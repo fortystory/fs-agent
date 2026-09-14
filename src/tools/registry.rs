@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::context::repo_map::RepoMapInput;
 use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 
@@ -161,6 +162,7 @@ impl Registry {
             outputs_dir: &call.outputs_dir,
             cwd: call.paths.cwd(),
             skills: &call.skills,
+            repo_map: &call.repo_map,
             tool_call_id: &call.tool_call_id,
             args: &call.args,
         };
@@ -267,6 +269,9 @@ pub struct PendingCall {
     /// The session's discovered skill library. Cloned as a handle, like the path
     /// table, so a tool that needs it never reaches into the session.
     pub skills: Arc<Skills>,
+    /// The `repo_map` tool's session inputs (spec §9). Owned, because the ranking
+    /// context is recomputed per call from the event stream rather than shared.
+    pub repo_map: RepoMapInput,
 }
 
 /// What one dispatch produced.

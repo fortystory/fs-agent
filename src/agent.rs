@@ -273,6 +273,19 @@ pub async fn run_turn(
             let paths = session.paths().clone();
             let locks = session.path_locks().clone();
             let skills = session.skills().clone();
+            // `repo_map` ranks by what this session is working on, so its input is
+            // recomputed from the stream — but only for a call that will use it.
+            let repo_map = if call.name == context::repo_map::REPO_MAP_TOOL {
+                context::repo_map::RepoMapInput {
+                    context: context::repo_map::RankContext::from_session(
+                        session.events(),
+                        session.cwd(),
+                    ),
+                    tokens: session.config().repo_map_tokens,
+                }
+            } else {
+                context::repo_map::RepoMapInput::default()
+            };
             let mut pending = PendingCall {
                 tool_call_id: tool_call_id.as_str().to_owned(),
                 tool_name: call.name.clone(),
@@ -281,6 +294,7 @@ pub async fn run_turn(
                 paths,
                 locks,
                 skills,
+                repo_map,
             };
 
             let started = Instant::now();

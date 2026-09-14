@@ -25,6 +25,11 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
 toml = "0.8"
+# Read-side symbol extraction only: the official Rust `tags.scm` is run through
+# tree-sitter to produce `(file, name, kind)`. The grammar compiles a C parser,
+# so the first build is slower than a pure-Rust dependency.
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
 url = "2"
 
 [dev-dependencies]

@@ -58,6 +58,9 @@ impl Fixture {
             // The dispatch seam under test does not involve skills; an empty
             // library keeps the built-in `skill` tool resolvable but inert.
             skills: std::sync::Arc::new(fs_agent::context::skills::Skills::default()),
+            // Likewise the repo map keeps an empty session context and the
+            // default budget: nothing in this file calls it.
+            repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
         }
     }
 

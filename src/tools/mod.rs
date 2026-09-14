@@ -13,28 +13,32 @@ pub mod edit;
 pub mod file;
 pub mod paths;
 pub mod registry;
+pub mod repo_map;
 pub mod skill;
 pub mod tool;
 
 pub use file::{EditFile, ReadFile, WriteFile, MATCH_LEVEL_PREFIX};
 pub use paths::{PathLocks, SessionPaths};
 pub use registry::{AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry};
+pub use repo_map::RepoMapTool;
 pub use skill::SkillTool;
 pub use tool::{
     Effect, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError, ToolOutput, WritePathResolver,
 };
 
-/// The v1 built-in tools. The remaining built-ins (`bash`, `repo_map`, `task`)
-/// mount on the same registry as their tickets land.
+/// The v1 built-in tools. The remaining built-ins (`bash`, `task`) mount on the
+/// same registry as their tickets land.
 ///
-/// `skill` is stateless: it reads the session's discovered skill library through
-/// [`ToolContext`], so the tool table stays fixed while the library follows the
-/// session's cwd (spec §9).
+/// `skill` and `repo_map` are stateless wrappers around session-carried values:
+/// `skill` reads the discovered skill library through [`ToolContext`], and
+/// `repo_map` reads the session's ranking context the same way. The tool table
+/// stays fixed while those values follow the session (spec §9).
 pub fn builtin() -> Registry {
     let mut registry = Registry::new();
     registry.register(Box::new(ReadFile));
     registry.register(Box::new(WriteFile));
     registry.register(Box::new(EditFile));
     registry.register(Box::new(SkillTool));
+    registry.register(Box::new(RepoMapTool::new()));
     registry
 }

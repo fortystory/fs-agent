@@ -22,10 +22,13 @@
 //! dropping removes messages, and it removes a round's assistant message and its
 //! results together, which keeps the pairing intact.
 //!
-//! [`skills`] is the sibling concern (spec §9): discovery and the description
-//! catalog live there, and the aggregate cap on loaded skill bodies is enforced
-//! here, before the window budget is even consulted.
+//! [`skills`] and [`repo_map`] are the sibling concerns (spec §9). Skills keep
+//! the description catalog and load bodies on demand; the aggregate cap on
+//! loaded skill bodies is enforced here, before the window budget is even
+//! consulted. `repo_map` extracts and ranks workspace symbols for the on-demand
+//! `repo_map` tool, and its product is a tool result like any other.
 
+pub mod repo_map;
 pub mod skills;
 
 use std::collections::BTreeMap;

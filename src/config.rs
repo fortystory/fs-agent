@@ -36,6 +36,15 @@ pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
 /// Anthropic documents 25k as Claude Code's default tool-response limit.
 pub const DEFAULT_MAX_TOOL_RESULT_TOKENS: u64 = 25_000;
 
+/// Default repo-map budget, in estimated tokens (spec §9, ticket 09): aider
+/// documents the same default for its `--map-tokens` switch.
+pub const DEFAULT_REPO_MAP_TOKENS: u64 = 1_024;
+
+/// Ceiling on a configured repo-map budget (spec §9, ticket 09): aider's source
+/// clamps `--map-tokens` here, and so does this configuration. A fixed budget is
+/// the point — the model cannot ask for a bigger map per call.
+pub const MAX_REPO_MAP_TOKENS: u64 = 4_096;
+
 /// Model used when no `default_model` is configured or exported.
 pub const DEFAULT_MODEL: &str = "kimi-k3";
 
@@ -636,6 +645,9 @@ pub struct SessionConfig {
     /// Cap on one tool result, in estimated tokens. An oversized result is
     /// truncated before it enters the stream (spec §10).
     pub max_tool_result_tokens: u64,
+    /// Cap on the repo map, in estimated tokens (spec §9). A fixed budget, never
+    /// a model-supplied argument; [`MAX_REPO_MAP_TOKENS`] is the ceiling.
+    pub repo_map_tokens: u64,
 }
 
 impl SessionConfig {
@@ -645,6 +657,7 @@ impl SessionConfig {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
+            repo_map_tokens: DEFAULT_REPO_MAP_TOKENS,
         }
     }
 
@@ -656,6 +669,13 @@ impl SessionConfig {
     /// Override the per-result truncation cap (spec §10).
     pub fn with_max_tool_result_tokens(mut self, max_tool_result_tokens: u64) -> Self {
         self.max_tool_result_tokens = max_tool_result_tokens;
+        self
+    }
+
+    /// Set the repo-map budget, clamped to [`MAX_REPO_MAP_TOKENS`] (spec §9): no
+    /// configuration can make one `repo_map` call unbounded.
+    pub fn with_repo_map_tokens(mut self, repo_map_tokens: u64) -> Self {
+        self.repo_map_tokens = repo_map_tokens.min(MAX_REPO_MAP_TOKENS);
         self
     }
 
@@ -678,6 +698,7 @@ impl Default for SessionConfig {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
+            repo_map_tokens: DEFAULT_REPO_MAP_TOKENS,
         }
     }
 }

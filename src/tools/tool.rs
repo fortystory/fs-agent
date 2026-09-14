@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::context::repo_map::RepoMapInput;
 use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 
@@ -88,6 +89,9 @@ pub struct ToolContext<'a> {
     /// The session's discovered skill library (spec §9). A value discovered at
     /// assembly, so `skill(name)` looks up rather than resolving a path.
     pub skills: &'a Skills,
+    /// The `repo_map` tool's session inputs (spec §9): the ranking context and
+    /// the configured budget. Bundled into one field so it travels like `skills`.
+    pub repo_map: &'a RepoMapInput,
     pub tool_call_id: &'a str,
     pub args: &'a Value,
 }
