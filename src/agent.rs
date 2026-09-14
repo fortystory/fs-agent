@@ -11,6 +11,8 @@
 //! 2. the provider is never called while a `tool_call` lacks a result;
 //! 3. only this loop writes to the log.
 
+use std::time::Instant;
+
 use futures::StreamExt;
 
 use crate::events::{
@@ -21,6 +23,7 @@ use crate::provider::projection::project;
 use crate::provider::{ChatRequest, Provider, StreamEvent, ToolCall, ToolChoice};
 use crate::render::RenderHandle;
 use crate::session::Session;
+use crate::tools::{DispatchOutcome, GuardedCall, PendingCall, ToolError};
 use crate::Error;
 
 /// How a turn ended, plus the assistant text of its last message.
@@ -106,7 +109,7 @@ pub async fn run_turn(
         let request = ChatRequest {
             model: session.config().model.clone(),
             messages: project(session.events(), speaker),
-            tools: Vec::new(),
+            tools: session.tools().specs(),
             tool_choice: ToolChoice::Auto,
             params: session.config().params.clone(),
             cache_key: Some(session.id().as_str().to_owned()),
@@ -198,30 +201,87 @@ pub async fn run_turn(
             )?;
         }
 
-        // Ticket 01 has no tool registry yet, so every call gets an explicit
-        // failure result. This keeps "exactly one result per tool_call" true and
-        // makes the continuation path real; ticket 03 replaces it with dispatch.
+        // Every `tool_call` gets exactly one result, produced here and nowhere
+        // else. The dispatcher owns the shared guardrails (read before edit, the
+        // per-path write locks, read-set invalidation) so no tool can opt out.
         for call in &tool_calls {
+            let tool_call_id = ToolCallId::new(call.id.clone());
+            let args = parse_tool_args(&call.arguments);
             emit(
                 session,
                 render,
                 speaker,
                 EventPayload::ToolCallStarted {
-                    tool_call_id: ToolCallId::new(call.id.clone()),
+                    tool_call_id: tool_call_id.clone(),
                     tool_name: call.name.clone(),
-                    args: parse_tool_args(&call.arguments),
+                    args: args.clone(),
                 },
             )?;
+
+            // The guardrails are a pure read of the call plus this agent's read
+            // set; the decision is applied to the read set here, in the loop.
+            // Everything is read off the session before the read set is borrowed.
+            let paths = session.paths().clone();
+            let locks = session.path_locks().clone();
+            let pending = PendingCall {
+                tool_call_id: tool_call_id.as_str().to_owned(),
+                tool_name: call.name.clone(),
+                args,
+                outputs_dir: session.outputs_dir().to_path_buf(),
+                paths,
+                locks,
+            };
+            let guardrails = session.tools().guardrails(
+                &pending.tool_name,
+                &pending.args,
+                session.read_set(),
+                &pending.paths,
+            );
+
+            let started = Instant::now();
+            let outcome = match guardrails {
+                GuardedCall::Refused(error) => DispatchOutcome::failure(error, false),
+                GuardedCall::Run(allowed) => {
+                    let outcome = session.tools().dispatch(&pending, &allowed).await;
+                    // A read is only a read if it worked: a failed read must not
+                    // license a later write.
+                    if outcome.is_ok() {
+                        session.record_reads(&allowed.read_paths);
+                    }
+                    if outcome.invalidated_reads {
+                        if let Some(path) = outcome
+                            .result
+                            .as_ref()
+                            .err()
+                            .and_then(ToolError::invalidated_path)
+                        {
+                            session.invalidate_read(path);
+                        }
+                    }
+                    outcome
+                }
+            };
+            let duration_ms = started.elapsed().as_millis() as u64;
+
             emit(
                 session,
                 render,
                 speaker,
-                EventPayload::ToolCallCompleted {
-                    tool_call_id: ToolCallId::new(call.id.clone()),
-                    ok: false,
-                    output: None,
-                    error: Some(format!("no tool registered: {}", call.name)),
-                    duration_ms: 0,
+                match outcome.result {
+                    Ok(output) => EventPayload::ToolCallCompleted {
+                        tool_call_id,
+                        ok: true,
+                        output: Some(output.text),
+                        error: None,
+                        duration_ms,
+                    },
+                    Err(error) => EventPayload::ToolCallCompleted {
+                        tool_call_id,
+                        ok: false,
+                        output: None,
+                        error: Some(error.to_string()),
+                        duration_ms,
+                    },
                 },
             )?;
         }

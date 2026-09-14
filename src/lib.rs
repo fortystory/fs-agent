@@ -44,6 +44,7 @@ use crate::events::{EventLog, SessionId, SpeakerId};
 use crate::provider::Provider;
 use crate::render::{RenderHandle, RenderSinks};
 use crate::session::Session;
+use crate::tools::{PathLocks, Registry};
 
 /// Everything the library needs, all of it injected.
 pub struct AssemblyParts {
@@ -59,6 +60,11 @@ pub struct AssemblyParts {
     pub session_id: SessionId,
     /// Injected configuration values.
     pub config: SessionConfig,
+    /// The tool table. A runtime value, assembled here and never a global.
+    pub tools: Registry,
+    /// Per-path write locks. The **same** table must reach every executor, or
+    /// write exclusion is per session and therefore no lock at all.
+    pub locks: PathLocks,
     /// The headless renderer's two explicit sinks.
     pub sinks: RenderSinks,
 }
@@ -81,12 +87,22 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         log_path,
         session_id,
         config,
+        tools,
+        locks,
         sinks,
     } = parts;
 
+    // Tool artifacts live beside the event log, so a session stays one movable
+    // directory (spec §11). The directory is created lazily by the tool that
+    // needs it.
+    let outputs_dir = log_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("outputs");
+
     let (render, render_task) = render::spawn_headless(sinks);
     let log = EventLog::create(log_path)?;
-    let mut session = Session::new(session_id, cwd, log, config);
+    let mut session = Session::new(session_id, cwd, log, config, tools, locks, outputs_dir);
     agent::record_session_started(&mut session, &render)?;
 
     Ok(Harness {
@@ -113,6 +129,11 @@ impl Harness {
 
     pub fn session_id(&self) -> &SessionId {
         self.session.id()
+    }
+
+    /// Where this session's tool artifacts land (`outputs/<tool_call_id>.*`).
+    pub fn outputs_dir(&self) -> &std::path::Path {
+        self.session.outputs_dir()
     }
 
     /// Drop the render channel and wait for every buffered render event to be

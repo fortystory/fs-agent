@@ -18,6 +18,7 @@ use crate::events::{read_events, EventPayload, SessionId, SpeakerId, Usage};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::render::RenderSinks;
+use crate::tools::{self, PathLocks};
 use crate::{assemble, AssemblyParts};
 
 /// Prompt for the second probe turn; keeps the transcript growing so the first
@@ -238,6 +239,9 @@ async fn probe_model(config: &Config, model_id: &str) -> Result<(), ProbeError> 
         log_path: log_path.clone(),
         session_id: SessionId::new(format!("probe-{model_id}")),
         config: session_config,
+        // The probe exercises real turns, so it gets the real tool table.
+        tools: tools::builtin(),
+        locks: PathLocks::new(),
         sinks: RenderSinks {
             // The probe prints its own report on stdout; the renderer narrates
             // to stderr only.
