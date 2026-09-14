@@ -1,0 +1,26 @@
+[package]
+name = "fs-agent"
+version = "0.1.0"
+edition = "2021"
+description = "A self-hosted coding agent CLI: append-only event stream plus per-agent windows"
+license = "MIT"
+
+[lib]
+name = "fs_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fs-agent"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"
