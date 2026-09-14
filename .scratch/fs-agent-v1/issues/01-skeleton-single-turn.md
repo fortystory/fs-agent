@@ -2,7 +2,7 @@
 
 **What to build:** 从零建起这个 crate，并让**一条完整的最小闭环**跑通：一次会话、一个 agent、一个回合、headless 渲染。这一票的产物除了「agent 能回一句话」之外，还有**整张 spec 唯一那条 e2e 接缝**——库入口的组装函数接收注入的 provider，测试用脚本化假 provider 驱动，断言事件流与两个 sink。之后的每一票都往这条接缝加场景，不新开 mock 接缝。
 
-Blocked by: None (can start immediately)
+Blocked by: None
 
 Status: done
 

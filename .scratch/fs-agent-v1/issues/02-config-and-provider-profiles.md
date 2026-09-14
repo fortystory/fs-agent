@@ -2,7 +2,7 @@
 
 **What to build:** 让 `fs-agent` 真的连上 KIMI 与 DeepSeek 两家，并把两家的差异在适配器里抹平——用户配好自己的 key 之后，一次回合能对两家各跑通，事件流里的用量、缓存计量与错误分类在两家之间**形状一致**。
 
-Blocked by: 01 · 骨架与唯一接缝
+Blocked by: 01
 
 Status: done
 

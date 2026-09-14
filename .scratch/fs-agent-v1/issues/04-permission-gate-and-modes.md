@@ -2,7 +2,7 @@
 
 **What to build:** 每一次工具调用都要过权限门。用户在 `readonly` / `ask` / `auto` 三档之间切换时行为可预测，且最坏情况有硬底——断路器短路 deny，任何规则与允许都翻不动它。
 
-Blocked by: 03 · 工具循环与文件工具
+Blocked by: 03
 
 Status: done
 

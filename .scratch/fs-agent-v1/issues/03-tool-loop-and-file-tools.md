@@ -2,7 +2,7 @@
 
 **What to build:** agent 能真的读、写、改工作区里的文件。模型发出的工具调用被拼装、派发、产出结果，并且「每个 `tool_call` 恰好一条结果」这条不变量由循环**在一处**保证。
 
-Blocked by: 01 · 骨架与唯一接缝
+Blocked by: 01
 
 Status: done
 
