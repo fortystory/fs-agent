@@ -154,6 +154,17 @@ pub trait Tool: Send + Sync {
         Vec::new()
     }
 
+    /// The argv this call will execute, for a tool that runs a command.
+    ///
+    /// `bash` is its owner (a later ticket); every other tool answers `None`.
+    /// The permission gate's `CommandPrefix` scope and the `rm` circuit breaker
+    /// both read this, so a command's argv must be visible **before** the
+    /// process starts — which is why the tool declares it here instead of the
+    /// gate guessing at a `command` string.
+    fn command(&self, _args: &Value) -> Option<Vec<String>> {
+        None
+    }
+
     /// Arguments arrive erased; each tool parses its own shape and reports its
     /// own errors.
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError>;

@@ -5,9 +5,14 @@
 //! session. Later tickets extend its scripting; they do not add new seams.
 
 #![allow(dead_code)]
+// Each integration test crate compiles this module separately and uses a
+// different subset of the fixtures.
+#![allow(unused_imports)]
 
+mod asker;
 mod capture;
 mod fake_provider;
 
+pub use asker::{AlwaysAllow, ScriptedAsker};
 pub use capture::CaptureBuf;
 pub use fake_provider::{FakeProvider, Reply};

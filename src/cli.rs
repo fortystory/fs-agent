@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 use crate::config::{self, Config, EnvMap, SessionConfig};
 use crate::events::{read_events, EventPayload, SessionId, SpeakerId, Usage};
+use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::render::RenderSinks;
@@ -176,8 +177,14 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     }
 
     let mut failed = false;
+    // The library reads no environment, so the CLI hands it the one fact the
+    // `rm` circuit breaker needs.
+    let home = env
+        .get("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
     for model in models {
-        match probe_model(&config, &model).await {
+        match probe_model(&config, &model, home.as_deref()).await {
             Ok(()) => {}
             Err(ProbeError::Skipped(message)) => eprintln!("fs-agent: skipping {model}: {message}"),
             Err(ProbeError::Failed(message)) => {
@@ -214,7 +221,11 @@ impl ProbeError {
     }
 }
 
-async fn probe_model(config: &Config, model_id: &str) -> Result<(), ProbeError> {
+async fn probe_model(
+    config: &Config,
+    model_id: &str,
+    home: Option<&Path>,
+) -> Result<(), ProbeError> {
     let (model, profile) = config
         .resolve_model(Some(model_id))
         .map_err(ProbeError::failed)?;
@@ -248,6 +259,11 @@ async fn probe_model(config: &Config, model_id: &str) -> Result<(), ProbeError> 
             stdout_result: Box::new(std::io::sink()),
             stderr_diagnostic: Box::new(std::io::stderr()),
         },
+        // The probe is headless and has no answerer, so the interactive default
+        // `ask` refuses writes rather than hanging on a question nobody can see.
+        policy: Policy::for_mode(Mode::Ask),
+        asker: None,
+        home: home.map(Path::to_path_buf),
     })
     .await
     .map_err(ProbeError::failed)?;

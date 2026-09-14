@@ -1,10 +1,10 @@
 //! The `Session` value: the only structure that holds mutable state.
 //!
 //! It owns the event log handle, the session identity, the injected
-//! configuration, the tool registry, the shared path locks and this agent's read
-//! set. Later tickets add the roster and budgets; an executor is a nested
-//! `Session` whose events still append to its parent's stream and whose tool
-//! registry and path locks are the same values.
+//! configuration, the tool registry, the shared path locks, this agent's read
+//! set, and the session's permission policy. Later tickets add the roster and
+//! budgets; an executor is a nested `Session` whose events still append to its
+//! parent's stream and whose tool registry and path locks are the same values.
 //!
 //! `Session` never writes on its own initiative. Its crate-private `append` is
 //! called only by the `agent` module, so the agent layer is the single writer of
@@ -12,10 +12,37 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::config::SessionConfig;
 use crate::events::{Event, EventLog, EventPayload, SessionId, SpeakerId};
+use crate::permissions::{Asker, Policy, Rule};
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
+
+/// Everything a session is assembled from. Injected, never read from the
+/// environment by the library: the permission policy, the ask port used when the
+/// gate answers `Ask`, and the user's home (which only the `rm` circuit breaker
+/// reads) all arrive here.
+pub struct SessionParts {
+    pub id: SessionId,
+    pub cwd: PathBuf,
+    pub log: EventLog,
+    pub config: SessionConfig,
+    /// The tool table for this session.
+    pub tools: Registry,
+    /// Per-path write locks. The **same** table must reach every executor, or
+    /// write exclusion is per session and therefore no lock at all.
+    pub locks: PathLocks,
+    /// Where this session's tool artifacts (`outputs/<tool_call_id>.*`) land.
+    pub outputs_dir: PathBuf,
+    /// The session's permission policy: a mode plus its rules.
+    pub policy: Policy,
+    /// The port the loop asks when the gate answers `Ask`. `None` means there is
+    /// no interactive answerer, so the loop downgrades `Ask` to `Deny`.
+    pub asker: Option<Arc<dyn Asker>>,
+    /// The user's home directory, when it is known.
+    pub home: Option<PathBuf>,
+}
 
 pub struct Session {
     id: SessionId,
@@ -28,25 +55,31 @@ pub struct Session {
     outputs_dir: PathBuf,
     /// Paths this agent has read. Never inherited: read permission is per agent.
     read_set: ReadSet,
+    /// The session's permission policy. A value, never an event: `--continue`
+    /// returns to the configured mode (spec §12).
+    policy: Policy,
+    /// The ask port, shared with any nested session so an executor asks through
+    /// the same renderer.
+    asker: Option<Arc<dyn Asker>>,
+    home: Option<PathBuf>,
 }
 
 impl Session {
     /// Wrap a freshly created log. Recording `SessionStarted` is the `agent`
     /// module's job, so all writes stay in one place.
-    ///
-    /// The registry and the lock table are injected: the registry is the tool
-    /// table for this session, and the lock table must be the *same* one every
-    /// executor uses, or per-path write exclusion is per-session and therefore
-    /// no lock at all.
-    pub fn new(
-        id: SessionId,
-        cwd: PathBuf,
-        log: EventLog,
-        config: SessionConfig,
-        tools: Registry,
-        locks: PathLocks,
-        outputs_dir: PathBuf,
-    ) -> Self {
+    pub fn new(parts: SessionParts) -> Self {
+        let SessionParts {
+            id,
+            cwd,
+            log,
+            config,
+            tools,
+            locks,
+            outputs_dir,
+            policy,
+            asker,
+            home,
+        } = parts;
         let paths = SessionPaths::new(&cwd);
         Self {
             id,
@@ -58,6 +91,9 @@ impl Session {
             paths,
             outputs_dir,
             read_set: ReadSet::default(),
+            policy,
+            asker,
+            home,
         }
     }
 
@@ -109,6 +145,27 @@ impl Session {
 
     pub fn path_locks(&self) -> &PathLocks {
         &self.locks
+    }
+
+    /// The session's permission policy.
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+
+    /// Remember a session-scoped allowance. This changes the policy value only:
+    /// it writes no `config.toml` and appends no event (spec §12).
+    pub fn remember_allow(&mut self, rule: Rule) {
+        self.policy.push(rule);
+    }
+
+    /// The ask port, if this session has an interactive answerer.
+    pub fn asker(&self) -> Option<&Arc<dyn Asker>> {
+        self.asker.as_ref()
+    }
+
+    /// The user's home directory, when it was injected.
+    pub fn home(&self) -> Option<&Path> {
+        self.home.as_deref()
     }
 
     /// This agent's read set. Read-before-edit consults it; a failed match

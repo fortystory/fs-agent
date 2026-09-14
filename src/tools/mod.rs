@@ -17,7 +17,7 @@ pub mod tool;
 
 pub use file::{EditFile, ReadFile, WriteFile, MATCH_LEVEL_PREFIX};
 pub use paths::{PathLocks, SessionPaths};
-pub use registry::{AllowedCall, DispatchOutcome, GuardedCall, PendingCall, Registry};
+pub use registry::{AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry};
 pub use tool::{
     Effect, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError, ToolOutput, WritePathResolver,
 };

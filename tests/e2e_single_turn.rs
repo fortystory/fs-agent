@@ -8,15 +8,17 @@
 mod support;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use fs_agent::config::{ReasoningEffort, SessionConfig};
 use fs_agent::events::{
     read_events, Event, EventPayload, Role, SessionId, SpeakerId, StopReason, Usage,
 };
+use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, ProviderError, StreamEvent};
 use fs_agent::render::RenderSinks;
 use fs_agent::{assemble, AssemblyParts, Harness};
-use support::{CaptureBuf, FakeProvider, Reply};
+use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {
     harness: Harness,
@@ -56,6 +58,11 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
         },
+        // An interactive session: the default `ask` mode, with a user who
+        // approves every write. Permission-specific tests script their own.
+        policy: Policy::for_mode(Mode::Ask),
+        asker: Some(Arc::new(AlwaysAllow)),
+        home: None,
     })
     .await
     .unwrap();

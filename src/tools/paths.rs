@@ -63,6 +63,16 @@ impl SessionPaths {
         Ok(resolved)
     }
 
+    /// The lexical join of a model-supplied path against the cwd, with no
+    /// canonicalization and no containment check.
+    ///
+    /// Used only when [`SessionPaths::resolve`] fails: the permission gate still
+    /// has to see the call before the guardrails refuse it, so the raw target is
+    /// what it gets.
+    pub fn unresolved(&self, path: &Path) -> PathBuf {
+        self.join(path)
+    }
+
     fn join(&self, path: &Path) -> PathBuf {
         if path.is_absolute() {
             path.to_path_buf()

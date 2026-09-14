@@ -73,10 +73,14 @@ impl Fixture {
         call: &PendingCall,
         read_set: &mut ReadSet,
     ) -> fs_agent::tools::DispatchOutcome {
-        match self
+        let facts = match self
             .registry
-            .guardrails(&call.tool_name, &call.args, read_set, &call.paths)
+            .facts(&call.tool_name, &call.args, &call.paths)
         {
+            Ok(facts) => facts,
+            Err(error) => return fs_agent::tools::DispatchOutcome::failure(error, false),
+        };
+        match facts.guardrails(read_set) {
             fs_agent::tools::GuardedCall::Refused(error) => {
                 fs_agent::tools::DispatchOutcome::failure(error, false)
             }
@@ -98,6 +102,20 @@ impl Fixture {
                 outcome
             }
         }
+    }
+
+    /// Resolve one call and apply the shared guardrails, for tests that assert a
+    /// decision without running the tool.
+    fn guardrails(
+        &self,
+        tool: &str,
+        args: &serde_json::Value,
+        read_set: &ReadSet,
+    ) -> fs_agent::tools::GuardedCall {
+        self.registry
+            .facts(tool, args, &self.paths)
+            .expect("a registered tool")
+            .guardrails(read_set)
     }
 }
 
@@ -348,17 +366,15 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
     let file = fixture.write("shared.txt", "start\n");
     let resolved = std::fs::canonicalize(&file).unwrap();
 
-    let first = fixture.registry.guardrails(
+    let first = fixture.guardrails(
         "read_file",
         &json!({ "file_path": file.to_str().unwrap() }),
         &ReadSet::default(),
-        &fixture.paths,
     );
-    let second = fixture.registry.guardrails(
+    let second = fixture.guardrails(
         "read_file",
         &json!({ "file_path": file.to_str().unwrap() }),
         &ReadSet::default(),
-        &fixture.paths,
     );
     let allowed = match (first, second) {
         (fs_agent::tools::GuardedCall::Run(a), fs_agent::tools::GuardedCall::Run(b)) => {
@@ -379,7 +395,7 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
     }));
     let mut read_set = ReadSet::default();
     read_set.record(resolved.clone());
-    let edit = fixture.registry.guardrails(
+    let edit = fixture.guardrails(
         "edit_file",
         &json!({
             "file_path": file.to_str().unwrap(),
@@ -387,7 +403,6 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
             "new_string": "b",
         }),
         &read_set,
-        &fixture.paths,
     );
     let write = match edit {
         fs_agent::tools::GuardedCall::Run(allowed) => allowed.write_targets,

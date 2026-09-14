@@ -4,13 +4,18 @@
 //! assembled at startup, fixed for the life of the prefix cache, and is the
 //! mount point dynamic tools plug into.
 //!
-//! Dispatch is split in two so the guardrails can be enforced without the tool
-//! layer ever touching the read set:
+//! Dispatch is split in three so the guardrails can be enforced without the
+//! tool layer ever touching the read set:
 //!
-//! 1. [`Registry::guardrails`] is a pure read of `(tool, args, read set, cwd)`.
-//!    It resolves the write targets, refuses a write whose path has not been
-//!    read, and returns the paths whose read permission the call earns.
-//! 2. [`Registry::dispatch`] runs the decided call, holding the shared per-path
+//! 1. [`Registry::facts`] resolves one call into a [`CallFacts`]: the declared
+//!    effect, the resolved write targets, the read paths and the argv. This is
+//!    where model-supplied paths meet the session cwd, so it is where the
+//!    filesystem is read; everything downstream is a function of values.
+//! 2. [`CallFacts::guardrails`] refuses an unresolvable target and a write whose
+//!    path has not been read, and returns the paths whose read permission the
+//!    call earns. It consults the read set and the target's existence, never
+//!    the registry.
+//! 3. [`Registry::dispatch`] runs the decided call, holding the shared per-path
 //!    write locks, and reports whether a failed match withdrew a path's read
 //!    permission.
 //!
@@ -63,36 +68,38 @@ impl Registry {
         self.tools.values().map(|tool| tool.spec()).collect()
     }
 
-    /// Decide whether one call may run, and what it is allowed to touch.
+    /// Resolve one call into the facts both the permission gate and the
+    /// guardrails read: the declared effect, the resolved write targets, the
+    /// resolved read paths, and the argv a command tool will run.
     ///
-    /// A refusal here means the call never reaches the tool, which is why the
-    /// loop synthesizes the one required error result for it.
-    pub fn guardrails(
+    /// Path resolution is the only impure part (it canonicalizes), so it happens
+    /// here, once, and the gate downstream stays a pure function of values. A
+    /// target that cannot be resolved is kept in its lexical form and reported
+    /// in [`CallFacts::path_error`]: the gate still sees the call, and refuses
+    /// it on the path limit rather than recording a verdict the call never got
+    /// to use.
+    pub fn facts(
         &self,
         tool_name: &str,
         args: &Value,
-        read_set: &ReadSet,
         paths: &SessionPaths,
-    ) -> GuardedCall {
+    ) -> Result<CallFacts, ToolError> {
         let Some(tool) = self.get(tool_name) else {
-            return GuardedCall::refused(ToolError::message(format!(
+            return Err(ToolError::message(format!(
                 "no tool registered: {tool_name}"
             )));
         };
 
         let effect = tool.effect(args);
         let mut write_targets = Vec::new();
-        let mut exclusive = false;
-        match &effect {
-            Effect::ReadOnly => {}
-            // `Exclusive` takes no path locks: it takes the workspace-wide lock,
-            // acquired before any path lock so the two orders cannot deadlock.
-            Effect::Exclusive => exclusive = true,
-            Effect::WritePaths(inputs) => {
-                for input in inputs {
-                    match paths.resolve(input) {
-                        Ok(path) => write_targets.push(path),
-                        Err(error) => return GuardedCall::refused(error),
+        let mut path_error: Option<ToolError> = None;
+        if let Effect::WritePaths(inputs) = &effect {
+            for input in inputs {
+                match paths.resolve(input) {
+                    Ok(path) => write_targets.push(path),
+                    Err(error) => {
+                        path_error.get_or_insert(error);
+                        write_targets.push(paths.unresolved(input));
                     }
                 }
             }
@@ -101,32 +108,26 @@ impl Registry {
         write_targets.sort();
         write_targets.dedup();
 
-        // Read before edit, enforced for every caller rather than by convention.
-        // Only an existing target needs reading: overwriting a file the agent has
-        // not looked at is the failure this guards, while creating a new one has
-        // nothing to clobber and nothing to read.
-        if let Some(path) = write_targets
-            .iter()
-            .find(|path| path.exists() && !read_set.contains(path))
-        {
-            return GuardedCall::refused(ToolError::message(format!(
-                "read before write: {} exists but has not been read in this session; read it first",
-                path.display()
-            )));
+        // Candidates for the read set. The loop records them only if the call
+        // succeeds: a failed read must not license a later write. A read the
+        // workspace cannot resolve is a path-limit denial like a write's.
+        let mut read_paths = Vec::new();
+        for path in tool.read_paths(args) {
+            match paths.resolve(&path) {
+                Ok(resolved) => read_paths.push(resolved),
+                Err(error) => {
+                    path_error.get_or_insert(error);
+                }
+            }
         }
 
-        // Candidates for the read set. The loop records them only if the call
-        // succeeds: a failed read must not license a later write.
-        let read_paths = tool
-            .read_paths(args)
-            .into_iter()
-            .filter_map(|path| paths.resolve(&path).ok())
-            .collect();
-
-        GuardedCall::Run(AllowedCall {
+        Ok(CallFacts {
+            tool_name: tool_name.to_owned(),
+            effect,
             write_targets,
             read_paths,
-            exclusive,
+            argv: tool.command(args),
+            path_error,
         })
     }
 
@@ -184,12 +185,6 @@ pub enum GuardedCall {
     Refused(ToolError),
 }
 
-impl GuardedCall {
-    fn refused(error: ToolError) -> Self {
-        GuardedCall::Refused(error)
-    }
-}
-
 /// What an allowed call may touch, already resolved against the session cwd.
 #[derive(Debug, Clone, Default)]
 pub struct AllowedCall {
@@ -199,6 +194,62 @@ pub struct AllowedCall {
     pub read_paths: Vec<PathBuf>,
     /// True when the call demands the workspace-wide lock.
     pub exclusive: bool,
+}
+
+/// One call, resolved: everything the permission gate and the guardrails read.
+///
+/// Built by [`Registry::facts`], which is where model-supplied paths meet the
+/// session cwd and stop being strings.
+#[derive(Debug, Clone)]
+pub struct CallFacts {
+    /// The tool name the model asked for.
+    pub tool_name: String,
+    /// The tool's declared workspace effect.
+    pub effect: Effect,
+    /// Resolved absolute write targets (empty unless the effect is `WritePaths`).
+    /// A target that could not be resolved stays in its lexical form.
+    pub write_targets: Vec<PathBuf>,
+    /// Resolved absolute read paths.
+    pub read_paths: Vec<PathBuf>,
+    /// The argv a command tool will run, when it runs one.
+    pub argv: Option<Vec<String>>,
+    /// The first target that could not be resolved against the session cwd. The
+    /// gate reads it as the path limit (the raw target is in `write_targets`),
+    /// and the guardrails refuse it if the gate is ever bypassed.
+    pub path_error: Option<ToolError>,
+}
+
+impl CallFacts {
+    /// The shared guardrails: containment first, so an unresolvable target never
+    /// reaches the tool, then read before edit, enforced for every caller rather
+    /// than by convention.
+    ///
+    /// Only an existing target needs reading: overwriting a file the agent has
+    /// not looked at is the failure this guards, while creating a new one has
+    /// nothing to clobber and nothing to read. This consults the read set and
+    /// each target's existence; it needs no registry.
+    pub fn guardrails(&self, read_set: &ReadSet) -> GuardedCall {
+        if let Some(error) = &self.path_error {
+            return GuardedCall::Refused(error.clone());
+        }
+
+        if let Some(path) = self
+            .write_targets
+            .iter()
+            .find(|path| path.exists() && !read_set.contains(path))
+        {
+            return GuardedCall::Refused(ToolError::message(format!(
+                "read before write: {} exists but has not been read in this session; read it first",
+                path.display()
+            )));
+        }
+
+        GuardedCall::Run(AllowedCall {
+            write_targets: self.write_targets.clone(),
+            read_paths: self.read_paths.clone(),
+            exclusive: matches!(self.effect, Effect::Exclusive),
+        })
+    }
 }
 
 /// Everything the dispatcher needs about one call the loop has already recorded.

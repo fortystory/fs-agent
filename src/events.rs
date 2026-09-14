@@ -190,11 +190,40 @@ pub enum HistoryReason {
 }
 
 /// The closed three-state permission verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The variant order **is** the decision lattice: `Allow < Ask < Deny`. Both the
+/// permission gate's rules (spec §12) and a pre-hook's tightening (spec §3)
+/// merge by taking the supremum on this order, so there is exactly one merge
+/// semantic in the system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Decision {
     Allow,
     Ask,
     Deny,
+}
+
+impl Decision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Decision::Allow => "allow",
+            Decision::Ask => "ask",
+            Decision::Deny => "deny",
+        }
+    }
+
+    /// The supremum of two verdicts: the stricter one wins.
+    pub fn join(self, other: Decision) -> Decision {
+        self.max(other)
+    }
+
+    /// Whether this action travels down the delegation chain by default.
+    ///
+    /// `Deny` and `Ask` are constraints and inherit; `Allow` does not — so
+    /// "inherit denials, never inherits allowances" is the default's natural
+    /// result rather than a special case (spec §12).
+    pub fn default_propagate(self) -> bool {
+        !matches!(self, Decision::Allow)
+    }
 }
 
 /// Where a permission verdict came from.

@@ -1,11 +1,13 @@
 //! The turn loop.
 //!
 //! The `agent` module is the only writer of the event stream, and the loop is
-//! the only place that calls the provider. Hooks and the permission gate become
-//! pure value transformations it applies in a fixed order (spec §3); ticket 01
-//! has neither yet, so the order is `project -> provider -> append`.
+//! the only place that calls the provider. Hooks and the permission gate are
+//! pure value transformations it applies in a fixed order (spec §3): the gate
+//! (ticket 04) already sits between the provider and dispatch — `hook.pre`
+//! arrives in ticket 05 — so the order is
+//! `project -> provider -> gate -> [ask] -> dispatch -> append`.
 //!
-//! Three invariants hold from this first ticket onward:
+//! Three invariants hold from the first ticket onward:
 //!
 //! 1. every `tool_call` gets exactly one result;
 //! 2. the provider is never called while a `tool_call` lacks a result;
@@ -16,14 +18,15 @@ use std::time::Instant;
 use futures::StreamExt;
 
 use crate::events::{
-    last_assistant_has_tool_calls, pending_tool_calls, EventPayload, Role, SpeakerId, StopReason,
-    ToolCallId, SCHEMA_VERSION,
+    last_assistant_has_tool_calls, pending_tool_calls, Decision, DecisionSource, EventPayload,
+    Role, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
 };
+use crate::permissions::{self, Answer, PermissionRequest};
 use crate::provider::projection::project;
 use crate::provider::{ChatRequest, Provider, StreamEvent, ToolCall, ToolChoice};
 use crate::render::RenderHandle;
 use crate::session::Session;
-use crate::tools::{DispatchOutcome, GuardedCall, PendingCall, ToolError};
+use crate::tools::{CallFacts, DispatchOutcome, GuardedCall, PendingCall, ToolError};
 use crate::Error;
 
 /// How a turn ended, plus the assistant text of its last message.
@@ -202,8 +205,11 @@ pub async fn run_turn(
         }
 
         // Every `tool_call` gets exactly one result, produced here and nowhere
-        // else. The dispatcher owns the shared guardrails (read before edit, the
-        // per-path write locks, read-set invalidation) so no tool can opt out.
+        // else. The permission gate runs first; a refusal (a policy deny, a user
+        // deny, or a headless `Ask` downgrade) synthesizes its one error result
+        // here, so the tool is never reached. The dispatcher then owns the
+        // shared guardrails (read before edit, the per-path write locks,
+        // read-set invalidation) so no tool can opt out.
         for call in &tool_calls {
             let tool_call_id = ToolCallId::new(call.id.clone());
             let args = parse_tool_args(&call.arguments);
@@ -218,8 +224,6 @@ pub async fn run_turn(
                 },
             )?;
 
-            // The guardrails are a pure read of the call plus this agent's read
-            // set; the decision is applied to the read set here, in the loop.
             // Everything is read off the session before the read set is borrowed.
             let paths = session.paths().clone();
             let locks = session.path_locks().clone();
@@ -231,34 +235,62 @@ pub async fn run_turn(
                 paths,
                 locks,
             };
-            let guardrails = session.tools().guardrails(
-                &pending.tool_name,
-                &pending.args,
-                session.read_set(),
-                &pending.paths,
-            );
 
             let started = Instant::now();
-            let outcome = match guardrails {
-                GuardedCall::Refused(error) => DispatchOutcome::failure(error, false),
-                GuardedCall::Run(allowed) => {
-                    let outcome = session.tools().dispatch(&pending, &allowed).await;
-                    // A read is only a read if it worked: a failed read must not
-                    // license a later write.
-                    if outcome.is_ok() {
-                        session.record_reads(&allowed.read_paths);
-                    }
-                    if outcome.invalidated_reads {
-                        if let Some(path) = outcome
-                            .result
-                            .as_ref()
-                            .err()
-                            .and_then(ToolError::invalidated_path)
-                        {
-                            session.invalidate_read(path);
+            // Resolve the call once: the gate and the guardrails read the same
+            // facts, and this is the only step that touches the filesystem for
+            // path resolution.
+            let facts = session
+                .tools()
+                .facts(&pending.tool_name, &pending.args, &pending.paths);
+
+            let outcome = match facts {
+                Err(error) => DispatchOutcome::failure(error, false),
+                Ok(facts) => {
+                    match authorize(
+                        session,
+                        render,
+                        speaker,
+                        &tool_call_id,
+                        &pending.args,
+                        &facts,
+                    )
+                    .await?
+                    {
+                        Authorized::Refuse { message } => {
+                            DispatchOutcome::failure(ToolError::message(message), false)
+                        }
+                        Authorized::Allow => {
+                            // The guardrails are a pure read of the facts plus
+                            // this agent's read set; the decision is applied to
+                            // the read set here, in the loop.
+                            match facts.guardrails(session.read_set()) {
+                                GuardedCall::Refused(error) => {
+                                    DispatchOutcome::failure(error, false)
+                                }
+                                GuardedCall::Run(allowed) => {
+                                    let outcome =
+                                        session.tools().dispatch(&pending, &allowed).await;
+                                    // A read is only a read if it worked: a
+                                    // failed read must not license a later write.
+                                    if outcome.is_ok() {
+                                        session.record_reads(&allowed.read_paths);
+                                    }
+                                    if outcome.invalidated_reads {
+                                        if let Some(path) = outcome
+                                            .result
+                                            .as_ref()
+                                            .err()
+                                            .and_then(ToolError::invalidated_path)
+                                        {
+                                            session.invalidate_read(path);
+                                        }
+                                    }
+                                    outcome
+                                }
+                            }
                         }
                     }
-                    outcome
                 }
             };
             let duration_ms = started.elapsed().as_millis() as u64;
@@ -294,6 +326,192 @@ pub async fn run_turn(
 
         return end_turn(session, render, speaker, StopReason::Completed, last_text);
     }
+}
+
+/// What the loop must do with one call once the gate and the user have spoken.
+enum Authorized {
+    Allow,
+    /// The call never reaches the tool; the message is its one required result.
+    Refuse {
+        message: String,
+    },
+}
+
+/// Apply the permission gate to one call and, when it answers `Ask`, ask the
+/// user through the injected port.
+///
+/// The gate itself is pure and never asks, never reads the environment and never
+/// writes an event. Everything interactive lives here: the ask, the
+/// session-scoped "always allow", and the headless downgrade of `Ask` to `Deny`
+/// (whose reason lands in `PermissionDecided`, so the audit can tell a
+/// no-terminal refusal apart from a policy one).
+async fn authorize(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    tool_call_id: &ToolCallId,
+    args: &serde_json::Value,
+    facts: &CallFacts,
+) -> Result<Authorized, Error> {
+    let request_id = format!("perm-{tool_call_id}");
+    let path_error = facts.path_error.as_ref().map(ToString::to_string);
+    let verdict = {
+        let call = permissions::Call {
+            tool_name: &facts.tool_name,
+            effect: &facts.effect,
+            write_targets: &facts.write_targets,
+            read_targets: &facts.read_paths,
+            argv: facts.argv.as_deref(),
+            cwd: session.cwd(),
+            home: session.home(),
+            path_error: path_error.as_deref(),
+        };
+        permissions::decide(session.policy(), speaker, &call)
+    };
+
+    match verdict.decision {
+        Decision::Allow => {
+            record_decision(
+                session,
+                render,
+                speaker,
+                &request_id,
+                Decision::Allow,
+                DecisionSource::Policy,
+                verdict.reason,
+            )?;
+            Ok(Authorized::Allow)
+        }
+        Decision::Deny => {
+            record_decision(
+                session,
+                render,
+                speaker,
+                &request_id,
+                Decision::Deny,
+                DecisionSource::Policy,
+                verdict.reason.clone(),
+            )?;
+            Ok(refuse(&verdict.reason))
+        }
+        Decision::Ask => {
+            let Some(asker) = session.asker().cloned() else {
+                // The gate keeps its faithful `Ask`; the loop is where "there is
+                // no answerer" turns it into a refusal, and it says so.
+                let reason = format!(
+                    "{}; downgraded to deny: no interactive answerer",
+                    verdict.reason
+                );
+                record_decision(
+                    session,
+                    render,
+                    speaker,
+                    &request_id,
+                    Decision::Deny,
+                    DecisionSource::Policy,
+                    reason.clone(),
+                )?;
+                return Ok(refuse(&reason));
+            };
+
+            let request = PermissionRequest {
+                request_id: request_id.clone(),
+                tool_call_id: tool_call_id.as_str().to_owned(),
+                tool_name: facts.tool_name.clone(),
+                args: args.clone(),
+                reason: verdict.reason.clone(),
+            };
+            emit(
+                session,
+                render,
+                speaker,
+                EventPayload::PermissionAsked {
+                    request_id: request_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                    request: serde_json::json!({
+                        "tool": facts.tool_name,
+                        "args": args,
+                        "reason": verdict.reason,
+                    }),
+                },
+            )?;
+
+            match asker.ask(&request).await {
+                Answer::Allow => {
+                    record_decision(
+                        session,
+                        render,
+                        speaker,
+                        &request_id,
+                        Decision::Allow,
+                        DecisionSource::User,
+                        format!("user approved: {}", verdict.reason),
+                    )?;
+                    Ok(Authorized::Allow)
+                }
+                Answer::AlwaysAllow => {
+                    // Session policy only: no `config.toml` write, no event.
+                    session
+                        .remember_allow(permissions::Rule::always_allow(speaker, &facts.tool_name));
+                    record_decision(
+                        session,
+                        render,
+                        speaker,
+                        &request_id,
+                        Decision::Allow,
+                        DecisionSource::User,
+                        format!("user approved always: {}", verdict.reason),
+                    )?;
+                    Ok(Authorized::Allow)
+                }
+                Answer::Deny => {
+                    let reason = format!("user denied: {}", verdict.reason);
+                    record_decision(
+                        session,
+                        render,
+                        speaker,
+                        &request_id,
+                        Decision::Deny,
+                        DecisionSource::User,
+                        reason.clone(),
+                    )?;
+                    Ok(refuse(&reason))
+                }
+            }
+        }
+    }
+}
+
+/// The one synthesized-refusal message shape, so every refusal path reads the
+/// same way in the tool result.
+fn refuse(reason: &str) -> Authorized {
+    Authorized::Refuse {
+        message: format!("permission denied: {reason}"),
+    }
+}
+
+/// Record one permission verdict. Every call gets exactly one of these, asked or
+/// not, so `decision × source` is a complete counter (ticket 19).
+fn record_decision(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    request_id: &str,
+    decision: Decision,
+    source: DecisionSource,
+    reason: String,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        speaker,
+        EventPayload::PermissionDecided {
+            request_id: request_id.to_owned(),
+            decision,
+            source,
+            reason: Some(reason),
+        },
+    )
 }
 
 /// Record the reason the turn stopped and return the outcome.

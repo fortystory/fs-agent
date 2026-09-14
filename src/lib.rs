@@ -35,15 +35,17 @@ pub mod tools;
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::task::JoinHandle;
 
 use crate::agent::TurnOutcome;
 use crate::config::SessionConfig;
 use crate::events::{EventLog, SessionId, SpeakerId};
+use crate::permissions::{Asker, Policy};
 use crate::provider::Provider;
 use crate::render::{RenderHandle, RenderSinks};
-use crate::session::Session;
+use crate::session::{Session, SessionParts};
 use crate::tools::{PathLocks, Registry};
 
 /// Everything the library needs, all of it injected.
@@ -67,6 +69,14 @@ pub struct AssemblyParts {
     pub locks: PathLocks,
     /// The headless renderer's two explicit sinks.
     pub sinks: RenderSinks,
+    /// The session's permission policy: a mode plus its rules.
+    pub policy: Policy,
+    /// The ask port used when the gate answers `Ask`. `None` means no
+    /// interactive answerer, so the loop downgrades `Ask` to `Deny`.
+    pub asker: Option<Arc<dyn Asker>>,
+    /// The user's home directory, when the caller knows it. Only the `rm`
+    /// circuit breaker reads it.
+    pub home: Option<PathBuf>,
 }
 
 /// The assembled harness the caller drives.
@@ -90,6 +100,9 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         tools,
         locks,
         sinks,
+        policy,
+        asker,
+        home,
     } = parts;
 
     // Tool artifacts live beside the event log, so a session stays one movable
@@ -102,7 +115,18 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
     let (render, render_task) = render::spawn_headless(sinks);
     let log = EventLog::create(log_path)?;
-    let mut session = Session::new(session_id, cwd, log, config, tools, locks, outputs_dir);
+    let mut session = Session::new(SessionParts {
+        id: session_id,
+        cwd,
+        log,
+        config,
+        tools,
+        locks,
+        outputs_dir,
+        policy,
+        asker,
+        home,
+    });
     agent::record_session_started(&mut session, &render)?;
 
     Ok(Harness {
