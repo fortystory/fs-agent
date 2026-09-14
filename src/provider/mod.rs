@@ -8,6 +8,8 @@
 //! `projection` is a submodule rather than its own boundary: projection is a
 //! provider-side concern.
 
+pub mod capability;
+pub mod openai;
 pub mod projection;
 
 use std::pin::Pin;
@@ -18,6 +20,10 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::events::Usage;
+
+/// Request-shaping values live in `config` (they are configuration), and are
+/// re-exported here because they are part of a provider request.
+pub use crate::config::{GenerationParams, ReasoningEffort};
 
 /// A streaming response: completed units only, with tool-call fragments already
 /// assembled by the adapter.
@@ -90,18 +96,6 @@ pub enum ToolChoice {
     None,
     Required,
     Tool(String),
-}
-
-/// Neutral generation parameters. The adapter filters these against the model
-/// capability table and warns when it drops something the user set explicitly.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct GenerationParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
 }
 
 /// One completed unit of a streaming response.

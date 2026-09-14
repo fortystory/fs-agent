@@ -9,7 +9,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use fs_agent::config::SessionConfig;
+use fs_agent::config::{ReasoningEffort, SessionConfig};
 use fs_agent::events::{
     read_events, Event, EventPayload, Role, SessionId, SpeakerId, StopReason, Usage,
 };
@@ -454,5 +454,27 @@ async fn a_tool_call_with_no_arguments_records_an_empty_object() {
     match &second.messages[second.messages.len() - 2] {
         Message::Assistant { tool_calls, .. } => assert_eq!(tool_calls[0].arguments, "{}"),
         other => panic!("expected Assistant with tool_calls, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_reasoning_tier_is_pinned_for_the_whole_session() {
+    // Switching Kimi's reasoning tier mid-session throws away the prefix cache,
+    // so the tier is a session value set before the first turn, not a per-call
+    // parameter the loop may vary.
+    let mut fixture = fixture(
+        vec![Reply::text("first"), Reply::text("second")],
+        SessionConfig::new("fake-model").with_reasoning_effort(ReasoningEffort::High),
+    )
+    .await;
+
+    fixture.harness.run_turn("one").await.unwrap();
+    fixture.harness.run_turn("two").await.unwrap();
+    fixture.harness.shutdown().await;
+
+    let requests = fixture.provider.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.params.reasoning_effort, Some(ReasoningEffort::High));
     }
 }

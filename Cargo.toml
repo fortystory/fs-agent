@@ -17,10 +17,15 @@ path = "src/main.rs"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
+# OpenAI-compatible transport only: no vendor protocol, no SSE parsing.
+# `native-tls` links the system OpenSSL instead of pulling the aws-lc-rs C build.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
+toml = "0.8"
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

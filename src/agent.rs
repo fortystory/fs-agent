@@ -18,7 +18,7 @@ use crate::events::{
     ToolCallId, SCHEMA_VERSION,
 };
 use crate::provider::projection::project;
-use crate::provider::{ChatRequest, GenerationParams, Provider, StreamEvent, ToolCall, ToolChoice};
+use crate::provider::{ChatRequest, Provider, StreamEvent, ToolCall, ToolChoice};
 use crate::render::RenderHandle;
 use crate::session::Session;
 use crate::Error;
@@ -108,7 +108,7 @@ pub async fn run_turn(
             messages: project(session.events(), speaker),
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
-            params: GenerationParams::default(),
+            params: session.config().params.clone(),
             cache_key: Some(session.id().as_str().to_owned()),
         };
 
