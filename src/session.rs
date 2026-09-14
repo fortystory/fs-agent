@@ -122,6 +122,12 @@ impl Session {
         self.log.events()
     }
 
+    /// The session's event log. Read-only here: projection takes the log as its
+    /// input, and only the `agent` module appends to it.
+    pub fn log(&self) -> &EventLog {
+        &self.log
+    }
+
     pub fn id(&self) -> &SessionId {
         &self.id
     }

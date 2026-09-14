@@ -138,10 +138,6 @@ impl OpenAiProvider {
         &self.model
     }
 
-    pub fn caps(&self) -> ModelCaps {
-        self.caps
-    }
-
     pub fn profile(&self) -> &ProviderProfile {
         &self.profile
     }
@@ -241,6 +237,10 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl Provider for OpenAiProvider {
+    fn caps(&self) -> ModelCaps {
+        self.caps
+    }
+
     async fn send(&self, request: ChatRequest) -> Result<EventStream, ProviderError> {
         if request.model != self.model {
             return Err(ProviderError::InvalidRequest {

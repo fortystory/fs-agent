@@ -79,6 +79,9 @@ pub async fn run_turn(
     render: &RenderHandle,
 ) -> Result<TurnOutcome, Error> {
     let max_iterations = session.config().max_iterations;
+    // The projection branches on the model's field-level facts, so they are
+    // read once from the provider rather than re-derived per iteration.
+    let caps = provider.caps();
     let mut iteration: u32 = 0;
     let mut last_text = String::new();
 
@@ -113,7 +116,7 @@ pub async fn run_turn(
 
         let request = ChatRequest {
             model: session.config().model.clone(),
-            messages: project(session.events(), speaker),
+            messages: project(session.log(), speaker, &caps),
             tools: session.tools().specs(),
             tool_choice: ToolChoice::Auto,
             params: session.config().params.clone(),

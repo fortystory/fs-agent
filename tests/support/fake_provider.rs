@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use fs_agent::events::Usage;
+use fs_agent::provider::capability::{caps_for, ModelCaps};
 use fs_agent::provider::{
     ChatRequest, EventStream, FinishReason, Provider, ProviderError, StreamEvent,
 };
@@ -57,14 +58,22 @@ pub struct FakeProvider {
 struct Inner {
     replies: Mutex<VecDeque<Reply>>,
     requests: Mutex<Vec<ChatRequest>>,
+    caps: ModelCaps,
 }
 
 impl FakeProvider {
     pub fn new(replies: Vec<Reply>) -> Self {
+        Self::with_caps(replies, caps_for("deepseek-flash").expect("built-in model"))
+    }
+
+    /// A fake bound to explicit capability facts, so a test can drive the
+    /// capability-driven branches of the projection.
+    pub fn with_caps(replies: Vec<Reply>, caps: ModelCaps) -> Self {
         Self {
             inner: Arc::new(Inner {
                 replies: Mutex::new(replies.into()),
                 requests: Mutex::new(Vec::new()),
+                caps,
             }),
         }
     }
@@ -80,6 +89,10 @@ impl FakeProvider {
 
 #[async_trait]
 impl Provider for FakeProvider {
+    fn caps(&self) -> ModelCaps {
+        self.inner.caps
+    }
+
     async fn send(&self, request: ChatRequest) -> Result<EventStream, ProviderError> {
         self.inner
             .requests

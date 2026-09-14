@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::Usage;
 
+use self::capability::ModelCaps;
+
 /// Request-shaping values live in `config` (they are configuration), and are
 /// re-exported here because they are part of a provider request.
 pub use crate::config::{GenerationParams, ReasoningEffort};
@@ -35,6 +37,13 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderErr
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn send(&self, request: ChatRequest) -> Result<EventStream, ProviderError>;
+
+    /// The field-level facts about the model this client speaks to.
+    ///
+    /// The projection reads these instead of asking the vendor's name, so a
+    /// per-field difference is data on [`ModelCaps`] rather than a branch in
+    /// [`projection::project`].
+    fn caps(&self) -> ModelCaps;
 }
 
 /// The already-projected request handed to a provider.

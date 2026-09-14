@@ -14,8 +14,8 @@ use fs_agent::provider::openai::{
     retry_delay, silent_warnings, BuildError, OpenAiProvider, RetryPolicy, StreamDecoder,
 };
 use fs_agent::provider::{
-    ChatRequest, FinishReason, GenerationParams, Message, ProviderError, StreamEvent, ToolCall,
-    ToolChoice, ToolSpec,
+    ChatRequest, FinishReason, GenerationParams, Message, Provider, ProviderError, StreamEvent,
+    ToolCall, ToolChoice, ToolSpec,
 };
 
 fn env(pairs: &[(&str, &str)]) -> EnvMap {

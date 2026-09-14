@@ -192,6 +192,8 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
     }
 
     // The provider saw the projection, the model, and the session cache key.
+    // The human is another speaker, so the projection names the participant;
+    // outside a discussion round there is no round label to prefix it with.
     let requests = fixture.provider.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].model, "fake-model");
@@ -200,7 +202,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         requests[0].messages,
         vec![Message::User {
             content: "say hi".to_owned(),
-            name: None,
+            name: Some("user".to_owned()),
         }]
     );
 }

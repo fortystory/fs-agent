@@ -8,6 +8,11 @@
 //! Ticket 01 ships the headless renderer only. Its purity is structural: it
 //! writes to exactly two explicit sinks, and `stdout_result` receives only the
 //! final product of a `TurnEnded { Completed }` turn.
+//!
+//! The `[speaker]` prefix below is the **human's** prefix. It is deliberately a
+//! separate generator from the projection's model-side prefix (spec §5): this
+//! one repeats on every line so an interleaved multi-agent log stays readable,
+//! while the model's is written once per merged block.
 
 use std::io::Write;
 
