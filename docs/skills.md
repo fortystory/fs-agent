@@ -30,14 +30,14 @@ not call the skill.
 - **Catalog.** At assembly, every `SKILL.md` under the discovery roots is read
   for its `name` and `description`. The catalog of `name: description` lines is
   recorded as a `ContextInjected { source: SkillsCatalog }` event, projected into
-  the pinned first `user` message, and is byte-stable across turns so the prefix
-  cache keeps hitting. The catalog is capped at 3k estimated tokens; late entries
-  are omitted whole with a count.
+  the pinned head of the context (never trimmed), and is byte-stable across
+  turns so the prefix cache keeps hitting. The catalog is capped at 3k estimated
+  tokens; late entries are omitted whole with a count.
 - **Loading.** The built-in `skill(name)` tool returns the body (frontmatter
-  stripped) as a normal tool result, appended at the tail of the conversation, so
-  the cached prefix never moves. The result is a normal tool result: it is
-  accounted for, truncated, and covered by the permission language (a
-  `Tool("skill")` rule can deny it).
+  stripped) as a normal tool result, appended at the tail, so the cached prefix
+  never moves. The result is a normal tool result: it is accounted for,
+  truncated, and covered by the permission language (a `Tool("skill")` rule can
+  deny it).
 - **Discovery.** Project level before user level, three roots each, most specific
   first; the first root to define a name wins:
 
@@ -52,10 +52,11 @@ not call the skill.
   catalog nor loadable by `skill(name)`: the model cannot guess its name around
   the flag. Only the user invokes it.
 - **Budgets.** One body is capped at 5k estimated tokens (truncated with a
-  pointer to the file, never refused); the loaded bodies in one request are
-  capped at 25k, with the oldest dropped first; the catalog is capped at 3k on
-  its own. The 25k cap is enforced by `context::trim`, independently of the
-  window budget.
+  pointer to the file, never refused — though a user-level skill's file sits
+  outside the workspace, where `read_file` cannot reach it); the loaded bodies in
+  one request are capped at 25k, with the oldest dropped first and the active
+  turn included; the catalog is capped at 3k on its own. The 25k cap is enforced
+  by `context::trim`, independently of the window budget.
 - **Skills carry instructions only.** v1 does not package tools into a skill:
   the tool table is part of the request prefix and is fixed at assembly, so
   adding a tool on skill load would throw the prefix cache away.

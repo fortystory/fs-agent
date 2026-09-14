@@ -2,8 +2,8 @@
 //!
 //! A skill is a directory containing `SKILL.md`: a YAML frontmatter block with a
 //! `name` and a `description`, plus a Markdown body of instructions. The cheap
-//! half — the catalog of `<name>: <description>` lines — is pinned into the first
-//! `user` message and is present every turn; the expensive half is loaded on
+//! half — the catalog of `<name>: <description>` lines — is pinned into the head
+//! of the context and is present every turn; the expensive half is loaded on
 //! demand by the built-in `skill(name)` tool and lands on the stream as an
 //! ordinary tool result appended at the tail, so the cached prefix never moves.
 //!
@@ -25,12 +25,17 @@
 //! absent from the catalog and [`Skills::load`] refuses it by name, so guessing a
 //! name cannot get around the flag.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::events::{Event, EventPayload};
 
 use super::{estimate_tokens, CHARS_PER_TOKEN};
+
+/// The built-in tool that loads a skill body. Named once here, because the
+/// skills module owns what "loading a skill" means: the tool, the sticky drop
+/// class and the recomputed loaded set all have to agree on the name.
+pub const SKILL_TOOL: &str = "skill";
 
 /// Cap on one loaded skill body (spec §9). Over it, the body is truncated with a
 /// pointer to the full file rather than refused.
@@ -114,10 +119,6 @@ impl Skills {
 
     pub fn is_empty(&self) -> bool {
         self.skills.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.skills.len()
     }
 
     /// Every discovered name, in precedence order.
@@ -210,7 +211,7 @@ fn capped_body(skill: &Skill) -> String {
     }
     let note = format!(
         "\n\n[truncated: this skill's full text exceeds the {MAX_SKILL_TOKENS}-token cap; \
-         read {} for the rest]",
+         it is at {} (use read_file when the workspace allows it)]",
         skill.path.display()
     );
     let cap_chars = (MAX_SKILL_TOKENS as usize).saturating_mul(CHARS_PER_TOKEN);
@@ -226,16 +227,16 @@ fn capped_body(skill: &Skill) -> String {
 /// set without a new field on the session.
 pub fn loaded_skill_names(events: &[Event]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    let mut pending: Vec<(String, String)> = Vec::new();
+    let mut pending: BTreeMap<String, String> = BTreeMap::new();
     for event in events {
         match &event.payload {
             EventPayload::ToolCallStarted {
                 tool_call_id,
                 tool_name,
                 args,
-            } if tool_name == "skill" => {
+            } if tool_name == SKILL_TOOL => {
                 if let Some(name) = args.get("name").and_then(serde_json::Value::as_str) {
-                    pending.push((tool_call_id.as_str().to_owned(), name.to_owned()));
+                    pending.insert(tool_call_id.as_str().to_owned(), name.to_owned());
                 }
             }
             EventPayload::ToolCallCompleted {
@@ -243,11 +244,7 @@ pub fn loaded_skill_names(events: &[Event]) -> Vec<String> {
                 ok: true,
                 ..
             } => {
-                if let Some(index) = pending
-                    .iter()
-                    .position(|(id, _)| id == tool_call_id.as_str())
-                {
-                    let (_, name) = pending.remove(index);
+                if let Some(name) = pending.remove(tool_call_id.as_str()) {
                     if !names.contains(&name) {
                         names.push(name);
                     }

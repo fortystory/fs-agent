@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use fs_agent::config::SessionConfig;
 use fs_agent::context::skills::{
     loaded_skill_names, Skills, MAX_CATALOG_TOKENS, MAX_LOADED_SKILL_TOKENS, MAX_SKILL_TOKENS,
+    SKILL_TOOL,
 };
 use fs_agent::context::{estimate_tokens, trim, TrimPolicy, DROPPED_TOOL_RESULT};
 use fs_agent::events::{
@@ -149,7 +150,7 @@ fn the_catalog_lists_each_invocable_skill_as_name_colon_description() {
     );
     assert!(catalog.contains("- beta: does the beta thing"), "{catalog}");
     assert!(
-        catalog.contains("skill"),
+        catalog.contains(SKILL_TOOL),
         "the catalog names the loading tool"
     );
     assert!(
@@ -274,7 +275,7 @@ fn loaded_skill_names_is_recomputed_from_the_stream() {
             debater.clone(),
             EventPayload::ToolCallStarted {
                 tool_call_id: ToolCallId::new(id),
-                tool_name: "skill".to_owned(),
+                tool_name: SKILL_TOOL.to_owned(),
                 args: serde_json::json!({ "name": name }),
             },
         )
@@ -364,7 +365,7 @@ fn old_skill_bodies_are_stubbed_once_the_loaded_total_exceeds_its_budget() {
             content: "first".to_owned(),
             name: Some("user".to_owned()),
         },
-        assistant_calling(&[("s1", "skill"), ("o1", "read_file"), ("s2", "skill")]),
+        assistant_calling(&[("s1", SKILL_TOOL), ("o1", "read_file"), ("s2", SKILL_TOOL)]),
         tool_result("s1", &"a".repeat(400)),
         tool_result("o1", &"b".repeat(400)),
         tool_result("s2", &"c".repeat(400)),
@@ -396,10 +397,47 @@ fn old_skill_bodies_are_stubbed_once_the_loaded_total_exceeds_its_budget() {
 }
 
 #[test]
+fn the_loaded_skill_budget_is_a_total_across_the_active_round_too() {
+    // Every body here was loaded in the active round, so the window's
+    // "never drop the current round" rule does not apply: the aggregate budget
+    // is a cap on the whole request, and the oldest body goes.
+    let policy = TrimPolicy {
+        loaded_skill_budget: 150,
+        ..TrimPolicy::default()
+    };
+    let messages = vec![
+        Message::User {
+            content: "rules".to_owned(),
+            name: None,
+        },
+        Message::User {
+            content: "question".to_owned(),
+            name: Some("user".to_owned()),
+        },
+        assistant_calling(&[("s1", SKILL_TOOL), ("s2", SKILL_TOOL)]),
+        tool_result("s1", &"a".repeat(400)),
+        tool_result("s2", &"c".repeat(400)),
+    ];
+
+    let trimmed = trim(messages, 10_000, &policy).unwrap();
+
+    assert_eq!(
+        tool_content(&trimmed[3]),
+        Some(DROPPED_TOOL_RESULT),
+        "the oldest loaded body is dropped even inside the active round"
+    );
+    assert_eq!(
+        tool_content(&trimmed[4]),
+        Some("c".repeat(400).as_str()),
+        "only as many bodies as the budget allows survive"
+    );
+}
+
+#[test]
 fn the_default_loaded_skill_budget_is_the_spec_value() {
     let policy = TrimPolicy::default();
     assert_eq!(policy.loaded_skill_budget, MAX_LOADED_SKILL_TOKENS);
-    assert_eq!(policy.sticky_tool_names, vec!["skill".to_owned()]);
+    assert_eq!(policy.sticky_tool_names, vec![SKILL_TOOL.to_owned()]);
 }
 
 // --- the assembly seam -----------------------------------------------------
@@ -477,7 +515,7 @@ fn skill_reply(id: &str, name: &str) -> Reply {
         StreamEvent::ToolCallCompleted {
             index: 0,
             id: id.to_owned(),
-            name: "skill".to_owned(),
+            name: SKILL_TOOL.to_owned(),
             arguments: serde_json::json!({ "name": name }).to_string(),
         },
         StreamEvent::Finished {

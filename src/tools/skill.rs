@@ -10,6 +10,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::context::skills::SKILL_TOOL;
 use crate::provider::ToolSpec;
 
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
@@ -21,9 +22,9 @@ pub struct SkillTool;
 impl Tool for SkillTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            name: "skill".to_owned(),
-            description: "Load a skill's full instructions by name. The skills catalog in the \
-                          conversation lists the available names and when each one applies."
+            name: SKILL_TOOL.to_owned(),
+            description: "Load a skill's full instructions by name. The skills catalog in your \
+                          context lists the available names and when each one applies."
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",

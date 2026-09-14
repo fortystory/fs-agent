@@ -125,7 +125,7 @@ pub struct TrimPolicy {
 impl Default for TrimPolicy {
     fn default() -> Self {
         Self {
-            sticky_tool_names: vec!["skill".to_owned()],
+            sticky_tool_names: vec![skills::SKILL_TOOL.to_owned()],
             loaded_skill_budget: MAX_LOADED_SKILL_TOKENS,
         }
     }
@@ -175,7 +175,7 @@ pub fn trim(
     // before skill bodies. The same shrink, applied to one stickiness class at a
     // time, which is what makes the order strict.
     for sticky in [false, true] {
-        for index in old_result_indices(&messages, pinned, &names, policy, sticky) {
+        for index in old_result_indices(&messages, &names, policy, sticky) {
             if fits(&messages, budget) {
                 return Ok(messages);
             }
@@ -244,29 +244,48 @@ fn tool_names(messages: &[Message]) -> BTreeMap<String, String> {
     names
 }
 
-/// The old (non-active-round) tool results of one class, oldest first. A result
-/// already stubbed is not a candidate again.
-fn old_result_indices(
-    messages: &[Message],
-    pinned: usize,
-    names: &BTreeMap<String, String>,
-    policy: &TrimPolicy,
-    sticky: bool,
-) -> Vec<usize> {
-    let starts = round_starts(messages, pinned);
-    let active_start = starts.last().copied().unwrap_or(messages.len());
-    (pinned..active_start)
-        .filter(|&index| is_skill_body(&messages[index], names, policy) == sticky)
+/// Live (not-yet-stubbed) tool results outside the pinned head, oldest first,
+/// stopping before `limit`.
+///
+/// Both drop mechanisms scan the same shape; `limit` is what distinguishes them:
+/// the window order stops at the active round (the model keeps the question it
+/// is answering), while the aggregate skill budget scans the whole request.
+fn live_tool_indices(messages: &[Message], limit: usize) -> Vec<usize> {
+    (pinned_len(messages)..limit.min(messages.len()))
         .filter(|&index| {
             matches!(&messages[index], Message::Tool { content, .. } if content.as_str() != DROPPED_TOOL_RESULT)
         })
         .collect()
 }
 
-/// Whether a message is an already-live skill body: a tool result whose call was
-/// made by a sticky tool. Drives both the aggregate skill budget and the window
-/// drop order.
-fn is_skill_body(message: &Message, names: &BTreeMap<String, String>, policy: &TrimPolicy) -> bool {
+/// Where the active (last) round starts, or the end when there is no round to
+/// distinguish.
+fn active_round_start(messages: &[Message]) -> usize {
+    let starts = round_starts(messages, pinned_len(messages));
+    starts.last().copied().unwrap_or(messages.len())
+}
+
+/// The old (non-active-round) tool results of one class, oldest first.
+fn old_result_indices(
+    messages: &[Message],
+    names: &BTreeMap<String, String>,
+    policy: &TrimPolicy,
+    sticky: bool,
+) -> Vec<usize> {
+    live_tool_indices(messages, active_round_start(messages))
+        .into_iter()
+        .filter(|&index| is_sticky_result(&messages[index], names, policy) == sticky)
+        .collect()
+}
+
+/// Whether a tool result belongs to the sticky class: its call was made by a tool
+/// named in [`TrimPolicy::sticky_tool_names`] (a loaded skill body, by default).
+/// Drives both the aggregate skill budget and the window drop order.
+fn is_sticky_result(
+    message: &Message,
+    names: &BTreeMap<String, String>,
+    policy: &TrimPolicy,
+) -> bool {
     match message {
         Message::Tool { tool_call_id, .. } => names
             .get(tool_call_id.as_str())
@@ -277,21 +296,20 @@ fn is_skill_body(message: &Message, names: &BTreeMap<String, String>, policy: &T
 
 /// Enforce the aggregate loaded-skill budget (spec §9) independently of the
 /// window: while the live skill bodies total more than the policy allows, stub
-/// the oldest. The active round is never touched, matching [`trim`]'s rule that
-/// the model always keeps the question it is answering.
+/// the oldest.
+///
+/// This is a cap on the whole request, the active turn included: a round that
+/// loads more than the budget itself loses its oldest body (and may load it
+/// again). It is a separate budget from the window, so it does not wait for the
+/// window to overflow.
 fn stub_skill_bodies_over_budget(
     messages: &mut [Message],
     names: &BTreeMap<String, String>,
     policy: &TrimPolicy,
 ) {
-    let pinned = pinned_len(messages);
-    let starts = round_starts(messages, pinned);
-    let active_start = starts.last().copied().unwrap_or(messages.len());
-    let candidates: Vec<usize> = (pinned..active_start)
-        .filter(|&index| {
-            matches!(&messages[index], Message::Tool { content, .. } if content.as_str() != DROPPED_TOOL_RESULT)
-        })
-        .filter(|&index| is_skill_body(&messages[index], names, policy))
+    let candidates: Vec<usize> = live_tool_indices(messages, messages.len())
+        .into_iter()
+        .filter(|&index| is_sticky_result(&messages[index], names, policy))
         .collect();
 
     let mut total: u64 = candidates
