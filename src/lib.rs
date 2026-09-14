@@ -41,7 +41,7 @@ use tokio::task::JoinHandle;
 
 use crate::agent::TurnOutcome;
 use crate::config::SessionConfig;
-use crate::events::{EventLog, SessionId, SpeakerId};
+use crate::events::{ContextSource, EventLog, SessionId, SpeakerId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy};
 use crate::provider::Provider;
@@ -120,6 +120,10 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
     let (render, render_task) = render::spawn_headless(sinks);
     let log = EventLog::create(log_path)?;
+    // The project rules are read once, before the session exists, and recorded
+    // as a pinned injection: identity -> rules -> history (spec §10). A missing
+    // AGENTS.md is not an error, it just means there is no injection.
+    let agents_md = context::load_agents_md(&cwd);
     let mut session = Session::new(SessionParts {
         id: session_id,
         cwd,
@@ -134,6 +138,9 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         home,
     });
     agent::record_session_started(&mut session, &render)?;
+    if let Some(content) = agents_md {
+        agent::record_context_injection(&mut session, &render, ContextSource::AgentsMd, &content)?;
+    }
 
     Ok(Harness {
         session,

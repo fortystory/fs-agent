@@ -495,6 +495,34 @@ pub fn last_assistant_has_tool_calls(events: &[Event], speaker: &SpeakerId) -> b
     has_tool_calls
 }
 
+/// Query: the session-cumulative usage, summed from every `UsageRecorded`
+/// event (spec §10, §17).
+///
+/// Session spend is a derived value over the log, never hidden state, so the
+/// window layer needs no lock and an executor's usage counts without a second
+/// ledger: its events are on the same stream.
+///
+/// `reasoning_tokens` stays `None` until some provider reports it; once one
+/// does, the totals are summed.
+pub fn total_usage(events: &[Event]) -> Usage {
+    let mut total = Usage::default();
+    let mut reasoning: Option<u64> = None;
+    for event in events {
+        let EventPayload::UsageRecorded { usage } = &event.payload else {
+            continue;
+        };
+        total.input_tokens += usage.input_tokens;
+        total.output_tokens += usage.output_tokens;
+        total.cached_tokens += usage.cached_tokens;
+        total.miss_tokens += usage.miss_tokens;
+        if let Some(tokens) = usage.reasoning_tokens {
+            *reasoning.get_or_insert(0) += tokens;
+        }
+    }
+    total.reasoning_tokens = reasoning;
+    total
+}
+
 /// Append-only JSONL log for one session.
 ///
 /// The writer is owned and only [`EventLog::append`] takes `&mut self`, so

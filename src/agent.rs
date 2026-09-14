@@ -18,9 +18,10 @@ use std::time::Instant;
 
 use futures::StreamExt;
 
+use crate::context;
 use crate::events::{
-    hook_format, last_assistant_has_tool_calls, pending_tool_calls, Decision, DecisionSource,
-    EventPayload, Role, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
+    hook_format, last_assistant_has_tool_calls, pending_tool_calls, ContextSource, Decision,
+    DecisionSource, EventPayload, Role, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -71,6 +72,30 @@ pub fn record_user_message(
     )
 }
 
+/// Record one pinned context injection.
+///
+/// The injection is a first-class event so `project` stays a function of the
+/// stream plus the rules (spec §10): the content the model replays is the
+/// content that was recorded, not whatever the file says today. `ContextInjected`
+/// is attributed to `User` (spec §5), and projection turns it into the first
+/// `user` message — never merged, and never dropped by [`context::trim`].
+pub fn record_context_injection(
+    session: &mut Session,
+    render: &RenderHandle,
+    source: ContextSource,
+    content: &str,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::User,
+        EventPayload::ContextInjected {
+            source,
+            content: content.to_owned(),
+        },
+    )
+}
+
 /// Run one complete turn for `speaker` and return why it stopped.
 pub async fn run_turn(
     session: &mut Session,
@@ -80,8 +105,10 @@ pub async fn run_turn(
 ) -> Result<TurnOutcome, Error> {
     let max_iterations = session.config().max_iterations;
     // The projection branches on the model's field-level facts, so they are
-    // read once from the provider rather than re-derived per iteration.
+    // read once from the provider rather than re-derived per iteration. The
+    // drop policy is a value too, so it is built once outside the loop.
     let caps = provider.caps();
+    let trim_policy = context::TrimPolicy::default();
     let mut iteration: u32 = 0;
     let mut last_text = String::new();
 
@@ -114,9 +141,22 @@ pub async fn run_turn(
             },
         )?;
 
+        // Projection only attributes; trimming is the next pure step and the
+        // only place anything is dropped. A trim that cannot fit the budget has
+        // exhausted every droppable class, which is the turn's hard failure
+        // (spec §10).
+        let projected = project(session.log(), speaker, &caps);
+        let messages = match context::trim(projected, context::usable_input(&caps), &trim_policy) {
+            Ok(messages) => messages,
+            Err(error) => {
+                render.diagnostic(&format!("context budget: {error}"));
+                return end_turn(session, render, speaker, StopReason::Error, last_text);
+            }
+        };
+
         let request = ChatRequest {
             model: session.config().model.clone(),
-            messages: project(session.log(), speaker, &caps),
+            messages,
             tools: session.tools().specs(),
             tool_choice: ToolChoice::Auto,
             params: session.config().params.clone(),
@@ -704,25 +744,38 @@ fn emit_completed(
     started: Instant,
 ) -> Result<(), Error> {
     let duration_ms = started.elapsed().as_millis() as u64;
+    // Truncation is part of the pipeline that runs **before** the event is
+    // appended (spec §10): an oversized body is spilled to disk and the stream
+    // carries a self-contained preview plus a pointer. It never fails the call.
+    let max_tokens = session.config().max_tool_result_tokens;
+    // A success body and a failure body truncate the same way; only which
+    // payload field carries the preview differs.
+    let (ok, text) = match result {
+        Ok(output) => (true, output.text),
+        Err(error) => (false, error.to_string()),
+    };
+    let preview = context::truncate_result(
+        &text,
+        tool_call_id.as_str(),
+        session.outputs_dir(),
+        max_tokens,
+    )
+    .preview;
+    let (output, error) = if ok {
+        (Some(preview), None)
+    } else {
+        (None, Some(preview))
+    };
     emit(
         session,
         render,
         speaker,
-        match result {
-            Ok(output) => EventPayload::ToolCallCompleted {
-                tool_call_id,
-                ok: true,
-                output: Some(output.text),
-                error: None,
-                duration_ms,
-            },
-            Err(error) => EventPayload::ToolCallCompleted {
-                tool_call_id,
-                ok: false,
-                output: None,
-                error: Some(error.to_string()),
-                duration_ms,
-            },
+        EventPayload::ToolCallCompleted {
+            tool_call_id,
+            ok,
+            output,
+            error,
+            duration_ms,
         },
     )
 }

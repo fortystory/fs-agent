@@ -2,8 +2,8 @@
 //! number, and a torn final line is tolerated.
 
 use fs_agent::events::{
-    last_assistant_has_tool_calls, pending_tool_calls, read_events, Event, EventLog, EventPayload,
-    Role, SessionId, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
+    last_assistant_has_tool_calls, pending_tool_calls, read_events, total_usage, Event, EventLog,
+    EventPayload, Role, SessionId, SpeakerId, StopReason, ToolCallId, Usage, SCHEMA_VERSION,
 };
 use std::io::Write;
 
@@ -261,4 +261,46 @@ fn continuation_is_decided_by_the_last_assistant_message() {
 
     let other = SpeakerId::Debater("deepseek".into());
     assert!(!last_assistant_has_tool_calls(&events, &other));
+}
+
+#[test]
+fn session_spend_is_the_sum_of_usage_events() {
+    let usage = |seq: u64, input: u64, output: u64, cached: u64, reasoning: Option<u64>| {
+        Event::new(
+            seq,
+            SpeakerId::Debater("kimi".into()),
+            EventPayload::UsageRecorded {
+                usage: Usage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cached_tokens: cached,
+                    miss_tokens: input - cached,
+                    reasoning_tokens: reasoning,
+                },
+            },
+        )
+    };
+    let events = vec![usage(1, 100, 20, 60, None), usage(2, 50, 10, 30, Some(5))];
+
+    let total = total_usage(&events);
+    assert_eq!(total.input_tokens, 150);
+    assert_eq!(total.output_tokens, 30);
+    assert_eq!(total.cached_tokens, 90);
+    assert_eq!(total.miss_tokens, 60);
+    assert_eq!(total.reasoning_tokens, Some(5));
+}
+
+#[test]
+fn usage_without_reasoning_leaves_the_reasoning_total_absent() {
+    let events = vec![Event::new(
+        1,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::UsageRecorded {
+            usage: Usage {
+                input_tokens: 7,
+                ..Usage::default()
+            },
+        },
+    )];
+    assert_eq!(total_usage(&events).reasoning_tokens, None);
 }

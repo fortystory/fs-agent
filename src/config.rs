@@ -32,6 +32,10 @@ use thiserror::Error;
 /// Default maximum provider calls in one turn (spec §3).
 pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
 
+/// Default cap on one tool result, in estimated tokens (spec §10, ticket 07):
+/// Anthropic documents 25k as Claude Code's default tool-response limit.
+pub const DEFAULT_MAX_TOOL_RESULT_TOKENS: u64 = 25_000;
+
 /// Model used when no `default_model` is configured or exported.
 pub const DEFAULT_MODEL: &str = "kimi-k3";
 
@@ -629,6 +633,9 @@ pub struct SessionConfig {
     pub max_iterations: u32,
     /// Generation parameters, including the pinned reasoning tier.
     pub params: GenerationParams,
+    /// Cap on one tool result, in estimated tokens. An oversized result is
+    /// truncated before it enters the stream (spec §10).
+    pub max_tool_result_tokens: u64,
 }
 
 impl SessionConfig {
@@ -637,11 +644,18 @@ impl SessionConfig {
             model: model.into(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             params: GenerationParams::default(),
+            max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
         }
     }
 
     pub fn with_max_iterations(mut self, max_iterations: u32) -> Self {
         self.max_iterations = max_iterations;
+        self
+    }
+
+    /// Override the per-result truncation cap (spec §10).
+    pub fn with_max_tool_result_tokens(mut self, max_tool_result_tokens: u64) -> Self {
+        self.max_tool_result_tokens = max_tool_result_tokens;
         self
     }
 
@@ -663,6 +677,7 @@ impl Default for SessionConfig {
             model: String::new(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             params: GenerationParams::default(),
+            max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
         }
     }
 }
