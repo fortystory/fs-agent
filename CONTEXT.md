@@ -1,0 +1,63 @@
+# fs-agent
+
+自用 coding agent CLI（Rust，从零实现）。本文件只收录本项目**特有**的领域词汇——它是术语表，不是 spec，不含实现决策。
+
+> **每条的格式是「中文名（English）」**：**中文是叙述、文档与讨论里的正式用词；英文是代码里的标识符 / 类型名**。两者指同一个概念，不是互为别名——所以写文档时说「讨论者」，写代码时写 `Debater`。
+>
+> `agent` 是泛称（程序名 `fs-agent`、"一个 agent 回合"），**不作为类型名**：类型名一律用下面的 **`Debater` / `Executor`**（即讨论者 / 执行者）。
+
+## 参与者
+
+**讨论者（Debater）**:
+参与同一会话轮次化讨论的对等 agent（v1 固定 2 个、异构：KIMI + DeepSeek）。
+_Avoid_: 辩论者、discussant、agent（作类型名时）
+
+**执行者（Executor）**:
+由讨论者派出、带自己的 `parent_id` 与独立预算的子 agent，用来实际执行任务。
+_Avoid_: 子代理、执行器、subagent、worker
+
+**发言归属（Speaker）**:
+一次发言的归属（事件上的 `speaker_id`）；投影靠它判定一条发言相对当前 agent 是 `assistant` 还是 `user`。
+_Avoid_: 说话人、发言者、author、role
+
+**合成器（Synthesizer）**:
+讨论收尾时把各方发言合成产出的**那一次调用**——不是 agent（无工具、无回合、不参与轮次）。产出是「共识 / 分歧（含各自成立的前提）/ 未决」三档，而不是一个新答案。
+_Avoid_: 聚合器、aggregator、judge、裁判
+
+## 事件与状态
+
+**事件（Event）**:
+事件流里一条不可变记录；事件流是会话的唯一真相源。
+_Avoid_: 消息（那是 provider 层的 `messages`）、log line
+
+**事件流（EventLog）**:
+只追加的事件序列；每个讨论者 / 执行者的 `messages` 都是它的一次投影。
+_Avoid_: 事件日志、transcript、history、bus
+
+**投影（Projection，`project()`）**:
+纯函数 `(EventLog, SpeakerId, provider 能力) → messages`，把事件流转成某个 agent 这一次调用要重放的 `messages`。住在 provider 适配器侧。
+_Avoid_: 渲染、render、format
+
+**会话（Session）**:
+持有 `EventLog` + 名册 + 预算 + config 的那个值；是唯一持有可变状态的结构。执行者用带 `parent_id` 的嵌套会话。
+_Avoid_: conversation、thread、context
+
+## 上下文与技能
+
+**技能（Skill）**:
+按需披露的指令包：描述每轮都在场（便宜），全文只在模型调用 `skill` 时取（贵，但只在真需要时付）。
+_Avoid_: 技巧、插件、工具、能力
+
+**技能清单（SkillsCatalog）**:
+技能的「名字 + 描述」列表，与 `AGENTS.md` 同处钉住的首条 `user` 消息、逐轮不变；模型据此决定要取哪个技能的全文。
+_Avoid_: 技能索引、技能目录
+
+## 讨论
+
+**轮次（Round）**:
+讨论协议的一步（独立首轮 → 揭示 → 定向第二轮 → 合成）。具体的一次读作「第 N 轮」。
+_Avoid_: iteration、pass
+
+**回合（Turn）**:
+单个 agent 的一次完整回合：投影 → 调 provider → 权限门 → 执行工具 → 追加事件。
+_Avoid_: step、call
