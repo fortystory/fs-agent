@@ -44,10 +44,6 @@ pub enum Vendor {
     DeepSeek,
 }
 
-/// The two modeled vendors, in one place: adding a vendor is an edit here plus
-/// its capability entries, not a hunt through scattered `match` arms.
-pub const ALL_VENDORS: [Vendor; 2] = [Vendor::Kimi, Vendor::DeepSeek];
-
 impl Vendor {
     /// Display name used in diagnostics.
     pub fn as_str(&self) -> &'static str {
@@ -58,52 +54,70 @@ impl Vendor {
     }
 
     /// Hosts a key of this vendor is allowed to be paired with.
+    ///
+    /// Kimi has two separate systems that share a vendor: the Open Platform
+    /// (`api.moonshot.cn` / `api.moonshot.ai`) and Kimi Code, the coding plan
+    /// (`api.kimi.com`). Their keys are not interchangeable, but both are Kimi.
     pub fn hosts(&self) -> &'static [&'static str] {
         match self {
-            Vendor::Kimi => &["api.moonshot.cn", "api.moonshot.ai"],
+            Vendor::Kimi => &["api.moonshot.cn", "api.moonshot.ai", "api.kimi.com"],
             Vendor::DeepSeek => &["api.deepseek.com"],
         }
     }
+}
 
-    /// Base URL used when `config.toml` and the environment both stay silent.
-    pub fn default_base_url(&self) -> &'static str {
-        match self {
-            Vendor::Kimi => "https://api.moonshot.cn/v1",
-            Vendor::DeepSeek => "https://api.deepseek.com",
-        }
-    }
+/// One built-in `[providers.*]` profile: the endpoint and the environment
+/// variables its key is read from. Kimi contributes two profiles because its
+/// Open Platform and its coding plan are separate systems with separate keys.
+pub struct BuiltinProvider {
+    pub name: &'static str,
+    pub vendor: Vendor,
+    pub base_url: &'static str,
+    pub key_env: &'static str,
+    pub alt_key_envs: &'static [&'static str],
+}
 
-    /// Primary environment variable carrying this vendor's key.
-    pub fn key_env(&self) -> &'static str {
-        match self {
-            Vendor::Kimi => "MOONSHOT_API_KEY",
-            Vendor::DeepSeek => "DEEPSEEK_API_KEY",
-        }
-    }
-
-    /// Additional accepted spellings of the same key.
-    pub fn alt_key_envs(&self) -> &'static [&'static str] {
-        match self {
-            Vendor::Kimi => &["KIMI_API_KEY"],
-            Vendor::DeepSeek => &[],
-        }
-    }
-
-    /// Every environment variable that may carry this vendor's key, primary
+impl BuiltinProvider {
+    /// Every environment variable that may carry this profile's key, primary
     /// first. One list shared by resolution and by error hints.
     pub fn key_envs(&self) -> Vec<&'static str> {
-        let mut names = vec![self.key_env()];
-        names.extend(self.alt_key_envs().iter().copied());
+        let mut names = vec![self.key_env];
+        names.extend(self.alt_key_envs.iter().copied());
         names
     }
+}
 
-    /// Name of the built-in `[providers.*]` section for this vendor.
-    pub fn provider_name(&self) -> &'static str {
-        match self {
-            Vendor::Kimi => "kimi",
-            Vendor::DeepSeek => "deepseek",
-        }
-    }
+/// The built-in profiles. `kimi` is the Open Platform and `kimi-code` is the
+/// coding plan; `KIMI_API_KEY` belongs to the latter, matching Kimi's own
+/// third-party-tool docs.
+pub const BUILTIN_PROVIDERS: &[BuiltinProvider] = &[
+    BuiltinProvider {
+        name: "kimi",
+        vendor: Vendor::Kimi,
+        base_url: "https://api.moonshot.cn/v1",
+        key_env: "MOONSHOT_API_KEY",
+        alt_key_envs: &[],
+    },
+    BuiltinProvider {
+        name: "kimi-code",
+        vendor: Vendor::Kimi,
+        base_url: "https://api.kimi.com/coding/v1",
+        key_env: "KIMI_API_KEY",
+        alt_key_envs: &["KIMI_CODE_API_KEY"],
+    },
+    BuiltinProvider {
+        name: "deepseek",
+        vendor: Vendor::DeepSeek,
+        base_url: "https://api.deepseek.com",
+        key_env: "DEEPSEEK_API_KEY",
+        alt_key_envs: &[],
+    },
+];
+
+fn builtin_provider(name: &str) -> Option<&'static BuiltinProvider> {
+    BUILTIN_PROVIDERS
+        .iter()
+        .find(|builtin| builtin.name == name)
 }
 
 /// Reasoning tier. Both vendors accept it at the request top level, but only
@@ -343,16 +357,17 @@ struct RawModel {
     reasoning_effort: Option<ReasoningEffort>,
 }
 
-/// The built-in provider profiles. `kimi` and `deepseek` are the two vendors
-/// this crate models; both are usable with nothing but an exported key.
-fn builtin_vendors() -> [(&'static str, Vendor); 2] {
-    ALL_VENDORS.map(|vendor| (vendor.provider_name(), vendor))
-}
-
 /// The built-in model entries: wire model id -> provider profile name. Every
 /// id here must also exist in the capability table (asserted by a test).
+///
+/// The K3 series appears twice on purpose: `kimi-k3` is the Open Platform id
+/// and `k3` / `k3-256k` are the Kimi Code (coding plan) ids for the same model.
 pub const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("kimi-k3", "kimi"),
+    ("k3", "kimi-code"),
+    ("k3-256k", "kimi-code"),
+    ("kimi-for-coding", "kimi-code"),
+    ("kimi-for-coding-highspeed", "kimi-code"),
     ("deepseek-v4-pro", "deepseek"),
     ("deepseek-flash", "deepseek"),
 ];
@@ -363,9 +378,9 @@ fn resolve_providers(
 ) -> Result<BTreeMap<String, ProviderProfile>, ConfigError> {
     let mut providers = BTreeMap::new();
 
-    let mut names: Vec<String> = builtin_vendors()
+    let mut names: Vec<String> = BUILTIN_PROVIDERS
         .iter()
-        .map(|(name, _)| (*name).to_owned())
+        .map(|builtin| builtin.name.to_owned())
         .collect();
     for name in raw.providers.keys() {
         if !names.iter().any(|known| known == name) {
@@ -374,10 +389,7 @@ fn resolve_providers(
     }
 
     for name in names {
-        let builtin_vendor = builtin_vendors()
-            .iter()
-            .find(|(builtin, _)| *builtin == name)
-            .map(|(_, vendor)| *vendor);
+        let builtin = builtin_provider(&name);
         let section = raw.providers.get(&name);
 
         // base_url: config.toml > exported env > built-in default.
@@ -388,14 +400,14 @@ fn resolve_providers(
         let base_url = section
             .and_then(|section| section.base_url.clone())
             .or(env_base_url)
-            .or_else(|| builtin_vendor.map(|vendor| vendor.default_base_url().to_owned()))
+            .or_else(|| builtin.map(|builtin| builtin.base_url.to_owned()))
             .ok_or_else(|| ConfigError::ProviderWithoutBaseUrl {
                 provider: name.clone(),
             })?;
 
         // key: config.toml > exported env > built-in default. A built-in
-        // vendor also answers to its alternate environment spellings.
-        let (api_key, key_source, key_env) = resolve_key(&name, section, builtin_vendor, env);
+        // profile also answers to its alternate environment spellings.
+        let (api_key, key_source, key_env) = resolve_key(&name, section, builtin, env);
 
         // Structurally block the cross-vendor 401: an environment-derived
         // vendor key may only be pointed at that vendor's hosts. The key's
@@ -408,7 +420,7 @@ fn resolve_providers(
         let key_vendor = key_source
             .env_var()
             .and_then(vendor_of_key_env)
-            .or(builtin_vendor);
+            .or_else(|| builtin.map(|builtin| builtin.vendor));
         if let (Some(vendor), KeySource::Env(key_env)) = (key_vendor, &key_source) {
             if !vendor.hosts().contains(&host.as_str()) {
                 return Err(ConfigError::CrossVendorKey {
@@ -429,7 +441,7 @@ fn resolve_providers(
                 api_key,
                 key_source,
                 key_env,
-                vendor: builtin_vendor,
+                vendor: builtin.map(|builtin| builtin.vendor),
             },
         );
     }
@@ -443,12 +455,12 @@ fn resolve_providers(
 fn resolve_key(
     name: &str,
     section: Option<&RawProvider>,
-    vendor: Option<Vendor>,
+    builtin: Option<&BuiltinProvider>,
     env: &EnvMap,
 ) -> (Option<String>, KeySource, String) {
     let recommended = section
         .and_then(|section| section.api_key_env.clone())
-        .or_else(|| vendor.map(|vendor| vendor.key_env().to_owned()))
+        .or_else(|| builtin.map(|builtin| builtin.key_env.to_owned()))
         .unwrap_or_else(|| format!("{}_API_KEY", env_prefix(name)));
 
     if let Some(key) = section.and_then(|section| section.api_key.clone()) {
@@ -460,8 +472,8 @@ fn resolve_key(
     let mut candidates: Vec<String> = Vec::new();
     if let Some(explicit) = section.and_then(|section| section.api_key_env.clone()) {
         candidates.push(explicit);
-    } else if let Some(vendor) = vendor {
-        candidates.extend(vendor.key_envs().into_iter().map(str::to_owned));
+    } else if let Some(builtin) = builtin {
+        candidates.extend(builtin.key_envs().into_iter().map(str::to_owned));
     } else {
         candidates.push(recommended.clone());
     }
@@ -553,9 +565,10 @@ fn env_prefix(name: &str) -> String {
 /// Which vendor a key environment variable belongs to, if any. Makes the
 /// cross-domain guard depend on the key's origin rather than the section name.
 fn vendor_of_key_env(name: &str) -> Option<Vendor> {
-    ALL_VENDORS
-        .into_iter()
-        .find(|vendor| vendor.key_envs().contains(&name))
+    BUILTIN_PROVIDERS
+        .iter()
+        .find(|builtin| builtin.key_envs().contains(&name))
+        .map(|builtin| builtin.vendor)
 }
 
 fn host_of(base_url: &str) -> Option<String> {

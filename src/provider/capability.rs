@@ -74,47 +74,93 @@ pub struct ModelCaps {
 }
 
 /// Every model id this crate models, in a stable order for diagnostics.
-pub const KNOWN_MODELS: &[&str] = &["kimi-k3", "deepseek-flash", "deepseek-v4-pro"];
+pub const KNOWN_MODELS: &[&str] = &[
+    // Kimi Open Platform.
+    "kimi-k3",
+    // Kimi Code (coding plan); K3 is exposed to it as `k3` / `k3-256k`.
+    "k3",
+    "k3-256k",
+    "kimi-for-coding",
+    "kimi-for-coding-highspeed",
+    // DeepSeek.
+    "deepseek-flash",
+    "deepseek-v4-pro",
+];
 
 /// Look up a model id. Unknown ids are an error, never a default.
 pub fn caps_for(model: &str) -> Result<ModelCaps, UnknownModel> {
     let caps = match model {
-        "kimi-k3" => ModelCaps {
-            vendor: Vendor::Kimi,
-            // Kimi states a 1M window; its own cap max is 1048576 (2^20).
-            context_window: 1_048_576,
-            max_output_tokens: 1_048_576,
-            supports_tools: true,
-            supports_reasoning: true,
-            supports_reasoning_effort: true,
-            requires_reasoning_replay: true,
-            // K3 fixes temperature=1.0 and top_p=0.95 and asks callers not to
-            // send them.
-            supports_temperature: false,
-            supports_top_p: false,
-            supports_prompt_cache_key: true,
-            supports_stream_options: true,
-            max_tokens_field: MaxTokensField::MaxCompletionTokens,
-            min_cacheable_tokens: 257,
-        },
-        "deepseek-v4-pro" | "deepseek-flash" => ModelCaps {
-            vendor: Vendor::DeepSeek,
-            context_window: 1_048_576,
-            max_output_tokens: 393_216,
-            supports_tools: true,
-            supports_reasoning: true,
-            supports_reasoning_effort: true,
-            requires_reasoning_replay: true,
-            supports_temperature: true,
-            supports_top_p: true,
-            supports_prompt_cache_key: false,
-            supports_stream_options: true,
-            max_tokens_field: MaxTokensField::MaxTokens,
-            min_cacheable_tokens: 0,
-        },
+        // The same K3 model, under its Open Platform id and its coding-plan ids.
+        "kimi-k3" | "k3" => k3_caps(1_048_576),
+        "k3-256k" => k3_caps(262_144),
+        // Kimi Code's K2.x models. `kimi-for-coding` is K2.8 Preview (takes an
+        // effort tier); `kimi-for-coding-highspeed` is K2.7 Code with thinking
+        // always on and no tier.
+        "kimi-for-coding" => kimi_code_k2_caps(1_048_576, true),
+        "kimi-for-coding-highspeed" => kimi_code_k2_caps(262_144, false),
+        "deepseek-v4-pro" | "deepseek-flash" => deepseek_caps(),
         other => return Err(UnknownModel::new(other)),
     };
     Ok(caps)
+}
+
+/// K3, whether reached through the Open Platform or Kimi Code.
+///
+/// K3 documents no output cap tighter than the window, and fixes sampling at
+/// temperature 1.0 / top_p 0.95 with a request not to send them.
+fn k3_caps(context_window: u32) -> ModelCaps {
+    ModelCaps {
+        vendor: Vendor::Kimi,
+        context_window,
+        max_output_tokens: context_window,
+        supports_tools: true,
+        supports_reasoning: true,
+        supports_reasoning_effort: true,
+        requires_reasoning_replay: true,
+        supports_temperature: false,
+        supports_top_p: false,
+        supports_prompt_cache_key: true,
+        supports_stream_options: true,
+        max_tokens_field: MaxTokensField::MaxCompletionTokens,
+        min_cacheable_tokens: 257,
+    }
+}
+
+fn kimi_code_k2_caps(context_window: u32, supports_reasoning_effort: bool) -> ModelCaps {
+    ModelCaps {
+        vendor: Vendor::Kimi,
+        context_window,
+        max_output_tokens: context_window,
+        supports_tools: true,
+        supports_reasoning: true,
+        supports_reasoning_effort,
+        requires_reasoning_replay: true,
+        supports_temperature: true,
+        supports_top_p: true,
+        supports_prompt_cache_key: true,
+        supports_stream_options: true,
+        max_tokens_field: MaxTokensField::MaxCompletionTokens,
+        min_cacheable_tokens: 257,
+    }
+}
+
+fn deepseek_caps() -> ModelCaps {
+    ModelCaps {
+        vendor: Vendor::DeepSeek,
+        context_window: 1_048_576,
+        // DeepSeek documents a hard 384K output cap below its 1M window.
+        max_output_tokens: 393_216,
+        supports_tools: true,
+        supports_reasoning: true,
+        supports_reasoning_effort: true,
+        requires_reasoning_replay: true,
+        supports_temperature: true,
+        supports_top_p: true,
+        supports_prompt_cache_key: false,
+        supports_stream_options: true,
+        max_tokens_field: MaxTokensField::MaxTokens,
+        min_cacheable_tokens: 0,
+    }
 }
 
 /// An unregistered model id. This is deliberately loud: a new model must be

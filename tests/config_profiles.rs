@@ -8,7 +8,7 @@
 use std::fs;
 
 use fs_agent::config::{
-    self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, DEFAULT_MODEL,
+    self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, Vendor, DEFAULT_MODEL,
 };
 
 fn env(pairs: &[(&str, &str)]) -> EnvMap {
@@ -23,7 +23,7 @@ fn builtin_defaults_exist_with_no_config_file_and_no_environment() {
     let config = resolve(None, &env(&[])).unwrap();
 
     assert_eq!(config.default_model, DEFAULT_MODEL);
-    assert_eq!(config.models.len(), 3);
+    assert_eq!(config.models.len(), 7);
 
     let kimi = config.provider("kimi").expect("built-in kimi profile");
     assert_eq!(kimi.base_url, "https://api.moonshot.cn/v1");
@@ -35,9 +35,45 @@ fn builtin_defaults_exist_with_no_config_file_and_no_environment() {
         .expect("built-in deepseek profile");
     assert_eq!(deepseek.base_url, "https://api.deepseek.com");
 
-    for id in ["kimi-k3", "deepseek-v4-pro", "deepseek-flash"] {
+    for id in [
+        "kimi-k3",
+        "k3",
+        "k3-256k",
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed",
+        "deepseek-v4-pro",
+        "deepseek-flash",
+    ] {
         assert!(config.model(id).is_some(), "built-in model {id}");
     }
+}
+
+#[test]
+fn the_kimi_coding_plan_is_its_own_builtin_provider() {
+    // Kimi Code and the Kimi Open Platform are separate systems: separate
+    // base_url, separate key variable, same vendor.
+    let config = resolve(None, &env(&[])).unwrap();
+    let coding = config.provider("kimi-code").expect("built-in kimi-code");
+    assert_eq!(coding.base_url, "https://api.kimi.com/coding/v1");
+    assert_eq!(coding.vendor, Some(Vendor::Kimi));
+    assert_eq!(coding.key_env, "KIMI_API_KEY");
+    assert_eq!(config.model("k3").unwrap().provider, "kimi-code");
+    assert_eq!(config.model("k3-256k").unwrap().provider, "kimi-code");
+}
+
+#[test]
+fn a_coding_plan_key_on_the_coding_host_passes_the_domain_guard() {
+    // `api.kimi.com` is a Kimi host, so an environment-derived Kimi key there
+    // is allowed: the two Kimi systems differ by base_url, not by vendor.
+    let config = resolve(None, &env(&[("KIMI_API_KEY", "sk-kimi-coding")])).unwrap();
+    let coding = config.provider("kimi-code").unwrap();
+    assert_eq!(coding.api_key.as_deref(), Some("sk-kimi-coding"));
+    assert_eq!(coding.key_source, KeySource::Env("KIMI_API_KEY".to_owned()));
+    // The Open Platform profile stays keyless: the variables do not bleed.
+    assert_eq!(
+        config.provider("kimi").unwrap().key_source,
+        KeySource::Missing
+    );
 }
 
 #[test]
@@ -125,8 +161,9 @@ reasoning_effort = "low"
     assert_eq!(model.params.max_output_tokens, Some(4096));
     assert_eq!(model.params.reasoning_effort, Some(ReasoningEffort::Low));
 
-    // The provider is shared; the override did not fork it.
-    assert_eq!(config.providers.len(), 2);
+    // The provider is shared; the override did not fork it. (Three built-in
+    // profiles: kimi, kimi-code, deepseek.)
+    assert_eq!(config.providers.len(), 3);
     assert_eq!(
         config
             .provider_for("deepseek-v4-pro")
@@ -301,12 +338,32 @@ fn the_default_path_prefers_xdg_config_home_then_home() {
 }
 
 #[test]
-fn the_kimi_key_is_accepted_under_both_documented_spellings() {
-    for name in ["MOONSHOT_API_KEY", "KIMI_API_KEY"] {
-        let config = resolve(None, &env(&[(name, "sk-kimi")])).unwrap();
-        assert_eq!(
-            config.provider("kimi").unwrap().key_source,
-            KeySource::Env(name.to_owned())
-        );
-    }
+fn each_builtin_profile_reads_its_own_key_variable() {
+    // `KIMI_API_KEY` is the coding plan's variable (Kimi's own third-party-tool
+    // docs use it), so it must not leak into the Open Platform profile.
+    let coding = resolve(None, &env(&[("KIMI_API_KEY", "sk-kimi-coding")])).unwrap();
+    assert_eq!(
+        coding.provider("kimi-code").unwrap().key_source,
+        KeySource::Env("KIMI_API_KEY".to_owned())
+    );
+    assert_eq!(
+        coding.provider("kimi").unwrap().key_source,
+        KeySource::Missing
+    );
+
+    let platform = resolve(None, &env(&[("MOONSHOT_API_KEY", "sk-platform")])).unwrap();
+    assert_eq!(
+        platform.provider("kimi").unwrap().key_source,
+        KeySource::Env("MOONSHOT_API_KEY".to_owned())
+    );
+    assert_eq!(
+        platform.provider("kimi-code").unwrap().key_source,
+        KeySource::Missing
+    );
+
+    let alternate = resolve(None, &env(&[("KIMI_CODE_API_KEY", "sk-kimi-coding")])).unwrap();
+    assert_eq!(
+        alternate.provider("kimi-code").unwrap().key_source,
+        KeySource::Env("KIMI_CODE_API_KEY".to_owned())
+    );
 }

@@ -159,15 +159,31 @@ impl OpenAiProvider {
         match error {
             ProviderError::Auth { detail } => ProviderError::Auth {
                 detail: format!(
-                    "{detail} (provider `{}`, base_url `{}`, key from {}). A key from one vendor \
-                     returns 401 against another vendor's host; check that the key and base_url \
-                     belong together.",
+                    "{detail} (provider `{}`, base_url `{}`, key from {}). {}",
                     self.profile.name,
                     self.profile.base_url,
-                    self.key_source_description()
+                    self.key_source_description(),
+                    self.auth_hint()
                 ),
             },
             other => other,
+        }
+    }
+
+    /// What to check when the vendor rejects the credentials. Kimi's two
+    /// systems are the common trap, so they are named explicitly.
+    fn auth_hint(&self) -> &'static str {
+        match self.profile.vendor {
+            Some(Vendor::Kimi) => {
+                "Kimi runs two separate systems: a Kimi Code (coding plan) `sk-kimi-` key goes to \
+                 https://api.kimi.com/coding/v1, while a Kimi Open Platform key goes to \
+                 https://api.moonshot.cn/v1. Keys and base URLs are not interchangeable, and a \
+                 401 can also mean the plan does not include the requested model."
+            }
+            Some(Vendor::DeepSeek) => {
+                "check that the key belongs to https://api.deepseek.com and is still active."
+            }
+            None => "check that the key and base_url belong together.",
         }
     }
 
@@ -799,13 +815,26 @@ fn nested_u64(value: &Value, outer: &str, inner: &str) -> Option<u64> {
 
 /// Map an HTTP status plus error body onto one of the six classes.
 ///
-/// `QuotaExhausted` and `RateLimited` stay separate even though both vendors
-/// can use 429 for the former (Kimi) and 402 for the latter (DeepSeek).
+/// The vendors disagree on codes, so the body refines the status where it
+/// matters: Kimi Code reports plan limits as 403 (quota windows and the
+/// concurrent-request cap) and DeepSeek reports an empty balance as 402, while
+/// both can use 429 for a transient rate limit.
 pub fn classify_status(status: u16, body: &str, retry_after: Option<Duration>) -> ProviderError {
     let detail = error_detail(body);
     match status {
-        401 | 403 => ProviderError::Auth { detail },
+        401 => ProviderError::Auth { detail },
         402 => ProviderError::QuotaExhausted { detail },
+        403 => {
+            if looks_like_concurrency(&detail) {
+                // The concurrent-request cap clears once in-flight requests
+                // finish, so it behaves like a rate limit.
+                ProviderError::RateLimited { retry_after }
+            } else if looks_like_quota(&detail) {
+                ProviderError::QuotaExhausted { detail }
+            } else {
+                ProviderError::Auth { detail }
+            }
+        }
         429 => {
             if looks_like_quota(&detail) {
                 ProviderError::QuotaExhausted { detail }
@@ -828,11 +857,18 @@ fn looks_like_quota(detail: &str) -> bool {
         "quota",
         "billing",
         "arrears",
+        "usage limit",
         "欠费",
         "余额",
+        "额度",
     ]
     .iter()
     .any(|needle| lowered.contains(needle))
+}
+
+fn looks_like_concurrency(detail: &str) -> bool {
+    let lowered = detail.to_ascii_lowercase();
+    lowered.contains("concurrent") || lowered.contains("too many requests")
 }
 
 fn error_detail(body: &str) -> String {

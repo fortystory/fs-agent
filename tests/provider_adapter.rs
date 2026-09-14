@@ -586,3 +586,107 @@ fn a_keyed_builtin_provider_builds_against_its_default_host() {
     assert_eq!(provider.profile().base_url, "https://api.moonshot.cn/v1");
     assert!(provider.caps().supports_prompt_cache_key);
 }
+
+#[test]
+fn the_kimi_coding_plan_models_are_registered_with_their_own_windows() {
+    // `k3` is the coding-plan id for the same model as `kimi-k3`; `k3-256k` is
+    // its 256K-context variant.
+    let k3 = caps_for("k3").unwrap();
+    let k3_256k = caps_for("k3-256k").unwrap();
+    assert_eq!(k3.context_window, 1_048_576);
+    assert_eq!(k3_256k.context_window, 262_144);
+    assert!(k3_256k.max_output_tokens <= k3_256k.context_window);
+    assert!(k3_256k.supports_prompt_cache_key);
+    assert!(k3_256k.requires_reasoning_replay);
+
+    // K2.8 Preview takes an effort tier; K2.7 HighSpeed is thinking-on only.
+    assert!(
+        caps_for("kimi-for-coding")
+            .unwrap()
+            .supports_reasoning_effort
+    );
+    assert!(
+        !caps_for("kimi-for-coding-highspeed")
+            .unwrap()
+            .supports_reasoning_effort
+    );
+}
+
+#[test]
+fn the_coding_plan_body_carries_the_cache_key_and_no_user_id() {
+    let (body, warnings) = build_body(
+        &request("k3-256k", GenerationParams::default()),
+        caps_for("k3-256k").unwrap(),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(body["prompt_cache_key"], "s-1");
+    assert!(body.get("user_id").is_none(), "{body}");
+}
+
+#[test]
+fn the_coding_plan_builds_against_the_coding_endpoint() {
+    let config = resolve(None, &env(&[("KIMI_API_KEY", "sk-kimi-coding")])).unwrap();
+    let provider = OpenAiProvider::build(&config, "k3-256k", silent_warnings()).unwrap();
+    assert_eq!(
+        provider.profile().base_url,
+        "https://api.kimi.com/coding/v1"
+    );
+    assert_eq!(
+        chat_completions_url(&provider.profile().base_url),
+        "https://api.kimi.com/coding/v1/chat/completions"
+    );
+}
+
+#[test]
+fn kimi_code_plan_limits_are_read_from_the_body_not_the_status_alone() {
+    // Kimi Code reports plan limits as 403, so 403 cannot mean "bad key" by
+    // itself; quota windows are exhaustion and the concurrency cap is a rate
+    // limit, neither of which is retried as an auth problem.
+    let five_hour = classify_status(
+        403,
+        r#"{"error":{"message":"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends."}}"#,
+        None,
+    );
+    assert!(
+        matches!(five_hour, ProviderError::QuotaExhausted { .. }),
+        "{five_hour:?}"
+    );
+
+    let weekly = classify_status(
+        403,
+        r#"{"error":{"message":"You've reached your weekly (7-day) usage limit."}}"#,
+        None,
+    );
+    assert!(
+        matches!(weekly, ProviderError::QuotaExhausted { .. }),
+        "{weekly:?}"
+    );
+
+    let concurrent = classify_status(
+        403,
+        r#"{"error":{"message":"You've reached your concurrent request limit. Please wait for your ongoing requests to finish and try again."}}"#,
+        None,
+    );
+    assert!(
+        matches!(concurrent, ProviderError::RateLimited { .. }),
+        "{concurrent:?}"
+    );
+
+    // A 403 with no account-limit wording is still a refusal.
+    let forbidden = classify_status(403, "forbidden", None);
+    assert!(
+        matches!(forbidden, ProviderError::Auth { .. }),
+        "{forbidden:?}"
+    );
+
+    // Transient 429s stay rate limits.
+    let transient = classify_status(
+        429,
+        r#"{"error":{"message":"The engine is currently overloaded, please try again later"}}"#,
+        None,
+    );
+    assert!(
+        matches!(transient, ProviderError::RateLimited { .. }),
+        "{transient:?}"
+    );
+}
