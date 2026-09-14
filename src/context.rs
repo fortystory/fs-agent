@@ -21,12 +21,19 @@
 //! the paired `tool` message must survive with a shorter body. Only whole-round
 //! dropping removes messages, and it removes a round's assistant message and its
 //! results together, which keeps the pairing intact.
+//!
+//! [`skills`] is the sibling concern (spec §9): discovery and the description
+//! catalog live there, and the aggregate cap on loaded skill bodies is enforced
+//! here, before the window budget is even consulted.
+
+pub mod skills;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
+use skills::MAX_LOADED_SKILL_TOKENS;
 
 /// Input space reserved for the model's own output (spec §10).
 ///
@@ -107,12 +114,19 @@ pub struct TrimPolicy {
     /// (spec §10: a loaded skill body belongs to the model's current work).
     /// Ticket 08 mounts the `skill` tool this names.
     pub sticky_tool_names: Vec<String>,
+    /// Aggregate cap on the loaded skill bodies in one request (spec §9).
+    ///
+    /// Independent of the window: once the total exceeds it the oldest bodies are
+    /// stubbed, whatever the window budget says. Ordinary tool results are never
+    /// touched by this pre-pass.
+    pub loaded_skill_budget: u64,
 }
 
 impl Default for TrimPolicy {
     fn default() -> Self {
         Self {
             sticky_tool_names: vec!["skill".to_owned()],
+            loaded_skill_budget: MAX_LOADED_SKILL_TOKENS,
         }
     }
 }
@@ -135,6 +149,10 @@ pub enum TrimError {
 /// (spec §10): old ordinary tool results, then old skill bodies, then old whole
 /// rounds. Still over budget after that is a hard failure for the turn.
 ///
+/// Before any of that, the aggregate loaded-skill budget is enforced (spec §9):
+/// the oldest skill bodies are stubbed once their total exceeds
+/// [`TrimPolicy::loaded_skill_budget`], even when the window budget is generous.
+///
 /// Read-only with respect to the event log: this only rewrites the `messages`
 /// value it is handed. The pinned injection at the head and the turn currently
 /// being assembled are never dropped.
@@ -143,12 +161,15 @@ pub fn trim(
     budget: u64,
     policy: &TrimPolicy,
 ) -> Result<Vec<Message>, TrimError> {
+    // Names are needed by both the skill-body budget and the window drop order.
+    let names = tool_names(&messages);
+    stub_skill_bodies_over_budget(&mut messages, &names, policy);
+
     if fits(&messages, budget) {
         return Ok(messages);
     }
 
     let pinned = pinned_len(&messages);
-    let names = tool_names(&messages);
 
     // Classes 1 and 2: old tool-result bodies, oldest first, ordinary results
     // before skill bodies. The same shrink, applied to one stickiness class at a
@@ -235,19 +256,55 @@ fn old_result_indices(
     let starts = round_starts(messages, pinned);
     let active_start = starts.last().copied().unwrap_or(messages.len());
     (pinned..active_start)
-        .filter(|&index| match &messages[index] {
-            Message::Tool {
-                tool_call_id,
-                content,
-            } if content.as_str() != DROPPED_TOOL_RESULT => {
-                let is_sticky = names
-                    .get(tool_call_id.as_str())
-                    .is_some_and(|name| policy.sticky_tool_names.iter().any(|tool| tool == name));
-                is_sticky == sticky
-            }
-            _ => false,
+        .filter(|&index| is_skill_body(&messages[index], names, policy) == sticky)
+        .filter(|&index| {
+            matches!(&messages[index], Message::Tool { content, .. } if content.as_str() != DROPPED_TOOL_RESULT)
         })
         .collect()
+}
+
+/// Whether a message is an already-live skill body: a tool result whose call was
+/// made by a sticky tool. Drives both the aggregate skill budget and the window
+/// drop order.
+fn is_skill_body(message: &Message, names: &BTreeMap<String, String>, policy: &TrimPolicy) -> bool {
+    match message {
+        Message::Tool { tool_call_id, .. } => names
+            .get(tool_call_id.as_str())
+            .is_some_and(|name| policy.sticky_tool_names.iter().any(|tool| tool == name)),
+        _ => false,
+    }
+}
+
+/// Enforce the aggregate loaded-skill budget (spec §9) independently of the
+/// window: while the live skill bodies total more than the policy allows, stub
+/// the oldest. The active round is never touched, matching [`trim`]'s rule that
+/// the model always keeps the question it is answering.
+fn stub_skill_bodies_over_budget(
+    messages: &mut [Message],
+    names: &BTreeMap<String, String>,
+    policy: &TrimPolicy,
+) {
+    let pinned = pinned_len(messages);
+    let starts = round_starts(messages, pinned);
+    let active_start = starts.last().copied().unwrap_or(messages.len());
+    let candidates: Vec<usize> = (pinned..active_start)
+        .filter(|&index| {
+            matches!(&messages[index], Message::Tool { content, .. } if content.as_str() != DROPPED_TOOL_RESULT)
+        })
+        .filter(|&index| is_skill_body(&messages[index], names, policy))
+        .collect();
+
+    let mut total: u64 = candidates
+        .iter()
+        .map(|&index| estimate_message_tokens(&messages[index]))
+        .sum();
+    for index in candidates {
+        if total <= policy.loaded_skill_budget {
+            break;
+        }
+        total -= estimate_message_tokens(&messages[index]);
+        stub_tool_result(&mut messages[index]);
+    }
 }
 
 fn stub_tool_result(message: &mut Message) {

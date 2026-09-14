@@ -272,6 +272,7 @@ pub async fn run_turn(
             // Everything is read off the session before the read set is borrowed.
             let paths = session.paths().clone();
             let locks = session.path_locks().clone();
+            let skills = session.skills().clone();
             let mut pending = PendingCall {
                 tool_call_id: tool_call_id.as_str().to_owned(),
                 tool_name: call.name.clone(),
@@ -279,6 +280,7 @@ pub async fn run_turn(
                 outputs_dir: session.outputs_dir().to_path_buf(),
                 paths,
                 locks,
+                skills,
             };
 
             let started = Instant::now();

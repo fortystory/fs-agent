@@ -55,6 +55,9 @@ impl Fixture {
             outputs_dir: self.outputs.clone(),
             paths: self.paths.clone(),
             locks: self.locks.clone(),
+            // The dispatch seam under test does not involve skills; an empty
+            // library keeps the built-in `skill` tool resolvable but inert.
+            skills: std::sync::Arc::new(fs_agent::context::skills::Skills::default()),
         }
     }
 

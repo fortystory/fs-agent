@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::SessionConfig;
+use crate::context::skills::Skills;
 use crate::events::{Event, EventLog, EventPayload, SessionId, SpeakerId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy, Rule};
@@ -46,6 +47,9 @@ pub struct SessionParts {
     pub hook: Option<Arc<dyn Hook>>,
     /// The user's home directory, when it is known.
     pub home: Option<PathBuf>,
+    /// The skills discovered at assembly (spec §9). Shared with every nested
+    /// session, so an executor sees the same catalog as its parent.
+    pub skills: Arc<Skills>,
 }
 
 pub struct Session {
@@ -69,6 +73,8 @@ pub struct Session {
     /// escape the strategy that constrains its parent (spec §16).
     hook: Option<Arc<dyn Hook>>,
     home: Option<PathBuf>,
+    /// The discovered skill library, read by the built-in `skill` tool (spec §9).
+    skills: Arc<Skills>,
 }
 
 impl Session {
@@ -87,6 +93,7 @@ impl Session {
             asker,
             hook,
             home,
+            skills,
         } = parts;
         let paths = SessionPaths::new(&cwd);
         Self {
@@ -103,6 +110,7 @@ impl Session {
             asker,
             hook,
             home,
+            skills,
         }
     }
 
@@ -186,6 +194,13 @@ impl Session {
     /// The user's home directory, when it was injected.
     pub fn home(&self) -> Option<&Path> {
         self.home.as_deref()
+    }
+
+    /// The discovered skill library (spec §9). The `skill` tool reads it through
+    /// the dispatch context; the catalog injection is computed from it at
+    /// assembly.
+    pub fn skills(&self) -> &Arc<Skills> {
+        &self.skills
     }
 
     /// This agent's read set. Read-before-edit consults it; a failed match

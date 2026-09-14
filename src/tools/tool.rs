@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 
 /// The workspace side effect of one planned call.
@@ -84,6 +85,9 @@ pub struct ToolContext<'a> {
     pub outputs_dir: &'a Path,
     /// Session cwd, for display and for tools that run relative to it.
     pub cwd: &'a Path,
+    /// The session's discovered skill library (spec §9). A value discovered at
+    /// assembly, so `skill(name)` looks up rather than resolving a path.
+    pub skills: &'a Skills,
     pub tool_call_id: &'a str,
     pub args: &'a Value,
 }

@@ -121,9 +121,13 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     let (render, render_task) = render::spawn_headless(sinks);
     let log = EventLog::create(log_path)?;
     // The project rules are read once, before the session exists, and recorded
-    // as a pinned injection: identity -> rules -> history (spec §10). A missing
-    // AGENTS.md is not an error, it just means there is no injection.
+    // as a pinned injection: identity -> rules -> catalog -> history (spec §10).
+    // A missing AGENTS.md is not an error, it just means there is no injection.
     let agents_md = context::load_agents_md(&cwd);
+    // Skills are discovered once at assembly, the same way: the library is a
+    // session value, and its cheap half — the description catalog — is pinned
+    // alongside the rules (spec §9). The full bodies load on demand.
+    let skills = Arc::new(context::skills::Skills::discover(&cwd, home.as_deref()));
     let mut session = Session::new(SessionParts {
         id: session_id,
         cwd,
@@ -136,10 +140,19 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         asker,
         hook,
         home,
+        skills: Arc::clone(&skills),
     });
     agent::record_session_started(&mut session, &render)?;
     if let Some(content) = agents_md {
         agent::record_context_injection(&mut session, &render, ContextSource::AgentsMd, &content)?;
+    }
+    if let Some(catalog) = skills.catalog() {
+        agent::record_context_injection(
+            &mut session,
+            &render,
+            ContextSource::SkillsCatalog,
+            &catalog,
+        )?;
     }
 
     Ok(Harness {

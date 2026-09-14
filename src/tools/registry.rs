@@ -24,9 +24,11 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 
 use super::paths::{PathLocks, SessionPaths};
@@ -158,6 +160,7 @@ impl Registry {
             write_paths: &call.paths,
             outputs_dir: &call.outputs_dir,
             cwd: call.paths.cwd(),
+            skills: &call.skills,
             tool_call_id: &call.tool_call_id,
             args: &call.args,
         };
@@ -261,6 +264,9 @@ pub struct PendingCall {
     pub outputs_dir: PathBuf,
     pub paths: SessionPaths,
     pub locks: PathLocks,
+    /// The session's discovered skill library. Cloned as a handle, like the path
+    /// table, so a tool that needs it never reaches into the session.
+    pub skills: Arc<Skills>,
 }
 
 /// What one dispatch produced.
