@@ -20,10 +20,30 @@ use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::render::RenderSinks;
 use crate::{assemble, AssemblyParts};
 
-/// Prompt for the first probe turn. Short and deterministic.
-const PROBE_PROMPT: &str = "Reply with exactly: ok";
-/// Prompt for the second turn; asks the model to keep the transcript growing.
+/// Prompt for the second probe turn; keeps the transcript growing so the first
+/// turn's prefix is what the cache has to match.
 const PROBE_FOLLOW_UP: &str = "Reply with exactly: done";
+
+/// How long to wait between the two probe turns.
+///
+/// DeepSeek builds its prefix cache on disk over "seconds"; asking again
+/// immediately measures a cold cache and reports a false negative.
+const CACHE_WARMUP: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The first probe turn. Padded well past both vendors' cache floors (Kimi only
+/// caches prompts above 256 tokens), so a second request can show a hit at all.
+fn probe_prompt() -> String {
+    const FILLER: &str =
+        "The quick brown fox jumps over the lazy dog while the prefix cache warms up. ";
+    let mut prompt = String::from(
+        "Ignore the filler below; it only pads the prompt so prefix caching engages.\n",
+    );
+    while prompt.len() < 2_000 {
+        prompt.push_str(FILLER);
+    }
+    prompt.push_str("\nReply with exactly: ok");
+    prompt
+}
 
 /// Parse `argv` from the environment and run. This is the binary entry point.
 pub fn main() -> ExitCode {
@@ -232,7 +252,13 @@ async fn probe_model(config: &Config, model_id: &str) -> Result<(), ProbeError> 
         "model {model_id}  (provider {}, {})",
         profile.name, profile.base_url
     );
-    for (turn, prompt) in [PROBE_PROMPT, PROBE_FOLLOW_UP].iter().enumerate() {
+    let first = probe_prompt();
+    let turns: [&str; 2] = [first.as_str(), PROBE_FOLLOW_UP];
+    for (turn, prompt) in turns.iter().enumerate() {
+        if turn > 0 {
+            // Let the vendor persist the first turn's prefix before asking again.
+            tokio::time::sleep(CACHE_WARMUP).await;
+        }
         harness.run_turn(prompt).await.map_err(ProbeError::failed)?;
         match last_usage(&log_path) {
             Some(usage) => println!(
