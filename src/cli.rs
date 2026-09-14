@@ -263,6 +263,9 @@ async fn probe_model(
         // `ask` refuses writes rather than hanging on a question nobody can see.
         policy: Policy::for_mode(Mode::Ask),
         asker: None,
+        // Ticket 05 lands the mount points; wiring user-declared hooks into the
+        // CLI is nobody's ticket yet, so the probe runs without one.
+        hook: None,
         home: home.map(Path::to_path_buf),
     })
     .await

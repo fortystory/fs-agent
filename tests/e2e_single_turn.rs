@@ -62,6 +62,7 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
         // approves every write. Permission-specific tests script their own.
         policy: Policy::for_mode(Mode::Ask),
         asker: Some(Arc::new(AlwaysAllow)),
+        hook: None,
         home: None,
     })
     .await

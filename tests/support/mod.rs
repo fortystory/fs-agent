@@ -12,7 +12,9 @@
 mod asker;
 mod capture;
 mod fake_provider;
+mod hook;
 
 pub use asker::{AlwaysAllow, ScriptedAsker};
 pub use capture::CaptureBuf;
 pub use fake_provider::{FakeProvider, Reply};
+pub use hook::{PostCall, PreCall, ScriptedHook};

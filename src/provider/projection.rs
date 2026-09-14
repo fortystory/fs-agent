@@ -5,12 +5,13 @@
 //!
 //! Ticket 01 covers the single-agent case: the acting speaker's own messages
 //! become `assistant`, everyone else's become `user`, and the speaker's tool
-//! round-trip is replayed. Other-speaker attribution (a one-line tool summary,
-//! merged PostToolUse feedback) and capability-driven field differences land in
-//! ticket 06.
+//! round-trip is replayed. Ticket 05 adds the merge of a post-hook's feedback
+//! into the result it annotates. Other-speaker attribution (a one-line tool
+//! summary, merged PostToolUse feedback) and capability-driven field differences
+//! land in ticket 06.
 
 use super::{Message, ToolCall};
-use crate::events::{Event, EventPayload, SpeakerId};
+use crate::events::{hook_format, Event, EventPayload, SpeakerId};
 
 /// Recompute the `messages` an agent should replay from the event stream.
 pub fn project(events: &[Event], speaker: &SpeakerId) -> Vec<Message> {
@@ -63,6 +64,27 @@ pub fn project(events: &[Event], speaker: &SpeakerId) -> Vec<Message> {
                         tool_call_id: tool_call_id.as_str().to_owned(),
                         content,
                     });
+                }
+            }
+            EventPayload::HookExecuted { point, outcome, .. }
+                if is_mine && point == hook_format::POINT_POST =>
+            {
+                // A post-hook's feedback is an appended event, but a provider
+                // allows exactly one `tool` message per `tool_call`, so the
+                // projection merges it into the result it annotates. Only a
+                // `feedback:` outcome merges; a failure is dropped, which is what
+                // makes "a post-hook failure only loses feedback" true on the
+                // model's side too.
+                if let Some(feedback) = hook_format::feedback_text(outcome) {
+                    if let Some(Message::Tool { content, .. }) = pending
+                        .as_mut()
+                        .and_then(|pending| pending.results.last_mut())
+                    {
+                        content.push_str("\n\n");
+                        content.push_str(hook_format::FEEDBACK_MARKER);
+                        content.push(' ');
+                        content.push_str(feedback);
+                    }
                 }
             }
             _ => {}

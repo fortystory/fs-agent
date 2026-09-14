@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::config::SessionConfig;
 use crate::events::{Event, EventLog, EventPayload, SessionId, SpeakerId};
+use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy, Rule};
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
 
@@ -40,6 +41,9 @@ pub struct SessionParts {
     /// The port the loop asks when the gate answers `Ask`. `None` means there is
     /// no interactive answerer, so the loop downgrades `Ask` to `Deny`.
     pub asker: Option<Arc<dyn Asker>>,
+    /// The strategy mounted at the two tool-call hook points. `None` means the
+    /// loop calls no hook and appends no `HookExecuted` event.
+    pub hook: Option<Arc<dyn Hook>>,
     /// The user's home directory, when it is known.
     pub home: Option<PathBuf>,
 }
@@ -61,6 +65,9 @@ pub struct Session {
     /// The ask port, shared with any nested session so an executor asks through
     /// the same renderer.
     asker: Option<Arc<dyn Asker>>,
+    /// The hook strategy, shared with any nested session so an executor cannot
+    /// escape the strategy that constrains its parent (spec §16).
+    hook: Option<Arc<dyn Hook>>,
     home: Option<PathBuf>,
 }
 
@@ -78,6 +85,7 @@ impl Session {
             outputs_dir,
             policy,
             asker,
+            hook,
             home,
         } = parts;
         let paths = SessionPaths::new(&cwd);
@@ -93,6 +101,7 @@ impl Session {
             read_set: ReadSet::default(),
             policy,
             asker,
+            hook,
             home,
         }
     }
@@ -161,6 +170,11 @@ impl Session {
     /// The ask port, if this session has an interactive answerer.
     pub fn asker(&self) -> Option<&Arc<dyn Asker>> {
         self.asker.as_ref()
+    }
+
+    /// The hook strategy, if one is mounted.
+    pub fn hook(&self) -> Option<&Arc<dyn Hook>> {
+        self.hook.as_ref()
     }
 
     /// The user's home directory, when it was injected.

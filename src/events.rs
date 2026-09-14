@@ -369,6 +369,61 @@ impl EventPayload {
     }
 }
 
+/// Text conventions over [`EventPayload::HookExecuted`].
+///
+/// The hook payload is `{ point, command, outcome }`: the schema has no room for
+/// a structured outcome, so an outcome is a line of text with a stable prefix.
+/// Producing and parsing share these constants because a drifting convention
+/// would silently turn ticket 19's hook metrics into zero (spec §18).
+///
+/// `feedback:` is the one outcome the projection merges into the tool message it
+/// annotates; a `failed:` outcome is dropped instead, which is what makes
+/// "a post-hook failure only loses feedback" true on the model's side too.
+pub mod hook_format {
+    /// `HookExecuted.point` for the pre-mount point.
+    pub const POINT_PRE: &str = "pre_tool_use";
+    /// `HookExecuted.point` for the post-mount point.
+    pub const POINT_POST: &str = "post_tool_use";
+
+    /// A hook produced no change: a pre-hook leaves the call alone, a post-hook
+    /// injects no feedback. The `point` says which.
+    pub const OUTCOME_CONTINUE: &str = "continue";
+    /// A pre-hook replaced the tool arguments.
+    pub const OUTCOME_REWRITE: &str = "rewrite";
+    /// A pre-hook tightened the effective verdict to ask.
+    pub const OUTCOME_TIGHTEN_ASK: &str = "tighten:ask";
+    /// A pre-hook tightened the effective verdict to deny.
+    pub const OUTCOME_TIGHTEN_DENY: &str = "tighten:deny";
+    /// A pre-hook skipped execution.
+    pub const OUTCOME_SKIP: &str = "skip";
+    /// A pre-hook stopped the turn.
+    pub const OUTCOME_STOP: &str = "stop";
+
+    /// Prefix of a post-hook outcome that carries feedback for the model.
+    pub const FEEDBACK_PREFIX: &str = "feedback: ";
+    /// Prefix of any failed or timed-out hook outcome.
+    pub const FAILED_PREFIX: &str = "failed: ";
+
+    /// The marker the projection puts in front of merged feedback.
+    pub const FEEDBACK_MARKER: &str = "[hook feedback]";
+
+    /// Build the outcome for feedback a post-hook injected.
+    pub fn feedback(text: &str) -> String {
+        format!("{FEEDBACK_PREFIX}{text}")
+    }
+
+    /// Build the outcome for a hook that failed or timed out.
+    pub fn failed(message: &str) -> String {
+        format!("{FAILED_PREFIX}{message}")
+    }
+
+    /// The feedback an outcome carries, or `None` when it carries none (a plain
+    /// `continue`, a failure, or a pre-hook outcome).
+    pub fn feedback_text(outcome: &str) -> Option<&str> {
+        outcome.strip_prefix(FEEDBACK_PREFIX)
+    }
+}
+
 /// The envelope. `seq` is the only identity of an event: it is the JSONL line
 /// number, so there is no second identity scheme.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

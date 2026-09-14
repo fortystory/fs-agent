@@ -64,6 +64,7 @@ async fn fixture(
         },
         policy: session_policy,
         asker,
+        hook: None,
         home: None,
     })
     .await

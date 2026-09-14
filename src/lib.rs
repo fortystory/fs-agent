@@ -42,6 +42,7 @@ use tokio::task::JoinHandle;
 use crate::agent::TurnOutcome;
 use crate::config::SessionConfig;
 use crate::events::{EventLog, SessionId, SpeakerId};
+use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy};
 use crate::provider::Provider;
 use crate::render::{RenderHandle, RenderSinks};
@@ -74,6 +75,9 @@ pub struct AssemblyParts {
     /// The ask port used when the gate answers `Ask`. `None` means no
     /// interactive answerer, so the loop downgrades `Ask` to `Deny`.
     pub asker: Option<Arc<dyn Asker>>,
+    /// The strategy mounted at the tool-call hook points. `None` means the loop
+    /// calls no hook.
+    pub hook: Option<Arc<dyn Hook>>,
     /// The user's home directory, when the caller knows it. Only the `rm`
     /// circuit breaker reads it.
     pub home: Option<PathBuf>,
@@ -102,6 +106,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         sinks,
         policy,
         asker,
+        hook,
         home,
     } = parts;
 
@@ -125,6 +130,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         outputs_dir,
         policy,
         asker,
+        hook,
         home,
     });
     agent::record_session_started(&mut session, &render)?;
