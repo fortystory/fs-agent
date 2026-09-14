@@ -29,10 +29,12 @@ not call the skill.
 
 - **Catalog.** At assembly, every `SKILL.md` under the discovery roots is read
   for its `name` and `description`. The catalog of `name: description` lines is
-  recorded as a `ContextInjected { source: SkillsCatalog }` event, projected into
-  the pinned head of the context (never trimmed), and is byte-stable across
-  turns so the prefix cache keeps hitting. The catalog is capped at 3k estimated
-  tokens; late entries are omitted whole with a count.
+  recorded as a `ContextInjected { source: SkillsCatalog }` event and projected
+  into the pinned head of the context: it **shares the first `user` message with
+  `AGENTS.md`** (so the wire never carries two consecutive same-role messages),
+  and that message is never trimmed and is byte-stable across turns so the prefix
+  cache keeps hitting. The catalog is capped at 3k estimated tokens; late entries
+  are omitted whole with a count.
 - **Loading.** The built-in `skill(name)` tool returns the body (frontmatter
   stripped) as a normal tool result, appended at the tail, so the cached prefix
   never moves. The result is a normal tool result: it is accounted for,

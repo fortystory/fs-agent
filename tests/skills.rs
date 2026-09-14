@@ -564,6 +564,7 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
             _ => None,
         })
         .collect();
+    // Two events, each with its own source...
     assert_eq!(injections.len(), 2, "one AGENTS.md and one skills catalog");
     assert!(matches!(
         injections[0],
@@ -584,22 +585,25 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
         "{content}"
     );
 
-    // Identity -> rules -> catalog -> history, and the catalog is byte-stable
+    // ...but the projection merges the leading injections into the one pinned
+    // first `user` message (spec §10: the rules and the catalog share it), so
+    // the wire never carries consecutive same-role messages. It is byte-stable
     // every turn so the prefix cache keeps hitting.
     for request in fixture.provider.requests() {
         assert_eq!(
             request.messages[0],
             Message::User {
-                content: "PROJECT RULES\n".to_owned(),
+                content: format!("PROJECT RULES\n\n{content}"),
                 name: None,
             }
         );
-        assert_eq!(
-            request.messages[1],
-            Message::User {
-                content: content.clone(),
-                name: None,
-            }
+        assert!(
+            !matches!(
+                request.messages.get(1),
+                Some(Message::User { name: None, .. })
+            ),
+            "the catalog does not become a second pinned message: {:?}",
+            request.messages
         );
     }
 }

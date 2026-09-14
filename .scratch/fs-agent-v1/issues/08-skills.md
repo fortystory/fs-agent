@@ -23,7 +23,7 @@ Status: done
 
 实现期把票面留白写实的几处（都不改 spec 的决定）：
 
-1. **清单与 `AGENTS.md` 是两条 `ContextInjected`、两条钉住的 `user` 消息**，不合成一条。票 07 的机制就是「一条注入 = 一条钉住消息」（票 07 评论第 7 条：票 08 追加一条 `SkillsCatalog` 即可）；两条都在钉住前缀里、逐轮字节不变、`trim` 永不裁剪，所以「逐轮不变以保前缀缓存」的实质要求照旧成立，布局读作「身份 → 规则 → 清单 → 历史」。评审指出 spec §10 原话「注入为**第一条** `user` 消息」与 §5「两条钉住的注入**不参与合并**」有歧义，已回改 §10 为「注入为钉住头部的 `user` 消息（各成一条、彼此不合并）」——不动任何决定，只把两节对齐。
+1. **清单与 `AGENTS.md` 是两条 `ContextInjected` 事件，但投影合并成同一条钉住的 `user` 消息**。流上仍按 `source` 各记一条（`AgentsMd` / `SkillsCatalog`，spec §2 的枚举因此保留），`project` 把**开头连续的**注入拼进同一条消息（spec §10、决议票 09「与 `AGENTS.md` 同一条」），所以线级不会出现连续两条同角色消息（§5 合并规则的初衷）。中途注入（票 15 的计划指令）前面已有历史，因此自成一 `user` 消息；`trim` 的钉住判据「开头连续的 `User{name:None}`」不变（现在通常只有 1 条）。**第一版实现曾让两条注入各成一消息**，第二轮两轴复查指出它与决议票 09 冲突，已按决议改为合并、并把 spec §10 回改成「合并注入为第一条 `user` 消息」。
 2. **「已加载总 25k」是整条请求的真实总量（含当前回合）**，落在 `trim` 的窗口 fit 检查之前：总量超 25k 就把最老的 skill body stub 掉，即使窗口还有富余；**普通工具结果一概不碰**。窗口驱动的丢弃顺序照旧（老普通结果 → 老 skill body → 老整轮），两条合起来正是决策票那句「老 skill body（超出 25k 的最老先丢）」。当前回合自己加载超预算时，该回合最老的 body 会被 stub（模型可以再 load 一次）——窗口的「当前回合永不丢」保护的是问题与回答，不是这条独立的 skills 预算（评审收口：只扫 `pinned..active_start` 时一回合能超 25k，不是真总量）。判定复用 `TrimPolicy.sticky_tool_names`，与票 07 的黏性类别共用一个判据。
 3. **frontmatter 用极小标量解析器，不引 YAML 依赖**：只认 `name` / `description` / `disable-model-invocation`，值支持裸串、单引号与双引号（双引号内 `\"` / `\\` 反转义，实测本机 38 个 skill 全覆盖）。**缺 `description` 的 `SKILL.md` 不算 skill**——清单就是靠 description 构成的。
 4. **单 skill 超 5k 是截断不是拒绝**：截到 5k 估算 token 并附「全文在 <SKILL.md 路径>（工作区允许时用 read_file 读）」的指针（决策票第 64 行口径）。项目级 skill 的路径在 cwd 内，`read_file` 够得着；**用户级 skill 在 cwd 外，`read_file` 受 cwd 限制够不着**——这是决策票没覆盖的一处限制，指针的措辞已改成不承诺「一定可读」。缓解：本机实测最大的 skill ~3k token（决策票同口径），5k 是安全阀、罕见路径。
@@ -32,5 +32,6 @@ Status: done
 7. **「已调用集合」= `loaded_skill_names(&[Event])`**：扫 `ToolCallStarted{tool_name=="skill"}` 与其 `ToolCallCompleted{ok:true}` 配对，按首次加载序返回去重名。纯查询、零状态，compaction 后要重注入直接站它上面。
 8. **交接票 12（会话恢复）**：`--continue` 复用既有日志时**不要再记 `SkillsCatalog` 注入**（同票 07 评论第 10 条对 `AgentsMd` 的规矩）。库本身在组装期重新发现即可，清单内容由 cwd 决定，**不随会话变化**。
 9. **交接票 09（repo map）**：`skill` 的形状可直接照搬——`ReadOnly`、无 read path、结果走同一套截断与丢弃；`repo_map` 不需要会话里的库，比它更简单。
-10. **两轴评审收口**：Spec 轴指出「已加载总 25k」原来只扫非当前回合（一回合内可超）、用户级 skill 的截断指针够不着、清单是第二条钉住消息（已回改 spec §10 对齐 §5）；Standards 轴指出工具名字面量散落（收进 `SKILL_TOOL`）、`old_result_indices` 与聚合 pass 重复候选扫描（收进 `live_tool_indices` / `active_round_start`）、`is_skill_body` 名不副实（改 `is_sticky_result`）、`Skills::len` 无调用者（删）。`render_catalog(budget)` / `names` / `is_empty` 作为纯函数测试接缝保留。
+10. **第一轮两轴评审收口**：Spec 轴指出「已加载总 25k」原来只扫非当前回合（一回合内可超）、用户级 skill 的截断指针够不着、清单是第二条钉住消息；Standards 轴指出工具名字面量散落（收进 `SKILL_TOOL`）、`old_result_indices` 与聚合 pass 重复候选扫描（收进 `live_tool_indices` / `active_round_start`）、`is_skill_body` 名不副实（改 `is_sticky_result`）、`Skills::len` 无调用者（删）。
+11. **第二轮两轴复查（固定点 `196c7e8`，含上一条修复）**：25k 真总量与截断措辞判定已解决；Spec 轴判定第一轮那次 §10 改写「削弱了决定」——决议票 09 明确清单与 `AGENTS.md` **同一条** message，于是改为**投影合并开头连续的注入**、§10 回改成「合并注入为第一条 `user` 消息」并写明两条事件各带 `source`。Standards 轴：无硬性违规。**遗留判断项**（未改，留待需要时）：`live_tool_indices` 之上的 sticky 过滤仍是两处各写一次；`"name"` 参数键在 `tools/skill.rs` 与 `loaded_skill_names` 各写一次；`names` / `is_empty` / `get` 与 `Skill` 的 pub 字段偏测试面；CONTEXT.md 缺「技能（Skill）」词条（按 `docs/agents/domain.md` 记给 `/domain-modeling`，且该文件当前未纳入 git）。
 

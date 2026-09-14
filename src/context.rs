@@ -207,9 +207,9 @@ fn fits(messages: &[Message], budget: u64) -> bool {
     estimate_messages_tokens(messages) <= budget
 }
 
-/// The pinned head: `ContextInjected` events become `user` messages with no
-/// `name`, and they are always first (spec §5, §10). They never take part in
-/// trimming.
+/// The pinned head: the projected `ContextInjected` events, which is why they
+/// are `user` messages with no `name`, always first (spec §5, §10). They never
+/// take part in trimming.
 ///
 /// A later mid-session injection (plan mode, ticket 15) is not in this leading
 /// prefix; that ticket must extend the pin marker when it lands.

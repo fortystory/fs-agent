@@ -72,17 +72,31 @@ pub fn project(log: &EventLog, speaker: &SpeakerId, caps: &ModelCaps) -> Vec<Mes
         match &event.payload {
             // Session skeleton: identity and harness bookkeeping stay private.
             EventPayload::SessionStarted { .. } => {}
-            // A pinned injection is its own message and never merges: it must
-            // look identical every turn for the prefix cache to keep hitting
-            // (spec §5, §10). This covers both pinned injections — the
-            // AGENTS.md + skills preamble and the mid-session plan instruction.
+            // A pinned injection belongs to the pinned head and never merges with
+            // speech: it must look identical every turn for the prefix cache to
+            // keep hitting (spec §5, §10). The leading injections — the project
+            // rules and the skills catalog — are **one** `user` message (spec
+            // §10, decision 09: "与 AGENTS.md 同一条"), so a run of them merges
+            // into a single message rather than becoming consecutive same-role
+            // messages. A mid-session injection (plan mode, ticket 15) has
+            // history before it and so stays its own message.
             EventPayload::ContextInjected { content, .. } => {
                 close_pending_if_settled(&mut messages, &mut pending, speaker);
                 flush_others(&mut messages, &mut others, &mut head_emitted);
-                messages.push(Message::User {
-                    content: content.clone(),
-                    name: None,
-                });
+                let leading = at_pinned_head(&messages);
+                match messages.last_mut() {
+                    Some(Message::User {
+                        content: body,
+                        name: None,
+                    }) if leading => {
+                        body.push('\n');
+                        body.push_str(content);
+                    }
+                    _ => messages.push(Message::User {
+                        content: content.clone(),
+                        name: None,
+                    }),
+                }
             }
             EventPayload::SessionEnded { .. } => {}
             // A round is a hard merge boundary, and its number is what the
@@ -212,6 +226,19 @@ pub fn project(log: &EventLog, speaker: &SpeakerId, caps: &ModelCaps) -> Vec<Mes
 /// consulted only for events that are not the acting speaker's.
 fn speaks_to_others(from: &SpeakerId) -> bool {
     !matches!(from, SpeakerId::Executor(_))
+}
+
+/// Whether nothing but pinned injections has been emitted yet, so a new
+/// injection still belongs to the leading block and merges into it.
+///
+/// A pinned injection is the only name-less `user` message at this point: speech
+/// carries a speaker `name`, and an `AgentError` cannot precede the session-start
+/// injections. An empty slice means the first push, where `last_mut` finds
+/// nothing and pushes instead of merging.
+fn at_pinned_head(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .all(|message| matches!(message, Message::User { name: None, .. }))
 }
 
 /// Every `seq` a [`EventPayload::HistorySuperseded`] event has retired.
