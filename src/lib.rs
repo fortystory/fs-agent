@@ -40,7 +40,7 @@ use tokio::task::JoinHandle;
 
 use crate::agent::TurnOutcome;
 use crate::config::SessionConfig;
-use crate::events::{Event, EventLog, EventPayload, Role, SessionId, SpeakerId};
+use crate::events::{EventLog, SessionId, SpeakerId};
 use crate::provider::Provider;
 use crate::render::{RenderHandle, RenderSinks};
 use crate::session::Session;
@@ -86,8 +86,8 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
     let (render, render_task) = render::spawn_headless(sinks);
     let log = EventLog::create(log_path)?;
-    let (session, started) = Session::start(session_id, cwd, log, config)?;
-    render.logged(&started);
+    let mut session = Session::new(session_id, cwd, log, config);
+    agent::record_session_started(&mut session, &render)?;
 
     Ok(Harness {
         session,
@@ -101,16 +101,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 impl Harness {
     /// Record a user message and run one turn to completion.
     pub async fn run_turn(&mut self, user_input: &str) -> Result<TurnOutcome, Error> {
-        let input = self.session.append(
-            SpeakerId::User,
-            EventPayload::MessageCompleted {
-                role: Role::User,
-                text: user_input.to_owned(),
-                reasoning: None,
-            },
-        )?;
-        self.render.logged(&input);
-
+        agent::record_user_message(&mut self.session, &self.render, user_input)?;
         agent::run_turn(
             &mut self.session,
             &self.speaker,
@@ -122,11 +113,6 @@ impl Harness {
 
     pub fn session_id(&self) -> &SessionId {
         self.session.id()
-    }
-
-    /// A snapshot of the session's event stream.
-    pub fn events(&self) -> Vec<Event> {
-        self.session.events().to_vec()
     }
 
     /// Drop the render channel and wait for every buffered render event to be

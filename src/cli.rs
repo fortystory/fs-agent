@@ -28,7 +28,7 @@ pub fn main() -> ExitCode {
 }
 
 fn print_help() {
-    eprintln!(
+    println!(
         "fs-agent {}\n\n  \
          usage: fs-agent [--help] [--version]\n\n  \
          Provider configuration and the interactive renderers are not wired into\n  \

@@ -4,12 +4,16 @@
 //! configuration. Later tickets add the roster, budgets, policy and read set;
 //! an executor is a nested `Session` whose events still append to its parent's
 //! stream.
+//!
+//! `Session` never writes on its own initiative. Its crate-private `append` is
+//! called only by the `agent` module, so the agent layer is the single writer of
+//! the event stream; tools, hooks, permissions and discussion cannot write.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::config::SessionConfig;
-use crate::events::{Event, EventLog, EventPayload, SessionId, SpeakerId, SCHEMA_VERSION};
+use crate::events::{Event, EventLog, EventPayload, SessionId, SpeakerId};
 
 pub struct Session {
     id: SessionId,
@@ -19,41 +23,26 @@ pub struct Session {
 }
 
 impl Session {
-    /// Create a session by creating its log and recording `SessionStarted`.
-    ///
-    /// The returned event is handed back so the caller can broadcast it to the
-    /// renderer; `Session` itself does not know about rendering.
-    pub fn start(
-        id: SessionId,
-        cwd: PathBuf,
-        log: EventLog,
-        config: SessionConfig,
-    ) -> io::Result<(Self, Event)> {
-        let cwd_string = cwd.to_string_lossy().into_owned();
-        let mut session = Self {
-            id: id.clone(),
+    /// Wrap a freshly created log. Recording `SessionStarted` is the `agent`
+    /// module's job, so all writes stay in one place.
+    pub fn new(id: SessionId, cwd: PathBuf, log: EventLog, config: SessionConfig) -> Self {
+        Self {
+            id,
             cwd,
             log,
             config,
-        };
-        let first = session.append(
-            SpeakerId::System,
-            EventPayload::SessionStarted {
-                session_id: id,
-                cwd: cwd_string,
-                schema_version: SCHEMA_VERSION,
-            },
-        )?;
-        Ok((session, first))
+        }
     }
 
     /// Append an event to this session's log.
     ///
-    /// The session owns the only handle to the log, and `agent`'s turn loop is
-    /// the only caller during a turn; tools, hooks, permissions and discussion
-    /// never write. Session-skeleton events and the user's own input are the
-    /// two writes the assembly boundary makes outside a turn.
-    pub fn append(&mut self, speaker_id: SpeakerId, payload: EventPayload) -> io::Result<Event> {
+    /// Crate-private: only the `agent` module writes. Keeping the write path
+    /// narrow is what makes "the log is the single source of truth" checkable.
+    pub(crate) fn append(
+        &mut self,
+        speaker_id: SpeakerId,
+        payload: EventPayload,
+    ) -> io::Result<Event> {
         self.log.append(speaker_id, payload)
     }
 

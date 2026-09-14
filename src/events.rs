@@ -22,99 +22,71 @@ use serde::{Deserialize, Serialize};
 /// backward compatibility across versions.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Stable identifier of a participant that can act (a debater or an executor).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct AgentId(pub String);
+/// Define an owned string identifier that serializes transparently.
+///
+/// Keeps the three identifier newtypes on one implementation, so they stay
+/// consistent and none of them decays into a bare `String`.
+macro_rules! string_id {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub String);
 
-impl AgentId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
+        impl $name {
+            pub fn new(id: impl Into<String>) -> Self {
+                Self(id.into())
+            }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_owned())
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+    };
 }
 
-impl fmt::Display for AgentId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
+string_id! {
+    /// Stable identifier of a participant that can act: a debater or an executor.
+    ///
+    /// The glossary forbids `agent` as a type name; the participant role lives
+    /// in [`SpeakerId`].
+    ParticipantId
 }
 
-impl From<&str> for AgentId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
+string_id! {
+    /// Identifier of a session. Never changes across `--continue`, so provider
+    /// prefix caches keep hitting.
+    SessionId
 }
 
-impl From<String> for AgentId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-/// Identifier of a session. Never changes across `--continue`, so provider
-/// prefix caches keep hitting.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SessionId(pub String);
-
-impl SessionId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for SessionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<&str> for SessionId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-/// Identifier of one tool call, unique within its session.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ToolCallId(pub String);
-
-impl ToolCallId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ToolCallId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<&str> for ToolCallId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
+string_id! {
+    /// Identifier of one tool call, unique within its session.
+    ToolCallId
 }
 
 /// Who is speaking. Attribution is never inferred from a provider `role`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SpeakerId {
-    Debater(AgentId),
-    Executor(AgentId),
+    Debater(ParticipantId),
+    Executor(ParticipantId),
     User,
     System,
 }
@@ -158,15 +130,6 @@ pub enum StopReason {
 }
 
 impl StopReason {
-    /// The five values any single loop may report.
-    pub const SINGLE_LOOP: [StopReason; 5] = [
-        StopReason::Completed,
-        StopReason::MaxIterations,
-        StopReason::Aborted,
-        StopReason::MistakeLimit,
-        StopReason::Error,
-    ];
-
     pub fn as_str(&self) -> &'static str {
         match self {
             StopReason::Completed => "Completed",
@@ -323,12 +286,12 @@ pub enum EventPayload {
     },
     // Executors.
     ExecutorSpawned {
-        executor_id: AgentId,
-        parent: AgentId,
+        executor_id: ParticipantId,
+        parent: ParticipantId,
         brief: String,
     },
     ExecutorFinished {
-        executor_id: AgentId,
+        executor_id: ParticipantId,
         reason: StopReason,
         summary: String,
     },
@@ -485,7 +448,7 @@ impl EventLog {
     pub fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         let events = read_events(&path)?;
-        truncate_torn_tail(&path)?;
+        repair_before_append(&path)?;
         let next_seq = events.len() as u64 + 1;
         let file = OpenOptions::new().append(true).open(&path)?;
         Ok(Self {
@@ -561,18 +524,30 @@ pub fn read_events(path: impl AsRef<Path>) -> io::Result<Vec<Event>> {
     Ok(events)
 }
 
-/// Drop a trailing partial line, if any, so the next append starts clean.
-fn truncate_torn_tail(path: &Path) -> io::Result<()> {
+/// Make the tail of an existing log safe to append to.
+///
+/// A complete event that merely lacks its terminating newline is kept and
+/// terminated; only an unparsable torn tail is dropped. Complete events are
+/// never removed, so `seq` keeps meaning "line number" after a reopen.
+fn repair_before_append(path: &Path) -> io::Result<()> {
     let bytes = std::fs::read(path)?;
     if bytes.is_empty() || bytes.ends_with(b"\n") {
         return Ok(());
     }
-    let keep = bytes
+    let tail_start = bytes
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map(|position| position + 1)
         .unwrap_or(0);
-    let file = OpenOptions::new().write(true).open(path)?;
-    file.set_len(keep as u64)?;
+    let tail = &bytes[tail_start..];
+
+    if serde_json::from_slice::<Event>(tail).is_ok() {
+        let mut file = OpenOptions::new().append(true).open(path)?;
+        file.write_all(b"\n")?;
+        file.flush()?;
+    } else {
+        let file = OpenOptions::new().write(true).open(path)?;
+        file.set_len(tail_start as u64)?;
+    }
     Ok(())
 }

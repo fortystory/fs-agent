@@ -181,7 +181,7 @@ async fn incremental_text_reaches_the_renderer_but_not_the_event_log() {
     let outcome = fixture.harness.run_turn("spell it").await.unwrap();
     assert_eq!(outcome.text, "alphabet");
 
-    let events = fixture.harness.events();
+    let events = read_events(&fixture.log_path).unwrap();
     let completed: Vec<&Event> = events
         .iter()
         .filter(|event| {
@@ -243,7 +243,7 @@ async fn a_tool_call_gets_exactly_one_result_and_the_loop_continues() {
     assert_eq!(outcome.reason, StopReason::Completed);
     assert_eq!(outcome.text, "all done");
 
-    let events = fixture.harness.events();
+    let events = read_events(&fixture.log_path).unwrap();
     let starts = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::ToolCallStarted { .. }))
@@ -261,11 +261,11 @@ async fn a_tool_call_gets_exactly_one_result_and_the_loop_continues() {
         }
         other => panic!("expected ToolCallCompleted, got {other:?}"),
     }
-    assert_eq!(
-        fixture.provider.call_count(),
-        2,
-        "the turn continued after the tool call"
-    );
+    let turn_starts = events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+        .count();
+    assert_eq!(turn_starts, 2, "the turn continued after the tool call");
 
     // The second projection replays the assistant tool call and its one result.
     let second = &fixture.provider.requests()[1];
@@ -313,9 +313,13 @@ async fn a_turn_that_keeps_asking_for_tools_hits_max_iterations() {
 
     let outcome = fixture.harness.run_turn("go").await.unwrap();
     assert_eq!(outcome.reason, StopReason::MaxIterations);
-    assert_eq!(fixture.provider.call_count(), 2);
 
-    let events = fixture.harness.events();
+    let events = read_events(&fixture.log_path).unwrap();
+    let turn_starts = events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+        .count();
+    assert_eq!(turn_starts, 2, "the loop stopped at the iteration cap");
     assert!(matches!(
         events.last().unwrap().payload,
         EventPayload::TurnEnded {
@@ -337,7 +341,7 @@ async fn a_provider_failure_ends_the_turn_with_error() {
     let outcome = fixture.harness.run_turn("go").await.unwrap();
     assert_eq!(outcome.reason, StopReason::Error);
 
-    let events = fixture.harness.events();
+    let events = read_events(&fixture.log_path).unwrap();
     assert!(matches!(
         events.last().unwrap().payload,
         EventPayload::TurnEnded {
@@ -347,4 +351,108 @@ async fn a_provider_failure_ends_the_turn_with_error() {
 
     fixture.harness.shutdown().await;
     assert!(fixture.stdout.text().is_empty());
+}
+
+#[tokio::test]
+async fn a_stream_that_ends_without_done_is_an_error_and_logs_no_completed_message() {
+    let mut fixture = fixture(
+        vec![Reply::Raw(vec![Ok(StreamEvent::TextDelta(
+            "partial".into(),
+        ))])],
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    let outcome = fixture.harness.run_turn("go").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::Error);
+
+    let events = read_events(&fixture.log_path).unwrap();
+    assert!(
+        !events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::MessageCompleted {
+                role: Role::Assistant,
+                ..
+            }
+        )),
+        "a stream without [DONE] produced no completed unit"
+    );
+    assert!(matches!(
+        events.last().unwrap().payload,
+        EventPayload::TurnEnded {
+            reason: StopReason::Error
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_mid_stream_error_ends_the_turn_with_error() {
+    let mut fixture = fixture(
+        vec![Reply::Raw(vec![
+            Ok(StreamEvent::TextDelta("partial".into())),
+            Err(ProviderError::Transport {
+                detail: "connection dropped".into(),
+            }),
+        ])],
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    let outcome = fixture.harness.run_turn("go").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::Error);
+
+    let events = read_events(&fixture.log_path).unwrap();
+    assert!(!events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            ..
+        }
+    )));
+    assert!(matches!(
+        events.last().unwrap().payload,
+        EventPayload::TurnEnded {
+            reason: StopReason::Error
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_tool_call_with_no_arguments_records_an_empty_object() {
+    let mut fixture = fixture(
+        vec![
+            Reply::Stream(vec![
+                StreamEvent::ToolCallCompleted {
+                    index: 0,
+                    id: "call-1".into(),
+                    name: "repo_map".into(),
+                    arguments: String::new(),
+                },
+                StreamEvent::Finished {
+                    finish_reason: FinishReason::ToolCalls,
+                },
+            ]),
+            Reply::text("done"),
+        ],
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    fixture.harness.run_turn("map it").await.unwrap();
+
+    let events = read_events(&fixture.log_path).unwrap();
+    let args = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCallStarted { args, .. } => Some(args.clone()),
+            _ => None,
+        })
+        .expect("a ToolCallStarted event");
+    assert_eq!(args, serde_json::json!({}), "empty arguments mean {{}}");
+
+    let second = &fixture.provider.requests()[1];
+    match &second.messages[second.messages.len() - 2] {
+        Message::Assistant { tool_calls, .. } => assert_eq!(tool_calls[0].arguments, "{}"),
+        other => panic!("expected Assistant with tool_calls, got {other:?}"),
+    }
 }

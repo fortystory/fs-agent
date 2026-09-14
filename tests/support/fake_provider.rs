@@ -69,14 +69,6 @@ impl FakeProvider {
         }
     }
 
-    pub fn call_count(&self) -> usize {
-        self.inner
-            .requests
-            .lock()
-            .expect("fake provider poisoned")
-            .len()
-    }
-
     pub fn requests(&self) -> Vec<ChatRequest> {
         self.inner
             .requests

@@ -115,6 +115,50 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
 }
 
 #[test]
+fn a_complete_final_line_without_a_newline_is_preserved_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("log.jsonl");
+
+    {
+        let mut log = EventLog::create(&path).unwrap();
+        log.append(SpeakerId::System, started("s-1")).unwrap();
+        log.append(
+            SpeakerId::User,
+            EventPayload::MessageCompleted {
+                role: Role::User,
+                text: "hi".to_owned(),
+                reasoning: None,
+            },
+        )
+        .unwrap();
+    }
+
+    // A crash can leave a *complete* final event with no terminating newline.
+    let raw = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, raw.trim_end_matches('\n')).unwrap();
+
+    let mut log = EventLog::open(&path).unwrap();
+    assert_eq!(log.events().len(), 2, "a complete event is never deleted");
+    assert_eq!(log.next_seq(), 3);
+
+    let appended = log
+        .append(
+            SpeakerId::System,
+            EventPayload::SessionEnded {
+                reason: StopReason::Completed,
+            },
+        )
+        .unwrap();
+    assert_eq!(appended.seq, 3);
+
+    let events = read_events(&path).unwrap();
+    assert_eq!(events.len(), 3);
+    for (index, event) in events.iter().enumerate() {
+        assert_eq!(event.seq, index as u64 + 1);
+    }
+}
+
+#[test]
 fn corruption_before_the_final_line_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("log.jsonl");

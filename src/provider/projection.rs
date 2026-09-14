@@ -23,7 +23,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId) -> Vec<Message> {
             EventPayload::MessageCompleted {
                 text, reasoning, ..
             } => {
-                flush(&mut messages, &mut pending);
+                finalize_assistant(&mut messages, &mut pending);
                 if is_mine {
                     pending = Some(PendingAssistant {
                         content: (!text.is_empty()).then(|| text.clone()),
@@ -45,7 +45,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId) -> Vec<Message> {
             } if is_mine => {
                 if let Some(pending) = pending.as_mut() {
                     pending.tool_calls.push(ToolCall {
-                        id: tool_call_id.0.clone(),
+                        id: tool_call_id.as_str().to_owned(),
                         name: tool_name.clone(),
                         arguments: args.to_string(),
                     });
@@ -60,7 +60,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId) -> Vec<Message> {
                 if let Some(pending) = pending.as_mut() {
                     let content = output.clone().or_else(|| error.clone()).unwrap_or_default();
                     pending.results.push(Message::Tool {
-                        tool_call_id: tool_call_id.0.clone(),
+                        tool_call_id: tool_call_id.as_str().to_owned(),
                         content,
                     });
                 }
@@ -69,7 +69,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId) -> Vec<Message> {
         }
     }
 
-    flush(&mut messages, &mut pending);
+    finalize_assistant(&mut messages, &mut pending);
     messages
 }
 
@@ -80,7 +80,7 @@ struct PendingAssistant {
     results: Vec<Message>,
 }
 
-fn flush(messages: &mut Vec<Message>, pending: &mut Option<PendingAssistant>) {
+fn finalize_assistant(messages: &mut Vec<Message>, pending: &mut Option<PendingAssistant>) {
     let Some(pending) = pending.take() else {
         return;
     };
