@@ -37,6 +37,14 @@ use super::tool::{
     BashLimits, Effect, ExecutorSpawner, ReadSet, Tool, ToolContext, ToolError, ToolOutput,
 };
 
+/// The text a read-before-write refusal begins with.
+///
+/// The result is the only place the refusal is recorded — there is no field for
+/// it — so producing it and the observability query that counts it share this
+/// constant, the same "convention text" rule the edit match level follows
+/// (spec §18). A drifting prefix would silently turn the count into zero.
+pub const READ_BEFORE_WRITE_PREFIX: &str = "read before write: ";
+
 /// The tool table for one session.
 #[derive(Default)]
 pub struct Registry {
@@ -265,7 +273,8 @@ impl CallFacts {
             .find(|path| path.exists() && !read_set.contains(path))
         {
             return GuardedCall::Refused(ToolError::message(format!(
-                "read before write: {} exists but has not been read in this session; read it first",
+                "{READ_BEFORE_WRITE_PREFIX}{} exists but has not been read in this session; \
+                 read it first",
                 path.display()
             )));
         }

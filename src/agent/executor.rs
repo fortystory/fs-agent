@@ -33,7 +33,8 @@ use super::{append_event, run_turn, CancelObserver, TurnScope};
 /// Like a debater's protocol instructions, it never enters the event stream: it
 /// is the one input to a request the stream does not carry (spec §15). It carries
 /// no discussion protocol — an executor does not debate, it works.
-const EXECUTOR_IDENTITY: &str = "You are an executor. Another agent dispatched you, through \
+pub(super) const EXECUTOR_IDENTITY: &str =
+    "You are an executor. Another agent dispatched you, through \
      the `task` tool, to carry out one piece of work in this repository, and you have your own \
      context: the repository rules and your brief, which is the last user message. Nobody sees \
      your steps — not your tool calls and not their output — so work until the task is done, then \

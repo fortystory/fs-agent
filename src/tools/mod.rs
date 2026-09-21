@@ -30,7 +30,10 @@ pub use file::{
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
 };
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
-pub use registry::{AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry};
+pub use registry::{
+    AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry,
+    READ_BEFORE_WRITE_PREFIX,
+};
 pub use repo_map::RepoMapTool;
 pub use skill::SkillTool;
 pub use task::{TaskTool, TASK_TOOL};

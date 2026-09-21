@@ -26,9 +26,11 @@
 mod cancel;
 mod executor;
 mod history;
+pub mod replay;
 
 pub use cancel::{CancelObserver, CancelSignal};
 pub use history::{recover_pending_calls, undo_last_edit, UndoOutcome};
+pub use replay::{replay, ReplayError};
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -44,6 +46,7 @@ use crate::events::{
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
+use crate::provider::capability::ModelCaps;
 use crate::provider::projection::project;
 use crate::provider::{ChatRequest, Message, Provider, StreamEvent, ToolCall, ToolChoice};
 use crate::render::RenderHandle;
@@ -86,7 +89,21 @@ pub enum TurnScope {
 
 /// This turn's view of the stream, under `scope`.
 fn scoped_events(session: &Session, speaker: &SpeakerId, scope: TurnScope) -> Vec<Event> {
-    let mut events = session.events();
+    scoped_events_slice(&session.events(), speaker, scope)
+}
+
+/// [`scoped_events`] over an explicit slice.
+///
+/// The slice form is what `replay` needs: it holds a snapshot already cut at the
+/// call it is reproducing, so it cannot go through the live log. The two share
+/// this one rule, which is what keeps a recomputed window identical to a live
+/// one (spec §15, §18).
+pub(crate) fn scoped_events_slice(
+    events: &[Event],
+    speaker: &SpeakerId,
+    scope: TurnScope,
+) -> Vec<Event> {
+    let mut events = events.to_vec();
     match scope {
         TurnScope::Whole => {}
         TurnScope::Round { before_seq } => {
@@ -104,6 +121,41 @@ fn scoped_events(session: &Session, speaker: &SpeakerId, scope: TurnScope) -> Ve
         }),
     }
     events
+}
+
+/// Project → prepend the private identity → trim.
+///
+/// The one place a turn's provider `messages` are built (spec §5, §10, §15), so
+/// `replay` reproduces the loop instead of approximating it: the same projection,
+/// the same leading `system` identity and the same trim policy, in the same
+/// order. The identity never enters the log, which is exactly why this has to be
+/// a shared function rather than two call sites that agree today.
+pub(crate) fn build_messages(
+    events: &[Event],
+    speaker: &SpeakerId,
+    caps: &ModelCaps,
+    identity: Option<&str>,
+    trim_policy: &context::TrimPolicy,
+) -> Result<Vec<Message>, context::TrimError> {
+    let projected = project(events, speaker, caps);
+    // The agent's private identity leads the request and never enters the log
+    // (spec §15). It is counted against the budget but pinned: `trim` treats a
+    // leading `system` message as part of the head that is never dropped, so the
+    // protocol instructions cannot be trimmed away while the question that needs
+    // them stays.
+    let projected = match identity {
+        Some(identity) => {
+            let mut messages = Vec::with_capacity(projected.len() + 1);
+            messages.push(Message::System {
+                content: identity.to_owned(),
+                name: None,
+            });
+            messages.extend(projected);
+            messages
+        }
+        None => projected,
+    };
+    context::trim(projected, context::usable_input(caps), trim_policy)
 }
 
 /// How a turn ended, plus the assistant text of its last message.
@@ -330,31 +382,14 @@ pub async fn run_turn(
         // only place anything is dropped. A trim that cannot fit the budget has
         // exhausted every droppable class, which is the turn's hard failure
         // (spec §10).
-        let projected = project(&events, speaker, &caps);
-        // The agent's private identity leads the request and never enters the
-        // log (spec §15). It is counted against the budget but pinned: `trim`
-        // treats a leading `system` message as part of the head that is never
-        // dropped, so the protocol instructions cannot be trimmed away while the
-        // question that needs them stays.
-        let projected = match session.identity() {
-            Some(identity) => {
-                let mut messages = Vec::with_capacity(projected.len() + 1);
-                messages.push(Message::System {
-                    content: identity.to_owned(),
-                    name: None,
-                });
-                messages.extend(projected);
-                messages
-            }
-            None => projected,
-        };
-        let messages = match context::trim(projected, context::usable_input(&caps), &trim_policy) {
-            Ok(messages) => messages,
-            Err(error) => {
-                render.diagnostic(&format!("context budget: {error}"));
-                return end_turn(session, render, speaker, StopReason::Error, last_text);
-            }
-        };
+        let messages =
+            match build_messages(&events, speaker, &caps, session.identity(), &trim_policy) {
+                Ok(messages) => messages,
+                Err(error) => {
+                    render.diagnostic(&format!("context budget: {error}"));
+                    return end_turn(session, render, speaker, StopReason::Error, last_text);
+                }
+            };
 
         // The pre-flight half of the session gate (spec §17). The estimate is
         // crude — characters / 4 — so the threshold is a multiple of what is

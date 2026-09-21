@@ -7,19 +7,31 @@
 //! `probe` is the ticket-02 manual acceptance tool: it drives one real turn
 //! against each configured model, then a second turn in the same session, so
 //! the usage line for the second request shows whether prefix caching hit. It
-//! runs headless with throwaway session logs and does not touch the session
-//! store (ticket 12) or the interactive renderers (ticket 18).
+//! runs headless with throwaway session logs.
+//!
+//! `prune` and `sessions` both read the store ticket 12 built: `prune` removes a
+//! workspace's session directories by hand, and `sessions` answers questions
+//! about a **finished** session from its own stream — `ls`, the round-grouped
+//! `show` (with `--files` as the workspace-object view), `replay` (the projection
+//! recomputation, spec §18) and `stats`. They live here because the store's root
+//! comes from the environment, which the library never reads; the queries
+//! themselves are [`crate::session::observe`] and [`crate::agent::replay`].
+//! The interactive renderers are still the one unwired piece (ticket 18).
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::agent::replay;
 use crate::config::{self, Config, EnvMap};
 use crate::events::{read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, Usage};
 use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
+use crate::provider::Message;
 use crate::render::RenderSinks;
-use crate::session::SessionStore;
+use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
+use crate::session::{SessionStore, StoredSession};
 use crate::tools::{self, PathLocks};
 use crate::{assemble, AssemblyParts, SessionScaffold};
 
@@ -102,6 +114,13 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
         }
         Some("probe") => probe(&args[1..], env).await,
         Some("prune") => prune(&args[1..], env),
+        Some("sessions") => {
+            let stdout = std::io::stdout();
+            let stderr = std::io::stderr();
+            let mut out = stdout.lock();
+            let mut err = stderr.lock();
+            run_sessions(&args[1..], env, &mut out, &mut err)
+        }
         Some(other) => {
             eprintln!("fs-agent: unknown argument {other:?}");
             print_help();
@@ -483,17 +502,748 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
     }
 }
 
+// ---------------------------------------------------------------------------
+// `sessions`: the observability CLI (spec §18)
+// ---------------------------------------------------------------------------
+
+/// One parsed `sessions` invocation. The verb decides which fields are read.
+#[derive(Debug, Default)]
+struct SessionsArgs {
+    verb: String,
+    id: Option<String>,
+    all: bool,
+    files: bool,
+    only_error: bool,
+    json: bool,
+    limit: Option<usize>,
+    round: Option<u32>,
+    speaker: Option<String>,
+    kind: Option<String>,
+    tool: Option<String>,
+    model: Option<String>,
+    config: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+}
+
+fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
+    let mut parsed = SessionsArgs::default();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        match arg {
+            "--all" => parsed.all = true,
+            "--files" => parsed.files = true,
+            "--only-error" => parsed.only_error = true,
+            "--json" => parsed.json = true,
+            "--round" | "--speaker" | "--kind" | "--tool" | "--model" | "--config" | "--cwd"
+            | "--limit" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("{arg} needs a value"))?;
+                match arg {
+                    "--round" => {
+                        parsed.round = Some(
+                            value
+                                .parse()
+                                .map_err(|_| format!("--round needs a number, got {value:?}"))?,
+                        )
+                    }
+                    "--speaker" => parsed.speaker = Some(value.clone()),
+                    "--kind" => parsed.kind = Some(value.clone()),
+                    "--tool" => parsed.tool = Some(value.clone()),
+                    "--model" => parsed.model = Some(value.clone()),
+                    "--config" => parsed.config = Some(PathBuf::from(value)),
+                    "--cwd" => parsed.cwd = Some(PathBuf::from(value)),
+                    "--limit" => {
+                        parsed.limit = Some(
+                            value
+                                .parse()
+                                .map_err(|_| format!("--limit needs a number, got {value:?}"))?,
+                        )
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown sessions argument {other:?}"))
+            }
+            other if parsed.verb.is_empty() => parsed.verb = other.to_owned(),
+            other if parsed.id.is_none() => parsed.id = Some(other.to_owned()),
+            other => return Err(format!("unexpected extra argument {other:?}")),
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
+/// The `sessions` subcommand family: `ls`, `show`, `replay`, `stats`.
+///
+/// stdout carries the result and stderr the diagnostics, whatever the verb; every
+/// view has a `--json` form so a pipeline can read it. There is no index: a
+/// session is found by scanning its bucket, and `--continue`'s "newest first"
+/// order is the order `ls` shows.
+pub fn run_sessions(
+    args: &[String],
+    env: &EnvMap,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> ExitCode {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_sessions_help(out);
+        return ExitCode::SUCCESS;
+    }
+    let parsed = match parse_sessions(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            let _ = writeln!(err, "fs-agent: {message}");
+            print_sessions_help(err);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let result = match parsed.verb.as_str() {
+        "ls" => sessions_ls(&parsed, env, out, err),
+        "show" => sessions_show(&parsed, env, out),
+        "replay" => sessions_replay(&parsed, env, out),
+        "stats" => sessions_stats(&parsed, env, out),
+        "" => {
+            let _ = writeln!(err, "fs-agent: sessions needs a verb");
+            print_sessions_help(err);
+            return ExitCode::FAILURE;
+        }
+        other => {
+            let _ = writeln!(err, "fs-agent: unknown sessions verb {other:?}");
+            print_sessions_help(err);
+            return ExitCode::FAILURE;
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            let _ = writeln!(err, "fs-agent: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The session store, or the refusal that there is nowhere to look.
+fn open_store(env: &EnvMap) -> Result<SessionStore, String> {
+    let root = config::sessions_dir(env).ok_or_else(|| {
+        "neither XDG_DATA_HOME nor HOME is set, so the session store cannot be found".to_owned()
+    })?;
+    Ok(SessionStore::new(root))
+}
+
+/// The workspace whose bucket is searched first: `--cwd`, else the current dir.
+fn search_cwd(parsed: &SessionsArgs) -> Result<PathBuf, String> {
+    match &parsed.cwd {
+        Some(path) => Ok(path.clone()),
+        None => std::env::current_dir()
+            .map_err(|error| format!("cannot determine the current directory: {error}")),
+    }
+}
+
+/// Find one session by id (or by the path of its directory).
+fn find_session(store: &SessionStore, cwd: &Path, id: &str) -> Result<StoredSession, String> {
+    let direct = PathBuf::from(id);
+    if direct.join(crate::session::store::LOG_FILE).is_file() {
+        return Ok(session_at(direct));
+    }
+    // The id is globally unique, but the owning bucket is the fast path; the
+    // store-wide scan is what makes `sessions show` work from any directory.
+    let mut candidates = store.list(cwd).unwrap_or_default();
+    candidates.extend(store.list_all().unwrap_or_default());
+    candidates
+        .into_iter()
+        .find(|session| session.id.as_str() == id)
+        .ok_or_else(|| format!("no session {id:?} in {}", store_list_label(cwd)))
+}
+
+fn store_list_label(cwd: &Path) -> String {
+    format!("{} (or any other bucket)", cwd.display())
+}
+
+fn session_at(dir: PathBuf) -> StoredSession {
+    let id = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    StoredSession {
+        id: SessionId::new(id),
+        outputs_dir: dir.join(crate::session::store::OUTPUTS_DIR),
+        log_path: dir.join(crate::session::store::LOG_FILE),
+        dir,
+    }
+}
+
+/// Parse `--speaker`: `user`, `system`, `executor:<id>`, or a debater's name.
+fn parse_speaker(raw: &str) -> SpeakerId {
+    match raw {
+        "user" => SpeakerId::User,
+        "system" => SpeakerId::System,
+        other => match other.strip_prefix("executor:") {
+            Some(id) => SpeakerId::Executor(id.into()),
+            None => SpeakerId::Debater(other.into()),
+        },
+    }
+}
+
+fn sessions_ls(
+    parsed: &SessionsArgs,
+    env: &EnvMap,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let store = open_store(env)?;
+    let cwd = search_cwd(parsed)?;
+    let listings = observe::list(&store, (!parsed.all).then_some(cwd.as_path()))
+        .map_err(|error| format!("cannot read the session store: {error}"))?;
+    let mut listings: Vec<Listing> = listings;
+    if let Some(limit) = parsed.limit {
+        listings.truncate(limit);
+    }
+
+    if parsed.json {
+        return write_json(out, &listings);
+    }
+    if listings.is_empty() {
+        let _ = writeln!(err, "fs-agent: no sessions in this bucket");
+        return Ok(());
+    }
+    let _ = writeln!(
+        out,
+        "{:<36}  {:<28}  {:<20}  {:>10}  {:>6}  {:>5}  ENDED",
+        "ID", "CWD", "STARTED", "TOKENS", "ROUNDS", "MSGS"
+    );
+    for listing in listings {
+        let _ = writeln!(
+            out,
+            "{:<36}  {:<28}  {:<20}  {:>10}  {:>6}  {:>5}  {}",
+            listing.id,
+            listing.cwd.as_deref().unwrap_or("-"),
+            listing
+                .started
+                .map(|at| at.format("%Y-%m-%d %H:%M:%SZ").to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            listing.tokens,
+            listing.rounds,
+            listing.messages,
+            listing
+                .ended
+                .map(|reason| reason.as_str())
+                .unwrap_or("(open)"),
+        );
+    }
+    Ok(())
+}
+
+fn sessions_show(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {
+    let store = open_store(env)?;
+    let cwd = search_cwd(parsed)?;
+    let id = parsed
+        .id
+        .as_deref()
+        .ok_or("sessions show needs a session id")?;
+    let session = find_session(&store, &cwd, id)?;
+    let events = read_events(&session.log_path)
+        .map_err(|error| format!("cannot read {}: {error}", session.log_path.display()))?;
+
+    if parsed.files {
+        let changes = filter_changes(observe::file_history(&events), parsed);
+        if parsed.json {
+            return write_json(out, &changes);
+        }
+        for change in changes {
+            let _ = writeln!(
+                out,
+                "{:<18}  {:<14}  {}",
+                change
+                    .round
+                    .map(|round| format!("round {round}"))
+                    .unwrap_or_else(|| "session".to_owned()),
+                change.speaker,
+                change.path,
+            );
+        }
+        return Ok(());
+    }
+
+    let filter = Filter {
+        round: parsed.round,
+        speaker: parsed.speaker.as_deref().map(parse_speaker),
+        kind: parsed.kind.clone(),
+        tool: parsed.tool.clone(),
+        only_error: parsed.only_error,
+    };
+    let timeline = observe::timeline(&events);
+    let timeline = if filter.is_empty() {
+        timeline
+    } else {
+        timeline.filtered(&filter)
+    };
+    if parsed.json {
+        return write_json(out, &timeline);
+    }
+    print_timeline(out, &timeline, &filter);
+    Ok(())
+}
+
+/// `--files` honors `--round`, `--speaker` and `--tool`; the entry-shaped
+/// filters (`--kind`, `--only-error`) have no meaning for a file-change row.
+fn filter_changes(
+    changes: Vec<observe::FileChange>,
+    parsed: &SessionsArgs,
+) -> Vec<observe::FileChange> {
+    let speaker = parsed.speaker.as_deref().map(parse_speaker);
+    changes
+        .into_iter()
+        .filter(|change| {
+            parsed.round.is_none_or(|round| change.round == Some(round))
+                && speaker
+                    .as_ref()
+                    .is_none_or(|speaker| &change.speaker == speaker)
+                && parsed.tool.as_ref().is_none_or(|tool| &change.tool == tool)
+        })
+        .collect()
+}
+
+fn sessions_replay(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {
+    let store = open_store(env)?;
+    let cwd = search_cwd(parsed)?;
+    let id = parsed
+        .id
+        .as_deref()
+        .ok_or("sessions replay needs a session id")?;
+    let speaker = parsed
+        .speaker
+        .as_deref()
+        .ok_or("sessions replay needs --speaker")?;
+    let session = find_session(&store, &cwd, id)?;
+    let events = read_events(&session.log_path)
+        .map_err(|error| format!("cannot read {}: {error}", session.log_path.display()))?;
+
+    let config = load_config(parsed.config.clone(), env)?;
+    let model = parsed
+        .model
+        .clone()
+        .unwrap_or_else(|| config.default_model.clone());
+    let speaker = parse_speaker(speaker);
+    // Caps follow routing, exactly as the live call did: a routed synthesizer
+    // or executor may answer on a model whose capability facts differ, and
+    // reproducing the request under the debater's caps would be a silent lie
+    // (spec §17, §18).
+    let routing = CostModel::new(&model, config.pricing.clone()).with_routing(&config.routing);
+    let caps = caps_for(routing.model_for(&speaker)).map_err(|error| error.to_string())?;
+
+    let messages = replay::replay(&events, &speaker, parsed.round, &caps)
+        .map_err(|error| error.to_string())?;
+    if parsed.json {
+        return write_json(out, &messages);
+    }
+    print_messages(out, &messages);
+    Ok(())
+}
+
+fn sessions_stats(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {
+    let store = open_store(env)?;
+    let cwd = search_cwd(parsed)?;
+    let id = parsed
+        .id
+        .as_deref()
+        .ok_or("sessions stats needs a session id")?;
+    let session = find_session(&store, &cwd, id)?;
+    let events = read_events(&session.log_path)
+        .map_err(|error| format!("cannot read {}: {error}", session.log_path.display()))?;
+
+    // Money needs a model and the stream carries none, so the model is named
+    // here: `--model`, else the configuration's default. The human view says
+    // which model it priced at, so the number is never silently attributed.
+    let config = load_config(parsed.config.clone(), env)?;
+    let model = parsed
+        .model
+        .clone()
+        .unwrap_or_else(|| config.default_model.clone());
+    let cost = CostModel::new(model.clone(), config.pricing.clone()).with_routing(&config.routing);
+    let stats = observe::stats(&events, Some(&cost));
+
+    if parsed.json {
+        return write_json(out, &stats);
+    }
+    print_stats(out, &stats, &model);
+    Ok(())
+}
+
+fn write_json<T: serde::Serialize>(out: &mut dyn Write, value: &T) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
+    writeln!(out, "{text}").map_err(|error| error.to_string())
+}
+
+fn print_timeline(out: &mut dyn Write, timeline: &Timeline, filter: &Filter) {
+    // Usage rows are the stats view's material; the default transcript skips
+    // them unless they were asked for by name.
+    let kind = filter.kind.as_deref().map(observe::canonical_kind);
+    let show_usage = kind.as_deref() == Some("usagerecorded");
+    for group in &timeline.groups {
+        match group.round {
+            Some(round) => {
+                let _ = writeln!(
+                    out,
+                    "\n── round {round}{} ──",
+                    group
+                        .mode
+                        .map(|mode| format!(" ({mode:?})"))
+                        .unwrap_or_default()
+                );
+            }
+            None => {
+                let _ = writeln!(out, "\n── session ──");
+            }
+        }
+        for entry in &group.entries {
+            if matches!(entry, Entry::RoundStarted { .. }) {
+                continue;
+            }
+            if matches!(entry, Entry::Usage { .. }) && !show_usage {
+                continue;
+            }
+            let _ = writeln!(out, "{}", render_entry(entry));
+        }
+    }
+}
+
+fn render_entry(entry: &Entry) -> String {
+    match entry {
+        Entry::Message { speaker, text, .. } => format!("[{speaker}] {text}"),
+        Entry::Tool {
+            speaker,
+            tool,
+            args,
+            ok,
+            output,
+            error,
+            hook,
+            ..
+        } => {
+            let mut lines = vec![format!("[{speaker}] → {tool}({args})")];
+            match (ok, output, error) {
+                (Some(true), Some(output), _) => {
+                    lines.push(indent(&truncate_preview(output), 2));
+                }
+                (Some(false), _, error) => {
+                    lines.push(indent(
+                        &format!("error: {}", error.as_deref().unwrap_or("(no message)")),
+                        2,
+                    ));
+                }
+                _ => lines.push(indent("(no result on the stream)", 2)),
+            }
+            if let Some(hook) = hook {
+                lines.push(indent(&format!("[hook] {hook}"), 2));
+            }
+            lines.join("\n")
+        }
+        Entry::RoundStarted { round, mode } => format!("round {round} started ({mode:?})"),
+        Entry::RoundEnded { round, reason } => format!("[round {round} ended: {reason}]"),
+        Entry::SessionEnded { reason } => format!("[session ended: {reason}]"),
+        Entry::TurnStarted { speaker, iteration } => {
+            format!("[{speaker}] turn iteration {iteration}")
+        }
+        Entry::TurnEnded { speaker, reason } => format!("[{speaker}] turn ended: {reason}"),
+        Entry::Divergence {
+            topic, positions, ..
+        } => {
+            let mut lines = vec![format!("!! divergence: {topic}")];
+            for position in positions {
+                lines.push(indent(&format!("- {position}"), 2));
+            }
+            lines.join("\n")
+        }
+        Entry::PermissionAsked {
+            speaker,
+            request_id,
+            ..
+        } => format!("[{speaker}] permission asked ({request_id})"),
+        Entry::PermissionDecided {
+            speaker,
+            decision,
+            source,
+            reason,
+            ..
+        } => format!(
+            "[{speaker}] permission {} ({}){}",
+            decision.as_str(),
+            decision_source(source),
+            reason
+                .as_deref()
+                .map(|reason| format!(": {reason}"))
+                .unwrap_or_default()
+        ),
+        Entry::Hook {
+            speaker,
+            point,
+            outcome,
+            ..
+        } => format!("[{speaker}] hook {point}: {outcome}"),
+        Entry::ExecutorSpawned {
+            speaker,
+            executor_id,
+            ..
+        } => format!("[{speaker}] dispatched executor {executor_id}"),
+        Entry::ExecutorFinished {
+            executor_id,
+            reason,
+            summary,
+            ..
+        } => format!("[executor {executor_id}] finished: {reason} — {summary}"),
+        Entry::Usage { speaker, usage } => format!(
+            "[{speaker}] usage in={} out={} cached={} miss={}",
+            usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.miss_tokens
+        ),
+        Entry::AgentError {
+            speaker, message, ..
+        } => format!("[{speaker}] error: {message}"),
+        Entry::SessionError { code, detail, .. } => format!("[session error {code}] {detail}"),
+        Entry::History {
+            reason, summary, ..
+        } => format!(
+            "[history: {reason:?}] {}",
+            summary.as_deref().unwrap_or("(superseded)")
+        ),
+        Entry::Context { source, .. } => format!("[context injected: {source:?}]"),
+    }
+}
+
+fn decision_source(source: &crate::events::DecisionSource) -> &'static str {
+    match source {
+        crate::events::DecisionSource::User => "user",
+        crate::events::DecisionSource::Hook => "hook",
+        crate::events::DecisionSource::Policy => "policy",
+    }
+}
+
+fn indent(text: &str, spaces: usize) -> String {
+    let pad = " ".repeat(spaces);
+    text.lines()
+        .map(|line| format!("{pad}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn truncate_preview(text: &str) -> String {
+    const MAX: usize = 500;
+    let mut preview: String = text.chars().take(MAX).collect();
+    if text.chars().count() > MAX {
+        preview.push('…');
+    }
+    preview
+}
+
+fn print_messages(out: &mut dyn Write, messages: &[Message]) {
+    for message in messages {
+        match message {
+            Message::System { content, .. } => {
+                let _ = writeln!(out, "[system]\n{content}\n");
+            }
+            Message::User { content, name, .. } => {
+                let label = name
+                    .as_deref()
+                    .map(|name| format!(" user:{name}"))
+                    .unwrap_or_default();
+                let _ = writeln!(out, "[{label}]\n{content}\n");
+            }
+            Message::Assistant {
+                content,
+                tool_calls,
+                ..
+            } => {
+                let _ = writeln!(out, "[assistant]");
+                if let Some(content) = content {
+                    let _ = writeln!(out, "{content}");
+                }
+                for call in tool_calls {
+                    let _ = writeln!(out, "→ {}({})", call.name, call.arguments);
+                }
+                let _ = writeln!(out);
+            }
+            Message::Tool {
+                tool_call_id,
+                content,
+            } => {
+                let _ = writeln!(out, "[tool {tool_call_id}]\n{content}\n");
+            }
+        }
+    }
+}
+
+fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
+    let _ = writeln!(
+        out,
+        "session: {} tokens, {} calls, {} messages, {} rounds{}",
+        stats.session.tokens.total_tokens(),
+        stats.session.calls,
+        stats.session.messages,
+        stats.session.rounds,
+        stats
+            .session
+            .cost
+            .map(|cost| format!(", ${cost:.6} (priced at {model})"))
+            .unwrap_or_else(|| format!(", no cost (no [pricing.{model}] entry)")),
+    );
+    for speaker in &stats.speakers {
+        let _ = writeln!(
+            out,
+            "  {:<16} {} tokens  {} calls  hit {}{}",
+            speaker.speaker,
+            speaker.tokens.total_tokens(),
+            speaker.calls,
+            speaker
+                .hit_rate
+                .map(|rate| format!("{:.0}%", rate * 100.0))
+                .unwrap_or_else(|| "-".to_owned()),
+            speaker
+                .cost
+                .map(|cost| format!("  ${cost:.6}"))
+                .unwrap_or_default(),
+        );
+    }
+    let _ = writeln!(
+        out,
+        "absence: {}/{} debate rounds one-sided{}",
+        stats.absence.one_sided,
+        stats.absence.rounds,
+        stats
+            .absence
+            .rate
+            .map(|rate| format!(" ({:.0}%)", rate * 100.0))
+            .unwrap_or_default(),
+    );
+    for agent in &stats.absence.per_speaker {
+        let _ = writeln!(out, "  absent: {} x{}", agent.name, agent.count);
+    }
+    let _ = writeln!(
+        out,
+        "edits: {} succeeded, {} failed matches",
+        stats.edits.succeeded, stats.edits.failed_matches
+    );
+    for level in &stats.edits.levels {
+        let _ = writeln!(out, "  match level {}: {}", level.name, level.count);
+    }
+    let _ = writeln!(
+        out,
+        "guards: read-before-write {}, read-set invalidations {}",
+        stats.guards.read_before_write, stats.guards.invalidated_reads
+    );
+    let _ = writeln!(
+        out,
+        "executors: {} spawned, {} finished",
+        stats.executors.spawned, stats.executors.finished
+    );
+    for reason in &stats.executors.by_reason {
+        let _ = writeln!(out, "  finished {}: {}", reason.name, reason.count);
+    }
+    let _ = writeln!(
+        out,
+        "hooks: {} executed ({} pre, {} post), {} feedback, {} failed",
+        stats.hooks.executed,
+        stats.hooks.pre,
+        stats.hooks.post,
+        stats.hooks.feedback,
+        stats.hooks.failed
+    );
+    let decisions = stats
+        .permissions
+        .decided
+        .iter()
+        .map(|count| format!("{} {}", count.count, count.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let decided = if decisions.is_empty() {
+        String::new()
+    } else {
+        format!(", {decisions} decided")
+    };
+    let _ = writeln!(
+        out,
+        "permissions: {} asked{decided}",
+        stats.permissions.asked,
+    );
+    let _ = writeln!(
+        out,
+        "divergences: {}/{}{}; rounds: {}",
+        stats.divergences,
+        stats.absence.rounds,
+        stats
+            .divergence_rate
+            .map(|rate| format!(" ({:.0}%)", rate * 100.0))
+            .unwrap_or_default(),
+        stats
+            .rounds
+            .iter()
+            .map(|round| format!(
+                "#{} {} {} calls{}",
+                round.round,
+                round.mode_str(),
+                round.calls,
+                round
+                    .ended
+                    .map(|reason| format!(" -> {reason}"))
+                    .unwrap_or_default()
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    for stop in &stats.stops {
+        let _ = writeln!(out, "  stop {}: {}", stop.name, stop.count);
+    }
+}
+
+trait RoundModeLabel {
+    fn mode_str(&self) -> &'static str;
+}
+
+impl RoundModeLabel for observe::RoundStats {
+    fn mode_str(&self) -> &'static str {
+        match self.mode {
+            crate::events::RoundMode::Independent => "independent",
+            crate::events::RoundMode::Targeted => "targeted",
+            crate::events::RoundMode::Synthesis => "synthesis",
+        }
+    }
+}
+
+fn print_sessions_help(out: &mut dyn Write) {
+    let _ = writeln!(
+        out,
+        "fs-agent sessions <verb> [options]\n\n  \
+         ls [--all] [--cwd PATH] [--limit N] [--json]\n      \
+         List this workspace's sessions (--all scans every bucket), newest first.\n  \
+         show <id> [--round N] [--speaker X] [--kind K] [--tool T] [--only-error] [--files] [--json]\n      \
+         The round-grouped transcript, tool calls merged with their results; --files\n      \
+         shows the workspace-object view instead (it honors --round/--speaker/--tool).\n  \
+         replay <id> --speaker X [--round N] [--model ID] [--json]\n      \
+         Recompute what one call sent to the provider, from the stream alone.\n  \
+         stats <id> [--model ID] [--json]\n      \
+         The fixed metric set (tokens, cost, absence rate, edit-ladder downgrades).\n\n  \
+         stdout carries the result and stderr the diagnostics."
+    );
+}
+
 fn print_help() {
     println!(
         "fs-agent {}\n\n  \
          usage: fs-agent [--help] [--version]\n         \
          fs-agent probe [--config PATH] [--model ID]...\n         \
-         fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
+         fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n         \
+         fs-agent sessions <ls|show|replay|stats> [options]\n\n  \
          The interactive renderers are not wired into this build yet. \
          `probe` drives one real turn against each configured model and a second \
          turn in the same session, then prints the normalized usage so you can \
          see prefix caching hit. `prune` removes this workspace's session \
-         directories, keeping the newest N (default 1). Configuration lives in \
+         directories, keeping the newest N (default 1). `sessions` answers \
+         questions about a finished session from its own event stream \
+         (ls / show / replay / stats; see `fs-agent sessions --help`). \
+         Configuration lives in \
          ~/.config/fs-agent/config.toml (XDG aware); a project .env is never loaded.",
         env!("CARGO_PKG_VERSION")
     );

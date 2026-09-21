@@ -626,6 +626,15 @@ impl Harness {
         self.session.id()
     }
 
+    /// The whole stream so far, in `seq` order.
+    ///
+    /// The single-agent counterpart of [`DiscussionHarness::events`]: one
+    /// accessor shape for both harnesses, so a caller (or a test) reads the
+    /// session's source of truth the same way whichever it holds.
+    pub fn events(&self) -> Vec<Event> {
+        self.session.events()
+    }
+
     /// Roll back the session's most recent `edit_file`: restore the bytes it
     /// replaced and retire its events (spec §11).
     ///

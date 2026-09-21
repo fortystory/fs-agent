@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub mod ledger;
+pub mod observe;
 pub mod store;
 
 pub use ledger::DayLedger;
