@@ -12,9 +12,16 @@
 //! `agent::append_event` is the one write path, so the `agent` layer is the single
 //! writer of the event stream; tools, hooks, permissions and discussion cannot
 //! write.
+//!
+//! [`store`] is the on-disk counterpart: where a session's directory lives, how
+//! `--continue` finds it, and how `prune` removes it.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+pub mod store;
+
+pub use store::{new_session_id, SessionStore, StoredSession};
 
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;

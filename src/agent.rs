@@ -19,6 +19,9 @@
 //! running an executor means driving a turn, so it is control flow (spec §1, §16).
 
 mod executor;
+mod history;
+
+pub use history::{recover_pending_calls, undo_last_edit, UndoOutcome};
 
 use std::sync::Arc;
 use std::time::Instant;

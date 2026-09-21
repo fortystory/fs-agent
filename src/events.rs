@@ -8,6 +8,7 @@
 //! Durability contract (spec §2): one JSONL file per session, a single writer,
 //! one `flush` per line and **no** `fsync`, and a torn final line is tolerated.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -448,6 +449,20 @@ impl Event {
     }
 }
 
+/// Query: every `seq` some `HistorySuperseded` event has retired.
+///
+/// A retired event is out of effect but never deleted (spec §2). Projection
+/// excludes these seqs and `/undo` looks past them, so the rule has one home.
+pub fn superseded_seqs(events: &[Event]) -> BTreeSet<u64> {
+    let mut retired = BTreeSet::new();
+    for event in events {
+        if let EventPayload::HistorySuperseded { targets, .. } = &event.payload {
+            retired.extend(targets.iter().copied());
+        }
+    }
+    retired
+}
+
 /// Query: which `tool_call`s have no result yet?
 ///
 /// Pending work is a query over the log, never hidden loop state. The turn loop
@@ -580,12 +595,23 @@ struct Inner {
 impl EventLog {
     /// Create a fresh log. Fails if the file already exists; the parent
     /// directory must exist.
+    ///
+    /// The file is made owner-only (`0600`): a stream carries the user's source
+    /// and, after redaction, nothing that was secret — but it is still private
+    /// (spec §11).
     pub fn create(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
-        let file = OpenOptions::new()
-            .create_new(true)
-            .append(true)
-            .open(&path)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).append(true);
+        // The mode is set at creation rather than narrowed afterwards, so there
+        // is no window in which the stream exists world-readable (spec §11, §20).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        let file = options.open(&path)?;
         Ok(Self {
             path,
             inner: Arc::new(Mutex::new(Inner {

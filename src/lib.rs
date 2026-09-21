@@ -48,7 +48,7 @@ use tokio::task::JoinHandle;
 use crate::agent::TurnOutcome;
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;
-use crate::events::{ContextSource, Event, EventLog, SessionId, SpeakerId};
+use crate::events::{ContextSource, Event, EventLog, EventPayload, SessionId, SpeakerId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy};
 use crate::provider::Provider;
@@ -174,6 +174,9 @@ struct OpenedSession {
     skills: Arc<Skills>,
     /// `AGENTS.md`, read once before the session exists.
     agents_md: Option<String>,
+    /// Whether the stream already carries a `SessionStarted`: a log that does is
+    /// a session being continued, not a new one.
+    resuming: bool,
     render: RenderHandle,
     render_task: JoinHandle<()>,
 }
@@ -202,7 +205,20 @@ impl OpenedSession {
             .unwrap_or_else(|| Path::new("."))
             .join("outputs");
         let (render, render_task) = render::spawn_headless(sinks);
-        let log = EventLog::create(log_path)?;
+        // Fresh or resumed is decided by the log's existence, which is the
+        // caller's decision: it hands over a path it just allocated under a new
+        // session id, or one an earlier run left behind. That keeps the library
+        // from reading an environment flag (spec §1) while still making
+        // `--continue` one code path (spec §11).
+        let log = if log_path.exists() {
+            EventLog::open(&log_path)?
+        } else {
+            EventLog::create(&log_path)?
+        };
+        let resuming = log
+            .events()
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::SessionStarted { .. }));
         let agents_md = context::load_agents_md(&cwd);
         let skills = Arc::new(Skills::discover(&cwd, home.as_deref()));
 
@@ -219,6 +235,7 @@ impl OpenedSession {
             home,
             skills,
             agents_md,
+            resuming,
             render,
             render_task,
         })
@@ -241,6 +258,25 @@ impl OpenedSession {
             skills: Arc::clone(&self.skills),
             identity,
         })
+    }
+
+    /// The one-time head work: a fresh stream records the session skeleton; a
+    /// resumed one closes the calls the killed process never answered.
+    ///
+    /// A resumed stream gets **no second** `SessionStarted` and no re-injected
+    /// context — both are already in the log, and replaying the recorded head is
+    /// what makes the resume byte-stable for the prefix cache (spec §10, §11).
+    fn start(&self, session: &mut Session) -> Result<(), Error> {
+        if !self.resuming {
+            return self.record_skeleton(session);
+        }
+        let recovered = agent::recover_pending_calls(session, &self.render)?;
+        if recovered > 0 {
+            self.render.diagnostic(&format!(
+                "resumed session: closed {recovered} interrupted tool call(s) with an unknown result"
+            ));
+        }
+        Ok(())
     }
 
     /// Record the session skeleton through one of the sessions: `SessionStarted`,
@@ -284,7 +320,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
     let opened = OpenedSession::open(scaffold, sinks)?;
     let mut session = opened.session(config, None);
-    opened.record_skeleton(&mut session)?;
+    opened.start(&mut session)?;
 
     Ok(Harness {
         session,
@@ -344,10 +380,11 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         } = debater;
         let identity = discussion::debater_identity(speaker.to_string().as_str());
         let mut session = opened.session(config, Some(identity));
-        // The first debater records the skeleton for the whole stream: it is the
+        // The first session records the skeleton for the whole stream, or — on a
+        // resume — closes the calls an earlier process left open: it is the
         // session-level head every debater then projects.
         if index == 0 {
-            opened.record_skeleton(&mut session)?;
+            opened.start(&mut session)?;
         }
         roster.push(agent::Debater {
             speaker,
@@ -388,6 +425,16 @@ impl Harness {
 
     pub fn session_id(&self) -> &SessionId {
         self.session.id()
+    }
+
+    /// Roll back the session's most recent `edit_file`: restore the bytes it
+    /// replaced and retire its events (spec §11).
+    ///
+    /// `Ok(None)` means there was nothing left to undo. The gesture exists only
+    /// at the front end; this is the operation a `/undo` calls, and it never
+    /// touches the user's git.
+    pub async fn undo_last_edit(&mut self) -> Result<Option<agent::UndoOutcome>, Error> {
+        agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
     /// Where this session's tool artifacts land (`outputs/<tool_call_id>.*`).
@@ -449,4 +496,7 @@ pub enum Error {
     /// The roster a discussion was assembled with cannot run the protocol.
     #[error("discussion setup: {0}")]
     Discussion(String),
+    /// `/undo` could not safely roll the workspace back.
+    #[error("undo: {0}")]
+    Undo(String),
 }

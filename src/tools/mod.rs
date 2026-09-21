@@ -18,8 +18,11 @@ pub mod skill;
 pub mod task;
 pub mod tool;
 
-pub use file::{EditFile, ReadFile, WriteFile, MATCH_LEVEL_PREFIX, WROTE_PATH_PREFIX};
-pub use paths::{PathLocks, SessionPaths};
+pub use file::{
+    before_artifact, EditCall, EditFile, ReadFile, WriteFile, EDIT_FILE, MATCH_LEVEL_PREFIX,
+    READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
+};
+pub use paths::{write_owner_only, PathLocks, SessionPaths};
 pub use registry::{AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry};
 pub use repo_map::RepoMapTool;
 pub use skill::SkillTool;

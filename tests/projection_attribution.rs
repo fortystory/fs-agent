@@ -563,8 +563,90 @@ fn superseded_ranges_are_excluded_from_the_projection() {
     assert!(text.contains("replacement answer"), "{text}");
 }
 
-// --- wire serialization -----------------------------------------------------
+#[test]
+fn retiring_a_tool_call_leaves_no_empty_assistant_message() {
+    // An assistant turn that was nothing but a tool call, with that call
+    // retired: nothing is left of the group, and the wire has no shape for an
+    // assistant message with no content and no calls, so none is emitted.
+    let (_dir, log) = log(|log| {
+        call(
+            log,
+            &kimi(),
+            "call-1",
+            "read_file",
+            serde_json::json!({"file_path": "a.txt"}),
+        );
+        result(log, &kimi(), "call-1", "a");
+        log.append(
+            SpeakerId::User,
+            EventPayload::HistorySuperseded {
+                targets: vec![2, 3],
+                reason: fs_agent::events::HistoryReason::Undo,
+                summary: None,
+            },
+        )
+        .unwrap();
+        say(log, &kimi(), "carried on");
+    });
 
+    let messages = project(&log.events(), &kimi(), &caps());
+    let assistants = messages
+        .iter()
+        .filter(|message| matches!(message, Message::Assistant { .. }))
+        .count();
+    assert_eq!(assistants, 1, "{messages:?}");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, Message::Tool { .. })),
+        "the retired result is gone too: {messages:?}"
+    );
+}
+
+#[test]
+fn retiring_a_tool_call_keeps_the_text_the_assistant_said() {
+    // The assistant said something and then called a tool; undoing the call
+    // retires the call and its result, not the sentence.
+    let (_dir, log) = log(|log| {
+        say(log, &kimi(), "let me look");
+        call(
+            log,
+            &kimi(),
+            "call-1",
+            "read_file",
+            serde_json::json!({"file_path": "a.txt"}),
+        );
+        result(log, &kimi(), "call-1", "a");
+        log.append(
+            SpeakerId::User,
+            EventPayload::HistorySuperseded {
+                targets: vec![3, 4],
+                reason: fs_agent::events::HistoryReason::Undo,
+                summary: None,
+            },
+        )
+        .unwrap();
+    });
+
+    let messages = project(&log.events(), &kimi(), &caps());
+    let assistant = messages
+        .iter()
+        .find(|message| matches!(message, Message::Assistant { .. }))
+        .expect("the sentence survives");
+    match assistant {
+        Message::Assistant {
+            content,
+            tool_calls,
+            ..
+        } => {
+            assert_eq!(content.as_deref(), Some("let me look"));
+            assert!(tool_calls.is_empty());
+        }
+        other => panic!("expected assistant, got {other:?}"),
+    }
+}
+
+// --- wire serialization -----------------------------------------------------
 #[test]
 fn projected_messages_serialize_into_both_vendors_wire_shapes() {
     let (_dir, log) = log(|log| {

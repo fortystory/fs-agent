@@ -489,6 +489,59 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
 }
 
 #[tokio::test]
+async fn an_executors_edit_is_undoable_like_any_other() {
+    // (Ticket 12.) `/undo` walks the session's stream, not one agent's slice, so
+    // an edit an executor made rolls back the same way (spec §11, §16).
+    let mut fixture = fixture(
+        &[("plan.txt", "keep me\n")],
+        vec![
+            calls(
+                "call-1",
+                "task",
+                serde_json::json!({"brief": "edit plan.txt"}),
+            ),
+            // The executor reads first: its read set starts empty.
+            calls(
+                "exec-read",
+                "read_file",
+                serde_json::json!({"file_path": "plan.txt"}),
+            ),
+            calls(
+                "exec-edit",
+                "edit_file",
+                serde_json::json!({"file_path": "plan.txt", "old_string": "keep me", "new_string": "changed"}),
+            ),
+            Reply::text("edited plan.txt"),
+            Reply::text("the executor edited it"),
+        ],
+        SessionConfig::new("fake-model"),
+        Policy::for_mode(Mode::Auto),
+        Some(Arc::new(AlwaysAllow)),
+    )
+    .await;
+
+    let outcome = fixture.harness.run_turn("delegate the edit").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::Completed);
+    assert_eq!(fixture.read("plan.txt"), "changed\n");
+
+    let undone = fixture.harness.undo_last_edit().await.unwrap().unwrap();
+    assert_eq!(undone.tool_call_id.as_str(), "exec-edit");
+    assert_eq!(fixture.read("plan.txt"), "keep me\n");
+
+    // The gesture is the user's; the stream records the retirement it caused.
+    let events = fixture.events();
+    assert!(events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::HistorySuperseded {
+            reason: fs_agent::events::HistoryReason::Undo,
+            ..
+        }
+    )));
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_failed_executor_is_an_error_result_and_the_dispatcher_carries_on() {
     let mut fixture = fixture(
         &[],

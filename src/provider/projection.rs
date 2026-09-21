@@ -29,11 +29,9 @@
 //! look alike early on, but one repeats per line for a person skimming and the
 //! other is written once per merged block for a model.
 
-use std::collections::BTreeSet;
-
 use super::capability::ModelCaps;
 use super::{Message, ToolCall};
-use crate::events::{hook_format, Event, EventPayload, SpeakerId, ToolCallId};
+use crate::events::{hook_format, superseded_seqs, Event, EventPayload, SpeakerId, ToolCallId};
 
 /// Longest sanitized participant name sent in a `name` field.
 ///
@@ -271,17 +269,6 @@ fn at_pinned_head(messages: &[Message]) -> bool {
         .all(|message| matches!(message, Message::User { name: None, .. }))
 }
 
-/// Every `seq` a [`EventPayload::HistorySuperseded`] event has retired.
-fn superseded_seqs(events: &[Event]) -> BTreeSet<u64> {
-    let mut retired = BTreeSet::new();
-    for event in events {
-        if let EventPayload::HistorySuperseded { targets, .. } = &event.payload {
-            retired.extend(targets.iter().copied());
-        }
-    }
-    retired
-}
-
 /// Add one other-speaker segment, pinning the first `user` message.
 fn push_other(
     messages: &mut Vec<Message>,
@@ -403,6 +390,15 @@ impl PendingAssistant {
         self.results.len() < self.tool_calls.len()
     }
 
+    /// Whether the group would emit an assistant message with nothing in it.
+    ///
+    /// Only a retired range can produce one: `/undo` supersedes an edit's tool
+    /// call, so a turn that carried no text is left with no content and no
+    /// calls. The wire has no shape for that message, so none is emitted.
+    fn is_empty(&self) -> bool {
+        self.content.is_none() && self.reasoning_content.is_none() && self.tool_calls.is_empty()
+    }
+
     fn add_call(&mut self, tool_call_id: &ToolCallId, tool_name: &str, args: &serde_json::Value) {
         self.tool_calls.push(ToolCall {
             id: tool_call_id.as_str().to_owned(),
@@ -455,6 +451,11 @@ fn close_pending_if_settled(
     let Some(pending) = pending.take() else {
         return;
     };
+    // A superseded tool call can empty the group out; an assistant message with
+    // no content, no reasoning and no calls is not a message.
+    if pending.is_empty() {
+        return;
+    }
     messages.push(Message::Assistant {
         content: pending.content,
         reasoning_content: pending.reasoning_content,

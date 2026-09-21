@@ -39,6 +39,15 @@ pub const READ_FILE: &str = "read_file";
 pub const WRITE_FILE: &str = "write_file";
 pub const EDIT_FILE: &str = "edit_file";
 
+/// The file name `/undo` reads for one edit: the bytes the edit actually
+/// replaced (spec §11).
+///
+/// Producing the name and finding it share this function, so the convention
+/// cannot drift the way a pair of `format!` calls would.
+pub fn before_artifact(tool_call_id: &str) -> String {
+    format!("{tool_call_id}.before")
+}
+
 #[derive(Debug, Deserialize)]
 struct ReadFileArgs {
     #[serde(default, deserialize_with = "nullable_string")]
@@ -65,7 +74,7 @@ macro_rules! file_path_arg {
     };
 }
 
-file_path_arg!(ReadFileArgs, WriteFileArgs, EditFileArgs);
+file_path_arg!(ReadFileArgs, WriteFileArgs, EditCall);
 
 /// The `file_path` field every file tool takes.
 trait FilePathArg {
@@ -219,16 +228,21 @@ impl Tool for WriteFile {
 /// `edit_file`: replace a matched region, reporting which level matched.
 pub struct EditFile;
 
-#[derive(Debug, Deserialize)]
-struct EditFileArgs {
+/// The arguments of one `edit_file` call.
+///
+/// Public because `/undo` re-reads them from the stream (`ToolCallStarted.args`):
+/// the shape the tool accepts and the shape undo parses are one type, so the two
+/// cannot drift.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EditCall {
     #[serde(default, deserialize_with = "nullable_string")]
-    file_path: String,
+    pub file_path: String,
     #[serde(default, deserialize_with = "nullable_string")]
-    old_string: String,
+    pub old_string: String,
     #[serde(default, deserialize_with = "nullable_string")]
-    new_string: String,
+    pub new_string: String,
     #[serde(default)]
-    replace_all: bool,
+    pub replace_all: bool,
 }
 
 #[async_trait]
@@ -266,11 +280,11 @@ impl Tool for EditFile {
     }
 
     fn effect(&self, args: &Value) -> Effect {
-        Effect::WritePaths(write_targets::<EditFileArgs>(args))
+        Effect::WritePaths(write_targets::<EditCall>(args))
     }
 
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError> {
-        let parsed: EditFileArgs = parse(&args)?;
+        let parsed: EditCall = parse(&args)?;
         let requested = required_path(EDIT_FILE, &parsed.file_path)?;
         let path = ctx.write_paths.resolve_write(&requested)?;
         let content = std::fs::read_to_string(&path).map_err(|error| {
@@ -299,21 +313,22 @@ impl Tool for EditFile {
         let replaced: String = edits.iter().map(|edit| edit.old_text.clone()).collect();
         let updated = apply_edits(&content, &edits, &parsed.new_string)?;
 
-        // The target changes first: if that write fails there is no edit to undo,
-        // so no snapshot may claim there is one.
-        std::fs::write(&path, updated.as_bytes()).map_err(|error| {
-            ToolError::message(format!("cannot write {}: {error}", path.display()))
-        })?;
-
-        let snapshot = ctx.outputs_dir.join(format!("{}.before", ctx.tool_call_id));
+        let snapshot = ctx.outputs_dir.join(before_artifact(ctx.tool_call_id));
         std::fs::create_dir_all(ctx.outputs_dir).map_err(|error| {
             ToolError::message(format!(
                 "cannot create {}: {error}",
                 ctx.outputs_dir.display()
             ))
         })?;
-        std::fs::write(&snapshot, replaced.as_bytes()).map_err(|error| {
+        // The snapshot lands **before** the target: if it cannot be written,
+        // nothing has changed yet and the call fails cleanly. A snapshot that
+        // outlives a failed target write is harmless — `/undo` only ever
+        // considers an edit whose recorded result succeeded.
+        super::paths::write_owner_only(&snapshot, replaced.as_bytes()).map_err(|error| {
             ToolError::message(format!("cannot write {}: {error}", snapshot.display()))
+        })?;
+        std::fs::write(&path, updated.as_bytes()).map_err(|error| {
+            ToolError::message(format!("cannot write {}: {error}", path.display()))
         })?;
 
         let level = edits

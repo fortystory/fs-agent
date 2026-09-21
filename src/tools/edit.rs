@@ -54,6 +54,26 @@ pub struct EditMatch {
     pub new_text: String,
 }
 
+/// Why a `/undo` could not reconstruct the content a snapshot came from.
+///
+/// Every variant is a refusal, never a guess: `/undo` either restores the exact
+/// bytes the edit replaced or it leaves the workspace alone (spec §11).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RevertError {
+    #[error("the file no longer contains the region this snapshot replaced")]
+    Stale,
+    #[error(
+        "more than one region of the file could be the one this snapshot replaced; \
+         the file has changed since the edit"
+    )]
+    Ambiguous,
+    #[error(
+        "this edit deleted the matched region, and the stream records no position for it; \
+         it cannot be undone automatically"
+    )]
+    CannotLocateDeletion,
+}
+
 /// Why an edit was refused. Every variant carries the detail the model needs to
 /// correct itself; none of them is silent.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -149,6 +169,131 @@ pub fn find_matches(
         }]);
     }
     Err(EditError::NoMatch)
+}
+
+/// Reconstruct the file content an edit started from: the inverse of the ladder.
+///
+/// `content` is the file as it is now, `before` is the **actual replaced bytes**
+/// the edit recorded, and `old_string` / `new_string` / `replace_all` are the
+/// edit's own arguments. The stream records no byte offset, so the region is
+/// found by *verification*: a candidate restore is accepted only when replaying
+/// the ladder over it reproduces the current content exactly. That makes the
+/// answer a fact about the workspace rather than a guess, and it is what lets a
+/// downgraded (line-trim) match be undone at all.
+///
+/// A pure deletion (`new_string` empty) carries no position the stream could
+/// recover, so it is refused rather than guessed at.
+pub fn revert(
+    content: &str,
+    before: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<String, RevertError> {
+    if new_string.is_empty() {
+        return Err(RevertError::CannotLocateDeletion);
+    }
+    if replace_all {
+        return revert_all(content, before, old_string, new_string);
+    }
+
+    let mut restored: Option<String> = None;
+    for span in find_all(content, new_string) {
+        let candidate = splice(content, &span, before);
+        if !replays(
+            &candidate, old_string, new_string, span.start, before, content,
+        ) {
+            continue;
+        }
+        if restored.is_some() {
+            return Err(RevertError::Ambiguous);
+        }
+        restored = Some(candidate);
+    }
+    restored.ok_or(RevertError::Stale)
+}
+
+/// Undo one `replace_all`: every occurrence the call replaced is an exact match,
+/// so the snapshot is `old_string` repeated — which is what makes the regions
+/// countable without a stored span.
+fn revert_all(
+    content: &str,
+    before: &str,
+    old_string: &str,
+    new_string: &str,
+) -> Result<String, RevertError> {
+    // An empty search string makes `before` unsegmentable, and an empty search
+    // is not a match any level would have produced.
+    if old_string.is_empty() || before.is_empty() {
+        return Err(RevertError::Stale);
+    }
+    if !before.len().is_multiple_of(old_string.len()) {
+        return Err(RevertError::Stale);
+    }
+    let count = before.len() / old_string.len();
+    if !before
+        .as_bytes()
+        .chunks(old_string.len())
+        .all(|chunk| chunk == old_string.as_bytes())
+    {
+        return Err(RevertError::Stale);
+    }
+
+    // More or fewer `new_string`s than the call replaced means the file moved on
+    // (or `new_string` also occurred elsewhere); either way the inverse is not
+    // determined.
+    if find_all(content, new_string).len() != count {
+        return Err(RevertError::Stale);
+    }
+
+    let restored = content.replace(new_string, old_string);
+    let edits = match find_matches(&restored, old_string, new_string, true) {
+        Ok(edits)
+            if edits.len() == count && edits.iter().all(|edit| edit.old_text == old_string) =>
+        {
+            edits
+        }
+        _ => return Err(RevertError::Stale),
+    };
+    let mut replay = restored.clone();
+    for edit in edits.iter().rev() {
+        replay.replace_range(edit.span.clone(), new_string);
+    }
+    if replay == content {
+        Ok(restored)
+    } else {
+        Err(RevertError::Stale)
+    }
+}
+
+/// Whether replaying the ladder over `candidate` really reproduces `content`,
+/// with the match landing exactly on the bytes inserted at `expected_start`.
+fn replays(
+    candidate: &str,
+    old_string: &str,
+    new_string: &str,
+    expected_start: usize,
+    before: &str,
+    content: &str,
+) -> bool {
+    let Ok(edits) = find_matches(candidate, old_string, new_string, false) else {
+        return false;
+    };
+    let [edit] = edits.as_slice() else {
+        return false;
+    };
+    edit.span.start == expected_start
+        && edit.old_text == before
+        && splice(candidate, &edit.span, new_string) == content
+}
+
+/// Replace one byte range of `text` with `replacement`.
+fn splice(text: &str, span: &Range<usize>, replacement: &str) -> String {
+    let mut out = String::with_capacity(text.len() - (span.end - span.start) + replacement.len());
+    out.push_str(&text[..span.start]);
+    out.push_str(replacement);
+    out.push_str(&text[span.end..]);
+    out
 }
 
 /// Every candidate span at one level, left to right.
@@ -524,5 +669,74 @@ mod tests {
         let content = "let tail = &items[1..];\nlet all = &items[..=9];\n";
         assert!(find_match(content, "items[1..]", "items[0..]").is_ok());
         assert!(find_match(content, "items[..=9]", "items[..=8]").is_ok());
+    }
+
+    #[test]
+    fn revert_restores_an_exact_edit_from_its_snapshot() {
+        let restored = revert("uno\ntwo\n", "one\n", "one\n", "uno\n", false).unwrap();
+
+        assert_eq!(restored, "one\ntwo\n");
+    }
+
+    #[test]
+    fn revert_restores_the_bytes_a_downgraded_match_replaced() {
+        // The model sent four spaces, the file had a tab: `.before` holds the
+        // tab, and the naive `old_string` would not match the restored file.
+        let restored = revert(
+            "fn main() {\n    run_twice();\n}\n",
+            "\trun();",
+            "    run();",
+            "    run_twice();",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(restored, "fn main() {\n\trun();\n}\n");
+    }
+
+    #[test]
+    fn revert_undoes_replace_all_from_the_repeated_snapshot() {
+        let restored =
+            revert("let a = 2;\nlet b = 2;\n", "= 1;= 1;", "= 1;", "= 2;", true).unwrap();
+
+        assert_eq!(restored, "let a = 1;\nlet b = 1;\n");
+    }
+
+    #[test]
+    fn revert_refuses_when_the_file_no_longer_holds_the_edit() {
+        let error = revert("something else\n", "one\n", "one\n", "uno\n", false).unwrap_err();
+
+        assert_eq!(error, RevertError::Stale);
+    }
+
+    #[test]
+    fn revert_refuses_when_two_regions_could_be_the_one_replaced() {
+        // Both "a b" and "b a" replay to "b b"; the snapshot cannot say which.
+        let error = revert("b b", "a", "a", "b", false).unwrap_err();
+
+        assert_eq!(error, RevertError::Ambiguous);
+    }
+
+    #[test]
+    fn revert_refuses_a_pure_deletion() {
+        let error = revert("two\n", "one\n", "one\n", "", false).unwrap_err();
+
+        assert_eq!(error, RevertError::CannotLocateDeletion);
+    }
+
+    #[test]
+    fn revert_refuses_when_the_replacement_also_occurs_outside_the_edit() {
+        // The call replaced two occurrences, but the file now holds a third
+        // "= 2;" that was already there: the inverse would corrupt it.
+        let error = revert(
+            "let a = 2;\nlet c = 2;\nlet b = 2;\n",
+            "= 1;= 1;",
+            "= 1;",
+            "= 2;",
+            true,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, RevertError::Stale);
     }
 }

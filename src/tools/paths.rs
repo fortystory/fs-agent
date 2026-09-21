@@ -12,10 +12,29 @@
 //!   file. A per-session table would be equivalent to no lock at all.
 
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::tool::{ReadPathResolver, ToolError, WritePathResolver};
+
+/// Write one session artifact owner-only (`0600`).
+///
+/// The mode is set when the file is created, not narrowed afterwards. Artifacts
+/// already live inside a `0700` session directory, so this is defence in depth:
+/// it is what keeps a `.before` snapshot or a spilled `.txt` unreachable even if
+/// the session directory's own mode does not survive a copy (spec §11, §20).
+pub fn write_owner_only(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
+}
 
 /// Resolve model-supplied paths against one session cwd.
 #[derive(Debug, Clone)]

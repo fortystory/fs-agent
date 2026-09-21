@@ -42,6 +42,16 @@ _Avoid_: 渲染、render、format
 持有 `EventLog` + 名册 + 预算 + config 的那个值；是唯一持有可变状态的结构。执行者用带 `parent_id` 的嵌套会话。
 _Avoid_: conversation、thread、context
 
+## 会话存储
+
+**会话目录（StoredSession）**:
+一个会话在磁盘上的可搬运单元：JSONL 事件流 + `outputs/`；与 cwd 绑定、默认 `0700`，`--continue` 与 `prune` 都以它为单位。
+_Avoid_: 会话文件、存档、checkpoint
+
+**会话桶（bucket）**:
+按会话 cwd 分出的目录；`--continue` 只扫本桶（cwd 的 slug 只用于分桶，权威 cwd 在 `SessionStarted` 里）。
+_Avoid_: 索引、registry
+
 ## 上下文与技能
 
 **技能（Skill）**:

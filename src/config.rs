@@ -352,6 +352,25 @@ pub fn default_path(env: &EnvMap) -> PathBuf {
     base.join("fs-agent").join("config.toml")
 }
 
+/// Default session store root: `$XDG_DATA_HOME/fs-agent/sessions`, else
+/// `$HOME/.local/share/fs-agent/sessions` (spec §11).
+///
+/// `None` when neither variable is set: the CLI reports that rather than
+/// inventing a directory to write a session into. The store itself takes its
+/// root as an argument, so the library never reads this.
+pub fn sessions_dir(env: &EnvMap) -> Option<PathBuf> {
+    let base = env
+        .get("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env.get("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".local").join("share"))
+        })?;
+    Some(base.join("fs-agent").join("sessions"))
+}
+
 // --- raw TOML shape -------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize)]

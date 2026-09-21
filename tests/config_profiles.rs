@@ -338,6 +338,26 @@ fn the_default_path_prefers_xdg_config_home_then_home() {
 }
 
 #[test]
+fn the_session_store_root_prefers_xdg_data_home_then_home() {
+    // The store's root is computed at the CLI boundary and injected into the
+    // library, so this is the only place the layout lives (spec §11).
+    assert_eq!(
+        config::sessions_dir(&env(&[
+            ("XDG_DATA_HOME", "/tmp/data"),
+            ("HOME", "/home/someone")
+        ])),
+        Some(std::path::PathBuf::from("/tmp/data/fs-agent/sessions"))
+    );
+    assert_eq!(
+        config::sessions_dir(&env(&[("HOME", "/home/someone")])),
+        Some(std::path::PathBuf::from(
+            "/home/someone/.local/share/fs-agent/sessions"
+        ))
+    );
+    assert_eq!(config::sessions_dir(&env(&[])), None);
+}
+
+#[test]
 fn each_builtin_profile_reads_its_own_key_variable() {
     // `KIMI_API_KEY` is the coding plan's variable (Kimi's own third-party-tool
     // docs use it), so it must not leak into the Open Platform profile.

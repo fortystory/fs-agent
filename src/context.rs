@@ -380,7 +380,7 @@ pub fn truncate_result(
 
     let pointer = outputs_dir.join(format!("{tool_call_id}.txt"));
     let spilled = std::fs::create_dir_all(outputs_dir)
-        .and_then(|()| std::fs::write(&pointer, text))
+        .and_then(|()| crate::tools::paths::write_owner_only(&pointer, text.as_bytes()))
         .is_ok();
     let pointer = spilled.then_some(pointer);
     let preview = preview(text, max_tokens, pointer.as_deref());

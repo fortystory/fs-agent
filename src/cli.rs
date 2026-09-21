@@ -19,6 +19,7 @@ use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::render::RenderSinks;
+use crate::session::SessionStore;
 use crate::tools::{self, PathLocks};
 use crate::{assemble, AssemblyParts, SessionScaffold};
 
@@ -75,6 +76,7 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("probe") => probe(&args[1..], env).await,
+        Some("prune") => prune(&args[1..], env),
         Some(other) => {
             eprintln!("fs-agent: unknown argument {other:?}");
             print_help();
@@ -318,15 +320,127 @@ fn probe_dir(model_id: &str) -> PathBuf {
     std::env::temp_dir().join("fs-agent-probe").join(slug)
 }
 
+#[derive(Debug)]
+struct PruneArgs {
+    /// How many of the most recent sessions to keep in the bucket.
+    keep: usize,
+    dry_run: bool,
+    /// The workspace whose bucket is pruned; the current directory by default.
+    cwd: Option<PathBuf>,
+}
+
+fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
+    let mut parsed = PruneArgs {
+        // Keep the session `--continue` would resume, remove the rest.
+        keep: 1,
+        dry_run: false,
+        cwd: None,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--keep" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--keep needs a number".to_owned())?;
+                parsed.keep = value
+                    .parse()
+                    .map_err(|_| format!("--keep needs a number, got {value:?}"))?;
+            }
+            "--dry-run" => parsed.dry_run = true,
+            "--cwd" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--cwd needs a path".to_owned())?;
+                parsed.cwd = Some(PathBuf::from(value));
+            }
+            other => return Err(format!("unknown prune argument {other:?}")),
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
+/// `prune` removes session directories, by hand (spec §11: nothing prunes
+/// automatically).
+///
+/// It works on one bucket — the workspace's — because that is the unit the store
+/// is bound to, and it keeps the newest `--keep` sessions (default one, the
+/// session `--continue` would resume). stdout carries the result; diagnostics go
+/// to stderr.
+fn prune(args: &[String], env: &EnvMap) -> ExitCode {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_prune_help();
+        return ExitCode::SUCCESS;
+    }
+    let parsed = match parse_prune(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("fs-agent: {message}");
+            print_prune_help();
+            return ExitCode::FAILURE;
+        }
+    };
+    let cwd = match parsed.cwd {
+        Some(path) => path,
+        None => match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                eprintln!("fs-agent: cannot determine the current directory: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let Some(root) = config::sessions_dir(env) else {
+        eprintln!(
+            "fs-agent: neither XDG_DATA_HOME nor HOME is set, so the session store cannot be found"
+        );
+        return ExitCode::FAILURE;
+    };
+    let store = SessionStore::new(root);
+
+    if parsed.dry_run {
+        return match store.list(&cwd) {
+            Ok(sessions) => {
+                for session in sessions.into_iter().skip(parsed.keep) {
+                    println!("would remove {} ({})", session.id, session.dir.display());
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("fs-agent: cannot read the session store: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    match store.prune(&cwd, parsed.keep) {
+        Ok(removed) => {
+            for session in removed {
+                println!("removed {} ({})", session.id, session.dir.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("fs-agent: cannot prune the session store: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn print_help() {
     println!(
         "fs-agent {}\n\n  \
          usage: fs-agent [--help] [--version]\n         \
-         fs-agent probe [--config PATH] [--model ID]...\n\n  \
+         fs-agent probe [--config PATH] [--model ID]...\n         \
+         fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
          The interactive renderers are not wired into this build yet. \
          `probe` drives one real turn against each configured model and a second \
          turn in the same session, then prints the normalized usage so you can \
-         see prefix caching hit. Configuration lives in \
+         see prefix caching hit. `prune` removes this workspace's session \
+         directories, keeping the newest N (default 1). Configuration lives in \
          ~/.config/fs-agent/config.toml (XDG aware); a project .env is never loaded.",
         env!("CARGO_PKG_VERSION")
     );
@@ -337,5 +451,16 @@ fn print_probe_help() {
         "fs-agent probe [--config PATH] [--model ID]...\n\n  \
          Sends two real turns per model in one session and prints input/output/cached/miss \
          for each. Without --model it probes every model whose provider has a key."
+    );
+}
+
+fn print_prune_help() {
+    println!(
+        "fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
+         Removes session directories for one workspace (the current directory, \
+         or --cwd). The newest N sessions are kept (default 1: the one \
+         `--continue` would resume). A session is a directory, so removal is \
+         whole-session; --dry-run lists what would go. Nothing else ever \
+         deletes sessions."
     );
 }
