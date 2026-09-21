@@ -1384,11 +1384,16 @@ fn render_entry(entry: &Entry) -> String {
             speaker,
             request_id,
             tool_call_id,
+            request,
             ..
         } => format!(
             "{} {}",
             label(speaker),
-            render::wording::permission_asked(request_id, tool_call_id.as_str())
+            render::wording::permission_asked(
+                crate::events::permission_format::tool_name(request),
+                request_id,
+                tool_call_id.as_str()
+            )
         ),
         Entry::PermissionDecided {
             speaker,

@@ -21,3 +21,4 @@ Status: done
 
 - 需求侧对应 spec 的 7–8、17 号 user story。
 - 「决定来源」那条共享函数是本仓库**已经有**的半个措辞层的证据：它的文档注释就写着「plain 与 TUI 必须对一条裁决的说法达成一致」。本票把同一套做法推广到其余短语。
+- 使用中发现：转录里的权限询问只印了 request id 与 tool call id，**没印工具名**——尽管 `PermissionAsked.request` 里一直带着 `tool`。事件流的形状补了唯一出处（`events::permission_format`，含读取用的 `tool_name`），`Block::PermissionAsked` 多带一个 `Option<String>`，两家画家、headless 与 `sessions show` 都据此显示 `权限询问：write_file（请求 …，调用 …）`。旧流里没有工具名时退回只印 id，不丢问题。

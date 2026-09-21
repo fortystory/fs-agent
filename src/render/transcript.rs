@@ -62,6 +62,10 @@ pub enum Block {
     },
     PermissionAsked {
         speaker: SpeakerId,
+        /// The tool the question is about, when the stream recorded one. It is
+        /// what the question is actually asking about, so a narration that shows
+        /// only the two ids is unreadable.
+        tool_name: Option<String>,
         request_id: String,
         tool_call_id: ToolCallId,
     },
@@ -298,10 +302,12 @@ impl Transcript {
             EventPayload::PermissionAsked {
                 request_id,
                 tool_call_id,
-                ..
+                request,
             } => {
                 blocks.push(Block::PermissionAsked {
                     speaker,
+                    tool_name: crate::events::permission_format::tool_name(&request)
+                        .map(str::to_owned),
                     request_id,
                     tool_call_id,
                 });

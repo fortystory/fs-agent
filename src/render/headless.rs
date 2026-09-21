@@ -230,13 +230,17 @@ impl Render for Headless {
                         EventPayload::PermissionAsked {
                             request_id,
                             tool_call_id,
-                            ..
+                            request,
                         } => {
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
                                 "{} {}",
                                 speaker_label(speaker),
-                                wording::permission_asked(request_id, tool_call_id.as_str())
+                                wording::permission_asked(
+                                    crate::events::permission_format::tool_name(request),
+                                    request_id,
+                                    tool_call_id.as_str()
+                                )
                             );
                         }
                         EventPayload::PermissionDecided {

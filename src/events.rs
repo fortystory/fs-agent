@@ -637,6 +637,42 @@ pub mod hook_format {
     }
 }
 
+/// The shape of [`EventPayload::PermissionAsked`]'s `request` value.
+///
+/// The event carries the question as JSON rather than as a typed struct, so the
+/// keys need one home: a reader of the stream and the loop that writes it must
+/// not disagree, and a narration that names the tool would otherwise silently
+/// lose it.
+pub mod permission_format {
+    /// The tool the question is about.
+    pub const TOOL: &str = "tool";
+    /// The arguments, so a reader can show what would run.
+    pub const ARGS: &str = "args";
+    /// Why the gate asked.
+    pub const REASON: &str = "reason";
+
+    /// The tool name a `PermissionAsked.request` carries, when it carries one.
+    pub fn tool_name(request: &serde_json::Value) -> Option<&str> {
+        request.get(TOOL).and_then(serde_json::Value::as_str)
+    }
+
+    /// Build the `request` value for a question. Keys come from this module, so
+    /// the writer and the readers share one shape.
+    pub fn request(tool_name: &str, args: &serde_json::Value, reason: &str) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            TOOL.to_owned(),
+            serde_json::Value::String(tool_name.to_owned()),
+        );
+        map.insert(ARGS.to_owned(), args.clone());
+        map.insert(
+            REASON.to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        serde_json::Value::Object(map)
+    }
+}
+
 /// The envelope. `seq` is the only identity of an event: it is the JSONL line
 /// number, so there is no second identity scheme.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

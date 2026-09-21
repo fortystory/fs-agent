@@ -147,7 +147,13 @@ fn a_usage_line_reads_in_chinese() {
 #[test]
 fn a_permission_ask_and_verdict_read_in_chinese() {
     assert_eq!(
-        wording::permission_asked("r-1", "c-1"),
+        wording::permission_asked(Some("write_file"), "r-1", "c-1"),
+        "权限询问：write_file（请求 r-1，调用 c-1）"
+    );
+    // An older stream that recorded no tool name still shows the ids rather than
+    // dropping the question.
+    assert_eq!(
+        wording::permission_asked(None, "r-1", "c-1"),
         "权限询问（请求 r-1，调用 c-1）"
     );
     assert_eq!(

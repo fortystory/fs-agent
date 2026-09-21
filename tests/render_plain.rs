@@ -413,3 +413,31 @@ async fn a_call_with_no_result_still_appears_when_the_stream_ends() {
     // Flushed rather than dropped: the call still reaches the transcript.
     assert!(stderr.text().contains("sleep 300"), "{:?}", stderr.text());
 }
+
+#[tokio::test]
+async fn a_permission_question_names_the_tool_it_is_about() {
+    // The question line used to carry only the request and call ids, so a person
+    // approving a write could not see which tool was asking (spec §12: the prompt
+    // names the action). The tool name is on the event's `request` value.
+    let events = [Event::new(
+        1,
+        kimi(),
+        EventPayload::PermissionAsked {
+            request_id: "perm-1".to_owned(),
+            tool_call_id: ToolCallId::new("call-5"),
+            request: fs_agent::events::permission_format::request(
+                "write_file",
+                &serde_json::json!({"path": "a.txt"}),
+                "mode ask",
+            ),
+        },
+    )];
+    let (_stdout, stderr) = run(&events, false).await;
+    let text = stderr.text();
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("[kimi] ") && line.contains("write_file")),
+        "the question names the tool: {text:?}"
+    );
+    assert!(text.contains("perm-1"), "and keeps the ids: {text:?}");
+}

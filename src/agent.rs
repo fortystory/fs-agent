@@ -1767,11 +1767,11 @@ async fn authorize(
                 EventPayload::PermissionAsked {
                     request_id: request_id.clone(),
                     tool_call_id: tool_call_id.clone(),
-                    request: serde_json::json!({
-                        "tool": facts.tool_name,
-                        "args": args,
-                        "reason": ask_reason,
-                    }),
+                    request: crate::events::permission_format::request(
+                        &facts.tool_name,
+                        args,
+                        &ask_reason,
+                    ),
                 },
             )?;
 

@@ -220,8 +220,17 @@ pub fn decision_name(name: &str) -> &str {
 }
 
 /// A permission question on the transcript.
-pub fn permission_asked(request_id: &str, tool_call_id: &str) -> String {
-    format!("权限询问（请求 {request_id}，调用 {tool_call_id}）")
+///
+/// The tool name is what the question is about; the two ids are what ties it to
+/// the audit trail. When the stream records no tool name the line still shows
+/// the ids rather than dropping the question.
+pub fn permission_asked(tool_name: Option<&str>, request_id: &str, tool_call_id: &str) -> String {
+    match tool_name {
+        Some(tool) => {
+            format!("权限询问：{tool}（请求 {request_id}，调用 {tool_call_id}）")
+        }
+        None => format!("权限询问（请求 {request_id}，调用 {tool_call_id}）"),
+    }
 }
 
 /// A permission verdict, with the source of the decision named in Chinese. The
