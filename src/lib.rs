@@ -376,6 +376,28 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         ));
     }
 
+    // The token allowance is a **session**-level fact shared by both debaters,
+    // the synthesizer and every executor they dispatch (spec §17), so a roster
+    // that disagrees about it is a setup error rather than a silently-picked
+    // winner.
+    let budget = debaters[0].config.budget.clone();
+    for debater in debaters.iter().skip(1) {
+        if debater.config.budget != budget {
+            return Err(Error::Discussion(format!(
+                "{} and {} were given different token budgets; the allowance is one value \
+                 shared by the whole session (spec §17)",
+                debaters[0].speaker, debater.speaker
+            )));
+        }
+    }
+    if synthesizer.config.budget != budget {
+        return Err(Error::Discussion(
+            "the synthesizer was given a different token budget from the debaters; the \
+             allowance is one value shared by the whole session (spec §17)"
+                .to_owned(),
+        ));
+    }
+
     let opened = OpenedSession::open(scaffold, sinks)?;
 
     let mut roster = Vec::with_capacity(debaters.len());
@@ -401,7 +423,17 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
     }
 
     let synthesizer = {
-        let SynthesizerParts { config, provider } = synthesizer;
+        let SynthesizerParts {
+            mut config,
+            provider,
+        } = synthesizer;
+        // The synthesizer is the other landing point a cheaper model may be
+        // routed to (spec §17). The debaters above are assembled straight from
+        // their own configs and never pass through this rule, which is what
+        // "a debater is never routed" means structurally.
+        config.model = config
+            .model_for(config::LandingPoint::Synthesizer)
+            .to_owned();
         agent::Synthesizer {
             session: opened.session(config, Some(discussion::synthesizer_identity())),
             provider,

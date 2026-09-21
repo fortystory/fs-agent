@@ -486,6 +486,18 @@ Status: ready-for-agent
 - **缓存计量归一成 `cached` / `miss` 一等字段进 `UsageRecorded`**（Kimi `cached_tokens`；DeepSeek `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`；**不照抄 Anthropic 的 `cache_creation` / `cache_read`**，那两家没有）；Kimi 有 **>256 tokens 才缓存**的门槛。
 - **`BudgetExhausted` 是撞墙值**，与 `Completed` **不能同色**，且与 `MaxIterations`（回数）/ `RoundsExhausted`（讨论轮数）是三个不同的上限。
 
+票 14 落地时把上面几处留白写实成机制（都不改本节的任何决定，但会束缚后续票，故折回正文）：
+
+- **闸门有三处，都只读「求和」**：`agent::run_turn` 每次迭代开头（撞顶 → `TurnEnded { BudgetExhausted }`）、`run_discussion` 轮次循环开头（撞顶 → 关掉「没结束辩论的那一轮」并直接进合成，落 `RoundEnded { BudgetExhausted }`）、`process_call` 的 `task` 分支（撞顶 → 该调用补一条错误结果、不派新执行者）。三处都从**整条流**求和（`events::total_usage`），**不用回合自己的投影窗口**——额度是会话的，而执行者的窗口本来就不含讨论者的花费。
+- **执行者的回合免检**：这条闸只在「派不派」上管执行者（§16）。已在跑的执行者不受闸门限制、跑到自己的轮数上限为止，其花费照常计入会话累计 ⇒ `ExecutorFinished` 永远拿不到 `BudgetExhausted`（§16 的失败四值不变），而**派发者**自己的下一个回合会被这条闸停住。
+- **前置估算的阈值 = 剩余额度 × 比例**（`Budget::admits_estimate`，`estimate_margin` 默认 1.5）。字符/4 估不准，「估算 > 剩余」会频繁误拒，所以判据取**宽容方向**；**真正的硬停仍是观测到的累计值**，估算只决定「这一发要不要发出去」。
+- **合成是唯一不设闸的调用**：`run_single_shot` 不看额度，额度为零也照发这一次；「降级并收尾」的收尾指的就是它。
+- **零轮次不补 `RoundEnded`**：额度在开赛前就没了时讨论跑 0 轮、直接进合成；没有开过的轮次不关（§15「`RoundEnded` 只由结束辩论阶段的那一轮发」的推论），此时 `BudgetExhausted` 由 `DiscussionOutcome.reason` 与诊断承担。
+- **额度是会话级、共享的注入值**：`SessionConfig::budget` 随执行者**原样继承**（§16「独立预算只指轮数不指钱」）；`assemble_discussion` 校验两个讨论者与合成器的 `Budget` 一致，不一致即组装期报错——不给「谁的数说了算」留竞态。
+- **弱模型分流的落点只有两个，且只有一条规则**：`SessionConfig::model_for(LandingPoint)`（`Synthesizer` / `Executor`）。讨论者不经这条规则；`config.toml` 的 `[routing] synthesizer_model` / `executor_model` 就是这两个值，缺省即继承讨论者模型。执行者的覆盖值仍必须落在**同一 provider profile 能服务**的 id 上（§16），这一条要到构造执行者时才判得动。
+- **配置面与显示**：`config.toml` 的 `[budget] session_tokens / estimate_margin`、`[pricing.<model-id>] miss_input / cached_input / output`（三者必填；model id 必须已登记，否则启动报错）、`[routing]`。`Config::session_config()` 是「文件里的配置 → 每个 agent 的注入值」的**唯一一处**，任何组装路径都走它，于是「`[budget]` 会拦住会话」不取决于谁记得拷贝。费用显示先落在 `probe` 的报表里，票 17 的 `sessions stats` 是它真正的家。
+- **日账本是查询不是状态**：`session::ledger::for_day(store, day)` / `today(store)` 扫会话文件，按**事件自己的 UTC 时间戳**决定归属哪一天（先按 mtime ≥ 当日零点粗筛，是优化、不是正确性依赖）；`SessionStore::list_all()` 是它跨桶读的工具。账本**只聚合 token、不算钱**：`UsageRecorded` 上没有 model 字段，费用归属需要名册（在配置里、不在流上），硬算就是编——费用由知道 model 的视图用 `PriceTable::cost` 显示。
+
 ### 18. 可观测性
 
 - **查询接口 = 四个动词的 CLI 子命令族**：`sessions ls` / `show <id> [--round|--speaker|--kind|--tool|--only-error]` / `replay <id> --speaker X --round N`（**投影重算**，调试投影 bug 的唯一手段）/ `stats <id>`。

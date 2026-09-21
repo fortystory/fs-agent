@@ -387,3 +387,151 @@ fn each_builtin_profile_reads_its_own_key_variable() {
         KeySource::Env("KIMI_CODE_API_KEY".to_owned())
     );
 }
+
+#[test]
+fn a_price_table_is_configuration_and_prices_a_hit_apart_from_a_miss() {
+    let config = resolve(
+        Some(
+            "[pricing.deepseek-flash]\n\
+             miss_input = 0.28\n\
+             cached_input = 0.028\n\
+             output = 0.42\n",
+        ),
+        &env(&[]),
+    )
+    .unwrap();
+
+    let usage = fs_agent::events::Usage {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cached_tokens: 900_000,
+        miss_tokens: 100_000,
+        reasoning_tokens: None,
+    };
+    // 0.1 Mtok miss at 0.28 + 0.9 Mtok hit at 0.028 + 1 Mtok out at 0.42.
+    let cost = config.pricing.cost("deepseek-flash", usage).unwrap();
+    assert!((cost - (0.028 + 0.0252 + 0.42)).abs() < 1e-12, "{cost}");
+
+    // A model with no table has no price, and the tables are per model.
+    assert!(config.pricing.cost("kimi-k3", usage).is_none());
+    assert!(config.pricing.pricing("deepseek-flash").is_some());
+}
+
+#[test]
+fn a_budget_section_caps_the_session_and_takes_the_tolerant_default_margin() {
+    let default = resolve(None, &env(&[])).unwrap();
+    assert_eq!(default.budget.limit, None, "v1 ships uncapped");
+    assert!(default.budget.estimate_margin > 1.0);
+
+    let capped = resolve(Some("[budget]\nsession_tokens = 250000\n"), &env(&[])).unwrap();
+    assert_eq!(capped.budget.limit, Some(250_000));
+    assert_eq!(capped.budget.remaining(50_000), Some(200_000));
+
+    let tuned = resolve(Some("[budget]\nestimate_margin = 1.25\n"), &env(&[])).unwrap();
+    assert_eq!(tuned.budget.estimate_margin, 1.25);
+}
+
+#[test]
+fn a_price_for_an_unregistered_model_is_a_startup_error() {
+    let error = resolve(
+        Some("[pricing.mystery]\nmiss_input = 1.0\ncached_input = 0.1\noutput = 2.0\n"),
+        &env(&[]),
+    )
+    .expect_err("a price is keyed by model id")
+    .to_string();
+    assert!(error.contains("mystery"), "{error}");
+}
+
+#[test]
+fn a_missing_or_nonsensical_price_is_rejected_rather_than_defaulted() {
+    // All three prices are required: a missing one would quietly price a whole
+    // class of tokens at zero.
+    let missing = resolve(
+        Some("[pricing.deepseek-flash]\nmiss_input = 1.0\noutput = 2.0\n"),
+        &env(&[]),
+    )
+    .expect_err("cached_input is required")
+    .to_string();
+    assert!(missing.contains("cached_input"), "{missing}");
+
+    let negative = resolve(
+        Some("[pricing.deepseek-flash]\nmiss_input = -1.0\ncached_input = 0.1\noutput = 2.0\n"),
+        &env(&[]),
+    )
+    .expect_err("a negative price is not a price")
+    .to_string();
+    assert!(negative.contains("miss_input"), "{negative}");
+
+    let typo = resolve(
+        Some("[pricing.deepseek-flash]\nmiss = 1.0\ncached_input = 0.1\noutput = 2.0\n"),
+        &env(&[]),
+    )
+    .expect_err("unknown keys must not be silently ignored")
+    .to_string();
+    assert!(typo.contains("miss"), "{typo}");
+}
+
+#[test]
+fn a_nonsensical_estimate_margin_is_a_startup_error() {
+    for margin in ["0.0", "-1.0", "nan"] {
+        let error = resolve(
+            Some(&format!("[budget]\nestimate_margin = {margin}\n")),
+            &env(&[]),
+        )
+        .expect_err("the tolerance must be a positive multiple")
+        .to_string();
+        assert!(error.contains("estimate_margin"), "{margin}: {error}");
+    }
+}
+
+#[test]
+fn routing_is_configuration_and_reaches_only_the_two_landing_points() {
+    let unrouted = resolve(None, &env(&[])).unwrap();
+    assert!(unrouted.routing.is_empty(), "v1 routes nobody");
+
+    let routed = resolve(
+        Some(
+            "[routing]\n\
+             synthesizer_model = \"deepseek-flash\"\n\
+             executor_model = \"deepseek-flash\"\n",
+        ),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(
+        routed.routing.synthesizer_model.as_deref(),
+        Some("deepseek-flash")
+    );
+
+    // The routing reaches the agent's values through the one assembly helper,
+    // and it moves the debater's own model not at all.
+    let config = routed.session_config("kimi-k3").unwrap();
+    assert_eq!(config.model, "kimi-k3");
+    assert_eq!(
+        config.model_for(fs_agent::config::LandingPoint::Synthesizer),
+        "deepseek-flash"
+    );
+    assert_eq!(
+        config.model_for(fs_agent::config::LandingPoint::Executor),
+        "deepseek-flash"
+    );
+    // An unrouted session answers everything with its own model.
+    let plain = unrouted.session_config("kimi-k3").unwrap();
+    assert_eq!(
+        plain.model_for(fs_agent::config::LandingPoint::Synthesizer),
+        "kimi-k3"
+    );
+}
+
+#[test]
+fn routing_to_an_unconfigured_model_is_a_startup_error() {
+    // A typo here would silently leave a participant on the discussion's model,
+    // which is exactly the kind of quiet downgrade this repo refuses.
+    let error = resolve(
+        Some("[routing]\nsynthesizer_model = \"mystery\"\n"),
+        &env(&[]),
+    )
+    .expect_err("a routed model must be configured")
+    .to_string();
+    assert!(error.contains("mystery"), "{error}");
+}

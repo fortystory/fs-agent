@@ -37,9 +37,9 @@ use futures::StreamExt;
 
 use crate::context;
 use crate::events::{
-    hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, ContextSource, Decision,
-    DecisionSource, Event, EventLog, EventPayload, ParticipantId, Role, RoundMode, SpeakerId,
-    StopReason, ToolCallId, SCHEMA_VERSION,
+    hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, total_usage, ContextSource,
+    Decision, DecisionSource, Event, EventLog, EventPayload, ParticipantId, Role, RoundMode,
+    SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -232,6 +232,32 @@ pub async fn run_turn(
             return end_turn(session, render, speaker, StopReason::Aborted, last_text);
         }
 
+        // The session's hard stop (spec §17): once the cumulative spend reaches
+        // the allowance this turn opens no further call and ends
+        // `BudgetExhausted` — degrade and wrap up, never a half-finished unit.
+        // The sum comes off the **whole** log, not this turn's scoped view: the
+        // allowance is the session's, and an executor's window deliberately
+        // excludes the debaters whose spend it shares.
+        //
+        // An executor's own turn is **exempt**: the hard stop refuses to dispatch
+        // new executors and lets the ones already running finish (spec §17), so
+        // nothing here may stop one mid-work. Its spend still lands on the stream.
+        let budget = session.config().budget.clone();
+        let spent = total_usage(&session.events()).total_tokens();
+        let gated = scope != TurnScope::Executor;
+        if gated {
+            if let Some(note) = budget.exhausted_note(spent) {
+                render.diagnostic(&note);
+                return end_turn(
+                    session,
+                    render,
+                    speaker,
+                    StopReason::BudgetExhausted,
+                    last_text,
+                );
+            }
+        }
+
         if iteration >= max_iterations {
             return end_turn(
                 session,
@@ -282,6 +308,26 @@ pub async fn run_turn(
                 return end_turn(session, render, speaker, StopReason::Error, last_text);
             }
         };
+
+        // The pre-flight half of the session gate (spec §17). The estimate is
+        // crude — characters / 4 — so the threshold is a multiple of what is
+        // left rather than an exact comparison, and a call that plainly would not
+        // fit is never sent. Output tokens are not estimated; the allowance's own
+        // cumulative check picks up whatever the call really costs. An executor's
+        // turn is exempt here too: it was already running when the money ran out.
+        if gated {
+            let estimated = context::estimate_messages_tokens(&messages);
+            if !budget.admits_estimate(spent, estimated) {
+                render.diagnostic(&budget.estimate_refusal_note(estimated));
+                return end_turn(
+                    session,
+                    render,
+                    speaker,
+                    StopReason::BudgetExhausted,
+                    last_text,
+                );
+            }
+        }
 
         let request = ChatRequest {
             model: session.config().model.clone(),
@@ -468,6 +514,12 @@ pub async fn run_turn(
 /// changed.
 const HOOK_STOPPED_TURN: &str = "hook stopped the turn: the tool did not run";
 const CANCELLED_BEFORE_RUN: &str = "the turn was cancelled: the tool did not run";
+/// The one result a `task` call gets when the session's token allowance is gone
+/// (spec §17): the executor was never dispatched, so the workspace is untouched
+/// by it.
+const BUDGET_NO_NEW_EXECUTOR: &str = "session token budget exhausted: no new executor was \
+                                       dispatched. Work that was already running was left to \
+                                       finish.";
 /// A cancel that caught the call in flight: the tool's future was dropped, so
 /// whether it took effect is unknown — the same honesty the crash-recovery
 /// result carries.
@@ -765,6 +817,26 @@ async fn process_call(
                     // is what gives each executor its own id before anything of it
                     // is recorded.
                     if pending.tool_name == TASK_TOOL {
+                        // The session's hard stop at its second landing point
+                        // (spec §17): an exhausted session dispatches no **new**
+                        // executor. Executors already running are not touched —
+                        // they finish on their own turn cap. The call was started,
+                        // so it still gets its one result, and that result says
+                        // the executor never ran.
+                        let spent = total_usage(&session.events()).total_tokens();
+                        if let Some(note) = session.config().budget.exhausted_note(spent) {
+                            render.diagnostic(&format!("{note}; no new executor was dispatched"));
+                            let refused = ToolError::message(BUDGET_NO_NEW_EXECUTOR);
+                            emit_completed(
+                                session,
+                                render,
+                                speaker,
+                                tool_call_id,
+                                Err(refused),
+                                started,
+                            )?;
+                            return Ok(Disposition::Finished);
+                        }
                         *executors_spawned += 1;
                         pending.executor = Some(Arc::new(ExecutorPort::new(
                             session,
@@ -1054,6 +1126,10 @@ pub async fn run_discussion(
 
     let mut rounds: u32 = 0;
     let mut absent: Vec<SpeakerId> = Vec::new();
+    // The session's allowance is one value shared by every participant (spec
+    // §17); assembly refuses a roster that disagrees about it, so the recorder's
+    // copy speaks for the discussion.
+    let budget = discussion.debaters[0].session.config().budget.clone();
 
     let reason = loop {
         // A gesture that landed before this round opened opens nothing: the
@@ -1061,6 +1137,28 @@ pub async fn run_discussion(
         if cancelled.is_cancelled() {
             break StopReason::Aborted;
         }
+
+        // The session's hard stop (spec §17): an exhausted session opens no
+        // further round and goes straight to the synthesizer, which is the one
+        // call that can never be skipped. Reaching the top of this loop with
+        // `rounds > 0` means the round before it did **not** end the debate, so
+        // that round is the one this reason closes; with nothing run yet there is
+        // no round boundary to record and the reason travels on
+        // `DiscussionOutcome` alone.
+        let spent = total_usage(&discussion.stream()).total_tokens();
+        if let Some(note) = budget.exhausted_note(spent) {
+            render.diagnostic(&format!("{note}; going straight to synthesis"));
+            if rounds > 0 {
+                record_round_ended(
+                    discussion.recorder(),
+                    render,
+                    rounds,
+                    StopReason::BudgetExhausted,
+                )?;
+            }
+            break StopReason::BudgetExhausted;
+        }
+
         rounds += 1;
         let mode = if rounds == 1 {
             RoundMode::Independent
@@ -1113,8 +1211,20 @@ pub async fn run_discussion(
         }
 
         // Nobody answered at all: a session-level failure rather than a debate
-        // result, and there is nothing for the synthesizer to synthesize.
+        // result, and there is nothing for the synthesizer to synthesize. Unless
+        // the budget is what stopped every side — that is the hard stop doing its
+        // job (degrade and wrap up), and recording it as a fault would make the
+        // gate look like a breakage (spec §17).
         if attendance.answers.is_empty() {
+            if budget.is_exhausted(total_usage(&discussion.stream()).total_tokens()) {
+                record_round_ended(
+                    discussion.recorder(),
+                    render,
+                    rounds,
+                    StopReason::BudgetExhausted,
+                )?;
+                break StopReason::BudgetExhausted;
+            }
             record_round_ended(discussion.recorder(), render, rounds, StopReason::Error)?;
             record_session_error(
                 discussion.recorder(),
@@ -1146,9 +1256,10 @@ pub async fn run_discussion(
             )?;
         }
 
-        // Ticket 14's hard stop lands here: once the cumulative token budget is
-        // exhausted the protocol opens no further round and goes straight to the
-        // synthesizer, ending the debate phase with `BudgetExhausted`.
+        // The session's hard stop already had its say at the top of this loop:
+        // an exhausted session never reaches this verdict, it goes straight to
+        // the synthesizer (spec §17). What is left here is the protocol's own
+        // four reasons.
         match crate::discussion::plan_after_round(outcome, rounds, discussion.max_rounds) {
             crate::discussion::RoundPlan::Stop(reason) => {
                 record_round_ended(discussion.recorder(), render, rounds, reason)?;
@@ -1246,6 +1357,10 @@ pub async fn run_discussion(
 /// discussion failure (`SessionError`, `RoundEnded { Error }`) or a cancellation
 /// (`RoundEnded { Aborted }`, no error). Only the caller holds the gesture, so
 /// only the caller can tell the two apart.
+///
+/// The session's token allowance deliberately does **not** gate this call: the
+/// synthesizer is the one call that can never be skipped (spec §17), which is
+/// why the hard stop degrades the debate phase into it rather than past it.
 pub async fn run_single_shot(
     session: &mut Session,
     provider: &dyn Provider,

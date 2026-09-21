@@ -13,8 +13,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::config::{self, Config, EnvMap, SessionConfig};
-use crate::events::{read_events, EventPayload, SessionId, SpeakerId, Usage};
+use crate::config::{self, Config, EnvMap};
+use crate::events::{read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, Usage};
 use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
@@ -228,7 +228,7 @@ async fn probe_model(
     model_id: &str,
     home: Option<&Path>,
 ) -> Result<(), ProbeError> {
-    let (model, profile) = config
+    let (_, profile) = config
         .resolve_model(Some(model_id))
         .map_err(ProbeError::failed)?;
     let provider = match OpenAiProvider::build(config, model_id, stderr_warnings()) {
@@ -244,7 +244,12 @@ async fn probe_model(
     let log_path = dir.join("log.jsonl");
     let _ = std::fs::remove_file(&log_path);
 
-    let session_config = SessionConfig::new(model_id).with_params(model.params.clone());
+    // Every configured value the session needs — generation parameters, the token
+    // allowance, the price table, the routing overrides — arrives through one
+    // function (spec §17), so this probe and any later front end assemble alike.
+    let session_config = config
+        .session_config(model_id)
+        .map_err(ProbeError::failed)?;
     let mut harness = assemble(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: dir,
@@ -288,7 +293,19 @@ async fn probe_model(
             tokio::time::sleep(CACHE_WARMUP).await;
         }
         harness.run_turn(prompt).await.map_err(ProbeError::failed)?;
-        match last_usage(&log_path) {
+        // The stream the turn just wrote is the report's only source. If it
+        // cannot be read the run is not silently reported as free; it says so.
+        let events = match read_events(&log_path) {
+            Ok(events) => events,
+            Err(error) => {
+                println!(
+                    "  turn {}: cannot read the session stream: {error}",
+                    turn + 1
+                );
+                continue;
+            }
+        };
+        match last_usage(&events) {
             Some(usage) => println!(
                 "  turn {}: input={} output={} cached={} miss={}",
                 turn + 1,
@@ -299,13 +316,24 @@ async fn probe_model(
             ),
             None => println!("  turn {}: no usage recorded", turn + 1),
         }
+        // Money is display only (spec §17): the probe shows what the session has
+        // cost when the model has a price, and says which table is missing when
+        // it does not. `sessions stats` (ticket 17) is where this belongs long
+        // term; the probe is the one report a person reads today.
+        let spent = total_usage(&events);
+        match config.pricing.cost(model_id, spent) {
+            Some(cost) => println!("  session: {} tokens, ${cost:.6}", spent.total_tokens()),
+            None => println!(
+                "  session: {} tokens (no [pricing.{model_id}] entry, so no cost)",
+                spent.total_tokens()
+            ),
+        }
     }
     harness.shutdown().await;
     Ok(())
 }
 
-fn last_usage(log_path: &Path) -> Option<Usage> {
-    let events = read_events(log_path).ok()?;
+fn last_usage(events: &[Event]) -> Option<Usage> {
     events.iter().rev().find_map(|event| match &event.payload {
         EventPayload::UsageRecorded { usage } => Some(*usage),
         _ => None,

@@ -19,7 +19,7 @@ use fs_agent::discussion::protocol::{
 use fs_agent::discussion::{debater_identity, plan_after_round, synthesis_prompt, RoundPlan};
 use fs_agent::events::{
     read_events, Event, EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId, StopReason,
-    SCHEMA_VERSION,
+    Usage, SCHEMA_VERSION,
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
@@ -435,6 +435,28 @@ async fn fixture_with(
     synthesizer_provider: FakeProvider,
     max_rounds: Option<u32>,
 ) -> Fixture {
+    let config = SessionConfig::new("fake-model");
+    fixture_with_configs(
+        kimi_provider,
+        deepseek_provider,
+        synthesizer_provider,
+        max_rounds,
+        [config.clone(), config.clone(), config],
+    )
+    .await
+}
+
+/// The same, with a configuration per participant: one debater, the other, the
+/// synthesizer. A discussion shares its token allowance (spec §17), so the
+/// configurations differ only where a test is about routing.
+async fn fixture_with_configs(
+    kimi_provider: FakeProvider,
+    deepseek_provider: FakeProvider,
+    synthesizer_provider: FakeProvider,
+    max_rounds: Option<u32>,
+    configs: [SessionConfig; 3],
+) -> Fixture {
+    let [kimi_config, deepseek_config, synthesizer_config] = configs;
     let dir = tempfile::tempdir().unwrap();
     let session = dir.path().join("session");
     let workspace = dir.path().join("workspace");
@@ -459,17 +481,17 @@ async fn fixture_with(
         debaters: vec![
             DebaterParts {
                 speaker: kimi(),
-                config: SessionConfig::new("fake-model"),
+                config: kimi_config,
                 provider: Box::new(kimi_provider.clone()),
             },
             DebaterParts {
                 speaker: deepseek(),
-                config: SessionConfig::new("fake-model"),
+                config: deepseek_config,
                 provider: Box::new(deepseek_provider.clone()),
             },
         ],
         synthesizer: SynthesizerParts {
-            config: SessionConfig::new("fake-model"),
+            config: synthesizer_config,
             provider: Box::new(synthesizer_provider.clone()),
         },
         max_rounds,
@@ -701,6 +723,58 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
         Err(error) => error,
     };
     assert!(matches!(error, Error::Discussion(_)), "got {error:?}");
+}
+
+#[tokio::test]
+async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
+    // The allowance is one value shared by every participant on the stream
+    // (spec §17), so two different caps are a setup error rather than a race
+    // about whose number the gate reads.
+    let dir = tempfile::tempdir().unwrap();
+    let assembled = assemble_discussion(DiscussionParts {
+        scaffold: SessionScaffold {
+            cwd: dir.path().to_path_buf(),
+            log_path: dir.path().join("log.jsonl"),
+            session_id: SessionId::new("s-discussion"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            hook: None,
+            home: None,
+        },
+        debaters: vec![
+            DebaterParts {
+                speaker: kimi(),
+                config: budgeted(1_000),
+                provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+            },
+            DebaterParts {
+                speaker: deepseek(),
+                config: budgeted(2_000),
+                provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+            },
+        ],
+        synthesizer: SynthesizerParts {
+            config: budgeted(1_000),
+            provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+        },
+        max_rounds: Some(2),
+        sinks: RenderSinks {
+            stdout_result: Box::new(CaptureBuf::default()),
+            stderr_diagnostic: Box::new(CaptureBuf::default()),
+        },
+    })
+    .await;
+
+    let error = match assembled {
+        Ok(_) => panic!("a roster that disagrees about the session budget must be refused"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(&error, Error::Discussion(message) if message.contains("token budget")),
+        "got {error:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,5 +1235,154 @@ fn message_content(message: &Message) -> &str {
         | Message::User { content, .. }
         | Message::Tool { content, .. } => content,
         Message::Assistant { content, .. } => content.as_deref().unwrap_or_default(),
+    }
+}
+
+/// An answer whose usage alone blows a budget: 600 input tokens, no output.
+fn answered_expensive(body: &str, conclusion: &str) -> Reply {
+    Reply::Stream(vec![
+        StreamEvent::TextDelta(answer(body, conclusion)),
+        StreamEvent::Usage(Usage {
+            input_tokens: 600,
+            output_tokens: 0,
+            cached_tokens: 0,
+            miss_tokens: 600,
+            reasoning_tokens: None,
+        }),
+        StreamEvent::Finished {
+            finish_reason: FinishReason::Stop,
+        },
+    ])
+}
+
+/// The session allowance every participant of a test discussion is given.
+fn budgeted(tokens: u64) -> SessionConfig {
+    SessionConfig::new("fake-model").with_session_token_limit(tokens)
+}
+
+#[tokio::test]
+async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthesis() {
+    // The debaters' first answers are expensive and they diverge, so the
+    // protocol's own plan would buy a targeted second round. The allowance is
+    // already spent by then, so the hard stop takes that round away and the
+    // discussion degrades into the one call it may not skip (spec §17).
+    let config = budgeted(1_000);
+    let mut fixture = fixture_with_configs(
+        FakeProvider::new(vec![answered_expensive("KIMI 正文", "复用事件流")]),
+        FakeProvider::new(vec![answered_expensive(
+            "DEEPSEEK 正文",
+            "每个 agent 各写一份日志",
+        )]),
+        FakeProvider::new(vec![Reply::text("共识：无\n分歧：日志归属\n未决：无")]),
+        Some(2),
+        [config.clone(), config.clone(), config],
+    )
+    .await;
+
+    let outcome = fixture.harness.discuss("日志该怎么放？").await.unwrap();
+    fixture.harness.shutdown().await;
+
+    // One call each, and the closing one still happened.
+    assert_eq!(fixture.kimi.requests().len(), 1);
+    assert_eq!(fixture.deepseek.requests().len(), 1);
+    assert_eq!(fixture.synthesizer.requests().len(), 1);
+    assert_eq!(outcome.reason, StopReason::BudgetExhausted);
+    assert_eq!(outcome.rounds, 1);
+    assert_eq!(outcome.synthesis, "共识：无\n分歧：日志归属\n未决：无");
+
+    let events = read_events(&fixture.log_path).unwrap();
+    assert!(
+        !events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::RoundStarted {
+                round: 2,
+                mode: RoundMode::Targeted
+            }
+        )),
+        "the hard stop must not open a targeted round"
+    );
+    // The round that the budget closed says so, and the synthesis round still
+    // ends `Completed`: the closing call is not a budget casualty.
+    assert_eq!(
+        round_endings(&events),
+        vec![(1, StopReason::BudgetExhausted), (2, StopReason::Completed)]
+    );
+    // The reason is distinguishable from the protocol's own three, on the wire
+    // and in the narration a person reads.
+    let rendered = fixture.stderr.text();
+    assert!(rendered.contains("BudgetExhausted"), "{rendered}");
+    assert!(!rendered.contains("RoundsExhausted"), "{rendered}");
+}
+
+#[tokio::test]
+async fn the_synthesizer_is_the_one_call_the_budget_cannot_skip() {
+    // An allowance of zero stops before the first provider call, so no debater
+    // ever speaks. The closing call is still made: degrading *past* synthesis
+    // would throw away the whole discussion (spec §17).
+    let config = budgeted(0);
+    let mut fixture = fixture_with_configs(
+        FakeProvider::new(vec![]),
+        FakeProvider::new(vec![]),
+        FakeProvider::new(vec![Reply::text("没有作答可合成")]),
+        Some(2),
+        [config.clone(), config.clone(), config],
+    )
+    .await;
+
+    let outcome = fixture.harness.discuss("还讨论吗？").await.unwrap();
+    fixture.harness.shutdown().await;
+
+    assert!(fixture.kimi.requests().is_empty());
+    assert!(fixture.deepseek.requests().is_empty());
+    assert_eq!(fixture.synthesizer.requests().len(), 1);
+    assert_eq!(outcome.reason, StopReason::BudgetExhausted);
+    assert_eq!(outcome.rounds, 0);
+
+    let events = read_events(&fixture.log_path).unwrap();
+    // No debate round opened, so there is no round boundary to close: the only
+    // `RoundEnded` belongs to the synthesis round.
+    assert_eq!(
+        round_endings(&events),
+        vec![(1, StopReason::Completed)],
+        "a debate phase that ran no round closes no round"
+    );
+    assert!(!events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::RoundStarted {
+            mode: RoundMode::Independent,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn routing_a_cheap_synthesizer_moves_neither_debater() {
+    // The two landing points a cheaper model may be routed to are the
+    // synthesizer and the executors (spec §17). Routing the first must not touch
+    // the debaters: heterogeneity is the protocol's strongest lever.
+    let synthesizer_config =
+        SessionConfig::new("fake-model").with_synthesizer_model("cheap-synthesizer");
+    let mut fixture = fixture_with_configs(
+        FakeProvider::new(vec![answered("KIMI 正文", "复用事件流")]),
+        FakeProvider::new(vec![answered("DEEPSEEK 正文", "复用事件流")]),
+        FakeProvider::new(vec![Reply::text("共识：复用事件流")]),
+        Some(2),
+        [
+            SessionConfig::new("fake-model"),
+            SessionConfig::new("fake-model"),
+            synthesizer_config,
+        ],
+    )
+    .await;
+
+    fixture.harness.discuss("该不该复用事件流？").await.unwrap();
+    fixture.harness.shutdown().await;
+
+    assert_eq!(fixture.synthesizer.requests()[0].model, "cheap-synthesizer");
+    for request in fixture.kimi.requests() {
+        assert_eq!(request.model, "fake-model");
+    }
+    for request in fixture.deepseek.requests() {
+        assert_eq!(request.model, "fake-model");
     }
 }

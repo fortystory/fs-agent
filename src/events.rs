@@ -167,6 +167,31 @@ pub struct Usage {
     pub reasoning_tokens: Option<u64>,
 }
 
+impl Usage {
+    /// The tokens the session's allowance counts: input plus output.
+    ///
+    /// `cached_tokens` and `miss_tokens` are a **split** of `input_tokens`, so
+    /// adding either on top would count the same prompt twice; a vendor counts
+    /// reasoning tokens inside `output_tokens` already (spec §17).
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+
+    /// Fold another record's counts into this one.
+    ///
+    /// `reasoning_tokens` stays `None` until some provider reports them, so a
+    /// total never claims a reasoning count nothing measured.
+    pub fn accumulate(&mut self, other: Usage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cached_tokens += other.cached_tokens;
+        self.miss_tokens += other.miss_tokens;
+        if let Some(tokens) = other.reasoning_tokens {
+            *self.reasoning_tokens.get_or_insert(0) += tokens;
+        }
+    }
+}
+
 /// Where a pinned injection came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextSource {
@@ -553,20 +578,12 @@ pub fn usage_of(events: &[Event], speaker: &SpeakerId) -> Usage {
 
 fn sum_usage<'a>(events: impl Iterator<Item = &'a Event>) -> Usage {
     let mut total = Usage::default();
-    let mut reasoning: Option<u64> = None;
     for event in events {
         let EventPayload::UsageRecorded { usage } = &event.payload else {
             continue;
         };
-        total.input_tokens += usage.input_tokens;
-        total.output_tokens += usage.output_tokens;
-        total.cached_tokens += usage.cached_tokens;
-        total.miss_tokens += usage.miss_tokens;
-        if let Some(tokens) = usage.reasoning_tokens {
-            *reasoning.get_or_insert(0) += tokens;
-        }
+        total.accumulate(*usage);
     }
-    total.reasoning_tokens = reasoning;
     total
 }
 

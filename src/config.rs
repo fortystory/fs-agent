@@ -21,13 +21,20 @@
 //! # Vocabulary
 //!
 //! A **Turn** is one provider call plus its tool execution; `max_iterations`
-//! counts turns within a single agent loop.
+//! counts turns within a single agent loop. A **round** is a discussion
+//! protocol step (§15). A [`Budget`] is the session's cumulative token
+//! allowance (§17) — not to be confused with the per-agent **window** budget in
+//! [`crate::context`].
+
+pub mod cost;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+pub use cost::{Budget, LandingPoint, PriceTable, Pricing, Routing};
 
 /// Default maximum provider calls in one turn (spec §3).
 pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
@@ -235,6 +242,15 @@ pub struct Config {
     pub default_model: String,
     pub providers: BTreeMap<String, ProviderProfile>,
     pub models: BTreeMap<String, ModelProfile>,
+    /// What a million tokens cost per model, for display (spec §17). Keyed by
+    /// model id; a model with no entry is reported as unpriced, never as free.
+    pub pricing: PriceTable,
+    /// The session's cumulative token allowance (spec §17), for display and for
+    /// the gate a session assembles with.
+    pub budget: Budget,
+    /// Which model the two landing points answer with (spec §17). Empty by
+    /// default: v1 runs everything on the discussion's model.
+    pub routing: Routing,
 }
 
 impl Config {
@@ -250,6 +266,22 @@ impl Config {
     pub fn provider_for(&self, model_id: &str) -> Option<&ProviderProfile> {
         let model = self.models.get(model_id)?;
         self.providers.get(&model.provider)
+    }
+
+    /// The per-agent values a session for `model_id` starts from: the model's
+    /// generation parameters, the session's allowance, the price table it
+    /// displays costs with, and the routing overrides (spec §17).
+    ///
+    /// One function rather than the same four lines at every assembly site, so
+    /// "the `[budget]` table gates the session" is true wherever a session is
+    /// assembled instead of only where someone remembered to copy it.
+    pub fn session_config(&self, model_id: &str) -> Result<SessionConfig, ConfigError> {
+        let (model, _) = self.resolve_model(Some(model_id))?;
+        let mut config = SessionConfig::new(model_id).with_params(model.params.clone());
+        config.pricing = self.pricing.clone();
+        config.budget = self.budget.clone();
+        self.routing.apply(&mut config);
+        Ok(config)
     }
 
     /// Every model whose provider has a usable key. The CLI probe uses this to
@@ -307,6 +339,9 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
 
     let providers = resolve_providers(&raw, env)?;
     let models = resolve_models(&raw, &providers)?;
+    let pricing = resolve_pricing(&raw, &models)?;
+    let budget = resolve_budget(raw.budget.as_ref())?;
+    let routing = resolve_routing(raw.routing.as_ref(), &models)?;
 
     let default_model = raw
         .default_model
@@ -323,6 +358,9 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         default_model,
         providers,
         models,
+        pricing,
+        budget,
+        routing,
     })
 }
 
@@ -381,6 +419,47 @@ struct RawConfig {
     providers: BTreeMap<String, RawProvider>,
     #[serde(default)]
     models: BTreeMap<String, RawModel>,
+    /// `[pricing.<model-id>]`: what a million tokens cost (spec §17). Display
+    /// only — the gate reads tokens.
+    #[serde(default)]
+    pricing: BTreeMap<String, RawPricing>,
+    budget: Option<RawBudget>,
+    routing: Option<RawRouting>,
+}
+
+/// The `[routing]` table (spec §17): the two landing points a cheaper model may
+/// be routed to. There is no key for a debater, which is the point.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRouting {
+    synthesizer_model: Option<String>,
+    executor_model: Option<String>,
+}
+
+/// One `[pricing.<model-id>]` table, in USD per million tokens.
+///
+/// All three prices are required: a missing one would silently price a class of
+/// tokens at zero, and "unpriced" already has its own, honest spelling (no table
+/// at all).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPricing {
+    /// Cache-miss input tokens.
+    miss_input: f64,
+    /// Cache-hit input tokens.
+    cached_input: f64,
+    /// Output tokens, reasoning included.
+    output: f64,
+}
+
+/// The `[budget]` table (spec §17).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawBudget {
+    /// Hard cap on the session's cumulative tokens.
+    session_tokens: Option<u64>,
+    /// Pre-flight tolerance, as a multiple of what is left (default 1.5).
+    estimate_margin: Option<f64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -584,6 +663,93 @@ fn resolve_models(
     Ok(models)
 }
 
+/// Resolve `[pricing.*]` into the display table (spec §17).
+///
+/// A price for a model that is not configured is a startup error: the key is a
+/// model id, and a typo there would silently turn every cost into "unknown".
+fn resolve_pricing(
+    raw: &RawConfig,
+    models: &BTreeMap<String, ModelProfile>,
+) -> Result<PriceTable, ConfigError> {
+    let mut table = PriceTable::new();
+    for (model, price) in &raw.pricing {
+        if !models.contains_key(model) {
+            return Err(ConfigError::UnknownPricedModel {
+                model: model.clone(),
+            });
+        }
+        for (field, value) in [
+            ("miss_input", price.miss_input),
+            ("cached_input", price.cached_input),
+            ("output", price.output),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ConfigError::InvalidPrice {
+                    model: model.clone(),
+                    field,
+                });
+            }
+        }
+        table.set(
+            model,
+            Pricing::new(price.miss_input, price.cached_input, price.output),
+        );
+    }
+    Ok(table)
+}
+
+/// Resolve `[budget]` into the session's allowance (spec §17).
+fn resolve_budget(raw: Option<&RawBudget>) -> Result<Budget, ConfigError> {
+    let mut budget = Budget::new();
+    let Some(raw) = raw else {
+        return Ok(budget);
+    };
+    if let Some(tokens) = raw.session_tokens {
+        budget = budget.with_limit(tokens);
+    }
+    if let Some(margin) = raw.estimate_margin {
+        if !margin.is_finite() || margin <= 0.0 {
+            return Err(ConfigError::InvalidBudget {
+                reason: format!(
+                    "estimate_margin must be a positive number of multiples, got {margin}"
+                ),
+            });
+        }
+        budget = budget.with_estimate_margin(margin);
+    }
+    Ok(budget)
+}
+
+/// Resolve `[routing]` into the two landing points' overrides (spec §17).
+///
+/// A routed model must be configured, for the same reason a price's key must be:
+/// a typo would silently leave the participant on the discussion's model. Whether
+/// it is a model the **dispatcher's provider** can serve is checked where the
+/// executor is built (spec §16), because that depends on the model chosen at
+/// assembly rather than on this file.
+fn resolve_routing(
+    raw: Option<&RawRouting>,
+    models: &BTreeMap<String, ModelProfile>,
+) -> Result<Routing, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(Routing::default());
+    };
+    for model in [&raw.synthesizer_model, &raw.executor_model]
+        .into_iter()
+        .flatten()
+    {
+        if !models.contains_key(model) {
+            return Err(ConfigError::UnknownRoutedModel {
+                model: model.clone(),
+            });
+        }
+    }
+    Ok(Routing {
+        synthesizer_model: raw.synthesizer_model.clone(),
+        executor_model: raw.executor_model.clone(),
+    })
+}
+
 fn params_of(section: Option<&RawModel>) -> GenerationParams {
     match section {
         Some(section) => GenerationParams {
@@ -652,6 +818,22 @@ pub enum ConfigError {
     #[error("unknown model `{model}`; set `default_model` or pass --model to one of the configured models")]
     UnknownModel { model: String },
     #[error(
+        "[pricing.{model}] names no configured model; prices are keyed by model id, so use a \
+         built-in id or declare the model under [models.{model}] first"
+    )]
+    UnknownPricedModel { model: String },
+    #[error(
+        "[routing] names `{model}`, which is not a configured model; routing may only point at a \
+         model id that exists in [models.*] or the built-in table"
+    )]
+    UnknownRoutedModel { model: String },
+    #[error(
+        "[pricing.{model}] {field}: a price is a non-negative number of USD per million tokens"
+    )]
+    InvalidPrice { model: String, field: &'static str },
+    #[error("[budget] {reason}")]
+    InvalidBudget { reason: String },
+    #[error(
         "provider `{provider}`: base_url host `{host}` does not match the source of the key \
          (`{key_env}` is a {vendor} key, and a {vendor} key expects {expected}). \
          Mixing a key with another vendor's base_url returns 401. Point `base_url` at {expected}, \
@@ -695,9 +877,24 @@ pub struct SessionConfig {
     /// dispatcher's provider, so this names a model that client can serve (a model
     /// of the same provider profile). Swapping the provider for executors is an
     /// assembly decision, not a per-session value.
+    ///
+    /// One of the two **landing points** a cheaper model may be routed to; read it
+    /// through [`SessionConfig::model_for`], which is the routing rule's one home.
     pub executor_model: Option<String>,
     /// How many executors one batch may run at once (spec §16).
     pub max_parallel_executors: usize,
+    /// Model the synthesizer answers with (spec §17). `None` inherits the
+    /// discussion's model, which is the default and the v1 behaviour.
+    ///
+    /// The other landing point. A **debater is never routed** — there is no
+    /// field for it and no call site that would read one.
+    pub synthesizer_model: Option<String>,
+    /// What a million tokens cost per model, for **display** (spec §17). The
+    /// gate reads tokens; this table never decides anything.
+    pub pricing: PriceTable,
+    /// The session's cumulative token allowance (spec §17). Every participant on
+    /// one stream shares it, which `assemble_discussion` enforces.
+    pub budget: Budget,
 }
 
 impl SessionConfig {
@@ -711,6 +908,9 @@ impl SessionConfig {
             executor_max_iterations: DEFAULT_EXECUTOR_MAX_ITERATIONS,
             executor_model: None,
             max_parallel_executors: DEFAULT_MAX_PARALLEL_EXECUTORS,
+            synthesizer_model: None,
+            pricing: PriceTable::new(),
+            budget: Budget::new(),
         }
     }
 
@@ -760,6 +960,51 @@ impl SessionConfig {
         self.params.reasoning_effort = Some(effort);
         self
     }
+
+    /// Route the synthesizer's one closing call to another model (spec §17).
+    pub fn with_synthesizer_model(mut self, synthesizer_model: impl Into<String>) -> Self {
+        self.synthesizer_model = Some(synthesizer_model.into());
+        self
+    }
+
+    /// Carry the price table this session displays costs with (spec §17).
+    pub fn with_pricing(mut self, pricing: PriceTable) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
+    /// Give this session its cumulative token allowance (spec §17).
+    pub fn with_budget(mut self, budget: Budget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Cap the session's cumulative tokens, keeping the default tolerance.
+    pub fn with_session_token_limit(mut self, tokens: u64) -> Self {
+        self.budget = self.budget.with_limit(tokens);
+        self
+    }
+
+    /// Set the pre-flight tolerance, as a multiple of what is left (spec §17).
+    pub fn with_estimate_margin(mut self, margin: f64) -> Self {
+        self.budget = self.budget.with_estimate_margin(margin);
+        self
+    }
+
+    /// The model `point` answers with: the configured override, else the model
+    /// this config already carries (spec §17).
+    ///
+    /// This is the system's **only** routing rule, and it is called from exactly
+    /// the two landing points — the executor port and the synthesizer's session.
+    /// A debater is never routed: it answers with [`SessionConfig::model`], which
+    /// no routing call can move.
+    pub fn model_for(&self, point: LandingPoint) -> &str {
+        let override_model = match point {
+            LandingPoint::Synthesizer => self.synthesizer_model.as_deref(),
+            LandingPoint::Executor => self.executor_model.as_deref(),
+        };
+        override_model.unwrap_or(&self.model)
+    }
 }
 
 impl Default for SessionConfig {
@@ -773,6 +1018,9 @@ impl Default for SessionConfig {
             executor_max_iterations: DEFAULT_EXECUTOR_MAX_ITERATIONS,
             executor_model: None,
             max_parallel_executors: DEFAULT_MAX_PARALLEL_EXECUTORS,
+            synthesizer_model: None,
+            pricing: PriceTable::new(),
+            budget: Budget::new(),
         }
     }
 }

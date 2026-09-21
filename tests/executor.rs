@@ -1308,3 +1308,187 @@ async fn the_report_names_the_file_a_rewriting_hook_actually_wrote() {
     assert!(reported.contains("created.txt"), "{reported}");
     assert!(!reported.contains("requested.txt"), "{reported}");
 }
+
+#[tokio::test]
+async fn an_exhausted_session_dispatches_no_new_executor() {
+    // The reply that asks for the executor already lands the whole allowance, so
+    // the dispatch is refused. Because the call was started it still gets exactly
+    // one result (invariant 1), and that result says the executor never ran — an
+    // executor that was already running would have been left to finish (spec §17).
+    let limit = 1_000;
+    let mut fixture = fixture(
+        &[],
+        vec![
+            Reply::Stream(vec![
+                StreamEvent::ToolCallCompleted {
+                    index: 0,
+                    id: "call-1".into(),
+                    name: "task".into(),
+                    arguments: serde_json::json!({"brief": "count the modules"}).to_string(),
+                },
+                StreamEvent::Usage(Usage {
+                    input_tokens: limit,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                    miss_tokens: limit,
+                    reasoning_tokens: None,
+                }),
+                StreamEvent::Finished {
+                    finish_reason: FinishReason::ToolCalls,
+                },
+            ]),
+            Reply::text("a reply the budget refuses to ask for"),
+        ],
+        SessionConfig::new("fake-model").with_session_token_limit(limit),
+        Policy::for_mode(Mode::Auto),
+        None,
+    )
+    .await;
+
+    let outcome = fixture.harness.run_turn("delegate it").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::BudgetExhausted);
+
+    let events = fixture.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::ExecutorSpawned { .. })),
+        "an exhausted session dispatches no new executor"
+    );
+    let results: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
+        .collect();
+    assert_eq!(results.len(), 1, "the task call keeps its one result");
+    match &results[0].payload {
+        EventPayload::ToolCallCompleted { ok, error, .. } => {
+            assert!(!ok);
+            let error = error.as_deref().unwrap();
+            assert!(error.contains("budget exhausted"), "{error}");
+            assert!(error.contains("no new executor"), "{error}");
+        }
+        other => panic!("expected ToolCallCompleted, got {other:?}"),
+    }
+    assert_eq!(
+        fixture.provider.requests().len(),
+        1,
+        "the turn stops rather than calling the provider again"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() {
+    // "No new executors, and the ones already running finish" (spec §17). The
+    // executor's first call blows the session allowance and asks for a tool, so a
+    // gated loop would abandon it on the next iteration; it must instead run to
+    // its own turn cap, and the dispatcher's own turn is the one the hard stop
+    // ends.
+    let limit = 500;
+    let mut fixture = fixture(
+        &[("notes.txt", "the notes\n")],
+        vec![
+            // Inside the allowance, so the dispatch is allowed.
+            Reply::Stream(vec![
+                StreamEvent::ToolCallCompleted {
+                    index: 0,
+                    id: "call-1".into(),
+                    name: "task".into(),
+                    arguments: serde_json::json!({"brief": "read the notes"}).to_string(),
+                },
+                StreamEvent::Usage(Usage {
+                    input_tokens: 100,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                    miss_tokens: 100,
+                    reasoning_tokens: None,
+                }),
+                StreamEvent::Finished {
+                    finish_reason: FinishReason::ToolCalls,
+                },
+            ]),
+            // The executor's own call spends far past the cap and asks for a
+            // tool, so its loop would iterate a second time.
+            Reply::Stream(vec![
+                StreamEvent::ToolCallCompleted {
+                    index: 0,
+                    id: "exec-read".into(),
+                    name: "read_file".into(),
+                    arguments: "{\"file_path\":\"notes.txt\"}".into(),
+                },
+                StreamEvent::Usage(Usage {
+                    input_tokens: 1_000,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                    miss_tokens: 1_000,
+                    reasoning_tokens: None,
+                }),
+                StreamEvent::Finished {
+                    finish_reason: FinishReason::ToolCalls,
+                },
+            ]),
+            Reply::text("read the notes"),
+            Reply::text("a reply the dispatcher's budget refuses to ask for"),
+        ],
+        SessionConfig::new("fake-model").with_session_token_limit(limit),
+        Policy::for_mode(Mode::Auto),
+        None,
+    )
+    .await;
+
+    let outcome = fixture.harness.run_turn("delegate it").await.unwrap();
+
+    let events = fixture.events();
+    let finished = only(
+        &events,
+        |payload| matches!(payload, EventPayload::ExecutorFinished { .. }),
+        "ExecutorFinished",
+    );
+    match &finished.payload {
+        EventPayload::ExecutorFinished {
+            reason, summary, ..
+        } => {
+            assert_eq!(
+                *reason,
+                StopReason::Completed,
+                "an executor that was already running is left to finish"
+            );
+            assert_eq!(summary, "read the notes");
+        }
+        other => panic!("expected ExecutorFinished, got {other:?}"),
+    }
+    // Its spend still counts: the dispatcher's own next iteration is refused.
+    assert_eq!(outcome.reason, StopReason::BudgetExhausted);
+    let reported = only(
+        &events,
+        |payload| {
+            matches!(
+                payload,
+                EventPayload::ToolCallCompleted {
+                    ok: true,
+                    output: Some(output),
+                    ..
+                } if output.starts_with("executor kimi-1 finished:")
+            )
+        },
+        "task result",
+    );
+    match &reported.payload {
+        EventPayload::ToolCallCompleted { output, .. } => {
+            let output = output.as_deref().unwrap();
+            assert!(
+                output.contains("finished: Completed"),
+                "the task reports the executor's own finish: {output}"
+            );
+        }
+        other => panic!("expected ToolCallCompleted, got {other:?}"),
+    }
+    assert_eq!(
+        fixture.provider.requests().len(),
+        3,
+        "the executor's two calls happened, the dispatcher's second did not"
+    );
+
+    fixture.harness.shutdown().await;
+}

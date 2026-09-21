@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::config::SessionConfig;
+use crate::config::{LandingPoint, SessionConfig};
 use crate::context::skills::Skills;
 use crate::events::{
     usage_of, Event, EventLog, EventPayload, ParticipantId, SessionId, SpeakerId, StopReason, Usage,
@@ -105,14 +105,12 @@ impl ExecutorPort {
         // The model is inherited unless a profile routes executors elsewhere
         // (spec §16, §17): the executor answers on the dispatcher's client, so an
         // override names a model that client can serve, and only the turn cap and
-        // the model are its own.
+        // the model are its own. The routing rule itself lives in
+        // `SessionConfig::model_for`, which is also the synthesizer's — those two
+        // are the only landing points a cheaper model may be routed to.
         let mut config = session.config().clone();
         config.max_iterations = config.executor_max_iterations;
-        config.model = session
-            .config()
-            .executor_model
-            .clone()
-            .unwrap_or_else(|| session.config().model.clone());
+        config.model = config.model_for(LandingPoint::Executor).to_owned();
 
         Self {
             parent: parent.clone(),

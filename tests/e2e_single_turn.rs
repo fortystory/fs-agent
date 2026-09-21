@@ -740,3 +740,101 @@ async fn the_edit_ladder_reports_a_downgraded_match_in_the_event_stream() {
     assert_eq!(std::fs::read_to_string(&snapshot).unwrap(), "\trun();");
     fixture.harness.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
+    // The hard stop is cumulative, not per turn (spec §17): the first call lands
+    // the whole allowance, the tool call it asked for still keeps its one result
+    // — the unit in flight completes — and the turn then stops instead of
+    // opening a second provider call.
+    let limit = 1_000;
+    let mut fixture = fixture(
+        vec![
+            Reply::Stream(vec![
+                StreamEvent::ToolCallCompleted {
+                    index: 0,
+                    id: "call-1".into(),
+                    name: "read_file".into(),
+                    arguments: "{\"file_path\":\"src/lib.rs\"}".into(),
+                },
+                StreamEvent::Usage(Usage {
+                    input_tokens: limit,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                    miss_tokens: limit,
+                    reasoning_tokens: None,
+                }),
+                StreamEvent::Finished {
+                    finish_reason: FinishReason::ToolCalls,
+                },
+            ]),
+            Reply::text("a reply the budget refuses to ask for"),
+        ],
+        SessionConfig::new("fake-model").with_session_token_limit(limit),
+    )
+    .await;
+    fixture.write("src/lib.rs", "pub fn main() {}\n");
+
+    let outcome = fixture.harness.run_turn("read the file").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::BudgetExhausted);
+    assert_eq!(
+        fixture.provider.requests().len(),
+        1,
+        "the second model call is never made"
+    );
+
+    let events = read_events(&fixture.log_path).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                EventPayload::ToolCallCompleted { ok: true, .. }
+            ))
+            .count(),
+        1,
+        "the call that was in flight keeps its one result"
+    );
+
+    fixture.harness.shutdown().await;
+    let stderr = fixture.stderr.text();
+    assert!(
+        stderr.contains("[turn ended: BudgetExhausted]"),
+        "the reason is narrated: {stderr}"
+    );
+    // Distinct from the reasons the same line can carry: a turn that ran out of
+    // its own iterations, or one that finished, must not read the same.
+    assert!(!stderr.contains("[turn ended: MaxIterations]"), "{stderr}");
+    assert!(!stderr.contains("[turn ended: Completed]"), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_call_the_pre_flight_estimate_refuses_is_never_sent() {
+    // The pre-flight half of the gate (spec §17): every droppable class fits the
+    // window, but the call plainly would not fit what is left of the session's
+    // allowance, so it is never sent — the cheap half of the hard stop.
+    let mut fixture = fixture(
+        vec![Reply::text("a reply the budget refuses to ask for")],
+        SessionConfig::new("fake-model").with_session_token_limit(10),
+    )
+    .await;
+
+    let prompt = "x".repeat(400);
+    let outcome = fixture.harness.run_turn(&prompt).await.unwrap();
+    assert_eq!(outcome.reason, StopReason::BudgetExhausted);
+    assert!(
+        fixture.provider.requests().is_empty(),
+        "a call that would not fit is not sent"
+    );
+
+    fixture.harness.shutdown().await;
+    let stderr = fixture.stderr.text();
+    assert!(stderr.contains("does not fit"), "{stderr}");
+}

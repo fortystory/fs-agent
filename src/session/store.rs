@@ -116,39 +116,33 @@ impl SessionStore {
     /// stream to resume.
     pub fn list(&self, cwd: &Path) -> io::Result<Vec<StoredSession>> {
         let bucket = self.bucket(cwd);
-        let entries = match std::fs::read_dir(&bucket) {
+        let mut sessions = scan_bucket(&bucket)?;
+        sort_newest_first(&mut sessions);
+        Ok(sessions)
+    }
+
+    /// Every session in the store, across every bucket, most recently written
+    /// first.
+    ///
+    /// A workspace-scoped question (`--continue`, `prune`) goes through
+    /// [`SessionStore::list`]; this is the store-wide one the daily ledger asks,
+    /// because a vendor's quota window is spent across workspaces (spec §17).
+    pub fn list_all(&self) -> io::Result<Vec<StoredSession>> {
+        let buckets = match std::fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
 
         let mut sessions = Vec::new();
-        for entry in entries {
-            let dir = entry?.path();
-            if !dir.is_dir() {
+        for bucket in buckets {
+            let path = bucket?.path();
+            if !path.is_dir() {
                 continue;
             }
-            let log_path = dir.join(LOG_FILE);
-            if !log_path.is_file() {
-                continue;
-            }
-            let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            sessions.push(StoredSession {
-                id: SessionId::new(name),
-                outputs_dir: dir.join(OUTPUTS_DIR),
-                log_path,
-                dir,
-            });
+            sessions.extend(scan_bucket(&path)?);
         }
-        // Newest first. Ids begin with their UTC creation stamp, so they break
-        // an mtime tie in the only sensible direction.
-        sessions.sort_by(|a, b| {
-            modified(&b.log_path)
-                .cmp(&modified(&a.log_path))
-                .then_with(|| b.id.cmp(&a.id))
-        });
+        sort_newest_first(&mut sessions);
         Ok(sessions)
     }
 
@@ -169,6 +163,47 @@ impl SessionStore {
         }
         Ok(removed)
     }
+}
+
+/// Every session directory directly under one bucket.
+fn scan_bucket(bucket: &Path) -> io::Result<Vec<StoredSession>> {
+    let entries = match std::fs::read_dir(bucket) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+
+    let mut sessions = Vec::new();
+    for entry in entries {
+        let dir = entry?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let log_path = dir.join(LOG_FILE);
+        if !log_path.is_file() {
+            continue;
+        }
+        let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        sessions.push(StoredSession {
+            id: SessionId::new(name),
+            outputs_dir: dir.join(OUTPUTS_DIR),
+            log_path,
+            dir,
+        });
+    }
+    Ok(sessions)
+}
+
+/// Newest first. Ids begin with their UTC creation stamp, so they break an mtime
+/// tie in the only sensible direction.
+fn sort_newest_first(sessions: &mut [StoredSession]) {
+    sessions.sort_by(|a, b| {
+        modified(&b.log_path)
+            .cmp(&modified(&a.log_path))
+            .then_with(|| b.id.cmp(&a.id))
+    });
 }
 
 /// A fresh session id: `<UTC timestamp>-<short random suffix>` (spec §11).
@@ -233,7 +268,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// When a path was last written; an unreadable path sorts as ancient.
-fn modified(path: &Path) -> SystemTime {
+pub(super) fn modified(path: &Path) -> SystemTime {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .unwrap_or(UNIX_EPOCH)

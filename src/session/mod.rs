@@ -14,13 +14,17 @@
 //! write.
 //!
 //! [`store`] is the on-disk counterpart: where a session's directory lives, how
-//! `--continue` finds it, and how `prune` removes it.
+//! `--continue` finds it, and how `prune` removes it. [`ledger`] reads those same
+//! directories to answer the one question a single session cannot: how much of a
+//! vendor's rolling quota window a UTC day has spent (spec §17).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub mod ledger;
 pub mod store;
 
+pub use ledger::DayLedger;
 pub use store::{new_session_id, SessionStore, StoredSession};
 
 use crate::config::SessionConfig;
