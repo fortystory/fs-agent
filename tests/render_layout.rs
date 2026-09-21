@@ -611,3 +611,264 @@ fn the_input_area_grows_with_the_draft_and_the_transcript_gives_up_the_rows() {
         three[22]
     );
 }
+
+/// One `UsageRecorded`, as the loop would log it.
+fn usage(
+    seq: u64,
+    input: u64,
+    output: u64,
+    cached: u64,
+    miss: u64,
+) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, SpeakerId, Usage};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::UsageRecorded {
+            usage: Usage {
+                input_tokens: input,
+                output_tokens: output,
+                cached_tokens: cached,
+                miss_tokens: miss,
+                reasoning_tokens: None,
+            },
+        },
+    ))
+}
+
+/// One `TurnEnded`.
+fn turn_ended(seq: u64) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, SpeakerId, StopReason};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::TurnEnded {
+            reason: StopReason::Completed,
+        },
+    ))
+}
+
+#[test]
+fn the_panel_names_the_model_and_shows_a_zero_and_a_dash_before_any_call() {
+    let rows = screen(120, 24, &mut state());
+    assert!(
+        rows[6].contains("模型") && rows[6].contains("claude-sonnet-4-5"),
+        "the model: {:?}",
+        rows[6]
+    );
+    assert!(
+        rows[7].contains("上下文") && rows[7].contains(fs_agent::render::wording::PANEL_UNKNOWN),
+        "no call has reported usage yet: {:?}",
+        rows[7]
+    );
+    assert!(
+        rows[8].contains("token") && rows[8].contains('0'),
+        "nothing spent yet: {:?}",
+        rows[8]
+    );
+    assert!(
+        rows[9].contains("回合") && rows[9].contains('0'),
+        "no turn yet: {:?}",
+        rows[9]
+    );
+    assert!(
+        !rows[6].contains("费用") && !rows.join("\n").contains('$'),
+        "money is not shown at all (spec §8)"
+    );
+}
+
+#[test]
+fn the_panel_reads_its_numbers_off_the_stream() {
+    let mut state = state();
+    // input = cached + miss, and neither may be added to the total on top of input.
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+    state.apply(turn_ended(2));
+
+    let rows = screen(120, 24, &mut state);
+    assert!(rows[6].contains("claude-sonnet-4-5"), "{:?}", rows[6]);
+    assert!(
+        rows[7].contains("9,000 / 200,000（4%）"),
+        "the window is the numerator of the last call: {:?}",
+        rows[7]
+    );
+    assert!(
+        rows[8].contains("12,345 / 100,000"),
+        "spent is input plus output: {:?}",
+        rows[8]
+    );
+    assert!(rows[9].contains('1'), "one turn: {:?}", rows[9]);
+    assert!(rows[10].contains("9,000"), "input: {:?}", rows[10]);
+    assert!(rows[11].contains("3,345"), "output: {:?}", rows[11]);
+    assert!(
+        rows[12].contains("5,000 / 4,000"),
+        "the cache split: {:?}",
+        rows[12]
+    );
+}
+
+/// A state whose session has no token allowance at all.
+fn state_without_budget() -> TuiState {
+    let mut facts = facts();
+    facts.budget_limit = None;
+    TuiState::new(facts)
+}
+
+#[test]
+fn a_short_narrow_panel_keeps_the_four_core_fields_and_drops_the_rest() {
+    // 80x16 is the smallest terminal that draws the panel at all: 23 columns of
+    // content and four rows.
+    let mut state = state();
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+    state.apply(turn_ended(2));
+    let rows = screen(80, 16, &mut state);
+    let text = rows.join("\n");
+
+    assert!(text.contains("模型"), "the model: {text}");
+    // Exactly the plain value: the percentage would have to be truncated to fit, and
+    // a truncated number reads as a smaller one.
+    let panel = panel_text(80, 16, &mut state);
+    assert_eq!(
+        panel[1], "上下文  9,000 / 200,000",
+        "the percentage is the first thing the width takes"
+    );
+    assert!(text.contains("12,345 / 100,000"), "the spend: {text}");
+    assert!(text.contains("回合"), "the turns: {text}");
+    assert!(
+        !text.contains("缓存") && !text.contains("3,345"),
+        "the detail rows are the first thing the height takes: {text}"
+    );
+}
+
+#[test]
+fn a_cache_split_too_wide_for_the_panel_is_left_out() {
+    let mut state = state();
+    state.apply(usage(1, 9_000, 3_345, 1_234_567, 9_876_543));
+
+    // 80 columns leaves 16 for a value; the split needs 21, so it goes.
+    let narrow = screen(80, 24, &mut state).join("\n");
+    assert!(
+        !narrow.contains("1,234,567"),
+        "the cache row does not fit: {narrow}"
+    );
+    // 120 leaves 22, which is exactly enough.
+    let wide = screen(120, 24, &mut state).join("\n");
+    assert!(
+        wide.contains("1,234,567 / 9,876,543"),
+        "and comes back when it does: {wide}"
+    );
+}
+
+#[test]
+fn a_session_with_no_allowance_shows_its_spend_alone() {
+    let mut state = state_without_budget();
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("12,345"), "what was spent: {text}");
+    assert!(
+        !text.contains("12,345 / "),
+        "and no cap is invented for it: {text}"
+    );
+}
+
+#[test]
+fn a_tall_draft_takes_the_panel_away_whole() {
+    // The counter-intuitive one the prototype measured: ten rows of draft leave
+    // three rows of middle, and three rows cannot hold the four core fields — so the
+    // whole panel goes rather than showing a third of it.
+    let mut state = state();
+    let draft: String = (0..10).map(|line| format!("第 {line} 行\n")).collect();
+    state.paste(&draft);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("第 8 行"), "the draft is on screen: {text}");
+    assert!(!text.contains("模型"), "the panel is gone: {text}");
+    assert!(!text.contains('┬'), "and so is its seam: {text}");
+}
+
+#[test]
+fn the_context_numerator_is_the_last_call_while_the_spend_accumulates() {
+    let mut state = state();
+    state.apply(usage(1, 9_000, 1_000, 5_000, 4_000));
+    // A one-digit percentage: `（15%）` would be one column too wide for a 22-column
+    // value and get dropped, which the width test covers.
+    state.apply(usage(2, 15_000, 2_000, 20_000, 10_000));
+
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows[7].contains("15,000 / 200,000（7%）"),
+        "the window is what the *last* call carried: {:?}",
+        rows[7]
+    );
+    assert!(
+        rows[8].contains("27,000 / 100,000"),
+        "the spend is every call's input plus output: {:?}",
+        rows[8]
+    );
+    assert!(rows[10].contains("24,000"), "input summed: {:?}", rows[10]);
+    assert!(rows[11].contains("3,000"), "output summed: {:?}", rows[11]);
+}
+
+/// The panel's content, one string per row, read out of a rendered frame.
+///
+/// The panel sits right of the shared seam and left of the middle block's border, so
+/// the seam column is what locates it.
+fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
+    let frame = buffer(width, height, state);
+    let (seam, top) = find_cell(&frame, width, height, "┬").expect("the panel is drawn");
+    let content = (seam + 1)..(width - 1);
+    // `┬` sits on the middle block's top border, so the content starts below it.
+    ((top + 1)..height)
+        .map(|y| {
+            let mut text = String::new();
+            let mut x = content.start;
+            while x < content.end {
+                let symbol = frame[(x, y)].symbol();
+                text.push_str(symbol);
+                x += symbol.cell_width().max(1);
+            }
+            text
+        })
+        .take_while(|row| !row.trim().is_empty())
+        // Padding is kept: whether a value is flush right or padded right is exactly
+        // what these tests are about.
+        .collect()
+}
+
+#[test]
+fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
+    use fs_agent::render::width::text_columns;
+
+    let mut state = state();
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+    state.apply(turn_ended(2));
+    let panel = panel_text(120, 24, &mut state);
+
+    // Label column is six wide (`上下文` fills it), then one space, then twenty-two
+    // columns of value.
+    assert_eq!(
+        panel[1], "上下文  9,000 / 200,000（4%）",
+        "the label field is six columns and the value is right-aligned in the rest"
+    );
+    // Text fills from the left of the value field; numbers from the right.
+    assert_eq!(panel[0].trim_end(), "模型   claude-sonnet-4-5");
+    assert!(
+        panel[0].ends_with("     "),
+        "the model is padded on its right: {:?}",
+        panel[0]
+    );
+    for row in [&panel[2], &panel[5], &panel[6]] {
+        assert!(
+            row.ends_with("000") || row.ends_with("345"),
+            "a number ends at the panel's right edge: {row:?}"
+        );
+        assert!(!row.ends_with(' '), "and has no padding after it: {row:?}");
+    }
+    // Seven rows, each filling the panel's 29 columns.
+    assert_eq!(panel.len(), 7, "{panel:?}");
+    for (index, row) in panel.iter().enumerate() {
+        assert_eq!(
+            text_columns(row),
+            29,
+            "row {index} fills the panel: {row:?}"
+        );
+    }
+}

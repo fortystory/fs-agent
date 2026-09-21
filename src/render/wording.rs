@@ -415,6 +415,70 @@ pub fn status_line(busy: bool, width: u16) -> String {
     }
 }
 
+/// A label in the information panel (spec §8).
+pub const PANEL_MODEL: &str = "模型";
+pub const PANEL_CONTEXT: &str = "上下文";
+/// Spelled the way the rest of the UI spells it; `CONTEXT.md` has no Chinese word
+/// for it and the stats lines already say `token`.
+pub const PANEL_TOKENS: &str = "token";
+/// **Turn**, not round: the panel counts `TurnEnded` (`CONTEXT.md` keeps 轮次 and
+/// 回合 apart).
+pub const PANEL_TURNS: &str = "回合";
+pub const PANEL_INPUT: &str = "输入";
+pub const PANEL_OUTPUT: &str = "输出";
+pub const PANEL_CACHE: &str = "缓存";
+
+/// What a field shows when there is no number for it yet.
+pub const PANEL_UNKNOWN: &str = "—";
+
+/// A count with thousands separators: `12,345`.
+pub fn thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// What the session has spent, against its allowance when it has one.
+///
+/// A session with no cap shows the spend alone: `12,345 / —` would read as a cap
+/// that is missing rather than one that was never set (spec §8).
+pub fn token_pair(used: u64, limit: Option<u64>) -> String {
+    match limit {
+        Some(limit) => format!("{} / {}", thousands(used), thousands(limit)),
+        None => thousands(used),
+    }
+}
+
+/// How full the model's window is, or [`PANEL_UNKNOWN`] before a call has reported
+/// its input tokens.
+pub fn context_pair(used: Option<u64>, usable: u64) -> String {
+    match used {
+        Some(used) => format!("{} / {}", thousands(used), thousands(usable)),
+        None => PANEL_UNKNOWN.to_owned(),
+    }
+}
+
+/// The same, with the share of the window the last call took.
+pub fn context_pair_percent(used: u64, usable: u64) -> String {
+    format!(
+        "{}（{}%）",
+        context_pair(Some(used), usable),
+        used.saturating_mul(100) / usable.max(1)
+    )
+}
+
+/// The cache split of one call's input: what was served from the prefix cache and
+/// what was not.
+pub fn cache_pair(cached: u64, miss: u64) -> String {
+    format!("{} / {}", thousands(cached), thousands(miss))
+}
+
 /// The question an oversized paste asks before it is taken (spec §7).
 pub fn paste_confirm(chars: usize) -> String {
     format!("粘贴 {chars} 字符？")

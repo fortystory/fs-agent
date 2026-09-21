@@ -45,6 +45,7 @@ use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
 use super::layout;
 use super::pane::Pane;
+use super::panel::Panel;
 use super::severity::Severity;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
 use super::width::{text_columns, truncate_columns};
@@ -347,6 +348,8 @@ pub struct TuiState {
     dirty: bool,
     /// The draft and its cursor.
     editor: Input,
+    /// The numbers the panel shows, counted off the stream.
+    panel: Panel,
     /// Where a `Prompt` request's answer goes.
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     /// A question waiting for a keypress.
@@ -425,6 +428,7 @@ impl TuiState {
             clock: Local::now(),
             dirty: true,
             editor: Input::new(),
+            panel: Panel::new(),
             prompt_reply: None,
             pending: None,
             events: Vec::new(),
@@ -516,8 +520,9 @@ impl TuiState {
                 } => self.mode = Mode::Ask,
                 _ => {}
             }
-            // A delta renders to nothing here: the live tail is the streaming
-            // view, and the completed `Message` block is the permanent one.
+            // The panel counts what this block says about the session; the pane
+            // shows what it says to the reader.
+            self.panel.observe(&block);
             for line in render_block(&block) {
                 self.pane.push(line);
             }
@@ -824,6 +829,9 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     frame.render_widget(Paragraph::new(rows), panes.transcript);
     draw_scrollbar(frame, panes.scrollbar(), &state.pane);
     draw_indicator(frame, text_area, state);
+    if let Some(panel) = panes.panel {
+        draw_panel(frame, panel, state);
+    }
     if let Some(seam) = panes.seam() {
         // The two panes share one column rather than each drawing a border. Its
         // ends join the middle block's borders instead of crossing them.
@@ -892,6 +900,11 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
         rect,
     );
     state.indicator = Some(rect);
+}
+
+/// The information panel: the session's numbers beside the transcript.
+fn draw_panel(frame: &mut ratatui::Frame, area: Rect, state: &TuiState) {
+    frame.render_widget(Paragraph::new(state.panel.lines(&state.facts, area)), area);
 }
 
 /// The shared seam between the conversation pane and the panel.

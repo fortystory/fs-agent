@@ -506,3 +506,33 @@ fn the_two_renderer_confirmations_read_in_chinese() {
     assert_eq!(wording::paste_confirm(120_000), "粘贴 120000 字符？");
     assert_eq!(wording::clear_draft_confirm(), "清空输入？");
 }
+
+#[test]
+fn the_panel_texts_read_like_the_prototype() {
+    assert_eq!(wording::thousands(999), "999");
+    assert_eq!(wording::thousands(12_345), "12,345");
+    assert_eq!(wording::thousands(1_234_567), "1,234,567");
+
+    assert_eq!(
+        wording::token_pair(12_345, Some(100_000)),
+        "12,345 / 100,000"
+    );
+    // No allowance is not a missing allowance: the cap is simply not there.
+    assert_eq!(wording::token_pair(12_345, None), "12,345");
+
+    // Before a call has reported its input, the window is unknown — not zero.
+    assert_eq!(wording::context_pair(None, 200_000), wording::PANEL_UNKNOWN);
+    assert_eq!(
+        wording::context_pair(Some(12_345), 200_000),
+        "12,345 / 200,000"
+    );
+    assert_eq!(
+        wording::context_pair_percent(12_345, 200_000),
+        "12,345 / 200,000（6%）"
+    );
+    assert_eq!(wording::cache_pair(9_000, 3_345), "9,000 / 3,345");
+
+    // The turns field is a *turn* count, which `CONTEXT.md` keeps apart from 轮次.
+    assert_eq!(wording::PANEL_TURNS, "回合");
+    assert_eq!(wording::PANEL_UNKNOWN, "—");
+}

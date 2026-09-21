@@ -33,6 +33,7 @@ pub mod input;
 pub mod layout;
 pub mod markdown;
 pub mod pane;
+pub mod panel;
 pub mod plain;
 pub mod severity;
 pub mod transcript;
