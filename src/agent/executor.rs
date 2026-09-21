@@ -26,7 +26,7 @@ use crate::tools::file::WROTE_PATH_PREFIX;
 use crate::tools::{ExecutorSpawner, PathLocks, Registry, ToolError, ToolOutput};
 use crate::Error;
 
-use super::{append_event, run_turn, TurnScope};
+use super::{append_event, run_turn, CancelObserver, TurnScope};
 
 /// The private identity of an executor (spec §16).
 ///
@@ -74,6 +74,11 @@ pub(super) struct ExecutorPort {
     config: SessionConfig,
     provider: Arc<dyn Provider>,
     render: RenderHandle,
+    /// The dispatcher's view of the cancel gesture (spec §6): the executor
+    /// watches the **same** gesture, so one press reaches the whole chain below
+    /// it. It is an observer, not a signal — an executor cannot cancel its
+    /// dispatcher.
+    cancelled: CancelObserver,
 }
 
 impl ExecutorPort {
@@ -83,6 +88,7 @@ impl ExecutorPort {
         provider: &Arc<dyn Provider>,
         render: &RenderHandle,
         executor_id: ParticipantId,
+        cancelled: &CancelObserver,
     ) -> Self {
         // The executor's policy: the dispatcher's **stance**, plus every rule the
         // dispatcher marked as propagating, and nothing else. Its authority is a
@@ -125,6 +131,7 @@ impl ExecutorPort {
             config,
             provider: Arc::clone(provider),
             render: render.clone(),
+            cancelled: cancelled.clone(),
         }
     }
 
@@ -175,6 +182,7 @@ impl ExecutorPort {
             &self.provider,
             &self.render,
             TurnScope::Executor,
+            &self.cancelled,
         )
         .await;
 

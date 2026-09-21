@@ -8,8 +8,8 @@ use fs_agent::provider::capability::{caps_for, ModelCaps};
 use fs_agent::provider::{
     ChatRequest, EventStream, FinishReason, Provider, ProviderError, StreamEvent,
 };
-use futures::stream;
-use tokio::sync::Barrier;
+use futures::{stream, StreamExt};
+use tokio::sync::{Barrier, Notify};
 
 /// How long a rendezvous waits before declaring that the two calls were not
 /// concurrent. Long enough never to fire on a loaded machine, short enough that a
@@ -30,6 +30,13 @@ pub enum Reply {
     /// The rendezvous instrument for a scripted *call*: it gates only the calls
     /// that must meet, so a parent's own turns in the same script do not wait.
     Meet(Arc<Barrier>, Box<Reply>),
+    /// Emit these events, then never end.
+    ///
+    /// The instrument for a stream a cancel gesture has to interrupt: the stream
+    /// never reaches `[DONE]`, so only a cancellation can end the turn. `opened`
+    /// is notified as the stream is handed over, so a test can cancel at a
+    /// defined moment instead of sleeping.
+    Stall(Arc<Notify>, Vec<StreamEvent>),
 }
 
 impl Reply {
@@ -185,6 +192,13 @@ impl Provider for FakeProvider {
                     });
                 }
                 Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
+            }
+            Reply::Stall(opened, events) => {
+                // Announce before the loop can poll: the gesture a test sends
+                // when it wakes still lands while this stream is in flight.
+                opened.notify_one();
+                let head = stream::iter(events.into_iter().map(Ok));
+                Ok(Box::pin(head.chain(stream::pending())))
             }
             // Already unwrapped by the rendezvous loop above.
             Reply::Meet(..) => unreachable!("a rendezvous reply is unwrapped before use"),

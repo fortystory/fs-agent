@@ -13,7 +13,7 @@ The protocol is split three ways, and the split is load-bearing:
 | Layer | Holds |
 | --- | --- |
 | `discussion` (`src/discussion.rs`, `src/discussion/protocol.rs`) | the **rules**: whether two conclusions agree, who answered in a round, whether another round is allowed, the private instructions and the synthesizer prompt. Pure, and it never touches `provider`. |
-| `agent` (`run_turn`, `run_discussion`, `run_single_shot`, `agent::executor`) | the **control flow**: the round loop, the two concurrent turns, the closing call, the executor a `task` call dispatches. This layer is the only writer of the event stream — every append goes through `agent::append_event` — and the only caller of a provider (spec §3). |
+| `agent` (`run_turn`, `run_discussion`, `run_single_shot`, `agent::executor`, `agent::cancel`) | the **control flow**: the round loop, the two concurrent turns, the closing call, the executor a `task` call dispatches, and the one gesture that stops it early. This layer is the only writer of the event stream — every append goes through `agent::append_event` — and the only caller of a provider (spec §3). |
 | assembly (`assemble_discussion`) | the **roster**: one `SessionScaffold` opened into two debater sessions and one synthesizer session, all sharing one log, one tool table, one lock table and one permission policy. |
 
 `discussion` decides; `agent` writes. That is why the round-boundary events are
@@ -40,10 +40,10 @@ verdict between rounds is mechanical and costs nothing:
   already there — but the cap is what bounds the false positives of substring
   matching.
 - `RoundEnded` is emitted **only by the round that ends the debate phase**, so its
-  four terminal reasons (`NoDivergence` / `Consensus` / `RoundsExhausted` /
-  `BudgetExhausted`) are always terminal and the renderer can act on them
-  directly. A round that opens a targeted round is closed by the next
-  `RoundStarted` instead.
+  terminal reasons (`NoDivergence` / `Consensus` / `RoundsExhausted` /
+  `BudgetExhausted`, plus `Aborted` when a cancel gesture stops the round) are
+  always terminal and the renderer can act on them directly. A round that opens a
+  targeted round is closed by the next `RoundStarted` instead.
 
 ## Two rules that must not be broken
 
@@ -73,6 +73,7 @@ Every failure is recorded and the discussion moves on; **nothing is ever re-run*
 | One side fails | That side is **absent** for the round; the debate phase ends with `NoDivergence` and the synthesizer still runs. The absence is a *query* over the stream (`round_attendance`): that side's own `TurnEnded { Error }` plus no `MessageCompleted` in the round. |
 | Both sides fail | `RoundEnded { Error }` + `SessionError`, no closing call. |
 | The synthesizer fails | `RoundEnded { Error }` + `SessionError`, empty product. |
+| A cancel gesture | The round ends `RoundEnded { Aborted }` — **not** `Error`, and no `SessionError`, because the user stopped it rather than the discussion failing. The debate phase closes without opening the synthesizer, and every started `tool_call` (a running executor's `task` included) still gets its one result (spec §6). |
 
 The synthesizer's prompt is rebuilt from the stream and names every absent side
 ("这一轮没有作答（本轮缺席）"), because the one misread this whole path is built to

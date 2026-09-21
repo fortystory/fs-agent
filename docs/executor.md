@@ -117,5 +117,6 @@ result, and can re-delegate, split the work, or do it itself.
 | The port's shape (`ExecutorSpawner`) | `tools::tool` |
 | The executor's table | `tools::registry` (`for_executor`) |
 | Sending it, running it, reporting back | `agent::executor` (the port) + `agent` (`run_deferred`) |
+| Stopping it when the user cancels | `agent::cancel` (the observer the port clones), `agent::executor` (winds down, `ExecutorFinished { Aborted }`) |
 | The brief as a message | `provider::projection` |
 | An executor turn is never the session's product | `render` |

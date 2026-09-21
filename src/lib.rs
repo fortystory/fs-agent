@@ -45,7 +45,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::task::JoinHandle;
 
-use crate::agent::TurnOutcome;
+use crate::agent::{CancelSignal, TurnOutcome};
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;
 use crate::events::{ContextSource, Event, EventLog, EventPayload, SessionId, SpeakerId};
@@ -146,6 +146,9 @@ pub struct Harness {
     provider: Arc<dyn Provider>,
     speaker: SpeakerId,
     render: RenderHandle,
+    /// The session's own end of the cancel gesture (spec §6). The front end
+    /// holds one and raises it; turns get observers of it.
+    cancel: CancelSignal,
     render_task: JoinHandle<()>,
 }
 
@@ -155,6 +158,9 @@ pub struct DiscussionHarness {
     /// The shared log handle, for assertions and for `--continue` bookkeeping.
     log: EventLog,
     render: RenderHandle,
+    /// The discussion's own end of the cancel gesture (spec §6): one gesture
+    /// reaches both debaters and every executor they dispatch.
+    cancel: CancelSignal,
     render_task: JoinHandle<()>,
 }
 
@@ -327,6 +333,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         provider: provider.into(),
         speaker,
         render: opened.render,
+        cancel: CancelSignal::new(),
         render_task: opened.render_task,
     })
 }
@@ -405,6 +412,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         discussion: agent::Discussion::new(roster, synthesizer, max_rounds),
         log: opened.log.clone(),
         render: opened.render,
+        cancel: CancelSignal::new(),
         render_task: opened.render_task,
     })
 }
@@ -412,15 +420,33 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
 impl Harness {
     /// Record a user message and run one turn to completion.
     pub async fn run_turn(&mut self, user_input: &str) -> Result<TurnOutcome, Error> {
+        // A gesture is scoped to one run: the press that stopped the last turn
+        // must not stop this one, or a cancelled session could never be used
+        // again in the same process (spec §6).
+        self.cancel.reset();
         agent::record_user_message(&mut self.session, &self.render, user_input)?;
+        // This turn's view of the gesture.
+        let cancelled = self.cancel.observer();
         agent::run_turn(
             &mut self.session,
             &self.speaker,
             &self.provider,
             &self.render,
             agent::TurnScope::Whole,
+            &cancelled,
         )
         .await
+    }
+
+    /// The session's end of the cancel gesture (spec §6).
+    ///
+    /// The front end holds this and raises it on Esc; a second press while
+    /// [`is_cancelled`](CancelSignal::is_cancelled) is already true is the front
+    /// end's to turn into an exit, because the session itself never needs to
+    /// know how it was killed — `--continue` closes whatever the process left
+    /// open.
+    pub fn cancel_signal(&self) -> CancelSignal {
+        self.cancel.clone()
     }
 
     pub fn session_id(&self) -> &SessionId {
@@ -456,7 +482,16 @@ impl DiscussionHarness {
     /// asking twice on one harness would restart them at one. Build a fresh
     /// harness for a second question.
     pub async fn discuss(&mut self, question: &str) -> Result<agent::DiscussionOutcome, Error> {
-        agent::run_discussion(&mut self.discussion, &self.render, question).await
+        // One discussion is one run, like one turn: the gesture starts clean.
+        self.cancel.reset();
+        let cancelled = self.cancel.observer();
+        agent::run_discussion(&mut self.discussion, &self.render, question, &cancelled).await
+    }
+
+    /// The discussion's end of the cancel gesture (spec §6), shared by both
+    /// debaters and every executor they dispatch.
+    pub fn cancel_signal(&self) -> CancelSignal {
+        self.cancel.clone()
     }
 
     pub fn session_id(&self) -> &SessionId {

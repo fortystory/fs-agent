@@ -17,10 +17,17 @@
 //!
 //! [`executor`] is a submodule of this layer rather than a boundary of its own:
 //! running an executor means driving a turn, so it is control flow (spec §1, §16).
+//!
+//! [`cancel`] is the plumbing of the one gesture that stops a turn early
+//! (spec §6): the turn selects on it while a provider stream is in flight and
+//! while a tool runs, and an executor holds the same plumbing so one gesture
+//! reaches the whole chain below it.
 
+mod cancel;
 mod executor;
 mod history;
 
+pub use cancel::{CancelObserver, CancelSignal};
 pub use history::{recover_pending_calls, undo_last_edit, UndoOutcome};
 
 use std::sync::Arc;
@@ -167,12 +174,18 @@ pub fn record_context_injection(
 /// `scope` is how much of the stream this turn may see. It only ever *removes*
 /// the other debater's same-round events, so a single-agent turn passes
 /// [`TurnScope::Whole`] and sees exactly the stream it always saw.
+///
+/// `cancelled` is this turn's view of the session's cancel gesture (spec §6). It
+/// is selected on while a provider stream is in flight and while a tool runs, and
+/// it is cloned into every executor this turn dispatches, so one gesture stops
+/// the chain below it too.
 pub async fn run_turn(
     session: &mut Session,
     speaker: &SpeakerId,
     provider: &Arc<dyn Provider>,
     render: &RenderHandle,
     scope: TurnScope,
+    cancelled: &CancelObserver,
 ) -> Result<TurnOutcome, Error> {
     let max_iterations = session.config().max_iterations;
     // The projection branches on the model's field-level facts, so they are
@@ -186,6 +199,15 @@ pub async fn run_turn(
     // allocated, so a resumed session cannot hand out an id it already used. The
     // count is taken once and then carried across this turn's batches.
     let mut executors_spawned = spawned_executors(&scoped_events(session, speaker, scope), speaker);
+    // The values every call of this turn is processed with. They do not change
+    // between iterations, so they are bundled once, outside the loop.
+    let context = TurnContext {
+        render,
+        speaker,
+        scope,
+        provider,
+        cancelled,
+    };
 
     loop {
         // One snapshot per iteration: the log is shared with any other debater
@@ -199,6 +221,15 @@ pub async fn run_turn(
         // that has nothing to do with it.
         if !pending_tool_calls_of(&events, speaker).is_empty() {
             return end_turn(session, render, speaker, StopReason::Error, last_text);
+        }
+
+        // A gesture that landed between iterations stops the turn before another
+        // provider call is opened (spec §6). Checking here rather than only
+        // inside the stream keeps a cancelled turn from making a request it
+        // would immediately abandon.
+        if cancelled.is_cancelled() {
+            render.diagnostic("turn cancelled before the next model call");
+            return end_turn(session, render, speaker, StopReason::Aborted, last_text);
         }
 
         if iteration >= max_iterations {
@@ -261,7 +292,19 @@ pub async fn run_turn(
             cache_key: Some(session.id().as_str().to_owned()),
         };
 
-        let mut stream = match provider.send(request).await {
+        // The request may itself still be in flight — an adapter hands back a
+        // stream only once the transport answers — so the send is selectable
+        // too: a gesture must not have to wait for a stalled connection.
+        let mut cancel = cancelled.clone();
+        let sent = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                render.diagnostic("turn cancelled while the model call was in flight");
+                return end_turn(session, render, speaker, StopReason::Aborted, last_text);
+            }
+            sent = provider.send(request) => sent,
+        };
+        let mut stream = match sent {
             Ok(stream) => stream,
             Err(error) => {
                 render.diagnostic(&format!("provider error: {error}"));
@@ -274,55 +317,77 @@ pub async fn run_turn(
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut failed = false;
         let mut saw_done = false;
+        let mut aborted = false;
 
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(StreamEvent::TextDelta(delta)) => {
-                    render.text_delta(speaker, &delta);
-                    text.push_str(&delta);
+        loop {
+            tokio::select! {
+                // The gesture wins a tie against an item that is ready: stopping
+                // now is the whole point of pressing it.
+                biased;
+                _ = cancel.cancelled() => {
+                    aborted = true;
+                    break;
                 }
-                Ok(StreamEvent::ReasoningDelta(delta)) => {
-                    render.reasoning_delta(speaker, &delta);
-                    reasoning.push_str(&delta);
-                }
-                Ok(StreamEvent::ToolCallStarted { .. }) => {
-                    // Fragments are assembled by the adapter; the loop only sees
-                    // the completed call.
-                }
-                Ok(StreamEvent::ToolCallCompleted {
-                    id,
-                    name,
-                    arguments,
-                    ..
-                }) => {
-                    tool_calls.push(ToolCall {
+                item = stream.next() => match item {
+                    Some(Ok(StreamEvent::TextDelta(delta))) => {
+                        render.text_delta(speaker, &delta);
+                        text.push_str(&delta);
+                    }
+                    Some(Ok(StreamEvent::ReasoningDelta(delta))) => {
+                        render.reasoning_delta(speaker, &delta);
+                        reasoning.push_str(&delta);
+                    }
+                    Some(Ok(StreamEvent::ToolCallStarted { .. })) => {
+                        // Fragments are assembled by the adapter; the loop only sees
+                        // the completed call.
+                    }
+                    Some(Ok(StreamEvent::ToolCallCompleted {
                         id,
                         name,
                         arguments,
-                    });
-                }
-                Ok(StreamEvent::Usage(usage)) => {
-                    emit(
-                        session,
-                        render,
-                        speaker,
-                        EventPayload::UsageRecorded { usage },
-                    )?;
-                }
-                Ok(StreamEvent::Finished { finish_reason }) => {
-                    // The stream ended on `[DONE]`. `finish_reason` is diagnostic
-                    // only; the turn's stop reason comes from the loop's own
-                    // continuation query, never from the provider.
-                    render.diagnostic(&format!("provider stream finished: {finish_reason:?}"));
-                    saw_done = true;
-                    break;
-                }
-                Err(error) => {
-                    render.diagnostic(&format!("provider stream error: {error}"));
-                    failed = true;
-                    break;
-                }
+                        ..
+                    })) => {
+                        tool_calls.push(ToolCall {
+                            id,
+                            name,
+                            arguments,
+                        });
+                    }
+                    Some(Ok(StreamEvent::Usage(usage))) => {
+                        emit(
+                            session,
+                            render,
+                            speaker,
+                            EventPayload::UsageRecorded { usage },
+                        )?;
+                    }
+                    Some(Ok(StreamEvent::Finished { finish_reason })) => {
+                        // The stream ended on `[DONE]`. `finish_reason` is diagnostic
+                        // only; the turn's stop reason comes from the loop's own
+                        // continuation query, never from the provider.
+                        render.diagnostic(&format!("provider stream finished: {finish_reason:?}"));
+                        saw_done = true;
+                        break;
+                    }
+                    Some(Err(error)) => {
+                        render.diagnostic(&format!("provider stream error: {error}"));
+                        failed = true;
+                        break;
+                    }
+                    // The stream just stopped. Nothing completed, so nothing lands
+                    // in the log; the `[DONE]` check below turns it into an error.
+                    None => break,
+                },
             }
+        }
+
+        // An interrupted stream is dropped here, with the turn: that is what
+        // "stop the in-flight provider stream" means for a real adapter, and it
+        // is why the partially received text stays out of the log — a turn that
+        // never reached `[DONE]` produced no completed unit (spec §6).
+        if aborted {
+            render.diagnostic("turn cancelled while the model stream was in flight");
+            return end_turn(session, render, speaker, StopReason::Aborted, text);
         }
 
         // Only `[DONE]` ends a message: a stream that failed or just stopped
@@ -361,35 +426,25 @@ pub async fn run_turn(
         // (spec §16). Everything else still runs inline, where it always did.
         let mut deferred: Vec<DeferredCall> = Vec::new();
         for call in &tool_calls {
-            match process_call(
-                session,
-                render,
-                speaker,
-                scope,
-                provider,
-                &mut executors_spawned,
-                call,
-            )
-            .await?
-            {
+            // A gesture that landed before this call was started owes nothing
+            // for it: nothing of it is on the stream yet. The deferred calls
+            // were started already, so each still gets the one result it is
+            // owed (spec §6).
+            if cancelled.is_cancelled() {
+                close_deferred_calls(session, render, speaker, deferred, CANCELLED_BEFORE_RUN)?;
+                render.diagnostic("turn cancelled before the tool calls ran");
+                return end_turn(session, render, speaker, StopReason::Aborted, last_text);
+            }
+
+            match process_call(session, &context, &mut executors_spawned, call).await? {
                 Disposition::Finished => {}
                 Disposition::Deferred(call) => deferred.push(*call),
-                Disposition::StopTurn => {
-                    // A hook stopped the turn. A deferred call has already been
-                    // started on the stream, so it is still owed exactly one
-                    // result; it never ran, so the result says so.
-                    for call in deferred {
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            ToolCallId::new(call.pending.tool_call_id.clone()),
-                            Err(ToolError::message(
-                                "hook stopped the turn: the tool did not run",
-                            )),
-                            call.started,
-                        )?;
-                    }
+                // A gesture stopped the turn (a pre-hook's `Stop`, or a cancel
+                // that caught the call in flight). The calls that were started
+                // and deferred are still owed exactly one result each; they
+                // never ran, so it says so.
+                Disposition::Stopped(why) => {
+                    close_deferred_calls(session, render, speaker, deferred, why)?;
                     return end_turn(session, render, speaker, StopReason::Aborted, last_text);
                 }
             }
@@ -406,14 +461,29 @@ pub async fn run_turn(
     }
 }
 
+/// The one result each stopping gesture gives a `tool_call`.
+///
+/// Named once because both flow through [`close_deferred_calls`] and the model
+/// reads them: whether the tool ran decides whether the workspace may have
+/// changed.
+const HOOK_STOPPED_TURN: &str = "hook stopped the turn: the tool did not run";
+const CANCELLED_BEFORE_RUN: &str = "the turn was cancelled: the tool did not run";
+/// A cancel that caught the call in flight: the tool's future was dropped, so
+/// whether it took effect is unknown — the same honesty the crash-recovery
+/// result carries.
+const CANCELLED_IN_FLIGHT: &str = "the turn was cancelled while this call was in flight, so its \
+                                    result is unknown. It was not re-run; check the workspace \
+                                    before relying on either outcome.";
+
 /// What the loop must do with one call once the hook and the gate have spoken.
 enum Disposition {
     /// This call is done: its one result is in the log.
     Finished,
     /// The call may run, and runs with the rest of the batch's deferred calls.
     Deferred(Box<DeferredCall>),
-    /// A hook stopped the turn; the caller ends it.
-    StopTurn,
+    /// The turn ends here. The caller closes the batch's started-but-undispatched
+    /// calls with `why`, then records the abort.
+    Stopped(&'static str),
 }
 
 /// One authorized call the batch runs alongside its siblings.
@@ -421,6 +491,32 @@ struct DeferredCall {
     pending: PendingCall,
     allowed: AllowedCall,
     started: Instant,
+}
+
+/// Give every started-but-undispatched call of a batch the one result it is owed
+/// when the turn ends before [`run_deferred`] reaches it.
+///
+/// A `task` call is recorded as started before it is deferred, so it is owed a
+/// result even though the executor never ran. `why` is the gesture that stopped
+/// the turn; the shape is one place, so a stopping path cannot forget a call.
+fn close_deferred_calls(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    deferred: Vec<DeferredCall>,
+    why: &str,
+) -> Result<(), Error> {
+    for call in deferred {
+        emit_completed(
+            session,
+            render,
+            speaker,
+            ToolCallId::new(call.pending.tool_call_id.clone()),
+            Err(ToolError::message(why)),
+            call.started,
+        )?;
+    }
+    Ok(())
 }
 
 /// What one decided call produced, ready to be recorded.
@@ -434,6 +530,19 @@ struct CallCompletion<'a> {
     outcome: DispatchOutcome,
 }
 
+/// The turn's own values, lent to every call it processes.
+///
+/// Who is acting, how much of the stream it may see, what it answers with, and
+/// how it can be stopped are the same for every call in a batch, so they are
+/// handed over once as one value instead of five.
+struct TurnContext<'a> {
+    render: &'a RenderHandle,
+    speaker: &'a SpeakerId,
+    scope: TurnScope,
+    provider: &'a Arc<dyn Provider>,
+    cancelled: &'a CancelObserver,
+}
+
 /// Carry one tool call from `ToolCallStarted` to its one result: resolve it, run
 /// the pre-hook, ask the gate, and — unless the call is a deferred `task` — run
 /// the tool.
@@ -442,13 +551,17 @@ struct CallCompletion<'a> {
 /// cannot drift: both end in [`finish_call`].
 async fn process_call(
     session: &mut Session,
-    render: &RenderHandle,
-    speaker: &SpeakerId,
-    scope: TurnScope,
-    provider: &Arc<dyn Provider>,
+    context: &TurnContext<'_>,
     executors_spawned: &mut u32,
     call: &ToolCall,
 ) -> Result<Disposition, Error> {
+    let TurnContext {
+        render,
+        speaker,
+        scope,
+        provider,
+        cancelled,
+    } = *context;
     let tool_call_id = ToolCallId::new(call.id.clone());
     emit(
         session,
@@ -589,7 +702,7 @@ async fn process_call(
                 // The turn ends here, but this call was already started, so it is
                 // still owed exactly one result. The remaining calls in the batch
                 // were never started and so are not owed one.
-                let stopped = ToolError::message("hook stopped the turn: the tool did not run");
+                let stopped = ToolError::message(HOOK_STOPPED_TURN);
                 emit_completed(
                     session,
                     render,
@@ -598,7 +711,7 @@ async fn process_call(
                     Err(stopped),
                     started,
                 )?;
-                return Ok(Disposition::StopTurn);
+                return Ok(Disposition::Stopped(HOOK_STOPPED_TURN));
             }
             Err(error) => {
                 // Fail-closed: block the action, diagnose it, and synthesize the
@@ -659,6 +772,7 @@ async fn process_call(
                             provider,
                             render,
                             ParticipantId::new(format!("{speaker}-{executors_spawned}")),
+                            cancelled,
                         )));
                         return Ok(Disposition::Deferred(Box::new(DeferredCall {
                             pending,
@@ -667,8 +781,28 @@ async fn process_call(
                         })));
                     }
                     // ④ dispatch, inline: a call that touches the workspace runs
-                    //    where it always did, in the batch's order.
-                    let outcome = session.tools().dispatch(&pending, &allowed).await;
+                    //    where it always did, in the batch's order. The gesture is
+                    //    selected on here too, so a tool that is in flight is
+                    //    dropped where it stands; the call still keeps its one
+                    //    required result, synthesized below (spec §6).
+                    let tools = session.shared_tools();
+                    let mut cancel = cancelled.clone();
+                    let outcome = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => {
+                            let stopped = ToolError::message(CANCELLED_IN_FLIGHT);
+                            emit_completed(
+                                session,
+                                render,
+                                speaker,
+                                tool_call_id,
+                                Err(stopped),
+                                started,
+                            )?;
+                            return Ok(Disposition::Stopped(CANCELLED_BEFORE_RUN));
+                        }
+                        outcome = tools.dispatch(&pending, &allowed) => outcome,
+                    };
                     finish_call(
                         session,
                         render,
@@ -912,6 +1046,7 @@ pub async fn run_discussion(
     discussion: &mut Discussion,
     render: &RenderHandle,
     question: &str,
+    cancelled: &CancelObserver,
 ) -> Result<DiscussionOutcome, Error> {
     // The question is the user's own message, recorded once before the rounds so
     // both debaters project the same one.
@@ -921,6 +1056,11 @@ pub async fn run_discussion(
     let mut absent: Vec<SpeakerId> = Vec::new();
 
     let reason = loop {
+        // A gesture that landed before this round opened opens nothing: the
+        // debate phase ends where it stands (spec §6).
+        if cancelled.is_cancelled() {
+            break StopReason::Aborted;
+        }
         rounds += 1;
         let mode = if rounds == 1 {
             RoundMode::Independent
@@ -943,6 +1083,7 @@ pub async fn run_discussion(
                 &debater.provider,
                 render,
                 scope,
+                cancelled,
             )
         }))
         .await;
@@ -950,6 +1091,15 @@ pub async fn run_discussion(
             // A log write failure is the one thing a turn returns as an error;
             // the stream is then unusable, so neither is the discussion.
             turn?;
+        }
+
+        // The gesture outranks the round's own verdict. A round the user stopped
+        // is not a debate result, and reading whatever single answer happened to
+        // land before the press as agreement is exactly the misread the absence
+        // query exists to prevent (spec §6).
+        if cancelled.is_cancelled() {
+            record_round_ended(discussion.recorder(), render, rounds, StopReason::Aborted)?;
+            break StopReason::Aborted;
         }
 
         // Read the round back off the stream. Attendance, order, agreement and
@@ -1011,6 +1161,19 @@ pub async fn run_discussion(
         }
     };
 
+    // A cancelled discussion goes nowhere near the synthesizer: the gesture means
+    // stop, and the closing call is a provider call like any other. Ending the
+    // debate phase `Aborted` rather than `Error` is what keeps "the user stopped
+    // it" from being recorded as a failure (spec §6).
+    if reason == StopReason::Aborted {
+        return Ok(DiscussionOutcome {
+            reason,
+            synthesis: String::new(),
+            rounds,
+            absent,
+        });
+    }
+
     // The synthesizer: the one call that can never be skipped. It is not a turn
     // and not a participant, but it is bracketed by a round so the stream still
     // says when it ran.
@@ -1027,10 +1190,19 @@ pub async fn run_discussion(
         discussion.synthesizer.provider.as_ref(),
         render,
         &prompt,
+        cancelled,
     )
     .await?;
 
-    let ended = if synthesis.is_some() {
+    // A gesture that reached the closing call ends the discussion there too: no
+    // partial product, and no `synthesis_failed` for a call the user stopped. A
+    // gesture that arrived after the call had already reached `[DONE]` does not
+    // undo it — a completed unit stays completed, exactly as a turn's own
+    // completed message does.
+    let cancelled_in_synthesis = synthesis.is_none() && cancelled.is_cancelled();
+    let ended = if cancelled_in_synthesis {
+        StopReason::Aborted
+    } else if synthesis.is_some() {
         StopReason::Completed
     } else {
         record_session_error(
@@ -1049,7 +1221,12 @@ pub async fn run_discussion(
     )?;
 
     Ok(DiscussionOutcome {
-        reason,
+        // The gesture, not the debate phase, is what stopped this discussion.
+        reason: if cancelled_in_synthesis {
+            StopReason::Aborted
+        } else {
+            reason
+        },
         synthesis: synthesis.unwrap_or_default(),
         rounds,
         absent,
@@ -1064,14 +1241,24 @@ pub async fn run_discussion(
 /// the session's spend is summed from (spec §17).
 ///
 /// `Ok(None)` means the call produced no product: a provider failure, a stream
-/// that never reached `[DONE]`, or an empty answer. That is not a log error but it
-/// is a failure of the discussion, so the caller records what it means.
+/// that never reached `[DONE]`, an empty answer, or a cancel gesture (spec §6).
+/// That is not a log error, but the caller still has to say what it means — a
+/// discussion failure (`SessionError`, `RoundEnded { Error }`) or a cancellation
+/// (`RoundEnded { Aborted }`, no error). Only the caller holds the gesture, so
+/// only the caller can tell the two apart.
 pub async fn run_single_shot(
     session: &mut Session,
     provider: &dyn Provider,
     render: &RenderHandle,
     prompt: &str,
+    cancelled: &CancelObserver,
 ) -> Result<Option<String>, Error> {
+    // Checked before the request is built, not only inside the stream: a call
+    // that has not been sent yet must not be sent after the gesture.
+    if cancelled.is_cancelled() {
+        return Ok(None);
+    }
+
     let mut messages = Vec::new();
     if let Some(identity) = session.identity() {
         messages.push(Message::System {
@@ -1093,7 +1280,16 @@ pub async fn run_single_shot(
         cache_key: Some(session.id().as_str().to_owned()),
     };
 
-    let mut stream = match provider.send(request).await {
+    let mut cancel = cancelled.clone();
+    let sent = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            render.diagnostic("synthesizer call cancelled");
+            return Ok(None);
+        }
+        sent = provider.send(request) => sent,
+    };
+    let mut stream = match sent {
         Ok(stream) => stream,
         Err(error) => {
             render.diagnostic(&format!("synthesizer provider error: {error}"));
@@ -1103,38 +1299,49 @@ pub async fn run_single_shot(
 
     let mut text = String::new();
     let mut saw_done = false;
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(StreamEvent::TextDelta(delta)) => {
-                render.text_delta(&SpeakerId::System, &delta);
-                text.push_str(&delta);
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                render.diagnostic("synthesizer call cancelled while its stream was in flight");
+                // No `[DONE]`, so no product: dropping the stream is the whole
+                // effect a gesture has here.
+                return Ok(None);
             }
-            Ok(StreamEvent::ReasoningDelta(delta)) => {
-                render.reasoning_delta(&SpeakerId::System, &delta);
-            }
-            Ok(StreamEvent::Usage(usage)) => {
-                emit(
-                    session,
-                    render,
-                    &SpeakerId::System,
-                    EventPayload::UsageRecorded { usage },
-                )?;
-            }
-            Ok(StreamEvent::Finished { finish_reason }) => {
-                render.diagnostic(&format!("synthesizer stream finished: {finish_reason:?}"));
-                saw_done = true;
-                break;
-            }
-            // No tools were offered, so a call here is a protocol violation
-            // rather than work to dispatch. It still must not be dispatched: the
-            // synthesizer has no tool table to dispatch into.
-            Ok(StreamEvent::ToolCallStarted { .. }) | Ok(StreamEvent::ToolCallCompleted { .. }) => {
-                render.diagnostic("synthesizer asked for a tool; ignored");
-            }
-            Err(error) => {
-                render.diagnostic(&format!("synthesizer stream error: {error}"));
-                break;
-            }
+            item = stream.next() => match item {
+                Some(Ok(StreamEvent::TextDelta(delta))) => {
+                    render.text_delta(&SpeakerId::System, &delta);
+                    text.push_str(&delta);
+                }
+                Some(Ok(StreamEvent::ReasoningDelta(delta))) => {
+                    render.reasoning_delta(&SpeakerId::System, &delta);
+                }
+                Some(Ok(StreamEvent::Usage(usage))) => {
+                    emit(
+                        session,
+                        render,
+                        &SpeakerId::System,
+                        EventPayload::UsageRecorded { usage },
+                    )?;
+                }
+                Some(Ok(StreamEvent::Finished { finish_reason })) => {
+                    render.diagnostic(&format!("synthesizer stream finished: {finish_reason:?}"));
+                    saw_done = true;
+                    break;
+                }
+                // No tools were offered, so a call here is a protocol violation
+                // rather than work to dispatch. It still must not be dispatched: the
+                // synthesizer has no tool table to dispatch into.
+                Some(Ok(StreamEvent::ToolCallStarted { .. }))
+                | Some(Ok(StreamEvent::ToolCallCompleted { .. })) => {
+                    render.diagnostic("synthesizer asked for a tool; ignored");
+                }
+                Some(Err(error)) => {
+                    render.diagnostic(&format!("synthesizer stream error: {error}"));
+                    break;
+                }
+                None => break,
+            },
         }
     }
 

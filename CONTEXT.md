@@ -52,6 +52,12 @@ _Avoid_: 会话文件、存档、checkpoint
 按会话 cwd 分出的目录；`--continue` 只扫本桶（cwd 的 slug 只用于分桶，权威 cwd 在 `SessionStarted` 里）。
 _Avoid_: 索引、registry
 
+## 控制
+
+**取消（Cancel）**:
+一次用户手势（Esc），中断在飞的 provider 调用与在跑的工具；`tool_call` 已开始的那些各补一条合成结果，当前回合以 `Aborted` 收尾。手势本身**不进事件流**（与 `/undo` 的写回、`/plan` 的覆盖同规矩），并且**只沿委派链向下**：`CancelSignal`（信号端，只有前端持有）发起，`CancelObserver`（观察端）在回合与执行者手里逐层克隆——回合手里没有能发起取消的东西，所以「执行者被取消」不会把派发者的回合记成失败。
+_Avoid_: abort、stop、interrupt（`Aborted` 是收尾原因，不是手势名）
+
 ## 上下文与技能
 
 **技能（Skill）**:
