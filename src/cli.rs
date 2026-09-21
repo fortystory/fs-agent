@@ -398,16 +398,15 @@ async fn interactive_loop(
                 },
             }
         };
-        let Some(line) = line else {
+        let Some(submitted) = line else {
             return ExitCode::SUCCESS;
         };
-        let command = line.trim();
-        if command.is_empty() {
+        if submitted.trim().is_empty() {
             continue;
         }
-        match command {
-            "/quit" | "/exit" => return ExitCode::SUCCESS,
-            "/undo" => match harness.undo_last_edit().await {
+        match submission(&submitted, |name| harness.has_skill(name)) {
+            Submission::Quit => return ExitCode::SUCCESS,
+            Submission::Undo => match harness.undo_last_edit().await {
                 Ok(Some(_)) => {}
                 Ok(None) => {
                     harness.notice(&format!("fs-agent: {}", render::wording::nothing_to_undo()))
@@ -417,8 +416,8 @@ async fn interactive_loop(
                     render::wording::error_report(&error)
                 )),
             },
-            "/plan" => enter_plan(harness).await,
-            "/endplan" => match harness.exit_plan_mode().await {
+            Submission::Plan => enter_plan(harness).await,
+            Submission::EndPlan => match harness.exit_plan_mode().await {
                 Ok(true) => {
                     harness.notice(&format!("fs-agent: {}", render::wording::plan_exited()))
                 }
@@ -428,24 +427,20 @@ async fn interactive_loop(
                     render::wording::error_report(&error)
                 )),
             },
+            Submission::Unknown(line) => {
+                let names = harness.skill_names();
+                harness.notice(&format!(
+                    "fs-agent: {}",
+                    render::wording::unknown_command(line, &names)
+                ));
+            }
             // `/<skill> [task]` is the user-side skill invocation (spec §9): the
             // one path a `disable-model-invocation: true` skill reserves for the
             // user. The body goes into the context at the tail; the task (when one
             // was typed) runs as an ordinary turn. A bare `/<skill>` only loads:
             // the transcript must never show a user message the user did not type.
-            other if other.starts_with('/') => {
-                let rest = other.trim_start_matches('/');
-                let (name, task) = match rest.split_once(char::is_whitespace) {
-                    Some((name, task)) => (name, task.trim()),
-                    None => (rest, ""),
-                };
-                if !harness.has_skill(name) {
-                    let names = harness.skill_names();
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::unknown_command(other, &names)
-                    ));
-                } else if let Err(error) = harness.load_skill(name) {
+            Submission::Skill { name, task } => {
+                if let Err(error) = harness.load_skill(name) {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
@@ -460,7 +455,7 @@ async fn interactive_loop(
                         "fs-agent: {}",
                         render::wording::skill_loaded(name)
                     ));
-                    if let Err(error) = run_one_turn(harness, events, task).await {
+                    if let Err(error) = run_one_turn(harness, events, &task).await {
                         harness.notice(&format!(
                             "fs-agent: {}",
                             render::wording::error_report(&error)
@@ -468,8 +463,10 @@ async fn interactive_loop(
                     }
                 }
             }
-            _ => {
-                if let Err(error) = run_one_turn(harness, events, &line).await {
+            // Everything else is a prompt, newlines and all: the transcript shows what
+            // the user wrote, as one message (spec §12).
+            Submission::Prompt(text) => {
+                if let Err(error) = run_one_turn(harness, events, text).await {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
@@ -477,6 +474,70 @@ async fn interactive_loop(
                 }
             }
         }
+    }
+}
+
+/// What one submission asks for (spec §12).
+#[derive(Debug, PartialEq, Eq)]
+enum Submission<'a> {
+    Quit,
+    Undo,
+    Plan,
+    EndPlan,
+    /// A first line that opens with `/` and names nothing known, with nothing after
+    /// it: a typo, and the one case the user is told about.
+    Unknown(&'a str),
+    /// `/<skill>` and the task that follows it.
+    Skill {
+        name: &'a str,
+        task: String,
+    },
+    /// The whole submission, newlines and all, as one prompt.
+    Prompt(&'a str),
+}
+
+/// Read one submission.
+///
+/// The **first line alone** decides whether this is a command, so `/<skill>` can be
+/// followed by a multi-line brief — the rest of its first line and every line below it
+/// become the task. A first line that opens with `/` but names something unknown is a
+/// typo when it is the whole submission (told about, as it always was) and a pasted
+/// paragraph when it is not.
+fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission<'a> {
+    let (first, rest) = match text.split_once('\n') {
+        Some((first, rest)) => (first.trim(), rest),
+        None => (text.trim(), ""),
+    };
+    match first {
+        "/quit" | "/exit" => Submission::Quit,
+        "/undo" => Submission::Undo,
+        "/plan" => Submission::Plan,
+        "/endplan" => Submission::EndPlan,
+        _ if first.starts_with('/') => {
+            let rest_of_line = first.trim_start_matches('/');
+            let (name, inline) = match rest_of_line.split_once(char::is_whitespace) {
+                Some((name, task)) => (name, task.trim()),
+                None => (rest_of_line, ""),
+            };
+            if !has_skill(name) {
+                if rest.trim().is_empty() {
+                    return Submission::Unknown(first);
+                }
+                // A pasted paragraph that happens to open with `/` is a paragraph.
+                return Submission::Prompt(text);
+            }
+            let mut task = inline.to_owned();
+            let rest = rest.trim_end_matches('\n');
+            if !rest.is_empty() {
+                if !task.is_empty() {
+                    task.push('\n');
+                }
+                task.push_str(rest);
+            }
+            Submission::Skill { name, task }
+        }
+        // Not a command at all: the whole text, however many lines, is the prompt.
+        _ => Submission::Prompt(text),
     }
 }
 
@@ -1713,4 +1774,87 @@ fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
 
 fn print_sessions_help(out: &mut dyn Write) {
     let _ = writeln!(out, "{}", render::wording::help_sessions());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{submission, Submission};
+
+    /// The skills a session knows about in these tests.
+    fn has_skill(name: &str) -> bool {
+        matches!(name, "ask-matt" | "review")
+    }
+
+    fn read(text: &str) -> Submission<'_> {
+        submission(text, has_skill)
+    }
+
+    #[test]
+    fn a_single_line_still_reads_exactly_as_it_did() {
+        assert_eq!(read("/quit"), Submission::Quit);
+        assert_eq!(read("/exit"), Submission::Quit);
+        assert_eq!(read("/undo"), Submission::Undo);
+        assert_eq!(read("/plan"), Submission::Plan);
+        assert_eq!(read("/endplan"), Submission::EndPlan);
+        assert_eq!(read("  /quit  "), Submission::Quit, "trimmed, as before");
+        assert_eq!(read("/nope"), Submission::Unknown("/nope"));
+        assert_eq!(
+            read("/ask-matt 帮我看一下"),
+            Submission::Skill {
+                name: "ask-matt",
+                task: "帮我看一下".to_owned(),
+            }
+        );
+        assert_eq!(
+            read("/ask-matt"),
+            Submission::Skill {
+                name: "ask-matt",
+                task: String::new(),
+            },
+            "a bare skill only loads"
+        );
+        assert_eq!(read("hello"), Submission::Prompt("hello"));
+    }
+
+    #[test]
+    fn a_multi_line_brief_follows_the_skill_named_on_the_first_line() {
+        assert_eq!(
+            read("/ask-matt\n第一行\n第二行"),
+            Submission::Skill {
+                name: "ask-matt",
+                task: "第一行\n第二行".to_owned(),
+            }
+        );
+        // The task may start on the skill's own line and carry on below it.
+        assert_eq!(
+            read("/ask-matt 第一行\n第二行"),
+            Submission::Skill {
+                name: "ask-matt",
+                task: "第一行\n第二行".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_pasted_paragraph_that_opens_with_a_slash_is_a_prompt() {
+        // Anything with lines after it is read as the paragraph it is, so pasting a
+        // path or a snippet does not earn an "unknown command" it never meant.
+        assert_eq!(
+            read("/usr/bin/env cargo test\n第二行"),
+            Submission::Prompt("/usr/bin/env cargo test\n第二行")
+        );
+        // On one line it is still a typo, and one the user is told about.
+        assert_eq!(read("/usr/bin/env"), Submission::Unknown("/usr/bin/env"));
+    }
+
+    #[test]
+    fn anything_else_is_the_whole_message() {
+        let text = "第一行\n第二行\n第三行";
+        assert_eq!(read(text), Submission::Prompt(text));
+        // Kept as written: the message is what the user typed, not a trimmed version.
+        assert_eq!(
+            read("  第一行\n第二行  "),
+            Submission::Prompt("  第一行\n第二行  ")
+        );
+    }
 }

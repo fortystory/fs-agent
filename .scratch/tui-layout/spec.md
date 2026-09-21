@@ -281,8 +281,9 @@ Status: ready-for-agent
 ### §12 CLI 接线与斜杠命令
 
 - `src/cli.rs:299` 构造 `TuiOptions { port, facts }`。
-- **斜杠命令只看第一行**：现在是 `let command = line.trim(); match command { … other if other.starts_with('/') }`。改为：取**第一行** trim，若它是 `/name` 或 `/name task…` → 走命令分支，**其余行按 `\n` 拼进 task**；否则整体当 prompt。单行行为逐字不变。
-- 这样 `/ask-matt` + 多行 brief 可用（保住 spec §9 的用户侧技能调用），粘贴以 `/` 开头的多行代码也不再误判。
+- **斜杠命令只看第一行**：取**第一行** trim 作为判定。四个内建命令（`/quit`、`/exit`、`/undo`、`/plan`、`/endplan`）与**已知技能名**走命令分支，其余行按 `\n` 拼进 task；其它一律整体当 prompt。单行行为逐字不变。
+- **第一行以 `/` 开头但名字不认识**分两种：**只有这一行**（整条输入就它）→ 仍是「未知命令」提示，与单行时的老行为一致；**后面还有行** → 当 prompt —— 粘一段以 `/` 开头的路径或代码不该换来一句它没打算要的 unknown command。
+- 这样 `/ask-matt` + 多行 brief 可用（保住 spec §9 的用户侧技能调用），粘贴以 `/` 开头的多行文本也不再误判。
 
 ### §13 不动的东西与不变量
 
