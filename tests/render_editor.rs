@@ -252,3 +252,40 @@ fn a_multi_line_draft_is_recalled_whole_and_keeps_its_blank_lines() {
     input.history_previous();
     assert_eq!(input.text(), "第一行\n\n第二行");
 }
+
+#[test]
+fn submitting_clears_the_draft_and_an_empty_one_is_an_empty_line() {
+    // `submitted()` is the editor's whole output: it trims the ends, clears what is
+    // typed, and remembers the line for `Ctrl-P`. A blank-only draft is an **empty
+    // line** — how the loop tells "the user pressed Enter on nothing" from "stdin
+    // closed" is the prompt channel's business, not the editor's.
+    let mut input = Input::new();
+    assert_eq!(input.submitted(), "");
+    assert_eq!(input.text(), "", "the draft is cleared either way");
+
+    input.insert_str("   \n  ");
+    assert_eq!(input.submitted(), "");
+    // Nothing worth recalling: a blank line never reaches the history.
+    input.insert_str("first");
+    input.submitted();
+    input.insert_str("draft");
+    input.history_previous();
+    assert_eq!(
+        input.text(),
+        "first",
+        "the blank draft stayed out of history"
+    );
+
+    // Submitting the same line twice keeps one entry, so Ctrl-P does not walk
+    // through duplicates of what was just sent.
+    let mut input = Input::new();
+    input.insert_str("same");
+    input.submitted();
+    input.insert_str("same");
+    input.submitted();
+    input.insert_str("draft");
+    input.history_previous();
+    assert_eq!(input.text(), "same");
+    input.history_previous();
+    assert_eq!(input.text(), "same", "and there is nothing before it");
+}

@@ -14,7 +14,7 @@ incremental text never enters the event log.
 | --- | --- | --- |
 | headless | `Headless` | the machine mode. Two explicit sinks; `stdout` carries the final product and nothing else. |
 | plain | `Plain` | the human transcript for a pipe or a simple terminal: a speaker prefix on every line, section lines, indented divergence blocks, one block per tool call. |
-| TUI | `Tui` | the ratatui interface. Inline viewport, owns the keyboard. |
+| TUI | `Tui` | the ratatui interface: the full-screen four-pane layout on the alternate screen (header / transcript / panel / input + hints), and it owns the keyboard. See ADR 0002. |
 
 The selection is the value type `Renderer`
 (`Renderer::headless` / `::plain` / `::tui`). Because the choice is a value and
@@ -107,3 +107,9 @@ workspace:
 
 The session starts in the `ask` mode, and the assembly injects the console asker,
 so a write asks on the same keyboard the prompt came from.
+
+What a real terminal has to confirm — the cursor, the mouse, resizing, quitting
+clean — is written down as a follow-along list in
+[`docs/tui-manual-checklist.md`](tui-manual-checklist.md). Everything a fixed-size
+`TestBackend` buffer or `scripts/tui-startup-check.py` can see is asserted there
+instead.

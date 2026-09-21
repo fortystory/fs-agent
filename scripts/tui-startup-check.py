@@ -13,6 +13,13 @@ part the status line did not cover on screen. The user saw:
 columns, and `lash` sits at offset 62 in the banner, so exactly that much of the
 banner survived.
 
+It now guards both ends of the process, because they are the two things only a
+pty can see (spec §Testing Decisions): the first frame — the status row drawn
+whole, the banner once, the header's identity, the pane frames present — and what
+the terminal is handed back on `Ctrl-C` — the alternate screen, mouse reporting,
+bracketed paste, and canonical/echoing tty flags. The cursor, the mouse and
+resizing stay on the manual list (`docs/tui-manual-checklist.md`).
+
 Why a pty script and not a Rust test: the corruption only exists on a real
 terminal (the renderer is chosen by `IsTerminal`), and the CLI builds its own
 sinks, so nothing in `cargo test` can observe what reaches the tty. This script
@@ -27,12 +34,15 @@ Exits 0 when every run is green. A pty that does not answer the cursor-position
 query (`ESC[6n`) makes ratatui fail to initialise, which is why this script
 answers it.
 """
+import collections
 import fcntl
 import os
 import pty
 import re
 import select
+import signal
 import struct
+import subprocess
 import sys
 import tempfile
 import termios
@@ -51,6 +61,53 @@ STATUS_ANCHOR = "ctrl-c"
 # anchor carries its fullwidth colon, which is written contiguously after the
 # ASCII prefix.
 BANNER_ANCHOR = "fs-agent："
+# The four-pane frame is a horizontal rule around every block plus a vertical one
+# per pane edge, so if the frames are gone the layout went with them. Three cells
+# of each orientation is deliberately far below what one screen draws: this is a
+# degradation guard, not a geometry assertion. The two are counted apart because
+# the transcript/panel seam is a lone vertical line that survives the frames --
+# counting every box character together would call a borderless screen green.
+BORDER_H = "─"
+BORDER_V = "│"
+# What the terminal has to be given back on the way out (spec §5, §19): the
+# alternate screen, mouse reporting in every encoding crossterm turns off, and
+# bracketed paste. `stty`/termios is checked separately, because raw mode is a
+# termios flag rather than an escape sequence.
+TEARDOWN = [
+    "\x1b[?1049l",
+    "\x1b[?1000l",
+    "\x1b[?1002l",
+    "\x1b[?1003l",
+    "\x1b[?1006l",
+    "\x1b[?2004l",
+]
+
+# The tty flags a shell has to have back: canonical input, echo and signals.
+Modes = collections.namedtuple("Modes", "canonical echo signals")
+
+
+def tty_modes(fd):
+    """The line discipline the pty was left in, as the child left it."""
+    lflag = termios.tcgetattr(fd)[3]
+    return Modes(
+        bool(lflag & termios.ICANON),
+        bool(lflag & termios.ECHO),
+        bool(lflag & termios.ISIG),
+    )
+
+
+class Run:
+    """One pty run: what was drawn, and what the terminal was left in."""
+
+    def __init__(self, raw, exited, status, modes, survived_empty_enter):
+        self.raw = raw
+        self.exited = exited
+        self.status = status
+        self.modes = modes
+        # An Enter on an empty draft is an empty line, not a closed stdin. It once
+        # was read as the latter and quit the session, so the run has to still be
+        # alive after one.
+        self.survived_empty_enter = survived_empty_enter
 
 
 def char_width(ch):
@@ -142,12 +199,17 @@ class Screen:
 
 
 def capture(binary, data_home, timeout=20.0):
-    """Run the binary on a pty until startup has settled, then quit it.
+    """Run the binary on a pty until startup settles, then quit it and look behind.
 
     A fixed read window is flaky: assembly (context, skills, the session
     directory) can outlast it, so the banner would not have been emitted yet and
     the run would look green for the wrong reason. Wait for both the status line
     and the banner instead, plus a grace period so a duplicate write is counted.
+
+    The way out is checked here too, because it is the same run: `Ctrl-C`, then
+    wait for the process to actually go -- the terminal is only clean once it has
+    (spec §19). The escape sequences it emitted and the termios it left are read
+    after it exited, not guessed from the source.
     """
     pid, fd = pty.fork()
     if pid == 0:
@@ -175,39 +237,87 @@ def capture(binary, data_home, timeout=20.0):
             settle_by = time.time() + 0.4
         if settle_by is not None and time.time() >= settle_by:
             break
+    # An empty Enter first: the loop discards the empty line and asks again, so the
+    # session has to still be there. This is the regression that once quit it.
     try:
-        os.write(fd, b"\x03")
+        os.write(fd, b"\r")
     except OSError:
         pass
-    time.sleep(0.3)
-    try:
-        while True:
-            readable, _, _ = select.select([fd], [], [], 0.15)
+    time.sleep(0.4)
+    reaped, wait_status = os.waitpid(pid, os.WNOHANG)
+    survived_empty_enter = reaped == 0
+    exited, status = (not survived_empty_enter), (
+        wait_status if not survived_empty_enter else None
+    )
+    if survived_empty_enter:
+        try:
+            os.write(fd, b"\x03")
+        except OSError:
+            pass
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            readable, _, _ = select.select([fd], [], [], 0.1)
+            if readable:
+                try:
+                    data = os.read(fd, 65536)
+                except OSError:
+                    # The slave side is gone; anything already buffered was read
+                    # above, and the reaping below is what is left to wait for.
+                    data = b""
+                if data:
+                    raw += data.decode("utf-8", "replace")
+                    continue
+            reaped, wait_status = os.waitpid(pid, os.WNOHANG)
+            if reaped == pid:
+                exited, status = True, wait_status
+                break
+        if not exited:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+    if exited:
+        # The teardown can land in the same instant as the exit, so take one more
+        # look before closing the master.
+        end = time.time() + 0.3
+        while time.time() < end:
+            readable, _, _ = select.select([fd], [], [], 0.1)
             if not readable:
                 break
-            data = os.read(fd, 65536)
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                break
             if not data:
                 break
             raw += data.decode("utf-8", "replace")
+    try:
+        modes = tty_modes(fd)
     except OSError:
-        pass
+        modes = None
     try:
         os.close(fd)
     except OSError:
         pass
-    return raw
+    return Run(raw, exited, status, modes, survived_empty_enter)
 
 
-def verdict(raw, devnull):
-    """Judge the reconstructed status row.
+def verdict(run, devnull, identity):
+    """Judge one run: the first frame it drew, and what it left behind.
 
     The whole capture is replayed rather than sliced at the first draw: a wide
     cell is written with an explicit cursor move, so the byte offset of the status
-    line is not `raw.find(STATUS_ANCHOR)`.
+    line is not `raw.find(STATUS_ANCHOR)`. The same replay answers the version
+    anchor, which is split in the byte stream for the same reason.
     """
+    if not run.survived_empty_enter:
+        return False, "an empty Enter ended the session"
+    if not run.exited:
+        return False, "ctrl-c did not end the process"
+    if run.status != 0:
+        return False, "ctrl-c left exit status %r" % (run.status,)
     frame = Screen(devnull)
-    frame.feed(raw)
-    row = next((r for r in frame.rows() if STATUS_ANCHOR in r), None)
+    frame.feed(run.raw)
+    rows = frame.rows()
+    row = next((r for r in rows if STATUS_ANCHOR in r), None)
     if row is None:
         return False, "the status row was not on screen at the first draw"
     # The hint row lives inside the bottom block, so the block's right border
@@ -219,10 +329,41 @@ def verdict(raw, devnull):
     residue = row.split(STATUS_TAIL, 1)[1].strip()
     if residue:
         return False, "the status row holds foreign text: %r" % residue[:80]
-    banner = raw.count(BANNER_ANCHOR)
+    if not any(identity in r for r in rows):
+        return False, "the header does not name %r" % identity
+    horizontal = sum(r.count(BORDER_H) for r in rows)
+    vertical = sum(r.count(BORDER_V) for r in rows)
+    if horizontal < 3 or vertical < 3:
+        return False, "the pane frames are gone: %d horizontal / %d vertical" % (
+            horizontal,
+            vertical,
+        )
+    banner = run.raw.count(BANNER_ANCHOR)
     if banner != 1:
         return False, "the startup banner reached the terminal %d times" % banner
-    return True, "status row clean, banner shown once"
+    if run.modes is None or not all(run.modes):
+        return False, "the tty was left raw: %r" % (run.modes,)
+    missing = [seq for seq in TEARDOWN if seq not in run.raw]
+    if missing:
+        return False, "the terminal was not given back: %s missing" % ", ".join(
+            repr(seq) for seq in missing
+        )
+    return True, "status row clean, banner once, terminal handed back"
+
+
+def binary_identity(binary):
+    """What the binary calls itself, which is what its header has to show.
+
+    Asking the binary rather than reading `Cargo.toml` keeps the anchor honest:
+    the point is that the running program's own identity reached the screen.
+    """
+    out = subprocess.run(
+        [os.path.abspath(binary), "--version"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return out.stdout.strip()
 
 
 def main():
@@ -231,12 +372,16 @@ def main():
     if not os.path.exists(binary):
         print("no binary at %s; run cargo build first" % binary)
         return 1
+    identity = binary_identity(binary)
+    if not identity:
+        print("no identity from %s --version" % binary)
+        return 1
     bad = 0
     with tempfile.TemporaryDirectory(prefix="fs-agent-tui-check-") as data_home:
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
             for i in range(runs):
-                ok, why = verdict(capture(binary, data_home), devnull)
+                ok, why = verdict(capture(binary, data_home), devnull, identity)
                 print("run %d: %s -- %s" % (i + 1, "GREEN" if ok else "RED", why))
                 bad += 0 if ok else 1
         finally:

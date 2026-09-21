@@ -280,6 +280,90 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
 }
 
 #[test]
+fn the_hint_ladder_is_the_one_the_prototype_measured() {
+    // The widths the spec recorded against the approved snapshots (§10, §13), so a
+    // change to the priority order shows up here rather than on a real terminal.
+    // `w=40` is the minimum: three items, no state word.
+    assert_eq!(
+        wording::status_line(false, 40),
+        "enter 发送 · ctrl-j 换行 · ctrl-c 退出"
+    );
+    // Then the state word joins in front, and each step buys one more hint.
+    assert_eq!(
+        wording::status_line(false, 60),
+        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
+    );
+    assert_eq!(
+        wording::status_line(false, 80),
+        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c 退出"
+    );
+    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · PgUp/PgDn 滚动 · ctrl-c 退出";
+    assert_eq!(wording::status_line(false, 120), full);
+    // At the maximum the line is stable: there is nothing left to buy.
+    assert_eq!(wording::status_line(false, 174), full);
+    // Busy swaps the word, not the ladder.
+    assert_eq!(
+        wording::status_line(true, 120).replace("工作中", "就绪"),
+        full
+    );
+}
+
+#[test]
+fn no_hint_ever_names_shift_enter() {
+    // Without the keyboard-enhancement protocol `Shift+Enter` is indistinguishable
+    // from `Enter`, which submits — so a hint that named it would be a lie, and the
+    // lie is invisible at any single width (spec §10, user story 54). Scan them all.
+    for busy in [false, true] {
+        for width in 1..=200 {
+            let line = wording::status_line(busy, width);
+            assert!(
+                !line.to_lowercase().contains("shift+enter"),
+                "{width}: {line}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_scroll_indicator_and_the_minimum_explain_themselves() {
+    // The indicator names what arrived and how to get there; without a count it is
+    // only the way back (spec §4).
+    assert_eq!(wording::new_content(12), "↓ 12 行新内容 · 点此到底");
+    assert_eq!(wording::new_content(1), "↓ 1 行新内容 · 点此到底");
+    assert_eq!(wording::back_to_bottom(), "点此到底");
+    // A terminal below the minimum is told why it is empty, with the numbers it has.
+    assert_eq!(wording::too_small(40, 10), "终端太小：至少 40×10");
+}
+
+#[test]
+fn every_panel_label_is_the_chinese_the_prototype_shows() {
+    assert_eq!(wording::PANEL_MODEL, "模型");
+    assert_eq!(wording::PANEL_CONTEXT, "上下文");
+    // `CONTEXT.md` has no Chinese word for a token, so it stays as it is elsewhere.
+    assert_eq!(wording::PANEL_TOKENS, "token");
+    assert_eq!(wording::PANEL_TURNS, "回合");
+    assert_eq!(wording::PANEL_INPUT, "输入");
+    assert_eq!(wording::PANEL_OUTPUT, "输出");
+    assert_eq!(wording::PANEL_CACHE, "缓存");
+}
+
+#[test]
+fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
+    // `scripts/tui-startup-check.py` anchors on this exact string to tell the new
+    // four-pane layout apart from anything older, so it has to be the crate's own
+    // name and version rather than a literal someone edits by hand.
+    assert_eq!(
+        wording::identity(),
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+    );
+    assert!(
+        wording::identity().starts_with("fs-agent "),
+        "{}",
+        wording::identity()
+    );
+}
+
+#[test]
 fn a_banner_labels_the_model_mode_and_session_in_chinese() {
     assert_eq!(
         wording::banner("s-1", "kimi-k3", Mode::Ask, "/tmp/ws", false),
