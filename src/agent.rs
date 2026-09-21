@@ -39,7 +39,8 @@ use crate::context;
 use crate::events::{
     hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, superseded_seqs,
     total_usage, ContextSource, Decision, DecisionSource, Event, EventLog, EventPayload,
-    HistoryReason, ParticipantId, Role, RoundMode, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
+    HistoryReason, ParticipantId, Redactor, Role, RoundMode, SpeakerId, StopReason, ToolCallId,
+    SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -1519,6 +1520,9 @@ pub async fn run_single_shot(
     if !saw_done || text.trim().is_empty() {
         return Ok(None);
     }
+    // Redacted once here, before it is both emitted and returned: the product
+    // the discussion hands back is the same text the stream carries.
+    let text = session.redacted(&text);
     emit(
         session,
         render,
@@ -1831,9 +1835,11 @@ fn emit_completed(
     started: Instant,
 ) -> Result<(), Error> {
     let duration_ms = started.elapsed().as_millis() as u64;
-    // Truncation is part of the pipeline that runs **before** the event is
-    // appended (spec §10): an oversized body is spilled to disk and the stream
-    // carries a self-contained preview plus a pointer. It never fails the call.
+    // The pre-stream pipeline is redact -> truncate -> spill (spec §10, §20),
+    // and this is where it runs: redaction first, so the `.txt` artifact on disk
+    // is redacted too, not just the preview that enters the stream. The tool
+    // above already ran on the true value — only what leaves the process is
+    // scrubbed.
     let max_tokens = session.config().max_tool_result_tokens;
     // A success body and a failure body truncate the same way; only which
     // payload field carries the preview differs.
@@ -1841,6 +1847,7 @@ fn emit_completed(
         Ok(output) => (true, output.text),
         Err(error) => (false, error.to_string()),
     };
+    let text = session.redacted(&text);
     let preview = context::truncate_result(
         &text,
         tool_call_id.as_str(),
@@ -1958,6 +1965,10 @@ async fn run_post_hook(
 }
 
 /// Record the reason the turn stopped and return the outcome.
+///
+/// The returned text is redacted like everything else that leaves the harness:
+/// the same value the stream carries is what a front end or an executor summary
+/// gets, so no second, unscrubbed copy of a key exists in memory to be printed.
 fn end_turn(
     session: &mut Session,
     render: &RenderHandle,
@@ -1966,6 +1977,7 @@ fn end_turn(
     text: String,
 ) -> Result<TurnOutcome, Error> {
     emit(session, render, speaker, EventPayload::TurnEnded { reason })?;
+    let text = session.redacted(&text);
     Ok(TurnOutcome { reason, text })
 }
 
@@ -1985,15 +1997,23 @@ fn parse_tool_args(arguments: &str) -> serde_json::Value {
 /// handle — which is what makes "the `agent` layer is the single writer" one
 /// function rather than a convention.
 ///
+/// Redaction is the last thing that happens **before** the append and the only
+/// thing that happens to the payload on its way in (spec §20): every free-text
+/// field is scrubbed with the session's [`Redactor`], so the stream, the file
+/// and the renderer all carry the same text the model will replay. The tool that
+/// produced the text ran earlier, on the true value.
+///
 /// The log is a cheap shared handle, so appending through a clone is the same
 /// append the session would have made: one writer, one `seq`, one line.
 pub(super) fn append_event(
     log: &EventLog,
+    redactor: &Redactor,
     render: &RenderHandle,
     speaker_id: SpeakerId,
-    payload: EventPayload,
+    mut payload: EventPayload,
 ) -> Result<Event, Error> {
     let mut log = log.clone();
+    payload.redact(redactor);
     let event = log.append(speaker_id, payload)?;
     render.logged(&event);
     Ok(event)
@@ -2018,5 +2038,11 @@ fn emit_returning(
     speaker: &SpeakerId,
     payload: EventPayload,
 ) -> Result<Event, Error> {
-    append_event(session.log(), render, speaker.clone(), payload)
+    append_event(
+        session.log(),
+        session.redactor(),
+        render,
+        speaker.clone(),
+        payload,
+    )
 }

@@ -143,6 +143,7 @@ impl ExecutorPort {
         // brief reach the executor's own projection (spec §5, §16).
         append_event(
             &self.log,
+            &self.config.redactor,
             &self.render,
             executor.clone(),
             EventPayload::ExecutorSpawned {
@@ -196,6 +197,7 @@ impl ExecutorPort {
         };
         append_event(
             &self.log,
+            &self.config.redactor,
             &self.render,
             executor.clone(),
             EventPayload::ExecutorFinished {

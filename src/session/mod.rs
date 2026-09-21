@@ -29,7 +29,7 @@ pub use store::{new_session_id, SessionStore, StoredSession};
 
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;
-use crate::events::{Event, EventLog, SessionId};
+use crate::events::{Event, EventLog, Redactor, SessionId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, Policy, Rule};
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
@@ -169,6 +169,26 @@ impl Session {
 
     pub fn config(&self) -> &SessionConfig {
         &self.config
+    }
+
+    /// The values this session scrubs from text on its way into the stream
+    /// (spec §20).
+    ///
+    /// Held by [`SessionConfig`] because `Config::session_config` is the one
+    /// place configuration becomes injected values; this accessor is how the one
+    /// write path and the text that leaves the harness reach it without walking
+    /// into the config's fields themselves.
+    pub fn redactor(&self) -> &Redactor {
+        &self.config.redactor
+    }
+
+    /// Redact `text` with this session's values (spec §20).
+    ///
+    /// The text that leaves the harness — a tool result about to be spilled, a
+    /// turn's outcome, a synthesizer's product — goes through here rather than
+    /// through the stream's write path, so the two carry the same text.
+    pub fn redacted(&self, text: &str) -> String {
+        self.config.redactor.redacted(text)
     }
 
     pub fn log_path(&self) -> &Path {

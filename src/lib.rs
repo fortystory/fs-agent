@@ -417,6 +417,29 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         ));
     }
 
+    // The redactor is a session-level fact for the same reason, and its
+    // disagreement is worse than the budget's: one participant's events would be
+    // scrubbed and another's would not, on the **same** stream, with nothing to
+    // show for it (spec §20). `Config::session_config` fills the same value into
+    // every config, so a mismatch means someone built one by hand.
+    let redactor = debaters[0].config.redactor.clone();
+    for debater in debaters.iter().skip(1) {
+        if debater.config.redactor != redactor {
+            return Err(Error::Discussion(format!(
+                "{} and {} were given different redactors; the values to scrub are one set \
+                 shared by the whole session (spec §20)",
+                debaters[0].speaker, debater.speaker
+            )));
+        }
+    }
+    if synthesizer.config.redactor != redactor {
+        return Err(Error::Discussion(
+            "the synthesizer was given a different redactor from the debaters; the values \
+             to scrub are one set shared by the whole session (spec §20)"
+                .to_owned(),
+        ));
+    }
+
     let opened = OpenedSession::open(scaffold, sinks)?;
 
     let mut roster = Vec::with_capacity(debaters.len());

@@ -7,6 +7,14 @@
 //!   and its subtree, because the agent's own API key sits in the user's home
 //!   directory. The rule limits paths *the model supplies*, not paths the
 //!   harness reads for itself.
+//!
+//!   Spec §20 calls the exception "a permission rule widens it"; that exception
+//!   is **not** implemented — the gate treats an unresolvable target as a deny
+//!   floor no rule can lower (`permissions::decide`, asserted by
+//!   `tests/permission_gate.rs::the_path_limit_is_a_deny_floor`), and the
+//!   dispatcher refuses before any tool runs. See `docs/credentials.md` for why
+//!   the specificity-ignoring rule algebra cannot express the safe version of
+//!   that exception, and what protects the key in the meantime (redaction).
 //! - **per-path write locks**: the lock table is injected at assembly time and
 //!   shared across executors, so two executors cannot interleave writes to one
 //!   file. A per-session table would be equivalent to no lock at all.
@@ -108,7 +116,7 @@ impl SessionPaths {
         }
         Err(ToolError::message(format!(
             "path {} is outside the session workspace {}; file tools are confined to the \
-             workspace (a permission rule is how you widen this)",
+             workspace and no permission rule widens that",
             resolved.display(),
             self.cwd.display()
         )))

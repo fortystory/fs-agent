@@ -103,3 +103,9 @@ _Avoid_: iteration、pass
 **回合（Turn）**:
 单个 agent 的一次完整回合：投影 → 调 provider → 权限门 → 执行工具 → 追加事件。
 _Avoid_: step、call
+
+## 安全
+
+**打码（Redactor）**:
+入流前的**值级、best-effort** 替换：把配置里解析出的密钥值换成 `[redacted]`，于是**流上的文本 == 模型看到的文本**，而工具执行仍拿真值；范围含消息正文与工具参数，`outputs/<tool_call_id>.txt` 打码、`<tool_call_id>.before` 不打码（它是 `/undo` 的字节级还原源）。
+_Avoid_: 脱敏、掩码、mask、sanitize

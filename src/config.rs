@@ -34,6 +34,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::events::Redactor;
+
 pub use cost::{Budget, LandingPoint, PriceTable, Pricing, Routing};
 
 /// Default maximum provider calls in one turn (spec §3).
@@ -284,13 +286,34 @@ impl Config {
     /// One function rather than the same four lines at every assembly site, so
     /// "the `[budget]` table gates the session" is true wherever a session is
     /// assembled instead of only where someone remembered to copy it.
+    ///
+    /// The redactor rides along for the same reason: every assembly path that
+    /// comes through here gets the configured keys' values to redact without
+    /// having to remember to ask, and `assemble_discussion` refuses a roster
+    /// whose participants disagree about them, so no stream is half-scrubbed.
     pub fn session_config(&self, model_id: &str) -> Result<SessionConfig, ConfigError> {
         let (model, _) = self.resolve_model(Some(model_id))?;
         let mut config = SessionConfig::new(model_id).with_params(model.params.clone());
         config.pricing = self.pricing.clone();
         config.budget = self.budget.clone();
+        config.redactor = self.redactor();
         self.routing.apply(&mut config);
         Ok(config)
+    }
+
+    /// The values that must never reach the event stream (spec §20): every
+    /// resolved provider key.
+    ///
+    /// The keys are the secrets this process was configured with — from
+    /// `config.toml` or the exported environment — which is the honest scope of
+    /// value-level redaction. A key the user holds elsewhere is not known here
+    /// and cannot be guessed at.
+    pub fn redactor(&self) -> Redactor {
+        Redactor::new(
+            self.providers
+                .values()
+                .filter_map(|provider| provider.api_key.clone()),
+        )
     }
 
     /// Every model whose provider has a usable key. The CLI probe uses this to
@@ -911,6 +934,14 @@ pub struct SessionConfig {
     /// The session's cumulative token allowance (spec §17). Every participant on
     /// one stream shares it, which `assemble_discussion` enforces.
     pub budget: Budget,
+    /// The values this session redacts from every event before it is appended
+    /// (spec §20). A session-level fact that every agent on the stream shares,
+    /// carried here because [`Config::session_config`] is the one place
+    /// configuration becomes injected values, so no assembly path that uses it
+    /// has to pass anything extra. A discussion goes further and **refuses** a
+    /// roster whose redactors disagree, because one stream with two answers to
+    /// "what is secret" would scrub some events and not others.
+    pub redactor: Redactor,
 }
 
 impl SessionConfig {
@@ -929,6 +960,7 @@ impl SessionConfig {
             synthesizer_model: None,
             pricing: PriceTable::new(),
             budget: Budget::new(),
+            redactor: Redactor::default(),
         }
     }
 
@@ -958,6 +990,13 @@ impl SessionConfig {
     /// Override the per-result truncation cap (spec §10).
     pub fn with_max_tool_result_tokens(mut self, max_tool_result_tokens: u64) -> Self {
         self.max_tool_result_tokens = max_tool_result_tokens;
+        self
+    }
+
+    /// Give this session the values it redacts before anything is appended to
+    /// the stream (spec §20).
+    pub fn with_redactor(mut self, redactor: Redactor) -> Self {
+        self.redactor = redactor;
         self
     }
 
@@ -1059,6 +1098,7 @@ impl Default for SessionConfig {
             synthesizer_model: None,
             pricing: PriceTable::new(),
             budget: Budget::new(),
+            redactor: Redactor::default(),
         }
     }
 }

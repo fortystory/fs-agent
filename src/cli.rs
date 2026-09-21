@@ -48,8 +48,33 @@ fn probe_prompt() -> String {
     prompt
 }
 
+/// Why this process refuses to start as root, if it is root (spec §20).
+///
+/// A pure function of the effective uid, on purpose: the refusal has nothing to
+/// read but the uid, so there is no argument, environment variable or mode that
+/// can turn it off. The guardrails in this project assume the worst case stays
+/// inside the workspace; as root a single misjudgement is system-wide, which is
+/// a different risk class than the one being managed.
+pub fn root_refusal(euid: u32) -> Option<String> {
+    (euid == 0).then(|| {
+        "refusing to start as root (euid 0): every guardrail in this tool assumes the worst \
+         case stays inside your workspace, and as root one misjudgement is system-wide. Run \
+         it as your normal user; there is no bypass flag."
+            .to_owned()
+    })
+}
+
 /// Parse `argv` from the environment and run. This is the binary entry point.
 pub fn main() -> ExitCode {
+    // Checked before anything else — before arguments, before the runtime — so
+    // there is no path into the program as root and no flag that skips the
+    // check (spec §20).
+    // SAFETY: `geteuid` only reads the calling process's uid and cannot fail.
+    let euid = unsafe { libc::geteuid() };
+    if let Some(message) = root_refusal(euid) {
+        eprintln!("fs-agent: {message}");
+        return ExitCode::FAILURE;
+    }
     let env: EnvMap = std::env::vars().collect();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let runtime = match tokio::runtime::Builder::new_multi_thread()

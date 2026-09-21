@@ -398,6 +398,188 @@ impl EventPayload {
             EventPayload::HistorySuperseded { .. } => "HistorySuperseded",
         }
     }
+
+    /// Redact every free-text field of this payload, in place.
+    ///
+    /// The exhaustive match is the point: the schema knows which of its fields
+    /// are text a person or a model wrote, and a new payload variant cannot be
+    /// added without deciding whether it carries any (spec §20). Identity and
+    /// lookup fields (`session_id`, `cwd`, `tool_name`, `code`, ids) are left
+    /// alone: they are the stream's keys, not prose, and a redacted key would
+    /// break lookups rather than protect anything.
+    ///
+    /// Args and permission requests are JSON trees the model built, so they are
+    /// walked leaf by leaf — a value pasted into a `write_file` argument is the
+    /// same leak as one pasted into a message body.
+    pub fn redact(&mut self, redactor: &Redactor) {
+        match self {
+            EventPayload::SessionStarted { .. }
+            | EventPayload::SessionEnded { .. }
+            | EventPayload::RoundStarted { .. }
+            | EventPayload::RoundEnded { .. }
+            | EventPayload::TurnStarted { .. }
+            | EventPayload::UsageRecorded { .. }
+            | EventPayload::TurnEnded { .. } => {}
+            EventPayload::ContextInjected { content, .. } => redactor.redact(content),
+            EventPayload::DivergenceRecorded {
+                topic, positions, ..
+            } => {
+                redactor.redact(topic);
+                for position in positions {
+                    redactor.redact(position);
+                }
+            }
+            EventPayload::MessageCompleted {
+                text, reasoning, ..
+            } => {
+                redactor.redact(text);
+                if let Some(reasoning) = reasoning {
+                    redactor.redact(reasoning);
+                }
+            }
+            EventPayload::ToolCallStarted { args, .. } => redactor.redact_value(args),
+            EventPayload::ToolCallCompleted { output, error, .. } => {
+                if let Some(output) = output {
+                    redactor.redact(output);
+                }
+                if let Some(error) = error {
+                    redactor.redact(error);
+                }
+            }
+            EventPayload::PermissionAsked { request, .. } => redactor.redact_value(request),
+            EventPayload::PermissionDecided { reason, .. } => {
+                if let Some(reason) = reason {
+                    redactor.redact(reason);
+                }
+            }
+            EventPayload::HookExecuted {
+                command, outcome, ..
+            } => {
+                redactor.redact(command);
+                redactor.redact(outcome);
+            }
+            EventPayload::ExecutorSpawned { brief, .. } => redactor.redact(brief),
+            EventPayload::ExecutorFinished { summary, .. } => redactor.redact(summary),
+            EventPayload::AgentError { message, .. } => redactor.redact(message),
+            EventPayload::SessionError { detail, .. } => redactor.redact(detail),
+            EventPayload::HistorySuperseded { summary, .. } => {
+                if let Some(summary) = summary {
+                    redactor.redact(summary);
+                }
+            }
+        }
+    }
+}
+
+/// The marker a redacted value is replaced with.
+///
+/// Fixed text rather than a length-preserving mask: the point is that the value
+/// is gone, and a marker that kept the original's length would invite reading
+/// the shape of the secret back out of the stream.
+pub const REDACTED: &str = "[redacted]";
+
+/// Shortest value the redactor will act on.
+///
+/// Value-level redaction is a blunt instrument: replacing a three-character
+/// string would rewrite ordinary prose everywhere it appeared and make the
+/// session unreadable, while every vendor key this project holds is far longer
+/// (spec §20 says best-effort, not exhaustive).
+const MIN_SECRET_CHARS: usize = 8;
+
+/// Value-level, best-effort secret redaction (spec §20).
+///
+/// The redactor holds the **values** that must not reach the stream — in
+/// practice the resolved provider API keys — and replaces each occurrence with
+/// [`REDACTED`]. It is applied before an event is appended, which is what makes
+/// "the text on the stream equals the text the model saw" true, while the tool
+/// that produced the text already ran on the real value.
+///
+/// It lives in `events` because the stream is at the bottom of the dependency
+/// DAG and both `config` (which knows the keys) and `agent` (which is the one
+/// writer) have to reach it.
+///
+/// What it does **not** do, on purpose: it does not guess at unregistered
+/// secrets, does not decode encodings, and does not stitch a value back together
+/// from fragments. The honest boundary is "the keys this process was configured
+/// with" (see `docs/credentials.md`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Redactor {
+    /// Longest first, so a value that starts with another value is replaced
+    /// whole rather than leaving the longer one's tail behind.
+    secrets: Vec<String>,
+}
+
+impl Redactor {
+    /// Build a redactor over `secrets`, dropping values too short to be keys.
+    pub fn new(secrets: impl IntoIterator<Item = String>) -> Self {
+        let mut secrets: Vec<String> = secrets
+            .into_iter()
+            .map(|secret| secret.trim().to_owned())
+            .filter(|secret| secret.chars().count() >= MIN_SECRET_CHARS)
+            .collect();
+        // Deduplicate first, then order by descending length with a stable
+        // tiebreak, so the replacement is deterministic whatever order the
+        // configuration arrived in.
+        secrets.sort();
+        secrets.dedup();
+        secrets.sort_by_key(|secret| std::cmp::Reverse(secret.chars().count()));
+        Self { secrets }
+    }
+
+    /// Whether this redactor has any value to hide.
+    pub fn is_empty(&self) -> bool {
+        self.secrets.is_empty()
+    }
+
+    /// Replace every occurrence of every secret in `text`, in place.
+    ///
+    /// A value with nothing to replace is left as the same allocation: the take
+    /// and the write-back are moves, not copies, so the no-secret case pays only
+    /// the scans.
+    pub fn redact(&self, text: &mut String) {
+        if self.is_empty() {
+            return;
+        }
+        let mut redacted = std::mem::take(text);
+        for secret in &self.secrets {
+            if redacted.contains(secret.as_str()) {
+                redacted = redacted.replace(secret.as_str(), REDACTED);
+            }
+        }
+        *text = redacted;
+    }
+
+    /// [`Redactor::redact`] as a function from one string to another.
+    pub fn redacted(&self, text: &str) -> String {
+        let mut redacted = text.to_owned();
+        self.redact(&mut redacted);
+        redacted
+    }
+
+    /// Walk a JSON value and redact every string leaf.
+    ///
+    /// Object **keys** are left alone: they are schema field names, and a key
+    /// that happens to equal a secret is not a value escaping anywhere.
+    pub fn redact_value(&self, value: &mut serde_json::Value) {
+        if self.is_empty() {
+            return;
+        }
+        match value {
+            serde_json::Value::String(text) => self.redact(text),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    self.redact_value(item);
+                }
+            }
+            serde_json::Value::Object(fields) => {
+                for field in fields.values_mut() {
+                    self.redact_value(field);
+                }
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            }
+        }
+    }
 }
 
 /// Text conventions over [`EventPayload::HookExecuted`].
