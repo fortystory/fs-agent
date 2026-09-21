@@ -22,6 +22,8 @@ use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::crossterm::event::{
     Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -148,6 +150,14 @@ impl Tui {
             // resize — and the terminal soft-wraps a line wider than it is,
             // scrambling the inline viewport. Pick up the size before inserting.
             let _ = terminal.autoresize();
+            // One frame, not two. The scrollback insert and the live redraw are
+            // separate writes, and a fast terminal happily displays the state
+            // between them: the inserted line caught half-drawn, its characters
+            // scattered across the row ("平铺"). A synchronized update (DECSET
+            // 2026) shows only the completed frame; a terminal without it ignores
+            // the pair.
+            let mut frame_out = std::io::stdout();
+            let _ = execute!(frame_out, BeginSynchronizedUpdate);
             for block in state.take_ready() {
                 let lines = render_block(&block);
                 if lines.is_empty() {
@@ -157,6 +167,7 @@ impl Tui {
                 let _ = terminal.insert_before(height, |buf| paint_scrollback(&lines, buf));
             }
             let _ = terminal.draw(|frame| draw_live(frame, &state));
+            let _ = execute!(frame_out, EndSynchronizedUpdate);
             if state.should_quit() {
                 break;
             }
