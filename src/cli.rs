@@ -409,8 +409,9 @@ async fn interactive_loop(
             },
             // `/<skill> [task]` is the user-side skill invocation (spec §9): the
             // one path a `disable-model-invocation: true` skill reserves for the
-            // user. The body goes into the context at the tail and the task runs
-            // as an ordinary turn.
+            // user. The body goes into the context at the tail; the task (when one
+            // was typed) runs as an ordinary turn. A bare `/<skill>` only loads:
+            // the transcript must never show a user message the user did not type.
             other if other.starts_with('/') => {
                 let rest = other.trim_start_matches('/');
                 let (name, task) = match rest.split_once(char::is_whitespace) {
@@ -428,16 +429,16 @@ async fn interactive_loop(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
                     ));
+                } else if task.is_empty() {
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::skill_loaded_waiting(name)
+                    ));
                 } else {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::skill_loaded(name)
                     ));
-                    let task = if task.is_empty() {
-                        render::wording::skill_default_task()
-                    } else {
-                        task
-                    };
                     if let Err(error) = run_one_turn(harness, events, task).await {
                         harness.notice(&format!(
                             "fs-agent: {}",

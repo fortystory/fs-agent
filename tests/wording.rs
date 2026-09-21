@@ -286,7 +286,10 @@ fn interactive_feedback_reads_in_chinese() {
         "未知命令 /nope（可用：/undo、/plan、/endplan、/quit；技能：/ask-matt、/release）"
     );
     assert_eq!(wording::skill_loaded("ask-matt"), "已加载技能 ask-matt");
-    assert_eq!(wording::skill_default_task(), "请按上面的技能说明执行。");
+    assert_eq!(
+        wording::skill_loaded_waiting("ask-matt"),
+        "已加载技能 ask-matt；请输入你的任务。"
+    );
     assert_eq!(wording::plan_entered(), "已进入计划模式");
     assert_eq!(wording::plan_exited(), "已退出计划模式");
 }

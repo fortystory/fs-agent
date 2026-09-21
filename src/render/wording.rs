@@ -435,15 +435,15 @@ pub fn unknown_command(command: &str, skills: &[&str]) -> String {
     )
 }
 
-/// The user loaded a skill by name.
+/// The user loaded a skill by name, with a task to run.
 pub fn skill_loaded(name: &str) -> String {
     format!("已加载技能 {name}")
 }
 
-/// The turn a bare `/<skill>` runs when the user gave no task: the skill body is
-/// already in the context, so the default is simply to apply it.
-pub fn skill_default_task() -> &'static str {
-    "请按上面的技能说明执行。"
+/// A bare `/<skill>`: the body is loaded and the loop waits for the task, so the
+/// transcript never shows a user message the user did not type.
+pub fn skill_loaded_waiting(name: &str) -> String {
+    format!("已加载技能 {name}；请输入你的任务。")
 }
 
 /// `/plan` succeeded.
