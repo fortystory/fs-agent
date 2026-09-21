@@ -412,9 +412,27 @@ pub fn nothing_to_undo() -> &'static str {
     "没有可撤销的修改"
 }
 
-/// A slash-command the loop does not know, naming the ones it does.
-pub fn unknown_command(command: &str) -> String {
-    format!("未知命令 {command}（可用：/undo、/plan、/endplan、/quit，或直接输入 /技能名）")
+/// A slash-command the loop does not know. It names the built-ins, and — when
+/// there are any — the skills the user can load by name, so `/` stays
+/// discoverable.
+pub fn unknown_command(command: &str, skills: &[&str]) -> String {
+    const BUILT_INS: &str = "可用：/undo、/plan、/endplan、/quit";
+    const LISTED: usize = 8;
+    if skills.is_empty() {
+        return format!("未知命令 {command}（{BUILT_INS}，或直接输入 /<技能名>）");
+    }
+    let mut names: Vec<String> = skills
+        .iter()
+        .take(LISTED)
+        .map(|name| format!("/{name}"))
+        .collect();
+    if skills.len() > LISTED {
+        names.push("…".to_owned());
+    }
+    format!(
+        "未知命令 {command}（{BUILT_INS}；技能：{}）",
+        names.join("、")
+    )
 }
 
 /// The user loaded a skill by name.

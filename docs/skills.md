@@ -57,7 +57,10 @@ not call the skill.
   the user names — including a `disable-model-invocation: true` one — and then
   runs `task` as an ordinary turn (a bare `/<name>` runs a default prompt). The
   body is a `ContextInjected { source: Skill }` appended **after** the history,
-  exactly like a tool-loaded body, so the cached prefix never moves.
+  the same slot plan mode's instruction uses, so the cached prefix never moves.
+  Each body is capped at `MAX_SKILL_TOKENS`, but the injection is pinned: the 25k
+  aggregate that drops old tool-loaded bodies does not cover it, so a session
+  that loads many skills keeps every one of them.
 - **Budgets.** One body is capped at 5k estimated tokens (truncated with a
   pointer to the file, never refused — though a user-level skill's file sits
   outside the workspace, where `read_file` cannot reach it); the loaded bodies in

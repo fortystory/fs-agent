@@ -418,9 +418,10 @@ async fn interactive_loop(
                     None => (rest, ""),
                 };
                 if !harness.has_skill(name) {
+                    let names = harness.skill_names();
                     harness.notice(&format!(
                         "fs-agent: {}",
-                        render::wording::unknown_command(other)
+                        render::wording::unknown_command(other, &names)
                     ));
                 } else if let Err(error) = harness.load_skill(name) {
                     harness.notice(&format!(

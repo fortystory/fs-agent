@@ -33,6 +33,10 @@ fn headings_stand_out_and_deeper_ones_are_just_bold() {
     assert_eq!(text(&deep[0]), "Note");
     assert!(has_modifier(&deep[0], Modifier::BOLD));
     assert!(!has_fg(&deep[0], Color::Cyan));
+
+    // A closing hash run needs a space before it: `# C#` is a heading named `C#`.
+    assert_eq!(text(&to_lines("# C#")[0]), "C#");
+    assert_eq!(text(&to_lines("## Title ##")[0]), "Title");
 }
 
 #[test]

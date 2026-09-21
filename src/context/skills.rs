@@ -133,15 +133,20 @@ impl Skills {
         self.skills.iter().find(|skill| skill.name == name)
     }
 
+    /// Look one up by name, or the error that names it.
+    fn lookup(&self, name: &str) -> Result<&Skill, SkillError> {
+        self.get(name).ok_or_else(|| SkillError::Unknown {
+            name: name.to_owned(),
+        })
+    }
+
     /// The body to put in a tool result, capped at [`MAX_SKILL_TOKENS`].
     ///
     /// Over cap the body is truncated and the truncation names the file, so the
     /// model can read the rest; refusing instead would make a slightly long skill
     /// unusable.
     pub fn load(&self, name: &str) -> Result<String, SkillError> {
-        let skill = self.get(name).ok_or_else(|| SkillError::Unknown {
-            name: name.to_owned(),
-        })?;
+        let skill = self.lookup(name)?;
         if skill.model_invocation_disabled {
             return Err(SkillError::Disabled {
                 name: skill.name.clone(),
@@ -157,10 +162,7 @@ impl Skills {
     /// keeps the skill away from the *model's* guesswork, and the user naming it
     /// is exactly the invocation it reserves. The body is capped the same way.
     pub fn invoke(&self, name: &str) -> Result<String, SkillError> {
-        let skill = self.get(name).ok_or_else(|| SkillError::Unknown {
-            name: name.to_owned(),
-        })?;
-        Ok(capped_body(skill))
+        Ok(capped_body(self.lookup(name)?))
     }
 
     /// The pinned description catalog, or `None` when no skill is invocable.

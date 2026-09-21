@@ -113,14 +113,21 @@ fn is_table_separator(cells: &[String]) -> bool {
         })
 }
 
-/// `# Title` .. `###### Title`, with the closing hashes stripped.
+/// `# Title` .. `###### Title`. A closing hash run is stripped only when a space
+/// separates it from the text, so `# C#` keeps its `#`.
 fn heading(trimmed: &str) -> Option<(usize, &str)> {
     let level = trimmed.chars().take_while(|ch| *ch == '#').count();
     if !(1..=6).contains(&level) {
         return None;
     }
     let rest = trimmed[level..].strip_prefix(' ')?;
-    Some((level, rest.trim_end().trim_end_matches('#').trim_end()))
+    let rest = rest.trim_end();
+    let without_closing = match rest.rfind(' ') {
+        Some(space) if rest[space + 1..].chars().all(|ch| ch == '#') => rest[..space].trim_end(),
+        None if rest.chars().all(|ch| ch == '#') => "",
+        _ => rest,
+    };
+    Some((level, without_closing))
 }
 
 /// A thematic break: three or more of `-`, `*` or `_`, spaces allowed.
