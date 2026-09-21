@@ -404,5 +404,128 @@ fn the_cursor_column_counts_a_wide_character_as_two() {
     }
 
     // Two prompt cells, then two characters of two columns each.
-    assert_eq!(state.cursor_column(), 6);
+    assert_eq!(state.cursor_column(80), 6);
+}
+
+#[test]
+fn the_arrows_and_emacs_keys_edit_the_line_in_place() {
+    let (mut state, mut answer) = state_with_prompt();
+    for ch in "helo".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Left); // hel|o
+    state.key(Key::Char('l')); // hell|o
+    state.key(Key::Home);
+    state.key(Key::Delete); // removes the leading 'h' -> ell|o
+    state.key(Key::End);
+    state.key(Key::Backspace); // ell|
+    state.key(Key::Char('o'));
+    state.key(Key::Enter);
+    assert_eq!(answer.try_recv().unwrap(), Some("ello".to_owned()));
+}
+
+#[test]
+fn ctrl_a_e_u_k_edit_like_emacs() {
+    let (mut state, mut answer) = state_with_prompt();
+    for ch in "abcdef".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::CtrlA); // |abcdef
+    state.key(Key::CtrlK); // clears forward -> |
+    state.key(Key::Char('x')); // x|
+    state.key(Key::Char('y')); // xy|
+    state.key(Key::CtrlA); // |xy
+    state.key(Key::Delete); // |y
+    state.key(Key::CtrlE); // y|
+    state.key(Key::CtrlU); // clears backward -> |
+    state.key(Key::Char('z'));
+    state.key(Key::Enter);
+    assert_eq!(answer.try_recv().unwrap(), Some("z".to_owned()));
+}
+
+#[test]
+fn ctrl_w_erases_the_word_before_the_cursor() {
+    let (mut state, mut answer) = state_with_prompt();
+    for ch in "cargo test --lib".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::CtrlW);
+    state.key(Key::Enter);
+    assert_eq!(answer.try_recv().unwrap(), Some("cargo test".to_owned()));
+}
+
+#[test]
+fn ctrl_p_and_ctrl_n_walk_the_prompt_history() {
+    let (mut state, mut first) = state_with_prompt();
+    for ch in "first".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Enter);
+    assert_eq!(first.try_recv().unwrap(), Some("first".to_owned()));
+
+    let (tx, mut second) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    for ch in "second".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Enter);
+    assert_eq!(second.try_recv().unwrap(), Some("second".to_owned()));
+
+    let (tx, mut third) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    state.key(Key::CtrlP); // newest: second
+    state.key(Key::CtrlP); // older: first
+    state.key(Key::CtrlP); // already oldest: stays
+    state.key(Key::CtrlN); // back to second
+    state.key(Key::Enter);
+    assert_eq!(third.try_recv().unwrap(), Some("second".to_owned()));
+}
+
+#[test]
+fn up_and_down_are_history_too_and_a_fresh_line_is_restored() {
+    let (mut state, mut first) = state_with_prompt();
+    for ch in "kept".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Enter);
+    assert_eq!(first.try_recv().unwrap(), Some("kept".to_owned()));
+
+    let (tx, mut second) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    for ch in "draft".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Up); // browse: kept
+    state.key(Key::Down); // back to the draft
+    state.key(Key::Enter);
+    assert_eq!(second.try_recv().unwrap(), Some("draft".to_owned()));
+}
+
+#[test]
+fn the_cursor_column_follows_the_cursor_not_the_end_of_the_line() {
+    let (mut state, _answer) = state_with_prompt();
+    for ch in "abc".chars() {
+        state.key(Key::Char(ch));
+    }
+    assert_eq!(state.cursor_column(80), 5, "> abc");
+    state.key(Key::Home);
+    assert_eq!(state.cursor_column(80), 2, "> |abc");
+    state.key(Key::Right);
+    assert_eq!(state.cursor_column(80), 3, "> a|bc");
+}
+
+#[test]
+fn a_long_line_scrolls_so_the_cursor_stays_on_screen() {
+    let (mut state, _answer) = state_with_prompt();
+    for ch in "x".repeat(200).chars() {
+        state.key(Key::Char(ch));
+    }
+    let width = 40;
+    let column = state.cursor_column(width);
+    assert!(
+        column < width,
+        "the cursor stays inside the terminal: {column}"
+    );
+    state.key(Key::Home);
+    assert_eq!(state.cursor_column(width), 2, "home brings the head back");
 }

@@ -67,17 +67,45 @@ const TICK: Duration = Duration::from_millis(120);
 pub enum Key {
     Char(char),
     Backspace,
+    Delete,
     Enter,
     Esc,
     BackTab,
     CtrlC,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    /// Emacs-style line editing: `Ctrl-A/E` move, `Ctrl-U/K/W` kill, `Ctrl-P/N`
+    /// walk the prompt history.
+    CtrlA,
+    CtrlE,
+    CtrlU,
+    CtrlK,
+    CtrlW,
+    CtrlP,
+    CtrlN,
 }
 
 /// Translate one crossterm keypress into a [`Key`], or `None` for a key the TUI
 /// ignores.
 fn map_key(key: KeyEvent) -> Option<Key> {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        return Some(Key::CtrlC);
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let KeyCode::Char(ch) = key.code {
+            return match ch.to_ascii_lowercase() {
+                'c' => Some(Key::CtrlC),
+                'a' => Some(Key::CtrlA),
+                'e' => Some(Key::CtrlE),
+                'u' => Some(Key::CtrlU),
+                'k' => Some(Key::CtrlK),
+                'w' => Some(Key::CtrlW),
+                'p' => Some(Key::CtrlP),
+                'n' => Some(Key::CtrlN),
+                _ => None,
+            };
+        }
     }
     match key.code {
         KeyCode::Esc => Some(Key::Esc),
@@ -85,6 +113,13 @@ fn map_key(key: KeyEvent) -> Option<Key> {
         KeyCode::Enter => Some(Key::Enter),
         KeyCode::Char(ch) => Some(Key::Char(ch)),
         KeyCode::Backspace => Some(Key::Backspace),
+        KeyCode::Delete => Some(Key::Delete),
+        KeyCode::Left => Some(Key::Left),
+        KeyCode::Right => Some(Key::Right),
+        KeyCode::Up => Some(Key::Up),
+        KeyCode::Down => Some(Key::Down),
+        KeyCode::Home => Some(Key::Home),
+        KeyCode::End => Some(Key::End),
         _ => None,
     }
 }
@@ -158,6 +193,11 @@ impl Tui {
             // the pair.
             let mut frame_out = std::io::stdout();
             let _ = execute!(frame_out, BeginSynchronizedUpdate);
+            // The inserts walk their text cell by cell, and a visible cursor
+            // rides that write head — it looks like it is hunting along the
+            // output instead of sitting in the input line. Hide it for the
+            // frame; `draw` shows it again at the input position.
+            let _ = terminal.hide_cursor();
             for block in state.take_ready() {
                 let lines = render_block(&block);
                 if lines.is_empty() {
@@ -195,6 +235,17 @@ pub struct TuiState {
     live: String,
     /// What the user has typed.
     input: String,
+    /// The cursor in `input`, as a **character** index (never a byte offset:
+    /// `input` is UTF-8 and a CJK character is three bytes).
+    cursor: usize,
+    /// Prompt lines already submitted, oldest first, for `Ctrl-P` / `Ctrl-N`.
+    history: Vec<String>,
+    /// Where in [`TuiState::history`] the browse currently is, or `None` when
+    /// editing a fresh line.
+    history_at: Option<usize>,
+    /// The fresh line stashed when a history browse began, restored when the
+    /// browse comes back past the newest entry.
+    draft: String,
     /// Where a `Prompt` request's answer goes.
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     /// A question waiting for a keypress.
@@ -218,6 +269,10 @@ impl TuiState {
             ready: Vec::new(),
             live: String::new(),
             input: String::new(),
+            cursor: 0,
+            history: Vec::new(),
+            history_at: None,
+            draft: String::new(),
             prompt_reply: None,
             pending: None,
             events: Vec::new(),
@@ -304,7 +359,7 @@ impl TuiState {
                 } else if self.pending.is_some() {
                     self.answer(self.default_answer());
                 } else {
-                    self.input.clear();
+                    self.clear_input();
                 }
                 return;
             }
@@ -315,22 +370,156 @@ impl TuiState {
             _ => {}
         }
         if self.pending.is_some() {
-            self.answer_key(key);
+            // A question is answered by its own keys; anything else (an arrow,
+            // a stray Ctrl chord) must not silently pick the non-acting answer.
+            if matches!(key, Key::Char(_) | Key::Enter) {
+                self.answer_key(key);
+            }
             return;
         }
         match key {
-            Key::Enter => {
-                let line = self.input.trim().to_owned();
-                self.input.clear();
-                if let Some(reply) = self.prompt_reply.take() {
-                    let _ = reply.send(if line.is_empty() { None } else { Some(line) });
-                }
-            }
-            Key::Char(ch) => self.input.push(ch),
-            Key::Backspace => {
-                self.input.pop();
-            }
+            Key::Enter => self.submit(),
+            Key::Char(ch) => self.insert_char(ch),
+            Key::Backspace => self.backspace(),
+            Key::Delete => self.delete_forward(),
+            Key::Left => self.cursor = self.cursor.saturating_sub(1),
+            Key::Right => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
+            Key::Home | Key::CtrlA => self.cursor = 0,
+            Key::End | Key::CtrlE => self.cursor = self.input.chars().count(),
+            Key::CtrlU => self.kill_to_start(),
+            Key::CtrlK => self.kill_to_end(),
+            Key::CtrlW => self.kill_word(),
+            Key::Up | Key::CtrlP => self.history_previous(),
+            Key::Down | Key::CtrlN => self.history_next(),
             _ => {}
+        }
+    }
+
+    // --- line editing ------------------------------------------------------
+
+    /// The byte offset of character index `at`, clamped to the end.
+    fn byte_at(&self, at: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(at)
+            .map(|(index, _)| index)
+            .unwrap_or(self.input.len())
+    }
+
+    fn insert_char(&mut self, ch: char) {
+        let at = self.byte_at(self.cursor);
+        self.input.insert(at, ch);
+        self.cursor += 1;
+        self.history_at = None;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let at = self.byte_at(self.cursor - 1);
+        self.input.remove(at);
+        self.cursor -= 1;
+        self.history_at = None;
+    }
+
+    fn delete_forward(&mut self) {
+        if self.cursor >= self.input.chars().count() {
+            return;
+        }
+        let at = self.byte_at(self.cursor);
+        self.input.remove(at);
+        self.history_at = None;
+    }
+
+    fn kill_to_start(&mut self) {
+        let at = self.byte_at(self.cursor);
+        self.input.drain(..at);
+        self.cursor = 0;
+        self.history_at = None;
+    }
+
+    fn kill_to_end(&mut self) {
+        let at = self.byte_at(self.cursor);
+        self.input.truncate(at);
+        self.history_at = None;
+    }
+
+    /// `Ctrl-W`: drop trailing spaces, then one run of non-spaces, before the
+    /// cursor — the shell's word-erase.
+    fn kill_word(&mut self) {
+        let chars: Vec<char> = self.input.chars().take(self.cursor).collect();
+        let mut start = chars.len();
+        while start > 0 && chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        let from = self.byte_at(start);
+        let to = self.byte_at(self.cursor);
+        self.input.replace_range(from..to, "");
+        self.cursor = start;
+        self.history_at = None;
+    }
+
+    fn set_input(&mut self, text: String) {
+        self.cursor = text.chars().count();
+        self.input = text;
+    }
+
+    fn clear_input(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+        self.history_at = None;
+        self.draft.clear();
+    }
+
+    /// `Ctrl-P` / Up: step to the older prompt, stashing the fresh line first.
+    fn history_previous(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        let at = match self.history_at {
+            None => {
+                self.draft = self.input.clone();
+                self.history.len() - 1
+            }
+            Some(0) => return,
+            Some(at) => at - 1,
+        };
+        self.history_at = Some(at);
+        self.set_input(self.history[at].clone());
+    }
+
+    /// `Ctrl-N` / Down: step to the newer prompt, or back to the fresh line.
+    fn history_next(&mut self) {
+        match self.history_at {
+            None => {}
+            Some(at) if at + 1 < self.history.len() => {
+                self.history_at = Some(at + 1);
+                self.set_input(self.history[at + 1].clone());
+            }
+            Some(_) => {
+                self.history_at = None;
+                let draft = std::mem::take(&mut self.draft);
+                self.set_input(draft);
+            }
+        }
+    }
+
+    /// Send the typed line to the loop and remember it.
+    fn submit(&mut self) {
+        let line = self.input.trim().to_owned();
+        self.input.clear();
+        self.cursor = 0;
+        self.history_at = None;
+        self.draft.clear();
+        if !line.is_empty() && self.history.last() != Some(&line) {
+            self.history.push(line.clone());
+        }
+        if let Some(reply) = self.prompt_reply.take() {
+            let _ = reply.send(if line.is_empty() { None } else { Some(line) });
         }
     }
 
@@ -396,34 +585,70 @@ impl TuiState {
         }
     }
 
-    /// The column the cursor rests on: the two prompt cells, then the input's
-    /// **display width** — a CJK character occupies two columns.
+    /// The column the cursor rests on for a terminal `width` columns wide: the
+    /// two prompt cells plus the input **up to the cursor**, in display columns.
     ///
     /// Here rather than inline in [`draw_live`] so it can be asserted without a
     /// terminal, like the rest of the display state.
-    pub fn cursor_column(&self) -> u16 {
-        2 + self.input.as_str().cell_width()
+    pub fn cursor_column(&self, width: u16) -> u16 {
+        if self.pending.is_some() {
+            return 0;
+        }
+        self.input_view(width).1
+    }
+
+    /// The visible input line and the cursor's column within it, for a terminal
+    /// `width` columns wide. Long input scrolls horizontally so the cursor stays
+    /// on screen.
+    fn input_view(&self, width: u16) -> (String, u16) {
+        const PROMPT: &str = "> ";
+        let available = (width as usize).saturating_sub(text_columns(PROMPT)).max(1);
+        let chars: Vec<char> = self.input.chars().collect();
+        let cursor = self.cursor.min(chars.len());
+        let before: String = chars[..cursor].iter().collect();
+        let before_columns = text_columns(&before);
+        // Scroll just enough that the cursor keeps one column of room.
+        let start_columns = before_columns.saturating_sub(available.saturating_sub(1));
+        let mut used = 0;
+        let mut start = chars.len();
+        for (index, ch) in chars.iter().enumerate() {
+            if used >= start_columns {
+                start = index;
+                break;
+            }
+            used += char_columns(*ch);
+        }
+        let visible: String = chars[start..].iter().collect();
+        let visible = truncate_columns(&visible, available);
+        let cursor_column = text_columns(PROMPT) + before_columns.saturating_sub(start_columns);
+        (format!("{PROMPT}{visible}"), cursor_column as u16)
     }
 
     /// The input line: a question prompt while one is pending, else the prompt.
-    fn input_line(&self) -> (String, Style) {
+    fn input_line(&self, width: u16) -> (String, Style) {
         match &self.pending {
             Some(Pending {
                 question: Question::Permission(request),
                 ..
             }) => (
-                wording::permission_prompt(&request.tool_name, &summarize_args(&request.args)),
+                truncate_columns(
+                    &wording::permission_prompt(&request.tool_name, &summarize_args(&request.args)),
+                    width as usize,
+                ),
                 Style::default().fg(ratatui::style::Color::Yellow),
             ),
             Some(Pending {
                 question: Question::PlanConflict(path),
                 ..
             }) => (
-                wording::plan_conflict_prompt(&path.display().to_string()),
+                truncate_columns(
+                    &wording::plan_conflict_prompt(&path.display().to_string()),
+                    width as usize,
+                ),
                 Style::default().fg(ratatui::style::Color::Yellow),
             ),
             None => (
-                format!("> {}", self.input),
+                self.input_view(width).0,
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         }
@@ -478,7 +703,7 @@ fn draw_live(frame: &mut ratatui::Frame, state: &TuiState) {
     while lines.len() < LIVE_ROWS {
         lines.insert(0, Line::from(""));
     }
-    let (input, style) = state.input_line();
+    let (input, style) = state.input_line(area.width);
     lines.push(Line::from(Span::styled(input, style)));
     lines.push(Line::from(Span::styled(
         state.status_line(area.width),
@@ -487,9 +712,37 @@ fn draw_live(frame: &mut ratatui::Frame, state: &TuiState) {
     frame.render_widget(Paragraph::new(lines), area);
     // The cursor sits at the end of the typed input, on the input line.
     frame.set_cursor_position((
-        state.cursor_column().min(area.width.saturating_sub(1)),
+        state
+            .cursor_column(area.width)
+            .min(area.width.saturating_sub(1)),
         area.y + LIVE_ROWS as u16,
     ));
+}
+
+/// The display width of `text`, in terminal columns.
+fn text_columns(text: &str) -> usize {
+    text.cell_width() as usize
+}
+
+/// The display width of one character, in terminal columns.
+fn char_columns(ch: char) -> usize {
+    let mut buf = [0u8; 4];
+    ch.encode_utf8(&mut buf).cell_width() as usize
+}
+
+/// The longest prefix of `text` that fits in `width` columns.
+fn truncate_columns(text: &str, width: usize) -> String {
+    let mut used = 0;
+    let mut end = 0;
+    for (index, ch) in text.char_indices() {
+        let columns = char_columns(ch);
+        if used + columns > width {
+            break;
+        }
+        used += columns;
+        end = index + ch.len_utf8();
+    }
+    text[..end].to_owned()
 }
 
 /// Paint `lines` into the scratch buffer [`Terminal::insert_before`] hands us.
