@@ -23,7 +23,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{
     assemble_discussion, DebaterParts, DiscussionHarness, DiscussionParts, Error, SessionScaffold,
     SynthesizerParts,
@@ -495,10 +495,10 @@ async fn fixture_with_configs(
             provider: Box::new(synthesizer_provider.clone()),
         },
         max_rounds,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
-        },
+        }),
     })
     .await
     .unwrap();
@@ -711,10 +711,10 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
-        },
+        }),
     })
     .await;
 
@@ -760,10 +760,10 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
-        },
+        }),
     })
     .await;
 

@@ -17,7 +17,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Answer, Asker, Mode, Policy, Rule, Scope, Subject};
 use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
@@ -53,10 +53,10 @@ async fn fixture(
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("fake-model"),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),

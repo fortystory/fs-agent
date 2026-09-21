@@ -21,7 +21,7 @@ use fs_agent::events::{
 use fs_agent::hooks::{Constraint, Hook, HookError, Tightening};
 use fs_agent::permissions::{Answer, Asker, Mode, Policy, Rule};
 use fs_agent::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
@@ -81,10 +81,10 @@ async fn fixture_with_tools(
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("fake-model"),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),

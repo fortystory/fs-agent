@@ -18,9 +18,10 @@
 //! themselves are [`crate::session::observe`] and [`crate::agent::replay`].
 //! The interactive renderers are still the one unwired piece (ticket 18).
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use crate::agent::replay;
 use crate::config::{self, Config, EnvMap};
@@ -29,11 +30,14 @@ use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::provider::Message;
-use crate::render::RenderSinks;
+use crate::render::{
+    self, ConsoleAsker, ConsoleEvents, ConsoleHandle, FrontEndEvent, PlainOptions, RenderSinks,
+    Renderer, TuiOptions,
+};
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
 use crate::tools::{self, PathLocks};
-use crate::{assemble, AssemblyParts, SessionScaffold};
+use crate::{assemble, AssemblyParts, Harness, SessionScaffold};
 
 /// Prompt for the second probe turn; keeps the transcript growing so the first
 /// turn's prefix is what the cache has to match.
@@ -108,7 +112,7 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             println!("fs-agent {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Some("--help") | Some("-h") | None => {
+        Some("--help") | Some("-h") => {
             print_help();
             ExitCode::SUCCESS
         }
@@ -121,11 +125,325 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             let mut err = stderr.lock();
             run_sessions(&args[1..], env, &mut out, &mut err)
         }
-        Some(other) => {
-            eprintln!("fs-agent: unknown argument {other:?}");
-            print_help();
-            ExitCode::FAILURE
+        // No subcommand (or a bare flag) is the interactive session: the common
+        // case is just running `fs-agent` in a workspace. `interactive` parses
+        // its own arguments and rejects anything it does not know.
+        _ => interactive(args, env).await,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The interactive front end (spec §19)
+// ---------------------------------------------------------------------------
+
+/// One parsed interactive invocation. The renderer is chosen here and injected
+/// into the assembly, so exactly one mode runs.
+#[derive(Debug, Default)]
+struct InteractiveArgs {
+    /// Force the plain renderer.
+    plain: bool,
+    /// Force the TUI renderer.
+    tui: bool,
+    /// Resume this workspace's newest session (spec §11).
+    resume: bool,
+    config: Option<PathBuf>,
+    model: Option<String>,
+    cwd: Option<PathBuf>,
+}
+
+fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
+    let mut parsed = InteractiveArgs::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--plain" => parsed.plain = true,
+            "--tui" => parsed.tui = true,
+            "--continue" | "-c" => parsed.resume = true,
+            flag @ ("--config" | "--model" | "--cwd") => {
+                let flag = flag.to_owned();
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("{flag} needs a value"))?;
+                match flag.as_str() {
+                    "--config" => parsed.config = Some(PathBuf::from(value)),
+                    "--model" => parsed.model = Some(value.clone()),
+                    "--cwd" => parsed.cwd = Some(PathBuf::from(value)),
+                    _ => unreachable!(),
+                }
+            }
+            other => return Err(format!("unknown argument {other:?}")),
         }
+        index += 1;
+    }
+    if parsed.plain && parsed.tui {
+        return Err(
+            "--plain and --tui are mutually exclusive: there is one renderer per process"
+                .to_owned(),
+        );
+    }
+    Ok(parsed)
+}
+
+/// The interactive session: one workspace, one renderer, one keyboard.
+///
+/// The renderer is selected before assembly and injected, and the same console
+/// port serves both the loop's prompts and the permission gate's questions — the
+/// two things that come from the same keyboard (spec §19).
+async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_interactive_help();
+        return ExitCode::SUCCESS;
+    }
+    let parsed = match parse_interactive(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("fs-agent: {message}");
+            print_interactive_help();
+            return ExitCode::FAILURE;
+        }
+    };
+    let config = match load_config(parsed.config.clone(), env) {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("fs-agent: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // An unregistered model is a startup error, never a silent downgrade.
+    if let Err(message) = validate_models(&config) {
+        eprintln!("fs-agent: {message}");
+        return ExitCode::FAILURE;
+    }
+    let model = parsed
+        .model
+        .clone()
+        .unwrap_or_else(|| config.default_model.clone());
+    let profile = match config.resolve_model(Some(&model)) {
+        Ok((_, profile)) => profile.clone(),
+        Err(error) => {
+            eprintln!("fs-agent: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(root) = config::sessions_dir(env) else {
+        eprintln!("fs-agent: neither XDG_DATA_HOME nor HOME is set, so a session cannot be stored");
+        return ExitCode::FAILURE;
+    };
+    let store = SessionStore::new(root);
+    let cwd = match parsed.cwd.clone() {
+        Some(cwd) => cwd,
+        None => match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                eprintln!("fs-agent: cannot determine the current directory: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let stored = if parsed.resume {
+        match store.latest(&cwd) {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                eprintln!("fs-agent: no session in {} to continue", cwd.display());
+                return ExitCode::FAILURE;
+            }
+            Err(error) => {
+                eprintln!("fs-agent: cannot read the session store: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        match store.create(&cwd) {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!("fs-agent: cannot create a session: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    let provider = match OpenAiProvider::build(&config, &model, stderr_warnings()) {
+        Ok(provider) => provider,
+        Err(error) => {
+            eprintln!("fs-agent: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let session_config = match config.session_config(&model) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("fs-agent: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let home = env
+        .get("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+
+    // The keyboard's two ends: the loop's handle and gesture receiver, and the
+    // port the selected renderer (or the plain line reader) serves it through.
+    let (console, port, mut events) = render::console();
+    let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
+    let renderer = if use_tui {
+        Renderer::tui(TuiOptions { port })
+    } else {
+        // The plain front end reads stdin; it is line-buffered, so there is no
+        // raw mode and no key events.
+        render::spawn_plain_console(port);
+        Renderer::plain(PlainOptions {
+            sinks: RenderSinks {
+                stdout_result: Box::new(std::io::stdout()),
+                stderr_diagnostic: Box::new(std::io::stderr()),
+            },
+            color: std::io::stderr().is_terminal() && env.get("NO_COLOR").is_none(),
+        })
+    };
+    let asker = Arc::new(ConsoleAsker::from_handle(&console));
+
+    let mut harness = match assemble(AssemblyParts {
+        scaffold: SessionScaffold {
+            cwd: cwd.clone(),
+            log_path: stored.log_path.clone(),
+            session_id: stored.id.clone(),
+            tools: tools::builtin(),
+            locks: PathLocks::new(),
+            // Interactive sessions start in `ask`: writes ask, reads are allowed
+            // (spec §12). A headless caller gets no answerer and downgrades.
+            policy: Policy::for_mode(Mode::Ask),
+            asker: Some(asker),
+            hook: None,
+            home,
+        },
+        provider: Box::new(provider),
+        speaker: SpeakerId::Debater(profile.name.clone().into()),
+        config: session_config,
+        renderer,
+    })
+    .await
+    {
+        Ok(harness) => harness,
+        Err(error) => {
+            eprintln!("fs-agent: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // User story A.12: say which model, mode and session this is, before the
+    // first question.
+    eprintln!(
+        "fs-agent: session {} · model {model} · mode {} · {}{}",
+        harness.session_id(),
+        harness.mode(),
+        stored.dir.display(),
+        if parsed.resume { " (continued)" } else { "" },
+    );
+
+    let code = interactive_loop(&mut harness, &console, &mut events).await;
+    harness.shutdown().await;
+    code
+}
+
+/// Read a line, run it, repeat — until the user leaves or input ends.
+async fn interactive_loop(
+    harness: &mut Harness,
+    console: &ConsoleHandle,
+    events: &mut ConsoleEvents,
+) -> ExitCode {
+    loop {
+        // Between turns the loop is only waiting for a prompt; a gesture that
+        // arrives here is handled without a turn in flight.
+        let line = loop {
+            tokio::select! {
+                line = console.prompt() => break line,
+                event = events.recv() => match event {
+                    Some(FrontEndEvent::Quit) | None => return ExitCode::SUCCESS,
+                    Some(FrontEndEvent::TogglePlan) => toggle_plan(harness).await,
+                    Some(FrontEndEvent::Cancel) => {}
+                },
+            }
+        };
+        let Some(line) = line else {
+            return ExitCode::SUCCESS;
+        };
+        let command = line.trim();
+        if command.is_empty() {
+            continue;
+        }
+        match command {
+            "/quit" | "/exit" => return ExitCode::SUCCESS,
+            "/undo" => match harness.undo_last_edit().await {
+                Ok(Some(_)) => {}
+                Ok(None) => eprintln!("fs-agent: nothing to undo"),
+                Err(error) => eprintln!("fs-agent: {error}"),
+            },
+            "/plan" => enter_plan(harness).await,
+            "/endplan" => {
+                if let Err(error) = harness.exit_plan_mode().await {
+                    eprintln!("fs-agent: {error}");
+                }
+            }
+            other if other.starts_with('/') => {
+                eprintln!("fs-agent: unknown command {other} (try /undo, /plan, /endplan, /quit)")
+            }
+            _ => {
+                if let Err(error) = run_one_turn(harness, events, &line).await {
+                    eprintln!("fs-agent: {error}");
+                }
+            }
+        }
+    }
+}
+
+/// Run one turn while still watching for the cancel gesture.
+///
+/// The turn owns the session, so the loop cannot read the keyboard itself; it
+/// selects on the console's unsolicited events instead. A second press while a
+/// cancellation is already raised forces the process down (spec §6) — the
+/// session never needs to know how it died, because `--continue` closes whatever
+/// the process left open.
+async fn run_one_turn(
+    harness: &mut Harness,
+    events: &mut ConsoleEvents,
+    input: &str,
+) -> Result<(), crate::Error> {
+    let signal = harness.cancel_signal();
+    let mut turn = Box::pin(harness.run_turn(input));
+    loop {
+        tokio::select! {
+            result = &mut turn => return result.map(|_| ()),
+            event = events.recv() => match event {
+                Some(FrontEndEvent::Cancel) => {
+                    if signal.is_cancelled() {
+                        std::process::exit(130);
+                    }
+                    signal.cancel();
+                }
+                // End of input or an explicit quit lets the turn wind down the
+                // same way a cancel does, so the stream still gets its ending.
+                Some(FrontEndEvent::Quit) | None => signal.cancel(),
+                Some(FrontEndEvent::TogglePlan) => {}
+            },
+        }
+    }
+}
+
+/// Enter plan mode, reporting any failure on stderr.
+async fn enter_plan(harness: &mut Harness) {
+    if let Err(error) = harness.enter_plan_mode().await {
+        eprintln!("fs-agent: {error}");
+    }
+}
+
+/// Shift+Tab: enter plan mode, or leave it if it is already on (spec §13).
+async fn toggle_plan(harness: &mut Harness) {
+    if harness.mode() == Mode::Plan {
+        if let Err(error) = harness.exit_plan_mode().await {
+            eprintln!("fs-agent: {error}");
+        }
+    } else {
+        enter_plan(harness).await;
     }
 }
 
@@ -315,12 +633,12 @@ async fn probe_model(
         provider: Box::new(provider),
         speaker: SpeakerId::Debater(profile.name.clone().into()),
         config: session_config,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             // The probe prints its own report on stdout; the renderer narrates
             // to stderr only.
             stdout_result: Box::new(std::io::sink()),
             stderr_diagnostic: Box::new(std::io::stderr()),
-        },
+        }),
     })
     .await
     .map_err(ProbeError::failed)?;
@@ -1232,20 +1550,38 @@ fn print_sessions_help(out: &mut dyn Write) {
 fn print_help() {
     println!(
         "fs-agent {}\n\n  \
-         usage: fs-agent [--help] [--version]\n         \
+         usage: fs-agent [--plain|--tui] [--continue] [--config PATH] [--model ID] [--cwd PATH]\n         \
          fs-agent probe [--config PATH] [--model ID]...\n         \
          fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n         \
          fs-agent sessions <ls|show|replay|stats> [options]\n\n  \
-         The interactive renderers are not wired into this build yet. \
-         `probe` drives one real turn against each configured model and a second \
-         turn in the same session, then prints the normalized usage so you can \
-         see prefix caching hit. `prune` removes this workspace's session \
-         directories, keeping the newest N (default 1). `sessions` answers \
-         questions about a finished session from its own event stream \
-         (ls / show / replay / stats; see `fs-agent sessions --help`). \
-         Configuration lives in \
+         With no subcommand, `fs-agent` starts an interactive session in the \
+         current workspace: it renders with the TUI on a terminal and with the \
+         plain transcript otherwise (--plain / --tui force one). `--continue` \
+         resumes this workspace's newest session. `probe` drives one real turn \
+         against each configured model and a second turn in the same session, \
+         then prints the normalized usage so you can see prefix caching hit. \
+         `prune` removes this workspace's session directories, keeping the \
+         newest N (default 1). `sessions` answers questions about a finished \
+         session from its own event stream (ls / show / replay / stats; see \
+         `fs-agent sessions --help`). Configuration lives in \
          ~/.config/fs-agent/config.toml (XDG aware); a project .env is never loaded.",
         env!("CARGO_PKG_VERSION")
+    );
+}
+
+fn print_interactive_help() {
+    println!(
+        "fs-agent [options]\n\n  \
+         Starts an interactive session in the current workspace. Commands: \
+         /undo rolls back the last edit, /plan and /endplan control the hard plan \
+         mode, /quit leaves. Esc cancels the running turn in the TUI; Shift+Tab \
+         toggles plan mode.\n\n  \
+         --plain            the plain transcript (no raw mode)\n  \
+         --tui              the terminal interface (inline viewport)\n  \
+         --continue, -c     resume this workspace's newest session\n  \
+         --config PATH      configuration file to load\n  \
+         --model ID         the model to run (default: config default_model)\n  \
+         --cwd PATH         the workspace (default: the current directory)"
     );
 }
 

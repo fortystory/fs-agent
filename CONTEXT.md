@@ -104,6 +104,20 @@ _Avoid_: iteration、pass
 单个 agent 的一次完整回合：投影 → 调 provider → 权限门 → 执行工具 → 追加事件。
 _Avoid_: step、call
 
+## 渲染
+
+**渲染器（Renderer）**:
+启动时选定的**唯一**渲染实现（headless / plain / TUI 三选一、互斥），消费组装期创建的同一条广播通道。三模式共享同一条事件序列，plain 与 TUI 共用 `Transcript` 的 `Block` 呈现层，只有绘制方式不同。
+_Avoid_: 显示层、UI 组件、renderer 实现类
+
+**转录（Transcript）**:
+把事件流（含旁路的增量文本）转成展示单元 `Block` 的共享层：工具调用、结果与后置 hook 反馈归成一个块，增量文本原样透传。**不是** `project()`——那个产出的是给模型的 `messages`。
+_Avoid_: 日志、输出、render
+
+**终端端口（Console）**:
+前端与循环之间的键盘接缝：循环按需请求一行或一个问题，前端（TUI 或 plain 的行读取）回答；取消 / 计划手势经 `ConsoleEvents` 主动上行。权限门走同一条通道（`ConsoleAsker`），因为两者都来自同一个键盘。
+_Avoid_: stdin、输入流、prompt
+
 ## 安全
 
 **打码（Redactor）**:

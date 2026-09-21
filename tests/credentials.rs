@@ -22,7 +22,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::tools::{builtin, PathLocks};
 use fs_agent::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionParts, Harness,
@@ -67,10 +67,10 @@ async fn fixture_with(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: workspace.clone(),
             log_path: log_path.clone(),
@@ -546,10 +546,10 @@ async fn a_discussion_refuses_a_roster_whose_redactors_disagree() {
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
         },
         max_rounds: Some(2),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
-        },
+        }),
     })
     .await;
 

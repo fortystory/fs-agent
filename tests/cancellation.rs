@@ -21,7 +21,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent, ToolSpec};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::tools::{Effect, Registry, Tool, ToolContext, ToolError, ToolOutput};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
@@ -60,10 +60,10 @@ async fn fixture_with_tools(
         provider: Box::new(provider.clone()),
         speaker: kimi(),
         config,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
             log_path: log_path.clone(),
@@ -447,10 +447,10 @@ async fn discussion_fixture(
             provider: Box::new(synthesizer_provider.clone()),
         },
         max_rounds: Some(2),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
-        },
+        }),
     })
     .await
     .unwrap();
@@ -773,10 +773,10 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
         provider: Box::new(FakeProvider::new(vec![Reply::text("resumed")])),
         speaker: kimi(),
         config: SessionConfig::new("fake-model"),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd,
             log_path: log_path.clone(),

@@ -26,7 +26,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -407,10 +407,10 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path, config: SessionConfig) -
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
         config,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: workspace.to_path_buf(),
             log_path: log_path.clone(),

@@ -52,7 +52,7 @@ use crate::events::{ContextSource, Event, EventLog, EventPayload, SessionId, Spe
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, PlanConflict, Policy};
 use crate::provider::Provider;
-use crate::render::{RenderHandle, RenderSinks};
+use crate::render::{RenderHandle, Renderer};
 use crate::session::{Session, SessionParts};
 use crate::tools::{PathLocks, Registry};
 
@@ -99,8 +99,9 @@ pub struct AssemblyParts {
     pub speaker: SpeakerId,
     /// This agent's model and budget values.
     pub config: SessionConfig,
-    /// The headless renderer's two explicit sinks.
-    pub sinks: RenderSinks,
+    /// The renderer, chosen at startup. Exactly one of the three modes runs, and
+    /// the assembly creates the one channel it consumes (spec §19).
+    pub renderer: Renderer,
 }
 
 /// One debater in a discussion: who speaks, and what answers for them.
@@ -133,8 +134,9 @@ pub struct DiscussionParts {
     /// ([`discussion::DEFAULT_MAX_ROUNDS`]); `Some` is how a caller changes it,
     /// and zero is refused.
     pub max_rounds: Option<u32>,
-    /// The headless renderer's two explicit sinks.
-    pub sinks: RenderSinks,
+    /// The renderer, chosen at startup. Exactly one of the three modes runs, and
+    /// the assembly creates the one channel it consumes (spec §19).
+    pub renderer: Renderer,
 }
 
 /// The assembled harness the caller drives.
@@ -196,7 +198,7 @@ struct OpenedSession {
 impl OpenedSession {
     /// The one-time work: create the log and its artifact directory, discover the
     /// skills, share the tool table and the policy, spawn the renderer.
-    fn open(scaffold: SessionScaffold, sinks: RenderSinks) -> Result<Self, Error> {
+    fn open(scaffold: SessionScaffold, renderer: Renderer) -> Result<Self, Error> {
         let SessionScaffold {
             cwd,
             log_path,
@@ -216,7 +218,11 @@ impl OpenedSession {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("outputs");
-        let (render, render_task) = render::spawn_headless(sinks);
+        // The channel is created here and its consumer end is injected into the
+        // one selected renderer: one renderer per process, never concurrent
+        // subscribers (spec §19).
+        let (render, receiver) = render::channel();
+        let render_task = renderer.spawn(receiver);
         // Fresh or resumed is decided by the log's existence, which is the
         // caller's decision: it hands over a path it just allocated under a new
         // session id, or one an earlier run left behind. That keeps the library
@@ -339,10 +345,10 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         provider,
         speaker,
         config,
-        sinks,
+        renderer,
     } = parts;
 
-    let opened = OpenedSession::open(scaffold, sinks)?;
+    let opened = OpenedSession::open(scaffold, renderer)?;
     let mut session = opened.session(config, None);
     opened.start(&mut session)?;
 
@@ -369,7 +375,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         debaters,
         synthesizer,
         max_rounds,
-        sinks,
+        renderer,
     } = parts;
 
     if debaters.len() != discussion::DEBATERS {
@@ -440,7 +446,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         ));
     }
 
-    let opened = OpenedSession::open(scaffold, sinks)?;
+    let opened = OpenedSession::open(scaffold, renderer)?;
 
     let mut roster = Vec::with_capacity(debaters.len());
     for (index, debater) in debaters.into_iter().enumerate() {

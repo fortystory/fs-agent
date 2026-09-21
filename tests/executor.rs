@@ -18,7 +18,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Asker, Mode, Policy, Rule, Scope, Subject};
 use fs_agent::provider::{FinishReason, Message, ProviderError, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
@@ -101,10 +101,10 @@ async fn fixture_with(
         provider: Box::new(provider.clone()),
         speaker: kimi(),
         config,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
             log_path: log_path.clone(),

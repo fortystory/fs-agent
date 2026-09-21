@@ -27,6 +27,15 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net",
 # The `bash` tool's process-tree kill: `Command::process_group(0)` puts the
 # shell in its own group, and only `killpg` terminates that whole group.
 libc = "0.2"
+# The interactive renderer (spec §19): ratatui over the crossterm backend, with
+# the inline viewport (no alternate screen, so the transcript stays scrollable).
+# `event-stream` is what gives crossterm an async keyboard source for `select!`.
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+# Syntax highlighting for tool output (spec §19). The Rust grammar is already a
+# dependency, so this reuses that tree; the closure has no C build step
+# (syntect's Oniguruma path is deliberately not taken).
+tree-sitter-highlight = "0.27"
 toml = "0.8"
 # Read-side symbol extraction only: the official Rust `tags.scm` is run through
 # tree-sitter to produce `(file, name, kind)`. The grammar compiles a C parser,

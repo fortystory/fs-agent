@@ -17,7 +17,7 @@ use fs_agent::events::{Event, ParticipantId, SessionId, SpeakerId};
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::capability::caps_for;
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
     Harness, SessionScaffold, SynthesizerParts,
@@ -96,10 +96,10 @@ async fn discussion(
             provider: Box::new(synthesizer_provider.clone()),
         },
         max_rounds: None,
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout),
             stderr_diagnostic: Box::new(stderr),
-        },
+        }),
     })
     .await
     .unwrap();
@@ -239,10 +239,10 @@ async fn solo(replies: Vec<Reply>) -> SoloFixture {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("solo".into()),
         config: SessionConfig::new("fake-model"),
-        sinks: RenderSinks {
+        renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(stdout),
             stderr_diagnostic: Box::new(stderr),
-        },
+        }),
         scaffold: SessionScaffold {
             cwd: workspace,
             log_path: session.join("log.jsonl"),

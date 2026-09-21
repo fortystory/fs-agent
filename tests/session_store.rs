@@ -18,7 +18,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::RenderSinks;
+use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::session::{SessionStore, StoredSession};
 use fs_agent::tools::{self, PathLocks};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
@@ -67,10 +67,10 @@ impl Env {
             provider: Box::new(provider),
             speaker: SpeakerId::Debater("kimi".into()),
             config: SessionConfig::new("fake-model"),
-            sinks: RenderSinks {
+            renderer: Renderer::headless(RenderSinks {
                 stdout_result: Box::new(self.stdout.clone()),
                 stderr_diagnostic: Box::new(self.stderr.clone()),
-            },
+            }),
             scaffold: SessionScaffold {
                 cwd: self.cwd.clone(),
                 log_path: stored.log_path.clone(),
