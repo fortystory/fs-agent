@@ -281,6 +281,85 @@ async fn completed_and_aborted_do_not_render_the_same() {
 }
 
 #[tokio::test]
+async fn a_permission_decision_between_start_and_result_does_not_split_the_call() {
+    // The loop records a `PermissionDecided` for **every** call, asked or not,
+    // and a pre-hook `HookExecuted` also fires between `ToolCallStarted` and the
+    // result. Neither may close the open block, or every live tool call would
+    // render as a resultless call plus a synthetic `?`.
+    let id = ToolCallId::new("call-4");
+    let events = [
+        Event::new(
+            1,
+            kimi(),
+            EventPayload::ToolCallStarted {
+                tool_call_id: id.clone(),
+                tool_name: "write_file".to_owned(),
+                args: serde_json::json!({"path": "a.txt"}),
+            },
+        ),
+        Event::new(
+            2,
+            kimi(),
+            EventPayload::HookExecuted {
+                point: hook_format::POINT_PRE.to_owned(),
+                command: "check".to_owned(),
+                outcome: hook_format::OUTCOME_CONTINUE.to_owned(),
+            },
+        ),
+        Event::new(
+            3,
+            kimi(),
+            EventPayload::PermissionAsked {
+                request_id: "r-1".to_owned(),
+                tool_call_id: id.clone(),
+                request: serde_json::json!({}),
+            },
+        ),
+        Event::new(
+            4,
+            kimi(),
+            EventPayload::PermissionDecided {
+                request_id: "r-1".to_owned(),
+                decision: fs_agent::events::Decision::Allow,
+                source: fs_agent::events::DecisionSource::Policy,
+                reason: Some("mode auto".to_owned()),
+            },
+        ),
+        Event::new(
+            5,
+            kimi(),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: id,
+                ok: true,
+                output: Some("wrote a.txt".to_owned()),
+                error: None,
+                duration_ms: 2,
+            },
+        ),
+        Event::new(
+            6,
+            kimi(),
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+        ),
+    ];
+    let (_stdout, stderr) = run(&events, false).await;
+    let text = stderr.text();
+    assert!(
+        text.contains("[kimi] → write_file(path=a.txt)"),
+        "the call keeps its arguments: {text:?}"
+    );
+    assert!(text.contains("  wrote a.txt"), "and its result: {text:?}");
+    assert!(
+        !text.contains("→ ?("),
+        "the completion must not become a second, anonymous block: {text:?}"
+    );
+    // The decision is still narrated, just not as a block boundary.
+    assert!(text.contains("permission allow"), "{text:?}");
+}
+
+#[tokio::test]
 async fn a_call_with_no_result_still_appears_when_the_stream_ends() {
     // A cancel leaves a `ToolCallStarted` with no result; the block is flushed at
     // end of stream rather than dropped (spec §19).

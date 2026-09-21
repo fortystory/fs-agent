@@ -53,7 +53,7 @@ impl CommandOutcome {
     /// Truncation happens later, in the loop's one pre-stream pipeline (spec
     /// §10), so an oversized body spills and the stream keeps a preview plus a
     /// pointer without any tool knowing about it.
-    pub fn render(&self) -> String {
+    pub fn report(&self) -> String {
         let mut text = String::new();
         if self.timed_out {
             text.push_str(&format!(

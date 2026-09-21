@@ -1006,14 +1006,14 @@ async fn a_discussion_puts_only_the_synthesis_on_stdout() {
 
 #[tokio::test]
 async fn the_four_round_reasons_render_distinguishably() {
-    use fs_agent::render::spawn_headless;
-
     let stdout = CaptureBuf::default();
     let stderr = CaptureBuf::default();
-    let (render, task) = spawn_headless(RenderSinks {
+    let (render, receiver) = fs_agent::render::channel();
+    let task = Renderer::headless(RenderSinks {
         stdout_result: Box::new(stdout.clone()),
         stderr_diagnostic: Box::new(stderr.clone()),
-    });
+    })
+    .spawn(receiver);
 
     let dir = tempfile::tempdir().unwrap();
     let mut log = EventLog::create(dir.path().join("log.jsonl")).unwrap();

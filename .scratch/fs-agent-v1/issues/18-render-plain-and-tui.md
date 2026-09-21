@@ -31,3 +31,5 @@ Status: done
 - **测试**：新增 `tests/render_plain.rs`（8）、`render_console.rs`（7）、`render_tui.rs`（12）、`render_highlight.rs`（8）；第 01 票的 headless stdout 回归断言未改、仍绿。文档 `docs/render.md` + `CONTEXT.md` 词条（渲染器 / 转录 / 终端端口）。
 
 **未做**：交互式默认仍是单 agent 会话（渲染器本身对讨论事件完全支持，测试直接喂讨论事件流断言）；讨论入口（两个讨论者的 CLI 名册）不在本票清单内。
+
+**两轴 review 后追加（2026-09-22）。** 抓到一个真缺陷：循环对**每次**调用都记一条 `PermissionDecided`（问了没问都记），`hook.pre` 也在 `ToolCallStarted` 之后，所以「遇到下一个无关事件才关块」的判据把每次工具调用劈成两块（一条无结果 + 一条匿名 `?`）。修法：把 `ToolCallCompleted` / `PermissionAsked` / `PermissionDecided` / `HookExecuted` 都算作「调用区间内」——照常叙述，但不关块；并补了一条喂**真实事件序**（start → pre-hook → asked → decided → completed → post-hook）的回归测试。其余为标准项：`parameter_placeholder` 收敛到 config 一处实现、`Severity::ansi` 去掉恒真的 `color` 参数、删掉无人调用的 `spawn_headless` / `Severity::label` / `CustomTool::declaration()` / `ConsoleHandle::ask`、`CommandOutcome::render` → `report`（避开「渲染」这个保留词）、`highlight` 去掉 `expect`、plain 与 TUI 共用 decision/source/usage 文案以避免 Repeated Switches。

@@ -194,12 +194,23 @@ impl Transcript {
             }
         }
 
-        // A completion belongs to the block its start opened, so it must not
-        // close it. Everything else closes a pending block first — which is also
-        // how a post-hook, arriving before that unrelated event, gets merged in.
-        let mut blocks = match &event.payload {
-            EventPayload::ToolCallCompleted { .. } => Vec::new(),
-            _ => self.flush(),
+        // These events belong to the interval between a call's start and its
+        // result: they are narrated, but they must not close the open block.
+        // `PermissionAsked`/`PermissionDecided` are the load-bearing case — the
+        // loop records a decision for **every** call, asked or not — and the
+        // pre-hook fires after `ToolCallStarted` too, so treating any of them as
+        // "unrelated" would split every tool call in two.
+        let inside_a_call = matches!(
+            &event.payload,
+            EventPayload::ToolCallCompleted { .. }
+                | EventPayload::PermissionAsked { .. }
+                | EventPayload::PermissionDecided { .. }
+                | EventPayload::HookExecuted { .. }
+        );
+        let mut blocks = if inside_a_call {
+            Vec::new()
+        } else {
+            self.flush()
         };
         match event.payload {
             EventPayload::ToolCallStarted {
@@ -356,6 +367,26 @@ impl Transcript {
 /// renderer, and deliberately not the model-side projection prefix (spec §5).
 pub fn speaker_label(speaker: &SpeakerId) -> String {
     format!("[{speaker}]")
+}
+
+/// The human label for a permission decision's source.
+///
+/// Shared rather than spelled out in each painter, because the plain and TUI
+/// renderers must agree on what a decision says.
+pub fn decision_source_label(source: DecisionSource) -> &'static str {
+    match source {
+        DecisionSource::User => "user",
+        DecisionSource::Hook => "hook",
+        DecisionSource::Policy => "policy",
+    }
+}
+
+/// The one-line usage summary both human renderers print.
+pub fn usage_summary(usage: &Usage) -> String {
+    format!(
+        "usage in={} out={} cached={} miss={}",
+        usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.miss_tokens
+    )
 }
 
 /// A one-line summary of a tool call's arguments.

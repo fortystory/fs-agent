@@ -35,10 +35,6 @@ pub const BASH_TOOL: &str = "bash";
 const SHELL: &str = "bash";
 const SHELL_FLAG: &str = "-lc";
 
-/// The result's section markers, re-exported so their one home is the shared
-/// runner but callers keep the `tools::bash::…` path.
-pub use super::process::{EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
-
 /// Run one command through the system shell.
 pub struct BashTool;
 
@@ -101,7 +97,7 @@ impl Tool for BashTool {
         }
         let limit = ctx.bash.timeout(requested);
         let outcome = process::run(ctx.cwd, &argv, limit).await?;
-        Ok(ToolOutput::new(outcome.render()))
+        Ok(ToolOutput::new(outcome.report()))
     }
 }
 

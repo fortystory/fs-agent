@@ -46,23 +46,10 @@ impl Severity {
         }
     }
 
-    /// A short, stable label, for a status line.
-    pub fn label(self) -> &'static str {
-        match self {
-            Severity::Good => "ok",
-            Severity::Note => "note",
-            Severity::Warn => "warn",
-            Severity::Bad => "error",
-        }
-    }
-
-    /// The ANSI SGR prefix for this severity, or an empty string when color is
-    /// off. `Good` is the terminal's default foreground; every other level is
-    /// colored so the four never collapse into each other.
-    pub fn ansi(self, color: bool) -> &'static str {
-        if !color {
-            return "";
-        }
+    /// The ANSI SGR prefix for this severity. `Good` is the terminal's default
+    /// foreground; every other level is colored so the four never collapse into
+    /// each other. Callers decide whether to paint at all.
+    pub fn ansi(self) -> &'static str {
         match self {
             Severity::Good => "\x1b[32m",
             Severity::Note => "\x1b[36m",
@@ -72,11 +59,5 @@ impl Severity {
     }
 
     /// The ANSI reset that closes [`Severity::ansi`].
-    pub fn ansi_reset(color: bool) -> &'static str {
-        if color {
-            "\x1b[0m"
-        } else {
-            ""
-        }
-    }
+    pub const ANSI_RESET: &'static str = "\x1b[0m";
 }

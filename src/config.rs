@@ -582,7 +582,7 @@ fn resolve_tool(
 
     // The program is the one element that cannot be a placeholder: a call with
     // no argument would otherwise have nothing to execute.
-    if placeholder(&raw.command[0]).is_some() {
+    if parameter_placeholder(&raw.command[0]).is_some() {
         return Err(ConfigError::InvalidTool {
             tool: custom_tool_name(namespace, tool),
             reason: "the first `command` element is the program and must be a literal, not a \
@@ -596,7 +596,7 @@ fn resolve_tool(
         .get("properties")
         .and_then(serde_json::Value::as_object);
     for element in &raw.command {
-        let Some(name) = placeholder(element) else {
+        let Some(name) = parameter_placeholder(element) else {
             continue;
         };
         let declared = properties.is_some_and(|properties| properties.contains_key(name));
@@ -631,7 +631,12 @@ fn resolve_tool(
 /// Substitution is by **whole argv element** (spec §14): `--path={p}` is not a
 /// placeholder, because the replacement unit is one element and a partial splice
 /// is how argv shapes drift.
-fn placeholder(element: &str) -> Option<&str> {
+///
+/// Crate-visible because the tool that substitutes argv
+/// ([`crate::tools::CustomTool`]) must parse an element exactly the way the
+/// validator did, or a declaration could validate and then substitute
+/// differently.
+pub(crate) fn parameter_placeholder(element: &str) -> Option<&str> {
     let inner = element.strip_prefix('{')?.strip_suffix('}')?;
     if inner.is_empty() || inner.contains(['{', '}', ' ']) {
         return None;

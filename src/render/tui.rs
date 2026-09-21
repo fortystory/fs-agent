@@ -28,12 +28,15 @@ use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{TerminalOptions, Viewport};
 use tokio::sync::broadcast;
 
-use crate::events::{Decision, Role, StopReason};
+use crate::events::{Role, StopReason};
 
 use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
 use super::severity::Severity;
-use super::transcript::{speaker_label, summarize_args, truncate, Block, ToolBlock, Transcript};
+use super::transcript::{
+    decision_source_label, speaker_label, summarize_args, truncate, usage_summary, Block,
+    ToolBlock, Transcript,
+};
 use super::{Render, RenderEvent};
 
 /// How many rows the live region occupies: the streaming tail, the input line and
@@ -544,16 +547,8 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             source,
             reason,
         } => {
-            let source = match source {
-                crate::events::DecisionSource::User => "user",
-                crate::events::DecisionSource::Hook => "hook",
-                crate::events::DecisionSource::Policy => "policy",
-            };
-            let decision = match decision {
-                Decision::Allow => "allow",
-                Decision::Ask => "ask",
-                Decision::Deny => "deny",
-            };
+            let source = decision_source_label(*source);
+            let decision = decision.as_str();
             let suffix = reason
                 .as_deref()
                 .map(|reason| format!(": {reason}"))
@@ -587,14 +582,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             format!("[executor {executor_id}] finished: {reason} — {summary}"),
         )],
         Block::Usage { speaker, usage } => vec![Line::from(Span::styled(
-            format!(
-                "{} usage in={} out={} cached={} miss={}",
-                speaker_label(speaker),
-                usage.input_tokens,
-                usage.output_tokens,
-                usage.cached_tokens,
-                usage.miss_tokens
-            ),
+            format!("{} {}", speaker_label(speaker), usage_summary(usage)),
             Style::default().fg(ratatui::style::Color::DarkGray),
         ))],
         Block::AgentError { speaker, message } => vec![severity_line(

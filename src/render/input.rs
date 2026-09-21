@@ -103,22 +103,6 @@ impl ConsoleHandle {
         self.requests.send(ConsoleRequest::Prompt { reply }).ok()?;
         answer.await.ok().flatten()
     }
-
-    /// Put a question to the user.
-    pub async fn ask(&self, question: Question) -> AnswerChoice {
-        let (reply, answer) = oneshot::channel();
-        if self
-            .requests
-            .send(ConsoleRequest::Ask(AskRequest { question, reply }))
-            .is_err()
-        {
-            // No front end left to ask: answer the non-acting way.
-            return AnswerChoice::Permission(Answer::Deny);
-        }
-        answer
-            .await
-            .unwrap_or(AnswerChoice::Permission(Answer::Deny))
-    }
 }
 
 /// The gestures the front end pushes on its own schedule.

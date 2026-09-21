@@ -24,16 +24,14 @@ pub mod skill;
 pub mod task;
 pub mod tool;
 
-pub use bash::{
-    BashTool, BASH_TOOL, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX,
-};
+pub use bash::{BashTool, BASH_TOOL};
 pub use custom::{is_custom_tool, CustomTool};
 pub use file::{
     before_artifact, EditCall, EditFile, ReadFile, WriteFile, EDIT_FILE, MATCH_LEVEL_PREFIX,
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
 };
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
-pub use process::CommandOutcome;
+pub use process::{CommandOutcome, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
 pub use registry::{
     AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry,
     READ_BEFORE_WRITE_PREFIX,

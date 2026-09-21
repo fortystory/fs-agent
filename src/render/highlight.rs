@@ -247,13 +247,12 @@ fn try_highlight(source: &str) -> Option<Vec<Vec<Span>>> {
                         lines.push(Vec::new());
                     }
                     if !part.is_empty() {
-                        lines
-                            .last_mut()
-                            .expect("a line was just ensured")
-                            .push(Span {
+                        if let Some(line) = lines.last_mut() {
+                            line.push(Span {
                                 text: part.to_owned(),
                                 class,
                             });
+                        }
                     }
                 }
             }

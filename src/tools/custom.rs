@@ -21,7 +21,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::config::{ToolDeclaration, CUSTOM_TOOL_SEPARATOR};
+use crate::config::{parameter_placeholder, ToolDeclaration, CUSTOM_TOOL_SEPARATOR};
 use crate::provider::ToolSpec;
 
 use super::process;
@@ -43,10 +43,6 @@ impl CustomTool {
         Self { declaration }
     }
 
-    pub fn declaration(&self) -> &ToolDeclaration {
-        &self.declaration
-    }
-
     /// The argv for one call: each `{parameter}` element is replaced by the
     /// argument, and omitted when the argument is absent.
     ///
@@ -56,7 +52,7 @@ impl CustomTool {
     pub fn argv(&self, args: &Value) -> Vec<String> {
         let mut argv = Vec::with_capacity(self.declaration.command.len());
         for element in &self.declaration.command {
-            let Some(name) = placeholder(element) else {
+            let Some(name) = parameter_placeholder(element) else {
                 // A literal element is used as written.
                 argv.push(element.clone());
                 continue;
@@ -105,7 +101,7 @@ impl Tool for CustomTool {
         }
         let limit = Duration::from_millis(self.declaration.timeout_ms);
         let outcome = process::run(ctx.cwd, &argv, limit).await?;
-        Ok(ToolOutput::new(outcome.render()))
+        Ok(ToolOutput::new(outcome.report()))
     }
 }
 
@@ -119,13 +115,4 @@ fn render_argument(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     }
-}
-
-/// The parameter name a whole-element `{name}` placeholder stands for.
-fn placeholder(element: &str) -> Option<&str> {
-    let inner = element.strip_prefix('{')?.strip_suffix('}')?;
-    if inner.is_empty() || inner.contains(['{', '}', ' ']) {
-        return None;
-    }
-    Some(inner)
 }

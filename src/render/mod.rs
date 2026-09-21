@@ -188,14 +188,3 @@ pub fn channel() -> (RenderHandle, broadcast::Receiver<RenderEvent>) {
     let (sender, receiver) = broadcast::channel(RENDER_CHANNEL_CAPACITY);
     (RenderHandle { sender }, receiver)
 }
-
-/// Spawn the headless renderer on a channel of its own.
-///
-/// The assembly path creates the channel itself and injects the consumer end, so
-/// this exists for a caller that drives a renderer directly (a test feeding a
-/// hand-built event stream). The returned handle is the send side.
-pub fn spawn_headless(sinks: RenderSinks) -> (RenderHandle, JoinHandle<()>) {
-    let (handle, receiver) = channel();
-    let task = Renderer::headless(sinks).spawn(receiver);
-    (handle, task)
-}

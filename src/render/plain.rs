@@ -19,7 +19,10 @@ use tokio::sync::broadcast;
 use crate::events::{Role, SpeakerId};
 
 use super::severity::Severity;
-use super::transcript::{speaker_label, summarize_args, truncate, Block, ToolBlock, Transcript};
+use super::transcript::{
+    decision_source_label, speaker_label, summarize_args, truncate, usage_summary, Block,
+    ToolBlock, Transcript,
+};
 use super::{DeltaKind, Render, RenderEvent, RenderSinks};
 
 /// How much of one tool result the plain transcript shows before eliding.
@@ -126,11 +129,7 @@ impl Plain {
                 source,
                 reason,
             } => {
-                let source = match source {
-                    crate::events::DecisionSource::User => "user",
-                    crate::events::DecisionSource::Hook => "hook",
-                    crate::events::DecisionSource::Policy => "policy",
-                };
+                let source = decision_source_label(source);
                 let suffix = reason
                     .as_deref()
                     .map(|reason| format!(": {reason}"))
@@ -170,12 +169,9 @@ impl Plain {
             }
             Block::Usage { speaker, usage } => {
                 self.line(&format!(
-                    "{} usage in={} out={} cached={} miss={}",
+                    "{} {}",
                     speaker_label(&speaker),
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cached_tokens,
-                    usage.miss_tokens
+                    usage_summary(&usage)
                 ));
             }
             Block::AgentError { speaker, message } => {
@@ -343,12 +339,7 @@ impl Plain {
         if !self.color {
             return text.to_owned();
         }
-        format!(
-            "{}{}{}",
-            severity.ansi(true),
-            text,
-            Severity::ansi_reset(true)
-        )
+        format!("{}{}{}", severity.ansi(), text, Severity::ANSI_RESET)
     }
 
     fn paint_reasoning(&self, text: &str) -> String {
