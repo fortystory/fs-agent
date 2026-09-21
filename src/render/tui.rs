@@ -69,10 +69,6 @@ const TICK: Duration = Duration::from_millis(120);
 /// A paste larger than this asks before it is taken (spec §7).
 const PASTE_CONFIRM_CHARS: usize = 100_000;
 
-/// The widest the question overlay ever gets. Wider than this and the eye has to
-/// travel: a permission question is one sentence, not a page (spec §9).
-const MODAL_MAX_WIDTH: u16 = 72;
-
 /// How many queued render events one frame absorbs. A bounded drain keeps a
 /// firehose from starving the keyboard for a whole frame's worth of work.
 const DRAIN_LIMIT: usize = 4_096;
@@ -388,8 +384,9 @@ enum Pending {
 }
 
 impl Pending {
-    /// The line the question puts in place of the input (spec §7; the modal
-    /// overlay in ticket 14 draws the same text).
+    /// The line the overlay shows for this question: the question and the keys that
+    /// answer it. It goes over the transcript, so the draft stays where the user left
+    /// it (spec §7, §9).
     fn prompt(&self) -> String {
         match self {
             Pending::Loop {
@@ -575,6 +572,13 @@ impl TuiState {
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
             ConsoleRequest::Ask(ask) => {
+                if self.pending.is_some() {
+                    // The loop asks one question at a time and waits for the answer, so
+                    // this cannot happen. If it ever did, dropping the *new* question
+                    // keeps the one on screen answerable; dropping its sender denies it,
+                    // which is the safe reading of an orphaned ask.
+                    return;
+                }
                 self.pending = Some(Pending::Loop {
                     question: ask.question,
                     reply: ask.reply,
@@ -618,18 +622,19 @@ impl TuiState {
                 }
                 return;
             }
-            Key::BackTab => {
-                self.events.push(FrontEndEvent::TogglePlan);
-                return;
-            }
             _ => {}
         }
         if self.pending.is_some() {
-            // A question is answered by its own keys; anything else (an arrow,
-            // a stray Ctrl chord) must not silently pick the non-acting answer.
+            // A question owns the keyboard: its own keys answer it, `Ctrl-C` and `Esc`
+            // above are the ways out, and nothing else gets through — not a stray
+            // character, not the plan-mode gesture (spec §9).
             if matches!(key, Key::Char(_) | Key::Enter) {
                 self.answer_key(key);
             }
+            return;
+        }
+        if key == Key::BackTab {
+            self.events.push(FrontEndEvent::TogglePlan);
             return;
         }
         match key {
@@ -760,29 +765,25 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
 /// carries the `PermissionAsked` block for anyone reading back. It owns the pointer
 /// while it is up, so the "back to bottom" rectangle is dropped.
 fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    let Some(pending) = state.pending.as_ref() else {
+    let Some(question) = state.pending.as_ref().map(|pending| pending.prompt()) else {
         return;
     };
-    let width = panes.middle.width.saturating_sub(4).min(MODAL_MAX_WIDTH);
-    let inner = width.saturating_sub(2) as usize;
+    // From here on a question is up, and the overlay covers the indicator: a click
+    // where it used to be must not act, even if the overlay itself turns out to have
+    // no room to be drawn.
+    state.indicator = None;
+    let inner = panes.modal_width().saturating_sub(2) as usize;
     if inner == 0 {
         return;
     }
-    // A long question wraps onto another line rather than losing its keys; the
-    // overlay still leaves the middle block's own borders showing.
-    let mut lines = pane::wrap_text(pending.prompt().trim(), inner);
+    // A long question wraps onto another line rather than losing its keys; the overlay
+    // still leaves the middle block's own borders showing.
+    let mut lines = pane::wrap_text(question.trim(), inner);
     let room = panes.middle.height.saturating_sub(2).max(1) as usize;
     lines.truncate(room);
-    let height = lines.len() as u16 + 2;
-    if height > panes.middle.height {
+    let Some(area) = panes.modal(lines.len() as u16) else {
         return;
-    }
-    let area = Rect::new(
-        panes.middle.x + (panes.middle.width - width) / 2,
-        panes.middle.y + (panes.middle.height - height) / 2,
-        width,
-        height,
-    );
+    };
     frame.render_widget(Clear, area);
     frame.render_widget(
         WidgetBlock::default()
@@ -794,10 +795,8 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         Paragraph::new(lines)
             .style(Style::default().fg(Color::Yellow))
             .alignment(Alignment::Center),
-        Rect::new(area.x + 1, area.y + 1, width - 2, height - 2),
+        layout::inner(area),
     );
-    // The overlay covers the indicator, so a click where it used to be must not act.
-    state.indicator = None;
 }
 
 /// Everything a terminal below the minimum gets: one centred sentence saying so,

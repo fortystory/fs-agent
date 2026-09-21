@@ -31,20 +31,25 @@ fn screen(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     (0..height).map(|y| row_text(&frame, y, width)).collect()
 }
 
-/// One row of the buffer as text.
+/// One row's text between two columns, read from the frame.
 ///
 /// A wide grapheme covers the cell after it, and that cell holds a space in the
-/// backend's buffer; reading it verbatim would spell `终 端` for `终端`. Advancing
-/// by the symbol's display width is what makes the row read like the terminal.
-fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
+/// backend's buffer; reading it verbatim would spell `终 端` for `终端`. Advancing by
+/// the symbol's display width is what makes the text read like the terminal.
+fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
     let mut text = String::new();
-    let mut x = 0;
-    while x < width {
-        let symbol = buffer[(x, y)].symbol();
+    let mut x = from;
+    while x < to {
+        let symbol = frame[(x, y)].symbol();
         text.push_str(symbol);
         x += symbol.cell_width().max(1);
     }
     text
+}
+
+/// A whole row of the buffer, as text.
+fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
+    cells(buffer, y, 0, width)
 }
 
 /// The rendered frame itself, for assertions about a particular cell.
@@ -390,18 +395,6 @@ fn first_notice(rows: &[String]) -> Option<usize> {
         let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         digits.parse().ok()
     })
-}
-
-/// One row's text between two columns, read from the frame.
-fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
-    let mut text = String::new();
-    let mut x = from;
-    while x < to {
-        let symbol = frame[(x, y)].symbol();
-        text.push_str(symbol);
-        x += symbol.cell_width().max(1);
-    }
-    text
 }
 
 /// The first cell holding `needle`, as `(column, row)`.
@@ -839,16 +832,7 @@ fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let content = (seam + 1)..(width - 1);
     // `┬` sits on the middle block's top border, so the content starts below it.
     ((top + 1)..height)
-        .map(|y| {
-            let mut text = String::new();
-            let mut x = content.start;
-            while x < content.end {
-                let symbol = frame[(x, y)].symbol();
-                text.push_str(symbol);
-                x += symbol.cell_width().max(1);
-            }
-            text
-        })
+        .map(|y| cells(&frame, y, content.start, content.end))
         .take_while(|row| !row.trim().is_empty())
         // Padding is kept: whether a value is flush right or padded right is exactly
         // what these tests are about.
@@ -968,6 +952,14 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
         rows[modal + 1]
     );
 
+    // The plan-mode gesture waits: a question owns the keyboard until it is answered
+    // (spec §9).
+    state.key(fs_agent::render::Key::BackTab);
+    assert!(
+        state.take_events().is_empty(),
+        "Shift-Tab is not a way out of a question"
+    );
+
     // The box reaches across the seam: only its own two borders are left on the row,
     // because the shared seam that sits inside it was blanked with the panel behind.
     let row = modal as u16;
@@ -979,6 +971,16 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
     assert!(
         borders[0] < 89 && borders[1] > 89,
         "and the box reaches across the seam: {borders:?}"
+    );
+    // Centred in the middle block: the room above and below is the same, within the
+    // row the integer division leaves over.
+    let (_, middle_top) = find_cell(&frame, 120, 24, "┬").expect("the seam, up top");
+    let (_, middle_bottom) = find_cell(&frame, 120, 24, "┴").expect("the seam, at the foot");
+    let above = (row - 1) - (middle_top + 1);
+    let below = (middle_bottom - 1) - (row + 1);
+    assert!(
+        above.abs_diff(below) <= 1,
+        "centred: {above} rows above the box, {below} below"
     );
 }
 
@@ -1093,4 +1095,44 @@ fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
         "清空输入？[y] 清空 / [n] 保留",
         "the interior holds the question and nothing that was behind it"
     );
+}
+
+/// The rendered frame and where its cursor ended up, when it was shown at all.
+fn frame_and_cursor(width: u16, height: u16, state: &mut TuiState) -> (Buffer, Option<(u16, u16)>) {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
+    terminal
+        .draw(|frame| draw_frame(frame, state))
+        .expect("one frame");
+    let backend = terminal.backend();
+    let cursor = backend.cursor_visible().then(|| {
+        let position = backend.cursor_position();
+        (position.x, position.y)
+    });
+    (backend.buffer().clone(), cursor)
+}
+
+#[test]
+fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
+    use fs_agent::permissions::Answer;
+    use fs_agent::render::{AnswerChoice, Key};
+
+    let mut state = state();
+    for ch in "hi".chars() {
+        state.key(Key::Char(ch));
+    }
+    let (_, before) = frame_and_cursor(120, 24, &mut state);
+    let before = before.expect("the cursor sits in the draft");
+
+    let (ask, mut asked) = ask_permission();
+    state.request(ask);
+    let (_, during) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(during, None, "a question takes the keyboard, so no cursor");
+
+    state.key(Key::Char('y'));
+    assert_eq!(
+        asked.try_recv().unwrap(),
+        AnswerChoice::Permission(Answer::Allow)
+    );
+    let (_, after) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(after, Some(before), "and it comes back where it was");
 }

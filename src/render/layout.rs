@@ -92,6 +92,30 @@ impl Regions {
         )
     }
 
+    /// The width of the question overlay inside this middle block.
+    pub fn modal_width(&self) -> u16 {
+        self.middle
+            .width
+            .saturating_sub(MODAL_MARGIN)
+            .min(MODAL_MAX_WIDTH)
+    }
+
+    /// Where a question `rows` display rows tall goes: centred in the middle block, or
+    /// nowhere when it cannot be drawn legibly there.
+    pub fn modal(&self, rows: u16) -> Option<Rect> {
+        let width = self.modal_width();
+        let height = rows.saturating_add(BORDER_ROWS);
+        if width <= BORDER_ROWS || height > self.middle.height {
+            return None;
+        }
+        Some(Rect::new(
+            self.middle.x + (self.middle.width - width) / 2,
+            self.middle.y + (self.middle.height - height) / 2,
+            width,
+            height,
+        ))
+    }
+
     /// The scrollbar's column inside the transcript's content.
     pub fn scrollbar(&self) -> Rect {
         Rect::new(
@@ -185,12 +209,29 @@ pub fn plan(area: Rect, draft_rows: u16) -> Regions {
 /// The column the transcript always keeps for its scrollbar, drawn or not.
 const SCROLLBAR_COLUMN: u16 = 1;
 
+/// The widest the question overlay ever gets. Wider than this and the eye has to
+/// travel: a question is one sentence, not a page (spec §9).
+const MODAL_MAX_WIDTH: u16 = 72;
+
+/// The blank columns the overlay leaves on either side of the middle block.
+const MODAL_MARGIN: u16 = 4;
+
 /// The panel's outer width, the shared seam column included.
 fn panel_outer(width: u16) -> u16 {
     ((u32::from(width) * 26 / 100) as u16).clamp(25, 31)
 }
 
-/// The content rectangle of a block: inside a one-cell border.
+/// The content rectangle of a bordered area.
+pub fn inner(area: Rect) -> Rect {
+    Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(BORDER_ROWS),
+        area.height.saturating_sub(BORDER_ROWS),
+    )
+}
+
+/// The content rectangle of a block: inside a one-cell border, `rows` tall.
 fn inside(block: Rect, rows: u16) -> Rect {
     Rect::new(
         block.x + 1,

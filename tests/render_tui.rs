@@ -10,8 +10,8 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
-    pane, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, FrontEndEvent, Key,
-    Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
+    pane, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
+    Key, Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
 };
 use ratatui::buffer::CellWidth;
 use ratatui::style::{Color, Modifier};
@@ -647,5 +647,60 @@ fn submitting_trims_the_ends_and_keeps_the_lines_between_them() {
     assert_eq!(
         answer.try_recv().unwrap(),
         Some("第一行\n\n第二行".to_owned())
+    );
+}
+
+#[test]
+fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
+    // The keymap's order is the spec's: a turn in flight makes `Esc` the cancel
+    // gesture, and a pending question does not change that (spec §6). The question
+    // waits for one of its own keys — `Ctrl-C` is the other way out.
+    let mut state = new_state();
+    state.apply(RenderEvent::Delta {
+        speaker: kimi(),
+        kind: DeltaKind::Text,
+        text: "…".to_owned(),
+    });
+    let (tx, mut asked) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::Permission(PermissionRequest {
+            request_id: "r-1".to_owned(),
+            tool_call_id: "c-1".to_owned(),
+            tool_name: "write_file".to_owned(),
+            args: serde_json::json!({}),
+            reason: "mode ask".to_owned(),
+        }),
+        reply: tx,
+    }));
+
+    state.key(Key::Esc);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+    assert!(
+        asked.try_recv().is_err(),
+        "the question is still waiting for its own keys"
+    );
+}
+
+#[test]
+fn a_second_question_does_not_displace_the_one_on_screen() {
+    // The loop asks one question at a time and waits, so a second ask means something
+    // went wrong; keeping the question the user can see answerable is the safe reading.
+    let mut state = new_state();
+    let (first_tx, mut first) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::PlanConflict("PLAN.md".into()),
+        reply: first_tx,
+    }));
+    let (second_tx, mut second) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::PlanConflict("other.md".into()),
+        reply: second_tx,
+    }));
+    assert!(second.try_recv().is_err(), "the late question was dropped");
+
+    state.key(Key::Char('k'));
+    assert_eq!(
+        first.try_recv().unwrap(),
+        AnswerChoice::Plan(fs_agent::permissions::PlanConflict::Keep)
     );
 }
