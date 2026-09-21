@@ -633,6 +633,11 @@ impl StreamDecoder {
 }
 
 /// Turn a byte stream of SSE frames into completed units.
+///
+/// One network chunk can carry a whole batch of frames, and the decoder queues
+/// them all; the stream then hands them back with no await point. Draining such a
+/// batch without ever yielding starves every other task on the runtime — notably
+/// the renderer, whose channel is bounded — so the pump yields periodically.
 pub fn sse_stream<S, B>(
     byte_stream: S,
     caps: ModelCaps,
@@ -647,10 +652,16 @@ where
             decoder: StreamDecoder::new(caps),
             queue: VecDeque::new(),
             ended: false,
+            since_yield: 0,
         },
         |mut state| async move {
             loop {
                 if let Some(event) = state.queue.pop_front() {
+                    state.since_yield += 1;
+                    if state.since_yield >= YIELD_EVERY {
+                        state.since_yield = 0;
+                        tokio::task::yield_now().await;
+                    }
                     return Some((Ok(event), state));
                 }
                 if state.ended {
@@ -686,11 +697,18 @@ where
     )
 }
 
+/// How many decoded events may be handed out before the pump yields to the
+/// runtime. Small enough that a burst cannot outrun a woken consumer (the render
+/// channel holds 1024), large enough that the yield is not per token.
+const YIELD_EVERY: u32 = 16;
+
 struct DecoderState<S> {
     bytes: Pin<Box<S>>,
     decoder: StreamDecoder,
     queue: VecDeque<StreamEvent>,
     ended: bool,
+    /// Events handed out since the last yield to the runtime.
+    since_yield: u32,
 }
 
 fn find_frame_end(buffer: &[u8]) -> Option<(usize, usize)> {
