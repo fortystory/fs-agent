@@ -407,10 +407,44 @@ async fn interactive_loop(
                     render::wording::error_report(&error)
                 )),
             },
-            other if other.starts_with('/') => harness.notice(&format!(
-                "fs-agent: {}",
-                render::wording::unknown_command(other)
-            )),
+            // `/<skill> [task]` is the user-side skill invocation (spec §9): the
+            // one path a `disable-model-invocation: true` skill reserves for the
+            // user. The body goes into the context at the tail and the task runs
+            // as an ordinary turn.
+            other if other.starts_with('/') => {
+                let rest = other.trim_start_matches('/');
+                let (name, task) = match rest.split_once(char::is_whitespace) {
+                    Some((name, task)) => (name, task.trim()),
+                    None => (rest, ""),
+                };
+                if !harness.has_skill(name) {
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::unknown_command(other)
+                    ));
+                } else if let Err(error) = harness.load_skill(name) {
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::error_report(&error)
+                    ));
+                } else {
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::skill_loaded(name)
+                    ));
+                    let task = if task.is_empty() {
+                        render::wording::skill_default_task()
+                    } else {
+                        task
+                    };
+                    if let Err(error) = run_one_turn(harness, events, task).await {
+                        harness.notice(&format!(
+                            "fs-agent: {}",
+                            render::wording::error_report(&error)
+                        ));
+                    }
+                }
+            }
             _ => {
                 if let Err(error) = run_one_turn(harness, events, &line).await {
                     harness.notice(&format!(

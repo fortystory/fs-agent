@@ -150,6 +150,19 @@ impl Skills {
         Ok(capped_body(skill))
     }
 
+    /// The body to put in the context when the **user** asks for a skill, as
+    /// `/<name>` does (spec §9).
+    ///
+    /// Unlike [`Skills::load`] this ignores `disable-model-invocation`: the flag
+    /// keeps the skill away from the *model's* guesswork, and the user naming it
+    /// is exactly the invocation it reserves. The body is capped the same way.
+    pub fn invoke(&self, name: &str) -> Result<String, SkillError> {
+        let skill = self.get(name).ok_or_else(|| SkillError::Unknown {
+            name: name.to_owned(),
+        })?;
+        Ok(capped_body(skill))
+    }
+
     /// The pinned description catalog, or `None` when no skill is invocable.
     ///
     /// Present every turn and byte-stable across turns: this text is part of the

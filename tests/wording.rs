@@ -220,6 +220,10 @@ fn bracketed_hints_read_in_chinese_with_their_enums_explained() {
         "[上下文注入：技能清单]"
     );
     assert_eq!(
+        wording::context_injected(ContextSource::Skill),
+        "[上下文注入：技能]"
+    );
+    assert_eq!(
         wording::context_injected(ContextSource::PlanMode),
         "[上下文注入：计划模式]"
     );
@@ -275,8 +279,10 @@ fn interactive_feedback_reads_in_chinese() {
     assert_eq!(wording::nothing_to_undo(), "没有可撤销的修改");
     assert_eq!(
         wording::unknown_command("/nope"),
-        "未知命令 /nope（可用：/undo、/plan、/endplan、/quit）"
+        "未知命令 /nope（可用：/undo、/plan、/endplan、/quit，或直接输入 /技能名）"
     );
+    assert_eq!(wording::skill_loaded("ask-matt"), "已加载技能 ask-matt");
+    assert_eq!(wording::skill_default_task(), "请按上面的技能说明执行。");
     assert_eq!(wording::plan_entered(), "已进入计划模式");
     assert_eq!(wording::plan_exited(), "已退出计划模式");
 }

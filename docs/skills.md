@@ -53,6 +53,11 @@ not call the skill.
 - **`disable-model-invocation: true`.** A skill with this flag is neither in the
   catalog nor loadable by `skill(name)`: the model cannot guess its name around
   the flag. Only the user invokes it.
+- **User invocation.** `/<name> [task]` in the interactive session loads a skill
+  the user names — including a `disable-model-invocation: true` one — and then
+  runs `task` as an ordinary turn (a bare `/<name>` runs a default prompt). The
+  body is a `ContextInjected { source: Skill }` appended **after** the history,
+  exactly like a tool-loaded body, so the cached prefix never moves.
 - **Budgets.** One body is capped at 5k estimated tokens (truncated with a
   pointer to the file, never refused — though a user-level skill's file sits
   outside the workspace, where `read_file` cannot reach it); the loaded bodies in

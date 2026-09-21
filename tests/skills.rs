@@ -222,6 +222,12 @@ fn a_disabled_skill_is_absent_from_the_catalog_and_refuses_to_load() {
         "the refusal names the flag: {error}"
     );
     assert_eq!(skills.load("public").unwrap(), "the body of the skill");
+    // The user path ignores the flag: `/<name>` is exactly what it reserves.
+    assert_eq!(
+        skills.invoke("secret").unwrap(),
+        "body",
+        "the user can load a model-disabled skill"
+    );
 }
 
 #[test]
@@ -691,6 +697,78 @@ async fn a_disabled_skill_is_refused_by_the_tool_and_the_turn_continues() {
     let error = completed_output(&fixture.events(), "call-1").unwrap_err();
     assert!(error.contains("disable-model-invocation"), "{error}");
     assert_eq!(loaded_skill_names(&fixture.events()), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn the_user_path_reaches_a_model_disabled_skill() {
+    // The flag reserves one invocation for the user: the skill is absent from the
+    // catalog and the tool refuses it, but `/<name>` loads it into the context at
+    // the tail, after the history, so the cached prefix never moves.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let path = workspace.join(".agents/skills/secret");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(
+        path.join("SKILL.md"),
+        "---\nname: secret\ndescription: user only\ndisable-model-invocation: true\n---\nUSER ONLY STEP\n",
+    )
+    .unwrap();
+
+    let mut fixture = fixture(
+        vec![Reply::text("first"), Reply::text("did it")],
+        &workspace,
+    )
+    .await;
+    fixture.run_turn("hi").await;
+    {
+        let harness = fixture.harness.as_mut().unwrap();
+        assert!(harness.has_skill("secret"), "the front end can offer it");
+        assert!(
+            harness.skill_names().contains(&"secret"),
+            "a disabled skill is still user-invocable: {:?}",
+            harness.skill_names()
+        );
+        harness.load_skill("secret").unwrap();
+    }
+    fixture.run_turn("go").await;
+    fixture.shutdown().await;
+
+    let events = fixture.events();
+    let injected = events.iter().find_map(|event| match &event.payload {
+        EventPayload::ContextInjected {
+            source: ContextSource::Skill,
+            content,
+        } => Some(content.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        injected.as_deref(),
+        Some("USER ONLY STEP"),
+        "the body is a Skill injection"
+    );
+
+    let requests = fixture.provider.requests();
+    let messages = &requests[1].messages;
+    let at = messages
+        .iter()
+        .position(|message| {
+            matches!(
+                message,
+                Message::User { content, injected: true, .. } if content == "USER ONLY STEP"
+            )
+        })
+        .expect("the body reached the model as an injected user message");
+    assert!(
+        at > 0,
+        "a mid-session injection is not the pinned head: {messages:?}"
+    );
+    assert!(
+        matches!(
+            messages.last(),
+            Some(Message::User { content, injected: false, .. }) if content == "go"
+        ),
+        "the task is the turn that follows it: {messages:?}"
+    );
 }
 
 #[tokio::test]

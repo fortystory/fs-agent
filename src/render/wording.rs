@@ -320,6 +320,7 @@ pub fn context_source(source: ContextSource) -> &'static str {
     match source {
         ContextSource::AgentsMd => "AGENTS.md",
         ContextSource::SkillsCatalog => "技能清单",
+        ContextSource::Skill => "技能",
         ContextSource::PlanMode => "计划模式",
     }
 }
@@ -413,7 +414,18 @@ pub fn nothing_to_undo() -> &'static str {
 
 /// A slash-command the loop does not know, naming the ones it does.
 pub fn unknown_command(command: &str) -> String {
-    format!("未知命令 {command}（可用：/undo、/plan、/endplan、/quit）")
+    format!("未知命令 {command}（可用：/undo、/plan、/endplan、/quit，或直接输入 /技能名）")
+}
+
+/// The user loaded a skill by name.
+pub fn skill_loaded(name: &str) -> String {
+    format!("已加载技能 {name}")
+}
+
+/// The turn a bare `/<skill>` runs when the user gave no task: the skill body is
+/// already in the context, so the default is simply to apply it.
+pub fn skill_default_task() -> &'static str {
+    "请按上面的技能说明执行。"
 }
 
 /// `/plan` succeeded.
@@ -606,6 +618,7 @@ pub fn error_report(error: &crate::Error) -> String {
         crate::Error::Io(error) => format!("事件流读写失败：{error}"),
         crate::Error::Discussion(detail) => format!("讨论无法组装：{detail}"),
         crate::Error::Undo(detail) => format!("撤销失败：{detail}"),
+        crate::Error::Skill(detail) => format!("技能加载失败：{detail}"),
     }
 }
 
@@ -822,7 +835,9 @@ pub fn help_main() -> String {
 pub fn help_interactive() -> String {
     "fs-agent [options]\n\n  \
      在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/plan 与 /endplan 控制\
-     硬计划模式，/quit 退出。TUI 里 Esc 取消正在跑的回合；Shift+Tab 切换计划模式。\n\n  \
+     硬计划模式，/quit 退出；输入 /技能名 直接加载一个技能（可带任务，例如 \
+     `/ask-matt 帮我看一下`），包括标了 `disable-model-invocation: true` 的技能。\
+     TUI 里 Esc 取消正在跑的回合；Shift+Tab 切换计划模式。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
      --tui              使用终端界面（inline viewport）\n  \
      --continue, -c     继续本工作区最新的会话\n  \

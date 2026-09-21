@@ -197,6 +197,10 @@ impl Usage {
 pub enum ContextSource {
     AgentsMd,
     SkillsCatalog,
+    /// A skill body the **user** loaded with `/<skill>` (spec §9). It lands at
+    /// the tail, unlike the pinned head injections: the model-side prefix never
+    /// moves.
+    Skill,
     PlanMode,
 }
 

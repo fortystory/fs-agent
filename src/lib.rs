@@ -529,6 +529,39 @@ impl Harness {
         self.cancel.clone()
     }
 
+    /// Every discovered skill name, in precedence order: what a front end offers
+    /// as `/<name>`.
+    pub fn skill_names(&self) -> Vec<&str> {
+        self.session.skills().names()
+    }
+
+    /// Whether `/<name>` names a discovered skill.
+    pub fn has_skill(&self, name: &str) -> bool {
+        self.session.skills().get(name).is_some()
+    }
+
+    /// Append a skill the **user** named (spec §9) to the context, at the tail.
+    ///
+    /// This is the invocation `disable-model-invocation: true` reserves: such a
+    /// skill is absent from the catalog and [`Skills::load`] refuses it, so a
+    /// model that guesses the name still cannot reach it — the user can. The body
+    /// is a `ContextInjected { source: Skill }` event, which projects as its own
+    /// `user` message after the current history, so the cached prefix never
+    /// moves. The caller runs the turn that uses it.
+    pub fn load_skill(&mut self, name: &str) -> Result<(), Error> {
+        let body = self
+            .session
+            .skills()
+            .invoke(name)
+            .map_err(|error| Error::Skill(error.to_string()))?;
+        agent::record_context_injection(
+            &mut self.session,
+            &self.render,
+            ContextSource::Skill,
+            &body,
+        )
+    }
+
     /// The mode this session currently runs under.
     pub fn mode(&self) -> Mode {
         self.session.mode()
@@ -732,4 +765,7 @@ pub enum Error {
     /// `/undo` could not safely roll the workspace back.
     #[error("undo: {0}")]
     Undo(String),
+    /// A skill the user named could not be loaded.
+    #[error("skill: {0}")]
+    Skill(String),
 }
