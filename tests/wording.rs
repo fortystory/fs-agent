@@ -498,3 +498,11 @@ fn a_provider_finish_reason_reads_in_chinese() {
         "vendor_specific"
     );
 }
+
+#[test]
+fn the_two_renderer_confirmations_read_in_chinese() {
+    // The questions the TUI asks itself: an oversized paste, and a multi-line draft
+    // `Esc` would throw away. Both default to the safe answer (spec §7).
+    assert_eq!(wording::paste_confirm(120_000), "粘贴 120000 字符？");
+    assert_eq!(wording::clear_draft_confirm(), "清空输入？");
+}

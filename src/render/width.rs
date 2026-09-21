@@ -13,7 +13,14 @@ pub fn text_columns(text: &str) -> usize {
 }
 
 /// The display width of one character, in terminal columns.
+///
+/// A control character takes none: the painters filter them out, so counting them
+/// would put the cursor somewhere the text is not. It also keeps this off the
+/// `cell_width` path that asserts when one reaches it.
 pub fn char_columns(ch: char) -> usize {
+    if ch.is_control() {
+        return 0;
+    }
     let mut buf = [0u8; 4];
     ch.encode_utf8(&mut buf).cell_width() as usize
 }

@@ -407,8 +407,11 @@ fn default_choice(question: &Question) -> AnswerChoice {
 }
 
 /// Whether a key means yes to a question this renderer asked itself.
+///
+/// Only `y`. `Esc` and `Enter` are the **safe** answer — "no" — because both are what
+/// a hand reaches for without reading (spec §7, 票 06 §1).
 fn agrees(key: Key) -> bool {
-    matches!(key, Key::Char('y') | Key::Char('Y') | Key::Enter)
+    matches!(key, Key::Char('y') | Key::Char('Y'))
 }
 
 impl TuiState {
@@ -460,6 +463,11 @@ impl TuiState {
     /// to take on sight asks first. **None of it submits** — a pasted newline is a
     /// newline (spec §7).
     pub fn paste(&mut self, text: &str) {
+        if self.pending.is_some() {
+            // A question owns the keyboard while it is up: a paste must not answer
+            // it, and must not land in a draft the user cannot see (spec §9).
+            return;
+        }
         let text = editor::normalize_paste(text);
         if text.is_empty() {
             return;
@@ -721,7 +729,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     }
     // The draft's own height decides how much room the input takes: it grows with
     // the text up to the layout's cap and then scrolls internally (spec §5).
-    let draft_rows = state.editor.rows(layout::input_text_width(area));
+    let draft_rows = state.editor.height(layout::input_text_width(area));
     let panes = layout::plan(area, draft_rows);
     draw_header(frame, &panes, state);
     draw_transcript(frame, &panes, state);
@@ -919,8 +927,9 @@ fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
             panes.input,
         ),
         None => {
-            let text_width = panes.input.width.saturating_sub(editor::PROMPT_COLUMNS);
-            let (rows, cursor) = state.editor.view(text_width, panes.input.height);
+            let (rows, cursor) = state
+                .editor
+                .view(layout::input_text_width(frame.area()), panes.input.height);
             frame.render_widget(
                 Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
                 panes.input,
@@ -1222,6 +1231,11 @@ mod tests {
         assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
             Some(Key::CtrlG)
+        );
+        // The newline key: the one the whole multi-line editor hangs on.
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Some(Key::CtrlJ)
         );
         // A bare `g` is text, not a gesture.
         assert_eq!(plain(KeyCode::Char('g')), Some(Key::Char('g')));

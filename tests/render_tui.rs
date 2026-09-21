@@ -561,6 +561,17 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.key(Key::Enter);
     assert_eq!(second.try_recv().unwrap(), None, "Esc is not consent");
 
+    let (tx, mut enter) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    state.paste(&huge);
+    state.key(Key::Enter); // the other safe answer: Enter declines as well
+    state.key(Key::Enter); // and this one submits, because the question is gone
+    assert_eq!(
+        enter.try_recv().unwrap(),
+        None,
+        "Enter answers the question, it does not consent to it"
+    );
+
     let (tx, mut third) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply: tx });
     state.paste(&huge);
@@ -568,6 +579,40 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.key(Key::Enter);
     let pasted = third.try_recv().unwrap().expect("the paste was taken");
     assert_eq!(pasted.chars().count(), 100_001, "all of it, in one piece");
+}
+
+#[test]
+fn a_paste_is_ignored_while_a_question_is_up() {
+    let (mut state, mut answer) = state_with_prompt();
+    let huge = "x".repeat(100_001);
+    // A paste must not answer a question, nor overwrite one: the oversized paste
+    // asks, and a second paste while it asks changes nothing (spec §9, §7).
+    state.paste(&huge);
+    // A second paste while the question is up must change nothing: not the question,
+    // and not the draft behind it.
+    state.paste("small");
+    state.key(Key::Char('y'));
+    state.key(Key::Enter);
+    let pasted = answer
+        .try_recv()
+        .unwrap()
+        .expect("the question survived the second paste");
+    assert_eq!(pasted.chars().count(), 100_001, "and so did its text");
+    assert!(
+        !pasted.contains("small"),
+        "the small paste did not reach the draft"
+    );
+}
+
+#[test]
+fn a_tab_in_a_paste_becomes_spaces_rather_than_breaking_the_column_count() {
+    let (mut state, mut answer) = state_with_prompt();
+    state.paste("fn main() {\n\tbody\n}");
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        Some("fn main() {\n    body\n}".to_owned())
+    );
 }
 
 #[test]

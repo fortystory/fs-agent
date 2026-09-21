@@ -43,3 +43,21 @@ Status: ready-for-agent
 **基线**：`cargo test` **516 passed / 0 failed**（502 → +12 编辑器 +4 状态机 +1 布局 −3 迁移）；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移；pty 启动检查 3/3 GREEN。
 
 **变异检验**（确认新测试不是摆设）：摘掉粘贴的 `\r` 归一、把超长阈值判断置假、把 Esc 的多行判断置假、让 `↑` 走历史、把输入区行数钉成 1、把 goal column 的列累加置零 —— 六处全部被抓到。
+
+**评审收口**（`/code-review` 双轴，2026-09-21）：
+
+Spec 轴抓到两个真 bug 与三处打折：
+
+- **粘贴里的 `	` 会在 debug 构建下 panic**。`CellWidth for str` 对单字节控制字符有 `debug_assert`（"control character passed to cell_width without filtering"），而票面要求「保留 `\n` 与 `\t`」。现在 `\t` 在归一阶段展开成**四个空格**：缩进保住了，列宽算术也不必为 tab 猜一个宽度。同时把 `width::char_columns` 对控制字符改为返回 0 列（它们本来就不被绘制），让这个 helper 不会再踩那条断言。
+- **「正好写满一行」的处理是错的**：原实现给光标**在数组末尾**补一行，于是 `"abcde\nf"`（宽 5）会把空行画在 `f` 的**下面**，光标跟着跑到下一行去。改成**终端式 pending wrap**：光标停在该行最后一格，不再另起一行（更简单，也少了一次输入区长高的抖动）。spec §5 与本票 Comments 里原先那句「给光标另起一行」已回改成这条。
+- **`agrees` 把 `Enter` 当「是」**，与票 06 §1 的表「默认（Esc / 回车）= 否」冲突 —— 已改成只有 `y`/`Y` 是同意，`Esc` 与 `Enter` 都是安全答案。用例补齐了 `Enter` 这一支。
+- **`paste()` 没看 pending**：模态期间粘贴会写进看不见的草稿；超长粘贴还会**覆盖** `Pending::Loop` 并丢掉 reply sender（等于把权限询问静默变成拒绝）。已加守卫（模态拥有键盘，spec §9），并加了一条更强的用例：问询期间再粘一次小的，`y` 之后提交出来的必须还是那一大段。
+- `tests/wording.rs` 少了新措辞的断言、`Ctrl-J` 少了 `map_key` 那一支 —— 都补上了。
+
+**第五处偏差（本轮补报）**：票面写「两个确认走既有 `Question`/`AnswerChoice` 机制（新增两个变体）」，实现改成了 `TuiState` 私有的 `Pending` 三态。理由：`input::Question`/`AnswerChoice` 是**控制台协议**的词汇（循环问、one-shot 回传），而这两个确认是**渲染器自问自答**，没有收件人；硬塞进去会让 `Question` 一名两义，`AnswerChoice` 也没有对应的「是/否」变体可说。票面真正要的「四问共用一套呈现」由 `Pending::prompt()` 提供，票 14 换绘制处即可。
+
+Standards 轴：`PROMPT_COLUMNS` 常量与 `indent()` 里的 `"  "` 是同一个宽度的两处编码 —— 常量改成函数 `prompt_columns()`（由 `PROMPT` 推出），缩进由它生成；`layout::INPUT_INDENT` 删除（几何直接用 `prompt_columns()`）；输入区文本宽度只在 `layout::input_text_width` 算一次（`draw_bottom` 也调它，不再自己减）；`edited`/`moved` 改名 `text_edited`/`cursor_moved`（名字要能读出「历史浏览是否结束」的区别）；`Input::rows` 改名 `Input::height`。
+
+**未改的两条 finding**：`clear_draft_confirm()` 用零参函数而非常量 —— 与本模块既有的零参文案（`nothing_to_undo` / `no_tool_result`）一致；`editor::PROMPT` 留在措辞层之外 —— 它是个界面符号而非文案，且旧实现就在渲染器里（先例一致）。
+
+**变异检验（本轮）**：摘掉 tab 展开、把 `Enter` 加回「是」、摘掉粘贴的 pending 守卫 —— 三处全部被抓到。

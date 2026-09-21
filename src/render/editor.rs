@@ -13,14 +13,17 @@
 
 use ratatui::text::Line;
 
-use super::width::char_columns;
+use super::width::{char_columns, text_columns};
 
 /// The prompt on the draft's first row.
 pub const PROMPT: &str = "> ";
 
 /// The columns the prompt takes — and therefore the indent every row after the
-/// first one carries, so every row holds the same amount of text.
-pub const PROMPT_COLUMNS: u16 = 2;
+/// first one carries, so every row holds the same amount of text. Derived from
+/// [`PROMPT`] so the two cannot drift apart; the layout reserves this many.
+pub fn prompt_columns() -> u16 {
+    text_columns(PROMPT) as u16
+}
 
 /// The separator between logical lines in the draft.
 const NEWLINE: char = '\n';
@@ -79,8 +82,9 @@ impl Input {
         self.text.contains(NEWLINE)
     }
 
-    /// How many display rows the draft needs at `width` text columns.
-    pub fn rows(&self, width: u16) -> u16 {
+    /// How many display rows tall the draft is at `width` text columns. The layout
+    /// asks before it knows anything else, because this is what sizes the input.
+    pub fn height(&self, width: u16) -> u16 {
         self.display_rows(width.max(1) as usize).0.len() as u16
     }
 
@@ -97,12 +101,16 @@ impl Input {
         } else {
             0
         };
+        let indent = " ".repeat(prompt_columns() as usize);
         let lines = rows
             .iter()
             .enumerate()
             .skip(top)
             .take(height)
-            .map(|(index, row)| Line::from(format!("{}{}", indent(index), row.text)))
+            .map(|(index, row)| {
+                let lead = if index == 0 { PROMPT } else { indent.as_str() };
+                Line::from(format!("{lead}{}", row.text))
+            })
             .collect();
         (
             lines,
@@ -119,7 +127,7 @@ impl Input {
         let at = self.byte_at(self.cursor);
         self.text.insert(at, ch);
         self.cursor += 1;
-        self.edited();
+        self.text_edited();
     }
 
     /// Insert a run of text at the cursor, as one edit.
@@ -130,7 +138,7 @@ impl Input {
         let at = self.byte_at(self.cursor);
         self.text.insert_str(at, text);
         self.cursor += text.chars().count();
-        self.edited();
+        self.text_edited();
     }
 
     /// Delete one character before the cursor; at a line start this joins the line
@@ -153,24 +161,24 @@ impl Input {
 
     pub fn left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
-        self.moved();
+        self.cursor_moved();
     }
 
     pub fn right(&mut self) {
         self.cursor = (self.cursor + 1).min(self.len());
-        self.moved();
+        self.cursor_moved();
     }
 
     /// The head of the cursor's **line**, not of the draft.
     pub fn home(&mut self) {
         self.cursor = self.line_bounds().0;
-        self.moved();
+        self.cursor_moved();
     }
 
     /// The end of the cursor's **line**, not of the draft.
     pub fn end(&mut self) {
         self.cursor = self.line_bounds().1;
-        self.moved();
+        self.cursor_moved();
     }
 
     /// Move up a line, holding the visual column the cursor had.
@@ -302,14 +310,16 @@ impl Input {
             .unwrap_or(self.text.len())
     }
 
-    /// A fresh edit: the history browse, the goal column and the draft are done.
-    fn edited(&mut self) {
+    /// A text edit: the history browse is over (what is in the draft is no longer
+    /// what was recalled) and so is the goal column.
+    fn text_edited(&mut self) {
         self.history_at = None;
         self.goal = None;
     }
 
-    /// A move that is not `↑`/`↓`: it keeps the history browse but drops the goal.
-    fn moved(&mut self) {
+    /// A cursor move that is not `↑`/`↓`: the browse survives — you are still inside
+    /// the draft you recalled — but the column being held is not.
+    fn cursor_moved(&mut self) {
         self.goal = None;
     }
 
@@ -364,7 +374,7 @@ impl Input {
         let end = self.byte_at(to);
         self.text.replace_range(start..end, "");
         self.cursor = from;
-        self.edited();
+        self.text_edited();
     }
 
     fn set(&mut self, text: &str) {
@@ -417,35 +427,22 @@ impl Input {
             at += 1;
         }
         let offset = cursor - rows[at].start;
-        let column = PROMPT_COLUMNS as usize
+        let prompt = prompt_columns() as usize;
+        let column = prompt
             + rows[at]
                 .text
                 .chars()
                 .take(offset)
                 .map(char_columns)
                 .sum::<usize>();
-        if column >= PROMPT_COLUMNS as usize + width {
-            // The cursor is at the end of a full row and there is nowhere to put it:
-            // it gets a row of its own, as a terminal would give it.
-            rows.push(Row {
-                text: String::new(),
-                start: cursor,
-                end: cursor,
-            });
-            at = rows.len() - 1;
-            return (
-                rows,
-                Placed {
-                    row: at as u16,
-                    column: PROMPT_COLUMNS,
-                },
-            );
-        }
+        // A cursor at the end of a row that is exactly full rests on its last cell,
+        // the way a terminal's pending wrap does, rather than opening a row of its
+        // own and pushing the rest of the draft down.
         (
             rows,
             Placed {
                 row: at as u16,
-                column: column as u16,
+                column: column.min(prompt + width - 1) as u16,
             },
         )
     }
@@ -457,25 +454,26 @@ impl Default for Input {
     }
 }
 
-/// What leads a display row: the prompt on the draft's first row, an indent as
-/// wide as it on every row after.
-fn indent(index: usize) -> &'static str {
-    if index == 0 {
-        PROMPT
-    } else {
-        "  "
-    }
-}
-
-/// Normalise pasted text: line endings become `\n`, and control characters are
-/// dropped except the two that carry meaning.
+/// Normalise pasted text: line endings become `\n`, tabs become spaces, and other
+/// control characters are dropped.
 ///
 /// crossterm hands a paste through untouched — no `\r` stripping, no control
 /// filtering, no length limit (research §6.3) — so the cleaning is ours.
+///
+/// Tabs become four spaces rather than being dropped: they carry indentation worth
+/// keeping, and a tab has no place in a display-column count (the wrapping table
+/// asserts on control characters rather than guessing at them).
 pub fn normalize_paste(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|ch| *ch == NEWLINE || *ch == '\t' || !ch.is_control())
-        .collect()
+    /// What one tab becomes.
+    const TAB: &str = "    ";
+    let mut out = String::with_capacity(text.len());
+    for ch in text.replace("\r\n", "\n").replace('\r', "\n").chars() {
+        match ch {
+            NEWLINE => out.push(NEWLINE),
+            '\t' => out.push_str(TAB),
+            ch if ch.is_control() => {}
+            ch => out.push(ch),
+        }
+    }
+    out
 }

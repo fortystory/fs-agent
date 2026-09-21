@@ -43,9 +43,8 @@ fn a_wide_character_takes_two_columns_in_the_draft() {
     // The same column arithmetic as the transcript: `你` is three bytes and two
     // columns, and counting bytes would wrap it three times too early.
     assert_eq!(rows(&typed("你好世界"), 6, 10), vec!["> 你好世", "  界"]);
-    // Exactly filling a row is the same case as filling it with ASCII: the cursor
-    // needs a row of its own to sit on.
-    assert_eq!(rows(&typed("你好世"), 6, 10), vec!["> 你好世", "  "]);
+    // Exactly filling a row keeps the cursor on that row's last cell, as with ASCII.
+    assert_eq!(rows(&typed("你好世"), 6, 10), vec!["> 你好世"]);
 }
 
 #[test]
@@ -63,12 +62,16 @@ fn the_cursor_maps_onto_the_row_it_is_typed_on() {
     let (_, cursor) = input.view(5, 10);
     assert_eq!((cursor.row, cursor.column), (0, 2));
 
-    // A full row with the cursor at its end needs a row of its own, or the cursor
-    // would sit one column outside the area that holds it.
+    // A full row with the cursor at its end keeps it on the last cell — a terminal's
+    // pending wrap — rather than opening a row of its own and pushing the draft down.
     let input = typed("abcde");
-    assert_eq!(input.rows(5), 2);
+    assert_eq!(input.height(5), 1);
     let (_, cursor) = input.view(5, 10);
-    assert_eq!((cursor.row, cursor.column), (1, 2));
+    assert_eq!(
+        (cursor.row, cursor.column),
+        (0, 2 + 4),
+        "the last cell of the row"
+    );
 
     // And an empty draft puts it right after the prompt.
     let (_, cursor) = Input::new().view(5, 10);
@@ -80,7 +83,7 @@ fn the_prompt_and_the_indent_are_the_same_width() {
     // The layout reserves columns from one constant and the editor draws the
     // prompt; they have to agree or every wrapped row is one column off.
     assert_eq!(
-        editor::PROMPT_COLUMNS as usize,
+        editor::prompt_columns() as usize,
         fs_agent::render::width::text_columns(editor::PROMPT)
     );
 }
