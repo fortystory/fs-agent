@@ -142,6 +142,12 @@ impl Tui {
             for event in state.take_events() {
                 port.emit(event);
             }
+            // `insert_before` lays its scratch buffer out at the **last known**
+            // viewport width; only `draw` refreshes it. Inserting first, as this
+            // loop does, would therefore render a line at the width from before a
+            // resize — and the terminal soft-wraps a line wider than it is,
+            // scrambling the inline viewport. Pick up the size before inserting.
+            let _ = terminal.autoresize();
             for block in state.take_ready() {
                 let lines = render_block(&block);
                 if lines.is_empty() {
