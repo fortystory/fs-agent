@@ -13,6 +13,7 @@ Status: ready-for-agent
 - [x] `a_notice_is_a_scrollback_line_shown_as_it_is` **已改名**为 `a_notice_is_a_transcript_line_shown_as_it_is`（"scrollback" 随 inline 视口一起没了），断言收在 `render_block` 上；「通知落在转录里而不是流式尾巴里」由 `tests/render_layout.rs` 的 `the_transcript_pane_shows_both_the_notices_and_the_streaming_tail` 覆盖
 - [ ] 编辑器四个用例改写为对着 `Input` 断言：`a_typed_line_is_submitted_to_the_loop`、`backspace_edits_the_line`、`an_empty_submission_closes_the_prompt`、`the_cursor_column_counts_a_wide_character_as_two`
 - [ ] 键位语义五个用例保留：`a_permission_question_is_answered_by_key`、`escape_answers_a_question_with_the_non_acting_choice`、`escape_while_working_is_a_cancel_gesture`、`an_idle_ctrl_c_quits_and_a_working_one_cancels`、`shift_tab_is_the_plan_gesture`
+- [ ] **接缝形状（票 11 之后的现状）**：`draw_frame` 取 `&mut TuiState`（缓存在绘制时按画出来的宽度刷新），`tests/render_layout.rs` 的 `screen()` / `buffer()` 两个 helper 也跟着收 `&mut`；`live_lines` 已删除，CJK 折行断言现在打在 `pane::wrap_text` 上。
 - [ ] 辅助函数：`state_with_prompt()` 已跟着新 `TuiState` 改签名（票 10 新增 `facts()` 与 `new_state()` 两个 helper；**不要**把 helper 命名成 `state()`，会和测试里满地的 `let mut state` 撞名）
 - [x] `scripts/tui-startup-check.py` 的**判定**：锚点 `STATUS_ANCHOR = "ctrl-c"` 与 `BANNER_ANCHOR = "fs-agent："` **确实保留**；判定已按预测改掉 —— 票 10 落地后脚本先红在一次 `endswith("退出")`（新底部块带边框，`退出` 后面跟着 `│`），改成先 `rstrip(" │")` 再判尾。**票 10 的实现已顺手修掉这一处并实测 `3/3 GREEN`**（banner 只出现一次、提示行完整），剩下的「新增 header 版本串锚点 + 边框存在性断言」仍留本票
 - [ ] 脚本**新增锚点**：header 的版本串（确认新布局起来了），再加一条粗断言「屏幕上出现 ≥3 处边框字符」防退化
