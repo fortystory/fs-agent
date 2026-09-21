@@ -14,7 +14,7 @@ Status: ready-for-agent
 - [ ] 编辑器四个用例改写为对着 `Input` 断言：`a_typed_line_is_submitted_to_the_loop`、`backspace_edits_the_line`、`an_empty_submission_closes_the_prompt`、`the_cursor_column_counts_a_wide_character_as_two`
 - [ ] 键位语义五个用例保留：`a_permission_question_is_answered_by_key`、`escape_answers_a_question_with_the_non_acting_choice`、`escape_while_working_is_a_cancel_gesture`、`an_idle_ctrl_c_quits_and_a_working_one_cancels`、`shift_tab_is_the_plan_gesture`
 - [ ] 辅助函数：`state_with_prompt()` 已跟着新 `TuiState` 改签名（票 10 新增 `facts()` 与 `new_state()` 两个 helper；**不要**把 helper 命名成 `state()`，会和测试里满地的 `let mut state` 撞名）
-- [ ] `scripts/tui-startup-check.py`：锚点 `STATUS_ANCHOR = "ctrl-c"` 与 `BANNER_ANCHOR = "fs-agent："` **保留**；**判定改掉** —— 新底部块带边框，`退出` 后面跟着 `│`，`row.endswith("退出")` 会失败，改成「该行包含 `ctrl-c 退出`，其后只允许边框/空白」
+- [x] `scripts/tui-startup-check.py` 的**判定**：锚点 `STATUS_ANCHOR = "ctrl-c"` 与 `BANNER_ANCHOR = "fs-agent："` **确实保留**；判定已按预测改掉 —— 票 10 落地后脚本先红在一次 `endswith("退出")`（新底部块带边框，`退出` 后面跟着 `│`），改成先 `rstrip(" │")` 再判尾。**票 10 的实现已顺手修掉这一处并实测 `3/3 GREEN`**（banner 只出现一次、提示行完整），剩下的「新增 header 版本串锚点 + 边框存在性断言」仍留本票
 - [ ] 脚本**新增锚点**：header 的版本串（确认新布局起来了），再加一条粗断言「屏幕上出现 ≥3 处边框字符」防退化
 - [ ] 脚本继续负责：启动不崩、首帧正确、**退出后终端干净**（无 raw mode 残留 / 鼠标捕获 / bracketed paste）
 - [ ] `tests/wording.rs` 补断言：新提示集六条、面板中文标签、`↓ {n} 行新内容 · 点此到底` / `点此到底`、`终端太小：至少 40×10`、两个确认文案

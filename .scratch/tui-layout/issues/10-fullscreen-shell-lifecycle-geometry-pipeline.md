@@ -44,4 +44,5 @@ Status: done
   2. **输入区行数的插头在本票已通、取值推给票 12**：`layout::plan` 的 `draft_rows` 参数与 cap 都是真的，但 `draw_frame` 目前传常量 1 —— 今天的编辑器是一行横向滚动，草稿恒为一行。
   3. `paste()` 目前只把粘贴文本按字符插入（已比「终端把粘贴拆成按键、第一个换行就提交」好），`\r\n` 归一、控制字符过滤与 10 万字符确认**留给票 12**。
 - **评审收口**（`/code-review` 双轴）：Standards 轴指出 `--tui` 的 help 文案仍写「inline viewport」（已改为「全屏四分区」）、`EXIT_HINT` 与提示数组重复定义（已拆成中间五条 + 独占的退出提示，去掉按下标切片）、`layout.rs` 里若干无名魔数（已是 `BORDER_ROWS` / `HINT_ROWS` / `AIRY_ROWS` / `MIN_MIDDLE_ROWS`）、`layout::too_small` 与 `wording::too_small` 同名两义（前者改名 `below_minimum`）、接缝列在渲染器里重算（已归 `Panes::seam()`）。Spec 轴指出 `TRANSCRIPT_MIN_WIDTH` 那条分支**不可达**（已删，并在 spec §2 注明）、尺寸矩阵缺 40×12 / 80×24 / 174×50（已补一条用例）、`h=10` 也压单行 header 只写在几何表里（已补进 spec §2）。
+- **真终端验证**：`scripts/tui-startup-check.py`（pty + VT emulator）**3/3 GREEN** —— 新的全屏 TUI 起得来、banner 只出现一次、提示行完整含 `ctrl-c 退出`、退出不挂。它先红过一次，红的正是票 16 预测的那处判定（边框跟在 `退出` 后面），顺手修掉了。
 - **基线**：`cargo test` **495 passed / 0 failed**（+6：新增 7 个布局用例，删 1 个宽字符用例）；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移。

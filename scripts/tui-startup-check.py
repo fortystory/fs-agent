@@ -210,6 +210,10 @@ def verdict(raw, devnull):
     row = next((r for r in frame.rows() if STATUS_ANCHOR in r), None)
     if row is None:
         return False, "the status row was not on screen at the first draw"
+    # The hint row lives inside the bottom block, so the block's right border
+    # follows the last hint. Strip it (and any padding) before asking whether the
+    # row was drawn whole; anything else after the tail is still foreign text.
+    row = row.rstrip(" │")
     if not row.endswith(STATUS_TAIL):
         return False, "the status line was not drawn whole: %r" % row[-60:]
     residue = row.split(STATUS_TAIL, 1)[1].strip()
