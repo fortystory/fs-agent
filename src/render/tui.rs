@@ -131,10 +131,13 @@ fn map_key(key: KeyEvent) -> Option<Key> {
 /// The session values the header and the panel cannot read off the event stream
 /// (spec §8).
 ///
-/// Everything here is known at assembly time. Anything that changes mid-session —
-/// the mode — is deliberately **not** here: an injected copy would go stale the
-/// first time the user pressed Shift+Tab, and the stream already carries both
-/// transitions.
+/// Everything here is known at assembly time and injected as one value, because
+/// that is the seam: the renderer never reaches for configuration. The header uses
+/// `cwd`; the rest are carried for the information panel, which ticket 13 fills in.
+///
+/// Anything that changes mid-session — the mode — is deliberately **not** here: an
+/// injected copy would go stale the first time the user pressed Shift+Tab, and the
+/// stream already carries both transitions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionFacts {
     /// The session this terminal is showing.
@@ -834,7 +837,7 @@ fn wrap_take(text: &str, width: usize) -> usize {
 /// frame comes out, and no terminal is involved (spec §2).
 pub fn draw_frame(frame: &mut ratatui::Frame, state: &TuiState) {
     let area = frame.area();
-    if layout::too_small(area) {
+    if layout::below_minimum(area) {
         draw_too_small(frame, area);
         return;
     }
@@ -929,10 +932,10 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &Tu
     draw_border(frame, panes.middle);
     let lines = state.pane_lines(panes.transcript.width, panes.transcript.height);
     frame.render_widget(Paragraph::new(lines), panes.transcript);
-    if let Some(panel) = panes.panel {
+    if let Some(seam) = panes.seam() {
         // The two panes share one column rather than each drawing a border. Its
         // ends join the middle block's borders instead of crossing them.
-        draw_seam(frame, panes.middle, panel.x - 1);
+        draw_seam(frame, panes.middle, seam);
     }
 }
 

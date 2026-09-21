@@ -1,10 +1,10 @@
 //! The fullscreen four-pane geometry (spec §2).
 //!
-//! Pure arithmetic: a terminal size and the two variable row counts go in, the
+//! Pure arithmetic: a terminal size and the input's row count go in, the
 //! rectangles that exist at that size come out. Keeping it apart from the drawing
-//! is what gives the degrade ladder exactly one home — the renderer has none —
-//! and what lets the thresholds be read off in one sitting rather than
-//! reconstructed from four call sites.
+//! is what gives the degrade ladder exactly one home — the renderer has none — and
+//! what lets the thresholds be read off in one sitting rather than reconstructed
+//! from four call sites. The panel's fate is decided here, not by the caller.
 
 use ratatui::layout::Rect;
 
@@ -16,10 +16,22 @@ pub const MIN_HEIGHT: u16 = 10;
 /// The width from which the header has room for its second line.
 const HEADER_TWO_LINE_WIDTH: u16 = 60;
 
-/// Rows the block chrome costs whatever the terminal size: the header's borders,
-/// the middle block's borders, the bottom block's borders, and the hint row. The
-/// airy rows and the input rows come on top of this.
-const CHROME: u16 = 7;
+/// The rows one block's border costs: one above the content, one below.
+const BORDER_ROWS: u16 = 2;
+
+/// The hint row, which rides inside the bottom block under the input.
+const HINT_ROWS: u16 = 1;
+
+/// The blank rows the layout keeps above and below the middle block.
+const AIRY_ROWS: u16 = 2;
+
+/// The fewest middle-content rows worth drawing. Airy is given up to keep this
+/// rather than the other way round.
+const MIN_MIDDLE_ROWS: u16 = 1;
+
+/// Rows the block chrome costs whatever the terminal size: the three blocks'
+/// borders and the hint row. The airy rows and the input rows come on top.
+const CHROME: u16 = 3 * BORDER_ROWS + HINT_ROWS;
 
 /// The most input rows the bottom block will ever hold (spec §7).
 const MAX_INPUT_ROWS: u16 = 10;
@@ -30,9 +42,6 @@ const PANEL_MIN_WIDTH: u16 = 80;
 
 /// The fewest middle-content rows that can hold the panel's four core fields.
 const PANEL_MIN_ROWS: u16 = 4;
-
-/// The narrowest transcript worth drawing beside the panel.
-const TRANSCRIPT_MIN_WIDTH: u16 = 20;
 
 /// One frame's regions, in terminal coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,9 +66,18 @@ pub struct Panes {
     pub hints: Rect,
 }
 
-/// Whether the terminal is too small for anything but the notice.
-pub fn too_small(area: Rect) -> bool {
+/// Whether the terminal is too small for anything but the notice sentence
+/// ([`crate::render::wording::too_small`]).
+pub fn below_minimum(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
+}
+
+impl Panes {
+    /// The column the conversation pane and the panel share, when the panel is
+    /// drawn. The panel's own left edge is one column to the right of it.
+    pub fn seam(&self) -> Option<u16> {
+        self.panel.map(|panel| panel.x - 1)
+    }
 }
 
 /// Lay out one frame. `draft_rows` is how many rows the input's draft wraps to.
@@ -75,35 +93,33 @@ pub fn plan(area: Rect, draft_rows: u16) -> Panes {
     let airy = fits_airy(area.height, header_rows, 1);
     let cap = max_input_rows(area.height, header_rows, airy);
     let input_rows = draft_rows.max(1).min(cap);
-    let airy_rows = if airy { 2 } else { 0 };
+    let airy_rows = if airy { AIRY_ROWS } else { 0 };
     let middle_rows = area.height - CHROME - header_rows - input_rows - airy_rows;
 
-    let header = Rect::new(area.x, area.y, area.width, header_rows + 2);
+    let header = Rect::new(area.x, area.y, area.width, header_rows + BORDER_ROWS);
     let middle = Rect::new(
         area.x,
         header.y + header.height + u16::from(airy),
         area.width,
-        middle_rows + 2,
+        middle_rows + BORDER_ROWS,
     );
     let bottom = Rect::new(
         area.x,
         middle.y + middle.height + u16::from(airy),
         area.width,
-        input_rows + 3,
+        input_rows + HINT_ROWS + BORDER_ROWS,
     );
 
     // The panel is the first thing the degrade ladder gives up, and its width is a
     // quarter of the terminal with a floor and a ceiling (spec §2).
-    let mut outer = if area.width >= PANEL_MIN_WIDTH && middle_rows >= PANEL_MIN_ROWS {
+    let outer = if area.width >= PANEL_MIN_WIDTH && middle_rows >= PANEL_MIN_ROWS {
         panel_outer(area.width)
     } else {
         0
     };
     // The two panes share the seam column, so the panel's outer width counts it
-    // once: the transcript keeps everything to the left of it.
-    if outer > 0 && area.width - outer - 1 < TRANSCRIPT_MIN_WIDTH {
-        outer = 0;
-    }
+    // once: the transcript keeps everything to the left of it (48 columns at the
+    // narrowest panel-on size, 80x16).
     let transcript_width = if outer > 0 {
         area.width - outer - 1
     } else {
@@ -113,7 +129,7 @@ pub fn plan(area: Rect, draft_rows: u16) -> Panes {
         Rect::new(
             middle.x + area.width - outer + 1,
             middle.y + 1,
-            outer - 2,
+            outer - BORDER_ROWS,
             middle_rows,
         )
     });
@@ -126,7 +142,12 @@ pub fn plan(area: Rect, draft_rows: u16) -> Panes {
         panel,
         bottom,
         input: inside(bottom, input_rows),
-        hints: Rect::new(bottom.x + 1, bottom.y + 1 + input_rows, bottom.width - 2, 1),
+        hints: Rect::new(
+            bottom.x + 1,
+            bottom.y + 1 + input_rows,
+            bottom.width - BORDER_ROWS,
+            HINT_ROWS,
+        ),
     }
 }
 
@@ -140,7 +161,7 @@ fn inside(block: Rect, rows: u16) -> Rect {
     Rect::new(
         block.x + 1,
         block.y + 1,
-        block.width.saturating_sub(2),
+        block.width.saturating_sub(BORDER_ROWS),
         rows,
     )
 }
@@ -156,15 +177,15 @@ fn header_content_rows(width: u16, height: u16) -> u16 {
     }
 }
 
-/// Whether the airy rows survive: one middle row has to be left for them to be
-/// worth having.
+/// Whether the airy rows survive: [`MIN_MIDDLE_ROWS`] has to be left for them to
+/// be worth having.
 fn fits_airy(height: u16, header_rows: u16, input_rows: u16) -> bool {
-    height >= CHROME + header_rows + input_rows + 3
+    height >= CHROME + header_rows + input_rows + AIRY_ROWS + MIN_MIDDLE_ROWS
 }
 
 /// How many rows the input may take at this size.
 fn max_input_rows(height: u16, header_rows: u16, airy: bool) -> u16 {
-    let airy_rows = if airy { 2 } else { 0 };
-    let room = height.saturating_sub(CHROME + header_rows + airy_rows + 1);
+    let airy_rows = if airy { AIRY_ROWS } else { 0 };
+    let room = height.saturating_sub(CHROME + header_rows + airy_rows + MIN_MIDDLE_ROWS);
     MAX_INPUT_ROWS.min(room).max(1)
 }

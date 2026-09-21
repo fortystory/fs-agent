@@ -299,8 +299,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         // The header and the panel display these; none of them rides the event
         // stream, and the one value that does change at runtime — the mode — is
         // deliberately absent (the stream carries both of its transitions).
-        // The window is the model's input budget: an unregistered model is a
-        // startup error, so the capability table answers here.
+        // The window is the model's input budget. The provider above already
+        // resolved this same table, so the failure below is belt-and-braces: it
+        // keeps an unregistered model a startup error here too, rather than a
+        // panic where the facts are built.
         let caps = match caps_for(&model) {
             Ok(caps) => caps,
             Err(error) => {

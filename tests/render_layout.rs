@@ -304,3 +304,50 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
         "the streaming tail is in the pane too: {text}"
     );
 }
+
+#[test]
+fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
+    // The rest of the matrix the geometry table covers, each asserted for the
+    // reason it is in the table: 40x12 is where airy comes back at 40 columns,
+    // 80x24 is the panel with room to spare, and 174x50 is the ceiling — the panel
+    // is capped at 31 columns and the transcript takes the rest.
+    for (width, height) in [(40, 12), (80, 24), (174, 50)] {
+        let rows = screen(width, height, &state());
+        let text = rows.join("\n");
+        assert!(
+            !text.contains("终端太小"),
+            "{width}x{height} is inside the minimum: {text}"
+        );
+        assert!(
+            rows[0].starts_with('┌') && rows[0].ends_with('┐'),
+            "{width}x{height} opens a header block: {:?}",
+            rows[0]
+        );
+        assert!(
+            text.contains("ctrl-c 退出"),
+            "{width}x{height} keeps the way out: {text}"
+        );
+    }
+
+    // 40x12 has the airy row under the header; 40x10 (covered above) does not.
+    let airy = screen(40, 12, &state());
+    assert_eq!(airy[3].trim(), "", "airy returns at 40x12: {:?}", airy[3]);
+    let floor = screen(40, 10, &state());
+    assert_ne!(
+        floor[3].trim(),
+        "",
+        "and is given up at 40x10: {:?}",
+        floor[3]
+    );
+
+    // 174x50 is wide enough that the panel is at its 31-column cap: the seam sits
+    // 31 columns from the right edge.
+    let wide = buffer(174, 50, &state());
+    let seam = 174 - 31;
+    assert_eq!(wide[(seam, 5)].symbol(), "┬", "the seam at the cap");
+    assert_eq!(
+        wide[(174 - 1, 5)].symbol(),
+        "┐",
+        "the panel ends at the right border"
+    );
+}

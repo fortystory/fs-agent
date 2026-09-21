@@ -361,15 +361,15 @@ pub fn status_word(busy: bool) -> &'static str {
     }
 }
 
-/// The live key hints, in the order they are shown: the most used first, the way
-/// out last. Key names stay literal; only the action is Chinese.
-const KEY_HINTS: [&str; 6] = [
+/// The live key hints, in the order they are shown: the most used first. The way
+/// out is [`EXIT_HINT`], which is reserved rather than appended, so it survives
+/// every width.
+const KEY_HINTS: [&str; 5] = [
     "enter 发送",
     "ctrl-j 换行",
     "esc 取消",
     "shift+tab 计划",
     "PgUp/PgDn 滚动",
-    "ctrl-c 退出",
 ];
 
 /// The hint that is never dropped: a terminal where the way out cannot be found
@@ -381,12 +381,17 @@ const EXIT_HINT: &str = "ctrl-c 退出";
 /// The hints fill from the left with [`EXIT_HINT`] reserved at their end, and the
 /// state word is placed in front of them only if it still fits — so a narrow
 /// terminal keeps its way out *and* the hints that explain the keys, and gives up
-/// `就绪` instead of `ctrl-j 换行`. The measured ladder is three items at 40
-/// columns, four at 60, five at 80 and six at 120 (spec §10).
+/// `就绪` rather than `ctrl-j 换行`. The state word's placement is always the left
+/// edge; what degrades is whether it appears at all.
+///
+/// Hint ladder, measured against the approved prototype snapshots: three hints at
+/// 40 columns, four at 60, five at 80, six at 120. The state word becomes a
+/// leading item from the width where `就绪 · ` fits in front of that run (45
+/// columns), so the whole line holds 3, 5, 6 and 7 items respectively.
 pub fn status_line(busy: bool, width: u16) -> String {
     let exit = EXIT_HINT.cell_width();
     let mut hints = String::new();
-    for hint in &KEY_HINTS[..KEY_HINTS.len() - 1] {
+    for hint in &KEY_HINTS {
         let candidate = if hints.is_empty() {
             (*hint).to_owned()
         } else {
@@ -907,7 +912,7 @@ pub fn help_interactive() -> String {
      `/ask-matt 帮我看一下`），包括标了 `disable-model-invocation: true` 的技能。\
      TUI 里 Esc 取消正在跑的回合；Shift+Tab 切换计划模式。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
-     --tui              使用终端界面（inline viewport）\n  \
+     --tui              使用终端界面（全屏四分区）\n  \
      --continue, -c     继续本工作区最新的会话\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \
