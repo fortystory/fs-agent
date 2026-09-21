@@ -27,7 +27,7 @@ use fs_agent::events::{
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
 use fs_agent::render::RenderSinks;
-use fs_agent::{assemble, AssemblyParts, Harness};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- pure: extraction ------------------------------------------------------
@@ -406,20 +406,22 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path, config: SessionConfig) -
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        cwd: workspace.to_path_buf(),
-        log_path: log_path.clone(),
-        session_id: SessionId::new("s-repo-map"),
         config,
-        tools: fs_agent::tools::builtin(),
-        locks: fs_agent::tools::PathLocks::new(),
         sinks: RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
         },
-        policy: Policy::for_mode(Mode::Auto),
-        asker: None,
-        hook: None,
-        home: None,
+        scaffold: SessionScaffold {
+            cwd: workspace.to_path_buf(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-repo-map"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            hook: None,
+            home: None,
+        },
     })
     .await
     .unwrap();

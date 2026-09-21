@@ -2,9 +2,12 @@
 //!
 //! It owns the event log handle, the session identity, the injected
 //! configuration, the tool registry, the shared path locks, this agent's read
-//! set, and the session's permission policy. Later tickets add the roster and
-//! budgets; an executor is a nested `Session` whose events still append to its
-//! parent's stream and whose tool registry and path locks are the same values.
+//! set, this agent's private identity, and the session's permission policy.
+//! Budgets land in a later ticket. The roster is not here: a discussion's
+//! debaters are each their own `Session`, assembled side by side and sharing one
+//! log, and an executor will be a nested `Session` whose events still append to
+//! its parent's stream and whose tool registry and path locks are the same
+//! values.
 //!
 //! `Session` never writes on its own initiative. Its crate-private `append` is
 //! called only by the `agent` module, so the agent layer is the single writer of
@@ -12,7 +15,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;
@@ -25,20 +28,25 @@ use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
 /// environment by the library: the permission policy, the ask port used when the
 /// gate answers `Ask`, and the user's home (which only the `rm` circuit breaker
 /// reads) all arrive here.
+///
+/// The tool table and the policy arrive as shared handles because a discussion
+/// has more than one session at once (spec §15): two debaters must dispatch into
+/// the **same** tools with the **same** per-path locks, and a session-scoped
+/// allowance one of them earns must reach the other.
 pub struct SessionParts {
     pub id: SessionId,
     pub cwd: PathBuf,
     pub log: EventLog,
     pub config: SessionConfig,
     /// The tool table for this session.
-    pub tools: Registry,
+    pub tools: Arc<Registry>,
     /// Per-path write locks. The **same** table must reach every executor, or
     /// write exclusion is per session and therefore no lock at all.
     pub locks: PathLocks,
     /// Where this session's tool artifacts (`outputs/<tool_call_id>.*`) land.
     pub outputs_dir: PathBuf,
     /// The session's permission policy: a mode plus its rules.
-    pub policy: Policy,
+    pub policy: Arc<Mutex<Policy>>,
     /// The port the loop asks when the gate answers `Ask`. `None` means there is
     /// no interactive answerer, so the loop downgrades `Ask` to `Deny`.
     pub asker: Option<Arc<dyn Asker>>,
@@ -50,6 +58,11 @@ pub struct SessionParts {
     /// The skills discovered at assembly (spec §9). Shared with every nested
     /// session, so an executor sees the same catalog as its parent.
     pub skills: Arc<Skills>,
+    /// This agent's private identity: the `system` message it is given, and the
+    /// one thing about it that never enters the event stream (spec §15). A
+    /// discussion's protocol instructions live here precisely so that a round's
+    /// `messages` stays recomputable from the stream.
+    pub identity: Option<String>,
 }
 
 pub struct Session {
@@ -57,15 +70,16 @@ pub struct Session {
     cwd: PathBuf,
     log: EventLog,
     config: SessionConfig,
-    tools: Registry,
+    tools: Arc<Registry>,
     locks: PathLocks,
     paths: SessionPaths,
     outputs_dir: PathBuf,
     /// Paths this agent has read. Never inherited: read permission is per agent.
     read_set: ReadSet,
     /// The session's permission policy. A value, never an event: `--continue`
-    /// returns to the configured mode (spec §12).
-    policy: Policy,
+    /// returns to the configured mode (spec §12). Shared, because a session
+    /// allowance earned inside one debater's turn is a session-scoped fact.
+    policy: Arc<Mutex<Policy>>,
     /// The ask port, shared with any nested session so an executor asks through
     /// the same renderer.
     asker: Option<Arc<dyn Asker>>,
@@ -75,6 +89,10 @@ pub struct Session {
     home: Option<PathBuf>,
     /// The discovered skill library, read by the built-in `skill` tool (spec §9).
     skills: Arc<Skills>,
+    /// This agent's private identity, or `None` when it is given none. Never
+    /// appended to the log: it is the one input to a request that the stream does
+    /// not carry (spec §15).
+    identity: Option<String>,
 }
 
 impl Session {
@@ -94,6 +112,7 @@ impl Session {
             hook,
             home,
             skills,
+            identity,
         } = parts;
         let paths = SessionPaths::new(&cwd);
         Self {
@@ -111,6 +130,7 @@ impl Session {
             hook,
             home,
             skills,
+            identity,
         }
     }
 
@@ -126,7 +146,12 @@ impl Session {
         self.log.append(speaker_id, payload)
     }
 
-    pub fn events(&self) -> &[Event] {
+    /// A snapshot of this session's events, in order.
+    ///
+    /// A snapshot rather than a borrow: the log is a shared handle, so two
+    /// debaters' turns may append to it between two reads, and no borrow could
+    /// span that.
+    pub fn events(&self) -> Vec<Event> {
         self.log.events()
     }
 
@@ -171,14 +196,28 @@ impl Session {
     }
 
     /// The session's permission policy.
-    pub fn policy(&self) -> &Policy {
-        &self.policy
+    ///
+    /// A snapshot by value: the policy is shared, so the gate takes the value it
+    /// judges with rather than holding a lock across an interactive ask.
+    pub fn policy(&self) -> Policy {
+        self.policy.lock().expect("policy mutex poisoned").clone()
     }
 
     /// Remember a session-scoped allowance. This changes the policy value only:
     /// it writes no `config.toml` and appends no event (spec §12).
     pub fn remember_allow(&mut self, rule: Rule) {
-        self.policy.push(rule);
+        self.policy
+            .lock()
+            .expect("policy mutex poisoned")
+            .push(rule);
+    }
+
+    /// This agent's private identity, if it has one.
+    ///
+    /// It reaches the provider as the leading `system` message and never reaches
+    /// the event stream (spec §15).
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
     }
 
     /// The ask port, if this session has an interactive answerer.

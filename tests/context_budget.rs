@@ -21,7 +21,7 @@ use fs_agent::provider::capability::{caps_for, ModelCaps};
 use fs_agent::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
 use fs_agent::render::RenderSinks;
 use fs_agent::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
-use fs_agent::{assemble, AssemblyParts, Harness};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -370,21 +370,23 @@ async fn fixture(
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        cwd: workspace.clone(),
-        log_path: log_path.clone(),
-        session_id: SessionId::new("s-context"),
         config,
-        tools,
-        locks: fs_agent::tools::PathLocks::new(),
         sinks: RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
         },
-        // `auto` keeps a test-only read-only tool allowed without an answerer.
-        policy: Policy::for_mode(Mode::Auto),
-        asker: None,
-        hook: None,
-        home: None,
+        scaffold: SessionScaffold {
+            cwd: workspace.clone(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-context"),
+            tools,
+            locks: fs_agent::tools::PathLocks::new(),
+            // `auto` keeps a test-only read-only tool allowed without an answerer.
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            hook: None,
+            home: None,
+        },
     })
     .await
     .unwrap();

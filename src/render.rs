@@ -6,8 +6,12 @@
 //! defined; incremental text never enters the event log.
 //!
 //! Ticket 01 ships the headless renderer only. Its purity is structural: it
-//! writes to exactly two explicit sinks, and `stdout_result` receives only the
-//! final product of a `TurnEnded { Completed }` turn.
+//! writes to exactly two explicit sinks. `stdout_result` receives the final
+//! product and nothing else — either the completed turn of a single-agent
+//! session, or, inside a discussion, the synthesizer's `System`-attributed
+//! product (spec §15). Every debater turn also ends `Completed`, so "the last
+//! completed turn" would put both debaters' answers on stdout; a round boundary
+//! is what tells the two apart.
 //!
 //! The `[speaker]` prefix below is the **human's** prefix. It is deliberately a
 //! separate generator from the projection's model-side prefix (spec §5): this
@@ -100,6 +104,11 @@ pub fn spawn_headless(sinks: RenderSinks) -> (RenderHandle, JoinHandle<()>) {
 async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<RenderEvent>) {
     let mut final_text = String::new();
     let mut in_reasoning = false;
+    // Whether a discussion round is open. Inside one, a completed turn is one
+    // debater's answer rather than the session's final product: every debater
+    // turn also ends `Completed`, so "the last completed turn" would put both
+    // debaters' answers on stdout (spec §15).
+    let mut in_round = false;
 
     loop {
         match receiver.recv().await {
@@ -153,6 +162,15 @@ async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<
                         ..
                     } => {
                         final_text = text.clone();
+                        // The harness's own completed message is the discussion's
+                        // final product — the synthesizer's option space. It is
+                        // the one thing that belongs on stdout without a turn:
+                        // the synthesizer has no turn (spec §15).
+                        if event.speaker_id == SpeakerId::System {
+                            let _ = sinks.stdout_result.write_all(text.as_bytes());
+                            let _ = sinks.stdout_result.write_all(b"\n");
+                            let _ = sinks.stdout_result.flush();
+                        }
                         let _ = writeln!(
                             sinks.stderr_diagnostic,
                             "\n[{}] message complete",
@@ -160,12 +178,27 @@ async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<
                         );
                     }
                     EventPayload::TurnEnded { reason } => {
-                        if *reason == StopReason::Completed {
+                        if *reason == StopReason::Completed && !in_round {
                             let _ = sinks.stdout_result.write_all(final_text.as_bytes());
                             let _ = sinks.stdout_result.write_all(b"\n");
                             let _ = sinks.stdout_result.flush();
                         }
                         let _ = writeln!(sinks.stderr_diagnostic, "[turn ended: {reason}]");
+                    }
+                    // A round boundary is narrated with its number and its
+                    // reason spelled out: the four terminal reasons
+                    // (`NoDivergence` / `Consensus` / `RoundsExhausted` /
+                    // `BudgetExhausted`) have to stay distinguishable to the
+                    // person reading the terminal, which is the whole point of
+                    // having four of them (spec §15).
+                    EventPayload::RoundStarted { round, mode } => {
+                        in_round = true;
+                        let _ = writeln!(sinks.stderr_diagnostic, "\n[round {round}: {mode:?}]");
+                    }
+                    EventPayload::RoundEnded { round, reason } => {
+                        in_round = false;
+                        let _ =
+                            writeln!(sinks.stderr_diagnostic, "[round {round} ended: {reason}]");
                     }
                     payload => {
                         let _ = writeln!(

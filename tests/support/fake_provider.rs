@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use fs_agent::events::Usage;
@@ -8,6 +9,12 @@ use fs_agent::provider::{
     ChatRequest, EventStream, FinishReason, Provider, ProviderError, StreamEvent,
 };
 use futures::stream;
+use tokio::sync::Barrier;
+
+/// How long a rendezvous waits before declaring that the two calls were not
+/// concurrent. Long enough never to fire on a loaded machine, short enough that a
+/// sequential regression fails instead of hanging the suite.
+const RENDEZVOUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One scripted response for one `Provider::send` call.
 #[derive(Clone)]
@@ -59,6 +66,9 @@ struct Inner {
     replies: Mutex<VecDeque<Reply>>,
     requests: Mutex<Vec<ChatRequest>>,
     caps: ModelCaps,
+    /// When set, `send` refuses to produce a stream until every party has
+    /// arrived: the instrument for "these two calls really are concurrent".
+    rendezvous: Option<Arc<Barrier>>,
 }
 
 impl FakeProvider {
@@ -69,11 +79,30 @@ impl FakeProvider {
     /// A fake bound to explicit capability facts, so a test can drive the
     /// capability-driven branches of the projection.
     pub fn with_caps(replies: Vec<Reply>, caps: ModelCaps) -> Self {
+        Self::build(replies, caps, None)
+    }
+
+    /// A fake that will not answer until every party of `barrier` has called
+    /// `send`.
+    ///
+    /// This is how a test proves two turns were in flight at once: a loop that
+    /// ran them one after another would block on the first `send` and trip the
+    /// rendezvous timeout instead of quietly producing a stream.
+    pub fn meeting_at(replies: Vec<Reply>, barrier: Arc<Barrier>) -> Self {
+        Self::build(
+            replies,
+            caps_for("deepseek-flash").expect("built-in model"),
+            Some(barrier),
+        )
+    }
+
+    fn build(replies: Vec<Reply>, caps: ModelCaps, rendezvous: Option<Arc<Barrier>>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 replies: Mutex::new(replies.into()),
                 requests: Mutex::new(Vec::new()),
                 caps,
+                rendezvous,
             }),
         }
     }
@@ -94,6 +123,17 @@ impl Provider for FakeProvider {
     }
 
     async fn send(&self, request: ChatRequest) -> Result<EventStream, ProviderError> {
+        if let Some(barrier) = &self.inner.rendezvous {
+            if tokio::time::timeout(RENDEZVOUS_TIMEOUT, barrier.wait())
+                .await
+                .is_err()
+            {
+                panic!(
+                    "FakeProvider: no other call arrived within {RENDEZVOUS_TIMEOUT:?}, \
+                     so this call was not concurrent with another"
+                );
+            }
+        }
         self.inner
             .requests
             .lock()

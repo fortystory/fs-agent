@@ -18,7 +18,7 @@ use fs_agent::events::{
 use fs_agent::permissions::{Answer, Asker, Mode, Policy, Rule, Scope, Subject};
 use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::RenderSinks;
-use fs_agent::{assemble, AssemblyParts, Harness};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
@@ -52,20 +52,22 @@ async fn fixture(
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        cwd: workspace.clone(),
-        log_path: log_path.clone(),
-        session_id: SessionId::new("s-perm"),
         config: SessionConfig::new("fake-model"),
-        tools: fs_agent::tools::builtin(),
-        locks: fs_agent::tools::PathLocks::new(),
         sinks: RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
         },
-        policy: session_policy,
-        asker,
-        hook: None,
-        home: None,
+        scaffold: SessionScaffold {
+            cwd: workspace.clone(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-perm"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: session_policy,
+            asker,
+            hook: None,
+            home: None,
+        },
     })
     .await
     .unwrap();

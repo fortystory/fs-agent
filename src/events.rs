@@ -12,6 +12,7 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -450,10 +451,28 @@ impl Event {
 /// Query: which `tool_call`s have no result yet?
 ///
 /// Pending work is a query over the log, never hidden loop state. The turn loop
-/// must not call the provider while this is non-empty.
+/// must not call the provider while this is non-empty. This session-wide form is
+/// the diagnostics and `--continue` recovery one; the loop uses
+/// [`pending_tool_calls_of`], because invariant 2 binds the acting agent.
 pub fn pending_tool_calls(events: &[Event]) -> Vec<ToolCallId> {
+    pending_of(events, None)
+}
+
+/// Query: which of `speaker`'s `tool_call`s have no result yet?
+///
+/// Invariant 2 is per acting agent. With two debaters in flight at once a
+/// session-wide query would read the other's unfinished call as one's own and
+/// refuse to call the provider for a reason that has nothing to do with it.
+pub fn pending_tool_calls_of(events: &[Event], speaker: &SpeakerId) -> Vec<ToolCallId> {
+    pending_of(events, Some(speaker))
+}
+
+fn pending_of(events: &[Event], only: Option<&SpeakerId>) -> Vec<ToolCallId> {
     let mut pending: Vec<ToolCallId> = Vec::new();
     for event in events {
+        if only.is_some_and(|speaker| &event.speaker_id != speaker) {
+            continue;
+        }
         match &event.payload {
             EventPayload::ToolCallStarted { tool_call_id, .. } => {
                 if !pending.contains(tool_call_id) {
@@ -525,12 +544,21 @@ pub fn total_usage(events: &[Event]) -> Usage {
 
 /// Append-only JSONL log for one session.
 ///
-/// The writer is owned and only [`EventLog::append`] takes `&mut self`, so
-/// there is exactly one writer per file. In-memory events are a cache of the
-/// file, kept in sync by the single writer.
-#[derive(Debug)]
+/// The handle is cheap to clone, and every clone shares one writer, one
+/// in-memory cache and one `next_seq` counter. That sharing is what lets two
+/// debaters run their turns concurrently onto one stream (spec §15) while "the
+/// log has a single writer" still holds: the lock makes each append atomic, so
+/// two events can never interleave inside a line and `seq` keeps meaning "line
+/// number". In-memory events are a cache of the file, kept in sync by whichever
+/// clone holds the lock.
+#[derive(Debug, Clone)]
 pub struct EventLog {
     path: PathBuf,
+    inner: Arc<Mutex<Inner>>,
+}
+
+#[derive(Debug)]
+struct Inner {
     writer: BufWriter<File>,
     events: Vec<Event>,
     next_seq: u64,
@@ -547,9 +575,11 @@ impl EventLog {
             .open(&path)?;
         Ok(Self {
             path,
-            writer: BufWriter::new(file),
-            events: Vec::new(),
-            next_seq: 1,
+            inner: Arc::new(Mutex::new(Inner {
+                writer: BufWriter::new(file),
+                events: Vec::new(),
+                next_seq: 1,
+            })),
         })
     }
 
@@ -565,9 +595,11 @@ impl EventLog {
         let file = OpenOptions::new().append(true).open(&path)?;
         Ok(Self {
             path,
-            writer: BufWriter::new(file),
-            events,
-            next_seq,
+            inner: Arc::new(Mutex::new(Inner {
+                writer: BufWriter::new(file),
+                events,
+                next_seq,
+            })),
         })
     }
 
@@ -576,18 +608,24 @@ impl EventLog {
     }
 
     pub fn next_seq(&self) -> u64 {
-        self.next_seq
+        self.inner().next_seq
     }
 
-    /// All events read so far, in order.
-    pub fn events(&self) -> &[Event] {
-        &self.events
+    /// A snapshot of every event read so far, in order.
+    ///
+    /// A snapshot rather than a borrow: two debaters share this handle, so there
+    /// is no lifetime at which the caller could hold a reference into it. The
+    /// stream is append-only, so a snapshot is a valid prefix of the log — which
+    /// is exactly what a round-scoped projection needs (spec §15).
+    pub fn events(&self) -> Vec<Event> {
+        self.inner().events.clone()
     }
 
     /// Append one event. Flushes the line but never `fsync`s.
     pub fn append(&mut self, speaker_id: SpeakerId, payload: EventPayload) -> io::Result<Event> {
+        let mut inner = self.inner.lock().expect("event log mutex poisoned");
         let event = Event {
-            seq: self.next_seq,
+            seq: inner.next_seq,
             at: Utc::now(),
             speaker_id,
             payload,
@@ -595,16 +633,24 @@ impl EventLog {
         let mut line =
             serde_json::to_string(&event).expect("Event payloads are always JSON-serializable");
         line.push('\n');
-        self.writer.write_all(line.as_bytes())?;
-        self.writer.flush()?;
-        self.events.push(event.clone());
-        self.next_seq += 1;
+        inner.writer.write_all(line.as_bytes())?;
+        inner.writer.flush()?;
+        inner.events.push(event.clone());
+        inner.next_seq += 1;
         Ok(event)
     }
 
     /// Flush buffered bytes to the OS. Not an `fsync`.
     pub fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
+        self.inner
+            .lock()
+            .expect("event log mutex poisoned")
+            .writer
+            .flush()
+    }
+
+    fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().expect("event log mutex poisoned")
     }
 }
 

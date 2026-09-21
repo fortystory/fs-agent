@@ -17,7 +17,7 @@ use fs_agent::events::{
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, ProviderError, StreamEvent};
 use fs_agent::render::RenderSinks;
-use fs_agent::{assemble, AssemblyParts, Harness};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {
@@ -48,22 +48,24 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        cwd: cwd.clone(),
-        log_path: log_path.clone(),
-        session_id: SessionId::new("s-1"),
         config,
-        tools: fs_agent::tools::builtin(),
-        locks: fs_agent::tools::PathLocks::new(),
         sinks: RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
         },
-        // An interactive session: the default `ask` mode, with a user who
-        // approves every write. Permission-specific tests script their own.
-        policy: Policy::for_mode(Mode::Ask),
-        asker: Some(Arc::new(AlwaysAllow)),
-        hook: None,
-        home: None,
+        scaffold: SessionScaffold {
+            cwd: cwd.clone(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-1"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            // An interactive session: the default `ask` mode, with a user who
+            // approves every write. Permission-specific tests script their own.
+            policy: Policy::for_mode(Mode::Ask),
+            asker: Some(Arc::new(AlwaysAllow)),
+            hook: None,
+            home: None,
+        },
     })
     .await
     .unwrap();

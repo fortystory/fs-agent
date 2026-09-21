@@ -210,16 +210,24 @@ fn fits(messages: &[Message], budget: u64) -> bool {
     estimate_messages_tokens(messages) <= budget
 }
 
-/// The pinned head: the projected `ContextInjected` events, which is why they
-/// are `user` messages with no `name`, always first (spec §5, §10). They never
-/// take part in trimming.
+/// The pinned head: the agent's private identity, then the projected
+/// `ContextInjected` events, which is why they are `user` messages with no
+/// `name`, always first (spec §5, §10, §15). They never take part in trimming.
+///
+/// Counting the identity here is also what keeps [`round_starts`] from mistaking
+/// the pinned injection for a droppable round.
 ///
 /// A later mid-session injection (plan mode, ticket 15) is not in this leading
 /// prefix; that ticket must extend the pin marker when it lands.
 fn pinned_len(messages: &[Message]) -> usize {
     messages
         .iter()
-        .take_while(|message| matches!(message, Message::User { name: None, .. }))
+        .take_while(|message| {
+            matches!(
+                message,
+                Message::System { .. } | Message::User { name: None, .. }
+            )
+        })
         .count()
 }
 

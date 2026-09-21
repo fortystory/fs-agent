@@ -150,7 +150,7 @@ fn another_speakers_text_is_kept_but_its_tool_round_trip_shrinks_to_one_summary_
         result(log, &deepseek(), "call-1", "SECRET-BODY");
     });
 
-    let messages = project(&log, &kimi(), &caps());
+    let messages = project(&log.events(), &kimi(), &caps());
 
     assert_eq!(
         messages.len(),
@@ -207,7 +207,7 @@ fn own_reasoning_is_replayed_and_the_tool_round_trip_merges_with_post_hook_feedb
         .unwrap();
     });
 
-    let messages = project(&log, &kimi(), &caps());
+    let messages = project(&log.events(), &kimi(), &caps());
 
     assert_eq!(messages.len(), 2, "{messages:?}");
     match &messages[0] {
@@ -265,7 +265,7 @@ fn a_failed_post_hook_loses_its_feedback_but_keeps_the_result() {
         .unwrap();
     });
 
-    let messages = project(&log, &kimi(), &caps());
+    let messages = project(&log.events(), &kimi(), &caps());
 
     let tool = messages
         .iter()
@@ -289,7 +289,7 @@ fn an_interleaved_other_speaker_never_leaves_a_tool_call_without_its_result() {
         result(log, &kimi(), "call-1", "body");
     });
 
-    let messages = project(&log, &kimi(), &caps());
+    let messages = project(&log.events(), &kimi(), &caps());
 
     let calls: Vec<String> = messages
         .iter()
@@ -339,8 +339,8 @@ fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_s
         say_with_reasoning(log, &kimi(), "kimi's answer", Some("k-think"));
     });
 
-    let for_kimi = project(&log, &kimi(), &caps());
-    let for_deepseek = project(&log, &deepseek(), &caps());
+    let for_kimi = project(&log.events(), &kimi(), &caps());
+    let for_deepseek = project(&log.events(), &deepseek(), &caps());
 
     assert_ne!(
         for_kimi, for_deepseek,
@@ -349,8 +349,8 @@ fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_s
 
     // The projection is a pure function: re-running it is byte-for-byte stable,
     // which is what "recomputable from the stream + the rules" buys.
-    assert_eq!(for_kimi, project(&log, &kimi(), &caps()));
-    assert_eq!(for_deepseek, project(&log, &deepseek(), &caps()));
+    assert_eq!(for_kimi, project(&log.events(), &kimi(), &caps()));
+    assert_eq!(for_deepseek, project(&log.events(), &deepseek(), &caps()));
 
     // kimi sees deepseek compressed to one user block, and its own turn with
     // its own reasoning.
@@ -411,7 +411,7 @@ fn the_pinned_head_never_merges_and_a_round_is_a_hard_boundary() {
         say(log, &kimi(), "round 2 from kimi");
     });
 
-    let messages = project(&log, &synthesizer(), &caps());
+    let messages = project(&log.events(), &synthesizer(), &caps());
     let users = user_messages(&messages);
 
     assert_eq!(users.len(), 3, "{messages:?}");
@@ -441,7 +441,7 @@ fn the_first_user_message_does_not_absorb_a_later_speakers_speech() {
         say(log, &deepseek(), "second");
     });
 
-    let messages = project(&log, &synthesizer(), &caps());
+    let messages = project(&log.events(), &synthesizer(), &caps());
     let users = user_messages(&messages);
 
     assert_eq!(users.len(), 2, "{messages:?}");
@@ -464,7 +464,7 @@ fn a_context_injection_is_pinned_and_does_not_merge() {
         say(log, &kimi(), "after");
     });
 
-    let messages = project(&log, &synthesizer(), &caps());
+    let messages = project(&log.events(), &synthesizer(), &caps());
     let users = user_messages(&messages);
 
     assert_eq!(
@@ -489,7 +489,7 @@ fn an_executors_events_stay_out_of_a_debaters_projection_but_not_its_own() {
         result(log, &executor, "e-call", "e-body");
     });
 
-    let for_synthesizer = project(&log, &synthesizer(), &caps());
+    let for_synthesizer = project(&log.events(), &synthesizer(), &caps());
     let synthesizer_text = for_synthesizer
         .iter()
         .map(text_of)
@@ -502,7 +502,7 @@ fn an_executors_events_stay_out_of_a_debaters_projection_but_not_its_own() {
     );
     assert!(!synthesizer_text.contains("e-body"), "{synthesizer_text}");
 
-    let for_executor = project(&log, &executor, &caps());
+    let for_executor = project(&log.events(), &executor, &caps());
     assert!(for_executor
         .iter()
         .any(|message| matches!(message, Message::Assistant { .. })));
@@ -522,7 +522,7 @@ fn names_are_sanitized_and_never_carried_on_tool_messages() {
         result(log, &odd, "call-1", "body");
     });
 
-    let messages = project(&log, &odd, &caps());
+    let messages = project(&log.events(), &odd, &caps());
     let own = messages
         .iter()
         .find(|message| matches!(message, Message::Assistant { .. }))
@@ -557,7 +557,7 @@ fn superseded_ranges_are_excluded_from_the_projection() {
         .unwrap();
     });
 
-    let messages = project(&log, &synthesizer(), &caps());
+    let messages = project(&log.events(), &synthesizer(), &caps());
     let text = messages.iter().map(text_of).collect::<Vec<_>>().join("\n");
     assert!(!text.contains("old answer"), "{text}");
     assert!(text.contains("replacement answer"), "{text}");
@@ -576,7 +576,7 @@ fn projected_messages_serialize_into_both_vendors_wire_shapes() {
 
     let request = ChatRequest {
         model: "fake-model".to_owned(),
-        messages: project(&log, &kimi(), &caps()),
+        messages: project(&log.events(), &kimi(), &caps()),
         tools: Vec::new(),
         tool_choice: ToolChoice::Auto,
         params: GenerationParams {
@@ -634,7 +634,7 @@ fn reasoning_replay_is_data_on_the_capability_table_not_a_vendor_branch() {
     let mut caps = caps();
     caps.requires_reasoning_replay = false;
 
-    let messages = project(&log, &kimi(), &caps);
+    let messages = project(&log.events(), &kimi(), &caps);
     match &messages[0] {
         Message::Assistant {
             reasoning_content, ..
@@ -645,7 +645,7 @@ fn reasoning_replay_is_data_on_the_capability_table_not_a_vendor_branch() {
         other => panic!("expected assistant, got {other:?}"),
     }
     // The same events with the on-table fact produce the replay.
-    let messages = project(&log, &kimi(), &caps_for("deepseek-flash").unwrap());
+    let messages = project(&log.events(), &kimi(), &caps_for("deepseek-flash").unwrap());
     match &messages[0] {
         Message::Assistant {
             reasoning_content, ..

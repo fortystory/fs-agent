@@ -27,7 +27,7 @@ use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::capability::caps_for;
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
 use fs_agent::render::RenderSinks;
-use fs_agent::{assemble, AssemblyParts, Harness};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- fixtures --------------------------------------------------------------
@@ -461,21 +461,23 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path) -> Fixture {
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        cwd: workspace.to_path_buf(),
-        log_path: log_path.clone(),
-        session_id: SessionId::new("s-skills"),
         config: SessionConfig::new("fake-model"),
-        tools: fs_agent::tools::builtin(),
-        locks: fs_agent::tools::PathLocks::new(),
         sinks: RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
         },
-        policy: Policy::for_mode(Mode::Auto),
-        asker: None,
-        hook: None,
-        // No user-level roots, so a test never reads the machine's own skills.
-        home: None,
+        scaffold: SessionScaffold {
+            cwd: workspace.to_path_buf(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-skills"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            hook: None,
+            // No user-level roots, so a test never reads the machine's own skills.
+            home: None,
+        },
     })
     .await
     .unwrap();

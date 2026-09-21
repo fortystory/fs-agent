@@ -1,4 +1,4 @@
-//! Projection: `(EventLog, SpeakerId, ModelCaps) -> messages`.
+//! Projection: `(&[Event], SpeakerId, ModelCaps) -> messages`.
 //!
 //! A pure function of the stream plus attribution rules. It holds no trimming
 //! state; trimming is a separate pure step that lands in ticket 07. The same
@@ -33,7 +33,7 @@ use std::collections::BTreeSet;
 
 use super::capability::ModelCaps;
 use super::{Message, ToolCall};
-use crate::events::{hook_format, Event, EventLog, EventPayload, SpeakerId, ToolCallId};
+use crate::events::{hook_format, Event, EventPayload, SpeakerId, ToolCallId};
 
 /// Longest sanitized participant name sent in a `name` field.
 ///
@@ -44,13 +44,19 @@ const MAX_NAME_CHARS: usize = 64;
 /// Longest rendered argument list kept in another speaker's tool summary.
 const MAX_TOOL_SUMMARY_CHARS: usize = 160;
 
-/// Recompute the `messages` an agent should replay from the event stream.
+/// Recompute the `messages` an agent should replay from a slice of the event
+/// stream.
+///
+/// The slice rather than the log itself: the stream is append-only, so a prefix
+/// of it is a perfectly good input, and a discussion round needs exactly that —
+/// a debater's window is cut at its round's `RoundStarted` (spec §15). Passing
+/// the events also keeps this function honest about being pure.
 ///
 /// `caps` supplies the provider's field-level facts, so a difference such as
 /// whether the model's own reasoning must round-trip is a table value rather
 /// than a code path.
-pub fn project(log: &EventLog, speaker: &SpeakerId, caps: &ModelCaps) -> Vec<Message> {
-    let superseded = superseded_seqs(log.events());
+pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<Message> {
+    let superseded = superseded_seqs(events);
     let mut messages = Vec::new();
     let mut others = OtherBlock::default();
     // Whether the first speech `user` message has been emitted. It is pinned:
@@ -61,7 +67,7 @@ pub fn project(log: &EventLog, speaker: &SpeakerId, caps: &ModelCaps) -> Vec<Mes
     let mut pending: Option<PendingAssistant> = None;
     let mut round: Option<u32> = None;
 
-    for event in log.events() {
+    for event in events {
         if superseded.contains(&event.seq) {
             continue;
         }

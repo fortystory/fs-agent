@@ -20,7 +20,7 @@ use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::render::RenderSinks;
 use crate::tools::{self, PathLocks};
-use crate::{assemble, AssemblyParts};
+use crate::{assemble, AssemblyParts, SessionScaffold};
 
 /// Prompt for the second probe turn; keeps the transcript growing so the first
 /// turn's prefix is what the cache has to match.
@@ -244,29 +244,32 @@ async fn probe_model(
 
     let session_config = SessionConfig::new(model_id).with_params(model.params.clone());
     let mut harness = assemble(AssemblyParts {
+        scaffold: SessionScaffold {
+            cwd: dir,
+            log_path: log_path.clone(),
+            session_id: SessionId::new(format!("probe-{model_id}")),
+            // The probe exercises real turns, so it gets the real tool table.
+            tools: tools::builtin(),
+            locks: PathLocks::new(),
+            // The probe is headless and has no answerer, so the interactive
+            // default `ask` refuses writes rather than hanging on a question
+            // nobody can see.
+            policy: Policy::for_mode(Mode::Ask),
+            asker: None,
+            // Ticket 05 lands the mount points; wiring user-declared hooks into
+            // the CLI is nobody's ticket yet, so the probe runs without one.
+            hook: None,
+            home: home.map(Path::to_path_buf),
+        },
         provider: Box::new(provider),
         speaker: SpeakerId::Debater(profile.name.clone().into()),
-        cwd: dir,
-        log_path: log_path.clone(),
-        session_id: SessionId::new(format!("probe-{model_id}")),
         config: session_config,
-        // The probe exercises real turns, so it gets the real tool table.
-        tools: tools::builtin(),
-        locks: PathLocks::new(),
         sinks: RenderSinks {
             // The probe prints its own report on stdout; the renderer narrates
             // to stderr only.
             stdout_result: Box::new(std::io::sink()),
             stderr_diagnostic: Box::new(std::io::stderr()),
         },
-        // The probe is headless and has no answerer, so the interactive default
-        // `ask` refuses writes rather than hanging on a question nobody can see.
-        policy: Policy::for_mode(Mode::Ask),
-        asker: None,
-        // Ticket 05 lands the mount points; wiring user-declared hooks into the
-        // CLI is nobody's ticket yet, so the probe runs without one.
-        hook: None,
-        home: home.map(Path::to_path_buf),
     })
     .await
     .map_err(ProbeError::failed)?;

@@ -23,7 +23,7 @@ use fs_agent::permissions::{Answer, Asker, Mode, Policy, Rule};
 use fs_agent::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
 use fs_agent::render::RenderSinks;
 use fs_agent::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
-use fs_agent::{assemble, AssemblyParts, Harness};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker, ScriptedHook};
 
@@ -80,20 +80,22 @@ async fn fixture_with_tools(
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        cwd: workspace.clone(),
-        log_path: log_path.clone(),
-        session_id: SessionId::new("s-hooks"),
         config: SessionConfig::new("fake-model"),
-        tools,
-        locks: fs_agent::tools::PathLocks::new(),
         sinks: RenderSinks {
             stdout_result: Box::new(stdout.clone()),
             stderr_diagnostic: Box::new(stderr.clone()),
         },
-        policy: session_policy,
-        asker,
-        hook,
-        home: None,
+        scaffold: SessionScaffold {
+            cwd: workspace.clone(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-hooks"),
+            tools,
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: session_policy,
+            asker,
+            hook,
+            home: None,
+        },
     })
     .await
     .unwrap();
