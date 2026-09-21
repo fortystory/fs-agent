@@ -13,7 +13,7 @@ The protocol is split three ways, and the split is load-bearing:
 | Layer | Holds |
 | --- | --- |
 | `discussion` (`src/discussion.rs`, `src/discussion/protocol.rs`) | the **rules**: whether two conclusions agree, who answered in a round, whether another round is allowed, the private instructions and the synthesizer prompt. Pure, and it never touches `provider`. |
-| `agent` (`run_turn`, `run_discussion`, `run_single_shot`) | the **control flow**: the round loop, the two concurrent turns, the closing call. This layer is the only writer of the event stream and the only caller of a provider (spec §3). |
+| `agent` (`run_turn`, `run_discussion`, `run_single_shot`, `agent::executor`) | the **control flow**: the round loop, the two concurrent turns, the closing call, the executor a `task` call dispatches. This layer is the only writer of the event stream — every append goes through `agent::append_event` — and the only caller of a provider (spec §3). |
 | assembly (`assemble_discussion`) | the **roster**: one `SessionScaffold` opened into two debater sessions and one synthesizer session, all sharing one log, one tool table, one lock table and one permission policy. |
 
 `discussion` decides; `agent` writes. That is why the round-boundary events are

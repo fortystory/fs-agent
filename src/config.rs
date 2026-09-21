@@ -32,6 +32,20 @@ use thiserror::Error;
 /// Default maximum provider calls in one turn (spec §3).
 pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
 
+/// Default maximum provider calls in one executor's turn (spec §16): goose's
+/// `GOOSE_SUBAGENT_MAX_TURNS`. An executor is there to do a job, not to run a
+/// marathon, and its own cap is what stops one runaway executor from eating the
+/// session's turn budget.
+pub const DEFAULT_EXECUTOR_MAX_ITERATIONS: u32 = 25;
+
+/// Default cap on how many executors one batch of tool calls runs at once
+/// (spec §16): goose's `GOOSE_MAX_BACKGROUND_TASKS`.
+///
+/// A cost and rate gate, not a safety gate: write exclusion between executors is
+/// the shared path locks' job, and this cap exists because N executors with N
+/// turn budgets and growing contexts multiply.
+pub const DEFAULT_MAX_PARALLEL_EXECUTORS: usize = 5;
+
 /// Default cap on one tool result, in estimated tokens (spec §10, ticket 07):
 /// Anthropic documents 25k as Claude Code's default tool-response limit.
 pub const DEFAULT_MAX_TOOL_RESULT_TOKENS: u64 = 25_000;
@@ -648,6 +662,23 @@ pub struct SessionConfig {
     /// Cap on the repo map, in estimated tokens (spec §9). A fixed budget, never
     /// a model-supplied argument; [`MAX_REPO_MAP_TOKENS`] is the ceiling.
     pub repo_map_tokens: u64,
+    /// Turn cap for an executor this agent dispatches (spec §16). Independent of
+    /// [`SessionConfig::max_iterations`] — "a runaway executor must not eat the
+    /// session's turns" is the requirement, not an optimization — while its token
+    /// spend still counts toward the session total.
+    pub executor_max_iterations: u32,
+    /// Model an executor answers with (spec §16, §17). `None` inherits the
+    /// dispatcher's model, which is the default and the v1 behaviour; the override
+    /// is the mechanism §17 leaves in place for routing work to a cheaper model
+    /// once there is data to route on.
+    ///
+    /// The **client** is not overridable here: an executor answers on its
+    /// dispatcher's provider, so this names a model that client can serve (a model
+    /// of the same provider profile). Swapping the provider for executors is an
+    /// assembly decision, not a per-session value.
+    pub executor_model: Option<String>,
+    /// How many executors one batch may run at once (spec §16).
+    pub max_parallel_executors: usize,
 }
 
 impl SessionConfig {
@@ -658,11 +689,32 @@ impl SessionConfig {
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
             repo_map_tokens: DEFAULT_REPO_MAP_TOKENS,
+            executor_max_iterations: DEFAULT_EXECUTOR_MAX_ITERATIONS,
+            executor_model: None,
+            max_parallel_executors: DEFAULT_MAX_PARALLEL_EXECUTORS,
         }
     }
 
     pub fn with_max_iterations(mut self, max_iterations: u32) -> Self {
         self.max_iterations = max_iterations;
+        self
+    }
+
+    /// Override the turn cap an executor runs under (spec §16).
+    pub fn with_executor_max_iterations(mut self, executor_max_iterations: u32) -> Self {
+        self.executor_max_iterations = executor_max_iterations;
+        self
+    }
+
+    /// Override how many executors one batch may run at once (spec §16).
+    pub fn with_max_parallel_executors(mut self, max_parallel_executors: usize) -> Self {
+        self.max_parallel_executors = max_parallel_executors.max(1);
+        self
+    }
+
+    /// Route this agent's executors to another model (spec §16, §17).
+    pub fn with_executor_model(mut self, executor_model: impl Into<String>) -> Self {
+        self.executor_model = Some(executor_model.into());
         self
     }
 
@@ -699,6 +751,9 @@ impl Default for SessionConfig {
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
             repo_map_tokens: DEFAULT_REPO_MAP_TOKENS,
+            executor_max_iterations: DEFAULT_EXECUTOR_MAX_ITERATIONS,
+            executor_model: None,
+            max_parallel_executors: DEFAULT_MAX_PARALLEL_EXECUTORS,
         }
     }
 }

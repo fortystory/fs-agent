@@ -140,7 +140,10 @@ pub struct DiscussionParts {
 /// The assembled harness the caller drives.
 pub struct Harness {
     session: Session,
-    provider: Box<dyn Provider>,
+    /// Shared, because an executor this session dispatches answers on the same
+    /// client: an executor's model is inherited unless a profile overrides it
+    /// (spec §16).
+    provider: Arc<dyn Provider>,
     speaker: SpeakerId,
     render: RenderHandle,
     render_task: JoinHandle<()>,
@@ -285,7 +288,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
 
     Ok(Harness {
         session,
-        provider,
+        provider: provider.into(),
         speaker,
         render: opened.render,
         render_task: opened.render_task,
@@ -349,7 +352,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         roster.push(agent::Debater {
             speaker,
             session,
-            provider,
+            provider: provider.into(),
         });
     }
 
@@ -376,7 +379,7 @@ impl Harness {
         agent::run_turn(
             &mut self.session,
             &self.speaker,
-            self.provider.as_ref(),
+            &self.provider,
             &self.render,
             agent::TurnScope::Whole,
         )

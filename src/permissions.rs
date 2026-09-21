@@ -311,9 +311,14 @@ impl Policy {
     /// `propagate` — denials and questions by default — so inheritance can only
     /// tighten.
     ///
-    /// The executor's mode is its own assembly decision, deliberately not copied
-    /// from the parent: copying an `auto` parent's mode would hand the child the
-    /// parent's allowance, which is exactly what must not travel (spec §12).
+    /// Working out the child's whole policy is [`crate::agent::executor`]'s job,
+    /// and what it does with this list is the point: the child runs under the
+    /// **same mode** as its dispatcher (a mode is the session's stance on writes,
+    /// and a delegation that inherited a looser one would be a widening), keeps
+    /// every propagated rule, and starts with an empty read set. Its authority is
+    /// therefore a subset of the dispatcher's; what never travels is an
+    /// *allowance*, which is what these rules would carry if `Allow` propagated
+    /// (spec §12, §16).
     pub fn inherited_rules(&self) -> Vec<Rule> {
         self.rules
             .iter()

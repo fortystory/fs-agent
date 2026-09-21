@@ -653,3 +653,46 @@ fn reasoning_replay_is_data_on_the_capability_table_not_a_vendor_branch() {
         other => panic!("expected assistant, got {other:?}"),
     }
 }
+
+#[test]
+fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
+    // The brief is the executor's first speech, not part of the pinned head: the
+    // head is the leading run of injections, and a plan-mode injection arriving
+    // later must stand alone rather than be appended to the brief (spec §5, §10).
+    let executor = SpeakerId::Executor("e-1".into());
+    let (_dir, log) = log(|log| {
+        log.append(
+            SpeakerId::User,
+            EventPayload::ContextInjected {
+                source: ContextSource::AgentsMd,
+                content: "project rules".to_owned(),
+            },
+        )
+        .unwrap();
+        log.append(
+            executor.clone(),
+            EventPayload::ExecutorSpawned {
+                executor_id: fs_agent::events::ParticipantId::new("e-1"),
+                parent: fs_agent::events::ParticipantId::new("kimi"),
+                brief: "count the modules under src".to_owned(),
+            },
+        )
+        .unwrap();
+        log.append(
+            SpeakerId::User,
+            EventPayload::ContextInjected {
+                source: ContextSource::PlanMode,
+                content: "read PLAN.md before acting".to_owned(),
+            },
+        )
+        .unwrap();
+    });
+
+    let messages = project(&log.events(), &executor, &caps());
+    let users = user_messages(&messages);
+
+    assert_eq!(users.len(), 3, "head, brief, injection: {messages:?}");
+    assert!(text_of(users[0]).contains("project rules"));
+    assert_eq!(text_of(users[1]), "count the modules under src");
+    assert_eq!(text_of(users[2]), "read PLAN.md before acting");
+}

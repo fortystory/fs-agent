@@ -524,6 +524,19 @@ pub fn last_assistant_has_tool_calls(events: &[Event], speaker: &SpeakerId) -> b
 /// `reasoning_tokens` stays `None` until some provider reports it; once one
 /// does, the totals are summed.
 pub fn total_usage(events: &[Event]) -> Usage {
+    sum_usage(events.iter())
+}
+
+/// Query: one speaker's usage, summed from its own `UsageRecorded` events.
+///
+/// The per-speaker slice of the session total: an executor's spend counts toward
+/// the session (spec §16) and is also what the `task` result reports back as
+/// metadata, so neither number needs a second ledger.
+pub fn usage_of(events: &[Event], speaker: &SpeakerId) -> Usage {
+    sum_usage(events.iter().filter(|event| &event.speaker_id == speaker))
+}
+
+fn sum_usage<'a>(events: impl Iterator<Item = &'a Event>) -> Usage {
     let mut total = Usage::default();
     let mut reasoning: Option<u64> = None;
     for event in events {

@@ -101,6 +101,16 @@ pub fn spawn_headless(sinks: RenderSinks) -> (RenderHandle, JoinHandle<()>) {
     (RenderHandle { sender }, task)
 }
 
+/// Whether a speaker is an executor.
+///
+/// An executor's turn is never the session's final product (spec §16, §19): the
+/// dispatcher's own turn is still open around it, so an executor's completed turn
+/// must neither print to `stdout` nor overwrite the text the dispatcher's turn
+/// will print.
+fn is_executor(speaker: &SpeakerId) -> bool {
+    matches!(speaker, SpeakerId::Executor(_))
+}
+
 async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<RenderEvent>) {
     let mut final_text = String::new();
     let mut in_reasoning = false;
@@ -149,7 +159,9 @@ async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<
                 }
                 match &event.payload {
                     EventPayload::TurnStarted { iteration, .. } => {
-                        final_text.clear();
+                        if !is_executor(&event.speaker_id) {
+                            final_text.clear();
+                        }
                         let _ = writeln!(
                             sinks.stderr_diagnostic,
                             "\n[{}] turn iteration {iteration}",
@@ -161,7 +173,13 @@ async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<
                         text,
                         ..
                     } => {
-                        final_text = text.clone();
+                        // An executor's turn is work, not the session's product:
+                        // keeping its text out of `final_text` is what stops it
+                        // reaching stdout, and it stops the executor's turn from
+                        // clearing (or overwriting) the turn it is working for.
+                        if !is_executor(&event.speaker_id) {
+                            final_text = text.clone();
+                        }
                         // The harness's own completed message is the discussion's
                         // final product — the synthesizer's option space. It is
                         // the one thing that belongs on stdout without a turn:
@@ -178,7 +196,10 @@ async fn run_headless(mut sinks: RenderSinks, mut receiver: broadcast::Receiver<
                         );
                     }
                     EventPayload::TurnEnded { reason } => {
-                        if *reason == StopReason::Completed && !in_round {
+                        if *reason == StopReason::Completed
+                            && !in_round
+                            && !is_executor(&event.speaker_id)
+                        {
                             let _ = sinks.stdout_result.write_all(final_text.as_bytes());
                             let _ = sinks.stdout_result.write_all(b"\n");
                             let _ = sinks.stdout_result.flush();

@@ -193,10 +193,34 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                     }
                 }
             }
+            // The spawn is attributed to the executor (`parent` names the
+            // dispatcher), and its one projected effect is on the executor
+            // itself: the brief becomes the executor's own first speech message.
+            // That keeps an executor's `messages` a function of the stream instead
+            // of an argument passed beside it (spec §5, §16). A debater sees
+            // nothing of it.
+            EventPayload::ExecutorSpawned {
+                executor_id,
+                parent,
+                brief,
+            } => {
+                if matches!(speaker, SpeakerId::Executor(id) if id == executor_id) {
+                    close_pending_if_settled(&mut messages, &mut pending, speaker);
+                    flush_others(&mut messages, &mut others, &mut head_emitted);
+                    // Named by the dispatcher, and so **not** name-less: the
+                    // pinned head is the run of leading nameless `user` messages,
+                    // and a mid-session injection (plan mode, ticket 15) has to
+                    // stay its own message rather than merge into the brief
+                    // (spec §5, §10).
+                    messages.push(Message::User {
+                        content: brief.clone(),
+                        name: Some(sanitize_name(parent.as_str())),
+                    });
+                }
+            }
             // An executor reports through the `task` call's tool result and the
             // spawning speaker's own argument, so its process never enters a
             // debater's projection (spec §5).
-            EventPayload::ExecutorSpawned { .. } => {}
             EventPayload::ExecutorFinished { .. } => {}
             // The model must see and correct its own error (spec §2); another
             // speaker's error is not this model's to fix.

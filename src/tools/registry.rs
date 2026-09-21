@@ -33,12 +33,12 @@ use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 
 use super::paths::{PathLocks, SessionPaths};
-use super::tool::{Effect, ReadSet, Tool, ToolContext, ToolError, ToolOutput};
+use super::tool::{Effect, ExecutorSpawner, ReadSet, Tool, ToolContext, ToolError, ToolOutput};
 
 /// The tool table for one session.
 #[derive(Default)]
 pub struct Registry {
-    tools: BTreeMap<String, Box<dyn Tool>>,
+    tools: BTreeMap<String, Arc<dyn Tool>>,
 }
 
 impl Registry {
@@ -49,11 +49,28 @@ impl Registry {
     /// Mount a tool. Runtime registration is what makes dynamic tools possible
     /// without a second registry.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.tools.insert(tool.spec().name, tool);
+        self.tools.insert(tool.spec().name, Arc::from(tool));
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|tool| tool.as_ref())
+        self.tools.get(name).map(Arc::as_ref)
+    }
+
+    /// The table a spawned executor gets (spec §16): the same tools, minus the
+    /// ones that are not delegable.
+    ///
+    /// A fresh value rather than a view, because a table is what a session
+    /// dispatches into and what a request's `tools` array is built from. It is a
+    /// pure function of the assembled table, so every executor sees the same
+    /// declaration order and the prefix cache keeps hitting.
+    pub fn for_executor(&self) -> Registry {
+        let tools = self
+            .tools
+            .iter()
+            .filter(|(_, tool)| tool.delegable())
+            .map(|(name, tool)| (name.clone(), Arc::clone(tool)))
+            .collect();
+        Registry { tools }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -163,6 +180,7 @@ impl Registry {
             cwd: call.paths.cwd(),
             skills: &call.skills,
             repo_map: &call.repo_map,
+            executor: call.executor.as_deref(),
             tool_call_id: &call.tool_call_id,
             args: &call.args,
         };
@@ -258,7 +276,7 @@ impl CallFacts {
 }
 
 /// Everything the dispatcher needs about one call the loop has already recorded.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PendingCall {
     pub tool_call_id: String,
     pub tool_name: String,
@@ -272,6 +290,28 @@ pub struct PendingCall {
     /// The `repo_map` tool's session inputs (spec §9). Owned, because the ranking
     /// context is recomputed per call from the event stream rather than shared.
     pub repo_map: RepoMapInput,
+    /// The port that runs a nested executor, for a `task` call (spec §16). Built
+    /// per call by the loop, which is what knows the provider and the renderer an
+    /// executor needs.
+    pub executor: Option<Arc<dyn ExecutorSpawner>>,
+}
+
+/// Hand-written because the port is an opaque handle: whether one is mounted is
+/// the only thing a diagnostic can usefully say about it.
+impl std::fmt::Debug for PendingCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingCall")
+            .field("tool_call_id", &self.tool_call_id)
+            .field("tool_name", &self.tool_name)
+            .field("args", &self.args)
+            .field("outputs_dir", &self.outputs_dir)
+            .field("paths", &self.paths)
+            .field("locks", &self.locks)
+            .field("skills", &self.skills)
+            .field("repo_map", &self.repo_map)
+            .field("executor", &self.executor.is_some())
+            .finish()
+    }
 }
 
 /// What one dispatch produced.

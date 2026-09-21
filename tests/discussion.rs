@@ -22,6 +22,7 @@ use fs_agent::events::{
     SCHEMA_VERSION,
 };
 use fs_agent::permissions::{Mode, Policy};
+use fs_agent::provider::{FinishReason, Message, StreamEvent};
 use fs_agent::render::RenderSinks;
 use fs_agent::{
     assemble_discussion, DebaterParts, DiscussionHarness, DiscussionParts, Error, SessionScaffold,
@@ -1031,4 +1032,134 @@ async fn omitting_the_round_cap_takes_the_protocol_default() {
 
     assert_eq!(outcome.rounds, 2);
     assert_eq!(outcome.reason, StopReason::RoundsExhausted);
+}
+
+#[tokio::test]
+async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discussion() {
+    // The whole point of `task` (spec §16): a debater can have real work done,
+    // and the other debater sees a summary — never the executor's process.
+    let delegated = Reply::Stream(vec![
+        StreamEvent::ToolCallCompleted {
+            index: 0,
+            id: "call-1".to_owned(),
+            name: "task".to_owned(),
+            arguments: serde_json::json!({"brief": "count the modules under src"}).to_string(),
+        },
+        StreamEvent::Finished {
+            finish_reason: FinishReason::ToolCalls,
+        },
+    ]);
+    let mut fixture = fixture(
+        vec![
+            delegated,
+            Reply::text("EXECUTOR-ONLY: 12 modules"),
+            answered("KIMI 第一轮正文（我派了执行者去数）", "复用事件流"),
+            answered("KIMI 第二轮正文", "复用事件流"),
+        ],
+        vec![
+            answered("DEEPSEEK 第一轮正文", "每个 agent 各写一份日志"),
+            answered("DEEPSEEK 第二轮正文", "复用事件流"),
+        ],
+        vec![Reply::text("共识：复用事件流")],
+        Some(2),
+    )
+    .await;
+
+    let outcome = fixture.harness.discuss("日志该怎么放？").await.unwrap();
+    fixture.harness.shutdown().await;
+
+    assert_eq!(outcome.reason, StopReason::Consensus);
+    assert_eq!(outcome.rounds, 2);
+
+    let events = read_events(&fixture.log_path).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ExecutorSpawned { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ExecutorFinished { .. }))
+            .count(),
+        1
+    );
+    // The dispatching debater gets the summary as its own `task` result.
+    let result = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCallCompleted {
+                ok: true,
+                output: Some(output),
+                ..
+            } => Some(output.clone()),
+            _ => None,
+        })
+        .expect("the task call's result");
+    assert!(result.contains("EXECUTOR-ONLY: 12 modules"), "{result}");
+
+    // The executor's process reaches neither debater's window; the other debater
+    // sees at most the one-line tool summary of the `task` call itself.
+    let kimi_round_two = &fixture.kimi.requests()[3];
+    let summary = kimi_round_two
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool { content, .. } if content.contains("EXECUTOR-ONLY") => Some(content),
+            _ => None,
+        })
+        .expect("the dispatcher's own tool result is in its window");
+    assert!(summary.contains("files changed: none"), "{summary}");
+
+    // The executor's process reaches the other debater's window in no form at
+    // all — not as speech (an `executor:kimi-1` block) and not as a body. The
+    // other debater learns of the work only through KIMI's own words.
+    for request in fixture.deepseek.requests() {
+        for message in &request.messages {
+            let content = message_content(message);
+            assert!(
+                !content.contains("EXECUTOR-ONLY"),
+                "an executor's process leaked into the other debater's window: {content}"
+            );
+            assert!(
+                !content.contains("executor:kimi-1"),
+                "an executor's events leaked into the other debater's window: {content}"
+            );
+        }
+    }
+
+    // The dispatcher's own window carries the summary exactly once, and as the
+    // `task` call's tool result — never as an executor turn projected into it.
+    let dispatcher = &fixture.kimi.requests()[3];
+    assert!(dispatcher.messages.iter().any(
+        |message| matches!(message, Message::Tool { content, .. } if content.contains("EXECUTOR-ONLY"))
+    ));
+    for message in &dispatcher.messages {
+        if let Message::User { content, .. } = message {
+            assert!(
+                !content.contains("EXECUTOR-ONLY") && !content.contains("executor:kimi-1"),
+                "an executor is not a speaker in a debater's window: {content}"
+            );
+        }
+    }
+    // And the first round's projection, taken before the executor existed, is
+    // untouched by any of it.
+    for message in &fixture.kimi.requests()[0].messages {
+        assert!(!message_content(message).contains("EXECUTOR-ONLY"));
+    }
+    // The other debater's round two exists (the round was targeted), and knows
+    // nothing of the executor beyond what KIMI said.
+    assert_eq!(fixture.deepseek.requests().len(), 2);
+}
+
+/// The text of one wire message, whichever shape it has.
+fn message_content(message: &Message) -> &str {
+    match message {
+        Message::System { content, .. }
+        | Message::User { content, .. }
+        | Message::Tool { content, .. } => content,
+        Message::Assistant { content, .. } => content.as_deref().unwrap_or_default(),
+    }
 }

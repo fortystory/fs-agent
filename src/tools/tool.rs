@@ -92,8 +92,28 @@ pub struct ToolContext<'a> {
     /// The `repo_map` tool's session inputs (spec §9): the ranking context and
     /// the configured budget. Bundled into one field so it travels like `skills`.
     pub repo_map: &'a RepoMapInput,
+    /// The port that runs a nested executor, for `task` (spec §16). `None` when
+    /// the session mounted no port, in which case `task` reports that rather than
+    /// pretending to work.
+    pub executor: Option<&'a dyn ExecutorSpawner>,
     pub tool_call_id: &'a str,
     pub args: &'a Value,
+}
+
+/// The port a tool uses to run a nested executor (spec §16).
+///
+/// It lives here, and is implemented by the `agent` layer (`agent::executor`),
+/// because running an executor means driving a whole turn: that layer is the only
+/// writer of the event stream and the only caller of a provider. `tools` knows
+/// only the shape, so the dependency arrow still points down.
+#[async_trait]
+pub trait ExecutorSpawner: Send + Sync {
+    /// Run one executor to completion for `brief`, and report back already shaped
+    /// as the `task` call's one result.
+    ///
+    /// The result is the summary plus the metadata derived from the stream
+    /// (spec §16); the executor's process reaches no one else.
+    async fn spawn(&self, brief: &str) -> Result<ToolOutput, ToolError>;
 }
 
 /// Resolve a model-supplied read path against the session cwd.
@@ -171,6 +191,17 @@ pub trait Tool: Send + Sync {
     /// gate guessing at a `command` string.
     fn command(&self, _args: &Value) -> Option<Vec<String>> {
         None
+    }
+
+    /// Whether this tool is part of an executor's table.
+    ///
+    /// Recursion depth is one (spec §16), and that is enforced by the tool table
+    /// rather than by a rule: `task` answers `false`, so an executor's tool
+    /// declaration simply has no way to dispatch another executor. A rule would
+    /// be a second, weaker line of defense — the tool would still be advertised
+    /// to the model, and a rule bug would be a recursion bug.
+    fn delegable(&self) -> bool {
+        true
     }
 
     /// Arguments arrive erased; each tool parses its own shape and reports its

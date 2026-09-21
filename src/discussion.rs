@@ -7,9 +7,9 @@
 //!
 //! The **control flow** that applies these rules — the round loop, the two
 //! concurrent turns, the closing call — lives in the `agent` layer, because that
-//! layer is the only writer of the event stream and the only caller of a provider
-//! (spec §3). So `discussion` never touches `provider`: it decides, `agent`
-//! writes.
+//! layer is the only writer of the event stream (through its one `append_event`
+//! path) and the only caller of a provider (spec §3). So `discussion` never
+//! touches `provider`: it decides, `agent` writes.
 
 pub mod protocol;
 

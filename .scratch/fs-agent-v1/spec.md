@@ -207,7 +207,7 @@ Status: ready-for-agent
 
   `events` · `config` · `provider` · `tools` · `permissions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`
 
-  关键约束：`events` **零内部依赖**（大家都依赖它，它不依赖任何人）；`project()` 是 `provider` 的子模块（**不是**新边界）；`discussion` **不碰 provider**（它只驱动 `agent` 的循环）；`agent` 层的循环是唯一写事件流的地方。
+  关键约束：`events` **零内部依赖**（大家都依赖它，它不依赖任何人）；`project()` 是 `provider` 的子模块（**不是**新边界）；`discussion` **不碰 provider**（它只驱动 `agent` 的循环）；`agent` 层是唯一写事件流的地方——循环与它驱动的执行者端口走**同一个** `append_event` 写入路径（票 11）。
 - **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + 配置 + read set）。执行者 = **带 `parent_id` 的嵌套 `Session`**，有独立轮数预算，事件**追加到父流**。
 - **架构深度到此为止**：本 spec 定到边界与关键 trait 签名，**不定**文件名、公开函数逐个签名与函数职责。
 - 根目录 `CONTEXT.md` 是正式词汇表；代码标识符用其中的英文名。
@@ -303,7 +303,7 @@ Status: ready-for-agent
 - **合并规则**：按 role 序列合并、**轮次是硬边界**、**无条数阈值**、严格按 `seq`；**两条钉住的注入**（首条 `user` 消息、`ContextInjected`）**不参与合并**。
 - **前缀 `[轮 N · 名字] …` 只加在他人发言上**（给自己加会污染回放）。这是**模型侧**的前缀，与渲染侧的前缀是**两套、不共用生成器**。
 - **`name` 发但只发在 `user` / `assistant` 上**，值消毒到 `[A-Za-z0-9_-]` 且短，**绝不依赖它**（三家的 schema 都只写 `type: string` + 一句「optional name」，无 pattern / maxLength；**DeepSeek 的 tool 消息根本没有 `name` 字段**，所以 tool 消息不发）。
-- **执行者的事件不进讨论者投影（`ExecutorFinished` 也不进）**，而**执行者自己的投影是全量的**——同一批事件，双向不同。
+- **执行者的事件不进讨论者投影（`ExecutorFinished` 也不进）**，而**执行者自己的投影是全量的**——它自己的工具往返照投、不压缩。**可见性规则**双向不同；**窗口**那一半见 §16 的票 11 折回（执行者的窗 = 钉住的注入 + 它自己的事件，brief 由 `ExecutorSpawned` 投影而来，且它**不是**钉住 head 的一部分）。
 - **plan 模式的注入与钉住的首条 `user` 同档：永不参与裁剪**（幂等注入消重复）。
 
 ### 6. 取消传播（spec 期新增的一条决定）
@@ -389,7 +389,7 @@ Status: ready-for-agent
   | `auto` | 默认 `Allow` | **不等于「跳过权限」**：只受规则与断路器约束——断路器、`.env` deny、root 防呆照样生效 |
   | `plan` | 同 `readonly`，**唯一豁免**：`WritePaths` 的**全部**路径 = `<repo>/PLAN.md` → `Allow` | 「硬」plan 模式；与 `readonly` 的差别**只有那一条豁免**（见 §13） |
 
-  四条对每个模式都成立的不变量：① **断路器短路在规则之前**，任何模式都翻不动；② **hook 只能收紧**（永远不能放松一个 `Deny`）；③ **沿委派链传播的是 `Deny` / `Ask`**（不给 `Allow`）；④ **无交互渲染器时 `Ask → Deny` 由循环在门外做**（门是纯函数、不读环境；门的裁决如实保持 `Ask`，理由进 `reason`）。另：**模式是 `Session` 的策略值、不进事件流**（`--continue` 回到 `config.toml` 的值，审计靠 `PermissionDecided`）。
+  四条对每个模式都成立的不变量：① **断路器短路在规则之前**，任何模式都翻不动；② **hook 只能收紧**（永远不能放松一个 `Deny`）；③ **沿委派链传播的是 `Deny` / `Ask`**（不给 `Allow`）；④ **无交互渲染器时 `Ask → Deny` 由循环在门外做**（门是纯函数、不读环境；门的裁决如实保持 `Ask`，理由进 `reason`）。另：**模式是 `Session` 的策略值、不进事件流**（`--continue` 回到 `config.toml` 的值，审计靠 `PermissionDecided`）。**执行者沿用父级的模式**（模式是会话对写的立场，子级不会拿到更松的那一档：`auto` 的子级也能写、`readonly` 的子级同样不能写），**收紧来自规则层**——`propagate` 为真的 `Deny`/`Ask` 照常 ∪ 下去，`Allow` 不传播；再加空的 read set，执行者的权限是派发者的**子集**（§16 的票 11 折回）。
 - **`.env` 家族默认 `deny`**（`*.example` / `*.sample` / `*.template` 除外）。
 - **「总是允许」只改会话内策略**、不写用户的 `config.toml`、不进流。
 - **deny 不从上下文移除工具**（移除会废掉前缀缓存）——要「不存在」就在组装期不注册。
@@ -453,6 +453,19 @@ Status: ready-for-agent
 - **同一批里多个 `task` 可并发**——因为 `task` 自己不碰工作区（`effect()` 判的是**工作区**副作用）；真正的写互斥在执行者内部的调用上、靠**共享 `PathLocks`**。**并发上限默认 5**（成本 / 速率闸门，不是安全闸门）。
 - **失败**（`ExecutorFinished{reason: Error|MaxIterations|Aborted|MistakeLimit}`）= 一条错误内容的工具结果，**讨论不因此中断**。
 
+票 11 落地时把上面几处留白写实成机制（都不改本节的任何决定，但会束缚后续票，故折回正文）：
+
+- **执行者的窗口 = 「钉住的注入 + 它自己的事件」**，不是全流：它不参与讨论，派它出去的那个会话的发言（以及另一方的作答）**不进它的窗**，否则长讨论会被完整重放进每个执行者的上下文。brief 仍从流上来——`ExecutorSpawned` 归**执行者自己**（`parent` 字段记派发者），`project` 把只给目标执行者的那条 `brief` 投影成它的第一条 `user` 消息 ⇒「流 + 规则 → messages」在嵌套会话里同样成立。**`ExecutorFinished` 对谁都不进投影**：派发者拿到的是那次 `task` 调用的工具结果。
+- 「**执行者自己的投影是全量的**」的另一半含义：它自己的工具往返（结果正文、按 `seq` 合并）照 `mine` 规则投，**不做**「他人回合只留一行摘要」的压缩——压缩是给他人准备的。
+- **执行者的模型可覆盖**（`SessionConfig::executor_model`，默认继承派发者）：这是 §17 弱模型分流留好的那个机制；**client 不换**（执行者在派发者的 provider 上作答），所以覆盖值必须是同一 provider profile 能服务的 model id。turn 上限（默认 25）与并发上限（默认 5）同样是 `SessionConfig` 的值。
+- **执行者 id = `<派发者>-<n>`**，`n` = 流上该派发者已派出的 `ExecutorSpawned` 计数（+ 同一回合内已建的端口数）。派生而非分配 ⇒ 不引入第二个身份来源，`--continue` 之后的会话也不会重发已用过的 id。
+- **权限**：执行者的策略 = **父级的模式** ∪ **父级策略里 `propagate` 为真的规则**——即「立场照旧，约束照收，允许不传」；再加**空的 read set**，它的权限是派发者的**子集**（`auto` 的子级能写、`readonly` 的子级不能写；`Allow` 规则不传播，所以派发者挣来的「总是允许」到不了子级）。headless 下若父级是 `ask`，子级的写也走「无交互 ⇒ `Ask→Deny`」——这条对每个 agent 一律成立，不是执行者特有的。
+- **递归深度 1 的第一道防线落在工具表上**：`Tool::delegable()`（`task` 为 `false`）+ `Registry::for_executor()` ⇒ 执行者的 `tools` 数组里**没有** `task`，模型连试的机会都没有（不是「有工具但拒绝」）。
+- **`task` 的 `effect()` = `ReadOnly`**（`effect` 判的是**工作区**副作用），于是同一批里的多个 `task` 可以并发：循环把**已授权**的 `task` 调用**延迟**到本批其余调用之后，再用 `buffered(并发上限)` 一起跑，结果按**批内顺序**落流（`max_parallel_executors` 默认 **5**）。真写互斥仍在执行者内部的调用上、靠**共享** `PathLocks`。hook 在某次调用上 `Stop` 时，已延迟的 `task` 各补一条「hook 停了这一回合」的错误结果——「每个 `tool_call` 恰好一条结果」在新交错下照样成立。
+- **回传的元数据是推导值**：token 从该执行者自己的 `UsageRecorded` 求和（`events::usage_of`），改动的文件**从成功结果里的路径行**（`tools::file::WROTE_PATH_PREFIX`）推导——读结果而不是读 `ToolCallStarted` 的参数，因为 `hook.pre` 可能已经改写了那次调用，「实际写了哪个文件」只有结果记着。产物是一条工具结果：`executor <id> finished: <reason>` + `files changed:` + `tokens:` + `report:`；失败四值走 `Err` 分支 ⇒ 一条错误内容的工具结果。
+- **`/undo` 免费成立**：执行者的 `outputs/<tool_call_id>.before` 与派发者在**同一个会话目录、同一命名约定**下（票 11 的验收项）。
+- **渲染（§19）**：执行者的一回合**不是**会话的最终产物——headless 的 `stdout` 只放最终产物，执行者的 `TurnEnded{Completed}` 既不打印、也不覆盖派发者那一回合的文本。
+
 ### 17. 成本与预算上限
 
 - **预算的单位是三个量、各管一段**：**窗口**按 agent 的模型（§10）、**轮数**（讨论 2 / 执行者 25）、**token 累计是会话级且讨论者与执行者共享**（`UsageRecorded` 的求和派生值）。
@@ -478,7 +491,7 @@ Status: ready-for-agent
 - **消费者接口**：每种模式一个 `tokio::spawn` 的任务消费**同一条广播通道**，通道由 `cli` 在组装期注入；**增量与日志事件必须同通道**（分两条则相对顺序无定义）。
 - **TUI 额外 `select!`(广播 / tick / 键盘)**，**输入归渲染器**（终端独占），答案经注入的 channel 回循环。
 - **呈现**：说话人前缀**逐行**（`[kimi]` / `[deepseek]` / `[executor:<id>]` / `[user]`）、轮次分节线、分歧缩进块、工具调用一行摘要、hook 反馈与工具结果**归成一处**（同 `tool_call_id`）。
-- **headless 纯净性靠结构**：渲染器只写两个显式 sink（`stdout_result` / `stderr_diagnostic`）；stdout **只放最终产物**（`TurnEnded{Completed}` / 讨论 `Consensus` 的 assistant 文本），其余全 stderr。
+- **headless 纯净性靠结构**：渲染器只写两个显式 sink（`stdout_result` / `stderr_diagnostic`）；stdout **只放最终产物**（`TurnEnded{Completed}` / 讨论 `Consensus` 的 assistant 文本），其余全 stderr；**执行者的一回合不是最终产物**（它既不上 stdout，也不覆盖派发者那一回合的文本，§16）。
 - **TUI 栈 = `ratatui` + `crossterm` 默认特性 + inline viewport**（定稿内容 `insert_before` 推进 scrollback、live 留 `Viewport::Inline`；**否决 alt screen**——转录要能滚动 / 复制）；**高亮 = `tree-sitter-highlight`**（树已在，闭包 15，不引 C 构建依赖；代价是终端渲染器自己写），diff 着色与语法高亮是**两层**。
 - **配置**：`~/.config/fs-agent/config.toml`（TOML）；**不**自动加载项目 `.env`；优先级 **`config.toml` > 已导出 env > 内置默认**。
 - **模式、名册、预算、路径锁、渲染器、provider 全部在组装期注入**——库入口不读环境。

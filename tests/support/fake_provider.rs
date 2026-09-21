@@ -25,6 +25,11 @@ pub enum Reply {
     Raw(Vec<Result<StreamEvent, ProviderError>>),
     /// Fail before any stream is produced.
     Fail(ProviderError),
+    /// Wait at this barrier before producing the inner reply.
+    ///
+    /// The rendezvous instrument for a scripted *call*: it gates only the calls
+    /// that must meet, so a parent's own turns in the same script do not wait.
+    Meet(Arc<Barrier>, Box<Reply>),
 }
 
 impl Reply {
@@ -148,6 +153,28 @@ impl Provider for FakeProvider {
             .pop_front()
             .expect("FakeProvider: no scripted reply left for this call");
 
+        // The rendezvous, when the script asks for one: a call that never meets
+        // its partner is a call that was not concurrent, and it fails loudly
+        // instead of hanging the suite.
+        let mut reply = reply;
+        let reply = loop {
+            match reply {
+                Reply::Meet(barrier, inner) => {
+                    if tokio::time::timeout(RENDEZVOUS_TIMEOUT, barrier.wait())
+                        .await
+                        .is_err()
+                    {
+                        panic!(
+                            "FakeProvider: no other call met this barrier within \
+                             {RENDEZVOUS_TIMEOUT:?}, so this call was not concurrent with another"
+                        );
+                    }
+                    reply = *inner;
+                }
+                other => break other,
+            }
+        };
+
         match reply {
             Reply::Fail(error) => Err(error),
             Reply::Raw(items) => Ok(Box::pin(stream::iter(items))),
@@ -159,6 +186,8 @@ impl Provider for FakeProvider {
                 }
                 Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
             }
+            // Already unwrapped by the rendezvous loop above.
+            Reply::Meet(..) => unreachable!("a rendezvous reply is unwrapped before use"),
         }
     }
 }

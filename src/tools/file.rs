@@ -20,6 +20,16 @@ use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 /// tool result as convention text, so rendering and diagnosis share one format.
 pub const MATCH_LEVEL_PREFIX: &str = "edit match level: ";
 
+/// The line every successful write begins with, naming the file it landed on.
+///
+/// The `ToolCallStarted` event records the arguments the **model** sent, and a
+/// `hook.pre` may have rewritten them afterwards; the result is the only record
+/// of the file that was actually written. Anything derived from the stream about
+/// "which files changed" (spec §16) therefore reads this line, and producing and
+/// parsing it share this constant — the same rule as [`MATCH_LEVEL_PREFIX`]
+/// (spec §18).
+pub const WROTE_PATH_PREFIX: &str = "wrote: ";
+
 /// `read_file`: read a file inside the session workspace.
 pub struct ReadFile;
 
@@ -199,7 +209,7 @@ impl Tool for WriteFile {
         })?;
         let verb = if existed { "replaced" } else { "created" };
         Ok(ToolOutput::new(format!(
-            "write_file: {verb} {} ({} bytes)",
+            "{WROTE_PATH_PREFIX}{}\nwrite_file: {verb} ({} bytes)",
             path.display(),
             parsed.content.len()
         )))
@@ -311,12 +321,12 @@ impl Tool for EditFile {
             .map(|edit| edit.level)
             .unwrap_or(MatchLevel::Exact);
         Ok(ToolOutput::new(format!(
-            "{} {}: {} replacement{} in {} ({} bytes -> {} bytes)",
+            "{WROTE_PATH_PREFIX}{}\n{} {}: {} replacement{} ({} bytes -> {} bytes)",
+            path.display(),
             MATCH_LEVEL_PREFIX,
             level.as_str(),
             edits.len(),
             if edits.len() == 1 { "" } else { "s" },
-            path.display(),
             content.len(),
             updated.len(),
         )))

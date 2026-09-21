@@ -2,24 +2,23 @@
 //!
 //! It owns the event log handle, the session identity, the injected
 //! configuration, the tool registry, the shared path locks, this agent's read
-//! set, this agent's private identity, and the session's permission policy.
-//! Budgets land in a later ticket. The roster is not here: a discussion's
-//! debaters are each their own `Session`, assembled side by side and sharing one
-//! log, and an executor will be a nested `Session` whose events still append to
-//! its parent's stream and whose tool registry and path locks are the same
-//! values.
+//! set, this agent's private identity, and the session's permission policy. The
+//! roster is not here: a discussion's debaters are each their own `Session`,
+//! assembled side by side and sharing one log, and an executor is a nested
+//! `Session` whose events still append to its parent's stream and whose tool
+//! registry and path locks are the same values.
 //!
-//! `Session` never writes on its own initiative. Its crate-private `append` is
-//! called only by the `agent` module, so the agent layer is the single writer of
-//! the event stream; tools, hooks, permissions and discussion cannot write.
+//! `Session` never writes on its own initiative: it hands out the log handle, and
+//! `agent::append_event` is the one write path, so the `agent` layer is the single
+//! writer of the event stream; tools, hooks, permissions and discussion cannot
+//! write.
 
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;
-use crate::events::{Event, EventLog, EventPayload, SessionId, SpeakerId};
+use crate::events::{Event, EventLog, SessionId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy, Rule};
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
@@ -134,18 +133,6 @@ impl Session {
         }
     }
 
-    /// Append an event to this session's log.
-    ///
-    /// Crate-private: only the `agent` module writes. Keeping the write path
-    /// narrow is what makes "the log is the single source of truth" checkable.
-    pub(crate) fn append(
-        &mut self,
-        speaker_id: SpeakerId,
-        payload: EventPayload,
-    ) -> io::Result<Event> {
-        self.log.append(speaker_id, payload)
-    }
-
     /// A snapshot of this session's events, in order.
     ///
     /// A snapshot rather than a borrow: the log is a shared handle, so two
@@ -180,6 +167,15 @@ impl Session {
     /// The tool table for this session.
     pub fn tools(&self) -> &Registry {
         &self.tools
+    }
+
+    /// The tool table as a shared handle.
+    ///
+    /// For work that must outlive a borrow of this session: the loop's batch of
+    /// deferred executor calls dispatches through the table while it still needs
+    /// the session to record their results (spec §16).
+    pub fn shared_tools(&self) -> Arc<Registry> {
+        Arc::clone(&self.tools)
     }
 
     /// Where this session's tool artifacts (`outputs/<tool_call_id>.*`) land.

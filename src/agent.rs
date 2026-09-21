@@ -1,8 +1,8 @@
 //! The turn loop.
 //!
-//! The `agent` module is the only writer of the event stream, and the loop is
-//! the only place that calls the provider. Hooks and the permission gate are
-//! pure value transformations it applies in a fixed order (spec §3):
+//! The `agent` layer is the only writer of the event stream, and the loop is the
+//! only place that calls the provider. Hooks and the permission gate are pure
+//! value transformations it applies in a fixed order (spec §3):
 //! `hook.pre -> gate -> [ask] -> dispatch -> hook.post -> append`. The pre-hook
 //! runs before the gate, so it can stop an ask from happening but can never
 //! bypass one; its output is a constraint, and the effective verdict is the
@@ -12,8 +12,15 @@
 //!
 //! 1. every `tool_call` gets exactly one result;
 //! 2. the provider is never called while a `tool_call` lacks a result;
-//! 3. only this loop writes to the log.
+//! 3. every event goes through [`append_event`] — the loop's own path and the
+//!    executor port it drives are the same single writer.
+//!
+//! [`executor`] is a submodule of this layer rather than a boundary of its own:
+//! running an executor means driving a turn, so it is control flow (spec §1, §16).
 
+mod executor;
+
+use std::sync::Arc;
 use std::time::Instant;
 
 use futures::StreamExt;
@@ -21,8 +28,8 @@ use futures::StreamExt;
 use crate::context;
 use crate::events::{
     hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, ContextSource, Decision,
-    DecisionSource, Event, EventPayload, Role, RoundMode, SpeakerId, StopReason, ToolCallId,
-    SCHEMA_VERSION,
+    DecisionSource, Event, EventLog, EventPayload, ParticipantId, Role, RoundMode, SpeakerId,
+    StopReason, ToolCallId, SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -30,8 +37,13 @@ use crate::provider::projection::project;
 use crate::provider::{ChatRequest, Message, Provider, StreamEvent, ToolCall, ToolChoice};
 use crate::render::RenderHandle;
 use crate::session::Session;
-use crate::tools::{CallFacts, DispatchOutcome, GuardedCall, PendingCall, ToolError, ToolOutput};
+use crate::tools::{
+    AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, ToolError, ToolOutput,
+    TASK_TOOL,
+};
 use crate::Error;
+
+use executor::{spawned_executors, ExecutorPort};
 
 /// How much of the stream one turn is allowed to see.
 ///
@@ -50,13 +62,35 @@ pub enum TurnScope {
     /// Everything up to and including `seq == before_seq` (the round's
     /// `RoundStarted`), plus the acting speaker's own later events.
     Round { before_seq: u64 },
+    /// An executor's own window: the pinned injections and its own events, and
+    /// nothing else.
+    ///
+    /// An executor is not a participant in the conversation that dispatched it.
+    /// It works from its brief, so the dispatching session's speech and the other
+    /// speaker's answers are not in its window — which is also what keeps a long
+    /// discussion from being replayed into every executor's context. The brief
+    /// itself arrives through the stream, as `ExecutorSpawned` (spec §5, §16).
+    Executor,
 }
 
 /// This turn's view of the stream, under `scope`.
 fn scoped_events(session: &Session, speaker: &SpeakerId, scope: TurnScope) -> Vec<Event> {
     let mut events = session.events();
-    if let TurnScope::Round { before_seq } = scope {
-        events.retain(|event| event.seq <= before_seq || &event.speaker_id == speaker);
+    match scope {
+        TurnScope::Whole => {}
+        TurnScope::Round { before_seq } => {
+            events.retain(|event| event.seq <= before_seq || &event.speaker_id == speaker);
+        }
+        // A pinned injection is the session head every agent replays, so it
+        // survives the cut whether or not the executor could have seen it live
+        // (an executor is spawned after the injections were recorded).
+        TurnScope::Executor => events.retain(|event| {
+            &event.speaker_id == speaker
+                || matches!(
+                    event.payload,
+                    EventPayload::ContextInjected { .. } | EventPayload::SessionStarted { .. }
+                )
+        }),
     }
     events
 }
@@ -133,7 +167,7 @@ pub fn record_context_injection(
 pub async fn run_turn(
     session: &mut Session,
     speaker: &SpeakerId,
-    provider: &dyn Provider,
+    provider: &Arc<dyn Provider>,
     render: &RenderHandle,
     scope: TurnScope,
 ) -> Result<TurnOutcome, Error> {
@@ -145,6 +179,10 @@ pub async fn run_turn(
     let trim_policy = context::TrimPolicy::default();
     let mut iteration: u32 = 0;
     let mut last_text = String::new();
+    // Executor ids are `<parent>-<n>`, counted off the stream rather than
+    // allocated, so a resumed session cannot hand out an id it already used. The
+    // count is taken once and then carried across this turn's batches.
+    let mut executors_spawned = spawned_executors(&scoped_events(session, speaker, scope), speaker);
 
     loop {
         // One snapshot per iteration: the log is shared with any other debater
@@ -309,273 +347,51 @@ pub async fn run_turn(
         // Every `tool_call` gets exactly one result, produced here and nowhere
         // else. The pre-hook runs first, then the permission gate; a refusal (a
         // hook's tighten/skip/failure, a policy deny, a user deny, or a headless
-        // `Ask` downgrade) synthesizes its one error result here, so the tool is
-        // never reached. The dispatcher then owns the shared guardrails (read
-        // before edit, the per-path write locks, read-set invalidation) so no
-        // tool can opt out, and the post-hook runs once the result is in the log.
+        // `Ask` downgrade) synthesizes its one error result, so the tool is never
+        // reached. The dispatcher then owns the shared guardrails (read before
+        // edit, the per-path write locks, read-set invalidation) so no tool can
+        // opt out, and the post-hook runs once the result is in the log.
+        //
+        // A `task` call is judged exactly like any other call and then deferred:
+        // the batch's deferred calls run together, because dispatching touches no
+        // workspace path and several executors working at once is the point
+        // (spec §16). Everything else still runs inline, where it always did.
+        let mut deferred: Vec<DeferredCall> = Vec::new();
         for call in &tool_calls {
-            let tool_call_id = ToolCallId::new(call.id.clone());
-            emit(
+            match process_call(
                 session,
                 render,
                 speaker,
-                EventPayload::ToolCallStarted {
-                    tool_call_id: tool_call_id.clone(),
-                    tool_name: call.name.clone(),
-                    args: parse_tool_args(&call.arguments),
-                },
-            )?;
-
-            // Everything is read off the session before the read set is borrowed.
-            let paths = session.paths().clone();
-            let locks = session.path_locks().clone();
-            let skills = session.skills().clone();
-            // `repo_map` ranks by what this session is working on, so its input is
-            // recomputed from the stream — but only for a call that will use it.
-            let repo_map = if call.name == context::repo_map::REPO_MAP_TOOL {
-                context::repo_map::RepoMapInput {
-                    context: context::repo_map::RankContext::from_session(
-                        &scoped_events(session, speaker, scope),
-                        session.cwd(),
-                    ),
-                    tokens: session.config().repo_map_tokens,
-                }
-            } else {
-                context::repo_map::RepoMapInput::default()
-            };
-            let mut pending = PendingCall {
-                tool_call_id: tool_call_id.as_str().to_owned(),
-                tool_name: call.name.clone(),
-                args: parse_tool_args(&call.arguments),
-                outputs_dir: session.outputs_dir().to_path_buf(),
-                paths,
-                locks,
-                skills,
-                repo_map,
-            };
-
-            let started = Instant::now();
-            // Resolve the call once: the gate, the hook and the guardrails read
-            // the same facts, and this is the only step that touches the
-            // filesystem for path resolution.
-            let mut facts =
-                match session
-                    .tools()
-                    .facts(&pending.tool_name, &pending.args, &pending.paths)
-                {
-                    Ok(facts) => facts,
-                    Err(error) => {
-                        // No tool to judge and nothing to run: the call's one
-                        // result is the failure.
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            tool_call_id,
-                            Err(error),
-                            started,
-                        )?;
-                        continue;
-                    }
-                };
-
-            // ① hook.pre. It runs before the gate, so it can stop an ask from
-            //    happening; its constraint is merged with the gate's verdict
-            //    below. A `Rewrite` changes what the gate and the tool see, which
-            //    is why it must happen here rather than after the gate.
-            //
-            //    Exactly one `HookExecuted` is recorded per invocation, whatever
-            //    the outcome, so the stream is a complete record of the mount
-            //    point and ticket 19 can group by hook result.
-            let mut hook_verdict: Option<Decision> = None;
-            if let Some(hook) = session.hook().cloned() {
-                let constraint = {
-                    let history = hooks::public_history(&session.events());
-                    let pre_call = hooks::PreHookCall {
-                        tool_call_id: pending.tool_call_id.as_str(),
-                        tool_name: &facts.tool_name,
-                        args: &pending.args,
-                        effect: &facts.effect,
-                        write_targets: &facts.write_targets,
-                        read_targets: &facts.read_paths,
-                        argv: facts.argv.as_deref(),
-                        cwd: session.cwd(),
-                        history: &history,
-                    };
-                    hook.pre(&pre_call).await
-                };
-                let outcome = match &constraint {
-                    Ok(constraint) => constraint.outcome(),
-                    Err(error) => hook_format::failed(&error.to_string()),
-                };
-                record_hook(
-                    session,
-                    render,
-                    speaker,
-                    HookPoint::PreToolUse,
-                    hook.command(),
-                    outcome,
-                )?;
-
-                // Only `Tighten` forces a verdict; the rest are flow.
-                hook_verdict = constraint.as_ref().ok().and_then(Constraint::tightening);
-
-                match constraint {
-                    Ok(Constraint::Continue | Constraint::Tighten(_)) => {}
-                    Ok(Constraint::Rewrite(new_args)) => {
-                        // The gate and the tool both see the rewritten call, so
-                        // the facts are resolved again before either reads them.
-                        pending.args = new_args;
-                        facts = match session.tools().facts(
-                            &pending.tool_name,
-                            &pending.args,
-                            &pending.paths,
-                        ) {
-                            Ok(facts) => facts,
-                            Err(error) => {
-                                emit_completed(
-                                    session,
-                                    render,
-                                    speaker,
-                                    tool_call_id,
-                                    Err(error),
-                                    started,
-                                )?;
-                                continue;
-                            }
-                        };
-                    }
-                    Ok(Constraint::Skip) => {
-                        let skipped =
-                            ToolError::message("hook skipped execution: the tool did not run");
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            tool_call_id,
-                            Err(skipped),
-                            started,
-                        )?;
-                        continue;
-                    }
-                    Ok(Constraint::Stop) => {
-                        // The turn ends here, but this call was already started,
-                        // so it is still owed exactly one result. The remaining
-                        // calls in the batch were never started and so are not
-                        // owed one.
-                        let stopped =
-                            ToolError::message("hook stopped the turn: the tool did not run");
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            tool_call_id,
-                            Err(stopped),
-                            started,
-                        )?;
-                        return end_turn(session, render, speaker, StopReason::Aborted, last_text);
-                    }
-                    Err(error) => {
-                        // Fail-closed: block the action, diagnose it, and
-                        // synthesize the call's one error result. The turn
-                        // continues, so a broken hook stays diagnosable instead
-                        // of becoming fatal.
-                        render.diagnostic(&format!(
-                            "hook.pre failed for {}: {error}; the action is blocked",
-                            pending.tool_name
-                        ));
-                        let blocked =
-                            ToolError::message(format!("hook failed, action blocked: {error}"));
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            tool_call_id,
-                            Err(blocked),
-                            started,
-                        )?;
-                        continue;
-                    }
-                }
-            }
-
-            // ② the gate, ③ the ask, ④ dispatch. The effective verdict is the
-            //    supremum of the hook's constraint and the gate's own verdict.
-            let mut dispatched = false;
-            let outcome = match authorize(
-                session,
-                render,
-                speaker,
-                &tool_call_id,
-                &pending.args,
-                &facts,
-                hook_verdict,
+                scope,
+                provider,
+                &mut executors_spawned,
+                call,
             )
             .await?
             {
-                Authorized::Refuse { message } => {
-                    DispatchOutcome::failure(ToolError::message(message), false)
-                }
-                Authorized::Allow => {
-                    // The guardrails are a pure read of the facts plus this
-                    // agent's read set; the decision is applied to the read set
-                    // here, in the loop.
-                    match facts.guardrails(session.read_set()) {
-                        GuardedCall::Refused(error) => DispatchOutcome::failure(error, false),
-                        GuardedCall::Run(allowed) => {
-                            dispatched = true;
-                            let outcome = session.tools().dispatch(&pending, &allowed).await;
-                            // A read is only a read if it worked: a failed read
-                            // must not license a later write.
-                            if outcome.is_ok() {
-                                session.record_reads(&allowed.read_paths);
-                            }
-                            if outcome.invalidated_reads {
-                                if let Some(path) = outcome
-                                    .result
-                                    .as_ref()
-                                    .err()
-                                    .and_then(ToolError::invalidated_path)
-                                {
-                                    session.invalidate_read(path);
-                                }
-                            }
-                            outcome
-                        }
+                Disposition::Finished => {}
+                Disposition::Deferred(call) => deferred.push(*call),
+                Disposition::StopTurn => {
+                    // A hook stopped the turn. A deferred call has already been
+                    // started on the stream, so it is still owed exactly one
+                    // result; it never ran, so the result says so.
+                    for call in deferred {
+                        emit_completed(
+                            session,
+                            render,
+                            speaker,
+                            ToolCallId::new(call.pending.tool_call_id.clone()),
+                            Err(ToolError::message(
+                                "hook stopped the turn: the tool did not run",
+                            )),
+                            call.started,
+                        )?;
                     }
+                    return end_turn(session, render, speaker, StopReason::Aborted, last_text);
                 }
-            };
-
-            // The result enters the log before the post-hook runs, so a hook that
-            // hangs cannot hide a result the renderer should already have seen.
-            let (ok, output, error) = match &outcome.result {
-                Ok(output) => (true, Some(output.text.clone()), None),
-                Err(error) => (false, None, Some(error.to_string())),
-            };
-            emit_completed(
-                session,
-                render,
-                speaker,
-                tool_call_id,
-                outcome.result,
-                started,
-            )?;
-
-            // ⑤ hook.post. It runs only when the tool really ran, and its failure
-            //    can only drop feedback.
-            if dispatched {
-                run_post_hook(
-                    session,
-                    render,
-                    speaker,
-                    &pending,
-                    ok,
-                    output.as_deref(),
-                    error.as_deref(),
-                )
-                .await?;
             }
         }
+        run_deferred(session, render, speaker, deferred).await?;
 
         last_text = text;
 
@@ -587,12 +403,430 @@ pub async fn run_turn(
     }
 }
 
+/// What the loop must do with one call once the hook and the gate have spoken.
+enum Disposition {
+    /// This call is done: its one result is in the log.
+    Finished,
+    /// The call may run, and runs with the rest of the batch's deferred calls.
+    Deferred(Box<DeferredCall>),
+    /// A hook stopped the turn; the caller ends it.
+    StopTurn,
+}
+
+/// One authorized call the batch runs alongside its siblings.
+struct DeferredCall {
+    pending: PendingCall,
+    allowed: AllowedCall,
+    started: Instant,
+}
+
+/// What one decided call produced, ready to be recorded.
+struct CallCompletion<'a> {
+    pending: &'a PendingCall,
+    /// The paths the call may touch, when it got past the gate's yes.
+    allowed: Option<&'a AllowedCall>,
+    started: Instant,
+    /// Whether the tool really ran: only then does the post-hook mount.
+    dispatched: bool,
+    outcome: DispatchOutcome,
+}
+
+/// Carry one tool call from `ToolCallStarted` to its one result: resolve it, run
+/// the pre-hook, ask the gate, and — unless the call is a deferred `task` — run
+/// the tool.
+///
+/// One function rather than inline code so the deferred path and the inline path
+/// cannot drift: both end in [`finish_call`].
+async fn process_call(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    scope: TurnScope,
+    provider: &Arc<dyn Provider>,
+    executors_spawned: &mut u32,
+    call: &ToolCall,
+) -> Result<Disposition, Error> {
+    let tool_call_id = ToolCallId::new(call.id.clone());
+    emit(
+        session,
+        render,
+        speaker,
+        EventPayload::ToolCallStarted {
+            tool_call_id: tool_call_id.clone(),
+            tool_name: call.name.clone(),
+            args: parse_tool_args(&call.arguments),
+        },
+    )?;
+
+    // Everything is read off the session before the read set is borrowed.
+    let paths = session.paths().clone();
+    let locks = session.path_locks().clone();
+    let skills = session.skills().clone();
+    // `repo_map` ranks by what this session is working on, so its input is
+    // recomputed from the stream — but only for a call that will use it.
+    let repo_map = if call.name == context::repo_map::REPO_MAP_TOOL {
+        context::repo_map::RepoMapInput {
+            context: context::repo_map::RankContext::from_session(
+                &scoped_events(session, speaker, scope),
+                session.cwd(),
+            ),
+            tokens: session.config().repo_map_tokens,
+        }
+    } else {
+        context::repo_map::RepoMapInput::default()
+    };
+    let mut pending = PendingCall {
+        tool_call_id: tool_call_id.as_str().to_owned(),
+        tool_name: call.name.clone(),
+        args: parse_tool_args(&call.arguments),
+        outputs_dir: session.outputs_dir().to_path_buf(),
+        paths,
+        locks,
+        skills,
+        repo_map,
+        executor: None,
+    };
+
+    let started = Instant::now();
+    // Resolve the call once: the gate, the hook and the guardrails read the same
+    // facts, and this is the only step that touches the filesystem for path
+    // resolution.
+    let mut facts = match session
+        .tools()
+        .facts(&pending.tool_name, &pending.args, &pending.paths)
+    {
+        Ok(facts) => facts,
+        Err(error) => {
+            // No tool to judge and nothing to run: the call's one result is
+            // the failure.
+            emit_completed(session, render, speaker, tool_call_id, Err(error), started)?;
+            return Ok(Disposition::Finished);
+        }
+    };
+
+    // ① hook.pre. It runs before the gate, so it can stop an ask from happening;
+    //    its constraint is merged with the gate's verdict below. A `Rewrite`
+    //    changes what the gate and the tool see, which is why it must happen here
+    //    rather than after the gate.
+    //
+    //    Exactly one `HookExecuted` is recorded per invocation, whatever the
+    //    outcome, so the stream is a complete record of the mount point and
+    //    ticket 19 can group by hook result.
+    let mut hook_verdict: Option<Decision> = None;
+    if let Some(hook) = session.hook().cloned() {
+        let constraint = {
+            let history = hooks::public_history(&session.events());
+            let pre_call = hooks::PreHookCall {
+                tool_call_id: pending.tool_call_id.as_str(),
+                tool_name: &facts.tool_name,
+                args: &pending.args,
+                effect: &facts.effect,
+                write_targets: &facts.write_targets,
+                read_targets: &facts.read_paths,
+                argv: facts.argv.as_deref(),
+                cwd: session.cwd(),
+                history: &history,
+            };
+            hook.pre(&pre_call).await
+        };
+        let outcome = match &constraint {
+            Ok(constraint) => constraint.outcome(),
+            Err(error) => hook_format::failed(&error.to_string()),
+        };
+        record_hook(
+            session,
+            render,
+            speaker,
+            HookPoint::PreToolUse,
+            hook.command(),
+            outcome,
+        )?;
+
+        // Only `Tighten` forces a verdict; the rest are flow.
+        hook_verdict = constraint.as_ref().ok().and_then(Constraint::tightening);
+
+        match constraint {
+            Ok(Constraint::Continue | Constraint::Tighten(_)) => {}
+            Ok(Constraint::Rewrite(new_args)) => {
+                // The gate and the tool both see the rewritten call, so the
+                // facts are resolved again before either reads them.
+                pending.args = new_args;
+                facts =
+                    match session
+                        .tools()
+                        .facts(&pending.tool_name, &pending.args, &pending.paths)
+                    {
+                        Ok(facts) => facts,
+                        Err(error) => {
+                            emit_completed(
+                                session,
+                                render,
+                                speaker,
+                                tool_call_id,
+                                Err(error),
+                                started,
+                            )?;
+                            return Ok(Disposition::Finished);
+                        }
+                    };
+            }
+            Ok(Constraint::Skip) => {
+                let skipped = ToolError::message("hook skipped execution: the tool did not run");
+                emit_completed(
+                    session,
+                    render,
+                    speaker,
+                    tool_call_id,
+                    Err(skipped),
+                    started,
+                )?;
+                return Ok(Disposition::Finished);
+            }
+            Ok(Constraint::Stop) => {
+                // The turn ends here, but this call was already started, so it is
+                // still owed exactly one result. The remaining calls in the batch
+                // were never started and so are not owed one.
+                let stopped = ToolError::message("hook stopped the turn: the tool did not run");
+                emit_completed(
+                    session,
+                    render,
+                    speaker,
+                    tool_call_id,
+                    Err(stopped),
+                    started,
+                )?;
+                return Ok(Disposition::StopTurn);
+            }
+            Err(error) => {
+                // Fail-closed: block the action, diagnose it, and synthesize the
+                // call's one error result. The turn continues, so a broken hook
+                // stays diagnosable instead of becoming fatal.
+                render.diagnostic(&format!(
+                    "hook.pre failed for {}: {error}; the action is blocked",
+                    pending.tool_name
+                ));
+                let blocked = ToolError::message(format!("hook failed, action blocked: {error}"));
+                emit_completed(
+                    session,
+                    render,
+                    speaker,
+                    tool_call_id,
+                    Err(blocked),
+                    started,
+                )?;
+                return Ok(Disposition::Finished);
+            }
+        }
+    }
+
+    // ② the gate, ③ the ask. The effective verdict is the supremum of the hook's
+    //    constraint and the gate's own verdict.
+    let authorized = authorize(
+        session,
+        render,
+        speaker,
+        &tool_call_id,
+        &pending.args,
+        &facts,
+        hook_verdict,
+    )
+    .await?;
+
+    let (allowed, outcome) = match authorized {
+        Authorized::Refuse { message } => (
+            None,
+            DispatchOutcome::failure(ToolError::message(message), false),
+        ),
+        Authorized::Allow => {
+            // The guardrails are a pure read of the facts plus this agent's read
+            // set; the decision is applied to the read set in `finish_call`.
+            match facts.guardrails(session.read_set()) {
+                GuardedCall::Refused(error) => (None, DispatchOutcome::failure(error, false)),
+                GuardedCall::Run(allowed) => {
+                    // A `task` call is dispatched through a port the loop builds
+                    // right here: this layer is the one that holds the provider
+                    // and the renderer, and building the port per authorized call
+                    // is what gives each executor its own id before anything of it
+                    // is recorded.
+                    if pending.tool_name == TASK_TOOL {
+                        *executors_spawned += 1;
+                        pending.executor = Some(Arc::new(ExecutorPort::new(
+                            session,
+                            speaker,
+                            provider,
+                            render,
+                            ParticipantId::new(format!("{speaker}-{executors_spawned}")),
+                        )));
+                        return Ok(Disposition::Deferred(Box::new(DeferredCall {
+                            pending,
+                            allowed,
+                            started,
+                        })));
+                    }
+                    // ④ dispatch, inline: a call that touches the workspace runs
+                    //    where it always did, in the batch's order.
+                    let outcome = session.tools().dispatch(&pending, &allowed).await;
+                    finish_call(
+                        session,
+                        render,
+                        speaker,
+                        CallCompletion {
+                            pending: &pending,
+                            allowed: Some(&allowed),
+                            started,
+                            dispatched: true,
+                            outcome,
+                        },
+                    )
+                    .await?;
+                    return Ok(Disposition::Finished);
+                }
+            }
+        }
+    };
+
+    finish_call(
+        session,
+        render,
+        speaker,
+        CallCompletion {
+            pending: &pending,
+            allowed,
+            started,
+            dispatched: false,
+            outcome,
+        },
+    )
+    .await?;
+    Ok(Disposition::Finished)
+}
+
+/// Run the batch's deferred calls together, at most
+/// [`SessionConfig::max_parallel_executors`] at a time, and record their results
+/// in the batch's order.
+///
+/// This is what makes "several executors in one batch run at once" true without
+/// a second delivery mechanism: every call is still an ordinary tool call with
+/// exactly one result, and the write exclusion that matters happens inside the
+/// executors, on the shared path locks (spec §16). The cap is a cost and rate
+/// gate, not a safety gate.
+async fn run_deferred(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    deferred: Vec<DeferredCall>,
+) -> Result<(), Error> {
+    if deferred.is_empty() {
+        return Ok(());
+    }
+    let cap = session.config().max_parallel_executors.max(1);
+    // A shared handle, so the futures borrow the tool table rather than the
+    // session: the session is the loop's to mutate again as the results land.
+    let tools = session.shared_tools();
+    // Collected before awaiting, so every future borrows the same `deferred`.
+    let mut batch = Vec::with_capacity(deferred.len());
+    for call in &deferred {
+        batch.push(tools.dispatch(&call.pending, &call.allowed));
+    }
+    let outcomes = futures::stream::iter(batch)
+        .buffered(cap)
+        .collect::<Vec<_>>()
+        .await;
+
+    for (call, outcome) in deferred.into_iter().zip(outcomes) {
+        finish_call(
+            session,
+            render,
+            speaker,
+            CallCompletion {
+                pending: &call.pending,
+                allowed: Some(&call.allowed),
+                started: call.started,
+                dispatched: true,
+                outcome,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Everything that follows a decided call: the read set, the call's one result,
+/// and the post-hook.
+///
+/// One implementation for both dispatch paths, so the invariants hold wherever
+/// the tool actually ran: a read is only a read if it succeeded, a failed match
+/// withdraws the path's read permission, and the result enters the log before the
+/// post-hook runs (a hook that hangs cannot hide a result the renderer should
+/// already have seen).
+async fn finish_call(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    completion: CallCompletion<'_>,
+) -> Result<(), Error> {
+    let CallCompletion {
+        pending,
+        allowed,
+        started,
+        dispatched,
+        outcome,
+    } = completion;
+
+    if let Some(allowed) = allowed {
+        if outcome.is_ok() {
+            session.record_reads(&allowed.read_paths);
+        }
+        if outcome.invalidated_reads {
+            if let Some(path) = outcome
+                .result
+                .as_ref()
+                .err()
+                .and_then(ToolError::invalidated_path)
+            {
+                session.invalidate_read(path);
+            }
+        }
+    }
+
+    let (ok, output, error) = match &outcome.result {
+        Ok(output) => (true, Some(output.text.clone()), None),
+        Err(error) => (false, None, Some(error.to_string())),
+    };
+    emit_completed(
+        session,
+        render,
+        speaker,
+        ToolCallId::new(pending.tool_call_id.clone()),
+        outcome.result,
+        started,
+    )?;
+
+    // ⑤ hook.post. It runs only when the tool really ran, and its failure can
+    //    only drop feedback.
+    if dispatched {
+        run_post_hook(
+            session,
+            render,
+            speaker,
+            pending,
+            ok,
+            output.as_deref(),
+            error.as_deref(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// One debater at runtime: its own session (its read set, its private identity,
 /// its model) and the provider that answers for it.
 pub struct Debater {
     pub speaker: SpeakerId,
     pub session: Session,
-    pub provider: Box<dyn Provider>,
+    /// Shared, because the executors this debater dispatches answer on the same
+    /// client (spec §16: an executor's model is inherited by default).
+    pub provider: Arc<dyn Provider>,
 }
 
 /// The synthesizer (CONTEXT.md: 合成器): a session to write into, and a provider
@@ -703,7 +937,7 @@ pub async fn run_discussion(
             run_turn(
                 &mut debater.session,
                 &debater.speaker,
-                debater.provider.as_ref(),
+                &debater.provider,
                 render,
                 scope,
             )
@@ -1363,6 +1597,27 @@ fn parse_tool_args(arguments: &str) -> serde_json::Value {
     serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null)
 }
 
+/// Append one event to the stream and narrate it to the renderer.
+///
+/// **The one write path** (spec §3, invariant 3): the loop reaches it through a
+/// session, and the executor port it drives reaches it through the shared log
+/// handle — which is what makes "the `agent` layer is the single writer" one
+/// function rather than a convention.
+///
+/// The log is a cheap shared handle, so appending through a clone is the same
+/// append the session would have made: one writer, one `seq`, one line.
+pub(super) fn append_event(
+    log: &EventLog,
+    render: &RenderHandle,
+    speaker_id: SpeakerId,
+    payload: EventPayload,
+) -> Result<Event, Error> {
+    let mut log = log.clone();
+    let event = log.append(speaker_id, payload)?;
+    render.logged(&event);
+    Ok(event)
+}
+
 fn emit(
     session: &mut Session,
     render: &RenderHandle,
@@ -1382,7 +1637,5 @@ fn emit_returning(
     speaker: &SpeakerId,
     payload: EventPayload,
 ) -> Result<Event, Error> {
-    let event = session.append(speaker.clone(), payload)?;
-    render.logged(&event);
-    Ok(event)
+    append_event(session.log(), render, speaker.clone(), payload)
 }
