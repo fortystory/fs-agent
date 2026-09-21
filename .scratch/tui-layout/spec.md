@@ -180,8 +180,8 @@ Status: ready-for-agent
 
 - 编辑器拆成**独立的 `Input` 类型**（新建 `src/render/editor.rs`），`TuiState` 持有一个。搬进去的：`input` / `cursor` / `history` / `history_at` / `draft` 与全部行编辑方法、`byte_at`。留在 `TuiState` 的：转录、`live`、`ready`、`pending`、`events`、`busy`、`quit`、`prompt_reply`，以及「提交后把文本送出去」那一半。
 - `Input` 新增：软换行（逻辑行 → 显示行）、光标行列计算、`insert_str`（粘贴整体插入）、`rows(width)`。列宽算术**不要**再从 `tui.rs` 搬一份：票 11 已把它收到 `src/render/width.rs`，编辑器直接用那一份，换行口径与 `pane::wrap_line` 保持一致。
-- **光标的唯一真相源 = `(逻辑行, 行内字符偏移)`**；显示行/列**每次渲染算出来**，不累加维护。全屏下 `area()` 恒为 `(0,0,w,h)` 且 `set_cursor_position` 是终端绝对坐标，**没有视口偏移要加**。
-- 软换行**按字符、不按词边界**（与转录的 `pane::wrap_line` 一致）；最小单位是字符不是 grapheme 簇。
+- **光标的唯一真相源是一个字符索引**（逻辑行与行内偏移由它推导，不另存）；显示行/列**每次渲染算出来**，不累加维护。全屏下 `area()` 恒为 `(0,0,w,h)` 且 `set_cursor_position` 是终端绝对坐标，**没有视口偏移要加**。实现期按此收窄：存二元组等于同一件事两处写，而插入/删除要的正是扁平索引（理由见票 12 的 Comments）。
+- 软换行**按字符、不按词边界**（与转录的 `pane::wrap_line` 一致）；最小单位是字符不是 grapheme 簇。`> ` 领第一行、其后每行缩进两格，因此每行装同样多的字；**正好写满一行时给光标另起一行**，否则光标会落在它所在区域之外。
 - `↑` / `↓` **保持视觉列（goal column）**；横向移动或插入字符时清掉。
 
 ### §6 键位表
