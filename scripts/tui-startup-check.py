@@ -30,7 +30,8 @@ Run after `cargo build`:
 
     python3 scripts/tui-startup-check.py [binary] [runs]
 
-Exits 0 when every run is green. A pty that does not answer the cursor-position
+Each run is made twice, once leaving by `Ctrl-C` and once by `/quit`. Exits 0 when
+every run is green. A pty that does not answer the cursor-position
 query (`ESC[6n`) makes ratatui fail to initialise, which is why this script
 answers it.
 """
@@ -81,6 +82,11 @@ TEARDOWN = [
     "\x1b[?1006l",
     "\x1b[?2004l",
 ]
+
+# The two ways out a user actually has. Both have to hand the terminal back, so
+# every run is made twice (spec §1: `/quit`, idle `Ctrl-C`; the panic path shares
+# the same function but cannot be triggered on demand -- see the manual list).
+GESTURES = [("ctrl-c", b"\x03"), ("/quit", b"/quit\r")]
 
 # The tty flags a shell has to have back: canonical input, echo and signals.
 Modes = collections.namedtuple("Modes", "canonical echo signals")
@@ -198,7 +204,53 @@ class Screen:
         return ["".join(r).rstrip() for r in self.grid]
 
 
-def capture(binary, data_home, timeout=20.0):
+def read_once(fd, screen=None, timeout=0.2):
+    """One read from the pty.
+
+    Returns the decoded text, `""` when nothing was ready, and `None` at end of
+    stream. `screen`, when given, also answers any cursor-position query in the
+    text: a pty that stays silent about one leaves ratatui waiting for a reply.
+    """
+    readable, _, _ = select.select([fd], [], [], timeout)
+    if not readable:
+        return ""
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        return None
+    if not data:
+        return None
+    text = data.decode("utf-8", "replace")
+    if screen is not None:
+        screen.feed(text)
+    return text
+
+
+def write(fd, data):
+    """Send bytes, tolerating a pty that has already gone."""
+    try:
+        os.write(fd, data)
+    except OSError:
+        pass
+
+
+def tty_state(fd, tries=3):
+    """The line discipline the child left, read before the master is closed.
+
+    A couple of retries because the read can race the slave closing; `None` means
+    the pty would not say, which the verdict reports as itself rather than as raw
+    mode left on.
+    """
+    for attempt in range(tries):
+        try:
+            return tty_modes(fd)
+        except OSError:
+            if attempt < tries - 1:
+                time.sleep(0.05)
+    return None
+
+
+def capture(binary, data_home, gesture=b"\x03", timeout=20.0):
     """Run the binary on a pty until startup settles, then quit it and look behind.
 
     A fixed read window is flaky: assembly (context, skills, the session
@@ -206,7 +258,7 @@ def capture(binary, data_home, timeout=20.0):
     the run would look green for the wrong reason. Wait for both the status line
     and the banner instead, plus a grace period so a duplicate write is counted.
 
-    The way out is checked here too, because it is the same run: `Ctrl-C`, then
+    The way out is checked here too, because it is the same run: `gesture`, then
     wait for the process to actually go -- the terminal is only clean once it has
     (spec §19). The escape sequences it emitted and the termios it left are read
     after it exited, not guessed from the source.
@@ -220,17 +272,10 @@ def capture(binary, data_home, timeout=20.0):
     raw, screen = "", Screen(fd)
     deadline, settle_by = time.time() + timeout, None
     while time.time() < deadline:
-        readable, _, _ = select.select([fd], [], [], 0.2)
-        if readable:
-            try:
-                data = os.read(fd, 65536)
-            except OSError:
-                break
-            if not data:
-                break
-            text = data.decode("utf-8", "replace")
-            raw += text
-            screen.feed(text)
+        text = read_once(fd, screen)
+        if text is None:
+            break
+        raw += text
         if settle_by is None and BANNER_ANCHOR in raw and any(
             STATUS_ANCHOR in row for row in screen.rows()
         ):
@@ -239,10 +284,7 @@ def capture(binary, data_home, timeout=20.0):
             break
     # An empty Enter first: the loop discards the empty line and asks again, so the
     # session has to still be there. This is the regression that once quit it.
-    try:
-        os.write(fd, b"\r")
-    except OSError:
-        pass
+    write(fd, b"\r")
     time.sleep(0.4)
     reaped, wait_status = os.waitpid(pid, os.WNOHANG)
     survived_empty_enter = reaped == 0
@@ -250,23 +292,13 @@ def capture(binary, data_home, timeout=20.0):
         wait_status if not survived_empty_enter else None
     )
     if survived_empty_enter:
-        try:
-            os.write(fd, b"\x03")
-        except OSError:
-            pass
+        write(fd, gesture)
         deadline = time.time() + 6.0
         while time.time() < deadline:
-            readable, _, _ = select.select([fd], [], [], 0.1)
-            if readable:
-                try:
-                    data = os.read(fd, 65536)
-                except OSError:
-                    # The slave side is gone; anything already buffered was read
-                    # above, and the reaping below is what is left to wait for.
-                    data = b""
-                if data:
-                    raw += data.decode("utf-8", "replace")
-                    continue
+            text = read_once(fd, screen, 0.1)
+            if text:
+                raw += text
+                continue
             reaped, wait_status = os.waitpid(pid, os.WNOHANG)
             if reaped == pid:
                 exited, status = True, wait_status
@@ -274,25 +306,15 @@ def capture(binary, data_home, timeout=20.0):
         if not exited:
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
-    if exited:
-        # The teardown can land in the same instant as the exit, so take one more
-        # look before closing the master.
-        end = time.time() + 0.3
-        while time.time() < end:
-            readable, _, _ = select.select([fd], [], [], 0.1)
-            if not readable:
-                break
-            try:
-                data = os.read(fd, 65536)
-            except OSError:
-                break
-            if not data:
-                break
-            raw += data.decode("utf-8", "replace")
-    try:
-        modes = tty_modes(fd)
-    except OSError:
-        modes = None
+    # Whatever was flushed as it went, then the state it left the pty in. The
+    # teardown can land in the same instant as the exit, so this is not skipped.
+    end = time.time() + 0.3
+    while time.time() < end:
+        text = read_once(fd, screen, 0.1)
+        if not text:
+            break
+        raw += text
+    modes = tty_state(fd)
     try:
         os.close(fd)
     except OSError:
@@ -309,11 +331,11 @@ def verdict(run, devnull, identity):
     anchor, which is split in the byte stream for the same reason.
     """
     if not run.survived_empty_enter:
-        return False, "an empty Enter ended the session"
+        return False, "the session did not survive an empty Enter"
     if not run.exited:
-        return False, "ctrl-c did not end the process"
+        return False, "the quit gesture did not end the process"
     if run.status != 0:
-        return False, "ctrl-c left exit status %r" % (run.status,)
+        return False, "the quit gesture left exit status %r" % (run.status,)
     frame = Screen(devnull)
     frame.feed(run.raw)
     rows = frame.rows()
@@ -341,7 +363,9 @@ def verdict(run, devnull, identity):
     banner = run.raw.count(BANNER_ANCHOR)
     if banner != 1:
         return False, "the startup banner reached the terminal %d times" % banner
-    if run.modes is None or not all(run.modes):
+    if run.modes is None:
+        return False, "could not read what the tty was left in"
+    if not (run.modes.canonical and run.modes.echo and run.modes.signals):
         return False, "the tty was left raw: %r" % (run.modes,)
     missing = [seq for seq in TEARDOWN if seq not in run.raw]
     if missing:
@@ -376,17 +400,22 @@ def main():
     if not identity:
         print("no identity from %s --version" % binary)
         return 1
-    bad = 0
+    bad, total = 0, runs * len(GESTURES)
     with tempfile.TemporaryDirectory(prefix="fs-agent-tui-check-") as data_home:
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
             for i in range(runs):
-                ok, why = verdict(capture(binary, data_home), devnull, identity)
-                print("run %d: %s -- %s" % (i + 1, "GREEN" if ok else "RED", why))
-                bad += 0 if ok else 1
+                for label, gesture in GESTURES:
+                    run = capture(binary, data_home, gesture)
+                    ok, why = verdict(run, devnull, identity)
+                    print(
+                        "run %d (%s): %s -- %s"
+                        % (i + 1, label, "GREEN" if ok else "RED", why)
+                    )
+                    bad += 0 if ok else 1
         finally:
             os.close(devnull)
-    print("\n%d/%d red" % (bad, runs))
+    print("\n%d/%d red" % (bad, total))
     return 0 if bad == 0 else 1
 
 

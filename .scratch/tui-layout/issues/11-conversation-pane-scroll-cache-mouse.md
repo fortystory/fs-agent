@@ -4,7 +4,7 @@
 
 Blocked by: 10
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §3（面板行缓冲与换行缓存）、§4（滚动、吸底与鼠标）、§6（键位表里转录那几行）
 

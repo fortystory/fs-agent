@@ -4,7 +4,7 @@
 
 Blocked by: None
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §12（CLI 接线与斜杠命令）、§6（`Ctrl-J` 换行带来的多行输入）
 

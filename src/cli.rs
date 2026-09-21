@@ -401,10 +401,10 @@ async fn interactive_loop(
         let Some(submitted) = line else {
             return ExitCode::SUCCESS;
         };
-        if submitted.trim().is_empty() {
-            continue;
-        }
         match submission(&submitted, |name| harness.has_skill(name)) {
+            // An empty line: nothing to answer, so ask again. `None` from the prompt
+            // is the only thing that ends input, and that is handled just above.
+            Submission::Ignore => {}
             Submission::Quit => return ExitCode::SUCCESS,
             Submission::Undo => match harness.undo_last_edit().await {
                 Ok(Some(_)) => {}
@@ -480,6 +480,10 @@ async fn interactive_loop(
 /// What one submission asks for (spec §12).
 #[derive(Debug, PartialEq, Eq)]
 enum Submission<'a> {
+    /// Nothing to send: an empty line, or one that is blank once trimmed. The loop
+    /// asks again without starting a turn — an Enter on an empty input is an empty
+    /// line, never the end of input (spec §6).
+    Ignore,
     Quit,
     Undo,
     Plan,
@@ -504,6 +508,9 @@ enum Submission<'a> {
 /// typo when it is the whole submission (told about, as it always was) and a pasted
 /// paragraph when it is not.
 ///
+/// A submission that is blank once trimmed is [`Submission::Ignore`]: there is nothing
+/// to send, so the loop asks again instead of starting a turn.
+///
 /// The built-ins take no task, so they match only as the **whole** submission: a line
 /// after `/plan` must not be dropped on the floor. Such a submission falls through to
 /// the rules above — `/plan` names no skill, so with lines after it the whole thing is
@@ -513,6 +520,9 @@ enum Submission<'a> {
 /// code read a skill name too. Trailing blank lines are dropped from a task; the rest
 /// is kept as written.
 fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission<'a> {
+    if text.trim().is_empty() {
+        return Submission::Ignore;
+    }
     let (first, rest) = match text.split_once('\n') {
         Some((first, rest)) => (first.trim(), rest),
         None => (text.trim(), ""),
@@ -1802,6 +1812,18 @@ mod tests {
 
     fn read(text: &str) -> Submission<'_> {
         submission(text, has_skill)
+    }
+
+    #[test]
+    fn a_blank_submission_is_ignored_rather_than_sent_or_read_as_the_end_of_input() {
+        // What an Enter on an empty input produces. The loop used to decide this
+        // itself, so nothing in `cargo test` pinned it -- and the TUI once sent the
+        // empty draft as the end-of-input sentinel, which quit the whole session.
+        assert!(matches!(read(""), Submission::Ignore));
+        assert!(matches!(read("   "), Submission::Ignore));
+        assert!(matches!(read("\n\n\t\n"), Submission::Ignore));
+        // Nor is it a prompt: an empty message must not reach the model.
+        assert!(!matches!(read("  \n  "), Submission::Prompt(_)));
     }
 
     #[test]

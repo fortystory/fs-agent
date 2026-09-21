@@ -82,6 +82,10 @@ _Avoid_: 符号表、codebase map、repo index
 会话级的**累计 token 上限**：闸门看 `UsageRecorded` 的求和（讨论者、执行者、合成器共用一个额度，各端 config 必须一致，不然组装期报错），撞顶时**降级收尾**而不是中断。与**窗口**（`context::usable_input`：按 agent **各自**模型算的单次输入上限，靠丢弃旧内容满足）是两回事。
 _Avoid_: 配额、quota、上下文预算
 
+**token**:
+模型的计量单位：输入 / 输出、以及缓存命中与未命中各自计数。**不给它中文名** —— UI 与统计行一律写 `token`（信息面板的标签、`token_pair`）。
+_Avoid_: 词元、令牌、字
+
 **价目表（PriceTable / Pricing）**:
 按 model id 配的单价，单位是每百万 token 的 USD（`cached` / `miss` / `output` 三档，**命中与未命中分开计价**）。**费用只作显示**：闸门只数 token；未登记的 model 显示为「无价格」，不是 0。
 _Avoid_: 费率表、计费表、cost table

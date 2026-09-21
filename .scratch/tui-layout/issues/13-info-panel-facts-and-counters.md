@@ -4,7 +4,7 @@
 
 Blocked by: 10
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §8（信息面板）、§10（措辞层）、§2（右栏宽度与栏内降级）
 

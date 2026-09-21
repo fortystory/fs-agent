@@ -4,7 +4,7 @@
 
 Blocked by: 10
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §5（`Input`）、§6（键位表）、§7（粘贴与两种确认）、§2（输入区行数与续行缩进 2 格）
 

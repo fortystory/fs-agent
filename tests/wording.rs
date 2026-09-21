@@ -297,6 +297,12 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
         wording::status_line(false, 80),
         "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c 退出"
     );
+    // Busy swaps the word and nothing else: at 60 the hint that loses is still
+    // `shift+tab 计划`, and `ctrl-c 退出` is still there.
+    assert_eq!(
+        wording::status_line(true, 60),
+        "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
+    );
     let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · PgUp/PgDn 滚动 · ctrl-c 退出";
     assert_eq!(wording::status_line(false, 120), full);
     // At the maximum the line is stable: there is nothing left to buy.
@@ -350,16 +356,13 @@ fn every_panel_label_is_the_chinese_the_prototype_shows() {
 #[test]
 fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
     // `scripts/tui-startup-check.py` anchors on this exact string to tell the new
-    // four-pane layout apart from anything older, so it has to be the crate's own
-    // name and version rather than a literal someone edits by hand.
+    // four-pane layout apart from anything older, and its expectation comes from the
+    // binary's own `--version` (`src/cli.rs` prints `fs-agent {version}`). The two
+    // spellings are written in two places, so this pins them together: change either
+    // and the check goes red rather than silently matching nothing.
     assert_eq!(
         wording::identity(),
-        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
-    );
-    assert!(
-        wording::identity().starts_with("fs-agent "),
-        "{}",
-        wording::identity()
+        format!("fs-agent {}", env!("CARGO_PKG_VERSION"))
     );
 }
 

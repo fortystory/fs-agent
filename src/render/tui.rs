@@ -671,10 +671,9 @@ impl TuiState {
     /// for something and wants to watch the answer, whatever they were reading
     /// (spec §4).
     ///
-    /// An empty draft is an **empty line**, never the end of input. The terminal cannot
-    /// be closed by pressing Enter, and `None` on that channel means exactly that — the
-    /// loop reads it as a closed stdin and stops. Quitting is `Ctrl-C` (the flag below)
-    /// or `/quit` (a line like any other).
+    /// An empty draft is sent as an **empty line**. The channel's sentinel for a closed
+    /// stdin is `None` (see [`ConsoleRequest::Prompt`]), and pressing Enter never means
+    /// that; quitting is `Ctrl-C` (the flag below) or `/quit` (a line like any other).
     fn submit(&mut self) {
         self.pane.to_bottom();
         let line = self.editor.submitted();

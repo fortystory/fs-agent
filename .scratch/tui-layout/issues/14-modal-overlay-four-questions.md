@@ -4,7 +4,7 @@
 
 Blocked by: 10, 12
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §9（模态覆盖层）、§7（两种确认）、§10（措辞层）
 
