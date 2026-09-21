@@ -1381,18 +1381,13 @@ fn render_entry(entry: &Entry) -> String {
             lines.join("\n")
         }
         Entry::PermissionAsked {
-            speaker,
-            request_id,
-            tool_call_id,
-            request,
-            ..
+            speaker, request, ..
         } => format!(
             "{} {}",
             label(speaker),
             render::wording::permission_asked(
                 crate::events::permission_format::tool_name(request),
-                request_id,
-                tool_call_id.as_str()
+                &render::transcript::summarize_permission_target(request)
             )
         ),
         Entry::PermissionDecided {

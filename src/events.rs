@@ -656,6 +656,16 @@ pub mod permission_format {
         request.get(TOOL).and_then(serde_json::Value::as_str)
     }
 
+    /// The arguments of the call the question is about, when it records them.
+    pub fn args(request: &serde_json::Value) -> Option<&serde_json::Value> {
+        request.get(ARGS)
+    }
+
+    /// Why the gate asked, when the request records it.
+    pub fn reason(request: &serde_json::Value) -> Option<&str> {
+        request.get(REASON).and_then(serde_json::Value::as_str)
+    }
+
     /// Build the `request` value for a question. Keys come from this module, so
     /// the writer and the readers share one shape.
     pub fn request(tool_name: &str, args: &serde_json::Value, reason: &str) -> serde_json::Value {

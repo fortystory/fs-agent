@@ -62,12 +62,11 @@ pub enum Block {
     },
     PermissionAsked {
         speaker: SpeakerId,
-        /// The tool the question is about, when the stream recorded one. It is
-        /// what the question is actually asking about, so a narration that shows
-        /// only the two ids is unreadable.
+        /// The tool the question is about, when the stream recorded one.
         tool_name: Option<String>,
-        request_id: String,
-        tool_call_id: ToolCallId,
+        /// The arguments of the call it is asking about, so a painter can show
+        /// the command or path a person is approving.
+        args: Value,
     },
     PermissionDecided {
         speaker: SpeakerId,
@@ -299,17 +298,14 @@ impl Transcript {
             EventPayload::TurnEnded { reason } => {
                 blocks.push(Block::TurnEnded { speaker, reason });
             }
-            EventPayload::PermissionAsked {
-                request_id,
-                tool_call_id,
-                request,
-            } => {
+            EventPayload::PermissionAsked { request, .. } => {
                 blocks.push(Block::PermissionAsked {
                     speaker,
                     tool_name: crate::events::permission_format::tool_name(&request)
                         .map(str::to_owned),
-                    request_id,
-                    tool_call_id,
+                    args: crate::events::permission_format::args(&request)
+                        .cloned()
+                        .unwrap_or(Value::Null),
                 });
             }
             EventPayload::PermissionDecided {
@@ -399,6 +395,15 @@ fn summarize_value(value: &Value) -> String {
     match value {
         Value::String(text) => text.replace('\n', "\\n"),
         other => other.to_string(),
+    }
+}
+
+/// The one-line summary of what a permission question would run, from an event's
+/// `request` value. Empty when the stream recorded no arguments.
+pub fn summarize_permission_target(request: &Value) -> String {
+    match crate::events::permission_format::args(request) {
+        Some(args) => summarize_args(args),
+        None => String::new(),
     }
 }
 

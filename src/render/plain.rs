@@ -119,17 +119,12 @@ impl Plain {
             Block::PermissionAsked {
                 speaker,
                 tool_name,
-                request_id,
-                tool_call_id,
+                args,
             } => {
                 self.line(&format!(
                     "{} {}",
                     speaker_label(&speaker),
-                    wording::permission_asked(
-                        tool_name.as_deref(),
-                        &request_id,
-                        tool_call_id.as_str()
-                    )
+                    wording::permission_asked(tool_name.as_deref(), &summarize_args(&args))
                 ));
             }
             Block::PermissionDecided {

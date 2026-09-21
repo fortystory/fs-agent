@@ -227,19 +227,14 @@ impl Render for Headless {
                                 wording::usage_summary(usage)
                             );
                         }
-                        EventPayload::PermissionAsked {
-                            request_id,
-                            tool_call_id,
-                            request,
-                        } => {
+                        EventPayload::PermissionAsked { request, .. } => {
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
                                 "{} {}",
                                 speaker_label(speaker),
                                 wording::permission_asked(
                                     crate::events::permission_format::tool_name(request),
-                                    request_id,
-                                    tool_call_id.as_str()
+                                    &super::transcript::summarize_permission_target(request)
                                 )
                             );
                         }

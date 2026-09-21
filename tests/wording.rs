@@ -146,15 +146,18 @@ fn a_usage_line_reads_in_chinese() {
 
 #[test]
 fn a_permission_ask_and_verdict_read_in_chinese() {
+    // The question shows the tool and the concrete call, never the ids.
     assert_eq!(
-        wording::permission_asked(Some("write_file"), "r-1", "c-1"),
-        "权限询问：write_file（请求 r-1，调用 c-1）"
+        wording::permission_asked(Some("bash"), "command=rm -rf /"),
+        "权限询问：bash（command=rm -rf /）"
     );
-    // An older stream that recorded no tool name still shows the ids rather than
-    // dropping the question.
     assert_eq!(
-        wording::permission_asked(None, "r-1", "c-1"),
-        "权限询问（请求 r-1，调用 c-1）"
+        wording::permission_asked(Some("read_file"), ""),
+        "权限询问：read_file"
+    );
+    assert_eq!(
+        wording::permission_asked(None, "command=ls"),
+        "权限询问（command=ls）"
     );
     assert_eq!(
         wording::permission_decided(Decision::Allow, DecisionSource::Policy, Some("mode ask")),
@@ -179,12 +182,12 @@ fn every_permission_decision_and_source_has_an_explicit_chinese_phrase() {
 #[test]
 fn the_input_line_prompts_read_in_chinese() {
     assert_eq!(
-        wording::permission_prompt("write_file", "r-1"),
-        "权限询问：write_file（r-1）？[y] 允许 / [a] 总是允许 / [n] 拒绝 "
+        wording::permission_prompt("bash", "command=rm -rf /"),
+        "权限询问：bash（command=rm -rf /）？[y] 允许 / [a] 总是允许 / [n] 拒绝 "
     );
     assert_eq!(
-        wording::permission_prompt_with_context("write_file", "{\"path\":\"a\"}", "mode ask"),
-        "权限询问：write_file {\"path\":\"a\"}（mode ask）？[y] 允许 / [a] 总是允许 / [n] 拒绝 "
+        wording::permission_prompt_with_context("write_file", "file_path=a.txt", "mode ask"),
+        "权限询问：write_file（file_path=a.txt）？原因：mode ask [y] 允许 / [a] 总是允许 / [n] 拒绝 "
     );
     assert_eq!(
         wording::plan_conflict_prompt("/tmp/PLAN.md"),

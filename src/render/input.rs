@@ -250,7 +250,7 @@ async fn answer_question(question: &Question) -> AnswerChoice {
         Question::Permission(request) => {
             let prompt = crate::render::wording::permission_prompt_with_context(
                 &request.tool_name,
-                &request.args.to_string(),
+                &crate::render::transcript::summarize_args(&request.args),
                 &request.reason,
             );
             match read_line(&prompt).await.as_deref() {

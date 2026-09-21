@@ -415,10 +415,10 @@ async fn a_call_with_no_result_still_appears_when_the_stream_ends() {
 }
 
 #[tokio::test]
-async fn a_permission_question_names_the_tool_it_is_about() {
-    // The question line used to carry only the request and call ids, so a person
-    // approving a write could not see which tool was asking (spec §12: the prompt
-    // names the action). The tool name is on the event's `request` value.
+async fn a_permission_question_names_the_tool_and_the_call() {
+    // The question line used to carry only ids, so a person approving a call
+    // could not see what it would run. It now names the tool and the concrete
+    // arguments; the ids stay in the event stream, not in what a person reads.
     let events = [Event::new(
         1,
         kimi(),
@@ -427,7 +427,7 @@ async fn a_permission_question_names_the_tool_it_is_about() {
             tool_call_id: ToolCallId::new("call-5"),
             request: fs_agent::events::permission_format::request(
                 "write_file",
-                &serde_json::json!({"path": "a.txt"}),
+                &serde_json::json!({"file_path": "a.txt"}),
                 "mode ask",
             ),
         },
@@ -435,9 +435,17 @@ async fn a_permission_question_names_the_tool_it_is_about() {
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
     assert!(
-        text.lines()
-            .any(|line| line.starts_with("[kimi] ") && line.contains("write_file")),
-        "the question names the tool: {text:?}"
+        text.lines().any(|line| line.starts_with("[kimi] ")
+            && line.contains("write_file")
+            && line.contains("file_path=a.txt")),
+        "the question names the tool and the call: {text:?}"
     );
-    assert!(text.contains("perm-1"), "and keeps the ids: {text:?}");
+    assert!(
+        !text.contains("perm-1"),
+        "the request id is not shown: {text:?}"
+    );
+    assert!(
+        !text.contains("call-5"),
+        "the call id is not shown: {text:?}"
+    );
 }
