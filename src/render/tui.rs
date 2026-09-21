@@ -40,13 +40,14 @@ use tokio::sync::broadcast;
 use crate::events::{ContextSource, HistoryReason, Role, StopReason};
 use crate::permissions::Mode;
 
+use super::editor::{self, Input};
 use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
 use super::layout;
 use super::pane::Pane;
 use super::severity::Severity;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
-use super::width::{char_columns, text_columns, truncate_columns};
+use super::width::{text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{Render, RenderEvent};
 
@@ -62,6 +63,9 @@ const TOOL_PREVIEW: usize = 4_000;
 /// the header's clock honest, and what gives a pending question a chance to
 /// appear while nothing else is happening.
 const TICK: Duration = Duration::from_millis(120);
+
+/// A paste larger than this asks before it is taken (spec §7).
+const PASTE_CONFIRM_CHARS: usize = 100_000;
 
 /// How many queued render events one frame absorbs. A bounded drain keeps a
 /// firehose from starving the keyboard for a whole frame's worth of work.
@@ -97,6 +101,7 @@ pub enum Key {
     CtrlP,
     CtrlN,
     CtrlG,
+    CtrlJ,
     PageUp,
     PageDown,
 }
@@ -116,6 +121,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'p' => Some(Key::CtrlP),
                 'n' => Some(Key::CtrlN),
                 'g' => Some(Key::CtrlG),
+                'j' => Some(Key::CtrlJ),
                 _ => None,
             };
         }
@@ -339,19 +345,8 @@ pub struct TuiState {
     clock: chrono::DateTime<Local>,
     /// Whether anything has changed since the last frame was drawn.
     dirty: bool,
-    /// What the user has typed.
-    input: String,
-    /// The cursor in `input`, as a **character** index (never a byte offset:
-    /// `input` is UTF-8 and a CJK character is three bytes).
-    cursor: usize,
-    /// Prompt lines already submitted, oldest first, for `Ctrl-P` / `Ctrl-N`.
-    history: Vec<String>,
-    /// Where in [`TuiState::history`] the browse currently is, or `None` when
-    /// editing a fresh line.
-    history_at: Option<usize>,
-    /// The fresh line stashed when a history browse began, restored when the
-    /// browse comes back past the newest entry.
-    draft: String,
+    /// The draft and its cursor.
+    editor: Input,
     /// Where a `Prompt` request's answer goes.
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     /// A question waiting for a keypress.
@@ -366,9 +361,54 @@ pub struct TuiState {
     quit: bool,
 }
 
-struct Pending {
-    question: Question,
-    reply: tokio::sync::oneshot::Sender<AnswerChoice>,
+/// A question waiting for an answer.
+///
+/// Two kinds live here. The loop's asks ([`Question`]) travel back over a one-shot
+/// channel; the renderer's own asks — an oversized paste, a draft that Esc would
+/// throw away — have nobody to answer to, so they hold what they need to do the
+/// thing themselves once the user says yes (spec §7).
+enum Pending {
+    /// The loop is waiting on an answer.
+    Loop {
+        question: Question,
+        reply: tokio::sync::oneshot::Sender<AnswerChoice>,
+    },
+    /// A paste too large to take without asking.
+    Paste { text: String, chars: usize },
+    /// A multi-line draft that `Esc` would clear.
+    ClearDraft,
+}
+
+impl Pending {
+    /// The line the question puts in place of the input (spec §7; the modal
+    /// overlay in ticket 14 draws the same text).
+    fn prompt(&self) -> String {
+        match self {
+            Pending::Loop {
+                question: Question::Permission(request),
+                ..
+            } => wording::permission_prompt(&request.tool_name, &summarize_args(&request.args)),
+            Pending::Loop {
+                question: Question::PlanConflict(path),
+                ..
+            } => wording::plan_conflict_prompt(&path.display().to_string()),
+            Pending::Paste { chars, .. } => wording::paste_confirm(*chars),
+            Pending::ClearDraft => wording::clear_draft_confirm().to_owned(),
+        }
+    }
+}
+
+/// The non-acting answer to a question the loop asked.
+fn default_choice(question: &Question) -> AnswerChoice {
+    match question {
+        Question::PlanConflict(_) => AnswerChoice::Plan(crate::permissions::PlanConflict::Keep),
+        Question::Permission(_) => AnswerChoice::Permission(crate::permissions::Answer::Deny),
+    }
+}
+
+/// Whether a key means yes to a question this renderer asked itself.
+fn agrees(key: Key) -> bool {
+    matches!(key, Key::Char('y') | Key::Char('Y') | Key::Enter)
 }
 
 impl TuiState {
@@ -381,11 +421,7 @@ impl TuiState {
             live: String::new(),
             clock: Local::now(),
             dirty: true,
-            input: String::new(),
-            cursor: 0,
-            history: Vec::new(),
-            history_at: None,
-            draft: String::new(),
+            editor: Input::new(),
             prompt_reply: None,
             pending: None,
             events: Vec::new(),
@@ -419,13 +455,21 @@ impl TuiState {
 
     /// Bracketed paste arrives as text, not as keys.
     ///
-    /// Normalising `\r\n`, filtering control characters and asking before an
-    /// oversized paste are ticket 12's; inserting the text as if typed is the
-    /// least this can do, and it already beats the terminal splitting a paste
-    /// into keys — where the first newline submitted the prompt.
+    /// Three things happen here that crossterm leaves to us (research §6.3): line
+    /// endings are normalised, control characters are dropped, and a paste too large
+    /// to take on sight asks first. **None of it submits** — a pasted newline is a
+    /// newline (spec §7).
     pub fn paste(&mut self, text: &str) {
-        for ch in text.chars() {
-            self.key(Key::Char(ch));
+        let text = editor::normalize_paste(text);
+        if text.is_empty() {
+            return;
+        }
+        self.dirty = true;
+        let chars = text.chars().count();
+        if chars > PASTE_CONFIRM_CHARS {
+            self.pending = Some(Pending::Paste { text, chars });
+        } else {
+            self.editor.insert_str(&text);
         }
     }
 
@@ -508,7 +552,7 @@ impl TuiState {
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
             ConsoleRequest::Ask(ask) => {
-                self.pending = Some(Pending {
+                self.pending = Some(Pending::Loop {
                     question: ask.question,
                     reply: ask.reply,
                 });
@@ -540,10 +584,14 @@ impl TuiState {
             Key::Esc => {
                 if self.busy {
                     self.events.push(FrontEndEvent::Cancel);
-                } else if self.pending.is_some() {
-                    self.answer(self.default_answer());
+                } else if let Some(pending) = self.pending.take() {
+                    self.decline(pending);
+                } else if self.editor.has_multiple_lines() {
+                    // Esc on a draft this long would throw away real work, so it
+                    // asks first — and the safe answer is "no" (spec §7).
+                    self.pending = Some(Pending::ClearDraft);
                 } else {
-                    self.clear_input();
+                    self.editor.clear();
                 }
                 return;
             }
@@ -563,18 +611,25 @@ impl TuiState {
         }
         match key {
             Key::Enter => self.submit(),
-            Key::Char(ch) => self.insert_char(ch),
-            Key::Backspace => self.backspace(),
-            Key::Delete => self.delete_forward(),
-            Key::Left => self.cursor = self.cursor.saturating_sub(1),
-            Key::Right => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
-            Key::Home | Key::CtrlA => self.cursor = 0,
-            Key::End | Key::CtrlE => self.cursor = self.input.chars().count(),
-            Key::CtrlU => self.kill_to_start(),
-            Key::CtrlK => self.kill_to_end(),
-            Key::CtrlW => self.kill_word(),
-            Key::Up | Key::CtrlP => self.history_previous(),
-            Key::Down | Key::CtrlN => self.history_next(),
+            Key::Char(ch) => self.editor.insert_char(ch),
+            // The one reliable newline key: Shift+Enter arrives as plain Enter on a
+            // terminal without the keyboard-enhancement protocol, so it submits
+            // (spec §6).
+            Key::CtrlJ => self.editor.insert_char('\n'),
+            Key::Backspace => self.editor.backspace(),
+            Key::Delete => self.editor.delete_forward(),
+            Key::Left => self.editor.left(),
+            Key::Right => self.editor.right(),
+            Key::Up => self.editor.up(),
+            Key::Down => self.editor.down(),
+            Key::Home | Key::CtrlA => self.editor.home(),
+            Key::End | Key::CtrlE => self.editor.end(),
+            Key::CtrlU => self.editor.kill_to_line_start(),
+            Key::CtrlK => self.editor.kill_to_line_end(),
+            Key::CtrlW => self.editor.kill_word(),
+            // History is `Ctrl-P` / `Ctrl-N` alone; the arrows belong to the cursor.
+            Key::CtrlP => self.editor.history_previous(),
+            Key::CtrlN => self.editor.history_next(),
             Key::PageUp => self.pane.page(true),
             Key::PageDown => self.pane.page(false),
             Key::CtrlG => self.pane.to_bottom(),
@@ -582,243 +637,68 @@ impl TuiState {
         }
     }
 
-    // --- line editing ------------------------------------------------------
-
-    /// The byte offset of character index `at`, clamped to the end.
-    fn byte_at(&self, at: usize) -> usize {
-        self.input
-            .char_indices()
-            .nth(at)
-            .map(|(index, _)| index)
-            .unwrap_or(self.input.len())
-    }
-
-    fn insert_char(&mut self, ch: char) {
-        let at = self.byte_at(self.cursor);
-        self.input.insert(at, ch);
-        self.cursor += 1;
-        self.history_at = None;
-    }
-
-    fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let at = self.byte_at(self.cursor - 1);
-        self.input.remove(at);
-        self.cursor -= 1;
-        self.history_at = None;
-    }
-
-    fn delete_forward(&mut self) {
-        if self.cursor >= self.input.chars().count() {
-            return;
-        }
-        let at = self.byte_at(self.cursor);
-        self.input.remove(at);
-        self.history_at = None;
-    }
-
-    fn kill_to_start(&mut self) {
-        let at = self.byte_at(self.cursor);
-        self.input.drain(..at);
-        self.cursor = 0;
-        self.history_at = None;
-    }
-
-    fn kill_to_end(&mut self) {
-        let at = self.byte_at(self.cursor);
-        self.input.truncate(at);
-        self.history_at = None;
-    }
-
-    /// `Ctrl-W`: drop trailing spaces, then one run of non-spaces, before the
-    /// cursor — the shell's word-erase.
-    fn kill_word(&mut self) {
-        let chars: Vec<char> = self.input.chars().take(self.cursor).collect();
-        let mut start = chars.len();
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        while start > 0 && !chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        let from = self.byte_at(start);
-        let to = self.byte_at(self.cursor);
-        self.input.replace_range(from..to, "");
-        self.cursor = start;
-        self.history_at = None;
-    }
-
-    fn set_input(&mut self, text: String) {
-        self.cursor = text.chars().count();
-        self.input = text;
-    }
-
-    fn clear_input(&mut self) {
-        self.input.clear();
-        self.cursor = 0;
-        self.history_at = None;
-        self.draft.clear();
-    }
-
-    /// `Ctrl-P` / Up: step to the older prompt, stashing the fresh line first.
-    fn history_previous(&mut self) {
-        if self.history.is_empty() {
-            return;
-        }
-        let at = match self.history_at {
-            None => {
-                self.draft = self.input.clone();
-                self.history.len() - 1
-            }
-            Some(0) => return,
-            Some(at) => at - 1,
-        };
-        self.history_at = Some(at);
-        self.set_input(self.history[at].clone());
-    }
-
-    /// `Ctrl-N` / Down: step to the newer prompt, or back to the fresh line.
-    fn history_next(&mut self) {
-        match self.history_at {
-            None => {}
-            Some(at) if at + 1 < self.history.len() => {
-                self.history_at = Some(at + 1);
-                self.set_input(self.history[at + 1].clone());
-            }
-            Some(_) => {
-                self.history_at = None;
-                let draft = std::mem::take(&mut self.draft);
-                self.set_input(draft);
-            }
-        }
-    }
-
-    /// Send the typed line to the loop and remember it.
+    /// Send the typed draft to the loop and remember it.
     ///
     /// Submitting also returns the transcript to the bottom: the user has just
     /// asked for something and wants to watch the answer, whatever they were
     /// reading (spec §4).
     fn submit(&mut self) {
         self.pane.to_bottom();
-        let line = self.input.trim().to_owned();
-        self.input.clear();
-        self.cursor = 0;
-        self.history_at = None;
-        self.draft.clear();
-        if !line.is_empty() && self.history.last() != Some(&line) {
-            self.history.push(line.clone());
-        }
+        let line = self.editor.submitted();
         if let Some(reply) = self.prompt_reply.take() {
             let _ = reply.send(if line.is_empty() { None } else { Some(line) });
         }
     }
 
-    fn answer_key(&mut self, key: Key) {
-        let choice = match (&self.pending.as_ref().map(|p| &p.question), key) {
-            (Some(Question::Permission(_)), Key::Char('y')) => {
-                AnswerChoice::Permission(crate::permissions::Answer::Allow)
-            }
-            (Some(Question::Permission(_)), Key::Char('a')) => {
-                AnswerChoice::Permission(crate::permissions::Answer::AlwaysAllow)
-            }
-            (Some(Question::PlanConflict(_)), Key::Char('o')) => {
-                AnswerChoice::Plan(crate::permissions::PlanConflict::Overwrite)
-            }
-            (Some(Question::PlanConflict(_)), Key::Char('a')) => {
-                AnswerChoice::Plan(crate::permissions::PlanConflict::Append)
-            }
-            (Some(Question::PlanConflict(_)), Key::Char('k')) => {
-                AnswerChoice::Plan(crate::permissions::PlanConflict::Keep)
-            }
-            _ => self.default_answer(),
-        };
-        self.answer(choice);
-    }
-
-    /// The non-acting answer: deny a permission, keep a plan file.
-    fn default_answer(&self) -> AnswerChoice {
-        match self.pending.as_ref().map(|p| &p.question) {
-            Some(Question::PlanConflict(_)) => {
-                AnswerChoice::Plan(crate::permissions::PlanConflict::Keep)
-            }
-            _ => AnswerChoice::Permission(crate::permissions::Answer::Deny),
-        }
-    }
-
-    fn answer(&mut self, choice: AnswerChoice) {
-        if let Some(pending) = self.pending.take() {
-            let _ = pending.reply.send(choice);
-        }
-    }
-
-    /// The column the cursor rests on for a terminal `width` columns wide: the
-    /// two prompt cells plus the input **up to the cursor**, in display columns.
+    /// Answer a question with a keypress.
     ///
-    /// Here rather than inline in [`draw_live`] so it can be asserted without a
-    /// terminal, like the rest of the display state.
-    pub fn cursor_column(&self, width: u16) -> u16 {
-        if self.pending.is_some() {
-            return 0;
-        }
-        self.input_view(width).1
-    }
-
-    /// The visible input line and the cursor's column within it, for a terminal
-    /// `width` columns wide. Long input scrolls horizontally so the cursor stays
-    /// on screen.
-    fn input_view(&self, width: u16) -> (String, u16) {
-        const PROMPT: &str = "> ";
-        let available = (width as usize).saturating_sub(text_columns(PROMPT)).max(1);
-        let chars: Vec<char> = self.input.chars().collect();
-        let cursor = self.cursor.min(chars.len());
-        let before: String = chars[..cursor].iter().collect();
-        let before_columns = text_columns(&before);
-        // Scroll just enough that the cursor keeps one column of room.
-        let start_columns = before_columns.saturating_sub(available.saturating_sub(1));
-        let mut used = 0;
-        let mut start = chars.len();
-        for (index, ch) in chars.iter().enumerate() {
-            if used >= start_columns {
-                start = index;
-                break;
+    /// The loop's questions have their own vocabularies, and an unrecognised key
+    /// falls back to the non-acting answer, so a stray character can never allow a
+    /// write. The renderer's own questions take `y` (or Enter) and nothing else.
+    fn answer_key(&mut self, key: Key) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        match pending {
+            Pending::Loop { question, reply } => {
+                let choice = match (&question, key) {
+                    (Question::Permission(_), Key::Char('y')) => {
+                        AnswerChoice::Permission(crate::permissions::Answer::Allow)
+                    }
+                    (Question::Permission(_), Key::Char('a')) => {
+                        AnswerChoice::Permission(crate::permissions::Answer::AlwaysAllow)
+                    }
+                    (Question::PlanConflict(_), Key::Char('o')) => {
+                        AnswerChoice::Plan(crate::permissions::PlanConflict::Overwrite)
+                    }
+                    (Question::PlanConflict(_), Key::Char('a')) => {
+                        AnswerChoice::Plan(crate::permissions::PlanConflict::Append)
+                    }
+                    (Question::PlanConflict(_), Key::Char('k')) => {
+                        AnswerChoice::Plan(crate::permissions::PlanConflict::Keep)
+                    }
+                    _ => default_choice(&question),
+                };
+                let _ = reply.send(choice);
             }
-            used += char_columns(*ch);
+            Pending::Paste { text, .. } => {
+                if agrees(key) {
+                    self.editor.insert_str(&text);
+                }
+            }
+            Pending::ClearDraft => {
+                if agrees(key) {
+                    self.editor.clear();
+                }
+            }
         }
-        let visible: String = chars[start..].iter().collect();
-        let visible = truncate_columns(&visible, available);
-        let cursor_column = text_columns(PROMPT) + before_columns.saturating_sub(start_columns);
-        (format!("{PROMPT}{visible}"), cursor_column as u16)
     }
 
-    /// The input line: a question prompt while one is pending, else the prompt.
-    fn input_line(&self, width: u16) -> (String, Style) {
-        match &self.pending {
-            Some(Pending {
-                question: Question::Permission(request),
-                ..
-            }) => (
-                truncate_columns(
-                    &wording::permission_prompt(&request.tool_name, &summarize_args(&request.args)),
-                    width as usize,
-                ),
-                Style::default().fg(ratatui::style::Color::Yellow),
-            ),
-            Some(Pending {
-                question: Question::PlanConflict(path),
-                ..
-            }) => (
-                truncate_columns(
-                    &wording::plan_conflict_prompt(&path.display().to_string()),
-                    width as usize,
-                ),
-                Style::default().fg(ratatui::style::Color::Yellow),
-            ),
-            None => (
-                self.input_view(width).0,
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+    /// What `Esc` means for a question: the non-acting answer, or nothing at all
+    /// when the question was this renderer's own.
+    fn decline(&mut self, pending: Pending) {
+        if let Pending::Loop { question, reply } = pending {
+            let _ = reply.send(default_choice(&question));
         }
     }
 
@@ -839,9 +719,10 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         draw_too_small(frame, area);
         return;
     }
-    // Ticket 12 replaces the constant with the draft's wrapped row count; today's
-    // editor is one line that scrolls horizontally, so the draft is one row.
-    let panes = layout::plan(area, 1);
+    // The draft's own height decides how much room the input takes: it grows with
+    // the text up to the layout's cap and then scrolls internally (spec §5).
+    let draft_rows = state.editor.rows(layout::input_text_width(area));
+    let panes = layout::plan(area, draft_rows);
     draw_header(frame, &panes, state);
     draw_transcript(frame, &panes, state);
     draw_bottom(frame, &panes, state);
@@ -1027,11 +908,32 @@ fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
 /// do.
 fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     draw_border(frame, panes.bottom);
-    let (input, style) = state.input_line(panes.input.width);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(input, style))),
-        panes.input,
-    );
+    match &state.pending {
+        // A question takes the whole input area: while it is up, the draft is not
+        // being typed into, and ticket 14 moves this into a modal overlay.
+        Some(pending) => frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate_columns(&pending.prompt(), panes.input.width as usize),
+                Style::default().fg(Color::Yellow),
+            ))),
+            panes.input,
+        ),
+        None => {
+            let text_width = panes.input.width.saturating_sub(editor::PROMPT_COLUMNS);
+            let (rows, cursor) = state.editor.view(text_width, panes.input.height);
+            frame.render_widget(
+                Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
+                panes.input,
+            );
+            // The cursor is placed from the rows that were just drawn — never from
+            // state kept between frames, which is what let the inline viewport's
+            // cursor wander (ADR 0002).
+            frame.set_cursor_position((
+                (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
+                panes.input.y + cursor.row,
+            ));
+        }
+    }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             state.status_line(panes.hints.width),
@@ -1039,14 +941,6 @@ fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
         ))),
         panes.hints,
     );
-    // The cursor sits in the input, at the end of what has been typed.
-    if state.pending.is_none() {
-        let column = panes.input.x + state.cursor_column(panes.input.width);
-        frame.set_cursor_position((
-            column.min(panes.input.right().saturating_sub(1)),
-            panes.input.y,
-        ));
-    }
 }
 
 /// Attribute a message's rows to its speaker: the label leads the first row and

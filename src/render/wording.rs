@@ -415,6 +415,16 @@ pub fn status_line(busy: bool, width: u16) -> String {
     }
 }
 
+/// The question an oversized paste asks before it is taken (spec §7).
+pub fn paste_confirm(chars: usize) -> String {
+    format!("粘贴 {chars} 字符？")
+}
+
+/// The question `Esc` asks before it throws a multi-line draft away.
+pub fn clear_draft_confirm() -> &'static str {
+    "清空输入？"
+}
+
 /// The indicator that says how much arrived while the viewport was scrolled away,
 /// and that the block is the way back (spec §4).
 pub fn new_content(rows: usize) -> String {

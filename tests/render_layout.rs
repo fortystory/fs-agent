@@ -587,3 +587,27 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
         );
     }
 }
+
+#[test]
+fn the_input_area_grows_with_the_draft_and_the_transcript_gives_up_the_rows() {
+    let mut state = state();
+    let one = screen(80, 24, &mut state);
+    assert!(one[20].starts_with('┌'), "one input row: {:?}", one[20]);
+    assert!(one[21].contains("> "), "the prompt: {:?}", one[21]);
+
+    state.paste("第一行\n第二行\n第三行");
+    let three = screen(80, 24, &mut state);
+    assert!(
+        three[18].starts_with('┌'),
+        "the bottom block moved up: {:?}",
+        three[18]
+    );
+    assert!(three[19].contains("第一行"), "{:?}", three[19]);
+    assert!(three[20].contains("第二行"), "{:?}", three[20]);
+    assert!(three[21].contains("第三行"), "{:?}", three[21]);
+    assert!(
+        three[22].contains("ctrl-c 退出"),
+        "the hints stay under the input: {:?}",
+        three[22]
+    );
+}

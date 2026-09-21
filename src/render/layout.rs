@@ -103,6 +103,13 @@ impl Regions {
     }
 }
 
+/// The width one input row has for text: the bottom block's content, less the
+/// prompt. Known before [`plan`] runs, because the draft's own height is what plan
+/// needs.
+pub fn input_text_width(area: Rect) -> u16 {
+    area.width.saturating_sub(BORDER_ROWS + INPUT_INDENT)
+}
+
 /// Lay out one frame. `draft_rows` is how many rows the input's draft wraps to.
 ///
 /// The order here **is** the degrade ladder: the panel is hidden first (by the
@@ -173,6 +180,10 @@ pub fn plan(area: Rect, draft_rows: u16) -> Regions {
         ),
     }
 }
+
+/// The columns the draft's prompt — and every continuation row's indent — takes.
+/// Held here because the layout has to reserve them; the editor draws them.
+const INPUT_INDENT: u16 = crate::render::editor::PROMPT_COLUMNS;
 
 /// The column the transcript always keeps for its scrollbar, drawn or not.
 const SCROLLBAR_COLUMN: u16 = 1;

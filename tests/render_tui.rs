@@ -386,18 +386,6 @@ fn the_live_tail_wraps_on_display_columns_not_bytes() {
 }
 
 #[test]
-fn the_cursor_column_counts_a_wide_character_as_two() {
-    // The cursor sat one column left of the input for every CJK character typed.
-    let mut state = new_state();
-    for ch in "你好".chars() {
-        state.key(Key::Char(ch));
-    }
-
-    // Two prompt cells, then two characters of two columns each.
-    assert_eq!(state.cursor_column(80), 6);
-}
-
-#[test]
 fn the_arrows_and_emacs_keys_edit_the_line_in_place() {
     let (mut state, mut answer) = state_with_prompt();
     for ch in "helo".chars() {
@@ -472,7 +460,7 @@ fn ctrl_p_and_ctrl_n_walk_the_prompt_history() {
 }
 
 #[test]
-fn up_and_down_are_history_too_and_a_fresh_line_is_restored() {
+fn the_arrows_move_the_cursor_while_ctrl_p_and_ctrl_n_walk_the_history() {
     let (mut state, mut first) = state_with_prompt();
     for ch in "kept".chars() {
         state.key(Key::Char(ch));
@@ -485,39 +473,20 @@ fn up_and_down_are_history_too_and_a_fresh_line_is_restored() {
     for ch in "draft".chars() {
         state.key(Key::Char(ch));
     }
-    state.key(Key::Up); // browse: kept
-    state.key(Key::Down); // back to the draft
+    // The arrows are the cursor's now: `Up` here must not swap the draft for the
+    // last submission — so what gets submitted still starts with what was typed.
+    state.key(Key::Up);
+    state.key(Key::Char('!'));
     state.key(Key::Enter);
-    assert_eq!(second.try_recv().unwrap(), Some("draft".to_owned()));
-}
+    assert_eq!(second.try_recv().unwrap(), Some("draft!".to_owned()));
 
-#[test]
-fn the_cursor_column_follows_the_cursor_not_the_end_of_the_line() {
-    let (mut state, _answer) = state_with_prompt();
-    for ch in "abc".chars() {
-        state.key(Key::Char(ch));
-    }
-    assert_eq!(state.cursor_column(80), 5, "> abc");
-    state.key(Key::Home);
-    assert_eq!(state.cursor_column(80), 2, "> |abc");
-    state.key(Key::Right);
-    assert_eq!(state.cursor_column(80), 3, "> a|bc");
-}
-
-#[test]
-fn a_long_line_scrolls_so_the_cursor_stays_on_screen() {
-    let (mut state, _answer) = state_with_prompt();
-    for ch in "x".repeat(200).chars() {
-        state.key(Key::Char(ch));
-    }
-    let width = 40;
-    let column = state.cursor_column(width);
-    assert!(
-        column < width,
-        "the cursor stays inside the terminal: {column}"
-    );
-    state.key(Key::Home);
-    assert_eq!(state.cursor_column(width), 2, "home brings the head back");
+    let (tx, mut third) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    state.key(Key::CtrlP); // the newest submission
+    state.key(Key::CtrlN); // and back to the fresh draft, which is empty
+    state.key(Key::Char('x'));
+    state.key(Key::Enter);
+    assert_eq!(third.try_recv().unwrap(), Some("x".to_owned()));
 }
 
 #[test]
@@ -556,4 +525,82 @@ fn a_users_message_keeps_its_lines_and_its_length() {
             "lined up under the body: {continuation:?}"
         );
     }
+}
+
+#[test]
+fn a_paste_never_submits_and_its_line_endings_are_normalised() {
+    let (mut state, mut answer) = state_with_prompt();
+    // CRLF, a bare CR and a stray control character: all of it arrives as text, and
+    // none of it presses Enter (spec §7).
+    state.paste("第一行\r\n第二行\r第三行\x07");
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        Some("第一行\n第二行\n第三行".to_owned())
+    );
+}
+
+#[test]
+fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
+    let (mut state, mut answer) = state_with_prompt();
+    let huge = "x".repeat(100_001);
+
+    state.paste(&huge);
+    state.key(Key::Char('n'));
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        None,
+        "declined: nothing arrived"
+    );
+
+    let (tx, mut second) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    state.paste(&huge);
+    state.key(Key::Esc); // the safe answer is no, so Esc declines too
+    state.key(Key::Enter);
+    assert_eq!(second.try_recv().unwrap(), None, "Esc is not consent");
+
+    let (tx, mut third) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    state.paste(&huge);
+    state.key(Key::Char('y'));
+    state.key(Key::Enter);
+    let pasted = third.try_recv().unwrap().expect("the paste was taken");
+    assert_eq!(pasted.chars().count(), 100_001, "all of it, in one piece");
+}
+
+#[test]
+fn esc_asks_before_it_throws_away_a_multi_line_draft() {
+    let (mut state, mut answer) = state_with_prompt();
+    state.paste("第一行\n第二行");
+    state.key(Key::Esc);
+    state.key(Key::Char('n'));
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        Some("第一行\n第二行".to_owned()),
+        "the draft survived"
+    );
+
+    // A single line still clears on the spot: there is nothing to lose.
+    let (tx, mut second) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    for ch in "one line".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Esc);
+    state.key(Key::Enter);
+    assert_eq!(second.try_recv().unwrap(), None, "cleared without asking");
+}
+
+#[test]
+fn submitting_trims_the_ends_and_keeps_the_lines_between_them() {
+    let (mut state, mut answer) = state_with_prompt();
+    state.paste("\n  第一行\n\n第二行  \n");
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        Some("第一行\n\n第二行".to_owned())
+    );
 }

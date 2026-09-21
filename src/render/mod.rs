@@ -26,6 +26,7 @@
 //! repeats on every line so an interleaved multi-agent log stays readable, while
 //! the model's is written once per merged block.
 
+pub mod editor;
 pub mod headless;
 pub mod highlight;
 pub mod input;
