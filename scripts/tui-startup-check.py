@@ -36,11 +36,26 @@ import struct
 import sys
 import tempfile
 import termios
+import unicodedata
 import time
 
 COLS, ROWS = 260, 30
-STATUS = "ready · enter send · esc cancel · shift+tab plan · ctrl-c quit"
-BANNER = "fs-agent: session"
+# The status line ends with this word; the verdict below checks nothing foreign
+# follows it on the row.
+STATUS_TAIL = "退出"
+# ratatui positions every wide cell with an explicit cursor move, so the raw byte
+# stream is not a contiguous string once the UI is Chinese. Readiness and the
+# verdict read the emulated screen instead; these ASCII anchors survive raw.
+STATUS_ANCHOR = "ctrl-c"
+# `fs-agent` alone also matches the store path and the bucket slug, so the banner
+# anchor carries its fullwidth colon, which is written contiguously after the
+# ASCII prefix.
+BANNER_ANCHOR = "fs-agent："
+
+
+def char_width(ch):
+    """Terminal columns one character occupies (wide CJK is two)."""
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 
 class Screen:
@@ -107,9 +122,15 @@ class Screen:
             elif ord(ch) < 32:
                 pass
             else:
+                width = char_width(ch)
                 if 0 <= self.cy < ROWS and 0 <= self.cx < COLS:
                     self.grid[self.cy][self.cx] = ch
-                self.cx += 1
+                    # A wide cell owns the column after it; blank it so joining
+                    # the row does not insert a phantom space between glyphs.
+                    for trail in range(1, width):
+                        if self.cx + trail < COLS:
+                            self.grid[self.cy][self.cx + trail] = ""
+                self.cx += width
                 if self.cx >= COLS:
                     self.cx = 0
                     self.cy = min(ROWS - 1, self.cy + 1)
@@ -148,7 +169,9 @@ def capture(binary, data_home, timeout=20.0):
             text = data.decode("utf-8", "replace")
             raw += text
             screen.feed(text)
-        if settle_by is None and BANNER in raw and STATUS in raw:
+        if settle_by is None and BANNER_ANCHOR in raw and any(
+            STATUS_ANCHOR in row for row in screen.rows()
+        ):
             settle_by = time.time() + 0.4
         if settle_by is not None and time.time() >= settle_by:
             break
@@ -176,24 +199,23 @@ def capture(binary, data_home, timeout=20.0):
 
 
 def verdict(raw, devnull):
-    """Judge the frame at the moment the status line is first drawn.
+    """Judge the reconstructed status row.
 
-    Freezing there is what makes this deterministic: later frames re-anchor the
-    viewport and can scrub the evidence, which is why the bug looks intermittent
-    on a real terminal.
+    The whole capture is replayed rather than sliced at the first draw: a wide
+    cell is written with an explicit cursor move, so the byte offset of the status
+    line is not `raw.find(STATUS_ANCHOR)`.
     """
-    at = raw.find(STATUS)
-    if at == -1:
-        return False, "the status line was never drawn"
     frame = Screen(devnull)
-    frame.feed(raw[: at + len(STATUS)])
-    row = next((r for r in frame.rows() if "ctrl-c quit" in r), None)
+    frame.feed(raw)
+    row = next((r for r in frame.rows() if STATUS_ANCHOR in r), None)
     if row is None:
         return False, "the status row was not on screen at the first draw"
-    residue = row.split("ctrl-c quit", 1)[1].strip()
+    if not row.endswith(STATUS_TAIL):
+        return False, "the status line was not drawn whole: %r" % row[-60:]
+    residue = row.split(STATUS_TAIL, 1)[1].strip()
     if residue:
         return False, "the status row holds foreign text: %r" % residue[:80]
-    banner = raw.count(BANNER)
+    banner = raw.count(BANNER_ANCHOR)
     if banner != 1:
         return False, "the startup banner reached the terminal %d times" % banner
     return True, "status row clean, banner shown once"
