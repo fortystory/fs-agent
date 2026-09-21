@@ -142,6 +142,19 @@ impl Tui {
     pub async fn run(self, mut receiver: broadcast::Receiver<RenderEvent>) {
         let TuiOptions { mut port } = self.options;
         let mut state = TuiState::new();
+        // Park the cursor on the last row **before** ratatui reserves the inline
+        // viewport: the reservation is anchored at the cursor, so a viewport
+        // reserved at the top grows *down* the screen as scrollback is inserted
+        // and drags the input line — and the cursor sitting on it — down with it,
+        // until the input and status walk off the bottom. Anchoring at the last
+        // row keeps the live region pinned there instead. Moving the cursor does
+        // not touch what is on screen; reserving the viewport then scrolls it up.
+        if let Ok((_, rows)) = crossterm::terminal::size() {
+            let _ = execute!(
+                std::io::stdout(),
+                crossterm::cursor::MoveTo(0, rows.saturating_sub(1))
+            );
+        }
         let mut terminal = ratatui::init_with_options(TerminalOptions {
             viewport: Viewport::Inline(LIVE_HEIGHT),
         });
