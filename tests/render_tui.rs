@@ -63,10 +63,13 @@ fn backspace_edits_the_line() {
 }
 
 #[test]
-fn an_empty_submission_closes_the_prompt() {
+fn an_empty_submission_is_an_empty_line_not_the_end_of_input() {
+    // `None` on the prompt channel means a closed stdin, and the loop stops on it — so
+    // Enter on an empty draft must not send it. It used to, and pressing Enter at an
+    // empty prompt quit the session.
     let (mut state, mut answer) = state_with_prompt();
     state.key(Key::Enter);
-    assert_eq!(answer.try_recv().unwrap(), None);
+    assert_eq!(answer.try_recv().unwrap(), Some(String::new()));
 }
 
 #[test]
@@ -543,6 +546,10 @@ fn a_paste_never_submits_and_its_line_endings_are_normalised() {
 #[test]
 fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     let (mut state, mut answer) = state_with_prompt();
+    // Declining leaves an empty draft, and pressing Enter on one submits an empty
+    // line — never the end of input. What arrives here is that empty line; that it
+    // starts no turn is the loop's call (`cli.rs` trims it and asks again).
+    let empty = Some(String::new());
     let huge = "x".repeat(100_001);
 
     state.paste(&huge);
@@ -550,8 +557,8 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.key(Key::Enter);
     assert_eq!(
         answer.try_recv().unwrap(),
-        None,
-        "declined: nothing arrived"
+        empty,
+        "declined: the text is gone"
     );
 
     let (tx, mut second) = tokio::sync::oneshot::channel();
@@ -559,7 +566,7 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.paste(&huge);
     state.key(Key::Esc); // the safe answer is no, so Esc declines too
     state.key(Key::Enter);
-    assert_eq!(second.try_recv().unwrap(), None, "Esc is not consent");
+    assert_eq!(second.try_recv().unwrap(), empty, "Esc is not consent");
 
     let (tx, mut enter) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply: tx });
@@ -568,8 +575,8 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.key(Key::Enter); // and this one submits, because the question is gone
     assert_eq!(
         enter.try_recv().unwrap(),
-        None,
-        "Enter answers the question, it does not consent to it"
+        empty,
+        "the huge paste was refused"
     );
 
     let (tx, mut third) = tokio::sync::oneshot::channel();
@@ -628,7 +635,9 @@ fn esc_asks_before_it_throws_away_a_multi_line_draft() {
         "the draft survived"
     );
 
-    // A single line still clears on the spot: there is nothing to lose.
+    // A single line still clears on the spot: there is nothing to lose, and the
+    // Enter that follows submits the empty draft it left behind — a line the loop
+    // discards, not a closed input.
     let (tx, mut second) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply: tx });
     for ch in "one line".chars() {
@@ -636,7 +645,11 @@ fn esc_asks_before_it_throws_away_a_multi_line_draft() {
     }
     state.key(Key::Esc);
     state.key(Key::Enter);
-    assert_eq!(second.try_recv().unwrap(), None, "cleared without asking");
+    assert_eq!(
+        second.try_recv().unwrap(),
+        Some(String::new()),
+        "cleared without asking"
+    );
 }
 
 #[test]

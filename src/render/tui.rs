@@ -667,14 +667,19 @@ impl TuiState {
 
     /// Send the typed draft to the loop and remember it.
     ///
-    /// Submitting also returns the transcript to the bottom: the user has just
-    /// asked for something and wants to watch the answer, whatever they were
-    /// reading (spec §4).
+    /// Submitting also returns the transcript to the bottom: the user has just asked
+    /// for something and wants to watch the answer, whatever they were reading
+    /// (spec §4).
+    ///
+    /// An empty draft is an **empty line**, never the end of input. The terminal cannot
+    /// be closed by pressing Enter, and `None` on that channel means exactly that — the
+    /// loop reads it as a closed stdin and stops. Quitting is `Ctrl-C` (the flag below)
+    /// or `/quit` (a line like any other).
     fn submit(&mut self) {
         self.pane.to_bottom();
         let line = self.editor.submitted();
         if let Some(reply) = self.prompt_reply.take() {
-            let _ = reply.send(if line.is_empty() { None } else { Some(line) });
+            let _ = reply.send(Some(line));
         }
     }
 

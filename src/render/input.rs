@@ -68,7 +68,12 @@ pub struct AskRequest {
 /// What the loop asks the front end for.
 #[derive(Debug)]
 pub enum ConsoleRequest {
-    /// The next user line. `None` means end of input.
+    /// The next user line.
+    ///
+    /// **`None` means end of input**, and nothing else: an empty line is
+    /// `Some(String::new())`. A front end whose input cannot end — the TUI, where
+    /// Enter on an empty draft is just an empty draft — must never send `None`, or the
+    /// loop reads it as a closed stdin and stops (spec §6).
     Prompt {
         reply: oneshot::Sender<Option<String>>,
     },

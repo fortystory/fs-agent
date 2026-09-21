@@ -1035,9 +1035,11 @@ fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
         AnswerChoice::Permission(Answer::Deny)
     );
     state.key(Key::Enter);
+    // The draft is empty, so the line that reaches the loop is empty too — and an
+    // empty line is a line, not the end of input (the loop discards it).
     assert_eq!(
         submitted.try_recv().unwrap(),
-        None,
+        Some(String::new()),
         "the draft stayed empty"
     );
 }
