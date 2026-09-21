@@ -248,9 +248,10 @@ async fn read_line(prompt: &str) -> Option<String> {
 async fn answer_question(question: &Question) -> AnswerChoice {
     match question {
         Question::Permission(request) => {
-            let prompt = format!(
-                "[permission] {} {} ({}) [y]es/[a]lways/[n]o ",
-                request.tool_name, request.args, request.reason
+            let prompt = crate::render::wording::permission_prompt_with_context(
+                &request.tool_name,
+                &request.args.to_string(),
+                &request.reason,
             );
             match read_line(&prompt).await.as_deref() {
                 Some("y") | Some("yes") => AnswerChoice::Permission(Answer::Allow),
@@ -259,7 +260,7 @@ async fn answer_question(question: &Question) -> AnswerChoice {
             }
         }
         Question::PlanConflict(path) => {
-            let prompt = format!("{} exists: [o]verwrite/[a]ppend/[k]eep ", path.display());
+            let prompt = crate::render::wording::plan_conflict_prompt(&path.display().to_string());
             match read_line(&prompt).await.as_deref() {
                 Some("o") | Some("overwrite") => AnswerChoice::Plan(PlanConflict::Overwrite),
                 Some("a") | Some("append") => AnswerChoice::Plan(PlanConflict::Append),

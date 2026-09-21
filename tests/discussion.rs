@@ -1036,23 +1036,25 @@ async fn the_four_round_reasons_render_distinguishably() {
     let _ = task.await;
 
     let rendered = stderr.text();
-    let mut lines: Vec<&str> = rendered
-        .lines()
-        .filter(|line| line.contains("round"))
+    // Each reason gets its own narration, and no two read the same: the phrase
+    // comes from the one wording source, so this pins the wiring and the
+    // distinctness together.
+    let expected: Vec<String> = reasons
+        .iter()
+        .map(|reason| fs_agent::render::wording::round_ended(2, *reason))
         .collect();
-    lines.sort_unstable();
-    lines.dedup();
+    for line in &expected {
+        assert!(
+            rendered.contains(line.as_str()),
+            "{line} missing from {rendered}"
+        );
+    }
+    let distinct: std::collections::BTreeSet<&String> = expected.iter().collect();
     assert_eq!(
-        lines.len(),
+        distinct.len(),
         reasons.len(),
         "the four reasons must not collapse into one rendering: {rendered}"
     );
-    for reason in reasons {
-        assert!(
-            rendered.contains(reason.as_str()),
-            "{reason} is not distinguishable in {rendered}"
-        );
-    }
     // A round ending is narration, never a final product.
     assert_eq!(stdout.text(), "");
 }
@@ -1310,8 +1312,20 @@ async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthes
     // The reason is distinguishable from the protocol's own three, on the wire
     // and in the narration a person reads.
     let rendered = fixture.stderr.text();
-    assert!(rendered.contains("BudgetExhausted"), "{rendered}");
-    assert!(!rendered.contains("RoundsExhausted"), "{rendered}");
+    assert!(
+        rendered.contains(&fs_agent::render::wording::round_ended(
+            1,
+            StopReason::BudgetExhausted
+        )),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains(&fs_agent::render::wording::round_ended(
+            1,
+            StopReason::RoundsExhausted
+        )),
+        "{rendered}"
+    );
 }
 
 #[tokio::test]

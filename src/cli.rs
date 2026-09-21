@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use ratatui::buffer::CellWidth;
+
 use crate::agent::replay;
 use crate::config::{self, Config, EnvMap};
 use crate::events::{read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, Usage};
@@ -72,12 +74,7 @@ fn probe_prompt() -> String {
 /// inside the workspace; as root a single misjudgement is system-wide, which is
 /// a different risk class than the one being managed.
 pub fn root_refusal(euid: u32) -> Option<String> {
-    (euid == 0).then(|| {
-        "refusing to start as root (euid 0): every guardrail in this tool assumes the worst \
-         case stays inside your workspace, and as root one misjudgement is system-wide. Run \
-         it as your normal user; there is no bypass flag."
-            .to_owned()
-    })
+    (euid == 0).then(|| render::wording::root_refusal().to_owned())
 }
 
 /// Parse `argv` from the environment and run. This is the binary entry point.
@@ -99,7 +96,10 @@ pub fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("fs-agent: cannot start the async runtime: {error}");
+            eprintln!(
+                "fs-agent: {}",
+                render::wording::startup_runtime(&error.to_string())
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -113,7 +113,7 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("--help") | Some("-h") => {
-            print_help();
+            println!("{}", render::wording::help_main());
             ExitCode::SUCCESS
         }
         Some("probe") => probe(&args[1..], env).await,
@@ -164,7 +164,7 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
                 index += 1;
                 let value = args
                     .get(index)
-                    .ok_or_else(|| format!("{flag} needs a value"))?;
+                    .ok_or_else(|| render::wording::needs_value(&flag))?;
                 match flag.as_str() {
                     "--config" => parsed.config = Some(PathBuf::from(value)),
                     "--model" => parsed.model = Some(value.clone()),
@@ -172,15 +172,12 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
                     _ => unreachable!(),
                 }
             }
-            other => return Err(format!("unknown argument {other:?}")),
+            other => return Err(render::wording::unknown_argument(other)),
         }
         index += 1;
     }
     if parsed.plain && parsed.tui {
-        return Err(
-            "--plain and --tui are mutually exclusive: there is one renderer per process"
-                .to_owned(),
-        );
+        return Err(render::wording::renderers_mutually_exclusive().to_owned());
     }
     Ok(parsed)
 }
@@ -192,21 +189,21 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
 /// two things that come from the same keyboard (spec §19).
 async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_interactive_help();
+        println!("{}", render::wording::help_interactive());
         return ExitCode::SUCCESS;
     }
     let parsed = match parse_interactive(args) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("fs-agent: {message}");
-            print_interactive_help();
+            println!("{}", render::wording::help_interactive());
             return ExitCode::FAILURE;
         }
     };
     let config = match load_config(parsed.config.clone(), env) {
         Ok(config) => config,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("fs-agent: {}", render::wording::startup_config(&message));
             return ExitCode::FAILURE;
         }
     };
@@ -227,7 +224,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         }
     };
     let Some(root) = config::sessions_dir(env) else {
-        eprintln!("fs-agent: neither XDG_DATA_HOME nor HOME is set, so a session cannot be stored");
+        eprintln!("fs-agent: {}", render::wording::startup_no_session_store());
         return ExitCode::FAILURE;
     };
     let store = SessionStore::new(root);
@@ -236,7 +233,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         None => match std::env::current_dir() {
             Ok(dir) => dir,
             Err(error) => {
-                eprintln!("fs-agent: cannot determine the current directory: {error}");
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_cwd(&error.to_string())
+                );
                 return ExitCode::FAILURE;
             }
         },
@@ -245,11 +245,17 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         match store.latest(&cwd) {
             Ok(Some(session)) => session,
             Ok(None) => {
-                eprintln!("fs-agent: no session in {} to continue", cwd.display());
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_no_session_to_continue(&cwd.display().to_string())
+                );
                 return ExitCode::FAILURE;
             }
             Err(error) => {
-                eprintln!("fs-agent: cannot read the session store: {error}");
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_store_read(&error.to_string())
+                );
                 return ExitCode::FAILURE;
             }
         }
@@ -257,7 +263,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         match store.create(&cwd) {
             Ok(session) => session,
             Err(error) => {
-                eprintln!("fs-agent: cannot create a session: {error}");
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_store_create(&error.to_string())
+                );
                 return ExitCode::FAILURE;
             }
         }
@@ -336,12 +345,12 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // first question. It goes through the renderer rather than to stderr: the
     // TUI started when the harness was assembled, and a second writer to the
     // terminal lands inside its live region, on top of the status line.
-    harness.notice(&format!(
-        "fs-agent: session {} · model {model} · mode {} · {}{}",
-        harness.session_id(),
+    harness.notice(&render::wording::banner(
+        harness.session_id().as_str(),
+        &model,
         harness.mode(),
-        stored.dir.display(),
-        if parsed.resume { " (continued)" } else { "" },
+        &stored.dir.display().to_string(),
+        parsed.resume,
     ));
 
     let code = interactive_loop(&mut harness, &console, &mut events).await;
@@ -379,21 +388,35 @@ async fn interactive_loop(
             "/quit" | "/exit" => return ExitCode::SUCCESS,
             "/undo" => match harness.undo_last_edit().await {
                 Ok(Some(_)) => {}
-                Ok(None) => harness.notice("fs-agent: nothing to undo"),
-                Err(error) => harness.notice(&format!("fs-agent: {error}")),
+                Ok(None) => {
+                    harness.notice(&format!("fs-agent: {}", render::wording::nothing_to_undo()))
+                }
+                Err(error) => harness.notice(&format!(
+                    "fs-agent: {}",
+                    render::wording::error_report(&error)
+                )),
             },
             "/plan" => enter_plan(harness).await,
-            "/endplan" => {
-                if let Err(error) = harness.exit_plan_mode().await {
-                    harness.notice(&format!("fs-agent: {error}"));
+            "/endplan" => match harness.exit_plan_mode().await {
+                Ok(true) => {
+                    harness.notice(&format!("fs-agent: {}", render::wording::plan_exited()))
                 }
-            }
+                Ok(false) => {}
+                Err(error) => harness.notice(&format!(
+                    "fs-agent: {}",
+                    render::wording::error_report(&error)
+                )),
+            },
             other if other.starts_with('/') => harness.notice(&format!(
-                "fs-agent: unknown command {other} (try /undo, /plan, /endplan, /quit)"
+                "fs-agent: {}",
+                render::wording::unknown_command(other)
             )),
             _ => {
                 if let Err(error) = run_one_turn(harness, events, &line).await {
-                    harness.notice(&format!("fs-agent: {error}"));
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::error_report(&error)
+                    ));
                 }
             }
         }
@@ -435,16 +458,29 @@ async fn run_one_turn(
 
 /// Enter plan mode, reporting any failure on the front end.
 async fn enter_plan(harness: &mut Harness) {
-    if let Err(error) = harness.enter_plan_mode().await {
-        harness.notice(&format!("fs-agent: {error}"));
+    let already = harness.mode() == Mode::Plan;
+    match harness.enter_plan_mode().await {
+        Ok(_) if !already => {
+            harness.notice(&format!("fs-agent: {}", render::wording::plan_entered()))
+        }
+        Ok(_) => {}
+        Err(error) => harness.notice(&format!(
+            "fs-agent: {}",
+            render::wording::error_report(&error)
+        )),
     }
 }
 
 /// Shift+Tab: enter plan mode, or leave it if it is already on (spec §13).
 async fn toggle_plan(harness: &mut Harness) {
     if harness.mode() == Mode::Plan {
-        if let Err(error) = harness.exit_plan_mode().await {
-            harness.notice(&format!("fs-agent: {error}"));
+        match harness.exit_plan_mode().await {
+            Ok(true) => harness.notice(&format!("fs-agent: {}", render::wording::plan_exited())),
+            Ok(false) => {}
+            Err(error) => harness.notice(&format!(
+                "fs-agent: {}",
+                render::wording::error_report(&error)
+            )),
         }
     } else {
         enter_plan(harness).await;
@@ -466,17 +502,17 @@ fn parse_probe(args: &[String]) -> Result<ProbeArgs, String> {
                 index += 1;
                 let value = args
                     .get(index)
-                    .ok_or_else(|| "--config needs a path".to_owned())?;
+                    .ok_or_else(|| render::wording::needs_path("--config"))?;
                 parsed.config = Some(PathBuf::from(value));
             }
             "--model" => {
                 index += 1;
                 let value = args
                     .get(index)
-                    .ok_or_else(|| "--model needs a model id".to_owned())?;
+                    .ok_or_else(|| render::wording::needs_model("--model"))?;
                 parsed.models.push(value.clone());
             }
-            other => return Err(format!("unknown probe argument {other:?}")),
+            other => return Err(render::wording::unknown_argument(other)),
         }
         index += 1;
     }
@@ -501,21 +537,21 @@ fn load_config(explicit: Option<PathBuf>, env: &EnvMap) -> Result<Config, String
 
 async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_probe_help();
+        println!("{}", render::wording::help_probe());
         return ExitCode::SUCCESS;
     }
     let parsed = match parse_probe(args) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("fs-agent: {message}");
-            print_probe_help();
+            println!("{}", render::wording::help_probe());
             return ExitCode::FAILURE;
         }
     };
     let config = match load_config(parsed.config, env) {
         Ok(config) => config,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("fs-agent: {}", render::wording::startup_config(&message));
             return ExitCode::FAILURE;
         }
     };
@@ -537,10 +573,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
         parsed.models
     };
     if models.is_empty() {
-        eprintln!(
-            "fs-agent: no configured provider has a key. Export MOONSHOT_API_KEY and/or \
-             DEEPSEEK_API_KEY, or set `api_key` under [providers.*] in config.toml."
-        );
+        eprintln!("fs-agent: {}", render::wording::probe_no_key());
         return ExitCode::FAILURE;
     }
 
@@ -739,20 +772,20 @@ fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
                 index += 1;
                 let value = args
                     .get(index)
-                    .ok_or_else(|| "--keep needs a number".to_owned())?;
+                    .ok_or_else(|| render::wording::needs_value("--keep"))?;
                 parsed.keep = value
                     .parse()
-                    .map_err(|_| format!("--keep needs a number, got {value:?}"))?;
+                    .map_err(|_| render::wording::needs_number("--keep", value))?;
             }
             "--dry-run" => parsed.dry_run = true,
             "--cwd" => {
                 index += 1;
                 let value = args
                     .get(index)
-                    .ok_or_else(|| "--cwd needs a path".to_owned())?;
+                    .ok_or_else(|| render::wording::needs_path("--cwd"))?;
                 parsed.cwd = Some(PathBuf::from(value));
             }
-            other => return Err(format!("unknown prune argument {other:?}")),
+            other => return Err(render::wording::unknown_argument(other)),
         }
         index += 1;
     }
@@ -768,14 +801,14 @@ fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
 /// to stderr.
 fn prune(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_prune_help();
+        println!("{}", render::wording::help_prune());
         return ExitCode::SUCCESS;
     }
     let parsed = match parse_prune(args) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("fs-agent: {message}");
-            print_prune_help();
+            println!("{}", render::wording::help_prune());
             return ExitCode::FAILURE;
         }
     };
@@ -784,15 +817,16 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
         None => match std::env::current_dir() {
             Ok(dir) => dir,
             Err(error) => {
-                eprintln!("fs-agent: cannot determine the current directory: {error}");
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_cwd(&error.to_string())
+                );
                 return ExitCode::FAILURE;
             }
         },
     };
     let Some(root) = config::sessions_dir(env) else {
-        eprintln!(
-            "fs-agent: neither XDG_DATA_HOME nor HOME is set, so the session store cannot be found"
-        );
+        eprintln!("fs-agent: {}", render::wording::startup_no_session_store());
         return ExitCode::FAILURE;
     };
     let store = SessionStore::new(root);
@@ -801,12 +835,21 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
         return match store.list(&cwd) {
             Ok(sessions) => {
                 for session in sessions.into_iter().skip(parsed.keep) {
-                    println!("would remove {} ({})", session.id, session.dir.display());
+                    println!(
+                        "{}",
+                        render::wording::prune_would_remove(
+                            session.id.as_str(),
+                            &session.dir.display().to_string()
+                        )
+                    );
                 }
                 ExitCode::SUCCESS
             }
             Err(error) => {
-                eprintln!("fs-agent: cannot read the session store: {error}");
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_store_read(&error.to_string())
+                );
                 ExitCode::FAILURE
             }
         };
@@ -815,12 +858,21 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
     match store.prune(&cwd, parsed.keep) {
         Ok(removed) => {
             for session in removed {
-                println!("removed {} ({})", session.id, session.dir.display());
+                println!(
+                    "{}",
+                    render::wording::prune_removed(
+                        session.id.as_str(),
+                        &session.dir.display().to_string()
+                    )
+                );
             }
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("fs-agent: cannot prune the session store: {error}");
+            eprintln!(
+                "fs-agent: {}",
+                render::wording::startup_store_prune(&error.to_string())
+            );
             ExitCode::FAILURE
         }
     }
@@ -864,13 +916,13 @@ fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
                 index += 1;
                 let value = args
                     .get(index)
-                    .ok_or_else(|| format!("{arg} needs a value"))?;
+                    .ok_or_else(|| render::wording::needs_value(arg))?;
                 match arg {
                     "--round" => {
                         parsed.round = Some(
                             value
                                 .parse()
-                                .map_err(|_| format!("--round needs a number, got {value:?}"))?,
+                                .map_err(|_| render::wording::needs_number("--round", value))?,
                         )
                     }
                     "--speaker" => parsed.speaker = Some(value.clone()),
@@ -883,18 +935,18 @@ fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
                         parsed.limit = Some(
                             value
                                 .parse()
-                                .map_err(|_| format!("--limit needs a number, got {value:?}"))?,
+                                .map_err(|_| render::wording::needs_number("--limit", value))?,
                         )
                     }
                     _ => unreachable!(),
                 }
             }
             other if other.starts_with('-') => {
-                return Err(format!("unknown sessions argument {other:?}"))
+                return Err(render::wording::unknown_argument(other))
             }
             other if parsed.verb.is_empty() => parsed.verb = other.to_owned(),
             other if parsed.id.is_none() => parsed.id = Some(other.to_owned()),
-            other => return Err(format!("unexpected extra argument {other:?}")),
+            other => return Err(render::wording::extra_argument(other)),
         }
         index += 1;
     }
@@ -932,12 +984,16 @@ pub fn run_sessions(
         "replay" => sessions_replay(&parsed, env, out),
         "stats" => sessions_stats(&parsed, env, out),
         "" => {
-            let _ = writeln!(err, "fs-agent: sessions needs a verb");
+            let _ = writeln!(err, "fs-agent: {}", render::wording::sessions_needs_verb());
             print_sessions_help(err);
             return ExitCode::FAILURE;
         }
         other => {
-            let _ = writeln!(err, "fs-agent: unknown sessions verb {other:?}");
+            let _ = writeln!(
+                err,
+                "fs-agent: {}",
+                render::wording::unknown_sessions_verb(other)
+            );
             print_sessions_help(err);
             return ExitCode::FAILURE;
         }
@@ -953,9 +1009,8 @@ pub fn run_sessions(
 
 /// The session store, or the refusal that there is nowhere to look.
 fn open_store(env: &EnvMap) -> Result<SessionStore, String> {
-    let root = config::sessions_dir(env).ok_or_else(|| {
-        "neither XDG_DATA_HOME nor HOME is set, so the session store cannot be found".to_owned()
-    })?;
+    let root = config::sessions_dir(env)
+        .ok_or_else(|| render::wording::startup_no_session_store().to_owned())?;
     Ok(SessionStore::new(root))
 }
 
@@ -964,7 +1019,7 @@ fn search_cwd(parsed: &SessionsArgs) -> Result<PathBuf, String> {
     match &parsed.cwd {
         Some(path) => Ok(path.clone()),
         None => std::env::current_dir()
-            .map_err(|error| format!("cannot determine the current directory: {error}")),
+            .map_err(|error| render::wording::startup_cwd(&error.to_string())),
     }
 }
 
@@ -981,11 +1036,11 @@ fn find_session(store: &SessionStore, cwd: &Path, id: &str) -> Result<StoredSess
     candidates
         .into_iter()
         .find(|session| session.id.as_str() == id)
-        .ok_or_else(|| format!("no session {id:?} in {}", store_list_label(cwd)))
+        .ok_or_else(|| render::wording::no_session(id, &store_list_label(cwd)))
 }
 
 fn store_list_label(cwd: &Path) -> String {
-    format!("{} (or any other bucket)", cwd.display())
+    render::wording::session_search_label(&cwd.display().to_string())
 }
 
 fn session_at(dir: PathBuf) -> StoredSession {
@@ -1022,7 +1077,7 @@ fn sessions_ls(
     let store = open_store(env)?;
     let cwd = search_cwd(parsed)?;
     let listings = observe::list(&store, (!parsed.all).then_some(cwd.as_path()))
-        .map_err(|error| format!("cannot read the session store: {error}"))?;
+        .map_err(|error| render::wording::startup_store_read(&error.to_string()))?;
     let mut listings: Vec<Listing> = listings;
     if let Some(limit) = parsed.limit {
         listings.truncate(limit);
@@ -1032,13 +1087,23 @@ fn sessions_ls(
         return write_json(out, &listings);
     }
     if listings.is_empty() {
-        let _ = writeln!(err, "fs-agent: no sessions in this bucket");
+        let _ = writeln!(err, "fs-agent: {}", render::wording::no_sessions());
         return Ok(());
     }
+    // The header is padded by **display columns**: a Chinese column name is
+    // narrower in characters than in columns, so `{:<36}` would shift it two
+    // columns left of the row it labels.
+    let columns = render::wording::ls_columns();
     let _ = writeln!(
         out,
-        "{:<36}  {:<28}  {:<20}  {:>10}  {:>6}  {:>5}  ENDED",
-        "ID", "CWD", "STARTED", "TOKENS", "ROUNDS", "MSGS"
+        "{}  {}  {}  {}  {}  {}  {}",
+        pad_end(columns[0], 36),
+        pad_end(columns[1], 28),
+        pad_end(columns[2], 20),
+        pad_start(columns[3], 10),
+        pad_start(columns[4], 6),
+        pad_start(columns[5], 5),
+        columns[6],
     );
     for listing in listings {
         let _ = writeln!(
@@ -1055,11 +1120,29 @@ fn sessions_ls(
             listing.messages,
             listing
                 .ended
-                .map(|reason| reason.as_str())
-                .unwrap_or("(open)"),
+                .map(render::wording::stop_reason)
+                .unwrap_or_else(render::wording::open_session),
         );
     }
     Ok(())
+}
+
+/// Pad `text` on the right to `width` **display columns**.
+fn pad_end(text: &str, width: usize) -> String {
+    let used = text.cell_width() as usize;
+    if used >= width {
+        return text.to_owned();
+    }
+    format!("{text}{}", " ".repeat(width - used))
+}
+
+/// Pad `text` on the left to `width` **display columns**.
+fn pad_start(text: &str, width: usize) -> String {
+    let used = text.cell_width() as usize;
+    if used >= width {
+        return text.to_owned();
+    }
+    format!("{}{text}", " ".repeat(width - used))
 }
 
 fn sessions_show(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Result<(), String> {
@@ -1068,10 +1151,11 @@ fn sessions_show(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Re
     let id = parsed
         .id
         .as_deref()
-        .ok_or("sessions show needs a session id")?;
+        .ok_or_else(render::wording::show_needs_id)?;
     let session = find_session(&store, &cwd, id)?;
-    let events = read_events(&session.log_path)
-        .map_err(|error| format!("cannot read {}: {error}", session.log_path.display()))?;
+    let events = read_events(&session.log_path).map_err(|error| {
+        render::wording::cannot_read(&session.log_path.display().to_string(), &error.to_string())
+    })?;
 
     if parsed.files {
         let changes = filter_changes(observe::file_history(&events), parsed);
@@ -1084,8 +1168,8 @@ fn sessions_show(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Re
                 "{:<18}  {:<14}  {}",
                 change
                     .round
-                    .map(|round| format!("round {round}"))
-                    .unwrap_or_else(|| "session".to_owned()),
+                    .map(render::wording::round_label)
+                    .unwrap_or_else(|| render::wording::session_group().to_owned()),
                 change.speaker,
                 change.path,
             );
@@ -1138,14 +1222,15 @@ fn sessions_replay(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> 
     let id = parsed
         .id
         .as_deref()
-        .ok_or("sessions replay needs a session id")?;
+        .ok_or_else(render::wording::replay_needs_id)?;
     let speaker = parsed
         .speaker
         .as_deref()
-        .ok_or("sessions replay needs --speaker")?;
+        .ok_or_else(render::wording::replay_needs_speaker)?;
     let session = find_session(&store, &cwd, id)?;
-    let events = read_events(&session.log_path)
-        .map_err(|error| format!("cannot read {}: {error}", session.log_path.display()))?;
+    let events = read_events(&session.log_path).map_err(|error| {
+        render::wording::cannot_read(&session.log_path.display().to_string(), &error.to_string())
+    })?;
 
     let config = load_config(parsed.config.clone(), env)?;
     let model = parsed
@@ -1175,10 +1260,11 @@ fn sessions_stats(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> R
     let id = parsed
         .id
         .as_deref()
-        .ok_or("sessions stats needs a session id")?;
+        .ok_or_else(render::wording::stats_needs_id)?;
     let session = find_session(&store, &cwd, id)?;
-    let events = read_events(&session.log_path)
-        .map_err(|error| format!("cannot read {}: {error}", session.log_path.display()))?;
+    let events = read_events(&session.log_path).map_err(|error| {
+        render::wording::cannot_read(&session.log_path.display().to_string(), &error.to_string())
+    })?;
 
     // Money needs a model and the stream carries none, so the model is named
     // here: `--model`, else the configuration's default. The human view says
@@ -1211,17 +1297,10 @@ fn print_timeline(out: &mut dyn Write, timeline: &Timeline, filter: &Filter) {
     for group in &timeline.groups {
         match group.round {
             Some(round) => {
-                let _ = writeln!(
-                    out,
-                    "\n── round {round}{} ──",
-                    group
-                        .mode
-                        .map(|mode| format!(" ({mode:?})"))
-                        .unwrap_or_default()
-                );
+                let _ = writeln!(out, "\n{}", render::wording::round_group(round, group.mode));
             }
             None => {
-                let _ = writeln!(out, "\n── session ──");
+                let _ = writeln!(out, "\n{}", render::wording::session_group());
             }
         }
         for entry in &group.entries {
@@ -1237,8 +1316,9 @@ fn print_timeline(out: &mut dyn Write, timeline: &Timeline, filter: &Filter) {
 }
 
 fn render_entry(entry: &Entry) -> String {
+    let label = |speaker: &SpeakerId| render::wording::speaker_label(speaker);
     match entry {
-        Entry::Message { speaker, text, .. } => format!("[{speaker}] {text}"),
+        Entry::Message { speaker, text, .. } => format!("{} {text}", label(speaker)),
         Entry::Tool {
             speaker,
             tool,
@@ -1249,35 +1329,52 @@ fn render_entry(entry: &Entry) -> String {
             hook,
             ..
         } => {
-            let mut lines = vec![format!("[{speaker}] → {tool}({args})")];
+            let mut lines = vec![format!(
+                "{} → {}",
+                label(speaker),
+                render::wording::tool_call(tool, &args.to_string())
+            )];
             match (ok, output, error) {
                 (Some(true), Some(output), _) => {
-                    lines.push(indent(&truncate_preview(output), 2));
-                }
-                (Some(false), _, error) => {
                     lines.push(indent(
-                        &format!("error: {}", error.as_deref().unwrap_or("(no message)")),
+                        &render::wording::tool_output_preview(output, PREVIEW),
                         2,
                     ));
                 }
-                _ => lines.push(indent("(no result on the stream)", 2)),
+                (Some(false), _, error) => {
+                    let message = error
+                        .clone()
+                        .unwrap_or_else(|| render::wording::no_message().to_owned());
+                    lines.push(indent(&render::wording::tool_error(&message), 2));
+                }
+                _ => lines.push(indent(render::wording::no_tool_result(), 2)),
             }
             if let Some(hook) = hook {
-                lines.push(indent(&format!("[hook] {hook}"), 2));
+                lines.push(indent(&render::wording::hook_feedback(hook), 2));
             }
             lines.join("\n")
         }
-        Entry::RoundStarted { round, mode } => format!("round {round} started ({mode:?})"),
-        Entry::RoundEnded { round, reason } => format!("[round {round} ended: {reason}]"),
-        Entry::SessionEnded { reason } => format!("[session ended: {reason}]"),
+        Entry::RoundStarted { round, mode } => render::wording::round_section(*round, *mode),
+        Entry::RoundEnded { round, reason } => render::wording::round_ended(*round, *reason),
+        Entry::SessionEnded { reason } => render::wording::session_ended(*reason),
         Entry::TurnStarted { speaker, iteration } => {
-            format!("[{speaker}] turn iteration {iteration}")
+            format!(
+                "{} {}",
+                label(speaker),
+                render::wording::turn_started(*iteration)
+            )
         }
-        Entry::TurnEnded { speaker, reason } => format!("[{speaker}] turn ended: {reason}"),
+        Entry::TurnEnded { speaker, reason } => {
+            format!(
+                "{} {}",
+                label(speaker),
+                render::wording::turn_ended(*reason)
+            )
+        }
         Entry::Divergence {
             topic, positions, ..
         } => {
-            let mut lines = vec![format!("!! divergence: {topic}")];
+            let mut lines = vec![format!("!! {}", render::wording::divergence(topic))];
             for position in positions {
                 lines.push(indent(&format!("- {position}"), 2));
             }
@@ -1286,8 +1383,13 @@ fn render_entry(entry: &Entry) -> String {
         Entry::PermissionAsked {
             speaker,
             request_id,
+            tool_call_id,
             ..
-        } => format!("[{speaker}] permission asked ({request_id})"),
+        } => format!(
+            "{} {}",
+            label(speaker),
+            render::wording::permission_asked(request_id, tool_call_id.as_str())
+        ),
         Entry::PermissionDecided {
             speaker,
             decision,
@@ -1295,54 +1397,54 @@ fn render_entry(entry: &Entry) -> String {
             reason,
             ..
         } => format!(
-            "[{speaker}] permission {} ({}){}",
-            decision.as_str(),
-            decision_source(source),
-            reason
-                .as_deref()
-                .map(|reason| format!(": {reason}"))
-                .unwrap_or_default()
+            "{} {}",
+            label(speaker),
+            render::wording::permission_decided(*decision, *source, reason.as_deref())
         ),
         Entry::Hook {
             speaker,
             point,
             outcome,
             ..
-        } => format!("[{speaker}] hook {point}: {outcome}"),
+        } => format!(
+            "{} {}",
+            label(speaker),
+            render::wording::hook(point, outcome)
+        ),
         Entry::ExecutorSpawned {
             speaker,
             executor_id,
             ..
-        } => format!("[{speaker}] dispatched executor {executor_id}"),
+        } => format!(
+            "{} {}",
+            label(speaker),
+            render::wording::executor_spawned(executor_id.as_str())
+        ),
         Entry::ExecutorFinished {
             executor_id,
             reason,
             summary,
             ..
-        } => format!("[executor {executor_id}] finished: {reason} — {summary}"),
-        Entry::Usage { speaker, usage } => format!(
-            "[{speaker}] usage in={} out={} cached={} miss={}",
-            usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.miss_tokens
-        ),
+        } => render::wording::executor_finished(executor_id.as_str(), *reason, summary),
+        Entry::Usage { speaker, usage } => {
+            format!(
+                "{} {}",
+                label(speaker),
+                render::wording::usage_summary(usage)
+            )
+        }
         Entry::AgentError {
             speaker, message, ..
-        } => format!("[{speaker}] error: {message}"),
-        Entry::SessionError { code, detail, .. } => format!("[session error {code}] {detail}"),
+        } => format!(
+            "{} {}",
+            label(speaker),
+            render::wording::agent_error(message)
+        ),
+        Entry::SessionError { code, detail, .. } => render::wording::session_error(code, detail),
         Entry::History {
             reason, summary, ..
-        } => format!(
-            "[history: {reason:?}] {}",
-            summary.as_deref().unwrap_or("(superseded)")
-        ),
-        Entry::Context { source, .. } => format!("[context injected: {source:?}]"),
-    }
-}
-
-fn decision_source(source: &crate::events::DecisionSource) -> &'static str {
-    match source {
-        crate::events::DecisionSource::User => "user",
-        crate::events::DecisionSource::Hook => "hook",
-        crate::events::DecisionSource::Policy => "policy",
+        } => render::wording::history(*reason, summary.as_deref()),
+        Entry::Context { source, .. } => render::wording::context_injected(*source),
     }
 }
 
@@ -1354,39 +1456,34 @@ fn indent(text: &str, spaces: usize) -> String {
         .join("\n")
 }
 
-fn truncate_preview(text: &str) -> String {
-    const MAX: usize = 500;
-    let mut preview: String = text.chars().take(MAX).collect();
-    if text.chars().count() > MAX {
-        preview.push('…');
-    }
-    preview
-}
+/// How much of one tool result `sessions show` prints before eliding.
+const PREVIEW: usize = 500;
 
 fn print_messages(out: &mut dyn Write, messages: &[Message]) {
     for message in messages {
         match message {
             Message::System { content, .. } => {
-                let _ = writeln!(out, "[system]\n{content}\n");
+                let _ = writeln!(out, "{}\n{content}\n", render::wording::replay_system());
             }
             Message::User { content, name, .. } => {
-                let label = name
-                    .as_deref()
-                    .map(|name| format!(" user:{name}"))
-                    .unwrap_or_default();
-                let _ = writeln!(out, "[{label}]\n{content}\n");
+                let label = render::wording::replay_user(name.as_deref());
+                let _ = writeln!(out, "{label}\n{content}\n");
             }
             Message::Assistant {
                 content,
                 tool_calls,
                 ..
             } => {
-                let _ = writeln!(out, "[assistant]");
+                let _ = writeln!(out, "{}", render::wording::replay_assistant());
                 if let Some(content) = content {
                     let _ = writeln!(out, "{content}");
                 }
                 for call in tool_calls {
-                    let _ = writeln!(out, "→ {}({})", call.name, call.arguments);
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        render::wording::replay_tool_call(&call.name, &call.arguments)
+                    );
                 }
                 let _ = writeln!(out);
             }
@@ -1394,218 +1491,161 @@ fn print_messages(out: &mut dyn Write, messages: &[Message]) {
                 tool_call_id,
                 content,
             } => {
-                let _ = writeln!(out, "[tool {tool_call_id}]\n{content}\n");
+                let _ = writeln!(
+                    out,
+                    "{}\n{content}\n",
+                    render::wording::replay_tool(tool_call_id)
+                );
             }
         }
     }
 }
 
 fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
+    let cost = match stats.session.cost {
+        Some(cost) => render::wording::stats_cost(cost, model),
+        None => render::wording::stats_no_cost(model),
+    };
     let _ = writeln!(
         out,
-        "session: {} tokens, {} calls, {} messages, {} rounds{}",
-        stats.session.tokens.total_tokens(),
-        stats.session.calls,
-        stats.session.messages,
-        stats.session.rounds,
-        stats
-            .session
-            .cost
-            .map(|cost| format!(", ${cost:.6} (priced at {model})"))
-            .unwrap_or_else(|| format!(", no cost (no [pricing.{model}] entry)")),
+        "{}",
+        render::wording::stats_session(
+            stats.session.tokens.total_tokens(),
+            stats.session.calls,
+            stats.session.messages,
+            stats.session.rounds,
+            &cost,
+        )
     );
     for speaker in &stats.speakers {
+        let hit = speaker
+            .hit_rate
+            .map(|rate| format!("{:.0}%", rate * 100.0))
+            .unwrap_or_else(|| "-".to_owned());
+        let cost = speaker
+            .cost
+            .map(|cost| format!("  ${cost:.6}"))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "  {:<16} {} tokens  {} calls  hit {}{}",
-            speaker.speaker,
-            speaker.tokens.total_tokens(),
-            speaker.calls,
-            speaker
-                .hit_rate
-                .map(|rate| format!("{:.0}%", rate * 100.0))
-                .unwrap_or_else(|| "-".to_owned()),
-            speaker
-                .cost
-                .map(|cost| format!("  ${cost:.6}"))
-                .unwrap_or_default(),
+            "{}",
+            render::wording::stats_speaker(
+                &speaker.speaker.to_string(),
+                speaker.tokens.total_tokens(),
+                speaker.calls,
+                &hit,
+                &cost,
+            )
+        );
+    }
+    let rate = stats
+        .absence
+        .rate
+        .map(|rate| format!(" ({:.0}%)", rate * 100.0))
+        .unwrap_or_default();
+    let _ = writeln!(
+        out,
+        "{}",
+        render::wording::stats_absence(stats.absence.one_sided, stats.absence.rounds, &rate)
+    );
+    for agent in &stats.absence.per_speaker {
+        let _ = writeln!(
+            out,
+            "{}",
+            render::wording::stats_absent(&agent.name, agent.count)
         );
     }
     let _ = writeln!(
         out,
-        "absence: {}/{} debate rounds one-sided{}",
-        stats.absence.one_sided,
-        stats.absence.rounds,
-        stats
-            .absence
-            .rate
-            .map(|rate| format!(" ({:.0}%)", rate * 100.0))
-            .unwrap_or_default(),
-    );
-    for agent in &stats.absence.per_speaker {
-        let _ = writeln!(out, "  absent: {} x{}", agent.name, agent.count);
-    }
-    let _ = writeln!(
-        out,
-        "edits: {} succeeded, {} failed matches",
-        stats.edits.succeeded, stats.edits.failed_matches
+        "{}",
+        render::wording::stats_edits(stats.edits.succeeded, stats.edits.failed_matches)
     );
     for level in &stats.edits.levels {
-        let _ = writeln!(out, "  match level {}: {}", level.name, level.count);
+        let _ = writeln!(
+            out,
+            "{}",
+            render::wording::stats_match_level(&level.name, level.count)
+        );
     }
     let _ = writeln!(
         out,
-        "guards: read-before-write {}, read-set invalidations {}",
-        stats.guards.read_before_write, stats.guards.invalidated_reads
+        "{}",
+        render::wording::stats_guards(
+            stats.guards.read_before_write,
+            stats.guards.invalidated_reads
+        )
     );
     let _ = writeln!(
         out,
-        "executors: {} spawned, {} finished",
-        stats.executors.spawned, stats.executors.finished
+        "{}",
+        render::wording::stats_executors(stats.executors.spawned, stats.executors.finished)
     );
     for reason in &stats.executors.by_reason {
-        let _ = writeln!(out, "  finished {}: {}", reason.name, reason.count);
+        let _ = writeln!(
+            out,
+            "{}",
+            render::wording::stats_executor_reason(&reason.name, reason.count)
+        );
     }
     let _ = writeln!(
         out,
-        "hooks: {} executed ({} pre, {} post), {} feedback, {} failed",
-        stats.hooks.executed,
-        stats.hooks.pre,
-        stats.hooks.post,
-        stats.hooks.feedback,
-        stats.hooks.failed
+        "{}",
+        render::wording::stats_hooks(
+            stats.hooks.executed,
+            stats.hooks.pre,
+            stats.hooks.post,
+            stats.hooks.feedback,
+            stats.hooks.failed
+        )
     );
     let decisions = stats
         .permissions
         .decided
         .iter()
-        .map(|count| format!("{} {}", count.count, count.name))
+        .map(|count| render::wording::stats_decision(count.count, &count.name))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join("、");
     let decided = if decisions.is_empty() {
         String::new()
     } else {
-        format!(", {decisions} decided")
+        format!("，已裁决 {decisions}")
     };
     let _ = writeln!(
         out,
-        "permissions: {} asked{decided}",
-        stats.permissions.asked,
+        "{}",
+        render::wording::stats_permissions(stats.permissions.asked, &decided)
     );
-    let _ = writeln!(
-        out,
-        "divergences: {}/{}{}; rounds: {}",
-        stats.divergences,
-        stats.absence.rounds,
-        stats
-            .divergence_rate
-            .map(|rate| format!(" ({:.0}%)", rate * 100.0))
-            .unwrap_or_default(),
-        stats
-            .rounds
-            .iter()
-            .map(|round| format!(
-                "#{} {} {} calls{}",
-                round.round,
-                round.mode_str(),
-                round.calls,
-                round
-                    .ended
-                    .map(|reason| format!(" -> {reason}"))
-                    .unwrap_or_default()
-            ))
-            .collect::<Vec<_>>()
-            .join("; ")
+    let rate = stats
+        .divergence_rate
+        .map(|rate| format!(" ({:.0}%)", rate * 100.0))
+        .unwrap_or_default();
+    let rounds = stats
+        .rounds
+        .iter()
+        .map(|round| {
+            let ended = round
+                .ended
+                .map(render::wording::stats_round_ended)
+                .unwrap_or_default();
+            render::wording::stats_round(round.round, round.mode, round.calls, &ended)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let head = format!(
+        "{}{}",
+        render::wording::stats_divergences(stats.divergences, stats.absence.rounds, &rate),
+        render::wording::stats_rounds_prefix()
     );
+    let _ = writeln!(out, "{head}{rounds}");
     for stop in &stats.stops {
-        let _ = writeln!(out, "  stop {}: {}", stop.name, stop.count);
-    }
-}
-
-trait RoundModeLabel {
-    fn mode_str(&self) -> &'static str;
-}
-
-impl RoundModeLabel for observe::RoundStats {
-    fn mode_str(&self) -> &'static str {
-        match self.mode {
-            crate::events::RoundMode::Independent => "independent",
-            crate::events::RoundMode::Targeted => "targeted",
-            crate::events::RoundMode::Synthesis => "synthesis",
-        }
+        let _ = writeln!(
+            out,
+            "{}",
+            render::wording::stats_stop(&stop.name, stop.count)
+        );
     }
 }
 
 fn print_sessions_help(out: &mut dyn Write) {
-    let _ = writeln!(
-        out,
-        "fs-agent sessions <verb> [options]\n\n  \
-         ls [--all] [--cwd PATH] [--limit N] [--json]\n      \
-         List this workspace's sessions (--all scans every bucket), newest first.\n  \
-         show <id> [--round N] [--speaker X] [--kind K] [--tool T] [--only-error] [--files] [--json]\n      \
-         The round-grouped transcript, tool calls merged with their results; --files\n      \
-         shows the workspace-object view instead (it honors --round/--speaker/--tool).\n  \
-         replay <id> --speaker X [--round N] [--model ID] [--json]\n      \
-         Recompute what one call sent to the provider, from the stream alone.\n  \
-         stats <id> [--model ID] [--json]\n      \
-         The fixed metric set (tokens, cost, absence rate, edit-ladder downgrades).\n\n  \
-         stdout carries the result and stderr the diagnostics."
-    );
-}
-
-fn print_help() {
-    println!(
-        "fs-agent {}\n\n  \
-         usage: fs-agent [--plain|--tui] [--continue] [--config PATH] [--model ID] [--cwd PATH]\n         \
-         fs-agent probe [--config PATH] [--model ID]...\n         \
-         fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n         \
-         fs-agent sessions <ls|show|replay|stats> [options]\n\n  \
-         With no subcommand, `fs-agent` starts an interactive session in the \
-         current workspace: it renders with the TUI on a terminal and with the \
-         plain transcript otherwise (--plain / --tui force one). `--continue` \
-         resumes this workspace's newest session. `probe` drives one real turn \
-         against each configured model and a second turn in the same session, \
-         then prints the normalized usage so you can see prefix caching hit. \
-         `prune` removes this workspace's session directories, keeping the \
-         newest N (default 1). `sessions` answers questions about a finished \
-         session from its own event stream (ls / show / replay / stats; see \
-         `fs-agent sessions --help`). Configuration lives in \
-         ~/.config/fs-agent/config.toml (XDG aware); a project .env is never loaded.",
-        env!("CARGO_PKG_VERSION")
-    );
-}
-
-fn print_interactive_help() {
-    println!(
-        "fs-agent [options]\n\n  \
-         Starts an interactive session in the current workspace. Commands: \
-         /undo rolls back the last edit, /plan and /endplan control the hard plan \
-         mode, /quit leaves. Esc cancels the running turn in the TUI; Shift+Tab \
-         toggles plan mode.\n\n  \
-         --plain            the plain transcript (no raw mode)\n  \
-         --tui              the terminal interface (inline viewport)\n  \
-         --continue, -c     resume this workspace's newest session\n  \
-         --config PATH      configuration file to load\n  \
-         --model ID         the model to run (default: config default_model)\n  \
-         --cwd PATH         the workspace (default: the current directory)"
-    );
-}
-
-fn print_probe_help() {
-    println!(
-        "fs-agent probe [--config PATH] [--model ID]...\n\n  \
-         Sends two real turns per model in one session and prints input/output/cached/miss \
-         for each. Without --model it probes every model whose provider has a key."
-    );
-}
-
-fn print_prune_help() {
-    println!(
-        "fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
-         Removes session directories for one workspace (the current directory, \
-         or --cwd). The newest N sessions are kept (default 1: the one \
-         `--continue` would resume). A session is a directory, so removal is \
-         whole-session; --dry-run lists what would go. Nothing else ever \
-         deletes sessions."
-    );
+    let _ = writeln!(out, "{}", render::wording::help_sessions());
 }

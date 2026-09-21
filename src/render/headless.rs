@@ -19,6 +19,8 @@ use tokio::sync::broadcast;
 
 use crate::events::{EventPayload, Role, SpeakerId, StopReason};
 
+use super::transcript::summarize_args;
+use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent, RenderSinks};
 
 /// Whether a speaker is an executor.
@@ -68,7 +70,9 @@ impl Render for Headless {
                     ..
                 }) => {
                     if !in_reasoning {
-                        let _ = sinks.stderr_diagnostic.write_all(b"[reasoning] ");
+                        let _ = sinks
+                            .stderr_diagnostic
+                            .write_all(wording::reasoning_marker().as_bytes());
                         in_reasoning = true;
                     }
                     let _ = sinks.stderr_diagnostic.write_all(text.as_bytes());
@@ -78,7 +82,7 @@ impl Render for Headless {
                         let _ = sinks.stderr_diagnostic.write_all(b"\n");
                         in_reasoning = false;
                     }
-                    let _ = writeln!(sinks.stderr_diagnostic, "[diag] {message}");
+                    let _ = writeln!(sinks.stderr_diagnostic, "{}", wording::diagnostic(&message));
                     let _ = sinks.stderr_diagnostic.flush();
                 }
                 Ok(RenderEvent::Notice(message)) => {
@@ -94,15 +98,22 @@ impl Render for Headless {
                         let _ = sinks.stderr_diagnostic.write_all(b"\n");
                         in_reasoning = false;
                     }
+                    // Progress narration is derived from the events themselves —
+                    // the machine mode keeps its own event-shaped narration rather
+                    // than going through the shared `Block` presentation type —
+                    // but every phrase comes from the wording layer.
+                    let speaker = &event.speaker_id;
                     match &event.payload {
+                        EventPayload::SessionStarted { .. } => {}
                         EventPayload::TurnStarted { iteration, .. } => {
-                            if !is_executor(&event.speaker_id) {
+                            if !is_executor(speaker) {
                                 final_text.clear();
                             }
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
-                                "\n[{}] turn iteration {iteration}",
-                                event.speaker_id
+                                "\n{} {}",
+                                speaker_label(speaker),
+                                wording::turn_started(*iteration)
                             );
                         }
                         EventPayload::MessageCompleted {
@@ -115,7 +126,7 @@ impl Render for Headless {
                             // stops it reaching stdout, and it stops the executor's
                             // turn from clearing (or overwriting) the turn it is
                             // working for.
-                            if !is_executor(&event.speaker_id) {
+                            if !is_executor(speaker) {
                                 final_text = text.clone();
                             }
                             // The harness's own completed message is the
@@ -123,27 +134,33 @@ impl Render for Headless {
                             // space. It is the one thing that belongs on stdout
                             // without a turn: the synthesizer has no turn (spec
                             // §15).
-                            if event.speaker_id == SpeakerId::System {
+                            if *speaker == SpeakerId::System {
                                 let _ = sinks.stdout_result.write_all(text.as_bytes());
                                 let _ = sinks.stdout_result.write_all(b"\n");
                                 let _ = sinks.stdout_result.flush();
                             }
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
-                                "\n[{}] message complete",
-                                event.speaker_id
+                                "\n{} {}",
+                                speaker_label(speaker),
+                                wording::message_complete()
                             );
                         }
+                        EventPayload::MessageCompleted { .. } => {}
                         EventPayload::TurnEnded { reason } => {
                             if *reason == StopReason::Completed
                                 && !in_round
-                                && !is_executor(&event.speaker_id)
+                                && !is_executor(speaker)
                             {
                                 let _ = sinks.stdout_result.write_all(final_text.as_bytes());
                                 let _ = sinks.stdout_result.write_all(b"\n");
                                 let _ = sinks.stdout_result.flush();
                             }
-                            let _ = writeln!(sinks.stderr_diagnostic, "[turn ended: {reason}]");
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{}",
+                                wording::turn_ended(*reason)
+                            );
                         }
                         // A round boundary is narrated with its number and its
                         // reason spelled out: the four terminal reasons
@@ -153,29 +170,155 @@ impl Render for Headless {
                         // having four of them (spec §15).
                         EventPayload::RoundStarted { round, mode } => {
                             in_round = true;
-                            let _ =
-                                writeln!(sinks.stderr_diagnostic, "\n[round {round}: {mode:?}]");
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "\n{}",
+                                wording::round_section(*round, *mode)
+                            );
                         }
                         EventPayload::RoundEnded { round, reason } => {
                             in_round = false;
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
-                                "[round {round} ended: {reason}]"
+                                "{}",
+                                wording::round_ended(*round, *reason)
                             );
                         }
-                        payload => {
+                        EventPayload::ContextInjected { source, .. } => {
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
-                                "[{}] {}",
-                                event.speaker_id,
-                                payload.kind()
+                                "{}",
+                                wording::context_injected(*source)
+                            );
+                        }
+                        EventPayload::DivergenceRecorded { topic, .. } => {
+                            let _ =
+                                writeln!(sinks.stderr_diagnostic, "{}", wording::divergence(topic));
+                        }
+                        EventPayload::ToolCallStarted {
+                            tool_name, args, ..
+                        } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::tool_call(tool_name, &summarize_args(args))
+                            );
+                        }
+                        EventPayload::ToolCallCompleted { ok, error, .. } => {
+                            let detail = if *ok {
+                                wording::tool_completed().to_owned()
+                            } else {
+                                wording::tool_error(
+                                    error.as_deref().unwrap_or(wording::no_message()),
+                                )
+                            };
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {detail}",
+                                speaker_label(speaker)
+                            );
+                        }
+                        EventPayload::UsageRecorded { usage } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::usage_summary(usage)
+                            );
+                        }
+                        EventPayload::PermissionAsked {
+                            request_id,
+                            tool_call_id,
+                            ..
+                        } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::permission_asked(request_id, tool_call_id.as_str())
+                            );
+                        }
+                        EventPayload::PermissionDecided {
+                            decision,
+                            source,
+                            reason,
+                            ..
+                        } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::permission_decided(*decision, *source, reason.as_deref())
+                            );
+                        }
+                        EventPayload::HookExecuted { point, outcome, .. } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::hook(point, outcome)
+                            );
+                        }
+                        EventPayload::ExecutorSpawned { executor_id, .. } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::executor_spawned(executor_id.as_str())
+                            );
+                        }
+                        EventPayload::ExecutorFinished {
+                            executor_id,
+                            reason,
+                            summary,
+                        } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{}",
+                                wording::executor_finished(executor_id.as_str(), *reason, summary)
+                            );
+                        }
+                        EventPayload::AgentError { message, .. } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{} {}",
+                                speaker_label(speaker),
+                                wording::agent_error(message)
+                            );
+                        }
+                        EventPayload::SessionError { code, detail } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{}",
+                                wording::session_error(code, detail)
+                            );
+                        }
+                        EventPayload::SessionEnded { reason } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{}",
+                                wording::session_ended(*reason)
+                            );
+                        }
+                        EventPayload::HistorySuperseded {
+                            reason, summary, ..
+                        } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{}",
+                                wording::history(*reason, summary.as_deref())
                             );
                         }
                     }
                     let _ = sinks.stderr_diagnostic.flush();
                 }
                 Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                    let _ = writeln!(sinks.stderr_diagnostic, "[render] dropped {dropped} events");
+                    let _ = writeln!(
+                        sinks.stderr_diagnostic,
+                        "{}",
+                        wording::renderer_dropped(dropped)
+                    );
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }

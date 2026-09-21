@@ -19,10 +19,8 @@ use tokio::sync::broadcast;
 use crate::events::{Role, SpeakerId};
 
 use super::severity::Severity;
-use super::transcript::{
-    decision_source_label, speaker_label, summarize_args, truncate, usage_summary, Block,
-    ToolBlock, Transcript,
-};
+use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
+use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent, RenderSinks};
 
 /// How much of one tool result the plain transcript shows before eliding.
@@ -87,15 +85,15 @@ impl Plain {
             } => self.message(speaker, role, &text),
             Block::RoundStarted { round, mode } => {
                 self.end_line();
-                self.line(&format!("\n── round {round} ({mode:?}) ──"));
+                self.line(&format!("\n{}", wording::round_section(round, mode)));
             }
             Block::RoundEnded { round, reason } => {
-                let text = format!("[round {round} ended: {reason}]");
+                let text = wording::round_ended(round, reason);
                 self.line(&self.paint_severity(Severity::of(reason), &text));
             }
             Block::Divergence { topic, positions } => {
                 self.end_line();
-                self.line(&format!("!! divergence: {topic}"));
+                self.line(&format!("!! {}", wording::divergence(&topic)));
                 for position in positions {
                     self.line(&format!("  - {position}"));
                 }
@@ -104,13 +102,18 @@ impl Plain {
             Block::TurnStarted { speaker, iteration } => {
                 self.end_line();
                 self.line(&format!(
-                    "{} turn iteration {iteration}",
-                    speaker_label(&speaker)
+                    "{} {}",
+                    speaker_label(&speaker),
+                    wording::turn_started(iteration)
                 ));
             }
             Block::TurnEnded { speaker, reason } => {
                 self.end_line();
-                let text = format!("{} turn ended: {reason}", speaker_label(&speaker));
+                let text = format!(
+                    "{} {}",
+                    speaker_label(&speaker),
+                    wording::turn_ended(reason)
+                );
                 self.line(&self.paint_severity(Severity::of(reason), &text));
             }
             Block::PermissionAsked {
@@ -119,8 +122,9 @@ impl Plain {
                 tool_call_id,
             } => {
                 self.line(&format!(
-                    "{} permission asked ({request_id}, call {tool_call_id})",
-                    speaker_label(&speaker)
+                    "{} {}",
+                    speaker_label(&speaker),
+                    wording::permission_asked(&request_id, tool_call_id.as_str())
                 ));
             }
             Block::PermissionDecided {
@@ -129,15 +133,10 @@ impl Plain {
                 source,
                 reason,
             } => {
-                let source = decision_source_label(source);
-                let suffix = reason
-                    .as_deref()
-                    .map(|reason| format!(": {reason}"))
-                    .unwrap_or_default();
                 self.line(&format!(
-                    "{} permission {} ({source}){suffix}",
+                    "{} {}",
                     speaker_label(&speaker),
-                    decision.as_str()
+                    wording::permission_decided(decision, source, reason.as_deref())
                 ));
             }
             Block::Hook {
@@ -146,8 +145,9 @@ impl Plain {
                 outcome,
             } => {
                 self.line(&format!(
-                    "{} hook {point}: {outcome}",
-                    speaker_label(&speaker)
+                    "{} {}",
+                    speaker_label(&speaker),
+                    wording::hook(&point, &outcome)
                 ));
             }
             Block::ExecutorSpawned {
@@ -155,8 +155,9 @@ impl Plain {
                 executor_id,
             } => {
                 self.line(&format!(
-                    "{} dispatched executor {executor_id}",
-                    speaker_label(&speaker)
+                    "{} {}",
+                    speaker_label(&speaker),
+                    wording::executor_spawned(executor_id.as_str())
                 ));
             }
             Block::ExecutorFinished {
@@ -164,39 +165,40 @@ impl Plain {
                 reason,
                 summary,
             } => {
-                let text = format!("[executor {executor_id}] finished: {reason} — {summary}");
+                let text = wording::executor_finished(executor_id.as_str(), reason, &summary);
                 self.line(&self.paint_severity(Severity::of(reason), &text));
             }
             Block::Usage { speaker, usage } => {
                 self.line(&format!(
                     "{} {}",
                     speaker_label(&speaker),
-                    usage_summary(&usage)
+                    wording::usage_summary(&usage)
                 ));
             }
             Block::AgentError { speaker, message } => {
-                let text = format!("{} error: {message}", speaker_label(&speaker));
+                let text = format!(
+                    "{} {}",
+                    speaker_label(&speaker),
+                    wording::agent_error(&message)
+                );
                 self.line(&self.paint_severity(Severity::Bad, &text));
             }
             Block::SessionError { code, detail } => {
-                let text = format!("[session error {code}] {detail}");
+                let text = wording::session_error(&code, &detail);
                 self.line(&self.paint_severity(Severity::Bad, &text));
             }
             Block::SessionEnded { reason } => {
-                let text = format!("[session ended: {reason}]");
+                let text = wording::session_ended(reason);
                 self.line(&self.paint_severity(Severity::of(reason), &text));
             }
             Block::ContextInjected { source } => {
-                self.line(&format!("[context injected: {source:?}]"));
+                self.line(&wording::context_injected(source));
             }
             Block::History { reason, summary } => {
-                self.line(&format!(
-                    "[history: {reason:?}] {}",
-                    summary.as_deref().unwrap_or("(superseded)")
-                ));
+                self.line(&wording::history(reason, summary.as_deref()));
             }
             Block::Diagnostic(message) => {
-                self.line(&format!("[diag] {message}"));
+                self.line(&wording::diagnostic(&message));
             }
             Block::Notice(message) => {
                 self.line(&message);
@@ -217,7 +219,8 @@ impl Plain {
                 if !self.in_reasoning {
                     self.end_line();
                     let prefix = speaker_label(&speaker);
-                    let marker = self.paint_reasoning(&format!("{prefix} (reasoning) "));
+                    let marker =
+                        self.paint_reasoning(&format!("{prefix} {} ", wording::reasoning_label()));
                     self.write(&marker);
                     self.open_speaker = Some(speaker.clone());
                     self.at_line_start = false;
@@ -246,17 +249,19 @@ impl Plain {
     fn tool(&mut self, tool: &ToolBlock) {
         self.end_line();
         let head = format!(
-            "{} → {}({})",
+            "{} → {}",
             speaker_label(&tool.speaker),
-            tool.tool,
-            summarize_args(&tool.args)
+            wording::tool_call(&tool.tool, &summarize_args(&tool.args))
         );
         self.line(&head);
         match &tool.outcome {
             Some(outcome) if outcome.ok => {
                 if let Some(output) = &outcome.output {
                     if !output.trim().is_empty() {
-                        self.line(&indent(&truncate(output, TOOL_PREVIEW), 2));
+                        self.line(&indent(
+                            &wording::tool_output_preview(output, TOOL_PREVIEW),
+                            2,
+                        ));
                     }
                 }
             }
@@ -264,15 +269,15 @@ impl Plain {
                 let error = outcome
                     .error
                     .as_deref()
-                    .unwrap_or("(no message)")
+                    .unwrap_or_else(|| wording::no_message())
                     .to_owned();
-                let text = indent(&truncate(&error, TOOL_PREVIEW), 2);
+                let text = indent(&wording::tool_output_preview(&error, TOOL_PREVIEW), 2);
                 self.line(&self.paint_severity(Severity::Bad, &text));
             }
-            None => self.line("  (no result on the stream)"),
+            None => self.line(&format!("  {}", wording::no_tool_result())),
         }
         if let Some(hook) = &tool.hook {
-            self.line(&indent(&format!("[hook] {hook}"), 2));
+            self.line(&indent(&wording::hook_feedback(hook), 2));
         }
     }
 
@@ -361,9 +366,7 @@ impl Render for Plain {
             match receiver.recv().await {
                 Ok(event) => plain.emit(event),
                 Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                    plain.emit(RenderEvent::Diagnostic(format!(
-                        "[render] dropped {dropped} events"
-                    )));
+                    plain.emit(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }

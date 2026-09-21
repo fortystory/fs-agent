@@ -10,7 +10,7 @@ use fs_agent::render::{
     paint_scrollback, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind,
     FrontEndEvent, Key, Question, RenderEvent, ToolBlock, ToolOutcome, TuiState,
 };
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::text::Line;
@@ -237,7 +237,13 @@ fn the_synthesizers_product_renders_with_the_system_speaker() {
         role: Role::Assistant,
         text: "consensus".to_owned(),
     });
-    assert!(lines[0].spans[0].content.contains("[system]"));
+    // The first span is the speaker prefix. Its exact words belong to the wording
+    // layer; here it only has to be a bracketed attribution.
+    let prefix = lines[0].spans[0].content.as_ref();
+    assert!(
+        prefix.starts_with('[') && prefix.ends_with("] "),
+        "a bracketed speaker prefix: {prefix:?}"
+    );
 }
 
 #[test]
@@ -260,6 +266,24 @@ fn a_notice_is_a_scrollback_line_shown_as_it_is() {
         .map(|span| span.content.as_ref())
         .collect();
     assert_eq!(text, banner);
+}
+
+#[test]
+fn a_message_continuation_indents_by_the_label_display_width() {
+    // A Chinese label is narrower in characters than in columns (`[用户]` is 4
+    // characters, 6 columns), so indenting by `chars().count()` put the second
+    // line two columns left of the first. The indent must measure columns.
+    let lines = render_block(&Block::Message {
+        speaker: SpeakerId::User,
+        role: Role::Assistant,
+        text: "one\ntwo".to_owned(),
+    });
+    let prefix = lines[0].spans[0].content.as_ref().cell_width() as usize;
+    let indent = lines[1].spans[0].content.as_ref().cell_width() as usize;
+    assert_eq!(
+        indent, prefix,
+        "the continuation lines up under the body of the first line"
+    );
 }
 
 #[test]

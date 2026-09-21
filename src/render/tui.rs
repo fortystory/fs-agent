@@ -34,10 +34,8 @@ use crate::events::{Role, StopReason};
 use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
 use super::severity::Severity;
-use super::transcript::{
-    decision_source_label, speaker_label, summarize_args, truncate, usage_summary, Block,
-    ToolBlock, Transcript,
-};
+use super::transcript::{summarize_args, truncate, Block, ToolBlock, Transcript};
+use super::wording::{self, speaker_label};
 use super::{Render, RenderEvent};
 
 /// How many rows the live region occupies: the streaming tail, the input line and
@@ -121,9 +119,7 @@ impl Tui {
                 received = receiver.recv() => match received {
                     Ok(event) => state.apply(event),
                     Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                        state.apply(RenderEvent::Diagnostic(format!(
-                            "[render] dropped {dropped} events"
-                        )));
+                        state.apply(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
@@ -399,20 +395,14 @@ impl TuiState {
                 question: Question::Permission(request),
                 ..
             }) => (
-                format!(
-                    "allow {} ({}): [y]es / [a]lways / [n]o ",
-                    request.tool_name, request.request_id
-                ),
+                wording::permission_prompt(&request.tool_name, &request.request_id),
                 Style::default().fg(ratatui::style::Color::Yellow),
             ),
             Some(Pending {
                 question: Question::PlanConflict(path),
                 ..
             }) => (
-                format!(
-                    "{} exists: [o]verwrite / [a]ppend / [k]eep ",
-                    path.display()
-                ),
+                wording::plan_conflict_prompt(&path.display().to_string()),
                 Style::default().fg(ratatui::style::Color::Yellow),
             ),
             None => (
@@ -422,9 +412,8 @@ impl TuiState {
         }
     }
 
-    fn status_line(&self) -> String {
-        let state = if self.busy { "working" } else { "ready" };
-        format!("{state} · enter send · esc cancel · shift+tab plan · ctrl-c quit")
+    fn status_line(&self, width: u16) -> String {
+        wording::status_line(self.busy, width)
     }
 }
 
@@ -475,7 +464,7 @@ fn draw_live(frame: &mut ratatui::Frame, state: &TuiState) {
     let (input, style) = state.input_line();
     lines.push(Line::from(Span::styled(input, style)));
     lines.push(Line::from(Span::styled(
-        state.status_line(),
+        state.status_line(area.width),
         Style::default().fg(ratatui::style::Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(lines), area);
@@ -542,7 +531,9 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
                     first = false;
                     format!("{} ", speaker_label(speaker))
                 } else {
-                    " ".repeat(speaker_label(speaker).chars().count() + 1)
+                    // Columns, not characters: a Chinese label is narrower in
+                    // characters than in columns (`[用户]` is 4 chars, 6 columns).
+                    " ".repeat(speaker_label(speaker).as_str().cell_width() as usize + 1)
                 };
                 lines.push(Line::from(vec![
                     Span::styled(prefix, Style::default().fg(ratatui::style::Color::DarkGray)),
@@ -560,18 +551,18 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
         ])],
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
-            format!("── round {round} ({mode:?}) ──"),
+            wording::round_section(*round, *mode),
             Style::default()
                 .fg(ratatui::style::Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ))],
         Block::RoundEnded { round, reason } => vec![severity_line(
             *reason,
-            format!("[round {round} ended: {reason}]"),
+            wording::round_ended(*round, *reason),
         )],
         Block::Divergence { topic, positions } => {
             let mut lines = vec![Line::from(Span::styled(
-                format!("!! divergence: {topic}"),
+                format!("!! {}", wording::divergence(topic)),
                 Style::default()
                     .fg(ratatui::style::Color::Magenta)
                     .add_modifier(Modifier::BOLD),
@@ -583,52 +574,56 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
         }
         Block::Tool(tool) => tool_lines(tool),
         Block::TurnStarted { speaker, iteration } => vec![Line::from(Span::styled(
-            format!("{} turn iteration {iteration}", speaker_label(speaker)),
+            format!(
+                "{} {}",
+                speaker_label(speaker),
+                wording::turn_started(*iteration)
+            ),
             Style::default().fg(ratatui::style::Color::DarkGray),
         ))],
         Block::TurnEnded { speaker, reason } => vec![severity_line(
             *reason,
-            format!("{} turn ended: {reason}", speaker_label(speaker)),
+            format!(
+                "{} {}",
+                speaker_label(speaker),
+                wording::turn_ended(*reason)
+            ),
         )],
         Block::PermissionAsked {
             speaker,
             request_id,
-            ..
+            tool_call_id,
         } => vec![Line::from(format!(
-            "{} permission asked ({request_id})",
-            speaker_label(speaker)
+            "{} {}",
+            speaker_label(speaker),
+            wording::permission_asked(request_id, tool_call_id.as_str())
         ))],
         Block::PermissionDecided {
             speaker,
             decision,
             source,
             reason,
-        } => {
-            let source = decision_source_label(*source);
-            let decision = decision.as_str();
-            let suffix = reason
-                .as_deref()
-                .map(|reason| format!(": {reason}"))
-                .unwrap_or_default();
-            vec![Line::from(format!(
-                "{} permission {decision} ({source}){suffix}",
-                speaker_label(speaker)
-            ))]
-        }
+        } => vec![Line::from(format!(
+            "{} {}",
+            speaker_label(speaker),
+            wording::permission_decided(*decision, *source, reason.as_deref())
+        ))],
         Block::Hook {
             speaker,
             point,
             outcome,
         } => vec![Line::from(format!(
-            "{} hook {point}: {outcome}",
-            speaker_label(speaker)
+            "{} {}",
+            speaker_label(speaker),
+            wording::hook(point, outcome)
         ))],
         Block::ExecutorSpawned {
             speaker,
             executor_id,
         } => vec![Line::from(format!(
-            "{} dispatched executor {executor_id}",
-            speaker_label(speaker)
+            "{} {}",
+            speaker_label(speaker),
+            wording::executor_spawned(executor_id.as_str())
         ))],
         Block::ExecutorFinished {
             executor_id,
@@ -636,33 +631,40 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             summary,
         } => vec![severity_line(
             *reason,
-            format!("[executor {executor_id}] finished: {reason} — {summary}"),
+            wording::executor_finished(executor_id.as_str(), *reason, summary),
         )],
         Block::Usage { speaker, usage } => vec![Line::from(Span::styled(
-            format!("{} {}", speaker_label(speaker), usage_summary(usage)),
+            format!(
+                "{} {}",
+                speaker_label(speaker),
+                wording::usage_summary(usage)
+            ),
             Style::default().fg(ratatui::style::Color::DarkGray),
         ))],
         Block::AgentError { speaker, message } => vec![severity_line(
             StopReason::Error,
-            format!("{} error: {message}", speaker_label(speaker)),
+            format!(
+                "{} {}",
+                speaker_label(speaker),
+                wording::agent_error(message)
+            ),
         )],
         Block::SessionError { code, detail } => vec![severity_line(
             StopReason::Error,
-            format!("[session error {code}] {detail}"),
+            wording::session_error(code, detail),
         )],
         Block::SessionEnded { reason } => {
-            vec![severity_line(*reason, format!("[session ended: {reason}]"))]
+            vec![severity_line(*reason, wording::session_ended(*reason))]
         }
         Block::ContextInjected { source } => vec![Line::from(Span::styled(
-            format!("[context injected: {source:?}]"),
+            wording::context_injected(*source),
             Style::default().fg(ratatui::style::Color::DarkGray),
         ))],
-        Block::History { reason, summary } => vec![Line::from(format!(
-            "[history: {reason:?}] {}",
-            summary.as_deref().unwrap_or("(superseded)")
-        ))],
+        Block::History { reason, summary } => {
+            vec![Line::from(wording::history(*reason, summary.as_deref()))]
+        }
         Block::Diagnostic(message) => vec![Line::from(Span::styled(
-            format!("[diag] {message}"),
+            wording::diagnostic(message),
             Style::default().fg(ratatui::style::Color::Yellow),
         ))],
         Block::Notice(message) => vec![Line::from(Span::styled(
@@ -691,7 +693,10 @@ fn tool_lines(tool: &ToolBlock) -> Vec<Line<'static>> {
             Style::default().fg(ratatui::style::Color::DarkGray),
         ),
         Span::styled(
-            format!("→ {}({})", tool.tool, summarize_args(&tool.args)),
+            format!(
+                "→ {}",
+                wording::tool_call(&tool.tool, &summarize_args(&tool.args))
+            ),
             Style::default().add_modifier(Modifier::BOLD),
         ),
     ])];
@@ -699,7 +704,10 @@ fn tool_lines(tool: &ToolBlock) -> Vec<Line<'static>> {
         Some(outcome) if outcome.ok => {
             if let Some(output) = &outcome.output {
                 if !output.trim().is_empty() {
-                    lines.extend(highlighted(&truncate(output, TOOL_PREVIEW)));
+                    lines.extend(highlighted(&wording::tool_output_preview(
+                        output,
+                        TOOL_PREVIEW,
+                    )));
                 }
             }
         }
@@ -707,18 +715,18 @@ fn tool_lines(tool: &ToolBlock) -> Vec<Line<'static>> {
             let error = outcome
                 .error
                 .as_deref()
-                .unwrap_or("(no message)")
+                .unwrap_or_else(|| wording::no_message())
                 .to_owned();
             lines.push(Line::from(Span::styled(
                 format!("  {error}"),
                 Style::default().fg(ratatui::style::Color::Red),
             )));
         }
-        None => lines.push(Line::from("  (no result on the stream)")),
+        None => lines.push(Line::from(format!("  {}", wording::no_tool_result()))),
     }
     if let Some(hook) = &tool.hook {
         lines.push(Line::from(Span::styled(
-            format!("  [hook] {hook}"),
+            format!("  {}", wording::hook_feedback(hook)),
             Style::default().fg(ratatui::style::Color::Yellow),
         )));
     }

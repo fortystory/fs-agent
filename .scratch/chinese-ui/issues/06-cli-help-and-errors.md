@@ -4,7 +4,7 @@
 
 Blocked by: 01
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §Implementation Decisions（`.scratch/chinese-ui/spec.md`）、ADR 0001（会话级错误的细节保持英文）
 

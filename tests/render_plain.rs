@@ -122,11 +122,23 @@ async fn rounds_are_sectioned_and_divergences_are_indented() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    assert!(text.contains("── round 2 (Targeted) ──"), "{text:?}");
-    assert!(text.contains("!! divergence: the seam"), "{text:?}");
+    // Semantic, not textual: the round opens with a section line carrying its
+    // number, and no debug-formatted enum reaches the interface. The exact words
+    // belong to the wording layer's own test.
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("── ") && line.contains('2') && line.ends_with("──")),
+        "a round section line: {text:?}"
+    );
+    assert!(!text.contains("Targeted"), "no debug enum: {text:?}");
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("!! ") && line.contains("the seam")),
+        "a divergence heading with its topic: {text:?}"
+    );
     assert!(
         text.contains("  - trace it") && text.contains("  - map it"),
-        "{text:?}"
+        "positions are indented: {text:?}"
     );
 }
 
@@ -175,13 +187,11 @@ async fn a_tool_result_and_its_post_hook_read_as_one_block() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    let head = text
-        .find("[kimi] → read_file(path=src/lib.rs)")
-        .expect("tool head");
+    // Semantic: head, result and post-hook feedback appear in that order, in one
+    // block. The exact words are the wording layer's test.
+    let head = text.find("read_file(path=src/lib.rs)").expect("tool head");
     let output = text.find("  fn main() {}").expect("tool output");
-    let hook = text
-        .find("  [hook] feedback: looks fine")
-        .expect("hook feedback");
+    let hook = text.find("feedback: looks fine").expect("hook feedback");
     assert!(head < output && output < hook, "{text:?}");
 }
 
@@ -223,8 +233,10 @@ async fn the_post_hook_is_not_printed_as_a_separate_event() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    assert_eq!(text.matches("[hook]").count(), 1, "{text:?}");
-    assert!(!text.contains("hook post_tool_use"), "{text:?}");
+    // The feedback appears exactly once (merged into its call), and no
+    // debug-formatted mount point reaches the interface.
+    assert_eq!(text.matches("feedback: ok").count(), 1, "{text:?}");
+    assert!(!text.contains("post_tool_use"), "{text:?}");
 }
 
 #[tokio::test]
@@ -282,18 +294,20 @@ async fn completed_and_aborted_do_not_render_the_same() {
     ];
     let (_stdout, stderr) = run(&events, true).await;
     let text = stderr.text();
-    // Green for the completed turn, yellow for the abort, red for the error.
+    // Green for the completed turn, yellow for the abort, red for the error. The
+    // assertion is on the severity colour and the attribution, not the phrase:
+    // wording has its own exact-text test.
     assert!(
-        text.contains("\x1b[32m[kimi] turn ended: Completed"),
-        "{text:?}"
+        text.lines().any(|line| line.starts_with("\x1b[32m[kimi] ")),
+        "a good stop reads green: {text:?}"
     );
     assert!(
-        text.contains("\x1b[33m[kimi] turn ended: Aborted"),
-        "{text:?}"
+        text.lines().any(|line| line.starts_with("\x1b[33m[kimi] ")),
+        "a warning stop reads yellow: {text:?}"
     );
     assert!(
-        text.contains("\x1b[31m[kimi] turn ended: Error"),
-        "{text:?}"
+        text.lines().any(|line| line.starts_with("\x1b[31m[kimi] ")),
+        "an error stop reads red: {text:?}"
     );
 }
 
@@ -364,7 +378,7 @@ async fn a_permission_decision_between_start_and_result_does_not_split_the_call(
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
     assert!(
-        text.contains("[kimi] → write_file(path=a.txt)"),
+        text.contains("write_file(path=a.txt)"),
         "the call keeps its arguments: {text:?}"
     );
     assert!(text.contains("  wrote a.txt"), "and its result: {text:?}");
@@ -372,8 +386,13 @@ async fn a_permission_decision_between_start_and_result_does_not_split_the_call(
         !text.contains("→ ?("),
         "the completion must not become a second, anonymous block: {text:?}"
     );
-    // The decision is still narrated, just not as a block boundary.
-    assert!(text.contains("permission allow"), "{text:?}");
+    // The decision is still narrated, just not as a block boundary: the line is
+    // attributed to the speaker and carries the gate's own reason verbatim.
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("[kimi] ") && line.contains("mode auto")),
+        "{text:?}"
+    );
 }
 
 #[tokio::test]
@@ -391,9 +410,6 @@ async fn a_call_with_no_result_still_appears_when_the_stream_ends() {
         },
     )];
     let (_stdout, stderr) = run(&events, false).await;
-    assert!(
-        stderr.text().contains("(no result on the stream)"),
-        "{:?}",
-        stderr.text()
-    );
+    // Flushed rather than dropped: the call still reaches the transcript.
+    assert!(stderr.text().contains("sleep 300"), "{:?}", stderr.text());
 }

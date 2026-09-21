@@ -116,7 +116,10 @@ pub fn synthesis_prompt(question: &str, events: &[Event]) -> String {
 
     for (round, mode) in debate_rounds(events) {
         let attendance = round_attendance(events, round);
-        prompt.push_str(&format!("\n## 第 {round} 轮（{}）\n", mode_label(mode)));
+        prompt.push_str(&format!(
+            "\n## 第 {round} 轮（{}）\n",
+            crate::render::wording::round_mode(mode)
+        ));
         for (speaker, answer) in &attendance.answers {
             prompt.push_str(&format!("\n### {speaker} 的作答\n{}\n", answer.trim()));
         }
@@ -170,12 +173,4 @@ fn debate_rounds(events: &[Event]) -> Vec<(u32, RoundMode)> {
         }
     }
     rounds
-}
-
-fn mode_label(mode: RoundMode) -> &'static str {
-    match mode {
-        RoundMode::Independent => "独立首轮",
-        RoundMode::Targeted => "定向第二轮",
-        RoundMode::Synthesis => "合成",
-    }
 }

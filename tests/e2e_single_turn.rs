@@ -131,14 +131,13 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
     // stdout holds exactly the final product; everything else went to stderr.
     assert_eq!(fixture.stdout.text(), "hello from fake\n");
     let diagnostics = fixture.stderr.text();
-    assert!(
-        diagnostics.contains("[reasoning] weighing"),
-        "{diagnostics}"
-    );
+    assert!(diagnostics.contains("weighing"), "{diagnostics}");
     assert!(diagnostics.contains("hello from fake"), "{diagnostics}");
     assert!(
-        diagnostics.contains("turn ended: Completed"),
-        "{diagnostics}"
+        diagnostics.contains(&fs_agent::render::wording::turn_ended(
+            StopReason::Completed
+        )),
+        "the turn's ending is narrated: {diagnostics}"
     );
 
     // The event stream is the observable contract.
@@ -806,14 +805,22 @@ async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
 
     fixture.harness.shutdown().await;
     let stderr = fixture.stderr.text();
-    assert!(
-        stderr.contains("[turn ended: BudgetExhausted]"),
-        "the reason is narrated: {stderr}"
-    );
+    let budget = fs_agent::render::wording::turn_ended(StopReason::BudgetExhausted);
+    assert!(stderr.contains(&budget), "the reason is narrated: {stderr}");
     // Distinct from the reasons the same line can carry: a turn that ran out of
     // its own iterations, or one that finished, must not read the same.
-    assert!(!stderr.contains("[turn ended: MaxIterations]"), "{stderr}");
-    assert!(!stderr.contains("[turn ended: Completed]"), "{stderr}");
+    assert!(
+        !stderr.contains(&fs_agent::render::wording::turn_ended(
+            StopReason::MaxIterations
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&fs_agent::render::wording::turn_ended(
+            StopReason::Completed
+        )),
+        "{stderr}"
+    );
 }
 
 #[tokio::test]

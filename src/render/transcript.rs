@@ -370,33 +370,7 @@ impl Transcript {
     }
 }
 
-/// The human's `[speaker]` prefix: one generator, used by every human-facing
-/// renderer, and deliberately not the model-side projection prefix (spec §5).
-pub fn speaker_label(speaker: &SpeakerId) -> String {
-    format!("[{speaker}]")
-}
-
-/// The human label for a permission decision's source.
-///
-/// Shared rather than spelled out in each painter, because the plain and TUI
-/// renderers must agree on what a decision says.
-pub fn decision_source_label(source: DecisionSource) -> &'static str {
-    match source {
-        DecisionSource::User => "user",
-        DecisionSource::Hook => "hook",
-        DecisionSource::Policy => "policy",
-    }
-}
-
-/// The one-line usage summary both human renderers print.
-pub fn usage_summary(usage: &Usage) -> String {
-    format!(
-        "usage in={} out={} cached={} miss={}",
-        usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.miss_tokens
-    )
-}
-
-/// A one-line summary of a tool call's arguments.
+/// The one-line summary of a tool call's arguments.
 ///
 /// Values are rendered compactly and the whole thing is capped, so a call with a
 /// large body still reads as one line — the same reason `docs` describe the

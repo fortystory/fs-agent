@@ -4,7 +4,7 @@
 
 Blocked by: None
 
-Status: ready-for-agent
+Status: done
 
 **参考:** spec §Implementation Decisions / §Testing Decisions（`.scratch/chinese-ui/spec.md`）、ADR 0001（冻结面）、票 23（中文宽度）
 
