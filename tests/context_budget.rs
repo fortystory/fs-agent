@@ -494,11 +494,13 @@ fn blob_reply(id: &str) -> Reply {
     ])
 }
 
-/// Caps whose usable input is exactly `usable` tokens.
+/// Caps whose usable input is exactly `usable` tokens **beyond the pinned
+/// identity**, which leads every request and counts against the budget too.
 fn caps_with_usable_input(usable: u32) -> ModelCaps {
+    let identity = fs_agent::context::estimate_tokens(fs_agent::agent::agent_identity());
     let mut caps = caps_for("deepseek-flash").unwrap();
     caps.max_output_tokens = 20_000;
-    caps.context_window = 20_000 + usable;
+    caps.context_window = 20_000 + usable + identity as u32;
     caps
 }
 
@@ -705,10 +707,19 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
         "the rules are recorded once per session, not once per turn"
     );
 
-    // It is the first user message, and trimming never removed it.
+    // The identity leads, the rules are the first user message, and trimming
+    // never removed either.
     for request in fixture.provider.requests() {
         assert_eq!(
             request.messages.first(),
+            Some(&Message::System {
+                content: fs_agent::agent::agent_identity().to_owned(),
+                name: None,
+            }),
+            "the program's identity leads every request"
+        );
+        assert_eq!(
+            request.messages.get(1),
             Some(&Message::User {
                 content: rules.to_owned(),
                 name: None,

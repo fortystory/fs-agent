@@ -21,9 +21,7 @@ use fs_agent::context::repo_map::{
     extract, rank, render, Definition, RankContext, Relevance, RepoMap, Scored, SymbolKind,
     REPO_MAP_TOOL,
 };
-use fs_agent::events::{
-    read_events, Event, EventPayload, Role, SessionId, SpeakerId, ToolCallId,
-};
+use fs_agent::events::{read_events, Event, EventPayload, Role, SessionId, SpeakerId, ToolCallId};
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
@@ -84,7 +82,10 @@ impl Greet for Widget {
 
     assert!(found.contains(&("Widget", SymbolKind::Class)), "{found:?}");
     assert!(found.contains(&("Colour", SymbolKind::Class)), "{found:?}");
-    assert!(found.contains(&("Greet", SymbolKind::Interface)), "{found:?}");
+    assert!(
+        found.contains(&("Greet", SymbolKind::Interface)),
+        "{found:?}"
+    );
     assert!(found.contains(&("inner", SymbolKind::Module)), "{found:?}");
     // The official query classifies a function inside any `declaration_list` —
     // an `impl`, a `trait`, or a `mod` body — as a method. The map follows the
@@ -173,7 +174,10 @@ fn rank_breaks_ties_on_the_structural_signal() {
 
     let ranked = rank(&definitions, &references, &RankContext::default());
 
-    assert_eq!(ranked[0].definition.name, "alpha", "more references wins the tie");
+    assert_eq!(
+        ranked[0].definition.name, "alpha",
+        "more references wins the tie"
+    );
     assert_eq!(ranked[0].references, 7);
     assert_eq!(ranked[0].definitions, 1);
     // The two `beta` sites are the same name defined in two files: they beat
@@ -225,7 +229,10 @@ fn render_omits_whole_symbols_and_notes_how_many() {
     let text = render(&ranked, Path::new(""), 60);
 
     assert!(estimate_tokens(&text) <= 60, "{text}");
-    assert!(text.starts_with("src/generated.rs: generated_symbol_000"), "{text}");
+    assert!(
+        text.starts_with("src/generated.rs: generated_symbol_000"),
+        "{text}"
+    );
     assert!(text.contains("more symbol(s) omitted"), "{text}");
     // Whole names only: no half-printed symbol ever appears.
     for line in text.lines().filter(|line| !line.starts_with('[')) {
@@ -281,7 +288,9 @@ fn session_context_collects_recent_paths_and_identifiers() {
         vec![PathBuf::from("/work/src/context.rs")],
         "only the file tools contribute, and `./` is collapsed"
     );
-    assert!(context.recent_identifiers.contains(&"trimpolicy".to_owned()));
+    assert!(context
+        .recent_identifiers
+        .contains(&"trimpolicy".to_owned()));
     assert!(context.recent_identifiers.contains(&"budget".to_owned()));
     assert!(
         !context.recent_identifiers.contains(&"is".to_owned()),
@@ -504,7 +513,10 @@ async fn repo_map_lands_as_an_ordinary_tool_result_never_an_injection() {
     );
 
     let mut fixture = fixture(
-        vec![repo_map_reply("call-1", serde_json::json!({})), Reply::text("done")],
+        vec![
+            repo_map_reply("call-1", serde_json::json!({})),
+            Reply::text("done"),
+        ],
         &workspace,
         SessionConfig::new("fake-model"),
     )
@@ -534,8 +546,13 @@ async fn repo_map_lands_as_an_ordinary_tool_result_never_an_injection() {
     assert_eq!(requests.len(), 2, "one call for the map, one to answer");
     let second = &requests[1];
     assert!(
-        matches!(second.messages.first(), Some(Message::User { .. })),
-        "there is no pinned injection here, only the user's question: {:?}",
+        matches!(second.messages.first(), Some(Message::System { .. })),
+        "only the identity leads: {:?}",
+        second.messages
+    );
+    assert!(
+        matches!(second.messages.get(1), Some(Message::User { .. })),
+        "then the user's question — there is no pinned injection here: {:?}",
         second.messages
     );
     assert!(
@@ -623,7 +640,10 @@ async fn repo_map_says_so_when_the_workspace_has_no_rust_symbols() {
     let workspace = dir.path().to_path_buf();
 
     let mut fixture = fixture(
-        vec![repo_map_reply("call-1", serde_json::json!({})), Reply::text("ok")],
+        vec![
+            repo_map_reply("call-1", serde_json::json!({})),
+            Reply::text("ok"),
+        ],
         &workspace,
         SessionConfig::new("fake-model"),
     )

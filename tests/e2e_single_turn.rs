@@ -201,11 +201,17 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
     assert_eq!(requests[0].cache_key.as_deref(), Some("s-1"));
     assert_eq!(
         requests[0].messages,
-        vec![Message::User {
-            content: "say hi".to_owned(),
-            name: Some("user".to_owned()),
-            injected: false,
-        }]
+        vec![
+            Message::System {
+                content: fs_agent::agent::agent_identity().to_owned(),
+                name: None,
+            },
+            Message::User {
+                content: "say hi".to_owned(),
+                name: Some("user".to_owned()),
+                injected: false,
+            },
+        ]
     );
 }
 

@@ -349,7 +349,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     } = parts;
 
     let opened = OpenedSession::open(scaffold, renderer)?;
-    let mut session = opened.session(config, None);
+    let mut session = opened.session(config, Some(agent::agent_identity().to_owned()));
     opened.start(&mut session)?;
 
     Ok(Harness {

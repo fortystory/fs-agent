@@ -123,6 +123,20 @@ pub(crate) fn scoped_events_slice(
     events
 }
 
+/// The single-agent `system` prompt: what this program is.
+///
+/// A discussion debater and an executor each lead with their own identity; a
+/// plain session led with none, so the only thing describing the program was the
+/// pinned context — and the model, reading a skill's prose, introduced itself as
+/// "Claude Code". The identity never enters the log, like every other one here,
+/// which is why `replay` derives it from the stream's shape.
+pub fn agent_identity() -> &'static str {
+    "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。\
+     你直接读写文件、运行命令、搜索代码，并按这个仓库自己的约定干活（AGENTS.md、CONTEXT.md、\
+     docs/adr、.scratch 里的 spec 与 ticket）。你不是 Claude Code，也不是 Anthropic 的产品，\
+     不要自称是；被问到你是谁时，说你是 fs-agent。你没有跨会话记忆：需要上下文就读文件或问用户。"
+}
+
 /// Project → prepend the private identity → trim.
 ///
 /// The one place a turn's provider `messages` are built (spec §5, §10, §15), so

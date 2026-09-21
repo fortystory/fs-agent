@@ -601,19 +601,24 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
     // ...but the projection merges the leading injections into the one pinned
     // first `user` message (spec §10: the rules and the catalog share it), so
     // the wire never carries consecutive same-role messages. It is byte-stable
-    // every turn so the prefix cache keeps hitting.
+    // every turn so the prefix cache keeps hitting. The program's identity leads.
     for request in fixture.provider.requests() {
+        assert!(
+            matches!(request.messages.first(), Some(Message::System { .. })),
+            "the identity leads: {:?}",
+            request.messages
+        );
         assert_eq!(
-            request.messages[0],
-            Message::User {
+            request.messages.get(1),
+            Some(&Message::User {
                 content: format!("PROJECT RULES\n\n{content}"),
                 name: None,
                 injected: true,
-            }
+            })
         );
         assert!(
             !matches!(
-                request.messages.get(1),
+                request.messages.get(2),
                 Some(Message::User { injected: true, .. })
             ),
             "the catalog does not become a second pinned message: {:?}",
@@ -668,7 +673,7 @@ async fn loading_a_skill_appends_its_body_as_an_ordinary_tool_result_at_the_tail
         "the skill body is the tail"
     );
     assert!(matches!(
-        second.messages.first(),
+        second.messages.get(1),
         Some(Message::User { name: None, .. })
     ));
 }

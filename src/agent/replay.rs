@@ -158,16 +158,19 @@ fn last_call_cut(events: &[Event], speaker: &SpeakerId, round: Option<u32>) -> O
 /// The private identity an agent's request leads with.
 ///
 /// It never enters the stream (spec §15), so replay derives it from the stream's
-/// shape instead: a discussion debater has the protocol instruction and an
+/// shape instead: a discussion debater has the protocol instruction, a debater
+/// without rounds is a plain session with this program's identity, and an
 /// executor has its own constant. The synthesizer is handled by [`synthesizer`]
-/// before this is consulted — its identity and its prompt are one unit — and a
-/// single-agent session (or the user) has none.
+/// before this is consulted — its identity and its prompt are one unit — and the
+/// user has none.
 fn identity_for(events: &[Event], speaker: &SpeakerId) -> Option<String> {
     match speaker {
         SpeakerId::Executor(_) => Some(EXECUTOR_IDENTITY.to_owned()),
-        SpeakerId::Debater(name) => {
-            has_rounds(events).then(|| discussion::debater_identity(name.as_str()))
-        }
+        SpeakerId::Debater(name) => Some(if has_rounds(events) {
+            discussion::debater_identity(name.as_str())
+        } else {
+            super::agent_identity().to_owned()
+        }),
         SpeakerId::System | SpeakerId::User => None,
     }
 }

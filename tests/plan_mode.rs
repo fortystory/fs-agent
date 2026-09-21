@@ -413,18 +413,22 @@ async fn a_turn_in_plan_mode_writes_the_plan_file_and_nothing_else() {
 
     // The instruction reaches the model as its own pinned message: it was
     // injected after history existed, so it stays separate rather than merging
-    // into the leading block (spec §13).
+    // into the leading block (spec §13). The program's identity leads everything.
     let request = &fixture.provider.requests()[0];
+    assert!(matches!(
+        &request.messages[0],
+        fs_agent::provider::Message::System { .. }
+    ));
     assert!(
         matches!(
-            &request.messages[0],
+            &request.messages[1],
             fs_agent::provider::Message::User { injected: true, .. }
         ),
-        "the instruction leads this request: {:?}",
+        "the instruction follows the identity: {:?}",
         request.messages
     );
     assert!(matches!(
-        &request.messages[1],
+        &request.messages[2],
         fs_agent::provider::Message::User {
             injected: false,
             ..
