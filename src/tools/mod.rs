@@ -13,9 +13,11 @@
 //! outside the process.
 
 pub mod bash;
+pub mod custom;
 pub mod edit;
 pub mod file;
 pub mod paths;
+pub mod process;
 pub mod registry;
 pub mod repo_map;
 pub mod skill;
@@ -25,11 +27,13 @@ pub mod tool;
 pub use bash::{
     BashTool, BASH_TOOL, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX,
 };
+pub use custom::{is_custom_tool, CustomTool};
 pub use file::{
     before_artifact, EditCall, EditFile, ReadFile, WriteFile, EDIT_FILE, MATCH_LEVEL_PREFIX,
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
 };
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
+pub use process::CommandOutcome;
 pub use registry::{
     AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Registry,
     READ_BEFORE_WRITE_PREFIX,
@@ -60,5 +64,18 @@ pub fn builtin() -> Registry {
     registry.register(Box::new(SkillTool));
     registry.register(Box::new(RepoMapTool::new()));
     registry.register(Box::new(TaskTool));
+    registry
+}
+
+/// The built-in table plus every dynamically declared tool (spec §14).
+///
+/// This is the assembly point for the tool table: a declaration becomes a
+/// normal-looking tool here and nowhere else, and the table does not change
+/// afterwards — the tool array is part of the cached prefix (spec §14).
+pub fn with_dynamic(declarations: &[crate::config::ToolDeclaration]) -> Registry {
+    let mut registry = builtin();
+    for declaration in declarations {
+        registry.register(Box::new(CustomTool::new(declaration.clone())));
+    }
     registry
 }

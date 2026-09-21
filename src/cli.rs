@@ -307,7 +307,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             cwd: cwd.clone(),
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            tools: tools::builtin(),
+            // The tool table is fixed here, at assembly: the built-ins plus
+            // every dynamically declared tool (spec §14).
+            tools: tools::with_dynamic(&config.tools),
             locks: PathLocks::new(),
             // Interactive sessions start in `ask`: writes ask, reads are allowed
             // (spec §12). A headless caller gets no answerer and downgrades.
@@ -618,7 +620,9 @@ async fn probe_model(
             log_path: log_path.clone(),
             session_id: SessionId::new(format!("probe-{model_id}")),
             // The probe exercises real turns, so it gets the real tool table.
-            tools: tools::builtin(),
+            // The tool table is fixed here, at assembly: the built-ins plus
+            // every dynamically declared tool (spec §14).
+            tools: tools::with_dynamic(&config.tools),
             locks: PathLocks::new(),
             // The probe is headless and has no answerer, so the interactive
             // default `ask` refuses writes rather than hanging on a question

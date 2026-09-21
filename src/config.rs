@@ -77,6 +77,52 @@ pub const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 /// the workspace-wide `Exclusive` lock indefinitely.
 pub const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
+/// The namespace every dynamically declared tool's wire name starts with
+/// (spec §14). A built-in name never contains `__`, so "this name has a `__`"
+/// is a lexically decidable test for "this tool came from configuration".
+pub const CUSTOM_TOOL_PREFIX: &str = "custom__";
+
+/// The separator between the namespace and the tool name, and the reason
+/// built-in names must not contain it.
+pub const CUSTOM_TOOL_SEPARATOR: &str = "__";
+
+/// Default wall-clock cap on one dynamically declared tool call, in
+/// milliseconds. Its declaration may lower or raise it up to the ceiling below.
+pub const DEFAULT_CUSTOM_TOOL_TIMEOUT_MS: u64 = 30_000;
+
+/// Ceiling on a dynamically declared tool's timeout: a declaration cannot make
+/// one command hold the workspace-wide `Exclusive` lock indefinitely.
+pub const MAX_CUSTOM_TOOL_TIMEOUT_MS: u64 = 600_000;
+
+/// The wire name of a dynamically declared tool (spec §14):
+/// `custom__<namespace>__<tool>`.
+pub fn custom_tool_name(namespace: &str, tool: &str) -> String {
+    format!("{CUSTOM_TOOL_PREFIX}{namespace}{CUSTOM_TOOL_SEPARATOR}{tool}")
+}
+
+/// One `[tools.<namespace>.<tool>]` declaration, resolved and validated.
+///
+/// The parameters are the provider's wire shape **verbatim** — no translation
+/// layer, so what the user writes is what the model is sent. There is
+/// deliberately no side-effect field: "this one is really read-only" has nowhere
+/// to be said, and every dynamic tool is `Exclusive` (spec §14).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolDeclaration {
+    /// The wire name: `custom__<namespace>__<tool>`.
+    pub name: String,
+    pub namespace: String,
+    pub tool: String,
+    pub description: String,
+    /// The argv template. A `{name}` element is replaced by that argument;
+    /// anything else is literal.
+    pub command: Vec<String>,
+    /// The JSON Schema, sent as written.
+    pub parameters: serde_json::Value,
+    /// The resolved wall-clock cap, clamped to
+    /// [`MAX_CUSTOM_TOOL_TIMEOUT_MS`].
+    pub timeout_ms: u64,
+}
+
 /// Model used when no `default_model` is configured or exported.
 pub const DEFAULT_MODEL: &str = "kimi-k3";
 
@@ -262,6 +308,10 @@ pub struct Config {
     /// Which model the two landing points answer with (spec §17). Empty by
     /// default: v1 runs everything on the discussion's model.
     pub routing: Routing,
+    /// The dynamically declared tools (spec §14), in stable name order. Fixed at
+    /// assembly: nothing adds or removes a tool mid-session, because the tool
+    /// array is part of the prefix cache.
+    pub tools: Vec<ToolDeclaration>,
 }
 
 impl Config {
@@ -374,6 +424,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let pricing = resolve_pricing(&raw, &models)?;
     let budget = resolve_budget(raw.budget.as_ref())?;
     let routing = resolve_routing(raw.routing.as_ref(), &models)?;
+    let tools = resolve_tools(&raw.tools)?;
 
     let default_model = raw
         .default_model
@@ -393,6 +444,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         pricing,
         budget,
         routing,
+        tools,
     })
 }
 
@@ -457,6 +509,134 @@ struct RawConfig {
     pricing: BTreeMap<String, RawPricing>,
     budget: Option<RawBudget>,
     routing: Option<RawRouting>,
+    /// `[tools.<namespace>.<tool>]`: dynamically declared tools (spec §14).
+    #[serde(default)]
+    tools: BTreeMap<String, BTreeMap<String, RawTool>>,
+}
+
+/// One `[tools.<namespace>.<tool>]` table.
+///
+/// The fields are the wire declaration itself: `description` and `parameters`
+/// are sent as written, and `command` is an argv template, never a shell string.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTool {
+    description: String,
+    /// The argv template. A whole element of the form `{name}` is replaced by
+    /// that argument; it is omitted when the argument is absent.
+    command: Vec<String>,
+    /// The JSON Schema, as sent to the provider.
+    parameters: serde_json::Value,
+    /// Optional wall-clock cap; defaults to
+    /// [`DEFAULT_CUSTOM_TOOL_TIMEOUT_MS`] and is clamped to
+    /// [`MAX_CUSTOM_TOOL_TIMEOUT_MS`].
+    timeout_ms: Option<u64>,
+}
+
+/// Resolve and validate every declared tool.
+///
+/// Validation is startup work on purpose: a declaration that names an argument
+/// it never receives, or a namespace the naming predicate cannot reparse, should
+/// fail before a turn begins rather than at the model's first call.
+fn resolve_tools(
+    raw: &BTreeMap<String, BTreeMap<String, RawTool>>,
+) -> Result<Vec<ToolDeclaration>, ConfigError> {
+    let mut declarations = Vec::new();
+    for (namespace, tools) in raw {
+        for (tool, declaration) in tools {
+            declarations.push(resolve_tool(namespace, tool, declaration)?);
+        }
+    }
+    // Stable order: the tool array is part of the cached prefix.
+    declarations.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(declarations)
+}
+
+fn resolve_tool(
+    namespace: &str,
+    tool: &str,
+    raw: &RawTool,
+) -> Result<ToolDeclaration, ConfigError> {
+    for (label, part) in [("namespace", namespace), ("tool", tool)] {
+        if part.is_empty()
+            || !part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+            || part.contains(CUSTOM_TOOL_SEPARATOR)
+        {
+            return Err(ConfigError::InvalidTool {
+                tool: custom_tool_name(namespace, tool),
+                reason: format!(
+                    "the {label} `{part}` must be non-empty and use only ASCII letters, digits, \
+                     `-` or `_` (and it may not contain `__`, which separates the name's parts)"
+                ),
+            });
+        }
+    }
+    if raw.command.is_empty() {
+        return Err(ConfigError::InvalidTool {
+            tool: custom_tool_name(namespace, tool),
+            reason: "`command` must not be empty: it is the argv to run".to_owned(),
+        });
+    }
+
+    // The program is the one element that cannot be a placeholder: a call with
+    // no argument would otherwise have nothing to execute.
+    if placeholder(&raw.command[0]).is_some() {
+        return Err(ConfigError::InvalidTool {
+            tool: custom_tool_name(namespace, tool),
+            reason: "the first `command` element is the program and must be a literal, not a \
+                     `{parameter}` placeholder"
+                .to_owned(),
+        });
+    }
+
+    let properties = raw
+        .parameters
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    for element in &raw.command {
+        let Some(name) = placeholder(element) else {
+            continue;
+        };
+        let declared = properties.is_some_and(|properties| properties.contains_key(name));
+        if !declared {
+            return Err(ConfigError::InvalidTool {
+                tool: custom_tool_name(namespace, tool),
+                reason: format!(
+                    "`{{{name}}}` appears in `command` but the parameter schema declares no \
+                     `{name}` under `parameters.properties`"
+                ),
+            });
+        }
+    }
+
+    Ok(ToolDeclaration {
+        name: custom_tool_name(namespace, tool),
+        namespace: namespace.to_owned(),
+        tool: tool.to_owned(),
+        description: raw.description.clone(),
+        command: raw.command.clone(),
+        parameters: raw.parameters.clone(),
+        timeout_ms: raw
+            .timeout_ms
+            .unwrap_or(DEFAULT_CUSTOM_TOOL_TIMEOUT_MS)
+            .clamp(1, MAX_CUSTOM_TOOL_TIMEOUT_MS),
+    })
+}
+
+/// The parameter name an argv element stands for, when the whole element is a
+/// `{name}` placeholder. Anything else is a literal.
+///
+/// Substitution is by **whole argv element** (spec §14): `--path={p}` is not a
+/// placeholder, because the replacement unit is one element and a partial splice
+/// is how argv shapes drift.
+fn placeholder(element: &str) -> Option<&str> {
+    let inner = element.strip_prefix('{')?.strip_suffix('}')?;
+    if inner.is_empty() || inner.contains(['{', '}', ' ']) {
+        return None;
+    }
+    Some(inner)
 }
 
 /// The `[routing]` table (spec §17): the two landing points a cheaper model may
@@ -878,6 +1058,8 @@ pub enum ConfigError {
         vendor: &'static str,
         expected: String,
     },
+    #[error("tool `{tool}`: {reason}")]
+    InvalidTool { tool: String, reason: String },
 }
 
 /// Injected configuration values for one agent's turn loop.

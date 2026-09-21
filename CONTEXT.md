@@ -104,6 +104,12 @@ _Avoid_: iteration、pass
 单个 agent 的一次完整回合：投影 → 调 provider → 权限门 → 执行工具 → 追加事件。
 _Avoid_: step、call
 
+## 工具
+
+**动态工具（CustomTool）**:
+在 `config.toml` 的 `[tools.<命名空间>.<工具>]` 里声明的外部命令，线级名是 `custom__<命名空间>__<工具>`。声明语法的字段就是 provider 收到的声明（JSON Schema 原样），**没有**副作用类别字段，所以 `effect()` 恒为 `Exclusive`；`command` 是 argv 模板，参数按**整个 argv 元素**替换、不经 shell。内建名永不含 `__`，因此「名字含 `__`」⟺「来自配置」是**词法可判定**的。
+_Avoid_: 插件、外部工具、MCP 工具
+
 ## 渲染
 
 **渲染器（Renderer）**:
