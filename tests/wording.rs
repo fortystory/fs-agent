@@ -503,8 +503,16 @@ fn a_provider_finish_reason_reads_in_chinese() {
 fn the_two_renderer_confirmations_read_in_chinese() {
     // The questions the TUI asks itself: an oversized paste, and a multi-line draft
     // `Esc` would throw away. Both default to the safe answer (spec §7).
-    assert_eq!(wording::paste_confirm(120_000), "粘贴 120000 字符？");
-    assert_eq!(wording::clear_draft_confirm(), "清空输入？");
+    // Each carries the keys that answer it: the overlay has room for one line, and a
+    // question without its keys is one the reader has to guess at (spec §9).
+    assert_eq!(
+        wording::paste_confirm(120_000),
+        "粘贴 120000 字符？[y] 粘贴 / [n] 取消"
+    );
+    assert_eq!(
+        wording::clear_draft_confirm(),
+        "清空输入？[y] 清空 / [n] 保留"
+    );
 }
 
 #[test]

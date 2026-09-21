@@ -392,6 +392,18 @@ fn first_notice(rows: &[String]) -> Option<usize> {
     })
 }
 
+/// One row's text between two columns, read from the frame.
+fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
+    let mut text = String::new();
+    let mut x = from;
+    while x < to {
+        let symbol = frame[(x, y)].symbol();
+        text.push_str(symbol);
+        x += symbol.cell_width().max(1);
+    }
+    text
+}
+
 /// The first cell holding `needle`, as `(column, row)`.
 fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
     (0..height).find_map(|y| {
@@ -903,4 +915,182 @@ fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits
     // The model name is the one value with no bare form to fall back on, so it is cut
     // — visibly, with an ellipsis.
     assert_eq!(panel[0], "模型   claude-sonnet-4…");
+}
+
+/// The loop asking about a write, as it would through the console channel.
+fn ask_permission() -> (
+    fs_agent::render::ConsoleRequest,
+    tokio::sync::oneshot::Receiver<fs_agent::render::AnswerChoice>,
+) {
+    use fs_agent::permissions::PermissionRequest;
+    use fs_agent::render::{AnswerChoice, AskRequest, ConsoleRequest, Question};
+    let (tx, rx) = tokio::sync::oneshot::channel::<AnswerChoice>();
+    (
+        ConsoleRequest::Ask(AskRequest {
+            question: Question::Permission(PermissionRequest {
+                request_id: "r-1".to_owned(),
+                tool_call_id: "c-1".to_owned(),
+                tool_name: "write_file".to_owned(),
+                args: serde_json::json!({"path": "a.rs"}),
+                reason: "mode ask".to_owned(),
+            }),
+            reply: tx,
+        }),
+        rx,
+    )
+}
+
+#[test]
+fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
+    use fs_agent::render::RenderEvent;
+
+    let mut state = state();
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+    let (ask, _rx) = ask_permission();
+    state.request(ask);
+
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(text.contains("权限询问：write_file"), "{text}");
+    assert!(text.contains("[y] 允许"), "the keys come with it: {text}");
+
+    let modal = rows
+        .iter()
+        .position(|row| row.contains("权限询问"))
+        .expect("the overlay is on screen");
+    assert!(rows[modal].contains('│'), "inside a box: {:?}", rows[modal]);
+    assert!(
+        rows[modal - 1].contains('┌') && rows[modal + 1].contains('└'),
+        "with borders of its own: {:?} / {:?}",
+        rows[modal - 1],
+        rows[modal + 1]
+    );
+
+    // The box reaches across the seam: only its own two borders are left on the row,
+    // because the shared seam that sits inside it was blanked with the panel behind.
+    let row = modal as u16;
+    let frame = buffer(120, 24, &mut state);
+    let borders: Vec<u16> = (1..119u16)
+        .filter(|x| frame[(*x, row)].symbol() == "│")
+        .collect();
+    assert_eq!(borders.len(), 2, "the box's borders: {borders:?}");
+    assert!(
+        borders[0] < 89 && borders[1] > 89,
+        "and the box reaches across the seam: {borders:?}"
+    );
+}
+
+#[test]
+fn every_question_kind_takes_the_overlay() {
+    use fs_agent::render::{AskRequest, ConsoleRequest, Key, Question};
+    use std::path::PathBuf;
+
+    // A plan-mode conflict, which the loop asks about too.
+    let mut plan = state();
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    plan.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::PlanConflict(PathBuf::from("/tmp/PLAN.md")),
+        reply: tx,
+    }));
+    let text = screen(120, 24, &mut plan).join("\n");
+    assert!(text.contains("/tmp/PLAN.md 已存在"), "{text}");
+    assert!(text.contains("[o] 覆盖"), "with its keys: {text}");
+
+    // An oversized paste.
+    let mut paste = state();
+    paste.paste(&"x".repeat(100_001));
+    let text = screen(120, 24, &mut paste).join("\n");
+    assert!(text.contains("粘贴 100001 字符？"), "{text}");
+    assert!(text.contains("[y] 粘贴"), "with its keys: {text}");
+
+    // And `Esc` on a multi-line draft.
+    let mut draft = state();
+    draft.paste("第一行\n第二行");
+    draft.key(Key::Esc);
+    let text = screen(120, 24, &mut draft).join("\n");
+    assert!(text.contains("清空输入？"), "{text}");
+    assert!(text.contains("[y] 清空"), "with its keys: {text}");
+}
+
+#[test]
+fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
+    use fs_agent::permissions::Answer;
+    use fs_agent::render::{AnswerChoice, ConsoleRequest, Key};
+
+    let mut state = state();
+    let (tx, mut submitted) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply: tx });
+    let (ask, mut asked) = ask_permission();
+    state.request(ask);
+
+    // `x` is not one of the answers, so the safe one is taken — and the draft, which
+    // the question is covering, never sees the key.
+    state.key(Key::Char('x'));
+    assert_eq!(
+        asked.try_recv().unwrap(),
+        AnswerChoice::Permission(Answer::Deny)
+    );
+    state.key(Key::Enter);
+    assert_eq!(
+        submitted.try_recv().unwrap(),
+        None,
+        "the draft stayed empty"
+    );
+}
+
+#[test]
+fn the_wheel_is_ignored_while_a_question_is_up() {
+    use fs_agent::render::{Key, RenderEvent};
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    let mut state = state();
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::PageUp);
+    let before = first_notice(&screen(120, 24, &mut state));
+
+    let (ask, _rx) = ask_permission();
+    state.request(ask);
+    let _ = screen(120, 24, &mut state);
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    // The modal owns the pointer: the viewport is exactly where it was.
+    assert_eq!(first_notice(&screen(120, 24, &mut state)), before);
+}
+
+#[test]
+fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
+    use fs_agent::render::Key;
+
+    // A **short** question: the room it leaves on either side is where the panel's own
+    // label sits, so anything left of the background would show up beside the words.
+    let mut state = state();
+    state.paste("第一行\n第二行");
+    state.key(Key::Esc);
+    let rows = screen(120, 24, &mut state);
+    let modal = rows
+        .iter()
+        .position(|row| row.contains("清空输入？"))
+        .expect("the overlay is on screen");
+
+    let row = modal as u16;
+    let frame = buffer(120, 24, &mut state);
+    let borders: Vec<u16> = (1..119u16)
+        .filter(|x| frame[(*x, row)].symbol() == "│")
+        .collect();
+    assert_eq!(borders.len(), 2, "the box's borders: {borders:?}");
+    assert_eq!(
+        cells(&frame, row, borders[0] + 1, borders[1]).trim(),
+        "清空输入？[y] 清空 / [n] 保留",
+        "the interior holds the question and nothing that was behind it"
+    );
 }

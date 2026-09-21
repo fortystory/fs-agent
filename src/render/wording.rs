@@ -486,14 +486,24 @@ pub fn cache_pair(cached: u64, miss: u64) -> String {
 }
 
 /// The question an oversized paste asks before it is taken (spec §7).
+///
+/// Every question carries the keys that answer it, the way [`PERMISSION_CHOICES`] and
+/// [`PLAN_CHOICES`] do: the overlay has room for one line, and a question without its
+/// keys is a question the reader has to guess at.
 pub fn paste_confirm(chars: usize) -> String {
-    format!("粘贴 {chars} 字符？")
+    format!("粘贴 {chars} 字符？{PASTE_CHOICES}")
 }
 
+/// The keys that answer the oversized-paste question.
+const PASTE_CHOICES: &str = "[y] 粘贴 / [n] 取消";
+
 /// The question `Esc` asks before it throws a multi-line draft away.
-pub fn clear_draft_confirm() -> &'static str {
-    "清空输入？"
+pub fn clear_draft_confirm() -> String {
+    format!("清空输入？{CLEAR_CHOICES}")
 }
+
+/// The keys that answer the clear-draft question.
+const CLEAR_CHOICES: &str = "[y] 清空 / [n] 保留";
 
 /// The indicator that says how much arrived while the viewport was scrolled away,
 /// and that the block is the way back (spec §4).

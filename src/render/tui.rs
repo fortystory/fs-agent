@@ -33,7 +33,8 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block as WidgetBlock, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Block as WidgetBlock, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState,
 };
 use tokio::sync::broadcast;
 
@@ -44,7 +45,7 @@ use super::editor::{self, Input};
 use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
 use super::layout;
-use super::pane::Pane;
+use super::pane::{self, Pane};
 use super::panel::Panel;
 use super::severity::Severity;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
@@ -67,6 +68,10 @@ const TICK: Duration = Duration::from_millis(120);
 
 /// A paste larger than this asks before it is taken (spec §7).
 const PASTE_CONFIRM_CHARS: usize = 100_000;
+
+/// The widest the question overlay ever gets. Wider than this and the eye has to
+/// travel: a permission question is one sentence, not a page (spec §9).
+const MODAL_MAX_WIDTH: u16 = 72;
 
 /// How many queued render events one frame absorbs. A bounded drain keeps a
 /// firehose from starving the keyboard for a whole frame's worth of work.
@@ -396,7 +401,7 @@ impl Pending {
                 ..
             } => wording::plan_conflict_prompt(&path.display().to_string()),
             Pending::Paste { chars, .. } => wording::paste_confirm(*chars),
-            Pending::ClearDraft => wording::clear_draft_confirm().to_owned(),
+            Pending::ClearDraft => wording::clear_draft_confirm(),
         }
     }
 }
@@ -536,6 +541,11 @@ impl TuiState {
     /// other click is ignored — the terminal's own selection is the user's, and
     /// nothing here takes focus (spec §4).
     pub fn mouse(&mut self, mouse: MouseEvent) {
+        if self.pending.is_some() {
+            // A question owns the pointer as well as the keyboard: the wheel must not
+            // scroll the transcript behind it (spec §9).
+            return;
+        }
         self.dirty = true;
         match mouse.kind {
             MouseEventKind::ScrollUp => self.pane.wheel(true),
@@ -739,6 +749,55 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     draw_header(frame, &panes, state);
     draw_transcript(frame, &panes, state);
     draw_bottom(frame, &panes, state);
+    // Last, so it is on top of the pane it is asking about.
+    draw_modal(frame, &panes, state);
+}
+
+/// The overlay a question is asked in (spec §9).
+///
+/// It sits over the middle block — transcript and panel both — so the question cannot
+/// be outrun by new output, and it is **not** part of the transcript: the stream still
+/// carries the `PermissionAsked` block for anyone reading back. It owns the pointer
+/// while it is up, so the "back to bottom" rectangle is dropped.
+fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let Some(pending) = state.pending.as_ref() else {
+        return;
+    };
+    let width = panes.middle.width.saturating_sub(4).min(MODAL_MAX_WIDTH);
+    let inner = width.saturating_sub(2) as usize;
+    if inner == 0 {
+        return;
+    }
+    // A long question wraps onto another line rather than losing its keys; the
+    // overlay still leaves the middle block's own borders showing.
+    let mut lines = pane::wrap_text(pending.prompt().trim(), inner);
+    let room = panes.middle.height.saturating_sub(2).max(1) as usize;
+    lines.truncate(room);
+    let height = lines.len() as u16 + 2;
+    if height > panes.middle.height {
+        return;
+    }
+    let area = Rect::new(
+        panes.middle.x + (panes.middle.width - width) / 2,
+        panes.middle.y + (panes.middle.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        WidgetBlock::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center),
+        Rect::new(area.x + 1, area.y + 1, width - 2, height - 2),
+    );
+    // The overlay covers the indicator, so a click where it used to be must not act.
+    state.indicator = None;
 }
 
 /// Everything a terminal below the minimum gets: one centred sentence saying so,
@@ -928,32 +987,22 @@ fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
 /// do.
 fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     draw_border(frame, panes.bottom);
-    match &state.pending {
-        // A question takes the whole input area: while it is up, the draft is not
-        // being typed into, and ticket 14 moves this into a modal overlay.
-        Some(pending) => frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                truncate_columns(&pending.prompt(), panes.input.width as usize),
-                Style::default().fg(Color::Yellow),
-            ))),
-            panes.input,
-        ),
-        None => {
-            let (rows, cursor) = state
-                .editor
-                .view(layout::input_text_width(frame.area()), panes.input.height);
-            frame.render_widget(
-                Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
-                panes.input,
-            );
-            // The cursor is placed from the rows that were just drawn — never from
-            // state kept between frames, which is what let the inline viewport's
-            // cursor wander (ADR 0002).
-            frame.set_cursor_position((
-                (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
-                panes.input.y + cursor.row,
-            ));
-        }
+    let (rows, cursor) = state
+        .editor
+        .view(layout::input_text_width(frame.area()), panes.input.height);
+    frame.render_widget(
+        Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
+        panes.input,
+    );
+    // The draft stays visible under a question — it is what the user was writing — but
+    // the cursor goes: the keyboard is answering, not editing (spec §9). The cursor is
+    // placed from the rows just drawn, never from state kept between frames, which is
+    // what let the inline viewport's cursor wander (ADR 0002).
+    if state.pending.is_none() {
+        frame.set_cursor_position((
+            (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
+            panes.input.y + cursor.row,
+        ));
     }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
