@@ -672,6 +672,16 @@ fn the_panel_names_the_model_and_shows_a_zero_and_a_dash_before_any_call() {
         rows[9]
     );
     assert!(
+        rows[10].contains("输入") && rows[10].contains('0'),
+        "nothing in: {:?}",
+        rows[10]
+    );
+    assert!(
+        rows[12].contains("0 / 0"),
+        "and a cache that has never been consulted: {:?}",
+        rows[12]
+    );
+    assert!(
         !rows[6].contains("费用") && !rows.join("\n").contains('$'),
         "money is not shown at all (spec §8)"
     );
@@ -871,4 +881,26 @@ fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
             "row {index} fills the panel: {row:?}"
         );
     }
+}
+
+#[test]
+fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits() {
+    let mut state = state();
+    // Seven-digit counts: `1,235,567 / 100,000` needs 19 of the 16 columns the panel
+    // has at 80 wide, so the separators go and the digits stay.
+    state.apply(usage(1, 1_234_567, 1_000, 0, 0));
+    let panel = panel_text(80, 24, &mut state);
+    assert_eq!(
+        panel[2], "token  1235567 / 100000",
+        "spend without separators"
+    );
+    assert_eq!(
+        // `上下文` fills the label column exactly, so only the separator follows it.
+        panel[1],
+        "上下文 1234567 / 200000",
+        "and the window without them"
+    );
+    // The model name is the one value with no bare form to fall back on, so it is cut
+    // — visibly, with an ellipsis.
+    assert_eq!(panel[0], "模型   claude-sonnet-4…");
 }

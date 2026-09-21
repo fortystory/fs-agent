@@ -39,6 +39,25 @@ Status: ready-for-agent
 
 **三处如实说明**：面板不显示**模式**（票 05 的 §4 把 `mode` 写进了纯函数的入参，但快照里 header 才是模式的家，面板没有它）；标签用 DarkGray（属 chrome，与边框/提示行同色，不新增颜色语义）；`thousands` 放在措辞层（数字的呈现方式是人面向文本的一部分，且三个配对函数都用它）。
 
-**基线**：`cargo test` **528 passed / 0 failed**（519 → +6 布局 +1 措辞 +... 另有两条在既有文件内新增）；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移；pty 启动检查 3/3 GREEN。
+**基线**：`cargo test` **529 passed / 0 failed**（519 → +9 布局 +1 措辞）；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移；pty 启动检查 3/3 GREEN。
 
 **变异检验**：把 `cached` 加进合计、分子取第一次而不是最近一次、百分比无条件显示、模型名改成右对齐、放不下的缓存行照画 —— 五处全部被抓到（其中百分比那条第一次**没抓到**，因为我原先只断言了前缀，截断后的 `9,000 / 200,000…` 仍然包含它；改成逐行精确比对后抓到）。
+
+**评审收口**（`/code-review` 双轴，2026-09-21）：
+
+Standards 轴：
+
+- **面板自己造了一本账**：`input`/`output`/`cached`/`miss` 四个累加字段是 `Usage::accumulate` / `Usage::total_tokens` / `events::total_usage` 的**第二份实现**，而票 05 明写「口径必须与 `events::total_usage` 逐字一致……渲染器自己累加时不许换算法」。改成 `Panel` 只持有一个 `Usage` 总账，`observe` 调 `accumulate`，`lines` 读 `total_tokens()` —— 同一规则现在只有一处实现。
+- `LABEL_COLUMNS = 6` 是写死的标签列宽，标签一旦变长就会被 `fit` 悄悄截断。改成 `label_columns()` **由最宽标签推出**（同一份标签常量），列宽与词表不会再脱节。
+- `wording::context_pair` 与 `context_pair_percent` 是两个函数，而票 05 的清单只有**三个**配对函数、且要求 `context_pair` 自己产出 `…（6%）`。合并回一个 `context_pair(used, usable, with_share)`，`with_share` 就是「值区放得下百分比」这个判断。
+- `format!("{} / {}", thousands(a), thousands(b))` 在三处重复 —— 抽成一个私有 `pair()`。
+- `draw_panel` 只是个三行转发 —— 内联进 `draw_transcript`。
+- 模块文档说明「面板是否存在由几何决定、这里管的是画出来的面板内部」，与 `layout.rs` 的「面板的命运在这里决定」不再读起来互相矛盾。
+
+Spec 轴：
+
+- **数值行也在被截断**：`fit` 对所有值都套 `…`，于是 80 列下七位计数会渲染成 `1,234,567 / 200…`，读起来像个更小的数。票面只要求截**模型名**，spec §2.4 要求窄栏「丢百分比、保留数值」。现在 `fit` 分两步：**先丢千分位**（装饰），仍放不下才**带省略号**截断（可见地短，而不是悄悄地错）。七位计数在 80 列下保住全部数字。
+- 「provider 不返回 usage」与缓存 `0 / 0` 没有断言 —— 补进「首回合之前」那条用例。
+- Comments 的用例计数写错（写成「+6 布局 +1 措辞 +...」），已改成实际数字。
+
+**本轮变异检验**：改 `total_tokens()` 把 `cached` 加进去、分子取第一次而非最近一次、拿掉 `fit` 的先丢千分位那一步 —— 三处全部被抓到。

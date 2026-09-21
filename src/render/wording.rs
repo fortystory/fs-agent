@@ -444,39 +444,45 @@ pub fn thousands(value: u64) -> String {
     out
 }
 
+/// Two counts in one field: `12,345 / 100,000`.
+fn pair(left: u64, right: u64) -> String {
+    format!("{} / {}", thousands(left), thousands(right))
+}
+
 /// What the session has spent, against its allowance when it has one.
 ///
 /// A session with no cap shows the spend alone: `12,345 / —` would read as a cap
 /// that is missing rather than one that was never set (spec §8).
 pub fn token_pair(used: u64, limit: Option<u64>) -> String {
     match limit {
-        Some(limit) => format!("{} / {}", thousands(used), thousands(limit)),
+        Some(limit) => pair(used, limit),
         None => thousands(used),
     }
 }
 
-/// How full the model's window is, or [`PANEL_UNKNOWN`] before a call has reported
-/// its input tokens.
-pub fn context_pair(used: Option<u64>, usable: u64) -> String {
-    match used {
-        Some(used) => format!("{} / {}", thousands(used), thousands(usable)),
-        None => PANEL_UNKNOWN.to_owned(),
+/// How full the model's window is: `12,345 / 200,000（6%）`, or [`PANEL_UNKNOWN`]
+/// before a call has reported its input tokens.
+///
+/// `with_share` is the panel saying the value column has room for the percentage.
+/// It is a parameter rather than a second function because the pair and its share
+/// are one field: `12,345 / 200,000（6%）` is what it says, and dropping the tail is
+/// how it degrades.
+pub fn context_pair(used: Option<u64>, usable: u64, with_share: bool) -> String {
+    let Some(used) = used else {
+        return PANEL_UNKNOWN.to_owned();
+    };
+    let pair = pair(used, usable);
+    if with_share {
+        format!("{}（{}%）", pair, used.saturating_mul(100) / usable.max(1))
+    } else {
+        pair
     }
-}
-
-/// The same, with the share of the window the last call took.
-pub fn context_pair_percent(used: u64, usable: u64) -> String {
-    format!(
-        "{}（{}%）",
-        context_pair(Some(used), usable),
-        used.saturating_mul(100) / usable.max(1)
-    )
 }
 
 /// The cache split of one call's input: what was served from the prefix cache and
 /// what was not.
 pub fn cache_pair(cached: u64, miss: u64) -> String {
-    format!("{} / {}", thousands(cached), thousands(miss))
+    pair(cached, miss)
 }
 
 /// The question an oversized paste asks before it is taken (spec §7).

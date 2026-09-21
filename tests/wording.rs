@@ -521,13 +521,17 @@ fn the_panel_texts_read_like_the_prototype() {
     assert_eq!(wording::token_pair(12_345, None), "12,345");
 
     // Before a call has reported its input, the window is unknown — not zero.
-    assert_eq!(wording::context_pair(None, 200_000), wording::PANEL_UNKNOWN);
     assert_eq!(
-        wording::context_pair(Some(12_345), 200_000),
-        "12,345 / 200,000"
+        wording::context_pair(None, 200_000, true),
+        wording::PANEL_UNKNOWN
     );
     assert_eq!(
-        wording::context_pair_percent(12_345, 200_000),
+        wording::context_pair(Some(12_345), 200_000, false),
+        "12,345 / 200,000"
+    );
+    // The share is part of the same field, and dropping it is how that field degrades.
+    assert_eq!(
+        wording::context_pair(Some(12_345), 200_000, true),
         "12,345 / 200,000（6%）"
     );
     assert_eq!(wording::cache_pair(9_000, 3_345), "9,000 / 3,345");

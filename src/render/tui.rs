@@ -830,7 +830,11 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     draw_scrollbar(frame, panes.scrollbar(), &state.pane);
     draw_indicator(frame, text_area, state);
     if let Some(panel) = panes.panel {
-        draw_panel(frame, panel, state);
+        // The panel's numbers, beside the transcript.
+        frame.render_widget(
+            Paragraph::new(state.panel.lines(&state.facts, panel)),
+            panel,
+        );
     }
     if let Some(seam) = panes.seam() {
         // The two panes share one column rather than each drawing a border. Its
@@ -900,11 +904,6 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
         rect,
     );
     state.indicator = Some(rect);
-}
-
-/// The information panel: the session's numbers beside the transcript.
-fn draw_panel(frame: &mut ratatui::Frame, area: Rect, state: &TuiState) {
-    frame.render_widget(Paragraph::new(state.panel.lines(&state.facts, area)), area);
 }
 
 /// The shared seam between the conversation pane and the panel.
