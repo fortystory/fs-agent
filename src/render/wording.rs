@@ -361,31 +361,81 @@ pub fn status_word(busy: bool) -> &'static str {
     }
 }
 
-/// The live key hints, in the order they are shown. Key names stay literal; only
-/// the action is Chinese.
-const KEY_HINTS: [&str; 4] = ["enter 发送", "esc 取消", "shift+tab 计划", "ctrl-c 退出"];
+/// The live key hints, in the order they are shown: the most used first, the way
+/// out last. Key names stay literal; only the action is Chinese.
+const KEY_HINTS: [&str; 6] = [
+    "enter 发送",
+    "ctrl-j 换行",
+    "esc 取消",
+    "shift+tab 计划",
+    "PgUp/PgDn 滚动",
+    "ctrl-c 退出",
+];
+
+/// The hint that is never dropped: a terminal where the way out cannot be found
+/// is worse than one that shows fewer hints.
+const EXIT_HINT: &str = "ctrl-c 退出";
 
 /// The status line for a terminal `width` **columns** wide.
 ///
-/// Width-sensitive because a fixed line was hard-truncated by the rendering
-/// library, so `ctrl-c 退出` simply never appeared on a narrow terminal. Hints are
-/// dropped from the right while they do not fit; the state word is the last thing
-/// to go, and it is returned even when it alone overflows.
+/// The hints fill from the left with [`EXIT_HINT`] reserved at their end, and the
+/// state word is placed in front of them only if it still fits — so a narrow
+/// terminal keeps its way out *and* the hints that explain the keys, and gives up
+/// `就绪` instead of `ctrl-j 换行`. The measured ladder is three items at 40
+/// columns, four at 60, five at 80 and six at 120 (spec §10).
 pub fn status_line(busy: bool, width: u16) -> String {
-    let mut line = status_word(busy).to_owned();
-    if line.as_str().cell_width() > width {
-        return line;
-    }
-    for hint in KEY_HINTS {
-        let mut candidate = line.clone();
-        candidate.push_str(" · ");
-        candidate.push_str(hint);
-        if candidate.as_str().cell_width() > width {
+    let exit = EXIT_HINT.cell_width();
+    let mut hints = String::new();
+    for hint in &KEY_HINTS[..KEY_HINTS.len() - 1] {
+        let candidate = if hints.is_empty() {
+            (*hint).to_owned()
+        } else {
+            format!("{hints} · {hint}")
+        };
+        if candidate.cell_width() + " · ".cell_width() + exit > width {
             break;
         }
-        line = candidate;
+        hints = candidate;
     }
-    line
+    let run = if hints.is_empty() {
+        EXIT_HINT.to_owned()
+    } else {
+        format!("{hints} · {EXIT_HINT}")
+    };
+    let with_state = format!("{} · {run}", status_word(busy));
+    if with_state.cell_width() <= width {
+        with_state
+    } else {
+        run
+    }
+}
+
+/// Everything a terminal smaller than the minimum shows, so the reason is a
+/// sentence rather than an empty screen (spec §2).
+pub fn too_small(width: u16, height: u16) -> String {
+    format!("终端太小：至少 {width}×{height}")
+}
+
+/// The header's identity field: the program and the version it was built from.
+pub fn identity() -> String {
+    format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
+/// The header's mode field.
+pub fn mode_field(mode: Mode) -> String {
+    format!("模式 {}", mode_label(mode))
+}
+
+/// The header's clock, at the minute: a second hand would redraw the frame sixty
+/// times a minute for no one (spec §10).
+pub fn clock(now: &chrono::DateTime<chrono::Local>) -> String {
+    now.format("%Y-%m-%d %H:%M").to_string()
+}
+
+/// The clock for a header with only one line, where the date is the first thing to
+/// go (spec §2).
+pub fn clock_short(now: &chrono::DateTime<chrono::Local>) -> String {
+    now.format("%H:%M").to_string()
 }
 
 /// The `Mode` a session runs under, named in Chinese.

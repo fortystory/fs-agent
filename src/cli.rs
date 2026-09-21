@@ -34,7 +34,7 @@ use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::provider::Message;
 use crate::render::{
     self, ConsoleAsker, ConsoleEvents, ConsoleHandle, FrontEndEvent, PlainOptions, RenderSinks,
-    Renderer, TuiOptions,
+    Renderer, SessionFacts, TuiOptions,
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
@@ -296,7 +296,26 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let (console, port, mut events) = render::console();
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
-        Renderer::tui(TuiOptions { port })
+        // The header and the panel display these; none of them rides the event
+        // stream, and the one value that does change at runtime — the mode — is
+        // deliberately absent (the stream carries both of its transitions).
+        // The window is the model's input budget: an unregistered model is a
+        // startup error, so the capability table answers here.
+        let caps = match caps_for(&model) {
+            Ok(caps) => caps,
+            Err(error) => {
+                eprintln!("fs-agent: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let facts = SessionFacts {
+            session_id: stored.id.as_str().to_owned(),
+            cwd: stored.dir.display().to_string(),
+            model: model.clone(),
+            context_window: crate::context::usable_input(&caps),
+            budget_limit: session_config.budget.limit,
+        };
+        Renderer::tui(TuiOptions { port, facts })
     } else {
         // The plain front end reads stdin; it is line-buffered, so there is no
         // raw mode and no key events.

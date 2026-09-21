@@ -1,51 +1,49 @@
-//! The ratatui interface (spec §19).
+//! The ratatui interface (spec §1–§2, ADR 0002).
 //!
 //! Three properties are structural, not stylistic:
 //!
-//! * **Inline viewport.** The terminal is never switched to the alternate
-//!   screen, so the transcript lands in the real scrollback and stays scrollable
-//!   and copyable. Finalized blocks are pushed above the live region with
-//!   `Terminal::insert_before`; the live region only ever shows the streaming
-//!   tail, the input line and the status line.
+//! * **Alternate screen, four panes.** The TUI draws a fullscreen header, a
+//!   conversation pane, an information panel and a bottom block holding the input
+//!   and the hints. The transcript lives in the pane's own buffer rather than in
+//!   the terminal's scrollback — which is what removed the inline viewport's
+//!   drifting cursor, since in fullscreen the pane origin is always `(0, 0)`.
 //! * **The renderer owns the keyboard.** It is the only task reading terminal
 //!   events, and it answers the loop's requests ([`ConsoleRequest`]) over the
 //!   injected console channel. That is what keeps input and output from fighting.
 //! * **`select!` over broadcast / tick / keys.** Render events, a redraw tick and
 //!   keyboard input are three independent sources; `select!` is how they are
-//!   merged without a second channel whose ordering would be undefined.
+//!   merged without a second channel whose ordering would be undefined. What is
+//!   already queued is drained before the frame is drawn, so a bursting provider
+//!   costs frames rather than events.
 
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::Local;
 use futures::StreamExt;
-use ratatui::buffer::{Buffer, CellWidth};
+use ratatui::buffer::CellWidth;
 use ratatui::crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
-use ratatui::{TerminalOptions, Viewport};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Paragraph};
 use tokio::sync::broadcast;
 
-use crate::events::{Role, StopReason};
+use crate::events::{ContextSource, HistoryReason, Role, StopReason};
+use crate::permissions::Mode;
 
 use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
+use super::layout;
 use super::severity::Severity;
 use super::transcript::{summarize_args, truncate, Block, ToolBlock, Transcript};
 use super::wording::{self, speaker_label};
 use super::{Render, RenderEvent};
-
-/// How many rows the live region occupies: the streaming tail, the input line and
-/// the status line.
-const LIVE_HEIGHT: u16 = 8;
-
-/// Rows of streaming text the live region keeps.
-const LIVE_ROWS: usize = LIVE_HEIGHT as usize - 2;
 
 /// How much streamed text is retained before it is trimmed to a tail. The
 /// transcript does not need the whole message live: the completed `Message`
@@ -55,8 +53,14 @@ const LIVE_BUFFER: usize = 4_000;
 /// How much of one tool result the TUI shows before eliding.
 const TOOL_PREVIEW: usize = 4_000;
 
-/// How often the live region is redrawn even without an event.
+/// How often the frame is redrawn even without an event. The tick is what keeps
+/// the header's clock honest, and what gives a pending question a chance to
+/// appear while nothing else is happening.
 const TICK: Duration = Duration::from_millis(120);
+
+/// How many queued render events one frame absorbs. A bounded drain keeps a
+/// firehose from starving the keyboard for a whole frame's worth of work.
+const DRAIN_LIMIT: usize = 4_096;
 
 /// The keys the TUI acts on.
 ///
@@ -124,9 +128,32 @@ fn map_key(key: KeyEvent) -> Option<Key> {
     }
 }
 
-/// The TUI's injected values: the front end's end of the console channel.
+/// The session values the header and the panel cannot read off the event stream
+/// (spec §8).
+///
+/// Everything here is known at assembly time. Anything that changes mid-session —
+/// the mode — is deliberately **not** here: an injected copy would go stale the
+/// first time the user pressed Shift+Tab, and the stream already carries both
+/// transitions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionFacts {
+    /// The session this terminal is showing.
+    pub session_id: String,
+    /// The directory the session is bound to.
+    pub cwd: String,
+    /// The model the session answers with.
+    pub model: String,
+    /// The input budget of that model's window, output reserve already removed.
+    pub context_window: u64,
+    /// The session's cumulative token allowance, when it has one.
+    pub budget_limit: Option<u64>,
+}
+
+/// The TUI's injected values: the front end's end of the console channel, plus
+/// the facts the header and the panel display.
 pub struct TuiOptions {
     pub port: ConsolePort,
+    pub facts: SessionFacts,
 }
 
 /// The TUI renderer.
@@ -140,95 +167,132 @@ impl Tui {
     }
 
     pub async fn run(self, mut receiver: broadcast::Receiver<RenderEvent>) {
-        let TuiOptions { mut port } = self.options;
-        let mut state = TuiState::new();
-        // Park the cursor on the last row **before** ratatui reserves the inline
-        // viewport: the reservation is anchored at the cursor, so a viewport
-        // reserved at the top grows *down* the screen as scrollback is inserted
-        // and drags the input line — and the cursor sitting on it — down with it,
-        // until the input and status walk off the bottom. Anchoring at the last
-        // row keeps the live region pinned there instead. Moving the cursor does
-        // not touch what is on screen; reserving the viewport then scrolls it up.
-        if let Ok((_, rows)) = crossterm::terminal::size() {
-            let _ = execute!(
-                std::io::stdout(),
-                crossterm::cursor::MoveTo(0, rows.saturating_sub(1))
-            );
-        }
-        let mut terminal = ratatui::init_with_options(TerminalOptions {
-            viewport: Viewport::Inline(LIVE_HEIGHT),
-        });
+        let TuiOptions { mut port, facts } = self.options;
+        let mut state = TuiState::new(facts);
+
+        // The alternate screen, raw mode, and a panic hook that restores them.
+        // Mouse reporting and bracketed paste are ours: `ratatui::init` does not
+        // touch either (spec §1).
+        let mut terminal = ratatui::init();
+        let modes = TerminalModes::enter();
         let mut keys = EventStream::new();
         let mut tick = tokio::time::interval(TICK);
         // The first tick fires immediately; soak it so the first frame is drawn
         // from state rather than from an empty buffer.
         tick.tick().await;
+        state.refresh_clock();
 
         loop {
+            let mut closed = false;
             tokio::select! {
                 received = receiver.recv() => match received {
                     Ok(event) => state.apply(event),
                     Err(broadcast::error::RecvError::Lagged(dropped)) => {
                         state.apply(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Closed) => closed = true,
                 },
-                maybe_key = keys.next() => {
-                    if let Some(Ok(CtEvent::Key(key))) = maybe_key {
+                maybe_event = keys.next() => match maybe_event {
+                    Some(Ok(CtEvent::Key(key))) => {
                         if key.kind == KeyEventKind::Press {
                             if let Some(key) = map_key(key) {
                                 state.key(key);
                             }
                         }
                     }
-                }
+                    Some(Ok(CtEvent::Paste(text))) => state.paste(&text),
+                    Some(Ok(CtEvent::Resize(..))) => state.mark_dirty(),
+                    _ => {}
+                },
                 request = port.recv() => match request {
                     Some(request) => state.request(request),
-                    None => break,
+                    None => closed = true,
                 },
-                _ = tick.tick() => {}
+                _ = tick.tick() => state.refresh_clock(),
+            }
+
+            // Whatever is already queued joins this frame. A provider that bursts
+            // a thousand deltas between two frames costs one frame instead of a
+            // thousand, and still loses nothing (spec §11).
+            let mut drained = 0usize;
+            while drained < DRAIN_LIMIT {
+                match receiver.try_recv() {
+                    Ok(event) => state.apply(event),
+                    Err(broadcast::error::TryRecvError::Lagged(dropped)) => {
+                        state.apply(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
+                    }
+                    Err(broadcast::error::TryRecvError::Empty) => break,
+                    Err(broadcast::error::TryRecvError::Closed) => {
+                        closed = true;
+                        break;
+                    }
+                }
+                drained += 1;
+            }
+            if closed {
+                break;
             }
 
             for event in state.take_events() {
                 port.emit(event);
             }
-            // `insert_before` lays its scratch buffer out at the **last known**
-            // viewport width; only `draw` refreshes it. Inserting first, as this
-            // loop does, would therefore render a line at the width from before a
-            // resize — and the terminal soft-wraps a line wider than it is,
-            // scrambling the inline viewport. Pick up the size before inserting.
-            let _ = terminal.autoresize();
-            // One frame, not two. The scrollback insert and the live redraw are
-            // separate writes, and a fast terminal happily displays the state
-            // between them: the inserted line caught half-drawn, its characters
-            // scattered across the row ("平铺"). A synchronized update (DECSET
-            // 2026) shows only the completed frame; a terminal without it ignores
-            // the pair.
-            let mut frame_out = std::io::stdout();
-            let _ = execute!(frame_out, BeginSynchronizedUpdate);
-            // The inserts walk their text cell by cell, and a visible cursor
-            // rides that write head — it looks like it is hunting along the
-            // output instead of sitting in the input line. Hide it for the
-            // frame; `draw` shows it again at the input position.
-            let _ = terminal.hide_cursor();
-            for block in state.take_ready() {
-                let lines = render_block(&block);
-                if lines.is_empty() {
-                    continue;
-                }
-                let height = lines.len().min(u16::MAX as usize) as u16;
-                let _ = terminal.insert_before(height, |buf| paint_scrollback(&lines, buf));
+            if state.is_dirty() {
+                // One frame in one write region. The synchronized update (DECSET
+                // 2026) wraps the buffer diff alone — reading the keyboard has no
+                // reason to be inside it — and a terminal without the pair simply
+                // ignores it.
+                let mut frame_out = std::io::stdout();
+                let _ = execute!(frame_out, BeginSynchronizedUpdate);
+                let _ = terminal.draw(|frame| draw_frame(frame, &state));
+                let _ = execute!(frame_out, EndSynchronizedUpdate);
+                state.mark_clean();
             }
-            let _ = terminal.draw(|frame| draw_live(frame, &state));
-            let _ = execute!(frame_out, EndSynchronizedUpdate);
             if state.should_quit() {
                 break;
             }
         }
 
-        // The alternate screen was never entered, but raw mode still has to go.
+        drop(modes);
         ratatui::restore();
     }
+}
+
+/// Mouse reporting and bracketed paste: enabled on the way in, disabled on the way
+/// out.
+///
+/// `ratatui::init` handles raw mode and the alternate screen only — its
+/// `TerminalOptions` has no mouse switch at all — so these two are ours to undo,
+/// on the normal path and on the panic path alike. Leaving them on would keep the
+/// terminal from selecting text after fs-agent exited.
+struct TerminalModes;
+
+impl TerminalModes {
+    fn enter() -> Self {
+        let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+        // `init` installed a hook that restores raw mode and the alternate
+        // screen; wrap it so a panic also gives the mouse and the paste mode back
+        // before it runs.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            disable_terminal_modes();
+            previous(info);
+        }));
+        Self
+    }
+}
+
+impl Drop for TerminalModes {
+    fn drop(&mut self) {
+        disable_terminal_modes();
+    }
+}
+
+fn disable_terminal_modes() {
+    let _ = execute!(
+        std::io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste
+    );
 }
 
 #[async_trait]
@@ -241,11 +305,24 @@ impl Render for Tui {
 /// The display-ready state, split from the terminal so it can be tested without
 /// one.
 pub struct TuiState {
+    /// What the header and the panel display, injected at assembly (spec §8).
+    facts: SessionFacts,
+    /// The mode the session is in. Seeded from the assembly-time default and kept
+    /// current from the stream, because both transitions ride it: entering plan
+    /// mode is a context injection and leaving it is a history supersession.
+    mode: Mode,
+    /// The event-to-block merger the plain renderer shares.
     transcript: Transcript,
-    /// Completed blocks waiting to be pushed into scrollback.
-    ready: Vec<Block>,
+    /// The conversation pane's content: every completed block, already rendered to
+    /// lines. The pane owns this rather than the terminal's scrollback.
+    source: Vec<Line<'static>>,
     /// The streaming tail of the current message.
     live: String,
+    /// The header's clock, kept so a tick can tell whether the frame it would draw
+    /// is any different from the one already on screen.
+    clock: chrono::DateTime<Local>,
+    /// Whether anything has changed since the last frame was drawn.
+    dirty: bool,
     /// What the user has typed.
     input: String,
     /// The cursor in `input`, as a **character** index (never a byte offset:
@@ -276,11 +353,15 @@ struct Pending {
 }
 
 impl TuiState {
-    pub fn new() -> Self {
+    pub fn new(facts: SessionFacts) -> Self {
         Self {
+            facts,
+            mode: Mode::Ask,
             transcript: Transcript::new(),
-            ready: Vec::new(),
+            source: Vec::new(),
             live: String::new(),
+            clock: Local::now(),
+            dirty: true,
             input: String::new(),
             cursor: 0,
             history: Vec::new(),
@@ -294,13 +375,48 @@ impl TuiState {
         }
     }
 
+    /// Whether anything has changed since the last frame was drawn.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
+    }
+
+    /// Re-read the wall clock. Only a new minute is worth a frame (spec §10).
+    pub fn refresh_clock(&mut self) {
+        let now = Local::now();
+        if wording::clock(&now) != wording::clock(&self.clock) {
+            self.clock = now;
+            self.dirty = true;
+        }
+    }
+
+    /// Bracketed paste arrives as text, not as keys.
+    ///
+    /// Normalising `\r\n`, filtering control characters and asking before an
+    /// oversized paste are ticket 12's; inserting the text as if typed is the
+    /// least this can do, and it already beats the terminal splitting a paste
+    /// into keys — where the first newline submitted the prompt.
+    pub fn paste(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.key(Key::Char(ch));
+        }
+    }
+
     /// Feed one render event.
     pub fn apply(&mut self, event: RenderEvent) {
+        self.dirty = true;
         for block in self.transcript.push(event) {
-            match block {
+            match &block {
                 Block::Delta { text, .. } => {
                     self.busy = true;
-                    self.live.push_str(&text);
+                    self.live.push_str(text);
                     if self.live.len() > LIVE_BUFFER {
                         let cut = self.live.len() - LIVE_BUFFER;
                         // Trim on a char boundary.
@@ -310,27 +426,33 @@ impl TuiState {
                         self.live.drain(..cut);
                     }
                 }
-                Block::Tool(_) => {
-                    self.busy = true;
-                    self.ready.push(block);
-                }
+                Block::Tool(_) => self.busy = true,
                 Block::Message { .. } => {
                     // The deltas were the live view; the block is the permanent
                     // one, so the tail can go.
                     self.live.clear();
-                    self.ready.push(block);
                 }
-                Block::TurnEnded { .. } | Block::SessionEnded { .. } => {
-                    self.busy = false;
-                    self.ready.push(block);
-                }
-                other => self.ready.push(other),
+                Block::TurnEnded { .. } | Block::SessionEnded { .. } => self.busy = false,
+                // The two transitions that move a session between modes. Both
+                // already ride the stream, which is why the mode is not injected.
+                Block::ContextInjected {
+                    source: ContextSource::PlanMode,
+                } => self.mode = Mode::Plan,
+                Block::History {
+                    reason: HistoryReason::ModeChange,
+                    ..
+                } => self.mode = Mode::Ask,
+                _ => {}
             }
+            // A delta renders to nothing here: the live tail is the streaming
+            // view, and the completed `Message` block is the permanent one.
+            self.source.extend(render_block(&block));
         }
     }
 
     /// Answer a request from the loop.
     pub fn request(&mut self, request: ConsoleRequest) {
+        self.dirty = true;
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
             ConsoleRequest::Ask(ask) => {
@@ -340,10 +462,6 @@ impl TuiState {
                 });
             }
         }
-    }
-
-    pub fn take_ready(&mut self) -> Vec<Block> {
-        std::mem::take(&mut self.ready)
     }
 
     pub fn take_events(&mut self) -> Vec<FrontEndEvent> {
@@ -357,6 +475,7 @@ impl TuiState {
     /// Handle one keypress. Answers and submissions go out through the pending
     /// one-shot channels; gestures are queued for the loop.
     pub fn key(&mut self, key: Key) {
+        self.dirty = true;
         match key {
             Key::CtrlC => {
                 if self.busy {
@@ -574,8 +693,10 @@ impl TuiState {
         }
     }
 
-    /// The streaming tail, wrapped to `width` **columns** and capped to the live
-    /// rows.
+    /// The streaming tail, wrapped to `width` **columns**.
+    ///
+    /// Uncapped: the conversation pane decides how much of it fits, and the tail
+    /// itself is already bounded by [`LIVE_BUFFER`].
     pub fn live_lines(&self, width: u16) -> Vec<String> {
         let width = width.max(1) as usize;
         let mut lines: Vec<String> = Vec::new();
@@ -591,11 +712,19 @@ impl TuiState {
                 rest = &rest[take..];
             }
         }
-        if lines.len() > LIVE_ROWS {
-            lines.split_off(lines.len() - LIVE_ROWS)
-        } else {
-            lines
-        }
+        lines
+    }
+
+    /// The conversation pane's visible rows: the tail of the transcript, with the
+    /// streaming tail last — where it will be replaced by the message it becomes.
+    fn pane_lines(&self, width: u16, height: u16) -> Vec<Line<'static>> {
+        let mut tail: Vec<Line<'static>> =
+            self.live_lines(width).into_iter().map(Line::from).collect();
+        let room = (height as usize).saturating_sub(tail.len());
+        let skip = self.source.len().saturating_sub(room);
+        let mut lines: Vec<Line<'static>> = self.source[skip..].to_vec();
+        lines.append(&mut tail);
+        lines
     }
 
     /// The column the cursor rests on for a terminal `width` columns wide: the
@@ -672,12 +801,6 @@ impl TuiState {
     }
 }
 
-impl Default for TuiState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// How many bytes of `text` fit into `width` terminal columns.
 ///
 /// Columns, not bytes: a CJK character is three bytes wide and two columns, so
@@ -705,31 +828,156 @@ fn wrap_take(text: &str, width: usize) -> usize {
     text.len()
 }
 
-/// Draw the live region: the streaming tail, the input line and the status line.
-fn draw_live(frame: &mut ratatui::Frame, state: &TuiState) {
+/// Draw one frame of the four-pane layout.
+///
+/// This is the seam the layout is tested through: a state goes in, a fixed-size
+/// frame comes out, and no terminal is involved (spec §2).
+pub fn draw_frame(frame: &mut ratatui::Frame, state: &TuiState) {
     let area = frame.area();
-    let mut lines: Vec<Line> = state
-        .live_lines(area.width)
-        .into_iter()
-        .map(Line::from)
-        .collect();
-    while lines.len() < LIVE_ROWS {
-        lines.insert(0, Line::from(""));
+    if layout::too_small(area) {
+        draw_too_small(frame, area);
+        return;
     }
-    let (input, style) = state.input_line(area.width);
-    lines.push(Line::from(Span::styled(input, style)));
-    lines.push(Line::from(Span::styled(
-        state.status_line(area.width),
-        Style::default().fg(ratatui::style::Color::DarkGray),
-    )));
-    frame.render_widget(Paragraph::new(lines), area);
-    // The cursor sits at the end of the typed input, on the input line.
-    frame.set_cursor_position((
-        state
-            .cursor_column(area.width)
-            .min(area.width.saturating_sub(1)),
-        area.y + LIVE_ROWS as u16,
-    ));
+    // Ticket 12 replaces the constant with the draft's wrapped row count; today's
+    // editor is one line that scrolls horizontally, so the draft is one row.
+    let panes = layout::plan(area, 1);
+    draw_header(frame, &panes, state);
+    draw_transcript(frame, &panes, state);
+    draw_bottom(frame, &panes, state);
+}
+
+/// Everything a terminal below the minimum gets: one centred sentence saying so,
+/// rather than four panes crushed into each other.
+fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
+    let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
+    frame.render_widget(
+        Paragraph::new(wording::too_small(layout::MIN_WIDTH, layout::MIN_HEIGHT))
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center),
+        row,
+    );
+}
+
+/// Frame a block: dim, so the border frames the content instead of competing with
+/// it.
+fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
+    frame.render_widget(
+        WidgetBlock::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
+}
+
+/// The header: what session this is, where it is, what mode it runs in, and when.
+fn draw_header(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiState) {
+    draw_border(frame, panes.header);
+    let lines = header_lines(panes.header_content, state);
+    frame.render_widget(Paragraph::new(lines), panes.header_content);
+}
+
+/// The header's fields.
+///
+/// Two lines hold identity and clock, then directory and mode — each pair pushed
+/// to the opposite edges so the eye can find them. One line has room for a single
+/// run of fields, and drops the directory: the mode matters more (spec §2).
+fn header_lines(content: Rect, state: &TuiState) -> Vec<Line<'static>> {
+    let width = content.width as usize;
+    if content.height <= 1 {
+        // The date is the first thing to go when the header is a single line —
+        // the time is what a glance is looking for.
+        let single = format!(
+            "{} · {} · {}",
+            wording::identity(),
+            wording::mode_field(state.mode),
+            wording::clock_short(&state.clock)
+        );
+        return vec![Line::from(truncate_columns(&single, width))];
+    }
+    vec![
+        Line::from(edges(
+            &wording::identity(),
+            &wording::clock(&state.clock),
+            width,
+        )),
+        Line::from(edges(
+            &state.facts.cwd,
+            &wording::mode_field(state.mode),
+            width,
+        )),
+    ]
+}
+
+/// One header line: `left` against the left edge, `right` against the right, and
+/// whatever space is left between them. When they cannot both fit, the identity
+/// survives and the other field is what gets cut.
+fn edges(left: &str, right: &str, width: usize) -> String {
+    let left_columns = text_columns(left);
+    let right_columns = text_columns(right);
+    if left_columns + right_columns >= width {
+        return truncate_columns(left, width);
+    }
+    let mut line = String::from(left);
+    line.push_str(&" ".repeat(width - left_columns - right_columns));
+    line.push_str(right);
+    line
+}
+
+/// The conversation pane: the transcript, which owns its own scroll buffer rather
+/// than the terminal's scrollback (ADR 0002).
+fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiState) {
+    draw_border(frame, panes.middle);
+    let lines = state.pane_lines(panes.transcript.width, panes.transcript.height);
+    frame.render_widget(Paragraph::new(lines), panes.transcript);
+    if let Some(panel) = panes.panel {
+        // The two panes share one column rather than each drawing a border. Its
+        // ends join the middle block's borders instead of crossing them.
+        draw_seam(frame, panes.middle, panel.x - 1);
+    }
+}
+
+/// The shared seam between the conversation pane and the panel.
+fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
+    let style = Style::default().fg(Color::DarkGray);
+    let top = middle.y;
+    let bottom = middle.y + middle.height - 1;
+    let buffer = frame.buffer_mut();
+    for y in top..=bottom {
+        let symbol = if y == top {
+            "┬"
+        } else if y == bottom {
+            "┴"
+        } else {
+            "│"
+        };
+        buffer[(x, y)].set_symbol(symbol).set_style(style);
+    }
+}
+
+/// The bottom block: the input line, and under it the hints that say what the keys
+/// do.
+fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiState) {
+    draw_border(frame, panes.bottom);
+    let (input, style) = state.input_line(panes.input.width);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(input, style))),
+        panes.input,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            state.status_line(panes.hints.width),
+            Style::default().fg(Color::DarkGray),
+        ))),
+        panes.hints,
+    );
+    // The cursor sits in the input, at the end of what has been typed.
+    if state.pending.is_none() {
+        let column = panes.input.x + state.cursor_column(panes.input.width);
+        frame.set_cursor_position((
+            column.min(panes.input.right().saturating_sub(1)),
+            panes.input.y,
+        ));
+    }
 }
 
 /// The display width of `text`, in terminal columns.
@@ -756,41 +1004,6 @@ fn truncate_columns(text: &str, width: usize) -> String {
         end = index + ch.len_utf8();
     }
     text[..end].to_owned()
-}
-
-/// Paint `lines` into the scratch buffer [`Terminal::insert_before`] hands us.
-///
-/// That buffer is not diffed on the way out: `insert_before` walks every cell
-/// and the backend prints each cell's symbol, where [`ratatui::buffer::Buffer`]'s
-/// own diff would have skipped the trailing columns of a wide grapheme. Those
-/// trailing cells hold `Cell::EMPTY`, whose symbol is a space, so a CJK
-/// transcript printed a blank column after every wide character and each line
-/// drew wider than the width its cells were laid out for.
-///
-/// Blanking those cells to the empty string stops the backend printing anything
-/// there. It still walks on to the next cell, and the cursor is already there:
-/// printing the wide grapheme moved the terminal two columns.
-pub fn paint_scrollback(lines: &[Line<'_>], buf: &mut Buffer) {
-    for (index, line) in lines.iter().enumerate() {
-        let area = Rect {
-            x: 0,
-            y: index as u16,
-            width: buf.area.width,
-            height: 1,
-        };
-        line.clone().render(area, buf);
-    }
-    for y in 0..buf.area.height {
-        let mut x = 0;
-        while x < buf.area.width {
-            let width = buf[(x, y)].cell_width().max(1);
-            let end = x.saturating_add(width).min(buf.area.width);
-            for trailing in x.saturating_add(1)..end {
-                buf[(trailing, y)].set_symbol("");
-            }
-            x = x.saturating_add(width);
-        }
-    }
 }
 
 /// Turn one finalized block into styled terminal lines.

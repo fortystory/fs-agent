@@ -245,21 +245,38 @@ fn bracketed_hints_read_in_chinese_with_their_enums_explained() {
 }
 
 #[test]
-fn the_status_line_keeps_its_state_word_and_drops_hints_when_narrow() {
-    // Wide enough: the state and every key hint.
+fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
+    // Wide enough: the state word, then the key hints, with the way out last.
     let wide = wording::status_line(false, 200);
     assert!(wide.starts_with("就绪 · "), "{wide}");
-    for hint in ["enter 发送", "esc 取消", "shift+tab 计划", "ctrl-c 退出"] {
+    for hint in [
+        "enter 发送",
+        "ctrl-j 换行",
+        "esc 取消",
+        "shift+tab 计划",
+        "PgUp/PgDn 滚动",
+        "ctrl-c 退出",
+    ] {
         assert!(wide.contains(hint), "{wide}");
     }
-    // 28 columns fit the state and two hints; the third would need 45.
+    assert!(wide.ends_with("ctrl-c 退出"), "{wide}");
+
+    // 28 columns fit one hint once the way out is reserved.
+    assert_eq!(wording::status_line(false, 28), "enter 发送 · ctrl-c 退出");
+    // 44 fit two and still not the state word: it is what goes, so the newline key
+    // stays visible on a narrow terminal.
     assert_eq!(
-        wording::status_line(false, 28),
-        "就绪 · enter 发送 · esc 取消"
+        wording::status_line(false, 44),
+        "enter 发送 · ctrl-j 换行 · ctrl-c 退出"
     );
-    // Narrower than the hints: the state word survives alone.
-    assert_eq!(wording::status_line(true, 8), "工作中");
-    assert_eq!(wording::status_line(false, 3), "就绪");
+    // 45 is where `就绪 · ` fits in front of that run.
+    assert_eq!(
+        wording::status_line(false, 45),
+        "就绪 · enter 发送 · ctrl-j 换行 · ctrl-c 退出"
+    );
+    // Narrower than any hint: the way out is all that is left.
+    assert_eq!(wording::status_line(true, 8), "ctrl-c 退出");
+    assert_eq!(wording::status_line(false, 3), "ctrl-c 退出");
 }
 
 #[test]

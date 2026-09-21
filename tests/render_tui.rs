@@ -2,7 +2,7 @@
 //!
 //! The terminal itself is crossterm's; what this crate owns is the state that
 //! decides what to draw and what a key means. Splitting it from the terminal is
-//! what makes that testable (spec §19).
+//! what makes that testable (spec §Testing Decisions).
 
 use fs_agent::events::{
     hook_format, Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason,
@@ -10,20 +10,32 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
-    paint_scrollback, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind,
-    FrontEndEvent, Key, Question, RenderEvent, ToolBlock, ToolOutcome, TuiState,
+    render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent, Key,
+    Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
 };
-use ratatui::buffer::{Buffer, CellWidth};
-use ratatui::layout::Rect;
+use ratatui::buffer::CellWidth;
 use ratatui::style::{Color, Modifier};
-use ratatui::text::Line;
 
 fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
 }
 
+fn facts() -> SessionFacts {
+    SessionFacts {
+        session_id: "01J8ZQ4K7M".to_owned(),
+        cwd: "~/code/fortystory/fs-agent".to_owned(),
+        model: "claude-sonnet-4-5".to_owned(),
+        context_window: 200_000,
+        budget_limit: Some(100_000),
+    }
+}
+
+fn new_state() -> TuiState {
+    TuiState::new(facts())
+}
+
 fn state_with_prompt() -> (TuiState, tokio::sync::oneshot::Receiver<Option<String>>) {
-    let mut state = TuiState::new();
+    let mut state = new_state();
     let (tx, rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply: tx });
     (state, rx)
@@ -59,7 +71,7 @@ fn an_empty_submission_closes_the_prompt() {
 
 #[test]
 fn a_permission_question_is_answered_by_key() {
-    let mut state = TuiState::new();
+    let mut state = new_state();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         question: Question::Permission(PermissionRequest {
@@ -80,7 +92,7 @@ fn a_permission_question_is_answered_by_key() {
 
 #[test]
 fn escape_answers_a_question_with_the_non_acting_choice() {
-    let mut state = TuiState::new();
+    let mut state = new_state();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         question: Question::Permission(PermissionRequest {
@@ -101,7 +113,7 @@ fn escape_answers_a_question_with_the_non_acting_choice() {
 
 #[test]
 fn escape_while_working_is_a_cancel_gesture() {
-    let mut state = TuiState::new();
+    let mut state = new_state();
     // A delta means a turn is in flight.
     state.apply(RenderEvent::Delta {
         speaker: kimi(),
@@ -114,11 +126,11 @@ fn escape_while_working_is_a_cancel_gesture() {
 
 #[test]
 fn an_idle_ctrl_c_quits_and_a_working_one_cancels() {
-    let mut state = TuiState::new();
+    let mut state = new_state();
     state.key(Key::CtrlC);
     assert!(state.should_quit());
 
-    let mut state = TuiState::new();
+    let mut state = new_state();
     state.apply(RenderEvent::Delta {
         speaker: kimi(),
         kind: fs_agent::render::DeltaKind::Text,
@@ -131,16 +143,19 @@ fn an_idle_ctrl_c_quits_and_a_working_one_cancels() {
 
 #[test]
 fn shift_tab_is_the_plan_gesture() {
-    let mut state = TuiState::new();
+    let mut state = new_state();
     state.key(Key::BackTab);
     assert_eq!(state.take_events(), vec![FrontEndEvent::TogglePlan]);
 }
 
 #[test]
 fn a_tool_call_and_its_hook_become_one_ready_block() {
+    // The merger is the transcript's, not the state machine's: it holds the call
+    // open until an unrelated event closes it, so the result and the hook that
+    // annotates it land in one block.
     let id = ToolCallId::new("call-1");
-    let mut state = TuiState::new();
-    state.apply(RenderEvent::Logged(Event::new(
+    let mut transcript = Transcript::new();
+    let call = Event::new(
         1,
         kimi(),
         EventPayload::ToolCallStarted {
@@ -148,8 +163,8 @@ fn a_tool_call_and_its_hook_become_one_ready_block() {
             tool_name: "read_file".to_owned(),
             args: serde_json::json!({"path": "a.rs"}),
         },
-    )));
-    state.apply(RenderEvent::Logged(Event::new(
+    );
+    let result = Event::new(
         2,
         kimi(),
         EventPayload::ToolCallCompleted {
@@ -159,8 +174,8 @@ fn a_tool_call_and_its_hook_become_one_ready_block() {
             error: None,
             duration_ms: 2,
         },
-    )));
-    state.apply(RenderEvent::Logged(Event::new(
+    );
+    let hook = Event::new(
         3,
         kimi(),
         EventPayload::HookExecuted {
@@ -168,17 +183,21 @@ fn a_tool_call_and_its_hook_become_one_ready_block() {
             command: "check".to_owned(),
             outcome: hook_format::feedback("ok").to_owned(),
         },
-    )));
+    );
+    for event in [call, result, hook] {
+        assert!(
+            transcript.push(RenderEvent::Logged(event)).is_empty(),
+            "the call is held open"
+        );
+    }
     // Nothing is ready until the next unrelated event closes the block.
-    assert!(state.take_ready().is_empty());
-    state.apply(RenderEvent::Logged(Event::new(
+    let ready = transcript.push(RenderEvent::Logged(Event::new(
         4,
         kimi(),
         EventPayload::TurnEnded {
             reason: StopReason::Completed,
         },
     )));
-    let ready = state.take_ready();
     let tool = ready
         .iter()
         .find_map(|block| match block {
@@ -250,19 +269,13 @@ fn the_synthesizers_product_renders_with_the_system_speaker() {
 }
 
 #[test]
-fn a_notice_is_a_scrollback_line_shown_as_it_is() {
+fn a_notice_is_a_transcript_line_shown_as_it_is() {
     // The startup banner is a notice, not a diagnostic: no `[diag]` label is
-    // added, and it goes into scrollback rather than into the live region, which
-    // is what keeps it clear of the status row (spec §19, §A.12).
+    // added, and it belongs to the transcript, where it stays put rather than
+    // scrolling away with the streaming tail it deliberately avoids
+    // (spec §A.12, §3).
     let banner = "fs-agent: session abc · model m · mode ask · /tmp/x";
-    let mut state = TuiState::new();
-    state.apply(RenderEvent::Notice(banner.to_owned()));
-
-    let ready = state.take_ready();
-    assert_eq!(ready.len(), 1);
-    assert!(matches!(&ready[0], Block::Notice(message) if message == banner));
-
-    let lines = render_block(&ready[0]);
+    let lines = render_block(&Block::Notice(banner.to_owned()));
     let text: String = lines[0]
         .spans
         .iter()
@@ -360,31 +373,12 @@ fn a_message_continuation_indents_by_the_label_display_width() {
 }
 
 #[test]
-fn a_wide_grapheme_leaves_no_blank_cell_after_it() {
-    // Scrollback goes out through `Terminal::insert_before`, which hands every
-    // cell of the scratch buffer to the backend and prints the cell's symbol. A
-    // wide grapheme's trailing cell is `Cell::EMPTY`, whose symbol is a space, so
-    // a CJK transcript would print a blank column after every character — one
-    // column too many per wide character, enough to soft-wrap the line and push
-    // the live region out of place (spec §19).
-    let line = Line::from("[user] 你好");
-    let mut buf = Buffer::empty(Rect::new(0, 0, 16, 1));
-    paint_scrollback(&[line], &mut buf);
-
-    let symbols: Vec<&str> = (0..16).map(|x| buf[(x, 0)].symbol()).collect();
-    assert_eq!(
-        symbols,
-        vec!["[", "u", "s", "e", "r", "]", " ", "你", "", "好", "", " ", " ", " ", " ", " "]
-    );
-}
-
-#[test]
 fn the_live_tail_wraps_on_display_columns_not_bytes() {
     // A CJK character is two columns wide but three bytes long. Wrapping on the
     // byte index cut the streaming tail at a third of the terminal width — the
     // one place where Chinese looked broken even though every cell was right
     // (spec §19).
-    let mut state = TuiState::new();
+    let mut state = new_state();
     state.apply(RenderEvent::Delta {
         speaker: kimi(),
         kind: DeltaKind::Text,
@@ -398,7 +392,7 @@ fn the_live_tail_wraps_on_display_columns_not_bytes() {
 #[test]
 fn the_cursor_column_counts_a_wide_character_as_two() {
     // The cursor sat one column left of the input for every CJK character typed.
-    let mut state = TuiState::new();
+    let mut state = new_state();
     for ch in "你好".chars() {
         state.key(Key::Char(ch));
     }

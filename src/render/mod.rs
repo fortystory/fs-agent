@@ -13,8 +13,9 @@
 //!   exactly two explicit sinks, and `stdout` receives the final product and
 //!   nothing else (ticket 01's regression assertion).
 //! * [`plain`] — the human transcript for a pipe or a simple terminal.
-//! * [`tui`] — the ratatui interface: an inline viewport (no alternate screen, so
-//!   the transcript stays scrollable) that owns the keyboard.
+//! * [`tui`] — the ratatui interface: a fullscreen four-pane layout on the
+//!   alternate screen (ADR 0002) that owns the keyboard and keeps the transcript
+//!   in its own scroll buffer.
 //!
 //! Plain and TUI share one [`transcript`] layer: the same events become the same
 //! [`transcript::Block`]s, and only the painting differs. That is what keeps this
@@ -28,6 +29,7 @@
 pub mod headless;
 pub mod highlight;
 pub mod input;
+pub mod layout;
 pub mod markdown;
 pub mod plain;
 pub mod severity;
@@ -49,7 +51,7 @@ pub use input::{
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
-pub use tui::{paint_scrollback, render_block, Key, Tui, TuiOptions, TuiState};
+pub use tui::{draw_frame, render_block, Key, SessionFacts, Tui, TuiOptions, TuiState};
 
 /// How many render events may be buffered before a slow consumer starts losing
 /// them. A lost delta degrades output, never correctness.
