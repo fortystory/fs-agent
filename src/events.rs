@@ -214,6 +214,10 @@ pub enum HistoryReason {
     Regenerate,
     Undo,
     Compaction,
+    /// The session's permission mode changed, so the instruction that described
+    /// the old one no longer does (spec §13). Unlike the other three this
+    /// retires harness content rather than an exchange.
+    ModeChange,
 }
 
 /// The closed three-state permission verdict.

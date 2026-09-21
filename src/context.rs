@@ -34,6 +34,7 @@ pub mod skills;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::permissions::PlanConflict;
 use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
 use skills::MAX_LOADED_SKILL_TOKENS;
@@ -64,6 +65,34 @@ pub const DROPPED_TOOL_RESULT: &str =
 /// The project rules file, read once at startup and injected as the first
 /// `user` message (spec §10).
 pub const AGENTS_MD: &str = "AGENTS.md";
+
+/// The short instruction plan mode injects on entry (spec §13), phrased once per
+/// answer to the conflict question.
+///
+/// Short on purpose: it is pinned for as long as the mode lasts, and a longer
+/// text would spend the model's budget restating what the gate already enforces.
+/// It names the file, and it does **not** offer the model a way out — leaving is
+/// the user's gesture, not a request the model can make.
+///
+/// `None` means there was no plan file to ask about; `Overwrite` means there was
+/// one and it was cleared, so both leave the model a blank sheet. The other two
+/// answers are told apart here, because on disk they are the same file.
+pub fn plan_mode_instruction(conflict: Option<PlanConflict>) -> &'static str {
+    match conflict {
+        None | Some(PlanConflict::Overwrite) => {
+            "现在处于硬 plan 模式：可以读，但唯一能写的是项目根目录的 PLAN.md。\
+             把计划写进它；改别的文件或运行 shell 都会被拒绝。"
+        }
+        Some(PlanConflict::Append) => {
+            "现在处于硬 plan 模式：可以读，但唯一能写的是项目根目录的 PLAN.md。\
+             它已经存在——先读它，再把计划追加在后面；改别的文件或运行 shell 都会被拒绝。"
+        }
+        Some(PlanConflict::Keep) => {
+            "现在处于硬 plan 模式：可以读，但唯一能写的是项目根目录的 PLAN.md。\
+             它已经存在——先读它，并把它当作现行计划，不要整体重写；改别的文件或运行 shell 都会被拒绝。"
+        }
+    }
+}
 
 /// The usable input budget for one agent, computed from **its own** model
 /// (spec §10). There is deliberately no session-wide budget.
@@ -157,8 +186,9 @@ pub enum TrimError {
 /// [`TrimPolicy::loaded_skill_budget`], even when the window budget is generous.
 ///
 /// Read-only with respect to the event log: this only rewrites the `messages`
-/// value it is handed. The pinned injection at the head and the turn currently
-/// being assembled are never dropped.
+/// value it is handed. Every pinned message (the private identity, and each
+/// `ContextInjected` wherever it sits) and the turn currently being assembled
+/// are never dropped.
 pub fn trim(
     mut messages: Vec<Message>,
     budget: u64,
@@ -172,8 +202,6 @@ pub fn trim(
         return Ok(messages);
     }
 
-    let pinned = pinned_len(&messages);
-
     // Classes 1 and 2: old tool-result bodies, oldest first, ordinary results
     // before skill bodies. The same shrink, applied to one stickiness class at a
     // time, which is what makes the order strict.
@@ -186,14 +214,25 @@ pub fn trim(
         }
     }
 
-    // Class 3: old whole rounds, oldest first. The active round and the pinned
-    // injection stay: the model must still have the question it is answering.
+    // Class 3: old whole rounds, oldest first. The active round and every pinned
+    // message stay: the model must still have the question it is answering, and
+    // the harness content it was given (spec §10, §13).
     while !fits(&messages, budget) {
-        let starts = round_starts(&messages, pinned);
+        let starts = round_starts(&messages);
         if starts.len() <= 1 {
             break;
         }
-        messages.drain(starts[0]..starts[1]);
+        // The round is dropped except for any pinned message inside it — a
+        // mid-session injection sits in the middle of a round and outlives it.
+        // At least one non-pinned message always goes (both `starts` are speech),
+        // so this loop makes progress.
+        let (from, to) = (starts[0], starts[1]);
+        let mut index = 0;
+        messages.retain(|message| {
+            let in_round = index >= from && index < to;
+            index += 1;
+            !in_round || is_pinned(message)
+        });
     }
 
     if fits(&messages, budget) {
@@ -210,33 +249,34 @@ fn fits(messages: &[Message], budget: u64) -> bool {
     estimate_messages_tokens(messages) <= budget
 }
 
-/// The pinned head: the agent's private identity, then the projected
-/// `ContextInjected` events, which is why they are `user` messages with no
-/// `name`, always first (spec §5, §10, §15). They never take part in trimming.
+/// Whether a message is pinned: harness content that trimming never drops and
+/// that never starts a droppable round.
 ///
-/// Counting the identity here is also what keeps [`round_starts`] from mistaking
-/// the pinned injection for a droppable round.
+/// The private identity is pinned by kind (it is also the first message), and a
+/// `ContextInjected` projection is pinned by kind wherever it sits. Pinning has
+/// to be a property of the message rather than a length of the leading run,
+/// because plan mode's instruction is injected mid-session and must survive the
+/// dropping of the rounds around it while the mode is on (spec §10, §13).
 ///
-/// A later mid-session injection (plan mode, ticket 15) is not in this leading
-/// prefix; that ticket must extend the pin marker when it lands.
-fn pinned_len(messages: &[Message]) -> usize {
-    messages
-        .iter()
-        .take_while(|message| {
-            matches!(
-                message,
-                Message::System { .. } | Message::User { name: None, .. }
-            )
-        })
-        .count()
+/// An ordinary `user` message — speech, or the error the model must correct —
+/// is deliberately *not* pinned: a nameless one is still a round boundary.
+fn is_pinned(message: &Message) -> bool {
+    match message {
+        Message::System { .. } => true,
+        Message::User { injected, .. } => *injected,
+        _ => false,
+    }
 }
 
 /// Indices where a round starts: every non-pinned `user` message. A round runs
 /// from its start to the next start (or the end), so dropping a whole round
 /// takes its assistant turns and their tool results with it.
-fn round_starts(messages: &[Message], pinned: usize) -> Vec<usize> {
-    (pinned..messages.len())
-        .filter(|&index| matches!(messages[index], Message::User { .. }))
+fn round_starts(messages: &[Message]) -> Vec<usize> {
+    messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| matches!(message, Message::User { .. }) && !is_pinned(message))
+        .map(|(index, _)| index)
         .collect()
 }
 
@@ -255,14 +295,16 @@ fn tool_names(messages: &[Message]) -> BTreeMap<String, String> {
     names
 }
 
-/// Live (not-yet-stubbed) tool results outside the pinned head, oldest first,
-/// stopping before `limit`.
+/// Live (not-yet-stubbed) tool results, oldest first, stopping before `limit`.
 ///
 /// Both drop mechanisms scan the same shape; `limit` is what distinguishes them:
 /// the window order stops at the active round (the model keeps the question it
 /// is answering), while the aggregate skill budget scans the whole request.
+///
+/// The scan needs no pin test of its own: a pinned message is the identity or an
+/// injection, and neither is ever a `tool` message.
 fn live_tool_indices(messages: &[Message], limit: usize) -> Vec<usize> {
-    (pinned_len(messages)..limit.min(messages.len()))
+    (0..limit.min(messages.len()))
         .filter(|&index| {
             matches!(&messages[index], Message::Tool { content, .. } if content.as_str() != DROPPED_TOOL_RESULT)
         })
@@ -272,7 +314,7 @@ fn live_tool_indices(messages: &[Message], limit: usize) -> Vec<usize> {
 /// Where the active (last) round starts, or the end when there is no round to
 /// distinguish.
 fn active_round_start(messages: &[Message]) -> usize {
-    let starts = round_starts(messages, pinned_len(messages));
+    let starts = round_starts(messages);
     starts.last().copied().unwrap_or(messages.len())
 }
 

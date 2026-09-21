@@ -205,6 +205,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         vec![Message::User {
             content: "say hi".to_owned(),
             name: Some("user".to_owned()),
+            injected: false,
         }]
     );
 }

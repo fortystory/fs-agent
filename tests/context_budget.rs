@@ -27,18 +27,27 @@ use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- message builders ------------------------------------------------------
 
-fn pinned(content: &str) -> Message {
-    // What `ContextInjected` projects to: a `user` message with no `name`.
+/// What a `ContextInjected` projects to: a `user` message with no `name`, marked
+/// as harness-injected rather than speech, so trimming pins it wherever it sits
+/// (ticket 15).
+fn injected(content: &str) -> Message {
     Message::User {
         content: content.to_owned(),
         name: None,
+        injected: true,
     }
+}
+
+/// A leading injection: the same shape as [`injected`], at the pinned head.
+fn pinned(content: &str) -> Message {
+    injected(content)
 }
 
 fn user(content: &str) -> Message {
     Message::User {
         content: content.to_owned(),
         name: Some("user".to_owned()),
+        injected: false,
     }
 }
 
@@ -235,6 +244,31 @@ fn trim_keeps_the_pinned_injection_and_the_active_round() {
 
     assert_eq!(trimmed.first(), Some(&pinned("rules")));
     assert!(trimmed.contains(&user("second question")));
+}
+
+#[test]
+fn trim_keeps_a_mid_session_injection_while_dropping_the_round_around_it() {
+    // The plan-mode instruction is injected in the middle of a round, not at the
+    // head: it must be pinned where it sits, and it must not split the round
+    // into two so that half of it escapes dropping (spec §13).
+    let messages = vec![
+        pinned("rules"),
+        user("first question"),
+        injected("plan mode: only PLAN.md may be written"),
+        assistant(&"answer ".repeat(200)),
+        user("second question"),
+    ];
+    let trimmed = trim(messages, 60, &TrimPolicy::default()).unwrap();
+
+    assert_eq!(
+        trimmed,
+        vec![
+            pinned("rules"),
+            injected("plan mode: only PLAN.md may be written"),
+            user("second question"),
+        ],
+        "the old round goes as a unit and the injection stays"
+    );
 }
 
 #[test]
@@ -678,6 +712,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
             Some(&Message::User {
                 content: rules.to_owned(),
                 name: None,
+                injected: true,
             }),
             "identity -> rules -> history, every turn"
         );

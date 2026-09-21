@@ -31,7 +31,7 @@ use crate::config::SessionConfig;
 use crate::context::skills::Skills;
 use crate::events::{Event, EventLog, SessionId};
 use crate::hooks::Hook;
-use crate::permissions::{Asker, Policy, Rule};
+use crate::permissions::{Asker, Mode, Policy, Rule};
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
 
 /// Everything a session is assembled from. Injected, never read from the
@@ -217,6 +217,21 @@ impl Session {
             .lock()
             .expect("policy mutex poisoned")
             .push(rule);
+    }
+
+    /// The mode this session currently runs under.
+    pub fn mode(&self) -> Mode {
+        self.policy.lock().expect("policy mutex poisoned").mode()
+    }
+
+    /// Swap the session's mode, keeping its rules. The plan-mode gesture's one
+    /// effect on the policy — a value, never an event, which is why `--continue`
+    /// starts from the configured mode (spec §12).
+    pub fn set_mode(&self, mode: Mode) {
+        self.policy
+            .lock()
+            .expect("policy mutex poisoned")
+            .set_mode(mode);
     }
 
     /// This agent's private identity, if it has one.

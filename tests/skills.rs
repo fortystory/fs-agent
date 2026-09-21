@@ -360,10 +360,12 @@ fn old_skill_bodies_are_stubbed_once_the_loaded_total_exceeds_its_budget() {
         Message::User {
             content: "rules".to_owned(),
             name: None,
+            injected: true,
         },
         Message::User {
             content: "first".to_owned(),
             name: Some("user".to_owned()),
+            injected: false,
         },
         assistant_calling(&[("s1", SKILL_TOOL), ("o1", "read_file"), ("s2", SKILL_TOOL)]),
         tool_result("s1", &"a".repeat(400)),
@@ -372,6 +374,7 @@ fn old_skill_bodies_are_stubbed_once_the_loaded_total_exceeds_its_budget() {
         Message::User {
             content: "second".to_owned(),
             name: Some("user".to_owned()),
+            injected: false,
         },
     ];
 
@@ -409,10 +412,12 @@ fn the_loaded_skill_budget_is_a_total_across_the_active_round_too() {
         Message::User {
             content: "rules".to_owned(),
             name: None,
+            injected: true,
         },
         Message::User {
             content: "question".to_owned(),
             name: Some("user".to_owned()),
+            injected: false,
         },
         assistant_calling(&[("s1", SKILL_TOOL), ("s2", SKILL_TOOL)]),
         tool_result("s1", &"a".repeat(400)),
@@ -597,12 +602,13 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
             Message::User {
                 content: format!("PROJECT RULES\n\n{content}"),
                 name: None,
+                injected: true,
             }
         );
         assert!(
             !matches!(
                 request.messages.get(1),
-                Some(Message::User { name: None, .. })
+                Some(Message::User { injected: true, .. })
             ),
             "the catalog does not become a second pinned message: {:?}",
             request.messages

@@ -251,7 +251,7 @@ Status: ready-for-agent
     AgentError        { message, recoverable }   // 模型要看到并纠正
     SessionError      { code, detail }           // 会话级运行失败，模型看不到
     // 历史操作
-    HistorySuperseded { targets: [Seq], reason: Regenerate | Undo | Compaction, summary? }
+    HistorySuperseded { targets: [Seq], reason: Regenerate | Undo | Compaction | ModeChange, summary? }
   ```
 
   四处已收口的细节：**合成器的产出 = 一条 `speaker_id = System` 的 `MessageCompleted`**（枚举里没有它的家，`System` 正是「harness 自己产生的事件」那一档；渲染侧当最终产物，投影侧就是一条「他人的发言」）；`ContextInjected.source` 含 `PlanMode`；**讨论里「某方本轮缺席」不新增字段**——查询口径是「这一轮里有 `TurnEnded{Error}` 且没有对应的 `MessageCompleted`」；字段名是 **`PermissionDecided.reason`**，不是 `.why`。
@@ -410,7 +410,8 @@ Status: ready-for-agent
 - **plan 模式 = 策略里的一条预设**（`effect()` 不是 `ReadOnly` 的调用一律 `Deny`），**不新增状态机**；是 `Deny` 不是 `Ask`（本模式的定义就是「硬」）。
 - **进出只用手势**：`/plan` / `/endplan` / Shift+Tab，**不进工具面**（给模型一个 `exit_plan_mode` 等于把「能不能写」交回给模型）。
 - **计划落项目根 `PLAN.md`，它是这个模式下唯一的写豁免**；豁免形状必须是「`WritePaths` 的**全部**路径都是它」（否则借道）；`Exclusive` **不可豁免**。
-- **`/plan` 撞上已存在的 `PLAN.md` → 先问用户（覆盖 / 追加 / 保留）**；「覆盖」由 CLI 清空（read-before-write 会拒写已存在文件；工具绝不擅自删用户的文件）。
+- **`/plan` 撞上已存在的 `PLAN.md` → 先问用户（覆盖 / 追加 / 保留）**；「覆盖」由 CLI 清空（read-before-write 会拒写已存在文件；工具绝不擅自删用户的文件）。无交互（没有 asker）时取**保留**：手势本来就只发生在交互前端，但脚本能调手势，而它绝不能替用户清空文件。
+- **离开 plan 模式要撤回那条指令**（实现期补的一条）：指令描述的是一个**状态**，状态结束了就不能继续被重放——门已经放行、模型却还被告知「只能写 PLAN.md」，是最糟的一档不一致。撤回用与 `/undo` 同一套机制：追加 `HistorySuperseded { targets: [那条注入], reason: ModeChange }`，历史一条不改（§2）。`--continue` 回来后若模式不是 plan，同样补一次撤回，否则被杀掉的进程会把那条指令留在窗口里。代价是模式切换点必有一次前缀缓存未命中——这本来就是手势该付的。
 - **compaction 后不重新注入**：钉住的短指令已保证指向文件的那条不被裁剪，注入全文会占每轮预算且**每次改计划都废掉前缀缓存**。
 
 ### 14. 动态工具注册

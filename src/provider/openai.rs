@@ -366,7 +366,7 @@ fn message_json(message: &Message) -> Value {
             object.insert("content".to_owned(), json!(content));
             insert_name(&mut object, name);
         }
-        Message::User { content, name } => {
+        Message::User { content, name, .. } => {
             object.insert("role".to_owned(), json!("user"));
             object.insert("content".to_owned(), json!(content));
             insert_name(&mut object, name);

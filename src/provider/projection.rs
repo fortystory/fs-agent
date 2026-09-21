@@ -92,6 +92,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                     Some(Message::User {
                         content: body,
                         name: None,
+                        injected: true,
                     }) if leading => {
                         body.push('\n');
                         body.push_str(content);
@@ -99,6 +100,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                     _ => messages.push(Message::User {
                         content: content.clone(),
                         name: None,
+                        injected: true,
                     }),
                 }
             }
@@ -213,6 +215,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                     messages.push(Message::User {
                         content: brief.clone(),
                         name: Some(sanitize_name(parent.as_str())),
+                        injected: false,
                     });
                 }
             }
@@ -228,6 +231,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                 messages.push(Message::User {
                     content: message.clone(),
                     name: None,
+                    injected: false,
                 });
             }
             EventPayload::AgentError { .. } => {}
@@ -259,14 +263,14 @@ fn speaks_to_others(from: &SpeakerId) -> bool {
 /// Whether nothing but pinned injections has been emitted yet, so a new
 /// injection still belongs to the leading block and merges into it.
 ///
-/// A pinned injection is the only name-less `user` message at this point: speech
-/// carries a speaker `name`, and an `AgentError` cannot precede the session-start
-/// injections. An empty slice means the first push, where `last_mut` finds
-/// nothing and pushes instead of merging.
+/// A pinned injection is the only `user` message marked `injected` at this
+/// point: speech carries a speaker `name`, and an `AgentError` cannot precede
+/// the session-start injections. An empty slice means the first push, where
+/// `last_mut` finds nothing and pushes instead of merging.
 fn at_pinned_head(messages: &[Message]) -> bool {
     messages
         .iter()
-        .all(|message| matches!(message, Message::User { name: None, .. }))
+        .all(|message| matches!(message, Message::User { injected: true, .. }))
 }
 
 /// Add one other-speaker segment, pinning the first `user` message.
@@ -358,7 +362,11 @@ impl OtherBlock {
             .collect::<Vec<_>>()
             .join("\n");
         self.segments.clear();
-        messages.push(Message::User { content, name });
+        messages.push(Message::User {
+            content,
+            name,
+            injected: false,
+        });
         true
     }
 }

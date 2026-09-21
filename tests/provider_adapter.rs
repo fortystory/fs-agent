@@ -39,6 +39,7 @@ fn request(model: &str, params: GenerationParams) -> ChatRequest {
         messages: vec![Message::User {
             content: "hi".to_owned(),
             name: None,
+            injected: false,
         }],
         tools: Vec::new(),
         tool_choice: ToolChoice::Auto,
@@ -159,6 +160,26 @@ fn the_output_cap_uses_each_vendors_own_parameter_name() {
 }
 
 #[test]
+fn the_injection_marker_is_not_part_of_the_wire_body() {
+    // `Message::User`'s `injected` flag is what `context::trim` pins a
+    // `ContextInjected` by (spec §10, §13). It is bookkeeping on this side of
+    // the seam: the provider must never see it, and the message must still go
+    // out as an ordinary `user` turn.
+    let mut chat = request("kimi-k3", GenerationParams::default());
+    chat.messages = vec![Message::User {
+        content: "rules".to_owned(),
+        name: None,
+        injected: true,
+    }];
+
+    let (body, _) = build_body(&chat, kimi());
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(body["messages"][0]["content"], "rules");
+    assert!(body["messages"][0].get("injected").is_none(), "{body}");
+    assert!(body["messages"][0].get("name").is_none(), "{body}");
+}
+
+#[test]
 fn parameters_a_model_does_not_support_are_dropped_with_a_warning() {
     let params = GenerationParams {
         temperature: Some(0.5),
@@ -207,6 +228,7 @@ fn an_assistant_turn_round_trips_its_reasoning_and_tool_calls() {
         Message::User {
             content: "read it".to_owned(),
             name: None,
+            injected: false,
         },
         Message::Assistant {
             content: None,

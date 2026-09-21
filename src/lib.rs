@@ -50,7 +50,7 @@ use crate::config::SessionConfig;
 use crate::context::skills::Skills;
 use crate::events::{ContextSource, Event, EventLog, EventPayload, SessionId, SpeakerId};
 use crate::hooks::Hook;
-use crate::permissions::{Asker, Policy};
+use crate::permissions::{Asker, Mode, PlanConflict, Policy};
 use crate::provider::Provider;
 use crate::render::{RenderHandle, RenderSinks};
 use crate::session::{Session, SessionParts};
@@ -149,6 +149,12 @@ pub struct Harness {
     /// The session's own end of the cancel gesture (spec §6). The front end
     /// holds one and raises it; turns get observers of it.
     cancel: CancelSignal,
+    /// The mode to return to when plan mode ends (spec §13).
+    ///
+    /// `None` means this session is not in plan mode. It is front-end state, not
+    /// session state: gestures never enter the event stream, so `--continue`
+    /// assembles a fresh harness and starts from the configured mode.
+    plan_restore: Option<Mode>,
     render_task: JoinHandle<()>,
 }
 
@@ -282,6 +288,18 @@ impl OpenedSession {
                 "resumed session: closed {recovered} interrupted tool call(s) with an unknown result"
             ));
         }
+        // The mode does not survive a resume (it is not in the stream), so a plan
+        // instruction the killed process left live is now stale: retire it, or a
+        // resumed session would go on telling the model it may not write while
+        // the gate lets it through (spec §13).
+        if session.mode() != Mode::Plan {
+            let retired = agent::retire_plan_instructions(session, &self.render)?;
+            if retired > 0 {
+                self.render.diagnostic(&format!(
+                    "resumed session: retired {retired} stale plan-mode instruction(s)"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -334,6 +352,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         speaker,
         render: opened.render,
         cancel: CancelSignal::new(),
+        plan_restore: None,
         render_task: opened.render_task,
     })
 }
@@ -479,6 +498,105 @@ impl Harness {
     /// open.
     pub fn cancel_signal(&self) -> CancelSignal {
         self.cancel.clone()
+    }
+
+    /// The mode this session currently runs under.
+    pub fn mode(&self) -> Mode {
+        self.session.mode()
+    }
+
+    /// Enter the hard plan mode (spec §13): the session may read, and the one
+    /// thing it may write is the project-root `PLAN.md`.
+    ///
+    /// The gesture is the only way in — there is deliberately no tool for it, or
+    /// "may I write" would be the model's decision to make. Entering records one
+    /// pinned instruction; the mode itself stays a session value and never
+    /// reaches the event stream.
+    ///
+    /// An existing `PLAN.md` is put to the user first (overwrite / append /
+    /// keep). Returns the answer, or `None` when there was no file to ask about
+    /// — including a re-entry, which is a no-op rather than a second injection.
+    pub async fn enter_plan_mode(&mut self) -> Result<Option<PlanConflict>, Error> {
+        if self.session.mode() == Mode::Plan {
+            return Ok(None);
+        }
+        let plan_path = self.session.cwd().join(permissions::PLAN_FILE_NAME);
+        let conflict = if plan_path.exists() {
+            Some(self.plan_conflict(&plan_path).await)
+        } else {
+            None
+        };
+        if conflict == Some(PlanConflict::Overwrite) {
+            // Cleared before anything is appended: if the append then fails the
+            // session is not in plan mode and its stream carries no instruction
+            // — consistent — while the file stays cleared, which is exactly what
+            // the user just chose. Read-before-write would otherwise refuse to
+            // clobber a file the model has not read, and the tool never deletes
+            // a file the user owns (spec §13).
+            std::fs::write(&plan_path, "")?;
+        }
+
+        let previous = self.session.mode();
+        self.session.set_mode(Mode::Plan);
+        if let Err(error) = agent::record_context_injection(
+            &mut self.session,
+            &self.render,
+            ContextSource::PlanMode,
+            context::plan_mode_instruction(conflict),
+        ) {
+            // The mode and the instruction it explains travel together: a stream
+            // that never recorded the instruction is a session that is not in
+            // plan mode.
+            self.session.set_mode(previous);
+            return Err(error);
+        }
+        self.plan_restore = Some(previous);
+        Ok(conflict)
+    }
+
+    /// Leave plan mode, restoring the mode the session had before it entered
+    /// (spec §13). Returns whether the mode changed: leaving a mode this session
+    /// is not in does nothing, and appends nothing.
+    ///
+    /// Leaving **retires** the pinned instruction rather than appending a
+    /// contradicting one: the instruction describes a state, and once the state
+    /// is over the model must stop being told it is in it. History is not
+    /// rewritten to do that — a `HistorySuperseded` retires the injection, the
+    /// same way `/undo` retires an exchange (spec §2).
+    ///
+    /// The **mode** is what says whether this session is in plan mode;
+    /// `plan_restore` only remembers the destination. Reading the mode here too
+    /// keeps the two from disagreeing if anything else ever changes the mode
+    /// while plan mode is on. A session *assembled* in plan mode therefore has
+    /// no destination to return to and stays in it: where such a session should
+    /// land is the front end's mode-selection surface (ticket 18), which is also
+    /// the only place a plan mode can be configured from.
+    pub async fn exit_plan_mode(&mut self) -> Result<bool, Error> {
+        if self.session.mode() != Mode::Plan {
+            self.plan_restore = None;
+            return Ok(false);
+        }
+        let Some(previous) = self.plan_restore.take() else {
+            return Ok(false);
+        };
+        // Retire first: if the append fails the session is still in plan mode,
+        // so the instruction still describes it.
+        agent::retire_plan_instructions(&mut self.session, &self.render)?;
+        self.session.set_mode(previous);
+        Ok(true)
+    }
+
+    /// Put the existing-plan question to the front end.
+    ///
+    /// With no answerer there is nobody to ask, and the non-destructive answer is
+    /// the only one a session may pick on the user's behalf: a gesture cannot
+    /// happen headless, but a script can call one, and it must not clear a file
+    /// the user wrote.
+    async fn plan_conflict(&self, path: &Path) -> PlanConflict {
+        match self.session.asker() {
+            Some(asker) => asker.ask_plan_conflict(path).await,
+            None => PlanConflict::Keep,
+        }
     }
 
     pub fn session_id(&self) -> &SessionId {

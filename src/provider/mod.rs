@@ -68,6 +68,13 @@ pub enum Message {
     User {
         content: String,
         name: Option<String>,
+        /// Whether this message is harness-injected content (`ContextInjected`)
+        /// rather than a speaker's words. Not part of the wire shape — the
+        /// encoder ignores it — but it is what tells [`crate::context::trim`]
+        /// that a `user` message is pinned wherever it sits, including one
+        /// injected mid-session when plan mode is entered (spec §10, §13).
+        #[serde(default)]
+        injected: bool,
     },
     Assistant {
         content: Option<String>,

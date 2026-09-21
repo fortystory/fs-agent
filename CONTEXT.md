@@ -58,6 +58,10 @@ _Avoid_: 索引、registry
 一次用户手势（Esc），中断在飞的 provider 调用与在跑的工具；`tool_call` 已开始的那些各补一条合成结果，当前回合以 `Aborted` 收尾。手势本身**不进事件流**（与 `/undo` 的写回、`/plan` 的覆盖同规矩），并且**只沿委派链向下**：`CancelSignal`（信号端，只有前端持有）发起，`CancelObserver`（观察端）在回合与执行者手里逐层克隆——回合手里没有能发起取消的东西，所以「执行者被取消」不会把派发者的回合记成失败。
 _Avoid_: abort、stop、interrupt（`Aborted` 是收尾原因，不是手势名）
 
+**硬计划模式（Plan mode）**:
+`readonly` 加**一条**写豁免的权限模式（`Mode::Plan`）：可以读，唯一能写的是项目根 `PLAN.md`；进出**只由用户手势**决定（`/plan` / `/endplan`），模型那侧没有对应的工具。派出去的执行者沿用同一模式。
+_Avoid_: planning mode、计划态（叙述里的「硬 plan 模式」指的就是它）
+
 ## 上下文与技能
 
 **技能（Skill）**:

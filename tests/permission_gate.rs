@@ -167,6 +167,75 @@ fn auto_is_not_permission_free_a_deny_rule_still_applies() {
     assert_eq!(decision(Mode::Auto, vec![rule], &write), Decision::Deny);
 }
 
+// --- mode plan (ticket 15) ------------------------------------------------
+
+/// The plan mode's one exemption, in the shape the predicate can prove: the
+/// **whole** write set is this session's `PLAN.md` (spec §12, §13).
+fn plan_write(cwd: &str, path: &str) -> Invocation {
+    Invocation::write("write_file").cwd(cwd).writes(&[path])
+}
+
+#[test]
+fn plan_denies_every_non_read_only_call_except_the_plan_file() {
+    let read = Invocation::read("read_file");
+    let plan = plan_write("/w", "/w/PLAN.md");
+    let notes = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
+    // `bash` is `Exclusive`, so it can never borrow the exemption: a shell can
+    // write anything.
+    let bash = Invocation::exclusive("bash").argv(&["bash", "-c", "echo hi > notes.txt"]);
+
+    assert_eq!(decision(Mode::Plan, vec![], &read), Decision::Allow);
+    assert_eq!(decision(Mode::Plan, vec![], &plan), Decision::Allow);
+    assert_eq!(decision(Mode::Plan, vec![], &notes), Decision::Deny);
+    assert_eq!(decision(Mode::Plan, vec![], &bash), Decision::Deny);
+    assert!(
+        gate(Mode::Plan, vec![], &notes).reason.contains("PLAN.md"),
+        "the verdict explains what the mode is waiting for"
+    );
+}
+
+#[test]
+fn the_plan_exemption_needs_the_whole_write_set_to_be_the_plan_file() {
+    // A call that also writes something else cannot borrow the exemption: that
+    // is the "borrowing a way through" this shape exists to rule out.
+    let borrowed = Invocation::write("edit_file").writes(&["/w/PLAN.md", "/w/notes.txt"]);
+    // The plan file is the project root's, resolved against the session cwd.
+    let nested = plan_write("/w", "/w/sub/PLAN.md");
+    let elsewhere = plan_write("/w", "/elsewhere/PLAN.md");
+
+    assert_eq!(decision(Mode::Plan, vec![], &borrowed), Decision::Deny);
+    assert_eq!(decision(Mode::Plan, vec![], &nested), Decision::Deny);
+    assert_eq!(decision(Mode::Plan, vec![], &elsewhere), Decision::Deny);
+}
+
+#[test]
+fn the_plan_floor_cannot_be_lowered_by_an_allow_rule() {
+    // "Always allow" is a session-scoped allowance earned in another mode; it
+    // must not become a way out of plan mode.
+    let notes = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
+    assert_eq!(
+        decision(Mode::Plan, vec![allow_any()], &notes),
+        Decision::Deny
+    );
+}
+
+#[test]
+fn plan_mode_still_defers_to_the_circuit_breaker_and_the_env_family() {
+    // The breaker sits outside every rule *and* every mode (spec §12 ①).
+    let wipe = Invocation::exclusive("bash")
+        .cwd("/home/u/project")
+        .home("/home/u")
+        .argv(&["rm", "-rf", "/"]);
+    assert_eq!(
+        decision(Mode::Plan, vec![allow_any()], &wipe),
+        Decision::Deny
+    );
+    // The `.env` family's default denial is a floor too: not even the mode that
+    // exists to protect the plan hands it out.
+    let env = plan_write("/w", "/w/.env");
+    assert_eq!(decision(Mode::Plan, vec![], &env), Decision::Deny);
+}
+
 // --- rules override the mode's default, never its floor -------------------
 
 #[test]
