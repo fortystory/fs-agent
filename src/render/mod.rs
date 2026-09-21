@@ -47,7 +47,7 @@ pub use input::{
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
-pub use tui::{render_block, Key, Tui, TuiOptions, TuiState};
+pub use tui::{paint_scrollback, render_block, Key, Tui, TuiOptions, TuiState};
 
 /// How many render events may be buffered before a slow consumer starts losing
 /// them. A lost delta degrades output, never correctness.
@@ -72,6 +72,12 @@ pub enum RenderEvent {
     Logged(Event),
     /// Renderer-only narration that is not an event.
     Diagnostic(String),
+    /// A front-end line that speaks for no event: the startup banner and the
+    /// interactive loop's plain feedback.
+    ///
+    /// Not a [`RenderEvent::Diagnostic`]: a diagnostic is the system reporting
+    /// something, and is labelled as such, while a notice is the line itself.
+    Notice(String),
 }
 
 /// The two explicit sinks of the headless renderer, injected at assembly time.
@@ -120,6 +126,15 @@ impl RenderHandle {
         let _ = self
             .sender
             .send(RenderEvent::Diagnostic(message.to_owned()));
+    }
+
+    /// A front-end line shown verbatim.
+    ///
+    /// The seam exists so that a caller holding a harness never has to print:
+    /// once a renderer owns the terminal, a second writer lands inside the
+    /// live region (spec §19).
+    pub fn notice(&self, message: &str) {
+        let _ = self.sender.send(RenderEvent::Notice(message.to_owned()));
     }
 }
 

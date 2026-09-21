@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::crossterm::event::{
     Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
@@ -151,17 +152,7 @@ impl Tui {
                     continue;
                 }
                 let height = lines.len().min(u16::MAX as usize) as u16;
-                let _ = terminal.insert_before(height, |buf| {
-                    for (index, line) in lines.iter().enumerate() {
-                        let area = Rect {
-                            x: 0,
-                            y: index as u16,
-                            width: buf.area.width,
-                            height: 1,
-                        };
-                        line.clone().render(area, buf);
-                    }
-                });
+                let _ = terminal.insert_before(height, |buf| paint_scrollback(&lines, buf));
             }
             let _ = terminal.draw(|frame| draw_live(frame, &state));
             if state.should_quit() {
@@ -368,8 +359,9 @@ impl TuiState {
         }
     }
 
-    /// The streaming tail, wrapped to `width` and capped to the live rows.
-    fn live_lines(&self, width: u16) -> Vec<String> {
+    /// The streaming tail, wrapped to `width` **columns** and capped to the live
+    /// rows.
+    pub fn live_lines(&self, width: u16) -> Vec<String> {
         let width = width.max(1) as usize;
         let mut lines: Vec<String> = Vec::new();
         for raw in self.live.split('\n') {
@@ -379,12 +371,7 @@ impl TuiState {
             }
             let mut rest = raw;
             while !rest.is_empty() {
-                let take = rest
-                    .char_indices()
-                    .take_while(|(index, _)| *index < width)
-                    .last()
-                    .map(|(index, ch)| index + ch.len_utf8())
-                    .unwrap_or(rest.len());
+                let take = wrap_take(rest, width);
                 lines.push(rest[..take].to_owned());
                 rest = &rest[take..];
             }
@@ -394,6 +381,15 @@ impl TuiState {
         } else {
             lines
         }
+    }
+
+    /// The column the cursor rests on: the two prompt cells, then the input's
+    /// **display width** — a CJK character occupies two columns.
+    ///
+    /// Here rather than inline in [`draw_live`] so it can be asserted without a
+    /// terminal, like the rest of the display state.
+    pub fn cursor_column(&self) -> u16 {
+        2 + self.input.as_str().cell_width()
     }
 
     /// The input line: a question prompt while one is pending, else the prompt.
@@ -438,6 +434,33 @@ impl Default for TuiState {
     }
 }
 
+/// How many bytes of `text` fit into `width` terminal columns.
+///
+/// Columns, not bytes: a CJK character is three bytes wide and two columns, so
+/// [counting bytes](TuiState::live_lines) wrapped the streaming tail at roughly a
+/// third of the terminal width.
+///
+/// Always takes at least one character, even one wider than the whole line: the
+/// caller loops until the remainder is empty, so a zero-length take would spin.
+/// Such a line still overflows its width — this only keeps the loop moving.
+///
+/// Per character rather than per grapheme because `Span::styled_graphemes` drops
+/// control characters, whose bytes could then not be turned back into an offset.
+/// The cost is that an emoji sequence built from several characters counts as
+/// wider than it draws, which only wraps it earlier than it had to.
+fn wrap_take(text: &str, width: usize) -> usize {
+    let mut used = 0;
+    let mut buf = [0u8; 4];
+    for (index, ch) in text.char_indices() {
+        let columns = ch.encode_utf8(&mut buf).cell_width() as usize;
+        if used + columns > width {
+            return if index == 0 { ch.len_utf8() } else { index };
+        }
+        used += columns;
+    }
+    text.len()
+}
+
 /// Draw the live region: the streaming tail, the input line and the status line.
 fn draw_live(frame: &mut ratatui::Frame, state: &TuiState) {
     let area = frame.area();
@@ -457,11 +480,45 @@ fn draw_live(frame: &mut ratatui::Frame, state: &TuiState) {
     )));
     frame.render_widget(Paragraph::new(lines), area);
     // The cursor sits at the end of the typed input, on the input line.
-    let column = 2 + state.input.chars().count() as u16;
     frame.set_cursor_position((
-        column.min(area.width.saturating_sub(1)),
+        state.cursor_column().min(area.width.saturating_sub(1)),
         area.y + LIVE_ROWS as u16,
     ));
+}
+
+/// Paint `lines` into the scratch buffer [`Terminal::insert_before`] hands us.
+///
+/// That buffer is not diffed on the way out: `insert_before` walks every cell
+/// and the backend prints each cell's symbol, where [`ratatui::buffer::Buffer`]'s
+/// own diff would have skipped the trailing columns of a wide grapheme. Those
+/// trailing cells hold `Cell::EMPTY`, whose symbol is a space, so a CJK
+/// transcript printed a blank column after every wide character and each line
+/// drew wider than the width its cells were laid out for.
+///
+/// Blanking those cells to the empty string stops the backend printing anything
+/// there. It still walks on to the next cell, and the cursor is already there:
+/// printing the wide grapheme moved the terminal two columns.
+pub fn paint_scrollback(lines: &[Line<'_>], buf: &mut Buffer) {
+    for (index, line) in lines.iter().enumerate() {
+        let area = Rect {
+            x: 0,
+            y: index as u16,
+            width: buf.area.width,
+            height: 1,
+        };
+        line.clone().render(area, buf);
+    }
+    for y in 0..buf.area.height {
+        let mut x = 0;
+        while x < buf.area.width {
+            let width = buf[(x, y)].cell_width().max(1);
+            let end = x.saturating_add(width).min(buf.area.width);
+            for trailing in x.saturating_add(1)..end {
+                buf[(trailing, y)].set_symbol("");
+            }
+            x = x.saturating_add(width);
+        }
+    }
 }
 
 /// Turn one finalized block into styled terminal lines.
@@ -607,6 +664,10 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
         Block::Diagnostic(message) => vec![Line::from(Span::styled(
             format!("[diag] {message}"),
             Style::default().fg(ratatui::style::Color::Yellow),
+        ))],
+        Block::Notice(message) => vec![Line::from(Span::styled(
+            message.clone(),
+            Style::default().fg(ratatui::style::Color::DarkGray),
         ))],
     }
 }

@@ -632,6 +632,16 @@ impl Harness {
         self.session.id()
     }
 
+    /// Say something to the front end that belongs to no event: the startup
+    /// banner, and the interactive loop's plain feedback.
+    ///
+    /// It goes through the render channel rather than straight to the terminal
+    /// because the renderer owns the terminal from assembly on: a second writer
+    /// lands inside the live region (spec §19).
+    pub fn notice(&self, message: &str) {
+        self.render.notice(message);
+    }
+
     /// The whole stream so far, in `seq` order.
     ///
     /// The single-agent counterpart of [`DiscussionHarness::events`]: one

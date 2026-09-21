@@ -333,14 +333,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     };
 
     // User story A.12: say which model, mode and session this is, before the
-    // first question.
-    eprintln!(
+    // first question. It goes through the renderer rather than to stderr: the
+    // TUI started when the harness was assembled, and a second writer to the
+    // terminal lands inside its live region, on top of the status line.
+    harness.notice(&format!(
         "fs-agent: session {} · model {model} · mode {} · {}{}",
         harness.session_id(),
         harness.mode(),
         stored.dir.display(),
         if parsed.resume { " (continued)" } else { "" },
-    );
+    ));
 
     let code = interactive_loop(&mut harness, &console, &mut events).await;
     harness.shutdown().await;
@@ -377,21 +379,21 @@ async fn interactive_loop(
             "/quit" | "/exit" => return ExitCode::SUCCESS,
             "/undo" => match harness.undo_last_edit().await {
                 Ok(Some(_)) => {}
-                Ok(None) => eprintln!("fs-agent: nothing to undo"),
-                Err(error) => eprintln!("fs-agent: {error}"),
+                Ok(None) => harness.notice("fs-agent: nothing to undo"),
+                Err(error) => harness.notice(&format!("fs-agent: {error}")),
             },
             "/plan" => enter_plan(harness).await,
             "/endplan" => {
                 if let Err(error) = harness.exit_plan_mode().await {
-                    eprintln!("fs-agent: {error}");
+                    harness.notice(&format!("fs-agent: {error}"));
                 }
             }
-            other if other.starts_with('/') => {
-                eprintln!("fs-agent: unknown command {other} (try /undo, /plan, /endplan, /quit)")
-            }
+            other if other.starts_with('/') => harness.notice(&format!(
+                "fs-agent: unknown command {other} (try /undo, /plan, /endplan, /quit)"
+            )),
             _ => {
                 if let Err(error) = run_one_turn(harness, events, &line).await {
-                    eprintln!("fs-agent: {error}");
+                    harness.notice(&format!("fs-agent: {error}"));
                 }
             }
         }
@@ -431,10 +433,10 @@ async fn run_one_turn(
     }
 }
 
-/// Enter plan mode, reporting any failure on stderr.
+/// Enter plan mode, reporting any failure on the front end.
 async fn enter_plan(harness: &mut Harness) {
     if let Err(error) = harness.enter_plan_mode().await {
-        eprintln!("fs-agent: {error}");
+        harness.notice(&format!("fs-agent: {error}"));
     }
 }
 
@@ -442,7 +444,7 @@ async fn enter_plan(harness: &mut Harness) {
 async fn toggle_plan(harness: &mut Harness) {
     if harness.mode() == Mode::Plan {
         if let Err(error) = harness.exit_plan_mode().await {
-            eprintln!("fs-agent: {error}");
+            harness.notice(&format!("fs-agent: {error}"));
         }
     } else {
         enter_plan(harness).await;

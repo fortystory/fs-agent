@@ -109,6 +109,8 @@ pub enum Block {
         summary: Option<String>,
     },
     Diagnostic(String),
+    /// A line that speaks for no speaker and narrates no event, shown as it is.
+    Notice(String),
 }
 
 /// One tool call, held open until its result (and any post-hook feedback) has
@@ -167,6 +169,11 @@ impl Transcript {
             RenderEvent::Diagnostic(message) => {
                 let mut blocks = self.flush();
                 blocks.push(Block::Diagnostic(message));
+                blocks
+            }
+            RenderEvent::Notice(message) => {
+                let mut blocks = self.flush();
+                blocks.push(Block::Notice(message));
                 blocks
             }
             RenderEvent::Logged(event) => self.push_logged(event),

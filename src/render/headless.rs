@@ -81,6 +81,14 @@ impl Render for Headless {
                     let _ = writeln!(sinks.stderr_diagnostic, "[diag] {message}");
                     let _ = sinks.stderr_diagnostic.flush();
                 }
+                Ok(RenderEvent::Notice(message)) => {
+                    if in_reasoning {
+                        let _ = sinks.stderr_diagnostic.write_all(b"\n");
+                        in_reasoning = false;
+                    }
+                    let _ = writeln!(sinks.stderr_diagnostic, "{message}");
+                    let _ = sinks.stderr_diagnostic.flush();
+                }
                 Ok(RenderEvent::Logged(event)) => {
                     if in_reasoning {
                         let _ = sinks.stderr_diagnostic.write_all(b"\n");

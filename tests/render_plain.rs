@@ -64,6 +64,23 @@ async fn every_streamed_line_carries_the_speaker_prefix() {
 }
 
 #[tokio::test]
+async fn a_notice_reaches_the_diagnostic_sink_verbatim() {
+    // The startup banner and the interactive loop's feedback go through the
+    // renderer instead of straight to the terminal: once a renderer owns the
+    // terminal, a second writer lands inside its live region (spec §19, §A.12).
+    let (handle, stdout, stderr, task) = renderer(false);
+    handle.notice("fs-agent: session abc · model m · mode ask · /tmp/x");
+    drop(handle);
+    task.await.unwrap();
+
+    assert_eq!(stdout.text(), "");
+    assert_eq!(
+        stderr.text(),
+        "fs-agent: session abc · model m · mode ask · /tmp/x\n"
+    );
+}
+
+#[tokio::test]
 async fn a_message_without_deltas_is_still_shown() {
     // A provider that does not stream, or the synthesizer's whole message, has
     // no deltas behind it — the completed message is the only copy.

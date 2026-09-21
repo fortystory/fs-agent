@@ -198,6 +198,9 @@ impl Plain {
             Block::Diagnostic(message) => {
                 self.line(&format!("[diag] {message}"));
             }
+            Block::Notice(message) => {
+                self.line(&message);
+            }
         }
         self.flush_sink();
     }

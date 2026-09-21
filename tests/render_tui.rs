@@ -7,10 +7,13 @@
 use fs_agent::events::{hook_format, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId};
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
-    render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, FrontEndEvent, Key, Question,
-    RenderEvent, ToolBlock, ToolOutcome, TuiState,
+    paint_scrollback, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind,
+    FrontEndEvent, Key, Question, RenderEvent, ToolBlock, ToolOutcome, TuiState,
 };
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::text::Line;
 
 fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
@@ -235,4 +238,74 @@ fn the_synthesizers_product_renders_with_the_system_speaker() {
         text: "consensus".to_owned(),
     });
     assert!(lines[0].spans[0].content.contains("[system]"));
+}
+
+#[test]
+fn a_notice_is_a_scrollback_line_shown_as_it_is() {
+    // The startup banner is a notice, not a diagnostic: no `[diag]` label is
+    // added, and it goes into scrollback rather than into the live region, which
+    // is what keeps it clear of the status row (spec §19, §A.12).
+    let banner = "fs-agent: session abc · model m · mode ask · /tmp/x";
+    let mut state = TuiState::new();
+    state.apply(RenderEvent::Notice(banner.to_owned()));
+
+    let ready = state.take_ready();
+    assert_eq!(ready.len(), 1);
+    assert!(matches!(&ready[0], Block::Notice(message) if message == banner));
+
+    let lines = render_block(&ready[0]);
+    let text: String = lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(text, banner);
+}
+
+#[test]
+fn a_wide_grapheme_leaves_no_blank_cell_after_it() {
+    // Scrollback goes out through `Terminal::insert_before`, which hands every
+    // cell of the scratch buffer to the backend and prints the cell's symbol. A
+    // wide grapheme's trailing cell is `Cell::EMPTY`, whose symbol is a space, so
+    // a CJK transcript would print a blank column after every character — one
+    // column too many per wide character, enough to soft-wrap the line and push
+    // the live region out of place (spec §19).
+    let line = Line::from("[user] 你好");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 16, 1));
+    paint_scrollback(&[line], &mut buf);
+
+    let symbols: Vec<&str> = (0..16).map(|x| buf[(x, 0)].symbol()).collect();
+    assert_eq!(
+        symbols,
+        vec!["[", "u", "s", "e", "r", "]", " ", "你", "", "好", "", " ", " ", " ", " ", " "]
+    );
+}
+
+#[test]
+fn the_live_tail_wraps_on_display_columns_not_bytes() {
+    // A CJK character is two columns wide but three bytes long. Wrapping on the
+    // byte index cut the streaming tail at a third of the terminal width — the
+    // one place where Chinese looked broken even though every cell was right
+    // (spec §19).
+    let mut state = TuiState::new();
+    state.apply(RenderEvent::Delta {
+        speaker: kimi(),
+        kind: DeltaKind::Text,
+        text: "你好世界五六".to_owned(),
+    });
+
+    // Six characters are twelve columns: five fit in ten, and the sixth wraps.
+    assert_eq!(state.live_lines(10), vec!["你好世界五", "六"]);
+}
+
+#[test]
+fn the_cursor_column_counts_a_wide_character_as_two() {
+    // The cursor sat one column left of the input for every CJK character typed.
+    let mut state = TuiState::new();
+    for ch in "你好".chars() {
+        state.key(Key::Char(ch));
+    }
+
+    // Two prompt cells, then two characters of two columns each.
+    assert_eq!(state.cursor_column(), 6);
 }
