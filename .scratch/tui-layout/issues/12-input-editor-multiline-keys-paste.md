@@ -8,7 +8,7 @@ Status: ready-for-agent
 
 **参考:** spec §5（`Input`）、§6（键位表）、§7（粘贴与两种确认）、§2（输入区行数与续行缩进 2 格）
 
-- [ ] 新建 `src/render/editor.rs`，`pub struct Input`；搬进 `input` / `cursor` / `history` / `history_at` / `draft` + 全部行编辑方法 + `byte_at`；搬进 `wrap_take` / `text_columns` / `char_columns` / `truncate_columns`。`TuiState` 持有一个 `Input`，只保留「提交后把文本送出去」那一半
+- [ ] 新建 `src/render/editor.rs`，`pub struct Input`；搬进 `input` / `cursor` / `history` / `history_at` / `draft` + 全部行编辑方法 + `byte_at`。列宽算术**不搬**：票 11 已经把它收到 `src/render/width.rs`（`text_columns` / `char_columns` / `truncate_columns`），编辑器直接用那一份；换行口径与 `pane::wrap_line` 一致（逐字符、CJK 2 列）。`TuiState` 持有一个 `Input`，只保留「提交后把文本送出去」那一半
 - [ ] `Input` 新增：软换行（逻辑行 → 显示行）、光标行列计算、`insert_str`、`rows(width)`
 - [ ] 软换行**逐字符、CJK 2 列、不按词边界**（与转录同一口径）；最小单位是字符不是 grapheme 簇
 - [ ] **光标的唯一真相源 = `(逻辑行, 行内字符偏移)`**；显示行列每次渲染算出来，不累加维护；`set_cursor_position` 直接写绝对坐标（全屏下无视口偏移）

@@ -48,3 +48,23 @@ Status: ready-for-agent
 **基线**：`cargo test` **502 passed / 0 failed**（495 → +6 布局用例 +1 单元测试）；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移；pty 启动检查仍 **3/3 GREEN**。
 
 **变异检验**（确认新测试不是摆设）：把 `evict()` 摘掉 → 上限用例红；把 resize 锚点改成 `top = 0` → 锚点用例红；把指示块右边界放开一列 → 指示块用例红。三处全部被抓到。
+
+**评审收口**（`/code-review` 双轴，2026-09-21）：
+
+Standards 轴：
+
+- `char_columns` 在 `pane.rs` 与 `tui.rs` 逐字重复 —— 抽出 **`src/render/width.rs`**（`text_columns` / `char_columns` / `truncate_columns`），两处共用。这也给票 12 的编辑器一个稳定的家（票 12 与 spec §5 已相应改写：不再「从 tui.rs 搬一份」）。
+- 保留列用裸 `1`（三处 `saturating_sub(1)`）—— 归位到几何：`layout::Regions::transcript_text()`（内容去掉滚动条那一列）与 `Regions::scrollbar()`，渲染器不再自己减。
+- `draw_scrollbar` 的注释说「the pane always reserves」—— 保留列的 owner 是 `layout`，注释已改。
+- `pane_rows` 只是转发 `pane.view` —— 删掉，直接调用。
+- 两条 Message 臂的「前缀 + 悬挂缩进」重复 —— 抽出 `attribute(speaker, rows)`，归属规则只留一处。
+- `layout::Panes` 与 `pane::Pane` 同屏两个名字 —— `Panes` 改名 **`Regions`**。
+- `indicator: Option<Rect>` + `hits_indicator` 挂在滚动缓冲上（屏幕坐标跑进了缓冲）—— 移到 `TuiState`；`Pane` 现在完全不知道屏幕坐标。
+- `Pane::height()` 无人调用 —— 删除。
+
+Spec 轴：
+
+- **上限用例用的数据每条只占一行**，所以「按源行而非显示行」这条其实没被证明 —— 改成每条折三行的数据（20 001 条 = 60 003 显示行）。现在把 `CAP` 调成 1/3（等于按显示行算）这条用例会红，已用变异检验确认。
+- spec §3 与新写的 `wrap_line` 不一致（spec 还写着「复用 `wrap_take`」，而那个函数已删）—— 已回改 spec §3，并把「列宽算术在 `width.rs`」写进 §3/§5。
+- 两处**不成立**的 finding，未改：①`track_style(DarkGray)` 不是多余 —— ratatui 的默认 track 是 `Style::new()`（无色），不加就与边框不同色；②`fresh()` 不会被 evict 干扰 —— evict 只从**最旧**那头丢行，`total` 与 `seen` 同减同一个高度，差值不变。
+- 一处**打折但不改**：resize 锚点落在源行的**起点**（票面就是「保持顶部可见的源行」），当该行在新宽度下折成多行时，视口顶回到这一行的开头而不是行内的同一偏移。这是票面的字面要求，也是更能读的选择。

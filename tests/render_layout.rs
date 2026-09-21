@@ -405,26 +405,33 @@ fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u
 fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
     use fs_agent::render::{Key, RenderEvent};
 
+    // Every notice wraps to three display rows, so a cap counted in display rows
+    // would keep a third of this history. That is the distinction this pins: the cap
+    // is by source line, so the same history survives at any terminal width (spec §3).
     let mut state = state();
     for index in 0..20_001 {
-        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+        state.apply(RenderEvent::Notice(format!(
+            "第 {index} 行 {}",
+            "x".repeat(200)
+        )));
     }
     // One frame first: a page step is measured in the rows the reader can see.
     let _ = screen(120, 24, &mut state);
 
-    // The oldest line is gone, not merely scrolled off: paging all the way up must
-    // not bring it back (spec §3).
-    for _ in 0..3_000 {
+    // The oldest source line is gone, not merely scrolled off: paging all the way up
+    // must not bring it back, and the top is the line that followed it.
+    for _ in 0..8_000 {
         state.key(Key::PageUp);
     }
-    let text = screen(120, 24, &mut state).join("\n");
+    let rows = screen(120, 24, &mut state);
     assert!(
-        !text.contains("第 0 行"),
-        "the oldest line was dropped: {text}"
+        !rows.join("\n").contains("第 0 行"),
+        "the oldest was dropped"
     );
-    assert!(
-        text.contains("第 1 行"),
-        "the line after it is the oldest now: {text}"
+    assert_eq!(
+        first_notice(&rows),
+        Some(1),
+        "the line after it is the oldest now"
     );
 }
 

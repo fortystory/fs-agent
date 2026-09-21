@@ -45,7 +45,7 @@ const PANEL_MIN_ROWS: u16 = 4;
 
 /// One frame's regions, in terminal coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Panes {
+pub struct Regions {
     /// The header block, its borders included.
     pub header: Rect,
     /// The header's content rows.
@@ -72,11 +72,34 @@ pub fn below_minimum(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
-impl Panes {
+impl Regions {
     /// The column the conversation pane and the panel share, when the panel is
     /// drawn. The panel's own left edge is one column to the right of it.
     pub fn seam(&self) -> Option<u16> {
         self.panel.map(|panel| panel.x - 1)
+    }
+
+    /// The transcript's text area: its content less the scrollbar's column.
+    ///
+    /// The column is reserved whether or not the scrollbar is drawn, so text never
+    /// rewraps because the transcript grew (spec §4).
+    pub fn transcript_text(&self) -> Rect {
+        Rect::new(
+            self.transcript.x,
+            self.transcript.y,
+            self.transcript.width.saturating_sub(SCROLLBAR_COLUMN),
+            self.transcript.height,
+        )
+    }
+
+    /// The scrollbar's column inside the transcript's content.
+    pub fn scrollbar(&self) -> Rect {
+        Rect::new(
+            self.transcript.right().saturating_sub(SCROLLBAR_COLUMN),
+            self.transcript.y,
+            SCROLLBAR_COLUMN,
+            self.transcript.height,
+        )
     }
 }
 
@@ -85,7 +108,7 @@ impl Panes {
 /// The order here **is** the degrade ladder: the panel is hidden first (by the
 /// renderer, which knows the transcript's width), then the header loses its second
 /// line, then the airy rows go. The floor is [`MIN_WIDTH`] x [`MIN_HEIGHT`].
-pub fn plan(area: Rect, draft_rows: u16) -> Panes {
+pub fn plan(area: Rect, draft_rows: u16) -> Regions {
     let header_rows = header_content_rows(area.width, area.height);
     // Airy is decided against the smallest draft there can be, so a draft that
     // grows gives up its own room rather than the whitespace: at 120x24 the input
@@ -134,7 +157,7 @@ pub fn plan(area: Rect, draft_rows: u16) -> Panes {
         )
     });
 
-    Panes {
+    Regions {
         header,
         header_content: inside(header, header_rows),
         middle,
@@ -150,6 +173,9 @@ pub fn plan(area: Rect, draft_rows: u16) -> Panes {
         ),
     }
 }
+
+/// The column the transcript always keeps for its scrollbar, drawn or not.
+const SCROLLBAR_COLUMN: u16 = 1;
 
 /// The panel's outer width, the shared seam column included.
 fn panel_outer(width: u16) -> u16 {

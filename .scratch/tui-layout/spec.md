@@ -159,7 +159,7 @@ Status: ready-for-agent
 
 - 面板持有的是**源行**缓冲：`Block` 展开成未换行的行。**20 000 的上限按源行算**（宽度无关，可复现）；滚动与滚动条另按**显示行**算。
 - 缓存 = 全量换行后的 `Vec<Line>` + **源行 → 显示行起点**索引。
-- **换行口径**：逐字符、一个 CJK 字符 2 列，复用既有 `wrap_take`。**不用** `Paragraph::line_count`（默认特性下被 unstable 门挡成 `pub(crate)`），**也不开** `unstable-rendered-line-info`。
+- **换行口径**：逐字符、一个 CJK 字符 2 列，把带样式的行切开并保留每个 span 的样式（`pane::wrap_line`）。**不用** `Paragraph::line_count`（默认特性下被 unstable 门挡成 `pub(crate)`），**也不开** `unstable-rendered-line-info`。列宽的算术集中在 `src/render/width.rs`（`text_columns` / `char_columns` / `truncate_columns`），转录、header、输入行与指示块共用同一份 —— 已有的 `wrap_take` 只服务无样式字符串，随票 11 删除。
 - **失效**：宽度变化（全量重算）与流式增量（只重算尾部）。新块到达**只增量换行尾部**并追加索引。
 - 缓存**在 `draw` 闭包里按 `frame.area().width` 失效**（不设单独的 resize 分支）。
 - **非 assistant 的消息不再截断**：现在那一支压成单行 + `truncate(text, 500)`，改成**保留换行的多行原样渲染**（不做 Markdown），续行按 speaker 前缀显示宽度缩进。**assistant 的消息本来就是全文 Markdown，不动。**
@@ -179,9 +179,9 @@ Status: ready-for-agent
 ### §5 输入编辑器 `Input`
 
 - 编辑器拆成**独立的 `Input` 类型**（新建 `src/render/editor.rs`），`TuiState` 持有一个。搬进去的：`input` / `cursor` / `history` / `history_at` / `draft` 与全部行编辑方法、`byte_at`。留在 `TuiState` 的：转录、`live`、`ready`、`pending`、`events`、`busy`、`quit`、`prompt_reply`，以及「提交后把文本送出去」那一半。
-- `Input` 新增：软换行（逻辑行 → 显示行）、光标行列计算、`insert_str`（粘贴整体插入）、`rows(width)`。`wrap_take` / `text_columns` / `char_columns` / `truncate_columns` 一并搬过去。
+- `Input` 新增：软换行（逻辑行 → 显示行）、光标行列计算、`insert_str`（粘贴整体插入）、`rows(width)`。列宽算术**不要**再从 `tui.rs` 搬一份：票 11 已把它收到 `src/render/width.rs`，编辑器直接用那一份，换行口径与 `pane::wrap_line` 保持一致。
 - **光标的唯一真相源 = `(逻辑行, 行内字符偏移)`**；显示行/列**每次渲染算出来**，不累加维护。全屏下 `area()` 恒为 `(0,0,w,h)` 且 `set_cursor_position` 是终端绝对坐标，**没有视口偏移要加**。
-- 软换行**按字符、不按词边界**（与转录一致）；最小单位是字符不是 grapheme 簇（与既有 `wrap_take` 的取舍一致）。
+- 软换行**按字符、不按词边界**（与转录的 `pane::wrap_line` 一致）；最小单位是字符不是 grapheme 簇。
 - `↑` / `↓` **保持视觉列（goal column）**；横向移动或插入字符时清掉。
 
 ### §6 键位表
@@ -335,7 +335,7 @@ Status: ready-for-agent
 ## Further Notes
 
 - **本 spec 的三条决定推翻了先前冻结项，都已如实记录**：①inline viewport → alt screen（ADR 0002，动机是修不好的光标 bug，不是审美）；②`Shift+Enter` **不能**换行（不启用键盘增强协议，它在协议层与 `Enter` 不可区分）；③鼠标捕获**改判为开**（换来滚轮与可点击的「到最下」，代价是**复制要按住 Shift 拖拽**）。
-- **spec 期修正的两处表述**（折叠时发现，已回改设计票）：①被截断 500 字的是**非 assistant** 的消息（主要是用户自己的输入），assistant 本来就是全文 Markdown；②`Paragraph::line_count` 语义正确但被 unstable 特性挡成 `pub(crate)`，因此**换行口径坚持用 `wrap_take`**，不为一个计数开不稳定特性。
+- **spec 期修正的两处表述**（折叠时发现，已回改设计票）：①被截断 500 字的是**非 assistant** 的消息（主要是用户自己的输入），assistant 本来就是全文 Markdown；②`Paragraph::line_count` 语义正确但被 unstable 特性挡成 `pub(crate)`，因此**换行口径坚持自己算**（现在落在 `pane::wrap_line` + `src/render/width.rs`），不为一个计数开不稳定特性。
 - **一条实现注意**：`map_key` 的 CONTROL 分支现在没有 `'j'`，所以 **Ctrl-J 目前是被丢弃的**，要显式加上。
 - **实现期修正的三处**（票 10 落地时发现，已回改本节与相关票）：①`status_line` 的降级优先级是「**提示优先、状态词最后加**」，不是「状态词先占位」—— 后者在 40 列下会挤掉 `ctrl-j 换行`，与票 02 那张已批准的 40×10 快照（3 条、无状态词）矛盾；②单行 header 的时钟是 `HH:MM`，不是完整日期时间（快照如此）；③`a_wide_grapheme_leaves_no_blank_cell_after_it` 随 `paint_scrollback` 一起删除 —— 那个 bug 只存在于 `insert_before` 的 scratch buffer，全屏走 ratatui 自己的 buffer diff，没有可测的自家代码。
 - **几何数字的唯一来源**是 `.scratch/tui-layout/prototype/`（`geometry-table.md` + `chosen-*.txt`，全部是 `TestBackend` 实测像素）。改布局时先改原型再改 spec，别在实现里即兴调比例。

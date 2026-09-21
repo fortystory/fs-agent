@@ -14,10 +14,10 @@
 
 use std::collections::VecDeque;
 
-use ratatui::buffer::CellWidth;
-use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+
+use super::width::char_columns;
 
 /// Source lines the pane keeps before dropping the oldest (spec §3).
 pub const CAP: usize = 20_000;
@@ -54,8 +54,6 @@ pub struct Pane {
     /// `total` as of the last frame that followed the bottom. The indicator counts
     /// what has arrived since.
     seen: usize,
-    /// Where the "back to bottom" indicator was drawn, so a click can hit it.
-    indicator: Option<Rect>,
 }
 
 impl Pane {
@@ -72,7 +70,6 @@ impl Pane {
             top_source: 0,
             follow: true,
             seen: 0,
-            indicator: None,
         }
     }
 
@@ -174,26 +171,6 @@ impl Pane {
     /// The display row at the top of the viewport.
     pub fn top(&self) -> usize {
         self.top
-    }
-
-    /// The last frame's pane height in display rows.
-    pub fn height(&self) -> u16 {
-        self.height
-    }
-
-    /// Remember where the "back to bottom" indicator was drawn.
-    pub fn set_indicator(&mut self, rect: Option<Rect>) {
-        self.indicator = rect;
-    }
-
-    /// Whether a click landed on the "back to bottom" indicator.
-    pub fn hits_indicator(&self, column: u16, row: u16) -> bool {
-        self.indicator.is_some_and(|rect| {
-            column >= rect.x
-                && column < rect.x.saturating_add(rect.width)
-                && row >= rect.y
-                && row < rect.y.saturating_add(rect.height)
-        })
     }
 
     /// Bring the wrap cache up to date for `width`, keeping the viewport on the
@@ -363,10 +340,4 @@ fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
         Some(last) if last.style == style => last.content.to_mut().push(ch),
         _ => spans.push(Span::styled(ch.to_string(), style)),
     }
-}
-
-/// The display width of one character, in terminal columns.
-fn char_columns(ch: char) -> usize {
-    let mut buf = [0u8; 4];
-    ch.encode_utf8(&mut buf).cell_width() as usize
 }

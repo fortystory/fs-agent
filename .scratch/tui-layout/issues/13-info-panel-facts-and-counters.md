@@ -24,4 +24,4 @@ Status: ready-for-agent
 
 ## Comments
 
-- **票 10 交接**（2026-09-21）：右栏的**空框与共用接缝已经在票 10 画好了**（`layout::Panes::panel` + `draw_seam`），本票只需填内容。票 10 票面 checklist 里那句「措辞层新增面板标签 / `—` / 配对函数」**没有在票 10 落地**，有意留给本票 —— 在被消费的这张票里加，才有测试可写。也就是本票要补：`PANEL_MODEL` / `PANEL_CONTEXT` / `PANEL_TOKENS` / `PANEL_TURNS` / `PANEL_INPUT` / `PANEL_OUTPUT` / `PANEL_CACHE`、`PANEL_UNKNOWN`（`—`）、`token_pair` / `context_pair` / `cache_pair`。
+- **票 10 交接**（2026-09-21）：右栏的**空框与共用接缝已经在票 10 画好了**（`layout::Regions::panel` + `draw_seam`；该结构在票 11 的评审收口里由 `Panes` 改名为 `Regions`），本票只需填内容。票 10 票面 checklist 里那句「措辞层新增面板标签 / `—` / 配对函数」**没有在票 10 落地**，有意留给本票 —— 在被消费的这张票里加，才有测试可写。也就是本票要补：`PANEL_MODEL` / `PANEL_CONTEXT` / `PANEL_TOKENS` / `PANEL_TURNS` / `PANEL_INPUT` / `PANEL_OUTPUT` / `PANEL_CACHE`、`PANEL_UNKNOWN`（`—`）、`token_pair` / `context_pair` / `cache_pair`。

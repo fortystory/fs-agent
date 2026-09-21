@@ -46,6 +46,7 @@ use super::layout;
 use super::pane::Pane;
 use super::severity::Severity;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
+use super::width::{char_columns, text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{Render, RenderEvent};
 
@@ -359,6 +360,9 @@ pub struct TuiState {
     events: Vec<FrontEndEvent>,
     /// Whether a turn is in flight, which decides what Esc and Ctrl-C mean.
     busy: bool,
+    /// Where the last frame drew the "back to bottom" indicator, so a click can be
+    /// matched against what the user actually saw.
+    indicator: Option<Rect>,
     quit: bool,
 }
 
@@ -386,6 +390,7 @@ impl TuiState {
             pending: None,
             events: Vec::new(),
             busy: false,
+            indicator: None,
             quit: false,
         }
     }
@@ -479,12 +484,22 @@ impl TuiState {
             MouseEventKind::ScrollUp => self.pane.wheel(true),
             MouseEventKind::ScrollDown => self.pane.wheel(false),
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.pane.hits_indicator(mouse.column, mouse.row) {
+                if self.indicator_hit(mouse.column, mouse.row) {
                     self.pane.to_bottom();
                 }
             }
             _ => {}
         }
+    }
+
+    /// Whether a click landed on the "back to bottom" indicator.
+    fn indicator_hit(&self, column: u16, row: u16) -> bool {
+        self.indicator.is_some_and(|rect| {
+            column >= rect.x
+                && column < rect.x.saturating_add(rect.width)
+                && row >= rect.y
+                && row < rect.y.saturating_add(rect.height)
+        })
     }
 
     /// Answer a request from the loop.
@@ -738,12 +753,6 @@ impl TuiState {
         }
     }
 
-    /// The conversation pane's rows for this frame: the transcript's tail with the
-    /// streaming tail last, wrapped to `width` and clipped to `height`.
-    fn pane_rows(&mut self, width: u16, height: u16) -> Vec<Line<'static>> {
-        self.pane.view(width, height, &self.live)
-    }
-
     /// The column the cursor rests on for a terminal `width` columns wide: the
     /// two prompt cells plus the input **up to the cursor**, in display columns.
     ///
@@ -826,7 +835,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let area = frame.area();
     if layout::below_minimum(area) {
         // Nothing is drawn that a click could land on.
-        state.pane.set_indicator(None);
+        state.indicator = None;
         draw_too_small(frame, area);
         return;
     }
@@ -862,7 +871,7 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
 }
 
 /// The header: what session this is, where it is, what mode it runs in, and when.
-fn draw_header(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiState) {
+fn draw_header(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     draw_border(frame, panes.header);
     let lines = header_lines(panes.header_content, state);
     frame.render_widget(Paragraph::new(lines), panes.header_content);
@@ -917,15 +926,15 @@ fn edges(left: &str, right: &str, width: usize) -> String {
 
 /// The conversation pane: the transcript's window onto its own scroll buffer,
 /// plus the two things that say where the viewport is (spec §3, §4).
-fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &mut TuiState) {
+fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     draw_border(frame, panes.middle);
-    // The scrollbar's column is reserved whether or not anything is drawn in it, so
-    // text never rewraps because the transcript grew (spec §4).
-    let text_width = panes.transcript.width.saturating_sub(1);
-    let rows = state.pane_rows(text_width, panes.transcript.height);
+    let text_area = panes.transcript_text();
+    let rows = state
+        .pane
+        .view(text_area.width, text_area.height, &state.live);
     frame.render_widget(Paragraph::new(rows), panes.transcript);
-    draw_scrollbar(frame, panes.transcript, &state.pane);
-    draw_indicator(frame, panes.transcript, state);
+    draw_scrollbar(frame, panes.scrollbar(), &state.pane);
+    draw_indicator(frame, text_area, state);
     if let Some(seam) = panes.seam() {
         // The two panes share one column rather than each drawing a border. Its
         // ends join the middle block's borders instead of crossing them.
@@ -934,12 +943,11 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &mu
 }
 
 /// The transcript's scrollbar: drawn only when there is more than a pane's worth,
-/// in the column the pane always reserves for it.
-fn draw_scrollbar(frame: &mut ratatui::Frame, area: Rect, pane: &Pane) {
-    if area.width == 0 || pane.total() <= area.height as usize {
+/// in the column the layout always reserves for it.
+fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
+    if track.width == 0 || pane.total() <= track.height as usize {
         return;
     }
-    let track = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
     // Following the bottom and reading history look different, so the position is
     // legible without reading a number.
     let thumb = if pane.following() {
@@ -951,7 +959,7 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, area: Rect, pane: &Pane) {
     };
     let mut scrollbar = ScrollbarState::new(pane.total())
         .position(pane.top())
-        .viewport_content_length(area.height as usize);
+        .viewport_content_length(track.height as usize);
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .track_style(Style::default().fg(Color::DarkGray))
@@ -967,7 +975,7 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, area: Rect, pane: &Pane) {
 /// — a click can only land on what the last frame drew.
 fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) {
     if state.pane.following() || area.width == 0 || area.height == 0 {
-        state.pane.set_indicator(None);
+        state.indicator = None;
         return;
     }
     let fresh = state.pane.fresh();
@@ -976,12 +984,11 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
     } else {
         wording::new_content(fresh)
     };
-    // Inside the pane's right edge, not on it: the last column belongs to the
-    // scrollbar, and a wide character here would shadow it away.
-    let room = area.width.saturating_sub(1);
-    let width = (text_columns(&text) as u16).min(room);
+    // `area` is already the text area — the scrollbar's column is not in it — so a
+    // wide character at the right edge cannot shadow the scrollbar away.
+    let width = (text_columns(&text) as u16).min(area.width);
     let rect = Rect::new(
-        area.right().saturating_sub(1).saturating_sub(width),
+        area.right().saturating_sub(width),
         area.bottom().saturating_sub(1),
         width,
         1,
@@ -995,7 +1002,7 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
         ))),
         rect,
     );
-    state.pane.set_indicator(Some(rect));
+    state.indicator = Some(rect);
 }
 
 /// The shared seam between the conversation pane and the panel.
@@ -1018,7 +1025,7 @@ fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
 
 /// The bottom block: the input line, and under it the hints that say what the keys
 /// do.
-fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiState) {
+fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     draw_border(frame, panes.bottom);
     let (input, style) = state.input_line(panes.input.width);
     frame.render_widget(
@@ -1042,30 +1049,29 @@ fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiSta
     }
 }
 
-/// The display width of `text`, in terminal columns.
-fn text_columns(text: &str) -> usize {
-    text.cell_width() as usize
-}
-
-/// The display width of one character, in terminal columns.
-fn char_columns(ch: char) -> usize {
-    let mut buf = [0u8; 4];
-    ch.encode_utf8(&mut buf).cell_width() as usize
-}
-
-/// The longest prefix of `text` that fits in `width` columns.
-fn truncate_columns(text: &str, width: usize) -> String {
-    let mut used = 0;
-    let mut end = 0;
-    for (index, ch) in text.char_indices() {
-        let columns = char_columns(ch);
-        if used + columns > width {
-            break;
-        }
-        used += columns;
-        end = index + ch.len_utf8();
-    }
-    text[..end].to_owned()
+/// Attribute a message's rows to its speaker: the label leads the first row and
+/// the rest hang under the body of it, so a wrapped or multi-line message reads as
+/// one utterance (spec §3).
+fn attribute(speaker: &crate::events::SpeakerId, rows: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let prefix = format!("{} ", speaker_label(speaker));
+    let indent = " ".repeat(prefix.as_str().cell_width() as usize);
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let lead = if index == 0 {
+                prefix.clone()
+            } else {
+                indent.clone()
+            };
+            let mut spans = vec![Span::styled(lead, Style::default().fg(Color::DarkGray))];
+            spans.extend(row.spans);
+            Line {
+                spans,
+                style: row.style,
+                alignment: row.alignment,
+            }
+        })
+        .collect()
 }
 
 /// Turn one finalized block into styled terminal lines.
@@ -1084,40 +1090,18 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             }
             // The answer is rendered as Markdown at full brightness; only the
             // speaker label repeats, in the narration grey.
-            let prefix = format!("{} ", speaker_label(speaker));
-            let indent = " ".repeat(prefix.as_str().cell_width() as usize);
-            super::markdown::to_lines(text)
-                .into_iter()
-                .enumerate()
-                .map(|(index, line)| {
-                    let lead = if index == 0 { &prefix } else { &indent };
-                    let mut spans = vec![Span::styled(
-                        lead.clone(),
-                        Style::default().fg(ratatui::style::Color::DarkGray),
-                    )];
-                    spans.extend(line.spans);
-                    Line::from(spans)
-                })
-                .collect()
+            attribute(speaker, super::markdown::to_lines(text))
         }
         // The user's own input — and the non-assistant system lines — shown as they
         // were written: every line, nothing elided, and no Markdown, because this
         // is not a document. Continuations line up under the body of the first line
         // (spec §3).
-        Block::Message { speaker, text, .. } => {
-            let prefix = format!("{} ", speaker_label(speaker));
-            let indent = " ".repeat(prefix.as_str().cell_width() as usize);
+        Block::Message { speaker, text, .. } => attribute(
+            speaker,
             text.split('\n')
-                .enumerate()
-                .map(|(index, raw)| {
-                    let lead = if index == 0 { &prefix } else { &indent };
-                    Line::from(vec![
-                        Span::styled(lead.clone(), Style::default().fg(Color::DarkGray)),
-                        Span::raw(raw.to_owned()),
-                    ])
-                })
-                .collect()
-        }
+                .map(|raw| Line::from(raw.to_owned()))
+                .collect(),
+        ),
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
             wording::round_section(*round, *mode),

@@ -36,6 +36,7 @@ pub mod plain;
 pub mod severity;
 pub mod transcript;
 pub mod tui;
+pub mod width;
 pub mod wording;
 
 use async_trait::async_trait;
