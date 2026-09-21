@@ -19,6 +19,7 @@ use crate::events::{
     StopReason, Usage,
 };
 use crate::permissions::Mode;
+use crate::provider::FinishReason;
 
 /// The human label for a round mode.
 ///
@@ -174,6 +175,48 @@ pub fn message_complete() -> &'static str {
 /// caller.
 pub fn tool_completed() -> &'static str {
     "工具完成"
+}
+
+/// The provider's own terminal label, named in Chinese. It is diagnostic only,
+/// but it still reaches the interface through a diagnostic line.
+pub fn finish_reason(reason: &FinishReason) -> &str {
+    match reason {
+        FinishReason::Stop => "正常停止",
+        FinishReason::Length => "达到长度上限",
+        FinishReason::ToolCalls => "请求工具",
+        FinishReason::ContentFilter => "内容被过滤",
+        FinishReason::InsufficientSystemResource => "系统资源不足",
+        FinishReason::Aborted => "已取消",
+        FinishReason::Other(other) => other,
+    }
+}
+
+/// The Chinese phrase for a stopping point recorded as its `as_str` name: a
+/// `sessions stats` row carries the name, not the enum. An unknown name is shown
+/// as itself.
+pub fn stop_reason_name(name: &str) -> &str {
+    match name {
+        "Completed" => stop_reason(StopReason::Completed),
+        "MaxIterations" => stop_reason(StopReason::MaxIterations),
+        "Aborted" => stop_reason(StopReason::Aborted),
+        "MistakeLimit" => stop_reason(StopReason::MistakeLimit),
+        "Error" => stop_reason(StopReason::Error),
+        "Consensus" => stop_reason(StopReason::Consensus),
+        "NoDivergence" => stop_reason(StopReason::NoDivergence),
+        "RoundsExhausted" => stop_reason(StopReason::RoundsExhausted),
+        "BudgetExhausted" => stop_reason(StopReason::BudgetExhausted),
+        other => other,
+    }
+}
+
+/// The Chinese phrase for a permission verdict recorded as its `as_str` name.
+pub fn decision_name(name: &str) -> &str {
+    match name {
+        "allow" => decision(Decision::Allow),
+        "ask" => decision(Decision::Ask),
+        "deny" => decision(Decision::Deny),
+        other => other,
+    }
 }
 
 /// A permission question on the transcript.

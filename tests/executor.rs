@@ -361,9 +361,10 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
     fixture.harness.shutdown().await;
     assert_eq!(fixture.stdout.text(), "the executor counted 12 files\n");
     // The executor's own working is narrated for a person reading the terminal,
-    // attributed to the executor.
+    // attributed to the executor under its own speaker label.
+    let label = fs_agent::render::wording::speaker_label(&SpeakerId::Executor("kimi-1".into()));
     assert!(
-        fixture.stderr.text().contains("kimi-1"),
+        fixture.stderr.text().contains(&label),
         "{}",
         fixture.stderr.text()
     );

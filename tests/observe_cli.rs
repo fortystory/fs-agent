@@ -315,7 +315,7 @@ fn an_unknown_verb_fails_loudly_with_nothing_on_stdout() {
     assert_eq!(code, ExitCode::FAILURE);
     assert!(out.is_empty(), "stdout carries only results: {out}");
     assert!(
-        !err.is_empty(),
-        "the refusal is on stderr (and says what to try): {err}"
+        err.contains("explain"),
+        "the refusal names the verb it did not know: {err}"
     );
 }

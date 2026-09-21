@@ -676,7 +676,11 @@ fn message_text(message: &Message) -> String {
 #[test]
 fn running_as_root_is_refused_with_no_bypass() {
     let refusal = fs_agent::cli::root_refusal(0).expect("root is refused");
-    assert!(!refusal.is_empty(), "the refusal says something");
+    assert_eq!(
+        refusal,
+        fs_agent::render::wording::root_refusal(),
+        "the refusal is the wording layer's text"
+    );
 
     assert_eq!(fs_agent::cli::root_refusal(1), None);
     assert_eq!(fs_agent::cli::root_refusal(1000), None);

@@ -493,7 +493,10 @@ pub async fn run_turn(
                         // The stream ended on `[DONE]`. `finish_reason` is diagnostic
                         // only; the turn's stop reason comes from the loop's own
                         // continuation query, never from the provider.
-                        render.diagnostic(&format!("provider stream finished: {finish_reason:?}"));
+                        render.diagnostic(&format!(
+                            "provider stream finished: {}",
+                            crate::render::wording::finish_reason(&finish_reason)
+                        ));
                         saw_done = true;
                         break;
                     }
@@ -1532,7 +1535,10 @@ pub async fn run_single_shot(
                     )?;
                 }
                 Some(Ok(StreamEvent::Finished { finish_reason })) => {
-                    render.diagnostic(&format!("synthesizer stream finished: {finish_reason:?}"));
+                    render.diagnostic(&format!(
+                        "synthesizer stream finished: {}",
+                        crate::render::wording::finish_reason(&finish_reason)
+                    ));
                     saw_done = true;
                     break;
                 }

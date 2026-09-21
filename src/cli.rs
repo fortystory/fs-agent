@@ -1530,7 +1530,7 @@ fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
             out,
             "{}",
             render::wording::stats_speaker(
-                &speaker.speaker.to_string(),
+                &pad_end(&speaker.speaker.to_string(), 16),
                 speaker.tokens.total_tokens(),
                 speaker.calls,
                 &hit,
@@ -1584,7 +1584,10 @@ fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
         let _ = writeln!(
             out,
             "{}",
-            render::wording::stats_executor_reason(&reason.name, reason.count)
+            render::wording::stats_executor_reason(
+                render::wording::stop_reason_name(&reason.name),
+                reason.count
+            )
         );
     }
     let _ = writeln!(
@@ -1602,7 +1605,12 @@ fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
         .permissions
         .decided
         .iter()
-        .map(|count| render::wording::stats_decision(count.count, &count.name))
+        .map(|count| {
+            render::wording::stats_decision(
+                count.count,
+                render::wording::decision_name(&count.name),
+            )
+        })
         .collect::<Vec<_>>()
         .join("、");
     let decided = if decisions.is_empty() {
@@ -1641,7 +1649,7 @@ fn print_stats(out: &mut dyn Write, stats: &observe::Stats, model: &str) {
         let _ = writeln!(
             out,
             "{}",
-            render::wording::stats_stop(&stop.name, stop.count)
+            render::wording::stats_stop(render::wording::stop_reason_name(&stop.name), stop.count)
         );
     }
 }

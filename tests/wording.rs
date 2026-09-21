@@ -435,4 +435,27 @@ fn the_stats_labels_read_in_chinese() {
         ),
         "#1 独立首轮 2 次调用，结束于 无分歧"
     );
+    // Recorded enum names are mapped too: no internal name reaches the view.
+    assert_eq!(wording::stop_reason_name("Completed"), "完成");
+    assert_eq!(wording::stop_reason_name("BudgetExhausted"), "预算用尽");
+    assert_eq!(wording::stop_reason_name("future_reason"), "future_reason");
+    assert_eq!(wording::decision_name("allow"), "允许");
+    assert_eq!(wording::decision_name("deny"), "拒绝");
+    assert_eq!(wording::decision_name("future"), "future");
+}
+
+#[test]
+fn a_provider_finish_reason_reads_in_chinese() {
+    use fs_agent::provider::FinishReason;
+    assert_eq!(wording::finish_reason(&FinishReason::Stop), "正常停止");
+    assert_eq!(wording::finish_reason(&FinishReason::ToolCalls), "请求工具");
+    assert_eq!(
+        wording::finish_reason(&FinishReason::Length),
+        "达到长度上限"
+    );
+    // A vendor's own unrecognized label passes through.
+    assert_eq!(
+        wording::finish_reason(&FinishReason::Other("vendor_specific".to_owned())),
+        "vendor_specific"
+    );
 }
