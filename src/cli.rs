@@ -484,8 +484,8 @@ enum Submission<'a> {
     Undo,
     Plan,
     EndPlan,
-    /// A first line that opens with `/` and names nothing known, with nothing after
-    /// it: a typo, and the one case the user is told about.
+    /// A first line that opens with `/` and names nothing known, with nothing but
+    /// blank lines after it: a typo, and the one case the user is told about.
     Unknown(&'a str),
     /// `/<skill>` and the task that follows it.
     Skill {
@@ -503,16 +503,28 @@ enum Submission<'a> {
 /// become the task. A first line that opens with `/` but names something unknown is a
 /// typo when it is the whole submission (told about, as it always was) and a pasted
 /// paragraph when it is not.
+///
+/// The built-ins take no task, so they match only as the **whole** submission: a line
+/// after `/plan` must not be dropped on the floor. Such a submission falls through to
+/// the rules above — `/plan` names no skill, so with lines after it the whole thing is
+/// read as a prompt, which at least shows the user what they sent.
+///
+/// Leading slashes are all stripped (`//undo` reads as `undo`), which is how the old
+/// code read a skill name too. Trailing blank lines are dropped from a task; the rest
+/// is kept as written.
 fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission<'a> {
     let (first, rest) = match text.split_once('\n') {
         Some((first, rest)) => (first.trim(), rest),
         None => (text.trim(), ""),
     };
+    // A built-in is the whole submission or it is nothing: it has no task to hold the
+    // lines that follow, and dropping them would lose what the user wrote.
+    let whole = rest.trim().is_empty();
     match first {
-        "/quit" | "/exit" => Submission::Quit,
-        "/undo" => Submission::Undo,
-        "/plan" => Submission::Plan,
-        "/endplan" => Submission::EndPlan,
+        "/quit" | "/exit" if whole => Submission::Quit,
+        "/undo" if whole => Submission::Undo,
+        "/plan" if whole => Submission::Plan,
+        "/endplan" if whole => Submission::EndPlan,
         _ if first.starts_with('/') => {
             let rest_of_line = first.trim_start_matches('/');
             let (name, inline) = match rest_of_line.split_once(char::is_whitespace) {
@@ -526,9 +538,12 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
                 // A pasted paragraph that happens to open with `/` is a paragraph.
                 return Submission::Prompt(text);
             }
+            // The task is the rest of the first line plus every line below it, as
+            // written: only trailing blank lines go. A continuation of nothing but
+            // blanks is not a task, so a bare `/<skill>` still only loads.
             let mut task = inline.to_owned();
             let rest = rest.trim_end_matches('\n');
-            if !rest.is_empty() {
+            if !rest.trim().is_empty() {
                 if !task.is_empty() {
                     task.push('\n');
                 }
@@ -1845,6 +1860,36 @@ mod tests {
         );
         // On one line it is still a typo, and one the user is told about.
         assert_eq!(read("/usr/bin/env"), Submission::Unknown("/usr/bin/env"));
+        // Blank lines after it are still "nothing after it".
+        assert_eq!(read("/nope\n   "), Submission::Unknown("/nope"));
+    }
+
+    #[test]
+    fn a_built_in_takes_no_task_so_a_line_after_it_is_not_dropped() {
+        // `/plan` followed by anything else is not the command: the lines after it must
+        // not vanish, so the whole submission is read by the rules for a `/`-opening
+        // line — `/plan` names no skill, so it is a prompt.
+        assert_eq!(
+            read("/plan\n把 X 改成 Y"),
+            Submission::Prompt("/plan\n把 X 改成 Y")
+        );
+        assert_eq!(read("/plan"), Submission::Plan);
+        assert_eq!(
+            read("/plan  "),
+            Submission::Plan,
+            "trailing blanks are fine"
+        );
+    }
+
+    #[test]
+    fn a_skill_followed_only_by_blanks_still_only_loads() {
+        assert_eq!(
+            read("/review\n   \n"),
+            Submission::Skill {
+                name: "review",
+                task: String::new(),
+            }
+        );
     }
 
     #[test]
