@@ -61,6 +61,9 @@ impl Fixture {
             // Likewise the repo map keeps an empty session context and the
             // default budget: nothing in this file calls it.
             repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
+            // The `bash` tool's configured limits; this file does not dispatch
+            // it, so the defaults are the honest value.
+            bash: fs_agent::tools::BashLimits::default(),
             // No executor port: this file drives the dispatch seam directly, and
             // `task` is not one of the tools it dispatches.
             executor: None,

@@ -485,18 +485,125 @@ fn circuit_breaker(call: &Call<'_>) -> Option<Verdict> {
 /// `rm` against the filesystem root or the home directory (or an ancestor of
 /// either) is the one class no rule may approve: it is the least reversible
 /// thing an agent can do.
+///
+/// The `bash` tool declares its argv as `["bash", "-lc", command]` (spec §7), so
+/// the command the shell will actually run is looked at, not the wrapper that
+/// starts it — otherwise every `rm` would be hidden one word in.
 fn rm_breaker(call: &Call<'_>) -> Option<Verdict> {
     let argv = call.argv?;
-    if argv.first().map(String::as_str) != Some("rm") {
+    for command in simple_commands(argv) {
+        if command.first().copied() != Some("rm") {
+            continue;
+        }
+        if let Some(target) = command.iter().skip(1).find(|arg| {
+            !arg.starts_with('-')
+                && !arg.is_empty()
+                && targets_root_or_home(arg, call.cwd, call.home)
+        }) {
+            return Some(Verdict {
+                decision: Decision::Deny,
+                reason: format!(
+                    "circuit breaker: rm targeting {target} is denied regardless of any rule"
+                ),
+            });
+        }
+    }
+    None
+}
+
+/// The simple commands one argv will run, as token lists.
+///
+/// For an ordinary argv that is the argv itself. For a shell wrapper
+/// (`bash -lc "<command>"`) it is the command string split on the shell's control
+/// operators and tokenized. The scan is **lexical and best-effort**: the breaker
+/// exists to stop an accident, not to confine an adversary (spec §12, §20), so a
+/// spelling it cannot see is documented rather than chased.
+fn simple_commands(argv: &[String]) -> Vec<Vec<&str>> {
+    match shell_command_string(argv) {
+        Some(script) => shell_simple_commands(script),
+        None => vec![argv.iter().map(String::as_str).collect()],
+    }
+}
+
+/// The command string a shell invocation will run, if the argv is one.
+///
+/// Recognizes `bash`/`sh` invoked with a `-c`-bearing flag: the argument after
+/// that flag is the script. The scan skips options, so a shell that takes an
+/// option argument first (`bash -o pipefail -c "…"`) is still seen; a shell given
+/// a script file instead (`bash build.sh`) has no command string here and its
+/// argv is treated as an ordinary argv.
+fn shell_command_string(argv: &[String]) -> Option<&str> {
+    let shell = Path::new(argv.first()?).file_name()?.to_str()?;
+    if !matches!(shell, "bash" | "sh") {
         return None;
     }
-    let target = argv.iter().skip(1).find(|arg| {
-        !arg.starts_with('-') && !arg.is_empty() && targets_root_or_home(arg, call.cwd, call.home)
-    })?;
-    Some(Verdict {
-        decision: Decision::Deny,
-        reason: format!("circuit breaker: rm targeting {target} is denied regardless of any rule"),
-    })
+    for (index, arg) in argv.iter().enumerate().skip(1) {
+        let Some(cluster) = arg.strip_prefix('-') else {
+            // A non-flag token (a script file, or an option's argument) does not
+            // carry the flag; a later `-c` may still.
+            continue;
+        };
+        if cluster.is_empty() || cluster.starts_with('-') {
+            // `-` (stdin) or a long option (`--norc`); neither carries the flag.
+            continue;
+        }
+        if cluster.contains('c') {
+            return argv.get(index + 1).map(String::as_str);
+        }
+    }
+    None
+}
+
+/// Split a shell command string into simple commands and tokenize each.
+///
+/// Control operators (`;`, `&`, `|`, `(`, `)`, newline) start a new simple
+/// command, matching surrounding quotes are stripped from a token, and leading
+/// grammatical keywords (`then`, `do`, `if`, `!`, …) are dropped, so `rm -rf "/"`,
+/// `(rm -rf /)` and `if x; then rm -rf /; fi` all read as an `rm`.
+fn shell_simple_commands(script: &str) -> Vec<Vec<&str>> {
+    script
+        .split([';', '&', '|', '(', ')', '\n'])
+        .map(|segment| {
+            let mut tokens: Vec<&str> = segment
+                .split_whitespace()
+                .map(strip_quotes)
+                .filter(|token| !token.is_empty())
+                .collect();
+            while tokens
+                .first()
+                .is_some_and(|token| SHELL_KEYWORDS.contains(token))
+            {
+                tokens.remove(0);
+            }
+            tokens
+        })
+        .filter(|command: &Vec<&str>| !command.is_empty())
+        .collect()
+}
+
+/// Grammatical shell words that may precede a simple command, so the breaker
+/// reads the command rather than the keyword in front of it.
+///
+/// These are syntax, not indirection: stripping them is still a lexical read of
+/// the same command. A wrapper that changes *what* runs (`sudo`, `env`, `eval`,
+/// an alias) is deliberately not here — see `docs/bash.md` for what the scan
+/// cannot see.
+const SHELL_KEYWORDS: &[&str] = &[
+    "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "time", "!",
+];
+
+/// A token without one matching pair of surrounding quotes.
+fn strip_quotes(token: &str) -> &str {
+    let bytes = token.as_bytes();
+    if token.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[token.len() - 1];
+        if (first == b'"' || first == b'\'') && first == last {
+            // The quotes are ASCII, so both cuts are on character boundaries.
+            return &token[1..token.len() - 1];
+        }
+    }
+    token
 }
 
 /// Whether one `rm` argument names `/`, `~`, or an ancestor of either.

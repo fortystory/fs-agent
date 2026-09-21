@@ -589,6 +589,54 @@ fn rm_relative_parents_are_folded_against_the_session_cwd() {
 }
 
 #[test]
+fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
+    // The `bash` tool declares `["bash", "-lc", command]` (ticket 20), so the
+    // breaker has to read the command the shell will run, not the wrapper that
+    // starts it.
+    let denied: [&[&str]; 10] = [
+        &["bash", "-lc", "rm -rf /"],
+        &["bash", "-lc", "cd /tmp && rm -rf /"],
+        &["bash", "-lc", "echo hi; rm -rf ~"],
+        &["sh", "-c", "rm -rf /home/u"],
+        &["bash", "-lc", r#"rm -rf "/""#],
+        &["bash", "-lc", "rm -rf '~'"],
+        // The shell's own grammar in front of the command does not hide it.
+        &["bash", "-lc", "(rm -rf /)"],
+        &["bash", "-lc", "if x; then rm -rf /; fi"],
+        &["bash", "-lc", "! rm -rf ~"],
+        // A shell option that takes an argument before `-c` does not stop the scan.
+        &["bash", "-o", "pipefail", "-c", "rm -rf /"],
+    ];
+    for argv in denied {
+        let call = Invocation::exclusive("bash").argv(argv).home("/home/u");
+        let verdict = gate(Mode::Auto, vec![allow_any()], &call);
+        assert_eq!(verdict.decision, Decision::Deny, "{argv:?}");
+        assert!(
+            verdict.reason.contains("circuit breaker"),
+            "{argv:?}: {}",
+            verdict.reason
+        );
+    }
+
+    // Ordinary work: the breaker reads commands, it does not refuse shells.
+    let allowed: [&[&str]; 5] = [
+        &["bash", "-lc", "rm -rf build/"],
+        &["bash", "-lc", "rm -rf /tmp/scratch"],
+        &["bash", "-lc", "echo rm -rf /"],
+        &["bash", "-lc", "git status"],
+        &["bash", "build.sh"],
+    ];
+    for argv in allowed {
+        let call = Invocation::exclusive("bash").argv(argv).home("/home/u");
+        assert_eq!(
+            decision(Mode::Auto, vec![], &call),
+            Decision::Allow,
+            "{argv:?}"
+        );
+    }
+}
+
+#[test]
 fn the_path_limit_is_a_deny_floor() {
     // A target the workspace cannot resolve is denied in every mode, so the
     // recorded verdict matches the refusal instead of reporting an `Allow` the

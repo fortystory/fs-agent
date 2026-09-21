@@ -48,8 +48,8 @@ use crate::provider::{ChatRequest, Message, Provider, StreamEvent, ToolCall, Too
 use crate::render::RenderHandle;
 use crate::session::Session;
 use crate::tools::{
-    AllowedCall, CallFacts, DispatchOutcome, GuardedCall, PendingCall, ToolError, ToolOutput,
-    TASK_TOOL,
+    AllowedCall, BashLimits, CallFacts, DispatchOutcome, GuardedCall, PendingCall, ToolError,
+    ToolOutput, TASK_TOOL,
 };
 use crate::Error;
 
@@ -698,6 +698,13 @@ async fn process_call(
         locks,
         skills,
         repo_map,
+        // The `bash` tool's two limits travel with the call, like the repo map's
+        // budget: configuration reaches a tool through the context it is handed,
+        // never by reaching into the session.
+        bash: BashLimits {
+            default_timeout_ms: session.config().bash_timeout_ms,
+            max_timeout_ms: session.config().max_bash_timeout_ms,
+        },
         executor: None,
     };
 

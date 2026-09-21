@@ -66,6 +66,15 @@ pub const DEFAULT_REPO_MAP_TOKENS: u64 = 1_024;
 /// the point — the model cannot ask for a bigger map per call.
 pub const MAX_REPO_MAP_TOKENS: u64 = 4_096;
 
+/// Default wall-clock cap on one `bash` call, in milliseconds (spec §7, ticket
+/// 20): Claude Code documents the same two-minute default.
+pub const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
+
+/// Ceiling on a `bash` timeout, in milliseconds (spec §7, ticket 20). A model may
+/// ask for less per call; it can never ask for more, so no one command can hold
+/// the workspace-wide `Exclusive` lock indefinitely.
+pub const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
+
 /// Model used when no `default_model` is configured or exported.
 pub const DEFAULT_MODEL: &str = "kimi-k3";
 
@@ -863,6 +872,13 @@ pub struct SessionConfig {
     /// Cap on the repo map, in estimated tokens (spec §9). A fixed budget, never
     /// a model-supplied argument; [`MAX_REPO_MAP_TOKENS`] is the ceiling.
     pub repo_map_tokens: u64,
+    /// Wall-clock cap on one `bash` call, in milliseconds (spec §7). Used when
+    /// the model passes no `timeout_ms`; `bash` is `Exclusive`, so this is also
+    /// the longest one command can hold the workspace-wide lock.
+    pub bash_timeout_ms: u64,
+    /// Hard ceiling on a model-supplied `bash` `timeout_ms` (spec §7): a call may
+    /// ask for less than the default, never for more.
+    pub max_bash_timeout_ms: u64,
     /// Turn cap for an executor this agent dispatches (spec §16). Independent of
     /// [`SessionConfig::max_iterations`] — "a runaway executor must not eat the
     /// session's turns" is the requirement, not an optimization — while its token
@@ -905,6 +921,8 @@ impl SessionConfig {
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
             repo_map_tokens: DEFAULT_REPO_MAP_TOKENS,
+            bash_timeout_ms: DEFAULT_BASH_TIMEOUT_MS,
+            max_bash_timeout_ms: MAX_BASH_TIMEOUT_MS,
             executor_max_iterations: DEFAULT_EXECUTOR_MAX_ITERATIONS,
             executor_model: None,
             max_parallel_executors: DEFAULT_MAX_PARALLEL_EXECUTORS,
@@ -947,6 +965,24 @@ impl SessionConfig {
     /// configuration can make one `repo_map` call unbounded.
     pub fn with_repo_map_tokens(mut self, repo_map_tokens: u64) -> Self {
         self.repo_map_tokens = repo_map_tokens.min(MAX_REPO_MAP_TOKENS);
+        self
+    }
+
+    /// Set the wall-clock cap a `bash` call runs under when the model does not
+    /// pass a `timeout_ms` (spec §7). Never above the ceiling, so a configured
+    /// default cannot outlive [`MAX_BASH_TIMEOUT_MS`].
+    pub fn with_bash_timeout_ms(mut self, bash_timeout_ms: u64) -> Self {
+        // The ceiling is at least one by construction (its own builder floors it),
+        // so the only clamp left is against the configured ceiling.
+        self.bash_timeout_ms = bash_timeout_ms.clamp(1, self.max_bash_timeout_ms);
+        self
+    }
+
+    /// Set the ceiling on a model-supplied `bash` `timeout_ms` (spec §7), and
+    /// pull the default down with it when the new ceiling is lower.
+    pub fn with_max_bash_timeout_ms(mut self, max_bash_timeout_ms: u64) -> Self {
+        self.max_bash_timeout_ms = max_bash_timeout_ms.max(1);
+        self.bash_timeout_ms = self.bash_timeout_ms.min(self.max_bash_timeout_ms);
         self
     }
 
@@ -1015,6 +1051,8 @@ impl Default for SessionConfig {
             params: GenerationParams::default(),
             max_tool_result_tokens: DEFAULT_MAX_TOOL_RESULT_TOKENS,
             repo_map_tokens: DEFAULT_REPO_MAP_TOKENS,
+            bash_timeout_ms: DEFAULT_BASH_TIMEOUT_MS,
+            max_bash_timeout_ms: MAX_BASH_TIMEOUT_MS,
             executor_max_iterations: DEFAULT_EXECUTOR_MAX_ITERATIONS,
             executor_model: None,
             max_parallel_executors: DEFAULT_MAX_PARALLEL_EXECUTORS,

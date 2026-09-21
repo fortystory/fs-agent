@@ -126,11 +126,13 @@ refused by its own gate, and the refusal is attributed to the executor.
 
 ## What plan mode does *not* include
 
-- **The `bash` tool.** Spec §7 lists it, but no ticket owns it (ticket 20), so
-  the `Exclusive` denial is pinned with a test-only tool instead. The gate rule
-  is already the real one.
 - **A `config.toml` key for the mode**, and the keybindings themselves. Both land
   with the interactive front end (ticket 18).
+
+The `bash` tool is **denied** in plan mode, and that is the real tool: ticket 20
+landed it, its `effect()` is `Exclusive`, and the e2e drives it rather than a
+stand-in. A shell has no write set, so it can never borrow the `PLAN.md`
+exemption; see `docs/bash.md`.
 
 ## Where the code lives
 

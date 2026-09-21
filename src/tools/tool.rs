@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -25,10 +26,9 @@ pub enum Effect {
     WritePaths(Vec<PathBuf>),
     /// Takes the workspace exclusively; nothing else may run at the same time.
     ///
-    /// No v1 tool produces this yet — `bash` (a later ticket) is its owner — but
-    /// the dispatcher already takes the workspace-wide lock for it, because
-    /// `effect()` is the one side-effect vocabulary the scheduler and the
-    /// permission gate share (spec §7).
+    /// `bash` (spec §7) is its owner: a shell can write anything, so the
+    /// dispatcher takes the workspace-wide lock for it. `effect()` is the one
+    /// side-effect vocabulary the scheduler and the permission gate share.
     Exclusive,
 }
 
@@ -74,6 +74,40 @@ impl ToolError {
     }
 }
 
+/// The two wall-clock limits one `bash` call runs under (spec §7).
+///
+/// Both come from `SessionConfig`; the tool is handed the pair rather than the
+/// whole configuration, so the only session values a command tool can read are
+/// the ones it is actually allowed to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BashLimits {
+    /// The cap used when the model passes no `timeout_ms`.
+    pub default_timeout_ms: u64,
+    /// The ceiling a model-supplied `timeout_ms` is clamped to.
+    pub max_timeout_ms: u64,
+}
+
+impl BashLimits {
+    /// The cap for one call: the model's request, clamped to the ceiling, else
+    /// the configured default. A `requested` of zero is refused by the caller
+    /// before this runs, so the result is always at least one millisecond.
+    pub fn timeout(&self, requested_ms: Option<u64>) -> Duration {
+        let ms = requested_ms.unwrap_or(self.default_timeout_ms);
+        Duration::from_millis(ms.clamp(1, self.max_timeout_ms.max(1)))
+    }
+}
+
+impl Default for BashLimits {
+    /// The configured defaults, so a value built outside assembly is usable
+    /// rather than a zero-millisecond cap.
+    fn default() -> Self {
+        Self {
+            default_timeout_ms: crate::config::DEFAULT_BASH_TIMEOUT_MS,
+            max_timeout_ms: crate::config::MAX_BASH_TIMEOUT_MS,
+        }
+    }
+}
+
 /// What a tool is handed for one call. The tool resolves its own paths (it knows
 /// which argument carries one), and the resolver is what keeps a model-supplied
 /// path inside the session cwd.
@@ -92,6 +126,9 @@ pub struct ToolContext<'a> {
     /// The `repo_map` tool's session inputs (spec §9): the ranking context and
     /// the configured budget. Bundled into one field so it travels like `skills`.
     pub repo_map: &'a RepoMapInput,
+    /// The wall-clock limits a `bash` call runs under (spec §7). Session
+    /// configuration, carried so the tool never reaches into the session.
+    pub bash: &'a BashLimits,
     /// The port that runs a nested executor, for `task` (spec §16). `None` when
     /// the session mounted no port, in which case `task` reports that rather than
     /// pretending to work.
@@ -184,11 +221,11 @@ pub trait Tool: Send + Sync {
 
     /// The argv this call will execute, for a tool that runs a command.
     ///
-    /// `bash` is its owner (a later ticket); every other tool answers `None`.
-    /// The permission gate's `CommandPrefix` scope and the `rm` circuit breaker
-    /// both read this, so a command's argv must be visible **before** the
-    /// process starts — which is why the tool declares it here instead of the
-    /// gate guessing at a `command` string.
+    /// `bash` is its owner; every other tool answers `None`. The permission
+    /// gate's `CommandPrefix` scope and the `rm` circuit breaker both read this,
+    /// so a command's argv must be visible **before** the process starts — which
+    /// is why the tool declares it here instead of the gate guessing at a
+    /// `command` string.
     fn command(&self, _args: &Value) -> Option<Vec<String>> {
         None
     }

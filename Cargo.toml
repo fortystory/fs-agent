@@ -23,7 +23,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "str
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "process", "io-util"] }
+# The `bash` tool's process-tree kill: `Command::process_group(0)` puts the
+# shell in its own group, and only `killpg` terminates that whole group.
+libc = "0.2"
 toml = "0.8"
 # Read-side symbol extraction only: the official Rust `tags.scm` is run through
 # tree-sitter to produce `(file, name, kind)`. The grammar compiles a C parser,

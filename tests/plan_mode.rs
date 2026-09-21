@@ -11,7 +11,6 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use fs_agent::config::SessionConfig;
 use fs_agent::events::{
     read_events, ContextSource, Decision, DecisionSource, Event, EventPayload, ParticipantId,
@@ -20,7 +19,6 @@ use fs_agent::events::{
 use fs_agent::permissions::{Asker, Mode, PlanConflict, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::RenderSinks;
-use fs_agent::tools::{Effect, Tool};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
@@ -64,9 +62,9 @@ async fn fixture_at(
     std::fs::create_dir_all(&workspace).unwrap();
     let log_path = session.join("log.jsonl");
     let provider = FakeProvider::new(replies);
-    // The built-in table plus a stand-in for the `bash` shape (ticket 20).
-    let mut tools = fs_agent::tools::builtin();
-    tools.register(Box::new(ShellStandin));
+    // The built-in table, `bash` included: an `Exclusive` call is what plan mode
+    // must refuse, and the real tool is the honest way to pin that.
+    let tools = fs_agent::tools::builtin();
 
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
@@ -201,46 +199,9 @@ fn write_reply(id: &str, file: &str) -> Reply {
     )
 }
 
-/// A test-only stand-in for the shape plan mode must refuse: `Exclusive`,
-/// because a shell can write anything.
-///
-/// v1 has no `bash` — spec §7 lists it, but no ticket owns it (see ticket 20) —
-/// so this is what pins the rule: the exemption is a `WritePaths` shape, and an
-/// `Exclusive` call can never borrow it.
-struct ShellStandin;
-
-#[async_trait]
-impl Tool for ShellStandin {
-    fn spec(&self) -> fs_agent::provider::ToolSpec {
-        fs_agent::provider::ToolSpec {
-            name: "run".to_owned(),
-            description: "test-only command tool".to_owned(),
-            parameters: serde_json::json!({ "type": "object", "properties": {} }),
-        }
-    }
-
-    fn effect(&self, _args: &serde_json::Value) -> Effect {
-        Effect::Exclusive
-    }
-
-    fn command(&self, _args: &serde_json::Value) -> Option<Vec<String>> {
-        Some(vec![
-            "sh".to_owned(),
-            "-c".to_owned(),
-            "echo hi > notes.txt".to_owned(),
-        ])
-    }
-
-    async fn call(
-        &self,
-        _ctx: &fs_agent::tools::ToolContext<'_>,
-        _args: serde_json::Value,
-    ) -> Result<fs_agent::tools::ToolOutput, fs_agent::tools::ToolError> {
-        Ok(fs_agent::tools::ToolOutput::new(
-            "ran: plan mode should have refused this",
-        ))
-    }
-}
+// A test-only stand-in for the shape plan mode must refuse is no longer needed:
+// ticket 20 landed the real `bash` tool, whose `effect()` is `Exclusive`. The
+// e2e below drives it, so the rule is pinned by the tool the session ships.
 
 // --- the gesture (spec §13) -----------------------------------------------
 
@@ -434,7 +395,11 @@ async fn a_turn_in_plan_mode_writes_the_plan_file_and_nothing_else() {
         vec![
             write_reply("call-notes", "notes.txt"),
             write_reply("call-plan", "PLAN.md"),
-            tool_reply("call-run", "run", "{}"),
+            tool_reply(
+                "call-bash",
+                "bash",
+                &serde_json::json!({ "command": "echo hi > notes.txt" }).to_string(),
+            ),
             Reply::text("planned"),
         ],
         Mode::Ask,
@@ -473,7 +438,7 @@ async fn a_turn_in_plan_mode_writes_the_plan_file_and_nothing_else() {
         vec![
             ("call-notes".to_owned(), false),
             ("call-plan".to_owned(), true),
-            ("call-run".to_owned(), false),
+            ("call-bash".to_owned(), false),
         ],
         "every call gets exactly one result, and only the plan write ran"
     );
@@ -491,8 +456,9 @@ async fn a_turn_in_plan_mode_writes_the_plan_file_and_nothing_else() {
     assert_eq!(
         decisions[2].0,
         Decision::Deny,
-        "an Exclusive call cannot borrow the write exemption"
+        "the real `bash` is Exclusive, so it cannot borrow the write exemption"
     );
+    assert!(!fixture.exists("notes.txt"), "the denied shell never ran");
     fixture.harness.shutdown().await;
 }
 

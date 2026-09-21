@@ -33,7 +33,9 @@ use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 
 use super::paths::{PathLocks, SessionPaths};
-use super::tool::{Effect, ExecutorSpawner, ReadSet, Tool, ToolContext, ToolError, ToolOutput};
+use super::tool::{
+    BashLimits, Effect, ExecutorSpawner, ReadSet, Tool, ToolContext, ToolError, ToolOutput,
+};
 
 /// The tool table for one session.
 #[derive(Default)]
@@ -180,6 +182,7 @@ impl Registry {
             cwd: call.paths.cwd(),
             skills: &call.skills,
             repo_map: &call.repo_map,
+            bash: &call.bash,
             executor: call.executor.as_deref(),
             tool_call_id: &call.tool_call_id,
             args: &call.args,
@@ -290,6 +293,10 @@ pub struct PendingCall {
     /// The `repo_map` tool's session inputs (spec §9). Owned, because the ranking
     /// context is recomputed per call from the event stream rather than shared.
     pub repo_map: RepoMapInput,
+    /// The wall-clock limits a `bash` call runs under (spec §7). Owned: it is a
+    /// `Copy` pair of numbers, and building it per call keeps configuration out
+    /// of the registry.
+    pub bash: BashLimits,
     /// The port that runs a nested executor, for a `task` call (spec §16). Built
     /// per call by the loop, which is what knows the provider and the renderer an
     /// executor needs.
@@ -309,6 +316,7 @@ impl std::fmt::Debug for PendingCall {
             .field("locks", &self.locks)
             .field("skills", &self.skills)
             .field("repo_map", &self.repo_map)
+            .field("bash", &self.bash)
             .field("executor", &self.executor.is_some())
             .finish()
     }
