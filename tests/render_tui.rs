@@ -10,7 +10,7 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
-    render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent, Key,
+    pane, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, FrontEndEvent, Key,
     Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
 };
 use ratatui::buffer::CellWidth;
@@ -374,19 +374,15 @@ fn a_message_continuation_indents_by_the_label_display_width() {
 
 #[test]
 fn the_live_tail_wraps_on_display_columns_not_bytes() {
-    // A CJK character is two columns wide but three bytes long. Wrapping on the
-    // byte index cut the streaming tail at a third of the terminal width — the
-    // one place where Chinese looked broken even though every cell was right
-    // (spec §19).
-    let mut state = new_state();
-    state.apply(RenderEvent::Delta {
-        speaker: kimi(),
-        kind: DeltaKind::Text,
-        text: "你好世界五六".to_owned(),
-    });
-
-    // Six characters are twelve columns: five fit in ten, and the sixth wraps.
-    assert_eq!(state.live_lines(10), vec!["你好世界五", "六"]);
+    // A CJK character is two columns wide but three bytes long. Wrapping on the byte
+    // index cut the streaming tail at a third of the width — the one place where
+    // Chinese looked broken even though every cell was right (spec §3).
+    let rows = pane::wrap_text("你好世界五六", 10);
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert_eq!(texts, vec!["你好世界五", "六"]);
 }
 
 #[test]
@@ -522,4 +518,42 @@ fn a_long_line_scrolls_so_the_cursor_stays_on_screen() {
     );
     state.key(Key::Home);
     assert_eq!(state.cursor_column(width), 2, "home brings the head back");
+}
+
+#[test]
+fn a_users_message_keeps_its_lines_and_its_length() {
+    // The transcript is for reading back what was asked. A pasted multi-line prompt
+    // has to survive whole: it used to be squashed onto one line and cut at 500
+    // characters (spec §3).
+    let long = "x".repeat(600);
+    let text = format!("第一行\n{long}\n第三行");
+    let lines = render_block(&Block::Message {
+        speaker: SpeakerId::User,
+        role: Role::User,
+        text,
+    });
+
+    let rendered: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    assert_eq!(rendered.len(), 3, "one row per line of the message");
+    assert!(rendered[0].ends_with("第一行"), "{:?}", rendered[0]);
+    assert!(rendered[1].contains(&long), "nothing is elided");
+    assert!(rendered[2].ends_with("第三行"), "{:?}", rendered[2]);
+
+    // The continuations line up under the body of the first line, not under the
+    // attribution.
+    let indent = rendered[0].chars().count() - "第一行".chars().count();
+    for continuation in &rendered[1..] {
+        assert!(
+            continuation.starts_with(&" ".repeat(indent)),
+            "lined up under the body: {continuation:?}"
+        );
+    }
 }

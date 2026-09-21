@@ -415,6 +415,17 @@ pub fn status_line(busy: bool, width: u16) -> String {
     }
 }
 
+/// The indicator that says how much arrived while the viewport was scrolled away,
+/// and that the block is the way back (spec §4).
+pub fn new_content(rows: usize) -> String {
+    format!("↓ {rows} 行新内容 · 点此到底")
+}
+
+/// The same indicator when nothing has arrived: it is only the way back.
+pub fn back_to_bottom() -> &'static str {
+    "点此到底"
+}
+
 /// Everything a terminal smaller than the minimum shows, so the reason is a
 /// sentence rather than an empty screen (spec §2).
 pub fn too_small(width: u16, height: u16) -> String {

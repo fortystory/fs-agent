@@ -24,14 +24,17 @@ use futures::StreamExt;
 use ratatui::buffer::CellWidth;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as WidgetBlock, Borders, Paragraph};
+use ratatui::widgets::{
+    Block as WidgetBlock, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 use tokio::sync::broadcast;
 
 use crate::events::{ContextSource, HistoryReason, Role, StopReason};
@@ -40,8 +43,9 @@ use crate::permissions::Mode;
 use super::highlight::{diff_tag, highlight_diff};
 use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
 use super::layout;
+use super::pane::Pane;
 use super::severity::Severity;
-use super::transcript::{summarize_args, truncate, Block, ToolBlock, Transcript};
+use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
 use super::wording::{self, speaker_label};
 use super::{Render, RenderEvent};
 
@@ -91,6 +95,9 @@ pub enum Key {
     CtrlW,
     CtrlP,
     CtrlN,
+    CtrlG,
+    PageUp,
+    PageDown,
 }
 
 /// Translate one crossterm keypress into a [`Key`], or `None` for a key the TUI
@@ -107,6 +114,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'w' => Some(Key::CtrlW),
                 'p' => Some(Key::CtrlP),
                 'n' => Some(Key::CtrlN),
+                'g' => Some(Key::CtrlG),
                 _ => None,
             };
         }
@@ -124,6 +132,8 @@ fn map_key(key: KeyEvent) -> Option<Key> {
         KeyCode::Down => Some(Key::Down),
         KeyCode::Home => Some(Key::Home),
         KeyCode::End => Some(Key::End),
+        KeyCode::PageUp => Some(Key::PageUp),
+        KeyCode::PageDown => Some(Key::PageDown),
         _ => None,
     }
 }
@@ -204,6 +214,7 @@ impl Tui {
                         }
                     }
                     Some(Ok(CtEvent::Paste(text))) => state.paste(&text),
+                    Some(Ok(CtEvent::Mouse(mouse))) => state.mouse(mouse),
                     Some(Ok(CtEvent::Resize(..))) => state.mark_dirty(),
                     _ => {}
                 },
@@ -246,7 +257,7 @@ impl Tui {
                 // ignores it.
                 let mut frame_out = std::io::stdout();
                 let _ = execute!(frame_out, BeginSynchronizedUpdate);
-                let _ = terminal.draw(|frame| draw_frame(frame, &state));
+                let _ = terminal.draw(|frame| draw_frame(frame, &mut state));
                 let _ = execute!(frame_out, EndSynchronizedUpdate);
                 state.mark_clean();
             }
@@ -316,9 +327,10 @@ pub struct TuiState {
     mode: Mode,
     /// The event-to-block merger the plain renderer shares.
     transcript: Transcript,
-    /// The conversation pane's content: every completed block, already rendered to
-    /// lines. The pane owns this rather than the terminal's scrollback.
-    source: Vec<Line<'static>>,
+    /// The conversation pane: every completed block's lines, wrapped at the drawn
+    /// width, with its own viewport. The pane owns the transcript rather than the
+    /// terminal's scrollback.
+    pane: Pane,
     /// The streaming tail of the current message.
     live: String,
     /// The header's clock, kept so a tick can tell whether the frame it would draw
@@ -361,7 +373,7 @@ impl TuiState {
             facts,
             mode: Mode::Ask,
             transcript: Transcript::new(),
-            source: Vec::new(),
+            pane: Pane::new(),
             live: String::new(),
             clock: Local::now(),
             dirty: true,
@@ -449,7 +461,29 @@ impl TuiState {
             }
             // A delta renders to nothing here: the live tail is the streaming
             // view, and the completed `Message` block is the permanent one.
-            self.source.extend(render_block(&block));
+            for line in render_block(&block) {
+                self.pane.push(line);
+            }
+        }
+    }
+
+    /// Handle one mouse event.
+    ///
+    /// Only two things answer to the mouse: the wheel scrolls the transcript, and
+    /// a click on the "back to bottom" indicator returns to the bottom. Every
+    /// other click is ignored — the terminal's own selection is the user's, and
+    /// nothing here takes focus (spec §4).
+    pub fn mouse(&mut self, mouse: MouseEvent) {
+        self.dirty = true;
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.pane.wheel(true),
+            MouseEventKind::ScrollDown => self.pane.wheel(false),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.pane.hits_indicator(mouse.column, mouse.row) {
+                    self.pane.to_bottom();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -526,6 +560,9 @@ impl TuiState {
             Key::CtrlW => self.kill_word(),
             Key::Up | Key::CtrlP => self.history_previous(),
             Key::Down | Key::CtrlN => self.history_next(),
+            Key::PageUp => self.pane.page(true),
+            Key::PageDown => self.pane.page(false),
+            Key::CtrlG => self.pane.to_bottom(),
             _ => {}
         }
     }
@@ -644,7 +681,12 @@ impl TuiState {
     }
 
     /// Send the typed line to the loop and remember it.
+    ///
+    /// Submitting also returns the transcript to the bottom: the user has just
+    /// asked for something and wants to watch the answer, whatever they were
+    /// reading (spec §4).
     fn submit(&mut self) {
+        self.pane.to_bottom();
         let line = self.input.trim().to_owned();
         self.input.clear();
         self.cursor = 0;
@@ -696,38 +738,10 @@ impl TuiState {
         }
     }
 
-    /// The streaming tail, wrapped to `width` **columns**.
-    ///
-    /// Uncapped: the conversation pane decides how much of it fits, and the tail
-    /// itself is already bounded by [`LIVE_BUFFER`].
-    pub fn live_lines(&self, width: u16) -> Vec<String> {
-        let width = width.max(1) as usize;
-        let mut lines: Vec<String> = Vec::new();
-        for raw in self.live.split('\n') {
-            if raw.is_empty() {
-                lines.push(String::new());
-                continue;
-            }
-            let mut rest = raw;
-            while !rest.is_empty() {
-                let take = wrap_take(rest, width);
-                lines.push(rest[..take].to_owned());
-                rest = &rest[take..];
-            }
-        }
-        lines
-    }
-
-    /// The conversation pane's visible rows: the tail of the transcript, with the
-    /// streaming tail last — where it will be replaced by the message it becomes.
-    fn pane_lines(&self, width: u16, height: u16) -> Vec<Line<'static>> {
-        let mut tail: Vec<Line<'static>> =
-            self.live_lines(width).into_iter().map(Line::from).collect();
-        let room = (height as usize).saturating_sub(tail.len());
-        let skip = self.source.len().saturating_sub(room);
-        let mut lines: Vec<Line<'static>> = self.source[skip..].to_vec();
-        lines.append(&mut tail);
-        lines
+    /// The conversation pane's rows for this frame: the transcript's tail with the
+    /// streaming tail last, wrapped to `width` and clipped to `height`.
+    fn pane_rows(&mut self, width: u16, height: u16) -> Vec<Line<'static>> {
+        self.pane.view(width, height, &self.live)
     }
 
     /// The column the cursor rests on for a terminal `width` columns wide: the
@@ -804,40 +818,15 @@ impl TuiState {
     }
 }
 
-/// How many bytes of `text` fit into `width` terminal columns.
-///
-/// Columns, not bytes: a CJK character is three bytes wide and two columns, so
-/// [counting bytes](TuiState::live_lines) wrapped the streaming tail at roughly a
-/// third of the terminal width.
-///
-/// Always takes at least one character, even one wider than the whole line: the
-/// caller loops until the remainder is empty, so a zero-length take would spin.
-/// Such a line still overflows its width — this only keeps the loop moving.
-///
-/// Per character rather than per grapheme because `Span::styled_graphemes` drops
-/// control characters, whose bytes could then not be turned back into an offset.
-/// The cost is that an emoji sequence built from several characters counts as
-/// wider than it draws, which only wraps it earlier than it had to.
-fn wrap_take(text: &str, width: usize) -> usize {
-    let mut used = 0;
-    let mut buf = [0u8; 4];
-    for (index, ch) in text.char_indices() {
-        let columns = ch.encode_utf8(&mut buf).cell_width() as usize;
-        if used + columns > width {
-            return if index == 0 { ch.len_utf8() } else { index };
-        }
-        used += columns;
-    }
-    text.len()
-}
-
 /// Draw one frame of the four-pane layout.
 ///
 /// This is the seam the layout is tested through: a state goes in, a fixed-size
 /// frame comes out, and no terminal is involved (spec §2).
-pub fn draw_frame(frame: &mut ratatui::Frame, state: &TuiState) {
+pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let area = frame.area();
     if layout::below_minimum(area) {
+        // Nothing is drawn that a click could land on.
+        state.pane.set_indicator(None);
         draw_too_small(frame, area);
         return;
     }
@@ -926,17 +915,87 @@ fn edges(left: &str, right: &str, width: usize) -> String {
     line
 }
 
-/// The conversation pane: the transcript, which owns its own scroll buffer rather
-/// than the terminal's scrollback (ADR 0002).
-fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &TuiState) {
+/// The conversation pane: the transcript's window onto its own scroll buffer,
+/// plus the two things that say where the viewport is (spec §3, §4).
+fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Panes, state: &mut TuiState) {
     draw_border(frame, panes.middle);
-    let lines = state.pane_lines(panes.transcript.width, panes.transcript.height);
-    frame.render_widget(Paragraph::new(lines), panes.transcript);
+    // The scrollbar's column is reserved whether or not anything is drawn in it, so
+    // text never rewraps because the transcript grew (spec §4).
+    let text_width = panes.transcript.width.saturating_sub(1);
+    let rows = state.pane_rows(text_width, panes.transcript.height);
+    frame.render_widget(Paragraph::new(rows), panes.transcript);
+    draw_scrollbar(frame, panes.transcript, &state.pane);
+    draw_indicator(frame, panes.transcript, state);
     if let Some(seam) = panes.seam() {
         // The two panes share one column rather than each drawing a border. Its
         // ends join the middle block's borders instead of crossing them.
         draw_seam(frame, panes.middle, seam);
     }
+}
+
+/// The transcript's scrollbar: drawn only when there is more than a pane's worth,
+/// in the column the pane always reserves for it.
+fn draw_scrollbar(frame: &mut ratatui::Frame, area: Rect, pane: &Pane) {
+    if area.width == 0 || pane.total() <= area.height as usize {
+        return;
+    }
+    let track = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
+    // Following the bottom and reading history look different, so the position is
+    // legible without reading a number.
+    let thumb = if pane.following() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD)
+    };
+    let mut scrollbar = ScrollbarState::new(pane.total())
+        .position(pane.top())
+        .viewport_content_length(area.height as usize);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .track_style(Style::default().fg(Color::DarkGray))
+            .thumb_style(thumb),
+        track,
+        &mut scrollbar,
+    );
+}
+
+/// The "what arrived, and the way back" indicator at the bottom right of the pane.
+///
+/// Its whole block is the click target, so the rectangle is remembered on the pane
+/// — a click can only land on what the last frame drew.
+fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) {
+    if state.pane.following() || area.width == 0 || area.height == 0 {
+        state.pane.set_indicator(None);
+        return;
+    }
+    let fresh = state.pane.fresh();
+    let text = if fresh == 0 {
+        wording::back_to_bottom().to_owned()
+    } else {
+        wording::new_content(fresh)
+    };
+    // Inside the pane's right edge, not on it: the last column belongs to the
+    // scrollbar, and a wide character here would shadow it away.
+    let room = area.width.saturating_sub(1);
+    let width = (text_columns(&text) as u16).min(room);
+    let rect = Rect::new(
+        area.right().saturating_sub(1).saturating_sub(width),
+        area.bottom().saturating_sub(1),
+        width,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate_columns(&text, width as usize),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        rect,
+    );
+    state.pane.set_indicator(Some(rect));
 }
 
 /// The shared seam between the conversation pane and the panel.
@@ -1041,13 +1100,24 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
                 })
                 .collect()
         }
-        Block::Message { speaker, text, .. } => vec![Line::from(vec![
-            Span::styled(
-                format!("{} ", speaker_label(speaker)),
-                Style::default().fg(ratatui::style::Color::DarkGray),
-            ),
-            Span::raw(truncate(text, 500)),
-        ])],
+        // The user's own input — and the non-assistant system lines — shown as they
+        // were written: every line, nothing elided, and no Markdown, because this
+        // is not a document. Continuations line up under the body of the first line
+        // (spec §3).
+        Block::Message { speaker, text, .. } => {
+            let prefix = format!("{} ", speaker_label(speaker));
+            let indent = " ".repeat(prefix.as_str().cell_width() as usize);
+            text.split('\n')
+                .enumerate()
+                .map(|(index, raw)| {
+                    let lead = if index == 0 { &prefix } else { &indent };
+                    Line::from(vec![
+                        Span::styled(lead.clone(), Style::default().fg(Color::DarkGray)),
+                        Span::raw(raw.to_owned()),
+                    ])
+                })
+                .collect()
+        }
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
             wording::round_section(*round, *mode),
@@ -1257,4 +1327,25 @@ fn highlighted(text: &str) -> Vec<Line<'static>> {
             Line::from(spans)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `map_key` is the one place crossterm's vocabulary becomes this renderer's,
+    /// and a key that misses here is a key that silently does nothing — which no
+    /// rendering test can see, because they all start from [`Key`].
+    #[test]
+    fn the_keys_the_pane_answers_to_map_from_crossterm() {
+        let plain = |code| map_key(KeyEvent::new(code, KeyModifiers::empty()));
+        assert_eq!(plain(KeyCode::PageUp), Some(Key::PageUp));
+        assert_eq!(plain(KeyCode::PageDown), Some(Key::PageDown));
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            Some(Key::CtrlG)
+        );
+        // A bare `g` is text, not a gesture.
+        assert_eq!(plain(KeyCode::Char('g')), Some(Key::Char('g')));
+    }
 }

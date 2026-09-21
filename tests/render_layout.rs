@@ -26,13 +26,9 @@ fn state() -> TuiState {
 }
 
 /// Render one frame at a fixed size and read the screen back as rows of text.
-fn screen(width: u16, height: u16, state: &TuiState) -> Vec<String> {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
-    terminal
-        .draw(|frame| draw_frame(frame, state))
-        .expect("one frame");
-    let buffer = terminal.backend().buffer();
-    (0..height).map(|y| row_text(buffer, y, width)).collect()
+fn screen(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
+    let frame = buffer(width, height, state);
+    (0..height).map(|y| row_text(&frame, y, width)).collect()
 }
 
 /// One row of the buffer as text.
@@ -52,7 +48,7 @@ fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
 }
 
 /// The rendered frame itself, for assertions about a particular cell.
-fn buffer(width: u16, height: u16, state: &TuiState) -> Buffer {
+fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
     terminal
         .draw(|frame| draw_frame(frame, state))
@@ -65,7 +61,7 @@ fn a_terminal_below_the_minimum_shows_one_centred_notice() {
     // 39x24 is one column short of the minimum; 40x9 is one row short. Both show the
     // notice and nothing else — no half-drawn panes (spec §2).
     for (width, height) in [(39, 24), (40, 9)] {
-        let rows = screen(width, height, &state());
+        let rows = screen(width, height, &mut state());
         let text = rows.join("\n");
         assert!(
             text.contains("终端太小：至少 40×10"),
@@ -92,7 +88,7 @@ fn a_wide_terminal_draws_the_header_the_transcript_and_the_bottom_block() {
     // 120x24 is the reference size: two header lines, twelve transcript rows, one
     // input row, one hint row, and a blank row above and below the middle block
     // (spec §2).
-    let rows = screen(120, 24, &state());
+    let rows = screen(120, 24, &mut state());
 
     // The header block: two content lines between its borders.
     assert!(rows[0].starts_with('┌'), "the header opens: {:?}", rows[0]);
@@ -154,7 +150,7 @@ fn a_wide_terminal_draws_the_header_the_transcript_and_the_bottom_block() {
 fn a_floor_sized_terminal_still_draws_every_region() {
     // 40x10 is inside the minimum: one header line, one transcript row, one input
     // row and one hint row, with the airy rows given up to keep them (spec §2).
-    let rows = screen(40, 10, &state());
+    let rows = screen(40, 10, &mut state());
     for (row, line) in rows.iter().enumerate() {
         assert!(
             line.starts_with('┌') || line.starts_with('│') || line.starts_with('└'),
@@ -184,7 +180,7 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
     // 120 columns: the panel is drawn, and the two panes share one column — a
     // vertical rule that meets the middle block's borders with junctions rather
     // than doubling them (spec §2).
-    let frame = buffer(120, 24, &state());
+    let frame = buffer(120, 24, &mut state());
     let seam = 89;
     assert_eq!(
         frame[(seam, 5)].symbol(),
@@ -202,7 +198,7 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
 
     // 60 columns is below the panel's minimum width: the transcript takes the
     // whole middle block and no seam is drawn at all.
-    let narrow = buffer(60, 24, &state());
+    let narrow = buffer(60, 24, &mut state());
     let text: String = (0..24)
         .map(|y| row_text(&narrow, y, 60))
         .collect::<Vec<_>>()
@@ -214,7 +210,7 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
 
     // 80x16 is the smallest terminal that fits the panel: four middle rows, which
     // is all the four core fields need.
-    let smallest = buffer(80, 16, &state());
+    let smallest = buffer(80, 16, &mut state());
     let middle_top = (0..16)
         .find(|y| smallest[(0, *y)].symbol() == "┌" && row_text(&smallest, *y, 80).contains('┬'))
         .expect("the panel is drawn at 80x16");
@@ -223,7 +219,7 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
 
 /// How many `·`-separated items the hint row holds, the state word included.
 fn hint_items(width: u16) -> Vec<String> {
-    let rows = screen(width, 24, &state());
+    let rows = screen(width, 24, &mut state());
     let row = rows
         .iter()
         .find(|row| row.contains("ctrl-c 退出"))
@@ -274,7 +270,9 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         hint_items(120)
     );
     assert!(
-        !screen(174, 24, &state()).join("\n").contains("shift+enter"),
+        !screen(174, 24, &mut state())
+            .join("\n")
+            .contains("shift+enter"),
         "no phantom newline key at any width"
     );
 }
@@ -294,7 +292,7 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
         text: "正在读文件".to_owned(),
     });
 
-    let text = screen(120, 24, &state).join("\n");
+    let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("fs-agent：会话 abc"),
         "the notice is a transcript line: {text}"
@@ -312,7 +310,7 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // 80x24 is the panel with room to spare, and 174x50 is the ceiling — the panel
     // is capped at 31 columns and the transcript takes the rest.
     for (width, height) in [(40, 12), (80, 24), (174, 50)] {
-        let rows = screen(width, height, &state());
+        let rows = screen(width, height, &mut state());
         let text = rows.join("\n");
         assert!(
             !text.contains("终端太小"),
@@ -330,9 +328,9 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     }
 
     // 40x12 has the airy row under the header; 40x10 (covered above) does not.
-    let airy = screen(40, 12, &state());
+    let airy = screen(40, 12, &mut state());
     assert_eq!(airy[3].trim(), "", "airy returns at 40x12: {:?}", airy[3]);
-    let floor = screen(40, 10, &state());
+    let floor = screen(40, 10, &mut state());
     assert_ne!(
         floor[3].trim(),
         "",
@@ -342,7 +340,7 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
 
     // 174x50 is wide enough that the panel is at its 31-column cap: the seam sits
     // 31 columns from the right edge.
-    let wide = buffer(174, 50, &state());
+    let wide = buffer(174, 50, &mut state());
     let seam = 174 - 31;
     assert_eq!(wide[(seam, 5)].symbol(), "┬", "the seam at the cap");
     assert_eq!(
@@ -350,4 +348,235 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
         "┐",
         "the panel ends at the right border"
     );
+}
+
+#[test]
+fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
+    use fs_agent::render::{Key, RenderEvent};
+
+    let mut state = state();
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+
+    // At rest the viewport follows the newest row.
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("第 39 行"), "the newest row is on screen");
+    assert!(!text.contains("第 0 行"), "the oldest has scrolled off");
+
+    // PgUp leaves the bottom and shows older rows.
+    state.key(Key::PageUp);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("第 39 行"),
+        "the newest row gives way: {text}"
+    );
+    assert!(text.contains("第 20 行"), "older rows appear: {text}");
+
+    // Ctrl-G comes back, and the viewport follows again.
+    state.key(Key::CtrlG);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("第 39 行"), "back at the bottom: {text}");
+    assert!(
+        !text.contains("第 20 行"),
+        "and the old rows are gone: {text}"
+    );
+}
+
+/// The index of the first `第 N 行` notice visible on screen, if any.
+fn first_notice(rows: &[String]) -> Option<usize> {
+    rows.iter().find_map(|row| {
+        let rest = row.split("第 ").nth(1)?;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    })
+}
+
+/// The first cell holding `needle`, as `(column, row)`.
+fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
+    (0..height).find_map(|y| {
+        (0..width)
+            .find(|x| frame[(*x, y)].symbol() == needle)
+            .map(|x| (x, y))
+    })
+}
+
+#[test]
+fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
+    use fs_agent::render::{Key, RenderEvent};
+
+    let mut state = state();
+    for index in 0..20_001 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+    // One frame first: a page step is measured in the rows the reader can see.
+    let _ = screen(120, 24, &mut state);
+
+    // The oldest line is gone, not merely scrolled off: paging all the way up must
+    // not bring it back (spec §3).
+    for _ in 0..3_000 {
+        state.key(Key::PageUp);
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("第 0 行"),
+        "the oldest line was dropped: {text}"
+    );
+    assert!(
+        text.contains("第 1 行"),
+        "the line after it is the oldest now: {text}"
+    );
+}
+
+#[test]
+fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
+    use fs_agent::render::{Key, RenderEvent};
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut state = state();
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+    let _ = screen(120, 24, &mut state);
+
+    // Scrolling up with nothing new to read: the indicator is only the way back.
+    state.key(Key::PageUp);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("点此到底"), "the way back is offered: {text}");
+    assert!(
+        !text.contains("行新内容"),
+        "nothing has arrived yet: {text}"
+    );
+    assert_eq!(first_notice(&screen(120, 24, &mut state)), Some(18));
+
+    // A row arrives while the reader is away, and the count is what arrived — not
+    // everything that happens to be below the viewport.
+    state.apply(RenderEvent::Notice("新的一行".to_owned()));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("↓ 1 行新内容 · 点此到底"),
+        "one row arrived: {text}"
+    );
+
+    // The wheel moves three rows a notch, up and down.
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::empty(),
+    };
+    state.mouse(mouse(MouseEventKind::ScrollUp));
+    assert_eq!(
+        first_notice(&screen(120, 24, &mut state)),
+        Some(15),
+        "three rows up"
+    );
+    state.mouse(mouse(MouseEventKind::ScrollDown));
+    assert_eq!(
+        first_notice(&screen(120, 24, &mut state)),
+        Some(18),
+        "three rows back down"
+    );
+
+    // A click on the indicator goes back to the bottom; a click anywhere else is
+    // ignored, because the transcript is the terminal's to select.
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = find_cell(&frame, 120, 24, "点").expect("the indicator is on screen");
+    // It stops one column short of the scrollbar: `点此到底` is eight columns wide
+    // and the pane's last column belongs to the scrollbar, so its last glyph must
+    // not straddle that column.
+    assert!(
+        column + 8 <= 88,
+        "the indicator stays left of the scrollbar, starting at {column}"
+    );
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,
+        row: 10,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        first_notice(&screen(120, 24, &mut state)),
+        Some(18),
+        "a click in the transcript body changes nothing"
+    );
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    });
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("新的一行"), "back at the bottom: {text}");
+    assert!(
+        !text.contains("点此到底"),
+        "and the indicator is gone: {text}"
+    );
+}
+
+#[test]
+fn a_resize_keeps_the_reader_on_the_same_line() {
+    use fs_agent::render::{Key, RenderEvent};
+
+    let mut state = state();
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+
+    // Following the bottom: a narrower terminal still follows the bottom.
+    let narrowed = screen(80, 24, &mut state).join("\n");
+    assert!(
+        narrowed.contains("第 39 行"),
+        "still at the bottom: {narrowed}"
+    );
+
+    // Scrolled away: the source line at the top is what survives the rewrap.
+    let _ = screen(120, 24, &mut state);
+    state.key(Key::PageUp);
+    state.key(Key::PageUp);
+    let before = first_notice(&screen(120, 24, &mut state));
+    assert_eq!(before, Some(8), "two pages up");
+    let after = first_notice(&screen(80, 24, &mut state));
+    assert_eq!(
+        after, before,
+        "the same line is at the top after the resize"
+    );
+}
+
+#[test]
+fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read() {
+    use fs_agent::render::RenderEvent;
+
+    // 120x24 leaves the transcript 88 content columns; the last of them belongs to
+    // the scrollbar whether or not anything is drawn in it, so text wraps at 87.
+    let mut state = state();
+    state.apply(RenderEvent::Notice("x".repeat(88)));
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        frame[(1, 6)].symbol(),
+        "x",
+        "the row starts at the first column"
+    );
+    assert_eq!(
+        frame[(1, 7)].symbol(),
+        "x",
+        "88 columns of text overflow the 87-column text area"
+    );
+    assert_eq!(
+        frame[(88, 6)].symbol(),
+        " ",
+        "nothing is drawn in the reserved column while everything fits"
+    );
+
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 行")));
+    }
+    let frame = buffer(120, 24, &mut state);
+    for y in 6..18 {
+        assert_ne!(
+            frame[(88, y)].symbol(),
+            " ",
+            "a scrollbar appears once the transcript is longer than the pane, row {y}"
+        );
+    }
 }

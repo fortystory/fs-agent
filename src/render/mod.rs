@@ -31,6 +31,7 @@ pub mod highlight;
 pub mod input;
 pub mod layout;
 pub mod markdown;
+pub mod pane;
 pub mod plain;
 pub mod severity;
 pub mod transcript;
