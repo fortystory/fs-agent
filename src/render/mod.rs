@@ -28,6 +28,7 @@
 pub mod headless;
 pub mod highlight;
 pub mod input;
+pub mod markdown;
 pub mod plain;
 pub mod severity;
 pub mod transcript;

@@ -521,26 +521,26 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             role: Role::Assistant,
             text,
         } => {
-            let mut lines = Vec::new();
             if text.is_empty() {
-                return lines;
+                return Vec::new();
             }
-            let mut first = true;
-            for raw in text.split('\n') {
-                let prefix = if first {
-                    first = false;
-                    format!("{} ", speaker_label(speaker))
-                } else {
-                    // Columns, not characters: a Chinese label is narrower in
-                    // characters than in columns (`[用户]` is 4 chars, 6 columns).
-                    " ".repeat(speaker_label(speaker).as_str().cell_width() as usize + 1)
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(ratatui::style::Color::DarkGray)),
-                    Span::raw(raw.to_owned()),
-                ]));
-            }
-            lines
+            // The answer is rendered as Markdown at full brightness; only the
+            // speaker label repeats, in the narration grey.
+            let prefix = format!("{} ", speaker_label(speaker));
+            let indent = " ".repeat(prefix.as_str().cell_width() as usize);
+            super::markdown::to_lines(text)
+                .into_iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    let lead = if index == 0 { &prefix } else { &indent };
+                    let mut spans = vec![Span::styled(
+                        lead.clone(),
+                        Style::default().fg(ratatui::style::Color::DarkGray),
+                    )];
+                    spans.extend(line.spans);
+                    Line::from(spans)
+                })
+                .collect()
         }
         Block::Message { speaker, text, .. } => vec![Line::from(vec![
             Span::styled(
@@ -573,13 +573,10 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             lines
         }
         Block::Tool(tool) => tool_lines(tool),
-        Block::TurnStarted { speaker, iteration } => vec![Line::from(Span::styled(
-            format!(
-                "{} {}",
-                speaker_label(speaker),
-                wording::turn_started(*iteration)
-            ),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+        Block::TurnStarted { speaker, iteration } => vec![narration(format!(
+            "{} {}",
+            speaker_label(speaker),
+            wording::turn_started(*iteration)
         ))],
         Block::TurnEnded { speaker, reason } => vec![severity_line(
             *reason,
@@ -593,7 +590,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             speaker,
             tool_name,
             args,
-        } => vec![Line::from(format!(
+        } => vec![narration(format!(
             "{} {}",
             speaker_label(speaker),
             wording::permission_asked(tool_name.as_deref(), &summarize_args(args))
@@ -603,7 +600,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             decision,
             source,
             reason,
-        } => vec![Line::from(format!(
+        } => vec![narration(format!(
             "{} {}",
             speaker_label(speaker),
             wording::permission_decided(*decision, *source, reason.as_deref())
@@ -612,7 +609,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             speaker,
             point,
             outcome,
-        } => vec![Line::from(format!(
+        } => vec![narration(format!(
             "{} {}",
             speaker_label(speaker),
             wording::hook(point, outcome)
@@ -620,7 +617,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
         Block::ExecutorSpawned {
             speaker,
             executor_id,
-        } => vec![Line::from(format!(
+        } => vec![narration(format!(
             "{} {}",
             speaker_label(speaker),
             wording::executor_spawned(executor_id.as_str())
@@ -633,13 +630,10 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             *reason,
             wording::executor_finished(executor_id.as_str(), *reason, summary),
         )],
-        Block::Usage { speaker, usage } => vec![Line::from(Span::styled(
-            format!(
-                "{} {}",
-                speaker_label(speaker),
-                wording::usage_summary(usage)
-            ),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+        Block::Usage { speaker, usage } => vec![narration(format!(
+            "{} {}",
+            speaker_label(speaker),
+            wording::usage_summary(usage)
         ))],
         Block::AgentError { speaker, message } => vec![severity_line(
             StopReason::Error,
@@ -656,22 +650,28 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
         Block::SessionEnded { reason } => {
             vec![severity_line(*reason, wording::session_ended(*reason))]
         }
-        Block::ContextInjected { source } => vec![Line::from(Span::styled(
-            wording::context_injected(*source),
-            Style::default().fg(ratatui::style::Color::DarkGray),
-        ))],
+        Block::ContextInjected { source } => {
+            vec![narration(wording::context_injected(*source))]
+        }
         Block::History { reason, summary } => {
-            vec![Line::from(wording::history(*reason, summary.as_deref()))]
+            vec![narration(wording::history(*reason, summary.as_deref()))]
         }
         Block::Diagnostic(message) => vec![Line::from(Span::styled(
             wording::diagnostic(message),
             Style::default().fg(ratatui::style::Color::Yellow),
         ))],
-        Block::Notice(message) => vec![Line::from(Span::styled(
-            message.clone(),
-            Style::default().fg(ratatui::style::Color::DarkGray),
-        ))],
+        Block::Notice(message) => vec![narration(message.clone())],
     }
+}
+
+/// One **intermediate** narration line: dim, so the model's answer — rendered at
+/// full brightness — is the thing that stands out. A line that carries a severity
+/// keeps its own colour instead (see [`severity_line`]).
+fn narration(text: String) -> Line<'static> {
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(ratatui::style::Color::DarkGray),
+    ))
 }
 
 fn severity_line(reason: StopReason, text: String) -> Line<'static> {

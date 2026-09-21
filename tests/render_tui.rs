@@ -4,7 +4,10 @@
 //! decides what to draw and what a key means. Splitting it from the terminal is
 //! what makes that testable (spec §19).
 
-use fs_agent::events::{hook_format, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId};
+use fs_agent::events::{
+    hook_format, Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason,
+    ToolCallId,
+};
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
     paint_scrollback, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind,
@@ -12,7 +15,7 @@ use fs_agent::render::{
 };
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
 
 fn kimi() -> SpeakerId {
@@ -266,6 +269,76 @@ fn a_notice_is_a_scrollback_line_shown_as_it_is() {
         .map(|span| span.content.as_ref())
         .collect();
     assert_eq!(text, banner);
+}
+
+#[test]
+fn the_answer_block_is_rendered_as_markdown() {
+    // The finalized answer goes through the Markdown renderer, so a heading is a
+    // heading and a bullet is a bullet — the readable half of the transcript.
+    let lines = render_block(&Block::Message {
+        speaker: kimi(),
+        role: Role::Assistant,
+        text: "# 标题\n\n- 一\n- 二\n".to_owned(),
+    });
+    let heading = &lines[0];
+    assert!(
+        heading
+            .spans
+            .iter()
+            .any(|span| span.style.fg == Some(Color::Cyan)
+                && span.style.add_modifier.contains(Modifier::BOLD)),
+        "the first line is the rendered heading: {heading:?}"
+    );
+    assert_eq!(heading.spans.last().unwrap().content.as_ref(), "标题");
+
+    let rendered: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    assert!(
+        rendered.iter().any(|line| line.contains("• 一")),
+        "the list marker is rendered, not the raw dash: {rendered:?}"
+    );
+}
+
+#[test]
+fn intermediate_narration_is_dim_and_the_answer_is_not() {
+    // Every narration line reads the same dim grey, whichever event it narrates,
+    // so the model's answer — at full brightness — is what stands out.
+    let verdict = render_block(&Block::PermissionDecided {
+        speaker: kimi(),
+        decision: Decision::Allow,
+        source: DecisionSource::User,
+        reason: Some("mode ask".to_owned()),
+    });
+    assert_eq!(
+        verdict[0].spans[0].style.fg,
+        Some(Color::DarkGray),
+        "a permission verdict is narration"
+    );
+
+    let asked = render_block(&Block::PermissionAsked {
+        speaker: kimi(),
+        tool_name: Some("bash".to_owned()),
+        args: serde_json::json!({"command": "ls"}),
+    });
+    assert_eq!(asked[0].spans[0].style.fg, Some(Color::DarkGray));
+
+    let answer = render_block(&Block::Message {
+        speaker: kimi(),
+        role: Role::Assistant,
+        text: "正文".to_owned(),
+    });
+    assert_ne!(
+        answer[0].spans[1].style.fg,
+        Some(Color::DarkGray),
+        "the answer body is not dimmed"
+    );
 }
 
 #[test]
