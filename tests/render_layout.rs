@@ -2076,7 +2076,7 @@ fn a_tool_result_is_folded_into_its_call_line() {
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains("[kimi] ▸ 调用 bash command=cargo test"),
+        text.contains("[kimi] ▸ 调用 bash 运行 cargo test"),
         "the call line keeps its parameter summary and gains the marker: {text}"
     );
     assert!(
@@ -2102,7 +2102,7 @@ fn a_tool_result_is_folded_into_its_call_line() {
     let rows = screen(120, 24, &mut failed);
     let text = rows.join("\n");
     assert!(
-        text.contains("[kimi] ▸ 调用 read_file path=missing.rs 失败"),
+        text.contains("[kimi] ▸ 调用 read_file missing.rs 失败"),
         "the failure is a suffix on the call line: {text}"
     );
     assert!(
@@ -2972,14 +2972,27 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         "bash",
         serde_json::json!({"command": "cat big"}),
     ));
-    state.apply(tool_completed(2, "call-23", true, Some("preview"), None));
+    // The event's `output` is the **cut** preview, which is what says there is a whole
+    // file to go and read — a preview with no marker in it is the whole body, and the
+    // detail does not go looking for a file that was never written.
+    state.apply(tool_completed(
+        2,
+        "call-23",
+        true,
+        Some(
+            "head\n[truncated: 200001 chars, ~50000 tokens; full output at \
+             /tmp/nonexistent-elsewhere/call-23.txt]\ntail",
+        ),
+        None,
+    ));
     click_row(&mut state, 120, 40, "调用 bash");
 
     // The mark is far below the visible body, so walk to the end of it.
     for _ in 0..4000 {
         state.key(Key::PageDown);
     }
-    let text = screen(120, 40, &mut state).join("\n");
+    let rows = screen(120, 40, &mut state);
+    let text = rows.join("\n");
     assert!(text.contains("已截断"), "the cut is stated: {text}");
 
     std::fs::remove_dir_all(&dir).ok();
@@ -3048,7 +3061,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains("调用 bash command=ls -la"),
+        text.contains("调用 bash 查看"),
         "the call line is up as soon as the result is: {text}"
     );
 
@@ -3076,7 +3089,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     asked.apply(tool_completed(4, "call-31", true, Some("out"), None));
     let text = screen(120, 24, &mut asked).join("\n");
     assert!(
-        text.contains("调用 bash command=ls"),
+        text.contains("调用 bash 查看"),
         "the call line is up as soon as the result is: {text}"
     );
 }
@@ -3244,5 +3257,194 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
         rows.iter().any(|row| row.contains("第 2")),
         "and PgUp still reaches further back: {}",
         rows.join("\n")
+    );
+}
+
+#[test]
+fn a_complete_result_does_not_claim_its_text_is_unavailable() {
+    // Only a result that was **cut** has a spilled file; a short one was never written
+    // anywhere, and its preview *is* the whole body. Saying `全文不可用` about it is a
+    // lie the reader cannot see through — it reads as "this detail is incomplete"
+    // (2026-09-23, user report: every bash detail ended with `--- stderr ---
+    // 全文不可用`).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-50",
+        "bash",
+        serde_json::json!({"command": "echo hi"}),
+    ));
+    state.apply(tool_completed(
+        2,
+        "call-50",
+        true,
+        Some("退出码 0\n--- stdout ---\nhi\n--- stderr ---\n"),
+        None,
+    ));
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("--- stderr ---"),
+        "the tool's own sections are shown as they are: {text}"
+    );
+    assert!(
+        !text.contains("全文不可用"),
+        "and no degradation is claimed for a body that was never cut: {text}"
+    );
+}
+
+#[test]
+fn a_cut_result_still_says_when_the_whole_text_is_gone() {
+    // The other half of the same rule: a preview that really was cut, with no file to
+    // read it back from, keeps the note.
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-51",
+        "bash",
+        serde_json::json!({"command": "cat big"}),
+    ));
+    state.apply(tool_completed(
+        2,
+        "call-51",
+        true,
+        Some("head\n[truncated: 999 chars, ~250 tokens; full output at /x/outputs/call-51.txt]\ntail"),
+        None,
+    ));
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("全文不可用"),
+        "a cut body with no readable file says so: {text}"
+    );
+}
+
+#[test]
+fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
+    // `调用 工具 描述`: the reader sees what the call was *for*, and the concrete
+    // arguments are one click away in the detail (票 02 §2，2026-09-23 修正).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-60",
+        "bash",
+        serde_json::json!({"command": "find .scratch -type f"}),
+    ));
+    state.apply(tool_completed(2, "call-60", true, Some("out"), None));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("[kimi] ▸ 调用 bash 查询 .scratch"),
+        "the line describes the call: {text}"
+    );
+    assert!(
+        !text.contains("find .scratch -type f"),
+        "and the arguments are not printed on it: {text}"
+    );
+
+    // The questionnaire describes itself by the question's own header.
+    let mut asked = state_with_roster(&["kimi"]);
+    asked.apply(tool_started(
+        1,
+        "call-61",
+        "ask_user_question",
+        serde_json::json!({"questions": [{"id": "q", "header": "下一步", "question": "接着做哪个？"}]}),
+    ));
+    asked.apply(tool_completed(2, "call-61", false, None, Some("declined")));
+    let text = screen(120, 40, &mut asked).join("\n");
+    assert!(
+        text.contains("[kimi] ▸ 调用 ask_user_question 下一步 失败"),
+        "the question's own summary describes the call: {text}"
+    );
+
+    // The arguments are still in the detail, under their own heading.
+    click_row(&mut asked, 120, 40, "调用 ask_user_question");
+    let text = screen(120, 40, &mut asked).join("\n");
+    assert!(text.contains("── 参数 ──"), "the args section: {text}");
+    assert!(
+        text.contains("下一步"),
+        "and it carries the concrete arguments: {text}"
+    );
+}
+
+#[test]
+fn the_call_line_wears_the_narration_grey_after_its_speakers_name() {
+    // The description is narration, not the model's answer, so it wears the same grey
+    // as the thinking line; the name keeps the speaker's colour (2026-09-23).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-62",
+        "bash",
+        serde_json::json!({"command": "ls -la"}),
+    ));
+    state.apply(tool_completed(2, "call-62", true, Some("out"), None));
+    let frame = buffer(120, 40, &mut state);
+
+    let Some((name_x, row)) = cell_of(&frame, 120, 40, "[kimi]") else {
+        panic!("the call line is on screen");
+    };
+    let Some((call_x, _)) = cell_of(&frame, 120, 40, "调用 bash") else {
+        panic!("the call line is on screen");
+    };
+    assert_eq!(
+        frame[(name_x, row)].fg,
+        Color::LightCyan,
+        "the name keeps the speaker's colour"
+    );
+    assert_eq!(
+        frame[(call_x, row)].fg,
+        Color::DarkGray,
+        "and the description wears the narration grey"
+    );
+}
+
+#[test]
+fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
+    // The border is the speaker's colour — whose line you are reading, before a word of
+    // it — and the words sit a cell inside it (2026-09-23).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-63",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-63", true, Some("out"), None));
+    click_row(&mut state, 120, 40, "调用 bash");
+    let frame = buffer(120, 40, &mut state);
+
+    // The overlay's own corner: a `┌` that is not the middle block's.
+    let mut corner = None;
+    for y in 0..40 {
+        for x in 2..120 {
+            if frame[(x, y)].symbol() == "┌" {
+                corner = Some((x, y));
+                break;
+            }
+        }
+        if corner.is_some() {
+            break;
+        }
+    }
+    let (x, y) = corner.expect("the overlay's top-left corner");
+    assert_eq!(
+        frame[(x, y)].fg,
+        Color::LightCyan,
+        "the border wears the speaker's colour"
+    );
+    assert_eq!(
+        (
+            frame[(x + 1, y + 1)].symbol(),
+            frame[(x + 2, y + 1)].symbol()
+        ),
+        (" ", " "),
+        "the cells just inside the border are air, on both axes"
+    );
+    assert_eq!(
+        frame[(x + 2, y + 2)].symbol(),
+        "[",
+        "and the title starts a cell in from the border on both"
     );
 }

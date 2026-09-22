@@ -487,7 +487,7 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(call, "[kimi] ▸ 调用 read_file path=a.rs");
+    assert_eq!(call, "[kimi] ▸ 调用 read_file a.rs");
     assert!(
         !ok[0].spans.iter().any(|span| span.style.bg.is_some()),
         "and carries no output body: {:#?}",
@@ -511,7 +511,7 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(call, "[kimi] ▸ 调用 read_file path=a.rs 失败");
+    assert_eq!(call, "[kimi] ▸ 调用 read_file a.rs 失败");
 
     // The post-hook's feedback is policy, not output: it stays on screen, as its own
     // block about the call just painted.

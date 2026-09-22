@@ -1259,7 +1259,8 @@ impl TuiState {
         // The name is a `speaker_label`, so it takes the speaker's colour — the same
         // rule every other line with one follows (票 07 §2).
         let name = wording::speaker_label(&self.thinking_speaker);
-        let name_style = Style::default().fg(self.colors.of(&self.thinking_speaker));
+        let color = self.colors.of(&self.thinking_speaker);
+        let name_style = Style::default().fg(color);
         let line = Line::from(vec![
             Span::styled(format!("{name} "), name_style),
             Span::styled(
@@ -1298,7 +1299,8 @@ impl TuiState {
         self.thinking_open = false;
         self.thinking_done = true;
         let name = wording::speaker_label(&self.thinking_speaker);
-        let name_style = Style::default().fg(self.colors.of(&self.thinking_speaker));
+        let color = self.colors.of(&self.thinking_speaker);
+        let name_style = Style::default().fg(color);
         // In place: one thinking segment is one line, from `正在思考` to `思考完成`
         // (票 02 §1). The `▸` after the name is what says the line can be opened — it
         // trails the speaker so every line still starts with who is speaking
@@ -1314,6 +1316,7 @@ impl TuiState {
         let detail = Detail {
             // The overlay's title is the clicked line's own text (票 02 §4).
             title: line_text(&line),
+            color,
             kind: DetailKind::Thinking { text },
         };
         self.pane.replace_last(line);
@@ -3307,23 +3310,24 @@ fn severity_style(reason: StopReason) -> Style {
 /// readable without a click (票 02 §3).
 fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     let failed = matches!(&tool.outcome, Some(outcome) if !outcome.ok);
+    let color = colors.of(&tool.speaker);
+    let description = wording::tool_description(&tool.tool, &tool.args);
     let mut call = vec![
         // The name leads, so every transcript line starts with who is speaking; the
         // marker after it is what says the line can be opened. It is paint, not
-        // wording, so it is not part of the sentence (票 03 §Answer）。
+        // wording, so it is not part of the sentence (票 03 §Answer)。
         Span::styled(
             format!("{} ", speaker_label(&tool.speaker)),
-            name_style(&tool.speaker, colors),
+            Style::default().fg(color),
         ),
         Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
+        // What the call was *for*, in the narration grey the thinking line wears — the
+        // arguments themselves are one click away (票 02 §2，2026-09-23 修正）。
         Span::styled(
-            format!(
-                "{} {} {}",
-                wording::tool_call_label(),
-                tool.tool,
-                summarize_args(&tool.args)
-            ),
-            Style::default().add_modifier(Modifier::BOLD),
+            tool_call_text(&tool.tool, &description),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     if failed {
@@ -3334,6 +3338,7 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
     }
     let detail = Detail {
         title: line_text(&Line::from(call.clone())),
+        color,
         kind: DetailKind::Tool {
             tool_call_id: tool.tool_call_id.clone(),
             output: tool
@@ -3349,6 +3354,17 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
         },
     };
     vec![RenderedLine::linked(Line::from(call), detail)]
+}
+
+/// `调用 工具 描述`, with the trailing space left out when there is no description to
+/// give (a dynamic tool whose arguments this layer cannot read).
+fn tool_call_text(tool: &str, description: &str) -> String {
+    let label = wording::tool_call_label();
+    if description.is_empty() {
+        format!("{label} {tool}")
+    } else {
+        format!("{label} {tool} {description}")
+    }
 }
 
 /// The text of a painted line, for a title.
@@ -3368,6 +3384,10 @@ fn line_text(line: &Line<'static>) -> String {
 pub struct Detail {
     /// The clicked line's own text, used as the overlay's title.
     title: String,
+    /// The speaker's colour for the line this detail belongs to: the overlay's border
+    /// wears it, so the box says whose line you are reading before you read a word of
+    /// it (2026-09-23).
+    color: Color,
     kind: DetailKind,
 }
 
@@ -3405,6 +3425,13 @@ struct DetailView {
     /// Body rows the overlay can show at once.
     height: usize,
 }
+
+/// The cell of air the detail overlay keeps between its border and its words.
+const DETAIL_PADDING: u16 = 1;
+
+/// The rows the overlay's own text needs before padding is worth having: a title row,
+/// two body rows, and the footer.
+const DETAIL_MIN_TEXT_ROWS: u16 = 4;
 
 /// The most characters a detail body will read from a spilled tool output.
 ///
@@ -3541,6 +3568,13 @@ fn section_header(name: &str) -> Line<'static> {
 /// documented degradation: the preview, and a sentence saying the full text was not
 /// available.
 fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -> (String, bool) {
+    // An uncut result has no spilled file to look for, and its preview is the whole
+    // body: show it as it is. Only a result the stream had to *cut* has a file on
+    // disk, so only that kind can be missing one (spec §11；2026-09-23，用户报告
+    // 短输出的详情不该写着「全文不可用」).
+    if !preview.contains(crate::context::TRUNCATED_MARKER) {
+        return (preview.to_owned(), false);
+    }
     // `SessionFacts.cwd` holds the **session directory**, so the outputs directory
     // is one join away — the same arithmetic the harness does (票 01 事实 56).
     let path = std::path::Path::new(session_dir)
@@ -3586,8 +3620,22 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         return;
     };
     let inner = layout::inner(area);
-    let height = inner.height as usize;
-    let body_rows = height.saturating_sub(2);
+    // A cell of air inside the border, so the words do not touch the frame. It is given
+    // **up** rather than eating the body: below the height that leaves the body two rows
+    // plus the title and the footer, the padding would hide the very content the reader
+    // opened the overlay for (2026-09-23).
+    let pad_x = u16::from(inner.width > DETAIL_PADDING * 3);
+    let pad_y = u16::from(inner.height >= DETAIL_PADDING * 2 + DETAIL_MIN_TEXT_ROWS);
+    let text = Rect::new(
+        inner.x + DETAIL_PADDING * pad_x,
+        inner.y + DETAIL_PADDING * pad_y,
+        inner.width.saturating_sub(DETAIL_PADDING * 2 * pad_x),
+        inner.height.saturating_sub(DETAIL_PADDING * 2 * pad_y),
+    );
+    // Everything below is sized from the **padded** rect: a body window one row taller
+    // than the box that shows it clips the last rows off the end, which is how the
+    // padding first ate a line of the very body it was making room for.
+    let body_rows = text.height.saturating_sub(2) as usize;
     let max_top = view.body.len().saturating_sub(body_rows);
     let top = view.top.min(max_top);
     let rows: Vec<Line<'static>> = view
@@ -3602,29 +3650,31 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
+    // The border wears the speaker's colour: the box belongs to one line, and whose
+    // line it is should be legible before a word of it is read (2026-09-23).
     frame.render_widget(
         WidgetBlock::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(view.detail.color)),
         area,
     );
     // The title row is the clicked line's own text, so the reader knows which line
     // they opened.
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            truncate_columns(&title, inner.width as usize),
+            truncate_columns(&title, text.width as usize),
             Style::default().add_modifier(Modifier::BOLD),
         ))),
-        Rect::new(inner.x, inner.y, inner.width, 1),
+        Rect::new(text.x, text.y, text.width, 1),
     );
     // The body takes everything between the title and the footer; the footer is
-    // pinned to the overlay's last inner row, so the two cannot overlap (票 03
+    // pinned to the overlay's last text row, so the two cannot overlap (票 03
     // §Answer).
     let body = Rect::new(
-        inner.x,
-        inner.y + 1,
-        inner.width,
-        inner.height.saturating_sub(2),
+        text.x,
+        text.y + 1,
+        text.width,
+        text.height.saturating_sub(2),
     );
     frame.render_widget(Paragraph::new(rows), body);
     frame.render_widget(
@@ -3632,7 +3682,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
             footer,
             Style::default().fg(Color::DarkGray),
         ))),
-        Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+        Rect::new(text.x, text.y + text.height - 1, text.width, 1),
     );
     let view = state.detail.as_mut().expect("just checked");
     view.height = body_rows;

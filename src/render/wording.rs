@@ -18,6 +18,8 @@ use crate::events::{
     hook_format, ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId,
     StopReason, Usage,
 };
+use serde_json::Value;
+
 use crate::permissions::Mode;
 use crate::provider::FinishReason;
 
@@ -336,6 +338,215 @@ pub fn detail_output_section() -> &'static str {
 pub fn detail_footer(position: usize, total: usize) -> String {
     format!("↕ {position}/{total} · esc 关闭")
 }
+
+/// One tool call's **description**: what the call was for, in place of its arguments.
+///
+/// The transcript shows `{label} 调用 {tool} {description}`; the concrete arguments and
+/// the whole output live in the call's detail view. A line of raw arguments is a
+/// debugger's view of a call — the reader wants to know what it *did* (票 02 §2，
+/// 2026-09-23 修正).
+///
+/// The rules are deliberately few and mechanical, because the description is derived
+/// from the arguments alone — nothing on the stream says what the model intended:
+///
+/// * the questionnaire tool describes itself by the question it asks;
+/// * a tool that takes a path describes itself by that path;
+/// * a shell command describes itself by a verb for its first recognised command plus
+///   the first path-like word in it — `查询 .scratch/tui-history-replay`;
+/// * anything else falls back to the call's argument summary, so a dynamic tool with
+///   unknown arguments is never left blank.
+pub fn tool_description(tool: &str, args: &Value) -> String {
+    if let Some(described) = argument_description(tool, args) {
+        return described;
+    }
+    if let Some(command) = args.get("command").and_then(Value::as_str) {
+        return command_description(command);
+    }
+    let summary = crate::render::transcript::summarize_args(args);
+    if summary.is_empty() {
+        return String::new();
+    }
+    summary
+}
+
+/// The description a tool's own arguments give it: the field that says what the call
+/// is about, in the order the tools in this repo name them.
+fn argument_description(tool: &str, args: &Value) -> Option<String> {
+    // A questionnaire is about the question, and its own `header` is the model's
+    // one-phrase summary of it — which is exactly what a description is.
+    if tool == ASK_USER_QUESTION_TOOL {
+        return first_question_field(args);
+    }
+    // A call that names one path is about that path.
+    for key in ["path", "file_path", "file", "target", "pattern", "query"] {
+        if let Some(value) = args.get(key).and_then(Value::as_str) {
+            let value = first_line(value);
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    // A dispatched task is about the task.
+    for key in ["task", "description", "prompt", "brief"] {
+        if let Some(value) = args.get(key).and_then(Value::as_str) {
+            let value = first_line(value);
+            if !value.is_empty() {
+                return Some(cut(&value, DESCRIPTION_MAX_CHARS));
+            }
+        }
+    }
+    None
+}
+
+/// The questionnaire tool's name.
+///
+/// Matched by name because a description is wording, and wording is keyed on what the
+/// call *is*: the tool table's `Tool` traits hold behaviour, not prose.
+const ASK_USER_QUESTION_TOOL: &str = "ask_user_question";
+
+/// The first question's `header`, else its `question`, as one line.
+fn first_question_field(args: &Value) -> Option<String> {
+    let questions = args.get("questions")?.as_array()?;
+    let first = questions.first()?;
+    for key in ["header", "question"] {
+        if let Some(value) = first.get(key).and_then(Value::as_str) {
+            let value = first_line(value);
+            if !value.is_empty() {
+                return Some(cut(&value, DESCRIPTION_MAX_CHARS));
+            }
+        }
+    }
+    None
+}
+
+/// A shell command's description: a verb for what it does, then what it does it to.
+///
+/// The rules are mechanical because the description is derived from the arguments
+/// alone — nothing on the stream says what the model intended:
+///
+/// 1. `cd somewhere` is dropped: navigation is never what a call is *about*.
+/// 2. The verb is the first word this layer recognises anywhere in the rest
+///    ([`command_verb`]), so `ls -a; find .scratch` describes itself by what it does.
+/// 3. The subject is the first word that looks like a path — `查询
+///    .scratch/tui-history-replay` — because that is the token that tells two `查询`
+///    calls apart. Failing that it is the first operand: `修改 build` from
+///    `rm -rf build`.
+/// 4. A program whose second word is a subcommand keeps both, because the subcommand
+///    alone is ambiguous: `查看 git status`, `运行 cargo test`.
+/// 5. A command with nothing recognisable in it describes itself by its first word:
+///    `运行 env`.
+fn command_description(command: &str) -> String {
+    let command = first_line(command);
+    let words: Vec<&str> = command
+        .split([';', '|', '&', '\n'])
+        .flat_map(str::split_whitespace)
+        .map(clean_word)
+        .filter(|word| !word.is_empty())
+        .collect();
+    let verb = words.iter().find_map(|word| command_verb(word));
+    let subject = subject_word(&words);
+    match (verb, subject) {
+        (Some(verb), Some(subject)) => cut(&format!("{verb} {subject}"), DESCRIPTION_MAX_CHARS),
+        (Some(verb), None) => cut(verb, DESCRIPTION_MAX_CHARS),
+        (None, Some(subject)) => cut(&format!("运行 {subject}"), DESCRIPTION_MAX_CHARS),
+        (None, None) => String::new(),
+    }
+}
+
+/// Programs whose second word is a subcommand worth keeping: `git status` is a call,
+/// `status` on its own is ambiguous.
+const SUBCOMMAND_PROGRAMS: [&str; 6] = ["git", "cargo", "npm", "pnpm", "yarn", "go"];
+
+/// The word a command is about: the first path-like operand, else the first operand.
+///
+/// Flags (`-rf`), redirections (`2>/dev/null`) and `cd`'s target are skipped — none of
+/// them is what a call is about, and naming the wrong one on a destructive call is
+/// worse than naming nothing.
+fn subject_word(words: &[&str]) -> Option<String> {
+    let mut operands: Vec<&str> = Vec::with_capacity(words.len());
+    let mut skip_next = false;
+    for word in words {
+        let word = *word;
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if word == "cd" {
+            skip_next = true;
+            continue;
+        }
+        if word.starts_with('-') || word.contains('>') || word.contains(' ') {
+            continue;
+        }
+        operands.push(word);
+    }
+    if let Some(path) = operands
+        .iter()
+        .find(|word| word.contains('/') || word.contains('*') || word.contains('.'))
+    {
+        return Some((*path).to_owned());
+    }
+    let mut operands = operands.into_iter();
+    let program = operands.next()?;
+    match operands.next() {
+        Some(subcommand) if SUBCOMMAND_PROGRAMS.contains(&program) => {
+            Some(format!("{program} {subcommand}"))
+        }
+        Some(operand) => Some(operand.to_owned()),
+        None => None,
+    }
+}
+
+/// A command word with the punctuation a shell line wraps it in taken off.
+fn clean_word(word: &str) -> &str {
+    word.trim_start_matches('(')
+        .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`' || ch == ';')
+}
+
+/// The verb a command's leading word earns: what the reader would say the call does.
+///
+/// Only three verbs, because a reader only needs three: look something up, look at
+/// something, or change something. A program this layer does not know is *not* guessed
+/// at — see [`command_description`].
+fn command_verb(word: &str) -> Option<&'static str> {
+    match word {
+        "grep" | "rg" | "ag" | "find" | "fd" | "rgrep" => Some("查询"),
+        "ls" | "cat" | "head" | "tail" | "wc" | "stat" | "file" | "tree" | "pwd" | "du"
+        | "less" | "more" | "sed" | "awk" | "jq" | "git" => Some("查看"),
+        "rm" | "mv" | "cp" | "mkdir" | "touch" | "chmod" | "chown" | "tee" | "ln" => Some("修改"),
+        "cargo" | "make" | "npm" | "pnpm" | "yarn" | "go" | "pytest" | "python" | "python3"
+        | "node" | "bash" | "sh" | "zsh" | "test" => Some("运行"),
+        _ => None,
+    }
+}
+
+/// `text`'s first line, trimmed of surrounding blanks.
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// `text` cut to `max` characters, marked with an ellipsis.
+///
+/// Local to this layer on purpose: the description is wording, and the transcript's
+/// own `truncate` is a presentation helper the wording layer has no business sharing.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// How long a call's description may be before it is cut.
+///
+/// The description exists to make the line readable at a glance; a long one would be
+/// as unreadable as the arguments it replaced, and the pane would wrap it anyway.
+const DESCRIPTION_MAX_CHARS: usize = 60;
 
 /// A tool call that finished successfully. The result itself is printed by the
 /// caller.

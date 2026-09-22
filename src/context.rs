@@ -463,8 +463,19 @@ fn preview(text: &str, max_tokens: u64, pointer: Option<&Path>) -> String {
         Some(path) => format!("full output at {}", path.display()),
         None => "full output could not be spilled to disk".to_owned(),
     };
-    format!("{head}\n[truncated: {total_chars} chars, ~{total_tokens} tokens; {note}]\n{tail}")
+    format!(
+        "{head}\n{TRUNCATED_MARKER}{total_chars} chars, ~{total_tokens} tokens; {note}]\n{tail}"
+    )
 }
+
+/// The marker a cut result body carries where the cut happened.
+///
+/// Public because it is the only way a reader of a finished event can tell the two
+/// kinds of `output` apart: an uncut result's preview **is** its whole text, while a
+/// cut one has a head, this marker, and a tail — and only the cut kind has a spilled
+/// file to go looking for. The event carries one field for both (spec §11), so the
+/// marker is the discriminator.
+pub const TRUNCATED_MARKER: &str = "[truncated: ";
 
 /// Read the project's `AGENTS.md`, if it exists and is not blank.
 ///
