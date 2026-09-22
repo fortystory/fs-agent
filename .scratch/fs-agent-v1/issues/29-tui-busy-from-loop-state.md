@@ -6,7 +6,7 @@ Blocked by: 26（`/discuss` 在活会话上）、28（人物注入）
 
 Status: done
 
-**参考:** spec §6（取消）、§9（问题拥有键盘）、§15（讨论协议）
+**参考:** spec §6（取消）、§19（渲染与 CLI 组装）、§15（讨论协议）
 
 - [x] **根因**：`busy` 只在 `Block::TurnEnded` / `SessionEnded` 上清零，而合成器（`run_single_shot`）只发 `Delta` / `Message` / `Usage`，**没有回合边界** ⇒ 讨论结束后 `busy` 永远是 true
 - [x] **症状**：`Ctrl-C` 因此走「取消手势」分支，而空闲的 `interactive_loop` 对内层 select 里的 `Cancel` 是 `=> {}`（丢弃）⇒ 按键被吞，进程既不退出也不取消

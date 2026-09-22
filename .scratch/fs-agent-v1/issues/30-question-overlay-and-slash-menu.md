@@ -16,7 +16,7 @@ Blocked by: None
 
 Status: open
 
-**参考:** spec §9（问题拥有键盘）、§10（措辞层）、票 26、`docs/tui-manual-checklist.md`、tui-layout 票 14
+**参考:** spec §19（渲染与 CLI 组装）、`docs/render.md`（措辞层的家）、票 26、`docs/tui-manual-checklist.md`、tui-layout 票 14
 
 ## Comments
 

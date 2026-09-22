@@ -11,7 +11,7 @@ Blocked by: 29（`/discuss` 在活会话上）、28（人物注入）
 
 Status: done
 
-**参考:** spec §6（取消传播）、§9（问题拥有键盘）、票 29、tui-layout 票 12
+**参考:** spec §6（取消传播）、§19（渲染与 CLI 组装）、票 29、tui-layout 票 12
 
 ## Comments
 
