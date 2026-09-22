@@ -66,6 +66,10 @@ def main(argv: list[str]) -> int:
 
     text = read(map_path)
 
+    has_task_list = any(
+        (match := SECTION.match(line)) and match.group(1).strip() == "任务清单"
+        for line in text.splitlines()
+    )
     rows = [TASK_ROW.match(line) for line in section_lines(text, "任务清单")]
     rows = [row for row in rows if row]
     expected = len(rows)
@@ -76,20 +80,23 @@ def main(argv: list[str]) -> int:
     }
 
     failures: list[str] = []
-    if expected != actual:
-        failures.append(
-            f"task-list count {expected} != child-file count {actual}"
-        )
-
-    listed: set[str] = set()
-    for row in rows:
-        target = os.path.normpath(os.path.join(map_dir, row.group(3)))
-        listed.add(target)
-        if not os.path.isfile(target):
-            failures.append(f"task-list entry points at missing file: {row.group(3)}")
-    for path in actual_paths:
-        if path not in listed:
-            failures.append(f"child file not in task list: {os.path.relpath(path, map_dir)}")
+    # Maps written before the task-list fallback (multi-agent-architecture,
+    # tui-layout) have no `## 任务清单` and no `Part of:`. For those the tool
+    # only reports the closed/total count instead of failing the fallback check.
+    if has_task_list:
+        if expected != actual:
+            failures.append(
+                f"task-list count {expected} != child-file count {actual}"
+            )
+        listed: set[str] = set()
+        for row in rows:
+            target = os.path.normpath(os.path.join(map_dir, row.group(3)))
+            listed.add(target)
+            if not os.path.isfile(target):
+                failures.append(f"task-list entry points at missing file: {row.group(3)}")
+        for path in actual_paths:
+            if path not in listed:
+                failures.append(f"child file not in task list: {os.path.relpath(path, map_dir)}")
 
     closed = 0
     for path in actual_paths:
@@ -105,13 +112,17 @@ def main(argv: list[str]) -> int:
 
         kind = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("Type:")), None)
         if kind is None:
-            failures.append(f"{rel}: missing Type:")
+            # The legacy implementation tickets (tui-layout 10–16) predate the
+            # wayfinder `Type:` convention; only the task-list maps require it.
+            if has_task_list:
+                failures.append(f"{rel}: missing Type:")
         elif kind not in TYPES:
             failures.append(f"{rel}: unknown Type: {kind!r}")
 
         part = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("Part of:")), None)
         if part is None:
-            failures.append(f"{rel}: missing Part of:")
+            if has_task_list:
+                failures.append(f"{rel}: missing Part of:")
         else:
             resolved = os.path.normpath(os.path.join(os.path.dirname(path), part))
             if resolved != map_path:
@@ -119,13 +130,16 @@ def main(argv: list[str]) -> int:
 
         blocked = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("Blocked by:")), None)
         if blocked is None:
-            failures.append(f"{rel}: missing Blocked by:")
+            if has_task_list:
+                failures.append(f"{rel}: missing Blocked by:")
         else:
             cleaned = blocked.strip()
             if cleaned not in {"—", "-", "", "None", "none"}:
                 for token in cleaned.split(","):
                     number = token.strip()
-                    if not number:
+                    # Legacy maps write prose here ("29（/discuss …）"); only a
+                    # bare number is a dependency the tool can resolve.
+                    if not number.isdigit():
                         continue
                     if number not in by_number:
                         failures.append(f"{rel}: Blocked by: {number!r} resolves to no ticket")
@@ -134,7 +148,10 @@ def main(argv: list[str]) -> int:
         failures.append("map has no child tickets (closed/total would be 0/0)")
 
     print(f"map:      {os.path.relpath(map_path)}")
-    print(f"expected: {expected} task-list entries")
+    if has_task_list:
+        print(f"expected: {expected} task-list entries")
+    else:
+        print("expected: (no 任务清单 — legacy map, count check skipped)")
     print(f"actual:   {actual} child files under issues/")
     print(f"closed/total: {closed}/{actual} by Status (checkbox marks: "
           f"{sum(1 for r in rows if r.group(1).lower() == 'x')}/{expected})")
