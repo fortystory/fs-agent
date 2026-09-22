@@ -6,6 +6,12 @@
 >
 > `agent` 是泛称（程序名 `fs-agent`、"一个 agent 回合"），**不作为类型名**：类型名一律用下面的 **`Debater` / `Executor`**（即讨论者 / 执行者）。
 
+## 名字
+
+**分叉合成（Forked Synthesis，`fs`）**:
+框架名，不是类型，也不是命令：`fs` 展开为 `Forked Synthesis`，指「异构讨论者分叉作答 → 合成器收束成共识 / 分歧 / 未决」这条机制；`fs-agent` 读作「分叉合成的 agent」。命令、crate 名与落盘路径（`~/.config/fs-agent/`、`~/.local/share/fs-agent/`）**一律保持 `fs-agent`**，不随框架名改写。
+_Avoid_: 把 `fs` 读成 filesystem / file system；与 Out of Scope 的 `fork/rewind` 手势混用「分叉」（那个叫 fork，指回退，不是本词）
+
 ## 参与者
 
 **讨论者（Debater）**:

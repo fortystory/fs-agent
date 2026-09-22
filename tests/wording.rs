@@ -554,6 +554,23 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
 }
 
 #[test]
+fn the_mark_is_five_rows_of_one_width() {
+    // The tall header shows the mark whole or not at all — `layout` decides that
+    // from `LOGO_WIDTH` before anything is drawn. A row of a different width would
+    // slip past that gate and paint over the border, so the contract is pinned here,
+    // where the characters live, rather than trusted at the painter.
+    let rows = wording::logo_lines();
+    assert_eq!(rows.len(), 5, "the mark is five rows: {rows:?}");
+    for row in rows {
+        assert_eq!(
+            row.chars().count(),
+            fs_agent::render::layout::LOGO_WIDTH as usize,
+            "every row is the width the layout reserved: {row:?}"
+        );
+    }
+}
+
+#[test]
 fn a_banner_labels_the_model_mode_and_session_in_chinese() {
     assert_eq!(
         wording::banner("s-1", "kimi-k3", Mode::Ask, "/tmp/ws", false),
