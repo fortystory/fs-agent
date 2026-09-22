@@ -3,6 +3,7 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-09-23，两轮 grilling）。本图只做**规划**，不产实现代码。
+**✅ 本图已完成（2026-09-23）**：5 张子票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
 
 ## Destination
 
@@ -62,26 +63,29 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 
 <!-- 逐条引用子票；条目数必须等于 issues/ 下的子票文件数（scripts/wayfinder-check.py 校验）。Frontier 的权威查询仍是扫描 issues/ 里 open + unblocked + unclaimed 的票。 -->
 
-- [ ] [grilling：重播的接缝、分帧与顺序契约](issues/01-continue-history-replay.md)
+- [x] [grilling：重播的接缝、分帧与顺序契约](issues/01-continue-history-replay.md)
 - [x] [research：分帧重播的接缝事实与成本实测](issues/02-research-replay-seam-and-cost.md)
-- [ ] [grilling：保真度、面板与 header 的历史重建](issues/03-grilling-fidelity-and-derived-facts.md)
-- [ ] [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md)
-- [ ] [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md)
+- [x] [grilling：保真度、面板与 header 的历史重建](issues/03-grilling-fidelity-and-derived-facts.md)
+- [x] [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md)
+- [x] [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md)
 
-共 **5** 张子票，当前 **1 resolved / 4 open**。
+共 **5** 张子票，当前 **5 resolved / 0 open**。
 
 ## Decisions so far
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里，本文件不复述。按名字引用，不写裸编号。 -->
 
 - [research：分帧重播的接缝事实与成本实测](issues/02-research-replay-seam-and-cost.md): 43 条 `file:line` 事实 + 一次成本实测。要点：① 生产代码**没有**把手能把历史注入正在跑的 `Harness`（`Harness.render` 私有、唯一公开出口是 `Harness::notice`），但 `RenderHandle::logged` 与 `render::channel()` 都是 `pub`；② `TuiOptions` 组装在 `assemble` **之前**，那时 CLI 只有 `StoredSession` 路径；组装后有 `Harness::events()`，文件侧有**无副作用**的 `read_events`（`EventLog::open` 会修复残尾、不是只读）；③ `--continue` 恢复会把悬空调用的合成失败结果**写进日志**，所以「先读文件」与「组装后取事件」看到的不是同一份；④ 重播成本由**源行**而非事件数决定，`Pane::evict` 在上限处 O(20 000)/行（release 8.87 µs vs 0.71 µs），50 000 条合成事件在 512 条/帧下 release **0.78 s**（7.94 ms/帧）、debug **5.8 s**，约 84% 的差额是逐出；⑤ 面板只吃 `Usage`/`TurnEnded`、模式只吃两条事件——重建就是逐条 `apply` 的自然结果；⑥ `outputs/` 随会话目录存亡、`--continue` 不删它，但本机 51 个会话里 **0 个 `.txt`**（降级分支是唯一可观测分支）。完整事实与 8 条 ⚪ 见 research 文件。
+- [grilling：重播的接缝、分帧与顺序契约](issues/01-continue-history-replay.md): 契约 6 条——接缝 = **CLI 在 `assemble` 后经新的 `ConsoleRequest::Replay { events }`**（照 `Catalog` 先例；console 通道 unbounded 无损；**含恢复事件**；`RenderEvent`/plain/headless 不动）。分帧 = **每轮迭代一批、不进 `select!` 等 tick**（否则 120ms × 98 帧 ≈ 12 s），预算 = **512 条事件 且 ≤2000 源行**（先到先停）；完成后清态、flush 缓冲、置脏。顺序 = live 事件进 `TuiState` 的 `Vec<RenderEvent>` 缓冲，完成后按到达顺序 flush；`Enter` 拦在 `submit()` 之前；重播期间**吸底**、滚动忽略。进度 = `恢复历史 {n}/{m}` 临时替掉提示行，`40×10` 降为 `恢复中 {n}/{m}`。边界 = 重播是**一过性状态、不复用 `busy()`**：`Ctrl-C` 退出、`Ctrl-D`/`Esc` 忽略、可打印字符照常进草稿、`resize` 正常。失败 = 读失败降级为不重播 + 诊断，不阻塞启动。
+- [grilling：保真度、面板与 header 的历史重建](issues/03-grilling-fidelity-and-derived-facts.md): 契约 4 条——「原样」= 逐条 `apply(Logged)`，块由 `Transcript` 唯一决定；**只有已记录事件能重播**（`Notice`/`Diagnostic` 不落日志，不重建；`SessionStarted` 不产块；合成器的 reasoning 历史里没有）。**历史分隔行**（用户选择）：重播结束、flush live 之前插一条 `Notice`，`wording::history_divider()` = `── 以上为历史 ──`，**仅当至少产出一个块**才插，顺序固定为 `[历史块] → [分隔行] → [缓冲的 banner / 诊断]`。**面板**：逐条 apply 自然累加一次（`last_input` = 末条 usage 的 input、`turns` = `TurnEnded` 数），与 live 衔接**不重置**；`context_window`/`budget_limit` 取当前配置、如实显示不调和。**模式**：以历史最后一条模式事件为准（含恢复补写的 `ModeChange`）——被杀在 plan 的会话重开后显示「询问」，与 harness 实际策略一致。**落点**：吸底（`follow=true`、`seen=total`、无指示条）。
+- [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md): 契约 4 条——**不新增形态**：历史详情就是 tui-ux 票 02/03 的覆盖层，命中沿用 tui-ux 票 04 的**绘制时当帧记录**（天然吸收 `evict` 的显示行平移）。可点范围 = 历史 `✓ 思考完成` 与工具行带 `▸`；**分隔行不可点**；**重播期间鼠标一律不响应**。工具全文的判据 = 事件文本里有没有 **`full output at <path>`** 注记：有 → 读 `<会话目录>/outputs/<id>.txt`，读不到 / 空 → 预览 + `全文不可用`；**没有注记 → 事件文本就是全文**（不误报不可用，悬空调用的 `INTERRUPTED` 结果走这条）。思考详情只来自 `MessageCompleted.reasoning`；合成器 `None` 的历史没有思考行、也就没有可点的思考详情（不伪造）。覆盖层行为与 live 完全一致（`Esc`/再点关闭、内滚、打开时视口冻结、关闭后恢复吸底）。
+- [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md): 分层定死——**行为进 `cargo test`**（`tests/support/` 加 session fixture：`tempfile::tempdir()` + `append(log_path, speaker, payload)`；多数断言直接构造 `Vec<Event>` 喂 `ConsoleRequest::Replay`）、**终端归属进 pty**（加 `--continue` 路径：先造会话再重开，断言不崩 / 收敛 / 退出交还干净）、**手感进手工清单**（新增 ⑫「`--continue` 重开」+ ⑦ 补「重开后退出」）。逐条列了：内容与顺序（`历史块 → 分隔行 → banner`）、分帧中途（部分历史 + 进度行）、面板 / 模式（含 `PlanMode`→`ModeChange` 的两个例子）、四种文件状态的详情、`Enter` 不提交与 live 缓冲顺序、空 / 1 / 512 / 513 边界、吸底。既有测试只改**编译期被逼改**的 `ConsoleRequest` match（TUI `request()` + plain 侧），现有断言预期不变、基线 **664**（tui-ux 落地后）开工前复核。spec 回改清单交给 `/to-spec`（`fs-agent-v1/spec.md`、`docs/render.md`、手工清单、pty 脚本、新文案）。实现顺序应在 `tui-ux` 实现之后。
 
 ## Not yet specified
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票。不要预先切成票那么大。 -->
 
-- **`Pane::evict` 在上限处的 O(20 000)/行是否值得优化**（环形缓冲 / 偏移代替整体平移）：票 02 实测它是重播与 live 的每行主成本（release 8.87 µs vs 0.71 µs）。它是否在目的地内，取决于 `grilling：重播的接缝、分帧与顺序契约` 对预算与可接受性的判定——若判为不够就毕业成票，否则记为已知代价。
-- **重播期间的滚动交互**：历史还没铺完时用户上滚、以及重播完成后是否强制吸底——票 01/03 若给不出确定答案，就先以「吸底、不被上滚打断」为默认。
+<!-- 当前**没有**未指定的雾：本图 5 张票全部 resolved，原有的 `Pane::evict` 优化问题已判出 scope（见 `## Out of scope`）。 -->
 
 ## Out of scope
 
@@ -93,12 +97,13 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 - **plain / headless 的历史呈现**：本图只 TUI。
 - **事件 schema 改动 / 逐段增量落流**：沿用既有决定。
 - **鼠标悬停反馈**：与 tui-ux 图同一条排除。
+- **`Pane::evict` 在上限处的 O(20 000)/行优化**（环形缓冲 / 偏移代替整体平移）：票 02 实测 release 下 8.87 µs/行，512 条/帧的 50 000 事件会话约 **0.78 s**，判为可接受，所以本图**不优化**；若实现后实测观感不够，另开 effort（不是本图的 resumption）。
 - **本图的执行**：本图只产决策与 spec-ready 结论。「做」发生在 `/to-spec` → `/to-tickets` → `/implement`。
 
 ## 进度
 
-**20%** —— 已 resolved：`research：分帧重播的接缝事实与成本实测`（事实与实测见 `.scratch/tui-history-replay/research/02-replay-seam-and-cost.md`）。**1/5 resolved**。
+**100%** —— **本图完成（2026-09-23）**：5/5 张子票全部 resolved，`Not yet specified` 为空 ⇒ 通往 destination 的决策已 clear。
 
-**下一步**：前沿 = `grilling：重播的接缝、分帧与顺序契约`、`grilling：保真度、面板与 header 的历史重建`、`grilling：历史详情覆盖层的复用与降级`（三张已随票 02 解锁，可并行）。最后是 `grilling：测试与验证迁移`。解票时先 `Status: claimed`，答案落 `## Answer` + `Status: resolved`，并把 gist 追加到 `Decisions so far`。
+**下一步 = handoff，不是 build**：`/to-spec` 把 5 张票的 decisions 折成可建计划（按 `grilling：测试与验证迁移` §7 回改 `fs-agent-v1/spec.md`、`docs/render.md`、手工清单与 pty 脚本）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。**`tui-ux` 已落地（2026-09-23），本图实现可直接开始**；**历史行必须经 `TuiState::apply`**（`links`）才有 `▸` 命中。**本图不再加票。**
 
-**待确认（未到 95%，不得 close）**：重播接缝的归属（`TuiOptions` 注入 vs 新增 `Harness` accessor）与预算是否按源行加权，都要在票 01 里定；票 02 的实测数字（`evict` 的 O(20 000)）已作为输入交进去。
+**待确认**：无。五张票的决定都已在 live exchange 里由维护者拍板；剩下的只是执行。
