@@ -1,0 +1,22 @@
+size: 40x10   click: marker ▸ | section: ── rule | thinking glyph: on | overlay: closed
+    0.........1.........2.........3.........
+   |----------------------------------------|
+  0|┌──────────────────────────────────────┐|
+  1|│fs-agent 0.1.0 · 模式 询问 · 10:42    │|
+  2|└──────────────────────────────────────┘|
+  3|┌──────────────────────────────────────┐|
+  4|│  tui.rs 失败                         │|
+  5|└──────────────────────────────────────┘|
+  6|┌──────────────────────────────────────┐|
+  7|│> 把折叠落成普通转录行                │|
+  8|│就绪 · enter 发送 · ctrl-j 换行 · esc │|
+  9|└──────────────────────────────────────┘|
+   |----------------------------------------|
+
+styles (dump shows symbols only):
+  [用户] 把折叠、详情覆盖层和角色配色做出来                         fg=Reset                      
+  Kimi: 提示行落成普通转录源行，计入 20 000 上…                 fg=Reset                      
+  [kimi] … 正在思考                                  fg=DarkGray                   
+  [kimi] ✓ 思考完成                                  fg=DarkGray                   [clickable: ▸ prefix]
+  [kimi] 调用 bash command=cargo test --all-ta…    fg=Reset      BOLD            [clickable: ▸ prefix]
+  [kimi] 调用 read_file path=src/render/tui.rs…    fg=Red                        [clickable: ▸ prefix]
