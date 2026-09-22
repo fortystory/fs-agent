@@ -3448,3 +3448,109 @@ fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
         "and the title starts a cell in from the border on both"
     );
 }
+
+/// The overlay's painted box on screen: its left column and its width.
+fn overlay_box(frame: &Buffer, width: u16, height: u16) -> Option<(u16, u16)> {
+    for y in 0..height {
+        let mut left = None;
+        for x in 1..width {
+            match frame[(x, y)].symbol() {
+                "┌" if left.is_none() => left = Some(x),
+                "┐" => {
+                    if let Some(left) = left {
+                        return Some((left, x - left + 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn the_permission_modals_buttons_are_centred() {
+    // The body is a centred paragraph and the buttons are a shorter line: centring them
+    // by their own width is what puts them under the words instead of off to the left
+    // (2026-09-23, user report).
+    let mut state = state_with_roster(&["deepseek"]);
+    state.request(ask_permission().0);
+    let frame = buffer(120, 24, &mut state);
+    let (x, width) = overlay_box(&frame, 120, 24).expect("the modal's box");
+
+    let (first, row) = cell_of(&frame, 120, 24, "[y] 允许").expect("the first button");
+    let (last, _) = cell_of(&frame, 120, 24, "[n] 拒绝").expect("the last button");
+    let last_end = last as usize + text_columns("[n] 拒绝");
+    let left_gap = first as usize - (x as usize + 1);
+    let right_gap = (x as usize + width as usize - 1) - last_end;
+    assert!(
+        row == cell_of(&frame, 120, 24, "[n] 拒绝")
+            .expect("the last button")
+            .1,
+        "the buttons are one row"
+    );
+    assert!(
+        left_gap.abs_diff(right_gap) <= 1,
+        "the button row is centred: {left_gap} columns of air on the left, {right_gap} on the right"
+    );
+}
+
+#[test]
+fn the_detail_footer_counts_the_last_row_on_screen() {
+    // A reader who has scrolled to the bottom is at the bottom: the footer counts the
+    // last row on screen, not the row the window happens to start at. It read `94/154`
+    // with the last row visible (2026-09-23, user report).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-70",
+        "bash",
+        serde_json::json!({"command": "seq 1 200"}),
+    ));
+    let body: Vec<String> = (1..=200).map(|n| format!("第 {n} 行")).collect();
+    state.apply(tool_completed(
+        2,
+        "call-70",
+        true,
+        Some(&body.join("\n")),
+        None,
+    ));
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    // The footer's two numbers, wherever they are on screen.
+    let counts = |state: &mut TuiState| -> (usize, usize) {
+        let rows = screen(120, 40, state);
+        let row = rows
+            .iter()
+            .find(|row| row.contains('↕'))
+            .expect("the footer is drawn");
+        let tail = row.split('↕').nth(1).expect("after the marker");
+        let pair = tail.split('·').next().expect("before the key").trim();
+        let (seen, total) = pair.split_once('/').expect("a pair");
+        (
+            seen.trim().parse().expect("a number"),
+            total.trim().parse().expect("a number"),
+        )
+    };
+
+    let (seen, total) = counts(&mut state);
+    assert!(
+        total > 100,
+        "the body is long enough to scroll: {seen}/{total}"
+    );
+    assert!(seen < total, "and the window starts short of the end");
+
+    for _ in 0..50 {
+        state.key(Key::PageDown);
+    }
+    let (seen, total) = counts(&mut state);
+    assert_eq!(
+        seen, total,
+        "at the bottom the footer reads the last row: {seen}/{total}"
+    );
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("第 200 行"),
+        "and the last row really is on screen: {text}"
+    );
+}

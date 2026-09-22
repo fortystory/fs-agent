@@ -2283,13 +2283,17 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             .alignment(Alignment::Center),
         body,
     );
+    // The button row is centred **by its own width**, not by the body's: the body is
+    // centred text and the buttons are a shorter line, so inheriting the body's inset
+    // left them stranded on the left (2026-09-23, user report).
+    let (line, regions) = buttons_row(buttons, &modal.actions);
+    let buttons_width = regions.iter().map(|(start, width, _)| start + width).max();
     let buttons_area = Rect::new(
-        inner_area.x + modal_column_inset(&body, inner),
+        inner_area.x + centred_inset(inner_area.width, buttons_width),
         inner_area.bottom().saturating_sub(1),
         inner_area.width,
         1,
     );
-    let (line, regions) = buttons_row(buttons, &modal.actions);
     frame.render_widget(
         Paragraph::new(line).style(Style::default().fg(Color::Yellow)),
         buttons_area,
@@ -2309,11 +2313,11 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         }));
 }
 
-/// The column a centred paragraph's text starts at, for the width it was laid out
-/// with. The overlay is centred on the middle block, and the button row under it has
-/// to be aligned with the body above (票 04 §3).
-fn modal_column_inset(body: &Rect, wrapped_width: usize) -> u16 {
-    body.width.saturating_sub(wrapped_width as u16) / 2
+/// The column something `width` columns wide starts at inside an area `room` wide, so
+/// that it is centred there.
+fn centred_inset(room: u16, width: Option<usize>) -> u16 {
+    let width = width.unwrap_or(0).min(room as usize) as u16;
+    room.saturating_sub(width) / 2
 }
 
 /// The keys that answer a question as one row of `(offset, width, action)` triples,
@@ -3645,7 +3649,13 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         .take(body_rows)
         .cloned()
         .collect();
-    let footer = wording::detail_footer(top + 1, view.body.len().max(1));
+    // The footer counts the **last row on screen**, not the first: a reader who has
+    // scrolled to the bottom is at the bottom, whatever row the window happens to start
+    // at (2026-09-23, user report: it read `94/154` with the last row visible).
+    let footer = wording::detail_footer(
+        (top + body_rows).min(view.body.len()).max(1),
+        view.body.len().max(1),
+    );
     let title = view.detail.title.clone();
 
     blank_half_covered_glyphs(frame, area);
