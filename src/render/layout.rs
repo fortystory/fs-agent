@@ -164,6 +164,39 @@ impl Regions {
             .min(MODAL_MAX_WIDTH)
     }
 
+    /// The width of the detail overlay: the same centring as a question, but with its
+    /// own (wider) ceiling. A tool output is a body, not a sentence, so it is allowed
+    /// more room before the eye has to travel (票 03 §Answer).
+    pub fn detail_width(&self) -> u16 {
+        self.middle
+            .width
+            .saturating_sub(MODAL_MARGIN)
+            .min(DETAIL_MAX_WIDTH)
+    }
+
+    /// Where the detail overlay goes: centred in the middle block, one row short of
+    /// the borders so a sliver of the transcript stays visible above and below.
+    ///
+    /// It is `None` when the terminal is too small to show a useful body — the same
+    /// honest answer [`Regions::modal`] gives, and the detail view is then not opened
+    /// at all rather than opened as two rows of border.
+    pub fn detail(&self) -> Option<Rect> {
+        let width = self.detail_width();
+        if width <= BORDER_ROWS || self.middle.height <= BORDER_ROWS + DETAIL_MIN_ROWS {
+            return None;
+        }
+        let height = self
+            .middle
+            .height
+            .saturating_sub(BORDER_ROWS + DETAIL_MARGIN_ROWS);
+        Some(Rect::new(
+            self.middle.x + (self.middle.width - width) / 2,
+            self.middle.y + (self.middle.height - height) / 2,
+            width,
+            height,
+        ))
+    }
+
     /// Where a question `rows` display rows tall goes: centred in the middle block, or
     /// nowhere when it cannot be drawn legibly there.
     pub fn modal(&self, rows: u16) -> Option<Rect> {
@@ -341,6 +374,16 @@ const MODAL_MAX_WIDTH: u16 = 72;
 
 /// The blank columns the overlay leaves on either side of the middle block.
 const MODAL_MARGIN: u16 = 4;
+
+/// The widest the detail overlay ever gets (票 03 §Answer).
+const DETAIL_MAX_WIDTH: u16 = 90;
+
+/// The fewest body rows a detail overlay is worth opening for.
+const DETAIL_MIN_ROWS: u16 = 1;
+
+/// The rows of transcript the detail overlay leaves showing, one above and one
+/// below, so the reader keeps the place they clicked from.
+const DETAIL_MARGIN_ROWS: u16 = 2;
 
 /// The most rows the `/` menu shows before its matches scroll. A menu is a hint, not
 /// a catalogue: past this the reader is scrolling a list to find a name they could

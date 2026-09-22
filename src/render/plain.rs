@@ -82,6 +82,11 @@ impl Plain {
                 speaker,
                 role,
                 text,
+                // plain shows no reasoning: its visible output is frozen, and a
+                // thinking line is a TUI affordance rather than part of the log
+                // (ADR 0001, 票 02 §5). The field is named for the compiler, not for
+                // the page.
+                reasoning: _,
             } => self.message(speaker, role, &text),
             Block::RoundStarted { round, mode } => {
                 self.end_line();

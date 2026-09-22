@@ -1851,3 +1851,480 @@ fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
     let (_, after) = frame_and_cursor(120, 24, &mut state);
     assert_eq!(after, Some(before), "and it comes back where it was");
 }
+
+// ---------------------------------------------------------------------------
+// The collapse: thinking lines, tool output, and the detail overlay
+// (tickets 01/02/03)
+// ---------------------------------------------------------------------------
+
+/// One `MessageCompleted` for the debater.
+fn message(seq: u64, text: &str, reasoning: Option<&str>) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, Role, SpeakerId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: text.to_owned(),
+            reasoning: reasoning.map(str::to_owned),
+        },
+    ))
+}
+
+/// One reasoning delta from the debater.
+fn reasoning_delta(text: &str) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::SpeakerId;
+    fs_agent::render::RenderEvent::Delta {
+        speaker: SpeakerId::Debater("kimi".into()),
+        kind: fs_agent::render::DeltaKind::Reasoning,
+        text: text.to_owned(),
+    }
+}
+
+/// One body-text delta from the debater.
+fn text_delta(text: &str) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::SpeakerId;
+    fs_agent::render::RenderEvent::Delta {
+        speaker: SpeakerId::Debater("kimi".into()),
+        kind: fs_agent::render::DeltaKind::Text,
+        text: text.to_owned(),
+    }
+}
+
+/// One `ToolCallStarted` from the debater.
+fn tool_started(
+    seq: u64,
+    id: &str,
+    tool: &str,
+    args: serde_json::Value,
+) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::ToolCallStarted {
+            tool_call_id: ToolCallId::new(id),
+            tool_name: tool.to_owned(),
+            args,
+        },
+    ))
+}
+
+/// One `ToolCallCompleted` for a call that started earlier.
+fn tool_completed(
+    seq: u64,
+    id: &str,
+    ok: bool,
+    output: Option<&str>,
+    error: Option<&str>,
+) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::ToolCallCompleted {
+            tool_call_id: ToolCallId::new(id),
+            ok,
+            output: output.map(str::to_owned),
+            error: error.map(str::to_owned),
+            duration_ms: 3,
+        },
+    ))
+}
+
+/// A click on a screen cell.
+fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+#[test]
+fn a_thinking_segment_opens_in_place_and_settles_in_place() {
+    // The whole state machine, seen from the screen: `正在思考` appears while only
+    // reasoning has arrived, the body's first delta settles that same line to
+    // `思考完成` without adding a second one, and the finished trace is kept (票 02 §1).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖，"));
+    state.apply(reasoning_delta("再看测试。"));
+
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(
+        text.contains("[kimi] … 正在思考"),
+        "the open line reads as in-progress: {text}"
+    );
+    assert!(
+        !text.contains("思考完成"),
+        "and does not claim to be finished: {text}"
+    );
+
+    state.apply(text_delta("答案是 42。"));
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(
+        text.contains("▸ [kimi] ✓ 思考完成"),
+        "the same line settles in place: {text}"
+    );
+    assert!(
+        !text.contains("正在思考"),
+        "and the in-progress line is gone, not duplicated: {text}"
+    );
+    assert_eq!(
+        text.matches("思考完成").count(),
+        1,
+        "one thinking segment is one line: {text}"
+    );
+
+    // The body still streams live after the freeze; the completed block replaces it.
+    state.apply(message(2, "答案是 42。", Some("先看依赖，再看测试。")));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("[kimi] 答案是 42。") || text.contains("答案是 42。"),
+        "the answer is in the transcript: {text}"
+    );
+    assert_eq!(
+        text.matches("思考完成").count(),
+        1,
+        "a recorded trace does not add a second thinking line: {text}"
+    );
+}
+
+#[test]
+fn a_turn_with_no_reasoning_adds_no_thinking_line() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "直接作答。", None));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("思考") && !text.contains("正在思考"),
+        "no reasoning, no thinking line: {text}"
+    );
+}
+
+#[test]
+fn a_synthesizer_trace_streams_but_records_nothing() {
+    // The synthesizer sends reasoning deltas and writes `reasoning: None`. The line
+    // still settles — the reader saw it thinking — and its detail says the whole text
+    // was never recorded (票 02 §1, 票 04 §3).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("综合两边的意见。"));
+    state.apply(message(2, "结论。", None));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("▸ [kimi] ✓ 思考完成"),
+        "the line settles even with no recorded trace: {text}"
+    );
+
+    click_row(&mut state, 120, 24, "✓ 思考完成");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("本次未记录思考全文"),
+        "the detail says the text was not recorded: {text}"
+    );
+}
+
+#[test]
+fn a_tool_result_is_folded_into_its_call_line() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "cargo test"}),
+    ));
+    state.apply(tool_completed(
+        2,
+        "call-1",
+        true,
+        Some("line one\nline two\nline three"),
+        None,
+    ));
+    state.apply(flush());
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("▸ [kimi] 调用 bash command=cargo test"),
+        "the call line keeps its parameter summary and gains the marker: {text}"
+    );
+    assert!(
+        !text.contains("line one") && !text.contains("line two"),
+        "the output body is folded away: {text}"
+    );
+
+    // A failure is the same line, with `失败` at its end — never a second line.
+    let mut failed = state_with_roster(&["kimi"]);
+    failed.apply(tool_started(
+        1,
+        "call-3",
+        "read_file",
+        serde_json::json!({"path": "missing.rs"}),
+    ));
+    failed.apply(tool_completed(
+        2,
+        "call-3",
+        false,
+        None,
+        Some("no such file"),
+    ));
+    failed.apply(flush());
+    let rows = screen(120, 24, &mut failed);
+    let text = rows.join("\n");
+    assert!(
+        text.contains("▸ [kimi] 调用 read_file path=missing.rs 失败"),
+        "the failure is a suffix on the call line: {text}"
+    );
+    assert!(
+        !text.contains("no such file"),
+        "and the error body is in the detail, not the transcript: {text}"
+    );
+}
+
+#[test]
+fn a_click_opens_the_detail_and_a_second_click_closes_it() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-9",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-9", true, Some("alpha\nbeta"), None));
+    state.apply(flush());
+
+    // A tall terminal, so the whole body fits: the shortest overlay scrolls, which is
+    // the next test's subject.
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("── 参数 ──"), "the arguments section: {text}");
+    assert!(text.contains("── 输出 ──"), "the output section: {text}");
+    assert!(text.contains("alpha"), "the whole output: {text}");
+    assert!(
+        text.contains("esc 关闭"),
+        "the footer names the way out: {text}"
+    );
+
+    // Esc closes it and the transcript is back.
+    state.key(Key::Esc);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("── 参数 ──"),
+        "Esc closes the overlay: {text}"
+    );
+    assert!(
+        text.contains("调用 bash"),
+        "and the line it opened from is still there: {text}"
+    );
+}
+
+#[test]
+fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-10",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    let body: Vec<String> = (0..40).map(|line| format!("输出第 {line} 行")).collect();
+    state.apply(tool_completed(
+        2,
+        "call-10",
+        true,
+        Some(&body.join("\n")),
+        None,
+    ));
+    state.apply(flush());
+
+    click_row(&mut state, 120, 40, "调用 bash");
+    // The body starts at the top, which at 40 rows is the arguments section.
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("── 参数 ──"),
+        "the body starts at the top: {text}"
+    );
+
+    // Walk to the very bottom with the page key, then a single arrow moves one row
+    // back up: the arrows and the pages both act on the same body.
+    for _ in 0..8 {
+        state.key(Key::PageDown);
+    }
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("esc 关闭"),
+        "the body reached the end: {text}"
+    );
+    state.key(Key::Down);
+    state.key(Key::Up);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("esc 关闭"),
+        "and the arrows still move inside it: {text}"
+    );
+
+    // The wheel moves the same body by one row a notch.
+    let before = text.clone();
+    state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
+    let after = screen(120, 40, &mut state).join("\n");
+    assert_ne!(before, after, "the wheel moves the detail body");
+}
+
+#[test]
+fn the_detail_overlay_reads_the_spilled_tool_output() {
+    // The event carries the preview; the whole text is the file the tool call id
+    // names. `SessionFacts.cwd` is the session directory, so the overlay reads
+    // `<cwd>/outputs/<tool_call_id>.txt` (票 02 §4).
+    let dir = std::env::temp_dir().join(format!("fs-agent-detail-{}", std::process::id()));
+    let outputs = dir.join("outputs");
+    std::fs::create_dir_all(&outputs).expect("the session's outputs directory");
+    std::fs::write(
+        outputs.join("call-11.txt"),
+        "the whole output\nwith a second line the preview never carried",
+    )
+    .expect("the spilled file");
+
+    let mut state = TuiState::new(SessionFacts {
+        session_id: "01J8ZQ4K7M".to_owned(),
+        cwd: dir.display().to_string(),
+        model: "claude-sonnet-4-5".to_owned(),
+        context_window: 200_000,
+        budget_limit: Some(100_000),
+        speaker_order: vec!["kimi".to_owned()],
+    });
+    state.apply(tool_started(
+        1,
+        "call-11",
+        "bash",
+        serde_json::json!({"command": "cat big"}),
+    ));
+    state.apply(tool_completed(
+        2,
+        "call-11",
+        true,
+        Some("the whole output\n[truncated: 999 chars]"),
+        None,
+    ));
+    state.apply(flush());
+
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("with a second line the preview never carried"),
+        "the whole spilled text is shown, not the preview: {text}"
+    );
+    assert!(
+        !text.contains("全文不可用"),
+        "and no degradation note: {text}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_missing_spilled_file_degrades_to_the_preview() {
+    // No `outputs/` directory at all: the detail shows the event's own preview and
+    // says the full text is not available (票 02 §4).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-12",
+        "bash",
+        serde_json::json!({"command": "cat big"}),
+    ));
+    state.apply(tool_completed(
+        2,
+        "call-12",
+        true,
+        Some("head of the output\n[truncated: 999 chars]"),
+        None,
+    ));
+    state.apply(flush());
+
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("head of the output"), "the preview: {text}");
+    assert!(
+        text.contains("全文不可用"),
+        "the degradation is stated: {text}"
+    );
+}
+
+#[test]
+fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
+    // A question owns the pointer: a click on a collapsed line while one is up is
+    // discarded, and no detail opens over the question (票 02 §4, 票 04 §2).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-13",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-13", true, Some("body"), None));
+    state.apply(flush());
+
+    // Find the call line's row before the question covers the pane.
+    let row = row_of(&mut state, 120, 40, "调用 bash").expect("the call line is drawn");
+    state.request(ask_permission().0);
+    state.mouse(click(20, row));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("── 参数 ──"),
+        "the detail did not open over the question: {text}"
+    );
+    assert!(
+        text.contains("权限询问"),
+        "and the question is still the thing on screen: {text}"
+    );
+}
+
+/// A state whose injected roster is the given debater names, which is what gives the
+/// transcript's names their colours (票 07 §1).
+fn state_with_roster(names: &[&str]) -> TuiState {
+    TuiState::new(SessionFacts {
+        speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
+        ..facts()
+    })
+}
+
+/// One wheel notch.
+fn wheel(kind: ratatui::crossterm::event::MouseEventKind) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent};
+    MouseEvent {
+        kind,
+        column: 40,
+        row: 10,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+/// The row a phrase is drawn on, rendered fresh.
+fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option<u16> {
+    let rows = screen(width, height, state);
+    rows.iter()
+        .position(|row| row.contains(needle))
+        .map(|row| row as u16)
+}
+
+/// Click the row a phrase is drawn on.
+///
+/// The frame is rendered first, because only what was drawn can be clicked, and the
+/// phrase is looked up in that same frame (票 04 §1).
+fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
+    let Some(row) = row_of(state, width, height, needle) else {
+        panic!("nothing on screen contains {needle:?}");
+    };
+    // The click's column only has to be inside the line; the row is what the pane
+    // maps back to a source line.
+    state.mouse(click(10, row));
+}
+
+/// An event that closes an open tool block, which is what puts it on screen: a call
+/// and its result are one block, and the block is emitted when the next unrelated
+/// event arrives (票 01 事实 10, `transcript.rs`'s grouping rule).
+fn flush() -> fs_agent::render::RenderEvent {
+    fs_agent::render::RenderEvent::Notice(String::new())
+}

@@ -419,6 +419,7 @@ fn a_speakers_name_is_drawn_in_its_role_colour() {
                 speaker: SpeakerId::User,
                 role: Role::User,
                 text: "hello".to_owned(),
+                reasoning: None,
             }],
             &["kimi", "claude"],
         ),
@@ -456,26 +457,81 @@ fn a_speakers_name_is_drawn_in_its_role_colour() {
 }
 
 #[test]
-fn a_diff_line_gets_a_background_from_the_diff_layer() {
-    // The diff layer is independent of the syntax layer, so it survives even on a
-    // line the grammar cannot parse as Rust (spec §19).
-    let tool = ToolBlock {
+fn a_tool_block_paints_one_line_and_folds_the_rest() {
+    // The collapsed tool block is the call line and, at most, the post-hook's
+    // feedback. The output body is not painted at all any more — it lives behind the
+    // call line's detail view — and a failure is a suffix on that same line rather
+    // than a line of its own (票 02 §3).
+    let tool = |outcome: Option<ToolOutcome>, hook: Option<&str>| ToolBlock {
         speaker: kimi(),
         tool_call_id: ToolCallId::new("call-2"),
         tool: "read_file".to_owned(),
         args: serde_json::json!({"path": "a.rs"}),
-        outcome: Some(ToolOutcome {
+        outcome,
+        hook: hook.map(str::to_owned),
+    };
+    let ok = render_block_uncoloured(&Block::Tool(Box::new(tool(
+        Some(ToolOutcome {
             ok: true,
-            output: Some("+fn main() {}".to_owned()),
+            output: Some("fn main() {}".to_owned()),
             error: None,
             duration_ms: 1,
         }),
-        hook: None,
-    };
-    let lines = render_block_uncoloured(&Block::Tool(Box::new(tool)));
-    // Line 0 is the header; line 1 is the highlighted body.
-    let body = &lines[1];
-    assert!(body.spans.iter().any(|span| span.style.bg.is_some()));
+        None,
+    ))));
+    assert_eq!(ok.len(), 1, "a successful call is one line: {ok:#?}");
+    let call: String = ok[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(call, "▸ [kimi] 调用 read_file path=a.rs");
+    assert!(
+        !ok[0].spans.iter().any(|span| span.style.bg.is_some()),
+        "and carries no output body: {:#?}",
+        ok[0]
+    );
+
+    // A failure is the same line with `失败` at its end; the error body is not here.
+    let failed = render_block_uncoloured(&Block::Tool(Box::new(tool(
+        Some(ToolOutcome {
+            ok: false,
+            output: None,
+            error: Some("no such file".to_owned()),
+            duration_ms: 1,
+        }),
+        None,
+    ))));
+    assert_eq!(
+        failed.len(),
+        1,
+        "a failed call is one line too: {failed:#?}"
+    );
+    let call: String = failed[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(call, "▸ [kimi] 调用 read_file path=a.rs 失败");
+
+    // The post-hook's feedback is policy, not output: it stays on screen.
+    let hooked = render_block_uncoloured(&Block::Tool(Box::new(tool(
+        Some(ToolOutcome {
+            ok: true,
+            output: Some("body".to_owned()),
+            error: None,
+            duration_ms: 1,
+        }),
+        Some("formatted with rustfmt"),
+    ))));
+    assert_eq!(hooked.len(), 2, "the hook feedback stays: {hooked:#?}");
+    assert!(
+        hooked[1]
+            .spans
+            .iter()
+            .any(|span| span.content.contains("formatted with rustfmt")),
+        "and it is the second line: {hooked:#?}"
+    );
 }
 
 #[test]
@@ -484,6 +540,7 @@ fn the_synthesizers_product_renders_with_the_system_speaker() {
         speaker: SpeakerId::System,
         role: Role::Assistant,
         text: "consensus".to_owned(),
+        reasoning: None,
     });
     // The first span is the speaker prefix. Its exact words belong to the wording
     // layer; here it only has to be a bracketed attribution.
@@ -518,6 +575,7 @@ fn the_answer_block_is_rendered_as_markdown() {
         speaker: kimi(),
         role: Role::Assistant,
         text: "# 标题\n\n- 一\n- 二\n".to_owned(),
+        reasoning: None,
     });
     let heading = &lines[0];
     assert!(
@@ -572,6 +630,7 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
         speaker: kimi(),
         role: Role::Assistant,
         text: "正文".to_owned(),
+        reasoning: None,
     });
     assert_ne!(
         answer[0].spans[1].style.fg,
@@ -589,6 +648,7 @@ fn a_message_continuation_indents_by_the_label_display_width() {
         speaker: SpeakerId::User,
         role: Role::Assistant,
         text: "one\ntwo".to_owned(),
+        reasoning: None,
     });
     let prefix = lines[0].spans[0].content.as_ref().cell_width() as usize;
     let indent = lines[1].spans[0].content.as_ref().cell_width() as usize;
@@ -726,6 +786,7 @@ fn a_users_message_keeps_its_lines_and_its_length() {
         speaker: SpeakerId::User,
         role: Role::User,
         text,
+        reasoning: None,
     });
 
     let rendered: Vec<String> = lines

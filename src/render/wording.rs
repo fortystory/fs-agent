@@ -271,6 +271,72 @@ pub fn message_complete() -> &'static str {
     "消息完成"
 }
 
+/// The line that opens a thinking segment, before any正文 has arrived: the stream
+/// is running and the trace is not finished (票 03 §Answer).
+pub fn thinking_in_progress() -> &'static str {
+    "… 正在思考"
+}
+
+/// The line a thinking segment settles into once the正文 arrives: the trace is
+/// frozen and the line becomes the way into its full text (票 03 §Answer).
+pub fn thinking_finished() -> &'static str {
+    "✓ 思考完成"
+}
+
+/// The verb a tool call line leads with (票 02 §2). The arguments follow it, by
+/// `transcript::summarize_args`.
+pub fn tool_call_label() -> &'static str {
+    "调用"
+}
+
+/// Appended to the **end** of a failed call's line, so the failure is a suffix and
+/// not a second line (票 02 §2).
+pub fn tool_failed() -> &'static str {
+    "失败"
+}
+
+/// The detail view's note when the whole tool output cannot be read back — the
+/// pointer's file is gone, or was never written (票 02 §4).
+pub fn detail_output_unavailable() -> &'static str {
+    "全文不可用"
+}
+
+/// The detail view's note when the thinking line has no whole trace to show: the
+/// synthesizer streams reasoning without recording it (票 02 §1).
+pub fn detail_reasoning_unrecorded() -> &'static str {
+    "本次未记录思考全文"
+}
+
+/// The detail view's note when a body was longer than the reader's limit.
+pub fn detail_truncated() -> &'static str {
+    "已截断"
+}
+
+/// A detail section's heading, drawn inside a rule: `── 思考 ──` (票 03 §Answer).
+pub fn detail_section(name: &str) -> String {
+    format!("── {name} ──")
+}
+
+/// The heading of the detail view's thinking section.
+pub fn detail_thinking_section() -> &'static str {
+    "思考"
+}
+
+/// The heading of the detail view's arguments section.
+pub fn detail_args_section() -> &'static str {
+    "参数"
+}
+
+/// The heading of the detail view's output section.
+pub fn detail_output_section() -> &'static str {
+    "输出"
+}
+
+/// The detail view's footer: where in the body the reader is, and how to leave.
+pub fn detail_footer(position: usize, total: usize) -> String {
+    format!("↕ {position}/{total} · esc 关闭")
+}
+
 /// A tool call that finished successfully. The result itself is printed by the
 /// caller.
 pub fn tool_completed() -> &'static str {

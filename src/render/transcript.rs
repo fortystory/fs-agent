@@ -37,6 +37,11 @@ pub enum Block {
         speaker: SpeakerId,
         role: Role,
         text: String,
+        /// The finished reasoning trace, when the provider sent one. This is the only
+        /// place the whole trace exists — the deltas are incremental and the log has
+        /// no separate reasoning event — so it is what the transcript's "thinking
+        /// finished" line holds open for its detail view (票 02 §1).
+        reasoning: Option<String>,
     },
     RoundStarted {
         round: u32,
@@ -274,11 +279,16 @@ impl Transcript {
                 })));
                 return blocks;
             }
-            EventPayload::MessageCompleted { role, text, .. } => {
+            EventPayload::MessageCompleted {
+                role,
+                text,
+                reasoning,
+            } => {
                 blocks.push(Block::Message {
                     speaker,
                     role,
                     text,
+                    reasoning,
                 });
             }
             EventPayload::RoundStarted { round, mode } => {

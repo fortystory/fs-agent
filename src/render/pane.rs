@@ -80,6 +80,43 @@ impl Pane {
         self.evict();
     }
 
+    /// Replace the newest source line. Used by the transcript's one mutable line:
+    /// the thinking hint is written as it starts and rewritten in place when the
+    /// trace is finished, so a reader never sees two lines for one thought (票 02 §1).
+    ///
+    /// A no-op on an empty pane, which is the honest answer: there is nothing to
+    /// rewrite.
+    pub fn replace_last(&mut self, line: Line<'static>) {
+        let Some(last) = self.lines.back_mut() else {
+            return;
+        };
+        *last = line;
+        // The rewritten line still has to reach the wrap cache. Dropping the cached
+        // rows for it is enough; the next `view` re-wraps it at the frame's width.
+        if self.wrapped_sources == self.lines.len() {
+            self.wrapped_sources -= 1;
+            self.starts.pop_back();
+            self.wrapped.clear();
+        }
+    }
+
+    /// The source line a display row belongs to, if any.
+    ///
+    /// This is how a click turns a screen row into a block: the pane counts display
+    /// rows, and everything a click can open is addressed by source line (票 04 §1).
+    pub fn source_at(&self, display_row: usize) -> Option<usize> {
+        if display_row >= self.total {
+            return None;
+        }
+        match self.starts.binary_search(&display_row) {
+            Ok(exact) => (exact < self.lines.len()).then_some(exact),
+            Err(insert) => {
+                let source = insert.checked_sub(1)?;
+                (source < self.lines.len()).then_some(source)
+            }
+        }
+    }
+
     /// The rows to draw: `height` display rows from the viewport top, with the
     /// streaming `live` text wrapped and appended after the source lines.
     ///

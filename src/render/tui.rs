@@ -38,12 +38,11 @@ use ratatui::widgets::{
 };
 use tokio::sync::broadcast;
 
-use crate::events::{ContextSource, HistoryReason, Role, StopReason};
+use crate::events::{ContextSource, HistoryReason, Role, StopReason, ToolCallId};
 use crate::permissions::Mode;
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
 use super::editor::{self, Input};
-use super::highlight::{diff_tag, highlight_diff};
 use super::input::{
     AnswerChoice, CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent, Question,
 };
@@ -54,15 +53,12 @@ use super::severity::Severity;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
 use super::width::{text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
-use super::{Render, RenderEvent};
+use super::{DeltaKind, Render, RenderEvent};
 
 /// How much streamed text is retained before it is trimmed to a tail. The
 /// transcript does not need the whole message live: the completed `Message`
 /// block re-renders it in full.
 const LIVE_BUFFER: usize = 4_000;
-
-/// How much of one tool result the TUI shows before eliding.
-const TOOL_PREVIEW: usize = 4_000;
 
 /// How often the frame is redrawn even without an event. The tick is what keeps
 /// the header's clock honest, and what gives a pending question a chance to
@@ -471,6 +467,36 @@ pub struct TuiState {
     /// recomputed per line because a name first seen mid-session has to keep the slot
     /// it was given.
     colors: SpeakerColors,
+    /// The reasoning deltas of the segment that is currently being thought through.
+    /// It is the bridge between the two halves of a thinking line: the line opens on
+    /// the first delta and is rewritten from this when the trace is finished, because
+    /// the finished trace only exists on `MessageCompleted` (票 02 §1).
+    reasoning: String,
+    /// The speaker the open thinking line belongs to, so the finished line can be
+    /// written with the same name.
+    thinking_speaker: crate::events::SpeakerId,
+    /// Whether a thinking line is open on screen right now — the one mutable row in
+    /// the pane.
+    thinking_open: bool,
+    /// The detail behind each source line of the pane, parallel to it and pruned by
+    /// the pane's own cap so the two never drift apart. `None` for the lines that are
+    /// not a way into anything.
+    links: std::collections::VecDeque<Option<Detail>>,
+    /// Where the last frame drew each of its display rows, so a click can be turned
+    /// back into the source line it landed on. Rebuilt every frame, like the
+    /// question overlay's hit regions, because only drawn rows answer the pointer
+    /// (票 04 §1).
+    drawn_rows: Vec<Option<usize>>,
+    /// The screen row the transcript's first drawn row was on, so a mouse row — which
+    /// is in screen coordinates — can be turned into an index into `drawn_rows`.
+    drawn_top: u16,
+    /// The detail overlay, while one is open.
+    detail: Option<DetailView>,
+    /// The last frame's whole terminal area. The detail overlay's body is laid out
+    /// when it opens, and the width that layout needs is a function of the terminal
+    /// size — known before the overlay is drawn, so a click does not have to wait for
+    /// a frame (票 04 §1).
+    area: Rect,
     /// Where a `Prompt` request's answer goes.
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     /// Whether the loop says it is inside a run. **Pushed by the loop**, never
@@ -880,6 +906,14 @@ impl TuiState {
             slash: MenuSelection::default(),
             panel: Panel::new(),
             colors,
+            reasoning: String::new(),
+            thinking_speaker: crate::events::SpeakerId::System,
+            thinking_open: false,
+            links: std::collections::VecDeque::new(),
+            drawn_rows: Vec::new(),
+            drawn_top: 0,
+            detail: None,
+            area: Rect::default(),
             prompt_reply: None,
             // Idle until the loop says otherwise: before it asks its first line nothing
             // is running, and the keyboard has to read that way (spec §6).
@@ -945,6 +979,50 @@ impl TuiState {
     pub fn apply(&mut self, event: RenderEvent) {
         self.dirty = true;
         for block in self.transcript.push(event) {
+            // The thinking line's lifecycle runs before the block is painted: a
+            // reasoning delta opens it, the body's first delta freezes it in place,
+            // and `MessageCompleted` settles whatever is still open (票 02 §1).
+            if let Block::Delta {
+                speaker,
+                kind,
+                text,
+            } = &block
+            {
+                match kind {
+                    DeltaKind::Reasoning => {
+                        self.open_thinking(speaker.clone());
+                        self.reasoning.push_str(text);
+                    }
+                    DeltaKind::Text => self.freeze_thinking(),
+                }
+            }
+            if let Block::Message {
+                speaker,
+                role,
+                reasoning,
+                ..
+            } = &block
+            {
+                if matches!(role, Role::Assistant) {
+                    // A recorded trace settles whatever is open — or opens the line
+                    // itself, when the provider sent reasoning without deltas. An
+                    // absent trace settles an open line as *unrecorded*, which is the
+                    // synthesizer's shape: deltas streamed, nothing written down
+                    // (票 02 §1).
+                    match reasoning {
+                        Some(text) => {
+                            let text = text.clone();
+                            self.open_thinking(speaker.clone());
+                            self.settle_thinking(Some(text), false);
+                        }
+                        None => {
+                            if self.thinking_open {
+                                self.settle_thinking(None, true);
+                            }
+                        }
+                    }
+                }
+            }
             match &block {
                 Block::Delta { text, .. } => {
                     self.live.push_str(text);
@@ -978,10 +1056,91 @@ impl TuiState {
             // speaker's first line is what settles any name the injected roster did
             // not list (票 07).
             self.panel.observe(&block);
-            let lines = render_block(&block, &mut self.colors);
-            for line in lines {
-                self.pane.push(line);
+            let lines = paint_block(&block, &mut self.colors);
+            for rendered in lines {
+                let link = rendered.link;
+                self.pane.push(rendered.line);
+                self.links.push_back(link);
+                self.prune_links();
             }
+        }
+    }
+
+    /// Open the thinking line, unless one is already open.
+    ///
+    /// The line is a plain transcript row — it counts against the pane's cap and
+    /// scrolls with everything else — and it is deliberately **not** clickable yet:
+    /// the whole trace only exists on `MessageCompleted` (票 02 §1).
+    fn open_thinking(&mut self, speaker: crate::events::SpeakerId) {
+        if self.thinking_open {
+            return;
+        }
+        self.thinking_open = true;
+        self.thinking_speaker = speaker;
+        self.reasoning.clear();
+        let line = Line::from(Span::styled(
+            format!(
+                "{} {}",
+                wording::speaker_label(&self.thinking_speaker),
+                wording::thinking_in_progress()
+            ),
+            Style::default().fg(Color::DarkGray),
+        ));
+        self.pane.push(line);
+        self.links.push_back(None);
+        self.prune_links();
+    }
+
+    /// Freeze the open thinking line where it stands: the body's first delta means
+    /// the model has stopped thinking and started answering, so the line settles
+    /// (票 02 §1).
+    fn freeze_thinking(&mut self) {
+        if !self.thinking_open {
+            return;
+        }
+        let text = std::mem::take(&mut self.reasoning);
+        let recorded = !text.is_empty();
+        self.settle_thinking(recorded.then_some(text), !recorded);
+    }
+
+    /// Settle the thinking line — recorded trace or not — and make it the way into
+    /// its detail.
+    ///
+    /// `None` with `unrecorded` is the synthesizer's shape: deltas streamed, the log
+    /// holds no whole text. `None` without it (and with no line open) is the
+    /// ordinary no-reasoning turn, which adds nothing at all (票 02 §1).
+    fn settle_thinking(&mut self, text: Option<String>, unrecorded: bool) {
+        if !self.thinking_open {
+            return;
+        }
+        self.reasoning.clear();
+        self.thinking_open = false;
+        let title = format!(
+            "{} {}",
+            wording::speaker_label(&self.thinking_speaker),
+            wording::thinking_finished()
+        );
+        let detail = Detail {
+            title: title.clone(),
+            kind: DetailKind::Thinking { text, unrecorded },
+        };
+        // In place: one thinking segment is one line, from `正在思考` to `思考完成`
+        // (票 02 §1). The leading `▸` is what says the line can be opened.
+        self.pane.replace_last(Line::from(vec![
+            Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(title, Style::default().fg(Color::DarkGray)),
+        ]));
+        if let Some(link) = self.links.back_mut() {
+            *link = Some(detail);
+        }
+    }
+
+    /// Drop the oldest links until this list is no longer than the pane's cap, which
+    /// is the only way the two stay parallel: a source row means the same thing in
+    /// both or neither (票 04 §1).
+    fn prune_links(&mut self) {
+        while self.links.len() > pane::CAP {
+            self.links.pop_front();
         }
     }
 
@@ -992,6 +1151,26 @@ impl TuiState {
     /// other click is ignored — the terminal's own selection is the user's, and
     /// nothing here takes focus (spec §4).
     pub fn mouse(&mut self, mouse: MouseEvent) {
+        // Three dispatches, in order of who owns the pointer. A detail overlay owns
+        // it outright; otherwise a question does; otherwise the transcript does.
+        // Nothing here ever scrolls the transcript behind something that is up
+        // (票 04 §2).
+        if self.detail_open() {
+            self.dirty = true;
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.detail_scroll(-1),
+                MouseEventKind::ScrollDown => self.detail_scroll(1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    // A second click on the line the overlay came from closes it;
+                    // anywhere else is ignored (票 02 §4).
+                    if self.detail_reselected(&mouse) {
+                        self.close_detail();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.pending.is_some() {
             // A question owns the pointer as well as the keyboard: the wheel must not
             // scroll the transcript behind it (spec §9).
@@ -1004,10 +1183,27 @@ impl TuiState {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.indicator_hit(mouse.column, mouse.row) {
                     self.pane.to_bottom();
+                } else {
+                    let width = layout::plan(self.area, 1).detail_width() as usize;
+                    if let Some((row, detail)) = self.link_hit(&mouse) {
+                        self.open_detail(row, detail, width);
+                    }
                 }
             }
             _ => {}
         }
+    }
+
+    /// The clickable link a click landed on: the source row and a copy of what it
+    /// opens.
+    ///
+    /// The width the overlay will open at comes from the last frame, which is the
+    /// only place the middle block's geometry is known (票 04 §1).
+    fn link_hit(&self, mouse: &MouseEvent) -> Option<(usize, Detail)> {
+        let offset = (mouse.row.checked_sub(self.drawn_top)?) as usize;
+        let row = (*self.drawn_rows.get(offset)?)?;
+        let detail = self.links.get(row)?.clone()?;
+        Some((row, detail))
     }
 
     /// Whether a click landed on the "back to bottom" indicator.
@@ -1135,6 +1331,29 @@ impl TuiState {
     /// one-shot channels; gestures are queued for the loop.
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
+        // The detail overlay is a view mode of its own: it owns the keyboard while it
+        // is up, and the transcript underneath is frozen where the reader left it
+        // (票 02 §4).
+        if self.detail_open() {
+            match key {
+                Key::CtrlC => {
+                    if self.busy() {
+                        self.events.push(FrontEndEvent::Cancel);
+                    } else {
+                        self.quit = true;
+                    }
+                }
+                // The one exception to "everything else is ignored": `Ctrl-D` closes
+                // the overlay rather than quitting, let alone asking (票 06 §5).
+                Key::Esc | Key::CtrlD => self.close_detail(),
+                Key::Up => self.detail_scroll(-1),
+                Key::Down => self.detail_scroll(1),
+                Key::PageUp => self.detail_scroll(-(self.detail_page() as isize)),
+                Key::PageDown => self.detail_scroll(self.detail_page() as isize),
+                _ => {}
+            }
+            return;
+        }
         match key {
             Key::CtrlC => {
                 if self.busy() {
@@ -1639,6 +1858,9 @@ fn questionnaire_parts(
 /// frame comes out, and no terminal is involved (spec §2).
 pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let area = frame.area();
+    // The pointer is answered between frames, and opening a detail needs the width
+    // this frame was drawn at.
+    state.area = area;
     if layout::below_minimum(area) {
         // Nothing is drawn that a click could land on.
         state.indicator = None;
@@ -1661,6 +1883,10 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     }
     // Last, so it is on top of the pane it is asking about.
     draw_modal(frame, &panes, state);
+    // The detail overlay goes over all of it. It cannot be up at the same time as a
+    // question — opening one needs an idle keyboard — so the order between the two
+    // is a formality (票 02 §4).
+    draw_detail(frame, &panes, state);
 }
 
 /// The overlay a question is asked in (spec §9).
@@ -1930,6 +2156,13 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     let rows = state
         .pane
         .view(text_area.width, text_area.height, &state.live);
+    // What a click can hit is what this frame actually drew, row by row. The pane
+    // answers which source line each drawn display row belongs to, and the source
+    // line is what the click's link is keyed by (票 04 §1).
+    state.drawn_top = text_area.y;
+    state.drawn_rows = (0..rows.len())
+        .map(|offset| state.pane.source_at(state.pane.top() + offset))
+        .collect();
     frame.render_widget(Paragraph::new(rows), panes.transcript);
     draw_scrollbar(frame, panes.scrollbar(), &state.pane);
     draw_indicator(frame, text_area, state);
@@ -2274,6 +2507,37 @@ fn speaker_line(
     ])
 }
 
+/// One painted source line, and where clicking it leads.
+///
+/// The link is optional because most lines are not a way into anything. A line
+/// that is carries the whole detail, read at the moment the line is painted, so a
+/// click never has to reach back into the event stream for it (票 02 §4, 票 04 §1).
+pub struct RenderedLine {
+    pub line: Line<'static>,
+    pub link: Option<Detail>,
+}
+
+impl RenderedLine {
+    /// A line with nothing behind it.
+    fn plain(line: Line<'static>) -> Self {
+        Self { line, link: None }
+    }
+
+    /// A line whose whole row opens `detail`.
+    fn linked(line: Line<'static>, detail: Detail) -> Self {
+        Self {
+            line,
+            link: Some(detail),
+        }
+    }
+}
+
+impl From<Line<'static>> for RenderedLine {
+    fn from(line: Line<'static>) -> Self {
+        Self::plain(line)
+    }
+}
+
 /// Turn one finalized block into styled terminal lines.
 ///
 /// This is the TUI half of the shared presentation layer: the block was decided
@@ -2285,21 +2549,29 @@ fn speaker_line(
 /// in the narration grey.
 pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
     paint_block(block, colors)
+        .into_iter()
+        .map(|rendered| rendered.line)
+        .collect()
 }
 
 /// Paint one block with no roster: every speaker name in the narration grey. This
 /// is what the shared rendering looked like before names had colours, kept for the
 /// callers that have no roster to draw one from.
 pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
-    paint_block(block, &mut SpeakerColors::new(&[]))
+    render_block(block, &mut SpeakerColors::new(&[]))
 }
 
-fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
+/// Paint one block, keeping each line's link.
+fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     match block {
         Block::Message {
             speaker,
             role: Role::Assistant,
             text,
+            // The reasoning is painted by the state machine, not from the block: it
+            // has already become a thinking line, and painting it here as well would
+            // show the same thought twice (票 02 §1).
+            reasoning: _,
         } => {
             if text.is_empty() {
                 return Vec::new();
@@ -2307,6 +2579,9 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
             // The answer is rendered as Markdown at full brightness; only the
             // speaker label is tinted.
             attribute(speaker, super::markdown::to_lines(text), colors)
+                .into_iter()
+                .map(RenderedLine::plain)
+                .collect()
         }
         // The user's own input — and the non-assistant system lines — shown as they
         // were written: every line, nothing elided, and no Markdown, because this
@@ -2318,43 +2593,48 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
                 .map(|raw| Line::from(raw.to_owned()))
                 .collect(),
             colors,
-        ),
+        )
+        .into_iter()
+        .map(RenderedLine::plain)
+        .collect(),
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
             wording::round_section(*round, *mode),
             Style::default()
                 .fg(ratatui::style::Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        ))],
-        Block::RoundEnded { round, reason } => vec![severity_line(
-            *reason,
-            wording::round_ended(*round, *reason),
-        )],
+        ))
+        .into()],
+        Block::RoundEnded { round, reason } => {
+            vec![severity_line(*reason, wording::round_ended(*round, *reason)).into()]
+        }
         Block::Divergence { topic, positions } => {
-            let mut lines = vec![Line::from(Span::styled(
+            let mut lines: Vec<RenderedLine> = vec![Line::from(Span::styled(
                 format!("!! {}", wording::divergence(topic)),
                 Style::default()
                     .fg(ratatui::style::Color::Magenta)
                     .add_modifier(Modifier::BOLD),
-            ))];
+            ))
+            .into()];
             for position in positions {
-                lines.push(Line::from(format!("  - {position}")));
+                lines.push(Line::from(format!("  - {position}")).into());
             }
             lines
         }
-        Block::Tool(tool) => tool_lines(tool, colors),
+        Block::Tool(tool) => tool_block_lines(tool, colors),
         Block::TurnStarted { speaker, iteration } => vec![speaker_line(
             speaker,
             wording::turn_started(*iteration),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
-        )],
-        Block::TurnEnded { speaker, reason } => vec![severity_speaker_line(
-            speaker,
-            *reason,
-            wording::turn_ended(*reason),
-            colors,
-        )],
+        )
+        .into()],
+        Block::TurnEnded { speaker, reason } => {
+            vec![
+                severity_speaker_line(speaker, *reason, wording::turn_ended(*reason), colors)
+                    .into(),
+            ]
+        }
         Block::PermissionAsked {
             speaker,
             tool_name,
@@ -2364,7 +2644,8 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
             wording::permission_asked(tool_name.as_deref(), &summarize_args(args)),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
-        )],
+        )
+        .into()],
         Block::PermissionDecided {
             speaker,
             decision,
@@ -2375,7 +2656,8 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
             wording::permission_decided(*decision, *source, reason.as_deref()),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
-        )],
+        )
+        .into()],
         Block::Hook {
             speaker,
             point,
@@ -2385,7 +2667,8 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
             wording::hook(point, outcome),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
-        )],
+        )
+        .into()],
         Block::ExecutorSpawned {
             speaker,
             executor_id,
@@ -2394,7 +2677,8 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
             wording::executor_spawned(executor_id.as_str()),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
-        )],
+        )
+        .into()],
         Block::ExecutorFinished {
             executor_id,
             reason,
@@ -2402,37 +2686,40 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> 
         } => vec![severity_line(
             *reason,
             wording::executor_finished(executor_id.as_str(), *reason, summary),
-        )],
+        )
+        .into()],
         Block::Usage { speaker, usage } => vec![speaker_line(
             speaker,
             wording::usage_summary(usage),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
-        )],
+        )
+        .into()],
         Block::AgentError { speaker, message } => vec![severity_speaker_line(
             speaker,
             StopReason::Error,
             wording::agent_error(message),
             colors,
-        )],
-        Block::SessionError { code, detail } => vec![severity_line(
-            StopReason::Error,
-            wording::session_error(code, detail),
-        )],
+        )
+        .into()],
+        Block::SessionError { code, detail } => {
+            vec![severity_line(StopReason::Error, wording::session_error(code, detail)).into()]
+        }
         Block::SessionEnded { reason } => {
-            vec![severity_line(*reason, wording::session_ended(*reason))]
+            vec![severity_line(*reason, wording::session_ended(*reason)).into()]
         }
         Block::ContextInjected { source } => {
-            vec![narration(wording::context_injected(source.clone()))]
+            vec![narration(wording::context_injected(source.clone())).into()]
         }
         Block::History { reason, summary } => {
-            vec![narration(wording::history(*reason, summary.as_deref()))]
+            vec![narration(wording::history(*reason, summary.as_deref())).into()]
         }
         Block::Diagnostic(message) => vec![Line::from(Span::styled(
             wording::diagnostic(message),
             Style::default().fg(ratatui::style::Color::Yellow),
-        ))],
-        Block::Notice(message) => vec![narration(message.clone())],
+        ))
+        .into()],
+        Block::Notice(message) => vec![narration(message.clone()).into()],
     }
 }
 
@@ -2474,78 +2761,357 @@ fn severity_style(reason: StopReason) -> Style {
     }
 }
 
-fn tool_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(vec![
+/// A finished tool call, folded to two things: the **call line** that stays in the
+/// transcript, and, behind it, the whole output (票 02 §3).
+///
+/// A failure is the same line with `失败` at its **end** — not a second line — and
+/// the error body moves into the detail. The post-hook's feedback stays on screen:
+/// it is policy feedback, not tool output, so it has to be readable without a click
+/// (票 02 §3).
+fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
+    let failed = matches!(&tool.outcome, Some(outcome) if !outcome.ok);
+    let mut call = vec![
+        // The marker is what says the line can be opened; it is paint, not wording,
+        // so it is not part of the sentence (票 03 §Answer).
+        Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{} ", speaker_label(&tool.speaker)),
             name_style(&tool.speaker, colors),
         ),
         Span::styled(
             format!(
-                "→ {}",
-                wording::tool_call(&tool.tool, &summarize_args(&tool.args))
+                "{} {} {}",
+                wording::tool_call_label(),
+                tool.tool,
+                summarize_args(&tool.args)
             ),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-    ])];
-    match &tool.outcome {
-        Some(outcome) if outcome.ok => {
-            if let Some(output) = &outcome.output {
-                if !output.trim().is_empty() {
-                    lines.extend(highlighted(&wording::tool_output_preview(
-                        output,
-                        TOOL_PREVIEW,
-                    )));
-                }
-            }
-        }
-        Some(outcome) => {
-            let error = outcome
-                .error
-                .as_deref()
-                .unwrap_or_else(|| wording::no_message())
-                .to_owned();
-            lines.push(Line::from(Span::styled(
-                format!("  {error}"),
-                Style::default().fg(ratatui::style::Color::Red),
-            )));
-        }
-        None => lines.push(Line::from(format!("  {}", wording::no_tool_result()))),
+    ];
+    if failed {
+        call.push(Span::styled(
+            format!(" {}", wording::tool_failed()),
+            Style::default().fg(Color::Red),
+        ));
     }
+    let detail = Detail {
+        title: line_text(&Line::from(call.clone())),
+        kind: DetailKind::Tool {
+            tool_call_id: tool.tool_call_id.clone(),
+            output: tool
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.output.clone()),
+            error: tool
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.error.clone()),
+            args: tool.args.clone(),
+            no_result: tool.outcome.is_none(),
+        },
+    };
+    let mut lines = vec![RenderedLine::linked(Line::from(call), detail)];
     if let Some(hook) = &tool.hook {
-        lines.push(Line::from(Span::styled(
-            format!("  {}", wording::hook_feedback(hook)),
-            Style::default().fg(ratatui::style::Color::Yellow),
-        )));
+        lines.push(
+            Line::from(Span::styled(
+                format!("  {}", wording::hook_feedback(hook)),
+                Style::default().fg(Color::Yellow),
+            ))
+            .into(),
+        );
     }
     lines
 }
 
-/// Syntax highlighting and diff coloring, composed for one tool result.
+/// The text of a painted line, for a title.
+fn line_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+/// What a clickable transcript line opens: a frozen thought, or a tool call's
+/// arguments and full output (票 02 §4).
 ///
-/// The two layers are computed independently and patched together: the syntax
-/// class is the foreground and the diff tag the background, so an added keyword
-/// is both.
-fn highlighted(text: &str) -> Vec<Line<'static>> {
-    let classes = highlight_diff(text);
-    text.split('\n')
-        .zip(classes)
-        .map(|(raw, spans)| {
-            let tag = diff_tag(raw);
-            let spans: Vec<Span> = if spans.is_empty() {
-                vec![Span::raw(String::new())]
+/// The body is read **when the line is painted**, so what the overlay shows cannot
+/// disagree with what was on screen when the reader clicked it.
+#[derive(Clone)]
+pub struct Detail {
+    /// The clicked line's own text, used as the overlay's title.
+    title: String,
+    kind: DetailKind,
+}
+
+/// The two things a detail view can be about.
+#[derive(Clone)]
+enum DetailKind {
+    /// A finished thinking segment. `text` is the whole trace when the stream
+    /// recorded one; `unrecorded` is the synthesizer's case, where deltas arrived
+    /// and the log holds no text (票 02 §1).
+    Thinking {
+        text: Option<String>,
+        unrecorded: bool,
+    },
+    /// A tool call: its arguments, and whatever the call produced.
+    Tool {
+        /// The id that names the spilled output file, `outputs/<id>.txt`.
+        tool_call_id: ToolCallId,
+        output: Option<String>,
+        error: Option<String>,
+        args: serde_json::Value,
+        no_result: bool,
+    },
+}
+
+/// The detail overlay's open state (票 02 §4).
+///
+/// It is a **view mode, not a pending question**: the transcript is frozen where it
+/// was, the keyboard and the wheel belong to the body until it is closed, and no
+/// `pending` is set — which is exactly what keeps the question guard from swallowing
+/// the wheel aimed at the overlay.
+struct DetailView {
+    /// The row the overlay was opened from, so a second click there closes it.
+    row: usize,
+    /// What is being shown.
+    detail: Detail,
+    /// The body, laid out at the width it was opened at.
+    body: Vec<Line<'static>>,
+    /// The first body row on screen.
+    top: usize,
+    /// Body rows the overlay can show at once.
+    height: usize,
+}
+
+/// The most characters a detail body will read from a spilled tool output.
+///
+/// A tool result is capped before it reaches the log, but the spilled file is not:
+/// this is the reader's own limit, past which the body ends with
+/// [`wording::detail_truncated`] (票 02 §4).
+const DETAIL_MAX_CHARS: usize = 200_000;
+
+impl TuiState {
+    /// Open the detail overlay for a line the reader clicked.
+    ///
+    /// The body is read here, at open time, and laid out at the width the overlay
+    /// will be drawn at, so scrolling is pure arithmetic from then on.
+    fn open_detail(&mut self, row: usize, detail: Detail, width: usize) {
+        let body = detail_body(&detail, &self.facts.cwd, width);
+        self.detail = Some(DetailView {
+            row,
+            detail,
+            body,
+            top: 0,
+            height: 0,
+        });
+    }
+
+    /// Close it, wherever it was opened from.
+    fn close_detail(&mut self) {
+        self.detail = None;
+    }
+
+    fn detail_open(&self) -> bool {
+        self.detail.is_some()
+    }
+
+    /// Scroll the open detail body by `rows` display rows; negative is up.
+    fn detail_scroll(&mut self, rows: isize) {
+        let Some(view) = self.detail.as_mut() else {
+            return;
+        };
+        let max_top = view.body.len().saturating_sub(view.height);
+        view.top = (view.top as isize + rows).clamp(0, max_top as isize) as usize;
+    }
+
+    /// One page of the detail body: its own height, minus a row of overlap so the
+    /// reader keeps the thread across a jump.
+    fn detail_page(&self) -> usize {
+        self.detail
+            .as_ref()
+            .map(|view| view.height.saturating_sub(1).max(1))
+            .unwrap_or(1)
+    }
+
+    /// The display row a click again landed on, when it is the row the overlay was
+    /// opened from.
+    fn detail_reselected(&self, mouse: &MouseEvent) -> bool {
+        let Some(view) = self.detail.as_ref() else {
+            return false;
+        };
+        let Some(offset) = mouse.row.checked_sub(self.drawn_top) else {
+            return false;
+        };
+        match self.drawn_rows.get(offset as usize) {
+            Some(Some(row)) => *row == view.row,
+            _ => false,
+        }
+    }
+}
+
+/// The body of a detail view, wrapped to `width`: the sections, in the order they
+/// are decided, each under a rule (票 03 §Answer).
+///
+/// An absent body is not an error: each one has a sentence that says so, because a
+/// click that opened a blank box is worse than one that never opened.
+fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'static>> {
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    match &detail.kind {
+        DetailKind::Thinking { text, unrecorded } => {
+            rows.push(section_header(wording::detail_thinking_section()));
+            match text {
+                Some(text) if !text.trim().is_empty() => {
+                    rows.extend(pane::wrap_text(text.trim_end(), width));
+                }
+                // Both an absent trace and an unrecorded one say the same thing; the
+                // flag is kept so a later change can tell the two apart (票 02 §1).
+                _ => {
+                    let _ = unrecorded;
+                    rows.push(Line::from(Span::styled(
+                        wording::detail_reasoning_unrecorded(),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
+        DetailKind::Tool {
+            tool_call_id,
+            output,
+            error,
+            args,
+            no_result,
+        } => {
+            rows.push(section_header(wording::detail_args_section()));
+            let args = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
+            rows.extend(pane::wrap_text(&args, width));
+            rows.push(section_header(wording::detail_output_section()));
+            if *no_result {
+                rows.push(Line::from(Span::styled(
+                    wording::no_tool_result(),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else if let Some(error) = error {
+                rows.extend(pane::wrap_text(error, width));
+            } else if let Some(output) = output {
+                let (body, truncated) = read_tool_body(tool_call_id, output, session_dir);
+                rows.extend(pane::wrap_text(&body, width));
+                if truncated {
+                    rows.push(Line::from(Span::styled(
+                        wording::detail_truncated(),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
             } else {
-                spans
-                    .into_iter()
-                    .map(|span| {
-                        let style = span.class.style().patch(tag.style());
-                        Span::styled(span.text, style)
-                    })
-                    .collect()
-            };
-            Line::from(spans)
-        })
-        .collect()
+                rows.push(Line::from(Span::styled(
+                    wording::detail_output_unavailable(),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+    }
+    rows
+}
+
+/// A section heading, drawn as a rule: the words in a run of `─`.
+fn section_header(name: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        wording::detail_section(name),
+        Style::default().fg(Color::DarkGray),
+    ))
+}
+
+/// The whole body of a tool result, when the spilled file can be read.
+///
+/// The event carries only the head/tail **preview**; the full text is what was
+/// spilled to `outputs/<tool_call_id>.txt`, and the call id is what names that
+/// file — never the preview's own prose (票 02 §4). A missing file is the
+/// documented degradation: the preview, and a sentence saying the full text was not
+/// available.
+fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -> (String, bool) {
+    // `SessionFacts.cwd` holds the **session directory**, so the outputs directory
+    // is one join away — the same arithmetic the harness does (票 01 事实 56).
+    let path = std::path::Path::new(session_dir)
+        .join(crate::session::store::OUTPUTS_DIR)
+        .join(format!("{tool_call_id}.txt"));
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return (
+            format!("{preview}\n{}", wording::detail_output_unavailable()),
+            false,
+        );
+    };
+    if text.chars().count() <= DETAIL_MAX_CHARS {
+        return (text, false);
+    }
+    let cut: String = text.chars().take(DETAIL_MAX_CHARS).collect();
+    (cut, true)
+}
+
+/// Paint the detail overlay over the middle block.
+///
+/// It owns the keyboard and the wheel while it is up, and the transcript stays
+/// frozen where it was — a reading position, not a moving one (票 02 §4).
+fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let Some(area) = panes.detail() else {
+        // Nowhere to draw it: leaving it open would keep the keyboard captured for a
+        // view nobody can see.
+        state.detail = None;
+        return;
+    };
+    let Some(view) = state.detail.as_ref() else {
+        return;
+    };
+    let inner = layout::inner(area);
+    let height = inner.height as usize;
+    let body_rows = height.saturating_sub(2);
+    let max_top = view.body.len().saturating_sub(body_rows);
+    let top = view.top.min(max_top);
+    let rows: Vec<Line<'static>> = view
+        .body
+        .iter()
+        .skip(top)
+        .take(body_rows)
+        .cloned()
+        .collect();
+    let footer = wording::detail_footer(top + 1, view.body.len().max(1));
+    let title = view.detail.title.clone();
+
+    blank_half_covered_glyphs(frame, area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        WidgetBlock::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
+    // The title row is the clicked line's own text, so the reader knows which line
+    // they opened.
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate_columns(&title, inner.width as usize),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    // The body takes everything between the title and the footer; the footer is
+    // pinned to the overlay's last inner row, so the two cannot overlap (票 03
+    // §Answer).
+    let body = Rect::new(
+        inner.x,
+        inner.y + 1,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    frame.render_widget(Paragraph::new(rows), body);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            footer,
+            Style::default().fg(Color::DarkGray),
+        ))),
+        Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
+    );
+    let view = state.detail.as_mut().expect("just checked");
+    view.height = body_rows;
+    view.top = top;
 }
 
 #[cfg(test)]
