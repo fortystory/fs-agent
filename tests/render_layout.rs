@@ -6,6 +6,7 @@
 //! header says, how many hints fit — never about the rectangles the layout computes
 //! on the way there.
 
+use fs_agent::render::width::text_columns;
 use fs_agent::render::{
     draw_frame, CatalogEntry, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
 };
@@ -2327,4 +2328,350 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
 /// event arrives (票 01 事实 10, `transcript.rs`'s grouping rule).
 fn flush() -> fs_agent::render::RenderEvent {
     fs_agent::render::RenderEvent::Notice(String::new())
+}
+
+// ---------------------------------------------------------------------------
+// Mouse answers on the two question shapes (ticket 04)
+// ---------------------------------------------------------------------------
+
+/// The screen cell a phrase starts on, searching top to bottom.
+///
+/// The match is against a row read **the way a terminal reads it** — a wide grapheme
+/// advances two columns and the cell after it is skipped — so the column a match
+/// reports is a screen column, which is what a mouse event carries.
+fn cell_of(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
+    for y in 0..height {
+        let row = row_text(frame, y, width);
+        if let Some(at) = row.find(needle) {
+            return Some((text_columns(&row[..at]) as u16, y));
+        }
+    }
+    None
+}
+
+/// Click the first cell where `needle` is drawn on the freshly rendered frame.
+fn click_text(state: &mut TuiState, width: u16, height: u16, needle: &str) {
+    let frame = buffer(width, height, state);
+    let Some((column, row)) = cell_of(&frame, width, height, needle) else {
+        panic!("nothing on screen contains {needle:?}");
+    };
+    state.mouse(click(column, row));
+}
+
+/// Click the cell in one screen row where `needle` is drawn.
+///
+/// The questionnaire's footer labels are also its body's wording, so the two can only
+/// be told apart by the row they are on — which is exactly the distinction the pointer
+/// makes (票 04 §4).
+fn click_in_row(state: &mut TuiState, width: u16, height: u16, row: u16, needle: &str) {
+    let frame = buffer(width, height, state);
+    let text = row_text(&frame, row, width);
+    let Some(at) = text.find(needle) else {
+        panic!("row {row} does not contain {needle:?}: {text:?}");
+    };
+    let column = text_columns(&text[..at]) as u16;
+    state.mouse(click(column, row));
+}
+
+#[test]
+fn a_permission_question_is_answered_by_clicking_a_button() {
+    for (label, expected) in [
+        (
+            "[y] 允许",
+            fs_agent::render::AnswerChoice::Permission(fs_agent::permissions::Answer::Allow),
+        ),
+        (
+            "[a] 总是允许",
+            fs_agent::render::AnswerChoice::Permission(fs_agent::permissions::Answer::AlwaysAllow),
+        ),
+        (
+            "[n] 拒绝",
+            fs_agent::render::AnswerChoice::Permission(fs_agent::permissions::Answer::Deny),
+        ),
+    ] {
+        let mut state = state_with_roster(&["kimi"]);
+        let (request, mut answer) = ask_permission();
+        state.request(request);
+        click_text(&mut state, 120, 24, label);
+        assert_eq!(
+            answer.try_recv().expect("the answer went out"),
+            expected,
+            "clicking {label} answers as its key would"
+        );
+        // The overlay is gone and the keyboard is back on the draft.
+        let text = screen(120, 24, &mut state).join("\n");
+        assert!(!text.contains("权限询问"), "the question closed: {text}");
+    }
+}
+
+#[test]
+fn clicking_a_question_body_or_border_does_nothing() {
+    let mut state = state_with_roster(&["kimi"]);
+    let (request, mut answer) = ask_permission();
+    state.request(request);
+
+    // The title row and the middle of the overlay's body.
+    for (column, row) in [(60, 10), (60, 11), (2, 10)] {
+        state.mouse(click(column, row));
+    }
+    assert!(
+        answer.try_recv().is_err(),
+        "a click off the buttons answers nothing"
+    );
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("权限询问"),
+        "and the question is still up: {text}"
+    );
+}
+
+#[test]
+fn a_plan_conflict_and_the_renderer_confirmations_answer_by_click() {
+    // Plan conflict: `[o] 覆盖` is the destructive answer, and a click runs it.
+    let mut state = state_with_roster(&["kimi"]);
+    let (reply, mut answer) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(fs_agent::render::AskRequest {
+        question: fs_agent::render::Question::PlanConflict(std::path::PathBuf::from(
+            "/tmp/plan.md",
+        )),
+        reply,
+    }));
+    click_text(&mut state, 120, 24, "[o] 覆盖");
+    assert!(matches!(
+        answer.try_recv().expect("the answer went out"),
+        fs_agent::render::AnswerChoice::Plan(fs_agent::permissions::PlanConflict::Overwrite)
+    ));
+
+    // The exit confirmation is the renderer's own: clicking `[y] 退出` quits.
+    let (mut idle, _line) = {
+        let mut state = state_with_roster(&["kimi"]);
+        let (reply, line) = tokio::sync::oneshot::channel();
+        state.request(ConsoleRequest::Prompt { reply });
+        (state, line)
+    };
+    idle.key(Key::CtrlD);
+    click_text(&mut idle, 120, 24, "[y] 退出");
+    assert!(idle.should_quit(), "the click confirmed the exit");
+
+    // And clicking `[n] 取消` on it leaves the session running.
+    let (mut escaped, _line) = {
+        let mut state = state_with_roster(&["kimi"]);
+        let (reply, line) = tokio::sync::oneshot::channel();
+        state.request(ConsoleRequest::Prompt { reply });
+        (state, line)
+    };
+    escaped.key(Key::CtrlD);
+    click_text(&mut escaped, 120, 24, "[n] 取消");
+    assert!(!escaped.should_quit(), "the safe answer is not the exit");
+}
+
+/// A questionnaire with `question` on screen, and its answer receiver.
+fn questionnaire_state(
+    question: fs_agent::questions::UserQuestion,
+) -> (
+    TuiState,
+    tokio::sync::oneshot::Receiver<Result<fs_agent::questions::UserAnswers, String>>,
+) {
+    use fs_agent::render::QuestionnaireRequest;
+    let mut state = state_with_roster(&["kimi"]);
+    let (reply, answers) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+        questions: vec![question],
+        reply,
+    }));
+    (state, answers)
+}
+
+#[test]
+fn a_single_select_option_is_chosen_by_clicking_its_row() {
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, mut answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![
+            Choice {
+                label: "甲".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: "乙".to_owned(),
+                description: None,
+            },
+        ],
+    });
+
+    // On the only question, a click answers but does **not** submit: the last
+    // question still needs the separate submit (票 04 §4).
+    click_text(&mut state, 120, 24, "2. 乙");
+    assert!(
+        answers.try_recv().is_err(),
+        "the last question only answers on a click"
+    );
+
+    // `Enter` is the submit once everything is handled.
+    state.key(Key::Enter);
+    let answers = answers.try_recv().expect("the questionnaire submitted");
+    let answers = answers.expect("a successful answer");
+    assert_eq!(answers.answers.len(), 1);
+    assert_eq!(answers.answers[0].selected, vec!["乙".to_owned()]);
+}
+
+#[test]
+fn a_multi_select_option_only_toggles_when_clicked() {
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, mut answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选几个".to_owned(),
+        multi_select: true,
+        options: vec![
+            Choice {
+                label: "甲".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: "乙".to_owned(),
+                description: None,
+            },
+        ],
+    });
+
+    click_text(&mut state, 120, 24, "1. 甲");
+    assert!(
+        answers.try_recv().is_err(),
+        "a multi-select click does not submit"
+    );
+    // The tick is on the row the click landed on.
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("[x] 1. 甲"), "the pick is shown: {text}");
+
+    // The footer's submit button appears once something is handled, and submits.
+    let row = row_of(&mut state, 120, 40, "提交").expect("the submit button is drawn");
+    click_in_row(&mut state, 120, 40, row, "提交");
+    let answers = answers.try_recv().expect("the submit button submitted");
+    assert_eq!(
+        answers.expect("a successful answer").answers[0].selected,
+        vec!["甲".to_owned()]
+    );
+}
+
+#[test]
+fn the_questionnaire_footer_pages_with_a_click() {
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, mut answers) = {
+        use fs_agent::render::QuestionnaireRequest;
+        let mut state = state_with_roster(&["kimi"]);
+        let (reply, answers) = tokio::sync::oneshot::channel();
+        let question = |id: &str| UserQuestion {
+            id: id.to_owned(),
+            header: None,
+            question: format!("第 {id} 题"),
+            multi_select: false,
+            options: vec![Choice {
+                label: "唯一".to_owned(),
+                description: None,
+            }],
+        };
+        state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+            questions: vec![question("q1"), question("q2")],
+            reply,
+        }));
+        (state, answers)
+    };
+
+    // The first question has no `← 上一题`; it does have `下一题 →`.
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("← 上一题"),
+        "no previous on the first: {text}"
+    );
+    assert!(text.contains("下一题 →"), "but a next: {text}");
+
+    // A click advances, and the second question offers the way back.
+    click_in_row(&mut state, 120, 24, 22, "下一题 →");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("2 / 2"), "the click paged forward: {text}");
+    assert!(
+        text.contains("← 上一题"),
+        "and the way back appears: {text}"
+    );
+    click_in_row(&mut state, 120, 24, 22, "← 上一题");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("1 / 2"), "the click paged back: {text}");
+    assert!(answers.try_recv().is_err(), "paging never submits");
+}
+
+#[test]
+fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = {
+        use fs_agent::render::QuestionnaireRequest;
+        let mut state = state_with_roster(&["kimi"]);
+        let (reply, answers) = tokio::sync::oneshot::channel();
+        let question = |id: &str| UserQuestion {
+            id: id.to_owned(),
+            header: None,
+            question: format!("第 {id} 题"),
+            multi_select: false,
+            options: vec![Choice {
+                label: "唯一".to_owned(),
+                description: None,
+            }],
+        };
+        state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+            questions: vec![question("q1"), question("q2")],
+            reply,
+        }));
+        (state, answers)
+    };
+
+    let (_, before) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(before, None, "no cursor until the row is focused");
+
+    click_text(&mut state, 120, 24, "自定义：");
+    let (_, focused) = frame_and_cursor(120, 24, &mut state);
+    assert!(
+        focused.is_some(),
+        "the click put the cursor on the custom row"
+    );
+
+    // Paging away resets the focus: the next question's custom row starts unfocused.
+    click_in_row(&mut state, 120, 24, 22, "下一题 →");
+    let (_, after) = frame_and_cursor(120, 24, &mut state);
+    assert_eq!(after, None, "the page turn reset the focus");
+}
+
+#[test]
+fn the_wheel_moves_the_questionnaire_highlight() {
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![
+            Choice {
+                label: "甲".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: "乙".to_owned(),
+                description: None,
+            },
+        ],
+    });
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("> ○ 1. 甲"),
+        "the highlight starts on 1: {text}"
+    );
+
+    state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("> ○ 2. 乙"),
+        "the wheel moved the highlight: {text}"
+    );
 }

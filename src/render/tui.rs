@@ -492,6 +492,8 @@ pub struct TuiState {
     drawn_top: u16,
     /// The detail overlay, while one is open.
     detail: Option<DetailView>,
+    /// Where the last frame drew a question's clickable parts.
+    regions: Regions,
     /// The last frame's whole terminal area. The detail overlay's body is laid out
     /// when it opens, and the width that layout needs is a function of the terminal
     /// size — known before the overlay is drawn, so a click does not have to wait for
@@ -559,6 +561,10 @@ struct Questionnaire {
     drafts: Vec<QuestionDraft>,
     /// Which question is on screen. One at a time, `2 / 3` in the footer.
     index: usize,
+    /// Whether the current question's free-text row has the cursor. It is entered by
+    /// clicking that row or by typing into it, and it resets when the page turns
+    /// (票 04 §5).
+    custom_focused: bool,
 }
 
 /// What the user has done to one question so far.
@@ -640,7 +646,10 @@ impl Questionnaire {
                 self.drafts[self.index].custom.pop();
             }
             // Every printable character is free text, digits included.
-            Key::Char(ch) => self.type_custom(ch),
+            Key::Char(ch) => {
+                self.custom_focused = true;
+                self.type_custom(ch);
+            }
             _ => {}
         }
         false
@@ -721,6 +730,38 @@ impl Questionnaire {
         self.drafts.iter().all(QuestionDraft::handled)
     }
 
+    /// Pick the option at `index` in the current question, the way clicking its row
+    /// does.
+    ///
+    /// A single-select question answers and moves on — the click *is* the answer —
+    /// except on the last question, where it only answers: submitting is still the
+    /// separate `Enter` (票 04 §4). A multi-select question only toggles, because the
+    /// reader is not done picking.
+    fn select_option(&mut self, index: usize) {
+        if index >= self.questions[self.index].options.len() {
+            return;
+        }
+        let multi_select = self.questions[self.index].multi_select;
+        self.drafts[self.index].highlight = index;
+        self.custom_focused = false;
+        if multi_select {
+            self.confirm_highlight();
+        } else {
+            self.confirm_highlight();
+            self.advance();
+        }
+    }
+
+    /// Hand the cursor to the free-text row.
+    fn focus_custom(&mut self) {
+        self.custom_focused = true;
+    }
+
+    /// Take it away when the page turns.
+    fn unfocus_custom(&mut self) {
+        self.custom_focused = false;
+    }
+
     /// The answers as the tool's one result (spec §7): a skipped question is
     /// `selected: []` with no `custom`, and single-select custom text overrides
     /// the choice.
@@ -784,6 +825,10 @@ impl Pending {
                     &summarize_args(&request.args),
                 )),
                 choices: &wording::PERMISSION_CHOICES,
+                actions: wording::PERMISSION_CHOICE_ANSWERS
+                    .iter()
+                    .map(|(key, answer)| HitAction::Answer(*key, AnswerChoice::Permission(*answer)))
+                    .collect(),
             },
             Pending::Loop {
                 question: Question::PlanConflict(path),
@@ -793,24 +838,31 @@ impl Pending {
                 summary: None,
                 detail: Some(wording::plan_conflict_body(&path.display().to_string())),
                 choices: &wording::PLAN_CHOICES,
+                actions: wording::PLAN_CHOICE_ANSWERS
+                    .iter()
+                    .map(|(key, conflict)| HitAction::Answer(*key, AnswerChoice::Plan(*conflict)))
+                    .collect(),
             },
             Pending::Paste { chars, .. } => Modal {
                 title: wording::paste_title().to_owned(),
                 summary: None,
                 detail: Some(wording::paste_body(*chars)),
                 choices: &wording::PASTE_CHOICES,
+                actions: vec![HitAction::Paste, HitAction::Dismiss],
             },
             Pending::ClearDraft => Modal {
                 title: wording::clear_draft_title().to_owned(),
                 summary: None,
                 detail: Some(wording::clear_draft_body().to_owned()),
                 choices: &wording::CLEAR_CHOICES,
+                actions: vec![HitAction::ClearDraft, HitAction::Dismiss],
             },
             Pending::Exit => Modal {
                 title: wording::exit_title().to_owned(),
                 summary: None,
                 detail: Some(wording::exit_body().to_owned()),
                 choices: &wording::EXIT_CHOICES,
+                actions: vec![HitAction::Quit, HitAction::Dismiss],
             },
             Pending::Questionnaire(_) => return None,
         };
@@ -835,6 +887,95 @@ struct Modal {
     detail: Option<String>,
     /// The keys that answer it, painted as one row of buttons.
     choices: &'static [wording::Choice],
+    /// What a click on each of those buttons does. Empty means "answer with the key",
+    /// which is what the loop's questions want; the renderer's own confirmations name
+    /// themselves because they have no channel to answer over (票 04 §3).
+    actions: Vec<HitAction>,
+}
+
+/// One clickable region of a question, recorded as it is painted.
+///
+/// The rectangle is in **screen** coordinates and its `action` is the whole of what a
+/// click there means, so the pointer handler never has to re-derive the layout it is
+/// looking at (票 04 §1).
+#[derive(Clone)]
+struct Region {
+    rect: Rect,
+    action: HitAction,
+}
+
+/// What a click on a question's painted part does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HitAction {
+    /// Answer the loop's question with this choice, exactly as pressing its key would.
+    Answer(char, AnswerChoice),
+    /// Confirm the oversized paste.
+    Paste,
+    /// Confirm clearing the draft.
+    ClearDraft,
+    /// Confirm quitting.
+    Quit,
+    /// Close the question without doing anything: the safe answer, as `Esc` is.
+    Dismiss,
+    /// Step back one question.
+    Previous,
+    /// Step forward one question.
+    Next,
+    /// Submit the questionnaire.
+    Submit,
+}
+
+/// A pointer gesture while a question owns it.
+enum QuestionClick {
+    /// A wheel notch: `true` is up.
+    Wheel(bool),
+    /// A left click, in screen coordinates.
+    At(u16, u16),
+}
+
+/// What the last frame drew that a question's pointer can act on.
+///
+/// Everything here is rebuilt every frame and read by the next click, which is the
+/// same mechanism the transcript's `indicator` has always used — and the reason a
+/// scrolled-away option or a clipped button needs no invalidation of its own
+/// (票 04 §1).
+#[derive(Default, Clone)]
+struct Regions {
+    /// One region per question-overlay button, in the order they are drawn.
+    cells: Vec<Region>,
+    /// The questionnaire's visible option rows: `(row, index in the question)`.
+    options: Vec<(u16, usize)>,
+    /// The questionnaire's free-text row, when it was drawn.
+    custom: Option<u16>,
+}
+
+impl Regions {
+    /// Forget everything: called once per frame, before anything is painted.
+    fn clear(&mut self) {
+        self.cells.clear();
+        self.options.clear();
+        self.custom = None;
+    }
+
+    /// The option index a click on `row` landed on, if that row was an option.
+    fn option_hit(&self, _column: u16, row: u16) -> Option<usize> {
+        self.options
+            .iter()
+            .find(|(option_row, _)| *option_row == row)
+            .map(|(_, index)| *index)
+    }
+
+    fn custom_at(&self, _column: u16, row: u16) -> bool {
+        self.custom == Some(row)
+    }
+
+    /// The action of the button a click landed on, if it landed on one.
+    fn action_at(&self, column: u16, row: u16) -> Option<HitAction> {
+        self.cells
+            .iter()
+            .find(|region| region.rect.contains((column, row).into()))
+            .map(|region| region.action)
+    }
 }
 
 /// The `/` menu's remembered half.
@@ -913,6 +1054,7 @@ impl TuiState {
             drawn_rows: Vec::new(),
             drawn_top: 0,
             detail: None,
+            regions: Regions::default(),
             area: Rect::default(),
             prompt_reply: None,
             // Idle until the loop says otherwise: before it asks its first line nothing
@@ -1155,14 +1297,14 @@ impl TuiState {
         // it outright; otherwise a question does; otherwise the transcript does.
         // Nothing here ever scrolls the transcript behind something that is up
         // (票 04 §2).
+        self.dirty = true;
+        // 1. The detail overlay owns the pointer outright. Its whole body scrolls, and
+        // a second click on the line it came from closes it (票 02 §4).
         if self.detail_open() {
-            self.dirty = true;
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.detail_scroll(-1),
                 MouseEventKind::ScrollDown => self.detail_scroll(1),
                 MouseEventKind::Down(MouseButton::Left) => {
-                    // A second click on the line the overlay came from closes it;
-                    // anywhere else is ignored (票 02 §4).
                     if self.detail_reselected(&mouse) {
                         self.close_detail();
                     }
@@ -1171,12 +1313,23 @@ impl TuiState {
             }
             return;
         }
+        // 2. A question owns the pointer next: the wheel must not scroll the
+        // transcript behind it, and a click answers it where it is answerable. What
+        // is answerable is whatever the last frame recorded as a region, so a key that
+        // was clipped or scrolled away simply has no region (spec §9, 票 04 §2).
         if self.pending.is_some() {
-            // A question owns the pointer as well as the keyboard: the wheel must not
-            // scroll the transcript behind it (spec §9).
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.question_click(QuestionClick::Wheel(true)),
+                MouseEventKind::ScrollDown => self.question_click(QuestionClick::Wheel(false)),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.question_click(QuestionClick::At(mouse.column, mouse.row))
+                }
+                _ => {}
+            }
             return;
         }
-        self.dirty = true;
+        // 3. Otherwise the transcript: the wheel scrolls it, the indicator and the
+        // collapsed lines answer to a click.
         match mouse.kind {
             MouseEventKind::ScrollUp => self.pane.wheel(true),
             MouseEventKind::ScrollDown => self.pane.wheel(false),
@@ -1191,6 +1344,112 @@ impl TuiState {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Act on a click or a wheel notch while a question owns the pointer.
+    fn question_click(&mut self, click: QuestionClick) {
+        match self.pending.as_mut() {
+            // The middle overlay: each `[key] label` interval is one button, and a
+            // click runs exactly the answer that key would have (票 04 §3).
+            Some(
+                Pending::Loop { .. } | Pending::Paste { .. } | Pending::ClearDraft | Pending::Exit,
+            ) => {
+                let QuestionClick::At(column, row) = click else {
+                    // The wheel does nothing over a one-line question.
+                    return;
+                };
+                let hit = self
+                    .regions
+                    .cells
+                    .iter()
+                    .find(|region| region.rect.contains((column, row).into()))
+                    .map(|region| region.action);
+                let Some(action) = hit else {
+                    return;
+                };
+                let pending = self.pending.take().expect("a question is up");
+                // The loop's questions send the answer the button was built with —
+                // the same answer its key sends — and the renderer's own
+                // confirmations answer themselves.
+                match (pending, action) {
+                    (Pending::Loop { reply, .. }, HitAction::Answer(_, choice)) => {
+                        let _ = reply.send(choice);
+                    }
+                    (pending, action) => self.own_answer(pending, action),
+                }
+            }
+            // The questionnaire owns the bottom input area: option rows, the custom
+            // line, and the footer's paging buttons (票 04 §4).
+            Some(Pending::Questionnaire(_)) => self.questionnaire_click(click),
+            None => {}
+        }
+    }
+
+    /// Answer one of the renderer's own confirmations, by the action a click carried.
+    fn own_answer(&mut self, pending: Pending, action: HitAction) {
+        match (pending, action) {
+            (Pending::Paste { text, .. }, HitAction::Paste) => {
+                self.editor.insert_str(&text);
+                self.sync_menu();
+            }
+            (Pending::ClearDraft, HitAction::ClearDraft) => self.editor.clear(),
+            (Pending::Exit, HitAction::Quit) => self.quit = true,
+            // `Dismiss`, and any pairing that cannot arise, is the safe answer: the
+            // question closes and nothing happens, which is what `Esc` does.
+            _ => {}
+        }
+    }
+
+    /// Act on a click or a wheel notch while the questionnaire owns the input area.
+    fn questionnaire_click(&mut self, click: QuestionClick) {
+        let regions = self.regions.clone();
+        let mut submitted = false;
+        let Some(Pending::Questionnaire(questionnaire)) = self.pending.as_mut() else {
+            return;
+        };
+        match click {
+            // The wheel moves the option window, which follows the highlight — so a
+            // notch is exactly one option's worth of movement (票 04 §4).
+            QuestionClick::Wheel(up) => questionnaire.move_highlight(if up { -1 } else { 1 }),
+            QuestionClick::At(column, row) => {
+                // The option rows and the free-text row are recorded by screen row;
+                // the footer's buttons are recorded as rectangles like every other
+                // button, so all of them are looked up through the same table
+                // (票 04 §1).
+                if let Some(option) = regions.option_hit(column, row) {
+                    questionnaire.select_option(option);
+                    return;
+                }
+                if regions.custom_at(column, row) {
+                    // Clicking the free-text row hands it the cursor; the keyboard
+                    // focus otherwise stays where the last key left it (票 04 §5).
+                    questionnaire.focus_custom();
+                    return;
+                }
+                match regions.action_at(column, row) {
+                    Some(HitAction::Previous) => {
+                        questionnaire.back();
+                        questionnaire.unfocus_custom();
+                    }
+                    Some(HitAction::Next) => {
+                        questionnaire.advance();
+                        questionnaire.unfocus_custom();
+                    }
+                    Some(HitAction::Submit) => {
+                        // The button submits exactly as `Enter` does once everything
+                        // is handled, so it goes through the same path that drops the
+                        // takeover and answers the tool (票 04 §4).
+                        if questionnaire.all_handled() {
+                            submitted = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if submitted {
+            self.questionnaire_key(Key::Enter);
         }
     }
 
@@ -1286,6 +1545,7 @@ impl TuiState {
                     reply: request.reply,
                     drafts,
                     index: 0,
+                    custom_focused: false,
                 }));
             }
             // The names the loop can act on. They arrive once, after assembly — the
@@ -1609,6 +1869,12 @@ impl TuiState {
         let Some(pending) = self.pending.take() else {
             return;
         };
+        self.answer_pending(pending, key);
+    }
+
+    /// The body of [`TuiState::answer_key`], for the caller that already holds the
+    /// question — the pointer path, which has to inspect it before answering it.
+    fn answer_pending(&mut self, pending: Pending, key: Key) {
         match pending {
             Pending::Loop { question, reply } => {
                 let choice = match (&question, key) {
@@ -1861,6 +2127,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // The pointer is answered between frames, and opening a detail needs the width
     // this frame was drawn at.
     state.area = area;
+    // Whatever the last frame recorded is what the pointer could hit; this frame
+    // starts from nothing and records only what it really paints (票 04 §1).
+    state.regions.clear();
     if layout::below_minimum(area) {
         // Nothing is drawn that a click could land on.
         state.indicator = None;
@@ -1933,7 +2202,11 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     if separator == 1 {
         rows.push(Line::default());
     }
-    rows.push(choices_row(modal.choices));
+    // The body is what is above the button row, and the buttons take the last row the
+    // overlay will have, so both are settled before the rectangle is asked for.
+    let body_rows = rows.len() as u16;
+    rows.push(Line::default());
+    let buttons = modal.choices;
     let Some(area) = panes.modal(rows.len() as u16) else {
         return;
     };
@@ -1945,12 +2218,104 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             .border_style(Style::default().fg(Color::Yellow)),
         area,
     );
+    // The body and the button row are painted apart so the buttons' columns can be
+    // recorded exactly: the question owns them, and a click has to land on the one it
+    // looks like it landed on (票 04 §3).
+    let inner_area = layout::inner(area);
+    let body = Rect::new(
+        inner_area.x,
+        inner_area.y,
+        inner_area.width,
+        body_rows.min(inner_area.height),
+    );
     frame.render_widget(
         Paragraph::new(rows)
             .style(Style::default().fg(Color::Yellow))
             .alignment(Alignment::Center),
-        layout::inner(area),
+        body,
     );
+    let buttons_area = Rect::new(
+        inner_area.x + modal_column_inset(&body, inner),
+        inner_area.bottom().saturating_sub(1),
+        inner_area.width,
+        1,
+    );
+    let (line, regions) = buttons_row(buttons, &modal.actions);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().fg(Color::Yellow)),
+        buttons_area,
+    );
+    state
+        .regions
+        .cells
+        .extend(regions.into_iter().map(|(start, width, action)| Region {
+            rect: Rect::new(
+                buttons_area.x + start as u16,
+                buttons_area.y,
+                width as u16,
+                1,
+            ),
+            action,
+        }));
+}
+
+/// The column a centred paragraph's text starts at, for the width it was laid out
+/// with. The overlay is centred on the middle block, and the button row under it has
+/// to be aligned with the body above (票 04 §3).
+fn modal_column_inset(body: &Rect, wrapped_width: usize) -> u16 {
+    body.width.saturating_sub(wrapped_width as u16) / 2
+}
+
+/// The keys that answer a question as one row of `(offset, width, action)` triples,
+/// where the offset is in **columns** from the start of that text and the width is
+/// the text's display width.
+///
+/// One `[y] 允许` per choice, three spaces between them: the same row the overlay has
+/// always drawn, now paired with what a click on it means, because who paints it and
+/// who hit-tests it must be one function or the two drift apart (票 04 §7).
+fn button_regions(
+    choices: &[wording::Choice],
+    actions: &[HitAction],
+) -> Vec<(usize, usize, HitAction)> {
+    let mut regions = Vec::with_capacity(choices.len());
+    let mut offset = 0usize;
+    for (index, choice) in choices.iter().enumerate() {
+        if index > 0 {
+            offset += text_columns("   ");
+        }
+        let width = text_columns(&button_text(choice));
+        // The action list comes from the same place the choices do, so the two cannot
+        // disagree about which button means what (票 04 §7).
+        let action = actions.get(index).copied().unwrap_or(HitAction::Dismiss);
+        regions.push((offset, width, action));
+        offset += width;
+    }
+    regions
+}
+
+/// One button's text, unchanged from what the overlay has always painted.
+fn button_text(choice: &wording::Choice) -> String {
+    format!("[{}] {}", choice.key, choice.label)
+}
+
+/// The button row as a styled line, and its clickable columns.
+fn buttons_row(
+    choices: &[wording::Choice],
+    actions: &[HitAction],
+) -> (Line<'static>, Vec<(usize, usize, HitAction)>) {
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(Color::Yellow);
+    let mut spans = Vec::new();
+    for (index, choice) in choices.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.push(Span::styled(format!("[{}]", choice.key), key_style));
+        spans.push(Span::styled(format!(" {}", choice.label), label_style));
+    }
+    (Line::from(spans), button_regions(choices, actions))
 }
 
 /// Blank the wide glyph a floating box is about to draw over.
@@ -1967,24 +2332,6 @@ fn blank_half_covered_glyphs(frame: &mut ratatui::Frame, area: Rect) {
             buffer[(area.x - 1, y)].set_symbol(" ");
         }
     }
-}
-
-/// The overlay's last row: one `[y] 允许` per key, the key itself picked out so the
-/// row reads as buttons rather than as one more sentence to parse.
-fn choices_row(choices: &[wording::Choice]) -> Line<'static> {
-    let key_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(Color::Yellow);
-    let mut spans = Vec::new();
-    for (index, choice) in choices.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("   "));
-        }
-        spans.push(Span::styled(format!("[{}]", choice.key), key_style));
-        spans.push(Span::styled(format!(" {}", choice.label), label_style));
-    }
-    Line::from(spans)
 }
 
 /// Everything a terminal below the minimum gets: one centred sentence saying so,
@@ -2275,22 +2622,25 @@ fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
 fn draw_bottom(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
-    state: &TuiState,
+    state: &mut TuiState,
 ) -> Option<editor::Placed> {
     draw_border(frame, panes.bottom);
-    if let Some(questionnaire) = state.questionnaire() {
-        draw_questionnaire(frame, panes, questionnaire);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                wording::questionnaire_status(
-                    questionnaire.index,
-                    questionnaire.questions.len(),
-                    questionnaire.all_handled(),
-                ),
-                Style::default().fg(Color::DarkGray),
-            ))),
-            panes.hints,
-        );
+    if state.questionnaire().is_some() {
+        // The questionnaire is lifted out and put back, so the painters can record
+        // their hit regions in the same state the pointer will read them from. It has
+        // no clone: its reply channel is the one thing about it that must stay single.
+        let Some(Pending::Questionnaire(questionnaire)) = state.pending.take() else {
+            return None;
+        };
+        let cursor = draw_questionnaire(frame, panes, &questionnaire, state);
+        if let Some(cursor) = cursor {
+            frame.set_cursor_position((
+                (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
+                panes.input.y + cursor.row,
+            ));
+        }
+        draw_questionnaire_footer(frame, panes, &questionnaire, state);
+        state.pending = Some(Pending::Questionnaire(questionnaire));
         return None;
     }
     let (rows, cursor) = state
@@ -2328,18 +2678,151 @@ fn draw_bottom(
 /// fit is windowed rather than clipped: the header and the question stay put and
 /// the option window follows the highlight (spec §7, §19). The footer still says
 /// which question it is, and the cap keeps the transcript visible.
+///
+/// The rows are drawn one at a time so each one's screen row can be recorded: the
+/// option rows are clickable, and which option a row holds depends on the window the
+/// highlight is currently driving (票 04 §4, §6).
 fn draw_questionnaire(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
     questionnaire: &Questionnaire,
+    state: &mut TuiState,
+) -> Option<editor::Placed> {
+    let question = &questionnaire.questions[questionnaire.index];
+    let draft = &questionnaire.drafts[questionnaire.index];
+    let width = panes.input.width as usize;
+    let (prefix, options, _custom) = questionnaire_parts(question, draft, width);
+    let window = questionnaire_window(question, draft, width, panes.input.height as usize);
+    let full = prefix.len() + options.len() + 1;
+    let start = if full < panes.input.height as usize {
+        0
+    } else {
+        option_window_start(
+            draft.highlight,
+            options.len(),
+            (panes.input.height as usize).saturating_sub(prefix.len() + 1),
+        )
+    };
+    let visible = options
+        .len()
+        .min((panes.input.height as usize).saturating_sub(prefix.len() + 1));
+    // The custom row is the last row the window drew, whether it was pinned there by
+    // a clip or simply ended the list.
+    let custom_row = window.len().saturating_sub(1);
+    for (row, line) in window.iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(line.clone()),
+            Rect::new(
+                panes.input.x,
+                panes.input.y + row as u16,
+                panes.input.width,
+                1,
+            ),
+        );
+    }
+    for offset in 0..visible.min(window.len().saturating_sub(prefix.len())) {
+        state.regions.options.push((
+            panes.input.y + (prefix.len() + offset) as u16,
+            start + offset,
+        ));
+    }
+    state.regions.custom = Some(panes.input.y + custom_row as u16);
+    // A focused custom row shows the cursor, the way the resident editor's does: it
+    // is the only row that can be typed into (票 04 §5).
+    if questionnaire.custom_focused {
+        let label = if question.options.is_empty() {
+            wording::questionnaire_answer_label()
+        } else {
+            wording::questionnaire_custom_label()
+        };
+        let column = text_columns(label) + text_columns(&draft.custom);
+        let column = column.min(panes.input.width.saturating_sub(1) as usize) as u16;
+        Some(editor::Placed {
+            row: custom_row as u16,
+            column,
+        })
+    } else {
+        None
+    }
+}
+
+/// The questionnaire's footer: which question it is, then only the buttons that are
+/// really available.
+///
+/// The unavailable ones are not drawn, so they have no click region — the pointer and
+/// the eye see the same set (票 04 §4). The three footer labels are one-per-question
+/// wording, and the region is recorded from the same layout that painted them.
+fn draw_questionnaire_footer(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    questionnaire: &Questionnaire,
+    state: &mut TuiState,
 ) {
-    let rows = questionnaire_window(
-        &questionnaire.questions[questionnaire.index],
-        &questionnaire.drafts[questionnaire.index],
-        panes.input.width as usize,
-        panes.input.height as usize,
-    );
-    frame.render_widget(Paragraph::new(rows), panes.input);
+    let total = questionnaire.questions.len();
+    // The progress counter and the three-column gap before the first button are one
+    // span, so the column the first button starts at is the span's own width — not a
+    // second guess at it (票 04 §7).
+    let mut cursor = text_columns(&wording::questionnaire_progress(questionnaire.index, total)) + 3;
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(
+        format!(
+            "{}   ",
+            wording::questionnaire_progress(questionnaire.index, total)
+        ),
+        Style::default().fg(Color::DarkGray),
+    )];
+    let items = [
+        (
+            questionnaire.index > 0,
+            wording::questionnaire_previous(),
+            HitAction::Previous,
+        ),
+        (
+            questionnaire.index + 1 < total,
+            wording::questionnaire_next(),
+            HitAction::Next,
+        ),
+        (
+            questionnaire.all_handled(),
+            wording::questionnaire_submit(),
+            HitAction::Submit,
+        ),
+    ];
+    let mut drawn = false;
+    for (available, label, action) in items {
+        // An unavailable button is not drawn and has no region, so the next one closes
+        // the gap: the footer reads as a list of what is really on offer.
+        if !available {
+            continue;
+        }
+        // One gap *between* drawn buttons, so skipping the first does not push the
+        // second three columns further out than it is painted.
+        if drawn {
+            cursor += 3;
+        }
+        let width = text_columns(label);
+        if let Some(rect) = hint_region(panes.hints, cursor, width) {
+            state.regions.cells.push(Region { rect, action });
+        }
+        spans.push(Span::styled(
+            label.to_owned(),
+            Style::default().fg(Color::DarkGray),
+        ));
+        cursor += width;
+        drawn = true;
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), panes.hints);
+}
+
+/// The screen rectangle of a run of `columns` starting `offset` columns into `row`,
+/// or `None` when it falls off the end of the terminal.
+fn hint_region(row: Rect, offset: usize, columns: usize) -> Option<Rect> {
+    let offset = u16::try_from(offset).ok()?;
+    let columns = u16::try_from(columns).ok()?;
+    let x = row.x.checked_add(offset)?;
+    if x.checked_add(columns)? > row.right() {
+        return None;
+    }
+    Some(Rect::new(x, row.y, columns, 1))
 }
 
 /// The `/` menu: the names a leading `/` can become — the built-ins the loop handles

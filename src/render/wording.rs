@@ -505,6 +505,20 @@ pub static CLEAR_CHOICES: [Choice; 2] = [
     },
 ];
 
+/// The keys that answer a plan-mode conflict, paired with the answer each one sends.
+pub static PLAN_CHOICE_ANSWERS: [(char, crate::permissions::PlanConflict); 3] = [
+    ('o', crate::permissions::PlanConflict::Overwrite),
+    ('a', crate::permissions::PlanConflict::Append),
+    ('k', crate::permissions::PlanConflict::Keep),
+];
+
+/// The keys that answer a permission question, paired with the answer each one sends.
+pub static PERMISSION_CHOICE_ANSWERS: [(char, crate::permissions::Answer); 3] = [
+    ('y', crate::permissions::Answer::Allow),
+    ('a', crate::permissions::Answer::AlwaysAllow),
+    ('n', crate::permissions::Answer::Deny),
+];
+
 /// The keys that answer the exit confirmation (票 06 §2). The safe answer is the
 /// first-looking one to a hand that reads the row: `n` cancels, and so does `Esc`.
 pub static EXIT_CHOICES: [Choice; 2] = [
@@ -650,6 +664,21 @@ pub fn exit_title() -> &'static str {
 /// not (票 06 §2).
 pub fn exit_body() -> &'static str {
     "会话记录会保留；未发送的草稿会丢弃"
+}
+
+/// The questionnaire footer's way back one question.
+pub fn questionnaire_previous() -> &'static str {
+    "← 上一题"
+}
+
+/// The questionnaire footer's way forward one question.
+pub fn questionnaire_next() -> &'static str {
+    "下一题 →"
+}
+
+/// The questionnaire footer's submit button, drawn only once everything is handled.
+pub fn questionnaire_submit() -> &'static str {
+    "提交"
 }
 
 /// The footer that pages a questionnaire: `2 / 3`.
