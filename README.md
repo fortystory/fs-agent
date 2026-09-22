@@ -12,7 +12,7 @@
 - **权限、秘密、可撤销。** 四个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 23 张实现票全部 `done`（约 24k 行 `src/`、21k 行 `tests/`、550+ 测试）。一处诚实的缺口：**讨论协议（讨论者 + 合成器）已在库层实现并有集成测试，但 CLI 入口还没接上**——从命令行启动的目前只有单 agent 会话，讨论经库 API `assemble_discussion` 驱动。
+**状态**：v1 的 29 张实现票全部 `done`（约 27k 行 `src/`、23k 行 `tests/`、597 测试；票 30/31 是收尾审查补记的两处前端欠账，尚未做）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
@@ -67,6 +67,22 @@ estimate_margin = 1.5         # 发出去之前的估算宽容倍数
 # synthesizer_model = "deepseek-flash"
 # executor_model = "deepseek-flash"
 
+[discussion]                  # 讨论者「池子」：`/discuss` 从里面抽两个
+debaters = ["kimi-k3", "deepseek-v4-pro"]     # 简写：名字就是模型 id
+# 也可以给人设起名 + 写「灵魂」（性格 / 立场，整场讨论都照它来）：
+# [[discussion.debaters]]
+# name = "张三"
+# model = "deepseek-v4-pro"
+# soul = "法外狂徒，思路不受限制：先质疑规则，再谈方案"
+# [[discussion.debaters]]
+# name = "李四"
+# model = "deepseek-flash"
+# soul = "守法好公民：先找依据，再评估风险"
+# `soul` 只给它自己看（对方的窗口里没有），并在流上留一份，`sessions replay` 可重算
+# 池子多于两个时，每次讨论随机抽两个；`--debaters 保守,激进` 指定抽哪两个。
+# 不同厂商最好；同厂商、甚至同一个模型也能跑（多样性会弱，会有一行提示）。
+# max_rounds = 2              # 独立首轮 + 至多一次定向第二轮（默认 2）
+
 [pricing.deepseek-flash]      # USD / 百万 token；费用只作显示，闸门只数 token
 miss_input = 0.28
 cached_input = 0.028
@@ -92,15 +108,18 @@ fs-agent --plain                # 强制 plain
 fs-agent --continue             # 继续本工作区最新的会话（会话 id 不变，前缀缓存继续命中）
 fs-agent --model deepseek-v4-pro
 fs-agent --cwd /path/to/repo
+fs-agent discuss "把权限模型换成 X，风险在哪？"   # 两个异构讨论者 + 合成器
+fs-agent discuss --plain "…" 2>/dev/null          # 只要合成产物（讨论过程走 stderr）
 fs-agent --help
 ```
 
-会话里：`/undo` 回滚上一次编辑、`/plan` 与 `/endplan` 进出硬计划模式、`/<技能名> [任务]` 直接加载一个技能（包括标了 `disable-model-invocation: true` 的）、`/quit` 退出；TUI 里 **Esc** 取消正在跑的回合、**Shift+Tab** 切计划模式。
+会话里：`/undo` 回滚上一次编辑、`/plan` 与 `/endplan` 进出硬计划模式、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合、**Shift+Tab** 切计划模式。
 
 ### 子命令
 
 | 命令 | 作用 |
 | --- | --- |
+| `fs-agent discuss "问题" [--plain\|--tui] [--config PATH] [--cwd PATH] [--debaters A,B]` | 起一次多角色讨论：从 `[discussion] debaters` 池子里抽两个讨论者（`--debaters` 指定），各自独立作答（不同厂商最好；同厂商或同模型也允许），只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决。讨论落在真会话里，`sessions show` 可复盘 |
 | `fs-agent probe [--model ID]...` | 对每个已配置 key 的模型发两次真实请求，打印归一化用量，用来看前缀缓存是否命中 |
 | `fs-agent prune [--keep N] [--cwd PATH] [--dry-run]` | 手动删除本工作区的会话目录，保留最新 N 个（默认 1）。除此之外没有任何东西会删你的会话 |
 | `fs-agent sessions ls [--all] [--limit N]` | 列出本工作区（`--all` 为全部桶）的会话 |

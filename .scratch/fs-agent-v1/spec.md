@@ -226,7 +226,7 @@ Status: ready-for-agent
   EventPayload =
     // 会话骨架
     SessionStarted    { session_id, cwd, schema_version }
-    ContextInjected   { source: AgentsMd | SkillsCatalog | PlanMode, content }
+    ContextInjected   { source: AgentsMd | SkillsCatalog | Skill | PlanMode | Persona(name), content }
     SessionEnded      { reason: StopReason }
     // 讨论协议（何时发由讨论协议定，这里是槽位）
     RoundStarted      { round, mode: Independent | Targeted | Synthesis }
@@ -450,6 +450,14 @@ Status: ready-for-agent
 - **单侧缺席的收尾理由取主张最少的一个**：`RoundEnded { NoDivergence }`，缺席本身仍由该方 `TurnEnded { Error }` + 该轮没有 `MessageCompleted` 表达（查询 `discussion::protocol::round_attendance`）。
 - **合成器的输入由流上重算，且缺席必须被写明**：`synthesis_prompt(question, events)` 逐轮取 `round_attendance`，把缺席方写成「本轮缺席」，而不是把单方回答摆成共识——这是上面那条危险误读的收口。合成失败（provider 报错 / 流未到 `[DONE]` / 产出为空）⇒ `RoundEnded { Error }` + `SessionError`、产物为空串、**不重跑**（同双侧失败）。
 
+票 24–29 落地时把讨论的**前台**与**人物池**写实成机制（不改本节的任何决定，但会束缚后续票，故同样折回正文）：
+
+- **roster 是池子，成员是「人物」**：`[discussion] debaters` 至少两个，一次讨论只用两个（`discussion::pick_pair`，运行时种子取自时钟、测试给常数；`--debaters A,B` 指定）。成员 = `名字 + 模型 + 可选 soul`（简写 `["kimi-k3", …]` 的名字就是模型 id）。**名字是它在流上的身份**（转录标签、私有身份、模型看到的 `[轮 N · 名字]` 前缀都用同一个串），所以配置期就必须是「非空、不断开的单个词、池内唯一」——同一个模型的两位**必须**各起名字，没有自动后缀。
+- **异构是设计的常态，不是配置期要求**：上面那条「异构 ⇒ 并发预算天然分到两家 provider」讲的是**最理想**的情形；同厂商、甚至同一个模型都允许（一个订阅到期不该让讨论不可用），此时两个并发调用落在同一家，多样性只剩采样噪声。所以它是**一条已解析的事实**（`Config::debaters_share_a_vendor(a, b)` 判**抽到的那一对**，而不是池子），由前台每次运行明说一遍，而不是拦下来。
+- **`soul` 是流上的注入，不是私有身份**：私有身份必须**是名字的纯函数**（上一段「协议指令常驻私有身份、不进流」的成立条件），而 soul 推不出来，所以它走 `ContextInjected { source: Persona(名字) }`、**署名那位讨论者自己**——这是唯一一条不是「用户对整场说的」注入，因此投影里只有它按 `mine` 过滤（对方正在跟这个角色辩论，合成器读的是作答而不是人设）。措辞由常量 `discussion::persona_brief` 框住。注入一律钉住（§10），所以它**必须有上限**（`MAX_DEBATER_SOUL`）。
+- **轮次号在一次会话内唯一**：讨论的轮次接在流上已有的轮次之后（`discussion::last_round`），所以同一个会话里跑第二次 `/discuss` 从第 4 轮起——`round_attendance` 与 `sessions show --round N` 靠这个唯一性分辨是哪一场。合成器的材料按**辩论阶段**切（`discussion::debate_phase_start`：判据是「结束过一轮辩论、且后面还有辩论轮」，取消掉的讨论没有合成轮，所以不能只靠序号连续与否），**`sessions replay` 调同一个函数**，实发与重算不会漂。
+- **`busy` 由循环推送，前端不许推断**：前端要回答的「循环现在在不在跑东西」只有循环自己知道。从事件流猜会漏掉非回合调用（合成器的单发调用只发 `Delta` / `Message` / `Usage`，**没有回合边界**）；从「没有 prompt 在飞」猜在循环问出**第一行之前**也成立（那正是组装期）。两条都会把 `Ctrl-C` 变成空闲循环丢弃的取消手势（§6），读起来就是键盘死了。
+
 ### 16. 执行者
 
 - **v1 = 一个通用 `task` 工具**，不做专职角色、不引入第三种身份。「角色」是**配置**不是代码结构（挂点是 args schema 里的 `role` + 组装期构造）。
@@ -608,6 +616,7 @@ Status: ready-for-agent
 - **术语照 `CONTEXT.md`。** 地图里有两处**有意留下的别名**（票 16 §2 标题的「聚合器」、票 14/22 的「子 agent / subagent」）：实现与票面都按词汇表走（**合成器 / 执行者**），不要跟着那两处写。
 - **地图做过一次全图审计**（2026-09-13）：修掉 24 处正文与交接块不一致 / 别名，收口 5 处 schema 缺口。**元发现值得带进 `/to-tickets`**：那 24 处里约一半的根因是「先写答案、后来由别的票修正它，但**没回改正文**」。所以：**实现票若改变了本 spec 的任何决定，必须回改本 spec**，别只在票的评论区里交接。
 - **票 02 回改**（2026-09-14）：真实调用核出 Kimi 的两套系统（Open Platform / Kimi Code）与 Kimi Code 的 403/401 限额语义，已折进 §4、§17——票 14 的成本闸门依赖 §17 那句原本写成「只有 429」的措辞。
+- **票 24–29 回改**（2026-09-22）：讨论的前台（`discuss` 子命令 + 活会话上的 `/discuss`）、人物池与 `soul`、以及 `busy` 的推送式判定折回 §2 与 §15——**之前只写在票的评论区与 `docs/discussion.md` 里**，正是上一段那条规则要禁止的形态。三处具体回改：§2 的 `ContextInjected.source` 补上 `Skill`（票 08 就加了，一直没回改）与 `Persona(name)`；§15 新增「roster 是池子 / 成员是人物」「异构不是配置期要求」「`soul` 是流上的注入」「轮次号一次会话内唯一」「`busy` 由循环推送」五条机制；§15 原有的「异构 ⇒ 并发预算天然分到两家 provider」被收窄成「最理想的情形」，同厂商时两个并发调用落在同一家。**这次审查还发现两处无票落地的前端工作**（四种问题的覆盖层形态、`/` 补全菜单），已补记成票 30；票 29 那句「顺带发现（未改，留给需要时）」的权限模态缺口补记成票 31。**票 24 的一条勾选是空的**：`examples/discuss.rs` 在本仓库历史里从未存在，没有可删的示例。
 - **票 10 回改**（2026-09-21）：讨论协议落成三层——`discussion`（纯策略：结论判定、轮次策略、身份与合成提示）、`agent`（控制流：轮次循环、两个并发回合、单发合成调用，仍是唯一写流者）、组装层（`assemble_discussion`：一块 `SessionScaffold` 开两个讨论者会话 + 一个合成器会话）。§15 新增的六条机制里有两条会束缚后续票——**轮次投影窗口**（票 17 的 replay 必须复现）与**常量私有身份**（system 是缓存前缀的头）——所以折回正文而不只写在票的评论里。**边界未变**：`discussion` 不碰 `provider`，provider 调用全在 `agent`。为让两个讨论者并发写同一条流，`EventLog` 变成可 `Clone` 的共享句柄（内部 `Mutex`，每条事件仍原子落入、`seq` 仍是行号），`project()` 的入参从 `&EventLog` 收窄成 `&[Event]`（更纯，也让轮次窗口自然）。两个讨论者会话共享一份**权限策略**：用户在同一个终端上说的「本会话记住允许」是会话级事实，不是某个讨论者的私产——§12 的「不继承允许」讲的是**委派链向下**（讨论者 → 执行者），兄弟会话之间不在那条链上。
 - **回数 / 成本的事实**（用来判断实现是否走样）：一次讨论 3 或 5 次调用；执行者默认 25 轮、并发上限 5；单 agent 默认 100 回合；一次机械判定不花钱。
 - **三条不变量，任何实现票都不许绕**：(1) 每个 `tool_call` 恰好一条结果；(2) 存在未出结果的 `tool_call` 时**绝不**调 provider（pending 是对事件流的查询，**作用域 = 发起调用的那个 agent**：票 10 起两个讨论者并发在飞，**对方**未出结果的 `tool_call` 不是本方的欠账，会话级那次全量查询留给 `--continue` 的悬空恢复）;（3）**只有循环写事件流**。
