@@ -1229,7 +1229,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    assert!(text.contains("权限询问：write_file"), "{text}");
+    assert!(text.contains("权限询问："), "{text}");
     assert!(text.contains("[y] 允许"), "the keys come with it: {text}");
 
     let modal = rows
@@ -1282,7 +1282,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
 }
 
 #[test]
-fn a_question_splits_into_a_title_a_summary_a_call_and_a_row_of_buttons() {
+fn a_question_splits_into_a_title_a_description_a_call_and_a_row_of_buttons() {
     let mut state = state();
     let (ask, _rx) = ask_permission();
     state.request(ask);
@@ -1295,17 +1295,18 @@ fn a_question_splits_into_a_title_a_summary_a_call_and_a_row_of_buttons() {
             .unwrap_or_else(|| panic!("{needle:?} is on screen:\n{text}"))
     };
 
-    // Five parts, top to bottom: what is asked, what the action is, what the call is
-    // *for* (the same words the folded transcript line uses), the concrete call, and
-    // the keys that answer it.
-    let title = row_of("权限询问：write_file");
-    let summary = row_of("写入一个文件");
+    // Four parts, top to bottom: what is asked, what the call is *for* (the same words
+    // the folded transcript line uses), the concrete call, and the keys that answer it.
+    // The title stopped naming the tool and the plain-sentence summary is gone, because
+    // the description row says the same thing in the words the reader has already seen
+    // (2026-09-23, user request: the popup repeated itself).
+    let title = row_of("权限询问：");
     let description = row_of("调用 write_file a.rs");
     let call = row_of("write_file（path=a.rs）");
     let keys = row_of("[y] 允许");
     assert!(
-        title < summary && summary < description && description < call && call < keys,
-        "title, summary, description, call, then the buttons:\n{text}"
+        title < description && description < call && call < keys,
+        "title, description, call, then the buttons:\n{text}"
     );
     // Each part keeps its own row: a command can no longer push the keys into the
     // middle of a sentence, and the keys cannot bury the command.
@@ -1315,14 +1316,14 @@ fn a_question_splits_into_a_title_a_summary_a_call_and_a_row_of_buttons() {
         rows[keys]
     );
     assert!(
-        !rows[title].contains("path=a.rs") && !rows[title].contains("写入一个文件"),
-        "so does the title: {:?}",
-        rows[title]
+        !rows[call].contains("调用 write_file"),
+        "and the call row carries the call, not the description: {:?}",
+        rows[call]
     );
     assert!(
-        !rows[summary].contains("path=a.rs"),
-        "and the summary explains an action, it does not repeat the call: {:?}",
-        rows[summary]
+        !rows[description].contains("path=a.rs"),
+        "while the description says what it is for, not how to run it: {:?}",
+        rows[description]
     );
 }
 
@@ -1357,7 +1358,8 @@ fn a_long_command_still_says_what_it_would_do() {
     use fs_agent::render::{AnswerChoice, AskRequest, Question};
 
     // The complaint this row answers: a wall of shell is not something a person can
-    // read, so the question says what kind of action it is *first*.
+    // read, so the question says what the call is *for* — in the same words the folded
+    // transcript line uses — before the wall itself.
     let mut state = state();
     let (tx, _rx) = tokio::sync::oneshot::channel::<AnswerChoice>();
     state.request(ConsoleRequest::Ask(AskRequest {
@@ -1375,15 +1377,18 @@ fn a_long_command_still_says_what_it_would_do() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    let summary = rows
+    let description = rows
         .iter()
-        .position(|row| row.contains("shell 命令"))
-        .unwrap_or_else(|| panic!("the summary is on screen:\n{text}"));
+        .position(|row| row.contains("调用 bash"))
+        .unwrap_or_else(|| panic!("the description is on screen:\n{text}"));
     let keys = rows
         .iter()
         .position(|row| row.contains("[y] 允许"))
         .unwrap_or_else(|| panic!("the buttons are on screen:\n{text}"));
-    assert!(summary < keys, "the summary leads the buttons:\n{text}");
+    assert!(
+        description < keys,
+        "the description leads the buttons:\n{text}"
+    );
     assert!(
         text.contains("git ls-files"),
         "and the command is still there to read:\n{text}"

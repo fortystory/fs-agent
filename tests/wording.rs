@@ -272,7 +272,7 @@ fn the_input_line_prompts_read_in_chinese() {
 fn a_question_has_a_title_a_body_and_a_row_of_choices() {
     // The overlay's three parts, each named on its own: a title that says what is
     // being asked, a body that says what it is about, and the keys (spec §9).
-    assert_eq!(wording::permission_title("bash"), "权限询问：bash");
+    assert_eq!(wording::permission_title(), "权限询问：");
     assert_eq!(
         wording::permission_call("bash", "command=rm -rf /"),
         "bash（command=rm -rf /）"
@@ -308,51 +308,6 @@ fn a_question_has_a_title_a_body_and_a_row_of_choices() {
         wording::choices_text(&wording::CLEAR_CHOICES),
         "[y] 清空 / [n] 保留"
     );
-}
-
-#[test]
-fn a_permission_summary_says_what_the_action_is() {
-    // The row a reader gets when the arguments are a wall of text: one plain sentence
-    // about the *action*, never a reading of the arguments.
-    assert_eq!(
-        wording::permission_summary("bash"),
-        "在你的工作区里执行一条 shell 命令（可以读写文件、访问网络）"
-    );
-    assert_eq!(
-        wording::permission_summary("write_file"),
-        "写入一个文件（新建，或者整体覆盖已有的）"
-    );
-    assert_eq!(
-        wording::permission_summary("read_file"),
-        "读取一个文件的内容"
-    );
-    assert_eq!(
-        wording::permission_summary("edit_file"),
-        "修改一个文件里的一段内容"
-    );
-    assert_eq!(
-        wording::permission_summary("custom__git__status"),
-        "运行你在配置里声明的自定义工具 git/status"
-    );
-    // A tool this crate does not know still gets a sentence: the name is all there is.
-    assert_eq!(wording::permission_summary("mystery"), "调用 mystery 工具");
-    // Every built-in is *named* in the table; falling through to the generic tail
-    // would be a missing sentence rather than an answer.
-    for name in [
-        "bash",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "task",
-        "skill",
-        "repo_map",
-    ] {
-        let summary = wording::permission_summary(name);
-        assert!(
-            !summary.starts_with("调用 "),
-            "{name} has no sentence of its own: {summary}"
-        );
-    }
 }
 
 #[test]

@@ -831,10 +831,7 @@ impl Pending {
                 question: Question::Permission(request),
                 ..
             } => Modal {
-                title: wording::permission_title(&request.tool_name),
-                // The plain sentence comes first: a reader who cannot parse the
-                // arguments still has to know what they are saying yes to.
-                summary: Some(wording::permission_summary(&request.tool_name)),
+                title: wording::permission_title().to_owned(),
                 // Then the same one-line description the folded transcript line
                 // carries — and *then* the call as it will run, because approving is
                 // the one moment the exact command has to be readable (2026-09-23).
@@ -854,7 +851,6 @@ impl Pending {
                 ..
             } => Modal {
                 title: wording::plan_conflict_title().to_owned(),
-                summary: None,
                 description: None,
                 detail: Some(wording::plan_conflict_body(&path.display().to_string())),
                 choices: &wording::PLAN_CHOICES,
@@ -865,7 +861,6 @@ impl Pending {
             },
             Pending::Paste { chars, .. } => Modal {
                 title: wording::paste_title().to_owned(),
-                summary: None,
                 description: None,
                 detail: Some(wording::paste_body(*chars)),
                 choices: &wording::PASTE_CHOICES,
@@ -873,7 +868,6 @@ impl Pending {
             },
             Pending::ClearDraft => Modal {
                 title: wording::clear_draft_title().to_owned(),
-                summary: None,
                 description: None,
                 detail: Some(wording::clear_draft_body().to_owned()),
                 choices: &wording::CLEAR_CHOICES,
@@ -881,7 +875,6 @@ impl Pending {
             },
             Pending::Exit => Modal {
                 title: wording::exit_title().to_owned(),
-                summary: None,
                 description: None,
                 detail: Some(wording::exit_body().to_owned()),
                 choices: &wording::EXIT_CHOICES,
@@ -903,9 +896,6 @@ impl Pending {
 struct Modal {
     /// The title row, higher up and bolder than the rest: `权限询问：bash`.
     title: String,
-    /// What the action is, in one plain sentence — the row a reader who cannot parse
-    /// the arguments reads. Absent when the question is already plain enough.
-    summary: Option<String>,
     /// What the call is *for*, in the very words the folded transcript line uses
     /// (`调用 bash 查看 git status`), so the question and the line it is about read
     /// alike (2026-09-23, user request). Absent for a question that is not about a tool
@@ -2250,9 +2240,6 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     }
     // What the action is, then the call itself: the sentence a reader can act on
     // first, the exact arguments under it.
-    if let Some(summary) = modal.summary.as_deref() {
-        rows.extend(pane::wrap_text(summary.trim(), inner));
-    }
     // What the call is for, then the call as it will run: orientation, then the thing
     // being approved.
     if let Some(description) = modal.description.as_deref() {

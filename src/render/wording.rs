@@ -770,54 +770,13 @@ pub fn choices_text(choices: &[Choice]) -> String {
         .join(" / ")
 }
 
-/// The **title** row of a permission overlay: what is being asked, in the tool's
-/// own name (`权限询问：bash`).
-pub fn permission_title(tool_name: &str) -> String {
-    permission_asked(Some(tool_name), "")
-}
-
-/// The **summary** row of a permission overlay: one plain sentence saying what the
-/// call *does*, for a reader who cannot be expected to read the arguments.
+/// The permission overlay's title.
 ///
-/// A command can be long enough that "yes or no" is a question about a wall of text;
-/// the summary is what turns it back into a question about an action — it would *run
-/// a shell command*, *overwrite a file*, *modify a file*. It says only what the tool
-/// is for, never what a particular argument means, because a guess about the
-/// arguments would be exactly the kind of reading this row exists to save the user
-/// (spec §9).
-///
-/// Names come from the tool table's own constants rather than from string literals,
-/// so renaming a tool cannot quietly leave its sentence behind. A name the table does
-/// not know still gets one: tools can also be declared in configuration.
-pub fn permission_summary(tool_name: &str) -> String {
-    match tool_name {
-        crate::tools::BASH_TOOL => {
-            "在你的工作区里执行一条 shell 命令（可以读写文件、访问网络）".to_owned()
-        }
-        crate::tools::READ_FILE => "读取一个文件的内容".to_owned(),
-        crate::tools::WRITE_FILE => "写入一个文件（新建，或者整体覆盖已有的）".to_owned(),
-        crate::tools::EDIT_FILE => "修改一个文件里的一段内容".to_owned(),
-        crate::tools::TASK_TOOL => "派出一个执行者去干活，它有自己的轮数预算".to_owned(),
-        crate::context::skills::SKILL_TOOL => "把一份技能说明加载进上下文".to_owned(),
-        crate::context::repo_map::REPO_MAP_TOOL => {
-            "扫一遍仓库，生成一份符号地图（只读）".to_owned()
-        }
-        declared if crate::tools::is_custom_tool(declared) => match custom_tool_parts(declared) {
-            Some((namespace, tool)) => format!("运行你在配置里声明的自定义工具 {namespace}/{tool}"),
-            None => "运行一个你在配置里声明的自定义工具".to_owned(),
-        },
-        other => format!("调用 {other} 工具"),
-    }
-}
-
-/// The `(namespace, tool)` a declared tool's wire name carries, when it has both.
-///
-/// `custom__git__status` reads back as `("git", "status")`; anything else is `None`
-/// and gets the generic sentence.
-fn custom_tool_parts(name: &str) -> Option<(&str, &str)> {
-    let rest = name.strip_prefix(crate::config::CUSTOM_TOOL_PREFIX)?;
-    let (namespace, tool) = rest.split_once(crate::config::CUSTOM_TOOL_SEPARATOR)?;
-    (!namespace.is_empty() && !tool.is_empty()).then_some((namespace, tool))
+/// It no longer names the tool: the row under it opens with `调用 工具 …`, which is the
+/// same sentence the folded transcript line carries, so the name is there once
+/// (2026-09-23, user request: the popup repeated itself).
+pub fn permission_title() -> &'static str {
+    "权限询问："
 }
 
 /// The **body** row of a permission overlay: the concrete call the question is
