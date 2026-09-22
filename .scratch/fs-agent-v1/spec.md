@@ -392,6 +392,7 @@ Status: ready-for-agent
 - **会话 id = `<UTC 时间戳>-<短随机后缀>`，`--continue` 之后绝不改变**（§4 的 `prompt_cache_key` 靠它保住前缀缓存）。
 - **拓扑 = 执行者的事件在同一个流里**（`ExecutorSpawned{executor_id, parent}` + `SpeakerId::Executor`）；「嵌套 Session」是**内存里的值结构**，不是文件布局；**存储层不做可见性裁剪**。
 - **恢复撞上悬空 `tool_call`** → **补一条合成的失败结果**（`ok:false`，错误信息说明「会话中断于此，结果未知」；**不丢弃、不重执行**），**不追加第二个 `SessionStarted`**。
+- **恢复的结果同时进转录**（§19）：`--continue` 不只是把事件流读进内存会话——组装后会按同一 `apply` 路径把全量事件重播给 TUI 渲染器，所以上面那条合成失败结果**也会出现在转录里**（`ok: false` + `INTERRUPTED`），而不是只在二次投影里可见。
 - **不变量精确措辞**：`流 + 落盘文件 + 投影规则 → messages`，且**投影不读落盘文件**（保持纯函数）；指针失效**降级为预览、绝不失败**，模型要全文就自己读文件（不需要新工具）。
 - **`/undo` 不碰用户的 git**：编辑工具把**实际被替换区段的旧内容**（不是 `old_string`——降级梯会命中不同文本）落到 `outputs/<tool_call_id>.before`；`/undo` 按命名约定找回那次 `edit_file` 调用并写回。**不做「每次编辑自动 git commit」**（会裹走用户未提交的改动、且在非 git 目录失效）。`/undo` 必须取与编辑**同一把 per-path 锁**。
   - 流上没有字节偏移，所以区域靠**重放验证**找回：候选还原必须能让编辑梯重新产出当前内容，才算命中（降级匹配因此同样可还原）；`replace_all` 的 `.before` 是 `old_string` 的重复，条数可数。**v1 的已知边界**：纯删除（`new_string` 为空）没有位置可找回，`/undo` 一律**拒绝**而不是猜。
@@ -558,7 +559,8 @@ Status: ready-for-agent
   **模型可读的错误结果**，绝不挂住（同 User Story 8 对权限询问的降级要求）。
 - **呈现**：说话人前缀**逐行**（`[kimi]` / `[deepseek]` / `[executor:<id>]` / `[user]`）、轮次分节线、分歧缩进块、工具调用一行摘要、hook 反馈与工具结果**归成一处**（同 `tool_call_id`）。
 - **headless 纯净性靠结构**：渲染器只写两个显式 sink（`stdout_result` / `stderr_diagnostic`）；stdout **只放最终产物**（`TurnEnded{Completed}` / 讨论 `Consensus` 的 assistant 文本），其余全 stderr；**执行者的一回合不是最终产物**（它既不上 stdout，也不覆盖派发者那一回合的文本，§16）。
-- **TUI 栈 = `ratatui` + `crossterm` 默认特性 + inline viewport**（定稿内容 `insert_before` 推进 scrollback、live 留 `Viewport::Inline`；**否决 alt screen**——转录要能滚动 / 复制）；**高亮 = `tree-sitter-highlight`**（树已在，闭包 15，不引 C 构建依赖；代价是终端渲染器自己写），diff 着色与语法高亮是**两层**。
+- **`--continue` 把历史重播进 TUI 转录**（`.scratch/tui-history-replay/spec.md`）：CLI 在组装**之后**照 `Catalog` 的先例推一条新的前端控制请求 `Replay { events }`，载荷取组装后的全量事件快照（**含恢复补写的合成失败结果**，§11）。渲染器逐条走与 live 相同的 `apply`，所以块 / 折叠提示行 / 详情命中 / 信息面板 / header 模式全部自然重建；**分帧**推进（每批 ≤ 512 条事件**且** ≤ 2000 源行、先到先停，期间不进 `select!` 等 tick），底部提示行临时显示 `恢复历史 n/m`，完成后先插一条 `── 以上为历史 ──` 再 flush 缓冲的 live 事件（banner 因此排在历史之后）。重播期间不接受提交、鼠标不响应、`Ctrl-C` 直接退出，读失败降级为不重播 + 诊断而**不阻塞启动**。**不改事件 schema、不动 plain / headless**。
+- **TUI 栈 = `ratatui` + `crossterm` 默认特性 + alt screen 四分区全屏**（header / 转录 / 信息面板 / 输入 + 提示；**否决 inline viewport**——转录要能滚动 / 复制的诉求由面板自持滚动缓冲满足，见 `docs/adr/0002-fullscreen-alt-screen-tui.md`。本行由 `.scratch/tui-layout/spec.md` 推翻，2026-09-23 回改正文）；**高亮 = `tree-sitter-highlight`**（树已在，闭包 15，不引 C 构建依赖；代价是终端渲染器自己写），diff 着色与语法高亮是**两层**。
 - **配置**：`~/.config/fs-agent/config.toml`（TOML）；**不**自动加载项目 `.env`；优先级 **`config.toml` > 已导出 env > 内置默认**。
 - **模式、名册、预算、路径锁、渲染器、provider 全部在组装期注入**——库入口不读环境。
 
@@ -649,6 +651,7 @@ Status: ready-for-agent
   只有主会话能问、零 schema 改动）与 §19（接管的形态与分页/跳过规则、接管只给这一类、`Esc` 保持原义、
   三个渲染器各自的降级）。它**不改 §2**：问题在 `tool_call` args、答案在 result，`--continue` 撞上
   挂起的问题复用既有的悬空调用合成结果。
+- **`.scratch/tui-history-replay/` 回改**（2026-09-23）：`--continue` 的历史重播折回 **§19**（新的前端控制请求、分帧预算、进度行、历史分隔行、详情复用与四种降级、失败不阻塞启动），恢复结果同时进转录折回 **§11**。那份 spec（`.scratch/tui-history-replay/spec.md`）是本项的可建计划；它的 `Further Notes` 记了两处勘误：设计票说手工清单新增 ⑫，实际应是 **⑭**（`tui-ux` 已占用 ⑫/⑬）；设计票说回改落在 §7，实际是 §19 与 §11（§7 是工具 trait，与「转录从空开始」无关）。**顺带修掉 §19 里 `inline viewport` / 「否决 alt screen」那一行**——它早已由 `.scratch/tui-layout/spec.md` 与 `docs/adr/0002-fullscreen-alt-screen-tui.md` 推翻，正文一直没跟（同一段提到 `:526` 的行号也已漂移）。
 - **票 10 回改**（2026-09-21）：讨论协议落成三层——`discussion`（纯策略：结论判定、轮次策略、身份与合成提示）、`agent`（控制流：轮次循环、两个并发回合、单发合成调用，仍是唯一写流者）、组装层（`assemble_discussion`：一块 `SessionScaffold` 开两个讨论者会话 + 一个合成器会话）。§15 新增的六条机制里有两条会束缚后续票——**轮次投影窗口**（票 17 的 replay 必须复现）与**常量私有身份**（system 是缓存前缀的头）——所以折回正文而不只写在票的评论里。**边界未变**：`discussion` 不碰 `provider`，provider 调用全在 `agent`。为让两个讨论者并发写同一条流，`EventLog` 变成可 `Clone` 的共享句柄（内部 `Mutex`，每条事件仍原子落入、`seq` 仍是行号），`project()` 的入参从 `&EventLog` 收窄成 `&[Event]`（更纯，也让轮次窗口自然）。两个讨论者会话共享一份**权限策略**：用户在同一个终端上说的「本会话记住允许」是会话级事实，不是某个讨论者的私产——§12 的「不继承允许」讲的是**委派链向下**（讨论者 → 执行者），兄弟会话之间不在那条链上。
 - **回数 / 成本的事实**（用来判断实现是否走样）：一次讨论 3 或 5 次调用；执行者默认 25 轮、并发上限 5；单 agent 默认 100 回合；一次机械判定不花钱。
 - **三条不变量，任何实现票都不许绕**：(1) 每个 `tool_call` 恰好一条结果；(2) 存在未出结果的 `tool_call` 时**绝不**调 provider（pending 是对事件流的查询，**作用域 = 发起调用的那个 agent**：票 10 起两个讨论者并发在飞，**对方**未出结果的 `tool_call` 不是本方的欠账，会话级那次全量查询留给 `--continue` 的悬空恢复）;（3）**只有循环写事件流**。

@@ -106,4 +106,6 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 
 **下一步 = handoff，不是 build**：`/to-spec` 把 5 张票的 decisions 折成可建计划（按 `grilling：测试与验证迁移` §7 回改 `fs-agent-v1/spec.md`、`docs/render.md`、手工清单与 pty 脚本）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。**`tui-ux` 已落地（2026-09-23），本图实现可直接开始**；**历史行必须经 `TuiState::apply`**（`links`）才有 `▸` 命中。**本图不再加票。**
 
+**2026-09-23 handoff 已落地**：`/to-spec` 的产物是 **`.scratch/tui-history-replay/spec.md`**（`Status: ready-for-agent`，含 5 张票的全部契约 + 勘误两条），并按 §7 回改了 `fs-agent-v1/spec.md` 的 **§19**（历史重播一条）与 **§11**（恢复结果同时进转录）——顺带修掉 §19 里早已被 tui-layout 与 ADR 0002 推翻、正文却没跟的 `inline viewport` 一行。**两处勘误**：设计票说的手工清单 ⑫ 实际是 **⑭**（`tui-ux` 已占 ⑫/⑬）；设计票说的回改落点 §7 实际是 §19/§11。`docs/render.md`、`docs/tui-manual-checklist.md`、`scripts/tui-startup-check.py` 的回改**刻意留给实现落地时做**（那些文档描述的是已实现的系统）。**下一步 = `/to-tickets`**，实现票编号从 `06` 起。
+
 **待确认**：无。五张票的决定都已在 live exchange 里由维护者拍板；剩下的只是执行。
