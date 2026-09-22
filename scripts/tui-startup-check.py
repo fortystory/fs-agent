@@ -30,10 +30,10 @@ Run after `cargo build`:
 
     python3 scripts/tui-startup-check.py [binary] [runs]
 
-Each run is made twice, once leaving by `Ctrl-C` and once by `/quit`. Exits 0 when
-every run is green. A pty that does not answer the cursor-position
-query (`ESC[6n`) makes ratatui fail to initialise, which is why this script
-answers it.
+Each run is made once per way out: `Ctrl-C`, `/quit`, and `Ctrl-D` followed by `y`
+at the exit confirmation (票 06). Exits 0 when every run is green. A pty that does
+not answer the cursor-position query (`ESC[6n`) makes ratatui fail to initialise,
+which is why this script answers it.
 """
 import collections
 import fcntl
@@ -89,10 +89,11 @@ TEARDOWN = [
     "\x1b[?2004l",
 ]
 
-# The two ways out a user actually has. Both have to hand the terminal back, so
-# every run is made twice (spec §1: `/quit`, idle `Ctrl-C`; the panic path shares
-# the same function but cannot be triggered on demand -- see the manual list).
-GESTURES = [("ctrl-c", b"\x03"), ("/quit", b"/quit\r")]
+# The ways out a user actually has. All of them have to hand the terminal back, so
+# every run is made once per gesture (spec §1: `/quit`, idle `Ctrl-C`; 票 06:
+# `Ctrl-D` then `y` at the confirmation; the panic path shares the same function but
+# cannot be triggered on demand -- see the manual list).
+GESTURES = [("ctrl-c", b"\x03"), ("/quit", b"/quit\r"), ("ctrl-d y", b"\x04y")]
 
 # The tty flags a shell has to have back: canonical input, echo and signals.
 Modes = collections.namedtuple("Modes", "canonical echo signals")
