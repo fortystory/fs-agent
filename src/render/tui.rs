@@ -827,7 +827,7 @@ impl Pending {
                 choices: &wording::PERMISSION_CHOICES,
                 actions: wording::PERMISSION_CHOICE_ANSWERS
                     .iter()
-                    .map(|(key, answer)| HitAction::Answer(*key, AnswerChoice::Permission(*answer)))
+                    .map(|(_, answer)| HitAction::Answer(AnswerChoice::Permission(*answer)))
                     .collect(),
             },
             Pending::Loop {
@@ -840,7 +840,7 @@ impl Pending {
                 choices: &wording::PLAN_CHOICES,
                 actions: wording::PLAN_CHOICE_ANSWERS
                     .iter()
-                    .map(|(key, conflict)| HitAction::Answer(*key, AnswerChoice::Plan(*conflict)))
+                    .map(|(_, conflict)| HitAction::Answer(AnswerChoice::Plan(*conflict)))
                     .collect(),
             },
             Pending::Paste { chars, .. } => Modal {
@@ -908,7 +908,7 @@ struct Region {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitAction {
     /// Answer the loop's question with this choice, exactly as pressing its key would.
-    Answer(char, AnswerChoice),
+    Answer(AnswerChoice),
     /// Confirm the oversized paste.
     Paste,
     /// Confirm clearing the draft.
@@ -957,15 +957,17 @@ impl Regions {
         self.custom = None;
     }
 
-    /// The option index a click on `row` landed on, if that row was an option.
-    fn option_hit(&self, _column: u16, row: u16) -> Option<usize> {
+    /// The option index a click on `row` landed on, if that row was an option. The
+    /// whole row is the target, so the column does not narrow it (票 04 §4).
+    fn option_at(&self, row: u16) -> Option<usize> {
         self.options
             .iter()
             .find(|(option_row, _)| *option_row == row)
             .map(|(_, index)| *index)
     }
 
-    fn custom_at(&self, _column: u16, row: u16) -> bool {
+    /// Whether `row` is the free-text row.
+    fn custom_at(&self, row: u16) -> bool {
         self.custom == Some(row)
     }
 
@@ -1155,11 +1157,11 @@ impl TuiState {
                         Some(text) => {
                             let text = text.clone();
                             self.open_thinking(speaker.clone());
-                            self.settle_thinking(Some(text), false);
+                            self.settle_thinking(Some(text));
                         }
                         None => {
                             if self.thinking_open {
-                                self.settle_thinking(None, true);
+                                self.settle_thinking(None);
                             }
                         }
                     }
@@ -1242,16 +1244,16 @@ impl TuiState {
         }
         let text = std::mem::take(&mut self.reasoning);
         let recorded = !text.is_empty();
-        self.settle_thinking(recorded.then_some(text), !recorded);
+        self.settle_thinking(recorded.then_some(text));
     }
 
     /// Settle the thinking line — recorded trace or not — and make it the way into
     /// its detail.
     ///
-    /// `None` with `unrecorded` is the synthesizer's shape: deltas streamed, the log
-    /// holds no whole text. `None` without it (and with no line open) is the
-    /// ordinary no-reasoning turn, which adds nothing at all (票 02 §1).
-    fn settle_thinking(&mut self, text: Option<String>, unrecorded: bool) {
+    /// `Some` is a recorded trace; `None` is the synthesizer's shape — deltas
+    /// streamed, the log holds no whole text — and its detail says so. A turn with no
+    /// thinking line open at all adds nothing (票 02 §1).
+    fn settle_thinking(&mut self, text: Option<String>) {
         if !self.thinking_open {
             return;
         }
@@ -1264,7 +1266,7 @@ impl TuiState {
         );
         let detail = Detail {
             title: title.clone(),
-            kind: DetailKind::Thinking { text, unrecorded },
+            kind: DetailKind::Thinking { text },
         };
         // In place: one thinking segment is one line, from `正在思考` to `思考完成`
         // (票 02 §1). The leading `▸` is what says the line can be opened.
@@ -1359,13 +1361,7 @@ impl TuiState {
                     // The wheel does nothing over a one-line question.
                     return;
                 };
-                let hit = self
-                    .regions
-                    .cells
-                    .iter()
-                    .find(|region| region.rect.contains((column, row).into()))
-                    .map(|region| region.action);
-                let Some(action) = hit else {
+                let Some(action) = self.regions.action_at(column, row) else {
                     return;
                 };
                 let pending = self.pending.take().expect("a question is up");
@@ -1373,7 +1369,7 @@ impl TuiState {
                 // the same answer its key sends — and the renderer's own
                 // confirmations answer themselves.
                 match (pending, action) {
-                    (Pending::Loop { reply, .. }, HitAction::Answer(_, choice)) => {
+                    (Pending::Loop { reply, .. }, HitAction::Answer(choice)) => {
                         let _ = reply.send(choice);
                     }
                     (pending, action) => self.own_answer(pending, action),
@@ -1417,11 +1413,11 @@ impl TuiState {
                 // the footer's buttons are recorded as rectangles like every other
                 // button, so all of them are looked up through the same table
                 // (票 04 §1).
-                if let Some(option) = regions.option_hit(column, row) {
+                if let Some(option) = regions.option_at(row) {
                     questionnaire.select_option(option);
                     return;
                 }
-                if regions.custom_at(column, row) {
+                if regions.custom_at(row) {
                     // Clicking the free-text row hands it the cursor; the keyboard
                     // focus otherwise stays where the last key left it (票 04 §5).
                     questionnaire.focus_custom();
@@ -3001,11 +2997,6 @@ pub struct RenderedLine {
 }
 
 impl RenderedLine {
-    /// A line with nothing behind it.
-    fn plain(line: Line<'static>) -> Self {
-        Self { line, link: None }
-    }
-
     /// A line whose whole row opens `detail`.
     fn linked(line: Line<'static>, detail: Detail) -> Self {
         Self {
@@ -3017,7 +3008,7 @@ impl RenderedLine {
 
 impl From<Line<'static>> for RenderedLine {
     fn from(line: Line<'static>) -> Self {
-        Self::plain(line)
+        Self { line, link: None }
     }
 }
 
@@ -3063,7 +3054,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
             // speaker label is tinted.
             attribute(speaker, super::markdown::to_lines(text), colors)
                 .into_iter()
-                .map(RenderedLine::plain)
+                .map(RenderedLine::from)
                 .collect()
         }
         // The user's own input — and the non-assistant system lines — shown as they
@@ -3078,7 +3069,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
             colors,
         )
         .into_iter()
-        .map(RenderedLine::plain)
+        .map(RenderedLine::from)
         .collect(),
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
@@ -3330,12 +3321,9 @@ pub struct Detail {
 #[derive(Clone)]
 enum DetailKind {
     /// A finished thinking segment. `text` is the whole trace when the stream
-    /// recorded one; `unrecorded` is the synthesizer's case, where deltas arrived
-    /// and the log holds no text (票 02 §1).
-    Thinking {
-        text: Option<String>,
-        unrecorded: bool,
-    },
+    /// recorded one, and `None` is the synthesizer's case — deltas arrived and the
+    /// log holds no text — which the detail says out loud (票 02 §1).
+    Thinking { text: Option<String> },
     /// A tool call: its arguments, and whatever the call produced.
     Tool {
         /// The id that names the spilled output file, `outputs/<id>.txt`.
@@ -3440,21 +3428,18 @@ impl TuiState {
 fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'static>> {
     let mut rows: Vec<Line<'static>> = Vec::new();
     match &detail.kind {
-        DetailKind::Thinking { text, unrecorded } => {
+        DetailKind::Thinking { text } => {
             rows.push(section_header(wording::detail_thinking_section()));
             match text {
                 Some(text) if !text.trim().is_empty() => {
                     rows.extend(pane::wrap_text(text.trim_end(), width));
                 }
-                // Both an absent trace and an unrecorded one say the same thing; the
-                // flag is kept so a later change can tell the two apart (票 02 §1).
-                _ => {
-                    let _ = unrecorded;
-                    rows.push(Line::from(Span::styled(
-                        wording::detail_reasoning_unrecorded(),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
+                // No recorded trace — the synthesizer's shape — so the body says so
+                // rather than opening blank (票 02 §1).
+                _ => rows.push(Line::from(Span::styled(
+                    wording::detail_reasoning_unrecorded(),
+                    Style::default().fg(Color::DarkGray),
+                ))),
             }
         }
         DetailKind::Tool {

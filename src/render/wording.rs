@@ -873,8 +873,8 @@ pub fn status_word(busy: bool) -> &'static str {
 }
 
 /// The live key hints, in the order they are shown: the most used first. The way
-/// out is [`EXIT_HINT`], which is reserved rather than appended, so it survives
-/// every width.
+/// out is [`EXIT_HINT_IDLE`] / [`EXIT_HINT_BUSY`] (whichever [`exit_hint`] picks),
+/// which is reserved rather than appended, so it survives every width.
 const KEY_HINTS: [&str; 5] = [
     "enter 发送",
     "ctrl-j 换行",
