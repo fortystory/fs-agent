@@ -3199,3 +3199,50 @@ fn a_click_outside_the_detail_overlay_closes_it() {
         "and those are its two edges on that row"
     );
 }
+
+#[test]
+fn a_settling_thinking_line_keeps_the_history_before_it() {
+    // A live session draws frames **between** events, and that is what fills the pane's
+    // wrap cache. A thinking line then settles *in place*, and that rewrite must not
+    // throw away the display rows of everything before it.
+    //
+    // It did. `replace_last` cleared the whole wrapped cache while `starts` kept
+    // pointing at the old offsets, so the pane came back with almost no rows: the
+    // history vanished, the pane stopped filling its height, and PgUp had nothing to
+    // scroll. Reported as "bash 命令都没了 / 输出没有占满屏幕 / PgUp 没有反映"
+    // (2026-09-23).
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(fs_agent::render::RenderEvent::Notice(format!(
+            "第 {index} 行"
+        )));
+    }
+    // A frame first, then the live thinking segment with a frame in the middle of it.
+    let _ = screen(120, 24, &mut state);
+    state.apply(reasoning_delta("先想一下。"));
+    let _ = screen(120, 24, &mut state);
+    state.apply(text_delta("答案。"));
+
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(
+        text.contains("▸ ✓ 思考完成"),
+        "the thinking line settled: {text}"
+    );
+    assert!(
+        text.contains("答案。"),
+        "and the body that settled it is there: {text}"
+    );
+    let notices = rows.iter().filter(|row| row.contains("第 ")).count();
+    assert!(
+        notices >= 5,
+        "the history before it is still on screen ({notices} rows): {text}"
+    );
+    state.key(Key::PageUp);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows.iter().any(|row| row.contains("第 2")),
+        "and PgUp still reaches further back: {}",
+        rows.join("\n")
+    );
+}

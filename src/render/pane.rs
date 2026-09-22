@@ -95,12 +95,17 @@ impl Pane {
             return;
         };
         *last = line;
-        // The rewritten line still has to reach the wrap cache. Dropping the cached
-        // rows for it is enough; the next `view` re-wraps it at the frame's width.
+        // If the row that was just rewritten has already been wrapped, its display rows
+        // are stale — and they are the **last** ones in the cache, so dropping exactly
+        // them is the whole job. Clearing the cache instead throws away every earlier
+        // line's rows while `starts` goes on pointing at their old offsets: the pane
+        // then reports a couple of rows, the history disappears from the screen and
+        // there is nothing left to scroll back through (2026-09-23, user report).
         if self.wrapped_sources == self.lines.len() {
+            if let Some(start) = self.starts.pop_back() {
+                self.wrapped.truncate(start);
+            }
             self.wrapped_sources -= 1;
-            self.starts.pop_back();
-            self.wrapped.clear();
         }
     }
 
