@@ -24,15 +24,17 @@ const BORDER_ROWS: u16 = 2;
 /// The hint row, which rides inside the bottom block under the input.
 const HINT_ROWS: u16 = 1;
 
-/// The blank rows the layout keeps above and below the middle block.
-const AIRY_ROWS: u16 = 2;
-
-/// The fewest middle-content rows worth drawing. Airy is given up to keep this
-/// rather than the other way round.
+/// The fewest middle-content rows worth drawing: the draft gives up its own room
+/// rather than the transcript's.
 const MIN_MIDDLE_ROWS: u16 = 1;
 
 /// Rows the block chrome costs whatever the terminal size: the three blocks'
-/// borders and the hint row. The airy rows and the input rows come on top.
+/// borders and the hint row. The input rows come on top.
+///
+/// There is deliberately **no** blank row between the blocks. The layout used to
+/// keep one under the header and one above the bottom block; giving both to the
+/// transcript is what the interface asked for, and it costs the arithmetic
+/// nothing but a term.
 const CHROME: u16 = 3 * BORDER_ROWS + HINT_ROWS;
 
 /// The mark's own width, shared with the painter so the two cannot drift apart.
@@ -41,8 +43,13 @@ pub const LOGO_WIDTH: u16 = 38;
 /// The rows under the mark that carry the directory, the mode and the clock.
 pub const LOGO_INFO_ROWS: u16 = 1;
 
-/// The header's content rows when the mark is drawn: the mark itself, then the one
-/// line of facts under it.
+/// The blank row between the mark and the line of facts under it. The tall header
+/// was already seven rows; the air moved from under the facts to above them, so
+/// the reader gets the mark, a breath, and where they are.
+pub const LOGO_GAP_ROWS: u16 = 1;
+
+/// The header's content rows when the mark is drawn: the mark itself, one blank
+/// row, then the one line of facts under it.
 pub const LOGO_HEIGHT: u16 = 7;
 
 /// The columns the header needs before it carries the mark: [`LOGO_WIDTH`], the
@@ -52,12 +59,11 @@ pub const LOGO_HEIGHT: u16 = 7;
 pub const LOGO_MIN_WIDTH: u16 = LOGO_WIDTH + BORDER_ROWS + 2;
 
 /// The height from which the tall header is worth its rows, read off the ladder
-/// rather than guessed: the header's content and border, the airy rows under it, the
-/// middle block's border and the fewest content rows worth drawing, and the bottom
-/// block's input row, hint row and border. Below this the header keeps its text form.
+/// rather than guessed: the header's content and border, the middle block's border
+/// and the fewest content rows worth drawing, and the bottom block's input row, hint
+/// row and border. Below this the header keeps its text form.
 pub const LOGO_MIN_HEIGHT: u16 = LOGO_HEIGHT
     + BORDER_ROWS
-    + AIRY_ROWS
     + BORDER_ROWS
     + MIN_MIDDLE_ROWS
     + BORDER_ROWS
@@ -259,28 +265,28 @@ pub fn content_width(area: Rect) -> u16 {
 ///
 /// The order here **is** the degrade ladder: the panel is hidden first (by the
 /// renderer, which knows the transcript's width), then the header loses its second
-/// line, then the airy rows go. The floor is [`MIN_WIDTH`] x [`MIN_HEIGHT`].
+/// line. The floor is [`MIN_WIDTH`] x [`MIN_HEIGHT`].
 pub fn plan(area: Rect, draft_rows: u16) -> Regions {
     let header_rows = header_content_rows(area.width, area.height);
-    // Airy is decided against the smallest draft there can be, so a draft that
-    // grows gives up its own room rather than the whitespace: at 120x24 the input
-    // may take all ten rows it is allowed, and the middle block still keeps some.
-    let airy = fits_airy(area.height, header_rows, 1);
-    let cap = max_input_rows(area.height, header_rows, airy);
+    // A draft that grows gives up the transcript's room rather than the other way
+    // round: the input may take all the rows it is allowed, and the middle block
+    // still keeps its fewest.
+    let cap = max_input_rows(area.height, header_rows);
     let input_rows = draft_rows.max(1).min(cap);
-    let airy_rows = if airy { AIRY_ROWS } else { 0 };
-    let middle_rows = area.height - CHROME - header_rows - input_rows - airy_rows;
+    let middle_rows = area
+        .height
+        .saturating_sub(CHROME + header_rows + input_rows);
 
     let header = Rect::new(area.x, area.y, area.width, header_rows + BORDER_ROWS);
     let middle = Rect::new(
         area.x,
-        header.y + header.height + u16::from(airy),
+        header.y + header.height,
         area.width,
         middle_rows + BORDER_ROWS,
     );
     let bottom = Rect::new(
         area.x,
-        middle.y + middle.height + u16::from(airy),
+        middle.y + middle.height,
         area.width,
         input_rows + HINT_ROWS + BORDER_ROWS,
     );
@@ -390,15 +396,8 @@ fn header_content_rows(width: u16, height: u16) -> u16 {
     }
 }
 
-/// Whether the airy rows survive: [`MIN_MIDDLE_ROWS`] has to be left for them to
-/// be worth having.
-fn fits_airy(height: u16, header_rows: u16, input_rows: u16) -> bool {
-    height >= CHROME + header_rows + input_rows + AIRY_ROWS + MIN_MIDDLE_ROWS
-}
-
 /// How many rows the input may take at this size.
-fn max_input_rows(height: u16, header_rows: u16, airy: bool) -> u16 {
-    let airy_rows = if airy { AIRY_ROWS } else { 0 };
-    let room = height.saturating_sub(CHROME + header_rows + airy_rows + MIN_MIDDLE_ROWS);
+fn max_input_rows(height: u16, header_rows: u16) -> u16 {
+    let room = height.saturating_sub(CHROME + header_rows + MIN_MIDDLE_ROWS);
     MAX_INPUT_ROWS.min(room).max(1)
 }

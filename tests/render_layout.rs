@@ -21,6 +21,7 @@ fn facts() -> SessionFacts {
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         budget_limit: Some(100_000),
+        speaker_order: Vec::new(),
     }
 }
 
@@ -126,9 +127,9 @@ fn a_terminal_below_the_minimum_shows_one_centred_notice() {
 
 #[test]
 fn a_wide_terminal_draws_the_mark_the_transcript_and_the_bottom_block() {
-    // 120x24 is the reference size: a tall mark header (five mark rows plus the line
-    // of facts under them), the transcript, one input row, one hint row, and a blank
-    // row above and below the middle block (spec §2).
+    // 120x24 is the reference size: a tall mark header (five mark rows, a blank
+    // row, then the line of facts), the transcript, one input row and one hint row
+    // — and no blank rows between the blocks (spec §2).
     let rows = screen(120, 24, &mut state());
 
     // The header block: the mark's rows between its borders.
@@ -146,21 +147,29 @@ fn a_wide_terminal_draws_the_mark_the_transcript_and_the_bottom_block() {
         rows[1],
         rows[5]
     );
-    assert!(
-        rows[6].contains("~/code/fortystory/fs-agent") && rows[6].contains("模式 询问"),
-        "the directory and the mode share the line under the mark: {:?}",
+    assert_eq!(
+        rows[6].trim_matches(|ch| ch == '│' || ch == ' '),
+        "",
+        "a blank row separates the mark from the facts: {:?}",
         rows[6]
+    );
+    assert!(
+        rows[7].contains("~/code/fortystory/fs-agent") && rows[7].contains("模式 询问"),
+        "the directory and the mode share the line under the mark: {:?}",
+        rows[7]
     );
 
     let middle = middle_top(&rows);
-    assert_eq!(
-        middle, 10,
-        "the mark header costs the extra rows: {rows:#?}"
-    );
+    assert_eq!(middle, 9, "the mark header costs the extra rows: {rows:#?}");
 
-    // The airy rows: the layout breathes between the blocks.
-    assert_eq!(rows[middle - 1].trim(), "", "a blank row under the header");
-    assert_eq!(rows[19].trim(), "", "a blank row above the bottom block");
+    // No airy: the middle block opens on the row after the header's border and the
+    // bottom block on the row after the middle's, so the transcript gets the two
+    // rows that used to be blank.
+    assert!(
+        rows[middle - 1].starts_with('└'),
+        "the middle opens right under the header: {:?}",
+        rows[middle - 1]
+    );
 
     // The middle block spans the transcript.
     assert!(
@@ -169,9 +178,9 @@ fn a_wide_terminal_draws_the_mark_the_transcript_and_the_bottom_block() {
         rows[middle]
     );
     assert!(
-        rows[18].starts_with('└'),
+        rows[19].starts_with('└'),
         "the middle closes: {:?}",
-        rows[18]
+        rows[19]
     );
 
     // The bottom block: the input line and the hints, in that order.
@@ -187,7 +196,7 @@ fn a_wide_terminal_draws_the_mark_the_transcript_and_the_bottom_block() {
     );
     assert!(rows[21].contains("> "), "the input prompt: {:?}", rows[21]);
     assert!(
-        rows[22].contains("ctrl-c 退出"),
+        rows[22].contains("ctrl-c"),
         "the hints name the way out: {:?}",
         rows[22]
     );
@@ -220,10 +229,10 @@ fn the_mark_is_drawn_on_the_top_rows_and_is_lit_from_above() {
 
     // 40x10 is one row short of the tall header, and 60 columns is too narrow for the
     // mark: both keep the text header rather than a clipped mark.
-    for (width, height) in [(40, 24), (40, 10), (120, 18)] {
+    for (width, height) in [(40, 24), (40, 10), (42, 17)] {
         // A fresh state: the pane can legitimately hold block glyphs (the scrollbar),
         // and the question here is only whether the *mark* is in the header. 40 columns
-        // is the mark's own width plus its borders with no air — too narrow — and 18
+        // is the mark's own width plus its borders with no air — too narrow — and 17
         // rows is one below the tall header, so both fall back to the text header.
         let mut fresh = state();
         let rows = screen(width, height, &mut fresh);
@@ -238,12 +247,20 @@ fn the_mark_is_drawn_on_the_top_rows_and_is_lit_from_above() {
             rows[0]
         );
     }
+
+    // One row taller and the mark is drawn: the tall header's threshold moved down
+    // to 18 when the airy rows left the ladder.
+    let rows = screen(42, 18, &mut state());
+    assert!(
+        rows.join("\n").contains('▄'),
+        "42x18 carries the mark: {rows:#?}"
+    );
 }
 
 #[test]
 fn a_floor_sized_terminal_still_draws_every_region() {
     // 40x10 is inside the minimum: one header line, one transcript row, one input
-    // row and one hint row, with the airy rows given up to keep them (spec §2).
+    // row and one hint row (spec §2).
     let rows = screen(40, 10, &mut state());
     for (row, line) in rows.iter().enumerate() {
         assert!(
@@ -262,11 +279,7 @@ fn a_floor_sized_terminal_still_draws_every_region() {
         rows[1]
     );
     assert!(rows[7].contains("> "), "the input row: {:?}", rows[7]);
-    assert!(
-        rows[8].contains("ctrl-c 退出"),
-        "the hint row: {:?}",
-        rows[8]
-    );
+    assert!(rows[8].contains("ctrl-c"), "the hint row: {:?}", rows[8]);
 }
 
 #[test]
@@ -286,11 +299,11 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
         "the seam meets the top border"
     );
     assert_eq!(
-        frame[(seam, top + 8)].symbol(),
+        frame[(seam, top + 10)].symbol(),
         "┴",
-        "and the top border is eight rows above the bottom one"
+        "and the top border is ten rows above the bottom one"
     );
-    for y in (top + 1)..top + 8 {
+    for y in (top + 1)..top + 10 {
         assert_eq!(
             frame[(seam, y)].symbol(),
             "│",
@@ -310,12 +323,12 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
         "no panel below 80 columns: {text}"
     );
 
-    // 80x16 is the smallest terminal that fits the panel: four middle rows, which
+    // 80x14 is the smallest terminal that fits the panel: four middle rows, which
     // is all the four core fields need.
-    let smallest = buffer(80, 16, &mut state());
-    let middle_top = (0..16)
+    let smallest = buffer(80, 14, &mut state());
+    let middle_top = (0..14)
         .find(|y| smallest[(0, *y)].symbol() == "┌" && row_text(&smallest, *y, 80).contains('┬'))
-        .expect("the panel is drawn at 80x16");
+        .expect("the panel is drawn at 80x14");
     assert!(middle_top > 0);
 }
 
@@ -330,7 +343,7 @@ fn hint_items(width: u16) -> Vec<String> {
     let rows = screen(width, 24, &mut state);
     let row = rows
         .iter()
-        .find(|row| row.contains("ctrl-c 退出"))
+        .find(|row| row.contains("ctrl-c"))
         .expect("the hint row is on screen");
     row.trim_matches(|ch| ch == '│' || ch == ' ')
         .split(" · ")
@@ -347,7 +360,7 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
     let rows = screen(120, 24, &mut state);
     let row = rows
         .iter()
-        .find(|row| row.contains("ctrl-c 退出"))
+        .find(|row| row.contains("ctrl-c"))
         .expect("the hint row is on screen");
     assert!(row.contains("esc 取消"), "{row}");
     assert!(row.contains("PgUp/PgDn 滚动"), "{row}");
@@ -357,11 +370,12 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
 
 #[test]
 fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
-    // The measured ladder: three items at 40 columns, four at 60, five at 80, six
-    // at 120 — and the state word joins them on the left once they fit (spec §10).
+    // The measured ladder with `ctrl-c/ctrl-d 退出` as the reserved way out: three
+    // items at 40 columns, four at 60, five at 80, seven at 120 — and the state word
+    // joins them on the left only where it still fits (spec §10, 票 06 §4).
     assert_eq!(hint_items(40).len(), 3, "40 columns: {:?}", hint_items(40));
-    assert_eq!(hint_items(60).len(), 5, "60 columns: {:?}", hint_items(60));
-    assert_eq!(hint_items(80).len(), 6, "80 columns: {:?}", hint_items(80));
+    assert_eq!(hint_items(60).len(), 4, "60 columns: {:?}", hint_items(60));
+    assert_eq!(hint_items(80).len(), 5, "80 columns: {:?}", hint_items(80));
     assert_eq!(
         hint_items(120).len(),
         7,
@@ -369,30 +383,49 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         hint_items(120)
     );
 
-    // At the floor the state word is the first thing to go, because giving up a
-    // hint to keep it would cost the newline key — the one hint that explains how
-    // to write a second line at all.
+    // At the floor only one hint fits before the way out, and the state word still
+    // does — it is the newline hint, one rung up, that a 40-column terminal gives up.
     let floor = hint_items(40);
-    assert_eq!(floor[0], "enter 发送", "the send hint survives: {floor:?}");
+    assert_eq!(floor[0], "就绪", "the state word fits at 40: {floor:?}");
+    assert_eq!(floor[1], "enter 发送", "then the send hint: {floor:?}");
     assert!(
-        floor.contains(&"ctrl-j 换行".to_owned()),
-        "so does the newline hint: {floor:?}"
+        !floor.contains(&"ctrl-j 换行".to_owned()),
+        "the newline hint is what the width costs: {floor:?}"
     );
-    assert_eq!(floor.last().unwrap(), "ctrl-c 退出");
+    assert_eq!(floor.last().unwrap(), "ctrl-c/ctrl-d 退出");
 
-    // From 60 columns up the state word is there, leftmost.
-    let roomy = hint_items(60);
-    assert_eq!(roomy[0], "就绪", "the state word comes back: {roomy:?}");
+    // At 60 the state word is what goes, so that two hints and the way out can fit:
+    // the quirk of "hints first, state word only if it still fits" (票 06 §4).
+    let sixty = hint_items(60);
+    assert_eq!(sixty[0], "enter 发送", "no state word at 60: {sixty:?}");
     assert!(
-        roomy.contains(&"esc 取消".to_owned()),
-        "and one more hint fits: {roomy:?}"
+        !sixty.contains(&"就绪".to_owned()),
+        "the state word is the first thing given up: {sixty:?}"
+    );
+    assert!(
+        sixty.contains(&"ctrl-j 换行".to_owned()),
+        "which is what buys the newline hint: {sixty:?}"
     );
 
-    // The long list only appears where there is room for it.
+    // At 80 columns the terminal is wide enough for five items but not six, so the
+    // state word is still the one that goes: two rows of border leave 78 columns for
+    // the hint text, and the full line needs 80.
+    let roomy = hint_items(80);
+    assert_eq!(
+        roomy[0], "enter 发送",
+        "no state word at 80 either: {roomy:?}"
+    );
     assert!(
-        hint_items(120).contains(&"PgUp/PgDn 滚动".to_owned()),
-        "the scroll hint is for wide terminals: {:?}",
-        hint_items(120)
+        roomy.contains(&"shift+tab 计划".to_owned()),
+        "but the plan-mode gesture fits: {roomy:?}"
+    );
+
+    // At 120 columns every hint and the state word are on the line.
+    let wide = hint_items(120);
+    assert_eq!(wide[0], "就绪", "the state word is back: {wide:?}");
+    assert!(
+        wide.contains(&"PgUp/PgDn 滚动".to_owned()),
+        "with the whole hint list behind it: {wide:?}"
     );
     assert!(
         !screen(174, 24, &mut state())
@@ -431,9 +464,9 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
 #[test]
 fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // The rest of the matrix the geometry table covers, each asserted for the
-    // reason it is in the table: 40x12 is where airy comes back at 40 columns,
-    // 80x24 is the panel with room to spare, and 174x50 is the ceiling — the panel
-    // is capped at 31 columns and the transcript takes the rest.
+    // reason it is in the table: 80x24 is the panel with room to spare, and 174x50
+    // is the ceiling — the panel is capped at 31 columns and the transcript takes
+    // the rest.
     for (width, height) in [(40, 12), (80, 24), (174, 50)] {
         let rows = screen(width, height, &mut state());
         let text = rows.join("\n");
@@ -447,20 +480,34 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             rows[0]
         );
         assert!(
-            text.contains("ctrl-c 退出"),
+            text.contains("ctrl-c"),
             "{width}x{height} keeps the way out: {text}"
         );
     }
 
-    // 40x12 has the airy row under the header; 40x10 (covered above) does not.
-    let airy = screen(40, 12, &mut state());
-    assert_eq!(airy[3].trim(), "", "airy returns at 40x12: {:?}", airy[3]);
-    let floor = screen(40, 10, &mut state());
-    assert_ne!(
-        floor[3].trim(),
-        "",
-        "and is given up at 40x10: {:?}",
-        floor[3]
+    // Airy is gone at every size: the row under the header's bottom border is the
+    // middle block's top border, however tall the terminal is.
+    for (width, height) in [(40, 10), (40, 12), (80, 24), (120, 24)] {
+        let rows = screen(width, height, &mut state());
+        let middle = middle_top(&rows);
+        assert!(
+            rows[middle - 1].starts_with('└'),
+            "{width}x{height} keeps no blank row under the header: {:?}",
+            rows[middle - 1]
+        );
+    }
+
+    // The panel appears from 80x14, not 80x16: with the airy rows gone the middle
+    // block has four content rows there, which is the panel's own minimum.
+    let narrow = screen(80, 14, &mut state());
+    assert!(
+        narrow.iter().any(|row| row.contains('┬')),
+        "the panel is drawn at 80x14: {narrow:#?}"
+    );
+    let smaller = screen(80, 13, &mut state());
+    assert!(
+        !smaller.iter().any(|row| row.contains('┬')),
+        "and not one row smaller: {smaller:#?}"
     );
 
     // 174x50 is wide enough that the panel is at its 31-column cap: the seam sits
@@ -524,13 +571,19 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
 /// rows ask for the number instead of remembering it — the mark header changed it
 /// once already.
 fn transcript_rows() -> usize {
+    // The transcript's **content** rows: the middle block's interior, which is its
+    // height less the two border rows. It grows with the layout, so it is measured
+    // from the frame here rather than remembered.
     let rows = screen(120, 24, &mut state());
-    let top = middle_top(&rows);
+    let middle = middle_top(&rows);
     let bottom = rows
         .iter()
-        .rposition(|row| row.starts_with('└'))
+        .enumerate()
+        .filter(|(_, row)| row.starts_with('└'))
+        .map(|(y, _)| y)
+        .nth(1)
         .expect("the middle block closes");
-    bottom - top - 1
+    bottom - middle - 1
 }
 
 /// The index of the first `第 N 行` notice visible on screen, if any.
@@ -621,9 +674,13 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
         !text.contains("行新内容"),
         "nothing has arrived yet: {text}"
     );
+    // One page up from the bottom leaves a page's overlap showing: the step is the
+    // pane's own height less the two rows the reader keeps, so at 120x24 the top of
+    // the viewport lands on notice 24 — the bottom was 31, and one page is seven.
+    let after_page_up = first_notice(&screen(120, 24, &mut state));
     assert_eq!(
-        first_notice(&screen(120, 24, &mut state)),
-        Some(40 - transcript_rows()),
+        after_page_up,
+        Some(24),
         "one page up lands on the pane's own height, not a remembered row"
     );
 
@@ -647,7 +704,6 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     // depends on how many rows the pane shows, so the two ends are compared with
     // each other rather than with a remembered row — that is what "three rows a
     // notch, and back" means at any terminal size.
-    let after_page_up = first_notice(&screen(120, 24, &mut state));
     state.mouse(mouse(MouseEventKind::ScrollUp));
     let after_wheel_up = first_notice(&screen(120, 24, &mut state));
     assert!(
@@ -799,7 +855,7 @@ fn the_input_area_grows_with_the_draft_and_the_transcript_gives_up_the_rows() {
     assert!(three[20].contains("第二行"), "{:?}", three[20]);
     assert!(three[21].contains("第三行"), "{:?}", three[21]);
     assert!(
-        three[22].contains("ctrl-c 退出"),
+        three[22].contains("ctrl-c"),
         "the hints stay under the input: {:?}",
         three[22]
     );
@@ -953,18 +1009,18 @@ fn state_without_budget() -> TuiState {
 
 #[test]
 fn a_short_narrow_panel_keeps_the_four_core_fields_and_drops_the_rest() {
-    // 80x16 is the smallest terminal that draws the panel at all: 23 columns of
+    // 80x14 is the smallest terminal that draws the panel at all: 23 columns of
     // content and four rows.
     let mut state = state();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
     state.apply(turn_ended(2));
-    let rows = screen(80, 16, &mut state);
+    let rows = screen(80, 14, &mut state);
     let text = rows.join("\n");
 
     assert!(text.contains("模型"), "the model: {text}");
     // Exactly the plain value: the percentage would have to be truncated to fit, and
     // a truncated number reads as a smaller one.
-    let panel = panel_text(80, 16, &mut state);
+    let panel = panel_text(80, 14, &mut state);
     assert_eq!(
         panel[1], "上下文  9,000 / 200,000",
         "the percentage is the first thing the width takes"
@@ -1102,8 +1158,9 @@ fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
         );
         assert!(!row.ends_with(' '), "and has no padding after it: {row:?}");
     }
-    // Seven rows, each filling the panel's 29 columns.
-    assert_eq!(panel.len(), 7, "{panel:?}");
+    // Nine rows in a 24-row terminal now that the airy rows belong to the middle
+    // block, each filling the panel's 29 columns.
+    assert_eq!(panel.len(), 9, "{panel:?}");
     for (index, row) in panel.iter().enumerate() {
         assert_eq!(
             text_columns(row),

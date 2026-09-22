@@ -323,6 +323,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             model: model.clone(),
             context_window: crate::context::usable_input(&caps),
             budget_limit: session_config.budget.limit,
+            // A single-agent session speaks as its profile, so that is the whole
+            // roster the transcript's name colours have to place (票 07 §1).
+            speaker_order: vec![profile.name.clone()],
         };
         Renderer::tui(TuiOptions { port, facts })
     } else {
@@ -600,6 +603,9 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             // `session_config` copies `[budget]` verbatim, so the file's value is the
             // session's.
             budget_limit: config.budget.limit,
+            // The pair, in roster order — the same order `pick_pair` produced, which is
+            // what gives the first debater the first palette slot (票 07 §1).
+            speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],
         };
         Renderer::tui(TuiOptions { port, facts })
     } else {

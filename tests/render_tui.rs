@@ -10,8 +10,9 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
-    pane, render_block, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
-    Key, Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
+    pane, render_block_uncoloured, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind,
+    FrontEndEvent, Key, Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript,
+    TuiState,
 };
 use ratatui::buffer::CellWidth;
 use ratatui::style::{Color, Modifier};
@@ -27,6 +28,7 @@ fn facts() -> SessionFacts {
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         budget_limit: Some(100_000),
+        speaker_order: Vec::new(),
     }
 }
 
@@ -200,6 +202,74 @@ fn shift_tab_is_the_plan_gesture() {
 }
 
 #[test]
+fn ctrl_d_asks_before_it_quits_and_the_safe_answer_is_no() {
+    // Idle: `Ctrl-D` opens the exit confirmation rather than quitting. The overlay is
+    // answered like the renderer's other own questions — `y` means yes, and every
+    // other reachable key (and `Esc`) means no, because a hand reaches for `Enter`
+    // without reading (票 06 §1, §2).
+    let (mut idle, _line) = state_with_prompt();
+    idle.key(Key::CtrlD);
+    assert!(
+        !idle.should_quit(),
+        "the confirmation comes before the quit"
+    );
+    idle.key(Key::Enter);
+    assert!(
+        !idle.should_quit(),
+        "Enter is the safe answer, not the exit"
+    );
+
+    // `Esc` closes the confirmation and leaves the session running.
+    let (mut escaped, _line) = state_with_prompt();
+    escaped.key(Key::CtrlD);
+    escaped.key(Key::Esc);
+    assert!(!escaped.should_quit());
+
+    // `y` is the one key that quits.
+    let (mut confirmed, _line) = state_with_prompt();
+    confirmed.key(Key::CtrlD);
+    confirmed.key(Key::Char('y'));
+    assert!(confirmed.should_quit(), "y confirms the exit");
+}
+
+#[test]
+fn ctrl_d_is_ignored_while_a_run_is_in_flight() {
+    // Busy: the gesture does nothing at all — no confirmation, no quit, no cancel
+    // (票 06 §1, §3). `Ctrl-C` remains the way to stop a run.
+    let mut state = state_running();
+    state.key(Key::CtrlD);
+    assert!(!state.should_quit());
+    assert!(state.take_events().is_empty(), "no cancel gesture either");
+}
+
+#[test]
+fn ctrl_d_is_ignored_while_a_question_is_up() {
+    // A question owns the keyboard, so `Ctrl-D` is that question's to ignore. The
+    // permission overlay below is the loop's, and the answer it is waiting for is
+    // unaffected by the stray key.
+    let (mut state, _line) = state_with_prompt();
+    let (reply, mut answer) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::Permission(PermissionRequest {
+            request_id: "r-1".to_owned(),
+            tool_call_id: "c-1".to_owned(),
+            tool_name: "bash".to_owned(),
+            args: serde_json::json!({"command": "ls"}),
+            reason: "mode ask".to_owned(),
+        }),
+        reply,
+    }));
+    state.key(Key::CtrlD);
+    assert!(!state.should_quit(), "the key is ignored, not acted on");
+    state.key(Key::Char('y'));
+    assert_eq!(
+        answer.try_recv().expect("the permission answer went out"),
+        AnswerChoice::Permission(Answer::Allow),
+        "and the question it was ignored for is still answerable"
+    );
+}
+
+#[test]
 fn a_tool_call_and_its_hook_become_one_ready_block() {
     // The merger is the transcript's, not the state machine's: it holds the call
     // open until an unrelated event closes it, so the result and the hook that
@@ -263,21 +333,126 @@ fn a_tool_call_and_its_hook_become_one_ready_block() {
 
 #[test]
 fn a_completed_turn_and_an_aborted_one_render_in_different_colors() {
-    let good = render_block(&Block::TurnEnded {
+    let good = render_block_uncoloured(&Block::TurnEnded {
         speaker: kimi(),
         reason: StopReason::Completed,
     });
-    let aborted = render_block(&Block::TurnEnded {
+    let aborted = render_block_uncoloured(&Block::TurnEnded {
         speaker: kimi(),
         reason: StopReason::Aborted,
     });
-    let bad = render_block(&Block::TurnEnded {
+    let bad = render_block_uncoloured(&Block::TurnEnded {
         speaker: kimi(),
         reason: StopReason::Error,
     });
-    assert_eq!(good[0].spans[0].style.fg, Some(Color::Green));
-    assert_eq!(aborted[0].spans[0].style.fg, Some(Color::Yellow));
-    assert_eq!(bad[0].spans[0].style.fg, Some(Color::Red));
+    // The line is `[name] text` in two spans: the name carries the speaker colour and
+    // the body carries the severity, so the severity is asserted on the second span.
+    for (line, color) in [
+        (&good[0], Color::Green),
+        (&aborted[0], Color::Yellow),
+        (&bad[0], Color::Red),
+    ] {
+        assert_eq!(
+            line.spans[1].style.fg,
+            Some(color),
+            "the body keeps the severity: {line:?}"
+        );
+    }
+    // With no roster every name is the narration grey, never a severity colour.
+    assert_eq!(good[0].spans[0].style.fg, Some(Color::DarkGray));
+}
+
+#[test]
+fn a_speakers_name_is_drawn_in_its_role_colour() {
+    use fs_agent::render::{render_block, SpeakerColors};
+
+    let name = |blocks: Vec<Block>, roster: &[&str]| {
+        let roster: Vec<String> = roster.iter().map(|name| (*name).to_owned()).collect();
+        let mut colors = SpeakerColors::new(&roster);
+        let lines: Vec<ratatui::text::Line<'static>> = blocks
+            .iter()
+            .flat_map(|block| render_block(block, &mut colors))
+            .collect();
+        lines
+            .first()
+            .map(|line| line.spans[0].style.fg)
+            .expect("a line")
+    };
+
+    // The two debaters take the palette in roster order, and the caller's order is
+    // the colour: the first is cyan, the second magenta (票 07 §1).
+    assert_eq!(
+        name(
+            vec![Block::TurnStarted {
+                speaker: SpeakerId::Debater("kimi".into()),
+                iteration: 1,
+            }],
+            &["kimi", "claude"],
+        ),
+        Some(Color::LightCyan)
+    );
+    assert_eq!(
+        name(
+            vec![Block::TurnStarted {
+                speaker: SpeakerId::Debater("claude".into()),
+                iteration: 1,
+            }],
+            &["kimi", "claude"],
+        ),
+        Some(Color::LightMagenta)
+    );
+
+    // An executor, the user and the system have fixed roles, whatever the roster.
+    assert_eq!(
+        name(
+            vec![Block::TurnStarted {
+                speaker: SpeakerId::Executor("worker".into()),
+                iteration: 1,
+            }],
+            &["kimi", "claude"],
+        ),
+        Some(Color::LightYellow)
+    );
+    assert_eq!(
+        name(
+            vec![Block::Message {
+                speaker: SpeakerId::User,
+                role: Role::User,
+                text: "hello".to_owned(),
+            }],
+            &["kimi", "claude"],
+        ),
+        Some(Color::LightGreen)
+    );
+    assert_eq!(
+        name(vec![Block::Notice(String::new())], &["kimi", "claude"]),
+        Some(Color::DarkGray),
+        "a line with no speaker keeps the narration grey"
+    );
+
+    // A debater the roster does not name — the mid-session `/discuss` case — takes the
+    // first unclaimed slot, and every later line for that name keeps it.
+    let mut colors = SpeakerColors::new(&["kimi".to_owned()]);
+    let first = render_block(
+        &Block::TurnStarted {
+            speaker: SpeakerId::Debater("newcomer".into()),
+            iteration: 1,
+        },
+        &mut colors,
+    );
+    let second = render_block(
+        &Block::TurnStarted {
+            speaker: SpeakerId::Debater("newcomer".into()),
+            iteration: 2,
+        },
+        &mut colors,
+    );
+    assert_eq!(first[0].spans[0].style.fg, Some(Color::LightMagenta));
+    assert_eq!(
+        second[0].spans[0].style.fg,
+        Some(Color::LightMagenta),
+        "and the colour does not move under the reader"
+    );
 }
 
 #[test]
@@ -297,7 +472,7 @@ fn a_diff_line_gets_a_background_from_the_diff_layer() {
         }),
         hook: None,
     };
-    let lines = render_block(&Block::Tool(Box::new(tool)));
+    let lines = render_block_uncoloured(&Block::Tool(Box::new(tool)));
     // Line 0 is the header; line 1 is the highlighted body.
     let body = &lines[1];
     assert!(body.spans.iter().any(|span| span.style.bg.is_some()));
@@ -305,7 +480,7 @@ fn a_diff_line_gets_a_background_from_the_diff_layer() {
 
 #[test]
 fn the_synthesizers_product_renders_with_the_system_speaker() {
-    let lines = render_block(&Block::Message {
+    let lines = render_block_uncoloured(&Block::Message {
         speaker: SpeakerId::System,
         role: Role::Assistant,
         text: "consensus".to_owned(),
@@ -326,7 +501,7 @@ fn a_notice_is_a_transcript_line_shown_as_it_is() {
     // scrolling away with the streaming tail it deliberately avoids
     // (spec §A.12, §3).
     let banner = "fs-agent: session abc · model m · mode ask · /tmp/x";
-    let lines = render_block(&Block::Notice(banner.to_owned()));
+    let lines = render_block_uncoloured(&Block::Notice(banner.to_owned()));
     let text: String = lines[0]
         .spans
         .iter()
@@ -339,7 +514,7 @@ fn a_notice_is_a_transcript_line_shown_as_it_is() {
 fn the_answer_block_is_rendered_as_markdown() {
     // The finalized answer goes through the Markdown renderer, so a heading is a
     // heading and a bullet is a bullet — the readable half of the transcript.
-    let lines = render_block(&Block::Message {
+    let lines = render_block_uncoloured(&Block::Message {
         speaker: kimi(),
         role: Role::Assistant,
         text: "# 标题\n\n- 一\n- 二\n".to_owned(),
@@ -374,7 +549,7 @@ fn the_answer_block_is_rendered_as_markdown() {
 fn intermediate_narration_is_dim_and_the_answer_is_not() {
     // Every narration line reads the same dim grey, whichever event it narrates,
     // so the model's answer — at full brightness — is what stands out.
-    let verdict = render_block(&Block::PermissionDecided {
+    let verdict = render_block_uncoloured(&Block::PermissionDecided {
         speaker: kimi(),
         decision: Decision::Allow,
         source: DecisionSource::User,
@@ -386,14 +561,14 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
         "a permission verdict is narration"
     );
 
-    let asked = render_block(&Block::PermissionAsked {
+    let asked = render_block_uncoloured(&Block::PermissionAsked {
         speaker: kimi(),
         tool_name: Some("bash".to_owned()),
         args: serde_json::json!({"command": "ls"}),
     });
     assert_eq!(asked[0].spans[0].style.fg, Some(Color::DarkGray));
 
-    let answer = render_block(&Block::Message {
+    let answer = render_block_uncoloured(&Block::Message {
         speaker: kimi(),
         role: Role::Assistant,
         text: "正文".to_owned(),
@@ -410,7 +585,7 @@ fn a_message_continuation_indents_by_the_label_display_width() {
     // A Chinese label is narrower in characters than in columns (`[用户]` is 4
     // characters, 6 columns), so indenting by `chars().count()` put the second
     // line two columns left of the first. The indent must measure columns.
-    let lines = render_block(&Block::Message {
+    let lines = render_block_uncoloured(&Block::Message {
         speaker: SpeakerId::User,
         role: Role::Assistant,
         text: "one\ntwo".to_owned(),
@@ -547,7 +722,7 @@ fn a_users_message_keeps_its_lines_and_its_length() {
     // characters (spec §3).
     let long = "x".repeat(600);
     let text = format!("第一行\n{long}\n第三行");
-    let lines = render_block(&Block::Message {
+    let lines = render_block_uncoloured(&Block::Message {
         speaker: SpeakerId::User,
         role: Role::User,
         text,

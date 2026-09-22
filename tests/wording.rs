@@ -415,28 +415,45 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
         "esc 取消",
         "shift+tab 计划",
         "PgUp/PgDn 滚动",
-        "ctrl-c 退出",
+        wording::EXIT_HINT_IDLE,
     ] {
         assert!(wide.contains(hint), "{wide}");
     }
-    assert!(wide.ends_with("ctrl-c 退出"), "{wide}");
+    assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
 
-    // 28 columns fit one hint once the way out is reserved.
-    assert_eq!(wording::status_line(false, 28), "enter 发送 · ctrl-c 退出");
-    // 44 fit two and still not the state word: it is what goes, so the newline key
-    // stays visible on a narrow terminal.
+    // 28 columns fit the state word and the way out; at 31 the send hint and the way
+    // out fit, and the state word is what goes — the way out is seven columns wider
+    // than it used to be, which is what moved this rung.
+    assert_eq!(wording::status_line(false, 28), "就绪 · ctrl-c/ctrl-d 退出");
     assert_eq!(
-        wording::status_line(false, 44),
-        "enter 发送 · ctrl-j 换行 · ctrl-c 退出"
+        wording::status_line(false, 31),
+        "enter 发送 · ctrl-c/ctrl-d 退出"
     );
-    // 45 is where `就绪 · ` fits in front of that run.
+    // 45 fit the first two hints and the way out but not the state word, so the
+    // newline key stays visible on a narrow terminal.
     assert_eq!(
         wording::status_line(false, 45),
-        "就绪 · enter 发送 · ctrl-j 换行 · ctrl-c 退出"
+        "enter 发送 · ctrl-j 换行 · ctrl-c/ctrl-d 退出"
+    );
+    // 80 is where the state word fits in front of the five-hint run; the rendered
+    // side of that ladder is asserted in `tests/render_layout.rs`.
+    assert_eq!(
+        wording::status_line(false, 80),
+        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c/ctrl-d 退出"
     );
     // Narrower than any hint: the way out is all that is left.
-    assert_eq!(wording::status_line(true, 8), "ctrl-c 退出");
-    assert_eq!(wording::status_line(false, 3), "ctrl-c 退出");
+    assert_eq!(wording::status_line(true, 8), wording::EXIT_HINT_BUSY);
+    assert_eq!(wording::status_line(false, 3), wording::EXIT_HINT_IDLE);
+    // Only the idle line advertises `ctrl-d`: while a run is in flight it does
+    // nothing, so naming it would be the one thing the hint row must not do.
+    assert!(
+        !wording::status_line(true, 200).contains("ctrl-d"),
+        "the busy line does not advertise a key that does nothing"
+    );
+    assert!(
+        wording::status_line(false, 200).contains("ctrl-d"),
+        "the idle line does"
+    );
 }
 
 #[test]
@@ -445,59 +462,64 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
     // `enter 发送` nor the interactive loop's plan gesture is on offer.
     let wide = wording::viewer_status_line(false, 200);
     assert_eq!(
-        wide, "就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c 退出",
+        wide, "就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出",
         "the whole viewer line"
     );
-    assert!(wide.ends_with("ctrl-c 退出"), "{wide}");
+    assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
 
     // The same ladder: the way out survives, the state word goes first.
     assert_eq!(
-        wording::viewer_status_line(false, 26),
-        "esc 取消 · ctrl-c 退出"
+        wording::viewer_status_line(false, 28),
+        "就绪 · ctrl-c/ctrl-d 退出"
     );
     assert_eq!(
-        wording::viewer_status_line(true, 26),
-        "esc 取消 · ctrl-c 退出",
-        "whatever the state word would have said"
+        wording::viewer_status_line(false, 31),
+        "esc 取消 · ctrl-c/ctrl-d 退出"
     );
 
-    // Busy reads as busy, and a terminal too narrow for anything still exits.
+    // Busy reads as busy — and while a run is in flight `ctrl-d` is ignored, so the
+    // viewer line is back to the plain `ctrl-c 退出`.
     assert!(wording::viewer_status_line(true, 200).starts_with("工作中 · "));
-    assert_eq!(wording::viewer_status_line(true, 3), "ctrl-c 退出");
+    assert!(!wording::viewer_status_line(true, 200).contains("ctrl-d"));
+    assert_eq!(
+        wording::viewer_status_line(true, 3),
+        wording::EXIT_HINT_BUSY
+    );
 }
 
 #[test]
 fn the_hint_ladder_is_the_one_the_prototype_measured() {
-    // The widths the spec recorded against the approved snapshots (§10, §13), so a
-    // change to the priority order shows up here rather than on a real terminal.
-    // `w=40` is the minimum: three items, no state word.
+    // The widths the prototype measured with the one-item way out (§10, 票 06 §4),
+    // so a change to the priority order shows up here rather than on a terminal.
+    // `w=40` is the minimum: the state word, one hint, and the way out.
     assert_eq!(
         wording::status_line(false, 40),
-        "enter 发送 · ctrl-j 换行 · ctrl-c 退出"
+        "就绪 · enter 发送 · ctrl-c/ctrl-d 退出"
     );
-    // Then the state word joins in front, and each step buys one more hint.
+    // The wider way out costs the state word from 45 columns, where the second hint
+    // and the exit fit and it does not.
     assert_eq!(
         wording::status_line(false, 60),
-        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
+        "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c/ctrl-d 退出"
     );
     assert_eq!(
         wording::status_line(false, 80),
-        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c 退出"
+        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c/ctrl-d 退出"
     );
-    // Busy swaps the word and nothing else: at 60 the hint that loses is still
-    // `shift+tab 计划`, and `ctrl-c 退出` is still there.
+    // Busy swaps the word and the way out: at 60 the hint that loses is still
+    // `shift+tab 计划`, and `ctrl-c 退出` — without `ctrl-d` — is there.
     assert_eq!(
         wording::status_line(true, 60),
         "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
-    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · PgUp/PgDn 滚动 · ctrl-c 退出";
+    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出";
     assert_eq!(wording::status_line(false, 120), full);
     // At the maximum the line is stable: there is nothing left to buy.
     assert_eq!(wording::status_line(false, 174), full);
-    // Busy swaps the word, not the ladder.
+    // Busy swaps the word and the exit, not the ladder.
     assert_eq!(
         wording::status_line(true, 120).replace("工作中", "就绪"),
-        full
+        full.replace("ctrl-c/ctrl-d 退出", "ctrl-c 退出")
     );
 }
 

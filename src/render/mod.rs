@@ -56,7 +56,10 @@ pub use input::{
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
-pub use tui::{draw_frame, render_block, Key, SessionFacts, Tui, TuiOptions, TuiState};
+pub use tui::{
+    draw_frame, render_block, render_block_uncoloured, Key, SessionFacts, SpeakerColors, Tui,
+    TuiOptions, TuiState,
+};
 
 /// How many render events may be buffered before a slow consumer starts losing
 /// them. A lost delta degrades output, never correctness.

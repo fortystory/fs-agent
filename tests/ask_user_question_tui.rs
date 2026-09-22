@@ -24,6 +24,7 @@ fn facts() -> SessionFacts {
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         budget_limit: Some(100_000),
+        speaker_order: Vec::new(),
     }
 }
 

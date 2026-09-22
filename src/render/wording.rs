@@ -439,6 +439,19 @@ pub static CLEAR_CHOICES: [Choice; 2] = [
     },
 ];
 
+/// The keys that answer the exit confirmation (票 06 §2). The safe answer is the
+/// first-looking one to a hand that reads the row: `n` cancels, and so does `Esc`.
+pub static EXIT_CHOICES: [Choice; 2] = [
+    Choice {
+        key: 'y',
+        label: "退出",
+    },
+    Choice {
+        key: 'n',
+        label: "取消",
+    },
+];
+
 /// A button row as one line of text: `[y] 允许 / [a] 总是允许 / [n] 拒绝`.
 ///
 /// This is what a plain console's input line uses. The TUI paints the same entries
@@ -559,6 +572,18 @@ pub fn clear_draft_title() -> &'static str {
 /// The **body** row of the clear-draft question.
 pub fn clear_draft_body() -> &'static str {
     "草稿有多行，Esc 会把它们全部丢掉"
+}
+
+/// The title of the `Ctrl-D` exit confirmation (票 06 §2).
+pub fn exit_title() -> &'static str {
+    "退出会话"
+}
+
+/// The body of the exit confirmation. It says both things a person would want to
+/// know before saying yes: the transcript on disk survives, the unsent draft does
+/// not (票 06 §2).
+pub fn exit_body() -> &'static str {
+    "会话记录会保留；未发送的草稿会丢弃"
 }
 
 /// The footer that pages a questionnaire: `2 / 3`.
@@ -763,9 +788,15 @@ const KEY_HINTS: [&str; 5] = [
     "PgUp/PgDn 滚动",
 ];
 
-/// The hint that is never dropped: a terminal where the way out cannot be found
-/// is worse than one that shows fewer hints.
-const EXIT_HINT: &str = "ctrl-c 退出";
+/// The way out while the keyboard is idle: both gestures quit, and the line says
+/// so. It is one item rather than two, because the two keys mean the same thing
+/// here and a narrow terminal has only so many columns (票 06 §4).
+pub const EXIT_HINT_IDLE: &str = "ctrl-c/ctrl-d 退出";
+
+/// The way out while a run is in flight: `Ctrl-C` cancels, and `Ctrl-D` is
+/// deliberately ignored — hinting at a key that does nothing is the one thing the
+/// hint row must never do (票 06 §4).
+pub const EXIT_HINT_BUSY: &str = "ctrl-c 退出";
 
 /// The hints a front end shows when it is **not** reading lines: a one-shot
 /// `discuss`, or the stretch of an interactive session with a turn in flight.
@@ -777,18 +808,19 @@ const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 
 /// The status line for a terminal `width` **columns** wide.
 ///
-/// The hints fill from the left with [`EXIT_HINT`] reserved at their end, and the
-/// state word is placed in front of them only if it still fits — so a narrow
+/// The hints fill from the left with the way out (`exit`) reserved at their end, and
+/// the state word is placed in front of them only if it still fits — so a narrow
 /// terminal keeps its way out *and* the hints that explain the keys, and gives up
 /// `就绪` rather than `ctrl-j 换行`. The state word's placement is always the left
 /// edge; what degrades is whether it appears at all.
 ///
-/// Hint ladder, measured against the approved prototype snapshots: three hints at
-/// 40 columns, four at 60, five at 80, six at 120. The state word becomes a
-/// leading item from the width where `就绪 · ` fits in front of that run (45
-/// columns), so the whole line holds 3, 5, 6 and 7 items respectively.
+/// Hint ladder, measured in the rendered frame: three items at 40 columns, four at
+/// 60, five at 80, and all six plus the state word at 120. The way out is one item
+/// now (`ctrl-c/ctrl-d 退出`), seven columns wider than the old `ctrl-c 退出`, and
+/// that is why the state word disappears from 60 through 80 — at 40 it survives
+/// because there is only one hint to pay for (票 06 §4).
 pub fn status_line(busy: bool, width: u16) -> String {
-    hint_line(status_word(busy), &KEY_HINTS, width)
+    hint_line(status_word(busy), &KEY_HINTS, exit_hint(busy), width)
 }
 
 /// The status line for a front end that is not reading lines: the same ladder over
@@ -798,13 +830,23 @@ pub fn status_line(busy: bool, width: u16) -> String {
 /// session that is mid-turn — or a `discuss` run, which never asks for a line at all
 /// — would otherwise promise `enter 发送` for a key that sends nothing (spec §6).
 pub fn viewer_status_line(busy: bool, width: u16) -> String {
-    hint_line(status_word(busy), &VIEWER_HINTS, width)
+    hint_line(status_word(busy), &VIEWER_HINTS, exit_hint(busy), width)
+}
+
+/// The way-out item for a status line: the idle wording only while the keyboard can
+/// really quit, which is exactly when nothing is running.
+pub fn exit_hint(busy: bool) -> &'static str {
+    if busy {
+        EXIT_HINT_BUSY
+    } else {
+        EXIT_HINT_IDLE
+    }
 }
 
 /// The ladder both status lines share: hints from the left, the way out reserved at
 /// the end, and the state word leading only when it still fits.
-fn hint_line(state: &str, hints: &[&str], width: u16) -> String {
-    let exit = EXIT_HINT.cell_width();
+fn hint_line(state: &str, hints: &[&str], exit: &str, width: u16) -> String {
+    let exit_columns = exit.cell_width();
     let mut chosen = String::new();
     for hint in hints {
         let candidate = if chosen.is_empty() {
@@ -812,15 +854,15 @@ fn hint_line(state: &str, hints: &[&str], width: u16) -> String {
         } else {
             format!("{chosen} · {hint}")
         };
-        if candidate.cell_width() + " · ".cell_width() + exit > width {
+        if candidate.cell_width() + " · ".cell_width() + exit_columns > width {
             break;
         }
         chosen = candidate;
     }
     let run = if chosen.is_empty() {
-        EXIT_HINT.to_owned()
+        exit.to_owned()
     } else {
-        format!("{chosen} · {EXIT_HINT}")
+        format!("{chosen} · {exit}")
     };
     let with_state = format!("{state} · {run}");
     if with_state.cell_width() <= width {

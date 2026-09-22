@@ -92,6 +92,9 @@ pub enum Key {
     Esc,
     BackTab,
     CtrlC,
+    /// `Ctrl-D`: quit, behind a confirmation. Ignored while a run is in flight, so
+    /// it is only ever the idle keyboard's gesture (票 06 §1).
+    CtrlD,
     Left,
     Right,
     Up,
@@ -120,6 +123,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
         if let KeyCode::Char(ch) = key.code {
             return match ch.to_ascii_lowercase() {
                 'c' => Some(Key::CtrlC),
+                'd' => Some(Key::CtrlD),
                 'a' => Some(Key::CtrlA),
                 'e' => Some(Key::CtrlE),
                 'u' => Some(Key::CtrlU),
@@ -153,6 +157,98 @@ fn map_key(key: KeyEvent) -> Option<Key> {
     }
 }
 
+/// Which colour each speaker's name is drawn in (票 07 §1).
+///
+/// The palette and the roster are injected; the only thing kept here is the slot a
+/// speaker first seen *after* assembly was given. A discussion can draw its pair at
+/// assembly, but a `/discuss` typed mid-session names people the injection has never
+/// heard of — they take the first unclaimed palette slot and keep it for the rest of
+/// the session, so a name never changes colour under the reader.
+///
+/// The colour is the **painter's** business: [`wording::speaker_label`] stays plain
+/// text, and nothing outside the transcript is tinted (票 07 §3, §4). Public only
+/// because [`render_block`] takes it; the state machine owns how it is built.
+pub struct SpeakerColors {
+    /// The debaters in roster order: slot `n` of the palette belongs to `roster[n]`.
+    roster: Vec<String>,
+    /// The palette slots the roster did not claim, in palette order: the first unclaimed
+    /// name seen during the session takes the first of these.
+    free_slots: Vec<usize>,
+    /// The names first seen during the session, in the order they appeared. This is the
+    /// whole of the state: the colours themselves are derivable from it and the roster.
+    extra: Vec<String>,
+    /// No roster was injected, so there is nothing to colour and every name is grey.
+    /// This is the plain half of the shared rendering, and it must stay neutral: an
+    /// empty roster is not a session with one anonymous debater, it is a caller with no
+    /// palette at all.
+    uncoloured: bool,
+}
+
+/// The debaters' palette, in the order the roster hands the slots out (票 07 §1).
+const DEBATER_PALETTE: [Color; 2] = [Color::LightCyan, Color::LightMagenta];
+
+impl SpeakerColors {
+    /// The palette for a roster: the debaters in the order their slots go out. A
+    /// caller with no roster passes an empty one, and every name is then grey.
+    pub fn new(roster: &[String]) -> Self {
+        let roster = roster.to_vec();
+        // The roster claims palette slots by position: the `n`-th debater gets slot
+        // `n`. With more debaters than colours the extra slots wrap, which is why the
+        // claim is `slot < len` and not the whole roster.
+        let claimed: Vec<usize> = (0..roster.len().min(DEBATER_PALETTE.len())).collect();
+        let free_slots = (0..DEBATER_PALETTE.len())
+            .filter(|slot| !claimed.contains(slot))
+            .collect();
+        Self {
+            uncoloured: roster.is_empty(),
+            roster,
+            free_slots,
+            extra: Vec::new(),
+        }
+    }
+
+    /// The colour for one speaker's name.
+    ///
+    /// The palette is fixed at assembly, so a session's name-to-colour map is stable
+    /// for as long as it runs — including for a name that first appears mid-session
+    /// (票 07 §1).
+    fn of(&mut self, speaker: &crate::events::SpeakerId) -> Color {
+        use crate::events::SpeakerId;
+        if self.uncoloured {
+            return Color::DarkGray;
+        }
+        match speaker {
+            SpeakerId::Debater(id) => self.debater(id.as_str()),
+            SpeakerId::Executor(_) => Color::LightYellow,
+            SpeakerId::User => Color::LightGreen,
+            SpeakerId::System => Color::Gray,
+        }
+    }
+
+    fn debater(&mut self, id: &str) -> Color {
+        if let Some(slot) = self.roster.iter().position(|name| name == id) {
+            return DEBATER_PALETTE[slot % DEBATER_PALETTE.len()];
+        }
+        // A name the injected roster does not know, which is what a `/discuss` typed
+        // mid-session produces. Its first appearance takes the first palette slot the
+        // roster did not claim; the recollection below turns that into the same colour
+        // on every later appearance. Grey once the palette is exhausted, because a
+        // reused colour reads as the wrong speaker (票 07 §1).
+        let slot = match self.extra.iter().position(|name| name == id) {
+            Some(slot) => slot,
+            None => {
+                let slot = self.extra.len();
+                self.extra.push(id.to_owned());
+                slot
+            }
+        };
+        match self.free_slots.get(slot) {
+            Some(slot) => DEBATER_PALETTE[*slot],
+            None => Color::Gray,
+        }
+    }
+}
+
 /// The session values the header and the panel cannot read off the event stream
 /// (spec §8).
 ///
@@ -176,6 +272,12 @@ pub struct SessionFacts {
     pub context_window: u64,
     /// The session's cumulative token allowance, when it has one.
     pub budget_limit: Option<u64>,
+    /// The debaters of this session, in the order they were drawn. A single-agent
+    /// session names its one profile; a discussion lists the pair the roster
+    /// produced. It is what gives a speaker its colour, so it is injected at
+    /// assembly for the same reason the rest of the facts are: the roster is not on
+    /// the stream (票 07 §1).
+    pub speaker_order: Vec<String>,
 }
 
 /// The TUI's injected values: the front end's end of the console channel, plus
@@ -365,6 +467,10 @@ pub struct TuiState {
     slash: MenuSelection,
     /// The numbers the panel shows, counted off the stream.
     panel: Panel,
+    /// Which colour each speaker's name is drawn in (票 07). Kept here rather than
+    /// recomputed per line because a name first seen mid-session has to keep the slot
+    /// it was given.
+    colors: SpeakerColors,
     /// Where a `Prompt` request's answer goes.
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     /// Whether the loop says it is inside a run. **Pushed by the loop**, never
@@ -396,6 +502,12 @@ enum Pending {
     Paste { text: String, chars: usize },
     /// A multi-line draft that `Esc` would clear.
     ClearDraft,
+    /// `Ctrl-D`: the renderer's own "are you sure you want out" (票 06 §1).
+    ///
+    /// It is the fifth renderer-side question and the only one that ends the
+    /// application. It has no one to send an answer to — saying yes sets
+    /// [`TuiState::quit`] and the loop's `select!` sees it on the next pass.
+    Exit,
     /// The model's questionnaire, owning the bottom input area (spec §7, §19).
     ///
     /// This is the one question kind that does **not** go through [`Pending::modal`]:
@@ -668,6 +780,12 @@ impl Pending {
                 detail: Some(wording::clear_draft_body().to_owned()),
                 choices: &wording::CLEAR_CHOICES,
             },
+            Pending::Exit => Modal {
+                title: wording::exit_title().to_owned(),
+                summary: None,
+                detail: Some(wording::exit_body().to_owned()),
+                choices: &wording::EXIT_CHOICES,
+            },
             Pending::Questionnaire(_) => return None,
         };
         Some(modal)
@@ -748,6 +866,7 @@ fn agrees(key: Key) -> bool {
 
 impl TuiState {
     pub fn new(facts: SessionFacts) -> Self {
+        let colors = SpeakerColors::new(&facts.speaker_order);
         Self {
             facts,
             mode: Mode::Ask,
@@ -760,6 +879,7 @@ impl TuiState {
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             panel: Panel::new(),
+            colors,
             prompt_reply: None,
             // Idle until the loop says otherwise: before it asks its first line nothing
             // is running, and the keyboard has to read that way (spec §6).
@@ -854,9 +974,12 @@ impl TuiState {
                 _ => {}
             }
             // The panel counts what this block says about the session; the pane
-            // shows what it says to the reader.
+            // shows what it says to the reader. Names are tinted on the way in, so a
+            // speaker's first line is what settles any name the injected roster did
+            // not list (票 07).
             self.panel.observe(&block);
-            for line in render_block(&block) {
+            let lines = render_block(&block, &mut self.colors);
+            for line in lines {
                 self.pane.push(line);
             }
         }
@@ -1018,6 +1141,16 @@ impl TuiState {
                     self.events.push(FrontEndEvent::Cancel);
                 } else {
                     self.quit = true;
+                }
+                return;
+            }
+            // `Ctrl-D` is the quit-with-a-confirmation gesture, and every one of its
+            // guards comes before the question guard below: while the loop is running
+            // it is ignored outright, and while any question is up it is that
+            // question's to ignore (票 06 §1, §3).
+            Key::CtrlD => {
+                if !self.busy() && self.pending.is_none() {
+                    self.pending = Some(Pending::Exit);
                 }
                 return;
             }
@@ -1290,6 +1423,13 @@ impl TuiState {
                     self.editor.clear();
                 }
             }
+            // Yes quits; every other reachable key is the safe answer — "no" — and
+            // so is `Esc`, which never gets here (票 06 §2).
+            Pending::Exit => {
+                if agrees(key) {
+                    self.quit = true;
+                }
+            }
             // Unreachable: `key` routes a questionnaire to `questionnaire_key`
             // before this, because it answers to a wider keyboard. Dropping it
             // here would refuse the tool, so it is only kept to keep the match
@@ -1307,8 +1447,12 @@ impl TuiState {
             }
             // A questionnaire belongs to a run, so `Esc` while one is up is the
             // cancel gesture and never reaches here (spec §19). If it ever did,
-            // dropping the sender is the honest "no answer".
-            Pending::Questionnaire(_) | Pending::Paste { .. } | Pending::ClearDraft => {}
+            // dropping the sender is the honest "no answer". The exit confirmation
+            // is the renderer's own and `Esc` is its safe answer: decline, stay in.
+            Pending::Questionnaire(_)
+            | Pending::Paste { .. }
+            | Pending::ClearDraft
+            | Pending::Exit => {}
         }
     }
 
@@ -1682,9 +1826,11 @@ fn draw_mark(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiSta
         Paragraph::new(lines),
         Rect::new(content.x, content.y, content.width, height),
     );
-    // The info row is the mark's last header row; the geometry put it there.
-    let info_y = content.y + height;
-    if content.height <= height {
+    // A blank row, then the facts: the mark says what this is, the air lets it
+    // land, and the line under it says where and when. The geometry put the facts
+    // on the content's last row, so the blank is what the two leave between them.
+    let info_y = content.y + height + layout::LOGO_GAP_ROWS;
+    if content.height <= height + layout::LOGO_GAP_ROWS {
         return;
     }
     let info = Line::from(edges(
@@ -2074,9 +2220,18 @@ fn menu_row(
 /// Attribute a message's rows to its speaker: the label leads the first row and
 /// the rest hang under the body of it, so a wrapped or multi-line message reads as
 /// one utterance (spec §3).
-fn attribute(speaker: &crate::events::SpeakerId, rows: Vec<Line<'static>>) -> Vec<Line<'static>> {
+///
+/// The name takes the speaker's own colour and the body keeps the row's — that
+/// split is the whole of the colouring rule: the name identifies, the body means
+/// what its severity says (票 07 §2).
+fn attribute(
+    speaker: &crate::events::SpeakerId,
+    rows: Vec<Line<'static>>,
+    colors: &mut SpeakerColors,
+) -> Vec<Line<'static>> {
     let prefix = format!("{} ", speaker_label(speaker));
     let indent = " ".repeat(prefix.as_str().cell_width() as usize);
+    let name_style = name_style(speaker, colors);
     rows.into_iter()
         .enumerate()
         .map(|(index, row)| {
@@ -2085,7 +2240,7 @@ fn attribute(speaker: &crate::events::SpeakerId, rows: Vec<Line<'static>>) -> Ve
             } else {
                 indent.clone()
             };
-            let mut spans = vec![Span::styled(lead, Style::default().fg(Color::DarkGray))];
+            let mut spans = vec![Span::styled(lead, name_style)];
             spans.extend(row.spans);
             Line {
                 spans,
@@ -2096,11 +2251,50 @@ fn attribute(speaker: &crate::events::SpeakerId, rows: Vec<Line<'static>>) -> Ve
         .collect()
 }
 
+/// The style a speaker's `[name]` prefix is drawn in.
+///
+/// With no palette the label keeps the narration grey it has always had, which is
+/// what the plain half of the shared rendering wants: only the TUI tints names,
+/// and `plain` never passes a palette (票 07 §4).
+fn name_style(speaker: &crate::events::SpeakerId, colors: &mut SpeakerColors) -> Style {
+    Style::default().fg(colors.of(speaker))
+}
+
+/// One narration line whose text begins with a speaker's `[name]` prefix: the name
+/// takes the speaker's colour, the rest the caller's style (票 07 §2).
+fn speaker_line(
+    speaker: &crate::events::SpeakerId,
+    text: String,
+    body: Style,
+    colors: &mut SpeakerColors,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(speaker_label(speaker), name_style(speaker, colors)),
+        Span::styled(format!(" {text}"), body),
+    ])
+}
+
 /// Turn one finalized block into styled terminal lines.
 ///
 /// This is the TUI half of the shared presentation layer: the block was decided
 /// once by [`Transcript`], and only the painting happens here.
-pub fn render_block(block: &Block) -> Vec<Line<'static>> {
+///
+/// `colors` is the transcript's name palette. A caller with no roster to hand —
+/// `plain`'s half of this rendering, and the tests that only care about text —
+/// passes an empty one through [`render_block_uncoloured`], which draws every name
+/// in the narration grey.
+pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
+    paint_block(block, colors)
+}
+
+/// Paint one block with no roster: every speaker name in the narration grey. This
+/// is what the shared rendering looked like before names had colours, kept for the
+/// callers that have no roster to draw one from.
+pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
+    paint_block(block, &mut SpeakerColors::new(&[]))
+}
+
+fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
     match block {
         Block::Message {
             speaker,
@@ -2111,8 +2305,8 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
                 return Vec::new();
             }
             // The answer is rendered as Markdown at full brightness; only the
-            // speaker label repeats, in the narration grey.
-            attribute(speaker, super::markdown::to_lines(text))
+            // speaker label is tinted.
+            attribute(speaker, super::markdown::to_lines(text), colors)
         }
         // The user's own input — and the non-assistant system lines — shown as they
         // were written: every line, nothing elided, and no Markdown, because this
@@ -2123,6 +2317,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             text.split('\n')
                 .map(|raw| Line::from(raw.to_owned()))
                 .collect(),
+            colors,
         ),
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
@@ -2147,56 +2342,59 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             }
             lines
         }
-        Block::Tool(tool) => tool_lines(tool),
-        Block::TurnStarted { speaker, iteration } => vec![narration(format!(
-            "{} {}",
-            speaker_label(speaker),
-            wording::turn_started(*iteration)
-        ))],
-        Block::TurnEnded { speaker, reason } => vec![severity_line(
+        Block::Tool(tool) => tool_lines(tool, colors),
+        Block::TurnStarted { speaker, iteration } => vec![speaker_line(
+            speaker,
+            wording::turn_started(*iteration),
+            Style::default().fg(ratatui::style::Color::DarkGray),
+            colors,
+        )],
+        Block::TurnEnded { speaker, reason } => vec![severity_speaker_line(
+            speaker,
             *reason,
-            format!(
-                "{} {}",
-                speaker_label(speaker),
-                wording::turn_ended(*reason)
-            ),
+            wording::turn_ended(*reason),
+            colors,
         )],
         Block::PermissionAsked {
             speaker,
             tool_name,
             args,
-        } => vec![narration(format!(
-            "{} {}",
-            speaker_label(speaker),
-            wording::permission_asked(tool_name.as_deref(), &summarize_args(args))
-        ))],
+        } => vec![speaker_line(
+            speaker,
+            wording::permission_asked(tool_name.as_deref(), &summarize_args(args)),
+            Style::default().fg(ratatui::style::Color::DarkGray),
+            colors,
+        )],
         Block::PermissionDecided {
             speaker,
             decision,
             source,
             reason,
-        } => vec![narration(format!(
-            "{} {}",
-            speaker_label(speaker),
-            wording::permission_decided(*decision, *source, reason.as_deref())
-        ))],
+        } => vec![speaker_line(
+            speaker,
+            wording::permission_decided(*decision, *source, reason.as_deref()),
+            Style::default().fg(ratatui::style::Color::DarkGray),
+            colors,
+        )],
         Block::Hook {
             speaker,
             point,
             outcome,
-        } => vec![narration(format!(
-            "{} {}",
-            speaker_label(speaker),
-            wording::hook(point, outcome)
-        ))],
+        } => vec![speaker_line(
+            speaker,
+            wording::hook(point, outcome),
+            Style::default().fg(ratatui::style::Color::DarkGray),
+            colors,
+        )],
         Block::ExecutorSpawned {
             speaker,
             executor_id,
-        } => vec![narration(format!(
-            "{} {}",
-            speaker_label(speaker),
-            wording::executor_spawned(executor_id.as_str())
-        ))],
+        } => vec![speaker_line(
+            speaker,
+            wording::executor_spawned(executor_id.as_str()),
+            Style::default().fg(ratatui::style::Color::DarkGray),
+            colors,
+        )],
         Block::ExecutorFinished {
             executor_id,
             reason,
@@ -2205,18 +2403,17 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             *reason,
             wording::executor_finished(executor_id.as_str(), *reason, summary),
         )],
-        Block::Usage { speaker, usage } => vec![narration(format!(
-            "{} {}",
-            speaker_label(speaker),
-            wording::usage_summary(usage)
-        ))],
-        Block::AgentError { speaker, message } => vec![severity_line(
+        Block::Usage { speaker, usage } => vec![speaker_line(
+            speaker,
+            wording::usage_summary(usage),
+            Style::default().fg(ratatui::style::Color::DarkGray),
+            colors,
+        )],
+        Block::AgentError { speaker, message } => vec![severity_speaker_line(
+            speaker,
             StopReason::Error,
-            format!(
-                "{} {}",
-                speaker_label(speaker),
-                wording::agent_error(message)
-            ),
+            wording::agent_error(message),
+            colors,
         )],
         Block::SessionError { code, detail } => vec![severity_line(
             StopReason::Error,
@@ -2250,22 +2447,38 @@ fn narration(text: String) -> Line<'static> {
 }
 
 fn severity_line(reason: StopReason, text: String) -> Line<'static> {
-    let style = match Severity::of(reason) {
+    Line::from(Span::styled(text, severity_style(reason)))
+}
+
+/// A severity line that names a speaker: the name keeps the speaker's colour, the
+/// rest of the line keeps the severity's (票 07 §2). That is how an error still
+/// reads as an error without the reader losing who made it.
+fn severity_speaker_line(
+    speaker: &crate::events::SpeakerId,
+    reason: StopReason,
+    text: String,
+    colors: &mut SpeakerColors,
+) -> Line<'static> {
+    speaker_line(speaker, text, severity_style(reason), colors)
+}
+
+/// The colour a stopping point paints its line in.
+fn severity_style(reason: StopReason) -> Style {
+    match Severity::of(reason) {
         Severity::Good => Style::default().fg(ratatui::style::Color::Green),
         Severity::Note => Style::default().fg(ratatui::style::Color::Cyan),
         Severity::Warn => Style::default().fg(ratatui::style::Color::Yellow),
         Severity::Bad => Style::default()
             .fg(ratatui::style::Color::Red)
             .add_modifier(Modifier::BOLD),
-    };
-    Line::from(Span::styled(text, style))
+    }
 }
 
-fn tool_lines(tool: &ToolBlock) -> Vec<Line<'static>> {
+fn tool_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
         Span::styled(
             format!("{} ", speaker_label(&tool.speaker)),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            name_style(&tool.speaker, colors),
         ),
         Span::styled(
             format!(
