@@ -1,7 +1,7 @@
 # 硬 plan 模式：用权限档位实现，不新增状态机
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 01, 05
 
 ## Question

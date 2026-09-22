@@ -1,7 +1,7 @@
 # 编辑策略的可插拔点与降级匹配分层
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 03
 
 ## Question

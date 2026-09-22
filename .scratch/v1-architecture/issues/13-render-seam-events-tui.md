@@ -1,7 +1,7 @@
 # 渲染接缝：结构化事件 + plain / TUI 双消费者（含 headless 共存）
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 01, 05
 
 ## Question

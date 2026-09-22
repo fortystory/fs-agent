@@ -1,7 +1,7 @@
 # 动态工具注册与「只读」标记的可信度策略
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 03, 05
 
 ## Question

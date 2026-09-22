@@ -1,7 +1,7 @@
 # 工具 trait、注册表、副作用标记与写串行化
 
 Type: grilling
-Status: open
+Status: closed
 
 ## Question
 

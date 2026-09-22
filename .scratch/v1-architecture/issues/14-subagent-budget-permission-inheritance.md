@@ -1,7 +1,7 @@
 # 子 agent：独立预算与权限沿委派链的继承
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 01, 03, 05, 06
 
 ## Question

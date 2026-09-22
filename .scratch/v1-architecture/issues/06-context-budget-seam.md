@@ -1,7 +1,7 @@
 # 上下文预算接缝、工具输出截断与丢弃的分界
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 02
 
 ## Question

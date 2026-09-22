@@ -1,7 +1,7 @@
 # Crate 与模块布局
 
 Type: grilling
-Status: open
+Status: closed
 
 ## Question
 

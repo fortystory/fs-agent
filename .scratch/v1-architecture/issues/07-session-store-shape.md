@@ -1,7 +1,7 @@
 # 会话存储形状与 `--continue`
 
 Type: grilling
-Status: open
+Status: closed
 
 ## Question
 

@@ -1,7 +1,7 @@
 # skills：渐进披露的指令包
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 01, 06
 
 ## Question

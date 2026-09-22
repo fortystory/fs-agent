@@ -1,7 +1,7 @@
 # repo map / 符号检索如何进入上下文预算
 
 Type: grilling
-Status: open
+Status: closed
 Blocked by: 01, 03, 06
 
 ## Question

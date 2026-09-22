@@ -1,7 +1,7 @@
 # Provider trait、流式 chunk 形状与终止判断
 
 Type: grilling
-Status: open
+Status: closed
 
 ## Question
 

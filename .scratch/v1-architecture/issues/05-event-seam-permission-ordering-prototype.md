@@ -1,7 +1,7 @@
 # 事件接缝与权限门的控制流次序（prototype）
 
 Type: prototype
-Status: open
+Status: closed
 Blocked by: 01, 03
 
 ## Question
