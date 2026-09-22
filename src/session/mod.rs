@@ -33,6 +33,7 @@ use crate::context::skills::Skills;
 use crate::events::{Event, EventLog, Redactor, SessionId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, Policy, Rule};
+use crate::questions::UserQuestions;
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
 
 /// Everything a session is assembled from. Injected, never read from the
@@ -61,6 +62,10 @@ pub struct SessionParts {
     /// The port the loop asks when the gate answers `Ask`. `None` means there is
     /// no interactive answerer, so the loop downgrades `Ask` to `Deny`.
     pub asker: Option<Arc<dyn Asker>>,
+    /// The port a model-initiated question goes through (spec §7). `None` means
+    /// no questionnaire answerer, so `ask_user_question` reports that instead of
+    /// hanging; the table is built without the tool in that case.
+    pub questions: Option<Arc<dyn UserQuestions>>,
     /// The strategy mounted at the two tool-call hook points. `None` means the
     /// loop calls no hook and appends no `HookExecuted` event.
     pub hook: Option<Arc<dyn Hook>>,
@@ -94,6 +99,9 @@ pub struct Session {
     /// The ask port, shared with any nested session so an executor asks through
     /// the same renderer.
     asker: Option<Arc<dyn Asker>>,
+    /// The question port, shared with any sibling session for the same reason as
+    /// the asker: one keyboard answers for the whole session.
+    questions: Option<Arc<dyn UserQuestions>>,
     /// The hook strategy, shared with any nested session so an executor cannot
     /// escape the strategy that constrains its parent (spec §16).
     hook: Option<Arc<dyn Hook>>,
@@ -120,6 +128,7 @@ impl Session {
             outputs_dir,
             policy,
             asker,
+            questions,
             hook,
             home,
             skills,
@@ -138,6 +147,7 @@ impl Session {
             read_set: ReadSet::default(),
             policy,
             asker,
+            questions,
             hook,
             home,
             skills,
@@ -285,6 +295,7 @@ impl Session {
             outputs_dir: self.outputs_dir.clone(),
             policy: Arc::clone(&self.policy),
             asker: self.asker.clone(),
+            questions: self.questions.clone(),
             hook: self.hook.clone(),
             home: self.home.clone(),
             skills: Arc::clone(&self.skills),
@@ -295,6 +306,13 @@ impl Session {
     /// The ask port, if this session has an interactive answerer.
     pub fn asker(&self) -> Option<&Arc<dyn Asker>> {
         self.asker.as_ref()
+    }
+
+    /// The question port, if this session can put model-initiated questions to
+    /// the user (spec §7). The loop copies it into each call's dispatch context,
+    /// where the `ask_user_question` tool reads it.
+    pub fn questions(&self) -> Option<&Arc<dyn UserQuestions>> {
+        self.questions.as_ref()
     }
 
     /// The hook strategy, if one is mounted.

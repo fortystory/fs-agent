@@ -167,6 +167,10 @@ impl ExecutorPort {
             // parent earned must not reach the child (spec §12).
             policy: Arc::new(Mutex::new(self.policy.clone())),
             asker: self.asker.clone(),
+            // Deliberately not carried: an executor's table has no
+            // `ask_user_question` at all (spec §7, §16), so there is nothing here
+            // for a port to answer.
+            questions: None,
             hook: self.hook.clone(),
             home: self.home.clone(),
             skills: Arc::clone(&self.skills),

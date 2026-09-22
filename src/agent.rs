@@ -775,6 +775,10 @@ async fn process_call(
             max_timeout_ms: session.config().max_bash_timeout_ms,
         },
         executor: None,
+        // The question port is the session's, not the loop's: carried here so the
+        // `ask_user_question` tool receives it through its dispatch context, where
+        // the executor port is filled in per authorized call (spec §7).
+        questions: session.questions().cloned(),
     };
 
     let started = Instant::now();

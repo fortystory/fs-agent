@@ -116,6 +116,11 @@ the next prompt.
   `render::spawn_plain_console`, which reads stdin line by line.
 - `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
   the gate's `Ask` and the plan-mode conflict question use the one keyboard.
+- `ConsoleQuestions` implements the model-question port on that same handle, so a
+  model-initiated questionnaire (`ask_user_question`) reaches the one keyboard
+  too. In the TUI it takes over the bottom input area — one question at a time,
+  paged, with an explicit skip — rather than the middle overlay the harness's
+  questions use; plain mode answers it line by line.
 
 In the TUI, `TuiState` is the testable half: it holds the transcript, the input
 line and any pending question, and `Key` is its own key vocabulary rather than

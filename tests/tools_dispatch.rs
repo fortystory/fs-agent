@@ -33,7 +33,7 @@ impl Fixture {
         Self {
             paths: SessionPaths::new(&workspace),
             locks: PathLocks::new(),
-            registry: builtin(),
+            registry: builtin(false),
             read_set: ReadSet::default(),
             dir,
             workspace,
@@ -67,6 +67,8 @@ impl Fixture {
             // No executor port: this file drives the dispatch seam directly, and
             // `task` is not one of the tools it dispatches.
             executor: None,
+            // No question port either: `ask_user_question` is not dispatched here.
+            questions: None,
         }
     }
 

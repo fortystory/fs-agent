@@ -396,7 +396,7 @@ async fn fixture(
     let stdout = CaptureBuf::default();
     let stderr = CaptureBuf::default();
 
-    let mut tools = fs_agent::tools::builtin();
+    let mut tools = fs_agent::tools::builtin(false);
     for tool in extra_tools {
         tools.register(tool);
     }
@@ -418,6 +418,7 @@ async fn fixture(
             // `auto` keeps a test-only read-only tool allowed without an answerer.
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
+            questions: None,
             hook: None,
             home: None,
         },

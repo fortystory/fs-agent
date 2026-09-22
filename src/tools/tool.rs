@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::context::repo_map::RepoMapInput;
 use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
+use crate::questions::UserQuestions;
 
 /// The workspace side effect of one planned call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +134,11 @@ pub struct ToolContext<'a> {
     /// the session mounted no port, in which case `task` reports that rather than
     /// pretending to work.
     pub executor: Option<&'a dyn ExecutorSpawner>,
+    /// The port that puts a model-initiated question to the user, for
+    /// `ask_user_question` (spec §7). `None` when the session mounted no port —
+    /// headless assembly never does — in which case the tool reports that rather
+    /// than hanging on an answer nobody can give.
+    pub questions: Option<&'a dyn UserQuestions>,
     pub tool_call_id: &'a str,
     pub args: &'a Value,
 }

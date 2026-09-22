@@ -19,9 +19,9 @@
 //!
 //! # Boundaries
 //!
-//! Twelve top-level modules, depending only downward:
-//! `events` · `config` · `provider` · `tools` · `permissions` · `hooks` ·
-//! `context` · `agent` · `discussion` · `session` · `render` · `cli`.
+//! Thirteen top-level modules, depending only downward:
+//! `events` · `config` · `provider` · `tools` · `permissions` · `questions` ·
+//! `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`.
 //! `events` depends on nothing internal; [`provider::projection`] is a submodule
 //! of `provider`, not a boundary. `discussion` never touches `provider`: it holds
 //! the protocol's rules, and the `agent` layer drives every call.
@@ -35,6 +35,7 @@ pub mod events;
 pub mod hooks;
 pub mod permissions;
 pub mod provider;
+pub mod questions;
 pub mod render;
 pub mod session;
 pub mod tools;
@@ -53,6 +54,7 @@ use crate::events::{ContextSource, Event, EventLog, EventPayload, Role, SessionI
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, PlanConflict, Policy};
 use crate::provider::Provider;
+use crate::questions::UserQuestions;
 use crate::render::{RenderHandle, Renderer};
 use crate::session::{Session, SessionParts};
 use crate::tools::{PathLocks, Registry};
@@ -82,6 +84,11 @@ pub struct SessionScaffold {
     /// The ask port used when the gate answers `Ask`. `None` means no
     /// interactive answerer, so the loop downgrades `Ask` to `Deny`.
     pub asker: Option<Arc<dyn Asker>>,
+    /// The port that puts a model-initiated question to the user (spec §7).
+    /// `None` means no questionnaire answerer — headless assembly never mounts
+    /// one — so the table does not advertise `ask_user_question` and the tool
+    /// fails readably if it is somehow called.
+    pub questions: Option<Arc<dyn UserQuestions>>,
     /// The strategy mounted at the tool-call hook points. `None` means the loop
     /// calls no hook.
     pub hook: Option<Arc<dyn Hook>>,
@@ -186,6 +193,9 @@ struct OpenedSession {
     outputs_dir: PathBuf,
     policy: Arc<Mutex<Policy>>,
     asker: Option<Arc<dyn Asker>>,
+    /// The session's question port (spec §7). Session-level, shared with every
+    /// sibling session like the asker: a debater asks through the same renderer.
+    questions: Option<Arc<dyn UserQuestions>>,
     hook: Option<Arc<dyn Hook>>,
     home: Option<PathBuf>,
     skills: Arc<Skills>,
@@ -210,6 +220,7 @@ impl OpenedSession {
             locks,
             policy,
             asker,
+            questions,
             hook,
             home,
         } = scaffold;
@@ -252,6 +263,7 @@ impl OpenedSession {
             outputs_dir,
             policy: Arc::new(Mutex::new(policy)),
             asker,
+            questions,
             hook,
             home,
             skills,
@@ -274,6 +286,7 @@ impl OpenedSession {
             outputs_dir: self.outputs_dir.clone(),
             policy: Arc::clone(&self.policy),
             asker: self.asker.clone(),
+            questions: self.questions.clone(),
             hook: self.hook.clone(),
             home: self.home.clone(),
             skills: Arc::clone(&self.skills),

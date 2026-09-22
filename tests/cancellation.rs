@@ -38,7 +38,7 @@ struct Fixture {
 }
 
 async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
-    fixture_with_tools(replies, config, fs_agent::tools::builtin()).await
+    fixture_with_tools(replies, config, fs_agent::tools::builtin(false)).await
 }
 
 async fn fixture_with_tools(
@@ -72,6 +72,7 @@ async fn fixture_with_tools(
             locks: fs_agent::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
+            questions: None,
             hook: None,
             home: None,
         },
@@ -294,7 +295,7 @@ async fn a_cancel_during_a_tool_call_gives_that_call_its_one_result() {
 #[tokio::test]
 async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
     let started = Arc::new(Notify::new());
-    let mut tools = fs_agent::tools::builtin();
+    let mut tools = fs_agent::tools::builtin(false);
     tools.register(Box::new(StallingTool {
         started: started.clone(),
     }));
@@ -423,10 +424,11 @@ async fn discussion_fixture(
             cwd,
             log_path: log_path.clone(),
             session_id: SessionId::new("s-cancel-discussion"),
-            tools: fs_agent::tools::builtin(),
+            tools: fs_agent::tools::builtin(false),
             locks: fs_agent::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
+            questions: None,
             hook: None,
             home: None,
         },
@@ -783,10 +785,11 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
             cwd,
             log_path: log_path.clone(),
             session_id: SessionId::new("s-cancel"),
-            tools: fs_agent::tools::builtin(),
+            tools: fs_agent::tools::builtin(false),
             locks: fs_agent::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
+            questions: None,
             hook: None,
             home: None,
         },

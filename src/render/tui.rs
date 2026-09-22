@@ -40,6 +40,7 @@ use tokio::sync::broadcast;
 
 use crate::events::{ContextSource, HistoryReason, Role, StopReason};
 use crate::permissions::Mode;
+use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
 use super::editor::{self, Input};
 use super::highlight::{diff_tag, highlight_diff};
@@ -368,7 +369,8 @@ pub struct TuiState {
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     /// Whether the loop says it is inside a run. **Pushed by the loop**, never
     /// inferred here: see [`TuiState::busy`].
-    running: bool,    /// A question waiting for a keypress.
+    running: bool,
+    /// A question waiting for a keypress.
     pending: Option<Pending>,
     /// Gestures to hand back to the loop.
     events: Vec<FrontEndEvent>,
@@ -394,13 +396,243 @@ enum Pending {
     Paste { text: String, chars: usize },
     /// A multi-line draft that `Esc` would clear.
     ClearDraft,
+    /// The model's questionnaire, owning the bottom input area (spec §7, §19).
+    ///
+    /// This is the one question kind that does **not** go through [`Pending::modal`]:
+    /// the middle overlay suits a one-line confirmation, while a questionnaire is
+    /// multi-row and paged, so it takes the input area instead.
+    Questionnaire(Questionnaire),
+}
+
+/// The model-initiated questionnaire while it owns the bottom input area.
+///
+/// The state lives here rather than in the session because a questionnaire is
+/// keyboard state, not session state: nothing about it is recorded, and the only
+/// durable trace of the exchange is the tool call's arguments and its one result
+/// (spec §7).
+struct Questionnaire {
+    /// The questions, in the order the model sent them.
+    questions: Vec<UserQuestion>,
+    /// Where the answers go when the questionnaire is submitted. Dropping it
+    /// without sending is read by the port as "no answer", which is what a
+    /// cancelled run means.
+    reply: tokio::sync::oneshot::Sender<Result<UserAnswers, String>>,
+    /// One draft per question, indexed the same as `questions`.
+    drafts: Vec<QuestionDraft>,
+    /// Which question is on screen. One at a time, `2 / 3` in the footer.
+    index: usize,
+}
+
+/// What the user has done to one question so far.
+#[derive(Default, Clone)]
+struct QuestionDraft {
+    /// The option labels picked, in the order they were picked.
+    selected: Vec<String>,
+    /// Free text typed. Single-select custom text overrides `selected`;
+    /// multi-select custom text supplements it (spec §7).
+    custom: String,
+    /// Which option the highlight is on. `↑`/`↓` move it, `Enter`/`Space`
+    /// confirm it. It is per draft, so paging away and back finds the highlight
+    /// where it was left.
+    highlight: usize,
+    /// The user pressed the skip key and moved on. This is a deliberate "no
+    /// answer", distinct from a question that was never reached.
+    skipped: bool,
+}
+
+impl QuestionDraft {
+    /// Whether this question has been answered or explicitly skipped. Every
+    /// question must reach this state before the questionnaire may be submitted.
+    fn handled(&self) -> bool {
+        self.skipped || !self.selected.is_empty() || !self.custom.trim().is_empty()
+    }
+}
+
+impl Questionnaire {
+    /// Take one keypress. Returns `true` when the questionnaire is submitted.
+    ///
+    /// The keyboard is the decided one (ticket 32): `↑`/`↓` move the highlight,
+    /// `Enter` or `Space` confirms it, `Tab` skips the question, `←`/`→` page,
+    /// and every printable character edits the free-text field. Digits are not
+    /// keys at all, so they are ordinary text everywhere and no option is out of
+    /// reach.
+    ///
+    /// `Enter` continues while something is unfinished and submits once
+    /// everything is handled, so an unhandled question simply refuses the key.
+    /// On a question with nothing answered yet it confirms the highlighted
+    /// option — choosing *is* the answer on a single-select one, so that also
+    /// advances — while an already-answered question (chosen or typed) just
+    /// moves on, so `Enter` never clobbers typed custom text. Confirming does
+    /// **not** submit on that same press: the next `Enter` is the submit
+    /// (spec §7, §19).
+    fn press(&mut self, key: Key) -> bool {
+        match key {
+            Key::Enter => {
+                if self.all_handled() {
+                    return true;
+                }
+                if self.drafts[self.index].handled() {
+                    self.advance();
+                } else if self.has_options() {
+                    self.confirm_highlight();
+                    if !self.questions[self.index].multi_select {
+                        self.advance();
+                    }
+                }
+            }
+            // `Space` confirms too, so a person can answer without the key that
+            // also submits. On a free-text question there is no option to
+            // confirm, so it is an ordinary space in the text.
+            Key::Char(' ') if self.has_options() => {
+                self.confirm_highlight();
+                if !self.questions[self.index].multi_select {
+                    self.advance();
+                }
+            }
+            // `Tab` is the explicit "skip this one and move on".
+            Key::Tab => {
+                self.drafts[self.index].skipped = true;
+                self.advance();
+            }
+            Key::Up => self.move_highlight(-1),
+            Key::Down => self.move_highlight(1),
+            Key::Left => self.back(),
+            Key::Right => self.advance(),
+            Key::Backspace => {
+                self.drafts[self.index].custom.pop();
+            }
+            // Every printable character is free text, digits included.
+            Key::Char(ch) => self.type_custom(ch),
+            _ => {}
+        }
+        false
+    }
+
+    /// Whether the question on screen offers options to highlight.
+    fn has_options(&self) -> bool {
+        !self.questions[self.index].options.is_empty()
+    }
+
+    /// Confirm the highlighted option (spec §7).
+    ///
+    /// A single-select question keeps only that option and clears custom text,
+    /// because the two are alternatives and custom text overrides a choice. A
+    /// multi-select question toggles, because custom text supplements the
+    /// choices and the user is not done picking yet.
+    fn confirm_highlight(&mut self) {
+        let index = self.drafts[self.index].highlight;
+        let Some(label) = self.questions[self.index]
+            .options
+            .get(index)
+            .map(|choice| choice.label.clone())
+        else {
+            return;
+        };
+        let multi_select = self.questions[self.index].multi_select;
+        let draft = &mut self.drafts[self.index];
+        if multi_select {
+            match draft.selected.iter().position(|picked| picked == &label) {
+                Some(at) => {
+                    draft.selected.remove(at);
+                }
+                None => draft.selected.push(label),
+            }
+        } else {
+            draft.selected = vec![label];
+            draft.custom.clear();
+        }
+    }
+
+    /// Move the highlight by `delta`, clamped to the options. The highlight is
+    /// what `Enter`/`Space` act on, so it never goes past either end.
+    fn move_highlight(&mut self, delta: isize) {
+        let count = self.questions[self.index].options.len();
+        if count == 0 {
+            return;
+        }
+        let draft = &mut self.drafts[self.index];
+        let next = draft.highlight as isize + delta;
+        draft.highlight = next.clamp(0, count as isize - 1) as usize;
+    }
+
+    /// Add one character of free text.
+    ///
+    /// On a single-select question typing clears the chosen option, because the
+    /// custom text is about to override it. On a multi-select one the choices
+    /// stay, because custom text supplements them (spec §7).
+    fn type_custom(&mut self, ch: char) {
+        let multi_select = self.questions[self.index].multi_select;
+        let draft = &mut self.drafts[self.index];
+        if !multi_select {
+            draft.selected.clear();
+        }
+        draft.custom.push(ch);
+    }
+
+    fn advance(&mut self) {
+        if self.index + 1 < self.questions.len() {
+            self.index += 1;
+        }
+    }
+
+    fn back(&mut self) {
+        self.index = self.index.saturating_sub(1);
+    }
+
+    fn all_handled(&self) -> bool {
+        self.drafts.iter().all(QuestionDraft::handled)
+    }
+
+    /// The answers as the tool's one result (spec §7): a skipped question is
+    /// `selected: []` with no `custom`, and single-select custom text overrides
+    /// the choice.
+    ///
+    /// The skip check comes first because skipping is a decision about the whole
+    /// question: text typed before `Tab` is discarded, or `selected: []` plus a
+    /// `custom` would read to the model as a deliberate custom answer instead of
+    /// "the user chose not to answer" (spec §7).
+    fn answers(&self) -> UserAnswers {
+        UserAnswers {
+            answers: self
+                .questions
+                .iter()
+                .zip(&self.drafts)
+                .map(|(question, draft)| {
+                    if draft.skipped {
+                        return UserAnswer {
+                            id: question.id.clone(),
+                            selected: Vec::new(),
+                            custom: None,
+                        };
+                    }
+                    let custom = draft.custom.trim();
+                    let custom = (!custom.is_empty()).then(|| custom.to_owned());
+                    let selected = if !question.multi_select && custom.is_some() {
+                        Vec::new()
+                    } else {
+                        draft.selected.clone()
+                    };
+                    UserAnswer {
+                        id: question.id.clone(),
+                        selected,
+                        custom,
+                    }
+                })
+                .collect(),
+        }
+    }
 }
 
 impl Pending {
-    /// The rows the overlay shows for this question. It goes over the transcript, so
-    /// the draft stays where the user left it (spec §7, §9).
-    fn modal(&self) -> Modal {
-        match self {
+    /// The rows the overlay shows for this question, or `None` for a question
+    /// that is not drawn as an overlay.
+    ///
+    /// The loop's asks and the renderer's own go over the transcript, so the draft
+    /// stays where the user left it (spec §7, §9). The questionnaire does not: it
+    /// is multi-row and paged, so it takes over the bottom input area instead
+    /// (spec §19), and this answers `None` for it.
+    fn modal(&self) -> Option<Modal> {
+        let modal = match self {
             Pending::Loop {
                 question: Question::Permission(request),
                 ..
@@ -436,7 +668,9 @@ impl Pending {
                 detail: Some(wording::clear_draft_body().to_owned()),
                 choices: &wording::CLEAR_CHOICES,
             },
-        }
+            Pending::Questionnaire(_) => return None,
+        };
+        Some(modal)
     }
 }
 
@@ -682,7 +916,14 @@ impl TuiState {
                 // Only the loop's questions go with the run. The renderer's own — an
                 // oversized paste, a draft `Esc` would clear — are not the run's to
                 // withdraw, and they can only be up while the loop is idle anyway.
-                if !running && matches!(self.pending, Some(Pending::Loop { .. })) {
+                // The questionnaire is the loop's too: it is the model's ask, and a
+                // cancelled run leaves it with no one waiting and no answer to give.
+                if !running
+                    && matches!(
+                        self.pending,
+                        Some(Pending::Loop { .. } | Pending::Questionnaire(_))
+                    )
+                {
                     self.pending = None;
                 }
             }
@@ -699,6 +940,35 @@ impl TuiState {
                     reply: ask.reply,
                 });
             }
+            ConsoleRequest::Questionnaire(request) => {
+                if self.pending.is_some() {
+                    // One question owns the keyboard at a time, exactly as for the
+                    // loop's asks: dropping the new one keeps the one on screen
+                    // answerable, and its dropped sender denies the orphaned ask.
+                    return;
+                }
+                // The tool refuses an empty questionnaire before it reaches a port,
+                // so this cannot come from the model. A question with no questions
+                // would have nothing to draw and nothing to index, so it is refused
+                // rather than allowed to panic the renderer.
+                if request.questions.is_empty() {
+                    let _ = request
+                        .reply
+                        .send(Err("a questionnaire needs at least one question".to_owned()));
+                    return;
+                }
+                let drafts = request
+                    .questions
+                    .iter()
+                    .map(|_| QuestionDraft::default())
+                    .collect();
+                self.pending = Some(Pending::Questionnaire(Questionnaire {
+                    questions: request.questions,
+                    reply: request.reply,
+                    drafts,
+                    index: 0,
+                }));
+            }
             // The names the loop can act on. They arrive once, after assembly — the
             // skills come from the session — and nothing else carries them.
             ConsoleRequest::Catalog { entries } => self.catalog = entries,
@@ -711,6 +981,31 @@ impl TuiState {
 
     pub fn should_quit(&self) -> bool {
         self.quit
+    }
+
+    /// The model's questionnaire, while it owns the bottom input area.
+    fn questionnaire(&self) -> Option<&Questionnaire> {
+        match &self.pending {
+            Some(Pending::Questionnaire(questionnaire)) => Some(questionnaire),
+            _ => None,
+        }
+    }
+
+    /// Feed one keypress to the questionnaire.
+    ///
+    /// The takeover stays up while the questionnaire has questions left; the one
+    /// keypress that submits it drops it, which is what hands the bottom input
+    /// area back to the resident editor.
+    fn questionnaire_key(&mut self, key: Key) {
+        let Some(Pending::Questionnaire(mut questionnaire)) = self.pending.take() else {
+            return;
+        };
+        if questionnaire.press(key) {
+            let answers = questionnaire.answers();
+            let _ = questionnaire.reply.send(Ok(answers));
+        } else {
+            self.pending = Some(Pending::Questionnaire(questionnaire));
+        }
     }
 
     /// Handle one keypress. Answers and submissions go out through the pending
@@ -750,7 +1045,15 @@ impl TuiState {
             // A question owns the keyboard: its own keys answer it, `Ctrl-C` and `Esc`
             // above are the ways out, and nothing else gets through — not a stray
             // character, not the plan-mode gesture (spec §9).
-            if matches!(key, Key::Char(_) | Key::Enter) {
+            //
+            // The questionnaire answers to a wider keyboard than the one-key
+            // questions — the arrows move and page, `Tab` skips, `Enter`/`Space`
+            // confirm — so it gets every key and routes its own. The other kinds
+            // keep the narrow rule, which is what makes a stray character unable
+            // to allow a write.
+            if matches!(self.pending, Some(Pending::Questionnaire(_))) {
+                self.questionnaire_key(key);
+            } else if matches!(key, Key::Char(_) | Key::Enter) {
                 self.answer_key(key);
             }
             return;
@@ -987,14 +1290,25 @@ impl TuiState {
                     self.editor.clear();
                 }
             }
+            // Unreachable: `key` routes a questionnaire to `questionnaire_key`
+            // before this, because it answers to a wider keyboard. Dropping it
+            // here would refuse the tool, so it is only kept to keep the match
+            // total.
+            Pending::Questionnaire(_) => {}
         }
     }
 
     /// What `Esc` means for a question: the non-acting answer, or nothing at all
     /// when the question was this renderer's own.
     fn decline(&mut self, pending: Pending) {
-        if let Pending::Loop { question, reply } = pending {
-            let _ = reply.send(default_choice(&question));
+        match pending {
+            Pending::Loop { question, reply } => {
+                let _ = reply.send(default_choice(&question));
+            }
+            // A questionnaire belongs to a run, so `Esc` while one is up is the
+            // cancel gesture and never reaches here (spec §19). If it ever did,
+            // dropping the sender is the honest "no answer".
+            Pending::Questionnaire(_) | Pending::Paste { .. } | Pending::ClearDraft => {}
         }
     }
 
@@ -1008,6 +1322,171 @@ impl TuiState {
             wording::viewer_status_line(self.busy(), width)
         }
     }
+
+    /// How many content rows the bottom block wants this frame.
+    ///
+    /// The resident editor's draft decides it normally; while a questionnaire owns
+    /// the input area, the questionnaire does — that is what makes the bottom block
+    /// grow to hold the question and its options (spec §19).
+    fn bottom_rows(&self, area: Rect) -> u16 {
+        match self.questionnaire() {
+            Some(questionnaire) => questionnaire_lines(
+                &questionnaire.questions[questionnaire.index],
+                &questionnaire.drafts[questionnaire.index],
+                layout::content_width(area) as usize,
+            )
+            .len() as u16,
+            None => self.editor.height(layout::input_text_width(area)),
+        }
+    }
+}
+
+/// One question's rows: its header, its text, its numbered options, and the line
+/// an answer is typed on.
+///
+/// The length of this is what [`TuiState::bottom_rows`] asks the layout for, so
+/// it is the **full** list; the painter clips and scrolls it through
+/// [`questionnaire_window`]. The options are numbered for reading only — the
+/// decided keyboard has no digit keys — and a recommended option gets a display
+/// badge while its underlying label, the value the answer carries, is left
+/// untouched (spec §7).
+fn questionnaire_lines(
+    question: &UserQuestion,
+    draft: &QuestionDraft,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let (mut rows, options, custom) = questionnaire_parts(question, draft, width);
+    rows.extend(options);
+    rows.push(custom);
+    rows
+}
+
+/// The rows of one question that fit in `height`, scrolling the option window so
+/// the highlighted option is always visible (spec §7).
+///
+/// The header and the question text are pinned: they say what is being asked, so
+/// losing them to a scroll would make the options unreadable. The typed-answer
+/// line is pinned at the bottom for the same reason. The options in between are
+/// the window, and it follows the highlight: moving down past the clip scrolls
+/// the tail into view instead of leaving the highlight off screen.
+fn questionnaire_window(
+    question: &UserQuestion,
+    draft: &QuestionDraft,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let (prefix, options, custom) = questionnaire_parts(question, draft, width);
+    if prefix.len() + options.len() < height {
+        let mut rows = prefix;
+        rows.extend(options);
+        rows.push(custom);
+        return rows;
+    }
+    // The prefix and the answer line are reserved; whatever is left is the
+    // window. A degenerate terminal with no room for either simply shows the
+    // prefix, which is the part that must not be lost.
+    let room = height.saturating_sub(prefix.len() + 1);
+    let start = option_window_start(draft.highlight, options.len(), room);
+    let mut rows = prefix;
+    rows.extend(options.into_iter().skip(start).take(room));
+    rows.push(custom);
+    rows.truncate(height);
+    rows
+}
+
+/// The first option to draw so that `highlight` is inside a window of `room`
+/// options. The list does not wrap: once the highlight is past the window the
+/// window follows it one row at a time.
+fn option_window_start(highlight: usize, count: usize, room: usize) -> usize {
+    if room == 0 || count <= room {
+        return 0;
+    }
+    let start = if highlight < room {
+        0
+    } else {
+        highlight + 1 - room
+    };
+    start.min(count - room)
+}
+
+/// Split one question into its pinned prefix (header and text), its option rows,
+/// and the typed-answer row.
+///
+/// The split exists for the scrolling window; the composition of each row lives
+/// here once, so the full list and the window cannot disagree about what an
+/// option reads as.
+fn questionnaire_parts(
+    question: &UserQuestion,
+    draft: &QuestionDraft,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>, Line<'static>) {
+    let mut prefix: Vec<Line<'static>> = Vec::new();
+    if let Some(header) = question
+        .header
+        .as_deref()
+        .map(str::trim)
+        .filter(|header| !header.is_empty())
+    {
+        for mut row in pane::wrap_text(header, width) {
+            row.style = Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
+            prefix.push(row);
+        }
+    }
+    let mut title = question.question.clone();
+    if question.multi_select {
+        title.push_str(wording::questionnaire_multi_marker());
+    }
+    prefix.extend(pane::wrap_text(title.trim(), width));
+
+    let mut options: Vec<Line<'static>> = Vec::with_capacity(question.options.len());
+    for (index, choice) in question.options.iter().enumerate() {
+        let highlighted = index == draft.highlight;
+        let picked = draft
+            .selected
+            .iter()
+            .any(|selected| selected == &choice.label);
+        let marker = match (question.multi_select, picked) {
+            (true, true) => "[x]",
+            (true, false) => "[ ]",
+            (false, true) => "●",
+            (false, false) => "○",
+        };
+        // The cursor says which option `Enter`/`Space` would confirm; the marker
+        // says which are picked. They are different facts and can differ.
+        let cursor = if highlighted { ">" } else { " " };
+        let text = format!(
+            "{cursor} {marker} {}",
+            wording::questionnaire_option(index + 1, &choice.label, choice.description.as_deref())
+        );
+        let mut style = if picked {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        if highlighted {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        options.push(Line::from(Span::styled(
+            truncate_columns(&text, width),
+            style,
+        )));
+    }
+
+    let label = if question.options.is_empty() {
+        wording::questionnaire_answer_label()
+    } else {
+        wording::questionnaire_custom_label()
+    };
+    let room = width.saturating_sub(text_columns(label));
+    let custom = Line::from(vec![
+        Span::styled(label, Style::default().fg(Color::DarkGray)),
+        Span::raw(truncate_columns(&draft.custom, room)),
+    ]);
+    (prefix, options, custom)
 }
 
 /// Draw one frame of the four-pane layout.
@@ -1023,9 +1502,11 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         return;
     }
     // The draft's own height decides how much room the input takes: it grows with
-    // the text up to the layout's cap and then scrolls internally (spec §5).
-    let draft_rows = state.editor.height(layout::input_text_width(area));
-    let panes = layout::plan(area, draft_rows);
+    // the text up to the layout's cap and then scrolls internally (spec §5). A
+    // questionnaire replaces that with its own height, so the bottom block grows to
+    // hold the question (spec §19).
+    let content_rows = state.bottom_rows(area);
+    let panes = layout::plan(area, content_rows);
     draw_header(frame, &panes, state);
     draw_transcript(frame, &panes, state);
     let anchor = draw_bottom(frame, &panes, state);
@@ -1045,7 +1526,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
 /// carries the `PermissionAsked` block for anyone reading back. It owns the pointer
 /// while it is up, so the "back to bottom" rectangle is dropped.
 fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    let Some(modal) = state.pending.as_ref().map(Pending::modal) else {
+    let Some(modal) = state.pending.as_ref().and_then(Pending::modal) else {
         return;
     };
     // From here on a question is up, and the overlay covers the indicator: a click
@@ -1407,12 +1888,32 @@ fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
 /// Returns where the cursor was put, so whatever floats over the pane can anchor
 /// itself to it — the `/` menu follows the cursor (spec §6). `None` while a question
 /// is up, because there is no cursor then.
+///
+/// A questionnaire replaces the input line with itself. That is the whole point of
+/// this kind of question: the middle overlay suits a one-line confirmation, while a
+/// questionnaire is several rows and pages, so it takes the area built for typing
+/// (spec §19).
 fn draw_bottom(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
     state: &TuiState,
 ) -> Option<editor::Placed> {
     draw_border(frame, panes.bottom);
+    if let Some(questionnaire) = state.questionnaire() {
+        draw_questionnaire(frame, panes, questionnaire);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                wording::questionnaire_status(
+                    questionnaire.index,
+                    questionnaire.questions.len(),
+                    questionnaire.all_handled(),
+                ),
+                Style::default().fg(Color::DarkGray),
+            ))),
+            panes.hints,
+        );
+        return None;
+    }
     let (rows, cursor) = state
         .editor
         .view(layout::input_text_width(frame.area()), panes.input.height);
@@ -1439,6 +1940,27 @@ fn draw_bottom(
         panes.hints,
     );
     anchor
+}
+
+/// The questionnaire in the bottom input area: one question's rows, scrolled to
+/// the room the layout gave.
+///
+/// The layout caps the bottom block's height, so a question with more rows than
+/// fit is windowed rather than clipped: the header and the question stay put and
+/// the option window follows the highlight (spec §7, §19). The footer still says
+/// which question it is, and the cap keeps the transcript visible.
+fn draw_questionnaire(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    questionnaire: &Questionnaire,
+) {
+    let rows = questionnaire_window(
+        &questionnaire.questions[questionnaire.index],
+        &questionnaire.drafts[questionnaire.index],
+        panes.input.width as usize,
+        panes.input.height as usize,
+    );
+    frame.render_widget(Paragraph::new(rows), panes.input);
 }
 
 /// The `/` menu: the names a leading `/` can become — the built-ins the loop handles

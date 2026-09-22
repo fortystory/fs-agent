@@ -64,7 +64,7 @@ async fn fixture_at(
     let provider = FakeProvider::new(replies);
     // The built-in table, `bash` included: an `Exclusive` call is what plan mode
     // must refuse, and the real tool is the honest way to pin that.
-    let tools = fs_agent::tools::builtin();
+    let tools = fs_agent::tools::builtin(false);
 
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
@@ -82,6 +82,7 @@ async fn fixture_at(
             locks: fs_agent::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
+            questions: None,
             hook: None,
             home: None,
         },

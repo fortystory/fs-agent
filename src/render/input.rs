@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::permissions::{Answer, Asker, PermissionRequest, PlanConflict};
+use crate::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
 
 /// A question the front end must put to the user.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +66,21 @@ pub struct AskRequest {
     pub reply: oneshot::Sender<AnswerChoice>,
 }
 
+/// A model-initiated questionnaire the front end must put to the user (spec §7).
+///
+/// It has its own reply channel rather than a [`Question`] variant on purpose:
+/// the permission gate's [`AnswerChoice`] cannot express a questionnaire answer,
+/// and making the gate carry a shape it can never produce is what the third asker
+/// exists to avoid (spec §19).
+#[derive(Debug)]
+pub struct QuestionnaireRequest {
+    pub questions: Vec<UserQuestion>,
+    /// The answers, or a model-readable reason none came back (input ended, or
+    /// the run was cancelled). Dropping the sender is read as the same "no
+    /// answer", so a cancelled run never leaves the tool hanging.
+    pub reply: oneshot::Sender<Result<UserAnswers, String>>,
+}
+
 /// One name a leading `/` can become, and the line that says what it does.
 ///
 /// The catalog is the **loop's** list, not the renderer's: the loop is what turns a
@@ -101,6 +117,9 @@ pub enum ConsoleRequest {
     },
     /// Put a question to the user.
     Ask(AskRequest),
+    /// Put the model's questionnaire to the user (spec §7). Its answer type is
+    /// different from [`Ask`](Self::Ask)'s, so it travels on its own channel.
+    Questionnaire(QuestionnaireRequest),
     /// The names a leading `/` can become.
     ///
     /// Pushed once, right after assembly, because the skills come from the session and
@@ -263,22 +282,97 @@ impl Asker for ConsoleAsker {
     }
 }
 
+/// The model-question port, answered through the front end (spec §7).
+///
+/// The mirror of [`ConsoleAsker`] for the model's questions: the loop side asks,
+/// the front end answers. The error text is **model-facing** — it becomes the
+/// `ask_user_question` call's result — so it is plain English and deliberately
+/// does not go through the wording layer.
+pub struct ConsoleQuestions {
+    requests: mpsc::UnboundedSender<ConsoleRequest>,
+}
+
+impl ConsoleQuestions {
+    pub fn new(requests: mpsc::UnboundedSender<ConsoleRequest>) -> Self {
+        Self { requests }
+    }
+
+    /// Build the port from a handle, so the CLI wires one keyboard into both the
+    /// loop and the model's questions.
+    pub fn from_handle(handle: &ConsoleHandle) -> Self {
+        Self::new(handle.requests.clone())
+    }
+}
+
+#[async_trait]
+impl UserQuestions for ConsoleQuestions {
+    async fn ask(&self, questions: &[UserQuestion]) -> Result<UserAnswers, String> {
+        let (reply, answer) = oneshot::channel();
+        if self
+            .requests
+            .send(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+                questions: questions.to_vec(),
+                reply,
+            }))
+            .is_err()
+        {
+            return Err("no questionnaire answerer is connected".to_owned());
+        }
+        match answer.await {
+            Ok(result) => result,
+            // The front end went away without answering — the run was cancelled,
+            // or the input ended. Never hang waiting for a person who is gone.
+            Err(_) => Err("the questionnaire was left unanswered".to_owned()),
+        }
+    }
+}
+
+/// A source of one input line, with `None` for end of input.
+///
+/// This is the plain front end's one input primitive. It is a value rather than a
+/// direct `stdin` read so the whole line-oriented console — the prompt, the
+/// permission questions, the questionnaire — can be driven from a script in a
+/// test, the same way the TUI's keyboard is driven one event at a time.
+pub type LineReader = Box<
+    dyn FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        + Send,
+>;
+
 /// Run the line-oriented front end for plain mode.
 ///
 /// stdin is line-buffered, so there is no raw mode and no key events: the port
 /// reads one line per request, whether the loop wanted a prompt or the gate wants
 /// an answer. Prompts go to stderr, never stdout — the final product is the only
 /// thing stdout carries (spec §19).
-pub fn spawn_plain_console(mut port: ConsolePort) -> tokio::task::JoinHandle<()> {
+pub fn spawn_plain_console(port: ConsolePort) -> tokio::task::JoinHandle<()> {
+    spawn_plain_console_with(port, Box::new(|| Box::pin(read_stdin_line())))
+}
+
+/// [`spawn_plain_console`] with an injected line reader.
+///
+/// The reader is the whole input surface of this front end, so injecting it is what
+/// makes the line-by-line path — including the model's questionnaire — testable
+/// without a pipe.
+pub fn spawn_plain_console_with(
+    mut port: ConsolePort,
+    mut reader: LineReader,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(request) = port.recv().await {
             match request {
                 ConsoleRequest::Prompt { reply } => {
-                    let _ = reply.send(read_line("> ").await);
+                    let _ = reply.send(next_line(&mut reader, "> ").await);
                 }
                 ConsoleRequest::Ask(ask) => {
-                    let answer = answer_question(&ask.question).await;
+                    let answer = answer_question(&mut reader, &ask.question).await;
                     let _ = ask.reply.send(answer);
+                }
+                // The model's questionnaire, answered one line per question. On
+                // end of input it returns an error rather than looping for ever
+                // (spec §19).
+                ConsoleRequest::Questionnaire(request) => {
+                    let answers = answer_questionnaire(&mut reader, &request.questions).await;
+                    let _ = request.reply.send(answers);
                 }
                 // There is no menu on the line-oriented front end: the names are
                 // discoverable through the unknown-command text instead.
@@ -291,11 +385,16 @@ pub fn spawn_plain_console(mut port: ConsolePort) -> tokio::task::JoinHandle<()>
     })
 }
 
-/// Read one line from stdin after writing `prompt` to stderr. `None` at EOF.
-async fn read_line(prompt: &str) -> Option<String> {
+/// Write `prompt` to stderr and pull the next line. `None` at end of input.
+async fn next_line(reader: &mut LineReader, prompt: &str) -> Option<String> {
     use std::io::Write;
     eprint!("{prompt}");
     let _ = std::io::stderr().flush();
+    reader().await
+}
+
+/// Read one line from stdin. `None` at EOF.
+async fn read_stdin_line() -> Option<String> {
     tokio::task::spawn_blocking(|| {
         let mut line = String::new();
         match std::io::stdin().read_line(&mut line) {
@@ -313,7 +412,7 @@ async fn read_line(prompt: &str) -> Option<String> {
 ///
 /// Anything that is not an explicit yes is read the non-acting way: an answer
 /// typed by accident must not approve a write.
-async fn answer_question(question: &Question) -> AnswerChoice {
+async fn answer_question(reader: &mut LineReader, question: &Question) -> AnswerChoice {
     match question {
         Question::Permission(request) => {
             let prompt = crate::render::wording::permission_prompt_with_context(
@@ -321,7 +420,7 @@ async fn answer_question(question: &Question) -> AnswerChoice {
                 &crate::render::transcript::summarize_args(&request.args),
                 &request.reason,
             );
-            match read_line(&prompt).await.as_deref() {
+            match next_line(reader, &prompt).await.as_deref() {
                 Some("y") | Some("yes") => AnswerChoice::Permission(Answer::Allow),
                 Some("a") | Some("always") => AnswerChoice::Permission(Answer::AlwaysAllow),
                 _ => AnswerChoice::Permission(Answer::Deny),
@@ -329,11 +428,159 @@ async fn answer_question(question: &Question) -> AnswerChoice {
         }
         Question::PlanConflict(path) => {
             let prompt = crate::render::wording::plan_conflict_prompt(&path.display().to_string());
-            match read_line(&prompt).await.as_deref() {
+            match next_line(reader, &prompt).await.as_deref() {
                 Some("o") | Some("overwrite") => AnswerChoice::Plan(PlanConflict::Overwrite),
                 Some("a") | Some("append") => AnswerChoice::Plan(PlanConflict::Append),
                 _ => AnswerChoice::Plan(PlanConflict::Keep),
             }
         }
     }
+}
+
+/// Put the model's questionnaire on the terminal, one question per line, and
+/// encode what was read (spec §7, §19).
+///
+/// There is no paging here: every question is printed and read in turn, so the
+/// "one screen at a time" of the TUI becomes "one prompt at a time". An empty line
+/// is a skip; a number picks an option; anything else is custom text. A
+/// multi-select question with options reads a second, optional line so that
+/// `selected` and `custom` can both be answered — the supplement spec §7
+/// requires. End of input is not an answer, so it fails the call instead of
+/// waiting.
+async fn answer_questionnaire(
+    reader: &mut LineReader,
+    questions: &[UserQuestion],
+) -> Result<UserAnswers, String> {
+    let mut answers = Vec::with_capacity(questions.len());
+    for (index, question) in questions.iter().enumerate() {
+        print_questionnaire_question(index, questions.len(), question);
+        let Some(answer) = read_plain_answer(reader, question).await else {
+            return Err("input ended before the questionnaire was answered".to_owned());
+        };
+        answers.push(answer);
+    }
+    Ok(UserAnswers { answers })
+}
+
+/// Read one question's answer, or `None` at end of input.
+///
+/// A multi-select question that offers options takes **two** lines: the numbers
+/// (or custom text) and then an optional supplement. That second line is the only
+/// way a line-oriented front end can say "this choice, plus this text" (spec §7);
+/// every other question takes one line, which keeps the common case short.
+async fn read_plain_answer(reader: &mut LineReader, question: &UserQuestion) -> Option<UserAnswer> {
+    if question.multi_select && !question.options.is_empty() {
+        let selection = next_line(
+            reader,
+            crate::render::wording::questionnaire_plain_options_prompt(true),
+        )
+        .await?;
+        let supplement = next_line(
+            reader,
+            crate::render::wording::questionnaire_plain_supplement_prompt(),
+        )
+        .await?;
+        return Some(encode_plain_answer(question, &selection, Some(&supplement)));
+    }
+    let prompt = if question.options.is_empty() {
+        crate::render::wording::questionnaire_plain_answer_prompt()
+    } else {
+        crate::render::wording::questionnaire_plain_options_prompt(false)
+    };
+    let line = next_line(reader, prompt).await?;
+    Some(encode_plain_answer(question, &line, None))
+}
+
+/// Print one question and its numbered options to stderr.
+fn print_questionnaire_question(index: usize, total: usize, question: &UserQuestion) {
+    if let Some(header) = question
+        .header
+        .as_deref()
+        .map(str::trim)
+        .filter(|header| !header.is_empty())
+    {
+        eprintln!("{header}");
+    }
+    eprintln!(
+        "[{}] {}",
+        crate::render::wording::questionnaire_progress(index, total),
+        question.question.trim()
+    );
+    for (at, choice) in question.options.iter().enumerate() {
+        eprintln!(
+            "  {}",
+            crate::render::wording::questionnaire_option(
+                at + 1,
+                &choice.label,
+                choice.description.as_deref(),
+            )
+        );
+    }
+}
+
+/// Encode one plain-console answer.
+///
+/// A blank first line is a skip (`selected: []`, no `custom`). A line that is a
+/// list of valid option numbers picks those options; anything else is custom
+/// text, which on a single-select question means the choice is empty because
+/// custom text overrides it (spec §7). `supplement` is the multi-select question's
+/// second line: when present it is added to the custom text, so `selected` and
+/// `custom` travel together.
+fn encode_plain_answer(
+    question: &UserQuestion,
+    line: &str,
+    supplement: Option<&str>,
+) -> UserAnswer {
+    let line = line.trim();
+    let supplement = supplement
+        .map(str::trim)
+        .filter(|supplement| !supplement.is_empty());
+
+    let mut selected = Vec::new();
+    let mut custom: Option<String> = None;
+    if question.options.is_empty() {
+        if !line.is_empty() {
+            custom = Some(line.to_owned());
+        }
+    } else if let Some(chosen) = chosen_options(question, line) {
+        selected = chosen;
+    } else if !line.is_empty() {
+        custom = Some(line.to_owned());
+    }
+    if let Some(supplement) = supplement {
+        custom = Some(match custom {
+            Some(first) => format!("{first} {supplement}"),
+            None => supplement.to_owned(),
+        });
+    }
+    UserAnswer {
+        id: question.id.clone(),
+        selected,
+        custom,
+    }
+}
+
+/// The labels a line of option numbers names, or `None` when the line is not a
+/// list of valid numbers (which makes it custom text).
+///
+/// A single-select question takes exactly one number; a multi-select one takes a
+/// comma-separated list.
+fn chosen_options(question: &UserQuestion, line: &str) -> Option<Vec<String>> {
+    let mut selected = Vec::new();
+    let tokens: Vec<&str> = if question.multi_select {
+        line.split(',').collect()
+    } else {
+        vec![line]
+    };
+    for token in tokens {
+        let number: usize = token.trim().parse().ok()?;
+        if number == 0 || number > question.options.len() {
+            return None;
+        }
+        let label = question.options[number - 1].label.clone();
+        if !selected.contains(&label) {
+            selected.push(label);
+        }
+    }
+    (!selected.is_empty()).then_some(selected)
 }

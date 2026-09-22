@@ -34,9 +34,10 @@ use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::provider::Message;
+use crate::questions::UserQuestions;
 use crate::render::{
-    self, ConsoleAsker, ConsoleEvents, ConsoleHandle, FrontEndEvent, PlainOptions, RenderSinks,
-    Renderer, SessionFacts, TuiOptions,
+    self, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsoleQuestions, FrontEndEvent,
+    PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
@@ -337,6 +338,12 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         })
     };
     let asker = Arc::new(ConsoleAsker::from_handle(&console));
+    // The model's questions travel the same keyboard on their own port (spec §7).
+    // Interactive assembly always has one — TUI or plain — so the tool table offers
+    // `ask_user_question`, and the table is built from the port's presence rather
+    // than from a second, drift-prone flag.
+    let questions: Option<Arc<dyn UserQuestions>> =
+        Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
     let mut harness = match assemble(AssemblyParts {
         scaffold: SessionScaffold {
@@ -345,12 +352,13 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             session_id: stored.id.clone(),
             // The tool table is fixed here, at assembly: the built-ins plus
             // every dynamically declared tool (spec §14).
-            tools: tools::with_dynamic(&config.tools),
+            tools: tools::with_dynamic(&config.tools, questions.is_some()),
             locks: PathLocks::new(),
             // Interactive sessions start in `ask`: writes ask, reads are allowed
             // (spec §12). A headless caller gets no answerer and downgrades.
             policy: Policy::for_mode(Mode::Ask),
             asker: Some(asker),
+            questions,
             hook: None,
             home,
         },
@@ -611,16 +619,21 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     // The same keyboard answers the debaters' permission questions: a discussion is
     // still a session with tools in it.
     let asker = Arc::new(ConsoleAsker::from_handle(&console));
+    // A debater is a main session, not an executor, so it may ask the user too
+    // (spec §7); the port is the same keyboard the permission gate uses.
+    let questions: Option<Arc<dyn UserQuestions>> =
+        Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
     let mut harness = match assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
             cwd,
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            tools: tools::with_dynamic(&config.tools),
+            tools: tools::with_dynamic(&config.tools, questions.is_some()),
             locks: PathLocks::new(),
             policy: Policy::for_mode(Mode::Ask),
             asker: Some(asker),
+            questions,
             hook: None,
             home,
         },
@@ -1504,16 +1517,17 @@ async fn probe_model(
             cwd: dir,
             log_path: log_path.clone(),
             session_id: SessionId::new(format!("probe-{model_id}")),
-            // The probe exercises real turns, so it gets the real tool table.
-            // The tool table is fixed here, at assembly: the built-ins plus
-            // every dynamically declared tool (spec §14).
-            tools: tools::with_dynamic(&config.tools),
+            // The probe exercises real turns, so it gets the real tool table —
+            // except for `ask_user_question`: headless has no answerer, and a tool
+            // that can only fail wastes a model call (spec §19).
+            tools: tools::with_dynamic(&config.tools, false),
             locks: PathLocks::new(),
             // The probe is headless and has no answerer, so the interactive
             // default `ask` refuses writes rather than hanging on a question
             // nobody can see.
             policy: Policy::for_mode(Mode::Ask),
             asker: None,
+            questions: None,
             // Ticket 05 lands the mount points; wiring user-declared hooks into
             // the CLI is nobody's ticket yet, so the probe runs without one.
             hook: None,

@@ -12,6 +12,7 @@
 //! caller's environment, which is the one thing in this boundary that reaches
 //! outside the process.
 
+pub mod ask_user;
 pub mod bash;
 pub mod custom;
 pub mod edit;
@@ -24,6 +25,7 @@ pub mod skill;
 pub mod task;
 pub mod tool;
 
+pub use ask_user::{AskUserQuestionTool, ASK_USER_QUESTION_TOOL};
 pub use bash::{BashTool, BASH_TOOL};
 pub use custom::{is_custom_tool, CustomTool};
 pub use file::{
@@ -53,7 +55,14 @@ pub use tool::{
 /// and is the one tool an executor's table does not get (spec §16). `bash` is
 /// stateless too: its two limits arrive through [`ToolContext`] like the repo
 /// map's budget.
-pub fn builtin() -> Registry {
+///
+/// `can_ask` is the assembly-level fact "this session has a question port"
+/// (spec §7, §19). It is a parameter rather than something `ask_user_question`
+/// discovers at call time because a headless session must not advertise the tool
+/// at all: offering the model a call that can only fail wastes a call. That is
+/// the same "the table decides" mechanism that keeps `task` out of an executor's
+/// table.
+pub fn builtin(can_ask: bool) -> Registry {
     let mut registry = Registry::new();
     registry.register(Box::new(ReadFile));
     registry.register(Box::new(WriteFile));
@@ -62,6 +71,9 @@ pub fn builtin() -> Registry {
     registry.register(Box::new(SkillTool));
     registry.register(Box::new(RepoMapTool::new()));
     registry.register(Box::new(TaskTool));
+    if can_ask {
+        registry.register(Box::new(AskUserQuestionTool));
+    }
     registry
 }
 
@@ -70,8 +82,10 @@ pub fn builtin() -> Registry {
 /// This is the assembly point for the tool table: a declaration becomes a
 /// normal-looking tool here and nowhere else, and the table does not change
 /// afterwards — the tool array is part of the cached prefix (spec §14).
-pub fn with_dynamic(declarations: &[crate::config::ToolDeclaration]) -> Registry {
-    let mut registry = builtin();
+/// `can_ask` travels straight to [`builtin`], so whether the model is offered
+/// `ask_user_question` is decided in the one place the table is built.
+pub fn with_dynamic(declarations: &[crate::config::ToolDeclaration], can_ask: bool) -> Registry {
+    let mut registry = builtin(can_ask);
     for declaration in declarations {
         registry.register(Box::new(CustomTool::new(declaration.clone())));
     }

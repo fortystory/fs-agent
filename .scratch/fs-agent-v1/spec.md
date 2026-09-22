@@ -335,7 +335,7 @@ Status: ready-for-agent
 - **`read-before-edit` 与 per-path 写互斥都在工具层 dispatch 集中强制**：read set 归 `Session`，**锁表是组装期注入的 `PathLocks`**（必须跨执行者共享；每会话一份等于没锁）。
 - **内建工具集**（v1 全部）：读文件 / 写文件 / 编辑文件 / `bash` / `skill(name)` / `repo_map(focus?)` / `task`。
 
-票 32 往这个集合里加第十个工具 `ask_user_question`，并定下它与既有「询问」的分界（**回改本节**，因为
+票 32 往这个集合里加第八个工具 `ask_user_question`，并定下它与既有「询问」的分界（**回改本节**，因为
 它改的是工具集合本身）：
 
 - **`ask_user_question(questions)` 是模型发起的用户提问**，答案是那条 `tool_call` 的**唯一结果**

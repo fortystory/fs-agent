@@ -31,6 +31,7 @@ use serde_json::Value;
 use crate::context::repo_map::RepoMapInput;
 use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
+use crate::questions::UserQuestions;
 
 use super::paths::{PathLocks, SessionPaths};
 use super::tool::{
@@ -192,6 +193,7 @@ impl Registry {
             repo_map: &call.repo_map,
             bash: &call.bash,
             executor: call.executor.as_deref(),
+            questions: call.questions.as_deref(),
             tool_call_id: &call.tool_call_id,
             args: &call.args,
         };
@@ -310,6 +312,10 @@ pub struct PendingCall {
     /// per call by the loop, which is what knows the provider and the renderer an
     /// executor needs.
     pub executor: Option<Arc<dyn ExecutorSpawner>>,
+    /// The port that puts a model-initiated question to the user, for an
+    /// `ask_user_question` call (spec §7). The session's, cloned as a handle like
+    /// the skills: the loop is not what answers, so it only carries the port.
+    pub questions: Option<Arc<dyn UserQuestions>>,
 }
 
 /// Hand-written because the port is an opaque handle: whether one is mounted is
@@ -327,6 +333,7 @@ impl std::fmt::Debug for PendingCall {
             .field("repo_map", &self.repo_map)
             .field("bash", &self.bash)
             .field("executor", &self.executor.is_some())
+            .field("questions", &self.questions.is_some())
             .finish()
     }
 }

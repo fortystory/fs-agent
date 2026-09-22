@@ -68,6 +68,36 @@ _Avoid_: abort、stop、interrupt（`Aborted` 是收尾原因，不是手势名�
 `readonly` 加**一条**写豁免的权限模式（`Mode::Plan`）：可以读，唯一能写的是项目根 `PLAN.md`；进出**只由用户手势**决定（`/plan` / `/endplan`），模型那侧没有对应的工具。派出去的执行者沿用同一模式。
 _Avoid_: planning mode、计划态（叙述里的「硬 plan 模式」指的就是它）
 
+## 提问
+
+**询问（Ask）**:
+**harness 发起**的问句，答案是**闸门**：权限门判定为「问」时的许可询问，以及进入硬计划模式时 `PLAN.md` 已存在的冲突。答案决定一次动作的去留（允许/拒绝、覆盖/追加/保留），因此它回答的是「要不要做」。走中段覆盖层、一行按钮；发起者是 harness 或渲染器，不是模型。执行者的询问沿委派链回到同一个键盘。
+_Avoid_: 用户提问（那是模型的）、prompt、确认框
+
+**用户提问（User Question）**:
+**模型发起**的问句，答案是**上下文**：模型调 `ask_user_question` 工具把一批问题交给用户，用户作答（或显式跳过），答案是那条 `tool_call` 的**唯一结果**（`{"answers":[{"id","selected","custom"?}]}` 的 JSON 文本）。与**询问（Ask）**的分界是「答案决定去留」还是「答案是模型继续干活的输入」——所以这是**第三类发起者**，`Asker` 那条接缝不扩展。只有主会话能问（执行者的工具表里没有它）；TUI 接管**底部输入区**（一屏一问、分页、每题必须作答或跳过），plain 逐行问答，headless 根本不挂这个工具。
+_Avoid_: 询问（那是 harness 的闸门）、question（类型名用 `UserQuestion`）、prompt
+
+**问卷（Questionnaire）**:
+模型一次 `ask_user_question` 调用里的**整批问题**，以及前端为它持有的键盘状态（TUI 的 `Questionnaire`）。它不是事件、不落流：唯一持久痕迹是那条 `tool_call` 的 args 和它的唯一结果（spec §7）。TUI 里接管底部输入区、一屏一问；plain 逐行问答。
+_Avoid_: 表单、form、wizard（那是多步配置流程，不是模型的问题）
+
+**问卷请求（QuestionnaireRequest）**:
+端口把一批问题交给前端的那个值（`src/render/input.rs`），带一条一次性回复通道 `reply: Result<UserAnswers, String>`；drop 掉 sender 等于「没有答案」（取消或输入结束），所以工具不会挂住。它与 `AskRequest` 并列——第三类发起者不扩展 `Asker` 接缝，就落在这里。
+_Avoid_: 把它当成 `Ask` 的一个变体（答案类型不同，通道也不同）
+
+**作答草稿（QuestionDraft）**:
+问卷里**一道题**的作答状态：已选 `selected`、自定义文本 `custom`、高亮下标 `highlight`、是否跳过 `skipped`。它活在键盘那一侧（TUI 的 `TuiState`），每题一份、可来回翻页；`skipped` 是显式的「不作答」，无论之前打过什么字都编码成 `selected: []` 且无 `custom`。
+_Avoid_: 答案（那是编码后的 `UserAnswer`）、答题卡
+
+**问题选项（questions::Choice）**:
+模型在 `questions[].options[]` 里给的一个选项：`label`（原串就是答案值，`(Recommended)` 只做显示）加可选 `description`。与 `wording::Choice`（一个键 + 一句中文标签，权限 / 计划冲突覆盖层的按钮词汇）**同名不同物**——前者是模型给的选项数据，后者是前端按钮的键位定义，共同点只有「都可被选中」；保留两个名字是更小的改动，各自的层各自命名。
+_Avoid_: 把两者互相当别名；按钮（那特指 `wording::Choice`）
+
+**问卷文案（`questionnaire_*`）**:
+`render::wording` 里问卷一族人类可见文案的命名前缀（`questionnaire_hint`、`questionnaire_option`、`questionnaire_plain_*` 等）。同一条规则：TUI 与 plain 共享同一个生成器，模型面文本不经过这里。
+_Avoid_: 在渲染器里内联问卷中文
+
 ## 上下文与技能
 
 **技能（Skill）**:

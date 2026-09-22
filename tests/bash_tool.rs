@@ -52,12 +52,13 @@ async fn fixture(replies: Vec<Reply>, mode: Mode, config: SessionConfig) -> Fixt
             cwd: workspace.clone(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-bash"),
-            tools: builtin(),
+            tools: builtin(false),
             locks: fs_agent::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             // An answerer that allows everything, so nothing but the breaker or
             // a mode can refuse a call in these tests.
             asker: Some(Arc::new(AlwaysAllow)),
+            questions: None,
             hook: None,
             home: None,
         },
@@ -151,7 +152,7 @@ fn run_with_timeout(id: &str, command: &str, timeout_ms: u64) -> Reply {
 
 #[test]
 fn bash_declares_one_shell_argv_and_an_exclusive_effect() {
-    let registry = builtin();
+    let registry = builtin(false);
     let bash = registry.get("bash").expect("bash is a built-in tool");
 
     assert_eq!(

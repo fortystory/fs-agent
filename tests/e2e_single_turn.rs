@@ -57,12 +57,13 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
             cwd: cwd.clone(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-1"),
-            tools: fs_agent::tools::builtin(),
+            tools: fs_agent::tools::builtin(false),
             locks: fs_agent::tools::PathLocks::new(),
             // An interactive session: the default `ask` mode, with a user who
             // approves every write. Permission-specific tests script their own.
             policy: Policy::for_mode(Mode::Ask),
             asker: Some(Arc::new(AlwaysAllow)),
+            questions: None,
             hook: None,
             home: None,
         },

@@ -245,6 +245,16 @@ pub fn input_text_width(area: Rect) -> u16 {
         .saturating_sub(BORDER_ROWS + crate::render::editor::prompt_columns())
 }
 
+/// The width of a block's content rows: the area less its two border columns.
+///
+/// The questionnaire needs this before [`plan`] runs — how many rows it wants
+/// decides how tall the bottom block is — and it has to match the `input`
+/// rectangle `plan` hands back, or the drawn rows and the requested height would
+/// disagree.
+pub fn content_width(area: Rect) -> u16 {
+    area.width.saturating_sub(BORDER_ROWS)
+}
+
 /// Lay out one frame. `draft_rows` is how many rows the input's draft wraps to.
 ///
 /// The order here **is** the degrade ladder: the panel is hidden first (by the

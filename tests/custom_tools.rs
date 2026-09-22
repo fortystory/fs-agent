@@ -59,8 +59,11 @@ fn a_declaration_becomes_a_namespaced_tool() {
 #[test]
 fn builtin_names_never_contain_the_separator() {
     // The lexical predicate "has `__` iff declared in configuration" only holds
-    // while no built-in name contains it (spec §14).
-    for spec in builtin().specs() {
+    // while no built-in name contains it (spec §14). `true` asks for the whole
+    // built-in table — the optional tool included — because the invariant is
+    // about every built-in, not about whatever a headless session happens to
+    // advertise.
+    for spec in builtin(true).specs() {
         assert!(
             !is_custom_tool(&spec.name),
             "built-in `{}` must not contain `__`",
@@ -71,23 +74,24 @@ fn builtin_names_never_contain_the_separator() {
 
 #[test]
 fn the_declared_tool_is_registered_and_recognizable() {
-    let registry = with_dynamic(&declarations(ECHO_TOML));
+    let registry = with_dynamic(&declarations(ECHO_TOML), false);
     assert!(is_custom_tool("custom__test__echo"));
     assert!(registry.get("custom__test__echo").is_some());
-    // The built-in table alone does not have it.
-    assert!(builtin().get("custom__test__echo").is_none());
+    // The built-in table alone does not have it — the full table, optional
+    // tools and all, is still not where a declared name comes from.
+    assert!(builtin(true).get("custom__test__echo").is_none());
 }
 
 #[test]
 fn a_dynamic_tool_cannot_claim_to_be_read_only() {
-    let registry = with_dynamic(&declarations(ECHO_TOML));
+    let registry = with_dynamic(&declarations(ECHO_TOML), false);
     let declared = registry.get("custom__test__echo").unwrap();
     assert_eq!(declared.effect(&serde_json::json!({})), Effect::Exclusive);
 }
 
 #[test]
 fn the_declared_schema_is_sent_verbatim() {
-    let registry = with_dynamic(&declarations(ECHO_TOML));
+    let registry = with_dynamic(&declarations(ECHO_TOML), false);
     let spec = registry.get("custom__test__echo").unwrap().spec();
     assert_eq!(spec.name, "custom__test__echo");
     assert_eq!(spec.description, "Echo one argument.");
@@ -285,10 +289,11 @@ async fn fixture(toml: &str, replies: Vec<Reply>, policy: Policy) -> Fixture {
             cwd: workspace.clone(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-custom"),
-            tools: with_dynamic(&declarations),
+            tools: with_dynamic(&declarations, false),
             locks: fs_agent::tools::PathLocks::new(),
             policy,
             asker: Some(Arc::new(AlwaysAllow)),
+            questions: None,
             hook: None,
             home: None,
         },

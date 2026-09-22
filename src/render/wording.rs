@@ -561,6 +561,130 @@ pub fn clear_draft_body() -> &'static str {
     "草稿有多行，Esc 会把它们全部丢掉"
 }
 
+/// The footer that pages a questionnaire: `2 / 3`.
+pub fn questionnaire_progress(index: usize, total: usize) -> String {
+    format!("{} / {}", index + 1, total)
+}
+
+/// The keys a questionnaire offers, in the order they are shown.
+///
+/// `ready` is whether every question is handled, because that is what decides
+/// whether `enter` submits or only continues (spec §7). Promising `enter 提交`
+/// while it is still advancing would be a lie the interface tells on every
+/// question but the last.
+pub fn questionnaire_hint(ready: bool) -> &'static str {
+    if ready {
+        "↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
+    } else {
+        "↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
+    }
+}
+
+/// The questionnaire's footer: which question is on screen, and what the keys do.
+///
+/// `ready` travels into [`questionnaire_hint`] so the footer says `提交` only
+/// when the key really submits.
+pub fn questionnaire_status(index: usize, total: usize, ready: bool) -> String {
+    format!(
+        "{} · {}",
+        questionnaire_progress(index, total),
+        questionnaire_hint(ready)
+    )
+}
+
+/// The marker a multi-select question carries beside its text, so the user knows
+/// more than one option may be picked.
+pub fn questionnaire_multi_marker() -> &'static str {
+    "（可多选）"
+}
+
+/// The label of the line a typed answer goes on, for a question with no options.
+pub fn questionnaire_answer_label() -> &'static str {
+    "回答："
+}
+
+/// The label of the line custom text goes on, for a question that offers options.
+pub fn questionnaire_custom_label() -> &'static str {
+    "自定义："
+}
+
+/// The plain console's prompt for a question that offers options.
+///
+/// The line-oriented front end has no visible mode, so the prompt has to say how
+/// to pick and how to skip: a number picks, anything else is custom text, and an
+/// empty line is a skip. A multi-select question says a second line follows,
+/// because that supplement is the only way to answer `selected` and `custom`
+/// together (spec §7).
+pub fn questionnaire_plain_options_prompt(multi_select: bool) -> &'static str {
+    if multi_select {
+        "输入编号（逗号分隔）选择，或输入文本；下一行补充；回车跳过 > "
+    } else {
+        "输入编号选择，或直接输入文本；回车跳过 > "
+    }
+}
+
+/// The plain console's second line for a multi-select question: the optional
+/// supplement that goes with the chosen options (spec §7).
+pub fn questionnaire_plain_supplement_prompt() -> &'static str {
+    "补充文本（可留空）> "
+}
+
+/// The plain console's prompt for a question with no options.
+pub fn questionnaire_plain_answer_prompt() -> &'static str {
+    "输入回答；回车跳过 > "
+}
+
+/// One option of a model's question, as both human front ends show it:
+/// `{number}. {label}{badge} — {description}` (spec §7).
+///
+/// This is the **one** generator of the option line, called by the plain printer
+/// and by the TUI's questionnaire painter, so a change to how an option reads
+/// cannot land in only one of them. The caller adds whatever state its front end
+/// shows beside the line — the TUI's picked/highlighted marker — because that is
+/// the one thing the two do not share.
+///
+/// The `(Recommended)` suffix is a display convention: it is replaced by
+/// [`recommended_badge`] here, while the value an answer carries keeps the whole
+/// label ([`recommended_label`]). The number is a reading index, not a key: the
+/// decided keyboard has none.
+pub fn questionnaire_option(number: usize, label: &str, description: Option<&str>) -> String {
+    let (label, recommended) = recommended_label(label);
+    let mut text = format!("{number}. {label}");
+    if recommended {
+        text.push_str(recommended_badge());
+    }
+    if let Some(description) = description
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+    {
+        text.push_str(" — ");
+        text.push_str(description);
+    }
+    text
+}
+
+/// The suffix a model appends to recommend an option (spec §7).
+pub const RECOMMENDED_SUFFIX: &str = "(Recommended)";
+
+/// The badge shown for an option whose label ends in [`RECOMMENDED_SUFFIX`].
+pub fn recommended_badge() -> &'static str {
+    "（推荐）"
+}
+
+/// Split a model-supplied option label into what is shown and whether it is
+/// recommended.
+///
+/// The suffix is a **display** convention: it is stripped so the option reads as
+/// a choice rather than as a sentence, while the value the answer carries stays
+/// the original label, marker and all (spec §7). The match is case-sensitive and
+/// only at the end, so a label that merely mentions the word is left alone.
+pub fn recommended_label(label: &str) -> (&str, bool) {
+    match label.trim_end().strip_suffix(RECOMMENDED_SUFFIX) {
+        Some(rest) => (rest.trim_end(), true),
+        None => (label, false),
+    }
+}
+
 /// The human's `[speaker]` prefix: one generator, used by every human-facing
 /// renderer, and deliberately not the model-side projection prefix (spec §5).
 ///

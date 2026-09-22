@@ -865,3 +865,70 @@ fn the_panel_texts_read_like_the_prototype() {
     assert_eq!(wording::PANEL_TURNS, "回合");
     assert_eq!(wording::PANEL_UNKNOWN, "—");
 }
+
+#[test]
+fn a_questionnaire_reads_in_chinese_and_pages() {
+    // The footer is the page indicator plus the keys, so a reader always knows
+    // which question this is and what the keyboard does (spec §19).
+    assert_eq!(wording::questionnaire_progress(1, 3), "2 / 3");
+    // The footer only promises `提交` once every question is handled; until then
+    // enter continues (spec §7).
+    assert_eq!(
+        wording::questionnaire_status(1, 3, false),
+        "2 / 3 · ↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
+    );
+    assert_eq!(
+        wording::questionnaire_hint(false),
+        "↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
+    );
+    assert_eq!(
+        wording::questionnaire_status(1, 3, true),
+        "2 / 3 · ↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
+    );
+    assert_eq!(
+        wording::questionnaire_hint(true),
+        "↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
+    );
+    assert_eq!(wording::questionnaire_multi_marker(), "（可多选）");
+    assert_eq!(wording::questionnaire_answer_label(), "回答：");
+    assert_eq!(wording::questionnaire_custom_label(), "自定义：");
+}
+
+#[test]
+fn a_recommended_option_keeps_its_value_when_displayed() {
+    // The marker is a display convention: what the option reads as loses the
+    // suffix, while the value an answer carries keeps the whole label (spec §7).
+    assert_eq!(wording::recommended_badge(), "（推荐）");
+    assert_eq!(
+        wording::recommended_label("serde (Recommended)"),
+        ("serde", true)
+    );
+    assert_eq!(wording::recommended_label("manual"), ("manual", false));
+    // Only the exact suffix at the very end counts.
+    assert_eq!(
+        wording::recommended_label("Recommended reading"),
+        ("Recommended reading", false)
+    );
+}
+
+#[test]
+fn the_plain_console_asks_a_questionnaire_in_chinese() {
+    assert_eq!(
+        wording::questionnaire_plain_options_prompt(false),
+        "输入编号选择，或直接输入文本；回车跳过 > "
+    );
+    // The multi-select prompt says the second line follows, so the supplement
+    // (selected and custom together) is discoverable rather than secret.
+    assert_eq!(
+        wording::questionnaire_plain_options_prompt(true),
+        "输入编号（逗号分隔）选择，或输入文本；下一行补充；回车跳过 > "
+    );
+    assert_eq!(
+        wording::questionnaire_plain_supplement_prompt(),
+        "补充文本（可留空）> "
+    );
+    assert_eq!(
+        wording::questionnaire_plain_answer_prompt(),
+        "输入回答；回车跳过 > "
+    );
+}

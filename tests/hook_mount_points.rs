@@ -72,7 +72,7 @@ async fn fixture_with_tools(
         session_policy.push(rule);
     }
 
-    let mut tools = fs_agent::tools::builtin();
+    let mut tools = fs_agent::tools::builtin(false);
     for tool in extra_tools {
         tools.register(tool);
     }
@@ -93,6 +93,7 @@ async fn fixture_with_tools(
             locks: fs_agent::tools::PathLocks::new(),
             policy: session_policy,
             asker,
+            questions: None,
             hook,
             home: None,
         },
