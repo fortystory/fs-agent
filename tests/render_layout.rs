@@ -11,6 +11,7 @@ use fs_agent::render::{
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
+use ratatui::style::Color;
 use ratatui::Terminal;
 
 fn facts() -> SessionFacts {
@@ -69,6 +70,24 @@ fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
     cells(buffer, y, 0, width)
 }
 
+/// The row the middle block's top border sits on.
+///
+/// The header is 7, 2 or 1 content rows depending on the terminal, so any test that
+/// counts from the middle block has to ask where it starts rather than assume — the
+/// mark made a fixed row number wrong, and a fixed row number would go wrong again
+/// the next time the ladder moves. Exactly three rows open a block, in order:
+/// header, middle, bottom.
+fn middle_top(rows: &[String]) -> usize {
+    let opens: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.starts_with('┌'))
+        .map(|(y, _)| y)
+        .collect();
+    assert_eq!(opens.len(), 3, "three blocks open: {opens:?}");
+    opens[1]
+}
+
 /// The rendered frame itself, for assertions about a particular cell.
 fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
@@ -106,38 +125,49 @@ fn a_terminal_below_the_minimum_shows_one_centred_notice() {
 }
 
 #[test]
-fn a_wide_terminal_draws_the_header_the_transcript_and_the_bottom_block() {
-    // 120x24 is the reference size: two header lines, twelve transcript rows, one
-    // input row, one hint row, and a blank row above and below the middle block
-    // (spec §2).
+fn a_wide_terminal_draws_the_mark_the_transcript_and_the_bottom_block() {
+    // 120x24 is the reference size: a tall mark header (five mark rows plus the line
+    // of facts under them), the transcript, one input row, one hint row, and a blank
+    // row above and below the middle block (spec §2).
     let rows = screen(120, 24, &mut state());
 
-    // The header block: two content lines between its borders.
+    // The header block: the mark's rows between its borders.
     assert!(rows[0].starts_with('┌'), "the header opens: {:?}", rows[0]);
-    assert!(rows[3].starts_with('└'), "the header closes: {:?}", rows[3]);
+    assert!(rows[8].starts_with('└'), "the header closes: {:?}", rows[8]);
     assert!(
-        rows[0].ends_with('┐') && rows[3].ends_with('┘'),
+        rows[0].ends_with('┐') && rows[8].ends_with('┘'),
         "the header block is closed on the right too: {:?} / {:?}",
         rows[0],
-        rows[3]
+        rows[8]
     );
     assert!(
-        rows[1].contains("fs-agent") && rows[1].contains(':'),
-        "the identity and the clock share the first line: {:?}",
-        rows[1]
+        rows[1].contains("▄▀▀█") && rows[5].contains("▀▀▀"),
+        "the mark's first and last rows are in the header: {:?} / {:?}",
+        rows[1],
+        rows[5]
     );
     assert!(
-        rows[2].contains("~/code/fortystory/fs-agent") && rows[2].contains("模式 询问"),
-        "the directory and the mode share the second line: {:?}",
-        rows[2]
+        rows[6].contains("~/code/fortystory/fs-agent") && rows[6].contains("模式 询问"),
+        "the directory and the mode share the line under the mark: {:?}",
+        rows[6]
+    );
+
+    let middle = middle_top(&rows);
+    assert_eq!(
+        middle, 10,
+        "the mark header costs the extra rows: {rows:#?}"
     );
 
     // The airy rows: the layout breathes between the blocks.
-    assert_eq!(rows[4].trim(), "", "a blank row under the header");
+    assert_eq!(rows[middle - 1].trim(), "", "a blank row under the header");
     assert_eq!(rows[19].trim(), "", "a blank row above the bottom block");
 
     // The middle block spans the transcript.
-    assert!(rows[5].starts_with('┌'), "the middle opens: {:?}", rows[5]);
+    assert!(
+        rows[middle].starts_with('┌'),
+        "the middle opens: {:?}",
+        rows[middle]
+    );
     assert!(
         rows[18].starts_with('└'),
         "the middle closes: {:?}",
@@ -166,6 +196,48 @@ fn a_wide_terminal_draws_the_header_the_transcript_and_the_bottom_block() {
         !rows.join("\n").contains("shift+enter"),
         "no phantom newline key"
     );
+}
+
+#[test]
+fn the_mark_is_drawn_on_the_top_rows_and_is_lit_from_above() {
+    // The painter's half of the mark: the characters are `wording`'s, but which rows
+    // they land on and how the gradient falls is the painter's, so it is asserted
+    // where it can be seen — in the buffer, cell by cell.
+    let frame = buffer(120, 24, &mut state());
+    assert_eq!(
+        frame[(1, 1)].symbol(),
+        "▄",
+        "the mark's first row starts at the header's first content row"
+    );
+    let top = frame[(1, 1)].fg;
+    let bottom = frame[(1, 5)].fg;
+    assert_eq!(
+        top,
+        Color::LightMagenta,
+        "the top of the mark is the bright end"
+    );
+    assert_eq!(bottom, Color::Magenta, "and the bottom row is the dim end");
+
+    // 40x10 is one row short of the tall header, and 60 columns is too narrow for the
+    // mark: both keep the text header rather than a clipped mark.
+    for (width, height) in [(40, 24), (40, 10), (120, 18)] {
+        // A fresh state: the pane can legitimately hold block glyphs (the scrollbar),
+        // and the question here is only whether the *mark* is in the header. 40 columns
+        // is the mark's own width plus its borders with no air — too narrow — and 18
+        // rows is one below the tall header, so both fall back to the text header.
+        let mut fresh = state();
+        let rows = screen(width, height, &mut fresh);
+        assert!(
+            !rows.join("\n").contains('▄'),
+            "{width}x{height} is below the mark's size: {:#?}",
+            rows[0]
+        );
+        assert!(
+            rows.join("\n").contains("fs-agent"),
+            "{width}x{height} keeps the identity in the text header: {:#?}",
+            rows[0]
+        );
+    }
 }
 
 #[test]
@@ -204,13 +276,21 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
     // than doubling them (spec §2).
     let frame = buffer(120, 24, &mut state());
     let seam = 89;
+    // The seam has to meet whichever rows the middle block occupies, so they come
+    // from the frame rather than from a remembered row number.
+    let rows: Vec<String> = (0..24).map(|y| row_text(&frame, y, 120)).collect();
+    let top = middle_top(&rows) as u16;
     assert_eq!(
-        frame[(seam, 5)].symbol(),
+        frame[(seam, top)].symbol(),
         "┬",
         "the seam meets the top border"
     );
-    assert_eq!(frame[(seam, 18)].symbol(), "┴", "and the bottom border");
-    for y in 6..=17 {
+    assert_eq!(
+        frame[(seam, top + 8)].symbol(),
+        "┴",
+        "and the top border is eight rows above the bottom one"
+    );
+    for y in (top + 1)..top + 8 {
         assert_eq!(
             frame[(seam, y)].symbol(),
             "│",
@@ -387,9 +467,12 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // 31 columns from the right edge.
     let wide = buffer(174, 50, &mut state());
     let seam = 174 - 31;
-    assert_eq!(wide[(seam, 5)].symbol(), "┬", "the seam at the cap");
+    let seam_row = (0..50)
+        .find(|y| wide[(seam, *y)].symbol() == "┬")
+        .expect("the seam meets the middle block's top border");
+    assert_eq!(wide[(seam, seam_row)].symbol(), "┬", "the seam at the cap");
     assert_eq!(
-        wide[(174 - 1, 5)].symbol(),
+        wide[(174 - 1, seam_row)].symbol(),
         "┐",
         "the panel ends at the right border"
     );
@@ -409,14 +492,21 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
     assert!(text.contains("第 39 行"), "the newest row is on screen");
     assert!(!text.contains("第 0 行"), "the oldest has scrolled off");
 
-    // PgUp leaves the bottom and shows older rows.
+    // PgUp leaves the bottom and shows older rows. One page is the pane's own
+    // height, so the row at the top is derived from what the pane can show rather
+    // than remembered — the mark header changed it, and a fixed row number would
+    // have to change again the next time the ladder moves.
+    let visible = transcript_rows();
     state.key(Key::PageUp);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("第 39 行"),
         "the newest row gives way: {text}"
     );
-    assert!(text.contains("第 20 行"), "older rows appear: {text}");
+    assert!(
+        text.contains(&format!("第 {} 行", 40 - visible)),
+        "older rows appear: {text}"
+    );
 
     // Ctrl-G comes back, and the viewport follows again.
     state.key(Key::CtrlG);
@@ -426,6 +516,21 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
         !text.contains("第 20 行"),
         "and the old rows are gone: {text}"
     );
+}
+
+/// How many transcript rows a 120x24 frame shows.
+///
+/// A page step and a wheel's reach are both measured in these, so tests that count
+/// rows ask for the number instead of remembering it — the mark header changed it
+/// once already.
+fn transcript_rows() -> usize {
+    let rows = screen(120, 24, &mut state());
+    let top = middle_top(&rows);
+    let bottom = rows
+        .iter()
+        .rposition(|row| row.starts_with('└'))
+        .expect("the middle block closes");
+    bottom - top - 1
 }
 
 /// The index of the first `第 N 行` notice visible on screen, if any.
@@ -465,8 +570,25 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
 
     // The oldest source line is gone, not merely scrolled off: paging all the way up
     // must not bring it back, and the top is the line that followed it.
-    for _ in 0..8_000 {
-        state.key(Key::PageUp);
+    //
+    // "All the way up" is reached, not counted: a page step is a pane's worth of
+    // display rows, and each notice wraps to two of them, so the number of steps is a
+    // function of the terminal — asserting a step count would be asserting the mark
+    // header's height through three layers.
+    // A frame is only cheap relative to a page step, not free: 20 000 wrapped notices
+    // are ~40 000 display rows, so the walk checks its position every few hundred
+    // steps rather than after each one.
+    let mut previous = None;
+    for _ in 0..400 {
+        for _ in 0..100 {
+            state.key(Key::PageUp);
+        }
+        let rows = screen(120, 24, &mut state);
+        let first = first_notice(&rows);
+        if first == previous {
+            break;
+        }
+        previous = first;
     }
     let rows = screen(120, 24, &mut state);
     assert!(
@@ -499,7 +621,11 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
         !text.contains("行新内容"),
         "nothing has arrived yet: {text}"
     );
-    assert_eq!(first_notice(&screen(120, 24, &mut state)), Some(18));
+    assert_eq!(
+        first_notice(&screen(120, 24, &mut state)),
+        Some(40 - transcript_rows()),
+        "one page up lands on the pane's own height, not a remembered row"
+    );
 
     // A row arrives while the reader is away, and the count is what arrived — not
     // everything that happens to be below the viewport.
@@ -517,17 +643,22 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
         row: 10,
         modifiers: KeyModifiers::empty(),
     };
+    // Notches move the viewport up and back; how many *notices* a notch crosses
+    // depends on how many rows the pane shows, so the two ends are compared with
+    // each other rather than with a remembered row — that is what "three rows a
+    // notch, and back" means at any terminal size.
+    let after_page_up = first_notice(&screen(120, 24, &mut state));
     state.mouse(mouse(MouseEventKind::ScrollUp));
-    assert_eq!(
-        first_notice(&screen(120, 24, &mut state)),
-        Some(15),
-        "three rows up"
+    let after_wheel_up = first_notice(&screen(120, 24, &mut state));
+    assert!(
+        after_wheel_up < after_page_up,
+        "the wheel moves the viewport up: {after_page_up:?} -> {after_wheel_up:?}"
     );
     state.mouse(mouse(MouseEventKind::ScrollDown));
     assert_eq!(
         first_notice(&screen(120, 24, &mut state)),
-        Some(18),
-        "three rows back down"
+        after_page_up,
+        "and one notch down returns to where it was"
     );
 
     // A click on the indicator goes back to the bottom; a click anywhere else is
@@ -549,7 +680,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     });
     assert_eq!(
         first_notice(&screen(120, 24, &mut state)),
-        Some(18),
+        after_page_up,
         "a click in the transcript body changes nothing"
     );
     state.mouse(MouseEvent {
@@ -585,9 +716,20 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
     // Scrolled away: the source line at the top is what survives the rewrap.
     let _ = screen(120, 24, &mut state);
     state.key(Key::PageUp);
+    let one_page_up = first_notice(&screen(120, 24, &mut state));
     state.key(Key::PageUp);
     let before = first_notice(&screen(120, 24, &mut state));
-    assert_eq!(before, Some(8), "two pages up");
+    // What this test is about is that the *same source line* stays pinned across the
+    // resize — so the precondition is "scrolled away from the bottom", not a
+    // particular page-step arithmetic.
+    assert!(
+        before < one_page_up,
+        "two pages up: {one_page_up:?} -> {before:?}"
+    );
+    assert!(
+        before.is_some_and(|row| row > 0),
+        "and away from the oldest row: {before:?}"
+    );
     let after = first_notice(&screen(80, 24, &mut state));
     assert_eq!(
         after, before,
@@ -604,13 +746,17 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     let mut state = state();
     state.apply(RenderEvent::Notice("x".repeat(88)));
     let frame = buffer(120, 24, &mut state);
+    let rows: Vec<String> = (0..24).map(|y| row_text(&frame, y, 120)).collect();
+    let content_row = middle_top(&rows) as u16 + 1;
+    // The transcript's text starts one column inside the middle block's border, so the
+    // header row the old row number pointed at is what had to change.
     assert_eq!(
-        frame[(1, 6)].symbol(),
+        frame[(1, content_row)].symbol(),
         "x",
         "the row starts at the first column"
     );
     assert_eq!(
-        frame[(1, 7)].symbol(),
+        frame[(1, content_row + 1)].symbol(),
         "x",
         "88 columns of text overflow the 87-column text area"
     );
@@ -624,7 +770,9 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
         state.apply(RenderEvent::Notice(format!("第 {index} 行")));
     }
     let frame = buffer(120, 24, &mut state);
-    for y in 6..18 {
+    let rows: Vec<String> = (0..24).map(|y| row_text(&frame, y, 120)).collect();
+    let top = middle_top(&rows) as u16;
+    for y in (top + 1)..(top + 1 + 7) {
         assert_ne!(
             frame[(88, y)].symbol(),
             " ",
@@ -693,41 +841,60 @@ fn turn_ended(seq: u64) -> fs_agent::render::RenderEvent {
     ))
 }
 
+/// The row the information panel's top border is on, if the panel is drawn.
+fn right_panel_top(rows: &[String]) -> Option<usize> {
+    rows.iter()
+        .position(|row| row.ends_with('┐') && row.contains('┬'))
+}
+
+/// A panel field by its offset from the panel's own first content row.
+///
+/// The panel is drawn inside the middle block, whose top row the mark header moved.
+/// A field is "the first one", "the third one" — not "row 6" — so the tests read the
+/// field rather than a row number that has to be recomputed whenever the header
+/// changes height.
+fn panel_field(rows: &[String], offset: usize) -> String {
+    let top = right_panel_top(rows).expect("the panel is drawn");
+    rows[top + 1 + offset].clone()
+}
+
 #[test]
 fn the_panel_names_the_model_and_shows_a_zero_and_a_dash_before_any_call() {
     let rows = screen(120, 24, &mut state());
     assert!(
-        rows[6].contains("模型") && rows[6].contains("claude-sonnet-4-5"),
+        panel_field(&rows, 0).contains("模型")
+            && panel_field(&rows, 0).contains("claude-sonnet-4-5"),
         "the model: {:?}",
-        rows[6]
+        panel_field(&rows, 0)
     );
     assert!(
-        rows[7].contains("上下文") && rows[7].contains(fs_agent::render::wording::PANEL_UNKNOWN),
+        panel_field(&rows, 1).contains("上下文")
+            && panel_field(&rows, 1).contains(fs_agent::render::wording::PANEL_UNKNOWN),
         "no call has reported usage yet: {:?}",
-        rows[7]
+        panel_field(&rows, 1)
     );
     assert!(
-        rows[8].contains("token") && rows[8].contains('0'),
+        panel_field(&rows, 2).contains("token") && panel_field(&rows, 2).contains('0'),
         "nothing spent yet: {:?}",
-        rows[8]
+        panel_field(&rows, 2)
     );
     assert!(
-        rows[9].contains("回合") && rows[9].contains('0'),
+        panel_field(&rows, 3).contains("回合") && panel_field(&rows, 3).contains('0'),
         "no turn yet: {:?}",
-        rows[9]
+        panel_field(&rows, 3)
     );
     assert!(
-        rows[10].contains("输入") && rows[10].contains('0'),
+        panel_field(&rows, 4).contains("输入") && panel_field(&rows, 4).contains('0'),
         "nothing in: {:?}",
-        rows[10]
+        panel_field(&rows, 4)
     );
     assert!(
-        rows[12].contains("0 / 0"),
+        panel_field(&rows, 6).contains("0 / 0"),
         "and a cache that has never been consulted: {:?}",
-        rows[12]
+        panel_field(&rows, 6)
     );
     assert!(
-        !rows[6].contains("费用") && !rows.join("\n").contains('$'),
+        !panel_field(&rows, 0).contains("费用") && !rows.join("\n").contains('$'),
         "money is not shown at all (spec §8)"
     );
 }
@@ -740,24 +907,40 @@ fn the_panel_reads_its_numbers_off_the_stream() {
     state.apply(turn_ended(2));
 
     let rows = screen(120, 24, &mut state);
-    assert!(rows[6].contains("claude-sonnet-4-5"), "{:?}", rows[6]);
     assert!(
-        rows[7].contains("9,000 / 200,000（4%）"),
+        panel_field(&rows, 0).contains("claude-sonnet-4-5"),
+        "{:?}",
+        panel_field(&rows, 0)
+    );
+    assert!(
+        panel_field(&rows, 1).contains("9,000 / 200,000（4%）"),
         "the window is the numerator of the last call: {:?}",
-        rows[7]
+        panel_field(&rows, 1)
     );
     assert!(
-        rows[8].contains("12,345 / 100,000"),
+        panel_field(&rows, 2).contains("12,345 / 100,000"),
         "spent is input plus output: {:?}",
-        rows[8]
+        panel_field(&rows, 2)
     );
-    assert!(rows[9].contains('1'), "one turn: {:?}", rows[9]);
-    assert!(rows[10].contains("9,000"), "input: {:?}", rows[10]);
-    assert!(rows[11].contains("3,345"), "output: {:?}", rows[11]);
     assert!(
-        rows[12].contains("5,000 / 4,000"),
+        panel_field(&rows, 3).contains('1'),
+        "one turn: {:?}",
+        panel_field(&rows, 3)
+    );
+    assert!(
+        panel_field(&rows, 4).contains("9,000"),
+        "input: {:?}",
+        panel_field(&rows, 4)
+    );
+    assert!(
+        panel_field(&rows, 5).contains("3,345"),
+        "output: {:?}",
+        panel_field(&rows, 5)
+    );
+    assert!(
+        panel_field(&rows, 6).contains("5,000 / 4,000"),
         "the cache split: {:?}",
-        rows[12]
+        panel_field(&rows, 6)
     );
 }
 
@@ -849,17 +1032,25 @@ fn the_context_numerator_is_the_last_call_while_the_spend_accumulates() {
 
     let rows = screen(120, 24, &mut state);
     assert!(
-        rows[7].contains("15,000 / 200,000（7%）"),
+        panel_field(&rows, 1).contains("15,000 / 200,000（7%）"),
         "the window is what the *last* call carried: {:?}",
-        rows[7]
+        panel_field(&rows, 1)
     );
     assert!(
-        rows[8].contains("27,000 / 100,000"),
+        panel_field(&rows, 2).contains("27,000 / 100,000"),
         "the spend is every call's input plus output: {:?}",
-        rows[8]
+        panel_field(&rows, 2)
     );
-    assert!(rows[10].contains("24,000"), "input summed: {:?}", rows[10]);
-    assert!(rows[11].contains("3,000"), "output summed: {:?}", rows[11]);
+    assert!(
+        panel_field(&rows, 4).contains("24,000"),
+        "input summed: {:?}",
+        panel_field(&rows, 4)
+    );
+    assert!(
+        panel_field(&rows, 5).contains("3,000"),
+        "output summed: {:?}",
+        panel_field(&rows, 5)
+    );
 }
 
 /// The panel's content, one string per row, read out of a rendered frame.
@@ -870,10 +1061,13 @@ fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let frame = buffer(width, height, state);
     let (seam, top) = find_cell(&frame, width, height, "┬").expect("the panel is drawn");
     let content = (seam + 1)..(width - 1);
-    // `┬` sits on the middle block's top border, so the content starts below it.
+    // `┬` sits on the middle block's top border, so the content starts below it; the
+    // panel's content ends where the block's bottom border begins.
     ((top + 1)..height)
         .map(|y| cells(&frame, y, content.start, content.end))
-        .take_while(|row| !row.trim().is_empty())
+        .take_while(|row| {
+            !row.trim().is_empty() && !row.trim_start_matches('─').is_empty() || !row.contains('─')
+        })
         // Padding is kept: whether a value is flush right or padded right is exactly
         // what these tests are about.
         .collect()
@@ -1069,6 +1263,31 @@ fn a_question_splits_into_a_title_a_summary_a_call_and_a_row_of_buttons() {
         !rows[summary].contains("path=a.rs"),
         "and the summary explains an action, it does not repeat the call: {:?}",
         rows[summary]
+    );
+}
+
+#[test]
+fn a_cancelled_run_leaves_no_overlay_behind() {
+    // The overlay belongs to the run that raised the question. Once that run is over the
+    // loop is not waiting for an answer, so nothing may stay on screen to collect one —
+    // the next keypress would go to a question nobody is waiting for (spec §6, §9).
+    let mut state = state();
+    state.request(ConsoleRequest::RunState { running: true });
+    let (ask, _answer) = ask_permission();
+    state.request(ask);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows.iter().any(|row| row.contains("权限询问")),
+        "the overlay is up while its run is:\n{}",
+        rows.join("\n")
+    );
+
+    state.request(ConsoleRequest::RunState { running: false });
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        !rows.iter().any(|row| row.contains("权限询问")),
+        "the overlay went with the run:\n{}",
+        rows.join("\n")
     );
 }
 

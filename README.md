@@ -125,6 +125,34 @@ fs-agent --help
 
 会话里：`/undo` 回滚上一次编辑、`/plan` 与 `/endplan` 进出硬计划模式、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合、**Shift+Tab** 切计划模式。
 
+### TUI 长什么样
+
+alt screen 全屏四分区，每一块都带边框（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀                    │  ← 顶栏
+│▓▄▄  ▓         ▓▄▄▓ ▓ ▀▓ ▓▄▄  ▓▄ ▓  ▓                     │
+│▒     ▀▀▄ ▀▀▀▀ ▒  ▒ ▒  ▒ ▒    ▒ ▀▒  ▒                     │
+│░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░                     │
+│▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀                     │
+│~/code/repo                              模式 询问 · 20:12  │
+└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────┬─────────────────────┐
+│                                    │模型        kimi-k3  │  ← 中（左：对话，右：信息面板）
+│                                    │上下文              —│
+│                                    │token       0/100,000│
+└────────────────────────────────────┴─────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│>                                                         │  ← 下（输入 + 提示）
+│就绪 · esc 取消 · ctrl-c 退出                              │
+└──────────────────────────────────────────────────────────┘
+```
+
+顶栏是**两个变体**，按终端大小自动切换：**≥ 41 列 × 19 行时画标记（fs 单字形，5 行字符画，亮品红→品红渐变）**，下面一行左放 cwd、右放模式与时钟；不够大就退回文字顶栏（两行：名称+版本 / 时钟、cwd / 模式；或最小尺寸的一行）。所以**窄终端（含 40×10 地板）看到的仍是老样子**。名称与版本由标记本身表达，高顶栏不再单列那一格字面量。
+
+降级阶梯是：信息面板先让位（< 80 列或中块不足 4 行）→ 顶栏退成文字 → 空行让位 → 最小 40×10，再小只剩一句 `终端太小：至少 40×10`。
+
 ### 子命令
 
 | 命令 | 作用 |
@@ -169,7 +197,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 - **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + read set）。执行者是带 `parent_id` 的嵌套 `Session`，事件追加到父流。
 - **策略是纯函数，控制流在循环里**：hook 输出的是**约束**、权限门输出的是**裁决**，两者在 `Allow < Ask < Deny` 上取上确界——类型里根本没有「放松权限」这个变体。
 - **12 个顶层边界，只向下依赖**：`events` · `config` · `provider` · `tools` · `permissions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`。`events` 零内部依赖；`discussion` 不碰 provider。
-- **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是全屏四分区（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）。
+- **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是全屏四分区（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：≥ 41 列 × 19 行时顶栏画标记，否则退成文字顶栏（见上面的「TUI 长什么样」）。
 
 默认数值：单 agent 100 回合、执行者 25 回合、同批执行者并发 5、单个工具结果 25k 估算 token、`repo_map` 1k（上限 4k）、`bash` 120s（上限 600s）。
 
@@ -177,10 +205,10 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 
 | 去哪看 | 是什么 |
 | --- | --- |
-| [`CONTEXT.md`](CONTEXT.md) | 正式词汇表。写文档、写代码、写票之前先看它 |
+| [`CONTEXT.md`](CONTEXT.md) | 正式词汇表（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`plan-mode`](docs/plan-mode.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：中文 UI 与冻结的模型文本、全屏 alt screen TUI |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：中文 UI 与冻结的模型文本、全屏 alt screen TUI（含顶栏标记与其代价） |
 | [`.scratch/`](.scratch/) | `multi-agent-architecture/` 是决策地图，`fs-agent-v1/issues/` 是一张票一个文件的实现票（含 `Status:` 行） |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（issue tracker、triage labels、domain docs） |
 

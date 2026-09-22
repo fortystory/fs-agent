@@ -738,6 +738,47 @@ fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
 }
 
 #[test]
+fn a_cancelled_run_takes_its_unanswered_question_with_it() {
+    // The bug this pins: while a run is in flight `Esc` is the cancel gesture, not an
+    // answer, so a question the run had open is never answered — and the loop's ask dies
+    // with the run that raised it. The front end kept the overlay up regardless, so the
+    // next keypress went to a question **nobody was waiting for**: it failed silently and
+    // read as a dead key (spec §6, §9).
+    let mut state = state_running();
+    let (tx, mut asked) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::Permission(PermissionRequest {
+            request_id: "r-1".to_owned(),
+            tool_call_id: "c-1".to_owned(),
+            tool_name: "write_file".to_owned(),
+            args: serde_json::json!({}),
+            reason: "mode ask".to_owned(),
+        }),
+        reply: tx,
+    }));
+
+    // The gesture cancels the run; it does not answer the question.
+    state.key(Key::Esc);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+    assert!(asked.try_recv().is_err(), "the question was not answered");
+
+    // The run ends, and the loop says so — which is what makes that question stale.
+    state.request(ConsoleRequest::RunState { running: false });
+
+    // So the next key is an ordinary key again: it edits the draft rather than answering
+    // a question from a run that is over.
+    let (reply, mut line) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply });
+    state.key(Key::Char('x'));
+    state.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("x".to_owned()));
+    assert!(
+        asked.try_recv().is_err(),
+        "nothing answers a question whose run is over"
+    );
+}
+
+#[test]
 fn a_second_question_does_not_displace_the_one_on_screen() {
     // The loop asks one question at a time and waits, so a second ask means something
     // went wrong; keeping the question the user can see answerable is the safe reading.

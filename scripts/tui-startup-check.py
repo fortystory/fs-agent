@@ -62,6 +62,12 @@ STATUS_ANCHOR = "ctrl-c"
 # anchor carries its fullwidth colon, which is written contiguously after the
 # ASCII prefix.
 BANNER_ANCHOR = "fs-agent："
+# The header shows one of two things, depending on the terminal (spec §2): the text
+# identity when it is small, and **the mark** when it is big enough — 260x30, this
+# script's size, is the mark. The mark is the program's identity in the tall header,
+# so either one proves the header was drawn; the identity alone would go red the
+# moment the mark is up.
+MARK_ROW = "▄▀▀█"
 # The four-pane frame is a horizontal rule around every block plus a vertical one
 # per pane edge, so if the frames are gone the layout went with them. Three cells
 # of each orientation is deliberately far below what one screen draws: this is a
@@ -351,8 +357,8 @@ def verdict(run, devnull, identity):
     residue = row.split(STATUS_TAIL, 1)[1].strip()
     if residue:
         return False, "the status row holds foreign text: %r" % residue[:80]
-    if not any(identity in r for r in rows):
-        return False, "the header does not name %r" % identity
+    if not any(identity in r for r in rows) and not any(MARK_ROW in r for r in rows):
+        return False, "the header shows neither %r nor the mark" % identity
     horizontal = sum(r.count(BORDER_H) for r in rows)
     vertical = sum(r.count(BORDER_V) for r in rows)
     if horizontal < 3 or vertical < 3:

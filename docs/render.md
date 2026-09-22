@@ -14,7 +14,7 @@ incremental text never enters the event log.
 | --- | --- | --- |
 | headless | `Headless` | the machine mode. Two explicit sinks; `stdout` carries the final product and nothing else. |
 | plain | `Plain` | the human transcript for a pipe or a simple terminal: a speaker prefix on every line, section lines, indented divergence blocks, one block per tool call. |
-| TUI | `Tui` | the ratatui interface: the full-screen four-pane layout on the alternate screen (header / transcript / panel / input + hints), and it owns the keyboard. See ADR 0002. |
+| TUI | `Tui` | the ratatui interface: the full-screen four-pane layout on the alternate screen (header / transcript / panel / input + hints), and it owns the keyboard. At 41x19 and above the header draws the mark (see "The header" below). See ADR 0002. |
 
 The selection is the value type `Renderer`
 (`Renderer::headless` / `::plain` / `::tui`). Because the choice is a value and
@@ -71,6 +71,34 @@ the diff tag the background, so an added keyword is both.
 The grammar is the Rust `tree-sitter` that the repo map already depends on,
 through `tree-sitter-highlight`. There is no C build step: syntect's Oniguruma
 path is not taken (spec §19, Out of Scope).
+
+## The header
+
+The top block has two forms, and `layout` picks between them from the terminal
+size alone (`Regions::header_kind`, `src/render/layout.rs`) — the painter never
+re-derives the ladder.
+
+- **`HeaderKind::Mark`**, at `LOGO_MIN_WIDTH` x `LOGO_MIN_HEIGHT` (41x19) and
+  above: five rows of block shading spelling the `fs` mark, then one row of facts
+  under it — the cwd on the left, the mode and the clock against the right edge.
+  The characters live in `wording::logo_lines` with every other human-facing
+  phrase; the colour ramp that makes them read as glyphs lives in the painter
+  (`mark_lines`), foreground only and no background, so it does not fight whatever
+  theme the terminal is already running.
+- **`TextTwoLines`** / **`TextOneLine`**, below that: the text header — identity
+  and clock, then cwd and mode, and at the floor height one line carrying the
+  identity, the mode and the clock.
+
+The tall header is the reason the middle block is shorter at a given height, so
+**the mark costs the transcript rows**: at 120x24 the pane shows 7 content rows
+where the text header left it 12. That is the trade the mark is; narrow terminals
+keep the old header and the old geometry. `LOGO_MIN_WIDTH` is the mark's own width
+plus its borders plus one column of air on each side — without the air it abuts
+the border and pushes it off the line.
+
+The one field the tall header gives up is the literal `fs-agent <version>`:
+the mark **is** the identity, and the version stays reachable through the text
+header, `fs-agent --version`, and the startup banner.
 
 ## The keyboard
 

@@ -35,6 +35,36 @@ const MIN_MIDDLE_ROWS: u16 = 1;
 /// borders and the hint row. The airy rows and the input rows come on top.
 const CHROME: u16 = 3 * BORDER_ROWS + HINT_ROWS;
 
+/// The mark's own width, shared with the painter so the two cannot drift apart.
+pub const LOGO_WIDTH: u16 = 38;
+
+/// The rows under the mark that carry the directory, the mode and the clock.
+pub const LOGO_INFO_ROWS: u16 = 1;
+
+/// The header's content rows when the mark is drawn: the mark itself, then the one
+/// line of facts under it.
+pub const LOGO_HEIGHT: u16 = 7;
+
+/// The columns the header needs before it carries the mark: [`LOGO_WIDTH`], the
+/// block's own two border columns, and one column of air on each side. Without the
+/// air the mark abuts the border and pushes it off the line — 40 columns is exactly
+/// the mark plus its borders, and it is too narrow.
+pub const LOGO_MIN_WIDTH: u16 = LOGO_WIDTH + BORDER_ROWS + 2;
+
+/// The height from which the tall header is worth its rows, read off the ladder
+/// rather than guessed: the header's content and border, the airy rows under it, the
+/// middle block's border and the fewest content rows worth drawing, and the bottom
+/// block's input row, hint row and border. Below this the header keeps its text form.
+pub const LOGO_MIN_HEIGHT: u16 = LOGO_HEIGHT
+    + BORDER_ROWS
+    + AIRY_ROWS
+    + BORDER_ROWS
+    + MIN_MIDDLE_ROWS
+    + BORDER_ROWS
+    + 1
+    + HINT_ROWS
+    + BORDER_ROWS;
+
 /// The most input rows the bottom block will ever hold (spec §7).
 const MAX_INPUT_ROWS: u16 = 10;
 
@@ -74,7 +104,33 @@ pub fn below_minimum(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
+/// Which of the three headers a frame draws.
+///
+/// The ladder is decided here, in [`header_content_rows`], so both callers ask this
+/// instead of re-deriving it from the content height — a painter that compared the
+/// height itself would be holding half the ladder, and the two halves could drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderKind {
+    /// One line: identity, mode and clock, the directory given up.
+    TextOneLine,
+    /// Two lines: identity and clock, then directory and mode.
+    TextTwoLines,
+    /// The mark, with the directory and the mode-and-clock line under it.
+    Mark,
+}
+
 impl Regions {
+    /// Which header this frame's geometry came out as.
+    pub fn header_kind(&self) -> HeaderKind {
+        if self.header_content.height >= LOGO_HEIGHT {
+            HeaderKind::Mark
+        } else if self.header_content.height <= 1 {
+            HeaderKind::TextOneLine
+        } else {
+            HeaderKind::TextTwoLines
+        }
+    }
+
     /// The column the conversation pane and the panel share, when the panel is
     /// drawn. The panel's own left edge is one column to the right of it.
     pub fn seam(&self) -> Option<u16> {
@@ -307,11 +363,17 @@ fn inside(block: Rect, rows: u16) -> Rect {
     )
 }
 
-/// The header is two lines whenever the terminal is wide enough for the directory
-/// and the mode to sit apart, and one line at the floor height, where a second
-/// line would leave the middle block with nothing.
+/// The header's content rows, and with them which header is drawn.
+///
+/// Three rungs, and the order between them is the point: the **mark** at
+/// [`LOGO_MIN_WIDTH`] x [`LOGO_MIN_HEIGHT`] and above; the two-line text header
+/// whenever the terminal is wide enough for the directory and the mode to sit
+/// apart; and one line at the floor height, where a second line would leave the
+/// middle block with nothing.
 fn header_content_rows(width: u16, height: u16) -> u16 {
-    if width < HEADER_TWO_LINE_WIDTH || height <= MIN_HEIGHT {
+    if width >= LOGO_MIN_WIDTH && height >= LOGO_MIN_HEIGHT {
+        LOGO_HEIGHT
+    } else if width < HEADER_TWO_LINE_WIDTH || height <= MIN_HEIGHT {
         1
     } else {
         2

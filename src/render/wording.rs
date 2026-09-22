@@ -798,6 +798,26 @@ pub fn identity() -> String {
     format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
 
+/// The mark the tall header carries, five rows of block shading.
+///
+/// The characters are all text; the colour ramp that makes them read as letters is
+/// the painter's business ([`crate::render::tui`]), exactly as it is for every other
+/// phrase in this module. A terminal too narrow for the whole mark never asks for
+/// these rows at all — [`crate::render::layout`] decides that up front, so nothing
+/// here has to think about clipping.
+///
+/// The mark spells `fs` — a forked synthesis, "two forks, one stem" (see
+/// `CONTEXT.md`), and the pixel grid is the one the maintainer picked.
+pub fn logo_lines() -> [&'static str; 5] {
+    [
+        "▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀",
+        "▓▄▄  ▓         ▓▄▄▓ ▓ ▀▓ ▓▄▄  ▓▄ ▓  ▓ ",
+        "▒     ▀▀▄ ▀▀▀▀ ▒  ▒ ▒  ▒ ▒    ▒ ▀▒  ▒ ",
+        "░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░ ",
+        "▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀ ",
+    ]
+}
+
 /// The header's mode field.
 pub fn mode_field(mode: Mode) -> String {
     format!("模式 {}", mode_label(mode))

@@ -670,7 +670,22 @@ impl TuiState {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
             // The loop's own account of whether it is running something. Nothing else
             // in this state may stand in for it.
-            ConsoleRequest::RunState { running } => self.running = running,
+            ConsoleRequest::RunState { running } => {
+                self.running = running;
+                // A question belongs to the run that raised it, so the end of that run is
+                // what makes it stale: the loop is no longer waiting for an answer, and
+                // its ask died with the run. Leaving the overlay up would send the next
+                // keypress to a question nobody is waiting for — a silent failure that
+                // reads as a dead key (spec §6, §9). Dropping the sender is the honest
+                // reading of "no one is waiting": a held question would be denied.
+                //
+                // Only the loop's questions go with the run. The renderer's own — an
+                // oversized paste, a draft `Esc` would clear — are not the run's to
+                // withdraw, and they can only be up while the loop is idle anyway.
+                if !running && matches!(self.pending, Some(Pending::Loop { .. })) {
+                    self.pending = None;
+                }
+            }
             ConsoleRequest::Ask(ask) => {
                 if self.pending.is_some() {
                     // The loop asks one question at a time and waits for the answer, so
@@ -1144,11 +1159,93 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
-/// The header: what session this is, where it is, what mode it runs in, and when.
+/// The header: the mark when the terminal is big enough for it, otherwise what
+/// session this is, where it is, what mode it runs in, and when.
+///
+/// Which of the three is drawn is the layout's call ([`layout::HeaderKind`]), not a
+/// size test repeated here.
 fn draw_header(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     draw_border(frame, panes.header);
-    let lines = header_lines(panes.header_content, state);
-    frame.render_widget(Paragraph::new(lines), panes.header_content);
+    match panes.header_kind() {
+        layout::HeaderKind::Mark => draw_mark(frame, panes, state),
+        // Both text kinds come out of `header_lines`, which reads the height itself.
+        layout::HeaderKind::TextOneLine | layout::HeaderKind::TextTwoLines => {
+            frame.render_widget(
+                Paragraph::new(header_lines(panes.header_content, state)),
+                panes.header_content,
+            );
+        }
+    }
+}
+
+/// The mark, and the line of facts that survives under it.
+///
+/// The mark says *what this is*; the line under it says *where and when*, the two
+/// things the tall header has no room to spell out: the directory on the left, then
+/// the mode and the clock against the right edge. The name and the version are what
+/// the mark itself is, so [`wording::identity`] is the one field the tall header
+/// gives up.
+fn draw_mark(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+    let content = panes.header_content;
+    let lines: Vec<Line<'static>> = mark_lines()
+        .iter()
+        .map(|(text, color)| {
+            Line::from(Span::styled(
+                (*text).to_owned(),
+                Style::default().fg(*color),
+            ))
+        })
+        .collect();
+    let height = lines.len() as u16;
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect::new(content.x, content.y, content.width, height),
+    );
+    // The info row is the mark's last header row; the geometry put it there.
+    let info_y = content.y + height;
+    if content.height <= height {
+        return;
+    }
+    let info = Line::from(edges(
+        &state.facts.cwd,
+        &format!(
+            "{} · {}",
+            wording::mode_field(state.mode),
+            wording::clock(&state.clock)
+        ),
+        content.width as usize,
+    ));
+    frame.render_widget(
+        Paragraph::new(info),
+        Rect::new(content.x, info_y, content.width, layout::LOGO_INFO_ROWS),
+    );
+}
+
+/// The mark's rows and their colours.
+///
+/// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
+/// here, where the rest of the painting does. Rows brighten towards the top, so the
+/// mark reads as lit from above. Foreground only, and deliberately no background: the
+/// mark sits on whatever background the user's theme already has, and filling the
+/// half-shade rows would fight that theme on as many terminals as it matched.
+fn mark_lines() -> Vec<(&'static str, Color)> {
+    let rows = wording::logo_lines();
+    debug_assert!(
+        rows.iter()
+            .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
+        "the mark is drawn whole or not at all, so its width is the layout's contract"
+    );
+    rows.iter()
+        .enumerate()
+        .map(|(row, text)| {
+            let color = if row < rows.len() - 1 {
+                Color::LightMagenta
+            } else {
+                Color::Magenta
+            };
+            (*text, color)
+        })
+        .collect()
 }
 
 /// The header's fields.
