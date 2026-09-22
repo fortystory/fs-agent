@@ -3,12 +3,13 @@
 //!
 //! Two rules make this more than a formatting pass:
 //!
-//! * **A tool call and its result are one block.** The post-hook's feedback
-//!   carries no `tool_call_id` — the loop emits it immediately after the result
-//!   it annotates — so the call is held open until the next unrelated event
-//!   arrives and the feedback (if any) has been merged in. That is the same
-//!   grouping `session::observe` performs on a finished stream, done
-//!   incrementally for a live one.
+//! * **A tool call and its result are one block, painted on the result.** The
+//!   post-hook's feedback carries no `tool_call_id` — the loop emits it immediately
+//!   after the result it annotates — so it travels as its own small block, aimed at
+//!   the call that has just been painted. Holding the call open to merge it instead
+//!   made the call invisible for its whole run: the TUI only painted it once some
+//!   later event arrived — the next answer's first streaming delta, or the turn's end
+//!   (票 02 §3).
 //! * **Incremental text passes straight through.** Deltas bypass the log, so
 //!   they cannot be re-derived later; the transcript forwards them so a renderer
 //!   can paint them as they arrive.
@@ -55,8 +56,17 @@ pub enum Block {
         topic: String,
         positions: Vec<String>,
     },
-    /// A tool call, its result, and any post-hook feedback: one block.
+    /// A tool call and its result: one block, emitted as soon as the result lands.
     Tool(Box<ToolBlock>),
+    /// A post-hook's feedback for the call it annotates.
+    ///
+    /// It travels on its own block because the call it annotates has already been
+    /// painted: the loop emits the feedback immediately after the result, and holding
+    /// the call open to wait for it is what used to hide the call line for the whole
+    /// run (票 02 §3).
+    ToolFeedback {
+        outcome: String,
+    },
     TurnStarted {
         speaker: SpeakerId,
         iteration: u32,
@@ -130,9 +140,6 @@ pub struct ToolBlock {
     pub tool: String,
     pub args: Value,
     pub outcome: Option<ToolOutcome>,
-    /// A post-hook's outcome for this call, merged here because the hook event
-    /// carries no `tool_call_id` and the call is what it annotated.
-    pub hook: Option<String>,
 }
 
 /// What a finished (or abandoned) tool call produced.
@@ -148,6 +155,9 @@ pub struct ToolOutcome {
 #[derive(Debug, Default)]
 pub struct Transcript {
     pending_tool: Option<ToolBlock>,
+    /// A call has been painted and its post-hook — which carries no `tool_call_id` —
+    /// may still be on its way. The next post-hook to arrive annotates that call.
+    awaiting_hook: bool,
 }
 
 impl Transcript {
@@ -157,8 +167,10 @@ impl Transcript {
 
     /// Feed one render event and take the blocks it produced.
     ///
-    /// A tool call produces nothing until it is complete (or flushed): that is
-    /// what lets a post-hook's feedback land inside the same block.
+    /// A tool call is painted as soon as its **result** arrives. It used to wait for
+    /// the next unrelated event so a post-hook could be merged into the same block,
+    /// which meant a call was invisible for its whole run — and, in the TUI, until the
+    /// model's *next* answer had finished streaming (票 02 §3).
     pub fn push(&mut self, event: RenderEvent) -> Vec<Block> {
         match event {
             RenderEvent::Delta {
@@ -188,8 +200,16 @@ impl Transcript {
         }
     }
 
-    /// Close an open tool block, if any. Call at end of stream so a call whose
-    /// result never arrived is still shown.
+    /// Close an open tool block, if any.
+    ///
+    /// The result is what paints a call, so this is only the fallback: a call whose
+    /// result never arrived — a stream that died mid-call. [`Plain`] calls it at end of
+    /// stream, so the line still reaches the page. The TUI cannot show it: it has no
+    /// frame after the stream closes (a cancelled call is *not* this case — the loop
+    /// writes a synthesized result for every call it started, and that result paints
+    /// the call).
+    ///
+    /// [`Plain`]: crate::render::Plain
     pub fn flush(&mut self) -> Vec<Block> {
         match self.pending_tool.take() {
             Some(tool) => vec![Block::Tool(Box::new(tool))],
@@ -199,12 +219,20 @@ impl Transcript {
 
     fn push_logged(&mut self, event: Event) -> Vec<Block> {
         let speaker = event.speaker_id.clone();
-        // A post-hook annotates the call it followed, so it must not flush it.
+        // The expectation lasts exactly one event: the loop emits a call's post-hook
+        // immediately after the result it annotates, so anything else arriving first
+        // means the hook is not coming — and a hook that then turned up much later
+        // must not be pinned onto a call it never annotated. Only the matched-result
+        // arm below re-arms it.
+        let expected_hook = std::mem::take(&mut self.awaiting_hook);
         if let EventPayload::HookExecuted { point, outcome, .. } = &event.payload {
             if point == hook_format::POINT_POST {
-                if let Some(tool) = self.pending_tool.as_mut() {
-                    tool.hook = Some(outcome.clone());
-                    return Vec::new();
+                let mut blocks = self.flush();
+                if expected_hook || !blocks.is_empty() {
+                    blocks.push(Block::ToolFeedback {
+                        outcome: outcome.clone(),
+                    });
+                    return blocks;
                 }
             }
         }
@@ -233,13 +261,14 @@ impl Transcript {
                 tool_name,
                 args,
             } => {
+                // A new call supersedes any feedback still expected for the last one.
+                self.awaiting_hook = false;
                 self.pending_tool = Some(ToolBlock {
                     speaker,
                     tool_call_id,
                     tool: tool_name,
                     args,
                     outcome: None,
-                    hook: None,
                 });
                 return blocks;
             }
@@ -250,16 +279,22 @@ impl Transcript {
                 error,
                 duration_ms,
             } => {
-                if let Some(tool) = self.pending_tool.as_mut() {
-                    if tool.tool_call_id == tool_call_id {
-                        tool.outcome = Some(ToolOutcome {
-                            ok,
-                            output,
-                            error,
-                            duration_ms,
-                        });
-                        return Vec::new();
-                    }
+                if self
+                    .pending_tool
+                    .as_ref()
+                    .is_some_and(|tool| tool.tool_call_id == tool_call_id)
+                {
+                    let mut tool = self.pending_tool.take().expect("just matched");
+                    tool.outcome = Some(ToolOutcome {
+                        ok,
+                        output,
+                        error,
+                        duration_ms,
+                    });
+                    // This call may still be annotated by the post-hook that follows.
+                    self.awaiting_hook = true;
+                    blocks.push(Block::Tool(Box::new(tool)));
+                    return blocks;
                 }
                 // A result with no matching start: surface it rather than drop
                 // it, so the transcript still shows that something finished.
@@ -275,7 +310,6 @@ impl Transcript {
                         error,
                         duration_ms,
                     }),
-                    hook: None,
                 })));
                 return blocks;
             }

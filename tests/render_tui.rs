@@ -270,10 +270,12 @@ fn ctrl_d_is_ignored_while_a_question_is_up() {
 }
 
 #[test]
-fn a_tool_call_and_its_hook_become_one_ready_block() {
-    // The merger is the transcript's, not the state machine's: it holds the call
-    // open until an unrelated event closes it, so the result and the hook that
-    // annotates it land in one block.
+fn a_tool_call_is_painted_by_its_result_and_annotated_by_its_hook() {
+    // The merger is the transcript's. The **result** is what ends the call and what
+    // paints it, so the call line is ready the moment the tool finishes; the
+    // post-hook, which carries no `tool_call_id`, follows as its own block aimed at
+    // the call just painted. Holding the call open for the hook instead hid it for
+    // the whole run (票 02 §3).
     let id = ToolCallId::new("call-1");
     let mut transcript = Transcript::new();
     let call = Event::new(
@@ -305,30 +307,35 @@ fn a_tool_call_and_its_hook_become_one_ready_block() {
             outcome: hook_format::feedback("ok").to_owned(),
         },
     );
-    for event in [call, result, hook] {
-        assert!(
-            transcript.push(RenderEvent::Logged(event)).is_empty(),
-            "the call is held open"
-        );
-    }
-    // Nothing is ready until the next unrelated event closes the block.
-    let ready = transcript.push(RenderEvent::Logged(Event::new(
-        4,
-        kimi(),
-        EventPayload::TurnEnded {
-            reason: StopReason::Completed,
-        },
-    )));
+
+    assert!(
+        transcript.push(RenderEvent::Logged(call)).is_empty(),
+        "a call in flight is not painted yet"
+    );
+    let ready = transcript.push(RenderEvent::Logged(result));
     let tool = ready
         .iter()
         .find_map(|block| match block {
             Block::Tool(tool) => Some(tool.as_ref()),
             _ => None,
         })
-        .expect("the call is one block");
+        .expect("the result paints the call");
     assert_eq!(tool.tool, "read_file");
-    assert_eq!(tool.hook.as_deref(), Some("feedback: ok"));
     assert!(tool.outcome.as_ref().unwrap().ok);
+
+    let feedback = transcript.push(RenderEvent::Logged(hook));
+    assert_eq!(
+        feedback.len(),
+        1,
+        "the hook is its own block: {feedback:#?}"
+    );
+    assert!(
+        matches!(
+            &feedback[0],
+            Block::ToolFeedback { outcome, .. } if outcome == &hook_format::feedback("ok")
+        ),
+        "and it carries the feedback it annotates the call with: {feedback:#?}"
+    );
 }
 
 #[test]
@@ -458,34 +465,29 @@ fn a_speakers_name_is_drawn_in_its_role_colour() {
 
 #[test]
 fn a_tool_block_paints_one_line_and_folds_the_rest() {
-    // The collapsed tool block is the call line and, at most, the post-hook's
-    // feedback. The output body is not painted at all any more — it lives behind the
-    // call line's detail view — and a failure is a suffix on that same line rather
-    // than a line of its own (票 02 §3).
-    let tool = |outcome: Option<ToolOutcome>, hook: Option<&str>| ToolBlock {
+    // The collapsed tool block is the call line alone. The output body is not painted
+    // at all any more — it lives behind the call line's detail view — and a failure is
+    // a suffix on that same line rather than a line of its own (票 02 §3).
+    let tool = |outcome: Option<ToolOutcome>| ToolBlock {
         speaker: kimi(),
         tool_call_id: ToolCallId::new("call-2"),
         tool: "read_file".to_owned(),
         args: serde_json::json!({"path": "a.rs"}),
         outcome,
-        hook: hook.map(str::to_owned),
     };
-    let ok = render_block_uncoloured(&Block::Tool(Box::new(tool(
-        Some(ToolOutcome {
-            ok: true,
-            output: Some("fn main() {}".to_owned()),
-            error: None,
-            duration_ms: 1,
-        }),
-        None,
-    ))));
+    let ok = render_block_uncoloured(&Block::Tool(Box::new(tool(Some(ToolOutcome {
+        ok: true,
+        output: Some("fn main() {}".to_owned()),
+        error: None,
+        duration_ms: 1,
+    })))));
     assert_eq!(ok.len(), 1, "a successful call is one line: {ok:#?}");
     let call: String = ok[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(call, "▸ [kimi] 调用 read_file path=a.rs");
+    assert_eq!(call, "[kimi] ▸ 调用 read_file path=a.rs");
     assert!(
         !ok[0].spans.iter().any(|span| span.style.bg.is_some()),
         "and carries no output body: {:#?}",
@@ -493,15 +495,12 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
     );
 
     // A failure is the same line with `失败` at its end; the error body is not here.
-    let failed = render_block_uncoloured(&Block::Tool(Box::new(tool(
-        Some(ToolOutcome {
-            ok: false,
-            output: None,
-            error: Some("no such file".to_owned()),
-            duration_ms: 1,
-        }),
-        None,
-    ))));
+    let failed = render_block_uncoloured(&Block::Tool(Box::new(tool(Some(ToolOutcome {
+        ok: false,
+        output: None,
+        error: Some("no such file".to_owned()),
+        duration_ms: 1,
+    })))));
     assert_eq!(
         failed.len(),
         1,
@@ -512,25 +511,20 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(call, "▸ [kimi] 调用 read_file path=a.rs 失败");
+    assert_eq!(call, "[kimi] ▸ 调用 read_file path=a.rs 失败");
 
-    // The post-hook's feedback is policy, not output: it stays on screen.
-    let hooked = render_block_uncoloured(&Block::Tool(Box::new(tool(
-        Some(ToolOutcome {
-            ok: true,
-            output: Some("body".to_owned()),
-            error: None,
-            duration_ms: 1,
-        }),
-        Some("formatted with rustfmt"),
-    ))));
-    assert_eq!(hooked.len(), 2, "the hook feedback stays: {hooked:#?}");
+    // The post-hook's feedback is policy, not output: it stays on screen, as its own
+    // block about the call just painted.
+    let hooked = render_block_uncoloured(&Block::ToolFeedback {
+        outcome: "formatted with rustfmt".to_owned(),
+    });
+    assert_eq!(hooked.len(), 1, "one feedback line: {hooked:#?}");
     assert!(
-        hooked[1]
+        hooked[0]
             .spans
             .iter()
             .any(|span| span.content.contains("formatted with rustfmt")),
-        "and it is the second line: {hooked:#?}"
+        "and it carries the hook's words: {hooked:#?}"
     );
 }
 

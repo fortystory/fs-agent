@@ -104,6 +104,9 @@ impl Plain {
                 }
             }
             Block::Tool(tool) => self.tool(&tool),
+            Block::ToolFeedback { outcome, .. } => {
+                self.line(&indent(&wording::hook_feedback(&outcome), 2));
+            }
             Block::TurnStarted { speaker, iteration } => {
                 self.end_line();
                 self.line(&format!(
@@ -280,9 +283,6 @@ impl Plain {
                 self.line(&self.paint_severity(Severity::Bad, &text));
             }
             None => self.line(&format!("  {}", wording::no_tool_result())),
-        }
-        if let Some(hook) = &tool.hook {
-            self.line(&indent(&wording::hook_feedback(hook), 2));
         }
     }
 

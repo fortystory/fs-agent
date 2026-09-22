@@ -497,6 +497,10 @@ pub struct TuiState {
     drawn_top: u16,
     /// The detail overlay, while one is open.
     detail: Option<DetailView>,
+    /// Where the last frame drew that overlay, so a click outside it can close it —
+    /// the same "remember what the reader actually saw" rule the indicator follows
+    /// (票 02 §4).
+    detail_rect: Option<Rect>,
     /// Where the last frame drew a question's clickable parts.
     regions: Regions,
     /// The last frame's whole terminal area. The detail overlay's body is laid out
@@ -1068,6 +1072,7 @@ impl TuiState {
             drawn_rows: Vec::new(),
             drawn_top: 0,
             detail: None,
+            detail_rect: None,
             regions: Regions::default(),
             area: Rect::default(),
             prompt_reply: None,
@@ -1294,21 +1299,24 @@ impl TuiState {
         self.thinking_done = true;
         let name = wording::speaker_label(&self.thinking_speaker);
         let name_style = Style::default().fg(self.colors.of(&self.thinking_speaker));
-        let title = format!("{} {}", name, wording::thinking_finished());
-        let detail = Detail {
-            title: title.clone(),
-            kind: DetailKind::Thinking { text },
-        };
         // In place: one thinking segment is one line, from `正在思考` to `思考完成`
-        // (票 02 §1). The leading `▸` is what says the line can be opened.
-        self.pane.replace_last(Line::from(vec![
-            Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
+        // (票 02 §1). The `▸` after the name is what says the line can be opened — it
+        // trails the speaker so every line still starts with who is speaking
+        // (票 03 §Answer，2026-09-23 修正).
+        let line = Line::from(vec![
             Span::styled(format!("{name} "), name_style),
+            Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 wording::thinking_finished(),
                 Style::default().fg(Color::DarkGray),
             ),
-        ]));
+        ]);
+        let detail = Detail {
+            // The overlay's title is the clicked line's own text (票 02 §4).
+            title: line_text(&line),
+            kind: DetailKind::Thinking { text },
+        };
+        self.pane.replace_last(line);
         if let Some(link) = self.links.back_mut() {
             *link = Some(detail);
         }
@@ -1342,7 +1350,14 @@ impl TuiState {
                 MouseEventKind::ScrollUp => self.detail_scroll(-1),
                 MouseEventKind::ScrollDown => self.detail_scroll(1),
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if self.detail_reselected(&mouse) {
+                    // A click outside closes it — the line it came from, the
+                    // transcript, the footer, anything (票 02 §4；2026-09-23 修正，
+                    // 原先只认「再点同一行」). A click inside is the overlay's own and
+                    // does nothing, because it has no buttons of its own.
+                    let inside = self
+                        .detail_rect
+                        .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
+                    if !inside {
                         self.close_detail();
                     }
                 }
@@ -1375,8 +1390,8 @@ impl TuiState {
                     self.pane.to_bottom();
                 } else {
                     let width = layout::plan(self.area, 1).detail_width() as usize;
-                    if let Some((row, detail)) = self.link_hit(&mouse) {
-                        self.open_detail(row, detail, width);
+                    if let Some(detail) = self.link_hit(&mouse) {
+                        self.open_detail(detail, width);
                     }
                 }
             }
@@ -1484,16 +1499,14 @@ impl TuiState {
         }
     }
 
-    /// The clickable link a click landed on: the source row and a copy of what it
-    /// opens.
+    /// The clickable link a click landed on, as a copy of what it opens.
     ///
     /// The width the overlay will open at comes from the last frame, which is the
     /// only place the middle block's geometry is known (票 04 §1).
-    fn link_hit(&self, mouse: &MouseEvent) -> Option<(usize, Detail)> {
+    fn link_hit(&self, mouse: &MouseEvent) -> Option<Detail> {
         let offset = (mouse.row.checked_sub(self.drawn_top)?) as usize;
         let row = (*self.drawn_rows.get(offset)?)?;
-        let detail = self.links.get(row)?.clone()?;
-        Some((row, detail))
+        self.links.get(row)?.clone()
     }
 
     /// Whether a click landed on the "back to bottom" indicator.
@@ -2165,6 +2178,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     if layout::below_minimum(area) {
         // Nothing is drawn that a click could land on.
         state.indicator = None;
+        state.detail_rect = None;
         draw_too_small(frame, area);
         return;
     }
@@ -3138,6 +3152,13 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
             lines
         }
         Block::Tool(tool) => tool_block_lines(tool, colors),
+        // The post-hook's feedback, about the call just painted: a plain indented
+        // line, yellow because it is policy talking rather than the tool.
+        Block::ToolFeedback { outcome, .. } => vec![Line::from(Span::styled(
+            format!("  {}", wording::hook_feedback(outcome)),
+            Style::default().fg(Color::Yellow),
+        ))
+        .into()],
         Block::TurnStarted { speaker, iteration } => vec![speaker_line(
             speaker,
             wording::turn_started(*iteration),
@@ -3277,23 +3298,24 @@ fn severity_style(reason: StopReason) -> Style {
     }
 }
 
-/// A finished tool call, folded to two things: the **call line** that stays in the
-/// transcript, and, behind it, the whole output (票 02 §3).
+/// A finished tool call, folded to one line: the **call** the reader can open, with
+/// the whole output behind it (票 02 §3).
 ///
 /// A failure is the same line with `失败` at its **end** — not a second line — and
-/// the error body moves into the detail. The post-hook's feedback stays on screen:
-/// it is policy feedback, not tool output, so it has to be readable without a click
-/// (票 02 §3).
+/// the error body moves into the detail. The post-hook's feedback is its own block
+/// and stays on screen: it is policy feedback, not tool output, so it has to be
+/// readable without a click (票 02 §3).
 fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     let failed = matches!(&tool.outcome, Some(outcome) if !outcome.ok);
     let mut call = vec![
-        // The marker is what says the line can be opened; it is paint, not wording,
-        // so it is not part of the sentence (票 03 §Answer).
-        Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
+        // The name leads, so every transcript line starts with who is speaking; the
+        // marker after it is what says the line can be opened. It is paint, not
+        // wording, so it is not part of the sentence (票 03 §Answer）。
         Span::styled(
             format!("{} ", speaker_label(&tool.speaker)),
             name_style(&tool.speaker, colors),
         ),
+        Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!(
                 "{} {} {}",
@@ -3326,17 +3348,7 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
             no_result: tool.outcome.is_none(),
         },
     };
-    let mut lines = vec![RenderedLine::linked(Line::from(call), detail)];
-    if let Some(hook) = &tool.hook {
-        lines.push(
-            Line::from(Span::styled(
-                format!("  {}", wording::hook_feedback(hook)),
-                Style::default().fg(Color::Yellow),
-            ))
-            .into(),
-        );
-    }
-    lines
+    vec![RenderedLine::linked(Line::from(call), detail)]
 }
 
 /// The text of a painted line, for a title.
@@ -3384,8 +3396,6 @@ enum DetailKind {
 /// `pending` is set — which is exactly what keeps the question guard from swallowing
 /// the wheel aimed at the overlay.
 struct DetailView {
-    /// The row the overlay was opened from, so a second click there closes it.
-    row: usize,
     /// What is being shown.
     detail: Detail,
     /// The body, laid out at the width it was opened at.
@@ -3408,10 +3418,9 @@ impl TuiState {
     ///
     /// The body is read here, at open time, and laid out at the width the overlay
     /// will be drawn at, so scrolling is pure arithmetic from then on.
-    fn open_detail(&mut self, row: usize, detail: Detail, width: usize) {
+    fn open_detail(&mut self, detail: Detail, width: usize) {
         let body = detail_body(&detail, &self.facts.cwd, width);
         self.detail = Some(DetailView {
-            row,
             detail,
             body,
             top: 0,
@@ -3453,21 +3462,6 @@ impl TuiState {
             .as_ref()
             .map(|view| view.height.saturating_sub(1).max(1))
             .unwrap_or(1)
-    }
-
-    /// The display row a click again landed on, when it is the row the overlay was
-    /// opened from.
-    fn detail_reselected(&self, mouse: &MouseEvent) -> bool {
-        let Some(view) = self.detail.as_ref() else {
-            return false;
-        };
-        let Some(offset) = mouse.row.checked_sub(self.drawn_top) else {
-            return false;
-        };
-        match self.drawn_rows.get(offset as usize) {
-            Some(Some(row)) => *row == view.row,
-            _ => false,
-        }
     }
 }
 
@@ -3570,13 +3564,15 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
 /// It owns the keyboard and the wheel while it is up, and the transcript stays
 /// frozen where it was — a reading position, not a moving one (票 02 §4).
 fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    if state.detail.is_none() {
+        state.detail_rect = None;
+        return;
+    }
     let Some(area) = panes.detail() else {
         // Nowhere to draw it: leaving it open would keep the keyboard captured for a
         // view nobody can see.
         state.detail = None;
-        return;
-    };
-    let Some(view) = state.detail.as_ref() else {
+        state.detail_rect = None;
         return;
     };
     // The transcript is frozen where it was: the reader is looking at a line, and a
@@ -3584,6 +3580,11 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     // under the overlay they are reading (票 02 §4).
     state.pane.set_following(false);
     state.pane.set_holding(true);
+    // What a click outside can hit only exists once this is recorded.
+    state.detail_rect = Some(area);
+    let Some(view) = state.detail.as_ref() else {
+        return;
+    };
     let inner = layout::inner(area);
     let height = inner.height as usize;
     let body_rows = height.saturating_sub(2);

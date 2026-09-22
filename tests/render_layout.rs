@@ -1911,6 +1911,35 @@ fn tool_started(
     ))
 }
 
+/// One `PermissionAsked` about a call.
+fn permission_asked(seq: u64, id: &str) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::PermissionAsked {
+            request_id: "r-1".to_owned(),
+            tool_call_id: ToolCallId::new(id),
+            request: serde_json::json!({"tool_name": "bash", "args": {"command": "ls"}}),
+        },
+    ))
+}
+
+/// One `PermissionDecided`: the user said yes.
+fn permission_decided(seq: u64) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Decision, DecisionSource, Event, EventPayload, SpeakerId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::PermissionDecided {
+            request_id: "r-1".to_owned(),
+            decision: Decision::Allow,
+            source: DecisionSource::User,
+            reason: None,
+        },
+    ))
+}
+
 /// One `ToolCallCompleted` for a call that started earlier.
 fn tool_completed(
     seq: u64,
@@ -1968,7 +1997,7 @@ fn a_thinking_segment_opens_in_place_and_settles_in_place() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(
-        text.contains("▸ [kimi] ✓ 思考完成"),
+        text.contains("[kimi] ▸ ✓ 思考完成"),
         "the same line settles in place: {text}"
     );
     assert!(
@@ -2016,7 +2045,7 @@ fn a_synthesizer_trace_streams_but_records_nothing() {
     state.apply(message(2, "结论。", None));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains("▸ [kimi] ✓ 思考完成"),
+        text.contains("[kimi] ▸ ✓ 思考完成"),
         "the line settles even with no recorded trace: {text}"
     );
 
@@ -2044,11 +2073,10 @@ fn a_tool_result_is_folded_into_its_call_line() {
         Some("line one\nline two\nline three"),
         None,
     ));
-    state.apply(flush());
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains("▸ [kimi] 调用 bash command=cargo test"),
+        text.contains("[kimi] ▸ 调用 bash command=cargo test"),
         "the call line keeps its parameter summary and gains the marker: {text}"
     );
     assert!(
@@ -2071,11 +2099,10 @@ fn a_tool_result_is_folded_into_its_call_line() {
         None,
         Some("no such file"),
     ));
-    failed.apply(flush());
     let rows = screen(120, 24, &mut failed);
     let text = rows.join("\n");
     assert!(
-        text.contains("▸ [kimi] 调用 read_file path=missing.rs 失败"),
+        text.contains("[kimi] ▸ 调用 read_file path=missing.rs 失败"),
         "the failure is a suffix on the call line: {text}"
     );
     assert!(
@@ -2094,7 +2121,6 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-9", true, Some("alpha\nbeta"), None));
-    state.apply(flush());
 
     // A tall terminal, so the whole body fits: the shortest overlay scrolls, which is
     // the next test's subject.
@@ -2138,7 +2164,6 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
         Some(&body.join("\n")),
         None,
     ));
-    state.apply(flush());
 
     click_row(&mut state, 120, 40, "调用 bash");
     // The body starts at the top, which at 40 rows is the arguments section.
@@ -2208,7 +2233,6 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         Some("the whole output\n[truncated: 999 chars]"),
         None,
     ));
-    state.apply(flush());
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -2242,7 +2266,6 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
         Some("head of the output\n[truncated: 999 chars]"),
         None,
     ));
-    state.apply(flush());
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -2265,7 +2288,6 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-13", true, Some("body"), None));
-    state.apply(flush());
 
     // Find the call line's row before the question covers the pane.
     let row = row_of(&mut state, 120, 40, "调用 bash").expect("the call line is drawn");
@@ -2321,13 +2343,6 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     // The click's column only has to be inside the line; the row is what the pane
     // maps back to a source line.
     state.mouse(click(10, row));
-}
-
-/// An event that closes an open tool block, which is what puts it on screen: a call
-/// and its result are one block, and the block is emitted when the next unrelated
-/// event arrives (票 01 事实 10, `transcript.rs`'s grouping rule).
-fn flush() -> fs_agent::render::RenderEvent {
-    fs_agent::render::RenderEvent::Notice(String::new())
 }
 
 // ---------------------------------------------------------------------------
@@ -2733,7 +2748,6 @@ fn the_detail_overlay_freezes_the_transcript() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-20", true, Some("body"), None));
-    state.apply(flush());
     let _ = screen(120, 24, &mut state);
 
     let _ = screen(120, 24, &mut state);
@@ -2794,7 +2808,6 @@ fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-21", true, Some("body"), None));
-    state.apply(flush());
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
@@ -2863,7 +2876,7 @@ fn a_thinking_line_tints_its_speakers_name() {
         panic!("the thinking line is on screen");
     };
     // The name sits just before the marker.
-    let name_x = column - text_columns("[kimi] ") as u16;
+    let name_x = column - text_columns("▸ ") as u16 - text_columns("[kimi] ") as u16;
     assert_eq!(
         frame[(name_x, row)].symbol(),
         "[",
@@ -2921,7 +2934,6 @@ fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-22", true, Some("body"), None));
-    state.apply(flush());
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
@@ -2961,7 +2973,6 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         serde_json::json!({"command": "cat big"}),
     ));
     state.apply(tool_completed(2, "call-23", true, Some("preview"), None));
-    state.apply(flush());
     click_row(&mut state, 120, 40, "调用 bash");
 
     // The mark is far below the visible body, so walk to the end of it.
@@ -2987,7 +2998,6 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-24", true, Some("body"), None));
-    state.apply(flush());
     click_row(&mut state, 120, 40, "调用 bash");
 
     state.key(Key::CtrlC);
@@ -3017,5 +3027,175 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
         !rows[input].contains('x'),
         "nothing landed in the draft: {:?}",
         rows[input]
+    );
+}
+
+#[test]
+fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
+    // The transcript used to hold a call open until some *later* unrelated event closed
+    // it, so the call line only appeared once the model had already answered its next
+    // iteration: for the whole tool run, and until then, the transcript showed nothing
+    // about the call at all (票 02 §3). The result is what ends the call, and it is
+    // what has to paint it.
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-30",
+        "bash",
+        serde_json::json!({"command": "ls -la"}),
+    ));
+    state.apply(tool_completed(2, "call-30", true, Some("total 0"), None));
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("调用 bash command=ls -la"),
+        "the call line is up as soon as the result is: {text}"
+    );
+
+    // A permission question asked **about this call** does not delay it either: the
+    // narration is painted while the call is still in flight, and the call line arrives
+    // on the result regardless.
+    let mut asked = state_with_roster(&["kimi"]);
+    asked.apply(tool_started(
+        1,
+        "call-31",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    asked.apply(permission_asked(2, "call-31"));
+    asked.apply(permission_decided(3));
+    let text = screen(120, 24, &mut asked).join("\n");
+    assert!(
+        text.contains("权限询问"),
+        "the question is narrated first: {text}"
+    );
+    assert!(
+        !text.contains("调用 bash"),
+        "and the call is not painted before its result: {text}"
+    );
+    asked.apply(tool_completed(4, "call-31", true, Some("out"), None));
+    let text = screen(120, 24, &mut asked).join("\n");
+    assert!(
+        text.contains("调用 bash command=ls"),
+        "the call line is up as soon as the result is: {text}"
+    );
+}
+
+#[test]
+fn the_detail_overlay_is_wider_than_a_question() {
+    // The body is a page, so it gets the room: the ceiling went 90 → 135 and below 139
+    // columns what caps it is the overlay's own margin, not the ceiling (票 03
+    // §Answer，2026-09-23 加宽 50%）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-41",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-41", true, Some("body"), None));
+    click_row(&mut state, 120, 40, "调用 bash");
+    let frame = buffer(120, 40, &mut state);
+    let detail = overlay_width(&frame, 120, 40).expect("the overlay's top border");
+
+    // A question's overlay is narrower, and it is painted the same way: ask one and
+    // measure it.
+    let mut asked = state_with_roster(&["kimi"]);
+    asked.request(ask_permission().0);
+    let frame = buffer(120, 40, &mut asked);
+    let question = overlay_width(&frame, 120, 40).expect("the question's top border");
+
+    assert!(
+        detail > question,
+        "the detail overlay ({detail}) is wider than a question's ({question})"
+    );
+    assert_eq!(
+        detail, 116,
+        "and at 120 columns it is capped by the margin, not the ceiling"
+    );
+}
+
+/// The painted width of a floating box, read off the row its top border is on.
+///
+/// The overlay is centred over the middle block, whose own border sits one column
+/// outside it on either side — so the box is found by looking for a `┌` that is **not**
+/// in the first column, and measured to its matching `┐`.
+fn overlay_width(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
+    for y in 0..height {
+        // Columns, not byte offsets: a row with CJK in it is longer in bytes than it is
+        // wide, and the box is measured in columns.
+        let mut left = None;
+        for x in 1..width {
+            match frame[(x, y)].symbol() {
+                "┌" if left.is_none() => left = Some(x),
+                "┐" => {
+                    if let Some(left) = left {
+                        return Some(x - left + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn a_click_outside_the_detail_overlay_closes_it() {
+    // The whole of the frame outside the overlay is a close target: the line it came
+    // from, the transcript around it, the panel, the footer (票 02 §4，2026-09-23
+    // 修正，原先只认「再点同一行」）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-40",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-40", true, Some("body"), None));
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
+
+    // Outside: the transcript row the line came from.
+    let row = row_of(&mut state, 120, 40, "调用 bash").expect("the call line");
+    state.mouse(click(4, row));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("── 参数 ──"),
+        "a click on the transcript closed it: {text}"
+    );
+
+    // Inside: nothing happens, because the overlay has no buttons of its own — and
+    // that includes the screen row the line was on when the overlay covers it. The old
+    // "click the same row again" is **not** what closes a covered line; the reliable
+    // ways out are `Esc`, `Ctrl-D`, and a click outside (票 02 §4，2026-09-23 修正).
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("── 参数 ──"), "reopened: {text}");
+    state.mouse(click(40, 20));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("── 参数 ──"),
+        "a click inside leaves it up: {text}"
+    );
+    // What decides is the **screen position**, not which transcript line is under it:
+    // a click inside the overlay's rectangle does nothing. So when the line the overlay
+    // was opened from sits under the overlay — which is where it usually is, since the
+    // overlay covers most of the middle block — clicking there does nothing either, and
+    // `Esc` / `Ctrl-D` / a click outside are the ways out (票 02 §4，2026-09-23 修正).
+    // The "inside does nothing" click above is that case: (40, 20) is inside the
+    // overlay's rectangle at this size.
+    // The overlay's own borders bracket that click: (40, 20) is between them.
+    let frame = buffer(120, 40, &mut state);
+    let overlay = overlay_width(&frame, 120, 40).expect("the overlay");
+    assert_eq!(
+        overlay, 116,
+        "at 120 columns the overlay is 116 wide, so the click above was inside it"
+    );
+    assert_eq!(
+        (frame[(2, 20)].symbol(), frame[(117, 20)].symbol()),
+        ("│", "│"),
+        "and those are its two edges on that row"
     );
 }

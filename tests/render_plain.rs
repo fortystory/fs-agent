@@ -144,8 +144,11 @@ async fn rounds_are_sectioned_and_divergences_are_indented() {
 
 #[tokio::test]
 async fn a_tool_result_and_its_post_hook_read_as_one_block() {
-    // The hook event carries no `tool_call_id`, so the only way to group it is to
-    // hold the call open until the next unrelated event (spec §19).
+    // The hook event carries no `tool_call_id`, so the call is what says which line the
+    // feedback belongs under. The call itself is painted by its **result**, not held
+    // open for the hook: holding it made the call invisible for the tool's whole run
+    // (2026-09-23, 票 02 §3). The order the reader sees is unchanged — head, result,
+    // feedback — only the moment they are written moves earlier.
     let id = ToolCallId::new("call-1");
     let events = [
         Event::new(
@@ -193,6 +196,93 @@ async fn a_tool_result_and_its_post_hook_read_as_one_block() {
     let output = text.find("  fn main() {}").expect("tool output");
     let hook = text.find("feedback: looks fine").expect("hook feedback");
     assert!(head < output && output < hook, "{text:?}");
+}
+
+#[tokio::test]
+async fn a_tool_call_is_printed_when_its_result_lands() {
+    // The result paints the call, with no further event needed: plain used to hold the
+    // call until something unrelated arrived, which for a trailing tool call meant the
+    // line only reached the page at end of stream (票 02 §3). Only the three events
+    // below are fed — no trailing turn end — so an image that still waits for one
+    // would print no head at all.
+    let id = ToolCallId::new("call-early");
+    let events = [
+        Event::new(
+            1,
+            kimi(),
+            EventPayload::ToolCallStarted {
+                tool_call_id: id.clone(),
+                tool_name: "bash".to_owned(),
+                args: serde_json::json!({"command": "true"}),
+            },
+        ),
+        Event::new(
+            2,
+            kimi(),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: id,
+                ok: true,
+                output: Some("done".to_owned()),
+                error: None,
+                duration_ms: 1,
+            },
+        ),
+    ];
+    let (_stdout, stderr) = run(&events, false).await;
+    let text = stderr.text();
+    let head = text.find("bash(command=true)").expect("the call line");
+    let output = text.find("  done").expect("its output");
+    assert!(head < output, "head then output: {text:?}");
+}
+
+/// The post-hook's feedback line on its own, with no call block in the same paint.
+#[tokio::test]
+async fn a_post_hook_prints_under_the_call_it_annotates() {
+    // The feedback is now its own `Block::ToolFeedback` aimed at the call just painted,
+    // so plain has to render it as the same indented line it always did — and it must
+    // not print the hook twice.
+    let id = ToolCallId::new("call-feedback");
+    let events = [
+        Event::new(
+            1,
+            kimi(),
+            EventPayload::ToolCallStarted {
+                tool_call_id: id.clone(),
+                tool_name: "bash".to_owned(),
+                args: serde_json::json!({"command": "true"}),
+            },
+        ),
+        Event::new(
+            2,
+            kimi(),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: id,
+                ok: true,
+                output: Some("done".to_owned()),
+                error: None,
+                duration_ms: 1,
+            },
+        ),
+        Event::new(
+            3,
+            kimi(),
+            EventPayload::HookExecuted {
+                point: hook_format::POINT_POST.to_owned(),
+                command: "check".to_owned(),
+                outcome: hook_format::feedback("looks fine").to_owned(),
+            },
+        ),
+    ];
+    let (_stdout, stderr) = run(&events, false).await;
+    let text = stderr.text();
+    assert_eq!(
+        text.matches("feedback: looks fine").count(),
+        1,
+        "the feedback is printed exactly once: {text:?}"
+    );
+    let output = text.find("  done").expect("the output");
+    let hook = text.find("feedback: looks fine").expect("the feedback");
+    assert!(output < hook, "the feedback follows the result: {text:?}");
 }
 
 #[tokio::test]

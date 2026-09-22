@@ -375,8 +375,11 @@ const MODAL_MAX_WIDTH: u16 = 72;
 /// The blank columns the overlay leaves on either side of the middle block.
 const MODAL_MARGIN: u16 = 4;
 
-/// The widest the detail overlay ever gets (票 03 §Answer).
-const DETAIL_MAX_WIDTH: u16 = 90;
+/// The widest the detail overlay ever gets (票 03 §Answer；2026-09-23 加宽 50%：
+/// 90 → 135)。A tool body is the one thing in the interface that is a page rather than
+/// a sentence, so it gets the room until the terminal itself runs out: at 120 columns
+/// the margin, not this ceiling, is what caps it.
+const DETAIL_MAX_WIDTH: u16 = 135;
 
 /// The fewest body rows a detail overlay is worth opening for.
 const DETAIL_MIN_ROWS: u16 = 1;

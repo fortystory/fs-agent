@@ -34,12 +34,17 @@ regression assertion for that.
 `render::transcript` turns events into `Block`s **once**; plain and TUI only
 paint them. Two rules live there:
 
-- **A tool call, its result and its post-hook feedback are one block.** The hook
-  event carries no `tool_call_id` — the loop emits it immediately after the
-  result it annotates — so the call is held open until the next unrelated event
-  closes it. This is the same grouping `session::observe` performs on a finished
-  stream, done incrementally for a live one. A call whose result never arrives
-  (a cancel) is flushed at end of stream rather than dropped.
+- **A tool call and its result are one block, painted by the result.** The call is
+  emitted the moment `ToolCallCompleted` arrives, so the call line is on screen as
+  soon as the tool finishes. The post-hook's feedback carries no `tool_call_id` — the
+  loop emits it immediately after the result it annotates — so it travels as its own
+  small block (`Block::ToolFeedback`) aimed at the call just painted. It used to be
+  merged into the call block, which meant the call was held open until the next
+  unrelated event closed it — in the TUI, the next answer's first streaming delta:
+  invisible for the tool's whole run, and painted only once it was over. (It is still
+  painted by the *result*, not by the start: making it appear when the call begins is a
+  different shape, not this one.) A call whose result never arrives (a cancel) is
+  flushed at end of stream rather than dropped.
 - **Incremental text passes straight through** as `Block::Delta`, because deltas
   bypass the log and cannot be re-derived later.
 

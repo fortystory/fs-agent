@@ -1,15 +1,24 @@
 //! Syntax highlighting and diff coloring — deliberately **two layers** (spec
 //! §19).
 //!
+//! ⚠️ **This module currently has no production consumer.** It is kept on purpose,
+//! not by oversight: see [`docs/highlight.md`](../../docs/highlight.md) for the
+//! two decisions that left it here and what would have to happen for it to come back
+//! or go away. The short version: the TUI used to compose these layers for tool
+//! output, and ticket 02 of `.scratch/tui-ux/` moved tool output into the detail
+//! overlay as plain text, which removed the last caller. Only this module's own
+//! tests and `tests/render_highlight.rs` exercise it now, so a regression here is
+//! invisible to the product until something calls it again.
+//!
 //! The diff layer answers one question about a line: is it added, removed, a
 //! hunk header, or context? The syntax layer answers a different one: what kind
-//! of code is this? A line can be both an addition and a keyword, and the TUI
+//! of code is this? A line can be both an addition and a keyword, and a caller
 //! composes the two styles ([`Class::style`] patched over [`DiffTag::style`])
 //! rather than picking a winner.
 //!
 //! The syntax layer runs the Rust grammar that is already a dependency through
-//! `tree-sitter-highlight`, so the build stays C-free — the Oniguruma path
-//! syntect would take is not used (spec §19, Out of Scope).
+//! `tree-sitter-highlight` — the Oniguruma path syntect would take is not used
+//! (spec §19, Out of Scope).
 
 use std::sync::OnceLock;
 
