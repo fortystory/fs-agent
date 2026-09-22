@@ -1295,15 +1295,17 @@ fn a_question_splits_into_a_title_a_summary_a_call_and_a_row_of_buttons() {
             .unwrap_or_else(|| panic!("{needle:?} is on screen:\n{text}"))
     };
 
-    // Four parts, top to bottom: what is asked, what the action is, the concrete
-    // call, and the keys that answer it.
+    // Five parts, top to bottom: what is asked, what the action is, what the call is
+    // *for* (the same words the folded transcript line uses), the concrete call, and
+    // the keys that answer it.
     let title = row_of("权限询问：write_file");
     let summary = row_of("写入一个文件");
+    let description = row_of("调用 write_file a.rs");
     let call = row_of("write_file（path=a.rs）");
     let keys = row_of("[y] 允许");
     assert!(
-        title < summary && summary < call && call < keys,
-        "title, then the summary, then the call, then the buttons:\n{text}"
+        title < summary && summary < description && description < call && call < keys,
+        "title, summary, description, call, then the buttons:\n{text}"
     );
     // Each part keeps its own row: a command can no longer push the keys into the
     // middle of a sentence, and the keys cannot bury the command.
@@ -3552,5 +3554,62 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     assert!(
         text.contains("第 200 行"),
         "and the last row really is on screen: {text}"
+    );
+}
+
+/// A permission question about a shell command, the way the loop asks one.
+fn ask_bash(command: &str) -> fs_agent::render::ConsoleRequest {
+    use fs_agent::permissions::PermissionRequest;
+    use fs_agent::render::{AskRequest, Question};
+    let (reply, _answer) = tokio::sync::oneshot::channel();
+    ConsoleRequest::Ask(AskRequest {
+        question: Question::Permission(PermissionRequest {
+            request_id: "r-1".to_owned(),
+            tool_call_id: "c-1".to_owned(),
+            tool_name: "bash".to_owned(),
+            args: serde_json::json!({ "command": command }),
+            reason: "mode ask".to_owned(),
+        }),
+        reply,
+    })
+}
+
+#[test]
+fn the_permission_question_describes_the_call_the_way_the_line_does() {
+    // The question and the folded line it is about are produced by **one** function, so
+    // they cannot drift apart — and the call as it will run stays under them, because
+    // approving is the moment the exact command has to be readable (2026-09-23, user
+    // request: the popup should read like the line, both kept).
+    let command = "head -5 README.md";
+    let mut state = state_with_roster(&["deepseek"]);
+    // The same call, first folded into the transcript...
+    state.apply(tool_started(
+        1,
+        "call-80",
+        "bash",
+        serde_json::json!({ "command": command }),
+    ));
+    state.apply(tool_completed(2, "call-80", true, Some("out"), None));
+    // ...and then asked about.
+    state.request(ask_bash(command));
+
+    let rows = screen(120, 40, &mut state);
+    let text = rows.join("\n");
+    assert_eq!(
+        text.matches("调用 bash 查看 README.md").count(),
+        2,
+        "the folded line and the question carry the same description: {text}"
+    );
+    let description = rows
+        .iter()
+        .position(|row| row.contains("调用 bash 查看 README.md") && row.contains('│'))
+        .expect("the description row in the overlay");
+    let call = rows
+        .iter()
+        .position(|row| row.contains("bash（command=head -5 README.md）"))
+        .expect("the exact call is still shown");
+    assert!(
+        description < call,
+        "and the exact call comes after it: {text}"
     );
 }

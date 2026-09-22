@@ -835,6 +835,10 @@ impl Pending {
                 // The plain sentence comes first: a reader who cannot parse the
                 // arguments still has to know what they are saying yes to.
                 summary: Some(wording::permission_summary(&request.tool_name)),
+                // Then the same one-line description the folded transcript line
+                // carries — and *then* the call as it will run, because approving is
+                // the one moment the exact command has to be readable (2026-09-23).
+                description: Some(wording::tool_call_line(&request.tool_name, &request.args)),
                 detail: Some(wording::permission_call(
                     &request.tool_name,
                     &summarize_args(&request.args),
@@ -851,6 +855,7 @@ impl Pending {
             } => Modal {
                 title: wording::plan_conflict_title().to_owned(),
                 summary: None,
+                description: None,
                 detail: Some(wording::plan_conflict_body(&path.display().to_string())),
                 choices: &wording::PLAN_CHOICES,
                 actions: wording::PLAN_CHOICE_ANSWERS
@@ -861,6 +866,7 @@ impl Pending {
             Pending::Paste { chars, .. } => Modal {
                 title: wording::paste_title().to_owned(),
                 summary: None,
+                description: None,
                 detail: Some(wording::paste_body(*chars)),
                 choices: &wording::PASTE_CHOICES,
                 actions: vec![HitAction::Paste, HitAction::Dismiss],
@@ -868,6 +874,7 @@ impl Pending {
             Pending::ClearDraft => Modal {
                 title: wording::clear_draft_title().to_owned(),
                 summary: None,
+                description: None,
                 detail: Some(wording::clear_draft_body().to_owned()),
                 choices: &wording::CLEAR_CHOICES,
                 actions: vec![HitAction::ClearDraft, HitAction::Dismiss],
@@ -875,6 +882,7 @@ impl Pending {
             Pending::Exit => Modal {
                 title: wording::exit_title().to_owned(),
                 summary: None,
+                description: None,
                 detail: Some(wording::exit_body().to_owned()),
                 choices: &wording::EXIT_CHOICES,
                 actions: vec![HitAction::Quit, HitAction::Dismiss],
@@ -898,6 +906,11 @@ struct Modal {
     /// What the action is, in one plain sentence — the row a reader who cannot parse
     /// the arguments reads. Absent when the question is already plain enough.
     summary: Option<String>,
+    /// What the call is *for*, in the very words the folded transcript line uses
+    /// (`调用 bash 查看 git status`), so the question and the line it is about read
+    /// alike (2026-09-23, user request). Absent for a question that is not about a tool
+    /// call.
+    description: Option<String>,
     /// The one concrete thing the question is about: the call, the path, the size.
     detail: Option<String>,
     /// The keys that answer it, painted as one row of buttons.
@@ -2240,6 +2253,11 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     if let Some(summary) = modal.summary.as_deref() {
         rows.extend(pane::wrap_text(summary.trim(), inner));
     }
+    // What the call is for, then the call as it will run: orientation, then the thing
+    // being approved.
+    if let Some(description) = modal.description.as_deref() {
+        rows.extend(pane::wrap_text(description.trim(), inner));
+    }
     if let Some(detail) = modal.detail.as_deref() {
         rows.extend(pane::wrap_text(detail.trim(), inner));
     }
@@ -3315,7 +3333,6 @@ fn severity_style(reason: StopReason) -> Style {
 fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     let failed = matches!(&tool.outcome, Some(outcome) if !outcome.ok);
     let color = colors.of(&tool.speaker);
-    let description = wording::tool_description(&tool.tool, &tool.args);
     let mut call = vec![
         // The name leads, so every transcript line starts with who is speaking; the
         // marker after it is what says the line can be opened. It is paint, not
@@ -3328,7 +3345,7 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
         // What the call was *for*, in the narration grey the thinking line wears — the
         // arguments themselves are one click away (票 02 §2，2026-09-23 修正）。
         Span::styled(
-            tool_call_text(&tool.tool, &description),
+            wording::tool_call_line(&tool.tool, &tool.args),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
@@ -3358,17 +3375,6 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
         },
     };
     vec![RenderedLine::linked(Line::from(call), detail)]
-}
-
-/// `调用 工具 描述`, with the trailing space left out when there is no description to
-/// give (a dynamic tool whose arguments this layer cannot read).
-fn tool_call_text(tool: &str, description: &str) -> String {
-    let label = wording::tool_call_label();
-    if description.is_empty() {
-        format!("{label} {tool}")
-    } else {
-        format!("{label} {tool} {description}")
-    }
 }
 
 /// The text of a painted line, for a title.

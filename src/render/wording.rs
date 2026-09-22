@@ -503,6 +503,21 @@ fn clean_word(word: &str) -> &str {
         .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`' || ch == ';')
 }
 
+/// The whole folded call line's text: `调用 工具 描述`.
+///
+/// **One producer for both readers.** The transcript's folded line and the permission
+/// question that asks about the same call show this same string, so the question you
+/// answer and the line it is about cannot drift apart (2026-09-23, user request: the
+/// permission popup should read like the call line).
+pub fn tool_call_line(tool: &str, args: &Value) -> String {
+    let description = tool_description(tool, args);
+    if description.is_empty() {
+        format!("{} {tool}", tool_call_label())
+    } else {
+        format!("{} {tool} {description}", tool_call_label())
+    }
+}
+
 /// The verb a command's leading word earns: what the reader would say the call does.
 ///
 /// Only three verbs, because a reader only needs three: look something up, look at
