@@ -778,3 +778,123 @@ fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
     assert_eq!(text_of(users[1]), "count the modules under src");
     assert_eq!(text_of(users[2]), "read PLAN.md before acting");
 }
+
+#[test]
+fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitized() {
+    // A debater is a persona: `[discussion] debaters = [{ name = "保守", … }]` names a
+    // side, and two sides of one discussion have to stay distinguishable in the
+    // prefix — a mangled name would read as the same speaker twice. The `name` field
+    // is the one place a vendor's charset is undocumented, so it is sanitized on its
+    // own (spec §5).
+    let persona = SpeakerId::Debater("保守".into());
+    let (dir, mut log) = log(|_| {});
+    log.append(
+        persona.clone(),
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "保守的看法".to_owned(),
+            reasoning: None,
+        },
+    )
+    .unwrap();
+    log.append(
+        SpeakerId::User,
+        EventPayload::MessageCompleted {
+            role: Role::User,
+            text: "问题".to_owned(),
+            reasoning: None,
+        },
+    )
+    .unwrap();
+    log.append(
+        persona.clone(),
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "再看一次".to_owned(),
+            reasoning: None,
+        },
+    )
+    .unwrap();
+
+    let events = log.events();
+    let messages = project(&events, &kimi(), &caps());
+    let merged = messages
+        .iter()
+        .find(|message| {
+            matches!(
+                message,
+                Message::User { content, .. } if content.contains("保守的看法")
+            )
+        })
+        .expect("the persona's turns reach the other side");
+    let Message::User { content, name, .. } = merged else {
+        unreachable!()
+    };
+    assert!(
+        content.contains("保守"),
+        "the prefix keeps the name the user chose: {content}"
+    );
+    assert_eq!(
+        name.as_deref(),
+        Some("--"),
+        "the wire field is the sanitized shape, and the body is the attribution guarantee"
+    );
+    drop(dir);
+}
+
+#[test]
+fn a_persona_is_private_to_the_side_it_describes() {
+    // A soul is recorded **on the stream** (so replay can rebuild the call), attributed
+    // to the debater it describes — and the projection hands it to nobody else: the
+    // other side is arguing *against* this character, and the synthesizer reads answers,
+    // not characters (spec §5, §15).
+    let (dir, mut log) = log(|_| {});
+    let persona = SpeakerId::Debater("张三".into());
+    log.append(
+        persona.clone(),
+        EventPayload::ContextInjected {
+            source: ContextSource::Persona("张三".into()),
+            content: "你的性格设定：法外狂徒".to_owned(),
+        },
+    )
+    .unwrap();
+    log.append(
+        SpeakerId::User,
+        EventPayload::MessageCompleted {
+            role: Role::User,
+            text: "问题".to_owned(),
+            reasoning: None,
+        },
+    )
+    .unwrap();
+    log.append(
+        persona.clone(),
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "张三的作答".to_owned(),
+            reasoning: None,
+        },
+    )
+    .unwrap();
+    let events = log.events();
+
+    let own = project(&events, &persona, &caps());
+    assert!(
+        own.iter().any(|message| matches!(
+            message,
+            Message::User { content, .. } if content.contains("法外狂徒")
+        )),
+        "the persona's own instruction reaches it: {own:?}"
+    );
+    for other in [kimi(), synthesizer()] {
+        let seen = project(&events, &other, &caps());
+        assert!(
+            !seen.iter().any(|message| matches!(
+                message,
+                Message::User { content, .. } if content.contains("法外狂徒")
+            )),
+            "{other} must not read another side's persona: {seen:?}"
+        );
+    }
+    drop(dir);
+}

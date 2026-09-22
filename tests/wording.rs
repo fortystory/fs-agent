@@ -76,6 +76,83 @@ fn a_round_and_a_session_ending_read_in_chinese() {
 }
 
 #[test]
+fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
+    assert_eq!(
+        wording::discussion_ended(StopReason::NoDivergence, 1, &[]),
+        "讨论结束：无分歧（跑了 1 轮）"
+    );
+    // The absent side is named: a round with one answer is not a round of agreement.
+    assert_eq!(
+        wording::discussion_ended(
+            StopReason::NoDivergence,
+            2,
+            &[SpeakerId::Debater("deepseek".into())]
+        ),
+        "讨论结束：无分歧（跑了 2 轮）；缺席：[deepseek]"
+    );
+    assert_eq!(wording::discussion_pair("保守", "激进"), "保守 × 激进");
+    // A debater is named by its persona, with the model beside it when they differ.
+    assert_eq!(
+        wording::debater_label("保守", "deepseek-v4-pro"),
+        "保守（deepseek-v4-pro）"
+    );
+    assert_eq!(
+        wording::debater_label("kimi-k3", "kimi-k3"),
+        "kimi-k3",
+        "the shorthand says it once"
+    );
+    assert_eq!(
+        wording::needs_two_debaters("保守"),
+        "--debaters 需要两个名字（逗号分隔，例如 `--debaters 保守,激进`），得到 `保守`"
+    );
+    assert_eq!(
+        wording::unknown_debater("激进", &["保守", "审查"]),
+        "池子里没有叫 `激进` 的讨论者；可用：`保守`、`审查`"
+    );
+    assert_eq!(
+        wording::discussion_replay("20260922T101500Z-ab12"),
+        "会话 20260922T101500Z-ab12；复盘：fs-agent sessions show 20260922T101500Z-ab12"
+    );
+    // The two ways `discuss` refuses to start say what to do instead.
+    assert!(
+        wording::discussion_no_roster().contains("[discussion]"),
+        "{}",
+        wording::discussion_no_roster()
+    );
+    assert!(
+        wording::discussion_no_roster().contains("debaters"),
+        "{}",
+        wording::discussion_no_roster()
+    );
+    assert_eq!(wording::question_prompt(), "问题> ");
+    // `/discuss` on a live session: which models, and which question.
+    assert_eq!(
+        wording::discussion_starting(
+            "保守（deepseek-v4-pro）",
+            "激进（deepseek-flash）",
+            "换个角度\n再说一次？"
+        ),
+        "开始讨论：保守（deepseek-v4-pro） × 激进（deepseek-flash）；题目：换个角度"
+    );
+    assert!(
+        wording::discuss_needs_in_session_question().contains("/discuss 你的问题"),
+        "{}",
+        wording::discuss_needs_in_session_question()
+    );
+
+    // One vendor — or one model twice — is allowed, and said out loud rather than
+    // passing for the heterogeneous case the design assumes.
+    assert_eq!(
+        wording::discussion_same_model("kimi-k3"),
+        "提示：两个讨论者都是 kimi-k3——同一个模型问两遍，剩下的差异只有采样噪声"
+    );
+    assert_eq!(
+        wording::discussion_one_vendor("kimi-k3", "k3"),
+        "提示：两个讨论者来自同一厂商（kimi-k3 × k3），多样性比设计假设的弱"
+    );
+}
+
+#[test]
 fn a_tool_call_summary_reads_in_chinese() {
     assert_eq!(
         wording::tool_call("read_file", "path=src/lib.rs"),
@@ -182,10 +259,6 @@ fn every_permission_decision_and_source_has_an_explicit_chinese_phrase() {
 #[test]
 fn the_input_line_prompts_read_in_chinese() {
     assert_eq!(
-        wording::permission_prompt("bash", "command=rm -rf /"),
-        "权限询问：bash（command=rm -rf /）？[y] 允许 / [a] 总是允许 / [n] 拒绝 "
-    );
-    assert_eq!(
         wording::permission_prompt_with_context("write_file", "file_path=a.txt", "mode ask"),
         "权限询问：write_file（file_path=a.txt）？原因：mode ask [y] 允许 / [a] 总是允许 / [n] 拒绝 "
     );
@@ -193,6 +266,93 @@ fn the_input_line_prompts_read_in_chinese() {
         wording::plan_conflict_prompt("/tmp/PLAN.md"),
         "/tmp/PLAN.md 已存在：[o] 覆盖 / [a] 追加 / [k] 保留 "
     );
+}
+
+#[test]
+fn a_question_has_a_title_a_body_and_a_row_of_choices() {
+    // The overlay's three parts, each named on its own: a title that says what is
+    // being asked, a body that says what it is about, and the keys (spec §9).
+    assert_eq!(wording::permission_title("bash"), "权限询问：bash");
+    assert_eq!(
+        wording::permission_call("bash", "command=rm -rf /"),
+        "bash（command=rm -rf /）"
+    );
+    assert_eq!(wording::permission_call("read_file", ""), "read_file");
+    assert_eq!(wording::plan_conflict_title(), "计划文件冲突");
+    assert_eq!(
+        wording::plan_conflict_body("/tmp/PLAN.md"),
+        "/tmp/PLAN.md 已存在"
+    );
+    assert_eq!(wording::paste_title(), "粘贴确认");
+    assert_eq!(wording::paste_body(120_000), "粘贴 120000 字符");
+    assert_eq!(wording::clear_draft_title(), "清空输入");
+    assert_eq!(
+        wording::clear_draft_body(),
+        "草稿有多行，Esc 会把它们全部丢掉"
+    );
+    // One table per question, and one join for any front end that has only a line:
+    // the TUI paints the entries, the plain console prints this text.
+    assert_eq!(
+        wording::choices_text(&wording::PERMISSION_CHOICES),
+        "[y] 允许 / [a] 总是允许 / [n] 拒绝"
+    );
+    assert_eq!(
+        wording::choices_text(&wording::PLAN_CHOICES),
+        "[o] 覆盖 / [a] 追加 / [k] 保留"
+    );
+    assert_eq!(
+        wording::choices_text(&wording::PASTE_CHOICES),
+        "[y] 粘贴 / [n] 取消"
+    );
+    assert_eq!(
+        wording::choices_text(&wording::CLEAR_CHOICES),
+        "[y] 清空 / [n] 保留"
+    );
+}
+
+#[test]
+fn a_permission_summary_says_what_the_action_is() {
+    // The row a reader gets when the arguments are a wall of text: one plain sentence
+    // about the *action*, never a reading of the arguments.
+    assert_eq!(
+        wording::permission_summary("bash"),
+        "在你的工作区里执行一条 shell 命令（可以读写文件、访问网络）"
+    );
+    assert_eq!(
+        wording::permission_summary("write_file"),
+        "写入一个文件（新建，或者整体覆盖已有的）"
+    );
+    assert_eq!(
+        wording::permission_summary("read_file"),
+        "读取一个文件的内容"
+    );
+    assert_eq!(
+        wording::permission_summary("edit_file"),
+        "修改一个文件里的一段内容"
+    );
+    assert_eq!(
+        wording::permission_summary("custom__git__status"),
+        "运行你在配置里声明的自定义工具 git/status"
+    );
+    // A tool this crate does not know still gets a sentence: the name is all there is.
+    assert_eq!(wording::permission_summary("mystery"), "调用 mystery 工具");
+    // Every built-in is *named* in the table; falling through to the generic tail
+    // would be a missing sentence rather than an answer.
+    for name in [
+        "bash",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "task",
+        "skill",
+        "repo_map",
+    ] {
+        let summary = wording::permission_summary(name);
+        assert!(
+            !summary.starts_with("调用 "),
+            "{name} has no sentence of its own: {summary}"
+        );
+    }
 }
 
 #[test]
@@ -277,6 +437,33 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     // Narrower than any hint: the way out is all that is left.
     assert_eq!(wording::status_line(true, 8), "ctrl-c 退出");
     assert_eq!(wording::status_line(false, 3), "ctrl-c 退出");
+}
+
+#[test]
+fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
+    // No line is being read (a one-shot `discuss`, or a turn in flight), so neither
+    // `enter 发送` nor the interactive loop's plan gesture is on offer.
+    let wide = wording::viewer_status_line(false, 200);
+    assert_eq!(
+        wide, "就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c 退出",
+        "the whole viewer line"
+    );
+    assert!(wide.ends_with("ctrl-c 退出"), "{wide}");
+
+    // The same ladder: the way out survives, the state word goes first.
+    assert_eq!(
+        wording::viewer_status_line(false, 26),
+        "esc 取消 · ctrl-c 退出"
+    );
+    assert_eq!(
+        wording::viewer_status_line(true, 26),
+        "esc 取消 · ctrl-c 退出",
+        "whatever the state word would have said"
+    );
+
+    // Busy reads as busy, and a terminal too narrow for anything still exits.
+    assert!(wording::viewer_status_line(true, 200).starts_with("工作中 · "));
+    assert_eq!(wording::viewer_status_line(true, 3), "ctrl-c 退出");
 }
 
 #[test]
@@ -383,16 +570,16 @@ fn interactive_feedback_reads_in_chinese() {
     assert_eq!(wording::nothing_to_undo(), "没有可撤销的修改");
     assert_eq!(
         wording::unknown_command("/nope", &[]),
-        "未知命令 /nope（可用：/undo、/plan、/endplan、/quit，或直接输入 /<技能名>）"
+        "未知命令 /nope（可用：/undo、/plan、/endplan、/discuss、/quit，或直接输入 /<技能名>）"
     );
     assert_eq!(
         wording::unknown_command("/nope", &["ask-matt", "release"]),
-        "未知命令 /nope（可用：/undo、/plan、/endplan、/quit；技能：/ask-matt、/release）"
+        "未知命令 /nope（可用：/undo、/plan、/endplan、/discuss、/quit；技能：/ask-matt、/release）"
     );
     assert_eq!(wording::skill_loaded("ask-matt"), "已加载技能 ask-matt");
     assert_eq!(
-        wording::skill_loaded_waiting("ask-matt"),
-        "已加载技能 ask-matt；请输入你的任务。"
+        wording::skill_started("ask-matt"),
+        "已加载技能 ask-matt，按技能正文开始"
     );
     assert_eq!(wording::plan_entered(), "已进入计划模式");
     assert_eq!(wording::plan_exited(), "已退出计划模式");
@@ -425,6 +612,23 @@ fn the_long_help_texts_are_chinese_and_keep_their_structure() {
     let interactive = wording::help_interactive();
     assert!(interactive.contains("--plain"), "{interactive}");
     assert!(interactive.contains("硬计划模式"), "{interactive}");
+
+    // The discussion has a front end of its own now, and both helps say so.
+    assert!(main.contains("fs-agent discuss"), "{main}");
+    let discuss = wording::help_discuss();
+    assert!(discuss.contains("fs-agent discuss"), "{discuss}");
+    assert!(discuss.contains("[discussion] debaters"), "{discuss}");
+    assert!(
+        discuss.contains("同厂商"),
+        "one vendor is documented as allowed"
+    );
+    assert!(discuss.contains("CONCLUSION:"), "{discuss}");
+    assert!(discuss.contains("3 次调用"), "{discuss}");
+    assert!(discuss.contains("sessions show"), "{discuss}");
+    assert!(
+        !discuss.contains(" 的") && !discuss.contains("永 远"),
+        "no space was left behind by a line continuation: {discuss}"
+    );
 
     let sessions = wording::help_sessions();
     assert!(sessions.contains("ls [--all]"), "{sessions}");
@@ -589,16 +793,25 @@ fn a_provider_finish_reason_reads_in_chinese() {
 #[test]
 fn the_two_renderer_confirmations_read_in_chinese() {
     // The questions the TUI asks itself: an oversized paste, and a multi-line draft
-    // `Esc` would throw away. Both default to the safe answer (spec §7).
-    // Each carries the keys that answer it: the overlay has room for one line, and a
-    // question without its keys is one the reader has to guess at (spec §9).
+    // `Esc` would throw away. Both default to the safe answer (spec §7), and both get
+    // the same three parts as a question from the loop — title, body, buttons.
     assert_eq!(
-        wording::paste_confirm(120_000),
-        "粘贴 120000 字符？[y] 粘贴 / [n] 取消"
+        format!(
+            "{}｜{}｜{}",
+            wording::paste_title(),
+            wording::paste_body(120_000),
+            wording::choices_text(&wording::PASTE_CHOICES)
+        ),
+        "粘贴确认｜粘贴 120000 字符｜[y] 粘贴 / [n] 取消"
     );
     assert_eq!(
-        wording::clear_draft_confirm(),
-        "清空输入？[y] 清空 / [n] 保留"
+        format!(
+            "{}｜{}｜{}",
+            wording::clear_draft_title(),
+            wording::clear_draft_body(),
+            wording::choices_text(&wording::CLEAR_CHOICES)
+        ),
+        "清空输入｜草稿有多行，Esc 会把它们全部丢掉｜[y] 清空 / [n] 保留"
     );
 }
 

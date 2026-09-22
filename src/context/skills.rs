@@ -129,6 +129,20 @@ impl Skills {
             .collect()
     }
 
+    /// Every discovered skill as `(name, description)`, in precedence order: what a
+    /// front end offers as `/<name>`, with the line that says what it is for.
+    ///
+    /// Unlike [`catalog`](Self::catalog) this keeps `disable-model-invocation` skills.
+    /// A front end's `/` menu is the **user's** list, and those skills exist only for
+    /// the user — a menu that dropped them would drop exactly the names the model
+    /// cannot offer on its own.
+    pub fn entries(&self) -> Vec<(&str, &str)> {
+        self.skills
+            .iter()
+            .map(|skill| (skill.name.as_str(), skill.description.as_str()))
+            .collect()
+    }
+
     pub fn get(&self, name: &str) -> Option<&Skill> {
         self.skills.iter().find(|skill| skill.name == name)
     }

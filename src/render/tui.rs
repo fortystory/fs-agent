@@ -43,7 +43,9 @@ use crate::permissions::Mode;
 
 use super::editor::{self, Input};
 use super::highlight::{diff_tag, highlight_diff};
-use super::input::{AnswerChoice, ConsolePort, ConsoleRequest, FrontEndEvent, Question};
+use super::input::{
+    AnswerChoice, CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent, Question,
+};
 use super::layout;
 use super::pane::{self, Pane};
 use super::panel::Panel;
@@ -84,6 +86,8 @@ pub enum Key {
     Backspace,
     Delete,
     Enter,
+    /// `Tab`, which is only ever the `/` menu's fill-in key (spec §6).
+    Tab,
     Esc,
     BackTab,
     CtrlC,
@@ -130,6 +134,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
     }
     match key.code {
         KeyCode::Esc => Some(Key::Esc),
+        KeyCode::Tab => Some(Key::Tab),
         KeyCode::BackTab => Some(Key::BackTab),
         KeyCode::Enter => Some(Key::Enter),
         KeyCode::Char(ch) => Some(Key::Char(ch)),
@@ -163,7 +168,8 @@ pub struct SessionFacts {
     pub session_id: String,
     /// The directory the session is bound to.
     pub cwd: String,
-    /// The model the session answers with.
+    /// The model the session answers with — or, in a discussion, the two debaters'
+    /// models, because the panel has one row for it (spec §8).
     pub model: String,
     /// The input budget of that model's window, output reserve already removed.
     pub context_window: u64,
@@ -349,16 +355,23 @@ pub struct TuiState {
     dirty: bool,
     /// The draft and its cursor.
     editor: Input,
+    /// The names a leading `/` can become, as the loop reported them. Empty until
+    /// that report arrives, which is why the `/` menu opens only once it has.
+    catalog: Vec<CatalogEntry>,
+    /// The `/` menu's highlight, and which token it belongs to. The matches
+    /// themselves are not kept: they are a pure function of the draft and the
+    /// catalog, so only the choice — which is not derivable — lives here.
+    slash: MenuSelection,
     /// The numbers the panel shows, counted off the stream.
     panel: Panel,
     /// Where a `Prompt` request's answer goes.
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
-    /// A question waiting for a keypress.
+    /// Whether the loop says it is inside a run. **Pushed by the loop**, never
+    /// inferred here: see [`TuiState::busy`].
+    running: bool,    /// A question waiting for a keypress.
     pending: Option<Pending>,
     /// Gestures to hand back to the loop.
     events: Vec<FrontEndEvent>,
-    /// Whether a turn is in flight, which decides what Esc and Ctrl-C mean.
-    busy: bool,
     /// Where the last frame drew the "back to bottom" indicator, so a click can be
     /// matched against what the user actually saw.
     indicator: Option<Rect>,
@@ -384,23 +397,103 @@ enum Pending {
 }
 
 impl Pending {
-    /// The line the overlay shows for this question: the question and the keys that
-    /// answer it. It goes over the transcript, so the draft stays where the user left
-    /// it (spec §7, §9).
-    fn prompt(&self) -> String {
+    /// The rows the overlay shows for this question. It goes over the transcript, so
+    /// the draft stays where the user left it (spec §7, §9).
+    fn modal(&self) -> Modal {
         match self {
             Pending::Loop {
                 question: Question::Permission(request),
                 ..
-            } => wording::permission_prompt(&request.tool_name, &summarize_args(&request.args)),
+            } => Modal {
+                title: wording::permission_title(&request.tool_name),
+                // The plain sentence comes first: a reader who cannot parse the
+                // arguments still has to know what they are saying yes to.
+                summary: Some(wording::permission_summary(&request.tool_name)),
+                detail: Some(wording::permission_call(
+                    &request.tool_name,
+                    &summarize_args(&request.args),
+                )),
+                choices: &wording::PERMISSION_CHOICES,
+            },
             Pending::Loop {
                 question: Question::PlanConflict(path),
                 ..
-            } => wording::plan_conflict_prompt(&path.display().to_string()),
-            Pending::Paste { chars, .. } => wording::paste_confirm(*chars),
-            Pending::ClearDraft => wording::clear_draft_confirm(),
+            } => Modal {
+                title: wording::plan_conflict_title().to_owned(),
+                summary: None,
+                detail: Some(wording::plan_conflict_body(&path.display().to_string())),
+                choices: &wording::PLAN_CHOICES,
+            },
+            Pending::Paste { chars, .. } => Modal {
+                title: wording::paste_title().to_owned(),
+                summary: None,
+                detail: Some(wording::paste_body(*chars)),
+                choices: &wording::PASTE_CHOICES,
+            },
+            Pending::ClearDraft => Modal {
+                title: wording::clear_draft_title().to_owned(),
+                summary: None,
+                detail: Some(wording::clear_draft_body().to_owned()),
+                choices: &wording::CLEAR_CHOICES,
+            },
         }
     }
+}
+
+/// The parts a question is asked in (spec §9).
+///
+/// The split is the point. A question used to be one wrapped paragraph, so a long
+/// command pushed its keys past the right edge and the reader had to pick them out
+/// of a sentence; here the title says what is being asked, the summary says what the
+/// action *is*, the detail shows the concrete call, and the keys that decide it get a
+/// row of their own and cannot be buried by any of it.
+struct Modal {
+    /// The title row, higher up and bolder than the rest: `权限询问：bash`.
+    title: String,
+    /// What the action is, in one plain sentence — the row a reader who cannot parse
+    /// the arguments reads. Absent when the question is already plain enough.
+    summary: Option<String>,
+    /// The one concrete thing the question is about: the call, the path, the size.
+    detail: Option<String>,
+    /// The keys that answer it, painted as one row of buttons.
+    choices: &'static [wording::Choice],
+}
+
+/// The `/` menu's remembered half.
+///
+/// Everything else about the menu is derived: the token comes from the draft, the
+/// matches from the catalog and that token. What cannot be derived is which row the
+/// user picked, so that — and the prefix it was picked under — is what is kept.
+#[derive(Debug, Default)]
+struct MenuSelection {
+    /// The prefix the highlight was made under. A different prefix means this is a
+    /// different menu, so the highlight starts over and an `Esc` stops applying.
+    prefix: String,
+    /// Which match is highlighted, if any.
+    ///
+    /// **`None` on a bare `/`**, and that is the safety rule: nothing is picked until
+    /// the user has typed a name or walked the list with an arrow, so a key pressed
+    /// only to look at the menu cannot run a command nobody asked for (spec §7's
+    /// reading of an incidental key).
+    selected: Option<usize>,
+    /// `Esc` closed the menu. It stays closed while the prefix it was closed under
+    /// is what is still being typed.
+    dismissed: bool,
+}
+
+/// The `/` menu as it stands right now: which token it belongs to, what matches it,
+/// and which match is highlighted.
+///
+/// A value, built per frame and per keypress from the draft plus the catalog. The
+/// menu is never state that can drift from what is on screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SlashMenu {
+    /// What has been typed after the slash.
+    prefix: String,
+    /// The matching entries, in catalog order, as `(name, description)`.
+    entries: Vec<(String, String)>,
+    /// Which entry is highlighted, clamped into range; `None` when none is.
+    selected: Option<usize>,
 }
 
 /// The non-acting answer to a question the loop asked.
@@ -430,11 +523,15 @@ impl TuiState {
             clock: Local::now(),
             dirty: true,
             editor: Input::new(),
+            catalog: Vec::new(),
+            slash: MenuSelection::default(),
             panel: Panel::new(),
             prompt_reply: None,
+            // Idle until the loop says otherwise: before it asks its first line nothing
+            // is running, and the keyboard has to read that way (spec §6).
+            running: false,
             pending: None,
             events: Vec::new(),
-            busy: false,
             indicator: None,
             quit: false,
         }
@@ -484,6 +581,9 @@ impl TuiState {
             self.pending = Some(Pending::Paste { text, chars });
         } else {
             self.editor.insert_str(&text);
+            // A paste can be a `/` command like any other keystroke: a pasted
+            // `/ask-matt` opens the menu on the frame after it lands.
+            self.sync_menu();
         }
     }
 
@@ -493,7 +593,6 @@ impl TuiState {
         for block in self.transcript.push(event) {
             match &block {
                 Block::Delta { text, .. } => {
-                    self.busy = true;
                     self.live.push_str(text);
                     if self.live.len() > LIVE_BUFFER {
                         let cut = self.live.len() - LIVE_BUFFER;
@@ -504,13 +603,11 @@ impl TuiState {
                         self.live.drain(..cut);
                     }
                 }
-                Block::Tool(_) => self.busy = true,
                 Block::Message { .. } => {
                     // The deltas were the live view; the block is the permanent
                     // one, so the tail can go.
                     self.live.clear();
                 }
-                Block::TurnEnded { .. } | Block::SessionEnded { .. } => self.busy = false,
                 // The two transitions that move a session between modes. Both
                 // already ride the stream, which is why the mode is not injected.
                 Block::ContextInjected {
@@ -571,6 +668,9 @@ impl TuiState {
         self.dirty = true;
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
+            // The loop's own account of whether it is running something. Nothing else
+            // in this state may stand in for it.
+            ConsoleRequest::RunState { running } => self.running = running,
             ConsoleRequest::Ask(ask) => {
                 if self.pending.is_some() {
                     // The loop asks one question at a time and waits for the answer, so
@@ -584,6 +684,9 @@ impl TuiState {
                     reply: ask.reply,
                 });
             }
+            // The names the loop can act on. They arrive once, after assembly — the
+            // skills come from the session — and nothing else carries them.
+            ConsoleRequest::Catalog { entries } => self.catalog = entries,
         }
     }
 
@@ -601,7 +704,7 @@ impl TuiState {
         self.dirty = true;
         match key {
             Key::CtrlC => {
-                if self.busy {
+                if self.busy() {
                     self.events.push(FrontEndEvent::Cancel);
                 } else {
                     self.quit = true;
@@ -609,10 +712,14 @@ impl TuiState {
                 return;
             }
             Key::Esc => {
-                if self.busy {
+                if self.busy() {
                     self.events.push(FrontEndEvent::Cancel);
                 } else if let Some(pending) = self.pending.take() {
                     self.decline(pending);
+                } else if self.slash_menu().is_some() {
+                    // The `/` menu is the smallest thing on screen, so `Esc` closes it
+                    // before it starts throwing away a draft (spec §6).
+                    self.slash.dismissed = true;
                 } else if self.editor.has_multiple_lines() {
                     // Esc on a draft this long would throw away real work, so it
                     // asks first — and the safe answer is "no" (spec §7).
@@ -636,6 +743,34 @@ impl TuiState {
         if key == Key::BackTab {
             self.events.push(FrontEndEvent::TogglePlan);
             return;
+        }
+        // While the `/` menu is up it owns the four keys that would otherwise edit or
+        // submit: `↑`/`↓` walk the matches, `Tab` fills one in, `Enter` fills one in and
+        // sends it. Everything else falls through to the editor, which is what filters
+        // the matches as the user keeps typing.
+        if self.slash_menu().is_some() {
+            match key {
+                Key::Down => {
+                    self.menu_move(1);
+                    return;
+                }
+                Key::Up => {
+                    self.menu_move(-1);
+                    return;
+                }
+                Key::Tab | Key::Enter => {
+                    // `Tab` fills in the highlighted name and stops there; `Enter` fills
+                    // it in **and submits**, so `/ask` + Enter runs the skill the menu
+                    // was pointing at. A bare `/` has nothing highlighted: `Enter` sends
+                    // it as typed, and the loop answers with the list of names.
+                    self.menu_accept();
+                    if key == Key::Enter {
+                        self.submit();
+                    }
+                    return;
+                }
+                _ => {}
+            }
         }
         match key {
             Key::Enter => self.submit(),
@@ -663,6 +798,23 @@ impl TuiState {
             Key::CtrlG => self.pane.to_bottom(),
             _ => {}
         }
+        // A key that changed the draft (or only moved the cursor inside the token) may
+        // have widened or narrowed the menu. Fold that in once, here, rather than at
+        // each of the arms above.
+        self.sync_menu();
+    }
+
+    /// Whether the loop is **inside a run**: a turn, or a discussion it is driving.
+    ///
+    /// The loop says so over [`ConsoleRequest::RunState`]; nothing here infers it. Two
+    /// inferences both failed. From the render stream: only `TurnEnded` cleared the old
+    /// flag, and the synthesizer's single call ends no turn, so after a discussion the
+    /// TUI believed it was working for ever. From "no prompt is outstanding": that
+    /// predicate is true before the loop asks its *first* line, so a keyboard that was
+    /// idle during assembly read as working. Both mistakes turned `Ctrl-C` into a cancel
+    /// gesture the idle loop discards — a dead keyboard.
+    fn busy(&self) -> bool {
+        self.running
     }
 
     /// Send the typed draft to the loop and remember it.
@@ -674,11 +826,107 @@ impl TuiState {
     /// An empty draft is sent as an **empty line**. The channel's sentinel for a closed
     /// stdin is `None` (see [`ConsoleRequest::Prompt`]), and pressing Enter never means
     /// that; quitting is `Ctrl-C` (the flag below) or `/quit` (a line like any other).
+    ///
+    /// With **no line being read** — a turn in flight, or a one-shot `discuss`, which
+    /// never asks for one — Enter does nothing at all rather than throwing the draft
+    /// away: the loop asks for a line when it is ready for one (spec §6), and until
+    /// then that draft is the only copy of what the user typed.
     fn submit(&mut self) {
+        let Some(reply) = self.prompt_reply.take() else {
+            return;
+        };
         self.pane.to_bottom();
         let line = self.editor.submitted();
-        if let Some(reply) = self.prompt_reply.take() {
-            let _ = reply.send(Some(line));
+        let _ = reply.send(Some(line));
+    }
+
+    /// The `/` menu as the draft calls for it right now, or `None` when there is
+    /// nothing to offer.
+    ///
+    /// Derived, never stored: the draft and the loop's catalog are the whole input.
+    /// Nothing is shown while a question is up, because a question owns the keyboard
+    /// — a menu would be offering keys that answer something else (spec §9).
+    fn slash_menu(&self) -> Option<SlashMenu> {
+        if self.pending.is_some() || self.slash.dismissed {
+            return None;
+        }
+        let token = self.editor.slash_token()?;
+        // Filter on case, but offer the name as it is catalogued: `/Ask` finds
+        // `ask-matt`, and Tab writes the spelling the loop will recognise.
+        let typed = token.prefix.to_lowercase();
+        let entries: Vec<(String, String)> = self
+            .catalog
+            .iter()
+            .filter(|entry| entry.name.to_lowercase().starts_with(&typed))
+            .map(|entry| (entry.name.clone(), entry.description.clone()))
+            .collect();
+        if entries.is_empty() {
+            return None;
+        }
+        Some(SlashMenu {
+            prefix: token.prefix,
+            selected: self.slash.selected.map(|at| at.min(entries.len() - 1)),
+            entries,
+        })
+    }
+
+    /// Move the highlight by `delta`, wrapping at both ends.
+    fn menu_move(&mut self, delta: isize) {
+        let Some(menu) = self.slash_menu() else {
+            return;
+        };
+        let len = menu.entries.len() as isize;
+        self.slash.selected = Some(match menu.selected {
+            Some(at) => (at as isize + delta).rem_euclid(len) as usize,
+            // Nothing was highlighted: `↓` takes the first row and `↑` the last, so the
+            // arrows walk the list in the order it is drawn.
+            None if delta > 0 => 0,
+            None => (len - 1) as usize,
+        });
+        self.slash.prefix = menu.prefix;
+    }
+
+    /// Fill the highlighted name into the draft.
+    ///
+    /// Does nothing when nothing is highlighted — a bare `/` is a list to look at, not
+    /// a choice that has been made.
+    fn menu_accept(&mut self) {
+        let Some(menu) = self.slash_menu() else {
+            return;
+        };
+        let Some(selected) = menu.selected else {
+            return;
+        };
+        let name = menu.entries[selected].0.clone();
+        if !self.editor.complete_slash(&name) {
+            return;
+        }
+        // The remembered prefix moves with the draft, or the next sync would read the
+        // fill-in as a change and reopen what this just closed.
+        self.slash.prefix = self
+            .editor
+            .slash_token()
+            .map(|token| token.prefix)
+            .unwrap_or_default();
+        self.slash.selected = None;
+        self.slash.dismissed = true;
+    }
+
+    /// Fold the draft's current token into the menu's remembered selection.
+    ///
+    /// A prefix that changed is a different menu: the highlight starts over — on the
+    /// first match once a name has been typed, on nothing at all while the token is
+    /// just a slash — and an `Esc` that closed the old one stops applying.
+    fn sync_menu(&mut self) {
+        let prefix = self
+            .editor
+            .slash_token()
+            .map(|token| token.prefix)
+            .unwrap_or_default();
+        if prefix != self.slash.prefix {
+            self.slash.selected = (!prefix.is_empty()).then_some(0);
+            self.slash.prefix = prefix;
+            self.slash.dismissed = false;
         }
     }
 
@@ -716,6 +964,7 @@ impl TuiState {
             Pending::Paste { text, .. } => {
                 if agrees(key) {
                     self.editor.insert_str(&text);
+                    self.sync_menu();
                 }
             }
             Pending::ClearDraft => {
@@ -735,7 +984,14 @@ impl TuiState {
     }
 
     fn status_line(&self, width: u16) -> String {
-        wording::status_line(self.busy, width)
+        // The hints describe what the keyboard does *now*. With no line being read —
+        // a turn in flight, or a one-shot `discuss` — `enter 发送` would be a promise
+        // this session does not keep (spec §6).
+        if self.prompt_reply.is_some() {
+            wording::status_line(self.busy(), width)
+        } else {
+            wording::viewer_status_line(self.busy(), width)
+        }
     }
 }
 
@@ -757,7 +1013,12 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let panes = layout::plan(area, draft_rows);
     draw_header(frame, &panes, state);
     draw_transcript(frame, &panes, state);
-    draw_bottom(frame, &panes, state);
+    let anchor = draw_bottom(frame, &panes, state);
+    // The `/` menu floats over the pane, under the cursor it belongs to — and under a
+    // question, which owns the keyboard and so has no menu to offer (spec §6, §9).
+    if let Some(anchor) = anchor {
+        draw_menu(frame, &panes, state, anchor);
+    }
     // Last, so it is on top of the pane it is asking about.
     draw_modal(frame, &panes, state);
 }
@@ -769,7 +1030,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
 /// carries the `PermissionAsked` block for anyone reading back. It owns the pointer
 /// while it is up, so the "back to bottom" rectangle is dropped.
 fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    let Some(question) = state.pending.as_ref().map(|pending| pending.prompt()) else {
+    let Some(modal) = state.pending.as_ref().map(Pending::modal) else {
         return;
     };
     // From here on a question is up, and the overlay covers the indicator: a click
@@ -780,14 +1041,37 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     if inner == 0 {
         return;
     }
-    // A long question wraps onto another line rather than losing its keys; the overlay
-    // still leaves the middle block's own borders showing.
-    let mut lines = pane::wrap_text(question.trim(), inner);
-    let room = panes.middle.height.saturating_sub(2).max(1) as usize;
-    lines.truncate(room);
-    let Some(area) = panes.modal(lines.len() as u16) else {
+    // The rows, in order. Anything long wraps onto another line rather than losing
+    // the keys; the overlay still leaves the middle block's own borders showing.
+    let rows_available = panes.middle.height.saturating_sub(2) as usize;
+    if rows_available == 0 {
+        return;
+    }
+    let mut rows: Vec<Line<'static>> = pane::wrap_text(modal.title.trim(), inner);
+    for row in &mut rows {
+        row.style = Style::default().add_modifier(Modifier::BOLD);
+    }
+    // What the action is, then the call itself: the sentence a reader can act on
+    // first, the exact arguments under it.
+    if let Some(summary) = modal.summary.as_deref() {
+        rows.extend(pane::wrap_text(summary.trim(), inner));
+    }
+    if let Some(detail) = modal.detail.as_deref() {
+        rows.extend(pane::wrap_text(detail.trim(), inner));
+    }
+    // The button row is budgeted first: it is the one row a question cannot do
+    // without. The blank that sets it apart costs a row too, but only when there is
+    // both room for it and something above to separate it from.
+    let separator = usize::from(rows_available >= 3 && !rows.is_empty());
+    rows.truncate(rows_available.saturating_sub(1 + separator));
+    if separator == 1 {
+        rows.push(Line::default());
+    }
+    rows.push(choices_row(modal.choices));
+    let Some(area) = panes.modal(rows.len() as u16) else {
         return;
     };
+    blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
     frame.render_widget(
         WidgetBlock::default()
@@ -796,11 +1080,45 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         area,
     );
     frame.render_widget(
-        Paragraph::new(lines)
+        Paragraph::new(rows)
             .style(Style::default().fg(Color::Yellow))
             .alignment(Alignment::Center),
         layout::inner(area),
     );
+}
+
+/// Blank the wide glyph a floating box is about to draw over.
+///
+/// A wide glyph owns two cells, and the cell after it is **skipped** when a frame is
+/// diffed to the terminal — so a border drawn on that second cell is silently dropped
+/// and the box loses a corner over anything that is not ASCII. Half a glyph cannot be
+/// drawn anyway: the glyph goes and the border stays whole.
+fn blank_half_covered_glyphs(frame: &mut ratatui::Frame, area: Rect) {
+    let buffer = frame.buffer_mut();
+    let last = area.bottom().min(buffer.area.bottom());
+    for y in area.y..last {
+        if area.x > buffer.area.left() && buffer[(area.x - 1, y)].symbol().cell_width() > 1 {
+            buffer[(area.x - 1, y)].set_symbol(" ");
+        }
+    }
+}
+
+/// The overlay's last row: one `[y] 允许` per key, the key itself picked out so the
+/// row reads as buttons rather than as one more sentence to parse.
+fn choices_row(choices: &[wording::Choice]) -> Line<'static> {
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(Color::Yellow);
+    let mut spans = Vec::new();
+    for (index, choice) in choices.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.push(Span::styled(format!("[{}]", choice.key), key_style));
+        spans.push(Span::styled(format!(" {}", choice.label), label_style));
+    }
+    Line::from(spans)
 }
 
 /// Everything a terminal below the minimum gets: one centred sentence saying so,
@@ -988,7 +1306,15 @@ fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
 
 /// The bottom block: the input line, and under it the hints that say what the keys
 /// do.
-fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+///
+/// Returns where the cursor was put, so whatever floats over the pane can anchor
+/// itself to it — the `/` menu follows the cursor (spec §6). `None` while a question
+/// is up, because there is no cursor then.
+fn draw_bottom(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &TuiState,
+) -> Option<editor::Placed> {
     draw_border(frame, panes.bottom);
     let (rows, cursor) = state
         .editor
@@ -1001,7 +1327,8 @@ fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
     // the cursor goes: the keyboard is answering, not editing (spec §9). The cursor is
     // placed from the rows just drawn, never from state kept between frames, which is
     // what let the inline viewport's cursor wander (ADR 0002).
-    if state.pending.is_none() {
+    let anchor = state.pending.is_none().then_some(cursor);
+    if anchor.is_some() {
         frame.set_cursor_position((
             (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
             panes.input.y + cursor.row,
@@ -1014,6 +1341,115 @@ fn draw_bottom(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
         ))),
         panes.hints,
     );
+    anchor
+}
+
+/// The `/` menu: the names a leading `/` can become — the built-ins the loop handles
+/// and the skills this session discovered — floating at the cursor and filtered by
+/// what has been typed after the slash (spec §6).
+///
+/// It is a **hint**, not a question: it never takes a key away from the draft, and a
+/// key it does claim (`↑`, `↓`, `Tab`, `Enter`) is only claimed while it is up.
+fn draw_menu(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &mut TuiState,
+    anchor: editor::Placed,
+) {
+    let Some(menu) = state.slash_menu() else {
+        return;
+    };
+    // The window of matches to draw: the highlight stays visible, and the rows above
+    // it are given up first as it walks down the list.
+    let room = panes
+        .menu_room(anchor)
+        .min(layout::MENU_MAX_ROWS)
+        .min(menu.entries.len() as u16) as usize;
+    if room == 0 {
+        return;
+    }
+    let highlighted = menu.selected.unwrap_or(0);
+    let first = if highlighted >= room {
+        highlighted + 1 - room
+    } else {
+        0
+    };
+    let visible = &menu.entries[first..first + room];
+
+    // One column of padding either side, the name column as wide as the widest name,
+    // then two spaces, then whatever description fits.
+    let name_width = visible
+        .iter()
+        .map(|(name, _)| text_columns(name) + 1)
+        .max()
+        .unwrap_or(0);
+    let widest = visible
+        .iter()
+        .map(|(_, description)| 2 + name_width + 2 + text_columns(description))
+        .max()
+        .unwrap_or(0);
+    let width = (widest as u16).min(layout::MENU_MAX_WIDTH);
+    let inner = width.saturating_sub(2) as usize;
+    let Some(area) = panes.menu(anchor, width, room as u16) else {
+        return;
+    };
+
+    let rows: Vec<Line<'static>> = visible
+        .iter()
+        .enumerate()
+        .map(|(offset, (name, description))| {
+            let selected = menu.selected == Some(first + offset);
+            menu_row(name, description, inner, name_width, selected)
+        })
+        .collect();
+    blank_half_covered_glyphs(frame, area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        WidgetBlock::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
+    frame.render_widget(Paragraph::new(rows), layout::inner(area));
+}
+
+/// One menu row: `/<name>`, padded to the name column, then the description.
+///
+/// The highlighted row is painted reversed so it reads as the button `Enter` would
+/// press, rather than as one more line of text.
+fn menu_row(
+    name: &str,
+    description: &str,
+    inner: usize,
+    name_width: usize,
+    selected: bool,
+) -> Line<'static> {
+    let label = format!("/{name}");
+    let mut text = label.clone();
+    // The description column, when there is room for a description and the row it
+    // would sit on. Too narrow and the name has the row to itself, which is still a
+    // complete hint.
+    let gap = name_width.saturating_sub(text_columns(&label)) + 2;
+    if !description.is_empty() && text_columns(&label) + gap + 2 <= inner {
+        text.push_str(&" ".repeat(gap));
+        text.push_str(description);
+    }
+    // One leading column of padding, then the row, then whatever is left — so the
+    // words never touch the border, and the highlight covers the whole row.
+    let body = truncate_columns(&text, inner.saturating_sub(1));
+    let padding = inner.saturating_sub(1 + text_columns(&body));
+    let style = if selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Yellow)
+    };
+    Line::from(vec![
+        Span::styled(format!(" {body}"), style),
+        Span::styled(" ".repeat(padding), style),
+    ])
 }
 
 /// Attribute a message's rows to its speaker: the label leads the first row and
@@ -1171,7 +1607,7 @@ pub fn render_block(block: &Block) -> Vec<Line<'static>> {
             vec![severity_line(*reason, wording::session_ended(*reason))]
         }
         Block::ContextInjected { source } => {
-            vec![narration(wording::context_injected(*source))]
+            vec![narration(wording::context_injected(source.clone()))]
         }
         Block::History { reason, summary } => {
             vec![narration(wording::history(*reason, summary.as_deref()))]

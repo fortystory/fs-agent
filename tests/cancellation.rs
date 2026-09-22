@@ -435,11 +435,13 @@ async fn discussion_fixture(
                 speaker: kimi(),
                 config: SessionConfig::new("fake-model"),
                 provider: Box::new(kimi_provider.clone()),
+                soul: None,
             },
             fs_agent::DebaterParts {
                 speaker: SpeakerId::Debater("deepseek".into()),
                 config: SessionConfig::new("fake-model"),
                 provider: Box::new(deepseek_provider.clone()),
+                soul: None,
             },
         ],
         synthesizer: fs_agent::SynthesizerParts {

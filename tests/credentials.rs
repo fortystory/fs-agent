@@ -524,6 +524,7 @@ async fn a_discussion_refuses_a_roster_whose_redactors_disagree() {
         speaker: SpeakerId::Debater(speaker.into()),
         config: SessionConfig::new("fake-model").with_redactor(redactor),
         provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+        soul: None,
     };
     let assembled = assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {

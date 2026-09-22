@@ -308,6 +308,10 @@ pub struct Config {
     /// Which model the two landing points answer with (spec §17). Empty by
     /// default: v1 runs everything on the discussion's model.
     pub routing: Routing,
+    /// Who debates, when `[discussion]` is configured (spec §15). Absent means this
+    /// configuration is for single-agent sessions; `fs-agent discuss` says so rather
+    /// than inventing a roster.
+    pub discussion: Option<DiscussionRoster>,
     /// The dynamically declared tools (spec §14), in stable name order. Fixed at
     /// assembly: nothing adds or removes a tool mid-session, because the tool
     /// array is part of the prefix cache.
@@ -321,6 +325,16 @@ impl Config {
 
     pub fn provider(&self, name: &str) -> Option<&ProviderProfile> {
         self.providers.get(name)
+    }
+
+    /// Whether two configured models are known to come from **one vendor**.
+    ///
+    /// Advisory, and asked of the pair that is actually debating: the protocol needs
+    /// two *identities*, not two vendors, but a pair from one vendor is two samples
+    /// rather than two independent judgements, so a front end says so out loud
+    /// (spec §15). Unknown models answer `false` — the model check happens earlier.
+    pub fn debaters_share_a_vendor(&self, first: &str, second: &str) -> bool {
+        same_vendor(&self.models, &self.providers, first, second)
     }
 
     /// The provider profile that serves `model_id`.
@@ -424,6 +438,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let pricing = resolve_pricing(&raw, &models)?;
     let budget = resolve_budget(raw.budget.as_ref())?;
     let routing = resolve_routing(raw.routing.as_ref(), &models)?;
+    let discussion = resolve_discussion(raw.discussion.as_ref(), &models)?;
     let tools = resolve_tools(&raw.tools)?;
 
     let default_model = raw
@@ -444,6 +459,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         pricing,
         budget,
         routing,
+        discussion,
         tools,
     })
 }
@@ -509,6 +525,8 @@ struct RawConfig {
     pricing: BTreeMap<String, RawPricing>,
     budget: Option<RawBudget>,
     routing: Option<RawRouting>,
+    /// `[discussion]`: who debates (spec §15).
+    discussion: Option<RawDiscussion>,
     /// `[tools.<namespace>.<tool>]`: dynamically declared tools (spec §14).
     #[serde(default)]
     tools: BTreeMap<String, BTreeMap<String, RawTool>>,
@@ -652,6 +670,107 @@ struct RawRouting {
     synthesizer_model: Option<String>,
     executor_model: Option<String>,
 }
+
+/// The `[discussion]` table: which two models debate, and how far the protocol may
+/// run (spec §15).
+///
+/// The roster lives in a table of its own rather than under `[routing]` because the
+/// two say opposite things: routing hands a participant to a *cheaper* model, and a
+/// debater is the one participant that is never routed. Keeping "who debates" out of
+/// the routing table is what makes that structural rather than a rule someone has to
+/// remember.
+///
+/// The synthesizer is **not** here: it is the routing table's other landing point
+/// (`[routing].synthesizer_model`), and one value with one spelling is the point.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDiscussion {
+    /// The pool a discussion draws its two debaters from, in configuration order:
+    /// either a model id alone, or a named debater.
+    debaters: Option<Vec<RawDebater>>,
+    /// Optional cap on rounds; absent means
+    /// [`crate::discussion::DEFAULT_MAX_ROUNDS`].
+    max_rounds: Option<u32>,
+}
+
+/// One `[[discussion.debaters]]` entry.
+///
+/// Two spellings, because a name is *additional* information rather than another way
+/// to say the model: `debaters = ["kimi-k3", "deepseek-v4-pro"]` is the short form when
+/// the model id is a good enough name, and a table adds the name when two debaters
+/// would otherwise be indistinguishable (the same model twice is the case this exists
+/// for).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RawDebater {
+    Model(String),
+    Named(RawNamedDebater),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNamedDebater {
+    /// The debater's identity: the name on the stream, in the transcript and in the
+    /// model-visible `[轮 N · 名字]` prefix.
+    name: String,
+    /// The model it answers with.
+    model: String,
+    /// The debater's **persona**, in the user's own words: the character it argues as.
+    /// Recorded on the stream as an injection private to this debater (spec §15).
+    soul: Option<String>,
+}
+
+/// One debater a discussion can draw: its **name** and the model it answers with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Debater {
+    /// The participant's identity on the stream. Two debaters of one discussion may
+    /// never share it: every projection is a function of `speaker_id`, so one name
+    /// would hand each side the other's answer as its own (spec §5).
+    pub name: String,
+    /// The model this debater answers with.
+    pub model: String,
+    /// The user's **persona** for this debater, when it wrote one: the character it
+    /// argues as, in the user's own words.
+    pub soul: Option<String>,
+}
+
+/// The resolved `[discussion]` roster: the **pool** a discussion draws two debaters
+/// from (spec §15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscussionRoster {
+    /// Every debater a discussion may draw, in configuration order. At least two; more
+    /// than two means different discussions can ask different pairs.
+    pub debaters: Vec<Debater>,
+    /// The round cap; `None` uses the protocol's default.
+    pub max_rounds: Option<u32>,
+}
+
+impl DiscussionRoster {
+    /// The pool member called `name`, if there is one.
+    pub fn debater(&self, name: &str) -> Option<&Debater> {
+        self.debaters.iter().find(|debater| debater.name == name)
+    }
+
+    /// Every debater's name, in configuration order — what an error message lists.
+    pub fn names(&self) -> Vec<&str> {
+        self.debaters
+            .iter()
+            .map(|debater| debater.name.as_str())
+            .collect()
+    }
+}
+
+/// The longest a debater's name may be. The name is a `name` field on the wire and a
+/// prefix in the body, so it stays short enough for both (the projection's own cap is
+/// [`crate::provider::projection`]'s, and this is the config-side bound).
+pub const MAX_DEBATER_NAME: usize = 32;
+
+/// The longest a debater's `soul` may be, in characters.
+///
+/// A soul is an injection, and injections are pinned: it is one debater's instruction
+/// for every round of every discussion it takes part in, so it is capped the way other
+/// pinned text is (spec §9, §10) rather than left to eat the window.
+pub const MAX_DEBATER_SOUL: usize = 2000;
 
 /// One `[pricing.<model-id>]` table, in USD per million tokens.
 ///
@@ -967,6 +1086,161 @@ fn resolve_routing(
     })
 }
 
+/// Resolve `[discussion]` into the pool a discussion draws from (spec §15).
+///
+/// A **pool**, not a pair: a discussion runs exactly two debaters, but which two is a
+/// decision made per discussion — named on the command line, or drawn at random from
+/// the pool when nothing is named. What is refused here is a pool that cannot serve
+/// that: fewer than two members, a model that is not configured, a name that cannot be
+/// an identity (empty, spaced, over-long), and two members sharing a name.
+///
+/// **Two debaters from one vendor — even the same model twice — are allowed.** The
+/// design assumes heterogeneous debaters, but one expired subscription must not make
+/// the discussion unrunnable, and two calls to one model still disagree when the
+/// sampling does. That is resolved for the pair that actually debates
+/// ([`Config::debaters_share_a_vendor`]) so a front end can say when the diversity is
+/// weaker than the design has in mind.
+fn resolve_discussion(
+    raw: Option<&RawDiscussion>,
+    models: &BTreeMap<String, ModelProfile>,
+) -> Result<Option<DiscussionRoster>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let Some(entries) = raw.debaters.as_ref() else {
+        return Err(ConfigError::InvalidDiscussion {
+            reason: "needs `debaters`: the pool a discussion draws its two debaters \
+                     from, either `debaters = [\"模型\", \"另一个模型\"]` or \
+                     `[[discussion.debaters]]` tables with `name` and `model`"
+                .to_owned(),
+        });
+    };
+    if entries.len() < crate::discussion::DEBATERS {
+        return Err(ConfigError::InvalidDiscussion {
+            reason: format!(
+                "`debaters` names {} pool member(s); a discussion runs exactly two \
+                 (spec §15), so the pool needs at least two",
+                entries.len()
+            ),
+        });
+    }
+    let mut debaters: Vec<Debater> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (name, model, soul) = match entry {
+            RawDebater::Model(model) => (model.clone(), model.clone(), None),
+            RawDebater::Named(named) => (
+                named.name.clone(),
+                named.model.clone(),
+                named.soul.clone().map(|soul| soul.trim().to_owned()),
+            ),
+        };
+        if !models.contains_key(&model) {
+            return Err(ConfigError::InvalidDiscussion {
+                reason: format!(
+                    "`debaters` names model `{model}`, which is not configured; use a \
+                     built-in id or declare it under [models.{model}] first"
+                ),
+            });
+        }
+        // The name is an identity the model is told about and the projection writes
+        // into a one-line prefix, so it has to be one unbroken word.
+        if name.is_empty()
+            || name.chars().any(char::is_whitespace)
+            || name.chars().any(char::is_control)
+        {
+            return Err(ConfigError::InvalidDiscussion {
+                reason: format!(
+                    "`{name}` cannot be a debater's name: a name is one word with no \
+                     spaces (it becomes the participant's identity, and the projection \
+                     writes it into a `[轮 N · 名字]` prefix)"
+                ),
+            });
+        }
+        if name.chars().count() > MAX_DEBATER_NAME {
+            return Err(ConfigError::InvalidDiscussion {
+                reason: format!(
+                    "`{name}` is longer than {MAX_DEBATER_NAME} characters; a debater's \
+                     name is an identity the model reads in every round prefix"
+                ),
+            });
+        }
+        // A soul is pinned for the whole discussion and never trimmed, so it is capped
+        // like any other pinned text (spec §10).
+        if let Some(soul) = &soul {
+            if soul.is_empty() {
+                return Err(ConfigError::InvalidDiscussion {
+                    reason: format!(
+                        "`{name}`: an empty `soul` says nothing; drop the field or write \
+                         what this debater is like"
+                    ),
+                });
+            }
+            if soul.chars().count() > MAX_DEBATER_SOUL {
+                return Err(ConfigError::InvalidDiscussion {
+                    reason: format!(
+                        "`{name}`: `soul` is longer than {MAX_DEBATER_SOUL} characters; \
+                         it is pinned context for every round, so it is capped"
+                    ),
+                });
+            }
+        }
+        debaters.push(Debater { name, model, soul });
+    }
+
+    // Two debaters of one discussion are two participants, and every projection is a
+    // function of `speaker_id` (spec §5) — so the pool's names must be unique. The case
+    // this catches is two members of one model with no names given: the model id is the
+    // name, and one model id cannot be two identities.
+    for (index, debater) in debaters.iter().enumerate() {
+        if debaters[..index]
+            .iter()
+            .any(|earlier| earlier.name == debater.name)
+        {
+            return Err(ConfigError::InvalidDiscussion {
+                reason: format!(
+                    "two debaters are both called `{}`; give one of them a name — \
+                     `{{ name = \"甲\", model = \"{}\" }}` — because the name is the \
+                     participant's identity on the stream",
+                    debater.name, debater.model
+                ),
+            });
+        }
+    }
+
+    if raw.max_rounds == Some(0) {
+        return Err(ConfigError::InvalidDiscussion {
+            reason: "`max_rounds` must be at least 1: a discussion with no round has \
+                     nothing to synthesize"
+                .to_owned(),
+        });
+    }
+    Ok(Some(DiscussionRoster {
+        debaters,
+        max_rounds: raw.max_rounds,
+    }))
+}
+
+/// Whether the two debaters are known to be one vendor's judgement twice.
+///
+/// The signal is the provider profile's classified [`Vendor`]. A profile the table
+/// does not classify — one the user declared — is compared by the host it points at,
+/// which is the same signal the cross-vendor key guard reads.
+fn same_vendor(
+    models: &BTreeMap<String, ModelProfile>,
+    providers: &BTreeMap<String, ProviderProfile>,
+    first: &str,
+    second: &str,
+) -> bool {
+    let profile = |model: &str| providers.get(&models.get(model)?.provider);
+    let (Some(a), Some(b)) = (profile(first), profile(second)) else {
+        return false;
+    };
+    match (a.vendor, b.vendor) {
+        (Some(one), Some(other)) => one == other,
+        (None, _) | (_, None) => a.name == b.name || host_of(&a.base_url) == host_of(&b.base_url),
+    }
+}
+
 fn params_of(section: Option<&RawModel>) -> GenerationParams {
     match section {
         Some(section) => GenerationParams {
@@ -1050,6 +1324,8 @@ pub enum ConfigError {
     InvalidPrice { model: String, field: &'static str },
     #[error("[budget] {reason}")]
     InvalidBudget { reason: String },
+    #[error("[discussion] {reason}")]
+    InvalidDiscussion { reason: String },
     #[error(
         "provider `{provider}`: base_url host `{host}` does not match the source of the key \
          (`{key_env}` is a {vendor} key, and a {vendor} key expects {expected}). \

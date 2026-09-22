@@ -225,10 +225,26 @@ pub fn record_context_injection(
     source: ContextSource,
     content: &str,
 ) -> Result<(), Error> {
+    record_context_injection_from(session, render, &SpeakerId::User, source, content)
+}
+
+/// The same, attributed to a **participant** rather than to the user.
+///
+/// One injection travels this way: a debater's persona (spec §15). Its attribution is
+/// what lets the projection give it to that debater and to nobody else — the other side
+/// of the argument has no business reading it — so this is the only place an injection
+/// speaks as someone other than the user.
+pub fn record_context_injection_from(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    source: ContextSource,
+    content: &str,
+) -> Result<(), Error> {
     emit(
         session,
         render,
-        &SpeakerId::User,
+        speaker,
         EventPayload::ContextInjected {
             source,
             content: content.to_owned(),
@@ -1137,6 +1153,9 @@ async fn finish_call(
 /// One debater at runtime: its own session (its read set, its private identity,
 /// its model) and the provider that answers for it.
 pub struct Debater {
+    /// The user's persona for this side, when it gave one: recorded as a private
+    /// injection before the first round (spec §15).
+    pub soul: Option<String>,
     pub speaker: SpeakerId,
     pub session: Session,
     /// Shared, because the executors this debater dispatches answer on the same
@@ -1159,6 +1178,11 @@ pub struct Discussion {
     debaters: Vec<Debater>,
     synthesizer: Synthesizer,
     max_rounds: u32,
+    /// The highest round already on the stream this discussion writes to. Rounds are
+    /// recorded as `round_offset + n`, so the local count `n` stays the protocol's
+    /// ("is this the first round?", "has the cap been reached?") while the number on
+    /// the stream stays unique inside the session.
+    round_offset: u32,
 }
 
 /// How a discussion ended, and what the synthesizer made of it.
@@ -1181,11 +1205,18 @@ pub struct DiscussionOutcome {
 impl Discussion {
     /// Take a roster. The roster's shape is validated at assembly, so this does
     /// not re-check it.
+    ///
+    /// The round numbers this discussion records start **after whatever the stream
+    /// already holds**: a session can carry more than one discussion (`/discuss` runs
+    /// on the live stream), and `RoundStarted { round }` has to say which one it
+    /// belongs to or every query over rounds mixes them (spec §15, `debate_phase_start`).
     pub fn new(debaters: Vec<Debater>, synthesizer: Synthesizer, max_rounds: u32) -> Self {
+        let round_offset = crate::discussion::last_round(&debaters[0].session.events());
         Self {
             debaters,
             synthesizer,
             max_rounds,
+            round_offset,
         }
     }
 
@@ -1229,8 +1260,33 @@ pub async fn run_discussion(
     // The question is the user's own message, recorded once before the rounds so
     // both debaters project the same one.
     record_user_message(discussion.recorder(), render, question)?;
+    // The personas, before the first round: each is user-authored text attributed to
+    // the debater it describes, so the projection hands it to that side alone. Recorded
+    // rather than kept in the private identity, so a round's `messages` stays
+    // recomputable from the stream (spec §5, §15).
+    let personas: Vec<(SpeakerId, String)> = discussion
+        .debaters
+        .iter()
+        .filter_map(|debater| {
+            debater.soul.as_deref().map(|soul| {
+                (
+                    debater.speaker.clone(),
+                    crate::discussion::persona_brief(soul),
+                )
+            })
+        })
+        .collect();
+    for (speaker, brief) in personas {
+        let source = ContextSource::Persona(match &speaker {
+            SpeakerId::Debater(name) => name.clone(),
+            other => crate::events::ParticipantId(other.to_string()),
+        });
+        record_context_injection_from(discussion.recorder(), render, &speaker, source, &brief)?;
+    }
 
     let mut rounds: u32 = 0;
+    // Where this discussion's round numbers start on the stream (see `Discussion`).
+    let offset = discussion.round_offset;
     let mut absent: Vec<SpeakerId> = Vec::new();
     // The session's allowance is one value shared by every participant (spec
     // §17); assembly refuses a roster that disagrees about it, so the recorder's
@@ -1258,7 +1314,7 @@ pub async fn run_discussion(
                 record_round_ended(
                     discussion.recorder(),
                     render,
-                    rounds,
+                    offset + rounds,
                     StopReason::BudgetExhausted,
                 )?;
             }
@@ -1271,7 +1327,10 @@ pub async fn run_discussion(
         } else {
             RoundMode::Targeted
         };
-        let started = record_round_started(discussion.recorder(), render, rounds, mode)?;
+        // What goes on the stream is the session-unique number; `rounds` stays this
+        // discussion's own count, which is what the protocol's rules are written in.
+        let recorded = offset + rounds;
+        let started = record_round_started(discussion.recorder(), render, recorded, mode)?;
 
         // Both debaters answer at once. `join_all` polls the two turns alternately
         // on this task: while one awaits its provider stream the other makes
@@ -1302,14 +1361,19 @@ pub async fn run_discussion(
         // land before the press as agreement is exactly the misread the absence
         // query exists to prevent (spec §6).
         if cancelled.is_cancelled() {
-            record_round_ended(discussion.recorder(), render, rounds, StopReason::Aborted)?;
+            record_round_ended(
+                discussion.recorder(),
+                render,
+                offset + rounds,
+                StopReason::Aborted,
+            )?;
             break StopReason::Aborted;
         }
 
         // Read the round back off the stream. Attendance, order, agreement and
         // absence are all queries over events, never loop state (spec §15).
         let attendance =
-            crate::discussion::protocol::round_attendance(&discussion.stream(), rounds);
+            crate::discussion::protocol::round_attendance(&discussion.stream(), recorded);
         for speaker in &attendance.absent {
             if !absent.contains(speaker) {
                 absent.push(speaker.clone());
@@ -1326,12 +1390,12 @@ pub async fn run_discussion(
                 record_round_ended(
                     discussion.recorder(),
                     render,
-                    rounds,
+                    recorded,
                     StopReason::BudgetExhausted,
                 )?;
                 break StopReason::BudgetExhausted;
             }
-            record_round_ended(discussion.recorder(), render, rounds, StopReason::Error)?;
+            record_round_ended(discussion.recorder(), render, recorded, StopReason::Error)?;
             record_session_error(
                 discussion.recorder(),
                 render,
@@ -1356,7 +1420,7 @@ pub async fn run_discussion(
             record_divergence(
                 discussion.recorder(),
                 render,
-                rounds,
+                recorded,
                 &crate::discussion::divergence_topic(question),
                 positions,
             )?;
@@ -1368,7 +1432,7 @@ pub async fn run_discussion(
         // four reasons.
         match crate::discussion::plan_after_round(outcome, rounds, discussion.max_rounds) {
             crate::discussion::RoundPlan::Stop(reason) => {
-                record_round_ended(discussion.recorder(), render, rounds, reason)?;
+                record_round_ended(discussion.recorder(), render, recorded, reason)?;
                 break reason;
             }
             // No `RoundEnded` for a round that did not end the debate: the next
@@ -1394,14 +1458,21 @@ pub async fn run_discussion(
     // The synthesizer: the one call that can never be skipped. It is not a turn
     // and not a participant, but it is bracketed by a round so the stream still
     // says when it ran.
-    let synthesis_round = rounds + 1;
+    let synthesis_round = offset + rounds + 1;
     record_round_started(
         discussion.recorder(),
         render,
         synthesis_round,
         RoundMode::Synthesis,
     )?;
-    let prompt = crate::discussion::synthesis_prompt(question, &discussion.stream());
+    // The materials are scoped to the phase this synthesis closes: the stream may
+    // already carry an earlier discussion's rounds.
+    let materials = discussion.stream();
+    let prompt = crate::discussion::synthesis_prompt(
+        question,
+        &materials,
+        crate::discussion::debate_phase_start(&materials, synthesis_round),
+    );
     let synthesis = run_single_shot(
         &mut discussion.synthesizer.session,
         discussion.synthesizer.provider.as_ref(),

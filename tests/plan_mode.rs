@@ -121,7 +121,7 @@ impl Fixture {
             .iter()
             .filter_map(|event| match &event.payload {
                 EventPayload::ContextInjected { source, content } => {
-                    Some((*source, content.clone()))
+                    Some((source.clone(), content.clone()))
                 }
                 _ => None,
             })

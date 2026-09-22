@@ -16,17 +16,20 @@ use fs_agent::discussion::protocol::{
     answers_agree, conclusion_of, normalize, round_attendance, round_outcome, RoundOutcome,
     CONCLUSION_MARKER,
 };
-use fs_agent::discussion::{debater_identity, plan_after_round, synthesis_prompt, RoundPlan};
+use fs_agent::discussion::{
+    debater_identity, pick_pair, plan_after_round, synthesis_prompt, RoundPlan,
+};
 use fs_agent::events::{
-    read_events, Event, EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId, StopReason,
-    Usage, SCHEMA_VERSION,
+    read_events, ContextSource, Event, EventLog, EventPayload, Role, RoundMode, SessionId,
+    SpeakerId, StopReason, Usage, SCHEMA_VERSION,
 };
 use fs_agent::permissions::{Mode, Policy};
+use fs_agent::provider::capability::caps_for;
 use fs_agent::provider::{FinishReason, Message, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{
-    assemble_discussion, DebaterParts, DiscussionHarness, DiscussionParts, Error, SessionScaffold,
-    SynthesizerParts,
+    assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
+    Error, Harness, SessionScaffold, SynthesizerParts,
 };
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -95,6 +98,35 @@ fn turn_ends(log: &mut EventLog, speaker: &SpeakerId, reason: StopReason) {
 /// An answer as a debater writes it: prose, then the marker line.
 fn answer(body: &str, conclusion: &str) -> String {
     format!("{body}\nCONCLUSION: {conclusion}")
+}
+
+#[test]
+fn a_pair_is_drawn_from_the_pool_without_repeating_a_member() {
+    // The draw is a pure function of the pool size and a seed, so a discussion can say
+    // which pair it ran and a test can pin the choice instead of the distribution.
+    assert_eq!(pick_pair(2, 0), Some((0, 1)));
+    assert_eq!(
+        pick_pair(2, 12_345),
+        Some((0, 1)),
+        "a pool of two debates as itself whatever the seed"
+    );
+    assert_eq!(pick_pair(1, 7), None, "one member cannot hold a discussion");
+    assert_eq!(pick_pair(0, 7), None);
+
+    // A pool of three: every draw is two distinct members, in pool order, and the seed
+    // really moves the pair (all three pairs come up over a modest range).
+    let mut seen = std::collections::BTreeSet::new();
+    for seed in 0..40u64 {
+        let (first, second) = pick_pair(3, seed).expect("a pair");
+        assert!(first < second, "seed {seed}: {first} then {second}");
+        assert!(second < 3, "seed {seed}: {second} is out of the pool");
+        seen.insert((first, second));
+    }
+    assert_eq!(
+        seen,
+        std::collections::BTreeSet::from([(0, 1), (0, 2), (1, 2)]),
+        "a pool of three can produce every pair"
+    );
 }
 
 #[test]
@@ -385,7 +417,7 @@ fn the_synthesizer_prompt_reveals_every_answer_and_names_every_absence() {
         round_ends(log, 1, StopReason::NoDivergence);
     });
 
-    let prompt = synthesis_prompt("该不该复用事件流？", &log.events());
+    let prompt = synthesis_prompt("该不该复用事件流？", &log.events(), 1);
 
     assert!(prompt.contains("该不该复用事件流？"));
     assert!(prompt.contains("KIMI 的作答正文"));
@@ -483,11 +515,13 @@ async fn fixture_with_configs(
                 speaker: kimi(),
                 config: kimi_config,
                 provider: Box::new(kimi_provider.clone()),
+                soul: None,
             },
             DebaterParts {
                 speaker: deepseek(),
                 config: deepseek_config,
                 provider: Box::new(deepseek_provider.clone()),
+                soul: None,
             },
         ],
         synthesizer: SynthesizerParts {
@@ -705,6 +739,7 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
             speaker: kimi(),
             config: SessionConfig::new("fake-model"),
             provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+            soul: None,
         }],
         synthesizer: SynthesizerParts {
             config: SessionConfig::new("fake-model"),
@@ -723,6 +758,61 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
         Err(error) => error,
     };
     assert!(matches!(error, Error::Discussion(_)), "got {error:?}");
+}
+
+#[tokio::test]
+async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
+    // Two debaters may be the same *model* — one subscription is not a reason to have
+    // no discussion — but they may not be the same *participant*: every projection is
+    // a function of `speaker_id`, so one name would hand each side the other's answer
+    // as its own in the targeted round (spec §5).
+    let dir = tempfile::tempdir().unwrap();
+    let assembled = assemble_discussion(DiscussionParts {
+        scaffold: SessionScaffold {
+            cwd: dir.path().to_path_buf(),
+            log_path: dir.path().join("log.jsonl"),
+            session_id: SessionId::new("s-discussion"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            hook: None,
+            home: None,
+        },
+        debaters: vec![
+            DebaterParts {
+                speaker: kimi(),
+                config: SessionConfig::new("fake-model"),
+                provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+                soul: None,
+            },
+            DebaterParts {
+                speaker: kimi(),
+                config: SessionConfig::new("fake-model"),
+                provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+                soul: None,
+            },
+        ],
+        synthesizer: SynthesizerParts {
+            config: SessionConfig::new("fake-model"),
+            provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+        },
+        max_rounds: Some(2),
+        renderer: Renderer::headless(RenderSinks {
+            stdout_result: Box::new(CaptureBuf::default()),
+            stderr_diagnostic: Box::new(CaptureBuf::default()),
+        }),
+    })
+    .await;
+
+    let error = match assembled {
+        Ok(_) => panic!("two debaters with one identity must be refused"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(&error, Error::Discussion(message) if message.contains("two identities")),
+        "got {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -748,11 +838,13 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
                 speaker: kimi(),
                 config: budgeted(1_000),
                 provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+                soul: None,
             },
             DebaterParts {
                 speaker: deepseek(),
                 config: budgeted(2_000),
                 provider: Box::new(FakeProvider::new(vec![Reply::text("hi")])),
+                soul: None,
             },
         ],
         synthesizer: SynthesizerParts {
@@ -1399,4 +1491,398 @@ async fn routing_a_cheap_synthesizer_moves_neither_debater() {
     for request in fixture.deepseek.requests() {
         assert_eq!(request.model, "fake-model");
     }
+}
+
+// ---------------------------------------------------------------------------
+// A discussion on a live session (`Harness::discuss`, the `/discuss` command)
+// ---------------------------------------------------------------------------
+
+/// One single-agent session on a temp log, with a scripted provider — the harness a
+/// `/discuss` runs inside.
+struct SessionFixture {
+    harness: Option<Harness>,
+    log_path: PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+async fn session_fixture(replies: Vec<Reply>) -> SessionFixture {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session");
+    std::fs::create_dir_all(&session).unwrap();
+    let log_path = session.join("log.jsonl");
+    let provider = FakeProvider::with_caps(replies, caps_for("deepseek-flash").unwrap());
+    let harness = assemble(AssemblyParts {
+        provider: Box::new(provider.clone()),
+        speaker: SpeakerId::Debater("kimi".into()),
+        config: SessionConfig::new("fake-model"),
+        renderer: Renderer::headless(RenderSinks {
+            stdout_result: Box::new(CaptureBuf::default()),
+            stderr_diagnostic: Box::new(CaptureBuf::default()),
+        }),
+        scaffold: SessionScaffold {
+            cwd: dir.path().to_path_buf(),
+            log_path: log_path.clone(),
+            session_id: SessionId::new("s-live"),
+            tools: fs_agent::tools::builtin(),
+            locks: fs_agent::tools::PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            hook: None,
+            home: None,
+        },
+    })
+    .await
+    .unwrap();
+    SessionFixture {
+        harness: Some(harness),
+        log_path,
+        _dir: dir,
+    }
+}
+
+impl SessionFixture {
+    fn harness(&mut self) -> &mut Harness {
+        self.harness.as_mut().expect("harness already shut down")
+    }
+
+    /// Two debaters and a synthesizer, each with its own scripted provider.
+    fn parts(
+        &self,
+        first: Vec<Reply>,
+        second: Vec<Reply>,
+        synthesizer: Vec<Reply>,
+    ) -> (Vec<DebaterParts>, SynthesizerParts) {
+        (
+            vec![
+                DebaterParts {
+                    speaker: SpeakerId::Debater("kimi-k3".into()),
+                    config: SessionConfig::new("fake-model"),
+                    provider: Box::new(FakeProvider::with_caps(
+                        first,
+                        caps_for("deepseek-flash").unwrap(),
+                    )),
+                    soul: None,
+                },
+                DebaterParts {
+                    speaker: SpeakerId::Debater("kimi-k3#2".into()),
+                    config: SessionConfig::new("fake-model"),
+                    provider: Box::new(FakeProvider::with_caps(
+                        second,
+                        caps_for("deepseek-flash").unwrap(),
+                    )),
+                    soul: None,
+                },
+            ],
+            SynthesizerParts {
+                config: SessionConfig::new("fake-model"),
+                provider: Box::new(FakeProvider::with_caps(
+                    synthesizer,
+                    caps_for("deepseek-flash").unwrap(),
+                )),
+            },
+        )
+    }
+
+    fn events(&self) -> Vec<Event> {
+        read_events(&self.log_path).unwrap()
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(harness) = self.harness.take() {
+            harness.shutdown().await;
+        }
+    }
+}
+
+fn round_starts_in(events: &[Event], mode: RoundMode) -> Vec<u32> {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::RoundStarted {
+                round,
+                mode: started,
+            } if *started == mode => Some(*round),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_discussion_on_a_live_session_inherits_its_context() {
+    // The point of `/discuss`: the debaters are siblings of the session the user is in,
+    // so their projection turns *its* turns into `user` messages — they argue about what
+    // the session is about, not about a question in a vacuum (spec §5, §15).
+    let mut fixture = session_fixture(vec![Reply::text("应该复用。"), Reply::text("继续。")]).await;
+    fixture
+        .harness()
+        .run_turn("我们该不该复用事件流？")
+        .await
+        .unwrap();
+
+    // Both sides conclude the same thing, so the discussion is one round: the round
+    // cut, the stream, and the synthesizer's materials are what this test is about.
+    let first = FakeProvider::with_caps(
+        vec![Reply::text(&answer("甲的看法", "复用"))],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let second = FakeProvider::with_caps(
+        vec![Reply::text(&answer("乙的看法", "复用"))],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let synthesizer = FakeProvider::with_caps(
+        vec![Reply::text("共识：复用。")],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let (mut debaters, synthesizer_parts) = fixture.parts(vec![], vec![], vec![]);
+    // Swap in providers this test can read back.
+    debaters[0].provider = Box::new(first.clone());
+    debaters[1].provider = Box::new(second.clone());
+    let synthesizer_parts = SynthesizerParts {
+        config: synthesizer_parts.config,
+        provider: Box::new(synthesizer.clone()),
+    };
+
+    let outcome = fixture
+        .harness()
+        .discuss("换个角度再看一次", debaters, synthesizer_parts, None)
+        .await
+        .unwrap();
+    assert_eq!(outcome.reason, StopReason::NoDivergence);
+    assert_eq!(outcome.rounds, 1);
+
+    // What the first debater was actually sent: the session's own history, as `user`.
+    let first_request = &first.requests()[0].messages;
+    assert!(
+        first_request.iter().any(|message| matches!(
+            message,
+            Message::User { content, .. } if content.contains("我们该不该复用事件流？")
+        )),
+        "the session's question reached the debater: {first_request:?}"
+    );
+    assert!(
+        first_request.iter().any(|message| matches!(
+            message,
+            Message::User { content, .. } if content.contains("应该复用。")
+        )),
+        "and so did the answer this session already gave, as another speaker's words: \
+         {first_request:?}"
+    );
+
+    // One stream: the session's own turn, then the discussion's rounds.
+    let events = fixture.events();
+    assert_eq!(
+        round_starts_in(&events, RoundMode::Independent),
+        vec![1],
+        "the first discussion on this stream numbers from one"
+    );
+    assert_eq!(round_starts_in(&events, RoundMode::Synthesis), vec![2]);
+
+    // And the session is still usable afterwards: the discussion appended to its
+    // stream rather than taking it over.
+    fixture
+        .harness()
+        .run_turn("讨论完了，继续。")
+        .await
+        .unwrap();
+    assert!(fixture.events().iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::MessageCompleted { role: Role::Assistant, text, .. }
+            if text.contains("应该复用。")
+    )));
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesizes_only_itself() {
+    // Two discussions in one session is exactly what `/discuss` makes possible, so the
+    // round numbers have to stay unique on the stream — and the second synthesizer must
+    // not be handed the first discussion's answers to synthesize as well.
+    let mut fixture = session_fixture(vec![Reply::text("开场。")]).await;
+    fixture.harness().run_turn("第一个问题").await.unwrap();
+
+    let (debaters, synthesizer) = fixture.parts(
+        vec![Reply::text(&answer("第一场的甲", "甲结论"))],
+        vec![Reply::text(&answer("第一场的乙", "甲结论"))],
+        vec![Reply::text("第一场的合成")],
+    );
+    fixture
+        .harness()
+        .discuss("第一个讨论", debaters, synthesizer, None)
+        .await
+        .unwrap();
+
+    // The second discussion runs with fresh providers, so its requests are readable on
+    // their own.
+    let second_debaters = FakeProvider::with_caps(
+        vec![Reply::text(&answer("第二场的甲", "甲结论"))],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let second_other = FakeProvider::with_caps(
+        vec![Reply::text(&answer("第二场的乙", "甲结论"))],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let second_synthesizer = FakeProvider::with_caps(
+        vec![Reply::text("第二场的合成")],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let (mut debaters, mut synthesizer) = fixture.parts(vec![], vec![], vec![]);
+    debaters[0].provider = Box::new(second_debaters.clone());
+    debaters[1].provider = Box::new(second_other.clone());
+    synthesizer.provider = Box::new(second_synthesizer.clone());
+    fixture
+        .harness()
+        .discuss("第二个讨论", debaters, synthesizer, None)
+        .await
+        .unwrap();
+    fixture.shutdown().await;
+
+    let events = fixture.events();
+    assert_eq!(
+        round_starts_in(&events, RoundMode::Independent),
+        vec![1, 3],
+        "the second discussion numbers after the first one's rounds"
+    );
+    assert_eq!(
+        round_starts_in(&events, RoundMode::Synthesis),
+        vec![2, 4],
+        "and so does its synthesis"
+    );
+
+    // The second synthesizer's prompt holds the second discussion only.
+    let prompt = second_synthesizer
+        .requests()
+        .last()
+        .expect("the synthesizer was called")
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::User { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("a user message");
+    assert!(prompt.contains("第二场的甲"), "{prompt}");
+    assert!(prompt.contains("第二个讨论"), "{prompt}");
+    assert!(
+        !prompt.contains("第一场的甲") && !prompt.contains("第一个讨论"),
+        "the first discussion is not material for the second synthesis: {prompt}"
+    );
+    // And the replayed prompt is the one that was sent: the invariant the whole
+    // event-stream design rests on, now with two discussions on one stream.
+    let replayed = fs_agent::agent::replay::replay(
+        &events,
+        &SpeakerId::System,
+        Some(4),
+        &caps_for("deepseek-flash").unwrap(),
+    )
+    .unwrap();
+    let replayed_prompt = replayed
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::User { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(replayed_prompt, prompt, "replay == what was sent");
+}
+
+#[tokio::test]
+async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
+    // The soul is the one thing about a debater that is *not* derivable from its name,
+    // so it travels on the stream: recorded as an injection attributed to that debater,
+    // private to it, and therefore part of what `sessions replay` recomputes (spec §5,
+    // §15).
+    let mut fixture = session_fixture(vec![Reply::text("开场。")]).await;
+    fixture.harness().run_turn("第一个问题").await.unwrap();
+
+    let first = FakeProvider::with_caps(
+        vec![Reply::text(&answer("张三的作答", "甲结论"))],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let second = FakeProvider::with_caps(
+        vec![Reply::text(&answer("李四的作答", "甲结论"))],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let synthesizer = FakeProvider::with_caps(
+        vec![Reply::text("合成")],
+        caps_for("deepseek-flash").unwrap(),
+    );
+    let (mut debaters, mut synthesizer_parts) = fixture.parts(vec![], vec![], vec![]);
+    debaters[0].speaker = SpeakerId::Debater("张三".into());
+    debaters[0].soul = Some("法外狂徒，思路不受限制".to_owned());
+    debaters[1].speaker = SpeakerId::Debater("李四".into());
+    debaters[1].soul = Some("守法好公民".to_owned());
+    debaters[0].provider = Box::new(first.clone());
+    debaters[1].provider = Box::new(second.clone());
+    synthesizer_parts.provider = Box::new(synthesizer.clone());
+
+    fixture
+        .harness()
+        .discuss("该不该复用它？", debaters, synthesizer_parts, None)
+        .await
+        .unwrap();
+
+    // Each side is told its own character and not the other's.
+    let sent = |provider: &FakeProvider| {
+        provider.requests()[0]
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::User { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let zhang = sent(&first);
+    assert!(zhang.contains("法外狂徒"), "{zhang}");
+    assert!(!zhang.contains("守法好公民"), "{zhang}");
+    let li = sent(&second);
+    assert!(li.contains("守法好公民"), "{li}");
+    assert!(!li.contains("法外狂徒"), "{li}");
+
+    // It is on the stream, attributed to the debater it describes.
+    let events = fixture.events();
+    let personas: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|event| match (&event.payload, &event.speaker_id) {
+            (
+                EventPayload::ContextInjected {
+                    source: ContextSource::Persona(name),
+                    content,
+                },
+                SpeakerId::Debater(speaker),
+            ) if name.as_str() == speaker.as_str() => Some((name.to_string(), content.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(personas.len(), 2, "one injection per debater: {personas:?}");
+    assert!(personas[0].1.contains("法外狂徒"), "{personas:?}");
+
+    // And because it is on the stream, the replay of that call is what was sent.
+    let replayed = fs_agent::agent::replay::replay(
+        &events,
+        &SpeakerId::Debater("张三".into()),
+        Some(1),
+        &caps_for("deepseek-flash").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        replayed.len(),
+        first.requests()[0].messages.len(),
+        "same shape: {replayed:?}"
+    );
+    let replayed_text = replayed
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content, .. } => Some(content.clone()),
+            Message::System { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(replayed_text.contains("法外狂徒"), "{replayed_text}");
+    assert!(replayed_text.contains("该不该复用它？"), "{replayed_text}");
+    fixture.shutdown().await;
 }

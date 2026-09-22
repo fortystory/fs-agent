@@ -65,6 +65,28 @@ pub struct AskRequest {
     pub reply: oneshot::Sender<AnswerChoice>,
 }
 
+/// One name a leading `/` can become, and the line that says what it does.
+///
+/// The catalog is the **loop's** list, not the renderer's: the loop is what turns a
+/// submission into an action, so the loop is what knows which names exist. A front
+/// end only offers them — it never decides what one means (spec §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogEntry {
+    /// The name without its slash, exactly as it must be typed.
+    pub name: String,
+    /// One line for a menu's second column. Empty when there is nothing to say.
+    pub description: String,
+}
+
+impl CatalogEntry {
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+        }
+    }
+}
+
 /// What the loop asks the front end for.
 #[derive(Debug)]
 pub enum ConsoleRequest {
@@ -79,6 +101,21 @@ pub enum ConsoleRequest {
     },
     /// Put a question to the user.
     Ask(AskRequest),
+    /// The names a leading `/` can become.
+    ///
+    /// Pushed once, right after assembly, because the skills come from the session and
+    /// nothing can list them earlier. A front end that draws no menu — the plain
+    /// console — has nothing to do with it.
+    Catalog { entries: Vec<CatalogEntry> },
+    /// Whether the loop is **inside a run** — a turn, or a discussion it is driving.
+    ///
+    /// The loop is the only thing that knows this, so it says so rather than letting a
+    /// front end infer it (spec §6). Inferring it from the render stream failed for
+    /// anything that is not a turn — the synthesizer's single call emits deltas and ends
+    /// no `TurnEnded`; inferring it from "no prompt is outstanding" failed at startup,
+    /// before the loop has asked for its first line yet. Both mistakes turn `Ctrl-C`
+    /// into a cancel gesture the idle loop discards, which reads as a dead keyboard.
+    RunState { running: bool },
 }
 
 /// A gesture, pushed by the front end on its own schedule.
@@ -107,6 +144,26 @@ impl ConsoleHandle {
         let (reply, answer) = oneshot::channel();
         self.requests.send(ConsoleRequest::Prompt { reply }).ok()?;
         answer.await.ok().flatten()
+    }
+
+    /// Tell the front end which `/<name>`s exist.
+    ///
+    /// Fire and forget: a front end that has already gone is not an error, and there
+    /// is no answer to wait for. The built-ins lead the list, then the session's
+    /// skills, so a menu reads in the order the loop would try them.
+    pub fn catalog(&self, entries: Vec<CatalogEntry>) {
+        let _ = self.requests.send(ConsoleRequest::Catalog { entries });
+    }
+
+    /// Say whether the loop is inside a run.
+    ///
+    /// Fire and forget, like [`catalog`](Self::catalog): the fact is a notification,
+    /// not a question, and a front end that has already gone is not an error. It has to
+    /// be *pushed* — the loop is the only one that knows when a run starts and ends,
+    /// and no side channel (the render stream, an outstanding prompt) says it for every
+    /// kind of run.
+    pub fn set_running(&self, running: bool) {
+        let _ = self.requests.send(ConsoleRequest::RunState { running });
     }
 }
 
@@ -223,6 +280,12 @@ pub fn spawn_plain_console(mut port: ConsolePort) -> tokio::task::JoinHandle<()>
                     let answer = answer_question(&ask.question).await;
                     let _ = ask.reply.send(answer);
                 }
+                // There is no menu on the line-oriented front end: the names are
+                // discoverable through the unknown-command text instead.
+                ConsoleRequest::Catalog { .. } => {}
+                // Nothing on this front end reads key events, so there is no gesture to
+                // turn into the wrong branch (spec §6).
+                ConsoleRequest::RunState { .. } => {}
             }
         }
     })

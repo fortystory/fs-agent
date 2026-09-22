@@ -8,6 +8,8 @@
 
 use ratatui::layout::Rect;
 
+use crate::render::editor::Placed;
+
 /// The smallest terminal the four-pane layout is drawn in. One column or row
 /// smaller and the only thing on screen is [`crate::render::wording::too_small`].
 pub const MIN_WIDTH: u16 = 40;
@@ -125,6 +127,58 @@ impl Regions {
             self.transcript.height,
         )
     }
+
+    /// How many content rows a floating menu anchored at `anchor` can take where it
+    /// would open: everything above the cursor's row, or the room below it when there
+    /// is nothing above.
+    ///
+    /// The caller trims the matches to this before asking for a rectangle, so a menu
+    /// scrolls instead of being refused.
+    pub fn menu_room(&self, anchor: Placed) -> u16 {
+        let cursor_y = self.input.y.saturating_add(anchor.row);
+        let above = cursor_y.saturating_sub(self.header.y);
+        if above > BORDER_ROWS {
+            return above - BORDER_ROWS;
+        }
+        self.bottom
+            .bottom()
+            .saturating_sub(cursor_y + 1)
+            .saturating_sub(BORDER_ROWS)
+    }
+
+    /// Where the floating `/` menu goes: a bordered box `width` columns wide and
+    /// `rows` content rows tall, anchored at the cursor so it follows what is being
+    /// typed (spec §6).
+    ///
+    /// It opens **upwards** — the input is at the foot of the screen, so that is the
+    /// side with room — and drops below the cursor only when there is nothing above.
+    /// `None` when it does not fit either way, which is the honest answer on a
+    /// terminal that small.
+    pub fn menu(&self, anchor: Placed, width: u16, rows: u16) -> Option<Rect> {
+        if rows == 0 || width < MENU_MIN_WIDTH {
+            return None;
+        }
+        let height = rows.saturating_add(BORDER_ROWS);
+        let cursor_y = self.input.y.saturating_add(anchor.row);
+        let top = self.header.y;
+        let y = if cursor_y.saturating_sub(top) >= height {
+            cursor_y - height
+        } else if self.bottom.bottom().saturating_sub(cursor_y + 1) >= height {
+            cursor_y + 1
+        } else {
+            return None;
+        };
+        let left = self.header.x;
+        let right = self.header.x.saturating_add(self.header.width);
+        let width = width.min(right.saturating_sub(left));
+        let x = self
+            .input
+            .x
+            .saturating_add(anchor.column)
+            .min(right.saturating_sub(width))
+            .max(left);
+        Some(Rect::new(x, y, width, height))
+    }
 }
 
 /// The width one input row has for text: the bottom block's content, less the
@@ -215,6 +269,18 @@ const MODAL_MAX_WIDTH: u16 = 72;
 
 /// The blank columns the overlay leaves on either side of the middle block.
 const MODAL_MARGIN: u16 = 4;
+
+/// The most rows the `/` menu shows before its matches scroll. A menu is a hint, not
+/// a catalogue: past this the reader is scrolling a list to find a name they could
+/// have typed (spec §6).
+pub const MENU_MAX_ROWS: u16 = 8;
+
+/// The widest the `/` menu ever gets: a name and its one-line description, without
+/// the eye having to travel.
+pub const MENU_MAX_WIDTH: u16 = 72;
+
+/// The narrowest a menu box is worth drawing: below this the border is most of it.
+const MENU_MIN_WIDTH: u16 = 12;
 
 /// The panel's outer width, the shared seam column included.
 fn panel_outer(width: u16) -> u16 {

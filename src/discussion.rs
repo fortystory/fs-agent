@@ -89,6 +89,21 @@ pub fn debater_identity(name: &str) -> String {
     )
 }
 
+/// A persona's **soul**, framed as the character this debater answers as.
+///
+/// The user writes the description; the framing is a constant so the two sides agree on
+/// what they are being told. It is recorded **on the stream** (a `ContextInjected`
+/// attributed to this debater) rather than folded into the private identity, because the
+/// identity has to stay recomputable from the stream (spec §15) — and because a soul is
+/// user-authored text, exactly like the project rules, which already travel that way.
+pub fn persona_brief(soul: &str) -> String {
+    format!(
+        "你的性格设定（用户给的，整场讨论都照它来）：\n{}\n\
+         保持这个性格，不要为了和对方一致而丢掉它，也不要替用户做最终决定。",
+        soul.trim()
+    )
+}
+
 /// The synthesizer's private identity: draw the option space, never converge.
 pub fn synthesizer_identity() -> String {
     "你是本次讨论的合成器。这是一次独立的单发调用：你不参与讨论、没有工具、不发表新观点。\n\
@@ -109,12 +124,21 @@ pub fn synthesizer_identity() -> String {
 /// same fact the log records. It reveals each debater's **speech** and never its
 /// private reasoning (spec §15): a summary of the reasoning would be the harness
 /// rewriting the argument for one side.
-pub fn synthesis_prompt(question: &str, events: &[Event]) -> String {
+///
+/// `since_round` scopes the materials to **this** discussion. One session can carry
+/// more than one discussion (`/discuss` runs on the live stream), and rounds are
+/// numbered after whatever the stream already holds — so without the bound, the
+/// second discussion's synthesizer would be handed the first one's answers and asked
+/// to synthesize both.
+pub fn synthesis_prompt(question: &str, events: &[Event], since_round: u32) -> String {
     let mut prompt = String::from("问题：\n");
     prompt.push_str(question.trim());
     prompt.push('\n');
 
-    for (round, mode) in debate_rounds(events) {
+    for (round, mode) in debate_rounds(events)
+        .into_iter()
+        .filter(|(round, _)| *round >= since_round)
+    {
         let attendance = round_attendance(events, round);
         prompt.push_str(&format!(
             "\n## 第 {round} 轮（{}）\n",
@@ -130,6 +154,94 @@ pub fn synthesis_prompt(question: &str, events: &[Event]) -> String {
 
     prompt.push_str("\n请按「共识 / 分歧（含各自成立的前提）/ 未决」三档输出。\n");
     prompt
+}
+
+/// The highest round number the stream holds, or zero when it holds none.
+///
+/// A discussion numbers its rounds **after the stream it writes to**, which is what
+/// keeps `round` unique inside one session: `/discuss` can run twice in a session,
+/// and `RoundStarted { round }` has to say which discussion it belongs to or every
+/// query over rounds (`round_attendance`, `sessions show --round N`) mixes them.
+pub fn last_round(events: &[Event]) -> u32 {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::RoundStarted { round, .. } => Some(*round),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Two distinct members of a pool, drawn from a seed, in pool order.
+///
+/// A pool exists so that different discussions can ask different pairs; the draw is
+/// *deterministic from the seed* so that a session can be reproduced by pinning it and a
+/// test can assert the choice instead of the distribution. `None` when the pool cannot
+/// serve a discussion at all (fewer than two members).
+///
+/// In pool order, because the order decides which debater records for the discussion.
+/// A cheap mix is enough: this picks which two models argue, not a cryptographic draw,
+/// and the two indices can never collide because the second is drawn from the remaining
+/// `len - 1` slots.
+pub fn pick_pair(len: usize, seed: u64) -> Option<(usize, usize)> {
+    if len < 2 {
+        return None;
+    }
+    let len = len as u64;
+    let first = seed % len;
+    let mut second = (seed / len) % (len - 1);
+    if second >= first {
+        second += 1;
+    }
+    let (first, second) = (first as usize, second as usize);
+    Some(if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    })
+}
+
+/// The first round of the debate phase a synthesis at `synthesis_round` closes.
+///
+/// This is how the synthesizer's materials are scoped to **one** discussion. Rounds
+/// are numbered after the stream they are written to (so a second `/discuss` in one
+/// session numbers from where the first stopped), which means "every round in the log"
+/// is not "this discussion's rounds" any more.
+///
+/// The rule is structural: a debate phase is a run of consecutive rounds whose only
+/// possible `RoundEnded` is on its last round — a round that ended the debate closes
+/// the phase (with or without a synthesis after it), and the next debate round on the
+/// same stream opens a new one. So walking the debate rounds in order, every round
+/// that ended a phase and is followed by another debate round starts a phase.
+///
+/// The live run and `sessions replay` both ask this question, so what the synthesizer
+/// was sent and what a replay recomputes cannot drift apart.
+pub fn debate_phase_start(events: &[Event], synthesis_round: u32) -> u32 {
+    let mut debate: Vec<u32> = Vec::new();
+    let mut ended: BTreeSet<u32> = BTreeSet::new();
+    for event in events {
+        match &event.payload {
+            EventPayload::RoundStarted { round, mode }
+                if *mode != RoundMode::Synthesis && *round < synthesis_round =>
+            {
+                debate.push(*round);
+            }
+            EventPayload::RoundEnded { round, .. } if *round < synthesis_round => {
+                ended.insert(*round);
+            }
+            _ => {}
+        }
+    }
+    debate.sort_unstable();
+    debate.dedup();
+    let mut start = debate.first().copied().unwrap_or(1);
+    for pair in debate.windows(2) {
+        if ended.contains(&pair[0]) {
+            start = pair[1];
+        }
+    }
+    start
 }
 
 /// A side's position in the divergence record.

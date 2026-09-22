@@ -41,6 +41,16 @@ fn state_with_prompt() -> (TuiState, tokio::sync::oneshot::Receiver<Option<Strin
     (state, rx)
 }
 
+/// A state the loop reports as **inside a run**.
+///
+/// This is the only way to be inside one: the front end never infers it, so a test that
+/// wants the cancel gesture has to say so the way the loop does.
+fn state_running() -> TuiState {
+    let mut state = new_state();
+    state.request(ConsoleRequest::RunState { running: true });
+    state
+}
+
 #[test]
 fn a_typed_line_is_submitted_to_the_loop() {
     let (mut state, mut answer) = state_with_prompt();
@@ -95,7 +105,9 @@ fn a_permission_question_is_answered_by_key() {
 
 #[test]
 fn escape_answers_a_question_with_the_non_acting_choice() {
-    let mut state = new_state();
+    // A question is asked *outside* a run (a front end sitting on a question the loop
+    // raised on its own): `Esc` there is the non-acting answer, never an approval.
+    let (mut state, _line) = state_with_prompt();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         question: Question::Permission(PermissionRequest {
@@ -116,32 +128,68 @@ fn escape_answers_a_question_with_the_non_acting_choice() {
 
 #[test]
 fn escape_while_working_is_a_cancel_gesture() {
-    let mut state = new_state();
-    // A delta means a turn is in flight.
-    state.apply(RenderEvent::Delta {
-        speaker: kimi(),
-        kind: fs_agent::render::DeltaKind::Text,
-        text: "thinking".to_owned(),
-    });
+    // "Working" is the loop's own report, not something the stream implies: a delta says
+    // a call *started*, which is not the same as running — the synthesizer's single call
+    // is one of these.
+    let mut state = state_running();
     state.key(Key::Esc);
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
 }
 
 #[test]
-fn an_idle_ctrl_c_quits_and_a_working_one_cancels() {
-    let mut state = new_state();
-    state.key(Key::CtrlC);
-    assert!(state.should_quit());
+fn ctrl_c_quits_before_the_loop_has_asked_for_its_first_line() {
+    // The bug this pins: `busy` was `prompt_reply.is_none()`, and that is true from the
+    // first frame until the loop asks its first line — all of assembly, which the TUI
+    // spends in raw mode reading keys. `Ctrl-C` there became a cancel gesture, and the
+    // idle loop discards those, so the key did nothing at all. A pty probe showed it:
+    // one `Ctrl-C` ~20ms in left the process running for as long as it was watched.
+    let mut fresh = new_state();
+    fresh.key(Key::CtrlC);
+    assert!(fresh.should_quit(), "a keyboard nobody is reading quits");
+    assert!(fresh.take_events().is_empty());
+}
 
-    let mut state = new_state();
-    state.apply(RenderEvent::Delta {
-        speaker: kimi(),
-        kind: fs_agent::render::DeltaKind::Text,
-        text: "working".to_owned(),
-    });
+#[test]
+fn an_idle_ctrl_c_quits_and_a_working_one_cancels() {
+    // Idle means the loop is waiting for a line, and it says so twice over: it has asked
+    // for one, and it has reported that nothing is running (spec §6).
+    let (mut idle, _line) = state_with_prompt();
+    idle.key(Key::CtrlC);
+    assert!(idle.should_quit());
+
+    // A run in flight is the other way round: the same key is the cancel gesture.
+    let mut state = state_running();
     state.key(Key::CtrlC);
     assert!(!state.should_quit());
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+}
+
+#[test]
+fn a_run_that_never_ended_a_turn_still_leaves_ctrl_c_quitting() {
+    // The bug this pins: `busy` used to be inferred from render events, and only
+    // `TurnEnded` ever cleared it. The synthesizer's single call — the closing call of a
+    // discussion — streams deltas and ends **no** turn, so after a discussion the TUI
+    // went on believing it was working, `Ctrl-C` became a cancel gesture, and the idle
+    // loop ignores those: the session could not be quit out of.
+    //
+    // The stream below is the same one that used to strand the front end; what differs is
+    // that the loop reports the end of the run itself, so no turn has to end for the
+    // keyboard to come back.
+    let mut state = state_running();
+    state.apply(RenderEvent::Delta {
+        speaker: kimi(),
+        kind: DeltaKind::Text,
+        text: "synthesizing".to_owned(),
+    });
+    // The discussion is over and the loop is waiting for the next line.
+    state.request(ConsoleRequest::RunState { running: false });
+
+    state.key(Key::CtrlC);
+    assert!(
+        state.should_quit(),
+        "an idle Ctrl-C quits even when no `TurnEnded` ever arrived"
+    );
+    assert!(state.take_events().is_empty());
 }
 
 #[test]
@@ -668,12 +716,7 @@ fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
     // The keymap's order is the spec's: a turn in flight makes `Esc` the cancel
     // gesture, and a pending question does not change that (spec §6). The question
     // waits for one of its own keys — `Ctrl-C` is the other way out.
-    let mut state = new_state();
-    state.apply(RenderEvent::Delta {
-        speaker: kimi(),
-        kind: DeltaKind::Text,
-        text: "…".to_owned(),
-    });
+    let mut state = state_running();
     let (tx, mut asked) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         question: Question::Permission(PermissionRequest {

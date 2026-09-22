@@ -289,3 +289,59 @@ fn submitting_clears_the_draft_and_an_empty_one_is_an_empty_line() {
     input.history_previous();
     assert_eq!(input.text(), "same", "and there is nothing before it");
 }
+
+// --- the `/` token ---------------------------------------------------------
+
+#[test]
+fn a_slash_token_is_the_head_of_the_first_line_and_ends_at_the_first_space() {
+    // What the menu filters on: the slash and whatever has been typed after it.
+    let input = typed("/ask");
+    let token = input.slash_token().expect("a token");
+    assert_eq!(token.start, 0);
+    assert_eq!(token.prefix, "ask");
+    // A bare slash is a token with nothing typed yet: the menu opens on `/` alone.
+    assert_eq!(typed("/").slash_token().unwrap().prefix, "");
+    // The cursor, not the end of the draft, is what counts — moving back inside the
+    // name narrows the token to what is in front of it.
+    let mut input = typed("/ask-matt");
+    input.home();
+    for _ in 0..4 {
+        input.right();
+    }
+    assert_eq!(input.slash_token().unwrap().prefix, "ask");
+}
+
+#[test]
+fn a_slash_in_a_prompt_or_a_path_is_not_a_token() {
+    // Only the first line is where the loop looks for a command, and only up to the
+    // first space: everything else is a character in a prompt, and completing it
+    // would overwrite what the user meant to write.
+    assert!(typed("看看 /tmp/x").slash_token().is_none());
+    assert!(typed("/ask-matt 优化这个").slash_token().is_none());
+    assert!(typed("第一行\n/undo").slash_token().is_none());
+    assert!(typed("ask-matt").slash_token().is_none());
+    // A multi-line draft whose *first* line is the command does open the menu, though
+    // — the token is on line one, where the loop will read it.
+    let mut input = typed("/ask\n帮我做 X");
+    input.up();
+    assert_eq!(input.slash_token().unwrap().prefix, "ask");
+}
+
+#[test]
+fn completing_a_slash_token_replaces_what_was_typed_and_leaves_the_cursor_after_it() {
+    let mut input = typed("/ask-matt 优化这个");
+    // The cursor is at the end, where the token is not — so nothing is completed.
+    assert!(!input.complete_slash("undo"));
+    assert_eq!(input.text(), "/ask-matt 优化这个");
+
+    // Inside the token, the name replaces the whole of it, and the task after the
+    // space is left exactly where it was.
+    let mut input = typed("/ask 优化这个");
+    input.home();
+    for _ in 0..3 {
+        input.right();
+    }
+    assert!(input.complete_slash("ask-matt"));
+    assert_eq!(input.text(), "/ask-matt 优化这个");
+    assert_eq!(input.submitted(), "/ask-matt 优化这个");
+}

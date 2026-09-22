@@ -39,6 +39,7 @@ pub mod render;
 pub mod session;
 pub mod tools;
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -48,7 +49,7 @@ use tokio::task::JoinHandle;
 use crate::agent::{CancelSignal, TurnOutcome};
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;
-use crate::events::{ContextSource, Event, EventLog, EventPayload, SessionId, SpeakerId};
+use crate::events::{ContextSource, Event, EventLog, EventPayload, Role, SessionId, SpeakerId};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, PlanConflict, Policy};
 use crate::provider::Provider;
@@ -108,10 +109,12 @@ pub struct AssemblyParts {
 pub struct DebaterParts {
     /// Must be a [`SpeakerId::Debater`]: the protocol compares debaters.
     pub speaker: SpeakerId,
-    /// This debater's own model and values. Heterogeneous on purpose — the two
-    /// debaters are different vendors (spec §15).
+    /// This debater's own model and values.
     pub config: SessionConfig,
     pub provider: Box<dyn Provider>,
+    /// The user's **persona** for this side: what it is like, in the user's own words.
+    /// Recorded as a private injection before the first round (spec §15).
+    pub soul: Option<String>,
 }
 
 /// The synthesizer's one call: not an agent, so it needs no speaker, no tools
@@ -363,21 +366,16 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     })
 }
 
-/// Assemble a discussion: two debaters on one stream, plus the synthesizer.
+/// The roster's invariants, checked wherever a discussion is assembled.
 ///
-/// Reads no environment, like [`assemble`]. The debaters are the same session
-/// scaffold opened twice, so they share the log, the tools, the path locks and
-/// the permission policy; what differs is their speaker, their model and their
-/// private identity (spec §15).
-pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHarness, Error> {
-    let DiscussionParts {
-        scaffold,
-        debaters,
-        synthesizer,
-        max_rounds,
-        renderer,
-    } = parts;
-
+/// Both ways in — a discussion with a stream of its own ([`assemble_discussion`]) and
+/// one on a live session ([`Harness::discuss`]) — ask the same questions, so a roster
+/// cannot be acceptable on one path and rejected on the other.
+fn validate_roster(
+    debaters: &[DebaterParts],
+    synthesizer: &SynthesizerParts,
+    max_rounds: u32,
+) -> Result<(), Error> {
     if debaters.len() != discussion::DEBATERS {
         return Err(Error::Discussion(format!(
             "v1 runs exactly {} debaters, got {}; more would reopen the \
@@ -386,7 +384,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
             debaters.len()
         )));
     }
-    for debater in &debaters {
+    for debater in debaters {
         if !matches!(debater.speaker, SpeakerId::Debater(_)) {
             return Err(Error::Discussion(format!(
                 "a debater must speak as a debater, got {}",
@@ -394,7 +392,21 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
             )));
         }
     }
-    let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
+    // Two debaters are two participants. Every projection is a function of
+    // `speaker_id`, so two debaters sharing one name would hand each side the other's
+    // answer as its own (spec §5) — most visibly in the targeted round, whose whole
+    // point is that a debater sees the *other* side's reply. Rosters that repeat a
+    // model are fine; repeating an *identity* is not.
+    let mut speakers = BTreeSet::new();
+    for debater in debaters {
+        if !speakers.insert(debater.speaker.to_string()) {
+            return Err(Error::Discussion(format!(
+                "two debaters share the speaker id {}; a discussion needs two \
+                 identities, or neither side's messages can be told apart",
+                debater.speaker
+            )));
+        }
+    }
     if max_rounds == 0 {
         return Err(Error::Discussion(
             "a discussion needs at least one round".to_owned(),
@@ -445,48 +457,88 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
                 .to_owned(),
         ));
     }
+    Ok(())
+}
+
+/// The three participants of a discussion, on whatever stream `fork` reaches.
+///
+/// `fork` is the whole difference between the two ways a discussion is assembled: a
+/// discussion of its own opens its sessions from the scaffold it just created, and one
+/// on a live session forks the session the user is in. What must not differ is decided
+/// here — each debater's private identity, and the synthesizer's landing point
+/// (spec §15, §17).
+fn discussion_participants(
+    debaters: Vec<DebaterParts>,
+    synthesizer: SynthesizerParts,
+    fork: impl Fn(SessionConfig, Option<String>) -> Session,
+) -> (Vec<agent::Debater>, agent::Synthesizer) {
+    let roster = debaters
+        .into_iter()
+        .map(|part| {
+            let DebaterParts {
+                speaker,
+                config,
+                provider,
+                soul,
+            } = part;
+            let identity = discussion::debater_identity(speaker.to_string().as_str());
+            agent::Debater {
+                speaker,
+                session: fork(config, Some(identity)),
+                provider: provider.into(),
+                soul,
+            }
+        })
+        .collect();
+
+    let SynthesizerParts {
+        mut config,
+        provider,
+    } = synthesizer;
+    // The synthesizer is the other landing point a cheaper model may be routed to
+    // (spec §17). The debaters above are assembled straight from their own configs and
+    // never pass through this rule, which is what "a debater is never routed" means
+    // structurally.
+    config.model = config
+        .model_for(config::LandingPoint::Synthesizer)
+        .to_owned();
+    let synthesizer = agent::Synthesizer {
+        session: fork(config, Some(discussion::synthesizer_identity())),
+        provider,
+    };
+    (roster, synthesizer)
+}
+
+/// Assemble a discussion: two debaters on one stream, plus the synthesizer.
+///
+/// Reads no environment, like [`assemble`]. The debaters are the same session
+/// scaffold opened twice, so they share the log, the tools, the path locks and
+/// the permission policy; what differs is their speaker, their model and their
+/// private identity (spec §15).
+pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHarness, Error> {
+    let DiscussionParts {
+        scaffold,
+        debaters,
+        synthesizer,
+        max_rounds,
+        renderer,
+    } = parts;
+
+    let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
+    validate_roster(&debaters, &synthesizer, max_rounds)?;
 
     let opened = OpenedSession::open(scaffold, renderer)?;
 
-    let mut roster = Vec::with_capacity(debaters.len());
-    for (index, debater) in debaters.into_iter().enumerate() {
-        let DebaterParts {
-            speaker,
-            config,
-            provider,
-        } = debater;
-        let identity = discussion::debater_identity(speaker.to_string().as_str());
-        let mut session = opened.session(config, Some(identity));
-        // The first session records the skeleton for the whole stream, or — on a
-        // resume — closes the calls an earlier process left open: it is the
-        // session-level head every debater then projects.
-        if index == 0 {
-            opened.start(&mut session)?;
-        }
-        roster.push(agent::Debater {
-            speaker,
-            session,
-            provider: provider.into(),
+    let (mut roster, synthesizer) =
+        discussion_participants(debaters, synthesizer, |config, identity| {
+            opened.session(config, identity)
         });
+    // The first session records the skeleton for the whole stream, or — on a resume —
+    // closes the calls an earlier process left open: it is the session-level head every
+    // debater then projects.
+    if let Some(first) = roster.first_mut() {
+        opened.start(&mut first.session)?;
     }
-
-    let synthesizer = {
-        let SynthesizerParts {
-            mut config,
-            provider,
-        } = synthesizer;
-        // The synthesizer is the other landing point a cheaper model may be
-        // routed to (spec §17). The debaters above are assembled straight from
-        // their own configs and never pass through this rule, which is what
-        // "a debater is never routed" means structurally.
-        config.model = config
-            .model_for(config::LandingPoint::Synthesizer)
-            .to_owned();
-        agent::Synthesizer {
-            session: opened.session(config, Some(discussion::synthesizer_identity())),
-            provider,
-        }
-    };
 
     Ok(DiscussionHarness {
         discussion: agent::Discussion::new(roster, synthesizer, max_rounds),
@@ -500,11 +552,20 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
 impl Harness {
     /// Record a user message and run one turn to completion.
     pub async fn run_turn(&mut self, user_input: &str) -> Result<TurnOutcome, Error> {
+        agent::record_user_message(&mut self.session, &self.render, user_input)?;
+        self.drive_turn().await
+    }
+
+    /// One turn, once whatever it starts from is already on the stream.
+    ///
+    /// The one place a turn is actually driven. Both entry points — a typed prompt and
+    /// a bare skill — differ only in what they append first, so they cannot drift on
+    /// what a turn *is*.
+    async fn drive_turn(&mut self) -> Result<TurnOutcome, Error> {
         // A gesture is scoped to one run: the press that stopped the last turn
         // must not stop this one, or a cancelled session could never be used
         // again in the same process (spec §6).
         self.cancel.reset();
-        agent::record_user_message(&mut self.session, &self.render, user_input)?;
         // This turn's view of the gesture.
         let cancelled = self.cancel.observer();
         agent::run_turn(
@@ -516,6 +577,67 @@ impl Harness {
             &cancelled,
         )
         .await
+    }
+
+    /// Run a discussion **on this session's stream** (spec §15).
+    ///
+    /// The debaters and the synthesizer are *siblings* of this session: they share its
+    /// log, tool table, write locks, permission policy, answerer, skills and renderer,
+    /// and differ only in their own model and private identity. Two consequences are
+    /// the point:
+    ///
+    /// * the projection turns **this agent's** turns into `user` messages for them
+    ///   (spec §5), so a discussion inherits the session's context — it argues about
+    ///   what this session is about, not about a question in a vacuum;
+    /// * the rounds are appended to the same stream, after whatever it already holds,
+    ///   so one session can carry a turn, a discussion, another turn — and
+    ///   `sessions show` reads the whole thing back.
+    ///
+    /// The roster is validated exactly as [`assemble_discussion`] validates it. A stream
+    /// this session did **not** open (a fresh discussion of its own) goes through
+    /// [`assemble_discussion`] instead: that path records the skeleton, this one appends
+    /// to a stream whose skeleton is already on it.
+    pub async fn discuss(
+        &mut self,
+        question: &str,
+        debaters: Vec<DebaterParts>,
+        synthesizer: SynthesizerParts,
+        max_rounds: Option<u32>,
+    ) -> Result<agent::DiscussionOutcome, Error> {
+        let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
+        validate_roster(&debaters, &synthesizer, max_rounds)?;
+        let (roster, synthesizer) =
+            discussion_participants(debaters, synthesizer, |config, identity| {
+                self.session.fork(config, identity)
+            });
+        // No skeleton and no recovery: this stream is live, and its `SessionStarted` is
+        // the one at its head.
+        let mut discussion = agent::Discussion::new(roster, synthesizer, max_rounds);
+        // One discussion is one run, like one turn: the gesture starts clean.
+        self.cancel.reset();
+        let cancelled = self.cancel.observer();
+        agent::run_discussion(&mut discussion, &self.render, question, &cancelled).await
+    }
+
+    /// The last thing the **user** asked in this session, or `None`.
+    ///
+    /// What a bare `/discuss` discusses: "the thing we were just talking about" is the
+    /// question worth putting to two models. Only `MessageCompleted` with the user role
+    /// counts — a context injection is attributed to the user too, and it is not a
+    /// question.
+    pub fn last_question(&self) -> Option<String> {
+        self.session
+            .events()
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                EventPayload::MessageCompleted {
+                    role: Role::User,
+                    text,
+                    ..
+                } => Some(text.clone()),
+                _ => None,
+            })
     }
 
     /// The session's end of the cancel gesture (spec §6).
@@ -533,6 +655,15 @@ impl Harness {
     /// as `/<name>`.
     pub fn skill_names(&self) -> Vec<&str> {
         self.session.skills().names()
+    }
+
+    /// Every discovered skill as `(name, description)`: what a front end's `/` menu
+    /// offers, with the line that says what the skill is for.
+    ///
+    /// This keeps `disable-model-invocation` skills, because the menu is the user's
+    /// list — see [`crate::context::skills::Skills::entries`].
+    pub fn skill_catalog(&self) -> Vec<(&str, &str)> {
+        self.session.skills().entries()
     }
 
     /// Whether `/<name>` names a discovered skill.
@@ -560,6 +691,19 @@ impl Harness {
             ContextSource::Skill,
             &body,
         )
+    }
+
+    /// Run the turn a bare `/<skill>` asks for (spec §9): load the skill, then call
+    /// the model with the body as the last thing it sees.
+    ///
+    /// There is deliberately **no synthetic user message**. The skill body is already
+    /// a `user` message once projected, so a turn that appended one would put words
+    /// in the user's mouth — the transcript would show a prompt they never typed, and
+    /// the model would answer that instead of the skill. This is why the bare form is
+    /// not `load_skill` followed by `run_turn("")`: an empty message is a message.
+    pub async fn run_skill(&mut self, name: &str) -> Result<TurnOutcome, Error> {
+        self.load_skill(name)?;
+        self.drive_turn().await
     }
 
     /// The mode this session currently runs under.

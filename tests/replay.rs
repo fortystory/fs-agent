@@ -84,11 +84,13 @@ async fn discussion(
                 speaker: kimi(),
                 config: config.clone(),
                 provider: Box::new(kimi_provider.clone()),
+                soul: None,
             },
             DebaterParts {
                 speaker: deepseek(),
                 config: config.clone(),
                 provider: Box::new(deepseek_provider.clone()),
+                soul: None,
             },
         ],
         synthesizer: SynthesizerParts {

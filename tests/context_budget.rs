@@ -692,7 +692,9 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
     let injection = events
         .iter()
         .find_map(|event| match &event.payload {
-            EventPayload::ContextInjected { source, content } => Some((*source, content.clone())),
+            EventPayload::ContextInjected { source, content } => {
+                Some((source.clone(), content.clone()))
+            }
             _ => None,
         })
         .expect("AGENTS.md was injected");

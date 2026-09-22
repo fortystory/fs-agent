@@ -219,6 +219,16 @@ fn synthesizer(events: &[Event], round: Option<u32>) -> Result<Vec<Message>, Rep
             .ok_or(ReplayError::NoSynthesis)?,
     };
 
+    // The round the synthesis was recorded under: the materials are scoped to the
+    // debate phase it closes (a session can carry more than one discussion).
+    let EventPayload::RoundStarted {
+        round: synthesis_round,
+        ..
+    } = &started.payload
+    else {
+        return Err(ReplayError::NoSynthesis);
+    };
+
     let question = events
         .iter()
         .filter(|event| event.seq <= started.seq)
@@ -238,7 +248,11 @@ fn synthesizer(events: &[Event], round: Option<u32>) -> Result<Vec<Message>, Rep
         .filter(|event| event.seq <= started.seq)
         .cloned()
         .collect();
-    let prompt = discussion::synthesis_prompt(&question, &up_to);
+    let prompt = discussion::synthesis_prompt(
+        &question,
+        &up_to,
+        discussion::debate_phase_start(&up_to, *synthesis_round),
+    );
 
     Ok(vec![
         Message::System {

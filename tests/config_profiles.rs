@@ -535,3 +535,208 @@ fn routing_to_an_unconfigured_model_is_a_startup_error() {
     .to_string();
     assert!(error.contains("mystery"), "{error}");
 }
+
+// --- the discussion pool (spec §15) ---------------------------------------
+
+/// The pool as `(name, model)` pairs, which is what a test wants to assert on.
+fn pool(config: &config::Config) -> Vec<(String, String)> {
+    config
+        .discussion
+        .as_ref()
+        .expect("[discussion] was configured")
+        .debaters
+        .iter()
+        .map(|debater| (debater.name.clone(), debater.model.clone()))
+        .collect()
+}
+
+#[test]
+fn a_discussion_pool_resolves_names_models_and_a_round_cap() {
+    // The shorthand: the model id is the name.
+    let shorthand = resolve(
+        Some("[discussion]\ndebaters = [\"kimi-k3\", \"deepseek-v4-pro\"]\nmax_rounds = 1\n"),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(
+        pool(&shorthand),
+        vec![
+            ("kimi-k3".to_owned(), "kimi-k3".to_owned()),
+            ("deepseek-v4-pro".to_owned(), "deepseek-v4-pro".to_owned()),
+        ]
+    );
+    assert_eq!(shorthand.discussion.unwrap().max_rounds, Some(1));
+
+    // Named personas, and more than two: the pool a discussion draws from.
+    let named = resolve(
+        Some(
+            "[discussion]\n\
+             [[discussion.debaters]]\nname = \"保守\"\nmodel = \"kimi-k3\"\n\
+             [[discussion.debaters]]\nname = \"激进\"\nmodel = \"deepseek-v4-pro\"\n\
+             [[discussion.debaters]]\nname = \"审查\"\nmodel = \"deepseek-flash\"\n",
+        ),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(
+        pool(&named),
+        vec![
+            ("保守".to_owned(), "kimi-k3".to_owned()),
+            ("激进".to_owned(), "deepseek-v4-pro".to_owned()),
+            ("审查".to_owned(), "deepseek-flash".to_owned()),
+        ]
+    );
+    assert_eq!(named.discussion.unwrap().max_rounds, None);
+}
+
+#[test]
+fn a_configuration_without_a_discussion_table_has_no_pool() {
+    // Absent means "this file is for single-agent sessions", which is what the
+    // subcommand says instead of inventing two debaters to ask.
+    let config = resolve(None, &env(&[])).unwrap();
+    assert_eq!(config.discussion, None);
+}
+
+#[test]
+fn a_pool_that_cannot_serve_a_discussion_is_a_startup_error() {
+    let one = resolve(Some("[discussion]\ndebaters = [\"kimi-k3\"]\n"), &env(&[]))
+        .expect_err("one member is not a pool")
+        .to_string();
+    assert!(one.contains("at least two"), "{one}");
+
+    // An empty table says nothing about who debates.
+    let missing = resolve(Some("[discussion]\nmax_rounds = 2\n"), &env(&[]))
+        .expect_err("a pool needs debaters")
+        .to_string();
+    assert!(missing.contains("debaters"), "{missing}");
+
+    let unknown = resolve(
+        Some("[discussion]\ndebaters = [\"kimi-k3\", \"mystery\"]\n"),
+        &env(&[]),
+    )
+    .expect_err("a debater must be a configured model")
+    .to_string();
+    assert!(unknown.contains("mystery"), "{unknown}");
+
+    let zero_rounds = resolve(
+        Some("[discussion]\ndebaters = [\"kimi-k3\", \"deepseek-v4-pro\"]\nmax_rounds = 0\n"),
+        &env(&[]),
+    )
+    .expect_err("a discussion needs a round")
+    .to_string();
+    assert!(zero_rounds.contains("max_rounds"), "{zero_rounds}");
+}
+
+#[test]
+fn one_model_twice_needs_two_names() {
+    // The name is the participant's identity on the stream, and every projection is a
+    // function of it — so one model id cannot be two identities. The error says what to
+    // write instead of inventing a suffix.
+    let error = resolve(
+        Some("[discussion]\ndebaters = [\"kimi-k3\", \"kimi-k3\"]\n"),
+        &env(&[]),
+    )
+    .expect_err("two debaters of one model need names")
+    .to_string();
+    assert!(error.contains("both called `kimi-k3`"), "{error}");
+    assert!(error.contains("name = \"甲\""), "{error}");
+
+    // Named, the same model twice is fine — and the two are one vendor, which the
+    // front end says out loud rather than refusing.
+    let config = resolve(
+        Some(
+            "[discussion]\n\
+             [[discussion.debaters]]\nname = \"甲\"\nmodel = \"kimi-k3\"\n\
+             [[discussion.debaters]]\nname = \"乙\"\nmodel = \"kimi-k3\"\n",
+        ),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(
+        pool(&config),
+        vec![
+            ("甲".to_owned(), "kimi-k3".to_owned()),
+            ("乙".to_owned(), "kimi-k3".to_owned()),
+        ]
+    );
+    assert!(config.debaters_share_a_vendor("kimi-k3", "kimi-k3"));
+    assert!(config.debaters_share_a_vendor("kimi-k3", "k3"), "both Kimi");
+    assert!(!config.debaters_share_a_vendor("kimi-k3", "deepseek-v4-pro"));
+}
+
+#[test]
+fn a_persona_can_carry_a_soul_and_it_is_capped() {
+    let config = resolve(
+        Some(
+            "[discussion]\n\
+             [[discussion.debaters]]\nname = \"张三\"\nmodel = \"kimi-k3\"\n\
+             soul = \"法外狂徒，思路不受限制\"\n\
+             [[discussion.debaters]]\nname = \"李四\"\nmodel = \"deepseek-v4-pro\"\n",
+        ),
+        &env(&[]),
+    )
+    .unwrap();
+    let pool = config.discussion.unwrap().debaters;
+    assert_eq!(pool[0].soul.as_deref(), Some("法外狂徒，思路不受限制"));
+    assert_eq!(pool[1].soul, None, "a soul is optional");
+
+    // An empty soul says nothing: writing the field and leaving it blank is a mistake,
+    // not a silent no-op.
+    let empty = resolve(
+        Some(
+            "[discussion]\n\
+             [[discussion.debaters]]\nname = \"张三\"\nmodel = \"kimi-k3\"\nsoul = \"  \"\n\
+             [[discussion.debaters]]\nname = \"李四\"\nmodel = \"deepseek-v4-pro\"\n",
+        ),
+        &env(&[]),
+    )
+    .expect_err("an empty soul is refused")
+    .to_string();
+    assert!(empty.contains("empty `soul`"), "{empty}");
+
+    // A soul is pinned for every round, so it is capped.
+    let long = "长".repeat(config::MAX_DEBATER_SOUL + 1);
+    let over = resolve(
+        Some(&format!(
+            "[discussion]\n\
+             [[discussion.debaters]]\nname = \"张三\"\nmodel = \"kimi-k3\"\nsoul = \"{long}\"\n\
+             [[discussion.debaters]]\nname = \"李四\"\nmodel = \"deepseek-v4-pro\"\n"
+        )),
+        &env(&[]),
+    )
+    .expect_err("an over-long soul is refused")
+    .to_string();
+    assert!(over.contains("longer than"), "{over}");
+}
+
+#[test]
+fn a_name_that_cannot_be_an_identity_is_a_startup_error() {
+    // A newline cannot even be written in a TOML basic string; a tab can, and it is
+    // the whitespace the prefix would break on.
+    for (name, why) in [("两 个", "spaces"), ("", "empty"), ("一\t二", "tab")] {
+        let error = resolve(
+            Some(&format!(
+                "[discussion]\n\
+                 [[discussion.debaters]]\nname = \"{name}\"\nmodel = \"kimi-k3\"\n\
+                 [[discussion.debaters]]\nname = \"另一个\"\nmodel = \"deepseek-v4-pro\"\n"
+            )),
+            &env(&[]),
+        )
+        .expect_err(why)
+        .to_string();
+        assert!(error.contains("one word"), "{why}: {error}");
+    }
+
+    let long = "长".repeat(config::MAX_DEBATER_NAME + 1);
+    let error = resolve(
+        Some(&format!(
+            "[discussion]\n\
+             [[discussion.debaters]]\nname = \"{long}\"\nmodel = \"kimi-k3\"\n\
+             [[discussion.debaters]]\nname = \"另一个\"\nmodel = \"deepseek-v4-pro\"\n"
+        )),
+        &env(&[]),
+    )
+    .expect_err("an over-long name is refused")
+    .to_string();
+    assert!(error.contains("longer than"), "{error}");
+}

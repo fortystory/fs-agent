@@ -188,7 +188,7 @@ impl Render for Headless {
                             let _ = writeln!(
                                 sinks.stderr_diagnostic,
                                 "{}",
-                                wording::context_injected(*source)
+                                wording::context_injected(source.clone())
                             );
                         }
                         EventPayload::DivergenceRecorded { topic, .. } => {

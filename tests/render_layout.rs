@@ -6,7 +6,9 @@
 //! header says, how many hints fit — never about the rectangles the layout computes
 //! on the way there.
 
-use fs_agent::render::{draw_frame, SessionFacts, TuiState};
+use fs_agent::render::{
+    draw_frame, CatalogEntry, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
+};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::Terminal;
@@ -23,6 +25,21 @@ fn facts() -> SessionFacts {
 
 fn state() -> TuiState {
     TuiState::new(facts())
+}
+
+/// A state whose loop is **waiting for a line** — what an idle front end looks like.
+///
+/// The distinction matters: inside a run, `Esc` and `Ctrl-C` are the cancel gesture
+/// rather than "close this" / "quit" (spec §6), and the loop is what says a run is on
+/// (`ConsoleRequest::RunState`). A fresh state is idle already; what the prompt request
+/// adds is a live editor for these tests to type into. The idle-UI tests — the `/` menu,
+/// a draft `Esc` would clear, the hint ladder — are about the waiting state.
+fn idle() -> TuiState {
+    let mut state = state();
+    let (reply, line) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply });
+    drop(line);
+    state
 }
 
 /// Render one frame at a fixed size and read the screen back as rows of text.
@@ -223,8 +240,14 @@ fn the_information_panel_shares_a_seam_with_the_transcript_only_when_there_is_ro
 }
 
 /// How many `·`-separated items the hint row holds, the state word included.
+///
+/// A prompt is in flight, because the measured ladder is the one a session shows
+/// while it is waiting for a line — the only time it can promise `enter 发送`.
 fn hint_items(width: u16) -> Vec<String> {
-    let rows = screen(width, 24, &mut state());
+    let mut state = state();
+    let (reply, _line) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply });
+    let rows = screen(width, 24, &mut state);
     let row = rows
         .iter()
         .find(|row| row.contains("ctrl-c 退出"))
@@ -233,6 +256,23 @@ fn hint_items(width: u16) -> Vec<String> {
         .split(" · ")
         .map(str::to_owned)
         .collect()
+}
+
+#[test]
+fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
+    // Mid-turn, or inside a one-shot `discuss`: nothing is reading lines, so `enter
+    // 发送` would be a lie and the plan-mode gesture has nothing to toggle.
+    let mut state = state();
+    state.apply(fs_agent::render::RenderEvent::Notice("工作中".to_owned()));
+    let rows = screen(120, 24, &mut state);
+    let row = rows
+        .iter()
+        .find(|row| row.contains("ctrl-c 退出"))
+        .expect("the hint row is on screen");
+    assert!(row.contains("esc 取消"), "{row}");
+    assert!(row.contains("PgUp/PgDn 滚动"), "{row}");
+    assert!(!row.contains("enter"), "{row}");
+    assert!(!row.contains("shift+tab"), "{row}");
 }
 
 #[test]
@@ -945,12 +985,6 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
         .position(|row| row.contains("权限询问"))
         .expect("the overlay is on screen");
     assert!(rows[modal].contains('│'), "inside a box: {:?}", rows[modal]);
-    assert!(
-        rows[modal - 1].contains('┌') && rows[modal + 1].contains('└'),
-        "with borders of its own: {:?} / {:?}",
-        rows[modal - 1],
-        rows[modal + 1]
-    );
 
     // The plan-mode gesture waits: a question owns the keyboard until it is answered
     // (spec §9).
@@ -972,15 +1006,404 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
         borders[0] < 89 && borders[1] > 89,
         "and the box reaches across the seam: {borders:?}"
     );
+    // The box's own edges, walked out from its left border: the title is its first
+    // content row, and the rows that follow are the question's other parts.
+    let left = borders[0];
+    let box_top = (0..row)
+        .rev()
+        .find(|y| frame[(left, *y)].symbol() == "┌")
+        .expect("the box's top border");
+    let box_bottom = (row..24u16)
+        .find(|y| frame[(left, *y)].symbol() == "└")
+        .expect("the box's bottom border");
+    assert_eq!(box_top + 1, row, "the title leads the question");
     // Centred in the middle block: the room above and below is the same, within the
     // row the integer division leaves over.
     let (_, middle_top) = find_cell(&frame, 120, 24, "┬").expect("the seam, up top");
     let (_, middle_bottom) = find_cell(&frame, 120, 24, "┴").expect("the seam, at the foot");
-    let above = (row - 1) - (middle_top + 1);
-    let below = (middle_bottom - 1) - (row + 1);
+    let above = box_top - (middle_top + 1);
+    let below = (middle_bottom - 1) - box_bottom;
     assert!(
         above.abs_diff(below) <= 1,
         "centred: {above} rows above the box, {below} below"
+    );
+}
+
+#[test]
+fn a_question_splits_into_a_title_a_summary_a_call_and_a_row_of_buttons() {
+    let mut state = state();
+    let (ask, _rx) = ask_permission();
+    state.request(ask);
+
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    let row_of = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} is on screen:\n{text}"))
+    };
+
+    // Four parts, top to bottom: what is asked, what the action is, the concrete
+    // call, and the keys that answer it.
+    let title = row_of("权限询问：write_file");
+    let summary = row_of("写入一个文件");
+    let call = row_of("write_file（path=a.rs）");
+    let keys = row_of("[y] 允许");
+    assert!(
+        title < summary && summary < call && call < keys,
+        "title, then the summary, then the call, then the buttons:\n{text}"
+    );
+    // Each part keeps its own row: a command can no longer push the keys into the
+    // middle of a sentence, and the keys cannot bury the command.
+    assert!(
+        !rows[keys].contains("path=a.rs") && !rows[keys].contains("权限询问"),
+        "the buttons have the row to themselves: {:?}",
+        rows[keys]
+    );
+    assert!(
+        !rows[title].contains("path=a.rs") && !rows[title].contains("写入一个文件"),
+        "so does the title: {:?}",
+        rows[title]
+    );
+    assert!(
+        !rows[summary].contains("path=a.rs"),
+        "and the summary explains an action, it does not repeat the call: {:?}",
+        rows[summary]
+    );
+}
+
+#[test]
+fn a_long_command_still_says_what_it_would_do() {
+    use fs_agent::permissions::PermissionRequest;
+    use fs_agent::render::{AnswerChoice, AskRequest, Question};
+
+    // The complaint this row answers: a wall of shell is not something a person can
+    // read, so the question says what kind of action it is *first*.
+    let mut state = state();
+    let (tx, _rx) = tokio::sync::oneshot::channel::<AnswerChoice>();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        question: Question::Permission(PermissionRequest {
+            request_id: "r-1".to_owned(),
+            tool_call_id: "c-1".to_owned(),
+            tool_name: "bash".to_owned(),
+            args: serde_json::json!({
+                "command": "for f in $(git ls-files '*.rs'); do grep -L 'mod tests' \"$f\"; done | xargs wc -l | sort -n",
+            }),
+            reason: "mode ask: a write asks the user".to_owned(),
+        }),
+        reply: tx,
+    }));
+
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    let summary = rows
+        .iter()
+        .position(|row| row.contains("shell 命令"))
+        .unwrap_or_else(|| panic!("the summary is on screen:\n{text}"));
+    let keys = rows
+        .iter()
+        .position(|row| row.contains("[y] 允许"))
+        .unwrap_or_else(|| panic!("the buttons are on screen:\n{text}"));
+    assert!(summary < keys, "the summary leads the buttons:\n{text}");
+    assert!(
+        text.contains("git ls-files"),
+        "and the command is still there to read:\n{text}"
+    );
+}
+
+// --- the `/` menu ----------------------------------------------------------
+
+/// Install the names the loop reports: the built-ins it parses, then the skills the
+/// session discovered. The renderer has no list of its own — this is the whole menu.
+fn install_catalog(state: &mut TuiState) {
+    state.request(ConsoleRequest::Catalog {
+        entries: [
+            ("undo", "回滚上一次编辑"),
+            ("plan", "进入硬计划模式"),
+            ("endplan", "退出硬计划模式"),
+            ("quit", "退出会话"),
+            ("ask-matt", "不知道用哪个 skill 时问它"),
+            ("review", "审查一个变更"),
+        ]
+        .iter()
+        .map(|(name, description)| CatalogEntry::new(*name, *description))
+        .collect(),
+    });
+}
+
+/// A prompt in flight, so a test can read back what a submission sent.
+fn awaiting_line(state: &mut TuiState) -> tokio::sync::oneshot::Receiver<Option<String>> {
+    let (reply, line) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Prompt { reply });
+    line
+}
+
+/// Where the `/` menu drew its box: `(x, y, width, height)`.
+///
+/// Found from the buffer, the way the border assertions above work: the row holding
+/// `needle`, the box's left border to the left of it, then its corners.
+fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16, u16, u16) {
+    let row = (0..height)
+        .find(|y| row_text(frame, *y, width).contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} is on screen"));
+    let column = row_text(frame, row, width).find(needle).unwrap() as u16;
+    let x = (0..column)
+        .rev()
+        .find(|c| frame[(*c, row)].symbol() == "│")
+        .expect("the menu's left border");
+    let top = (0..row)
+        .rev()
+        .find(|y| frame[(x, *y)].symbol() == "┌")
+        .expect("the menu's top border");
+    let bottom = (row..height)
+        .find(|y| frame[(x, *y)].symbol() == "└")
+        .expect("the menu's bottom border");
+    let right = (x..width)
+        .find(|c| frame[(*c, top)].symbol() == "┐")
+        .expect("the menu's right border");
+    (x, top, right - x + 1, bottom - top + 1)
+}
+
+/// The row the draft is typed on.
+fn input_row(rows: &[String]) -> usize {
+    rows.iter()
+        .position(|row| row.starts_with("│> "))
+        .expect("the input row")
+}
+
+#[test]
+fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
+    let mut state = state();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    for name in [
+        "/undo",
+        "/plan",
+        "/endplan",
+        "/quit",
+        "/ask-matt",
+        "/review",
+    ] {
+        assert!(text.contains(name), "{name} is offered:\n{text}");
+    }
+    assert!(
+        text.contains("回滚上一次编辑"),
+        "with what it does:\n{text}"
+    );
+
+    // It floats — box, borders and all — above the input it belongs to.
+    let frame = buffer(120, 24, &mut state);
+    let (_, top, _, height) = menu_box(&frame, 120, 24, "/undo");
+    assert!(height >= 3, "a box, not a row: {height} tall");
+    assert!(
+        top as usize + height as usize <= input_row(&rows),
+        "the menu sits above the input: {top}+{height} vs {}",
+        input_row(&rows)
+    );
+}
+
+#[test]
+fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
+    let mut state = state();
+    install_catalog(&mut state);
+    for ch in "/ask".chars() {
+        state.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("/ask-matt"), "{text}");
+    assert!(
+        !text.contains("/undo"),
+        "everything else is filtered out:\n{text}"
+    );
+
+    // A prefix that names nothing closes the box rather than showing an empty one.
+    for ch in "zzz".chars() {
+        state.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("│ /"),
+        "no menu for a prefix that names nothing:\n{text}"
+    );
+}
+
+#[test]
+fn the_menu_follows_the_cursor_column() {
+    let mut state = state();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut state);
+    let (before, ..) = menu_box(&frame, 120, 24, "/undo");
+    // One more character, and the box moves with the cursor that typed it.
+    state.key(Key::Char('a'));
+    let frame = buffer(120, 24, &mut state);
+    let (after, ..) = menu_box(&frame, 120, 24, "/ask-matt");
+    assert_eq!(after, before + 1, "the box moved with the cursor");
+}
+
+#[test]
+fn tab_fills_the_highlighted_name_in_and_does_not_submit_it() {
+    let mut state = state();
+    install_catalog(&mut state);
+    let mut line = awaiting_line(&mut state);
+    for ch in "/as".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Tab);
+    assert!(
+        line.try_recv().is_err(),
+        "Tab fills in; it never sends what is in the draft"
+    );
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("│> /ask-matt"),
+        "the name is in the draft:\n{text}"
+    );
+    // And the fill-in closed the menu, so a task can be typed after it.
+    assert!(!text.contains("│ /ask-matt"), "the menu is done:\n{text}");
+}
+
+#[test]
+fn enter_fills_the_highlighted_name_in_and_submits_it_in_one_press() {
+    let mut state = state();
+    install_catalog(&mut state);
+    let mut line = awaiting_line(&mut state);
+    for ch in "/ask".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Enter);
+    assert_eq!(
+        line.try_recv().unwrap(),
+        Some("/ask-matt".to_owned()),
+        "`/ask` + Enter is one gesture, and the name it sent is a complete one"
+    );
+}
+
+#[test]
+fn the_arrows_walk_the_matches() {
+    let mut state = state();
+    install_catalog(&mut state);
+    let mut line = awaiting_line(&mut state);
+    // A bare `/` highlights nothing, so the first `↓` takes the first name and the
+    // second takes the one after it.
+    state.key(Key::Char('/'));
+    state.key(Key::Down);
+    state.key(Key::Down);
+    state.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("/plan".to_owned()));
+}
+
+#[test]
+fn enter_on_a_bare_slash_sends_what_was_typed() {
+    // Nothing is highlighted until a name is typed or an arrow walks the list, so an
+    // `Enter` pressed only to look at the menu cannot run the first command in it.
+    let mut state = state();
+    install_catalog(&mut state);
+    let mut line = awaiting_line(&mut state);
+    state.key(Key::Char('/'));
+    state.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("/".to_owned()));
+}
+
+#[test]
+fn an_arrow_on_a_bare_slash_picks_the_row_enter_takes() {
+    // The deliberate path: walk the list, take what the highlight landed on.
+    let mut state = state();
+    install_catalog(&mut state);
+    let mut line = awaiting_line(&mut state);
+    state.key(Key::Char('/'));
+    state.key(Key::Down);
+    state.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("/undo".to_owned()));
+}
+
+#[test]
+fn the_arrows_wrap_at_the_ends() {
+    let mut state = state();
+    install_catalog(&mut state);
+    let mut line = awaiting_line(&mut state);
+    // Up from the first match wraps to the last one.
+    state.key(Key::Char('/'));
+    state.key(Key::Up);
+    state.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("/review".to_owned()));
+}
+
+#[test]
+fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
+    let mut state = idle();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+    state.key(Key::Esc);
+
+    // The draft survives: `Esc` closed the menu, it did not start throwing the draft
+    // away, and it did not clear a one-line draft either (spec §6, §7).
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("│> /"), "the draft is still there:\n{text}");
+    assert!(!text.contains("│ /undo"), "the menu is gone:\n{text}");
+    assert!(!text.contains("清空输入"), "nothing was asked:\n{text}");
+}
+
+#[test]
+fn a_question_hides_the_menu_because_it_owns_the_keyboard() {
+    let mut state = state();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+    let (ask, _rx) = ask_permission();
+    state.request(ask);
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("权限询问"), "the question is up:\n{text}");
+    assert!(
+        !text.contains("│ /undo"),
+        "and nothing is offering keys that answer something else:\n{text}"
+    );
+}
+
+#[test]
+fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
+    // A wide glyph owns two cells and the second one is skipped when a frame is diffed
+    // to the terminal, so a box whose left border landed there used to lose its
+    // top-left corner. The half-covered glyph is blanked instead — half a glyph cannot
+    // be drawn anyway — and the box stays a box.
+    let mut state = state();
+    install_catalog(&mut state);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("对话第 {index} 行")));
+    }
+    state.key(Key::Char('/'));
+    let _ = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let (x, top, width, height) = menu_box(&frame, 120, 24, "/undo");
+    let (bottom, right) = (top + height - 1, x + width - 1);
+    for y in top..=bottom {
+        let (left, rightmost) = if y == top {
+            ("┌", "┐")
+        } else if y == bottom {
+            ("└", "┘")
+        } else {
+            ("│", "│")
+        };
+        assert_eq!(frame[(x, y)].symbol(), left, "row {y}, left border");
+        assert_eq!(
+            frame[(right, y)].symbol(),
+            rightmost,
+            "row {y}, right border"
+        );
+    }
+}
+
+#[test]
+fn there_is_no_menu_before_the_loop_has_said_what_exists() {
+    let mut state = state();
+    state.key(Key::Char('/'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("│ /"),
+        "an empty catalog offers nothing:\n{text}"
     );
 }
 
@@ -997,6 +1420,7 @@ fn every_question_kind_takes_the_overlay() {
         reply: tx,
     }));
     let text = screen(120, 24, &mut plan).join("\n");
+    assert!(text.contains("计划文件冲突"), "the title: {text}");
     assert!(text.contains("/tmp/PLAN.md 已存在"), "{text}");
     assert!(text.contains("[o] 覆盖"), "with its keys: {text}");
 
@@ -1004,15 +1428,20 @@ fn every_question_kind_takes_the_overlay() {
     let mut paste = state();
     paste.paste(&"x".repeat(100_001));
     let text = screen(120, 24, &mut paste).join("\n");
-    assert!(text.contains("粘贴 100001 字符？"), "{text}");
+    assert!(text.contains("粘贴确认"), "the title: {text}");
+    assert!(text.contains("粘贴 100001 字符"), "{text}");
     assert!(text.contains("[y] 粘贴"), "with its keys: {text}");
 
     // And `Esc` on a multi-line draft.
-    let mut draft = state();
+    let mut draft = idle();
     draft.paste("第一行\n第二行");
     draft.key(Key::Esc);
     let text = screen(120, 24, &mut draft).join("\n");
-    assert!(text.contains("清空输入？"), "{text}");
+    assert!(text.contains("清空输入"), "{text}");
+    assert!(
+        text.contains("草稿有多行"),
+        "what it would throw away: {text}"
+    );
     assert!(text.contains("[y] 清空"), "with its keys: {text}");
 }
 
@@ -1077,25 +1506,33 @@ fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
 
     // A **short** question: the room it leaves on either side is where the panel's own
     // label sits, so anything left of the background would show up beside the words.
-    let mut state = state();
+    let mut state = idle();
     state.paste("第一行\n第二行");
     state.key(Key::Esc);
     let rows = screen(120, 24, &mut state);
-    let modal = rows
+    let title = rows
         .iter()
-        .position(|row| row.contains("清空输入？"))
+        .position(|row| row.contains("清空输入"))
         .expect("the overlay is on screen");
+    let keys = rows
+        .iter()
+        .position(|row| row.contains("[y] 清空"))
+        .expect("its buttons are too");
 
-    let row = modal as u16;
     let frame = buffer(120, 24, &mut state);
     let borders: Vec<u16> = (1..119u16)
-        .filter(|x| frame[(*x, row)].symbol() == "│")
+        .filter(|x| frame[(*x, title as u16)].symbol() == "│")
         .collect();
     assert_eq!(borders.len(), 2, "the box's borders: {borders:?}");
     assert_eq!(
-        cells(&frame, row, borders[0] + 1, borders[1]).trim(),
-        "清空输入？[y] 清空 / [n] 保留",
-        "the interior holds the question and nothing that was behind it"
+        cells(&frame, title as u16, borders[0] + 1, borders[1]).trim(),
+        "清空输入",
+        "the interior holds the title and nothing that was behind it"
+    );
+    assert_eq!(
+        cells(&frame, keys as u16, borders[0] + 1, borders[1]).trim(),
+        "[y] 清空   [n] 保留",
+        "and the buttons are the whole of their own row"
     );
 }
 

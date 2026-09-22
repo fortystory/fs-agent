@@ -26,8 +26,10 @@ use std::sync::Arc;
 use ratatui::buffer::CellWidth;
 
 use crate::agent::replay;
-use crate::config::{self, Config, EnvMap};
-use crate::events::{read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, Usage};
+use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
+use crate::events::{
+    read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage,
+};
 use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
@@ -39,7 +41,10 @@ use crate::render::{
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
 use crate::tools::{self, PathLocks};
-use crate::{assemble, AssemblyParts, Harness, SessionScaffold};
+use crate::{
+    assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
+    Harness, SessionScaffold, SynthesizerParts,
+};
 
 /// Prompt for the second probe turn; keeps the transcript growing so the first
 /// turn's prefix is what the cache has to match.
@@ -117,6 +122,7 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("probe") => probe(&args[1..], env).await,
+        Some("discuss") => discuss(&args[1..], env).await,
         Some("prune") => prune(&args[1..], env),
         Some("sessions") => {
             let stdout = std::io::stdout();
@@ -374,9 +380,645 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         parsed.resume,
     ));
 
-    let code = interactive_loop(&mut harness, &console, &mut events).await;
+    // The `/` menu's names. The loop is what acts on a submission, so the loop is
+    // what says which names exist: the built-ins it parses, then the skills this
+    // session discovered — which is why this is sent here, after assembly and
+    // before the first prompt, and not injected with the header's facts.
+    console.catalog(
+        render::wording::BUILT_IN_COMMANDS
+            .iter()
+            .map(|command| render::CatalogEntry::new(command.name, command.description))
+            .chain(
+                harness
+                    .skill_catalog()
+                    .into_iter()
+                    .map(|(name, description)| render::CatalogEntry::new(name, description)),
+            )
+            .collect(),
+    );
+
+    let code = interactive_loop(&mut harness, &console, &mut events, &config).await;
     harness.shutdown().await;
     code
+}
+
+// ---------------------------------------------------------------------------
+// The discussion front end (spec §15)
+// ---------------------------------------------------------------------------
+
+/// One parsed `fs-agent discuss` invocation.
+///
+/// There is deliberately no `--model`: who debates is a configuration fact
+/// (`[discussion] debaters`), and a flag that could replace one of the two would be a
+/// second way to say it. What is left to choose is how the discussion is watched.
+#[derive(Debug, Default)]
+struct DiscussArgs {
+    /// The question, in the words it was given with. Empty means "ask stdin".
+    words: Vec<String>,
+    /// `--debaters a,b`: which two of the pool debate. `None` draws a pair.
+    debaters: Option<[String; 2]>,
+    plain: bool,
+    tui: bool,
+    config: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+}
+
+fn parse_discuss(args: &[String]) -> Result<DiscussArgs, String> {
+    let mut parsed = DiscussArgs::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--plain" => parsed.plain = true,
+            "--tui" => parsed.tui = true,
+            flag @ ("--config" | "--cwd" | "--debaters") => {
+                let flag = flag.to_owned();
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| render::wording::needs_value(&flag))?;
+                match flag.as_str() {
+                    "--config" => parsed.config = Some(PathBuf::from(value)),
+                    "--cwd" => parsed.cwd = Some(PathBuf::from(value)),
+                    "--debaters" => parsed.debaters = Some(split_names(value)?),
+                    _ => unreachable!(),
+                }
+            }
+            // Everything after `--` is the question, so a question may start with a
+            // dash.
+            "--" => {
+                parsed.words.extend(args[index + 1..].iter().cloned());
+                break;
+            }
+            other if other.starts_with("--") => {
+                return Err(render::wording::unknown_argument(other))
+            }
+            other => parsed.words.push(other.to_owned()),
+        }
+        index += 1;
+    }
+    if parsed.plain && parsed.tui {
+        return Err(render::wording::renderers_mutually_exclusive().to_owned());
+    }
+    Ok(parsed)
+}
+
+/// One question, two debaters, one synthesizer, one session.
+///
+/// The renderer is chosen exactly as the interactive path chooses it, so a discussion
+/// watched in a terminal gets the TUI — the permission modal included, for whatever a
+/// debater wants to run — and a piped one gets the plain transcript with the
+/// synthesizer's product alone on stdout.
+async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{}", render::wording::help_discuss());
+        return ExitCode::SUCCESS;
+    }
+    let parsed = match parse_discuss(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("fs-agent: {message}");
+            println!("{}", render::wording::help_discuss());
+            return ExitCode::FAILURE;
+        }
+    };
+    let config = match load_config(parsed.config.clone(), env) {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("fs-agent: {}", render::wording::startup_config(&message));
+            return ExitCode::FAILURE;
+        }
+    };
+    // An unregistered model is a startup error, never a silent downgrade.
+    if let Err(message) = validate_models(&config) {
+        eprintln!("fs-agent: {message}");
+        return ExitCode::FAILURE;
+    }
+    // No roster is not an error in the file — most configurations are for
+    // single-agent sessions — but it is one for this subcommand.
+    let Some(roster) = config.discussion.clone() else {
+        eprintln!("fs-agent: {}", render::wording::discussion_no_roster());
+        return ExitCode::FAILURE;
+    };
+    // Which two of the pool debate: the ones named on the command line, or a draw.
+    let pair = match pick_debaters(&roster, parsed.debaters.clone(), discussion_seed()) {
+        Ok(pair) => pair,
+        Err(message) => {
+            eprintln!("fs-agent: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for line in advisory_lines(&config, &pair) {
+        eprintln!("fs-agent: {line}");
+    }
+
+    // The question comes before anything is assembled: reading it may block on a
+    // terminal, and the terminal has to still be in cooked mode for that (assembly
+    // puts the TUI into raw mode and owns the screen from then on).
+    let Some(question) = question(&parsed.words) else {
+        eprintln!("fs-agent: {}", render::wording::discuss_needs_question());
+        return ExitCode::FAILURE;
+    };
+
+    let Some(root) = config::sessions_dir(env) else {
+        eprintln!("fs-agent: {}", render::wording::startup_no_session_store());
+        return ExitCode::FAILURE;
+    };
+    let cwd = match parsed.cwd.clone() {
+        Some(cwd) => cwd,
+        None => match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                eprintln!(
+                    "fs-agent: {}",
+                    render::wording::startup_cwd(&error.to_string())
+                );
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let stored = match SessionStore::new(root).create(&cwd) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!(
+                "fs-agent: {}",
+                render::wording::startup_store_create(&error.to_string())
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let home = env
+        .get("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+
+    // Every participant's provider is built before the renderer starts, so a missing
+    // key is a startup error on a normal screen rather than a half-drawn interface.
+    let (debaters, synthesizer) = match discussion_participants(&config, &pair) {
+        Ok(parts) => parts,
+        Err(message) => {
+            eprintln!("fs-agent: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!(
+        "fs-agent: {}",
+        render::wording::discussion_starting(
+            &render::wording::debater_label(&pair[0].name, &pair[0].model),
+            &render::wording::debater_label(&pair[1].name, &pair[1].model),
+            &question,
+        )
+    );
+
+    let (console, port, mut events) = render::console();
+    let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
+    let renderer = if use_tui {
+        let caps = match caps_for(&pair[0].model) {
+            Ok(caps) => caps,
+            Err(error) => {
+                eprintln!("fs-agent: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let facts = SessionFacts {
+            session_id: stored.id.as_str().to_owned(),
+            cwd: stored.dir.display().to_string(),
+            // The panel has one model row and one context row, and a discussion has a
+            // pair of debaters and no single window: the row names **both models**, and
+            // the window is the first debater's, which is the approximation the panel
+            // cannot help but be (spec §8). The names are the transcript's business
+            // (`debater_label`); this row is about models, so it shows models.
+            model: render::wording::discussion_pair(&pair[0].model, &pair[1].model),
+            context_window: crate::context::usable_input(&caps),
+            // `session_config` copies `[budget]` verbatim, so the file's value is the
+            // session's.
+            budget_limit: config.budget.limit,
+        };
+        Renderer::tui(TuiOptions { port, facts })
+    } else {
+        render::spawn_plain_console(port);
+        Renderer::plain(PlainOptions {
+            sinks: RenderSinks {
+                stdout_result: Box::new(std::io::stdout()),
+                stderr_diagnostic: Box::new(std::io::stderr()),
+            },
+            color: std::io::stderr().is_terminal() && env.get("NO_COLOR").is_none(),
+        })
+    };
+    // This front end never reads a line — one question in, one discussion out — so it is
+    // inside a run for its whole life, and says so before the loop would ever ask. Told
+    // here rather than inferred, for the reason `ConsoleRequest::RunState` records.
+    console.set_running(true);
+    // The same keyboard answers the debaters' permission questions: a discussion is
+    // still a session with tools in it.
+    let asker = Arc::new(ConsoleAsker::from_handle(&console));
+
+    let mut harness = match assemble_discussion(DiscussionParts {
+        scaffold: SessionScaffold {
+            cwd,
+            log_path: stored.log_path.clone(),
+            session_id: stored.id.clone(),
+            tools: tools::with_dynamic(&config.tools),
+            locks: PathLocks::new(),
+            policy: Policy::for_mode(Mode::Ask),
+            asker: Some(asker),
+            hook: None,
+            home,
+        },
+        debaters,
+        synthesizer,
+        max_rounds: roster.max_rounds,
+        renderer,
+    })
+    .await
+    {
+        Ok(harness) => harness,
+        Err(error) => {
+            eprintln!("fs-agent: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let outcome = run_discussion(&mut harness, &mut events, &question).await;
+    harness.shutdown().await;
+
+    // The line is printed after the alt screen is restored, because the TUI's
+    // transcript does not survive the process: whatever the user missed on screen, the
+    // session id is the durable way back to it.
+    match outcome {
+        Ok(outcome) => {
+            eprintln!(
+                "fs-agent: {}",
+                render::wording::discussion_ended(outcome.reason, outcome.rounds, &outcome.absent)
+            );
+            eprintln!(
+                "fs-agent: {}",
+                render::wording::discussion_replay(stored.id.as_str())
+            );
+            // A discussion that failed outright is a failure; a cancelled one is what
+            // the user asked for, the way a cancelled turn is in an interactive
+            // session (spec §6).
+            if outcome.reason == StopReason::Error {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(error) => {
+            eprintln!("fs-agent: {}", render::wording::error_report(&error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `/discuss [--debaters a,b] [问题]`: the command's own flags, and the question.
+///
+/// The flags only count at the front — the moment something else appears, the rest of
+/// the line (newlines and all) is the question, so a question may start with a dash and
+/// may be a paragraph.
+#[derive(Debug)]
+struct DiscussLine {
+    debaters: Option<[String; 2]>,
+    question: String,
+}
+
+fn parse_discuss_line(text: &str) -> Result<DiscussLine, String> {
+    let mut rest = text.trim_start();
+    let mut debaters = None;
+    loop {
+        let Some((word, tail)) = rest.split_once(char::is_whitespace) else {
+            return Ok(DiscussLine {
+                debaters,
+                question: rest.to_owned(),
+            });
+        };
+        match word {
+            "--debaters" | "--debater" => {
+                let tail = tail.trim_start();
+                match tail.split_once(char::is_whitespace) {
+                    Some((value, after)) => {
+                        debaters = Some(split_names(value)?);
+                        rest = after;
+                    }
+                    None => {
+                        return Ok(DiscussLine {
+                            debaters: Some(split_names(tail)?),
+                            question: String::new(),
+                        })
+                    }
+                }
+            }
+            "--" => {
+                return Ok(DiscussLine {
+                    debaters,
+                    question: tail.trim_start().to_owned(),
+                })
+            }
+            other if other.starts_with("--") => {
+                return Err(render::wording::unknown_argument(other))
+            }
+            _ => {
+                return Ok(DiscussLine {
+                    debaters,
+                    question: rest.to_owned(),
+                })
+            }
+        }
+    }
+}
+
+/// `a,b` as two debater names.
+fn split_names(value: &str) -> Result<[String; 2], String> {
+    let names: Vec<String> = value
+        .split(',')
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect();
+    <[String; 2]>::try_from(names).map_err(|_| render::wording::needs_two_debaters(value))
+}
+
+/// The two debaters a discussion runs with: the ones asked for by name, or a draw from
+/// the pool.
+///
+/// A draw is the default because a pool exists to vary the pair; `seed` is injected (the
+/// clock at run time, a constant in tests) so the choice is reproducible.
+fn pick_debaters(
+    roster: &DiscussionRoster,
+    requested: Option<[String; 2]>,
+    seed: u64,
+) -> Result<[Debater; 2], String> {
+    let lookup = |name: &str| {
+        roster
+            .debater(name)
+            .cloned()
+            .ok_or_else(|| render::wording::unknown_debater(name, &roster.names()))
+    };
+    match requested {
+        Some([first, second]) => Ok([lookup(&first)?, lookup(&second)?]),
+        None => {
+            let (first, second) = crate::discussion::pick_pair(roster.debaters.len(), seed)
+                .ok_or_else(|| render::wording::discussion_no_roster().to_owned())?;
+            Ok([
+                roster.debaters[first].clone(),
+                roster.debaters[second].clone(),
+            ])
+        }
+    }
+}
+
+/// What to say about the pair *before* it debates: that a pool member sharing a vendor
+/// means two samples rather than two judgements.
+///
+/// Allowed — one subscription is not a reason to have no discussion at all — and said
+/// out loud rather than passing for the design's case (spec §15).
+fn advisory_lines(config: &Config, pair: &[Debater; 2]) -> Vec<String> {
+    let [first, second] = pair;
+    if first.model == second.model {
+        return vec![render::wording::discussion_same_model(
+            &render::wording::debater_label(&first.name, &first.model),
+        )];
+    }
+    if config.debaters_share_a_vendor(&first.model, &second.model) {
+        return vec![render::wording::discussion_one_vendor(
+            &render::wording::debater_label(&first.name, &first.model),
+            &render::wording::debater_label(&second.name, &second.model),
+        )];
+    }
+    Vec::new()
+}
+
+/// A seed for drawing a pair: the clock, mixed the way a session id's suffix is.
+///
+/// Not a PRNG — this decides which two of a handful of debaters argue — but it has to
+/// differ between two discussions started in the same second, which the nanos do.
+fn discussion_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    hasher.write_u128(nanos);
+    hasher.finish()
+}
+
+/// One provider and one set of session values per participant, from the roster.
+///
+/// The two debaters answer with the roster's models; the synthesizer answers with the
+/// routing table's landing point — with nothing routed, the first debater's model,
+/// which is what `SessionConfig::model_for(Synthesizer)` resolves to inside the
+/// assembly. Building its provider on exactly that model is what keeps the provider and
+/// the config that is sent to it in agreement.
+///
+/// Used by both ways in: the `discuss` subcommand (a discussion of its own) and
+/// `/discuss` (a discussion on the session the user is in).
+fn discussion_participants(
+    config: &Config,
+    pair: &[Debater; 2],
+) -> Result<(Vec<DebaterParts>, SynthesizerParts), String> {
+    let build = |model: &str| -> Result<(config::SessionConfig, Box<dyn crate::provider::Provider>), String> {
+        let values = config
+            .session_config(model)
+            .map_err(|error| error.to_string())?;
+        let provider = OpenAiProvider::build(config, model, stderr_warnings())
+            .map_err(|error| error.to_string())?;
+        Ok((values, Box::new(provider)))
+    };
+    let [first, second] = pair;
+    let (first_config, first_provider) = build(&first.model)?;
+    let (second_config, second_provider) = build(&second.model)?;
+    let synthesizer_model = config
+        .routing
+        .synthesizer_model
+        .clone()
+        .unwrap_or_else(|| first.model.clone());
+    let (synthesizer_config, synthesizer_provider) = build(&synthesizer_model)?;
+    Ok((
+        vec![
+            DebaterParts {
+                // The debater's **name** is its identity on the stream — not the model,
+                // which a pool can hand to two debaters at once (spec §5, §15).
+                speaker: SpeakerId::Debater(first.name.as_str().into()),
+                config: first_config,
+                provider: first_provider,
+                soul: first.soul.clone(),
+            },
+            DebaterParts {
+                speaker: SpeakerId::Debater(second.name.as_str().into()),
+                config: second_config,
+                provider: second_provider,
+                soul: second.soul.clone(),
+            },
+        ],
+        SynthesizerParts {
+            config: synthesizer_config,
+            provider: synthesizer_provider,
+        },
+    ))
+}
+
+/// `/discuss [问题]`: run a discussion **on this session's stream** (spec §15).
+///
+/// The loop owns the keyboard and the session owns the log, so this reads the roster
+/// out of the configuration, builds one provider per participant, and hands the
+/// protocol the session the user is already in: the debaters are its siblings, so they
+/// inherit its context and their rounds land in its stream. Everything the user needs
+/// to know — which models, which question, and how it ended — goes through the
+/// renderer rather than stderr, because the TUI owns the screen.
+async fn discuss_in_session(
+    harness: &mut Harness,
+    events: &mut ConsoleEvents,
+    config: &Config,
+    asked: String,
+) -> Result<(), crate::Error> {
+    let Some(roster) = config.discussion.clone() else {
+        harness.notice(&format!(
+            "fs-agent: {}",
+            render::wording::discussion_no_roster()
+        ));
+        return Ok(());
+    };
+    // `--debaters a,b` first, then the question: the flags belong to the command, and
+    // what is left of the line is what the user is asking about.
+    let line = match parse_discuss_line(&asked) {
+        Ok(line) => line,
+        Err(message) => {
+            harness.notice(&format!("fs-agent: {message}"));
+            return Ok(());
+        }
+    };
+    // A bare `/discuss` puts the thing this session was just asked to two models: "what
+    // we were talking about" is the question worth a second judgement.
+    let question = if line.question.trim().is_empty() {
+        match harness.last_question() {
+            Some(last) => last,
+            None => {
+                harness.notice(&format!(
+                    "fs-agent: {}",
+                    render::wording::discuss_needs_in_session_question()
+                ));
+                return Ok(());
+            }
+        }
+    } else {
+        line.question
+    };
+    let pair = match pick_debaters(&roster, line.debaters, discussion_seed()) {
+        Ok(pair) => pair,
+        Err(message) => {
+            harness.notice(&format!("fs-agent: {message}"));
+            return Ok(());
+        }
+    };
+    let (debaters, synthesizer) = match discussion_participants(config, &pair) {
+        Ok(parts) => parts,
+        Err(message) => {
+            harness.notice(&format!("fs-agent: {message}"));
+            return Ok(());
+        }
+    };
+    for line in advisory_lines(config, &pair) {
+        harness.notice(&format!("fs-agent: {line}"));
+    }
+    harness.notice(&format!(
+        "fs-agent: {}",
+        render::wording::discussion_starting(
+            &render::wording::debater_label(&pair[0].name, &pair[0].model),
+            &render::wording::debater_label(&pair[1].name, &pair[1].model),
+            &question,
+        )
+    ));
+
+    let signal = harness.cancel_signal();
+    // The future borrows the harness for as long as it runs, so it lives in its own
+    // scope: the notice below needs the harness back.
+    let outcome = {
+        let mut run =
+            Box::pin(harness.discuss(&question, debaters, synthesizer, roster.max_rounds));
+        loop {
+            tokio::select! {
+                result = &mut run => break result?,
+                event = events.recv() => match event {
+                    Some(FrontEndEvent::Cancel) => {
+                        if signal.is_cancelled() {
+                            std::process::exit(130);
+                        }
+                        signal.cancel();
+                    }
+                    // End of input or an explicit quit lets the discussion wind down the
+                    // same way a cancel does, so the stream still gets its ending.
+                    Some(FrontEndEvent::Quit) | None => signal.cancel(),
+                    // Plan mode is a session gesture, and the session is mid-discussion:
+                    // it waits until the rounds are over.
+                    Some(FrontEndEvent::TogglePlan) => {}
+                },
+            }
+        }
+    };
+    harness.notice(&format!(
+        "fs-agent: {}",
+        render::wording::discussion_ended(outcome.reason, outcome.rounds, &outcome.absent)
+    ));
+    Ok(())
+}
+
+/// Drive one discussion while still watching for the cancel gesture.
+///
+/// The same shape as [`run_one_turn`], for the same reason: the discussion owns the
+/// session, so the loop cannot read the keyboard itself and listens for gestures
+/// instead. A second press while a cancellation is already raised forces the process
+/// down — the stream still gets its ending, because the first press asked for it.
+async fn run_discussion(
+    harness: &mut DiscussionHarness,
+    events: &mut ConsoleEvents,
+    question: &str,
+) -> Result<crate::agent::DiscussionOutcome, crate::Error> {
+    let signal = harness.cancel_signal();
+    let mut run = Box::pin(harness.discuss(question));
+    loop {
+        tokio::select! {
+            result = &mut run => return result,
+            event = events.recv() => match event {
+                Some(FrontEndEvent::Cancel) => {
+                    if signal.is_cancelled() {
+                        std::process::exit(130);
+                    }
+                    signal.cancel();
+                }
+                // End of input or an explicit quit lets the discussion wind down the
+                // same way a cancel does, so the stream still gets its ending.
+                Some(FrontEndEvent::Quit) | None => signal.cancel(),
+                // Plan mode is a session gesture: a discussion has one question and no
+                // prompt to return to, so there is nothing here to toggle it for.
+                Some(FrontEndEvent::TogglePlan) => {}
+            },
+        }
+    }
+}
+
+/// The question: the words it was given with, or stdin.
+///
+/// A terminal gets a prompt — nothing has entered raw mode yet, so a cooked read still
+/// works — and a pipe is read to the end, which is what `echo 问题 | fs-agent discuss`
+/// needs.
+fn question(words: &[String]) -> Option<String> {
+    let typed = words.join(" ");
+    if !typed.trim().is_empty() {
+        return Some(typed);
+    }
+    if std::io::stdin().is_terminal() {
+        eprint!("{}", render::wording::question_prompt());
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        return match std::io::stdin().read_line(&mut line) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(line.trim().to_owned()).filter(|question| !question.is_empty()),
+        };
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).ok()?;
+    let text = text.trim().to_owned();
+    (!text.is_empty()).then_some(text)
 }
 
 /// Read a line, run it, repeat — until the user leaves or input ends.
@@ -384,8 +1026,14 @@ async fn interactive_loop(
     harness: &mut Harness,
     console: &ConsoleHandle,
     events: &mut ConsoleEvents,
+    config: &Config,
 ) -> ExitCode {
     loop {
+        // The loop is the only thing that knows whether something is running, so it
+        // tells the front end instead of letting it infer (spec §6). Nothing is running
+        // until a submission is taken, and the front end has to read that way from the
+        // first frame — including before this loop's first prompt.
+        console.set_running(false);
         // Between turns the loop is only waiting for a prompt; a gesture that
         // arrives here is handled without a turn in flight.
         let line = loop {
@@ -401,6 +1049,10 @@ async fn interactive_loop(
         let Some(submitted) = line else {
             return ExitCode::SUCCESS;
         };
+        // A line was taken, so from here until the next turn of this loop the session is
+        // running something — a turn, a discussion, an undo. `Ctrl-C` is the cancel
+        // gesture for all of them.
+        console.set_running(true);
         match submission(&submitted, |name| harness.has_skill(name)) {
             // An empty line: nothing to answer, so ask again. `None` from the prompt
             // is the only thing that ends input, and that is handled just above.
@@ -436,26 +1088,35 @@ async fn interactive_loop(
             }
             // `/<skill> [task]` is the user-side skill invocation (spec §9): the
             // one path a `disable-model-invocation: true` skill reserves for the
-            // user. The body goes into the context at the tail; the task (when one
-            // was typed) runs as an ordinary turn. A bare `/<skill>` only loads:
-            // the transcript must never show a user message the user did not type.
+            // user. The body goes into the context at the tail. A bare `/<skill>`
+            // runs there and then — the body *is* the instruction — and a task, when
+            // one was typed, follows it as an ordinary user message.
             Submission::Skill { name, task } => {
-                if let Err(error) = harness.load_skill(name) {
+                if task.is_empty() {
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::skill_started(name)
+                    ));
+                    if let Err(error) = run_one_turn(harness, events, TurnStart::Skill(name)).await
+                    {
+                        harness.notice(&format!(
+                            "fs-agent: {}",
+                            render::wording::error_report(&error)
+                        ));
+                    }
+                } else if let Err(error) = harness.load_skill(name) {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
-                    ));
-                } else if task.is_empty() {
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::skill_loaded_waiting(name)
                     ));
                 } else {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::skill_loaded(name)
                     ));
-                    if let Err(error) = run_one_turn(harness, events, &task).await {
+                    if let Err(error) =
+                        run_one_turn(harness, events, TurnStart::Prompt(&task)).await
+                    {
                         harness.notice(&format!(
                             "fs-agent: {}",
                             render::wording::error_report(&error)
@@ -463,10 +1124,21 @@ async fn interactive_loop(
                     }
                 }
             }
+            // `/discuss [问题]`: a discussion **on this session's stream** (spec §15).
+            // The debaters are siblings of this session, so they inherit its context and
+            // append their rounds to its log; the user is back at the prompt afterwards.
+            Submission::Discuss(question) => {
+                if let Err(error) = discuss_in_session(harness, events, config, question).await {
+                    harness.notice(&format!(
+                        "fs-agent: {}",
+                        render::wording::error_report(&error)
+                    ));
+                }
+            }
             // Everything else is a prompt, newlines and all: the transcript shows what
             // the user wrote, as one message (spec §12).
             Submission::Prompt(text) => {
-                if let Err(error) = run_one_turn(harness, events, text).await {
+                if let Err(error) = run_one_turn(harness, events, TurnStart::Prompt(text)).await {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
@@ -475,6 +1147,24 @@ async fn interactive_loop(
             }
         }
     }
+}
+
+/// The task or question that follows a command's name on its first line: the rest of
+/// that line, then every line below it, as written. Only trailing blank lines go, so a
+/// continuation of nothing but blanks is not a task.
+///
+/// One function for `/<skill>` and `/discuss` both, because "what the user wrote after
+/// the command" is one rule and two copies of it would drift.
+fn task_of(inline: &str, rest: &str) -> String {
+    let mut task = inline.to_owned();
+    let rest = rest.trim_end_matches('\n');
+    if !rest.trim().is_empty() {
+        if !task.is_empty() {
+            task.push('\n');
+        }
+        task.push_str(rest);
+    }
+    task
 }
 
 /// What one submission asks for (spec §12).
@@ -496,6 +1186,10 @@ enum Submission<'a> {
         name: &'a str,
         task: String,
     },
+    /// `/discuss [问题]`: run a discussion **on this session's stream** (spec §15).
+    /// The question is empty when the user typed no question — the loop then puts the
+    /// session's last question to the debaters.
+    Discuss(String),
     /// The whole submission, newlines and all, as one prompt.
     Prompt(&'a str),
 }
@@ -541,6 +1235,12 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
                 Some((name, task)) => (name, task.trim()),
                 None => (rest_of_line, ""),
             };
+            // `/discuss [问题]` is the one built-in with an argument, so it takes the
+            // same shape a skill's task does: the rest of the line, then every line
+            // below it. A bare `/discuss` leaves the question to the loop.
+            if name == "discuss" {
+                return Submission::Discuss(task_of(inline, rest));
+            }
             if !has_skill(name) {
                 if rest.trim().is_empty() {
                     return Submission::Unknown(first);
@@ -548,22 +1248,24 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
                 // A pasted paragraph that happens to open with `/` is a paragraph.
                 return Submission::Prompt(text);
             }
-            // The task is the rest of the first line plus every line below it, as
-            // written: only trailing blank lines go. A continuation of nothing but
-            // blanks is not a task, so a bare `/<skill>` still only loads.
-            let mut task = inline.to_owned();
-            let rest = rest.trim_end_matches('\n');
-            if !rest.trim().is_empty() {
-                if !task.is_empty() {
-                    task.push('\n');
-                }
-                task.push_str(rest);
+            Submission::Skill {
+                name,
+                task: task_of(inline, rest),
             }
-            Submission::Skill { name, task }
         }
         // Not a command at all: the whole text, however many lines, is the prompt.
         _ => Submission::Prompt(text),
     }
+}
+
+/// What starts the turn the loop is about to drive.
+enum TurnStart<'a> {
+    /// A prompt the user typed: it becomes a `user` message and the turn runs.
+    Prompt(&'a str),
+    /// A bare `/<skill>`: [`Harness::run_skill`] loads the body, which projects as a
+    /// `user` message of its own, so no prompt is invented for it. The transcript
+    /// must never show words the user did not type.
+    Skill(&'a str),
 }
 
 /// Run one turn while still watching for the cancel gesture.
@@ -576,10 +1278,15 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
 async fn run_one_turn(
     harness: &mut Harness,
     events: &mut ConsoleEvents,
-    input: &str,
+    start: TurnStart<'_>,
 ) -> Result<(), crate::Error> {
     let signal = harness.cancel_signal();
-    let mut turn = Box::pin(harness.run_turn(input));
+    let mut turn = Box::pin(async move {
+        match start {
+            TurnStart::Prompt(input) => harness.run_turn(input).await,
+            TurnStart::Skill(name) => harness.run_skill(name).await,
+        }
+    });
     loop {
         tokio::select! {
             result = &mut turn => return result.map(|_| ()),
@@ -1587,7 +2294,7 @@ fn render_entry(entry: &Entry) -> String {
         Entry::History {
             reason, summary, ..
         } => render::wording::history(*reason, summary.as_deref()),
-        Entry::Context { source, .. } => render::wording::context_injected(*source),
+        Entry::Context { source, .. } => render::wording::context_injected(source.clone()),
     }
 }
 
@@ -1923,5 +2630,175 @@ mod tests {
             read("  第一行\n第二行  "),
             Submission::Prompt("  第一行\n第二行  ")
         );
+    }
+
+    // --- the in-session discussion (spec §15) -------------------------------
+
+    #[test]
+    fn a_session_discussion_takes_a_question_or_leaves_it_to_the_loop() {
+        // The question is the rest of the line plus whatever follows it, exactly as a
+        // skill's task is: a discussion question can be a paragraph.
+        assert_eq!(
+            read("/discuss 要不要换掉权限模型"),
+            Submission::Discuss("要不要换掉权限模型".to_owned())
+        );
+        assert_eq!(
+            read("/discuss 第一行\n第二行\n\n"),
+            Submission::Discuss("第一行\n第二行".to_owned())
+        );
+        // Bare: the loop puts the session's last question to the debaters.
+        assert_eq!(read("/discuss"), Submission::Discuss(String::new()));
+        assert_eq!(read("  /discuss   "), Submission::Discuss(String::new()));
+        // Only that name is a command: a skill called `discussion` is a skill.
+        assert_eq!(read("/discussion x"), Submission::Unknown("/discussion x"));
+    }
+
+    // --- the pool a discussion draws from (spec §15) -------------------------
+
+    use super::{parse_discuss_line, pick_debaters, split_names};
+    use crate::config::{Debater, DiscussionRoster};
+
+    fn pool() -> DiscussionRoster {
+        DiscussionRoster {
+            debaters: vec![
+                Debater {
+                    name: "保守".to_owned(),
+                    model: "kimi-k3".to_owned(),
+                    soul: Some("保守".to_owned()),
+                },
+                Debater {
+                    name: "激进".to_owned(),
+                    model: "deepseek-v4-pro".to_owned(),
+                    soul: None,
+                },
+                Debater {
+                    name: "审查".to_owned(),
+                    model: "deepseek-flash".to_owned(),
+                    soul: None,
+                },
+            ],
+            max_rounds: None,
+        }
+    }
+
+    fn names(pair: &[Debater; 2]) -> [String; 2] {
+        [pair[0].name.clone(), pair[1].name.clone()]
+    }
+
+    #[test]
+    fn a_discussion_draws_a_pair_or_takes_the_one_it_is_given() {
+        // Named: exactly those two, in the order asked for.
+        let picked =
+            pick_debaters(&pool(), Some(["审查".to_owned(), "保守".to_owned()]), 0).unwrap();
+        assert_eq!(names(&picked), ["审查", "保守"]);
+        assert_eq!(picked[0].model, "deepseek-flash");
+
+        // Drawn: two distinct pool members, and the seed decides which.
+        let first = pick_debaters(&pool(), None, 0).unwrap();
+        assert_eq!(names(&first), ["保守", "激进"]);
+        let second = pick_debaters(&pool(), None, 2).unwrap();
+        assert_eq!(names(&second), ["保守", "审查"], "the seed moves the pair");
+
+        // A name the pool does not have says what it does have.
+        let error =
+            pick_debaters(&pool(), Some(["保守".to_owned(), "没有".to_owned()]), 0).unwrap_err();
+        assert!(error.contains("没有"), "{error}");
+        assert!(error.contains("`审查`"), "{error}");
+    }
+
+    #[test]
+    fn a_discussion_command_reads_its_flags_before_the_question() {
+        let line = parse_discuss_line("--debaters 保守,激进 换个角度再看").unwrap();
+        assert_eq!(line.debaters, Some(["保守".to_owned(), "激进".to_owned()]));
+        assert_eq!(line.question, "换个角度再看");
+
+        // No question: the loop supplies the session's last one.
+        let bare = parse_discuss_line("--debaters 保守,激进").unwrap();
+        assert_eq!(bare.question, "");
+        assert_eq!(bare.debaters.unwrap(), ["保守", "激进"]);
+
+        // A question with no flags, newlines and all.
+        let plain = parse_discuss_line("第一行\n第二行").unwrap();
+        assert_eq!(plain.debaters, None);
+        assert_eq!(plain.question, "第一行\n第二行");
+
+        // Anything after `--` is the question, so a question may look like a flag.
+        let after = parse_discuss_line("-- --看起来像参数的题目").unwrap();
+        assert_eq!(after.question, "--看起来像参数的题目");
+
+        assert!(parse_discuss_line("--nope x")
+            .unwrap_err()
+            .contains("--nope"));
+        assert!(split_names("保守").unwrap_err().contains("两个名字"));
+        assert_eq!(
+            split_names("保守, 激进").unwrap(),
+            ["保守".to_owned(), "激进".to_owned()],
+            "whitespace after the comma is fine"
+        );
+    }
+
+    #[test]
+    fn the_discuss_subcommand_takes_the_same_selection() {
+        let parsed = discuss_args(&["--debaters", "保守,激进", "问题"]).unwrap();
+        assert_eq!(parsed.debaters.unwrap(), ["保守", "激进"]);
+        assert_eq!(parsed.words, vec!["问题".to_owned()]);
+        assert!(discuss_args(&["--debaters", "只有一个", "问题"])
+            .unwrap_err()
+            .contains("两个名字"));
+    }
+
+    // --- the discussion's arguments (spec §15) ------------------------------
+
+    use super::{parse_discuss, question, DiscussArgs};
+
+    fn discuss_args(args: &[&str]) -> Result<DiscussArgs, String> {
+        parse_discuss(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_discussion_question_is_every_word_that_is_not_a_flag() {
+        let parsed = discuss_args(&["把", "X", "换掉", "风险在哪"]).unwrap();
+        assert_eq!(parsed.words.join(" "), "把 X 换掉 风险在哪");
+        assert_eq!(
+            question(&parsed.words).as_deref(),
+            Some("把 X 换掉 风险在哪")
+        );
+        // Nothing to ask: the caller reads stdin instead.
+        assert_eq!(question(&[]), None);
+        assert_eq!(question(&["   ".to_owned()]), None);
+    }
+
+    #[test]
+    fn a_discussion_reads_the_renderer_and_the_paths_it_is_given() {
+        let parsed =
+            discuss_args(&["--tui", "--cwd", "/tmp/x", "--config", "/tmp/c.toml", "q"]).unwrap();
+        assert!(parsed.tui);
+        assert!(!parsed.plain);
+        assert_eq!(parsed.cwd.unwrap().to_str(), Some("/tmp/x"));
+        assert_eq!(parsed.config.unwrap().to_str(), Some("/tmp/c.toml"));
+        assert_eq!(parsed.words, vec!["q".to_owned()]);
+    }
+
+    #[test]
+    fn a_discussion_rejects_what_it_cannot_honour() {
+        // Two renderers, one process.
+        assert!(discuss_args(&["--plain", "--tui", "q"])
+            .unwrap_err()
+            .contains("互斥"));
+        // A flag that does not exist, and a flag missing its value.
+        assert!(discuss_args(&["--model", "kimi-k3"])
+            .unwrap_err()
+            .contains("--model"));
+        assert!(discuss_args(&["--cwd"]).unwrap_err().contains("--cwd"));
+        // There is no `--continue`: a discussion is one question, one harness.
+        assert!(discuss_args(&["--continue"])
+            .unwrap_err()
+            .contains("--continue"));
+    }
+
+    #[test]
+    fn a_question_that_looks_like_a_flag_goes_after_a_double_dash() {
+        let parsed = discuss_args(&["--", "--这段以横线开头"]).unwrap();
+        assert_eq!(parsed.words, vec!["--这段以横线开头".to_owned()]);
     }
 }

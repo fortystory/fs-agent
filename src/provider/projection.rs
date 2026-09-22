@@ -31,7 +31,9 @@
 
 use super::capability::ModelCaps;
 use super::{Message, ToolCall};
-use crate::events::{hook_format, superseded_seqs, Event, EventPayload, SpeakerId, ToolCallId};
+use crate::events::{
+    hook_format, superseded_seqs, ContextSource, Event, EventPayload, SpeakerId, ToolCallId,
+};
 
 /// Longest sanitized participant name sent in a `name` field.
 ///
@@ -84,7 +86,15 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             // into a single message rather than becoming consecutive same-role
             // messages. A mid-session injection (plan mode, ticket 15) has
             // history before it and so stays its own message.
-            EventPayload::ContextInjected { content, .. } => {
+            EventPayload::ContextInjected { source, content } => {
+                // A persona belongs to the participant it describes: it is that
+                // debater's own instruction, and the other side — which it is arguing
+                // against — has no business reading it. Every other injection is the
+                // user speaking to the whole session (the project rules, the skills
+                // catalog, plan mode), so it reaches everyone.
+                if matches!(source, ContextSource::Persona(_)) && !mine {
+                    continue;
+                }
                 close_pending_if_settled(&mut messages, &mut pending, speaker);
                 flush_others(&mut messages, &mut others, &mut head_emitted);
                 let leading = at_pinned_head(&messages);
@@ -354,7 +364,10 @@ impl OtherBlock {
                 names.push(&segment.speaker);
             }
         }
-        let name = (names.len() == 1).then(|| names[0].to_owned());
+        // The field, not the prefix: the prefix above is written verbatim so two
+        // personas of one model stay apart, and this is sanitized because a vendor's
+        // accepted `name` charset is undocumented.
+        let name = (names.len() == 1).then(|| sanitize_name(names[0]));
         let content = self
             .segments
             .iter()
@@ -468,19 +481,34 @@ fn close_pending_if_settled(
         content: pending.content,
         reasoning_content: pending.reasoning_content,
         tool_calls: pending.tool_calls,
-        name: Some(speaker_name(speaker)),
+        name: Some(wire_name(speaker)),
     });
     messages.extend(pending.results);
 }
 
-/// The model-side name for a speaker, sanitized to `[A-Za-z0-9_-]`.
+/// The name a speaker is **called**, verbatim: what the body prefix writes and what
+/// the other side has to be able to tell apart.
 ///
-/// No vendor documents a character set or length for `name`; the body prefix
-/// carries the same information, so a provider that ignores or truncates this
-/// loses nothing (spec §5). `SpeakerId`'s display form is the single source of
-/// the raw value (`executor:<id>` sanitizes to `executor-<id>`).
+/// A debater is a **persona**: its name is chosen (`[discussion] debaters =
+/// [{ name = "保守", … }]`), so it can be any word the user likes — `保守` is a name a
+/// reader and a model can both use, and mangling it would leave two sides of one
+/// discussion indistinguishable. An executor's identity is `executor-<id>`, the shape
+/// the display form already had.
+///
+/// The **wire `name` field** is a different question: [`wire_name`] sanitizes it to
+/// `[A-Za-z0-9_-]`, because no vendor documents a character set for it. The body prefix
+/// carries the same information, so a provider that ignores or truncates that field
+/// loses nothing (spec §5).
 fn speaker_name(speaker: &SpeakerId) -> String {
-    sanitize_name(&speaker.to_string())
+    match speaker {
+        SpeakerId::Executor(id) => format!("executor-{id}"),
+        other => other.to_string(),
+    }
+}
+
+/// The same name, in the shape a `name` field is allowed to take.
+fn wire_name(speaker: &SpeakerId) -> String {
+    sanitize_name(&speaker_name(speaker))
 }
 
 fn sanitize_name(raw: &str) -> String {

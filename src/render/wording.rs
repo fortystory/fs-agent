@@ -54,6 +54,106 @@ pub fn round_ended(round: u32, reason: StopReason) -> String {
     format!("第 {round} 轮结束：{}", stop_reason(reason))
 }
 
+/// What `fs-agent discuss` reports once the discussion is over and the screen is
+/// back: why it stopped, how many rounds actually ran, and who was absent.
+///
+/// The absent side is named because it is the one thing the stream records but a
+/// reader can miss: a round with one answer is not a round of agreement.
+pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -> String {
+    let mut line = format!("讨论结束：{}（跑了 {rounds} 轮）", stop_reason(reason));
+    if !absent.is_empty() {
+        let names = absent
+            .iter()
+            .map(speaker_label)
+            .collect::<Vec<_>>()
+            .join("、");
+        line.push_str(&format!("；缺席：{names}"));
+    }
+    line
+}
+
+/// Where a discussion can be read back from, for the line printed after the alt
+/// screen has been restored: the TUI's transcript does not survive the process, so
+/// the session id is the durable answer.
+pub fn discussion_replay(session_id: &str) -> String {
+    format!("会话 {session_id}；复盘：fs-agent sessions show {session_id}")
+}
+
+/// The pair that is debating, for a front end that has one field to name it in.
+pub fn discussion_pair(first: &str, second: &str) -> String {
+    format!("{first} × {second}")
+}
+
+/// One debater as a notice names it: `保守（deepseek-v4-pro）`.
+///
+/// The model is shown beside the name because the name is an identity the user chose
+/// while the model is what actually answers — and with a pool the two can differ per
+/// discussion. The shorthand case (a debater named after its model) says it once.
+pub fn debater_label(name: &str, model: &str) -> String {
+    if name == model {
+        name.to_owned()
+    } else {
+        format!("{name}（{model}）")
+    }
+}
+
+/// `--debaters` with the wrong shape.
+pub fn needs_two_debaters(value: &str) -> String {
+    format!("--debaters 需要两个名字（逗号分隔，例如 `--debaters 保守,激进`），得到 `{value}`")
+}
+
+/// `--debaters` naming something the pool does not have.
+pub fn unknown_debater(name: &str, pool: &[&str]) -> String {
+    format!(
+        "池子里没有叫 `{name}` 的讨论者；可用：{}",
+        pool.iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join("、")
+    )
+}
+
+/// `/discuss` is about to run: which two models, and what they are being asked.
+///
+/// The question is named because it may not have been typed — a bare `/discuss` puts
+/// the session's last question to the debaters, and the user should see which one that
+/// was before two models start answering it.
+pub fn discussion_starting(first: &str, second: &str, question: &str) -> String {
+    format!(
+        "开始讨论：{first} × {second}；题目：{}",
+        first_non_empty_line(question)
+    )
+}
+
+/// The first non-empty line of a block of text, trimmed — a question or a task can be
+/// a paragraph, and a notice has one line.
+fn first_non_empty_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+}
+
+/// The advisory line for a roster whose two debaters are the same model.
+///
+/// Allowed — one expired subscription is not a reason to have no discussion at all —
+/// but the design's premise is two independent judgements, and a single model asked
+/// twice leaves only the sampling noise between them.
+pub fn discussion_same_model(model: &str) -> String {
+    format!("提示：两个讨论者都是 {model}——同一个模型问两遍，剩下的差异只有采样噪声")
+}
+
+/// The advisory line for a roster that is one vendor with two models.
+pub fn discussion_one_vendor(first: &str, second: &str) -> String {
+    format!("提示：两个讨论者来自同一厂商（{first} × {second}），多样性比设计假设的弱")
+}
+
+/// The prompt `fs-agent discuss` puts on a terminal when no question was given on
+/// the command line.
+pub fn question_prompt() -> &'static str {
+    "问题> "
+}
+
 /// The whole session closing.
 pub fn session_ended(reason: StopReason) -> String {
     format!("会话结束：{}", stop_reason(reason))
@@ -269,33 +369,197 @@ pub fn decision_source(source: DecisionSource) -> &'static str {
     }
 }
 
-/// The TUI's permission input line: what would run, and the keys that answer it.
-pub fn permission_prompt(tool_name: &str, args: &str) -> String {
-    format!(
-        "{}？{PERMISSION_CHOICES} ",
-        permission_asked(Some(tool_name), args)
-    )
+/// One key on a question's button row: the key that answers, and what that answer
+/// means.
+///
+/// The TUI's overlay paints one `[key] label` per entry and the plain console joins
+/// the same table into its single input line, so a question cannot grow a key on one
+/// front end that the other does not offer (spec §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Choice {
+    /// The key that answers, shown literally.
+    pub key: char,
+    /// What that key answers.
+    pub label: &'static str,
+}
+
+/// The keys that answer a permission question.
+pub static PERMISSION_CHOICES: [Choice; 3] = [
+    Choice {
+        key: 'y',
+        label: "允许",
+    },
+    Choice {
+        key: 'a',
+        label: "总是允许",
+    },
+    Choice {
+        key: 'n',
+        label: "拒绝",
+    },
+];
+
+/// The keys that answer a plan-mode conflict.
+pub static PLAN_CHOICES: [Choice; 3] = [
+    Choice {
+        key: 'o',
+        label: "覆盖",
+    },
+    Choice {
+        key: 'a',
+        label: "追加",
+    },
+    Choice {
+        key: 'k',
+        label: "保留",
+    },
+];
+
+/// The keys that answer the oversized-paste question.
+pub static PASTE_CHOICES: [Choice; 2] = [
+    Choice {
+        key: 'y',
+        label: "粘贴",
+    },
+    Choice {
+        key: 'n',
+        label: "取消",
+    },
+];
+
+/// The keys that answer the clear-draft question.
+pub static CLEAR_CHOICES: [Choice; 2] = [
+    Choice {
+        key: 'y',
+        label: "清空",
+    },
+    Choice {
+        key: 'n',
+        label: "保留",
+    },
+];
+
+/// A button row as one line of text: `[y] 允许 / [a] 总是允许 / [n] 拒绝`.
+///
+/// This is what a plain console's input line uses. The TUI paints the same entries
+/// as spans of its own, with the key picked out (spec §9).
+pub fn choices_text(choices: &[Choice]) -> String {
+    choices
+        .iter()
+        .map(|choice| format!("[{}] {}", choice.key, choice.label))
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+/// The **title** row of a permission overlay: what is being asked, in the tool's
+/// own name (`权限询问：bash`).
+pub fn permission_title(tool_name: &str) -> String {
+    permission_asked(Some(tool_name), "")
+}
+
+/// The **summary** row of a permission overlay: one plain sentence saying what the
+/// call *does*, for a reader who cannot be expected to read the arguments.
+///
+/// A command can be long enough that "yes or no" is a question about a wall of text;
+/// the summary is what turns it back into a question about an action — it would *run
+/// a shell command*, *overwrite a file*, *modify a file*. It says only what the tool
+/// is for, never what a particular argument means, because a guess about the
+/// arguments would be exactly the kind of reading this row exists to save the user
+/// (spec §9).
+///
+/// Names come from the tool table's own constants rather than from string literals,
+/// so renaming a tool cannot quietly leave its sentence behind. A name the table does
+/// not know still gets one: tools can also be declared in configuration.
+pub fn permission_summary(tool_name: &str) -> String {
+    match tool_name {
+        crate::tools::BASH_TOOL => {
+            "在你的工作区里执行一条 shell 命令（可以读写文件、访问网络）".to_owned()
+        }
+        crate::tools::READ_FILE => "读取一个文件的内容".to_owned(),
+        crate::tools::WRITE_FILE => "写入一个文件（新建，或者整体覆盖已有的）".to_owned(),
+        crate::tools::EDIT_FILE => "修改一个文件里的一段内容".to_owned(),
+        crate::tools::TASK_TOOL => "派出一个执行者去干活，它有自己的轮数预算".to_owned(),
+        crate::context::skills::SKILL_TOOL => "把一份技能说明加载进上下文".to_owned(),
+        crate::context::repo_map::REPO_MAP_TOOL => {
+            "扫一遍仓库，生成一份符号地图（只读）".to_owned()
+        }
+        declared if crate::tools::is_custom_tool(declared) => match custom_tool_parts(declared) {
+            Some((namespace, tool)) => format!("运行你在配置里声明的自定义工具 {namespace}/{tool}"),
+            None => "运行一个你在配置里声明的自定义工具".to_owned(),
+        },
+        other => format!("调用 {other} 工具"),
+    }
+}
+
+/// The `(namespace, tool)` a declared tool's wire name carries, when it has both.
+///
+/// `custom__git__status` reads back as `("git", "status")`; anything else is `None`
+/// and gets the generic sentence.
+fn custom_tool_parts(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix(crate::config::CUSTOM_TOOL_PREFIX)?;
+    let (namespace, tool) = rest.split_once(crate::config::CUSTOM_TOOL_SEPARATOR)?;
+    (!namespace.is_empty() && !tool.is_empty()).then_some((namespace, tool))
+}
+
+/// The **body** row of a permission overlay: the concrete call the question is
+/// about (`bash（command=rm -rf /）`). The tool name leads it so the row stands on
+/// its own under the title.
+pub fn permission_call(tool_name: &str, args: &str) -> String {
+    if args.is_empty() {
+        tool_name.to_owned()
+    } else {
+        format!("{tool_name}（{args}）")
+    }
 }
 
 /// The plain console's permission input line, which also has room for the gate's
 /// reason.
 pub fn permission_prompt_with_context(tool_name: &str, args: &str, reason: &str) -> String {
     format!(
-        "{}？原因：{reason} {PERMISSION_CHOICES} ",
-        permission_asked(Some(tool_name), args)
+        "{}？原因：{reason} {} ",
+        permission_asked(Some(tool_name), args),
+        choices_text(&PERMISSION_CHOICES)
     )
 }
 
-/// The plan-mode conflict input line.
-pub fn plan_conflict_prompt(path: &str) -> String {
-    format!("{path} 已存在：{PLAN_CHOICES} ")
+/// The **title** row of the plan-mode conflict overlay.
+pub fn plan_conflict_title() -> &'static str {
+    "计划文件冲突"
 }
 
-/// The keys that answer a permission question. Key names stay literal.
-const PERMISSION_CHOICES: &str = "[y] 允许 / [a] 总是允许 / [n] 拒绝";
+/// The **body** row of the plan-mode conflict overlay: the path already there.
+pub fn plan_conflict_body(path: &str) -> String {
+    format!("{path} 已存在")
+}
 
-/// The keys that answer a plan-mode conflict. Key names stay literal.
-const PLAN_CHOICES: &str = "[o] 覆盖 / [a] 追加 / [k] 保留";
+/// The plain console's plan-conflict input line.
+pub fn plan_conflict_prompt(path: &str) -> String {
+    format!(
+        "{}：{} ",
+        plan_conflict_body(path),
+        choices_text(&PLAN_CHOICES)
+    )
+}
+
+/// The **title** row of the oversized-paste question.
+pub fn paste_title() -> &'static str {
+    "粘贴确认"
+}
+
+/// The **body** row of the oversized-paste question.
+pub fn paste_body(chars: usize) -> String {
+    format!("粘贴 {chars} 字符")
+}
+
+/// The **title** row of the clear-draft question.
+pub fn clear_draft_title() -> &'static str {
+    "清空输入"
+}
+
+/// The **body** row of the clear-draft question.
+pub fn clear_draft_body() -> &'static str {
+    "草稿有多行，Esc 会把它们全部丢掉"
+}
 
 /// The human's `[speaker]` prefix: one generator, used by every human-facing
 /// renderer, and deliberately not the model-side projection prefix (spec §5).
@@ -312,16 +576,19 @@ pub fn speaker_label(speaker: &SpeakerId) -> String {
 
 /// A pinned context injection, with its source named rather than debug-printed.
 pub fn context_injected(source: ContextSource) -> String {
-    format!("[上下文注入：{}]", context_source(source))
+    format!("[上下文注入：{}]", context_source(&source))
 }
 
 /// The Chinese name of a context source.
-pub fn context_source(source: ContextSource) -> &'static str {
+pub fn context_source(source: &ContextSource) -> String {
     match source {
-        ContextSource::AgentsMd => "AGENTS.md",
-        ContextSource::SkillsCatalog => "技能清单",
-        ContextSource::Skill => "技能",
-        ContextSource::PlanMode => "计划模式",
+        ContextSource::AgentsMd => "AGENTS.md".to_owned(),
+        ContextSource::SkillsCatalog => "技能清单".to_owned(),
+        ContextSource::Skill => "技能".to_owned(),
+        ContextSource::PlanMode => "计划模式".to_owned(),
+        // The one injection that belongs to **one** participant, so it says which:
+        // a reader of the transcript should see who was given a persona.
+        ContextSource::Persona(name) => format!("人物：{name}"),
     }
 }
 
@@ -376,6 +643,14 @@ const KEY_HINTS: [&str; 5] = [
 /// is worse than one that shows fewer hints.
 const EXIT_HINT: &str = "ctrl-c 退出";
 
+/// The hints a front end shows when it is **not** reading lines: a one-shot
+/// `discuss`, or the stretch of an interactive session with a turn in flight.
+///
+/// Only what the keyboard really does then — stop the run, and read back what it
+/// produced. No `enter 发送` (nothing would be sent) and no `shift+tab 计划` (that
+/// gesture is the interactive loop's, and a discussion has no prompt to return to).
+const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
+
 /// The status line for a terminal `width` **columns** wide.
 ///
 /// The hints fill from the left with [`EXIT_HINT`] reserved at their end, and the
@@ -389,25 +664,41 @@ const EXIT_HINT: &str = "ctrl-c 退出";
 /// leading item from the width where `就绪 · ` fits in front of that run (45
 /// columns), so the whole line holds 3, 5, 6 and 7 items respectively.
 pub fn status_line(busy: bool, width: u16) -> String {
+    hint_line(status_word(busy), &KEY_HINTS, width)
+}
+
+/// The status line for a front end that is not reading lines: the same ladder over
+/// [`VIEWER_HINTS`].
+///
+/// The distinction is not cosmetic. The hints describe what the keyboard does, and a
+/// session that is mid-turn — or a `discuss` run, which never asks for a line at all
+/// — would otherwise promise `enter 发送` for a key that sends nothing (spec §6).
+pub fn viewer_status_line(busy: bool, width: u16) -> String {
+    hint_line(status_word(busy), &VIEWER_HINTS, width)
+}
+
+/// The ladder both status lines share: hints from the left, the way out reserved at
+/// the end, and the state word leading only when it still fits.
+fn hint_line(state: &str, hints: &[&str], width: u16) -> String {
     let exit = EXIT_HINT.cell_width();
-    let mut hints = String::new();
-    for hint in &KEY_HINTS {
-        let candidate = if hints.is_empty() {
+    let mut chosen = String::new();
+    for hint in hints {
+        let candidate = if chosen.is_empty() {
             (*hint).to_owned()
         } else {
-            format!("{hints} · {hint}")
+            format!("{chosen} · {hint}")
         };
         if candidate.cell_width() + " · ".cell_width() + exit > width {
             break;
         }
-        hints = candidate;
+        chosen = candidate;
     }
-    let run = if hints.is_empty() {
+    let run = if chosen.is_empty() {
         EXIT_HINT.to_owned()
     } else {
-        format!("{hints} · {EXIT_HINT}")
+        format!("{chosen} · {EXIT_HINT}")
     };
-    let with_state = format!("{} · {run}", status_word(busy));
+    let with_state = format!("{state} · {run}");
     if with_state.cell_width() <= width {
         with_state
     } else {
@@ -485,26 +776,6 @@ pub fn cache_pair(cached: u64, miss: u64) -> String {
     pair(cached, miss)
 }
 
-/// The question an oversized paste asks before it is taken (spec §7).
-///
-/// Every question carries the keys that answer it, the way [`PERMISSION_CHOICES`] and
-/// [`PLAN_CHOICES`] do: the overlay has room for one line, and a question without its
-/// keys is a question the reader has to guess at.
-pub fn paste_confirm(chars: usize) -> String {
-    format!("粘贴 {chars} 字符？{PASTE_CHOICES}")
-}
-
-/// The keys that answer the oversized-paste question.
-const PASTE_CHOICES: &str = "[y] 粘贴 / [n] 取消";
-
-/// The question `Esc` asks before it throws a multi-line draft away.
-pub fn clear_draft_confirm() -> String {
-    format!("清空输入？{CLEAR_CHOICES}")
-}
-
-/// The keys that answer the clear-draft question.
-const CLEAR_CHOICES: &str = "[y] 清空 / [n] 保留";
-
 /// The indicator that says how much arrived while the viewport was scrolled away,
 /// and that the block is the way back (spec §4).
 pub fn new_content(rows: usize) -> String {
@@ -568,14 +839,66 @@ pub fn nothing_to_undo() -> &'static str {
     "没有可撤销的修改"
 }
 
+/// A slash command as a menu offers it and a hint names it.
+///
+/// This is the **human-facing** list, the one the `/` menu and the unknown-command
+/// text are built from. What a submission *means* stays the loop's parser; a name
+/// here that the parser did not know would be a bug, not a policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Command {
+    /// The name without its slash, exactly as it must be typed.
+    pub name: &'static str,
+    /// One line saying what it does.
+    pub description: &'static str,
+}
+
+/// The built-in slash commands, in the order every list shows them.
+pub static BUILT_IN_COMMANDS: [Command; 5] = [
+    Command {
+        name: "undo",
+        description: "回滚上一次编辑",
+    },
+    Command {
+        name: "plan",
+        description: "进入硬计划模式",
+    },
+    Command {
+        name: "endplan",
+        description: "退出硬计划模式",
+    },
+    Command {
+        name: "discuss",
+        description: "起一场多角色讨论（用本会话的上下文）",
+    },
+    Command {
+        name: "quit",
+        description: "退出会话",
+    },
+];
+
+/// The built-ins as one hint line: `可用：/undo、/plan、/endplan、/discuss、/quit`.
+///
+/// One generator, so the menu's list and the unknown-command text cannot drift
+/// apart.
+pub fn built_in_names() -> String {
+    format!(
+        "可用：{}",
+        BUILT_IN_COMMANDS
+            .iter()
+            .map(|command| format!("/{}", command.name))
+            .collect::<Vec<_>>()
+            .join("、")
+    )
+}
+
 /// A slash-command the loop does not know. It names the built-ins, and — when
 /// there are any — the skills the user can load by name, so `/` stays
 /// discoverable.
 pub fn unknown_command(command: &str, skills: &[&str]) -> String {
-    const BUILT_INS: &str = "可用：/undo、/plan、/endplan、/quit";
+    let built_ins = built_in_names();
     const LISTED: usize = 8;
     if skills.is_empty() {
-        return format!("未知命令 {command}（{BUILT_INS}，或直接输入 /<技能名>）");
+        return format!("未知命令 {command}（{built_ins}，或直接输入 /<技能名>）");
     }
     let mut names: Vec<String> = skills
         .iter()
@@ -586,20 +909,21 @@ pub fn unknown_command(command: &str, skills: &[&str]) -> String {
         names.push("…".to_owned());
     }
     format!(
-        "未知命令 {command}（{BUILT_INS}；技能：{}）",
+        "未知命令 {command}（{built_ins}；技能：{}）",
         names.join("、")
     )
 }
 
-/// The user loaded a skill by name, with a task to run.
+/// The user loaded a skill by name, to run right away.
 pub fn skill_loaded(name: &str) -> String {
     format!("已加载技能 {name}")
 }
 
-/// A bare `/<skill>`: the body is loaded and the loop waits for the task, so the
-/// transcript never shows a user message the user did not type.
-pub fn skill_loaded_waiting(name: &str) -> String {
-    format!("已加载技能 {name}；请输入你的任务。")
+/// A bare `/<skill>`: the body is loaded **and the turn starts**, because the body
+/// is the instruction. A skill that waited for a task would be a command the user
+/// had to invoke twice.
+pub fn skill_started(name: &str) -> String {
+    format!("已加载技能 {name}，按技能正文开始")
 }
 
 /// `/plan` succeeded.
@@ -991,11 +1315,14 @@ pub fn help_main() -> String {
     format!(
         "fs-agent {}\n\n  \
          usage: fs-agent [--plain|--tui] [--continue] [--config PATH] [--model ID] [--cwd PATH]\n         \
+         fs-agent discuss [--plain|--tui] [--config PATH] [--cwd PATH] \"问题\"\n         \
          fs-agent probe [--config PATH] [--model ID]...\n         \
          fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n         \
          fs-agent sessions <ls|show|replay|stats> [options]\n\n  \
          不带子命令时，fs-agent 在当前工作区启动一个交互会话：终端上用 TUI 渲染，否则用 \
          plain 转录（--plain / --tui 可强制其一）。--continue 继续本工作区最新的会话。\
+         discuss 起一次多角色讨论：两个讨论者各自独立作答，只在结论冲突时开一轮定向第二轮，\
+         最后由合成器画出共识 / 分歧 / 未决（见 `fs-agent discuss --help`）。\
          probe 对每个已配置的模型驱动一次真实回合，并在同一会话里再跑一次，然后打印归一化\
          后的用量，以便看到前缀缓存是否命中。prune 手动删除本工作区的会话目录，保留最新的 \
          N 个（默认 1）。sessions 只从会话自己的事件流回答关于一个已结束会话的问题\
@@ -1005,18 +1332,68 @@ pub fn help_main() -> String {
     )
 }
 
+/// `fs-agent discuss` with no `[discussion]` table: what to write instead.
+///
+/// There is deliberately no default roster: picking two models for someone would
+/// spend their money on a configuration they never chose.
+pub fn discussion_no_roster() -> &'static str {
+    "config.toml 里没有 [discussion]：讨论需要两个讨论者，加 `[discussion]` 与 \
+     `debaters = [\"kimi-k3\", \"deepseek-v4-pro\"]`（至少两个池子成员；不同厂商最好， \
+     同厂商甚至同一个模型也能跑，只是多样性会弱），见 `fs-agent discuss --help`"
+}
+
+/// `fs-agent discuss` with nothing to ask.
+pub fn discuss_needs_question() -> &'static str {
+    "discuss 需要一个问句：`fs-agent discuss \"问题\"`，或者把问题从 stdin 传进来"
+}
+
+/// `/discuss` with no question of its own *and* no question in the session yet.
+///
+/// A bare `/discuss` discusses the last thing the user asked; in a session where they
+/// have not asked anything, there is nothing to discuss.
+pub fn discuss_needs_in_session_question() -> &'static str {
+    "`/discuss` 没有可讨论的题目：写成 `/discuss 你的问题`，或先在这个会话里问一句，\
+     不带题目的 `/discuss` 会拿最后一个问题去讨论"
+}
+
 /// The interactive session's `--help`.
 pub fn help_interactive() -> String {
     "fs-agent [options]\n\n  \
      在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/plan 与 /endplan 控制\
-     硬计划模式，/quit 退出；输入 /技能名 直接加载一个技能（可带任务，例如 \
+     硬计划模式，/quit 退出；输入 /技能名 直接运行一个技能（可带任务，例如 \
      `/ask-matt 帮我看一下`），包括标了 `disable-model-invocation: true` 的技能。\
-     TUI 里 Esc 取消正在跑的回合；Shift+Tab 切换计划模式。\n\n  \
+     输入 / 会弹出补全窗口，列出全部命令与技能。\
+     `/discuss [--debaters A,B] [问题]` 起一场多角色讨论：两个讨论者用**本会话的上下文**\
+     各自作答，只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决；\
+     `--debaters 保守,激进` 指定抽池子里的哪两个（不写就随机抽两个），不带问题就用本会话\
+     最后一个问题。讨论的事件写进同一个会话，`sessions show` 能一起复盘。\
+     TUI 里 Esc 取消正在跑的回合（或正在跑的讨论）；Shift+Tab 切换计划模式。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
      --tui              使用终端界面（全屏四分区）\n  \
      --continue, -c     继续本工作区最新的会话\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \
+     --cwd PATH         工作区（默认：当前目录）"
+        .to_owned()
+}
+
+/// `discuss --help`.
+pub fn help_discuss() -> String {
+    "fs-agent discuss [--plain|--tui] [--config PATH] [--cwd PATH] [--debaters A,B] \"问题\"\n\n  \
+     起一次多角色讨论：两个讨论者从配置的 `[discussion] debaters` **池子**里抽——\
+     `--debaters 保守,激进` 指定抽哪两个（名字来自池子里的 `name`），不写就随机抽两个。\
+     池子成员是「名字 + 模型」：不同厂商最好，同厂商甚至同一个模型也允许，只是多样性会弱\
+     （同一个模型的两位必须各起一个名字，名字就是它在流上的身份）。抽到的两位就同一个问题各自独立作答，各自给一行 `CONCLUSION:`；只有结论冲突时才再开\
+     一轮定向第二轮；最后合成器做一次单发调用，产出「共识 / 分歧（含各自成立的前提）\
+     / 未决」——它画出选项空间，不替你收敛。一次讨论是 3 次调用（无分歧）或 5 次\
+     （有分歧）。合成器沿用 `[routing].synthesizer_model`（没配就用第一个讨论者的模型）；\
+     讨论者永远不会被路由到弱模型。\n\n  \
+     问句没写在命令行上时：stdin 是终端就问你要一行，是管道就读到结尾（`echo 问题 | \
+     fs-agent discuss`）。讨论落在真会话里，`fs-agent sessions show <id>` 可以复盘（TUI \
+     退出后转录不留，完整记录在会话日志里）。\n\n  \
+     --plain            使用 plain 转录（讨论过程走 stderr，合成产物走 stdout）\n  \
+     --tui              使用终端界面（终端上默认就是它）\n  \
+     --config PATH      要加载的配置文件\n  \
      --cwd PATH         工作区（默认：当前目录）"
         .to_owned()
 }

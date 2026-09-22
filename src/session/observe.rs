@@ -604,7 +604,7 @@ fn entry_of(event: &Event) -> Option<Entry> {
         },
         EventPayload::ContextInjected { source, content } => Entry::Context {
             speaker,
-            source: *source,
+            source: source.clone(),
             content: content.clone(),
         },
         // Handled by the grouping loop above.

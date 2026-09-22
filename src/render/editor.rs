@@ -35,6 +35,24 @@ pub struct Placed {
     pub column: u16,
 }
 
+/// The `/`-token the cursor sits in: a slash command being typed.
+///
+/// It is the **head of the first line** and nothing else. That is where the loop
+/// looks for a command, so it is the only place a menu may offer one: a `/` inside a
+/// later line, or after the space that starts a task, is a character in a prompt, and
+/// completing it would overwrite something the user meant to write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashToken {
+    /// The character index the `/` sits at.
+    pub start: usize,
+    /// The character index just past the name: the first whitespace after the slash,
+    /// or the end of the draft. A fill-in replaces all of it, because the part of the
+    /// name *after* the cursor is still part of what is being typed.
+    pub end: usize,
+    /// What has been typed after the slash, up to the cursor.
+    pub prefix: String,
+}
+
 /// One display row of the draft.
 struct Row {
     text: String,
@@ -256,6 +274,56 @@ impl Input {
             self.history.push(line.clone());
         }
         line
+    }
+
+    // --- slash tokens -------------------------------------------------------
+
+    /// The `/`-token the cursor sits in, when it sits in one.
+    ///
+    /// The token must start at the very beginning of the draft and must not have
+    /// reached a space yet: `/ask-matt` is a token, `/ask-matt 优化这个` is a command
+    /// with a task, and `看看 /tmp/x` is a path. Only the first line is considered,
+    /// because only the first line is where the loop looks for a command.
+    pub fn slash_token(&self) -> Option<SlashToken> {
+        let (line_start, _) = self.line_bounds();
+        if line_start != 0 || !self.text.starts_with('/') {
+            return None;
+        }
+        // The name runs to the first whitespace there is — a newline ends the line,
+        // and a space starts the task — or to the end of the draft.
+        let end = self
+            .text
+            .chars()
+            .position(char::is_whitespace)
+            .unwrap_or_else(|| self.len());
+        // A cursor past the name is in the task, where there is nothing to complete.
+        if self.cursor > end {
+            return None;
+        }
+        Some(SlashToken {
+            start: 0,
+            end,
+            prefix: self
+                .text
+                .chars()
+                .skip(1)
+                .take(self.cursor.saturating_sub(1))
+                .collect(),
+        })
+    }
+
+    /// Replace the `/`-token with `/<name>`, leaving the cursor after it.
+    ///
+    /// Returns `false` — and changes nothing — when the cursor is not in a token, so
+    /// a stale menu can never write into a draft the user has moved on from.
+    pub fn complete_slash(&mut self, name: &str) -> bool {
+        let Some(token) = self.slash_token() else {
+            return false;
+        };
+        self.remove_range(token.start, token.end);
+        self.cursor = token.start;
+        self.insert_str(&format!("/{name}"));
+        true
     }
 
     // --- history ------------------------------------------------------------

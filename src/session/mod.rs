@@ -263,6 +263,35 @@ impl Session {
         self.identity.as_deref()
     }
 
+    /// A **sibling** session on the same stream: every session-level value is shared —
+    /// the event log, the tool table, the write locks, the permission policy, the
+    /// answerer, the hook, the home directory and the discovered skills — and only the
+    /// agent's own values differ (its model, its generation parameters, its private
+    /// identity).
+    ///
+    /// This is what lets a discussion run **on a live session** (spec §15): its
+    /// debaters are siblings of the session the user is in, so their projection turns
+    /// that session's turns into `user` messages and their rounds are appended to the
+    /// same stream. The read set is deliberately **not** inherited — read permission is
+    /// per agent (spec §12), and a debater has read nothing.
+    pub(crate) fn fork(&self, config: SessionConfig, identity: Option<String>) -> Self {
+        Self::new(SessionParts {
+            id: self.id.clone(),
+            cwd: self.cwd.clone(),
+            log: self.log.clone(),
+            config,
+            tools: Arc::clone(&self.tools),
+            locks: self.locks.clone(),
+            outputs_dir: self.outputs_dir.clone(),
+            policy: Arc::clone(&self.policy),
+            asker: self.asker.clone(),
+            hook: self.hook.clone(),
+            home: self.home.clone(),
+            skills: Arc::clone(&self.skills),
+            identity,
+        })
+    }
+
     /// The ask port, if this session has an interactive answerer.
     pub fn asker(&self) -> Option<&Arc<dyn Asker>> {
         self.asker.as_ref()

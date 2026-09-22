@@ -193,7 +193,7 @@ impl Usage {
 }
 
 /// Where a pinned injection came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextSource {
     AgentsMd,
     SkillsCatalog,
@@ -202,6 +202,12 @@ pub enum ContextSource {
     /// moves.
     Skill,
     PlanMode,
+    /// One debater's persona — the user's `soul` for it (spec §15).
+    ///
+    /// Unlike every other injection this one is **private to its participant**: it is
+    /// recorded with that debater as the speaker and the projection hands it to nobody
+    /// else, because it describes one side of the argument.
+    Persona(ParticipantId),
 }
 
 /// The mode a discussion round was run in.

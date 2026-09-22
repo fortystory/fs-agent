@@ -777,6 +777,76 @@ async fn the_user_path_reaches_a_model_disabled_skill() {
 }
 
 #[tokio::test]
+async fn a_bare_skill_invocation_runs_there_and_then() {
+    // `/greet` + Enter is **one** gesture: the body is loaded and the turn it starts
+    // runs, because the body *is* the instruction. A bare invocation that only loaded
+    // would be a command the user has to invoke twice.
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let path = workspace.join(".agents/skills/greet");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(
+        path.join("SKILL.md"),
+        "---\nname: greet\ndescription: say hello\n---\nGREET STEP\n",
+    )
+    .unwrap();
+
+    let mut fixture = fixture(vec![Reply::text("done")], &workspace).await;
+    let outcome = fixture
+        .harness
+        .as_mut()
+        .unwrap()
+        .run_skill("greet")
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.reason,
+        fs_agent::events::StopReason::Completed,
+        "the skill's own turn ran"
+    );
+    fixture.shutdown().await;
+
+    let events = fixture.events();
+    let injected = events.iter().find_map(|event| match &event.payload {
+        EventPayload::ContextInjected {
+            source: ContextSource::Skill,
+            content,
+        } => Some(content.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        injected.as_deref(),
+        Some("GREET STEP"),
+        "the body rode the stream as a Skill injection"
+    );
+    // The one thing that must not be there: a `user` message nobody typed. The body
+    // is a `ContextInjected`, which is what carries the instruction to the model.
+    assert!(
+        events.iter().all(|event| !matches!(
+            &event.payload,
+            EventPayload::MessageCompleted {
+                role: fs_agent::events::Role::User,
+                ..
+            }
+        )),
+        "no prompt was invented for the bare invocation"
+    );
+    let requests = fixture.provider.requests();
+    let messages = &requests[0].messages;
+    // In a session with no history yet the body rides the pinned head message — the
+    // projection merges injections that are adjacent — so this checks that the
+    // instruction arrived, not that it arrived alone. What matters is that it is
+    // `injected`: it is the skill speaking, not the user.
+    assert!(
+        matches!(
+            messages.last(),
+            Some(Message::User { content, injected: true, .. }) if content.contains("GREET STEP")
+        ),
+        "the body reaches the model as an injected `user` message: {messages:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_unknown_skill_gets_a_normal_error_result() {
     let dir = tempfile::tempdir().unwrap();
     let mut fixture = fixture(
