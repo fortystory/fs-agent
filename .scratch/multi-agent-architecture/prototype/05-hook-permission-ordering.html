@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>原型：hook 挂载点与权限门，谁拥有控制流？（票 05）</title>
+<style>
+  :root { --accent:#4f46e5; --border:#d4d4d8; --muted:#71717a; --bg:#fafafa; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+         margin: 0; background: var(--bg); color: #18181b; line-height: 1.55; }
+  main { max-width: 1060px; margin: 0 auto; padding: 24px 20px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 22px 0 8px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .question { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px;
+              padding: 10px 14px; font-size: 13.5px; margin: 12px 0 18px; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .panel { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); text-transform: none; }
+  dl { display: grid; grid-template-columns: 130px 1fr; margin: 0; row-gap: 4px; font-size: 13.5px; }
+  dt { color: var(--muted); } dd { margin: 0; font-weight: 500; }
+  .log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+         background: #18181b; color: #e4e4e7; border-radius: 8px; padding: 10px 12px;
+         min-height: 200px; max-height: 340px; overflow: auto; }
+  .log div { padding: 1.5px 0; }
+  .log .seq { color: #71717a; display:inline-block; width: 34px; }
+  .log .kind { color: #a5b4fc; }
+  .ok { color: #16a34a; font-weight: 600; } .bad { color: #dc2626; font-weight: 600; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  button { font: inherit; font-size: 13.5px; padding: 7px 12px; border-radius: 7px;
+           border: 1px solid var(--border); background: #fff; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+  button:disabled { opacity: .42; cursor: not-allowed; }
+  button.impossible { border-style: dashed; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .scenario { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 13.5px; }
+  .scenario p { margin: 4px 0 10px; }
+  .scenario .watch { color: var(--muted); }
+  .stepbtns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .stepbtns .n { font-family: ui-monospace, monospace; color: var(--muted); font-size: 12px; }
+  .flash { outline: 2px solid var(--accent); }
+  code { background: #f4f4f5; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  .modelsees { white-space: pre-wrap; background: #f0fdf4; border: 1px solid #bbf7d0;
+               border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>原型：hook 挂载点与权限门，谁拥有控制流？</h1>
+  <div class="sub">fs-agent 架构图 · 票 05（prototype，丢弃式）· 2026-09-13 · 双击打开即可玩，无需任何安装</div>
+
+  <div class="question">
+    <b>这个原型要回答的问题：</b>工具调用前后各有一个 hook 挂载点（<code>pre</code> / <code>post</code>），权限门夹在中间——次序是 <code>hook.pre → 权限门 → dispatch → hook.post</code>。<b>谁拥有控制流？</b>规则只有两条：① <b>hook 只能收紧、不能放松权限</b>（Claude Code 的规则）；② <b>每个 tool_call 恰好产生一条工具结果</b>（票 02/03 的不变量），被拒绝 / 被跳过 / hook 失败时由谁合成那条结果？下方右侧是<b>事件流</b>——用的正是票 15 定的事件名。
+  </div>
+
+  <div class="panels">
+    <div>
+      <div class="panel">
+        <h3>当前状态（每次点击后重绘）</h3>
+        <dl id="state"></dl>
+        <div id="modelsees"></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <h3>设置（仅在空闲时可改）</h3>
+        <div class="sub" style="margin-bottom:6px">权限策略模式：</div>
+        <div class="btns" id="modes"></div>
+        <div class="sub" style="margin-bottom:6px">模型发起一次工具调用：</div>
+        <div class="btns" id="emitters"></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <h3>自由操作（不按剧本，随便按；非法阶段的按钮自动禁用）</h3>
+        <div class="btns" id="free"></div>
+        <div class="sub">注意那个虚线按钮——它永远不可点：<b>「hook 把权限放松」这个意图在返回值类型里根本不存在</b>（非法状态不可表示），这不是靠运行时检查挡掉的，是连表达都表达不出来。</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>事件流（一条只追加的流；事件名 = 票 15 的枚举）</h3>
+      <div class="log" id="log"><div class="sub" style="color:#71717a">（还没有事件）</div></div>
+    </div>
+  </div>
+
+  <h2>带剧本的演练（每页一个场景，按顺序点按钮）</h2>
+  <div class="tabs" id="tabs"></div>
+  <div class="scenario" id="scenario"></div>
+</main>
+
+<script>
+// ==================== 纯逻辑模块（可整体提走的那部分；不碰 DOM） ====================
+// PROTOTYPE-MODULE-START
+const FS05 = (() => {
+  const TOOLS = {
+    read_file: { label: 'read_file("src/main.rs")（只读）', kind: 'read' },
+    edit_file: { label: 'edit_file("src/main.rs")（写）',  kind: 'write' },
+    run_rm:    { label: 'run("rm -rf build/")（危险）',      kind: 'danger' },
+  };
+  // 决策格：allow < ask < deny，越往右越严。hook 只能往右推。
+  const RANK = { allow: 0, ask: 1, deny: 2 };
+  const tighterOf = (a, b) => (RANK[a] >= RANK[b] ? a : b);
+
+  // 权限门 = 纯函数（策略模式, 工具） → 裁决。不读写外部状态。
+  function gate(mode, toolKey) {
+    const k = TOOLS[toolKey].kind;
+    if (k === 'danger') return { decision: 'deny', why: '危险命令黑名单' };
+    if (mode === 'readonly' && k !== 'read') return { decision: 'deny', why: 'readonly 模式：禁止写' };
+    if (mode === 'ask' && k === 'write') return { decision: 'ask', why: 'ask 模式：写操作要询问' };
+    return { decision: 'allow', why: mode + ' 模式放行' };
+  }
+
+  function initial(mode) {
+    return {
+      mode,                 // 'auto' | 'ask' | 'readonly'
+      phase: 'idle',        // idle → pre → (asking) → dispatch → post → done | stopped
+      callNo: 0, tool: null,
+      hookTighten: null,    // null | 'ask' | 'deny' —— 类型里没有「放松」这个值
+      verdict: null,        // 权限门的原始裁决 {decision, why}
+      effective: null,      // 生效裁决 = 门与 hook 取更严
+      effSource: null,      // 'Policy' | 'Hook' | 'User'
+      result: null,         // 工具结果（含合成结果）
+      feedback: null,       // post-hook 回灌
+      log: [],              // 事件流（票 15 的事件名）
+    };
+  }
+  function emit(st, kind, text) { st.log.push({ seq: st.log.length + 1, kind, text }); }
+
+  // pre-hook 收尾：过权限门，算生效裁决，按裁决分流
+  function finishPre(st, tighten, hookLabel) {
+    if (st.phase !== 'pre') return st;
+    st.hookTighten = tighten;
+    emit(st, 'HookExecuted', 'pre_tool_use → ' + hookLabel);
+    st.verdict = gate(st.mode, st.tool);
+    st.effective = tighten ? tighterOf(st.verdict.decision, tighten) : st.verdict.decision;
+    st.effSource = (tighten && tighten !== st.verdict.decision && st.effective === tighten) ? 'Hook' : 'Policy';
+    if (st.effective === 'deny') {
+      const why = st.effSource === 'Hook'
+        ? 'hook 把门的「' + st.verdict.decision + '」收紧成 deny'
+        : st.verdict.why;
+      emit(st, 'PermissionDecided', 'deny（来源：' + st.effSource + '；' + why + '）');
+      emit(st, 'ToolCallCompleted', '#' + st.callNo + ' err="权限被拒绝"（合成的错误结果：工具没有运行）');
+      st.result = { ok: false, text: '被权限门 / hook 拒绝，工具没有运行' };
+      st.phase = 'done';
+    } else if (st.effective === 'ask') {
+      emit(st, 'PermissionAsked', TOOLS[st.tool].label + ' —— ' + st.verdict.why + (st.effSource === 'Hook' ? '（hook 收紧所致）' : ''));
+      st.phase = 'asking';
+    } else {
+      emit(st, 'PermissionDecided', 'allow（来源：' + st.effSource + '）');
+      st.phase = 'dispatch';
+    }
+    return st;
+  }
+
+  function step(st, a) {
+    st = structuredClone(st);
+    switch (a.type) {
+      case 'emit': {
+        if (st.phase !== 'idle') return st;
+        st.callNo += 1; st.tool = a.tool;
+        emit(st, 'ToolCallStarted', '#' + st.callNo + ' ' + TOOLS[a.tool].label);
+        st.phase = 'pre'; return st;
+      }
+      case 'pre-continue': return finishPre(st, null, '放行（不改写）');
+      case 'pre-tighten-ask':  return finishPre(st, 'ask',  '收紧 → ask');
+      case 'pre-tighten-deny': return finishPre(st, 'deny', '收紧 → deny');
+      case 'pre-skip': {
+        if (st.phase !== 'pre') return st;
+        emit(st, 'HookExecuted', 'pre_tool_use → skip（跳过执行）');
+        emit(st, 'ToolCallCompleted', '#' + st.callNo + ' ok output="hook 跳过执行"（合成结果：工具没有运行，但「恰好一条结果」不变量成立）');
+        st.result = { ok: true, text: 'hook 跳过了执行（工具没有运行）' };
+        st.phase = 'done'; return st;
+      }
+      case 'pre-stop': {
+        if (st.phase !== 'pre') return st;
+        emit(st, 'HookExecuted', 'pre_tool_use → stop（停止本轮）');
+        emit(st, 'TurnEnded', 'reason = Aborted（hook 停止）');
+        st.phase = 'stopped'; return st;
+      }
+      case 'pre-fail': {
+        if (st.phase !== 'pre') return st;
+        emit(st, 'HookExecuted', 'pre_tool_use → 失败（exit≠0 / 超时 / 输出无法解析）');
+        emit(st, 'SessionError', 'hook 失败 → fail-closed：动作被阻止');
+        emit(st, 'ToolCallCompleted', '#' + st.callNo + ' err="hook 失败，动作未执行"（合成的错误结果）');
+        st.result = { ok: false, text: 'hook 失败（fail-closed）：工具没有运行，副作用没有发生' };
+        st.phase = 'done'; return st;
+      }
+      case 'user-approve': {
+        if (st.phase !== 'asking') return st;
+        emit(st, 'PermissionDecided', 'allow（来源：User）');
+        st.effSource = 'User'; st.phase = 'dispatch'; return st;
+      }
+      case 'user-reject': {
+        if (st.phase !== 'asking') return st;
+        emit(st, 'PermissionDecided', 'deny（来源：User：拒绝）');
+        emit(st, 'ToolCallCompleted', '#' + st.callNo + ' err="权限被拒绝"（合成的错误结果：工具没有运行）');
+        st.result = { ok: false, text: '用户拒绝了这次权限询问' };
+        st.phase = 'done'; return st;
+      }
+      case 'tool-ok': {
+        if (st.phase !== 'dispatch') return st;
+        st.result = { ok: true, text: st.tool === 'read_file' ? '读到了 42 行' : '编辑完成' };
+        emit(st, 'ToolCallCompleted', '#' + st.callNo + ' ok');
+        st.phase = 'post'; return st;
+      }
+      case 'tool-err': {
+        if (st.phase !== 'dispatch') return st;
+        st.result = { ok: false, text: '工具执行出错' };
+        emit(st, 'ToolCallCompleted', '#' + st.callNo + ' err="执行失败"');
+        st.phase = 'post'; return st;
+      }
+      case 'post-continue': {
+        if (st.phase !== 'post') return st;
+        emit(st, 'HookExecuted', 'post_tool_use → 放行');
+        st.phase = 'done'; return st;
+      }
+      case 'post-feedback': {
+        if (st.phase !== 'post') return st;
+        st.feedback = 'cargo test 失败：3 个测试未通过';
+        emit(st, 'HookExecuted', 'post_tool_use → 注入反馈（verify 失败）');
+        st.phase = 'done'; return st;
+      }
+      case 'post-fail': {
+        if (st.phase !== 'post') return st;
+        emit(st, 'HookExecuted', 'post_tool_use → 失败');
+        emit(st, 'SessionError', 'post-hook 失败：反馈丢失。注意不对称——副作用已经发生，fail-closed 在这里只能丢反馈、不能撤销世界。');
+        st.phase = 'done'; return st;
+      }
+      case 'set-mode': return initial(a.mode);
+      case 'reset':    return initial(st.mode);
+    }
+    return st;
+  }
+
+  // 投影演示：模型最终在这条工具消息里看到什么（post-hook 反馈并入同一条结果）
+  function modelSees(st) {
+    if (!st.result) return null;
+    let t = (st.result.ok ? '✅ tool 结果：' : '❌ tool 结果：') + st.result.text;
+    if (st.feedback) t += '\n\n[hook 反馈] ' + st.feedback;
+    return t;
+  }
+
+  // 不变量：没有结果的 tool_call 个数（done/stopped 时应为 0）
+  function pendingResults(st) {
+    const started = st.log.filter(e => e.kind === 'ToolCallStarted').length;
+    const completed = st.log.filter(e => e.kind === 'ToolCallCompleted').length;
+    return started - completed;
+  }
+
+  return { TOOLS, initial, step, modelSees, pendingResults, gate };
+})();
+// PROTOTYPE-MODULE-END
+</script>
+
+<script>
+// ==================== 页面壳（一次性；所有显示都从纯模块渲染） ====================
+const $ = s => document.querySelector(s);
+let state = FS05.initial('auto');
+
+const PHASE_LABEL = {
+  idle: '空闲（等模型发起调用）', pre: '① hook.pre 运行中', asking: '③ 等待用户回答权限询问',
+  dispatch: '④ 工具执行中', post: '⑤ hook.post 运行中', done: '完成（本轮可再起一次）', stopped: '本轮被 hook 停止',
+};
+
+const ACTIONS = [
+  { id: 'pre-continue',     label: 'hook.pre：放行',            phases: ['pre'] },
+  { id: 'pre-tighten-ask',  label: 'hook.pre：收紧到「要询问」', phases: ['pre'] },
+  { id: 'pre-tighten-deny', label: 'hook.pre：收紧到「拒绝」',   phases: ['pre'] },
+  { id: 'pre-skip',         label: 'hook.pre：跳过执行（skip）', phases: ['pre'] },
+  { id: 'pre-stop',         label: 'hook.pre：停止本轮（stop）', phases: ['pre'] },
+  { id: 'pre-fail',         label: 'hook.pre：失败 / 超时',      phases: ['pre'] },
+  { id: 'user-approve',     label: '用户：批准',                 phases: ['asking'], primary: true },
+  { id: 'user-reject',      label: '用户：拒绝',                 phases: ['asking'] },
+  { id: 'tool-ok',          label: '工具：执行成功',             phases: ['dispatch'] },
+  { id: 'tool-err',         label: '工具：执行出错',             phases: ['dispatch'] },
+  { id: 'post-continue',    label: 'hook.post：放行',            phases: ['post'] },
+  { id: 'post-feedback',    label: 'hook.post：注入反馈（测试失败）', phases: ['post'] },
+  { id: 'post-fail',        label: 'hook.post：失败 / 超时',     phases: ['post'] },
+];
+
+function render() {
+  const st = state;
+  const rows = [
+    ['策略模式', st.mode],
+    ['当前阶段', PHASE_LABEL[st.phase]],
+    ['本次调用', st.tool ? '#' + st.callNo + ' ' + FS05.TOOLS[st.tool].label : '—'],
+    ['权限门原始裁决', st.verdict ? st.verdict.decision + '（' + st.verdict.why + '）' : '—'],
+    ['hook 的收紧', st.hookTighten ? st.hookTighten : '—'],
+    ['生效裁决', st.effective ? st.effective + '（来源：' + st.effSource + '）' : '—'],
+    ['不变量：无结果的 tool_call', (() => { const p = FS05.pendingResults(st);
+        const finished = st.phase === 'done' || st.phase === 'stopped';
+        return p + (finished ? (p === 0 ? ' ✓ 恰好一条结果' : ' ✗ 不变量被破坏') : '（进行中）'); })()],
+  ];
+  $('#state').innerHTML = rows.map(r => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('');
+
+  const ms = FS05.modelSees(st);
+  $('#modelsees').innerHTML = ms ? '<div class="sub">模型最终看到的这条工具消息（投影把 hook 反馈并进同一条结果）：</div><div class="modelsees">' + ms + '</div>' : '';
+
+  $('#log').innerHTML = st.log.length
+    ? st.log.map(e => '<div><span class="seq">' + String(e.seq).padStart(3, ' ') + '</span><span class="kind">' + e.kind + '</span> ' + e.text + '</div>').join('')
+    : '<div class="sub" style="color:#71717a">（还没有事件）</div>';
+  $('#log').scrollTop = $('#log').scrollHeight;
+
+  // 设置区
+  $('#modes').innerHTML = '';
+  ['auto', 'ask', 'readonly'].forEach(m => {
+    const b = document.createElement('button');
+    b.textContent = m + (m === 'auto' ? '（全自动）' : m === 'ask' ? '（写操作要询问）' : '（只读）');
+    if (m === st.mode) b.className = 'primary';
+    b.disabled = st.phase !== 'idle';
+    b.onclick = () => { state = FS05.step(state, { type: 'set-mode', mode: m }); render(); };
+    $('#modes').appendChild(b);
+  });
+  $('#emitters').innerHTML = '';
+  Object.keys(FS05.TOOLS).forEach(t => {
+    const b = document.createElement('button');
+    b.textContent = '发起 ' + FS05.TOOLS[t].label;
+    b.disabled = st.phase !== 'idle';
+    b.onclick = () => { state = FS05.step(state, { type: 'emit', tool: t }); render(); };
+    $('#emitters').appendChild(b);
+  });
+
+  // 自由操作区
+  $('#free').innerHTML = '';
+  ACTIONS.forEach(a => {
+    const b = document.createElement('button');
+    b.textContent = a.label;
+    if (a.primary) b.className = 'primary';
+    b.disabled = !a.phases.includes(st.phase);
+    b.onclick = () => { state = FS05.step(state, { type: a.id }); render(); };
+    $('#free').appendChild(b);
+  });
+  const imp = document.createElement('button');
+  imp.textContent = 'hook.pre：把权限放松（ask→allow）';
+  imp.className = 'impossible'; imp.disabled = true;
+  imp.title = '这个意图不存在：hook 的返回值类型是 Continue | Tighten(ask|deny) | Skip | Stop，没有「放松」这个变体。';
+  $('#free').appendChild(imp);
+  const again = document.createElement('button');
+  again.textContent = '↺ 重置（保持模式）';
+  again.onclick = () => { state = FS05.step(state, { type: 'reset' }); render(); };
+  $('#free').appendChild(again);
+  renderScenario();
+}
+
+// ---------------- 剧本 ----------------
+const SCENARIOS = [
+  { name: '1 · 顺利路径（auto）', mode: 'auto',
+    desc: '全自动模式下一次只读调用。注意右侧事件流的次序：ToolCallStarted → HookExecuted(pre) → PermissionDecided(allow) → ToolCallCompleted → HookExecuted(post)。',
+    watch: '看点：没发生询问时也有 PermissionDecided——这是票 19 要的「权限策略烦不烦」计数器的免费来源。',
+    steps: [
+      { label: '发起 read_file（只读）', action: { type: 'emit', tool: 'read_file' } },
+      { label: 'hook.pre：放行', action: { type: 'pre-continue' } },
+      { label: '工具：执行成功', action: { type: 'tool-ok' } },
+      { label: 'hook.post：放行', action: { type: 'post-continue' } },
+    ] },
+  { name: '2 · hook 收紧成询问', mode: 'auto',
+    desc: '策略本来是 auto（门会放行），但 hook 把这步调用的生效裁决收紧到了 ask——于是询问真的发生了。',
+    watch: '看点：生效裁决 = 门的裁决与 hook 的收紧「取更严」。来源列显示 Hook，说明是 hook 把这次调用推进了询问。',
+    steps: [
+      { label: '发起 edit_file（写）', action: { type: 'emit', tool: 'edit_file' } },
+      { label: 'hook.pre：收紧到「要询问」', action: { type: 'pre-tighten-ask' } },
+      { label: '用户：批准', action: { type: 'user-approve' } },
+      { label: '工具：执行成功', action: { type: 'tool-ok' } },
+      { label: 'hook.post：放行', action: { type: 'post-continue' } },
+    ] },
+  { name: '3 · 黑名单与「放松不存在」', mode: 'readonly',
+    desc: '只读模式下发起危险命令。权限门直接 deny，合成一条错误结果，工具从头到尾没有运行。',
+    watch: '看点：自由操作区那个虚线按钮——hook 想放松这次拒绝？做不到，返回值类型里没有这个变体。',
+    steps: [
+      { label: '发起 run("rm -rf build/")（危险）', action: { type: 'emit', tool: 'run_rm' } },
+      { label: 'hook.pre：放行（注意它无法放松门的拒绝）', action: { type: 'pre-continue' } },
+    ] },
+  { name: '4 · hook 拦截一次询问', mode: 'ask',
+    desc: 'ask 模式下写操作本来要询问用户。hook 在门之前把它收紧成了 deny——于是询问根本不发生，「用户：批准/拒绝」按钮从未出现。',
+    watch: '看点：hook 能阻止一次询问发生（ask→deny），但永远不能绕过一次询问（ask→allow 不存在）。这正是「只能收紧」的含义。',
+    steps: [
+      { label: '发起 edit_file（写）', action: { type: 'emit', tool: 'edit_file' } },
+      { label: 'hook.pre：收紧到「拒绝」', action: { type: 'pre-tighten-deny' } },
+    ] },
+  { name: '5 · hook.pre 失败 → fail-closed', mode: 'auto',
+    desc: 'hook 脚本本身坏了（非零退出 / 超时 / 输出无法解析）。动作被阻止，工具没有运行。',
+    watch: '看点：即使这样，「每个 tool_call 恰好一条结果」仍然成立——一条合成的错误结果被追加。rig 的 runner 也是 fail-closed：返回该事件无法执行的动作时结束并给诊断，而不是静默忽略。',
+    steps: [
+      { label: '发起 edit_file（写）', action: { type: 'emit', tool: 'edit_file' } },
+      { label: 'hook.pre：失败 / 超时', action: { type: 'pre-fail' } },
+    ] },
+  { name: '6 · PostToolUse 回灌（verify）', mode: 'auto',
+    desc: '工具成功了，但 hook.post 跑了测试且失败——把失败作为反馈注入。这就是综述说的「把 verify 从模型的自觉变成 harness 的保证」（aider 的 lint/test 反省循环）。',
+    watch: '看点：日志里 ToolCallCompleted 与 HookExecuted 是两条事件；但模型看到的是一条合并后的工具消息（下方绿框）。改写结果不存在——事件永不修改，可见性合并是投影的事。',
+    steps: [
+      { label: '发起 edit_file（写）', action: { type: 'emit', tool: 'edit_file' } },
+      { label: 'hook.pre：放行', action: { type: 'pre-continue' } },
+      { label: '工具：执行成功', action: { type: 'tool-ok' } },
+      { label: 'hook.post：注入反馈（测试失败）', action: { type: 'post-feedback' } },
+    ] },
+  { name: '7 · hook 跳过执行（skip）', mode: 'auto',
+    desc: 'hook 决定这步不用真跑（例如它判定参数非法，或要从缓存给答案）。工具没有运行——但结果仍然有且只有一条。',
+    watch: '看点：rig 的 on_tool_call 文档原文「The hook may rewrite the current arguments, skip execution, or stop the run」。skip 的结果由 hook/循环合成。',
+    steps: [
+      { label: '发起 read_file（只读）', action: { type: 'emit', tool: 'read_file' } },
+      { label: 'hook.pre：跳过执行（skip）', action: { type: 'pre-skip' } },
+    ] },
+];
+
+let curTab = -1, stepIdx = -1;
+
+function renderTabs() {
+  $('#tabs').innerHTML = '';
+  SCENARIOS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.textContent = s.name;
+    if (i === curTab) b.className = 'active';
+    b.onclick = () => { curTab = i; stepIdx = -1; state = FS05.step(state, { type: 'set-mode', mode: s.mode }); render(); };
+    $('#tabs').appendChild(b);
+  });
+}
+
+function renderScenario() {
+  if (curTab < 0) { $('#scenario').innerHTML = '<span class="sub">选一个剧本开始。它会先把状态重置到对应模式。</span>'; return; }
+  const s = SCENARIOS[curTab];
+  let html = '<p>' + s.desc + '</p><p class="watch">' + s.watch + '</p><div class="stepbtns">';
+  if (stepIdx >= s.steps.length) {
+    html += '<span class="ok">剧本走完。可以切到别的剧本，或到自由操作区继续按。</span>';
+  } else {
+    s.steps.forEach((st, i) => {
+      if (i < stepIdx) html += '<span class="n">✓ ' + (i + 1) + '</span>';
+      else if (i === stepIdx)
+        html += '<button class="primary" data-step="' + i + '">' + (i + 1) + '. ' + st.label + '</button>';
+      else html += '<span class="n">' + (i + 1) + '. ' + st.label + '</span>';
+    });
+    if (stepIdx < 0) html += '<span class="n">（从第 1 步开始）</span>';
+  }
+  html += '</div>';
+  $('#scenario').innerHTML = html;
+  const btn = $('#scenario').querySelector('button[data-step]');
+  if (btn) btn.onclick = () => {
+    state = FS05.step(state, s.steps[stepIdx].action);
+    stepIdx += 1; render();
+    if (stepIdx === s.steps.length) { /* 走完后自由区仍可操作 */ }
+  };
+}
+
+// 起步：选中第一个剧本
+renderTabs();
+curTab = 0; stepIdx = 0; state = FS05.step(state, { type: 'set-mode', mode: SCENARIOS[0].mode });
+render();
+</script>
+</body>
+</html>
