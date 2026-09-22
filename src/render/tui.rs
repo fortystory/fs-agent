@@ -478,6 +478,11 @@ pub struct TuiState {
     /// Whether a thinking line is open on screen right now — the one mutable row in
     /// the pane.
     thinking_open: bool,
+    /// Whether this turn's message has already had its thinking line. The body's first
+    /// delta settles the line long before `MessageCompleted` arrives, so the record
+    /// has to outlive `thinking_open` or the completion would add a second line for
+    /// the same thought (票 02 §1).
+    thinking_done: bool,
     /// The detail behind each source line of the pane, parallel to it and pruned by
     /// the pane's own cap so the two never drift apart. `None` for the lines that are
     /// not a way into anything.
@@ -719,11 +724,17 @@ impl Questionnaire {
     fn advance(&mut self) {
         if self.index + 1 < self.questions.len() {
             self.index += 1;
+            // The page turned, so the cursor goes back to the question's own rows
+            // (票 04 §5).
+            self.custom_focused = false;
         }
     }
 
     fn back(&mut self) {
-        self.index = self.index.saturating_sub(1);
+        if self.index > 0 {
+            self.index -= 1;
+            self.custom_focused = false;
+        }
     }
 
     fn all_handled(&self) -> bool {
@@ -1052,6 +1063,7 @@ impl TuiState {
             reasoning: String::new(),
             thinking_speaker: crate::events::SpeakerId::System,
             thinking_open: false,
+            thinking_done: false,
             links: std::collections::VecDeque::new(),
             drawn_rows: Vec::new(),
             drawn_top: 0,
@@ -1148,15 +1160,19 @@ impl TuiState {
             } = &block
             {
                 if matches!(role, Role::Assistant) {
-                    // A recorded trace settles whatever is open — or opens the line
-                    // itself, when the provider sent reasoning without deltas. An
-                    // absent trace settles an open line as *unrecorded*, which is the
-                    // synthesizer's shape: deltas streamed, nothing written down
-                    // (票 02 §1).
+                    // The message's whole trace settles whatever is open. When the
+                    // provider sent no deltas at all the line is opened here instead,
+                    // already finished; when one was already opened and settled (the
+                    // body froze it mid-stream) nothing new is added, because one
+                    // thinking segment is one line (票 02 §1). An absent trace settles
+                    // an open line as unrecorded — the synthesizer's shape, deltas
+                    // streamed and nothing written down.
                     match reasoning {
                         Some(text) => {
                             let text = text.clone();
-                            self.open_thinking(speaker.clone());
+                            if !self.thinking_open && !self.thinking_done {
+                                self.open_thinking(speaker.clone());
+                            }
                             self.settle_thinking(Some(text));
                         }
                         None => {
@@ -1165,9 +1181,22 @@ impl TuiState {
                             }
                         }
                     }
+                    self.thinking_done = true;
                 }
             }
+            // A new turn's thinking is a new segment, so the "already drawn" latch
+            // clears with the turn (票 02 §1).
+            if matches!(&block, Block::TurnStarted { .. }) {
+                self.thinking_done = false;
+            }
             match &block {
+                // Reasoning is not part of the message body: it is folded into its own
+                // line, so it never joins the live tail the body streams through
+                // (票 02 §3).
+                Block::Delta {
+                    kind: DeltaKind::Reasoning,
+                    ..
+                } => {}
                 Block::Delta { text, .. } => {
                     self.live.push_str(text);
                     if self.live.len() > LIVE_BUFFER {
@@ -1222,14 +1251,17 @@ impl TuiState {
         self.thinking_open = true;
         self.thinking_speaker = speaker;
         self.reasoning.clear();
-        let line = Line::from(Span::styled(
-            format!(
-                "{} {}",
-                wording::speaker_label(&self.thinking_speaker),
-                wording::thinking_in_progress()
+        // The name is a `speaker_label`, so it takes the speaker's colour — the same
+        // rule every other line with one follows (票 07 §2).
+        let name = wording::speaker_label(&self.thinking_speaker);
+        let name_style = Style::default().fg(self.colors.of(&self.thinking_speaker));
+        let line = Line::from(vec![
+            Span::styled(format!("{name} "), name_style),
+            Span::styled(
+                wording::thinking_in_progress(),
+                Style::default().fg(Color::DarkGray),
             ),
-            Style::default().fg(Color::DarkGray),
-        ));
+        ]);
         self.pane.push(line);
         self.links.push_back(None);
         self.prune_links();
@@ -1259,11 +1291,10 @@ impl TuiState {
         }
         self.reasoning.clear();
         self.thinking_open = false;
-        let title = format!(
-            "{} {}",
-            wording::speaker_label(&self.thinking_speaker),
-            wording::thinking_finished()
-        );
+        self.thinking_done = true;
+        let name = wording::speaker_label(&self.thinking_speaker);
+        let name_style = Style::default().fg(self.colors.of(&self.thinking_speaker));
+        let title = format!("{} {}", name, wording::thinking_finished());
         let detail = Detail {
             title: title.clone(),
             kind: DetailKind::Thinking { text },
@@ -1272,7 +1303,11 @@ impl TuiState {
         // (票 02 §1). The leading `▸` is what says the line can be opened.
         self.pane.replace_last(Line::from(vec![
             Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(title, Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{name} "), name_style),
+            Span::styled(
+                wording::thinking_finished(),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
         if let Some(link) = self.links.back_mut() {
             *link = Some(detail);
@@ -1502,6 +1537,10 @@ impl TuiState {
                 }
             }
             ConsoleRequest::Ask(ask) => {
+                // A question may not be drawn over the detail overlay: the overlay is
+                // not a `pending`, so nothing else would stand it down, and the modal
+                // underneath would be unanswerable (票 02 §4).
+                self.close_detail();
                 if self.pending.is_some() {
                     // The loop asks one question at a time and waits for the answer, so
                     // this cannot happen. If it ever did, dropping the *new* question
@@ -1515,6 +1554,8 @@ impl TuiState {
                 });
             }
             ConsoleRequest::Questionnaire(request) => {
+                // Same reason as `Ask`: the overlay stands down for the question.
+                self.close_detail();
                 if self.pending.is_some() {
                     // One question owns the keyboard at a time, exactly as for the
                     // loop's asks: dropping the new one keeps the one on screen
@@ -1592,15 +1633,10 @@ impl TuiState {
         // (票 02 §4).
         if self.detail_open() {
             match key {
-                Key::CtrlC => {
-                    if self.busy() {
-                        self.events.push(FrontEndEvent::Cancel);
-                    } else {
-                        self.quit = true;
-                    }
-                }
                 // The one exception to "everything else is ignored": `Ctrl-D` closes
                 // the overlay rather than quitting, let alone asking (票 06 §5).
+                // `Ctrl-C` is **not** an exception: it is one of the ignored keys
+                // (票 02 §4).
                 Key::Esc | Key::CtrlD => self.close_detail(),
                 Key::Up => self.detail_scroll(-1),
                 Key::Down => self.detail_scroll(1),
@@ -2244,14 +2280,15 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     state
         .regions
         .cells
-        .extend(regions.into_iter().map(|(start, width, action)| Region {
-            rect: Rect::new(
-                buttons_area.x + start as u16,
-                buttons_area.y,
-                width as u16,
-                1,
-            ),
-            action,
+        .extend(regions.into_iter().filter_map(|(start, width, action)| {
+            // A button wider than the overlay is not clickable past its border: the
+            // part that was not drawn has no region (票 04 §3).
+            let x = buttons_area.x + start as u16;
+            let room = buttons_area.right().saturating_sub(x).min(width as u16);
+            (room > 0).then_some(Region {
+                rect: Rect::new(x, buttons_area.y, room, 1),
+                action,
+            })
         }));
 }
 
@@ -2555,7 +2592,10 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
 /// Its whole block is the click target, so the rectangle is remembered on the pane
 /// — a click can only land on what the last frame drew.
 fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) {
-    if state.pane.following() || area.width == 0 || area.height == 0 {
+    // While the detail overlay holds the transcript, the way back is the overlay's own
+    // footer: the indicator's count is paused and its click belongs to nobody
+    // (票 02 §4).
+    if state.pane.following() || state.detail_open() || area.width == 0 || area.height == 0 {
         state.indicator = None;
         return;
     }
@@ -2790,9 +2830,11 @@ fn draw_questionnaire_footer(
         if !available {
             continue;
         }
-        // One gap *between* drawn buttons, so skipping the first does not push the
-        // second three columns further out than it is painted.
+        // One gap *between* drawn buttons, and it is **painted** rather than only
+        // counted: a region derived from a gap that is not on screen is a region that
+        // points three columns off the button (票 04 §7).
         if drawn {
+            spans.push(Span::raw("   "));
             cursor += 3;
         }
         let width = text_columns(label);
@@ -3378,8 +3420,17 @@ impl TuiState {
     }
 
     /// Close it, wherever it was opened from.
+    ///
+    /// A no-op when nothing is open, which matters because the request handlers call it
+    /// unconditionally: releasing a freeze that was never taken would yank a reader who
+    /// had scrolled up back to the bottom (票 02 §4).
     fn close_detail(&mut self) {
-        self.detail = None;
+        if self.detail.take().is_some() {
+            // The reading position was the overlay's; letting go of it returns the
+            // transcript to the bottom, and the count to measuring from there.
+            self.pane.set_holding(false);
+            self.pane.set_following(true);
+        }
     }
 
     fn detail_open(&self) -> bool {
@@ -3528,6 +3579,11 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     let Some(view) = state.detail.as_ref() else {
         return;
     };
+    // The transcript is frozen where it was: the reader is looking at a line, and a
+    // burst of output must not pull it away — nor make the "N new rows" count climb
+    // under the overlay they are reading (票 02 §4).
+    state.pane.set_following(false);
+    state.pane.set_holding(true);
     let inner = layout::inner(area);
     let height = inner.height as usize;
     let body_rows = height.saturating_sub(2);

@@ -2675,3 +2675,347 @@ fn the_wheel_moves_the_questionnaire_highlight() {
         "the wheel moved the highlight: {text}"
     );
 }
+
+#[test]
+fn one_message_never_gets_two_thinking_lines() {
+    // The body's first delta settles the line long before `MessageCompleted`
+    // arrives — and the completion carries the whole trace, so a naive "open if not
+    // open" would add a second line for the same thought. No frame is drawn between
+    // the events here, which is what made the earlier version of this test pass
+    // (票 02 §1).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖。"));
+    state.apply(text_delta("答案。"));
+    state.apply(message(1, "答案。", Some("先看依赖。")));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert_eq!(
+        text.matches("思考完成").count(),
+        1,
+        "one thinking segment is one line: {text}"
+    );
+    assert!(
+        !text.contains("正在思考"),
+        "and the in-progress line is gone: {text}"
+    );
+}
+
+#[test]
+fn reasoning_never_joins_the_message_body() {
+    // Reasoning is folded into its own line; letting it through to the live tail would
+    // print the raw thought under `正在思考` (票 02 §3).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("这是不该出现的思考正文。"));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("… 正在思考"),
+        "the thinking line is there: {text}"
+    );
+    assert!(
+        !text.contains("这是不该出现的思考正文"),
+        "and the raw reasoning is not: {text}"
+    );
+}
+
+#[test]
+fn the_detail_overlay_freezes_the_transcript() {
+    // A reader who opened a line keeps looking at it: output that arrives while the
+    // overlay is up must not pull the pane to the bottom (票 02 §4).
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(fs_agent::render::RenderEvent::Notice(format!(
+            "第 {index} 行"
+        )));
+    }
+    state.apply(tool_started(
+        1,
+        "call-20",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-20", true, Some("body"), None));
+    state.apply(flush());
+    let _ = screen(120, 24, &mut state);
+
+    let _ = screen(120, 24, &mut state);
+    click_row(&mut state, 120, 24, "调用 bash");
+    let before = screen(120, 24, &mut state);
+    assert!(
+        before.join("\n").contains("── 参数 ──"),
+        "the overlay is up"
+    );
+    let frozen: Vec<String> = before
+        .iter()
+        .skip(middle_top(&before) + 1)
+        .take(transcript_rows())
+        .cloned()
+        .collect();
+
+    // New output arrives while the overlay is open.
+    for index in 40..60 {
+        state.apply(fs_agent::render::RenderEvent::Notice(format!(
+            "第 {index} 行"
+        )));
+    }
+    let during = screen(120, 24, &mut state);
+    let after: Vec<String> = during
+        .iter()
+        .skip(middle_top(&during) + 1)
+        .take(transcript_rows())
+        .cloned()
+        .collect();
+    assert_eq!(
+        after, frozen,
+        "the transcript behind the overlay did not move"
+    );
+    // The rows that arrived are not counted at the reader either: the overlay is
+    // holding the position, so "N new rows" would be counting under it.
+    let counter = |rows: &[String]| {
+        rows.iter()
+            .find(|row| row.contains("行新内容"))
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        counter(&during),
+        counter(&before),
+        "and the new-rows count is held too"
+    );
+}
+
+#[test]
+fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
+    // A question may not be drawn over the overlay: the modal underneath would be
+    // unanswerable, because the overlay is what owns the keyboard (票 02 §4).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-21",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-21", true, Some("body"), None));
+    state.apply(flush());
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
+
+    state.request(ask_permission().0);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("── 参数 ──"),
+        "the overlay stood down for the question: {text}"
+    );
+    assert!(text.contains("权限询问"), "and the question is up: {text}");
+}
+
+#[test]
+fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
+    // The gaps between the footer's buttons are painted as well as counted, so the
+    // region a click lands in is the button the glyphs are in — this pins the bug
+    // where a counted-but-unpainted gap put every region three columns out
+    // (票 04 §7).
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, mut answers) = {
+        use fs_agent::render::QuestionnaireRequest;
+        let mut state = state_with_roster(&["kimi"]);
+        let (reply, answers) = tokio::sync::oneshot::channel();
+        let question = |id: &str| UserQuestion {
+            id: id.to_owned(),
+            header: None,
+            question: format!("第 {id} 题"),
+            multi_select: false,
+            options: vec![Choice {
+                label: "唯一".to_owned(),
+                description: None,
+            }],
+        };
+        state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+            questions: vec![question("q1"), question("q2")],
+            reply,
+        }));
+        (state, answers)
+    };
+
+    // On the first question only `下一题 →` is drawn. Clicking its glyphs advances.
+    click_in_row(&mut state, 120, 24, 22, "下一题 →");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("2 / 2"), "the click advanced: {text}");
+
+    // On the second, `← 上一题` is drawn first: clicking it goes back, and do not let
+    // it land on anything else.
+    click_in_row(&mut state, 120, 24, 22, "← 上一题");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("1 / 2"), "the click went back: {text}");
+    assert!(answers.try_recv().is_err(), "paging never submits");
+}
+
+#[test]
+fn a_thinking_line_tints_its_speakers_name() {
+    // The thinking hint carries a `speaker_label`, so its name takes the speaker's
+    // colour while the marker and the state word stay the narration grey
+    // (票 07 §2).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖。"));
+    state.apply(text_delta("答案。"));
+
+    let frame = buffer(120, 40, &mut state);
+    let Some((column, row)) = cell_of(&frame, 120, 40, "✓ 思考完成") else {
+        panic!("the thinking line is on screen");
+    };
+    // The name sits just before the marker.
+    let name_x = column - text_columns("[kimi] ") as u16;
+    assert_eq!(
+        frame[(name_x, row)].symbol(),
+        "[",
+        "the name prefix is there"
+    );
+    assert_eq!(
+        frame[(name_x, row)].fg,
+        Color::LightCyan,
+        "the name takes the first roster slot"
+    );
+    assert_eq!(
+        frame[(column, row)].fg,
+        Color::DarkGray,
+        "and the state word stays narration grey"
+    );
+}
+
+#[test]
+fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
+    // Reasoning and body deltas interleave, so a single message can hold several
+    // thinking segments: each one settles where it stands and the next opens its own
+    // line (票 02 §1).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("第一段思考。"));
+    state.apply(text_delta("第一段正文。"));
+    state.apply(reasoning_delta("第二段思考。"));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("… 正在思考"),
+        "the second segment is open: {text}"
+    );
+    assert_eq!(
+        text.matches("思考完成").count(),
+        1,
+        "and the first is settled: {text}"
+    );
+
+    state.apply(message(1, "第一段正文。", Some("第一段思考。第二段思考。")));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("正在思考"),
+        "the completion settles the open segment: {text}"
+    );
+}
+
+#[test]
+fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
+    // The one exception to "the overlay ignores every other key": `Ctrl-D` closes it
+    // instead of opening the exit confirmation (票 06 §5).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-22",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-22", true, Some("body"), None));
+    state.apply(flush());
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
+
+    state.key(Key::CtrlD);
+    assert!(!state.should_quit(), "closing is not quitting");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(!text.contains("── 参数 ──"), "the overlay closed: {text}");
+    assert!(
+        !text.contains("退出会话"),
+        "and no confirmation was asked: {text}"
+    );
+}
+
+#[test]
+fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
+    // The spilled file has no cap of its own, so the reader's does the cutting and
+    // the body says it happened (票 02 §4).
+    let dir = std::env::temp_dir().join(format!("fs-agent-detail-big-{}", std::process::id()));
+    let outputs = dir.join("outputs");
+    std::fs::create_dir_all(&outputs).expect("the session's outputs directory");
+    let big = "x".repeat(200_001);
+    std::fs::write(outputs.join("call-23.txt"), &big).expect("the spilled file");
+
+    let mut state = TuiState::new(SessionFacts {
+        session_id: "01J8ZQ4K7M".to_owned(),
+        cwd: dir.display().to_string(),
+        model: "claude-sonnet-4-5".to_owned(),
+        context_window: 200_000,
+        budget_limit: Some(100_000),
+        speaker_order: vec!["kimi".to_owned()],
+    });
+    state.apply(tool_started(
+        1,
+        "call-23",
+        "bash",
+        serde_json::json!({"command": "cat big"}),
+    ));
+    state.apply(tool_completed(2, "call-23", true, Some("preview"), None));
+    state.apply(flush());
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    // The mark is far below the visible body, so walk to the end of it.
+    for _ in 0..4000 {
+        state.key(Key::PageDown);
+    }
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("已截断"), "the cut is stated: {text}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_detail_overlay_ignores_every_key_but_its_own() {
+    // The overlay owns the keyboard: `Esc` and `Ctrl-D` close it, the arrows and the
+    // page keys scroll it, and **everything else is ignored** — `Ctrl-C` included, so
+    // a stray gesture cannot quit or cancel out from under a reader (票 02 §4).
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-24",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-24", true, Some("body"), None));
+    state.apply(flush());
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    state.key(Key::CtrlC);
+    assert!(
+        !state.should_quit(),
+        "Ctrl-C does not quit from the overlay"
+    );
+    assert!(
+        state.take_events().is_empty(),
+        "and it does not cancel anything either"
+    );
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("── 参数 ──"),
+        "the overlay is still up: {text}"
+    );
+
+    // A printable key does not reach the draft either: the overlay's keys are the
+    // overlay's, and the editor behind it is not being typed into.
+    state.key(Key::Char('x'));
+    let rows = screen(120, 40, &mut state);
+    let input = rows
+        .iter()
+        .position(|row| row.contains("> "))
+        .expect("the input row is drawn");
+    assert!(
+        !rows[input].contains('x'),
+        "nothing landed in the draft: {:?}",
+        rows[input]
+    );
+}

@@ -54,6 +54,9 @@ pub struct Pane {
     /// `total` as of the last frame that followed the bottom. The indicator counts
     /// what has arrived since.
     seen: usize,
+    /// Whether the count is paused — a reader holding the transcript open on a line
+    /// rather than scrolling through it (票 02 §4).
+    holding: bool,
 }
 
 impl Pane {
@@ -70,6 +73,7 @@ impl Pane {
             top_source: 0,
             follow: true,
             seen: 0,
+            holding: false,
         }
     }
 
@@ -191,9 +195,36 @@ impl Pane {
         self.follow
     }
 
+    /// Stop counting new rows, or start again.
+    ///
+    /// The detail overlay holds the viewport; while it is up the "N new rows" count
+    /// would climb with output the reader cannot see and was not asked to read
+    /// (票 02 §4). The count is re-baselined on the frame that turns the hold on, so
+    /// releasing it measures from the reader's new position.
+    pub fn set_holding(&mut self, holding: bool) {
+        if holding && !self.holding {
+            self.seen = self.total;
+        }
+        self.holding = holding;
+    }
+
+    /// Hold the viewport where it is, or let it track the bottom again.
+    ///
+    /// The detail overlay reads from a frozen transcript: leaving `follow` alone would
+    /// let a burst of output pull the line the reader opened out from under them
+    /// (票 02 §4). Releasing it returns the viewer to the bottom, which is where a
+    /// reader who has stopped reading history wants to be.
+    pub fn set_following(&mut self, follow: bool) {
+        if follow {
+            self.to_bottom();
+        } else {
+            self.follow = false;
+        }
+    }
+
     /// Display rows that arrived since the viewport last left the bottom.
     pub fn fresh(&self) -> usize {
-        if self.follow {
+        if self.follow || self.holding {
             0
         } else {
             self.total.saturating_sub(self.seen)
