@@ -28,3 +28,4 @@ Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
 - **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
 - **Claim**: set `Status: claimed` and save before any work.
 - **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+- **Check**: `python3 scripts/wayfinder-check.py .scratch/<effort>/map.md`. Local markdown has no sub-issue or dependency edges, so the script does the expected-vs-actual comparison a native tracker would: the map's `## 任务清单` checkbox entries must be exactly the files in `issues/`, and every child must carry `Type:` / `Status:` / `Part of:` / `Blocked by:` that resolves to a sibling. It exits non-zero on any mismatch; run it before claiming the map is done.

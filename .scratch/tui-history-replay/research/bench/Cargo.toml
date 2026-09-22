@@ -1,0 +1,15 @@
+# Throwaway benchmark for ticket 02 (research: replay seam and cost).
+# Deliberately its own workspace so it never joins the product build.
+# Build with CARGO_TARGET_DIR=/tmp/... and never commit this directory.
+[package]
+name = "replay-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+fs-agent = { path = "../../../.." }
+ratatui = "0.30"
+serde_json = "1"
