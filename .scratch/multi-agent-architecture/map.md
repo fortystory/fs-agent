@@ -2,7 +2,7 @@
 
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
-前身：`.scratch/v1-architecture/`（**已封存**，作为证据源；其目的地建立在「极简」上，已被用户推翻）
+前身：**v1-architecture 图**（**已删除**，只存在于 git 历史 `b510e6b`；其目的地建立在「极简」上，已被用户推翻。它的 ratify 记录已折进本图下面的「判据变更的后果」，唯一仍被引用的事实产物是 `research/08-rust-ecosystem.md`）
 
 ## Destination
 
@@ -23,7 +23,7 @@ Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 - **领域**：`fs-agent` —— 自用 coding agent CLI，Rust，从零实现。
 - **设计输入**：
   - `docs/research/coding-agent-features.md` —— 940 行综述，10 个 coding agent。**警告：它的多 agent 章节讲的是「隔离」架构，与本图目的地相反，不能当依据用。**
-  - `.scratch/v1-architecture/` —— 封存的前身图。它的 ratify 记录是「哪些砍掉项是被『极简』砍的、哪些是被证据砍的」的**主要来源**。
+  - **v1-architecture 图**（**已删除**，见 git 历史 `b510e6b`）—— 它当时的 ratify 记录是「哪些砍掉项是被『极简』砍的、哪些是被证据砍的」的**主要来源**；那个分类已折进本图的「判据变更的后果」，所以不再需要那份图本身。它唯一仍被引用的事实产物已迁到 `research/08-rust-ecosystem.md`。
   - `.scratch/multi-agent-architecture/research/01-debate-conformity-and-speaker-attribution.md`（731 行）
   - `.scratch/multi-agent-architecture/research/02-provider-call-surface.md`（761 行，Kimi/DeepSeek 逐字段一手参考）
 - **已退休的票**：旧图的 **08（research：Rust 生态）已解**，结论并入本 Notes 的「Rust 生态事实」，不再单独开票。**本图编号在 08 处有一个空洞**，旧编号全部保留，以防票内交叉引用断裂。
@@ -57,7 +57,7 @@ Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 - **`async fn` in trait 不 dyn-compatible**（Rust Reference 明确）→ `Provider` / `Tool` **不能直接 `dyn`**；替代：`async-trait` / `trait-variant` / `dynosaur` / 泛型单态化。
 - **hook 挂载点的惯用表达是「trait + typed enum」，不是 channel**；`rig-agent` 的 `AgentHook` 是最近先例。
 - **JSONL 无官方 API**；`std` 的 `OpenOptions::append` **不保证**跨线程追加不交错。
-- 产物：`.scratch/v1-architecture/research/08-rust-ecosystem.md`。时点提醒：调研日 Rust stable 已是 **1.98.1**，本机 `rustc` 是 **1.94.0**。
+- 产物：`.scratch/multi-agent-architecture/research/08-rust-ecosystem.md`。时点提醒：调研日 Rust stable 已是 **1.98.1**，本机 `rustc` 是 **1.94.0**。
 
 ### 判据变更的后果：砍掉项分两类
 

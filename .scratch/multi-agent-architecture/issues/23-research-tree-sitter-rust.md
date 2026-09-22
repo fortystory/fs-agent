@@ -7,7 +7,7 @@ Status: resolved
 
 本票为**票 12（repo map / 符号检索）**提供外部事实。它是 AFK 的：由子代理读一手来源，产出带来源链接的简报，**不给方案、不下结论**。
 
-**为什么需要它**：`docs/research/coding-agent-features.md` 把 repo map 描述成"需要 tree-sitter + 图排序的**独立工程**"，而票 08 的 Rust 生态调研产物（`.scratch/v1-architecture/research/08-rust-ecosystem.md`，399 行）经核实**完全没有覆盖 tree-sitter**——对全文检索 `tree-sitter` / `图排序` / `符号` / `repo map` 均为 **0 命中**。所以"这件事在 Rust 里到底多贵"目前没有事实底座，而票 12 的取舍完全压在这上面。
+**为什么需要它**：`docs/research/coding-agent-features.md` 把 repo map 描述成"需要 tree-sitter + 图排序的**独立工程**"，而票 08 的 Rust 生态调研产物（`.scratch/multi-agent-architecture/research/08-rust-ecosystem.md`，399 行）经核实**完全没有覆盖 tree-sitter**——对全文检索 `tree-sitter` / `图排序` / `符号` / `repo map` 均为 **0 命中**。所以"这件事在 Rust 里到底多贵"目前没有事实底座，而票 12 的取舍完全压在这上面。
 
 判据：**只报告事实与来源，不推荐方案、不选赢家**。凡一手来源未写明者标 ⚪ 未证实。
 

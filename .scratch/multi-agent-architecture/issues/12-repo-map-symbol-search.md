@@ -8,7 +8,7 @@ Blocked by: 01, 03, 06, 23
 
 ratify 第 4 条翻案把它加进范围。综述原本的砍掉理由：「需要 tree-sitter + 图排序的**独立工程**；对中小仓库收益有限」。
 
-**先读票 08 的研究产物**：`.scratch/v1-architecture/research/08-rust-ecosystem.md`。
+**先读票 08 的研究产物**：`.scratch/multi-agent-architecture/research/08-rust-ecosystem.md`。
 
 **一个已 ratify 确认的关键区分**：tree-sitter **用于读**（本票）是业界标准做法 —— aider 就是这么做的；tree-sitter **用于写**（AST 编辑，第 5 条）是**零采用**，已砍。**不要把两者混为一谈**，它们是方向相反的两个赌注。
 

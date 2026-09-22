@@ -37,7 +37,7 @@ Blocked by: 15
 
 **已定（2026-09-13，prototype + grilling，5 问逐条确认）。**
 
-**先读材料的更正**：票面写的"research/01 第 3 节（rig-agent 的 `AgentHook`）"是笔误——那份简报第 3 节讲的是说话人归属；rig-agent 的事实实际在 **`.scratch/v1-architecture/research/08-rust-ecosystem.md` §3.1**：`on_tool_call` *"Runs before a valid tool call is executed. The hook may **rewrite the current arguments, skip execution, or stop the run**."*；`on_tool_result` *"Runs **after a tool call resolves and before its presentation is sent to the model**."*；runner 是 **fail-closed**；同节还确认**全 Rust 生态没有拿 channel 当 hook 机制的**（一律 trait + typed enum 返回值）。
+**先读材料的更正**：票面写的"research/01 第 3 节（rig-agent 的 `AgentHook`）"是笔误——那份简报第 3 节讲的是说话人归属；rig-agent 的事实实际在 **`.scratch/multi-agent-architecture/research/08-rust-ecosystem.md` §3.1**：`on_tool_call` *"Runs before a valid tool call is executed. The hook may **rewrite the current arguments, skip execution, or stop the run**."*；`on_tool_result` *"Runs **after a tool call resolves and before its presentation is sent to the model**."*；runner 是 **fail-closed**；同节还确认**全 Rust 生态没有拿 channel 当 hook 机制的**（一律 trait + typed enum 返回值）。
 
 **产物（原型）**：`.scratch/multi-agent-architecture/prototype/05-hook-permission-ordering.html` —— 单文件、双击即开、无依赖的可按压状态机；7 个带剧本的演练（顺利路径 / hook 收紧成询问 / 黑名单 / hook 拦截询问 / pre 失败 fail-closed / PostToolUse 回灌 / 跳过执行）；右侧事件流用的正是**票 15 的事件名**。
 

@@ -5,7 +5,7 @@ Status: resolved
 
 ## Question
 
-本票为**票 13（渲染接缝：plain / TUI / headless）**提供外部事实。票面第 5 条点名了这个缺口，并且已核实：`ratatui` / `crossterm` / `tui` 在 `.scratch/v1-architecture/research/`、`.scratch/multi-agent-architecture/research/` 与 `docs/research/coding-agent-features.md` 里**全部零命中**。票面同时保留了"diff 语法高亮"（明确不做的只是"高亮之外的编辑器能力"），所以高亮库也要一并查。
+本票为**票 13（渲染接缝：plain / TUI / headless）**提供外部事实。票面第 5 条点名了这个缺口，并且已核实：`ratatui` / `crossterm` / `tui` 在当时的 `.scratch/v1-architecture/research/`（那份笔记今在 `research/08-rust-ecosystem.md`；v1-architecture 图已删除，见 git 历史 `b510e6b`）、`.scratch/multi-agent-architecture/research/` 与 `docs/research/coding-agent-features.md` 里**全部零命中**。票面同时保留了"diff 语法高亮"（明确不做的只是"高亮之外的编辑器能力"），所以高亮库也要一并查。
 
 判据：**只报告事实与来源，不推荐方案、不选赢家**。凡一手来源未写明者标 ⚪ 未证实，**不做推断**。
 
