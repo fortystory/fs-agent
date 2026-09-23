@@ -28,7 +28,7 @@ import os
 import re
 import sys
 
-TYPES = {"research", "prototype", "grilling", "task"}
+TYPES = {"research", "prototype", "grilling", "task", "implement"}
 CLOSED_STATUSES = {"resolved", "done", "closed"}
 
 TASK_ROW = re.compile(r"^\s*-\s*\[([ xX])\]\s*\[([^\]]+)\]\(([^)]+)\)\s*$")

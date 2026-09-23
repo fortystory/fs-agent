@@ -3,7 +3,7 @@
 Status: ready-for-agent
 
 - **来源**：`.scratch/tui-history-replay/map.md`（wayfinder 地图，5 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外是 `Further Notes` 记的两处勘误。
-- **实现票落点**：`.scratch/tui-history-replay/issues/NN-*.md`，**编号从 `06` 起**（`01`–`05` 是设计票，不要覆盖）。
+- **实现票落点**：`.scratch/tui-history-replay/issues/NN-*.md`，**编号从 `06` 起**（`01`–`05` 是设计票，不要覆盖）。`/to-tickets` 已切出 **`06`–`09`**：接缝与分帧重播 → 分隔行/面板/模式 → 历史详情 → 验证迁移与文档；`06` 是开工点，`07` 与 `08` 互不阻塞但共用同一个新测试文件（建议串行）。
 - **回改的既有 spec**：`.scratch/fs-agent-v1/spec.md` §19（新增历史重播一条、修掉过时的 inline viewport 一行）与 §11（恢复结果同时进转录）已由本 spec 折回正文。
 - **术语**：叙述用中文，标识符用英文。词汇表在 `CONTEXT.md`——本项目**只有概念「事件」，没有「重播」这个领域词**：它是渲染侧的动作（把历史事件按同一 `apply` 路径喂给转录），不新增词汇，也不与 `sessions replay`（那是**投影重算**）混用。
 
@@ -181,6 +181,7 @@ Status: ready-for-agent
 ### 10. 新增的文案与符号
 
 - 新增文案一族：`恢复历史 {n}/{m}` / `恢复中 {n}/{m}` / `恢复中`，以及分隔行 `── 以上为历史 ──`。落渲染层的文案模块，与既有人类可见文案同处。
+- **函数名用 `history_*`，不用 `replay_*`**：`history_progress(n, m)` / `history_progress_narrow(n, m)` / `history_progress_minimal()` 与 `history_divider()`。理由是文案模块里**已经有一整个 `replay_*` 家族**服务于 `sessions replay`（**投影重算**，如 `replay_needs_id` / `replay_system` / `discussion_replay`）；本特性是渲染侧的历史重播，同一模块里两个「replay」含义不同会立刻误导读代码的人。`history_*` 与既有的 `history_reason` 同族。
 - 新增渲染状态：replay 态（事件、下标、已产出源行数）与 live 缓冲。
 - 新增前端控制请求变体与对应 handle 方法（§1）。
 - **不改**：事件 schema、转录的块定义、投影、plain / headless。

@@ -3,7 +3,7 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-09-23，两轮 grilling）。本图只做**规划**，不产实现代码。
-**✅ 本图已完成（2026-09-23）**：5 张子票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
+**✅ 设计部分已完成（2026-09-23）**：5 张决策票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；交棒产物是 `.scratch/tui-history-replay/spec.md`，`/to-tickets` 已在同一 `issues/` 下切出 **4 张实现票（`06`–`09`，`Type: implement`）**。**不要再往这张图加决策票**——实现票由 `/implement` 认领，wayfinder 会话跳过它们（见 `## Notes` 与 tracker 文档）。
 
 ## Destination
 
@@ -27,7 +27,7 @@ Charting: **已完成**（2026-09-23，两轮 grilling）。本图只做**规划
 - 本仓库 issue tracker = **local markdown**：map = `.scratch/tui-history-replay/map.md`，child = `.scratch/tui-history-replay/issues/NN-*.md`，阻塞 = 票面 `Blocked by: NN`，claim = 票面 `Status: claimed`，resolve = `## Answer` + `Status: resolved` + 追加到本文件 `Decisions so far`。
 - 该后端**没有 native sub-issue / 原生依赖边**，所以按既定规则**回退**：本文件用 `## 任务清单` 逐条引用子票（条目数 == 子票文件数），每张子票顶部写 `Part of: ../map.md`。**阻塞关系以正文 `Blocked by:` 为权威**。
 - 校验：`python3 scripts/wayfinder-check.py .scratch/tui-history-replay/map.md`（数量 / `Part of` / `Blocked by` 解析 / `closed-total`；对不上非零退出）。
-- **`Status:` 与 triage 共用**：triage 状态也记在 `Status:`（canonical 角色串），category 记 `Category:` 行。**frontier 判定 = 非 `resolved`/`done`/`closed` + unblocked + unclaimed**。
+- **`Status:` 与 triage 共用**：triage 状态也记在 `Status:`（canonical 角色串），category 记 `Category:` 行。**frontier 判定 = 非 `resolved`/`done`/`closed` + unblocked + unclaimed + `Type` ≠ `implement`**——`06`–`09` 是实现票，虽在同一目录、`Status: ready-for-agent`，也**不是**本图的 frontier（`docs/agents/issue-tracker.md` 已写明这条）。
 
 ### 冻结项（charting 两轮 grilling 定下，票里不得重开）
 
@@ -61,15 +61,19 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 
 ## 任务清单
 
-<!-- 逐条引用子票；条目数必须等于 issues/ 下的子票文件数（scripts/wayfinder-check.py 校验）。Frontier 的权威查询仍是扫描 issues/ 里 open + unblocked + unclaimed 的票。 -->
+<!-- 逐条引用子票（决策票 + `/to-tickets` 切出的实现票）；条目数必须等于 issues/ 下的子票文件数（scripts/wayfinder-check.py 校验）。Frontier 的权威查询仍是扫描 issues/ 里 open + unblocked + unclaimed **且 `Type` ≠ `implement`** 的票。 -->
 
 - [x] [grilling：重播的接缝、分帧与顺序契约](issues/01-continue-history-replay.md)
 - [x] [research：分帧重播的接缝事实与成本实测](issues/02-research-replay-seam-and-cost.md)
 - [x] [grilling：保真度、面板与 header 的历史重建](issues/03-grilling-fidelity-and-derived-facts.md)
 - [x] [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md)
 - [x] [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md)
+- [ ] [重开时把历史铺进转录（接缝、分帧与进度行）](issues/06-history-replay-seam-framing-and-progress.md)
+- [ ] [历史与 live 的接缝：分隔行、信息面板与 header 模式](issues/07-history-seam-divider-panel-and-mode.md)
+- [ ] [历史行可点：详情覆盖层的复用与四种降级](issues/08-history-detail-overlay-reuse-and-degradation.md)
+- [ ] [验证迁移：pty 路径、手工清单与文档回改](issues/09-verification-pty-checklist-and-docs.md)
 
-共 **5** 张子票，当前 **5 resolved / 0 open**。
+共 **9** 张子票（**5** 张决策票全部 resolved + **4** 张实现票 open），当前 **5 resolved / 4 open**；实现票的依赖边 = `07 ← 06`、`08 ← 06`、`09 ← 06, 07, 08`，所以 `/implement` 的开工点是 `06`。
 
 ## Decisions so far
 
@@ -79,7 +83,7 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 - [grilling：重播的接缝、分帧与顺序契约](issues/01-continue-history-replay.md): 契约 6 条——接缝 = **CLI 在 `assemble` 后经新的 `ConsoleRequest::Replay { events }`**（照 `Catalog` 先例；console 通道 unbounded 无损；**含恢复事件**；`RenderEvent`/plain/headless 不动）。分帧 = **每轮迭代一批、不进 `select!` 等 tick**（否则 120ms × 98 帧 ≈ 12 s），预算 = **512 条事件 且 ≤2000 源行**（先到先停）；完成后清态、flush 缓冲、置脏。顺序 = live 事件进 `TuiState` 的 `Vec<RenderEvent>` 缓冲，完成后按到达顺序 flush；`Enter` 拦在 `submit()` 之前；重播期间**吸底**、滚动忽略。进度 = `恢复历史 {n}/{m}` 临时替掉提示行，`40×10` 降为 `恢复中 {n}/{m}`。边界 = 重播是**一过性状态、不复用 `busy()`**：`Ctrl-C` 退出、`Ctrl-D`/`Esc` 忽略、可打印字符照常进草稿、`resize` 正常。失败 = 读失败降级为不重播 + 诊断，不阻塞启动。
 - [grilling：保真度、面板与 header 的历史重建](issues/03-grilling-fidelity-and-derived-facts.md): 契约 4 条——「原样」= 逐条 `apply(Logged)`，块由 `Transcript` 唯一决定；**只有已记录事件能重播**（`Notice`/`Diagnostic` 不落日志，不重建；`SessionStarted` 不产块；合成器的 reasoning 历史里没有）。**历史分隔行**（用户选择）：重播结束、flush live 之前插一条 `Notice`，`wording::history_divider()` = `── 以上为历史 ──`，**仅当至少产出一个块**才插，顺序固定为 `[历史块] → [分隔行] → [缓冲的 banner / 诊断]`。**面板**：逐条 apply 自然累加一次（`last_input` = 末条 usage 的 input、`turns` = `TurnEnded` 数），与 live 衔接**不重置**；`context_window`/`budget_limit` 取当前配置、如实显示不调和。**模式**：以历史最后一条模式事件为准（含恢复补写的 `ModeChange`）——被杀在 plan 的会话重开后显示「询问」，与 harness 实际策略一致。**落点**：吸底（`follow=true`、`seen=total`、无指示条）。
 - [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md): 契约 4 条——**不新增形态**：历史详情就是 tui-ux 票 02/03 的覆盖层，命中沿用 tui-ux 票 04 的**绘制时当帧记录**（天然吸收 `evict` 的显示行平移）。可点范围 = 历史 `✓ 思考完成` 与工具行带 `▸`；**分隔行不可点**；**重播期间鼠标一律不响应**。工具全文的判据 = 事件文本里有没有 **`full output at <path>`** 注记：有 → 读 `<会话目录>/outputs/<id>.txt`，读不到 / 空 → 预览 + `全文不可用`；**没有注记 → 事件文本就是全文**（不误报不可用，悬空调用的 `INTERRUPTED` 结果走这条）。思考详情只来自 `MessageCompleted.reasoning`；合成器 `None` 的历史没有思考行、也就没有可点的思考详情（不伪造）。覆盖层行为与 live 完全一致（`Esc`/再点关闭、内滚、打开时视口冻结、关闭后恢复吸底）。
-- [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md): 分层定死——**行为进 `cargo test`**（`tests/support/` 加 session fixture：`tempfile::tempdir()` + `append(log_path, speaker, payload)`；多数断言直接构造 `Vec<Event>` 喂 `ConsoleRequest::Replay`）、**终端归属进 pty**（加 `--continue` 路径：先造会话再重开，断言不崩 / 收敛 / 退出交还干净）、**手感进手工清单**（新增 ⑫「`--continue` 重开」+ ⑦ 补「重开后退出」）。逐条列了：内容与顺序（`历史块 → 分隔行 → banner`）、分帧中途（部分历史 + 进度行）、面板 / 模式（含 `PlanMode`→`ModeChange` 的两个例子）、四种文件状态的详情、`Enter` 不提交与 live 缓冲顺序、空 / 1 / 512 / 513 边界、吸底。既有测试只改**编译期被逼改**的 `ConsoleRequest` match（TUI `request()` + plain 侧），现有断言预期不变、基线 **664**（tui-ux 落地后）开工前复核。spec 回改清单交给 `/to-spec`（`fs-agent-v1/spec.md`、`docs/render.md`、手工清单、pty 脚本、新文案）。实现顺序应在 `tui-ux` 实现之后。
+- [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md): 分层定死——**行为进 `cargo test`**（`tests/support/` 加 session fixture：`tempfile::tempdir()` + `append(log_path, speaker, payload)`；多数断言直接构造 `Vec<Event>` 喂 `ConsoleRequest::Replay`）、**终端归属进 pty**（加 `--continue` 路径：先造会话再重开，断言不崩 / 收敛 / 退出交还干净）、**手感进手工清单**（新增 ⑫「`--continue` 重开」+ ⑦ 补「重开后退出」；**编号勘误：实际落 ⑭**，见 `## 进度`）。逐条列了：内容与顺序（`历史块 → 分隔行 → banner`）、分帧中途（部分历史 + 进度行）、面板 / 模式（含 `PlanMode`→`ModeChange` 的两个例子）、四种文件状态的详情、`Enter` 不提交与 live 缓冲顺序、空 / 1 / 512 / 513 边界、吸底。既有测试只改**编译期被逼改**的 `ConsoleRequest` match（TUI `request()` + plain 侧），现有断言预期不变、基线 **664**（tui-ux 落地后）开工前复核。spec 回改清单交给 `/to-spec`（`fs-agent-v1/spec.md`、`docs/render.md`、手工清单、pty 脚本、新文案）。实现顺序应在 `tui-ux` 实现之后。
 
 ## Not yet specified
 
@@ -102,10 +106,12 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 
 ## 进度
 
-**100%** —— **本图完成（2026-09-23）**：5/5 张子票全部 resolved，`Not yet specified` 为空 ⇒ 通往 destination 的决策已 clear。
+**决策部分 100%** —— **本图完成（2026-09-23）**：5/5 张**决策票**全部 resolved、`Not yet specified` 为空 ⇒ 通往 destination 的决策已 clear。随后 `/to-tickets` 又在同一目录切出 **4 张实现票**（`06`–`09`）：它们计入 `## 任务清单` 的条目数，但**不计入本图的路线完成度**。
 
-**下一步 = handoff，不是 build**：`/to-spec` 把 5 张票的 decisions 折成可建计划（按 `grilling：测试与验证迁移` §7 回改 `fs-agent-v1/spec.md`、`docs/render.md`、手工清单与 pty 脚本）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。**`tui-ux` 已落地（2026-09-23），本图实现可直接开始**；**历史行必须经 `TuiState::apply`**（`links`）才有 `▸` 命中。**本图不再加票。**
+**下一步 = handoff，不是 build**：`/to-spec` 把 5 张票的 decisions 折成可建计划（按 `grilling：测试与验证迁移` §7 回改 `fs-agent-v1/spec.md`、`docs/render.md`、手工清单与 pty 脚本）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。**`tui-ux` 已落地（2026-09-23），本图实现可直接开始**；**历史行必须经 `TuiState::apply`**（`links`）才有 `▸` 命中。**本图不再加决策票**（实现票是实现交棒的产物，见 `## 进度` 末两段）。
 
-**2026-09-23 handoff 已落地**：`/to-spec` 的产物是 **`.scratch/tui-history-replay/spec.md`**（`Status: ready-for-agent`，含 5 张票的全部契约 + 勘误两条），并按 §7 回改了 `fs-agent-v1/spec.md` 的 **§19**（历史重播一条）与 **§11**（恢复结果同时进转录）——顺带修掉 §19 里早已被 tui-layout 与 ADR 0002 推翻、正文却没跟的 `inline viewport` 一行。**两处勘误**：设计票说的手工清单 ⑫ 实际是 **⑭**（`tui-ux` 已占 ⑫/⑬）；设计票说的回改落点 §7 实际是 §19/§11。`docs/render.md`、`docs/tui-manual-checklist.md`、`scripts/tui-startup-check.py` 的回改**刻意留给实现落地时做**（那些文档描述的是已实现的系统）。**下一步 = `/to-tickets`**，实现票编号从 `06` 起。
+**2026-09-23 handoff 已落地**：`/to-spec` 的产物是 **`.scratch/tui-history-replay/spec.md`**（`Status: ready-for-agent`，含 5 张票的全部契约 + 勘误两条），并按 §7 回改了 `fs-agent-v1/spec.md` 的 **§19**（历史重播一条）与 **§11**（恢复结果同时进转录）——顺带修掉 §19 里早已被 tui-layout 与 ADR 0002 推翻、正文却没跟的 `inline viewport` 一行。**两处勘误**：设计票说的手工清单 ⑫ 实际是 **⑭**（`tui-ux` 已占 ⑫/⑬）；设计票说的回改落点 §7 实际是 §19/§11。`docs/render.md`、`docs/tui-manual-checklist.md`、`scripts/tui-startup-check.py` 的回改**刻意留给实现落地时做**（那些文档描述的是已实现的系统）。**下一步曾 = `/to-tickets`**；它已在 2026-09-23 落地（见下）。
+
+**2026-09-23 `/to-tickets` 已落地**：按 spec 在同一个 `issues/` 下切出 **4 张实现票 `06`–`09`**（`Type: implement`、`Status: ready-for-agent`），依赖边 `07 ← 06`、`08 ← 06`、`09 ← 06, 07, 08`——**`/implement` 的开工点 = `06`**。`07` 与 `08` 互不阻塞，但都会往同一个新测试文件里加断言，建议串行。工具宽相：`wayfinder-check.py` 的 `TYPES` 纳入 `implement`（实现票不计入 wayfinder frontier），`docs/agents/issue-tracker.md` 同步了这条与「地图设计票全结即完成」的口径。**实现票由 `/implement` 认领，wayfinder 会话不要动它们；本图的决策路线到此为止。**
 
 **待确认**：无。五张票的决定都已在 live exchange 里由维护者拍板；剩下的只是执行。
