@@ -13,6 +13,12 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# DSH skills-deck runtime state: regenerable cache/logs and the 2-byte
+# `dirWritable` probe (written under the process cwd because the fs sandbox
+# only permits writes there).
+.dsh-mattskillsdeck-cache/
+.dsh-write-probe
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
