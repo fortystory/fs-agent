@@ -131,6 +131,50 @@ In the TUI, `TuiState` is the testable half: it holds the transcript, the input
 line and any pending question, and `Key` is its own key vocabulary rather than
 crossterm's, so the state machine is tested without a terminal.
 
+## Reopening a session: the history replay
+
+`--continue` reopens this workspace's newest session, and the TUI lays its whole
+event stream back into the transcript so the screen does not start empty. The
+seam is a front-end control request rather than a render event: the CLI pushes
+`ConsoleRequest::Replay { events }` (`ConsoleHandle::replay`) right after
+assembly and before the startup banner, carrying the **assembled** snapshot
+(`Harness::events()`), which already includes the synthetic results recovery
+wrote for dangling tool calls. Plain mode ignores the request; it keeps no
+transcript to replay into. `RenderEvent`, the transcript and the headless
+renderer are untouched.
+
+- **One apply path.** Every replayed event goes through the same `TuiState::apply`
+  a live event does, so blocks, collapsed hint lines, name colours, the
+  information panel and the header mode are rebuilt as side effects rather than
+  by a second implementation. That is also why a history row is clickable: the
+  detail hit table is maintained by `apply`, not rebuilt for history.
+- **Framed, with a progress line.** `replay_batch` applies one slice per loop
+  pass, bounded by both 512 events and 2000 source lines, and the loop does not
+  wait on the 120 ms tick while a replay is pending. The bottom hint row is
+  temporarily replaced by `恢复历史 n/m` (narrower terminals get `恢复中 n/m`,
+  then `恢复中`); `wording::history_progress_line` owns that ladder.
+- **The seam.** `TuiOptions::reopened` says a replay is coming, and the TUI waits for
+  that first console request before it renders anything: assembly has already emitted
+  the recovery results on the render channel, and they are the same events the
+  snapshot holds, so nothing may be painted until the replay that owns them is up.
+  When the last slice lands, a render-layer line `── 以上为历史 ──`
+  (`wording::history_divider`) is inserted — only if the history actually drew
+  something — and only then are the held-back live events flushed, in arrival order.
+  The banner therefore lands after the seam. A live *logged* event arriving during a
+  replay is dropped rather than buffered, because the snapshot already contains it;
+  only events that never enter the log (the banner, diagnostics, streaming deltas) are
+  held. The divider is never logged, so the next reopen inserts a fresh one.
+- **Held input.** While a replay is in flight the draft still edits, but `Enter`
+  does not submit, the pointer is ignored, and the scroll keys are ignored: the
+  viewport stays pinned to the transcript's end until the history is done.
+  `Ctrl-C` quits (this is not a run, so there is nothing to cancel); `Ctrl-D` and
+  `Esc` are inert.
+
+The behaviour is asserted in `tests/history_replay.rs` against a fixed-size
+`TestBackend`; the terminal ownership of a reopen is guarded by the
+`--continue` run in `scripts/tui-startup-check.py`, and the feel of a large
+session stays on the manual list (`docs/tui-manual-checklist.md`, ⑭).
+
 ## The interactive CLI
 
 `fs-agent` with no subcommand starts an interactive session in the current

@@ -68,12 +68,12 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 - [x] [grilling：保真度、面板与 header 的历史重建](issues/03-grilling-fidelity-and-derived-facts.md)
 - [x] [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md)
 - [x] [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md)
-- [ ] [重开时把历史铺进转录（接缝、分帧与进度行）](issues/06-history-replay-seam-framing-and-progress.md)
-- [ ] [历史与 live 的接缝：分隔行、信息面板与 header 模式](issues/07-history-seam-divider-panel-and-mode.md)
-- [ ] [历史行可点：详情覆盖层的复用与四种降级](issues/08-history-detail-overlay-reuse-and-degradation.md)
-- [ ] [验证迁移：pty 路径、手工清单与文档回改](issues/09-verification-pty-checklist-and-docs.md)
+- [x] [重开时把历史铺进转录（接缝、分帧与进度行）](issues/06-history-replay-seam-framing-and-progress.md)
+- [x] [历史与 live 的接缝：分隔行、信息面板与 header 模式](issues/07-history-seam-divider-panel-and-mode.md)
+- [x] [历史行可点：详情覆盖层的复用与四种降级](issues/08-history-detail-overlay-reuse-and-degradation.md)
+- [x] [验证迁移：pty 路径、手工清单与文档回改](issues/09-verification-pty-checklist-and-docs.md)
 
-共 **9** 张子票（**5** 张决策票全部 resolved + **4** 张实现票 open），当前 **5 resolved / 4 open**；实现票的依赖边 = `07 ← 06`、`08 ← 06`、`09 ← 06, 07, 08`，所以 `/implement` 的开工点是 `06`。
+共 **9** 张子票（**5** 张决策票全部 resolved + **4** 张实现票 2026-09-23 全部实现、`Status: done`）；实现票的依赖边 = `07 ← 06`、`08 ← 06`、`09 ← 06, 07, 08`。
 
 ## Decisions so far
 

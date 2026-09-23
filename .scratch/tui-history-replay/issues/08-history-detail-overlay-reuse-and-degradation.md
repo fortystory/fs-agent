@@ -1,7 +1,7 @@
 # 08 — 历史行可点：详情覆盖层的复用与四种降级
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 06
 Part of: ../map.md
 
@@ -13,8 +13,8 @@ Part of: ../map.md
 
 **验收：**
 
-- [ ] 历史里的「✓ 思考完成」行与工具行可点开覆盖层；命中沿用**绘制当帧记录**（天然吸收转录满上限后的显示行平移，不需要历史专用例外）。
-- [ ] 工具详情四种文件状态：
+- [x] 历史里的「✓ 思考完成」行与工具行可点开覆盖层；命中沿用**绘制当帧记录**（天然吸收转录满上限后的显示行平移，不需要历史专用例外）。
+- [x] 工具详情四种文件状态：
 
   | 事件文本 | `<会话目录>/outputs/<id>.txt` | 显示 |
   | --- | --- | --- |
@@ -23,10 +23,16 @@ Part of: ../map.md
   | 含注记 | 存在但为空 | 预览 + `全文不可用` |
   | **不含注记** | （从不尝试读） | 事件文本即全文，**不出现** `全文不可用` |
 
-- [ ] 悬空调用的合成结果（`ok: false` + `INTERRUPTED`，**不含注记**）显示那段文本，不误报「不可用」。
-- [ ] 思考详情只来自 `MessageCompleted.reasoning`（超限同样 `已截断`）；`reasoning: None` 的历史没有思考行、也没有可点的思考详情。
-- [ ] 重播期间鼠标点击与滚轮**一律不响应**（与键盘边界一致）；重播完成后恢复。
-- [ ] 历史分隔行、轮次分节线、无 `▸` 的行一律不可点。
-- [ ] 覆盖层行为与 live 完全一致：`Esc` / 再点同一行关闭；方向键 / 翻页 / 滚轮滚详情；打开时视口冻结（吸底暂停）、期间 live 事件照常追加但视口不跟随；关闭后恢复吸底。
-- [ ] 不新增文案：复用既有的 `全文不可用` / `已截断` / 滚动指示。
-- [ ] `cargo test --all-targets` 不低于 **664 passed**；clippy 干净；fmt 只留既有漂移。
+- [x] 悬空调用的合成结果（`ok: false` + `INTERRUPTED`，**不含注记**）显示那段文本，不误报「不可用」。
+- [x] 思考详情只来自 `MessageCompleted.reasoning`（超限同样 `已截断`）；`reasoning: None` 的历史没有思考行、也没有可点的思考详情。
+- [x] 重播期间鼠标点击与滚轮**一律不响应**（与键盘边界一致）；重播完成后恢复。
+- [x] 历史分隔行、轮次分节线、无 `▸` 的行一律不可点。
+- [x] 覆盖层行为与 live 完全一致：`Esc` / 再点同一行关闭；方向键 / 翻页 / 滚轮滚详情；打开时视口冻结（吸底暂停）、期间 live 事件照常追加但视口不跟随；关闭后恢复吸底。
+- [x] 不新增文案：复用既有的 `全文不可用` / `已截断` / 滚动指示。
+- [x] `cargo test --all-targets` 不低于 **664 passed**；clippy 干净；fmt 只留既有漂移。
+
+## Comments
+
+- 2026-09-23 实现落地：历史行可点是「必须经同一条 `apply`」的自然结果（`links` 命中表），本票未新增形态；断言覆盖历史 `▸` 工具行 / 思考行的覆盖层、四种文件状态、无 reasoning 的历史不出现思考行、以及重播期间鼠标一律不响应（`mouse()` 顶部早返回）。
+- 一处修实现：`read_tool_body` 原先把「存在但为空」的 `outputs/<id>.txt` 当全文显示（空正文），与 spec §8 第三种状态不符；现补上「空文件 = 预览 + `全文不可用`」，并保留「不含注记 = 事件文本即全文」。
+- 断言：`tests/history_replay.rs` 的 `a_history_tool_line_opens_the_same_detail_overlay` / `a_history_thinking_line_opens_its_recorded_trace` / `a_history_without_recorded_reasoning_has_no_thinking_line` / 四种文件状态四条 / `the_pointer_does_nothing_while_a_replay_is_in_flight` / `the_divider_and_section_lines_are_not_clickable`。`cargo test --all-targets` = 704 passed / 0 failed。

@@ -262,11 +262,11 @@ Status: ready-for-agent
 - **本 spec 是折叠，不是新决定。** 五张设计票的契约（接缝与调度、保真度与派生信息、详情复用与降级、验证分层）是全部内容的来源；只有下面两处勘误是本 spec 新增的。
 - **勘误一（编号）**：设计票 05 说手工清单「新增 ⑫」，但 `tui-ux` 落地后 ⑫ / ⑬ 已被占用，实际应为 **⑭**（同时把「重开后退出」补进既有的退出项下）。
 - **勘误二（回改落点）**：设计票 01 说 spec 回改落在 `.scratch/fs-agent-v1/spec.md` 的 §7；经核对 §7 是工具 trait，与「转录从空开始」无关。实际回改落在 **§19（渲染与 CLI 组装）与 §11（会话存储、`--continue`）**，已折回正文。
-- **文档回改清单（实现落地时一并做，不在本 spec 内）**：
-  - `docs/render.md`：渲染接缝补一节——新增的前端控制请求与「历史重播」的呈现（历史行经同一条 apply、分隔行、分帧与进度行）。
-  - `docs/tui-manual-checklist.md`：新增 **⑭**，并在退出项下补「重开后退出」。
-  - `scripts/tui-startup-check.py`：加 `--continue` 路径（见 `Testing Decisions`）。
-  - 渲染层文案模块：新增进度一族与分隔行文案。
+- **文档回改清单（实现落地时一并做；2026-09-23 已随票 06–09 全部落地，逐条清空）**：
+  - ✅ `docs/render.md`：补了「Reopening a session: the history replay」一节——新增的前端控制请求、历史行经同一条 apply、分隔行、分帧与进度行。
+  - ✅ `docs/tui-manual-checklist.md`：新增 **⑭ `--continue` 重开**，并在 ⑦ 退出项下补了「重开后退出」。
+  - ✅ `scripts/tui-startup-check.py`：每条 run 追加一次 `--continue` 路径（先由前几条 run 造出会话），断言不崩、重播收敛、终端交还干净。
+  - ✅ 渲染层文案模块：新增 `history_progress` / `history_progress_narrow` / `history_progress_minimal` / `history_progress_line` / `history_divider`。
   - 这些文档描述的是**已实现**的系统，所以留到实现落地时改，避免文档先于行为。
 - **已知代价（不是缺陷，写下来免得被当成 bug）**：
   - 历史 token 数与当前预算 / 窗口可能不自洽（配置变过时），**如实显示不调和**。

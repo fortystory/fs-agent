@@ -31,9 +31,11 @@ Run after `cargo build`:
     python3 scripts/tui-startup-check.py [binary] [runs]
 
 Each run is made once per way out: `Ctrl-C`, `/quit`, and `Ctrl-D` followed by `y`
-at the exit confirmation (票 06). Exits 0 when every run is green. A pty that does
-not answer the cursor-position query (`ESC[6n`) makes ratatui fail to initialise,
-which is why this script answers it.
+at the exit confirmation (票 06), plus one `--continue` reopen per run — the same
+terminal, a session that already exists, so the startup history replay is on the
+critical path. Exits 0 when every run is green. A pty that does not answer the
+cursor-position query (`ESC[6n`) makes ratatui fail to initialise, which is why
+this script answers it.
 """
 import collections
 import fcntl
@@ -62,6 +64,9 @@ STATUS_ANCHOR = "ctrl-c"
 # anchor carries its fullwidth colon, which is written contiguously after the
 # ASCII prefix.
 BANNER_ANCHOR = "fs-agent："
+# The history replay's progress line, on the hint row until the history has
+# settled. A `--continue` run is only green when it is gone from the final screen.
+REPLAY_PROGRESS_ANCHOR = "恢复"
 # The header shows one of two things, depending on the terminal (spec §2): the text
 # identity when it is small, and **the mark** when it is big enough — 260x30, this
 # script's size, is the mark. The mark is the program's identity in the tall header,
@@ -257,7 +262,7 @@ def tty_state(fd, tries=3):
     return None
 
 
-def capture(binary, data_home, gesture=b"\x03", timeout=20.0):
+def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
     """Run the binary on a pty until startup settles, then quit it and look behind.
 
     A fixed read window is flaky: assembly (context, skills, the session
@@ -269,12 +274,15 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0):
     wait for the process to actually go -- the terminal is only clean once it has
     (spec §19). The escape sequences it emitted and the termios it left are read
     after it exited, not guessed from the source.
+
+    `args` are extra CLI arguments; `--continue` uses them to reopen a session the
+    same `data_home` already holds.
     """
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["XDG_DATA_HOME"] = data_home
         os.environ["TERM"] = "xterm-256color"
-        os.execv(os.path.abspath(binary), [binary])
+        os.execv(os.path.abspath(binary), [binary, *args])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     raw, screen = "", Screen(fd)
     deadline, settle_by = time.time() + timeout, None
@@ -329,13 +337,18 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0):
     return Run(raw, exited, status, modes, survived_empty_enter)
 
 
-def verdict(run, devnull, identity):
+def verdict(run, devnull, identity, replay=False):
     """Judge one run: the first frame it drew, and what it left behind.
 
     The whole capture is replayed rather than sliced at the first draw: a wide
     cell is written with an explicit cursor move, so the byte offset of the status
     line is not `raw.find(STATUS_ANCHOR)`. The same replay answers the version
     anchor, which is split in the byte stream for the same reason.
+
+    `replay` marks a `--continue` run: the final screen then also has to show the
+    replay had **converged** -- the history progress line is gone and the ordinary
+    status row is what is left. The replay's *content* is not judged here; that is
+    `cargo test`'s job (`.scratch/tui-history-replay/spec.md` §Testing Decisions).
     """
     if not run.survived_empty_enter:
         return False, "the session did not survive an empty Enter"
@@ -346,6 +359,10 @@ def verdict(run, devnull, identity):
     frame = Screen(devnull)
     frame.feed(run.raw)
     rows = frame.rows()
+    if replay and any(REPLAY_PROGRESS_ANCHOR in r for r in rows):
+        return False, "the history replay did not converge: %r" % (
+            next(r for r in rows if REPLAY_PROGRESS_ANCHOR in r)[-60:],
+        )
     row = next((r for r in rows if STATUS_ANCHOR in r), None)
     if row is None:
         return False, "the status row was not on screen at the first draw"
@@ -407,7 +424,7 @@ def main():
     if not identity:
         print("no identity from %s --version" % binary)
         return 1
-    bad, total = 0, runs * len(GESTURES)
+    bad, total = 0, runs * (len(GESTURES) + 1)
     with tempfile.TemporaryDirectory(prefix="fs-agent-tui-check-") as data_home:
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
@@ -420,6 +437,16 @@ def main():
                         % (i + 1, label, "GREEN" if ok else "RED", why)
                     )
                     bad += 0 if ok else 1
+                # Reopen the session the runs above just made, in the same store:
+                # the history replay is then on the startup path, and its
+                # convergence and the terminal it hands back are what a pty can see.
+                run = capture(binary, data_home, args=("--continue",))
+                ok, why = verdict(run, devnull, identity, replay=True)
+                print(
+                    "run %d (--continue): %s -- %s"
+                    % (i + 1, "GREEN" if ok else "RED", why)
+                )
+                bad += 0 if ok else 1
         finally:
             os.close(devnull)
     print("\n%d/%d red" % (bad, total))

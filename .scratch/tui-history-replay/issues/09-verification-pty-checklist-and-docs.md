@@ -1,7 +1,7 @@
 # 09 — 验证迁移：pty 路径、手工清单与文档回改
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 06, 07, 08
 Part of: ../map.md
 
@@ -13,11 +13,17 @@ Part of: ../map.md
 
 **验收：**
 
-- [ ] pty 脚本新增 `--continue` 路径：先造会话（跑一次普通启动，或直接写最小 `log.jsonl`）再重开；断言**不崩**、重播**收敛**（进度行消失）、退出后终端**交还干净**（alt screen / 鼠标 / 粘贴 / termios）。
-- [ ] 重播内容的正确性**不进** pty——那是 `cargo test` 的活。
-- [ ] `docs/tui-manual-checklist.md` 新增 **⑭ `--continue` 重开**：真会话开一次看进度观感、历史详情点击、分帧中途上滚（预期无响应 / 吸底）、超大会话的启动手感。
-- [ ] 手工清单退出项补一条「**重开后退出**」：`--continue` → `Ctrl-C` / `Ctrl-D` → 终端干净。
-- [ ] `docs/render.md` 补一节历史重播：新的前端控制请求、历史行经同一条 apply、分隔行、分帧与进度行。
-- [ ] 渲染层文案模块已落新一族（`history_progress` / `history_divider`，见 spec §10）；`docs/render.md` 不必逐字重复文案。
-- [ ] spec 的 `Further Notes` 文档回改清单逐条清空（v1 spec 的 §19 / §11 已在 `/to-spec` 阶段折回）。
-- [ ] `cargo test --all-targets` 基线复核（开工前与收尾各一次，不低于 **664 passed**）；`cargo clippy --all-targets` 干净。
+- [x] pty 脚本新增 `--continue` 路径：先造会话（跑一次普通启动，或直接写最小 `log.jsonl`）再重开；断言**不崩**、重播**收敛**（进度行消失）、退出后终端**交还干净**（alt screen / 鼠标 / 粘贴 / termios）。
+- [x] 重播内容的正确性**不进** pty——那是 `cargo test` 的活。
+- [x] `docs/tui-manual-checklist.md` 新增 **⑭ `--continue` 重开**：真会话开一次看进度观感、历史详情点击、分帧中途上滚（预期无响应 / 吸底）、超大会话的启动手感。
+- [x] 手工清单退出项补一条「**重开后退出**」：`--continue` → `Ctrl-C` / `Ctrl-D` → 终端干净。
+- [x] `docs/render.md` 补一节历史重播：新的前端控制请求、历史行经同一条 apply、分隔行、分帧与进度行。
+- [x] 渲染层文案模块已落新一族（`history_progress` / `history_divider`，见 spec §10）；`docs/render.md` 不必逐字重复文案。
+- [x] spec 的 `Further Notes` 文档回改清单逐条清空（v1 spec 的 §19 / §11 已在 `/to-spec` 阶段折回）。
+- [x] `cargo test --all-targets` 基线复核（开工前与收尾各一次，不低于 **664 passed**）；`cargo clippy --all-targets` 干净。
+
+## Comments
+
+- 2026-09-23 实现落地：`scripts/tui-startup-check.py` 的每条 run 追加一次 `--continue`（用前面几条 run 在同一 `XDG_DATA_HOME` 里造出的会话），`verdict(replay=True)` 断言末屏无 `恢复`（重播收敛）+ 原有终端交还检查；手工清单新增 **⑭**、⑦ 下补「重开后退出」；`docs/render.md` 新增历史重播一节；spec 的 Further Notes 文档回改清单已逐条清空。
+- pty 实测（`python3 scripts/tui-startup-check.py target/debug/fs-agent 1`）：4/4 GREEN（ctrl-c / /quit / ctrl-d y / --continue）。
+- 基线复核：开工前 `cargo test --all-targets` = **677 passed / 0 failed**，收尾 **704 passed / 0 failed**；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只留 `src/context/repo_map.rs` 既有漂移。

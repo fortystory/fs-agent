@@ -327,7 +327,14 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             // roster the transcript's name colours have to place (票 07 §1).
             speaker_order: vec![profile.name.clone()],
         };
-        Renderer::tui(TuiOptions { port, facts })
+        Renderer::tui(TuiOptions {
+            port,
+            facts,
+            // A reopened session gets its history replayed before the banner, so the
+            // TUI has to know not to render anything until that replay arrives
+            // (`.scratch/tui-history-replay/spec.md` §1, §3).
+            reopened: parsed.resume,
+        })
     } else {
         // The plain front end reads stdin; it is line-buffered, so there is no
         // raw mode and no key events.
@@ -378,6 +385,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // The history a reopened session assembled with, pushed to the front end before
+    // the banner so the TUI lays it out first and the banner lands *after* the seam
+    // rather than in the middle of it (`.scratch/tui-history-replay/spec.md` §1).
+    // The payload is the assembled snapshot, so it carries the synthetic results
+    // `--continue`'s recovery wrote for dangling tool calls. A fresh session has no
+    // history, so nothing is sent at all.
+    if parsed.resume {
+        console.replay(harness.events());
+    }
 
     // User story A.12: say which model, mode and session this is, before the
     // first question. It goes through the renderer rather than to stderr: the
@@ -607,7 +624,13 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             // what gives the first debater the first palette slot (票 07 §1).
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],
         };
-        Renderer::tui(TuiOptions { port, facts })
+        // A discussion is one question, one harness: it is never a reopen, so no
+        // history is replayed and the TUI renders from the first frame.
+        Renderer::tui(TuiOptions {
+            port,
+            facts,
+            reopened: false,
+        })
     } else {
         render::spawn_plain_console(port);
         Renderer::plain(PlainOptions {

@@ -1152,6 +1152,69 @@ fn hint_line(state: &str, hints: &[&str], exit: &str, width: u16) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// History replay (`.scratch/tui-history-replay/spec.md` §4, §6)
+// ---------------------------------------------------------------------------
+
+/// The name the replay goes by and the count it has reached: how many of the
+/// history's events have been laid into the transcript.
+///
+/// Deliberately `history_*`, not `replay_*`: this module already has a whole
+/// `replay_*` family for `sessions replay`, which **recomputes a projection** and
+/// is a different thing from laying history out for a reader (spec §10).
+pub fn history_progress(n: usize, m: usize) -> String {
+    format!("恢复历史 {n}/{m}")
+}
+
+/// The same count once the hint row is too narrow for the whole phrase: the
+/// minimum legal frame (`40×10`) leaves 38 columns of hints (票 06 §4).
+pub fn history_progress_narrow(n: usize, m: usize) -> String {
+    format!("恢复中 {n}/{m}")
+}
+
+/// The count with no numbers at all, for a hint row narrower than the minimum
+/// frame can ever draw.
+pub fn history_progress_minimal() -> &'static str {
+    "恢复中"
+}
+
+/// The replay progress line for a hint row `width` columns wide.
+///
+/// The width is the **hint row's**, not the terminal's, exactly as
+/// [`status_line`]'s is: the minimum frame (40 columns) leaves 38 columns of hints,
+/// and that is the width the middle rung exists for. The ladder is here rather than
+/// in the renderer for the same reason the hint ladder is: it is wording, and it is
+/// measurable without a terminal.
+pub fn history_progress_line(n: usize, m: usize, width: u16) -> String {
+    if width < HISTORY_NARROW_MIN {
+        history_progress_minimal().to_owned()
+    } else if width < HISTORY_FULL_MIN {
+        history_progress_narrow(n, m)
+    } else {
+        history_progress(n, m)
+    }
+}
+
+/// The narrowest hint row that still carries the count: the minimum legal frame
+/// less the two border columns.
+const HISTORY_NARROW_MIN: u16 = super::layout::MIN_WIDTH - 2;
+
+/// The hint ladder's next measured rung after the minimum: a 60-column terminal
+/// buys the second hint, and it is where the full history phrase earns its columns.
+const HISTORY_FULL_TERMINAL: u16 = 60;
+
+/// The hint row from which the full phrase is worth its columns.
+const HISTORY_FULL_MIN: u16 = HISTORY_FULL_TERMINAL - 2;
+
+/// The line drawn between replayed history and what this session adds.
+///
+/// It is a **render-layer line, not an event**: it never enters the log, so the next
+/// `--continue` inserts a fresh one on the new seam instead of replaying the old
+/// (spec §6).
+pub fn history_divider() -> &'static str {
+    "── 以上为历史 ──"
+}
+
 /// A label in the information panel (spec §8).
 pub const PANEL_MODEL: &str = "模型";
 pub const PANEL_CONTEXT: &str = "上下文";

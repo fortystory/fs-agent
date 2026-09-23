@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::events::Event;
 use crate::permissions::{Answer, Asker, PermissionRequest, PlanConflict};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
 
@@ -135,6 +136,15 @@ pub enum ConsoleRequest {
     /// before the loop has asked for its first line yet. Both mistakes turn `Ctrl-C`
     /// into a cancel gesture the idle loop discards, which reads as a dead keyboard.
     RunState { running: bool },
+    /// The event stream a reopened session opened with, for the front end to lay
+    /// out as history (`.scratch/tui-history-replay/spec.md` §1).
+    ///
+    /// Pushed once, right after assembly and before the startup banner, because the
+    /// payload is the **assembled** snapshot — which includes the synthetic results
+    /// `--continue`'s recovery wrote for dangling tool calls, and so cannot be taken
+    /// before assembly. A front end that keeps no transcript — the plain console —
+    /// has nothing to do with it.
+    Replay { events: Vec<Event> },
 }
 
 /// A gesture, pushed by the front end on its own schedule.
@@ -183,6 +193,16 @@ impl ConsoleHandle {
     /// kind of run.
     pub fn set_running(&self, running: bool) {
         let _ = self.requests.send(ConsoleRequest::RunState { running });
+    }
+
+    /// Hand the front end the history a reopened session assembled with.
+    ///
+    /// Fire and forget, like [`catalog`](Self::catalog): laying the history out is the
+    /// front end's own business, and there is no answer to wait for. The payload is the
+    /// **whole** assembled stream in `seq` order; an empty one means there is nothing to
+    /// replay and the front end behaves as it always has.
+    pub fn replay(&self, events: Vec<Event>) {
+        let _ = self.requests.send(ConsoleRequest::Replay { events });
     }
 }
 
@@ -380,6 +400,10 @@ pub fn spawn_plain_console_with(
                 // Nothing on this front end reads key events, so there is no gesture to
                 // turn into the wrong branch (spec §6).
                 ConsoleRequest::RunState { .. } => {}
+                // There is no transcript to lay history into: the line-oriented front
+                // end prints each event as it arrives and keeps nothing
+                // (`.scratch/tui-history-replay/spec.md` §1).
+                ConsoleRequest::Replay { .. } => {}
             }
         }
     })

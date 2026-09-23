@@ -733,6 +733,23 @@ fn the_replay_labels_read_in_chinese() {
 }
 
 #[test]
+fn the_history_replay_progress_reads_in_chinese_and_degrades_by_width() {
+    // The three rungs of the progress line, and the width at which each takes over:
+    // 38 columns is the minimum frame's hint row, and the full phrase is worth its
+    // columns from the next measured rung (`.scratch/tui-history-replay/spec.md` §4).
+    assert_eq!(wording::history_progress(12, 345), "恢复历史 12/345");
+    assert_eq!(wording::history_progress_narrow(12, 345), "恢复中 12/345");
+    assert_eq!(wording::history_progress_minimal(), "恢复中");
+    assert_eq!(wording::history_progress_line(12, 345, 38), "恢复中 12/345");
+    assert_eq!(wording::history_progress_line(12, 345, 37), "恢复中");
+    assert_eq!(
+        wording::history_progress_line(12, 345, 58),
+        "恢复历史 12/345"
+    );
+    assert_eq!(wording::history_divider(), "── 以上为历史 ──");
+}
+
+#[test]
 fn the_stats_labels_read_in_chinese() {
     assert_eq!(
         wording::stats_session(120, 2, 3, 4, &wording::stats_no_cost("mystery")),

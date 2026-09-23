@@ -38,7 +38,7 @@ use ratatui::widgets::{
 };
 use tokio::sync::broadcast;
 
-use crate::events::{ContextSource, HistoryReason, Role, StopReason, ToolCallId};
+use crate::events::{ContextSource, Event, HistoryReason, Role, StopReason, ToolCallId};
 use crate::permissions::Mode;
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
@@ -71,6 +71,20 @@ const PASTE_CONFIRM_CHARS: usize = 100_000;
 /// How many queued render events one frame absorbs. A bounded drain keeps a
 /// firehose from starving the keyboard for a whole frame's worth of work.
 const DRAIN_LIMIT: usize = 4_096;
+
+/// How many history events one replay batch applies.
+///
+/// Replaying a session is a frame-by-frame catch-up rather than a blocking load, so
+/// each pass takes a bounded slice and draws. The event count alone is not enough of
+/// a bound: a slice of 512 huge tool results would still be a slow frame, so the
+/// batch also stops at [`REPLAY_BATCH_LINES`] source lines
+/// (`.scratch/tui-history-replay/spec.md` §2).
+const REPLAY_BATCH_EVENTS: usize = 512;
+
+/// How many transcript source lines one replay batch may produce. The pane's cost
+/// per line grows with its cap once the transcript is full, so the batch is
+/// bounded by what it draws, not only by how many events it consumed.
+const REPLAY_BATCH_LINES: usize = 2_000;
 
 /// The keys the TUI acts on.
 ///
@@ -281,6 +295,17 @@ pub struct SessionFacts {
 pub struct TuiOptions {
     pub port: ConsolePort,
     pub facts: SessionFacts,
+    /// Whether this session was **reopened** (`--continue`), so a history replay is
+    /// on its way over the console port.
+    ///
+    /// It is a flag, not the history: the events themselves ride
+    /// [`ConsoleRequest::Replay`], because only the assembled harness has the
+    /// post-recovery snapshot. The TUI needs the flag because it must not lay down a
+    /// single render event — not even the banner — until that snapshot has arrived,
+    /// or the recovery events assembly already emitted would be painted above the
+    /// history they belong to and then painted again by the replay
+    /// (`.scratch/tui-history-replay/spec.md` §1, §3).
+    pub reopened: bool,
 }
 
 /// The TUI renderer.
@@ -294,7 +319,11 @@ impl Tui {
     }
 
     pub async fn run(self, mut receiver: broadcast::Receiver<RenderEvent>) {
-        let TuiOptions { mut port, facts } = self.options;
+        let TuiOptions {
+            mut port,
+            facts,
+            reopened,
+        } = self.options;
         let mut state = TuiState::new(facts);
 
         // The alternate screen, raw mode, and a panic hook that restores them.
@@ -309,45 +338,58 @@ impl Tui {
         tick.tick().await;
         state.refresh_clock();
 
+        // A reopened session waits for the replay before it renders anything. The
+        // loop pushes it as its **first** console request, right after assembly and
+        // before the banner; assembly has meanwhile emitted the recovery results on
+        // the render channel, and those events are already in the replay's snapshot.
+        // Waiting here is what keeps them from being painted above the history and
+        // then painted again by the replay. A port that has gone drops the wait.
+        if reopened {
+            if let Some(request) = port.recv().await {
+                state.request(request);
+            }
+        }
+
         loop {
             let mut closed = false;
-            tokio::select! {
-                received = receiver.recv() => match received {
-                    Ok(event) => state.apply(event),
-                    Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                        state.apply(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
-                    }
-                    Err(broadcast::error::RecvError::Closed) => closed = true,
-                },
-                maybe_event = keys.next() => match maybe_event {
-                    Some(Ok(CtEvent::Key(key))) => {
-                        if key.kind == KeyEventKind::Press {
-                            if let Some(key) = map_key(key) {
-                                state.key(key);
-                            }
-                        }
-                    }
-                    Some(Ok(CtEvent::Paste(text))) => state.paste(&text),
-                    Some(Ok(CtEvent::Mouse(mouse))) => state.mouse(mouse),
-                    Some(Ok(CtEvent::Resize(..))) => state.mark_dirty(),
-                    _ => {}
-                },
-                request = port.recv() => match request {
-                    Some(request) => state.request(request),
-                    None => closed = true,
-                },
-                _ = tick.tick() => state.refresh_clock(),
+            if state.replay_pending() {
+                // A replay must not be throttled by the redraw tick — a large session
+                // is dozens of batches, and waiting 120 ms between them would turn a
+                // second into minutes — but the keyboard, the live stream and the
+                // loop's requests still have to be answered between batches, or
+                // `Ctrl-C` during a long replay would be a dead key. The last branch
+                // is always ready, so this select never waits on anything and the
+                // batch below runs as fast as the frame can be drawn
+                // (`.scratch/tui-history-replay/spec.md` §2).
+                tokio::select! {
+                    biased;
+                    received = receiver.recv() => closed = state.take_render_event(received),
+                    maybe_event = keys.next() => state.terminal_event(maybe_event),
+                    request = port.recv() => closed = state.port_request(request),
+                    _ = std::future::ready(()) => {}
+                }
+                state.replay_batch();
+            } else {
+                tokio::select! {
+                    received = receiver.recv() => closed = state.take_render_event(received),
+                    maybe_event = keys.next() => state.terminal_event(maybe_event),
+                    request = port.recv() => closed = state.port_request(request),
+                    _ = tick.tick() => state.refresh_clock(),
+                }
             }
 
             // Whatever is already queued joins this frame. A provider that bursts
             // a thousand deltas between two frames costs one frame instead of a
-            // thousand, and still loses nothing (spec §11).
+            // thousand, and still loses nothing (spec §11). During a replay these are
+            // buffered rather than applied, exactly like the ones the select saw.
             let mut drained = 0usize;
             while drained < DRAIN_LIMIT {
                 match receiver.try_recv() {
-                    Ok(event) => state.apply(event),
+                    Ok(event) => state.live_event(event),
                     Err(broadcast::error::TryRecvError::Lagged(dropped)) => {
-                        state.apply(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
+                        state.live_event(RenderEvent::Diagnostic(wording::renderer_dropped(
+                            dropped,
+                        )));
                     }
                     Err(broadcast::error::TryRecvError::Empty) => break,
                     Err(broadcast::error::TryRecvError::Closed) => {
@@ -520,6 +562,15 @@ pub struct TuiState {
     /// Where the last frame drew the "back to bottom" indicator, so a click can be
     /// matched against what the user actually saw.
     indicator: Option<Rect>,
+    /// The history replay in flight, if any. `Some` is a one-shot startup state: the
+    /// keyboard, the pointer and the loop behave differently until it drains
+    /// (`.scratch/tui-history-replay/spec.md` §2).
+    replay: Option<Replay>,
+    /// Live render events that arrived while a replay was in flight, in arrival
+    /// order. They are applied — after the history and its seam — once the replay
+    /// finishes, so the startup banner cannot be painted into the middle of history
+    /// (spec §3).
+    live_buffer: Vec<RenderEvent>,
     quit: bool,
 }
 
@@ -1051,6 +1102,23 @@ fn agrees(key: Key) -> bool {
     matches!(key, Key::Char('y') | Key::Char('Y'))
 }
 
+/// A history replay in flight: the assembled event stream, how much of it has been
+/// laid into the transcript, and how many source lines that produced.
+///
+/// The replay is a one-shot state of the renderer — it is not [`TuiState::busy`],
+/// which is the loop's word for a run: there is nothing to cancel during a replay, so
+/// `Ctrl-C` quits instead (`.scratch/tui-history-replay/spec.md` §2, §5).
+struct Replay {
+    /// The whole stream, in `seq` order, exactly as assembly left it.
+    events: Vec<Event>,
+    /// The next event to apply. Doubles as the `n` the progress line shows.
+    next: usize,
+    /// Source lines the replay has produced so far. Zero means the history drew
+    /// nothing — an empty stream, or a skeleton of `SessionStarted` — and so there is
+    /// no seam to mark (spec §6).
+    lines: usize,
+}
+
 impl TuiState {
     pub fn new(facts: SessionFacts) -> Self {
         let colors = SpeakerColors::new(&facts.speaker_order);
@@ -1085,6 +1153,8 @@ impl TuiState {
             pending: None,
             events: Vec::new(),
             indicator: None,
+            replay: None,
+            live_buffer: Vec::new(),
             quit: false,
         }
     }
@@ -1139,9 +1209,14 @@ impl TuiState {
         }
     }
 
-    /// Feed one render event.
-    pub fn apply(&mut self, event: RenderEvent) {
+    /// Feed one render event, and answer how many transcript source lines it drew.
+    ///
+    /// The count is what the history replay's batch budget is measured in: a frame's
+    /// cost is bounded by the text it lays down, not only by how many events it
+    /// consumed (`.scratch/tui-history-replay/spec.md` §2). Live callers ignore it.
+    pub fn apply(&mut self, event: RenderEvent) -> usize {
         self.dirty = true;
+        let mut produced = 0usize;
         for block in self.transcript.push(event) {
             // The thinking line's lifecycle runs before the block is painted: a
             // reasoning delta opens it, the body's first delta freezes it in place,
@@ -1154,7 +1229,7 @@ impl TuiState {
             {
                 match kind {
                     DeltaKind::Reasoning => {
-                        self.open_thinking(speaker.clone());
+                        produced += usize::from(self.open_thinking(speaker.clone()));
                         self.reasoning.push_str(text);
                     }
                     DeltaKind::Text => self.freeze_thinking(),
@@ -1179,7 +1254,7 @@ impl TuiState {
                         Some(text) => {
                             let text = text.clone();
                             if !self.thinking_open && !self.thinking_done {
-                                self.open_thinking(speaker.clone());
+                                produced += usize::from(self.open_thinking(speaker.clone()));
                             }
                             self.settle_thinking(Some(text));
                         }
@@ -1238,6 +1313,7 @@ impl TuiState {
             // not list (票 07).
             self.panel.observe(&block);
             let lines = paint_block(&block, &mut self.colors);
+            produced += lines.len();
             for rendered in lines {
                 let link = rendered.link;
                 self.pane.push(rendered.line);
@@ -1245,16 +1321,143 @@ impl TuiState {
                 self.prune_links();
             }
         }
+        produced
     }
 
-    /// Open the thinking line, unless one is already open.
+    /// Feed one **live** render event: an event that arrived while the renderer is
+    /// running, as opposed to one the history replay is laying down.
+    ///
+    /// While a replay is in flight the event is held back, in arrival order, so
+    /// history and the lines this session adds cannot interleave. A **logged** event
+    /// is not held at all: the replay's snapshot is the assembled stream, so a logged
+    /// event arriving during a replay is one the snapshot already holds — buffering it
+    /// would paint the same tool call or message a second time. Only events that never
+    /// enter the log — the banner, diagnostics, streaming deltas — are buffered for
+    /// after the seam (`spec` §3).
+    pub fn live_event(&mut self, event: RenderEvent) {
+        if self.replay.is_some() {
+            if !matches!(event, RenderEvent::Logged(_)) {
+                self.live_buffer.push(event);
+            }
+            self.dirty = true;
+        } else {
+            self.apply(event);
+        }
+    }
+
+    /// Whether the history replay still has events to lay down.
+    pub fn replay_pending(&self) -> bool {
+        self.replay.is_some()
+    }
+
+    /// Apply one batch of the history replay's events.
+    ///
+    /// The batch is bounded by **both** [`REPLAY_BATCH_EVENTS`] and
+    /// [`REPLAY_BATCH_LINES`], whichever trips first: a slice of 512 events is not
+    /// itself a bound on a frame when each one can be a huge tool result. Finishing
+    /// the batch that consumes the last event also closes the replay — the seam, the
+    /// buffered live events and the return to the bottom all happen here, before the
+    /// next frame is drawn.
+    pub fn replay_batch(&mut self) {
+        let Some(mut replay) = self.replay.take() else {
+            return;
+        };
+        let mut applied = 0usize;
+        let mut produced = 0usize;
+        while replay.next < replay.events.len()
+            && applied < REPLAY_BATCH_EVENTS
+            && produced < REPLAY_BATCH_LINES
+        {
+            let event = replay.events[replay.next].clone();
+            replay.next += 1;
+            applied += 1;
+            produced += self.apply(RenderEvent::Logged(event));
+        }
+        replay.lines += produced;
+        // `apply` sets the flag itself, but the progress line's `n` is state the frame
+        // only sees if this pass says so — and the pass that changes nothing but the
+        // count is exactly the one that would otherwise never be drawn.
+        self.dirty = true;
+        if replay.next >= replay.events.len() {
+            self.finish_replay(replay);
+        } else {
+            self.replay = Some(replay);
+        }
+    }
+
+    /// Close a finished replay: mark the seam, release the buffered live events, and
+    /// return the viewport to the bottom.
+    ///
+    /// The divider is inserted only when the history actually drew something, so an
+    /// empty stream or a bare `SessionStarted` skeleton gets no seam to nothing. It
+    /// is a render-layer line rather than an event, so it never enters the log and
+    /// the next `--continue` inserts a new one instead of replaying the old.
+    fn finish_replay(&mut self, replay: Replay) {
+        if replay.lines > 0 {
+            self.apply(RenderEvent::Notice(wording::history_divider().to_owned()));
+        }
+        for event in std::mem::take(&mut self.live_buffer) {
+            self.apply(event);
+        }
+        // The reader is caught up: the transcript is history and the viewport is at
+        // its end, which is where a session that has just started belongs.
+        self.pane.to_bottom();
+        self.dirty = true;
+    }
+
+    /// Handle one keypress while the history replay is in flight.
+    ///
+    /// A replay is **not** a run, so none of the run's keys mean their run meaning:
+    /// there is nothing to cancel, and `Ctrl-C` quits. The editor keeps working —
+    /// waiting time is typing time — but `Enter` cannot submit and the transcript's
+    /// scroll keys are ignored, because the history below is still being laid down
+    /// and the viewport stays pinned to its end (`spec` §3, §5).
+    fn replay_key(&mut self, key: Key) {
+        if key == Key::CtrlC {
+            self.quit = true;
+            return;
+        }
+        // Everything the editor answers to still works; `Ctrl-D`, `Esc`, `Enter`, the
+        // scroll keys and the plan-mode gesture are ignored outright.
+        self.editor_key(key);
+        self.sync_menu();
+    }
+
+    /// Apply the keys that edit the draft, wherever the draft is live — the resident
+    /// editor and a replay share them, so the two cannot drift.
+    fn editor_key(&mut self, key: Key) {
+        match key {
+            Key::Char(ch) => self.editor.insert_char(ch),
+            // The one reliable newline key: Shift+Enter arrives as plain Enter on a
+            // terminal without the keyboard-enhancement protocol, so it submits
+            // (spec §6).
+            Key::CtrlJ => self.editor.insert_char('\n'),
+            Key::Backspace => self.editor.backspace(),
+            Key::Delete => self.editor.delete_forward(),
+            Key::Left => self.editor.left(),
+            Key::Right => self.editor.right(),
+            Key::Up => self.editor.up(),
+            Key::Down => self.editor.down(),
+            Key::Home | Key::CtrlA => self.editor.home(),
+            Key::End | Key::CtrlE => self.editor.end(),
+            Key::CtrlU => self.editor.kill_to_line_start(),
+            Key::CtrlK => self.editor.kill_to_line_end(),
+            Key::CtrlW => self.editor.kill_word(),
+            // History is `Ctrl-P` / `Ctrl-N` alone; the arrows belong to the cursor.
+            Key::CtrlP => self.editor.history_previous(),
+            Key::CtrlN => self.editor.history_next(),
+            _ => {}
+        }
+    }
+
+    /// Open the thinking line, unless one is already open. `true` when it drew a row.
     ///
     /// The line is a plain transcript row — it counts against the pane's cap and
     /// scrolls with everything else — and it is deliberately **not** clickable yet:
     /// the whole trace only exists on `MessageCompleted` (票 02 §1).
-    fn open_thinking(&mut self, speaker: crate::events::SpeakerId) {
+    fn open_thinking(&mut self, speaker: crate::events::SpeakerId) -> bool {
         if self.thinking_open {
-            return;
+            return false;
         }
         self.thinking_open = true;
         self.thinking_speaker = speaker;
@@ -1274,6 +1477,7 @@ impl TuiState {
         self.pane.push(line);
         self.links.push_back(None);
         self.prune_links();
+        true
     }
 
     /// Freeze the open thinking line where it stands: the body's first delta means
@@ -1344,6 +1548,12 @@ impl TuiState {
     /// other click is ignored — the terminal's own selection is the user's, and
     /// nothing here takes focus (spec §4).
     pub fn mouse(&mut self, mouse: MouseEvent) {
+        // A replay owns the pointer by ignoring it: history is still being laid down
+        // under a viewport pinned to the bottom, so neither a wheel notch nor a click
+        // may move it or open a line that has not finished arriving (`spec` §5).
+        if self.replay.is_some() {
+            return;
+        }
         // Three dispatches, in order of who owns the pointer. A detail overlay owns
         // it outright; otherwise a question does; otherwise the transcript does.
         // Nothing here ever scrolls the transcript behind something that is up
@@ -1607,6 +1817,18 @@ impl TuiState {
             // The names the loop can act on. They arrive once, after assembly — the
             // skills come from the session — and nothing else carries them.
             ConsoleRequest::Catalog { entries } => self.catalog = entries,
+            // The history a reopened session assembled with. An empty stream is not a
+            // replay: entering the state would show a progress line for an operation
+            // that lays nothing down and marks no seam (`spec` §2).
+            ConsoleRequest::Replay { events } => {
+                if !events.is_empty() {
+                    self.replay = Some(Replay {
+                        events,
+                        next: 0,
+                        lines: 0,
+                    });
+                }
+            }
         }
     }
 
@@ -1616,6 +1838,57 @@ impl TuiState {
 
     pub fn should_quit(&self) -> bool {
         self.quit
+    }
+
+    /// Take one broadcast receive. `true` means the channel is gone.
+    fn take_render_event(
+        &mut self,
+        received: Result<RenderEvent, broadcast::error::RecvError>,
+    ) -> bool {
+        match received {
+            Ok(event) => {
+                self.live_event(event);
+                false
+            }
+            // A dropped renderer delta degrades output, never correctness, so it is
+            // narrated like any other live event — and buffered during a replay for the
+            // same reason the banner is.
+            Err(broadcast::error::RecvError::Lagged(dropped)) => {
+                self.live_event(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
+                false
+            }
+            Err(broadcast::error::RecvError::Closed) => true,
+        }
+    }
+
+    /// Take one terminal event.
+    fn terminal_event(&mut self, event: Option<std::io::Result<CtEvent>>) {
+        match event {
+            Some(Ok(CtEvent::Key(key))) => {
+                if key.kind == KeyEventKind::Press {
+                    if let Some(key) = map_key(key) {
+                        self.key(key);
+                    }
+                }
+            }
+            Some(Ok(CtEvent::Paste(text))) => self.paste(&text),
+            Some(Ok(CtEvent::Mouse(mouse))) => self.mouse(mouse),
+            // A resize is a repaint, and the replay keeps batching: the next frame is
+            // laid out at the new size (`.scratch/tui-history-replay/spec.md` §5).
+            Some(Ok(CtEvent::Resize(..))) => self.mark_dirty(),
+            _ => {}
+        }
+    }
+
+    /// Take one request from the loop. `true` means the port is gone.
+    fn port_request(&mut self, request: Option<ConsoleRequest>) -> bool {
+        match request {
+            Some(request) => {
+                self.request(request);
+                false
+            }
+            None => true,
+        }
     }
 
     /// The model's questionnaire, while it owns the bottom input area.
@@ -1647,6 +1920,14 @@ impl TuiState {
     /// one-shot channels; gestures are queued for the loop.
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
+        // A replay owns the keyboard before anything else does — including the detail
+        // overlay, which cannot be open this early — because its boundaries are its
+        // own: `Ctrl-C` quits, `Ctrl-D` and `Esc` are inert, and the editor still
+        // works (`spec` §5).
+        if self.replay.is_some() {
+            self.replay_key(key);
+            return;
+        }
         // The detail overlay is a view mode of its own: it owns the keyboard while it
         // is up, and the transcript underneath is frozen where the reader left it
         // (票 02 §4).
@@ -1755,29 +2036,11 @@ impl TuiState {
         }
         match key {
             Key::Enter => self.submit(),
-            Key::Char(ch) => self.editor.insert_char(ch),
-            // The one reliable newline key: Shift+Enter arrives as plain Enter on a
-            // terminal without the keyboard-enhancement protocol, so it submits
-            // (spec §6).
-            Key::CtrlJ => self.editor.insert_char('\n'),
-            Key::Backspace => self.editor.backspace(),
-            Key::Delete => self.editor.delete_forward(),
-            Key::Left => self.editor.left(),
-            Key::Right => self.editor.right(),
-            Key::Up => self.editor.up(),
-            Key::Down => self.editor.down(),
-            Key::Home | Key::CtrlA => self.editor.home(),
-            Key::End | Key::CtrlE => self.editor.end(),
-            Key::CtrlU => self.editor.kill_to_line_start(),
-            Key::CtrlK => self.editor.kill_to_line_end(),
-            Key::CtrlW => self.editor.kill_word(),
-            // History is `Ctrl-P` / `Ctrl-N` alone; the arrows belong to the cursor.
-            Key::CtrlP => self.editor.history_previous(),
-            Key::CtrlN => self.editor.history_next(),
             Key::PageUp => self.pane.page(true),
             Key::PageDown => self.pane.page(false),
             Key::CtrlG => self.pane.to_bottom(),
-            _ => {}
+            // Every other key the editor answers to; the two paths share them.
+            _ => self.editor_key(key),
         }
         // A key that changed the draft (or only moved the cursor inside the token) may
         // have widened or narrowed the menu. Fold that in once, here, rather than at
@@ -1813,6 +2076,12 @@ impl TuiState {
     /// away: the loop asks for a line when it is ready for one (spec §6), and until
     /// then that draft is the only copy of what the user typed.
     fn submit(&mut self) {
+        // A replay is not a conversation: `Enter` must not fire a turn into the middle
+        // of history. The draft stays exactly where it is, and the key is simply not
+        // the submit it looks like (`spec` §3).
+        if self.replay.is_some() {
+            return;
+        }
         let Some(reply) = self.prompt_reply.take() else {
             return;
         };
@@ -1993,6 +2262,13 @@ impl TuiState {
     }
 
     fn status_line(&self, width: u16) -> String {
+        // A replay speaks for itself: it temporarily replaces the hint set with its
+        // own progress, and there is no exit hint to give — `Ctrl-D` is ignored and
+        // the exit `Ctrl-C` may or may not perform is not a hint a person needs
+        // (`spec` §4).
+        if let Some(replay) = &self.replay {
+            return wording::history_progress_line(replay.next, replay.events.len(), width);
+        }
         // The hints describe what the keyboard does *now*. With no line being read —
         // a turn in flight, or a one-shot `discuss` — `enter 发送` would be a promise
         // this session does not keep (spec §6).
@@ -3563,7 +3839,9 @@ fn section_header(name: &str) -> Line<'static> {
 /// spilled to `outputs/<tool_call_id>.txt`, and the call id is what names that
 /// file — never the preview's own prose (票 02 §4). A missing file is the
 /// documented degradation: the preview, and a sentence saying the full text was not
-/// available.
+/// available. An **empty** file is the same degradation: there is no full text to
+/// show, and the preview plus the sentence is the honest answer rather than a blank
+/// body (票 08 §8).
 fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -> (String, bool) {
     // An uncut result has no spilled file to look for, and its preview is the whole
     // body: show it as it is. Only a result the stream had to *cut* has a file on
@@ -3577,12 +3855,18 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
     let path = std::path::Path::new(session_dir)
         .join(crate::session::store::OUTPUTS_DIR)
         .join(format!("{tool_call_id}.txt"));
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return (
+    let unavailable = || {
+        (
             format!("{preview}\n{}", wording::detail_output_unavailable()),
             false,
-        );
+        )
     };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return unavailable();
+    };
+    if text.is_empty() {
+        return unavailable();
+    }
     if text.chars().count() <= DETAIL_MAX_CHARS {
         return (text, false);
     }
