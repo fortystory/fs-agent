@@ -2768,10 +2768,10 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
 ///
 /// Which of the three is the layout's decision — [`layout::SidebarKind`] — so the
 /// ladder has one home. The mark is centred in the wide rung, which is the mark's own
-/// width plus a column of air on each side. **The identity's dash turns while a run is in
-/// flight** (`.scratch/tui-input-pulse/spec.md` §2) — in the mark's own dash cell, and in
-/// the text identity's single dash on the rung that has no mark for it, so both rungs
-/// carry the signal.
+/// width plus a column of air on each side. **The identity's dash falls while a run is in
+/// flight** (`.scratch/tui-input-pulse/spec.md` §2) — through the mark's own dash cell, and
+/// through the three heights one character can take on the rung that has no mark for it, so
+/// both rungs carry the signal.
 fn draw_sidebar_identity(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -2802,9 +2802,9 @@ fn draw_sidebar_identity(
         }
         layout::SidebarKind::Text => {
             // The one rung with no mark gets the same signal from the one glyph it does
-            // have: the dash of `fs-agent`, turned to the frame the loop's clock is on.
+            // have: the dash of `fs-agent`, fallen to the frame the loop's clock is on.
             let identity = match state.busy() {
-                true => wording::identity_turning(state.pulse as usize),
+                true => wording::identity_falling(state.pulse as usize),
                 false => wording::identity(),
             };
             frame.render_widget(
@@ -3156,7 +3156,7 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
 /// Two versions of it ran on a real terminal and both were turned down: 12 frames of
 /// light/normal pairs at 100 ms read as *flickering*, and 6 light hues at 400 ms read as
 /// *abrupt* — a colour ring changes the whole mark at once, and the eye has nothing to
-/// follow between frames. What is on screen today is the dash turning in `fs-agent`
+/// follow between frames. What is on screen today is the dash falling in `fs-agent`
 /// (see [`mark_lines`]); the ring stays here because the user asked for the code to be
 /// kept rather than deleted, and because a colour signal is a reasonable thing to want
 /// again once there is a way to make it move rather than jump.
@@ -3190,64 +3190,49 @@ const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(250);
 /// The mark spells `fs-agent` in eight glyph cells of four columns, separated by a blank
 /// column each (a label in [`wording::logo_lines`]; `all-blank columns: 4, 9, 14, …` of
 /// the 38-wide grid). The dash is the third cell, so its four columns are 10 to 13 and
-/// they are blank in every row but the middle one — which is exactly the room a turning
-/// bar needs.
+/// they are blank in every row but the middle one — which is exactly the room a falling bar
+/// needs: five rows to fall through, none of them spoken for.
 const MARK_DASH_COLUMN: usize = 10;
 const MARK_DASH_WIDTH: usize = 4;
 
-/// What the dash wears for one orientation, as (row in the mark, column in the dash's own
-/// four, glyph): the flat `▀▀▀▀` across the middle row, `▚` stepping down the diagonal, `█`
-/// standing up in the middle column, `▞` stepping up the other diagonal.
+/// The glyph the falling dash is drawn with: the same half-block bar the idle mark carries.
 ///
-/// **All four are the mark's own block family** (票 06): the idle dash is the half-block
-/// bar the mark has always drawn, and an animation that only exists while something is
-/// running has no business changing how the mark looks when nothing is. The flat row is
-/// therefore `wording::logo_lines`'s own, and the three moving ones are drawn from the
-/// same half- and quarter-block vocabulary. The narrow rung's text row turns the same four
-/// orientations in box-drawing instead ([`wording::DASH_TURN`]) — a text line has no block
-/// cell to draw in, and there the diagonals have to be real diagonals.
-///
-/// The order is [`wording::DASH_TURN`]'s: flat, `╲`, `│`, `╱` — clockwise. The two tables
-/// are the same turn in two alphabets, so they are indexed together.
-///
-/// The box is four wide and five tall, so a four-cell bar cannot pivot exactly — the
-/// upright has to pick a column, and the diagonals run corner to corner. What makes it
-/// read as **one bar going round** rather than four glyphs taking turns is that the length
-/// never changes and every orientation keeps the same middle: the flat dash sits exactly
-/// where the idle mark drew it, and each turn moves the ends rather than the middle.
-const DASH_CELLS: [&[(usize, usize, char)]; 4] = [
-    &[(2, 0, '▀'), (2, 1, '▀'), (2, 2, '▀'), (2, 3, '▀')],
-    &[(0, 0, '▚'), (1, 1, '▚'), (2, 2, '▚'), (3, 3, '▚')],
-    &[
-        (0, 2, '█'),
-        (1, 2, '█'),
-        (2, 2, '█'),
-        (3, 2, '█'),
-        (4, 2, '█'),
-    ],
-    &[(3, 0, '▞'), (2, 1, '▞'), (1, 2, '▞'), (0, 3, '▞')],
-];
+/// It never changes — what changes is the row it lands on (票 07). The first version of this
+/// animation turned the bar through four orientations, and the second drew a different
+/// glyph per orientation; both made the mark's own dash a different thing while a run was in
+/// flight. One bar, moving down the cell, is the one that reads as motion without becoming a
+/// new glyph.
+const DASH_BAR: char = '▀';
 
-/// The mark's rows and their colours, with its dash turned to `turning` — `None` while
-/// nothing is running, which is the still dash.
+/// The mark's rows and their colours, with its dash fallen to the row `frame` names —
+/// `None` while nothing is running, which is the row the mark has always drawn it on.
 ///
 /// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
 /// here, where the rest of the painting does. Rows brighten towards the top, so the mark
 /// reads as lit from above — **always**, working or not: the colour signal was retired in
 /// 票 05 (see [`PULSE_PALETTE`]), so what moves in this mark is the dash alone
-/// (`.scratch/tui-input-pulse/spec.md` §2).
+/// (`.scratch/tui-input-pulse/spec.md` §2). The dash **keeps its shape and steps down one
+/// row per frame**, wrapping from the mark's last row back to its first: the cell is the
+/// mark's own five rows, and the idle position is the middle one, so a mark at rest is
+/// byte-for-byte what it was before the animation existed.
 ///
 /// Foreground only, and deliberately no background: the mark sits on whatever
 /// background the user's theme already has, and filling the half-shade rows would
 /// fight that theme on as many terminals as it matched.
-fn mark_lines(turning: Option<u64>) -> Vec<(String, Color)> {
+fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
     let rows = wording::logo_lines();
     debug_assert!(
         rows.iter()
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
         "the mark is drawn whole or not at all, so its width is the layout's contract"
     );
-    let phase = turning.unwrap_or(0) as usize % DASH_CELLS.len();
+    let bar_row = match frame {
+        Some(frame) => frame as usize % rows.len(),
+        // The middle row: where `logo_lines` itself draws the dash, and therefore what an
+        // idle mark looks like. It is the fall's third frame, so a run's first frame is the
+        // top row — the bar reappears above and falls again (票 07).
+        None => rows.len() / 2,
+    };
     let mut lines: Vec<(Vec<char>, Color)> = rows
         .iter()
         .enumerate()
@@ -3267,8 +3252,13 @@ fn mark_lines(turning: Option<u64>) -> Vec<(String, Color)> {
             (line, color)
         })
         .collect();
-    for (row, column, glyph) in DASH_CELLS[phase] {
-        lines[*row].0[MARK_DASH_COLUMN + *column] = *glyph;
+    for cell in lines[bar_row]
+        .0
+        .iter_mut()
+        .skip(MARK_DASH_COLUMN)
+        .take(MARK_DASH_WIDTH)
+    {
+        *cell = DASH_BAR;
     }
     lines
         .into_iter()

@@ -531,35 +531,43 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
 }
 
 #[test]
-fn the_identities_dash_turns_without_moving_anything_else() {
+fn the_identities_dash_falls_without_moving_anything_else() {
     // The busy signal on the narrow rung (`.scratch/tui-input-pulse/spec.md` §2): the dash
-    // of `fs-agent` is the only character that changes, which is what makes the line read
-    // as "working" rather than as a different string. The version and the crate's name
-    // come from `identity()`, so the startup check's anchor and the turned line cannot
-    // drift apart.
+    // of `fs-agent` is the only character that changes, which is what makes the line read as
+    // "working" rather than as a different string. The version and the crate's name come
+    // from `identity()`, so the startup check's anchor and the falling line cannot drift
+    // apart.
     let identity = wording::identity();
     let mut seen = Vec::new();
-    for phase in 0..wording::DASH_TURN.len() {
-        let turned = wording::identity_turning(phase);
+    for phase in 0..wording::DASH_FALL.len() {
+        let fallen = wording::identity_falling(phase);
         assert_eq!(
-            turned.replace(wording::DASH_TURN[phase], "-"),
+            fallen.replace(wording::DASH_FALL[phase], "-"),
             identity,
-            "phase {phase} differs from the idle identity in the dash alone: {turned}"
+            "phase {phase} differs from the idle identity in the dash alone: {fallen}"
         );
-        seen.push(turned);
+        seen.push(fallen);
     }
-    seen.sort();
-    seen.dedup();
+    // Five frames of one descent, and every frame a bar rather than a spinner: the heights
+    // walk from high to low and back to high, which a rotating glyph set would fail.
+    let heights: Vec<char> = seen
+        .iter()
+        .map(|line| line.chars().nth(2).unwrap())
+        .collect();
     assert_eq!(
-        seen.len(),
-        wording::DASH_TURN.len(),
-        "and the four orientations are four different lines: {seen:?}"
+        heights,
+        wording::DASH_FALL.to_vec(),
+        "the frames descend in order: {seen:?}"
     );
-    // The turn is closed: a phase past the end wraps rather than panicking, because the
+    assert!(
+        heights.iter().all(|glyph| matches!(glyph, '▀' | '█' | '▄')),
+        "and every frame is the bar at some height: {seen:?}"
+    );
+    // The fall is closed: a phase past the end wraps rather than panicking, because the
     // pulse counter it comes from only ever grows.
     assert_eq!(
-        wording::identity_turning(wording::DASH_TURN.len()),
-        wording::identity_turning(0)
+        wording::identity_falling(wording::DASH_FALL.len()),
+        wording::identity_falling(0)
     );
 }
 

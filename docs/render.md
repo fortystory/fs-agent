@@ -103,17 +103,16 @@ column** on the right, and the geometry is one pure function of the terminal siz
   human-facing phrase; the colour ramp that makes them read as glyphs lives in the
   painter (`mark_lines`), foreground only and no background, so it does not fight
   whatever theme the terminal is already running. The ramp never changes: **the "it is
-  working" signal is the dash of `fs-agent` turning** (`.scratch/tui-input-pulse/spec.md`
+  working" signal is the dash of `fs-agent` falling** (`.scratch/tui-input-pulse/spec.md`
   §2). The mark spells `fs-agent` in eight four-column glyph cells, and the painter draws
-  its third cell — the dash's own four columns — from a small table: flat, then the two
-  diagonals, then upright, one orientation per `PULSE_FRAME` (250 ms), clockwise and back.
-  **All four are the mark's own block glyphs** (`▀▀▀▀`, `▚` steps, `█`, `▞` steps): the idle
-  dash is the half-block bar the mark has always drawn, and an animation that only exists
-  while something runs has no business restyling the mark at rest (票 06). The same turn
-  shows up on the narrow rung, where there is no mark and the identity is the text row
-  `fs-agent 0.1.0`: `wording::identity_turning` swaps its one dash for a box-drawing glyph
-  from `wording::DASH_TURN` — a text line has no block cell to draw in, so there the
-  diagonals are real diagonals. Two colour versions of this signal were tried on a real terminal and both were
+  its third cell — the dash's own four columns — as a bar that **falls**: the same `▀▀▀▀`
+  the idle mark carries, one row lower per `PULSE_FRAME` (250 ms), wrapping from the mark's
+  last row back to its first. The shape never changes; only its row does (票 07 — a turned
+  bar and a redrawn one were both tried and turned down). The cell is the mark's own five
+  rows and the idle position is the middle one, so a mark at rest is byte-for-byte what it
+  was before any of this existed (票 06). The narrow rung, which has no mark, falls the only
+  way one text cell can: `wording::identity_falling` swaps the dash of `fs-agent 0.1.0` for a
+  bar at one of three heights (`wording::DASH_FALL`), on the same five-frame cycle. Two colour versions of this signal were tried on a real terminal and both were
   retired — 12 light/normal frames at 100 ms read as flickering (票 04) and six light hues
   at 400 ms read as abrupt — so `PULSE_PALETTE` stays in the code, off screen, with a test
   pinning that nothing wears it (票 05).

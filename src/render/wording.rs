@@ -1309,24 +1309,23 @@ pub fn identity() -> String {
     format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
 
-/// The four orientations of the dash in `fs-agent`, in the order they turn
-/// (`.scratch/tui-input-pulse/spec.md` §2): flat, then clockwise.
+/// The dash of `fs-agent` **falling**, one glyph per pulse frame
+/// (`.scratch/tui-input-pulse/spec.md` §2).
 ///
 /// These are the glyphs of the **text** identity — the narrow rung's `fs-agent 0.1.0`,
-/// where the dash is one character between `fs` and `agent`. Box-drawing rather than ASCII
-/// `-`, `\`, `|`, `/`: the diagonals are real diagonals and all four sit on the same
-/// baseline, so the turn does not jitter the way an ASCII spinner does.
+/// where the dash is one character between `fs` and `agent`. A line has no room to fall
+/// through, so it falls the only way one cell can: the bar sits high, then fills the cell,
+/// then sinks to the bottom, and starts over. Half blocks rather than a rotating spinner
+/// (`-`, `/`, `|`, `\`): the shape stays a bar and only its height moves, which is the same
+/// thing the mark does with its five rows.
 ///
-/// The **mark** turns the same four orientations, but it has a block cell to draw in and
-/// draws them in its own half- and quarter-block alphabet instead (`mark_lines` in
-/// `crate::render::tui`, whose table is indexed by this one). The two are one turn in two
-/// alphabets: change the order here and the mark's phases have to follow.
-///
-/// The order is clockwise, starting from the still dash — the classic `- \ | /` of every
-/// command-line spinner.
-pub const DASH_TURN: [char; 4] = ['─', '╲', '│', '╱'];
+/// The **mark** falls through those five rows carrying the one shape it has always had
+/// (`mark_lines` in `crate::render::tui`). The two are indexed by the same frame, so a
+/// pulse frame is one place in one fall; adding or removing an entry here would take the
+/// mark's cycle out of step with this one.
+pub const DASH_FALL: [char; 5] = ['▀', '▀', '█', '▄', '▄'];
 
-/// The identity line with its dash **turned** to `phase` — what the sidebar's text row
+/// The identity line with its dash **fallen** to `phase` — what the sidebar's text row
 /// shows while a run is in flight.
 ///
 /// It is built **from** [`identity`] rather than beside it, so the crate's name and the
@@ -1334,8 +1333,8 @@ pub const DASH_TURN: [char; 4] = ['─', '╲', '│', '╱'];
 /// this one both anchor on that string, and a second `fs-agent …` built here would be a
 /// second thing to keep in step. `fs-agent <version>` holds exactly one dash; the day that
 /// stops being true this needs a different rule, and the test is where that shows up.
-pub fn identity_turning(phase: usize) -> String {
-    let dash = DASH_TURN[phase % DASH_TURN.len()].to_string();
+pub fn identity_falling(phase: usize) -> String {
+    let dash = DASH_FALL[phase % DASH_FALL.len()].to_string();
     identity().replacen('-', &dash, 1)
 }
 
@@ -1350,7 +1349,7 @@ pub fn identity_turning(phase: usize) -> String {
 /// The mark spells `fs-agent` — the `fs` of a forked synthesis ("two forks, one stem",
 /// see `CONTEXT.md`) with the program's name after it — and the pixel grid is the one the
 /// maintainer picked. The dash between them is the third of its eight glyph cells, and it
-/// is the one glyph the painter draws for itself: it turns while a run is in flight
+/// is the one glyph the painter draws for itself: it falls while a run is in flight
 /// (`.scratch/tui-input-pulse/spec.md` §2).
 pub fn logo_lines() -> [&'static str; 5] {
     [

@@ -564,28 +564,28 @@ fn dash_cell(state: &mut TuiState) -> Vec<String> {
 }
 
 #[test]
-fn the_dash_of_fs_agent_turns_while_a_run_is_in_flight() {
+fn the_dash_of_fs_agent_falls_while_a_run_is_in_flight() {
     // The working signal (`.scratch/tui-input-pulse/spec.md` §2): the dash of the mark
-    // turns through four orientations, clockwise, and comes back to the flat one. The
-    // shapes are written out here as a person reads them — one bar going round, not four
-    // glyphs taking turns — so a change to the geometry has to be a change to this frame
-    // rather than a change to a table nobody looks at.
-    // The mark's own block alphabet, not the text row's box-drawing one (票 06): the flat
-    // dash is the half-block bar the mark has always drawn, and the three moving
-    // orientations are quarter-block steps and a full-block upright.
+    // keeps its shape and steps down one row per frame, then reappears at the top and falls
+    // again. The frames are written out here as a person reads them, so a change to the
+    // geometry has to be a change to this column rather than to a table nobody looks at —
+    // and the same bar in every frame is what rules out the turned and drawn versions that
+    // came before it.
     let phases = [
+        ["▀▀▀▀", "    ", "    ", "    ", "    "],
+        ["    ", "▀▀▀▀", "    ", "    ", "    "],
         ["    ", "    ", "▀▀▀▀", "    ", "    "],
-        ["▚   ", " ▚  ", "  ▚ ", "   ▚", "    "],
-        ["  █ ", "  █ ", "  █ ", "  █ ", "  █ "],
-        ["   ▞", "  ▞ ", " ▞  ", "▞   ", "    "],
+        ["    ", "    ", "    ", "▀▀▀▀", "    "],
+        ["    ", "    ", "    ", "    ", "▀▀▀▀"],
     ];
-    // Idle is the flat dash — and it is **the mark's own**, character for character: an
-    // animation that only exists while something runs may not restyle the mark at rest.
+    // Idle is the middle row — where `logo_lines` itself draws the dash, character for
+    // character: an animation that only exists while something runs may not restyle the
+    // mark at rest (票 06).
     let mut state = state();
     assert_eq!(
         dash_cell(&mut state),
-        phases[0].map(str::to_owned).to_vec(),
-        "a still mark shows the dash lying flat"
+        phases[2].map(str::to_owned).to_vec(),
+        "a still mark shows the dash on the row it has always had"
     );
     assert_eq!(
         dash_cell(&mut state),
@@ -595,14 +595,15 @@ fn the_dash_of_fs_agent_turns_while_a_run_is_in_flight() {
         "and that flat dash is byte-for-byte the one `logo_lines` has always carried"
     );
 
-    // Two turns: one to show it moves, the second to show it comes back.
+    // A run starts at the top of the cell and falls: two laps of five, so the wrap back to
+    // the first row is covered as well.
     state.request(ConsoleRequest::RunState { running: true });
     for frame in 1..=phases.len() * 2 {
         state.tick();
         assert_eq!(
             dash_cell(&mut state),
             phases[frame % phases.len()].map(str::to_owned).to_vec(),
-            "frame {frame} of the turn"
+            "frame {frame} of the fall"
         );
         // And the colour does not move with it: 票 05 took the hue ring off the screen
         // after two versions of it read badly on a real terminal, so a busy mark wears
@@ -616,16 +617,18 @@ fn the_dash_of_fs_agent_turns_while_a_run_is_in_flight() {
                 Color::LightMagenta,
                 Color::Magenta
             ],
-            "the mark keeps its ramp while the dash turns: frame {frame}"
+            "the mark keeps its ramp while the dash falls: frame {frame}"
         );
     }
 }
 
 #[test]
-fn the_narrow_rungs_text_identity_turns_its_dash_too() {
+fn the_narrow_rungs_text_identity_falls_its_dash_too() {
     // The rung with no mark carries the same signal in the one glyph it has: the dash of
-    // `fs-agent 0.1.0`. Without this, the animation would be invisible on every terminal
-    // under 120 columns (`.scratch/tui-input-pulse/spec.md` §2).
+    // `fs-agent 0.1.0`. A line has no room to fall through, so the fall is the bar's height
+    // inside one cell — high, high, full, low, low — on the same five-frame cycle the mark
+    // walks through its five rows. Without it the animation would be invisible on every
+    // terminal under 120 columns (`.scratch/tui-input-pulse/spec.md` §2).
     let mut state = state();
     let still = screen(100, 24, &mut state).join("\n");
     assert!(
@@ -633,15 +636,14 @@ fn the_narrow_rungs_text_identity_turns_its_dash_too() {
         "an idle narrow rung shows the identity as it always did: {still}"
     );
 
-    // The turn starts from the flat dash, so the first four frames of a run are the other
-    // three orientations and then the flat one again.
+    // A run starts at the top of the fall; the fifth frame is the top again.
     state.request(ConsoleRequest::RunState { running: true });
-    for (frame, glyph) in ["╲", "│", "╱", "─"].iter().enumerate() {
+    for (frame, glyph) in ["▀", "█", "▄", "▄", "▀"].iter().enumerate() {
         state.tick();
         let text = screen(100, 24, &mut state).join("\n");
         assert!(
             text.contains(&format!("fs{glyph}agent {}", env!("CARGO_PKG_VERSION"))),
-            "frame {} turns the dash to {glyph}: {text}",
+            "frame {} drops the dash to {glyph}: {text}",
             frame + 1
         );
         assert!(
@@ -653,17 +655,18 @@ fn the_narrow_rungs_text_identity_turns_its_dash_too() {
 
 #[test]
 fn a_finished_run_puts_the_dash_back_to_still() {
-    // The pulse is one run's, not the session's: the dash goes flat when the run ends, and
-    // the next run starts one orientation on, whatever the last one left behind
-    // (`.scratch/tui-input-pulse/spec.md` §2).
+    // The pulse is one run's, not the session's: the dash returns to the row it rests on
+    // when the run ends, and the next run starts at the top of the fall, whatever the last
+    // one left behind (`.scratch/tui-input-pulse/spec.md` §2).
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     for _ in 0..3 {
         state.tick();
     }
-    assert!(
-        dash_cell(&mut state)[0].contains('▞'),
-        "three frames in, the dash is on its fourth orientation: {:?}",
+    assert_eq!(
+        dash_cell(&mut state)[3],
+        "▀▀▀▀",
+        "three frames in, the dash is three rows down: {:?}",
         dash_cell(&mut state)
     );
 
@@ -671,14 +674,21 @@ fn a_finished_run_puts_the_dash_back_to_still() {
     assert_eq!(
         dash_cell(&mut state)[2],
         "▀▀▀▀",
-        "idle again: the flat dash, not the orientation the run stopped on"
+        "idle again: the row the mark rests on, not the one the run stopped on"
     );
 
     state.request(ConsoleRequest::RunState { running: true });
+    assert_eq!(
+        dash_cell(&mut state)[0],
+        "▀▀▀▀",
+        "and the next run starts at the top of the fall, not where the last one stopped: {:?}",
+        dash_cell(&mut state)
+    );
     state.tick();
-    assert!(
-        dash_cell(&mut state)[0].contains('▚'),
-        "and the next run starts at the turn's first orientation: {:?}",
+    assert_eq!(
+        dash_cell(&mut state)[1],
+        "▀▀▀▀",
+        "one frame later it is a row down: {:?}",
         dash_cell(&mut state)
     );
 }
@@ -706,7 +716,7 @@ fn the_pulse_is_invisible_where_there_is_no_sidebar() {
 #[test]
 fn the_colour_ring_is_kept_off_screen() {
     // 票 05 retired the hue ring: two versions of it were tried on a real terminal and
-    // both read badly, so what is on screen is the turning dash. The palette stays in the
+    // both read badly, so what is on screen is the falling dash. The palette stays in the
     // code because the user asked for it to be kept — and a kept thing that creeps back
     // onto the screen without anyone deciding it should is what this test is for.
     let ring: Vec<String> = PULSE_PALETTE.iter().map(|c| format!("{c:?}")).collect();
