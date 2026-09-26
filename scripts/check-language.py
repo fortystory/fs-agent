@@ -27,6 +27,8 @@ import re
 import sys
 
 CJK = re.compile(r"[\u4e00-\u9fff]")
+# 断言/panic 消息所在的行：那些字面量是散文，不在冻结面内。
+ASSERTION = re.compile(r"\b(assert|assert_eq|assert_ne|debug_assert|panic|expect)\b")
 
 # --- ① 冻结面 ---------------------------------------------------------------
 # 模型可见（工具声明 / 工具结果 / 身份与轮前缀 / 投影）与进流（reason / detail /
@@ -116,12 +118,17 @@ COMMENT_FLOOR = {
 
 
 def literals(src: str):
-    """真正的字符串字面量（处理转义、raw string、注释），产出 (行号, 内容)。"""
+    """真正的字符串字面量（处理转义、raw string、字符字面量、注释）。
+
+    产出 `(行号, 内容, 该行源码文本)`：第三项只用来判断这个字面量是不是断言消息。
+    """
     out, i, n, line = [], 0, len(src), 1
+    line_start = 0
     while i < n:
         ch = src[i]
         if ch == "\n":
             line += 1
+            line_start = i + 1
             i += 1
             continue
         if ch == "/" and i + 1 < n and src[i + 1] == "/":
@@ -133,6 +140,13 @@ def literals(src: str):
             line += src.count("\n", i, j)
             i = n if j < 0 else j + 2
             continue
+        if ch == "'" and i + 2 < n:
+            # 字符字面量（`'x'`、`'\n'`）：跳过去。生命周期写作 `'a`（没有收尾的
+            # 单引号），所以只在两个引号之间没有换行、且长度 ≤ 4 时才算。
+            j = i + 3 if src[i + 1] == "\\" else i + 2
+            if j < n and src[j] == "'" and "\n" not in src[i:j]:
+                i = j + 1
+                continue
         if ch == "r" and i + 1 < n and src[i + 1] in '#"':
             k, hashes = i + 1, 0
             while k < n and src[k] == "#":
@@ -143,7 +157,7 @@ def literals(src: str):
                 j = src.find(end, k + 1)
                 body = src[k + 1: j] if j > 0 else ""
                 if body:
-                    out.append((line, body))
+                    out.append((line, body, src[line_start:src.find(chr(10), line_start) if src.find(chr(10), line_start) > 0 else n]))
                 line += src.count("\n", i, (j + len(end)) if j > 0 else n)
                 i = n if j < 0 else j + len(end)
                 continue
@@ -160,7 +174,7 @@ def literals(src: str):
                 j += 1
             body = "".join(buf)
             if body:
-                out.append((line, body))
+                out.append((line, body, src[line_start:src.find(chr(10), line_start) if src.find(chr(10), line_start) > 0 else n]))
             line += src.count("\n", i, j)
             i = j + 1
             continue
@@ -185,11 +199,15 @@ def check_frozen(list_allowed: bool) -> list[str]:
             problems.append(f"{path}: 冻结面清单里的文件不存在（清单该更新了）")
             continue
         src = code_only(open(path, encoding="utf-8").read())
-        for line, body in literals(src):
+        for line, body, line_text in literals(src):
             if not CJK.search(body):
                 continue
             head = re.sub(r"^(\\n|\\t|\s)+", "", body)
             if any(path == p and head.startswith(prefix) for p, prefix in ALLOWED):
+                continue
+            # 断言消息是给人看的散文（ADR 0004），不是模型可见文本，也不是进流的文本：
+            # `assert!` / `panic!` / `expect(…)` 所在那一行的字面量不查。
+            if ASSERTION.search(line_text):
                 continue
             head = body[:60].replace("\n", " ")
             problems.append(f"{path}:{line}: 冻结面里出现了中文串 {head!r}…")
