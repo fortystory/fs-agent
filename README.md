@@ -236,18 +236,20 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
 
-**约定**（新文档照这个走，别猜）：
+**约定**（新文档照这个走，别猜；这是 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 定的线）：
 
-- **写中文的**：`README.md`、`CONTEXT.md`、`.scratch/` 下的 spec / map / 票、`docs/adr/`、`docs/tui-manual-checklist.md` —— 面向**使用与流程**：怎么说、怎么验、为什么这么定。
-- **写英文的**：`docs/` 下的逐面设计文档与 `docs/agents/` —— 面向**代码内部**：模块边界、不变量、代码在哪。代码标识符一律英文。
-- **例外**：`docs/highlight.md` 是中文 —— 它回答的是「这个模块为什么留着、什么会让它回来」，读者是将来的接手人。
-- 两条推论：**新增文档跟邻居走**；**跨语言引用保留标识符英文**（中文文档里也写 `Session`、`project()`）。
+- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
+- **只有三类东西留英文**：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **模型可见**的文本（工具声明与描述、工具结果、`AgentError.message`）；③ **进事件流、要永久回放**的文本（`PermissionDecided.reason`、`SessionError.detail`、协议标记 `CONCLUSION:`、投影的 `[轮 N · 名字]` 前缀）。
+- **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
+- 为什么后两类不动：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) —— 模型可见文本是 provider 缓存前缀的头，改它要付「缓存整体作废 + 老流永久中英混排」两笔，而那一侧的读者是模型，不是人。
+- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（冻结面无 CJK、`docs/*.md` 的中文占比下限、`src/` 注释中文行的棘轮）。
 
 ## 开发
 
 ```sh
 cargo test                              # 全量测试（条数见上面的「状态」）
 cargo clippy --all-targets
+python3 scripts/check-language.py       # 散文中文 / 冻结面英文的护栏（ADR 0004）
 python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 ```
 
