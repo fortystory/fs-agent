@@ -1,94 +1,76 @@
-# Rendering
+# 渲染
 
-Rendering is the **one boundary every front end goes through** (spec §19). One
-renderer runs per process, chosen at startup, and it consumes the one broadcast
-channel the assembly creates. There is no second event bus: incremental model
-text and logged events travel together, so their relative order is defined, and
-incremental text never enters the event log.
+渲染是**每个前端都要经过的那一条边界**（spec §19）。每个进程只跑一个渲染器，启动时选定，
+消费组装期创建的那一条广播通道。没有第二条事件总线：模型的增量文本与进流的事件走同一条
+路，于是两者的相对顺序是定的，而增量文本永不进事件流。
 
-## One trait, three implementations
+## 一个 trait，三个实现
 
-`src/render/` holds the boundary:
+`src/render/` 就是这条边界：
 
-| Mode | Type | What it is for |
+| 模式 | 类型 | 用来干什么 |
 | --- | --- | --- |
-| headless | `Headless` | the machine mode. Two explicit sinks; `stdout` carries the final product and nothing else. |
-| plain | `Plain` | the human transcript for a pipe or a simple terminal: a speaker prefix on every line, section lines, indented divergence blocks, one block per tool call. |
-| TUI | `Tui` | the ratatui interface: one frame around a full-height sidebar and a main column (transcript + rail / status row / input / hints) on the alternate screen, and it owns the keyboard. The sidebar has two widths and carries the mark on the wide one (see "The shell" below). See ADR 0002. |
+| headless | `Headless` | 机器模式。两个显式的写出口；`stdout` 只承载最终产物，别的什么都不放。 |
+| plain | `Plain` | 给管道或简单终端看的人类转录：每行一个发言前缀、分节行、缩进的分歧块、每次工具调用一个块。 |
+| TUI | `Tui` | ratatui 界面：alt screen 上的一圈外框，框住一条全高左栏与一条主列（转录 + 回合条 / 状态行 / 输入区 / 提示行），而且它占着键盘。左栏有两个宽度档，宽的那档画标记（见下文「外壳」）。见 ADR 0002。 |
 
-The selection is the value type `Renderer`
-(`Renderer::headless` / `::plain` / `::tui`). Because the choice is a value and
-not a set of subscribers, "exactly one renderer runs" is a property of the type.
-`OpenedSession::open` creates the channel and injects the consumer end into the
-selected renderer (`render::channel` + `Renderer::spawn`).
+这个选择就是值类型 `Renderer`（`Renderer::headless` / `::plain` / `::tui`）。因为选择是一个
+值、不是一组订阅者，「只有一个渲染器在跑」是这个类型的性质。`OpenedSession::open` 创建那条
+通道，并把消费端注入选中的渲染器（`render::channel` + `Renderer::spawn`）。
 
-`Headless` is the only mode with a purity contract: it writes to exactly two
-explicit sinks, and `stdout_result` receives **only** the final product — the
-completed turn of a single-agent session, or the synthesizer's `System` message
-inside a discussion. An executor's turn is never the final product and never
-overwrites the dispatcher's text. `cargo test --test e2e_single_turn` is the
-regression assertion for that.
+`Headless` 是唯一带纯度契约的模式：它只往两个显式的写出口写，而 `stdout_result` **只**接最终
+产物 —— 单 agent 会话里那个完成的回合，或讨论里合成器的那条 `System` 消息。执行者的回合
+永远不是最终产物，也永远不覆盖派发者的文本。`cargo test --test e2e_single_turn` 就是这一条
+的回归断言。
 
-## One presentation layer, two painters
+## 一个呈现层，两个画家
 
-`render::transcript` turns events into `Block`s **once**; plain and TUI only
-paint them. Two rules live there:
+`render::transcript` 把事件转成 `Block`，**只转一次**；plain 与 TUI 只负责画。有两条规矩
+住在这里：
 
-- **A tool call and its result are one block, painted by the result.** The call is
-  emitted the moment `ToolCallCompleted` arrives, so the call line is on screen as
-  soon as the tool finishes. The post-hook's feedback carries no `tool_call_id` — the
-  loop emits it immediately after the result it annotates — so it travels as its own
-  small block (`Block::ToolFeedback`) aimed at the call just painted. It used to be
-  merged into the call block, which meant the call was held open until the next
-  unrelated event closed it — in the TUI, the next answer's first streaming delta:
-  invisible for the tool's whole run, and painted only once it was over. (It is still
-  painted by the *result*, not by the start: making it appear when the call begins is a
-  different shape, not this one.) A call whose result never arrives (a cancel) is
-  flushed at end of stream rather than dropped.
-- **Incremental text passes straight through** as `Block::Delta`, because deltas
-  bypass the log and cannot be re-derived later.
-- **A call whose payload *is* the data paints like any other line.** `todo` keeps
-  the agent's list in the arguments of one `tool_call` (`.scratch/todo-and-modes/spec.md`
-  §2), so the transcript shows the ordinary folded tool line and the detail overlay
-  shows the arguments; the list itself is recomputed from those arguments by
-  `tools::todo::read_items`, never parsed out of the result text — the result is a
-  one-line receipt. The sidebar's `todo` page is the other reader of the same
-  function (see "The shell").
+- **一次工具调用与它的结果是一个块，由结果绘制。** `ToolCallCompleted` 一到达就把这次
+  调用发出去，所以工具一跑完，调用行就在屏幕上。后置 hook 的反馈不带 `tool_call_id` ——
+  循环在它批注的那条结果之后紧接着发出它 —— 所以它作为自己的一个小块
+  （`Block::ToolFeedback`）旅行，瞄准刚画好的那次调用。它**曾经**被并进调用块里，那意味着
+  这次调用要一直开着，等下一个与它无关的事件来关 —— 在 TUI 里就是下一个回答的第一个流式
+  增量：工具整个运行期间它都不可见，只有跑完了才被画出来。（它仍然由*结果*绘制，不是由
+  开始绘制：让它在调用开始时出现是另一种形状，不是这一种。）结果永不到达的那次调用
+  （一次取消）在流末尾被冲掉，而不是被丢掉。
+- **增量文本原样透传**为 `Block::Delta`，因为增量绕过了事件流，事后无法重新推出来。
+- **载荷*就是*数据的那次调用，画起来与别的行一样。** `todo` 把 agent 的列表放在一次
+  `tool_call` 的参数里（`.scratch/todo-and-modes/spec.md` §2），所以转录里显示的是那条普通
+  的折叠工具行，详情覆盖层显示的是参数；列表本身由这些参数经 `tools::todo::read_items`
+  重算，**从不**从结果文本里解析 —— 结果只是一行回执。左栏的 `todo` 页是同一个函数的另
+  一位读者（见「外壳」）。
 
-The `[speaker]` prefix is the **human's** generator, deliberately separate from
-the projection's model-side prefix (spec §5): the human one repeats per line, the
-model one is written once per merged block.
+`[speaker]` 前缀是**人**这一侧的生成器，刻意与投影的模型侧前缀分开（spec §5）：人这一侧
+每行都重复，模型那一侧每个合并块只写一次。
 
-## Severity
+## 严重度
 
-`render::severity` classifies every `StopReason` into `Good` / `Note` / `Warn` /
-`Bad`. The plain renderer turns that into ANSI colors and the TUI into a ratatui
-`Style`; the two must never collapse `Completed` into `Aborted` or `Error`
-(user story 135). `RoundsExhausted` is a `Note`; `Aborted` and `MaxIterations`
-are warnings; `Error`, `MistakeLimit` and `BudgetExhausted` are errors.
+`render::severity` 把每一个 `StopReason` 归入 `Good` / `Note` / `Warn` / `Bad`。plain 渲染
+器把它变成 ANSI 颜色，TUI 变成 ratatui `Style`；两者都必须永不把 `Completed` 塌缩成
+`Aborted` 或 `Error`（用户故事 135）。`RoundsExhausted` 是 `Note`；`Aborted` 与
+`MaxIterations` 是告警；`Error`、`MistakeLimit` 与 `BudgetExhausted` 是错误。
 
-## Highlighting
+## 高亮
 
-`render::highlight` is two layers, and they never consult each other:
+`render::highlight` 是两层，两者从不互相问话：
 
-- the **diff layer** (`diff_tag`) says what a line is in a patch: added,
-  removed, hunk, or context;
-- the **syntax layer** (`highlight_rust`) says what kind of code it is.
+- **diff 层**（`diff_tag`）说的是这一行在补丁里是什么：新增、删除、hunk 头还是上下文；
+- **语法层**（`highlight_rust`）说的是这段代码是什么语法元素。
 
-`highlight_diff` composes them: the diff marker is peeled off, the remaining code
-is highlighted as one document (so a multi-line comment or string still parses),
-and the marker is re-attached. In the TUI the syntax class is the foreground and
-the diff tag the background, so an added keyword is both.
+`highlight_diff` 把两者合起来：diff 标记被剥掉，剩下的代码当作一整份文档来高亮（所以多行
+注释或字符串照样能解析），然后标记被贴回去。TUI 里语法类是前景、diff 标签是背景，于是一个
+新增的关键字两个身份都占。
 
-The grammar is the Rust `tree-sitter` that the repo map already depends on,
-through `tree-sitter-highlight`. There is no C build step: syntect's Oniguruma
-path is not taken (spec §19, Out of Scope).
+这套语法就是仓库地图已经依赖的那个 Rust `tree-sitter`，经由 `tree-sitter-highlight` 使用。
+没有 C 构建步骤：syntect 的 Oniguruma 那条路没有走（spec §19，Out of Scope）。
 
-## The shell
+## 外壳
 
-One frame around everything, a **full-height sidebar** on the left and a **main
-column** on the right, and the geometry is one pure function of the terminal size
-(`layout::plan`, `src/render/layout.rs`) — the painters never re-derive a ladder.
+一圈外框框住一切，左边是一条**全高左栏**，右边是一条**主列**，而几何是终端尺寸的一个纯
+函数（`layout::plan`，`src/render/layout.rs`）—— 画家从不重新推一遍降级阶梯。
 
 ```
 ┌─ the frame ────────────────────────────────────────────────────────┐
@@ -100,155 +82,115 @@ column** on the right, and the geometry is one pure function of the terminal siz
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
 
-- **The sidebar** is 40 columns from 120 up and 28 down to 80; below that it is
-  hidden whole and the main column takes everything. Width decides whether it is
-  there at all; its own height decides what it holds: the mark gives way first (to
-  the text identity, then to nothing), then fields from the tail (缓存 → 输出 →
-  输入), with the tab bar and 上下文 / token / 回合 as the floor.
-- **The mark** is five rows of block shading spelling the `fs` mark, centred in the
-  wide rung. The characters live in `wording::logo_lines` with every other
-  human-facing phrase; the colour ramp that makes them read as glyphs lives in the
-  painter (`mark_lines`), foreground only and no background, so it does not fight
-  whatever theme the terminal is already running. **Nothing here moves**: the falling dash
-  the mark and the text identity both grew, and the hue ring before it, were tried on a real
-  terminal and turned off (`.scratch/tui-input-pulse/spec.md` §2, 票 04–08). Both are still
-  in the module — `mark_lines` takes the frame it would fall on, `wording::identity_falling`
-  builds the other rung's line — and both are unit-tested where they live, but
-  `draw_sidebar_identity` passes `None` and `identity()`, so the left column is still. Two colour versions of this signal were tried on a real terminal and both were
-  retired — 12 light/normal frames at 100 ms read as flickering (票 04) and six light hues
-  at 400 ms read as abrupt — so `PULSE_PALETTE` stays in the code, off screen, with a test
-  pinning that nothing wears it (票 05).
-- **The tab bar** pages the sidebar: 调用量 is the session's readings, 轨迹 and 文件
-  are not built yet and say so. The tabs are **clicked, never keyed** — `Tab`
-  belongs to the `/` menu and `Shift+Tab` to the mode cycle — and on a placeholder
-  page the status row's `上下文 n%` is the only reading left.
-- **`todo` is the one tab that comes and goes** (`.scratch/todo-and-modes/spec.md`
-  §4). It appears the first time a **non-executor** speaker submits a `todo` call
-  whose arguments carry a non-empty list, and it stays for the rest of the session:
-  an all-completed list, a cleared one, and a `--continue` that replays the same
-  calls all keep it. The latch (`TodoPanel::visible`) and the list in force are
-  renderer state derived from the blocks the renderer already sees — nothing about
-  either is stored beside the stream — and the bar is built from the same label
-  list the separators, the fill and the hit rectangles come from, so a label that
-  is not drawn cannot be clicked. An **executor's** list never reaches this page:
-  it is that executor's own record, visible in the transcript and nowhere in the
-  sidebar. The page draws one row per item (`☐` / `▸` / `✓` and its content) and a
-  count row `已完成 2/5`, with no scrolling: what does not fit is announced in one
-  row above the count (`＋3 项`), and a page with room for a single row shows the
-  count alone.
-- **The rail** is the transcript's last column: one cell per turn, or per round in a
-  discussion, newest at the foot, the viewport's own cell drawn bright. Its window
-  follows the focus, so there is always exactly one bright cell; clicking a cell
-  jumps to the question that opened that turn, top-aligned.
-- **Chrome is 7 rows**: the frame's two, the main column's three rules, the status
-  row and the hint row — so `转录行 = h − 7 − 输入行数`, where the input's rows are
-  clamped to 3 … 10: three rows are held open before the draft needs them, and the
-  transcript's last row wins where the two floors meet (at 40×10 the input takes two
-  and the transcript keeps one). The hints are laid out at the **main column's**
-  width, not the terminal's.
-- The working directory and the clock are **not on screen at all** (they left with
-  the old header); `SessionFacts.session_dir` is still injected because the detail
-  overlay reads spilled tool output out of it.
+- **左栏**在 120 列往上时 40 列宽，到 80 列是 28 列；再往下整栏隐藏，主列拿走全部。宽度
+  决定它到底在不在；它自己的高度决定它装什么：先让出标记（退成文字身份，再退成什么都
+  没有），然后从尾部让出字段（缓存 → 输出 → 输入），页签条与 上下文 / token / 回合 是
+  地板。
+- **标记**是五行块状阴影拼出的 `fs` 标记，在宽档里居中。这些字符住在 `wording::logo_lines`，
+  与每一个别的给人看的短语一起；让它们读起来像字形的那条颜色坡道住在画家那里
+  （`mark_lines`），只设前景、不设背景，所以不跟终端正在跑的任何主题打架。**这里什么都
+  不动**：标记与文字身份都长过的那条下落短横、以及它之前的那圈色相环，都在真终端上试过、
+  然后关掉了（`.scratch/tui-input-pulse/spec.md` §2，票 04–08）。两者都还在模块里 ——
+  `mark_lines` 接受它本该落在的那一帧，`wording::identity_falling` 构造另一档的那一行 ——
+  而且两者都在它们所在的地方有单元测试，但 `draw_sidebar_identity` 传的是 `None` 与
+  `identity()`，所以左栏是静止的。这个信号的两个颜色版本在真终端上试过，两个都退了休 ——
+  12 帧亮/普通色、100 ms 一帧，读起来像闪（票 04）；六个亮色相、400 ms，读起来像生硬
+  切换 —— 所以 `PULSE_PALETTE` 留在代码里、不上屏，并且有一个测试钉住没有任何东西穿它
+  （票 05）。
+- **页签条**给左栏翻页：调用量是会话的读数，轨迹与文件还没实现、并且会自己说出来。页签是
+  **点出来的，从不给键位** —— `Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环 —— 而在占位页上，
+  状态行的 `上下文 n%` 是唯一剩下的读数。
+- **`todo` 是唯一来去的那一页签**（`.scratch/todo-and-modes/spec.md` §4）。第一次有**非执行者**
+  提交一次参数里带非空列表的 `todo` 调用时它出现，此后整个会话都在：全完成的
+  列表、被清空的列表、以及重放同几次调用的 `--continue` 都留得住它。那个闩
+  （`TodoPanel::visible`）与当时生效的列表都是从渲染器已经看见的块推出来的渲染器状态 ——
+  两者的任何一部分都不存在流旁边 —— 而页签条是由分隔符、填充与命中矩形所用的同一份标签
+  列表建的，所以没被画出来的标签点不到。**执行者**的列表永远到不了这一页：那是那个执行者
+  自己的记录，在转录里看得见，在左栏里哪儿都没有。这一页每项画一行（`☐` / `▸` / `✓` 加上
+  内容），再加一行计数行 `已完成 2/5`，不滚动：装不下的那些在计数行上面用一行说出来
+  （`＋3 项`），而只有一行容量的页面只显示计数。
+- **回合条**是转录最右的那一列：一格 = 一个回合（讨论里则是一轮），最新的在底部，视口自己
+  那一格画得亮。它的窗口跟着焦点走，所以永远恰好有一格是亮的；点一格跳到开启那个回合的
+  问题，顶端对齐。
+- **外壳占 7 行**：外框的 2 行、主列的 3 条分隔线、状态行与提示行 —— 于是
+  `转录行 = h − 7 − 输入行数`，其中输入区的行数夹在 3 … 10：草稿还没需要时也先留 3 行，
+  而两个地板相遇处转录的最后一行胜出（40×10 下输入区拿 2 行、转录留 1 行）。提示行按
+  **主列的**宽度排版，不是终端宽度。
+- 工作目录与时钟**根本不在屏幕上**（它们随旧顶栏一起退场）；`SessionFacts.session_dir` 仍然
+  被注入，因为详情覆盖层要从它那里读落盘的工具输出。
 
-## The keyboard
+## 键盘
 
-`render::input` is the seam between the loop and whichever front end owns the
-terminal. The traffic is **request-driven**, not a stream: the loop asks for a
-line only when it is ready for one, and for an answer only when the gate has
-asked a question. A reader that read ahead would swallow a permission answer as
-the next prompt.
+`render::input` 是循环与那个占着终端的前端之间的接缝。这里的流量是**按需请求**的，不是一
+条流：循环只在准备好要一行时才要一行，只在闸门问出问题时才要一个答案。一个会预读的读取器
+会把一个权限答案当成下一个提示符吞下去。
 
-- The loop holds `ConsoleHandle` (prompts and questions) and `ConsoleEvents`
-  (unsolicited gestures: cancel, the mode cycle, quit). They are two values because
-  the loop selects on both at once.
-- The front end holds `ConsolePort`. The TUI serves it from its own `select!` over
-  broadcast / console port / keyboard, plus **one timer, armed only while a run is in
-  flight**: the pulse that colours the prompt's `❱` (`.scratch/tui-input-pulse/spec.md` §2b,
-  票 09). Nothing else is waiting to be *noticed* — a pending question arrives on the console
-  port, an event arrives on the rendering channel, a key is a key — but a colour that walks
-  the hue wheel is a function of time alone, so it needs a clock; idle, that branch is guarded
-  off and this `select!` is three sources again. It is an `interval` rather than a sleep built
-  fresh each pass, because a sleep would be reset by every event in a burst and the prompt
-  would stop breathing exactly when the session is busiest. Plain mode serves the port with
-  `render::spawn_plain_console`, which reads stdin line by line.
-- `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
-  a permission question and the prompt use the one keyboard.
-- `ConsoleQuestions` implements the model-question port on that same handle, so a
-  model-initiated questionnaire (`ask_user_question`) reaches the one keyboard
-  too. In the TUI it takes over the bottom input area — one question at a time,
-  paged, with an explicit skip — rather than the middle overlay the harness's
-  questions use; plain mode answers it line by line.
+- 循环持有 `ConsoleHandle`（提示符与问题）与 `ConsoleEvents`（主动上行的手势：取消、模式
+  循环、退出）。它们是两个值，因为循环同时 select 两者。
+- 前端持有 `ConsolePort`。TUI 用自己的 `select!` 在 broadcast / console port / 键盘上加
+  **一个计时器**来应答它，这个计时器**只在一次运行在飞时**才 arm：那就是给提示符的 `❱`
+  上色的脉冲（`.scratch/tui-input-pulse/spec.md` §2b，票 09）。没有别的东西在等着被*注意到*
+  —— 待答的问题从 console port 来、事件从渲染通道来、按键就是按键 —— 但一个沿色相环
+  走的颜色只是时间的函数，所以它需要一台时钟；空闲时那条分支被守掉，这个 `select!` 又只剩
+  三个源。它是一条 `interval`，而不是每一次循环新建的 sleep，因为一次突发里的每个事件都会把
+  sleep 重置，而那恰好是会话最忙的时候，提示符会停止呼吸。plain 模式用
+  `render::spawn_plain_console` 应答这个端口，它逐行读 stdin。
+- `ConsoleAsker` 在同一个句柄上实现权限门的 `Asker`，所以权限问题与提示符用的是同一个
+  键盘。
+- `ConsoleQuestions` 在同一个句柄上实现模型提问端口，所以模型发起的问卷
+  （`ask_user_question`）也到达同一个键盘。TUI 里它接管底部输入区 —— 一屏一问、分页、可以
+  显式跳过 —— 而不是 harness 那些问题用的中段覆盖层；plain 模式逐行作答。
 
-In the TUI, `TuiState` is the testable half: it holds the transcript, the input
-line and any pending question, and `Key` is its own key vocabulary rather than
-crossterm's, so the state machine is tested without a terminal.
+TUI 里 `TuiState` 是可测的那一半：它持有转录、输入行与任何待答的问题，而 `Key` 是它自己的
+键位词汇，不是 crossterm 的，所以状态机不接终端也能测。
 
-## Reopening a session: the history replay
+## 重新打开会话：历史重播
 
-`--continue` reopens this workspace's newest session, and the TUI lays its whole
-event stream back into the transcript so the screen does not start empty. The
-seam is a front-end control request rather than a render event: the CLI pushes
-`ConsoleRequest::Replay { events }` (`ConsoleHandle::replay`) right after
-assembly and before the startup banner, carrying the **assembled** snapshot
-(`Harness::events()`), which already includes the synthetic results recovery
-wrote for dangling tool calls. Plain mode ignores the request; it keeps no
-transcript to replay into. `RenderEvent`, the transcript and the headless
-renderer are untouched.
+`--continue` 重开本工作区最新的那个会话，TUI 把它的整条事件流铺回转录里，于是屏幕不是空着
+开始的。这条接缝是一个前端控制请求，不是一个渲染事件：CLI 在组装之后、启动横幅之前推进
+`ConsoleRequest::Replay { events }`（`ConsoleHandle::replay`），带着**组装好的**快照
+（`Harness::events()`），其中已经包含恢复期为悬空工具调用写下的那些合成结果。plain 模式
+不理这个请求；它没有转录可供重播。`RenderEvent`、转录与 headless 渲染器都不动。
 
-- **One apply path.** Every replayed event goes through the same `TuiState::apply`
-  a live event does, so blocks, collapsed hint lines, name colours, the
-  information panel, the rail and the mode are rebuilt as side effects rather than
-  by a second implementation. That is also why a history row is clickable: the
-  detail hit table is maintained by `apply`, not rebuilt for history.
-- **Framed, with a progress line.** `replay_batch` applies one slice per loop
-  pass, bounded by both 512 events and 2000 source lines, and the loop never waits
-  while a replay is pending. The bottom hint row is
-  temporarily replaced by `恢复历史 n/m` (narrower terminals get `恢复中 n/m`,
-  then `恢复中`); `wording::history_progress_line` owns that ladder.
-- **The seam.** `TuiOptions::reopened` says a replay is coming, and the TUI waits for
-  that first console request before it renders anything: assembly has already emitted
-  the recovery results on the render channel, and they are the same events the
-  snapshot holds, so nothing may be painted until the replay that owns them is up.
-  When the last slice lands, a render-layer line `── 以上为历史 ──`
-  (`wording::history_divider`) is inserted — only if the history actually drew
-  something — and only then are the held-back live events flushed, in arrival order.
-  The banner therefore lands after the seam. A live *logged* event arriving during a
-  replay is dropped rather than buffered, because the snapshot already contains it;
-  only events that never enter the log (the banner, diagnostics, streaming deltas) are
-  held. The divider is never logged, so the next reopen inserts a fresh one.
-- **Held input.** While a replay is in flight the draft still edits, but `Enter`
-  does not submit, the pointer is ignored, and the scroll keys are ignored: the
-  viewport stays pinned to the transcript's end until the history is done.
-  `Ctrl-C` quits (this is not a run, so there is nothing to cancel); `Ctrl-D` and
-  `Esc` are inert.
+- **只有一条施加路径。** 每个被重播的事件都走活事件走的那个 `TuiState::apply`，于是块、折叠的
+  提示行、名字颜色、信息面板、回合条与模式都是作为副作用重建的，而不是由第二套实现重建。
+  这也正是历史行可以点的原因：详情命中表由 `apply` 维护，不为历史重建。
+- **分帧，带一条进度行。** `replay_batch` 每轮循环施加一片，同时受 512 个事件与 2000 个源行
+  两个上限约束，而重播还没结束时循环从不空等。底部提示行临时换成 `恢复历史 n/m`（更窄的
+  终端得到 `恢复中 n/m`，再窄是 `恢复中`）；那条降级阶梯归
+  `wording::history_progress_line` 所有。
+- **那条接缝。** `TuiOptions::reopened` 说明有一次重播要来，而 TUI 在渲染任何东西之前先等
+  那第一个 console 请求：组装已经在渲染通道上发出了恢复结果，它们与快照持有的那些是同一
+  批事件，所以在拥有它们的重播上来之前，什么都不能画。最后一片落地时，插入一条渲染层的行
+  `── 以上为历史 ──`（`wording::history_divider`）—— 只在历史真的画出了东西时才插 —— 也
+  只有到这时，被按住不发的活事件才按到达顺序冲出去。所以横幅落在接缝之后。重播期间到达的
+  一条*进流的*活事件被丢掉，而不是缓冲，因为快照已经含有它；只有永不进流的事件
+  （横幅、诊断、流式增量）被按住。分隔行从不进流，所以下一次重开插进来的是新的一条。
+- **按住的输入。** 重播在飞时草稿照样能编辑，但 `Enter` 不提交、指针被忽略、滚动键也被
+  忽略：视口一直钉在转录末尾，直到历史走完。`Ctrl-C` 退出（这不是一次运行，所以没有东西
+  可取消）；`Ctrl-D` 与 `Esc` 没有反应。
 
-The behaviour is asserted in `tests/history_replay.rs` against a fixed-size
-`TestBackend`; the terminal ownership of a reopen is guarded by the
-`--continue` run in `scripts/tui-startup-check.py`, and the feel of a large
-session stays on the manual list (`docs/tui-manual-checklist.md`, ⑭).
+这些行为在 `tests/history_replay.rs` 里对着一个固定尺寸的 `TestBackend` 断言；一次重开对
+终端的占有由 `scripts/tui-startup-check.py` 里的 `--continue` 路径守着，而大会话的观感留
+在手工清单上（`docs/tui-manual-checklist.md`，⑭）。
 
-## The interactive CLI
+## 交互式 CLI
 
-`fs-agent` with no subcommand starts an interactive session in the current
-workspace:
+不带子命令的 `fs-agent` 在当前工作区里开一个交互式会话：
 
-- renderer: the TUI when stdout is a terminal, the plain transcript otherwise;
-  `--plain` / `--tui` force one (and the two are mutually exclusive);
-- `--continue` resumes this workspace's newest session, keeping its id;
-- `--config`, `--model`, `--mode`, `--cwd` as elsewhere; `--mode` is this path's
-  own (a discussion and the probe run under `[permissions] mode`);
-- commands: `/undo`, `/discuss`, `/quit`; Esc cancels the running turn in the TUI
-  and Shift+Tab cycles the permission mode `readonly → ask → auto → readonly`.
+- 渲染器：stdout 是终端时用 TUI，否则用 plain 转录；`--plain` / `--tui` 强制选一个（两者
+  互斥）；
+- `--continue` 续上本工作区最新的会话，保留它的 id；
+- `--config`、`--model`、`--mode`、`--cwd` 与别处一样；`--mode` 是这条路径自己的（讨论与
+  `probe` 跑在 `[permissions] mode` 之下）；
+- 命令：`/undo`、`/discuss`、`/quit`；TUI 里 Esc 取消正在跑的回合，Shift+Tab 循环权限模式
+  `readonly → ask → auto → readonly`。
 
-The session starts in the configured mode — `[permissions] mode`, or `--mode` over
-it, `ask` by default — and the assembly injects the console asker, so a write asks
-on the same keyboard the prompt came from. The mode is a value on the session that
-nothing on the stream carries, so the front end is assembled with it
-(`SessionFacts::mode`), shows it in the status row, and steps its own copy on the
-gesture while the loop steps the policy; ADR 0003 has the why.
+会话从配置的那一档模式起步 —— `[permissions] mode`，或在其上覆盖的 `--mode`，默认 `ask`
+—— 而组装把 console asker 注入进来，所以一次写在提示符来的同一个键盘上发问。模式是会话上
+的一个值，流上没有任何东西携带它，所以前端组装时就带着它（`SessionFacts::mode`）、在状态
+行里显示它，并在手势到来时走自己那份拷贝，同时循环走策略那一份；为什么如此见 ADR 0003。
 
-What a real terminal has to confirm — the cursor, the mouse, resizing, quitting
-clean — is written down as a follow-along list in
-[`docs/tui-manual-checklist.md`](tui-manual-checklist.md). Everything a fixed-size
-`TestBackend` buffer or `scripts/tui-startup-check.py` can see is asserted there
-instead.
+真终端必须确认的东西 —— 光标、鼠标、缩放、干净退出 —— 写成了一份跟着走的清单，在
+[`docs/tui-manual-checklist.md`](tui-manual-checklist.md) 里。固定尺寸 `TestBackend` 缓冲
+或 `scripts/tui-startup-check.py` 看得见的一切，则在那里断言。
