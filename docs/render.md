@@ -102,7 +102,13 @@ column** on the right, and the geometry is one pure function of the terminal siz
   wide rung. The characters live in `wording::logo_lines` with every other
   human-facing phrase; the colour ramp that makes them read as glyphs lives in the
   painter (`mark_lines`), foreground only and no background, so it does not fight
-  whatever theme the terminal is already running.
+  whatever theme the terminal is already running. At rest the ramp brightens towards
+  the top; **while a run is in flight the whole mark takes one colour off
+  `PULSE_PALETTE`** and walks that ring one frame per `PULSE_FRAME` (12 frames, 100 ms
+  each), which is the interface's "it is working" signal
+  (`.scratch/tui-input-pulse/spec.md` §2). The gradient is deliberately gone for as
+  long as the ring is: a flat moving mark reads as alive from further away than a
+  moving gradient does, and the ramp is back on the next idle frame.
 - **The tab bar** pages the sidebar: 调用量 is the session's readings, 轨迹 and 文件
   are not built yet and say so. The tabs are **clicked, never keyed** — `Tab`
   belongs to the `/` menu and `Shift+Tab` to plan mode — and on a placeholder page
@@ -112,8 +118,11 @@ column** on the right, and the geometry is one pure function of the terminal siz
   follows the focus, so there is always exactly one bright cell; clicking a cell
   jumps to the question that opened that turn, top-aligned.
 - **Chrome is 7 rows**: the frame's two, the main column's three rules, the status
-  row and the hint row — so `转录行 = h − 7 − 输入行数`. The hints are laid out at the
-  **main column's** width, not the terminal's.
+  row and the hint row — so `转录行 = h − 7 − 输入行数`, where the input's rows are
+  clamped to 3 … 10: three rows are held open before the draft needs them, and the
+  transcript's last row wins where the two floors meet (at 40×10 the input takes two
+  and the transcript keeps one). The hints are laid out at the **main column's**
+  width, not the terminal's.
 - The working directory and the clock are **not on screen at all** (they left with
   the old header); `SessionFacts.session_dir` is still injected because the detail
   overlay reads spilled tool output out of it.
@@ -130,9 +139,17 @@ the next prompt.
   (unsolicited gestures: cancel, plan toggle, quit). They are two values because
   the loop selects on both at once.
 - The front end holds `ConsolePort`. The TUI serves it from its own `select!`
-  over broadcast / console port / keyboard — three sources and no timer, since
-  nothing is waiting to be noticed; plain mode serves it with
-  `render::spawn_plain_console`, which reads stdin line by line.
+  over broadcast / console port / keyboard, plus **one timer that only exists while
+  a run is in flight**: the mark's pulse. Nothing else is waiting to be *noticed* —
+  a pending question arrives on the console port, an event arrives on the rendering
+  channel, a key is a key — but the pulse is a function of time alone, so it needs a
+  clock. The clock is an `interval` guarded by `if state.busy()` on its `select!`
+  arm, so an idle session is back to the three sources and an idle process burns no
+  CPU (`.scratch/tui-input-pulse/spec.md` §2, §4). It is an `interval` rather than a
+  sleep built fresh each pass, because a sleep would be reset by every event in a
+  burst and the mark would stop moving exactly when the session is busiest. Plain
+  mode serves the port with `render::spawn_plain_console`, which reads stdin line by
+  line.
 - `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
   the gate's `Ask` and the plan-mode conflict question use the one keyboard.
 - `ConsoleQuestions` implements the model-question port on that same handle, so a

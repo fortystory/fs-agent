@@ -180,6 +180,7 @@ Status: ready-for-agent（`issues/01` 的帧已跑完，争议档已定并折回
 - **删除**：`layout::HeaderKind` 与 `header_content_rows` / `HEADER_TWO_LINE_WIDTH` / `LOGO_MIN_WIDTH` / `LOGO_MIN_HEIGHT` / `LOGO_HEIGHT` / `LOGO_GAP_ROWS` / `LOGO_INFO_ROWS` / `PANEL_MIN_WIDTH` / `PANEL_MIN_ROWS` / `MIN_MIDDLE_ROWS`；`tui.rs` 的 `draw_header` / `draw_mark`（改写进左栏）/ `header_lines` / `edges` / `draw_seam`（改写成 `draw_divide`）；`TuiState.clock`。
   > **`SessionFacts.cwd` 例外（实现期修正）**：原文要求删掉它，但它**确实被读** —— 详情覆盖层要用它拼 `outputs/<tool_call_id>.txt` 读回工具全文（`read_tool_body`）。所以留下字段、改名 `session_dir`（它装的一直是会话目录），并让 rustdoc 写明「工作目录已随旧顶栏离开界面」：这样「cwd 不再显示」这条决议写在类型里，而那条真实职责也还在。
 - **`TICK` / `interval` 臂**：它唯一的职责是「时钟走字」置脏；时钟没了它就没事做，而待答问题经由 console port 到达、事件经由广播到达，都不靠它。**已删**（票 05 逐条确认：三条来源 —— 广播、console port、键盘 —— 都是真的会唤醒的，没有任何东西等着被「注意到」）。
+  > **实现期修正（`.scratch/tui-input-pulse/spec.md` §4，2026-09-26）**：定时器**随忙碌脉冲回来了一条** —— 标记的颜色相位是时间的函数，没有时钟就动不起来。边界是「**只在一次运行在飞时 arm**」：那条 `select!` 臂带 `if state.busy()` 守卫，空闲时它不被 poll、不能唤醒循环，所以上面那段论证在空闲态仍然成立。上面这段不改写，因为它是当时删掉的理由；改的是它的适用范围（从「任何定时器」收窄成「空闲时的定时器」）。
 - `draw_indicator` / 滚动条 / `/` 菜单 / 详情覆盖层的行为不变，只是坐标改到主列。
 
 ## Testing Decisions
