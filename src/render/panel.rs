@@ -60,6 +60,12 @@ impl Panel {
         }
     }
 
+    /// The most recent call's input tokens: what the status row's `上下文 n%` is a
+    /// share of, and what the sidebar's context field pairs with the ceiling.
+    pub fn last_input(&self) -> Option<u64> {
+        self.last_input
+    }
+
     /// The rows to draw in `area`, most important first.
     pub fn lines(&self, facts: &SessionFacts, area: Rect) -> Vec<Line<'static>> {
         let value_columns = (area.width as usize).saturating_sub(label_columns() + 1);
@@ -79,8 +85,9 @@ impl Panel {
         let tokens = wording::token_pair(self.total.total_tokens(), facts.budget_limit);
         let cache = wording::cache_pair(self.total.cached_tokens, self.total.miss_tokens);
 
+        // No `模型` row: it moved to the status row, where it is visible whatever
+        // page the sidebar is showing and whatever width the sidebar has (spec §3).
         let mut rows: Vec<(&'static str, String, bool)> = vec![
-            (wording::PANEL_MODEL, facts.model.clone(), false),
             (wording::PANEL_CONTEXT, context, true),
             (wording::PANEL_TOKENS, tokens, true),
             (wording::PANEL_TURNS, wording::thousands(self.turns), true),
@@ -116,7 +123,6 @@ impl Panel {
 /// column cannot fall out of step with the words it holds.
 fn label_columns() -> usize {
     [
-        wording::PANEL_MODEL,
         wording::PANEL_CONTEXT,
         wording::PANEL_TOKENS,
         wording::PANEL_TURNS,

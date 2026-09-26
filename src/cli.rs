@@ -319,7 +319,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         };
         let facts = SessionFacts {
             session_id: stored.id.as_str().to_owned(),
-            cwd: stored.dir.display().to_string(),
+            session_dir: stored.dir.display().to_string(),
             model: model.clone(),
             context_window: crate::context::usable_input(&caps),
             budget_limit: session_config.budget.limit,
@@ -609,7 +609,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         };
         let facts = SessionFacts {
             session_id: stored.id.as_str().to_owned(),
-            cwd: stored.dir.display().to_string(),
+            session_dir: stored.dir.display().to_string(),
             // The panel has one model row and one context row, and a discussion has a
             // pair of debaters and no single window: the row names **both models**, and
             // the window is the first debater's, which is the approximation the panel

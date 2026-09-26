@@ -25,7 +25,7 @@ use ratatui::Terminal;
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        cwd: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         budget_limit: Some(100_000),
@@ -41,7 +41,7 @@ fn state() -> TuiState {
 /// `outputs/<id>.txt` out of.
 fn state_in(dir: &Path) -> TuiState {
     TuiState::new(SessionFacts {
-        cwd: dir.display().to_string(),
+        session_dir: dir.display().to_string(),
         ..facts()
     })
 }
@@ -250,16 +250,26 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     state.mouse(click(10, row));
 }
 
-/// The row the information panel's top border is on, if the panel is drawn.
-fn right_panel_top(rows: &[String]) -> Option<usize> {
-    rows.iter()
-        .position(|row| row.ends_with('┐') && row.contains('┬'))
-}
-
-/// A panel field by its offset from the panel's own first content row.
+/// A sidebar field by its offset from the page's first row.
+///
+/// The page starts under the tab bar — the row after its bottom rule — and the fields
+/// are the sidebar's own half of those rows, so the divider's column ends each one.
 fn panel_field(rows: &[String], offset: usize) -> String {
-    let top = right_panel_top(rows).expect("the panel is drawn");
-    rows[top + 1 + offset].clone()
+    let mut rules = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.starts_with('├'))
+        .map(|(y, _)| y);
+    rules.next().expect("the tab bar's top rule");
+    let top = rules.next().expect("the tab bar's bottom rule") + 1;
+    let row = &rows[top + offset];
+    let inner = row.trim_start_matches('│');
+    let end = inner
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, '│' | '├' | '┤'))
+        .map(|(index, _)| index)
+        .expect("the divider ends the sidebar");
+    inner[..end].to_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -634,9 +644,9 @@ fn the_panel_adds_up_the_history_and_keeps_accumulating() {
     state.live_event(RenderEvent::Logged(turn_ended(5)));
 
     let rows = screen(120, 40, &mut state);
-    let tokens = panel_field(&rows, 2);
-    let turns = panel_field(&rows, 3);
-    let input = panel_field(&rows, 4);
+    let tokens = panel_field(&rows, 1);
+    let turns = panel_field(&rows, 2);
+    let input = panel_field(&rows, 3);
     assert!(tokens.contains("180"), "100+20+50+10: {tokens:?}");
     assert!(turns.contains('2'), "two turns: {turns:?}");
     assert!(input.contains("150"), "100+50 input: {input:?}");

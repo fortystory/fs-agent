@@ -1,7 +1,7 @@
 # 外壳骨架：外框、分隔线、两档左栏、主列重排
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by:
 
 > 规格：`.scratch/tui-sidebar/spec.md` §1 / §2 / §3 / §6 / §8。帧（真实渲染）在 `.scratch/tui-sidebar/prototype/frames/`。
@@ -41,4 +41,16 @@ tab 切换与占位页（`03`）、回合条（`04`）、`TICK` 删除与文档�
 
 ## Comments
 
-（实现时把偏离 spec 的地方记在这里）
+**实现完成（2026-09-26）**。落点：`src/render/layout.rs`（整段重写 `plan()` 与 `Regions`）、`src/render/tui.rs`（`draw_shell` / `draw_divide` / `draw_sidebar` / `draw_status` / `draw_transcript` / `draw_bottom`，删掉 header 一族）、`src/render/wording.rs`（新增 tab 标签 / 占位符 / `context_share` / `status_row` / 回合条字形，删 `clock` / `clock_short`）、`src/render/panel.rs`（去掉 `模型` 行）、`src/cli.rs`（facts 改名）、`tests/render_layout.rs` / `tests/wording.rs` / `tests/history_replay.rs` / `tests/ask_user_question_tui.rs`。
+
+**与票面/规格不同的地方，逐条记下**：
+
+1. **`SessionFacts.cwd` 改成保留并改名 `session_dir`，而不是删除**（票面 §8 的删除清单要求删）。理由是它**确实被读**：详情覆盖层要用它拼 `outputs/<tool_call_id>.txt` 读回工具全文（`read_tool_body`），删掉会让「全文」这条路径失效。所以这里做的是把「cwd 不再显示」这条决议写进类型本身（字段名就是它真正装的东西），并在 rustdoc 里写明工作目录已随旧顶栏离开界面。`cargo clippy` 双向确认没有留下没人读的字段。
+2. **`Regions` 比票面多两个字段**：`main`（主列的整块，浮层与菜单的居中/边界都从它算）与 `sidebar_page`（左栏页面的矩形，它的**高度就是**高度阶梯留下的字段数）。票面列的是「新字段：sidebar / tabs / divide / rail / SidebarKind / status / …」，这两个是把「画什么」真的画得出来的最小补充，没有第二个来源。
+3. **一条票面要求的测试换了个落点**：票面把「首帧画得出五区域」写在 `tests/render_tui.rs`，但那个文件是**状态机**测试（不起帧），全部几何断言在 `tests/render_layout.rs`（它才是 `draw_frame` 的接缝）。五区域、状态行三档、提示行宽度账都在后者。
+4. **两条宽度退化路径改在 `Panel::lines` 上直接测**：左栏两个档（28 / 40）的值列分别是 21 / 33 列，v1 的「先丢 `（6%）`、再丢缓存行」两条**从外壳上够不到**（28 档丢百分比仍会在值长到 22 列时触发，缓存行则再也不触发）。这两条按 spec §3「保留为代码路径」留下，测试改成用 `Rect` 直接打 `Panel::lines`，并在测试里写明为什么不能从帧上打。
+5. **一处措辞层的台阶数被实测钉住**：`status_row()` 的第三档（只剩 `上下文 n%`）返回**非空**，第 4 档「整行消失」按 spec §2 不实现 —— 触不到它需要主列内容宽 < 11，而地板是 40×10。宽度不够时由画家的 `truncate_columns` 兜底。
+
+**实测数字（120×24 参考档）**：左栏 40（mark 居中，各 1 格 air）、主列 77、转录 16 行 × 75 文本列（滚动条 1 + 回合条 1 恒留）、状态行 `模型 claude-sonnet-4-5 │ 模式 询问 │ 上下文 —`、提示行 4 条 + 退出（放不下 `就绪`）。高度阶梯实测：`h = 16` 才有 mark、`h = 12` 有身份行、`h = 10` 身份行与「缓存」已让位 —— 与 spec §2 的档位表逐条对上。
+
+**基线**：`cargo test` **708 passed / 0 failed**；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移（未顺手格式化）。

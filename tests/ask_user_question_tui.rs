@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        cwd: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         budget_limit: Some(100_000),
@@ -120,23 +120,26 @@ fn the_question_and_its_options_take_over_the_bottom_input_area() {
     );
     assert!(text.contains("2. manual"), "{text}");
 
-    // It is in the bottom block, not the middle overlay: the question's row sits
-    // below the last middle-block border.
-    let middle_bottom = rows
+    // It is in the input area at the foot of the main column, not the middle overlay:
+    // its row sits under the rule above the input, and the frame is still the only box
+    // on screen.
+    let frame_bottom = rows
         .iter()
         .rposition(|row| row.starts_with('└'))
-        .expect("the bottom block's bottom border");
+        .expect("the frame's bottom border");
     let question_row = rows
         .iter()
         .position(|row| row.contains("Which framework?"))
         .expect("the question is on screen");
     assert!(
-        question_row < middle_bottom,
-        "the question is drawn in the bottom block:\n{text}"
+        question_row < frame_bottom,
+        "the question is drawn inside the frame:\n{text}"
     );
-    // And there is no middle-pane overlay: only three blocks open.
     let opens = rows.iter().filter(|row| row.starts_with('┌')).count();
-    assert_eq!(opens, 3, "no fifth box floats over the transcript:\n{text}");
+    assert_eq!(
+        opens, 1,
+        "no box floats over the transcript: only the frame's own corner:\n{text}"
+    );
 }
 
 #[test]

@@ -861,6 +861,57 @@ fn the_panel_texts_read_like_the_prototype() {
 }
 
 #[test]
+fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
+    // The three tabs, and what a page with no content yet says instead of showing a
+    // blank or made-up data (`.scratch/tui-sidebar/spec.md` §3).
+    assert_eq!(wording::TAB_USAGE, "调用量");
+    assert_eq!(wording::TAB_TRACE, "轨迹");
+    assert_eq!(wording::TAB_FILES, "文件");
+    assert_eq!(wording::tab_placeholder(), "此页尚未实现（另有票在跟）");
+    // The rail's glyphs: an ordinary unit, the focused one, and the mark for units the
+    // column had no room for.
+    assert_eq!(wording::RAIL_CELL, "┊");
+    assert_eq!(wording::RAIL_FOCUS, "┃");
+    assert_eq!(wording::RAIL_TRUNCATED, "⋮");
+}
+
+#[test]
+fn the_status_row_gives_up_the_model_then_the_mode_and_never_itself() {
+    // The short form always carries its label, so a bare `6%` never appears
+    // unexplained — and before a call has reported its input it says so rather than
+    // showing a zero (spec §5).
+    assert_eq!(wording::context_share(Some(12_345), 200_000), "上下文 6%");
+    assert_eq!(wording::context_share(None, 200_000), "上下文 —");
+
+    let model = "claude-sonnet-4-5";
+    let mode = wording::mode_field(Mode::Ask);
+    let share = wording::context_share(Some(12_345), 200_000);
+    // Three rungs, decided by the width the main column really has (spec §2):
+    // everything, then the model dropped, then only the share — which is where it
+    // stays, because the width that would take the row away is below the terminal
+    // floor.
+    assert_eq!(
+        wording::status_row(model, &mode, &share, 77),
+        " 模型 claude-sonnet-4-5 │ 模式 询问 │ 上下文 6% "
+    );
+    assert_eq!(
+        wording::status_row(model, &mode, &share, 45),
+        " 模式 询问 │ 上下文 6% ",
+        "the model is the first segment given up"
+    );
+    assert_eq!(
+        wording::status_row(model, &mode, &share, 11),
+        " 上下文 6% ",
+        "and the mode follows it"
+    );
+    assert_eq!(
+        wording::status_row(model, &mode, &share, 4),
+        " 上下文 6% ",
+        "there is no rung that removes the row: a width too small for even the share is the painter's to truncate"
+    );
+}
+
+#[test]
 fn a_questionnaire_reads_in_chinese_and_pages() {
     // The footer is the page indicator plus the keys, so a reader always knows
     // which question this is and what the keyboard does (spec §19).

@@ -24,7 +24,7 @@ fn kimi() -> SpeakerId {
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        cwd: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         budget_limit: Some(100_000),

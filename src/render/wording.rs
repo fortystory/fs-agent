@@ -1327,22 +1327,78 @@ pub fn logo_lines() -> [&'static str; 5] {
     ]
 }
 
-/// The header's mode field.
+/// The sidebar's mode field, and the status row's.
 pub fn mode_field(mode: Mode) -> String {
     format!("模式 {}", mode_label(mode))
 }
 
-/// The header's clock, at the minute: a second hand would redraw the frame sixty
-/// times a minute for no one (spec §10).
-pub fn clock(now: &chrono::DateTime<chrono::Local>) -> String {
-    now.format("%Y-%m-%d %H:%M").to_string()
+// ---------------------------------------------------------------------------
+// The shell: the sidebar's tabs, the status row and the rail
+// (`.scratch/tui-sidebar/spec.md` §3, §5, §6)
+// ---------------------------------------------------------------------------
+
+/// The sidebar's tab labels, in the order they are drawn (spec §3).
+pub const TAB_USAGE: &str = "调用量";
+pub const TAB_TRACE: &str = "轨迹";
+pub const TAB_FILES: &str = "文件";
+
+/// What a tab whose page is not built yet says. A sentence rather than a blank
+/// panel, so the reader knows it is not done rather than broken, and naming the
+/// ticket makes the reason checkable (spec §3).
+pub fn tab_placeholder() -> &'static str {
+    "此页尚未实现（另有票在跟）"
 }
 
-/// The clock for a header with only one line, where the date is the first thing to
-/// go (spec §2).
-pub fn clock_short(now: &chrono::DateTime<chrono::Local>) -> String {
-    now.format("%H:%M").to_string()
+/// The status row's short form of how full the model's window is: `上下文 6%`, or
+/// `上下文 —` before a call has reported its input tokens.
+///
+/// Short because the status row shares its one line with the model and the mode:
+/// the pair, the ceiling and the percentage in brackets are the sidebar's field
+/// (spec §5).
+pub fn context_share(used: Option<u64>, usable: u64) -> String {
+    match used {
+        Some(used) => format!(
+            "{} {}%",
+            PANEL_CONTEXT,
+            used.saturating_mul(100) / usable.max(1)
+        ),
+        None => format!("{} {}", PANEL_CONTEXT, PANEL_UNKNOWN),
+    }
 }
+
+/// The status row: `模型 … │ 模式 … │ 上下文 …%`, with the width ladder folded in.
+///
+/// Three rungs, and the order is the point: the **model** goes first (it is the
+/// longest segment and does not change within a session), then the **mode**, and
+/// what is left is the one reading that answers "how much room is there" — still
+/// carrying its label, so a bare `6%` never appears unexplained (spec §2, §5).
+///
+/// There is deliberately **no** rung that takes the row away. The width that would
+/// take is narrower than [`super::layout::MIN_WIDTH`], so the row is always drawn;
+/// a `width` too small even for the last rung is the painter's to truncate.
+pub fn status_row(model: &str, mode: &str, share: &str, width: usize) -> String {
+    let segment = |text: &str| format!(" {text} ");
+    let full = format!(
+        "{}│{}│{}",
+        segment(&format!("{PANEL_MODEL} {model}")),
+        segment(mode),
+        segment(share)
+    );
+    if usize::from(full.cell_width()) <= width {
+        return full;
+    }
+    let two = format!("{}│{}", segment(mode), segment(share));
+    if usize::from(two.cell_width()) <= width {
+        return two;
+    }
+    segment(share)
+}
+
+/// The rail's three glyphs: an ordinary unit, the focused unit, and the mark for
+/// the units the column had no room for (spec §4).
+pub const RAIL_CELL: &str = "┊";
+pub const RAIL_FOCUS: &str = "┃";
+pub const RAIL_TRUNCATED: &str = "⋮";
 
 /// The `Mode` a session runs under, named in Chinese.
 pub fn mode_label(mode: Mode) -> &'static str {

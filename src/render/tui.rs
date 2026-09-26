@@ -1,25 +1,26 @@
-//! The ratatui interface (spec §1–§2, ADR 0002).
+//! The ratatui interface (`.scratch/tui-sidebar/spec.md` §1–§2, ADR 0002).
 //!
 //! Three properties are structural, not stylistic:
 //!
-//! * **Alternate screen, four panes.** The TUI draws a fullscreen header, a
-//!   conversation pane, an information panel and a bottom block holding the input
-//!   and the hints. The transcript lives in the pane's own buffer rather than in
-//!   the terminal's scrollback — which is what removed the inline viewport's
-//!   drifting cursor, since in fullscreen the pane origin is always `(0, 0)`.
+//! * **Alternate screen, one frame.** The TUI draws a fullscreen frame around a
+//!   full-height sidebar and a main column: the sidebar holds the mark and the
+//!   session's readings, the main column stacks the transcript (with the scrollbar
+//!   and the rail at its right edge), the status row, the input and the hints. The
+//!   transcript lives in its own buffer rather than in the terminal's scrollback —
+//!   which is what removed the inline viewport's drifting cursor, since in
+//!   fullscreen the pane origin is always `(0, 0)`.
 //! * **The renderer owns the keyboard.** It is the only task reading terminal
 //!   events, and it answers the loop's requests ([`ConsoleRequest`]) over the
 //!   injected console channel. That is what keeps input and output from fighting.
-//! * **`select!` over broadcast / tick / keys.** Render events, a redraw tick and
-//!   keyboard input are three independent sources; `select!` is how they are
-//!   merged without a second channel whose ordering would be undefined. What is
-//!   already queued is drained before the frame is drawn, so a bursting provider
-//!   costs frames rather than events.
+//! * **`select!` over broadcast / keys.** Render events, the loop's requests and
+//!   keyboard input are three independent sources; `select!` is how they are merged
+//!   without a second channel whose ordering would be undefined. What is already
+//!   queued is drained before the frame is drawn, so a bursting provider costs
+//!   frames rather than events.
 
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Local;
 use futures::StreamExt;
 use ratatui::buffer::CellWidth;
 use ratatui::crossterm::event::{
@@ -60,9 +61,11 @@ use super::{DeltaKind, Render, RenderEvent};
 /// block re-renders it in full.
 const LIVE_BUFFER: usize = 4_000;
 
-/// How often the frame is redrawn even without an event. The tick is what keeps
-/// the header's clock honest, and what gives a pending question a chance to
-/// appear while nothing else is happening.
+/// How often the frame is redrawn even without an event.
+///
+/// It is the last remnant of the header's clock, which the shell no longer shows:
+/// the arm that wakes on it puts nothing on screen any more (票 02 §8, confirmed
+/// and removed in 票 05).
 const TICK: Duration = Duration::from_millis(120);
 
 /// A paste larger than this asks before it is taken (spec §7).
@@ -259,12 +262,13 @@ impl SpeakerColors {
     }
 }
 
-/// The session values the header and the panel cannot read off the event stream
-/// (spec §8).
+/// The session values the sidebar and the status row cannot read off the event
+/// stream (spec §8).
 ///
 /// Everything here is known at assembly time and injected as one value, because
-/// that is the seam: the renderer never reaches for configuration. The header uses
-/// `cwd`; the rest are carried for the information panel, which ticket 13 fills in.
+/// that is the seam: the renderer never reaches for configuration. The status row
+/// shows the model, the sidebar shows the counts, and the detail overlay reads
+/// spilled tool output out of `session_dir`.
 ///
 /// Anything that changes mid-session — the mode — is deliberately **not** here: an
 /// injected copy would go stale the first time the user pressed Shift+Tab, and the
@@ -273,10 +277,12 @@ impl SpeakerColors {
 pub struct SessionFacts {
     /// The session this terminal is showing.
     pub session_id: String,
-    /// The directory the session is bound to.
-    pub cwd: String,
+    /// The directory the session's own files live in: the detail overlay joins the
+    /// spilled tool outputs out of it, and nothing on screen shows it (the working
+    /// directory left the interface with the old header, spec §8).
+    pub session_dir: String,
     /// The model the session answers with — or, in a discussion, the two debaters'
-    /// models, because the panel has one row for it (spec §8).
+    /// models, because the status row has one field for it (spec §5).
     pub model: String,
     /// The input budget of that model's window, output reserve already removed.
     pub context_window: u64,
@@ -291,7 +297,7 @@ pub struct SessionFacts {
 }
 
 /// The TUI's injected values: the front end's end of the console channel, plus
-/// the facts the header and the panel display.
+/// the facts the sidebar and the status row display.
 pub struct TuiOptions {
     pub port: ConsolePort,
     pub facts: SessionFacts,
@@ -336,7 +342,6 @@ impl Tui {
         // The first tick fires immediately; soak it so the first frame is drawn
         // from state rather than from an empty buffer.
         tick.tick().await;
-        state.refresh_clock();
 
         // A reopened session waits for the replay before it renders anything. The
         // loop pushes it as its **first** console request, right after assembly and
@@ -374,7 +379,7 @@ impl Tui {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
-                    _ = tick.tick() => state.refresh_clock(),
+                    _ = tick.tick() => {}
                 }
             }
 
@@ -475,7 +480,7 @@ impl Render for Tui {
 /// The display-ready state, split from the terminal so it can be tested without
 /// one.
 pub struct TuiState {
-    /// What the header and the panel display, injected at assembly (spec §8).
+    /// What the sidebar and the status row display, injected at assembly (spec §8).
     facts: SessionFacts,
     /// The mode the session is in. Seeded from the assembly-time default and kept
     /// current from the stream, because both transitions ride it: entering plan
@@ -489,9 +494,6 @@ pub struct TuiState {
     pane: Pane,
     /// The streaming tail of the current message.
     live: String,
-    /// The header's clock, kept so a tick can tell whether the frame it would draw
-    /// is any different from the one already on screen.
-    clock: chrono::DateTime<Local>,
     /// Whether anything has changed since the last frame was drawn.
     dirty: bool,
     /// The draft and its cursor.
@@ -1128,7 +1130,6 @@ impl TuiState {
             transcript: Transcript::new(),
             pane: Pane::new(),
             live: String::new(),
-            clock: Local::now(),
             dirty: true,
             editor: Input::new(),
             catalog: Vec::new(),
@@ -1170,15 +1171,6 @@ impl TuiState {
 
     pub fn mark_clean(&mut self) {
         self.dirty = false;
-    }
-
-    /// Re-read the wall clock. Only a new minute is worth a frame (spec §10).
-    pub fn refresh_clock(&mut self) {
-        let now = Local::now();
-        if wording::clock(&now) != wording::clock(&self.clock) {
-            self.clock = now;
-            self.dirty = true;
-        }
     }
 
     /// Bracketed paste arrives as text, not as keys.
@@ -2445,7 +2437,7 @@ fn questionnaire_parts(
     (prefix, options, custom)
 }
 
-/// Draw one frame of the four-pane layout.
+/// Draw one frame of the shell.
 ///
 /// This is the seam the layout is tested through: a state goes in, a fixed-size
 /// frame comes out, and no terminal is involved (spec §2).
@@ -2465,20 +2457,22 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         return;
     }
     // The draft's own height decides how much room the input takes: it grows with
-    // the text up to the layout's cap and then scrolls internally (spec §5). A
-    // questionnaire replaces that with its own height, so the bottom block grows to
+    // the text up to the layout's cap and then scrolls internally (spec §2). A
+    // questionnaire replaces that with its own height, so the input area grows to
     // hold the question (spec §19).
     let content_rows = state.bottom_rows(area);
     let panes = layout::plan(area, content_rows);
-    draw_header(frame, &panes, state);
+    draw_shell(frame, &panes, state, area);
     draw_transcript(frame, &panes, state);
+    draw_status(frame, &panes, state);
     let anchor = draw_bottom(frame, &panes, state);
-    // The `/` menu floats over the pane, under the cursor it belongs to — and under a
-    // question, which owns the keyboard and so has no menu to offer (spec §6, §9).
+    // The `/` menu floats over the main column, under the cursor it belongs to — and
+    // under a question, which owns the keyboard and so has no menu to offer
+    // (spec §6, §9).
     if let Some(anchor) = anchor {
         draw_menu(frame, &panes, state, anchor);
     }
-    // Last, so it is on top of the pane it is asking about.
+    // Last, so it is on top of the transcript it is asking about.
     draw_modal(frame, &panes, state);
     // The detail overlay goes over all of it. It cannot be up at the same time as a
     // question — opening one needs an idle keyboard — so the order between the two
@@ -2486,12 +2480,199 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     draw_detail(frame, &panes, state);
 }
 
+/// The parts of the shell that are not regions of their own: the frame, the divider
+/// column, the sidebar and the main column's three rules.
+///
+/// The order is the painting order and it is why the junctions come out whole: the
+/// frame first, then the divider down the sidebar's right edge, then the sidebar —
+/// whose tab bar writes `├` and `┤` over the two of them — and last the main
+/// column's rules, which write `├` into the divider column at their own rows
+/// (spec §1).
+fn draw_shell(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState, area: Rect) {
+    draw_border(frame, area);
+    draw_divide(frame, panes, area);
+    draw_sidebar(frame, panes, state);
+    // The rules above the status row, the input and the hints. Left of them is the
+    // divider — or, with no sidebar, the frame's own left border — and right of them
+    // the frame's right border.
+    let style = Style::default().fg(Color::DarkGray);
+    let right = area.right().saturating_sub(1);
+    for y in [panes.status.y - 1, panes.input.y - 1, panes.hints.y - 1] {
+        let left = panes.divide.unwrap_or(area.x);
+        let buffer = frame.buffer_mut();
+        buffer[(left, y)].set_symbol("├").set_style(style);
+        for x in left + 1..right {
+            buffer[(x, y)].set_symbol("─").set_style(style);
+        }
+        buffer[(right, y)].set_symbol("┤").set_style(style);
+    }
+}
+
+/// The column the sidebar and the main column share: one vertical rule from the
+/// frame's top border to its bottom one, with the frame's own junctions at the ends
+/// rather than a second border (spec §1).
+///
+/// The tab bar paints its own junctions over it at the two rows its rules occupy.
+fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) {
+    let Some(divide) = panes.divide else {
+        return;
+    };
+    let style = Style::default().fg(Color::DarkGray);
+    let buffer = frame.buffer_mut();
+    for y in area.y..area.bottom() {
+        let symbol = if y == area.y {
+            "┬"
+        } else if y == area.bottom() - 1 {
+            "┴"
+        } else {
+            "│"
+        };
+        buffer[(divide, y)].set_symbol(symbol).set_style(style);
+    }
+}
+
+/// The sidebar: the mark or the text identity at the top, then the tab bar, then
+/// the page the tab selects (spec §3).
+///
+/// Everything here is drawn from the layout's decisions — which identity, which
+/// page rows — never from a size test of its own, so the ladder has one home.
+fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+    let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
+        return;
+    };
+    let dim = Style::default().fg(Color::DarkGray);
+    match panes.sidebar_kind {
+        layout::SidebarKind::Mark => {
+            // The mark is 38 columns and the wide rung is 40, so it sits centred
+            // with a column of air on each side; a rung narrower than the mark never
+            // asks for these rows at all (spec §2).
+            let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
+            let lines: Vec<Line<'static>> = mark_lines()
+                .into_iter()
+                .map(|(text, color)| {
+                    Line::from(Span::styled(text.to_owned(), Style::default().fg(color)))
+                })
+                .collect();
+            let rows = lines.len() as u16;
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect::new(
+                    sidebar.x + offset,
+                    sidebar.y,
+                    sidebar.width.saturating_sub(offset),
+                    rows,
+                ),
+            );
+        }
+        layout::SidebarKind::Text => {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(wording::identity(), dim))),
+                Rect::new(sidebar.x, sidebar.y, sidebar.width, 1),
+            );
+        }
+        layout::SidebarKind::Hidden => {}
+    }
+    // The tab bar: two rules with the labels between them. Both rules start at the
+    // frame's left border and end at the divider column, so the sidebar reads as one
+    // compartment rather than as a block of its own (spec §3).
+    for y in [tabs.y - 1, tabs.y + 1] {
+        let buffer = frame.buffer_mut();
+        buffer[(sidebar.x - 1, y)].set_symbol("├").set_style(dim);
+        for x in sidebar.x..sidebar.right() {
+            buffer[(x, y)].set_symbol("─").set_style(dim);
+        }
+        if let Some(divide) = panes.divide {
+            buffer[(divide, y)].set_symbol("┤").set_style(dim);
+        }
+    }
+    // The labels, one separator between them and the rest of the row filled with a
+    // rule, so the row reads as a bar rather than as three stranded words.
+    let entries = [
+        (Tab::Usage, wording::TAB_USAGE),
+        (Tab::Trace, wording::TAB_TRACE),
+        (Tab::Files, wording::TAB_FILES),
+    ];
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0u16;
+    for (index, (tab, label)) in entries.iter().enumerate() {
+        // 票 03 turns this into the state's selected page; until then the sidebar
+        // shows the usage page and the bar says so.
+        let selected = matches!(tab, Tab::Usage);
+        let style = if selected {
+            Style::default()
+                .fg(Color::LightMagenta)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            dim
+        };
+        spans.push(Span::styled((*label).to_owned(), style));
+        used += text_columns(label) as u16;
+        if index + 1 < entries.len() {
+            spans.push(Span::styled("│", dim));
+            used += 1;
+        }
+    }
+    spans.push(Span::styled(
+        "─".repeat(sidebar.width.saturating_sub(used) as usize),
+        dim,
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
+    // The page itself. The rows come from the layout's height ladder, so a squeezed
+    // sidebar loses fields from the tail rather than clipping the three readings
+    // that matter (spec §2).
+    let Some(page) = panes.sidebar_page else {
+        return;
+    };
+    frame.render_widget(Paragraph::new(state.panel.lines(&state.facts, page)), page);
+}
+
+/// The status row: which model, which mode, and how full the window is (spec §5).
+///
+/// The three segments are painted, not clickable: nothing on this row is a control,
+/// so nothing here records a hit region. The width ladder lives in
+/// [`wording::status_row`]; the row itself is always drawn, and a width too narrow
+/// even for its last rung is truncated rather than dropped (spec §2).
+fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+    let share = wording::context_share(state.panel.last_input(), state.facts.context_window);
+    let width = panes.status.width as usize;
+    let text = wording::status_row(
+        &state.facts.model,
+        &wording::mode_field(state.mode),
+        &share,
+        width,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate_columns(&text, width),
+            Style::default().fg(Color::DarkGray),
+        ))),
+        panes.status,
+    );
+}
+
+/// Which sidebar page is showing (spec §3).
+///
+/// Clicked, never keyed: `Tab` belongs to the `/` menu and `Shift+Tab` to plan mode,
+/// and this repo does not enable the keyboard-enhancement protocol. A page that is
+/// not built yet shows [`wording::tab_placeholder`] rather than made-up data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    /// The session's readings: what the old information panel held.
+    Usage,
+    /// The call trace. Not built yet.
+    Trace,
+    /// The files this session touched. Not built yet.
+    Files,
+}
+
 /// The overlay a question is asked in (spec §9).
 ///
-/// It sits over the middle block — transcript and panel both — so the question cannot
-/// be outrun by new output, and it is **not** part of the transcript: the stream still
-/// carries the `PermissionAsked` block for anyone reading back. It owns the pointer
-/// while it is up, so the "back to bottom" rectangle is dropped.
+/// It sits in the middle of the main column so the question cannot be outrun by new
+/// output, and it is **not** part of the transcript: the stream still carries the
+/// `PermissionAsked` block for anyone reading back. Centring it on the main column
+/// rather than the whole terminal keeps the sidebar's readings visible while a
+/// question is up (spec §1). It owns the pointer while it is up, so the "back to
+/// bottom" rectangle is dropped.
 fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let Some(modal) = state.pending.as_ref().and_then(Pending::modal) else {
         return;
@@ -2506,7 +2687,7 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     }
     // The rows, in order. Anything long wraps onto another line rather than losing
     // the keys; the overlay still leaves the middle block's own borders showing.
-    let rows_available = panes.middle.height.saturating_sub(2) as usize;
+    let rows_available = panes.main.height.saturating_sub(2) as usize;
     if rows_available == 0 {
         return;
     }
@@ -2693,69 +2874,6 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
 }
 
 /// The header: the mark when the terminal is big enough for it, otherwise what
-/// session this is, where it is, what mode it runs in, and when.
-///
-/// Which of the three is drawn is the layout's call ([`layout::HeaderKind`]), not a
-/// size test repeated here.
-fn draw_header(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
-    draw_border(frame, panes.header);
-    match panes.header_kind() {
-        layout::HeaderKind::Mark => draw_mark(frame, panes, state),
-        // Both text kinds come out of `header_lines`, which reads the height itself.
-        layout::HeaderKind::TextOneLine | layout::HeaderKind::TextTwoLines => {
-            frame.render_widget(
-                Paragraph::new(header_lines(panes.header_content, state)),
-                panes.header_content,
-            );
-        }
-    }
-}
-
-/// The mark, and the line of facts that survives under it.
-///
-/// The mark says *what this is*; the line under it says *where and when*, the two
-/// things the tall header has no room to spell out: the directory on the left, then
-/// the mode and the clock against the right edge. The name and the version are what
-/// the mark itself is, so [`wording::identity`] is the one field the tall header
-/// gives up.
-fn draw_mark(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
-    let content = panes.header_content;
-    let lines: Vec<Line<'static>> = mark_lines()
-        .iter()
-        .map(|(text, color)| {
-            Line::from(Span::styled(
-                (*text).to_owned(),
-                Style::default().fg(*color),
-            ))
-        })
-        .collect();
-    let height = lines.len() as u16;
-    frame.render_widget(
-        Paragraph::new(lines),
-        Rect::new(content.x, content.y, content.width, height),
-    );
-    // A blank row, then the facts: the mark says what this is, the air lets it
-    // land, and the line under it says where and when. The geometry put the facts
-    // on the content's last row, so the blank is what the two leave between them.
-    let info_y = content.y + height + layout::LOGO_GAP_ROWS;
-    if content.height <= height + layout::LOGO_GAP_ROWS {
-        return;
-    }
-    let info = Line::from(edges(
-        &state.facts.cwd,
-        &format!(
-            "{} · {}",
-            wording::mode_field(state.mode),
-            wording::clock(&state.clock)
-        ),
-        content.width as usize,
-    ));
-    frame.render_widget(
-        Paragraph::new(info),
-        Rect::new(content.x, info_y, content.width, layout::LOGO_INFO_ROWS),
-    );
-}
-
 /// The mark's rows and their colours.
 ///
 /// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
@@ -2783,57 +2901,10 @@ fn mark_lines() -> Vec<(&'static str, Color)> {
         .collect()
 }
 
-/// The header's fields.
-///
-/// Two lines hold identity and clock, then directory and mode — each pair pushed
-/// to the opposite edges so the eye can find them. One line has room for a single
-/// run of fields, and drops the directory: the mode matters more (spec §2).
-fn header_lines(content: Rect, state: &TuiState) -> Vec<Line<'static>> {
-    let width = content.width as usize;
-    if content.height <= 1 {
-        // The date is the first thing to go when the header is a single line —
-        // the time is what a glance is looking for.
-        let single = format!(
-            "{} · {} · {}",
-            wording::identity(),
-            wording::mode_field(state.mode),
-            wording::clock_short(&state.clock)
-        );
-        return vec![Line::from(truncate_columns(&single, width))];
-    }
-    vec![
-        Line::from(edges(
-            &wording::identity(),
-            &wording::clock(&state.clock),
-            width,
-        )),
-        Line::from(edges(
-            &state.facts.cwd,
-            &wording::mode_field(state.mode),
-            width,
-        )),
-    ]
-}
-
-/// One header line: `left` against the left edge, `right` against the right, and
-/// whatever space is left between them. When they cannot both fit, the identity
-/// survives and the other field is what gets cut.
-fn edges(left: &str, right: &str, width: usize) -> String {
-    let left_columns = text_columns(left);
-    let right_columns = text_columns(right);
-    if left_columns + right_columns >= width {
-        return truncate_columns(left, width);
-    }
-    let mut line = String::from(left);
-    line.push_str(&" ".repeat(width - left_columns - right_columns));
-    line.push_str(right);
-    line
-}
-
-/// The conversation pane: the transcript's window onto its own scroll buffer,
-/// plus the two things that say where the viewport is (spec §3, §4).
+/// The transcript: its window onto the pane's scroll buffer, the scrollbar and the
+/// rail at its right edge, and the indicator that says where the viewport is
+/// (spec §1, §3, §4).
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    draw_border(frame, panes.middle);
     let text_area = panes.transcript_text();
     let rows = state
         .pane
@@ -2845,21 +2916,9 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     state.drawn_rows = (0..rows.len())
         .map(|offset| state.pane.source_at(state.pane.top() + offset))
         .collect();
-    frame.render_widget(Paragraph::new(rows), panes.transcript);
+    frame.render_widget(Paragraph::new(rows), text_area);
     draw_scrollbar(frame, panes.scrollbar(), &state.pane);
     draw_indicator(frame, text_area, state);
-    if let Some(panel) = panes.panel {
-        // The panel's numbers, beside the transcript.
-        frame.render_widget(
-            Paragraph::new(state.panel.lines(&state.facts, panel)),
-            panel,
-        );
-    }
-    if let Some(seam) = panes.seam() {
-        // The two panes share one column rather than each drawing a border. Its
-        // ends join the middle block's borders instead of crossing them.
-        draw_seam(frame, panes.middle, seam);
-    }
 }
 
 /// The transcript's scrollbar: drawn only when there is more than a pane's worth,
@@ -2928,30 +2987,12 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
     state.indicator = Some(rect);
 }
 
-/// The shared seam between the conversation pane and the panel.
-fn draw_seam(frame: &mut ratatui::Frame, middle: Rect, x: u16) {
-    let style = Style::default().fg(Color::DarkGray);
-    let top = middle.y;
-    let bottom = middle.y + middle.height - 1;
-    let buffer = frame.buffer_mut();
-    for y in top..=bottom {
-        let symbol = if y == top {
-            "┬"
-        } else if y == bottom {
-            "┴"
-        } else {
-            "│"
-        };
-        buffer[(x, y)].set_symbol(symbol).set_style(style);
-    }
-}
-
-/// The bottom block: the input line, and under it the hints that say what the keys
-/// do.
+/// The main column's foot: the input line, and under it the hint row that says what
+/// the keys do.
 ///
-/// Returns where the cursor was put, so whatever floats over the pane can anchor
-/// itself to it — the `/` menu follows the cursor (spec §6). `None` while a question
-/// is up, because there is no cursor then.
+/// Returns where the cursor was put, so whatever floats over the main column can
+/// anchor itself to it — the `/` menu follows the cursor (spec §6). `None` while a
+/// question is up, because there is no cursor then.
 ///
 /// A questionnaire replaces the input line with itself. That is the whole point of
 /// this kind of question: the middle overlay suits a one-line confirmation, while a
@@ -2962,7 +3003,6 @@ fn draw_bottom(
     panes: &layout::Regions,
     state: &mut TuiState,
 ) -> Option<editor::Placed> {
-    draw_border(frame, panes.bottom);
     if state.questionnaire().is_some() {
         // The questionnaire is lifted out and put back, so the painters can record
         // their hit regions in the same state the pointer will read them from. It has
@@ -3719,7 +3759,7 @@ impl TuiState {
     /// The body is read here, at open time, and laid out at the width the overlay
     /// will be drawn at, so scrolling is pure arithmetic from then on.
     fn open_detail(&mut self, detail: Detail, width: usize) {
-        let body = detail_body(&detail, &self.facts.cwd, width);
+        let body = detail_body(&detail, &self.facts.session_dir, width);
         self.detail = Some(DetailView {
             detail,
             body,
@@ -3874,7 +3914,7 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
     (cut, true)
 }
 
-/// Paint the detail overlay over the middle block.
+/// Paint the detail overlay over the main column.
 ///
 /// It owns the keyboard and the wheel while it is up, and the transcript stays
 /// frozen where it was — a reading position, not a moving one (票 02 §4).
