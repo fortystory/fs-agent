@@ -5,6 +5,8 @@ Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划**，不产实现代码。
 **✅ 本图已完成（2026-09-23）**：8 张子票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
 
+> **交棒已发生（2026-09-26 补记）**：这八张票的增量已经折进 **[`.scratch/tui-layout/spec.md`](../tui-layout/spec.md) §14「使用体验与视觉效果」**，该 spec 的 §2 几何数字与 Mark header 阈值也按本图（含 `prototype/geometry/geometry-table.md` 的「新」列）回改过；实现由 `/implement` 逐票落地（提交见 `7e437a0` / `940cd43` / `0641c57` / `b48871c` / `538c4aa` / `530a191`）。本图至此**只作决策存档**，不再是待办。
+
 ## Destination
 
 一份 **spec-ready 的 TUI 使用体验与视觉效果决策集**，交给 `/to-spec` 折叠进既有 TUI spec（`.scratch/tui-layout/spec.md`，本图会推翻它若干条已实现的决定）并生成实现票。
