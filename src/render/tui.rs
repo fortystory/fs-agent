@@ -1,25 +1,19 @@
-//! The ratatui interface (`.scratch/tui-sidebar/spec.md` §1–§2, ADR 0002).
+//! ratatui 界面（`.scratch/tui-sidebar/spec.md` §1–§2，ADR 0002）。
 //!
-//! Three properties are structural, not stylistic:
+//! 有三条性质是结构性的，不是风格问题：
 //!
-//! * **Alternate screen, one frame.** The TUI draws a fullscreen frame around a
-//!   full-height sidebar and a main column: the sidebar holds the mark and the
-//!   session's readings, the main column stacks the transcript (with the scrollbar
-//!   and the rail at its right edge), the status row, the input and the hints. The
-//!   transcript lives in its own buffer rather than in the terminal's scrollback —
-//!   which is what removed the inline viewport's drifting cursor, since in
-//!   fullscreen the pane origin is always `(0, 0)`.
-//! * **The renderer owns the keyboard.** It is the only task reading terminal
-//!   events, and it answers the loop's requests ([`ConsoleRequest`]) over the
-//!   injected console channel. That is what keeps input and output from fighting.
-//! * **`select!` over broadcast / keys.** Render events, the loop's requests and
-//!   keyboard input are three independent sources; `select!` is how they are merged
-//!   without a second channel whose ordering would be undefined. What is already
-//!   queued is drained before the frame is drawn, so a bursting provider costs
-//!   frames rather than events. The one timer in the loop is the mark's pulse, and
-//!   it is armed **only while a run is in flight**
-//!   (`.scratch/tui-input-pulse/spec.md` §2): an idle session still waits on those
-//!   three sources and nothing else.
+//! * **alt screen，一帧。** TUI 画一圈全屏外框，框住一条全高左栏与一条主列：左栏放
+//!   标记与会话的读数，主列自上而下堆着转录（右边缘带滚动条与回合条）、状态行、
+//!   输入区与提示行。转录住在自己的缓冲里，而不是终端的滚动回退里 —— 内联视口那个
+//!   漂移的光标也正是这么消掉的：全屏下窗格原点永远是 `(0, 0)`。
+//! * **渲染器占着键盘。** 它是唯一读终端事件的 task，并且通过注入的 console 通道
+//!   回答循环的请求（[`ConsoleRequest`]）。输入与输出不打架，靠的就是这一条。
+//! * **`select!` 管 broadcast 与按键。** 渲染事件、循环的请求与键盘输入是三个互相
+//!   独立的来源；`select!` 是它们合流的方式，不用再引入一条顺序未定义的第二通道。
+//!   已经排进队列的在画帧之前先排空，所以一个爆发输出的 provider 花掉的是帧而不是
+//!   事件。循环里唯一的定时器是标记的脉冲，而且**只在一次运行在飞的时候**才武装
+//!   （`.scratch/tui-input-pulse/spec.md` §2）：空闲的会话仍然只等这三个来源，别的
+//!   什么都不等。
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -55,50 +49,45 @@ use super::width::{text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
 
-/// How much streamed text is retained before it is trimmed to a tail. The
-/// transcript does not need the whole message live: the completed `Message`
-/// block re-renders it in full.
+/// 流式文本保留多少才裁成一条尾巴。转录不需要整条消息都活着：完成的 `Message` 块会
+/// 把它整段重画一遍。
 const LIVE_BUFFER: usize = 4_000;
 
-/// A paste larger than this asks before it is taken (spec §7).
+/// 大于这个值的粘贴要先问一句才收下（spec §7）。
 const PASTE_CONFIRM_CHARS: usize = 100_000;
 
-/// How many queued render events one frame absorbs. A bounded drain keeps a
-/// firehose from starving the keyboard for a whole frame's worth of work.
+/// 一帧吸收多少个排队中的渲染事件。有界的排空让突发输出不至于把键盘饿掉整整一帧的
+/// 工作量。
 const DRAIN_LIMIT: usize = 4_096;
 
-/// How many history events one replay batch applies.
+/// 一次重放批次应用多少个历史事件。
 ///
-/// Replaying a session is a frame-by-frame catch-up rather than a blocking load, so
-/// each pass takes a bounded slice and draws. The event count alone is not enough of
-/// a bound: a slice of 512 huge tool results would still be a slow frame, so the
-/// batch also stops at [`REPLAY_BATCH_LINES`] source lines
-/// (`.scratch/tui-history-replay/spec.md` §2).
+/// 重放一个会话是一帧一帧地追赶，而不是阻塞式加载，所以每一趟只取有界的一片然后画。
+/// 只按事件数设上限是不够的：512 条巨型工具结果照样是慢帧，所以批次还停在上限
+/// [`REPLAY_BATCH_LINES`] 条来源行（`.scratch/tui-history-replay/spec.md` §2）。
 const REPLAY_BATCH_EVENTS: usize = 512;
 
-/// How many transcript source lines one replay batch may produce. The pane's cost
-/// per line grows with its cap once the transcript is full, so the batch is
-/// bounded by what it draws, not only by how many events it consumed.
+/// 一次重放批次最多产出多少条转录来源行。转录满之后，窗格每行的成本随它的上限一起涨，
+/// 所以批次的界限是它画出来多少，而不是只按它吃掉多少事件来算。
 const REPLAY_BATCH_LINES: usize = 2_000;
 
-/// The keys the TUI acts on.
+/// TUI 认的按键。
 ///
-/// Deliberately its own vocabulary rather than crossterm's: the state machine is
-/// then testable without a terminal, and a backend change cannot silently move a
-/// binding.
+/// 刻意用自己的词汇表而不是 crossterm 的：这样状态机不用终端就能测，而换个后端也不会
+/// 悄悄挪掉一个绑定。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Char(char),
     Backspace,
     Delete,
     Enter,
-    /// `Tab`, which is only ever the `/` menu's fill-in key (spec §6).
+    /// `Tab`，它永远只是 `/` 菜单的补全键（spec §6）。
     Tab,
     Esc,
     BackTab,
     CtrlC,
-    /// `Ctrl-D`: quit, behind a confirmation. Ignored while a run is in flight, so
-    /// it is only ever the idle keyboard's gesture (票 06 §1).
+    /// `Ctrl-D`：退出，藏在一次确认后面。运行在飞的时候忽略，所以它永远只是空闲键盘
+    /// 的手势（票 06 §1）。
     CtrlD,
     Left,
     Right,
@@ -106,8 +95,7 @@ pub enum Key {
     Down,
     Home,
     End,
-    /// Emacs-style line editing: `Ctrl-A/E` move, `Ctrl-U/K/W` kill, `Ctrl-P/N`
-    /// walk the prompt history.
+    /// Emacs 风格的行编辑：`Ctrl-A/E` 移动，`Ctrl-U/K/W` 抹掉，`Ctrl-P/N` 翻提示历史。
     CtrlA,
     CtrlE,
     CtrlU,
@@ -121,8 +109,7 @@ pub enum Key {
     PageDown,
 }
 
-/// Translate one crossterm keypress into a [`Key`], or `None` for a key the TUI
-/// ignores.
+/// 把一个 crossterm 按键翻成 [`Key`]，TUI 不认的键返回 `None`。
 fn map_key(key: KeyEvent) -> Option<Key> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         if let KeyCode::Char(ch) = key.code {
@@ -162,44 +149,40 @@ fn map_key(key: KeyEvent) -> Option<Key> {
     }
 }
 
-/// Which colour each speaker's name is drawn in (票 07 §1).
+/// 每个发言者的名字用什么颜色画（票 07 §1）。
 ///
-/// The palette and the roster are injected; the only thing kept here is the slot a
-/// speaker first seen *after* assembly was given. A discussion can draw its pair at
-/// assembly, but a `/discuss` typed mid-session names people the injection has never
-/// heard of — they take the first unclaimed palette slot and keep it for the rest of
-/// the session, so a name never changes colour under the reader.
+/// 调色板与名册都是注入的；这里只保存一个**组装之后**才第一次出现的发言者拿到的槽位。
+/// 讨论可以在组装时就把它的那一对定下来，但会话中途敲的 `/discuss` 点出了注入从没听说
+/// 过的人 —— 他们拿走第一个没人认领的调色板槽位，并在余下的会话里一直占着，于是名字
+/// 永远不会在读的人眼皮底下换颜色。
 ///
-/// The colour is the **painter's** business: [`wording::speaker_label`] stays plain
-/// text, and nothing outside the transcript is tinted (票 07 §3, §4). Public only
-/// because [`render_block`] takes it; the state machine owns how it is built.
+/// 颜色是**画家**的事：[`wording::speaker_label`] 保持纯文本，转录之外的东西一律不上色
+/// （票 07 §3、§4）。公开只因为 [`render_block`] 收它；它怎么建出来归状态机管。
 pub struct SpeakerColors {
-    /// The debaters in roster order: slot `n` of the palette belongs to `roster[n]`.
+    /// 名册顺序里的讨论者：调色板的槽位 `n` 属于 `roster[n]`。
     roster: Vec<String>,
-    /// The palette slots the roster did not claim, in palette order: the first unclaimed
-    /// name seen during the session takes the first of these.
+    /// 名册没认领的那些调色板槽位，按调色板顺序排：会话期间第一个没人认领的名字拿走
+    /// 其中第一个。
     free_slots: Vec<usize>,
-    /// The names first seen during the session, in the order they appeared. This is the
-    /// whole of the state: the colours themselves are derivable from it and the roster.
+    /// 会话期间第一次见到的名字，按出现顺序。状态就这全部：颜色本身可以从它和名册推
+    /// 出来。
     extra: Vec<String>,
-    /// No roster was injected, so there is nothing to colour and every name is grey.
-    /// This is the plain half of the shared rendering, and it must stay neutral: an
-    /// empty roster is not a session with one anonymous debater, it is a caller with no
-    /// palette at all.
+    /// 没有注入名册，于是没什么可上色的，每个名字都是灰的。这是共享渲染里素的那一半，
+    /// 而且它必须保持中性：空名册不是「一个匿名讨论者的会话」，而是「调用方根本没有
+    /// 调色板」。
     uncoloured: bool,
 }
 
-/// The debaters' palette, in the order the roster hands the slots out (票 07 §1).
+/// 讨论者的调色板，按名册把槽位发出去的顺序（票 07 §1）。
 const DEBATER_PALETTE: [Color; 2] = [Color::LightCyan, Color::LightMagenta];
 
 impl SpeakerColors {
-    /// The palette for a roster: the debaters in the order their slots go out. A
-    /// caller with no roster passes an empty one, and every name is then grey.
+    /// 一份名册对应的调色板：按槽位发出去的顺序列出讨论者。没有名册的调用方传一个空的
+    /// 进来，于是每个名字都是灰的。
     pub fn new(roster: &[String]) -> Self {
         let roster = roster.to_vec();
-        // The roster claims palette slots by position: the `n`-th debater gets slot
-        // `n`. With more debaters than colours the extra slots wrap, which is why the
-        // claim is `slot < len` and not the whole roster.
+        // 名册按位置认领调色板槽位：第 `n` 个讨论者拿槽位 `n`。讨论者比颜色多时多出来的
+        // 槽位会绕回来，所以这里的认领是 `slot < len` 而不是整个名册。
         let claimed: Vec<usize> = (0..roster.len().min(DEBATER_PALETTE.len())).collect();
         let free_slots = (0..DEBATER_PALETTE.len())
             .filter(|slot| !claimed.contains(slot))
@@ -212,11 +195,10 @@ impl SpeakerColors {
         }
     }
 
-    /// The colour for one speaker's name.
+    /// 一个发言者名字的颜色。
     ///
-    /// The palette is fixed at assembly, so a session's name-to-colour map is stable
-    /// for as long as it runs — including for a name that first appears mid-session
-    /// (票 07 §1).
+    /// 调色板在组装时就定下，所以一个会话的名字到颜色的映射只要它在跑就是稳定的 ——
+    /// 包括会话中途才第一次出现的名字（票 07 §1）。
     fn of(&mut self, speaker: &crate::events::SpeakerId) -> Color {
         use crate::events::SpeakerId;
         if self.uncoloured {
@@ -234,11 +216,9 @@ impl SpeakerColors {
         if let Some(slot) = self.roster.iter().position(|name| name == id) {
             return DEBATER_PALETTE[slot % DEBATER_PALETTE.len()];
         }
-        // A name the injected roster does not know, which is what a `/discuss` typed
-        // mid-session produces. Its first appearance takes the first palette slot the
-        // roster did not claim; the recollection below turns that into the same colour
-        // on every later appearance. Grey once the palette is exhausted, because a
-        // reused colour reads as the wrong speaker (票 07 §1).
+        // 注入的名册不认识的名字，也就是会话中途敲的 `/discuss` 造出来的那种。它第一次
+        // 露面时拿走名册没认领的第一个调色板槽位；下面那句记忆把它变成此后每次露面都相同
+        // 的颜色。调色板用光了就是灰色，因为重复的颜色读起来像换了个发言者（票 07 §1）。
         let slot = match self.extra.iter().position(|name| name == id) {
             Some(slot) => slot,
             None => {
@@ -254,67 +234,57 @@ impl SpeakerColors {
     }
 }
 
-/// The session values the sidebar and the status row cannot read off the event
-/// stream (spec §8).
+/// 左栏与状态行没法从事件流上读到的那些会话值（spec §8）。
 ///
-/// Everything here is known at assembly time and injected as one value, because
-/// that is the seam: the renderer never reaches for configuration. The status row
-/// shows the model, the sidebar shows the counts, and the detail overlay reads
-/// spilled tool output out of `session_dir`.
+/// 这里的一切在组装时就已经知道，并且作为一个值注入，因为 seam 就在这里：渲染器从不
+/// 伸手去够配置。状态行显示模型，左栏显示各项计数，详情覆盖层从 `session_dir` 里读出
+/// 落盘的工具输出。
 ///
-/// Anything that changes mid-session — the mode — is deliberately **not** here: an
-/// injected copy would go stale the first time the user pressed Shift+Tab, and the
-/// stream already carries both transitions.
+/// 会话中途会变的那些 —— 模式 —— 刻意**不**在这里：注入的副本会在用户第一次按下
+/// Shift+Tab 时过期，而流上本来就带着那两次迁移。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionFacts {
-    /// The session this terminal is showing.
+    /// 这个终端正在显示的那个会话。
     pub session_id: String,
-    /// The directory the session's own files live in: the detail overlay joins the
-    /// spilled tool outputs out of it, and nothing on screen shows it (the working
-    /// directory left the interface with the old header, spec §8).
+    /// 会话自己的文件所在的目录：详情覆盖层从它那里拼出落盘的工具输出，而屏幕上不显示
+    /// 它（工作目录随旧顶栏一起退场，spec §8）。
     pub session_dir: String,
-    /// The model the session answers with — or, in a discussion, the two debaters'
-    /// models, because the status row has one field for it (spec §5).
+    /// 这个会话用来作答的模型 —— 讨论里则是两个讨论者的模型，因为状态行只有一栏放它
+    /// （spec §5）。
     pub model: String,
-    /// The input budget of that model's window, output reserve already removed.
+    /// 那个模型窗口的输入预算，输出预留已经减掉。
     pub context_window: u64,
-    /// The permission mode the session was assembled in (spec §12).
+    /// 会话组装时所在的权限模式（spec §12）。
     ///
-    /// It is injected because the status row shows it and nothing on the stream
-    /// says it: a mode is a `Session` value, and the two transitions it used to
-    /// have — a plan-mode injection and a mode-change supersession — no longer
-    /// exist. `Shift+Tab` is the only thing that moves it, and the front end
-    /// applies the same step the loop does (`.scratch/todo-and-modes/spec.md` §1).
+    /// 它被注入是因为状态行显示它、而流上没有任何东西说它：模式是一个 `Session` 值，
+    /// 它**曾经**有的那两次迁移 —— 一次 plan 模式注入、一次模式变更取代 —— 都不再存在。
+    /// `Shift+Tab` 是唯一能挪动它的东西，而前端施加的步进与循环施加的是同一步
+    /// （`.scratch/todo-and-modes/spec.md` §1）。
     pub mode: Mode,
-    /// The session's cumulative token allowance, when it has one.
+    /// 会话累计的 token 额度，有的话。
     pub budget_limit: Option<u64>,
-    /// The debaters of this session, in the order they were drawn. A single-agent
-    /// session names its one profile; a discussion lists the pair the roster
-    /// produced. It is what gives a speaker its colour, so it is injected at
-    /// assembly for the same reason the rest of the facts are: the roster is not on
-    /// the stream (票 07 §1).
+    /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
+    /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
+    /// 名册不在流上（票 07 §1）。
     pub speaker_order: Vec<String>,
 }
 
-/// The TUI's injected values: the front end's end of the console channel, plus
-/// the facts the sidebar and the status row display.
+/// TUI 的注入值：console 通道的前端这一端，加上左栏与状态行要显示的那些事实。
 pub struct TuiOptions {
     pub port: ConsolePort,
     pub facts: SessionFacts,
-    /// Whether this session was **reopened** (`--continue`), so a history replay is
-    /// on its way over the console port.
+    /// 这个会话是不是**被重新打开**的（`--continue`），所以有一次历史重放正沿着 console
+    /// 端口过来。
     ///
-    /// It is a flag, not the history: the events themselves ride
-    /// [`ConsoleRequest::Replay`], because only the assembled harness has the
-    /// post-recovery snapshot. The TUI needs the flag because it must not lay down a
-    /// single render event — not even the banner — until that snapshot has arrived,
-    /// or the recovery events assembly already emitted would be painted above the
-    /// history they belong to and then painted again by the replay
-    /// (`.scratch/tui-history-replay/spec.md` §1, §3).
+    /// 它是一个标志，不是历史本身：事件自己走 [`ConsoleRequest::Replay`]，因为只有组装
+    /// 完成后的 harness 手里才有恢复之后的那份快照。TUI 需要这个标志，是因为在快照到达
+    /// 之前它一条渲染事件都不许落下 —— 连横幅都不许 —— 否则组装已经发出的那些恢复事件
+    /// 会被画在它们本该从属的历史之上，然后又被重放画一遍
+    /// （`.scratch/tui-history-replay/spec.md` §1、§3）。
     pub reopened: bool,
 }
 
-/// The TUI renderer.
+/// TUI 渲染器。
 pub struct Tui {
     options: TuiOptions,
 }
@@ -332,44 +302,38 @@ impl Tui {
         } = self.options;
         let mut state = TuiState::new(facts);
 
-        // The alternate screen, raw mode, and a panic hook that restores them.
-        // Mouse reporting and bracketed paste are ours: `ratatui::init` does not
-        // touch either (spec §1).
+        // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
+        // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
         let mut terminal = ratatui::init();
         let modes = TerminalModes::enter();
         let mut keys = EventStream::new();
 
-        // A reopened session waits for the replay before it renders anything. The
-        // loop pushes it as its **first** console request, right after assembly and
-        // before the banner; assembly has meanwhile emitted the recovery results on
-        // the render channel, and those events are already in the replay's snapshot.
-        // Waiting here is what keeps them from being painted above the history and
-        // then painted again by the replay. A port that has gone drops the wait.
+        // 重新打开的会话在画任何东西之前先等这次重放。循环把它作为**第一条** console 请求
+        // 推过来，紧接组装之后、横幅之前；与此同时组装已经在渲染通道上发出了那些恢复
+        // 结果，而它们已经在那份重放快照里了。在这里等，正是为了不让它们被画在历史之上、
+        // 然后再被重放画一遍。端口没了就放弃等待。
         if reopened {
             if let Some(request) = port.recv().await {
                 state.request(request);
             }
         }
 
-        // The pulse's clock: the only timer in this loop, and it is **armed only while a run
-        // is in flight** — the `if` on its `select!` arm is what keeps that true, because an
-        // unarmed branch is never polled and cannot wake the loop
-        // (`.scratch/tui-input-pulse/spec.md` §2b, 票 09). An `interval` rather than a `sleep`
-        // built fresh each pass: a provider bursting a thousand deltas would reset a sleep on
-        // every iteration, and the prompt would stop moving exactly when the session is
-        // busiest. `Delay` keeps a backlog of missed frames from being spent all at once when
-        // the loop comes back from a long frame.
+        // 脉冲的时钟：这个循环里唯一的定时器，而且**只在一次运行在飞的时候**才武装 ——
+        // 保证这一点的就是它 `select!` 分支上的 `if`，因为没武装的分支永远不会被 poll，
+        // 也就唤不醒循环（`.scratch/tui-input-pulse/spec.md` §2b，票 09）。用 `interval`
+        // 而不是每一趟新建一个 `sleep`：一个突发一千条增量的 provider 会让每轮迭代都重置
+        // 一次 sleep，于是提示符恰恰会在会话最忙的时候停住不动。`Delay` 让积压的漏帧不会
+        // 在循环从某个长帧里回来时被一次性花掉。
         let mut pulse = tokio::time::interval(PULSE_FRAME);
         pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             let mut closed = false;
             if state.replay_pending() {
-                // Every source is asked between batches — the keyboard, the live
-                // stream and the loop's requests — or `Ctrl-C` during a long replay
-                // would be a dead key. The last branch is always ready, so this select
-                // never waits on anything and the batch below runs as fast as the
-                // frame can be drawn (`.scratch/tui-history-replay/spec.md` §2).
+                // 批次之间每个来源都会被问一遍 —— 键盘、实时流与循环的请求 —— 否则一次长
+                // 重放中的 `Ctrl-C` 就是一个死键。最后一个分支总是就绪的，所以这个 select
+                // 从不等待任何东西，下面的批次就以能画出来的最快速度跑
+                // （`.scratch/tui-history-replay/spec.md` §2）。
                 tokio::select! {
                     biased;
                     received = receiver.recv() => closed = state.take_render_event(received),
@@ -379,14 +343,12 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
-                // Three sources, plus the pulse's timer while a run is in flight. The redraw
-                // tick that used to live here went with the clock it existed for — a pending
-                // question arrives on the console port, events arrive on the render channel,
-                // and a key is a key, so nothing *else* is waiting to be noticed (票 05 §1).
-                // The pulse is the one thing that is: it is a function of time alone, so it
-                // needs a clock — and that clock is the `if` below. Idle, this `select!` is
-                // three sources again and the keyboard is the only thing that can wake it
-                // (`.scratch/tui-input-pulse/spec.md` §2b).
+                // 三个来源，加上运行在飞时的脉冲定时器。曾经住在这里的重绘 tick 随它存在
+                // 的那个时钟一起走了 —— 待答的问题从 console 端口来，事件从渲染通道来，
+                // 而键就是键，所以没有*别的*东西在等着被注意到（票 05 §1）。脉冲是那个
+                // 例外：它只是时间的函数，所以它需要一个时钟 —— 那个时钟就是下面的 `if`。
+                // 空闲时这个 `select!` 又只是三个来源，键盘是唯一能唤醒它的东西
+                // （`.scratch/tui-input-pulse/spec.md` §2b）。
                 tokio::select! {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
@@ -395,10 +357,9 @@ impl Tui {
                 }
             }
 
-            // Whatever is already queued joins this frame. A provider that bursts
-            // a thousand deltas between two frames costs one frame instead of a
-            // thousand, and still loses nothing (spec §11). During a replay these are
-            // buffered rather than applied, exactly like the ones the select saw.
+            // 已经排进队列的都并进这一帧。一个在两帧之间突发一千条增量的 provider 花掉
+            // 一帧而不是一千帧，而且仍然什么都不丢（spec §11）。重放期间这些是缓冲下来而
+            // 不是应用掉，跟 select 看见的那些一模一样。
             let mut drained = 0usize;
             while drained < DRAIN_LIMIT {
                 match receiver.try_recv() {
@@ -424,10 +385,9 @@ impl Tui {
                 port.emit(event);
             }
             if state.is_dirty() {
-                // One frame in one write region. The synchronized update (DECSET
-                // 2026) wraps the buffer diff alone — reading the keyboard has no
-                // reason to be inside it — and a terminal without the pair simply
-                // ignores it.
+                // 一帧写在一个同步区里。synchronized update（DECSET 2026）只把缓冲差分包
+                // 在里面 —— 读键盘没有任何理由待在它里面 —— 而终端不支持这一对时就当没
+                // 看见。
                 let mut frame_out = std::io::stdout();
                 let _ = execute!(frame_out, BeginSynchronizedUpdate);
                 let _ = terminal.draw(|frame| draw_frame(frame, &mut state));
@@ -444,21 +404,18 @@ impl Tui {
     }
 }
 
-/// Mouse reporting and bracketed paste: enabled on the way in, disabled on the way
-/// out.
+/// 鼠标上报与括号粘贴：进来时打开，出去时关掉。
 ///
-/// `ratatui::init` handles raw mode and the alternate screen only — its
-/// `TerminalOptions` has no mouse switch at all — so these two are ours to undo,
-/// on the normal path and on the panic path alike. Leaving them on would keep the
-/// terminal from selecting text after fs-agent exited.
+/// `ratatui::init` 只管 raw 模式与 alt screen —— 它的 `TerminalOptions` 里根本没有鼠标
+/// 开关 —— 所以这两样得我们自己撤，正常路径与 panic 路径都一样。留着不管，fs-agent
+/// 退出之后终端就没法选文字了。
 struct TerminalModes;
 
 impl TerminalModes {
     fn enter() -> Self {
         let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
-        // `init` installed a hook that restores raw mode and the alternate
-        // screen; wrap it so a panic also gives the mouse and the paste mode back
-        // before it runs.
+        // `init` 装了一个 hook 恢复 raw 模式与 alt screen；把它包一层，让 panic 在它跑
+        // 之前也把鼠标与粘贴模式还回去。
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             disable_terminal_modes();
@@ -489,216 +446,180 @@ impl Render for Tui {
     }
 }
 
-/// The display-ready state, split from the terminal so it can be tested without
-/// one.
+/// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
 pub struct TuiState {
-    /// What the sidebar and the status row display, injected at assembly (spec §8).
+    /// 左栏与状态行显示什么，组装时注入（spec §8）。
     facts: SessionFacts,
-    /// The mode the session is in. Seeded from the assembly-time value
-    /// ([`SessionFacts::mode`]) and moved by the gesture alone: nothing on the
-    /// stream says what mode a session is in, and `Shift+Tab` is the one thing
-    /// that changes it (`.scratch/todo-and-modes/spec.md` §1).
+    /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
+    /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
+    /// （`.scratch/todo-and-modes/spec.md` §1）。
     mode: Mode,
-    /// The event-to-block merger the plain renderer shares.
+    /// plain 渲染器共用的那个「事件转块」的合并器。
     transcript: Transcript,
-    /// The conversation pane: every completed block's lines, wrapped at the drawn
-    /// width, with its own viewport. The pane owns the transcript rather than the
-    /// terminal's scrollback.
+    /// 对话窗格：每个完成块的行按画出来的宽度折行，带自己的视口。转录归这个窗格所有，
+    /// 而不是归终端的滚动回退。
     pane: Pane,
-    /// The streaming tail of the current message.
+    /// 当前消息正在流的尾巴。
     live: String,
-    /// Whether anything has changed since the last frame was drawn.
+    /// 上一帧画完之后有没有什么东西变了。
     dirty: bool,
-    /// The draft and its cursor.
+    /// 草稿与它的光标。
     editor: Input,
-    /// The names a leading `/` can become, as the loop reported them. Empty until
-    /// that report arrives, which is why the `/` menu opens only once it has.
+    /// 开头的 `/` 能变成哪些名字，按循环报上来的样子。在那份报告到达之前是空的，这
+    /// 正是 `/` 菜单要等它到了才开的原因。
     catalog: Vec<CatalogEntry>,
-    /// The `/` menu's highlight, and which token it belongs to. The matches
-    /// themselves are not kept: they are a pure function of the draft and the
-    /// catalog, so only the choice — which is not derivable — lives here.
+    /// `/` 菜单的高亮，以及它属于哪个 token。匹配结果本身不保存：它们是草稿与目录的纯
+    /// 函数，所以这里只留那个选择 —— 那是推不出来的。
     slash: MenuSelection,
-    /// The numbers the sidebar's usage page shows, counted off the stream.
+    /// 左栏调用量页显示的那些数字，从流上数出来的。
     panel: Panel,
-    /// The todo page and its latch: the list in force, read off the calls the
-    /// renderer has seen, and whether the tab is offered at all
-    /// (`.scratch/todo-and-modes/spec.md` §4). Renderer state, not an event — a
-    /// reopened session rebuilds it by replaying the same calls.
+    /// 待办页与它的闩：当时生效的列表（从渲染器已经见过的调用读出），以及这个页签到底
+    /// 给不给（`.scratch/todo-and-modes/spec.md` §4）。是渲染器状态，不是事件 —— 重新
+    /// 打开的会话靠重放同样的调用把它重建出来。
     todo: crate::render::TodoPanel,
-    /// Which sidebar page is showing. Renderer state, not an event: nothing about it
-    /// belongs on the stream, and it dies with the process (spec §3).
+    /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
+    /// 它随进程一起死（spec §3）。
     tab: Tab,
-    /// Which colour each speaker's name is drawn in (票 07). Kept here rather than
-    /// recomputed per line because a name first seen mid-session has to keep the slot
-    /// it was given.
+    /// 每个发言者的名字用什么颜色画（票 07）。放在这里而不是每行重算，因为会话中途第一
+    /// 次出现的名字得保住已经发给它的那个槽位。
     colors: SpeakerColors,
-    /// The reasoning deltas of the segment that is currently being thought through.
-    /// It is the bridge between the two halves of a thinking line: the line opens on
-    /// the first delta and is rewritten from this when the trace is finished, because
-    /// the finished trace only exists on `MessageCompleted` (票 02 §1).
+    /// 正在被思考的那一段的推理增量。它是一条思考行两半之间的桥：这行在第一个增量上开
+    /// 出来，等 trace 完成时用这里的内容重写，因为完整的 trace 只在 `MessageCompleted`
+    /// 上才有（票 02 §1）。
     reasoning: String,
-    /// The speaker the open thinking line belongs to, so the finished line can be
-    /// written with the same name.
+    /// 敞开的那条思考行属于哪个发言者，好让写完的那行用同一个名字。
     thinking_speaker: crate::events::SpeakerId,
-    /// Whether a thinking line is open on screen right now — the one mutable row in
-    /// the pane.
+    /// 此刻屏幕上有没有一条敞开的思考行 —— 窗格里唯一会变的那一行。
     thinking_open: bool,
-    /// Whether this turn's message has already had its thinking line. The body's first
-    /// delta settles the line long before `MessageCompleted` arrives, so the record
-    /// has to outlive `thinking_open` or the completion would add a second line for
-    /// the same thought (票 02 §1).
+    /// 这一回合的消息是否已经有它的思考行了。正文的第一个增量在 `MessageCompleted` 到达
+    /// 之前很久就把这行定下来了，所以这条记录必须比 `thinking_open` 活得久，否则完成
+    /// 事件会为同一个想法再加一行（票 02 §1）。
     thinking_done: bool,
-    /// The rail's units and their segment heads.
+    /// 回合条的单位与它们的分段头。
     turn_rail: TurnRail,
-    /// The detail behind each source line of the pane, parallel to it and pruned by
-    /// the pane's own cap so the two never drift apart. `None` for the lines that are
-    /// not a way into anything.
+    /// 窗格每一条来源行背后的详情，与它平行，并且按窗格自己的上限一起裁剪，好让两者
+    /// 永不脱节。不是任何入口的那些行是 `None`。
     links: std::collections::VecDeque<Option<Detail>>,
-    /// Where the last frame drew each of its display rows, so a click can be turned
-    /// back into the source line it landed on. Rebuilt every frame, like the
-    /// question overlay's hit regions, because only drawn rows answer the pointer
-    /// (票 04 §1).
+    /// 上一帧把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧重建，
+    /// 与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
     drawn_rows: Vec<Option<usize>>,
-    /// The screen row the transcript's first drawn row was on, so a mouse row — which
-    /// is in screen coordinates — can be turned into an index into `drawn_rows`.
+    /// 转录第一条被画出来的行所在的屏幕行，好把鼠标行（它是屏幕坐标）变成 `drawn_rows`
+    /// 的下标。
     drawn_top: u16,
-    /// The detail overlay, while one is open.
+    /// 详情覆盖层，开着的时候。
     detail: Option<DetailView>,
-    /// Where the last frame drew that overlay, so a click outside it can close it —
-    /// the same "remember what the reader actually saw" rule the indicator follows
-    /// (票 02 §4).
+    /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
+    /// 「记住读的人真看到了什么」的规矩（票 02 §4）。
     detail_rect: Option<Rect>,
-    /// Where the last frame drew a question's clickable parts.
+    /// 上一帧把一个问题的可点部分画在了哪里。
     regions: Regions,
-    /// The last frame's whole terminal area. The detail overlay's body is laid out
-    /// when it opens, and the width that layout needs is a function of the terminal
-    /// size — known before the overlay is drawn, so a click does not have to wait for
-    /// a frame (票 04 §1).
+    /// 上一帧的整个终端区域。详情覆盖层的主体在打开时就排版好了，而那次排版需要的宽度是
+    /// 终端尺寸的函数 —— 在覆盖层被画出来之前就知道，所以一次点击不必等一帧（票 04 §1）。
     area: Rect,
-    /// Where a `Prompt` request's answer goes.
+    /// 一次 `Prompt` 请求的答案往哪儿去。
     prompt_reply: Option<tokio::sync::oneshot::Sender<Option<String>>>,
-    /// Whether the loop says it is inside a run. **Pushed by the loop**, never
-    /// inferred here: see [`TuiState::busy`].
+    /// 循环是否说它正在一次运行里面。**由循环推过来**，绝不在这里推断：见
+    /// [`TuiState::busy`]。
     running: bool,
-    /// The busy pulse's frame counter, advanced by [`TuiState::tick`] and read by the
-    /// mark's painter. Zero whenever no run is in flight — the loop's timer is what
-    /// moves it, so an idle session leaves it exactly where the last run left it,
-    /// which is zero (`.scratch/tui-input-pulse/spec.md` §2).
+    /// 忙碌脉冲的帧计数器，由 [`TuiState::tick`] 推进、由标记的画家读。没有运行在飞时
+    /// 就是零 —— 推动它的是循环的定时器，所以空闲的会话把它原样留在上次运行留下的位置，
+    /// 也就是零（`.scratch/tui-input-pulse/spec.md` §2）。
     pulse: u64,
-    /// A question waiting for a keypress.
+    /// 一个等着按键的问题。
     pending: Option<Pending>,
-    /// Gestures to hand back to the loop.
+    /// 要交回给循环的手势。
     events: Vec<FrontEndEvent>,
-    /// Where the last frame drew the "back to bottom" indicator, so a click can be
-    /// matched against what the user actually saw.
+    /// 上一帧把「回到末尾」指示器画在哪里，好让一次点击跟用户真看见的东西对得上。
     indicator: Option<Rect>,
-    /// The history replay in flight, if any. `Some` is a one-shot startup state: the
-    /// keyboard, the pointer and the loop behave differently until it drains
-    /// (`.scratch/tui-history-replay/spec.md` §2).
+    /// 正在飞的那次历史重放，有的话。`Some` 是一个一次性的启动状态：在它排空之前，键盘、
+    /// 指针与循环的行为都不一样（`.scratch/tui-history-replay/spec.md` §2）。
     replay: Option<Replay>,
-    /// Live render events that arrived while a replay was in flight, in arrival
-    /// order. They are applied — after the history and its seam — once the replay
-    /// finishes, so the startup banner cannot be painted into the middle of history
-    /// (spec §3).
+    /// 重放在飞期间到达的实时渲染事件，按到达顺序。它们在重放结束之后（历史与其接缝
+    /// 之后）才被应用，所以启动横幅不会被画进历史中间（spec §3）。
     live_buffer: Vec<RenderEvent>,
     quit: bool,
 }
 
-/// A question waiting for an answer.
+/// 一个等着答案的问题。
 ///
-/// Two kinds live here. The loop's asks travel back over a one-shot channel as a
-/// [`PermissionRequest`]; the renderer's own asks — an oversized paste, a draft
-/// that Esc would throw away — have nobody to answer to, so they hold what they
-/// need to do the thing themselves once the user says yes (spec §7).
+/// 这里住着两种。循环的询问通过一条一次性通道把答案送回去（[`PermissionRequest`]）；
+/// 渲染器自己的询问 —— 一次过大的粘贴、一份 Esc 会丢掉的草稿 —— 没有可答的对象，所以
+/// 它们自己拿着「用户说 yes 之后要做的事」（spec §7）。
 enum Pending {
-    /// The loop is waiting on an answer.
+    /// 循环在等一个答案。
     Loop {
         request: PermissionRequest,
         reply: tokio::sync::oneshot::Sender<Answer>,
     },
-    /// A paste too large to take without asking.
+    /// 一次大到不能不问就收下的粘贴。
     Paste { text: String, chars: usize },
-    /// A multi-line draft that `Esc` would clear.
+    /// 一份多行的草稿，`Esc` 会把它清掉。
     ClearDraft,
-    /// `Ctrl-D`: the renderer's own "are you sure you want out" (票 06 §1).
+    /// `Ctrl-D`：渲染器自己的「你确定要出去吗」（票 06 §1）。
     ///
-    /// It is the fifth renderer-side question and the only one that ends the
-    /// application. It has no one to send an answer to — saying yes sets
-    /// [`TuiState::quit`] and the loop's `select!` sees it on the next pass.
+    /// 它是渲染器侧第五个问题，也是唯一结束应用的那个。它没有人可发答案 —— 说 yes 就是
+    /// 置上 [`TuiState::quit`]，循环的 `select!` 会在下一趟看见。
     Exit,
-    /// The model's questionnaire, owning the bottom input area (spec §7, §19).
+    /// 模型发起的问卷，它占着底部输入区（spec §7、§19）。
     ///
-    /// This is the one question kind that does **not** go through [`Pending::modal`]:
-    /// the middle overlay suits a one-line confirmation, while a questionnaire is
-    /// multi-row and paged, so it takes the input area instead.
+    /// 这是唯一**不**走 [`Pending::modal`] 的问题种类：中间覆盖层适合一行确认，而问卷是
+    /// 多行、分页的，于是它改占输入区。
     Questionnaire(Questionnaire),
 }
 
-/// The model-initiated questionnaire while it owns the bottom input area.
+/// 模型发起的问卷，在它占着底部输入区的时候。
 ///
-/// The state lives here rather than in the session because a questionnaire is
-/// keyboard state, not session state: nothing about it is recorded, and the only
-/// durable trace of the exchange is the tool call's arguments and its one result
-/// (spec §7).
+/// 状态住在这里而不是会话里，因为问卷是键盘状态，不是会话状态：它没有任何东西被记录，
+/// 这场交换唯一持久的痕迹是那次工具调用的参数与它那一条结果（spec §7）。
 struct Questionnaire {
-    /// The questions, in the order the model sent them.
+    /// 那些问题，按模型发出来的顺序。
     questions: Vec<UserQuestion>,
-    /// Where the answers go when the questionnaire is submitted. Dropping it
-    /// without sending is read by the port as "no answer", which is what a
-    /// cancelled run means.
+    /// 问卷提交时答案往哪儿去。不发就丢掉，端口读作「没有答案」，也就是一次被取消的
+    /// 运行的意思。
     reply: tokio::sync::oneshot::Sender<Result<UserAnswers, String>>,
-    /// One draft per question, indexed the same as `questions`.
+    /// 每个问题一份草稿，下标与 `questions` 对齐。
     drafts: Vec<QuestionDraft>,
-    /// Which question is on screen. One at a time, `2 / 3` in the footer.
+    /// 屏幕上是第几个问题。一次一个，页脚里写作 `2 / 3`。
     index: usize,
-    /// Whether the current question's free-text row has the cursor. It is entered by
-    /// clicking that row or by typing into it, and it resets when the page turns
-    /// (票 04 §5).
+    /// 当前问题的自由文本行有没有光标。点那一行、或往它里面打字都会进入它，翻页时复位
+    /// （票 04 §5）。
     custom_focused: bool,
 }
 
-/// What the user has done to one question so far.
+/// 到目前为止用户对一个问题做了什么。
 #[derive(Default, Clone)]
 struct QuestionDraft {
-    /// The option labels picked, in the order they were picked.
+    /// 选中的选项标签，按选中的顺序。
     selected: Vec<String>,
-    /// Free text typed. Single-select custom text overrides `selected`;
-    /// multi-select custom text supplements it (spec §7).
+    /// 打进去的自由文本。单选时自定义文本覆盖 `selected`；多选时它是对它的补充
+    /// （spec §7）。
     custom: String,
-    /// Which option the highlight is on. `↑`/`↓` move it, `Enter`/`Space`
-    /// confirm it. It is per draft, so paging away and back finds the highlight
-    /// where it was left.
+    /// 高亮落在哪个选项上。`↑`/`↓` 移动它，`Enter`/`Space` 确认它。它是每份草稿各自的，
+    /// 所以翻走再翻回来会发现高亮还留在离开时的位置。
     highlight: usize,
-    /// The user pressed the skip key and moved on. This is a deliberate "no
-    /// answer", distinct from a question that was never reached.
+    /// 用户按了跳过键走掉了。这是一次刻意的「不答」，与一个从没走到的问题不同。
     skipped: bool,
 }
 
 impl QuestionDraft {
-    /// Whether this question has been answered or explicitly skipped. Every
-    /// question must reach this state before the questionnaire may be submitted.
+    /// 这个问题是被答了还是被明确跳过了。问卷能提交之前，每个问题都必须走到这个状态。
     fn handled(&self) -> bool {
         self.skipped || !self.selected.is_empty() || !self.custom.trim().is_empty()
     }
 }
 
 impl Questionnaire {
-    /// Take one keypress. Returns `true` when the questionnaire is submitted.
+    /// 吃一个按键。问卷被提交时返回 `true`。
     ///
-    /// The keyboard is the decided one (ticket 32): `↑`/`↓` move the highlight,
-    /// `Enter` or `Space` confirms it, `Tab` skips the question, `←`/`→` page,
-    /// and every printable character edits the free-text field. Digits are not
-    /// keys at all, so they are ordinary text everywhere and no option is out of
-    /// reach.
+    /// 键位是定下来的那一套（ticket 32）：`↑`/`↓` 移动高亮，`Enter` 或 `Space` 确认它，
+    /// `Tab` 跳过这个问题，`←`/`→` 翻页，而每个可打印字符都编辑自由文本栏。数字根本不是
+    /// 键，所以在哪里都是普通文字，没有一个选项够不着。
     ///
-    /// `Enter` continues while something is unfinished and submits once
-    /// everything is handled, so an unhandled question simply refuses the key.
-    /// On a question with nothing answered yet it confirms the highlighted
-    /// option — choosing *is* the answer on a single-select one, so that also
-    /// advances — while an already-answered question (chosen or typed) just
-    /// moves on, so `Enter` never clobbers typed custom text. Confirming does
-    /// **not** submit on that same press: the next `Enter` is the submit
-    /// (spec §7, §19).
+    /// `Enter` 在还有没完成的东西时继续往前走，等全处理完了才提交，所以一个没处理的问题
+    /// 就是直接拒掉这个键。在一个还什么都没答的问题上它确认高亮的选项 —— 单选里「选中」
+    /// *就是*回答，所以那也会往前走 —— 而一个已经答过的问题（选了或打了字）只是往前走，
+    /// 于是 `Enter` 永远不会踩掉打进去的自定义文本。确认**不会**在同一次按键里提交：
+    /// 下一次 `Enter` 才是提交（spec §7、§19）。
     fn press(&mut self, key: Key) -> bool {
         match key {
             Key::Enter => {
@@ -714,16 +635,15 @@ impl Questionnaire {
                     }
                 }
             }
-            // `Space` confirms too, so a person can answer without the key that
-            // also submits. On a free-text question there is no option to
-            // confirm, so it is an ordinary space in the text.
+            // `Space` 也确认，这样人能不用那个兼作提交的键来作答。在自由文本问题上没有
+            // 选项可确认，所以它就是一个普通的空格。
             Key::Char(' ') if self.has_options() => {
                 self.confirm_highlight();
                 if !self.questions[self.index].multi_select {
                     self.advance();
                 }
             }
-            // `Tab` is the explicit "skip this one and move on".
+            // `Tab` 是那个明确的「跳过这个，继续」。
             Key::Tab => {
                 self.drafts[self.index].skipped = true;
                 self.advance();
@@ -735,7 +655,7 @@ impl Questionnaire {
             Key::Backspace => {
                 self.drafts[self.index].custom.pop();
             }
-            // Every printable character is free text, digits included.
+            // 每个可打印字符都是自由文本，数字也一样。
             Key::Char(ch) => {
                 self.custom_focused = true;
                 self.type_custom(ch);
@@ -745,17 +665,15 @@ impl Questionnaire {
         false
     }
 
-    /// Whether the question on screen offers options to highlight.
+    /// 屏幕上的这个问题有没有可以高亮的选项。
     fn has_options(&self) -> bool {
         !self.questions[self.index].options.is_empty()
     }
 
-    /// Confirm the highlighted option (spec §7).
+    /// 确认高亮的那个选项（spec §7）。
     ///
-    /// A single-select question keeps only that option and clears custom text,
-    /// because the two are alternatives and custom text overrides a choice. A
-    /// multi-select question toggles, because custom text supplements the
-    /// choices and the user is not done picking yet.
+    /// 单选问题只留下那一个选项并清掉自定义文本，因为两者是二选一，而自定义文本覆盖
+    /// 选择。多选问题是切换，因为自定义文本是对所选项的补充，而用户还没挑完。
     fn confirm_highlight(&mut self) {
         let index = self.drafts[self.index].highlight;
         let Some(label) = self.questions[self.index]
@@ -780,8 +698,8 @@ impl Questionnaire {
         }
     }
 
-    /// Move the highlight by `delta`, clamped to the options. The highlight is
-    /// what `Enter`/`Space` act on, so it never goes past either end.
+    /// 把高亮移动 `delta`，夹在选项范围内。`Enter`/`Space` 作用的就是高亮，所以它永远
+    /// 不会越出两端。
     fn move_highlight(&mut self, delta: isize) {
         let count = self.questions[self.index].options.len();
         if count == 0 {
@@ -792,11 +710,10 @@ impl Questionnaire {
         draft.highlight = next.clamp(0, count as isize - 1) as usize;
     }
 
-    /// Add one character of free text.
+    /// 添一个自由文本字符。
     ///
-    /// On a single-select question typing clears the chosen option, because the
-    /// custom text is about to override it. On a multi-select one the choices
-    /// stay, because custom text supplements them (spec §7).
+    /// 在单选问题上打字会清掉选中的选项，因为自定义文本马上要覆盖它。在多选问题上所选的
+    /// 留下，因为自定义文本是对它们的补充（spec §7）。
     fn type_custom(&mut self, ch: char) {
         let multi_select = self.questions[self.index].multi_select;
         let draft = &mut self.drafts[self.index];
@@ -809,8 +726,7 @@ impl Questionnaire {
     fn advance(&mut self) {
         if self.index + 1 < self.questions.len() {
             self.index += 1;
-            // The page turned, so the cursor goes back to the question's own rows
-            // (票 04 §5).
+            // 翻页了，所以光标回到问题自己那几行（票 04 §5）。
             self.custom_focused = false;
         }
     }
@@ -826,13 +742,10 @@ impl Questionnaire {
         self.drafts.iter().all(QuestionDraft::handled)
     }
 
-    /// Pick the option at `index` in the current question, the way clicking its row
-    /// does.
+    /// 选中当前问题里下标为 `index` 的选项，跟点它那一行一样。
     ///
-    /// A single-select question answers and moves on — the click *is* the answer —
-    /// except on the last question, where it only answers: submitting is still the
-    /// separate `Enter` (票 04 §4). A multi-select question only toggles, because the
-    /// reader is not done picking.
+    /// 单选问题答完就往前走 —— 那一次点击*就是*回答 —— 最后一个问题除外，那里它只回答：
+    /// 提交仍然是另外那一下 `Enter`（票 04 §4）。多选问题只切换，因为读的人还没挑完。
     fn select_option(&mut self, index: usize) {
         if index >= self.questions[self.index].options.len() {
             return;
@@ -848,24 +761,22 @@ impl Questionnaire {
         }
     }
 
-    /// Hand the cursor to the free-text row.
+    /// 把光标交给自由文本行。
     fn focus_custom(&mut self) {
         self.custom_focused = true;
     }
 
-    /// Take it away when the page turns.
+    /// 翻页时把它收回来。
     fn unfocus_custom(&mut self) {
         self.custom_focused = false;
     }
 
-    /// The answers as the tool's one result (spec §7): a skipped question is
-    /// `selected: []` with no `custom`, and single-select custom text overrides
-    /// the choice.
+    /// 答案，也就是工具那一条结果（spec §7）：跳过的问题写作 `selected: []` 且没有
+    /// `custom`，单选时自定义文本覆盖选择。
     ///
-    /// The skip check comes first because skipping is a decision about the whole
-    /// question: text typed before `Tab` is discarded, or `selected: []` plus a
-    /// `custom` would read to the model as a deliberate custom answer instead of
-    /// "the user chose not to answer" (spec §7).
+    /// 跳过的检查放在最前面，因为跳过是对整个问题的决定：`Tab` 之前打的字被丢掉，否则
+    /// `selected: []` 再带一个 `custom` 会被模型读成一次刻意的自定义作答，而不是「用户
+    /// 选择不回答」（spec §7）。
     fn answers(&self) -> UserAnswers {
         UserAnswers {
             answers: self
@@ -899,20 +810,17 @@ impl Questionnaire {
 }
 
 impl Pending {
-    /// The rows the overlay shows for this question, or `None` for a question
-    /// that is not drawn as an overlay.
+    /// 覆盖层为这个问题显示的那些行，不画成覆盖层的问题返回 `None`。
     ///
-    /// The loop's asks and the renderer's own go over the transcript, so the draft
-    /// stays where the user left it (spec §7, §9). The questionnaire does not: it
-    /// is multi-row and paged, so it takes over the bottom input area instead
-    /// (spec §19), and this answers `None` for it.
+    /// 循环的询问与渲染器自己的询问都画在转录之上，所以草稿留在用户放它的地方
+    /// （spec §7、§9）。问卷不是：它是多行、分页的，所以它改为接管底部输入区
+    /// （spec §19），而这里对它的回答是 `None`。
     fn modal(&self) -> Option<Modal> {
         let modal = match self {
             Pending::Loop { request, .. } => Modal {
                 title: wording::permission_title().to_owned(),
-                // Then the same one-line description the folded transcript line
-                // carries — and *then* the call as it will run, because approving is
-                // the one moment the exact command has to be readable (2026-09-23).
+                // 然后是折叠转录行带着的那句一行描述 —— 再*然后*是它将要跑起来的样子，
+                // 因为批准的那一刻正是确切命令必须可读的时刻（2026-09-23）。
                 description: Some(wording::tool_call_line(&request.tool_name, &request.args)),
                 detail: Some(wording::permission_call(
                     &request.tool_name,
@@ -951,101 +859,94 @@ impl Pending {
     }
 }
 
-/// The parts a question is asked in (spec §9).
+/// 一个问题被问出来时用的那些部件（spec §9）。
 ///
-/// The split is the point. A question used to be one wrapped paragraph, so a long
-/// command pushed its keys past the right edge and the reader had to pick them out
-/// of a sentence; here the title says what is being asked, the summary says what the
-/// action *is*, the detail shows the concrete call, and the keys that decide it get a
-/// row of their own and cannot be buried by any of it.
+/// 拆开就是重点。问题曾经是一个折行的段落，于是一条长命令把它的键挤到右边之外，读的人
+/// 得从一句话里把它们挑出来；这里标题说在问什么，摘要说这个动作*是*什么，详情给出具体
+/// 的调用，而决定它的那些键独占一行、不被上面任何东西埋掉。
 struct Modal {
-    /// The title row, higher up and bolder than the rest: `权限询问：bash`.
+    /// 标题行，位置更高、比其余更粗：`权限询问：bash`。
     title: String,
-    /// What the call is *for*, in the very words the folded transcript line uses
-    /// (`调用 bash 查看 git status`), so the question and the line it is about read
-    /// alike (2026-09-23, user request). Absent for a question that is not about a tool
-    /// call.
+    /// 这次调用是*为了*什么，就用折叠转录行的那几个字（`调用 bash 查看 git status`），
+    /// 这样问题与它所问的那一行读起来一致（2026-09-23，用户要求）。不是关于工具调用的
+    /// 问题没有这一项。
     description: Option<String>,
-    /// The one concrete thing the question is about: the call, the path, the size.
+    /// 这个问题所问的那一件具体的事：那次调用、那个路径、那个大小。
     detail: Option<String>,
-    /// The keys that answer it, painted as one row of buttons.
+    /// 回答它的那些键，画成一行按钮。
     choices: &'static [wording::Choice],
-    /// What a click on each of those buttons does. Empty means "answer with the key",
-    /// which is what the loop's questions want; the renderer's own confirmations name
-    /// themselves because they have no channel to answer over (票 04 §3).
+    /// 点这些按钮各自会做什么。空的意思是「用键回答」，循环的问题要的就是这个；渲染器
+    /// 自己的确认会自我点名，因为它们没有可答的通道（票 04 §3）。
     actions: Vec<HitAction>,
 }
 
-/// One clickable region of a question, recorded as it is painted.
+/// 一个问题的某一块可点区域，在画出来的时候记下。
 ///
-/// The rectangle is in **screen** coordinates and its `action` is the whole of what a
-/// click there means, so the pointer handler never has to re-derive the layout it is
-/// looking at (票 04 §1).
+/// 矩形是**屏幕**坐标，而它的 `action` 就是点在那里意味着的全部，所以指针处理函数从来
+/// 不必把它正在看的版式再推一遍（票 04 §1）。
 #[derive(Clone)]
 struct Region {
     rect: Rect,
     action: HitAction,
 }
 
-/// What a click on a question's painted part does.
+/// 点一下问题被画出来的部件会做什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitAction {
-    /// Answer the loop's question with this choice, exactly as pressing its key would.
+    /// 用这个选择回答循环的问题，跟按下它的键完全一样。
     Answer(Answer),
-    /// Confirm the oversized paste.
+    /// 确认这次过大的粘贴。
     Paste,
-    /// Confirm clearing the draft.
+    /// 确认清掉草稿。
     ClearDraft,
-    /// Confirm quitting.
+    /// 确认退出。
     Quit,
-    /// Close the question without doing anything: the safe answer, as `Esc` is.
+    /// 什么都不做就关掉问题：安全的那一个答案，`Esc` 也是它。
     Dismiss,
-    /// Step back one question.
+    /// 退回上一个问题。
     Previous,
-    /// Step forward one question.
+    /// 前进到下一个问题。
     Next,
-    /// Submit the questionnaire.
+    /// 提交问卷。
     Submit,
-    /// Show this sidebar page, as clicking its tab does (spec §3).
+    /// 显示左栏的这一页，跟点它的页签一样（spec §3）。
     SwitchTab(Tab),
-    /// Jump to the start of this unit, as clicking its rail cell does (spec §4).
+    /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
     TurnRailUnit(usize),
 }
 
-/// A pointer gesture while a question owns it.
+/// 一个问题占着指针时的一次指针手势。
 enum QuestionClick {
-    /// A wheel notch: `true` is up.
+    /// 滚轮一格：`true` 是向上。
     Wheel(bool),
-    /// A left click, in screen coordinates.
+    /// 一次左键点击，屏幕坐标。
     At(u16, u16),
 }
 
-/// What the last frame drew that a question's pointer can act on.
+/// 上一帧画出来的、问题的指针能作用上去的那些东西。
 ///
-/// Everything here is rebuilt every frame and read by the next click, which is the
-/// same mechanism the transcript's `indicator` has always used — and the reason a
-/// scrolled-away option or a clipped button needs no invalidation of its own
-/// (票 04 §1).
+/// 这里的一切每帧重建、由下一次点击来读，与转录的 `indicator` 一直在用的机制相同 ——
+/// 这也是一个滚出屏幕的选项、一个被裁掉的按钮不需要各自失效的原因（票 04 §1）。
 #[derive(Default, Clone)]
 struct Regions {
-    /// One region per question-overlay button, in the order they are drawn.
+    /// 问题覆盖层每个按钮一块区域，按画出来的顺序。
     cells: Vec<Region>,
-    /// The questionnaire's visible option rows: `(row, index in the question)`.
+    /// 问卷可见的选项行：`(行, 该问题里的下标)`。
     options: Vec<(u16, usize)>,
-    /// The questionnaire's free-text row, when it was drawn.
+    /// 问卷的自由文本行，画出来了的时候。
     custom: Option<u16>,
 }
 
 impl Regions {
-    /// Forget everything: called once per frame, before anything is painted.
+    /// 忘掉一切：每帧调一次，在画任何东西之前。
     fn clear(&mut self) {
         self.cells.clear();
         self.options.clear();
         self.custom = None;
     }
 
-    /// The option index a click on `row` landed on, if that row was an option. The
-    /// whole row is the target, so the column does not narrow it (票 04 §4).
+    /// 点 `row` 落在了哪个选项下标上，如果那一行确实是选项。整行都是目标，所以列不会
+    /// 把它收窄（票 04 §4）。
     fn option_at(&self, row: u16) -> Option<usize> {
         self.options
             .iter()
@@ -1053,12 +954,12 @@ impl Regions {
             .map(|(_, index)| *index)
     }
 
-    /// Whether `row` is the free-text row.
+    /// `row` 是不是自由文本行。
     fn custom_at(&self, row: u16) -> bool {
         self.custom == Some(row)
     }
 
-    /// The action of the button a click landed on, if it landed on one.
+    /// 一次点击落到的那个按钮的动作，落在按钮上的话。
     fn action_at(&self, column: u16, row: u16) -> Option<HitAction> {
         self.cells
             .iter()
@@ -1067,89 +968,82 @@ impl Regions {
     }
 }
 
-/// The `/` menu's remembered half.
+/// `/` 菜单里需要被记住的那一半。
 ///
-/// Everything else about the menu is derived: the token comes from the draft, the
-/// matches from the catalog and that token. What cannot be derived is which row the
-/// user picked, so that — and the prefix it was picked under — is what is kept.
+/// 菜单的其余部分全是推出来的：token 从草稿来，匹配从目录与那个 token 来。推不出来的是
+/// 用户挑了哪一行，所以这里留的就是它 —— 以及它是在哪个前缀下挑的。
 #[derive(Debug, Default)]
 struct MenuSelection {
-    /// The prefix the highlight was made under. A different prefix means this is a
-    /// different menu, so the highlight starts over and an `Esc` stops applying.
+    /// 高亮是在哪个前缀下做出来的。前缀不同就意味着这是另一个菜单，于是高亮从头开始，
+    /// 而那次 `Esc` 也不再作数。
     prefix: String,
-    /// Which match is highlighted, if any.
+    /// 高亮落在哪个匹配上，有的话。
     ///
-    /// **`None` on a bare `/`**, and that is the safety rule: nothing is picked until
-    /// the user has typed a name or walked the list with an arrow, so a key pressed
-    /// only to look at the menu cannot run a command nobody asked for (spec §7's
-    /// reading of an incidental key).
+    /// **裸 `/` 时是 `None`**，这就是那条安全规矩：在用户打出名字、或者用方向键走过列表
+    /// 之前，什么都没被选中，于是只为看一眼菜单而按下的键不可能跑起一条没人要的命令
+    /// （spec §7 对一个顺手按键的读法）。
     selected: Option<usize>,
-    /// `Esc` closed the menu. It stays closed while the prefix it was closed under
-    /// is what is still being typed.
+    /// `Esc` 关掉了菜单。只要还在打的就是它当初被关掉时的那个前缀，它就保持关着。
     dismissed: bool,
 }
 
-/// The `/` menu as it stands right now: which token it belongs to, what matches it,
-/// and which match is highlighted.
+/// 此刻的 `/` 菜单：它属于哪个 token、什么与它匹配、哪个匹配被高亮。
 ///
-/// A value, built per frame and per keypress from the draft plus the catalog. The
-/// menu is never state that can drift from what is on screen.
+/// 一个值，由草稿加目录在每帧、每次按键时建出来。菜单永远不会是可以与屏幕上所见漂移开
+/// 的状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SlashMenu {
-    /// What has been typed after the slash.
+    /// 斜杠后面已经打进去的内容。
     prefix: String,
-    /// The matching entries, in catalog order, as `(name, description)`.
+    /// 匹配上的那些条目，按目录顺序，形如 `(名字, 描述)`。
     entries: Vec<(String, String)>,
-    /// Which entry is highlighted, clamped into range; `None` when none is.
+    /// 高亮落在哪个条目上，夹进范围；没有时是 `None`。
     selected: Option<usize>,
 }
 
-/// Whether a key means yes to a question this renderer asked itself.
+/// 对一个渲染器自己问出来的问题，某个键是否意味着 yes。
 ///
-/// Only `y`. `Esc` and `Enter` are the **safe** answer — "no" — because both are what
-/// a hand reaches for without reading (spec §7, 票 06 §1).
+/// 只有 `y`。`Esc` 与 `Enter` 是**安全**的那个答案 —— 「不」—— 因为这两个都是伸手就按
+/// 下去的键（spec §7，票 06 §1）。
 fn agrees(key: Key) -> bool {
     matches!(key, Key::Char('y') | Key::Char('Y'))
 }
 
-/// The rail's bookkeeping: one unit per completed turn or round, and where each one
-/// starts (`.scratch/tui-sidebar/spec.md` §4).
+/// 回合条的记账：每个完成的回合（讨论里是每一轮）一个单位，以及每个单位从哪里开始
+/// （`.scratch/tui-sidebar/spec.md` §4）。
 ///
-/// Two indexes and a counter, all derived from the stream — there is deliberately no
-/// remembered selection, because a stored "current unit" would drift away from the
-/// viewport the moment anything arrived.
+/// 两个索引加一个计数器，全部从流上推出来 —— 刻意没有记下来的选择，因为存下来的
+/// 「当前单位」会在任何一个事件到达的瞬间与视口漂开。
 #[derive(Default)]
 struct TurnRail {
-    /// One entry per source line, parallel to `links` and pruned with it.
+    /// 每条来源行一个条目，与 `links` 平行，并跟它一起裁剪。
     lines: std::collections::VecDeque<TurnRailLine>,
-    /// The segment-head source line of each **completed** unit.
+    /// 每个**已完成**单位的分段头来源行。
     heads: Vec<usize>,
-    /// Source lines painted since the last boundary. Counted rather than remembered as
-    /// an index because the cap drops lines from the front.
+    /// 上一个边界之后画出来的来源行数。它是数出来的、而不是记成一个索引，因为上限从前面
+    /// 丢行。
     lines_in_unit: usize,
 }
 
-/// What the rail remembers about one painted source line.
+/// 回合条记住的一条被画出来的来源行的信息。
 #[derive(Debug, Clone, Copy)]
 struct TurnRailLine {
-    /// The unit it belongs to. A line that arrived after the last boundary belongs to
-    /// the unit that has not finished yet.
+    /// 它属于哪个单位。上一个边界之后到达的行属于那个还没结束的单位。
     unit: usize,
-    /// Whether it is the user's own message. The head of a unit is the first of those
-    /// inside it.
+    /// 它是不是用户自己的消息。一个单位的头是它里面第一条这样的行。
     user: bool,
 }
 
 impl TurnRail {
-    /// How many units the session has completed.
+    /// 会话已经完成了多少个单位。
     fn units(&self) -> usize {
         self.heads.len()
     }
 
-    /// Note one painted source line.
+    /// 记下一条被画出来的来源行。
     fn push_line(&mut self, user_message: bool) {
-        // The unit a line belongs to is the one being built: `units()` is how many are
-        // finished, so that is the index this line will take when its turn ends.
+        // 一行属于的那个单位就是正在建的那个：`units()` 是已经完成的个数，所以那就是这一行
+        // 在它回合结束时将拿到的下标。
         self.lines.push_back(TurnRailLine {
             unit: self.heads.len(),
             user: user_message,
@@ -1157,13 +1051,11 @@ impl TurnRail {
         self.lines_in_unit += 1;
     }
 
-    /// The current unit ended: record where its segment starts and open the next one.
+    /// 当前单位结束了：记下它的分段从哪里开始，并开出下一个。
     ///
-    /// The head is the **first user message inside the unit**, which is what a cell
-    /// click should land on: the reader asked the question, so that is where a turn
-    /// begins. A discussion unit has no user message of its own (the debaters answer
-    /// the one question the session already holds), so it falls back to the unit's own
-    /// first line — which is the round's opening narration.
+    /// 头是**单位里第一条用户消息**，那才是点一格该落到的地方：问题是谁提的，一个回合就
+    /// 从那里开始。讨论的单位自己没有用户消息（讨论者回答的是会话本来就持有的那一个问题），
+    /// 于是退回到单位自己的第一行 —— 也就是那一轮的开场叙述。
     fn close_unit(&mut self) {
         let start = self.lines.len().saturating_sub(self.lines_in_unit);
         let head = (start..self.lines.len())
@@ -1173,9 +1065,8 @@ impl TurnRail {
         self.lines_in_unit = 0;
     }
 
-    /// Drop the oldest source lines with the transcript's cap, and shift the heads
-    /// that pointed past them. A unit whose whole span is dropped collapses onto the
-    /// oldest surviving line, which is the closest thing left to jump to.
+    /// 按转录的上限丢掉最老的来源行，并把指到它们之外的段头平移回来。整个跨度都被丢掉的
+    /// 单位会塌到最老的那条幸存行上，那是还剩的、最接近的跳转目标。
     fn prune(&mut self, dropped: usize) {
         for _ in 0..dropped {
             self.lines.pop_front();
@@ -1186,7 +1077,7 @@ impl TurnRail {
         self.lines_in_unit = self.lines_in_unit.saturating_sub(dropped);
     }
 
-    /// The unit a source line belongs to.
+    /// 一条来源行属于哪个单位。
     fn unit_of(&self, source: usize) -> usize {
         self.lines
             .get(source)
@@ -1194,26 +1085,25 @@ impl TurnRail {
             .unwrap_or_else(|| self.units())
     }
 
-    /// Where a unit's segment starts.
+    /// 一个单位的分段从哪里开始。
     fn head(&self, unit: usize) -> Option<usize> {
         self.heads.get(unit).copied()
     }
 }
 
-/// A history replay in flight: the assembled event stream, how much of it has been
-/// laid into the transcript, and how many source lines that produced.
+/// 一次正在飞的历史重放：组装好的事件流、其中有多少已经铺进转录、以及那产出了多少条
+/// 来源行。
 ///
-/// The replay is a one-shot state of the renderer — it is not [`TuiState::busy`],
-/// which is the loop's word for a run: there is nothing to cancel during a replay, so
-/// `Ctrl-C` quits instead (`.scratch/tui-history-replay/spec.md` §2, §5).
+/// 重放是渲染器的一个一次性状态 —— 它不是 [`TuiState::busy`]，那是循环对「一次运行」的
+/// 说法：重放期间没有什么可取消的，所以 `Ctrl-C` 改为退出
+/// （`.scratch/tui-history-replay/spec.md` §2、§5）。
 struct Replay {
-    /// The whole stream, in `seq` order, exactly as assembly left it.
+    /// 整条流，按 `seq` 顺序，与组装留下它时一模一样。
     events: Vec<Event>,
-    /// The next event to apply. Doubles as the `n` the progress line shows.
+    /// 下一个要应用的事件。同时充当进度行显示的 `n`。
     next: usize,
-    /// Source lines the replay has produced so far. Zero means the history drew
-    /// nothing — an empty stream, or a skeleton of `SessionStarted` — and so there is
-    /// no seam to mark (spec §6).
+    /// 重放到目前为止产出的来源行数。零意味着历史什么都没画 —— 一条空流，或者一副只有
+    /// `SessionStarted` 的骨架 —— 于是没有接缝可标（spec §6）。
     lines: usize,
 }
 
@@ -1248,8 +1138,8 @@ impl TuiState {
             regions: Regions::default(),
             area: Rect::default(),
             prompt_reply: None,
-            // Idle until the loop says otherwise: before it asks its first line nothing
-            // is running, and the keyboard has to read that way (spec §6).
+            // 空闲，直到循环另说：在它要第一行之前没有任何东西在跑，而键盘必须读起来就是
+            // 这个样子（spec §6）。
             running: false,
             pulse: 0,
             pending: None,
@@ -1261,7 +1151,7 @@ impl TuiState {
         }
     }
 
-    /// Whether anything has changed since the last frame was drawn.
+    /// 上一帧画完之后有没有什么东西变了。
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -1274,14 +1164,12 @@ impl TuiState {
         self.dirty = false;
     }
 
-    /// Advance the pulse by one frame (`.scratch/tui-input-pulse/spec.md` §2b).
+    /// 把脉冲推进一帧（`.scratch/tui-input-pulse/spec.md` §2b）。
     ///
-    /// The loop calls this from the one timer it arms while a run is in flight, so an idle
-    /// front end never reaches here; the guard is repeated anyway, because a prompt whose
-    /// colour moved while its writer was typing would be the animation getting in the way
-    /// (票 09). It is the pulse's frame and nothing else: **not** a general "redraw
-    /// something" hook, and anything that needs a frame should say so through the event that
-    /// changed it.
+    /// 循环在它于一次运行在飞期间武装的那个定时器里调它，所以空闲的前端从来到不了这里；
+    /// 这个守卫还是照写一遍，因为一个在它的写作者正打字时变了色的提示符，就是动画挡了路
+    /// （票 09）。它推进的是脉冲的帧、别的什么都不是：**不是**一个通用的「重画点什么」的
+    /// 钩子，任何需要一帧的东西都应该通过那个改变了它的事件说出来。
     pub fn tick(&mut self) {
         if self.busy() {
             self.pulse = self.pulse.wrapping_add(1);
@@ -1289,16 +1177,15 @@ impl TuiState {
         }
     }
 
-    /// Bracketed paste arrives as text, not as keys.
+    /// 括号粘贴是作为文本到达的，不是作为按键。
     ///
-    /// Three things happen here that crossterm leaves to us (research §6.3): line
-    /// endings are normalised, control characters are dropped, and a paste too large
-    /// to take on sight asks first. **None of it submits** — a pasted newline is a
-    /// newline (spec §7).
+    /// 这里做三件 crossterm 留给我们的事（research §6.3）：行尾归一化、丢掉控制字符、以及
+    /// 一次大到不能看一眼就收下的粘贴先问一句。**这些都不提交** —— 粘进来的换行就是换行
+    /// （spec §7）。
     pub fn paste(&mut self, text: &str) {
         if self.pending.is_some() {
-            // A question owns the keyboard while it is up: a paste must not answer
-            // it, and must not land in a draft the user cannot see (spec §9).
+            // 问题在的时候它占着键盘：一次粘贴不许回答它，也不许落进用户看不见的草稿里
+            // （spec §9）。
             return;
         }
         let text = editor::normalize_paste(text);
@@ -1311,24 +1198,22 @@ impl TuiState {
             self.pending = Some(Pending::Paste { text, chars });
         } else {
             self.editor.insert_str(&text);
-            // A paste can be a `/` command like any other keystroke: a pasted
-            // `/ask-matt` opens the menu on the frame after it lands.
+            // 一次粘贴可以像任何别的按键一样是条 `/` 命令：粘进来的 `/ask-matt` 在它落地
+            // 后的那一帧打开菜单。
             self.sync_menu();
         }
     }
 
-    /// Feed one render event, and answer how many transcript source lines it drew.
+    /// 喂进一个渲染事件，并回答它画了多少条转录来源行。
     ///
-    /// The count is what the history replay's batch budget is measured in: a frame's
-    /// cost is bounded by the text it lays down, not only by how many events it
-    /// consumed (`.scratch/tui-history-replay/spec.md` §2). Live callers ignore it.
+    /// 这个计数就是历史重放批次预算的量度：一帧的成本由它铺下去的文字定界，而不是只按它
+    /// 吃掉多少事件来算（`.scratch/tui-history-replay/spec.md` §2）。实时调用方不看它。
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         self.dirty = true;
         let mut produced = 0usize;
         for block in self.transcript.push(event) {
-            // The thinking line's lifecycle runs before the block is painted: a
-            // reasoning delta opens it, the body's first delta freezes it in place,
-            // and `MessageCompleted` settles whatever is still open (票 02 §1).
+            // 思考行的生命周期跑在块被画出来之前：一个推理增量开出它，正文的第一个增量把它
+            // 就地冻住，而 `MessageCompleted` 把还开着的那条定下来（票 02 §1）。
             if let Block::Delta {
                 speaker,
                 kind,
@@ -1351,13 +1236,10 @@ impl TuiState {
             } = &block
             {
                 if matches!(role, Role::Assistant) {
-                    // The message's whole trace settles whatever is open. When the
-                    // provider sent no deltas at all the line is opened here instead,
-                    // already finished; when one was already opened and settled (the
-                    // body froze it mid-stream) nothing new is added, because one
-                    // thinking segment is one line (票 02 §1). An absent trace settles
-                    // an open line as unrecorded — the synthesizer's shape, deltas
-                    // streamed and nothing written down.
+                    // 消息的整段 trace 把还开着的定下来。provider 一个增量都没发时，这行改在
+                    // 这里开出来、且已经完成；已经开过并定过的那条（正文在流中途把它冻住了）
+                    // 不再加新的，因为一段思考就是一行（票 02 §1）。trace 缺席时把开着的行按
+                    // 「未记录」定下来 —— 那是合成器的形状，增量流过了，什么都没记下来。
                     match reasoning {
                         Some(text) => {
                             let text = text.clone();
@@ -1375,15 +1257,13 @@ impl TuiState {
                     self.thinking_done = true;
                 }
             }
-            // A new turn's thinking is a new segment, so the "already drawn" latch
-            // clears with the turn (票 02 §1).
+            // 新回合的思考是新的一段，所以「已经画过」这个闩随回合一起清掉（票 02 §1）。
             if matches!(&block, Block::TurnStarted { .. }) {
                 self.thinking_done = false;
             }
             match &block {
-                // Reasoning is not part of the message body: it is folded into its own
-                // line, so it never joins the live tail the body streams through
-                // (票 02 §3).
+                // 推理不是消息正文的一部分：它被折进自己那一行，所以永远不加入正文流过的那条
+                // 活尾巴（票 02 §3）。
                 Block::Delta {
                     kind: DeltaKind::Reasoning,
                     ..
@@ -1392,7 +1272,7 @@ impl TuiState {
                     self.live.push_str(text);
                     if self.live.len() > LIVE_BUFFER {
                         let cut = self.live.len() - LIVE_BUFFER;
-                        // Trim on a char boundary.
+                        // 按字符边界裁。
                         let cut = (cut..self.live.len())
                             .find(|index| self.live.is_char_boundary(*index))
                             .unwrap_or(self.live.len());
@@ -1400,19 +1280,15 @@ impl TuiState {
                     }
                 }
                 Block::Message { .. } => {
-                    // The deltas were the live view; the block is the permanent
-                    // one, so the tail can go.
+                    // 增量是那一版实时的视图；块才是永久的那一版，所以尾巴可以走了。
                     self.live.clear();
                 }
                 _ => {}
             }
-            // The panel counts what this block says about the session; the pane
-            // shows what it says to the reader. Names are tinted on the way in, so a
-            // speaker's first line is what settles any name the injected roster did
-            // not list (票 07).
+            // 面板数的是这个块就会话说了什么；窗格显示的是它向读者说了什么。名字在进来的路上
+            // 就上了色，所以发言者的第一行就是给注入名册没列到的名字定色的那一下（票 07）。
             self.panel.observe(&block);
-            // The `todo` page is derived the same way, from the one block kind that
-            // carries a list: a call's own arguments.
+            // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
             self.todo.observe(&block);
             let lines = paint_block(&block, &mut self.colors);
             produced += lines.len();
@@ -1423,9 +1299,8 @@ impl TuiState {
                 self.turn_rail.push_line(is_user_message(&block));
                 self.prune_links();
             }
-            // A turn's end closes a unit; so does a round's, in a discussion — where
-            // the unit is the **round**, because that is the thing a discussion counts
-            // (`CONTEXT.md` keeps 轮次 and 回合 apart, spec §4).
+            // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
+            // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。
             if is_boundary(&block, self.discussion()) {
                 self.turn_rail.close_unit();
             }
@@ -1433,24 +1308,20 @@ impl TuiState {
         produced
     }
 
-    /// Whether this session counts **rounds** rather than turns.
+    /// 这个会话数的是**轮**而不是回合。
     ///
-    /// Injected rather than inferred: a discussion is a session with more than one
-    /// debater, and that is part of what assembly already knows (spec §4).
+    /// 注入而不是推断：讨论就是一个有不止一个讨论者的会话，而这属于组装已经知道的东西
+    /// （spec §4）。
     fn discussion(&self) -> bool {
         self.facts.speaker_order.len() > 1
     }
 
-    /// Feed one **live** render event: an event that arrived while the renderer is
-    /// running, as opposed to one the history replay is laying down.
+    /// 喂进一个**实时**渲染事件：渲染器跑着的时候到达的事件，相对于历史重放正在铺下的那种。
     ///
-    /// While a replay is in flight the event is held back, in arrival order, so
-    /// history and the lines this session adds cannot interleave. A **logged** event
-    /// is not held at all: the replay's snapshot is the assembled stream, so a logged
-    /// event arriving during a replay is one the snapshot already holds — buffering it
-    /// would paint the same tool call or message a second time. Only events that never
-    /// enter the log — the banner, diagnostics, streaming deltas — are buffered for
-    /// after the seam (`spec` §3).
+    /// 重放在飞的时候，事件按到达顺序压着不发，这样历史与这个会话加的行不会交错。**进流
+    /// 的**事件根本不压：重放的快照就是组装好的那条流，所以重放期间到达的一条进流事件是
+    /// 快照已经持有的 —— 缓冲它会把同一次工具调用或同一条消息画第二遍。只有那些永不进事件
+    /// 流的事件 —— 横幅、诊断、流式增量 —— 才被缓冲到接缝之后（`spec` §3）。
     pub fn live_event(&mut self, event: RenderEvent) {
         if self.replay.is_some() {
             if !matches!(event, RenderEvent::Logged(_)) {
@@ -1462,19 +1333,17 @@ impl TuiState {
         }
     }
 
-    /// Whether the history replay still has events to lay down.
+    /// 历史重放还有没有事件要铺。
     pub fn replay_pending(&self) -> bool {
         self.replay.is_some()
     }
 
-    /// Apply one batch of the history replay's events.
+    /// 应用历史重放的一批事件。
     ///
-    /// The batch is bounded by **both** [`REPLAY_BATCH_EVENTS`] and
-    /// [`REPLAY_BATCH_LINES`], whichever trips first: a slice of 512 events is not
-    /// itself a bound on a frame when each one can be a huge tool result. Finishing
-    /// the batch that consumes the last event also closes the replay — the seam, the
-    /// buffered live events and the return to the bottom all happen here, before the
-    /// next frame is drawn.
+    /// 批次由 [`REPLAY_BATCH_EVENTS`] 与 [`REPLAY_BATCH_LINES`] **两者**定界，谁先到算谁：
+    /// 512 个事件的一片本身并不是一帧的界限，因为每一个都可能是巨型工具结果。吃掉最后
+    /// 一个事件的那一批同时也关掉重放 —— 接缝、缓冲着的实时事件与回到末尾都发生在这里，
+    /// 在下一帧被画出来之前。
     pub fn replay_batch(&mut self) {
         let Some(mut replay) = self.replay.take() else {
             return;
@@ -1491,9 +1360,8 @@ impl TuiState {
             produced += self.apply(RenderEvent::Logged(event));
         }
         replay.lines += produced;
-        // `apply` sets the flag itself, but the progress line's `n` is state the frame
-        // only sees if this pass says so — and the pass that changes nothing but the
-        // count is exactly the one that would otherwise never be drawn.
+        // `apply` 自己会置这个标志，但进度行的 `n` 是只有这一趟说了话、帧才看得见的状态 ——
+        // 而只改了计数、别的什么都没改的那一趟，恰恰就是本来永远不会被画出来的那趟。
         self.dirty = true;
         if replay.next >= replay.events.len() {
             self.finish_replay(replay);
@@ -1502,13 +1370,11 @@ impl TuiState {
         }
     }
 
-    /// Close a finished replay: mark the seam, release the buffered live events, and
-    /// return the viewport to the bottom.
+    /// 关掉一次跑完的重放：标出接缝、放出缓冲着的实时事件、把视口送回末尾。
     ///
-    /// The divider is inserted only when the history actually drew something, so an
-    /// empty stream or a bare `SessionStarted` skeleton gets no seam to nothing. It
-    /// is a render-layer line rather than an event, so it never enters the log and
-    /// the next `--continue` inserts a new one instead of replaying the old.
+    /// 分隔线只在历史真的画出了东西时才插入，所以一条空流或一副只剩 `SessionStarted` 的
+    /// 骨架不会拿到一条通向虚无的接缝。它是渲染层的一行，不是事件，所以它永不进事件流，
+    /// 而下一次 `--continue` 会插入新的一条、而不是重放旧的那条。
     fn finish_replay(&mut self, replay: Replay) {
         if replay.lines > 0 {
             self.apply(RenderEvent::Notice(wording::history_divider().to_owned()));
@@ -1516,38 +1382,33 @@ impl TuiState {
         for event in std::mem::take(&mut self.live_buffer) {
             self.apply(event);
         }
-        // The reader is caught up: the transcript is history and the viewport is at
-        // its end, which is where a session that has just started belongs.
+        // 读的人追上来了：转录就是历史，视口在它的末尾，而一个刚开出来的会话本来就该在那里。
         self.pane.to_bottom();
         self.dirty = true;
     }
 
-    /// Handle one keypress while the history replay is in flight.
+    /// 历史重放在飞时处理一个按键。
     ///
-    /// A replay is **not** a run, so none of the run's keys mean their run meaning:
-    /// there is nothing to cancel, and `Ctrl-C` quits. The editor keeps working —
-    /// waiting time is typing time — but `Enter` cannot submit and the transcript's
-    /// scroll keys are ignored, because the history below is still being laid down
-    /// and the viewport stays pinned to its end (`spec` §3, §5).
+    /// 重放**不是**一次运行，所以运行的那些键一个都不作运行解：没有什么可取消的，而
+    /// `Ctrl-C` 是退出。编辑器照常工作 —— 等待的时间就是打字的时间 —— 但 `Enter` 不能
+    /// 提交，转录的滚动键被忽略，因为下面的历史还在铺，视口钉在它的末尾（`spec` §3、§5）。
     fn replay_key(&mut self, key: Key) {
         if key == Key::CtrlC {
             self.quit = true;
             return;
         }
-        // Everything the editor answers to still works; `Ctrl-D`, `Esc`, `Enter`, the
-        // scroll keys and the mode gesture are ignored outright.
+        // 编辑器认的那些键全都照常工作；`Ctrl-D`、`Esc`、`Enter`、滚动键与模式手势一律忽略。
         self.editor_key(key);
         self.sync_menu();
     }
 
-    /// Apply the keys that edit the draft, wherever the draft is live — the resident
-    /// editor and a replay share them, so the two cannot drift.
+    /// 施加那些编辑草稿的键，无论草稿活在哪儿 —— 常驻编辑器与重放共用它们，所以两者不会
+    /// 漂开。
     fn editor_key(&mut self, key: Key) {
         match key {
             Key::Char(ch) => self.editor.insert_char(ch),
-            // The one reliable newline key: Shift+Enter arrives as plain Enter on a
-            // terminal without the keyboard-enhancement protocol, so it submits
-            // (spec §6).
+            // 唯一可靠的换行键：在没有 keyboard-enhancement 协议的终端上 Shift+Enter 到达时
+            // 就是一个普通的 Enter，所以它会提交（spec §6）。
             Key::CtrlJ => self.editor.insert_char('\n'),
             Key::Backspace => self.editor.backspace(),
             Key::Delete => self.editor.delete_forward(),
@@ -1560,18 +1421,17 @@ impl TuiState {
             Key::CtrlU => self.editor.kill_to_line_start(),
             Key::CtrlK => self.editor.kill_to_line_end(),
             Key::CtrlW => self.editor.kill_word(),
-            // History is `Ctrl-P` / `Ctrl-N` alone; the arrows belong to the cursor.
+            // 历史只归 `Ctrl-P` / `Ctrl-N`；方向键属于光标。
             Key::CtrlP => self.editor.history_previous(),
             Key::CtrlN => self.editor.history_next(),
             _ => {}
         }
     }
 
-    /// Open the thinking line, unless one is already open. `true` when it drew a row.
+    /// 开出思考行，除非已经有一条开着。它画出了一行时返回 `true`。
     ///
-    /// The line is a plain transcript row — it counts against the pane's cap and
-    /// scrolls with everything else — and it is deliberately **not** clickable yet:
-    /// the whole trace only exists on `MessageCompleted` (票 02 §1).
+    /// 这一行是普通的转录行 —— 它照算窗格的上限，也跟别的一切一起滚 —— 而且刻意**还**
+    /// 不可点：完整 trace 只在 `MessageCompleted` 上才有（票 02 §1）。
     fn open_thinking(&mut self, speaker: crate::events::SpeakerId) -> bool {
         if self.thinking_open {
             return false;
@@ -1579,8 +1439,8 @@ impl TuiState {
         self.thinking_open = true;
         self.thinking_speaker = speaker;
         self.reasoning.clear();
-        // The name is a `speaker_label`, so it takes the speaker's colour — the same
-        // rule every other line with one follows (票 07 §2).
+        // 名字是 `speaker_label`，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
+        // （票 07 §2）。
         let name = wording::speaker_label(&self.thinking_speaker);
         let color = self.colors.of(&self.thinking_speaker);
         let name_style = Style::default().fg(color);
@@ -1597,9 +1457,8 @@ impl TuiState {
         true
     }
 
-    /// Freeze the open thinking line where it stands: the body's first delta means
-    /// the model has stopped thinking and started answering, so the line settles
-    /// (票 02 §1).
+    /// 把敞开的那条思考行就地冻住：正文的第一个增量意味着模型已经不思考、开始作答了，
+    /// 于是这行定下来（票 02 §1）。
     fn freeze_thinking(&mut self) {
         if !self.thinking_open {
             return;
@@ -1609,12 +1468,10 @@ impl TuiState {
         self.settle_thinking(recorded.then_some(text));
     }
 
-    /// Settle the thinking line — recorded trace or not — and make it the way into
-    /// its detail.
+    /// 把思考行定下来 —— 不管有没有记录下来的 trace —— 并把它变成通向它详情的入口。
     ///
-    /// `Some` is a recorded trace; `None` is the synthesizer's shape — deltas
-    /// streamed, the log holds no whole text — and its detail says so. A turn with no
-    /// thinking line open at all adds nothing (票 02 §1).
+    /// `Some` 是记录下来的 trace；`None` 是合成器的形状 —— 增量流过了，事件流里没有整段
+    /// 文本 —— 它的详情会说出来。一个根本没有敞开思考行的回合什么都不加（票 02 §1）。
     fn settle_thinking(&mut self, text: Option<String>) {
         if !self.thinking_open {
             return;
@@ -1625,10 +1482,9 @@ impl TuiState {
         let name = wording::speaker_label(&self.thinking_speaker);
         let color = self.colors.of(&self.thinking_speaker);
         let name_style = Style::default().fg(color);
-        // In place: one thinking segment is one line, from `正在思考` to `思考完成`
-        // (票 02 §1). The `▸` after the name is what says the line can be opened — it
-        // trails the speaker so every line still starts with who is speaking
-        // (票 03 §Answer，2026-09-23 修正).
+        // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。名字后面那个
+        // `▸` 说的是这行可以打开 —— 它跟在发言者后面，这样每一行仍然以「谁在说话」开头
+        // （票 03 §Answer，2026-09-23 修正）。
         let line = Line::from(vec![
             Span::styled(format!("{name} "), name_style),
             Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
@@ -1638,7 +1494,7 @@ impl TuiState {
             ),
         ]);
         let detail = Detail {
-            // The overlay's title is the clicked line's own text (票 02 §4).
+            // 覆盖层的标题就是被点那一行自己的文字（票 02 §4）。
             title: line_text(&line),
             color,
             kind: DetailKind::Thinking { text },
@@ -1649,12 +1505,11 @@ impl TuiState {
         }
     }
 
-    /// Drop the oldest links until this list is no longer than the pane's cap, which
-    /// is the only way the two stay parallel: a source row means the same thing in
-    /// both or neither (票 04 §1).
+    /// 一直丢掉最老的链接，直到这个列表不比窗格的上限长，这是两者保持平行的唯一办法：
+    /// 一条来源行在两边要么意思相同、要么两边都没有（票 04 §1）。
     ///
-    /// The rail's per-line index is pruned in the same breath, and for the same
-    /// reason: a source line's unit is looked up by the index the pane hands back.
+    /// 回合条的逐行索引也在同一口气里裁掉，理由相同：一条来源行属于哪个单位，是按窗格
+    /// 交回来的下标去查的。
     fn prune_links(&mut self) {
         let before = self.links.len();
         while self.links.len() > pane::CAP {
@@ -1666,37 +1521,31 @@ impl TuiState {
         }
     }
 
-    /// Handle one mouse event.
+    /// 处理一个鼠标事件。
     ///
-    /// Five things can answer to the pointer, and the order between them is who owns
-    /// it: an open detail overlay, then a question, then the turn rail, then the
-    /// sidebar's tabs, then the transcript — whose wheel, indicator and collapsed
-    /// lines answer to it. Anything none of them claims is ignored: the terminal's own
-    /// selection is the user's, and nothing here takes focus (spec §4, §7).
+    /// 有五样东西可以回应指针，它们之间的顺序就是谁占着它：开着的详情覆盖层，然后是问题，
+    /// 然后是回合条，然后是左栏的页签，最后是转录 —— 它的滚轮、指示器与折叠行都回应它。
+    /// 没有一样认领的就忽略：终端自己的选择是用户的，而这里什么都不抢焦点（spec §4、§7）。
     pub fn mouse(&mut self, mouse: MouseEvent) {
-        // A replay owns the pointer by ignoring it: history is still being laid down
-        // under a viewport pinned to the bottom, so neither a wheel notch nor a click
-        // may move it or open a line that has not finished arriving (`spec` §5).
+        // 重放靠忽略来占着指针：历史还在一个钉在末尾的视口下面铺，所以滚轮一格与一次点击
+        // 都不许挪动它、也不许打开一行还没到达完的行（`spec` §5）。
         if self.replay.is_some() {
             return;
         }
-        // The five dispatches, in order of who owns the pointer. A detail overlay
-        // owns it outright; otherwise a question does; otherwise the frame's own
-        // parts do, the rail and the tabs before the text they sit next to. Nothing
-        // here ever scrolls the transcript behind something that is up
-        // (票 04 §2, `tui-sidebar` spec §7).
+        // 五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则是这一帧自己的
+        // 那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西背后的
+        // 转录（票 04 §2，`tui-sidebar` spec §7）。
         self.dirty = true;
-        // 1. The detail overlay owns the pointer outright. Its whole body scrolls, and
-        // a second click on the line it came from closes it (票 02 §4).
+        // 1. 详情覆盖层直接占着指针。它的整个主体都滚，而再点一次它来自的那一行会关掉它
+        // （票 02 §4）。
         if self.detail_open() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.detail_scroll(-1),
                 MouseEventKind::ScrollDown => self.detail_scroll(1),
                 MouseEventKind::Down(MouseButton::Left) => {
-                    // A click outside closes it — the line it came from, the
-                    // transcript, the footer, anything (票 02 §4；2026-09-23 修正，
-                    // 原先只认「再点同一行」). A click inside is the overlay's own and
-                    // does nothing, because it has no buttons of its own.
+                    // 框外的一次点击关掉它 —— 它来自的那一行、转录、页脚，什么都行
+                    // （票 02 §4；2026-09-23 修正，原先只认「再点同一行」）。框内的点击是
+                    // 覆盖层自己的、什么都不做，因为它没有自己的按钮。
                     let inside = self
                         .detail_rect
                         .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
@@ -1708,10 +1557,9 @@ impl TuiState {
             }
             return;
         }
-        // 2. A question owns the pointer next: the wheel must not scroll the
-        // transcript behind it, and a click answers it where it is answerable. What
-        // is answerable is whatever the last frame recorded as a region, so a key that
-        // was clipped or scrolled away simply has no region (spec §9, 票 04 §2).
+        // 2. 接下来是问题占着指针：滚轮不许滚动它背后的转录，而一次点击在它可答的地方回答
+        // 它。可答的是上一帧记成区域的那些，所以一个被裁掉或滚走的键干脆没有区域
+        // （spec §9，票 04 §2）。
         if self.pending.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.question_click(QuestionClick::Wheel(true)),
@@ -1723,10 +1571,9 @@ impl TuiState {
             }
             return;
         }
-        // 3. Otherwise the frame's own parts, in the order who owns the pointer: the
-        // sidebar's tabs, then the transcript — whose wheel, indicator and collapsed
-        // lines answer to it. A tab is a control, so it is asked before the text around
-        // it is (spec §7).
+        // 3. 否则就是这一帧自己的部件，按谁占着指针排序：左栏的页签，然后是转录 —— 它的
+        // 滚轮、指示器与折叠行都回应它。页签是个控件，所以它在周围的文字之前被问
+        // （spec §7）。
         match mouse.kind {
             MouseEventKind::ScrollUp => self.pane.wheel(true),
             MouseEventKind::ScrollDown => self.pane.wheel(false),
@@ -1748,25 +1595,24 @@ impl TuiState {
         }
     }
 
-    /// Act on a click or a wheel notch while a question owns the pointer.
+    /// 问题占着指针时，对一次点击或滚轮一格作出反应。
     fn question_click(&mut self, click: QuestionClick) {
         match self.pending.as_mut() {
-            // The middle overlay: each `[key] label` interval is one button, and a
-            // click runs exactly the answer that key would have (票 04 §3).
+            // 中间覆盖层：每一个 `[键] 标签` 区间就是一个按钮，点一下跑的就是那个键会给出的
+            // 答案，分毫不差（票 04 §3）。
             Some(
                 Pending::Loop { .. } | Pending::Paste { .. } | Pending::ClearDraft | Pending::Exit,
             ) => {
                 let QuestionClick::At(column, row) = click else {
-                    // The wheel does nothing over a one-line question.
+                    // 滚轮在一行的问题上什么都不做。
                     return;
                 };
                 let Some(action) = self.regions.action_at(column, row) else {
                     return;
                 };
                 let pending = self.pending.take().expect("a question is up");
-                // The loop's questions send the answer the button was built with —
-                // the same answer its key sends — and the renderer's own
-                // confirmations answer themselves.
+                // 循环的问题发出按钮被建出来时带着的那个答案 —— 与它那个键发出的一样 ——
+                // 而渲染器自己的确认是自己回答自己。
                 match (pending, action) {
                     (Pending::Loop { reply, .. }, HitAction::Answer(choice)) => {
                         let _ = reply.send(choice);
@@ -1775,22 +1621,19 @@ impl TuiState {
                         pending @ (Pending::Paste { .. } | Pending::ClearDraft | Pending::Exit),
                         action,
                     ) => self.own_answer(pending, action),
-                    // A region that is not this question's own. The sidebar's tabs are
-                    // in the same table of what the frame painted, so a click on one
-                    // arrives here; the question owns the pointer, so the click does
-                    // nothing — and above all it must not close the question the reader
-                    // has not answered (spec §7, §9).
+                    // 一块不属于这个问题的区域。左栏的页签在同一张「这一帧画了什么」的表里，
+                    // 所以点在它上面也会到这里来；问题占着指针，所以这次点击什么都不做 ——
+                    // 尤其是，它绝不许关掉一个读的人还没回答的问题（spec §7、§9）。
                     (pending, _) => self.pending = Some(pending),
                 }
             }
-            // The questionnaire owns the bottom input area: option rows, the custom
-            // line, and the footer's paging buttons (票 04 §4).
+            // 问卷占着底部输入区：选项行、自定义行，以及页脚的翻页按钮（票 04 §4）。
             Some(Pending::Questionnaire(_)) => self.questionnaire_click(click),
             None => {}
         }
     }
 
-    /// Answer one of the renderer's own confirmations, by the action a click carried.
+    /// 回答渲染器自己的一条确认，用一次点击带着的动作。
     fn own_answer(&mut self, pending: Pending, action: HitAction) {
         match (pending, action) {
             (Pending::Paste { text, .. }, HitAction::Paste) => {
@@ -1799,13 +1642,13 @@ impl TuiState {
             }
             (Pending::ClearDraft, HitAction::ClearDraft) => self.editor.clear(),
             (Pending::Exit, HitAction::Quit) => self.quit = true,
-            // `Dismiss`, and any pairing that cannot arise, is the safe answer: the
-            // question closes and nothing happens, which is what `Esc` does.
+            // `Dismiss`，以及任何不可能出现的组合，都是安全的那一个答案：问题关掉、什么都
+            // 不发生，`Esc` 干的就是这个。
             _ => {}
         }
     }
 
-    /// Act on a click or a wheel notch while the questionnaire owns the input area.
+    /// 问卷占着输入区时，对一次点击或滚轮一格作出反应。
     fn questionnaire_click(&mut self, click: QuestionClick) {
         let regions = self.regions.clone();
         let mut submitted = false;
@@ -1813,21 +1656,17 @@ impl TuiState {
             return;
         };
         match click {
-            // The wheel moves the option window, which follows the highlight — so a
-            // notch is exactly one option's worth of movement (票 04 §4).
+            // 滚轮挪动选项窗口，而窗口跟着高亮走 —— 所以一格正好是一个选项的位移（票 04 §4）。
             QuestionClick::Wheel(up) => questionnaire.move_highlight(if up { -1 } else { 1 }),
             QuestionClick::At(column, row) => {
-                // The option rows and the free-text row are recorded by screen row;
-                // the footer's buttons are recorded as rectangles like every other
-                // button, so all of them are looked up through the same table
-                // (票 04 §1).
+                // 选项行与自由文本行按屏幕行记录；页脚的按钮像别的按钮一样记成矩形，所以它们
+                // 全都从同一张表里查（票 04 §1）。
                 if let Some(option) = regions.option_at(row) {
                     questionnaire.select_option(option);
                     return;
                 }
                 if regions.custom_at(row) {
-                    // Clicking the free-text row hands it the cursor; the keyboard
-                    // focus otherwise stays where the last key left it (票 04 §5).
+                    // 点自由文本行把光标交给它；否则键盘焦点留在上一个键放它的地方（票 04 §5）。
                     questionnaire.focus_custom();
                     return;
                 }
@@ -1841,9 +1680,8 @@ impl TuiState {
                         questionnaire.unfocus_custom();
                     }
                     Some(HitAction::Submit) => {
-                        // The button submits exactly as `Enter` does once everything
-                        // is handled, so it goes through the same path that drops the
-                        // takeover and answers the tool (票 04 §4).
+                        // 这个按钮的提交与全部处理完之后 `Enter` 的提交一模一样，所以它走的
+                        // 是同一条路：放掉接管、回答工具（票 04 §4）。
                         if questionnaire.all_handled() {
                             submitted = true;
                         }
@@ -1857,13 +1695,11 @@ impl TuiState {
         }
     }
 
-    /// The unit the viewport's top row belongs to — the rail's bright cell.
+    /// 视口最上面一行属于哪个单位 —— 回合条上亮的那一格。
     ///
-    /// A **derived** quantity, deliberately: the viewport is the state, and a stored
-    /// "current unit" would drift the first time anything arrived or the reader
-    /// scrolled. At the bottom it is the newest unit, which is what "I am following the
-    /// conversation" means even when the whole transcript fits on one screen
-    /// (spec §4).
+    /// 刻意是一个**推出来**的量：视口才是状态，而存下来的「当前单位」会在任何一个事件
+    /// 到达、或读的人滚动一下的瞬间就漂开。在末尾时它是最新的那个单位，也就是「我在跟着
+    /// 这场对话走」的意思，哪怕整条转录一屏就装得下（spec §4）。
     fn focused_turn(&self) -> Option<usize> {
         let units = self.turn_rail.units();
         if units == 0 {
@@ -1876,11 +1712,10 @@ impl TuiState {
         Some(self.turn_rail.unit_of(source).min(units - 1))
     }
 
-    /// Jump to the start of a unit: what clicking its cell does.
+    /// 跳到某个单位的开头：点它那一格所做的事。
     ///
-    /// The landing is **top-aligned**, so every jump lands where the eye expects; the
-    /// newest unit clamps to the bottom instead, which is the same rule read at the
-    /// end of the transcript rather than a special case (spec §4).
+    /// 落点是**顶端对齐**的，所以每一次跳都落在眼睛期待的地方；最新那个单位改为夹到末尾，
+    /// 这是同一条规矩在转录末端读到的样子，而不是一个特例（spec §4）。
     fn jump_to_unit(&mut self, unit: usize) {
         let Some(head) = self.turn_rail.head(unit) else {
             return;
@@ -1888,17 +1723,16 @@ impl TuiState {
         self.pane.scroll_to_source(head);
     }
 
-    /// The clickable link a click landed on, as a copy of what it opens.
+    /// 一次点击落到的那个可点链接，拷成它要打开的东西。
     ///
-    /// The width the overlay will open at comes from the last frame, which is the
-    /// only place the middle block's geometry is known (票 04 §1).
+    /// 覆盖层将在哪个宽度上打开，来自上一帧，那是中间块几何唯一已知的地方（票 04 §1）。
     fn link_hit(&self, mouse: &MouseEvent) -> Option<Detail> {
         let offset = (mouse.row.checked_sub(self.drawn_top)?) as usize;
         let row = (*self.drawn_rows.get(offset)?)?;
         self.links.get(row)?.clone()
     }
 
-    /// Whether a click landed on the "back to bottom" indicator.
+    /// 一次点击是否落在了「回到末尾」指示器上。
     fn indicator_hit(&self, column: u16, row: u16) -> bool {
         self.indicator.is_some_and(|rect| {
             column >= rect.x
@@ -1908,34 +1742,29 @@ impl TuiState {
         })
     }
 
-    /// Answer a request from the loop.
+    /// 回答循环发来的一个请求。
     pub fn request(&mut self, request: ConsoleRequest) {
         self.dirty = true;
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
-            // The loop's own account of whether it is running something. Nothing else
-            // in this state may stand in for it.
+            // 循环自己对「它是不是正在跑东西」的说法。这个状态里没有别的什么可以替它说话。
             ConsoleRequest::RunState { running } => {
                 self.running = running;
-                // The pulse belongs to one run: the prompt goes back to the colour it rests
-                // on when the run ends, so the next one starts from the same place — and the
-                // resting colour is a constant rather than wherever the last turn happened to
-                // stop (`.scratch/tui-input-pulse/spec.md` §2b, 票 09).
+                // 脉冲属于某一次运行：运行结束时提示符回到它歇着的那个颜色，于是下一次从
+                // 同一个地方开始 —— 而歇着的颜色是一个常量，不是上一次回合恰好停下来的地方
+                // （`.scratch/tui-input-pulse/spec.md` §2b，票 09）。
                 if !running {
                     self.pulse = 0;
                 }
-                // A question belongs to the run that raised it, so the end of that run is
-                // what makes it stale: the loop is no longer waiting for an answer, and
-                // its ask died with the run. Leaving the overlay up would send the next
-                // keypress to a question nobody is waiting for — a silent failure that
-                // reads as a dead key (spec §6, §9). Dropping the sender is the honest
-                // reading of "no one is waiting": a held question would be denied.
+                // 问题属于把它提出来的那次运行，所以那次运行的结束就是它变馊的原因：循环
+                // 不再等答案，它那次询问也随运行一起死了。把覆盖层留在屏幕上，会把下一个
+                // 按键送进一个没人在等的问题 —— 一次静默的失败，读起来像死键（spec §6、§9）。
+                // 丢掉发送端是对「没人在等」最诚实的读法：留着一个问题会被拒绝。
                 //
-                // Only the loop's questions go with the run. The renderer's own — an
-                // oversized paste, a draft `Esc` would clear — are not the run's to
-                // withdraw, and they can only be up while the loop is idle anyway.
-                // The questionnaire is the loop's too: it is the model's ask, and a
-                // cancelled run leaves it with no one waiting and no answer to give.
+                // 只有循环的问题随运行一起走。渲染器自己的那些 —— 一次过大的粘贴、一份
+                // `Esc` 会清掉的草稿 —— 不是这次运行能撤回的，而且它们只能趁循环空闲时才
+                // 立着。问卷也是循环的：它是模型提的，而一次被取消的运行让它既没人在等、
+                // 也没答案可给。
                 if !running
                     && matches!(
                         self.pending,
@@ -1946,15 +1775,13 @@ impl TuiState {
                 }
             }
             ConsoleRequest::Ask(ask) => {
-                // A question may not be drawn over the detail overlay: the overlay is
-                // not a `pending`, so nothing else would stand it down, and the modal
-                // underneath would be unanswerable (票 02 §4).
+                // 问题不可以画在详情覆盖层之上：覆盖层不是一个 `pending`，所以没有别的东西
+                // 会让它退下，而它底下那个模态会变得无法回答（票 02 §4）。
                 self.close_detail();
                 if self.pending.is_some() {
-                    // The loop asks one question at a time and waits for the answer, so
-                    // this cannot happen. If it ever did, dropping the *new* question
-                    // keeps the one on screen answerable; dropping its sender denies it,
-                    // which is the safe reading of an orphaned ask.
+                    // 循环一次只问一个问题、并等那个答案，所以这不可能发生。万一发生了，
+                    // 丢掉*新*的问题能让屏幕上那个仍然可答；丢掉它的发送端就是拒绝它，那是
+                    // 对一个孤儿询问安全的读法。
                     return;
                 }
                 self.pending = Some(Pending::Loop {
@@ -1963,18 +1790,16 @@ impl TuiState {
                 });
             }
             ConsoleRequest::Questionnaire(request) => {
-                // Same reason as `Ask`: the overlay stands down for the question.
+                // 与 `Ask` 同一个理由：覆盖层为问题退下。
                 self.close_detail();
                 if self.pending.is_some() {
-                    // One question owns the keyboard at a time, exactly as for the
-                    // loop's asks: dropping the new one keeps the one on screen
-                    // answerable, and its dropped sender denies the orphaned ask.
+                    // 一次只有一个问题占着键盘，正如循环的询问那样：丢掉新的那个让屏幕上那个
+                    // 仍然可答，而它被丢掉的发送端拒绝了那个孤儿询问。
                     return;
                 }
-                // The tool refuses an empty questionnaire before it reaches a port,
-                // so this cannot come from the model. A question with no questions
-                // would have nothing to draw and nothing to index, so it is refused
-                // rather than allowed to panic the renderer.
+                // 工具在到达端口之前就拒掉空问卷，所以这不可能是模型发来的。一个没有问题的
+                // 问题会既没东西可画、也没东西可索引，所以它被拒掉，而不是放任它把渲染器
+                // panic 掉。
                 if request.questions.is_empty() {
                     let _ = request
                         .reply
@@ -1994,12 +1819,11 @@ impl TuiState {
                     custom_focused: false,
                 }));
             }
-            // The names the loop can act on. They arrive once, after assembly — the
-            // skills come from the session — and nothing else carries them.
+            // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
+            // 没有别的东西携带它们。
             ConsoleRequest::Catalog { entries } => self.catalog = entries,
-            // The history a reopened session assembled with. An empty stream is not a
-            // replay: entering the state would show a progress line for an operation
-            // that lays nothing down and marks no seam (`spec` §2).
+            // 重新打开的会话组装时用的那段历史。空流不是一次重放：进入那个状态会为一次什么
+            // 都不铺、也不标接缝的操作显示一条进度行（`spec` §2）。
             ConsoleRequest::Replay { events } => {
                 if !events.is_empty() {
                     self.replay = Some(Replay {
@@ -2020,7 +1844,7 @@ impl TuiState {
         self.quit
     }
 
-    /// Take one broadcast receive. `true` means the channel is gone.
+    /// 取一次 broadcast 接收。`true` 表示通道没了。
     fn take_render_event(
         &mut self,
         received: Result<RenderEvent, broadcast::error::RecvError>,
@@ -2030,9 +1854,8 @@ impl TuiState {
                 self.live_event(event);
                 false
             }
-            // A dropped renderer delta degrades output, never correctness, so it is
-            // narrated like any other live event — and buffered during a replay for the
-            // same reason the banner is.
+            // 丢掉的渲染器增量损害的是输出，从不是正确性，所以它像任何别的实时事件一样被
+            // 叙述出来 —— 并且和横幅同一个理由，在重放期间被缓冲。
             Err(broadcast::error::RecvError::Lagged(dropped)) => {
                 self.live_event(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
                 false
@@ -2041,7 +1864,7 @@ impl TuiState {
         }
     }
 
-    /// Take one terminal event.
+    /// 取一个终端事件。
     fn terminal_event(&mut self, event: Option<std::io::Result<CtEvent>>) {
         match event {
             Some(Ok(CtEvent::Key(key))) => {
@@ -2053,14 +1876,14 @@ impl TuiState {
             }
             Some(Ok(CtEvent::Paste(text))) => self.paste(&text),
             Some(Ok(CtEvent::Mouse(mouse))) => self.mouse(mouse),
-            // A resize is a repaint, and the replay keeps batching: the next frame is
-            // laid out at the new size (`.scratch/tui-history-replay/spec.md` §5).
+            // resize 就是一次重画，而重放继续成批地跑：下一帧按新尺寸排版
+            // （`.scratch/tui-history-replay/spec.md` §5）。
             Some(Ok(CtEvent::Resize(..))) => self.mark_dirty(),
             _ => {}
         }
     }
 
-    /// Take one request from the loop. `true` means the port is gone.
+    /// 取一个来自循环的请求。`true` 表示端口没了。
     fn port_request(&mut self, request: Option<ConsoleRequest>) -> bool {
         match request {
             Some(request) => {
@@ -2071,7 +1894,7 @@ impl TuiState {
         }
     }
 
-    /// The model's questionnaire, while it owns the bottom input area.
+    /// 模型的问卷，在它占着底部输入区的时候。
     fn questionnaire(&self) -> Option<&Questionnaire> {
         match &self.pending {
             Some(Pending::Questionnaire(questionnaire)) => Some(questionnaire),
@@ -2079,11 +1902,10 @@ impl TuiState {
         }
     }
 
-    /// Feed one keypress to the questionnaire.
+    /// 给问卷喂一个按键。
     ///
-    /// The takeover stays up while the questionnaire has questions left; the one
-    /// keypress that submits it drops it, which is what hands the bottom input
-    /// area back to the resident editor.
+    /// 只要问卷还有问题剩下，接管就立着；提交它的那一个按键把它丢掉，那也正是把底部输入区
+    /// 交还给常驻编辑器的那一下。
     fn questionnaire_key(&mut self, key: Key) {
         let Some(Pending::Questionnaire(mut questionnaire)) = self.pending.take() else {
             return;
@@ -2096,27 +1918,22 @@ impl TuiState {
         }
     }
 
-    /// Handle one keypress. Answers and submissions go out through the pending
-    /// one-shot channels; gestures are queued for the loop.
+    /// 处理一个按键。答案与提交通过待答的一次性通道发出去；手势排队交给循环。
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
-        // A replay owns the keyboard before anything else does — including the detail
-        // overlay, which cannot be open this early — because its boundaries are its
-        // own: `Ctrl-C` quits, `Ctrl-D` and `Esc` are inert, and the editor still
-        // works (`spec` §5).
+        // 重放在别的一切之前就占着键盘 —— 包括详情覆盖层，它在这个阶段不可能开着 ——
+        // 因为它的边界是它自己的：`Ctrl-C` 退出，`Ctrl-D` 与 `Esc` 不起作用，而编辑器照常
+        // 工作（`spec` §5）。
         if self.replay.is_some() {
             self.replay_key(key);
             return;
         }
-        // The detail overlay is a view mode of its own: it owns the keyboard while it
-        // is up, and the transcript underneath is frozen where the reader left it
-        // (票 02 §4).
+        // 详情覆盖层是一个自成一体的视图模式：它立着的时候占着键盘，而它下面的转录冻在
+        // 读的人离开的地方（票 02 §4）。
         if self.detail_open() {
             match key {
-                // The one exception to "everything else is ignored": `Ctrl-D` closes
-                // the overlay rather than quitting, let alone asking (票 06 §5).
-                // `Ctrl-C` is **not** an exception: it is one of the ignored keys
-                // (票 02 §4).
+                // 「别的都被忽略」的唯一例外：`Ctrl-D` 关掉覆盖层，而不是退出、更不是发问
+                // （票 06 §5）。`Ctrl-C` **不是**例外：它是被忽略的键之一（票 02 §4）。
                 Key::Esc | Key::CtrlD => self.close_detail(),
                 Key::Up => self.detail_scroll(-1),
                 Key::Down => self.detail_scroll(1),
@@ -2135,10 +1952,9 @@ impl TuiState {
                 }
                 return;
             }
-            // `Ctrl-D` is the quit-with-a-confirmation gesture, and every one of its
-            // guards comes before the question guard below: while the loop is running
-            // it is ignored outright, and while any question is up it is that
-            // question's to ignore (票 06 §1, §3).
+            // `Ctrl-D` 是那个「带确认的退出」手势，而它的每一道守卫都排在下面那道问题守卫
+            // 之前：循环在跑时它被直接忽略，而有任何问题立着时，忽略它归那个问题管
+            // （票 06 §1、§3）。
             Key::CtrlD => {
                 if !self.busy() && self.pending.is_none() {
                     self.pending = Some(Pending::Exit);
@@ -2151,12 +1967,12 @@ impl TuiState {
                 } else if let Some(pending) = self.pending.take() {
                     self.decline(pending);
                 } else if self.slash_menu().is_some() {
-                    // The `/` menu is the smallest thing on screen, so `Esc` closes it
-                    // before it starts throwing away a draft (spec §6).
+                    // `/` 菜单是屏幕上最小的东西，所以 `Esc` 先关掉它，然后才轮到手扔草稿
+                    // （spec §6）。
                     self.slash.dismissed = true;
                 } else if self.editor.has_multiple_lines() {
-                    // Esc on a draft this long would throw away real work, so it
-                    // asks first — and the safe answer is "no" (spec §7).
+                    // 在一份这么长的草稿上按 Esc 会丢掉真的工作，所以它先问一句 —— 而安全的
+                    // 答案是「不」（spec §7）。
                     self.pending = Some(Pending::ClearDraft);
                 } else {
                     self.editor.clear();
@@ -2166,15 +1982,12 @@ impl TuiState {
             _ => {}
         }
         if self.pending.is_some() {
-            // A question owns the keyboard: its own keys answer it, `Ctrl-C` and `Esc`
-            // above are the ways out, and nothing else gets through — not a stray
-            // character, not the mode gesture (spec §9).
+            // 问题占着键盘：它自己的键回答它，上面的 `Ctrl-C` 与 `Esc` 是出路，别的什么都进
+            // 不来 —— 一个乱按的字符不行，模式手势也不行（spec §9）。
             //
-            // The questionnaire answers to a wider keyboard than the one-key
-            // questions — the arrows move and page, `Tab` skips, `Enter`/`Space`
-            // confirm — so it gets every key and routes its own. The other kinds
-            // keep the narrow rule, which is what makes a stray character unable
-            // to allow a write.
+            // 问卷认的键盘比那些单键问题宽 —— 方向键移动与翻页，`Tab` 跳过，`Enter`/`Space`
+            // 确认 —— 所以它拿到每一个键并自己分发。别的种类保持那条窄规矩，正是它让一个
+            // 乱按的字符无法批准一次写入。
             if matches!(self.pending, Some(Pending::Questionnaire(_))) {
                 self.questionnaire_key(key);
             } else if matches!(key, Key::Char(_) | Key::Enter) {
@@ -2183,19 +1996,17 @@ impl TuiState {
             return;
         }
         if key == Key::BackTab {
-            // The gesture and the display are one step of the same cycle: the mode is
-            // a session value the loop owns, and this front end is the only thing that
-            // shows it — so it moves its own copy and asks for the same move. Both
-            // apply [`Mode::next`] to the value assembly seeded, which is what keeps
-            // them from disagreeing (`.scratch/todo-and-modes/spec.md` §1).
+            // 手势与显示是同一次循环的一步：模式是循环持有的一个会话值，而前端是唯一显示它
+            // 的东西 —— 所以它挪动自己那份副本，并请求同一次挪动。两者都对组装打底的那个值
+            // 施加 [`Mode::next`]，这让它们不会互相矛盾
+            // （`.scratch/todo-and-modes/spec.md` §1）。
             self.mode = self.mode.next();
             self.events.push(FrontEndEvent::CycleMode);
             return;
         }
-        // While the `/` menu is up it owns the four keys that would otherwise edit or
-        // submit: `↑`/`↓` walk the matches, `Tab` fills one in, `Enter` fills one in and
-        // sends it. Everything else falls through to the editor, which is what filters
-        // the matches as the user keeps typing.
+        // `/` 菜单立着时，它占着那四个本来会编辑或提交的键：`↑`/`↓` 走过匹配，`Tab` 填进
+        // 一个，`Enter` 填进一个并把它发出去。别的都落到编辑器，而编辑器正是用户继续打字时
+        // 过滤匹配的地方。
         if self.slash_menu().is_some() {
             match key {
                 Key::Down => {
@@ -2207,10 +2018,9 @@ impl TuiState {
                     return;
                 }
                 Key::Tab | Key::Enter => {
-                    // `Tab` fills in the highlighted name and stops there; `Enter` fills
-                    // it in **and submits**, so `/ask` + Enter runs the skill the menu
-                    // was pointing at. A bare `/` has nothing highlighted: `Enter` sends
-                    // it as typed, and the loop answers with the list of names.
+                    // `Tab` 填进高亮的那个名字就停在那里；`Enter` 填进去**并提交**，于是
+                    // `/ask` + Enter 跑起菜单指着的那条 skill。裸 `/` 什么都没高亮：`Enter`
+                    // 把它按打出来的样子发出去，循环回一串名字。
                     self.menu_accept();
                     if key == Key::Enter {
                         self.submit();
@@ -2225,46 +2035,39 @@ impl TuiState {
             Key::PageUp => self.pane.page(true),
             Key::PageDown => self.pane.page(false),
             Key::CtrlG => self.pane.to_bottom(),
-            // Every other key the editor answers to; the two paths share them.
+            // 编辑器认的每一个别的键；两条路径共用它们。
             _ => self.editor_key(key),
         }
-        // A key that changed the draft (or only moved the cursor inside the token) may
-        // have widened or narrowed the menu. Fold that in once, here, rather than at
-        // each of the arms above.
+        // 一个改了草稿（或只在 token 里挪了光标）的键，可能把菜单撑宽或收窄了。在这里一次
+        // 收进来，而不是在每个分支里各收一次。
         self.sync_menu();
     }
 
-    /// Whether the loop is **inside a run**: a turn, or a discussion it is driving.
+    /// 循环是否**在一次运行里面**：一个回合，或者它在驱动的一场讨论。
     ///
-    /// The loop says so over [`ConsoleRequest::RunState`]; nothing here infers it. Two
-    /// inferences both failed. From the render stream: only `TurnEnded` cleared the old
-    /// flag, and the synthesizer's single call ends no turn, so after a discussion the
-    /// TUI believed it was working for ever. From "no prompt is outstanding": that
-    /// predicate is true before the loop asks its *first* line, so a keyboard that was
-    /// idle during assembly read as working. Both mistakes turned `Ctrl-C` into a cancel
-    /// gesture the idle loop discards — a dead keyboard.
+    /// 这件事由循环通过 [`ConsoleRequest::RunState`] 说出来；这里什么都不推断它。两次推断
+    /// 都失败了。从渲染流推：只有 `TurnEnded` 会清掉旧标志，而合成器那一次调用不结束任何
+    /// 回合，于是一场讨论之后 TUI 以为自己永远在工作。从「没有未决的提示」推：那个谓词在
+    /// 循环要它的*第一*行之前就是真的，于是组装期间空闲的键盘被读成工作中。两个错都把
+    /// `Ctrl-C` 变成了一个空闲循环会丢掉的取消手势 —— 一块死键盘。
     fn busy(&self) -> bool {
         self.running
     }
 
-    /// Send the typed draft to the loop and remember it.
+    /// 把打好的草稿交给循环并记住它。
     ///
-    /// Submitting also returns the transcript to the bottom: the user has just asked
-    /// for something and wants to watch the answer, whatever they were reading
-    /// (spec §4).
+    /// 提交也把转录送回末尾：用户刚问了一件事，想看着答案，不管他当时在读什么（spec §4）。
     ///
-    /// An empty draft is sent as an **empty line**. The channel's sentinel for a closed
-    /// stdin is `None` (see [`ConsoleRequest::Prompt`]), and pressing Enter never means
-    /// that; quitting is `Ctrl-C` (the flag below) or `/quit` (a line like any other).
+    /// 空草稿作为**一个空行**发出去。通道对「stdin 关了」的哨兵是 `None`（见
+    /// [`ConsoleRequest::Prompt`]），而敲 Enter 从来不是那个意思；退出是 `Ctrl-C`（下面那个
+    /// 标志）或 `/quit`（一行普通输入）。
     ///
-    /// With **no line being read** — a turn in flight, or a one-shot `discuss`, which
-    /// never asks for one — Enter does nothing at all rather than throwing the draft
-    /// away: the loop asks for a line when it is ready for one (spec §6), and until
-    /// then that draft is the only copy of what the user typed.
+    /// 在**没有行被读**的时候 —— 一个回合在飞，或者一次性的 `discuss`，后者从不索要一行
+    /// —— Enter 干脆什么都不做，而不是把草稿扔掉：循环在准备好接一行的时候才要一行
+    /// （spec §6），在那之前那份草稿是用户打的东西的唯一副本。
     fn submit(&mut self) {
-        // A replay is not a conversation: `Enter` must not fire a turn into the middle
-        // of history. The draft stays exactly where it is, and the key is simply not
-        // the submit it looks like (`spec` §3).
+        // 重放不是一场对话：`Enter` 不许往历史中间打出一个回合。草稿原封不动留在那儿，而
+        // 这个键就是不是它看起来的那个提交（`spec` §3）。
         if self.replay.is_some() {
             return;
         }
@@ -2276,19 +2079,17 @@ impl TuiState {
         let _ = reply.send(Some(line));
     }
 
-    /// The `/` menu as the draft calls for it right now, or `None` when there is
-    /// nothing to offer.
+    /// 此刻草稿所要求的那个 `/` 菜单，没什么可提供时是 `None`。
     ///
-    /// Derived, never stored: the draft and the loop's catalog are the whole input.
-    /// Nothing is shown while a question is up, because a question owns the keyboard
-    /// — a menu would be offering keys that answer something else (spec §9).
+    /// 推出来的，从不保存：草稿与循环的目录就是全部输入。有问题立着时什么都不显示，因为
+    /// 问题占着键盘 —— 菜单会提供一些回答别的东西的键（spec §9）。
     fn slash_menu(&self) -> Option<SlashMenu> {
         if self.pending.is_some() || self.slash.dismissed {
             return None;
         }
         let token = self.editor.slash_token()?;
-        // Filter on case, but offer the name as it is catalogued: `/Ask` finds
-        // `ask-matt`, and Tab writes the spelling the loop will recognise.
+        // 按大小写过滤，但提供的是目录里的那个名字：`/Ask` 找得到 `ask-matt`，而 Tab 写出
+        // 循环会认的那个拼法。
         let typed = token.prefix.to_lowercase();
         let entries: Vec<(String, String)> = self
             .catalog
@@ -2306,7 +2107,7 @@ impl TuiState {
         })
     }
 
-    /// Move the highlight by `delta`, wrapping at both ends.
+    /// 把高亮移动 `delta`，两端回绕。
     fn menu_move(&mut self, delta: isize) {
         let Some(menu) = self.slash_menu() else {
             return;
@@ -2314,18 +2115,17 @@ impl TuiState {
         let len = menu.entries.len() as isize;
         self.slash.selected = Some(match menu.selected {
             Some(at) => (at as isize + delta).rem_euclid(len) as usize,
-            // Nothing was highlighted: `↓` takes the first row and `↑` the last, so the
-            // arrows walk the list in the order it is drawn.
+            // 什么都没被高亮：`↓` 拿第一行、`↑` 拿最后一行，于是方向键按它被画出来的顺序走过
+            // 列表。
             None if delta > 0 => 0,
             None => (len - 1) as usize,
         });
         self.slash.prefix = menu.prefix;
     }
 
-    /// Fill the highlighted name into the draft.
+    /// 把高亮的那个名字填进草稿。
     ///
-    /// Does nothing when nothing is highlighted — a bare `/` is a list to look at, not
-    /// a choice that has been made.
+    /// 什么都没高亮时什么都不做 —— 裸 `/` 是一份用来看的列表，不是已经做出的选择。
     fn menu_accept(&mut self) {
         let Some(menu) = self.slash_menu() else {
             return;
@@ -2337,8 +2137,8 @@ impl TuiState {
         if !self.editor.complete_slash(&name) {
             return;
         }
-        // The remembered prefix moves with the draft, or the next sync would read the
-        // fill-in as a change and reopen what this just closed.
+        // 记住的前缀随草稿一起走，否则下一次同步会把这次补全读成一次变化，并把刚刚关掉的
+        // 东西重新打开。
         self.slash.prefix = self
             .editor
             .slash_token()
@@ -2348,11 +2148,10 @@ impl TuiState {
         self.slash.dismissed = true;
     }
 
-    /// Fold the draft's current token into the menu's remembered selection.
+    /// 把草稿当前的 token 收进菜单记住的那个选择里。
     ///
-    /// A prefix that changed is a different menu: the highlight starts over — on the
-    /// first match once a name has been typed, on nothing at all while the token is
-    /// just a slash — and an `Esc` that closed the old one stops applying.
+    /// 变了的前缀是另一个菜单：高亮从头开始 —— 打过名字之后落在第一个匹配上，而 token 只是
+    /// 一个斜杠时落在什么都不高亮上 —— 而那次关掉旧菜单的 `Esc` 不再作数。
     fn sync_menu(&mut self) {
         let prefix = self
             .editor
@@ -2366,11 +2165,10 @@ impl TuiState {
         }
     }
 
-    /// Answer a question with a keypress.
+    /// 用一个按键回答一个问题。
     ///
-    /// The loop's questions have their own vocabularies, and an unrecognised key
-    /// falls back to the non-acting answer, so a stray character can never allow a
-    /// write. The renderer's own questions take `y` (or Enter) and nothing else.
+    /// 循环的问题有各自的词汇表，而认不出来的键退回到那个不起作用的答案，所以一个乱按的
+    /// 字符永远无法批准一次写入。渲染器自己的问题只认 `y`（或 Enter），别的都不认。
     fn answer_key(&mut self, key: Key) {
         let Some(pending) = self.pending.take() else {
             return;
@@ -2378,16 +2176,16 @@ impl TuiState {
         self.answer_pending(pending, key);
     }
 
-    /// The body of [`TuiState::answer_key`], for the caller that already holds the
-    /// question — the pointer path, which has to inspect it before answering it.
+    /// [`TuiState::answer_key`] 的主体，给已经拿着那个问题的调用方 —— 指针那条路，它在回答
+    /// 之前得先看看它。
     fn answer_pending(&mut self, pending: Pending, key: Key) {
         match pending {
             Pending::Loop { reply, .. } => {
                 let answer = match key {
                     Key::Char('y') => Answer::Allow,
                     Key::Char('a') => Answer::AlwaysAllow,
-                    // Anything else is the non-acting reading: a stray character can
-                    // never allow a write (spec §9).
+                    // 别的任何东西都是不起作用的那种读法：一个乱按的字符永远无法批准一次写入
+                    // （spec §9）。
                     _ => Answer::Deny,
                 };
                 let _ = reply.send(answer);
@@ -2403,32 +2201,29 @@ impl TuiState {
                     self.editor.clear();
                 }
             }
-            // Yes quits; every other reachable key is the safe answer — "no" — and
-            // so is `Esc`, which never gets here (票 06 §2).
+            // yes 就退出；别的任何够得到的键都是安全的那一个答案 —— 「不」—— `Esc` 也是，
+            // 它从不到这里来（票 06 §2）。
             Pending::Exit => {
                 if agrees(key) {
                     self.quit = true;
                 }
             }
-            // Unreachable: `key` routes a questionnaire to `questionnaire_key`
-            // before this, because it answers to a wider keyboard. Dropping it
-            // here would refuse the tool, so it is only kept to keep the match
-            // total.
+            // 到不了：`key` 在到这之前就把问卷路由给 `questionnaire_key` 了，因为问卷认的
+            // 键盘更宽。在这里丢掉它会拒掉那个工具，所以它只为了让 match 保持穷尽而留着。
             Pending::Questionnaire(_) => {}
         }
     }
 
-    /// What `Esc` means for a question: the non-acting answer, or nothing at all
-    /// when the question was this renderer's own.
+    /// 对一个问题，`Esc` 是什么意思：不起作用的那个答案；问题是这个渲染器自己提的时，
+    /// 什么都不做。
     fn decline(&mut self, pending: Pending) {
         match pending {
             Pending::Loop { reply, .. } => {
                 let _ = reply.send(Answer::Deny);
             }
-            // A questionnaire belongs to a run, so `Esc` while one is up is the
-            // cancel gesture and never reaches here (spec §19). If it ever did,
-            // dropping the sender is the honest "no answer". The exit confirmation
-            // is the renderer's own and `Esc` is its safe answer: decline, stay in.
+            // 问卷属于一次运行，所以它立着时的 `Esc` 是取消手势，从不到这里来（spec §19）。
+            // 万一真来了，丢掉发送端就是诚实的「没有答案」。退出确认是渲染器自己的，而 `Esc`
+            // 是它的安全答案：拒绝，留在里面。
             Pending::Questionnaire(_)
             | Pending::Paste { .. }
             | Pending::ClearDraft
@@ -2437,16 +2232,14 @@ impl TuiState {
     }
 
     fn status_line(&self, width: u16) -> String {
-        // A replay speaks for itself: it temporarily replaces the hint set with its
-        // own progress, and there is no exit hint to give — `Ctrl-D` is ignored and
-        // the exit `Ctrl-C` may or may not perform is not a hint a person needs
-        // (`spec` §4).
+        // 重放自己会说话：它临时用自己的进度替换掉提示集合，而且没有退出提示可给 ——
+        // `Ctrl-D` 被忽略，而退出那个 `Ctrl-C` 可能做、也可能不做的事，不是人需要的提示
+        // （`spec` §4）。
         if let Some(replay) = &self.replay {
             return wording::history_progress_line(replay.next, replay.events.len(), width);
         }
-        // The hints describe what the keyboard does *now*. With no line being read —
-        // a turn in flight, or a one-shot `discuss` — `enter 发送` would be a promise
-        // this session does not keep (spec §6).
+        // 提示说的是键盘*现在*干什么。没有行被读的时候 —— 一个回合在飞，或者一次性的
+        // `discuss` —— `enter 发送` 会是一个这个会话兑现不了的承诺（spec §6）。
         if self.prompt_reply.is_some() {
             wording::status_line(self.busy(), width)
         } else {
@@ -2454,11 +2247,10 @@ impl TuiState {
         }
     }
 
-    /// How many content rows the bottom block wants this frame.
+    /// 底部块这一帧要多少内容行。
     ///
-    /// The resident editor's draft decides it normally; while a questionnaire owns
-    /// the input area, the questionnaire does — that is what makes the bottom block
-    /// grow to hold the question and its options (spec §19).
+    /// 平常由常驻编辑器的草稿决定；问卷占着输入区时由问卷决定 —— 那正是底部块会长高到装下
+    /// 问题与它的选项的原因（spec §19）。
     fn bottom_rows(&self, area: Rect) -> u16 {
         match self.questionnaire() {
             Some(questionnaire) => questionnaire_lines(
@@ -2472,15 +2264,12 @@ impl TuiState {
     }
 }
 
-/// One question's rows: its header, its text, its numbered options, and the line
-/// an answer is typed on.
+/// 一个问题的那些行：它的表头、它的文字、它编号的选项，以及一行用来打答案的地方。
 ///
-/// The length of this is what [`TuiState::bottom_rows`] asks the layout for, so
-/// it is the **full** list; the painter clips and scrolls it through
-/// [`questionnaire_window`]. The options are numbered for reading only — the
-/// decided keyboard has no digit keys — and a recommended option gets a display
-/// badge while its underlying label, the value the answer carries, is left
-/// untouched (spec §7).
+/// 它的长度正是 [`TuiState::bottom_rows`] 向排版要的东西，所以它是**完整**的那份列表；
+/// 画家通过 [`questionnaire_window`] 裁剪并滚动它。选项的编号只是给读的 —— 定下来的键盘
+/// 没有数字键 —— 而一个推荐选项会拿到一个展示用的小标记，它底下的标签（也就是答案携带的
+/// 那个值）则原样不动（spec §7）。
 fn questionnaire_lines(
     question: &UserQuestion,
     draft: &QuestionDraft,
@@ -2492,14 +2281,11 @@ fn questionnaire_lines(
     rows
 }
 
-/// The rows of one question that fit in `height`, scrolling the option window so
-/// the highlighted option is always visible (spec §7).
+/// 一个问题在 `height` 行内装得下的那些行，滚动选项窗口好让高亮的选项始终可见（spec §7）。
 ///
-/// The header and the question text are pinned: they say what is being asked, so
-/// losing them to a scroll would make the options unreadable. The typed-answer
-/// line is pinned at the bottom for the same reason. The options in between are
-/// the window, and it follows the highlight: moving down past the clip scrolls
-/// the tail into view instead of leaving the highlight off screen.
+/// 表头与问题文本是钉住的：它们说在问什么，把它们滚掉会让选项变得读不懂。打答案的那一行
+/// 出于同样的理由钉在底部。中间那些选项就是窗口，它跟着高亮走：往下越过裁剪线时，滚出来
+/// 的是尾部，而不是把高亮留在屏幕外。
 fn questionnaire_window(
     question: &UserQuestion,
     draft: &QuestionDraft,
@@ -2513,9 +2299,8 @@ fn questionnaire_window(
         rows.push(custom);
         return rows;
     }
-    // The prefix and the answer line are reserved; whatever is left is the
-    // window. A degenerate terminal with no room for either simply shows the
-    // prefix, which is the part that must not be lost.
+    // 前缀与答案行是预留的；剩下多少就是窗口。一个连这两样都没地方的退化终端干脆只显示
+    // 前缀，那是绝不能丢掉的那部分。
     let room = height.saturating_sub(prefix.len() + 1);
     let start = option_window_start(draft.highlight, options.len(), room);
     let mut rows = prefix;
@@ -2525,9 +2310,8 @@ fn questionnaire_window(
     rows
 }
 
-/// The first option to draw so that `highlight` is inside a window of `room`
-/// options. The list does not wrap: once the highlight is past the window the
-/// window follows it one row at a time.
+/// 为了让 `highlight` 落在一个 `room` 个选项的窗口里，第一个该画的选项。列表不回绕：一旦
+/// 高亮越过窗口，窗口就一行一行地跟着它。
 fn option_window_start(highlight: usize, count: usize, room: usize) -> usize {
     if room == 0 || count <= room {
         return 0;
@@ -2540,12 +2324,10 @@ fn option_window_start(highlight: usize, count: usize, room: usize) -> usize {
     start.min(count - room)
 }
 
-/// Split one question into its pinned prefix (header and text), its option rows,
-/// and the typed-answer row.
+/// 把一个问题的钉住部分（表头与文本）、选项行、以及打答案的那一行拆开。
 ///
-/// The split exists for the scrolling window; the composition of each row lives
-/// here once, so the full list and the window cannot disagree about what an
-/// option reads as.
+/// 拆开是为了那个滚动的窗口；每一行怎么组成只在这里写一次，这样完整列表与窗口不会对
+/// 「一个选项读起来是什么样」有分歧。
 fn questionnaire_parts(
     question: &UserQuestion,
     draft: &QuestionDraft,
@@ -2584,8 +2366,8 @@ fn questionnaire_parts(
             (false, true) => "●",
             (false, false) => "○",
         };
-        // The cursor says which option `Enter`/`Space` would confirm; the marker
-        // says which are picked. They are different facts and can differ.
+        // 光标说的是 `Enter`/`Space` 会确认哪个选项；标记说的是哪些被选中了。这是两个不同的
+        // 事实，可以不一致。
         let cursor = if highlighted { ">" } else { " " };
         let text = format!(
             "{cursor} {marker} {}",
@@ -2620,57 +2402,49 @@ fn questionnaire_parts(
     (prefix, options, custom)
 }
 
-/// Draw one frame of the shell.
+/// 画一帧外壳。
 ///
-/// This is the seam the layout is tested through: a state goes in, a fixed-size
-/// frame comes out, and no terminal is involved (spec §2).
+/// 这是排版被测试所通过的接缝：一个状态进去，一帧固定尺寸的画出来，不涉及任何终端
+/// （spec §2）。
 pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let area = frame.area();
-    // The pointer is answered between frames, and opening a detail needs the width
-    // this frame was drawn at.
+    // 指针是在两帧之间被回应的，而打开详情需要这一帧被画出来时的宽度。
     state.area = area;
-    // Whatever the last frame recorded is what the pointer could hit; this frame
-    // starts from nothing and records only what it really paints (票 04 §1).
+    // 上一帧记下来的才是指针可能打中的；这一帧从什么都没有开始，只记它真画出来的东西
+    // （票 04 §1）。
     state.regions.clear();
     if layout::below_minimum(area) {
-        // Nothing is drawn that a click could land on.
+        // 什么都不画，好让点击无处可落。
         state.indicator = None;
         state.detail_rect = None;
         draw_too_small(frame, area);
         return;
     }
-    // The draft's own height decides how much room the input takes: it grows with
-    // the text up to the layout's cap and then scrolls internally (spec §2). A
-    // questionnaire replaces that with its own height, so the input area grows to
-    // hold the question (spec §19).
+    // 草稿自己的高度决定输入区占多少位置：它随文字长高、直到排版的上限，然后就地滚动
+    // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）。
     let content_rows = state.bottom_rows(area);
     let panes = layout::plan(area, content_rows);
     draw_shell(frame, &panes, state, area);
     draw_transcript(frame, &panes, state);
     draw_status(frame, &panes, state);
     let anchor = draw_bottom(frame, &panes, state);
-    // The `/` menu floats over the main column, under the cursor it belongs to — and
-    // under a question, which owns the keyboard and so has no menu to offer
-    // (spec §6, §9).
+    // `/` 菜单浮在主列之上、在它所属的那个光标下面 —— 也浮在问题之下，因为问题占着键盘、
+    // 于是没有菜单可提供（spec §6、§9）。
     if let Some(anchor) = anchor {
         draw_menu(frame, &panes, state, anchor);
     }
-    // Last, so it is on top of the transcript it is asking about.
+    // 最后画，所以它在它所问的那条转录之上。
     draw_modal(frame, &panes, state);
-    // The detail overlay goes over all of it. It cannot be up at the same time as a
-    // question — opening one needs an idle keyboard — so the order between the two
-    // is a formality (票 02 §4).
+    // 详情覆盖层盖在所有这一切之上。它不可能与一个问题同时立着 —— 打开它需要一个空闲的
+    // 键盘 —— 所以两者之间的顺序只是形式（票 02 §4）。
     draw_detail(frame, &panes, state);
 }
 
-/// The parts of the shell that are not regions of their own: the frame, the divider
-/// column, the sidebar and the main column's three rules.
+/// 外壳里那些不是自己一块区域的部件：外框、分隔列、左栏，以及主列的三条分隔线。
 ///
-/// The order is the painting order and it is why the junctions come out whole: the
-/// frame first, then the divider down the sidebar's right edge, then the sidebar —
-/// whose tab bar writes `├` and `┤` over the two of them — and last the main
-/// column's rules, which write `├` into the divider column at their own rows
-/// (spec §1).
+/// 这个顺序就是绘制顺序，也正是交叉点能画完整的原因：先外框，然后沿左栏右边缘往下画的
+/// 分隔列，然后是左栏 —— 它的页签条在两者之上写出 `├` 与 `┤` —— 最后是主列的分隔线，
+/// 它们在各自的行上往分隔列里写 `├`（spec §1）。
 fn draw_shell(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -2680,21 +2454,18 @@ fn draw_shell(
     draw_border(frame, area);
     draw_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
-    // The rules above the status row, the input and the hints. Left of them is the
-    // divider — or, with no sidebar, the frame's own left border — and right of them
-    // the frame's right border.
+    // 状态行、输入区与提示行各自上面那条分隔线。它们左边是分隔列 —— 没有左栏时就是外框
+    // 自己的左边框 —— 右边是外框的右边框。
     let right = area.right().saturating_sub(1);
     for y in [panes.status.y - 1, panes.input.y - 1, panes.hints.y - 1] {
         paint_rule(frame, y, panes.divide.unwrap_or(area.x), right);
     }
 }
 
-/// One horizontal rule across a row, from `left` to `right` inclusive, with `├` and
-/// `┤` at the two ends so it joins whatever borders it runs between rather than
-/// crossing them (spec §1).
+/// 一行横贯某个行、从 `left` 到 `right`（含两端）的分隔线，两端带 `├` 与 `┤`，好让它接到
+/// 它所处的那两条边框上，而不是横穿过去（spec §1）。
 ///
-/// The main column's rules and the tab bar's are the same stroke; they differ only in
-/// the columns they span.
+/// 主列的分隔线与页签条用的是同一笔；它们只在跨的列上不同。
 fn paint_rule(frame: &mut ratatui::Frame, y: u16, left: u16, right: u16) {
     let style = Style::default().fg(Color::DarkGray);
     let buffer = frame.buffer_mut();
@@ -2705,11 +2476,10 @@ fn paint_rule(frame: &mut ratatui::Frame, y: u16, left: u16, right: u16) {
     buffer[(right, y)].set_symbol("┤").set_style(style);
 }
 
-/// The column the sidebar and the main column share: one vertical rule from the
-/// frame's top border to its bottom one, with the frame's own junctions at the ends
-/// rather than a second border (spec §1).
+/// 左栏与主列共用的那一列：一条从外框上边框到底边框的竖线，两端用外框自己的交叉符，
+/// 而不是再来一条边框（spec §1）。
 ///
-/// The tab bar paints its own junctions over it at the two rows its rules occupy.
+/// 页签条在它占的那两行上把各自的交叉符画在它上面。
 fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) {
     let Some(divide) = panes.divide else {
         return;
@@ -2728,12 +2498,10 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     }
 }
 
-/// The sidebar, top to bottom: the identity, the tab bar, and the page the tab
-/// selects (spec §3). One function per part, because each has its own reason to change
-/// — the ladder, the tabs' behaviour, and the page's content.
+/// 左栏，自上而下：身份、页签条，以及页签选中的那一页（spec §3）。每个部件一个函数，
+/// 因为每个都有自己会变的理由 —— 那条阶梯、页签的行为，以及页面的内容。
 ///
-/// Where the sidebar is and how tall its parts are is the layout's call, never a size
-/// test repeated here.
+/// 左栏在哪、它的各部件多高，是排版的事，绝不在这里重写一遍尺寸判断。
 fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
         return;
@@ -2743,25 +2511,21 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
     draw_sidebar_page(frame, panes, state);
 }
 
-/// The sidebar's identity: the mark, the text identity, or nothing at all
-/// (spec §3).
+/// 左栏的身份：标记、文字身份，或者什么都没有（spec §3）。
 ///
-/// Which of the three is the layout's decision — [`layout::SidebarKind`] — so the
-/// ladder has one home. The mark is centred in the wide rung, which is the mark's own
-/// width plus a column of air on each side. Nothing here moves: the mark's falling dash and
-/// the text identity's were both turned off in 票 08 (`.scratch/tui-input-pulse/spec.md`
-/// §2), and the whole of the animation in this interface now lives in the prompt's colour.
+/// 三者选哪一个是排版的决定 —— [`layout::SidebarKind`] —— 于是那条阶梯只有一个家。标记在
+/// 宽档里居中，那档宽度就是标记自己的宽度加左右各一列留白。这里什么都不动：标记的下落
+/// 短横与文字身份的那一半都在票 08 关掉了（`.scratch/tui-input-pulse/spec.md` §2），这个
+/// 界面里全部的动画如今都活在提示符的颜色里。
 fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, sidebar: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     match panes.sidebar_kind {
         layout::SidebarKind::Mark => {
-            // The mark is 38 columns and the wide rung is 40, so it sits centred
-            // with a column of air on each side; a rung narrower than the mark never
-            // asks for these rows at all (spec §2).
+            // 标记是 38 列，而宽档是 40 列，所以它居中时左右各留一列白；比标记还窄的档位
+            // 根本不会要这几行（spec §2）。
             let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
-            // `None`: the mark does not move (票 08). The falling dash is still here — its
-            // frames are unit-tested next to it — but the maintainer turned it off, and the
-            // left column is back to the still mark it was before any of this.
+            // `None`：标记不动（票 08）。下落短横还在这里 —— 它的帧就在它旁边有单元测试
+            // —— 但维护者把它关了，左栏回到了这一切之前那个静止的标记。
             let lines: Vec<Line<'static>> = mark_lines(None)
                 .into_iter()
                 .map(|(text, color)| Line::from(Span::styled(text, Style::default().fg(color))))
@@ -2778,9 +2542,8 @@ fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, si
             );
         }
         layout::SidebarKind::Text => {
-            // The still identity: the narrow rung's half of the falling dash went off screen
-            // with the mark's (票 08). `wording::identity_falling` is kept beside it for when
-            // the idea comes back.
+            // 静止的身份：窄档那一半下落短横随标记的一起退出了屏幕（票 08）。
+            // `wording::identity_falling` 就留在它旁边，等那个想法回来。
             let identity = wording::identity();
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(identity, dim))),
@@ -2791,11 +2554,10 @@ fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, si
     }
 }
 
-/// The page the tab selects (spec §3).
+/// 页签选中的那一页（spec §3）。
 ///
-/// The rows come from the layout's height ladder, so a squeezed sidebar loses fields
-/// from the tail rather than clipping the three readings that matter (spec §2). A page
-/// that is not built yet says so in one row rather than showing made-up data.
+/// 这些行来自排版的高度阶梯，所以被压扁的左栏是从尾部丢字段，而不是把三个要紧的读数裁掉
+/// （spec §2）。还没做出来的页面用一行说出来，而不是显示编出来的数据。
 fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     let Some(page) = panes.sidebar_page else {
         return;
@@ -2811,18 +2573,15 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     frame.render_widget(Paragraph::new(rows), page);
 }
 
-/// The sidebar's tab bar: two rules with the labels between them, the selected one
-/// bright (spec §3, `.scratch/todo-and-modes/spec.md` §4).
+/// 左栏的页签条：两条分隔线、标签夹在中间，选中的那个更亮（spec §3，
+/// `.scratch/todo-and-modes/spec.md` §4）。
 ///
-/// Both rules start at the frame's left border and end at the divider column, so the
-/// sidebar reads as one compartment rather than as a block of its own. Each label
-/// records a hit rectangle as it is painted: the pointer can only hit what is really
-/// there, and the rule that fills the rest of the row is not a tab.
+/// 两条线都从外框左边框开始、到分隔列结束，于是左栏读起来是一个隔间，而不是自成一体的
+/// 一块。每个标签在画出来时记下一个命中矩形：指针只能打中真在那里的东西，而填满这一行
+/// 其余部分的线不是页签。
 ///
-/// The label list is built rather than written out because `todo` is conditional —
-/// it is in the bar only once the session has a list — and everything else follows
-/// from it: the separators, the fill and the hit rectangles are all derived from the
-/// same list, so a label that is not drawn cannot be clicked.
+/// 标签列表是建出来的而不是写死的，因为 `todo` 是有条件的 —— 会话有了列表它才在条上 ——
+/// 别的都从它推出来：分隔符、填充与命中矩形都从同一份列表来，所以没被画出来的标签点不到。
 fn draw_tab_bar(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -2839,8 +2598,8 @@ fn draw_tab_bar(
             panes.divide.unwrap_or(sidebar.right()),
         );
     }
-    // The labels, one separator between them and the rest of the row filled with a
-    // rule, so the row reads as a bar rather than as stranded words.
+    // 标签、之间一个分隔符，这一行其余部分用线填满，于是这一行读起来是一根条，而不是几个
+    // 落单的词。
     let mut entries = vec![(Tab::Usage, wording::TAB_USAGE)];
     if state.todo.visible() {
         entries.push((Tab::Todo, wording::TAB_TODO));
@@ -2879,12 +2638,11 @@ fn draw_tab_bar(
     frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
 }
 
-/// The status row: which model, which mode, and how full the window is (spec §5).
+/// 状态行：哪个模型、哪个模式，以及窗口有多满（spec §5）。
 ///
-/// The three segments are painted, not clickable: nothing on this row is a control,
-/// so nothing here records a hit region. The width ladder lives in
-/// [`wording::status_row`]; the row itself is always drawn, and a width too narrow
-/// even for its last rung is truncated rather than dropped (spec §2).
+/// 三段是画出来的，不可点：这一行上没有任何东西是控件，所以这里什么都不记命中区域。宽度的
+/// 阶梯住在 [`wording::status_row`] 里；这一行本身总是画出来的，连它最后一档都容不下的宽度
+/// 会被截断而不是丢掉（spec §2）。
 fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
     let share = wording::context_share(state.panel.last_input(), state.facts.context_window);
     let width = panes.status.width as usize;
@@ -2903,53 +2661,45 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
     );
 }
 
-/// Which sidebar page is showing (spec §3).
+/// 正在显示左栏的哪一页（spec §3）。
 ///
-/// Clicked, never keyed: `Tab` belongs to the `/` menu and `Shift+Tab` to the mode
-/// cycle,
-/// and this repo does not enable the keyboard-enhancement protocol. A page that is
-/// not built yet shows [`wording::tab_placeholder`] rather than made-up data.
+/// 点出来的，从不给键位：`Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环，而这个仓库不启用
+/// keyboard-enhancement 协议。还没做出来的页面显示 [`wording::tab_placeholder`]，而不是编
+/// 出来的数据。
 ///
-/// The accepted cost of that: on a placeholder page the session's readings are not on
-/// screen at all, so the status row's `上下文 n%` is the only one left. It is not a
-/// bug — there is no second copy of the numbers to fall back on — and the alternative
-/// (a keyboard route through the tabs) is not available here anyway.
+/// 接受它的代价是：在占位页上，会话的读数根本不在屏幕上，于是状态行的 `上下文 n%` 是唯一
+/// 剩下的那个。这不是 bug —— 没有第二份数字可以退回 —— 而另一条路（用键盘走页签）在这里
+/// 本来也不通。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
-    /// The session's readings: what the old information panel held.
+    /// 会话的读数：旧信息面板装着的那些。
     Usage,
-    /// The agent's todo list, and the only tab that is not always in the bar: it
-    /// appears the first time a main session submits a list and stays for the rest
-    /// of the session (`.scratch/todo-and-modes/spec.md` §4).
+    /// agent 的待办列表，也是唯一不总在条上的页签：主会话第一次提交一次列表时它出现，此后
+    /// 整个会话都在（`.scratch/todo-and-modes/spec.md` §4）。
     Todo,
-    /// The call trace. Not built yet.
+    /// 调用轨迹。还没做。
     Trace,
-    /// The files this session touched. Not built yet.
+    /// 这个会话碰过的文件。还没做。
     Files,
 }
 
-/// The overlay a question is asked in (spec §9).
+/// 问题被问出来时所在的覆盖层（spec §9）。
 ///
-/// It sits in the middle of the main column so the question cannot be outrun by new
-/// output, and it is **not** part of the transcript: the stream still carries the
-/// `PermissionAsked` block for anyone reading back. Centring it on the main column
-/// rather than the whole terminal keeps the sidebar's readings visible while a
-/// question is up (spec §1). It owns the pointer while it is up, so the "back to
-/// bottom" rectangle is dropped.
+/// 它坐在主列中间，这样问题不会被新输出甩在后面，而且它**不是**转录的一部分：流上仍然带着
+/// `PermissionAsked` 块，给回看的人。把它居中在主列而不是整个终端，能让左栏的读数在问题
+/// 立着时仍然可见（spec §1）。它立着的时候占着指针，所以「回到末尾」那个矩形被丢掉。
 fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let Some(modal) = state.pending.as_ref().and_then(Pending::modal) else {
         return;
     };
-    // From here on a question is up, and the overlay covers the indicator: a click
-    // where it used to be must not act, even if the overlay itself turns out to have
-    // no room to be drawn.
+    // 从这里开始问题就立着了，而覆盖层盖住指示器：它原来所在的位置上的一次点击不许起作用，
+    // 哪怕覆盖层自己最后发现没有地方可画。
     state.indicator = None;
     let inner = panes.modal_width().saturating_sub(2) as usize;
     if inner == 0 {
         return;
     }
-    // The rows, in order. Anything long wraps onto another line rather than losing
-    // the keys; the overlay still leaves the middle block's own borders showing.
+    // 那些行，按顺序。长的一律折到下一行，而不是丢掉键；覆盖层仍然把中间块自己的边框露出来。
     let rows_available = panes.main.height.saturating_sub(2) as usize;
     if rows_available == 0 {
         return;
@@ -2958,26 +2708,24 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     for row in &mut rows {
         row.style = Style::default().add_modifier(Modifier::BOLD);
     }
-    // What the action is, then the call itself: the sentence a reader can act on
-    // first, the exact arguments under it.
-    // What the call is for, then the call as it will run: orientation, then the thing
-    // being approved.
+    // 这个动作是什么，然后是调用本身：先给出读的人能据以行动的那句话，再给出它下面确切的
+    // 参数。
+    // 这次调用是为了什么，然后是它将要跑起来的样子：先给方向，再给正在被批准的东西。
     if let Some(description) = modal.description.as_deref() {
         rows.extend(pane::wrap_text(description.trim(), inner));
     }
     if let Some(detail) = modal.detail.as_deref() {
         rows.extend(pane::wrap_text(detail.trim(), inner));
     }
-    // The button row is budgeted first: it is the one row a question cannot do
-    // without. The blank that sets it apart costs a row too, but only when there is
-    // both room for it and something above to separate it from.
+    // 按钮行的预算最先分：它是问题少不掉的那一行。把它隔开的那条空行也要花掉一行，但只在既有
+    // 地方放它、上面又有东西可隔的时候。
     let separator = usize::from(rows_available >= 3 && !rows.is_empty());
     rows.truncate(rows_available.saturating_sub(1 + separator));
     if separator == 1 {
         rows.push(Line::default());
     }
-    // The body is what is above the button row, and the buttons take the last row the
-    // overlay will have, so both are settled before the rectangle is asked for.
+    // 主体是按钮行上面的那些，而按钮拿走覆盖层会有的最后一行，所以两者都在要矩形之前就定下来
+    // 了。
     let body_rows = rows.len() as u16;
     rows.push(Line::default());
     let buttons = modal.choices;
@@ -2992,9 +2740,8 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             .border_style(Style::default().fg(Color::Yellow)),
         area,
     );
-    // The body and the button row are painted apart so the buttons' columns can be
-    // recorded exactly: the question owns them, and a click has to land on the one it
-    // looks like it landed on (票 04 §3).
+    // 主体与按钮行分开画，这样按钮的列能被准确记下来：问题占着它们，而一次点击必须落在它看
+    // 起来落在的那个按钮上（票 04 §3）。
     let inner_area = layout::inner(area);
     let body = Rect::new(
         inner_area.x,
@@ -3008,9 +2755,8 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
             .alignment(Alignment::Center),
         body,
     );
-    // The button row is centred **by its own width**, not by the body's: the body is
-    // centred text and the buttons are a shorter line, so inheriting the body's inset
-    // left them stranded on the left (2026-09-23, user report).
+    // 按钮行是按**它自己的宽度**居中的，不是按主体的：主体是居中的文本，而按钮是更短的一行，
+    // 继承主体的内缩会让它们卡在左边（2026-09-23，用户报告）。
     let (line, regions) = buttons_row(buttons, &modal.actions);
     let buttons_width = regions.iter().map(|(start, width, _)| start + width).max();
     let buttons_area = Rect::new(
@@ -3027,8 +2773,7 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         .regions
         .cells
         .extend(regions.into_iter().filter_map(|(start, width, action)| {
-            // A button wider than the overlay is not clickable past its border: the
-            // part that was not drawn has no region (票 04 §3).
+            // 比覆盖层还宽的按钮，越过边框的部分点不到：没被画出来的那部分没有区域（票 04 §3）。
             let x = buttons_area.x + start as u16;
             let room = buttons_area.right().saturating_sub(x).min(width as u16);
             (room > 0).then_some(Region {
@@ -3038,20 +2783,17 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         }));
 }
 
-/// The column something `width` columns wide starts at inside an area `room` wide, so
-/// that it is centred there.
+/// 一个 `width` 列宽的东西在一个 `room` 列宽的区域里从哪一列开始，好让它在其中居中。
 fn centred_inset(room: u16, width: Option<usize>) -> u16 {
     let width = width.unwrap_or(0).min(room as usize) as u16;
     room.saturating_sub(width) / 2
 }
 
-/// The keys that answer a question as one row of `(offset, width, action)` triples,
-/// where the offset is in **columns** from the start of that text and the width is
-/// the text's display width.
+/// 回答一个问题的那些键，做成一行 `(偏移, 宽度, 动作)` 三元组：偏移是从那段文字开头算的
+/// **列**数，宽度是那段文字的显示宽度。
 ///
-/// One `[y] 允许` per choice, three spaces between them: the same row the overlay has
-/// always drawn, now paired with what a click on it means, because who paints it and
-/// who hit-tests it must be one function or the two drift apart (票 04 §7).
+/// 每个选择一个 `[y] 允许`，之间三个空格：覆盖层一直画的就是这一行，如今配上点它意味着什么，
+/// 因为画它的人与给它做命中测试的人必须是同一个函数，否则两者会漂开（票 04 §7）。
 fn button_regions(
     choices: &[wording::Choice],
     actions: &[HitAction],
@@ -3063,8 +2805,8 @@ fn button_regions(
             offset += text_columns("   ");
         }
         let width = text_columns(&button_text(choice));
-        // The action list comes from the same place the choices do, so the two cannot
-        // disagree about which button means what (票 04 §7).
+        // 动作列表与选项来自同一个地方，所以两者不会对「哪个按钮是什么意思」有分歧
+        // （票 04 §7）。
         let action = actions.get(index).copied().unwrap_or(HitAction::Dismiss);
         regions.push((offset, width, action));
         offset += width;
@@ -3072,12 +2814,12 @@ fn button_regions(
     regions
 }
 
-/// One button's text, unchanged from what the overlay has always painted.
+/// 一个按钮的文字，与覆盖层一直画的完全一样。
 fn button_text(choice: &wording::Choice) -> String {
     format!("[{}] {}", choice.key, choice.label)
 }
 
-/// The button row as a styled line, and its clickable columns.
+/// 按钮行作为一行带样式的文本，以及它那些可点的列。
 fn buttons_row(
     choices: &[wording::Choice],
     actions: &[HitAction],
@@ -3097,12 +2839,11 @@ fn buttons_row(
     (Line::from(spans), button_regions(choices, actions))
 }
 
-/// Blank the wide glyph a floating box is about to draw over.
+/// 把浮动框即将画上去的那个宽字形涂成空白。
 ///
-/// A wide glyph owns two cells, and the cell after it is **skipped** when a frame is
-/// diffed to the terminal — so a border drawn on that second cell is silently dropped
-/// and the box loses a corner over anything that is not ASCII. Half a glyph cannot be
-/// drawn anyway: the glyph goes and the border stays whole.
+/// 一个宽字形占两个单元格，而它后面那个单元格在把帧差分给终端时会被**跳过** —— 于是画在第二
+/// 个单元格上的边框会被悄悄丢掉，框在任何非 ASCII 的东西上就少一个角。何况半个字形也画不
+/// 出来：字形让位，边框保持完整。
 fn blank_half_covered_glyphs(frame: &mut ratatui::Frame, area: Rect) {
     let buffer = frame.buffer_mut();
     let last = area.bottom().min(buffer.area.bottom());
@@ -3113,8 +2854,7 @@ fn blank_half_covered_glyphs(frame: &mut ratatui::Frame, area: Rect) {
     }
 }
 
-/// Everything a terminal below the minimum gets: one centred sentence saying so,
-/// rather than a crushed shell.
+/// 低于最小尺寸的终端会拿到的全部东西：一句话居中地说出来，而不是一副被压扁的外壳。
 fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
     let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
     frame.render_widget(
@@ -3125,8 +2865,7 @@ fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
-/// Frame a block: dim, so the border frames the content instead of competing with
-/// it.
+/// 给一个块围上外框：用暗色，好让边框把内容框起来，而不是跟它抢。
 fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     frame.render_widget(
         WidgetBlock::default()
@@ -3136,21 +2875,17 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
-/// The prompt's colour at one pulse frame (`.scratch/tui-input-pulse/spec.md` §2b).
+/// 在一个脉冲帧上提示符的颜色（`.scratch/tui-input-pulse/spec.md` §2b）。
 ///
-/// The maintainer's script, translated: the hue walks the wheel at 0.3 turns a second — a
-/// full revolution every 3.3 -- while the saturation breathes around 0.55 with an amplitude
-/// of 0.2 once every 2.1 seconds, and the value stays at 0.85 so the glyph never shouts.
-/// **It only walks while a run is in flight**: the frame comes from the loop's clock, which
-/// is armed then and not otherwise, and the counter is reset when a run ends, so a prompt at
-/// rest always wears frame 0's colour (票 09).
-/// The point of the breathing is exactly that: a hue change alone is a colour change, and a
-/// colour that also swells is a colour that reads as alive.
+/// 维护者的脚本，翻译过来的样子：色相以每秒 0.3 圈走过色环 —— 每 3.3 秒一整圈 —— 同时饱和
+/// 度在 0.55 上下呼吸，幅度 0.2、每 2.1 秒一次，而明度留在 0.85，好让这个字形永远不喊叫。
+/// **它只在一次运行在飞的时候走**：帧来自循环的时钟，那时才武装、别时不武装，而运行结束时
+/// 计数器复位，所以歇着的提示符永远穿帧 0 的颜色（票 09）。
+/// 呼吸的意义正在于此：只变色相就是换了个颜色，而一个还会胀缩的颜色，读起来才像活的。
 ///
-/// It is 24-bit colour, the one place in this interface that is not a 16-colour ANSI code —
-/// the prompt sits on the terminal's own background either way, and a hue that has to pick
-/// one of sixteen names would step visibly. The whole function is a pure function of the
-/// frame, so a test can say what frame 0 looks like without a terminal.
+/// 它是 24 位色，这个界面里唯一不是 16 色 ANSI 码的地方 —— 提示符两边都坐在终端自己的背景
+/// 上，而一个必须在十六个名字里挑一个的色相会看得见台阶。整个函数是帧的纯函数，所以测试
+/// 不必有终端就能说出帧 0 长什么样。
 fn prompt_colour(frame: u64) -> Color {
     let seconds = frame as f64 * PULSE_FRAME.as_secs_f64();
     let hue = (seconds * PROMPT_HUE_PER_SECOND) % 1.0;
@@ -3160,27 +2895,23 @@ fn prompt_colour(frame: u64) -> Color {
     Color::Rgb(red, green, blue)
 }
 
-/// How fast the prompt's hue walks the wheel, in turns per second. The maintainer's script
-/// stepped it 0.005 per 1/60 s, which is what these three constants are: the script's rates
-/// expressed in seconds, so the look survives a change of frame length.
+/// 提示符的色相走色环有多快，单位是每秒圈数。维护者的脚本每 1/60 秒走 0.005，这三个常量就是
+/// 那个：脚本的速率换成秒，这样换个帧长，样子还留得住。
 const PROMPT_HUE_PER_SECOND: f64 = 0.3;
 
-/// The saturation the prompt breathes around, how far it swings, and how fast it swings
-/// (radians per second: the script's 0.05 per 1/60 s).
+/// 提示符呼吸的中心饱和度、它摆多远，以及摆多快（每秒弧度：脚本里的每 1/60 秒 0.05）。
 const PROMPT_SATURATION: f64 = 0.55;
 const PROMPT_SATURATION_BREATH: f64 = 0.2;
 const PROMPT_BREATH_PER_SECOND: f64 = 3.0;
 
-/// The value (brightness) the prompt keeps: bright enough to read on a dark theme, dim
-/// enough not to glare on a light one.
+/// 提示符保持的明度（亮度）：在暗色主题上够亮、读得清，在亮色主题上够暗、不刺眼。
 const PROMPT_VALUE: f64 = 0.85;
 
-/// HSV to RGB, the way `colorsys.hsv_to_rgb` does it in the script this came from —
-/// including the truncation to 8 bits, so the same frame gives the same colour as the
-/// script did.
+/// HSV 转 RGB，按它来源那个脚本里 `colorsys.hsv_to_rgb` 的算法 —— 包括截到 8 位，这样同一帧
+/// 给出的颜色与脚本当年给出的一样。
 fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> (u8, u8, u8) {
-    // Each sixth of the wheel is one hue's rise and the next one's fall; `sector` is which
-    // sixth, `offset` is how far into it.
+    // 色环的每六分之一是一个色相升、下一个色相降；`sector` 是第几个六分之一，`offset` 是在
+    // 里面走了多远。
     let scaled = (hue.fract() * 6.0).rem_euclid(6.0);
     let sector = scaled.floor();
     let offset = scaled - sector;
@@ -3200,26 +2931,21 @@ fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> (u8, u8, u8) {
     (byte(red), byte(green), byte(blue))
 }
 
-/// The busiest answer the interface used to give to "is it working?", as a ring of
-/// colours — **kept, and deliberately off screen** (`.scratch/tui-input-pulse/spec.md`
-/// §2, 票 05).
+/// 界面对「它在工作吗？」曾经给过的最忙的一个答案，做成一圈颜色 —— **留着，而且刻意不在屏幕上**
+/// （`.scratch/tui-input-pulse/spec.md` §2，票 05）。
 ///
-/// Two versions of it ran on a real terminal and both were turned down: 12 frames of
-/// light/normal pairs at 100 ms read as *flickering*, and 6 light hues at 400 ms read as
-/// *abrupt* — a colour ring changes the whole mark at once, and the eye has nothing to
-/// follow between frames. What is on screen today is the dash falling in `fs-agent`
-/// (see [`mark_lines`]); the ring stays here because the user asked for the code to be
-/// kept rather than deleted, and because a colour signal is a reasonable thing to want
-/// again once there is a way to make it move rather than jump.
+/// 它有两个版本在真终端上跑过，两个都被否了：12 帧亮/普通成对、100 ms 一帧，读起来像*闪*；
+/// 6 个亮色相、400 ms，读起来像*生硬切换* —— 一圈颜色会把整个标记一次换掉，而眼睛在帧与帧
+/// 之间没有东西可跟。今天在屏幕上的是 `fs-agent` 里下落的那根短横（见 [`mark_lines`]）；
+/// 这圈颜色留在这里，因为用户要求把代码留着而不是删掉，也因为一旦有了让它动起来而不是跳过去
+/// 的办法，一个颜色信号是合理得会再想要的东西。
 ///
-/// **Every entry is a light variant, and that property is load-bearing**: one brightness
-/// is what a colour signal would need not to read as flicker. A test pins it, and another
-/// pins that nothing on screen wears this palette right now.
+/// **每一个条目都是亮色变体，这条性质是承重的**：一个颜色信号要读起来不像闪，就得只有一个
+/// 亮度。一个测试钉住它，另一个钉住现在屏幕上没有任何东西穿这套调色板。
 ///
-/// Six hues, walked in order round the wheel; frame 0 is the mark's own bright end, so a
-/// colour signal would leave the idle mark without a jump. Standard ANSI colours only:
-/// the mark sits on whatever theme the user already has, and a 24-bit value would be a
-/// colour that theme cannot answer.
+/// 六个色相，按顺序绕过色环；帧 0 是标记自己亮的那一端，这样一个颜色信号不会让空闲的标记挨
+/// 一次跳。只用标准 ANSI 颜色：标记坐在用户已经有的任何主题上，而一个 24 位的值会是那个主题
+/// 答不上来的颜色。
 pub const PULSE_PALETTE: [Color; 6] = [
     Color::LightMagenta,
     Color::LightBlue,
@@ -3229,54 +2955,45 @@ pub const PULSE_PALETTE: [Color; 6] = [
     Color::LightRed,
 ];
 
-/// One pulse frame: about sixteen a second, which is what a colour that walks the hue wheel
-/// needs to read as a rotation rather than as a series of jumps (`.scratch/tui-input-pulse/
-/// spec.md` §2b: the maintainer's own script ran at 60 fps and this is the same look at a
-/// coarser step). It is the frame length of **every** pulse-driven animation, so a re-armed
-/// falling dash would also step this fast.
+/// 一个脉冲帧：大约每秒十六帧，这是一个走色环的颜色要读起来像在旋转、而不是一串跳跃所需要的
+/// 速度（`.scratch/tui-input-pulse/spec.md` §2b：维护者自己的脚本跑在 60 fps，而这是同一个
+/// 样子、步长更粗）。它是**每一个**脉冲驱动的动画的帧长，所以重新武装的下落短横也会以这个
+/// 步频走。
 ///
-/// **The clock is armed only while a run is in flight** (票 09). 票 08 had it running always,
-/// on the reasoning that the prompt — the thing it colours — is on screen while nothing is
-/// running; the maintainer's own answer was that a colour moving under their hands while
-/// they type is noise, not life. So the prompt breathes while the agent works and holds its
-/// resting colour the rest of the time, and an idle session is back to three sources in the
-/// `select!` and no wake-ups at all.
+/// **这个时钟只在一次运行在飞的时候武装**（票 09）。票 08 让它一直跑，理由是提示符 —— 它上色
+/// 的那个东西 —— 在什么都没跑的时候也在屏幕上；维护者自己的回答是，一个在他们打字时手底下
+/// 动来动去的颜色是噪声、不是生命。于是提示符在 agent 工作时呼吸，其余时间保持它歇着的颜色，
+/// 而空闲的会话回到 `select!` 里的三个来源、一次唤醒都没有。
 const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
-/// The mark's hyphen: the column its cell starts at, and how wide that cell is.
+/// 标记的连字符：它的单元格从哪一列开始，以及那个单元格多宽。
 ///
-/// The mark spells `fs-agent` in eight glyph cells of four columns, separated by a blank
-/// column each (a label in [`wording::logo_lines`]; `all-blank columns: 4, 9, 14, …` of
-/// the 38-wide grid). The dash is the third cell, so its four columns are 10 to 13 and
-/// they are blank in every row but the middle one — which is exactly the room a falling bar
-/// needs: five rows to fall through, none of them spoken for.
+/// 标记用八个字形单元格拼出 `fs-agent`，每个四列、之间空一列（[`wording::logo_lines`] 里的
+/// 一张标签；38 列网格里 `全空的列：4、9、14、……`）。短横是第三个单元格，所以它那四列是 10
+/// 到 13，而除了中间那一行，它们在每一行都是空的 —— 那正是下落横条需要的空间：五行可以落，
+/// 一行都没被占用。
 const MARK_DASH_COLUMN: usize = 10;
 const MARK_DASH_WIDTH: usize = 4;
 
-/// The glyph the falling dash is drawn with: the same half-block bar the idle mark carries.
+/// 下落短横用什么字形画：与空闲标记携带的那根半块横条同一个。
 ///
-/// It never changes — what changes is the row it lands on (票 07). The first version of this
-/// animation turned the bar through four orientations, and the second drew a different
-/// glyph per orientation; both made the mark's own dash a different thing while a run was in
-/// flight. One bar, moving down the cell, is the one that reads as motion without becoming a
-/// new glyph.
+/// 它永远不变 —— 变的是它落在哪一行（票 07）。这个动画的第一个版本把横条转过四个方向，第二个
+/// 每个方向画一个不同的字形；两者都让标记自己那根短横在一次运行在飞时变成了另一个东西。一根
+/// 横条、在单元格里往下走，是那个读起来像运动、却不会变成新字形的做法。
 const DASH_BAR: char = '▀';
 
-/// The mark's rows and their colours, with its dash fallen to the row `frame` names —
-/// `None` while nothing is running, which is the row the mark has always drawn it on.
+/// 标记的那些行与它们的颜色，它的短横落到 `frame` 指定的那一行上 —— 什么都没在跑时是
+/// `None`，也就是标记一直画它的那一行。
 ///
-/// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
-/// here, where the rest of the painting does. Rows brighten towards the top, so the mark
-/// reads as lit from above — **always**, working or not: the colour signal was retired in
-/// 票 05 (see [`PULSE_PALETTE`]), so what moves in this mark is the dash alone
-/// (`.scratch/tui-input-pulse/spec.md` §2). The dash **keeps its shape and steps down one
-/// row per frame**, wrapping from the mark's last row back to its first: the cell is the
-/// mark's own five rows, and the idle position is the middle one, so a mark at rest is
-/// byte-for-byte what it was before the animation existed.
+/// 文字是 [`wording::logo_lines`] 的；让它读起来像字形的那条颜色坡道住在这里，与别的绘制在
+/// 一起。行越靠上越亮，于是标记读起来像从上方照亮 —— **永远如此**，不管在不在工作：颜色信号
+/// 在票 05 退休了（见 [`PULSE_PALETTE`]），所以这个标记里动的只有那根短横
+/// （`.scratch/tui-input-pulse/spec.md` §2）。短横**保持它的形状、每帧往下一行**，从标记的
+/// 最后一行回绕到第一行：那个单元格就是标记自己的五行，而空闲位置是中间那一行，所以一个静止
+/// 的标记与这个动画存在之前逐字节相同。
 ///
-/// Foreground only, and deliberately no background: the mark sits on whatever
-/// background the user's theme already has, and filling the half-shade rows would
-/// fight that theme on as many terminals as it matched.
+/// 只设前景，而且是刻意不设背景：标记坐在用户主题已有的任何背景上，填掉那些半阴影行会在它能
+/// 匹配的同样多的终端上与那个主题打架。
 fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
     let rows = wording::logo_lines();
     debug_assert!(
@@ -3286,9 +3003,8 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
     );
     let bar_row = match frame {
         Some(frame) => frame as usize % rows.len(),
-        // The middle row: where `logo_lines` itself draws the dash, and therefore what an
-        // idle mark looks like. It is the fall's third frame, so a run's first frame is the
-        // top row — the bar reappears above and falls again (票 07).
+        // 中间那一行：`logo_lines` 自己画短横的位置，因此也就是空闲标记的样子。它是下落的第三
+        // 帧，所以一次运行的第一帧是最上面那一行 —— 横条在上方重新出现、再落一次（票 07）。
         None => rows.len() / 2,
     };
     let mut lines: Vec<(Vec<char>, Color)> = rows
@@ -3301,9 +3017,8 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
                 Color::Magenta
             };
             let mut line: Vec<char> = text.chars().collect();
-            // The dash's own cell is given up first: the mark's idle hyphen is drawn in
-            // it, and every orientation but the flat one puts glyphs in rows that hold
-            // something else today.
+            // 短横自己的单元格先让出来：标记空闲时的连字符画在它里面，而除了平的那一个，每个
+            // 方向都会往今天放着别的东西的行里放字形。
             for cell in line.iter_mut().skip(MARK_DASH_COLUMN).take(MARK_DASH_WIDTH) {
                 *cell = ' ';
             }
@@ -3324,17 +3039,15 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
         .collect()
 }
 
-/// The transcript: its window onto the pane's scroll buffer, the scrollbar and the
-/// rail at its right edge, and the indicator that says where the viewport is
-/// (spec §1, §3, §4).
+/// 转录：它对着窗格滚动缓冲的那扇窗、它右边缘的滚动条与回合条，以及说出视口在哪里的指示器
+/// （spec §1、§3、§4）。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let text_area = panes.transcript_text();
     let rows = state
         .pane
         .view(text_area.width, text_area.height, &state.live);
-    // What a click can hit is what this frame actually drew, row by row. The pane
-    // answers which source line each drawn display row belongs to, and the source
-    // line is what the click's link is keyed by (票 04 §1).
+    // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于哪条
+    // 来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
     state.drawn_top = text_area.y;
     state.drawn_rows = (0..rows.len())
         .map(|offset| state.pane.source_at(state.pane.top() + offset))
@@ -3345,13 +3058,10 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     draw_indicator(frame, text_area, state);
 }
 
-/// The rail: one cell per turn, or per round in a discussion, down the transcript's
-/// right edge (spec §4).
+/// 回合条：每个回合一格（讨论里是每一轮），沿转录的右边缘往下（spec §4）。
 ///
-/// The cell the viewport is in is the bright one, and it is **derived** from what the
-/// pane is showing — never stored — so it cannot drift from the reader's position. Each
-/// cell records where it was painted, so a click can only land on a cell that is really
-/// on screen.
+/// 视口所在的那一格是亮的，而它是从窗格正在显示的东西**推出来**的 —— 从不保存 —— 所以它不会
+/// 与读的人的位置漂开。每一格都记下自己被画在哪里，所以一次点击只能落在真在屏幕上的格子上。
 fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let rows = panes.rail.height as usize;
     if rows == 0 || panes.rail.width == 0 {
@@ -3359,8 +3069,7 @@ fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
     }
     let units = state.turn_rail.units();
     if units == 0 {
-        // An empty session has an empty column: no cells, and no `⋮` pretending there
-        // is history above (spec §4).
+        // 空的会话有一条空列：没有格子，也没有一个 `⋮` 假装上面还有历史（spec §4）。
         return;
     }
     let focus = state.focused_turn().unwrap_or(units - 1);
@@ -3391,14 +3100,12 @@ fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
     }
 }
 
-/// The transcript's scrollbar: drawn only when there is more than a pane's worth,
-/// in the column the layout always reserves for it.
+/// 转录的滚动条：只在内容多于一屏时才画，画在排版一直为它留的那一列里。
 fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
     if track.width == 0 || pane.total() <= track.height as usize {
         return;
     }
-    // Following the bottom and reading history look different, so the position is
-    // legible without reading a number.
+    // 跟着末尾与在读历史看起来不一样，所以位置不用读数字就看得出来。
     let thumb = if pane.following() {
         Style::default().fg(Color::DarkGray)
     } else {
@@ -3418,14 +3125,12 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
     );
 }
 
-/// The "what arrived, and the way back" indicator at the bottom right of the pane.
+/// 窗格右下那个「来了什么、以及回去的路」的指示器。
 ///
-/// Its whole block is the click target, so the rectangle is remembered on the pane
-/// — a click can only land on what the last frame drew.
+/// 它的整块都是点击目标，所以这个矩形记在窗格上 —— 一次点击只能落在上一帧画出来的东西上。
 fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) {
-    // While the detail overlay holds the transcript, the way back is the overlay's own
-    // footer: the indicator's count is paused and its click belongs to nobody
-    // (票 02 §4).
+    // 详情覆盖层占着转录的时候，回去的路是覆盖层自己的页脚：指示器的计数暂停了，它的点击不
+    // 属于任何人（票 02 §4）。
     if state.pane.following() || state.detail_open() || area.width == 0 || area.height == 0 {
         state.indicator = None;
         return;
@@ -3436,8 +3141,8 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
     } else {
         wording::new_content(fresh)
     };
-    // `area` is already the text area — the scrollbar's column is not in it — so a
-    // wide character at the right edge cannot shadow the scrollbar away.
+    // `area` 已经是文字区 —— 滚动条那一列不在里面 —— 所以右边缘的一个宽字符不可能把滚动条
+    // 遮没。
     let width = (text_columns(&text) as u16).min(area.width);
     let rect = Rect::new(
         area.right().saturating_sub(width),
@@ -3457,26 +3162,21 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
     state.indicator = Some(rect);
 }
 
-/// The main column's foot: the input line, and under it the hint row that says what
-/// the keys do.
+/// 主列的脚：输入行，以及它下面那行说明按键干什么的提示行。
 ///
-/// Returns where the cursor was put, so whatever floats over the main column can
-/// anchor itself to it — the `/` menu follows the cursor (spec §6). `None` while a
-/// question is up, because there is no cursor then.
+/// 返回光标被放在了哪里，好让浮在主列之上的东西把自己锚在它上面 —— `/` 菜单跟着光标走
+/// （spec §6）。有问题立着时是 `None`，因为那时候没有光标。
 ///
-/// A questionnaire replaces the input line with itself. That is the whole point of
-/// this kind of question: the middle overlay suits a one-line confirmation, while a
-/// questionnaire is several rows and pages, so it takes the area built for typing
-/// (spec §19).
+/// 问卷用自己替换掉输入行。这正是这一类问题的全部意义：中间覆盖层适合一行确认，而问卷是好
+/// 几行、好几页，于是它拿走为打字建的那块区域（spec §19）。
 fn draw_bottom(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
     state: &mut TuiState,
 ) -> Option<editor::Placed> {
     if state.questionnaire().is_some() {
-        // The questionnaire is lifted out and put back, so the painters can record
-        // their hit regions in the same state the pointer will read them from. It has
-        // no clone: its reply channel is the one thing about it that must stay single.
+        // 问卷被抬出来再放回去，好让画家把命中区域记在指针将来读它们的同一份状态里。它没有
+        // clone：它那个回复通道是它身上唯一必须保持独一份的东西。
         let Some(Pending::Questionnaire(questionnaire)) = state.pending.take() else {
             return None;
         };
@@ -3494,11 +3194,10 @@ fn draw_bottom(
     let (mut rows, cursor) = state
         .editor
         .view(layout::input_text_width(frame.area()), panes.input.height);
-    // The prompt is its own span (see `editor::Input::view`), which is what gives it a colour
-    // the draft never takes. Only the span that **is** the prompt is coloured: the indent on
-    // the rows under it is the same width of spaces, and a draft long enough to scroll the
-    // prompt off the top has no prompt on screen to colour (`.scratch/tui-input-pulse/spec.md`
-    // §2b).
+    // 提示符是自己的一个 span（见 `editor::Input::view`），正是它给了提示符一个草稿永远不会
+    // 拿到的颜色。只有**就是**提示符的那个 span 上色：它下面那些行的缩进是同样宽的空格，而
+    // 一份长到把提示符滚出顶端的草稿，屏幕上根本没有提示符可上色
+    // （`.scratch/tui-input-pulse/spec.md` §2b）。
     let prompt_style = Style::default().fg(prompt_colour(state.pulse));
     for row in &mut rows {
         match row.spans.first_mut() {
@@ -3510,10 +3209,9 @@ fn draw_bottom(
         Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
         panes.input,
     );
-    // The draft stays visible under a question — it is what the user was writing — but
-    // the cursor goes: the keyboard is answering, not editing (spec §9). The cursor is
-    // placed from the rows just drawn, never from state kept between frames, which is
-    // what let the inline viewport's cursor wander (ADR 0002).
+    // 草稿在问题之下仍然可见 —— 那是用户正在写的东西 —— 但光标收起来：键盘正在回答，不是在
+    // 编辑（spec §9）。光标是按刚画出来的那些行摆的，从不按帧与帧之间保存的状态摆，正是后者
+    // 让内联视口的光标漂移（ADR 0002）。
     let anchor = state.pending.is_none().then_some(cursor);
     if anchor.is_some() {
         frame.set_cursor_position((
@@ -3531,17 +3229,14 @@ fn draw_bottom(
     anchor
 }
 
-/// The questionnaire in the bottom input area: one question's rows, scrolled to
-/// the room the layout gave.
+/// 底部输入区里的问卷：一个问题的那些行，按排版给的地方滚动。
 ///
-/// The layout caps the bottom block's height, so a question with more rows than
-/// fit is windowed rather than clipped: the header and the question stay put and
-/// the option window follows the highlight (spec §7, §19). The footer still says
-/// which question it is, and the cap keeps the transcript visible.
+/// 排版给底部块的高度封了顶，所以行数多过能装下的问题是被开窗、而不是被裁掉：表头与问题待着
+/// 不动，选项窗口跟着高亮走（spec §7、§19）。页脚仍然说是第几个问题，而那个顶让转录保持
+/// 可见。
 ///
-/// The rows are drawn one at a time so each one's screen row can be recorded: the
-/// option rows are clickable, and which option a row holds depends on the window the
-/// highlight is currently driving (票 04 §4, §6).
+/// 这些行一次画一行，好记下每一行的屏幕行：选项行是可点的，而一行装着哪个选项取决于高亮当前
+/// 驱动的那个窗口（票 04 §4、§6）。
 fn draw_questionnaire(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -3566,8 +3261,7 @@ fn draw_questionnaire(
     let visible = options
         .len()
         .min((panes.input.height as usize).saturating_sub(prefix.len() + 1));
-    // The custom row is the last row the window drew, whether it was pinned there by
-    // a clip or simply ended the list.
+    // 自定义行是窗口画出的最后一行，不管它是因为裁剪被钉在那里，还是干脆结束了那个列表。
     let custom_row = window.len().saturating_sub(1);
     for (row, line) in window.iter().enumerate() {
         frame.render_widget(
@@ -3587,8 +3281,7 @@ fn draw_questionnaire(
         ));
     }
     state.regions.custom = Some(panes.input.y + custom_row as u16);
-    // A focused custom row shows the cursor, the way the resident editor's does: it
-    // is the only row that can be typed into (票 04 §5).
+    // 聚焦的自定义行会显示光标，跟常驻编辑器一样：它是唯一能往里打字的行（票 04 §5）。
     if questionnaire.custom_focused {
         let label = if question.options.is_empty() {
             wording::questionnaire_answer_label()
@@ -3606,12 +3299,10 @@ fn draw_questionnaire(
     }
 }
 
-/// The questionnaire's footer: which question it is, then only the buttons that are
-/// really available.
+/// 问卷的页脚：这是第几个问题，然后只列真正可用的那些按钮。
 ///
-/// The unavailable ones are not drawn, so they have no click region — the pointer and
-/// the eye see the same set (票 04 §4). The three footer labels are one-per-question
-/// wording, and the region is recorded from the same layout that painted them.
+/// 不可用的不画出来，所以它们没有点击区域 —— 指针与眼睛看到的是同一套（票 04 §4）。页脚那三个
+/// 标签是每题一份的文案，而区域是从画它们的同一份排版里记下来的。
 fn draw_questionnaire_footer(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -3619,9 +3310,8 @@ fn draw_questionnaire_footer(
     state: &mut TuiState,
 ) {
     let total = questionnaire.questions.len();
-    // The progress counter and the three-column gap before the first button are one
-    // span, so the column the first button starts at is the span's own width — not a
-    // second guess at it (票 04 §7).
+    // 进度计数器与第一个按钮前那三个字宽的间隔是同一个 span，所以第一个按钮起始的列就是这个
+    // span 自己的宽度 —— 而不是对它的第二次猜测（票 04 §7）。
     let mut cursor = text_columns(&wording::questionnaire_progress(questionnaire.index, total)) + 3;
     let mut spans: Vec<Span<'static>> = vec![Span::styled(
         format!(
@@ -3649,14 +3339,13 @@ fn draw_questionnaire_footer(
     ];
     let mut drawn = false;
     for (available, label, action) in items {
-        // An unavailable button is not drawn and has no region, so the next one closes
-        // the gap: the footer reads as a list of what is really on offer.
+        // 不可用的按钮不画、也没有区域，于是下一个按钮把这段间隔收掉：页脚读起来是一份真正在
+        // 提供什么的列表。
         if !available {
             continue;
         }
-        // One gap *between* drawn buttons, and it is **painted** rather than only
-        // counted: a region derived from a gap that is not on screen is a region that
-        // points three columns off the button (票 04 §7).
+        // 间隔只出现在**画出来的按钮之间**，而且它是**画出来**的、不是只在心里记个数：由一段
+        // 不在屏幕上的间隔推出来的区域，是一个指着按钮旁边三个列开外的区域（票 04 §7）。
         if drawn {
             spans.push(Span::raw("   "));
             cursor += 3;
@@ -3675,8 +3364,7 @@ fn draw_questionnaire_footer(
     frame.render_widget(Paragraph::new(Line::from(spans)), panes.hints);
 }
 
-/// The screen rectangle of a run of `columns` starting `offset` columns into `row`,
-/// or `None` when it falls off the end of the terminal.
+/// 从 `row` 往里偏移 `offset` 列、长 `columns` 列的那一段的屏幕矩形，落到终端外面时是 `None`。
 fn hint_region(row: Rect, offset: usize, columns: usize) -> Option<Rect> {
     let offset = u16::try_from(offset).ok()?;
     let columns = u16::try_from(columns).ok()?;
@@ -3687,12 +3375,11 @@ fn hint_region(row: Rect, offset: usize, columns: usize) -> Option<Rect> {
     Some(Rect::new(x, row.y, columns, 1))
 }
 
-/// The `/` menu: the names a leading `/` can become — the built-ins the loop handles
-/// and the skills this session discovered — floating at the cursor and filtered by
-/// what has been typed after the slash (spec §6).
+/// `/` 菜单：开头的 `/` 能变成哪些名字 —— 循环处理的内建命令，加上这个会话发现的 skills
+/// —— 浮在光标处，并按斜杠后面打了什么过滤（spec §6）。
 ///
-/// It is a **hint**, not a question: it never takes a key away from the draft, and a
-/// key it does claim (`↑`, `↓`, `Tab`, `Enter`) is only claimed while it is up.
+/// 它是一个**提示**，不是一个问题：它从不会把某个键从草稿那里拿走，而它确实占着的键（`↑`、
+/// `↓`、`Tab`、`Enter`）只在它立着时才有。
 fn draw_menu(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -3702,8 +3389,7 @@ fn draw_menu(
     let Some(menu) = state.slash_menu() else {
         return;
     };
-    // The window of matches to draw: the highlight stays visible, and the rows above
-    // it are given up first as it walks down the list.
+    // 要画的匹配那一窗：高亮始终可见，而它上面的行在它往下走时先被让出去。
     let room = panes
         .menu_room(anchor)
         .min(layout::MENU_MAX_ROWS)
@@ -3719,8 +3405,7 @@ fn draw_menu(
     };
     let visible = &menu.entries[first..first + room];
 
-    // One column of padding either side, the name column as wide as the widest name,
-    // then two spaces, then whatever description fits.
+    // 左右各一列内边距，名字列与最宽的名字一样宽，然后两个空格，然后是放得下的描述。
     let name_width = visible
         .iter()
         .map(|(name, _)| text_columns(name) + 1)
@@ -3756,10 +3441,9 @@ fn draw_menu(
     frame.render_widget(Paragraph::new(rows), layout::inner(area));
 }
 
-/// One menu row: `/<name>`, padded to the name column, then the description.
+/// 一行菜单：`/<名字>`，补齐到名字列宽，然后是描述。
 ///
-/// The highlighted row is painted reversed so it reads as the button `Enter` would
-/// press, rather than as one more line of text.
+/// 高亮的那一行反色画，好让它读起来是 `Enter` 会按下的那个按钮，而不是又多了一行文字。
 fn menu_row(
     name: &str,
     description: &str,
@@ -3769,16 +3453,14 @@ fn menu_row(
 ) -> Line<'static> {
     let label = format!("/{name}");
     let mut text = label.clone();
-    // The description column, when there is room for a description and the row it
-    // would sit on. Too narrow and the name has the row to itself, which is still a
-    // complete hint.
+    // 描述列，在有地方放一个描述、也有它要占的那一行的时候。太窄就让名字独占这一行，那仍然是
+    // 一个完整的提示。
     let gap = name_width.saturating_sub(text_columns(&label)) + 2;
     if !description.is_empty() && text_columns(&label) + gap + 2 <= inner {
         text.push_str(&" ".repeat(gap));
         text.push_str(description);
     }
-    // One leading column of padding, then the row, then whatever is left — so the
-    // words never touch the border, and the highlight covers the whole row.
+    // 开头一列内边距，然后是这一行，然后是剩下的部分 —— 于是文字永远不碰边框，而高亮盖住整行。
     let body = truncate_columns(&text, inner.saturating_sub(1));
     let padding = inner.saturating_sub(1 + text_columns(&body));
     let style = if selected {
@@ -3795,13 +3477,11 @@ fn menu_row(
     ])
 }
 
-/// Attribute a message's rows to its speaker: the label leads the first row and
-/// the rest hang under the body of it, so a wrapped or multi-line message reads as
-/// one utterance (spec §3).
+/// 把一条消息的那些行归到它的发言者名下：标签引领第一行，其余的都挂在它正文下面缩进的位置，
+/// 于是一条折行的或多行的消息读起来是一次发言（spec §3）。
 ///
-/// The name takes the speaker's own colour and the body keeps the row's — that
-/// split is the whole of the colouring rule: the name identifies, the body means
-/// what its severity says (票 07 §2).
+/// 名字拿发言者自己的颜色，正文保持这一行的 —— 这个分工就是全部的上色规矩：名字做标识，正文
+/// 的意思由它的严重度说了算（票 07 §2）。
 fn attribute(
     speaker: &crate::events::SpeakerId,
     rows: Vec<Line<'static>>,
@@ -3829,17 +3509,16 @@ fn attribute(
         .collect()
 }
 
-/// The style a speaker's `[name]` prefix is drawn in.
+/// 一个发言者的 `[name]` 前缀用什么样式画。
 ///
-/// With no palette the label keeps the narration grey it has always had, which is
-/// what the plain half of the shared rendering wants: only the TUI tints names,
-/// and `plain` never passes a palette (票 07 §4).
+/// 没有调色板时标签保持它一直有的那个叙述灰，这正是共享渲染里素的那一半要的：只有 TUI 会给
+/// 名字上色，而 `plain` 从不传调色板（票 07 §4）。
 fn name_style(speaker: &crate::events::SpeakerId, colors: &mut SpeakerColors) -> Style {
     Style::default().fg(colors.of(speaker))
 }
 
-/// One narration line whose text begins with a speaker's `[name]` prefix: the name
-/// takes the speaker's colour, the rest the caller's style (票 07 §2).
+/// 一条叙述行，文字以某个发言者的 `[name]` 前缀开头：名字拿发言者的颜色，其余用调用方的样式
+/// （票 07 §2）。
 fn speaker_line(
     speaker: &crate::events::SpeakerId,
     text: String,
@@ -3852,18 +3531,17 @@ fn speaker_line(
     ])
 }
 
-/// One painted source line, and where clicking it leads.
+/// 一条被画出来的来源行，以及点它通向哪儿。
 ///
-/// The link is optional because most lines are not a way into anything. A line
-/// that is carries the whole detail, read at the moment the line is painted, so a
-/// click never has to reach back into the event stream for it (票 02 §4, 票 04 §1).
+/// 链接可选，因为大多数行不是通向任何地方的入口。是入口的行带着整份详情，在这行被画出来的那
+/// 一刻读出来，所以一次点击从不必回头去事件流里够它（票 02 §4，票 04 §1）。
 pub struct RenderedLine {
     pub line: Line<'static>,
     pub link: Option<Detail>,
 }
 
 impl RenderedLine {
-    /// A line whose whole row opens `detail`.
+    /// 一整行都打开 `detail` 的一条行。
     fn linked(line: Line<'static>, detail: Detail) -> Self {
         Self {
             line,
@@ -3878,15 +3556,12 @@ impl From<Line<'static>> for RenderedLine {
     }
 }
 
-/// Turn one finalized block into styled terminal lines.
+/// 把一个定稿的块变成带样式的终端行。
 ///
-/// This is the TUI half of the shared presentation layer: the block was decided
-/// once by [`Transcript`], and only the painting happens here.
+/// 这是共享呈现层的 TUI 那一半：块已经被 [`Transcript`] 决定过一次，这里只发生绘制。
 ///
-/// `colors` is the transcript's name palette. A caller with no roster to hand —
-/// `plain`'s half of this rendering, and the tests that only care about text —
-/// passes an empty one through [`render_block_uncoloured`], which draws every name
-/// in the narration grey.
+/// `colors` 是转录的名字调色板。手上没有名册的调用方 —— `plain` 的那一半渲染，以及只关心文字
+/// 的测试 —— 通过 [`render_block_uncoloured`] 传一个空的进来，于是每个名字都画成叙述灰。
 pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
     paint_block(block, colors)
         .into_iter()
@@ -3894,39 +3569,34 @@ pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'stat
         .collect()
 }
 
-/// Paint one block with no roster: every speaker name in the narration grey. This
-/// is what the shared rendering looked like before names had colours, kept for the
-/// callers that have no roster to draw one from.
+/// 不带名册地画一个块：每个发言者的名字都是叙述灰。这是名字有颜色之前共享渲染的样子，留给那些
+/// 没有名册可据以画的调用方。
 pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
     render_block(block, &mut SpeakerColors::new(&[]))
 }
 
-/// Paint one block, keeping each line's link.
+/// 画一个块，保留每一行的链接。
 fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     match block {
         Block::Message {
             speaker,
             role: Role::Assistant,
             text,
-            // The reasoning is painted by the state machine, not from the block: it
-            // has already become a thinking line, and painting it here as well would
-            // show the same thought twice (票 02 §1).
+            // 推理是由状态机画的，不是从这个块画的：它已经成了一条思考行，在这里再画一遍会把
+            // 同一个想法显示两次（票 02 §1）。
             reasoning: _,
         } => {
             if text.is_empty() {
                 return Vec::new();
             }
-            // The answer is rendered as Markdown at full brightness; only the
-            // speaker label is tinted.
+            // 回答按 Markdown 以全亮度渲染；只有发言者标签上色。
             attribute(speaker, super::markdown::to_lines(text), colors)
                 .into_iter()
                 .map(RenderedLine::from)
                 .collect()
         }
-        // The user's own input — and the non-assistant system lines — shown as they
-        // were written: every line, nothing elided, and no Markdown, because this
-        // is not a document. Continuations line up under the body of the first line
-        // (spec §3).
+        // 用户自己的输入 —— 以及非 assistant 的系统行 —— 按写下来的样子显示：每一行都在，
+        // 什么都不略去，也不上 Markdown，因为这不是一份文档。续行与第一行正文对齐（spec §3）。
         Block::Message { speaker, text, .. } => attribute(
             speaker,
             text.split('\n')
@@ -3962,8 +3632,8 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
             lines
         }
         Block::Tool(tool) => tool_block_lines(tool, colors),
-        // The post-hook's feedback, about the call just painted: a plain indented
-        // line, yellow because it is policy talking rather than the tool.
+        // 后置 hook 的反馈，关于刚画出来的那次调用：一行普通的缩进行，黄色，因为说话的是策略
+        // 而不是工具。
         Block::ToolFeedback { outcome, .. } => vec![Line::from(Span::styled(
             format!("  {}", wording::hook_feedback(outcome)),
             Style::default().fg(Color::Yellow),
@@ -4070,9 +3740,8 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     }
 }
 
-/// One **intermediate** narration line: dim, so the model's answer — rendered at
-/// full brightness — is the thing that stands out. A line that carries a severity
-/// keeps its own colour instead (see [`severity_line`]).
+/// 一条**中间**叙述行：用暗色，好让模型那个以全亮度渲染的回答成为显眼的东西。带严重度的行
+/// 改为保持自己的颜色（见 [`severity_line`]）。
 fn narration(text: String) -> Line<'static> {
     Line::from(Span::styled(
         text,
@@ -4084,9 +3753,8 @@ fn severity_line(reason: StopReason, text: String) -> Line<'static> {
     Line::from(Span::styled(text, severity_style(reason)))
 }
 
-/// A severity line that names a speaker: the name keeps the speaker's colour, the
-/// rest of the line keeps the severity's (票 07 §2). That is how an error still
-/// reads as an error without the reader losing who made it.
+/// 一条点名了发言者的严重度行：名字保持发言者的颜色，这一行的其余部分保持严重度的颜色
+/// （票 07 §2）。这样一个错误仍然读起来像个错误，而读的人不会丢掉它是谁弄出来的。
 fn severity_speaker_line(
     speaker: &crate::events::SpeakerId,
     reason: StopReason,
@@ -4096,7 +3764,7 @@ fn severity_speaker_line(
     speaker_line(speaker, text, severity_style(reason), colors)
 }
 
-/// The colour a stopping point paints its line in.
+/// 一个停止点把它那一行画成什么颜色。
 fn severity_style(reason: StopReason) -> Style {
     match Severity::of(reason) {
         Severity::Good => Style::default().fg(ratatui::style::Color::Green),
@@ -4108,27 +3776,24 @@ fn severity_style(reason: StopReason) -> Style {
     }
 }
 
-/// A finished tool call, folded to one line: the **call** the reader can open, with
-/// the whole output behind it (票 02 §3).
+/// 一次已完成的工具调用，折成一行：读的人能打开的**那次调用**，整份输出在它后面（票 02 §3）。
 ///
-/// A failure is the same line with `失败` at its **end** — not a second line — and
-/// the error body moves into the detail. The post-hook's feedback is its own block
-/// and stays on screen: it is policy feedback, not tool output, so it has to be
-/// readable without a click (票 02 §3).
+/// 失败是同一行在**末尾**多一个 `失败` —— 不是第二行 —— 而错误正文移进详情。后置 hook 的反馈
+/// 是自己的一个块、留在屏幕上：它是策略的反馈，不是工具输出，所以不点也必须是可读的
+/// （票 02 §3）。
 fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
     let failed = matches!(&tool.outcome, Some(outcome) if !outcome.ok);
     let color = colors.of(&tool.speaker);
     let mut call = vec![
-        // The name leads, so every transcript line starts with who is speaking; the
-        // marker after it is what says the line can be opened. It is paint, not
-        // wording, so it is not part of the sentence (票 03 §Answer)。
+        // 名字打头，于是每条转录行都以谁在说话开头；它后面那个标记说的是这行可以打开。它是
+        // 绘制、不是文案，所以不是那句话的一部分（票 03 §Answer）。
         Span::styled(
             format!("{} ", speaker_label(&tool.speaker)),
             Style::default().fg(color),
         ),
         Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
-        // What the call was *for*, in the narration grey the thinking line wears — the
-        // arguments themselves are one click away (票 02 §2，2026-09-23 修正）。
+        // 这次调用是*为了*什么，用思考行穿的那个叙述灰 —— 参数本身离一次点击之遥
+        // （票 02 §2，2026-09-23 修正）。
         Span::styled(
             wording::tool_call_line(&tool.tool, &tool.args),
             Style::default()
@@ -4162,8 +3827,7 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
     vec![RenderedLine::linked(Line::from(call), detail)]
 }
 
-/// Whether a source line is the user's own message, which is what a rail cell's jump
-/// aims at (spec §4).
+/// 一条来源行是不是用户自己的消息，那正是回合条一格跳转所瞄准的（spec §4）。
 fn is_user_message(block: &Block) -> bool {
     matches!(
         block,
@@ -4174,11 +3838,10 @@ fn is_user_message(block: &Block) -> bool {
     )
 }
 
-/// Whether this block ends the unit the rail counts.
+/// 这个块是否结束回合条计数的那个单位。
 ///
-/// A discussion counts its **rounds** and an interactive session its turns; the two
-/// boundaries both exist in a discussion's stream, so which one counts is a property
-/// of the session rather than of the block (spec §4).
+/// 讨论数的是它的**轮**，交互会话数的是它的回合；两个边界都存在于一场讨论的流里，所以哪一个
+/// 算数是会话的性质、而不是块的性质（spec §4）。
 fn is_boundary(block: &Block, discussion: bool) -> bool {
     if discussion {
         matches!(block, Block::RoundEnded { .. })
@@ -4187,31 +3850,28 @@ fn is_boundary(block: &Block, discussion: bool) -> bool {
     }
 }
 
-/// One row of the rail's column.
+/// 回合条那一列的一行。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TurnRailRow {
-    /// The unit with this index, counted from the oldest.
+    /// 这个下标对应的单位，从最老的那个数起。
     Unit(usize),
-    /// Units were left out at this end: `⋮`.
+    /// 这一端有单位被略掉了：`⋮`。
     Cut,
-    /// Nothing is drawn here.
+    /// 这里什么都不画。
     Blank,
 }
 
-/// The rail's slots for a transcript `rows` rows tall, `units` units long, with the
-/// viewport on `focus`.
+/// 一条 `rows` 行高、`units` 个单位长、视口在 `focus` 上的转录，回合条该有哪些格。
 ///
-/// Two properties, and both are the spec's (§4):
+/// 两条性质，两条都是 spec 的（§4）：
 ///
-/// * the focus cell is always among them — that is the whole point of the column;
-/// * whichever end had units cut says so with a `⋮`.
+/// * 聚焦那一格永远在其中 —— 这就是这一列的整个意义；
+/// * 哪一端有单位被裁掉，哪一端就用一个 `⋮` 说出来。
 ///
-/// The window is bottom-anchored whenever it can be, and slides up only as far as the
-/// focus needs: a viewport at the bottom shows the newest units, and one parked in the
-/// middle shows the units around it. Keeping only the newest N — the first thing this
-/// was written as — left a viewport parked on an old unit with **no** bright cell at
-/// all, which is the frame `prototype/frames/120x24-rail-30-units-focus-12-gap.txt`
-/// records.
+/// 窗口能贴底就贴底，只在焦点需要时往上滑：贴着底部的视口显示最新的单位，停在中间的显示它
+/// 周围的那些。只保留最新 N 个 —— 这是它最初写成的样子 —— 会让一个停在一个老单位上的视口
+/// **一个亮格都没有**，那正是 `prototype/frames/120x24-rail-30-units-focus-12-gap.txt` 记
+/// 下来的那一帧。
 fn turn_rail_rows(rows: usize, units: usize, focus: usize) -> Vec<TurnRailRow> {
     let mut out = vec![TurnRailRow::Blank; rows];
     if rows == 0 || units == 0 {
@@ -4219,15 +3879,14 @@ fn turn_rail_rows(rows: usize, units: usize, focus: usize) -> Vec<TurnRailRow> {
     }
     let focus = focus.min(units - 1);
     if units <= rows {
-        // Every unit fits: newest at the bottom, blank above.
+        // 每个单位都装得下：最新的在底部，上面留白。
         for index in 0..units {
             out[rows - units + index] = TurnRailRow::Unit(index);
         }
         return out;
     }
-    // More units than rows. One slot is the focus, and each end that had units cut
-    // spends another; a terminal so short that even those do not fit keeps the focus
-    // cell and gives the marks up.
+    // 单位比行还多。一格给焦点，每一端有单位被裁掉的再花掉一格；一个短到连这些都不放不下的
+    // 终端保住聚焦那格、把标记让出去。
     let above = focus;
     let below = units - 1 - focus;
     let mut budget = rows - 1;
@@ -4247,9 +3906,8 @@ fn turn_rail_rows(rows: usize, units: usize, focus: usize) -> Vec<TurnRailRow> {
             bottom_cut = false;
         }
     }
-    // Split what is left between the two sides, giving each no more than it has and
-    // handing the remainder back to the older side: a viewport at the bottom takes
-    // everything above it, one in the middle comes out roughly centred.
+    // 把剩下的在两侧分掉，每边不超过它有的，余下的还给更老的那一侧：贴底的视口拿走它上面
+    // 全部，居中的那些大致居中。
     let mut above_taken = above.min(budget / 2);
     let below_taken = below.min(budget - above_taken);
     above_taken += (above - above_taken).min(budget - above_taken - below_taken);
@@ -4269,7 +3927,7 @@ fn turn_rail_rows(rows: usize, units: usize, focus: usize) -> Vec<TurnRailRow> {
     out
 }
 
-/// The text of a painted line, for a title.
+/// 一条被画出来的行的文字，用来做标题。
 fn line_text(line: &Line<'static>) -> String {
     line.spans
         .iter()
@@ -4277,32 +3935,29 @@ fn line_text(line: &Line<'static>) -> String {
         .collect::<String>()
 }
 
-/// What a clickable transcript line opens: a frozen thought, or a tool call's
-/// arguments and full output (票 02 §4).
+/// 一条可点的转录行打开什么：一个被冻住的想法，或一次工具调用的参数与完整输出（票 02 §4）。
 ///
-/// The body is read **when the line is painted**, so what the overlay shows cannot
-/// disagree with what was on screen when the reader clicked it.
+/// 主体是**在这行被画出来时**读的，所以覆盖层显示的东西不会与读的人点击时屏幕上的东西有
+/// 分歧。
 #[derive(Clone)]
 pub struct Detail {
-    /// The clicked line's own text, used as the overlay's title.
+    /// 被点那一行自己的文字，用作覆盖层的标题。
     title: String,
-    /// The speaker's colour for the line this detail belongs to: the overlay's border
-    /// wears it, so the box says whose line you are reading before you read a word of
-    /// it (2026-09-23).
+    /// 这条详情所属那一行发言者的颜色：覆盖层的边框穿它，于是这个框在你读它一个字之前就说清
+    /// 了你在读谁的行（2026-09-23）。
     color: Color,
     kind: DetailKind,
 }
 
-/// The two things a detail view can be about.
+/// 一个详情视图可以关于的两件事。
 #[derive(Clone)]
 enum DetailKind {
-    /// A finished thinking segment. `text` is the whole trace when the stream
-    /// recorded one, and `None` is the synthesizer's case — deltas arrived and the
-    /// log holds no text — which the detail says out loud (票 02 §1).
+    /// 一段已完成的思考。流记录了 trace 时 `text` 是整段 trace，而 `None` 是合成器的情形
+    /// —— 增量到了、事件流里没有文本 —— 详情会把这一点说出来（票 02 §1）。
     Thinking { text: Option<String> },
-    /// A tool call: its arguments, and whatever the call produced.
+    /// 一次工具调用：它的参数，以及这次调用产出了什么。
     Tool {
-        /// The id that names the spilled output file, `outputs/<id>.txt`.
+        /// 给落盘输出文件命名的那个 id，`outputs/<id>.txt`。
         tool_call_id: ToolCallId,
         output: Option<String>,
         error: Option<String>,
@@ -4311,42 +3966,37 @@ enum DetailKind {
     },
 }
 
-/// The detail overlay's open state (票 02 §4).
+/// 详情覆盖层的打开状态（票 02 §4）。
 ///
-/// It is a **view mode, not a pending question**: the transcript is frozen where it
-/// was, the keyboard and the wheel belong to the body until it is closed, and no
-/// `pending` is set — which is exactly what keeps the question guard from swallowing
-/// the wheel aimed at the overlay.
+/// 它是一个**视图模式，不是一个待答的问题**：转录冻在原处，键盘与滚轮在它被关掉之前归主体
+/// 所有，而且没有置任何 `pending` —— 这正是让问题守卫不会把瞄准覆盖层的滚轮吞掉的原因。
 struct DetailView {
-    /// What is being shown.
+    /// 正在显示什么。
     detail: Detail,
-    /// The body, laid out at the width it was opened at.
+    /// 主体，按它被打开时的宽度排版。
     body: Vec<Line<'static>>,
-    /// The first body row on screen.
+    /// 屏幕上主体的第一行。
     top: usize,
-    /// Body rows the overlay can show at once.
+    /// 覆盖层一次能显示多少主体行。
     height: usize,
 }
 
-/// The cell of air the detail overlay keeps between its border and its words.
+/// 详情覆盖层在边框与文字之间留的那一列空气。
 const DETAIL_PADDING: u16 = 1;
 
-/// The rows the overlay's own text needs before padding is worth having: a title row,
-/// two body rows, and the footer.
+/// 覆盖层自己的文字在有内边距之前需要的行数：一行标题、两行主体，加上页脚。
 const DETAIL_MIN_TEXT_ROWS: u16 = 4;
 
-/// The most characters a detail body will read from a spilled tool output.
+/// 一个详情主体会从落盘的工具输出里读的最多字符数。
 ///
-/// A tool result is capped before it reaches the log, but the spilled file is not:
-/// this is the reader's own limit, past which the body ends with
-/// [`wording::detail_truncated`] (票 02 §4).
+/// 一条工具结果在进事件流之前就被截过，但落盘的那个文件没有：这是读的人自己的上限，超过它
+/// 主体以 [`wording::detail_truncated`] 结尾（票 02 §4）。
 const DETAIL_MAX_CHARS: usize = 200_000;
 
 impl TuiState {
-    /// Open the detail overlay for a line the reader clicked.
+    /// 为读的人点的那一行打开详情覆盖层。
     ///
-    /// The body is read here, at open time, and laid out at the width the overlay
-    /// will be drawn at, so scrolling is pure arithmetic from then on.
+    /// 主体在这里、在打开的那一刻读，并按覆盖层将被画出来的宽度排版，于是此后滚动是纯算术。
     fn open_detail(&mut self, detail: Detail, width: usize) {
         let body = detail_body(&detail, &self.facts.session_dir, width);
         self.detail = Some(DetailView {
@@ -4357,15 +4007,13 @@ impl TuiState {
         });
     }
 
-    /// Close it, wherever it was opened from.
+    /// 关掉它，无论它是从哪里打开的。
     ///
-    /// A no-op when nothing is open, which matters because the request handlers call it
-    /// unconditionally: releasing a freeze that was never taken would yank a reader who
-    /// had scrolled up back to the bottom (票 02 §4).
+    /// 什么都没开时是空操作，这一点要紧，因为请求处理函数是无条件调它的：放开一次从没被拿走
+    /// 的冻结，会把一个已经往上滚的读的人拽回底部（票 02 §4）。
     fn close_detail(&mut self) {
         if self.detail.take().is_some() {
-            // The reading position was the overlay's; letting go of it returns the
-            // transcript to the bottom, and the count to measuring from there.
+            // 阅读位置是覆盖层的；放开它就是把转录送回底部，而计数也从那里重新起算。
             self.pane.set_holding(false);
             self.pane.set_following(true);
         }
@@ -4375,7 +4023,7 @@ impl TuiState {
         self.detail.is_some()
     }
 
-    /// Scroll the open detail body by `rows` display rows; negative is up.
+    /// 把打开着的详情主体滚动 `rows` 个显示行；负数是往上。
     fn detail_scroll(&mut self, rows: isize) {
         let Some(view) = self.detail.as_mut() else {
             return;
@@ -4384,8 +4032,7 @@ impl TuiState {
         view.top = (view.top as isize + rows).clamp(0, max_top as isize) as usize;
     }
 
-    /// One page of the detail body: its own height, minus a row of overlap so the
-    /// reader keeps the thread across a jump.
+    /// 详情主体的一页：它自己的高度减去一行重叠，好让读的人在跳跃之间不断线。
     fn detail_page(&self) -> usize {
         self.detail
             .as_ref()
@@ -4394,11 +4041,11 @@ impl TuiState {
     }
 }
 
-/// The body of a detail view, wrapped to `width`: the sections, in the order they
-/// are decided, each under a rule (票 03 §Answer).
+/// 一个详情视图的主体，折到 `width`：那些小节，按它们被决定的顺序，每个在一道分隔线下面
+/// （票 03 §Answer）。
 ///
-/// An absent body is not an error: each one has a sentence that says so, because a
-/// click that opened a blank box is worse than one that never opened.
+/// 主体缺席不是错误：每个都有一句话说出来，因为一次点开一个空框的点击，比一次根本没打开的
+/// 点击更糟。
 fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'static>> {
     let mut rows: Vec<Line<'static>> = Vec::new();
     match &detail.kind {
@@ -4408,8 +4055,8 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
                 Some(text) if !text.trim().is_empty() => {
                     rows.extend(pane::wrap_text(text.trim_end(), width));
                 }
-                // No recorded trace — the synthesizer's shape — so the body says so
-                // rather than opening blank (票 02 §1).
+                // 没有记录下来的 trace —— 合成器的形状 —— 所以主体把它说出来，而不是开成空白
+                // （票 02 §1）。
                 _ => rows.push(Line::from(Span::styled(
                     wording::detail_reasoning_unrecorded(),
                     Style::default().fg(Color::DarkGray),
@@ -4454,7 +4101,7 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
     rows
 }
 
-/// A section heading, drawn as a rule: the words in a run of `─`.
+/// 一个小节标题，画成一道分隔线：文字嵌在一串 `─` 里。
 fn section_header(name: &str) -> Line<'static> {
     Line::from(Span::styled(
         wording::detail_section(name),
@@ -4462,26 +4109,21 @@ fn section_header(name: &str) -> Line<'static> {
     ))
 }
 
-/// The whole body of a tool result, when the spilled file can be read.
+/// 落盘文件读得出来时，一条工具结果的整个主体。
 ///
-/// The event carries only the head/tail **preview**; the full text is what was
-/// spilled to `outputs/<tool_call_id>.txt`, and the call id is what names that
-/// file — never the preview's own prose (票 02 §4). A missing file is the
-/// documented degradation: the preview, and a sentence saying the full text was not
-/// available. An **empty** file is the same degradation: there is no full text to
-/// show, and the preview plus the sentence is the honest answer rather than a blank
-/// body (票 08 §8).
+/// 事件只带首/尾的**预览**；完整文本是落盘到 `outputs/<tool_call_id>.txt` 的那份，而给那个
+/// 文件命名的是调用 id —— 从来不是预览自己的叙述（票 02 §4）。文件缺失是文档写明的降级：
+/// 预览，加一句说完整文本不可用。文件**为空**是同一种降级：没有完整文本可显示，而预览加那一
+/// 句话是诚实的答案，而不是一个空主体（票 08 §8）。
 fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -> (String, bool) {
-    // An uncut result has no spilled file to look for, and its preview is the whole
-    // body: show it as it is. Only a result the stream had to *cut* has a file on
-    // disk, so only that kind can be missing one (spec §11；2026-09-23，用户报告
-    // 短输出的详情不该写着「全文不可用」).
+    // 没被裁过的结果没有落盘文件可找，而它的预览就是整个主体：原样显示。只有流不得不*裁*过的
+    // 结果在磁盘上才有文件，所以只有那一种可能缺文件（spec §11；2026-09-23，用户报告短输出的
+    // 详情不该写着「全文不可用」）。
     if !preview.contains(crate::context::TRUNCATED_MARKER) {
         return (preview.to_owned(), false);
     }
-    // `SessionFacts.session_dir` holds the **session directory**, so the outputs
-    // directory is one join away — the same arithmetic the harness does
-    // (票 01 事实 56).
+    // `SessionFacts.session_dir` 装的是**会话目录**，所以 outputs 目录只差一次 join —— 与
+    // harness 做的是同一道算术（票 01 事实 56）。
     let path = std::path::Path::new(session_dir)
         .join(crate::session::store::OUTPUTS_DIR)
         .join(format!("{tool_call_id}.txt"));
@@ -4504,37 +4146,34 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
     (cut, true)
 }
 
-/// Paint the detail overlay over the main column.
+/// 把详情覆盖层画在主列之上。
 ///
-/// It owns the keyboard and the wheel while it is up, and the transcript stays
-/// frozen where it was — a reading position, not a moving one (票 02 §4).
+/// 它立着的时候占着键盘与滚轮，而转录冻在原处 —— 一个阅读位置，不是一个会动的位置
+/// （票 02 §4）。
 fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     if state.detail.is_none() {
         state.detail_rect = None;
         return;
     }
     let Some(area) = panes.detail() else {
-        // Nowhere to draw it: leaving it open would keep the keyboard captured for a
-        // view nobody can see.
+        // 没地方画它：让它开着会把键盘扣在一个没人看得见的视图上。
         state.detail = None;
         state.detail_rect = None;
         return;
     };
-    // The transcript is frozen where it was: the reader is looking at a line, and a
-    // burst of output must not pull it away — nor make the "N new rows" count climb
-    // under the overlay they are reading (票 02 §4).
+    // 转录冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让「N 行新内容」的计数在
+    // 他们正读的覆盖层底下往上爬（票 02 §4）。
     state.pane.set_following(false);
     state.pane.set_holding(true);
-    // What a click outside can hit only exists once this is recorded.
+    // 框外的一次点击能打中什么，只有记下来之后才存在。
     state.detail_rect = Some(area);
     let Some(view) = state.detail.as_ref() else {
         return;
     };
     let inner = layout::inner(area);
-    // A cell of air inside the border, so the words do not touch the frame. It is given
-    // **up** rather than eating the body: below the height that leaves the body two rows
-    // plus the title and the footer, the padding would hide the very content the reader
-    // opened the overlay for (2026-09-23).
+    // 边框里面一列空气，好让文字不碰外框。它是被**让出来**的，而不是吃掉主体：在低于「主体
+    // 两行加标题与页脚」的那个高度时，内边距会藏起读的人正是为了它才打开覆盖层的内容
+    // （2026-09-23）。
     let pad_x = u16::from(inner.width > DETAIL_PADDING * 3);
     let pad_y = u16::from(inner.height >= DETAIL_PADDING * 2 + DETAIL_MIN_TEXT_ROWS);
     let text = Rect::new(
@@ -4543,9 +4182,8 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         inner.width.saturating_sub(DETAIL_PADDING * 2 * pad_x),
         inner.height.saturating_sub(DETAIL_PADDING * 2 * pad_y),
     );
-    // Everything below is sized from the **padded** rect: a body window one row taller
-    // than the box that shows it clips the last rows off the end, which is how the
-    // padding first ate a line of the very body it was making room for.
+    // 下面的一切都按**带内边距**的矩形定尺寸：一个比显示它的框高一行的主体窗口，会把末尾几行
+    // 裁掉，内边距当初就是这样吃掉了它正在为之腾地方的那份主体的一行。
     let body_rows = text.height.saturating_sub(2) as usize;
     let max_top = view.body.len().saturating_sub(body_rows);
     let top = view.top.min(max_top);
@@ -4556,9 +4194,8 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         .take(body_rows)
         .cloned()
         .collect();
-    // The footer counts the **last row on screen**, not the first: a reader who has
-    // scrolled to the bottom is at the bottom, whatever row the window happens to start
-    // at (2026-09-23, user report: it read `94/154` with the last row visible).
+    // 页脚数的是**屏幕上最后一行**，不是第一行：一个已经滚到底的读的人就在底部，不管窗口恰好
+    // 从哪一行开始（2026-09-23，用户报告：最后一行可见时它显示 `94/154`）。
     let footer = wording::detail_footer(
         (top + body_rows).min(view.body.len()).max(1),
         view.body.len().max(1),
@@ -4567,16 +4204,15 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
-    // The border wears the speaker's colour: the box belongs to one line, and whose
-    // line it is should be legible before a word of it is read (2026-09-23).
+    // 边框穿发言者的颜色：这个框属于一行，而它属于谁的行，应该在你读它一个字之前就看得出来
+    // （2026-09-23）。
     frame.render_widget(
         WidgetBlock::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(view.detail.color)),
         area,
     );
-    // The title row is the clicked line's own text, so the reader knows which line
-    // they opened.
+    // 标题行是被点那一行自己的文字，这样读的人知道他们打开的是哪一行。
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             truncate_columns(&title, text.width as usize),
@@ -4584,9 +4220,8 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         ))),
         Rect::new(text.x, text.y, text.width, 1),
     );
-    // The body takes everything between the title and the footer; the footer is
-    // pinned to the overlay's last text row, so the two cannot overlap (票 03
-    // §Answer).
+    // 主体拿走标题与页脚之间的一切；页脚钉在覆盖层最后一行文字上，所以两者不可能重叠
+    // （票 03 §Answer）。
     let body = Rect::new(
         text.x,
         text.y + 1,
@@ -4610,14 +4245,12 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 mod tests {
     use super::*;
 
-    /// The prompt's colour is the maintainer's script translated into this renderer, so the
-    /// numbers are pinned against the script's own output.
+    /// 提示符的颜色是维护者的脚本翻进这个渲染器的结果，所以这些数字是对着脚本自己的输出钉的。
     ///
-    /// The script stepped its hue 0.005 and its breath 0.05 **per 1/60 s**, so the two agree
-    /// at a moment, not at an index: one pulse frame is 60 ms, which is three and a half
-    /// script frames, and frame 5 of ours is frame 18 of the script's. These triples are what
-    /// `colorsys.hsv_to_rgb` printed for the script's frames
-    /// (`.scratch/tui-input-pulse/spec.md` §2b).
+    /// 脚本每 **1/60 秒**走 0.005 色相、0.05 呼吸，所以两者在*某个时刻*上一致，而**不是**在
+    /// 某个下标上：一个脉冲帧是 60 ms，也就是三个半脚本帧，我们这里的帧 5 是脚本的帧 18。
+    /// 这些三元组就是 `colorsys.hsv_to_rgb` 为脚本的帧打出来的
+    /// （`.scratch/tui-input-pulse/spec.md` §2b）。
     #[test]
     fn the_prompt_colour_is_the_script_at_the_same_moment() {
         assert_eq!(PULSE_FRAME.as_millis(), 60);
@@ -4630,30 +4263,28 @@ mod tests {
             assert_eq!(
                 prompt_colour(frame),
                 expected,
-                "frame {frame} is the colour the script printed {} s in",
+                "帧 {frame}：脚本在第 {} 秒打出来的就是这个颜色",
                 frame as f64 * PULSE_FRAME.as_secs_f64()
             );
         }
     }
 
-    /// The hue wheel, pinned at the six points every implementation agrees on — the corners
-    /// where a rounding mistake in the sector arithmetic would show up first.
+    /// 色环，钉在每个实现都同意的那六个点上 —— 分区算术里一个舍入错误最先显形的那几个角。
     #[test]
     fn hsv_to_rgb_matches_the_shortcut_table() {
         assert_eq!(hsv_to_rgb(0.0, 0.0, 1.0), (255, 255, 255));
         assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), (255, 0, 0));
         assert_eq!(hsv_to_rgb(1.0 / 3.0, 1.0, 1.0), (0, 255, 0));
         assert_eq!(hsv_to_rgb(2.0 / 3.0, 1.0, 1.0), (0, 0, 255));
-        // The wheel closes: hue 1 is hue 0, and a hue past it wraps rather than panicking.
+        // 色环闭合：色相 1 就是色相 0，而越过它的色相会回绕而不是 panic。
         assert_eq!(hsv_to_rgb(1.0, 0.4, 0.8), hsv_to_rgb(0.0, 0.4, 0.8));
         assert_eq!(hsv_to_rgb(2.25, 0.4, 0.8), hsv_to_rgb(0.25, 0.4, 0.8));
     }
 
-    /// The falling dash, unit-tested **here** because it is not on screen any more
-    /// (票 08): `draw_sidebar_identity` passes `None`, so no integration test can drive its
-    /// frames through a rendered buffer. The code is kept for the next idea about how the
-    /// mark should move, and this is what keeps it honest in the meantime — a kept animation
-    /// that has quietly stopped working is worse than no animation at all.
+    /// 下落短横**在这里**做单元测试，因为它已经不在屏幕上了（票 08）：`draw_sidebar_identity`
+    /// 传的是 `None`，所以没有集成测试能把它那些帧从一份渲染出来的缓冲里走一遍。这段代码留给
+    /// 下一个关于标记该怎么动的想法，而这就是在此期间让它保持诚实的东西 —— 一个悄悄停摆了的
+    /// 保留动画，比根本没有动画更糟。
     #[test]
     fn the_falling_dash_steps_down_one_row_per_frame_and_wraps() {
         let rows = wording::logo_lines();
@@ -4669,28 +4300,27 @@ mod tests {
                 if index == expected_row {
                     assert_eq!(
                         cell, "▀▀▀▀",
-                        "frame {frame}: the bar is on row {expected_row}"
+                        "帧 {frame}：横条落在第 {expected_row} 行"
                     );
                 } else {
                     assert_eq!(
                         cell.trim(),
                         "",
-                        "frame {frame}: row {index} is empty, so the bar never splits"
+                        "帧 {frame}：第 {index} 行是空的，所以横条从不分开"
                     );
                 }
             }
         }
-        // And the still mark is the row `logo_lines` draws its dash on — the middle one.
+        // 而静止的标记就是 `logo_lines` 画它那根短横的那一行 —— 中间那一行。
         assert_eq!(
             mark_lines(None)[rows.len() / 2].0,
             rows[rows.len() / 2],
-            "an idle mark keeps the row the mark has always drawn"
+            "空闲的标记保持标记一直画的那一行"
         );
     }
 
-    /// `map_key` is the one place crossterm's vocabulary becomes this renderer's,
-    /// and a key that misses here is a key that silently does nothing — which no
-    /// rendering test can see, because they all start from [`Key`].
+    /// `map_key` 是 crossterm 的词汇表变成这个渲染器词汇表的唯一地方，而这里漏掉一个键就是一个
+    /// 悄无声息的死键 —— 那是任何渲染测试都看不见的，因为它们全都从 [`Key`] 开始。
     #[test]
     fn the_keys_the_pane_answers_to_map_from_crossterm() {
         let plain = |code| map_key(KeyEvent::new(code, KeyModifiers::empty()));
@@ -4700,12 +4330,12 @@ mod tests {
             map_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
             Some(Key::CtrlG)
         );
-        // The newline key: the one the whole multi-line editor hangs on.
+        // 换行键：整个多行编辑器就挂在这一个键上。
         assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
             Some(Key::CtrlJ)
         );
-        // A bare `g` is text, not a gesture.
+        // 一个光秃秃的 `g` 是文字，不是手势。
         assert_eq!(plain(KeyCode::Char('g')), Some(Key::Char('g')));
     }
 }
