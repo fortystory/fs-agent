@@ -1,22 +1,17 @@
-//! The OpenAI-compatible client: one implementation, two vendor profiles.
+//! OpenAI 兼容客户端：一套实现，两个厂商档案。
 //!
-//! KIMI and DeepSeek are not two providers, they are two sets of facts about
-//! the same request and response shape. This module is the execution point for
-//! every one of those differences (spec §4):
+//! KIMI 与 DeepSeek 不是两个 provider，而是关于同一套请求与响应形状的两组事实。这个模块是那些差
+//! 异每一处的执行点（spec §4）：
 //!
-//! * `tool_call` argument fragments (including `index`) are assembled here, so
-//!   the layer above never sees a fragment;
-//! * both vendors' `usage` shapes are normalized to `cached` / `miss`;
-//! * a parameter that was explicitly set but is not supported is **dropped with
-//!   a warning**, never silently;
-//! * the six `ProviderError` classes are assigned here, with `QuotaExhausted`
-//!   and `RateLimited` kept apart;
-//! * transport-level retries are bounded and live here; the layer above never
-//!   re-runs a turn.
+//! * `tool_call` 的参数碎片（含 `index`）在这里拼好，所以上面那层永远看不到碎片；
+//! * 两家厂商的 `usage` 形状都归一成 `cached` / `miss`；
+//! * 明确设了、模型却不支持的参数是**带着告警丢掉**，绝不悄悄丢；
+//! * 六个 `ProviderError` 类别在这里指派，其中 `QuotaExhausted` 与 `RateLimited` 保持分开；
+//! * 传输层重试有上界、且住在这里；上面那层从不重跑一个回合。
 //!
-//! The vendor-specific behaviour is isolated in value-in/value-out functions —
-//! [`build_body`], [`StreamDecoder`], [`normalize_usage`], [`classify_status`],
-//! [`retry_delay`] — so it is tested with recorded chunk shapes and no network.
+//! 厂商特有的行为被隔离在值进值出的函数里 —— [`build_body`]、[`StreamDecoder`]、
+//! [`normalize_usage`]、[`classify_status`]、[`retry_delay`] —— 所以它们用录下来的 chunk 形状
+//! 测试，不需要网络。
 
 use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
 use std::pin::Pin;
@@ -36,21 +31,20 @@ use super::{
 use crate::config::{Config, ConfigError, KeySource, ProviderProfile, Vendor};
 use crate::events::Usage;
 
-/// Where adapter warnings go. Injected, so the library never assumes a sink.
+/// 适配器告警的去处。注入，所以库从不假定某个去处。
 pub type WarningSink = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// Drop warnings on the floor. For tests and embedders that chose their own.
+/// 把告警丢在地上。用于测试和自带去处的嵌入方。
 pub fn silent_warnings() -> WarningSink {
     Arc::new(|_| {})
 }
 
-/// Send warnings to stderr with a stable prefix. The CLI injects this.
+/// 把告警送到 stderr，带一个稳定的前缀。CLI 注入的是这个。
 pub fn stderr_warnings() -> WarningSink {
     Arc::new(|message| eprintln!("fs-agent: warning: {message}"))
 }
 
-/// Bounded transport retry policy. Retries are counted per `send` call and are
-/// deliberately small: the upper layer does not re-run a turn.
+/// 有上界的传输重试策略。重试按每次 `send` 调用计数，且刻意很小：上层不重跑一个回合。
 #[derive(Debug, Clone, Copy)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
@@ -75,8 +69,8 @@ impl RetryPolicy {
     }
 }
 
-/// The delay before attempt `attempt + 1`, or `None` when the error must not be
-/// retried. `attempt` is the 1-based number of the attempt that just failed.
+/// 第 `attempt + 1` 次尝试之前的延迟；错误绝不能重试时是 `None`。`attempt` 是刚刚失败那次尝试的
+/// 序号（从 1 起）。
 pub fn retry_delay(policy: RetryPolicy, attempt: u32, error: &ProviderError) -> Option<Duration> {
     if attempt >= policy.max_attempts {
         return None;
@@ -92,7 +86,7 @@ pub fn retry_delay(policy: RetryPolicy, attempt: u32, error: &ProviderError) -> 
     }
 }
 
-/// The real client for one model. Built from resolved configuration.
+/// 某个模型真实客户端。由已解析的配置构建。
 pub struct OpenAiProvider {
     http: reqwest::Client,
     profile: ProviderProfile,
@@ -103,7 +97,7 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    /// Build the client for one model id, using the default retry policy.
+    /// 为某个模型 id 构建客户端，用默认的重试策略。
     pub fn build(
         config: &Config,
         model_id: &str,
@@ -150,7 +144,7 @@ impl OpenAiProvider {
         }
     }
 
-    /// Add the readable cross-vendor diagnosis to a 401/403.
+    /// 给 401/403 补上那条可读的跨厂商诊断。
     fn with_auth_hint(&self, error: ProviderError) -> ProviderError {
         match error {
             ProviderError::Auth { detail } => ProviderError::Auth {
@@ -166,8 +160,7 @@ impl OpenAiProvider {
         }
     }
 
-    /// What to check when the vendor rejects the credentials. Kimi's two
-    /// systems are the common trap, so they are named explicitly.
+    /// 厂商拒掉凭据时该查什么。Kimi 的两套系统是常见的坑，所以这里点名写出来。
     fn auth_hint(&self) -> &'static str {
         match self.profile.vendor {
             Some(Vendor::Kimi) => {
@@ -259,17 +252,16 @@ impl Provider for OpenAiProvider {
     }
 }
 
-/// The `/chat/completions` endpoint for a base URL that may or may not carry a
-/// `/v1` suffix.
+/// 某个 base URL 的 `/chat/completions` 端点，那个 URL 可能带、也可能不带 `/v1` 后缀。
 pub fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
-/// Render a [`ChatRequest`] as the wire body, filtering parameters the model
-/// does not support and returning one warning per dropped or clamped value.
+/// 把 [`ChatRequest`] 渲染成线上 body，滤掉模型不支持的参数，并为每一个被丢掉或被夹紧的值返回一
+/// 条告警。
 ///
-/// `user_id` is deliberately never sent (spec §4): it exists for vendor-side
-/// identity and would leak a stable handle for no benefit.
+/// `user_id` 刻意从不发送（spec §4）：它存在的意义是厂商侧的身份，发出去只会白白漏掉一个稳定的
+/// 句柄。
 pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>) {
     let mut body = Map::new();
     let mut warnings = Vec::new();
@@ -344,8 +336,8 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
     }
 
     if let Some(cache_key) = &request.cache_key {
-        // The harness sets this, not the user, so an unsupported model omits it
-        // without a warning: prompt-prefix caching is best-effort by nature.
+        // 这是 harness 设的，不是用户设的，所以不支持的模型直接省略它而不再给告警：前缀缓存本质上
+        // 是尽力而为。
         if caps.supports_prompt_cache_key {
             body.insert("prompt_cache_key".to_owned(), json!(cache_key));
         }
@@ -382,8 +374,8 @@ fn message_json(message: &Message) -> Value {
                 "content".to_owned(),
                 json!(content.clone().unwrap_or_default()),
             );
-            // DeepSeek 400s when a tools request drops its own reasoning, and
-            // Kimi K3 keeps reasoning across turns; either way it must round-trip.
+            // 带工具的请求一旦丢掉自己的推理，DeepSeek 直接 400；而 Kimi K3 跨回合保留推理；无论
+            // 哪种，它都必须往返。
             if let Some(reasoning) = reasoning_content {
                 object.insert("reasoning_content".to_owned(), json!(reasoning));
             }
@@ -452,16 +444,13 @@ fn tool_choice_json(choice: &ToolChoice) -> Value {
 
 // --- SSE decoding and tool-call assembly ----------------------------------
 
-/// A streaming accumulator for one response: bytes in, completed units out.
+/// 一条响应的流式累加器：字节进，完成单元出。
 ///
-/// It holds only the bytes in flight and the partial tool calls of the request
-/// currently streaming — this is transport state, not session state; `Session`
-/// remains the only value that holds session state. The same bytes always yield
-/// the same units, which is why tests drive it directly.
+/// 它只持有在飞的字节与当前这条请求的部分工具调用 —— 这是传输状态，不是会话状态；`Session` 仍是
+/// 唯一持有会话状态的值。同一批字节总是产出同样的单元，这正是测试直接驱动它的原因。
 ///
-/// Feed it raw response chunks with [`StreamDecoder::push`]; when the byte
-/// stream ends, call [`StreamDecoder::finish`]. Nothing is emitted as complete
-/// until `data: [DONE]` arrives, so a truncated stream never looks finished.
+/// 用 [`StreamDecoder::push`] 喂它原始响应 chunk；字节流结束时调 [`StreamDecoder::finish`]。在
+/// `data: [DONE]` 到来之前，不会有任何东西以完成态发出，所以被截断的流永远不会看起来已经结束。
 pub struct StreamDecoder {
     caps: ModelCaps,
     buffer: Vec<u8>,
@@ -490,7 +479,7 @@ impl StreamDecoder {
         }
     }
 
-    /// Consume one response chunk and return whatever became complete.
+    /// 消费一个响应 chunk，返回其中变得完整的部分。
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<StreamEvent>, ProviderError> {
         let mut events = Vec::new();
         if self.terminated {
@@ -511,9 +500,8 @@ impl StreamDecoder {
         Ok(events)
     }
 
-    /// The byte stream ended. Dispatch a trailing frame that arrived without its
-    /// blank-line separator; otherwise emit nothing, so a stream that never saw
-    /// `[DONE]` produces no completed unit.
+    /// 字节流结束了。派发最后一个没带空行分隔符就到达的帧；否则什么都不发，于是一个从没见过
+    /// `[DONE]` 的流不会产出任何完成单元。
     pub fn finish(&mut self) -> Result<Vec<StreamEvent>, ProviderError> {
         let mut events = Vec::new();
         if self.terminated || self.buffer.is_empty() {
@@ -574,8 +562,8 @@ impl StreamDecoder {
         let Some(delta) = choice.delta else {
             return;
         };
-        // Reasoning always precedes content in a delta (Kimi's documented
-        // order); keep that order so the renderer shows thinking first.
+        // 在一个 delta 里推理总是排在内容之前（Kimi 记下的顺序）；保持这个顺序，渲染器好先显示思
+        // 考。
         if let Some(reasoning) = delta.reasoning_content.filter(|text| !text.is_empty()) {
             events.push(StreamEvent::ReasoningDelta(reasoning));
         }
@@ -598,7 +586,7 @@ impl StreamDecoder {
                     name: name.clone(),
                 });
             }
-            let call = self.tools.get_mut(&index).expect("just inserted");
+            let call = self.tools.get_mut(&index).expect("刚插入的");
             if call.id.is_empty() {
                 call.id = id;
             }
@@ -632,12 +620,11 @@ impl StreamDecoder {
     }
 }
 
-/// Turn a byte stream of SSE frames into completed units.
+/// 把 SSE 帧的字节流变成完成单元。
 ///
-/// One network chunk can carry a whole batch of frames, and the decoder queues
-/// them all; the stream then hands them back with no await point. Draining such a
-/// batch without ever yielding starves every other task on the runtime — notably
-/// the renderer, whose channel is bounded — so the pump yields periodically.
+/// 一个网络 chunk 可能装着整整一批帧，而解码器把它们全排进队列；随后流在同一口气里把它们交回来，
+/// 中间没有 await 点。这样把一批排干而从不 yield 会让 runtime 上其他任务挨饿 —— 尤其是渲染器，它
+/// 的通道是有界的 —— 所以这个泵会定期 yield。
 pub fn sse_stream<S, B>(
     byte_stream: S,
     caps: ModelCaps,
@@ -697,9 +684,8 @@ where
     )
 }
 
-/// How many decoded events may be handed out before the pump yields to the
-/// runtime. Small enough that a burst cannot outrun a woken consumer (the render
-/// channel holds 1024), large enough that the yield is not per token.
+/// 泵向 runtime yield 之前可以交出多少个已解码事件。小到一次突发跑不过一个被唤醒的消费者（渲染
+/// 通道容量 1024），大到这个 yield 不是每个 token 一次。
 const YIELD_EVERY: u32 = 16;
 
 struct DecoderState<S> {
@@ -707,7 +693,7 @@ struct DecoderState<S> {
     decoder: StreamDecoder,
     queue: VecDeque<StreamEvent>,
     ended: bool,
-    /// Events handed out since the last yield to the runtime.
+    /// 上一次向 runtime yield 以来交出的事件数。
     since_yield: u32,
 }
 
@@ -788,10 +774,10 @@ fn parse_finish_reason(reason: &str) -> FinishReason {
 
 // --- usage and error normalization ----------------------------------------
 
-/// Normalize a vendor `usage` object into the neutral shape.
+/// 把厂商的 `usage` 对象归一成中性的形状。
 ///
-/// Kimi reports `cached_tokens`; DeepSeek reports `prompt_cache_hit_tokens` and
-/// `prompt_cache_miss_tokens`. Both become `cached_tokens` / `miss_tokens`.
+/// Kimi 报的是 `cached_tokens`；DeepSeek 报的是 `prompt_cache_hit_tokens` 与
+/// `prompt_cache_miss_tokens`。两者都变成 `cached_tokens` / `miss_tokens`。
 pub fn normalize_usage(vendor: Vendor, usage: &Value) -> Usage {
     let input_tokens = u64_field(usage, "prompt_tokens").unwrap_or(0);
     let output_tokens = u64_field(usage, "completion_tokens").unwrap_or(0);
@@ -831,12 +817,11 @@ fn nested_u64(value: &Value, outer: &str, inner: &str) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
-/// Map an HTTP status plus error body onto one of the six classes.
+/// 把一个 HTTP 状态码加错误正文映射到六个类别之一。
 ///
-/// The vendors disagree on codes, so the body refines the status where it
-/// matters: Kimi Code reports plan limits as 403 (quota windows and the
-/// concurrent-request cap) and DeepSeek reports an empty balance as 402, while
-/// both can use 429 for a transient rate limit.
+/// 厂商对状态码的说法不一致，所以在要紧的地方由正文来细化状态码：Kimi Code 把套餐限制报成 403
+/// （配额窗口与并发请求上限），DeepSeek 把余额为零报成 402，而两家都可能用 429 表示一次短暂的限
+/// 流。
 pub fn classify_status(status: u16, body: &str, retry_after: Option<Duration>) -> ProviderError {
     let detail = error_detail(body);
     match status {
@@ -844,8 +829,7 @@ pub fn classify_status(status: u16, body: &str, retry_after: Option<Duration>) -
         402 => ProviderError::QuotaExhausted { detail },
         403 => {
             if looks_like_concurrency(&detail) {
-                // The concurrent-request cap clears once in-flight requests
-                // finish, so it behaves like a rate limit.
+                // 并发请求上限在在飞的请求结束后就会放开，所以它的行为像限流。
                 ProviderError::RateLimited { retry_after }
             } else if looks_like_quota(&detail) {
                 ProviderError::QuotaExhausted { detail }
@@ -909,7 +893,7 @@ fn error_detail(body: &str) -> String {
     }
 }
 
-/// Parse a `Retry-After` header value. Only the delta-seconds form is honored.
+/// 解析一个 `Retry-After` 响应头值。只认 delta-seconds 那种形式。
 pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
     let raw = value?.trim();
     if raw.is_empty() {
@@ -922,8 +906,7 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
     Some(Duration::from_secs_f64(seconds.min(600.0)))
 }
 
-/// Failures that stop a provider from being built. Runtime failures are
-/// [`ProviderError`] instead.
+/// 阻止 provider 被构建出来的失败。运行期失败走 [`ProviderError`]。
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     #[error(transparent)]

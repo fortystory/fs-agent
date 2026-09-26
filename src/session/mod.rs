@@ -1,22 +1,16 @@
-//! The `Session` value: the only structure that holds mutable state.
+//! `Session` 值：唯一持有可变状态的结构。
 //!
-//! It owns the event log handle, the session identity, the injected
-//! configuration, the tool registry, the shared path locks, this agent's read
-//! set, this agent's private identity, and the session's permission policy. The
-//! roster is not here: a discussion's debaters are each their own `Session`,
-//! assembled side by side and sharing one log, and an executor is a nested
-//! `Session` whose events still append to its parent's stream and whose tool
-//! registry and path locks are the same values.
+//! 它持有事件流句柄、会话身份、注入的配置、工具表、共享的路径锁、这个 agent 的读集合、这个 agent
+//! 的私有身份，以及会话的权限策略。名册不在这里：一场讨论的讨论者各自是一个 `Session`，并排组装
+//! 并共用一个日志，而执行者是一个嵌套 `Session`，它的事件仍然追加到父级的流上，工具表与路径锁也
+//! 是同一批值。
 //!
-//! `Session` never writes on its own initiative: it hands out the log handle, and
-//! `agent::append_event` is the one write path, so the `agent` layer is the single
-//! writer of the event stream; tools, hooks, permissions and discussion cannot
-//! write.
+//! `Session` 从不自己发起写入：它把日志句柄交出去，而 `agent::append_event` 是唯一的写入路径，所
+//! 以 `agent` 层是事件流的唯一写者；工具、钩子、权限与讨论都写不了。
 //!
-//! [`store`] is the on-disk counterpart: where a session's directory lives, how
-//! `--continue` finds it, and how `prune` removes it. [`ledger`] reads those same
-//! directories to answer the one question a single session cannot: how much of a
-//! vendor's rolling quota window a UTC day has spent (spec §17).
+//! [`store`] 是它在磁盘上的对应物：会话目录住在哪里、`--continue` 怎么找到它、`prune` 怎么删掉
+//! 它。[`ledger`] 读的正是这些目录，用来回答单场会话答不了的那个问题：某个 UTC 自然日花掉了厂商
+//! 滚动配额窗口的多少（spec §17）。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,48 +30,39 @@ use crate::permissions::{Asker, Mode, Policy, Rule};
 use crate::questions::UserQuestions;
 use crate::tools::{PathLocks, ReadSet, Registry, SessionPaths};
 
-/// Everything a session is assembled from. Injected, never read from the
-/// environment by the library: the permission policy, the ask port used when the
-/// gate answers `Ask`, and the user's home (which only the `rm` circuit breaker
-/// reads) all arrive here.
+/// 组装一场会话所需的全部东西。它是注入的，库从不自己从环境里读：权限策略、权限门答 `Ask` 时用
+/// 的询问端口，以及用户的家目录（只有 `rm` 断路器读它）都从这里进来。
 ///
-/// The tool table and the policy arrive as shared handles because a discussion
-/// has more than one session at once (spec §15): two debaters must dispatch into
-/// the **same** tools with the **same** per-path locks, and a session-scoped
-/// allowance one of them earns must reach the other.
+/// 工具表与策略以共享句柄的形式进来，因为一场讨论同时有不止一场会话（spec §15）：两个讨论者必须
+/// 派发进**同一批**工具、用**同一批**逐路径锁，而其中一个挣到的会话级许可必须到达另一个。
 pub struct SessionParts {
     pub id: SessionId,
     pub cwd: PathBuf,
     pub log: EventLog,
     pub config: SessionConfig,
-    /// The tool table for this session.
+    /// 这场会话的工具表。
     pub tools: Arc<Registry>,
-    /// Per-path write locks. The **same** table must reach every executor, or
-    /// write exclusion is per session and therefore no lock at all.
+    /// 逐路径写锁。**同一张**表必须到达每个执行者，否则写互斥就成了按会话算，也就根本不算锁。
     pub locks: PathLocks,
-    /// Where this session's tool artifacts (`outputs/<tool_call_id>.*`) land.
+    /// 这场会话的工具产物（`outputs/<tool_call_id>.*`）落在哪里。
     pub outputs_dir: PathBuf,
-    /// The session's permission policy: a mode plus its rules.
+    /// 会话的权限策略：一个模式加上它的规则。
     pub policy: Arc<Mutex<Policy>>,
-    /// The port the loop asks when the gate answers `Ask`. `None` means there is
-    /// no interactive answerer, so the loop downgrades `Ask` to `Deny`.
+    /// 权限门答 `Ask` 时循环去问的端口。`None` 表示没有交互式应答者，循环会把 `Ask` 降级为
+    /// `Deny`。
     pub asker: Option<Arc<dyn Asker>>,
-    /// The port a model-initiated question goes through (spec §7). `None` means
-    /// no questionnaire answerer, so `ask_user_question` reports that instead of
-    /// hanging; the table is built without the tool in that case.
+    /// 模型发起的提问所走的端口（spec §7）。`None` 表示没有问卷应答者，于是
+    /// `ask_user_question` 报告这一点而不是挂住；那种情况下工具表也不带这个工具。
     pub questions: Option<Arc<dyn UserQuestions>>,
-    /// The strategy mounted at the two tool-call hook points. `None` means the
-    /// loop calls no hook and appends no `HookExecuted` event.
+    /// 挂在两个工具调用钩子点上的策略。`None` 表示循环不调任何钩子，也不追加 `HookExecuted`
+    /// 事件。
     pub hook: Option<Arc<dyn Hook>>,
-    /// The user's home directory, when it is known.
+    /// 用户的家目录，已知时。
     pub home: Option<PathBuf>,
-    /// The skills discovered at assembly (spec §9). Shared with every nested
-    /// session, so an executor sees the same catalog as its parent.
+    /// 组装时发现的技能（spec §9）。与每一场嵌套会话共享，所以执行者看到的名录和它的父级一样。
     pub skills: Arc<Skills>,
-    /// This agent's private identity: the `system` message it is given, and the
-    /// one thing about it that never enters the event stream (spec §15). A
-    /// discussion's protocol instructions live here precisely so that a round's
-    /// `messages` stays recomputable from the stream.
+    /// 这个 agent 的私有身份：给它的那条 `system` 消息，以及关于它、却永不进入事件流的那一件事
+    /// （spec §15）。讨论的协议指令正住在这里，好让一轮的 `messages` 仍能从流重算出来。
     pub identity: Option<String>,
 }
 
@@ -90,33 +75,27 @@ pub struct Session {
     locks: PathLocks,
     paths: SessionPaths,
     outputs_dir: PathBuf,
-    /// Paths this agent has read. Never inherited: read permission is per agent.
+    /// 这个 agent 读过的路径。从不继承：读权限是每个 agent 各自的。
     read_set: ReadSet,
-    /// The session's permission policy. A value, never an event: `--continue`
-    /// returns to the configured mode (spec §12). Shared, because a session
-    /// allowance earned inside one debater's turn is a session-scoped fact.
+    /// 会话的权限策略。一个值，绝不是事件：`--continue` 会回到配置里的那一档（spec §12）。共享，
+    /// 因为某个讨论者回合里挣到的会话许可是一件属于整场会话的事实。
     policy: Arc<Mutex<Policy>>,
-    /// The ask port, shared with any nested session so an executor asks through
-    /// the same renderer.
+    /// 询问端口，与任何嵌套会话共享，好让执行者通过同一个渲染器提问。
     asker: Option<Arc<dyn Asker>>,
-    /// The question port, shared with any sibling session for the same reason as
-    /// the asker: one keyboard answers for the whole session.
+    /// 问卷端口，与任何兄弟会话共享，理由与询问端口相同：同一个键盘为整场会话作答。
     questions: Option<Arc<dyn UserQuestions>>,
-    /// The hook strategy, shared with any nested session so an executor cannot
-    /// escape the strategy that constrains its parent (spec §16).
+    /// 钩子策略，与任何嵌套会话共享，好让执行者逃不出约束它父级的那个策略（spec §16）。
     hook: Option<Arc<dyn Hook>>,
     home: Option<PathBuf>,
-    /// The discovered skill library, read by the built-in `skill` tool (spec §9).
+    /// 发现到的技能库，内建 `skill` 工具读它（spec §9）。
     skills: Arc<Skills>,
-    /// This agent's private identity, or `None` when it is given none. Never
-    /// appended to the log: it is the one input to a request that the stream does
-    /// not carry (spec §15).
+    /// 这个 agent 的私有身份；没有给它身份时是 `None`。从不追加进日志：它是请求的一项输入，而事
+    /// 件流不承载它（spec §15）。
     identity: Option<String>,
 }
 
 impl Session {
-    /// Wrap a freshly created log. Recording `SessionStarted` is the `agent`
-    /// module's job, so all writes stay in one place.
+    /// 包住一份刚建好的日志。记录 `SessionStarted` 是 `agent` 模块的事，这样所有写入都留在一处。
     pub fn new(parts: SessionParts) -> Self {
         let SessionParts {
             id,
@@ -155,17 +134,15 @@ impl Session {
         }
     }
 
-    /// A snapshot of this session's events, in order.
+    /// 这场会话事件的一份快照，按序。
     ///
-    /// A snapshot rather than a borrow: the log is a shared handle, so two
-    /// debaters' turns may append to it between two reads, and no borrow could
-    /// span that.
+    /// 快照而不是借用：日志是共享句柄，两个讨论者的回合可能在两次读之间往它上面追加，没有任何借用
+    /// 能跨越那段时间。
     pub fn events(&self) -> Vec<Event> {
         self.log.events()
     }
 
-    /// The session's event log. Read-only here: projection takes the log as its
-    /// input, and only the `agent` module appends to it.
+    /// 会话的事件流。这里只读：投影把流当输入，只有 `agent` 模块往它上面追加。
     pub fn log(&self) -> &EventLog {
         &self.log
     }
@@ -182,22 +159,18 @@ impl Session {
         &self.config
     }
 
-    /// The values this session scrubs from text on its way into the stream
-    /// (spec §20).
+    /// 这场会话在文本进入事件流的路上会打码掉的那些值（spec §20）。
     ///
-    /// Held by [`SessionConfig`] because `Config::session_config` is the one
-    /// place configuration becomes injected values; this accessor is how the one
-    /// write path and the text that leaves the harness reach it without walking
-    /// into the config's fields themselves.
+    /// 由 [`SessionConfig`] 持有，因为 `Config::session_config` 是配置变成注入值的唯一一处；这个
+    /// 访问器让唯一写入路径与离开 harness 的文本都能拿到它，而不必亲自走进配置的字段里。
     pub fn redactor(&self) -> &Redactor {
         &self.config.redactor
     }
 
-    /// Redact `text` with this session's values (spec §20).
+    /// 用这场会话的值给 `text` 打码（spec §20）。
     ///
-    /// The text that leaves the harness — a tool result about to be spilled, a
-    /// turn's outcome, a synthesizer's product — goes through here rather than
-    /// through the stream's write path, so the two carry the same text.
+    /// 离开 harness 的文本 —— 即将落盘的工具结果、一个回合的收尾、合成器的产出 —— 走这里、而不是
+    /// 走流的写入路径，这样两边携带的是同一份文本。
     pub fn redacted(&self, text: &str) -> String {
         self.config.redactor.redacted(text)
     }
@@ -206,21 +179,20 @@ impl Session {
         self.log.path()
     }
 
-    /// The tool table for this session.
+    /// 这场会话的工具表。
     pub fn tools(&self) -> &Registry {
         &self.tools
     }
 
-    /// The tool table as a shared handle.
+    /// 以共享句柄的形式给出的工具表。
     ///
-    /// For work that must outlive a borrow of this session: the loop's batch of
-    /// deferred executor calls dispatches through the table while it still needs
-    /// the session to record their results (spec §16).
+    /// 用于必须活过对本会话的借用的工作：循环那一批推迟的执行者调用，在它仍需要会话记录结果的同时
+    /// 通过这张表派发（spec §16）。
     pub fn shared_tools(&self) -> Arc<Registry> {
         Arc::clone(&self.tools)
     }
 
-    /// Where this session's tool artifacts (`outputs/<tool_call_id>.*`) land.
+    /// 这场会话的工具产物（`outputs/<tool_call_id>.*`）落在哪里。
     pub fn outputs_dir(&self) -> &Path {
         &self.outputs_dir
     }
@@ -233,57 +205,50 @@ impl Session {
         &self.locks
     }
 
-    /// The session's permission policy.
+    /// 会话的权限策略。
     ///
-    /// A snapshot by value: the policy is shared, so the gate takes the value it
-    /// judges with rather than holding a lock across an interactive ask.
+    /// 按值取快照：策略是共享的，所以权限门取的是它据以裁决的那个值，而不是在一次交互式询问期间一
+    /// 直持着锁。
     pub fn policy(&self) -> Policy {
-        self.policy.lock().expect("policy mutex poisoned").clone()
+        self.policy.lock().expect("策略互斥锁中毒").clone()
     }
 
-    /// Remember a session-scoped allowance. This changes the policy value only:
-    /// it writes no `config.toml` and appends no event (spec §12).
+    /// 记住一条会话级许可。它只改策略这个值：不写 `config.toml`、也不追加事件（spec §12）。
     pub fn remember_allow(&mut self, rule: Rule) {
         self.policy
             .lock()
-            .expect("policy mutex poisoned")
+            .expect("策略互斥锁中毒")
             .push(rule);
     }
 
-    /// The mode this session currently runs under.
+    /// 这场会话当前跑在哪一档。
     pub fn mode(&self) -> Mode {
-        self.policy.lock().expect("policy mutex poisoned").mode()
+        self.policy.lock().expect("策略互斥锁中毒").mode()
     }
 
-    /// Swap the session's mode, keeping its rules. The mode-cycle gesture's one
-    /// effect on the policy — a value, never an event, which is why `--continue`
-    /// starts from the configured mode (spec §12).
+    /// 换掉会话的模式，保留它的规则。这是模式循环手势对策略的唯一作用 —— 一个值，绝不是事件，这
+    /// 也正是 `--continue` 从配置里的那一档开始的原因（spec §12）。
     pub fn set_mode(&self, mode: Mode) {
         self.policy
             .lock()
-            .expect("policy mutex poisoned")
+            .expect("策略互斥锁中毒")
             .set_mode(mode);
     }
 
-    /// This agent's private identity, if it has one.
+    /// 这个 agent 的私有身份，如果有的话。
     ///
-    /// It reaches the provider as the leading `system` message and never reaches
-    /// the event stream (spec §15).
+    /// 它作为开头那条 `system` 消息到达 provider，永不进入事件流（spec §15）。
     pub fn identity(&self) -> Option<&str> {
         self.identity.as_deref()
     }
 
-    /// A **sibling** session on the same stream: every session-level value is shared —
-    /// the event log, the tool table, the write locks, the permission policy, the
-    /// answerer, the hook, the home directory and the discovered skills — and only the
-    /// agent's own values differ (its model, its generation parameters, its private
-    /// identity).
+    /// 同一份流上的**兄弟**会话：每个会话级的值都共享 —— 事件流、工具表、写锁、权限策略、应答者、
+    /// 钩子、家目录与发现到的技能 —— 只有 agent 自己的值不同（它的模型、它的生成参数、它的私有身
+    /// 份）。
     ///
-    /// This is what lets a discussion run **on a live session** (spec §15): its
-    /// debaters are siblings of the session the user is in, so their projection turns
-    /// that session's turns into `user` messages and their rounds are appended to the
-    /// same stream. The read set is deliberately **not** inherited — read permission is
-    /// per agent (spec §12), and a debater has read nothing.
+    /// 这正是讨论能**跑在一场活会话上**的原因（spec §15）：它的讨论者是用户所在那场会话的兄弟，所
+    /// 以它们的投影把那场会话的回合变成 `user` 消息，而它们的轮次追加到同一份流上。读集合刻意
+    /// **不**继承 —— 读权限是每个 agent 各自的（spec §12），而讨论者什么都没读过。
     pub(crate) fn fork(&self, config: SessionConfig, identity: Option<String>) -> Self {
         Self::new(SessionParts {
             id: self.id.clone(),
@@ -303,51 +268,48 @@ impl Session {
         })
     }
 
-    /// The ask port, if this session has an interactive answerer.
+    /// 询问端口，如果这场会话有交互式应答者。
     pub fn asker(&self) -> Option<&Arc<dyn Asker>> {
         self.asker.as_ref()
     }
 
-    /// The question port, if this session can put model-initiated questions to
-    /// the user (spec §7). The loop copies it into each call's dispatch context,
-    /// where the `ask_user_question` tool reads it.
+    /// 问卷端口，如果这场会话能把模型发起的提问交给用户（spec §7）。循环把它拷进每次调用的派发上
+    /// 下文中，`ask_user_question` 工具在那里读它。
     pub fn questions(&self) -> Option<&Arc<dyn UserQuestions>> {
         self.questions.as_ref()
     }
 
-    /// The hook strategy, if one is mounted.
+    /// 钩子策略，如果挂了一个。
     pub fn hook(&self) -> Option<&Arc<dyn Hook>> {
         self.hook.as_ref()
     }
 
-    /// The user's home directory, when it was injected.
+    /// 用户的家目录，在它被注入时。
     pub fn home(&self) -> Option<&Path> {
         self.home.as_deref()
     }
 
-    /// The discovered skill library (spec §9). The `skill` tool reads it through
-    /// the dispatch context; the catalog injection is computed from it at
-    /// assembly.
+    /// 发现到的技能库（spec §9）。`skill` 工具通过派发上下文读它；技能清单的注入在组装时由它算
+    /// 出。
     pub fn skills(&self) -> &Arc<Skills> {
         &self.skills
     }
 
-    /// This agent's read set. Read-before-edit consults it; a failed match
-    /// withdraws a path from it, and a read adds one.
+    /// 这个 agent 的读集合。`read-before-edit` 会查它；一次失败的比对会把一个路径从它里面撤掉，
+    /// 而一次读会加进一个。
     pub fn read_set(&self) -> &ReadSet {
         &self.read_set
     }
 
-    /// Record paths this agent has read.
+    /// 记录这个 agent 读过的路径。
     ///
-    /// The loop calls this after the call completes, not inside dispatch, so the
-    /// read set never has to be borrowed mutably at the same time as the tool
-    /// registry it is dispatching into.
+    /// 循环在调用完成后调它，而不是在派发内部，这样读集合永远不必与它正在派发进去的那张工具表同时
+    /// 被可变借用。
     pub fn record_reads(&mut self, paths: &[std::path::PathBuf]) {
         self.read_set.record_all(paths.iter().cloned());
     }
 
-    /// Withdraw this agent's read permission for one path.
+    /// 撤销这个 agent 对某一个路径的读权限。
     pub fn invalidate_read(&mut self, path: &Path) {
         self.read_set.invalidate(path);
     }

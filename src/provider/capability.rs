@@ -1,24 +1,21 @@
-//! The capability table: model id -> what that model actually supports.
+//! 能力表：模型 id -> 那个模型实际支持什么。
 //!
-//! Built by model id, modeling only the two vendors this crate speaks to. It is
-//! `#[non_exhaustive]` so a new capability is not a breaking change, and an
-//! unregistered id is an **error**, never a silent downgrade (spec §4): the
-//! adapter either knows a model's shape or it refuses to guess.
+//! 按模型 id 构建，只建模本 crate 实际对话的这两家厂商。它是 `#[non_exhaustive]`，所以新增一
+//! 项能力不是破坏性变更；而没登记的 id 是**错误**，绝不是悄悄降级（spec §4）：适配器要么知道
+//! 某个模型的形状，要么拒绝去猜。
 //!
-//! Sources for the numbers are the vendors' own API references:
-//! Kimi (`kimi-k3`, 1M context, `max_completion_tokens` up to 1048576,
-//! `reasoning_effort` low/high/max, `cached_tokens`, `prompt_cache_key`, and a
-//! cache floor of 256 prompt tokens) and DeepSeek (`deepseek-flash` /
-//! `deepseek-v4-pro`, 1M context, 384K max output, `prompt_cache_hit_tokens` /
-//! `prompt_cache_miss_tokens`, no `prompt_cache_key`).
+//! 这些数字的来源是厂商自己的 API 参考：Kimi（`kimi-k3`，1M 上下文，`max_completion_tokens`
+//! 上限 1048576，`reasoning_effort` 取 low/high/max，`cached_tokens`，`prompt_cache_key`，缓
+//! 存下限 256 个 prompt token）与 DeepSeek（`deepseek-flash` / `deepseek-v4-pro`，1M 上下文，
+//! 384K 最大输出，`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，没有
+//! `prompt_cache_key`）。
 
 use std::fmt;
 
 use crate::config::Vendor;
 
-/// The wire parameter carrying the output-token cap. Kimi deprecated
-/// `max_tokens` in favor of `max_completion_tokens`; DeepSeek still documents
-/// `max_tokens`.
+/// 承载输出 token 上限的那个线上参数。Kimi 弃用了 `max_tokens`、改用
+/// `max_completion_tokens`；DeepSeek 仍然记的是 `max_tokens`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaxTokensField {
     MaxTokens,
@@ -34,68 +31,62 @@ impl MaxTokensField {
     }
 }
 
-/// What one model id supports. Every field is a fact about the vendor, not a
-/// policy of this crate.
+/// 一个模型 id 支持什么。每个字段都是关于厂商的事实，不是本 crate 的策略。
 ///
-/// Some entries are read by later tickets rather than by the adapter: this is
-/// the single home for the facts the spec pins (context windows for §10's
-/// usable-input budget, the cache floor for §17's accounting, the reasoning
-/// replay contract for §5's projection), so they are not re-guessed there.
+/// 有些条目是更晚的票要读、而不是适配器要读的：spec 钉住的事实都只住在这一处（§10 的可用输入预
+/// 算要用上下文窗口，§17 的记账要用缓存下限，§5 的投影要用推理重放契约），所以在那些地方不必
+/// 再猜一遍。
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct ModelCaps {
     pub vendor: Vendor,
-    /// Total context window, input plus output.
+    /// 总上下文窗口，输入加输出。
     pub context_window: u32,
-    /// Largest value the output-token cap may take. Never larger than
-    /// `context_window`: the cap is a slice of the same window.
+    /// 输出 token 上限可以取的最大值。永不大于 `context_window`：那个上限是同一个窗口里切出
+    /// 来的一片。
     pub max_output_tokens: u32,
     pub supports_tools: bool,
-    /// Returns `reasoning_content`.
+    /// 会返回 `reasoning_content`。
     pub supports_reasoning: bool,
-    /// Accepts the top-level `reasoning_effort` tier.
+    /// 接受顶层的 `reasoning_effort` 档位。
     pub supports_reasoning_effort: bool,
-    /// Whether the model's own `reasoning_content` must be replayed on a
-    /// request that carries tools; dropping it is a vendor-side error
-    /// (DeepSeek 400s). Projection (§5) owns the replay; the flag documents why
-    /// it is not optional.
+    /// 带工具的请求里，模型自己的 `reasoning_content` 是否必须重放；丢掉它是厂商侧的错误
+    /// （DeepSeek 直接 400）。重放由投影（§5）负责，这个标志只记录它为什么不是可选项。
     pub requires_reasoning_replay: bool,
     pub supports_temperature: bool,
     pub supports_top_p: bool,
-    /// Accepts `prompt_cache_key` (Kimi); DeepSeek's cache is automatic and the
-    /// parameter does not exist.
+    /// 接受 `prompt_cache_key`（Kimi）；DeepSeek 的缓存是自动的，没有这个参数。
     pub supports_prompt_cache_key: bool,
-    /// Accepts `stream_options: {include_usage: true}`, which yields a final
-    /// usage-only chunk before `[DONE]`.
+    /// 接受 `stream_options: {include_usage: true}`，它会在 `[DONE]` 之前多给一个只带用量
+    /// 的 chunk。
     pub supports_stream_options: bool,
     pub max_tokens_field: MaxTokensField,
-    /// Prompt-token count below which the vendor does not cache at all.
+    /// 低于这个 prompt token 数时厂商根本不缓存。
     pub min_cacheable_tokens: u32,
 }
 
-/// Every model id this crate models, in a stable order for diagnostics.
+/// 本 crate 建模的全部模型 id，顺序稳定，便于诊断。
 pub const KNOWN_MODELS: &[&str] = &[
-    // Kimi Open Platform.
+    // Kimi Open Platform。
     "kimi-k3",
-    // Kimi Code (coding plan); K3 is exposed to it as `k3` / `k3-256k`.
+    // Kimi Code（编程套餐）；K3 在它那里以 `k3` / `k3-256k` 暴露。
     "k3",
     "k3-256k",
     "kimi-for-coding",
     "kimi-for-coding-highspeed",
-    // DeepSeek.
+    // DeepSeek。
     "deepseek-flash",
     "deepseek-v4-pro",
 ];
 
-/// Look up a model id. Unknown ids are an error, never a default.
+/// 按 id 查模型。不认识的 id 是错误，永远不给默认值。
 pub fn caps_for(model: &str) -> Result<ModelCaps, UnknownModel> {
     let caps = match model {
-        // The same K3 model, under its Open Platform id and its coding-plan ids.
+        // 同一个 K3 模型，一个是 Open Platform 的 id，两个是编程套餐的 id。
         "kimi-k3" | "k3" => k3_caps(1_048_576),
         "k3-256k" => k3_caps(262_144),
-        // Kimi Code's K2.x models. `kimi-for-coding` is K2.8 Preview (takes an
-        // effort tier); `kimi-for-coding-highspeed` is K2.7 Code with thinking
-        // always on and no tier.
+        // Kimi Code 的 K2.x 模型。`kimi-for-coding` 是 K2.8 Preview（接受一个 effort
+        // 档位）；`kimi-for-coding-highspeed` 是 K2.7 Code，思考常开、没有档位。
         "kimi-for-coding" => kimi_code_k2_caps(1_048_576, true),
         "kimi-for-coding-highspeed" => kimi_code_k2_caps(262_144, false),
         "deepseek-v4-pro" | "deepseek-flash" => deepseek_caps(),
@@ -104,10 +95,10 @@ pub fn caps_for(model: &str) -> Result<ModelCaps, UnknownModel> {
     Ok(caps)
 }
 
-/// K3, whether reached through the Open Platform or Kimi Code.
+/// K3，无论走 Open Platform 还是 Kimi Code 进来。
 ///
-/// K3 documents no output cap tighter than the window, and fixes sampling at
-/// temperature 1.0 / top_p 0.95 with a request not to send them.
+/// K3 没有记下任何比窗口更紧的输出上限，并且把采样固定在 temperature 1.0 / top_p 0.95，同时
+/// 要求不要把它们发过去。
 fn k3_caps(context_window: u32) -> ModelCaps {
     ModelCaps {
         vendor: Vendor::Kimi,
@@ -148,7 +139,7 @@ fn deepseek_caps() -> ModelCaps {
     ModelCaps {
         vendor: Vendor::DeepSeek,
         context_window: 1_048_576,
-        // DeepSeek documents a hard 384K output cap below its 1M window.
+        // DeepSeek 记下的输出上限是硬性的 384K，在它 1M 的窗口之下。
         max_output_tokens: 393_216,
         supports_tools: true,
         supports_reasoning: true,
@@ -163,8 +154,7 @@ fn deepseek_caps() -> ModelCaps {
     }
 }
 
-/// An unregistered model id. This is deliberately loud: a new model must be
-/// added to the table with sourced numbers before it can run.
+/// 没登记的模型 id。这里刻意做得响：新模型必须带着有出处的数字进表才能跑。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownModel {
     pub model: String,

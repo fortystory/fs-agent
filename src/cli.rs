@@ -1,22 +1,17 @@
-//! CLI boundary: the only place that reads the environment.
+//! CLI 边界：唯一读环境的地方。
 //!
-//! The binary is a thin shell around this module. Everything the library needs
-//! is assembled here from `config.toml`, the exported environment and the
-//! built-in defaults, then injected into [`crate::assemble`].
+//! 二进制只是这个模块外面一层薄壳。库需要的一切都在这里从 `config.toml`、导出的环境与内建默认值组
+//! 装出来，然后注入 [`crate::assemble`]。
 //!
-//! `probe` is the ticket-02 manual acceptance tool: it drives one real turn
-//! against each configured model, then a second turn in the same session, so
-//! the usage line for the second request shows whether prefix caching hit. It
-//! runs headless with throwaway session logs.
+//! `probe` 是票 02 的手工验收工具：它对每个已配置的模型驱动一个真实回合，然后在同一场会话里再驱动
+//! 第二个回合，这样第二个请求的用量行就能看出前缀缓存有没有命中。它无头运行，用一次性的会话日志。
 //!
-//! `prune` and `sessions` both read the store ticket 12 built: `prune` removes a
-//! workspace's session directories by hand, and `sessions` answers questions
-//! about a **finished** session from its own stream — `ls`, the round-grouped
-//! `show` (with `--files` as the workspace-object view), `replay` (the projection
-//! recomputation, spec §18) and `stats`. They live here because the store's root
-//! comes from the environment, which the library never reads; the queries
-//! themselves are [`crate::session::observe`] and [`crate::agent::replay`].
-//! The interactive renderers are still the one unwired piece (ticket 18).
+//! `prune` 与 `sessions` 读的都是票 12 建出来的那个 store：`prune` 手动删掉某个工作区的会话目录，
+//! 而 `sessions` 从一场**已结束**会话自己的流里回答关于它的问题 —— `ls`、按轮分组的 `show`
+//! （`--files` 是按工作区对象看的那个视图）、`replay`（投影的重算，spec §18）与 `stats`。它们住在
+//! 这里，因为 store 的 root 来自环境，而库从不读环境；查询本身在
+//! [`crate::session::observe`] 与 [`crate::agent::replay`]。交互式渲染器仍是唯一没有接线的那一块
+//! （票 18）。
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -47,18 +42,16 @@ use crate::{
     Harness, SessionScaffold, SynthesizerParts,
 };
 
-/// Prompt for the second probe turn; keeps the transcript growing so the first
-/// turn's prefix is what the cache has to match.
+/// 探针第二个回合的提示词；它让转录继续变长，好让第一个回合的前缀成为缓存必须匹配的那些内容。
 const PROBE_FOLLOW_UP: &str = "Reply with exactly: done";
 
-/// How long to wait between the two probe turns.
+/// 两次探针回合之间等多久。
 ///
-/// DeepSeek builds its prefix cache on disk over "seconds"; asking again
-/// immediately measures a cold cache and reports a false negative.
+/// DeepSeek 在磁盘上建它的前缀缓存要花「秒」级的时间；立刻再问一次量到的是冷缓存，会报出假阴性。
 const CACHE_WARMUP: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The first probe turn. Padded well past both vendors' cache floors (Kimi only
-/// caches prompts above 256 tokens), so a second request can show a hit at all.
+/// 探针的第一个回合。填充得远超两家厂商的缓存下限（Kimi 只缓存 256 token 以上的 prompt），这样
+/// 第二个请求才有可能显出一次命中。
 fn probe_prompt() -> String {
     const FILLER: &str =
         "The quick brown fox jumps over the lazy dog while the prefix cache warms up. ";
@@ -72,23 +65,20 @@ fn probe_prompt() -> String {
     prompt
 }
 
-/// Why this process refuses to start as root, if it is root (spec §20).
+/// 如果这个进程是 root，它为什么拒绝启动（spec §20）。
 ///
-/// A pure function of the effective uid, on purpose: the refusal has nothing to
-/// read but the uid, so there is no argument, environment variable or mode that
-/// can turn it off. The guardrails in this project assume the worst case stays
-/// inside the workspace; as root a single misjudgement is system-wide, which is
-/// a different risk class than the one being managed.
+/// 刻意做成只由有效 uid 决定的纯函数：这次拒绝除了 uid 没有任何可读的东西，所以没有任何参数、环境
+/// 变量或模式能把它关掉。这个项目的护栏假定最糟的情况留在工作区之内；而作为 root，一次误判就是全系
+/// 统的，那是与正在管理的风险不同的一类风险。
 pub fn root_refusal(euid: u32) -> Option<String> {
     (euid == 0).then(|| render::wording::root_refusal().to_owned())
 }
 
-/// Parse `argv` from the environment and run. This is the binary entry point.
+/// 从环境里解析 `argv` 并运行。这是二进制的入口。
 pub fn main() -> ExitCode {
-    // Checked before anything else — before arguments, before the runtime — so
-    // there is no path into the program as root and no flag that skips the
-    // check (spec §20).
-    // SAFETY: `geteuid` only reads the calling process's uid and cannot fail.
+    // 先于一切检查 —— 先于参数、先于 runtime —— 所以进不了以 root 身份运行程序的那条路径，也没有
+    // 任何旗标能跳过这个检查（spec §20）。
+    // SAFETY: `geteuid` 只读调用进程的 uid，不会失败。
     let euid = unsafe { libc::geteuid() };
     if let Some(message) = root_refusal(euid) {
         eprintln!("fs-agent: {message}");
@@ -132,31 +122,29 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             let mut err = stderr.lock();
             run_sessions(&args[1..], env, &mut out, &mut err)
         }
-        // No subcommand (or a bare flag) is the interactive session: the common
-        // case is just running `fs-agent` in a workspace. `interactive` parses
-        // its own arguments and rejects anything it does not know.
+        // 没有子命令（或者只有一个裸旗标）就是交互式会话：常见情形就是在某个工作区里直接跑
+        // `fs-agent`。`interactive` 自己解析自己那批参数，并拒掉任何它不认识的东西。
         _ => interactive(args, env).await,
     }
 }
 
 // ---------------------------------------------------------------------------
-// The interactive front end (spec §19)
+// 交互式前端（spec §19）
 // ---------------------------------------------------------------------------
 
-/// One parsed interactive invocation. The renderer is chosen here and injected
-/// into the assembly, so exactly one mode runs.
+/// 一次已解析的交互式调用。渲染器在这里选定并注入组装，所以只会有一个模式在跑。
 #[derive(Debug, Default)]
 struct InteractiveArgs {
-    /// Force the plain renderer.
+    /// 强制用 plain 渲染器。
     plain: bool,
-    /// Force the TUI renderer.
+    /// 强制用 TUI 渲染器。
     tui: bool,
-    /// Resume this workspace's newest session (spec §11).
+    /// 接着跑这个工作区最新的那场会话（spec §11）。
     resume: bool,
     config: Option<PathBuf>,
     model: Option<String>,
-    /// `--mode readonly|ask|auto`: the permission mode for this run, overriding
-    /// `[permissions] mode` (spec §12). Absent means "whatever the file says".
+    /// `--mode readonly|ask|auto`：这一趟跑的权限模式，覆盖 `[permissions] mode`（spec §12）。不
+    /// 写表示「文件怎么写就怎么来」。
     mode: Option<Mode>,
     cwd: Option<PathBuf>,
 }
@@ -178,9 +166,8 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
                 match flag.as_str() {
                     "--config" => parsed.config = Some(PathBuf::from(value)),
                     "--model" => parsed.model = Some(value.clone()),
-                    // Parsed here rather than in the assembly: a mode the gate does
-                    // not know is a typo, and a typo is worth refusing before a
-                    // provider is built or a session is created.
+                    // 在这里解析而不是在组装里：权限门不认识的一个模式是打错字，而打错字值得在
+                    // provider 被构建、会话被创建之前就拒掉。
                     "--mode" => {
                         parsed.mode = Some(
                             Mode::parse(value)
@@ -201,21 +188,19 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
     Ok(parsed)
 }
 
-/// The mode a run starts in: the `--mode` flag over `[permissions] mode`
-/// (spec §12; `.scratch/todo-and-modes/spec.md` §1).
+/// 一趟运行从哪一档开始：`--mode` 旗标压过 `[permissions] mode`（spec §12；
+/// `.scratch/todo-and-modes/spec.md` §1）。
 ///
-/// A named function rather than the expression inline, because "which of the two
-/// wins" **is** the entry-point decision, and this is the only place a test can
-/// hold it — the rest of the path needs a terminal.
+/// 做成具名函数而不是内联表达式，因为「两者谁赢」**就是**入口点的决定，而这里是测试唯一能把它按住
+/// 的地方 —— 剩下的路径需要终端。
 fn effective_mode(parsed: &InteractiveArgs, config: &Config) -> Mode {
     parsed.mode.unwrap_or(config.mode)
 }
 
-/// The interactive session: one workspace, one renderer, one keyboard.
+/// 交互式会话：一个工作区、一个渲染器、一个键盘。
 ///
-/// The renderer is selected before assembly and injected, and the same console
-/// port serves both the loop's prompts and the permission gate's questions — the
-/// two things that come from the same keyboard (spec §19).
+/// 渲染器在组装之前选定并注入，而同一个控制台端口既服务循环的提示、也服务权限门的询问 —— 这两样东
+/// 西来自同一个键盘（spec §19）。
 async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", render::wording::help_interactive());
@@ -236,7 +221,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // An unregistered model is a startup error, never a silent downgrade.
+    // 没登记的模型是启动错误，绝不是悄悄降级。
     if let Err(message) = validate_models(&config) {
         eprintln!("fs-agent: {message}");
         return ExitCode::FAILURE;
@@ -320,23 +305,19 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
 
-    // The mode this run starts in: the flag over the file (spec §12). Resolved
-    // once, here, because three things need the same answer — the policy the gate
-    // runs under, the banner and the status row.
+    // 这一趟从哪一档开始：旗标压过文件（spec §12）。在这里一次性定下来，因为有三样东西要同一个答
+    // 案 —— 权限门跑在哪一档、横幅、以及状态行。
     let mode = effective_mode(&parsed, &config);
 
-    // The keyboard's two ends: the loop's handle and gesture receiver, and the
-    // port the selected renderer (or the plain line reader) serves it through.
+    // 键盘的两端：循环持有的句柄与手势接收端，以及选定的渲染器（或 plain 逐行读取器）为它服务的那
+    // 个端口。
     let (console, port, mut events) = render::console();
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
-        // The header and the panel display these; none of them rides the event
-        // stream. The mode is one of them: it is a session value the front end
-        // shows and the gesture moves, not something the stream carries any more.
-        // The window is the model's input budget. The provider above already
-        // resolved this same table, so the failure below is belt-and-braces: it
-        // keeps an unregistered model a startup error here too, rather than a
-        // panic where the facts are built.
+        // 表头与面板显示这些；它们都不走事件流。模式就是其中之一：它是前端要显示、手势要挪动的一个
+        // 会话值，而不再是流承载的东西。窗口是模型的输入预算。上面的 provider 已经解析过同一张表，
+        // 所以下面这个失败是双保险：它让没登记的模型在这里也是启动错误，而不是在构建那些事实的地方
+        // panic。
         let caps = match caps_for(&model) {
             Ok(caps) => caps,
             Err(error) => {
@@ -351,21 +332,19 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             context_window: crate::context::usable_input(&caps),
             mode,
             budget_limit: session_config.budget.limit,
-            // A single-agent session speaks as its profile, so that is the whole
-            // roster the transcript's name colours have to place (票 07 §1).
+            // 单 agent 会话以它的档案发言，所以那就是转录的名字配色需要安排的全部名册
+            // （票 07 §1）。
             speaker_order: vec![profile.name.clone()],
         };
         Renderer::tui(TuiOptions {
             port,
             facts,
-            // A reopened session gets its history replayed before the banner, so the
-            // TUI has to know not to render anything until that replay arrives
-            // (`.scratch/tui-history-replay/spec.md` §1, §3).
+            // 重新打开的会话会在横幅之前重放它的历史，所以 TUI 必须知道，在那次重放到达之前什么都
+            // 不要画（`.scratch/tui-history-replay/spec.md` §1、§3）。
             reopened: parsed.resume,
         })
     } else {
-        // The plain front end reads stdin; it is line-buffered, so there is no
-        // raw mode and no key events.
+        // plain 前端读 stdin；它是行缓冲的，所以没有 raw 模式、也没有按键事件。
         render::spawn_plain_console(port);
         Renderer::plain(PlainOptions {
             sinks: RenderSinks {
@@ -376,10 +355,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         })
     };
     let asker = Arc::new(ConsoleAsker::from_handle(&console));
-    // The model's questions travel the same keyboard on their own port (spec §7).
-    // Interactive assembly always has one — TUI or plain — so the tool table offers
-    // `ask_user_question`, and the table is built from the port's presence rather
-    // than from a second, drift-prone flag.
+    // 模型的问题走同一个键盘、走它自己的端口（spec §7）。交互式组装总是有一个 —— TUI 或 plain
+    // —— 所以工具表提供 `ask_user_question`，而这张表是按端口在不在建的，不是按第二个容易漂移的
+    // 标志建的。
     let questions: Option<Arc<dyn UserQuestions>> =
         Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
@@ -388,12 +366,11 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             cwd: cwd.clone(),
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            // The tool table is fixed here, at assembly: the built-ins plus
-            // every dynamically declared tool (spec §14).
+            // 工具表在这里、在组装处定下：内建的那些加上每一个动态声明的工具（spec §14）。
             tools: tools::with_dynamic(&config.tools, questions.is_some()),
             locks: PathLocks::new(),
-            // The mode the user chose: `[permissions] mode`, or `--mode` over it
-            // (spec §12). A headless caller gets no answerer and downgrades.
+            // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
+            // 用方没有应答者，于是降级。
             policy: Policy::for_mode(mode),
             asker: Some(asker),
             questions,
@@ -414,20 +391,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         }
     };
 
-    // The history a reopened session assembled with, pushed to the front end before
-    // the banner so the TUI lays it out first and the banner lands *after* the seam
-    // rather than in the middle of it (`.scratch/tui-history-replay/spec.md` §1).
-    // The payload is the assembled snapshot, so it carries the synthetic results
-    // `--continue`'s recovery wrote for dangling tool calls. A fresh session has no
-    // history, so nothing is sent at all.
+    // 重新打开的会话组装时带上的历史，在横幅之前推给前端，好让 TUI 先把它铺好、横幅落在接缝**之
+    // 后**，而不是落在接缝中间（`.scratch/tui-history-replay/spec.md` §1）。payload 就是组装好的
+    // 那份快照，所以它带着 `--continue` 的恢复为悬空工具调用写下的合成结果。新会话没有历史，所以
+    // 什么都不发。
     if parsed.resume {
         console.replay(harness.events());
     }
 
-    // User story A.12: say which model, mode and session this is, before the
-    // first question. It goes through the renderer rather than to stderr: the
-    // TUI started when the harness was assembled, and a second writer to the
-    // terminal lands inside its live region, on top of the status line.
+    // 用户故事 A.12：在第一个问题之前说清这是哪个模型、哪一档、哪场会话。它走渲染器而不是 stderr：
+    // TUI 在 harness 组装时就已经启动，第二个往终端写的人会落在它的活动区域里、盖在状态行上。
     harness.notice(&render::wording::banner(
         harness.session_id().as_str(),
         &model,
@@ -436,10 +409,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         parsed.resume,
     ));
 
-    // The `/` menu's names. The loop is what acts on a submission, so the loop is
-    // what says which names exist: the built-ins it parses, then the skills this
-    // session discovered — which is why this is sent here, after assembly and
-    // before the first prompt, and not injected with the header's facts.
+    // `/` 菜单里的名字。真正对提交作出反应的是循环，所以「有哪些名字」也由循环说了算：它解析的那
+    // 些内建命令，然后是这场会话发现到的技能 —— 这正是它在这里、在组装之后、第一个提示之前发出，
+    // 而不是随表头那些事实一起注入的原因。
     console.catalog(
         render::wording::BUILT_IN_COMMANDS
             .iter()
@@ -459,19 +431,18 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
 }
 
 // ---------------------------------------------------------------------------
-// The discussion front end (spec §15)
+// 讨论前端（spec §15）
 // ---------------------------------------------------------------------------
 
-/// One parsed `fs-agent discuss` invocation.
+/// 一次已解析的 `fs-agent discuss` 调用。
 ///
-/// There is deliberately no `--model`: who debates is a configuration fact
-/// (`[discussion] debaters`), and a flag that could replace one of the two would be a
-/// second way to say it. What is left to choose is how the discussion is watched.
+/// 刻意没有 `--model`：谁参与讨论是一件配置事实（`[discussion] debaters`），而一个能替换掉两者之
+/// 一的旗标会是说同一件事的第二种方式。剩下可选的只是这场讨论怎么看。
 #[derive(Debug, Default)]
 struct DiscussArgs {
-    /// The question, in the words it was given with. Empty means "ask stdin".
+    /// 那个问题，用它被给进来时的那些词。空表示「问 stdin」。
     words: Vec<String>,
-    /// `--debaters a,b`: which two of the pool debate. `None` draws a pair.
+    /// `--debaters a,b`：池子里哪两位参与讨论。`None` 表示抽一对。
     debaters: Option<[String; 2]>,
     plain: bool,
     tui: bool,
@@ -499,8 +470,7 @@ fn parse_discuss(args: &[String]) -> Result<DiscussArgs, String> {
                     _ => unreachable!(),
                 }
             }
-            // Everything after `--` is the question, so a question may start with a
-            // dash.
+            // `--` 之后的一切都是问题，所以一个问题可以以横线开头。
             "--" => {
                 parsed.words.extend(args[index + 1..].iter().cloned());
                 break;
@@ -518,12 +488,10 @@ fn parse_discuss(args: &[String]) -> Result<DiscussArgs, String> {
     Ok(parsed)
 }
 
-/// One question, two debaters, one synthesizer, one session.
+/// 一个问题、两位讨论者、一个合成器、一场会话。
 ///
-/// The renderer is chosen exactly as the interactive path chooses it, so a discussion
-/// watched in a terminal gets the TUI — the permission modal included, for whatever a
-/// debater wants to run — and a piped one gets the plain transcript with the
-/// synthesizer's product alone on stdout.
+/// 渲染器的选法与交互式那条路完全一样，所以在终端里看一场讨论得到的就是 TUI —— 包括权限模态框，供
+/// 讨论者想跑的任何东西 —— 而管道接进来的拿到 plain 转录，stdout 上只有合成器的产出。
 async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", render::wording::help_discuss());
@@ -544,18 +512,17 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // An unregistered model is a startup error, never a silent downgrade.
+    // 没登记的模型是启动错误，绝不是悄悄降级。
     if let Err(message) = validate_models(&config) {
         eprintln!("fs-agent: {message}");
         return ExitCode::FAILURE;
     }
-    // No roster is not an error in the file — most configurations are for
-    // single-agent sessions — but it is one for this subcommand.
+    // 文件里没有名册不算错误 —— 大多数配置都是给单 agent 会话用的 —— 但对这个子命令算。
     let Some(roster) = config.discussion.clone() else {
         eprintln!("fs-agent: {}", render::wording::discussion_no_roster());
         return ExitCode::FAILURE;
     };
-    // Which two of the pool debate: the ones named on the command line, or a draw.
+    // 池子里哪两位参与讨论：命令行点了名的，或者抽出来的。
     let pair = match pick_debaters(&roster, parsed.debaters.clone(), discussion_seed()) {
         Ok(pair) => pair,
         Err(message) => {
@@ -567,9 +534,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         eprintln!("fs-agent: {line}");
     }
 
-    // The question comes before anything is assembled: reading it may block on a
-    // terminal, and the terminal has to still be in cooked mode for that (assembly
-    // puts the TUI into raw mode and owns the screen from then on).
+    // 问题在任何东西被组装之前就要拿到：读它可能在终端上阻塞，而那时终端必须还在 cooked 模式下
+    // （组装会把 TUI 切进 raw 模式，并从那一刻起占住屏幕）。
     let Some(question) = question(&parsed.words) else {
         eprintln!("fs-agent: {}", render::wording::discuss_needs_question());
         return ExitCode::FAILURE;
@@ -607,8 +573,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
 
-    // Every participant's provider is built before the renderer starts, so a missing
-    // key is a startup error on a normal screen rather than a half-drawn interface.
+    // 每位参与者的 provider 都在渲染器启动之前建好，所以少一个密钥是在一块正常屏幕上的启动错误，
+    // 而不是一个画了一半的界面。
     let (debaters, synthesizer) = match discussion_participants(&config, &pair) {
         Ok(parts) => parts,
         Err(message) => {
@@ -638,24 +604,21 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         let facts = SessionFacts {
             session_id: stored.id.as_str().to_owned(),
             session_dir: stored.dir.display().to_string(),
-            // The panel has one model row and one context row, and a discussion has a
-            // pair of debaters and no single window: the row names **both models**, and
-            // the window is the first debater's, which is the approximation the panel
-            // cannot help but be (spec §8). The names are the transcript's business
-            // (`debater_label`); this row is about models, so it shows models.
+            // 面板只有一行模型和一行上下文，而一场讨论有一对讨论者、没有单一窗口：这一行列出**两个
+            // 模型**，窗口是第一位讨论者的 —— 面板也只能是这么个近似（spec §8）。名字是转录的事
+            // （`debater_label`）；这一行讲的是模型，所以它显示模型。
             model: render::wording::discussion_pair(&pair[0].model, &pair[1].model),
             context_window: crate::context::usable_input(&caps),
-            // `--mode` belongs to the interactive path; a discussion reads the file.
+            // `--mode` 属于交互式那条路；讨论读文件。
             mode: config.mode,
-            // `session_config` copies `[budget]` verbatim, so the file's value is the
-            // session's.
+            // `session_config` 原样拷贝 `[budget]`，所以文件里的值就是这场会话的值。
             budget_limit: config.budget.limit,
-            // The pair, in roster order — the same order `pick_pair` produced, which is
-            // what gives the first debater the first palette slot (票 07 §1).
+            // 这一对，按名册顺序 —— 与 `pick_pair` 产出的顺序相同，正是它把第一个调色板槽位给了第
+            // 一位讨论者（票 07 §1）。
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],
         };
-        // A discussion is one question, one harness: it is never a reopen, so no
-        // history is replayed and the TUI renders from the first frame.
+        // 一场讨论是一个问题、一个 harness：它从不是一次重新打开，所以没有历史要重放，TUI 从第一
+        // 帧起就在画。
         Renderer::tui(TuiOptions {
             port,
             facts,
@@ -671,15 +634,14 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             color: std::io::stderr().is_terminal() && env.get("NO_COLOR").is_none(),
         })
     };
-    // This front end never reads a line — one question in, one discussion out — so it is
-    // inside a run for its whole life, and says so before the loop would ever ask. Told
-    // here rather than inferred, for the reason `ConsoleRequest::RunState` records.
+    // 这个前端从不读一行 —— 一个问题进去、一场讨论出来 —— 所以它一辈子都跑在一次 run 里面，并在
+    // 循环还不会开口问之前就说了这一点。在这里告诉它而不是让它推断，理由与
+    // `ConsoleRequest::RunState` 记下的那条相同。
     console.set_running(true);
-    // The same keyboard answers the debaters' permission questions: a discussion is
-    // still a session with tools in it.
+    // 同一个键盘也回答讨论者的权限询问：一场讨论仍然是一场带着工具的会话。
     let asker = Arc::new(ConsoleAsker::from_handle(&console));
-    // A debater is a main session, not an executor, so it may ask the user too
-    // (spec §7); the port is the same keyboard the permission gate uses.
+    // 讨论者是主会话而不是执行者，所以它也可以问用户（spec §7）；这个端口与权限门用的是同一个键
+    // 盘。
     let questions: Option<Arc<dyn UserQuestions>> =
         Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
@@ -690,8 +652,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             session_id: stored.id.clone(),
             tools: tools::with_dynamic(&config.tools, questions.is_some()),
             locks: PathLocks::new(),
-            // The file's mode: a debater asks through the same gate as any session,
-            // and the roster shares one policy (spec §12, §15).
+            // 文件里的模式：讨论者与任何会话一样走同一个权限门，而名册共享一个策略（spec §12、
+            // §15）。
             policy: Policy::for_mode(config.mode),
             asker: Some(asker),
             questions,
@@ -715,9 +677,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     let outcome = run_discussion(&mut harness, &mut events, &question).await;
     harness.shutdown().await;
 
-    // The line is printed after the alt screen is restored, because the TUI's
-    // transcript does not survive the process: whatever the user missed on screen, the
-    // session id is the durable way back to it.
+    // 这行在 alt screen 恢复之后打印，因为 TUI 的转录活不过进程：用户在屏幕上漏掉的东西，会话 id
+    // 是回到它身边的持久途径。
     match outcome {
         Ok(outcome) => {
             eprintln!(
@@ -728,9 +689,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
                 "fs-agent: {}",
                 render::wording::discussion_replay(stored.id.as_str())
             );
-            // A discussion that failed outright is a failure; a cancelled one is what
-            // the user asked for, the way a cancelled turn is in an interactive
-            // session (spec §6).
+            // 整场失败掉的讨论是一次失败；被取消的那场正是用户要的，如同交互式会话里被取消的一个回
+            // 合（spec §6）。
             if outcome.reason == StopReason::Error {
                 ExitCode::FAILURE
             } else {
@@ -744,11 +704,10 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     }
 }
 
-/// `/discuss [--debaters a,b] [问题]`: the command's own flags, and the question.
+/// `/discuss [--debaters a,b] [问题]`：这条命令自己的旗标，以及那个问题。
 ///
-/// The flags only count at the front — the moment something else appears, the rest of
-/// the line (newlines and all) is the question, so a question may start with a dash and
-/// may be a paragraph.
+/// 旗标只算开头的那些 —— 一旦出现别的东西，这一行剩下的部分（含换行）就是问题，所以一个问题可以
+/// 以横线开头，也可以是一整段。
 #[derive(Debug)]
 struct DiscussLine {
     debaters: Option<[String; 2]>,
@@ -800,7 +759,7 @@ fn parse_discuss_line(text: &str) -> Result<DiscussLine, String> {
     }
 }
 
-/// `a,b` as two debater names.
+/// `a,b` 析成两个讨论者名字。
 fn split_names(value: &str) -> Result<[String; 2], String> {
     let names: Vec<String> = value
         .split(',')
@@ -810,11 +769,10 @@ fn split_names(value: &str) -> Result<[String; 2], String> {
     <[String; 2]>::try_from(names).map_err(|_| render::wording::needs_two_debaters(value))
 }
 
-/// The two debaters a discussion runs with: the ones asked for by name, or a draw from
-/// the pool.
+/// 一场讨论用的那两位讨论者：点名要的，或者从池子里抽的。
 ///
-/// A draw is the default because a pool exists to vary the pair; `seed` is injected (the
-/// clock at run time, a constant in tests) so the choice is reproducible.
+/// 抽是默认做法，因为池子存在的意义就是换一对；`seed` 是注入的（运行时是时钟，测试里是常量），所
+/// 以这个选择可复现。
 fn pick_debaters(
     roster: &DiscussionRoster,
     requested: Option<[String; 2]>,
@@ -839,11 +797,10 @@ fn pick_debaters(
     }
 }
 
-/// What to say about the pair *before* it debates: that a pool member sharing a vendor
-/// means two samples rather than two judgements.
+/// 在这一对辩论**之前**该说什么：池子里有两位同厂商，意味着拿到的是两个样本而不是两个独立判断。
 ///
-/// Allowed — one subscription is not a reason to have no discussion at all — and said
-/// out loud rather than passing for the design's case (spec §15).
+/// 这是允许的 —— 一个订阅到期不该让讨论不可用 —— 但要明说，不能拿它冒充本设计适用的情况
+/// （spec §15）。
 fn advisory_lines(config: &Config, pair: &[Debater; 2]) -> Vec<String> {
     let [first, second] = pair;
     if first.model == second.model {
@@ -860,10 +817,10 @@ fn advisory_lines(config: &Config, pair: &[Debater; 2]) -> Vec<String> {
     Vec::new()
 }
 
-/// A seed for drawing a pair: the clock, mixed the way a session id's suffix is.
+/// 抽一对用的种子：时钟，按会话 id 后缀的方式混合。
 ///
-/// Not a PRNG — this decides which two of a handful of debaters argue — but it has to
-/// differ between two discussions started in the same second, which the nanos do.
+/// 不是 PRNG —— 它只决定几个讨论者里哪两位参与 —— 但它必须在同一秒开始的两场讨论之间不同，而纳秒
+/// 做到了这一点。
 fn discussion_seed() -> u64 {
     use std::hash::{BuildHasher, Hasher};
 
@@ -876,16 +833,14 @@ fn discussion_seed() -> u64 {
     hasher.finish()
 }
 
-/// One provider and one set of session values per participant, from the roster.
+/// 每位参与者一个 provider 与一组会话值，取自名册。
 ///
-/// The two debaters answer with the roster's models; the synthesizer answers with the
-/// routing table's landing point — with nothing routed, the first debater's model,
-/// which is what `SessionConfig::model_for(Synthesizer)` resolves to inside the
-/// assembly. Building its provider on exactly that model is what keeps the provider and
-/// the config that is sent to it in agreement.
+/// 两位讨论者用名册里的模型作答；合成器用路由表的落点作答 —— 什么都没路由时就是第一位讨论者的模
+/// 型，也就是 `SessionConfig::model_for(Synthesizer)` 在组装内部解析出的那个。把它的 provider 恰
+/// 好建在那个模型上，是让 provider 与发给它的配置保持一致的东西。
 ///
-/// Used by both ways in: the `discuss` subcommand (a discussion of its own) and
-/// `/discuss` (a discussion on the session the user is in).
+/// 两个入口都用它：`discuss` 子命令（自带的一场讨论）与 `/discuss`（跑在用户所在会话上的一场讨
+/// 论）。
 fn discussion_participants(
     config: &Config,
     pair: &[Debater; 2],
@@ -910,8 +865,8 @@ fn discussion_participants(
     Ok((
         vec![
             DebaterParts {
-                // The debater's **name** is its identity on the stream — not the model,
-                // which a pool can hand to two debaters at once (spec §5, §15).
+                // 讨论者的**名字**才是它在流上的身份 —— 不是模型，池子可能同时把同一个模型交给两位
+                // 讨论者（spec §5、§15）。
                 speaker: SpeakerId::Debater(first.name.as_str().into()),
                 config: first_config,
                 provider: first_provider,
@@ -931,14 +886,11 @@ fn discussion_participants(
     ))
 }
 
-/// `/discuss [问题]`: run a discussion **on this session's stream** (spec §15).
+/// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。
 ///
-/// The loop owns the keyboard and the session owns the log, so this reads the roster
-/// out of the configuration, builds one provider per participant, and hands the
-/// protocol the session the user is already in: the debaters are its siblings, so they
-/// inherit its context and their rounds land in its stream. Everything the user needs
-/// to know — which models, which question, and how it ended — goes through the
-/// renderer rather than stderr, because the TUI owns the screen.
+/// 键盘归循环、日志归会话，所以这里从配置里读出名册，为每位参与者建一个 provider，然后把用户已经
+/// 在的那场会话交给协议：讨论者是它的兄弟，于是继承它的上下文、轮次落进它的流。用户需要知道的一切
+/// —— 哪些模型、什么问题、怎么收尾的 —— 都走渲染器而不是 stderr，因为屏幕归 TUI。
 async fn discuss_in_session(
     harness: &mut Harness,
     events: &mut ConsoleEvents,
@@ -952,8 +904,7 @@ async fn discuss_in_session(
         ));
         return Ok(());
     };
-    // `--debaters a,b` first, then the question: the flags belong to the command, and
-    // what is left of the line is what the user is asking about.
+    // 先 `--debaters a,b`，再是问题：旗标属于这条命令，而这一行剩下的部分才是用户要问的东西。
     let line = match parse_discuss_line(&asked) {
         Ok(line) => line,
         Err(message) => {
@@ -961,8 +912,8 @@ async fn discuss_in_session(
             return Ok(());
         }
     };
-    // A bare `/discuss` puts the thing this session was just asked to two models: "what
-    // we were talking about" is the question worth a second judgement.
+    // 一句光秃秃的 `/discuss` 就把这场会话刚被问到的那个东西交给两个模型：「我们刚才在谈什么」正是
+    // 值得第二份判断的那个问题。
     let question = if line.question.trim().is_empty() {
         match harness.last_question() {
             Some(last) => last,
@@ -1004,11 +955,11 @@ async fn discuss_in_session(
     ));
 
     let signal = harness.cancel_signal();
-    // The mode handle rides along for the same reason the cancel signal does: the run
-    // future borrows the harness, and the gesture has to reach the policy anyway.
+    // 模式句柄随行，理由与取消信号相同：那个 run future 借走了 harness，而这个手势无论如何必须够
+    // 得到策略。
     let modes = harness.mode_cycle();
-    // The future borrows the harness for as long as it runs, so it lives in its own
-    // scope: the notice below needs the harness back.
+    // 这个 future 在它运行的整段时间里借走 harness，所以它自成一个作用域：下面的通告要把 harness
+    // 拿回来。
     let outcome = {
         let mut run =
             Box::pin(harness.discuss(&question, debaters, synthesizer, roster.max_rounds));
@@ -1022,12 +973,10 @@ async fn discuss_in_session(
                         }
                         signal.cancel();
                     }
-                    // End of input or an explicit quit lets the discussion wind down the
-                    // same way a cancel does, so the stream still gets its ending.
+                    // 输入结束或显式退出让讨论像被取消一样落下来，所以流仍然得到它的收尾。
                     Some(FrontEndEvent::Quit) | None => signal.cancel(),
-                    // A mode is a value the gate reads per call, so the press is
-                    // applied at once even mid-discussion: the handle exists because
-                    // the run future borrows the harness (spec §12).
+                    // 模式是权限门每次调用都读的一个值，所以这次按键立刻生效、哪怕是在讨论中途：句
+                    // 柄之所以存在，是因为 run future 借走了 harness（spec §12）。
                     Some(FrontEndEvent::CycleMode) => {
                         modes.cycle();
                     }
@@ -1042,12 +991,10 @@ async fn discuss_in_session(
     Ok(())
 }
 
-/// Drive one discussion while still watching for the cancel gesture.
+/// 驱动一场讨论，同时仍然盯着取消手势。
 ///
-/// The same shape as [`run_one_turn`], for the same reason: the discussion owns the
-/// session, so the loop cannot read the keyboard itself and listens for gestures
-/// instead. A second press while a cancellation is already raised forces the process
-/// down — the stream still gets its ending, because the first press asked for it.
+/// 形状与 [`run_one_turn`] 相同，理由也相同：讨论占着会话，所以循环没法自己读键盘，改为监听手势。
+/// 在取消已经举起时再按一次会把进程按下去 —— 流仍然得到它的收尾，因为第一次按键已经要了它。
 async fn run_discussion(
     harness: &mut DiscussionHarness,
     events: &mut ConsoleEvents,
@@ -1066,11 +1013,9 @@ async fn run_discussion(
                     }
                     signal.cancel();
                 }
-                // End of input or an explicit quit lets the discussion wind down the
-                // same way a cancel does, so the stream still gets its ending.
+                // 输入结束或显式退出让讨论像被取消一样落下来，所以流仍然得到它的收尾。
                 Some(FrontEndEvent::Quit) | None => signal.cancel(),
-                // One policy covers all three participants, so this is the same
-                // gesture it is anywhere else (spec §12).
+                // 一个策略盖住三位参与者，所以这与它在别处的是同一个手势（spec §12）。
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
                 }
@@ -1079,11 +1024,10 @@ async fn run_discussion(
     }
 }
 
-/// The question: the words it was given with, or stdin.
+/// 那个问题：用它被给进来时的那些词，或者 stdin。
 ///
-/// A terminal gets a prompt — nothing has entered raw mode yet, so a cooked read still
-/// works — and a pipe is read to the end, which is what `echo 问题 | fs-agent discuss`
-/// needs.
+/// 终端上给一个提示 —— 还没有任何东西进过 raw 模式，所以 cooked 读仍然可用 —— 而管道读到结尾，这
+/// 正是 `echo 问题 | fs-agent discuss` 需要的。
 fn question(words: &[String]) -> Option<String> {
     let typed = words.join(" ");
     if !typed.trim().is_empty() {
@@ -1104,7 +1048,7 @@ fn question(words: &[String]) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// Read a line, run it, repeat — until the user leaves or input ends.
+/// 读一行、跑它、重复 —— 直到用户离开或输入结束。
 async fn interactive_loop(
     harness: &mut Harness,
     console: &ConsoleHandle,
@@ -1112,13 +1056,10 @@ async fn interactive_loop(
     config: &Config,
 ) -> ExitCode {
     loop {
-        // The loop is the only thing that knows whether something is running, so it
-        // tells the front end instead of letting it infer (spec §6). Nothing is running
-        // until a submission is taken, and the front end has to read that way from the
-        // first frame — including before this loop's first prompt.
+        // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
+        // 交之前什么都没在跑，而前端从第一帧起就得这么读 —— 包括在这个循环第一次提问之前。
         console.set_running(false);
-        // Between turns the loop is only waiting for a prompt; a gesture that
-        // arrives here is handled without a turn in flight.
+        // 回合之间循环只在等一次提示；这时候到达的手势在没有回合在飞的情况下处理掉。
         let line = loop {
             tokio::select! {
                 line = console.prompt() => break line,
@@ -1134,13 +1075,12 @@ async fn interactive_loop(
         let Some(submitted) = line else {
             return ExitCode::SUCCESS;
         };
-        // A line was taken, so from here until the next turn of this loop the session is
-        // running something — a turn, a discussion, an undo. `Ctrl-C` is the cancel
-        // gesture for all of them.
+        // 拿到一行了，所以从这里到这个循环的下一次轮转之间，会话正在跑东西 —— 一个回合、一场讨论、
+        // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
         console.set_running(true);
         match submission(&submitted, |name| harness.has_skill(name)) {
-            // An empty line: nothing to answer, so ask again. `None` from the prompt
-            // is the only thing that ends input, and that is handled just above.
+            // 一个空行：没有可答的，于是再问一次。提示处返回 `None` 是唯一结束输入的东西，而那种情
+            // 况就在上面处理。
             Submission::Ignore => {}
             Submission::Quit => return ExitCode::SUCCESS,
             Submission::Undo => match harness.undo_last_edit().await {
@@ -1160,11 +1100,9 @@ async fn interactive_loop(
                     render::wording::unknown_command(line, &names)
                 ));
             }
-            // `/<skill> [task]` is the user-side skill invocation (spec §9): the
-            // one path a `disable-model-invocation: true` skill reserves for the
-            // user. The body goes into the context at the tail. A bare `/<skill>`
-            // runs there and then — the body *is* the instruction — and a task, when
-            // one was typed, follows it as an ordinary user message.
+            // `/<skill> [task]` 是用户侧的技能调用（spec §9）：`disable-model-invocation: true`
+            // 的技能为用户留下的那条路。正文进上下文尾部。光秃秃的 `/<skill>` 就地跑 —— 正文**就
+            // 是**指令 —— 而打了任务时，任务作为一条普通 user 消息跟在它后面。
             Submission::Skill { name, task } => {
                 if task.is_empty() {
                     harness.notice(&format!(
@@ -1198,9 +1136,8 @@ async fn interactive_loop(
                     }
                 }
             }
-            // `/discuss [问题]`: a discussion **on this session's stream** (spec §15).
-            // The debaters are siblings of this session, so they inherit its context and
-            // append their rounds to its log; the user is back at the prompt afterwards.
+            // `/discuss [问题]`：在**当前会话的流上**的一场讨论（spec §15）。讨论者是这场会话的兄
+            // 弟，所以继承它的上下文，并把轮次追加到它的日志上；之后用户回到提示符前。
             Submission::Discuss(question) => {
                 if let Err(error) = discuss_in_session(harness, events, config, question).await {
                     harness.notice(&format!(
@@ -1209,8 +1146,7 @@ async fn interactive_loop(
                     ));
                 }
             }
-            // Everything else is a prompt, newlines and all: the transcript shows what
-            // the user wrote, as one message (spec §12).
+            // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
             Submission::Prompt(text) => {
                 if let Err(error) = run_one_turn(harness, events, TurnStart::Prompt(text)).await {
                     harness.notice(&format!(
@@ -1223,12 +1159,11 @@ async fn interactive_loop(
     }
 }
 
-/// The task or question that follows a command's name on its first line: the rest of
-/// that line, then every line below it, as written. Only trailing blank lines go, so a
-/// continuation of nothing but blanks is not a task.
+/// 跟在命令名之后、位于它第一行上的任务或问题：那一行剩下的部分，然后是下面每一行，按原样。只丢
+/// 结尾的空白行，所以一段全是空白的续行不算任务。
 ///
-/// One function for `/<skill>` and `/discuss` both, because "what the user wrote after
-/// the command" is one rule and two copies of it would drift.
+/// `/<skill>` 与 `/discuss` 共用一个函数，因为「用户在命令之后写了什么」是一条规则，两份拷贝迟早
+/// 会漂移。
 fn task_of(inline: &str, rest: &str) -> String {
     let mut task = inline.to_owned();
     let rest = rest.trim_end_matches('\n');
@@ -1241,50 +1176,44 @@ fn task_of(inline: &str, rest: &str) -> String {
     task
 }
 
-/// What one submission asks for (spec §12).
+/// 一次提交在要什么（spec §12）。
 #[derive(Debug, PartialEq, Eq)]
 enum Submission<'a> {
-    /// Nothing to send: an empty line, or one that is blank once trimmed. The loop
-    /// asks again without starting a turn — an Enter on an empty input is an empty
-    /// line, never the end of input (spec §6).
+    /// 没有要发的东西：一个空行，或者去掉空白后是空的一行。循环不再起一个回合，直接再问一次 —— 在
+    /// 空输入上按回车是空行，绝不是输入结束（spec §6）。
     Ignore,
     Quit,
     Undo,
-    /// A first line that opens with `/` and names nothing known, with nothing but
-    /// blank lines after it: a typo, and the one case the user is told about.
+    /// 第一行以 `/` 开头、却什么都没点名，而且后面只有空行：一个错字，也是唯一会被告诉用户的那种
+    /// 情况。
     Unknown(&'a str),
-    /// `/<skill>` and the task that follows it.
+    /// `/<skill>` 以及跟在它后面的任务。
     Skill {
         name: &'a str,
         task: String,
     },
-    /// `/discuss [问题]`: run a discussion **on this session's stream** (spec §15).
-    /// The question is empty when the user typed no question — the loop then puts the
-    /// session's last question to the debaters.
+    /// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。用户没打问题时问题为空 ——
+    /// 那时循环把这场会话最后一个问题交给那两位讨论者。
     Discuss(String),
-    /// The whole submission, newlines and all, as one prompt.
+    /// 整条提交，含换行，作为一条 prompt。
     Prompt(&'a str),
 }
 
-/// Read one submission.
+/// 读一次提交。
 ///
-/// The **first line alone** decides whether this is a command, so `/<skill>` can be
-/// followed by a multi-line brief — the rest of its first line and every line below it
-/// become the task. A first line that opens with `/` but names something unknown is a
-/// typo when it is the whole submission (told about, as it always was) and a pasted
-/// paragraph when it is not.
+/// 由**只看第一行**来决定这是不是一条命令，所以 `/<skill>` 后面可以跟一段多行的简报 —— 它第一行剩
+/// 下的部分和下面每一行都成为任务。第一行以 `/` 开头却点名了不认识的东西时，如果整条提交就这一行那
+/// 就是一个错字（会告诉用户，一如既往），否则就是贴进来的一段文字。
 ///
-/// A submission that is blank once trimmed is [`Submission::Ignore`]: there is nothing
-/// to send, so the loop asks again instead of starting a turn.
+/// 去掉空白后为空的提交是 [`Submission::Ignore`]：没有要发的东西，所以循环再问一次，而不是起一个回
+/// 合。
 ///
-/// The built-ins take no task, so they match only as the **whole** submission: a line
-/// after `/undo` must not be dropped on the floor. Such a submission falls through to
-/// the rules above — `/undo` names no skill, so with lines after it the whole thing is
-/// read as a prompt, which at least shows the user what they sent.
+/// 内建命令不接受任务，所以它们只在作为**整条**提交时匹配：`/undo` 后面的一行绝不能被丢在地上。这样
+/// 的提交会落到上面那几条规则上 —— `/undo` 没点名任何技能，所以带着后面的行时整条被当作一条 prompt
+/// 读，至少还让用户看见自己发了什么。
 ///
-/// Leading slashes are all stripped (`//undo` reads as `undo`), which is how the old
-/// code read a skill name too. Trailing blank lines are dropped from a task; the rest
-/// is kept as written.
+/// 开头的斜杠一律剥掉（`//undo` 读作 `undo`），旧代码读技能名时也是这样。任务结尾的空白行丢掉；其
+/// 余按原样保留。
 fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission<'a> {
     if text.trim().is_empty() {
         return Submission::Ignore;
@@ -1293,8 +1222,8 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
         Some((first, rest)) => (first.trim(), rest),
         None => (text.trim(), ""),
     };
-    // A built-in is the whole submission or it is nothing: it has no task to hold the
-    // lines that follow, and dropping them would lose what the user wrote.
+    // 内建命令要么是整条提交，要么什么都不算：它没有任务来装后面的那些行，而丢掉它们会丢掉用户写下
+    // 的东西。
     let whole = rest.trim().is_empty();
     match first {
         "/quit" | "/exit" if whole => Submission::Quit,
@@ -1305,9 +1234,8 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
                 Some((name, task)) => (name, task.trim()),
                 None => (rest_of_line, ""),
             };
-            // `/discuss [问题]` is the one built-in with an argument, so it takes the
-            // same shape a skill's task does: the rest of the line, then every line
-            // below it. A bare `/discuss` leaves the question to the loop.
+            // `/discuss [问题]` 是唯一带参数的内建命令，所以它取与技能的任务相同的形状：这一行剩下
+            // 的部分，然后是下面每一行。光秃秃的 `/discuss` 把问题留给循环。
             if name == "discuss" {
                 return Submission::Discuss(task_of(inline, rest));
             }
@@ -1315,7 +1243,7 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
                 if rest.trim().is_empty() {
                     return Submission::Unknown(first);
                 }
-                // A pasted paragraph that happens to open with `/` is a paragraph.
+                // 一段碰巧以 `/` 开头的贴进来的文字，就是一段文字。
                 return Submission::Prompt(text);
             }
             Submission::Skill {
@@ -1323,28 +1251,25 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
                 task: task_of(inline, rest),
             }
         }
-        // Not a command at all: the whole text, however many lines, is the prompt.
+        // 根本不是命令：整段文本，不管多少行，就是 prompt。
         _ => Submission::Prompt(text),
     }
 }
 
-/// What starts the turn the loop is about to drive.
+/// 循环即将驱动的那个回合由什么起头。
 enum TurnStart<'a> {
-    /// A prompt the user typed: it becomes a `user` message and the turn runs.
+    /// 用户打的 prompt：它成为一条 `user` 消息，然后回合跑起来。
     Prompt(&'a str),
-    /// A bare `/<skill>`: [`Harness::run_skill`] loads the body, which projects as a
-    /// `user` message of its own, so no prompt is invented for it. The transcript
-    /// must never show words the user did not type.
+    /// 光秃秃的 `/<skill>`：[`Harness::run_skill`] 加载正文，它自己就投影成一条 `user` 消息，所以
+    /// 为它凭空造一条 prompt 是不对的。转录绝不能显示用户没打过的字。
     Skill(&'a str),
 }
 
-/// Run one turn while still watching for the cancel gesture.
+/// 跑一个回合，同时仍然盯着取消手势。
 ///
-/// The turn owns the session, so the loop cannot read the keyboard itself; it
-/// selects on the console's unsolicited events instead. A second press while a
-/// cancellation is already raised forces the process down (spec §6) — the
-/// session never needs to know how it died, because `--continue` closes whatever
-/// the process left open.
+/// 回合占着会话，所以循环没法自己读键盘；它改为 select 控制台那些未被请求的事件。在取消已经举起时
+/// 再按一次会把进程按下去（spec §6）—— 会话永远不需要知道自己是怎么死的，因为 `--continue` 会关掉
+/// 进程留下的任何东西。
 async fn run_one_turn(
     harness: &mut Harness,
     events: &mut ConsoleEvents,
@@ -1368,11 +1293,10 @@ async fn run_one_turn(
                     }
                     signal.cancel();
                 }
-                // End of input or an explicit quit lets the turn wind down the
-                // same way a cancel does, so the stream still gets its ending.
+                // 输入结束或显式退出让回合像被取消一样落下来，所以流仍然得到它的收尾。
                 Some(FrontEndEvent::Quit) | None => signal.cancel(),
-                // The gate reads the policy per call, so this moves the stance of the
-                // call after this one — which is what "switch modes mid-turn" means.
+                // 权限门每次调用都读策略，所以这次按键挪动的是「下一次调用」的立场 —— 这就是「回合
+                // 中途换档」的意思。
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
                 }
@@ -1413,8 +1337,7 @@ fn parse_probe(args: &[String]) -> Result<ProbeArgs, String> {
     Ok(parsed)
 }
 
-/// Load configuration: an explicit `--config` must exist; the default path is
-/// used only when it does.
+/// 加载配置：显式的 `--config` 必须存在；默认路径只在它存在时才被采用。
 fn load_config(explicit: Option<PathBuf>, env: &EnvMap) -> Result<Config, String> {
     match explicit {
         Some(path) => config::load(&path, env).map_err(|error| error.to_string()),
@@ -1450,8 +1373,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
         }
     };
 
-    // An unregistered model id is a startup error, never a silent downgrade:
-    // check the whole table before probing anything.
+    // 没登记的模型 id 是启动错误，绝不是悄悄降级：探测任何东西之前先查整张表。
     if let Err(message) = validate_models(&config) {
         eprintln!("fs-agent: {message}");
         return ExitCode::FAILURE;
@@ -1472,8 +1394,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     }
 
     let mut failed = false;
-    // The library reads no environment, so the CLI hands it the one fact the
-    // `rm` circuit breaker needs.
+    // 库不读任何环境，所以 CLI 把它唯一需要的那件事实交给它 —— `rm` 断路器要用的那个。
     let home = env
         .get("HOME")
         .filter(|value| !value.is_empty())
@@ -1495,9 +1416,8 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     }
 }
 
-/// Every configured model id must be in the capability table before anything
-/// runs, so an unregistered id is a startup error rather than a surprise after
-/// a turn has begun.
+/// 每一个已配置的模型 id 都必须在任何东西跑起来之前就在能力表里，所以没登记的 id 是启动错误，而不
+/// 是一个回合开始之后才发现的意外。
 fn validate_models(config: &Config) -> Result<(), String> {
     for model in config.models.values() {
         caps_for(&model.id).map_err(|error| error.to_string())?;
@@ -1537,9 +1457,8 @@ async fn probe_model(
     let log_path = dir.join("log.jsonl");
     let _ = std::fs::remove_file(&log_path);
 
-    // Every configured value the session needs — generation parameters, the token
-    // allowance, the price table, the routing overrides — arrives through one
-    // function (spec §17), so this probe and any later front end assemble alike.
+    // 会话需要的每一个已配置的值 —— 生成参数、token 配额、价目表、路由覆盖 —— 都经同一个函数到达
+    // （spec §17），所以这个探针与以后任何前端组装出来的东西都一样。
     let session_config = config
         .session_config(model_id)
         .map_err(ProbeError::failed)?;
@@ -1548,19 +1467,16 @@ async fn probe_model(
             cwd: dir,
             log_path: log_path.clone(),
             session_id: SessionId::new(format!("probe-{model_id}")),
-            // The probe exercises real turns, so it gets the real tool table —
-            // except for `ask_user_question`: headless has no answerer, and a tool
-            // that can only fail wastes a model call (spec §19).
+            // 探针要跑真实回合，所以给它真实的工具表 —— 除了 `ask_user_question`：无头没有应答者，
+            // 而一个只能失败的工具会白白浪费一次模型调用（spec §19）。
             tools: tools::with_dynamic(&config.tools, false),
             locks: PathLocks::new(),
-            // The probe is headless and has no answerer, so the configured mode's
-            // `ask` (the default) refuses writes rather than hanging on a question
-            // nobody can see.
+            // 探针是无头的、没有应答者，所以配置那一档的 `ask`（默认）会拒掉写，而不是挂在一个谁也
+            // 看不见的问题上。
             policy: Policy::for_mode(config.mode),
             asker: None,
             questions: None,
-            // Ticket 05 lands the mount points; wiring user-declared hooks into
-            // the CLI is nobody's ticket yet, so the probe runs without one.
+            // 票 05 落地挂载点；把用户声明的钩子接进 CLI 还没有归属的票，所以探针不带钩子跑。
             hook: None,
             home: home.map(Path::to_path_buf),
         },
@@ -1568,8 +1484,7 @@ async fn probe_model(
         speaker: SpeakerId::Debater(profile.name.clone().into()),
         config: session_config,
         renderer: Renderer::headless(RenderSinks {
-            // The probe prints its own report on stdout; the renderer narrates
-            // to stderr only.
+            // 探针把自己的报告打在 stdout 上；渲染器只往 stderr 叙述。
             stdout_result: Box::new(std::io::sink()),
             stderr_diagnostic: Box::new(std::io::stderr()),
         }),
@@ -1585,12 +1500,12 @@ async fn probe_model(
     let turns: [&str; 2] = [first.as_str(), PROBE_FOLLOW_UP];
     for (turn, prompt) in turns.iter().enumerate() {
         if turn > 0 {
-            // Let the vendor persist the first turn's prefix before asking again.
+            // 在再问一次之前，先让厂商把第一个回合的前缀持久化下来。
             tokio::time::sleep(CACHE_WARMUP).await;
         }
         harness.run_turn(prompt).await.map_err(ProbeError::failed)?;
-        // The stream the turn just wrote is the report's only source. If it
-        // cannot be read the run is not silently reported as free; it says so.
+        // 那个回合刚写下的流是这份报告唯一的来源。读不了它时，这次运行不会被悄悄报成免费；它会说
+        // 出来。
         let events = match read_events(&log_path) {
             Ok(events) => events,
             Err(error) => {
@@ -1612,10 +1527,8 @@ async fn probe_model(
             ),
             None => println!("  turn {}: no usage recorded", turn + 1),
         }
-        // Money is display only (spec §17): the probe shows what the session has
-        // cost when the model has a price, and says which table is missing when
-        // it does not. `sessions stats` (ticket 17) is where this belongs long
-        // term; the probe is the one report a person reads today.
+        // 钱只作显示（spec §17）：模型有价格时探针显示这场会话花了多少，没有时说清缺的是哪张表。
+        // `sessions stats`（票 17）才是它长期该待的地方；探针是今天真有人读的那份报告。
         let spent = total_usage(&events);
         match config.pricing.cost(model_id, spent) {
             Some(cost) => println!("  session: {} tokens, ${cost:.6}", spent.total_tokens()),
@@ -1646,16 +1559,16 @@ fn probe_dir(model_id: &str) -> PathBuf {
 
 #[derive(Debug)]
 struct PruneArgs {
-    /// How many of the most recent sessions to keep in the bucket.
+    /// 这个桶里要留多少场最近的会话。
     keep: usize,
     dry_run: bool,
-    /// The workspace whose bucket is pruned; the current directory by default.
+    /// 要 prune 哪个工作区的桶；默认是当前目录。
     cwd: Option<PathBuf>,
 }
 
 fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
     let mut parsed = PruneArgs {
-        // Keep the session `--continue` would resume, remove the rest.
+        // 留下 `--continue` 会接着跑的那场会话，删掉其余的。
         keep: 1,
         dry_run: false,
         cwd: None,
@@ -1687,13 +1600,10 @@ fn parse_prune(args: &[String]) -> Result<PruneArgs, String> {
     Ok(parsed)
 }
 
-/// `prune` removes session directories, by hand (spec §11: nothing prunes
-/// automatically).
+/// `prune` 手动删掉会话目录（spec §11：什么都不自动 prune）。
 ///
-/// It works on one bucket — the workspace's — because that is the unit the store
-/// is bound to, and it keeps the newest `--keep` sessions (default one, the
-/// session `--continue` would resume). stdout carries the result; diagnostics go
-/// to stderr.
+/// 它只作用在一个桶上 —— 这个工作区的桶 —— 因为那是 store 所绑定的单位，而它留下最新的 `--keep`
+/// 场会话（默认一场，即 `--continue` 会接着跑的那场）。stdout 承载结果，诊断走 stderr。
 fn prune(args: &[String], env: &EnvMap) -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", render::wording::help_prune());
@@ -1774,10 +1684,10 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
 }
 
 // ---------------------------------------------------------------------------
-// `sessions`: the observability CLI (spec §18)
+// `sessions`：可观测性 CLI（spec §18）
 // ---------------------------------------------------------------------------
 
-/// One parsed `sessions` invocation. The verb decides which fields are read.
+/// 一次已解析的 `sessions` 调用。由动词决定读哪些字段。
 #[derive(Debug, Default)]
 struct SessionsArgs {
     verb: String,
@@ -1848,12 +1758,10 @@ fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
     Ok(parsed)
 }
 
-/// The `sessions` subcommand family: `ls`, `show`, `replay`, `stats`.
+/// `sessions` 子命令一族：`ls`、`show`、`replay`、`stats`。
 ///
-/// stdout carries the result and stderr the diagnostics, whatever the verb; every
-/// view has a `--json` form so a pipeline can read it. There is no index: a
-/// session is found by scanning its bucket, and `--continue`'s "newest first"
-/// order is the order `ls` shows.
+/// 不管哪个动词，stdout 都承载结果、stderr 承载诊断；每个视图都有 `--json` 形式，好让管道能读它。
+/// 没有索引：找一场会话靠扫它的桶，而 `--continue` 的「最新在前」就是 `ls` 显示的顺序。
 pub fn run_sessions(
     args: &[String],
     env: &EnvMap,
@@ -1902,14 +1810,14 @@ pub fn run_sessions(
     }
 }
 
-/// The session store, or the refusal that there is nowhere to look.
+/// 会话 store，或者「没有可看的地方」这句拒绝。
 fn open_store(env: &EnvMap) -> Result<SessionStore, String> {
     let root = config::sessions_dir(env)
         .ok_or_else(|| render::wording::startup_no_session_store().to_owned())?;
     Ok(SessionStore::new(root))
 }
 
-/// The workspace whose bucket is searched first: `--cwd`, else the current dir.
+/// 先搜哪个工作区的桶：`--cwd`，否则当前目录。
 fn search_cwd(parsed: &SessionsArgs) -> Result<PathBuf, String> {
     match &parsed.cwd {
         Some(path) => Ok(path.clone()),
@@ -1918,14 +1826,14 @@ fn search_cwd(parsed: &SessionsArgs) -> Result<PathBuf, String> {
     }
 }
 
-/// Find one session by id (or by the path of its directory).
+/// 按 id（或按它目录的路径）找一场会话。
 fn find_session(store: &SessionStore, cwd: &Path, id: &str) -> Result<StoredSession, String> {
     let direct = PathBuf::from(id);
     if direct.join(crate::session::store::LOG_FILE).is_file() {
         return Ok(session_at(direct));
     }
-    // The id is globally unique, but the owning bucket is the fast path; the
-    // store-wide scan is what makes `sessions show` work from any directory.
+    // id 是全局唯一的，但拥有它的那个桶才是快路径；全 store 扫一遍是让 `sessions show` 在任何目录
+    // 下都能用的东西。
     let mut candidates = store.list(cwd).unwrap_or_default();
     candidates.extend(store.list_all().unwrap_or_default());
     candidates
@@ -1951,7 +1859,7 @@ fn session_at(dir: PathBuf) -> StoredSession {
     }
 }
 
-/// Parse `--speaker`: `user`, `system`, `executor:<id>`, or a debater's name.
+/// 解析 `--speaker`：`user`、`system`、`executor:<id>`，或某位讨论者的名字。
 fn parse_speaker(raw: &str) -> SpeakerId {
     match raw {
         "user" => SpeakerId::User,
@@ -1985,9 +1893,8 @@ fn sessions_ls(
         let _ = writeln!(err, "fs-agent: {}", render::wording::no_sessions());
         return Ok(());
     }
-    // The header is padded by **display columns**: a Chinese column name is
-    // narrower in characters than in columns, so `{:<36}` would shift it two
-    // columns left of the row it labels.
+    // 表头是按**显示列宽**补齐的：一个中文列名按字符数算比按列宽算要窄，所以 `{:<36}` 会让它相对
+    // 它标注的那一行左移两列。
     let columns = render::wording::ls_columns();
     let _ = writeln!(
         out,
@@ -2022,7 +1929,7 @@ fn sessions_ls(
     Ok(())
 }
 
-/// Pad `text` on the right to `width` **display columns**.
+/// 把 `text` 右侧补齐到 `width` 个**显示列**。
 fn pad_end(text: &str, width: usize) -> String {
     let used = text.cell_width() as usize;
     if used >= width {
@@ -2031,7 +1938,7 @@ fn pad_end(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(width - used))
 }
 
-/// Pad `text` on the left to `width` **display columns**.
+/// 把 `text` 左侧补齐到 `width` 个**显示列**。
 fn pad_start(text: &str, width: usize) -> String {
     let used = text.cell_width() as usize;
     if used >= width {
@@ -2092,8 +1999,8 @@ fn sessions_show(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> Re
     Ok(())
 }
 
-/// `--files` honors `--round`, `--speaker` and `--tool`; the entry-shaped
-/// filters (`--kind`, `--only-error`) have no meaning for a file-change row.
+/// `--files` 认 `--round`、`--speaker` 与 `--tool`；按行形状来的过滤器（`--kind`、`--only-error`）
+/// 对一行文件改动没有意义。
 fn filter_changes(
     changes: Vec<observe::FileChange>,
     parsed: &SessionsArgs,
@@ -2133,10 +2040,8 @@ fn sessions_replay(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> 
         .clone()
         .unwrap_or_else(|| config.default_model.clone());
     let speaker = parse_speaker(speaker);
-    // Caps follow routing, exactly as the live call did: a routed synthesizer
-    // or executor may answer on a model whose capability facts differ, and
-    // reproducing the request under the debater's caps would be a silent lie
-    // (spec §17, §18).
+    // 能力表跟着路由走，与那次真实调用完全一样：被路由的合成器或执行者可能用另一个模型作答，而它的
+    // 能力表事实不同，拿讨论者的能力表去重现那条请求会是一个无声的谎言（spec §17、§18）。
     let routing = CostModel::new(&model, config.pricing.clone()).with_routing(&config.routing);
     let caps = caps_for(routing.model_for(&speaker)).map_err(|error| error.to_string())?;
 
@@ -2161,9 +2066,8 @@ fn sessions_stats(parsed: &SessionsArgs, env: &EnvMap, out: &mut dyn Write) -> R
         render::wording::cannot_read(&session.log_path.display().to_string(), &error.to_string())
     })?;
 
-    // Money needs a model and the stream carries none, so the model is named
-    // here: `--model`, else the configuration's default. The human view says
-    // which model it priced at, so the number is never silently attributed.
+    // 钱需要一个模型，而流不携带模型，所以模型在这里点名：`--model`，否则配置里的默认值。给人看的
+    // 视图会说它按哪个模型计了价，所以这个数字永远不会被无声地归到某个模型上。
     let config = load_config(parsed.config.clone(), env)?;
     let model = parsed
         .model
@@ -2185,8 +2089,7 @@ fn write_json<T: serde::Serialize>(out: &mut dyn Write, value: &T) -> Result<(),
 }
 
 fn print_timeline(out: &mut dyn Write, timeline: &Timeline, filter: &Filter) {
-    // Usage rows are the stats view's material; the default transcript skips
-    // them unless they were asked for by name.
+    // 用量行是统计视图的素材；默认的转录跳过它们，除非有人点名要。
     let kind = filter.kind.as_deref().map(observe::canonical_kind);
     let show_usage = kind.as_deref() == Some("usagerecorded");
     for group in &timeline.groups {
@@ -2351,7 +2254,7 @@ fn indent(text: &str, spaces: usize) -> String {
         .join("\n")
 }
 
-/// How much of one tool result `sessions show` prints before eliding.
+/// `sessions show` 在略去之前打印一个工具结果的多大部分。
 const PREVIEW: usize = 500;
 
 fn print_messages(out: &mut dyn Write, messages: &[Message]) {
@@ -2557,7 +2460,7 @@ fn print_sessions_help(out: &mut dyn Write) {
 mod tests {
     use super::{submission, Mode, Submission};
 
-    /// The skills a session knows about in these tests.
+    /// 这些测试里一场会话知道的技能。
     fn has_skill(name: &str) -> bool {
         matches!(name, "ask-matt" | "review")
     }
@@ -2568,13 +2471,12 @@ mod tests {
 
     #[test]
     fn a_blank_submission_is_ignored_rather_than_sent_or_read_as_the_end_of_input() {
-        // What an Enter on an empty input produces. The loop used to decide this
-        // itself, so nothing in `cargo test` pinned it -- and the TUI once sent the
-        // empty draft as the end-of-input sentinel, which quit the whole session.
+        // 在空输入上按回车产生什么。以前是循环自己决定这件事的，所以 `cargo test` 里没有任何东西把
+        // 它钉住 —— 而 TUI 曾经把空草稿当作输入结束的哨兵发出去，结果退掉了整场会话。
         assert!(matches!(read(""), Submission::Ignore));
         assert!(matches!(read("   "), Submission::Ignore));
         assert!(matches!(read("\n\n\t\n"), Submission::Ignore));
-        // Nor is it a prompt: an empty message must not reach the model.
+        // 它也不是一条 prompt：空消息绝不能到达模型。
         assert!(!matches!(read("  \n  "), Submission::Prompt(_)));
     }
 
@@ -2583,7 +2485,7 @@ mod tests {
         assert_eq!(read("/quit"), Submission::Quit);
         assert_eq!(read("/exit"), Submission::Quit);
         assert_eq!(read("/undo"), Submission::Undo);
-        assert_eq!(read("  /quit  "), Submission::Quit, "trimmed, as before");
+        assert_eq!(read("  /quit  "), Submission::Quit, "与从前一样去掉空白");
         assert_eq!(read("/nope"), Submission::Unknown("/nope"));
         assert_eq!(
             read("/ask-matt 帮我看一下"),
@@ -2598,7 +2500,7 @@ mod tests {
                 name: "ask-matt",
                 task: String::new(),
             },
-            "a bare skill only loads"
+            "光秃秃的技能名只加载正文"
         );
         assert_eq!(read("hello"), Submission::Prompt("hello"));
     }
@@ -2612,7 +2514,7 @@ mod tests {
                 task: "第一行\n第二行".to_owned(),
             }
         );
-        // The task may start on the skill's own line and carry on below it.
+        // 任务可以从技能那一行开始，再往下面续。
         assert_eq!(
             read("/ask-matt 第一行\n第二行"),
             Submission::Skill {
@@ -2624,23 +2526,22 @@ mod tests {
 
     #[test]
     fn a_pasted_paragraph_that_opens_with_a_slash_is_a_prompt() {
-        // Anything with lines after it is read as the paragraph it is, so pasting a
-        // path or a snippet does not earn an "unknown command" it never meant.
+        // 后面带行的东西都按它是一整段来读，所以粘贴一个路径或一段代码不会换来一句它从未想说的
+        // 「未知命令」。
         assert_eq!(
             read("/usr/bin/env cargo test\n第二行"),
             Submission::Prompt("/usr/bin/env cargo test\n第二行")
         );
-        // On one line it is still a typo, and one the user is told about.
+        // 只占一行时它仍然是个错字，而且是会告诉用户的那一种。
         assert_eq!(read("/usr/bin/env"), Submission::Unknown("/usr/bin/env"));
-        // Blank lines after it are still "nothing after it".
+        // 它后面的空行仍然算「后面什么都没有」。
         assert_eq!(read("/nope\n   "), Submission::Unknown("/nope"));
     }
 
     #[test]
     fn a_built_in_takes_no_task_so_a_line_after_it_is_not_dropped() {
-        // `/undo` followed by anything else is not the command: the lines after it must
-        // not vanish, so the whole submission is read by the rules for a `/`-opening
-        // line — `/undo` names no skill, so it is a prompt.
+        // `/undo` 后面跟着别的东西时就不是这条命令了：后面的行绝不能消失，所以整条提交按「以 `/` 开
+        // 头的行」那一套规则读 —— `/undo` 没点名任何技能，所以它是一条 prompt。
         assert_eq!(
             read("/undo\n把 X 改成 Y"),
             Submission::Prompt("/undo\n把 X 改成 Y")
@@ -2649,15 +2550,15 @@ mod tests {
         assert_eq!(
             read("/undo  "),
             Submission::Undo,
-            "trailing blanks are fine"
+            "结尾的空白没关系"
         );
     }
 
     #[test]
     fn a_retired_command_is_now_an_unknown_one() {
-        // `plan` and `endplan` were built-ins until the mode they controlled left
-        // (`.scratch/todo-and-modes`). Nothing is left to parse them, and the answer is
-        // the unknown-command text — which names the built-ins that do exist.
+        // 在它们所控制的那个模式退场之前，`plan` 与 `endplan` 都是内建命令
+        // （`.scratch/todo-and-modes`）。现在没有东西去解析它们了，答案是未知命令那段文本 —— 那段
+        // 文本会点名真正存在的内建命令。
         assert_eq!(read("/plan"), Submission::Unknown("/plan"));
         assert_eq!(read("/endplan"), Submission::Unknown("/endplan"));
     }
@@ -2684,11 +2585,11 @@ mod tests {
         assert_eq!(
             args(&[]).unwrap().mode,
             None,
-            "absent means the file decides"
+            "不写表示由文件决定"
         );
         let error = args(&["--mode", "plan"]).unwrap_err();
         for word in ["plan", "readonly", "ask", "auto"] {
-            assert!(error.contains(word), "`{word}` is missing from: {error}");
+            assert!(error.contains(word), "`{word}` 没有出现在：{error}");
         }
     }
 
@@ -2696,9 +2597,8 @@ mod tests {
     fn the_mode_flag_overrides_the_configuration_and_its_absence_does_not() {
         use super::{effective_mode, InteractiveArgs};
 
-        // Both directions of the one entry-point rule: with the flag set the file is
-        // not consulted, and without it the file is exactly what a session starts in
-        // (`.scratch/todo-and-modes/spec.md` §1).
+        // 那一条入口点规则的两个方向：旗标设了就根本不看文件，没设时文件正是这场会话开始于的那一档
+        // （`.scratch/todo-and-modes/spec.md` §1）。
         let configured = |written: Option<&str>| {
             crate::config::resolve(written, &crate::config::EnvMap::new()).unwrap()
         };
@@ -2737,7 +2637,7 @@ mod tests {
     fn anything_else_is_the_whole_message() {
         let text = "第一行\n第二行\n第三行";
         assert_eq!(read(text), Submission::Prompt(text));
-        // Kept as written: the message is what the user typed, not a trimmed version.
+        // 按原样保留：这条消息就是用户打下的东西，不是修剪过的版本。
         assert_eq!(
             read("  第一行\n第二行  "),
             Submission::Prompt("  第一行\n第二行  ")
@@ -2748,8 +2648,8 @@ mod tests {
 
     #[test]
     fn a_session_discussion_takes_a_question_or_leaves_it_to_the_loop() {
-        // The question is the rest of the line plus whatever follows it, exactly as a
-        // skill's task is: a discussion question can be a paragraph.
+        // 问题就是这一行剩下的部分加上跟在它后面的一切，与技能的任务完全一样：一个讨论的问题可以是
+        // 一整段。
         assert_eq!(
             read("/discuss 要不要换掉权限模型"),
             Submission::Discuss("要不要换掉权限模型".to_owned())
@@ -2758,10 +2658,10 @@ mod tests {
             read("/discuss 第一行\n第二行\n\n"),
             Submission::Discuss("第一行\n第二行".to_owned())
         );
-        // Bare: the loop puts the session's last question to the debaters.
+        // 光秃秃的：循环把这场会话最后一个问题交给那两位讨论者。
         assert_eq!(read("/discuss"), Submission::Discuss(String::new()));
         assert_eq!(read("  /discuss   "), Submission::Discuss(String::new()));
-        // Only that name is a command: a skill called `discussion` is a skill.
+        // 只有那个名字才是命令：一个叫 `discussion` 的技能就只是个技能。
         assert_eq!(read("/discussion x"), Submission::Unknown("/discussion x"));
     }
 
@@ -2799,19 +2699,19 @@ mod tests {
 
     #[test]
     fn a_discussion_draws_a_pair_or_takes_the_one_it_is_given() {
-        // Named: exactly those two, in the order asked for.
+        // 点名：恰好是这两位，按要的顺序。
         let picked =
             pick_debaters(&pool(), Some(["审查".to_owned(), "保守".to_owned()]), 0).unwrap();
         assert_eq!(names(&picked), ["审查", "保守"]);
         assert_eq!(picked[0].model, "deepseek-flash");
 
-        // Drawn: two distinct pool members, and the seed decides which.
+        // 抽的：池子里两位不同的成员，由种子决定是哪两位。
         let first = pick_debaters(&pool(), None, 0).unwrap();
         assert_eq!(names(&first), ["保守", "激进"]);
         let second = pick_debaters(&pool(), None, 2).unwrap();
-        assert_eq!(names(&second), ["保守", "审查"], "the seed moves the pair");
+        assert_eq!(names(&second), ["保守", "审查"], "种子挪动了这一对");
 
-        // A name the pool does not have says what it does have.
+        // 池子里没有的名字，会说清池子里有什么。
         let error =
             pick_debaters(&pool(), Some(["保守".to_owned(), "没有".to_owned()]), 0).unwrap_err();
         assert!(error.contains("没有"), "{error}");
@@ -2824,17 +2724,17 @@ mod tests {
         assert_eq!(line.debaters, Some(["保守".to_owned(), "激进".to_owned()]));
         assert_eq!(line.question, "换个角度再看");
 
-        // No question: the loop supplies the session's last one.
+        // 没有要问的问题：循环补上这场会话最后一个。
         let bare = parse_discuss_line("--debaters 保守,激进").unwrap();
         assert_eq!(bare.question, "");
         assert_eq!(bare.debaters.unwrap(), ["保守", "激进"]);
 
-        // A question with no flags, newlines and all.
+        // 一个不带旗标的问题，含换行。
         let plain = parse_discuss_line("第一行\n第二行").unwrap();
         assert_eq!(plain.debaters, None);
         assert_eq!(plain.question, "第一行\n第二行");
 
-        // Anything after `--` is the question, so a question may look like a flag.
+        // `--` 之后的一切都是问题，所以一个问题可以长得像旗标。
         let after = parse_discuss_line("-- --看起来像参数的题目").unwrap();
         assert_eq!(after.question, "--看起来像参数的题目");
 
@@ -2845,7 +2745,7 @@ mod tests {
         assert_eq!(
             split_names("保守, 激进").unwrap(),
             ["保守".to_owned(), "激进".to_owned()],
-            "whitespace after the comma is fine"
+            "逗号后面的空白没关系"
         );
     }
 
@@ -2875,7 +2775,7 @@ mod tests {
             question(&parsed.words).as_deref(),
             Some("把 X 换掉 风险在哪")
         );
-        // Nothing to ask: the caller reads stdin instead.
+        // 没有要问的：调用方改为读 stdin。
         assert_eq!(question(&[]), None);
         assert_eq!(question(&["   ".to_owned()]), None);
     }
@@ -2893,16 +2793,16 @@ mod tests {
 
     #[test]
     fn a_discussion_rejects_what_it_cannot_honour() {
-        // Two renderers, one process.
+        // 两个渲染器，一个进程。
         assert!(discuss_args(&["--plain", "--tui", "q"])
             .unwrap_err()
             .contains("互斥"));
-        // A flag that does not exist, and a flag missing its value.
+        // 一个不存在的旗标，以及一个缺了值的旗标。
         assert!(discuss_args(&["--model", "kimi-k3"])
             .unwrap_err()
             .contains("--model"));
         assert!(discuss_args(&["--cwd"]).unwrap_err().contains("--cwd"));
-        // There is no `--continue`: a discussion is one question, one harness.
+        // 没有 `--continue`：一场讨论是一个问题、一个 harness。
         assert!(discuss_args(&["--continue"])
             .unwrap_err()
             .contains("--continue"));

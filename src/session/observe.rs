@@ -1,27 +1,21 @@
-//! The human-facing views behind the `sessions` CLI (spec §18).
+//! `sessions` CLI 背后那些给人看的视图（spec §18）。
 //!
-//! Every view here is a **group-by over the event stream**, never a new capture
-//! point: the stream is the single source of truth, and a second store of
-//! diagnostics would be a second thing to keep honest. `seq` is the only
-//! identity, so a view is a sequential read plus an in-memory filter — there is
-//! deliberately no index.
+//! 这里每个视图都是**对事件流的一次 group-by**，绝不是新的采集点：流是唯一真相源，而第二份诊断
+//! 存储就是第二件要维持诚实的东西。`seq` 是唯一的身份，所以一个视图就是一次顺序读加一次内存里的
+//! 过滤 —— 这里刻意没有索引。
 //!
-//! Four views:
+//! 四个视图：
 //!
-//! * [`list`] / [`summarize`] — which sessions exist, for `sessions ls`;
-//! * [`timeline`] — the round-grouped transcript, for `sessions show`, with
-//!   [`Filter`] as the escape hatch and tool calls merged with their results;
-//! * [`file_history`] — the one view indexed by a **workspace object** instead
-//!   of by time ("who changed this file, in which round"), derived from the
-//!   `wrote:` line a successful write reports;
-//! * [`stats`] — the fixed metric set, including the two quantities nothing else
-//!   surfaces: the one-sided absence rate and the edit-ladder downgrade
-//!   distribution.
+//! * [`list`] / [`summarize`] —— 有哪些会话，供 `sessions ls` 用；
+//! * [`timeline`] —— 按轮分组的转录，供 `sessions show` 用，[`Filter`] 是它的逃生口，工具调用与
+//!   各自的结果合并在一起；
+//! * [`file_history`] —— 唯一一个按**工作区对象**而不是按时间索引的视图（「谁在那一轮改了这个文
+//!   件」），从一次成功写入所报的 `wrote:` 行推出来；
+//! * [`stats`] —— 固定的指标集，其中包括别处都不露面的两个量：单边缺席率与编辑阶梯的降级分布。
 //!
-//! The conventional texts the derived metrics read (`edit match level:`,
-//! `wrote:`, the read-before-write refusal, the `no match` failure) come from the
-//! constants the producers use, never from a literal written twice: a drifting
-//! prefix would silently turn a count into zero (spec §18).
+//! 派生指标所读的那些约定文本（`edit match level:`、`wrote:`、读后写的拒绝、`no match` 失败）来
+//! 自生产者用的常量，绝不是某处写第二遍的字面量：一个漂移的前缀会把一个计数悄悄变成零
+//! （spec §18）。
 
 use std::collections::BTreeMap;
 use std::io;
@@ -43,34 +37,34 @@ use crate::tools::READ_BEFORE_WRITE_PREFIX;
 use super::store::{SessionStore, StoredSession};
 
 // ---------------------------------------------------------------------------
-// Listing
+// 列表
 // ---------------------------------------------------------------------------
 
-/// One session as a row: enough to find the one you meant.
+/// 一场会话的一行：足以找到你想找的那一场。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Listing {
     pub id: SessionId,
-    /// The movable session directory.
+    /// 可搬运的会话目录。
     pub dir: PathBuf,
-    /// The authoritative workspace, from `SessionStarted`.
+    /// 权威的工作区，来自 `SessionStarted`。
     pub cwd: Option<String>,
-    /// When the session started, from its own first event.
+    /// 会话开始的时间，来自它自己的第一条事件。
     pub started: Option<DateTime<Utc>>,
-    /// When the stream was last written, from the file's mtime.
+    /// 流最后一次被写入的时间，来自文件的 mtime。
     pub written: Option<DateTime<Utc>>,
-    /// The recorded session ending, when there is one.
+    /// 记下的会话收尾，如果有一条。
     pub ended: Option<StopReason>,
-    /// Session-cumulative tokens, summed from `UsageRecorded`.
+    /// 会话累计 token，从 `UsageRecorded` 加总。
     pub tokens: u64,
-    /// Completed messages on the stream.
+    /// 流上已完成的消息数。
     pub messages: usize,
-    /// Rounds opened.
+    /// 开过的轮次。
     pub rounds: usize,
 }
 
-/// List sessions: one cwd's bucket, or every bucket when `cwd` is `None`.
+/// 列出会话：某一个 cwd 的桶；`cwd` 为 `None` 时是每个桶。
 ///
-/// Newest first, which is the order `--continue` would consider them in.
+/// 最新的在前，也就是 `--continue` 会考虑它们的顺序。
 pub fn list(store: &SessionStore, cwd: Option<&Path>) -> io::Result<Vec<Listing>> {
     let sessions = match cwd {
         Some(cwd) => store.list(cwd)?,
@@ -79,7 +73,7 @@ pub fn list(store: &SessionStore, cwd: Option<&Path>) -> io::Result<Vec<Listing>
     sessions.iter().map(summarize).collect()
 }
 
-/// Summarize one stored session from its own stream.
+/// 从一场已存会话自己的流汇总出它的一行。
 pub fn summarize(session: &StoredSession) -> io::Result<Listing> {
     let events = crate::events::read_events(&session.log_path)?;
     let mut listing = Listing {
@@ -117,10 +111,10 @@ fn written_at(path: &Path) -> Option<DateTime<Utc>> {
 }
 
 // ---------------------------------------------------------------------------
-// Timeline
+// 时间线
 // ---------------------------------------------------------------------------
 
-/// The round-grouped transcript (`sessions show`).
+/// 按轮分组的转录（`sessions show`）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Timeline {
     pub session_id: Option<SessionId>,
@@ -128,21 +122,19 @@ pub struct Timeline {
     pub groups: Vec<TimelineGroup>,
 }
 
-/// One round's slice of the transcript, plus the stretch before the first round.
+/// 转录里一轮的那一片，外加第一轮之前那一段。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TimelineGroup {
-    /// The round number, or `None` for the session's prelude (and for a
-    /// single-agent session, which has no rounds at all).
+    /// 轮次编号；会话的前奏是 `None`（单 agent 会话也用它，因为它根本没有轮次）。
     pub round: Option<u32>,
     pub mode: Option<RoundMode>,
-    /// How the round ended, when it was the one that ended the debate phase.
+    /// 这一轮是怎么结束的 —— 当它是结束辩论阶段的那一轮时。
     pub ended: Option<StopReason>,
     pub entries: Vec<Entry>,
 }
 
-/// One row of the transcript. Tool calls are merged with their results, and a
-/// post-hook's feedback with the result it annotates, so a call reads as one
-/// thing rather than three.
+/// 转录里的一行。工具调用与它的结果合并，钩子的后续反馈与它所评注的结果合并，所以一次调用读起来
+/// 是一件事，而不是三件。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "entry", rename_all = "snake_case")]
 pub enum Entry {
@@ -156,13 +148,13 @@ pub enum Entry {
         tool_call_id: ToolCallId,
         tool: String,
         args: serde_json::Value,
-        /// `None` while the call has no result yet.
+        /// 这次调用还没有结果时是 `None`。
         ok: Option<bool>,
         output: Option<String>,
         error: Option<String>,
         duration_ms: Option<u64>,
-        /// A post-hook's outcome for this call, merged here because the hook
-        /// event carries no `tool_call_id` and the call is what it annotated.
+        /// 钩子对这次调用的结局，合并在这里，因为钩子事件不携带 `tool_call_id`，而这次调用正是它
+        /// 所评注的那个。
         hook: Option<String>,
     },
     RoundStarted {
@@ -248,7 +240,7 @@ pub enum Entry {
 }
 
 impl Entry {
-    /// The stable name of this row, for `--kind`.
+    /// 这一行稳定的名字，供 `--kind` 用。
     pub fn kind(&self) -> &'static str {
         match self {
             Entry::Message { .. } => "MessageCompleted",
@@ -272,7 +264,7 @@ impl Entry {
         }
     }
 
-    /// The speaker this row is attributed to, when it has one.
+    /// 这一行归到哪位发言者，如果有一位。
     pub fn speaker(&self) -> Option<&SpeakerId> {
         match self {
             Entry::Message { speaker, .. }
@@ -296,8 +288,8 @@ impl Entry {
         }
     }
 
-    /// Whether `--only-error` keeps this row: a failed call, a failed or
-    /// aborted turn, an error, or a round that ended in one.
+    /// `--only-error` 是否保留这一行：失败的调用、失败或被中断的回合、一条错误，或者以错误收尾的
+    /// 一轮。
     pub fn is_error(&self) -> bool {
         match self {
             Entry::Tool { ok, .. } => *ok == Some(false),
@@ -318,19 +310,17 @@ impl Entry {
     }
 }
 
-/// Fold a kind name to the one form `--kind` compares in.
+/// 把一个 kind 名折叠成 `--kind` 用来比较的唯一形态。
 ///
-/// Case, underscores and dashes are all decoration around the same event name;
-/// a merged tool row answers to any of the three names it replaces. Public
-/// because the CLI's "is this the usage row" test must agree with the filter, and
-/// two normalizers would eventually disagree.
+/// 大小写、下划线与横线都只是同一个事件名周围的装饰；合并后的工具行同时答应它取代的那三个名字。公
+/// 开是因为 CLI 那句「这是用量行吗」的判断必须与过滤器一致，而两个归一化器迟早会不一致。
 pub fn canonical_kind(kind: &str) -> String {
     let normalized: String = kind
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect();
-    // A merged tool row answers to any of the three names it replaces.
+    // 合并后的工具行同时答应它取代的那三个名字。
     if matches!(
         normalized.as_str(),
         "tool" | "toolcall" | "toolcallstarted" | "toolcallcompleted"
@@ -341,13 +331,13 @@ pub fn canonical_kind(kind: &str) -> String {
     }
 }
 
-/// Build the round-grouped transcript. Tool calls are merged with their results
-/// by `tool_call_id`, and a post-hook's outcome with the result it annotates.
+/// 构建按轮分组的转录。工具调用按 `tool_call_id` 与各自的结果合并，钩子的结局与它所评注的结果合
+/// 并。
 pub fn timeline(events: &[Event]) -> Timeline {
     let mut timeline = Timeline::default();
     let mut open: Option<usize> = None;
-    // `tool_call_id -> (group, entry)`: a result may land in a group the
-    // transcript has already moved past, so the row is found by identity.
+    // `tool_call_id -> (组, 行)`：一条结果可能落进转录已经走过的那一组，所以这一行是按身份找回来
+    // 的。
     let mut tools: Vec<(ToolCallId, usize, usize)> = Vec::new();
 
     for event in events {
@@ -435,8 +425,7 @@ pub fn timeline(events: &[Event]) -> Timeline {
                         *slot_duration = Some(*duration_ms);
                     }
                 } else {
-                    // A result whose start is not on this stream is a resume
-                    // artifact; show it rather than dropping it.
+                    // 起点不在这份流上的结果是一种续跑残留；显示它，而不是丢掉它。
                     let index = open_group(&mut timeline, &mut open);
                     timeline.groups[index].entries.push(Entry::Tool {
                         speaker: event.speaker_id.clone(),
@@ -452,9 +441,8 @@ pub fn timeline(events: &[Event]) -> Timeline {
                 }
                 continue;
             }
-            // A post-hook's feedback belongs with the result it annotates; the
-            // hook event carries no id, and the loop emits it immediately after
-            // the result, so the latest result is the pairing (spec §3, §19).
+            // 钩子的后续反馈属于它所评注的那条结果；钩子事件不携带 id，而循环紧接结果之后就发出
+            // 它，所以最近的那条结果就是配对关系（spec §3、§19）。
             EventPayload::HookExecuted { point, outcome, .. }
                 if point == hook_format::POINT_POST =>
             {
@@ -475,7 +463,7 @@ pub fn timeline(events: &[Event]) -> Timeline {
     timeline
 }
 
-/// The open group, opening the session's prelude group on first use.
+/// 当前打开的组，首次使用时打开会话的前奏组。
 fn open_group(timeline: &mut Timeline, open: &mut Option<usize>) -> usize {
     if let Some(index) = *open {
         return index;
@@ -485,7 +473,7 @@ fn open_group(timeline: &mut Timeline, open: &mut Option<usize>) -> usize {
     timeline.groups.len() - 1
 }
 
-/// The most recent row that is a tool call, wherever it sits.
+/// 最近的那一行工具调用，不管它落在哪里。
 fn last_tool_entry(timeline: &mut Timeline) -> Option<&mut Option<String>> {
     for group in timeline.groups.iter_mut().rev() {
         for entry in group.entries.iter_mut().rev() {
@@ -607,7 +595,7 @@ fn entry_of(event: &Event) -> Option<Entry> {
             source: source.clone(),
             content: content.clone(),
         },
-        // Handled by the grouping loop above.
+        // 由上面的分组循环处理。
         EventPayload::SessionStarted { .. }
         | EventPayload::RoundStarted { .. }
         | EventPayload::RoundEnded { .. }
@@ -616,7 +604,7 @@ fn entry_of(event: &Event) -> Option<Entry> {
     })
 }
 
-/// Filters over a [`Timeline`] (`sessions show`).
+/// 作用于 [`Timeline`] 的过滤器（`sessions show`）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Filter {
     pub round: Option<u32>,
@@ -627,8 +615,8 @@ pub struct Filter {
 }
 
 impl Filter {
-    /// Whether this filter names nothing, in which case the caller can use the
-    /// transcript it already built instead of cloning a filtered copy.
+    /// 这个过滤器是否什么都没点名；那样调用方可以直接用它已经建好的转录，而不必克隆一份过滤后的
+    /// 副本。
     pub fn is_empty(&self) -> bool {
         self.round.is_none()
             && self.speaker.is_none()
@@ -639,8 +627,7 @@ impl Filter {
 }
 
 impl Timeline {
-    /// Apply a [`Filter`]; empty groups fall away, so a filtered view stays
-    /// round-grouped without empty section headings.
+    /// 施加一个 [`Filter`]；空的组会掉出去，于是一个过滤后的视图仍然按轮分组，却没有空的小标题。
     pub fn filtered(&self, filter: &Filter) -> Timeline {
         let mut timeline = Timeline {
             session_id: self.session_id.clone(),
@@ -697,10 +684,10 @@ fn matches_filter(entry: &Entry, filter: &Filter) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// File history
+// 文件历史
 // ---------------------------------------------------------------------------
 
-/// One changed file, attributed to the agent and round that changed it.
+/// 一个被改过的文件，归到改了它的那个 agent 与那一轮。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileChange {
     pub path: String,
@@ -710,11 +697,10 @@ pub struct FileChange {
     pub seq: u64,
 }
 
-/// The workspace-object view: every file a successful write or edit landed on.
+/// 按工作区对象看的视图：每一次成功的写入或编辑落在过的每一个文件。
 ///
-/// The path comes from the **result** line (`wrote:`), not from the call's
-/// arguments: a `hook.pre` may have rewritten the arguments, so the result is the
-/// only record of what was actually written (spec §16, §18).
+/// 路径来自**结果**那一行（`wrote:`），不是来自调用的参数：`hook.pre` 可能改写过参数，所以结果是
+/// 「实际写下了什么」的唯一记录（spec §16、§18）。
 pub fn file_history(events: &[Event]) -> Vec<FileChange> {
     let mut round: Option<u32> = None;
     let mut names: BTreeMap<ToolCallId, String> = BTreeMap::new();
@@ -757,22 +743,21 @@ pub fn file_history(events: &[Event]) -> Vec<FileChange> {
 }
 
 // ---------------------------------------------------------------------------
-// Stats
+// 统计
 // ---------------------------------------------------------------------------
 
-/// One named count, so a JSON consumer can read a distribution without
-/// depending on a map's ordering.
+/// 一个有名字的计数，好让 JSON 消费方不必依赖 map 的顺序就能读一个分布。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Count {
     pub name: String,
     pub count: usize,
 }
 
-/// The fixed metric set (`sessions stats`), all of it a group-by over the stream.
+/// 固定的指标集（`sessions stats`），全都是对事件流的一次 group-by。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stats {
     pub session: SessionStats,
-    /// One row per participant: debaters, the synthesizer and every executor.
+    /// 每位参与者一行：讨论者、合成器，以及每一个执行者。
     pub speakers: Vec<SpeakerStats>,
     pub rounds: Vec<RoundStats>,
     pub absence: AbsenceStats,
@@ -781,15 +766,15 @@ pub struct Stats {
     pub guards: GuardStats,
     pub permissions: PermissionStats,
     pub hooks: HookStats,
-    /// Rounds whose two sides recorded a conflict.
+    /// 两边记下了分歧的轮次。
     pub divergences: usize,
-    /// `divergences / debate rounds`, or `None` when there were none.
+    /// `divergences / debate rounds`；一轮辩论都没有时是 `None`。
     pub divergence_rate: Option<f64>,
-    /// How the debate phase ended, per reason.
+    /// 辩论阶段是怎么结束的，按原因分。
     pub stops: Vec<Count>,
 }
 
-/// The session-wide totals.
+/// 会话级的合计。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionStats {
     pub tokens: Usage,
@@ -799,18 +784,18 @@ pub struct SessionStats {
     pub rounds: usize,
 }
 
-/// One participant's spend: tokens always, money when a model was named.
+/// 一位参与者的花费：token 总是有，钱只在这个发言者点了名时才有。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeakerStats {
     pub speaker: SpeakerId,
     pub tokens: Usage,
     pub calls: usize,
     pub cost: Option<f64>,
-    /// `cached / (cached + miss)`, or `None` when nothing was billed.
+    /// `cached / (cached + miss)`；什么都没计费时是 `None`。
     pub hit_rate: Option<f64>,
 }
 
-/// One round: the calls it cost and how it was closed.
+/// 一轮：它花掉的调用数以及它是怎么收尾的。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoundStats {
     pub round: u32,
@@ -819,20 +804,20 @@ pub struct RoundStats {
     pub ended: Option<StopReason>,
 }
 
-/// The absence picture across the debate rounds (spec §15's query).
+/// 辩论轮次上的缺席图景（spec §15 的那个查询）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AbsenceStats {
-    /// Debate rounds (the synthesis round is not one).
+    /// 辩论轮数（合成那一轮不算）。
     pub rounds: usize,
-    /// Rounds where exactly one side was absent while the other answered.
+    /// 恰好一边缺席、另一边作答了的轮次。
     pub one_sided: usize,
-    /// How often each speaker was the absent one.
+    /// 每位发言者当缺席那一方的次数。
     pub per_speaker: Vec<Count>,
-    /// `one_sided / rounds`, or `None` when there were no debate rounds.
+    /// `one_sided / rounds`；一轮辩论都没有时是 `None`。
     pub rate: Option<f64>,
 }
 
-/// The executors a session dispatched and why they stopped.
+/// 一场会话派出过的执行者，以及它们为什么停下。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutorStats {
     pub spawned: usize,
@@ -841,79 +826,74 @@ pub struct ExecutorStats {
     pub tokens: Usage,
 }
 
-/// The edit ladder's outcome (spec §8): how many edits landed and at which level.
+/// 编辑阶梯的结局（spec §8）：多少次编辑落了地、落在哪一级。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditStats {
     pub succeeded: usize,
-    /// The match ladder's downgrade distribution (`exact` / the two downgrades).
+    /// 匹配阶梯的降级分布（`exact` 与两次降级）。
     pub levels: Vec<Count>,
-    /// Edits refused because no ladder level matched — the case that withdraws
-    /// the path's read permission.
+    /// 因为没有一级匹配得上而被拒的编辑 —— 就是撤掉路径读权限的那种情况。
     pub failed_matches: usize,
 }
 
-/// The two guardrails whose refusals are otherwise invisible (spec §7).
+/// 两条护栏，它们的拒绝在别处看不见（spec §7）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuardStats {
     pub read_before_write: usize,
     pub invalidated_reads: usize,
 }
 
-/// Permission questions asked and how they were decided.
+/// 问过的权限询问，以及它们是怎么裁定的。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionStats {
     pub asked: usize,
     pub decided: Vec<Count>,
 }
 
-/// What the mounted hooks did over the session.
+/// 挂着的钩子在这场会话里做了什么。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HookStats {
     pub executed: usize,
     pub pre: usize,
     pub post: usize,
-    /// Post-hook outcomes that carried feedback to the model.
+    /// 把反馈带给了模型的钩子结局。
     pub feedback: usize,
-    /// Hook failures or timeouts (fail-closed pre-hooks, dropped post feedback).
+    /// 钩子失败或超时（前置钩子失败即关闭、后置反馈被丢掉）。
     pub failed: usize,
     pub outcomes: Vec<Count>,
 }
 
-/// The model each speaker is priced at, for a view that knows the roster.
+/// 每位发言者按哪个模型计价，供知道名册的视图用。
 ///
-/// `UsageRecorded` carries no model — the roster lives in configuration, not on
-/// the stream — so money is only shown when the caller names the model. Tokens
-/// and hit rates need no model and are always reported. The routing rule is
-/// [`SessionConfig::model_for`]'s, not a second copy of it (spec §17): a routed
-/// synthesizer or executor is priced at the model it actually answered with.
+/// `UsageRecorded` 不携带模型 —— 名册住在配置里、不在流上 —— 所以只有在调用方点名模型时才显示
+/// 钱。token 与命中率不需要模型，总是会报。路由规则用的是 [`SessionConfig::model_for`] 的，不是
+/// 它的第二份拷贝（spec §17）：被路由的合成器或执行者按它实际作答时用的模型计价。
 #[derive(Debug, Clone)]
 pub struct CostModel {
     config: SessionConfig,
 }
 
 impl CostModel {
-    /// Price a session whose answerers all use `base_model`.
+    /// 为一场应答者全都用 `base_model` 的会话定价。
     pub fn new(base_model: impl Into<String>, pricing: PriceTable) -> Self {
         Self {
             config: SessionConfig::new(base_model).with_pricing(pricing),
         }
     }
 
-    /// Apply the configured `[routing]` overrides, so the synthesizer and the
-    /// executors are priced at the models they really ran on.
+    /// 施加配置里的 `[routing]` 覆盖，好让合成器与执行者按它们真正跑过的模型计价。
     pub fn with_routing(mut self, routing: &Routing) -> Self {
         routing.apply(&mut self.config);
         self
     }
 
-    /// The model a speaker is priced at: the system's one routing rule, applied
-    /// to a speaker rather than restated here.
+    /// 一位发言者按哪个模型计价：系统唯一那条路由规则，作用在一位发言者上，而不是在这里重说一
+    /// 遍。
     pub fn model_for(&self, speaker: &SpeakerId) -> &str {
         match speaker {
             SpeakerId::System => self.config.model_for(LandingPoint::Synthesizer),
             SpeakerId::Executor(_) => self.config.model_for(LandingPoint::Executor),
-            // A debater is never a landing point (spec §17): it answers with the
-            // session's own model.
+            // 讨论者绝不是一个落点（spec §17）：它用会话自己的模型作答。
             SpeakerId::Debater(_) | SpeakerId::User => &self.config.model,
         }
     }
@@ -923,8 +903,7 @@ impl CostModel {
     }
 }
 
-/// Compute the metric set. `cost` may be `None`: money is display only and
-/// needs a model the stream does not carry (spec §17).
+/// 算出这套指标。`cost` 可能是 `None`：钱只作显示，且需要一个流上不携带的模型（spec §17）。
 pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
     let mut agents: BTreeMap<SpeakerId, Usage> = BTreeMap::new();
     let mut agent_calls: BTreeMap<SpeakerId, usize> = BTreeMap::new();
@@ -1073,8 +1052,7 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
         }
     }
 
-    // Absence is a question about rounds, so it is asked of the stream per round
-    // rather than reconstructed while walking (spec §15's query).
+    // 缺席是关于轮次的问题，所以它按轮向流提问，而不是在走流的过程中重建（spec §15 的那个查询）。
     let debate_rounds: Vec<u32> = rounds
         .iter()
         .filter(|round| round.mode != RoundMode::Synthesis)
@@ -1111,8 +1089,7 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
         })
         .collect();
 
-    // The session total is the sum of the rows above, so token and money
-    // arithmetic can never drift apart.
+    // 会话总计就是上面各行之和，所以 token 与钱的算术永远不会互相漂移。
     session.tokens = speaker_stats
         .iter()
         .fold(Usage::default(), |mut total, speaker| {
@@ -1154,9 +1131,9 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
     }
 }
 
-/// Classify one finished tool call's result text for the two silent metrics.
+/// 为那两个沉默的指标分类一次已完成的工具调用的结果文本。
 ///
-/// Returns `(match levels reported, whether the failure was a failed match)`.
+/// 返回 `(报出的匹配级别数, 这次失败是不是一次失败的匹配)`。
 fn tally_tool(
     ok: bool,
     output: Option<&str>,
@@ -1175,11 +1152,9 @@ fn tally_tool(
     if error.starts_with(READ_BEFORE_WRITE_PREFIX) {
         guards.read_before_write += 1;
     }
-    // The invalidation is not a field of its own: a failed match *is* the case
-    // that withdraws the read permission. The producer prefixes the path
-    // (`edit_file` reports `"<path>: {error}"`), so the suffix is matched
-    // against the variant's own rendering — the parser cannot drift from the
-    // producer's text (spec §18).
+    // 这次作废不是单独的字段：一次失败的匹配**就是**撤掉读权限的那种情况。生产者会给路径加前缀
+    // （`edit_file` 报的是 `"<path>: {error}"`），所以用该变体自己的渲染来匹配后缀 —— 解析器不
+    // 可能与生产者的文本漂移（spec §18）。
     if error.ends_with(&EditError::NoMatch.to_string()) {
         guards.invalidated_reads += 1;
         return (0, true);
@@ -1187,10 +1162,10 @@ fn tally_tool(
     (0, false)
 }
 
-/// Count the match levels reported in one successful edit result.
+/// 数一次成功编辑结果里报出的匹配级别。
 ///
-/// The line is `edit match level: <level>: …`; the level is parsed via the
-/// producer's prefix so the two cannot drift (spec §18).
+/// 那一行是 `edit match level: <level>: …`；级别通过生产者的前缀解析，所以两者不可能漂移
+/// （spec §18）。
 fn count_levels(output: &str, levels: &mut BTreeMap<String, usize>) -> usize {
     let mut seen = 0;
     for line in output.lines() {
@@ -1210,7 +1185,7 @@ fn count_levels(output: &str, levels: &mut BTreeMap<String, usize>) -> usize {
     seen
 }
 
-/// A distribution, most frequent first, then by name so JSON stays stable.
+/// 一个分布，最频繁的在前，然后按名字排，好让 JSON 保持稳定。
 fn counted(counts: BTreeMap<String, usize>) -> Vec<Count> {
     let mut counted: Vec<Count> = counts
         .into_iter()

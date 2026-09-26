@@ -1,33 +1,24 @@
-//! Projection: `(&[Event], SpeakerId, ModelCaps) -> messages`.
+//! 投影：`(&[Event], SpeakerId, ModelCaps) -> messages`。
 //!
-//! A pure function of the stream plus attribution rules. It holds no trimming
-//! state; trimming is a separate pure step that lands in ticket 07. The same
-//! events always project to the same `messages`, which is what makes "any
-//! agent's `messages` is recomputable from the stream + the rules" (spec §5)
-//! true.
+//! 它是事件流加上归属规则的纯函数。它不持有任何裁剪状态；裁剪是另一道纯步骤，落在票 07。同一批
+//! 事件总是投影出同样的 `messages`，这正是「任何 agent 的 `messages` 都能从流 + 规则重算出来」
+//! （spec §5）成立的原因。
 //!
-//! This module owns the one place where "self" versus "other" is decided:
+//! 本模块独占那个判定「自己」与「别人」的地方：
 //!
-//! * the acting speaker's own turns become `assistant`; everyone else's become
-//!   `user` (spec §5), because neither vendor documents how it treats several
-//!   consecutive same-role messages, so consecutive other-speaker turns are
-//!   merged into one `user` message and each segment inside a discussion round
-//!   carries a `[轮 N · 名字]` prefix;
-//! * another speaker's tool calls survive as a one-line summary only — the
-//!   result body and `reasoning_content` are not projected, and the paired
-//!   `tool` result is dropped with them (the wire-level `tool_call` ↔ `tool`
-//!   pairing check would reject anything else);
-//! * the speaker's own `reasoning_content` is replayed (DeepSeek 400s without
-//!   it), and its own tool round-trip plus a `PostToolUse` hook's feedback are
-//!   merged by `seq` into the one `tool` message the provider allows.
+//! * 正在发言的那一位自己的回合变成 `assistant`；其他人的变成 `user`（spec §5），因为两家厂商都
+//!   没记下它如何处理连续多条同角色消息，所以连续的别人发言合并成一条 `user` 消息，而讨论轮次里
+//!   的每一段都带一个 `[轮 N · 名字]` 前缀；
+//! * 另一个讨论者的工具调用只以一行摘要留下来 —— 结果正文与 `reasoning_content` 不投影，与之配
+//!   对的那条 `tool` 结果也一并丢掉（线上层的 `tool_call` ↔ `tool` 配对检查会拒掉别的做法）；
+//! * 发言者自己的 `reasoning_content` 会重放（DeepSeek 缺了它直接 400），而它自己的工具往返加上
+//!   一条 `PostToolUse` 钩子的反馈，按 `seq` 合并进 provider 唯一允许的那条 `tool` 消息。
 //!
-//! Per-field differences live on [`ModelCaps`] as data, so this file branches
-//! on values, never on a vendor name (spec §5).
+//! 逐字段的差异以数据形式住在 [`ModelCaps`] 上，所以这个文件按值分支，绝不按厂商名分支
+//! （spec §5）。
 //!
-//! The `[轮 N · 名字]` prefix here is the **model's** prefix. The renderer's
-//! human-facing prefix is deliberately a separate generator (spec §5): the two
-//! look alike early on, but one repeats per line for a person skimming and the
-//! other is written once per merged block for a model.
+//! 这里的 `[轮 N · 名字]` 是**模型**那个前缀。渲染器给人看的前缀刻意是另一个生成器（spec §5）：
+//! 两者早期看着很像，但一个为人快速浏览而逐行重复，另一个为模型而每个合并块只写一次。
 
 use super::capability::ModelCaps;
 use super::{Message, ToolCall};
@@ -35,34 +26,30 @@ use crate::events::{
     hook_format, superseded_seqs, ContextSource, Event, EventPayload, SpeakerId, ToolCallId,
 };
 
-/// Longest sanitized participant name sent in a `name` field.
+/// 送进 `name` 字段的最长清洗后参与者名。
 ///
-/// No vendor documents a character set or a length for `name`, so the value is
-/// kept to a shape any reasonable implementation accepts (spec §5).
+/// 没有厂商记下 `name` 的字符集或长度，所以这个值保持在任何一个讲道理的实现都会接受的形状上
+/// （spec §5）。
 const MAX_NAME_CHARS: usize = 64;
 
-/// Longest rendered argument list kept in another speaker's tool summary.
+/// 另一位讨论者的工具摘要里保留的最长渲染参数列表。
 const MAX_TOOL_SUMMARY_CHARS: usize = 160;
 
-/// Recompute the `messages` an agent should replay from a slice of the event
-/// stream.
+/// 从事件流的一段里重算出某个 agent 该重放的 `messages`。
 ///
-/// The slice rather than the log itself: the stream is append-only, so a prefix
-/// of it is a perfectly good input, and a discussion round needs exactly that —
-/// a debater's window is cut at its round's `RoundStarted` (spec §15). Passing
-/// the events also keeps this function honest about being pure.
+/// 传的是一段而不是整份日志：流是只追加的，所以它的一个前缀是完美的合法输入，而一个讨论轮次要的
+/// 正好就是这个 —— 讨论者的窗口切在它那一轮的 `RoundStarted`（spec §15）。传事件也让这个函数在
+/// 「自己是纯的」这件事上保持一致。
 ///
-/// `caps` supplies the provider's field-level facts, so a difference such as
-/// whether the model's own reasoning must round-trip is a table value rather
-/// than a code path.
+/// `caps` 提供 provider 的逐字段事实，所以「模型自己的推理是否必须往返」这样的差异是表里的一个
+/// 值，而不是一条代码路径。
 pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<Message> {
     let superseded = superseded_seqs(events);
     let mut messages = Vec::new();
     let mut others = OtherBlock::default();
-    // Whether the first speech `user` message has been emitted. It is pinned:
-    // the head of the conversation must stay byte-stable for the prefix cache,
-    // so it never absorbs a later speaker's speech (spec §5). A pinned
-    // `ContextInjected` is separate and does not consume this flag.
+    // 第一条发言 `user` 消息是否已经发出。它是钉住的：会话的开头必须逐字节稳定，前缀缓存才能命
+    // 中，所以它绝不会再吸收后来某位的发言（spec §5）。钉住的 `ContextInjected` 是另一回事，不
+    // 消耗这个标志。
     let mut head_emitted = false;
     let mut pending: Option<PendingAssistant> = None;
     let mut round: Option<u32> = None;
@@ -72,26 +59,20 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             continue;
         }
         let mine = &event.speaker_id == speaker;
-        // The exhaustive "what enters the model's context" table (spec §5).
-        // There is deliberately no `_` arm: a new payload must be classified
-        // here rather than silently defaulting to invisible.
+        // 「什么进入模型上下文」的穷举表（spec §5）。这里刻意没有 `_` 分支：新的 payload 必须在
+        // 这里被分类，而不是悄悄默认成不可见。
         match &event.payload {
-            // Session skeleton: identity and harness bookkeeping stay private.
+            // 会话骨架：身份与 harness 记账保持私有。
             EventPayload::SessionStarted { .. } => {}
-            // A pinned injection belongs to the pinned head and never merges with
-            // speech: it must look identical every turn for the prefix cache to
-            // keep hitting (spec §5, §10). The leading injections — the project
-            // rules and the skills catalog — are **one** `user` message (spec
-            // §10, decision 09: "与 AGENTS.md 同一条"), so a run of them merges
-            // into a single message rather than becoming consecutive same-role
-            // messages. A mid-session injection (a skill body the user
-            // loaded, spec §9) has history before it and so stays its own message.
+            // 钉住的注入属于钉住的开头，绝不与发言合并：它必须每一回合都看起来一模一样，前缀缓存
+            // 才能继续命中（spec §5、§10）。开头那几条注入 —— 项目规矩与技能清单 —— 是**一条**
+            // `user` 消息（spec §10、决定 09：「与 AGENTS.md 同一条」），所以连续的一串注入合并成
+            // 一条消息，而不是变成连续的同角色消息。会话中途的注入（用户加载的技能正文，spec §9）
+            // 前面有历史，所以它自成一条消息。
             EventPayload::ContextInjected { source, content } => {
-                // A persona belongs to the participant it describes: it is that
-                // debater's own instruction, and the other side — which it is arguing
-                // against — has no business reading it. Every other injection is the
-                // user speaking to the whole session (the project rules, the skills
-                // catalog, a loaded skill body), so it reaches everyone.
+                // 人物属于它所描述的那一位：那是那个讨论者自己的指令，而它所反驳的另一方没有理由读
+                // 到它。其余每一条注入都是用户在对整场会话说话（项目规矩、技能清单、加载的技能正
+                // 文），所以它们到达所有人。
                 if matches!(source, ContextSource::Persona(_)) && !mine {
                     continue;
                 }
@@ -115,8 +96,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                 }
             }
             EventPayload::SessionEnded { .. } => {}
-            // A round is a hard merge boundary, and its number is what the
-            // model-side prefix records (spec §5).
+            // 一轮是一条硬合并边界，而模型侧的前缀记的就是它的编号（spec §5）。
             EventPayload::RoundStarted { round: started, .. } => {
                 close_pending_if_settled(&mut messages, &mut pending, speaker);
                 flush_others(&mut messages, &mut others, &mut head_emitted);
@@ -158,8 +138,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                         pending.add_call(tool_call_id, tool_name, args);
                     }
                 } else if speaks_to_others(&event.speaker_id) {
-                    // Another speaker's tool call survives as one summary line;
-                    // its result body does not (spec §5).
+                    // 另一位讨论者的工具调用以一行摘要留下来；它的结果正文不会（spec §5）。
                     close_pending_if_settled(&mut messages, &mut pending, speaker);
                     push_other(
                         &mut messages,
@@ -182,7 +161,7 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                         pending.add_result(tool_call_id, output, error);
                     }
                 }
-                // An other speaker's result body is never projected.
+                // 另一位发言者的结果正文从不投影。
             }
             EventPayload::UsageRecorded { .. } => {}
             EventPayload::TurnEnded { .. } => {}
@@ -192,23 +171,18 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                 if mine && point == hook_format::POINT_POST {
                     if let Some(feedback) = hook_format::feedback_text(outcome) {
                         if let Some(pending) = pending.as_mut() {
-                            // A post-hook feedback is an appended event, but a
-                            // provider allows exactly one `tool` message per
-                            // `tool_call`, so it merges into the result it
-                            // annotates. `HookExecuted` has no `tool_call_id`,
-                            // and the loop emits it immediately after the
-                            // result, so "the latest result" is the pairing.
+                            // 钩子的后续反馈是一条追加的事件，但 provider 对每条 `tool_call` 只
+                            // 允许一条 `tool` 消息，所以它合并进它所评注的那条结果。
+                            // `HookExecuted` 没有 `tool_call_id`，而循环紧接结果之后就发出它，所
+                            // 以「最近的那条结果」就是配对关系。
                             pending.add_feedback(feedback);
                         }
                     }
                 }
             }
-            // The spawn is attributed to the executor (`parent` names the
-            // dispatcher), and its one projected effect is on the executor
-            // itself: the brief becomes the executor's own first speech message.
-            // That keeps an executor's `messages` a function of the stream instead
-            // of an argument passed beside it (spec §5, §16). A debater sees
-            // nothing of it.
+            // 这次派生归到执行者头上（`parent` 指的是派发者），而它在投影上的唯一效果落在执行者自
+            // 己身上：简报成为执行者自己的第一条发言。这让执行者的 `messages` 成为事件流的函数，而
+            // 不是旁边另传的一个参数（spec §5、§16）。讨论者对此一无所见。
             EventPayload::ExecutorSpawned {
                 executor_id,
                 parent,
@@ -217,11 +191,9 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                 if matches!(speaker, SpeakerId::Executor(id) if id == executor_id) {
                     close_pending_if_settled(&mut messages, &mut pending, speaker);
                     flush_others(&mut messages, &mut others, &mut head_emitted);
-                    // Named by the dispatcher, and so **not** name-less: the
-                    // pinned head is the run of leading nameless `user` messages,
-                    // and a mid-session injection (a skill body the user loaded)
-                    // has to stay its own message rather than merge into the brief
-                    // (spec §5, §9, §10).
+                    // 由派发者给出名字，所以**不是**无名：钉住的开头是那一串开头处的无名 `user`
+                    // 消息，而会话中途的注入（用户加载的技能正文）必须自成一条消息，而不是合并进
+                    // 简报（spec §5、§9、§10）。
                     messages.push(Message::User {
                         content: brief.clone(),
                         name: Some(sanitize_name(parent.as_str())),
@@ -229,12 +201,10 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                     });
                 }
             }
-            // An executor reports through the `task` call's tool result and the
-            // spawning speaker's own argument, so its process never enters a
-            // debater's projection (spec §5).
+            // 执行者通过 `task` 调用的工具结果与派发者自己的那个参数来汇报，所以它的过程从不进入
+            // 讨论者的投影（spec §5）。
             EventPayload::ExecutorFinished { .. } => {}
-            // The model must see and correct its own error (spec §2); another
-            // speaker's error is not this model's to fix.
+            // 模型必须看见并能改正自己的错误（spec §2）；别人的错误不是这个模型该修的。
             EventPayload::AgentError { message, .. } if mine => {
                 close_pending_if_settled(&mut messages, &mut pending, speaker);
                 flush_others(&mut messages, &mut others, &mut head_emitted);
@@ -245,45 +215,40 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                 });
             }
             EventPayload::AgentError { .. } => {}
-            // A session-level failure is not the model's to fix (spec §2).
+            // 会话级失败不是模型该修的（spec §2）。
             EventPayload::SessionError { .. } => {}
-            // The superseded range was already filtered out above; the record
-            // itself is bookkeeping, not a message.
+            // 被取代的那一段上面已经滤掉了；这条记录本身是记账，不是消息。
             EventPayload::HistorySuperseded { .. } => {}
         }
     }
 
-    // The speaker's own group goes before any speech that was buffered while
-    // its tool calls were still awaiting results, so a `tool_call` is never
-    // separated from the `tool` message that answers it.
+    // 发言者自己的那一组排在任何「等它的工具调用出结果时缓冲下来的发言」之前，所以一条
+    // `tool_call` 永远不会与回答它的那条 `tool` 消息分开。
     close_pending_if_settled(&mut messages, &mut pending, speaker);
     flush_others(&mut messages, &mut others, &mut head_emitted);
     messages
 }
 
-/// Whether an event from this speaker enters someone else's context.
+/// 来自这一位发言者的事件是否进入别人的上下文。
 ///
-/// Only executors are hidden: a debater sees another debater, the synthesizer
-/// (`System`) and the human. An executor's own projection is full, so this is
-/// consulted only for events that are not the acting speaker's.
+/// 只有执行者被藏起来：讨论者能看见另一个讨论者、合成器（`System`）和人。执行者自己的投影是完整
+/// 的，所以这里只在事件不属于正在发言的那一位时才被查。
 fn speaks_to_others(from: &SpeakerId) -> bool {
     !matches!(from, SpeakerId::Executor(_))
 }
 
-/// Whether nothing but pinned injections has been emitted yet, so a new
-/// injection still belongs to the leading block and merges into it.
+/// 到目前为止除了钉住的注入什么都没发过，所以一条新的注入仍属于开头那一块并合并进去。
 ///
-/// A pinned injection is the only `user` message marked `injected` at this
-/// point: speech carries a speaker `name`, and an `AgentError` cannot precede
-/// the session-start injections. An empty slice means the first push, where
-/// `last_mut` finds nothing and pushes instead of merging.
+/// 钉住的注入是此刻唯一带着 `injected` 标记的 `user` 消息：发言带着发言者的 `name`，而
+/// `AgentError` 不可能排在会话开头的注入之前。空切片意味着这是第一次 push，此时 `last_mut` 找不
+/// 到东西，于是 push 而不是合并。
 fn at_pinned_head(messages: &[Message]) -> bool {
     messages
         .iter()
         .all(|message| matches!(message, Message::User { injected: true, .. }))
 }
 
-/// Add one other-speaker segment, pinning the first `user` message.
+/// 加一段别人的发言，并在第一次 `user` 消息处钉住。
 fn push_other(
     messages: &mut Vec<Message>,
     others: &mut OtherBlock,
@@ -297,7 +262,7 @@ fn push_other(
     }
     let name = speaker_name(speaker);
     if !*head_emitted && !others.is_empty() && !others.has_speaker(&name) {
-        // The pinned head ends where a different speaker begins.
+        // 钉住的开头在换到另一个发言者时结束。
         others.flush_into(messages);
         *head_emitted = true;
     }
@@ -310,11 +275,10 @@ fn flush_others(messages: &mut Vec<Message>, others: &mut OtherBlock, head_emitt
     }
 }
 
-/// A run of consecutive other-speaker turns, merged into one `user` message.
+/// 连续的一串别人发言，合并成一条 `user` 消息。
 ///
-/// Merging is by role sequence with no count threshold (spec §5): the goal is
-/// to avoid the vendors' undocumented behaviour on consecutive same-role
-/// messages, not to shorten anything.
+/// 合并只看角色序列、没有条数阈值（spec §5）：目的是避开厂商对连续同角色消息那些没记录的行为，
+/// 不是为了把任何东西缩短。
 #[derive(Default)]
 struct OtherBlock {
     segments: Vec<OtherSegment>,
@@ -338,9 +302,8 @@ impl OtherBlock {
         if body.is_empty() {
             return;
         }
-        // Outside a discussion round there is no `N` to write, and a plain CLI
-        // session has exactly one other speaker, so the text stays bare and
-        // `name` carries the attribution.
+        // 讨论轮次之外没有 `N` 可写，而普通 CLI 会话恰好只有另一位发言者，所以正文保持素净，由
+        // `name` 承载归属。
         let line = match round {
             Some(round) => format!("[轮 {round} · {speaker}] {body}"),
             None => body.to_owned(),
@@ -351,22 +314,20 @@ impl OtherBlock {
         });
     }
 
-    /// Emit the merged block, reporting whether one was emitted.
+    /// 发出合并后的块，并报告是否发出了一块。
     fn flush_into(&mut self, messages: &mut Vec<Message>) -> bool {
         if self.segments.is_empty() {
             return false;
         }
-        // `name` is an enhancement, never the attribution guarantee: the body
-        // prefix is. A merged block with several speakers gets no single name.
+        // `name` 是增强，绝不是归属的保证：正文前缀才是。多位发言者合并成的块拿不到单个名字。
         let mut names: Vec<&str> = Vec::new();
         for segment in &self.segments {
             if !names.contains(&segment.speaker.as_str()) {
                 names.push(&segment.speaker);
             }
         }
-        // The field, not the prefix: the prefix above is written verbatim so two
-        // personas of one model stay apart, and this is sanitized because a vendor's
-        // accepted `name` charset is undocumented.
+        // 字段而不是前缀：上面的前缀是逐字写下的，好让同一个模型的两个人物保持区分，而这个字段要
+        // 清洗，因为厂商接受的 `name` 字符集没有记录。
         let name = (names.len() == 1).then(|| sanitize_name(names[0]));
         let content = self
             .segments
@@ -384,7 +345,7 @@ impl OtherBlock {
     }
 }
 
-/// The acting speaker's in-flight assistant message and its tool results.
+/// 正在发言的那一位在飞的 assistant 消息与它的工具结果。
 struct PendingAssistant {
     content: Option<String>,
     reasoning_content: Option<String>,
@@ -396,26 +357,23 @@ impl PendingAssistant {
     fn new(text: &str, reasoning: &Option<String>, caps: &ModelCaps) -> Self {
         Self {
             content: (!text.is_empty()).then(|| text.to_owned()),
-            // Whether the model's own reasoning must round-trip is a capability
-            // fact, not a branch on the vendor (spec §4, §5).
+            // 模型自己的推理是否必须往返是一个能力表事实，不是按厂商分支（spec §4、§5）。
             reasoning_content: reasoning.clone().filter(|_| caps.requires_reasoning_replay),
             tool_calls: Vec::new(),
             results: Vec::new(),
         }
     }
 
-    /// Whether a `tool_call` still has no `tool` message. A settled group may
-    /// be emitted; an unsettled one must stay open so its pairing survives an
-    /// interleaving (which a valid turn never produces).
+    /// 是否还有 `tool_call` 没拿到 `tool` 消息。已了结的一组可以发出；没了结的必须继续敞开，好
+    /// 让它的配对在交错中存活（合法的回合从不产生交错）。
     fn awaiting_results(&self) -> bool {
         self.results.len() < self.tool_calls.len()
     }
 
-    /// Whether the group would emit an assistant message with nothing in it.
+    /// 这一组是否会发出一条什么都没有的 assistant 消息。
     ///
-    /// Only a retired range can produce one: `/undo` supersedes an edit's tool
-    /// call, so a turn that carried no text is left with no content and no
-    /// calls. The wire has no shape for that message, so none is emitted.
+    /// 只有被取代的那一段才可能产生它：`/undo` 取代了某个编辑的工具调用，于是一个不携带任何文本的
+    /// 回合就既没有内容也没有调用。线上没有这条消息的形状，所以一条都不发。
     fn is_empty(&self) -> bool {
         self.content.is_none() && self.reasoning_content.is_none() && self.tool_calls.is_empty()
     }
@@ -428,8 +386,7 @@ impl PendingAssistant {
         });
     }
 
-    /// One `tool_call` gets exactly one `tool` message; its body already merged
-    /// the result and any post-hook feedback.
+    /// 一条 `tool_call` 恰好拿到一条 `tool` 消息；它的正文已经合并了结果与任何钩子的后续反馈。
     fn add_result(
         &mut self,
         tool_call_id: &ToolCallId,
@@ -443,9 +400,8 @@ impl PendingAssistant {
         });
     }
 
-    /// Merge feedback into the result it annotates. `failed:` outcomes never
-    /// reach here, which is what makes "a post-hook failure only loses
-    /// feedback" true on the model's side too.
+    /// 把反馈合并进它所评注的那条结果。`failed:` 的结局到不了这里，这让「钩子失败只丢反馈」在模型
+    /// 那一侧也成立。
     fn add_feedback(&mut self, feedback: &str) {
         if let Some(Message::Tool { content, .. }) = self.results.last_mut() {
             content.push_str("\n\n");
@@ -456,8 +412,7 @@ impl PendingAssistant {
     }
 }
 
-/// Emit the acting speaker's assistant group, unless its `tool_call`s are still
-/// awaiting results that a later event may carry.
+/// 发出正在发言那一位的 assistant 组，除非它的 `tool_call` 仍在等一个更晚的事件可能带来的结果。
 fn close_pending_if_settled(
     messages: &mut Vec<Message>,
     pending: &mut Option<PendingAssistant>,
@@ -472,8 +427,8 @@ fn close_pending_if_settled(
     let Some(pending) = pending.take() else {
         return;
     };
-    // A superseded tool call can empty the group out; an assistant message with
-    // no content, no reasoning and no calls is not a message.
+    // 被取代的工具调用可能把这一组掏空；一条没有内容、没有推理、没有调用的 assistant 消息不是消
+    // 息。
     if pending.is_empty() {
         return;
     }
@@ -486,19 +441,15 @@ fn close_pending_if_settled(
     messages.extend(pending.results);
 }
 
-/// The name a speaker is **called**, verbatim: what the body prefix writes and what
-/// the other side has to be able to tell apart.
+/// 一位发言者**被称**的名字，逐字：正文前缀写的就是它，也是对方必须能分辨的东西。
 ///
-/// A debater is a **persona**: its name is chosen (`[discussion] debaters =
-/// [{ name = "保守", … }]`), so it can be any word the user likes — `保守` is a name a
-/// reader and a model can both use, and mangling it would leave two sides of one
-/// discussion indistinguishable. An executor's identity is `executor-<id>`, the shape
-/// the display form already had.
+/// 讨论者是一个**人物**：它的名字是选出来的（`[discussion] debaters = [{ name = "保守", … }]`），
+/// 所以可以是用户喜欢的任何词 —— `保守` 是一个读者和模型都能用的名字，把它改造会让同一场讨论的
+/// 两方分不清。执行者的身份是 `executor-<id>`，即展示形式本来就有的形状。
 ///
-/// The **wire `name` field** is a different question: [`wire_name`] sanitizes it to
-/// `[A-Za-z0-9_-]`, because no vendor documents a character set for it. The body prefix
-/// carries the same information, so a provider that ignores or truncates that field
-/// loses nothing (spec §5).
+/// **线上 `name` 字段**是另一个问题：[`wire_name`] 把它清洗成 `[A-Za-z0-9_-]`，因为没有厂商记下
+/// 它的字符集。正文前缀承载同样的信息，所以一个忽略或截断那个字段的 provider 什么也不损失
+/// （spec §5）。
 fn speaker_name(speaker: &SpeakerId) -> String {
     match speaker {
         SpeakerId::Executor(id) => format!("executor-{id}"),
@@ -506,7 +457,7 @@ fn speaker_name(speaker: &SpeakerId) -> String {
     }
 }
 
-/// The same name, in the shape a `name` field is allowed to take.
+/// 同一个名字，取 `name` 字段允许的形状。
 fn wire_name(speaker: &SpeakerId) -> String {
     sanitize_name(&speaker_name(speaker))
 }
@@ -530,9 +481,8 @@ fn sanitize_name(raw: &str) -> String {
     }
 }
 
-/// One line for another speaker's tool call: the tool name plus a truncated
-/// rendering of its arguments, keeping "what did they actually check"
-/// answerable without paying for the result body (spec §5).
+/// 另一位发言者工具调用的一行：工具名加上截断的参数渲染，让「他们到底查了什么」仍然答得上来，而
+/// 不必为结果正文付钱（spec §5）。
 fn tool_summary(tool_name: &str, args: &serde_json::Value) -> String {
     let rendered = match args {
         serde_json::Value::Null => String::new(),
