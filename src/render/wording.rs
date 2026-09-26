@@ -1309,6 +1309,32 @@ pub fn identity() -> String {
     format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
 
+/// The four orientations of the dash in `fs-agent`, in the order they turn
+/// (`.scratch/tui-input-pulse/spec.md` §2).
+///
+/// One glyph set for both places the identity is drawn: the narrow rung's text row, where
+/// it is the one character between `fs` and `agent`, and the mark's own dash cell, where
+/// it is a bar four cells long. Box-drawing rather than ASCII `-`, `\`, `|`, `/`: the
+/// diagonals are real diagonals and all four sit on the same baseline, so the turn does
+/// not jitter the way an ASCII spinner does.
+///
+/// The order is clockwise, starting from the still dash — the classic `- \ | /` of every
+/// command-line spinner.
+pub const DASH_TURN: [char; 4] = ['─', '╲', '│', '╱'];
+
+/// The identity line with its dash **turned** to `phase` — what the sidebar's text row
+/// shows while a run is in flight.
+///
+/// It is built **from** [`identity`] rather than beside it, so the crate's name and the
+/// version keep exactly one spelling: `scripts/tui-startup-check.py` and the test next to
+/// this one both anchor on that string, and a second `fs-agent …` built here would be a
+/// second thing to keep in step. `fs-agent <version>` holds exactly one dash; the day that
+/// stops being true this needs a different rule, and the test is where that shows up.
+pub fn identity_turning(phase: usize) -> String {
+    let dash = DASH_TURN[phase % DASH_TURN.len()].to_string();
+    identity().replacen('-', &dash, 1)
+}
+
 /// The mark the wide sidebar carries, five rows of block shading.
 ///
 /// The characters are all text; the colour ramp that makes them read as letters is
@@ -1317,8 +1343,11 @@ pub fn identity() -> String {
 /// rows at all — [`crate::render::layout`] decides that up front, so nothing here has
 /// to think about clipping.
 ///
-/// The mark spells `fs` — a forked synthesis, "two forks, one stem" (see
-/// `CONTEXT.md`), and the pixel grid is the one the maintainer picked.
+/// The mark spells `fs-agent` — the `fs` of a forked synthesis ("two forks, one stem",
+/// see `CONTEXT.md`) with the program's name after it — and the pixel grid is the one the
+/// maintainer picked. The dash between them is the third of its eight glyph cells, and it
+/// is the one glyph the painter draws for itself: it turns while a run is in flight
+/// (`.scratch/tui-input-pulse/spec.md` §2).
 pub fn logo_lines() -> [&'static str; 5] {
     [
         "▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀",

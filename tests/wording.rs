@@ -531,6 +531,39 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
 }
 
 #[test]
+fn the_identities_dash_turns_without_moving_anything_else() {
+    // The busy signal on the narrow rung (`.scratch/tui-input-pulse/spec.md` §2): the dash
+    // of `fs-agent` is the only character that changes, which is what makes the line read
+    // as "working" rather than as a different string. The version and the crate's name
+    // come from `identity()`, so the startup check's anchor and the turned line cannot
+    // drift apart.
+    let identity = wording::identity();
+    let mut seen = Vec::new();
+    for phase in 0..wording::DASH_TURN.len() {
+        let turned = wording::identity_turning(phase);
+        assert_eq!(
+            turned.replace(wording::DASH_TURN[phase], "-"),
+            identity,
+            "phase {phase} differs from the idle identity in the dash alone: {turned}"
+        );
+        seen.push(turned);
+    }
+    seen.sort();
+    seen.dedup();
+    assert_eq!(
+        seen.len(),
+        wording::DASH_TURN.len(),
+        "and the four orientations are four different lines: {seen:?}"
+    );
+    // The turn is closed: a phase past the end wraps rather than panicking, because the
+    // pulse counter it comes from only ever grows.
+    assert_eq!(
+        wording::identity_turning(wording::DASH_TURN.len()),
+        wording::identity_turning(0)
+    );
+}
+
+#[test]
 fn the_mark_is_five_rows_of_one_width() {
     // The sidebar shows the mark whole or not at all — `layout` decides that
     // from `LOGO_WIDTH` before anything is drawn. A row of a different width would

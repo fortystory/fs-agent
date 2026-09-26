@@ -551,89 +551,134 @@ fn mark_colours(state: &mut TuiState) -> Vec<Color> {
     (1..=5u16).map(|y| frame[(2, y)].fg).collect()
 }
 
+/// The mark's dash cell as a person sees it: five rows of the four columns the dash of
+/// `fs-agent` lives in, read off a 120x24 frame.
+///
+/// The mark starts at the sidebar's second column and its dash cell starts ten columns
+/// in (`fs-agent` is eight glyph cells of four columns, one blank column apart).
+fn dash_cell(state: &mut TuiState) -> Vec<String> {
+    let frame = buffer(120, 24, state);
+    (1..=5u16)
+        .map(|y| cells(&frame, y, 2 + 10, 2 + 14))
+        .collect()
+}
+
 #[test]
-fn the_mark_walks_the_pulse_ring_while_a_run_is_in_flight() {
-    // The busy half of the mark: the whole block takes one colour off the ring per
-    // frame, and six frames bring it back to where it started
-    // (`.scratch/tui-input-pulse/spec.md` §2). The idle ramp next door is the other
-    // half of the same painter, and the ring's first frame is that ramp's own bright
-    // end, so the two meet without a jump.
+fn the_dash_of_fs_agent_turns_while_a_run_is_in_flight() {
+    // The working signal (`.scratch/tui-input-pulse/spec.md` §2): the dash of the mark
+    // turns through four orientations, clockwise, and comes back to the flat one. The
+    // shapes are written out here as a person reads them — one bar going round, not four
+    // glyphs taking turns — so a change to the geometry has to be a change to this frame
+    // rather than a change to a table nobody looks at.
+    let phases = [
+        ["    ", "    ", "────", "    ", "    "],
+        ["╲   ", " ╲  ", "  ╲ ", "   ╲", "    "],
+        ["  │ ", "  │ ", "  │ ", "  │ ", "  │ "],
+        ["   ╱", "  ╱ ", " ╱  ", "╱   ", "    "],
+    ];
+    // Idle is the flat dash — the mark at rest looks the way it always did.
     let mut state = state();
-    state.request(ConsoleRequest::RunState { running: true });
     assert_eq!(
-        PULSE_PALETTE[0],
-        Color::LightMagenta,
-        "frame 0 is the ramp's top colour"
+        dash_cell(&mut state),
+        phases[0].map(str::to_owned).to_vec(),
+        "a still mark shows the dash lying flat"
     );
-    // The ring must not flicker, and brightness is what the eye reads as flicker: the
-    // first version alternated light and normal hues, and that is what got changed
-    // (票 04). Every entry being a light variant is the property that keeps the mark
-    // reading as "changing colour" instead.
-    for colour in PULSE_PALETTE {
-        let name = format!("{colour:?}");
-        assert!(
-            name.starts_with("Light"),
-            "the ring carries one brightness only, and this frame is not a light variant: {name}"
-        );
-    }
-    // Two laps: one to show the hue moves, the second to show the ring closes.
-    for frame in 1..=PULSE_PALETTE.len() * 2 {
+
+    // Two turns: one to show it moves, the second to show it comes back.
+    state.request(ConsoleRequest::RunState { running: true });
+    for frame in 1..=phases.len() * 2 {
         state.tick();
-        let expected = PULSE_PALETTE[frame % PULSE_PALETTE.len()];
+        assert_eq!(
+            dash_cell(&mut state),
+            phases[frame % phases.len()].map(str::to_owned).to_vec(),
+            "frame {frame} of the turn"
+        );
+        // And the colour does not move with it: 票 05 took the hue ring off the screen
+        // after two versions of it read badly on a real terminal, so a busy mark wears
+        // exactly the ramp an idle one does.
         assert_eq!(
             mark_colours(&mut state),
-            vec![expected; 5],
-            "frame {frame} of the ring: the whole mark is one colour"
+            vec![
+                Color::LightMagenta,
+                Color::LightMagenta,
+                Color::LightMagenta,
+                Color::LightMagenta,
+                Color::Magenta
+            ],
+            "the mark keeps its ramp while the dash turns: frame {frame}"
         );
     }
 }
 
 #[test]
-fn a_finished_run_puts_the_pulse_back_at_the_rings_first_frame() {
-    // The pulse is one run's, not the session's: the mark goes back to the static ramp
-    // when the run ends, and the next run does not resume mid-colour — it starts one
-    // frame past the ring's first entry, whatever the last run left behind
+fn the_narrow_rungs_text_identity_turns_its_dash_too() {
+    // The rung with no mark carries the same signal in the one glyph it has: the dash of
+    // `fs-agent 0.1.0`. Without this, the animation would be invisible on every terminal
+    // under 120 columns (`.scratch/tui-input-pulse/spec.md` §2).
+    let mut state = state();
+    let still = screen(100, 24, &mut state).join("\n");
+    assert!(
+        still.contains(&format!("fs-agent {}", env!("CARGO_PKG_VERSION"))),
+        "an idle narrow rung shows the identity as it always did: {still}"
+    );
+
+    // The turn starts from the flat dash, so the first four frames of a run are the other
+    // three orientations and then the flat one again.
+    state.request(ConsoleRequest::RunState { running: true });
+    for (frame, glyph) in ["╲", "│", "╱", "─"].iter().enumerate() {
+        state.tick();
+        let text = screen(100, 24, &mut state).join("\n");
+        assert!(
+            text.contains(&format!("fs{glyph}agent {}", env!("CARGO_PKG_VERSION"))),
+            "frame {} turns the dash to {glyph}: {text}",
+            frame + 1
+        );
+        assert!(
+            !text.contains("fs-agent"),
+            "and never draws both spellings at once: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_finished_run_puts_the_dash_back_to_still() {
+    // The pulse is one run's, not the session's: the dash goes flat when the run ends, and
+    // the next run starts one orientation on, whatever the last one left behind
     // (`.scratch/tui-input-pulse/spec.md` §2).
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     for _ in 0..3 {
         state.tick();
     }
-    assert_eq!(
-        mark_colours(&mut state),
-        vec![PULSE_PALETTE[3]; 5],
-        "three frames in, the mark is on frame three"
+    assert!(
+        dash_cell(&mut state)[0].contains('╱'),
+        "three frames in, the dash is on its fourth orientation: {:?}",
+        dash_cell(&mut state)
     );
 
     state.request(ConsoleRequest::RunState { running: false });
     assert_eq!(
-        mark_colours(&mut state),
-        vec![
-            Color::LightMagenta,
-            Color::LightMagenta,
-            Color::LightMagenta,
-            Color::LightMagenta,
-            Color::Magenta
-        ],
-        "idle again: the ramp, not the frame the run stopped on"
+        dash_cell(&mut state)[2],
+        "────",
+        "idle again: the flat dash, not the orientation the run stopped on"
     );
 
     state.request(ConsoleRequest::RunState { running: true });
     state.tick();
-    assert_eq!(
-        mark_colours(&mut state),
-        vec![PULSE_PALETTE[1]; 5],
-        "and the next run starts at the ring's first frame, not where the last one left off"
+    assert!(
+        dash_cell(&mut state)[0].contains('╲'),
+        "and the next run starts at the turn's first orientation: {:?}",
+        dash_cell(&mut state)
     );
 }
 
 #[test]
-fn the_pulse_is_invisible_where_the_mark_is_not_drawn() {
-    // The mark *is* the animation, so the rungs without one have no animation at all —
-    // which the user accepted, and the text identity line stays a still line. What must
-    // not happen is a tick redrawing anything: two frames apart come out identical
+fn the_pulse_is_invisible_where_there_is_no_sidebar() {
+    // Below 80 columns there is no sidebar at all — no mark and no identity line — so
+    // there is nothing for the pulse to move. What must not happen is a tick redrawing
+    // anything: two frames apart come out identical
     // (`.scratch/tui-input-pulse/spec.md` §2).
-    for (width, height) in [(100u16, 24u16), (60, 24), (40, 10)] {
+    for (width, height) in [(60u16, 24u16), (40, 10)] {
         let mut state = state();
         state.request(ConsoleRequest::RunState { running: true });
         state.tick();
@@ -642,13 +687,47 @@ fn the_pulse_is_invisible_where_the_mark_is_not_drawn() {
         let after = buffer(width, height, &mut state);
         assert_eq!(
             before, after,
-            "{width}x{height} has no mark, so a pulse frame changes nothing"
+            "{width}x{height} has no sidebar, so a pulse frame changes nothing"
         );
+    }
+}
+
+#[test]
+fn the_colour_ring_is_kept_off_screen() {
+    // 票 05 retired the hue ring: two versions of it were tried on a real terminal and
+    // both read badly, so what is on screen is the turning dash. The palette stays in the
+    // code because the user asked for it to be kept — and a kept thing that creeps back
+    // onto the screen without anyone deciding it should is what this test is for.
+    let ring: Vec<String> = PULSE_PALETTE.iter().map(|c| format!("{c:?}")).collect();
+    assert_eq!(ring.len(), 6, "the ring is six hues: {ring:?}");
+    for colour in &ring {
         assert!(
-            !row_text(&after, 1, width).contains('▄'),
-            "{width}x{height} draws no mark to animate: {:?}",
-            row_text(&after, 1, width)
+            colour.starts_with("Light"),
+            "one brightness, so a colour signal would never flicker: {colour}"
         );
+    }
+    // A busy frame, drawn as large as the shell goes: not one cell wears a ring hue that
+    // the mark's own ramp does not already have in it. (LightMagenta is in both, and it
+    // is the ramp's top colour, so it is not evidence of the ring being drawn.)
+    let mut state = state();
+    state.request(ConsoleRequest::RunState { running: true });
+    state.tick();
+    let frame = buffer(174, 50, &mut state);
+    let off_screen = [
+        Color::LightBlue,
+        Color::LightCyan,
+        Color::LightGreen,
+        Color::LightYellow,
+        Color::LightRed,
+    ];
+    for y in 0..50u16 {
+        for x in 0..174u16 {
+            let fg = frame[(x, y)].fg;
+            assert!(
+                !off_screen.contains(&fg),
+                "nothing on screen wears the retired ring: {fg:?} at ({x}, {y})"
+            );
+        }
     }
 }
 

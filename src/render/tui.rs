@@ -2768,10 +2768,10 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
 ///
 /// Which of the three is the layout's decision — [`layout::SidebarKind`] — so the
 /// ladder has one home. The mark is centred in the wide rung, which is the mark's own
-/// width plus a column of air on each side. Its colour comes from the run's state: the
-/// static ramp while idle, one frame of [`PULSE_PALETTE`] while a run is in flight
-/// (`.scratch/tui-input-pulse/spec.md` §2). On the narrow rung there is no mark — and
-/// so no pulse, which the user accepted: the text identity stays a still line.
+/// width plus a column of air on each side. **The identity's dash turns while a run is in
+/// flight** (`.scratch/tui-input-pulse/spec.md` §2) — in the mark's own dash cell, and in
+/// the text identity's single dash on the rung that has no mark for it, so both rungs
+/// carry the signal.
 fn draw_sidebar_identity(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -2787,9 +2787,7 @@ fn draw_sidebar_identity(
             let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
             let lines: Vec<Line<'static>> = mark_lines(state.busy().then_some(state.pulse))
                 .into_iter()
-                .map(|(text, color)| {
-                    Line::from(Span::styled(text.to_owned(), Style::default().fg(color)))
-                })
+                .map(|(text, color)| Line::from(Span::styled(text, Style::default().fg(color))))
                 .collect();
             let rows = lines.len() as u16;
             frame.render_widget(
@@ -2803,8 +2801,14 @@ fn draw_sidebar_identity(
             );
         }
         layout::SidebarKind::Text => {
+            // The one rung with no mark gets the same signal from the one glyph it does
+            // have: the dash of `fs-agent`, turned to the frame the loop's clock is on.
+            let identity = match state.busy() {
+                true => wording::identity_turning(state.pulse as usize),
+                false => wording::identity(),
+            };
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(wording::identity(), dim))),
+                Paragraph::new(Line::from(Span::styled(identity, dim))),
                 Rect::new(sidebar.x, sidebar.y, sidebar.width, 1),
             );
         }
@@ -3145,24 +3149,26 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
-/// The busiest answer the interface has to a three-word question, as a ring of
-/// colours (`.scratch/tui-input-pulse/spec.md` §2).
+/// The busiest answer the interface used to give to "is it working?", as a ring of
+/// colours — **kept, and deliberately off screen** (`.scratch/tui-input-pulse/spec.md`
+/// §2, 票 05).
 ///
-/// Six frames, one per hue, walked in order, so the mark goes round the colour wheel
-/// and comes back. Frame 0 is the mark's own bright end, which is what makes the first
-/// busy frame a continuation of the idle mark rather than a jump away from it.
-/// Standard ANSI colours only: the mark sits on whatever theme the user already has,
-/// and a 24-bit value would be a colour that theme cannot answer.
+/// Two versions of it ran on a real terminal and both were turned down: 12 frames of
+/// light/normal pairs at 100 ms read as *flickering*, and 6 light hues at 400 ms read as
+/// *abrupt* — a colour ring changes the whole mark at once, and the eye has nothing to
+/// follow between frames. What is on screen today is the dash turning in `fs-agent`
+/// (see [`mark_lines`]); the ring stays here because the user asked for the code to be
+/// kept rather than deleted, and because a colour signal is a reasonable thing to want
+/// again once there is a way to make it move rather than jump.
 ///
-/// **Every entry is a light variant, and that is the point** (票 04). The first version
-/// alternated light and normal — 亮品红 → 品红 → 亮蓝 → 蓝 … — and on a real terminal
-/// that read as *flickering*: the brightness jumped a whole step every frame, and the
-/// eye follows that rather than the hue. One brightness, six hues, is what "it is
-/// changing colour" looks like.
+/// **Every entry is a light variant, and that property is load-bearing**: one brightness
+/// is what a colour signal would need not to read as flicker. A test pins it, and another
+/// pins that nothing on screen wears this palette right now.
 ///
-/// Public for the same reason the ring is worth asserting: a test reads it to check
-/// which frame the mark is on, and a palette the tests re-typed would be a second
-/// copy of the ring.
+/// Six hues, walked in order round the wheel; frame 0 is the mark's own bright end, so a
+/// colour signal would leave the idle mark without a jump. Standard ANSI colours only:
+/// the mark sits on whatever theme the user already has, and a 24-bit value would be a
+/// colour that theme cannot answer.
 pub const PULSE_PALETTE: [Color; 6] = [
     Color::LightMagenta,
     Color::LightBlue,
@@ -3172,43 +3178,86 @@ pub const PULSE_PALETTE: [Color; 6] = [
     Color::LightRed,
 ];
 
-/// One pulse frame: two and a half frames a second, so the ring takes 2.4 seconds to
-/// come round — a hue every 400 ms, a pace the eye can follow. The first version ran at
-/// 100 ms and read as flicker (票 04). The loop only arms this clock while a run is in
-/// flight, so an idle session never pays for it.
-const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(400);
+/// One pulse frame: four a second, so the dash takes a full turn in one second — an
+/// orientation every 250 ms, which is the pace the classic spinner has always used and
+/// fast enough that the turn reads as motion rather than as four glyphs taking turns
+/// (票 05; the colour versions that came before ran at 400 ms and 100 ms). The loop only
+/// arms this clock while a run is in flight, so an idle session never pays for it.
+const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// The mark's rows and their colours.
+/// The mark's hyphen: the column its cell starts at, and how wide that cell is.
+///
+/// The mark spells `fs-agent` in eight glyph cells of four columns, separated by a blank
+/// column each (a label in [`wording::logo_lines`]; `all-blank columns: 4, 9, 14, …` of
+/// the 38-wide grid). The dash is the third cell, so its four columns are 10 to 13 and
+/// they are blank in every row but the middle one — which is exactly the room a turning
+/// bar needs.
+const MARK_DASH_COLUMN: usize = 10;
+const MARK_DASH_WIDTH: usize = 4;
+
+/// Where the dash's cells are for one orientation, as (row in the mark, column in the
+/// dash's own four): `─` lies across the middle row, `╲` and `╱` run corner to corner,
+/// `│` stands up in the middle column.
+///
+/// The box is four wide and five tall, so a four-cell bar cannot pivot exactly — the
+/// upright has to pick a column, and the diagonals pass through the corners. What makes
+/// it read as **one bar going round** rather than four glyphs taking turns is that the
+/// length never changes and every orientation is centred on the same cell-free middle:
+/// the flat dash sits where the idle mark already drew it, and each turn moves the ends,
+/// not the middle.
+const DASH_CELLS: [&[(usize, usize)]; 4] = [
+    &[(2, 0), (2, 1), (2, 2), (2, 3)],
+    &[(0, 0), (1, 1), (2, 2), (3, 3)],
+    &[(0, 2), (1, 2), (2, 2), (3, 2), (4, 2)],
+    &[(3, 0), (2, 1), (1, 2), (0, 3)],
+];
+
+/// The mark's rows and their colours, with its dash turned to `turning` — `None` while
+/// nothing is running, which is the still dash.
 ///
 /// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
-/// here, where the rest of the painting does. Idle (`None`), rows brighten towards the
-/// top, so the mark reads as lit from above. While a run is in flight (`Some(frame)`),
-/// the whole mark takes one colour off [`PULSE_PALETTE`] instead, so it reads as
-/// working — at the cost of the gradient, which is deliberate: a flat moving mark says
-/// "alive" louder than a moving gradient would, and the ramp is back on the next idle
-/// frame (`.scratch/tui-input-pulse/spec.md` §2).
+/// here, where the rest of the painting does. Rows brighten towards the top, so the mark
+/// reads as lit from above — **always**, working or not: the colour signal was retired in
+/// 票 05 (see [`PULSE_PALETTE`]), so what moves in this mark is the dash alone
+/// (`.scratch/tui-input-pulse/spec.md` §2).
 ///
 /// Foreground only, and deliberately no background: the mark sits on whatever
 /// background the user's theme already has, and filling the half-shade rows would
 /// fight that theme on as many terminals as it matched.
-fn mark_lines(pulse: Option<u64>) -> Vec<(&'static str, Color)> {
+fn mark_lines(turning: Option<u64>) -> Vec<(String, Color)> {
     let rows = wording::logo_lines();
     debug_assert!(
         rows.iter()
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
         "the mark is drawn whole or not at all, so its width is the layout's contract"
     );
-    let ring = pulse.map(|frame| PULSE_PALETTE[(frame % PULSE_PALETTE.len() as u64) as usize]);
-    rows.iter()
+    let phase = turning.unwrap_or(0) as usize % wording::DASH_TURN.len();
+    let glyph = wording::DASH_TURN[phase];
+    let mut lines: Vec<(Vec<char>, Color)> = rows
+        .iter()
         .enumerate()
         .map(|(row, text)| {
-            let color = ring.unwrap_or(if row < rows.len() - 1 {
+            let color = if row < rows.len() - 1 {
                 Color::LightMagenta
             } else {
                 Color::Magenta
-            });
-            (*text, color)
+            };
+            let mut line: Vec<char> = text.chars().collect();
+            // The dash's own cell is given up first: the mark's idle hyphen is drawn in
+            // it, and every orientation but the flat one puts glyphs in rows that hold
+            // something else today.
+            for cell in line.iter_mut().skip(MARK_DASH_COLUMN).take(MARK_DASH_WIDTH) {
+                *cell = ' ';
+            }
+            (line, color)
         })
+        .collect();
+    for (row, column) in DASH_CELLS[phase] {
+        lines[*row].0[MARK_DASH_COLUMN + *column] = glyph;
+    }
+    lines
+        .into_iter()
+        .map(|(line, color)| (line.into_iter().collect(), color))
         .collect()
 }
 

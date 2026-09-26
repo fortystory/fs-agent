@@ -102,16 +102,17 @@ column** on the right, and the geometry is one pure function of the terminal siz
   wide rung. The characters live in `wording::logo_lines` with every other
   human-facing phrase; the colour ramp that makes them read as glyphs lives in the
   painter (`mark_lines`), foreground only and no background, so it does not fight
-  whatever theme the terminal is already running. At rest the ramp brightens towards
-  the top; **while a run is in flight the whole mark takes one colour off
-  `PULSE_PALETTE`** and walks that ring one frame per `PULSE_FRAME` (6 hues, 400 ms
-  each, so a lap takes 2.4 s), which is the interface's "it is working" signal
-  (`.scratch/tui-input-pulse/spec.md` §2). Every entry in the ring is a **light**
-  variant on purpose: an earlier version alternated light and normal hues every 100 ms
-  and read as flickering, because the eye follows a brightness jump rather than a hue
-  change (票 04). The gradient is deliberately gone for as long as the ring is: a flat
-  moving mark reads as alive from further away than a moving gradient does, and the
-  ramp is back on the next idle frame.
+  whatever theme the terminal is already running. The ramp never changes: **the "it is
+  working" signal is the dash of `fs-agent` turning** (`.scratch/tui-input-pulse/spec.md`
+  §2). The mark spells `fs-agent` in eight four-column glyph cells, and the painter draws
+  its third cell — the dash's own four columns — from a small table: flat, then the two
+  diagonals, then upright, one orientation per `PULSE_FRAME` (250 ms), clockwise and back.
+  The same turn shows up on the narrow rung, where there is no mark and the identity is the
+  text row `fs-agent 0.1.0`: `wording::identity_turning` swaps its one dash for the same
+  glyph. Two colour versions of this signal were tried on a real terminal and both were
+  retired — 12 light/normal frames at 100 ms read as flickering (票 04) and six light hues
+  at 400 ms read as abrupt — so `PULSE_PALETTE` stays in the code, off screen, with a test
+  pinning that nothing wears it (票 05).
 - **The tab bar** pages the sidebar: 调用量 is the session's readings, 轨迹 and 文件
   are not built yet and say so. The tabs are **clicked, never keyed** — `Tab`
   belongs to the `/` menu and `Shift+Tab` to plan mode — and on a placeholder page
@@ -143,7 +144,8 @@ the next prompt.
   the loop selects on both at once.
 - The front end holds `ConsolePort`. The TUI serves it from its own `select!`
   over broadcast / console port / keyboard, plus **one timer that only exists while
-  a run is in flight**: the mark's pulse. Nothing else is waiting to be *noticed* —
+  a run is in flight**: the pulse that turns the identity's dash. Nothing else is waiting
+  to be *noticed* —
   a pending question arrives on the console port, an event arrives on the rendering
   channel, a key is a key — but the pulse is a function of time alone, so it needs a
   clock. The clock is an `interval` guarded by `if state.busy()` on its `select!`
