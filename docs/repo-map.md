@@ -1,62 +1,51 @@
-# Repo map
+# 仓库地图
 
-The repo map is an **on-demand symbol map of the workspace**: a single
-`repo_map(focus?)` call returns which Rust files define which functions, types,
-traits, modules and macros, ranked so the part of the code this session is
-working on comes first. It is the read-side use of tree-sitter (spec §9): the
-official `tags.scm` is run over every `.rs` file under the session cwd.
+仓库地图是**按需取的会话工作区符号地图**：一次 `repo_map(focus?)` 调用返回「哪些 Rust
+文件定义了哪些函数、类型、trait、模块与宏」，排序把这次会话正在动的那部分代码放在最前。
+它是 tree-sitter 的**读侧**用法（spec §9）：把官方 `tags.scm` 跑过会话 cwd 下的每一个
+`.rs` 文件。
 
-## Where does a navigation aid go?
+## 一个导航的帮手该放在哪
 
-The repo map is one point on the same cost line as skills and `AGENTS.md`:
+仓库地图与技能、`AGENTS.md` 是同一条成本线上的一个点：
 
-| Need | Where it goes |
+| 需要什么 | 放在哪 |
 | --- | --- |
-| "What is in this repository, broadly?" | **`repo_map`** — one call, a fixed budget, ranked to the current task |
-| "What does this one file / symbol do?" | **`read_file`** — you already know the path |
-| "Find every place this name is used" | **grep / read** (the map lists names, not usage sites) |
+| 「这个仓库大体上有什么？」 | **`repo_map`** —— 一次调用、固定预算、按当前任务排序 |
+| 「这一个文件 / 符号是干什么的？」 | **`read_file`** —— 路径你已经知道 |
+| 「找出这个名字被用到的每一处」 | **grep / read**（地图只列名字，不列使用点） |
 
-The boundary rule mirrors skills: `repo_map` is for *exploring an unfamiliar
-repository*, not for facts you can already name. It is deliberately **not
-injected** — an injected map would have to refresh as files change, and every
-refresh would push the history after it out of the cached prefix. An on-demand
-tool result lands at the tail and leaves the prefix alone.
+这条分界线与技能那条同规矩：`repo_map` 用于**探索不熟悉的仓库**，不用于你已经叫得出名字
+的事实。它**刻意不注入** —— 注入的地图得随文件变化刷新，而每次刷新都会把它之后的历史
+挤出前缀缓存。按需取的产物落在尾部，前缀一点不动。
 
-## How it works
+## 它怎么工作
 
-- **Extraction.** Every `.rs` file under the cwd is parsed once with
-  `tree-sitter-rust` and the grammar's official `queries/tags.scm`. The query
-  yields only names and kinds — no signatures, no scope — so v1 renders names
-  only. Hidden directories, `target/`, `node_modules/`, symlinks, and files over
-  1 MB are skipped, and at most 2 000 files are walked, so one call cannot run
-  away. The compiled query and parser are constructed once per session.
-- **Cache.** Unchanged files are served from an in-memory mtime cache (aider
-  keeps the same cache in SQLite; one session does not need a database). A
-  repeat call re-parses only what changed, which keeps the "explore, then ask
-  again with a focus" loop cheap.
-- **Budget.** Fixed default **1k** estimated tokens, configurable up to a **4k**
-  ceiling. There is no `tokens` argument: the budget is configuration, not a
-  model decision, and a value a model sends anyway is ignored. A map that does
-  not fit is cut at whole-symbol boundaries and ends with a one-line count of
-  what was omitted.
-- **Ranking.** A naive, inspectable pure function (spec §9), not a whole-graph
-  PageRank. Session relevance first — the `focus` argument, then paths this
-  session recently read or wrote, then identifiers the recent messages used —
-  and a structural tiebreak (how often a name is referenced and defined). `rank`
-  is the replaceable seam a weighted PageRank would drop into later, if a large
-  repository ever makes it worth it.
+- **抽取。** cwd 下每个 `.rs` 文件用 `tree-sitter-rust` 与它语法里官方的
+  `queries/tags.scm` 解析一次。查询只产出名字与种类 —— 没有签名、没有作用域 —— 所以
+  v1 只画名字。隐藏目录、`target/`、`node_modules/`、符号链接、超过 1 MB 的文件都跳过，
+  最多走 2 000 个文件，于是一次调用跑不掉。编译好的查询与解析器每会话构造一次。
+- **缓存。** 没变的文件由一份内存里的 mtime 缓存供给（aider 把同一份缓存放在 SQLite 里；
+  一个会话用不上数据库）。重复调用只重解析变过的那部分，于是「先探索、再带 focus 问一次」
+  这个循环很便宜。
+- **预算。** 默认固定 **1k** 估算 token，可配到 **4k** 上限。没有 `tokens` 参数：预算是
+  配置，不是模型的决定，模型硬塞的值被忽略。装不下的地图按**整个符号**的边界切，末尾
+  一行写出被省掉多少。
+- **排序。** 一个朴素、可检视的纯函数（spec §9），不是整图 PageRank。先是会话相关度
+  —— `focus` 参数、然后这次会话最近读过 / 写过的路径、然后是最近消息里用过的标识符
+  —— 再加一个结构性平手裁决（一个名字被引用与被定义的次数）。`rank` 是那条可替换的
+  接缝，日后真要让加权 PageRank 落进来就落在它那儿 ——
+  前提是哪个大仓库真值得付这个成本。
 
-## Measured baseline
+## 实测基线
 
-The regression baseline is synthetic so it does not depend on what happens to be
-on a machine; regenerate it with
-`cargo test --release --test repo_map -- --ignored --nocapture`.
+回归基线是合成的，所以不取决于某台机器上恰好有什么；重新生成的命令是
+`cargo test --release --test repo_map -- --ignored --nocapture`。
 
-| Date | Files / bytes | Cold build | Warm (cached) build | Output |
+| 日期 | 文件 / 字节 | 冷构建 | 热（命中缓存）构建 | 产物 |
 | --- | --- | --- | --- | --- |
-| 2026-09-15 | 400 / 204 800 | 92.8 ms (400 parses) | 19.0 ms | 4 093 chars ≈ 1 024 tokens |
+| 2026-09-15 | 400 / 204 800 | 92.8 ms（400 次解析） | 19.0 ms | 4 093 字符 ≈ 1 024 token |
 
-The real-crate figure from the research ticket (`syn` + `petgraph` + `regex`,
-237 files / 3.97 MB) was 395–466 ms to parse plus 226–228 ms to run the tags
-query, ~133 MiB peak when every tree was retained; this map does not retain
-trees, so its cost is dominated by parsing whatever changed.
+调研票里那个真实 crate 的数字（`syn` + `petgraph` + `regex`，237 个文件 / 3.97 MB）是
+解析 395–466 ms、跑 tags 查询 226–228 ms，每棵语法树都留着时峰值约 133 MiB；这份地图
+不留树，所以它的成本由**重解析变过的那部分**主导。

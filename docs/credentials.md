@@ -1,25 +1,23 @@
-# Credentials, redaction, and the boundaries around them
+# 凭据、打码，以及围着它们的那些边界
 
-The agent's own API key sits in `~/.config/fs-agent/config.toml` on the same
-machine, and the agent can read files, write files and run commands. Spec §20
-owns this surface; this file is the human-facing map of the decisions and where
-they live in the code.
+agent 自己的 API key 就躺在同一台机器的 `~/.config/fs-agent/config.toml` 里，而这个 agent
+能读文件、写文件、跑命令。spec §20 管这一面；这份文件是给人看的决策地图，以及这些决策
+住在代码的哪里。
 
-## The four exposure paths
+## 四条暴露路径
 
-| Path | What stops it |
+| 路径 | 谁拦住它 |
 | --- | --- |
-| (a) **file-tool read** | the `.env` family is denied by policy (`permissions::env_family`) **and** every model-supplied path is confined to the session cwd (`tools::paths::SessionPaths`) — the key's real home is outside the workspace, so it is refused before a tool runs |
-| (b) **command echo** | redaction happens **before the event is appended**, so `cat config.toml`'s output is scrubbed on its way into the stream (and into the file, the renderer and the projection at once) |
-| (c) **cross agent** | projection already drops another speaker's tool-result bodies and reasoning; what is left — a speaker repeating a key in their own words — is covered because redaction includes message bodies |
-| (d) **egress** | **honestly: nothing.** A `curl` with a key in it is indistinguishable from legitimate work, and v1 ships no process sandbox. The real boundary is not giving the agent a key you cannot afford to lose |
+| (a) **文件工具读** | `.env` 家族被策略拒掉（`permissions::env_family`），**并且**模型给的每条路径都被限制在会话 cwd 内（`tools::paths::SessionPaths`）—— key 真正的家在会话工作区之外，所以任何一个工具跑起来之前它就被拒了 |
+| (b) **命令回显** | 打码发生在**事件被追加之前**，所以 `cat config.toml` 的产物在**进流**的路上就被洗掉（同时进文件、进渲染器、进投影，一次搞定） |
+| (c) **跨 agent** | 投影本来就会丢掉另一方的工具结果正文与推理；剩下的那一块 —— 某一方用自己的话复述一个 key —— 也被覆盖，因为打码的范围包含消息正文 |
+| (d) **出网** | **如实说：什么都没有。** 带 key 的 `curl` 和正经工作分不出来，而 v1 不发进程沙箱。真正的边界是别把一个你赔不起的 key 交给它 |
 
-## The pipeline: redact → truncate → spill
+## 流水线：打码 → 截断 → 落盘
 
-Spec §10 fixes the order of the pre-stream pipeline, and §20 puts redaction at
-its head. Both run in `agent::emit_completed` for a tool result, and the second
-half of the guarantee — *every* event — runs in `agent::append_event`, the one
-write path to the stream:
+spec §10 定死了入流前流水线的顺序，§20 把打码放在它的最前。对一条工具结果，两者都跑在
+`agent::emit_completed` 里；而这条保证的后半 —— **每一个**事件 —— 跑在
+`agent::append_event` 里，那是写事件流的唯一一条路径：
 
 ```
 tool runs on the TRUE value
@@ -30,127 +28,104 @@ tool runs on the TRUE value
        └─ append + render              agent::append_event  ← the only writer
 ```
 
-The consequence, stated the other way round: **the text on the stream equals the
-text the model saw.** The projection replays what is in the log, so a value that
-was scrubbed on the way in is also what the next request carries — a run cannot
-"remember" a key the stream no longer has.
+把这条反过来讲，就是它的后果：**流上的文本等于模型看到的文本。** 投影重放的是日志里的
+东西，所以在进来的路上被洗掉的值，就是下一次请求携带的值 —— 一次运行没法「记得」一条
+流上已经不存在的 key。
 
-| Artifact | Redacted? | Why |
+| 产物 | 打码？ | 为什么 |
 | --- | --- | --- |
-| the JSONL stream (and the renderer) | yes | it is what the model replays |
-| tool calls' `args`, permission requests | yes, walked as JSON | a key pasted into a `write_file` argument is the same leak as one pasted into prose |
-| `outputs/<tool_call_id>.txt` (spill) | yes | it is written from the already-redacted text |
-| `outputs/<tool_call_id>.before` | **no** | it is `/undo`'s byte-level restore source and holds the user's own workspace content, not model output (§11) |
-| `TurnOutcome.text` / `DiscussionOutcome.synthesis` | yes | the same value the stream carries is what a front end or an executor summary gets, so no second unscrubbed copy exists |
+| JSONL 事件流（与渲染器） | 是 | 模型重放的就是它 |
+| 工具调用的 `args`、权限询问 | 是，按 JSON 走一遍 | 粘进 `write_file` 参数里的 key，与粘进正文里的 key 是同一次泄漏 |
+| `outputs/<tool_call_id>.txt`（落盘） | 是 | 它是从已经打过码的文本写出来的 |
+| `outputs/<tool_call_id>.before` | **否** | 它是 `/undo` 的字节级还原源，装的是用户自己的工作区内容，不是模型的产物（§11） |
+| `TurnOutcome.text` / `DiscussionOutcome.synthesis` | 是 | 流上携带的那个值就是前端或执行者摘要拿到的值，所以不存在第二份没洗过的拷贝 |
 
-### What the redactor is
+### 打码器是什么
 
-`events::Redactor` holds the **values** to hide — in practice every resolved
-provider key (`Config::redactor`, filled into `SessionConfig` by
-`Config::session_config`, the one place configuration becomes injected values).
-It replaces each occurrence with `[redacted]`.
+`events::Redactor` 持有要藏起来的**值** —— 实际上是每一个解析出来的 provider key
+（`Config::redactor`，由 `Config::session_config` 填进 `SessionConfig`，那是配置变成注入
+值的唯一一处）。它把每一处出现替换成 `[redacted]`。
 
-- **Value-level and exact.** No pattern matching, no entropy heuristics, no
-  guessing at "looks like a key".
-- **Longest first.** A shorter value that is a prefix of a longer one would
-  otherwise leave the longer one's tail on the stream.
-- **A floor of 8 characters.** Replacing a three-character string would rewrite
-  ordinary prose everywhere it appeared; every vendor key here is far longer.
-- **JSON leaves too**, because a tool call's arguments are an arbitrary tree.
+- **值级的、精确的。** 不做模式匹配、不做熵启发、不猜「看起来像 key」。
+- **长的先替换。** 否则一个较短的值若是较长值的前缀，会把长的那条的尾巴留在流上。
+- **8 个字符的地板。** 替换一个三字符的串会把普通正文里它出现的每一处都改写；这里的
+  每个厂商 key 都长得多。
+- **JSON 叶子也走一遍**，因为一条工具调用的参数是一棵任意的树。
 
-## What value-level redaction is not
+## 值级打码不是什么
 
-- It does **not** know about secrets it was not configured with. Keys the user
-  exports for something else, copied into the workspace, are invisible to it.
-- It does **not** act on values shorter than eight characters. A configured
-  "key" that short is treated as a non-secret rather than replaced everywhere it
-  appears: value-level replacement of a three-letter string would rewrite
-  ordinary prose and make the session unreadable, and no vendor key is that
-  short. The floor is a deliberate trade-off, not a bug — but it does mean a
-  pathologically short custom key is **not** scrubbed.
-- It does **not** decode. Base64, hex, URL-encoding, or a key split across two
-  lines passes through.
-- It does **not** touch a live stream. Incremental text deltas never enter the
-  event stream (spec §2) and are rendered as they arrive; a key the model types
-  is visible on the terminal that produced it, and is only scrubbed where it
-  would become durable — in the completed message that lands in the log.
-- It does **not** follow (d): a value the model sends out over the network has
-  already left.
+- 它**不**认识自己没被配置过的密钥。用户为别的东西导出、又拷进工作区的 key，对它是不
+  存在的。
+- 它**不**对短于八个字符的值动手。这么短的配置「key」被当作非密钥，而不是在它出现的
+  每一处替换掉：值级替换一个三字母的串会把普通正文改写掉、让会话读不下去，而没有任何
+  厂商 key 这么短。这个地板是**刻意的取舍，不是 bug** —— 但它确实意味着一个短到离谱的
+  自定义 key **不会**被洗掉。
+- 它**不**解码。Base64、hex、URL 编码、或一个拆成两行的 key 都照样过去。
+- 它**碰不到**在飞的流。增量文本永**不进流**（spec §2），一到就渲染；模型打出来的 key
+  在产出它的那个终端上是看得见的，只在它会变成持久物的地方被洗掉 —— 即落进日志的那条
+  完整消息里。
+- 它**管不到** (d)：模型发到网上的值，那时已经出去了。
 
-## Root is refused, with no bypass
+## root 被拒，没有 bypass
 
-`cli::main` checks the effective uid before it parses a single argument:
-running as root exits with a refusal (`cli::root_refusal`, a pure function of
-the uid, which is what makes "there is no flag" structural rather than a
-promise). Every guardrail in this project assumes the worst case stays inside
-the workspace; as root a single misjudgement is system-wide.
+`cli::main` 在解析第一个参数之前就先查有效的 uid：以 root 启动直接拒绝退出
+（`cli::root_refusal`，一个只关于 uid 的纯函数 —— 这正是「没有那个旗标」是结构性的、
+而不是一句承诺的原因）。这个项目里每一道护栏都假设最坏情况仍留在工作区内；身为 root，
+一次误判就是全系统的。
 
-## Prompt injection lowers the ceiling; it does not move it to zero
+## 提示注入压低上限，但不会把它压到零
 
-The permission gate is a **pure function of `(policy, tool, args)` and never
-reads conversation text**. That is the whole point: no sentence in any message —
-from the user, another debater, or a file the agent read — can persuade the gate
-to allow something, because the gate cannot see the sentence. The blast radius
-of a successful injection is exactly the radius the configured policy already
-allows.
+权限门是**只关于 `(policy, tool, args)` 的纯函数，从不读对话文本**。整个要害就在这：
+任何消息里的任何一句话 —— 用户的、另一位讨论者的、或 agent 读过的文件里的 —— 都不能
+说服这道门放行什么，因为门看不见那句话。一次成功的注入，其爆炸半径正好是已配置的策略
+本来就允许的那个半径。
 
-What follows, and what does not:
+由此推出什么、不推出什么：
 
-- **Do not** down-weight a speaker because it might be injected. A model's words
-  are an input to the *next* model call; the gate is not listening.
-- **Do not** make the gate read the conversation, or the property above stops
-  being a property and becomes a heuristic.
-- **Do** keep the identity instructions (`system`) in front of each agent, keep
-  another speaker's tool results out of the projection, and keep the gate
-  text-blind. Those three are the mitigation, and they are already in place.
-- **Do** treat an injection as a *policy* problem: the fix is to narrow what the
-  policy allows (rules, modes, the breakers), not to write a better prompt.
+- **不要**因为某一方可能被注入就压低它的分量。一个模型的话是**下一次**模型调用的输入；
+  门根本没在听。
+- **不要**让门去读对话，否则上面那条性质就不再是性质，而降级成启发式。
+- **要**把身份指令（`system`）留在每个 agent 前面、把另一方的工具结果挡在投影之外、让
+  门对文本视而不见。这三条就是缓解措施，而且都已经在位。
+- **要**把一次注入当成**策略**问题：修法是收窄策略允许的范围（规则、模式、断路器），
+  不是写一句更好的提示词。
 
-## Known edges
+## 已知的边缘情况
 
-- **`/undo` after a redacted edit.** `/undo` re-reads an edit's recorded
-  arguments (`ToolCallStarted.args`) and replay-verifies them against the file.
-  If the replaced or inserted region itself contained a configured key, those
-  arguments are `[redacted]` on the stream, the replay check cannot confirm the
-  region, and undo **refuses** (`Stale` / `Ambiguous`) instead of guessing
-  (`tests/credentials.rs::undo_refuses_when_the_recorded_region_held_the_secret`;
-  an edit elsewhere in the same file still undoes normally). That is the safe
-  direction, and it is the price of scrubbing arguments at all — without it, the
-  one-line summary projection gives another speaker whatever the model put in a
-  tool's arguments, and the JSONL file keeps it.
-- **The spill file's mode** is `0600` inside a `0700` session directory
-  (`tools::paths::write_owner_only`), so even a redacted artifact is not
-  world-readable.
-- **A session whose cwd is your home directory.** The cwd rule keeps
-  `~/.config/fs-agent/config.toml` out of reach because it is normally outside
-  the workspace; started from `$HOME` it is inside it, and neither the cwd rule
-  nor the `.env` rule covers it. What still holds is the redaction: a read of the
-  configuration file lands on the stream with the key already `[redacted]`.
-- **The workspace limit has no rule-based exception, contrary to spec §20.**
-  Spec §20 says the exception to the cwd limit is "a permission rule widens it";
-  the gate actually treats an out-of-workspace target as a **deny floor that no
-  rule can lower** (`permissions::decide`, pinned by
-  `tests/permission_gate.rs::the_path_limit_is_a_deny_floor`), and the
-  dispatcher refuses before any tool runs. The reason it was left that way is
-  that the rule algebra ignores specificity (spec §12), so "any matching allow
-  widens containment" would mean a broad `Tool("read_file")` allow silently
-  grants reads anywhere; a safe widening would need a rule shape that does not
-  exist yet. Redaction, not a rule, is what protects a key inside the workspace
-  today.
-- **Redaction is not a sandbox.** Spec §20 keeps the upgrade path to "Linux-only
-  bubblewrap" and deliberately builds no abstraction ahead of it; `docs/bash.md`
-  lists what the `rm` breaker cannot see.
+- **一次被打过码的编辑之后的 `/undo`。** `/undo` 会重读一次编辑记录下来的参数
+  （`ToolCallStarted.args`），并对着文件做重放核对。如果被替换或插入的那一段本身就含
+  一个已配置的 key，那些参数在流上是 `[redacted]`，重放核对没法确认那一段，于是 undo
+  **拒绝**（`Stale` / `Ambiguous`）而不是猜
+  （`tests/credentials.rs::undo_refuses_when_the_recorded_region_held_the_secret`；同一
+  文件里别处的编辑照常可 undo）。这是安全的那一侧，也是「参数一律打码」的代价 ——
+  不打的话，一行摘要的投影会把模型塞进工具参数里的东西原样交给另一方，而 JSONL 文件
+  还会一直留着它。
+- **落盘文件的权限位**是 `0600`，落在 `0700` 的会话目录里
+  （`tools::paths::write_owner_only`），所以连一份打过码的产物也不是谁都能读。
+- **cwd 就是你家目录的会话。** cwd 规则之所以让 `~/.config/fs-agent/config.toml` 够不着，
+  是因为它一般在工作区之外；从 `$HOME` 起会话时它就在工作区里面，cwd 规则与 `.env` 规则
+  都盖不住它。还成立的是打码：读一次配置文件，落到流上时那个 key 已经是 `[redacted]`。
+- **工作区限制没有基于规则的例外，这一点与 spec §20 不一致。** spec §20 说 cwd 限制的
+  例外是「一条权限规则把它放宽」；门实际把工作区外的目标当成一道**任何规则都降不下去的
+  拒绝地板**（`permissions::decide`，由
+  `tests/permission_gate.rs::the_path_limit_is_a_deny_floor` 钉住），而派发层在任何一个
+  工具跑起来之前就拒掉。之所以留着这样，是因为规则代数忽略具体程度（spec §12），于是
+  「任何匹配的 allow 都放宽范围」会意味着一条宽泛的 `Tool("read_file")` allow 悄悄给了
+  任意位置的读权限；要安全地放宽，需要一种现在还不存在的规则形状。今天保护工作区内一个
+  key 的是打码，不是规则。
+- **打码不是沙箱。** spec §20 把升级路径留成「只做 Linux 的 bubblewrap」，且刻意不预做
+  抽象；`docs/bash.md` 列出了 `rm` 断路器看不见的东西。
 
-## Where the code lives
+## 代码住在哪
 
-| Piece | Module |
+| 部件 | 模块 |
 | --- | --- |
-| `Redactor`, `REDACTED`, `EventPayload::redact` | `src/events.rs` |
-| redaction applied before the append (the one write path) | `src/agent.rs` (`append_event`) |
-| redact → truncate → spill for tool results | `src/agent.rs` (`emit_completed`) + `src/context.rs` (`truncate_result`) |
-| the executor's lifecycle events go through the same path | `src/agent/executor.rs` |
-| the value set: every resolved provider key | `src/config.rs` (`Config::redactor`, `SessionConfig::redactor`) |
-| cwd confinement for model-supplied paths | `src/tools/paths.rs` (`SessionPaths`) |
-| the `.env` family's deny | `src/permissions.rs` (`env_family`) |
-| the root refusal | `src/cli.rs` (`root_refusal`, called first in `main`) |
-| tests | `tests/credentials.rs` |
+| `Redactor`、`REDACTED`、`EventPayload::redact` | `src/events.rs` |
+| 在追加之前施加打码（那唯一一条写路径） | `src/agent.rs`（`append_event`） |
+| 工具结果的打码 → 截断 → 落盘 | `src/agent.rs`（`emit_completed`）+ `src/context.rs`（`truncate_result`） |
+| 执行者的生命周期事件走同一条路 | `src/agent/executor.rs` |
+| 值的集合：每一个解析出来的 provider key | `src/config.rs`（`Config::redactor`、`SessionConfig::redactor`） |
+| 模型给的路径的 cwd 限制 | `src/tools/paths.rs`（`SessionPaths`） |
+| `.env` 家族的拒绝 | `src/permissions.rs`（`env_family`） |
+| root 拒绝 | `src/cli.rs`（`root_refusal`，在 `main` 里最先被调用） |
+| 测试 | `tests/credentials.rs` |

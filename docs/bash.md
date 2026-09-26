@@ -1,46 +1,41 @@
 # `bash`
 
-`bash(command, timeout_ms?)` runs one shell command in the session workspace and
-returns its exit status, stdout and stderr. Spec §7 lists it as the last of the
-v1 built-ins; §12 owns the gate it passes through; §20 owns what it deliberately
-does **not** do (process-level isolation). This file is the human-facing map of
-the decisions and where they live in the code.
+`bash(command, timeout_ms?)` 在会话工作区里跑一条 shell 命令，返回它的退出状态、stdout
+与 stderr。spec §7 把它列为 v1 内建工具的最后一个；§12 管它要过的那道权限门；§20 管它
+**刻意不做**的那件事（进程级隔离）。这份文件是给人看的决策地图，以及这些决策住在代码的
+哪里。
 
-## The shape
+## 形状
 
-| Piece | Value | Why |
+| 部件 | 值 | 为什么 |
 | --- | --- | --- |
-| `spec()` | `bash(command: string, timeout_ms?: integer)` | one command string, one optional cap |
-| `effect()` | **always `Exclusive`** | a shell can write anything, so the dispatcher takes the workspace-wide lock and the gate sees a write |
-| `command(args)` | `["bash", "-lc", command]` | the gate, the `CommandPrefix` scope and the circuit breaker read the argv **before** the process starts |
-| execution | a direct `spawn` of that argv | the model's command is **one element**, so it cannot splice a second shell layer |
-| result | exit status + stdout + stderr, in sections | one tool result like any other; a non-zero exit is data, not an error |
+| `spec()` | `bash(command: string, timeout_ms?: integer)` | 一条命令字符串、一个可选的上限 |
+| `effect()` | **恒为 `Exclusive`** | shell 什么都能写，所以派发层拿的是全工作区的锁，权限门看到的是一次写 |
+| `command(args)` | `["bash", "-lc", command]` | 权限门、`CommandPrefix` 作用域与断路器在进程起来**之前**读 argv |
+| 执行 | 对这个 argv 直接 `spawn` | 模型的命令是**一个元素**，所以它插不进第二层 shell |
+| 结果 | 退出状态 + stdout + stderr，分段 | 与别的工具结果一样的普通工具结果；非零退出是数据，不是错误 |
 
-`bash -lc` gives the command the user's login environment (`-l`) and reads the
-command string as one argument (`-c`). Nothing is ever concatenated into a larger
-shell line, so there is no place for a model-supplied string to become shell
-syntax the model did not write.
+`bash -lc` 让命令拿到用户的登录环境（`-l`），并把命令字符串当作**一个**参数读（`-c`）。
+任何东西都不会被拼进一条更大的 shell 命令行，所以模型给的字符串没有地方变成模型自己
+没写的 shell 语法。
 
-## Where the gate stands
+## 权限门站在哪
 
-`bash` needs no special case in `permissions.rs`:
+`permissions.rs` 里 `bash` 不需要任何特例：
 
-- `readonly` denies it because that mode denies every non-`ReadOnly` call, and
-  `Exclusive` is not `ReadOnly`. There is no exemption to borrow: the one write
-  exemption this project ever had (the old plan mode's `PLAN.md`, a `WritePaths`
-  shape whose **whole** write set is that file) went with the mode, and a shell has
-  no write set anyway (see `docs/adr/0003-plan-leaves-the-permission-modes.md`).
-- `ask` asks; `auto` allows, subject to the rules and the breakers as always.
-- `CommandPrefix` rules match the declared argv — `["bash", "-lc", …]` — exactly
-  as declared. A rule written for the command's own argv would need the shell
-  unwrapped, which this scope does not do.
+- `readonly` 拒它，因为这一档拒掉每一次非 `ReadOnly` 调用，而 `Exclusive` 不是
+  `ReadOnly`。没有豁免可借：这个项目**曾经**有过的唯一一处写豁免（已退场的 plan 模式的
+  `PLAN.md`，一种 `WritePaths` 形状、写入集**整体**就是那一个文件）随那一档模式一起
+  退了场，何况 shell 根本没有写入集（见 `docs/adr/0003-plan-leaves-the-permission-modes.md`）。
+- `ask` 问；`auto` 放行，照旧受规则与断路器约束。
+- `CommandPrefix` 规则匹配的是声明的 argv —— `["bash", "-lc", …]` —— 就按声明的样子。
+  为命令自己的 argv 写规则需要把 shell 拆开，这个作用域不做这件事。
 
-### The `rm` circuit breaker sees through the wrapper
+### `rm` 断路器看穿这层包装
 
-Spec §12 puts one hard link outside both the modes and the rules: `rm` against
-`/`, `~`, or an ancestor of either is `Deny`, whatever any allow or hook says. A
-`rm` hidden behind `bash -lc "…"` would be one word in, so the breaker looks at
-what the shell will run, not at the wrapper (spec §7):
+spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、`~`、或这两者任一的祖先，
+一律 `Deny`，不管哪条 allow 或 hook 说什么。藏在 `bash -lc "…"` 后面的 `rm` 只是往里
+一层而已，所以断路器看的是 shell 将要跑什么，而不是外面那层包装（spec §7）：
 
 ```
 ["bash", "-lc", "rm -rf /"]            → the command is tokenized and refused
@@ -51,96 +46,76 @@ what the shell will run, not at the wrapper (spec §7):
 ["bash", "-lc", "echo rm -rf /"]       → `echo` is the command; ordinary work
 ```
 
-**The scan is lexical and best-effort, on purpose.** Spec §12 is explicit that
-the breaker is there to stop an accident, not to confine an adversary, and §20
-says v1 ships no process-level sandbox. It handles quoting, the shell's control
-operators, the grammatical keywords in front of a command, and a shell option
-before `-c`; it does **not** follow indirection. A variable (`rm -rf $HOME`), a
-wrapper program that changes what runs (`sudo rm …`, `env …, rm …`, `eval`,
-`xargs`, an alias), command substitution (`$(rm …)`), a here-doc or a script
-written to disk, or an obfuscated spelling is not seen. The real boundary is that
-the agent has no root and its key is not the user's filesystem.
+**这次扫描是词法的、尽力而为的，而且是有意的。** spec §12 写明断路器是为了拦住一次
+事故，不是为了关住一个对手，§20 则说 v1 不发布任何进程级沙箱。它处理引号、shell 的控制
+操作符、命令前面的语法关键字、以及 `-c` 之前的一个 shell 选项；它**不**跟着间接引用走。
+变量（`rm -rf $HOME`）、改变将要跑什么的包装程序（`sudo rm …`、`env …, rm …`、`eval`、
+`xargs`、别名）、命令替换（`$(rm …)`）、here-doc 或写到盘上的脚本、以及换个写法的混淆
+拼写，它都看不见。真正的边界是 agent 没有 root，而它手里的 key 也不是你文件系统的钥匙。
 
-## The timeout and the process tree
+## 超时与进程树
 
-A timeout that merely dropped the future would leave the shell's children
-running in the background. `bash` therefore:
+一次只把 future drop 掉的超时，会把 shell 的子进程留在后台继续跑。所以 `bash`：
 
-1. spawns the shell in **its own process group** (`Command::process_group(0)`,
-   the `setsid`-equivalent — same group semantics, no separate session id), so
-   its pid is its group id;
-2. runs one bounded loop over three things: the shell's exit, stdout's EOF and
-   stderr's EOF;
-3. on expiry sends **`SIGKILL` to the whole group** (`libc::killpg`), then reaps
-   the shell.
+1. 在**它自己的进程组**里 spawn 这个 shell（`Command::process_group(0)`，与 `setsid`
+   等价 —— 同样的组语义，不另开会话 id），所以它的 pid 就是它的组 id；
+2. 只跑一个有限的循环，盯三件事：shell 退出、stdout 的 EOF、stderr 的 EOF；
+3. 到期时把 **`SIGKILL` 打给整个进程组**（`libc::killpg`），然后回收 shell。
 
-The deadline bounds the **whole call**, not just the shell's lifetime, because
-those are not the same moment: a backgrounded child inherits the output pipes, so
-`bash -lc "sleep 300 &"` exits at once while the pipes stay open. Waiting only on
-the shell would hang the turn for the child's whole lifetime. If a process
-deliberately left the group and still holds a pipe, a short grace applies after
-the kill and the result reports what is known rather than hanging.
+这个截止时间限住的是**整次调用**，不只是 shell 的存活期，因为这两者不是同一个时刻：
+被放到后台的子进程继承了输出管道，所以 `bash -lc "sleep 300 &"` 立刻退出而管道还开着。
+只等 shell 的话，整个回合要陪那个子进程挂到它自己结束。如果一个进程刻意脱离了进程组却
+还握着管道，kill 之后会有一段短短的宽限，结果如实报告已知的内容，而不是挂住。
 
-The kill lives in a `ProcessGroup` guard that fires on **drop** as well, which
-covers the other way a call ends early: the loop drops an in-flight tool on a
-cancel gesture (spec §6). Both paths leave the same guarantee — nothing started
-by the command is still running afterwards.
+这次 kill 住在一个 `ProcessGroup` 守卫里，它在 **drop** 时同样触发，于是盖住了调用提前
+结束的另一条路：一次取消手势（spec §6）让循环把在飞的工具 drop 掉。两条路留下同一条
+保证 —— 命令起过的东西，事后一个都不在跑。
 
-| Knob | Default | Where |
+| 旋钮 | 默认 | 在哪 |
 | --- | --- | --- |
-| default cap | 120 s | `config::DEFAULT_BASH_TIMEOUT_MS`, `SessionConfig::bash_timeout_ms` |
-| hard ceiling | 600 s | `config::MAX_BASH_TIMEOUT_MS`, `SessionConfig::max_bash_timeout_ms` |
+| 默认上限 | 120 s | `config::DEFAULT_BASH_TIMEOUT_MS`, `SessionConfig::bash_timeout_ms` |
+| 硬上限 | 600 s | `config::MAX_BASH_TIMEOUT_MS`, `SessionConfig::max_bash_timeout_ms` |
 
-The model may ask for less via `timeout_ms`; it can never ask for more, so no one
-command can hold the workspace-wide `Exclusive` lock indefinitely. A `timeout_ms`
-of zero (or a non-integer) is an argument error, not a silent fallback. Both
-values reach the tool through `ToolContext::bash` as a `BashLimits` pair, built
-per call from `SessionConfig` — the same shape as the repo map's budget.
+模型可以用 `timeout_ms` 要得**更少**，但从不能要得更多，于是一条命令没法无限期占着
+全工作区的 `Exclusive` 锁。`timeout_ms` 为 0（或不是整数）是参数错误，不是静默回退。
+两个值都通过 `ToolContext::bash` 以一对 `BashLimits` 到达工具，每次调用从 `SessionConfig`
+构造 —— 与仓库地图的预算一个形状。
 
-A timeout is a **result**, not a `ToolError`: the output reports
-`timed out after <n> ms; the process group was killed`, the signal that killed the
-shell, and whatever stdout/stderr had been produced. The model can see what
-happened; only a failure to spawn or reap the shell itself is an error.
+超时是**结果**，不是 `ToolError`：产物报告
+`timed out after <n> ms; the process group was killed`、杀掉 shell 的那个信号、以及已经
+产出的 stdout/stderr。模型看得见发生了什么；只有 spawn 或回收 shell 本身失败才算错误。
 
-## It is non-interactive
+## 它是非交互的
 
-- **stdin is `/dev/null`**, and **no TTY is allocated**: an interactive program
-  sees EOF rather than hanging forever.
-- **The environment is inherited as-is.** v1 does no environment sanitation and
-  does not invent `TERM`, `NO_COLOR` or anything else (§20); a command that wants
-  a different environment sets it itself. `bash -lc` also sources the user's
-  login files, so the command starts from the environment a terminal would give
-  it — minus the terminal.
+- **stdin 是 `/dev/null`**，并且**不分配 TTY**：交互式程序看到的是 EOF，而不是永远挂着。
+- **环境原样继承。** v1 不做环境清理，也不凭空造 `TERM`、`NO_COLOR` 之类（§20）；想要
+  不一样环境的命令自己设。`bash -lc` 还会 source 用户的登录文件，所以命令一开始拿到的
+  环境与终端会给它的那个一样 —— 只是没有终端。
 
-## The result, and truncation
+## 结果与截断
 
-The result text is three named sections — `exit code: …`, `--- stdout ---`,
-`--- stderr ---` — with the exit code expressed as a code or as `killed by signal
-N`. A non-zero exit is not a failure of the tool: the model asked for a process
-and got one.
+结果文本是三段带名字的节 —— `exit code: …`、`--- stdout ---`、`--- stderr ---` ——
+退出码写成一个码，或者写成 `killed by signal N`。非零退出不是这个工具失败：模型要的是
+一个进程，它也拿到了一个。
 
-An oversized body is **not** handled here. It goes through the same pre-stream
-pipeline as every other tool result (spec §10, ticket 07): spill to
-`outputs/<tool_call_id>.txt`, and the event carries a head/tail preview plus the
-pointer. `bash` neither knows nor needs to know that this happens.
+过大的正文**不在这里**处理。它和每一个别的工具结果走同一条入流前流水线（spec §10、
+票 07）：落盘到 `outputs/<tool_call_id>.txt`，事件里带上首尾预览和那个指针。`bash` 既不
+知道、也不需要知道这件事在发生。
 
-## What `bash` does not include
+## `bash` 不包含什么
 
-- **A process-level sandbox.** Spec §20: v1 relies on write serialization, the
-  permission gate and the breakers, and the upgrade path is "Linux-only
-  bubblewrap", with no abstraction built ahead of it.
-- **PTY / interactive programs.** No terminal is allocated and stdin is empty by
-  design.
-- **Background jobs and job control.** A command may background a process inside
-  its own shell, but nothing manages or reports jobs; a timeout or a cancel kills
-  the whole group.
+- **进程级沙箱。** spec §20：v1 靠写串行化、权限门与断路器，升级路径写明是「只做 Linux
+  的 bubblewrap」，且不预做抽象。
+- **PTY / 交互式程序。** 不分配终端、stdin 按设计是空的。
+- **后台作业与作业控制。** 一条命令可以在它自己的 shell 里把进程放到后台，但没有任何
+  东西管理或汇报作业；超时或取消杀掉整个进程组。
 
-## Where the code lives
+## 代码住在哪
 
-| Piece | Module |
+| 部件 | 模块 |
 | --- | --- |
-| `BashTool`, the argv, the timeout, the process-group kill, the result format | `tools/bash.rs` |
-| `BashLimits` (the two caps the tool is handed) | `tools/tool.rs` |
-| The default and the ceiling | `config.rs` (`SessionConfig::bash_timeout_ms` / `max_bash_timeout_ms`) |
-| The `rm` breaker and its shell unwrapping | `permissions.rs` (`rm_breaker`, `simple_commands`) |
-| Spill + preview pointer | `context.rs` (`truncate_result`), applied by `agent.rs` |
+| `BashTool`、argv、超时、进程组 kill、结果格式 | `tools/bash.rs` |
+| `BashLimits`（交给这个工具的两个上限） | `tools/tool.rs` |
+| 默认值与上限 | `config.rs`（`SessionConfig::bash_timeout_ms` / `max_bash_timeout_ms`） |
+| `rm` 断路器与它拆 shell 的那部分 | `permissions.rs`（`rm_breaker`、`simple_commands`） |
+| 落盘 + 预览指针 | `context.rs`（`truncate_result`），由 `agent.rs` 施加上去 |
