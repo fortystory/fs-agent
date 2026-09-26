@@ -14,7 +14,7 @@ incremental text never enters the event log.
 | --- | --- | --- |
 | headless | `Headless` | the machine mode. Two explicit sinks; `stdout` carries the final product and nothing else. |
 | plain | `Plain` | the human transcript for a pipe or a simple terminal: a speaker prefix on every line, section lines, indented divergence blocks, one block per tool call. |
-| TUI | `Tui` | the ratatui interface: the full-screen four-pane layout on the alternate screen (header / transcript / panel / input + hints), and it owns the keyboard. At 41x19 and above the header draws the mark (see "The header" below). See ADR 0002. |
+| TUI | `Tui` | the ratatui interface: one frame around a full-height sidebar and a main column (transcript + rail / status row / input / hints) on the alternate screen, and it owns the keyboard. The sidebar has two widths and carries the mark on the wide one (see "The shell" below). See ADR 0002. |
 
 The selection is the value type `Renderer`
 (`Renderer::headless` / `::plain` / `::tui`). Because the choice is a value and
@@ -77,33 +77,46 @@ The grammar is the Rust `tree-sitter` that the repo map already depends on,
 through `tree-sitter-highlight`. There is no C build step: syntect's Oniguruma
 path is not taken (spec §19, Out of Scope).
 
-## The header
+## The shell
 
-The top block has two forms, and `layout` picks between them from the terminal
-size alone (`Regions::header_kind`, `src/render/layout.rs`) — the painter never
-re-derives the ladder.
+One frame around everything, a **full-height sidebar** on the left and a **main
+column** on the right, and the geometry is one pure function of the terminal size
+(`layout::plan`, `src/render/layout.rs`) — the painters never re-derive a ladder.
 
-- **`HeaderKind::Mark`**, at `LOGO_MIN_WIDTH` x `LOGO_MIN_HEIGHT` (41x19) and
-  above: five rows of block shading spelling the `fs` mark, then one row of facts
-  under it — the cwd on the left, the mode and the clock against the right edge.
-  The characters live in `wording::logo_lines` with every other human-facing
-  phrase; the colour ramp that makes them read as glyphs lives in the painter
-  (`mark_lines`), foreground only and no background, so it does not fight whatever
-  theme the terminal is already running.
-- **`TextTwoLines`** / **`TextOneLine`**, below that: the text header — identity
-  and clock, then cwd and mode, and at the floor height one line carrying the
-  identity, the mode and the clock.
+```
+┌─ the frame ────────────────────────────────────────────────────────┐
+│ mark / text identity │ transcript        (scrollbar + rail at its  │
+│ ── tab bar ──────────┤                    right edge)               │
+│ 上下文 / token / …    ├── the status row: 模型 … │ 模式 … │ 上下文 …% │
+│                      ├── the input area                            │
+│                      ├── the hint row                              │
+└──────────────────────┴─────────────────────────────────────────────┘
+```
 
-The tall header is the reason the middle block is shorter at a given height, so
-**the mark costs the transcript rows**: at 120x24 the pane shows 7 content rows
-where the text header left it 12. That is the trade the mark is; narrow terminals
-keep the old header and the old geometry. `LOGO_MIN_WIDTH` is the mark's own width
-plus its borders plus one column of air on each side — without the air it abuts
-the border and pushes it off the line.
-
-The one field the tall header gives up is the literal `fs-agent <version>`:
-the mark **is** the identity, and the version stays reachable through the text
-header, `fs-agent --version`, and the startup banner.
+- **The sidebar** is 40 columns from 120 up and 28 down to 80; below that it is
+  hidden whole and the main column takes everything. Width decides whether it is
+  there at all; its own height decides what it holds: the mark gives way first (to
+  the text identity, then to nothing), then fields from the tail (缓存 → 输出 →
+  输入), with the tab bar and 上下文 / token / 回合 as the floor.
+- **The mark** is five rows of block shading spelling the `fs` mark, centred in the
+  wide rung. The characters live in `wording::logo_lines` with every other
+  human-facing phrase; the colour ramp that makes them read as glyphs lives in the
+  painter (`mark_lines`), foreground only and no background, so it does not fight
+  whatever theme the terminal is already running.
+- **The tab bar** pages the sidebar: 调用量 is the session's readings, 轨迹 and 文件
+  are not built yet and say so. The tabs are **clicked, never keyed** — `Tab`
+  belongs to the `/` menu and `Shift+Tab` to plan mode — and on a placeholder page
+  the status row's `上下文 n%` is the only reading left.
+- **The rail** is the transcript's last column: one cell per turn, or per round in a
+  discussion, newest at the foot, the viewport's own cell drawn bright. Its window
+  follows the focus, so there is always exactly one bright cell; clicking a cell
+  jumps to the question that opened that turn, top-aligned.
+- **Chrome is 7 rows**: the frame's two, the main column's three rules, the status
+  row and the hint row — so `转录行 = h − 7 − 输入行数`. The hints are laid out at the
+  **main column's** width, not the terminal's.
+- The working directory and the clock are **not on screen at all** (they left with
+  the old header); `SessionFacts.session_dir` is still injected because the detail
+  overlay reads spilled tool output out of it.
 
 ## The keyboard
 
@@ -117,7 +130,8 @@ the next prompt.
   (unsolicited gestures: cancel, plan toggle, quit). They are two values because
   the loop selects on both at once.
 - The front end holds `ConsolePort`. The TUI serves it from its own `select!`
-  over broadcast / tick / keyboard; plain mode serves it with
+  over broadcast / console port / keyboard — three sources and no timer, since
+  nothing is waiting to be noticed; plain mode serves it with
   `render::spawn_plain_console`, which reads stdin line by line.
 - `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
   the gate's `Ask` and the plan-mode conflict question use the one keyboard.
@@ -145,12 +159,12 @@ renderer are untouched.
 
 - **One apply path.** Every replayed event goes through the same `TuiState::apply`
   a live event does, so blocks, collapsed hint lines, name colours, the
-  information panel and the header mode are rebuilt as side effects rather than
+  information panel, the rail and the mode are rebuilt as side effects rather than
   by a second implementation. That is also why a history row is clickable: the
   detail hit table is maintained by `apply`, not rebuilt for history.
 - **Framed, with a progress line.** `replay_batch` applies one slice per loop
-  pass, bounded by both 512 events and 2000 source lines, and the loop does not
-  wait on the 120 ms tick while a replay is pending. The bottom hint row is
+  pass, bounded by both 512 events and 2000 source lines, and the loop never waits
+  while a replay is pending. The bottom hint row is
   temporarily replaced by `恢复历史 n/m` (narrower terminals get `恢复中 n/m`,
   then `恢复中`); `wording::history_progress_line` owns that ladder.
 - **The seam.** `TuiOptions::reopened` says a replay is coming, and the TUI waits for

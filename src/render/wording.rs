@@ -1215,8 +1215,9 @@ pub fn history_divider() -> &'static str {
     "── 以上为历史 ──"
 }
 
-/// A label in the information panel (spec §8).
+/// The model's label: the status row's first segment (spec §5).
 pub const PANEL_MODEL: &str = "模型";
+/// The session's readings in the sidebar's usage page (spec §3).
 pub const PANEL_CONTEXT: &str = "上下文";
 /// Spelled the way the rest of the UI spells it; `CONTEXT.md` has no Chinese word
 /// for it and the stats lines already say `token`.
@@ -1302,18 +1303,19 @@ pub fn too_small(width: u16, height: u16) -> String {
     format!("终端太小：至少 {width}×{height}")
 }
 
-/// The header's identity field: the program and the version it was built from.
+/// The program and the version it was built from: the sidebar's text identity, which is
+/// what a terminal too narrow for the mark shows instead (spec §3).
 pub fn identity() -> String {
     format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
 
-/// The mark the tall header carries, five rows of block shading.
+/// The mark the wide sidebar carries, five rows of block shading.
 ///
 /// The characters are all text; the colour ramp that makes them read as letters is
 /// the painter's business ([`crate::render::tui`]), exactly as it is for every other
-/// phrase in this module. A terminal too narrow for the whole mark never asks for
-/// these rows at all — [`crate::render::layout`] decides that up front, so nothing
-/// here has to think about clipping.
+/// phrase in this module. A sidebar too narrow for the whole mark never asks for these
+/// rows at all — [`crate::render::layout`] decides that up front, so nothing here has
+/// to think about clipping.
 ///
 /// The mark spells `fs` — a forked synthesis, "two forks, one stem" (see
 /// `CONTEXT.md`), and the pixel grid is the one the maintainer picked.
@@ -1327,7 +1329,8 @@ pub fn logo_lines() -> [&'static str; 5] {
     ]
 }
 
-/// The sidebar's mode field, and the status row's.
+/// The mode as a field: what the status row shows, and what the old header's facts line
+/// used to.
 pub fn mode_field(mode: Mode) -> String {
     format!("模式 {}", mode_label(mode))
 }
@@ -1954,7 +1957,7 @@ pub fn help_interactive() -> String {
      最后一个问题。讨论的事件写进同一个会话，`sessions show` 能一起复盘。\
      TUI 里 Esc 取消正在跑的回合（或正在跑的讨论）；Shift+Tab 切换计划模式。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
-     --tui              使用终端界面（全屏四分区）\n  \
+     --tui              使用终端界面（全屏外壳）\n  \
      --continue, -c     继续本工作区最新的会话\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \

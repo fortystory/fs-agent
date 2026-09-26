@@ -15,9 +15,10 @@ banner survived.
 
 It now guards both ends of the process, because they are the two things only a
 pty can see (spec §Testing Decisions): the first frame — the status row drawn
-whole, the banner once, the header's identity, the pane frames present — and what
-the terminal is handed back on `Ctrl-C` — the alternate screen, mouse reporting,
-bracketed paste, and canonical/echoing tty flags. The cursor, the mouse and
+whole, the banner once, the identity (the mark, in the sidebar), the frame and its
+divider present — and what the terminal is handed back on `Ctrl-C` — the
+alternate screen, mouse reporting, bracketed paste, and canonical/echoing tty
+flags. The cursor, the mouse and
 resizing stay on the manual list (`docs/tui-manual-checklist.md`).
 
 Why a pty script and not a Rust test: the corruption only exists on a real
@@ -67,18 +68,19 @@ BANNER_ANCHOR = "fs-agent："
 # The history replay's progress line, on the hint row until the history has
 # settled. A `--continue` run is only green when it is gone from the final screen.
 REPLAY_PROGRESS_ANCHOR = "恢复"
-# The header shows one of two things, depending on the terminal (spec §2): the text
-# identity when it is small, and **the mark** when it is big enough — 260x30, this
-# script's size, is the mark. The mark is the program's identity in the tall header,
-# so either one proves the header was drawn; the identity alone would go red the
-# moment the mark is up.
+# The sidebar shows one of two things, depending on the terminal
+# (`tui-sidebar` spec §2): the text identity when it is narrow, and **the mark** in
+# its top rows when it is wide enough — 260x30, this script's size, is the wide rung
+# (40 columns, drawn from 120 up). The mark is the program's identity in the
+# sidebar, so either one proves the sidebar was drawn; the identity alone would go
+# red the moment the mark is up.
 MARK_ROW = "▄▀▀█"
-# The four-pane frame is a horizontal rule around every block plus a vertical one
-# per pane edge, so if the frames are gone the layout went with them. Three cells
-# of each orientation is deliberately far below what one screen draws: this is a
-# degradation guard, not a geometry assertion. The two are counted apart because
-# the transcript/panel seam is a lone vertical line that survives the frames --
-# counting every box character together would call a borderless screen green.
+# One frame around everything, with a single divider column and three rules in the
+# main column, so if the frames are gone the shell went with them. Three cells of
+# each orientation is deliberately far below what one screen draws: this is a
+# degradation guard, not a geometry assertion. The two are counted apart because the
+# divider is a lone vertical line that survives the frame -- counting every box
+# character together would call a borderless screen green.
 BORDER_H = "─"
 BORDER_V = "│"
 # What the terminal has to be given back on the way out (spec §5, §19): the

@@ -1,4 +1,4 @@
-# TUI 用 alt screen 全屏四分区布局，取代 inline viewport
+# TUI 用 alt screen 全屏布局，取代 inline viewport
 
 TUI 渲染器从「inline 视口 + 把转录插进 scrollback」改为 **alt screen 全屏四分区**：上为基础信息（名称+版本 / cwd / 模式 / 时钟），中左为对话面板，中右为信息面板（模型 / 上下文 / token / 回合），下为输入区与快捷键提示。对话面板因此**自己持有滚动缓冲**（上限 20 000 源行、超出丢最旧、吸底但上滚后不抢），转录不再依赖终端 scrollback。这**推翻 spec §19 的 TUI 栈那一行**（`.scratch/fs-agent-v1/spec.md:526`）与用户故事 129 的「**否决 alt screen** —— 转录要能滚动 / 复制」。
 
@@ -16,4 +16,5 @@ TUI 渲染器从「inline 视口 + 把转录插进 scrollback」改为 **alt scr
 - **保真度唯一变更**：非 assistant 的消息（主要是用户自己的输入）不再压成单行 + `truncate(text, 500)`，改为保留换行的多行渲染 —— 多行输入上线后，粘进来的 20 行正是最需要看全的内容。assistant 的回答本来就是全文 Markdown（`src/render/tui.rs:802-827`），不动；工具输出继续用 4 000 字符 preview。
 - **可测性反而变好**：`TestBackend` 在默认特性下可用（无特性门），布局、降级阶梯、滚动与吸底都能进 `cargo test`，不必依赖 pty；`scripts/tui-startup-check.py` 只需改判定（底部块现在带边框，`退出` 后面多了 `│`）而不是重写。
 - **与 ADR 0001 的关系**：本 ADR **不动模型可见文本**，只动呈现。ADR 0001 的冻结清单（debater/synthesizer system prompt、投影的 `[轮 N · 名字]` 前缀、`AgentError.message`、fs-agent 工具结果）逐条不受影响；本 ADR 新增的字符串全部落在措辞层 `src/render/wording.rs`。
+- **外壳改版（后加，2026-09）**：四分区改成**一圈外框 + 一条全高左栏 + 一条主列**（外框 / 左栏的标记与 tab / 主列的转录 + 回合条 + 状态行 + 输入 + 提示），见 `.scratch/tui-sidebar/spec.md`。本文标题里的「四分区」、上文「顶部那块后来长成两个变体」一段与下面那条「标记顶栏的代价」自此**只作历史记录**：顶栏连同它的 cwd/时钟退场，标记搬进左栏，左栏的开关尺寸改为按**宽度**（≥ 120 列 40 列宽画标记，80–119 列画文字身份，< 80 列隐藏）。核心决定不变 —— 仍是 alt screen 全屏、转录自己持有滚动缓冲、光标不依赖视口位置。
 - **标记顶栏的代价（后加，2026-09）**：高顶栏多占 5 行，120×24 的中块因此从 12 行缩到 7 行——**转录、面板、滚动翻页的可见行数都是它的下游**，`tests/render_layout.rs` 的若干断言（以及 `scripts/tui-startup-check.py` 的身份判定）随之从"记住第几行"改成"从帧里推出中块位置"。低于 42×18 一律回退文字顶栏，所以窄终端（含 40×10 的地板）行为不变。**块与块之间不留空行**（`layout::CHROME` 里那两项被删掉）：省下的两行归转录。

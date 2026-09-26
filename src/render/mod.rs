@@ -13,9 +13,9 @@
 //!   exactly two explicit sinks, and `stdout` receives the final product and
 //!   nothing else (ticket 01's regression assertion).
 //! * [`plain`] — the human transcript for a pipe or a simple terminal.
-//! * [`tui`] — the ratatui interface: a fullscreen four-pane layout on the
-//!   alternate screen (ADR 0002) that owns the keyboard and keeps the transcript
-//!   in its own scroll buffer.
+//! * [`tui`] — the ratatui interface: one fullscreen frame around a sidebar and a
+//!   main column on the alternate screen (ADR 0002) that owns the keyboard and keeps
+//!   the transcript in its own scroll buffer.
 //!
 //! Plain and TUI share one [`transcript`] layer: the same events become the same
 //! [`transcript::Block`]s, and only the painting differs. That is what keeps this

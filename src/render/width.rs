@@ -1,7 +1,7 @@
 //! Display-width arithmetic: how many terminal columns a piece of text takes.
 //!
 //! One home for it, because two parts of the renderer need the same answer — the
-//! conversation pane wraps styled lines to a width, and the header, the input line
+//! conversation pane wraps styled lines to a width, and the sidebar, the input line
 //! and the indicator clip text to one — and a second copy is how `终` ends up
 //! counted as one column.
 

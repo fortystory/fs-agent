@@ -18,8 +18,6 @@
 //!   queued is drained before the frame is drawn, so a bursting provider costs
 //!   frames rather than events.
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 use futures::StreamExt;
 use ratatui::buffer::CellWidth;
@@ -60,13 +58,6 @@ use super::{DeltaKind, Render, RenderEvent};
 /// transcript does not need the whole message live: the completed `Message`
 /// block re-renders it in full.
 const LIVE_BUFFER: usize = 4_000;
-
-/// How often the frame is redrawn even without an event.
-///
-/// It is the last remnant of the header's clock, which the shell no longer shows:
-/// the arm that wakes on it puts nothing on screen any more (票 02 §8, confirmed
-/// and removed in 票 05).
-const TICK: Duration = Duration::from_millis(120);
 
 /// A paste larger than this asks before it is taken (spec §7).
 const PASTE_CONFIRM_CHARS: usize = 100_000;
@@ -338,10 +329,6 @@ impl Tui {
         let mut terminal = ratatui::init();
         let modes = TerminalModes::enter();
         let mut keys = EventStream::new();
-        let mut tick = tokio::time::interval(TICK);
-        // The first tick fires immediately; soak it so the first frame is drawn
-        // from state rather than from an empty buffer.
-        tick.tick().await;
 
         // A reopened session waits for the replay before it renders anything. The
         // loop pushes it as its **first** console request, right after assembly and
@@ -358,14 +345,11 @@ impl Tui {
         loop {
             let mut closed = false;
             if state.replay_pending() {
-                // A replay must not be throttled by the redraw tick — a large session
-                // is dozens of batches, and waiting 120 ms between them would turn a
-                // second into minutes — but the keyboard, the live stream and the
-                // loop's requests still have to be answered between batches, or
-                // `Ctrl-C` during a long replay would be a dead key. The last branch
-                // is always ready, so this select never waits on anything and the
-                // batch below runs as fast as the frame can be drawn
-                // (`.scratch/tui-history-replay/spec.md` §2).
+                // Every source is asked between batches — the keyboard, the live
+                // stream and the loop's requests — or `Ctrl-C` during a long replay
+                // would be a dead key. The last branch is always ready, so this select
+                // never waits on anything and the batch below runs as fast as the
+                // frame can be drawn (`.scratch/tui-history-replay/spec.md` §2).
                 tokio::select! {
                     biased;
                     received = receiver.recv() => closed = state.take_render_event(received),
@@ -375,11 +359,14 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
+                // Three sources and no timer. The redraw tick used to live here, and it
+                // went with the clock it existed for: a pending question arrives on the
+                // console port, events arrive on the render channel, and a key is a key,
+                // so nothing is waiting to be noticed (票 05 §1).
                 tokio::select! {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
-                    _ = tick.tick() => {}
                 }
             }
 
@@ -3040,7 +3027,7 @@ fn blank_half_covered_glyphs(frame: &mut ratatui::Frame, area: Rect) {
 }
 
 /// Everything a terminal below the minimum gets: one centred sentence saying so,
-/// rather than four panes crushed into each other.
+/// rather than a crushed shell.
 fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
     let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
     frame.render_widget(
@@ -4231,8 +4218,9 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
     if !preview.contains(crate::context::TRUNCATED_MARKER) {
         return (preview.to_owned(), false);
     }
-    // `SessionFacts.cwd` holds the **session directory**, so the outputs directory
-    // is one join away — the same arithmetic the harness does (票 01 事实 56).
+    // `SessionFacts.session_dir` holds the **session directory**, so the outputs
+    // directory is one join away — the same arithmetic the harness does
+    // (票 01 事实 56).
     let path = std::path::Path::new(session_dir)
         .join(crate::session::store::OUTPUTS_DIR)
         .join(format!("{tool_call_id}.txt"));
