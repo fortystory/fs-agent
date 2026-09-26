@@ -167,73 +167,45 @@ fn auto_is_not_permission_free_a_deny_rule_still_applies() {
     assert_eq!(decision(Mode::Auto, vec![rule], &write), Decision::Deny);
 }
 
-// --- mode plan (ticket 15) ------------------------------------------------
+// --- the mode cycle (票 01 of `.scratch/todo-and-modes`) -------------------
 
-/// The plan mode's one exemption, in the shape the predicate can prove: the
-/// **whole** write set is this session's `PLAN.md` (spec §12, §13).
-fn plan_write(cwd: &str, path: &str) -> Invocation {
-    Invocation::write("write_file").cwd(cwd).writes(&[path])
+#[test]
+fn a_mode_cycles_readonly_ask_auto_and_back() {
+    // The gesture's whole algebra: one step per press, and three presses return
+    // a session to the mode it started in (`.scratch/todo-and-modes/spec.md` §1).
+    assert_eq!(Mode::Readonly.next(), Mode::Ask);
+    assert_eq!(Mode::Ask.next(), Mode::Auto);
+    assert_eq!(Mode::Auto.next(), Mode::Readonly);
+    assert_eq!(Mode::Ask.next().next().next(), Mode::Ask);
 }
 
 #[test]
-fn plan_denies_every_non_read_only_call_except_the_plan_file() {
+fn the_three_modes_are_the_three_words_a_configuration_may_write() {
+    // One spelling per mode, and nothing else parses: `plan` was the fourth and
+    // is gone — what took its place is the `todo` tool, not a mode.
+    for mode in [Mode::Readonly, Mode::Ask, Mode::Auto] {
+        assert_eq!(Mode::parse(mode.as_str()), Some(mode));
+    }
+    assert_eq!(Mode::parse("plan"), None);
+    assert_eq!(Mode::parse("AUTO"), None);
+    assert_eq!(Mode::parse(""), None);
+}
+
+#[test]
+fn every_mode_keeps_its_own_stance_on_a_write() {
     let read = Invocation::read("read_file");
-    let plan = plan_write("/w", "/w/PLAN.md");
     let notes = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
-    // `bash` is `Exclusive`, so it can never borrow the exemption: a shell can
-    // write anything.
-    let bash = Invocation::exclusive("bash").argv(&["bash", "-c", "echo hi > notes.txt"]);
+    // The file the old plan mode existed to protect is now an ordinary write: no
+    // mode exempts it and none refuses it by name.
+    let plan = Invocation::write("write_file").writes(&["/w/PLAN.md"]);
 
-    assert_eq!(decision(Mode::Plan, vec![], &read), Decision::Allow);
-    assert_eq!(decision(Mode::Plan, vec![], &plan), Decision::Allow);
-    assert_eq!(decision(Mode::Plan, vec![], &notes), Decision::Deny);
-    assert_eq!(decision(Mode::Plan, vec![], &bash), Decision::Deny);
-    assert!(
-        gate(Mode::Plan, vec![], &notes).reason.contains("PLAN.md"),
-        "the verdict explains what the mode is waiting for"
-    );
-}
-
-#[test]
-fn the_plan_exemption_needs_the_whole_write_set_to_be_the_plan_file() {
-    // A call that also writes something else cannot borrow the exemption: that
-    // is the "borrowing a way through" this shape exists to rule out.
-    let borrowed = Invocation::write("edit_file").writes(&["/w/PLAN.md", "/w/notes.txt"]);
-    // The plan file is the project root's, resolved against the session cwd.
-    let nested = plan_write("/w", "/w/sub/PLAN.md");
-    let elsewhere = plan_write("/w", "/elsewhere/PLAN.md");
-
-    assert_eq!(decision(Mode::Plan, vec![], &borrowed), Decision::Deny);
-    assert_eq!(decision(Mode::Plan, vec![], &nested), Decision::Deny);
-    assert_eq!(decision(Mode::Plan, vec![], &elsewhere), Decision::Deny);
-}
-
-#[test]
-fn the_plan_floor_cannot_be_lowered_by_an_allow_rule() {
-    // "Always allow" is a session-scoped allowance earned in another mode; it
-    // must not become a way out of plan mode.
-    let notes = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
-    assert_eq!(
-        decision(Mode::Plan, vec![allow_any()], &notes),
-        Decision::Deny
-    );
-}
-
-#[test]
-fn plan_mode_still_defers_to_the_circuit_breaker_and_the_env_family() {
-    // The breaker sits outside every rule *and* every mode (spec §12 ①).
-    let wipe = Invocation::exclusive("bash")
-        .cwd("/home/u/project")
-        .home("/home/u")
-        .argv(&["rm", "-rf", "/"]);
-    assert_eq!(
-        decision(Mode::Plan, vec![allow_any()], &wipe),
-        Decision::Deny
-    );
-    // The `.env` family's default denial is a floor too: not even the mode that
-    // exists to protect the plan hands it out.
-    let env = plan_write("/w", "/w/.env");
-    assert_eq!(decision(Mode::Plan, vec![], &env), Decision::Deny);
+    assert_eq!(decision(Mode::Readonly, vec![], &read), Decision::Allow);
+    assert_eq!(decision(Mode::Readonly, vec![], &notes), Decision::Deny);
+    assert_eq!(decision(Mode::Readonly, vec![], &plan), Decision::Deny);
+    assert_eq!(decision(Mode::Ask, vec![], &notes), Decision::Ask);
+    assert_eq!(decision(Mode::Ask, vec![], &plan), Decision::Ask);
+    assert_eq!(decision(Mode::Auto, vec![], &notes), Decision::Allow);
+    assert_eq!(decision(Mode::Auto, vec![], &plan), Decision::Allow);
 }
 
 // --- rules override the mode's default, never its floor -------------------
@@ -383,18 +355,18 @@ fn path_scope_matches_write_and_read_targets() {
 
 #[test]
 fn path_set_requires_the_write_set_to_be_exactly_equal() {
-    let plan = "/w/PLAN.md";
+    let exact = "/w/generated.rs";
     let rule = Rule::new(
         Subject::Any,
-        Scope::PathSet(vec![PathBuf::from(plan)]),
+        Scope::PathSet(vec![PathBuf::from(exact)]),
         Decision::Deny,
     );
 
     // A path set is about the **whole** write set: a call that also writes
     // elsewhere is not the call the rule describes, and `Exclusive` has no
     // write set to match at all.
-    let alone = Invocation::write("write_file").writes(&[plan]);
-    let borrowed = Invocation::write("write_file").writes(&[plan, "/w/src/main.rs"]);
+    let alone = Invocation::write("write_file").writes(&[exact]);
+    let borrowed = Invocation::write("write_file").writes(&[exact, "/w/src/main.rs"]);
     let exclusive = Invocation::exclusive("bash");
     assert_eq!(
         decision(Mode::Auto, vec![rule.clone()], &alone),

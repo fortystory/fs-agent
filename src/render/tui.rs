@@ -40,14 +40,12 @@ use ratatui::widgets::{
 };
 use tokio::sync::broadcast;
 
-use crate::events::{ContextSource, Event, HistoryReason, Role, StopReason, ToolCallId};
-use crate::permissions::Mode;
+use crate::events::{Event, Role, StopReason, ToolCallId};
+use crate::permissions::{Answer, Mode, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
 use super::editor::{self, Input};
-use super::input::{
-    AnswerChoice, CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent, Question,
-};
+use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent};
 use super::layout;
 use super::pane::{self, Pane};
 use super::panel::Panel;
@@ -280,6 +278,14 @@ pub struct SessionFacts {
     pub model: String,
     /// The input budget of that model's window, output reserve already removed.
     pub context_window: u64,
+    /// The permission mode the session was assembled in (spec §12).
+    ///
+    /// It is injected because the status row shows it and nothing on the stream
+    /// says it: a mode is a `Session` value, and the two transitions it used to
+    /// have — a plan-mode injection and a mode-change supersession — no longer
+    /// exist. `Shift+Tab` is the only thing that moves it, and the front end
+    /// applies the same step the loop does (`.scratch/todo-and-modes/spec.md` §1).
+    pub mode: Mode,
     /// The session's cumulative token allowance, when it has one.
     pub budget_limit: Option<u64>,
     /// The debaters of this session, in the order they were drawn. A single-agent
@@ -488,9 +494,10 @@ impl Render for Tui {
 pub struct TuiState {
     /// What the sidebar and the status row display, injected at assembly (spec §8).
     facts: SessionFacts,
-    /// The mode the session is in. Seeded from the assembly-time default and kept
-    /// current from the stream, because both transitions ride it: entering plan
-    /// mode is a context injection and leaving it is a history supersession.
+    /// The mode the session is in. Seeded from the assembly-time value
+    /// ([`SessionFacts::mode`]) and moved by the gesture alone: nothing on the
+    /// stream says what mode a session is in, and `Shift+Tab` is the one thing
+    /// that changes it (`.scratch/todo-and-modes/spec.md` §1).
     mode: Mode,
     /// The event-to-block merger the plain renderer shares.
     transcript: Transcript,
@@ -594,15 +601,15 @@ pub struct TuiState {
 
 /// A question waiting for an answer.
 ///
-/// Two kinds live here. The loop's asks ([`Question`]) travel back over a one-shot
-/// channel; the renderer's own asks — an oversized paste, a draft that Esc would
-/// throw away — have nobody to answer to, so they hold what they need to do the
-/// thing themselves once the user says yes (spec §7).
+/// Two kinds live here. The loop's asks travel back over a one-shot channel as a
+/// [`PermissionRequest`]; the renderer's own asks — an oversized paste, a draft
+/// that Esc would throw away — have nobody to answer to, so they hold what they
+/// need to do the thing themselves once the user says yes (spec §7).
 enum Pending {
     /// The loop is waiting on an answer.
     Loop {
-        question: Question,
-        reply: tokio::sync::oneshot::Sender<AnswerChoice>,
+        request: PermissionRequest,
+        reply: tokio::sync::oneshot::Sender<Answer>,
     },
     /// A paste too large to take without asking.
     Paste { text: String, chars: usize },
@@ -896,10 +903,7 @@ impl Pending {
     /// (spec §19), and this answers `None` for it.
     fn modal(&self) -> Option<Modal> {
         let modal = match self {
-            Pending::Loop {
-                question: Question::Permission(request),
-                ..
-            } => Modal {
+            Pending::Loop { request, .. } => Modal {
                 title: wording::permission_title().to_owned(),
                 // Then the same one-line description the folded transcript line
                 // carries — and *then* the call as it will run, because approving is
@@ -912,20 +916,7 @@ impl Pending {
                 choices: &wording::PERMISSION_CHOICES,
                 actions: wording::PERMISSION_CHOICE_ANSWERS
                     .iter()
-                    .map(|(_, answer)| HitAction::Answer(AnswerChoice::Permission(*answer)))
-                    .collect(),
-            },
-            Pending::Loop {
-                question: Question::PlanConflict(path),
-                ..
-            } => Modal {
-                title: wording::plan_conflict_title().to_owned(),
-                description: None,
-                detail: Some(wording::plan_conflict_body(&path.display().to_string())),
-                choices: &wording::PLAN_CHOICES,
-                actions: wording::PLAN_CHOICE_ANSWERS
-                    .iter()
-                    .map(|(_, conflict)| HitAction::Answer(AnswerChoice::Plan(*conflict)))
+                    .map(|(_, answer)| HitAction::Answer(*answer))
                     .collect(),
             },
             Pending::Paste { chars, .. } => Modal {
@@ -995,7 +986,7 @@ struct Region {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitAction {
     /// Answer the loop's question with this choice, exactly as pressing its key would.
-    Answer(AnswerChoice),
+    Answer(Answer),
     /// Confirm the oversized paste.
     Paste,
     /// Confirm clearing the draft.
@@ -1106,14 +1097,6 @@ struct SlashMenu {
     entries: Vec<(String, String)>,
     /// Which entry is highlighted, clamped into range; `None` when none is.
     selected: Option<usize>,
-}
-
-/// The non-acting answer to a question the loop asked.
-fn default_choice(question: &Question) -> AnswerChoice {
-    match question {
-        Question::PlanConflict(_) => AnswerChoice::Plan(crate::permissions::PlanConflict::Keep),
-        Question::Permission(_) => AnswerChoice::Permission(crate::permissions::Answer::Deny),
-    }
 }
 
 /// Whether a key means yes to a question this renderer asked itself.
@@ -1232,9 +1215,10 @@ struct Replay {
 impl TuiState {
     pub fn new(facts: SessionFacts) -> Self {
         let colors = SpeakerColors::new(&facts.speaker_order);
+        let mode = facts.mode;
         Self {
             facts,
-            mode: Mode::Ask,
+            mode,
             transcript: Transcript::new(),
             pane: Pane::new(),
             live: String::new(),
@@ -1414,15 +1398,6 @@ impl TuiState {
                     // one, so the tail can go.
                     self.live.clear();
                 }
-                // The two transitions that move a session between modes. Both
-                // already ride the stream, which is why the mode is not injected.
-                Block::ContextInjected {
-                    source: ContextSource::PlanMode,
-                } => self.mode = Mode::Plan,
-                Block::History {
-                    reason: HistoryReason::ModeChange,
-                    ..
-                } => self.mode = Mode::Ask,
                 _ => {}
             }
             // The panel counts what this block says about the session; the pane
@@ -1551,7 +1526,7 @@ impl TuiState {
             return;
         }
         // Everything the editor answers to still works; `Ctrl-D`, `Esc`, `Enter`, the
-        // scroll keys and the plan-mode gesture are ignored outright.
+        // scroll keys and the mode gesture are ignored outright.
         self.editor_key(key);
         self.sync_menu();
     }
@@ -1974,7 +1949,7 @@ impl TuiState {
                     return;
                 }
                 self.pending = Some(Pending::Loop {
-                    question: ask.question,
+                    request: ask.request,
                     reply: ask.reply,
                 });
             }
@@ -2184,7 +2159,7 @@ impl TuiState {
         if self.pending.is_some() {
             // A question owns the keyboard: its own keys answer it, `Ctrl-C` and `Esc`
             // above are the ways out, and nothing else gets through — not a stray
-            // character, not the plan-mode gesture (spec §9).
+            // character, not the mode gesture (spec §9).
             //
             // The questionnaire answers to a wider keyboard than the one-key
             // questions — the arrows move and page, `Tab` skips, `Enter`/`Space`
@@ -2199,7 +2174,13 @@ impl TuiState {
             return;
         }
         if key == Key::BackTab {
-            self.events.push(FrontEndEvent::TogglePlan);
+            // The gesture and the display are one step of the same cycle: the mode is
+            // a session value the loop owns, and this front end is the only thing that
+            // shows it — so it moves its own copy and asks for the same move. Both
+            // apply [`Mode::next`] to the value assembly seeded, which is what keeps
+            // them from disagreeing (`.scratch/todo-and-modes/spec.md` §1).
+            self.mode = self.mode.next();
+            self.events.push(FrontEndEvent::CycleMode);
             return;
         }
         // While the `/` menu is up it owns the four keys that would otherwise edit or
@@ -2392,26 +2373,15 @@ impl TuiState {
     /// question — the pointer path, which has to inspect it before answering it.
     fn answer_pending(&mut self, pending: Pending, key: Key) {
         match pending {
-            Pending::Loop { question, reply } => {
-                let choice = match (&question, key) {
-                    (Question::Permission(_), Key::Char('y')) => {
-                        AnswerChoice::Permission(crate::permissions::Answer::Allow)
-                    }
-                    (Question::Permission(_), Key::Char('a')) => {
-                        AnswerChoice::Permission(crate::permissions::Answer::AlwaysAllow)
-                    }
-                    (Question::PlanConflict(_), Key::Char('o')) => {
-                        AnswerChoice::Plan(crate::permissions::PlanConflict::Overwrite)
-                    }
-                    (Question::PlanConflict(_), Key::Char('a')) => {
-                        AnswerChoice::Plan(crate::permissions::PlanConflict::Append)
-                    }
-                    (Question::PlanConflict(_), Key::Char('k')) => {
-                        AnswerChoice::Plan(crate::permissions::PlanConflict::Keep)
-                    }
-                    _ => default_choice(&question),
+            Pending::Loop { reply, .. } => {
+                let answer = match key {
+                    Key::Char('y') => Answer::Allow,
+                    Key::Char('a') => Answer::AlwaysAllow,
+                    // Anything else is the non-acting reading: a stray character can
+                    // never allow a write (spec §9).
+                    _ => Answer::Deny,
                 };
-                let _ = reply.send(choice);
+                let _ = reply.send(answer);
             }
             Pending::Paste { text, .. } => {
                 if agrees(key) {
@@ -2443,8 +2413,8 @@ impl TuiState {
     /// when the question was this renderer's own.
     fn decline(&mut self, pending: Pending) {
         match pending {
-            Pending::Loop { question, reply } => {
-                let _ = reply.send(default_choice(&question));
+            Pending::Loop { reply, .. } => {
+                let _ = reply.send(Answer::Deny);
             }
             // A questionnaire belongs to a run, so `Esc` while one is up is the
             // cancel gesture and never reaches here (spec §19). If it ever did,
@@ -2919,7 +2889,8 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
 
 /// Which sidebar page is showing (spec §3).
 ///
-/// Clicked, never keyed: `Tab` belongs to the `/` menu and `Shift+Tab` to plan mode,
+/// Clicked, never keyed: `Tab` belongs to the `/` menu and `Shift+Tab` to the mode
+/// cycle,
 /// and this repo does not enable the keyboard-enhancement protocol. A page that is
 /// not built yet shows [`wording::tab_placeholder`] rather than made-up data.
 ///

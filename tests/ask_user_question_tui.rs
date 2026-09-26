@@ -23,6 +23,9 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
+        // The mode the session was assembled in; `ask` is the default, and a test
+        // that means another one says so in its own facts.
+        mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: Vec::new(),
     }

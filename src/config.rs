@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::events::Redactor;
+use crate::permissions::Mode;
 
 pub use cost::{Budget, LandingPoint, PriceTable, Pricing, Routing};
 
@@ -302,6 +303,11 @@ pub struct Config {
     /// What a million tokens cost per model, for display (spec §17). Keyed by
     /// model id; a model with no entry is reported as unpriced, never as free.
     pub pricing: PriceTable,
+    /// The mode a session starts in (spec §12; `.scratch/todo-and-modes/spec.md`
+    /// §1). The session's stance on writes, chosen by the **user** — `--mode`
+    /// overrides it for one run, and `Shift+Tab` cycles it inside a session. It
+    /// never enters the event stream, so `--continue` returns to this value.
+    pub mode: Mode,
     /// The session's cumulative token allowance (spec §17), for display and for
     /// the gate a session assembles with.
     pub budget: Budget,
@@ -448,6 +454,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let providers = resolve_providers(&raw, env)?;
     let models = resolve_models(&raw, &providers)?;
     let pricing = resolve_pricing(&raw, &models)?;
+    let mode = resolve_mode(raw.permissions.as_ref())?;
     let budget = resolve_budget(raw.budget.as_ref())?;
     let routing = resolve_routing(raw.routing.as_ref(), &models)?;
     let max_iterations = raw
@@ -479,6 +486,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         providers,
         models,
         pricing,
+        mode,
         budget,
         routing,
         max_iterations,
@@ -547,6 +555,9 @@ struct RawConfig {
     /// only — the gate reads tokens.
     #[serde(default)]
     pricing: BTreeMap<String, RawPricing>,
+    /// `[permissions]`: the mode a session starts in, and the only knob this
+    /// table has (spec §12).
+    permissions: Option<RawPermissions>,
     budget: Option<RawBudget>,
     routing: Option<RawRouting>,
     /// `[turn]`: the turn caps (spec §3, story 11).
@@ -824,6 +835,33 @@ struct RawTurn {
     /// Hard cap on provider calls in one **executor's** turn (spec §16), counted
     /// independently of the dispatcher's.
     executor_max_iterations: Option<u32>,
+}
+
+/// The `[permissions]` table (spec §12; `.scratch/todo-and-modes/spec.md` §1).
+///
+/// One field: the mode a session starts in. The remaining permission machinery —
+/// the rule algebra, the breaker, the `.env` floor, the path limit — is the
+/// gate's own defaults rather than configuration, so it has nothing to say here.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPermissions {
+    /// `readonly` | `ask` | `auto`; absent means [`Mode::Ask`].
+    mode: Option<String>,
+}
+
+/// Resolve `[permissions]` into the mode a session starts in (spec §12).
+///
+/// An unknown word is a startup error rather than a silent fallback to `ask`: a
+/// configuration holding `mode = "plan"` (the fourth mode this table used to
+/// have) would otherwise start a session under a permission stance its author
+/// never asked for.
+fn resolve_mode(raw: Option<&RawPermissions>) -> Result<Mode, ConfigError> {
+    let Some(written) = raw.and_then(|raw| raw.mode.as_deref()) else {
+        return Ok(Mode::Ask);
+    };
+    Mode::parse(written).ok_or_else(|| ConfigError::UnknownMode {
+        mode: written.to_owned(),
+    })
 }
 
 /// The `[budget]` table (spec §17).
@@ -1362,6 +1400,10 @@ pub enum ConfigError {
     InvalidPrice { model: String, field: &'static str },
     #[error("[budget] {reason}")]
     InvalidBudget { reason: String },
+    #[error(
+        "unknown mode `{mode}`; `[permissions] mode` (or `--mode`) takes `readonly`, `ask` or          `auto` — what used to be the `plan` mode is the model's `todo` tool now"
+    )]
+    UnknownMode { mode: String },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(

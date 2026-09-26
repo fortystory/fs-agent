@@ -34,7 +34,6 @@ pub mod skills;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::permissions::PlanConflict;
 use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
 use skills::MAX_LOADED_SKILL_TOKENS;
@@ -65,34 +64,6 @@ pub const DROPPED_TOOL_RESULT: &str =
 /// The project rules file, read once at startup and injected as the first
 /// `user` message (spec §10).
 pub const AGENTS_MD: &str = "AGENTS.md";
-
-/// The short instruction plan mode injects on entry (spec §13), phrased once per
-/// answer to the conflict question.
-///
-/// Short on purpose: it is pinned for as long as the mode lasts, and a longer
-/// text would spend the model's budget restating what the gate already enforces.
-/// It names the file, and it does **not** offer the model a way out — leaving is
-/// the user's gesture, not a request the model can make.
-///
-/// `None` means there was no plan file to ask about; `Overwrite` means there was
-/// one and it was cleared, so both leave the model a blank sheet. The other two
-/// answers are told apart here, because on disk they are the same file.
-pub fn plan_mode_instruction(conflict: Option<PlanConflict>) -> &'static str {
-    match conflict {
-        None | Some(PlanConflict::Overwrite) => {
-            "现在处于硬 plan 模式：可以读，但唯一能写的是项目根目录的 PLAN.md。\
-             把计划写进它；改别的文件或运行 shell 都会被拒绝。"
-        }
-        Some(PlanConflict::Append) => {
-            "现在处于硬 plan 模式：可以读，但唯一能写的是项目根目录的 PLAN.md。\
-             它已经存在——先读它，再把计划追加在后面；改别的文件或运行 shell 都会被拒绝。"
-        }
-        Some(PlanConflict::Keep) => {
-            "现在处于硬 plan 模式：可以读，但唯一能写的是项目根目录的 PLAN.md。\
-             它已经存在——先读它，并把它当作现行计划，不要整体重写；改别的文件或运行 shell 都会被拒绝。"
-        }
-    }
-}
 
 /// The usable input budget for one agent, computed from **its own** model
 /// (spec §10). There is deliberately no session-wide budget.
@@ -255,8 +226,8 @@ fn fits(messages: &[Message], budget: u64) -> bool {
 /// The private identity is pinned by kind (it is also the first message), and a
 /// `ContextInjected` projection is pinned by kind wherever it sits. Pinning has
 /// to be a property of the message rather than a length of the leading run,
-/// because plan mode's instruction is injected mid-session and must survive the
-/// dropping of the rounds around it while the mode is on (spec §10, §13).
+/// because a `Skill` body the user loaded is injected mid-session and must
+/// survive the dropping of the rounds around it (spec §9, §10).
 ///
 /// An ordinary `user` message — speech, or the error the model must correct —
 /// is deliberately *not* pinned: a nameless one is still a round boundary.

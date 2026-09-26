@@ -39,10 +39,9 @@ use futures::StreamExt;
 
 use crate::context;
 use crate::events::{
-    hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, superseded_seqs,
-    total_usage, ContextSource, Decision, DecisionSource, Event, EventLog, EventPayload,
-    HistoryReason, ParticipantId, Redactor, Role, RoundMode, SpeakerId, StopReason, ToolCallId,
-    SCHEMA_VERSION,
+    hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, total_usage, ContextSource,
+    Decision, DecisionSource, Event, EventLog, EventPayload, ParticipantId, Redactor, Role,
+    RoundMode, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -250,52 +249,6 @@ pub fn record_context_injection_from(
             content: content.to_owned(),
         },
     )
-}
-
-/// Retire every live plan-mode instruction, returning how many there were.
-///
-/// An instruction describes a state, so it has to stop being replayed when the
-/// state ends — the user leaves plan mode, or a killed process resumes into a
-/// different mode. History is never rewritten (spec §2), so "stop saying this"
-/// is a `HistorySuperseded` over the injections, the same mechanism `/undo`
-/// uses for an exchange. Their records stay in the log; projection drops them,
-/// which is why letting the mode change leave one live costs the prefix cache a
-/// miss exactly once, at the gesture.
-pub fn retire_plan_instructions(
-    session: &mut Session,
-    render: &RenderHandle,
-) -> Result<usize, Error> {
-    let events = session.events();
-    let retired = superseded_seqs(&events);
-    let targets: Vec<u64> = events
-        .iter()
-        .filter(|event| !retired.contains(&event.seq))
-        .filter(|event| {
-            matches!(
-                &event.payload,
-                EventPayload::ContextInjected {
-                    source: ContextSource::PlanMode,
-                    ..
-                }
-            )
-        })
-        .map(|event| event.seq)
-        .collect();
-    if targets.is_empty() {
-        return Ok(0);
-    }
-    let count = targets.len();
-    emit(
-        session,
-        render,
-        &SpeakerId::User,
-        EventPayload::HistorySuperseded {
-            targets,
-            reason: HistoryReason::ModeChange,
-            summary: Some("the session is no longer in plan mode".to_owned()),
-        },
-    )?;
-    Ok(count)
 }
 
 /// Run one complete turn for `speaker` and return why it stopped.

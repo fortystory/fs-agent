@@ -12,8 +12,8 @@
 use std::path::Path;
 
 use fs_agent::events::{
-    ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId, StopReason,
-    ToolCallId, Usage,
+    read_events, ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId,
+    StopReason, ToolCallId, Usage,
 };
 use fs_agent::render::{
     draw_frame, wording, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
@@ -28,6 +28,9 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
+        // The mode the session was assembled in; `ask` is the default, and a test
+        // that means another one says so in its own facts.
+        mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: vec!["kimi".to_owned()],
     }
@@ -708,24 +711,61 @@ fn the_rail_grows_with_the_replayed_history() {
 }
 
 #[test]
-fn the_status_row_mode_is_whatever_the_history_ended_on() {
-    // Plan injection then a mode change reads as 询问; plan injection alone reads as
-    // 计划; no mode event keeps the assembled default (spec §7, user story 24).
-    let cases: Vec<(Vec<Event>, &str)> = vec![
-        (vec![plan_injected(1), mode_change(2)], "询问"),
-        (vec![plan_injected(1)], "计划"),
-        (vec![message(1, "没有模式事件", None)], "询问"),
-    ];
-    for (events, expected) in cases {
+fn the_two_retired_variants_still_deserialize_off_an_old_stream() {
+    // Why the variants stay in the schema at all: a session written before
+    // `.scratch/todo-and-modes` carries these two events, and `--continue` parses
+    // that stream with `read_events` before any renderer sees it. Writing the lines
+    // out as JSONL and reading them back is the honest way to pin "the schema still
+    // accepts them" — removals like this one are exactly where that breaks
+    // (ADR 0003).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("log.jsonl");
+    let lines: Vec<String> = [plan_injected(1), mode_change(2)]
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap())
+        .collect();
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    // The payloads, not the whole events: `at` is a wall-clock stamp, so two Events
+    // for one payload are equal in everything but the instant they were written.
+    let read = read_events(&path).expect("an old stream still parses");
+    let payloads: Vec<EventPayload> = read.into_iter().map(|event| event.payload).collect();
+    assert_eq!(
+        payloads,
+        vec![plan_injected(1).payload, mode_change(2).payload]
+    );
+}
+
+#[test]
+fn an_old_streams_plan_events_still_replay_without_moving_the_mode() {
+    // Old streams carry the two events the plan mode used to emit — a `PlanMode`
+    // injection and the `ModeChange` that retired it. Both variants stay in the
+    // schema so such a stream still deserializes and replays (ADR 0003), and the
+    // lines still say what they said. What they no longer do is move the session's
+    // mode: a mode is a session value the front end was assembled with
+    // (`.scratch/todo-and-modes/spec.md` §1).
+    for events in [
+        vec![plan_injected(1), mode_change(2)],
+        vec![plan_injected(1)],
+        vec![message(1, "没有模式事件", None)],
+    ] {
         let mut state = state();
         replay(&mut state, events.clone());
         run_replay(&mut state);
         let text = screen(120, 40, &mut state).join("\n");
         assert!(
-            text.contains(expected),
-            "{events:?} should read as {expected}: {text}"
+            text.contains("模式 询问"),
+            "{events:?} keeps the assembled mode: {text}"
         );
     }
+
+    // The injection itself is still readable — the line names the source it came
+    // from — so an old session reads back as what it was.
+    let mut state = state();
+    replay(&mut state, vec![plan_injected(1)]);
+    run_replay(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("上下文注入：计划模式"), "{text}");
 }
 
 // ---------------------------------------------------------------------------

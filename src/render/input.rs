@@ -15,64 +15,31 @@
 //! [`ConsoleAsker`] implements the permission gate's [`Asker`] port on top of the
 //! same handle, so a question and a prompt travel the one keyboard.
 
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::events::Event;
-use crate::permissions::{Answer, Asker, PermissionRequest, PlanConflict};
+use crate::permissions::{Answer, Asker, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
 
-/// A question the front end must put to the user.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Question {
-    /// The permission gate answered `Ask`.
-    Permission(PermissionRequest),
-    /// Plan mode is being entered and `PLAN.md` already exists (spec §13).
-    PlanConflict(PathBuf),
-}
-
-/// The user's answer to a [`Question`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnswerChoice {
-    Permission(Answer),
-    Plan(PlanConflict),
-}
-
-impl AnswerChoice {
-    pub fn as_permission(self) -> Answer {
-        match self {
-            AnswerChoice::Permission(answer) => answer,
-            // A plan answer cannot arrive for a permission question: the two are
-            // paired by construction. Deny is the safe reading if that is ever
-            // violated, because it is the non-acting one.
-            AnswerChoice::Plan(_) => Answer::Deny,
-        }
-    }
-
-    pub fn as_plan(self) -> PlanConflict {
-        match self {
-            AnswerChoice::Plan(conflict) => conflict,
-            // The non-destructive reading, for the same reason as above.
-            AnswerChoice::Permission(_) => PlanConflict::Keep,
-        }
-    }
-}
-
 /// One question plus the one-shot channel its answer comes back on.
+///
+/// The question is a [`PermissionRequest`] rather than an enum of its own: the
+/// gate's `Ask` is the only thing the loop ever puts to the user through this
+/// channel, and it used to have a second variant purely to carry the plan-file
+/// conflict of the mode that no longer exists.
 #[derive(Debug)]
 pub struct AskRequest {
-    pub question: Question,
-    pub reply: oneshot::Sender<AnswerChoice>,
+    pub request: PermissionRequest,
+    pub reply: oneshot::Sender<Answer>,
 }
 
 /// A model-initiated questionnaire the front end must put to the user (spec §7).
 ///
-/// It has its own reply channel rather than a [`Question`] variant on purpose:
-/// the permission gate's [`AnswerChoice`] cannot express a questionnaire answer,
-/// and making the gate carry a shape it can never produce is what the third asker
-/// exists to avoid (spec §19).
+/// It has its own reply channel rather than a second [`AskRequest`] shape on
+/// purpose: a questionnaire answer is not an [`Answer`], and making the gate carry
+/// a shape it can never produce is what the third asker exists to avoid
+/// (spec §19).
 #[derive(Debug)]
 pub struct QuestionnaireRequest {
     pub questions: Vec<UserQuestion>,
@@ -152,8 +119,10 @@ pub enum ConsoleRequest {
 pub enum FrontEndEvent {
     /// The user interrupted the run (Esc / Ctrl-C).
     Cancel,
-    /// Shift+Tab: enter plan mode, or leave it if already in it (spec §13).
-    TogglePlan,
+    /// Shift+Tab: cycle the permission mode `readonly → ask → auto → readonly`
+    /// (spec §12; `.scratch/todo-and-modes/spec.md` §1). A value on the session,
+    /// never an event: the loop applies it, and nothing is injected.
+    CycleMode,
     /// The user asked to leave.
     Quit,
 }
@@ -255,8 +224,8 @@ pub fn console() -> (ConsoleHandle, ConsolePort, ConsoleEvents) {
 
 /// The permission gate's port, answered through the front end (spec §12).
 ///
-/// The two questions the gate can ask are exactly the two [`Question`]s: the
-/// gate's `Ask`, and the plan-mode gesture's "this file already exists".
+/// One question travels here — the gate's `Ask` — on the one keyboard this front
+/// end already owns.
 pub struct ConsoleAsker {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
 }
@@ -272,33 +241,23 @@ impl ConsoleAsker {
         Self::new(handle.requests.clone())
     }
 
-    async fn put(&self, question: Question) -> AnswerChoice {
+    async fn put(&self, request: PermissionRequest) -> Answer {
         let (reply, answer) = oneshot::channel();
         if self
             .requests
-            .send(ConsoleRequest::Ask(AskRequest { question, reply }))
+            .send(ConsoleRequest::Ask(AskRequest { request, reply }))
             .is_err()
         {
-            return AnswerChoice::Permission(Answer::Deny);
+            return Answer::Deny;
         }
-        answer
-            .await
-            .unwrap_or(AnswerChoice::Permission(Answer::Deny))
+        answer.await.unwrap_or(Answer::Deny)
     }
 }
 
 #[async_trait]
 impl Asker for ConsoleAsker {
     async fn ask(&self, request: &PermissionRequest) -> Answer {
-        self.put(Question::Permission(request.clone()))
-            .await
-            .as_permission()
-    }
-
-    async fn ask_plan_conflict(&self, path: &std::path::Path) -> PlanConflict {
-        self.put(Question::PlanConflict(path.to_path_buf()))
-            .await
-            .as_plan()
+        self.put(request.clone()).await
     }
 }
 
@@ -384,7 +343,7 @@ pub fn spawn_plain_console_with(
                     let _ = reply.send(next_line(&mut reader, "> ").await);
                 }
                 ConsoleRequest::Ask(ask) => {
-                    let answer = answer_question(&mut reader, &ask.question).await;
+                    let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);
                 }
                 // The model's questionnaire, answered one line per question. On
@@ -432,32 +391,20 @@ async fn read_stdin_line() -> Option<String> {
     .flatten()
 }
 
-/// Put one question on the terminal and read the answer.
+/// Put one permission question on the terminal and read the answer.
 ///
 /// Anything that is not an explicit yes is read the non-acting way: an answer
 /// typed by accident must not approve a write.
-async fn answer_question(reader: &mut LineReader, question: &Question) -> AnswerChoice {
-    match question {
-        Question::Permission(request) => {
-            let prompt = crate::render::wording::permission_prompt_with_context(
-                &request.tool_name,
-                &crate::render::transcript::summarize_args(&request.args),
-                &request.reason,
-            );
-            match next_line(reader, &prompt).await.as_deref() {
-                Some("y") | Some("yes") => AnswerChoice::Permission(Answer::Allow),
-                Some("a") | Some("always") => AnswerChoice::Permission(Answer::AlwaysAllow),
-                _ => AnswerChoice::Permission(Answer::Deny),
-            }
-        }
-        Question::PlanConflict(path) => {
-            let prompt = crate::render::wording::plan_conflict_prompt(&path.display().to_string());
-            match next_line(reader, &prompt).await.as_deref() {
-                Some("o") | Some("overwrite") => AnswerChoice::Plan(PlanConflict::Overwrite),
-                Some("a") | Some("append") => AnswerChoice::Plan(PlanConflict::Append),
-                _ => AnswerChoice::Plan(PlanConflict::Keep),
-            }
-        }
+async fn answer_question(reader: &mut LineReader, request: &PermissionRequest) -> Answer {
+    let prompt = crate::render::wording::permission_prompt_with_context(
+        &request.tool_name,
+        &crate::render::transcript::summarize_args(&request.args),
+        &request.reason,
+    );
+    match next_line(reader, &prompt).await.as_deref() {
+        Some("y") | Some("yes") => Answer::Allow,
+        Some("a") | Some("always") => Answer::AlwaysAllow,
+        _ => Answer::Deny,
     }
 }
 

@@ -72,7 +72,7 @@ pub enum Message {
         /// rather than a speaker's words. Not part of the wire shape — the
         /// encoder ignores it — but it is what tells [`crate::context::trim`]
         /// that a `user` message is pinned wherever it sits, including one
-        /// injected mid-session when plan mode is entered (spec §10, §13).
+        /// injected mid-session when the user loads a skill body (spec §9, §10).
         #[serde(default)]
         injected: bool,
     },

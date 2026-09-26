@@ -17,10 +17,9 @@
 //!
 //! - the **circuit breaker** short-circuits a hard `Deny` before any rule is
 //!   evaluated, so no allow and no hook can flip it;
-//! - a **mode's floor** (`readonly` denies every non-read-only call, `plan`
-//!   denies everything but `PLAN.md`) cannot be lowered by a rule, while a
-//!   mode's *default* can — which is what makes "always allow" work in `ask`
-//!   mode.
+//! - a **mode's floor** (`readonly` denies every non-read-only call) cannot be
+//!   lowered by a rule, while a mode's *default* can — which is what makes
+//!   "always allow" work in `ask` mode.
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -52,10 +51,12 @@ const PROTECTED_DIRS: &[&str] = &[".git", ".ssh"];
 /// be committed.
 const ENV_TEMPLATE_SUFFIXES: &[&str] = &[".example", ".sample", ".template"];
 
-/// The file plan mode exists to produce, in the project root (spec §13).
-pub const PLAN_FILE_NAME: &str = "PLAN.md";
-
-/// The permission modes.
+/// The permission modes, in the order the gesture cycles them.
+///
+/// Three rungs, and the order is the cycle: `readonly` is the tightest, `auto`
+/// the loosest, and one press of `Shift+Tab` moves to the next (spec §1 of
+/// `.scratch/todo-and-modes`). A mode is the session's stance on writes, not a
+/// plan: the thing that used to be the fourth rung is the model's `todo` tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mode {
     /// Any non-read-only call is denied; there are no write exemptions.
@@ -65,11 +66,6 @@ pub enum Mode {
     /// Allowed by default. **Not** "permissions skipped": the breaker, the
     /// `.env` floor and every rule still apply.
     Auto,
-    /// The hard plan mode: like [`Mode::Readonly`], except that a call whose
-    /// **whole** write set is the project-root `PLAN.md` is allowed. The
-    /// difference between the two modes is that one exemption and nothing else
-    /// (spec §13).
-    Plan,
 }
 
 /// A mode's standing verdict for one effect.
@@ -84,25 +80,41 @@ struct Stance {
 }
 
 impl Mode {
-    /// The wire and CLI spelling of the mode.
+    /// The wire and CLI spelling of the mode. This is also what `config.toml`
+    /// writes in `[permissions] mode`, and the only spelling that parses.
     pub fn as_str(self) -> &'static str {
         match self {
             Mode::Readonly => "readonly",
             Mode::Ask => "ask",
             Mode::Auto => "auto",
-            Mode::Plan => "plan",
         }
     }
 
-    /// The mode's stance on this call. Only `readonly` has an unconditional
-    /// floor, and only `plan` looks past the effect at the call's whole shape —
-    /// its floor is a predicate (`not` the plan file) rather than a constant, so
-    /// one narrow exemption survives it.
+    /// The mode a spelling names, or `None` when it names none.
     ///
-    /// The stance is a function of the call rather than of its effect alone for
-    /// exactly that reason: the exemption has to be a conjunct inside the deny,
-    /// because in a "deny beats allow, specificity ignored" algebra a narrow
-    /// allow rule could never beat the mode's own deny (spec §12).
+    /// One parser for both entry points — the configuration table and the
+    /// `--mode` flag — so "which words are modes" cannot be answered twice.
+    pub fn parse(word: &str) -> Option<Mode> {
+        [Mode::Readonly, Mode::Ask, Mode::Auto]
+            .into_iter()
+            .find(|mode| mode.as_str() == word)
+    }
+
+    /// The next mode in the cycle: `readonly → ask → auto → readonly`.
+    ///
+    /// One step per press of `Shift+Tab`. Three presses therefore return a
+    /// session to the mode it started in, which is what makes the gesture a
+    /// cycle rather than a ladder with a top.
+    pub fn next(self) -> Mode {
+        match self {
+            Mode::Readonly => Mode::Ask,
+            Mode::Ask => Mode::Auto,
+            Mode::Auto => Mode::Readonly,
+        }
+    }
+
+    /// The mode's stance on this call. Only `readonly` has a floor, and it is
+    /// unconditional: what the mode denies, no rule may allow.
     fn stance(self, call: &Call<'_>) -> Stance {
         match (self, call.effect) {
             (Mode::Readonly, Effect::ReadOnly) => Stance {
@@ -130,22 +142,17 @@ impl Mode {
                 floor: None,
                 reason: "mode auto: allowed by default",
             },
-            (Mode::Plan, Effect::ReadOnly) => Stance {
-                default: Decision::Allow,
-                floor: None,
-                reason: "mode plan: reads are allowed",
-            },
-            (Mode::Plan, _) if is_plan_write(call) => Stance {
-                default: Decision::Allow,
-                floor: None,
-                reason: "mode plan: PLAN.md is the one write this mode allows",
-            },
-            (Mode::Plan, _) => Stance {
-                default: Decision::Deny,
-                floor: Some(Decision::Deny),
-                reason: "mode plan: only PLAN.md may be written (leave plan mode to change anything else)",
-            },
         }
+    }
+}
+
+impl Default for Mode {
+    /// `ask` is the mode a session starts in when nothing says otherwise: writes
+    /// ask, reads are allowed. It is the default of `[permissions] mode` as well,
+    /// and having one answer for both is why this impl exists rather than a literal
+    /// at each front end (spec §12).
+    fn default() -> Self {
+        Mode::Ask
     }
 }
 
@@ -203,8 +210,8 @@ impl Subject {
 /// The scope of a rule: a predicate over the call, not a name matcher.
 ///
 /// Because a scope can look at the whole call (its effect, its write set, its
-/// argv), a condition like "not read-only **and** the write set is not exactly
-/// `PLAN.md`" is expressible directly, instead of a broad deny fighting a narrow
+/// argv), a condition like "not read-only **and** the write set is exactly this
+/// set" is expressible directly, instead of a broad deny fighting a narrow
 /// allow on a specificity axis that does not exist here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
@@ -338,7 +345,7 @@ impl Policy {
         self.rules.push(rule);
     }
 
-    /// Swap the mode, keeping the rules. This is the plan-mode gesture's one
+    /// Swap the mode, keeping the rules. This is the mode-cycle gesture's one
     /// effect on the policy: a value, never an event (spec §12).
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
@@ -727,17 +734,6 @@ fn is_env_file(path: &Path) -> bool {
     name == ".env" || name.starts_with(".env.") || name.ends_with(".env")
 }
 
-/// Whether this call is plan mode's one write exemption: an ordinary path write
-/// whose **entire** write set is the project-root `PLAN.md` (spec §13).
-///
-/// The whole-set shape is the point. A narrower "writes include PLAN.md" test
-/// would let a call that also writes somewhere else borrow the exemption — the
-/// way through that [`write_set_equals`] exists to close — and it is also why
-/// `Exclusive` can never qualify: a shell has no write set to be equal to.
-fn is_plan_write(call: &Call<'_>) -> bool {
-    write_set_equals(call, &[call.cwd.join(PLAN_FILE_NAME)])
-}
-
 /// `PathSet` compares the **write** set exactly, and only for a `WritePaths`
 /// call: `Exclusive` has no path set to be equal to, so it can never borrow a
 /// path-shaped exemption.
@@ -843,37 +839,11 @@ pub enum Answer {
     Deny,
 }
 
-/// What to do about a `PLAN.md` that is already there when plan mode is entered
-/// (spec §13). Three answers rather than a yes/no, because "I already have a
-/// plan" has three sensible outcomes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlanConflict {
-    /// Clear the file, so the plan about to be written is a fresh one. The only
-    /// answer with a file effect, and the only destructive one.
-    Overwrite,
-    /// Keep the file and extend it.
-    Append,
-    /// Keep the file and treat it as the plan already in force.
-    Keep,
-}
-
 /// The port the loop asks through. A headless session injects none, and the
 /// loop downgrades the gate's `Ask` to `Deny`; an interactive renderer injects
 /// an implementation that reads the keyboard and answers.
-///
-/// Two questions live behind one port because both come from the same keyboard:
-/// the permission gate's `Ask`, and the plan-mode gesture's "this file already
-/// exists". A front end implements both or it cannot answer for the user.
 #[async_trait]
 pub trait Asker: Send + Sync {
     /// Ask about one call and return the user's answer.
     async fn ask(&self, request: &PermissionRequest) -> Answer;
-
-    /// Ask what to do about an existing plan file when plan mode is entered.
-    ///
-    /// There is no downgrade here the way there is for `Ask`: a gesture only
-    /// happens interactively, so a caller with no front end chooses before it
-    /// asks (the front end's absence, not this method, is where "keep the file"
-    /// comes from).
-    async fn ask_plan_conflict(&self, path: &Path) -> PlanConflict;
 }

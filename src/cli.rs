@@ -155,6 +155,9 @@ struct InteractiveArgs {
     resume: bool,
     config: Option<PathBuf>,
     model: Option<String>,
+    /// `--mode readonly|ask|auto`: the permission mode for this run, overriding
+    /// `[permissions] mode` (spec §12). Absent means "whatever the file says".
+    mode: Option<Mode>,
     cwd: Option<PathBuf>,
 }
 
@@ -166,7 +169,7 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
             "--plain" => parsed.plain = true,
             "--tui" => parsed.tui = true,
             "--continue" | "-c" => parsed.resume = true,
-            flag @ ("--config" | "--model" | "--cwd") => {
+            flag @ ("--config" | "--model" | "--mode" | "--cwd") => {
                 let flag = flag.to_owned();
                 index += 1;
                 let value = args
@@ -175,6 +178,15 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
                 match flag.as_str() {
                     "--config" => parsed.config = Some(PathBuf::from(value)),
                     "--model" => parsed.model = Some(value.clone()),
+                    // Parsed here rather than in the assembly: a mode the gate does
+                    // not know is a typo, and a typo is worth refusing before a
+                    // provider is built or a session is created.
+                    "--mode" => {
+                        parsed.mode = Some(
+                            Mode::parse(value)
+                                .ok_or_else(|| render::wording::unknown_mode(value))?,
+                        )
+                    }
                     "--cwd" => parsed.cwd = Some(PathBuf::from(value)),
                     _ => unreachable!(),
                 }
@@ -298,14 +310,19 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
 
+    // The mode this run starts in: the flag over the file (spec §12). Resolved
+    // once, here, because three things need the same answer — the policy the gate
+    // runs under, the banner and the status row.
+    let mode = parsed.mode.unwrap_or(config.mode);
+
     // The keyboard's two ends: the loop's handle and gesture receiver, and the
     // port the selected renderer (or the plain line reader) serves it through.
     let (console, port, mut events) = render::console();
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
         // The header and the panel display these; none of them rides the event
-        // stream, and the one value that does change at runtime — the mode — is
-        // deliberately absent (the stream carries both of its transitions).
+        // stream. The mode is one of them: it is a session value the front end
+        // shows and the gesture moves, not something the stream carries any more.
         // The window is the model's input budget. The provider above already
         // resolved this same table, so the failure below is belt-and-braces: it
         // keeps an unregistered model a startup error here too, rather than a
@@ -322,6 +339,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             session_dir: stored.dir.display().to_string(),
             model: model.clone(),
             context_window: crate::context::usable_input(&caps),
+            mode,
             budget_limit: session_config.budget.limit,
             // A single-agent session speaks as its profile, so that is the whole
             // roster the transcript's name colours have to place (票 07 §1).
@@ -364,9 +382,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             // every dynamically declared tool (spec §14).
             tools: tools::with_dynamic(&config.tools, questions.is_some()),
             locks: PathLocks::new(),
-            // Interactive sessions start in `ask`: writes ask, reads are allowed
+            // The mode the user chose: `[permissions] mode`, or `--mode` over it
             // (spec §12). A headless caller gets no answerer and downgrades.
-            policy: Policy::for_mode(Mode::Ask),
+            policy: Policy::for_mode(mode),
             asker: Some(asker),
             questions,
             hook: None,
@@ -617,6 +635,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             // (`debater_label`); this row is about models, so it shows models.
             model: render::wording::discussion_pair(&pair[0].model, &pair[1].model),
             context_window: crate::context::usable_input(&caps),
+            // `--mode` belongs to the interactive path; a discussion reads the file.
+            mode: config.mode,
             // `session_config` copies `[budget]` verbatim, so the file's value is the
             // session's.
             budget_limit: config.budget.limit,
@@ -660,7 +680,9 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             session_id: stored.id.clone(),
             tools: tools::with_dynamic(&config.tools, questions.is_some()),
             locks: PathLocks::new(),
-            policy: Policy::for_mode(Mode::Ask),
+            // The file's mode: a debater asks through the same gate as any session,
+            // and the roster shares one policy (spec §12, §15).
+            policy: Policy::for_mode(config.mode),
             asker: Some(asker),
             questions,
             hook: None,
@@ -972,6 +994,9 @@ async fn discuss_in_session(
     ));
 
     let signal = harness.cancel_signal();
+    // The mode handle rides along for the same reason the cancel signal does: the run
+    // future borrows the harness, and the gesture has to reach the policy anyway.
+    let modes = harness.mode_cycle();
     // The future borrows the harness for as long as it runs, so it lives in its own
     // scope: the notice below needs the harness back.
     let outcome = {
@@ -990,9 +1015,12 @@ async fn discuss_in_session(
                     // End of input or an explicit quit lets the discussion wind down the
                     // same way a cancel does, so the stream still gets its ending.
                     Some(FrontEndEvent::Quit) | None => signal.cancel(),
-                    // Plan mode is a session gesture, and the session is mid-discussion:
-                    // it waits until the rounds are over.
-                    Some(FrontEndEvent::TogglePlan) => {}
+                    // A mode is a value the gate reads per call, so the press is
+                    // applied at once even mid-discussion: the handle exists because
+                    // the run future borrows the harness (spec §12).
+                    Some(FrontEndEvent::CycleMode) => {
+                        modes.cycle();
+                    }
                 },
             }
         }
@@ -1016,6 +1044,7 @@ async fn run_discussion(
     question: &str,
 ) -> Result<crate::agent::DiscussionOutcome, crate::Error> {
     let signal = harness.cancel_signal();
+    let modes = harness.mode_cycle();
     let mut run = Box::pin(harness.discuss(question));
     loop {
         tokio::select! {
@@ -1030,9 +1059,11 @@ async fn run_discussion(
                 // End of input or an explicit quit lets the discussion wind down the
                 // same way a cancel does, so the stream still gets its ending.
                 Some(FrontEndEvent::Quit) | None => signal.cancel(),
-                // Plan mode is a session gesture: a discussion has one question and no
-                // prompt to return to, so there is nothing here to toggle it for.
-                Some(FrontEndEvent::TogglePlan) => {}
+                // One policy covers all three participants, so this is the same
+                // gesture it is anywhere else (spec §12).
+                Some(FrontEndEvent::CycleMode) => {
+                    modes.cycle();
+                }
             },
         }
     }
@@ -1083,7 +1114,9 @@ async fn interactive_loop(
                 line = console.prompt() => break line,
                 event = events.recv() => match event {
                     Some(FrontEndEvent::Quit) | None => return ExitCode::SUCCESS,
-                    Some(FrontEndEvent::TogglePlan) => toggle_plan(harness).await,
+                    Some(FrontEndEvent::CycleMode) => {
+                        harness.mode_cycle().cycle();
+                    }
                     Some(FrontEndEvent::Cancel) => {}
                 },
             }
@@ -1105,17 +1138,6 @@ async fn interactive_loop(
                 Ok(None) => {
                     harness.notice(&format!("fs-agent: {}", render::wording::nothing_to_undo()))
                 }
-                Err(error) => harness.notice(&format!(
-                    "fs-agent: {}",
-                    render::wording::error_report(&error)
-                )),
-            },
-            Submission::Plan => enter_plan(harness).await,
-            Submission::EndPlan => match harness.exit_plan_mode().await {
-                Ok(true) => {
-                    harness.notice(&format!("fs-agent: {}", render::wording::plan_exited()))
-                }
-                Ok(false) => {}
                 Err(error) => harness.notice(&format!(
                     "fs-agent: {}",
                     render::wording::error_report(&error)
@@ -1218,8 +1240,6 @@ enum Submission<'a> {
     Ignore,
     Quit,
     Undo,
-    Plan,
-    EndPlan,
     /// A first line that opens with `/` and names nothing known, with nothing but
     /// blank lines after it: a typo, and the one case the user is told about.
     Unknown(&'a str),
@@ -1248,8 +1268,8 @@ enum Submission<'a> {
 /// to send, so the loop asks again instead of starting a turn.
 ///
 /// The built-ins take no task, so they match only as the **whole** submission: a line
-/// after `/plan` must not be dropped on the floor. Such a submission falls through to
-/// the rules above — `/plan` names no skill, so with lines after it the whole thing is
+/// after `/undo` must not be dropped on the floor. Such a submission falls through to
+/// the rules above — `/undo` names no skill, so with lines after it the whole thing is
 /// read as a prompt, which at least shows the user what they sent.
 ///
 /// Leading slashes are all stripped (`//undo` reads as `undo`), which is how the old
@@ -1269,8 +1289,6 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
     match first {
         "/quit" | "/exit" if whole => Submission::Quit,
         "/undo" if whole => Submission::Undo,
-        "/plan" if whole => Submission::Plan,
-        "/endplan" if whole => Submission::EndPlan,
         _ if first.starts_with('/') => {
             let rest_of_line = first.trim_start_matches('/');
             let (name, inline) = match rest_of_line.split_once(char::is_whitespace) {
@@ -1323,6 +1341,7 @@ async fn run_one_turn(
     start: TurnStart<'_>,
 ) -> Result<(), crate::Error> {
     let signal = harness.cancel_signal();
+    let modes = harness.mode_cycle();
     let mut turn = Box::pin(async move {
         match start {
             TurnStart::Prompt(input) => harness.run_turn(input).await,
@@ -1342,40 +1361,13 @@ async fn run_one_turn(
                 // End of input or an explicit quit lets the turn wind down the
                 // same way a cancel does, so the stream still gets its ending.
                 Some(FrontEndEvent::Quit) | None => signal.cancel(),
-                Some(FrontEndEvent::TogglePlan) => {}
+                // The gate reads the policy per call, so this moves the stance of the
+                // call after this one — which is what "switch modes mid-turn" means.
+                Some(FrontEndEvent::CycleMode) => {
+                    modes.cycle();
+                }
             },
         }
-    }
-}
-
-/// Enter plan mode, reporting any failure on the front end.
-async fn enter_plan(harness: &mut Harness) {
-    let already = harness.mode() == Mode::Plan;
-    match harness.enter_plan_mode().await {
-        Ok(_) if !already => {
-            harness.notice(&format!("fs-agent: {}", render::wording::plan_entered()))
-        }
-        Ok(_) => {}
-        Err(error) => harness.notice(&format!(
-            "fs-agent: {}",
-            render::wording::error_report(&error)
-        )),
-    }
-}
-
-/// Shift+Tab: enter plan mode, or leave it if it is already on (spec §13).
-async fn toggle_plan(harness: &mut Harness) {
-    if harness.mode() == Mode::Plan {
-        match harness.exit_plan_mode().await {
-            Ok(true) => harness.notice(&format!("fs-agent: {}", render::wording::plan_exited())),
-            Ok(false) => {}
-            Err(error) => harness.notice(&format!(
-                "fs-agent: {}",
-                render::wording::error_report(&error)
-            )),
-        }
-    } else {
-        enter_plan(harness).await;
     }
 }
 
@@ -1551,10 +1543,10 @@ async fn probe_model(
             // that can only fail wastes a model call (spec §19).
             tools: tools::with_dynamic(&config.tools, false),
             locks: PathLocks::new(),
-            // The probe is headless and has no answerer, so the interactive
-            // default `ask` refuses writes rather than hanging on a question
+            // The probe is headless and has no answerer, so the configured mode's
+            // `ask` (the default) refuses writes rather than hanging on a question
             // nobody can see.
-            policy: Policy::for_mode(Mode::Ask),
+            policy: Policy::for_mode(config.mode),
             asker: None,
             questions: None,
             // Ticket 05 lands the mount points; wiring user-declared hooks into
@@ -2553,7 +2545,7 @@ fn print_sessions_help(out: &mut dyn Write) {
 
 #[cfg(test)]
 mod tests {
-    use super::{submission, Submission};
+    use super::{submission, Mode, Submission};
 
     /// The skills a session knows about in these tests.
     fn has_skill(name: &str) -> bool {
@@ -2581,8 +2573,6 @@ mod tests {
         assert_eq!(read("/quit"), Submission::Quit);
         assert_eq!(read("/exit"), Submission::Quit);
         assert_eq!(read("/undo"), Submission::Undo);
-        assert_eq!(read("/plan"), Submission::Plan);
-        assert_eq!(read("/endplan"), Submission::EndPlan);
         assert_eq!(read("  /quit  "), Submission::Quit, "trimmed, as before");
         assert_eq!(read("/nope"), Submission::Unknown("/nope"));
         assert_eq!(
@@ -2638,19 +2628,58 @@ mod tests {
 
     #[test]
     fn a_built_in_takes_no_task_so_a_line_after_it_is_not_dropped() {
-        // `/plan` followed by anything else is not the command: the lines after it must
+        // `/undo` followed by anything else is not the command: the lines after it must
         // not vanish, so the whole submission is read by the rules for a `/`-opening
-        // line — `/plan` names no skill, so it is a prompt.
+        // line — `/undo` names no skill, so it is a prompt.
         assert_eq!(
-            read("/plan\n把 X 改成 Y"),
-            Submission::Prompt("/plan\n把 X 改成 Y")
+            read("/undo\n把 X 改成 Y"),
+            Submission::Prompt("/undo\n把 X 改成 Y")
         );
-        assert_eq!(read("/plan"), Submission::Plan);
+        assert_eq!(read("/undo"), Submission::Undo);
         assert_eq!(
-            read("/plan  "),
-            Submission::Plan,
+            read("/undo  "),
+            Submission::Undo,
             "trailing blanks are fine"
         );
+    }
+
+    #[test]
+    fn a_retired_command_is_now_an_unknown_one() {
+        // `plan` and `endplan` were built-ins until the mode they controlled left
+        // (`.scratch/todo-and-modes`). Nothing is left to parse them, and the answer is
+        // the unknown-command text — which names the built-ins that do exist.
+        assert_eq!(read("/plan"), Submission::Unknown("/plan"));
+        assert_eq!(read("/endplan"), Submission::Unknown("/endplan"));
+    }
+
+    #[test]
+    fn the_mode_flag_parses_the_three_modes_and_refuses_the_rest() {
+        use super::parse_interactive;
+
+        let args = |words: &[&str]| {
+            parse_interactive(
+                &words
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        for (written, expected) in [
+            ("readonly", Mode::Readonly),
+            ("ask", Mode::Ask),
+            ("auto", Mode::Auto),
+        ] {
+            assert_eq!(args(&["--mode", written]).unwrap().mode, Some(expected));
+        }
+        assert_eq!(
+            args(&[]).unwrap().mode,
+            None,
+            "absent means the file decides"
+        );
+        let error = args(&["--mode", "plan"]).unwrap_err();
+        for word in ["plan", "readonly", "ask", "auto"] {
+            assert!(error.contains(word), "`{word}` is missing from: {error}");
+        }
     }
 
     #[test]

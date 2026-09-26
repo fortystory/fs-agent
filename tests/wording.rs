@@ -262,9 +262,15 @@ fn the_input_line_prompts_read_in_chinese() {
         wording::permission_prompt_with_context("write_file", "file_path=a.txt", "mode ask"),
         "权限询问：write_file（file_path=a.txt）？原因：mode ask [y] 允许 / [a] 总是允许 / [n] 拒绝 "
     );
-    assert_eq!(
-        wording::plan_conflict_prompt("/tmp/PLAN.md"),
-        "/tmp/PLAN.md 已存在：[o] 覆盖 / [a] 追加 / [k] 保留 "
+    // The three modes, in the words the status row and the banner use; the fourth
+    // one (`计划`) left with the mode itself (`.scratch/todo-and-modes`).
+    assert_eq!(wording::mode_label(Mode::Readonly), "只读");
+    assert_eq!(wording::mode_label(Mode::Ask), "询问");
+    assert_eq!(wording::mode_label(Mode::Auto), "自动");
+    assert_eq!(wording::mode_field(Mode::Auto), "模式 自动");
+    assert!(
+        wording::unknown_mode("plan").contains("plan"),
+        "the refusal quotes what was written"
     );
 }
 
@@ -278,11 +284,6 @@ fn a_question_has_a_title_a_body_and_a_row_of_choices() {
         "bash（command=rm -rf /）"
     );
     assert_eq!(wording::permission_call("read_file", ""), "read_file");
-    assert_eq!(wording::plan_conflict_title(), "计划文件冲突");
-    assert_eq!(
-        wording::plan_conflict_body("/tmp/PLAN.md"),
-        "/tmp/PLAN.md 已存在"
-    );
     assert_eq!(wording::paste_title(), "粘贴确认");
     assert_eq!(wording::paste_body(120_000), "粘贴 120000 字符");
     assert_eq!(wording::clear_draft_title(), "清空输入");
@@ -295,10 +296,6 @@ fn a_question_has_a_title_a_body_and_a_row_of_choices() {
     assert_eq!(
         wording::choices_text(&wording::PERMISSION_CHOICES),
         "[y] 允许 / [a] 总是允许 / [n] 拒绝"
-    );
-    assert_eq!(
-        wording::choices_text(&wording::PLAN_CHOICES),
-        "[o] 覆盖 / [a] 追加 / [k] 保留"
     );
     assert_eq!(
         wording::choices_text(&wording::PASTE_CHOICES),
@@ -368,7 +365,7 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
         "enter 发送",
         "ctrl-j 换行",
         "esc 取消",
-        "shift+tab 计划",
+        "shift+tab 模式",
         "PgUp/PgDn 滚动",
         wording::EXIT_HINT_IDLE,
     ] {
@@ -394,7 +391,7 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     // side of that ladder is asserted in `tests/render_layout.rs`.
     assert_eq!(
         wording::status_line(false, 80),
-        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c/ctrl-d 退出"
+        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
     // Narrower than any hint: the way out is all that is left.
     assert_eq!(wording::status_line(true, 8), wording::EXIT_HINT_BUSY);
@@ -459,15 +456,15 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
     );
     assert_eq!(
         wording::status_line(false, 80),
-        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c/ctrl-d 退出"
+        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
     // Busy swaps the word and the way out: at 60 the hint that loses is still
-    // `shift+tab 计划`, and `ctrl-c 退出` — without `ctrl-d` — is there.
+    // `shift+tab 模式`, and `ctrl-c 退出` — without `ctrl-d` — is there.
     assert_eq!(
         wording::status_line(true, 60),
         "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
-    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出";
+    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出";
     assert_eq!(wording::status_line(false, 120), full);
     // At the maximum the line is stable: there is nothing left to buy.
     assert_eq!(wording::status_line(false, 174), full);
@@ -595,8 +592,8 @@ fn a_banner_labels_the_model_mode_and_session_in_chinese() {
         "fs-agent：会话 s-1 · 模型 kimi-k3 · 模式 询问 · /tmp/ws"
     );
     assert_eq!(
-        wording::banner("s-1", "kimi-k3", Mode::Plan, "/tmp/ws", true),
-        "fs-agent：会话 s-1 · 模型 kimi-k3 · 模式 计划 · /tmp/ws（已继续）"
+        wording::banner("s-1", "kimi-k3", Mode::Auto, "/tmp/ws", true),
+        "fs-agent：会话 s-1 · 模型 kimi-k3 · 模式 自动 · /tmp/ws（已继续）"
     );
 }
 
@@ -605,19 +602,17 @@ fn interactive_feedback_reads_in_chinese() {
     assert_eq!(wording::nothing_to_undo(), "没有可撤销的修改");
     assert_eq!(
         wording::unknown_command("/nope", &[]),
-        "未知命令 /nope（可用：/undo、/plan、/endplan、/discuss、/quit，或直接输入 /<技能名>）"
+        "未知命令 /nope（可用：/undo、/discuss、/quit，或直接输入 /<技能名>）"
     );
     assert_eq!(
         wording::unknown_command("/nope", &["ask-matt", "release"]),
-        "未知命令 /nope（可用：/undo、/plan、/endplan、/discuss、/quit；技能：/ask-matt、/release）"
+        "未知命令 /nope（可用：/undo、/discuss、/quit；技能：/ask-matt、/release）"
     );
     assert_eq!(wording::skill_loaded("ask-matt"), "已加载技能 ask-matt");
     assert_eq!(
         wording::skill_started("ask-matt"),
         "已加载技能 ask-matt，按技能正文开始"
     );
-    assert_eq!(wording::plan_entered(), "已进入计划模式");
-    assert_eq!(wording::plan_exited(), "已退出计划模式");
 }
 
 #[test]
@@ -646,7 +641,10 @@ fn the_long_help_texts_are_chinese_and_keep_their_structure() {
 
     let interactive = wording::help_interactive();
     assert!(interactive.contains("--plain"), "{interactive}");
-    assert!(interactive.contains("硬计划模式"), "{interactive}");
+    // The mode entry points the help has to name: the flag, and the gesture.
+    assert!(interactive.contains("--mode MODE"), "{interactive}");
+    assert!(interactive.contains("只读 / 询问 / 自动"), "{interactive}");
+    assert!(interactive.contains("Shift+Tab"), "{interactive}");
 
     // The discussion has a front end of its own now, and both helps say so.
     assert!(main.contains("fs-agent discuss"), "{main}");

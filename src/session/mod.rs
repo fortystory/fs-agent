@@ -255,7 +255,7 @@ impl Session {
         self.policy.lock().expect("policy mutex poisoned").mode()
     }
 
-    /// Swap the session's mode, keeping its rules. The plan-mode gesture's one
+    /// Swap the session's mode, keeping its rules. The mode-cycle gesture's one
     /// effect on the policy — a value, never an event, which is why `--continue`
     /// starts from the configured mode (spec §12).
     pub fn set_mode(&self, mode: Mode) {

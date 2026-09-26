@@ -84,14 +84,14 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             // rules and the skills catalog — are **one** `user` message (spec
             // §10, decision 09: "与 AGENTS.md 同一条"), so a run of them merges
             // into a single message rather than becoming consecutive same-role
-            // messages. A mid-session injection (plan mode, ticket 15) has
-            // history before it and so stays its own message.
+            // messages. A mid-session injection (a skill body the user
+            // loaded, spec §9) has history before it and so stays its own message.
             EventPayload::ContextInjected { source, content } => {
                 // A persona belongs to the participant it describes: it is that
                 // debater's own instruction, and the other side — which it is arguing
                 // against — has no business reading it. Every other injection is the
                 // user speaking to the whole session (the project rules, the skills
-                // catalog, plan mode), so it reaches everyone.
+                // catalog, a loaded skill body), so it reaches everyone.
                 if matches!(source, ContextSource::Persona(_)) && !mine {
                     continue;
                 }
@@ -219,9 +219,9 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
                     flush_others(&mut messages, &mut others, &mut head_emitted);
                     // Named by the dispatcher, and so **not** name-less: the
                     // pinned head is the run of leading nameless `user` messages,
-                    // and a mid-session injection (plan mode, ticket 15) has to
-                    // stay its own message rather than merge into the brief
-                    // (spec §5, §10).
+                    // and a mid-session injection (a skill body the user loaded)
+                    // has to stay its own message rather than merge into the brief
+                    // (spec §5, §9, §10).
                     messages.push(Message::User {
                         content: brief.clone(),
                         name: Some(sanitize_name(parent.as_str())),

@@ -10,8 +10,8 @@
 use fs_agent::render::editor;
 use fs_agent::render::width::text_columns;
 use fs_agent::render::{
-    draw_frame, CatalogEntry, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
-    PULSE_PALETTE,
+    draw_frame, CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent, SessionFacts,
+    TuiState, PULSE_PALETTE,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
@@ -24,6 +24,9 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
+        // The mode the session was assembled in: the status row's `模式 …` field. A
+        // test that means another one overrides it in its own facts.
+        mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: Vec::new(),
     }
@@ -491,7 +494,7 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             "enter 发送",
             "ctrl-j 换行",
             "esc 取消",
-            "shift+tab 计划",
+            "shift+tab 模式",
             "ctrl-c/ctrl-d 退出",
         ],
         "four hints and the way out, and no state word"
@@ -1087,7 +1090,7 @@ fn only_the_tab_labels_answer_a_click() {
 #[test]
 fn a_question_keeps_the_tabs_from_answering() {
     use fs_agent::permissions::Answer;
-    use fs_agent::render::{wording, AnswerChoice};
+    use fs_agent::render::wording;
 
     // A question owns the pointer outright: a click on the tab bar reaches the
     // question's handler and stops there. It must not switch the page, and — the trap
@@ -1119,7 +1122,7 @@ fn a_question_keeps_the_tabs_from_answering() {
     state.key(Key::Char('y'));
     assert_eq!(
         answer.try_recv().unwrap(),
-        AnswerChoice::Permission(Answer::Allow),
+        Answer::Allow,
         "the question can still be answered"
     );
 }
@@ -2364,20 +2367,20 @@ fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits
 /// The loop asking about a write, as it would through the console channel.
 fn ask_permission() -> (
     fs_agent::render::ConsoleRequest,
-    tokio::sync::oneshot::Receiver<fs_agent::render::AnswerChoice>,
+    tokio::sync::oneshot::Receiver<fs_agent::permissions::Answer>,
 ) {
     use fs_agent::permissions::PermissionRequest;
-    use fs_agent::render::{AnswerChoice, AskRequest, ConsoleRequest, Question};
-    let (tx, rx) = tokio::sync::oneshot::channel::<AnswerChoice>();
+    use fs_agent::render::{AskRequest, ConsoleRequest};
+    let (tx, rx) = tokio::sync::oneshot::channel::<fs_agent::permissions::Answer>();
     (
         ConsoleRequest::Ask(AskRequest {
-            question: Question::Permission(PermissionRequest {
+            request: PermissionRequest {
                 request_id: "r-1".to_owned(),
                 tool_call_id: "c-1".to_owned(),
                 tool_name: "write_file".to_owned(),
                 args: serde_json::json!({"path": "a.rs"}),
                 reason: "mode ask".to_owned(),
-            }),
+            },
             reply: tx,
         }),
         rx,
@@ -2523,15 +2526,15 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
 #[test]
 fn a_long_command_still_says_what_it_would_do() {
     use fs_agent::permissions::PermissionRequest;
-    use fs_agent::render::{AnswerChoice, AskRequest, Question};
+    use fs_agent::render::AskRequest;
 
     // The complaint this row answers: a wall of shell is not something a person can
     // read, so the question says what the call is *for* — in the same words the folded
     // transcript line uses — before the wall itself.
     let mut state = state();
-    let (tx, _rx) = tokio::sync::oneshot::channel::<AnswerChoice>();
+    let (tx, _rx) = tokio::sync::oneshot::channel::<fs_agent::permissions::Answer>();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
@@ -2539,7 +2542,7 @@ fn a_long_command_still_says_what_it_would_do() {
                 "command": "for f in $(git ls-files '*.rs'); do grep -L 'mod tests' \"$f\"; done | xargs wc -l | sort -n",
             }),
             reason: "mode ask: a write asks the user".to_owned(),
-        }),
+        },
         reply: tx,
     }));
 
@@ -2561,6 +2564,63 @@ fn a_long_command_still_says_what_it_would_do() {
         text.contains("git ls-files"),
         "and the command is still there to read:\n{text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The mode cycle (`.scratch/todo-and-modes/spec.md` §1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shift_tab_cycles_the_status_row_through_the_three_modes_and_back() {
+    // The gesture at the frame: one press steps the mode the status row shows, and
+    // three presses return the session to the mode assembly gave it. The row is the
+    // only place the mode is visible — the plan-mode overlay and its instruction are
+    // gone with the mode itself — so this frame is the whole of the user story
+    // "see which mode I am in while I work".
+    let mut state = idle();
+    let first = screen(120, 24, &mut state).join("\n");
+    assert!(first.contains("模式 询问"), "the assembled mode: {first}");
+
+    for expected in ["模式 自动", "模式 只读", "模式 询问"] {
+        state.key(Key::BackTab);
+        let text = screen(120, 24, &mut state).join("\n");
+        assert!(text.contains(expected), "the row shows {expected}: {text}");
+    }
+    assert_eq!(
+        state.take_events(),
+        vec![
+            FrontEndEvent::CycleMode,
+            FrontEndEvent::CycleMode,
+            FrontEndEvent::CycleMode
+        ],
+        "one press, one gesture for the loop"
+    );
+}
+
+#[test]
+fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
+    // `--mode readonly` (or `[permissions] mode`) has to be on the row from the first
+    // frame. A row that always started at 询问 would be a lie about the gate the user
+    // just configured.
+    let mut state = TuiState::new(SessionFacts {
+        mode: fs_agent::permissions::Mode::Readonly,
+        ..facts()
+    });
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("模式 只读"), "{text}");
+}
+
+#[test]
+fn no_key_opens_a_plan_mode_any_more() {
+    // The gesture that used to exist leaves nothing behind: `Shift+Tab` steps the
+    // permission mode, and no key draws a plan overlay or injects an instruction
+    // (`.scratch/todo-and-modes/spec.md` §1).
+    let mut state = idle();
+    state.key(Key::BackTab);
+    let text = screen(120, 24, &mut state).join("\n");
+    for gone in ["计划", "PLAN.md", "硬计划"] {
+        assert!(!text.contains(gone), "`{gone}` is gone: {text}");
+    }
 }
 
 // --- the `/` menu ----------------------------------------------------------
@@ -2865,20 +2925,15 @@ fn there_is_no_menu_before_the_loop_has_said_what_exists() {
 
 #[test]
 fn every_question_kind_takes_the_overlay() {
-    use fs_agent::render::{AskRequest, ConsoleRequest, Key, Question};
-    use std::path::PathBuf;
+    use fs_agent::render::Key;
 
-    // A plan-mode conflict, which the loop asks about too.
-    let mut plan = state();
-    let (tx, _rx) = tokio::sync::oneshot::channel();
-    plan.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::PlanConflict(PathBuf::from("/tmp/PLAN.md")),
-        reply: tx,
-    }));
-    let text = screen(120, 24, &mut plan).join("\n");
-    assert!(text.contains("计划文件冲突"), "the title: {text}");
-    assert!(text.contains("/tmp/PLAN.md 已存在"), "{text}");
-    assert!(text.contains("[o] 覆盖"), "with its keys: {text}");
+    // The loop's permission question.
+    let mut asking = state();
+    let (ask, _answer) = ask_permission();
+    asking.request(ask);
+    let text = screen(120, 24, &mut asking).join("\n");
+    assert!(text.contains("权限询问："), "the title: {text}");
+    assert!(text.contains("[y] 允许"), "with its keys: {text}");
 
     // An oversized paste.
     let mut paste = state();
@@ -2904,7 +2959,7 @@ fn every_question_kind_takes_the_overlay() {
 #[test]
 fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
     use fs_agent::permissions::Answer;
-    use fs_agent::render::{AnswerChoice, ConsoleRequest, Key};
+    use fs_agent::render::{ConsoleRequest, Key};
 
     let mut state = state();
     let (tx, mut submitted) = tokio::sync::oneshot::channel();
@@ -2915,10 +2970,7 @@ fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
     // `x` is not one of the answers, so the safe one is taken — and the draft, which
     // the question is covering, never sees the key.
     state.key(Key::Char('x'));
-    assert_eq!(
-        asked.try_recv().unwrap(),
-        AnswerChoice::Permission(Answer::Deny)
-    );
+    assert_eq!(asked.try_recv().unwrap(), Answer::Deny);
     state.key(Key::Enter);
     // The draft is empty, so the line that reaches the loop is empty too — and an
     // empty line is a line, not the end of input (the loop discards it).
@@ -3009,7 +3061,7 @@ fn frame_and_cursor(width: u16, height: u16, state: &mut TuiState) -> (Buffer, O
 #[test]
 fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
     use fs_agent::permissions::Answer;
-    use fs_agent::render::{AnswerChoice, Key};
+    use fs_agent::render::Key;
 
     let mut state = state();
     for ch in "hi".chars() {
@@ -3024,10 +3076,7 @@ fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
     assert_eq!(during, None, "a question takes the keyboard, so no cursor");
 
     state.key(Key::Char('y'));
-    assert_eq!(
-        asked.try_recv().unwrap(),
-        AnswerChoice::Permission(Answer::Allow)
-    );
+    assert_eq!(asked.try_recv().unwrap(), Answer::Allow);
     let (_, after) = frame_and_cursor(120, 24, &mut state);
     assert_eq!(after, Some(before), "and it comes back where it was");
 }
@@ -3396,6 +3445,9 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         session_dir: dir.display().to_string(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
+        // The mode the session was assembled in: the status row's `模式 …` field. A
+        // test that means another one overrides it in its own facts.
+        mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: vec!["kimi".to_owned()],
     });
@@ -3570,18 +3622,9 @@ fn click_in_row(state: &mut TuiState, width: u16, height: u16, row: u16, needle:
 #[test]
 fn a_permission_question_is_answered_by_clicking_a_button() {
     for (label, expected) in [
-        (
-            "[y] 允许",
-            fs_agent::render::AnswerChoice::Permission(fs_agent::permissions::Answer::Allow),
-        ),
-        (
-            "[a] 总是允许",
-            fs_agent::render::AnswerChoice::Permission(fs_agent::permissions::Answer::AlwaysAllow),
-        ),
-        (
-            "[n] 拒绝",
-            fs_agent::render::AnswerChoice::Permission(fs_agent::permissions::Answer::Deny),
-        ),
+        ("[y] 允许", fs_agent::permissions::Answer::Allow),
+        ("[a] 总是允许", fs_agent::permissions::Answer::AlwaysAllow),
+        ("[n] 拒绝", fs_agent::permissions::Answer::Deny),
     ] {
         let mut state = state_with_roster(&["kimi"]);
         let (request, mut answer) = ask_permission();
@@ -3620,22 +3663,7 @@ fn clicking_a_question_body_or_border_does_nothing() {
 }
 
 #[test]
-fn a_plan_conflict_and_the_renderer_confirmations_answer_by_click() {
-    // Plan conflict: `[o] 覆盖` is the destructive answer, and a click runs it.
-    let mut state = state_with_roster(&["kimi"]);
-    let (reply, mut answer) = tokio::sync::oneshot::channel();
-    state.request(ConsoleRequest::Ask(fs_agent::render::AskRequest {
-        question: fs_agent::render::Question::PlanConflict(std::path::PathBuf::from(
-            "/tmp/plan.md",
-        )),
-        reply,
-    }));
-    click_text(&mut state, 120, 24, "[o] 覆盖");
-    assert!(matches!(
-        answer.try_recv().expect("the answer went out"),
-        fs_agent::render::AnswerChoice::Plan(fs_agent::permissions::PlanConflict::Overwrite)
-    ));
-
+fn the_renderer_confirmations_answer_by_click() {
     // The exit confirmation is the renderer's own: clicking `[y] 退出` quits.
     let (mut idle, _line) = {
         let mut state = state_with_roster(&["kimi"]);
@@ -4132,6 +4160,9 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         session_dir: dir.display().to_string(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
+        // The mode the session was assembled in: the status row's `模式 …` field. A
+        // test that means another one overrides it in its own facts.
+        mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: vec!["kimi".to_owned()],
     });
@@ -4747,16 +4778,16 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
 /// A permission question about a shell command, the way the loop asks one.
 fn ask_bash(command: &str) -> fs_agent::render::ConsoleRequest {
     use fs_agent::permissions::PermissionRequest;
-    use fs_agent::render::{AskRequest, Question};
+    use fs_agent::render::AskRequest;
     let (reply, _answer) = tokio::sync::oneshot::channel();
     ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
             args: serde_json::json!({ "command": command }),
             reason: "mode ask".to_owned(),
-        }),
+        },
         reply,
     })
 }

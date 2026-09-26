@@ -10,12 +10,22 @@ use fs_agent::events::{
 };
 use fs_agent::permissions::{Answer, PermissionRequest};
 use fs_agent::render::{
-    pane, render_block_uncoloured, AnswerChoice, AskRequest, Block, ConsoleRequest, DeltaKind,
-    FrontEndEvent, Key, Question, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript,
-    TuiState,
+    pane, render_block_uncoloured, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
+    Key, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
 };
 use ratatui::buffer::CellWidth;
 use ratatui::style::{Color, Modifier};
+
+/// One permission question about `tool_name`, as the loop hands it to the front end.
+fn permission_request(tool_name: &str) -> PermissionRequest {
+    PermissionRequest {
+        request_id: "r-1".to_owned(),
+        tool_call_id: "c-1".to_owned(),
+        tool_name: tool_name.to_owned(),
+        args: serde_json::json!({}),
+        reason: "mode ask".to_owned(),
+    }
+}
 
 fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
@@ -27,6 +37,7 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
+        mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: Vec::new(),
     }
@@ -111,20 +122,17 @@ fn a_permission_question_is_answered_by_key() {
     let mut state = new_state();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "write_file".to_owned(),
             args: serde_json::json!({}),
             reason: "mode ask".to_owned(),
-        }),
+        },
         reply: tx,
     }));
     state.key(Key::Char('a'));
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        AnswerChoice::Permission(Answer::AlwaysAllow)
-    );
+    assert_eq!(rx.try_recv().unwrap(), Answer::AlwaysAllow);
 }
 
 #[test]
@@ -134,20 +142,17 @@ fn escape_answers_a_question_with_the_non_acting_choice() {
     let (mut state, _line) = state_with_prompt();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
             args: serde_json::json!({}),
             reason: "mode ask".to_owned(),
-        }),
+        },
         reply: tx,
     }));
     state.key(Key::Esc);
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        AnswerChoice::Permission(Answer::Deny)
-    );
+    assert_eq!(rx.try_recv().unwrap(), Answer::Deny);
 }
 
 #[test]
@@ -217,10 +222,10 @@ fn a_run_that_never_ended_a_turn_still_leaves_ctrl_c_quitting() {
 }
 
 #[test]
-fn shift_tab_is_the_plan_gesture() {
+fn shift_tab_is_the_mode_gesture() {
     let mut state = new_state();
     state.key(Key::BackTab);
-    assert_eq!(state.take_events(), vec![FrontEndEvent::TogglePlan]);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::CycleMode]);
 }
 
 #[test]
@@ -272,13 +277,13 @@ fn ctrl_d_is_ignored_while_a_question_is_up() {
     let (mut state, _line) = state_with_prompt();
     let (reply, mut answer) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
             args: serde_json::json!({"command": "ls"}),
             reason: "mode ask".to_owned(),
-        }),
+        },
         reply,
     }));
     state.key(Key::CtrlD);
@@ -286,7 +291,7 @@ fn ctrl_d_is_ignored_while_a_question_is_up() {
     state.key(Key::Char('y'));
     assert_eq!(
         answer.try_recv().expect("the permission answer went out"),
-        AnswerChoice::Permission(Answer::Allow),
+        Answer::Allow,
         "and the question it was ignored for is still answerable"
     );
 }
@@ -971,13 +976,13 @@ fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
     let mut state = state_running();
     let (tx, mut asked) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "write_file".to_owned(),
             args: serde_json::json!({}),
             reason: "mode ask".to_owned(),
-        }),
+        },
         reply: tx,
     }));
 
@@ -999,13 +1004,13 @@ fn a_cancelled_run_takes_its_unanswered_question_with_it() {
     let mut state = state_running();
     let (tx, mut asked) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::Permission(PermissionRequest {
+        request: PermissionRequest {
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "write_file".to_owned(),
             args: serde_json::json!({}),
             reason: "mode ask".to_owned(),
-        }),
+        },
         reply: tx,
     }));
 
@@ -1037,19 +1042,16 @@ fn a_second_question_does_not_displace_the_one_on_screen() {
     let mut state = new_state();
     let (first_tx, mut first) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::PlanConflict("PLAN.md".into()),
+        request: permission_request("write_file"),
         reply: first_tx,
     }));
     let (second_tx, mut second) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
-        question: Question::PlanConflict("other.md".into()),
+        request: permission_request("edit_file"),
         reply: second_tx,
     }));
     assert!(second.try_recv().is_err(), "the late question was dropped");
 
-    state.key(Key::Char('k'));
-    assert_eq!(
-        first.try_recv().unwrap(),
-        AnswerChoice::Plan(fs_agent::permissions::PlanConflict::Keep)
-    );
+    state.key(Key::Char('n'));
+    assert_eq!(first.try_recv().unwrap(), Answer::Deny);
 }

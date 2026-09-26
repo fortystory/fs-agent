@@ -4,13 +4,10 @@
 //! These tests stand a tiny scripted front end in for a renderer, which is the
 //! point of the seam: the loop's side is exercised without a terminal.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::permissions::{Answer, Asker, PermissionRequest, PlanConflict};
-use fs_agent::render::{
-    console, AnswerChoice, ConsoleAsker, ConsoleRequest, FrontEndEvent, Question,
-};
+use fs_agent::permissions::{Answer, Asker, PermissionRequest};
+use fs_agent::render::{console, ConsoleAsker, ConsoleRequest, FrontEndEvent};
 
 #[tokio::test]
 async fn a_prompt_travels_out_and_the_answer_comes_back() {
@@ -49,10 +46,8 @@ async fn the_asker_routes_a_permission_question_through_the_same_keyboard() {
     let front_end = tokio::spawn(async move {
         match port.recv().await {
             Some(ConsoleRequest::Ask(ask)) => {
-                assert!(matches!(ask.question, Question::Permission(_)));
-                let _ = ask
-                    .reply
-                    .send(AnswerChoice::Permission(Answer::AlwaysAllow));
+                assert_eq!(ask.request.tool_name, "write_file");
+                let _ = ask.reply.send(Answer::AlwaysAllow);
             }
             other => panic!("expected an ask, got {other:?}"),
         }
@@ -70,33 +65,8 @@ async fn the_asker_routes_a_permission_question_through_the_same_keyboard() {
 }
 
 #[tokio::test]
-async fn a_plan_conflict_question_and_answer_round_trip() {
-    let (handle, mut port, _events) = console();
-    let asker = ConsoleAsker::from_handle(&handle);
-    let front_end = tokio::spawn(async move {
-        match port.recv().await {
-            Some(ConsoleRequest::Ask(ask)) => {
-                assert_eq!(
-                    ask.question,
-                    Question::PlanConflict(PathBuf::from("PLAN.md"))
-                );
-                let _ = ask.reply.send(AnswerChoice::Plan(PlanConflict::Append));
-            }
-            other => panic!("expected an ask, got {other:?}"),
-        }
-    });
-
-    assert_eq!(
-        asker.ask_plan_conflict(&PathBuf::from("PLAN.md")).await,
-        PlanConflict::Append
-    );
-    front_end.await.unwrap();
-}
-
-#[tokio::test]
 async fn with_no_front_end_the_answer_is_the_non_acting_one() {
-    // A closed front end must not invent consent: a permission question is denied
-    // and a plan conflict keeps the user's file (spec §12, §13).
+    // A closed front end must not invent consent: the question is denied (spec §12).
     let (handle, port, _events) = console();
     drop(port);
     let asker = ConsoleAsker::from_handle(&handle);
@@ -108,10 +78,6 @@ async fn with_no_front_end_the_answer_is_the_non_acting_one() {
         reason: "mode ask".to_owned(),
     };
     assert_eq!(asker.ask(&request).await, Answer::Deny);
-    assert_eq!(
-        asker.ask_plan_conflict(&PathBuf::from("PLAN.md")).await,
-        PlanConflict::Keep
-    );
 }
 
 #[tokio::test]
@@ -120,9 +86,9 @@ async fn a_gesture_reaches_the_loop_without_being_asked_for() {
     // this while a turn is in flight.
     let (_handle, port, mut events) = console();
     port.emit(FrontEndEvent::Cancel);
-    port.emit(FrontEndEvent::TogglePlan);
+    port.emit(FrontEndEvent::CycleMode);
     assert_eq!(events.recv().await, Some(FrontEndEvent::Cancel));
-    assert_eq!(events.recv().await, Some(FrontEndEvent::TogglePlan));
+    assert_eq!(events.recv().await, Some(FrontEndEvent::CycleMode));
     drop(port);
     assert_eq!(events.recv().await, None);
 }
@@ -135,7 +101,7 @@ async fn a_generic_asker_handle_can_be_shared() {
     let asker: Arc<dyn Asker> = Arc::new(ConsoleAsker::from_handle(&handle));
     let front_end = tokio::spawn(async move {
         if let Some(ConsoleRequest::Ask(ask)) = port.recv().await {
-            let _ = ask.reply.send(AnswerChoice::Permission(Answer::Allow));
+            let _ = ask.reply.send(Answer::Allow);
         }
     });
     let request = PermissionRequest {

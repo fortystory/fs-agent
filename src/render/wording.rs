@@ -691,22 +691,6 @@ pub static PERMISSION_CHOICES: [Choice; 3] = [
     },
 ];
 
-/// The keys that answer a plan-mode conflict.
-pub static PLAN_CHOICES: [Choice; 3] = [
-    Choice {
-        key: 'o',
-        label: "覆盖",
-    },
-    Choice {
-        key: 'a',
-        label: "追加",
-    },
-    Choice {
-        key: 'k',
-        label: "保留",
-    },
-];
-
 /// The keys that answer the oversized-paste question.
 pub static PASTE_CHOICES: [Choice; 2] = [
     Choice {
@@ -729,13 +713,6 @@ pub static CLEAR_CHOICES: [Choice; 2] = [
         key: 'n',
         label: "保留",
     },
-];
-
-/// The keys that answer a plan-mode conflict, paired with the answer each one sends.
-pub static PLAN_CHOICE_ANSWERS: [(char, crate::permissions::PlanConflict); 3] = [
-    ('o', crate::permissions::PlanConflict::Overwrite),
-    ('a', crate::permissions::PlanConflict::Append),
-    ('k', crate::permissions::PlanConflict::Keep),
 ];
 
 /// The keys that answer a permission question, paired with the answer each one sends.
@@ -797,25 +774,6 @@ pub fn permission_prompt_with_context(tool_name: &str, args: &str, reason: &str)
         "{}？原因：{reason} {} ",
         permission_asked(Some(tool_name), args),
         choices_text(&PERMISSION_CHOICES)
-    )
-}
-
-/// The **title** row of the plan-mode conflict overlay.
-pub fn plan_conflict_title() -> &'static str {
-    "计划文件冲突"
-}
-
-/// The **body** row of the plan-mode conflict overlay: the path already there.
-pub fn plan_conflict_body(path: &str) -> String {
-    format!("{path} 已存在")
-}
-
-/// The plain console's plan-conflict input line.
-pub fn plan_conflict_prompt(path: &str) -> String {
-    format!(
-        "{}：{} ",
-        plan_conflict_body(path),
-        choices_text(&PLAN_CHOICES)
     )
 }
 
@@ -1014,6 +972,9 @@ pub fn context_source(source: &ContextSource) -> String {
         ContextSource::AgentsMd => "AGENTS.md".to_owned(),
         ContextSource::SkillsCatalog => "技能清单".to_owned(),
         ContextSource::Skill => "技能".to_owned(),
+        // Kept for reading **old** streams: the mode it names is gone, but a session
+        // written before `.scratch/todo-and-modes` still carries the injection, and a
+        // replay of it should say what it was (ADR 0003).
         ContextSource::PlanMode => "计划模式".to_owned(),
         // The one injection that belongs to **one** participant, so it says which:
         // a reader of the transcript should see who was given a persona.
@@ -1034,6 +995,8 @@ pub fn history_reason(reason: HistoryReason) -> &'static str {
         HistoryReason::Regenerate => "重新生成",
         HistoryReason::Undo => "撤销",
         HistoryReason::Compaction => "压缩",
+        // Likewise old-stream-only: retirement of a pinned instruction when the mode
+        // changed. Nothing emits this any more (ADR 0003).
         HistoryReason::ModeChange => "模式变更",
     }
 }
@@ -1064,7 +1027,7 @@ const KEY_HINTS: [&str; 5] = [
     "enter 发送",
     "ctrl-j 换行",
     "esc 取消",
-    "shift+tab 计划",
+    "shift+tab 模式",
     "PgUp/PgDn 滚动",
 ];
 
@@ -1082,7 +1045,7 @@ pub const EXIT_HINT_BUSY: &str = "ctrl-c 退出";
 /// `discuss`, or the stretch of an interactive session with a turn in flight.
 ///
 /// Only what the keyboard really does then — stop the run, and read back what it
-/// produced. No `enter 发送` (nothing would be sent) and no `shift+tab 计划` (that
+/// produced. No `enter 发送` (nothing would be sent) and no `shift+tab 模式` (that
 /// gesture is the interactive loop's, and a discussion has no prompt to return to).
 const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 
@@ -1441,7 +1404,6 @@ pub fn mode_label(mode: Mode) -> &'static str {
         Mode::Readonly => "只读",
         Mode::Ask => "询问",
         Mode::Auto => "自动",
-        Mode::Plan => "计划",
     }
 }
 
@@ -1473,18 +1435,10 @@ pub struct Command {
 }
 
 /// The built-in slash commands, in the order every list shows them.
-pub static BUILT_IN_COMMANDS: [Command; 5] = [
+pub static BUILT_IN_COMMANDS: [Command; 3] = [
     Command {
         name: "undo",
         description: "回滚上一次编辑",
-    },
-    Command {
-        name: "plan",
-        description: "进入硬计划模式",
-    },
-    Command {
-        name: "endplan",
-        description: "退出硬计划模式",
     },
     Command {
         name: "discuss",
@@ -1496,7 +1450,7 @@ pub static BUILT_IN_COMMANDS: [Command; 5] = [
     },
 ];
 
-/// The built-ins as one hint line: `可用：/undo、/plan、/endplan、/discuss、/quit`.
+/// The built-ins as one hint line: `可用：/undo、/discuss、/quit`.
 ///
 /// One generator, so the menu's list and the unknown-command text cannot drift
 /// apart.
@@ -1546,16 +1500,6 @@ pub fn skill_started(name: &str) -> String {
     format!("已加载技能 {name}，按技能正文开始")
 }
 
-/// `/plan` succeeded.
-pub fn plan_entered() -> &'static str {
-    "已进入计划模式"
-}
-
-/// `/endplan` succeeded.
-pub fn plan_exited() -> &'static str {
-    "已退出计划模式"
-}
-
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
@@ -1563,6 +1507,15 @@ pub fn plan_exited() -> &'static str {
 /// An argument the command does not recognize.
 pub fn unknown_argument(arg: &str) -> String {
     format!("未知参数 {arg}")
+}
+
+/// `--mode` with a value that names no mode. It lists the three, because the word
+/// most likely to arrive here is `plan` — the mode this version no longer has.
+pub fn unknown_mode(mode: &str) -> String {
+    format!(
+        "--mode 只认 readonly / ask / auto，收到 `{mode}`；从前的 plan 模式已经取消，\
+         计划交给模型自己的 todo 工具"
+    )
 }
 
 /// A flag that was given without the value it needs.
@@ -1979,20 +1932,21 @@ pub fn discuss_needs_in_session_question() -> &'static str {
 /// The interactive session's `--help`.
 pub fn help_interactive() -> String {
     "fs-agent [options]\n\n  \
-     在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/plan 与 /endplan 控制\
-     硬计划模式，/quit 退出；输入 /技能名 直接运行一个技能（可带任务，例如 \
+     在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/quit 退出；输入 /技能名 直接运行一个技能（可带任务，例如 \
      `/ask-matt 帮我看一下`），包括标了 `disable-model-invocation: true` 的技能。\
      输入 / 会弹出补全窗口，列出全部命令与技能。\
      `/discuss [--debaters A,B] [问题]` 起一场多角色讨论：两个讨论者用**本会话的上下文**\
      各自作答，只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决；\
      `--debaters 保守,激进` 指定抽池子里的哪两个（不写就随机抽两个），不带问题就用本会话\
      最后一个问题。讨论的事件写进同一个会话，`sessions show` 能一起复盘。\
-     TUI 里 Esc 取消正在跑的回合（或正在跑的讨论）；Shift+Tab 切换计划模式。\n\n  \
+     TUI 里 Esc 取消正在跑的回合（或正在跑的讨论）；Shift+Tab 在只读 / 询问 / 自动\
+     三档权限模式之间循环，当前档位显示在状态行。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
      --tui              使用终端界面（全屏外壳）\n  \
      --continue, -c     继续本工作区最新的会话\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \
+     --mode MODE        权限模式：readonly / ask / auto（默认：配置里的 [permissions] mode）\n  \
      --cwd PATH         工作区（默认：当前目录）"
         .to_owned()
 }

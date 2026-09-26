@@ -52,7 +52,7 @@ use crate::config::SessionConfig;
 use crate::context::skills::Skills;
 use crate::events::{ContextSource, Event, EventLog, EventPayload, Role, SessionId, SpeakerId};
 use crate::hooks::Hook;
-use crate::permissions::{Asker, Mode, PlanConflict, Policy};
+use crate::permissions::{Asker, Mode, Policy};
 use crate::provider::Provider;
 use crate::questions::UserQuestions;
 use crate::render::{RenderHandle, Renderer};
@@ -161,12 +161,10 @@ pub struct Harness {
     /// The session's own end of the cancel gesture (spec §6). The front end
     /// holds one and raises it; turns get observers of it.
     cancel: CancelSignal,
-    /// The mode to return to when plan mode ends (spec §13).
-    ///
-    /// `None` means this session is not in plan mode. It is front-end state, not
-    /// session state: gestures never enter the event stream, so `--continue`
-    /// assembles a fresh harness and starts from the configured mode.
-    plan_restore: Option<Mode>,
+    /// The policy every agent on this stream shares, kept here rather than reached
+    /// through the session: the mode-cycle gesture has to be available while a
+    /// pinned run future borrows the harness (spec §12).
+    policy: Arc<Mutex<Policy>>,
     render_task: JoinHandle<()>,
 }
 
@@ -179,6 +177,10 @@ pub struct DiscussionHarness {
     /// The discussion's own end of the cancel gesture (spec §6): one gesture
     /// reaches both debaters and every executor they dispatch.
     cancel: CancelSignal,
+    /// The one policy all three participants share (spec §15), kept for the same
+    /// reason [`Harness`] keeps it: the mode gesture must be reachable while the
+    /// discussion's run future borrows the harness.
+    policy: Arc<Mutex<Policy>>,
     render_task: JoinHandle<()>,
 }
 
@@ -310,18 +312,6 @@ impl OpenedSession {
                 "resumed session: closed {recovered} interrupted tool call(s) with an unknown result"
             ));
         }
-        // The mode does not survive a resume (it is not in the stream), so a plan
-        // instruction the killed process left live is now stale: retire it, or a
-        // resumed session would go on telling the model it may not write while
-        // the gate lets it through (spec §13).
-        if session.mode() != Mode::Plan {
-            let retired = agent::retire_plan_instructions(session, &self.render)?;
-            if retired > 0 {
-                self.render.diagnostic(&format!(
-                    "resumed session: retired {retired} stale plan-mode instruction(s)"
-                ));
-            }
-        }
         Ok(())
     }
 
@@ -368,13 +358,14 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     let mut session = opened.session(config, Some(agent::agent_identity().to_owned()));
     opened.start(&mut session)?;
 
+    let policy = Arc::clone(&opened.policy);
     Ok(Harness {
         session,
         provider: provider.into(),
         speaker,
         render: opened.render,
         cancel: CancelSignal::new(),
-        plan_restore: None,
+        policy,
         render_task: opened.render_task,
     })
 }
@@ -553,11 +544,13 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         opened.start(&mut first.session)?;
     }
 
+    let policy = Arc::clone(&opened.policy);
     Ok(DiscussionHarness {
         discussion: agent::Discussion::new(roster, synthesizer, max_rounds),
         log: opened.log.clone(),
         render: opened.render,
         cancel: CancelSignal::new(),
+        policy,
         render_task: opened.render_task,
     })
 }
@@ -724,97 +717,16 @@ impl Harness {
         self.session.mode()
     }
 
-    /// Enter the hard plan mode (spec §13): the session may read, and the one
-    /// thing it may write is the project-root `PLAN.md`.
+    /// This session's end of the mode-cycle gesture (spec §12).
     ///
-    /// The gesture is the only way in — there is deliberately no tool for it, or
-    /// "may I write" would be the model's decision to make. Entering records one
-    /// pinned instruction; the mode itself stays a session value and never
-    /// reaches the event stream.
-    ///
-    /// An existing `PLAN.md` is put to the user first (overwrite / append /
-    /// keep). Returns the answer, or `None` when there was no file to ask about
-    /// — including a re-entry, which is a no-op rather than a second injection.
-    pub async fn enter_plan_mode(&mut self) -> Result<Option<PlanConflict>, Error> {
-        if self.session.mode() == Mode::Plan {
-            return Ok(None);
-        }
-        let plan_path = self.session.cwd().join(permissions::PLAN_FILE_NAME);
-        let conflict = if plan_path.exists() {
-            Some(self.plan_conflict(&plan_path).await)
-        } else {
-            None
-        };
-        if conflict == Some(PlanConflict::Overwrite) {
-            // Cleared before anything is appended: if the append then fails the
-            // session is not in plan mode and its stream carries no instruction
-            // — consistent — while the file stays cleared, which is exactly what
-            // the user just chose. Read-before-write would otherwise refuse to
-            // clobber a file the model has not read, and the tool never deletes
-            // a file the user owns (spec §13).
-            std::fs::write(&plan_path, "")?;
-        }
-
-        let previous = self.session.mode();
-        self.session.set_mode(Mode::Plan);
-        if let Err(error) = agent::record_context_injection(
-            &mut self.session,
-            &self.render,
-            ContextSource::PlanMode,
-            context::plan_mode_instruction(conflict),
-        ) {
-            // The mode and the instruction it explains travel together: a stream
-            // that never recorded the instruction is a session that is not in
-            // plan mode.
-            self.session.set_mode(previous);
-            return Err(error);
-        }
-        self.plan_restore = Some(previous);
-        Ok(conflict)
-    }
-
-    /// Leave plan mode, restoring the mode the session had before it entered
-    /// (spec §13). Returns whether the mode changed: leaving a mode this session
-    /// is not in does nothing, and appends nothing.
-    ///
-    /// Leaving **retires** the pinned instruction rather than appending a
-    /// contradicting one: the instruction describes a state, and once the state
-    /// is over the model must stop being told it is in it. History is not
-    /// rewritten to do that — a `HistorySuperseded` retires the injection, the
-    /// same way `/undo` retires an exchange (spec §2).
-    ///
-    /// The **mode** is what says whether this session is in plan mode;
-    /// `plan_restore` only remembers the destination. Reading the mode here too
-    /// keeps the two from disagreeing if anything else ever changes the mode
-    /// while plan mode is on. A session *assembled* in plan mode therefore has
-    /// no destination to return to and stays in it: where such a session should
-    /// land is the front end's mode-selection surface (ticket 18), which is also
-    /// the only place a plan mode can be configured from.
-    pub async fn exit_plan_mode(&mut self) -> Result<bool, Error> {
-        if self.session.mode() != Mode::Plan {
-            self.plan_restore = None;
-            return Ok(false);
-        }
-        let Some(previous) = self.plan_restore.take() else {
-            return Ok(false);
-        };
-        // Retire first: if the append fails the session is still in plan mode,
-        // so the instruction still describes it.
-        agent::retire_plan_instructions(&mut self.session, &self.render)?;
-        self.session.set_mode(previous);
-        Ok(true)
-    }
-
-    /// Put the existing-plan question to the front end.
-    ///
-    /// With no answerer there is nobody to ask, and the non-destructive answer is
-    /// the only one a session may pick on the user's behalf: a gesture cannot
-    /// happen headless, but a script can call one, and it must not clear a file
-    /// the user wrote.
-    async fn plan_conflict(&self, path: &Path) -> PlanConflict {
-        match self.session.asker() {
-            Some(asker) => asker.ask_plan_conflict(path).await,
-            None => PlanConflict::Keep,
+    /// The gesture is a value on the policy, never an event, and nothing is
+    /// injected. A model finds out that the stance changed the first time a call of
+    /// its is refused, from the `PermissionDecided` reason — which is the deliberate
+    /// trade, because injecting a line into the head of `messages` would throw away
+    /// the prefix cache on every press (ADR 0003).
+    pub fn mode_cycle(&self) -> ModeCycle {
+        ModeCycle {
+            policy: Arc::clone(&self.policy),
         }
     }
 
@@ -882,6 +794,14 @@ impl DiscussionHarness {
         self.cancel.clone()
     }
 
+    /// The discussion's end of the mode-cycle gesture (spec §12): one policy
+    /// covers all three participants, so one press moves all of them.
+    pub fn mode_cycle(&self) -> ModeCycle {
+        ModeCycle {
+            policy: Arc::clone(&self.policy),
+        }
+    }
+
     pub fn session_id(&self) -> &SessionId {
         self.discussion.session_id()
     }
@@ -899,6 +819,29 @@ impl DiscussionHarness {
     /// written to the sinks. Call this before asserting on captured sinks.
     pub async fn shutdown(self) {
         drain_renderer(self.render, self.render_task).await;
+    }
+}
+
+/// The session's end of the mode-cycle gesture (spec §12; `Shift+Tab`).
+///
+/// A **handle**, like [`CancelSignal`], and for the same reason: the gesture has to
+/// reach the policy while a pinned run future borrows the harness — the loop can
+/// hold this because it was cloned before the borrow. Every session of one stream
+/// shares the policy it points at, so one press moves the whole discussion's stance
+/// on writes, which is what a mode is.
+#[derive(Clone)]
+pub struct ModeCycle {
+    policy: Arc<Mutex<Policy>>,
+}
+
+impl ModeCycle {
+    /// Step one rung around the cycle and return the mode now in force: the value
+    /// the front end shows is then the value the gate reads.
+    pub fn cycle(&self) -> Mode {
+        let mut policy = self.policy.lock().expect("policy mutex poisoned");
+        let mode = policy.mode().next();
+        policy.set_mode(mode);
+        mode
     }
 }
 

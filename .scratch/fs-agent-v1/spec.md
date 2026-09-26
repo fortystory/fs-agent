@@ -401,20 +401,21 @@ Status: ready-for-agent
 
 ### 12. 权限表达、模式与沿委派链的继承
 
+> **2026-09-26 回改**：模式从四档回到**三档**（`readonly` / `ask` / `auto`）——`plan` 那一行删掉了，「计划」改由模型的 `todo` 工具承担，入口补齐为 `[permissions] mode` + `--mode` + `Shift+Tab` 循环三档。本节下面以 `plan` 举的两处例（`Scope` 的谓词形状、`propagate` 默认值的后果）是那条豁免当年的**来由**，形状本身（`PathSet`、`Allow` 不传播）仍在用；整件事见 `.scratch/todo-and-modes/spec.md` 与 `docs/adr/0003-plan-leaves-the-permission-modes.md`。**§13 整节已被取代**（原文保留在下面）。
+
 - **规则 = `subject` + `Scope` + `action` + `propagate`**；`Scope` = `Tool(glob)` / `CommandPrefix(argv)` / `Path(pattern)` / **`PathSet(exact)`** / `All`。
 - **作用域是「对这次调用的谓词」**：这样 plan 模式的 `PLAN.md` 豁免才成立——它是 deny 条件里的一个**与项**（「非 `ReadOnly` **且** 写入集 ≠ `{PLAN.md}`」），而不是一条会被宽 deny 压过的窄 allow。
 - **优先级 = `deny > ask > allow` 且忽略具体程度**（让规则优先级、hook 收紧、执行者继承**共用同一个代数**，只有一套合并语义；「具体程度」无法定义）。
 - **评估次序**：**断路器（短路 `Deny`，早于一切）→ 规则取上确界 → hook 收紧 → 无交互时 `Ask→Deny`**。
-- **`propagate` 按动作定默认值**（`Deny` / `Ask` 为真、`Allow` 为假）⇒ 执行者策略 = 父级传播下来的 ∪ 自己的 ⇒「继承拒绝、不继承允许」是**默认值不是特例**，plan 模式的硬要求自动满足。
+- **`propagate` 按动作定默认值**（`Deny` / `Ask` 为真、`Allow` 为假）⇒ 执行者策略 = 父级传播下来的 ∪ 自己的 ⇒「继承拒绝、不继承允许」是**默认值不是特例**，`readonly` 的硬要求也是靠它自动满足的。
 - **断路器进 v1，且是「短路」不是「规则」**：敏感路径写入**永不自动批准**；`rm` 打到 `/` / `~` 及其父目录一律 `Deny`，任何 allow 与 hook 都翻不过来。**诚实定位 = 减少误伤，不是抵抗攻击，别当主要防线。**
-- **四个内置模式**（此前被多处引用却从未被定义，本 spec 把它固定下来）：
+- **三个内置模式**（此前被多处引用却从未被定义，本 spec 把它固定下来；2026-09-26 从四档回改，`plan` 那一行见上面那条注）：
 
   | 模式 | 判据 | 说明 |
   | --- | --- | --- |
   | `readonly` | 非 `ReadOnly` → `Deny` | **没有任何写豁免**；`bash` 也拒（`Exclusive`，shell 里能写文件）。要放行就切模式 |
   | `ask` | 写类（`WritePaths` / `Exclusive`）→ `Ask`；只读 → `Allow` | 交互式默认：「默认安全又不打断」那一档 |
   | `auto` | 默认 `Allow` | **不等于「跳过权限」**：只受规则与断路器约束——断路器、`.env` deny、root 防呆照样生效 |
-  | `plan` | 同 `readonly`，**唯一豁免**：`WritePaths` 的**全部**路径 = `<repo>/PLAN.md` → `Allow` | 「硬」plan 模式；与 `readonly` 的差别**只有那一条豁免**（见 §13） |
 
   四条对每个模式都成立的不变量：① **断路器短路在规则之前**，任何模式都翻不动；② **hook 只能收紧**（永远不能放松一个 `Deny`）；③ **沿委派链传播的是 `Deny` / `Ask`**（不给 `Allow`）；④ **无交互渲染器时 `Ask → Deny` 由循环在门外做**（门是纯函数、不读环境；门的裁决如实保持 `Ask`，理由进 `reason`）。另：**模式是 `Session` 的策略值、不进事件流**（`--continue` 回到 `config.toml` 的值，审计靠 `PermissionDecided`）。**执行者沿用父级的模式**（模式是会话对写的立场，子级不会拿到更松的那一档：`auto` 的子级也能写、`readonly` 的子级同样不能写），**收紧来自规则层**——`propagate` 为真的 `Deny`/`Ask` 照常 ∪ 下去，`Allow` 不传播；再加空的 read set，执行者的权限是派发者的**子集**（§16 的票 11 折回）。
 - **`.env` 家族默认 `deny`**（`*.example` / `*.sample` / `*.template` 除外）。
@@ -424,6 +425,8 @@ Status: ready-for-agent
 - **headless 的 `Ask` 自动降级为 `Deny`**：理由进 stderr 与 `PermissionDecided.reason`，**由循环在门外做**。
 
 ### 13. 硬 plan 模式
+
+> **2026-09-26：整节已被取代，原文保留在下面。** 取代它的是 `.scratch/todo-and-modes/spec.md`：权限回到三档、`plan` 整个退场，「计划」改由模型自己的 `todo` 工具承担（列表活在 `tool_call` 的 args 里，零 schema 改动）。这条推翻本身留了一条 ADR：`docs/adr/0003-plan-leaves-the-permission-modes.md`（写清当初为什么必须是模式、现在为什么搬出来、代价与向后兼容）。用户故事 78/80/82–84 里关于 plan 的那几条随本节一起失效；本节里两条仍然适用的事实是：**模式是 `Session` 的策略值、不进事件流**，以及**执行者沿用父级的模式**（现在写在 §12）。
 
 - **plan 模式 = 策略里的一条预设**（`effect()` 不是 `ReadOnly` 的调用一律 `Deny`），**不新增状态机**；是 `Deny` 不是 `Ask`（本模式的定义就是「硬」）。
 - **进出只用手势**：`/plan` / `/endplan` / Shift+Tab，**不进工具面**（给模型一个 `exit_plan_mode` 等于把「能不能写」交回给模型）。
@@ -549,8 +552,9 @@ Status: ready-for-agent
 - **TUI 额外 `select!`(广播 / tick / 键盘)**，**输入归渲染器**（终端独占），答案经注入的 channel 回循环。
 - **模型发起的用户提问在 TUI 上接管底部输入区**（票 32）：一屏一问、分页；**每题必须显式作答或跳过
   才能提交**，本题未处理时提交键禁用；单选选中即前进，单选下打字清空已选、多选下保留；`(Recommended)`
-  只做**显示**标记。**接管只给这一类**——权限询问与计划冲突仍走中段覆盖层，两类问题的形态理由不同
-  （覆盖层适合一行确认，输入区接管适合会占多行、要翻页的问卷）。
+  只做**显示**标记。**接管只给这一类**——权限询问仍走中段覆盖层（2026-09-26：曾经并列的「计划冲突」随
+  plan 模式一起退场，见 §13 与 `docs/adr/0003-plan-leaves-the-permission-modes.md`），两类问题的形态理由
+  不同（覆盖层适合一行确认，输入区接管适合会占多行、要翻页的问卷）。
 - **`Esc` / `Ctrl-C` 在提问期间保持原义**：取消**这次运行**（§6）。**不引入**「只放弃这次提问」的
   第三个手势，也**不新增错误类型**——取消后那条 `tool_call` 走 §6 的第 5 条路径拿到它唯一的结果。
 - **三个渲染器各有其位**（票 32）：TUI 用底部接管；`plain` **逐行问答**（它本来就读 stdin / 写 stderr）；

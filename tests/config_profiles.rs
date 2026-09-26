@@ -10,6 +10,7 @@ use std::fs;
 use fs_agent::config::{
     self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, Vendor, DEFAULT_MODEL,
 };
+use fs_agent::permissions::Mode;
 
 fn env(pairs: &[(&str, &str)]) -> EnvMap {
     pairs
@@ -774,4 +775,47 @@ fn a_name_that_cannot_be_an_identity_is_a_startup_error() {
     .expect_err("an over-long name is refused")
     .to_string();
     assert!(error.contains("longer than"), "{error}");
+}
+
+// --- the permission mode (票 01 of `.scratch/todo-and-modes`) --------------
+
+#[test]
+fn the_permissions_table_selects_the_mode_a_session_starts_in() {
+    for (written, expected) in [
+        ("readonly", Mode::Readonly),
+        ("ask", Mode::Ask),
+        ("auto", Mode::Auto),
+    ] {
+        let config = resolve(
+            Some(&format!("[permissions]\nmode = \"{written}\"\n")),
+            &env(&[]),
+        )
+        .unwrap_or_else(|error| panic!("`{written}` is a mode: {error}"));
+        assert_eq!(config.mode, expected);
+    }
+}
+
+#[test]
+fn a_configuration_that_says_nothing_about_permissions_asks() {
+    // The interactive default the three assembly points used to hardcode, now the
+    // documented default of the table that replaced it.
+    assert_eq!(resolve(None, &env(&[])).unwrap().mode, Mode::Ask);
+    assert_eq!(
+        resolve(Some("[budget]\nsession_tokens = 1000\n"), &env(&[]))
+            .unwrap()
+            .mode,
+        Mode::Ask
+    );
+}
+
+#[test]
+fn an_unknown_mode_is_a_startup_error_that_names_the_three() {
+    // `plan` is the value a configuration written before this change holds, so it
+    // is the one that has to say what to write instead.
+    let error = resolve(Some("[permissions]\nmode = \"plan\"\n"), &env(&[]))
+        .expect_err("plan is not a mode any more")
+        .to_string();
+    for word in ["plan", "readonly", "ask", "auto"] {
+        assert!(error.contains(word), "`{word}` is missing from: {error}");
+    }
 }
