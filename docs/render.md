@@ -141,15 +141,15 @@ the next prompt.
   (unsolicited gestures: cancel, plan toggle, quit). They are two values because
   the loop selects on both at once.
 - The front end holds `ConsolePort`. The TUI serves it from its own `select!` over
-  broadcast / console port / keyboard, plus **one timer that runs always**: the pulse that
-  colours the prompt's `❱` (`.scratch/tui-input-pulse/spec.md` §2b, 票 08). Nothing else is
-  waiting to be *noticed* — a pending question arrives on the console port, an event arrives
-  on the rendering channel, a key is a key — but a colour that walks the hue wheel is a
-  function of time alone, so it needs a clock, and that clock is not gated on a run: the
-  prompt is on screen while the loop waits for a line. It is an `interval` rather than a
-  sleep built fresh each pass, because a sleep would be reset by every event in a burst and
-  the prompt would stop breathing exactly when the session is busiest. Plain mode serves the
-  port with `render::spawn_plain_console`, which reads stdin line by line.
+  broadcast / console port / keyboard, plus **one timer, armed only while a run is in
+  flight**: the pulse that colours the prompt's `❱` (`.scratch/tui-input-pulse/spec.md` §2b,
+  票 09). Nothing else is waiting to be *noticed* — a pending question arrives on the console
+  port, an event arrives on the rendering channel, a key is a key — but a colour that walks
+  the hue wheel is a function of time alone, so it needs a clock; idle, that branch is guarded
+  off and this `select!` is three sources again. It is an `interval` rather than a sleep built
+  fresh each pass, because a sleep would be reset by every event in a burst and the prompt
+  would stop breathing exactly when the session is busiest. Plain mode serves the port with
+  `render::spawn_plain_console`, which reads stdin line by line.
 - `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
   the gate's `Ask` and the plan-mode conflict question use the one keyboard.
 - `ConsoleQuestions` implements the model-question port on that same handle, so a

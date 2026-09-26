@@ -345,13 +345,14 @@ impl Tui {
             }
         }
 
-        // The pulse's clock: the only timer in this loop, and it runs **always** — what it
-        // drives (the prompt's colour) is on screen while nothing is running, so there is no
-        // busy state to gate it on any more (`.scratch/tui-input-pulse/spec.md` §2b, 票 08).
-        // An `interval` rather than a `sleep` built fresh each pass: a provider bursting a
-        // thousand deltas would reset a sleep on every iteration, and the prompt would stop
-        // moving exactly when the session is busiest. `Delay` keeps a backlog of missed
-        // frames from being spent all at once when the loop comes back from a long frame.
+        // The pulse's clock: the only timer in this loop, and it is **armed only while a run
+        // is in flight** — the `if` on its `select!` arm is what keeps that true, because an
+        // unarmed branch is never polled and cannot wake the loop
+        // (`.scratch/tui-input-pulse/spec.md` §2b, 票 09). An `interval` rather than a `sleep`
+        // built fresh each pass: a provider bursting a thousand deltas would reset a sleep on
+        // every iteration, and the prompt would stop moving exactly when the session is
+        // busiest. `Delay` keeps a backlog of missed frames from being spent all at once when
+        // the loop comes back from a long frame.
         let mut pulse = tokio::time::interval(PULSE_FRAME);
         pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -372,19 +373,19 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
-                // Three sources and the pulse's timer. The redraw tick that used to live
-                // here went with the clock it existed for — a pending question arrives on
-                // the console port, events arrive on the render channel, and a key is a key,
-                // so nothing *else* is waiting to be noticed (票 05 §1). The pulse is the one
-                // thing that is: it is a function of time alone, so it needs a clock, and
-                // that clock is armed always because the prompt it colours is always on
-                // screen (票 08; it used to carry an `if state.busy()` guard, which went with
-                // the falling dash — `.scratch/tui-input-pulse/spec.md` §2b).
+                // Three sources, plus the pulse's timer while a run is in flight. The redraw
+                // tick that used to live here went with the clock it existed for — a pending
+                // question arrives on the console port, events arrive on the render channel,
+                // and a key is a key, so nothing *else* is waiting to be noticed (票 05 §1).
+                // The pulse is the one thing that is: it is a function of time alone, so it
+                // needs a clock — and that clock is the `if` below. Idle, this `select!` is
+                // three sources again and the keyboard is the only thing that can wake it
+                // (`.scratch/tui-input-pulse/spec.md` §2b).
                 tokio::select! {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
-                    _ = pulse.tick() => state.tick(),
+                    _ = pulse.tick(), if state.busy() => state.tick(),
                 }
             }
 
@@ -1285,18 +1286,17 @@ impl TuiState {
 
     /// Advance the pulse by one frame (`.scratch/tui-input-pulse/spec.md` §2b).
     ///
-    /// The loop calls this from the one timer in its `select!`, which runs whether or not a
-    /// run is in flight, because what the pulse drives — the prompt's colour — is on screen
-    /// the whole time (票 08). It is the pulse's frame and nothing else: **not** a general
-    /// "redraw something" hook, and anything that needs a frame should say so through the
-    /// event that changed it.
-    ///
-    /// The counter is never reset. It used to be, because each run had its own falling dash
-    /// to start; a colour that restarting at hue 0 every run would visibly jump calls for one
-    /// continuous clock instead.
+    /// The loop calls this from the one timer it arms while a run is in flight, so an idle
+    /// front end never reaches here; the guard is repeated anyway, because a prompt whose
+    /// colour moved while its writer was typing would be the animation getting in the way
+    /// (票 09). It is the pulse's frame and nothing else: **not** a general "redraw
+    /// something" hook, and anything that needs a frame should say so through the event that
+    /// changed it.
     pub fn tick(&mut self) {
-        self.pulse = self.pulse.wrapping_add(1);
-        self.dirty = true;
+        if self.busy() {
+            self.pulse = self.pulse.wrapping_add(1);
+            self.dirty = true;
+        }
     }
 
     /// Bracketed paste arrives as text, not as keys.
@@ -1933,6 +1933,13 @@ impl TuiState {
             // in this state may stand in for it.
             ConsoleRequest::RunState { running } => {
                 self.running = running;
+                // The pulse belongs to one run: the prompt goes back to the colour it rests
+                // on when the run ends, so the next one starts from the same place — and the
+                // resting colour is a constant rather than wherever the last turn happened to
+                // stop (`.scratch/tui-input-pulse/spec.md` §2b, 票 09).
+                if !running {
+                    self.pulse = 0;
+                }
                 // A question belongs to the run that raised it, so the end of that run is
                 // what makes it stale: the loop is no longer waiting for an answer, and
                 // its ask died with the run. Leaving the overlay up would send the next
@@ -3143,6 +3150,9 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
 /// The maintainer's script, translated: the hue walks the wheel at 0.3 turns a second — a
 /// full revolution every 3.3 -- while the saturation breathes around 0.55 with an amplitude
 /// of 0.2 once every 2.1 seconds, and the value stays at 0.85 so the glyph never shouts.
+/// **It only walks while a run is in flight**: the frame comes from the loop's clock, which
+/// is armed then and not otherwise, and the counter is reset when a run ends, so a prompt at
+/// rest always wears frame 0's colour (票 09).
 /// The point of the breathing is exactly that: a hue change alone is a colour change, and a
 /// colour that also swells is a colour that reads as alive.
 ///
@@ -3234,10 +3244,12 @@ pub const PULSE_PALETTE: [Color; 6] = [
 /// coarser step). It is the frame length of **every** pulse-driven animation, so a re-armed
 /// falling dash would also step this fast.
 ///
-/// **This clock is armed whether or not a run is in flight** (票 08). That is a deliberate
-/// reversal of 票 02/03: the prompt is on screen while nothing is running, so the thing it
-/// drives is too. The cost is one wake-up and at most a two-cell repaint every 60 ms, idle
-/// included; what it buys is a prompt that keeps breathing while the loop waits for a line.
+/// **The clock is armed only while a run is in flight** (票 09). 票 08 had it running always,
+/// on the reasoning that the prompt — the thing it colours — is on screen while nothing is
+/// running; the maintainer's own answer was that a colour moving under their hands while
+/// they type is noise, not life. So the prompt breathes while the agent works and holds its
+/// resting colour the rest of the time, and an idle session is back to three sources in the
+/// `select!` and no wake-ups at all.
 const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
 /// The mark's hyphen: the column its cell starts at, and how wide that cell is.

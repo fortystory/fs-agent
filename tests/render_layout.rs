@@ -641,22 +641,40 @@ fn prompt_cell(state: &mut TuiState) -> (String, Color) {
 }
 
 #[test]
-fn the_prompt_is_an_angle_bracket_whose_colour_walks_the_wheel() {
-    // The animation this feature ended up with (`.scratch/tui-input-pulse/spec.md` §2b): the
-    // prompt is `❱ ` and its colour keeps moving while the editor waits. The colour is a pure
-    // function of the pulse frame, and frame 0 is the frame the maintainer's script started
-    // on, so a change to the maths shows up here as a concrete RGB triple.
+fn the_prompt_is_an_angle_bracket_that_holds_still_while_you_type() {
+    // The prompt's colour is the interface's animation, and the maintainer's rule for it is
+    // the conclusion of a long argument: **it moves while the agent works and holds still
+    // while they type** (`.scratch/tui-input-pulse/spec.md` §2b, 票 09). The resting colour
+    // is frame 0 — the frame their script started on — so it is the same colour every time
+    // the keyboard comes back to them.
     let mut state = state();
     let (symbol, colour) = prompt_cell(&mut state);
     assert_eq!(symbol, "❱", "the prompt glyph");
     assert_eq!(
         colour,
         Color::Rgb(216, 97, 97),
-        "frame 0 is the script's own first colour"
+        "a prompt waiting for a line wears the script's first colour"
     );
 
-    // And it moves: no two of the next few frames wear the same colour.
-    let mut seen = vec![colour];
+    // Typing does not stir it: not one tick moves the colour off the resting frame.
+    for frame in 0..5 {
+        state.tick();
+        assert_eq!(
+            prompt_cell(&mut state).1,
+            colour,
+            "tick {frame} while the keyboard is the writer's: nothing moves"
+        );
+    }
+}
+
+#[test]
+fn the_prompts_colour_walks_the_wheel_while_a_run_is_in_flight() {
+    // The other half of that rule: once a turn is in flight the colour moves, and no two
+    // frames of it wear the same colour.
+    let mut state = state();
+    let resting = prompt_cell(&mut state).1;
+    state.request(ConsoleRequest::RunState { running: true });
+    let mut seen = Vec::new();
     for _ in 0..5 {
         state.tick();
         seen.push(prompt_cell(&mut state).1);
@@ -667,7 +685,27 @@ fn the_prompt_is_an_angle_bracket_whose_colour_walks_the_wheel() {
     assert_eq!(
         unique.len(),
         seen.len(),
-        "every frame is its own colour: {seen:?}"
+        "every frame of a run is its own colour: {seen:?}"
+    );
+    assert!(
+        !seen.contains(&resting),
+        "and none of them is the resting colour: {seen:?}"
+    );
+
+    // When the run ends the prompt goes back to resting, and the next run starts there too —
+    // the counter belongs to one run, so the resting colour is never "wherever it stopped".
+    state.request(ConsoleRequest::RunState { running: false });
+    assert_eq!(
+        prompt_cell(&mut state).1,
+        resting,
+        "the run's end puts the prompt back to rest"
+    );
+    state.request(ConsoleRequest::RunState { running: true });
+    state.tick();
+    assert_eq!(
+        prompt_cell(&mut state).1,
+        seen[0],
+        "and the next run walks the same frames the last one did, from the start"
     );
 }
 
@@ -721,11 +759,10 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
 }
 
 #[test]
-fn the_only_thing_a_pulse_frame_touches_is_the_prompt() {
+fn a_pulse_frame_touches_the_prompt_and_nothing_else() {
     // What the clock moves, everywhere the shell is drawn (`.scratch/tui-input-pulse/spec.md`
-    // §2b, 票 08): the prompt's colour, and nothing else. Below 80 columns there is no sidebar
-    // at all, and the only difference between two frames has to be those two cells — the
-    // sidebar being absent is not what makes a frame still, the prompt's span is.
+    // §2b): the prompt's colour, and nothing else — no mark, no rail, no status row. Below 80
+    // columns there is no sidebar at all, and the difference is still exactly those two cells.
     for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
         state.request(ConsoleRequest::RunState { running: true });

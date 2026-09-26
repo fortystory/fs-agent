@@ -54,25 +54,25 @@ fn state_running() -> TuiState {
 }
 
 #[test]
-fn the_pulse_moves_whether_or_not_a_run_is_in_flight() {
-    // The clock runs always, because what it drives — the prompt's colour — is on screen
-    // while the loop waits for a line (`.scratch/tui-input-pulse/spec.md` §2b, 票 08). It
-    // used to be gated on the run, and to restart with each one; a hue that jumped back to
-    // its first frame every time a turn ended is what made it stop being.
+fn the_pulse_moves_only_while_a_run_is_in_flight() {
+    // The clock's frame is the prompt's colour, and the prompt moves only while the agent is
+    // working: an idle tick must not even ask for a frame, or the colour under the writer's
+    // hands would keep moving (`.scratch/tui-input-pulse/spec.md` §2b, 票 09 — 票 08 had it
+    // the other way round, on the reasoning that the prompt is on screen while nothing runs).
     let mut state = new_state();
     state.mark_clean();
     state.tick();
-    assert!(state.is_dirty(), "an idle tick is a frame");
+    assert!(!state.is_dirty(), "an idle tick is not a frame");
 
     state.request(ConsoleRequest::RunState { running: true });
     state.mark_clean();
     state.tick();
-    assert!(state.is_dirty(), "and so is a run's");
+    assert!(state.is_dirty(), "a run's tick asks for the next one");
 
     state.request(ConsoleRequest::RunState { running: false });
     state.mark_clean();
     state.tick();
-    assert!(state.is_dirty(), "the clock does not stop with the run");
+    assert!(!state.is_dirty(), "and the clock stops with the run");
 }
 
 #[test]
