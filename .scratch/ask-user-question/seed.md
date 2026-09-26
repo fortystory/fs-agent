@@ -2,6 +2,20 @@
 
 > **这不是 spec，也不是票。** 它是进 `/grill-with-docs` 之前的路由判断与待谈分叉，
 > 写下来是因为下一步要 `/clear`（那些推理只活在上一轮对话里）。规格以 grilling 的产物为准。
+>
+> **✅ 这张种子已经做完（2026-09-26 补记）**：功能实现于 **`.scratch/fs-agent-v1/issues/32-ask-user-question-tool.md`（`Status: done`，`cd6bf3f`）**，
+> 本目录**不会**再长出 spec —— grilling 的产物直接折进了既有 v1 spec（`dece59a` 回改 §7 与 §19）与 `CONTEXT.md` 的两个词条。
+> 下面的五个分叉各自的落点：
+>
+> | 分叉 | 落在哪 |
+> | --- | --- |
+> | 1. 谁发起 | `CONTEXT.md` **用户提问（User Question）** / **问卷（Questionnaire）** 词条；`Asker` 那条接缝**不扩展**（第三类发起者） |
+> | 2. 流上的形状 | **零 schema 改动**：问题在 `tool_call` 的 args、答案在它的唯一结果（spec §7）；`--continue` 撞上悬空 `tool_call` 走 §11 既有的合成 unknown 结果，**不为「被遗弃的问题」发明新语义** |
+> | 3. 呈现位置 | 底部输入区接管**只给这一类**；权限 / 计划冲突 / 粘贴 / 清草稿四类仍走中段覆盖层，**票 30 未受影响**（spec §19） |
+> | 4. 非交互渲染器 | `plain` 逐行问答；`headless` 不把它挂进工具表；真漏了 answerer 时返回**模型可读的错误结果**，绝不挂住（spec §19） |
+> | 5. v1 收多少 | 收了：多问题 / 多选 / 自由文本 / `header` / 每题草稿 / 推荐标记。**不收 `detail` / `intent`**；plan-review 式专属面板将来由**循环直接调接缝**，与模型面工具无关（spec §7） |
+>
+> 实现与验收：`src/questions.rs`、`src/tools/ask_user.rs`、`src/render/tui.rs` 的 `Pending::Questionnaire`；测试 `tests/ask_user_question.rs`（16 条）+ `tests/ask_user_question_tui.rs`（13 条）；手工清单 ①.5 与 ③.6、⑬ 各有一条。**已知没做的**：真终端里问卷的键盘手感（分页页脚、窄终端折行、自由文本行光标、提交禁用态的视觉）只有 `TestBackend` 帧断言，手工清单里没有对应条目。
 
 ## 原始请求
 
