@@ -48,3 +48,17 @@ Status: done
 3. **顺带修一处 stale**：`docs/tui-manual-checklist.md` ①.5 还写着「`> ` 提示还在」—— 提示符早已是 `❱ `（票 08），改成 `❱ ` 并指向 ⑯。
 
 **没做**（用户明确没选）：给手工清单补「问卷（键盘）」一节（一屏一问的读感、页脚 `2 / 3` 与翻页键在窄终端的折行、自由文本行光标、`提交` 禁用态视觉、选项窗口跟随高亮）—— 那五条今天只有 `TestBackend` 帧断言，真终端里没人验过，**留作下一票**。
+
+---
+
+## 追加（2026-09-26 晚：`workspace` 模式 → 沙箱意向）
+
+用户提了一个新权限模式（会话 cwd 内一律允许、区外要审批、对所有角色生效）。摸完事实后按用户要求**先调研 DSH 怎么做的**，结论（DSH 的墙是内核：`read-only` / `workspace-write` / `danger-full-access` 三种 file effect，shell 整条 argv 交给沙箱 runner 不解析命令，越界靠内核拒绝后的**一次性升级审批**，沙箱不可用则 fail closed）→ 用户决定：**`workspace` 模式先不做，先记下「做进程级沙箱」的意向**。
+
+落点（全部为文档/意向）：
+- 新增 `.scratch/sandbox/seed.md`：意向 + 已拍但暂缓的 `workspace` 模式决议（模式名 `workspace`/「工作区」、config 默认 + `--mode`、区内禁区照旧硬拒、读也问、角色自动继承）+ shell 那一格的四个候选 + 七个待谈分叉 + 一手材料指针 + 与 README/docs 现有立场的关系。
+- 调研文件 `.scratch/sandbox/research/01-dsh-workspace-permissions-and-shell.md`（221 行 / 85 处引用，由后台调研 agent 产出、我抽验了最吃重的几条：`SANDBOX_UNAVAILABLE` 逐字全文、bash 的 `confine(argv)`、子 agent `approvalPolicy: 'never'`、平台链 bwrap/Landlock/sandbox-exec）。
+- `.scratch/README.md` 加 `sandbox/` 一行；README《安全模型》那段加一条引用块（「有一条明确的意向，尚未设计」，指回 seed）。
+- 目录名从 `workspace-mode/` 改成 `sandbox/`：现在要做的对象是沙箱，`workspace` 模式是它的下游。
+
+**未做**：任何代码与权限门改动；`cargo test` 等基线未受影响（本轮只碰 markdown）。

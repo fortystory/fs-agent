@@ -205,6 +205,8 @@ alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 
 
 **这不是沙箱。** v1 不做进程级隔离，对「模型把密钥发到网上」基本无能为力；升级路径写明是「只做 Linux 的 bubblewrap」，且**不预做抽象**。真正的边界是别把赔不起的 key 交给它。完整边界见 [`docs/credentials.md`](docs/credentials.md)。
 
+> **沙箱：有一条明确的意向，尚未设计。** 「项目目录内自动、目录外要审批」这个想法在 shell 那一格卡住了 —— 没有进程级隔离就没有可靠的「越界」信号（候选方案与 DSH 的做法、一手引用见 [`.scratch/sandbox/seed.md`](.scratch/sandbox/seed.md)）。那一步做完之前不动权限模式。
+
 ## 架构
 
 ```
