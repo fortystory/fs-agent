@@ -203,9 +203,9 @@ Status: ready-for-agent
 ### 1. Crate 与模块布局
 
 - **单 crate**：一个薄的二进制入口 + 一个公开的库入口。库入口是**组装点**，provider、路径锁、渲染 sink、配置都从参数注入，**不在库里读环境**——这是 e2e 用假 provider 的唯一入口（见 `Testing Decisions`）。
-- **12 个顶层边界**，依赖**只沿 DAG 向下**，不允许环：
+- **13 个顶层边界**（2026-09-26 回改：原文写 12，漏了票 32 为「模型发起的用户提问」加的 `questions`；同一处的清单也补上了它），依赖**只沿 DAG 向下**，不允许环：
 
-  `events` · `config` · `provider` · `tools` · `permissions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`
+  `events` · `config` · `provider` · `tools` · `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`
 
   关键约束：`events` **零内部依赖**（大家都依赖它，它不依赖任何人）；`project()` 是 `provider` 的子模块（**不是**新边界）；`discussion` **不碰 provider**（它只驱动 `agent` 的循环）；`agent` 层是唯一写事件流的地方——循环与它驱动的执行者端口走**同一个** `append_event` 写入路径（票 11）。
 - **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + 配置 + read set）。执行者 = **带 `parent_id` 的嵌套 `Session`**，有独立轮数预算，事件**追加到父流**。

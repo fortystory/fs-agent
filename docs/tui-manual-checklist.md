@@ -5,7 +5,8 @@
 每项都给了怎么做、该看见什么；看不见就是回归。
 
 来源：`.scratch/tui-layout/spec.md` 的 §Testing Decisions「手工清单」与 §2/§4/§5/§7，
-以及外壳改版的 `.scratch/tui-sidebar/spec.md`（§Testing Decisions 的「手工清单」）。
+外壳改版的 `.scratch/tui-sidebar/spec.md`（§Testing Decisions 的「手工清单」），
+以及模式与待办那一轮的 `.scratch/todo-and-modes/spec.md`（§4、§Testing Decisions → ⑰）。
 布局本身按 ADR 0002：alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**
 （转录 / 状态行 / 输入 / 提示）。左栏在 **≥ 120 列**时 40 列宽并画 fs 标记（5 行字符画），
 **80–119 列**时 28 列宽画一行文字身份，**< 80 列**整栏隐藏 —— 标记的边缘与颜色、

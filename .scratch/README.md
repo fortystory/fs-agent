@@ -30,5 +30,5 @@
 
 **两条如实记录**：
 
-- `.scratch/call-rationale/` 在磁盘上存在，但里面只有一个**空的** `issues/` —— 它不在 git 里（`git ls-files .scratch` 没有它），也没有任何 spec/map/票。它不列进上表；要删的话是 `rmdir .scratch/call-rationale/issues .scratch/call-rationale`。
+- `.scratch/call-rationale/`（磁盘上只有一个**空的** `issues/`、不在 git 里、没有任何 spec/map/票，所以不列进上表）**已按这里写过的办法 `rmdir` 掉了**；本索引曾如实记过它存在（2026-09-26 复核时它已经不在了）。
 - `map` 与 `spec` 可以同时存在：wayfinder 的图走完之后会被折成 spec（`tui-layout`、`tui-history-replay` 就是这样），图留着当决策记录。

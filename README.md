@@ -219,7 +219,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 - **投影是纯函数**：`project(log, speaker, caps) → messages`，住在 provider 适配器侧、按模型能力表分叉。裁剪（`trim`）是投影**之后**的另一个纯函数，只读、日志一条不删。
 - **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + read set）。执行者是带 `parent_id` 的嵌套 `Session`，事件追加到父流。**权限档位**就是策略里的一个值：三个入口（`[permissions] mode` / `--mode` / `Shift+Tab`）改的都是它，它**不进事件流**，所以 `--continue` 从配置那一档重新开始，审计看 `PermissionDecided.reason`。
 - **策略是纯函数，控制流在循环里**：hook 输出的是**约束**、权限门输出的是**裁决**，两者在 `Allow < Ask < Deny` 上取上确界——类型里根本没有「放松权限」这个变体。
-- **12 个顶层边界，只向下依赖**：`events` · `config` · `provider` · `tools` · `permissions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`。`events` 零内部依赖；`discussion` 不碰 provider。
+- **13 个顶层边界，只向下依赖**：`events` · `config` · `provider` · `tools` · `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`（`questions` 是票 32 加的第三类发起者那两条端口，与 `src/lib.rs` 的清单一致）。`events` 零内部依赖；`discussion` 不碰 provider。
 - **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是外框 + 全高左栏 + 主列（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：≥ 120 列时左栏 40 列画标记，80–119 列退成文字身份，再窄整栏隐藏（见上面的「TUI 长什么样」）。
 
 默认数值：单 agent 100 回合、执行者 25 回合（这两个用 `[turn]` 调）、同批执行者并发 5、单个工具结果 25k 估算 token、`repo_map` 1k（上限 4k）、`bash` 120s（上限 600s）。
@@ -231,7 +231,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：中文 UI 与冻结的模型文本、全屏 alt screen TUI（含标记与其代价）、「计划」从权限模式里搬出来（模式三档 + 模型的 `todo` 工具） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏 alt screen TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
