@@ -1,12 +1,9 @@
-//! The executor: a nested session a debater dispatches through `task` (spec §16).
+//! 执行者：讨论者通过 `task` 派发出来的嵌套会话（spec §16）。
 //!
-//! This is a submodule of `agent` rather than a boundary of its own, because
-//! running an executor *is* control flow — it drives a [`run_turn`] — and the
-//! `agent` layer stays the only writer of the event stream and the only caller of
-//! a provider (spec §1, §3). What lives here is everything true of an executor and
-//! not of a debater: its private identity, the port the loop hands to `task`, the
-//! brief-to-report plumbing, and the stream queries the report's metadata is
-//! derived from.
+//! 它是 `agent` 的子模块，而不是自己的一道边界，因为跑一个执行者**就是**控制流 —— 它驱动
+//! 一次 [`run_turn`] —— 而 `agent` 层要保持是事件流的唯一写者、也是 provider 的唯一调用者
+//! （spec §1、§3）。住在这里的，是「对执行者成立、对讨论者不成立」的那一切：它的私有身份、
+//! 循环交给 `task` 的那个端口、从简报进到报告的管路，以及报告的元数据所派生的那些流查询。
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -28,11 +25,10 @@ use crate::Error;
 
 use super::{append_event, run_turn, CancelObserver, TurnScope};
 
-/// The private identity of an executor (spec §16).
+/// 执行者的私有身份（spec §16）。
 ///
-/// Like a debater's protocol instructions, it never enters the event stream: it
-/// is the one input to a request the stream does not carry (spec §15). It carries
-/// no discussion protocol — an executor does not debate, it works.
+/// 与讨论者的协议指令一样，它从不进事件流：它是流不携带的那个请求输入之一（spec §15）。
+/// 它不含任何讨论协议 —— 执行者不辩论，它干活。
 pub(super) const EXECUTOR_IDENTITY: &str =
     "You are an executor. Another agent dispatched you, through \
      the `task` tool, to carry out one piece of work in this repository, and you have your own \
@@ -42,17 +38,15 @@ pub(super) const EXECUTOR_IDENTITY: &str =
      must know. That report is the whole of what comes back. You cannot dispatch further \
      executors. If the task cannot be done, say so plainly and explain why instead of guessing.";
 
-/// The port that runs one nested executor (spec §16): [`ExecutorSpawner`], built
-/// by the loop and handed to `task` through the tool context.
+/// 跑一个嵌套执行者的端口（spec §16）：[`ExecutorSpawner`]，由循环构造、经工具上下文交给
+/// `task`。
 ///
-/// It snapshots the dispatching session so the executor can run while that
-/// session is busy being dispatched into: everything shared (the log, the path
-/// locks, the ask port, the hook, the skill library) is a handle, and everything
-/// per-agent (the read set, the identity, the policy) is either fresh or derived.
-/// The one thing it cannot snapshot is the provider, which arrives as a shared
-/// handle because the executor answers on the dispatcher's client.
+/// 它给派发中的会话拍一张快照，这样执行者可以在那个会话正忙着自己被派发的时候跑：所有共享的
+/// 东西（日志、路径锁、询问端口、钩子、技能库）都是句柄，而所有按 agent 分的东西（读集合、
+/// 身份、策略）要么是新的、要么是派生的。唯一没法快照的是 provider —— 它以共享句柄的形式
+/// 传进来，因为执行者在派发者的 client 上作答。
 pub(super) struct ExecutorPort {
-    /// Who dispatched it: the speaker the `ExecutorSpawned` names as `parent`.
+    /// 谁派发的它：`ExecutorSpawned` 记为 `parent` 的那个发言者。
     parent: SpeakerId,
     executor_id: ParticipantId,
     cwd: PathBuf,
@@ -60,25 +54,22 @@ pub(super) struct ExecutorPort {
     session_id: SessionId,
     outputs_dir: PathBuf,
     locks: PathLocks,
-    /// The executor's own policy: its mode plus the parent's **propagating** rules
-    /// only, so it inherits denials and questions and never an allowance
-    /// (spec §12, §16).
+    /// 执行者自己的策略：它自己的模式，加上父会话里**会传播**的那些规则，仅此而已 ——
+    /// 于是它继承拒绝与询问，从不继承放行（spec §12、§16）。
     policy: Policy,
     asker: Option<Arc<dyn Asker>>,
     hook: Option<Arc<dyn Hook>>,
     home: Option<PathBuf>,
     skills: Arc<Skills>,
-    /// The executor's tool table: the session's table minus what is not
-    /// delegable, so `task` is absent by construction (spec §16).
+    /// 执行者的工具表：会话那张表减掉不可委派的部分，所以 `task` 在构造上就不在其中
+    /// （spec §16）。
     tools: Arc<Registry>,
-    /// The executor's own values: the inherited model, and its own turn cap.
+    /// 执行者自己的值：继承来的模型，加上它自己的回合上限。
     config: SessionConfig,
     provider: Arc<dyn Provider>,
     render: RenderHandle,
-    /// The dispatcher's view of the cancel gesture (spec §6): the executor
-    /// watches the **same** gesture, so one press reaches the whole chain below
-    /// it. It is an observer, not a signal — an executor cannot cancel its
-    /// dispatcher.
+    /// 派发者手里那个取消手势的视图（spec §6）：执行者观察的是**同一个**手势，所以一次
+    /// 按下能到达它下面整条链。它是观察端而不是信号端 —— 执行者取消不了它的派发者。
     cancelled: CancelObserver,
 }
 
@@ -91,24 +82,20 @@ impl ExecutorPort {
         executor_id: ParticipantId,
         cancelled: &CancelObserver,
     ) -> Self {
-        // The executor's policy: the dispatcher's **stance**, plus every rule the
-        // dispatcher marked as propagating, and nothing else. Its authority is a
-        // subset of the dispatcher's — an `auto` session's executor may write, a
-        // `readonly` session's may not, an `ask` session's asks through the same
-        // port — while an *allowance* never travels, because `Allow` does not
-        // propagate (spec §12, §16).
+        // 执行者的策略：派发者的**立场**，加上派发者标为可传播的每一条规则，别的什么都没有。
+        // 它的权限是派发者权限的子集 —— `auto` 会话的执行者可以写，`readonly` 会话的不可以，
+        // `ask` 会话的执行者经同一个端口发问 —— 而*放行*从不随之下行，因为 `Allow` 不传播
+        // （spec §12、§16）。
         let parent_policy = session.policy();
         let mut policy = Policy::for_mode(parent_policy.mode());
         for rule in parent_policy.inherited_rules() {
             policy.push(rule);
         }
 
-        // The model is inherited unless a profile routes executors elsewhere
-        // (spec §16, §17): the executor answers on the dispatcher's client, so an
-        // override names a model that client can serve, and only the turn cap and
-        // the model are its own. The routing rule itself lives in
-        // `SessionConfig::model_for`, which is also the synthesizer's — those two
-        // are the only landing points a cheaper model may be routed to.
+        // 模型是继承来的，除非某个 profile 把执行者路由到别处（spec §16、§17）：执行者在
+        // 派发者的 client 上作答，所以覆盖只能点名那个 client 能服务的模型，而真正属于它自己
+        // 的只有回合上限和模型。路由规则本身住在 `SessionConfig::model_for`，合成器用的也是
+        // 同一个 —— 那两处是更便宜的模型唯一可被路由到的落点。
         let mut config = session.config().clone();
         config.max_iterations = config.executor_max_iterations;
         config.model = config.model_for(LandingPoint::Executor).to_owned();
@@ -134,14 +121,12 @@ impl ExecutorPort {
         }
     }
 
-    /// Run the executor to completion and shape the one tool result out of it.
+    /// 把执行者跑完，并从中塑出那一个工具结果。
     async fn run(&self, brief: &str) -> Result<ToolOutput, ToolError> {
         let executor = SpeakerId::Executor(self.executor_id.clone());
-        // The spawn is recorded before the executor does anything, so the stream
-        // reads causally even though the whole thing is one blocking tool call. It
-        // is attributed to the executor — it is the executor's lifecycle event,
-        // and `parent` is what names the dispatcher — which is also what lets the
-        // brief reach the executor's own projection (spec §5, §16).
+        // 派发记录在执行者做任何事之前写下，所以哪怕整件事就是一次阻塞的工具调用，流读起来
+        // 也是因果的。它归属给执行者 —— 这是执行者的生命周期事件，`parent` 才是点名派发者的
+        // 地方 —— 而这也正是简报能进入执行者自己那次投影的原因（spec §5、§16）。
         append_event(
             &self.log,
             &self.config.redactor,
@@ -163,13 +148,12 @@ impl ExecutorPort {
             tools: Arc::clone(&self.tools),
             locks: self.locks.clone(),
             outputs_dir: self.outputs_dir.clone(),
-            // A fresh policy value, never the parent's handle: an allowance the
-            // parent earned must not reach the child (spec §12).
+            // 一个新的策略值，绝不是父会话那个句柄：父会话挣来的放行绝不能
+            // 传到子会话（spec §12）。
             policy: Arc::new(Mutex::new(self.policy.clone())),
             asker: self.asker.clone(),
-            // Deliberately not carried: an executor's table has no
-            // `ask_user_question` at all (spec §7, §16), so there is nothing here
-            // for a port to answer.
+            // 刻意不携带：执行者的表里根本没有 `ask_user_question`
+            // （spec §7、§16），所以这里没有任何东西需要一个端口来回答。
             questions: None,
             hook: self.hook.clone(),
             home: self.home.clone(),
@@ -177,9 +161,8 @@ impl ExecutorPort {
             identity: Some(EXECUTOR_IDENTITY.to_owned()),
         });
 
-        // The read set starts empty and neither direction flows (spec §16): the
-        // guardrail is about one agent's picture of the workspace, and a child
-        // that has not looked at a file has no picture of it.
+        // 读集合从空开始，而且两个方向都不流（spec §16）：这条护栏讲的是一个 agent 对工作区
+        // 的认知，而一个还没看过某个文件的子会话对它就还没有认知。
         let outcome = run_turn(
             &mut session,
             &executor,
@@ -192,8 +175,8 @@ impl ExecutorPort {
 
         let (reason, summary) = match outcome {
             Ok(outcome) => (outcome.reason, outcome.text),
-            // A log write failure is the one fatal outcome: the stream is no
-            // longer usable, so there is nothing to report through it either.
+            // 日志写入失败是唯一致命的结局：流已经不能用了，所以也没有什么东西
+            // 还能经它上报。
             Err(error) => {
                 self.render
                     .diagnostic(&format!("executor {}: {error}", self.executor_id));
@@ -213,15 +196,15 @@ impl ExecutorPort {
         )
         .map_err(spawn_failed)?;
 
-        // The metadata is derived from the stream (spec §16): the executor's own
-        // spend and the files it changed, with no second ledger and no new field.
+        // 元数据从流上派生（spec §16）：执行者自己花的钱、以及它改过的文件，不需要第二本
+        // 账、也不需要新字段。
         let events = self.log.events();
         let usage = usage_of(&events, &executor);
         let changed = changed_files(&events, &self.executor_id);
         let report = executor_report(&self.executor_id, reason, &summary, usage, &changed);
 
-        // The four failure values are an error-content tool result; the
-        // discussion is not interrupted by them (spec §16).
+        // 那四个失败值是一条「错误内容」的工具结果；讨论不会因为它们被
+        // 打断（spec §16）。
         if reason == StopReason::Completed {
             Ok(ToolOutput::new(report))
         } else {
@@ -237,14 +220,13 @@ impl ExecutorSpawner for ExecutorPort {
     }
 }
 
-/// Turn a write failure into the `task` call's error result.
+/// 把一次写入失败变成 `task` 调用那条错误结果。
 fn spawn_failed(error: Error) -> ToolError {
     ToolError::message(format!("executor: {error}"))
 }
 
-/// The participant a speaker acts as. `parent` is a participant id, so a speaker
-/// that is not a participant (which cannot dispatch anyway) folds to its own
-/// spelling rather than inventing a second identity.
+/// 一个发言者以什么身份行动。`parent` 是参与者 id，所以一个不是参与者的发言者（它本来也
+/// 派发不了）折成自己的拼写，而不是另造一个身份。
 fn participant_of(speaker: &SpeakerId) -> ParticipantId {
     match speaker {
         SpeakerId::Debater(id) | SpeakerId::Executor(id) => id.clone(),
@@ -252,9 +234,8 @@ fn participant_of(speaker: &SpeakerId) -> ParticipantId {
     }
 }
 
-/// How many executors this participant has already dispatched, counted off the
-/// stream. Ids are `<parent>-<n>` from that count, so a session that is resumed
-/// cannot hand out an id it already used.
+/// 这个参与者已经派发过多少个执行者，从流上数。id 就是由这个计数组成的 `<parent>-<n>`，
+/// 所以一个被续上的会话不可能发出一个它已经用过的 id。
 pub(super) fn spawned_executors(events: &[Event], parent: &SpeakerId) -> u32 {
     let parent = participant_of(parent);
     events
@@ -268,16 +249,14 @@ pub(super) fn spawned_executors(events: &[Event], parent: &SpeakerId) -> u32 {
         .count() as u32
 }
 
-/// The files one executor changed, derived from the stream (spec §16).
+/// 一个执行者改过的文件，从流上派生（spec §16）。
 ///
-/// A change is a successful call whose result names the file it wrote
-/// ([`WROTE_PATH_PREFIX`]). Reading the **result** rather than the call's
-/// arguments is what keeps this correct when a `hook.pre` rewrote the call after
-/// `ToolCallStarted` recorded what the model asked for.
+/// 一次改动就是一次成功的调用、且它的结果点名了写向哪个文件（[`WROTE_PATH_PREFIX`]）。
+/// 读**结果**而不是调用的参数，正是让它在 `hook.pre` 于 `ToolCallStarted` 记下模型所求
+/// 之后改写这次调用时依然正确的原因。
 ///
-/// It lives here rather than beside the other stream queries in `events` because
-/// it parses a tool convention, and `events` depends on nothing (spec §1) — naming
-/// `write_file` there would point the dependency arrow the wrong way.
+/// 它住在这里而不是 `events` 里别的流查询旁边，因为它解析的是一条工具约定，而 `events`
+/// 不依赖任何东西（spec §1）—— 在那里点名 `write_file` 会把依赖箭头指反。
 fn changed_files(events: &[Event], executor: &ParticipantId) -> Vec<String> {
     let speaker = SpeakerId::Executor(executor.clone());
     let mut changed: BTreeSet<String> = BTreeSet::new();
@@ -301,11 +280,10 @@ fn changed_files(events: &[Event], executor: &ParticipantId) -> Vec<String> {
     changed.into_iter().collect()
 }
 
-/// The one shape of an executor's reply: summary plus metadata (spec §16).
+/// 执行者那份回复的唯一形状：摘要加元数据（spec §16）。
 ///
-/// Nobody parses this — it is the dispatcher's reading material, delivered as the
-/// `task` call's result — so the list of changed files and the token counts sit
-/// above the summary where a reader can act on them.
+/// 没有人解析它 —— 它是派发者的阅读材料，作为 `task` 调用的结果送达 —— 所以改动过的文件
+/// 清单和 token 计数放在摘要上方，读者能照着它们行动。
 fn executor_report(
     executor: &ParticipantId,
     reason: StopReason,

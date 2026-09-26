@@ -1,14 +1,11 @@
-//! The two stream operations that are not the turn loop: closing the calls a
-//! killed process left open, and `/undo`.
+//! 两个不属于回合循环的流操作：把一个被杀死的进程留下的调用收尾，以及 `/undo`。
 //!
-//! Both are history edits, and both live in the `agent` layer for the same
-//! reason every other write does — it is the single writer of the event stream.
-//! Recovery **completes** a range the crash left open; `/undo` **retires** a
-//! range and restores the bytes it changed (spec §11).
+//! 两者都是历史编辑，也都因为这个层是事件流的唯一写者而住在 `agent` 层 —— 与其它每一处
+//! 写入同一个理由。恢复是**补完**崩溃留下的一段开口；`/undo` 是**注销**一段并还原它改过的
+//! 字节（spec §11）。
 //!
-//! Neither is a gesture in the stream: a resume is implied by an unfinished
-//! call, and an undo's only trace is the `HistorySuperseded` record of what it
-//! did (spec §6, §11).
+//! 两者都不是流上的手势：一次续上由一个未完成的调用自己暗示，而一次 undo 唯一的痕迹是那
+//! 条记录它干了什么的 `HistorySuperseded`（spec §6、§11）。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,31 +22,28 @@ use crate::session::Session;
 use crate::tools::edit;
 use crate::tools::{before_artifact, EditCall, ToolError, EDIT_FILE};
 
-/// The one result a killed process never got to write.
+/// 被杀死的进程始终没来得及写下的那一个结果。
 ///
-/// It says "unknown", not "failed": the call may have taken effect before the
-/// process died, so the model must not assume the workspace is untouched — and
-/// it must not be re-run on the chance that it did not (spec §11).
+/// 它说的是「未知」，不是「失败」：调用有可能在这个进程死掉之前已经生效了，所以模型不能
+/// 假定工作区没被动过 —— 也不能抱着「多半没生效」的侥幸把它重跑一遍（spec §11）。
 const INTERRUPTED: &str =
     "the session was interrupted while this call was in flight, so its result is unknown. \
      It was not re-run; check the workspace before relying on either outcome.";
 
-/// Close every `tool_call` an interrupted process left without a result.
+/// 把一个被中断的进程留下的、没有结果的 `tool_call` 逐个收尾。
 ///
-/// The query is session-wide (`pending_tool_calls`, not the per-speaker loop
-/// form): the whole process died, so every agent's unfinished call is this
-/// session's unfinished call (spec §11, Further Notes). Returns how many results
-/// were synthesized.
+/// 查询是会话级的（用 `pending_tool_calls`，而不是逐发言者的那种循环形式）：整个进程都死
+/// 了，所以每个 agent 没做完的调用就是本会话没做完的调用（spec §11，Further Notes）。
+/// 返回合成了多少个结果。
 ///
-/// It is called once, at assembly, before any turn runs — which is also what
-/// keeps the loop's invariant 2 true across a resume.
+/// 它只在组装期、任何回合开跑之前调用一次 —— 这同时也是循环的不变量 2 能跨一次续上依然
+/// 成立的原因。
 pub fn recover_pending_calls(session: &mut Session, render: &RenderHandle) -> Result<usize, Error> {
     let events = session.events();
     let mut recovered = 0;
     for tool_call_id in pending_tool_calls(&events) {
-        // The result must be attributed to the agent that started the call, or
-        // projection cannot pair it with the assistant message still holding the
-        // `tool_call`.
+        // 结果必须归属到发起这次调用的 agent，否则投影没法把它和那条还攥着
+        // `tool_call` 的助手消息配成一对。
         let Some(speaker) = started_by(&events, &tool_call_id) else {
             continue;
         };
@@ -66,7 +60,7 @@ pub fn recover_pending_calls(session: &mut Session, render: &RenderHandle) -> Re
     Ok(recovered)
 }
 
-/// Who started a call, read from the stream rather than guessed.
+/// 谁发起了这次调用：从流上读，而不是猜。
 fn started_by(events: &[Event], tool_call_id: &ToolCallId) -> Option<SpeakerId> {
     events.iter().find_map(|event| match &event.payload {
         EventPayload::ToolCallStarted {
@@ -76,31 +70,30 @@ fn started_by(events: &[Event], tool_call_id: &ToolCallId) -> Option<SpeakerId> 
     })
 }
 
-/// One edit `/undo` can roll back.
+/// 一次 `/undo` 可以回滚的编辑。
 #[derive(Debug, Clone, PartialEq)]
 struct UndoableEdit {
     tool_call_id: ToolCallId,
-    /// The `ToolCallStarted` and `ToolCallCompleted` seqs the undo retires, so
-    /// the projection stops replaying the edit.
+    /// undo 要注销的那两个 seq（`ToolCallStarted` 与 `ToolCallCompleted`），
+    /// 投影从此不再回放这次编辑。
     started_seq: u64,
     completed_seq: u64,
-    /// The arguments the model sent, exactly as the stream recorded them.
+    /// 模型当时发来的参数，与流上记录的一模一样。
     args: Value,
 }
 
-/// What an `/undo` did, for the front end to narrate.
+/// 一次 `/undo` 干了什么，供前端叙述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoOutcome {
     pub tool_call_id: ToolCallId,
     pub path: PathBuf,
 }
 
-/// The edit the next `/undo` would roll back, or `None` when there is none.
+/// 下一次 `/undo` 会回滚的那次编辑，没有时是 `None`。
 ///
-/// A pure query over the stream: the most recent `edit_file` call that succeeded
-/// and has not already been retired (by an earlier undo, or by anything else
-/// that supersedes history). Walking backwards is what makes repeated undos step
-/// back through the session's edits one at a time.
+/// 一条纯查询：流上最近一次成功、且尚未被注销的 `edit_file` 调用（注销可能来自更早的一次
+/// undo，也可能来自任何别的取代历史的东西）。倒着走正是连按 undo 能一次一步地退回会话里
+/// 各次编辑的原因。
 fn last_undoable_edit(events: &[Event]) -> Option<UndoableEdit> {
     let superseded = superseded_seqs(events);
     let mut open: HashMap<ToolCallId, (u64, String, Value)> = HashMap::new();
@@ -140,16 +133,14 @@ fn last_undoable_edit(events: &[Event]) -> Option<UndoableEdit> {
     last
 }
 
-/// Roll back the most recent edit: restore its bytes and retire its events.
+/// 回滚最近一次编辑：还原它的字节，并注销它的事件。
 ///
-/// The restore source is `outputs/<tool_call_id>.before` — the **actual replaced
-/// bytes**, so an edit that landed on a downgraded match restores exactly too
-/// (spec §11). The same per-path lock the edit took is taken here, so an undo
-/// cannot interleave with another writer, and the user's git is never touched.
+/// 还原的来源是 `outputs/<tool_call_id>.before` —— **真正被替换掉的那些字节**，所以一次
+/// 落在降级匹配上的编辑也能精确还原（spec §11）。这里锁的路径锁与那次编辑自己拿的是同一
+/// 把，所以 undo 不会和另一个写者交错，而用户的 git 从头到尾没被碰过。
 ///
-/// Returns `Ok(None)` when there is no edit to undo. Every other failure is an
-/// error and leaves the workspace alone: a stale snapshot is refused rather than
-/// guessed at.
+/// 没有可 undo 的编辑时返回 `Ok(None)`。其它任何失败都是错误，且不动工作区：陈旧的快照会
+/// 被拒绝，而不是被猜着用。
 pub async fn undo_last_edit(
     session: &mut Session,
     render: &RenderHandle,
@@ -181,8 +172,8 @@ pub async fn undo_last_edit(
         ))
     })?;
 
-    // The same lock the edit itself took (spec §11): an undo is a writer of the
-    // path, so it queues with every other writer of it.
+    // 与那次编辑自己拿的同一把锁（spec §11）：undo 也是这条路径的写者，
+    // 所以它排在其它每一个写者后面。
     let _guard = session.path_locks().lock(&path).await;
 
     let content = std::fs::read_to_string(&path)
@@ -203,7 +194,7 @@ pub async fn undo_last_edit(
     std::fs::write(&path, restored.as_bytes())
         .map_err(|error| Error::Undo(format!("cannot restore {}: {error}", path.display())))?;
 
-    // The gesture itself never enters the stream; its effect does.
+    // 手势本身从不进流；它的效果进。
     emit(
         session,
         render,

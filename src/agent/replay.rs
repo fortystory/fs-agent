@@ -1,26 +1,21 @@
-//! `sessions replay`: recompute a request from the stream (spec §18).
+//! `sessions replay`：从流上重算一次请求（spec §18）。
 //!
-//! The acceptance for "the event log is the single source of truth" is that the
-//! `messages` recomputed from the log equal the `messages` that were actually
-//! sent to the provider. That can only hold if replay is the loop's **own**
-//! pipeline — projection, the private identity, the trim policy — rather than a
-//! second implementation that agrees today. [`super::build_messages`] is that
-//! pipeline; this module supplies the one input the log does not carry (which
-//! call is being reproduced) and the identity, derived from the stream.
+//! 「事件流是唯一真相源」的验收方式，是**从流重算出的 `messages` 等于当时真发给 provider
+//! 的 `messages`**。这只有在 replay 就是循环**自己**那条流水线 —— 投影、私有身份、裁剪
+//! 策略 —— 时才可能成立，而不是靠第二份「今天恰好也一致」的实现。
+//! [`super::build_messages`] 就是那条流水线；本模块补上流不携带的那一个输入（正在复现的
+//! 是哪一次调用），以及那份从流的形状上推出来的身份。
 //!
-//! # Reproducing one call, not the final state
+//! # 复现一次调用，而不是最终状态
 //!
-//! A finished stream holds the response to the call being reproduced, so
-//! projecting the whole log would include events that did not exist when the
-//! request went out. The cut is the speaker's `TurnStarted` for that call: the
-//! loop snapshots the stream just before it appends that event, so
-//! `seq < TurnStarted` is exactly what the request saw. Combined with
-//! [`TurnScope`], a recomputed round window is the live one.
+//! 一条已经结束的流里装着被复现那次调用的响应，所以投影整条日志会把「请求发出时还不存在
+//! 的事件」也算进去。切点就是该发言者这次调用对应的 `TurnStarted`：循环在追加那条事件之前
+//! 刚好给流拍了一张快照，所以 `seq < TurnStarted` 正是那次请求看到的东西。再配上
+//! [`TurnScope`]，重算出的轮次窗口就是当时那个活着的窗口。
 //!
-//! The synthesizer is not a turn: it has no `TurnStarted` and its request is not
-//! a projection at all — it is its private identity plus
-//! [`crate::discussion::synthesis_prompt`]. Both are functions of the stream, so
-//! it is reproduced the same way.
+//! 合成器不是回合：它没有 `TurnStarted`，它的请求也根本不是一次投影 —— 那是它自己的私有
+//! 身份加上 [`crate::discussion::synthesis_prompt`]。两者都是流上的函数，所以它同样能被
+//! 复现出来。
 
 use crate::context;
 use crate::discussion;
@@ -31,7 +26,7 @@ use crate::provider::Message;
 use super::executor::EXECUTOR_IDENTITY;
 use super::{build_messages, scoped_events_slice, TurnScope};
 
-/// Why a request could not be recomputed from the stream.
+/// 一次请求为什么无法从流上重算出来。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReplayError {
     #[error("this session has no round {0} to replay")]
@@ -53,11 +48,10 @@ pub enum ReplayError {
     Trim(#[from] context::TrimError),
 }
 
-/// Recompute what `speaker` sent to its provider.
+/// 重算 `speaker` 发给它那个 provider 的内容。
 ///
-/// `round` selects a discussion round; it is required for a debater in a
-/// discussion and names the synthesis round for the synthesizer. `None` means
-/// the whole stream, which is a single-agent turn's scope.
+/// `round` 用来选一次讨论的轮次：讨论里的讨论者必需，对合成器则是点名合成轮。`None` 表示
+/// 整条流，也就是单 agent 回合的作用域。
 pub fn replay(
     events: &[Event],
     speaker: &SpeakerId,
@@ -69,8 +63,8 @@ pub fn replay(
     }
 
     let scope = scope_for(events, speaker, round)?;
-    // The cut for the call being reproduced: everything the loop had appended
-    // when it took its snapshot. A source with no cut has no call to reproduce.
+    // 这次被复现调用的切点：循环拍快照时它已经追加过的全部内容。没有切点的发言者就没有
+    // 可复现的调用。
     let cut = last_call_cut(events, speaker, round)
         .ok_or(ReplayError::NoProviderCall(speaker.clone()))?;
     let snapshot: Vec<Event> = events
@@ -89,7 +83,7 @@ pub fn replay(
     )?)
 }
 
-/// How much of the stream the replayed call saw.
+/// 被复现的那次调用看到了多少流。
 fn scope_for(
     events: &[Event],
     speaker: &SpeakerId,
@@ -110,12 +104,11 @@ fn scope_for(
                 before_seq: started.seq,
             })
         }
-        // A debater out of a discussion is an executor's shape, not a plain
-        // session's: only its own events are in its window (spec §16).
+        // 一个不在讨论里的讨论者，形状是执行者而不是普通会话：它的窗口里只有自己的事件
+        // （spec §16）。
         None if matches!(speaker, SpeakerId::Executor(_)) => Ok(TurnScope::Executor),
-        // A discussion's debater needs a round: without one, "the whole stream"
-        // would put the other side's answers in the window, which is exactly what
-        // the round cut exists to prevent. Refusing is honest; guessing is not.
+        // 讨论里的讨论者需要一个轮次：不给的话，「整条流」会把对面那一方的回答放进窗口，
+        // 而轮次切点存在的意义正是防这个。拒绝是诚实的，猜不是。
         None if has_rounds(events) && matches!(speaker, SpeakerId::Debater(_)) => {
             Err(ReplayError::RoundRequired)
         }
@@ -129,14 +122,12 @@ fn has_rounds(events: &[Event]) -> bool {
         .any(|event| matches!(event.payload, EventPayload::RoundStarted { .. }))
 }
 
-/// The `seq` of the speaker's last `TurnStarted` in `round` (or in the stream,
-/// when `round` is `None`).
+/// 该发言者在 `round` 里（`round` 为 `None` 时则在整条流里）最后一个 `TurnStarted`
+/// 的 `seq`。
 ///
-/// The loop appends `TurnStarted` after the snapshot it projects, so this seq is
-/// the exclusive upper bound of what the call saw. The **last** one is the one
-/// whose request is reproducible from a finished stream: later iterations live on
-/// top of earlier ones, and a turn's final response is appended only after its
-/// own call.
+/// 循环是在它投影的那张快照**之后**追加 `TurnStarted` 的，所以这个 seq 就是那次调用所见
+/// 内容的上界（不含）。能从一个已经结束的流里复现出其请求的那一个，是**最后一个**：更晚
+/// 的迭代叠在更早的之上，而一个回合的最终回复只在它自己那次调用之后才追加。
 fn last_call_cut(events: &[Event], speaker: &SpeakerId, round: Option<u32>) -> Option<u64> {
     let mut current: Option<u32> = None;
     let mut cut = None;
@@ -155,14 +146,12 @@ fn last_call_cut(events: &[Event], speaker: &SpeakerId, round: Option<u32>) -> O
     cut
 }
 
-/// The private identity an agent's request leads with.
+/// 一个 agent 的请求打头的那份私有身份。
 ///
-/// It never enters the stream (spec §15), so replay derives it from the stream's
-/// shape instead: a discussion debater has the protocol instruction, a debater
-/// without rounds is a plain session with this program's identity, and an
-/// executor has its own constant. The synthesizer is handled by [`synthesizer`]
-/// before this is consulted — its identity and its prompt are one unit — and the
-/// user has none.
+/// 它从不进流（spec §15），所以 replay 改从流的形状上把它推出来：讨论里的讨论者拿到的是
+/// 协议指令，没有轮次的讨论者就是一个带着本程序身份的普通会话，执行者有它自己的常量。
+/// 合成器在这之前就由 [`synthesizer`] 处理掉了 —— 它的身份和它的提示词是一个整体 —— 而
+/// 用户没有身份。
 fn identity_for(events: &[Event], speaker: &SpeakerId) -> Option<String> {
     match speaker {
         SpeakerId::Executor(_) => Some(EXECUTOR_IDENTITY.to_owned()),
@@ -175,12 +164,10 @@ fn identity_for(events: &[Event], speaker: &SpeakerId) -> Option<String> {
     }
 }
 
-/// The synthesizer's request: its identity plus the prompt derived from the
-/// stream (spec §15).
+/// 合成器的请求：它的身份，加上从流上推出来的提示词（spec §15）。
 ///
-/// Not a projection: [`crate::discussion::synthesis_prompt`] renders every
-/// round's answers and absences from the log, exactly as the closing call built
-/// it.
+/// 这不是一次投影：[`crate::discussion::synthesis_prompt`] 从日志里渲染出每一轮的作答与
+/// 缺席，与那次收尾调用当时构造出来的完全一致。
 fn synthesizer(events: &[Event], round: Option<u32>) -> Result<Vec<Message>, ReplayError> {
     let started = match round {
         Some(round) => events
@@ -219,8 +206,8 @@ fn synthesizer(events: &[Event], round: Option<u32>) -> Result<Vec<Message>, Rep
             .ok_or(ReplayError::NoSynthesis)?,
     };
 
-    // The round the synthesis was recorded under: the materials are scoped to the
-    // debate phase it closes (a session can carry more than one discussion).
+    // 这次合成记在哪个轮次之下：材料的作用域是它所收尾的那个辩论阶段（一个会话里可以装
+    // 不止一场讨论）。
     let EventPayload::RoundStarted {
         round: synthesis_round,
         ..

@@ -1,30 +1,24 @@
-//! Configuration boundary.
+//! 配置边界。
 //!
-//! Library code never reads the environment: the resolution here is a pure
-//! function over an explicit environment map ([`resolve`]), and `cli` is the
-//! only place that reads the process environment and hands the snapshot in.
+//! 库代码从不读环境：这里的解析是对一张显式环境表（[`resolve`]）的纯函数，只有 `cli` 读
+//! 进程环境，并把快照交进来。
 //!
-//! # Two levels (spec §4)
+//! # 两层（spec §4）
 //!
-//! `[providers.*]` holds a `base_url` and the key that goes with it;
-//! `[models.*]` references a provider by name and overrides generation
-//! parameters. A model section's key **is** the wire model id, which is also
-//! the capability-table key — so "unregistered model id" is a lookup failure in
-//! [`crate::provider::capability`], not a silent downgrade.
+//! `[providers.*]` 放 `base_url` 与跟它配套的密钥；`[models.*]` 按名字引用一个 provider，
+//! 并覆盖生成参数。模型段的键**就是**线级 model id，同时也是能力表的键 —— 所以「未登记的
+//! model id」是 [`crate::provider::capability`] 里的一次查表失败，而不是静默降级。
 //!
-//! # Precedence
+//! # 优先级
 //!
-//! `config.toml` > exported environment > built-in default, per field. A
-//! project `.env` is **never** loaded: [`Config::load`] reads exactly the path
-//! it is given and the environment map it is handed.
+//! 逐字段：`config.toml` > 导出的环境变量 > 内置缺省。项目里的 `.env` **永不**被加载：
+//! [`Config::load`] 只读递给它的那个路径，以及递给它的那张环境表。
 //!
-//! # Vocabulary
+//! # 用词
 //!
-//! A **Turn** is one provider call plus its tool execution; `max_iterations`
-//! counts turns within a single agent loop. A **round** is a discussion
-//! protocol step (§15). A [`Budget`] is the session's cumulative token
-//! allowance (§17) — not to be confused with the per-agent **window** budget in
-//! [`crate::context`].
+//! **回合（Turn）** 是一次 provider 调用加上它的工具执行；`max_iterations` 数的是一个
+//! agent 循环里的回合数。**轮次（round）** 是讨论协议的一步（§15）。[`Budget`] 是会话的
+//! 累计 token 额度（§17）—— 别和 [`crate::context`] 里按 agent 各自算的**窗口**预算混了。
 
 pub mod cost;
 
@@ -39,96 +33,86 @@ use crate::permissions::Mode;
 
 pub use cost::{Budget, LandingPoint, PriceTable, Pricing, Routing};
 
-/// Default maximum provider calls in one turn (spec §3).
+/// 一个回合里 provider 调用的缺省上限（spec §3）。
 pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
 
-/// Default maximum provider calls in one executor's turn (spec §16): goose's
-/// `GOOSE_SUBAGENT_MAX_TURNS`. An executor is there to do a job, not to run a
-/// marathon, and its own cap is what stops one runaway executor from eating the
-/// session's turn budget.
+/// 执行者一个回合里 provider 调用的缺省上限（spec §16）：即 goose 的
+/// `GOOSE_SUBAGENT_MAX_TURNS`。执行者是来干一件活的，不是来跑马拉松的，它自己的上限正是
+/// 拦住一个失控执行者吃掉整个会话回合预算的东西。
 pub const DEFAULT_EXECUTOR_MAX_ITERATIONS: u32 = 25;
 
-/// Default cap on how many executors one batch of tool calls runs at once
-/// (spec §16): goose's `GOOSE_MAX_BACKGROUND_TASKS`.
+/// 一批工具调用里同时跑多少个执行者的缺省上限（spec §16）：即 goose 的
+/// `GOOSE_MAX_BACKGROUND_TASKS`。
 ///
-/// A cost and rate gate, not a safety gate: write exclusion between executors is
-/// the shared path locks' job, and this cap exists because N executors with N
-/// turn budgets and growing contexts multiply.
+/// 这是成本与速率的闸门，不是安全的闸门：执行者之间的写互斥是共享路径锁的活，而这条上限
+/// 存在是因为 N 个执行者乘上各自的回合预算、再乘上不断长大的上下文会放大。
 pub const DEFAULT_MAX_PARALLEL_EXECUTORS: usize = 5;
 
-/// Default cap on one tool result, in estimated tokens (spec §10, ticket 07):
-/// Anthropic documents 25k as Claude Code's default tool-response limit.
+/// 单条工具结果的缺省上限，按估计 token 计（spec §10，票 07）：Anthropic 记 Claude Code
+/// 的工具响应上限默认是 25k。
 pub const DEFAULT_MAX_TOOL_RESULT_TOKENS: u64 = 25_000;
 
-/// Default repo-map budget, in estimated tokens (spec §9, ticket 09): aider
-/// documents the same default for its `--map-tokens` switch.
+/// 仓库地图的缺省预算，按估计 token 计（spec §9，票 09）：aider 为它自己的 `--map-tokens`
+/// 记录的缺省值与此相同。
 pub const DEFAULT_REPO_MAP_TOKENS: u64 = 1_024;
 
-/// Ceiling on a configured repo-map budget (spec §9, ticket 09): aider's source
-/// clamps `--map-tokens` here, and so does this configuration. A fixed budget is
-/// the point — the model cannot ask for a bigger map per call.
+/// 配置出来的仓库地图预算的上限（spec §9，票 09）：aider 的源码就把 `--map-tokens` 夹在
+/// 这里，本项目的配置也这么夹。固定预算才是重点 —— 模型没法按调用要一张更大的地图。
 pub const MAX_REPO_MAP_TOKENS: u64 = 4_096;
 
-/// Default wall-clock cap on one `bash` call, in milliseconds (spec §7, ticket
-/// 20): Claude Code documents the same two-minute default.
+/// 单次 `bash` 调用的缺省墙钟上限，按毫秒计（spec §7，票 20）：Claude Code 记录的缺省也
+/// 是两分钟。
 pub const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 
-/// Ceiling on a `bash` timeout, in milliseconds (spec §7, ticket 20). A model may
-/// ask for less per call; it can never ask for more, so no one command can hold
-/// the workspace-wide `Exclusive` lock indefinitely.
+/// `bash` 超时的上限，按毫秒计（spec §7，票 20）。模型可以按调用要得更短，永远要不到更长，
+/// 所以没有任何一条命令能无限期攥着工作区级的 `Exclusive` 锁。
 pub const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
-/// The namespace every dynamically declared tool's wire name starts with
-/// (spec §14). A built-in name never contains `__`, so "this name has a `__`"
-/// is a lexically decidable test for "this tool came from configuration".
+/// 每一个动态声明的工具的线级名都以它开头（spec §14）。内建名永不含 `__`，所以「这个名字
+/// 里有 `__`」是「这个工具来自配置」的词法可判定测试。
 pub const CUSTOM_TOOL_PREFIX: &str = "custom__";
 
-/// The separator between the namespace and the tool name, and the reason
-/// built-in names must not contain it.
+/// 命名空间与工具名之间的分隔符，以及内建名不得包含它的原因。
 pub const CUSTOM_TOOL_SEPARATOR: &str = "__";
 
-/// Default wall-clock cap on one dynamically declared tool call, in
-/// milliseconds. Its declaration may lower or raise it up to the ceiling below.
+/// 单次动态声明的工具调用的缺省墙钟上限，按毫秒计。它的声明可以调低，也可以调高到下面那个
+/// 上限为止。
 pub const DEFAULT_CUSTOM_TOOL_TIMEOUT_MS: u64 = 30_000;
 
-/// Ceiling on a dynamically declared tool's timeout: a declaration cannot make
-/// one command hold the workspace-wide `Exclusive` lock indefinitely.
+/// 动态声明的工具的超时上限：一份声明没法让某条命令无限期攥着工作区级的 `Exclusive` 锁。
 pub const MAX_CUSTOM_TOOL_TIMEOUT_MS: u64 = 600_000;
 
-/// The wire name of a dynamically declared tool (spec §14):
-/// `custom__<namespace>__<tool>`.
+/// 一个动态声明的工具的线级名（spec §14）：`custom__<namespace>__<tool>`。
 pub fn custom_tool_name(namespace: &str, tool: &str) -> String {
     format!("{CUSTOM_TOOL_PREFIX}{namespace}{CUSTOM_TOOL_SEPARATOR}{tool}")
 }
 
-/// One `[tools.<namespace>.<tool>]` declaration, resolved and validated.
+/// 一条解析并校验过的 `[tools.<namespace>.<tool>]` 声明。
 ///
-/// The parameters are the provider's wire shape **verbatim** — no translation
-/// layer, so what the user writes is what the model is sent. There is
-/// deliberately no side-effect field: "this one is really read-only" has nowhere
-/// to be said, and every dynamic tool is `Exclusive` (spec §14).
+/// 参数就是 provider 收到的线级形状，**原样** —— 没有翻译层，用户写的是什么，模型就收到
+/// 什么。刻意没有副作用字段：「这一个其实只读」无处可说，每个动态工具都是 `Exclusive`
+/// （spec §14）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDeclaration {
-    /// The wire name: `custom__<namespace>__<tool>`.
+    /// 线级名：`custom__<namespace>__<tool>`。
     pub name: String,
     pub namespace: String,
     pub tool: String,
     pub description: String,
-    /// The argv template. A `{name}` element is replaced by that argument;
-    /// anything else is literal.
+    /// argv 模板。形如 `{name}` 的整个元素会被那个参数替换；别的都是字面量。
     pub command: Vec<String>,
-    /// The JSON Schema, sent as written.
+    /// JSON Schema，原样发送。
     pub parameters: serde_json::Value,
-    /// The resolved wall-clock cap, clamped to
-    /// [`MAX_CUSTOM_TOOL_TIMEOUT_MS`].
+    /// 解析后的墙钟上限，夹在
+    /// [`MAX_CUSTOM_TOOL_TIMEOUT_MS`] 之内。
     pub timeout_ms: u64,
 }
 
-/// Model used when no `default_model` is configured or exported.
+/// 没有配置也没有导出 `default_model` 时用的模型。
 pub const DEFAULT_MODEL: &str = "kimi-k3";
 
-/// Which vendor a provider profile speaks to. Only these two are modeled;
-/// `#[non_exhaustive]` keeps a third one from being assumed anywhere.
+/// 一条 provider profile 对哪家厂商说话。只有这两家被建模；`#[non_exhaustive]` 让任何地方
+/// 都不会假定存在第三家。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Vendor {
@@ -137,7 +121,7 @@ pub enum Vendor {
 }
 
 impl Vendor {
-    /// Display name used in diagnostics.
+    /// 诊断里用的显示名。
     pub fn as_str(&self) -> &'static str {
         match self {
             Vendor::Kimi => "Kimi",
@@ -145,11 +129,11 @@ impl Vendor {
         }
     }
 
-    /// Hosts a key of this vendor is allowed to be paired with.
+    /// 这家厂商的密钥允许与哪些主机配对。
     ///
-    /// Kimi has two separate systems that share a vendor: the Open Platform
-    /// (`api.moonshot.cn` / `api.moonshot.ai`) and Kimi Code, the coding plan
-    /// (`api.kimi.com`). Their keys are not interchangeable, but both are Kimi.
+    /// Kimi 有两套共享一个厂商的系统：开放平台（`api.moonshot.cn` / `api.moonshot.ai`）
+    /// 与 Kimi Code，也就是 coding plan（`api.kimi.com`）。两者的密钥不能互换，但都是
+    /// Kimi。
     pub fn hosts(&self) -> &'static [&'static str] {
         match self {
             Vendor::Kimi => &["api.moonshot.cn", "api.moonshot.ai", "api.kimi.com"],
@@ -158,9 +142,8 @@ impl Vendor {
     }
 }
 
-/// One built-in `[providers.*]` profile: the endpoint and the environment
-/// variables its key is read from. Kimi contributes two profiles because its
-/// Open Platform and its coding plan are separate systems with separate keys.
+/// 一条内置的 `[providers.*]` profile：端点，以及它的密钥从哪些环境变量读。Kimi 贡献两条
+/// profile，因为它的开放平台与 coding plan 是密钥不同的两套系统。
 pub struct BuiltinProvider {
     pub name: &'static str,
     pub vendor: Vendor,
@@ -170,8 +153,7 @@ pub struct BuiltinProvider {
 }
 
 impl BuiltinProvider {
-    /// Every environment variable that may carry this profile's key, primary
-    /// first. One list shared by resolution and by error hints.
+    /// 可能携带这条 profile 密钥的每一个环境变量，首选的在前。解析与错误提示共用同一张表。
     pub fn key_envs(&self) -> Vec<&'static str> {
         let mut names = vec![self.key_env];
         names.extend(self.alt_key_envs.iter().copied());
@@ -179,9 +161,8 @@ impl BuiltinProvider {
     }
 }
 
-/// The built-in profiles. `kimi` is the Open Platform and `kimi-code` is the
-/// coding plan; `KIMI_API_KEY` belongs to the latter, matching Kimi's own
-/// third-party-tool docs.
+/// 内置的那些 profile。`kimi` 是开放平台，`kimi-code` 是 coding plan；`KIMI_API_KEY`
+/// 属于后者，与 Kimi 自己那份第三方工具文档一致。
 pub const BUILTIN_PROVIDERS: &[BuiltinProvider] = &[
     BuiltinProvider {
         name: "kimi",
@@ -212,10 +193,8 @@ fn builtin_provider(name: &str) -> Option<&'static BuiltinProvider> {
         .find(|builtin| builtin.name == name)
 }
 
-/// Reasoning tier. Both vendors accept it at the request top level, but only
-/// some model ids honor it (spec §4: Kimi K3 / DeepSeek). The tier is fixed
-/// when the session starts: changing it mid-session throws away the prefix
-/// cache.
+/// 推理档位。两家厂商都在请求顶层接受它，但只有部分 model id 真正照办（spec §4：Kimi K3 /
+/// DeepSeek）。档位在会话开始时就定死：中途改它会扔掉前缀缓存。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
@@ -234,8 +213,7 @@ impl ReasoningEffort {
     }
 }
 
-/// Neutral generation parameters. Provider adapters filter these against the
-/// model capability table and warn when they drop something explicitly set.
+/// 中立的生成参数。provider 适配器拿模型能力表过滤它们，并在丢掉一个明确设置过的值时告警。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GenerationParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,20 +222,20 @@ pub struct GenerationParams {
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    /// Pinned for the whole session; never switched mid-session.
+    /// 整个会话钉住；中途从不切换。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-/// Where a provider's key came from. The source decides whether the key is
-/// bound to a vendor host (spec §4: `base_url` must match the key's origin).
+/// 一个 provider 的密钥从哪来。来源决定这个密钥是否绑定厂商主机（spec §4：`base_url` 必须
+/// 与密钥的出身一致）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeySource {
-    /// Written next to `base_url` in `config.toml`: the pairing is explicit.
+    /// 写在 `config.toml` 里 `base_url` 旁边：配对是明写的。
     Config,
-    /// Read from this environment variable.
+    /// 从这个环境变量读到。
     Env(String),
-    /// Not found; building a provider for it is an error.
+    /// 没找到；为它构造 provider 是错误。
     Missing,
 }
 
@@ -270,66 +248,59 @@ impl KeySource {
     }
 }
 
-/// A resolved provider profile: one `base_url` + one key.
+/// 一条解析好的 provider profile：一个 `base_url` + 一个密钥。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProfile {
     pub name: String,
     pub base_url: String,
     pub api_key: Option<String>,
     pub key_source: KeySource,
-    /// The environment variable this profile reads its key from (or would,
-    /// when the key is missing). Named in diagnostics so the fix is copyable.
+    /// 这条 profile 从哪个环境变量读密钥（缺失时则是本该读的那个）。诊断里会点名它，这样
+    /// 修法可以直接抄。
     pub key_env: String,
-    /// `Some` for the built-in vendor profiles, `None` for a custom entry.
+    /// 内置厂商 profile 是 `Some`，自定义条目是 `None`。
     pub vendor: Option<Vendor>,
 }
 
-/// A resolved model entry: a wire model id, its provider, and its parameters.
+/// 一条解析好的模型条目：一个线级 model id、它的 provider、以及它的参数。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelProfile {
-    /// Wire model id, sent as `model` and used as the capability-table key.
+    /// 线级 model id，作为 `model` 发送，并用作能力表的键。
     pub id: String,
-    /// Name of the [`ProviderProfile`] this model is served by.
+    /// 服务这个模型的那条 [`ProviderProfile`] 的名字。
     pub provider: String,
     pub params: GenerationParams,
 }
 
-/// Fully resolved configuration.
+/// 完全解析好的配置。
 #[derive(Debug, Clone)]
 pub struct Config {
     pub default_model: String,
     pub providers: BTreeMap<String, ProviderProfile>,
     pub models: BTreeMap<String, ModelProfile>,
-    /// What a million tokens cost per model, for display (spec §17). Keyed by
-    /// model id; a model with no entry is reported as unpriced, never as free.
+    /// 每个模型一百万 token 多少钱，作显示用（spec §17）。按 model id 作键；没有条目的模型
+    /// 报作「无价格」，永不是免费。
     pub pricing: PriceTable,
-    /// The mode a session starts in (spec §12; `.scratch/todo-and-modes/spec.md`
-    /// §1). The session's stance on writes, chosen by the **user** — `--mode`
-    /// overrides it for one run, and `Shift+Tab` cycles it inside a session. It
-    /// never enters the event stream, so `--continue` returns to this value.
+    /// 会话开始时的那一档模式（spec §12；`.scratch/todo-and-modes/spec.md` §1）。会话对
+    /// 「写」的立场，由**用户**选 —— `--mode` 为一次运行覆盖它，`Shift+Tab` 在会话内循环
+    /// 三档。它从不进事件流，所以 `--continue` 回到的是这个值。
     pub mode: Mode,
-    /// The session's cumulative token allowance (spec §17), for display and for
-    /// the gate a session assembles with.
+    /// 会话的累计 token 额度（spec §17），供显示，也供会话组装时用的那道闸门。
     pub budget: Budget,
-    /// Which model the two landing points answer with (spec §17). Empty by
-    /// default: v1 runs everything on the discussion's model.
+    /// 两个落点各用哪个模型作答（spec §17）。缺省为空：v1 一切都跑在讨论的模型上。
     pub routing: Routing,
-    /// Hard cap on provider calls in one turn loop (spec §3). A **per-agent**
-    /// value, unlike the session's budget: two debaters each run their own turn
-    /// loop, so they do not have to agree on it.
+    /// 一个回合循环里 provider 调用的硬上限（spec §3）。这是个**按 agent** 的值，与会话的
+    /// 预算不同：两个讨论者各跑自己的回合循环，所以不必在这一项上一致。
     pub max_iterations: u32,
-    /// Hard cap on provider calls in one executor's turn (spec §16). An executor
-    /// is built from the session config with this in place of the dispatcher's
-    /// own cap, so it is independent of [`Config::max_iterations`] by
-    /// construction rather than by a rule someone has to remember.
+    /// 执行者一个回合里 provider 调用的硬上限（spec §16）。执行者是用会话配置构造的，只是
+    /// 用这个值替掉派发者自己的上限，所以它独立于 [`Config::max_iterations`] 是构造上的事实，
+    /// 而不是靠一条要人记住的规则。
     pub executor_max_iterations: u32,
-    /// Who debates, when `[discussion]` is configured (spec §15). Absent means this
-    /// configuration is for single-agent sessions; `fs-agent discuss` says so rather
-    /// than inventing a roster.
+    /// 配置了 `[discussion]` 时谁参与辩论（spec §15）。缺席表示这份配置是给单 agent 会话用
+    /// 的；`fs-agent discuss` 会照说，而不是凭空编一份名册。
     pub discussion: Option<DiscussionRoster>,
-    /// The dynamically declared tools (spec §14), in stable name order. Fixed at
-    /// assembly: nothing adds or removes a tool mid-session, because the tool
-    /// array is part of the prefix cache.
+    /// 动态声明的那些工具（spec §14），按稳定的名字顺序。组装期就定死：没有任何东西会在
+    /// 会话中途增删工具，因为工具数组是前缀缓存的一部分。
     pub tools: Vec<ToolDeclaration>,
 }
 
@@ -342,35 +313,30 @@ impl Config {
         self.providers.get(name)
     }
 
-    /// Whether two configured models are known to come from **one vendor**.
+    /// 两个配置好的模型是否已知来自**同一家厂商**。
     ///
-    /// Advisory, and asked of the pair that is actually debating: the protocol needs
-    /// two *identities*, not two vendors, but a pair from one vendor is two samples
-    /// rather than two independent judgements, so a front end says so out loud
-    /// (spec §15). Unknown models answer `false` — the model check happens earlier.
+    /// 仅供参考，而且是就真正在辩论的那一对来问：协议需要的是两个*身份*，不是两家厂商，但
+    /// 来自同一家厂商的一对是两个样本而不是两个独立判断，所以前端会把这件事说出来
+    /// （spec §15）。未知模型答 `false` —— 模型检查发生得更早。
     pub fn debaters_share_a_vendor(&self, first: &str, second: &str) -> bool {
         same_vendor(&self.models, &self.providers, first, second)
     }
 
-    /// The provider profile that serves `model_id`.
+    /// 服务 `model_id` 的那条 provider profile。
     pub fn provider_for(&self, model_id: &str) -> Option<&ProviderProfile> {
         let model = self.models.get(model_id)?;
         self.providers.get(&model.provider)
     }
 
-    /// The per-agent values a session for `model_id` starts from: the model's
-    /// generation parameters, the session's allowance, the price table it
-    /// displays costs with, the turn cap it may spend (spec §3), and the routing
-    /// overrides (spec §17).
+    /// 一个 `model_id` 的会话开局用哪些按 agent 的值：模型的生成参数、会话的额度、它用来
+    /// 显示花费的价目表、它可以花的回合上限（spec §3），以及路由覆盖（spec §17）。
     ///
-    /// One function rather than the same four lines at every assembly site, so
-    /// "the `[budget]` table gates the session" is true wherever a session is
-    /// assembled instead of only where someone remembered to copy it.
+    /// 做成一个函数，而不是在每个组装点重复那同样的四行，这样「`[budget]` 表管着会话」在
+    /// 任何组装会话的地方都成立，而不只在有人记得抄它的地方成立。
     ///
-    /// The redactor rides along for the same reason: every assembly path that
-    /// comes through here gets the configured keys' values to redact without
-    /// having to remember to ask, and `assemble_discussion` refuses a roster
-    /// whose participants disagree about them, so no stream is half-scrubbed.
+    /// 打码器搭车同行也是同一个理由：每一条经过这里的组装路径都拿到配置里的密钥值去替换，
+    /// 不必记得去要；而 `assemble_discussion` 会拒绝参与者在这一项上不一致的名册，所以没有
+    /// 哪条流是只打了一半码的。
     pub fn session_config(&self, model_id: &str) -> Result<SessionConfig, ConfigError> {
         let (model, _) = self.resolve_model(Some(model_id))?;
         let mut config = SessionConfig::new(model_id).with_params(model.params.clone());
@@ -383,13 +349,10 @@ impl Config {
         Ok(config)
     }
 
-    /// The values that must never reach the event stream (spec §20): every
-    /// resolved provider key.
+    /// 绝不能进事件流的那些值（spec §20）：每一条解析出来的 provider 密钥。
     ///
-    /// The keys are the secrets this process was configured with — from
-    /// `config.toml` or the exported environment — which is the honest scope of
-    /// value-level redaction. A key the user holds elsewhere is not known here
-    /// and cannot be guessed at.
+    /// 这些密钥就是这个进程被配置时的那些秘密 —— 来自 `config.toml` 或导出的环境 —— 这正是
+    /// 值级打码诚实的范围。用户手里别处存的密钥，这里并不知道，也猜不出来。
     pub fn redactor(&self) -> Redactor {
         Redactor::new(
             self.providers
@@ -398,8 +361,7 @@ impl Config {
         )
     }
 
-    /// Every model whose provider has a usable key. The CLI probe uses this to
-    /// decide what it can actually run.
+    /// provider 有可用密钥的那些模型。CLI 的探测用它来判定自己实际能跑什么。
     pub fn models_with_keys(&self) -> Vec<&ModelProfile> {
         self.models
             .values()
@@ -411,7 +373,7 @@ impl Config {
             .collect()
     }
 
-    /// Resolve the model to run, defaulting to `default_model`.
+    /// 解析出要跑的模型，缺省用 `default_model`。
     pub fn resolve_model(
         &self,
         requested: Option<&str>,
@@ -434,15 +396,13 @@ impl Config {
     }
 }
 
-/// Environment snapshot. The library never reads the process environment, so
-/// callers hand this in; tests build one directly.
+/// 环境快照。库从不读进程环境，所以由调用方交进来；测试直接构造一张。
 pub type EnvMap = BTreeMap<String, String>;
 
-/// Resolve configuration from in-memory inputs.
+/// 从内存里的输入解析配置。
 ///
-/// `file_text` is the contents of `config.toml` (`None` = no file). `env` is
-/// the exported environment. Nothing else is consulted, which is what makes
-/// "a project `.env` is not loaded" true by construction.
+/// `file_text` 是 `config.toml` 的内容（`None` = 没有文件）。`env` 是导出的环境。别的什么
+/// 都不去查，这正是让「项目里的 `.env` 不会被加载」成为构造性事实的原因。
 pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigError> {
     let raw = match file_text {
         Some(text) => toml::from_str::<RawConfig>(text).map_err(|source| ConfigError::Parse {
@@ -496,8 +456,8 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     })
 }
 
-/// Read and resolve `config.toml` at `path`. A missing file is an error here;
-/// callers that treat absence as "defaults only" pass `None` to [`resolve`].
+/// 读取并解析 `path` 处的 `config.toml`。文件缺失在这里是错误；把缺失当作「只用缺省」的
+/// 调用方给 [`resolve`] 传 `None`。
 pub fn load(path: &Path, env: &EnvMap) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
         path: path.display().to_string(),
@@ -506,8 +466,8 @@ pub fn load(path: &Path, env: &EnvMap) -> Result<Config, ConfigError> {
     resolve(Some(&text), env)
 }
 
-/// Default config path: `$XDG_CONFIG_HOME/fs-agent/config.toml`, else
-/// `$HOME/.config/fs-agent/config.toml`.
+/// 缺省的配置路径：`$XDG_CONFIG_HOME/fs-agent/config.toml`，否则
+/// `$HOME/.config/fs-agent/config.toml`。
 pub fn default_path(env: &EnvMap) -> PathBuf {
     let base = env
         .get("XDG_CONFIG_HOME")
@@ -522,12 +482,11 @@ pub fn default_path(env: &EnvMap) -> PathBuf {
     base.join("fs-agent").join("config.toml")
 }
 
-/// Default session store root: `$XDG_DATA_HOME/fs-agent/sessions`, else
-/// `$HOME/.local/share/fs-agent/sessions` (spec §11).
+/// 缺省的会话存储根目录：`$XDG_DATA_HOME/fs-agent/sessions`，否则
+/// `$HOME/.local/share/fs-agent/sessions`（spec §11）。
 ///
-/// `None` when neither variable is set: the CLI reports that rather than
-/// inventing a directory to write a session into. The store itself takes its
-/// root as an argument, so the library never reads this.
+/// 两个变量都没设时是 `None`：CLI 会照说，而不是凭空造一个目录把会话写进去。存储本身把根
+/// 目录当参数收，所以库从不读它。
 pub fn sessions_dir(env: &EnvMap) -> Option<PathBuf> {
     let base = env
         .get("XDG_DATA_HOME")
@@ -541,7 +500,7 @@ pub fn sessions_dir(env: &EnvMap) -> Option<PathBuf> {
     Some(base.join("fs-agent").join("sessions"))
 }
 
-// --- raw TOML shape -------------------------------------------------------
+// --- 原始 TOML 形状 -----------------------------------------------------
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -551,48 +510,44 @@ struct RawConfig {
     providers: BTreeMap<String, RawProvider>,
     #[serde(default)]
     models: BTreeMap<String, RawModel>,
-    /// `[pricing.<model-id>]`: what a million tokens cost (spec §17). Display
-    /// only — the gate reads tokens.
+    /// `[pricing.<model-id>]`：一百万 token 多少钱（spec §17）。只作显示 ——
+    /// 闸门数的是 token。
     #[serde(default)]
     pricing: BTreeMap<String, RawPricing>,
-    /// `[permissions]`: the mode a session starts in, and the only knob this
-    /// table has (spec §12).
+    /// `[permissions]`：会话开始时的那一档模式，也是这张表唯一的旋钮（spec §12）。
     permissions: Option<RawPermissions>,
     budget: Option<RawBudget>,
     routing: Option<RawRouting>,
-    /// `[turn]`: the turn caps (spec §3, story 11).
+    /// `[turn]`：回合上限（spec §3，story 11）。
     turn: Option<RawTurn>,
-    /// `[discussion]`: who debates (spec §15).
+    /// `[discussion]`：谁参与辩论（spec §15）。
     discussion: Option<RawDiscussion>,
-    /// `[tools.<namespace>.<tool>]`: dynamically declared tools (spec §14).
+    /// `[tools.<namespace>.<tool>]`：动态声明的工具（spec §14）。
     #[serde(default)]
     tools: BTreeMap<String, BTreeMap<String, RawTool>>,
 }
 
-/// One `[tools.<namespace>.<tool>]` table.
+/// 一张 `[tools.<namespace>.<tool>]` 表。
 ///
-/// The fields are the wire declaration itself: `description` and `parameters`
-/// are sent as written, and `command` is an argv template, never a shell string.
+/// 字段就是线级声明本身：`description` 与 `parameters` 原样发送，而 `command` 是 argv
+/// 模板，从来不是一段 shell 字符串。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTool {
     description: String,
-    /// The argv template. A whole element of the form `{name}` is replaced by
-    /// that argument; it is omitted when the argument is absent.
+    /// argv 模板。形如 `{name}` 的整个元素会被那个参数替换；参数缺席时它被省略。
     command: Vec<String>,
-    /// The JSON Schema, as sent to the provider.
+    /// JSON Schema，发送给 provider 时的样子。
     parameters: serde_json::Value,
-    /// Optional wall-clock cap; defaults to
-    /// [`DEFAULT_CUSTOM_TOOL_TIMEOUT_MS`] and is clamped to
-    /// [`MAX_CUSTOM_TOOL_TIMEOUT_MS`].
+    /// 可选的墙钟上限；缺省是 [`DEFAULT_CUSTOM_TOOL_TIMEOUT_MS`]，
+    /// 并夹在 [`MAX_CUSTOM_TOOL_TIMEOUT_MS`] 之内。
     timeout_ms: Option<u64>,
 }
 
-/// Resolve and validate every declared tool.
+/// 解析并校验每一条声明的工具。
 ///
-/// Validation is startup work on purpose: a declaration that names an argument
-/// it never receives, or a namespace the naming predicate cannot reparse, should
-/// fail before a turn begins rather than at the model's first call.
+/// 校验刻意放在启动期：一份声明点名了一个它永远收不到的参数，或者一个命名谓词没法重新解析
+/// 出来的命名空间，都该在一个回合开始之前就失败，而不是等到模型第一次调用。
 fn resolve_tools(
     raw: &BTreeMap<String, BTreeMap<String, RawTool>>,
 ) -> Result<Vec<ToolDeclaration>, ConfigError> {
@@ -602,7 +557,7 @@ fn resolve_tools(
             declarations.push(resolve_tool(namespace, tool, declaration)?);
         }
     }
-    // Stable order: the tool array is part of the cached prefix.
+    // 稳定顺序：工具数组是缓存前缀的一部分。
     declarations.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(declarations)
 }
@@ -635,8 +590,7 @@ fn resolve_tool(
         });
     }
 
-    // The program is the one element that cannot be a placeholder: a call with
-    // no argument would otherwise have nothing to execute.
+    // 程序名是唯一不能是占位符的那个元素：不然一次没有参数的调用就没有东西可执行。
     if parameter_placeholder(&raw.command[0]).is_some() {
         return Err(ConfigError::InvalidTool {
             tool: custom_tool_name(namespace, tool),
@@ -680,17 +634,13 @@ fn resolve_tool(
     })
 }
 
-/// The parameter name an argv element stands for, when the whole element is a
-/// `{name}` placeholder. Anything else is a literal.
+/// 当一个 argv 元素整体是 `{name}` 占位符时，它代表哪个参数名。别的都是字面量。
 ///
-/// Substitution is by **whole argv element** (spec §14): `--path={p}` is not a
-/// placeholder, because the replacement unit is one element and a partial splice
-/// is how argv shapes drift.
+/// 替换以**整个 argv 元素**为单位（spec §14）：`--path={p}` 不是占位符，因为替换的单位是
+/// 一个元素，而局部拼接正是 argv 形状漂移的来路。
 ///
-/// Crate-visible because the tool that substitutes argv
-/// ([`crate::tools::CustomTool`]) must parse an element exactly the way the
-/// validator did, or a declaration could validate and then substitute
-/// differently.
+/// crate 内可见，是因为真正替换 argv 的那个工具（[`crate::tools::CustomTool`]）必须与
+/// 校验器用同样的方式解析一个元素，否则一份声明可能校验通过、替换时却换了个样子。
 pub(crate) fn parameter_placeholder(element: &str) -> Option<&str> {
     let inner = element.strip_prefix('{')?.strip_suffix('}')?;
     if inner.is_empty() || inner.contains(['{', '}', ' ']) {
@@ -699,8 +649,8 @@ pub(crate) fn parameter_placeholder(element: &str) -> Option<&str> {
     Some(inner)
 }
 
-/// The `[routing]` table (spec §17): the two landing points a cheaper model may
-/// be routed to. There is no key for a debater, which is the point.
+/// `[routing]` 表（spec §17）：更便宜的模型可被路由到的那两个落点。没有给讨论者的键，这
+/// 正是重点。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawRouting {
@@ -708,35 +658,31 @@ struct RawRouting {
     executor_model: Option<String>,
 }
 
-/// The `[discussion]` table: which two models debate, and how far the protocol may
-/// run (spec §15).
+/// `[discussion]` 表：哪两个模型参与辩论，以及协议最多能跑多远（spec §15）。
 ///
-/// The roster lives in a table of its own rather than under `[routing]` because the
-/// two say opposite things: routing hands a participant to a *cheaper* model, and a
-/// debater is the one participant that is never routed. Keeping "who debates" out of
-/// the routing table is what makes that structural rather than a rule someone has to
-/// remember.
+/// 名册住在自己那张表里而不是 `[routing]` 之下，因为两者说的是相反的事：routing 把一个
+/// 参与者交给*更便宜*的模型，而讨论者是唯一永不被路由的参与者。把「谁参与辩论」留在
+/// routing 表之外，正是让这件事成为结构性事实、而不是一条要记住的规则的原因。
 ///
-/// The synthesizer is **not** here: it is the routing table's other landing point
-/// (`[routing].synthesizer_model`), and one value with one spelling is the point.
+/// 合成器**不**在这里：它是 routing 表里的另一个落点（`[routing].synthesizer_model`），
+/// 而一个值只有一种拼写才是重点。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDiscussion {
-    /// The pool a discussion draws its two debaters from, in configuration order:
-    /// either a model id alone, or a named debater.
+    /// 讨论从哪个池子里抽它的两个讨论者，按配置顺序：要么只给一个 model id，要么是一个具名
+    /// 的讨论者。
     debaters: Option<Vec<RawDebater>>,
-    /// Optional cap on rounds; absent means
-    /// [`crate::discussion::DEFAULT_MAX_ROUNDS`].
+    /// 可选的轮次上限；缺席表示用
+    /// [`crate::discussion::DEFAULT_MAX_ROUNDS`]。
     max_rounds: Option<u32>,
 }
 
-/// One `[[discussion.debaters]]` entry.
+/// 一条 `[[discussion.debaters]]` 条目。
 ///
-/// Two spellings, because a name is *additional* information rather than another way
-/// to say the model: `debaters = ["kimi-k3", "deepseek-v4-pro"]` is the short form when
-/// the model id is a good enough name, and a table adds the name when two debaters
-/// would otherwise be indistinguishable (the same model twice is the case this exists
-/// for).
+/// 两种拼法，因为名字是*额外的*信息，而不是说模型的另一种方式：
+/// `debaters = ["kimi-k3", "deepseek-v4-pro"]` 是短形式，适用于 model id 本身就够当名
+/// 字的时候；而两个讨论者本来没法区分时（同一个模型来两次就是它为之存在的情况），用一张表
+/// 补上名字。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum RawDebater {
@@ -747,48 +693,44 @@ enum RawDebater {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawNamedDebater {
-    /// The debater's identity: the name on the stream, in the transcript and in the
-    /// model-visible `[轮 N · 名字]` prefix.
+    /// 这个讨论者的身份：流上、转录里、以及模型可见的 `[轮 N · 名字]` 前缀里用的名字。
     name: String,
-    /// The model it answers with.
+    /// 它作答所用的模型。
     model: String,
-    /// The debater's **persona**, in the user's own words: the character it argues as.
-    /// Recorded on the stream as an injection private to this debater (spec §15).
+    /// 这个讨论者的**人物**，用用户的原话说：它扮演什么性格来辩论。它作为只发给这个讨论者
+    /// 的注入落在流上（spec §15）。
     soul: Option<String>,
 }
 
-/// One debater a discussion can draw: its **name** and the model it answers with.
+/// 一个讨论可以抽到的讨论者：它的**名字**，以及它作答所用的模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Debater {
-    /// The participant's identity on the stream. Two debaters of one discussion may
-    /// never share it: every projection is a function of `speaker_id`, so one name
-    /// would hand each side the other's answer as its own (spec §5).
+    /// 这个参与者在流上的身份。同一场讨论的两个讨论者绝不能共用它：每一次投影都是
+    /// `speaker_id` 的函数，所以一个名字会让每一方把对面的回答当成自己的（spec §5）。
     pub name: String,
-    /// The model this debater answers with.
+    /// 这个讨论者作答所用的模型。
     pub model: String,
-    /// The user's **persona** for this debater, when it wrote one: the character it
-    /// argues as, in the user's own words.
+    /// 用户给这个讨论者写的**人物**（如果写了的话）：它扮演什么性格来辩论，用用户的原话。
     pub soul: Option<String>,
 }
 
-/// The resolved `[discussion]` roster: the **pool** a discussion draws two debaters
-/// from (spec §15).
+/// 解析好的 `[discussion]` 名册：讨论从中抽两个讨论者的那个**池子**（spec §15）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscussionRoster {
-    /// Every debater a discussion may draw, in configuration order. At least two; more
-    /// than two means different discussions can ask different pairs.
+    /// 讨论可能抽到的每一个讨论者，按配置顺序。至少两个；多于两个意味着不同的讨论可以要不同
+    /// 的对。
     pub debaters: Vec<Debater>,
-    /// The round cap; `None` uses the protocol's default.
+    /// 轮次上限；`None` 用协议的缺省值。
     pub max_rounds: Option<u32>,
 }
 
 impl DiscussionRoster {
-    /// The pool member called `name`, if there is one.
+    /// 叫 `name` 的那个池子成员，如果有的话。
     pub fn debater(&self, name: &str) -> Option<&Debater> {
         self.debaters.iter().find(|debater| debater.name == name)
     }
 
-    /// Every debater's name, in configuration order — what an error message lists.
+    /// 每个讨论者的名字，按配置顺序 —— 错误消息里列的就是它。
     pub fn names(&self) -> Vec<&str> {
         self.debaters
             .iter()
@@ -797,64 +739,57 @@ impl DiscussionRoster {
     }
 }
 
-/// The longest a debater's name may be. The name is a `name` field on the wire and a
-/// prefix in the body, so it stays short enough for both (the projection's own cap is
-/// [`crate::provider::projection`]'s, and this is the config-side bound).
+/// 讨论者名字的最大长度。名字在线上是一个 `name` 字段，在正文里是一个前缀，所以它短到两边
+/// 都够用（投影自己那条上限在 [`crate::provider::projection`] 里，这里是配置侧的那条界）。
 pub const MAX_DEBATER_NAME: usize = 32;
 
-/// The longest a debater's `soul` may be, in characters.
+/// 讨论者 `soul` 的最大长度，按字符计。
 ///
-/// A soul is an injection, and injections are pinned: it is one debater's instruction
-/// for every round of every discussion it takes part in, so it is capped the way other
-/// pinned text is (spec §9, §10) rather than left to eat the window.
+/// 灵魂是一次注入，而注入是钉住的：它是这个讨论者参与的每一场讨论的每一轮的指令，所以它像
+/// 别的钉住文本一样被限长（spec §9、§10），而不是放着让它吃掉窗口。
 pub const MAX_DEBATER_SOUL: usize = 2000;
 
-/// One `[pricing.<model-id>]` table, in USD per million tokens.
+/// 一张 `[pricing.<model-id>]` 表，单位是每百万 token 的 USD。
 ///
-/// All three prices are required: a missing one would silently price a class of
-/// tokens at zero, and "unpriced" already has its own, honest spelling (no table
-/// at all).
+/// 三个价格都是必需的：缺一个会静默把一类 token 定价成零，而「无价格」本来就有自己诚实的
+/// 拼法（整张表都不写）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPricing {
-    /// Cache-miss input tokens.
+    /// 缓存未命中的输入 token。
     miss_input: f64,
-    /// Cache-hit input tokens.
+    /// 缓存命中的输入 token。
     cached_input: f64,
-    /// Output tokens, reasoning included.
+    /// 输出 token，含推理。
     output: f64,
 }
 
-/// The `[turn]` table (spec §3, story 11): what one agent's turn loop may cost
-/// in provider calls, and what an executor it dispatches gets instead (spec §16).
+/// `[turn]` 表（spec §3，story 11）：一个 agent 的回合循环在 provider 调用上最多花多少，
+/// 以及它派发的执行者换到的是什么（spec §16）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTurn {
-    /// Hard cap on provider calls in one turn.
+    /// 一个回合里 provider 调用的硬上限。
     max_iterations: Option<u32>,
-    /// Hard cap on provider calls in one **executor's** turn (spec §16), counted
-    /// independently of the dispatcher's.
+    /// 一个**执行者**的回合里 provider 调用的硬上限（spec §16），独立于派发者的那一份来数。
     executor_max_iterations: Option<u32>,
 }
 
-/// The `[permissions]` table (spec §12; `.scratch/todo-and-modes/spec.md` §1).
+/// `[permissions]` 表（spec §12；`.scratch/todo-and-modes/spec.md` §1）。
 ///
-/// One field: the mode a session starts in. The remaining permission machinery —
-/// the rule algebra, the breaker, the `.env` floor, the path limit — is the
-/// gate's own defaults rather than configuration, so it has nothing to say here.
+/// 一个字段：会话开始时的那一档模式。其余的权限机制 —— 规则代数、断路器、`.env` 地板、路径
+/// 限制 —— 都是权限门自己的缺省值而不是配置，所以这里没什么可说的。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPermissions {
-    /// `readonly` | `ask` | `auto`; absent means [`Mode::Ask`].
+    /// `readonly` | `ask` | `auto`；缺席表示 [`Mode::Ask`]。
     mode: Option<String>,
 }
 
-/// Resolve `[permissions]` into the mode a session starts in (spec §12).
+/// 把 `[permissions]` 解析成会话开始时的那一档模式（spec §12）。
 ///
-/// An unknown word is a startup error rather than a silent fallback to `ask`: a
-/// configuration holding `mode = "plan"` (the fourth mode this table used to
-/// have) would otherwise start a session under a permission stance its author
-/// never asked for.
+/// 一个不认识的词是启动错误，而不是静默回退到 `ask`：一份写着 `mode = "plan"` 的配置
+/// （这张表曾经有过的第四档）否则会以一个作者从没要过的权限立场把会话启动起来。
 fn resolve_mode(raw: Option<&RawPermissions>) -> Result<Mode, ConfigError> {
     let Some(written) = raw.and_then(|raw| raw.mode.as_deref()) else {
         return Ok(Mode::Ask);
@@ -864,13 +799,13 @@ fn resolve_mode(raw: Option<&RawPermissions>) -> Result<Mode, ConfigError> {
     })
 }
 
-/// The `[budget]` table (spec §17).
+/// `[budget]` 表（spec §17）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBudget {
-    /// Hard cap on the session's cumulative tokens.
+    /// 会话累计 token 的硬上限。
     session_tokens: Option<u64>,
-    /// Pre-flight tolerance, as a multiple of what is left (default 1.5).
+    /// 预检宽容度，以剩余量的倍数表示（缺省 1.5）。
     estimate_margin: Option<f64>,
 }
 
@@ -879,8 +814,7 @@ struct RawBudget {
 struct RawProvider {
     base_url: Option<String>,
     api_key: Option<String>,
-    /// Name of the environment variable to read the key from, when it is not
-    /// the vendor default.
+    /// 密钥从哪个环境变量读，当它不是该厂商的缺省变量时。
     api_key_env: Option<String>,
 }
 
@@ -894,11 +828,11 @@ struct RawModel {
     reasoning_effort: Option<ReasoningEffort>,
 }
 
-/// The built-in model entries: wire model id -> provider profile name. Every
-/// id here must also exist in the capability table (asserted by a test).
+/// 内置的模型条目：线级 model id -> provider profile 名。这里的每一个 id 也都必须存在于
+/// 能力表中（有测试断言这一点）。
 ///
-/// The K3 series appears twice on purpose: `kimi-k3` is the Open Platform id
-/// and `k3` / `k3-256k` are the Kimi Code (coding plan) ids for the same model.
+/// K3 系列刻意出现两次：`kimi-k3` 是开放平台的 id，而 `k3` / `k3-256k` 是同一个模型在
+/// Kimi Code（coding plan）下的 id。
 pub const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("kimi-k3", "kimi"),
     ("k3", "kimi-code"),
@@ -929,7 +863,7 @@ fn resolve_providers(
         let builtin = builtin_provider(&name);
         let section = raw.providers.get(&name);
 
-        // base_url: config.toml > exported env > built-in default.
+        // base_url：config.toml > 导出的环境变量 > 内置缺省。
         let env_base_url = env
             .get(&format!("{}_BASE_URL", env_prefix(&name)))
             .filter(|value| !value.is_empty())
@@ -942,14 +876,13 @@ fn resolve_providers(
                 provider: name.clone(),
             })?;
 
-        // key: config.toml > exported env > built-in default. A built-in
-        // profile also answers to its alternate environment spellings.
+        // key：config.toml > 导出的环境变量 > 内置缺省。内置 profile 还会认
+        // 自己的备用环境变量拼法。
         let (api_key, key_source, key_env) = resolve_key(&name, section, builtin, env);
 
-        // Structurally block the cross-vendor 401: an environment-derived
-        // vendor key may only be pointed at that vendor's hosts. The key's
-        // origin decides, not the section name — `[providers.kimi]` with
-        // `api_key_env = "DEEPSEEK_API_KEY"` is a DeepSeek key.
+        // 从结构上拦住跨厂商的 401：一个来自环境变量的厂商密钥只允许指向该厂商的
+        // 主机。说话的是密钥的出身，不是段名 —— `[providers.kimi]` 配上
+        // `api_key_env = "DEEPSEEK_API_KEY"` 就是一个 DeepSeek 密钥。
         let host = host_of(&base_url).ok_or_else(|| ConfigError::InvalidBaseUrl {
             provider: name.clone(),
             base_url: base_url.clone(),
@@ -986,9 +919,8 @@ fn resolve_providers(
     Ok(providers)
 }
 
-/// Returns `(key, source, recommended_env_var)`. The recommended variable is
-/// named even when the key is missing, so the error can tell the user exactly
-/// what to export.
+/// 返回 `(key, source, recommended_env_var)`。哪怕密钥缺失也会点名推荐的那个变量，这样
+/// 错误消息能准确告诉用户该导出什么。
 fn resolve_key(
     name: &str,
     section: Option<&RawProvider>,
@@ -1035,8 +967,8 @@ fn resolve_models(
             (*id).to_owned(),
             ModelProfile {
                 id: (*id).to_owned(),
-                // A built-in id may still be re-pointed at a custom provider
-                // (a proxy, say); absent an override it keeps its vendor.
+                // 内置 id 仍然可以被重新指向一个自定义 provider（代理，比如）；
+                // 没有覆盖时它保留自己的厂商。
                 provider: section
                     .and_then(|section| section.provider.clone())
                     .unwrap_or_else(|| (*provider).to_owned()),
@@ -1075,10 +1007,10 @@ fn resolve_models(
     Ok(models)
 }
 
-/// Resolve `[pricing.*]` into the display table (spec §17).
+/// 把 `[pricing.*]` 解析成显示用的价目表（spec §17）。
 ///
-/// A price for a model that is not configured is a startup error: the key is a
-/// model id, and a typo there would silently turn every cost into "unknown".
+/// 给一个没有配置的模型定价是启动错误：这里的键是 model id，在那里打错一个字会静默地把每一
+/// 笔费用变成「未知」。
 fn resolve_pricing(
     raw: &RawConfig,
     models: &BTreeMap<String, ModelProfile>,
@@ -1110,7 +1042,7 @@ fn resolve_pricing(
     Ok(table)
 }
 
-/// Resolve `[budget]` into the session's allowance (spec §17).
+/// 把 `[budget]` 解析成会话的额度（spec §17）。
 fn resolve_budget(raw: Option<&RawBudget>) -> Result<Budget, ConfigError> {
     let mut budget = Budget::new();
     let Some(raw) = raw else {
@@ -1132,13 +1064,11 @@ fn resolve_budget(raw: Option<&RawBudget>) -> Result<Budget, ConfigError> {
     Ok(budget)
 }
 
-/// Resolve `[routing]` into the two landing points' overrides (spec §17).
+/// 把 `[routing]` 解析成两个落点的覆盖（spec §17）。
 ///
-/// A routed model must be configured, for the same reason a price's key must be:
-/// a typo would silently leave the participant on the discussion's model. Whether
-/// it is a model the **dispatcher's provider** can serve is checked where the
-/// executor is built (spec §16), because that depends on the model chosen at
-/// assembly rather than on this file.
+/// 被路由到的模型必须是配置过的，与价格的键同理：打错一个字会静默地把这个参与者留在讨论的
+/// 模型上。至于它是不是**派发者的 provider** 能服务的模型，在构造执行者的地方检查
+/// （spec §16），因为那取决于组装时选定的模型，而不是这个文件。
 fn resolve_routing(
     raw: Option<&RawRouting>,
     models: &BTreeMap<String, ModelProfile>,
@@ -1162,20 +1092,16 @@ fn resolve_routing(
     })
 }
 
-/// Resolve `[discussion]` into the pool a discussion draws from (spec §15).
+/// 把 `[discussion]` 解析成讨论从中抽取的池子（spec §15）。
 ///
-/// A **pool**, not a pair: a discussion runs exactly two debaters, but which two is a
-/// decision made per discussion — named on the command line, or drawn at random from
-/// the pool when nothing is named. What is refused here is a pool that cannot serve
-/// that: fewer than two members, a model that is not configured, a name that cannot be
-/// an identity (empty, spaced, over-long), and two members sharing a name.
+/// 是**池子**，不是一对：一场讨论恰好跑两个讨论者，但抽哪两个是逐场讨论决定的 —— 命令行上
+/// 点名，或者什么都没点名时从池子里随机抽。这里拒绝的是服务不了这件事的池子：成员少于两个、
+/// 模型没配置过、名字当不了身份（空、带空格、过长），以及两个成员共用一个名字。
 ///
-/// **Two debaters from one vendor — even the same model twice — are allowed.** The
-/// design assumes heterogeneous debaters, but one expired subscription must not make
-/// the discussion unrunnable, and two calls to one model still disagree when the
-/// sampling does. That is resolved for the pair that actually debates
-/// ([`Config::debaters_share_a_vendor`]) so a front end can say when the diversity is
-/// weaker than the design has in mind.
+/// **来自同一家厂商的两个讨论者 —— 哪怕同一个模型来两次 —— 是允许的。** 设计假定讨论者是
+/// 异构的，但一个到期的订阅不该让讨论跑不起来；而调用同一个模型两次，在采样有差异时依然会
+/// 不一致。这件事针对真正在辩论的那一对来判定（[`Config::debaters_share_a_vendor`]），这样
+/// 前端能在多样性弱于设计预期时说出来。
 fn resolve_discussion(
     raw: Option<&RawDiscussion>,
     models: &BTreeMap<String, ModelProfile>,
@@ -1218,8 +1144,8 @@ fn resolve_discussion(
                 ),
             });
         }
-        // The name is an identity the model is told about and the projection writes
-        // into a one-line prefix, so it has to be one unbroken word.
+        // 名字是模型被告知的身份，也是投影写进一行前缀里的东西，所以它必须是一个不断开的
+        // 词。
         if name.is_empty()
             || name.chars().any(char::is_whitespace)
             || name.chars().any(char::is_control)
@@ -1240,8 +1166,7 @@ fn resolve_discussion(
                 ),
             });
         }
-        // A soul is pinned for the whole discussion and never trimmed, so it is capped
-        // like any other pinned text (spec §10).
+        // 灵魂在整场讨论里钉住、从不裁剪，所以它和别的钉住文本一样被限长（spec §10）。
         if let Some(soul) = &soul {
             if soul.is_empty() {
                 return Err(ConfigError::InvalidDiscussion {
@@ -1263,10 +1188,9 @@ fn resolve_discussion(
         debaters.push(Debater { name, model, soul });
     }
 
-    // Two debaters of one discussion are two participants, and every projection is a
-    // function of `speaker_id` (spec §5) — so the pool's names must be unique. The case
-    // this catches is two members of one model with no names given: the model id is the
-    // name, and one model id cannot be two identities.
+    // 同一场讨论的两个讨论者就是两个参与者，而每一次投影都是 `speaker_id` 的函数
+    // （spec §5）—— 所以池子里的名字必须唯一。这里抓住的情况是同一个模型的两个成员都没给
+    // 名字：model id 就是名字，而一个 model id 当不了两个身份。
     for (index, debater) in debaters.iter().enumerate() {
         if debaters[..index]
             .iter()
@@ -1296,11 +1220,10 @@ fn resolve_discussion(
     }))
 }
 
-/// Whether the two debaters are known to be one vendor's judgement twice.
+/// 这两个讨论者是否已知是同一家厂商的判断来了两次。
 ///
-/// The signal is the provider profile's classified [`Vendor`]. A profile the table
-/// does not classify — one the user declared — is compared by the host it points at,
-/// which is the same signal the cross-vendor key guard reads.
+/// 信号是 provider profile 归类出的 [`Vendor`]。表里没归类过的一条 profile（用户自己声明
+/// 的）改按它指向的主机比较，与跨厂商密钥守卫读的是同一个信号。
 fn same_vendor(
     models: &BTreeMap<String, ModelProfile>,
     providers: &BTreeMap<String, ProviderProfile>,
@@ -1341,8 +1264,7 @@ fn env_prefix(name: &str) -> String {
         .collect()
 }
 
-/// Which vendor a key environment variable belongs to, if any. Makes the
-/// cross-domain guard depend on the key's origin rather than the section name.
+/// 一个密钥环境变量属于哪家厂商（如果有的话）。这让跨域守卫取决于密钥的出身，而不是段名。
 fn vendor_of_key_env(name: &str) -> Option<Vendor> {
     BUILTIN_PROVIDERS
         .iter()
@@ -1356,8 +1278,7 @@ fn host_of(base_url: &str) -> Option<String> {
         .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
 }
 
-/// Configuration failures. Every one of these is a startup error: none of them
-/// degrades silently.
+/// 配置失败。这里每一个都是启动错误：没有一个会静默降级。
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("config.toml: {source}")]
@@ -1421,67 +1342,56 @@ pub enum ConfigError {
     InvalidTool { tool: String, reason: String },
 }
 
-/// Injected configuration values for one agent's turn loop.
+/// 注入给某一个 agent 回合循环的配置值。
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
-    /// Model identifier used for the provider call.
+    /// provider 调用所用的模型标识。
     pub model: String,
-    /// Hard cap on provider calls in one turn.
+    /// 一个回合里 provider 调用的硬上限。
     pub max_iterations: u32,
-    /// Generation parameters, including the pinned reasoning tier.
+    /// 生成参数，含钉住的推理档位。
     pub params: GenerationParams,
-    /// Cap on one tool result, in estimated tokens. An oversized result is
-    /// truncated before it enters the stream (spec §10).
+    /// 单条工具结果的上限，按估计 token 计。过大的结果在进流之前就被裁剪（spec §10）。
     pub max_tool_result_tokens: u64,
-    /// Cap on the repo map, in estimated tokens (spec §9). A fixed budget, never
-    /// a model-supplied argument; [`MAX_REPO_MAP_TOKENS`] is the ceiling.
+    /// 仓库地图的上限，按估计 token 计（spec §9）。固定预算，从不是模型给的参数；
+    /// [`MAX_REPO_MAP_TOKENS`] 是上限。
     pub repo_map_tokens: u64,
-    /// Wall-clock cap on one `bash` call, in milliseconds (spec §7). Used when
-    /// the model passes no `timeout_ms`; `bash` is `Exclusive`, so this is also
-    /// the longest one command can hold the workspace-wide lock.
+    /// 单次 `bash` 调用的墙钟上限，按毫秒计（spec §7）。模型不传 `timeout_ms` 时用它；
+    /// `bash` 是 `Exclusive`，所以这同时也是一条命令能攥着工作区级锁的最长时间。
     pub bash_timeout_ms: u64,
-    /// Hard ceiling on a model-supplied `bash` `timeout_ms` (spec §7): a call may
-    /// ask for less than the default, never for more.
+    /// 模型所给 `bash` `timeout_ms` 的硬上限（spec §7）：一次调用可以要得比缺省更短，永远
+    /// 要不到更长。
     pub max_bash_timeout_ms: u64,
-    /// Turn cap for an executor this agent dispatches (spec §16). Independent of
-    /// [`SessionConfig::max_iterations`] — "a runaway executor must not eat the
-    /// session's turns" is the requirement, not an optimization — while its token
-    /// spend still counts toward the session total.
+    /// 这个 agent 派发的执行者的回合上限（spec §16）。独立于
+    /// [`SessionConfig::max_iterations`] —— 「失控的执行者绝不能吃掉会话的回合」是需求，
+    /// 不是优化 —— 而它花掉的 token 仍然计进会话总数。
     pub executor_max_iterations: u32,
-    /// Model an executor answers with (spec §16, §17). `None` inherits the
-    /// dispatcher's model, which is the default and the v1 behaviour; the override
-    /// is the mechanism §17 leaves in place for routing work to a cheaper model
-    /// once there is data to route on.
+    /// 执行者作答所用的模型（spec §16、§17）。`None` 继承派发者的模型，这是缺省、也是 v1
+    /// 的行为；那个覆盖是 §17 留在原地的机制，等到有数据可依时用来把活路由给更便宜的模型。
     ///
-    /// The **client** is not overridable here: an executor answers on its
-    /// dispatcher's provider, so this names a model that client can serve (a model
-    /// of the same provider profile). Swapping the provider for executors is an
-    /// assembly decision, not a per-session value.
+    /// **client** 在这里不可覆盖：执行者在它派发者的 provider 上作答，所以这里点名的必须是
+    /// 那个 client 能服务的模型（同一个 provider profile 下的模型）。给执行者换 provider 是
+    /// 组装期的决定，不是按会话的值。
     ///
-    /// One of the two **landing points** a cheaper model may be routed to; read it
-    /// through [`SessionConfig::model_for`], which is the routing rule's one home.
+    /// 更便宜的模型可被路由到的两个**落点**之一；通过 [`SessionConfig::model_for`] 读它，
+    /// 那是路由规则唯一的家。
     pub executor_model: Option<String>,
-    /// How many executors one batch may run at once (spec §16).
+    /// 一批里可以同时跑多少个执行者（spec §16）。
     pub max_parallel_executors: usize,
-    /// Model the synthesizer answers with (spec §17). `None` inherits the
-    /// discussion's model, which is the default and the v1 behaviour.
+    /// 合成器作答所用的模型（spec §17）。`None` 继承讨论的模型，这是缺省、也是 v1 的行为。
     ///
-    /// The other landing point. A **debater is never routed** — there is no
-    /// field for it and no call site that would read one.
+    /// 另一个落点。**讨论者绝不被路由** —— 没有那个字段，也没有任何会去读它的调用点。
     pub synthesizer_model: Option<String>,
-    /// What a million tokens cost per model, for **display** (spec §17). The
-    /// gate reads tokens; this table never decides anything.
+    /// 每个模型一百万 token 多少钱，作**显示**用（spec §17）。闸门数的是 token；这张表
+    /// 从不决定任何事。
     pub pricing: PriceTable,
-    /// The session's cumulative token allowance (spec §17). Every participant on
-    /// one stream shares it, which `assemble_discussion` enforces.
+    /// 会话的累计 token 额度（spec §17）。同一条流上的每个参与者共用它，这一点由
+    /// `assemble_discussion` 强制。
     pub budget: Budget,
-    /// The values this session redacts from every event before it is appended
-    /// (spec §20). A session-level fact that every agent on the stream shares,
-    /// carried here because [`Config::session_config`] is the one place
-    /// configuration becomes injected values, so no assembly path that uses it
-    /// has to pass anything extra. A discussion goes further and **refuses** a
-    /// roster whose redactors disagree, because one stream with two answers to
-    /// "what is secret" would scrub some events and not others.
+    /// 这个会话在每条事件被追加之前要从它里面打掉的那些值（spec §20）。这是同一条流上每个
+    /// agent 共用的会话级事实，带在这里是因为 [`Config::session_config`] 正是配置变成注入值
+    /// 的那一处，于是用它的组装路径都不必额外传东西。讨论还更进一步：它会**拒绝**打码器互相
+    /// 不一致的名册，因为一条流对「什么算秘密」给出两个答案，就会有些事件被打码、有些没有。
     pub redactor: Redactor,
 }
 
@@ -1510,56 +1420,54 @@ impl SessionConfig {
         self
     }
 
-    /// Override the turn cap an executor runs under (spec §16).
+    /// 覆盖执行者跑着的那个回合上限（spec §16）。
     pub fn with_executor_max_iterations(mut self, executor_max_iterations: u32) -> Self {
         self.executor_max_iterations = executor_max_iterations;
         self
     }
 
-    /// Override how many executors one batch may run at once (spec §16).
+    /// 覆盖一批里可以同时跑多少个执行者（spec §16）。
     pub fn with_max_parallel_executors(mut self, max_parallel_executors: usize) -> Self {
         self.max_parallel_executors = max_parallel_executors.max(1);
         self
     }
 
-    /// Route this agent's executors to another model (spec §16, §17).
+    /// 把这个 agent 的执行者路由到另一个模型（spec §16、§17）。
     pub fn with_executor_model(mut self, executor_model: impl Into<String>) -> Self {
         self.executor_model = Some(executor_model.into());
         self
     }
 
-    /// Override the per-result truncation cap (spec §10).
+    /// 覆盖单条结果的裁剪上限（spec §10）。
     pub fn with_max_tool_result_tokens(mut self, max_tool_result_tokens: u64) -> Self {
         self.max_tool_result_tokens = max_tool_result_tokens;
         self
     }
 
-    /// Give this session the values it redacts before anything is appended to
-    /// the stream (spec §20).
+    /// 给这个会话一份打码值，在有任何东西被追加到流上之前就用它（spec §20）。
     pub fn with_redactor(mut self, redactor: Redactor) -> Self {
         self.redactor = redactor;
         self
     }
 
-    /// Set the repo-map budget, clamped to [`MAX_REPO_MAP_TOKENS`] (spec §9): no
-    /// configuration can make one `repo_map` call unbounded.
+    /// 设置仓库地图预算，夹在 [`MAX_REPO_MAP_TOKENS`] 之内（spec §9）：没有任何配置能让
+    /// 一次 `repo_map` 调用无界。
     pub fn with_repo_map_tokens(mut self, repo_map_tokens: u64) -> Self {
         self.repo_map_tokens = repo_map_tokens.min(MAX_REPO_MAP_TOKENS);
         self
     }
 
-    /// Set the wall-clock cap a `bash` call runs under when the model does not
-    /// pass a `timeout_ms` (spec §7). Never above the ceiling, so a configured
-    /// default cannot outlive [`MAX_BASH_TIMEOUT_MS`].
+    /// 设置模型不传 `timeout_ms` 时 `bash` 调用的墙钟上限（spec §7）。永远不会高过天花板，
+    /// 所以配置出来的缺省活不过 [`MAX_BASH_TIMEOUT_MS`]。
     pub fn with_bash_timeout_ms(mut self, bash_timeout_ms: u64) -> Self {
-        // The ceiling is at least one by construction (its own builder floors it),
-        // so the only clamp left is against the configured ceiling.
+        // 天花板在构造上至少是 1（它自己的 builder 会把它垫起来），所以剩下的唯一一次夹取
+        // 是对着配置出来的天花板。
         self.bash_timeout_ms = bash_timeout_ms.clamp(1, self.max_bash_timeout_ms);
         self
     }
 
-    /// Set the ceiling on a model-supplied `bash` `timeout_ms` (spec §7), and
-    /// pull the default down with it when the new ceiling is lower.
+    /// 设置模型所给 `bash` `timeout_ms` 的天花板（spec §7），新的天花板更低时把缺省一起
+    /// 拉下来。
     pub fn with_max_bash_timeout_ms(mut self, max_bash_timeout_ms: u64) -> Self {
         self.max_bash_timeout_ms = max_bash_timeout_ms.max(1);
         self.bash_timeout_ms = self.bash_timeout_ms.min(self.max_bash_timeout_ms);
@@ -1571,49 +1479,47 @@ impl SessionConfig {
         self
     }
 
-    /// Pin the reasoning tier for the whole session (spec §4).
+    /// 把推理档位在整个会话里钉住（spec §4）。
     pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
         self.params.reasoning_effort = Some(effort);
         self
     }
 
-    /// Route the synthesizer's one closing call to another model (spec §17).
+    /// 把合成器那一次收尾调用路由到另一个模型（spec §17）。
     pub fn with_synthesizer_model(mut self, synthesizer_model: impl Into<String>) -> Self {
         self.synthesizer_model = Some(synthesizer_model.into());
         self
     }
 
-    /// Carry the price table this session displays costs with (spec §17).
+    /// 带上这个会话用来显示花费的价目表（spec §17）。
     pub fn with_pricing(mut self, pricing: PriceTable) -> Self {
         self.pricing = pricing;
         self
     }
 
-    /// Give this session its cumulative token allowance (spec §17).
+    /// 给这个会话它的累计 token 额度（spec §17）。
     pub fn with_budget(mut self, budget: Budget) -> Self {
         self.budget = budget;
         self
     }
 
-    /// Cap the session's cumulative tokens, keeping the default tolerance.
+    /// 给会话的累计 token 封顶，保留缺省的宽容度。
     pub fn with_session_token_limit(mut self, tokens: u64) -> Self {
         self.budget = self.budget.with_limit(tokens);
         self
     }
 
-    /// Set the pre-flight tolerance, as a multiple of what is left (spec §17).
+    /// 设置预检宽容度，以剩余量的倍数表示（spec §17）。
     pub fn with_estimate_margin(mut self, margin: f64) -> Self {
         self.budget = self.budget.with_estimate_margin(margin);
         self
     }
 
-    /// The model `point` answers with: the configured override, else the model
-    /// this config already carries (spec §17).
+    /// `point` 作答所用的模型：配置里的覆盖，否则是本配置已经带着的那个模型（spec §17）。
     ///
-    /// This is the system's **only** routing rule, and it is called from exactly
-    /// the two landing points — the executor port and the synthesizer's session.
-    /// A debater is never routed: it answers with [`SessionConfig::model`], which
-    /// no routing call can move.
+    /// 这是全系统**唯一**一条路由规则，而且恰好只从两个落点调用 —— 执行者端口，以及合成器
+    /// 的会话。讨论者绝不被路由：它用 [`SessionConfig::model`] 作答，没有任何路由调用能挪动
+    /// 它。
     pub fn model_for(&self, point: LandingPoint) -> &str {
         let override_model = match point {
             LandingPoint::Synthesizer => self.synthesizer_model.as_deref(),

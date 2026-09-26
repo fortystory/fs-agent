@@ -1,27 +1,23 @@
-//! The turn loop.
+//! 回合循环。
 //!
-//! The `agent` layer is the only writer of the event stream, and the loop is the
-//! only place that calls the provider. Hooks and the permission gate are pure
-//! value transformations it applies in a fixed order (spec §3):
-//! `hook.pre -> gate -> [ask] -> dispatch -> hook.post -> append`. The pre-hook
-//! runs before the gate, so it can stop an ask from happening but can never
-//! bypass one; its output is a constraint, and the effective verdict is the
-//! supremum of that constraint and the gate's verdict.
+//! `agent` 层是事件流的唯一写者，而循环是唯一调用 provider 的地方。钩子与权限门是它按固定
+//! 顺序施加的纯值变换（spec §3）：
+//! `hook.pre -> gate -> [ask] -> dispatch -> hook.post -> append`。前置钩子在权限门之前
+//! 跑，所以它能拦下一次询问，却永远绕不过一次；它的输出是一条约束，而最终裁决是那条约束与
+//! 权限门裁决的上确界。
 //!
-//! Three invariants hold from the first ticket onward:
+//! 从第一张票起就有三条不变量成立：
 //!
-//! 1. every `tool_call` gets exactly one result;
-//! 2. the provider is never called while a `tool_call` lacks a result;
-//! 3. every event goes through [`append_event`] — the loop's own path and the
-//!    executor port it drives are the same single writer.
+//! 1. 每一个 `tool_call` 恰好拿到一个结果；
+//! 2. 只要还有 `tool_call` 没有结果，就绝不调用 provider；
+//! 3. 每一条事件都走 [`append_event`] —— 循环自己的路径与它驱动的执行者端口是同一个唯一
+//!    写者。
 //!
-//! [`executor`] is a submodule of this layer rather than a boundary of its own:
-//! running an executor means driving a turn, so it is control flow (spec §1, §16).
+//! [`executor`] 是本层的子模块，而不是自己的一道边界：跑一个执行者意味着驱动一个回合，所以
+//! 它是控制流（spec §1、§16）。
 //!
-//! [`cancel`] is the plumbing of the one gesture that stops a turn early
-//! (spec §6): the turn selects on it while a provider stream is in flight and
-//! while a tool runs, and an executor holds the same plumbing so one gesture
-//! reaches the whole chain below it.
+//! [`cancel`] 是那个能提前停下回合的手势的管路（spec §6）：provider 流在飞时、工具在跑时，
+//! 回合 select 它；执行者持有同一套管路，于是一次手势能到达它下面整条链。
 
 mod cancel;
 mod executor;
@@ -58,45 +54,39 @@ use crate::Error;
 
 use executor::{spawned_executors, ExecutorPort};
 
-/// How much of the stream one turn is allowed to see.
+/// 一个回合被允许看到多少流。
 ///
-/// A single-agent turn sees everything. A turn inside a discussion round sees
-/// everything up to and including that round's `RoundStarted`, plus its own
-/// later events — never the other debater's events in the same round (spec §15).
+/// 单 agent 回合看到全部。讨论轮次里的一个回合看到截止到该轮 `RoundStarted`（含）的一切，
+/// 加上它自己更晚的事件 —— 永远看不到同一轮里另一个讨论者的事件（spec §15）。
 ///
-/// This is a *structural* cut, not a timing hope. The two debaters are in flight
-/// at once, so "neither has answered yet" is a race that a fast fake provider
-/// loses immediately; cutting the stream at a `seq` is the only form of
-/// independence that holds whatever order the two turns interleave in.
+/// 这是**结构性**的切分，不是对时序的指望。两个讨论者同时在飞，所以「两边都还没作答」是一场
+/// 快的假 provider 立刻就会输掉的竞态；把流切在一个 `seq` 上，是唯一一种无论两个回合如何
+/// 交错都成立的独立性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnScope {
-    /// Everything in the log: an ordinary single-agent turn.
+    /// 日志里的一切：一次普通的单 agent 回合。
     Whole,
-    /// Everything up to and including `seq == before_seq` (the round's
-    /// `RoundStarted`), plus the acting speaker's own later events.
+    /// 截止到 `seq == before_seq`（该轮的 `RoundStarted`，含）的一切，
+    /// 加上正在行动的发言者自己更晚的事件。
     Round { before_seq: u64 },
-    /// An executor's own window: the pinned injections and its own events, and
-    /// nothing else.
+    /// 执行者自己的窗口：钉住的注入加上它自己的事件，别的都没有。
     ///
-    /// An executor is not a participant in the conversation that dispatched it.
-    /// It works from its brief, so the dispatching session's speech and the other
-    /// speaker's answers are not in its window — which is also what keeps a long
-    /// discussion from being replayed into every executor's context. The brief
-    /// itself arrives through the stream, as `ExecutorSpawned` (spec §5, §16).
+    /// 执行者不是派发它那场对话的参与者。它靠自己的简报干活，所以派发它的那个会话说了什么、
+    /// 另一个发言者答了什么，都不在它的窗口里 —— 这也是让一场长讨论不至于被回放进每个执行者
+    /// 上下文的原因。简报本身是经流送达的，作为 `ExecutorSpawned`（spec §5、§16）。
     Executor,
 }
 
-/// This turn's view of the stream, under `scope`.
+/// 这个回合在 `scope` 之下对流的视图。
 fn scoped_events(session: &Session, speaker: &SpeakerId, scope: TurnScope) -> Vec<Event> {
     scoped_events_slice(&session.events(), speaker, scope)
 }
 
-/// [`scoped_events`] over an explicit slice.
+/// 在一段显式切片上做 [`scoped_events`]。
 ///
-/// The slice form is what `replay` needs: it holds a snapshot already cut at the
-/// call it is reproducing, so it cannot go through the live log. The two share
-/// this one rule, which is what keeps a recomputed window identical to a live
-/// one (spec §15, §18).
+/// 切片形式是 `replay` 需要的：它手里那张快照已经在被复现的那次调用处切好了，所以它走不了
+/// 活着的日志。两者共用这一条规则，这正是重算出的窗口与活着的窗口一模一样的原因
+/// （spec §15、§18）。
 pub(crate) fn scoped_events_slice(
     events: &[Event],
     speaker: &SpeakerId,
@@ -108,9 +98,8 @@ pub(crate) fn scoped_events_slice(
         TurnScope::Round { before_seq } => {
             events.retain(|event| event.seq <= before_seq || &event.speaker_id == speaker);
         }
-        // A pinned injection is the session head every agent replays, so it
-        // survives the cut whether or not the executor could have seen it live
-        // (an executor is spawned after the injections were recorded).
+        // 钉住的注入是每个 agent 都会重放的会话头部，所以无论执行者有没有可能当场看到它，
+        // 它都活过这次切分（执行者是在注入被记录之后才派发出来的）。
         TurnScope::Executor => events.retain(|event| {
             &event.speaker_id == speaker
                 || matches!(
@@ -122,22 +111,17 @@ pub(crate) fn scoped_events_slice(
     events
 }
 
-/// The single-agent `system` prompt: what this program is.
+/// 单 agent 的 `system` 提示词：本程序是什么。
 ///
-/// A discussion debater and an executor each lead with their own identity; a
-/// plain session led with none, so the only thing describing the program was the
-/// pinned context — and the model, reading a skill's prose, introduced itself as
-/// "Claude Code". The identity never enters the log, like every other one here,
-/// which is why `replay` derives it from the stream's shape.
+/// 讨论者与执行者各自以自己的身份打头；而普通会话本来什么都不带，于是唯一描述这个程序的东西
+/// 就是钉住的上下文 —— 模型读着一段技能正文，自我介绍成了「Claude Code」。这份身份和这里的
+/// 其它身份一样从不进日志，所以 `replay` 从流的形状上把它推出来。
 ///
-/// The second half is the **rules section** of `.scratch/todo-and-modes/spec.md`
-/// §3: guidance to keep a `todo` list, not enforcement. It rides here because this
-/// is the model-visible prefix of **every** request, which makes it the harshest
-/// version of ADR 0001's rule — adding a line is allowed, changing or removing one
-/// invalidates every session's cached prefix. The wording is English because it is
-/// model-visible text (ADR 0001), and it is a `const`-style literal for a second
-/// reason: a test pins the three status words in it, so the tool's vocabulary and
-/// this instruction cannot drift.
+/// 后半段是 `.scratch/todo-and-modes/spec.md` §3 的**规则段**：引导模型维护一份 `todo` 列表，
+/// 不是强制。它搭在这里，是因为这是**每一次**请求里模型可见的前缀，也就是 ADR 0001 那条规矩
+/// 最严苛的版本 —— 加一行是允许的，改一行或删一行会让每一个会话的缓存前缀作废。措辞是英文，
+/// 因为它属于模型可见文本（ADR 0001）；它还是 `const` 风格的字面量，另有一个理由：有测试钉住
+/// 里面的三个状态词，所以工具的用词和这条指令没法漂开。
 pub fn agent_identity() -> &'static str {
     concat!(
         "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。",
@@ -153,13 +137,12 @@ pub fn agent_identity() -> &'static str {
     )
 }
 
-/// Project → prepend the private identity → trim.
+/// 投影 → 前置私有身份 → 裁剪。
 ///
-/// The one place a turn's provider `messages` are built (spec §5, §10, §15), so
-/// `replay` reproduces the loop instead of approximating it: the same projection,
-/// the same leading `system` identity and the same trim policy, in the same
-/// order. The identity never enters the log, which is exactly why this has to be
-/// a shared function rather than two call sites that agree today.
+/// 一个回合的 provider `messages` 在这里被构造（spec §5、§10、§15），这是唯一的一处，所以
+/// `replay` 是复现循环而不是近似它：同一个投影、同一份打头的 `system` 身份、同一条裁剪策略，
+/// 同一个顺序。身份从不进日志，这正是它必须是一个共享函数、而不是两处「今天恰好一致」的调用
+/// 点的原因。
 pub(crate) fn build_messages(
     events: &[Event],
     speaker: &SpeakerId,
@@ -168,11 +151,9 @@ pub(crate) fn build_messages(
     trim_policy: &context::TrimPolicy,
 ) -> Result<Vec<Message>, context::TrimError> {
     let projected = project(events, speaker, caps);
-    // The agent's private identity leads the request and never enters the log
-    // (spec §15). It is counted against the budget but pinned: `trim` treats a
-    // leading `system` message as part of the head that is never dropped, so the
-    // protocol instructions cannot be trimmed away while the question that needs
-    // them stays.
+    // agent 的私有身份给请求打头、从不进日志（spec §15）。它计进预算但被钉住：`trim` 把
+    // 打头的 `system` 消息当作永不丢弃的头部的一部分，所以协议指令不会被裁掉，而需要它们的
+    // 那个问题还留着。
     let projected = match identity {
         Some(identity) => {
             let mut messages = Vec::with_capacity(projected.len() + 1);
@@ -188,15 +169,15 @@ pub(crate) fn build_messages(
     context::trim(projected, context::usable_input(caps), trim_policy)
 }
 
-/// How a turn ended, plus the assistant text of its last message.
+/// 一个回合是怎么结束的，以及它最后一条消息里的助手文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnOutcome {
     pub reason: StopReason,
     pub text: String,
 }
 
-/// Record the session skeleton. The agent module owns every write to the log,
-/// so even the one-off `SessionStarted` event is recorded here.
+/// 记下会话骨架。`agent` 模块拥有对日志的每一次写入，
+/// 所以连一次性的 `SessionStarted` 事件也在这里记录。
 pub fn record_session_started(session: &mut Session, render: &RenderHandle) -> Result<(), Error> {
     emit(
         session,
@@ -210,7 +191,7 @@ pub fn record_session_started(session: &mut Session, render: &RenderHandle) -> R
     )
 }
 
-/// Record the user's own message before a turn runs.
+/// 在一个回合开始之前记下用户自己的消息。
 pub fn record_user_message(
     session: &mut Session,
     render: &RenderHandle,
@@ -228,13 +209,12 @@ pub fn record_user_message(
     )
 }
 
-/// Record one pinned context injection.
+/// 记下一次钉住的上下文注入。
 ///
-/// The injection is a first-class event so `project` stays a function of the
-/// stream plus the rules (spec §10): the content the model replays is the
-/// content that was recorded, not whatever the file says today. `ContextInjected`
-/// is attributed to `User` (spec §5), and projection turns it into the first
-/// `user` message — never merged, and never dropped by [`context::trim`].
+/// 注入是一等事件，这样 `project` 才能保持是流加规则的函数（spec §10）：模型重放的内容就是
+/// 当时记录下来的内容，而不是那个文件今天写着什么。`ContextInjected` 归属给 `User`
+/// （spec §5），投影把它变成第一条 `user` 消息 —— 从不合并，也从不被 [`context::trim`]
+/// 丢掉。
 pub fn record_context_injection(
     session: &mut Session,
     render: &RenderHandle,
@@ -244,12 +224,10 @@ pub fn record_context_injection(
     record_context_injection_from(session, render, &SpeakerId::User, source, content)
 }
 
-/// The same, attributed to a **participant** rather than to the user.
+/// 同上，但归属给一个**参与者**而不是用户。
 ///
-/// One injection travels this way: a debater's persona (spec §15). Its attribution is
-/// what lets the projection give it to that debater and to nobody else — the other side
-/// of the argument has no business reading it — so this is the only place an injection
-/// speaks as someone other than the user.
+/// 只有一次注入走这条路：讨论者的人物（spec §15）。它的归属正是投影能把它只给那个讨论者、
+/// 不给别人的原因 —— 论点的对侧没道理读到它 —— 所以这是唯一一处注入以用户之外的身份说话。
 pub fn record_context_injection_from(
     session: &mut Session,
     render: &RenderHandle,
@@ -268,16 +246,13 @@ pub fn record_context_injection_from(
     )
 }
 
-/// Run one complete turn for `speaker` and return why it stopped.
+/// 为 `speaker` 跑完整整一个回合，并返回它为什么停下。
 ///
-/// `scope` is how much of the stream this turn may see. It only ever *removes*
-/// the other debater's same-round events, so a single-agent turn passes
-/// [`TurnScope::Whole`] and sees exactly the stream it always saw.
+/// `scope` 是这个回合能看到多少流。它只会*去掉*另一个讨论者同轮的事件，所以单 agent 回合传
+/// [`TurnScope::Whole`]，看到的正是它一向看到的流。
 ///
-/// `cancelled` is this turn's view of the session's cancel gesture (spec §6). It
-/// is selected on while a provider stream is in flight and while a tool runs, and
-/// it is cloned into every executor this turn dispatches, so one gesture stops
-/// the chain below it too.
+/// `cancelled` 是这个回合对会话取消手势的视图（spec §6）。provider 流在飞时、工具在跑时都会
+/// select 它，它也会被克隆进这个回合派发的每一个执行者，于是一次手势也能停下它下面的链。
 pub async fn run_turn(
     session: &mut Session,
     speaker: &SpeakerId,
@@ -287,19 +262,16 @@ pub async fn run_turn(
     cancelled: &CancelObserver,
 ) -> Result<TurnOutcome, Error> {
     let max_iterations = session.config().max_iterations;
-    // The projection branches on the model's field-level facts, so they are
-    // read once from the provider rather than re-derived per iteration. The
-    // drop policy is a value too, so it is built once outside the loop.
+    // 投影会按模型字段级的那些事实分叉，所以它们从 provider 读一次，而不是每一轮迭代重新推
+    // 一遍。丢弃策略也是一个值，所以它在循环外构造一次。
     let caps = provider.caps();
     let trim_policy = context::TrimPolicy::default();
     let mut iteration: u32 = 0;
     let mut last_text = String::new();
-    // Executor ids are `<parent>-<n>`, counted off the stream rather than
-    // allocated, so a resumed session cannot hand out an id it already used. The
-    // count is taken once and then carried across this turn's batches.
+    // 执行者 id 是 `<parent>-<n>`，从流上数出来而不是分配出来的，所以一个被续上的会话发不出
+    // 它已经用过的 id。计数取一次，然后带着走完这个回合的各批。
     let mut executors_spawned = spawned_executors(&scoped_events(session, speaker, scope), speaker);
-    // The values every call of this turn is processed with. They do not change
-    // between iterations, so they are bundled once, outside the loop.
+    // 这个回合的每一次调用都用这些值处理。它们在迭代之间不变，所以在循环外打成一个包。
     let context = TurnContext {
         render,
         speaker,
@@ -309,38 +281,31 @@ pub async fn run_turn(
     };
 
     loop {
-        // One snapshot per iteration: the log is shared with any other debater
-        // in flight, so every read of it is a snapshot rather than a borrow.
+        // 每次迭代一张快照：日志与另一个在飞的讨论者共享，所以对它的每一次读都是快照而不是
+        // 借用。
         let events = scoped_events(session, speaker, scope);
 
-        // Invariant 2: a pending tool_call means the log is owed a result, so
-        // the provider must not be called. Scoped to this speaker: with two
-        // debaters in flight, the other's unfinished call is not this turn's
-        // business — reading it as one's own would end the turn with an error
-        // that has nothing to do with it.
+        // 不变量 2：有挂着的 tool_call 就说明日志还欠一个结果，所以绝不能调用 provider。
+        // 作用域限于这个发言者：两个讨论者同时在飞时，另一个没做完的调用不是这个回合的事 ——
+        // 把它当成自己的会让这个回合以一个跟它毫不相干的错误收场。
         if !pending_tool_calls_of(&events, speaker).is_empty() {
             return end_turn(session, render, speaker, StopReason::Error, last_text);
         }
 
-        // A gesture that landed between iterations stops the turn before another
-        // provider call is opened (spec §6). Checking here rather than only
-        // inside the stream keeps a cancelled turn from making a request it
-        // would immediately abandon.
+        // 落在迭代之间的手势会在下一个 provider 调用打开之前停下这个回合（spec §6）。在这里
+        // 检查，而不是只在流内部检查，能让一个被取消的回合不去发一个它马上就会弃掉的请求。
         if cancelled.is_cancelled() {
             render.diagnostic("turn cancelled before the next model call");
             return end_turn(session, render, speaker, StopReason::Aborted, last_text);
         }
 
-        // The session's hard stop (spec §17): once the cumulative spend reaches
-        // the allowance this turn opens no further call and ends
-        // `BudgetExhausted` — degrade and wrap up, never a half-finished unit.
-        // The sum comes off the **whole** log, not this turn's scoped view: the
-        // allowance is the session's, and an executor's window deliberately
-        // excludes the debaters whose spend it shares.
+        // 会话的硬停（spec §17）：累计花费一旦碰到额度，这个回合就不再打开新的调用，并以
+        // `BudgetExhausted` 收场 —— 降级收尾，绝不留下半个单位。求和取自**整条**日志，而不是
+        // 这个回合那点有作用域的视图：额度是会话的，而执行者的窗口刻意不包含与它分享额度的
+        // 那些讨论者。
         //
-        // An executor's own turn is **exempt**: the hard stop refuses to dispatch
-        // new executors and lets the ones already running finish (spec §17), so
-        // nothing here may stop one mid-work. Its spend still lands on the stream.
+        // 执行者自己的回合是**豁免**的：硬停拒绝派发新执行者，让已经在跑的那些跑完
+        // （spec §17），所以这里没有任何东西能中途停下一个。它花掉的钱照样落在流上。
         let budget = session.config().budget.clone();
         let spent = total_usage(&session.events()).total_tokens();
         let gated = scope != TurnScope::Executor;
@@ -378,10 +343,8 @@ pub async fn run_turn(
             },
         )?;
 
-        // Projection only attributes; trimming is the next pure step and the
-        // only place anything is dropped. A trim that cannot fit the budget has
-        // exhausted every droppable class, which is the turn's hard failure
-        // (spec §10).
+        // 投影只做归属；裁剪是下一个纯步骤，也是唯一丢弃东西的地方。一次装不进预算的裁剪说明
+        // 每一类可丢的材料都用尽了，那是这个回合的硬失败（spec §10）。
         let messages =
             match build_messages(&events, speaker, &caps, session.identity(), &trim_policy) {
                 Ok(messages) => messages,
@@ -391,12 +354,10 @@ pub async fn run_turn(
                 }
             };
 
-        // The pre-flight half of the session gate (spec §17). The estimate is
-        // crude — characters / 4 — so the threshold is a multiple of what is
-        // left rather than an exact comparison, and a call that plainly would not
-        // fit is never sent. Output tokens are not estimated; the allowance's own
-        // cumulative check picks up whatever the call really costs. An executor's
-        // turn is exempt here too: it was already running when the money ran out.
+        // 会话闸门的预检那一半（spec §17）。估计很粗 —— 字符数 / 4 —— 所以阈值取剩余量的倍数
+        // 而不是精确比较，而一次显然装不下的调用绝不会被发出去。输出 token 不做估计；额度
+        // 自己的累计检查会把这次调用真正花的钱收上来。执行者的回合在这里同样豁免：钱花光的
+        // 时候它已经在跑了。
         if gated {
             let estimated = context::estimate_messages_tokens(&messages);
             if !budget.admits_estimate(spent, estimated) {
@@ -420,9 +381,8 @@ pub async fn run_turn(
             cache_key: Some(session.id().as_str().to_owned()),
         };
 
-        // The request may itself still be in flight — an adapter hands back a
-        // stream only once the transport answers — so the send is selectable
-        // too: a gesture must not have to wait for a stalled connection.
+        // 请求自己有可能仍在飞 —— 适配器只有在传输层作答之后才交回流 —— 所以这次发送也可以
+        // select：一次手势不该被迫等一条卡住的连接。
         let mut cancel = cancelled.clone();
         let sent = tokio::select! {
             biased;
@@ -449,8 +409,8 @@ pub async fn run_turn(
 
         loop {
             tokio::select! {
-                // The gesture wins a tie against an item that is ready: stopping
-                // now is the whole point of pressing it.
+                // 手势在与一个已经就绪的条目打平时胜出：现在停下正是
+                // 按下它的全部意义。
                 biased;
                 _ = cancel.cancelled() => {
                     aborted = true;
@@ -466,8 +426,8 @@ pub async fn run_turn(
                         reasoning.push_str(&delta);
                     }
                     Some(Ok(StreamEvent::ToolCallStarted { .. })) => {
-                        // Fragments are assembled by the adapter; the loop only sees
-                        // the completed call.
+                        // 碎片由适配器拼装；循环只看到完成的
+                        // 那次调用。
                     }
                     Some(Ok(StreamEvent::ToolCallCompleted {
                         id,
@@ -490,9 +450,9 @@ pub async fn run_turn(
                         )?;
                     }
                     Some(Ok(StreamEvent::Finished { finish_reason })) => {
-                        // The stream ended on `[DONE]`. `finish_reason` is diagnostic
-                        // only; the turn's stop reason comes from the loop's own
-                        // continuation query, never from the provider.
+                        // 流在 `[DONE]` 上结束。`finish_reason` 只作诊断；
+                        // 这个回合的停止原因来自循环自己的续跑查询，
+                        // 从不来自 provider。
                         render.diagnostic(&format!(
                             "provider stream finished: {}",
                             crate::render::wording::finish_reason(&finish_reason)
@@ -505,24 +465,23 @@ pub async fn run_turn(
                         failed = true;
                         break;
                     }
-                    // The stream just stopped. Nothing completed, so nothing lands
-                    // in the log; the `[DONE]` check below turns it into an error.
+                    // 流就这么停了。没有任何东西完成，所以什么都不落进日志；
+                    // 下面的 `[DONE]` 检查把它变成错误。
                     None => break,
                 },
             }
         }
 
-        // An interrupted stream is dropped here, with the turn: that is what
-        // "stop the in-flight provider stream" means for a real adapter, and it
-        // is why the partially received text stays out of the log — a turn that
-        // never reached `[DONE]` produced no completed unit (spec §6).
+        // 一条被中断的流在这里被丢掉，和这个回合一起：对真实适配器来说，「停下在飞的
+        // provider 流」就是这个意思，也正是收到一半的文本留在日志之外的原因 —— 一个从没到
+        // `[DONE]` 的回合没有产出任何完成的单位（spec §6）。
         if aborted {
             render.diagnostic("turn cancelled while the model stream was in flight");
             return end_turn(session, render, speaker, StopReason::Aborted, text);
         }
 
-        // Only `[DONE]` ends a message: a stream that failed or just stopped
-        // without it produced no completed unit, so nothing lands in the log.
+        // 只有 `[DONE]` 才结束一条消息：失败了、或者没有它就停下的流没有产出任何完成的单位，
+        // 所以什么都不落进日志。
         if failed || !saw_done {
             if !failed {
                 render.diagnostic("provider stream ended without [DONE]");
@@ -543,24 +502,19 @@ pub async fn run_turn(
             )?;
         }
 
-        // Every `tool_call` gets exactly one result, produced here and nowhere
-        // else. The pre-hook runs first, then the permission gate; a refusal (a
-        // hook's tighten/skip/failure, a policy deny, a user deny, or a headless
-        // `Ask` downgrade) synthesizes its one error result, so the tool is never
-        // reached. The dispatcher then owns the shared guardrails (read before
-        // edit, the per-path write locks, read-set invalidation) so no tool can
-        // opt out, and the post-hook runs once the result is in the log.
+        // 每一个 `tool_call` 恰好拿到一个结果，在这里产出、别处不产出。前置钩子先跑，然后是
+        // 权限门；一次拒绝（钩子的收紧 / 跳过 / 失败、策略拒绝、用户拒绝、或者 headless 下的
+        // `Ask` 降级）合成它那一个错误结果，所以工具根本不会被触到。接着派发者握住那些共享
+        // 护栏（改前先读、逐路径的写锁、读集合失效），这样没有哪个工具能选择退出；结果落进
+        // 日志之后，后置钩子跑一次。
         //
-        // A `task` call is judged exactly like any other call and then deferred:
-        // the batch's deferred calls run together, because dispatching touches no
-        // workspace path and several executors working at once is the point
-        // (spec §16). Everything else still runs inline, where it always did.
+        // 一次 `task` 调用被判定得和其它调用一模一样，然后被推迟：这一批里被推迟的调用一起
+        // 跑，因为派发不碰工作区的任何路径，而几个执行者同时干活正是重点（spec §16）。别的
+        // 一切照旧在原地跑，就像它一向那样。
         let mut deferred: Vec<DeferredCall> = Vec::new();
         for call in &tool_calls {
-            // A gesture that landed before this call was started owes nothing
-            // for it: nothing of it is on the stream yet. The deferred calls
-            // were started already, so each still gets the one result it is
-            // owed (spec §6).
+            // 手势在这次调用开始之前就落下的，不欠它任何东西：它还没有一丝一毫落在流上。
+            // 被推迟的那些调用已经开始了，所以每一个仍然拿到它被欠的那一个结果（spec §6）。
             if cancelled.is_cancelled() {
                 close_deferred_calls(session, render, speaker, deferred, CANCELLED_BEFORE_RUN)?;
                 render.diagnostic("turn cancelled before the tool calls ran");
@@ -570,10 +524,8 @@ pub async fn run_turn(
             match process_call(session, &context, &mut executors_spawned, call).await? {
                 Disposition::Finished => {}
                 Disposition::Deferred(call) => deferred.push(*call),
-                // A gesture stopped the turn (a pre-hook's `Stop`, or a cancel
-                // that caught the call in flight). The calls that were started
-                // and deferred are still owed exactly one result each; they
-                // never ran, so it says so.
+                // 一次手势停下了这个回合（前置钩子的 `Stop`，或者一次抓住调用在飞时的取消）。
+                // 那些已经启动并推迟的调用仍然各欠恰好一个结果；它们从没跑过，所以说出来。
                 Disposition::Stopped(why) => {
                     close_deferred_calls(session, render, speaker, deferred, why)?;
                     return end_turn(session, render, speaker, StopReason::Aborted, last_text);
@@ -592,50 +544,46 @@ pub async fn run_turn(
     }
 }
 
-/// The one result each stopping gesture gives a `tool_call`.
+/// 每个让回合停下的手势给 `tool_call` 的那一个结果。
 ///
-/// Named once because both flow through [`close_deferred_calls`] and the model
-/// reads them: whether the tool ran decides whether the workspace may have
-/// changed.
+/// 只在这里命名一次，因为两者都经 [`close_deferred_calls`] 流过、而且模型会读到它们：工具
+/// 有没有跑，决定了工作区有没有可能被改过。
 const HOOK_STOPPED_TURN: &str = "hook stopped the turn: the tool did not run";
 const CANCELLED_BEFORE_RUN: &str = "the turn was cancelled: the tool did not run";
-/// The one result a `task` call gets when the session's token allowance is gone
-/// (spec §17): the executor was never dispatched, so the workspace is untouched
-/// by it.
+/// 会话 token 额度用尽时一次 `task` 调用拿到的那一个结果（spec §17）：执行者从没被派发
+/// 出去，所以工作区没被它碰过。
 const BUDGET_NO_NEW_EXECUTOR: &str = "session token budget exhausted: no new executor was \
                                        dispatched. Work that was already running was left to \
                                        finish.";
-/// A cancel that caught the call in flight: the tool's future was dropped, so
-/// whether it took effect is unknown — the same honesty the crash-recovery
-/// result carries.
+/// 一次抓住调用在飞时的取消：工具那个 future 被 drop 了，所以它有没有生效是未知的 —— 与
+/// 崩溃恢复那条结果携带的是同一种诚实。
 const CANCELLED_IN_FLIGHT: &str = "the turn was cancelled while this call was in flight, so its \
                                     result is unknown. It was not re-run; check the workspace \
                                     before relying on either outcome.";
 
-/// What the loop must do with one call once the hook and the gate have spoken.
+/// 钩子与权限门都说过话之后，循环对一次调用必须做什么。
 enum Disposition {
-    /// This call is done: its one result is in the log.
+    /// 这次调用完事了：它那一个结果已经在日志里。
     Finished,
-    /// The call may run, and runs with the rest of the batch's deferred calls.
+    /// 这次调用可以跑，和这一批里别的被推迟的调用一起跑。
     Deferred(Box<DeferredCall>),
-    /// The turn ends here. The caller closes the batch's started-but-undispatched
-    /// calls with `why`, then records the abort.
+    /// 这个回合到此为止。调用方用 `why` 把这一批里已启动但未派发的调用收尾，
+    /// 然后记录这次中止。
     Stopped(&'static str),
 }
 
-/// One authorized call the batch runs alongside its siblings.
+/// 一次被授权、与同批兄弟一起跑的调用。
 struct DeferredCall {
     pending: PendingCall,
     allowed: AllowedCall,
     started: Instant,
 }
 
-/// Give every started-but-undispatched call of a batch the one result it is owed
-/// when the turn ends before [`run_deferred`] reaches it.
+/// 在回合结束、[`run_deferred`] 还没来得及走到时，给一批里每一个已启动但未派发的调用
+/// 它被欠的那一个结果。
 ///
-/// A `task` call is recorded as started before it is deferred, so it is owed a
-/// result even though the executor never ran. `why` is the gesture that stopped
-/// the turn; the shape is one place, so a stopping path cannot forget a call.
+/// 一次 `task` 调用在被推迟之前就记为已启动，所以哪怕执行者从没跑过，它也欠着一个结果。
+/// `why` 是停下这个回合的那个手势；形状只在一处，所以任何一条收尾路径都不可能忘掉一次调用。
 fn close_deferred_calls(
     session: &mut Session,
     render: &RenderHandle,
@@ -656,22 +604,21 @@ fn close_deferred_calls(
     Ok(())
 }
 
-/// What one decided call produced, ready to be recorded.
+/// 一次已决策的调用产出了什么，等着被记录。
 struct CallCompletion<'a> {
     pending: &'a PendingCall,
-    /// The paths the call may touch, when it got past the gate's yes.
+    /// 这次调用可以碰的路径，当它过了权限门那个「是」的时候。
     allowed: Option<&'a AllowedCall>,
     started: Instant,
-    /// Whether the tool really ran: only then does the post-hook mount.
+    /// 工具是不是真的跑过：只有跑过，后置钩子才挂上去。
     dispatched: bool,
     outcome: DispatchOutcome,
 }
 
-/// The turn's own values, lent to every call it processes.
+/// 这个回合自己的那些值，借给它处理的每一次调用。
 ///
-/// Who is acting, how much of the stream it may see, what it answers with, and
-/// how it can be stopped are the same for every call in a batch, so they are
-/// handed over once as one value instead of five.
+/// 谁在行动、它能看多少流、它用什么作答、以及它可以被怎么停下，对一批里的每一次调用都一样，
+/// 所以它们作为一个值交出去一次，而不是五个。
 struct TurnContext<'a> {
     render: &'a RenderHandle,
     speaker: &'a SpeakerId,
@@ -680,12 +627,11 @@ struct TurnContext<'a> {
     cancelled: &'a CancelObserver,
 }
 
-/// Carry one tool call from `ToolCallStarted` to its one result: resolve it, run
-/// the pre-hook, ask the gate, and — unless the call is a deferred `task` — run
-/// the tool.
+/// 把一次工具调用从 `ToolCallStarted` 送到它那一个结果：解析它、跑前置钩子、问权限门，
+/// 然后 —— 除非这次调用是一次被推迟的 `task` —— 跑那个工具。
 ///
-/// One function rather than inline code so the deferred path and the inline path
-/// cannot drift: both end in [`finish_call`].
+/// 做成一个函数而不是内联代码，这样被推迟的路径与原地路径没法漂开：两者都在
+/// [`finish_call`] 收尾。
 async fn process_call(
     session: &mut Session,
     context: &TurnContext<'_>,
@@ -711,12 +657,12 @@ async fn process_call(
         },
     )?;
 
-    // Everything is read off the session before the read set is borrowed.
+    // 在读集合被借走之前，一切都先从会话上读出来。
     let paths = session.paths().clone();
     let locks = session.path_locks().clone();
     let skills = session.skills().clone();
-    // `repo_map` ranks by what this session is working on, so its input is
-    // recomputed from the stream — but only for a call that will use it.
+    // `repo_map` 按这个会话正在干什么来排序，所以它的输入从流上重算 ——
+    // 但只为真会用到它的那次调用算。
     let repo_map = if call.name == context::repo_map::REPO_MAP_TOOL {
         context::repo_map::RepoMapInput {
             context: context::repo_map::RankContext::from_session(
@@ -737,45 +683,40 @@ async fn process_call(
         locks,
         skills,
         repo_map,
-        // The `bash` tool's two limits travel with the call, like the repo map's
-        // budget: configuration reaches a tool through the context it is handed,
-        // never by reaching into the session.
+        // `bash` 工具的那两条限制随调用一起走，就像仓库地图的预算：配置是通过交到手里的
+        // 上下文到达工具的，从不靠伸手进会话里去取。
         bash: BashLimits {
             default_timeout_ms: session.config().bash_timeout_ms,
             max_timeout_ms: session.config().max_bash_timeout_ms,
         },
         executor: None,
-        // The question port is the session's, not the loop's: carried here so the
-        // `ask_user_question` tool receives it through its dispatch context, where
-        // the executor port is filled in per authorized call (spec §7).
+        // 问题端口是会话的，不是循环的：带在这里，是为了让 `ask_user_question` 工具经它被
+        // 派发时的上下文收到它，而执行者端口是逐次授权调用填进去的（spec §7）。
         questions: session.questions().cloned(),
     };
 
     let started = Instant::now();
-    // Resolve the call once: the gate, the hook and the guardrails read the same
-    // facts, and this is the only step that touches the filesystem for path
-    // resolution.
+    // 调用只解析一次：权限门、钩子与护栏读的是同一批事实，而这是唯一一个为了解析路径去碰
+    // 文件系统的步骤。
     let mut facts = match session
         .tools()
         .facts(&pending.tool_name, &pending.args, &pending.paths)
     {
         Ok(facts) => facts,
         Err(error) => {
-            // No tool to judge and nothing to run: the call's one result is
-            // the failure.
+            // 没有工具可判、也没有东西可跑：这次调用的那一个结果
+            // 就是这次失败。
             emit_completed(session, render, speaker, tool_call_id, Err(error), started)?;
             return Ok(Disposition::Finished);
         }
     };
 
-    // ① hook.pre. It runs before the gate, so it can stop an ask from happening;
-    //    its constraint is merged with the gate's verdict below. A `Rewrite`
-    //    changes what the gate and the tool see, which is why it must happen here
-    //    rather than after the gate.
+    // ① hook.pre。它在权限门之前跑，所以能拦下一次询问；它的约束在下面与权限门的裁决合并。
+    //    一次 `Rewrite` 会改变权限门与工具看到的东西，所以它必须发生在这里，而不是权限门
+    //    之后。
     //
-    //    Exactly one `HookExecuted` is recorded per invocation, whatever the
-    //    outcome, so the stream is a complete record of the mount point and
-    //    ticket 19 can group by hook result.
+    //    每次调用恰好记录一条 `HookExecuted`，无论结果如何，这样流就是挂载点的一份完整
+    //    记录，票 19 能按钩子结果分组。
     let mut hook_verdict: Option<Decision> = None;
     if let Some(hook) = session.hook().cloned() {
         let constraint = {
@@ -806,14 +747,14 @@ async fn process_call(
             outcome,
         )?;
 
-        // Only `Tighten` forces a verdict; the rest are flow.
+        // 只有 `Tighten` 会强制一个裁决；其余的都是流程。
         hook_verdict = constraint.as_ref().ok().and_then(Constraint::tightening);
 
         match constraint {
             Ok(Constraint::Continue | Constraint::Tighten(_)) => {}
             Ok(Constraint::Rewrite(new_args)) => {
-                // The gate and the tool both see the rewritten call, so the
-                // facts are resolved again before either reads them.
+                // 权限门与工具看到的都是改写后的调用，所以两边读之前
+                // 事实要重新解析一次。
                 pending.args = new_args;
                 facts =
                     match session
@@ -847,9 +788,8 @@ async fn process_call(
                 return Ok(Disposition::Finished);
             }
             Ok(Constraint::Stop) => {
-                // The turn ends here, but this call was already started, so it is
-                // still owed exactly one result. The remaining calls in the batch
-                // were never started and so are not owed one.
+                // 这个回合到此为止，但这次调用已经启动了，所以它仍然欠着
+                // 恰好一个结果。这一批里其余的调用从没启动过，因此不欠。
                 let stopped = ToolError::message(HOOK_STOPPED_TURN);
                 emit_completed(
                     session,
@@ -862,9 +802,9 @@ async fn process_call(
                 return Ok(Disposition::Stopped(HOOK_STOPPED_TURN));
             }
             Err(error) => {
-                // Fail-closed: block the action, diagnose it, and synthesize the
-                // call's one error result. The turn continues, so a broken hook
-                // stays diagnosable instead of becoming fatal.
+                // 失败即关闭：挡住这次动作、诊断它、并合成这次调用的那一个
+                // 错误结果。回合继续，所以一个坏掉的钩子仍然可被诊断，
+                // 而不会变成致命的。
                 render.diagnostic(&format!(
                     "hook.pre failed for {}: {error}; the action is blocked",
                     pending.tool_name
@@ -883,8 +823,8 @@ async fn process_call(
         }
     }
 
-    // ② the gate, ③ the ask. The effective verdict is the supremum of the hook's
-    //    constraint and the gate's own verdict.
+    // ② 权限门，③ 询问。最终裁决是钩子那条约束与权限门自己裁决的
+    //    上确界。
     let authorized = authorize(
         session,
         render,
@@ -902,23 +842,19 @@ async fn process_call(
             DispatchOutcome::failure(ToolError::message(message), false),
         ),
         Authorized::Allow => {
-            // The guardrails are a pure read of the facts plus this agent's read
-            // set; the decision is applied to the read set in `finish_call`.
+            // 护栏是对事实加上这个 agent 的读集合的一次纯读取；决定在
+            // `finish_call` 里施加到读集合上。
             match facts.guardrails(session.read_set()) {
                 GuardedCall::Refused(error) => (None, DispatchOutcome::failure(error, false)),
                 GuardedCall::Run(allowed) => {
-                    // A `task` call is dispatched through a port the loop builds
-                    // right here: this layer is the one that holds the provider
-                    // and the renderer, and building the port per authorized call
-                    // is what gives each executor its own id before anything of it
-                    // is recorded.
+                    // 一次 `task` 调用经循环就地构造的端口派发：这一层才是持有 provider 与
+                    // 渲染器的地方，而逐次授权调用构造端口，正是让每个执行者在关于它的任何
+                    // 东西被记录之前就有自己的 id 的原因。
                     if pending.tool_name == TASK_TOOL {
-                        // The session's hard stop at its second landing point
-                        // (spec §17): an exhausted session dispatches no **new**
-                        // executor. Executors already running are not touched —
-                        // they finish on their own turn cap. The call was started,
-                        // so it still gets its one result, and that result says
-                        // the executor never ran.
+                        // 会话在它第二个落点上的硬停（spec §17）：一个额度耗尽的会话不派发
+                        // **新的**执行者。已经在跑的执行者不受影响 —— 它们按自己的回合上限
+                        // 跑完。这次调用已经启动，所以它仍然拿到那一个结果，而那条结果说
+                        // 执行者从没跑过。
                         let spent = total_usage(&session.events()).total_tokens();
                         if let Some(note) = session.config().budget.exhausted_note(spent) {
                             render.diagnostic(&format!("{note}; no new executor was dispatched"));
@@ -948,11 +884,9 @@ async fn process_call(
                             started,
                         })));
                     }
-                    // ④ dispatch, inline: a call that touches the workspace runs
-                    //    where it always did, in the batch's order. The gesture is
-                    //    selected on here too, so a tool that is in flight is
-                    //    dropped where it stands; the call still keeps its one
-                    //    required result, synthesized below (spec §6).
+                    // ④ 派发，原地：碰工作区的调用在它一向所在的地方、按这一批的顺序跑。
+                    //    手势在这里也会被 select，所以一个在飞的工具会被就地丢掉；这次调用
+                    //    仍然保留它那一个必需的结果，在下面合成（spec §6）。
                     let tools = session.shared_tools();
                     let mut cancel = cancelled.clone();
                     let outcome = tokio::select! {
@@ -1006,15 +940,12 @@ async fn process_call(
     Ok(Disposition::Finished)
 }
 
-/// Run the batch's deferred calls together, at most
-/// [`SessionConfig::max_parallel_executors`] at a time, and record their results
-/// in the batch's order.
+/// 把这一批里被推迟的调用一起跑，最多同时
+/// [`SessionConfig::max_parallel_executors`] 个，并按这一批的顺序记录它们的结果。
 ///
-/// This is what makes "several executors in one batch run at once" true without
-/// a second delivery mechanism: every call is still an ordinary tool call with
-/// exactly one result, and the write exclusion that matters happens inside the
-/// executors, on the shared path locks (spec §16). The cap is a cost and rate
-/// gate, not a safety gate.
+/// 这才是「一批里几个执行者同时跑」在没有第二套投递机制的情况下成真的原因：每次调用仍然是
+/// 一次普通的工具调用、恰好一个结果，而真正要紧的那种写互斥发生在执行者内部、在共享路径锁
+/// 上（spec §16）。这条上限是成本与速率的闸门，不是安全的闸门。
 async fn run_deferred(
     session: &mut Session,
     render: &RenderHandle,
@@ -1025,10 +956,10 @@ async fn run_deferred(
         return Ok(());
     }
     let cap = session.config().max_parallel_executors.max(1);
-    // A shared handle, so the futures borrow the tool table rather than the
-    // session: the session is the loop's to mutate again as the results land.
+    // 一个共享句柄，这样各个 future 借的是工具表而不是会话：结果落地时，会话还是循环可以
+    // 继续改的东西。
     let tools = session.shared_tools();
-    // Collected before awaiting, so every future borrows the same `deferred`.
+    // 在 await 之前收集好，这样每个 future 借的是同一个 `deferred`。
     let mut batch = Vec::with_capacity(deferred.len());
     for call in &deferred {
         batch.push(tools.dispatch(&call.pending, &call.allowed));
@@ -1056,14 +987,11 @@ async fn run_deferred(
     Ok(())
 }
 
-/// Everything that follows a decided call: the read set, the call's one result,
-/// and the post-hook.
+/// 一次已决策的调用之后的一切：读集合、这次调用的那一个结果，以及后置钩子。
 ///
-/// One implementation for both dispatch paths, so the invariants hold wherever
-/// the tool actually ran: a read is only a read if it succeeded, a failed match
-/// withdraws the path's read permission, and the result enters the log before the
-/// post-hook runs (a hook that hangs cannot hide a result the renderer should
-/// already have seen).
+/// 两条派发路径共用一份实现，所以无论工具实际在哪条路径上跑过，不变量都成立：一次读只有
+/// 在成功时才算读，一次失败的匹配会撤回那条路径的读权限，而结果在后置钩子跑之前就进日志
+/// （一个卡住的钩子藏不住一条渲染器本该已经看见的结果）。
 async fn finish_call(
     session: &mut Session,
     render: &RenderHandle,
@@ -1107,8 +1035,7 @@ async fn finish_call(
         started,
     )?;
 
-    // ⑤ hook.post. It runs only when the tool really ran, and its failure can
-    //    only drop feedback.
+    // ⑤ hook.post。只有工具真的跑了它才跑，而它的失败最多只能丢掉反馈。
     if dispatched {
         run_post_hook(
             session,
@@ -1124,66 +1051,58 @@ async fn finish_call(
     Ok(())
 }
 
-/// One debater at runtime: its own session (its read set, its private identity,
-/// its model) and the provider that answers for it.
+/// 运行时的讨论者：它自己的会话（它的读集合、它的私有身份、它的模型），以及为它作答的
+/// provider。
 pub struct Debater {
-    /// The user's persona for this side, when it gave one: recorded as a private
-    /// injection before the first round (spec §15).
+    /// 用户给这一方的人物，如果给了的话：在第一轮之前作为私有注入记录（spec §15）。
     pub soul: Option<String>,
     pub speaker: SpeakerId,
     pub session: Session,
-    /// Shared, because the executors this debater dispatches answer on the same
-    /// client (spec §16: an executor's model is inherited by default).
+    /// 共享，因为这个讨论者派发的执行者在同一个 client 上作答（spec §16：执行者的模型按
+    /// 缺省是继承来的）。
     pub provider: Arc<dyn Provider>,
 }
 
-/// The synthesizer (CONTEXT.md: 合成器): a session to write into, and a provider
-/// to call.
+/// 合成器（CONTEXT.md）：一个要写进去的会话，以及一个要调的 provider。
 ///
-/// It has no speaker and no tools because it is not an agent: it is one call the
-/// harness makes on its own behalf (spec §15).
+/// 它没有发言归属、也没有工具，因为它不是 agent：它是 harness 代表自己做出的那一次调用
+/// （spec §15）。
 pub struct Synthesizer {
     pub session: Session,
     pub provider: Box<dyn Provider>,
 }
 
-/// A discussion: the roster, the closing call, and the round cap.
+/// 一场讨论：名册、收尾调用，以及轮次上限。
 pub struct Discussion {
     debaters: Vec<Debater>,
     synthesizer: Synthesizer,
     max_rounds: u32,
-    /// The highest round already on the stream this discussion writes to. Rounds are
-    /// recorded as `round_offset + n`, so the local count `n` stays the protocol's
-    /// ("is this the first round?", "has the cap been reached?") while the number on
-    /// the stream stays unique inside the session.
+    /// 这场讨论要写入的那条流上已有的最高轮次。轮次记为 `round_offset + n`，所以本地计数
+    /// `n` 仍然是协议里的那个（「这是第一轮吗？」「碰到上限了吗？」），而流上的数字在会话内
+    /// 保持唯一。
     round_offset: u32,
 }
 
-/// How a discussion ended, and what the synthesizer made of it.
+/// 一场讨论是怎么结束的，以及合成器从中得出了什么。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscussionOutcome {
-    /// Why the debate phase stopped, or `Error` when nobody answered at all.
+    /// 辩论阶段为什么停下；没人作答时是 `Error`。
     pub reason: StopReason,
-    /// The synthesizer's three-band product. Empty when the discussion failed
-    /// before the closing call, or when that call itself produced nothing.
+    /// 合成器三档的产出。讨论在收尾调用之前就失败、或者那次调用本身没产出东西时为空。
     pub synthesis: String,
-    /// How many debate rounds ran: one when there was no divergence, two when
-    /// there was.
+    /// 跑了几轮辩论：没有分歧时一轮，有分歧时两轮。
     pub rounds: u32,
-    /// Debaters that were absent from at least one round, in roster order. The
-    /// stream carries why (their own `TurnEnded { Error }` plus the missing
-    /// `MessageCompleted`); this is only the summary.
+    /// 至少缺席一轮的讨论者，按名册顺序。为什么缺席由流上携带（它们自己的
+    /// `TurnEnded { Error }`，加上缺失的那条 `MessageCompleted`）；这里只是摘要。
     pub absent: Vec<SpeakerId>,
 }
 
 impl Discussion {
-    /// Take a roster. The roster's shape is validated at assembly, so this does
-    /// not re-check it.
+    /// 取一份名册。名册的形状在组装期已经校验过，所以这里不再复查。
     ///
-    /// The round numbers this discussion records start **after whatever the stream
-    /// already holds**: a session can carry more than one discussion (`/discuss` runs
-    /// on the live stream), and `RoundStarted { round }` has to say which one it
-    /// belongs to or every query over rounds mixes them (spec §15, `debate_phase_start`).
+    /// 这场讨论记录的轮次号从**流上已有的内容之后**开始：一个会话可以装不止一场讨论
+    /// （`/discuss` 就在活着的流上跑），而 `RoundStarted { round }` 得说清自己属于哪一场，
+    /// 否则每一个跨轮次的查询都会把它们混在一起（spec §15、`debate_phase_start`）。
     pub fn new(debaters: Vec<Debater>, synthesizer: Synthesizer, max_rounds: u32) -> Self {
         let round_offset = crate::discussion::last_round(&debaters[0].session.events());
         Self {
@@ -1198,46 +1117,40 @@ impl Discussion {
         self.debaters[0].session.id()
     }
 
-    /// The session that records for the discussion as a whole.
+    /// 代表整场讨论记录的那个会话。
     ///
-    /// The debaters share one log, so any of their sessions can append a round
-    /// boundary or read the stream back. Going through one accessor keeps "which
-    /// session speaks for the discussion" a decision made in one place instead of
-    /// a `debaters[0]` repeated at every call site.
+    /// 讨论者共用一条日志，所以它们任何一个的会话都能追加一个轮次边界、或把流读回来。走一个
+    /// 访问器，让「哪个会话代表这场讨论说话」成为一个在一处做出的决定，而不是在每个调用点
+    /// 重复的 `debaters[0]`。
     fn recorder(&mut self) -> &mut Session {
         &mut self.debaters[0].session
     }
 
-    /// The shared stream, as a snapshot.
+    /// 共享的那条流，以快照的形式。
     fn stream(&self) -> Vec<Event> {
         self.debaters[0].session.events()
     }
 }
 
-/// Run one discussion: an independent first round, a targeted second only when
-/// the conclusions conflict, then the synthesizer's single call (spec §15).
+/// 跑一场讨论：一次独立首轮，只在结论冲突时来一次定向的第二轮，然后是合成器那一次调用
+/// （spec §15）。
 ///
-/// The control flow lives in this layer because this layer is the only writer of
-/// the event stream and the only caller of a provider (spec §3); [`crate::discussion`]
-/// holds the rules this function applies.
+/// 控制流住在这个层里，因为这个层是事件流的唯一写者、也是 provider 的唯一调用者（spec §3）；
+/// [`crate::discussion`] 持有这个函数所施加的那些规则。
 ///
-/// Failure semantics, all of them "record and continue, never re-run": a single
-/// side failing is that side's absence for the round and the discussion carries
-/// on; both sides failing is a round that ends `Error` plus a `SessionError`, with
-/// no closing call.
+/// 失败语义全都是「记录并继续，绝不重跑」：一边失败就是那一边这一轮的缺席，讨论照走；两边
+/// 都失败是一个以 `Error` 收场的轮次加上一条 `SessionError`，没有收尾调用。
 pub async fn run_discussion(
     discussion: &mut Discussion,
     render: &RenderHandle,
     question: &str,
     cancelled: &CancelObserver,
 ) -> Result<DiscussionOutcome, Error> {
-    // The question is the user's own message, recorded once before the rounds so
-    // both debaters project the same one.
+    // 问题就是用户自己的消息，在各轮之前记录一次，好让两个讨论者投影到同一条。
     record_user_message(discussion.recorder(), render, question)?;
-    // The personas, before the first round: each is user-authored text attributed to
-    // the debater it describes, so the projection hands it to that side alone. Recorded
-    // rather than kept in the private identity, so a round's `messages` stays
-    // recomputable from the stream (spec §5, §15).
+    // 人物，在第一轮之前：每一份都是归属给它所描述的那个讨论者的用户文本，所以投影只把它
+    // 交给那一边。记录而不是放在私有身份里，这样一轮的 `messages` 永远能从流上重算
+    // （spec §5、§15）。
     let personas: Vec<(SpeakerId, String)> = discussion
         .debaters
         .iter()
@@ -1259,28 +1172,23 @@ pub async fn run_discussion(
     }
 
     let mut rounds: u32 = 0;
-    // Where this discussion's round numbers start on the stream (see `Discussion`).
+    // 这场讨论的轮次号在流上从哪儿开始（见 `Discussion`）。
     let offset = discussion.round_offset;
     let mut absent: Vec<SpeakerId> = Vec::new();
-    // The session's allowance is one value shared by every participant (spec
-    // §17); assembly refuses a roster that disagrees about it, so the recorder's
-    // copy speaks for the discussion.
+    // 会话的额度是每个参与者共用的同一个值（spec §17）；组装期会拒绝在它上面不一致的名册，
+    // 所以记录者的那一份代表整场讨论。
     let budget = discussion.debaters[0].session.config().budget.clone();
 
     let reason = loop {
-        // A gesture that landed before this round opened opens nothing: the
-        // debate phase ends where it stands (spec §6).
+        // 在这一轮打开之前落下的手势什么都没打开：辩论阶段就地结束（spec §6）。
         if cancelled.is_cancelled() {
             break StopReason::Aborted;
         }
 
-        // The session's hard stop (spec §17): an exhausted session opens no
-        // further round and goes straight to the synthesizer, which is the one
-        // call that can never be skipped. Reaching the top of this loop with
-        // `rounds > 0` means the round before it did **not** end the debate, so
-        // that round is the one this reason closes; with nothing run yet there is
-        // no round boundary to record and the reason travels on
-        // `DiscussionOutcome` alone.
+        // 会话的硬停（spec §17）：额度耗尽的会话不再打开新的轮次，直接走向合成器 —— 那唯一
+        // 一次绝不能跳过的调用。带着 `rounds > 0` 走到这个循环顶部，说明前一轮**没有**结束
+        // 辩论，所以那一轮就是这个原因所收束的；还没跑过任何一轮时，没有轮次边界可记录，
+        // 这个原因只随 `DiscussionOutcome` 传出去。
         let spent = total_usage(&discussion.stream()).total_tokens();
         if let Some(note) = budget.exhausted_note(spent) {
             render.diagnostic(&format!("{note}; going straight to synthesis"));
@@ -1301,15 +1209,14 @@ pub async fn run_discussion(
         } else {
             RoundMode::Targeted
         };
-        // What goes on the stream is the session-unique number; `rounds` stays this
-        // discussion's own count, which is what the protocol's rules are written in.
+        // 落进流的是那个会话内唯一的数字；`rounds` 保持这场讨论自己的计数，协议规则正是用
+        // 那个计数写的。
         let recorded = offset + rounds;
         let started = record_round_started(discussion.recorder(), render, recorded, mode)?;
 
-        // Both debaters answer at once. `join_all` polls the two turns alternately
-        // on this task: while one awaits its provider stream the other makes
-        // progress, which is all "concurrently" can mean for two network-bound
-        // turns, and it keeps both turns writing through one shared log.
+        // 两个讨论者同时作答。`join_all` 在这个任务上交替轮询两个回合：一个在等自己的
+        // provider 流时，另一个就在推进 —— 对两个受网络所限的回合来说，「并发」能有的意思
+        // 就是这些 —— 而且这让两个回合都经同一条共享日志写。
         let scope = TurnScope::Round {
             before_seq: started.seq,
         };
@@ -1325,15 +1232,13 @@ pub async fn run_discussion(
         }))
         .await;
         for turn in turns {
-            // A log write failure is the one thing a turn returns as an error;
-            // the stream is then unusable, so neither is the discussion.
+            // 日志写入失败是一个回合唯一会当作错误返回的东西；
+            // 那时流已经不能用了，讨论也一样。
             turn?;
         }
 
-        // The gesture outranks the round's own verdict. A round the user stopped
-        // is not a debate result, and reading whatever single answer happened to
-        // land before the press as agreement is exactly the misread the absence
-        // query exists to prevent (spec §6).
+        // 手势压过这一轮自己的判定。用户停下的一轮不是一个辩论结果，而把按下之前恰好落地的
+        // 那一个回答读成一致，正是缺席查询存在所要防的那种误读（spec §6）。
         if cancelled.is_cancelled() {
             record_round_ended(
                 discussion.recorder(),
@@ -1344,8 +1249,8 @@ pub async fn run_discussion(
             break StopReason::Aborted;
         }
 
-        // Read the round back off the stream. Attendance, order, agreement and
-        // absence are all queries over events, never loop state (spec §15).
+        // 把这一轮从流上读回来。出席、顺序、一致与缺席全都是对事件的查询，从不是循环状态
+        // （spec §15）。
         let attendance =
             crate::discussion::protocol::round_attendance(&discussion.stream(), recorded);
         for speaker in &attendance.absent {
@@ -1354,11 +1259,9 @@ pub async fn run_discussion(
             }
         }
 
-        // Nobody answered at all: a session-level failure rather than a debate
-        // result, and there is nothing for the synthesizer to synthesize. Unless
-        // the budget is what stopped every side — that is the hard stop doing its
-        // job (degrade and wrap up), and recording it as a fault would make the
-        // gate look like a breakage (spec §17).
+        // 根本没人作答：这是会话级失败而不是辩论结果，而合成器也没什么可合成的。除非是预算
+        // 停下了每一方 —— 那是硬停在做它该做的事（降级收尾），把它记成故障会让闸门看起来像
+        // 坏掉了（spec §17）。
         if attendance.answers.is_empty() {
             if budget.is_exhausted(total_usage(&discussion.stream()).total_tokens()) {
                 record_round_ended(
@@ -1400,26 +1303,22 @@ pub async fn run_discussion(
             )?;
         }
 
-        // The session's hard stop already had its say at the top of this loop:
-        // an exhausted session never reaches this verdict, it goes straight to
-        // the synthesizer (spec §17). What is left here is the protocol's own
-        // four reasons.
+        // 会话的硬停在这个循环顶部已经表过态了：额度耗尽的会话永远走不到这个判定，它直接去
+        // 合成器（spec §17）。这里剩下的是协议自己的四个原因。
         match crate::discussion::plan_after_round(outcome, rounds, discussion.max_rounds) {
             crate::discussion::RoundPlan::Stop(reason) => {
                 record_round_ended(discussion.recorder(), render, recorded, reason)?;
                 break reason;
             }
-            // No `RoundEnded` for a round that did not end the debate: the next
-            // `RoundStarted` closes it. That keeps every `RoundEnded` a reason the
-            // renderer can act on, which is what the terminal four values are for.
+            // 没有结束辩论的那一轮不写 `RoundEnded`：下一个 `RoundStarted` 会把它关上。这让
+            // 每一条 `RoundEnded` 都是渲染器能据以行动的原因，而那四个终值正是为此存在。
             crate::discussion::RoundPlan::TargetedRound => continue,
         }
     };
 
-    // A cancelled discussion goes nowhere near the synthesizer: the gesture means
-    // stop, and the closing call is a provider call like any other. Ending the
-    // debate phase `Aborted` rather than `Error` is what keeps "the user stopped
-    // it" from being recorded as a failure (spec §6).
+    // 一场被取消的讨论根本不会靠近合成器：手势的意思就是停，而收尾调用和其它调用一样是一次
+    // provider 调用。把辩论阶段以 `Aborted` 而不是 `Error` 收场，正是「用户停下了它」不至于
+    // 被记成失败的原因（spec §6）。
     if reason == StopReason::Aborted {
         return Ok(DiscussionOutcome {
             reason,
@@ -1429,9 +1328,8 @@ pub async fn run_discussion(
         });
     }
 
-    // The synthesizer: the one call that can never be skipped. It is not a turn
-    // and not a participant, but it is bracketed by a round so the stream still
-    // says when it ran.
+    // 合成器：那一次绝不能跳过的调用。它不是回合、也不是参与者，但它被一个轮次括起来，所以
+    // 流上仍然说得出它是什么时候跑的。
     let synthesis_round = offset + rounds + 1;
     record_round_started(
         discussion.recorder(),
@@ -1439,8 +1337,7 @@ pub async fn run_discussion(
         synthesis_round,
         RoundMode::Synthesis,
     )?;
-    // The materials are scoped to the phase this synthesis closes: the stream may
-    // already carry an earlier discussion's rounds.
+    // 材料的作用域限于这次合成所收尾的那个阶段：流上可能已经带着更早一场讨论的轮次。
     let materials = discussion.stream();
     let prompt = crate::discussion::synthesis_prompt(
         question,
@@ -1456,11 +1353,9 @@ pub async fn run_discussion(
     )
     .await?;
 
-    // A gesture that reached the closing call ends the discussion there too: no
-    // partial product, and no `synthesis_failed` for a call the user stopped. A
-    // gesture that arrived after the call had already reached `[DONE]` does not
-    // undo it — a completed unit stays completed, exactly as a turn's own
-    // completed message does.
+    // 一个到达收尾调用的手势也让讨论就此结束：不要半个产出，也不要为一次用户停下的调用写
+    // `synthesis_failed`。在调用已经到达 `[DONE]` 之后才到的手势不会撤销它 —— 完成的单位
+    // 保持完成，与一个回合自己那条完成的消息一模一样。
     let cancelled_in_synthesis = synthesis.is_none() && cancelled.is_cancelled();
     let ended = if cancelled_in_synthesis {
         StopReason::Aborted
@@ -1483,7 +1378,7 @@ pub async fn run_discussion(
     )?;
 
     Ok(DiscussionOutcome {
-        // The gesture, not the debate phase, is what stopped this discussion.
+        // 停下这场讨论的是手势，不是辩论阶段。
         reason: if cancelled_in_synthesis {
             StopReason::Aborted
         } else {
@@ -1495,23 +1390,19 @@ pub async fn run_discussion(
     })
 }
 
-/// One independent single-shot call: the synthesizer's shape (spec §15).
+/// 一次独立的单发调用：合成器的形状（spec §15）。
 ///
-/// Not a turn: no `TurnStarted`, no `TurnEnded`, no tools, no iteration. Its
-/// product is a `MessageCompleted` from `System` — the harness's own voice, and
-/// the renderer's final artifact — and its usage still lands on the stream, where
-/// the session's spend is summed from (spec §17).
+/// 不是回合：没有 `TurnStarted`、没有 `TurnEnded`、没有工具、没有迭代。它的产出是一条来自
+/// `System` 的 `MessageCompleted` —— harness 自己的声音，也是渲染器的最终产物 —— 而它的
+/// 用量照样落在流上，会话的花费就是从那里求和出来的（spec §17）。
 ///
-/// `Ok(None)` means the call produced no product: a provider failure, a stream
-/// that never reached `[DONE]`, an empty answer, or a cancel gesture (spec §6).
-/// That is not a log error, but the caller still has to say what it means — a
-/// discussion failure (`SessionError`, `RoundEnded { Error }`) or a cancellation
-/// (`RoundEnded { Aborted }`, no error). Only the caller holds the gesture, so
-/// only the caller can tell the two apart.
+/// `Ok(None)` 表示这次调用没有产出：provider 失败、一条从没到 `[DONE]` 的流、空回答，或者
+/// 一次取消手势（spec §6）。那不是日志错误，但调用方仍然得说清它意味着什么 —— 讨论失败
+/// （`SessionError`、`RoundEnded { Error }`）还是被取消（`RoundEnded { Aborted }`，无
+/// 错误）。只有调用方持有那个手势，所以只有调用方能区分这两者。
 ///
-/// The session's token allowance deliberately does **not** gate this call: the
-/// synthesizer is the one call that can never be skipped (spec §17), which is
-/// why the hard stop degrades the debate phase into it rather than past it.
+/// 会话的 token 额度刻意**不**给这次调用设闸：合成器是那唯一一次绝不能跳过的调用
+/// （spec §17），这就是硬停把辩论阶段降级进它、而不是越过它的原因。
 pub async fn run_single_shot(
     session: &mut Session,
     provider: &dyn Provider,
@@ -1519,8 +1410,8 @@ pub async fn run_single_shot(
     prompt: &str,
     cancelled: &CancelObserver,
 ) -> Result<Option<String>, Error> {
-    // Checked before the request is built, not only inside the stream: a call
-    // that has not been sent yet must not be sent after the gesture.
+    // 在请求构造之前就检查，而不是只在流内部检查：一次还没发出去的调用，绝不能在手势之后
+    // 才发出去。
     if cancelled.is_cancelled() {
         return Ok(None);
     }
@@ -1535,8 +1426,8 @@ pub async fn run_single_shot(
     messages.push(Message::User {
         content: prompt.to_owned(),
         name: None,
-        // Not a `ContextInjected` projection: the synthesizer's own brief is the
-        // only `user` message here and this path never trims (spec §15).
+        // 这不是一次 `ContextInjected` 投影：合成器自己的简报是这里唯一一条 `user` 消息，
+        // 而这条路径从不裁剪（spec §15）。
         injected: false,
     });
 
@@ -1573,8 +1464,7 @@ pub async fn run_single_shot(
             biased;
             _ = cancel.cancelled() => {
                 render.diagnostic("synthesizer call cancelled while its stream was in flight");
-                // No `[DONE]`, so no product: dropping the stream is the whole
-                // effect a gesture has here.
+                // 没有 `[DONE]` 就没有产出：丢掉这条流就是手势在这里的全部效果。
                 return Ok(None);
             }
             item = stream.next() => match item {
@@ -1601,9 +1491,8 @@ pub async fn run_single_shot(
                     saw_done = true;
                     break;
                 }
-                // No tools were offered, so a call here is a protocol violation
-                // rather than work to dispatch. It still must not be dispatched: the
-                // synthesizer has no tool table to dispatch into.
+                // 没有提供任何工具，所以这里的一次调用是协议违规，而不是要派发的活。它仍然
+                // 不能被派发：合成器没有可派发进去的工具表。
                 Some(Ok(StreamEvent::ToolCallStarted { .. }))
                 | Some(Ok(StreamEvent::ToolCallCompleted { .. })) => {
                     render.diagnostic("synthesizer asked for a tool; ignored");
@@ -1620,8 +1509,7 @@ pub async fn run_single_shot(
     if !saw_done || text.trim().is_empty() {
         return Ok(None);
     }
-    // Redacted once here, before it is both emitted and returned: the product
-    // the discussion hands back is the same text the stream carries.
+    // 在这里打一次码，早于它既被发出、又被返回：讨论交回去的产出与流上携带的是同一段文本。
     let text = session.redacted(&text);
     emit(
         session,
@@ -1636,8 +1524,8 @@ pub async fn run_single_shot(
     Ok(Some(text))
 }
 
-/// Record a round boundary. The protocol decides *when* (spec §15); this layer
-/// writes, so "only the loop writes the stream" stays literally true.
+/// 记录一个轮次边界。协议决定*何时*（spec §15）；这一层负责写，所以「只有循环写流」保持
+/// 字面为真。
 pub fn record_round_started(
     session: &mut Session,
     render: &RenderHandle,
@@ -1652,7 +1540,7 @@ pub fn record_round_started(
     )
 }
 
-/// Record the end of a round that ended the debate, with the protocol's reason.
+/// 记录一个结束辩论的轮次的结尾，带上协议给出的原因。
 pub fn record_round_ended(
     session: &mut Session,
     render: &RenderHandle,
@@ -1667,7 +1555,7 @@ pub fn record_round_ended(
     )
 }
 
-/// Record a conflict: the topic, and each side's stated position.
+/// 记录一次冲突：题目，以及每一方申明的立场。
 pub fn record_divergence(
     session: &mut Session,
     render: &RenderHandle,
@@ -1687,7 +1575,7 @@ pub fn record_divergence(
     )
 }
 
-/// Record a session-level failure: a run failure the model never sees (spec §2).
+/// 记录一次会话级失败：一次模型永远看不到的运行失败（spec §2）。
 pub fn record_session_error(
     session: &mut Session,
     render: &RenderHandle,
@@ -1705,29 +1593,24 @@ pub fn record_session_error(
     )
 }
 
-/// What the loop must do with one call once the gate and the user have spoken.
+/// 权限门与用户都说过话之后，循环对一次调用必须做什么。
 enum Authorized {
     Allow,
-    /// The call never reaches the tool; the message is its one required result.
+    /// 这次调用根本到不了工具；那条消息就是它那一个必需的结果。
     Refuse {
         message: String,
     },
 }
 
-/// Apply the permission gate to one call, merge the pre-hook's constraint into
-/// its verdict, and, when the effective verdict is `Ask`, ask the user through
-/// the injected port.
+/// 对一次调用施加权限门，把前置钩子的约束并进它的裁决，并在最终裁决是 `Ask` 时通过注入的
+/// 端口问用户。
 ///
-/// The gate itself is pure and never asks, never reads the environment and never
-/// writes an event. Everything interactive lives here: the ask, the
-/// session-scoped "always allow", and the headless downgrade of `Ask` to `Deny`
-/// (whose reason lands in `PermissionDecided`, so the audit can tell a
-/// no-terminal refusal apart from a policy one).
+/// 权限门本身是纯的，从不发问、从不读环境、也从不写事件。一切交互都住在这里：那次询问、
+/// 会话级的「总是允许」，以及无交互前端下 `Ask` 到 `Deny` 的降级（它的理由落进
+/// `PermissionDecided`，所以审计能区分一次没有终端造成的拒绝和一次策略拒绝）。
 ///
-/// `hook_verdict` is the verdict a pre-hook's `Tighten` forced, if any. The
-/// effective verdict is the supremum of the two — the hook can raise a verdict
-/// but never lower one, because the only tightenings that exist are `Ask` and
-/// `Deny`.
+/// `hook_verdict` 是前置钩子的 `Tighten` 强制过的裁决（如果有）。最终裁决是两者的上确界 ——
+/// 钩子能抬高一个裁决，却永远抬不低，因为存在的那几种收紧只有 `Ask` 与 `Deny`。
 async fn authorize(
     session: &mut Session,
     render: &RenderHandle,
@@ -1753,9 +1636,8 @@ async fn authorize(
         permissions::decide(&session.policy(), speaker, &call)
     };
 
-    // The one merge: `Allow < Ask < Deny`. A hook that tightens to what the gate
-    // already said changes nothing, and so is not the source of the recorded
-    // decision.
+    // 那唯一一次合并：`Allow < Ask < Deny`。一个收紧到权限门本来就说过的东西的钩子什么都没
+    // 改变，因此它也不是被记录下来的那次决定的来源。
     let effective = hooks::effective_verdict(verdict.decision, hook_verdict);
     let tightened_by_hook = hook_verdict.is_some_and(|hook| hook > verdict.decision);
     let hook_note = tightened_by_hook.then_some("(a hook tightened the verdict)");
@@ -1792,13 +1674,13 @@ async fn authorize(
             Ok(refuse(&annotated))
         }
         Decision::Ask => {
-            // A hook may have been the reason this ask exists; carry that into
-            // the prompt and the audit without turning it into a fourth state.
+            // 这次询问的存在可能正是某个钩子造成的；把那一点带进提问与审计，
+            // 而不把它变成第四个状态。
             let ask_reason = annotated;
 
             let Some(asker) = session.asker().cloned() else {
-                // The gate keeps its faithful `Ask`; the loop is where "there is
-                // no answerer" turns it into a refusal, and it says so.
+                // 权限门保持它那个忠实的 `Ask`；循环才是把「没有作答者」
+                // 变成拒绝的地方，而且它说了出来。
                 let reason = format!("{ask_reason}; downgraded to deny: no interactive answerer");
                 record_decision(
                     session,
@@ -1848,7 +1730,7 @@ async fn authorize(
                     Ok(Authorized::Allow)
                 }
                 Answer::AlwaysAllow => {
-                    // Session policy only: no `config.toml` write, no event.
+                    // 只落在会话策略里：不写 `config.toml`，不发事件。
                     session
                         .remember_allow(permissions::Rule::always_allow(speaker, &facts.tool_name));
                     record_decision(
@@ -1880,15 +1762,14 @@ async fn authorize(
     }
 }
 
-/// The one synthesized-refusal message shape, so every refusal path reads the
-/// same way in the tool result.
+/// 合成出来的拒绝消息只有这一种形状，这样每一条拒绝路径在工具结果里读起来都一样。
 fn refuse(reason: &str) -> Authorized {
     Authorized::Refuse {
         message: format!("permission denied: {reason}"),
     }
 }
 
-/// Append a hook's note to a verdict reason, when a hook raised the verdict.
+/// 钩子抬高了裁决时，把它的备注附到裁决理由后面。
 fn annotate_reason(reason: &str, hook_note: Option<&str>) -> String {
     match hook_note {
         Some(note) => format!("{reason} {note}"),
@@ -1896,8 +1777,8 @@ fn annotate_reason(reason: &str, hook_note: Option<&str>) -> String {
     }
 }
 
-/// Record one permission verdict. Every call gets exactly one of these, asked or
-/// not, so `decision × source` is a complete counter (ticket 19).
+/// 记录一次权限裁决。每次调用恰好得到一条，无论有没有问过，所以 `decision × source` 是一
+/// 个完整的计数器（票 19）。
 fn record_decision(
     session: &mut Session,
     render: &RenderHandle,
@@ -1920,12 +1801,11 @@ fn record_decision(
     )
 }
 
-/// Append the one `ToolCallCompleted` a call is owed, whichever path produced
-/// it: a real dispatch, a permission refusal, a hook skip or a hook failure.
+/// 追加一次调用被欠的那一条 `ToolCallCompleted`，无论它出自哪条路径：真的派发、权限拒绝、
+/// 钩子跳过，还是钩子失败。
 ///
-/// Keeping the synthesis in one place is what makes "every `tool_call` gets
-/// exactly one result" checkable rather than a convention spread over five
-/// branches.
+/// 把合成放在一处，正是让「每一个 `tool_call` 恰好拿到一个结果」可被检查、而不是散在五个
+/// 分支上的一条约定。
 fn emit_completed(
     session: &mut Session,
     render: &RenderHandle,
@@ -1935,14 +1815,11 @@ fn emit_completed(
     started: Instant,
 ) -> Result<(), Error> {
     let duration_ms = started.elapsed().as_millis() as u64;
-    // The pre-stream pipeline is redact -> truncate -> spill (spec §10, §20),
-    // and this is where it runs: redaction first, so the `.txt` artifact on disk
-    // is redacted too, not just the preview that enters the stream. The tool
-    // above already ran on the true value — only what leaves the process is
-    // scrubbed.
+    // 进流之前的流水线是打码 -> 裁剪 -> 溢出落盘（spec §10、§20），这里就是它跑的地方：先
+    // 打码，这样磁盘上那份 `.txt` 产物也是打过码的，而不只是进流的那段预览。上面那个工具早
+    // 就在真值上跑过了 —— 只有离开这个进程的东西才被打码。
     let max_tokens = session.config().max_tool_result_tokens;
-    // A success body and a failure body truncate the same way; only which
-    // payload field carries the preview differs.
+    // 成功正文与失败正文裁剪方式一样；不同的只是预览落在 payload 的哪个字段里。
     let (ok, text) = match result {
         Ok(output) => (true, output.text),
         Err(error) => (false, error.to_string()),
@@ -1974,10 +1851,10 @@ fn emit_completed(
     )
 }
 
-/// Append one `HookExecuted`.
+/// 追加一条 `HookExecuted`。
 ///
-/// Both mount points and every outcome — including a failure — go through here,
-/// so ticket 19 can group the stream by hook result without a second event kind.
+/// 两个挂载点和每一种结果 —— 包括失败 —— 都走这里，所以票 19 能按钩子结果给流分组，不需要
+/// 第二种事件。
 fn record_hook(
     session: &mut Session,
     render: &RenderHandle,
@@ -1998,12 +1875,10 @@ fn record_hook(
     )
 }
 
-/// Run `hook.post` for a call whose tool really ran.
+/// 为一次工具真的跑过的调用运行 `hook.post`。
 ///
-/// Failure here is deliberately asymmetric with `hook.pre`: the world has
-/// already changed, so the most a broken post-hook can do is lose its feedback.
-/// The failure is recorded and diagnosed; the call's result is already in the log
-/// and stays there.
+/// 这里的失败刻意与 `hook.pre` 不对称：世界已经变了，所以一个坏掉的后置钩子最多只能丢掉它
+/// 的反馈。失败会被记录并诊断；这次调用的结果已经在日志里，并且留在那里。
 async fn run_post_hook(
     session: &mut Session,
     render: &RenderHandle,
@@ -2064,11 +1939,10 @@ async fn run_post_hook(
     }
 }
 
-/// Record the reason the turn stopped and return the outcome.
+/// 记下这个回合停下的原因，并返回结局。
 ///
-/// The returned text is redacted like everything else that leaves the harness:
-/// the same value the stream carries is what a front end or an executor summary
-/// gets, so no second, unscrubbed copy of a key exists in memory to be printed.
+/// 返回的文本像一切离开 harness 的东西一样被打过码：前端或执行者摘要拿到的就是流上携带的
+/// 那个值，所以内存里不会存在第二份没打码的密钥副本等着被打印出来。
 fn end_turn(
     session: &mut Session,
     render: &RenderHandle,
@@ -2081,8 +1955,8 @@ fn end_turn(
     Ok(TurnOutcome { reason, text })
 }
 
-/// Arguments arrive as a JSON string; a call with no parameters sends nothing,
-/// which means "no arguments" rather than the JSON literal `null`.
+/// 参数是以 JSON 字符串到达的；没有参数的调用什么都不发，
+/// 那意味着「没有参数」，而不是 JSON 字面量 `null`。
 fn parse_tool_args(arguments: &str) -> serde_json::Value {
     if arguments.trim().is_empty() {
         return serde_json::json!({});
@@ -2090,21 +1964,18 @@ fn parse_tool_args(arguments: &str) -> serde_json::Value {
     serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null)
 }
 
-/// Append one event to the stream and narrate it to the renderer.
+/// 往流上追加一条事件，并把它叙述给渲染器。
 ///
-/// **The one write path** (spec §3, invariant 3): the loop reaches it through a
-/// session, and the executor port it drives reaches it through the shared log
-/// handle — which is what makes "the `agent` layer is the single writer" one
-/// function rather than a convention.
+/// **唯一的写路径**（spec §3，不变量 3）：循环通过一个会话到达它，它驱动的执行者端口通过
+/// 共享的日志句柄到达它 —— 这正是让「`agent` 层是唯一写者」成为一个函数、而不是一条约定
+/// 的原因。
 ///
-/// Redaction is the last thing that happens **before** the append and the only
-/// thing that happens to the payload on its way in (spec §20): every free-text
-/// field is scrubbed with the session's [`Redactor`], so the stream, the file
-/// and the renderer all carry the same text the model will replay. The tool that
-/// produced the text ran earlier, on the true value.
+/// 打码是追加**之前**发生的最后一件事，也是 payload 在进流路上唯一被做的事（spec §20）：
+/// 每一个自由文本字段都用会话的 [`Redactor`] 打码，所以流、文件与渲染器携带的都是模型将要
+/// 重放的那段文本。产出这段文本的那个工具更早跑过，跑在真值上。
 ///
-/// The log is a cheap shared handle, so appending through a clone is the same
-/// append the session would have made: one writer, one `seq`, one line.
+/// 日志是一个便宜的共享句柄，所以通过克隆追加与那个会话自己追加是同一次追加：一个写者、
+/// 一个 `seq`、一行。
 pub(super) fn append_event(
     log: &EventLog,
     redactor: &Redactor,
@@ -2128,10 +1999,10 @@ fn emit(
     emit_returning(session, render, speaker, payload).map(|_| ())
 }
 
-/// Like [`emit`], but hands the event back.
+/// 与 [`emit`] 相同，但把事件交回来。
 ///
-/// The round loop needs the `seq` of a `RoundStarted`: that number is the cut a
-/// round's projection window is taken at (spec §15).
+/// 轮次循环需要一条 `RoundStarted` 的 `seq`：那个数字就是一轮投影窗口所取自的切点
+/// （spec §15）。
 fn emit_returning(
     session: &mut Session,
     render: &RenderHandle,

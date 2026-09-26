@@ -1,78 +1,70 @@
-//! The cancel gesture's plumbing (spec §6).
+//! 取消手势的管路（spec §6）。
 //!
-//! A cancellation is a **gesture**, not an event: raising it never enters the
-//! stream, exactly like `/undo`'s write-back and `/plan`'s override. All this
-//! module carries is the signal that a turn should stop where it stands — the
-//! stream records only what the agents then did about it (`TurnEnded { Aborted }`,
-//! the synthesized results, an executor's own `ExecutorFinished`).
+//! 一次取消是**手势**，不是事件：发起它从不进流，与 `/undo` 的写回、`/plan` 的覆盖
+//! 同规矩。这个模块携带的只是「某个回合应当在原地停下」这个信号 —— 流上记录的只有
+//! 各方随后拿它做了什么（`TurnEnded { Aborted }`、合成的那些结果、执行者自己的
+//! `ExecutorFinished`）。
 //!
-//! The two ends are deliberately different types. [`CancelSignal`] is held by
-//! whoever owns the gesture — the front end — and is the only end that can raise
-//! one. [`CancelObserver`] is what a turn is handed, and it is cloned down to
-//! every executor that turn dispatches. So "cancellation propagates down the
-//! delegation chain and never up it" (spec §6) is a property of the types rather
-//! than a rule to remember: a turn holds nothing it could cancel with, so an
-//! executor being stopped cannot end its dispatcher's turn as a failure.
+//! 两端刻意是不同类型。[`CancelSignal`] 由拥有这个手势的一方 —— 前端 —— 持有，也是
+//! 唯一能发起取消的那一端。[`CancelObserver`] 是交给一个回合的东西，并逐层克隆到该
+//! 回合派发的每一个执行者。于是「取消沿委派链向下传播、从不向上」（spec §6）是类型层
+//! 面的性质，而不是一条要记住的规则：回合手里没有任何能发起取消的东西，所以「执行者
+//! 被取消」不会把派发者的回合记成失败。
 //!
-//! A gesture is scoped to **one run**: the harness resets the signal when a turn
-//! (or a discussion) begins, so a press that arrived while nothing was running
-//! stops nothing, and the session stays usable for the next question.
+//! 手势的作用域是**一次运行**：回合（或讨论）开始时 harness 会重置信号，所以在什么都
+//! 没跑的时候按下的那一下停不掉任何东西，会话也照常能回答下一个问题。
 
 use tokio::sync::watch;
 
-/// The gesture's own end: the one handle that can raise a cancellation.
+/// 手势自己那一端：唯一能发起取消的句柄。
 ///
-/// It lives at the front end, which also decides what a **second** press means
-/// (spec §6: it forces the process down); this type only records that the first
-/// one happened.
+/// 它住在前端；前端同时决定**第二次**按下是什么意思（spec §6：它会把进程按下去）；
+/// 这个类型只记录第一次按下的发生。
 #[derive(Debug, Clone)]
 pub struct CancelSignal {
     cancelled: watch::Sender<bool>,
 }
 
-/// A turn's view of the gesture: read-only, and cheap to clone into every nested
-/// turn.
+/// 一个回合对手势的视图：只读，而且克隆进每个嵌套回合都很便宜。
 #[derive(Debug, Clone)]
 pub struct CancelObserver {
     cancelled: watch::Receiver<bool>,
 }
 
 impl CancelSignal {
-    /// A signal with no observers yet. Each turn mints its own with
-    /// [`observer`](Self::observer).
+    /// 还没有任何观察端的信号。每个回合用
+    /// [`observer`](Self::observer) 自己铸一个。
     pub fn new() -> Self {
         Self {
             cancelled: watch::channel(false).0,
         }
     }
 
-    /// Raise the gesture. Idempotent, and effective for the rest of the run even
-    /// if it is raised in a window with no observer alive. [`reset`](Self::reset)
-    /// is what ends its effect, when the next run begins.
+    /// 发起手势。幂等，而且在这轮运行余下的时间里一直有效 —— 哪怕它是在没有观察端
+    /// 活着的窗口里发起的。[`reset`](Self::reset) 才是结束它效力的东西，在下一次运行
+    /// 开始时调用。
     pub fn cancel(&self) {
-        // `send_replace`, not `send`: `send` is a no-op when nobody is watching,
-        // which would silently swallow a gesture raised in such a window.
+        // 用 `send_replace` 而不是 `send`：没人看着时 `send` 是空操作，
+        // 那会静默吞掉在这样一个窗口里发起的手势。
         self.cancelled.send_replace(true);
     }
 
-    /// Start a fresh gesture, dropping one that was raised earlier.
+    /// 开始一次新手势，丢掉先前发起的那一次。
     ///
-    /// The harness calls this when a run begins, which is what keeps a gesture
-    /// scoped to one run: a press that arrived while nothing was running — or
-    /// the gesture of a turn that has already ended — cannot stop a later one.
-    /// Only the signal end can do this; a running turn holds an observer.
+    /// harness 在一次运行开始时调用它，这正是手势的作用域限于一次运行的原因：什么都
+    /// 没跑的时候按下的那一下 —— 或者一个已经结束的回合的手势 —— 停不掉后面那一次。
+    /// 只有信号端能做这件事；正在跑的回合手里拿的是观察端。
     pub fn reset(&self) {
         self.cancelled.send_replace(false);
     }
 
-    /// Whether a cancellation has been raised. The front end reads this to tell
-    /// the first press (cancel) from the second (exit).
+    /// 是否已经发起过取消。前端读它来区分第一次按下（取消）与第二次（退出）。
     pub fn is_cancelled(&self) -> bool {
         *self.cancelled.borrow()
     }
 
-    /// A view for one turn. Minted per turn rather than shared, so each turn
-    /// owns the `&mut` its wait needs.
+    /// 给一个回合的视图。按回合铸而不是共享，这样每个回合各自拥有它那头等待所需的
+    /// `&mut`。
     pub fn observer(&self) -> CancelObserver {
         CancelObserver {
             cancelled: self.cancelled.subscribe(),
@@ -91,11 +83,10 @@ impl CancelObserver {
         *self.cancelled.borrow()
     }
 
-    /// Resolve when the gesture is raised.
+    /// 手势被发起时 resolve。
     ///
-    /// Resolves immediately when it already is. If the signal end is gone,
-    /// nobody can raise the gesture any more, so this wait parks forever — which
-    /// is what keeps "the sender was dropped" from being read as "cancelled".
+    /// 已经发起过就立即 resolve。信号端没了就再也没人能发起手势，所以这个等待会永久
+    /// park —— 这正是让「发送端被 drop」不至于被读成「已取消」的原因。
     pub async fn cancelled(&mut self) {
         if self.is_cancelled() {
             return;

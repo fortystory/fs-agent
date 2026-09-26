@@ -1,59 +1,51 @@
-//! Cost and the session's spend cap (spec §17).
+//! 成本与会话的花费上限（spec §17）。
 //!
-//! # Two budgets, never to be confused
+//! # 两笔预算，永远别混
 //!
-//! [`crate::context::usable_input`] is the **window**: how much input one call
-//! may carry, computed per agent from **its own** model, enforced by dropping
-//! the oldest droppable material. [`Budget`] is the **session's cumulative
-//! allowance**: one hard stop shared by the debaters, the synthesizer and every
-//! executor they dispatch, enforced by degrading and wrapping up.
+//! [`crate::context::usable_input`] 是**窗口**：一次调用最多能带多少输入，按 agent 各自的
+//! 模型算出，靠丢弃最旧的可丢材料来满足。[`Budget`] 是**会话的累计额度**：讨论者、合成器
+//! 以及它们派发的每一个执行者共用的一个硬停，靠降级收尾来满足。
 //!
-//! # Money is display only
+//! # 钱只作显示
 //!
-//! The gate reads **tokens**. [`Pricing`] exists so a human can see what those
-//! tokens cost, and it never decides anything (spec §17). Prices are quoted per
-//! million tokens — the unit both vendors publish — and `cached` and `miss` are
-//! priced apart because a prefix-cache hit is usually an order of magnitude
-//! cheaper than a miss.
+//! 闸门数的是 **token**。[`Pricing`] 存在的意义是让人看见这些 token 值多少钱，它从不决定
+//! 任何事（spec §17）。价格按每百万 token 报 —— 两家供应商都这么公布 —— 而 `cached` 与
+//! `miss` 分开计价，因为前缀缓存命中通常比未命中便宜一个数量级。
 //!
-//! Everything here is a value resolved from configuration, never state: the
-//! spend a [`Budget`] is compared against is summed from the event stream
-//! ([`crate::events::total_usage`]), so no lock guards it and `--continue`
-//! cannot lose it (spec §10).
+//! 这里的一切都是从配置解析出来的**值**，从不是状态：拿 [`Budget`] 去比的花费是从事件流
+//! 求和出来的（[`crate::events::total_usage`]），所以没有锁看着它，`--continue` 也丢不掉
+//! 它（spec §10）。
 
 use std::collections::BTreeMap;
 
 use crate::events::Usage;
 
-/// The default pre-flight tolerance (spec §17).
+/// 缺省的预检宽容度（spec §17）。
 ///
-/// A call is refused only when its estimated size exceeds `remaining * margin`.
-/// The estimate is `chars / 4`, which is wrong by tens of percent on code and on
-/// non-Latin text; comparing it straight against what is left (`margin = 1.0`)
-/// refuses calls that would have fitted, which is the failure the spec names.
-/// The observed cumulative sum stays the real gate, so a margin above one buys
-/// fewer false refusals at the price of occasionally letting one call overshoot
-/// — which the next gate then catches.
+/// 只有估计的体积超过 `remaining * margin` 时才会拒掉一次调用。估计值取 `chars / 4`，
+/// 在代码上、在非拉丁文本上都会差出几十个百分点；把它直接和剩下的量比（`margin = 1.0`）
+/// 会拒掉本来装得下的调用，而那正是 spec 点名的那种失败。真正当闸门的仍然是观测到的累计
+/// 和，所以大于一的 margin 用「偶尔让一次调用超一点」换「更少的假拒绝」—— 超出的部分
+/// 下一道闸门会抓住。
 pub const DEFAULT_ESTIMATE_MARGIN: f64 = 1.5;
 
-/// The session's cumulative token allowance (spec §17).
+/// 会话的累计 token 额度（spec §17）。
 ///
-/// `limit: None` means no cap at all, which is v1's default: the mechanism is in
-/// place and the number waits for data. An executor's allowance is **not** its
-/// own — "independent budget" means its turn cap, never its money (spec §16) —
-/// so this value travels into every nested session unchanged.
+/// `limit: None` 表示完全无上限，这是 v1 的缺省：机制在那儿，数字等着数据。执行者的额度
+/// **不是**它自己的 —— 「独立预算」指的是它的回合上限，从来不是它的钱（spec §16）—— 所以
+/// 这个值原样进入每一个嵌套会话。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Budget {
-    /// Hard cap on the session's cumulative tokens, summed from every
-    /// `UsageRecorded` on the stream.
+    /// 会话累计 token 的硬上限，从流上每一条
+    /// `UsageRecorded` 求和得来。
     pub limit: Option<u64>,
-    /// Pre-flight tolerance, as a multiple of what is left. See
-    /// [`DEFAULT_ESTIMATE_MARGIN`].
+    /// 预检宽容度，以剩余量的倍数表示。见
+    /// [`DEFAULT_ESTIMATE_MARGIN`]。
     pub estimate_margin: f64,
 }
 
 impl Budget {
-    /// No cap, with the default tolerance.
+    /// 无上限，用缺省的宽容度。
     pub fn new() -> Self {
         Self {
             limit: None,
@@ -61,38 +53,36 @@ impl Budget {
         }
     }
 
-    /// Cap the session at `tokens`. Zero is legal and stops before the first
-    /// call, which is what makes "the synthesizer is the one call that cannot be
-    /// skipped" testable.
+    /// 把会话上限设为 `tokens`。零是合法的，它会在第一次调用之前就停下，这正是让
+    /// 「合成器是那唯一一次不能被跳过的调用」可测的原因。
     pub fn with_limit(mut self, tokens: u64) -> Self {
         self.limit = Some(tokens);
         self
     }
 
-    /// Set the pre-flight tolerance.
+    /// 设置预检宽容度。
     pub fn with_estimate_margin(mut self, margin: f64) -> Self {
         self.estimate_margin = margin;
         self
     }
 
-    /// What is left of the allowance, or `None` when there is no cap.
+    /// 额度还剩下多少；没有上限时是 `None`。
     pub fn remaining(&self, spent: u64) -> Option<u64> {
         self.limit.map(|limit| limit.saturating_sub(spent))
     }
 
-    /// The hard stop: has the session already spent its allowance?
+    /// 硬停：这个会话是不是已经把额度花掉了？
     ///
-    /// `spent` is the sum over the whole stream — debaters, synthesizer and
-    /// executors alike — and never an estimate. The comparison is `>=`, so a
-    /// session that lands exactly on its cap is done.
+    /// `spent` 是整条流的求和 —— 讨论者、合成器、执行者全都算 —— 从不是一个估计值。比较
+    /// 用的是 `>=`，所以正好停在上限上的会话也算收工。
     pub fn is_exhausted(&self, spent: u64) -> bool {
         self.limit.is_some_and(|limit| spent >= limit)
     }
 
-    /// The pre-flight rule: does a call estimated at `estimate` tokens still fit?
+    /// 预检规则：一次估计为 `estimate` token 的调用还装得下吗？
     ///
-    /// Refusing here costs one call's worth of work; not refusing costs an
-    /// overshoot the cumulative gate catches on the next round.
+    /// 在这里拒绝，代价是一次调用的工作量；不拒绝，代价是一次超支，而累计那道闸门会在
+    /// 下一轮抓住它。
     pub fn admits_estimate(&self, spent: u64, estimate: u64) -> bool {
         let Some(remaining) = self.remaining(spent) else {
             return true;
@@ -101,11 +91,10 @@ impl Budget {
         (estimate as f64) <= threshold
     }
 
-    /// The sentence the hard stop narrates when the allowance is gone, or `None`
-    /// while there is room.
+    /// 额度用尽时硬停要叙述的那句话；还有余地时是 `None`。
     ///
-    /// The gate sites each append what they do about it — close the round, refuse
-    /// the dispatch — so the fact itself is phrased once.
+    /// 各道闸门各自追加它对此做了什么 —— 收束这一轮、拒绝这次派发 —— 所以事实本身只
+    /// 措辞一次。
     pub fn exhausted_note(&self, spent: u64) -> Option<String> {
         self.is_exhausted(spent).then(|| {
             format!(
@@ -115,7 +104,7 @@ impl Budget {
         })
     }
 
-    /// The sentence for a call the pre-flight estimate refuses.
+    /// 预检估计拒掉一次调用时的那句话。
     pub fn estimate_refusal_note(&self, estimate: u64) -> String {
         format!(
             "session token budget: a call estimated at ~{estimate} tokens does not fit {}",
@@ -123,7 +112,7 @@ impl Budget {
         )
     }
 
-    /// The cap as the diagnostics above read it out.
+    /// 上限本身，按上面那几条诊断的读法。
     fn cap_text(&self) -> String {
         match self.limit {
             Some(limit) => format!("a cap of {limit} tokens"),
@@ -133,22 +122,21 @@ impl Budget {
 }
 
 impl Default for Budget {
-    /// No cap, with the default tolerance — **not** a zero margin, which would
-    /// refuse everything.
+    /// 无上限，用缺省的宽容度 —— **不是**零 margin，那样会把一切都拒掉。
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// One model's prices, in USD per million tokens.
+/// 一个模型的价目表，单位是每百万 token 的 USD。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pricing {
-    /// Cache-**miss** input tokens: what a fresh prompt costs.
+    /// 缓存**未命中**的输入 token：一条全新提示词的开销。
     pub miss_input_per_mtok: f64,
-    /// Cache-**hit** input tokens. Pricing these at zero is a statement that the
-    /// vendor does not charge for a hit, not a missing value.
+    /// 缓存**命中**的输入 token。把它们定价成零，是在说这家供应商对命中不计费，而不是
+    /// 这个值缺失。
     pub cached_input_per_mtok: f64,
-    /// Output tokens, reasoning included.
+    /// 输出 token，含推理。
     pub output_per_mtok: f64,
 }
 
@@ -161,7 +149,7 @@ impl Pricing {
         }
     }
 
-    /// What one usage record cost, in USD. Display only (spec §17).
+    /// 一条用量记录花了多少钱，单位 USD。只作显示（spec §17）。
     pub fn cost(&self, usage: Usage) -> f64 {
         let (cached, miss) = self.billed_input(usage);
         (cached as f64 * self.cached_input_per_mtok
@@ -170,12 +158,11 @@ impl Pricing {
             / 1_000_000.0
     }
 
-    /// The input tokens, split into the two classes the vendors distinguish.
+    /// 输入 token，按两家供应商区分的那两类拆开。
     ///
-    /// The adapters normalize `cached + miss == input`, but a `Usage` that
-    /// carries only a total — a test, or a provider that reports no cache
-    /// detail — must not be billed as free: the uncached remainder is charged at
-    /// the miss price whenever the reported `miss` is smaller than it.
+    /// 适配器会把 `cached + miss == input` 归一化，但一个只带总数的 `Usage` —— 测试里，
+    /// 或者供应商不报缓存明细时 —— 绝不能被当成免费：只要报上来的 `miss` 比未缓存的余量
+    /// 小，那部分余量就按未命中价计费。
     fn billed_input(&self, usage: Usage) -> (u64, u64) {
         let cached = usage.cached_tokens.min(usage.input_tokens);
         let miss = usage
@@ -185,12 +172,11 @@ impl Pricing {
     }
 }
 
-/// The configured prices, keyed by wire model id (spec §17).
+/// 配置好的价目表，按线级 model id 作键（spec §17）。
 ///
-/// Keyed by model id rather than by provider profile, because the two debaters
-/// are different models and a model id is what the capability table and
-/// `[models.*]` already key on. A model with no entry has **no** cost rather than
-/// a zero one: "unpriced" and "free" must not look the same in a report.
+/// 按 model id 而不是按 provider profile 作键，因为两个讨论者就是不同的模型，而能力表与
+/// `[models.*]` 本来也是按 model id 作键的。没有条目的模型是**没有**费用而不是费用为零：
+/// 报告里「无价格」与「免费」不能长得一样。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PriceTable {
     entries: BTreeMap<String, Pricing>,
@@ -218,51 +204,47 @@ impl PriceTable {
         self.entries.is_empty()
     }
 
-    /// What `usage` cost on `model`, or `None` when the model has no price.
+    /// `usage` 在 `model` 上花了多少钱；该模型没有价格时是 `None`。
     pub fn cost(&self, model: &str, usage: Usage) -> Option<f64> {
         self.pricing(model).map(|pricing| pricing.cost(usage))
     }
 }
 
-/// A place a cheaper model may be routed to (spec §17).
+/// 更便宜的模型可以被路由到的位置（spec §17）。
 ///
-/// Exactly two exist: the synthesizer's one closing call, and the executors a
-/// debater dispatches. A **debater is never routed** — heterogeneity is the
-/// strongest diversity lever the protocol has (spec §15), and two sides on the
-/// same model have stopped being heterogeneous — so there is deliberately no
-/// third variant here and no debater-shaped call to
-/// [`crate::config::SessionConfig::model_for`].
+/// 全系统只有两个：合成器那一次收尾调用，以及讨论者派发的执行者。**讨论者绝不被路由** ——
+/// 异构是这套协议手里最强的多样性杠杆（spec §15），而同一模型上的两方已经不再是异构的 ——
+/// 所以这里刻意没有第三个变体，也没有任何讨论者形状的地方会调
+/// [`crate::config::SessionConfig::model_for`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LandingPoint {
-    /// The synthesizer's single call, assembled by [`crate::assemble_discussion`].
+    /// 合成器那一次调用，由 [`crate::assemble_discussion`] 组装。
     Synthesizer,
-    /// The nested sessions `task` dispatches (`crate::agent::executor`).
+    /// `task` 派发的那些嵌套会话（`crate::agent::executor`）。
     Executor,
 }
 
-/// Which model each landing point answers with, as configured (spec §17).
+/// 每个落点按配置分别用哪个模型作答（spec §17）。
 ///
-/// The session-level `[routing]` table. Both values are `None` by default, which
-/// is v1's behaviour: everything answers with the discussion's model until there
-/// is data to route on — the mechanism is in place, the numbers wait.
+/// 就是会话级的 `[routing]` 表。两个值缺省都是 `None`，也就是 v1 的行为：在有数据可依
+/// 之前，一切都用讨论的模型作答 —— 机制已就位，数字还没来。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Routing {
-    /// Model the synthesizer answers with.
+    /// 合成器作答所用的模型。
     pub synthesizer_model: Option<String>,
-    /// Model the executors answer with.
+    /// 执行者作答所用的模型。
     pub executor_model: Option<String>,
 }
 
 impl Routing {
-    /// Whether neither landing point is routed, which is v1's default.
+    /// 两个落点是不是都没有被路由，这是 v1 的缺省。
     pub fn is_empty(&self) -> bool {
         self.synthesizer_model.is_none() && self.executor_model.is_none()
     }
 
-    /// Apply the configured overrides to one agent's values.
+    /// 把配置里的覆盖应用到某一个 agent 的值上。
     ///
-    /// Note what is **not** here: a debater's model. There is no field for it and
-    /// no call site that would read one.
+    /// 注意这里**没有**什么：讨论者的模型。既没有那个字段，也没有任何会去读它的调用点。
     pub fn apply(&self, config: &mut crate::config::SessionConfig) {
         config.synthesizer_model = self.synthesizer_model.clone();
         config.executor_model = self.executor_model.clone();
