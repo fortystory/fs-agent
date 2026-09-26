@@ -16,7 +16,10 @@
 //!   keyboard input are three independent sources; `select!` is how they are merged
 //!   without a second channel whose ordering would be undefined. What is already
 //!   queued is drained before the frame is drawn, so a bursting provider costs
-//!   frames rather than events.
+//!   frames rather than events. The one timer in the loop is the mark's pulse, and
+//!   it is armed **only while a run is in flight**
+//!   (`.scratch/tui-input-pulse/spec.md` §2): an idle session still waits on those
+//!   three sources and nothing else.
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -342,6 +345,17 @@ impl Tui {
             }
         }
 
+        // The pulse's clock: the only timer in this loop, and it is **armed only while
+        // a run is in flight** — the `if` on its `select!` arm is what keeps that true,
+        // because an unarmed branch is never polled and cannot wake the loop
+        // (`.scratch/tui-input-pulse/spec.md` §2). An `interval` rather than a `sleep`
+        // built fresh each pass: a provider bursting a thousand deltas would reset a
+        // sleep on every iteration, and the mark would stop moving exactly when the
+        // session is busiest. `Delay` keeps a backlog of missed frames from being spent
+        // all at once when the loop comes back from a long frame.
+        let mut pulse = tokio::time::interval(PULSE_FRAME);
+        pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
             let mut closed = false;
             if state.replay_pending() {
@@ -359,14 +373,19 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
-                // Three sources and no timer. The redraw tick used to live here, and it
-                // went with the clock it existed for: a pending question arrives on the
-                // console port, events arrive on the render channel, and a key is a key,
-                // so nothing is waiting to be noticed (票 05 §1).
+                // Three sources, plus the pulse's timer while a run is in flight. The
+                // redraw tick that used to live here went with the clock it existed for
+                // — a pending question arrives on the console port, events arrive on the
+                // render channel, and a key is a key, so nothing *else* is waiting to be
+                // noticed (票 05 §1). The pulse is the one thing that is: it is a
+                // function of time alone, so it needs a clock, and that clock is the
+                // `if` below — idle, this `select!` is three sources again
+                // (`.scratch/tui-input-pulse/spec.md` §4).
                 tokio::select! {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
+                    _ = pulse.tick(), if state.busy() => state.tick(),
                 }
             }
 
@@ -549,6 +568,11 @@ pub struct TuiState {
     /// Whether the loop says it is inside a run. **Pushed by the loop**, never
     /// inferred here: see [`TuiState::busy`].
     running: bool,
+    /// The busy pulse's frame counter, advanced by [`TuiState::tick`] and read by the
+    /// mark's painter. Zero whenever no run is in flight — the loop's timer is what
+    /// moves it, so an idle session leaves it exactly where the last run left it,
+    /// which is zero (`.scratch/tui-input-pulse/spec.md` §2).
+    pulse: u64,
     /// A question waiting for a keypress.
     pending: Option<Pending>,
     /// Gestures to hand back to the loop.
@@ -1237,6 +1261,7 @@ impl TuiState {
             // Idle until the loop says otherwise: before it asks its first line nothing
             // is running, and the keyboard has to read that way (spec §6).
             running: false,
+            pulse: 0,
             pending: None,
             events: Vec::new(),
             indicator: None,
@@ -1257,6 +1282,21 @@ impl TuiState {
 
     pub fn mark_clean(&mut self) {
         self.dirty = false;
+    }
+
+    /// Advance the busy pulse by one frame
+    /// (`.scratch/tui-input-pulse/spec.md` §2).
+    ///
+    /// The loop calls this from the one timer it arms while a run is in flight, so an
+    /// idle front end never reaches here; the guard is repeated anyway, because a mark
+    /// moving on an idle screen would be a lie about what the program is doing. It is
+    /// the pulse's frame and nothing else — **not** a general "redraw something" hook,
+    /// and anything that needs a frame should say so through the event that changed it.
+    pub fn tick(&mut self) {
+        if self.busy() {
+            self.pulse = self.pulse.wrapping_add(1);
+            self.dirty = true;
+        }
     }
 
     /// Bracketed paste arrives as text, not as keys.
@@ -1893,6 +1933,12 @@ impl TuiState {
             // in this state may stand in for it.
             ConsoleRequest::RunState { running } => {
                 self.running = running;
+                // The pulse belongs to one run: the mark goes back to the ring's first
+                // frame when a run ends, so the next one does not resume mid-colour
+                // (`.scratch/tui-input-pulse/spec.md` §2).
+                if !running {
+                    self.pulse = 0;
+                }
                 // A question belongs to the run that raised it, so the end of that run is
                 // what makes it stale: the loop is no longer waiting for an answer, and
                 // its ask died with the run. Leaving the overlay up would send the next
@@ -2712,7 +2758,7 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
     let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
         return;
     };
-    draw_sidebar_identity(frame, panes, sidebar);
+    draw_sidebar_identity(frame, panes, state, sidebar);
     draw_tab_bar(frame, panes, state, sidebar, tabs);
     draw_sidebar_page(frame, panes, state);
 }
@@ -2722,8 +2768,16 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
 ///
 /// Which of the three is the layout's decision — [`layout::SidebarKind`] — so the
 /// ladder has one home. The mark is centred in the wide rung, which is the mark's own
-/// width plus a column of air on each side.
-fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, sidebar: Rect) {
+/// width plus a column of air on each side. Its colour comes from the run's state: the
+/// static ramp while idle, one frame of [`PULSE_PALETTE`] while a run is in flight
+/// (`.scratch/tui-input-pulse/spec.md` §2). On the narrow rung there is no mark — and
+/// so no pulse, which the user accepted: the text identity stays a still line.
+fn draw_sidebar_identity(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &TuiState,
+    sidebar: Rect,
+) {
     let dim = Style::default().fg(Color::DarkGray);
     match panes.sidebar_kind {
         layout::SidebarKind::Mark => {
@@ -2731,7 +2785,7 @@ fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, si
             // with a column of air on each side; a rung narrower than the mark never
             // asks for these rows at all (spec §2).
             let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
-            let lines: Vec<Line<'static>> = mark_lines()
+            let lines: Vec<Line<'static>> = mark_lines(state.busy().then_some(state.pulse))
                 .into_iter()
                 .map(|(text, color)| {
                     Line::from(Span::styled(text.to_owned(), Style::default().fg(color)))
@@ -3091,28 +3145,67 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
+/// The busiest answer the interface has to a three-word question, as a ring of
+/// colours (`.scratch/tui-input-pulse/spec.md` §2).
+///
+/// Twelve frames — six hues, each in its light and normal form — walked in order, so
+/// the mark goes round the colour wheel and comes back. Frame 0 is the mark's own
+/// bright end, which is what makes the first busy frame a continuation of the idle
+/// mark rather than a jump away from it. Standard ANSI colours only: the mark sits on
+/// whatever theme the user already has, and a 24-bit value would be a colour that
+/// theme cannot answer.
+/// Public for the same reason the ring is worth asserting: a test reads it to check
+/// which frame the mark is on, and a palette the tests re-typed would be a second
+/// copy of the ring.
+pub const PULSE_PALETTE: [Color; 12] = [
+    Color::LightMagenta,
+    Color::Magenta,
+    Color::LightBlue,
+    Color::Blue,
+    Color::LightCyan,
+    Color::Cyan,
+    Color::LightGreen,
+    Color::Green,
+    Color::LightYellow,
+    Color::Yellow,
+    Color::LightRed,
+    Color::Red,
+];
+
+/// One pulse frame: ten a second, so the ring takes 1.2 seconds to come round. Fast
+/// enough to read as motion, slow enough not to flicker — and the loop only arms this
+/// clock while a run is in flight, so an idle session never pays for it.
+const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// The mark's rows and their colours.
 ///
 /// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
-/// here, where the rest of the painting does. Rows brighten towards the top, so the
-/// mark reads as lit from above. Foreground only, and deliberately no background: the
-/// mark sits on whatever background the user's theme already has, and filling the
-/// half-shade rows would fight that theme on as many terminals as it matched.
-fn mark_lines() -> Vec<(&'static str, Color)> {
+/// here, where the rest of the painting does. Idle (`None`), rows brighten towards the
+/// top, so the mark reads as lit from above. While a run is in flight (`Some(frame)`),
+/// the whole mark takes one colour off [`PULSE_PALETTE`] instead, so it reads as
+/// working — at the cost of the gradient, which is deliberate: a flat moving mark says
+/// "alive" louder than a moving gradient would, and the ramp is back on the next idle
+/// frame (`.scratch/tui-input-pulse/spec.md` §2).
+///
+/// Foreground only, and deliberately no background: the mark sits on whatever
+/// background the user's theme already has, and filling the half-shade rows would
+/// fight that theme on as many terminals as it matched.
+fn mark_lines(pulse: Option<u64>) -> Vec<(&'static str, Color)> {
     let rows = wording::logo_lines();
     debug_assert!(
         rows.iter()
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
         "the mark is drawn whole or not at all, so its width is the layout's contract"
     );
+    let ring = pulse.map(|frame| PULSE_PALETTE[(frame % PULSE_PALETTE.len() as u64) as usize]);
     rows.iter()
         .enumerate()
         .map(|(row, text)| {
-            let color = if row < rows.len() - 1 {
+            let color = ring.unwrap_or(if row < rows.len() - 1 {
                 Color::LightMagenta
             } else {
                 Color::Magenta
-            };
+            });
             (*text, color)
         })
         .collect()

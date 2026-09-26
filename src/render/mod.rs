@@ -58,7 +58,7 @@ pub use severity::Severity;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
 pub use tui::{
     draw_frame, render_block, render_block_uncoloured, Key, SessionFacts, SpeakerColors, Tui,
-    TuiOptions, TuiState,
+    TuiOptions, TuiState, PULSE_PALETTE,
 };
 
 /// How many render events may be buffered before a slow consumer starts losing

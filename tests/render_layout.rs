@@ -10,6 +10,7 @@
 use fs_agent::render::width::text_columns;
 use fs_agent::render::{
     draw_frame, CatalogEntry, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
+    PULSE_PALETTE,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
@@ -242,9 +243,11 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
 
 #[test]
 fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
-    // The painter's half of the mark: the characters are `wording`'s, but which rows
-    // they land on and how the gradient falls is the painter's, so it is asserted
-    // where it can be seen — in the buffer, cell by cell.
+    // The mark at rest — the painter's half of it: the characters are `wording`'s, but
+    // which rows they land on and how the gradient falls is the painter's, so it is
+    // asserted where it can be seen, in the buffer, cell by cell. The moving half is
+    // `the_mark_walks_the_pulse_ring_while_a_run_is_in_flight`
+    // (`.scratch/tui-input-pulse/spec.md` §2).
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
         frame[(2, 1)].symbol(),
@@ -538,6 +541,104 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
         text.contains("正在读文件"),
         "the streaming tail is in the pane too: {text}"
     );
+}
+
+/// The mark's five row colours at 120x24, top to bottom: the column the painter
+/// writes is the sidebar's second column, and the mark's first glyph sits there on
+/// every one of its rows.
+fn mark_colours(state: &mut TuiState) -> Vec<Color> {
+    let frame = buffer(120, 24, state);
+    (1..=5u16).map(|y| frame[(2, y)].fg).collect()
+}
+
+#[test]
+fn the_mark_walks_the_pulse_ring_while_a_run_is_in_flight() {
+    // The busy half of the mark: the whole block takes one colour off the ring per
+    // frame, and twelve frames bring it back to where it started
+    // (`.scratch/tui-input-pulse/spec.md` §2). The idle ramp next door is the other
+    // half of the same painter, and the ring's first frame is that ramp's own bright
+    // end, so the two meet without a jump.
+    let mut state = state();
+    state.request(ConsoleRequest::RunState { running: true });
+    assert_eq!(
+        PULSE_PALETTE[0],
+        Color::LightMagenta,
+        "frame 0 is the ramp's top colour"
+    );
+    // Two laps: one to show the hue moves, the second to show the ring closes.
+    for frame in 1..=PULSE_PALETTE.len() * 2 {
+        state.tick();
+        let expected = PULSE_PALETTE[frame % PULSE_PALETTE.len()];
+        assert_eq!(
+            mark_colours(&mut state),
+            vec![expected; 5],
+            "frame {frame} of the ring: the whole mark is one colour"
+        );
+    }
+}
+
+#[test]
+fn a_finished_run_puts_the_pulse_back_at_the_rings_first_frame() {
+    // The pulse is one run's, not the session's: the mark goes back to the static ramp
+    // when the run ends, and the next run does not resume mid-colour — it starts one
+    // frame past the ring's first entry, whatever the last run left behind
+    // (`.scratch/tui-input-pulse/spec.md` §2).
+    let mut state = state();
+    state.request(ConsoleRequest::RunState { running: true });
+    for _ in 0..3 {
+        state.tick();
+    }
+    assert_eq!(
+        mark_colours(&mut state),
+        vec![PULSE_PALETTE[3]; 5],
+        "three frames in, the mark is on frame three"
+    );
+
+    state.request(ConsoleRequest::RunState { running: false });
+    assert_eq!(
+        mark_colours(&mut state),
+        vec![
+            Color::LightMagenta,
+            Color::LightMagenta,
+            Color::LightMagenta,
+            Color::LightMagenta,
+            Color::Magenta
+        ],
+        "idle again: the ramp, not the frame the run stopped on"
+    );
+
+    state.request(ConsoleRequest::RunState { running: true });
+    state.tick();
+    assert_eq!(
+        mark_colours(&mut state),
+        vec![PULSE_PALETTE[1]; 5],
+        "and the next run starts at the ring's first frame, not where the last one left off"
+    );
+}
+
+#[test]
+fn the_pulse_is_invisible_where_the_mark_is_not_drawn() {
+    // The mark *is* the animation, so the rungs without one have no animation at all —
+    // which the user accepted, and the text identity line stays a still line. What must
+    // not happen is a tick redrawing anything: two frames apart come out identical
+    // (`.scratch/tui-input-pulse/spec.md` §2).
+    for (width, height) in [(100u16, 24u16), (60, 24), (40, 10)] {
+        let mut state = state();
+        state.request(ConsoleRequest::RunState { running: true });
+        state.tick();
+        let before = buffer(width, height, &mut state);
+        state.tick();
+        let after = buffer(width, height, &mut state);
+        assert_eq!(
+            before, after,
+            "{width}x{height} has no mark, so a pulse frame changes nothing"
+        );
+        assert!(
+            !row_text(&after, 1, width).contains('▄'),
+            "{width}x{height} draws no mark to animate: {:?}",
+            row_text(&after, 1, width)
+        );
+    }
 }
 
 #[test]
@@ -1584,7 +1685,11 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
         "three input rows leave the transcript fourteen: {empty:#?}"
     );
     let input = TRANSCRIPT_TOP + rows + 3;
-    assert!(empty[input].contains("> "), "the prompt: {:?}", empty[input]);
+    assert!(
+        empty[input].contains("> "),
+        "the prompt: {:?}",
+        empty[input]
+    );
     assert!(
         empty[input + 1].trim_matches(['│', ' ']).is_empty()
             && empty[input + 2].trim_matches(['│', ' ']).is_empty(),
