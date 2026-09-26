@@ -570,18 +570,29 @@ fn the_dash_of_fs_agent_turns_while_a_run_is_in_flight() {
     // shapes are written out here as a person reads them — one bar going round, not four
     // glyphs taking turns — so a change to the geometry has to be a change to this frame
     // rather than a change to a table nobody looks at.
+    // The mark's own block alphabet, not the text row's box-drawing one (票 06): the flat
+    // dash is the half-block bar the mark has always drawn, and the three moving
+    // orientations are quarter-block steps and a full-block upright.
     let phases = [
-        ["    ", "    ", "────", "    ", "    "],
-        ["╲   ", " ╲  ", "  ╲ ", "   ╲", "    "],
-        ["  │ ", "  │ ", "  │ ", "  │ ", "  │ "],
-        ["   ╱", "  ╱ ", " ╱  ", "╱   ", "    "],
+        ["    ", "    ", "▀▀▀▀", "    ", "    "],
+        ["▚   ", " ▚  ", "  ▚ ", "   ▚", "    "],
+        ["  █ ", "  █ ", "  █ ", "  █ ", "  █ "],
+        ["   ▞", "  ▞ ", " ▞  ", "▞   ", "    "],
     ];
-    // Idle is the flat dash — the mark at rest looks the way it always did.
+    // Idle is the flat dash — and it is **the mark's own**, character for character: an
+    // animation that only exists while something runs may not restyle the mark at rest.
     let mut state = state();
     assert_eq!(
         dash_cell(&mut state),
         phases[0].map(str::to_owned).to_vec(),
         "a still mark shows the dash lying flat"
+    );
+    assert_eq!(
+        dash_cell(&mut state),
+        fs_agent::render::wording::logo_lines()
+            .map(|row| row.chars().skip(10).take(4).collect::<String>())
+            .to_vec(),
+        "and that flat dash is byte-for-byte the one `logo_lines` has always carried"
     );
 
     // Two turns: one to show it moves, the second to show it comes back.
@@ -651,7 +662,7 @@ fn a_finished_run_puts_the_dash_back_to_still() {
         state.tick();
     }
     assert!(
-        dash_cell(&mut state)[0].contains('╱'),
+        dash_cell(&mut state)[0].contains('▞'),
         "three frames in, the dash is on its fourth orientation: {:?}",
         dash_cell(&mut state)
     );
@@ -659,14 +670,14 @@ fn a_finished_run_puts_the_dash_back_to_still() {
     state.request(ConsoleRequest::RunState { running: false });
     assert_eq!(
         dash_cell(&mut state)[2],
-        "────",
+        "▀▀▀▀",
         "idle again: the flat dash, not the orientation the run stopped on"
     );
 
     state.request(ConsoleRequest::RunState { running: true });
     state.tick();
     assert!(
-        dash_cell(&mut state)[0].contains('╲'),
+        dash_cell(&mut state)[0].contains('▚'),
         "and the next run starts at the turn's first orientation: {:?}",
         dash_cell(&mut state)
     );

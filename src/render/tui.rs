@@ -3195,21 +3195,37 @@ const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(250);
 const MARK_DASH_COLUMN: usize = 10;
 const MARK_DASH_WIDTH: usize = 4;
 
-/// Where the dash's cells are for one orientation, as (row in the mark, column in the
-/// dash's own four): `─` lies across the middle row, `╲` and `╱` run corner to corner,
-/// `│` stands up in the middle column.
+/// What the dash wears for one orientation, as (row in the mark, column in the dash's own
+/// four, glyph): the flat `▀▀▀▀` across the middle row, `▚` stepping down the diagonal, `█`
+/// standing up in the middle column, `▞` stepping up the other diagonal.
+///
+/// **All four are the mark's own block family** (票 06): the idle dash is the half-block
+/// bar the mark has always drawn, and an animation that only exists while something is
+/// running has no business changing how the mark looks when nothing is. The flat row is
+/// therefore `wording::logo_lines`'s own, and the three moving ones are drawn from the
+/// same half- and quarter-block vocabulary. The narrow rung's text row turns the same four
+/// orientations in box-drawing instead ([`wording::DASH_TURN`]) — a text line has no block
+/// cell to draw in, and there the diagonals have to be real diagonals.
+///
+/// The order is [`wording::DASH_TURN`]'s: flat, `╲`, `│`, `╱` — clockwise. The two tables
+/// are the same turn in two alphabets, so they are indexed together.
 ///
 /// The box is four wide and five tall, so a four-cell bar cannot pivot exactly — the
-/// upright has to pick a column, and the diagonals pass through the corners. What makes
-/// it read as **one bar going round** rather than four glyphs taking turns is that the
-/// length never changes and every orientation is centred on the same cell-free middle:
-/// the flat dash sits where the idle mark already drew it, and each turn moves the ends,
-/// not the middle.
-const DASH_CELLS: [&[(usize, usize)]; 4] = [
-    &[(2, 0), (2, 1), (2, 2), (2, 3)],
-    &[(0, 0), (1, 1), (2, 2), (3, 3)],
-    &[(0, 2), (1, 2), (2, 2), (3, 2), (4, 2)],
-    &[(3, 0), (2, 1), (1, 2), (0, 3)],
+/// upright has to pick a column, and the diagonals run corner to corner. What makes it
+/// read as **one bar going round** rather than four glyphs taking turns is that the length
+/// never changes and every orientation keeps the same middle: the flat dash sits exactly
+/// where the idle mark drew it, and each turn moves the ends rather than the middle.
+const DASH_CELLS: [&[(usize, usize, char)]; 4] = [
+    &[(2, 0, '▀'), (2, 1, '▀'), (2, 2, '▀'), (2, 3, '▀')],
+    &[(0, 0, '▚'), (1, 1, '▚'), (2, 2, '▚'), (3, 3, '▚')],
+    &[
+        (0, 2, '█'),
+        (1, 2, '█'),
+        (2, 2, '█'),
+        (3, 2, '█'),
+        (4, 2, '█'),
+    ],
+    &[(3, 0, '▞'), (2, 1, '▞'), (1, 2, '▞'), (0, 3, '▞')],
 ];
 
 /// The mark's rows and their colours, with its dash turned to `turning` — `None` while
@@ -3231,8 +3247,7 @@ fn mark_lines(turning: Option<u64>) -> Vec<(String, Color)> {
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
         "the mark is drawn whole or not at all, so its width is the layout's contract"
     );
-    let phase = turning.unwrap_or(0) as usize % wording::DASH_TURN.len();
-    let glyph = wording::DASH_TURN[phase];
+    let phase = turning.unwrap_or(0) as usize % DASH_CELLS.len();
     let mut lines: Vec<(Vec<char>, Color)> = rows
         .iter()
         .enumerate()
@@ -3252,8 +3267,8 @@ fn mark_lines(turning: Option<u64>) -> Vec<(String, Color)> {
             (line, color)
         })
         .collect();
-    for (row, column) in DASH_CELLS[phase] {
-        lines[*row].0[MARK_DASH_COLUMN + *column] = glyph;
+    for (row, column, glyph) in DASH_CELLS[phase] {
+        lines[*row].0[MARK_DASH_COLUMN + *column] = *glyph;
     }
     lines
         .into_iter()

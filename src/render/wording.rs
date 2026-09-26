@@ -1310,13 +1310,17 @@ pub fn identity() -> String {
 }
 
 /// The four orientations of the dash in `fs-agent`, in the order they turn
-/// (`.scratch/tui-input-pulse/spec.md` §2).
+/// (`.scratch/tui-input-pulse/spec.md` §2): flat, then clockwise.
 ///
-/// One glyph set for both places the identity is drawn: the narrow rung's text row, where
-/// it is the one character between `fs` and `agent`, and the mark's own dash cell, where
-/// it is a bar four cells long. Box-drawing rather than ASCII `-`, `\`, `|`, `/`: the
-/// diagonals are real diagonals and all four sit on the same baseline, so the turn does
-/// not jitter the way an ASCII spinner does.
+/// These are the glyphs of the **text** identity — the narrow rung's `fs-agent 0.1.0`,
+/// where the dash is one character between `fs` and `agent`. Box-drawing rather than ASCII
+/// `-`, `\`, `|`, `/`: the diagonals are real diagonals and all four sit on the same
+/// baseline, so the turn does not jitter the way an ASCII spinner does.
+///
+/// The **mark** turns the same four orientations, but it has a block cell to draw in and
+/// draws them in its own half- and quarter-block alphabet instead (`mark_lines` in
+/// `crate::render::tui`, whose table is indexed by this one). The two are one turn in two
+/// alphabets: change the order here and the mark's phases have to follow.
 ///
 /// The order is clockwise, starting from the still dash — the classic `- \ | /` of every
 /// command-line spinner.

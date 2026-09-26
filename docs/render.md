@@ -107,9 +107,13 @@ column** on the right, and the geometry is one pure function of the terminal siz
   §2). The mark spells `fs-agent` in eight four-column glyph cells, and the painter draws
   its third cell — the dash's own four columns — from a small table: flat, then the two
   diagonals, then upright, one orientation per `PULSE_FRAME` (250 ms), clockwise and back.
-  The same turn shows up on the narrow rung, where there is no mark and the identity is the
-  text row `fs-agent 0.1.0`: `wording::identity_turning` swaps its one dash for the same
-  glyph. Two colour versions of this signal were tried on a real terminal and both were
+  **All four are the mark's own block glyphs** (`▀▀▀▀`, `▚` steps, `█`, `▞` steps): the idle
+  dash is the half-block bar the mark has always drawn, and an animation that only exists
+  while something runs has no business restyling the mark at rest (票 06). The same turn
+  shows up on the narrow rung, where there is no mark and the identity is the text row
+  `fs-agent 0.1.0`: `wording::identity_turning` swaps its one dash for a box-drawing glyph
+  from `wording::DASH_TURN` — a text line has no block cell to draw in, so there the
+  diagonals are real diagonals. Two colour versions of this signal were tried on a real terminal and both were
   retired — 12 light/normal frames at 100 ms read as flickering (票 04) and six light hues
   at 400 ms read as abrupt — so `PULSE_PALETTE` stays in the code, off screen, with a test
   pinning that nothing wears it (票 05).
