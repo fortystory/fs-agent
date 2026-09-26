@@ -1,0 +1,16 @@
+# THROWAWAY probe for ticket 01 (full-height sidebar + turn rail + status row).
+#
+# Deliberately its own workspace root so it never joins the fs-agent package
+# graph: the repo-root Cargo.toml, src/ and Cargo.lock are untouched by this
+# crate. `ratatui` is the only dependency and it is already in the local
+# registry (fs-agent depends on it), so `cargo build --offline` resolves.
+[package]
+name = "tui-sidebar-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+ratatui = "0.30"
