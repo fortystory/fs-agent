@@ -22,7 +22,7 @@
 - **权限、秘密、可撤销。** 四个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 29 张实现票全部 `done`（约 27k 行 `src/`、23k 行 `tests/`、597 测试；票 30/31 是收尾审查补记的两处前端欠账，尚未做）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
+**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32）；`src/` **31,196** 行、`tests/` **28,632** 行（`wc -l`）、**736** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
@@ -226,15 +226,23 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
-| [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`plan-mode`](docs/plan-mode.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
+| [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`plan-mode`](docs/plan-mode.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
 | [`docs/adr/`](docs/adr/) | 不可逆的决定：中文 UI 与冻结的模型文本、全屏 alt screen TUI（含标记与其代价） |
-| [`.scratch/`](.scratch/) | `multi-agent-architecture/` 是决策地图，`fs-agent-v1/issues/` 是一张票一个文件的实现票（含 `Status:` 行） |
-| [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（issue tracker、triage labels、domain docs） |
+| [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
+| [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
+| [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定；指向 [`docs/agents/`](docs/agents/) 的三份细目（[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md)） |
+
+**约定**（新文档照这个走，别猜）：
+
+- **写中文的**：`README.md`、`CONTEXT.md`、`.scratch/` 下的 spec / map / 票、`docs/adr/`、`docs/tui-manual-checklist.md` —— 面向**使用与流程**：怎么说、怎么验、为什么这么定。
+- **写英文的**：`docs/` 下的逐面设计文档与 `docs/agents/` —— 面向**代码内部**：模块边界、不变量、代码在哪。代码标识符一律英文。
+- **例外**：`docs/highlight.md` 是中文 —— 它回答的是「这个模块为什么留着、什么会让它回来」，读者是将来的接手人。
+- 两条推论：**新增文档跟邻居走**；**跨语言引用保留标识符英文**（中文文档里也写 `Session`、`project()`）。
 
 ## 开发
 
 ```sh
-cargo test                              # 550+ 测试
+cargo test                              # 全量测试（条数见上面的「状态」）
 cargo clippy --all-targets
 python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 ```
