@@ -554,7 +554,7 @@ fn mark_colours(state: &mut TuiState) -> Vec<Color> {
 #[test]
 fn the_mark_walks_the_pulse_ring_while_a_run_is_in_flight() {
     // The busy half of the mark: the whole block takes one colour off the ring per
-    // frame, and twelve frames bring it back to where it started
+    // frame, and six frames bring it back to where it started
     // (`.scratch/tui-input-pulse/spec.md` §2). The idle ramp next door is the other
     // half of the same painter, and the ring's first frame is that ramp's own bright
     // end, so the two meet without a jump.
@@ -565,6 +565,17 @@ fn the_mark_walks_the_pulse_ring_while_a_run_is_in_flight() {
         Color::LightMagenta,
         "frame 0 is the ramp's top colour"
     );
+    // The ring must not flicker, and brightness is what the eye reads as flicker: the
+    // first version alternated light and normal hues, and that is what got changed
+    // (票 04). Every entry being a light variant is the property that keeps the mark
+    // reading as "changing colour" instead.
+    for colour in PULSE_PALETTE {
+        let name = format!("{colour:?}");
+        assert!(
+            name.starts_with("Light"),
+            "the ring carries one brightness only, and this frame is not a light variant: {name}"
+        );
+    }
     // Two laps: one to show the hue moves, the second to show the ring closes.
     for frame in 1..=PULSE_PALETTE.len() * 2 {
         state.tick();

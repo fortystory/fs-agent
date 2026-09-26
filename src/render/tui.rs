@@ -3148,34 +3148,35 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
 /// The busiest answer the interface has to a three-word question, as a ring of
 /// colours (`.scratch/tui-input-pulse/spec.md` §2).
 ///
-/// Twelve frames — six hues, each in its light and normal form — walked in order, so
-/// the mark goes round the colour wheel and comes back. Frame 0 is the mark's own
-/// bright end, which is what makes the first busy frame a continuation of the idle
-/// mark rather than a jump away from it. Standard ANSI colours only: the mark sits on
-/// whatever theme the user already has, and a 24-bit value would be a colour that
-/// theme cannot answer.
+/// Six frames, one per hue, walked in order, so the mark goes round the colour wheel
+/// and comes back. Frame 0 is the mark's own bright end, which is what makes the first
+/// busy frame a continuation of the idle mark rather than a jump away from it.
+/// Standard ANSI colours only: the mark sits on whatever theme the user already has,
+/// and a 24-bit value would be a colour that theme cannot answer.
+///
+/// **Every entry is a light variant, and that is the point** (票 04). The first version
+/// alternated light and normal — 亮品红 → 品红 → 亮蓝 → 蓝 … — and on a real terminal
+/// that read as *flickering*: the brightness jumped a whole step every frame, and the
+/// eye follows that rather than the hue. One brightness, six hues, is what "it is
+/// changing colour" looks like.
+///
 /// Public for the same reason the ring is worth asserting: a test reads it to check
 /// which frame the mark is on, and a palette the tests re-typed would be a second
 /// copy of the ring.
-pub const PULSE_PALETTE: [Color; 12] = [
+pub const PULSE_PALETTE: [Color; 6] = [
     Color::LightMagenta,
-    Color::Magenta,
     Color::LightBlue,
-    Color::Blue,
     Color::LightCyan,
-    Color::Cyan,
     Color::LightGreen,
-    Color::Green,
     Color::LightYellow,
-    Color::Yellow,
     Color::LightRed,
-    Color::Red,
 ];
 
-/// One pulse frame: ten a second, so the ring takes 1.2 seconds to come round. Fast
-/// enough to read as motion, slow enough not to flicker — and the loop only arms this
-/// clock while a run is in flight, so an idle session never pays for it.
-const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(100);
+/// One pulse frame: two and a half frames a second, so the ring takes 2.4 seconds to
+/// come round — a hue every 400 ms, a pace the eye can follow. The first version ran at
+/// 100 ms and read as flicker (票 04). The loop only arms this clock while a run is in
+/// flight, so an idle session never pays for it.
+const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// The mark's rows and their colours.
 ///

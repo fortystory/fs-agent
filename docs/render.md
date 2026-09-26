@@ -104,11 +104,14 @@ column** on the right, and the geometry is one pure function of the terminal siz
   painter (`mark_lines`), foreground only and no background, so it does not fight
   whatever theme the terminal is already running. At rest the ramp brightens towards
   the top; **while a run is in flight the whole mark takes one colour off
-  `PULSE_PALETTE`** and walks that ring one frame per `PULSE_FRAME` (12 frames, 100 ms
-  each), which is the interface's "it is working" signal
-  (`.scratch/tui-input-pulse/spec.md` §2). The gradient is deliberately gone for as
-  long as the ring is: a flat moving mark reads as alive from further away than a
-  moving gradient does, and the ramp is back on the next idle frame.
+  `PULSE_PALETTE`** and walks that ring one frame per `PULSE_FRAME` (6 hues, 400 ms
+  each, so a lap takes 2.4 s), which is the interface's "it is working" signal
+  (`.scratch/tui-input-pulse/spec.md` §2). Every entry in the ring is a **light**
+  variant on purpose: an earlier version alternated light and normal hues every 100 ms
+  and read as flickering, because the eye follows a brightness jump rather than a hue
+  change (票 04). The gradient is deliberately gone for as long as the ring is: a flat
+  moving mark reads as alive from further away than a moving gradient does, and the
+  ramp is back on the next idle frame.
 - **The tab bar** pages the sidebar: 调用量 is the session's readings, 轨迹 and 文件
   are not built yet and say so. The tabs are **clicked, never keyed** — `Tab`
   belongs to the `/` menu and `Shift+Tab` to plan mode — and on a placeholder page
