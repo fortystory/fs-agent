@@ -2959,20 +2959,21 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
 
 /// Install the names the loop reports: the built-ins it parses, then the skills the
 /// session discovered. The renderer has no list of its own — this is the whole menu.
+///
+/// The built-in half is read off [`wording::BUILT_IN_COMMANDS`] — the same list the
+/// loop parses and the unknown-command text names — rather than written out here,
+/// so this fixture cannot drift from the real menu again (it offered `/plan` and
+/// `/endplan` for a while after those commands were retired).
 fn install_catalog(state: &mut TuiState) {
-    state.request(ConsoleRequest::Catalog {
-        entries: [
-            ("undo", "回滚上一次编辑"),
-            ("plan", "进入硬计划模式"),
-            ("endplan", "退出硬计划模式"),
-            ("quit", "退出会话"),
-            ("ask-matt", "不知道用哪个 skill 时问它"),
-            ("review", "审查一个变更"),
-        ]
+    let mut entries: Vec<CatalogEntry> = wording::BUILT_IN_COMMANDS
         .iter()
-        .map(|(name, description)| CatalogEntry::new(*name, *description))
-        .collect(),
-    });
+        .map(|command| CatalogEntry::new(command.name, command.description))
+        .collect();
+    entries.extend([
+        CatalogEntry::new("ask-matt", "不知道用哪个 skill 时问它"),
+        CatalogEntry::new("review", "审查一个变更"),
+    ]);
+    state.request(ConsoleRequest::Catalog { entries });
 }
 
 /// A prompt in flight, so a test can read back what a submission sent.
@@ -3024,16 +3025,13 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    for name in [
-        "/undo",
-        "/plan",
-        "/endplan",
-        "/quit",
-        "/ask-matt",
-        "/review",
-    ] {
+    for name in ["/undo", "/discuss", "/quit", "/ask-matt", "/review"] {
         assert!(text.contains(name), "{name} is offered:\n{text}");
     }
+    assert!(
+        !text.contains("/plan") && !text.contains("/endplan"),
+        "the retired commands are not offered any more:\n{text}"
+    );
     assert!(
         text.contains("回滚上一次编辑"),
         "with what it does:\n{text}"
@@ -3138,7 +3136,11 @@ fn the_arrows_walk_the_matches() {
     state.key(Key::Down);
     state.key(Key::Down);
     state.key(Key::Enter);
-    assert_eq!(line.try_recv().unwrap(), Some("/plan".to_owned()));
+    assert_eq!(
+        line.try_recv().unwrap(),
+        Some("/discuss".to_owned()),
+        "the second name in the built-in list"
+    );
 }
 
 #[test]

@@ -20,7 +20,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use crate::events::SpeakerId;
-use crate::tools::todo::{read_items, Item, Status, TODO_TOOL};
+use crate::tools::todo::{read_items, Item, TODO_TOOL};
 
 use super::transcript::Block;
 use super::width::truncate_columns;
@@ -70,12 +70,10 @@ impl TodoPanel {
         if room == 0 {
             return Vec::new();
         }
-        let completed = self
-            .items
-            .iter()
-            .filter(|item| item.status == Status::Completed)
-            .count();
-        let count = Line::from(wording::todo_count(completed, self.items.len()));
+        let count = Line::from(wording::todo_count(
+            crate::tools::todo::completed(&self.items),
+            self.items.len(),
+        ));
         if room == 1 {
             return vec![count];
         }
@@ -105,13 +103,8 @@ impl TodoPanel {
 
 /// One item's row: its status glyph, then its content, clamped to the page.
 fn item_line(item: &Item, width: usize) -> Line<'static> {
-    let glyph = match item.status {
-        Status::Pending => wording::TODO_PENDING,
-        Status::InProgress => wording::TODO_IN_PROGRESS,
-        Status::Completed => wording::TODO_COMPLETED,
-    };
     Line::from(truncate_columns(
-        &format!("{glyph} {}", item.content),
+        &format!("{} {}", wording::todo_glyph(item.status), item.content),
         width,
     ))
 }

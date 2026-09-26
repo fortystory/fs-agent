@@ -818,4 +818,10 @@ fn an_unknown_mode_is_a_startup_error_that_names_the_three() {
     for word in ["plan", "readonly", "ask", "auto"] {
         assert!(error.contains(word), "`{word}` is missing from: {error}");
     }
+    // Printed verbatim by the startup path, so a lost line continuation would put a
+    // run of spaces in the middle of the sentence.
+    assert!(
+        !error.contains("  "),
+        "one sentence, no run of spaces in it: {error:?}"
+    );
 }

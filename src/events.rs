@@ -201,6 +201,11 @@ pub enum ContextSource {
     /// the tail, unlike the pinned head injections: the model-side prefix never
     /// moves.
     Skill,
+    /// The instruction the old **plan mode** injected on entry. Nothing emits this
+    /// any more — the mode is gone
+    /// (`docs/adr/0003-plan-leaves-the-permission-modes.md`) — and the variant
+    /// stays only so a stream written **before** that change still deserializes:
+    /// dropping it would make `--continue` fail on an old session.
     PlanMode,
     /// One debater's persona — the user's `soul` for it (spec §15).
     ///
@@ -225,8 +230,11 @@ pub enum HistoryReason {
     Undo,
     Compaction,
     /// The session's permission mode changed, so the instruction that described
-    /// the old one no longer does (spec §13). Unlike the other three this
-    /// retires harness content rather than an exchange.
+    /// the old one no longer does. Nothing emits this any more — it retired the
+    /// plan-mode instruction, and there is no such instruction
+    /// (`docs/adr/0003-plan-leaves-the-permission-modes.md`) — and it stays for
+    /// the same reason [`ContextSource::PlanMode`] does: old streams carry it, and
+    /// unlike the other three it retires harness content rather than an exchange.
     ModeChange,
 }
 

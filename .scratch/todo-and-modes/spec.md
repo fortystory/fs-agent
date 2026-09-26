@@ -94,8 +94,9 @@ Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现�
 
 - **前端怎么知道档位（§1 没写）**。模式不进流，所以三件事各自落地：`SessionFacts` 多了一个 `mode` 字段（组装期注入，状态行与启动 banner 说同一件事，`--mode` 也因此从第一帧就看得见）；TUI 收到 `BackTab` 时按 `Mode::next()` 自己走一步**并**推 `CycleMode`，循环那侧走同一步；而循环在运行期够不到 harness（被 pin 住的 run future 借着它），所以多了一个 `ModeCycle` 句柄 —— 形状与理由都同 `CancelSignal`。`DiscussionHarness` 也持一份（三个参与者共用一个策略）。
 - **`Question` / `AnswerChoice` 顺手坍缩**（§5 的删除清单里没有这两个名字）。它们本来是「两个问题共用一条键盘」的配对；plan 冲突退场后只剩一个变体，于是连同 `as_permission` / `as_plan` 一起删掉，`AskRequest` 直接带 `PermissionRequest` 与 `Answer`。这是同一个删除的必然后果，不是额外改动。
-- **`tests/plan_mode.rs` 改写为 `tests/modes.rs`**（§5 说的是「删除或改写」）。文件名里的 plan 已无意义；留下的五条是：三档起步、循环只改策略不进流、`--continue` 回到配置档、`readonly` 拒写而切到 `ask` 后同一调用放行、执行者继承会话的模式。老事件的向后兼容另在 `tests/history_replay.rs`（把两条老事件写成 JSONL 再读回来）。
+- **`tests/plan_mode.rs` 改写为 `tests/modes.rs`**（§5 说的是「删除或改写」）。文件名里的 plan 已无意义；留下的六条是：三档起步、循环只改策略不进流、`--continue` 回到配置档、`readonly` 拒写而切到 `ask` 后同一调用放行、`readonly` 下 shell 也被拒且没跑、执行者继承会话的模式。老事件的向后兼容另在 `tests/history_replay.rs`（把两条老事件写成 JSONL 再读回来）。
 - **列表的读取处只有一个**：`tools::todo::read_items()`，工具自己的 `call` 与侧栏的 `TodoPanel` 共用它。解析**手写**而不是 `serde` derive：derive 的错误信息（`invalid type: map, expected a sequence`）不点名是哪个字段，而这条错误是给模型看的（`item 2 has \`status\` = \`done\`; the three words are …`）。
+- **解析比票面稍严**：多出来的字段（顶层或单项里的未知键）也拒，`items: null` 当作「清空」（与缺省、空数组同义）。前者与 `config.toml` 的 `deny_unknown_fields` 同规矩——**拼错不该静默**；后者是一个空值在 JSON 里最自然的读法。两者都在 `tests/todo.rs` 里钉着。
 - **新模块 `src/render/todo.rs`（`TodoPanel`）**：§4 的落点列的是 `tui.rs` / `wording.rs`。「闩锁 + 页内容 + 那条一行高的退化规则」自成一件事，所以单独成模块（`Tab`、标签条与页的接线仍在 `tui.rs`）。
 - **回执文案（§2 只给了「例如」）**：非空 `todo: 3 items (1 completed)`（单数写 `item`），清空 `todo: cleared` —— 清空只回一句，不多一个 `0 items`。
 - **`--mode` 只挂交互路径**：`discuss` 子命令与 `probe` 读配置文件。§1 只说「`--mode` 旗标覆盖配置」，没说哪个子命令；讨论的名册与探针的模型都从配置来，多一个档位入口就多一处能与名册不一致的地方。

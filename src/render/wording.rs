@@ -1350,6 +1350,16 @@ pub const TODO_PENDING: &str = "☐";
 pub const TODO_IN_PROGRESS: &str = "▸";
 pub const TODO_COMPLETED: &str = "✓";
 
+/// The glyph one item's row opens with. A table like [`mode_label`], so "which
+/// glyph means what" has one home and the sidebar's page has none of its own.
+pub fn todo_glyph(status: crate::tools::todo::Status) -> &'static str {
+    match status {
+        crate::tools::todo::Status::Pending => TODO_PENDING,
+        crate::tools::todo::Status::InProgress => TODO_IN_PROGRESS,
+        crate::tools::todo::Status::Completed => TODO_COMPLETED,
+    }
+}
+
 /// The `todo` page's count line: `已完成 2/5`.
 pub fn todo_count(completed: usize, total: usize) -> String {
     format!("已完成 {completed}/{total}")

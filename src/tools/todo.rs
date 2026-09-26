@@ -69,13 +69,25 @@ pub struct Item {
 /// The tool.
 pub struct TodoTool;
 
+/// How many of a list's items are done. One expression for the two readers that
+/// need it — the receipt the model gets and the sidebar's count row — so they
+/// cannot disagree about what "completed" counts.
+pub fn completed(items: &[Item]) -> usize {
+    items
+        .iter()
+        .filter(|item| item.status == Status::Completed)
+        .count()
+}
+
 /// Read a `todo` call's list out of its arguments.
 ///
 /// This is the reader every consumer shares — the tool's own `call`, the sidebar's
 /// page and any later one — so the shape is defined once: what the tool accepts is
-/// exactly what a reader can read. A renderer that meets a list it cannot read
-/// (only possible if the shape ever changes) shows no list rather than half of
-/// one, and the args stay the truth; the receipt text is parsed by nobody.
+/// exactly what a reader can read. A list it cannot read reads as an **empty** one
+/// (never half a list, and never a panic): the writer below refuses to record such
+/// a call in the first place, so this is a reader that must not break rather than a
+/// state a session can reach — and an empty list is a state the page already has a
+/// word for. The args stay the truth; the receipt text is parsed by nobody.
 pub fn read_items(args: &Value) -> Vec<Item> {
     TodoTool::parse(args).unwrap_or_default()
 }
@@ -143,13 +155,12 @@ impl TodoTool {
                 )));
             }
             let status = match object.get("status").and_then(Value::as_str) {
-                Some(word) if Status::parse(word).is_some() => Status::parse(word).unwrap(),
-                Some(word) => {
-                    return Err(ToolError::message(format!(
+                Some(word) => Status::parse(word).ok_or_else(|| {
+                    ToolError::message(format!(
                         "{TODO_TOOL}: item {index} has `status` = `{word}`; the three words are \
                          `pending`, `in_progress` and `completed`"
-                    )))
-                }
+                    ))
+                })?,
                 None => {
                     return Err(ToolError::message(format!(
                         "{TODO_TOOL}: item {index} needs a `status` of `pending`, `in_progress` \
@@ -170,14 +181,11 @@ fn receipt(items: &[Item]) -> String {
     if items.is_empty() {
         return format!("{TODO_TOOL}: cleared");
     }
-    let completed = items
-        .iter()
-        .filter(|item| item.status == Status::Completed)
-        .count();
     let noun = if items.len() == 1 { "item" } else { "items" };
     format!(
-        "{TODO_TOOL}: {} {noun} ({completed} completed)",
-        items.len()
+        "{TODO_TOOL}: {} {noun} ({} completed)",
+        items.len(),
+        completed(items)
     )
 }
 

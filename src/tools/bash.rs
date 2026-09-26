@@ -5,8 +5,9 @@
 //!
 //! * `effect()` is **always** [`Effect::Exclusive`]: a shell can write anything,
 //!   so the dispatcher takes the workspace-wide lock and the permission gate
-//!   treats the call as a write. Plan mode and `readonly` therefore refuse it
-//!   without a special case.
+//!   treats the call as a write. `readonly` therefore refuses it without a
+//!   special case, and there is no write exemption left to borrow (the old plan
+//!   mode's `PLAN.md` one is gone — `docs/adr/0003-plan-leaves-the-permission-modes.md`).
 //! * the command runs as **one argv element** — `["bash", "-lc", command]`
 //!   spawned directly, never a command string spliced into a larger shell line —
 //!   so the model cannot add a second layer of shell substitution.

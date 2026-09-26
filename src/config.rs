@@ -1400,9 +1400,7 @@ pub enum ConfigError {
     InvalidPrice { model: String, field: &'static str },
     #[error("[budget] {reason}")]
     InvalidBudget { reason: String },
-    #[error(
-        "unknown mode `{mode}`; `[permissions] mode` (or `--mode`) takes `readonly`, `ask` or          `auto` — what used to be the `plan` mode is the model's `todo` tool now"
-    )]
+    #[error("unknown mode `{mode}`; `[permissions] mode` (or `--mode`) takes `readonly`, `ask` or `auto`")]
     UnknownMode { mode: String },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },

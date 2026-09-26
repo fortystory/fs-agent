@@ -148,7 +148,7 @@ _Avoid_: step、call
 _Avoid_: 插件、外部工具、MCP 工具
 
 **待办列表（Todo）**:
-一次 `todo` 调用提交的**整份**列表：每项是 `{content, status}`，`status` 取 `pending` / `in_progress` / `completed` 之一。**列表就是那条 `tool_call` 的 args** —— 没有第二处存储，结果只是一句回执（`todo: 3 items (1 completed)`），所以 `--continue`、`sessions replay` 与侧栏都从 args 重算。**一次提交整份**（replace-all）：缺省或空数组就是清空；同一条助手消息里两次并发调用按 `seq` 定序，**后落地的那条是真相**。它是**某个 agent 自己的**列表 —— 主会话与每个执行者各有一份，互不干扰，只有主会话那份上侧栏。
+一次 `todo` 调用提交的**整份**列表：每项是 `{content, status}`，`status` 取 `pending` / `in_progress` / `completed` 之一。**列表就是那条 `tool_call` 的 args** —— 没有第二处存储，结果只是一句回执（`todo: 3 items (1 completed)`），所以 `--continue`、`sessions replay` 与侧栏都从 args 重算。**一次提交整份**（replace-all）：缺省或空数组就是清空；同一条助手消息里两次并发调用按 `seq` 定序，**后落地的那条是真相**。它是**某个 agent 自己的**列表 —— 主会话与每个执行者各有一份，互不干扰；上侧栏的是**非执行者**那一份（主会话与讨论者都算，见**待办工具**），执行者的只进转录。
 _Avoid_: 计划（那是它取代掉的那一档模式）、待办事项（词表里没有别的「事项」）、`TODO.md`（不落盘）
 
 **待办工具（`todo`）**:

@@ -201,6 +201,16 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
     Ok(parsed)
 }
 
+/// The mode a run starts in: the `--mode` flag over `[permissions] mode`
+/// (spec §12; `.scratch/todo-and-modes/spec.md` §1).
+///
+/// A named function rather than the expression inline, because "which of the two
+/// wins" **is** the entry-point decision, and this is the only place a test can
+/// hold it — the rest of the path needs a terminal.
+fn effective_mode(parsed: &InteractiveArgs, config: &Config) -> Mode {
+    parsed.mode.unwrap_or(config.mode)
+}
+
 /// The interactive session: one workspace, one renderer, one keyboard.
 ///
 /// The renderer is selected before assembly and injected, and the same console
@@ -313,7 +323,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // The mode this run starts in: the flag over the file (spec §12). Resolved
     // once, here, because three things need the same answer — the policy the gate
     // runs under, the banner and the status row.
-    let mode = parsed.mode.unwrap_or(config.mode);
+    let mode = effective_mode(&parsed, &config);
 
     // The keyboard's two ends: the loop's handle and gesture receiver, and the
     // port the selected renderer (or the plain line reader) serves it through.
@@ -2680,6 +2690,36 @@ mod tests {
         for word in ["plan", "readonly", "ask", "auto"] {
             assert!(error.contains(word), "`{word}` is missing from: {error}");
         }
+    }
+
+    #[test]
+    fn the_mode_flag_overrides_the_configuration_and_its_absence_does_not() {
+        use super::{effective_mode, InteractiveArgs};
+
+        // Both directions of the one entry-point rule: with the flag set the file is
+        // not consulted, and without it the file is exactly what a session starts in
+        // (`.scratch/todo-and-modes/spec.md` §1).
+        let configured = |written: Option<&str>| {
+            crate::config::resolve(written, &crate::config::EnvMap::new()).unwrap()
+        };
+        let flag = |mode| InteractiveArgs {
+            mode,
+            ..Default::default()
+        };
+
+        let default = configured(None);
+        assert_eq!(effective_mode(&flag(None), &default), Mode::Ask);
+        assert_eq!(
+            effective_mode(&flag(Some(Mode::Readonly)), &default),
+            Mode::Readonly
+        );
+
+        let auto = configured(Some("[permissions]\nmode = \"auto\"\n"));
+        assert_eq!(effective_mode(&flag(None), &auto), Mode::Auto);
+        assert_eq!(
+            effective_mode(&flag(Some(Mode::Readonly)), &auto),
+            Mode::Readonly
+        );
     }
 
     #[test]
