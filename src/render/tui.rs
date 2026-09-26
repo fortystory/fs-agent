@@ -345,14 +345,13 @@ impl Tui {
             }
         }
 
-        // The pulse's clock: the only timer in this loop, and it is **armed only while
-        // a run is in flight** — the `if` on its `select!` arm is what keeps that true,
-        // because an unarmed branch is never polled and cannot wake the loop
-        // (`.scratch/tui-input-pulse/spec.md` §2). An `interval` rather than a `sleep`
-        // built fresh each pass: a provider bursting a thousand deltas would reset a
-        // sleep on every iteration, and the mark would stop moving exactly when the
-        // session is busiest. `Delay` keeps a backlog of missed frames from being spent
-        // all at once when the loop comes back from a long frame.
+        // The pulse's clock: the only timer in this loop, and it runs **always** — what it
+        // drives (the prompt's colour) is on screen while nothing is running, so there is no
+        // busy state to gate it on any more (`.scratch/tui-input-pulse/spec.md` §2b, 票 08).
+        // An `interval` rather than a `sleep` built fresh each pass: a provider bursting a
+        // thousand deltas would reset a sleep on every iteration, and the prompt would stop
+        // moving exactly when the session is busiest. `Delay` keeps a backlog of missed
+        // frames from being spent all at once when the loop comes back from a long frame.
         let mut pulse = tokio::time::interval(PULSE_FRAME);
         pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -373,19 +372,19 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
-                // Three sources, plus the pulse's timer while a run is in flight. The
-                // redraw tick that used to live here went with the clock it existed for
-                // — a pending question arrives on the console port, events arrive on the
-                // render channel, and a key is a key, so nothing *else* is waiting to be
-                // noticed (票 05 §1). The pulse is the one thing that is: it is a
-                // function of time alone, so it needs a clock, and that clock is the
-                // `if` below — idle, this `select!` is three sources again
-                // (`.scratch/tui-input-pulse/spec.md` §4).
+                // Three sources and the pulse's timer. The redraw tick that used to live
+                // here went with the clock it existed for — a pending question arrives on
+                // the console port, events arrive on the render channel, and a key is a key,
+                // so nothing *else* is waiting to be noticed (票 05 §1). The pulse is the one
+                // thing that is: it is a function of time alone, so it needs a clock, and
+                // that clock is armed always because the prompt it colours is always on
+                // screen (票 08; it used to carry an `if state.busy()` guard, which went with
+                // the falling dash — `.scratch/tui-input-pulse/spec.md` §2b).
                 tokio::select! {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
-                    _ = pulse.tick(), if state.busy() => state.tick(),
+                    _ = pulse.tick() => state.tick(),
                 }
             }
 
@@ -1284,19 +1283,20 @@ impl TuiState {
         self.dirty = false;
     }
 
-    /// Advance the busy pulse by one frame
-    /// (`.scratch/tui-input-pulse/spec.md` §2).
+    /// Advance the pulse by one frame (`.scratch/tui-input-pulse/spec.md` §2b).
     ///
-    /// The loop calls this from the one timer it arms while a run is in flight, so an
-    /// idle front end never reaches here; the guard is repeated anyway, because a mark
-    /// moving on an idle screen would be a lie about what the program is doing. It is
-    /// the pulse's frame and nothing else — **not** a general "redraw something" hook,
-    /// and anything that needs a frame should say so through the event that changed it.
+    /// The loop calls this from the one timer in its `select!`, which runs whether or not a
+    /// run is in flight, because what the pulse drives — the prompt's colour — is on screen
+    /// the whole time (票 08). It is the pulse's frame and nothing else: **not** a general
+    /// "redraw something" hook, and anything that needs a frame should say so through the
+    /// event that changed it.
+    ///
+    /// The counter is never reset. It used to be, because each run had its own falling dash
+    /// to start; a colour that restarting at hue 0 every run would visibly jump calls for one
+    /// continuous clock instead.
     pub fn tick(&mut self) {
-        if self.busy() {
-            self.pulse = self.pulse.wrapping_add(1);
-            self.dirty = true;
-        }
+        self.pulse = self.pulse.wrapping_add(1);
+        self.dirty = true;
     }
 
     /// Bracketed paste arrives as text, not as keys.
@@ -1933,12 +1933,6 @@ impl TuiState {
             // in this state may stand in for it.
             ConsoleRequest::RunState { running } => {
                 self.running = running;
-                // The pulse belongs to one run: the mark goes back to the ring's first
-                // frame when a run ends, so the next one does not resume mid-colour
-                // (`.scratch/tui-input-pulse/spec.md` §2).
-                if !running {
-                    self.pulse = 0;
-                }
                 // A question belongs to the run that raised it, so the end of that run is
                 // what makes it stale: the loop is no longer waiting for an answer, and
                 // its ask died with the run. Leaving the overlay up would send the next
@@ -2758,7 +2752,7 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
     let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
         return;
     };
-    draw_sidebar_identity(frame, panes, state, sidebar);
+    draw_sidebar_identity(frame, panes, sidebar);
     draw_tab_bar(frame, panes, state, sidebar, tabs);
     draw_sidebar_page(frame, panes, state);
 }
@@ -2768,16 +2762,10 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
 ///
 /// Which of the three is the layout's decision — [`layout::SidebarKind`] — so the
 /// ladder has one home. The mark is centred in the wide rung, which is the mark's own
-/// width plus a column of air on each side. **The identity's dash falls while a run is in
-/// flight** (`.scratch/tui-input-pulse/spec.md` §2) — through the mark's own dash cell, and
-/// through the three heights one character can take on the rung that has no mark for it, so
-/// both rungs carry the signal.
-fn draw_sidebar_identity(
-    frame: &mut ratatui::Frame,
-    panes: &layout::Regions,
-    state: &TuiState,
-    sidebar: Rect,
-) {
+/// width plus a column of air on each side. Nothing here moves: the mark's falling dash and
+/// the text identity's were both turned off in 票 08 (`.scratch/tui-input-pulse/spec.md`
+/// §2), and the whole of the animation in this interface now lives in the prompt's colour.
+fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, sidebar: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     match panes.sidebar_kind {
         layout::SidebarKind::Mark => {
@@ -2785,7 +2773,10 @@ fn draw_sidebar_identity(
             // with a column of air on each side; a rung narrower than the mark never
             // asks for these rows at all (spec §2).
             let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
-            let lines: Vec<Line<'static>> = mark_lines(state.busy().then_some(state.pulse))
+            // `None`: the mark does not move (票 08). The falling dash is still here — its
+            // frames are unit-tested next to it — but the maintainer turned it off, and the
+            // left column is back to the still mark it was before any of this.
+            let lines: Vec<Line<'static>> = mark_lines(None)
                 .into_iter()
                 .map(|(text, color)| Line::from(Span::styled(text, Style::default().fg(color))))
                 .collect();
@@ -2801,12 +2792,10 @@ fn draw_sidebar_identity(
             );
         }
         layout::SidebarKind::Text => {
-            // The one rung with no mark gets the same signal from the one glyph it does
-            // have: the dash of `fs-agent`, fallen to the frame the loop's clock is on.
-            let identity = match state.busy() {
-                true => wording::identity_falling(state.pulse as usize),
-                false => wording::identity(),
-            };
+            // The still identity: the narrow rung's half of the falling dash went off screen
+            // with the mark's (票 08). `wording::identity_falling` is kept beside it for when
+            // the idea comes back.
+            let identity = wording::identity();
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(identity, dim))),
                 Rect::new(sidebar.x, sidebar.y, sidebar.width, 1),
@@ -3149,6 +3138,67 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
+/// The prompt's colour at one pulse frame (`.scratch/tui-input-pulse/spec.md` §2b).
+///
+/// The maintainer's script, translated: the hue walks the wheel at 0.3 turns a second — a
+/// full revolution every 3.3 -- while the saturation breathes around 0.55 with an amplitude
+/// of 0.2 once every 2.1 seconds, and the value stays at 0.85 so the glyph never shouts.
+/// The point of the breathing is exactly that: a hue change alone is a colour change, and a
+/// colour that also swells is a colour that reads as alive.
+///
+/// It is 24-bit colour, the one place in this interface that is not a 16-colour ANSI code —
+/// the prompt sits on the terminal's own background either way, and a hue that has to pick
+/// one of sixteen names would step visibly. The whole function is a pure function of the
+/// frame, so a test can say what frame 0 looks like without a terminal.
+fn prompt_colour(frame: u64) -> Color {
+    let seconds = frame as f64 * PULSE_FRAME.as_secs_f64();
+    let hue = (seconds * PROMPT_HUE_PER_SECOND) % 1.0;
+    let saturation =
+        PROMPT_SATURATION + PROMPT_SATURATION_BREATH * (seconds * PROMPT_BREATH_PER_SECOND).sin();
+    let (red, green, blue) = hsv_to_rgb(hue, saturation, PROMPT_VALUE);
+    Color::Rgb(red, green, blue)
+}
+
+/// How fast the prompt's hue walks the wheel, in turns per second. The maintainer's script
+/// stepped it 0.005 per 1/60 s, which is what these three constants are: the script's rates
+/// expressed in seconds, so the look survives a change of frame length.
+const PROMPT_HUE_PER_SECOND: f64 = 0.3;
+
+/// The saturation the prompt breathes around, how far it swings, and how fast it swings
+/// (radians per second: the script's 0.05 per 1/60 s).
+const PROMPT_SATURATION: f64 = 0.55;
+const PROMPT_SATURATION_BREATH: f64 = 0.2;
+const PROMPT_BREATH_PER_SECOND: f64 = 3.0;
+
+/// The value (brightness) the prompt keeps: bright enough to read on a dark theme, dim
+/// enough not to glare on a light one.
+const PROMPT_VALUE: f64 = 0.85;
+
+/// HSV to RGB, the way `colorsys.hsv_to_rgb` does it in the script this came from —
+/// including the truncation to 8 bits, so the same frame gives the same colour as the
+/// script did.
+fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> (u8, u8, u8) {
+    // Each sixth of the wheel is one hue's rise and the next one's fall; `sector` is which
+    // sixth, `offset` is how far into it.
+    let scaled = (hue.fract() * 6.0).rem_euclid(6.0);
+    let sector = scaled.floor();
+    let offset = scaled - sector;
+    let (rising, falling) = (
+        value * (1.0 - saturation * (1.0 - offset)),
+        value * (1.0 - saturation * offset),
+    );
+    let (red, green, blue) = match sector as u32 {
+        0 => (value, rising, value * (1.0 - saturation)),
+        1 => (falling, value, value * (1.0 - saturation)),
+        2 => (value * (1.0 - saturation), value, rising),
+        3 => (value * (1.0 - saturation), falling, value),
+        4 => (rising, value * (1.0 - saturation), value),
+        _ => (value, value * (1.0 - saturation), falling),
+    };
+    let byte = |channel: f64| (channel * 255.0).clamp(0.0, 255.0) as u8;
+    (byte(red), byte(green), byte(blue))
+}
+
 /// The busiest answer the interface used to give to "is it working?", as a ring of
 /// colours — **kept, and deliberately off screen** (`.scratch/tui-input-pulse/spec.md`
 /// §2, 票 05).
@@ -3178,12 +3228,17 @@ pub const PULSE_PALETTE: [Color; 6] = [
     Color::LightRed,
 ];
 
-/// One pulse frame: four a second, so the dash takes a full turn in one second — an
-/// orientation every 250 ms, which is the pace the classic spinner has always used and
-/// fast enough that the turn reads as motion rather than as four glyphs taking turns
-/// (票 05; the colour versions that came before ran at 400 ms and 100 ms). The loop only
-/// arms this clock while a run is in flight, so an idle session never pays for it.
-const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(250);
+/// One pulse frame: about sixteen a second, which is what a colour that walks the hue wheel
+/// needs to read as a rotation rather than as a series of jumps (`.scratch/tui-input-pulse/
+/// spec.md` §2b: the maintainer's own script ran at 60 fps and this is the same look at a
+/// coarser step). It is the frame length of **every** pulse-driven animation, so a re-armed
+/// falling dash would also step this fast.
+///
+/// **This clock is armed whether or not a run is in flight** (票 08). That is a deliberate
+/// reversal of 票 02/03: the prompt is on screen while nothing is running, so the thing it
+/// drives is too. The cost is one wake-up and at most a two-cell repaint every 60 ms, idle
+/// included; what it buys is a prompt that keeps breathing while the loop waits for a line.
+const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
 /// The mark's hyphen: the column its cell starts at, and how wide that cell is.
 ///
@@ -3433,9 +3488,21 @@ fn draw_bottom(
         state.pending = Some(Pending::Questionnaire(questionnaire));
         return None;
     }
-    let (rows, cursor) = state
+    let (mut rows, cursor) = state
         .editor
         .view(layout::input_text_width(frame.area()), panes.input.height);
+    // The prompt is its own span (see `editor::Input::view`), which is what gives it a colour
+    // the draft never takes. Only the span that **is** the prompt is coloured: the indent on
+    // the rows under it is the same width of spaces, and a draft long enough to scroll the
+    // prompt off the top has no prompt on screen to colour (`.scratch/tui-input-pulse/spec.md`
+    // §2b).
+    let prompt_style = Style::default().fg(prompt_colour(state.pulse));
+    for row in &mut rows {
+        match row.spans.first_mut() {
+            Some(lead) if lead.content.as_ref() == editor::PROMPT => lead.style = prompt_style,
+            _ => {}
+        }
+    }
     frame.render_widget(
         Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
         panes.input,
@@ -4539,6 +4606,84 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prompt's colour is the maintainer's script translated into this renderer, so the
+    /// numbers are pinned against the script's own output.
+    ///
+    /// The script stepped its hue 0.005 and its breath 0.05 **per 1/60 s**, so the two agree
+    /// at a moment, not at an index: one pulse frame is 60 ms, which is three and a half
+    /// script frames, and frame 5 of ours is frame 18 of the script's. These triples are what
+    /// `colorsys.hsv_to_rgb` printed for the script's frames
+    /// (`.scratch/tui-input-pulse/spec.md` §2b).
+    #[test]
+    fn the_prompt_colour_is_the_script_at_the_same_moment() {
+        assert_eq!(PULSE_FRAME.as_millis(), 60);
+        for (frame, expected) in [
+            (0u64, Color::Rgb(216, 97, 97)),
+            (5, Color::Rgb(216, 146, 63)),
+            (10, Color::Rgb(203, 216, 55)),
+            (30, Color::Rgb(131, 196, 216)),
+        ] {
+            assert_eq!(
+                prompt_colour(frame),
+                expected,
+                "frame {frame} is the colour the script printed {} s in",
+                frame as f64 * PULSE_FRAME.as_secs_f64()
+            );
+        }
+    }
+
+    /// The hue wheel, pinned at the six points every implementation agrees on — the corners
+    /// where a rounding mistake in the sector arithmetic would show up first.
+    #[test]
+    fn hsv_to_rgb_matches_the_shortcut_table() {
+        assert_eq!(hsv_to_rgb(0.0, 0.0, 1.0), (255, 255, 255));
+        assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), (255, 0, 0));
+        assert_eq!(hsv_to_rgb(1.0 / 3.0, 1.0, 1.0), (0, 255, 0));
+        assert_eq!(hsv_to_rgb(2.0 / 3.0, 1.0, 1.0), (0, 0, 255));
+        // The wheel closes: hue 1 is hue 0, and a hue past it wraps rather than panicking.
+        assert_eq!(hsv_to_rgb(1.0, 0.4, 0.8), hsv_to_rgb(0.0, 0.4, 0.8));
+        assert_eq!(hsv_to_rgb(2.25, 0.4, 0.8), hsv_to_rgb(0.25, 0.4, 0.8));
+    }
+
+    /// The falling dash, unit-tested **here** because it is not on screen any more
+    /// (票 08): `draw_sidebar_identity` passes `None`, so no integration test can drive its
+    /// frames through a rendered buffer. The code is kept for the next idea about how the
+    /// mark should move, and this is what keeps it honest in the meantime — a kept animation
+    /// that has quietly stopped working is worse than no animation at all.
+    #[test]
+    fn the_falling_dash_steps_down_one_row_per_frame_and_wraps() {
+        let rows = wording::logo_lines();
+        for frame in 0..10u64 {
+            let expected_row = (frame as usize) % rows.len();
+            let lines = mark_lines(Some(frame));
+            for (index, (line, _)) in lines.iter().enumerate() {
+                let cell: String = line
+                    .chars()
+                    .skip(MARK_DASH_COLUMN)
+                    .take(MARK_DASH_WIDTH)
+                    .collect();
+                if index == expected_row {
+                    assert_eq!(
+                        cell, "▀▀▀▀",
+                        "frame {frame}: the bar is on row {expected_row}"
+                    );
+                } else {
+                    assert_eq!(
+                        cell.trim(),
+                        "",
+                        "frame {frame}: row {index} is empty, so the bar never splits"
+                    );
+                }
+            }
+        }
+        // And the still mark is the row `logo_lines` draws its dash on — the middle one.
+        assert_eq!(
+            mark_lines(None)[rows.len() / 2].0,
+            rows[rows.len() / 2],
+            "an idle mark keeps the row the mark has always drawn"
+        );
+    }
 
     /// `map_key` is the one place crossterm's vocabulary becomes this renderer's,
     /// and a key that misses here is a key that silently does nothing — which no

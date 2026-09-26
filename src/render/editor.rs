@@ -11,12 +11,20 @@
 //! to one `Ctrl-U`, and `↑`/`↓` move the cursor instead of walking history — the
 //! history keys are `Ctrl-P` / `Ctrl-N` alone (spec §6).
 
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 
 use super::width::{char_columns, text_columns};
 
 /// The prompt on the draft's first row.
-pub const PROMPT: &str = "> ";
+///
+/// `❱` (U+2771) rather than `>`: the painter gives this glyph a colour that walks the hue
+/// wheel while the editor sits there (`.scratch/tui-input-pulse/spec.md` §2b), and the
+/// angle bracket is the shape that reads as an arrow at that weight. It counts as **one
+/// column** in this renderer's width table, so the prompt is two columns wide exactly as
+/// `> ` was and nothing downstream of [`prompt_columns`] moves. A terminal configured to
+/// draw ambiguous-width characters double would show it as two, which is recorded as a
+/// manual check rather than defended against here.
+pub const PROMPT: &str = "❱ ";
 
 /// The columns the prompt takes — and therefore the indent every row after the
 /// first one carries, so every row holds the same amount of text. Derived from
@@ -111,6 +119,12 @@ impl Input {
     /// Scrolled to keep the cursor's row inside `height`: the draft grows to its
     /// ten-row limit and then scrolls, rather than hiding what is being typed
     /// (spec §5).
+    ///
+    /// The lead of a row — the prompt on the first row, the indent on the rest — is its
+    /// **own span**, so the painter has somewhere to put the prompt's colour without
+    /// reaching into the draft's text (`.scratch/tui-input-pulse/spec.md` §2b). The
+    /// characters are unchanged, which is why the editor's own tests read the line the way
+    /// a person does: the spans concatenated.
     pub fn view(&self, width: u16, height: u16) -> (Vec<Line<'static>>, Placed) {
         let (rows, placed) = self.display_rows(width.max(1) as usize);
         let height = (height.max(1)) as usize;
@@ -127,7 +141,10 @@ impl Input {
             .take(height)
             .map(|(index, row)| {
                 let lead = if index == 0 { PROMPT } else { indent.as_str() };
-                Line::from(format!("{lead}{}", row.text))
+                Line::from(vec![
+                    Span::raw(lead.to_owned()),
+                    Span::raw(row.text.clone()),
+                ])
             })
             .collect();
         (

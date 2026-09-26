@@ -7,6 +7,12 @@
 
 use fs_agent::render::editor::{self, Input};
 
+/// The prompt as the editor draws it. These tests are about wrapping and the cursor, not
+/// about the glyph, so they spell the lead through this: the mark that fronts the draft was
+/// changed to `❱ ` in 票 08 (`.scratch/tui-input-pulse/spec.md` §2b) and one place to change
+/// is enough.
+const P: &str = editor::PROMPT;
+
 /// An editor holding `text`, with the cursor at the end — what typing it leaves.
 fn typed(text: &str) -> Input {
     let mut input = Input::new();
@@ -26,25 +32,37 @@ fn rows(input: &Input, width: u16, height: u16) -> Vec<String> {
 
 #[test]
 fn a_draft_wraps_by_display_columns_with_the_prompt_then_an_indent() {
-    // `> ` leads the first row, two spaces lead every row after it, and the text
+    // The prompt leads the first row, two spaces lead every row after it, and the text
     // wraps at five columns: the prompt and the indent are the same width, so every
     // row holds the same amount of text (spec §2, §5).
-    assert_eq!(rows(&typed("abc"), 5, 10), vec!["> abc"]);
-    assert_eq!(rows(&typed("abcdefgh"), 5, 10), vec!["> abcde", "  fgh"]);
+    assert_eq!(rows(&typed("abc"), 5, 10), vec![format!("{P}abc")]);
+    assert_eq!(
+        rows(&typed("abcdefgh"), 5, 10),
+        vec![format!("{P}abcde"), "  fgh".to_owned()]
+    );
     // A newline is a row break of its own, not a wrap.
-    assert_eq!(rows(&typed("ab\ncd"), 5, 10), vec!["> ab", "  cd"]);
+    assert_eq!(
+        rows(&typed("ab\ncd"), 5, 10),
+        vec![format!("{P}ab"), "  cd".to_owned()]
+    );
     // An empty draft is still one row: the prompt is always there to type into.
-    assert_eq!(rows(&Input::new(), 5, 10), vec!["> "]);
-    assert_eq!(rows(&typed("ab\n"), 5, 10), vec!["> ab", "  "]);
+    assert_eq!(rows(&Input::new(), 5, 10), vec![P.to_owned()]);
+    assert_eq!(
+        rows(&typed("ab\n"), 5, 10),
+        vec![format!("{P}ab"), "  ".to_owned()]
+    );
 }
 
 #[test]
 fn a_wide_character_takes_two_columns_in_the_draft() {
     // The same column arithmetic as the transcript: `你` is three bytes and two
     // columns, and counting bytes would wrap it three times too early.
-    assert_eq!(rows(&typed("你好世界"), 6, 10), vec!["> 你好世", "  界"]);
+    assert_eq!(
+        rows(&typed("你好世界"), 6, 10),
+        vec![format!("{P}你好世"), "  界".to_owned()]
+    );
     // Exactly filling a row keeps the cursor on that row's last cell, as with ASCII.
-    assert_eq!(rows(&typed("你好世"), 6, 10), vec!["> 你好世"]);
+    assert_eq!(rows(&typed("你好世"), 6, 10), vec![format!("{P}你好世")]);
 }
 
 #[test]
@@ -86,6 +104,12 @@ fn the_prompt_and_the_indent_are_the_same_width() {
         editor::prompt_columns() as usize,
         fs_agent::render::width::text_columns(editor::PROMPT)
     );
+    // Two columns, as `> ` was: the glyph in front of the draft changed in 票 08 and this is
+    // what says the change did not move anybody's text. `❱` is ambiguous-width — one column
+    // in this renderer's table, two in a terminal configured to draw those double, which the
+    // manual checklist asks a person to look at.
+    assert_eq!(editor::PROMPT, "❱ ");
+    assert_eq!(editor::prompt_columns(), 2);
 }
 
 #[test]
@@ -220,7 +244,11 @@ fn a_draft_taller_than_the_area_scrolls_to_keep_the_cursor_in_view() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(head, "> xxxxxxxxxx", "ten columns of text fit the row");
+    assert_eq!(
+        head,
+        format!("{P}xxxxxxxxxx"),
+        "ten columns of text fit the row"
+    );
 }
 
 #[test]

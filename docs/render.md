@@ -102,17 +102,12 @@ column** on the right, and the geometry is one pure function of the terminal siz
   wide rung. The characters live in `wording::logo_lines` with every other
   human-facing phrase; the colour ramp that makes them read as glyphs lives in the
   painter (`mark_lines`), foreground only and no background, so it does not fight
-  whatever theme the terminal is already running. The ramp never changes: **the "it is
-  working" signal is the dash of `fs-agent` falling** (`.scratch/tui-input-pulse/spec.md`
-  §2). The mark spells `fs-agent` in eight four-column glyph cells, and the painter draws
-  its third cell — the dash's own four columns — as a bar that **falls**: the same `▀▀▀▀`
-  the idle mark carries, one row lower per `PULSE_FRAME` (250 ms), wrapping from the mark's
-  last row back to its first. The shape never changes; only its row does (票 07 — a turned
-  bar and a redrawn one were both tried and turned down). The cell is the mark's own five
-  rows and the idle position is the middle one, so a mark at rest is byte-for-byte what it
-  was before any of this existed (票 06). The narrow rung, which has no mark, falls the only
-  way one text cell can: `wording::identity_falling` swaps the dash of `fs-agent 0.1.0` for a
-  bar at one of three heights (`wording::DASH_FALL`), on the same five-frame cycle. Two colour versions of this signal were tried on a real terminal and both were
+  whatever theme the terminal is already running. **Nothing here moves**: the falling dash
+  the mark and the text identity both grew, and the hue ring before it, were tried on a real
+  terminal and turned off (`.scratch/tui-input-pulse/spec.md` §2, 票 04–08). Both are still
+  in the module — `mark_lines` takes the frame it would fall on, `wording::identity_falling`
+  builds the other rung's line — and both are unit-tested where they live, but
+  `draw_sidebar_identity` passes `None` and `identity()`, so the left column is still. Two colour versions of this signal were tried on a real terminal and both were
   retired — 12 light/normal frames at 100 ms read as flickering (票 04) and six light hues
   at 400 ms read as abrupt — so `PULSE_PALETTE` stays in the code, off screen, with a test
   pinning that nothing wears it (票 05).
@@ -145,19 +140,16 @@ the next prompt.
 - The loop holds `ConsoleHandle` (prompts and questions) and `ConsoleEvents`
   (unsolicited gestures: cancel, plan toggle, quit). They are two values because
   the loop selects on both at once.
-- The front end holds `ConsolePort`. The TUI serves it from its own `select!`
-  over broadcast / console port / keyboard, plus **one timer that only exists while
-  a run is in flight**: the pulse that turns the identity's dash. Nothing else is waiting
-  to be *noticed* —
-  a pending question arrives on the console port, an event arrives on the rendering
-  channel, a key is a key — but the pulse is a function of time alone, so it needs a
-  clock. The clock is an `interval` guarded by `if state.busy()` on its `select!`
-  arm, so an idle session is back to the three sources and an idle process burns no
-  CPU (`.scratch/tui-input-pulse/spec.md` §2, §4). It is an `interval` rather than a
-  sleep built fresh each pass, because a sleep would be reset by every event in a
-  burst and the mark would stop moving exactly when the session is busiest. Plain
-  mode serves the port with `render::spawn_plain_console`, which reads stdin line by
-  line.
+- The front end holds `ConsolePort`. The TUI serves it from its own `select!` over
+  broadcast / console port / keyboard, plus **one timer that runs always**: the pulse that
+  colours the prompt's `❱` (`.scratch/tui-input-pulse/spec.md` §2b, 票 08). Nothing else is
+  waiting to be *noticed* — a pending question arrives on the console port, an event arrives
+  on the rendering channel, a key is a key — but a colour that walks the hue wheel is a
+  function of time alone, so it needs a clock, and that clock is not gated on a run: the
+  prompt is on screen while the loop waits for a line. It is an `interval` rather than a
+  sleep built fresh each pass, because a sleep would be reset by every event in a burst and
+  the prompt would stop breathing exactly when the session is busiest. Plain mode serves the
+  port with `render::spawn_plain_console`, which reads stdin line by line.
 - `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
   the gate's `Ask` and the plan-mode conflict question use the one keyboard.
 - `ConsoleQuestions` implements the model-question port on that same handle, so a

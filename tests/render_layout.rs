@@ -7,6 +7,7 @@
 //! sidebar's page says, where the rail's cells are, how many hints fit — never about
 //! the rectangles the layout computes on the way there.
 
+use fs_agent::render::editor;
 use fs_agent::render::width::text_columns;
 use fs_agent::render::{
     draw_frame, CatalogEntry, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
@@ -195,7 +196,7 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[16]
     );
     assert!(
-        rows[18].contains("│> "),
+        rows[18].contains(&format!("│{}", editor::PROMPT)),
         "the input's first row carries the prompt: {:?}",
         rows[18]
     );
@@ -354,7 +355,7 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
     // above and below them, and the hint row keeps the eighth either way.
     assert_eq!(transcript_rows(&rows), 1, "one transcript row: {rows:#?}");
     assert!(
-        rows[5].starts_with("│> "),
+        rows[5].starts_with(&format!("│{}", editor::PROMPT)),
         "the input's first row is the prompt's: {:?}",
         rows[5]
     );
@@ -564,50 +565,39 @@ fn dash_cell(state: &mut TuiState) -> Vec<String> {
 }
 
 #[test]
-fn the_dash_of_fs_agent_falls_while_a_run_is_in_flight() {
-    // The working signal (`.scratch/tui-input-pulse/spec.md` §2): the dash of the mark
-    // keeps its shape and steps down one row per frame, then reappears at the top and falls
-    // again. The frames are written out here as a person reads them, so a change to the
-    // geometry has to be a change to this column rather than to a table nobody looks at —
-    // and the same bar in every frame is what rules out the turned and drawn versions that
-    // came before it.
-    let phases = [
+fn the_mark_does_not_move_while_a_run_is_in_flight() {
+    // 票 08 turned the falling dash off: the mark is still again, which is exactly what the
+    // maintainer asked for after seeing it on a real terminal. The code that would move it is
+    // kept (and unit-tested where it lives), so this is the assertion that keeps it off —
+    // frames ticked while a run is in flight have to come out identical.
+    // The cell as it would look if the bar had moved at all — one row up, one row down.
+    let moved = [
         ["▀▀▀▀", "    ", "    ", "    ", "    "],
-        ["    ", "▀▀▀▀", "    ", "    ", "    "],
-        ["    ", "    ", "▀▀▀▀", "    ", "    "],
-        ["    ", "    ", "    ", "▀▀▀▀", "    "],
         ["    ", "    ", "    ", "    ", "▀▀▀▀"],
     ];
-    // Idle is the middle row — where `logo_lines` itself draws the dash, character for
-    // character: an animation that only exists while something runs may not restyle the
-    // mark at rest (票 06).
     let mut state = state();
+    let still = dash_cell(&mut state);
     assert_eq!(
-        dash_cell(&mut state),
-        phases[2].map(str::to_owned).to_vec(),
-        "a still mark shows the dash on the row it has always had"
+        still[2], "▀▀▀▀",
+        "the mark rests on the row it has always drawn: {still:?}"
     );
     assert_eq!(
-        dash_cell(&mut state),
+        still,
         fs_agent::render::wording::logo_lines()
             .map(|row| row.chars().skip(10).take(4).collect::<String>())
             .to_vec(),
-        "and that flat dash is byte-for-byte the one `logo_lines` has always carried"
+        "and that row is byte-for-byte the one `logo_lines` carries"
     );
 
-    // A run starts at the top of the cell and falls: two laps of five, so the wrap back to
-    // the first row is covered as well.
     state.request(ConsoleRequest::RunState { running: true });
-    for frame in 1..=phases.len() * 2 {
+    for frame in 0..8 {
         state.tick();
         assert_eq!(
             dash_cell(&mut state),
-            phases[frame % phases.len()].map(str::to_owned).to_vec(),
-            "frame {frame} of the fall"
+            still,
+            "frame {frame} of a run: the mark has not moved"
         );
-        // And the colour does not move with it: 票 05 took the hue ring off the screen
-        // after two versions of it read badly on a real terminal, so a busy mark wears
-        // exactly the ramp an idle one does.
+        // And it is not the colour that moved instead: the ramp is untouched.
         assert_eq!(
             mark_colours(&mut state),
             vec![
@@ -617,98 +607,143 @@ fn the_dash_of_fs_agent_falls_while_a_run_is_in_flight() {
                 Color::LightMagenta,
                 Color::Magenta
             ],
-            "the mark keeps its ramp while the dash falls: frame {frame}"
+            "nor has its colour: frame {frame}"
+        );
+    }
+    for shape in &moved {
+        assert_ne!(
+            dash_cell(&mut state),
+            shape.map(str::to_owned).to_vec(),
+            "and the bar is never on any other row: the fall is off"
         );
     }
 }
 
+/// Where the prompt is drawn: the cell holding `❱`, found on screen the way a person finds
+/// it rather than from a rectangle this test would have to keep in step with the layout.
+fn prompt_at(width: u16, height: u16, state: &mut TuiState) -> (u16, u16) {
+    let frame = buffer(width, height, state);
+    for y in 0..height {
+        for x in 0..width {
+            if frame[(x, y)].symbol() == "❱" {
+                return (x, y);
+            }
+        }
+    }
+    panic!("the prompt is on screen");
+}
+
+/// The prompt cell of the input's first row: its symbol and the colour it was painted in.
+fn prompt_cell(state: &mut TuiState) -> (String, Color) {
+    let frame = buffer(120, 24, state);
+    let (x, y) = prompt_at(120, 24, state);
+    (frame[(x, y)].symbol().to_owned(), frame[(x, y)].fg)
+}
+
 #[test]
-fn the_narrow_rungs_text_identity_falls_its_dash_too() {
-    // The rung with no mark carries the same signal in the one glyph it has: the dash of
-    // `fs-agent 0.1.0`. A line has no room to fall through, so the fall is the bar's height
-    // inside one cell — high, high, full, low, low — on the same five-frame cycle the mark
-    // walks through its five rows. Without it the animation would be invisible on every
-    // terminal under 120 columns (`.scratch/tui-input-pulse/spec.md` §2).
+fn the_prompt_is_an_angle_bracket_whose_colour_walks_the_wheel() {
+    // The animation this feature ended up with (`.scratch/tui-input-pulse/spec.md` §2b): the
+    // prompt is `❱ ` and its colour keeps moving while the editor waits. The colour is a pure
+    // function of the pulse frame, and frame 0 is the frame the maintainer's script started
+    // on, so a change to the maths shows up here as a concrete RGB triple.
     let mut state = state();
-    let still = screen(100, 24, &mut state).join("\n");
-    assert!(
-        still.contains(&format!("fs-agent {}", env!("CARGO_PKG_VERSION"))),
-        "an idle narrow rung shows the identity as it always did: {still}"
+    let (symbol, colour) = prompt_cell(&mut state);
+    assert_eq!(symbol, "❱", "the prompt glyph");
+    assert_eq!(
+        colour,
+        Color::Rgb(216, 97, 97),
+        "frame 0 is the script's own first colour"
     );
 
-    // A run starts at the top of the fall; the fifth frame is the top again.
+    // And it moves: no two of the next few frames wear the same colour.
+    let mut seen = vec![colour];
+    for _ in 0..5 {
+        state.tick();
+        seen.push(prompt_cell(&mut state).1);
+    }
+    let mut unique = seen.clone();
+    unique.sort_by_key(|colour| format!("{colour:?}"));
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        seen.len(),
+        "every frame is its own colour: {seen:?}"
+    );
+}
+
+#[test]
+fn the_prompts_colour_stays_out_of_the_draft() {
+    // The prompt is its own span so it can be coloured; the draft beside it is not. A
+    // tinted draft would mean the span boundary had been lost, which the writer would see as
+    // their own text changing colour under them.
+    let mut state = state();
+    for ch in "hello".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.tick();
+    let frame = buffer(120, 24, &mut state);
+    let (x, y) = prompt_at(120, 24, &mut state);
+    assert!(
+        row_text(&frame, y, 120).contains("❱ hello"),
+        "the draft sits right after the prompt: {:?}",
+        row_text(&frame, y, 120)
+    );
+    // The prompt's own cell carries a hue; the space behind it is part of the same span, and
+    // the draft starts one cell after that.
+    assert_eq!(frame[(x, y)].fg, prompt_cell(&mut state).1, "the hue");
+    let draft = &frame[(x + 2, y)];
+    assert_eq!(
+        format!("{:?}", draft.fg),
+        format!("{:?}", Color::Reset),
+        "and the draft is the terminal's own foreground, untouched: {draft:?}"
+    );
+    assert!(
+        draft.modifier.contains(Modifier::BOLD),
+        "though it keeps the input's weight: {draft:?}"
+    );
+}
+
+#[test]
+fn the_mark_stays_still_on_the_narrow_rung_too() {
+    // The text identity's falling dash went off with the mark's (票 08): the narrow rung
+    // shows the identity exactly as it did before any of this, and `identity_falling` is kept
+    // beside it, still unit-tested where it lives.
+    let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
-    for (frame, glyph) in ["▀", "█", "▄", "▄", "▀"].iter().enumerate() {
+    for frame in 0..5 {
         state.tick();
         let text = screen(100, 24, &mut state).join("\n");
         assert!(
-            text.contains(&format!("fs{glyph}agent {}", env!("CARGO_PKG_VERSION"))),
-            "frame {} drops the dash to {glyph}: {text}",
-            frame + 1
-        );
-        assert!(
-            !text.contains("fs-agent"),
-            "and never draws both spellings at once: {text}"
+            text.contains(&format!("fs-agent {}", env!("CARGO_PKG_VERSION"))),
+            "frame {frame}: the identity is still itself: {text}"
         );
     }
 }
 
 #[test]
-fn a_finished_run_puts_the_dash_back_to_still() {
-    // The pulse is one run's, not the session's: the dash returns to the row it rests on
-    // when the run ends, and the next run starts at the top of the fall, whatever the last
-    // one left behind (`.scratch/tui-input-pulse/spec.md` §2).
-    let mut state = state();
-    state.request(ConsoleRequest::RunState { running: true });
-    for _ in 0..3 {
-        state.tick();
-    }
-    assert_eq!(
-        dash_cell(&mut state)[3],
-        "▀▀▀▀",
-        "three frames in, the dash is three rows down: {:?}",
-        dash_cell(&mut state)
-    );
-
-    state.request(ConsoleRequest::RunState { running: false });
-    assert_eq!(
-        dash_cell(&mut state)[2],
-        "▀▀▀▀",
-        "idle again: the row the mark rests on, not the one the run stopped on"
-    );
-
-    state.request(ConsoleRequest::RunState { running: true });
-    assert_eq!(
-        dash_cell(&mut state)[0],
-        "▀▀▀▀",
-        "and the next run starts at the top of the fall, not where the last one stopped: {:?}",
-        dash_cell(&mut state)
-    );
-    state.tick();
-    assert_eq!(
-        dash_cell(&mut state)[1],
-        "▀▀▀▀",
-        "one frame later it is a row down: {:?}",
-        dash_cell(&mut state)
-    );
-}
-
-#[test]
-fn the_pulse_is_invisible_where_there_is_no_sidebar() {
-    // Below 80 columns there is no sidebar at all — no mark and no identity line — so
-    // there is nothing for the pulse to move. What must not happen is a tick redrawing
-    // anything: two frames apart come out identical
-    // (`.scratch/tui-input-pulse/spec.md` §2).
-    for (width, height) in [(60u16, 24u16), (40, 10)] {
+fn the_only_thing_a_pulse_frame_touches_is_the_prompt() {
+    // What the clock moves, everywhere the shell is drawn (`.scratch/tui-input-pulse/spec.md`
+    // §2b, 票 08): the prompt's colour, and nothing else. Below 80 columns there is no sidebar
+    // at all, and the only difference between two frames has to be those two cells — the
+    // sidebar being absent is not what makes a frame still, the prompt's span is.
+    for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
         state.request(ConsoleRequest::RunState { running: true });
         state.tick();
         let before = buffer(width, height, &mut state);
         state.tick();
         let after = buffer(width, height, &mut state);
+        let (prompt_x, prompt_y) = prompt_at(width, height, &mut state);
+        let changed: Vec<(u16, u16)> = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .filter(|(x, y)| before[(*x, *y)] != after[(*x, *y)])
+            .collect();
+        let expected: Vec<(u16, u16)> = (0..fs_agent::render::editor::prompt_columns())
+            .map(|offset| (prompt_x + offset, prompt_y))
+            .collect();
         assert_eq!(
-            before, after,
-            "{width}x{height} has no sidebar, so a pulse frame changes nothing"
+            changed, expected,
+            "{width}x{height}: only the prompt's own cells change"
         );
     }
 }
@@ -1797,7 +1832,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     );
     let input = TRANSCRIPT_TOP + rows + 3;
     assert!(
-        empty[input].contains("> "),
+        empty[input].contains(editor::PROMPT),
         "the prompt: {:?}",
         empty[input]
     );
@@ -2548,7 +2583,7 @@ fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16,
 /// so it follows the sidebar and the divider.
 fn input_row(rows: &[String]) -> usize {
     rows.iter()
-        .position(|row| row.contains("│> "))
+        .position(|row| row.contains(&format!("│{}", editor::PROMPT)))
         .expect("the input row")
 }
 
@@ -2640,7 +2675,7 @@ fn tab_fills_the_highlighted_name_in_and_does_not_submit_it() {
     );
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains("│> /ask-matt"),
+        text.contains(&format!("│{}/ask-matt", editor::PROMPT)),
         "the name is in the draft:\n{text}"
     );
     // And the fill-in closed the menu, so a task can be typed after it.
@@ -2723,7 +2758,10 @@ fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
     // The draft survives: `Esc` closed the menu, it did not start throwing the draft
     // away, and it did not clear a one-line draft either (spec §6, §7).
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("│> /"), "the draft is still there:\n{text}");
+    assert!(
+        text.contains(&format!("│{}/", editor::PROMPT)),
+        "the draft is still there:\n{text}"
+    );
     assert!(!text.contains("│ /undo"), "the menu is gone:\n{text}");
     assert!(!text.contains("清空输入"), "nothing was asked:\n{text}");
 }
@@ -4128,7 +4166,7 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     let rows = screen(120, 40, &mut state);
     let input = rows
         .iter()
-        .position(|row| row.contains("> "))
+        .position(|row| row.contains(editor::PROMPT))
         .expect("the input row is drawn");
     assert!(
         !rows[input].contains('x'),
