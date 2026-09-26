@@ -31,7 +31,7 @@ Blocked by: 07
    - 输出 `Color::Rgb(r, g, b)` —— **24 位真彩**，这是用户脚本的本意，也是仓库里第一处非 16 色的颜色。
 7. **时钟改成常开**：`PULSE_FRAME` 250ms → **60ms**（约 16 帧/秒，肉眼看是连续变色而不是跳色）；`select!` 那条臂**去掉 `if state.busy()` 守卫**；`RunState { running: false }` 的**归零删掉**，`tick()` 不再判定忙碌 —— 被驱动的那个东西（提示符）在没有运行的时候也在屏幕上。
    **这是对票 02/03「空闲时没有任何定时器」的正式反转**，代价写进 spec：空闲时每 60ms 醒一次、重画 2 个格子（真彩 fg 变了就是脏格），换来的是一条一直在呼吸的提示符。`MissedTickBehavior::Delay` 与 `interval`（而不是每轮重建的 `sleep`）照旧。
-8. **`PULSE_PALETTE` 仍留在屏幕外**；它今天的地位与 `DASH_BAR` 一样：留着、有人看着、别偷偷回屏。
+8. **`PULSE_PALETTE` 仍留在屏幕外**；它本票之后的地位与 `DASH_BAR` 一样：留着、有人看着、别偷偷回屏。
 
 ## 测试
 
@@ -45,7 +45,7 @@ Blocked by: 07
 
 `tests/render_tui.rs`：`tick()` 现在**无论忙闲都置脏并推进**（改写原「只在运行时」用例），并把「运行结束归零」删掉。
 
-`tests/wording.rs`：`identity_falling` 那条保留（直接打函数），补一句「它今天不在渲染路径上」。
+`tests/wording.rs`：`identity_falling` 那条保留（直接打函数），补一句「本票之后它不在渲染路径上」。
 
 `src/render/tui.rs` 单元测试：下落四帧的形状（`mark_lines(Some(n))` 的短横落在第 `n % 5` 行、形状恒为 `▀▀▀▀`）。
 

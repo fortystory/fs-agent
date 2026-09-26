@@ -38,7 +38,7 @@ Status: ready-for-agent（一次 grilling 的折叠 + 四轮真机反馈；实�
 2. 作为用户，我想让输入区在第 4 行才开始长高、并照旧在 10 行封顶，以便行数账仍然简单。
 3. 作为用户，我想让这 3 行只是「有地方写」，不引来第二圈边框，以便界面里仍然只有一圈外框。
 4. 作为用户，我想在终端太矮（40×10）时优先保住转录的那一行，以便输入区的最小高度不把转录挤没。
-5. 作为用户，我想让草稿仍然从输入区**顶部**开始写，以便光标位置与今天完全一样。
+5. 作为用户，我想让草稿仍然从输入区**顶部**开始写，以便光标位置与本票之前的实现完全一样。
 6. 作为用户，我想让多行草稿的 `Esc` / 粘贴 / 光标行为一个字节都不变，以便这次只动几何、不动编辑器。
 
 ### B. 忙碌脉冲
@@ -82,7 +82,7 @@ Status: ready-for-agent（一次 grilling 的折叠 + 四轮真机反馈；实�
 - **mark 与文字身份行都不动**（票 08）：`draw_sidebar_identity` 传 `mark_lines(None)` 并用 `wording::identity()`，左边那一栏就是这个动画出现之前的样子 —— mark 的五行走它原来的品红渐变（上 4 行 `LightMagenta`、底行 `Magenta`），短横停在 `logo_lines` 自己那一行。
 - **代码留着、测试跟着走**：`mark_lines(frame)`（含 `DASH_BAR` 与那张逐步下落的行表）、`PULSE_PALETTE`、`wording::DASH_FALL` / `identity_falling` 全部保留。离开屏幕的代码**不能靠集成测试驱动**，所以：
   - 下落的逐帧断言搬进 `src/render/tui.rs` 的 `#[cfg(test)] mod tests`（`mark_lines(Some(n))` 每帧一行、形状恒为 `▀▀▀▀`、第 `n % 5` 行）；
-  - `identity_falling` 的用例留在 `tests/wording.rs`（它是 pub 的），注释里写明「今天不在渲染路径上」；
+  - `identity_falling` 的用例留在 `tests/wording.rs`（它是 pub 的），注释里写明「本票之后不在渲染路径上」；
   - 集成侧反过来多一条**「它没有偷偷回屏」**：跑一个回合 tick 若干帧，mark 的五格颜色与短横那一格逐帧相同，且那几格不等于落到底/落到顶的形状。
 - **`PULSE_PALETTE`** 与下落代码同命：留着、有人看着、别接回渲染路径。
 

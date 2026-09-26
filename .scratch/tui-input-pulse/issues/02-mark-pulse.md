@@ -17,7 +17,7 @@ Blocked by: 01
 ## 具体行为
 
 1. **色环**：`const PULSE_PALETTE: [Color; 12]`，六个色相 × 明/暗：`LightMagenta, Magenta, LightBlue, Blue, LightCyan, Cyan, LightGreen, Green, LightYellow, Yellow, LightRed, Red`。第 0 帧是 `LightMagenta`（mark 空闲态的顶部色），注释写清「绕色环、不是随机配色」以及「第一帧与空闲态相接」。
-2. **画笔**：`mark_lines(pulse: Option<u64>)` —— `None` 是今天的静态渐变（上 4 行 `LightMagenta`、底行 `Magenta`），`Some(n)` 是整块 `PULSE_PALETTE[n as usize % PULSE_PALETTE.len()]`。宽度断言（38 列）照旧 `debug_assert`。调用方（`draw_sidebar_identity`）从 `state` 取 `state.busy().then_some(state.pulse)`，所以它的签名要带上 `state`。
+2. **画笔**：`mark_lines(pulse: Option<u64>)` —— `None` 是本票之前那个静态渐变（上 4 行 `LightMagenta`、底行 `Magenta`），`Some(n)` 是整块 `PULSE_PALETTE[n as usize % PULSE_PALETTE.len()]`。宽度断言（38 列）照旧 `debug_assert`。调用方（`draw_sidebar_identity`）从 `state` 取 `state.busy().then_some(state.pulse)`，所以它的签名要带上 `state`。
 3. **状态**：`TuiState` 新增 `pulse: u64`（初始 0）；新增 `fn tick(&mut self)`：**只在忙碌时**推进 `pulse` 并置脏，空闲时什么都不做（`is_dirty()` 保持原值）。rustdoc 写明它是脉冲的那一格，不是通用的重画钩子。
 4. **归零**：`ConsoleRequest::RunState { running: false }` 时把 `pulse` 归零（下一次运行从色环第一帧开始）。`running: true` 时不重置（同一次运行的多次 RunState 不重来）。
 5. **节拍与守卫**：`const PULSE_FRAME: Duration = Duration::from_millis(100)`；`Tui::run` 里建一个常驻 `tokio::time::interval(PULSE_FRAME)`（`MissedTickBehavior::Delay`），普通分支的 `select!` 增加一条 `_ = pulse.tick(), if state.busy() => state.tick()`。**守卫是重点**：空闲时那条臂不 arm、不唤醒，循环仍是三条来源；重播那条分支不加（重播不是忙碌，它有自己的批处理节拍）。

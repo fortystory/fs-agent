@@ -38,7 +38,7 @@ Blocked by: 04
 ## 文档
 
 1. **spec 回改**：§2 改写成「忙碌信号 = 转动短横」，颜色环标为「已退出屏幕、代码保留」；用户故事改成「我想让短横转起来」。
-2. `README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md` ⑯ 同步；`CONTEXT.md` 新增词条 **转动短横（TurningDash）**，**忙碌脉冲（Pulse）**改成「那个帧计数器，今天驱动短横的朝向」。
+2. `README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md` ⑯ 同步；`CONTEXT.md` 新增词条 **转动短横（TurningDash）**，**忙碌脉冲（Pulse）**改成「那个帧计数器，它驱动短横的朝向」。
 3. 票 02 / 03 / 04 的 Comments 是历史记录，不改写。
 
 ## 不做什么
@@ -54,5 +54,5 @@ Blocked by: 04
 3. **两档都转**：宽档转 mark 里那一格，窄档（80–119 列）转文字身份行里那一格；`w < 80` 无左栏、仍然没有信号。
 4. **颜色撤出屏幕**：忙碌时 mark 保持静止渐变（上 4 行 `LightMagenta`、底行 `Magenta`）。`PULSE_PALETTE` 6 项原样保留（用户要求「代码留着」），rustdoc 写明它为什么在屏幕外，并**新增一条测试盯着它没有偷偷回屏**（174×50 的忙碌帧里逐格断言没有任何 ring 色）。`PULSE_FRAME` 400ms → **250ms**（四个朝向、1 秒一圈）。机制（`pulse`、`if state.busy()` 守卫、`MissedTickBehavior::Delay`、归零）一个字节没动。
 5. **测试**：`the_dash_of_fs_agent_turns_while_a_run_is_in_flight`（四朝向的**形状写成四段字符画**、两圈回到原点、同时逐帧盯住 mark 颜色不变）、`the_narrow_rungs_text_identity_turns_its_dash_too`（四个朝向各出现一次、且不会同时出现两种拼法）、`a_finished_run_puts_the_dash_back_to_still`、`the_pulse_is_invisible_where_there_is_no_sidebar`（60×24 与 40×10 两帧逐格相等）、`the_colour_ring_is_kept_off_screen`、`tests/wording.rs` 的 `the_identities_dash_turns_without_moving_anything_else`。旧的色环测试（变色、归零按颜色）整段删除。
-6. **文档**：README 的界面帧**重新 dump**（空闲 mark 里那一格现在是 `────`），左栏那段改成「短横转、颜色不参与」；`docs/render.md` 的 mark 段与「定时器只为脉冲存在」那句改写；`CONTEXT.md` 新增 **转动短横（TurningDash）** 词条、**忙碌脉冲（Pulse）** 改成「那个帧计数器，今天的消费者是短横的朝向；色环已退出屏幕、不要再接回渲染路径」；手工清单 ⑯ 的 4–9 条改成转动口径（新增「颜色不动」与「窄档也转」两条）。票 02/03/04 的 Comments 未改写。
+6. **文档**：README 的界面帧**重新 dump**（本票之后空闲 mark 里那一格是 `────`），左栏那段改成「短横转、颜色不参与」；`docs/render.md` 的 mark 段与「定时器只为脉冲存在」那句改写；`CONTEXT.md` 新增 **转动短横（TurningDash）** 词条、**忙碌脉冲（Pulse）** 改成「那个帧计数器，它的消费者是短横的朝向；色环已退出屏幕、不要再接回渲染路径」；手工清单 ⑯ 的 4–9 条改成转动口径（新增「颜色不动」与「窄档也转」两条）。票 02/03/04 的 Comments 未改写。
 7. **基线**：`cargo test` **731 passed / 0 failed**；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移。
