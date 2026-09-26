@@ -1,79 +1,59 @@
-# Skills
+# 技能
 
-A skill is a **progressively disclosed instruction pack**: its description is
-present every turn (cheap), its full text is loaded only when it is actually
-needed (expensive, but paid once). This document is about *where an instruction
-belongs*; the mechanism itself is in spec §9.
+一个技能是**逐步披露的指令包**：它的描述每一轮都在场（便宜），全文只在真需要时才加载
+（贵，但只付一次）。这份文件讲的是*一条指令该放在哪*；机制本身在 spec §9。
 
-## Where does an instruction go?
+## 一条指令该放在哪？
 
-Ask what the instruction costs if it is present every turn, and whether the
-harness must guarantee it:
+问两件事：这条指令每轮都在场要花多少，以及 harness 是否必须保证它：
 
-| Content | Where it goes | Test |
+| 内容 | 放在哪 | 怎么判断 |
 | --- | --- | --- |
-| Project facts — build/test commands, code style, directory conventions, hard constraints | **`AGENTS.md`** | "Is this in effect in **more than 80%** of turns?" |
-| Task-scoped or long instructions — a release process, a migration runbook, a class of refactor, steps for an external system, long reference material | **skill** | "Is it only relevant to specific tasks, or too long to pay for every turn?" |
-| Something that must happen unconditionally — formatting, running tests, refusing a class of command | **hook** | "Does it need the harness to *guarantee* it, rather than trusting the model to comply?" |
+| 项目事实 —— 构建 / 测试命令、代码风格、目录约定、硬约束 | **`AGENTS.md`** | 「它在**超过 80%** 的回合里都成立吗？」 |
+| 面向某个任务或很长的指令 —— 一次发布流程、一份迁移 runbook、一类重构、给外部系统用的步骤、长长的参考资料 | **skill** | 「它只跟特定任务有关，或者长到不值得每轮都付吗？」 |
+| 必须无条件发生的事 —— 格式化、跑测试、拒掉某一类命令 | **hook** | 「它需要 harness **保证**它，而不是指望模型照办吗？」 |
 
-The point of the split is cost, not capability. `AGENTS.md` is injected in full
-every turn, so it gets more expensive as it grows. A skill pays only when the
-model decides the description matches the task. A hook is the only one of the
-three the model cannot ignore.
+这条分界讲的是成本，不是能力。`AGENTS.md` 每轮全文注入，所以它越长越贵。技能只在模型判定
+描述匹配任务时才付钱。hook 是这三者里唯一模型忽略不掉的那个。
 
-`AGENTS.md` is never a place for long, occasionally-relevant instructions, and a
-skill is never a place for something that must be enforced: the model may simply
-not call the skill.
+`AGENTS.md` 永远不是放那种又长、又只偶尔相关的指令的地方，技能也永远不是放必须强制执行的
+东西的地方：模型完全可能就是不调那个技能。
 
-## How it works
+## 它怎么工作
 
-- **Catalog.** At assembly, every `SKILL.md` under the discovery roots is read
-  for its `name` and `description`. The catalog of `name: description` lines is
-  recorded as a `ContextInjected { source: SkillsCatalog }` event and projected
-  into the pinned head of the context: it **shares the first `user` message with
-  `AGENTS.md`** (so the wire never carries two consecutive same-role messages),
-  and that message is never trimmed and is byte-stable across turns so the prefix
-  cache keeps hitting. The catalog is capped at 3k estimated tokens; late entries
-  are omitted whole with a count.
-- **Loading.** The built-in `skill(name)` tool returns the body (frontmatter
-  stripped) as a normal tool result, appended at the tail, so the cached prefix
-  never moves. The result is a normal tool result: it is accounted for,
-  truncated, and covered by the permission language (a `Tool("skill")` rule can
-  deny it).
-- **Discovery.** Project level before user level, three roots each, most specific
-  first; the first root to define a name wins:
+- **清单。** 组装时，每一个发现根下的 `SKILL.md` 都会被读一次 `name` 与 `description`。这份
+  由 `name: description` 行组成的清单，作为一条 `ContextInjected { source: SkillsCatalog }`
+  事件记录下来，并投影进上下文中钉住的那一截头部：它与 `AGENTS.md` **共享第一条 `user`
+  消息**（所以线级上永远不会出现两条连续同角色的消息），而那条消息永不裁剪、逐轮字节稳定，
+  好让前缀缓存一直命中。清单封顶 3k 估算 token；装不下的后段整条省略，并带上一个计数。
+- **加载。** 内建 `skill(name)` 工具把正文（去掉 frontmatter）作为一条普通工具结果返回，追加
+  在尾部，所以缓存过的前缀一动不动。它就是一条普通工具结果：照样计量、照样截断，也照样受
+  权限语言覆盖（一条 `Tool("skill")` 规则可以拒掉它）。
+- **发现。** 项目级先于用户级，各三个根，最具体的在前；第一个定义了某个名字的根胜出：
 
-  | Level | Roots (left beats right) |
+  | 层级 | 根（左边胜过右边） |
   | --- | --- |
-  | project | `<repo>/.fs-agent/skills/` → `<repo>/.agents/skills/` → `<repo>/.claude/skills/` |
-  | user | `~/.config/fs-agent/skills/` → `~/.agents/skills/` → `~/.claude/skills/` |
+  | 项目 | `<repo>/.fs-agent/skills/` → `<repo>/.agents/skills/` → `<repo>/.claude/skills/` |
+  | 用户 | `~/.config/fs-agent/skills/` → `~/.agents/skills/` → `~/.claude/skills/` |
 
-  Following the `.agents` and `.claude` conventions means an existing library
-  works without moving anything.
-- **`disable-model-invocation: true`.** A skill with this flag is neither in the
-  catalog nor loadable by `skill(name)`: the model cannot guess its name around
-  the flag. Only the user invokes it.
-- **User invocation.** `/<name> [task]` in the interactive session loads a skill
-  the user names — including a `disable-model-invocation: true` one — and then
-  runs `task` as an ordinary turn (a bare `/<name>` runs a default prompt). The
-  body is a `ContextInjected { source: Skill }` appended **after** the history,
-  the slot a mid-session injection takes (the old plan mode's instruction used it
-  before this; a user-loaded skill body is the case it exists for now), so the
-  cached prefix never moves.
-  Each body is capped at `MAX_SKILL_TOKENS`, but the injection is pinned: the 25k
-  aggregate that drops old tool-loaded bodies does not cover it, so a session
-  that loads many skills keeps every one of them.
-- **Budgets.** One body is capped at 5k estimated tokens (truncated with a
-  pointer to the file, never refused — though a user-level skill's file sits
-  outside the workspace, where `read_file` cannot reach it); the loaded bodies in
-  one request are capped at 25k, with the oldest dropped first and the active
-  turn included; the catalog is capped at 3k on its own. The 25k cap is enforced
-  by `context::trim`, independently of the window budget.
-- **Skills carry instructions only.** v1 does not package tools into a skill:
-  the tool table is part of the request prefix and is fixed at assembly, so
-  adding a tool on skill load would throw the prefix cache away.
+  跟随 `.agents` 与 `.claude` 这两套约定，意味着已有的技能库不用挪动任何东西就能用。
+- **`disable-model-invocation: true`。** 带这个旗标的技能既不在清单里，也不能由
+  `skill(name)` 加载：模型没法绕过这个旗标去猜它的名字。只有用户能调它。
+- **用户调用。** 交互式会话里的 `/<name> [task]` 会加载用户点名的技能 —— 包括标了
+  `disable-model-invocation: true` 的 —— 然后把 `task` 当一次普通回合跑（只写 `/<name>`
+  则跑一个默认提示词）。正文是一条追加在历史**之后**的 `ContextInjected { source: Skill }`，
+  也就是会话中途注入占的那个位置（以前占它的是旧 plan 模式的指令；用户加载的技能正文就是
+  它现在为之存在的那个场景），所以缓存过的前缀一动不动。
+  每份正文封顶 `MAX_SKILL_TOKENS`，但这条注入是钉住的：丢掉旧工具加载正文的那个 25k 合计
+  上限盖不到它，所以一个加载了很多技能的会话会把它们全都留着。
+- **预算。** 单份正文封顶 5k 估算 token（截断并给一个指向该文件的指针，从不拒掉 —— 尽管
+  用户级技能的文件在会话工作区之外，`read_file` 够不着它）；一次请求里加载的正文合计封顶
+  25k，从最旧的开始丢，当前回合算在内；清单自己封顶 3k。25k 这个上限由 `context::trim`
+  施加，与窗口预算无关。
+- **技能只装指令。** v1 不把工具打包进技能：工具表是请求前缀的一部分、在组装期定死，所以
+  加载技能时加一个工具等于把前缀缓存丢掉。
 
-## File format
+## 文件格式
 
 ```
 <name>/SKILL.md
@@ -88,5 +68,4 @@ description: Cut a release: version bump, changelog, tag, and publish. Use when 
 Step-by-step instructions...
 ```
 
-`name` defaults to the directory name when omitted. A `SKILL.md` without a
-`description` is skipped: the description is what the catalog is made of.
+`name` 缺省时取目录名。没有 `description` 的 `SKILL.md` 会被跳过：清单就是由描述组成的。

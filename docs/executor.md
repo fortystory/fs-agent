@@ -1,12 +1,11 @@
-# Executor
+# 执行者
 
-An executor (CONTEXT.md: 执行者) is a **nested session** a debater dispatches
-through the built-in `task(brief)` tool to do real work. It has its own context,
-its own turn budget and the same workspace, and it reports back **a summary plus
-metadata** — never its process. Spec §16 owns the decisions; this file is the
-human-facing map of where they live in the code and why the shape is what it is.
+执行者（CONTEXT.md：执行者）是讨论者通过内建 `task(brief)` 工具派出去干真活的一个**嵌套
+会话**。它有自己的上下文、自己的回合预算，共用同一个工作区，回来只报**一份摘要加元数据**
+—— 从不报它的过程。spec §16 管这些决策；这份文件是给人看的地图：它们住在代码的哪里，以及
+形状**为什么**是这样。
 
-## The flow of one `task` call
+## 一次 `task` 调用的流向
 
 ```
 debater ── task(brief) ──► hook.pre ──► permission gate ──► deferred
@@ -21,87 +20,73 @@ debater ── task(brief) ──► hook.pre ──► permission gate ──�
    the `task` call's one ToolCallCompleted: summary + files changed + tokens
 ```
 
-Everything lands on the **one** session stream, so the log stays the single
-source of truth, `seq` stays the line number, and an executor's edits sit in the
-same session directory as the dispatcher's — which is why `/undo` covers them.
+所有东西都落在**同一条**会话流上，于是日志仍是唯一真相源，`seq` 仍是行号，执行者的改动与
+派发者的住在同一个会话目录里 —— 这正是 `/undo` 覆盖得到它们的原因。
 
-`effect()` for `task` is `ReadOnly`, because `effect()` classifies **workspace**
-side effects and dispatching touches no workspace path. That is what lets a batch
-of `task` calls run at once; the write exclusion that matters happens inside the
-executors, on the shared `PathLocks`.
+`task` 的 `effect()` 是 `ReadOnly`，因为 `effect()` 分类的是**工作区**副作用，而派发本身不碰
+任何工作区路径。一批 `task` 调用能同时跑，靠的就是这一点；真正要紧的写排斥发生在执行者
+**内部**，落在共享的 `PathLocks` 上。
 
-## Visibility: two directions, deliberately different
+## 可见性：两个方向，刻意不同
 
-| Question | Answer | Why |
+| 问题 | 答案 | 为什么 |
 | --- | --- | --- |
-| Does an executor's process enter a debater's window? | **No** — not its messages, not its tool results, not `ExecutorFinished` | The dispatcher reports in its own words; the discussion carries speech, not a shared tool history (and only the summary is affordable) |
-| Does the dispatching debater get the summary? | **Yes**, as the `task` call's result | Ordinary tool call, ordinary result: no second delivery mechanism |
-| Does the other debater get it? | Only through the dispatcher's speech | One rule for the dispatcher and the others, or the discussion is asymmetric |
-| What is in the executor's own window? | The pinned injections plus **its own** events | It works from its brief, not from a replay of the debate |
-| How does the brief get there? | `ExecutorSpawned` projects into the target executor's first speech message, named by the dispatcher | So `messages = project(stream + rules)` holds in a nested session, and the brief is not mistaken for the pinned head |
+| 执行者的过程会进讨论者的窗口吗？ | **不会** —— 它的 messages 不进，它的工具结果不进，`ExecutorFinished` 也不进 | 派发者用自己的话汇报；讨论承载的是**发言**，不是一份共享的工具历史（而且只有摘要付得起） |
+| 派发的那个讨论者拿得到摘要吗？ | **拿得到**，作为那次 `task` 调用的结果 | 普通的工具调用、普通的结果：没有第二套投递机制 |
+| 另一位讨论者拿得到吗？ | 只经由派发者的发言 | 派发者与其余各位适用同一条规则，否则这场讨论就不对称了 |
+| 执行者自己的窗口里有什么？ | 钉住的那些注入，加上**它自己的**事件 | 它照自己的 brief 干活，不是靠重放那场辩论 |
+| brief 是怎么到那儿的？ | `ExecutorSpawned` 投影成目标执行者的第一条发言消息，署名是派发者 | 于是 `messages = project(stream + rules)` 在嵌套会话里也成立，brief 不会被误当成钉住的那一截头部 |
 
-An executor's *own* tool round-trip is projected in full (its results, its
-reasoning, merged by `seq`); the "another speaker's tool calls survive as one
-line" rule is what applies to everyone else.
+执行者**自己**的工具往返是完整投影的（它的结果、它的推理，按 `seq` 合并）；「别人的工具调用
+只留一行」这条规则，管的是其余所有人。
 
-## Its own budget, and what it shares
+## 它自己的预算，以及它共享什么
 
-| Value | Own or shared | Where |
+| 量 | 自己的还是共享的 | 在哪 |
 | --- | --- | --- |
-| Turn cap | **Own**, default **25**, set by `[turn] executor_max_iterations` | `SessionConfig` |
-| Model | **Inherited** from the dispatcher; `executor_model` routes it elsewhere on the *same* client | `SessionConfig` |
-| Token spend | **Shared**: counted in the session total | `UsageRecorded` on the one stream |
-| Read set | **Own, empty**: neither direction flows | read-before-edit is per agent's picture |
-| Todo list | **Own**: an executor plans with `todo` like anyone else, and its list is its own | the list lives in that call's arguments |
-| Event log · path locks · outputs dir · skill library · ask port · hook | **Shared handles** | one session, several agents |
+| 回合上限 | **自己的**，默认 **25**，由 `[turn] executor_max_iterations` 定 | `SessionConfig` |
+| 模型 | 从派发者**继承**；`executor_model` 把它改派到别处，但仍在**同一个** client 上 | `SessionConfig` |
+| token 消耗 | **共享**：计入会话总量 | 那条唯一流上的 `UsageRecorded` |
+| 读集 | **自己的，且是空的**：两个方向都不流动 | 写前必读看的是**每个** agent 自己的画面 |
+| 待办列表 | **自己的**：执行者像别人一样用 `todo` 做计划，它的列表就是它自己的 | 列表活在那次调用的参数里 |
+| 事件流 · 路径锁 · outputs 目录 · 技能库 · 询问端口 · hook | **共享的句柄** | 一个会话，几个 agent |
 
-The read set not travelling is what forces an executor to read before it writes —
-"the parent read it" is not a licence, because the guardrail is about *this*
-agent's picture of the file. The todo list not travelling is the same kind of
-statement: an executor's list is its own record of its own steps, visible in the
-transcript (its `todo` call is an ordinary line) and **not** on the sidebar — that
-page shows the main session's list (`tools::todo::read_items`, and the sidebar's
-`TodoPanel`, which ignores an executor's calls outright).
+读集不跟着走，正是执行者必须先读后写的原因 —— 「父级读过了」不是许可证，因为这条护栏管的
+是**这个** agent 对那个文件的认识。待办列表不跟着走是同一类陈述：执行者的列表是它自己对自己
+步骤的记录，在转录里看得见（它的 `todo` 调用是一行普通记录），**不**上左栏 —— 那一页显示的是
+主会话的列表（`tools::todo::read_items`，以及左栏的 `TodoPanel`，后者对执行者的调用直接
+视而不见）。
 
-## Permissions: a subset of the dispatcher's
+## 权限：派发者的一个子集
 
-An executor runs under its dispatcher's **mode** (a mode is the session's stance
-on writes: an `auto` dispatcher's executor may write, a `readonly` one's may not)
-plus every rule the dispatcher marked as propagating — `Deny` and `Ask` travel by
-default, `Allow` never does — and it starts with an **empty read set**. Its
-authority is therefore a subset of the dispatcher's: a delegation can never be
-more permissive, can never borrow an allowance the dispatcher earned, and can
-never be the way around a hard stance.
+执行者跑在派发者的**模式**之下（模式是会话对「写」的那一档立场：`auto` 派发者的执行者可以
+写，`readonly` 派发者的不能），再加上派发者标了「可传播」的每一条规则 —— `Deny` 与 `Ask`
+默认往下传，`Allow` 从不传 —— 并且一开始的**读集是空的**。所以它的权限是派发者的一个子集：
+一次委派永远不会更宽松，永远借不到派发者挣来的许可，也永远成不了绕过一个硬立场的那条路。
 
-`ask` behaves the same for both: with no interactive answerer (a headless run) the
-loop downgrades it to `Deny`, and in an interactive session the executor asks
-through the *same* port as the dispatcher.
+`ask` 对两者行为相同：没有交互式作答者时（headless 运行），循环把它降级成 `Deny`；交互式
+会话里，执行者经由与派发者**同一个**端口发问。
 
-## Depth one, enforced by the tool table
+## 深度为一，靠工具表强制
 
-An executor cannot dispatch an executor. The first line of defense is that its
-table has no `task` at all: `Tool::delegable()` (`false` for `task`) and
-`Registry::for_executor()` hand a nested session the same tools minus the
-non-delegable ones. A *rule* would be a weaker second line — the tool would still
-be advertised to the model, and a rule bug would be a recursion bug.
+执行者不能再派执行者。第一道防线是它的表里**根本没有** `task`：`Tool::delegable()`（对
+`task` 为 `false`）与 `Registry::for_executor()` 交给嵌套会话的，是同一批工具减去那些不可
+委派的。改用一条**规则**会是一道更弱的第二防线 —— 工具照样会声明给模型看，而且规则里的一
+个 bug 就是递归的一个 bug。
 
-## Concurrency
+## 并发
 
-One batch may hold several `task` calls, and they run together, capped by
-`max_parallel_executors` (default **5** — a cost and rate gate, not a safety
-gate). The loop authorizes each call in batch order and *defers* the authorized
-`task` calls, then runs the deferred ones with bounded concurrency and records
-their results in batch order. Each is still an ordinary tool call with exactly
-one result; if a hook stops the turn after a `task` was deferred, that call still
-gets its one (error) result, because it was already started on the stream.
+一批里可以有若干个 `task` 调用，它们一起跑，上限由 `max_parallel_executors` 管（默认 **5**
+—— 那是成本与速率闸门，不是安全闸门）。循环按批内顺序授权每一次调用，把获授权的 `task`
+调用**延后**，然后以有界并发跑这些延后的调用，并按下发的批内顺序记录它们的结果。每一个仍
+是一次普通工具调用、恰好一条结果；如果一个 hook 在某个 `task` 已被延后之后掐停了回合，那次
+调用照样拿到它那一条（错误）结果，因为它已经在流上开始了。
 
-## Failure
+## 失败
 
-`ExecutorFinished{reason}` carries one of the loop's single-loop values. Anything
-but `Completed` becomes an **error-content tool result** for the `task` call. The
-`files changed:` line is derived from the executor's successful results — the path
-each write reported, not the arguments the model sent, since a `hook.pre` may have
-rewritten them:
+`ExecutorFinished{reason}` 带的是循环那套单回合取值里的一个。除 `Completed` 之外的任何值，
+对那次 `task` 调用都变成**错误内容的工具结果**。`files changed:` 那一行来自执行者成功的那些
+结果 —— 是每一次写自己报出来的路径，不是模型发来的参数，因为 `hook.pre` 可能改写过它们：
 
 ```
 executor <id> finished: Error
@@ -111,17 +96,16 @@ report:
 …
 ```
 
-A failed executor does not interrupt the discussion: the dispatcher reads the
-result, and can re-delegate, split the work, or do it itself.
+一个失败的执行者不会打断讨论：派发者读那条结果，然后可以重新委派、把活拆开、或者自己干。
 
-## Where the code lives
+## 代码住在哪
 
-| Piece | Module |
+| 部件 | 模块 |
 | --- | --- |
-| `task(brief)` — a thin shell over the port | `tools::task` |
-| The port's shape (`ExecutorSpawner`) | `tools::tool` |
-| The executor's table | `tools::registry` (`for_executor`) |
-| Sending it, running it, reporting back | `agent::executor` (the port) + `agent` (`run_deferred`) |
-| Stopping it when the user cancels | `agent::cancel` (the observer the port clones), `agent::executor` (winds down, `ExecutorFinished { Aborted }`) |
-| The brief as a message | `provider::projection` |
-| An executor turn is never the session's product | `render` |
+| `task(brief)` —— 端口上的一层薄壳 | `tools::task` |
+| 端口的形状（`ExecutorSpawner`） | `tools::tool` |
+| 执行者的工具表 | `tools::registry`（`for_executor`） |
+| 把它发出去、跑起来、报回来 | `agent::executor`（那个端口）+ `agent`（`run_deferred`） |
+| 用户取消时把它停下来 | `agent::cancel`（端口克隆的那个观察端）、`agent::executor`（收尾，`ExecutorFinished { Aborted }`） |
+| brief 作为一条消息 | `provider::projection` |
+| 执行者的回合永不是会话的产物 | `render` |

@@ -1,10 +1,9 @@
-# Observability: `sessions`
+# 可观测性：`sessions`
 
-`sessions` answers questions about a **finished** session from its own event
-stream (spec §18). Nothing here is a new capture point: every view is a group-by
-over the JSONL the session already wrote, so a diagnostic can never disagree with
-the source of truth. There is deliberately **no index** — `seq` is the line
-number, so a view is a sequential read plus an in-memory filter.
+`sessions` 从**已经结束**的会话自己的事件流上回答关于它的各种问题（spec §18）。这里没有任何
+东西是新的采集点：每一个视图都是对会话已经写下的那份 JSONL 做一次 group-by，所以一次诊断
+永远不会和真相源对不上。这里**刻意没有索引** —— `seq` 就是行号，所以一个视图就是一次顺序读
+加一次内存里的过滤。
 
 ```
 fs-agent sessions ls [--all] [--cwd PATH] [--limit N] [--json]
@@ -14,91 +13,72 @@ fs-agent sessions replay <id> --speaker X [--round N] [--model ID] [--json]
 fs-agent sessions stats <id> [--model ID] [--json]
 ```
 
-`<id>` is a session id, or the path of a session directory (a session is a
-movable directory, so that is often the handiest handle). stdout carries the
-result and stderr the diagnostics, whatever the verb; every view has a `--json`
-form for a pipeline.
+`<id>` 是一个会话 id，或者一个会话目录的路径（会话是可搬运的目录，所以那常常是最顺手的
+抓手）。无论哪个动词，stdout 放结果、stderr 放诊断；每个视图都有 `--json` 形式，好接进
+管道。
 
-## The four verbs
+## 四个动词
 
-- **`ls`** — one row per session (id, cwd, start, tokens, rounds, messages, end
-  reason), newest first, the order `--continue` considers. `--all` scans every
-  bucket; without it only the workspace's bucket is read.
-- **`show`** — the round-grouped transcript. A tool call and its result are
-  **one row**, and a post-hook's feedback is merged into the row it annotated
-  (the hook event carries no `tool_call_id`; the loop emits it right after the
-  result, so the latest result is the pairing). `--files` switches to the
-  workspace-object view: every file a successful write or edit landed on, with
-  the round and the speaker. Filters: `--round`, `--speaker`, `--kind`, `--tool`,
-  `--only-error`. `--files` honors `--round`, `--speaker` and `--tool`; `--kind`
-  and `--only-error` describe transcript rows and have no meaning for a file
-  change.
-- **`replay`** — recompute what one call actually sent to the provider. See
-  below; this is the acceptance for "the event stream is the single source of
-  truth".
-- **`stats`** — the fixed metric set: per-speaker tokens / cost / hit rate, calls
-  per round, one-sided absence rate, executor stop reasons, the edit ladder's
-  downgrade distribution, read-before-edit refusals and read-set invalidations,
-  permission decisions, hook outcomes, divergence rate and stop distribution.
+- **`ls`** —— 一个会话一行（id、cwd、开始、token、轮次、消息、结束原因），最新的在前，
+  也就是 `--continue` 考虑的那个顺序。`--all` 扫每一个会话桶；不带它就只读本工作区的桶。
+- **`show`** —— 按轮次分组的转录。一次工具调用与它的结果**是一行**，后置 hook 的反馈合并
+  进它批注的那一行（hook 事件不带 `tool_call_id`；循环在结果之后紧接着发出它，所以最新的
+  那条结果就是配对）。`--files` 切到工作区对象视图：每一次成功的写或编辑落到的每一个文件，
+  带上轮次与发言归属。过滤器：`--round`、`--speaker`、`--kind`、`--tool`、`--only-error`。
+  `--files` 认 `--round`、`--speaker` 与 `--tool`；`--kind` 与 `--only-error` 描述的是转录
+  行，对一次文件改动没有意义。
+- **`replay`** —— 重算某一次调用实际发给 provider 的内容。见下文；这就是「事件流是唯一
+  真相源」的验收。
+- **`stats`** —— 固定的指标集：按发言归属的 token / 费用 / 命中率、每轮调用次数、单侧缺席
+  率、执行者的收尾原因、编辑匹配梯的降级分布、写前必读的拒绝与读集失效、权限决定、hook
+  结果、分歧率与收尾分布。
 
-The two quantities nothing else surfaces are the point of the fixed set: the
-**one-sided absence rate** (a round where one side failed out must never be read
-as agreement) and the **edit-ladder downgrade distribution** (a downgraded match
-must never be silent).
+这套固定指标集的要害，是那两个别处都浮不上来的量：**单侧缺席率**（一方掉线的那一轮，
+永远不能被读成一致）与**编辑匹配梯的降级分布**（一次降级匹配永远不能是静默的）。
 
-## `replay`: what, exactly, is recomputed
+## `replay`：重算的到底是哪些东西
 
-`replay` reproduces **one call**, not the round's final state. A finished stream
-contains the answer to the call you are reproducing, so projecting the whole
-stream would include events that did not exist when the request went out. The cut
-is the speaker's **last `TurnStarted`** in the round: the loop snapshots the
-stream just before it appends that event, so
+`replay` 复现的是**某一次调用**，不是那一轮的最终状态。一份已经结束的流里含有你正在复现的
+那次调用的答案，所以投影整条流会把那次请求发出去时还不存在的事件也包含进来。切点就是发言
+归属在这一轮里的**最后一条 `TurnStarted`**：循环在追加那条事件之前刚好给流拍了一次快照，
+所以
 
 ```
 (seq < TurnStarted) ∩ TurnScope
 ```
 
-is exactly the window the request saw. `TurnScope` is the same structural round
-cut the live loop uses, so a recomputed targeted round really contains the first
-round and really excludes the other debater's same-round events.
+正是那次请求看到的窗口。`TurnScope` 与活循环用的是同一个结构性的轮次切法，所以重算出来的
+一轮定向轮真的包含第一轮，也真的排除了另一位讨论者的同轮事件。
 
-Consequences worth knowing:
+几个值得知道的后果：
 
-- A multi-iteration tool turn is reproduced at its **last** call. Earlier
-  iterations of the same round are not addressable in v1.
-- The **synthesizer** is not a turn and not a projection: it is its private
-  identity plus `synthesis_prompt`, both functions of the stream (the question is
-  the last `user` message before the synthesis round). `replay --speaker system`
-  reconstructs exactly that.
-- An **executor** replays on its own window (its brief plus the pinned
-  injections, never the dispatching session's speech) with the executor identity.
-- A **debater in a discussion** needs `--round`. Without one the whole-stream
-  window would put the other side's answers in — replay refuses rather than
-  guessing.
+- 一个多迭代的工具回合，复现的是它**最后一次**调用。同一轮里更早的那些迭代在 v1 里不可
+  寻址。
+- **合成器**不是一个回合，也不是一次投影：它是它的私有身份加上 `synthesis_prompt`，两者
+  都是流上的函数（问题是合成轮之前最后一条 `user` 消息）。`replay --speaker system` 重建的
+  正是它。
+- **执行者**在自己的窗口上重放（它的 brief 加上钉住的那些注入，绝不是派发会话的发言），用
+  执行者的身份。
+- 讨论里的**讨论者**需要 `--round`。不带的话，整条流的窗口会把对方的作答也放进去 —— replay
+  宁可拒绝，也不猜。
 
-The equality is structural, not a coincidence: `run_turn` and `replay` both build
-their request with `agent::build_messages` (project → prepend the private
-identity → trim). The identity never enters the stream, so replay derives it from
-the stream's shape — debater + rounds → the protocol instruction, executor → the
-executor constant, plain single-agent → none.
+这个相等是结构性的，不是巧合：`run_turn` 与 `replay` 都用 `agent::build_messages` 构造自己
+的请求（投影 → 在前面接上私有身份 → 裁剪）。身份永不进流，所以 replay 从流的形状里推它 ——
+讨论者 + 轮次 → 协议指令，执行者 → 执行者常量，普通的单 agent → 没有。
 
-## Money needs a model
+## 钱需要一个模型
 
-`UsageRecorded` carries no model: prices are keyed by model id, and the roster
-lives in configuration, not on the stream. So `stats` shows cost only when the
-caller names a model — `--model`, otherwise `config.default_model` — and the
-human view says which model it priced at (`no cost (no [pricing.<model>] entry)`
-when the table has no entry, which is not the same as free). `[routing]` is
-applied, so a routed synthesizer or executor is priced at the model it really
-answered with. `replay` needs the same model, because the capability table (for
-example whether reasoning must round-trip) is keyed by model id too.
+`UsageRecorded` 不带模型：价格按 model id 配，而名册住在配置里，不在流上。所以只有调用者
+点名一个模型时 `stats` 才显示费用 —— `--model`，否则 `config.default_model` —— 而给人看的
+那一版会说明它按哪个模型计了价（价格表里没有条目时是
+`no cost (no [pricing.<model>] entry)`，那和免费不是一回事）。`[routing]` 会被施加，所以被
+路由过的合成器或执行者，按它**真正作答**的那个模型计价。`replay` 需要同一个模型，因为能力表
+（例如推理是否必须往返）也是按 model id 配的。
 
-## Reading the derived metrics
+## 读那些派生指标
 
-The diagnostics that only exist as text on an existing payload are read through
-the producer's own constants — `MATCH_LEVEL_PREFIX`, `WROTE_PATH_PREFIX`,
-`READ_BEFORE_WRITE_PREFIX`, and the edit ladder's `EditError` rendering — never
-through a literal written twice. A failed ladder match lands as
-`"<path>: <error>"`, so the read-set-invalidation count matches on the suffix.
-This is the one place where a drifting string could silently turn a metric into
-zero, which is why the convention has a single home (spec §18).
+那些只以文本形式存在于一条已有载荷上的诊断，是通过**产出方自己的常量**读的 ——
+`MATCH_LEVEL_PREFIX`、`WROTE_PATH_PREFIX`、`READ_BEFORE_WRITE_PREFIX`，以及编辑匹配梯的
+`EditError` 渲染 —— 从不用一个抄了两遍的字面量。一次匹配梯失败落地成 `"<path>: <error>"`，
+所以读集失效的计数是按后缀匹配的。这是唯一一处一个漂移的字符串能把一个指标静默变成零的
+地方，也正因如此这条约定只有一个家（spec §18）。
