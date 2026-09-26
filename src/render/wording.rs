@@ -1336,9 +1336,29 @@ pub fn mode_field(mode: Mode) -> String {
 // ---------------------------------------------------------------------------
 
 /// The sidebar's tab labels, in the order they are drawn (spec §3).
+///
+/// `todo` sits second, and is the one label that is not always there: it appears
+/// once the session has a list (`.scratch/todo-and-modes/spec.md` §4). Four labels
+/// and their separators still fit the narrow rung.
 pub const TAB_USAGE: &str = "调用量";
+pub const TAB_TODO: &str = "todo";
 pub const TAB_TRACE: &str = "轨迹";
 pub const TAB_FILES: &str = "文件";
+
+/// The three glyphs a `todo` item's row opens with: waiting, being worked on, done.
+pub const TODO_PENDING: &str = "☐";
+pub const TODO_IN_PROGRESS: &str = "▸";
+pub const TODO_COMPLETED: &str = "✓";
+
+/// The `todo` page's count line: `已完成 2/5`.
+pub fn todo_count(completed: usize, total: usize) -> String {
+    format!("已完成 {completed}/{total}")
+}
+
+/// The row that stands in for the items the page had no room for: `＋3 项`.
+pub fn todo_overflow(hidden: usize) -> String {
+    format!("＋{hidden} 项")
+}
 
 /// What a tab whose page is not built yet says. A sentence rather than a blank
 /// panel, so the reader knows it is not done rather than broken, and naming the

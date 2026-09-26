@@ -1,7 +1,7 @@
 # 侧栏 `todo` 标签：会话出现过列表就常驻
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 02
 
 > 规格：`.scratch/todo-and-modes/spec.md` §4、`Testing Decisions`。

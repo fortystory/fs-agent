@@ -10,8 +10,8 @@
 use fs_agent::render::editor;
 use fs_agent::render::width::text_columns;
 use fs_agent::render::{
-    draw_frame, CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent, SessionFacts,
-    TuiState, PULSE_PALETTE,
+    draw_frame, wording, CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent,
+    SessionFacts, TuiState, PULSE_PALETTE,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
@@ -2621,6 +2621,338 @@ fn no_key_opens_a_plan_mode_any_more() {
     for gone in ["计划", "PLAN.md", "硬计划"] {
         assert!(!text.contains(gone), "`{gone}` is gone: {text}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The sidebar's `todo` tab (`.scratch/todo-and-modes/spec.md` §4)
+// ---------------------------------------------------------------------------
+
+/// A `todo` call's arguments: the whole list, each item `{content, status}`.
+fn todo_args(list: &[(&str, &str)]) -> serde_json::Value {
+    serde_json::json!({
+        "items": list
+            .iter()
+            .map(|(content, status)| serde_json::json!({ "content": content, "status": status }))
+            .collect::<Vec<_>>()
+    })
+}
+
+fn kimi() -> fs_agent::events::SpeakerId {
+    fs_agent::events::SpeakerId::Debater("kimi".into())
+}
+
+fn executor() -> fs_agent::events::SpeakerId {
+    fs_agent::events::SpeakerId::Executor(fs_agent::events::ParticipantId::new("kimi-1"))
+}
+
+/// One `todo` call as the renderer sees it: the start carries the arguments, and the
+/// block is painted when the result lands — so both go in.
+fn apply_todo(
+    state: &mut TuiState,
+    id: &str,
+    speaker: fs_agent::events::SpeakerId,
+    args: serde_json::Value,
+) {
+    use fs_agent::events::{Event, EventPayload, ToolCallId};
+    state.apply(RenderEvent::Logged(Event::new(
+        1,
+        speaker.clone(),
+        EventPayload::ToolCallStarted {
+            tool_call_id: ToolCallId::new(id),
+            tool_name: fs_agent::tools::TODO_TOOL.to_owned(),
+            args,
+        },
+    )));
+    state.apply(RenderEvent::Logged(Event::new(
+        2,
+        speaker,
+        EventPayload::ToolCallCompleted {
+            tool_call_id: ToolCallId::new(id),
+            ok: true,
+            output: Some("todo: ok".to_owned()),
+            error: None,
+            duration_ms: 1,
+        },
+    )));
+}
+
+/// The tab bar's own row, read off the frame. Empty when the terminal is too narrow
+/// for a sidebar, which is when there is no bar at all.
+fn tab_bar(state: &mut TuiState, width: u16, height: u16) -> String {
+    let rows = screen(width, height, state);
+    rows.iter()
+        .find(|row| row.contains(wording::TAB_USAGE))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The sidebar's own columns, row by row. The transcript may well carry the same
+/// words — a `todo` call's arguments are on the folded line too — so an assertion
+/// about the **page** has to read the page's columns rather than the whole screen.
+fn sidebar_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let frame = buffer(width, height, state);
+    (0..height)
+        .map(|y| cells(&frame, y, 1, SIDEBAR_COLUMNS))
+        .collect()
+}
+
+/// The narrow rung's width, which is also where the sidebar stops being drawn.
+const SIDEBAR_COLUMNS: u16 = 41;
+
+/// The row index the tab bar's labels are on.
+fn tab_bar_row(state: &mut TuiState, width: u16, height: u16) -> u16 {
+    screen(width, height, state)
+        .iter()
+        .position(|row| row.contains(wording::TAB_USAGE))
+        .expect("the tab bar is on screen") as u16
+}
+
+#[test]
+fn no_todo_tab_before_a_list_has_ever_landed() {
+    // The tab is not a fixture of the shell: a session that has never planned has
+    // three pages, at both sidebar widths — and at 60 columns there is no sidebar at
+    // all, so no bar to carry the label either.
+    for (width, height) in [(120u16, 24u16), (80, 24), (60, 24)] {
+        let mut state = state_with_roster(&["kimi"]);
+        let bar = tab_bar(&mut state, width, height);
+        assert!(
+            !bar.contains(wording::TAB_TODO),
+            "{width}x{height} has no `todo` tab before a list: {bar}"
+        );
+    }
+}
+
+#[test]
+fn the_todo_tab_appears_with_a_non_empty_list_and_then_stays() {
+    // The user chose "once seen, always there": a tab that came and went under the
+    // reader's hand would move the page they are looking at. So all-completed and
+    // cleared keep it as firmly as the first list did.
+    for (width, height) in [(120u16, 24u16), (80, 24)] {
+        let mut state = state_with_roster(&["kimi"]);
+        apply_todo(
+            &mut state,
+            "call-1",
+            kimi(),
+            todo_args(&[("写测试", "pending")]),
+        );
+        assert!(
+            tab_bar(&mut state, width, height).contains(wording::TAB_TODO),
+            "{width}x{height} shows the tab after a list"
+        );
+
+        apply_todo(
+            &mut state,
+            "call-2",
+            kimi(),
+            todo_args(&[("写测试", "completed")]),
+        );
+        assert!(
+            tab_bar(&mut state, width, height).contains(wording::TAB_TODO),
+            "{width}x{height} keeps it when everything is done"
+        );
+
+        apply_todo(
+            &mut state,
+            "call-3",
+            kimi(),
+            serde_json::json!({ "items": [] }),
+        );
+        assert!(
+            tab_bar(&mut state, width, height).contains(wording::TAB_TODO),
+            "{width}x{height} keeps it after the list is cleared"
+        );
+    }
+}
+
+#[test]
+fn an_executors_list_stays_out_of_the_sidebar() {
+    // A dispatcher's list and its executor's are two lists (§2). The executor's is
+    // its own record: it shows in the transcript, and the sidebar — which shows the
+    // main session's — must not even grow a tab for it.
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "exec-1",
+        executor(),
+        todo_args(&[("派出去的活", "pending")]),
+    );
+
+    assert!(!tab_bar(&mut state, 120, 24).contains(wording::TAB_TODO));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("派出去的活") || text.contains("todo"),
+        "the call itself is still in the transcript: {text}"
+    );
+}
+
+#[test]
+fn the_todo_page_lists_each_item_with_its_glyph_and_counts_them() {
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[
+            ("还没开始", "pending"),
+            ("正在做", "in_progress"),
+            ("做完了", "completed"),
+        ]),
+    );
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("☐ 还没开始"), "{text}");
+    assert!(text.contains("▸ 正在做"), "{text}");
+    assert!(text.contains("✓ 做完了"), "{text}");
+    assert!(text.contains("已完成 1/3"), "{text}");
+}
+
+#[test]
+fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
+    // No scrolling on this page: the height ladder gives the rows, and the last one
+    // before the count says how many items did not fit. The count row is the floor —
+    // it is what is left when nothing else is.
+    let items: Vec<(String, &str)> = (0..12)
+        .map(|index| (format!("第 {index} 项"), "pending"))
+        .collect();
+    let borrowed: Vec<(&str, &str)> = items
+        .iter()
+        .map(|(content, status)| (content.as_str(), *status))
+        .collect();
+
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(&mut state, "call-1", kimi(), todo_args(&borrowed));
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
+
+    let rows = sidebar_rows(&mut state, 120, 24);
+    let count = rows
+        .iter()
+        .position(|line| line.contains("已完成 0/12"))
+        .unwrap_or_else(|| panic!("the count row is on the page: {rows:#?}"));
+    let shown = rows
+        .iter()
+        .take(count)
+        .filter(|line| (0..12).any(|index| line.contains(&format!("第 {index} 项"))))
+        .count();
+    let overflow = rows[count - 1].clone();
+    assert!(
+        overflow.contains(&format!("＋{} 项", 12 - shown)),
+        "the row above the count says how many did not fit ({shown} shown): {rows:#?}"
+    );
+    assert!(shown < 12, "the page did not fit them all: {rows:#?}");
+}
+
+#[test]
+fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
+    // Through the panel rather than a frame, because no terminal asks the layout for a
+    // one-row page — `SIDEBAR_MIN_FIELDS` is the floor — and the rule still has to
+    // hold there rather than draw a stray item.
+    use fs_agent::render::todo::TodoPanel;
+    use fs_agent::render::{Block, ToolBlock, ToolOutcome};
+    use ratatui::layout::Rect;
+
+    let mut panel = TodoPanel::default();
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: kimi(),
+        tool_call_id: fs_agent::events::ToolCallId::new("call-1"),
+        tool: fs_agent::tools::TODO_TOOL.to_owned(),
+        args: todo_args(&[("一件事", "pending")]),
+        outcome: Some(ToolOutcome {
+            ok: true,
+            output: Some("todo: ok".to_owned()),
+            error: None,
+            duration_ms: 1,
+        }),
+    })));
+
+    let lines = panel.lines(Rect::new(0, 0, 28, 1));
+    let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    assert_eq!(text.len(), 1, "{text:?}");
+    assert!(text[0].contains("已完成 0/1"), "{text:?}");
+}
+
+#[test]
+fn the_four_tab_labels_fit_at_the_narrow_width() {
+    // 调用量│todo│轨迹│文件 is eleven cells and three separators, so the narrow rung
+    // still has room for all four — the label bar must not push one off the edge.
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("一件事", "pending")]),
+    );
+
+    let bar = tab_bar(&mut state, 80, 24);
+    assert!(
+        bar.contains(&format!(
+            "{}│{}│{}│{}",
+            wording::TAB_USAGE,
+            wording::TAB_TODO,
+            wording::TAB_TRACE,
+            wording::TAB_FILES
+        )),
+        "all four labels, in order, with their separators: {bar}"
+    );
+
+    // And the labels are still the only controls in the bar: the separator and the
+    // rule that fills the rest of the row are painted, not painted **as tabs**, so a
+    // click on either does nothing (`draw_tab_bar` derives the separators, the fill
+    // and the hit rectangles from the one label list).
+    let frame = buffer(80, 24, &mut state);
+    let row = tab_bar_row(&mut state, 80, 24);
+    let inside_the_sidebar = 2..29u16;
+    let fill = inside_the_sidebar
+        .clone()
+        .find(|x| frame[(*x, row)].symbol() == "─")
+        .expect("the row fills after the four labels");
+    let separator = inside_the_sidebar
+        .clone()
+        .find(|x| frame[(*x, row)].symbol() == "│")
+        .expect("the labels are separated");
+    for column in [separator, fill] {
+        state.mouse(click(column, row));
+        let text = screen(80, 24, &mut state).join("\n");
+        assert!(
+            !text.contains("☐ 一件事"),
+            "a click at column {column} is not a tab: {text}"
+        );
+        assert!(text.contains("token"), "the page did not move: {text}");
+    }
+}
+
+#[test]
+fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
+    // The one thing a conditional tab could do is take the page away from someone
+    // reading it. It cannot: the latch is "has ever had a list", and clearing the
+    // list leaves the page showing the count.
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("一件事", "pending")]),
+    );
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
+    assert!(sidebar_rows(&mut state, 120, 24)
+        .join("\n")
+        .contains("一件事"));
+
+    apply_todo(
+        &mut state,
+        "call-2",
+        kimi(),
+        serde_json::json!({ "items": [] }),
+    );
+    let page = sidebar_rows(&mut state, 120, 24).join("\n");
+    assert!(page.contains("已完成 0/0"), "{page}");
+    assert!(
+        !page.contains("一件事"),
+        "and the items are gone with the list: {page}"
+    );
 }
 
 // --- the `/` menu ----------------------------------------------------------

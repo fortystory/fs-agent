@@ -36,6 +36,7 @@ pub mod pane;
 pub mod panel;
 pub mod plain;
 pub mod severity;
+pub mod todo;
 pub mod transcript;
 pub mod tui;
 pub mod width;
@@ -55,6 +56,7 @@ pub use input::{
 };
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;
+pub use todo::TodoPanel;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
 pub use tui::{
     draw_frame, render_block, render_block_uncoloured, Key, SessionFacts, SpeakerColors, Tui,

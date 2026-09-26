@@ -520,6 +520,11 @@ pub struct TuiState {
     slash: MenuSelection,
     /// The numbers the sidebar's usage page shows, counted off the stream.
     panel: Panel,
+    /// The todo page and its latch: the list in force, read off the calls the
+    /// renderer has seen, and whether the tab is offered at all
+    /// (`.scratch/todo-and-modes/spec.md` §4). Renderer state, not an event — a
+    /// reopened session rebuilds it by replaying the same calls.
+    todo: crate::render::TodoPanel,
     /// Which sidebar page is showing. Renderer state, not an event: nothing about it
     /// belongs on the stream, and it dies with the process (spec §3).
     tab: Tab,
@@ -1227,6 +1232,7 @@ impl TuiState {
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             panel: Panel::new(),
+            todo: crate::render::TodoPanel::default(),
             tab: Tab::Usage,
             colors,
             reasoning: String::new(),
@@ -1405,6 +1411,9 @@ impl TuiState {
             // speaker's first line is what settles any name the injected roster did
             // not list (票 07).
             self.panel.observe(&block);
+            // The `todo` page is derived the same way, from the one block kind that
+            // carries a list: a call's own arguments.
+            self.todo.observe(&block);
             let lines = paint_block(&block, &mut self.colors);
             produced += lines.len();
             for rendered in lines {
@@ -2793,6 +2802,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     };
     let rows = match state.tab {
         Tab::Usage => state.panel.lines(&state.facts, page),
+        Tab::Todo => state.todo.lines(page),
         Tab::Trace | Tab::Files => vec![Line::from(Span::styled(
             truncate_columns(wording::tab_placeholder(), page.width as usize),
             Style::default().fg(Color::DarkGray),
@@ -2801,13 +2811,18 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     frame.render_widget(Paragraph::new(rows), page);
 }
 
-/// The sidebar's tab bar: two rules with the three labels between them, the selected
-/// one bright (spec §3).
+/// The sidebar's tab bar: two rules with the labels between them, the selected one
+/// bright (spec §3, `.scratch/todo-and-modes/spec.md` §4).
 ///
 /// Both rules start at the frame's left border and end at the divider column, so the
 /// sidebar reads as one compartment rather than as a block of its own. Each label
 /// records a hit rectangle as it is painted: the pointer can only hit what is really
 /// there, and the rule that fills the rest of the row is not a tab.
+///
+/// The label list is built rather than written out because `todo` is conditional —
+/// it is in the bar only once the session has a list — and everything else follows
+/// from it: the separators, the fill and the hit rectangles are all derived from the
+/// same list, so a label that is not drawn cannot be clicked.
 fn draw_tab_bar(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -2825,12 +2840,13 @@ fn draw_tab_bar(
         );
     }
     // The labels, one separator between them and the rest of the row filled with a
-    // rule, so the row reads as a bar rather than as three stranded words.
-    let entries = [
-        (Tab::Usage, wording::TAB_USAGE),
-        (Tab::Trace, wording::TAB_TRACE),
-        (Tab::Files, wording::TAB_FILES),
-    ];
+    // rule, so the row reads as a bar rather than as stranded words.
+    let mut entries = vec![(Tab::Usage, wording::TAB_USAGE)];
+    if state.todo.visible() {
+        entries.push((Tab::Todo, wording::TAB_TODO));
+    }
+    entries.push((Tab::Trace, wording::TAB_TRACE));
+    entries.push((Tab::Files, wording::TAB_FILES));
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0u16;
     for (index, (tab, label)) in entries.iter().enumerate() {
@@ -2902,6 +2918,10 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
 enum Tab {
     /// The session's readings: what the old information panel held.
     Usage,
+    /// The agent's todo list, and the only tab that is not always in the bar: it
+    /// appears the first time a main session submits a list and stays for the rest
+    /// of the session (`.scratch/todo-and-modes/spec.md` §4).
+    Todo,
     /// The call trace. Not built yet.
     Trace,
     /// The files this session touched. Not built yet.
