@@ -536,6 +536,41 @@ fn routing_to_an_unconfigured_model_is_a_startup_error() {
     assert!(error.contains("mystery"), "{error}");
 }
 
+// --- the turn caps (spec §3, story 11) ------------------------------------
+
+#[test]
+fn the_turn_table_sets_the_turn_cap() {
+    let configured = resolve(Some("[turn]\nmax_iterations = 1000\n"), &env(&[])).unwrap();
+
+    // The wiring from "a table in config.toml" to "the value the turn loop
+    // reads" runs through the one place configuration becomes injected values
+    // (`Config::session_config`), so no assembly path has to remember it.
+    let config = configured.session_config("kimi-k3").unwrap();
+    assert_eq!(config.max_iterations, 1000);
+}
+
+#[test]
+fn the_turn_table_sets_the_executors_own_cap() {
+    // An executor's cap is configured beside the dispatcher's rather than derived
+    // from it (spec §16).
+    let configured = resolve(Some("[turn]\nexecutor_max_iterations = 500\n"), &env(&[])).unwrap();
+    let config = configured.session_config("kimi-k3").unwrap();
+    assert_eq!(config.executor_max_iterations, 500);
+}
+
+#[test]
+fn a_configuration_that_says_nothing_about_turns_keeps_the_spec_defaults() {
+    // Story 11's "单 agent 默认 100 回合" and §16's 25, as the spec and the README
+    // state them. Making the caps configurable must not be a silent raise, so a
+    // configuration that never mentions `[turn]` spends exactly what it did before.
+    let plain = resolve(None, &env(&[]))
+        .unwrap()
+        .session_config("kimi-k3")
+        .unwrap();
+    assert_eq!(plain.max_iterations, 100);
+    assert_eq!(plain.executor_max_iterations, 25);
+}
+
 // --- the discussion pool (spec §15) ---------------------------------------
 
 /// The pool as `(name, model)` pairs, which is what a test wants to assert on.

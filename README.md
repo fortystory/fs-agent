@@ -69,6 +69,12 @@ api_key = "sk-..."
 temperature = 0.6
 # reasoning_effort = "high"   # 会话开始前定死，中途切档会废掉前缀缓存
 
+[turn]                        # 回合上限：一个回合最多多少次 provider 调用（spec §3 / §16）
+# max_iterations = 1000         # 一个回合的调用上限（默认 100），讨论者也走这条；
+#                               # 长任务被默认值半路掐死就调它
+# executor_max_iterations = 500 # 执行者自己的回合上限（默认 25）：独立计数，
+#                               # 所以一个失控的执行者吃不掉会话的回合预算
+
 [budget]
 session_tokens = 2000000      # 会话累计 token 上限（讨论者 / 执行者 / 合成器共用）
 estimate_margin = 1.5         # 发出去之前的估算宽容倍数
@@ -212,7 +218,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 - **12 个顶层边界，只向下依赖**：`events` · `config` · `provider` · `tools` · `permissions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`。`events` 零内部依赖；`discussion` 不碰 provider。
 - **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是外框 + 全高左栏 + 主列（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：≥ 120 列时左栏 40 列画标记，80–119 列退成文字身份，再窄整栏隐藏（见上面的「TUI 长什么样」）。
 
-默认数值：单 agent 100 回合、执行者 25 回合、同批执行者并发 5、单个工具结果 25k 估算 token、`repo_map` 1k（上限 4k）、`bash` 120s（上限 600s）。
+默认数值：单 agent 100 回合、执行者 25 回合（这两个用 `[turn]` 调）、同批执行者并发 5、单个工具结果 25k 估算 token、`repo_map` 1k（上限 4k）、`bash` 120s（上限 600s）。
 
 ## 文档
 

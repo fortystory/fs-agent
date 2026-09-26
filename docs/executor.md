@@ -48,7 +48,7 @@ line" rule is what applies to everyone else.
 
 | Value | Own or shared | Where |
 | --- | --- | --- |
-| Turn cap | **Own**, default **25** (`executor_max_iterations`) | `SessionConfig` |
+| Turn cap | **Own**, default **25**, set by `[turn] executor_max_iterations` | `SessionConfig` |
 | Model | **Inherited** from the dispatcher; `executor_model` routes it elsewhere on the *same* client | `SessionConfig` |
 | Token spend | **Shared**: counted in the session total | `UsageRecorded` on the one stream |
 | Read set | **Own, empty**: neither direction flows | read-before-edit is per agent's picture |

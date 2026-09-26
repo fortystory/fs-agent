@@ -308,6 +308,15 @@ pub struct Config {
     /// Which model the two landing points answer with (spec §17). Empty by
     /// default: v1 runs everything on the discussion's model.
     pub routing: Routing,
+    /// Hard cap on provider calls in one turn loop (spec §3). A **per-agent**
+    /// value, unlike the session's budget: two debaters each run their own turn
+    /// loop, so they do not have to agree on it.
+    pub max_iterations: u32,
+    /// Hard cap on provider calls in one executor's turn (spec §16). An executor
+    /// is built from the session config with this in place of the dispatcher's
+    /// own cap, so it is independent of [`Config::max_iterations`] by
+    /// construction rather than by a rule someone has to remember.
+    pub executor_max_iterations: u32,
     /// Who debates, when `[discussion]` is configured (spec §15). Absent means this
     /// configuration is for single-agent sessions; `fs-agent discuss` says so rather
     /// than inventing a roster.
@@ -345,7 +354,8 @@ impl Config {
 
     /// The per-agent values a session for `model_id` starts from: the model's
     /// generation parameters, the session's allowance, the price table it
-    /// displays costs with, and the routing overrides (spec §17).
+    /// displays costs with, the turn cap it may spend (spec §3), and the routing
+    /// overrides (spec §17).
     ///
     /// One function rather than the same four lines at every assembly site, so
     /// "the `[budget]` table gates the session" is true wherever a session is
@@ -361,6 +371,8 @@ impl Config {
         config.pricing = self.pricing.clone();
         config.budget = self.budget.clone();
         config.redactor = self.redactor();
+        config.max_iterations = self.max_iterations;
+        config.executor_max_iterations = self.executor_max_iterations;
         self.routing.apply(&mut config);
         Ok(config)
     }
@@ -438,6 +450,16 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let pricing = resolve_pricing(&raw, &models)?;
     let budget = resolve_budget(raw.budget.as_ref())?;
     let routing = resolve_routing(raw.routing.as_ref(), &models)?;
+    let max_iterations = raw
+        .turn
+        .as_ref()
+        .and_then(|turn| turn.max_iterations)
+        .unwrap_or(DEFAULT_MAX_ITERATIONS);
+    let executor_max_iterations = raw
+        .turn
+        .as_ref()
+        .and_then(|turn| turn.executor_max_iterations)
+        .unwrap_or(DEFAULT_EXECUTOR_MAX_ITERATIONS);
     let discussion = resolve_discussion(raw.discussion.as_ref(), &models)?;
     let tools = resolve_tools(&raw.tools)?;
 
@@ -459,6 +481,8 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         pricing,
         budget,
         routing,
+        max_iterations,
+        executor_max_iterations,
         discussion,
         tools,
     })
@@ -525,6 +549,8 @@ struct RawConfig {
     pricing: BTreeMap<String, RawPricing>,
     budget: Option<RawBudget>,
     routing: Option<RawRouting>,
+    /// `[turn]`: the turn caps (spec §3, story 11).
+    turn: Option<RawTurn>,
     /// `[discussion]`: who debates (spec §15).
     discussion: Option<RawDiscussion>,
     /// `[tools.<namespace>.<tool>]`: dynamically declared tools (spec §14).
@@ -786,6 +812,18 @@ struct RawPricing {
     cached_input: f64,
     /// Output tokens, reasoning included.
     output: f64,
+}
+
+/// The `[turn]` table (spec §3, story 11): what one agent's turn loop may cost
+/// in provider calls, and what an executor it dispatches gets instead (spec §16).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTurn {
+    /// Hard cap on provider calls in one turn.
+    max_iterations: Option<u32>,
+    /// Hard cap on provider calls in one **executor's** turn (spec §16), counted
+    /// independently of the dispatcher's.
+    executor_max_iterations: Option<u32>,
 }
 
 /// The `[budget]` table (spec §17).
