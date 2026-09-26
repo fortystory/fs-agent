@@ -530,6 +530,8 @@ pub struct TuiState {
     /// has to outlive `thinking_open` or the completion would add a second line for
     /// the same thought (票 02 §1).
     thinking_done: bool,
+    /// The rail's units and their segment heads.
+    rail: Rail,
     /// The detail behind each source line of the pane, parallel to it and pruned by
     /// the pane's own cap so the two never drift apart. `None` for the lines that are
     /// not a way into anything.
@@ -999,6 +1001,8 @@ enum HitAction {
     Submit,
     /// Show this sidebar page, as clicking its tab does (spec §3).
     SwitchTab(Tab),
+    /// Jump to the start of this unit, as clicking its rail cell does (spec §4).
+    RailUnit(usize),
 }
 
 /// A pointer gesture while a question owns it.
@@ -1109,6 +1113,87 @@ fn agrees(key: Key) -> bool {
     matches!(key, Key::Char('y') | Key::Char('Y'))
 }
 
+/// The rail's bookkeeping: one unit per completed turn or round, and where each one
+/// starts (`.scratch/tui-sidebar/spec.md` §4).
+///
+/// Two indexes and a counter, all derived from the stream — there is deliberately no
+/// remembered selection, because a stored "current unit" would drift away from the
+/// viewport the moment anything arrived.
+#[derive(Default)]
+struct Rail {
+    /// The unit each source line belongs to, parallel to `links` and pruned with it.
+    /// A line that arrived after the last boundary belongs to the unit that has not
+    /// finished yet.
+    of_line: std::collections::VecDeque<usize>,
+    /// Whether each source line is the user's own message. The head of a unit is the
+    /// first of those inside it.
+    user: std::collections::VecDeque<bool>,
+    /// The segment-head source line of each **completed** unit.
+    heads: Vec<usize>,
+    /// Source lines painted since the last boundary. Counted rather than remembered as
+    /// an index because the cap drops lines from the front.
+    lines_in_unit: usize,
+}
+
+impl Rail {
+    /// How many units the session has completed.
+    fn units(&self) -> usize {
+        self.heads.len()
+    }
+
+    /// Note one painted source line.
+    fn push_line(&mut self, user_message: bool) {
+        // The unit a line belongs to is the one being built: `units()` is how many are
+        // finished, so that is the index this line will take when its turn ends.
+        self.of_line.push_back(self.heads.len());
+        self.user.push_back(user_message);
+        self.lines_in_unit += 1;
+    }
+
+    /// The current unit ended: record where its segment starts and open the next one.
+    ///
+    /// The head is the **first user message inside the unit**, which is what a cell
+    /// click should land on: the reader asked the question, so that is where a turn
+    /// begins. A discussion unit has no user message of its own (the debaters answer
+    /// the one question the session already holds), so it falls back to the unit's own
+    /// first line — which is the round's opening narration.
+    fn close_unit(&mut self) {
+        let start = self.of_line.len().saturating_sub(self.lines_in_unit);
+        let head = (start..self.of_line.len())
+            .find(|index| self.user[*index])
+            .unwrap_or(start);
+        self.heads.push(head);
+        self.lines_in_unit = 0;
+    }
+
+    /// Drop the oldest source lines with the transcript's cap, and shift the heads
+    /// that pointed past them. A unit whose whole span is dropped collapses onto the
+    /// oldest surviving line, which is the closest thing left to jump to.
+    fn prune(&mut self, dropped: usize) {
+        for _ in 0..dropped {
+            self.of_line.pop_front();
+            self.user.pop_front();
+        }
+        for head in &mut self.heads {
+            *head = head.saturating_sub(dropped);
+        }
+        self.lines_in_unit = self.lines_in_unit.saturating_sub(dropped);
+    }
+
+    /// The unit a source line belongs to.
+    fn unit_of(&self, source: usize) -> usize {
+        self.of_line
+            .get(source)
+            .copied()
+            .unwrap_or_else(|| self.units())
+    }
+
+    /// Where a unit's segment starts.
+    fn head(&self, unit: usize) -> Option<usize> {
+        self.heads.get(unit).copied()
+    }
+}
+
 /// A history replay in flight: the assembled event stream, how much of it has been
 /// laid into the transcript, and how many source lines that produced.
 ///
@@ -1146,6 +1231,7 @@ impl TuiState {
             thinking_speaker: crate::events::SpeakerId::System,
             thinking_open: false,
             thinking_done: false,
+            rail: Rail::default(),
             links: std::collections::VecDeque::new(),
             drawn_rows: Vec::new(),
             drawn_top: 0,
@@ -1316,10 +1402,25 @@ impl TuiState {
                 let link = rendered.link;
                 self.pane.push(rendered.line);
                 self.links.push_back(link);
+                self.rail.push_line(is_user_message(&block));
                 self.prune_links();
+            }
+            // A turn's end closes a unit; so does a round's, in a discussion — where
+            // the unit is the **round**, because that is the thing a discussion counts
+            // (`CONTEXT.md` keeps 轮次 and 回合 apart, spec §4).
+            if is_boundary(&block, self.discussion()) {
+                self.rail.close_unit();
             }
         }
         produced
+    }
+
+    /// Whether this session counts **rounds** rather than turns.
+    ///
+    /// Injected rather than inferred: a discussion is a session with more than one
+    /// debater, and that is part of what assembly already knows (spec §4).
+    fn discussion(&self) -> bool {
+        self.facts.speaker_order.len() > 1
     }
 
     /// Feed one **live** render event: an event that arrived while the renderer is
@@ -1533,9 +1634,17 @@ impl TuiState {
     /// Drop the oldest links until this list is no longer than the pane's cap, which
     /// is the only way the two stay parallel: a source row means the same thing in
     /// both or neither (票 04 §1).
+    ///
+    /// The rail's per-line index is pruned in the same breath, and for the same
+    /// reason: a source line's unit is looked up by the index the pane hands back.
     fn prune_links(&mut self) {
+        let before = self.links.len();
         while self.links.len() > pane::CAP {
             self.links.pop_front();
+        }
+        let dropped = before - self.links.len();
+        if dropped > 0 {
+            self.rail.prune(dropped);
         }
     }
 
@@ -1604,6 +1713,7 @@ impl TuiState {
             MouseEventKind::Down(MouseButton::Left) => {
                 match self.regions.action_at(mouse.column, mouse.row) {
                     Some(HitAction::SwitchTab(tab)) => self.tab = tab,
+                    Some(HitAction::RailUnit(unit)) => self.jump_to_unit(unit),
                     _ if self.indicator_hit(mouse.column, mouse.row) => self.pane.to_bottom(),
                     _ => {
                         let width = layout::plan(self.area, 1).detail_width() as usize;
@@ -1725,6 +1835,37 @@ impl TuiState {
         if submitted {
             self.questionnaire_key(Key::Enter);
         }
+    }
+
+    /// The unit the viewport's top row belongs to — the rail's bright cell.
+    ///
+    /// A **derived** quantity, deliberately: the viewport is the state, and a stored
+    /// "current unit" would drift the first time anything arrived or the reader
+    /// scrolled. At the bottom it is the newest unit, which is what "I am following the
+    /// conversation" means even when the whole transcript fits on one screen
+    /// (spec §4).
+    fn focused_unit(&self) -> Option<usize> {
+        let units = self.rail.units();
+        if units == 0 {
+            return None;
+        }
+        if self.pane.following() {
+            return Some(units - 1);
+        }
+        let source = self.pane.source_at(self.pane.top())?;
+        Some(self.rail.unit_of(source).min(units - 1))
+    }
+
+    /// Jump to the start of a unit: what clicking its cell does.
+    ///
+    /// The landing is **top-aligned**, so every jump lands where the eye expects; the
+    /// newest unit clamps to the bottom instead, which is the same rule read at the
+    /// end of the transcript rather than a special case (spec §4).
+    fn jump_to_unit(&mut self, unit: usize) {
+        let Some(head) = self.rail.head(unit) else {
+            return;
+        };
+        self.pane.scroll_to_source(head);
     }
 
     /// The clickable link a click landed on, as a copy of what it opens.
@@ -2966,7 +3107,52 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
         .collect();
     frame.render_widget(Paragraph::new(rows), text_area);
     draw_scrollbar(frame, panes.scrollbar(), &state.pane);
+    draw_rail(frame, panes, state);
     draw_indicator(frame, text_area, state);
+}
+
+/// The rail: one cell per turn, or per round in a discussion, down the transcript's
+/// right edge (spec §4).
+///
+/// The cell the viewport is in is the bright one, and it is **derived** from what the
+/// pane is showing — never stored — so it cannot drift from the reader's position. Each
+/// cell records where it was painted, so a click can only land on a cell that is really
+/// on screen.
+fn draw_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    let rows = panes.rail.height as usize;
+    if rows == 0 || panes.rail.width == 0 {
+        return;
+    }
+    let units = state.rail.units();
+    if units == 0 {
+        // An empty session has an empty column: no cells, and no `⋮` pretending there
+        // is history above (spec §4).
+        return;
+    }
+    let focus = state.focused_unit().unwrap_or(units - 1);
+    let style = Style::default().fg(Color::DarkGray);
+    let focus_style = Style::default()
+        .fg(Color::LightMagenta)
+        .add_modifier(Modifier::BOLD);
+    for (offset, slot) in rail_rows(rows, units, focus).into_iter().enumerate() {
+        let (symbol, style, unit) = match slot {
+            RailRow::Blank => continue,
+            RailRow::Cut => (wording::RAIL_TRUNCATED, style, None),
+            RailRow::Unit(unit) if unit == focus => (wording::RAIL_FOCUS, focus_style, Some(unit)),
+            RailRow::Unit(unit) => (wording::RAIL_CELL, style, Some(unit)),
+        };
+        let y = panes.rail.y + offset as u16;
+        let buffer = frame.buffer_mut();
+        buffer[(panes.rail.x, y)]
+            .set_symbol(symbol)
+            .set_style(style);
+        if let Some(unit) = unit {
+            state.regions.cells.push(Region {
+                rect: Rect::new(panes.rail.x, y, 1, 1),
+                action: HitAction::RailUnit(unit),
+            });
+        }
+    }
 }
 
 /// The transcript's scrollbar: drawn only when there is more than a pane's worth,
@@ -3726,6 +3912,113 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
         },
     };
     vec![RenderedLine::linked(Line::from(call), detail)]
+}
+
+/// Whether a source line is the user's own message, which is what a rail cell's jump
+/// aims at (spec §4).
+fn is_user_message(block: &Block) -> bool {
+    matches!(
+        block,
+        Block::Message {
+            speaker: crate::events::SpeakerId::User,
+            ..
+        }
+    )
+}
+
+/// Whether this block ends the unit the rail counts.
+///
+/// A discussion counts its **rounds** and an interactive session its turns; the two
+/// boundaries both exist in a discussion's stream, so which one counts is a property
+/// of the session rather than of the block (spec §4).
+fn is_boundary(block: &Block, discussion: bool) -> bool {
+    if discussion {
+        matches!(block, Block::RoundEnded { .. })
+    } else {
+        matches!(block, Block::TurnEnded { .. })
+    }
+}
+
+/// One row of the rail's column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RailRow {
+    /// The unit with this index, counted from the oldest.
+    Unit(usize),
+    /// Units were left out at this end: `⋮`.
+    Cut,
+    /// Nothing is drawn here.
+    Blank,
+}
+
+/// The rail's slots for a transcript `rows` rows tall, `units` units long, with the
+/// viewport on `focus`.
+///
+/// Two properties, and both are the spec's (§4):
+///
+/// * the focus cell is always among them — that is the whole point of the column;
+/// * whichever end had units cut says so with a `⋮`.
+///
+/// The window is bottom-anchored whenever it can be, and slides up only as far as the
+/// focus needs: a viewport at the bottom shows the newest units, and one parked in the
+/// middle shows the units around it. Keeping only the newest N — the first thing this
+/// was written as — left a viewport parked on an old unit with **no** bright cell at
+/// all, which is the frame `prototype/frames/120x24-rail-30-units-focus-12-gap.txt`
+/// records.
+fn rail_rows(rows: usize, units: usize, focus: usize) -> Vec<RailRow> {
+    let mut out = vec![RailRow::Blank; rows];
+    if rows == 0 || units == 0 {
+        return out;
+    }
+    let focus = focus.min(units - 1);
+    if units <= rows {
+        // Every unit fits: newest at the bottom, blank above.
+        for index in 0..units {
+            out[rows - units + index] = RailRow::Unit(index);
+        }
+        return out;
+    }
+    // More units than rows. One slot is the focus, and each end that had units cut
+    // spends another; a terminal so short that even those do not fit keeps the focus
+    // cell and gives the marks up.
+    let above = focus;
+    let below = units - 1 - focus;
+    let mut budget = rows - 1;
+    let mut top_cut = above > 0;
+    let mut bottom_cut = below > 0;
+    if top_cut {
+        if budget > 0 {
+            budget -= 1;
+        } else {
+            top_cut = false;
+        }
+    }
+    if bottom_cut {
+        if budget > 0 {
+            budget -= 1;
+        } else {
+            bottom_cut = false;
+        }
+    }
+    // Split what is left between the two sides, giving each no more than it has and
+    // handing the remainder back to the older side: a viewport at the bottom takes
+    // everything above it, one in the middle comes out roughly centred.
+    let mut above_taken = above.min(budget / 2);
+    let below_taken = below.min(budget - above_taken);
+    above_taken += (above - above_taken).min(budget - above_taken - below_taken);
+
+    let mut cells: Vec<RailRow> = Vec::with_capacity(rows);
+    if top_cut {
+        cells.push(RailRow::Cut);
+    }
+    let first = focus - above_taken;
+    for index in first..first + above_taken + 1 + below_taken {
+        cells.push(RailRow::Unit(index));
+    }
+    if bottom_cut {
+        cells.push(RailRow::Cut);
+    }
+    out[rows - cells.len()..].copy_from_slice(&cells);
+    out
 }
 
 /// The text of a painted line, for a title.

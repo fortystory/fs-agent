@@ -211,6 +211,20 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
+/// The rail's column at 120x40: the characters drawn in it, blanks dropped.
+///
+/// The rail sits in the transcript's last column, inside the frame at 119 — the
+/// scrollbar takes the one before it (`.scratch/tui-sidebar/spec.md` §1).
+fn rail_shape(state: &mut TuiState) -> String {
+    let frame = buffer(120, 40, state);
+    (1..39u16)
+        // The transcript ends where the main column's first rule begins.
+        .take_while(|y| !row_text(&frame, *y, 120).ends_with('┤'))
+        .map(|y| frame[(118, y)].symbol().chars().next().unwrap_or(' '))
+        .filter(|ch| *ch != ' ')
+        .collect()
+}
+
 fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
     let mut text = String::new();
     let mut x = from;
@@ -650,6 +664,47 @@ fn the_panel_adds_up_the_history_and_keeps_accumulating() {
     assert!(tokens.contains("180"), "100+20+50+10: {tokens:?}");
     assert!(turns.contains('2'), "two turns: {turns:?}");
     assert!(input.contains("150"), "100+50 input: {input:?}");
+}
+
+#[test]
+fn the_rail_grows_with_the_replayed_history() {
+    // The rail is derived from the stream like everything else, so a reopened session
+    // finds its turns already on the column — and during the replay it fills a batch at
+    // a time rather than appearing whole (spec §4).
+    let mut state = state();
+    let history: Vec<Event> = (1..=40).map(turn_ended).collect();
+    replay(&mut state, history);
+    run_replay(&mut state);
+
+    // Forty turns, all cut down to the column's own height: the mark at the top and the
+    // newest turn at the foot as the focus, because a finished replay returns the
+    // viewport to the bottom.
+    let shape = rail_shape(&mut state);
+    assert_eq!(
+        shape.chars().next(),
+        Some('⋮'),
+        "the column says older turns are above: {shape}"
+    );
+    assert_eq!(
+        shape.chars().last(),
+        Some('┃'),
+        "and the newest turn is the focus: {shape}"
+    );
+    assert_eq!(
+        shape.matches('┃').count(),
+        1,
+        "exactly one focus cell: {shape}"
+    );
+
+    // A live turn after the seam adds its cell, so history and this session share one
+    // rail rather than starting a second.
+    let before = shape.len();
+    state.live_event(RenderEvent::Logged(turn_ended(41)));
+    let after = rail_shape(&mut state);
+    assert!(
+        after.len() >= before && after.ends_with('┃'),
+        "the new turn took its cell and the focus moved to it: {after}"
+    );
 }
 
 #[test]

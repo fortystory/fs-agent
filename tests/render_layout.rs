@@ -30,6 +30,14 @@ fn state() -> TuiState {
     TuiState::new(facts())
 }
 
+/// The injected facts for a session with this roster: one name is a session with a
+/// single speaker, two make it a discussion.
+fn facts_with_roster(names: &[&str]) -> SessionFacts {
+    let mut facts = facts();
+    facts.speaker_order = names.iter().map(|name| (*name).to_owned()).collect();
+    facts
+}
+
 /// A state whose loop is **waiting for a line** — what an idle front end looks like.
 ///
 /// The distinction matters: inside a run, `Esc` and `Ctrl-C` are the cancel gesture
@@ -825,6 +833,375 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     );
 }
 
+/// The rail's column at 120x24: one character per transcript row, top to bottom.
+fn rail_cells(state: &mut TuiState) -> Vec<char> {
+    let rows = screen(120, 24, state);
+    let transcript = transcript_rows(&rows);
+    let frame = buffer(120, 24, state);
+    (TRANSCRIPT_TOP..TRANSCRIPT_TOP + transcript)
+        .map(|y| {
+            frame[(RAIL_AT_120, y as u16)]
+                .symbol()
+                .chars()
+                .next()
+                .unwrap_or(' ')
+        })
+        .collect()
+}
+
+/// The rail's column as a compact string: `⋮` and `┃`/`┊` only, blanks dropped.
+fn rail_shape(state: &mut TuiState) -> String {
+    rail_cells(state)
+        .into_iter()
+        .filter(|ch| *ch != ' ')
+        .collect()
+}
+
+/// One `MessageCompleted` from the **user**.
+fn user_message(seq: u64, text: &str) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, Role, SpeakerId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::User,
+        EventPayload::MessageCompleted {
+            role: Role::User,
+            text: text.to_owned(),
+            reasoning: None,
+        },
+    ))
+}
+
+/// One `TurnStarted`.
+fn turn_started(seq: u64) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{Event, EventPayload, SpeakerId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::TurnStarted {
+            agent: SpeakerId::Debater("kimi".into()),
+            iteration: 1,
+        },
+    ))
+}
+
+/// One whole turn: the user's question, the turn's start, one answer and the turn's
+/// end. Four source lines, so a test that wants N units asks for N of these.
+fn a_turn(state: &mut TuiState, seq: u64, question: &str) {
+    state.apply(user_message(seq, question));
+    state.apply(turn_started(seq + 1));
+    state.apply(message(seq + 2, "回答", None));
+    state.apply(turn_ended(seq + 3));
+}
+
+/// `count` whole turns, numbered from zero.
+fn turns(state: &mut TuiState, count: u64) {
+    for index in 0..count {
+        a_turn(state, index * 4 + 1, &format!("问题 {index}"));
+    }
+}
+
+/// The first transcript row's text, which is where a rail jump lands.
+fn top_transcript_row(state: &mut TuiState) -> String {
+    let rows = screen(120, 24, state);
+    rows[TRANSCRIPT_TOP].clone()
+}
+
+#[test]
+fn the_rail_grows_one_cell_per_turn_and_keeps_the_newest_at_the_foot() {
+    // An empty session has an empty column: no cells, and no `⋮` pretending there is
+    // history above (spec §4).
+    let mut fresh = state();
+    assert_eq!(rail_shape(&mut fresh), "");
+
+    let mut state = state();
+    turns(&mut state, 3);
+    // Three turns, bottom-anchored, and the newest is the bright one.
+    assert_eq!(rail_shape(&mut state), "┊┊┃");
+    assert_eq!(
+        rail_cells(&mut state).len(),
+        transcript_rows_at_120x24(),
+        "the column is as tall as the transcript and no taller"
+    );
+    let cells = rail_cells(&mut state);
+    assert!(
+        cells[transcript_rows_at_120x24() - 3..]
+            .iter()
+            .all(|ch| *ch != ' '),
+        "the three cells sit at the foot: {cells:?}"
+    );
+
+    turns(&mut state, 1);
+    assert_eq!(
+        rail_shape(&mut state),
+        "┊┊┊┃",
+        "the fourth turn adds a cell"
+    );
+}
+
+#[test]
+fn the_truncation_mark_appears_only_where_units_were_cut() {
+    let mut state = state();
+    turns(&mut state, 3);
+    assert!(
+        !rail_shape(&mut state).contains('⋮'),
+        "nothing is cut when everything fits"
+    );
+
+    // More turns than rows: the newest are shown and the top cell says older ones are
+    // above. Nothing is cut at the bottom, because the viewport is at the bottom.
+    let mut scrolled = TuiState::new(facts());
+    turns(&mut scrolled, 30);
+    let shape = rail_shape(&mut scrolled);
+    assert_eq!(
+        shape.chars().next(),
+        Some('⋮'),
+        "the top cell says there is more above: {shape}"
+    );
+    assert_eq!(
+        shape.chars().last(),
+        Some('┃'),
+        "and the newest turn is the foot: {shape}"
+    );
+    assert_eq!(
+        shape.matches('┃').count() + shape.matches('┊').count(),
+        transcript_rows_at_120x24() - 1,
+        "the mark costs one cell: {shape}"
+    );
+
+    // Park the viewport at the very top: now it is the units **below** that are cut.
+    let _ = screen(120, 24, &mut scrolled);
+    for _ in 0..40 {
+        scrolled.key(fs_agent::render::Key::PageUp);
+    }
+    let shape = rail_shape(&mut scrolled);
+    assert_eq!(
+        shape.chars().last(),
+        Some('⋮'),
+        "the foot now says there is more below: {shape}"
+    );
+    assert_eq!(
+        shape.chars().next(),
+        Some('┃'),
+        "and the focus is the oldest turn on screen: {shape}"
+    );
+    assert_eq!(
+        shape.matches('┃').count(),
+        1,
+        "exactly one cell is the focus: {shape}"
+    );
+}
+
+#[test]
+fn the_rail_window_follows_the_focus_wherever_the_viewport_is() {
+    // The prototype's hole: keeping only the newest cells left a viewport parked on an
+    // old unit with **no** bright cell at all
+    // (`prototype/frames/120x24-rail-30-units-focus-12-gap.txt`). The window moves with
+    // the focus instead, so there is always exactly one — this is that regression.
+    let mut state = state();
+    turns(&mut state, 30);
+    let _ = screen(120, 24, &mut state);
+
+    let visible = transcript_rows_at_120x24();
+    // Walk up one page at a time and check the invariant at every stop, including the
+    // ones where the focus lands in the middle of the unit list.
+    for _ in 0..20 {
+        state.key(fs_agent::render::Key::PageUp);
+        let shape = rail_shape(&mut state);
+        assert_eq!(
+            shape.matches('┃').count(),
+            1,
+            "exactly one bright cell at every position: {shape}"
+        );
+        assert!(
+            shape.chars().filter(|ch| *ch != '⋮').count() <= visible,
+            "and no more cells than the column has rows: {shape}"
+        );
+    }
+}
+
+#[test]
+fn the_focus_is_the_unit_the_top_row_belongs_to() {
+    let mut state = state();
+    turns(&mut state, 30);
+    let _ = screen(120, 24, &mut state);
+
+    // At the bottom the focus is the newest unit, whatever the top row happens to be —
+    // the viewport is following the conversation, and that is what "newest" means.
+    assert_eq!(
+        rail_cells(&mut state).iter().rposition(|ch| *ch == '┃'),
+        Some(transcript_rows_at_120x24() - 1),
+        "following the bottom puts the focus on the last row"
+    );
+
+    // Scrolled away, the focus is the unit the viewport's top row is inside.
+    let question = top_transcript_row(&mut state);
+    state.key(fs_agent::render::Key::PageUp);
+    let shape = rail_shape(&mut state);
+    assert_eq!(shape.matches('┃').count(), 1, "one focus cell: {shape}");
+    assert_ne!(
+        rail_cells(&mut state).iter().rposition(|ch| *ch == '┃'),
+        Some(transcript_rows_at_120x24() - 1),
+        "and it is no longer the newest: {shape}"
+    );
+    assert!(!question.is_empty(), "the top row had text: {question:?}");
+}
+
+#[test]
+fn clicking_a_rail_cell_jumps_to_that_turns_question() {
+    // The story the rail exists for: click a cell, land on the question you asked —
+    // top-aligned, so every jump lands where the eye expects (spec §4).
+    let mut state = state();
+    turns(&mut state, 30);
+    let _ = screen(120, 24, &mut state);
+
+    // The cells are the newest fifteen units, bottom-anchored under a `⋮`, so the cell
+    // just below the mark is fifteen turns back from the end and the one four rows
+    // below that is an older turn still. Each is clicked in a fresh state, because a
+    // jump moves the viewport — and with it the window of cells.
+    for (offset, unit) in [(1usize, 15u64), (5, 19)] {
+        let mut state = TuiState::new(facts());
+        turns(&mut state, 30);
+        let _ = screen(120, 24, &mut state);
+        let cells = rail_cells(&mut state);
+        let mark = cells
+            .iter()
+            .position(|ch| *ch == '⋮')
+            .expect("the column is cut at the top");
+        state.mouse(click(RAIL_AT_120, (TRANSCRIPT_TOP + mark + offset) as u16));
+        assert!(
+            top_transcript_row(&mut state).contains(&format!("[用户] 问题 {unit}")),
+            "the jump lands on that turn's own question: {:?}",
+            top_transcript_row(&mut state)
+        );
+    }
+}
+
+#[test]
+fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
+    // The newest unit has less than a screenful left, so the jump clamps — which is the
+    // same rule read at the end of the transcript rather than a special case, and it is
+    // why clicking the focus cell usually looks like nothing happened (spec §4).
+    let mut state = state();
+    turns(&mut state, 30);
+    let _ = screen(120, 24, &mut state);
+
+    let before = top_transcript_row(&mut state);
+    state.mouse(click(
+        RAIL_AT_120,
+        (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 1) as u16,
+    ));
+    assert_eq!(
+        top_transcript_row(&mut state),
+        before,
+        "clicking the foot cell keeps the viewport where it was"
+    );
+    assert_eq!(
+        rail_cells(&mut state).last(),
+        Some(&'┃'),
+        "and the viewport is still following the newest turn"
+    );
+}
+
+#[test]
+fn a_discussion_counts_rounds_where_a_session_counts_turns() {
+    use fs_agent::events::{Event, EventPayload, Role, RoundMode, SpeakerId, StopReason};
+
+    // `speaker_order` with more than one debater is what makes a session a discussion,
+    // and a discussion counts its rounds — `CONTEXT.md` keeps 轮次 and 回合 apart
+    // (spec §4).
+    let mut state = TuiState::new(facts_with_roster(&["kimi", "deepseek"]));
+    let kimi = SpeakerId::Debater("kimi".into());
+    state.apply(user_message(1, "讨论题目"));
+    for round in 0..3u32 {
+        for (offset, payload) in [
+            EventPayload::RoundStarted {
+                round,
+                mode: RoundMode::Independent,
+            },
+            EventPayload::MessageCompleted {
+                role: Role::Assistant,
+                text: format!("第 {round} 轮"),
+                reasoning: None,
+            },
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+            EventPayload::RoundEnded {
+                round,
+                reason: StopReason::Completed,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            state.apply(fs_agent::render::RenderEvent::Logged(Event::new(
+                2 + u64::from(round) * 4 + offset as u64,
+                kimi.clone(),
+                payload,
+            )));
+        }
+    }
+
+    // Three rounds and three `TurnEnded`s: the rail counts the rounds.
+    assert_eq!(rail_shape(&mut state), "┊┊┃");
+
+    // The first round's head is the user's question — the one message a discussion does
+    // carry, recorded before the first round opened...
+    let first = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 3) as u16;
+    state.mouse(click(RAIL_AT_120, first));
+    assert!(
+        top_transcript_row(&mut state).contains("[用户] 讨论题目"),
+        "the session's question is where the first cell lands: {:?}",
+        top_transcript_row(&mut state)
+    );
+
+    // ...and a later round has no user message of its own, so its cell lands on the
+    // round's opening line — the spec's fallback for a unit with nothing to aim at.
+    let mut later = TuiState::new(facts_with_roster(&["kimi", "deepseek"]));
+    later.apply(user_message(1, "讨论题目"));
+    for round in 0..3u32 {
+        for (offset, payload) in [
+            EventPayload::RoundStarted {
+                round,
+                mode: RoundMode::Independent,
+            },
+            EventPayload::MessageCompleted {
+                role: Role::Assistant,
+                text: format!("第 {round} 轮"),
+                reasoning: None,
+            },
+            EventPayload::RoundEnded {
+                round,
+                reason: StopReason::Completed,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            later.apply(fs_agent::render::RenderEvent::Logged(Event::new(
+                2 + u64::from(round) * 3 + offset as u64,
+                kimi.clone(),
+                payload,
+            )));
+        }
+    }
+    // Padding, so the transcript is taller than the pane and a jump has somewhere to
+    // land: a notice is neither a user message nor a boundary, so the units stand.
+    for index in 0..40 {
+        later.apply(fs_agent::render::RenderEvent::Notice(format!(
+            "第 {index} 行"
+        )));
+    }
+    assert_eq!(rail_shape(&mut later), "┊┊┃");
+    let second = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 2) as u16;
+    later.mouse(click(RAIL_AT_120, second));
+    assert!(
+        top_transcript_row(&mut later).contains("── 第 1 轮"),
+        "a round with no user message of its own lands on its first line: {:?}",
+        top_transcript_row(&mut later)
+    );
+}
+
 #[test]
 fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
     use fs_agent::render::{Key, RenderEvent};
@@ -881,6 +1258,7 @@ fn transcript_rows_at_120x24() -> usize {
 const MAIN_LEFT_AT_120: u16 = 42;
 const TRANSCRIPT_TEXT_RIGHT_AT_120: u16 = 117;
 const SCROLLBAR_AT_120: u16 = 117;
+const RAIL_AT_120: u16 = 118;
 
 /// The transcript's text at 120x24, one string per display row.
 ///

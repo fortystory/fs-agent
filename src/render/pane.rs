@@ -155,6 +155,25 @@ impl Pane {
         self.window(height, &live_rows)
     }
 
+    /// Put the top of the viewport on a **source line**, top-aligned.
+    ///
+    /// This is how the rail's cells jump: the unit a cell stands for is a range of
+    /// source lines, and landing on its first one puts the reader at the start of that
+    /// turn rather than somewhere inside it (`.scratch/tui-sidebar/spec.md` §4). A line
+    /// that is already past the last full screenful — the newest unit, usually —
+    /// clamps to the bottom, so the last cell needs no special case.
+    pub fn scroll_to_source(&mut self, source: usize) {
+        let row = self.starts.get(source).copied().unwrap_or(0);
+        self.follow = false;
+        let max_top = self.total.saturating_sub(self.height as usize);
+        self.top = row.min(max_top);
+        if self.top >= max_top {
+            self.follow = true;
+            self.seen = self.total;
+        }
+        self.sync_top_source();
+    }
+
     /// Scroll by `rows` display rows; negative is up.
     pub fn scroll(&mut self, rows: isize) {
         let max_top = self.total.saturating_sub(self.height as usize);
