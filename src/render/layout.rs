@@ -68,6 +68,15 @@ const SIDEBAR_MIN_FIELDS: u16 = 3;
 /// The most input rows the input area will ever hold (spec §2).
 const MAX_INPUT_ROWS: u16 = 10;
 
+/// The fewest rows the input area ever holds, whatever the draft wraps to
+/// (`.scratch/tui-input-pulse/spec.md` §1).
+///
+/// It is the **area's** floor, not the draft's: the editor still answers one row for
+/// an empty draft, and the rows under it are simply blank. A place to write three
+/// lines that does not grow the moment the third line arrives is the whole point —
+/// the box used to jump under the cursor as the draft did.
+const MIN_INPUT_ROWS: u16 = 3;
+
 /// Which of the three sidebar identities a frame draws.
 ///
 /// The ladder is decided here, in [`sidebar_content`], so the painter asks this
@@ -283,11 +292,18 @@ pub fn content_width(area: Rect) -> u16 {
 /// The order here **is** the degrade ladder: the sidebar is narrowed, then hidden,
 /// as the terminal narrows; the input grows into the transcript's rows as the draft
 /// does; and the sidebar's own height decides which of its parts survive (spec §2).
+///
+/// The input's own ladder is [`MIN_INPUT_ROWS`] … [`MAX_INPUT_ROWS`], and the floor
+/// is clamped by the room: **the transcript's last row wins** where the two meet, so
+/// 40×10 draws a two-row input with one transcript row above it rather than three
+/// rows and no transcript at all.
 pub fn plan(area: Rect, draft_rows: u16) -> Regions {
     let inner = inner(area);
     let tier = sidebar_tier(area.width);
     let (sidebar_kind, fields) = sidebar_content(area.width, inner.height);
-    let input_rows = draft_rows.max(1).min(max_input_rows(area.height));
+    let input_rows = draft_rows
+        .max(MIN_INPUT_ROWS)
+        .min(max_input_rows(area.height));
     let transcript_rows = area.height.saturating_sub(CHROME + input_rows);
 
     let sidebar = tier.map(|tier| Rect::new(inner.x, inner.y, tier, inner.height));
@@ -400,6 +416,9 @@ pub fn inner(area: Rect) -> Rect {
 
 /// How many rows the input may take at this size: its cap, or what is left once the
 /// transcript keeps its floor row, whichever is smaller.
+///
+/// At 40×10 that room is two rows, so this — not [`MIN_INPUT_ROWS`] — is what the
+/// input gets there.
 fn max_input_rows(height: u16) -> u16 {
     let room = height.saturating_sub(CHROME + 1);
     MAX_INPUT_ROWS.min(room).max(1)

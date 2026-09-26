@@ -173,25 +173,38 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     );
 
     // The divider runs the whole height of the frame, and the main column's rules
-    // meet it with junctions.
+    // meet it with junctions. A 24-row terminal leaves the transcript fourteen rows:
+    // three go to the input's floor and seven to the chrome
+    // (`.scratch/tui-input-pulse/spec.md` §1).
     assert_eq!(
         transcript_rows(&rows),
-        16,
-        "120x24 gives the transcript 16 rows"
+        14,
+        "120x24 gives the transcript 14 rows"
     );
     assert!(
-        rows[17].contains('├') && rows[17].contains('┤'),
+        rows[15].contains('├') && rows[15].contains('┤'),
         "the rule above the status row spans the main column: {:?}",
-        rows[17]
+        rows[15]
     );
     assert!(
-        rows[18].contains("模型 claude-sonnet-4-5")
-            && rows[18].contains("模式 询问")
-            && rows[18].contains("上下文 —"),
+        rows[16].contains("模型 claude-sonnet-4-5")
+            && rows[16].contains("模式 询问")
+            && rows[16].contains("上下文 —"),
         "the status row names the model, the mode and the share: {:?}",
+        rows[16]
+    );
+    assert!(
+        rows[18].contains("│> "),
+        "the input's first row carries the prompt: {:?}",
         rows[18]
     );
-    assert!(rows[20].contains("> "), "the input row: {:?}", rows[20]);
+    assert!(
+        rows[19].trim_matches(['│', ' ']).is_empty()
+            && rows[20].trim_matches(['│', ' ']).is_empty(),
+        "and the two under it are blank rows of the same box: {:?} / {:?}",
+        rows[19],
+        rows[20]
+    );
     assert!(
         rows[22].contains("ctrl-c"),
         "the hints name the way out: {:?}",
@@ -332,18 +345,31 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
             "row {row} belongs to the frame: {line:?}"
         );
     }
-    assert_eq!(transcript_rows(&rows), 2, "two transcript rows: {rows:#?}");
+    // The input's floor is three rows, but the transcript's last row wins where the
+    // two meet: at the floor the input takes two and the transcript keeps one
+    // (`.scratch/tui-input-pulse/spec.md` §1). Its rows are 5 and 6, the rules are
+    // above and below them, and the hint row keeps the eighth either way.
+    assert_eq!(transcript_rows(&rows), 1, "one transcript row: {rows:#?}");
     assert!(
-        rows[4].contains("模式 询问") && rows[4].contains("上下文 —"),
+        rows[5].starts_with("│> "),
+        "the input's first row is the prompt's: {:?}",
+        rows[5]
+    );
+    assert!(
+        rows[6].trim_matches(['│', ' ']).is_empty(),
+        "and it takes two rows here, not three: {:?}",
+        rows[6]
+    );
+    assert!(
+        rows[3].contains("模式 询问") && rows[3].contains("上下文 —"),
         "the status row gives up the model at the floor: {:?}",
-        rows[4]
+        rows[3]
     );
     assert!(
-        !rows[4].contains("claude-sonnet"),
+        !rows[3].contains("claude-sonnet"),
         "which is the first thing it loses: {:?}",
-        rows[4]
+        rows[3]
     );
-    assert!(rows[6].contains("> "), "the input row: {:?}", rows[6]);
     assert!(rows[8].contains("ctrl-c"), "the hint row: {:?}", rows[8]);
     assert!(
         !rows.join("\n").contains("fs-agent"),
@@ -521,14 +547,17 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // rung, and the transcript rows the chrome leaves (spec §1–§2).
     let cases = [
         // width, height, sidebar tier, identity, model on the status row, transcript rows
-        (40u16, 10u16, None, "", false, 2usize),
-        (40, 24, None, "", false, 16),
-        (60, 24, None, "", true, 16),
-        (80, 14, Some(28u16), "fs-agent", true, 6),
-        (80, 24, Some(28), "fs-agent", true, 16),
-        (100, 24, Some(28), "fs-agent", true, 16),
-        (120, 24, Some(40), "mark", true, 16),
-        (174, 50, Some(40), "mark", true, 42),
+        // The input's floor is three rows, so every rung that has the room gives the
+        // transcript `h - 7 - 3`; at the 40x10 floor the input takes two instead and
+        // the transcript keeps its last row (`.scratch/tui-input-pulse/spec.md` §1).
+        (40u16, 10u16, None, "", false, 1usize),
+        (40, 24, None, "", false, 14),
+        (60, 24, None, "", true, 14),
+        (80, 14, Some(28u16), "fs-agent", true, 4),
+        (80, 24, Some(28), "fs-agent", true, 14),
+        (100, 24, Some(28), "fs-agent", true, 14),
+        (120, 24, Some(40), "mark", true, 14),
+        (174, 50, Some(40), "mark", true, 40),
     ];
     for (width, height, tier, identity, model, rows_expected) in cases {
         let rows = screen(width, height, &mut state());
@@ -1059,11 +1088,12 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
     turns(&mut state, 30);
     let _ = screen(120, 24, &mut state);
 
-    // The cells are the newest fifteen units, bottom-anchored under a `⋮`, so the cell
-    // just below the mark is fifteen turns back from the end and the one four rows
-    // below that is an older turn still. Each is clicked in a fresh state, because a
+    // The window is bottom-anchored under a `⋮`: at 120x24 the transcript is fourteen
+    // rows, so one is the mark and thirteen are cells — units 17 through 30, top to
+    // bottom. Offset 1 is therefore unit 17 (thirteen turns back from the end) and
+    // offset 5 is unit 21 (nine back). Each is clicked in a fresh state, because a
     // jump moves the viewport — and with it the window of cells.
-    for (offset, unit) in [(1usize, 15u64), (5, 19)] {
+    for (offset, unit) in [(1usize, 17u64), (5, 21)] {
         let mut state = TuiState::new(facts());
         turns(&mut state, 30);
         let _ = screen(120, 24, &mut state);
@@ -1540,29 +1570,37 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
 }
 
 #[test]
-fn the_input_area_grows_with_the_draft_and_the_transcript_gives_up_the_rows() {
+fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_it() {
     // The input sits under the transcript, the status row and their two rules; what a
     // taller draft buys is transcript rows given up, not a block that moves up as a
-    // whole.
+    // whole. Its floor is three rows, so an empty draft and a three-line one cost the
+    // transcript exactly the same — that is what the floor is for
+    // (`.scratch/tui-input-pulse/spec.md` §1).
     let mut state = state();
-    let one = screen(80, 24, &mut state);
-    let rows = transcript_rows(&one);
+    let empty = screen(80, 24, &mut state);
+    let rows = transcript_rows(&empty);
     assert_eq!(
-        rows, 16,
-        "one input row leaves the transcript sixteen: {one:#?}"
+        rows, 14,
+        "three input rows leave the transcript fourteen: {empty:#?}"
     );
+    let input = TRANSCRIPT_TOP + rows + 3;
+    assert!(empty[input].contains("> "), "the prompt: {:?}", empty[input]);
     assert!(
-        one[TRANSCRIPT_TOP + rows + 3].contains("> "),
-        "the prompt: {:?}",
-        one[TRANSCRIPT_TOP + rows + 3]
+        empty[input + 1].trim_matches(['│', ' ']).is_empty()
+            && empty[input + 2].trim_matches(['│', ' ']).is_empty(),
+        "and the two rows it holds open are blank, not a second block: {:?} / {:?}",
+        empty[input + 1],
+        empty[input + 2]
     );
 
+    // Three lines of draft move nothing: the box was already that tall, so the
+    // transcript keeps every row it had.
     state.paste("第一行\n第二行\n第三行");
     let three = screen(80, 24, &mut state);
     let rows = transcript_rows(&three);
     assert_eq!(
         rows, 14,
-        "three input rows cost the transcript two: {three:#?}"
+        "a three-row draft fits the floor, so the geometry does not move: {three:#?}"
     );
     let input = TRANSCRIPT_TOP + rows + 3;
     assert!(three[input].contains("第一行"), "{:?}", three[input]);
@@ -1580,6 +1618,20 @@ fn the_input_area_grows_with_the_draft_and_the_transcript_gives_up_the_rows() {
         three[input + 4].contains("ctrl-c"),
         "the hints stay under the input: {:?}",
         three[input + 4]
+    );
+
+    // From the fourth row on it grows again, one row of transcript per row of draft,
+    // and the ten-row cap still holds it (spec §1).
+    state.paste("\n第四行\n第五行");
+    let five = screen(80, 24, &mut state);
+    assert_eq!(
+        transcript_rows(&five),
+        12,
+        "two rows past the floor cost the transcript two: {five:#?}"
+    );
+    assert!(
+        five.join("\n").contains("第五行"),
+        "the draft is on screen: {five:#?}"
     );
 }
 
