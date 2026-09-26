@@ -2644,7 +2644,7 @@ mod tests {
         );
     }
 
-    // --- the in-session discussion (spec §15) -------------------------------
+    // --- 会话内的讨论（spec §15） -------------------------------
 
     #[test]
     fn a_session_discussion_takes_a_question_or_leaves_it_to_the_loop() {
@@ -2665,7 +2665,7 @@ mod tests {
         assert_eq!(read("/discussion x"), Submission::Unknown("/discussion x"));
     }
 
-    // --- the pool a discussion draws from (spec §15) -------------------------
+    // --- 讨论抽取的池子（spec §15） -------------------------
 
     use super::{parse_discuss_line, pick_debaters, split_names};
     use crate::config::{Debater, DiscussionRoster};
@@ -2759,7 +2759,7 @@ mod tests {
             .contains("两个名字"));
     }
 
-    // --- the discussion's arguments (spec §15) ------------------------------
+    // --- 讨论的参数（spec §15） ------------------------------
 
     use super::{parse_discuss, question, DiscussArgs};
 

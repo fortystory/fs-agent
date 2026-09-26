@@ -442,7 +442,7 @@ fn tool_choice_json(choice: &ToolChoice) -> Value {
     }
 }
 
-// --- SSE decoding and tool-call assembly ----------------------------------
+// --- SSE 解码与工具调用拼装 ----------------------------------
 
 /// 一条响应的流式累加器：字节进，完成单元出。
 ///
@@ -772,7 +772,7 @@ fn parse_finish_reason(reason: &str) -> FinishReason {
     }
 }
 
-// --- usage and error normalization ----------------------------------------
+// --- 用量与错误的归一化 ----------------------------------------
 
 /// 把厂商的 `usage` 对象归一成中性的形状。
 ///
