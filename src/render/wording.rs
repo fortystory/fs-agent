@@ -1,16 +1,13 @@
-//! The wording layer: every human-facing phrase, in one place.
+//! 措辞层：每一条给人看的短语，都在一处。
 //!
-//! Pure functions from a domain value to a Chinese phrase. It knows nothing
-//! about style (colour and bold stay in the painters) and nothing about
-//! structure (the plain renderer's per-line prefix, the TUI's indentation and
-//! `sessions show`'s round grouping are their callers'). Hard-coded Chinese, no
-//! runtime locale: changing the language means changing this module
-//! (spec §Implementation Decisions).
+//! 从一个领域值到一个中文短语的纯函数。它不知道风格（颜色与加粗留在画家那里），也不知道
+//! 结构（plain 渲染器的逐行前缀、TUI 的缩进与 `sessions show` 的轮次分组，是它们各自
+//! 调用方的事）。硬编码中文、没有运行时 locale：换一种语言就是改这个模块
+//! （spec §Implementation Decisions）。
 //!
-//! **Model-visible text is not here** (ADR 0001): the debaters' and
-//! synthesizer's system prompts, the projection's round prefix, `AgentError`'s
-//! message and fs-agent's own tool-result text are frozen cache prefixes and must
-//! not reach for this module.
+//! **模型可见的文本不在这里**（ADR 0001）：讨论者与合成器的 system prompt、投影的轮
+//! 前缀、`AgentError` 的 message，以及 fs-agent 自己那些工具结果文本，都是冻结的缓存
+//! 前缀，绝不能伸手到这个模块。
 
 use ratatui::buffer::CellWidth;
 
@@ -23,10 +20,9 @@ use serde_json::Value;
 use crate::permissions::Mode;
 use crate::provider::FinishReason;
 
-/// The human label for a round mode.
+/// 一个轮次模式给人看的标签。
 ///
-/// The discussion protocol's synthesis prompt uses the same words, so the
-/// interface and the instructions name the rounds identically.
+/// 讨论协议的合成 prompt 用的是同一批词，所以界面与指令对轮次的命名是一致的。
 pub fn round_mode(mode: RoundMode) -> &'static str {
     match mode {
         RoundMode::Independent => "独立首轮",
@@ -35,32 +31,31 @@ pub fn round_mode(mode: RoundMode) -> &'static str {
     }
 }
 
-/// The round section line both human painters print.
+/// 两个人类画家都打的轮次分节行。
 pub fn round_section(round: u32, mode: RoundMode) -> String {
     format!("── 第 {round} 轮（{}）──", round_mode(mode))
 }
 
-/// The narration that opens one agent turn.
+/// 开启一个 agent 回合的叙述。
 pub fn turn_started(iteration: u32) -> String {
     format!("回合开始（第 {iteration} 次迭代）")
 }
 
-/// The narration that closes one agent turn, with the reason spelled out in
-/// Chinese.
+/// 收尾一个 agent 回合的叙述，原因用中文摊开来说。
 pub fn turn_ended(reason: StopReason) -> String {
     format!("回合结束：{}", stop_reason(reason))
 }
 
-/// A discussion round closing.
+/// 一个讨论轮次收尾。
 pub fn round_ended(round: u32, reason: StopReason) -> String {
     format!("第 {round} 轮结束：{}", stop_reason(reason))
 }
 
-/// What `fs-agent discuss` reports once the discussion is over and the screen is
-/// back: why it stopped, how many rounds actually ran, and who was absent.
+/// `fs-agent discuss` 在讨论结束、屏幕变回来之后报的那段：为什么停、实际跑了几轮，以及
+/// 谁缺席。
 ///
-/// The absent side is named because it is the one thing the stream records but a
-/// reader can miss: a round with one answer is not a round of agreement.
+/// 点名缺席的那一方，是因为它是事件流记了、读的人却容易漏掉的那一件事：只有一方作答的
+/// 一轮，不是达成一致的一轮。
 pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -> String {
     let mut line = format!("讨论结束：{}（跑了 {rounds} 轮）", stop_reason(reason));
     if !absent.is_empty() {
@@ -74,23 +69,21 @@ pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -
     line
 }
 
-/// Where a discussion can be read back from, for the line printed after the alt
-/// screen has been restored: the TUI's transcript does not survive the process, so
-/// the session id is the durable answer.
+/// 一场讨论可以从哪里读回来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
+/// 进程，所以会话 id 才是那个持久的答案。
 pub fn discussion_replay(session_id: &str) -> String {
     format!("会话 {session_id}；复盘：fs-agent sessions show {session_id}")
 }
 
-/// The pair that is debating, for a front end that has one field to name it in.
+/// 正在讨论的那一对，给只有一个字段能点名它们的前端。
 pub fn discussion_pair(first: &str, second: &str) -> String {
     format!("{first} × {second}")
 }
 
-/// One debater as a notice names it: `保守（deepseek-v4-pro）`.
+/// 一个讨论者在通告里的写法：`保守（deepseek-v4-pro）`。
 ///
-/// The model is shown beside the name because the name is an identity the user chose
-/// while the model is what actually answers — and with a pool the two can differ per
-/// discussion. The shorthand case (a debater named after its model) says it once.
+/// 名字旁边显示模型，因为名字是用户挑的身份、而模型才是真正作答的那个 —— 有了池子之后，
+/// 两者在一次讨论里可以不一样。简写那种情况（讨论者的名字就是它的模型）只说一遍。
 pub fn debater_label(name: &str, model: &str) -> String {
     if name == model {
         name.to_owned()
@@ -99,12 +92,12 @@ pub fn debater_label(name: &str, model: &str) -> String {
     }
 }
 
-/// `--debaters` with the wrong shape.
+/// 形状不对的 `--debaters`。
 pub fn needs_two_debaters(value: &str) -> String {
     format!("--debaters 需要两个名字（逗号分隔，例如 `--debaters 保守,激进`），得到 `{value}`")
 }
 
-/// `--debaters` naming something the pool does not have.
+/// `--debaters` 点了池子里没有的名字。
 pub fn unknown_debater(name: &str, pool: &[&str]) -> String {
     format!(
         "池子里没有叫 `{name}` 的讨论者；可用：{}",
@@ -115,11 +108,10 @@ pub fn unknown_debater(name: &str, pool: &[&str]) -> String {
     )
 }
 
-/// `/discuss` is about to run: which two models, and what they are being asked.
+/// `/discuss` 即将开跑：哪两个模型，以及要问它们什么。
 ///
-/// The question is named because it may not have been typed — a bare `/discuss` puts
-/// the session's last question to the debaters, and the user should see which one that
-/// was before two models start answering it.
+/// 点名题目，因为它可能不是打进来的 —— 一个裸 `/discuss` 把会话的最后一个问题摆给讨论
+/// 者，而用户应该先看到那是哪个问题，再让两个模型开始作答。
 pub fn discussion_starting(first: &str, second: &str, question: &str) -> String {
     format!(
         "开始讨论：{first} × {second}；题目：{}",
@@ -127,8 +119,8 @@ pub fn discussion_starting(first: &str, second: &str, question: &str) -> String 
     )
 }
 
-/// The first non-empty line of a block of text, trimmed — a question or a task can be
-/// a paragraph, and a notice has one line.
+/// 一段文本的第一条非空行、去掉首尾空白 —— 一个问题或一项任务可以是一整段，而通告只有
+/// 一行。
 fn first_non_empty_line(text: &str) -> &str {
     text.lines()
         .map(str::trim)
@@ -136,35 +128,33 @@ fn first_non_empty_line(text: &str) -> &str {
         .unwrap_or_default()
 }
 
-/// The advisory line for a roster whose two debaters are the same model.
+/// 一份两个讨论者是同一个模型的名册的提示行。
 ///
-/// Allowed — one expired subscription is not a reason to have no discussion at all —
-/// but the design's premise is two independent judgements, and a single model asked
-/// twice leaves only the sampling noise between them.
+/// 允许 —— 一个订阅到期不该是完全没有讨论的理由 —— 但这个设计的前提是两个独立的判断，
+/// 而同一个模型问两遍，中间只剩采样噪声。
 pub fn discussion_same_model(model: &str) -> String {
     format!("提示：两个讨论者都是 {model}——同一个模型问两遍，剩下的差异只有采样噪声")
 }
 
-/// The advisory line for a roster that is one vendor with two models.
+/// 一份同一厂商、两个模型的名册的提示行。
 pub fn discussion_one_vendor(first: &str, second: &str) -> String {
     format!("提示：两个讨论者来自同一厂商（{first} × {second}），多样性比设计假设的弱")
 }
 
-/// The prompt `fs-agent discuss` puts on a terminal when no question was given on
-/// the command line.
+/// 命令行上没给问题时，`fs-agent discuss` 在终端上打的那个提示。
 pub fn question_prompt() -> &'static str {
     "问题> "
 }
 
-/// The whole session closing.
+/// 整场会话收尾。
 pub fn session_ended(reason: StopReason) -> String {
     format!("会话结束：{}", stop_reason(reason))
 }
 
-/// The Chinese phrase for a stopping point.
+/// 一个停止点的中文短语。
 ///
-/// One explicit mapping, so a debug-formatted enum never reaches the interface
-/// (spec §Implementation Decisions).
+/// 一份显式映射，于是 debug 格式化出来的枚举永远不会到达界面
+/// （spec §Implementation Decisions）。
 pub fn stop_reason(reason: StopReason) -> &'static str {
     match reason {
         StopReason::Completed => "完成",
@@ -179,14 +169,13 @@ pub fn stop_reason(reason: StopReason) -> &'static str {
     }
 }
 
-/// The one-line summary of a tool call. The tool name and its arguments are
-/// structure and stay verbatim; only the verb is Chinese.
+/// 一次工具调用的一行摘要。工具名与它的参数是结构、原样保留；只有动词是中文。
 pub fn tool_call(tool: &str, args: &str) -> String {
     format!("调用 {tool}({args})")
 }
 
-/// A tool result trimmed to `max_chars`, marking the cut in Chinese so a person
-/// can tell a complete short result from an elided long one.
+/// 一条裁到 `max_chars` 的工具结果，切口用中文标出来，好让人分得清一条完整的短结果与
+/// 一条被省略的长结果。
 pub fn tool_output_preview(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_owned();
@@ -196,23 +185,23 @@ pub fn tool_output_preview(text: &str, max_chars: usize) -> String {
     out
 }
 
-/// The placeholder for a call whose result never arrived (a cancel).
+/// 结果从未到达的那次调用（一次取消）的占位。
 pub fn no_tool_result() -> &'static str {
     "（流上没有结果）"
 }
 
-/// The placeholder for a failed call that carried no message of its own.
+/// 失败、却没带自己的消息的那次调用的占位。
 pub fn no_message() -> &'static str {
     "（没有消息）"
 }
 
-/// The pre-hook narration, with its mount point named in Chinese.
+/// 前置钩子的叙述，挂载点用中文点名。
 pub fn hook(point: &str, outcome: &str) -> String {
     format!("钩子 {}：{outcome}", hook_point(point))
 }
 
-/// The Chinese name of a hook mount point. An unknown point is passed through:
-/// the outcome already carries the hook's own, unalterable text.
+/// 一个钩子挂载点的中文名。不认识的挂载点原样透传：outcome 里已经带着钩子自己那段无法
+/// 改写的文本。
 pub fn hook_point(point: &str) -> &str {
     match point {
         hook_format::POINT_PRE => "工具调用前",
@@ -221,17 +210,17 @@ pub fn hook_point(point: &str) -> &str {
     }
 }
 
-/// A post-hook's feedback, merged into the call it annotates.
+/// 后置钩子的反馈，并进它所标注的那次调用。
 pub fn hook_feedback(outcome: &str) -> String {
     format!("[钩子] {outcome}")
 }
 
-/// A debater dispatching an executor.
+/// 一个讨论者派出执行者。
 pub fn executor_spawned(executor_id: &str) -> String {
     format!("派出执行者 {executor_id}")
 }
 
-/// An executor closing, with its reason and summary.
+/// 一个执行者收尾，带上它的原因与小结。
 pub fn executor_finished(executor_id: &str, reason: StopReason, summary: &str) -> String {
     format!(
         "执行者 {executor_id} 收尾：{} — {summary}",
@@ -239,18 +228,18 @@ pub fn executor_finished(executor_id: &str, reason: StopReason, summary: &str) -
     )
 }
 
-/// The heading of a divergence block.
+/// 分歧块的小标题。
 pub fn divergence(topic: &str) -> String {
     format!("分歧：{topic}")
 }
 
-/// A speaker's own error, as narration. The message itself is frozen
-/// (`AgentError.message` is model-visible, ADR 0001) and passed through.
+/// 某个发言者自己的错误，作为叙述。消息本身是冻结的（`AgentError.message` 模型可见，
+/// ADR 0001），原样透传。
 pub fn agent_error(message: &str) -> String {
     format!("错误：{message}")
 }
 
-/// The one-line usage summary both human painters print.
+/// 两个人类画家都打的一行用量摘要。
 pub fn usage_summary(usage: &Usage) -> String {
     format!(
         "用量 in={} out={} cached={} miss={}",
@@ -258,103 +247,98 @@ pub fn usage_summary(usage: &Usage) -> String {
     )
 }
 
-/// The marker in front of a streamed reasoning trace.
+/// 流式推理轨迹前面的那条标记。
 pub fn reasoning_marker() -> &'static str {
     "[思考] "
 }
 
-/// The plain transcript's reasoning label, appended to the speaker prefix.
+/// plain 转录的推理标签，接在发言归属前缀后面。
 pub fn reasoning_label() -> &'static str {
     "（思考）"
 }
 
-/// A completed message's boundary narration (the body already streamed).
+/// 一条完成消息的边界叙述（正文已经流过去了）。
 pub fn message_complete() -> &'static str {
     "消息完成"
 }
 
-/// The line that opens a thinking segment, before any正文 has arrived: the stream
-/// is running and the trace is not finished (票 03 §Answer).
+/// 开启一段思考的那一行 —— 在正文到达之前：流还在跑，轨迹还没写完（票 03 §Answer）。
 pub fn thinking_in_progress() -> &'static str {
     "… 正在思考"
 }
 
-/// The line a thinking segment settles into once the正文 arrives: the trace is
-/// frozen and the line becomes the way into its full text (票 03 §Answer).
+/// 正文到达之后，一段思考定下来的那一行：轨迹冻结了，这一行变成进入它全文的入口
+/// （票 03 §Answer）。
 pub fn thinking_finished() -> &'static str {
     "✓ 思考完成"
 }
 
-/// The verb a tool call line leads with (票 02 §2). The arguments follow it, by
-/// `transcript::summarize_args`.
+/// 工具调用行打头的那个动词（票 02 §2）。参数跟在它后面，由
+/// `transcript::summarize_args` 给出。
 pub fn tool_call_label() -> &'static str {
     "调用"
 }
 
-/// Appended to the **end** of a failed call's line, so the failure is a suffix and
-/// not a second line (票 02 §2).
+/// 接在一次失败调用那一行的**末尾**，于是失败是一个后缀，而不是第二行（票 02 §2）。
 pub fn tool_failed() -> &'static str {
     "失败"
 }
 
-/// The detail view's note when the whole tool output cannot be read back — the
-/// pointer's file is gone, or was never written (票 02 §4).
+/// 整条工具输出读不回来时详情视图的那句话 —— 指针指的文件没了，或者从来没写过
+/// （票 02 §4）。
 pub fn detail_output_unavailable() -> &'static str {
     "全文不可用"
 }
 
-/// The detail view's note when the thinking line has no whole trace to show: the
-/// synthesizer streams reasoning without recording it (票 02 §1).
+/// 思考那一行没有完整轨迹可显时详情视图的那句话：合成器流式推理、却不把它记下来
+/// （票 02 §1）。
 pub fn detail_reasoning_unrecorded() -> &'static str {
     "本次未记录思考全文"
 }
 
-/// The detail view's note when a body was longer than the reader's limit.
+/// 正文长过读的人那个上限时详情视图的那句话。
 pub fn detail_truncated() -> &'static str {
     "已截断"
 }
 
-/// A detail section's heading, drawn inside a rule: `── 思考 ──` (票 03 §Answer).
+/// 详情视图一节的小标题，画在一条横线里：`── 思考 ──`（票 03 §Answer）。
 pub fn detail_section(name: &str) -> String {
     format!("── {name} ──")
 }
 
-/// The heading of the detail view's thinking section.
+/// 详情视图思考那一节的小标题。
 pub fn detail_thinking_section() -> &'static str {
     "思考"
 }
 
-/// The heading of the detail view's arguments section.
+/// 详情视图参数那一节的小标题。
 pub fn detail_args_section() -> &'static str {
     "参数"
 }
 
-/// The heading of the detail view's output section.
+/// 详情视图输出那一节的小标题。
 pub fn detail_output_section() -> &'static str {
     "输出"
 }
 
-/// The detail view's footer: where in the body the reader is, and how to leave.
+/// 详情视图的页脚：读者读到全文的哪里，以及怎么离开。
 pub fn detail_footer(position: usize, total: usize) -> String {
     format!("↕ {position}/{total} · esc 关闭")
 }
 
-/// One tool call's **description**: what the call was for, in place of its arguments.
+/// 一次工具调用的**描述**：这次调用是干什么的，替代它那一行生参数。
 ///
-/// The transcript shows `{label} 调用 {tool} {description}`; the concrete arguments and
-/// the whole output live in the call's detail view. A line of raw arguments is a
-/// debugger's view of a call — the reader wants to know what it *did* (票 02 §2，
-/// 2026-09-23 修正).
+/// 转录显示 `{label} 调用 {tool} {description}`；具体的参数与整条输出住在这次调用的
+/// 详情视图里。一行生参数是调试器眼里的调用 —— 读的人想知道它*干了什么*（票 02 §2，
+/// 2026-09-23 修正）。
 ///
-/// The rules are deliberately few and mechanical, because the description is derived
-/// from the arguments alone — nothing on the stream says what the model intended:
+/// 规则刻意少而机械，因为描述只从参数推出来 —— 流上没有任何东西说模型想干什么：
 ///
-/// * the questionnaire tool describes itself by the question it asks;
-/// * a tool that takes a path describes itself by that path;
-/// * a shell command describes itself by a verb for its first recognised command plus
-///   the first path-like word in it — `查询 .scratch/tui-history-replay`;
-/// * anything else falls back to the call's argument summary, so a dynamic tool with
-///   unknown arguments is never left blank.
+/// * 问卷工具用它问的那道题描述自己；
+/// * 收路径的工具用那个路径描述自己；
+/// * 一条 shell 命令用「它第一个认出来的命令所挣的动词」加上其中第一个像路径的词描述
+///   自己 —— `查询 .scratch/tui-history-replay`；
+/// * 其余的都落到这次调用的参数摘要上，于是一个参数未知的动态工具永远不会留空。
 pub fn tool_description(tool: &str, args: &Value) -> String {
     if let Some(described) = argument_description(tool, args) {
         return described;
@@ -369,15 +353,15 @@ pub fn tool_description(tool: &str, args: &Value) -> String {
     summary
 }
 
-/// The description a tool's own arguments give it: the field that says what the call
-/// is about, in the order the tools in this repo name them.
+/// 工具自己的参数给它的描述：说这次调用是关于什么的那个字段，按这个仓库里各工具给它们
+/// 命名的顺序找。
 fn argument_description(tool: &str, args: &Value) -> Option<String> {
-    // A questionnaire is about the question, and its own `header` is the model's
-    // one-phrase summary of it — which is exactly what a description is.
+    // 问卷是关于那道题的，而它自己的 `header` 就是模型对它的一句概括 —— 那正是描述该有
+    // 的东西。
     if tool == ASK_USER_QUESTION_TOOL {
         return first_question_field(args);
     }
-    // A call that names one path is about that path.
+    // 点名了一个路径的调用，就是关于那个路径的。
     for key in ["path", "file_path", "file", "target", "pattern", "query"] {
         if let Some(value) = args.get(key).and_then(Value::as_str) {
             let value = first_line(value);
@@ -386,7 +370,7 @@ fn argument_description(tool: &str, args: &Value) -> Option<String> {
             }
         }
     }
-    // A dispatched task is about the task.
+    // 派出去的任务，是关于那项任务的。
     for key in ["task", "description", "prompt", "brief"] {
         if let Some(value) = args.get(key).and_then(Value::as_str) {
             let value = first_line(value);
@@ -398,13 +382,13 @@ fn argument_description(tool: &str, args: &Value) -> Option<String> {
     None
 }
 
-/// The questionnaire tool's name.
+/// 问卷工具的名字。
 ///
-/// Matched by name because a description is wording, and wording is keyed on what the
-/// call *is*: the tool table's `Tool` traits hold behaviour, not prose.
+/// 按名字匹配，因为描述是措辞，而措辞以这次调用*是*什么为键：工具表里的 `Tool` trait
+/// 持有行为，不持有散文。
 const ASK_USER_QUESTION_TOOL: &str = "ask_user_question";
 
-/// The first question's `header`, else its `question`, as one line.
+/// 第一道题的 `header`，没有就用它的 `question`，排成一行。
 fn first_question_field(args: &Value) -> Option<String> {
     let questions = args.get("questions")?.as_array()?;
     let first = questions.first()?;
@@ -419,22 +403,19 @@ fn first_question_field(args: &Value) -> Option<String> {
     None
 }
 
-/// A shell command's description: a verb for what it does, then what it does it to.
+/// 一条 shell 命令的描述：一个说它干什么的动词，然后是它拿什么去干。
 ///
-/// The rules are mechanical because the description is derived from the arguments
-/// alone — nothing on the stream says what the model intended:
+/// 规则机械，因为描述只从参数推出来 —— 流上没有任何东西说模型想干什么：
 ///
-/// 1. `cd somewhere` is dropped: navigation is never what a call is *about*.
-/// 2. The verb is the first word this layer recognises anywhere in the rest
-///    ([`command_verb`]), so `ls -a; find .scratch` describes itself by what it does.
-/// 3. The subject is the first word that looks like a path — `查询
-///    .scratch/tui-history-replay` — because that is the token that tells two `查询`
-///    calls apart. Failing that it is the first operand: `修改 build` from
-///    `rm -rf build`.
-/// 4. A program whose second word is a subcommand keeps both, because the subcommand
-///    alone is ambiguous: `查看 git status`, `运行 cargo test`.
-/// 5. A command with nothing recognisable in it describes itself by its first word:
-///    `运行 env`.
+/// 1. `cd somewhere` 被丢掉：导航永远不是一次调用*关于*的东西。
+/// 2. 动词是这一层在余下部分里认出来的第一个词（[`command_verb`]），所以
+///    `ls -a; find .scratch` 用它所干的事描述自己。
+/// 3. 宾语是第一个看起来像路径的词 —— `查询 .scratch/tui-history-replay` —— 因为那才是
+///    把两次 `查询` 分开的 token。没有的话就取第一个操作数：从 `rm -rf build` 得到
+///    `修改 build`。
+/// 4. 第二个词是子命令的程序两个词都留，因为单看子命令是含混的：`查看 git status`、
+///    `运行 cargo test`。
+/// 5. 里面一个词都认不出来的命令用它的第一个词描述自己：`运行 env`。
 fn command_description(command: &str) -> String {
     let command = first_line(command);
     let words: Vec<&str> = command
@@ -453,15 +434,14 @@ fn command_description(command: &str) -> String {
     }
 }
 
-/// Programs whose second word is a subcommand worth keeping: `git status` is a call,
-/// `status` on its own is ambiguous.
+/// 第二个词是值得留下的子命令的那些程序：`git status` 是一次调用，光一个 `status` 是含混
+/// 的。
 const SUBCOMMAND_PROGRAMS: [&str; 6] = ["git", "cargo", "npm", "pnpm", "yarn", "go"];
 
-/// The word a command is about: the first path-like operand, else the first operand.
+/// 一条命令是关于的那个词：第一个像路径的操作数，没有就取第一个操作数。
 ///
-/// Flags (`-rf`), redirections (`2>/dev/null`) and `cd`'s target are skipped — none of
-/// them is what a call is about, and naming the wrong one on a destructive call is
-/// worse than naming nothing.
+/// 旗标（`-rf`）、重定向（`2>/dev/null`）与 `cd` 的目标都跳过 —— 它们都不是一次调用
+/// 关于的东西，而在一次破坏性调用上点错名字，比什么都不点更糟。
 fn subject_word(words: &[&str]) -> Option<String> {
     let mut operands: Vec<&str> = Vec::with_capacity(words.len());
     let mut skip_next = false;
@@ -497,18 +477,17 @@ fn subject_word(words: &[&str]) -> Option<String> {
     }
 }
 
-/// A command word with the punctuation a shell line wraps it in taken off.
+/// 剥掉一行 shell 给它包上的标点之后的命令词。
 fn clean_word(word: &str) -> &str {
     word.trim_start_matches('(')
         .trim_matches(|ch| ch == '"' || ch == '\'' || ch == '`' || ch == ';')
 }
 
-/// The whole folded call line's text: `调用 工具 描述`.
+/// 整条折叠调用行的文本：`调用 工具 描述`。
 ///
-/// **One producer for both readers.** The transcript's folded line and the permission
-/// question that asks about the same call show this same string, so the question you
-/// answer and the line it is about cannot drift apart (2026-09-23, user request: the
-/// permission popup should read like the call line).
+/// **两个读者一个产出。** 转录的折叠行与就同一次调用发问的权限询问显示的是同一个字符串，
+/// 于是你作答的那个问题与它所讲的那一行不会漂开（2026-09-23，用户要求：权限弹窗读起来该
+/// 像调用行）。
 pub fn tool_call_line(tool: &str, args: &Value) -> String {
     let description = tool_description(tool, args);
     if description.is_empty() {
@@ -518,11 +497,10 @@ pub fn tool_call_line(tool: &str, args: &Value) -> String {
     }
 }
 
-/// The verb a command's leading word earns: what the reader would say the call does.
+/// 一条命令开头的词挣来的动词：读的人会说这次调用在干什么。
 ///
-/// Only three verbs, because a reader only needs three: look something up, look at
-/// something, or change something. A program this layer does not know is *not* guessed
-/// at — see [`command_description`].
+/// 只有三个动词，因为读的人只需要三个：查点东西、看点东西，或者改点东西。这一层不认识的
+/// 程序**不猜** —— 见 [`command_description`]。
 fn command_verb(word: &str) -> Option<&'static str> {
     match word {
         "grep" | "rg" | "ag" | "find" | "fd" | "rgrep" => Some("查询"),
@@ -535,7 +513,7 @@ fn command_verb(word: &str) -> Option<&'static str> {
     }
 }
 
-/// `text`'s first line, trimmed of surrounding blanks.
+/// `text` 的第一条非空行，去掉首尾空白。
 fn first_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -544,10 +522,10 @@ fn first_line(text: &str) -> String {
         .to_owned()
 }
 
-/// `text` cut to `max` characters, marked with an ellipsis.
+/// `text` 裁到 `max` 个字符，用省略号标出。
 ///
-/// Local to this layer on purpose: the description is wording, and the transcript's
-/// own `truncate` is a presentation helper the wording layer has no business sharing.
+/// 刻意只留在这个层里：描述是措辞，而转录自己那个 `truncate` 是呈现助手，措辞层没有理由
+/// 跟它共用。
 fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
@@ -557,20 +535,18 @@ fn cut(text: &str, max: usize) -> String {
     out
 }
 
-/// How long a call's description may be before it is cut.
+/// 一次调用的描述在被裁掉之前可以有多长。
 ///
-/// The description exists to make the line readable at a glance; a long one would be
-/// as unreadable as the arguments it replaced, and the pane would wrap it anyway.
+/// 描述的存在是为了让这一行一眼可读；长描述会与被它替掉的那些参数一样难读，而窗格反正也
+/// 会折它。
 const DESCRIPTION_MAX_CHARS: usize = 60;
 
-/// A tool call that finished successfully. The result itself is printed by the
-/// caller.
+/// 一次成功结束的工具调用。结果本身由调用方打印。
 pub fn tool_completed() -> &'static str {
     "工具完成"
 }
 
-/// The provider's own terminal label, named in Chinese. It is diagnostic only,
-/// but it still reaches the interface through a diagnostic line.
+/// provider 自己那个终止标签，用中文点名。它只是诊断，但它仍然会经一条诊断行到达界面。
 pub fn finish_reason(reason: &FinishReason) -> &str {
     match reason {
         FinishReason::Stop => "正常停止",
@@ -583,9 +559,8 @@ pub fn finish_reason(reason: &FinishReason) -> &str {
     }
 }
 
-/// The Chinese phrase for a stopping point recorded as its `as_str` name: a
-/// `sessions stats` row carries the name, not the enum. An unknown name is shown
-/// as itself.
+/// 一个以它 `as_str` 名字记下来的停止点的中文短语：`sessions stats` 的一行带的是名字、
+/// 不是枚举。不认识的名字原样显示。
 pub fn stop_reason_name(name: &str) -> &str {
     match name {
         "Completed" => stop_reason(StopReason::Completed),
@@ -601,7 +576,7 @@ pub fn stop_reason_name(name: &str) -> &str {
     }
 }
 
-/// The Chinese phrase for a permission verdict recorded as its `as_str` name.
+/// 一个以它 `as_str` 名字记下来的权限裁决的中文短语。
 pub fn decision_name(name: &str) -> &str {
     match name {
         "allow" => decision(Decision::Allow),
@@ -611,11 +586,10 @@ pub fn decision_name(name: &str) -> &str {
     }
 }
 
-/// A permission question on the transcript.
+/// 转录上的一次权限询问。
 ///
-/// What a person needs is the tool and the concrete call it would make — the
-/// command, the path, the body. The request and tool-call ids are the stream's
-/// business; they are not shown.
+/// 人需要的是那个工具与它将要做的具体调用 —— 命令、路径、正文。request 与 tool-call 的
+/// id 是事件流的事；它们不显示。
 pub fn permission_asked(tool_name: Option<&str>, args: &str) -> String {
     match (tool_name, args.is_empty()) {
         (Some(tool), true) => format!("权限询问：{tool}"),
@@ -625,8 +599,7 @@ pub fn permission_asked(tool_name: Option<&str>, args: &str) -> String {
     }
 }
 
-/// A permission verdict, with the source of the decision named in Chinese. The
-/// reason is the gate's own durable text and is passed through.
+/// 一个权限裁决，裁决来自哪里用中文点名。reason 是权限门自己那段持久文本，原样透传。
 pub fn permission_decided(
     decision: Decision,
     source: DecisionSource,
@@ -642,7 +615,7 @@ pub fn permission_decided(
     )
 }
 
-/// The Chinese phrase for a permission verdict.
+/// 一个权限裁决的中文短语。
 pub fn decision(decision: Decision) -> &'static str {
     match decision {
         Decision::Allow => "允许",
@@ -651,8 +624,8 @@ pub fn decision(decision: Decision) -> &'static str {
     }
 }
 
-/// The Chinese label for where a verdict came from. The precedent for this whole
-/// module, and now one of its functions (spec §Implementation Decisions).
+/// 一个裁决来自哪里的中文标签。这一整个模块的先例，如今是它的函数之一
+/// （spec §Implementation Decisions）。
 pub fn decision_source(source: DecisionSource) -> &'static str {
     match source {
         DecisionSource::User => "用户",
@@ -661,21 +634,19 @@ pub fn decision_source(source: DecisionSource) -> &'static str {
     }
 }
 
-/// One key on a question's button row: the key that answers, and what that answer
-/// means.
+/// 一道题按钮行上的一个键：作答的那个键，以及那个答案是什么意思。
 ///
-/// The TUI's overlay paints one `[key] label` per entry and the plain console joins
-/// the same table into its single input line, so a question cannot grow a key on one
-/// front end that the other does not offer (spec §9).
+/// TUI 的覆盖层每个条目画一个 `[key] label`，plain 控制台把同一张表接进它那一条输入行，
+/// 所以一道题不可能在一个前端长出一个另一个前端没提供的键（spec §9）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Choice {
-    /// The key that answers, shown literally.
+    /// 作答的那个键，原样显示。
     pub key: char,
-    /// What that key answers.
+    /// 那个键答的是哪个意思。
     pub label: &'static str,
 }
 
-/// The keys that answer a permission question.
+/// 回答一次权限询问的那些键。
 pub static PERMISSION_CHOICES: [Choice; 3] = [
     Choice {
         key: 'y',
@@ -691,7 +662,7 @@ pub static PERMISSION_CHOICES: [Choice; 3] = [
     },
 ];
 
-/// The keys that answer the oversized-paste question.
+/// 回答过大粘贴那个问题的键。
 pub static PASTE_CHOICES: [Choice; 2] = [
     Choice {
         key: 'y',
@@ -703,7 +674,7 @@ pub static PASTE_CHOICES: [Choice; 2] = [
     },
 ];
 
-/// The keys that answer the clear-draft question.
+/// 回答清空草稿那个问题的键。
 pub static CLEAR_CHOICES: [Choice; 2] = [
     Choice {
         key: 'y',
@@ -715,15 +686,15 @@ pub static CLEAR_CHOICES: [Choice; 2] = [
     },
 ];
 
-/// The keys that answer a permission question, paired with the answer each one sends.
+/// 回答一次权限询问的那些键，配上每一个送出的答案。
 pub static PERMISSION_CHOICE_ANSWERS: [(char, crate::permissions::Answer); 3] = [
     ('y', crate::permissions::Answer::Allow),
     ('a', crate::permissions::Answer::AlwaysAllow),
     ('n', crate::permissions::Answer::Deny),
 ];
 
-/// The keys that answer the exit confirmation (票 06 §2). The safe answer is the
-/// first-looking one to a hand that reads the row: `n` cancels, and so does `Esc`.
+/// 回答退出确认的那些键（票 06 §2）。对一只顺着读这一行的眼睛来说，安全的答案是先出现的
+/// 那一个：`n` 取消，`Esc` 也是取消。
 pub static EXIT_CHOICES: [Choice; 2] = [
     Choice {
         key: 'y',
@@ -735,10 +706,10 @@ pub static EXIT_CHOICES: [Choice; 2] = [
     },
 ];
 
-/// A button row as one line of text: `[y] 允许 / [a] 总是允许 / [n] 拒绝`.
+/// 一行文本形式的按钮行：`[y] 允许 / [a] 总是允许 / [n] 拒绝`。
 ///
-/// This is what a plain console's input line uses. The TUI paints the same entries
-/// as spans of its own, with the key picked out (spec §9).
+/// 这是 plain 控制台那条输入行用的东西。TUI 把同样的条目画成它自己的 span，并把键挑出来
+/// （spec §9）。
 pub fn choices_text(choices: &[Choice]) -> String {
     choices
         .iter()
@@ -747,18 +718,16 @@ pub fn choices_text(choices: &[Choice]) -> String {
         .join(" / ")
 }
 
-/// The permission overlay's title.
+/// 权限覆盖层的标题。
 ///
-/// It no longer names the tool: the row under it opens with `调用 工具 …`, which is the
-/// same sentence the folded transcript line carries, so the name is there once
-/// (2026-09-23, user request: the popup repeated itself).
+/// 它不再点名工具：它下面那一行以 `调用 工具 …` 开头，那是与折叠转录行同一句话，于是名字
+/// 只出现一次（2026-09-23，用户要求：弹窗在重复自己）。
 pub fn permission_title() -> &'static str {
     "权限询问："
 }
 
-/// The **body** row of a permission overlay: the concrete call the question is
-/// about (`bash（command=rm -rf /）`). The tool name leads it so the row stands on
-/// its own under the title.
+/// 权限覆盖层的**正文**行：这道题所讲的那个具体调用（`bash（command=rm -rf /）`）。
+/// 工具名打头，于是这一行在标题下自己站得住。
 pub fn permission_call(tool_name: &str, args: &str) -> String {
     if args.is_empty() {
         tool_name.to_owned()
@@ -767,8 +736,7 @@ pub fn permission_call(tool_name: &str, args: &str) -> String {
     }
 }
 
-/// The plain console's permission input line, which also has room for the gate's
-/// reason.
+/// plain 控制台的权限输入行，它还给权限门的理由留了位置。
 pub fn permission_prompt_with_context(tool_name: &str, args: &str, reason: &str) -> String {
     format!(
         "{}？原因：{reason} {} ",
@@ -777,64 +745,62 @@ pub fn permission_prompt_with_context(tool_name: &str, args: &str, reason: &str)
     )
 }
 
-/// The **title** row of the oversized-paste question.
+/// 过大粘贴那个问题的**标题**行。
 pub fn paste_title() -> &'static str {
     "粘贴确认"
 }
 
-/// The **body** row of the oversized-paste question.
+/// 过大粘贴那个问题的**正文**行。
 pub fn paste_body(chars: usize) -> String {
     format!("粘贴 {chars} 字符")
 }
 
-/// The **title** row of the clear-draft question.
+/// 清空草稿那个问题的**标题**行。
 pub fn clear_draft_title() -> &'static str {
     "清空输入"
 }
 
-/// The **body** row of the clear-draft question.
+/// 清空草稿那个问题的**正文**行。
 pub fn clear_draft_body() -> &'static str {
     "草稿有多行，Esc 会把它们全部丢掉"
 }
 
-/// The title of the `Ctrl-D` exit confirmation (票 06 §2).
+/// `Ctrl-D` 退出确认的标题（票 06 §2）。
 pub fn exit_title() -> &'static str {
     "退出会话"
 }
 
-/// The body of the exit confirmation. It says both things a person would want to
-/// know before saying yes: the transcript on disk survives, the unsent draft does
-/// not (票 06 §2).
+/// 退出确认的正文。它把人在说「是」之前想知道的那两件事都说出来：磁盘上的转录留得住，
+/// 没发出去的草稿留不住（票 06 §2）。
 pub fn exit_body() -> &'static str {
     "会话记录会保留；未发送的草稿会丢弃"
 }
 
-/// The questionnaire footer's way back one question.
+/// 问卷页脚里往回一题的路。
 pub fn questionnaire_previous() -> &'static str {
     "← 上一题"
 }
 
-/// The questionnaire footer's way forward one question.
+/// 问卷页脚里往前一题的路。
 pub fn questionnaire_next() -> &'static str {
     "下一题 →"
 }
 
-/// The questionnaire footer's submit button, drawn only once everything is handled.
+/// 问卷页脚的提交按钮，只在每一题都有着落之后才画。
 pub fn questionnaire_submit() -> &'static str {
     "提交"
 }
 
-/// The footer that pages a questionnaire: `2 / 3`.
+/// 给问卷翻页的页脚：`2 / 3`。
 pub fn questionnaire_progress(index: usize, total: usize) -> String {
     format!("{} / {}", index + 1, total)
 }
 
-/// The keys a questionnaire offers, in the order they are shown.
+/// 问卷提供的那些键，按它们显示的先后。
 ///
-/// `ready` is whether every question is handled, because that is what decides
-/// whether `enter` submits or only continues (spec §7). Promising `enter 提交`
-/// while it is still advancing would be a lie the interface tells on every
-/// question but the last.
+/// `ready` 表示每道题是否都有着落，因为正是它决定 `enter` 是提交、还是只继续（spec §7）。
+/// 在它还在一题题往下走的时候就承诺 `enter 提交`，会是界面在除最后一题之外的每一题上撒的
+/// 谎。
 pub fn questionnaire_hint(ready: bool) -> &'static str {
     if ready {
         "↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
@@ -843,10 +809,9 @@ pub fn questionnaire_hint(ready: bool) -> &'static str {
     }
 }
 
-/// The questionnaire's footer: which question is on screen, and what the keys do.
+/// 问卷的页脚：屏幕上是第几题，以及那些键都干什么。
 ///
-/// `ready` travels into [`questionnaire_hint`] so the footer says `提交` only
-/// when the key really submits.
+/// `ready` 传进 [`questionnaire_hint`]，于是页脚只在那个键真的会提交时才说 `提交`。
 pub fn questionnaire_status(index: usize, total: usize, ready: bool) -> String {
     format!(
         "{} · {}",
@@ -855,29 +820,26 @@ pub fn questionnaire_status(index: usize, total: usize, ready: bool) -> String {
     )
 }
 
-/// The marker a multi-select question carries beside its text, so the user knows
-/// more than one option may be picked.
+/// 多选题在它的文本旁边带的那条标记，好让用户知道可以选中多于一个选项。
 pub fn questionnaire_multi_marker() -> &'static str {
     "（可多选）"
 }
 
-/// The label of the line a typed answer goes on, for a question with no options.
+/// 没有选项的题上，打的答案落在那一行的标签。
 pub fn questionnaire_answer_label() -> &'static str {
     "回答："
 }
 
-/// The label of the line custom text goes on, for a question that offers options.
+/// 给了选项的题上，自定义文本落在那一行的标签。
 pub fn questionnaire_custom_label() -> &'static str {
     "自定义："
 }
 
-/// The plain console's prompt for a question that offers options.
+/// plain 控制台给有选项的题打的那个提示。
 ///
-/// The line-oriented front end has no visible mode, so the prompt has to say how
-/// to pick and how to skip: a number picks, anything else is custom text, and an
-/// empty line is a skip. A multi-select question says a second line follows,
-/// because that supplement is the only way to answer `selected` and `custom`
-/// together (spec §7).
+/// 逐行前端没有可见的模式，所以提示得说清怎么选、怎么跳过：编号是选，别的东西是自定义
+/// 文本，空行是跳过。多选题要说下面还跟着一行，因为那段补充是把 `selected` 与 `custom`
+/// 一起答出来的唯一办法（spec §7）。
 pub fn questionnaire_plain_options_prompt(multi_select: bool) -> &'static str {
     if multi_select {
         "输入编号（逗号分隔）选择，或输入文本；下一行补充；回车跳过 > "
@@ -886,30 +848,26 @@ pub fn questionnaire_plain_options_prompt(multi_select: bool) -> &'static str {
     }
 }
 
-/// The plain console's second line for a multi-select question: the optional
-/// supplement that goes with the chosen options (spec §7).
+/// plain 控制台给多选题的第二行：与所选选项搭配的那段可选补充（spec §7）。
 pub fn questionnaire_plain_supplement_prompt() -> &'static str {
     "补充文本（可留空）> "
 }
 
-/// The plain console's prompt for a question with no options.
+/// plain 控制台给没有选项的题打的那个提示。
 pub fn questionnaire_plain_answer_prompt() -> &'static str {
     "输入回答；回车跳过 > "
 }
 
-/// One option of a model's question, as both human front ends show it:
-/// `{number}. {label}{badge} — {description}` (spec §7).
+/// 模型的题里的一个选项，两个人类前端都这么显示它：
+/// `{number}. {label}{badge} — {description}`（spec §7）。
 ///
-/// This is the **one** generator of the option line, called by the plain printer
-/// and by the TUI's questionnaire painter, so a change to how an option reads
-/// cannot land in only one of them. The caller adds whatever state its front end
-/// shows beside the line — the TUI's picked/highlighted marker — because that is
-/// the one thing the two do not share.
+/// 这是选项行的**唯一**生成器，plain 的打印器与 TUI 的问卷画家都调它，所以「一个选项读
+/// 起来是什么样」的改动不可能只落在其中一个上。调用方在这一行旁边加上它自己前端显示的那点
+/// 状态 —— TUI 那个选中/高亮的标记 —— 因为那是两者唯一不共享的东西。
 ///
-/// The `(Recommended)` suffix is a display convention: it is replaced by
-/// [`recommended_badge`] here, while the value an answer carries keeps the whole
-/// label ([`recommended_label`]). The number is a reading index, not a key: the
-/// decided keyboard has none.
+/// `(Recommended)` 后缀是一条显示约定：它在这里被 [`recommended_badge`] 换掉，而答案
+/// 携带的值保留整条 label（[`recommended_label`]）。那个编号是阅读序号、不是键：定下来的
+/// 键盘上没有它。
 pub fn questionnaire_option(number: usize, label: &str, description: Option<&str>) -> String {
     let (label, recommended) = recommended_label(label);
     let mut text = format!("{number}. {label}");
@@ -926,21 +884,19 @@ pub fn questionnaire_option(number: usize, label: &str, description: Option<&str
     text
 }
 
-/// The suffix a model appends to recommend an option (spec §7).
+/// 模型推荐一个选项时接的后缀（spec §7）。
 pub const RECOMMENDED_SUFFIX: &str = "(Recommended)";
 
-/// The badge shown for an option whose label ends in [`RECOMMENDED_SUFFIX`].
+/// label 以 [`RECOMMENDED_SUFFIX`] 结尾的选项上显示的那枚徽标。
 pub fn recommended_badge() -> &'static str {
     "（推荐）"
 }
 
-/// Split a model-supplied option label into what is shown and whether it is
-/// recommended.
+/// 把模型给的选项 label 拆成「显示什么」与「是否被推荐」。
 ///
-/// The suffix is a **display** convention: it is stripped so the option reads as
-/// a choice rather than as a sentence, while the value the answer carries stays
-/// the original label, marker and all (spec §7). The match is case-sensitive and
-/// only at the end, so a label that merely mentions the word is left alone.
+/// 这个后缀是**显示**约定：它被剥掉，好让选项读起来是个可选项、而不是一句话，而答案携带的
+/// 值仍是原来那条 label、连标记一起（spec §7）。匹配区分大小写、而且只在结尾，所以一条
+/// 只是提到这个词的 label 不会被动。
 pub fn recommended_label(label: &str) -> (&str, bool) {
     match label.trim_end().strip_suffix(RECOMMENDED_SUFFIX) {
         Some(rest) => (rest.trim_end(), true),
@@ -948,10 +904,10 @@ pub fn recommended_label(label: &str) -> (&str, bool) {
     }
 }
 
-/// The human's `[speaker]` prefix: one generator, used by every human-facing
-/// renderer, and deliberately not the model-side projection prefix (spec §5).
+/// 人的 `[speaker]` 前缀：一个生成器，每个面向人的渲染器都用它，而且刻意不是模型侧的
+/// 投影前缀（spec §5）。
 ///
-/// A debater keeps its own name; the unattributed speakers get a Chinese label.
+/// 讨论者保留自己的名字；没有归属的那些发言者拿一个中文标签。
 pub fn speaker_label(speaker: &SpeakerId) -> String {
     match speaker {
         SpeakerId::Debater(id) => format!("[{id}]"),
@@ -961,57 +917,57 @@ pub fn speaker_label(speaker: &SpeakerId) -> String {
     }
 }
 
-/// A pinned context injection, with its source named rather than debug-printed.
+/// 一条钉住的上下文注入，来源被点名、而不是 debug 打印出来。
 pub fn context_injected(source: ContextSource) -> String {
     format!("[上下文注入：{}]", context_source(&source))
 }
 
-/// The Chinese name of a context source.
+/// 一个上下文来源的中文名。
 pub fn context_source(source: &ContextSource) -> String {
     match source {
         ContextSource::AgentsMd => "AGENTS.md".to_owned(),
         ContextSource::SkillsCatalog => "技能清单".to_owned(),
         ContextSource::Skill => "技能".to_owned(),
-        // Kept for reading **old** streams: the mode it names is gone, but a session
-        // written before `.scratch/todo-and-modes` still carries the injection, and a
-        // replay of it should say what it was (ADR 0003).
+        // 留着读**老**流：它点名的那一档模式已经没了，但在
+        // `.scratch/todo-and-modes` 之前写下的会话仍然带着这条注入，复盘它时应该说出它
+        // 当时是什么（ADR 0003）。
         ContextSource::PlanMode => "计划模式".to_owned(),
-        // The one injection that belongs to **one** participant, so it says which:
-        // a reader of the transcript should see who was given a persona.
+        // 唯一一条只属于**一个**参与者的注入，所以它说出是哪个：读转录的人应该看到谁被
+        // 给了人物设定。
         ContextSource::Persona(name) => format!("人物：{name}"),
     }
 }
 
-/// A history range that stopped being authoritative. The summary is the stream's
-/// own text and passes through; without one the line still says what happened.
+/// 一段不再权威的历史。summary 是事件流自己的文本，原样透传；没有它，这一行也仍然说得
+/// 出发生了什么。
 pub fn history(reason: HistoryReason, summary: Option<&str>) -> String {
     let text = summary.unwrap_or("历史已被取代");
     format!("[历史：{}] {text}", history_reason(reason))
 }
 
-/// The Chinese name of a history reason.
+/// 一个历史原因的中文名。
 pub fn history_reason(reason: HistoryReason) -> &'static str {
     match reason {
         HistoryReason::Regenerate => "重新生成",
         HistoryReason::Undo => "撤销",
         HistoryReason::Compaction => "压缩",
-        // Likewise old-stream-only: retirement of a pinned instruction when the mode
-        // changed. Nothing emits this any more (ADR 0003).
+        // 同样是只为老流留的：模式变更时一条钉住指令的退场。已经没有地方产出它了
+        // （ADR 0003）。
         HistoryReason::ModeChange => "模式变更",
     }
 }
 
-/// The renderer's own diagnostic line.
+/// 渲染器自己的诊断行。
 pub fn diagnostic(message: &str) -> String {
     format!("[诊断] {message}")
 }
 
-/// The renderer fell behind the channel and lost events.
+/// 渲染器跟不上通道、丢了事件。
 pub fn renderer_dropped(dropped: u64) -> String {
     format!("渲染器丢弃了 {dropped} 个事件")
 }
 
-/// The status word: whether a turn is in flight.
+/// 状态词：有没有一个回合在飞。
 pub fn status_word(busy: bool) -> &'static str {
     if busy {
         "工作中"
@@ -1020,9 +976,9 @@ pub fn status_word(busy: bool) -> &'static str {
     }
 }
 
-/// The live key hints, in the order they are shown: the most used first. The way
-/// out is [`EXIT_HINT_IDLE`] / [`EXIT_HINT_BUSY`] (whichever [`exit_hint`] picks),
-/// which is reserved rather than appended, so it survives every width.
+/// 活着的键位提示，按它们显示的先后：最常用的在前。出口是 [`EXIT_HINT_IDLE`] /
+/// [`EXIT_HINT_BUSY`]（由 [`exit_hint`] 挑），它是**预留**的、不是追加的，所以任何宽度
+/// 下它都活下来。
 const KEY_HINTS: [&str; 5] = [
     "enter 发送",
     "ctrl-j 换行",
@@ -1031,53 +987,47 @@ const KEY_HINTS: [&str; 5] = [
     "PgUp/PgDn 滚动",
 ];
 
-/// The way out while the keyboard is idle: both gestures quit, and the line says
-/// so. It is one item rather than two, because the two keys mean the same thing
-/// here and a narrow terminal has only so many columns (票 06 §4).
+/// 键盘空闲时的出口：两个手势都退出，这一行也这么说。它是一个条目而不是两个，因为这两个
+/// 键在这里意思相同，而窄终端就只有那么多列（票 06 §4）。
 pub const EXIT_HINT_IDLE: &str = "ctrl-c/ctrl-d 退出";
 
-/// The way out while a run is in flight: `Ctrl-C` cancels, and `Ctrl-D` is
-/// deliberately ignored — hinting at a key that does nothing is the one thing the
-/// hint row must never do (票 06 §4).
+/// 一次运行在飞时的出口：`Ctrl-C` 取消，而 `Ctrl-D` 刻意被忽略 —— 提示一个什么都不做
+/// 的键，是提示行绝不能做的那件事（票 06 §4）。
 pub const EXIT_HINT_BUSY: &str = "ctrl-c 退出";
 
-/// The hints a front end shows when it is **not** reading lines: a one-shot
-/// `discuss`, or the stretch of an interactive session with a turn in flight.
+/// 前端**没有**在读行时显示的提示：一次性 `discuss`，或者交互式会话里一个回合在飞的那
+/// 一段。
 ///
-/// Only what the keyboard really does then — stop the run, and read back what it
-/// produced. No `enter 发送` (nothing would be sent) and no `shift+tab 模式` (that
-/// gesture is the interactive loop's, and a discussion has no prompt to return to).
+/// 只有那时键盘真会做的事 —— 停下这次运行，以及读回它产出的东西。没有 `enter 发送`
+/// （没有东西会被发出去），也没有 `shift+tab 模式`（那个手势是交互式循环的，而讨论没有
+/// 可回去的提示行）。
 const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 
-/// The status line for a terminal `width` **columns** wide.
+/// 一个 `width` **列**宽终端的状态行。
 ///
-/// The hints fill from the left with the way out (`exit`) reserved at their end, and
-/// the state word is placed in front of them only if it still fits — so a narrow
-/// terminal keeps its way out *and* the hints that explain the keys, and gives up
-/// `就绪` rather than `ctrl-j 换行`. The state word's placement is always the left
-/// edge; what degrades is whether it appears at all.
+/// 提示从左边填，出口（`exit`）预留在它们末尾，状态词只在还装得下时才摆在它们前面 —— 于是
+/// 窄终端保住它的出口*以及*解释键位的提示，让掉的是 `就绪`、而不是 `ctrl-j 换行`。状态词
+/// 的位置永远是左缘；退化的是它到底出不出现。
 ///
-/// Hint ladder, measured in the rendered frame: three items at 40 columns, four at
-/// 60, five at 80, and all six plus the state word at 120. The way out is one item
-/// now (`ctrl-c/ctrl-d 退出`), seven columns wider than the old `ctrl-c 退出`, and
-/// that is why the state word disappears from 60 through 80 — at 40 it survives
-/// because there is only one hint to pay for (票 06 §4).
+/// 提示阶梯，按画出来的帧实测：40 列三个条目，60 列四个，80 列五个，120 列六个全上再加
+/// 状态词。出口现在是一个条目（`ctrl-c/ctrl-d 退出`），比从前的 `ctrl-c 退出` 宽七列，
+/// 这就是状态词从 60 到 80 列消失的原因 —— 40 列时它还在，因为只有一条提示要付账
+/// （票 06 §4）。
 pub fn status_line(busy: bool, width: u16) -> String {
     hint_line(status_word(busy), &KEY_HINTS, exit_hint(busy), width)
 }
 
-/// The status line for a front end that is not reading lines: the same ladder over
-/// [`VIEWER_HINTS`].
+/// 前端没有在读行时的状态行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
 ///
-/// The distinction is not cosmetic. The hints describe what the keyboard does, and a
-/// session that is mid-turn — or a `discuss` run, which never asks for a line at all
-/// — would otherwise promise `enter 发送` for a key that sends nothing (spec §6).
+/// 这条区分不是装饰。提示描述的是键盘会做什么，而一个回合跑到一半的会话 —— 或一次
+/// `discuss` 运行，它压根不会要一行输入 —— 否则就会为一个什么都不发的键承诺
+/// `enter 发送`（spec §6）。
 pub fn viewer_status_line(busy: bool, width: u16) -> String {
     hint_line(status_word(busy), &VIEWER_HINTS, exit_hint(busy), width)
 }
 
-/// The way-out item for a status line: the idle wording only while the keyboard can
-/// really quit, which is exactly when nothing is running.
+/// 状态行里那个出口条目：只有键盘真的能退出时才用空闲那一档措辞，而那恰好就是没有东西在
+/// 跑的时候。
 pub fn exit_hint(busy: bool) -> &'static str {
     if busy {
         EXIT_HINT_BUSY
@@ -1086,8 +1036,7 @@ pub fn exit_hint(busy: bool) -> &'static str {
     }
 }
 
-/// The ladder both status lines share: hints from the left, the way out reserved at
-/// the end, and the state word leading only when it still fits.
+/// 两条状态行共用的阶梯：提示从左来，出口预留在末尾，状态词只在还装得下时才打头。
 fn hint_line(state: &str, hints: &[&str], exit: &str, width: u16) -> String {
     let exit_columns = exit.cell_width();
     let mut chosen = String::new();
@@ -1116,38 +1065,32 @@ fn hint_line(state: &str, hints: &[&str], exit: &str, width: u16) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// History replay (`.scratch/tui-history-replay/spec.md` §4, §6)
+// 历史重放（`.scratch/tui-history-replay/spec.md` §4、§6）
 // ---------------------------------------------------------------------------
 
-/// The name the replay goes by and the count it has reached: how many of the
-/// history's events have been laid into the transcript.
+/// 重放所用的名字与它数到的进度：历史的事件里有多少已经铺进转录。
 ///
-/// Deliberately `history_*`, not `replay_*`: this module already has a whole
-/// `replay_*` family for `sessions replay`, which **recomputes a projection** and
-/// is a different thing from laying history out for a reader (spec §10).
+/// 刻意叫 `history_*`、不叫 `replay_*`：这个模块已经有一整套给 `sessions replay` 用的
+/// `replay_*` 家族，那个**重算一次投影**，与把历史铺给读的人看是两回事（spec §10）。
 pub fn history_progress(n: usize, m: usize) -> String {
     format!("恢复历史 {n}/{m}")
 }
 
-/// The same count once the hint row is too narrow for the whole phrase: the
-/// minimum legal frame (`40×10`) leaves 38 columns of hints (票 06 §4).
+/// 提示行窄到放不下整句之后的那个计数：最小合法帧（`40×10`）留下 38 列提示（票 06 §4）。
 pub fn history_progress_narrow(n: usize, m: usize) -> String {
     format!("恢复中 {n}/{m}")
 }
 
-/// The count with no numbers at all, for a hint row narrower than the minimum
-/// frame can ever draw.
+/// 一个数字都没有的计数，给比最小帧能画出的还窄的提示行。
 pub fn history_progress_minimal() -> &'static str {
     "恢复中"
 }
 
-/// The replay progress line for a hint row `width` columns wide.
+/// 一条 `width` 列宽的提示行的重放进度行。
 ///
-/// The width is the **hint row's**, not the terminal's, exactly as
-/// [`status_line`]'s is: the minimum frame (40 columns) leaves 38 columns of hints,
-/// and that is the width the middle rung exists for. The ladder is here rather than
-/// in the renderer for the same reason the hint ladder is: it is wording, and it is
-/// measurable without a terminal.
+/// 这个宽度是**提示行的**、不是终端的，和 [`status_line`] 完全一样：最小帧（40 列）留下
+/// 38 列提示，而中间那一档就是为这个宽度存在的。阶梯放在这里而不是渲染器里，理由与提示
+/// 阶梯相同：它是措辞，而且不用终端就量得出来。
 pub fn history_progress_line(n: usize, m: usize, width: u16) -> String {
     if width < HISTORY_NARROW_MIN {
         history_progress_minimal().to_owned()
@@ -1158,44 +1101,40 @@ pub fn history_progress_line(n: usize, m: usize, width: u16) -> String {
     }
 }
 
-/// The narrowest hint row that still carries the count: the minimum legal frame
-/// less the two border columns.
+/// 仍然带着计数的、最窄的提示行：最小合法帧减去两条边框列。
 const HISTORY_NARROW_MIN: u16 = super::layout::MIN_WIDTH - 2;
 
-/// The hint ladder's next measured rung after the minimum: a 60-column terminal
-/// buys the second hint, and it is where the full history phrase earns its columns.
+/// 提示阶梯在最小帧之后下一档实测出来的位置：60 列终端买到第二条提示，而整句历史短语正是
+/// 在那里挣到它的列数。
 const HISTORY_FULL_TERMINAL: u16 = 60;
 
-/// The hint row from which the full phrase is worth its columns.
+/// 从这一档提示行起，整句短语值得占那些列。
 const HISTORY_FULL_MIN: u16 = HISTORY_FULL_TERMINAL - 2;
 
-/// The line drawn between replayed history and what this session adds.
+/// 画在重放的历史与这场会话新增的内容之间的那条线。
 ///
-/// It is a **render-layer line, not an event**: it never enters the log, so the next
-/// `--continue` inserts a fresh one on the new seam instead of replaying the old
-/// (spec §6).
+/// 它是**渲染层的一条线，不是一条事件**：它从不进日志，所以下一次 `--continue` 会在新的
+/// 接缝上插一条新的，而不是把旧的也重放出来（spec §6）。
 pub fn history_divider() -> &'static str {
     "── 以上为历史 ──"
 }
 
-/// The model's label: the status row's first segment (spec §5).
+/// 模型的标签：状态行的第一段（spec §5）。
 pub const PANEL_MODEL: &str = "模型";
-/// The session's readings in the sidebar's usage page (spec §3).
+/// 左栏调用量页上的会话读数（spec §3）。
 pub const PANEL_CONTEXT: &str = "上下文";
-/// Spelled the way the rest of the UI spells it; `CONTEXT.md` has no Chinese word
-/// for it and the stats lines already say `token`.
+/// 按界面其他地方的拼法拼；`CONTEXT.md` 里它没有中文词，而统计行已经在写 `token`。
 pub const PANEL_TOKENS: &str = "token";
-/// **Turn**, not round: the panel counts `TurnEnded` (`CONTEXT.md` keeps 轮次 and
-/// 回合 apart).
+/// **回合**，不是轮次：这一页数的是 `TurnEnded`（`CONTEXT.md` 把轮次与回合分开）。
 pub const PANEL_TURNS: &str = "回合";
 pub const PANEL_INPUT: &str = "输入";
 pub const PANEL_OUTPUT: &str = "输出";
 pub const PANEL_CACHE: &str = "缓存";
 
-/// What a field shows when there is no number for it yet.
+/// 一个字段还没有数字可显时显示的东西。
 pub const PANEL_UNKNOWN: &str = "—";
 
-/// A count with thousands separators: `12,345`.
+/// 带千位分隔符的计数：`12,345`。
 pub fn thousands(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -1208,15 +1147,15 @@ pub fn thousands(value: u64) -> String {
     out
 }
 
-/// Two counts in one field: `12,345 / 100,000`.
+/// 一个字段里的两个计数：`12,345 / 100,000`。
 fn pair(left: u64, right: u64) -> String {
     format!("{} / {}", thousands(left), thousands(right))
 }
 
-/// What the session has spent, against its allowance when it has one.
+/// 这场会话花了多少，对上它的额度 —— 当它有额度时。
 ///
-/// A session with no cap shows the spend alone: `12,345 / —` would read as a cap
-/// that is missing rather than one that was never set (spec §8).
+/// 没有上限的会话只显示花掉的那部分：`12,345 / —` 会被读成一个缺失的上限，而不是一个从来
+/// 没设过的上限（spec §8）。
 pub fn token_pair(used: u64, limit: Option<u64>) -> String {
     match limit {
         Some(limit) => pair(used, limit),
@@ -1224,13 +1163,12 @@ pub fn token_pair(used: u64, limit: Option<u64>) -> String {
     }
 }
 
-/// How full the model's window is: `12,345 / 200,000（6%）`, or [`PANEL_UNKNOWN`]
-/// before a call has reported its input tokens.
+/// 模型的窗口有多满：`12,345 / 200,000（6%）`，或者在还没有一次调用报出输入 token 之前
+/// 是 [`PANEL_UNKNOWN`]。
 ///
-/// `with_share` is the panel saying the value column has room for the percentage.
-/// It is a parameter rather than a second function because the pair and its share
-/// are one field: `12,345 / 200,000（6%）` is what it says, and dropping the tail is
-/// how it degrades.
+/// `with_share` 是这一页在说值那一列还放得下百分比。它是一个参数而不是第二个函数，因为那
+/// 一对与它的占比是同一个字段：`12,345 / 200,000（6%）` 才是它说的话，而丢掉尾巴就是它
+/// 退化的方式。
 pub fn context_pair(used: Option<u64>, usable: u64, with_share: bool) -> String {
     let Some(used) = used else {
         return PANEL_UNKNOWN.to_owned();
@@ -1243,77 +1181,68 @@ pub fn context_pair(used: Option<u64>, usable: u64, with_share: bool) -> String 
     }
 }
 
-/// The cache split of one call's input: what was served from the prefix cache and
-/// what was not.
+/// 一次调用输入的缓存拆分：多少由前缀缓存供给、多少不是。
 pub fn cache_pair(cached: u64, miss: u64) -> String {
     pair(cached, miss)
 }
 
-/// The indicator that says how much arrived while the viewport was scrolled away,
-/// and that the block is the way back (spec §4).
+/// 那条指示器：视口滚走期间到了多少，以及这个块就是回去的路（spec §4）。
 pub fn new_content(rows: usize) -> String {
     format!("↓ {rows} 行新内容 · 点此到底")
 }
 
-/// The same indicator when nothing has arrived: it is only the way back.
+/// 什么都没有到达时的同一条指示器：它只是回去的路。
 pub fn back_to_bottom() -> &'static str {
     "点此到底"
 }
 
-/// Everything a terminal smaller than the minimum shows, so the reason is a
-/// sentence rather than an empty screen (spec §2).
+/// 比最小尺寸还小的终端上显示的一切，好让原因是一句话、而不是一块空屏（spec §2）。
 pub fn too_small(width: u16, height: u16) -> String {
     format!("终端太小：至少 {width}×{height}")
 }
 
-/// The program and the version it was built from: the sidebar's text identity, which is
-/// what a terminal too narrow for the mark shows instead (spec §3).
+/// 程序名与它构建自的版本：左栏那段文字身份 —— 窄到画不下标记的终端显示的就是它
+/// （spec §3）。
 pub fn identity() -> String {
     format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
 
-/// The dash of `fs-agent` **falling**, one glyph per pulse frame
-/// (`.scratch/tui-input-pulse/spec.md` §2).
+/// `fs-agent` 里那条**下落**的短横，脉冲一帧一个字形
+/// （`.scratch/tui-input-pulse/spec.md` §2）。
 ///
-/// These are the glyphs of the **text** identity — the narrow rung's `fs-agent 0.1.0`,
-/// where the dash is one character between `fs` and `agent`. A line has no room to fall
-/// through, so it falls the only way one cell can: the bar sits high, then fills the cell,
-/// then sinks to the bottom, and starts over. Half blocks rather than a rotating spinner
-/// (`-`, `/`, `|`, `\`): the shape stays a bar and only its height moves, which is the same
-/// thing the mark does with its five rows.
+/// 这些是**文字**身份的字形 —— 窄档那行 `fs-agent 0.1.0`，短横是 `fs` 与 `agent` 之间
+/// 的一个字符。一行没有可以往下落的纵深，所以它只能按一个单元能落的方式落：横条先停在偏
+/// 上，然后填满这个单元，再沉到底部，然后重来。用半块而不是一个转动的 spinner
+/// （`-`、`/`、`|`、`\`）：形状一直是根横条，动的只有它的高度，这与标记拿它那五行做的
+/// 是同一件事。
 ///
-/// The **mark** falls through those five rows carrying the one shape it has always had
-/// (`mark_lines` in `crate::render::tui`). The two are indexed by the same frame, so a
-/// pulse frame is one place in one fall; adding or removing an entry here would take the
-/// mark's cycle out of step with this one.
+/// **标记**穿过那五行往下落，带着它一直就有的那个形状（`crate::render::tui` 里的
+/// `mark_lines`）。两者由同一个帧下标索引，所以一个脉冲帧就是一次下落里的一个位置；这里
+/// 增删一个条目，会让标记的循环与这一个错开。
 pub const DASH_FALL: [char; 5] = ['▀', '▀', '█', '▄', '▄'];
 
-/// The identity line with its dash **fallen** to `phase` — what the sidebar's text row
-/// shows while a run is in flight.
+/// 短横**落到** `phase` 那一步之后的身份行 —— 一次运行在飞时左栏那行文字显示的东西。
 ///
-/// It is built **from** [`identity`] rather than beside it, so the crate's name and the
-/// version keep exactly one spelling: `scripts/tui-startup-check.py` and the test next to
-/// this one both anchor on that string, and a second `fs-agent …` built here would be a
-/// second thing to keep in step. `fs-agent <version>` holds exactly one dash; the day that
-/// stops being true this needs a different rule, and the test is where that shows up.
+/// 它是**从** [`identity`] 建出来的、而不是在它旁边另建一个，于是 crate 的名字与版本只有
+/// 一个拼写：`scripts/tui-startup-check.py` 与紧邻这个函数的测试都锚在那条字符串上，而在
+/// 这里另造一个 `fs-agent …` 就是多了一样要跟着同步的东西。`fs-agent <version>` 正好只有
+/// 一条短横；哪天不再如此，这条规则就得换一个，而那会在测试里显出来。
 pub fn identity_falling(phase: usize) -> String {
     let dash = DASH_FALL[phase % DASH_FALL.len()].to_string();
     identity().replacen('-', &dash, 1)
 }
 
-/// The mark the wide sidebar carries, five rows of block shading.
+/// 宽档左栏带的那个标记，五行块状明暗。
 ///
-/// The characters are all text; the colour ramp that makes them read as letters is
-/// the painter's business ([`crate::render::tui`]), exactly as it is for every other
-/// phrase in this module. A sidebar too narrow for the whole mark never asks for these
-/// rows at all — [`crate::render::layout`] decides that up front, so nothing here has
-/// to think about clipping.
+/// 这些字符全是文本；让它们读起来像字母的那道颜色渐变是画家的事
+/// （[`crate::render::tui`]），与这个模块里其他每一条短语完全一样。窄到放不下整个标记的
+/// 左栏压根不会要这几行 —— [`crate::render::layout`] 事先就定了，所以这里不用想裁剪的
+/// 事。
 ///
-/// The mark spells `fs-agent` — the `fs` of a forked synthesis ("two forks, one stem",
-/// see `CONTEXT.md`) with the program's name after it — and the pixel grid is the one the
-/// maintainer picked. The dash between them is the third of its eight glyph cells, and it
-/// is the one glyph the painter draws for itself: it falls while a run is in flight
-/// (`.scratch/tui-input-pulse/spec.md` §2).
+/// 标记拼出 `fs-agent` —— 前面是分叉合成的 `fs`（「两叉一茎」，见 `CONTEXT.md`），后面
+/// 跟程序名 —— 像素网格是维护者挑的那一个。中间那条短横是它八个字形单元里的第三个，也是
+/// 画家唯一自己画的那个字形：一次运行在飞时它往下落
+/// （`.scratch/tui-input-pulse/spec.md` §2）。
 pub fn logo_lines() -> [&'static str; 5] {
     [
         "▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀",
@@ -1324,34 +1253,32 @@ pub fn logo_lines() -> [&'static str; 5] {
     ]
 }
 
-/// The mode as a field: what the status row shows, and what the old header's facts line
-/// used to.
+/// 模式作为一个字段：状态行显示的那个，也是从前头部那行事实显示过的那个。
 pub fn mode_field(mode: Mode) -> String {
     format!("模式 {}", mode_label(mode))
 }
 
 // ---------------------------------------------------------------------------
-// The shell: the sidebar's tabs, the status row and the rail
-// (`.scratch/tui-sidebar/spec.md` §3, §5, §6)
+// 外壳：左栏的页签、状态行与回合条
+// （`.scratch/tui-sidebar/spec.md` §3、§5、§6）
 // ---------------------------------------------------------------------------
 
-/// The sidebar's tab labels, in the order they are drawn (spec §3).
+/// 左栏的页签标签，按它们画出来的先后（spec §3）。
 ///
-/// `todo` sits second, and is the one label that is not always there: it appears
-/// once the session has a list (`.scratch/todo-and-modes/spec.md` §4). Four labels
-/// and their separators still fit the narrow rung.
+/// `todo` 排第二，而且是唯一一个不是常在那儿的标签：会话有了列表之后它才出现
+/// （`.scratch/todo-and-modes/spec.md` §4）。四个标签加它们的间隔，在窄档仍然放得下。
 pub const TAB_USAGE: &str = "调用量";
 pub const TAB_TODO: &str = "todo";
 pub const TAB_TRACE: &str = "轨迹";
 pub const TAB_FILES: &str = "文件";
 
-/// The three glyphs a `todo` item's row opens with: waiting, being worked on, done.
+/// 一条 `todo` 项那一行开头的三个字形：等待、在做、做完。
 pub const TODO_PENDING: &str = "☐";
 pub const TODO_IN_PROGRESS: &str = "▸";
 pub const TODO_COMPLETED: &str = "✓";
 
-/// The glyph one item's row opens with. A table like [`mode_label`], so "which
-/// glyph means what" has one home and the sidebar's page has none of its own.
+/// 一项那一行开头的字形。一张 [`mode_label`] 那样的表，于是「哪个字形是什么意思」只有
+/// 一个归宿，左栏那一页自己一个都不留。
 pub fn todo_glyph(status: crate::tools::todo::Status) -> &'static str {
     match status {
         crate::tools::todo::Status::Pending => TODO_PENDING,
@@ -1360,29 +1287,27 @@ pub fn todo_glyph(status: crate::tools::todo::Status) -> &'static str {
     }
 }
 
-/// The `todo` page's count line: `已完成 2/5`.
+/// `todo` 页的计数行：`已完成 2/5`。
 pub fn todo_count(completed: usize, total: usize) -> String {
     format!("已完成 {completed}/{total}")
 }
 
-/// The row that stands in for the items the page had no room for: `＋3 项`.
+/// 顶替那些这一页没地方放的项的那一行：`＋3 项`。
 pub fn todo_overflow(hidden: usize) -> String {
     format!("＋{hidden} 项")
 }
 
-/// What a tab whose page is not built yet says. A sentence rather than a blank
-/// panel, so the reader knows it is not done rather than broken, and naming the
-/// ticket makes the reason checkable (spec §3).
+/// 页还没建出来的页签说的话。是一句话而不是一块空面板，于是读的人知道它是**没做完**、
+/// 不是坏了，而点出票号让这个原因可以核对（spec §3）。
 pub fn tab_placeholder() -> &'static str {
     "此页尚未实现（另有票在跟）"
 }
 
-/// The status row's short form of how full the model's window is: `上下文 6%`, or
-/// `上下文 —` before a call has reported its input tokens.
+/// 状态行里模型窗口有多满的短形式：`上下文 6%`，或者在还没有一次调用报出输入 token 之前
+/// 是 `上下文 —`。
 ///
-/// Short because the status row shares its one line with the model and the mode:
-/// the pair, the ceiling and the percentage in brackets are the sidebar's field
-/// (spec §5).
+/// 短，是因为状态行那一条线要与模型、模式共享：带上限与括号里百分比的完整那一对是左栏的
+/// 字段（spec §5）。
 pub fn context_share(used: Option<u64>, usable: u64) -> String {
     match used {
         Some(used) => format!(
@@ -1394,16 +1319,14 @@ pub fn context_share(used: Option<u64>, usable: u64) -> String {
     }
 }
 
-/// The status row: `模型 … │ 模式 … │ 上下文 …%`, with the width ladder folded in.
+/// 状态行：`模型 … │ 模式 … │ 上下文 …%`，宽度阶梯折在里面。
 ///
-/// Three rungs, and the order is the point: the **model** goes first (it is the
-/// longest segment and does not change within a session), then the **mode**, and
-/// what is left is the one reading that answers "how much room is there" — still
-/// carrying its label, so a bare `6%` never appears unexplained (spec §2, §5).
+/// 三档，而顺序才是重点：**模型**先走（它最长，且在一次会话里不变），然后是**模式**，剩下
+/// 的是唯一回答「还有多少地方」的那个读数 —— 仍然带着它的标签，于是一个光秃秃的 `6%`
+/// 永远不会毫无解释地出现（spec §2、§5）。
 ///
-/// There is deliberately **no** rung that takes the row away. The width that would
-/// take is narrower than [`super::layout::MIN_WIDTH`], so the row is always drawn;
-/// a `width` too small even for the last rung is the painter's to truncate.
+/// 刻意**没有**一档是把整行拿走。那需要的宽度比 [`super::layout::MIN_WIDTH`] 还窄，所以
+/// 这一行永远会画；一个连最后一档都放不下的 `width` 由画家去截。
 pub fn status_row(model: &str, mode: &str, share: &str, width: usize) -> String {
     let segment = |text: &str| format!(" {text} ");
     let full = format!(
@@ -1422,13 +1345,13 @@ pub fn status_row(model: &str, mode: &str, share: &str, width: usize) -> String 
     segment(share)
 }
 
-/// The rail's three glyphs: an ordinary unit, the focused unit, and the mark for
-/// the units the column had no room for (spec §4).
+/// 回合条上的三个字形：一个普通单位、焦点那个单位，以及这一列没地方放的单位所用的标记
+/// （spec §4）。
 pub const RAIL_CELL: &str = "┊";
 pub const RAIL_FOCUS: &str = "┃";
 pub const RAIL_TRUNCATED: &str = "⋮";
 
-/// The `Mode` a session runs under, named in Chinese.
+/// 一场会话跑在其下的 `Mode`，用中文点名。
 pub fn mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Readonly => "只读",
@@ -1437,7 +1360,7 @@ pub fn mode_label(mode: Mode) -> &'static str {
     }
 }
 
-/// The startup banner: what this session is, in Chinese labels.
+/// 启动横幅：这场会话是什么，用中文标签。
 pub fn banner(session: &str, model: &str, mode: Mode, dir: &str, continued: bool) -> String {
     let tail = if continued { "（已继续）" } else { "" };
     format!(
@@ -1446,25 +1369,24 @@ pub fn banner(session: &str, model: &str, mode: Mode, dir: &str, continued: bool
     )
 }
 
-/// `/undo` with nothing to roll back.
+/// 没有可回滚的东西时的 `/undo`。
 pub fn nothing_to_undo() -> &'static str {
     "没有可撤销的修改"
 }
 
-/// A slash command as a menu offers it and a hint names it.
+/// 一条斜杠命令在菜单里被提供、在提示里被点名时的样子。
 ///
-/// This is the **human-facing** list, the one the `/` menu and the unknown-command
-/// text are built from. What a submission *means* stays the loop's parser; a name
-/// here that the parser did not know would be a bug, not a policy.
+/// 这是**面向人**的那张列表，`/` 菜单与未知命令那两处文本都由它建出来。一次提交*意味着*
+/// 什么仍然归循环的解析器；这里有一个解析器不认得的名字会是 bug，不是策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
-    /// The name without its slash, exactly as it must be typed.
+    /// 不带斜杠的名字，与必须打出来的完全一致。
     pub name: &'static str,
-    /// One line saying what it does.
+    /// 一句话说明它做什么。
     pub description: &'static str,
 }
 
-/// The built-in slash commands, in the order every list shows them.
+/// 内建的斜杠命令，按每一份列表显示它们的顺序。
 pub static BUILT_IN_COMMANDS: [Command; 3] = [
     Command {
         name: "undo",
@@ -1480,10 +1402,9 @@ pub static BUILT_IN_COMMANDS: [Command; 3] = [
     },
 ];
 
-/// The built-ins as one hint line: `可用：/undo、/discuss、/quit`.
+/// 内建命令作为一行提示：`可用：/undo、/discuss、/quit`。
 ///
-/// One generator, so the menu's list and the unknown-command text cannot drift
-/// apart.
+/// 一个生成器，于是菜单的列表与未知命令那处文本不会漂开。
 pub fn built_in_names() -> String {
     format!(
         "可用：{}",
@@ -1495,9 +1416,8 @@ pub fn built_in_names() -> String {
     )
 }
 
-/// A slash-command the loop does not know. It names the built-ins, and — when
-/// there are any — the skills the user can load by name, so `/` stays
-/// discoverable.
+/// 循环不认识的一条斜杠命令。它点名内建命令，以及 —— 有的话 —— 用户可以按名字载入的
+/// 技能，于是 `/` 一直可发现。
 pub fn unknown_command(command: &str, skills: &[&str]) -> String {
     let built_ins = built_in_names();
     const LISTED: usize = 8;
@@ -1518,29 +1438,28 @@ pub fn unknown_command(command: &str, skills: &[&str]) -> String {
     )
 }
 
-/// The user loaded a skill by name, to run right away.
+/// 用户按名字载入了一个技能，立刻就要跑。
 pub fn skill_loaded(name: &str) -> String {
     format!("已加载技能 {name}")
 }
 
-/// A bare `/<skill>`: the body is loaded **and the turn starts**, because the body
-/// is the instruction. A skill that waited for a task would be a command the user
-/// had to invoke twice.
+/// 一个裸 `/<skill>`：正文**载入，而且回合开跑**，因为正文就是指令。等任务才动的技能，
+/// 会是一条用户得调两次的命令。
 pub fn skill_started(name: &str) -> String {
     format!("已加载技能 {name}，按技能正文开始")
 }
 
 // ---------------------------------------------------------------------------
-// Argument parsing
+// 参数解析
 // ---------------------------------------------------------------------------
 
-/// An argument the command does not recognize.
+/// 命令不认识的一个参数。
 pub fn unknown_argument(arg: &str) -> String {
     format!("未知参数 {arg}")
 }
 
-/// `--mode` with a value that names no mode. It lists the three, because the word
-/// most likely to arrive here is `plan` — the mode this version no longer has.
+/// `--mode` 的值点不出任何模式。它列出那三档，因为最可能到这里的词是 `plan` —— 这个
+/// 版本已经没有的那一档模式。
 pub fn unknown_mode(mode: &str) -> String {
     format!(
         "--mode 只认 readonly / ask / auto，收到 `{mode}`；从前的 plan 模式已经取消，\
@@ -1548,162 +1467,158 @@ pub fn unknown_mode(mode: &str) -> String {
     )
 }
 
-/// A flag that was given without the value it needs.
+/// 给了旗标、却没给它需要的值。
 pub fn needs_value(flag: &str) -> String {
     format!("{flag} 需要一个值")
 }
 
-/// A flag that needs a number but got something else.
+/// 需要数字、却拿到别的东西的旗标。
 pub fn needs_number(flag: &str, value: &str) -> String {
     format!("{flag} 需要一个数字，得到 {value}")
 }
 
-/// A flag that needs a path.
+/// 需要一个路径的旗标。
 pub fn needs_path(flag: &str) -> String {
     format!("{flag} 需要一个路径")
 }
 
-/// A flag that needs a model id.
+/// 需要一个模型 id 的旗标。
 pub fn needs_model(flag: &str) -> String {
     format!("{flag} 需要一个模型 id")
 }
 
-/// More positional arguments than the command takes.
+/// 位置参数比这条命令该收的多。
 pub fn extra_argument(arg: &str) -> String {
     format!("多余的参数 {arg}")
 }
 
-/// `--plain` and `--tui` asked for at once.
+/// 同时要了 `--plain` 与 `--tui`。
 pub fn renderers_mutually_exclusive() -> &'static str {
     "--plain 与 --tui 互斥：每个进程只有一个渲染器"
 }
 
-/// `sessions` with no verb.
+/// 没有动词的 `sessions`。
 pub fn sessions_needs_verb() -> &'static str {
     "sessions 需要一个子命令"
 }
 
-/// A `sessions` verb that does not exist.
+/// 不存在的 `sessions` 动词。
 pub fn unknown_sessions_verb(verb: &str) -> String {
     format!("未知的 sessions 子命令 {verb}")
 }
 
-/// `sessions show` without an id.
+/// 没有 id 的 `sessions show`。
 pub fn show_needs_id() -> &'static str {
     "sessions show 需要会话 id"
 }
 
-/// `sessions replay` without an id.
+/// 没有 id 的 `sessions replay`。
 pub fn replay_needs_id() -> &'static str {
     "sessions replay 需要会话 id"
 }
 
-/// `sessions replay` without `--speaker`.
+/// 没有 `--speaker` 的 `sessions replay`。
 pub fn replay_needs_speaker() -> &'static str {
     "sessions replay 需要 --speaker"
 }
 
-/// `sessions stats` without an id.
+/// 没有 id 的 `sessions stats`。
 pub fn stats_needs_id() -> &'static str {
     "sessions stats 需要会话 id"
 }
 
-/// A session id that no bucket holds. The id and the search label stay verbatim.
+/// 哪个桶里都没有的一个会话 id。id 与查找标签原样保留。
 pub fn no_session(id: &str, where_: &str) -> String {
     format!("{where_} 中没有会话 {id}")
 }
 
-/// The label for the bucket `sessions` searched (and the scan that widens it).
+/// `sessions` 搜过的那个桶的标签（以及把它放宽的那次扫描）。
 pub fn session_search_label(cwd: &str) -> String {
     format!("{cwd}（或任何其他桶）")
 }
 
-/// A stored file that could not be read. The path and detail stay verbatim.
+/// 一个读不了的已存文件。路径与 detail 原样保留。
 pub fn cannot_read(path: &str, detail: &str) -> String {
     format!("无法读取 {path}：{detail}")
 }
 
 // ---------------------------------------------------------------------------
-// Startup refusals and failures
+// 启动期的拒绝与失败
 // ---------------------------------------------------------------------------
 
-/// The refusal to run as root (spec §20). The detail stays English: it names the
-/// system call and the uid, which is the diagnostic clue.
+/// 拒绝以 root 跑（spec §20）。detail 保持英文：它点名系统调用与 uid，那是诊断线索。
 pub fn root_refusal() -> &'static str {
     "拒绝以 root（euid 0）启动：本工具的每一条护栏都假定最坏情况留在你的工作区内，\
      而 root 的一次误判是系统级的。请用你的普通用户运行；没有绕过开关。"
 }
 
-/// The async runtime could not be built.
+/// 异步运行时建不起来。
 pub fn startup_runtime(detail: &str) -> String {
     format!("无法启动异步运行时：{detail}")
 }
 
-/// `prune --dry-run` naming a session it would remove. The id and path stay
-/// verbatim.
+/// `prune --dry-run` 点名一个它将会删掉的会话。id 与路径原样保留。
 pub fn prune_would_remove(id: &str, dir: &str) -> String {
     format!("将删除 {id}（{dir}）")
 }
 
-/// `prune` naming a session it removed.
+/// `prune` 点名一个它删掉的会话。
 pub fn prune_removed(id: &str, dir: &str) -> String {
     format!("已删除 {id}（{dir}）")
 }
 
-/// Configuration could not be read.
+/// 配置读不了。
 pub fn startup_config(detail: &str) -> String {
     format!("无法读取配置：{detail}")
 }
 
-/// Neither `XDG_DATA_HOME` nor `HOME` is set, so a session has nowhere to live.
+/// `XDG_DATA_HOME` 与 `HOME` 都没设，于是会话无处存放。
 pub fn startup_no_session_store() -> &'static str {
     "既没有设置 XDG_DATA_HOME 也没有设置 HOME，会话无处存放"
 }
 
-/// The session store could not be read.
+/// 会话存储读不了。
 pub fn startup_store_read(detail: &str) -> String {
     format!("无法读取会话存储：{detail}")
 }
 
-/// The session store could not be created in.
+/// 会话存储里建不了东西。
 pub fn startup_store_create(detail: &str) -> String {
     format!("无法创建会话：{detail}")
 }
 
-/// The session store could not be pruned.
+/// 会话存储清理不了。
 pub fn startup_store_prune(detail: &str) -> String {
     format!("无法清理会话存储：{detail}")
 }
 
-/// There is no session in `dir` to continue.
+/// `dir` 里没有可继续的会话。
 pub fn startup_no_session_to_continue(dir: &str) -> String {
     format!("{dir} 中没有可继续的会话")
 }
 
-/// The current directory could not be determined.
+/// 当前目录定不下来。
 pub fn startup_cwd(detail: &str) -> String {
     format!("无法确定当前目录：{detail}")
 }
 
-/// No configured provider has a key.
+/// 没有任何已配置的 provider 带着密钥。
 pub fn probe_no_key() -> &'static str {
     "没有任何已配置的 provider 带密钥。请导出 MOONSHOT_API_KEY 和/或 \
      DEEPSEEK_API_KEY，或在 config.toml 的 [providers.*] 下设置 `api_key`。"
 }
 
 // ---------------------------------------------------------------------------
-// Errors
+// 错误
 // ---------------------------------------------------------------------------
 
-/// A session-level failure (spec §2): the code is explained in Chinese, the
-/// durable detail is passed through verbatim. The detail is a diagnostic clue and
-/// the stream only appends, so it is frozen at write time (ADR 0001).
+/// 一个会话级失败（spec §2）：code 用中文解释，持久的 detail 原样透传。detail 是诊断
+/// 线索，而事件流只追加，所以它在写下时就冻结了（ADR 0001）。
 pub fn session_error(code: &str, detail: &str) -> String {
     format!("[会话错误：{}] {detail}", session_error_code(code))
 }
 
-/// The Chinese explanation of a session error code. An unknown code is shown as
-/// itself: a new code must not be silently dropped.
+/// 一个会话错误码的中文解释。不认识的 code 原样显示：新的 code 不能被悄悄丢掉。
 pub fn session_error_code(code: &str) -> &str {
     match code {
         "discussion_failed" => "讨论失败",
@@ -1712,8 +1627,7 @@ pub fn session_error_code(code: &str) -> &str {
     }
 }
 
-/// A loop-level failure, with the variant named in Chinese and the detail passed
-/// through.
+/// 一个循环级失败，变体名用中文，detail 原样透传。
 pub fn error_report(error: &crate::Error) -> String {
     match error {
         crate::Error::Io(error) => format!("事件流读写失败：{error}"),
@@ -1724,26 +1638,25 @@ pub fn error_report(error: &crate::Error) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// `sessions` output
+// `sessions` 的输出
 // ---------------------------------------------------------------------------
 
-/// The `sessions ls` column names, in order. Padded by the caller, which knows
-/// the terminal's column budget.
+/// `sessions ls` 的列名，按顺序。由知道终端列预算的调用方补齐宽度。
 pub fn ls_columns() -> [&'static str; 7] {
     ["标识", "工作区", "开始", "用量", "轮次", "消息", "结束"]
 }
 
-/// `sessions ls` found nothing in the bucket.
+/// `sessions ls` 在这个桶里什么都没找到。
 pub fn no_sessions() -> &'static str {
     "本桶中没有会话"
 }
 
-/// The `ls` ending column for a session that never ended.
+/// 一场从未结束的会话在 `ls` 结束那一列上显示的东西。
 pub fn open_session() -> &'static str {
     "未结束"
 }
 
-/// A round-grouped section line in `sessions show`.
+/// `sessions show` 里按轮次分组的分节行。
 pub fn round_group(round: u32, mode: Option<RoundMode>) -> String {
     match mode {
         Some(mode) => round_section(round, mode),
@@ -1751,28 +1664,27 @@ pub fn round_group(round: u32, mode: Option<RoundMode>) -> String {
     }
 }
 
-/// The pre-round section of `sessions show`.
+/// `sessions show` 轮次之前那一节。
 pub fn session_group() -> &'static str {
     "── 会话 ──"
 }
 
-/// A single round's label in the `--files` view.
+/// `--files` 视图里单个轮次的标签。
 pub fn round_label(round: u32) -> String {
     format!("第 {round} 轮")
 }
 
-/// A failed tool call's reason, as narration.
+/// 一次失败工具调用的原因，作为叙述。
 pub fn tool_error(error: &str) -> String {
     format!("错误：{error}")
 }
 
-/// The `sessions replay` label for a system message.
+/// 系统消息在 `sessions replay` 里的标签。
 pub fn replay_system() -> &'static str {
     "[系统]"
 }
 
-/// The `sessions replay` label for a user message, naming the speaker when the
-/// projection recorded one.
+/// 用户消息在 `sessions replay` 里的标签，投影记下了发言者时就点名。
 pub fn replay_user(name: Option<&str>) -> String {
     match name {
         Some(name) => format!("[用户 {name}]"),
@@ -1780,25 +1692,24 @@ pub fn replay_user(name: Option<&str>) -> String {
     }
 }
 
-/// The `sessions replay` label for an assistant message.
+/// 助手消息在 `sessions replay` 里的标签。
 pub fn replay_assistant() -> &'static str {
     "[助手]"
 }
 
-/// The `sessions replay` label for a tool result.
+/// 工具结果在 `sessions replay` 里的标签。
 pub fn replay_tool(tool_call_id: &str) -> String {
     format!("[工具 {tool_call_id}]")
 }
 
-/// A tool call inside a replayed assistant message. The arguments are the wire's
-/// own JSON and stay verbatim.
+/// 一条重放的助手消息里的一次工具调用。参数是线级自己的 JSON，原样保留。
 pub fn replay_tool_call(name: &str, arguments: &str) -> String {
     format!("→ 调用 {name}({arguments})")
 }
 
-// --- `sessions stats` labels ---
+// --- `sessions stats` 的标签 ---
 
-/// The session-wide totals line.
+/// 会话级的总计行。
 pub fn stats_session(
     tokens: u64,
     calls: usize,
@@ -1809,58 +1720,58 @@ pub fn stats_session(
     format!("会话：{tokens} token，{calls} 次调用，{messages} 条消息，{rounds} 轮{cost}")
 }
 
-/// The priced tail of the session line.
+/// 会话行带价格的那个尾巴。
 pub fn stats_cost(cost: f64, model: &str) -> String {
     format!("，${cost:.6}（按 {model} 计价）")
 }
 
-/// The unpriced tail, naming the missing price entry: an unregistered model shows
-/// as having no price, never as zero (CONTEXT.md: PriceTable).
+/// 无价格的那个尾巴，点名缺失的价目条目：没登记的模型显示为没有价格，绝不是 0
+/// （CONTEXT.md：PriceTable）。
 pub fn stats_no_cost(model: &str) -> String {
     format!("，无价格（没有 [pricing.{model}] 条目）")
 }
 
-/// One speaker's spend row.
+/// 一个发言者的花费行。
 pub fn stats_speaker(speaker: &str, tokens: u64, calls: usize, hit: &str, cost: &str) -> String {
     format!("  {speaker} {tokens} token  {calls} 次调用  命中 {hit}{cost}")
 }
 
-/// The absence picture across the debate rounds.
+/// 辩论轮次里的缺席图景。
 pub fn stats_absence(one_sided: usize, rounds: usize, rate: &str) -> String {
     format!("缺席：{rounds} 轮辩论中有 {one_sided} 轮只有一方作答{rate}")
 }
 
-/// One speaker's absence count.
+/// 一个发言者的缺席次数。
 pub fn stats_absent(name: &str, count: usize) -> String {
     format!("  缺席：{name} ×{count}")
 }
 
-/// The edit ladder's outcome.
+/// 编辑匹配梯的结果。
 pub fn stats_edits(succeeded: usize, failed: usize) -> String {
     format!("编辑：{succeeded} 次成功，{failed} 次匹配失败")
 }
 
-/// One match-ladder downgrade level.
+/// 匹配梯上的一档降级。
 pub fn stats_match_level(name: &str, count: usize) -> String {
     format!("  匹配层级 {name}：{count}")
 }
 
-/// The two guardrails' refusal counts.
+/// 两条护栏的拒绝次数。
 pub fn stats_guards(read_before_write: usize, invalidated: usize) -> String {
     format!("护栏：写前必读 {read_before_write}，读集失效 {invalidated}")
 }
 
-/// Executors dispatched and closed.
+/// 派出的与收尾的执行者。
 pub fn stats_executors(spawned: usize, finished: usize) -> String {
     format!("执行者：派出 {spawned}，收尾 {finished}")
 }
 
-/// One executor stopping reason.
+/// 一个执行者的收尾原因。
 pub fn stats_executor_reason(name: &str, count: usize) -> String {
     format!("  收尾 {name}：{count}")
 }
 
-/// What the mounted hooks did.
+/// 挂着的钩子做了什么。
 pub fn stats_hooks(
     executed: usize,
     pre: usize,
@@ -1871,49 +1782,49 @@ pub fn stats_hooks(
     format!("钩子：执行 {executed}（前 {pre}，后 {post}），反馈 {feedback}，失败 {failed}")
 }
 
-/// Permission questions asked, with an already-assembled decisions tail.
+/// 问出去的权限询问次数，带上一段已经拼好的裁决尾巴。
 pub fn stats_permissions(asked: usize, decided: &str) -> String {
     format!("权限：询问 {asked}{decided}")
 }
 
-/// One decision in the permissions tail.
+/// 权限尾巴里的一个裁决。
 pub fn stats_decision(count: usize, name: &str) -> String {
     format!("{count} {name}")
 }
 
-/// The divergence rate across the debate rounds.
+/// 辩论轮次里的分歧率。
 pub fn stats_divergences(divergences: usize, rounds: usize, rate: &str) -> String {
     format!("分歧：{divergences}/{rounds}{rate}")
 }
 
-/// The prefix before the per-round list.
+/// 逐轮列表之前的前缀。
 pub fn stats_rounds_prefix() -> &'static str {
     "；轮次："
 }
 
-/// One round in the per-round list. `ended` is already formatted, or empty.
+/// 逐轮列表里的一轮。`ended` 已经格式化好了，或者为空。
 pub fn stats_round(round: u32, mode: RoundMode, calls: usize, ended: &str) -> String {
     format!("#{round} {} {calls} 次调用{ended}", round_mode(mode))
 }
 
-/// A round's closing reason in the per-round list.
+/// 逐轮列表里一轮的收尾原因。
 pub fn stats_round_ended(reason: StopReason) -> String {
     format!("，结束于 {}", stop_reason(reason))
 }
 
-/// One stopping reason count.
+/// 一个停止原因的计数。
 pub fn stats_stop(name: &str, count: usize) -> String {
     format!("  停止 {name}：{count}")
 }
 
 // ---------------------------------------------------------------------------
-// Help
+// 帮助
 // ---------------------------------------------------------------------------
 //
-// Help returns a string instead of printing, so the wording layer covers it and a
-// test can assert it; `main` owns the printing.
+// help 返回一个字符串、而不是直接打印，于是措辞层盖得住它、测试也断言得了；打印归
+// `main`。
 
-/// The top-level `--help`.
+/// 顶层的 `--help`。
 pub fn help_main() -> String {
     format!(
         "fs-agent {}\n\n  \
@@ -1935,31 +1846,30 @@ pub fn help_main() -> String {
     )
 }
 
-/// `fs-agent discuss` with no `[discussion]` table: what to write instead.
+/// 没有 `[discussion]` 表时的 `fs-agent discuss`：该写什么。
 ///
-/// There is deliberately no default roster: picking two models for someone would
-/// spend their money on a configuration they never chose.
+/// 刻意没有缺省名册：替别人挑两个模型，等于把他的钱花在一份他从没选过的配置上。
 pub fn discussion_no_roster() -> &'static str {
     "config.toml 里没有 [discussion]：讨论需要两个讨论者，加 `[discussion]` 与 \
      `debaters = [\"kimi-k3\", \"deepseek-v4-pro\"]`（至少两个池子成员；不同厂商最好， \
      同厂商甚至同一个模型也能跑，只是多样性会弱），见 `fs-agent discuss --help`"
 }
 
-/// `fs-agent discuss` with nothing to ask.
+/// 没有问题可问的 `fs-agent discuss`。
 pub fn discuss_needs_question() -> &'static str {
     "discuss 需要一个问句：`fs-agent discuss \"问题\"`，或者把问题从 stdin 传进来"
 }
 
-/// `/discuss` with no question of its own *and* no question in the session yet.
+/// `/discuss` 自己没带题、*而且*会话里也还没有题的时侯。
 ///
-/// A bare `/discuss` discusses the last thing the user asked; in a session where they
-/// have not asked anything, there is nothing to discuss.
+/// 一个裸 `/discuss` 讨论用户最后问的那件事；在一场他们什么都还没问的会话里，没有东西可
+/// 讨论。
 pub fn discuss_needs_in_session_question() -> &'static str {
     "`/discuss` 没有可讨论的题目：写成 `/discuss 你的问题`，或先在这个会话里问一句，\
      不带题目的 `/discuss` 会拿最后一个问题去讨论"
 }
 
-/// The interactive session's `--help`.
+/// 交互式会话的 `--help`。
 pub fn help_interactive() -> String {
     "fs-agent [options]\n\n  \
      在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/quit 退出；输入 /技能名 直接运行一个技能（可带任务，例如 \
@@ -1981,7 +1891,7 @@ pub fn help_interactive() -> String {
         .to_owned()
 }
 
-/// `discuss --help`.
+/// `discuss --help`。
 pub fn help_discuss() -> String {
     "fs-agent discuss [--plain|--tui] [--config PATH] [--cwd PATH] [--debaters A,B] \"问题\"\n\n  \
      起一次多角色讨论：两个讨论者从配置的 `[discussion] debaters` **池子**里抽——\
@@ -2002,7 +1912,7 @@ pub fn help_discuss() -> String {
         .to_owned()
 }
 
-/// `probe --help`.
+/// `probe --help`。
 pub fn help_probe() -> String {
     "fs-agent probe [--config PATH] [--model ID]...\n\n  \
      对每个模型在同一会话里发送两次真实回合，并打印每次的 input/output/cached/miss。\
@@ -2010,7 +1920,7 @@ pub fn help_probe() -> String {
         .to_owned()
 }
 
-/// `prune --help`.
+/// `prune --help`。
 pub fn help_prune() -> String {
     "fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
      删除一个工作区（当前目录，或 --cwd）的会话目录。保留最新的 N 个会话（默认 1：即 \
@@ -2019,7 +1929,7 @@ pub fn help_prune() -> String {
         .to_owned()
 }
 
-/// `sessions --help`.
+/// `sessions --help`。
 pub fn help_sessions() -> String {
     "fs-agent sessions <verb> [options]\n\n  \
      ls [--all] [--cwd PATH] [--limit N] [--json]\n      \

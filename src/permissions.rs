@@ -1,25 +1,19 @@
-//! Permission boundary (spec §12): rules, modes, the circuit breaker, and
-//! delegation-chain inheritance.
+//! 权限边界（spec §12）：规则、模式、断路器，以及委派链上的继承。
 //!
-//! Every tool call passes through one pure function, [`decide`]. It reads the
-//! policy and one [`Call`] — the tool name, the resolved paths, and the argv a
-//! command tool will run — and answers the closed three-state [`Decision`].
-//! It never reads conversation text, never reads the environment, never asks a
-//! question and never appends an event. Everything interactive happens in the
-//! `agent` loop, outside the gate: the loop asks through an [`Asker`], and when
-//! there is none it downgrades the gate's faithful `Ask` to `Deny` and records
-//! the reason in `PermissionDecided`.
+//! 每次工具调用都经过同一个纯函数 [`decide`]。它读策略与一个 [`Call`] —— 工具名、
+//! 已解析的路径、以及命令类工具将要跑的 argv —— 并回答那个封闭的三态 [`Decision`]。
+//! 它从不读对话文本、从不读环境、从不发问、也从不追加事件。一切交互都发生在 `agent`
+//! 循环里、权限门之外：循环通过 [`Asker`] 发问，没有 [`Asker`] 时它把权限门那个忠实的
+//! `Ask` 降级成 `Deny`，并把理由记进 `PermissionDecided`。
 //!
-//! The algebra is one lattice with one merge: `deny > ask > allow`, ignoring
-//! specificity, so rule priority, a hook's tightening and a child's inherited
-//! constraints all take the supremum on the same order. Two things sit outside
-//! that merge, both deliberately:
+//! 代数是**一个格、一次合并**：`deny > ask > allow`，不看专指程度，于是规则优先级、
+//! 钩子的收紧与子会话继承来的约束全都在同一个序上取上确界。有两样刻意留在这条合并
+//! 之外：
 //!
-//! - the **circuit breaker** short-circuits a hard `Deny` before any rule is
-//!   evaluated, so no allow and no hook can flip it;
-//! - a **mode's floor** (`readonly` denies every non-read-only call) cannot be
-//!   lowered by a rule, while a mode's *default* can — which is what makes
-//!   "always allow" work in `ask` mode.
+//! - **断路器**在任何规则被评估之前就把一个硬 `Deny` 短路掉，所以没有任何 allow、也
+//!   没有哪个钩子能翻转它；
+//! - **模式的地板**（`readonly` 拒绝每一次非只读调用）任何规则都降不下去，而模式的
+//!   *缺省*可以 —— 这正是 `ask` 模式下「总是允许」能起作用的原因。
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -30,8 +24,8 @@ use serde_json::Value;
 use crate::events::{Decision, ParticipantId, SpeakerId};
 use crate::tools::Effect;
 
-/// The shell startup files whose writes are never auto-approved: a silent write
-/// here changes every future shell, which is home-directory-scale damage.
+/// 写入之后绝不自动放行的那些 shell 启动文件：在这里一次静默的写入会改变往后每一个
+/// shell，那是家目录级别的破坏。
 const SHELL_RC_FILES: &[&str] = &[
     ".bashrc",
     ".bash_profile",
@@ -43,36 +37,31 @@ const SHELL_RC_FILES: &[&str] = &[
     ".npmrc",
 ];
 
-/// Directories whose contents are the user's own safety net. A write inside
-/// them is denied outright rather than merely asked about.
+/// 内容就是用户自己那张安全网的目录。写进去直接拒绝，而不只是问一句。
 const PROTECTED_DIRS: &[&str] = &[".git", ".ssh"];
 
-/// The `.env` family's escapes: files that carry no real secret and are meant to
-/// be committed.
+/// `.env` 一族的逃生口：那些不携带真密钥、本来就打算提交的文件。
 const ENV_TEMPLATE_SUFFIXES: &[&str] = &[".example", ".sample", ".template"];
 
-/// The permission modes, in the order the gesture cycles them.
+/// 权限模式，按手势循环它们时的顺序排。
 ///
-/// Three rungs, and the order is the cycle: `readonly` is the tightest, `auto`
-/// the loosest, and one press of `Shift+Tab` moves to the next (spec §1 of
-/// `.scratch/todo-and-modes`). A mode is the session's stance on writes, not a
-/// plan: the thing that used to be the fourth rung is the model's `todo` tool.
+/// 三档，而顺序就是循环：`readonly` 最紧、`auto` 最松，按一次 `Shift+Tab` 走到下一档
+/// （`.scratch/todo-and-modes` 的 spec §1）。模式是会话对写的立场、不是计划：原先那
+/// 第四档如今是模型的 `todo` 工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mode {
-    /// Any non-read-only call is denied; there are no write exemptions.
+    /// 任何非只读调用一律拒；没有写豁免。
     Readonly,
-    /// Writes ask, reads are allowed — the interactive default.
+    /// 写要问、读放行 —— 交互式的默认档。
     Ask,
-    /// Allowed by default. **Not** "permissions skipped": the breaker, the
-    /// `.env` floor and every rule still apply.
+    /// 默认放行。**不是**「跳过权限」：断路器、`.env` 地板与每一条规则仍然有效。
     Auto,
 }
 
-/// A mode's standing verdict for one effect.
+/// 一个模式对某种副作用的固定裁决。
 ///
-/// The three fields travel together on purpose: `default` is what applies when
-/// no rule matches, `floor` is what no rule may lower, and `reason` is what the
-/// verdict says out loud. One table keeps them in step.
+/// 三个字段刻意绑在一起走：`default` 是没有规则匹配时生效的东西，`floor` 是任何规则都
+/// 降不下去的东西，`reason` 是裁决说出口的那句话。一张表让三者保持同步。
 struct Stance {
     default: Decision,
     floor: Option<Decision>,
@@ -80,8 +69,8 @@ struct Stance {
 }
 
 impl Mode {
-    /// The wire and CLI spelling of the mode. This is also what `config.toml`
-    /// writes in `[permissions] mode`, and the only spelling that parses.
+    /// 模式在线级与 CLI 上的拼写。`config.toml` 的 `[permissions] mode` 写的也是它，
+    /// 而且它是唯一能解析成功的拼写。
     pub fn as_str(self) -> &'static str {
         match self {
             Mode::Readonly => "readonly",
@@ -90,21 +79,20 @@ impl Mode {
         }
     }
 
-    /// The mode a spelling names, or `None` when it names none.
+    /// 一个拼写所指的模式；指不出任何模式时是 `None`。
     ///
-    /// One parser for both entry points — the configuration table and the
-    /// `--mode` flag — so "which words are modes" cannot be answered twice.
+    /// 两个入口 —— 配置表与 `--mode` 旗标 —— 共用同一个解析器，于是「哪些词是模式」
+    /// 不会有第二处答案。
     pub fn parse(word: &str) -> Option<Mode> {
         [Mode::Readonly, Mode::Ask, Mode::Auto]
             .into_iter()
             .find(|mode| mode.as_str() == word)
     }
 
-    /// The next mode in the cycle: `readonly → ask → auto → readonly`.
+    /// 循环里的下一档：`readonly → ask → auto → readonly`。
     ///
-    /// One step per press of `Shift+Tab`. Three presses therefore return a
-    /// session to the mode it started in, which is what makes the gesture a
-    /// cycle rather than a ladder with a top.
+    /// 按一次 `Shift+Tab` 走一步。于是按三次就回到会话开始那一档，这也是这个手势是
+    /// 「循环」而不是一座有顶的梯子的原因。
     pub fn next(self) -> Mode {
         match self {
             Mode::Readonly => Mode::Ask,
@@ -113,8 +101,8 @@ impl Mode {
         }
     }
 
-    /// The mode's stance on this call. Only `readonly` has a floor, and it is
-    /// unconditional: what the mode denies, no rule may allow.
+    /// 这个模式对这次调用的立场。只有 `readonly` 有地板，而且它是无条件的：模式拒绝
+    /// 的东西，任何规则都不许放行。
     fn stance(self, call: &Call<'_>) -> Stance {
         match (self, call.effect) {
             (Mode::Readonly, Effect::ReadOnly) => Stance {
@@ -147,10 +135,9 @@ impl Mode {
 }
 
 impl Default for Mode {
-    /// `ask` is the mode a session starts in when nothing says otherwise: writes
-    /// ask, reads are allowed. It is the default of `[permissions] mode` as well,
-    /// and having one answer for both is why this impl exists rather than a literal
-    /// at each front end (spec §12).
+    /// 没有别的说法时，会话就从 `ask` 这一档开始：写要问、读放行。它也是
+    /// `[permissions] mode` 的缺省值，而「两边同一个答案」正是这里写一个 impl、而不是
+    /// 在每个前端各写一个字面量的原因（spec §12）。
     fn default() -> Self {
         Mode::Ask
     }
@@ -162,21 +149,20 @@ impl fmt::Display for Mode {
     }
 }
 
-/// Who a rule applies to. `Any` is the common case; `Deny`/`Ask` rules that
-/// propagate are how one participant's constraint reaches the executors it
-/// spawns.
+/// 一条规则适用于谁。`Any` 是常见情况；会传播的 `Deny`/`Ask` 规则就是一个参与者的
+/// 约束到达它派出的执行者的途径。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subject {
     Any,
     Debater,
     Executor,
-    /// One named participant, debater or executor.
+    /// 一个具名的参与者，讨论者或执行者。
     Participant(ParticipantId),
 }
 
 impl Subject {
-    /// The subject that names one speaker, for a rule remembered about this
-    /// agent (a session-scoped "always allow").
+    /// 为一条关于这个 agent 记住的规则（会话级的「总是允许」）给出指名那个发言者的
+    /// subject。
     pub fn for_speaker(speaker: &SpeakerId) -> Subject {
         match speaker {
             SpeakerId::Debater(id) | SpeakerId::Executor(id) => Subject::Participant(id.clone()),
@@ -184,7 +170,7 @@ impl Subject {
         }
     }
 
-    /// Whether this subject covers `speaker`.
+    /// 这个 subject 是否覆盖 `speaker`。
     pub fn matches(&self, speaker: &SpeakerId) -> bool {
         match (self, speaker) {
             (Subject::Any, _) => true,
@@ -207,30 +193,29 @@ impl Subject {
     }
 }
 
-/// The scope of a rule: a predicate over the call, not a name matcher.
+/// 一条规则的作用域：一个作用于调用的谓词，而不是名字匹配器。
 ///
-/// Because a scope can look at the whole call (its effect, its write set, its
-/// argv), a condition like "not read-only **and** the write set is exactly this
-/// set" is expressible directly, instead of a broad deny fighting a narrow
-/// allow on a specificity axis that does not exist here.
+/// 因为作用域能看到整个调用（它的副作用、它的写集合、它的 argv），像「不是只读
+/// **且**写集合正好是这一组」这样的条件可以直接写出来，而不必让一条宽泛的 deny 和一条
+/// 狭窄的 allow 在一个这里根本不存在的「专指度」轴上打架。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    /// Tool name, as a glob (`edit_file`, `custom__*`).
+    /// 工具名，按 glob 匹配（`edit_file`、`custom__*`）。
     Tool(String),
-    /// A command's argv prefix (`["git", "status"]`), element-wise.
+    /// 一条命令的 argv 前缀（`["git", "status"]`），逐元素比对。
     CommandPrefix(Vec<String>),
-    /// A path glob, matched relative to the session cwd (absolute when the
-    /// pattern starts with `/`) against this call's write and read targets.
+    /// 一个路径 glob，相对会话 cwd 匹配（模式以 `/` 开头时按绝对路径），拿这次调用的
+    /// 写与读目标去比。
     Path(String),
-    /// The **write** set is exactly this set: the shape a safe exemption needs,
-    /// because a call that also writes something else cannot borrow it.
+    /// **写**集合正好是这一组：一条安全的豁免需要的形状，因为一个顺带还写了别的
+    /// 东西的调用借不到它。
     PathSet(Vec<PathBuf>),
-    /// Every call.
+    /// 每一次调用。
     All,
 }
 
 impl Scope {
-    /// Whether this scope covers the call.
+    /// 这个作用域是否覆盖这次调用。
     pub fn matches(&self, call: &Call<'_>) -> bool {
         match self {
             Scope::Tool(pattern) => glob_match(pattern, call.tool_name),
@@ -261,22 +246,22 @@ impl Scope {
     }
 }
 
-/// One permission rule: who, over what, how, and whether it reaches executors.
+/// 一条权限规则：谁、在什么之上、怎么办，以及它是否到达执行者。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
-    /// Who the rule applies to.
+    /// 规则适用于谁。
     pub subject: Subject,
-    /// The predicate this rule matches a call against.
+    /// 这条规则拿什么谓词去匹配调用。
     pub scope: Scope,
-    /// What matching this rule means.
+    /// 匹配上这条规则意味着什么。
     pub action: Decision,
-    /// Whether this rule is inherited by spawned executors. Defaults by action
-    /// (`Deny`/`Ask` yes, `Allow` no).
+    /// 这条规则是否被派出的执行者继承。默认由 action 决定（`Deny`/`Ask` 是，
+    /// `Allow` 否）。
     pub propagate: bool,
 }
 
 impl Rule {
-    /// Build a rule whose `propagate` takes the action's default.
+    /// 建一条 `propagate` 取 action 默认值的规则。
     pub fn new(subject: Subject, scope: Scope, action: Decision) -> Self {
         Self {
             propagate: action.default_propagate(),
@@ -286,14 +271,14 @@ impl Rule {
         }
     }
 
-    /// Override the action's default propagation for this rule.
+    /// 为这条规则覆盖 action 的默认传播性。
     pub fn with_propagate(mut self, propagate: bool) -> Self {
         self.propagate = propagate;
         self
     }
 
-    /// The rule a session-scoped "always allow" appends: this participant may
-    /// use this tool. It never propagates and never leaves the session.
+    /// 会话级的「总是允许」追加的那条规则：这个参与者可以用这个工具。它绝不传播、
+    /// 也绝不离开这个会话。
     pub fn always_allow(speaker: &SpeakerId, tool_name: &str) -> Rule {
         Rule::new(
             Subject::for_speaker(speaker),
@@ -312,8 +297,8 @@ impl Rule {
     }
 }
 
-/// A mode plus its rules. The mode is a `Session` value: it never enters the
-/// event stream, and `--continue` returns to the configured value (spec §12).
+/// 一个模式加上它的规则。模式是 `Session` 的一个值：它从不进事件流，而 `--continue`
+/// 会回到配置里那一档（spec §12）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     mode: Mode,
@@ -321,7 +306,7 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// A policy with this mode and no rules.
+    /// 一个跑这个模式、没有规则的策略。
     pub fn for_mode(mode: Mode) -> Self {
         Self {
             mode,
@@ -329,40 +314,36 @@ impl Policy {
         }
     }
 
-    /// The mode this policy runs in.
+    /// 这个策略跑在哪一档。
     pub fn mode(&self) -> Mode {
         self.mode
     }
 
-    /// The rules, in the order they were pushed.
+    /// 规则，按压入顺序。
     pub fn rules(&self) -> &[Rule] {
         &self.rules
     }
 
-    /// Add a rule. This is how "always allow" changes the session policy — and
-    /// the only way it changes anything: no `config.toml` write, no event.
+    /// 加一条规则。「总是允许」就是这么改会话策略的 —— 也是它唯一的改动途径：不写
+    /// `config.toml`、不进事件。
     pub fn push(&mut self, rule: Rule) {
         self.rules.push(rule);
     }
 
-    /// Swap the mode, keeping the rules. This is the mode-cycle gesture's one
-    /// effect on the policy: a value, never an event (spec §12).
+    /// 换掉模式、留下规则。这是模式循环手势对策略唯一的影响：一个值，永远不是一个
+    /// 事件（spec §12）。
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
     }
 
-    /// The rules that travel to a spawned executor: only the ones marked
-    /// `propagate` — denials and questions by default — so inheritance can only
-    /// tighten.
+    /// 会跟着走到派出的执行者那里的规则：只有标了 `propagate` 的那些 —— 缺省是拒绝与
+    /// 问 —— 所以继承只可能收紧。
     ///
-    /// Working out the child's whole policy is [`crate::agent::executor`]'s job,
-    /// and what it does with this list is the point: the child runs under the
-    /// **same mode** as its dispatcher (a mode is the session's stance on writes,
-    /// and a delegation that inherited a looser one would be a widening), keeps
-    /// every propagated rule, and starts with an empty read set. Its authority is
-    /// therefore a subset of the dispatcher's; what never travels is an
-    /// *allowance*, which is what these rules would carry if `Allow` propagated
-    /// (spec §12, §16).
+    /// 算出子会话的整份策略是 [`crate::agent::executor`] 的事，而它拿这张列表做什么
+    /// 才是重点：子会话与派发者跑在**同一个模式**下（模式是会话对写的立场，继承到一个
+    /// 更松的就是放宽），保留每一条传播来的规则，并以一个空的读集合起步。于是它的权限
+    /// 是派发者的子集；永远不跟着走的是**许可**，而如果 `Allow` 会传播，这些规则正是
+    /// 会带上许可的那种（spec §12、§16）。
     pub fn inherited_rules(&self) -> Vec<Rule> {
         self.rules
             .iter()
@@ -372,55 +353,52 @@ impl Policy {
     }
 }
 
-/// One call, as the gate needs to see it. Built by the loop from the registry's
-/// resolved facts; borrowed so the gate stays a pure read.
+/// 一次调用在权限门眼里的样子。由循环用注册表解析出的事实建出来；借用，所以权限门
+/// 始终是一次纯读。
 #[derive(Debug)]
 pub struct Call<'a> {
-    /// The tool name the model asked for.
+    /// 模型要的那个工具名。
     pub tool_name: &'a str,
-    /// The tool's declared workspace effect.
+    /// 工具声明的对工作区的副作用。
     pub effect: &'a Effect,
-    /// Resolved absolute write targets (empty unless the effect is `WritePaths`).
-    /// A target that could not be resolved is kept in its lexical form, so the
-    /// gate still sees the call.
+    /// 已解析的绝对写目标（副作用不是 `WritePaths` 时为空）。解析不了的目标保留它的
+    /// 字面形式，于是权限门照样看得见这次调用。
     pub write_targets: &'a [PathBuf],
-    /// Resolved absolute read targets.
+    /// 已解析的绝对读目标。
     pub read_targets: &'a [PathBuf],
-    /// The argv a command tool will run, when it runs one.
+    /// 命令类工具将要跑的 argv —— 当它要跑一条命令时。
     pub argv: Option<&'a [String]>,
-    /// Session cwd, the base for relative path patterns and for the `rm` breaker.
+    /// 会话 cwd，相对路径模式与 `rm` 断路的基准。
     pub cwd: &'a Path,
-    /// The user's home, when it is known. Only the `rm` breaker reads it.
+    /// 用户的 home —— 知道的时候。只有 `rm` 断路器读它。
     pub home: Option<&'a Path>,
-    /// Why a target could not be resolved against the workspace, if one could
-    /// not. The path limit denies such a call, so the recorded verdict matches
-    /// the outcome instead of reporting an `Allow` the call never got to use.
+    /// 某个目标为什么解析不到工作区里 —— 如果确实有。路径上限会拒绝这样的调用，于是
+    /// 记下来的裁决与实际结果一致，而不是报一个这次调用根本没用上的 `Allow`。
     pub path_error: Option<&'a str>,
 }
 
-/// The gate's answer: a decision and a reason that is always filled (ticket 19
-/// reads `reason` to answer "is my permission policy too annoying?").
+/// 权限门的答案：一个裁决，加一句永远填好的理由（票 19 读 `reason` 来回答「我的权限
+/// 策略是不是太烦了？」）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
-    /// The gate's decision.
+    /// 权限门的裁决。
     pub decision: Decision,
-    /// Why, in one sentence; never empty.
+    /// 为什么，一句话；永远不空。
     pub reason: String,
 }
 
-/// The gate. Pure: no environment, no interaction, no event.
+/// 权限门。纯函数：不读环境、不交互、不落事件。
 pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict {
-    // ① The circuit breaker short-circuits a hard deny before any rule is
-    //    evaluated, so no allow (and, later, no hook) can flip it.
+    // ① 断路器在任何规则被评估之前就把一个硬拒绝短路掉，所以没有任何 allow（以及
+    //    往后任何钩子）能翻转它。
     if let Some(verdict) = circuit_breaker(call) {
         return verdict;
     }
 
     let stance = policy.mode.stance(call);
 
-    // ② The mode's default, or — when any rule matches — the supremum of the
-    //    matching rules. Specificity is ignored on purpose: a broad deny beats a
-    //    narrow allow, so exemptions must be written into the deny's predicate.
+    // ② 模式的缺省，或者 —— 有规则匹配时 —— 匹配规则的**上确界**。专指程度是刻意
+    //    不看的：宽泛的 deny 压过狭窄的 allow，所以豁免必须写进 deny 的谓词里。
     let matching: Vec<&Rule> = policy
         .rules
         .iter()
@@ -436,18 +414,15 @@ pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict 
             .collect()
     };
 
-    // ③ A mode floor (only `readonly` has one) is maxed in even when rules
-    //    replaced the mode's default.
+    // ③ 模式的地板（只有 `readonly` 有）在规则替换掉模式的缺省之后也要一并取最大。
     if !matching.is_empty() {
         if let Some(floor) = stance.floor {
             parts.push((floor, stance.reason.to_owned()));
         }
     }
 
-    // ④ Constraints that are defaults of the policy rather than rules from a
-    //    file: the workspace's path limit, sensitive writes that are never
-    //    auto-approved, and the `.env` family. All are floors, so no rule can
-    //    lower them.
+    // ④ 属于策略缺省、而不是来自文件的规则的约束：工作区的路径上限、绝不自动放行的
+    //    敏感写入，以及 `.env` 一族。它们都是地板，所以没有规则能降下去。
     if let Some(message) = call.path_error {
         parts.push((Decision::Deny, format!("path limit: {message}")));
     }
@@ -475,7 +450,7 @@ pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict 
     }
 }
 
-/// The breakers, checked before every rule. A `Deny` here is final.
+/// 断路器们，在每一条规则之前先查。这里的 `Deny` 是终局的。
 fn circuit_breaker(call: &Call<'_>) -> Option<Verdict> {
     if let Some(verdict) = rm_breaker(call) {
         return Some(verdict);
@@ -489,13 +464,12 @@ fn circuit_breaker(call: &Call<'_>) -> Option<Verdict> {
     })
 }
 
-/// `rm` against the filesystem root or the home directory (or an ancestor of
-/// either) is the one class no rule may approve: it is the least reversible
-/// thing an agent can do.
+/// 对文件系统根或家目录（或两者的某个祖先）动手的 `rm`，是没有任何规则能批准的那一
+/// 类：它是 agent 能做的最不可逆的事。
 ///
-/// The `bash` tool declares its argv as `["bash", "-lc", command]` (spec §7), so
-/// the command the shell will actually run is looked at, not the wrapper that
-/// starts it — otherwise every `rm` would be hidden one word in.
+/// `bash` 工具把它的 argv 声明成 `["bash", "-lc", command]`（spec §7），所以看的是
+/// shell 真正要跑的那条命令，而不是启动它的那层包装 —— 否则每一条 `rm` 都能藏在一个
+/// 词背后躲过去。
 fn rm_breaker(call: &Call<'_>) -> Option<Verdict> {
     let argv = call.argv?;
     for command in simple_commands(argv) {
@@ -518,13 +492,12 @@ fn rm_breaker(call: &Call<'_>) -> Option<Verdict> {
     None
 }
 
-/// The simple commands one argv will run, as token lists.
+/// 一条 argv 将会跑的那些简单命令，按 token 列表给出。
 ///
-/// For an ordinary argv that is the argv itself. For a shell wrapper
-/// (`bash -lc "<command>"`) it is the command string split on the shell's control
-/// operators and tokenized. The scan is **lexical and best-effort**: the breaker
-/// exists to stop an accident, not to confine an adversary (spec §12, §20), so a
-/// spelling it cannot see is documented rather than chased.
+/// 对一条普通 argv，它就是这条 argv 本身。对一个 shell 包装（`bash -lc "<command>"`），
+/// 它是把命令串按 shell 的控制操作符切开再分词。这次扫描是**词法、best-effort** 的：
+/// 断路器存在是为了拦住事故，不是为了圈禁对手（spec §12、§20），所以它看不见的写法
+/// 是写进文档，而不是去追。
 fn simple_commands(argv: &[String]) -> Vec<Vec<&str>> {
     match shell_command_string(argv) {
         Some(script) => shell_simple_commands(script),
@@ -532,13 +505,12 @@ fn simple_commands(argv: &[String]) -> Vec<Vec<&str>> {
     }
 }
 
-/// The command string a shell invocation will run, if the argv is one.
+/// 一次 shell 调用将要跑的命令串 —— 如果这条 argv 确实是的话。
 ///
-/// Recognizes `bash`/`sh` invoked with a `-c`-bearing flag: the argument after
-/// that flag is the script. The scan skips options, so a shell that takes an
-/// option argument first (`bash -o pipefail -c "…"`) is still seen; a shell given
-/// a script file instead (`bash build.sh`) has no command string here and its
-/// argv is treated as an ordinary argv.
+/// 认出带一个含 `-c` 旗标的 `bash`/`sh` 调用：那个旗标后面的参数就是脚本。扫描会跳过
+/// 选项，所以先吃一个选项参数再上 `-c` 的 shell（`bash -o pipefail -c "…"`）照样能
+/// 被看见；给的是脚本文件的 shell（`bash build.sh`）在这里没有命令串，它的 argv 就
+/// 按普通 argv 处理。
 fn shell_command_string(argv: &[String]) -> Option<&str> {
     let shell = Path::new(argv.first()?).file_name()?.to_str()?;
     if !matches!(shell, "bash" | "sh") {
@@ -546,12 +518,12 @@ fn shell_command_string(argv: &[String]) -> Option<&str> {
     }
     for (index, arg) in argv.iter().enumerate().skip(1) {
         let Some(cluster) = arg.strip_prefix('-') else {
-            // A non-flag token (a script file, or an option's argument) does not
-            // carry the flag; a later `-c` may still.
+            // 一个不是旗标的 token（脚本文件，或某个选项的参数）不带这个旗标；
+            // 后面的 `-c` 仍然可能带。
             continue;
         };
         if cluster.is_empty() || cluster.starts_with('-') {
-            // `-` (stdin) or a long option (`--norc`); neither carries the flag.
+            // `-`（stdin）或长选项（`--norc`）；两者都不带这个旗标。
             continue;
         }
         if cluster.contains('c') {
@@ -561,12 +533,11 @@ fn shell_command_string(argv: &[String]) -> Option<&str> {
     None
 }
 
-/// Split a shell command string into simple commands and tokenize each.
+/// 把一条 shell 命令串切成简单命令，并为每条分词。
 ///
-/// Control operators (`;`, `&`, `|`, `(`, `)`, newline) start a new simple
-/// command, matching surrounding quotes are stripped from a token, and leading
-/// grammatical keywords (`then`, `do`, `if`, `!`, …) are dropped, so `rm -rf "/"`,
-/// `(rm -rf /)` and `if x; then rm -rf /; fi` all read as an `rm`.
+/// 控制操作符（`;`、`&`、`|`、`(`、`)`、换行）开启一条新的简单命令，成对的引号会从
+/// token 上剥掉，开头的语法关键字（`then`、`do`、`if`、`!`……）会被丢掉，于是
+/// `rm -rf "/"`、`(rm -rf /)` 与 `if x; then rm -rf /; fi` 读出来都是一个 `rm`。
 fn shell_simple_commands(script: &str) -> Vec<Vec<&str>> {
     script
         .split([';', '&', '|', '(', ')', '\n'])
@@ -588,39 +559,37 @@ fn shell_simple_commands(script: &str) -> Vec<Vec<&str>> {
         .collect()
 }
 
-/// Grammatical shell words that may precede a simple command, so the breaker
-/// reads the command rather than the keyword in front of it.
+/// 可能出现在一条简单命令前面的语法性 shell 词，好让断路器读的是命令、而不是它前面
+/// 那个关键字。
 ///
-/// These are syntax, not indirection: stripping them is still a lexical read of
-/// the same command. A wrapper that changes *what* runs (`sudo`, `env`, `eval`,
-/// an alias) is deliberately not here — see `docs/bash.md` for what the scan
-/// cannot see.
+/// 这些是语法、不是间接层：剥掉它们仍然是对同一条命令的词法读取。改变**跑的是什么**
+/// 的包装（`sudo`、`env`、`eval`、别名）刻意不在表里 —— 这次扫描看不见什么，见
+/// `docs/bash.md`。
 const SHELL_KEYWORDS: &[&str] = &[
     "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "time", "!",
 ];
 
-/// A token without one matching pair of surrounding quotes.
+/// 去掉一对外围引号（成对匹配）之后的 token。
 fn strip_quotes(token: &str) -> &str {
     let bytes = token.as_bytes();
     if token.len() >= 2 {
         let first = bytes[0];
         let last = bytes[token.len() - 1];
         if (first == b'"' || first == b'\'') && first == last {
-            // The quotes are ASCII, so both cuts are on character boundaries.
+            // 引号是 ASCII 的，所以两处切点都落在字符边界上。
             return &token[1..token.len() - 1];
         }
     }
     token
 }
 
-/// Whether one `rm` argument names `/`, `~`, or an ancestor of either.
+/// 一个 `rm` 参数是否指向 `/`、`~`，或两者的某个祖先。
 ///
-/// Relative arguments are folded against the session cwd, so `rm -rf ../..`
-/// from a directory under the home directory is caught the same way its
-/// absolute spelling is.
+/// 相对参数会折进会话 cwd，所以在家目录下某个目录里跑 `rm -rf ../..` 会与它的绝对
+/// 写法一样被逮住。
 fn targets_root_or_home(arg: &str, cwd: &Path, home: Option<&Path>) -> bool {
     let trimmed = arg.trim_end_matches('/');
-    // `""` is `/` or `//`.
+    // `""` 就是 `/` 或 `//`。
     if trimmed.is_empty() {
         return true;
     }
@@ -634,7 +603,7 @@ fn targets_root_or_home(arg: &str, cwd: &Path, home: Option<&Path>) -> bool {
         if let Some(home) = home {
             return reaches_root_or_home(&fold(&home.join(rest)), Some(home));
         }
-        // Without a home, only the plainly-folding spellings can be judged.
+        // 没有 home 时，只有明确能折出来的写法才判得了。
         return rest.split('/').all(|component| component == "..");
     }
     let path = Path::new(trimmed);
@@ -646,8 +615,7 @@ fn targets_root_or_home(arg: &str, cwd: &Path, home: Option<&Path>) -> bool {
     reaches_root_or_home(&folded, home)
 }
 
-/// Whether a lexically folded path is the filesystem root or an ancestor of the
-/// home directory (home itself included).
+/// 一条词法折叠后的路径是否就是文件系统根，或者是家目录的祖先（家目录本身也算）。
 fn reaches_root_or_home(folded: &Path, home: Option<&Path>) -> bool {
     if folded == Path::new("/") {
         return true;
@@ -655,8 +623,8 @@ fn reaches_root_or_home(folded: &Path, home: Option<&Path>) -> bool {
     home.is_some_and(|home| home.starts_with(folded))
 }
 
-/// Fold `.` and `..` lexically. The gate cannot canonicalize — it is pure — and
-/// a lexical fold is what catches `/home/u/../..` without touching the disk.
+/// 词法地折掉 `.` 与 `..`。权限门没法 canonicalize —— 它是纯的 —— 而词法折叠正是
+/// 那个不碰磁盘就能逮住 `/home/u/../..` 的东西。
 fn fold(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -671,7 +639,7 @@ fn fold(path: &Path) -> PathBuf {
     out
 }
 
-/// A write inside `.git/` or `.ssh/`.
+/// 写进 `.git/` 或 `.ssh/` 里。
 fn protected_write<'a>(call: &Call<'a>) -> Option<&'a Path> {
     call.write_targets
         .iter()
@@ -686,8 +654,7 @@ fn protected_write<'a>(call: &Call<'a>) -> Option<&'a Path> {
         .map(PathBuf::as_path)
 }
 
-/// A write to a shell startup file: never auto-approved, but the user may still
-/// approve it case by case.
+/// 写一个 shell 启动文件：绝不自动放行，但用户仍然可以逐个批准。
 fn never_auto_approved(call: &Call<'_>) -> Option<Verdict> {
     call.write_targets
         .iter()
@@ -705,8 +672,8 @@ fn never_auto_approved(call: &Call<'_>) -> Option<Verdict> {
         })
 }
 
-/// The `.env` family: its whole content is credentials, and a read lands in the
-/// session file and `outputs/` forever. Templates carry no real secret.
+/// `.env` 一族：它的全部内容都是凭据，而一次读会永久落进会话文件与 `outputs/` 里。
+/// 模板不携带真密钥。
 fn env_family(call: &Call<'_>) -> Option<Verdict> {
     call.write_targets
         .iter()
@@ -734,9 +701,8 @@ fn is_env_file(path: &Path) -> bool {
     name == ".env" || name.starts_with(".env.") || name.ends_with(".env")
 }
 
-/// `PathSet` compares the **write** set exactly, and only for a `WritePaths`
-/// call: `Exclusive` has no path set to be equal to, so it can never borrow a
-/// path-shaped exemption.
+/// `PathSet` 精确比较**写**集合，而且只对 `WritePaths` 调用有意义：`Exclusive` 没有
+/// 路径集合可言，所以它永远借不到路径形状的豁免。
 fn write_set_equals(call: &Call<'_>, exact: &[PathBuf]) -> bool {
     if !matches!(call.effect, Effect::WritePaths(_)) {
         return false;
@@ -761,21 +727,21 @@ fn path_matches(pattern: &str, path: &Path, cwd: &Path) -> bool {
     if glob_match(pattern, &relative) {
         return true;
     }
-    // `**/name` also matches `name` at the cwd root: a leading `**/` may stand
-    // for zero directories, which is what users mean by it.
+    // `**/name` 也匹配 cwd 根下的 `name`：开头的 `**/` 可以代表零层目录，用户用它
+    // 就是这个意思。
     pattern
         .strip_prefix("**/")
         .is_some_and(|rest| glob_match(rest, &relative))
 }
 
-/// A small glob: `*` matches any run of characters that does not cross `/`,
-/// `**` crosses `/`, `?` matches one character (never `/`), everything else is
-/// literal. No dependency, and no surprises about what a deny pattern covers.
+/// 一个小 glob：`*` 匹配任意一段不跨 `/` 的字符，`**` 跨 `/`，`?` 匹配一个字符
+/// （永远不匹配 `/`），其余都是字面量。没有依赖，也不会在「一条 deny 模式到底覆盖了
+/// 什么」上出意外。
 fn glob_match(pattern: &str, text: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
     let text: Vec<char> = text.chars().collect();
 
-    // dp[j]: does the pattern consumed so far match text[..j]?
+    // dp[j]：目前消费掉的模式是否匹配 text[..j]？
     let mut dp = vec![false; text.len() + 1];
     dp[0] = true;
 
@@ -813,37 +779,36 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     dp[text.len()]
 }
 
-/// One question the loop asks, outside the gate.
+/// 循环在权限门之外问的一个问题。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PermissionRequest {
-    /// Identifier shared by the `PermissionAsked` and `PermissionDecided` pair.
+    /// `PermissionAsked` 与 `PermissionDecided` 这一对共用的标识。
     pub request_id: String,
-    /// The call this question is about.
+    /// 这个问题所问的那次调用。
     pub tool_call_id: String,
-    /// The tool name, for a prompt that names the action.
+    /// 工具名，给会点名动作的提示用。
     pub tool_name: String,
-    /// The arguments, so a prompt can show what would run.
+    /// 参数，好让提示能显示将要跑什么。
     pub args: Value,
-    /// Why the gate asked, carried so the prompt can explain itself.
+    /// 权限门为什么问 —— 带上它，好让提示能自己解释自己。
     pub reason: String,
 }
 
-/// What the user answered.
+/// 用户答了什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
-    /// Run this call.
+    /// 跑这次调用。
     Allow,
-    /// Run this call and remember the allowance for the rest of the session.
+    /// 跑这次调用，并在余下的会话里记住这条许可。
     AlwaysAllow,
-    /// Refuse this call.
+    /// 拒掉这次调用。
     Deny,
 }
 
-/// The port the loop asks through. A headless session injects none, and the
-/// loop downgrades the gate's `Ask` to `Deny`; an interactive renderer injects
-/// an implementation that reads the keyboard and answers.
+/// 循环发问走的那条端口。headless 会话什么都不注入，循环就把权限门的 `Ask` 降级成
+/// `Deny`；交互式渲染器注入一个读键盘并作答的实现。
 #[async_trait]
 pub trait Asker: Send + Sync {
-    /// Ask about one call and return the user's answer.
+    /// 就一次调用发问，并返回用户的答案。
     async fn ask(&self, request: &PermissionRequest) -> Answer;
 }

@@ -1,30 +1,25 @@
-//! fs-agent: a self-hosted coding agent CLI.
+//! fs-agent：一个自用的 coding agent CLI。
 //!
-//! One append-only event stream plus one projection per agent. The event stream
-//! is the single source of truth; an agent's `messages` is recomputed from it,
-//! never stored.
+//! 一条只追加的事件流，加上每个 agent 一份投影。事件流是唯一真相源；agent 的
+//! `messages` 由它重算，从不存下来。
 //!
-//! # The assembly seam
+//! # 组装接缝
 //!
-//! [`assemble`] and [`assemble_discussion`] are the two ends of the one
-//! end-to-end seam. They take injected [`Provider`]s, injected render sinks, and
-//! injected configuration values, and they **read no environment** — so a test
-//! can drive a whole session with a scripted fake provider and assert the JSONL
-//! event stream plus the two sinks. Later tickets add scenarios to this seam;
-//! they do not open new mock seams.
+//! [`assemble`] 与 [`assemble_discussion`] 是那条唯一的端到端接缝的两头。它们接收
+//! 注入的 [`Provider`]、注入的渲染接收端与注入的配置值，并且**不读任何环境** —— 于是
+//! 一个测试可以拿一个按脚本应答的假 provider 驱动整场会话，再对 JSONL 事件流与那两个
+//! 接收端做断言。后来的票给这条接缝加场景；它们不会另开 mock 接缝。
 //!
-//! A discussion is the same scaffold opened once per participant: one event
-//! stream, two debater sessions that share it, and a synthesizer session for the
-//! single-shot closing call (spec §15).
+//! 一次讨论就是同一个脚手架按参与者各开一次：一条事件流、两个共享它的讨论者会话，再加
+//! 一场会话负责收尾那一次单发调用（spec §15）。
 //!
-//! # Boundaries
+//! # 边界
 //!
-//! Thirteen top-level modules, depending only downward:
-//! `events` · `config` · `provider` · `tools` · `permissions` · `questions` ·
-//! `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`.
-//! `events` depends on nothing internal; [`provider::projection`] is a submodule
-//! of `provider`, not a boundary. `discussion` never touches `provider`: it holds
-//! the protocol's rules, and the `agent` layer drives every call.
+//! 十三个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` ·
+//! `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` ·
+//! `session` · `render` · `cli`。`events` 不依赖任何内部模块；[`provider::projection`]
+//! 是 `provider` 的子模块、不是一条边界。`discussion` 永远不碰 `provider`：它持着
+//! 协议的规则，而每一次调用都由 `agent` 层驱动。
 
 pub mod agent;
 pub mod cli;
@@ -59,133 +54,124 @@ use crate::render::{RenderHandle, Renderer};
 use crate::session::{Session, SessionParts};
 use crate::tools::{PathLocks, Registry};
 
-/// Everything a session needs except who is speaking and which model they use.
+/// 一场会话需要的一切，除了谁在发言、用的又是哪个模型。
 ///
-/// One scaffold can open more than one session, which is what a discussion is:
-/// two debaters necessarily share the event stream, the tool table, the path
-/// locks, the permission policy, the ask port and the hook, because those are
-/// session-level facts rather than per-agent ones (spec §15). The render sinks
-/// are deliberately *not* here: there is one renderer per process, so they are
-/// consumed once by whoever assembles.
+/// 一个脚手架可以开出不止一场会话，一次讨论就是这样：两个讨论者必然共享事件流、工具
+/// 表、路径锁、权限策略、询问端口与钩子，因为那些是会话级事实、而不是每个 agent 各自的
+/// 东西（spec §15）。渲染接收端刻意**不**在这里：一个进程只有一个渲染器，所以它们由
+/// 组装的那一方一次性消费掉。
 pub struct SessionScaffold {
-    /// Session working directory, recorded in `SessionStarted`.
+    /// 会话的工作目录，记在 `SessionStarted` 里。
     pub cwd: PathBuf,
-    /// Path of this session's JSONL event log. Its parent must exist.
+    /// 这场会话 JSONL 事件日志的路径。它的父目录必须已存在。
     pub log_path: PathBuf,
-    /// Session identity; never changes across `--continue`.
+    /// 会话身份；跨 `--continue` 永不改变。
     pub session_id: SessionId,
-    /// The tool table. A runtime value, assembled here and never a global.
+    /// 工具表。一个运行时值，在这里组装出来，永远不是全局量。
     pub tools: Registry,
-    /// Per-path write locks. The **same** table must reach every executor, or
-    /// write exclusion is per session and therefore no lock at all.
+    /// 按路径的写锁。**同一张**表必须到达每一个执行者，否则写互斥就只是每场会话各自
+    /// 的、也就等于根本没有锁。
     pub locks: PathLocks,
-    /// The session's permission policy: a mode plus its rules.
+    /// 这场会话的权限策略：一个模式加上它的规则。
     pub policy: Policy,
-    /// The ask port used when the gate answers `Ask`. `None` means no
-    /// interactive answerer, so the loop downgrades `Ask` to `Deny`.
+    /// 权限门答 `Ask` 时用的询问端口。`None` 表示没有交互式作答者，于是循环把 `Ask`
+    /// 降级成 `Deny`。
     pub asker: Option<Arc<dyn Asker>>,
-    /// The port that puts a model-initiated question to the user (spec §7).
-    /// `None` means no questionnaire answerer — headless assembly never mounts
-    /// one — so the table does not advertise `ask_user_question` and the tool
-    /// fails readably if it is somehow called.
+    /// 把模型发起的问句摆给用户的那条端口（spec §7）。`None` 表示没有问卷调查作答者
+    /// —— headless 组装永远不挂 —— 于是工具表不宣告 `ask_user_question`，而它万一被
+    /// 调到也会可读地失败。
     pub questions: Option<Arc<dyn UserQuestions>>,
-    /// The strategy mounted at the tool-call hook points. `None` means the loop
-    /// calls no hook.
+    /// 挂在工具调用钩子点上的策略。`None` 表示循环不调任何钩子。
     pub hook: Option<Arc<dyn Hook>>,
-    /// The user's home directory, when the caller knows it. Only the `rm`
-    /// circuit breaker reads it.
+    /// 用户的 home 目录 —— 调用方知道的时候。只有 `rm` 断路器读它。
     pub home: Option<PathBuf>,
 }
 
-/// Everything a single-agent session needs, all of it injected.
+/// 单 agent 会话需要的一切，全部注入。
 pub struct AssemblyParts {
-    /// The session all this runs in.
+    /// 这一切跑在其中的那场会话。
     pub scaffold: SessionScaffold,
-    /// The model client. Real profiles arrive in ticket 02; tests inject fakes.
+    /// 模型客户端。真的 profile 在票 02 到；测试注入假的。
     pub provider: Box<dyn Provider>,
-    /// The agent this session acts as.
+    /// 这场会话扮演的那个 agent。
     pub speaker: SpeakerId,
-    /// This agent's model and budget values.
+    /// 这个 agent 的模型与预算值。
     pub config: SessionConfig,
-    /// The renderer, chosen at startup. Exactly one of the three modes runs, and
-    /// the assembly creates the one channel it consumes (spec §19).
+    /// 渲染器，启动时选定。三种模式正好跑一种，而组装只创建它要消费的那一条通道
+    /// （spec §19）。
     pub renderer: Renderer,
 }
 
-/// One debater in a discussion: who speaks, and what answers for them.
+/// 一次讨论里的一个讨论者：谁发言，以及替它作答的是什么。
 pub struct DebaterParts {
-    /// Must be a [`SpeakerId::Debater`]: the protocol compares debaters.
+    /// 必须是 [`SpeakerId::Debater`]：协议要在讨论者之间比较。
     pub speaker: SpeakerId,
-    /// This debater's own model and values.
+    /// 这个讨论者自己的模型与取值。
     pub config: SessionConfig,
     pub provider: Box<dyn Provider>,
-    /// The user's **persona** for this side: what it is like, in the user's own words.
-    /// Recorded as a private injection before the first round (spec §15).
+    /// 用户给这一方写的**人物**：他是什么样的人，用用户自己的话。在第一轮之前作为一条
+    /// 私有注入记下来（spec §15）。
     pub soul: Option<String>,
 }
 
-/// The synthesizer's one call: not an agent, so it needs no speaker, no tools
-/// and no turn (spec §15).
+/// 合成器的那一次调用：它不是 agent，所以不需要发言归属、不需要工具、也没有回合
+/// （spec §15）。
 pub struct SynthesizerParts {
     pub config: SessionConfig,
     pub provider: Box<dyn Provider>,
 }
 
-/// Everything a discussion needs, all of it injected.
+/// 一次讨论需要的一切，全部注入。
 pub struct DiscussionParts {
-    /// The session all this runs in. Opened once per debater.
+    /// 这一切跑在其中的那场会话。每个讨论者各开一次。
     pub scaffold: SessionScaffold,
-    /// Exactly [`discussion::DEBATERS`] debaters (spec §15; N > 2 would reopen
-    /// the "N = 2 does not arbitrate" decision, so v1 refuses it).
+    /// 正好 [`discussion::DEBATERS`] 个讨论者（spec §15；N > 2 会重新打开「N = 2 不做
+    /// 裁决」那个决议，所以 v1 拒掉它）。
     pub debaters: Vec<DebaterParts>,
     pub synthesizer: SynthesizerParts,
-    /// Cap on debate rounds. `None` takes the protocol's default, one
-    /// independent round plus one targeted round
-    /// ([`discussion::DEFAULT_MAX_ROUNDS`]); `Some` is how a caller changes it,
-    /// and zero is refused.
+    /// 讨论轮次的上限。`None` 取协议的缺省，也就是一个独立首轮加一个定向第二轮
+    /// （[`discussion::DEFAULT_MAX_ROUNDS`]）；`Some` 是调用方改它的方式，而零是
+    /// 拒掉的。
     pub max_rounds: Option<u32>,
-    /// The renderer, chosen at startup. Exactly one of the three modes runs, and
-    /// the assembly creates the one channel it consumes (spec §19).
+    /// 渲染器，启动时选定。三种模式正好跑一种，而组装只创建它要消费的那一条通道
+    /// （spec §19）。
     pub renderer: Renderer,
 }
 
-/// The assembled harness the caller drives.
+/// 组装好之后由调用方驱动的 harness。
 pub struct Harness {
     session: Session,
-    /// Shared, because an executor this session dispatches answers on the same
-    /// client: an executor's model is inherited unless a profile overrides it
-    /// (spec §16).
+    /// 共享的，因为这场会话派出的执行者在同一个客户端上作答：执行者的模型是继承来的，
+    /// 除非有 profile 覆盖（spec §16）。
     provider: Arc<dyn Provider>,
     speaker: SpeakerId,
     render: RenderHandle,
-    /// The session's own end of the cancel gesture (spec §6). The front end
-    /// holds one and raises it; turns get observers of it.
+    /// 这场会话自己那一端的取消手势（spec §6）。前端持有一个并举起它；各回合拿到的是
+    /// 它的观察端。
     cancel: CancelSignal,
-    /// The policy every agent on this stream shares, kept here rather than reached
-    /// through the session: the mode-cycle gesture has to be available while a
-    /// pinned run future borrows the harness (spec §12).
+    /// 这条流上每个 agent 共享的策略 —— 放在这里而不是从会话里够过去：模式循环手势
+    /// 必须在一个钉住的 run future 借着 harness 的时候也可用（spec §12）。
     policy: Arc<Mutex<Policy>>,
     render_task: JoinHandle<()>,
 }
 
-/// The assembled discussion the caller drives.
+/// 组装好之后由调用方驱动的讨论。
 pub struct DiscussionHarness {
     discussion: agent::Discussion,
-    /// The shared log handle, for assertions and for `--continue` bookkeeping.
+    /// 共享的日志句柄，给断言与 `--continue` 记账用。
     log: EventLog,
     render: RenderHandle,
-    /// The discussion's own end of the cancel gesture (spec §6): one gesture
-    /// reaches both debaters and every executor they dispatch.
+    /// 讨论自己那一端的取消手势（spec §6）：一次手势同时到达两个讨论者与它们派出的
+    /// 每一个执行者。
     cancel: CancelSignal,
-    /// The one policy all three participants share (spec §15), kept for the same
-    /// reason [`Harness`] keeps it: the mode gesture must be reachable while the
-    /// discussion's run future borrows the harness.
+    /// 三个参与者共用的那一份策略（spec §15）；留着的理由和 [`Harness`] 一样：讨论的
+    /// run future 借着 harness 的时候，模式手势必须够得着。
     policy: Arc<Mutex<Policy>>,
     render_task: JoinHandle<()>,
 }
 
-/// A scaffold after its one-time work: one log, one tool table, one lock table,
-/// one policy, one renderer. Every session opened from it shares these.
+/// 做完它那一次性工作的脚手架：一份日志、一张工具表、一张锁表、一份策略、一个渲染器。
+/// 从它开出的每一场会话都共享这些。
 struct OpenedSession {
     id: SessionId,
     cwd: PathBuf,
@@ -195,24 +181,23 @@ struct OpenedSession {
     outputs_dir: PathBuf,
     policy: Arc<Mutex<Policy>>,
     asker: Option<Arc<dyn Asker>>,
-    /// The session's question port (spec §7). Session-level, shared with every
-    /// sibling session like the asker: a debater asks through the same renderer.
+    /// 这场会话的提问端口（spec §7）。会话级，像询问端那样与每一场兄弟会话共享：讨论者
+    /// 也通过同一个渲染器发问。
     questions: Option<Arc<dyn UserQuestions>>,
     hook: Option<Arc<dyn Hook>>,
     home: Option<PathBuf>,
     skills: Arc<Skills>,
-    /// `AGENTS.md`, read once before the session exists.
+    /// `AGENTS.md`，在会话存在之前读一次。
     agents_md: Option<String>,
-    /// Whether the stream already carries a `SessionStarted`: a log that does is
-    /// a session being continued, not a new one.
+    /// 这条流是否已经带着一条 `SessionStarted`：带着的那份日志是继续中的会话，不是新的
+    /// 一场。
     resuming: bool,
     render: RenderHandle,
     render_task: JoinHandle<()>,
 }
 
 impl OpenedSession {
-    /// The one-time work: create the log and its artifact directory, discover the
-    /// skills, share the tool table and the policy, spawn the renderer.
+    /// 那一次性工作：建日志与它的产物目录、发现技能、共享工具表与策略、起渲染器。
     fn open(scaffold: SessionScaffold, renderer: Renderer) -> Result<Self, Error> {
         let SessionScaffold {
             cwd,
@@ -227,23 +212,19 @@ impl OpenedSession {
             home,
         } = scaffold;
 
-        // Tool artifacts live beside the event log, so a session stays one
-        // movable directory (spec §11). The directory is created lazily by the
-        // tool that needs it.
+        // 工具的产物住在事件日志旁边，于是会话始终是一个可搬运的目录（spec §11）。
+        // 目录由需要它的那个工具按需创建。
         let outputs_dir = log_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("outputs");
-        // The channel is created here and its consumer end is injected into the
-        // one selected renderer: one renderer per process, never concurrent
-        // subscribers (spec §19).
+        // 通道在这里创建，它的消费端则注入到唯一选中的那个渲染器：一个进程一个
+        // 渲染器，永远没有并发的订阅者（spec §19）。
         let (render, receiver) = render::channel();
         let render_task = renderer.spawn(receiver);
-        // Fresh or resumed is decided by the log's existence, which is the
-        // caller's decision: it hands over a path it just allocated under a new
-        // session id, or one an earlier run left behind. That keeps the library
-        // from reading an environment flag (spec §1) while still making
-        // `--continue` one code path (spec §11).
+        // 全新还是继续，由日志是否存在决定，而那是调用方的决定：它交过来的是它刚在新
+        // session id 下分配的一条路径，或是更早一次运行留下的那份。这样库就不用去读环境
+        // 旗标（spec §1），同时 `--continue` 仍然只有一条代码路径（spec §11）。
         let log = if log_path.exists() {
             EventLog::open(&log_path)?
         } else {
@@ -276,7 +257,7 @@ impl OpenedSession {
         })
     }
 
-    /// Open an agent's session. Cheap: every session-level value is shared.
+    /// 开出一个 agent 的会话。便宜：每一个会话级的值都是共享的。
     fn session(&self, config: SessionConfig, identity: Option<String>) -> Session {
         Session::new(SessionParts {
             id: self.id.clone(),
@@ -296,12 +277,12 @@ impl OpenedSession {
         })
     }
 
-    /// The one-time head work: a fresh stream records the session skeleton; a
-    /// resumed one closes the calls the killed process never answered.
+    /// 那一次性头部工作：全新的流记下会话骨架；继续的流把被杀的进程没答完的那些调用
+    /// 收尾。
     ///
-    /// A resumed stream gets **no second** `SessionStarted` and no re-injected
-    /// context — both are already in the log, and replaying the recorded head is
-    /// what makes the resume byte-stable for the prefix cache (spec §10, §11).
+    /// 继续的流**不会**得到第二条 `SessionStarted`、也不会重新注入上下文 —— 两者都已经
+    /// 在日志里，而重放记下来的头部正是让这次继续在前缀缓存面前逐字节稳定的原因
+    /// （spec §10、§11）。
     fn start(&self, session: &mut Session) -> Result<(), Error> {
         if !self.resuming {
             return self.record_skeleton(session);
@@ -315,13 +296,11 @@ impl OpenedSession {
         Ok(())
     }
 
-    /// Record the session skeleton through one of the sessions: `SessionStarted`,
-    /// then the two pinned injections.
+    /// 通过其中一场会话记下会话骨架：`SessionStarted`，然后那两条钉住的注入。
     ///
-    /// Identity -> rules -> catalog -> history (spec §10). A missing `AGENTS.md`
-    /// is not an error, it just means there is no injection. Exactly one session
-    /// per stream does this, and a discussion's debaters all project the same
-    /// pinned head because of it.
+    /// 身份 -> 规则 -> 技能清单 -> 历史（spec §10）。缺 `AGENTS.md` 不是错误，只表示
+    /// 没有那条注入。每条流正好有一场会话做这件事，一次讨论的所有讨论者因此投影出同一个
+    /// 钉住的头部。
     fn record_skeleton(&self, session: &mut Session) -> Result<(), Error> {
         agent::record_session_started(session, &self.render)?;
         if let Some(content) = &self.agents_md {
@@ -344,7 +323,7 @@ impl OpenedSession {
     }
 }
 
-/// Assemble a single-agent session. Reads no environment.
+/// 组装一场单 agent 会话。不读任何环境。
 pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     let AssemblyParts {
         scaffold,
@@ -370,11 +349,11 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     })
 }
 
-/// The roster's invariants, checked wherever a discussion is assembled.
+/// 名册的那些不变量，凡组装讨论的地方都查一遍。
 ///
-/// Both ways in — a discussion with a stream of its own ([`assemble_discussion`]) and
-/// one on a live session ([`Harness::discuss`]) — ask the same questions, so a roster
-/// cannot be acceptable on one path and rejected on the other.
+/// 两条入口 —— 一场有自己事件流的讨论（[`assemble_discussion`]）与一场跑在活动会话上
+/// 的讨论（[`Harness::discuss`]）—— 问的是同一组问题，于是一份名册不可能在一条路径上
+/// 可以接受、在另一条上被拒。
 fn validate_roster(
     debaters: &[DebaterParts],
     synthesizer: &SynthesizerParts,
@@ -396,11 +375,10 @@ fn validate_roster(
             )));
         }
     }
-    // Two debaters are two participants. Every projection is a function of
-    // `speaker_id`, so two debaters sharing one name would hand each side the other's
-    // answer as its own (spec §5) — most visibly in the targeted round, whose whole
-    // point is that a debater sees the *other* side's reply. Rosters that repeat a
-    // model are fine; repeating an *identity* is not.
+    // 两个讨论者就是两个参与者。每一份投影都是 `speaker_id` 的函数，所以两个讨论者共用
+    // 一个名字会把对方的作答当成自己的发给各自那一方（spec §5）—— 在定向第二轮里最
+    // 显眼，那一轮的全部意义就是讨论者看到*对方*的回答。名册里重复一个模型没问题；重复
+    // 一个*身份*不行。
     let mut speakers = BTreeSet::new();
     for debater in debaters {
         if !speakers.insert(debater.speaker.to_string()) {
@@ -417,10 +395,9 @@ fn validate_roster(
         ));
     }
 
-    // The token allowance is a **session**-level fact shared by both debaters,
-    // the synthesizer and every executor they dispatch (spec §17), so a roster
-    // that disagrees about it is a setup error rather than a silently-picked
-    // winner.
+    // token 额度是**会话**级事实，由两个讨论者、合成器与它们派出的每一个执行者共享
+    // （spec §17），所以一份在这一点上不一致的名册是组装错误，而不是悄悄挑出来的一个
+    // 赢家。
     let budget = debaters[0].config.budget.clone();
     for debater in debaters.iter().skip(1) {
         if debater.config.budget != budget {
@@ -439,11 +416,10 @@ fn validate_roster(
         ));
     }
 
-    // The redactor is a session-level fact for the same reason, and its
-    // disagreement is worse than the budget's: one participant's events would be
-    // scrubbed and another's would not, on the **same** stream, with nothing to
-    // show for it (spec §20). `Config::session_config` fills the same value into
-    // every config, so a mismatch means someone built one by hand.
+    // 出于同样的理由，打码器也是会话级事实，而不一致比预算不一致更糟：同一个参与者的
+    // 事件会被打码、另一个的不会，而且是在**同一条**流上，事后没有任何迹象（spec §20）。
+    // `Config::session_config` 把同一个值填进每一份 config，所以不一致就意味着有人手搓了
+    // 一份。
     let redactor = debaters[0].config.redactor.clone();
     for debater in debaters.iter().skip(1) {
         if debater.config.redactor != redactor {
@@ -464,13 +440,11 @@ fn validate_roster(
     Ok(())
 }
 
-/// The three participants of a discussion, on whatever stream `fork` reaches.
+/// 一次讨论的三个参与者，落在 `fork` 够得到的那条流上。
 ///
-/// `fork` is the whole difference between the two ways a discussion is assembled: a
-/// discussion of its own opens its sessions from the scaffold it just created, and one
-/// on a live session forks the session the user is in. What must not differ is decided
-/// here — each debater's private identity, and the synthesizer's landing point
-/// (spec §15, §17).
+/// `fork` 就是组装一场讨论的两条路径之间的全部差别：一场自己的讨论从它刚建好的脚手架开
+/// 会话，一场跑在活动会话上的讨论则分叉出用户所在的那场会话。绝不能有差别的东西在这里
+/// 定下 —— 每个讨论者的私有身份，以及合成器的落点（spec §15、§17）。
 fn discussion_participants(
     debaters: Vec<DebaterParts>,
     synthesizer: SynthesizerParts,
@@ -499,10 +473,9 @@ fn discussion_participants(
         mut config,
         provider,
     } = synthesizer;
-    // The synthesizer is the other landing point a cheaper model may be routed to
-    // (spec §17). The debaters above are assembled straight from their own configs and
-    // never pass through this rule, which is what "a debater is never routed" means
-    // structurally.
+    // 合成器是更便宜的模型可以被改派过去的另一个落点（spec §17）。上面的讨论者直接由
+    // 各自的 config 组装出来、从不经过这条规则，这就是「讨论者绝不是落点」在结构上的
+    // 含义。
     config.model = config
         .model_for(config::LandingPoint::Synthesizer)
         .to_owned();
@@ -513,12 +486,10 @@ fn discussion_participants(
     (roster, synthesizer)
 }
 
-/// Assemble a discussion: two debaters on one stream, plus the synthesizer.
+/// 组装一场讨论：一条流上两个讨论者，加上合成器。
 ///
-/// Reads no environment, like [`assemble`]. The debaters are the same session
-/// scaffold opened twice, so they share the log, the tools, the path locks and
-/// the permission policy; what differs is their speaker, their model and their
-/// private identity (spec §15).
+/// 和 [`assemble`] 一样不读任何环境。讨论者就是同一个会话脚手架开两次，所以它们共享
+/// 日志、工具、路径锁与权限策略；不同的是它们的发言归属、模型与私有身份（spec §15）。
 pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHarness, Error> {
     let DiscussionParts {
         scaffold,
@@ -537,9 +508,8 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         discussion_participants(debaters, synthesizer, |config, identity| {
             opened.session(config, identity)
         });
-    // The first session records the skeleton for the whole stream, or — on a resume —
-    // closes the calls an earlier process left open: it is the session-level head every
-    // debater then projects.
+    // 第一场会话为整条流记下骨架，或者在继续时收尾更早那个进程留下没答完的调用：它就是
+    // 每个讨论者随后要投影的那个会话级头部。
     if let Some(first) = roster.first_mut() {
         opened.start(&mut first.session)?;
     }
@@ -556,23 +526,21 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
 }
 
 impl Harness {
-    /// Record a user message and run one turn to completion.
+    /// 记下一条用户消息，并把一个回合跑到结束。
     pub async fn run_turn(&mut self, user_input: &str) -> Result<TurnOutcome, Error> {
         agent::record_user_message(&mut self.session, &self.render, user_input)?;
         self.drive_turn().await
     }
 
-    /// One turn, once whatever it starts from is already on the stream.
+    /// 一个回合 —— 从它起点的那点东西已经在流上之后算起。
     ///
-    /// The one place a turn is actually driven. Both entry points — a typed prompt and
-    /// a bare skill — differ only in what they append first, so they cannot drift on
-    /// what a turn *is*.
+    /// 真正驱动一个回合的唯一地方。两条入口 —— 一条打进来的提示与一个裸技能 —— 只在
+    /// 它们先追加什么上有差别，所以它们不可能在「一个回合*是*什么」上漂开。
     async fn drive_turn(&mut self) -> Result<TurnOutcome, Error> {
-        // A gesture is scoped to one run: the press that stopped the last turn
-        // must not stop this one, or a cancelled session could never be used
-        // again in the same process (spec §6).
+        // 手势的范围是一次运行：按下去停掉上一个回合的那一下不能停掉这一个，否则一次被
+        // 取消的会话在同一进程里就再也不能用了（spec §6）。
         self.cancel.reset();
-        // This turn's view of the gesture.
+        // 这个回合对手势的看法。
         let cancelled = self.cancel.observer();
         agent::run_turn(
             &mut self.session,
@@ -585,24 +553,20 @@ impl Harness {
         .await
     }
 
-    /// Run a discussion **on this session's stream** (spec §15).
+    /// 在**这场会话的流上**跑一次讨论（spec §15）。
     ///
-    /// The debaters and the synthesizer are *siblings* of this session: they share its
-    /// log, tool table, write locks, permission policy, answerer, skills and renderer,
-    /// and differ only in their own model and private identity. Two consequences are
-    /// the point:
+    /// 讨论者与合成器是这场会话的*兄弟*：它们共享它的日志、工具表、写锁、权限策略、
+    /// 作答者、技能与渲染器，只在各自的模型与私有身份上不同。两条后果才是重点：
     ///
-    /// * the projection turns **this agent's** turns into `user` messages for them
-    ///   (spec §5), so a discussion inherits the session's context — it argues about
-    ///   what this session is about, not about a question in a vacuum;
-    /// * the rounds are appended to the same stream, after whatever it already holds,
-    ///   so one session can carry a turn, a discussion, another turn — and
-    ///   `sessions show` reads the whole thing back.
+    /// * 投影把**这个 agent 的**回合变成它们眼里的 `user` 消息（spec §5），于是一次
+    ///   讨论继承这场会话的上下文 —— 它争论的是这场会话在谈什么，而不是真空里的一个
+    ///   问题；
+    /// * 轮次追加在同一条流上，接在它已有的内容之后，于是一场会话可以装一个回合、一次
+    ///   讨论、再来一个回合 —— 而 `sessions show` 把整段读回来。
     ///
-    /// The roster is validated exactly as [`assemble_discussion`] validates it. A stream
-    /// this session did **not** open (a fresh discussion of its own) goes through
-    /// [`assemble_discussion`] instead: that path records the skeleton, this one appends
-    /// to a stream whose skeleton is already on it.
+    /// 名册的校验与 [`assemble_discussion`] 一模一样。这场会话**没有**开出的流（一场
+    /// 全新的、自己的讨论）走 [`assemble_discussion`]：那条路径记骨架，这条往一个骨架
+    /// 已经躺在它上面的流里追加。
     pub async fn discuss(
         &mut self,
         question: &str,
@@ -616,21 +580,19 @@ impl Harness {
             discussion_participants(debaters, synthesizer, |config, identity| {
                 self.session.fork(config, identity)
             });
-        // No skeleton and no recovery: this stream is live, and its `SessionStarted` is
-        // the one at its head.
+        // 没有骨架、也没有恢复：这条流是活的，它的 `SessionStarted` 就在头部。
         let mut discussion = agent::Discussion::new(roster, synthesizer, max_rounds);
-        // One discussion is one run, like one turn: the gesture starts clean.
+        // 一次讨论就是一次运行，像一个回合：手势从干净的地方开始。
         self.cancel.reset();
         let cancelled = self.cancel.observer();
         agent::run_discussion(&mut discussion, &self.render, question, &cancelled).await
     }
 
-    /// The last thing the **user** asked in this session, or `None`.
+    /// **用户**在这场会话里最后问的那句话，或者 `None`。
     ///
-    /// What a bare `/discuss` discusses: "the thing we were just talking about" is the
-    /// question worth putting to two models. Only `MessageCompleted` with the user role
-    /// counts — a context injection is attributed to the user too, and it is not a
-    /// question.
+    /// 一个裸 `/discuss` 讨论的就是它：「我们刚才在聊的那件事」才是值得摆给两个模型的
+    /// 问题。只有 user 角色的 `MessageCompleted` 算数 —— 一条上下文注入也归属于用户，
+    /// 但它不是一个问题。
     pub fn last_question(&self) -> Option<String> {
         self.session
             .events()
@@ -646,45 +608,40 @@ impl Harness {
             })
     }
 
-    /// The session's end of the cancel gesture (spec §6).
+    /// 这场会话自己那一端的取消手势（spec §6）。
     ///
-    /// The front end holds this and raises it on Esc; a second press while
-    /// [`is_cancelled`](CancelSignal::is_cancelled) is already true is the front
-    /// end's to turn into an exit, because the session itself never needs to
-    /// know how it was killed — `--continue` closes whatever the process left
-    /// open.
+    /// 前端持有它并在 Esc 时举起；当 [`is_cancelled`](CancelSignal::is_cancelled) 已经
+    /// 为真时再按一次，由前端把它变成一个退出，因为会话本身永远不需要知道自己是怎么被
+    /// 杀的 —— `--continue` 会把进程留下没答完的收尾。
     pub fn cancel_signal(&self) -> CancelSignal {
         self.cancel.clone()
     }
 
-    /// Every discovered skill name, in precedence order: what a front end offers
-    /// as `/<name>`.
+    /// 发现到的每一个技能名，按优先级顺序：前端把它作为 `/<name>` 提供出来。
     pub fn skill_names(&self) -> Vec<&str> {
         self.session.skills().names()
     }
 
-    /// Every discovered skill as `(name, description)`: what a front end's `/` menu
-    /// offers, with the line that says what the skill is for.
+    /// 发现到的每一个技能，按 `(名字, 描述)`：前端的 `/` 菜单提供这些，带上说明这个技能
+    /// 是干什么的那一行。
     ///
-    /// This keeps `disable-model-invocation` skills, because the menu is the user's
-    /// list — see [`crate::context::skills::Skills::entries`].
+    /// 它保留 `disable-model-invocation` 的技能，因为菜单是用户的那张列表 —— 见
+    /// [`crate::context::skills::Skills::entries`]。
     pub fn skill_catalog(&self) -> Vec<(&str, &str)> {
         self.session.skills().entries()
     }
 
-    /// Whether `/<name>` names a discovered skill.
+    /// `/<name>` 是否指到一个发现到的技能。
     pub fn has_skill(&self, name: &str) -> bool {
         self.session.skills().get(name).is_some()
     }
 
-    /// Append a skill the **user** named (spec §9) to the context, at the tail.
+    /// 把**用户**点名的技能（spec §9）追加到上下文尾部。
     ///
-    /// This is the invocation `disable-model-invocation: true` reserves: such a
-    /// skill is absent from the catalog and [`Skills::load`] refuses it, so a
-    /// model that guesses the name still cannot reach it — the user can. The body
-    /// is a `ContextInjected { source: Skill }` event, which projects as its own
-    /// `user` message after the current history, so the cached prefix never
-    /// moves. The caller runs the turn that uses it.
+    /// 这正是 `disable-model-invocation: true` 保留的那次调用：这样的技能不在技能清单
+    /// 里，[`Skills::load`] 也拒它，所以一个猜出名字的模型仍然够不到它 —— 用户够得到。
+    /// 正文是一条 `ContextInjected { source: Skill }` 事件，它投影成当前历史之后的一条
+    /// 独立 `user` 消息，于是缓存前缀永远不动。用它跑那个回合的是调用方。
     pub fn load_skill(&mut self, name: &str) -> Result<(), Error> {
         let body = self
             .session
@@ -699,31 +656,28 @@ impl Harness {
         )
     }
 
-    /// Run the turn a bare `/<skill>` asks for (spec §9): load the skill, then call
-    /// the model with the body as the last thing it sees.
+    /// 跑一个裸 `/<skill>` 要的那个回合（spec §9）：载入技能，然后拿它作为模型看到的
+    /// 最后一样东西去调模型。
     ///
-    /// There is deliberately **no synthetic user message**. The skill body is already
-    /// a `user` message once projected, so a turn that appended one would put words
-    /// in the user's mouth — the transcript would show a prompt they never typed, and
-    /// the model would answer that instead of the skill. This is why the bare form is
-    /// not `load_skill` followed by `run_turn("")`: an empty message is a message.
+    /// 刻意**没有合成的用户消息**。技能正文投影之后本来就是一条 `user` 消息，所以再追加
+    /// 一条的回合等于替用户说话 —— 转录里会出现一句他们从没打过的提示，而模型会去答它而
+    /// 不是答技能。这就是裸形式不是 `load_skill` 之后跟一个 `run_turn("")` 的原因：空
+    /// 消息也是一条消息。
     pub async fn run_skill(&mut self, name: &str) -> Result<TurnOutcome, Error> {
         self.load_skill(name)?;
         self.drive_turn().await
     }
 
-    /// The mode this session currently runs under.
+    /// 这场会话眼下跑在哪一档。
     pub fn mode(&self) -> Mode {
         self.session.mode()
     }
 
-    /// This session's end of the mode-cycle gesture (spec §12).
+    /// 这场会话自己那一端的模式循环手势（spec §12）。
     ///
-    /// The gesture is a value on the policy, never an event, and nothing is
-    /// injected. A model finds out that the stance changed the first time a call of
-    /// its is refused, from the `PermissionDecided` reason — which is the deliberate
-    /// trade, because injecting a line into the head of `messages` would throw away
-    /// the prefix cache on every press (ADR 0003).
+    /// 这个手势是策略上的一个值、永远不是一条事件，也什么都不注入。模型是在自己某次调用
+    /// 被拒时、从 `PermissionDecided` 的 reason 里才知道立场变了 —— 这是刻意的代价，
+    /// 因为往 `messages` 头部注入一行会在每一次按下时把前缀缓存整个扔掉（ADR 0003）。
     pub fn mode_cycle(&self) -> ModeCycle {
         ModeCycle {
             policy: Arc::clone(&self.policy),
@@ -734,68 +688,62 @@ impl Harness {
         self.session.id()
     }
 
-    /// Say something to the front end that belongs to no event: the startup
-    /// banner, and the interactive loop's plain feedback.
+    /// 对前端说一句不属于任何事件的话：启动横幅，以及交互式循环那些朴素的反馈。
     ///
-    /// It goes through the render channel rather than straight to the terminal
-    /// because the renderer owns the terminal from assembly on: a second writer
-    /// lands inside the live region (spec §19).
+    /// 它走渲染通道而不是直接写终端，因为从组装那一刻起终端归渲染器：第二个写者会插进
+    /// 那个活着的区域里（spec §19）。
     pub fn notice(&self, message: &str) {
         self.render.notice(message);
     }
 
-    /// The whole stream so far, in `seq` order.
+    /// 目前为止的整条流，按 `seq` 顺序。
     ///
-    /// The single-agent counterpart of [`DiscussionHarness::events`]: one
-    /// accessor shape for both harnesses, so a caller (or a test) reads the
-    /// session's source of truth the same way whichever it holds.
+    /// [`DiscussionHarness::events`] 的单 agent 对应物：两个 harness 一个取值形状，
+    /// 于是调用方（或测试）拿哪一个都用同样的方式读这场会话的真相源。
     pub fn events(&self) -> Vec<Event> {
         self.session.events()
     }
 
-    /// Roll back the session's most recent `edit_file`: restore the bytes it
-    /// replaced and retire its events (spec §11).
+    /// 回滚这场会话最近一次 `edit_file`：把它替换掉的字节还原回来，并退掉它的事件
+    /// （spec §11）。
     ///
-    /// `Ok(None)` means there was nothing left to undo. The gesture exists only
-    /// at the front end; this is the operation a `/undo` calls, and it never
-    /// touches the user's git.
+    /// `Ok(None)` 表示已经没有可撤销的东西了。手势只在前端存在；这是 `/undo` 调的那个
+    /// 操作，而它永远不碰用户的 git。
     pub async fn undo_last_edit(&mut self) -> Result<Option<agent::UndoOutcome>, Error> {
         agent::undo_last_edit(&mut self.session, &self.render).await
     }
 
-    /// Where this session's tool artifacts land (`outputs/<tool_call_id>.*`).
+    /// 这场会话的工具产物落在哪里（`outputs/<tool_call_id>.*`）。
     pub fn outputs_dir(&self) -> &std::path::Path {
         self.session.outputs_dir()
     }
 
-    /// Drop the render channel and wait for every buffered render event to be
-    /// written to the sinks. Call this before asserting on captured sinks.
+    /// 丢掉渲染通道，并等每一条缓冲中的渲染事件都写进接收端。对捕获的接收端做断言之前
+    /// 调它。
     pub async fn shutdown(self) {
         drain_renderer(self.render, self.render_task).await;
     }
 }
 
 impl DiscussionHarness {
-    /// Put the question to the debaters and run the protocol to its end.
+    /// 把问题摆给讨论者，把协议跑到结束。
     ///
-    /// One harness is one discussion: round numbers are per discussion, so
-    /// asking twice on one harness would restart them at one. Build a fresh
-    /// harness for a second question.
+    /// 一个 harness 就是一次讨论：轮次号是按讨论算的，所以在一个 harness 上问第二次会
+    /// 让它们从一重新开始。第二个问题要另建一个 harness。
     pub async fn discuss(&mut self, question: &str) -> Result<agent::DiscussionOutcome, Error> {
-        // One discussion is one run, like one turn: the gesture starts clean.
+        // 一次讨论就是一次运行，像一个回合：手势从干净的地方开始。
         self.cancel.reset();
         let cancelled = self.cancel.observer();
         agent::run_discussion(&mut self.discussion, &self.render, question, &cancelled).await
     }
 
-    /// The discussion's end of the cancel gesture (spec §6), shared by both
-    /// debaters and every executor they dispatch.
+    /// 讨论自己那一端的取消手势（spec §6），两个讨论者与它们派出的每一个执行者共享。
     pub fn cancel_signal(&self) -> CancelSignal {
         self.cancel.clone()
     }
 
-    /// The discussion's end of the mode-cycle gesture (spec §12): one policy
-    /// covers all three participants, so one press moves all of them.
+    /// 讨论自己那一端的模式循环手势（spec §12）：一份策略盖住三个参与者，所以按一次
+    /// 三个一起动。
     pub fn mode_cycle(&self) -> ModeCycle {
         ModeCycle {
             policy: Arc::clone(&self.policy),
@@ -806,7 +754,7 @@ impl DiscussionHarness {
         self.discussion.session_id()
     }
 
-    /// The whole stream so far, in `seq` order.
+    /// 目前为止的整条流，按 `seq` 顺序。
     pub fn events(&self) -> Vec<Event> {
         self.log.events()
     }
@@ -815,57 +763,54 @@ impl DiscussionHarness {
         self.log.path()
     }
 
-    /// Drop the render channel and wait for every buffered render event to be
-    /// written to the sinks. Call this before asserting on captured sinks.
+    /// 丢掉渲染通道，并等每一条缓冲中的渲染事件都写进接收端。对捕获的接收端做断言之前
+    /// 调它。
     pub async fn shutdown(self) {
         drain_renderer(self.render, self.render_task).await;
     }
 }
 
-/// The session's end of the mode-cycle gesture (spec §12; `Shift+Tab`).
+/// 这场会话自己那一端的模式循环手势（spec §12；`Shift+Tab`）。
 ///
-/// A **handle**, like [`CancelSignal`], and for the same reason: the gesture has to
-/// reach the policy while a pinned run future borrows the harness — the loop can
-/// hold this because it was cloned before the borrow. Every session of one stream
-/// shares the policy it points at, so one press moves the whole discussion's stance
-/// on writes, which is what a mode is.
+/// 一个**句柄**，和 [`CancelSignal`] 一样，理由也一样：手势必须在一个钉住的 run future
+/// 借着 harness 的时候够到策略 —— 循环能持有它，因为它是在那次借用之前克隆下来的。一条
+/// 流上的每一场会话都共享它指向的那份策略，所以按一次动的是整场讨论对写的立场，而那就是
+/// 模式该有的东西。
 #[derive(Clone)]
 pub struct ModeCycle {
     policy: Arc<Mutex<Policy>>,
 }
 
 impl ModeCycle {
-    /// Step one rung around the cycle and return the mode now in force: the value
-    /// the front end shows is then the value the gate reads.
+    /// 绕循环走一档，并返回此刻生效的模式：于是前端显示的那个值就是权限门读的值。
     pub fn cycle(&self) -> Mode {
-        let mut policy = self.policy.lock().expect("policy mutex poisoned");
+        let mut policy = self.policy.lock().expect("策略互斥锁已中毒");
         let mode = policy.mode().next();
         policy.set_mode(mode);
         mode
     }
 }
 
-/// Drop the render channel and wait for every buffered render event to reach the
-/// sinks. Both harnesses shut down the same way; one renderer per process is what
-/// makes that literally the same operation.
+/// 丢掉渲染通道，并等每一条缓冲中的渲染事件都到达接收端。两个 harness 以同样的方式
+/// 收尾；一个进程一个渲染器才是「字面上就是同一个操作」的来由。
 async fn drain_renderer(render: RenderHandle, render_task: JoinHandle<()>) {
     drop(render);
     let _ = render_task.await;
 }
 
-/// Errors that stop assembly or the loop itself. Provider failures are turned
-/// into `TurnEnded { Error }` by the loop and are not this type.
+/// 停下组装或循环本身的错误。provider 的失败由循环变成 `TurnEnded { Error }`，不是这个
+/// 类型。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("event log i/o error: {0}")]
     Io(#[from] io::Error),
-    /// The roster a discussion was assembled with cannot run the protocol.
+    /// 用来组装一次讨论的那份名册跑不了协议。
     #[error("discussion setup: {0}")]
     Discussion(String),
-    /// `/undo` could not safely roll the workspace back.
+    /// `/undo` 不能安全地把工作区回滚。
     #[error("undo: {0}")]
     Undo(String),
-    /// A skill the user named could not be loaded.
+    /// 用户点名的技能载入不了。
     #[error("skill: {0}")]
     Skill(String),
 }

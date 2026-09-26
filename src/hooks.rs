@@ -1,32 +1,25 @@
-//! Hook boundary (spec §3, user stories I).
+//! 钩子边界（spec §3，用户故事 I）。
 //!
-//! A hook is a user *strategy* mounted at one of two points around a tool call.
-//! The loop owns the control flow and applies both transformations in a fixed
-//! order:
+//! 一个钩子是一份挂载在工具调用前后两点之一的用户**策略**。控制流归循环，两种变换由
+//! 循环按固定顺序施加：
 //!
 //! ```text
 //! hook.pre -> permission gate -> [ask] -> dispatch -> hook.post -> append
 //! ```
 //!
-//! One algebraic fact is the reason this module exists: **a pre-hook can only
-//! tighten**. Its output is a [`Constraint`] —
-//! `Continue | Rewrite(args) | Tighten(Ask|Deny) | Skip | Stop` — and the only
-//! verdict-shaped variant carries a [`Tightening`], which has no `Allow` case. So
-//! "hooks cannot loosen permissions" is a property of the type rather than a
-//! runtime check, and the effective verdict is the supremum of the constraint and
-//! the gate's verdict on `Allow < Ask < Deny`. There is no `PermissionRequest`
-//! mount point: `hook.pre` runs before the gate, so it can stop an ask from ever
-//! happening but can never bypass one.
+//! 这个模块存在的理由是**一条代数事实**：**前置钩子只能收紧**。它的产出是一个
+//! [`Constraint`] —— `Continue | Rewrite(args) | Tighten(Ask|Deny) | Skip | Stop` ——
+//! 而其中唯一裁决形状的变体带的是 [`Tightening`]，它没有 `Allow` 那一支。于是「钩子
+//! 松不开权限」是**类型的性质**而不是运行时检查，生效裁决就是约束与权限门裁决在
+//! `Allow < Ask < Deny` 上的上确界。这里没有 `PermissionRequest` 挂载点：`hook.pre`
+//! 跑在权限门之前，所以它能把一次询问掐死在发生之前，却永远绕不过一次询问。
 //!
-//! Failure is asymmetric (spec §3). A `hook.pre` failure or timeout is
-//! **fail-closed**: the action is blocked, the failure is diagnosed, and the loop
-//! synthesizes the call's one error result. A `hook.post` failure only **drops
-//! feedback** — the world has already changed, and fail-closed buys no safety on
-//! that side.
+//! 失败是不对称的（spec §3）。`hook.pre` 失败或超时一律 **fail-closed**：动作被拦住、
+//! 这次失败被诊断出来，循环为这次调用合成那唯一一条错误结果。`hook.post` 失败只是
+//! **丢掉反馈** —— 世界已经变了，那一侧 fail-closed 换不来任何安全。
 //!
-//! A hook observes only the closed public subset of the stream, [`HookEvent`]:
-//! tool, permission and session-boundary events. Messages, reasoning, usage,
-//! executor events and session errors are not part of a hook's face.
+//! 钩子只观察事件流那个封闭的公开子集 [`HookEvent`]：工具、权限与会话边界事件。消息、
+//! 推理、用量、执行者事件与会话错误都不在钩子的视野里。
 
 use std::path::{Path, PathBuf};
 
@@ -38,28 +31,28 @@ use crate::events::{
 };
 use crate::tools::Effect;
 
-/// What a `hook.pre` returns: a constraint on the call, never a verdict.
+/// `hook.pre` 的产出：对这次调用的一条约束，永远不是一个裁决。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
-    /// Leave the call alone; the gate's verdict stands.
+    /// 不动这次调用；权限门的裁决说了算。
     Continue,
-    /// Replace the arguments **before** the gate evaluates the call, so both the
-    /// gate and the tool see the rewritten call.
+    /// 在权限门判定这次调用**之前**换掉参数，于是权限门与工具看到的都是改写后的
+    /// 调用。
     Rewrite(Value),
-    /// Raise the effective verdict. `Tightening` cannot express `Allow`.
+    /// 抬高生效裁决。`Tightening` 表达不出 `Allow`。
     Tighten(Tightening),
-    /// Do not run the tool. The loop synthesizes the call's one error result.
+    /// 不跑这个工具。循环为这次调用合成那唯一一条错误结果。
     Skip,
-    /// Stop the turn now. The loop synthesizes the current call's one error
-    /// result and ends the turn with `StopReason::Aborted`.
+    /// 立刻结束这个回合。循环为当前这次调用合成那唯一一条错误结果，并以
+    /// `StopReason::Aborted` 收尾。
     Stop,
 }
 
 impl Constraint {
-    /// The verdict this constraint forces, when it forces one.
+    /// 这条约束逼出来的裁决 —— 如果它逼得出的话。
     ///
-    /// `Continue`, `Rewrite`, `Skip` and `Stop` are flow, not verdicts; only
-    /// `Tighten` contributes to the supremum with the gate's verdict.
+    /// `Continue`、`Rewrite`、`Skip` 与 `Stop` 讲的是流程、不是裁决；只有 `Tighten`
+    /// 参与和权限门裁决取上确界。
     pub fn tightening(&self) -> Option<Decision> {
         match self {
             Constraint::Tighten(tightening) => Some(tightening.decision()),
@@ -67,7 +60,7 @@ impl Constraint {
         }
     }
 
-    /// The text recorded in `HookExecuted.outcome` for this constraint.
+    /// 这条约束记进 `HookExecuted.outcome` 的文本。
     pub fn outcome(&self) -> String {
         match self {
             Constraint::Continue => hook_format::OUTCOME_CONTINUE.to_owned(),
@@ -80,8 +73,8 @@ impl Constraint {
     }
 }
 
-/// The two verdicts a hook may tighten to. `Allow` is absent **by construction**,
-/// which is what makes "only tighten" a typing property.
+/// 钩子能收紧到的两个裁决。`Allow` 是**按构造**缺席的，正因为如此「只能收紧」才是条
+/// 类型性质。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tightening {
     Ask,
@@ -89,7 +82,7 @@ pub enum Tightening {
 }
 
 impl Tightening {
-    /// The verdict this tightening contributes to the supremum.
+    /// 这条收紧贡献给上确界的裁决。
     pub fn decision(self) -> Decision {
         match self {
             Tightening::Ask => Decision::Ask,
@@ -98,17 +91,16 @@ impl Tightening {
     }
 }
 
-/// The one merge: the effective verdict is the supremum of a pre-hook's
-/// tightening and the gate's verdict. `None` means the hook did not tighten.
+/// 唯一的那一次合并：生效裁决是前置钩子的收紧与权限门裁决的上确界。`None` 表示钩子
+/// 没有收紧。
 ///
-/// This is the only place the two are combined, so the loop and the pure test
-/// cannot drift apart — and because `Tightening` has no `Allow`, the merge can
-/// only ever raise a verdict.
+/// 两者只在这一处合流，所以循环与纯测试漂不开 —— 而且因为 `Tightening` 里没有
+/// `Allow`，这次合并只可能把裁决抬高。
 pub fn effective_verdict(gate: Decision, tightening: Option<Decision>) -> Decision {
     gate.join(tightening.unwrap_or(Decision::Allow))
 }
 
-/// Where a hook is mounted. The one place the two points are spelled.
+/// 钩子挂在哪。两个挂载点只在这一处拼写。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookPoint {
     PreToolUse,
@@ -116,7 +108,7 @@ pub enum HookPoint {
 }
 
 impl HookPoint {
-    /// The spelling stored in `HookExecuted.point`.
+    /// 存进 `HookExecuted.point` 的那个拼写。
     pub fn as_str(self) -> &'static str {
         match self {
             HookPoint::PreToolUse => hook_format::POINT_PRE,
@@ -125,8 +117,8 @@ impl HookPoint {
     }
 }
 
-/// Why a hook could not produce an outcome. Both cases are fail-closed at the
-/// pre mount point and feedback-dropping at the post one.
+/// 钩子为什么产不出结果。两种情况在前挂载点都是 fail-closed，在后挂载点都是丢掉
+/// 反馈。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HookError {
     #[error("{0}")]
@@ -135,69 +127,67 @@ pub enum HookError {
     Timeout,
 }
 
-/// One call as a pre-hook sees it: the resolved facts plus the closed public
-/// subset of the stream so far.
+/// 一次调用在前置钩子眼里的样子：已解析好的事实，加上事件流目前为止那个封闭的公开
+/// 子集。
 ///
-/// The facts are what the gate will judge, so a hook can reason about the same
-/// effect and the same resolved paths the gate sees. `history` is borrowed from
-/// the session's log and never contains an event outside [`HookEvent`].
+/// 这些事实就是权限门将要判的东西，所以钩子能就权限门看到的同一个副作用与同一批已
+/// 解析路径去推理。`history` 从会话的事件流借来，永远不会包含 [`HookEvent`] 之外的
+/// 事件。
 pub struct PreHookCall<'a> {
     pub tool_call_id: &'a str,
     pub tool_name: &'a str,
-    /// The arguments as they stand now; a `Rewrite` replaces them.
+    /// 此刻的参数原文；`Rewrite` 会换掉它们。
     pub args: &'a Value,
     pub effect: &'a Effect,
     pub write_targets: &'a [PathBuf],
     pub read_targets: &'a [PathBuf],
     pub argv: Option<&'a [String]>,
     pub cwd: &'a Path,
-    /// The public subset of the stream, in `seq` order.
+    /// 事件流的公开子集，按 `seq` 顺序。
     pub history: &'a [HookEvent],
 }
 
-/// One resolved call as a post-hook sees it.
+/// 一次已解析的调用在后置钩子眼里的样子。
 pub struct PostHookCall<'a> {
     pub tool_call_id: &'a str,
     pub tool_name: &'a str,
     pub args: &'a Value,
-    /// Whether the tool call produced a successful result.
+    /// 这次工具调用有没有产出一条成功的结果。
     pub ok: bool,
     pub output: Option<&'a str>,
     pub error: Option<&'a str>,
-    /// The public subset of the stream, in `seq` order.
+    /// 事件流的公开子集，按 `seq` 顺序。
     pub history: &'a [HookEvent],
 }
 
-/// The port the loop calls at both mount points.
+/// 循环在两个挂载点都调的那条端口。
 ///
-/// A hook states its own `command` (the identity recorded in `HookExecuted`),
-/// and may implement either side: the defaults leave a call alone and inject no
-/// feedback. There is exactly one hook value per session, shared with nested
-/// sessions the way the asker is, so an executor does not lose the strategy.
+/// 钩子自报 `command`（记进 `HookExecuted` 的身份），两侧可以任选一侧实现：默认实现
+/// 不动调用、也不注入反馈。一个会话正好有一个钩子值，像询问端那样与嵌套会话共享，
+/// 所以执行者不会丢掉这份策略。
 #[async_trait]
 pub trait Hook: Send + Sync {
-    /// Identity recorded in `HookExecuted.command`.
+    /// 记进 `HookExecuted.command` 的身份。
     fn command(&self) -> &str;
 
-    /// Runs before the permission gate. The default leaves the call alone.
+    /// 跑在权限门之前。默认实现不动这次调用。
     async fn pre(&self, _call: &PreHookCall<'_>) -> Result<Constraint, HookError> {
         Ok(Constraint::Continue)
     }
 
-    /// Runs after the tool resolved. `Some` text is feedback the projection
-    /// merges into that tool's message; the default injects nothing.
+    /// 在工具解析完之后跑。`Some` 里的文本是反馈，投影会把它并进那个工具的消息；
+    /// 默认实现什么都不注入。
     async fn post(&self, _call: &PostHookCall<'_>) -> Result<Option<String>, HookError> {
         Ok(None)
     }
 }
 
-/// The closed public subset of the event stream a hook may observe (spec §2):
-/// tool, permission and session-boundary events, seven variants in all.
+/// 钩子可以观察的事件流那个封闭的公开子集（spec §2）：工具、权限与会话边界事件，
+/// 一共七个变体。
 ///
-/// A separate type, not a filter over [`EventPayload`], is what keeps the
-/// observation surface closed: there is no arm here for messages, reasoning,
-/// usage, executor events, history operations or session errors, so no future
-/// event leaks into a hook by default.
+/// 用一个独立类型、而不是在 [`EventPayload`] 上加一道过滤，正是让观察面封闭的原因：
+/// 这里没有给消息、推理、用量、执行者事件、历史操作或会话错误留任何一支，所以将来新增
+/// 的事件默认漏不进钩子。
 #[derive(Debug, Clone, PartialEq)]
 pub enum HookEvent {
     SessionStarted {
@@ -238,8 +228,7 @@ pub enum HookEvent {
 }
 
 impl HookEvent {
-    /// Project one payload into the public subset, or `None` when a hook may not
-    /// see it.
+    /// 把一条 payload 投影进公开子集；钩子不该看到的返回 `None`。
     pub fn from_payload(payload: &EventPayload) -> Option<Self> {
         match payload {
             EventPayload::SessionStarted {
@@ -307,7 +296,7 @@ impl HookEvent {
         }
     }
 
-    /// A short, stable name for diagnostics and assertions.
+    /// 诊断与断言用的一行稳定短名。
     pub fn kind(&self) -> &'static str {
         match self {
             HookEvent::SessionStarted { .. } => "SessionStarted",
@@ -321,8 +310,7 @@ impl HookEvent {
     }
 }
 
-/// Project a whole stream into the public subset a hook may observe, in `seq`
-/// order.
+/// 把整条事件流投影成钩子可以观察的公开子集，按 `seq` 顺序。
 pub fn public_history(events: &[Event]) -> Vec<HookEvent> {
     events
         .iter()
