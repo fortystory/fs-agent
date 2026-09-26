@@ -70,8 +70,8 @@ fs-agent sessions stats <id> [--model ID] [--json]
 
 `UsageRecorded` 不带模型：价格按 model id 配，而名册住在配置里，不在流上。所以只有调用者
 点名一个模型时 `stats` 才显示费用 —— `--model`，否则 `config.default_model` —— 而给人看的
-那一版会说明它按哪个模型计了价（价格表里没有条目时是
-`no cost (no [pricing.<model>] entry)`，那和免费不是一回事）。`[routing]` 会被施加，所以被
+那一版会说明它按哪个模型计了价（价格表里没有条目时说的是「无价格（没有
+`[pricing.<model>]` 条目）」，那和免费不是一回事）。`[routing]` 会被施加，所以被
 路由过的合成器或执行者，按它**真正作答**的那个模型计价。`replay` 需要同一个模型，因为能力表
 （例如推理是否必须往返）也是按 model id 配的。
 

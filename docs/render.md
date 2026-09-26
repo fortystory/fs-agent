@@ -25,7 +25,7 @@
 
 ## 一个呈现层，两个画家
 
-`render::transcript` 把事件转成 `Block`，**只转一次**；plain 与 TUI 只负责画。有两条规矩
+`render::transcript` 把事件转成 `Block`，**只转一次**；plain 与 TUI 只负责画。有三条规矩
 住在这里：
 
 - **一次工具调用与它的结果是一个块，由结果绘制。** `ToolCallCompleted` 一到达就把这次
