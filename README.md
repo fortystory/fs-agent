@@ -23,7 +23,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **31,404** 行、`tests/` **29,171** 行（`wc -l`）、**756** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
+**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **31,462** 行、`tests/` **29,179** 行（`wc -l`）、**757** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
