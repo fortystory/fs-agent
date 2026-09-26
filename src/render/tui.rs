@@ -518,7 +518,7 @@ pub struct TuiState {
     /// the same thought (票 02 §1).
     thinking_done: bool,
     /// The rail's units and their segment heads.
-    rail: Rail,
+    turn_rail: TurnRail,
     /// The detail behind each source line of the pane, parallel to it and pruned by
     /// the pane's own cap so the two never drift apart. `None` for the lines that are
     /// not a way into anything.
@@ -989,7 +989,7 @@ enum HitAction {
     /// Show this sidebar page, as clicking its tab does (spec §3).
     SwitchTab(Tab),
     /// Jump to the start of this unit, as clicking its rail cell does (spec §4).
-    RailUnit(usize),
+    TurnRailUnit(usize),
 }
 
 /// A pointer gesture while a question owns it.
@@ -1107,14 +1107,9 @@ fn agrees(key: Key) -> bool {
 /// remembered selection, because a stored "current unit" would drift away from the
 /// viewport the moment anything arrived.
 #[derive(Default)]
-struct Rail {
-    /// The unit each source line belongs to, parallel to `links` and pruned with it.
-    /// A line that arrived after the last boundary belongs to the unit that has not
-    /// finished yet.
-    of_line: std::collections::VecDeque<usize>,
-    /// Whether each source line is the user's own message. The head of a unit is the
-    /// first of those inside it.
-    user: std::collections::VecDeque<bool>,
+struct TurnRail {
+    /// One entry per source line, parallel to `links` and pruned with it.
+    lines: std::collections::VecDeque<TurnRailLine>,
     /// The segment-head source line of each **completed** unit.
     heads: Vec<usize>,
     /// Source lines painted since the last boundary. Counted rather than remembered as
@@ -1122,7 +1117,18 @@ struct Rail {
     lines_in_unit: usize,
 }
 
-impl Rail {
+/// What the rail remembers about one painted source line.
+#[derive(Debug, Clone, Copy)]
+struct TurnRailLine {
+    /// The unit it belongs to. A line that arrived after the last boundary belongs to
+    /// the unit that has not finished yet.
+    unit: usize,
+    /// Whether it is the user's own message. The head of a unit is the first of those
+    /// inside it.
+    user: bool,
+}
+
+impl TurnRail {
     /// How many units the session has completed.
     fn units(&self) -> usize {
         self.heads.len()
@@ -1132,8 +1138,10 @@ impl Rail {
     fn push_line(&mut self, user_message: bool) {
         // The unit a line belongs to is the one being built: `units()` is how many are
         // finished, so that is the index this line will take when its turn ends.
-        self.of_line.push_back(self.heads.len());
-        self.user.push_back(user_message);
+        self.lines.push_back(TurnRailLine {
+            unit: self.heads.len(),
+            user: user_message,
+        });
         self.lines_in_unit += 1;
     }
 
@@ -1145,9 +1153,9 @@ impl Rail {
     /// the one question the session already holds), so it falls back to the unit's own
     /// first line — which is the round's opening narration.
     fn close_unit(&mut self) {
-        let start = self.of_line.len().saturating_sub(self.lines_in_unit);
-        let head = (start..self.of_line.len())
-            .find(|index| self.user[*index])
+        let start = self.lines.len().saturating_sub(self.lines_in_unit);
+        let head = (start..self.lines.len())
+            .find(|index| self.lines[*index].user)
             .unwrap_or(start);
         self.heads.push(head);
         self.lines_in_unit = 0;
@@ -1158,8 +1166,7 @@ impl Rail {
     /// oldest surviving line, which is the closest thing left to jump to.
     fn prune(&mut self, dropped: usize) {
         for _ in 0..dropped {
-            self.of_line.pop_front();
-            self.user.pop_front();
+            self.lines.pop_front();
         }
         for head in &mut self.heads {
             *head = head.saturating_sub(dropped);
@@ -1169,9 +1176,9 @@ impl Rail {
 
     /// The unit a source line belongs to.
     fn unit_of(&self, source: usize) -> usize {
-        self.of_line
+        self.lines
             .get(source)
-            .copied()
+            .map(|line| line.unit)
             .unwrap_or_else(|| self.units())
     }
 
@@ -1218,7 +1225,7 @@ impl TuiState {
             thinking_speaker: crate::events::SpeakerId::System,
             thinking_open: false,
             thinking_done: false,
-            rail: Rail::default(),
+            turn_rail: TurnRail::default(),
             links: std::collections::VecDeque::new(),
             drawn_rows: Vec::new(),
             drawn_top: 0,
@@ -1389,14 +1396,14 @@ impl TuiState {
                 let link = rendered.link;
                 self.pane.push(rendered.line);
                 self.links.push_back(link);
-                self.rail.push_line(is_user_message(&block));
+                self.turn_rail.push_line(is_user_message(&block));
                 self.prune_links();
             }
             // A turn's end closes a unit; so does a round's, in a discussion — where
             // the unit is the **round**, because that is the thing a discussion counts
             // (`CONTEXT.md` keeps 轮次 and 回合 apart, spec §4).
             if is_boundary(&block, self.discussion()) {
-                self.rail.close_unit();
+                self.turn_rail.close_unit();
             }
         }
         produced
@@ -1631,16 +1638,17 @@ impl TuiState {
         }
         let dropped = before - self.links.len();
         if dropped > 0 {
-            self.rail.prune(dropped);
+            self.turn_rail.prune(dropped);
         }
     }
 
     /// Handle one mouse event.
     ///
-    /// Only two things answer to the mouse: the wheel scrolls the transcript, and
-    /// a click on the "back to bottom" indicator returns to the bottom. Every
-    /// other click is ignored — the terminal's own selection is the user's, and
-    /// nothing here takes focus (spec §4).
+    /// Five things can answer to the pointer, and the order between them is who owns
+    /// it: an open detail overlay, then a question, then the turn rail, then the
+    /// sidebar's tabs, then the transcript — whose wheel, indicator and collapsed
+    /// lines answer to it. Anything none of them claims is ignored: the terminal's own
+    /// selection is the user's, and nothing here takes focus (spec §4, §7).
     pub fn mouse(&mut self, mouse: MouseEvent) {
         // A replay owns the pointer by ignoring it: history is still being laid down
         // under a viewport pinned to the bottom, so neither a wheel notch nor a click
@@ -1648,10 +1656,11 @@ impl TuiState {
         if self.replay.is_some() {
             return;
         }
-        // Three dispatches, in order of who owns the pointer. A detail overlay owns
-        // it outright; otherwise a question does; otherwise the transcript does.
-        // Nothing here ever scrolls the transcript behind something that is up
-        // (票 04 §2).
+        // The five dispatches, in order of who owns the pointer. A detail overlay
+        // owns it outright; otherwise a question does; otherwise the frame's own
+        // parts do, the rail and the tabs before the text they sit next to. Nothing
+        // here ever scrolls the transcript behind something that is up
+        // (票 04 §2, `tui-sidebar` spec §7).
         self.dirty = true;
         // 1. The detail overlay owns the pointer outright. Its whole body scrolls, and
         // a second click on the line it came from closes it (票 02 §4).
@@ -1700,7 +1709,7 @@ impl TuiState {
             MouseEventKind::Down(MouseButton::Left) => {
                 match self.regions.action_at(mouse.column, mouse.row) {
                     Some(HitAction::SwitchTab(tab)) => self.tab = tab,
-                    Some(HitAction::RailUnit(unit)) => self.jump_to_unit(unit),
+                    Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
                     _ if self.indicator_hit(mouse.column, mouse.row) => self.pane.to_bottom(),
                     _ => {
                         let width = layout::plan(self.area, 1).detail_width() as usize;
@@ -1831,8 +1840,8 @@ impl TuiState {
     /// scrolled. At the bottom it is the newest unit, which is what "I am following the
     /// conversation" means even when the whole transcript fits on one screen
     /// (spec §4).
-    fn focused_unit(&self) -> Option<usize> {
-        let units = self.rail.units();
+    fn focused_turn(&self) -> Option<usize> {
+        let units = self.turn_rail.units();
         if units == 0 {
             return None;
         }
@@ -1840,7 +1849,7 @@ impl TuiState {
             return Some(units - 1);
         }
         let source = self.pane.source_at(self.pane.top())?;
-        Some(self.rail.unit_of(source).min(units - 1))
+        Some(self.turn_rail.unit_of(source).min(units - 1))
     }
 
     /// Jump to the start of a unit: what clicking its cell does.
@@ -1849,7 +1858,7 @@ impl TuiState {
     /// newest unit clamps to the bottom instead, which is the same rule read at the
     /// end of the transcript rather than a special case (spec §4).
     fn jump_to_unit(&mut self, unit: usize) {
-        let Some(head) = self.rail.head(unit) else {
+        let Some(head) = self.turn_rail.head(unit) else {
             return;
         };
         self.pane.scroll_to_source(head);
@@ -2648,17 +2657,26 @@ fn draw_shell(
     // The rules above the status row, the input and the hints. Left of them is the
     // divider — or, with no sidebar, the frame's own left border — and right of them
     // the frame's right border.
-    let style = Style::default().fg(Color::DarkGray);
     let right = area.right().saturating_sub(1);
     for y in [panes.status.y - 1, panes.input.y - 1, panes.hints.y - 1] {
-        let left = panes.divide.unwrap_or(area.x);
-        let buffer = frame.buffer_mut();
-        buffer[(left, y)].set_symbol("├").set_style(style);
-        for x in left + 1..right {
-            buffer[(x, y)].set_symbol("─").set_style(style);
-        }
-        buffer[(right, y)].set_symbol("┤").set_style(style);
+        paint_rule(frame, y, panes.divide.unwrap_or(area.x), right);
     }
+}
+
+/// One horizontal rule across a row, from `left` to `right` inclusive, with `├` and
+/// `┤` at the two ends so it joins whatever borders it runs between rather than
+/// crossing them (spec §1).
+///
+/// The main column's rules and the tab bar's are the same stroke; they differ only in
+/// the columns they span.
+fn paint_rule(frame: &mut ratatui::Frame, y: u16, left: u16, right: u16) {
+    let style = Style::default().fg(Color::DarkGray);
+    let buffer = frame.buffer_mut();
+    buffer[(left, y)].set_symbol("├").set_style(style);
+    for x in left + 1..right {
+        buffer[(x, y)].set_symbol("─").set_style(style);
+    }
+    buffer[(right, y)].set_symbol("┤").set_style(style);
 }
 
 /// The column the sidebar and the main column share: one vertical rule from the
@@ -2684,17 +2702,28 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     }
 }
 
-/// The sidebar: the mark or the text identity at the top, then the tab bar, then
-/// the page the tab selects (spec §3).
+/// The sidebar, top to bottom: the identity, the tab bar, and the page the tab
+/// selects (spec §3). One function per part, because each has its own reason to change
+/// — the ladder, the tabs' behaviour, and the page's content.
 ///
-/// Everything here is drawn from the layout's decisions — which identity, which
-/// page rows — never from a size test of its own, so the ladder has one home. The tab
-/// labels record a hit rectangle each as they are painted, so a click can only land on
-/// a tab that is really on screen.
+/// Where the sidebar is and how tall its parts are is the layout's call, never a size
+/// test repeated here.
 fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
         return;
     };
+    draw_sidebar_identity(frame, panes, sidebar);
+    draw_tab_bar(frame, panes, state, sidebar, tabs);
+    draw_sidebar_page(frame, panes, state);
+}
+
+/// The sidebar's identity: the mark, the text identity, or nothing at all
+/// (spec §3).
+///
+/// Which of the three is the layout's decision — [`layout::SidebarKind`] — so the
+/// ladder has one home. The mark is centred in the wide rung, which is the mark's own
+/// width plus a column of air on each side.
+fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, sidebar: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     match panes.sidebar_kind {
         layout::SidebarKind::Mark => {
@@ -2727,18 +2756,49 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
         }
         layout::SidebarKind::Hidden => {}
     }
-    // The tab bar: two rules with the labels between them. Both rules start at the
-    // frame's left border and end at the divider column, so the sidebar reads as one
-    // compartment rather than as a block of its own (spec §3).
+}
+
+/// The page the tab selects (spec §3).
+///
+/// The rows come from the layout's height ladder, so a squeezed sidebar loses fields
+/// from the tail rather than clipping the three readings that matter (spec §2). A page
+/// that is not built yet says so in one row rather than showing made-up data.
+fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+    let Some(page) = panes.sidebar_page else {
+        return;
+    };
+    let rows = match state.tab {
+        Tab::Usage => state.panel.lines(&state.facts, page),
+        Tab::Trace | Tab::Files => vec![Line::from(Span::styled(
+            truncate_columns(wording::tab_placeholder(), page.width as usize),
+            Style::default().fg(Color::DarkGray),
+        ))],
+    };
+    frame.render_widget(Paragraph::new(rows), page);
+}
+
+/// The sidebar's tab bar: two rules with the three labels between them, the selected
+/// one bright (spec §3).
+///
+/// Both rules start at the frame's left border and end at the divider column, so the
+/// sidebar reads as one compartment rather than as a block of its own. Each label
+/// records a hit rectangle as it is painted: the pointer can only hit what is really
+/// there, and the rule that fills the rest of the row is not a tab.
+fn draw_tab_bar(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &mut TuiState,
+    sidebar: Rect,
+    tabs: Rect,
+) {
+    let dim = Style::default().fg(Color::DarkGray);
     for y in [tabs.y - 1, tabs.y + 1] {
-        let buffer = frame.buffer_mut();
-        buffer[(sidebar.x - 1, y)].set_symbol("├").set_style(dim);
-        for x in sidebar.x..sidebar.right() {
-            buffer[(x, y)].set_symbol("─").set_style(dim);
-        }
-        if let Some(divide) = panes.divide {
-            buffer[(divide, y)].set_symbol("┤").set_style(dim);
-        }
+        paint_rule(
+            frame,
+            y,
+            sidebar.x - 1,
+            panes.divide.unwrap_or(sidebar.right()),
+        );
     }
     // The labels, one separator between them and the rest of the row filled with a
     // rule, so the row reads as a bar rather than as three stranded words.
@@ -2759,9 +2819,6 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
             dim
         };
         let width = text_columns(label) as u16;
-        // One region per label's own text, recorded as it is painted: the pointer can
-        // only hit what is really there, and the rule that fills the rest of the row is
-        // not a tab (spec §3).
         if used + width <= sidebar.width {
             state.regions.cells.push(Region {
                 rect: Rect::new(tabs.x + used, tabs.y, width, 1),
@@ -2780,21 +2837,6 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
         dim,
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
-    // The page itself. The rows come from the layout's height ladder, so a squeezed
-    // sidebar loses fields from the tail rather than clipping the three readings that
-    // matter (spec §2). A page that is not built yet says so in one row rather than
-    // showing made-up data.
-    let Some(page) = panes.sidebar_page else {
-        return;
-    };
-    let rows = match state.tab {
-        Tab::Usage => state.panel.lines(&state.facts, page),
-        Tab::Trace | Tab::Files => vec![Line::from(Span::styled(
-            truncate_columns(wording::tab_placeholder(), page.width as usize),
-            dim,
-        ))],
-    };
-    frame.render_widget(Paragraph::new(rows), page);
 }
 
 /// The status row: which model, which mode, and how full the window is (spec §5).
@@ -3049,7 +3091,6 @@ fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
-/// The header: the mark when the terminal is big enough for it, otherwise what
 /// The mark's rows and their colours.
 ///
 /// The text is [`wording::logo_lines`]'s; the ramp that makes it read as glyphs lives
@@ -3094,7 +3135,7 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
         .collect();
     frame.render_widget(Paragraph::new(rows), text_area);
     draw_scrollbar(frame, panes.scrollbar(), &state.pane);
-    draw_rail(frame, panes, state);
+    draw_turn_rail(frame, panes, state);
     draw_indicator(frame, text_area, state);
 }
 
@@ -3105,28 +3146,30 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
 /// pane is showing — never stored — so it cannot drift from the reader's position. Each
 /// cell records where it was painted, so a click can only land on a cell that is really
 /// on screen.
-fn draw_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let rows = panes.rail.height as usize;
     if rows == 0 || panes.rail.width == 0 {
         return;
     }
-    let units = state.rail.units();
+    let units = state.turn_rail.units();
     if units == 0 {
         // An empty session has an empty column: no cells, and no `⋮` pretending there
         // is history above (spec §4).
         return;
     }
-    let focus = state.focused_unit().unwrap_or(units - 1);
+    let focus = state.focused_turn().unwrap_or(units - 1);
     let style = Style::default().fg(Color::DarkGray);
     let focus_style = Style::default()
         .fg(Color::LightMagenta)
         .add_modifier(Modifier::BOLD);
-    for (offset, slot) in rail_rows(rows, units, focus).into_iter().enumerate() {
+    for (offset, slot) in turn_rail_rows(rows, units, focus).into_iter().enumerate() {
         let (symbol, style, unit) = match slot {
-            RailRow::Blank => continue,
-            RailRow::Cut => (wording::RAIL_TRUNCATED, style, None),
-            RailRow::Unit(unit) if unit == focus => (wording::RAIL_FOCUS, focus_style, Some(unit)),
-            RailRow::Unit(unit) => (wording::RAIL_CELL, style, Some(unit)),
+            TurnRailRow::Blank => continue,
+            TurnRailRow::Cut => (wording::RAIL_TRUNCATED, style, None),
+            TurnRailRow::Unit(unit) if unit == focus => {
+                (wording::RAIL_FOCUS, focus_style, Some(unit))
+            }
+            TurnRailRow::Unit(unit) => (wording::RAIL_CELL, style, Some(unit)),
         };
         let y = panes.rail.y + offset as u16;
         let buffer = frame.buffer_mut();
@@ -3136,7 +3179,7 @@ fn draw_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut Tu
         if let Some(unit) = unit {
             state.regions.cells.push(Region {
                 rect: Rect::new(panes.rail.x, y, 1, 1),
-                action: HitAction::RailUnit(unit),
+                action: HitAction::TurnRailUnit(unit),
             });
         }
     }
@@ -3928,7 +3971,7 @@ fn is_boundary(block: &Block, discussion: bool) -> bool {
 
 /// One row of the rail's column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RailRow {
+enum TurnRailRow {
     /// The unit with this index, counted from the oldest.
     Unit(usize),
     /// Units were left out at this end: `⋮`.
@@ -3951,8 +3994,8 @@ enum RailRow {
 /// was written as — left a viewport parked on an old unit with **no** bright cell at
 /// all, which is the frame `prototype/frames/120x24-rail-30-units-focus-12-gap.txt`
 /// records.
-fn rail_rows(rows: usize, units: usize, focus: usize) -> Vec<RailRow> {
-    let mut out = vec![RailRow::Blank; rows];
+fn turn_rail_rows(rows: usize, units: usize, focus: usize) -> Vec<TurnRailRow> {
+    let mut out = vec![TurnRailRow::Blank; rows];
     if rows == 0 || units == 0 {
         return out;
     }
@@ -3960,7 +4003,7 @@ fn rail_rows(rows: usize, units: usize, focus: usize) -> Vec<RailRow> {
     if units <= rows {
         // Every unit fits: newest at the bottom, blank above.
         for index in 0..units {
-            out[rows - units + index] = RailRow::Unit(index);
+            out[rows - units + index] = TurnRailRow::Unit(index);
         }
         return out;
     }
@@ -3993,16 +4036,16 @@ fn rail_rows(rows: usize, units: usize, focus: usize) -> Vec<RailRow> {
     let below_taken = below.min(budget - above_taken);
     above_taken += (above - above_taken).min(budget - above_taken - below_taken);
 
-    let mut cells: Vec<RailRow> = Vec::with_capacity(rows);
+    let mut cells: Vec<TurnRailRow> = Vec::with_capacity(rows);
     if top_cut {
-        cells.push(RailRow::Cut);
+        cells.push(TurnRailRow::Cut);
     }
     let first = focus - above_taken;
     for index in first..first + above_taken + 1 + below_taken {
-        cells.push(RailRow::Unit(index));
+        cells.push(TurnRailRow::Unit(index));
     }
     if bottom_cut {
-        cells.push(RailRow::Cut);
+        cells.push(TurnRailRow::Cut);
     }
     out[rows - cells.len()..].copy_from_slice(&cells);
     out

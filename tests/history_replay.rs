@@ -215,7 +215,7 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 ///
 /// The rail sits in the transcript's last column, inside the frame at 119 — the
 /// scrollbar takes the one before it (`.scratch/tui-sidebar/spec.md` §1).
-fn rail_shape(state: &mut TuiState) -> String {
+fn turn_rail_shape(state: &mut TuiState) -> String {
     let frame = buffer(120, 40, state);
     (1..39u16)
         // The transcript ends where the main column's first rule begins.
@@ -679,7 +679,7 @@ fn the_rail_grows_with_the_replayed_history() {
     // Forty turns, all cut down to the column's own height: the mark at the top and the
     // newest turn at the foot as the focus, because a finished replay returns the
     // viewport to the bottom.
-    let shape = rail_shape(&mut state);
+    let shape = turn_rail_shape(&mut state);
     assert_eq!(
         shape.chars().next(),
         Some('⋮'),
@@ -700,7 +700,7 @@ fn the_rail_grows_with_the_replayed_history() {
     // rail rather than starting a second.
     let before = shape.len();
     state.live_event(RenderEvent::Logged(turn_ended(41)));
-    let after = rail_shape(&mut state);
+    let after = turn_rail_shape(&mut state);
     assert!(
         after.len() >= before && after.ends_with('┃'),
         "the new turn took its cell and the focus moved to it: {after}"
@@ -708,7 +708,7 @@ fn the_rail_grows_with_the_replayed_history() {
 }
 
 #[test]
-fn the_header_mode_is_whatever_the_history_ended_on() {
+fn the_status_row_mode_is_whatever_the_history_ended_on() {
     // Plan injection then a mode change reads as 询问; plan injection alone reads as
     // 计划; no mode event keeps the assembled default (spec §7, user story 24).
     let cases: Vec<(Vec<Event>, &str)> = vec![

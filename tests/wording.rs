@@ -520,7 +520,7 @@ fn every_panel_label_is_the_chinese_the_prototype_shows() {
 #[test]
 fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
     // `scripts/tui-startup-check.py` anchors on this exact string to tell the new
-    // four-pane layout apart from anything older, and its expectation comes from the
+    // shell apart from anything older, and its expectation comes from the
     // binary's own `--version` (`src/cli.rs` prints `fs-agent {version}`). The two
     // spellings are written in two places, so this pins them together: change either
     // and the check goes red rather than silently matching nothing.
@@ -532,7 +532,7 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
 
 #[test]
 fn the_mark_is_five_rows_of_one_width() {
-    // The tall header shows the mark whole or not at all — `layout` decides that
+    // The sidebar shows the mark whole or not at all — `layout` decides that
     // from `LOGO_WIDTH` before anything is drawn. A row of a different width would
     // slip past that gate and paint over the border, so the contract is pinned here,
     // where the characters live, rather than trusted at the painter.

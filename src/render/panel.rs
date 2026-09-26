@@ -1,20 +1,22 @@
-//! The information panel: what the session is and what it has cost (spec §8).
+//! The session's readings: what it is and what it has cost
+//! (`.scratch/tui-sidebar/spec.md` §3).
 //!
-//! The panel is a **pure function** of the injected facts and the counters this
-//! module keeps off the stream. Nothing here is remembered between frames except
-//! the counts themselves, so there is no second ledger to drift from
+//! The readings are one page of the sidebar now — the tab bar's 调用量 — and one
+//! field of them, the context share, is also the status row's (`wording::status_row`).
+//! What is drawn here is a **pure function** of the injected facts and the counters
+//! this module keeps off the stream. Nothing is remembered between frames except the
+//! counts themselves, so there is no second ledger to drift from
 //! [`crate::events::total_usage`] — the sums below are the same sums that function
 //! makes over a finished stream.
 //!
-//! Whether the panel exists at all is the geometry's call — it is hidden below 80
-//! columns or four rows of middle — so what follows is the layout **inside** a panel
-//! that is drawn. A row is the prototype's: a label column as wide as the widest
-//! label, a space, then a value that numbers fill from the right and text from the
-//! left. The drops are width- and height-driven, in the order ticket 05 fixed:
-//! the percentage and the cache row go by width, the detail rows by height (they are
-//! last, and the paragraph clips the tail) — and the four core fields are never
-//! dropped, because a panel too small for them is hidden whole, which is the
-//! geometry's rule rather than this module's.
+//! Whether the page is drawn at all, and how many of its rows fit, is the geometry's
+//! call (`layout::Regions::sidebar_page`, whose height **is** that count). A row is
+//! the prototype's: a label column as wide as the widest label, a space, then a value
+//! that numbers fill from the right and text from the left. The drops are width- and
+//! height-driven: the percentage and the cache row go by width, the tail rows by
+//! height (they are last, and the paragraph clips them). Both width paths are
+//! unreachable from the shell's own rungs — 21 columns at the narrow rung is exactly
+//! what the widest value needs — and are kept as the protection they always were.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};

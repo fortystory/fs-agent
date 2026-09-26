@@ -1,10 +1,11 @@
-//! The fullscreen four-pane layout, rendered into a `TestBackend` so the geometry
-//! can be asserted without a terminal (spec §2, §Testing Decisions).
+//! The fullscreen shell, rendered into a `TestBackend` so the geometry can be
+//! asserted without a terminal (`.scratch/tui-sidebar/spec.md` §1–§2,
+//! `Testing Decisions`).
 //!
 //! The seam is [`draw_frame`]: a state goes in, a fixed-size buffer comes out. Every
 //! assertion below is about what a person would see — which regions exist, what the
-//! header says, how many hints fit — never about the rectangles the layout computes
-//! on the way there.
+//! sidebar's page says, where the rail's cells are, how many hints fit — never about
+//! the rectangles the layout computes on the way there.
 
 use fs_agent::render::width::text_columns;
 use fs_agent::render::{
@@ -834,7 +835,7 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
 }
 
 /// The rail's column at 120x24: one character per transcript row, top to bottom.
-fn rail_cells(state: &mut TuiState) -> Vec<char> {
+fn turn_rail_cells(state: &mut TuiState) -> Vec<char> {
     let rows = screen(120, 24, state);
     let transcript = transcript_rows(&rows);
     let frame = buffer(120, 24, state);
@@ -850,8 +851,8 @@ fn rail_cells(state: &mut TuiState) -> Vec<char> {
 }
 
 /// The rail's column as a compact string: `⋮` and `┃`/`┊` only, blanks dropped.
-fn rail_shape(state: &mut TuiState) -> String {
-    rail_cells(state)
+fn turn_rail_shape(state: &mut TuiState) -> String {
+    turn_rail_cells(state)
         .into_iter()
         .filter(|ch| *ch != ' ')
         .collect()
@@ -911,18 +912,18 @@ fn the_rail_grows_one_cell_per_turn_and_keeps_the_newest_at_the_foot() {
     // An empty session has an empty column: no cells, and no `⋮` pretending there is
     // history above (spec §4).
     let mut fresh = state();
-    assert_eq!(rail_shape(&mut fresh), "");
+    assert_eq!(turn_rail_shape(&mut fresh), "");
 
     let mut state = state();
     turns(&mut state, 3);
     // Three turns, bottom-anchored, and the newest is the bright one.
-    assert_eq!(rail_shape(&mut state), "┊┊┃");
+    assert_eq!(turn_rail_shape(&mut state), "┊┊┃");
     assert_eq!(
-        rail_cells(&mut state).len(),
+        turn_rail_cells(&mut state).len(),
         transcript_rows_at_120x24(),
         "the column is as tall as the transcript and no taller"
     );
-    let cells = rail_cells(&mut state);
+    let cells = turn_rail_cells(&mut state);
     assert!(
         cells[transcript_rows_at_120x24() - 3..]
             .iter()
@@ -932,7 +933,7 @@ fn the_rail_grows_one_cell_per_turn_and_keeps_the_newest_at_the_foot() {
 
     turns(&mut state, 1);
     assert_eq!(
-        rail_shape(&mut state),
+        turn_rail_shape(&mut state),
         "┊┊┊┃",
         "the fourth turn adds a cell"
     );
@@ -943,7 +944,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     let mut state = state();
     turns(&mut state, 3);
     assert!(
-        !rail_shape(&mut state).contains('⋮'),
+        !turn_rail_shape(&mut state).contains('⋮'),
         "nothing is cut when everything fits"
     );
 
@@ -951,7 +952,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     // above. Nothing is cut at the bottom, because the viewport is at the bottom.
     let mut scrolled = TuiState::new(facts());
     turns(&mut scrolled, 30);
-    let shape = rail_shape(&mut scrolled);
+    let shape = turn_rail_shape(&mut scrolled);
     assert_eq!(
         shape.chars().next(),
         Some('⋮'),
@@ -973,7 +974,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     for _ in 0..40 {
         scrolled.key(fs_agent::render::Key::PageUp);
     }
-    let shape = rail_shape(&mut scrolled);
+    let shape = turn_rail_shape(&mut scrolled);
     assert_eq!(
         shape.chars().last(),
         Some('⋮'),
@@ -1006,7 +1007,7 @@ fn the_rail_window_follows_the_focus_wherever_the_viewport_is() {
     // ones where the focus lands in the middle of the unit list.
     for _ in 0..20 {
         state.key(fs_agent::render::Key::PageUp);
-        let shape = rail_shape(&mut state);
+        let shape = turn_rail_shape(&mut state);
         assert_eq!(
             shape.matches('┃').count(),
             1,
@@ -1028,7 +1029,9 @@ fn the_focus_is_the_unit_the_top_row_belongs_to() {
     // At the bottom the focus is the newest unit, whatever the top row happens to be —
     // the viewport is following the conversation, and that is what "newest" means.
     assert_eq!(
-        rail_cells(&mut state).iter().rposition(|ch| *ch == '┃'),
+        turn_rail_cells(&mut state)
+            .iter()
+            .rposition(|ch| *ch == '┃'),
         Some(transcript_rows_at_120x24() - 1),
         "following the bottom puts the focus on the last row"
     );
@@ -1036,10 +1039,12 @@ fn the_focus_is_the_unit_the_top_row_belongs_to() {
     // Scrolled away, the focus is the unit the viewport's top row is inside.
     let question = top_transcript_row(&mut state);
     state.key(fs_agent::render::Key::PageUp);
-    let shape = rail_shape(&mut state);
+    let shape = turn_rail_shape(&mut state);
     assert_eq!(shape.matches('┃').count(), 1, "one focus cell: {shape}");
     assert_ne!(
-        rail_cells(&mut state).iter().rposition(|ch| *ch == '┃'),
+        turn_rail_cells(&mut state)
+            .iter()
+            .rposition(|ch| *ch == '┃'),
         Some(transcript_rows_at_120x24() - 1),
         "and it is no longer the newest: {shape}"
     );
@@ -1062,7 +1067,7 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
         let mut state = TuiState::new(facts());
         turns(&mut state, 30);
         let _ = screen(120, 24, &mut state);
-        let cells = rail_cells(&mut state);
+        let cells = turn_rail_cells(&mut state);
         let mark = cells
             .iter()
             .position(|ch| *ch == '⋮')
@@ -1096,7 +1101,7 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
         "clicking the foot cell keeps the viewport where it was"
     );
     assert_eq!(
-        rail_cells(&mut state).last(),
+        turn_rail_cells(&mut state).last(),
         Some(&'┃'),
         "and the viewport is still following the newest turn"
     );
@@ -1143,7 +1148,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     }
 
     // Three rounds and three `TurnEnded`s: the rail counts the rounds.
-    assert_eq!(rail_shape(&mut state), "┊┊┃");
+    assert_eq!(turn_rail_shape(&mut state), "┊┊┃");
 
     // The first round's head is the user's question — the one message a discussion does
     // carry, recorded before the first round opened...
@@ -1192,7 +1197,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
             "第 {index} 行"
         )));
     }
-    assert_eq!(rail_shape(&mut later), "┊┊┃");
+    assert_eq!(turn_rail_shape(&mut later), "┊┊┃");
     let second = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 2) as u16;
     later.mouse(click(RAIL_AT_120, second));
     assert!(

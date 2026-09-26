@@ -32,6 +32,10 @@ const BORDER_COLUMNS: u16 = 2;
 /// The rows the tab bar costs: a rule, the labels, a rule (spec §3).
 const TAB_ROWS: u16 = 3;
 
+/// The rows between a tab bar's top rule and its labels: the rule itself. Written
+/// beside [`TAB_ROWS`] so the two accounts of the same bar cannot drift.
+const TAB_RULE_ROWS: u16 = 1;
+
 /// The columns the transcript always keeps at its right edge: the scrollbar's
 /// column and the rail's. Reserved whether or not they are drawn, so text never
 /// rewraps because the transcript grew (spec §1).
@@ -313,7 +317,7 @@ pub fn plan(area: Rect, draft_rows: u16) -> Regions {
         tabs: sidebar.map(|sidebar| {
             Rect::new(
                 sidebar.x,
-                sidebar.y + sidebar_kind.rows() + 1,
+                sidebar.y + sidebar_kind.rows() + TAB_RULE_ROWS,
                 sidebar.width,
                 1,
             )
