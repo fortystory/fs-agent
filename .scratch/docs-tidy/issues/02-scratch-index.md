@@ -1,7 +1,7 @@
 # `.scratch/README.md`：feature 索引
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/docs-tidy/spec.md`（Problem Statement 3、Solution 2、User Story 3）。
@@ -37,3 +37,13 @@ Blocked by: 01
 ## 不做什么
 
 给 feature 目录改名 / 合并；补写缺失的 spec；动 `issues/` 里的任何文件。
+
+## Comments
+
+**实现完成（2026-09-26）**。落点：`.scratch/README.md`（新增）。
+
+1. 开头写清 tracker 的约定（一 feature 一目录、spec / map / seed 的分工、票的 `Type:` `Status:` `Blocked by:`、blockers 优先），并指向 `docs/agents/issue-tracker.md` 作为权威。
+2. **一张表**：十个 feature（含本轮 `docs-tidy`），每行是目录链接 + 形态 + 一句话 + 票数与状态。形态与一句话都由 `head -1` 取标题后核过；`tui-layout` 那句加了「外壳已被 `tui-sidebar` 推翻」—— 那张图的结论已经被后来的 spec 覆盖，索引里不说清楚会把人带偏。
+3. **票数按状态分开写**：`resolved` 是 wayfinder 决策票的收尾状态、`done` 是实现票的，同一个 feature 里两种都有（`tui-layout` 9+7、`tui-history-replay` 5+4、`tui-sidebar` 1+4），并写明两条数法命令。
+4. **如实记两条**：`.scratch/call-rationale/` 不在上表（磁盘上只有一个空 `issues/`，`git ls-files` 里没有它，也没有 spec/map/票），以及 `map` 与 `spec` 同时存在是正常的（图走完折成 spec，图留作决策记录）。
+5. 本轮 3/3：票 03 完成后本表那一行已是 `3/3 done`。
