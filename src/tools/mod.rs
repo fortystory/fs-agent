@@ -23,6 +23,7 @@ pub mod registry;
 pub mod repo_map;
 pub mod skill;
 pub mod task;
+pub mod todo;
 pub mod tool;
 
 pub use ask_user::{AskUserQuestionTool, ASK_USER_QUESTION_TOOL};
@@ -41,6 +42,7 @@ pub use registry::{
 pub use repo_map::RepoMapTool;
 pub use skill::SkillTool;
 pub use task::{TaskTool, TASK_TOOL};
+pub use todo::{TodoTool, TODO_TOOL};
 pub use tool::{
     BashLimits, Effect, ExecutorSpawner, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError,
     ToolOutput, WritePathResolver,
@@ -62,6 +64,10 @@ pub use tool::{
 /// at all: offering the model a call that can only fail wastes a call. That is
 /// the same "the table decides" mechanism that keeps `task` out of an executor's
 /// table.
+///
+/// `todo` is deliberately **not** behind `can_ask`: keeping a list needs nobody to
+/// answer, so the three renderers all mount it — which is exactly where it differs
+/// from `ask_user_question` (`.scratch/todo-and-modes/spec.md` §2).
 pub fn builtin(can_ask: bool) -> Registry {
     let mut registry = Registry::new();
     registry.register(Box::new(ReadFile));
@@ -71,6 +77,7 @@ pub fn builtin(can_ask: bool) -> Registry {
     registry.register(Box::new(SkillTool));
     registry.register(Box::new(RepoMapTool::new()));
     registry.register(Box::new(TaskTool));
+    registry.register(Box::new(TodoTool));
     if can_ask {
         registry.register(Box::new(AskUserQuestionTool));
     }

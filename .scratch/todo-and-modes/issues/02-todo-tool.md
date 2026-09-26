@@ -1,7 +1,7 @@
 # `todo` 工具：模型自己维护的待办列表
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/todo-and-modes/spec.md` §2、§3、`Testing Decisions`。

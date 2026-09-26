@@ -129,11 +129,28 @@ pub(crate) fn scoped_events_slice(
 /// pinned context — and the model, reading a skill's prose, introduced itself as
 /// "Claude Code". The identity never enters the log, like every other one here,
 /// which is why `replay` derives it from the stream's shape.
+///
+/// The second half is the **rules section** of `.scratch/todo-and-modes/spec.md`
+/// §3: guidance to keep a `todo` list, not enforcement. It rides here because this
+/// is the model-visible prefix of **every** request, which makes it the harshest
+/// version of ADR 0001's rule — adding a line is allowed, changing or removing one
+/// invalidates every session's cached prefix. The wording is English because it is
+/// model-visible text (ADR 0001), and it is a `const`-style literal for a second
+/// reason: a test pins the three status words in it, so the tool's vocabulary and
+/// this instruction cannot drift.
 pub fn agent_identity() -> &'static str {
-    "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。\
-     你直接读写文件、运行命令、搜索代码，并按这个仓库自己的约定干活（AGENTS.md、CONTEXT.md、\
-     docs/adr、.scratch 里的 spec 与 ticket）。你不是 Claude Code，也不是 Anthropic 的产品，\
-     不要自称是；被问到你是谁时，说你是 fs-agent。你没有跨会话记忆：需要上下文就读文件或问用户。"
+    concat!(
+        "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。",
+        "你直接读写文件、运行命令、搜索代码，并按这个仓库自己的约定干活（AGENTS.md、CONTEXT.md、",
+        "docs/adr、.scratch 里的 spec 与 ticket）。你不是 Claude Code，也不是 Anthropic 的产品，",
+        "不要自称是；被问到你是谁时，说你是 fs-agent。你没有跨会话记忆：需要上下文就读文件或问用户。",
+        "\n\n",
+        "Before you start a task, write the plan down with the `todo` tool: every step as an item \
+         whose `status` is `pending`. Mark the one you are working on `in_progress`, update the \
+         list as each item finishes (`completed`), and close the work with one final call in \
+         which every item is `completed`. The list is how the user sees what you are doing and \
+         how far you have got, so keep it current rather than writing it once.",
+    )
 }
 
 /// Project → prepend the private identity → trim.

@@ -47,6 +47,13 @@ paint them. Two rules live there:
   flushed at end of stream rather than dropped.
 - **Incremental text passes straight through** as `Block::Delta`, because deltas
   bypass the log and cannot be re-derived later.
+- **A call whose payload *is* the data paints like any other line.** `todo` keeps
+  the agent's list in the arguments of one `tool_call` (`.scratch/todo-and-modes/spec.md`
+  §2), so the transcript shows the ordinary folded tool line and the detail overlay
+  shows the arguments; the list itself is recomputed from those arguments by
+  `tools::todo::read_items`, never parsed out of the result text — the result is a
+  one-line receipt. The sidebar's `todo` page is the other reader of the same
+  function (see "The shell").
 
 The `[speaker]` prefix is the **human's** generator, deliberately separate from
 the projection's model-side prefix (spec §5): the human one repeats per line, the

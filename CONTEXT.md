@@ -151,6 +151,14 @@ _Avoid_: step、call
 在 `config.toml` 的 `[tools.<命名空间>.<工具>]` 里声明的外部命令，线级名是 `custom__<命名空间>__<工具>`。声明语法的字段就是 provider 收到的声明（JSON Schema 原样），**没有**副作用类别字段，所以 `effect()` 恒为 `Exclusive`；`command` 是 argv 模板，参数按**整个 argv 元素**替换、不经 shell。内建名永不含 `__`，因此「名字含 `__`」⟺「来自配置」是**词法可判定**的。
 _Avoid_: 插件、外部工具、MCP 工具
 
+**待办列表（Todo）**:
+一次 `todo` 调用提交的**整份**列表：每项是 `{content, status}`，`status` 取 `pending` / `in_progress` / `completed` 之一。**列表就是那条 `tool_call` 的 args** —— 没有第二处存储，结果只是一句回执（`todo: 3 items (1 completed)`），所以 `--continue`、`sessions replay` 与侧栏都从 args 重算。**一次提交整份**（replace-all）：缺省或空数组就是清空；同一条助手消息里两次并发调用按 `seq` 定序，**后落地的那条是真相**。它是**某个 agent 自己的**列表 —— 主会话与每个执行者各有一份，互不干扰，只有主会话那份上侧栏。
+_Avoid_: 计划（那是它取代掉的那一档模式）、待办事项（词表里没有别的「事项」）、`TODO.md`（不落盘）
+
+**待办工具（`todo`）**:
+模型维护待办列表的内建工具（`src/tools/todo.rs`）。`effect()` 是 `ReadOnly` —— 它不碰工作区，列表活在调用自己的 args 里 —— 所以权限门从不为它发问，两次调用可以并发；`content` 为空或 `status` 越界是**模型可读的**工具错误。挂载面是**主会话、讨论者与执行者**，headless 也挂（它不需要人，这正是与 `ask_user_question` 的分界），也不像 `task` 那样从执行者的表里被拿掉。规则段（`agent_identity()`）请模型开工前先立待办，但那是**引导**、不是强制：没有首轮 `tool_choice`、没有门层强制。
+_Avoid_: plan 工具、`update_plan`、`exit_plan_mode`
+
 ## 渲染
 
 **渲染器（Renderer）**:
