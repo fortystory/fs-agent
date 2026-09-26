@@ -1,6 +1,6 @@
 # 计划从「权限模式」改成「模型自己的待办工具」；模式三档可选
 
-Status: ready-for-agent（一次 grilling 的折叠：九个决议由用户拍定；实现票 `01`–`04`）
+Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现票 `01`–`04` 全部 `done`，2026-09-26）
 
 - **来源**：用户提出「把 plan 模式从 `ask`/`auto`/`readonly` 中删除、添加 `auto`/`readonly` 入口；把 plan 做成一个内建工具提供给大模型、大模型必须用它管理计划；在左侧加一个 `todo` 标签显示待办列表」+ 两轮问答（九个决议）。
 - **它推翻一条刻意的决定**：`.scratch/fs-agent-v1/spec.md` §13 写着「进出 plan 只由用户手势，**给模型一个 `exit_plan_mode` 等于把『能不能写』交回给模型**」。本 spec 把「能不能写」还回给用户（模式三档，用户选），于是那条论证失去对象 —— 但**推翻本身要留痕**，所以票 01 必须带一条 ADR（`docs/adr/0003-*`）。
@@ -87,3 +87,18 @@ Status: ready-for-agent（一次 grilling 的折叠：九个决议由用户拍�
 - **强制**：不做首轮 `tool_choice` 强制、不做门层强制。
 - **权限门的其它部分**：规则代数、断路器、`.env` 家族、cwd 限制、沿委派链传播，一条不改。
 - **DSH 那套 upgrade + justification 审批**：属于沙箱那条线。
+
+## Further Notes
+
+**实现期与本文不一致或本文没写的地方（2026-09-26 落地时记下）**：
+
+- **前端怎么知道档位（§1 没写）**。模式不进流，所以三件事各自落地：`SessionFacts` 多了一个 `mode` 字段（组装期注入，状态行与启动 banner 说同一件事，`--mode` 也因此从第一帧就看得见）；TUI 收到 `BackTab` 时按 `Mode::next()` 自己走一步**并**推 `CycleMode`，循环那侧走同一步；而循环在运行期够不到 harness（被 pin 住的 run future 借着它），所以多了一个 `ModeCycle` 句柄 —— 形状与理由都同 `CancelSignal`。`DiscussionHarness` 也持一份（三个参与者共用一个策略）。
+- **`Question` / `AnswerChoice` 顺手坍缩**（§5 的删除清单里没有这两个名字）。它们本来是「两个问题共用一条键盘」的配对；plan 冲突退场后只剩一个变体，于是连同 `as_permission` / `as_plan` 一起删掉，`AskRequest` 直接带 `PermissionRequest` 与 `Answer`。这是同一个删除的必然后果，不是额外改动。
+- **`tests/plan_mode.rs` 改写为 `tests/modes.rs`**（§5 说的是「删除或改写」）。文件名里的 plan 已无意义；留下的五条是：三档起步、循环只改策略不进流、`--continue` 回到配置档、`readonly` 拒写而切到 `ask` 后同一调用放行、执行者继承会话的模式。老事件的向后兼容另在 `tests/history_replay.rs`（把两条老事件写成 JSONL 再读回来）。
+- **列表的读取处只有一个**：`tools::todo::read_items()`，工具自己的 `call` 与侧栏的 `TodoPanel` 共用它。解析**手写**而不是 `serde` derive：derive 的错误信息（`invalid type: map, expected a sequence`）不点名是哪个字段，而这条错误是给模型看的（`item 2 has \`status\` = \`done\`; the three words are …`）。
+- **新模块 `src/render/todo.rs`（`TodoPanel`）**：§4 的落点列的是 `tui.rs` / `wording.rs`。「闩锁 + 页内容 + 那条一行高的退化规则」自成一件事，所以单独成模块（`Tab`、标签条与页的接线仍在 `tui.rs`）。
+- **回执文案（§2 只给了「例如」）**：非空 `todo: 3 items (1 completed)`（单数写 `item`），清空 `todo: cleared` —— 清空只回一句，不多一个 `0 items`。
+- **`--mode` 只挂交互路径**：`discuss` 子命令与 `probe` 读配置文件。§1 只说「`--mode` 旗标覆盖配置」，没说哪个子命令；讨论的名册与探针的模型都从配置来，多一个档位入口就多一处能与名册不一致的地方。
+- **档位名的解析只有一处**：`Mode::parse`（配置表与旗标共用），`Mode` 的 `Default` 是 `Ask`（配置缺省与渲染器缺省是同一件事，所以只写一次）。
+- **手工清单落在 `docs/tui-manual-checklist.md` 的 ⑰**（模式循环与 `todo` 标签），写法与 ⑮/⑯ 一致：固定尺寸 buffer 已断言的部分不重复，只留真终端能验的。
+

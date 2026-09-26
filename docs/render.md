@@ -120,8 +120,22 @@ column** on the right, and the geometry is one pure function of the terminal siz
   pinning that nothing wears it (票 05).
 - **The tab bar** pages the sidebar: 调用量 is the session's readings, 轨迹 and 文件
   are not built yet and say so. The tabs are **clicked, never keyed** — `Tab`
-  belongs to the `/` menu and `Shift+Tab` to plan mode — and on a placeholder page
-  the status row's `上下文 n%` is the only reading left.
+  belongs to the `/` menu and `Shift+Tab` to the mode cycle — and on a placeholder
+  page the status row's `上下文 n%` is the only reading left.
+- **`todo` is the one tab that comes and goes** (`.scratch/todo-and-modes/spec.md`
+  §4). It appears the first time a **non-executor** speaker submits a `todo` call
+  whose arguments carry a non-empty list, and it stays for the rest of the session:
+  an all-completed list, a cleared one, and a `--continue` that replays the same
+  calls all keep it. The latch (`TodoPanel::visible`) and the list in force are
+  renderer state derived from the blocks the renderer already sees — nothing about
+  either is stored beside the stream — and the bar is built from the same label
+  list the separators, the fill and the hit rectangles come from, so a label that
+  is not drawn cannot be clicked. An **executor's** list never reaches this page:
+  it is that executor's own record, visible in the transcript and nowhere in the
+  sidebar. The page draws one row per item (`☐` / `▸` / `✓` and its content) and a
+  count row `已完成 2/5`, with no scrolling: what does not fit is announced in one
+  row above the count (`＋3 项`), and a page with room for a single row shows the
+  count alone.
 - **The rail** is the transcript's last column: one cell per turn, or per round in a
   discussion, newest at the foot, the viewport's own cell drawn bright. Its window
   follows the focus, so there is always exactly one bright cell; clicking a cell
@@ -145,7 +159,7 @@ asked a question. A reader that read ahead would swallow a permission answer as
 the next prompt.
 
 - The loop holds `ConsoleHandle` (prompts and questions) and `ConsoleEvents`
-  (unsolicited gestures: cancel, plan toggle, quit). They are two values because
+  (unsolicited gestures: cancel, the mode cycle, quit). They are two values because
   the loop selects on both at once.
 - The front end holds `ConsolePort`. The TUI serves it from its own `select!` over
   broadcast / console port / keyboard, plus **one timer, armed only while a run is in
@@ -158,7 +172,7 @@ the next prompt.
   would stop breathing exactly when the session is busiest. Plain mode serves the port with
   `render::spawn_plain_console`, which reads stdin line by line.
 - `ConsoleAsker` implements the permission gate's `Asker` on the same handle, so
-  the gate's `Ask` and the plan-mode conflict question use the one keyboard.
+  a permission question and the prompt use the one keyboard.
 - `ConsoleQuestions` implements the model-question port on that same handle, so a
   model-initiated questionnaire (`ask_user_question`) reaches the one keyboard
   too. In the TUI it takes over the bottom input area — one question at a time,
@@ -221,12 +235,17 @@ workspace:
 - renderer: the TUI when stdout is a terminal, the plain transcript otherwise;
   `--plain` / `--tui` force one (and the two are mutually exclusive);
 - `--continue` resumes this workspace's newest session, keeping its id;
-- `--config`, `--model`, `--cwd` as elsewhere;
-- commands: `/undo`, `/plan`, `/endplan`, `/quit`; Esc cancels the running turn
-  in the TUI and Shift+Tab toggles plan mode.
+- `--config`, `--model`, `--mode`, `--cwd` as elsewhere; `--mode` is this path's
+  own (a discussion and the probe run under `[permissions] mode`);
+- commands: `/undo`, `/discuss`, `/quit`; Esc cancels the running turn in the TUI
+  and Shift+Tab cycles the permission mode `readonly → ask → auto → readonly`.
 
-The session starts in the `ask` mode, and the assembly injects the console asker,
-so a write asks on the same keyboard the prompt came from.
+The session starts in the configured mode — `[permissions] mode`, or `--mode` over
+it, `ask` by default — and the assembly injects the console asker, so a write asks
+on the same keyboard the prompt came from. The mode is a value on the session that
+nothing on the stream carries, so the front end is assembled with it
+(`SessionFacts::mode`), shows it in the status row, and steps its own copy on the
+gesture while the loop steps the policy; ADR 0003 has the why.
 
 What a real terminal has to confirm — the cursor, the mouse, resizing, quitting
 clean — is written down as a follow-along list in

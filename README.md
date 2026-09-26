@@ -19,10 +19,11 @@
 - **单一模型的判断没有对照。** 两个**异构**讨论者（KIMI + DeepSeek）各自作答，只在结论真的冲突时开一轮定向第二轮，最后合成器画出「共识 / 分歧（含各自成立的前提）/ 未决」的选项空间——决定权在你，不在一个自动收敛的投票器。
 - **探索和动手是两种活。** 执行者是讨论者用内建 `task` 工具派出的子 agent，带自己的 `parent_id` 与轮数预算（默认 25）；它的事件落在**同一条流**里，但过程默认不进任何讨论者的窗口，结论经派发者自己的发言进入讨论。
 - **上下文预算是硬的。** 窗口（按每个 agent 各自的模型算）、轮数、会话累计 token、费用是四个不同的量，各有各的语义，撞顶时**降级收尾**而不是随机截断。
-- **权限、秘密、可撤销。** 四个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
+- **计划是模型的工具，不是一档权限。** 模型用内建 `todo` 工具维护自己的待办列表（一次提交整份，列表就在那次调用的参数里），左栏的 `todo` 标签把它显示出来；「能不能写」则由**你**那一档决定（`Shift+Tab` 循环 `readonly` / `ask` / `auto`）。
+- **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32）；`src/` **31,196** 行、`tests/` **28,632** 行（`wc -l`）、**736** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
+**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **31,404** 行、`tests/` **29,171** 行（`wc -l`）、**756** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
@@ -129,7 +130,7 @@ fs-agent discuss --plain "…" 2>/dev/null          # 只要合成产物（讨�
 fs-agent --help
 ```
 
-会话里：`/undo` 回滚上一次编辑、`/plan` 与 `/endplan` 进出硬计划模式、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合、**Shift+Tab** 切计划模式。
+会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合、**Shift+Tab** 在 `readonly` / `ask` / `auto` 三档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
 
 ### TUI 长什么样
 
@@ -143,7 +144,7 @@ alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 
 │ ░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░  │[kimi] ▸ ✓ 思考完成                                                          │
 │ ▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀  │[kimi] 工作区是干净的。                                                      │
 ├────────────────────────────────────────┤[kimi] ▸ 调用 bash 查看 git status                                           │
-│调用量│轨迹│文件────────────────────────│[kimi] 用量 in=12345 out=3345 cached=9000 miss=3345                          │
+│调用量│todo│轨迹│文件───────────────────│[kimi] 用量 in=12345 out=3345 cached=9000 miss=3345                          │
 ├────────────────────────────────────────┤[kimi] 回合结束：完成                                                        │
 │上下文            12,345 / 200,000（6%）│                                                                             │
 │token                   15,690 / 100,000│                                                                             │
@@ -158,11 +159,11 @@ alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 
 │                                        │                                                                             │
 │                                        │                                                                             │
 │                                        ├─────────────────────────────────────────────────────────────────────────────┤
-│                                        │enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 计划 · ctrl-c/ctrl-d 退出    │
+│                                        │enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出    │
 └────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**左栏（全高）**放身份与读数：宽档（≥ 120 列，40 列宽）画 fs 标记（5 行字符画，亮品红→品红渐变），窄档（80–119 列，28 列宽）退成一行 `fs-agent <版本>`，再窄就**整栏隐藏**、转录吃掉全部宽度。界面里**唯一在动的东西是输入区的提示符**：它是 `❱ `，**fs-agent 干活时**颜色一直在走 —— 色相每 3.3 秒绕一圈、饱和度同时以 2.1 秒的周期轻轻呼吸（24 位真彩，取值来自一条自用脚本）；**轮到你自己打字时它停住**，停在那个固定的静止色上，一眼就能分清「它在想」和「该我说了」。左栏的 mark **完全静止**（下落动画做过、看下来不好看，已关掉，代码留着）。标记下面是 tab 条（`调用量` / `轨迹` / `文件`，**用鼠标点**切换，后两页还没做、写一句占位），再下面是六个读数（上下文 / token / 回合 / 输入 / 输出 / 缓存）。**去留由宽度决定，内容由高度决定**：高度不够时先丢标记、再丢身份行、最后从尾部丢字段，上下文 / token / 回合这三行最后才走。
+**左栏（全高）**放身份与读数：宽档（≥ 120 列，40 列宽）画 fs 标记（5 行字符画，亮品红→品红渐变），窄档（80–119 列，28 列宽）退成一行 `fs-agent <版本>`，再窄就**整栏隐藏**、转录吃掉全部宽度。界面里**唯一在动的东西是输入区的提示符**：它是 `❱ `，**fs-agent 干活时**颜色一直在走 —— 色相每 3.3 秒绕一圈、饱和度同时以 2.1 秒的周期轻轻呼吸（24 位真彩，取值来自一条自用脚本）；**轮到你自己打字时它停住**，停在那个固定的静止色上，一眼就能分清「它在想」和「该我说了」。左栏的 mark **完全静止**（下落动画做过、看下来不好看，已关掉，代码留着）。标记下面是 tab 条（`调用量` / `轨迹` / `文件`，**用鼠标点**切换，后两页还没做、写一句占位），再下面是六个读数（上下文 / token / 回合 / 输入 / 输出 / 缓存）。**`todo` 是第四个标签，而且是有条件的一个**：会话里第一次出现非空待办列表时它插到 `调用量` 右边，此后**不再消失**（全做完、被清空都留着——标签在读者眼皮底下消失会把页面挪走）。那一页一行一项（`☐` 待办 / `▸` 进行中 / `✓` 已完成）+ 一行 `已完成 2/5`；不滚动，装不下的项用一行 `＋3 项` 交代。执行者调 `todo` 只在转录里留一行，**不上左栏**。**去留由宽度决定，内容由高度决定**：高度不够时先丢标记、再丢身份行、最后从尾部丢字段，上下文 / token / 回合这三行最后才走。
 
 **主列**自上而下是：转录（右缘恒留两列 —— 滚动条与**回合条**）→ 状态行（`模型 … │ 模式 … │ 上下文 …%`，按宽度先丢模型、再丢模式，**这一行永远在**）→ 输入区（**最少三行**，草稿在第 4 行才继续把它撑高、10 行封顶；提示符 `❱ ` 会变色）→ 提示行。**回合条**一格一个回合（讨论会话一格一个轮次）：最新的一格贴底、视口所在的那一格是亮色 `┃`、其余是暗色 `┊`，溢出的一端画 `⋮`；窗口跟着焦点走，所以任何滚动位置上都有一格是亮的，点一格就跳回那一轮**你自己敲的那句**。**cwd 与时钟不再显示**（它们随旧顶栏一起退场）。
 
@@ -170,7 +171,7 @@ alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 
 
 转录里**中间过程是折起来的**：思考只留一行 `[kimi] ▸ ✓ 思考完成`，工具调用只留一行 `[kimi] ▸ 调用 bash 查看 git status`——描述从参数推出（`查询`/`查看`/`修改`/`运行` + 第一个路径或子命令），命令全文与输出都不铺在屏幕上。**点这两行的 `▸`** 打开详情覆盖层（居中于主列，边框是被点那行说话人的颜色）：思考全文、工具参数、输出全文分节显示，可用 `PgUp`/`PgDn` 或滚轮翻，`Esc` 或点框外关掉；转录停在原处不动。
 
-说话人名字按角色着色（讨论者 1 浅青、讨论者 2 浅品红、执行者 浅黄、用户 浅绿、系统 灰），正文保留原来的语义色。鼠标还能**点击作答**：权限 / 计划冲突 / 粘贴 / 清草稿四种覆盖层的候选键，以及 `ask_user_question` 问卷的每个选项行、翻页与提交。键盘上 `Ctrl-C` 忙时取消、闲时退出，**`Ctrl-D` 闲时弹退出确认**（忙时忽略）。
+说话人名字按角色着色（讨论者 1 浅青、讨论者 2 浅品红、执行者 浅黄、用户 浅绿、系统 灰），正文保留原来的语义色。鼠标还能**点击作答**：权限 / 粘贴 / 清草稿三种覆盖层的候选键，以及 `ask_user_question` 问卷的每个选项行、翻页与提交。键盘上 `Ctrl-C` 忙时取消、闲时退出，**`Ctrl-D` 闲时弹退出确认**（忙时忽略）。
 
 ### 子命令
 
@@ -190,14 +191,15 @@ alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 
 
 ## 安全模型
 
-四个内置模式：
+三个内置模式：
 
 | 模式 | 判据 |
 | --- | --- |
 | `readonly` | 非 `ReadOnly` 调用一律 `Deny`；`bash` 也拒（shell 里能写文件） |
 | `ask` | 写类 `Ask`、只读 `Allow`——交互式的默认档 |
 | `auto` | 默认 `Allow`，但**不等于跳过权限**：断路器、规则、hook 照常生效 |
-| `plan` | 同 `readonly`，唯一豁免是「写入集的全部路径 = 项目根 `PLAN.md`」 |
+
+模式是**会话的一档值**、不进事件流：三个入口是 `config.toml` 的 `[permissions] mode`（默认 `ask`）、`--mode readonly|ask|auto` 覆盖它、以及会话里 `Shift+Tab` 循环三档（`--continue` 回到配置里的那一档，审计看 `PermissionDecided.reason`）。切档**不注入任何东西**，所以模型不会事先知道档位变了，它是第一次被拒（理由里写着档位）才知道的——这是为了不掉前缀缓存换来的代价（[ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）。三档之外没有第四档：**计划**是模型自己的 `todo` 工具，不是一种权限。
 
 四条对每个模式都成立：① 断路器短路在规则之前，任何模式都翻不动；② hook **只能收紧**，永远不能放松一个 `Deny`；③ 沿委派链向下传播的是 `Deny` / `Ask`，`Allow` 不传播（所以「派个子 agent 去写」绕不过你的拒绝）；④ 无交互渲染器时 `Ask → Deny`（脚本不会挂住等你）。
 
@@ -215,7 +217,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 
 - **只追加的事件流**：信封是 `{ seq, at, speaker_id, payload }`，`seq` 就是 JSONL 行号、是唯一身份。重新生成 / 撤销 / compaction 一律追加一条 `HistorySuperseded`，历史一条不改。增量文本**不进流**，它走传输层旁路直达渲染。
 - **投影是纯函数**：`project(log, speaker, caps) → messages`，住在 provider 适配器侧、按模型能力表分叉。裁剪（`trim`）是投影**之后**的另一个纯函数，只读、日志一条不删。
-- **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + read set）。执行者是带 `parent_id` 的嵌套 `Session`，事件追加到父流。
+- **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + read set）。执行者是带 `parent_id` 的嵌套 `Session`，事件追加到父流。**权限档位**就是策略里的一个值：三个入口（`[permissions] mode` / `--mode` / `Shift+Tab`）改的都是它，它**不进事件流**，所以 `--continue` 从配置那一档重新开始，审计看 `PermissionDecided.reason`。
 - **策略是纯函数，控制流在循环里**：hook 输出的是**约束**、权限门输出的是**裁决**，两者在 `Allow < Ask < Deny` 上取上确界——类型里根本没有「放松权限」这个变体。
 - **12 个顶层边界，只向下依赖**：`events` · `config` · `provider` · `tools` · `permissions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`。`events` 零内部依赖；`discussion` 不碰 provider。
 - **三个前端**（headless / plain / TUI）共用一条广播通道与一个转录层，启动时选定且互斥；headless 的 stdout **只有最终产物**。TUI 是外框 + 全高左栏 + 主列（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：≥ 120 列时左栏 40 列画标记，80–119 列退成文字身份，再窄整栏隐藏（见上面的「TUI 长什么样」）。
@@ -228,8 +230,8 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
-| [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`plan-mode`](docs/plan-mode.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：中文 UI 与冻结的模型文本、全屏 alt screen TUI（含标记与其代价） |
+| [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：中文 UI 与冻结的模型文本、全屏 alt screen TUI（含标记与其代价）、「计划」从权限模式里搬出来（模式三档 + 模型的 `todo` 工具） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |

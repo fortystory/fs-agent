@@ -52,11 +52,16 @@ line" rule is what applies to everyone else.
 | Model | **Inherited** from the dispatcher; `executor_model` routes it elsewhere on the *same* client | `SessionConfig` |
 | Token spend | **Shared**: counted in the session total | `UsageRecorded` on the one stream |
 | Read set | **Own, empty**: neither direction flows | read-before-edit is per agent's picture |
+| Todo list | **Own**: an executor plans with `todo` like anyone else, and its list is its own | the list lives in that call's arguments |
 | Event log · path locks · outputs dir · skill library · ask port · hook | **Shared handles** | one session, several agents |
 
 The read set not travelling is what forces an executor to read before it writes —
 "the parent read it" is not a licence, because the guardrail is about *this*
-agent's picture of the file.
+agent's picture of the file. The todo list not travelling is the same kind of
+statement: an executor's list is its own record of its own steps, visible in the
+transcript (its `todo` call is an ordinary line) and **not** on the sidebar — that
+page shows the main session's list (`tools::todo::read_items`, and the sidebar's
+`TodoPanel`, which ignores an executor's calls outright).
 
 ## Permissions: a subset of the dispatcher's
 

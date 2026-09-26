@@ -1,7 +1,7 @@
 # 收口：文档、手工清单与基线
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01, 02, 03
 
 > 规格：`.scratch/todo-and-modes/spec.md` 全篇。

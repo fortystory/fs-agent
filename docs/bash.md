@@ -25,10 +25,11 @@ syntax the model did not write.
 
 `bash` needs no special case in `permissions.rs`:
 
-- `readonly` and `plan` deny it because they deny every non-`ReadOnly` call, and
-  `Exclusive` is not `ReadOnly`. (`plan`'s one exemption is a `WritePaths` shape
-  whose **whole** write set is `PLAN.md`; a shell has no write set, so it can
-  never borrow it.)
+- `readonly` denies it because that mode denies every non-`ReadOnly` call, and
+  `Exclusive` is not `ReadOnly`. There is no exemption to borrow: the one write
+  exemption this project ever had (the old plan mode's `PLAN.md`, a `WritePaths`
+  shape whose **whole** write set is that file) went with the mode, and a shell has
+  no write set anyway (see `docs/adr/0003-plan-leaves-the-permission-modes.md`).
 - `ask` asks; `auto` allows, subject to the rules and the breakers as always.
 - `CommandPrefix` rules match the declared argv — `["bash", "-lc", …]` — exactly
   as declared. A rule written for the command's own argv would need the shell
