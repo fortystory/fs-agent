@@ -1,22 +1,17 @@
-//! The session's readings: what it is and what it has cost
-//! (`.scratch/tui-sidebar/spec.md` §3).
+//! 会话的读数：它是什么，以及它花了多少（`.scratch/tui-sidebar/spec.md` §3）。
 //!
-//! The readings are one page of the sidebar now — the tab bar's 调用量 — and one
-//! field of them, the context share, is also the status row's (`wording::status_row`).
-//! What is drawn here is a **pure function** of the injected facts and the counters
-//! this module keeps off the stream. Nothing is remembered between frames except the
-//! counts themselves, so there is no second ledger to drift from
-//! [`crate::events::total_usage`] — the sums below are the same sums that function
-//! makes over a finished stream.
+//! 读数现在是左栏的一页 —— 页签条上的调用量 —— 而其中一项，上下文占比，同时也是状态
+//! 行的（`wording::status_row`）。这里画的东西是注入的事实与本模块从流上数出来的计数器
+//! 的**纯函数**。帧与帧之间除计数本身之外什么都不记，所以没有第二本账会与
+//! [`crate::events::total_usage`] 漂移 —— 下面这些求和与那个函数在一份完成的流上做的
+//! 是同一组求和。
 //!
-//! Whether the page is drawn at all, and how many of its rows fit, is the geometry's
-//! call (`layout::Regions::sidebar_page`, whose height **is** that count). A row is
-//! the prototype's: a label column as wide as the widest label, a space, then a value
-//! that numbers fill from the right and text from the left. The drops are width- and
-//! height-driven: the percentage and the cache row go by width, the tail rows by
-//! height (they are last, and the paragraph clips them). Both width paths are
-//! unreachable from the shell's own rungs — 21 columns at the narrow rung is exactly
-//! what the widest value needs — and are kept as the protection they always were.
+//! 这一页到底画不画、它的几行放得下，由几何说了算（`layout::Regions::sidebar_page`，
+//! 它的高度**就是**那个数）。一行的样子来自 prototype：一条与最宽标签同宽的标签列、一个
+//! 空格，然后是一个数字靠右、文字靠左填进去的值。丢东西由宽度与高度决定：百分比与缓存行
+//! 按宽度走，尾部那些行按高度走（它们排在最后，段落把它们裁掉）。两条按宽度丢的路从外壳
+//! 自己那几档都到不了 —— 窄档下 21 列正好是最宽的那个值需要的 —— 留着它们，只是它们一
+//! 直以来的那层保险。
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -29,14 +24,14 @@ use super::tui::SessionFacts;
 use super::width::{text_columns, truncate_columns};
 use super::wording;
 
-/// What the panel counts off the stream.
+/// 这个面板从流上数出来的东西。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Panel {
-    /// Every `UsageRecorded`, folded by [`Usage::accumulate`] — the same fold
-    /// `events::total_usage` makes over a finished stream, so the panel cannot drift
-    /// from the session's ledger by re-deriving the arithmetic.
+    /// 每一条 `UsageRecorded`，用 [`Usage::accumulate`] 折叠 —— 与 `events::total_usage`
+    /// 在一份完成的流上做的是同一个折叠，所以这个面板不会因为自己重推一遍算术而与会话
+    /// 的账目漂移。
     total: Usage,
-    /// The most recent call's input tokens: what the next request would carry.
+    /// 最近一次调用的输入 token：下一次请求会带走的东西。
     last_input: Option<u64>,
     turns: u64,
 }
@@ -46,11 +41,11 @@ impl Panel {
         Self::default()
     }
 
-    /// Take what this block contributes, if anything.
+    /// 收下这个块贡献的东西，如果有的话。
     ///
-    /// `cached` and `miss` are a **split** of `input`, and a vendor counts reasoning
-    /// tokens inside `output` already, so neither may be added on top — the same
-    /// accounting `Usage::total_tokens` and `events::total_usage` do (spec §8).
+    /// `cached` 与 `miss` 是对 `input` 的一个**拆分**，而供应商已经把推理 token 数在
+    /// `output` 里了，所以哪个都不能再往上加 —— 与 `Usage::total_tokens` 和
+    /// `events::total_usage` 是同一套算法（spec §8）。
     pub fn observe(&mut self, block: &Block) {
         match block {
             Block::Usage { usage, .. } => {
@@ -62,19 +57,19 @@ impl Panel {
         }
     }
 
-    /// The most recent call's input tokens: what the status row's `上下文 n%` is a
-    /// share of, and what the sidebar's context field pairs with the ceiling.
+    /// 最近一次调用的输入 token：状态行的 `上下文 n%` 是它的占比，左栏那个上下文字段拿
+    /// 它与上限配成一对。
     pub fn last_input(&self) -> Option<u64> {
         self.last_input
     }
 
-    /// The rows to draw in `area`, most important first.
+    /// 在 `area` 里要画的行，最重要的在前。
     pub fn lines(&self, facts: &SessionFacts, area: Rect) -> Vec<Line<'static>> {
         let value_columns = (area.width as usize).saturating_sub(label_columns() + 1);
 
         let context = match self.last_input {
             Some(used) => {
-                // The percentage is the first thing the width takes away.
+                // 宽度第一个拿走的就是百分比。
                 let share = wording::context_pair(Some(used), facts.context_window, true);
                 if text_columns(&share) <= value_columns {
                     share
@@ -87,18 +82,16 @@ impl Panel {
         let tokens = wording::token_pair(self.total.total_tokens(), facts.budget_limit);
         let cache = wording::cache_pair(self.total.cached_tokens, self.total.miss_tokens);
 
-        // No `模型` row: it moved to the status row, where it is visible whatever
-        // page the sidebar is showing and whatever width the sidebar has (spec §3).
+        // 没有 `模型` 行：它搬到了状态行，在那里无论左栏在显示哪一页、无论左栏多宽都
+        // 看得见（spec §3）。
         let mut rows: Vec<(&'static str, String, bool)> = vec![
             (wording::PANEL_CONTEXT, context, true),
             (wording::PANEL_TOKENS, tokens, true),
             (wording::PANEL_TURNS, wording::thousands(self.turns), true),
         ];
-        // Dropped in reverse order of importance, which is why they are appended
-        // last: the height cut below takes them off the end. There is deliberately no
-        // *width* floor for these rows — the panel is drawn only with at least 23
-        // columns of content, so a value never has fewer than 16 columns, and a wider
-        // floor would be unreachable. A value that still overruns is fitted above.
+        // 按重要性倒着丢，所以它们加在最后：下面的高度裁剪从末尾把它们拿走。这些行刻意
+        // 没有*宽度*下限 —— 面板只有内容至少 23 列时才画，所以一个值永远不少于 16 列，
+        // 更宽的下限根本到不了。还是超出的值在上面被适配过。
         rows.push((
             wording::PANEL_INPUT,
             wording::thousands(self.total.input_tokens),
@@ -112,17 +105,15 @@ impl Panel {
         if text_columns(&cache) <= value_columns {
             rows.push((wording::PANEL_CACHE, cache, true));
         }
-        // The height needs no cut here: the rows are in order of importance, and the
-        // paragraph clips whatever does not fit the panel's content area, so the last
-        // rows are the ones that go.
+        // 高度在这里不用裁：这些行按重要性排好了，段落会把塞不进面板内容区的东西裁掉，
+        // 所以走掉的正是最后那些行。
         rows.iter()
             .map(|(label, value, right)| row(label, value, value_columns, *right))
             .collect()
     }
 }
 
-/// The label column: as wide as the widest label, so no label is ever cut and the
-/// column cannot fall out of step with the words it holds.
+/// 标签列：与最宽的标签同宽，这样没有标签会被裁，这一列也不会与自己装的那些词脱节。
 fn label_columns() -> usize {
     [
         wording::PANEL_CONTEXT,
@@ -138,8 +129,7 @@ fn label_columns() -> usize {
     .unwrap_or(0)
 }
 
-/// One panel row: a dim label in the label column, then the value filling what is
-/// left — numbers from the right, text from the left.
+/// 面板的一行：标签列里一个暗标签，然后是填满剩余空间的值 —— 数字靠右，文字靠左。
 fn row(label: &str, value: &str, width: usize, right: bool) -> Line<'static> {
     let labels = label_columns();
     let label = pad_right(&fit(label, labels), labels);
@@ -156,12 +146,10 @@ fn row(label: &str, value: &str, width: usize, right: bool) -> Line<'static> {
     ])
 }
 
-/// `text` fitted to `width` columns.
+/// 把 `text` 适配到 `width` 列。
 ///
-/// Thousands separators go first — they are decoration, and a number that fits
-/// without them is worth more than one that does not fit with them. What still does
-/// not fit is cut with an ellipsis, so a short number is *visibly* short rather than
-/// silently wrong.
+/// 千位分隔符先去 —— 它们是装饰，一个不带分隔符放得下的数字，比一个带着就放不下的数字
+/// 更值钱。还是放不下的用省略号裁掉，所以一个短数字是*看得见地*短，而不是悄悄错了。
 fn fit(text: &str, width: usize) -> String {
     if text_columns(text) <= width {
         return text.to_owned();

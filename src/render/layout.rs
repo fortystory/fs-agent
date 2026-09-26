@@ -1,100 +1,88 @@
-//! The fullscreen shell's geometry (`.scratch/tui-sidebar/spec.md` §1–§2).
+//! 全屏外壳的几何（`.scratch/tui-sidebar/spec.md` §1–§2）。
 //!
-//! Pure arithmetic: a terminal size and the input's row count go in, the
-//! rectangles that exist at that size come out. Keeping it apart from the drawing
-//! is what gives the degrade ladder exactly one home — the renderer has none — and
-//! what lets the thresholds be read off in one sitting rather than reconstructed
-//! from four call sites.
+//! 纯算术：进去的是终端尺寸与输入区的行数，出来的是那个尺寸下存在的那些矩形。把它与绘制
+//! 拆开，正是让降级阶梯恰好只有一个家的原因 —— 渲染器里没有 —— 也让人能一口气把那些
+//! 阈值读完，而不是从四个调用点往回重建。
 //!
-//! The shell is **one frame, one full-height sidebar, one main column**: the frame
-//! is the terminal's border, the sidebar holds the mark, the tab bar and the
-//! session's readings, and the main column stacks the transcript, the status row,
-//! the input and the hints. The sidebar's fate is decided here, not by the caller.
+//! 外壳是**一圈外框、一条全高左栏、一条主列**：外框是终端的边框，左栏放标记、页签条与
+//! 会话读数，主列自上而下堆着转录、状态行、输入区与提示行。左栏的去留在这里定，不由调用
+//! 方定。
 
 use ratatui::layout::Rect;
 
 use crate::render::editor::Placed;
 
-/// The smallest terminal the shell is drawn in. One column or row smaller and the
-/// only thing on screen is [`crate::render::wording::too_small`].
+/// 画外壳的最小终端。再小一列或一行，屏幕上就只剩 [`crate::render::wording::too_small`]。
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 10;
 
-/// The rows the shell spends on chrome that is neither transcript nor input: the
-/// frame's two rows, the main column's three rules, the status row and the hint
-/// row. `转录行 = h − CHROME − 输入行数`, which is the whole of the vertical
-/// arithmetic (spec §1).
+/// 外壳花在既不是转录也不是输入区的那些构件上的行：外框的两行、主列的三条分隔线、状态行
+/// 与提示行。`转录行 = h − CHROME − 输入行数`，这就是纵向算术的全部（spec §1）。
 const CHROME: u16 = 7;
 
-/// The frame's two border columns.
+/// 外框的两条边框列。
 const BORDER_COLUMNS: u16 = 2;
 
-/// The rows the tab bar costs: a rule, the labels, a rule (spec §3).
+/// 页签条花掉的行：一条分隔线、标签、一条分隔线（spec §3）。
 const TAB_ROWS: u16 = 3;
 
-/// The rows between a tab bar's top rule and its labels: the rule itself. Written
-/// beside [`TAB_ROWS`] so the two accounts of the same bar cannot drift.
+/// 页签条顶端那条分隔线与它的标签之间的行：就是那条分隔线本身。写在 [`TAB_ROWS`] 旁边，
+/// 好让同一条页签条的两笔账不会漂移。
 const TAB_RULE_ROWS: u16 = 1;
 
-/// The columns the transcript always keeps at its right edge: the scrollbar's
-/// column and the rail's. Reserved whether or not they are drawn, so text never
-/// rewraps because the transcript grew (spec §1).
+/// 转录在右缘永远留着的那几列：滚动条的列与回合条的列。画不画都留着，这样文字不会因为
+/// 转录长高了而重新折行（spec §1）。
 const TRAILING_COLUMNS: u16 = 2;
 
-/// The sidebar's two content widths (spec §2). There is deliberately no rung
-/// between them: the prototype measured the middle one and the `（6%）` it buys
-/// back is already in the status row.
+/// 左栏的两个内容宽度（spec §2）。两者之间刻意没有档：prototype 量过中间那一档，它换回来
+/// 的 `（6%）` 已经在状态行里了。
 const SIDEBAR_WIDE: u16 = 40;
 const SIDEBAR_NARROW: u16 = 28;
 
-/// The widths at which each sidebar rung starts.
+/// 左栏每一档开始的宽度。
 const SIDEBAR_WIDE_FROM: u16 = 120;
 
-/// Below this the sidebar is hidden whole and the main column takes everything.
+/// 低于这个宽度，左栏整栏隐藏，主列拿走一切。
 const SIDEBAR_NARROW_FROM: u16 = 80;
 
-/// The mark's own width, shared with the painter so the two cannot drift apart.
+/// 标记自己的宽度，与画家共用，好让两者不会脱节。
 pub const LOGO_WIDTH: u16 = 38;
 
-/// The rows the mark draws, and the one row the text identity takes.
+/// 标记画的行数，以及文字身份占的那一行。
 const LOGO_ROWS: u16 = 5;
 const IDENTITY_ROWS: u16 = 1;
 
-/// The fields the sidebar's usage page holds when nothing is squeezed, and the
-/// fewest it ever keeps: 上下文 / token / 回合 (spec §2).
+/// 什么都不挤时左栏调用量页持有的字段，以及它最少保留的几个：上下文 / token / 回合
+/// （spec §2）。
 const SIDEBAR_FIELDS: u16 = 6;
 const SIDEBAR_MIN_FIELDS: u16 = 3;
 
-/// The most input rows the input area will ever hold (spec §2).
+/// 输入区最多持有的输入行数（spec §2）。
 const MAX_INPUT_ROWS: u16 = 10;
 
-/// The fewest rows the input area ever holds, whatever the draft wraps to
-/// (`.scratch/tui-input-pulse/spec.md` §1).
+/// 无论草稿折成几行，输入区最少持有的行数（`.scratch/tui-input-pulse/spec.md` §1）。
 ///
-/// It is the **area's** floor, not the draft's: the editor still answers one row for
-/// an empty draft, and the rows under it are simply blank. A place to write three
-/// lines that does not grow the moment the third line arrives is the whole point —
-/// the box used to jump under the cursor as the draft did.
+/// 它是**输入区**的地板，不是草稿的：空草稿照样让编辑器答一行，它下面的行就是空白。有一个
+/// 写三行的地方、而它不会在第三行到来的那一刻长高，这就是全部意义 —— 以前这个框会跟着草稿
+/// 在光标下面跳。
 const MIN_INPUT_ROWS: u16 = 3;
 
-/// Which of the three sidebar identities a frame draws.
+/// 一帧画左栏三种身份里的哪一种。
 ///
-/// The ladder is decided here, in [`sidebar_content`], so the painter asks this
-/// instead of re-deriving it from the sidebar's height — a painter that compared
-/// heights itself would be holding half the ladder, and the two halves could
-/// drift.
+/// 阶梯在这里、在 [`sidebar_content`] 里定，所以画家问这里，而不是从左栏的高度自己重推
+/// —— 一个自己比高度的画家就握着半条阶梯，而两半会漂移。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarKind {
-    /// The mark, on the wide rung (spec §2).
+    /// 宽档上的标记（spec §2）。
     Mark,
-    /// One line of text identity, which is what the narrow rung has room for.
+    /// 一行文字身份，窄档放得下的就是这个。
     Text,
-    /// Neither: the height ladder gave the identity up so the readings could stay.
+    /// 两者都不是：高度阶梯让出了身份，好让读数留下来。
     Hidden,
 }
 
 impl SidebarKind {
-    /// The rows this identity spends at the top of the sidebar.
+    /// 这个身份在左栏顶上花掉的行。
     pub fn rows(self) -> u16 {
         match self {
             SidebarKind::Mark => LOGO_ROWS,
@@ -104,47 +92,41 @@ impl SidebarKind {
     }
 }
 
-/// One frame's regions, in terminal coordinates.
+/// 一帧的那些区域，用终端坐标表示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Regions {
-    /// The main column: everything inside the frame right of the divider. It is
-    /// what the floating overlays are centred in (spec §1).
+    /// 主列：外框之内、分隔线右侧的一切。浮动的覆盖层就是在它里面居中的（spec §1）。
     pub main: Rect,
-    /// The transcript's rows: text, scrollbar and rail together.
+    /// 转录的那些行：文字、滚动条与回合条合在一起。
     pub transcript: Rect,
-    /// The rail's single column, at the transcript's right edge. Drawn whether or
-    /// not the session has units to put in it.
+    /// 回合条的那一列，在转录的右缘。会话有没有单位放进去都画。
     pub rail: Rect,
-    /// The status row's content row: `模型 … │ 模式 … │ 上下文 …%`. Always drawn
-    /// (spec §2, §5).
+    /// 状态行的内容行：`模型 … │ 模式 … │ 上下文 …%`。永远都画（spec §2、§5）。
     pub status: Rect,
-    /// The input rows inside the main column.
+    /// 主列里的那些输入行。
     pub input: Rect,
-    /// The hint row, under the input.
+    /// 提示行，在输入区下面。
     pub hints: Rect,
-    /// The sidebar's content, when it is drawn at all. The divider's column is
-    /// **not** part of it.
+    /// 左栏的内容，在它到底画了的时候。分隔线那一列**不算**它的一部分。
     pub sidebar: Option<Rect>,
-    /// The tab bar's label row, when the sidebar is drawn.
+    /// 页签条的标签行，在左栏画了的时候。
     pub tabs: Option<Rect>,
-    /// The sidebar's page rows — one row per field the height ladder kept, so the
-    /// rectangle's own height is that count (spec §2, §3).
+    /// 左栏的页行 —— 高度阶梯每留下一个字段就一行，所以这个矩形自己的高度就是那个数
+    /// （spec §2、§3）。
     pub sidebar_page: Option<Rect>,
-    /// The column the sidebar and the main column share.
+    /// 左栏与主列共有的那一列。
     pub divide: Option<u16>,
-    /// Which sidebar identity this frame came out as.
+    /// 这一帧最后出来的是哪种左栏身份。
     pub sidebar_kind: SidebarKind,
 }
 
-/// Whether the terminal is too small for anything but the notice sentence
-/// ([`crate::render::wording::too_small`]).
+/// 终端是不是小到只放得下那句告知（[`crate::render::wording::too_small`]）。
 pub fn below_minimum(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
 impl Regions {
-    /// The transcript's text area: its content less the two columns its right edge
-    /// always keeps — the scrollbar's and the rail's.
+    /// 转录的文字区：它的内容减去右缘永远留着的那两列 —— 滚动条的与回合条的。
     pub fn transcript_text(&self) -> Rect {
         Rect::new(
             self.transcript.x,
@@ -154,7 +136,7 @@ impl Regions {
         )
     }
 
-    /// The scrollbar's column, one to the left of the rail's.
+    /// 滚动条那一列，在回合条那一列的左边一格。
     pub fn scrollbar(&self) -> Rect {
         Rect::new(
             self.transcript.right().saturating_sub(TRAILING_COLUMNS),
@@ -164,7 +146,7 @@ impl Regions {
         )
     }
 
-    /// The width of the question overlay inside the main column.
+    /// 主列里问题覆盖层的宽度。
     pub fn modal_width(&self) -> u16 {
         self.main
             .width
@@ -172,9 +154,8 @@ impl Regions {
             .min(MODAL_MAX_WIDTH)
     }
 
-    /// The width of the detail overlay: the same centring as a question, but with its
-    /// own (wider) ceiling. A tool output is a body, not a sentence, so it is allowed
-    /// more room before the eye has to travel (票 03 §Answer).
+    /// 详情覆盖层的宽度：与问题一样的居中，但有自己（更宽）的上限。一段工具输出是正文，
+    /// 不是一句话，所以允许它有更多余地，免得眼睛来回跑（票 03 §Answer）。
     pub fn detail_width(&self) -> u16 {
         self.main
             .width
@@ -182,12 +163,10 @@ impl Regions {
             .min(DETAIL_MAX_WIDTH)
     }
 
-    /// Where the detail overlay goes: centred in the main column, one row short of
-    /// the borders so a sliver of the transcript stays visible above and below.
+    /// 详情覆盖层去哪儿：在主列里居中，比上下边框各短一行，好让转录在上下各留一条边。
     ///
-    /// It is `None` when the terminal is too small to show a useful body — the same
-    /// honest answer [`Regions::modal`] gives, and the detail view is then not opened
-    /// at all rather than opened as two rows of border.
+    /// 终端小到显示不出有用的正文时是 `None` —— 与 [`Regions::modal`] 给的是同一个诚实
+    /// 答案，而那时详情视图干脆不打开，而不是打开成两行边框。
     pub fn detail(&self) -> Option<Rect> {
         let width = self.detail_width();
         if width <= BORDER_COLUMNS || self.main.height <= BORDER_COLUMNS + DETAIL_MIN_ROWS {
@@ -205,8 +184,7 @@ impl Regions {
         ))
     }
 
-    /// Where a question `rows` display rows tall goes: centred in the main column,
-    /// or nowhere when it cannot be drawn legibly there.
+    /// 一个 `rows` 个显示行高的问题去哪儿：在主列里居中，在那里画不清楚时哪儿都不去。
     pub fn modal(&self, rows: u16) -> Option<Rect> {
         let width = self.modal_width();
         let height = rows.saturating_add(BORDER_COLUMNS);
@@ -221,12 +199,10 @@ impl Regions {
         ))
     }
 
-    /// How many content rows a floating menu anchored at `anchor` can take where it
-    /// would open: everything above the cursor's row, or the room below it when there
-    /// is nothing above.
+    /// 一个锚在 `anchor` 的浮动菜单在它要开的地方能拿多少内容行：光标那一行之上的全部，
+    /// 上面没地方时则是它下面的余地。
     ///
-    /// The caller trims the matches to this before asking for a rectangle, so a menu
-    /// scrolls instead of being refused.
+    /// 调用方在要矩形之前先把匹配结果裁到这个数，于是菜单是滚动而不是被拒。
     pub fn menu_room(&self, anchor: Placed) -> u16 {
         let cursor_y = self.input.y.saturating_add(anchor.row);
         let above = cursor_y.saturating_sub(self.main.y);
@@ -236,14 +212,11 @@ impl Regions {
         self.main.bottom().saturating_sub(cursor_y + 1)
     }
 
-    /// Where the floating `/` menu goes: a bordered box `width` columns wide and
-    /// `rows` content rows tall, anchored at the cursor so it follows what is being
-    /// typed (spec §6).
+    /// 浮动的 `/` 菜单去哪儿：一个 `width` 列宽、`rows` 个内容行高的带框盒子，锚在光标上，
+    /// 好跟着正在打的东西走（spec §6）。
     ///
-    /// It opens **upwards** — the input is at the foot of the screen, so that is the
-    /// side with room — and drops below the cursor only when there is nothing above.
-    /// `None` when it does not fit either way, which is the honest answer on a
-    /// terminal that small.
+    /// 它**向上**开 —— 输入区在屏幕脚下，所以有地方的是那一侧 —— 只有在上面什么都放不下时
+    /// 才落到光标下面。两边都放不下时是 `None`，那是在那么小的终端上诚实的答案。
     pub fn menu(&self, anchor: Placed, width: u16, rows: u16) -> Option<Rect> {
         if rows == 0 || width < MENU_MIN_WIDTH {
             return None;
@@ -271,32 +244,28 @@ impl Regions {
     }
 }
 
-/// The width one input row has for text: the main column's content, less the
-/// prompt. Known before [`plan`] runs, because the draft's own height is what plan
-/// needs.
+/// 一个输入行有多少宽度留给文字：主列的内容减去提示符。在 [`plan`] 跑之前就知道，因为
+/// plan 需要的正是草稿自己的高度。
 pub fn input_text_width(area: Rect) -> u16 {
     main_width(area.width).saturating_sub(crate::render::editor::prompt_columns())
 }
 
-/// The main column's content width.
+/// 主列的内容宽度。
 ///
-/// The questionnaire needs this before [`plan`] runs — how many rows it wants
-/// decides how tall the input area is — and it has to match the `input` rectangle
-/// `plan` hands back, or the drawn rows and the requested height would disagree.
+/// 问卷在 [`plan`] 跑之前就需要这个 —— 它想要几行决定输入区多高 —— 而它必须与 `plan`
+/// 交回来的 `input` 矩形一致，否则画出来的行与请求的高度就对不上。
 pub fn content_width(area: Rect) -> u16 {
     main_width(area.width)
 }
 
-/// Lay out one frame. `draft_rows` is how many rows the input's draft wraps to.
+/// 排出一帧的版面。`draft_rows` 是输入的草稿折成的行数。
 ///
-/// The order here **is** the degrade ladder: the sidebar is narrowed, then hidden,
-/// as the terminal narrows; the input grows into the transcript's rows as the draft
-/// does; and the sidebar's own height decides which of its parts survive (spec §2).
+/// 这里的顺序**就是**降级阶梯：终端变窄时左栏先变窄、再隐藏；草稿长高时输入区往转录的行里
+/// 长；左栏自己的高度决定它的哪些部分活下来（spec §2）。
 ///
-/// The input's own ladder is [`MIN_INPUT_ROWS`] … [`MAX_INPUT_ROWS`], and the floor
-/// is clamped by the room: **the transcript's last row wins** where the two meet, so
-/// 40×10 draws a two-row input with one transcript row above it rather than three
-/// rows and no transcript at all.
+/// 输入区自己的阶梯是 [`MIN_INPUT_ROWS`] … [`MAX_INPUT_ROWS`]，而地板被余地夹住：两者相
+/// 撞处**转录的最后一行优先**，所以 40×10 画出一个两行的输入区、上面留一行转录，而不是三行
+/// 输入区、转录一行不剩。
 pub fn plan(area: Rect, draft_rows: u16) -> Regions {
     let inner = inner(area);
     let tier = sidebar_tier(area.width);
@@ -351,9 +320,8 @@ pub fn plan(area: Rect, draft_rows: u16) -> Regions {
     }
 }
 
-/// The sidebar's content width at a terminal `width` wide, or `None` when it is
-/// hidden. **Width alone decides that**: the sidebar is a column of its own, so its
-/// height is not the transcript's to spend (spec §2).
+/// 终端宽 `width` 时左栏的内容宽度，隐藏时是 `None`。**只由宽度决定**：左栏是它自己的一
+/// 列，所以它的高度不是转录可以花掉的（spec §2）。
 fn sidebar_tier(width: u16) -> Option<u16> {
     if width >= SIDEBAR_WIDE_FROM {
         Some(SIDEBAR_WIDE)
@@ -364,20 +332,17 @@ fn sidebar_tier(width: u16) -> Option<u16> {
     }
 }
 
-/// The columns the main column gets: the frame's border, and the sidebar with its
-/// divider column when the sidebar is drawn.
+/// 主列拿到的那些列：外框的边框，以及左栏画出来时它连同分隔线那一列。
 fn main_width(width: u16) -> u16 {
     let sidebar = sidebar_tier(width).map_or(0, |tier| tier + 1);
     width.saturating_sub(BORDER_COLUMNS + sidebar)
 }
 
-/// The sidebar's identity and how many usage fields it can show, given its own
-/// content height.
+/// 给定左栏自己的内容高度，它的身份以及它能显示几个用量字段。
 ///
-/// The ladder is fixed: the **mark** goes first (to the text identity, then to
-/// nothing), then fields from the tail — 缓存, then 输出, then 输入. The floor is
-/// the tab bar plus 上下文 / token / 回合, so the three readings that answer "how
-/// much is left" are the last to go (spec §2).
+/// 阶梯是定死的：**标记**先走（先退成文字身份，再退成没有），然后从尾部丢字段 —— 先是
+/// 缓存，再是输出，再是输入。地板是页签条加上上下文 / token / 回合，所以回答「还剩多少」的
+/// 那三个读数最后走（spec §2）。
 fn sidebar_content(width: u16, content_rows: u16) -> (SidebarKind, u16) {
     let Some(tier) = sidebar_tier(width) else {
         return (SidebarKind::Hidden, 0);
@@ -396,15 +361,15 @@ fn sidebar_content(width: u16, content_rows: u16) -> (SidebarKind, u16) {
             SidebarKind::Mark => kind = SidebarKind::Text,
             SidebarKind::Text => kind = SidebarKind::Hidden,
             SidebarKind::Hidden if fields > SIDEBAR_MIN_FIELDS => fields -= 1,
-            // The floor: the tab bar and the three readings. A terminal too short
-            // even for those is below [`MIN_HEIGHT`] and never reaches here.
+            // 地板：页签条与那三个读数。连这些也放不下的终端在 [`MIN_HEIGHT`] 以下，永远
+            // 到不了这里。
             SidebarKind::Hidden => break,
         }
     }
     (kind, fields)
 }
 
-/// The content rectangle of a bordered area.
+/// 一个带框区域的内容矩形。
 pub fn inner(area: Rect) -> Rect {
     Rect::new(
         area.x + 1,
@@ -414,44 +379,38 @@ pub fn inner(area: Rect) -> Rect {
     )
 }
 
-/// How many rows the input may take at this size: its cap, or what is left once the
-/// transcript keeps its floor row, whichever is smaller.
+/// 这个尺寸下输入区最多能拿几行：它的上限，或者转录留住自己那行地板之后剩下的，两者取小。
 ///
-/// At 40×10 that room is two rows, so this — not [`MIN_INPUT_ROWS`] — is what the
-/// input gets there.
+/// 40×10 下那份余地是两行，所以在那里给输入区的是这个 —— 不是 [`MIN_INPUT_ROWS`]。
 fn max_input_rows(height: u16) -> u16 {
     let room = height.saturating_sub(CHROME + 1);
     MAX_INPUT_ROWS.min(room).max(1)
 }
 
-/// The widest the question overlay ever gets. Wider than this and the eye has to
-/// travel: a question is one sentence, not a page (spec §9).
+/// 问题覆盖层最宽能到多少。比这更宽眼睛就得来回跑了：一个问题是一句话，不是一页
+/// （spec §9）。
 const MODAL_MAX_WIDTH: u16 = 72;
 
-/// The blank columns the overlay leaves on either side of the main column.
+/// 覆盖层在主列两侧留下的空白列。
 const MODAL_MARGIN: u16 = 4;
 
-/// The widest the detail overlay ever gets (票 03 §Answer；2026-09-23 加宽 50%：
-/// 90 → 135)。A tool body is the one thing in the interface that is a page rather than
-/// a sentence, so it gets the room until the terminal itself runs out: at 120 columns
-/// the margin, not this ceiling, is what caps it.
+/// 详情覆盖层最宽能到多少（票 03 §Answer；2026-09-23 加宽 50%：90 → 135）。一段工具正文
+/// 是界面里唯一像一页而不是一句话的东西，所以它拿到那份余地，直到终端自己用完：120 列时
+/// 封住它的是边距，不是这条上限。
 const DETAIL_MAX_WIDTH: u16 = 135;
 
-/// The fewest body rows a detail overlay is worth opening for.
+/// 值得为详情覆盖层打开的最少正文行数。
 const DETAIL_MIN_ROWS: u16 = 1;
 
-/// The rows of transcript the detail overlay leaves showing, one above and one
-/// below, so the reader keeps the place they clicked from.
+/// 详情覆盖层两边各留一行转录显示，上下各一行，好让读者保住他点进来的那个位置。
 const DETAIL_MARGIN_ROWS: u16 = 2;
 
-/// The most rows the `/` menu shows before its matches scroll. A menu is a hint, not
-/// a catalogue: past this the reader is scrolling a list to find a name they could
-/// have typed (spec §6).
+/// `/` 菜单在匹配结果开始滚动之前最多显示几行。菜单是一条提示，不是一份目录：过了这个数，
+/// 读者就是在滚一份列表去找一个他本可以打出来的名字（spec §6）。
 pub const MENU_MAX_ROWS: u16 = 8;
 
-/// The widest the `/` menu ever gets: a name and its one-line description, without
-/// the eye having to travel.
+/// `/` 菜单最宽能到多少：一个名字加它那一行描述，不用眼睛来回跑。
 pub const MENU_MAX_WIDTH: u16 = 72;
 
-/// The narrowest a menu box is worth drawing: below this the border is most of it.
+/// 值得画一个菜单盒子的最窄宽度：低于这个，边框就是它的大半。
 const MENU_MIN_WIDTH: u16 = 12;

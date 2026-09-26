@@ -1,30 +1,24 @@
-//! Rendering boundary (spec §19).
+//! 渲染边界（spec §19）。
 //!
-//! There is **one** renderer per process, chosen at startup, and the three
-//! implementations are mutually exclusive — never concurrent subscribers. All
-//! three consume the **same** broadcast channel, and that channel is created and
-//! injected at assembly time ([`channel`] + [`Renderer::spawn`]). Incremental
-//! text and logged events travel on that one channel so their relative order is
-//! defined; incremental text never enters the event log.
+//! 每个进程只有**一个**渲染器，启动时选定，三个实现互斥 —— 绝不是并发的订阅者。三者
+//! 消费**同一条**广播通道，那条通道在组装期创建并注入（[`channel`] +
+//! [`Renderer::spawn`]）。增量文本与进流的事件走那一条通道，于是两者的相对顺序是定的；
+//! 增量文本永不进事件流。
 //!
-//! The three implementations:
+//! 三个实现：
 //!
-//! * [`headless`] — the machine mode. Its purity is structural: it writes to
-//!   exactly two explicit sinks, and `stdout` receives the final product and
-//!   nothing else (ticket 01's regression assertion).
-//! * [`plain`] — the human transcript for a pipe or a simple terminal.
-//! * [`tui`] — the ratatui interface: one fullscreen frame around a sidebar and a
-//!   main column on the alternate screen (ADR 0002) that owns the keyboard and keeps
-//!   the transcript in its own scroll buffer.
+//! * [`headless`] —— 机器模式。它的纯粹性是结构性的：它只往两个显式的写出口写，而
+//!   `stdout` 只收最终产物，别的什么都不收（票 01 的回归断言）。
+//! * [`plain`] —— 给管道或简单终端看的人类转录。
+//! * [`tui`] —— ratatui 界面：alt screen 上一圈全屏外框，框住一条左栏与一条主列
+//!   （ADR 0002），它占着键盘，并把转录养在自己的滚动缓冲里。
 //!
-//! Plain and TUI share one [`transcript`] layer: the same events become the same
-//! [`transcript::Block`]s, and only the painting differs. That is what keeps this
-//! from being three renderers each re-deriving the same presentation rules.
+//! plain 与 TUI 共用一个 [`transcript`] 层：同一批事件变成同一批 [`transcript::Block`]，
+//! 只有画法不同。就是这样才没变成三个各自重推同一套呈现规则的渲染器。
 //!
-//! The `[speaker]` prefix is the **human's** prefix. It is deliberately a
-//! separate generator from the projection's model-side prefix (spec §5): this one
-//! repeats on every line so an interleaved multi-agent log stays readable, while
-//! the model's is written once per merged block.
+//! `[speaker]` 前缀是**人**这一侧的前缀。它刻意是投影的模型侧前缀之外的另一个生成器
+//! （spec §5）：这一个每行都重复，好让交错的多 agent 日志仍然读得下去，而模型那一侧
+//! 每个合并块只写一次。
 
 pub mod editor;
 pub mod headless;
@@ -63,19 +57,18 @@ pub use tui::{
     TuiOptions, TuiState, PULSE_PALETTE,
 };
 
-/// How many render events may be buffered before a slow consumer starts losing
-/// them. A lost delta degrades output, never correctness.
+/// 一个慢消费者开始丢事件之前，能缓冲多少个渲染事件。丢掉一个增量是输出降级，绝不是
+/// 正确性降级。
 pub const RENDER_CHANNEL_CAPACITY: usize = 1024;
 
-/// Text that bypasses the event log on its way to the renderer.
+/// 在去渲染器的路上绕过事件流的文本。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeltaKind {
     Text,
     Reasoning,
 }
 
-/// Anything a renderer may observe: incremental model output or a completed
-/// unit that landed in the event log.
+/// 渲染器能观察到的一切：增量模型输出，或一个已落地进事件流的完整单位。
 #[derive(Debug, Clone)]
 pub enum RenderEvent {
     Delta {
@@ -84,21 +77,20 @@ pub enum RenderEvent {
         text: String,
     },
     Logged(Event),
-    /// Renderer-only narration that is not an event.
+    /// 只给渲染器看的叙述，不是事件。
     Diagnostic(String),
-    /// A front-end line that speaks for no event: the startup banner and the
-    /// interactive loop's plain feedback.
+    /// 一行不为任何事件说话的界面文字：启动横幅与交互循环的朴素反馈。
     ///
-    /// Not a [`RenderEvent::Diagnostic`]: a diagnostic is the system reporting
-    /// something, and is labelled as such, while a notice is the line itself.
+    /// 不是 [`RenderEvent::Diagnostic`]：诊断是系统在报什么，并且被标成那样，而一条告知
+    /// 就是那一行本身。
     Notice(String),
 }
 
-/// The two explicit sinks of the headless renderer, injected at assembly time.
+/// headless 渲染器的两个显式写出口，组装时注入。
 pub struct RenderSinks {
-    /// Final products only.
+    /// 只接最终产物。
     pub stdout_result: Box<dyn std::io::Write + Send>,
-    /// Everything else: progress, diagnostics, event narration.
+    /// 别的所有东西：进度、诊断、事件叙述。
     pub stderr_diagnostic: Box<dyn std::io::Write + Send>,
 }
 
@@ -108,7 +100,7 @@ impl std::fmt::Debug for RenderSinks {
     }
 }
 
-/// Send side of the render channel. Cheap to clone.
+/// 渲染通道的发送端。克隆很便宜。
 #[derive(Clone)]
 pub struct RenderHandle {
     sender: broadcast::Sender<RenderEvent>,
@@ -135,47 +127,42 @@ impl RenderHandle {
         let _ = self.sender.send(RenderEvent::Logged(event.clone()));
     }
 
-    /// A renderer-only diagnostic that is not an event.
+    /// 一条只给渲染器看的诊断，不是事件。
     pub fn diagnostic(&self, message: &str) {
         let _ = self
             .sender
             .send(RenderEvent::Diagnostic(message.to_owned()));
     }
 
-    /// A front-end line shown verbatim.
+    /// 一行原样显示的界面文字。
     ///
-    /// The seam exists so that a caller holding a harness never has to print:
-    /// once a renderer owns the terminal, a second writer lands inside the
-    /// live region (spec §19).
+    /// 这条接缝存在，是为了让持有 harness 的调用方永远不必自己 print：渲染器一旦占住
+    /// 终端，第二个写入者就会落进活动区域里（spec §19）。
     pub fn notice(&self, message: &str) {
         let _ = self.sender.send(RenderEvent::Notice(message.to_owned()));
     }
 }
 
-/// One consumer of the render channel.
+/// 渲染通道的一个消费者。
 ///
-/// The three implementations are started one at a time, never side by side: the
-/// selection *is* [`Renderer`], and it is made once, at assembly. A renderer owns
-/// whatever resources its mode needs (the machine mode's sinks, the TUI's
-/// terminal) and returns when every [`RenderHandle`] has been dropped and the
-/// channel has drained.
+/// 三个实现一次起一个，绝不并排：这个选择*就是* [`Renderer`]，而且在组装时做一次。
+/// 一个渲染器拥有它的模式需要的那些资源（机器模式的写出口、TUI 的终端），并在每一个
+/// [`RenderHandle`] 都被丢掉、通道排空之后返回。
 #[async_trait]
 pub trait Render: Send {
     async fn consume(self: Box<Self>, receiver: broadcast::Receiver<RenderEvent>);
 }
 
-/// The startup renderer selection: exactly one of the three modes.
+/// 启动时的渲染器选择：三种模式里恰好一个。
 ///
-/// A value rather than a trait object because the choice has to be made where
-/// the front end is assembled, and because "mutually exclusive" is then a
-/// property of the type rather than a convention.
+/// 是值类型而不是 trait 对象，因为这个选择必须在组装前端的地方做出来，也因为这样
+/// 「互斥」就是类型的性质，而不是一条约定。
 pub enum Renderer {
-    /// The machine mode: two explicit sinks, `stdout` carries only the final
-    /// product.
+    /// 机器模式：两个显式写出口，`stdout` 只承载最终产物。
     Headless(RenderSinks),
-    /// The human transcript for a pipe or a simple terminal.
+    /// 给管道或简单终端看的人类转录。
     Plain(PlainOptions),
-    /// The ratatui interface; it owns the keyboard.
+    /// ratatui 界面；它占着键盘。
     Tui(Box<TuiOptions>),
 }
 
@@ -192,7 +179,7 @@ impl Renderer {
         Renderer::Tui(Box::new(options))
     }
 
-    /// Start the selected renderer on `receiver`, which the assembly created.
+    /// 在 `receiver` 上启动选中的渲染器，那条通道由组装期创建。
     pub fn spawn(self, receiver: broadcast::Receiver<RenderEvent>) -> JoinHandle<()> {
         match self {
             Renderer::Headless(sinks) => {
@@ -211,8 +198,8 @@ impl Renderer {
     }
 }
 
-/// Create the one render channel. The assembly owns the send side (as a
-/// [`RenderHandle`]); the consumer end is handed to exactly one [`Renderer`].
+/// 创建那唯一一条渲染通道。组装期持有发送端（作为一个 [`RenderHandle`]）；消费端交给
+/// 恰好一个 [`Renderer`]。
 pub fn channel() -> (RenderHandle, broadcast::Receiver<RenderEvent>) {
     let (sender, receiver) = broadcast::channel(RENDER_CHANNEL_CAPACITY);
     (RenderHandle { sender }, receiver)

@@ -1,27 +1,25 @@
-//! Markdown rendering for the TUI transcript.
+//! TUI 转录的 Markdown 渲染。
 //!
-//! The model answers in Markdown; this turns the common subset of it into styled
-//! [`Line`]s, so a heading reads like a heading and a fenced block reads like
-//! code. It is deliberately not CommonMark: a hand-written scanner over the
-//! constructs a coding agent actually emits, with no parser dependency. Anything
-//! it does not recognize is passed through verbatim, so imperfect input degrades
-//! to plain text rather than disappearing.
+//! 模型用 Markdown 作答；这里把它常见的那一部分变成带样式的 [`Line`]，于是一个标题读
+//! 起来像个标题，一个围栏块读起来像代码。它刻意不是 CommonMark：一支手写的扫描器，只
+//! 扫 coding agent 真会吐出的那些构造，不依赖任何 parser。它认不出的东西一律原样透传，
+//! 所以不完美的输入会降级成纯文本，而不是消失。
 //!
-//! The palette is the **answer's**: nothing here is dimmed to the narration grey.
-//! The caller owns the speaker prefix and the block's continuation indent.
+//! 调色板是**答案的**：这里没有任何东西被调暗成叙述的灰色。发言前缀与块的续行缩进归
+//! 调用方管。
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// Inline code and fenced blocks.
+/// 行内代码与围栏块。
 const CODE: Color = Color::Yellow;
-/// Muted structure: blockquote bars, rules, link targets.
+/// 静音的结构：引用条、分隔线、链接目标。
 const MUTED: Color = Color::Gray;
 
-/// Render one Markdown block as terminal lines.
+/// 把一个 Markdown 块渲染成终端行。
 pub fn to_lines(text: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    // The fence that is currently open, as `(character, length)`.
+    // 当前敞着的围栏，形如 `(字符, 长度)`。
     let mut fence: Option<(char, usize)> = None;
 
     for raw in text.split('\n') {
@@ -65,7 +63,7 @@ pub fn to_lines(text: &str) -> Vec<Line<'static>> {
             continue;
         }
         if let Some(cells) = table_row(trimmed) {
-            // The `|---|---|` alignment row carries no content.
+            // `|---|---|` 这条对齐行不带内容。
             if !is_table_separator(&cells) {
                 lines.push(table_line(&cells));
             }
@@ -76,12 +74,12 @@ pub fn to_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
-/// A fenced code line: indented and in the code colour, kept byte-for-byte.
+/// 围栏里的一行代码：缩进、上代码色，逐字节保留。
 fn code_line(raw: &str) -> Line<'static> {
     Line::from(Span::styled(format!("  {raw}"), Style::default().fg(CODE)))
 }
 
-/// A heading's own line: `#`/`##` stand out in cyan, deeper ones just bold.
+/// 标题自己那一行：`#`/`##` 用青色挑出来，更深的只加粗。
 fn heading_line(level: usize, rest: &str) -> Line<'static> {
     let mut style = Style::default().add_modifier(Modifier::BOLD);
     if level <= 2 {
@@ -94,13 +92,13 @@ fn rule_line() -> Line<'static> {
     Line::from(Span::styled("─".repeat(24), Style::default().fg(MUTED)))
 }
 
-/// A table row: cells joined with a visible separator.
+/// 表格的一行：各格用一条看得见的分隔符连起来。
 fn table_line(cells: &[String]) -> Line<'static> {
     let text = cells.join(" │ ");
     Line::from(Span::styled(text, Style::default()))
 }
 
-/// Split `| a | b |` into its cells, or `None` when the line is not a table row.
+/// 把 `| a | b |` 拆成各格；这一行不是表格行时返回 `None`。
 fn table_row(trimmed: &str) -> Option<Vec<String>> {
     let body = trimmed.strip_prefix('|')?.strip_suffix('|')?;
     Some(body.split('|').map(|cell| cell.trim().to_owned()).collect())
@@ -113,8 +111,8 @@ fn is_table_separator(cells: &[String]) -> bool {
         })
 }
 
-/// `# Title` .. `###### Title`. A closing hash run is stripped only when a space
-/// separates it from the text, so `# C#` keeps its `#`.
+/// `# Title` .. `###### Title`。只有当一个空格把它与正文隔开时才剥掉收尾的井号串，
+/// 所以 `# C#` 保得住它那个 `#`。
 fn heading(trimmed: &str) -> Option<(usize, &str)> {
     let level = trimmed.chars().take_while(|ch| *ch == '#').count();
     if !(1..=6).contains(&level) {
@@ -130,7 +128,7 @@ fn heading(trimmed: &str) -> Option<(usize, &str)> {
     Some((level, without_closing))
 }
 
-/// A thematic break: three or more of `-`, `*` or `_`, spaces allowed.
+/// 一条主题分隔：`-`、`*` 或 `_` 三个及以上，允许夹空格。
 fn is_rule(trimmed: &str) -> bool {
     let mut marker = None;
     let mut count = 0;
@@ -156,7 +154,7 @@ fn blockquote(trimmed: &str) -> Option<&str> {
     Some(rest.strip_prefix(' ').unwrap_or(rest))
 }
 
-/// A list item: `(indent, marker, rest)`. Task boxes become `☐` / `☑`.
+/// 一个列表项：`(缩进, 标记, 剩余)`。任务框会变成 `☐` / `☑`。
 fn list_item(raw: &str) -> Option<(String, String, &str)> {
     let indent_len = raw.len() - raw.trim_start().len();
     let indent = &raw[..indent_len];
@@ -168,7 +166,7 @@ fn list_item(raw: &str) -> Option<(String, String, &str)> {
             return Some((indent.to_owned(), marker, rest));
         }
     }
-    // `12. item`: digits, then `. `.
+    // `12. item`：先数字，再 `. `。
     let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
     if digits > 0 {
         if let Some(rest) = trimmed[digits..].strip_prefix(". ") {
@@ -178,7 +176,7 @@ fn list_item(raw: &str) -> Option<(String, String, &str)> {
     None
 }
 
-/// A task-list box after a bullet: `[x] done` / `[ ] todo`.
+/// 项目符号后面的任务框：`[x] done` / `[ ] todo`。
 fn task_box(rest: &str) -> (String, &str) {
     match rest.get(..4) {
         Some("[x] ") | Some("[X] ") => ("☑ ".to_owned(), &rest[4..]),
@@ -187,7 +185,7 @@ fn task_box(rest: &str) -> (String, &str) {
     }
 }
 
-/// A line that opens a fenced block: three or more backticks or tildes.
+/// 开出一个围栏块的行：三个及以上的反引号或波浪号。
 fn opening_fence(trimmed: &str) -> Option<(char, usize)> {
     for ch in ['`', '~'] {
         let count = trimmed.chars().take_while(|c| *c == ch).count();
@@ -204,10 +202,9 @@ fn closes_fence(raw: &str, ch: char, len: usize) -> bool {
     count >= len && trimmed.chars().skip(count).all(|c| c == ch || c == ' ')
 }
 
-/// One line's inline spans: code, bold, italic, strikethrough and links.
+/// 一行的行内 span：代码、粗体、斜体、删除线与链接。
 ///
-/// `prev` tracks the character before the cursor so `snake_case` is not read as
-/// emphasis: `_` only opens at a word boundary.
+/// `prev` 记着光标前一个字符，好让 `snake_case` 不被读成强调：`_` 只在词边界上开。
 fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut plain = String::new();
@@ -215,7 +212,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut prev = '\n';
 
     while !rest.is_empty() {
-        // A code span wins over everything inside it.
+        // 代码 span 胜过它里面的一切。
         if let Some(after) = rest.strip_prefix('`') {
             if let Some(end) = after.find('`') {
                 flush(&mut spans, &mut plain, base);
@@ -274,7 +271,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
             }
         }
 
-        let ch = rest.chars().next().expect("non-empty");
+        let ch = rest.chars().next().expect("非空");
         plain.push(ch);
         prev = ch;
         rest = &rest[ch.len_utf8()..];
@@ -284,8 +281,8 @@ fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     spans
 }
 
-/// `**` or `__`, but not a lone `*` or `_`. `__` needs a word boundary for the
-/// same reason single `_` does: `__init__` is an identifier, not emphasis.
+/// `**` 或 `__`，但不认孤立的 `*` 或 `_`。`__` 需要词边界，理由与单个 `_` 相同：
+/// `__init__` 是个标识符，不是强调。
 fn strong_marker(rest: &str, prev: char) -> Option<(&'static str, Modifier)> {
     if rest.starts_with("**") {
         return Some(("**", Modifier::BOLD));
@@ -296,7 +293,7 @@ fn strong_marker(rest: &str, prev: char) -> Option<(&'static str, Modifier)> {
     None
 }
 
-/// A single `*` or `_`; `_` only at a word boundary, so identifiers survive.
+/// 单个 `*` 或 `_`；`_` 只在词边界上，好让标识符活下来。
 fn emphasis_marker(rest: &str, prev: char) -> Option<(&'static str, Modifier)> {
     if rest.starts_with('*') && !rest.starts_with("**") {
         return Some(("*", Modifier::ITALIC));

@@ -1,33 +1,26 @@
-//! Syntax highlighting and diff coloring — deliberately **two layers** (spec
-//! §19).
+//! 语法高亮与 diff 着色 —— 刻意分成**两层**（spec §19）。
 //!
-//! ⚠️ **This module currently has no production consumer.** It is kept on purpose,
-//! not by oversight: see [`docs/highlight.md`](../../docs/highlight.md) for the
-//! two decisions that left it here and what would have to happen for it to come back
-//! or go away. The short version: the TUI used to compose these layers for tool
-//! output, and ticket 02 of `.scratch/tui-ux/` moved tool output into the detail
-//! overlay as plain text, which removed the last caller. Only this module's own
-//! tests and `tests/render_highlight.rs` exercise it now, so a regression here is
-//! invisible to the product until something calls it again.
+//! ⚠️ **这个模块目前没有任何生产消费者。** 留着它是刻意的，不是疏忽：见
+//! [`docs/highlight.md`](../../docs/highlight.md)，那里记着把它留在这里的两个决定，以及
+//! 它要回来或要走掉得发生什么。短版本：TUI 曾经为工具输出合成这两层，而
+//! `.scratch/tui-ux/` 的票 02 把工具输出改成以纯文本进详情覆盖层，于是最后一个调用方
+//! 没了。现在只有这个模块自己的测试与 `tests/render_highlight.rs` 练它，所以这里的回归
+//! 对产品是隐形的，直到又有人调它。
 //!
-//! The diff layer answers one question about a line: is it added, removed, a
-//! hunk header, or context? The syntax layer answers a different one: what kind
-//! of code is this? A line can be both an addition and a keyword, and a caller
-//! composes the two styles ([`Class::style`] patched over [`DiffTag::style`])
-//! rather than picking a winner.
+//! diff 层回答关于一行的一个问题：它是新增、删除、hunk 头，还是上下文？语法层回答的是
+//! 另一个：这是什么代码？一行可以既是新增又是关键字，于是调用方把两种样式合起来
+//! （[`Class::style`] 盖在 [`DiffTag::style`] 上），而不是挑一个赢家。
 //!
-//! The syntax layer runs the Rust grammar that is already a dependency through
-//! `tree-sitter-highlight` — the Oniguruma path syntect would take is not used
-//! (spec §19, Out of Scope).
+//! 语法层通过 `tree-sitter-highlight` 跑那份已经是依赖的 Rust 语法 —— syntect 会走的
+//! Oniguruma 那条路没有走（spec §19，Out of Scope）。
 
 use std::sync::OnceLock;
 
 use ratatui::style::{Color, Modifier, Style};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-/// The capture names this renderer recognizes. Anything a query names that is
-/// not here falls back to plain text, which is why a grammar update cannot break
-/// rendering — it can only go uncolored.
+/// 这个渲染器认得的 capture 名。查询点到、而这里没有的名字退回纯文本，这就是为什么一次
+/// 语法更新弄不坏渲染 —— 它只能让东西不上色。
 const CAPTURES: &[&str] = &[
     "attribute",
     "boolean",
@@ -58,7 +51,7 @@ const CAPTURES: &[&str] = &[
     "variable.parameter",
 ];
 
-/// A kind of code, as far as coloring is concerned.
+/// 就上色而言，这是一种什么代码。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
     Plain,
@@ -76,8 +69,8 @@ pub enum Class {
 
 impl Class {
     fn of(capture: &str) -> Class {
-        // Capture names are dotted (`function.method`), and the prefix decides
-        // the family. Longest prefixes first where two could match.
+        // capture 名是点分的（`function.method`），前缀决定属于哪一族。两个前缀都可能
+        // 匹配时，长的在前。
         if capture.starts_with("comment") {
             Class::Comment
         } else if capture.starts_with("string") || capture == "escape" {
@@ -103,7 +96,7 @@ impl Class {
         }
     }
 
-    /// The ANSI SGR prefix for this class, or `""` for no color.
+    /// 这一类的 ANSI SGR 前缀；不上色时是 `""`。
     pub fn ansi(self) -> &'static str {
         match self {
             Class::Plain => "",
@@ -118,7 +111,7 @@ impl Class {
         }
     }
 
-    /// The TUI style for this class.
+    /// 这一类的 TUI 样式。
     pub fn style(self) -> Style {
         match self {
             Class::Plain | Class::Variable => Style::default(),
@@ -135,26 +128,26 @@ impl Class {
     }
 }
 
-/// One colored piece of a line.
+/// 一行里上了色的一小片。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
     pub text: String,
     pub class: Class,
 }
 
-/// Which layer of a diff a line belongs to.
+/// 一行属于 diff 的哪一层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffTag {
-    /// Not part of a diff at all.
+    /// 根本不属于一份 diff。
     Context,
     Added,
     Removed,
-    /// A file header (`+++` / `---`) or a hunk header (`@@`).
+    /// 一个文件头（`+++` / `---`）或一个 hunk 头（`@@`）。
     Hunk,
 }
 
 impl DiffTag {
-    /// The ANSI color a plain terminal paints this tag with.
+    /// plain 终端画这个标签用的 ANSI 颜色。
     pub fn ansi(self) -> &'static str {
         match self {
             DiffTag::Context => "",
@@ -164,8 +157,7 @@ impl DiffTag {
         }
     }
 
-    /// The TUI style for this tag. It is a **background** so it composes with
-    /// the syntax layer's foreground instead of fighting it.
+    /// 这个标签的 TUI 样式。它是**背景**，这样它与语法层的前景是叠加的，而不是互相打架。
     pub fn style(self) -> Style {
         match self {
             DiffTag::Context => Style::default(),
@@ -178,7 +170,7 @@ impl DiffTag {
     }
 }
 
-/// Classify one line of a unified diff.
+/// 给统一 diff 的一行归类。
 pub fn diff_tag(line: &str) -> DiffTag {
     if line.starts_with("+++") || line.starts_with("---") || line.starts_with("@@") {
         DiffTag::Hunk
@@ -191,11 +183,10 @@ pub fn diff_tag(line: &str) -> DiffTag {
     }
 }
 
-/// The configured Rust grammar, built once per process.
+/// 配好的 Rust 语法，每进程构建一次。
 ///
-/// A failure to build the query is treated as "no highlighting available" rather
-/// than an error: the renderer's job is to show output, and losing color is a
-/// degradation, not a failure.
+/// 查询构建失败按「没有高亮可用」处理，而不是报错：渲染器的差事是显示输出，丢掉颜色是
+/// 降级，不是失败。
 fn rust_config() -> Option<&'static HighlightConfiguration> {
     static CONFIG: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
     CONFIG
@@ -214,11 +205,10 @@ fn rust_config() -> Option<&'static HighlightConfiguration> {
         .as_ref()
 }
 
-/// Highlight Rust source into per-line spans.
+/// 把 Rust 源码高亮成逐行的 span。
 ///
-/// The parse tree comes from the same grammar the repo map already depends on;
-/// no second grammar is added for highlighting. On any failure the source comes
-/// back as one plain span per line.
+/// 解析树来自仓库地图已经依赖的那一份语法；不为高亮加第二份语法。任何失败都让源码按每行
+/// 一个纯文本 span 回来。
 pub fn highlight_rust(source: &str) -> Vec<Vec<Span>> {
     match try_highlight(source) {
         Some(lines) => lines,
@@ -238,8 +228,8 @@ fn try_highlight(source: &str) -> Option<Vec<Vec<Span>>> {
     for event in events {
         match event.ok()? {
             HighlightEvent::HighlightStart(highlight) => {
-                // `configure` maps every recognized capture onto its index in
-                // `CAPTURES`, so the index is the capture's name.
+                // `configure` 把每个认得的 capture 映到它在 `CAPTURES` 里的下标，所以
+                // 这个下标就是那个 capture 的名字。
                 let name = CAPTURES.get(highlight.0).copied().unwrap_or("plain");
                 stack.push(Class::of(name));
             }
@@ -270,14 +260,11 @@ fn try_highlight(source: &str) -> Option<Vec<Vec<Span>>> {
     Some(lines)
 }
 
-/// Highlight a patch (or ordinary text) into per-line spans, **on top of** the
-/// diff layer.
+/// 把一份补丁（或普通文本）高亮成逐行的 span，**叠在** diff 层之上。
 ///
-/// This is the two layers composing: the diff marker is peeled off first, the
-/// remaining code is highlighted as one document (so a string or comment that
-/// spans lines still parses), and the marker is re-attached as a plain span. A
-/// removed `fn` is therefore both a removal and a keyword, which is the whole
-/// point of keeping the layers separate.
+/// 这就是两层在合成：先剥掉 diff 标记，剩下的代码当作一整份文档来高亮（所以跨行的字符串
+/// 或注释照样能解析），然后标记作为一个纯文本 span 贴回去。于是一个被删掉的 `fn` 既是
+/// 删除又是关键字 —— 这正是把两层分开的全部理由。
 pub fn highlight_diff(source: &str) -> Vec<Vec<Span>> {
     let lines: Vec<&str> = source.split('\n').collect();
     let mut code_lines: Vec<&str> = Vec::with_capacity(lines.len());
@@ -333,9 +320,8 @@ fn plain_lines(source: &str) -> Vec<Vec<Span>> {
         .collect()
 }
 
-/// Paint one line for a terminal: the diff tag wins when the line is part of a
-/// diff, and the syntax layer colors context lines. The two are computed
-/// independently — neither one is derived from the other.
+/// 为终端画一行：这一行属于 diff 时 diff 标签说话，而语法层给上下文行上色。两者是各自
+/// 独立算出来的 —— 谁也不是从另一个推出来的。
 pub fn ansi_line(line: &str, color: bool) -> String {
     if !color {
         return line.to_owned();

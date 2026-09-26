@@ -1,19 +1,15 @@
-//! The keyboard seam between the loop and whichever front end owns the
-//! terminal (spec §19, user story 133).
+//! 循环与占着终端的那一侧前端之间的键盘接缝（spec §19，用户故事 133）。
 //!
-//! Two facts shape it:
+//! 两件事塑出了它：
 //!
-//! * **Input belongs to the renderer.** In TUI mode the terminal is in raw mode
-//!   and one task owns every key; in plain mode a single reader task owns stdin.
-//!   Either way the loop never touches the terminal directly.
-//! * **The loop asks for what it needs.** A line is read only when the loop is
-//!   ready for one, and an answer only when the gate has asked a question. A
-//!   reader that read ahead would swallow the answer to a permission question as
-//!   if it were the next prompt — so the traffic is request-driven, not a stream.
+//! * **输入归渲染器。** TUI 模式下终端处在 raw 模式，一个 task 占着每一个键；plain
+//!   模式下由一个读取 task 占着 stdin。无论哪种，循环都从不直接碰终端。
+//! * **循环按需索取。** 只有在循环准备好要一行时才读一行，只有在门已经问了问题时才读
+//!   一个答案。一个提前读的读取者会把权限问题的答案当成下一个提示吞掉 —— 所以这里是
+//!   请求驱动的，不是一条流。
 //!
-//! The loop side is [`ConsoleHandle`]; the front end side is [`ConsolePort`].
-//! [`ConsoleAsker`] implements the permission gate's [`Asker`] port on top of the
-//! same handle, so a question and a prompt travel the one keyboard.
+//! 循环那一侧是 [`ConsoleHandle`]；前端那一侧是 [`ConsolePort`]。[`ConsoleAsker`] 在
+//! 同一个 handle 上实现权限门的 [`Asker`] 接缝，所以一个问题与一条提示走的是同一个键盘。
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
@@ -22,43 +18,40 @@ use crate::events::Event;
 use crate::permissions::{Answer, Asker, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
 
-/// One question plus the one-shot channel its answer comes back on.
+/// 一个问题，加上它的答案回来时走的那条一次性通道。
 ///
-/// The question is a [`PermissionRequest`] rather than an enum of its own: the
-/// gate's `Ask` is the only thing the loop ever puts to the user through this
-/// channel, and it used to have a second variant purely to carry the plan-file
-/// conflict of the mode that no longer exists.
+/// 这个问题是 [`PermissionRequest`] 而不是它自己的一个枚举：门的 `Ask` 是循环唯一会通过
+/// 这条通道摆到用户面前的东西，而它曾经有过第二个变体，纯粹是为了携带那个已经不存在的
+/// 模式的计划文件冲突。
 #[derive(Debug)]
 pub struct AskRequest {
     pub request: PermissionRequest,
     pub reply: oneshot::Sender<Answer>,
 }
 
-/// A model-initiated questionnaire the front end must put to the user (spec §7).
+/// 一份由模型发起、前端必须摆到用户面前的问卷（spec §7）。
 ///
-/// It has its own reply channel rather than a second [`AskRequest`] shape on
-/// purpose: a questionnaire answer is not an [`Answer`], and making the gate carry
-/// a shape it can never produce is what the third asker exists to avoid
-/// (spec §19).
+/// 它有自己的回复通道，而不是第二份 [`AskRequest`] 的形状，这是刻意的：问卷的答案不是
+/// 一个 [`Answer`]，而让门去携带一个它永远产不出的形状，正是第三个 asker 存在起来要避开
+/// 的事（spec §19）。
 #[derive(Debug)]
 pub struct QuestionnaireRequest {
     pub questions: Vec<UserQuestion>,
-    /// The answers, or a model-readable reason none came back (input ended, or
-    /// the run was cancelled). Dropping the sender is read as the same "no
-    /// answer", so a cancelled run never leaves the tool hanging.
+    /// 那些答案，或者一条模型可读的「没有答案」的理由（输入结束了，或这次运行被取消
+    /// 了）。丢掉 sender 被读作同一个「没有答案」，于是一次被取消的运行永远不会把工具挂
+    /// 在那里。
     pub reply: oneshot::Sender<Result<UserAnswers, String>>,
 }
 
-/// One name a leading `/` can become, and the line that says what it does.
+/// 开头的 `/` 能变成的一个名字，以及一句说它是干什么的话。
 ///
-/// The catalog is the **loop's** list, not the renderer's: the loop is what turns a
-/// submission into an action, so the loop is what knows which names exist. A front
-/// end only offers them — it never decides what one means (spec §6).
+/// 这份目录是**循环的**列表，不是渲染器的：把一次提交变成动作的是循环，所以知道存在哪些
+/// 名字的也是循环。前端只负责把它们摆出来 —— 它从不决定其中一个是什么意思（spec §6）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
-    /// The name without its slash, exactly as it must be typed.
+    /// 不带斜杠的名字，与必须打进去的样子一模一样。
     pub name: String,
-    /// One line for a menu's second column. Empty when there is nothing to say.
+    /// 菜单第二列的一句话。没什么可说时是空的。
     pub description: String,
 }
 
@@ -71,142 +64,130 @@ impl CatalogEntry {
     }
 }
 
-/// What the loop asks the front end for.
+/// 循环从前端要的东西。
 #[derive(Debug)]
 pub enum ConsoleRequest {
-    /// The next user line.
+    /// 下一行用户输入。
     ///
-    /// **`None` means end of input**, and nothing else: an empty line is
-    /// `Some(String::new())`. A front end whose input cannot end — the TUI, where
-    /// Enter on an empty draft is just an empty draft — must never send `None`, or the
-    /// loop reads it as a closed stdin and stops (spec §6).
+    /// **`None` 就是输入结束**，没别的意思：一个空行是 `Some(String::new())`。一个输入
+    /// 不会结束的前端 —— TUI，在空草稿上按 Enter 只是又一个空草稿 —— 绝不能发 `None`，
+    /// 否则循环会把它读成 stdin 关掉了，于是停下（spec §6）。
     Prompt {
         reply: oneshot::Sender<Option<String>>,
     },
-    /// Put a question to the user.
+    /// 把一个问题摆到用户面前。
     Ask(AskRequest),
-    /// Put the model's questionnaire to the user (spec §7). Its answer type is
-    /// different from [`Ask`](Self::Ask)'s, so it travels on its own channel.
+    /// 把模型的问卷摆到用户面前（spec §7）。它的答案类型与 [`Ask`](Self::Ask) 的不同，
+    /// 所以走自己的通道。
     Questionnaire(QuestionnaireRequest),
-    /// The names a leading `/` can become.
+    /// 开头的 `/` 能变成哪些名字。
     ///
-    /// Pushed once, right after assembly, because the skills come from the session and
-    /// nothing can list them earlier. A front end that draws no menu — the plain
-    /// console — has nothing to do with it.
+    /// 组装之后立刻推一次，因为技能来自会话，没有什么能更早把它们列出来。一个不画菜单的
+    /// 前端 —— plain 那条控制台 —— 与它无关。
     Catalog { entries: Vec<CatalogEntry> },
-    /// Whether the loop is **inside a run** — a turn, or a discussion it is driving.
+    /// 循环是不是**在一次运行里面** —— 一个回合，或它正在驱动的一场讨论。
     ///
-    /// The loop is the only thing that knows this, so it says so rather than letting a
-    /// front end infer it (spec §6). Inferring it from the render stream failed for
-    /// anything that is not a turn — the synthesizer's single call emits deltas and ends
-    /// no `TurnEnded`; inferring it from "no prompt is outstanding" failed at startup,
-    /// before the loop has asked for its first line yet. Both mistakes turn `Ctrl-C`
-    /// into a cancel gesture the idle loop discards, which reads as a dead keyboard.
+    /// 知道这件事的只有循环，所以它自己说，而不是让前端去推断（spec §6）。从渲染流上推
+    /// 断，对不是回合的任何东西都失效 —— 合成器那次单一调用会吐增量，却不结束任何
+    /// `TurnEnded`；从「没有未决的提示」推断，在启动时失效，那时循环还没要过它的第一行。
+    /// 两个错都会把 `Ctrl-C` 变成空闲循环直接丢掉的手势，读起来就是一个死掉的键盘。
     RunState { running: bool },
-    /// The event stream a reopened session opened with, for the front end to lay
-    /// out as history (`.scratch/tui-history-replay/spec.md` §1).
+    /// 重新打开的会话开局带着的事件流，供前端铺成历史
+    /// （`.scratch/tui-history-replay/spec.md` §1）。
     ///
-    /// Pushed once, right after assembly and before the startup banner, because the
-    /// payload is the **assembled** snapshot — which includes the synthetic results
-    /// `--continue`'s recovery wrote for dangling tool calls, and so cannot be taken
-    /// before assembly. A front end that keeps no transcript — the plain console —
-    /// has nothing to do with it.
+    /// 组装之后、启动横幅之前推一次，因为载荷是**组装后**的快照 —— 它包含 `--continue`
+    /// 的恢复为悬空工具调用写下的合成结果，所以不能在组装前取。一个不养转录的前端 ——
+    /// plain 那条控制台 —— 与它无关。
     Replay { events: Vec<Event> },
 }
 
-/// A gesture, pushed by the front end on its own schedule.
+/// 一个手势，由前端按自己的节奏推上来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontEndEvent {
-    /// The user interrupted the run (Esc / Ctrl-C).
+    /// 用户打断了这次运行（Esc / Ctrl-C）。
     Cancel,
-    /// Shift+Tab: cycle the permission mode `readonly → ask → auto → readonly`
-    /// (spec §12; `.scratch/todo-and-modes/spec.md` §1). A value on the session,
-    /// never an event: the loop applies it, and nothing is injected.
+    /// Shift+Tab：循环权限模式 `readonly → ask → auto → readonly`（spec §12；
+    /// `.scratch/todo-and-modes/spec.md` §1）。它是会话上的一个值，永远不是事件：循环应用
+    /// 它，什么都不注入。
     CycleMode,
-    /// The user asked to leave.
+    /// 用户要求离开。
     Quit,
 }
 
-/// The loop's end of the keyboard.
+/// 键盘上属于循环的那一端。
 ///
-/// The request sender and the gesture receiver are **two values**, not one: the
-/// loop selects on a prompt and on an unsolicited gesture at the same time, and
-/// one struct would be borrowed twice.
+/// 请求发送端与手势接收端是**两个值**，不是一个：循环同时 select 一条提示与一个没人要的
+/// 手势，而合成一个结构体会被借两次。
 pub struct ConsoleHandle {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
 }
 
 impl ConsoleHandle {
-    /// Read the next user line, or `None` at end of input.
+    /// 读下一行用户输入；输入结束时是 `None`。
     pub async fn prompt(&self) -> Option<String> {
         let (reply, answer) = oneshot::channel();
         self.requests.send(ConsoleRequest::Prompt { reply }).ok()?;
         answer.await.ok().flatten()
     }
 
-    /// Tell the front end which `/<name>`s exist.
+    /// 告诉前端存在哪些 `/<name>`。
     ///
-    /// Fire and forget: a front end that has already gone is not an error, and there
-    /// is no answer to wait for. The built-ins lead the list, then the session's
-    /// skills, so a menu reads in the order the loop would try them.
+    /// 发完就完：一个已经走了的前端不是错误，也没有什么答案要等。内建项排在列表最前，然后
+    /// 是会话的技能，所以菜单读起来的顺序就是循环会尝试它们的顺序。
     pub fn catalog(&self, entries: Vec<CatalogEntry>) {
         let _ = self.requests.send(ConsoleRequest::Catalog { entries });
     }
 
-    /// Say whether the loop is inside a run.
+    /// 说循环是不是在一次运行里面。
     ///
-    /// Fire and forget, like [`catalog`](Self::catalog): the fact is a notification,
-    /// not a question, and a front end that has already gone is not an error. It has to
-    /// be *pushed* — the loop is the only one that knows when a run starts and ends,
-    /// and no side channel (the render stream, an outstanding prompt) says it for every
-    /// kind of run.
+    /// 与 [`catalog`](Self::catalog) 一样发完就完：这个事实是一则通知，不是一个问题，而
+    /// 一个已经走了的前端不是错误。它必须被*推*过去 —— 知道一次运行何时开始何时结束的只有
+    /// 循环，也没有哪条侧通道（渲染流、一个未决的提示）对每一种运行都说得出来。
     pub fn set_running(&self, running: bool) {
         let _ = self.requests.send(ConsoleRequest::RunState { running });
     }
 
-    /// Hand the front end the history a reopened session assembled with.
+    /// 把重新打开的会话组装出来的历史交给前端。
     ///
-    /// Fire and forget, like [`catalog`](Self::catalog): laying the history out is the
-    /// front end's own business, and there is no answer to wait for. The payload is the
-    /// **whole** assembled stream in `seq` order; an empty one means there is nothing to
-    /// replay and the front end behaves as it always has.
+    /// 与 [`catalog`](Self::catalog) 一样发完就完：把历史铺开是前端自己的事，也没有什么
+    /// 答案要等。载荷是按 `seq` 序的**整条**组装好的流；空的一条意味着没东西可重放，前端
+    /// 照它一如既往的样子行事。
     pub fn replay(&self, events: Vec<Event>) {
         let _ = self.requests.send(ConsoleRequest::Replay { events });
     }
 }
 
-/// The gestures the front end pushes on its own schedule.
+/// 前端按自己的节奏推上来的那些手势。
 pub struct ConsoleEvents {
     events: mpsc::UnboundedReceiver<FrontEndEvent>,
 }
 
 impl ConsoleEvents {
-    /// The next gesture, or `None` once the front end is gone.
+    /// 下一个手势；前端走了之后是 `None`。
     pub async fn recv(&mut self) -> Option<FrontEndEvent> {
         self.events.recv().await
     }
 }
 
-/// The front end's end of the keyboard. Only one task should hold it.
+/// 键盘上属于前端的那一端。只该有一个 task 持有它。
 pub struct ConsolePort {
     requests: mpsc::UnboundedReceiver<ConsoleRequest>,
     events: mpsc::UnboundedSender<FrontEndEvent>,
 }
 
 impl ConsolePort {
-    /// Wait for the next thing the loop wants.
+    /// 等循环下一个想要的东西。
     pub async fn recv(&mut self) -> Option<ConsoleRequest> {
         self.requests.recv().await
     }
 
-    /// Push a gesture the loop did not ask for (Esc, Shift+Tab, Ctrl-C).
+    /// 推一个循环没要过的手势（Esc、Shift+Tab、Ctrl-C）。
     pub fn emit(&self, event: FrontEndEvent) {
         let _ = self.events.send(event);
     }
 }
 
-/// Create the pair. The handle and the events receiver go to the loop, the port
-/// to the front end.
+/// 创建这一对。handle 与手势接收端给循环，端口给前端。
 pub fn console() -> (ConsoleHandle, ConsolePort, ConsoleEvents) {
     let (request_tx, request_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -222,10 +203,9 @@ pub fn console() -> (ConsoleHandle, ConsolePort, ConsoleEvents) {
     )
 }
 
-/// The permission gate's port, answered through the front end (spec §12).
+/// 权限门的那个接缝，经过前端作答（spec §12）。
 ///
-/// One question travels here — the gate's `Ask` — on the one keyboard this front
-/// end already owns.
+/// 有一个问题从这里走 —— 门的 `Ask` —— 走的正是这个前端已经占着的那一个键盘。
 pub struct ConsoleAsker {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
 }
@@ -235,8 +215,7 @@ impl ConsoleAsker {
         Self { requests }
     }
 
-    /// Build an asker from a handle, so the CLI wires one keyboard into both the
-    /// loop and the permission gate.
+    /// 从一个 handle 造一个 asker，好让 CLI 把同一个键盘接进循环与权限门两处。
     pub fn from_handle(handle: &ConsoleHandle) -> Self {
         Self::new(handle.requests.clone())
     }
@@ -261,12 +240,11 @@ impl Asker for ConsoleAsker {
     }
 }
 
-/// The model-question port, answered through the front end (spec §7).
+/// 模型提问的那个接缝，经过前端作答（spec §7）。
 ///
-/// The mirror of [`ConsoleAsker`] for the model's questions: the loop side asks,
-/// the front end answers. The error text is **model-facing** — it becomes the
-/// `ask_user_question` call's result — so it is plain English and deliberately
-/// does not go through the wording layer.
+/// 它是 [`ConsoleAsker`] 在模型的问题上的镜像：循环那一侧问，前端答。错误文本是**模型
+/// 可见**的 —— 它成为 `ask_user_question` 那次调用的结果 —— 所以它是朴素英文，并且刻意
+/// 不走措辞层。
 pub struct ConsoleQuestions {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
 }
@@ -276,8 +254,7 @@ impl ConsoleQuestions {
         Self { requests }
     }
 
-    /// Build the port from a handle, so the CLI wires one keyboard into both the
-    /// loop and the model's questions.
+    /// 从一个 handle 造这个端口，好让 CLI 把同一个键盘接进循环与模型的问题两处。
     pub fn from_handle(handle: &ConsoleHandle) -> Self {
         Self::new(handle.requests.clone())
     }
@@ -299,39 +276,36 @@ impl UserQuestions for ConsoleQuestions {
         }
         match answer.await {
             Ok(result) => result,
-            // The front end went away without answering — the run was cancelled,
-            // or the input ended. Never hang waiting for a person who is gone.
+            // 前端没作答就走了 —— 这次运行被取消了，或者输入结束了。永远不要挂在那里等一个
+            // 已经不在的人。
             Err(_) => Err("the questionnaire was left unanswered".to_owned()),
         }
     }
 }
 
-/// A source of one input line, with `None` for end of input.
+/// 一行输入的来源，用 `None` 表示输入结束。
 ///
-/// This is the plain front end's one input primitive. It is a value rather than a
-/// direct `stdin` read so the whole line-oriented console — the prompt, the
-/// permission questions, the questionnaire — can be driven from a script in a
-/// test, the same way the TUI's keyboard is driven one event at a time.
+/// 这是 plain 前端唯一的输入原语。它是一个值而不是直接读 `stdin`，这样整条面向行的控制
+/// 台 —— 提示、权限问题、问卷 —— 都能在测试里由脚本驱动，就像 TUI 的键盘被一次一个事件
+/// 驱动一样。
 pub type LineReader = Box<
     dyn FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         + Send,
 >;
 
-/// Run the line-oriented front end for plain mode.
+/// 为 plain 模式跑起这条面向行的前端。
 ///
-/// stdin is line-buffered, so there is no raw mode and no key events: the port
-/// reads one line per request, whether the loop wanted a prompt or the gate wants
-/// an answer. Prompts go to stderr, never stdout — the final product is the only
-/// thing stdout carries (spec §19).
+/// stdin 是行缓冲的，所以没有 raw 模式也没有按键事件：端口每来一个请求读一行，无论循环是
+/// 要一条提示还是门要一个答案。提示去 stderr，绝不去 stdout —— stdout 只承载最终产物
+/// （spec §19）。
 pub fn spawn_plain_console(port: ConsolePort) -> tokio::task::JoinHandle<()> {
     spawn_plain_console_with(port, Box::new(|| Box::pin(read_stdin_line())))
 }
 
-/// [`spawn_plain_console`] with an injected line reader.
+/// 注入式行读取器版本的 [`spawn_plain_console`]。
 ///
-/// The reader is the whole input surface of this front end, so injecting it is what
-/// makes the line-by-line path — including the model's questionnaire — testable
-/// without a pipe.
+/// 这个读取器就是这条前端全部的输入面，所以把它注入进来正是让逐行那条路 —— 包括模型的
+/// 问卷 —— 不用管道也能测的原因。
 pub fn spawn_plain_console_with(
     mut port: ConsolePort,
     mut reader: LineReader,
@@ -346,29 +320,26 @@ pub fn spawn_plain_console_with(
                     let answer = answer_question(&mut reader, &ask.request).await;
                     let _ = ask.reply.send(answer);
                 }
-                // The model's questionnaire, answered one line per question. On
-                // end of input it returns an error rather than looping for ever
-                // (spec §19).
+                // 模型的问卷，一问一行地答。输入结束时它返回一个错误，而不是永远转下去
+                // （spec §19）。
                 ConsoleRequest::Questionnaire(request) => {
                     let answers = answer_questionnaire(&mut reader, &request.questions).await;
                     let _ = request.reply.send(answers);
                 }
-                // There is no menu on the line-oriented front end: the names are
-                // discoverable through the unknown-command text instead.
+                // 面向行的前端没有菜单：名字靠那句未知命令的文案去发现。
                 ConsoleRequest::Catalog { .. } => {}
-                // Nothing on this front end reads key events, so there is no gesture to
-                // turn into the wrong branch (spec §6).
+                // 这条前端上没有任何东西读按键事件，所以也没有手势会被读成错误的分支
+                // （spec §6）。
                 ConsoleRequest::RunState { .. } => {}
-                // There is no transcript to lay history into: the line-oriented front
-                // end prints each event as it arrives and keeps nothing
-                // (`.scratch/tui-history-replay/spec.md` §1).
+                // 没有转录可以铺历史：面向行的前端来一个事件印一个，什么都不留
+                // （`.scratch/tui-history-replay/spec.md` §1）。
                 ConsoleRequest::Replay { .. } => {}
             }
         }
     })
 }
 
-/// Write `prompt` to stderr and pull the next line. `None` at end of input.
+/// 把 `prompt` 写到 stderr 并取下一行。输入结束时是 `None`。
 async fn next_line(reader: &mut LineReader, prompt: &str) -> Option<String> {
     use std::io::Write;
     eprint!("{prompt}");
@@ -376,7 +347,7 @@ async fn next_line(reader: &mut LineReader, prompt: &str) -> Option<String> {
     reader().await
 }
 
-/// Read one line from stdin. `None` at EOF.
+/// 从 stdin 读一行。EOF 时是 `None`。
 async fn read_stdin_line() -> Option<String> {
     tokio::task::spawn_blocking(|| {
         let mut line = String::new();
@@ -391,10 +362,9 @@ async fn read_stdin_line() -> Option<String> {
     .flatten()
 }
 
-/// Put one permission question on the terminal and read the answer.
+/// 把一个权限问题放到终端上并读答案。
 ///
-/// Anything that is not an explicit yes is read the non-acting way: an answer
-/// typed by accident must not approve a write.
+/// 不是明确 yes 的一律按「不动手」那一侧读：一个打错了的答案绝不能批准一次写。
 async fn answer_question(reader: &mut LineReader, request: &PermissionRequest) -> Answer {
     let prompt = crate::render::wording::permission_prompt_with_context(
         &request.tool_name,
@@ -408,16 +378,12 @@ async fn answer_question(reader: &mut LineReader, request: &PermissionRequest) -
     }
 }
 
-/// Put the model's questionnaire on the terminal, one question per line, and
-/// encode what was read (spec §7, §19).
+/// 把模型的问卷放到终端上，一题一行，并把读到的编码下来（spec §7、§19）。
 ///
-/// There is no paging here: every question is printed and read in turn, so the
-/// "one screen at a time" of the TUI becomes "one prompt at a time". An empty line
-/// is a skip; a number picks an option; anything else is custom text. A
-/// multi-select question with options reads a second, optional line so that
-/// `selected` and `custom` can both be answered — the supplement spec §7
-/// requires. End of input is not an answer, so it fails the call instead of
-/// waiting.
+/// 这里没有分页：每个问题依次印出来、读进来，于是 TUI 的「一屏一问」变成「一提示一问」。
+/// 空行是跳过；一个数字选一个选项；别的都是自定义文本。带选项的多选问题会再读第二行、可选
+/// 的一行，好让 `selected` 与 `custom` 都能被作答 —— 这就是 spec §7 要求的那条补充。输入
+/// 结束不是一个答案，所以它让这次调用失败，而不是干等。
 async fn answer_questionnaire(
     reader: &mut LineReader,
     questions: &[UserQuestion],
@@ -433,12 +399,11 @@ async fn answer_questionnaire(
     Ok(UserAnswers { answers })
 }
 
-/// Read one question's answer, or `None` at end of input.
+/// 读一个问题的一个答案；输入结束时是 `None`。
 ///
-/// A multi-select question that offers options takes **two** lines: the numbers
-/// (or custom text) and then an optional supplement. That second line is the only
-/// way a line-oriented front end can say "this choice, plus this text" (spec §7);
-/// every other question takes one line, which keeps the common case short.
+/// 带选项的多选问题要**两**行：先是一串数字（或自定义文本），然后是一条可选的补充。那
+/// 第二行是面向行的前端唯一能说出「选这个，外加这段文字」的办法（spec §7）；其余每个问题
+/// 都只要一行，这样常见情形就短。
 async fn read_plain_answer(reader: &mut LineReader, question: &UserQuestion) -> Option<UserAnswer> {
     if question.multi_select && !question.options.is_empty() {
         let selection = next_line(
@@ -462,7 +427,7 @@ async fn read_plain_answer(reader: &mut LineReader, question: &UserQuestion) -> 
     Some(encode_plain_answer(question, &line, None))
 }
 
-/// Print one question and its numbered options to stderr.
+/// 把一个问题与它编了号的选项印到 stderr。
 fn print_questionnaire_question(index: usize, total: usize, question: &UserQuestion) {
     if let Some(header) = question
         .header
@@ -489,14 +454,12 @@ fn print_questionnaire_question(index: usize, total: usize, question: &UserQuest
     }
 }
 
-/// Encode one plain-console answer.
+/// 把 plain 控制台的一个答案编码下来。
 ///
-/// A blank first line is a skip (`selected: []`, no `custom`). A line that is a
-/// list of valid option numbers picks those options; anything else is custom
-/// text, which on a single-select question means the choice is empty because
-/// custom text overrides it (spec §7). `supplement` is the multi-select question's
-/// second line: when present it is added to the custom text, so `selected` and
-/// `custom` travel together.
+/// 第一行空白是一次跳过（`selected: []`，没有 `custom`）。一行是合法的选项号列表就选那些
+/// 选项；别的都是自定义文本，在单选问题上这意味着选择为空，因为自定义文本覆盖它
+/// （spec §7）。`supplement` 是多选问题的第二行：有它就加进自定义文本，于是 `selected`
+/// 与 `custom` 一起走。
 fn encode_plain_answer(
     question: &UserQuestion,
     line: &str,
@@ -531,11 +494,9 @@ fn encode_plain_answer(
     }
 }
 
-/// The labels a line of option numbers names, or `None` when the line is not a
-/// list of valid numbers (which makes it custom text).
+/// 一行选项号点到的那些标签；这一行不是一列合法数字时是 `None`（那它就是自定义文本）。
 ///
-/// A single-select question takes exactly one number; a multi-select one takes a
-/// comma-separated list.
+/// 单选问题正好取一个数字；多选取一串逗号分隔的。
 fn chosen_options(question: &UserQuestion, line: &str) -> Option<Vec<String>> {
     let mut selected = Vec::new();
     let tokens: Vec<&str> = if question.multi_select {

@@ -1,16 +1,12 @@
-//! The conversation pane's scroll buffer (spec §3, §4).
+//! 对话窗格的滚动缓冲（spec §3、§4）。
 //!
-//! The pane owns the transcript rather than the terminal's scrollback (ADR 0002),
-//! so it has to answer three questions the terminal used to answer for us: how
-//! much history to keep, how it wraps at the current width, and where the viewport
-//! sits. The cap answers the first, the wrap cache the second, and the sticky
-//! bottom the third.
+//! 转录归这个窗格所有，而不是归终端的滚动回退（ADR 0002），所以它得回答三个以前由终端
+//! 替我们回答的问题：留多少历史、在当前宽度下怎么折行、视口待在哪儿。上限回答第一个，
+//! 折行缓存回答第二个，吸底回答第三个。
 //!
-//! **Two units, deliberately.** The cap counts *source* lines — what a block
-//! renders to, before wrapping — because a cap counted in display rows would keep
-//! different amounts of history at different terminal widths. The viewport, the
-//! scrollbar and the "new content" indicator count *display* rows, which is what a
-//! person actually sees.
+//! **刻意用两个单位。** 上限数的是*来源*行 —— 一个块在折行之前渲染成的东西 —— 因为用
+//! 显示行数的上限会在不同终端宽度下留下不同数量的历史。视口、滚动条与「新内容」指示器
+//! 数的是*显示*行，那是人真正看到的东西。
 
 use std::collections::VecDeque;
 
@@ -19,43 +15,40 @@ use ratatui::text::{Line, Span};
 
 use super::width::char_columns;
 
-/// Source lines the pane keeps before dropping the oldest (spec §3).
+/// 窗格在丢掉最旧的那些之前保留多少来源行（spec §3）。
 pub const CAP: usize = 20_000;
 
-/// Rows a PgUp/PgDn step keeps from the page it is leaving, so the reader does not
-/// lose the thread (spec §4).
+/// 一次 PgUp/PgDn 从它正离开的那一页留下几行，好让读者不断线索（spec §4）。
 const PAGE_OVERLAP: usize = 2;
 
-/// Rows one wheel notch scrolls (spec §4).
+/// 一格滚轮滚几行（spec §4）。
 const WHEEL_ROWS: usize = 3;
 
-/// The conversation pane's buffer and viewport.
+/// 对话窗格的缓冲与视口。
 pub struct Pane {
-    /// Source lines, oldest first. Never longer than [`CAP`].
+    /// 来源行，最旧的在前。长度永不超过 [`CAP`]。
     lines: VecDeque<Line<'static>>,
-    /// The display row each source line starts on. Parallel to `lines`.
+    /// 每条来源行起始的显示行。与 `lines` 平行。
     starts: VecDeque<usize>,
-    /// The wrapped display rows of `lines`, at `width`.
+    /// `lines` 在 `width` 下折行后的显示行。
     wrapped: VecDeque<Line<'static>>,
-    /// How many source lines `wrapped` already accounts for.
+    /// `wrapped` 已经算进了多少条来源行。
     wrapped_sources: usize,
-    /// The width everything above was wrapped at; zero until the first frame.
+    /// 上面那些东西折行时用的宽度；第一帧之前是零。
     width: u16,
-    /// The last frame's pane height, so a key or a wheel notch knows its step.
+    /// 上一帧窗格的高度，好让一次按键或一格滚轮知道自己的步长。
     height: u16,
-    /// Display rows in the last frame: source rows and the live tail together.
+    /// 上一帧的显示行数：来源行与实时尾巴合在一起。
     total: usize,
-    /// The display row at the top of the viewport.
+    /// 视口顶端的那一个显示行。
     top: usize,
-    /// The source line the viewport top sits in — what a rewrap keeps its eye on.
+    /// 视口顶端所在的那条来源行 —— 重新折行时盯住的就是它。
     top_source: usize,
-    /// Whether the viewport tracks the bottom.
+    /// 视口是不是跟着底部走。
     follow: bool,
-    /// `total` as of the last frame that followed the bottom. The indicator counts
-    /// what has arrived since.
+    /// 上一个跟着底部的帧当时的 `total`。指示器数的是那之后到达的东西。
     seen: usize,
-    /// Whether the count is paused — a reader holding the transcript open on a line
-    /// rather than scrolling through it (票 02 §4).
+    /// 计数是不是被按住了 —— 读者把转录停在一行上看着，而不是从头滚到尾（票 02 §4）。
     holding: bool,
 }
 
@@ -77,30 +70,26 @@ impl Pane {
         }
     }
 
-    /// Append one source line; the oldest is dropped once [`CAP`] is reached.
+    /// 追加一条来源行；到了 [`CAP`] 就把最旧的丢掉。
     pub fn push(&mut self, line: Line<'static>) {
         self.lines.push_back(line);
         self.wrap_pending();
         self.evict();
     }
 
-    /// Replace the newest source line. Used by the transcript's one mutable line:
-    /// the thinking hint is written as it starts and rewritten in place when the
-    /// trace is finished, so a reader never sees two lines for one thought (票 02 §1).
+    /// 替换最新那条来源行。给转录里唯一那条会变的行用：思考提示在它开始时写下，在 trace
+    /// 写完时原地重写一遍，所以读者永远不会为一个想法看到两行（票 02 §1）。
     ///
-    /// A no-op on an empty pane, which is the honest answer: there is nothing to
-    /// rewrite.
+    /// 在空窗格上什么都不做，这是诚实的答案：没有东西可重写。
     pub fn replace_last(&mut self, line: Line<'static>) {
         let Some(last) = self.lines.back_mut() else {
             return;
         };
         *last = line;
-        // If the row that was just rewritten has already been wrapped, its display rows
-        // are stale — and they are the **last** ones in the cache, so dropping exactly
-        // them is the whole job. Clearing the cache instead throws away every earlier
-        // line's rows while `starts` goes on pointing at their old offsets: the pane
-        // then reports a couple of rows, the history disappears from the screen and
-        // there is nothing left to scroll back through (2026-09-23, user report).
+        // 如果刚重写的那一行已经折过行，它的显示行就是陈旧的 —— 而且它们是缓存里**最后**
+        // 那些，所以正好丢掉它们就是全部工作。清掉整个缓存反而会把更早每一行的显示行都扔
+        // 了，而 `starts` 还在指它们的老偏移：于是窗格报出两行，历史从屏幕上消失，也没有
+        // 什么可以往回滚了（2026-09-23，用户报告）。
         if self.wrapped_sources == self.lines.len() {
             if let Some(start) = self.starts.pop_back() {
                 self.wrapped.truncate(start);
@@ -109,10 +98,10 @@ impl Pane {
         }
     }
 
-    /// The source line a display row belongs to, if any.
+    /// 一个显示行属于哪条来源行，如果有的话。
     ///
-    /// This is how a click turns a screen row into a block: the pane counts display
-    /// rows, and everything a click can open is addressed by source line (票 04 §1).
+    /// 一次点击就是这样把屏幕行变回块的：窗格数的是显示行，而一次点击能打开的每样东西都
+    /// 按来源行寻址（票 04 §1）。
     pub fn source_at(&self, display_row: usize) -> Option<usize> {
         if display_row >= self.total {
             return None;
@@ -126,12 +115,11 @@ impl Pane {
         }
     }
 
-    /// The rows to draw: `height` display rows from the viewport top, with the
-    /// streaming `live` text wrapped and appended after the source lines.
+    /// 要画的行：从视口顶端起 `height` 个显示行，其中正在流的 `live` 文本折行后接在来源
+    /// 行之后。
     ///
-    /// This is also where the wrap cache is brought up to date, which is why it
-    /// takes `&mut self`: the width that matters is the one the frame is actually
-    /// drawn at, and that is only known here.
+    /// 折行缓存也是在这里被更新到最新的，这就是它收 `&mut self` 的原因：要紧的那个宽度是
+    /// 这一帧真正画出来的宽度，而那个只在这里知道。
     pub fn view(&mut self, width: u16, height: u16, live: &str) -> Vec<Line<'static>> {
         self.ensure(width);
         let live_rows = wrap_text(live, width.max(1) as usize);
@@ -143,8 +131,8 @@ impl Pane {
         if self.follow {
             self.top = max_top;
         } else if self.top > max_top {
-            // The transcript shrank under the viewport: the cap dropped rows, or
-            // the pane grew. Landing at the bottom is the only honest place left.
+            // 转录在视口下面缩了：可能是上限丢了行，也可能是窗格长高了。落在底部是唯一
+            // 诚实的去处。
             self.top = max_top;
         }
         if self.top >= max_top {
@@ -155,13 +143,12 @@ impl Pane {
         self.window(height, &live_rows)
     }
 
-    /// Put the top of the viewport on a **source line**, top-aligned.
+    /// 把视口顶端放到一条**来源行**上，顶对齐。
     ///
-    /// This is how the rail's cells jump: the unit a cell stands for is a range of
-    /// source lines, and landing on its first one puts the reader at the start of that
-    /// turn rather than somewhere inside it (`.scratch/tui-sidebar/spec.md` §4). A line
-    /// that is already past the last full screenful — the newest unit, usually —
-    /// clamps to the bottom, so the last cell needs no special case.
+    /// 回合条的格子就是这样跳的：一格代表的单位是一段来源行，落在它的第一条上就把读者放
+    /// 在那个回合的开头，而不是它中间的某处（`.scratch/tui-sidebar/spec.md` §4）。一条已经
+    /// 在最后一个整屏之后的来源行 —— 通常是最新的那个单位 —— 夹到底部，所以最后一格不
+    /// 需要特例。
     pub fn scroll_to_source(&mut self, source: usize) {
         let row = self.starts.get(source).copied().unwrap_or(0);
         self.follow = false;
@@ -174,13 +161,12 @@ impl Pane {
         self.sync_top_source();
     }
 
-    /// Scroll by `rows` display rows; negative is up.
+    /// 滚动 `rows` 个显示行；负数是往上。
     pub fn scroll(&mut self, rows: isize) {
         let max_top = self.total.saturating_sub(self.height as usize);
         if rows < 0 {
-            // Leaving the bottom is what starts counting what arrives next; `seen`
-            // stays where the last frame left it, so the indicator measures what
-            // has arrived *since*, not what is merely below.
+            // 离开底部才是「开始数此后到达的东西」的那一刻；`seen` 留在上一帧把它放在的
+            // 地方，所以指示器量的是*那之后*到达的，而不只是底下有多少。
             self.follow = false;
         }
         self.top = (self.top as isize + rows).clamp(0, max_top as isize) as usize;
@@ -191,13 +177,13 @@ impl Pane {
         self.sync_top_source();
     }
 
-    /// One page, keeping [`PAGE_OVERLAP`] rows of the page being left.
+    /// 翻一页，留下 [`PAGE_OVERLAP`] 行正在离开的那一页。
     pub fn page(&mut self, up: bool) {
         let step = (self.height as usize).saturating_sub(PAGE_OVERLAP).max(1);
         self.scroll(if up { -(step as isize) } else { step as isize });
     }
 
-    /// One wheel notch.
+    /// 一格滚轮。
     pub fn wheel(&mut self, up: bool) {
         self.scroll(if up {
             -(WHEEL_ROWS as isize)
@@ -206,7 +192,7 @@ impl Pane {
         });
     }
 
-    /// Follow the bottom again; the next frame puts the viewport there.
+    /// 重新跟着底部；下一帧把视口放到那里。
     pub fn to_bottom(&mut self) {
         self.follow = true;
         self.top = self.total.saturating_sub(self.height as usize);
@@ -214,17 +200,16 @@ impl Pane {
         self.sync_top_source();
     }
 
-    /// Whether the viewport is tracking the bottom.
+    /// 视口此刻是不是跟着底部走。
     pub fn following(&self) -> bool {
         self.follow
     }
 
-    /// Stop counting new rows, or start again.
+    /// 停住对新行的计数，或者重新开始。
     ///
-    /// The detail overlay holds the viewport; while it is up the "N new rows" count
-    /// would climb with output the reader cannot see and was not asked to read
-    /// (票 02 §4). The count is re-baselined on the frame that turns the hold on, so
-    /// releasing it measures from the reader's new position.
+    /// 详情覆盖层占住视口；它开着的时候，「N 条新行」这个计数会跟着读者看不见、也没被要求
+    /// 去读的输出一起涨（票 02 §4）。计数在打开扣住的那一帧重新取基准，所以松开它之后是
+    /// 从读者的新位置开始量的。
     pub fn set_holding(&mut self, holding: bool) {
         if holding && !self.holding {
             self.seen = self.total;
@@ -232,12 +217,11 @@ impl Pane {
         self.holding = holding;
     }
 
-    /// Hold the viewport where it is, or let it track the bottom again.
+    /// 把视口扣在原地，或者让它重新跟着底部走。
     ///
-    /// The detail overlay reads from a frozen transcript: leaving `follow` alone would
-    /// let a burst of output pull the line the reader opened out from under them
-    /// (票 02 §4). Releasing it returns the viewer to the bottom, which is where a
-    /// reader who has stopped reading history wants to be.
+    /// 详情覆盖层读的是一份冻住的转录：不管 `follow` 的话，一阵突发输出会把读者打开的那
+    /// 一行从他脚下拽走（票 02 §4）。松开它把人送回底部，一个已经不再读历史的读者想去的
+    /// 正是那里。
     pub fn set_following(&mut self, follow: bool) {
         if follow {
             self.to_bottom();
@@ -246,7 +230,7 @@ impl Pane {
         }
     }
 
-    /// Display rows that arrived since the viewport last left the bottom.
+    /// 视口上次离开底部之后到达的显示行数。
     pub fn fresh(&self) -> usize {
         if self.follow || self.holding {
             0
@@ -255,18 +239,17 @@ impl Pane {
         }
     }
 
-    /// Display rows in the last frame.
+    /// 上一帧的显示行数。
     pub fn total(&self) -> usize {
         self.total
     }
 
-    /// The display row at the top of the viewport.
+    /// 视口顶端的那一个显示行。
     pub fn top(&self) -> usize {
         self.top
     }
 
-    /// Bring the wrap cache up to date for `width`, keeping the viewport on the
-    /// source line it was showing when the width changes.
+    /// 把折行缓存更新到 `width`，并在宽度变化时把视口留在它原来显示的那条来源行上。
     fn ensure(&mut self, width: u16) {
         if width == self.width {
             self.wrap_pending();
@@ -278,17 +261,16 @@ impl Pane {
         self.wrapped_sources = 0;
         self.wrap_pending();
         if !self.follow {
-            // Every display row moved, so the row number means something else now;
-            // the source line is what survives a rewrap (spec §4).
+            // 每一个显示行都动了，所以行号现在指的是别的东西；一次重新折行之后活下来的
+            // 是来源行（spec §4）。
             self.top = self.starts.get(self.top_source).copied().unwrap_or(0);
         }
     }
 
-    /// Wrap the source lines that arrived since the last pass.
+    /// 把上一趟之后到达的来源行折行。
     fn wrap_pending(&mut self) {
         if self.width == 0 {
-            // No frame has been drawn yet, so there is no width to wrap to. The
-            // first `view` does all of it.
+            // 还没有画过任何一帧，所以没有宽度可折。第一次 `view` 会把全部做完。
             return;
         }
         let width = self.width.max(1) as usize;
@@ -302,11 +284,11 @@ impl Pane {
         }
     }
 
-    /// Drop the oldest source lines until the cap holds again.
+    /// 丢掉最旧的来源行，直到上限重新成立。
     fn evict(&mut self) {
         while self.lines.len() > CAP {
             if self.wrapped_sources == 0 {
-                // Nothing has been wrapped yet, so the line costs nothing else.
+                // 还什么都没折过行，所以这条行没有别的代价。
                 self.lines.pop_front();
                 continue;
             }
@@ -320,9 +302,8 @@ impl Pane {
                 self.wrapped.pop_front();
             }
             self.wrapped_sources -= 1;
-            // Every remaining start moves up by the rows that just left, and so does
-            // the viewport. This runs once per evicted line — at most once per
-            // completed block, once the transcript is at its cap.
+            // 剩下每一个起始位置都上移刚走掉的那些行，视口也一样。这每丢一条来源行跑一次
+            // —— 转录到达上限之后，最多每个完成的块一次。
             for start in self.starts.iter_mut() {
                 *start = start.saturating_sub(height);
             }
@@ -333,7 +314,7 @@ impl Pane {
         }
     }
 
-    /// Note which source line the viewport top is inside, for the next rewrap.
+    /// 记下视口顶端落在哪条来源行里，供下一次重新折行用。
     fn sync_top_source(&mut self) {
         self.top_source = match self.starts.binary_search(&self.top) {
             Ok(exact) => exact,
@@ -341,8 +322,7 @@ impl Pane {
         };
     }
 
-    /// `height` display rows from `top`, taking source rows first and then the live
-    /// tail.
+    /// 从 `top` 起 `height` 个显示行，先取来源行，然后取实时尾巴。
     fn window(&self, height: usize, live: &[Line<'static>]) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         for index in self.top..self.total {
@@ -369,12 +349,11 @@ impl Default for Pane {
     }
 }
 
-/// The display rows of `text` at `width` columns: one per logical line, each
-/// wrapped on display columns.
+/// `text` 在 `width` 列下的显示行：每条逻辑行一个，各自按显示列折行。
 pub fn wrap_text(text: &str, width: usize) -> Vec<Line<'static>> {
     if text.is_empty() {
-        // No tail at all is no rows at all. Splitting would give one empty row, and
-        // a blank row at the bottom of every frame is a row the pane does not have.
+        // 完全没有尾巴就是完全没有行。切开会给出一行空的，而每帧底部多出一行空白是窗格
+        // 并没有的一行。
         return Vec::new();
     }
     text.split('\n')
@@ -382,18 +361,15 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// Wrap one styled line to `width` columns, keeping each piece's styling.
+/// 把一条带样式的行折到 `width` 列，保住每一片的样式。
 ///
-/// **Columns, not bytes.** A CJK character is three bytes and two columns, so
-/// counting bytes wrapped a Chinese line at roughly a third of the pane's width —
-/// the one place where Chinese looked broken even though every cell was right.
+/// **数的是列，不是字节。** 一个 CJK 字符是三个字节、两列，所以按字节数会把一行中文折
+/// 到窗格宽度的三分之一左右 —— 那是中文看起来唯一坏掉的地方，尽管每一格都是对的。
 ///
-/// Per character rather than per grapheme: the offset has to be recoverable, and a
-/// cluster's cells are not ours to split. A wide character alone in a one-column
-/// pane still overflows it; wrapping cannot do better, it only has to keep moving.
+/// 按字符而不是按字素簇：偏移必须能还原，而一个字素簇占的格子不归我们切。一个宽字符独自
+/// 待在一列宽的窗格里照样溢出；折行做不了更好，它只需要一直往前走。
 ///
-/// A continuation row starts at column zero — the pane is a log, and an indent
-/// would claim a structure the wrapped text does not have.
+/// 续行从第零列起 —— 窗格是一份日志，缩进会主张一种折行后的文字并没有的结构。
 fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut out: Vec<Line<'static>> = Vec::new();
@@ -416,7 +392,7 @@ fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     out
 }
 
-/// One wrapped row, inheriting the line's own style and alignment.
+/// 一个折出来的行，继承那一行自己的样式与对齐。
 fn finish(template: &Line<'static>, spans: Vec<Span<'static>>) -> Line<'static> {
     Line {
         spans,
@@ -425,8 +401,8 @@ fn finish(template: &Line<'static>, spans: Vec<Span<'static>>) -> Line<'static> 
     }
 }
 
-/// Append one character, extending the last span when the style matches so a
-/// wrapped row stays one span per styled run rather than one per character.
+/// 追加一个字符，样式相同时延长最后一个 span，好让一个折出来的行每一段样式一个 span，
+/// 而不是每个字符一个。
 fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
     match spans.last_mut() {
         Some(last) if last.style == style => last.content.to_mut().push(ch),

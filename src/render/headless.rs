@@ -1,16 +1,13 @@
-//! The headless renderer: the machine mode (spec §19).
+//! headless 渲染器：机器模式（spec §19）。
 //!
-//! Its purity is structural — it writes to exactly two explicit sinks.
-//! `stdout_result` receives the final product and nothing else: either the
-//! completed turn of a single-agent session, or, inside a discussion, the
-//! synthesizer's `System`-attributed product (spec §15). Every debater turn also
-//! ends `Completed`, so "the last completed turn" would put both debaters'
-//! answers on stdout; a round boundary is what tells the two apart.
+//! 它的纯粹性是结构性的 —— 它只往两个显式的写出口写。`stdout_result` 只收最终产物，
+//! 别的什么都不收：要么是单 agent 会话里那个完成的回合，要么是讨论里合成器那条带
+//! `System` 归属的产物（spec §15）。每个讨论者的回合也都以 `Completed` 收尾，所以
+//! 「最后一个完成的回合」会把两个讨论者的作答都放上 stdout；把两者分开的是轮次边界。
 //!
-//! An executor's turn is never the session's final product (spec §16, §19): the
-//! dispatcher's own turn is still open around it, so an executor's completed turn
-//! must neither print to `stdout` nor overwrite the text the dispatcher's turn
-//! will print.
+//! 执行者的回合永远不是会话的最终产物（spec §16、§19）：派发者自己的回合还在它周围
+//! 敞着，所以执行者完成的回合既不能印到 `stdout`，也不能覆盖派发者的回合将要印出的
+//! 文本。
 
 use std::io::Write;
 
@@ -23,12 +20,12 @@ use super::transcript::summarize_args;
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent, RenderSinks};
 
-/// Whether a speaker is an executor.
+/// 一个发言者是不是执行者。
 fn is_executor(speaker: &SpeakerId) -> bool {
     matches!(speaker, SpeakerId::Executor(_))
 }
 
-/// The machine renderer.
+/// 机器渲染器。
 pub struct Headless {
     sinks: RenderSinks,
 }
@@ -45,10 +42,9 @@ impl Render for Headless {
         let Headless { mut sinks } = *self;
         let mut final_text = String::new();
         let mut in_reasoning = false;
-        // Whether a discussion round is open. Inside one, a completed turn is one
-        // debater's answer rather than the session's final product: every debater
-        // turn also ends `Completed`, so "the last completed turn" would put both
-        // debaters' answers on stdout (spec §15).
+        // 一场讨论的轮次有没有敞着。在一轮里面，一个完成的回合是某位讨论者的作答，而不
+        // 是会话的最终产物：每个讨论者的回合也都以 `Completed` 收尾，所以「最后一个完成
+        // 的回合」会把两个讨论者的作答都放上 stdout（spec §15）。
         let mut in_round = false;
 
         loop {
@@ -98,10 +94,8 @@ impl Render for Headless {
                         let _ = sinks.stderr_diagnostic.write_all(b"\n");
                         in_reasoning = false;
                     }
-                    // Progress narration is derived from the events themselves —
-                    // the machine mode keeps its own event-shaped narration rather
-                    // than going through the shared `Block` presentation type —
-                    // but every phrase comes from the wording layer.
+                    // 进度叙述是从事件本身推出来的 —— 机器模式养着自己这一套事件形状的
+                    // 叙述，而不是走共享的 `Block` 呈现类型 —— 但每一句话都来自措辞层。
                     let speaker = &event.speaker_id;
                     match &event.payload {
                         EventPayload::SessionStarted { .. } => {}
@@ -121,19 +115,15 @@ impl Render for Headless {
                             text,
                             ..
                         } => {
-                            // An executor's turn is work, not the session's
-                            // product: keeping its text out of `final_text` is what
-                            // stops it reaching stdout, and it stops the executor's
-                            // turn from clearing (or overwriting) the turn it is
-                            // working for.
+                            // 执行者的回合是干活，不是会话的产物：把它的文本挡在
+                            // `final_text` 外面，就是不让它上 stdout，也顺带不让执行者的
+                            // 回合清掉（或覆盖）它正在为之干活的那个回合。
                             if !is_executor(speaker) {
                                 final_text = text.clone();
                             }
-                            // The harness's own completed message is the
-                            // discussion's final product — the synthesizer's option
-                            // space. It is the one thing that belongs on stdout
-                            // without a turn: the synthesizer has no turn (spec
-                            // §15).
+                            // harness 自己那条完成消息就是讨论的最终产物 —— 合成器的
+                            // 选项空间。它是唯一不需要回合就属于 stdout 的东西：合成器
+                            // 没有回合（spec §15）。
                             if *speaker == SpeakerId::System {
                                 let _ = sinks.stdout_result.write_all(text.as_bytes());
                                 let _ = sinks.stdout_result.write_all(b"\n");
@@ -162,12 +152,10 @@ impl Render for Headless {
                                 wording::turn_ended(*reason)
                             );
                         }
-                        // A round boundary is narrated with its number and its
-                        // reason spelled out: the four terminal reasons
-                        // (`NoDivergence` / `Consensus` / `RoundsExhausted` /
-                        // `BudgetExhausted`) have to stay distinguishable to the
-                        // person reading the terminal, which is the whole point of
-                        // having four of them (spec §15).
+                        // 一条轮次边界连着它的编号与写明白的理由一起叙述：那四个终止原因
+                        // （`NoDivergence` / `Consensus` / `RoundsExhausted` /
+                        // `BudgetExhausted`）对读终端的人来说必须分得开，而这正是有四
+                        // 个的全部意义（spec §15）。
                         EventPayload::RoundStarted { round, mode } => {
                             in_round = true;
                             let _ = writeln!(

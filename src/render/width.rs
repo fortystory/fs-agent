@@ -1,22 +1,19 @@
-//! Display-width arithmetic: how many terminal columns a piece of text takes.
+//! 显示宽度的算术：一段文字占多少终端列。
 //!
-//! One home for it, because two parts of the renderer need the same answer — the
-//! conversation pane wraps styled lines to a width, and the sidebar, the input line
-//! and the indicator clip text to one — and a second copy is how `终` ends up
-//! counted as one column.
+//! 只住一处，因为渲染器有两处需要同一个答案 —— 对话窗格把带样式的行折到某个宽度，
+//! 左栏、提示行与指示器把文字裁到某一个 —— 而第二份拷贝就是 `终` 被算成一列的由来。
 
 use ratatui::buffer::CellWidth;
 
-/// The display width of `text`, in terminal columns.
+/// `text` 的显示宽度，单位是终端列。
 pub fn text_columns(text: &str) -> usize {
     text.cell_width() as usize
 }
 
-/// The display width of one character, in terminal columns.
+/// 单个字符的显示宽度，单位是终端列。
 ///
-/// A control character takes none: the painters filter them out, so counting them
-/// would put the cursor somewhere the text is not. It also keeps this off the
-/// `cell_width` path that asserts when one reaches it.
+/// 控制字符算零列：画家会把它们滤掉，把它们数进去就会把光标放到文字并不在的地方。
+/// 这也让这里避开 `cell_width` 那条路 —— 走到那里它会直接断言。
 pub fn char_columns(ch: char) -> usize {
     if ch.is_control() {
         return 0;
@@ -25,7 +22,7 @@ pub fn char_columns(ch: char) -> usize {
     ch.encode_utf8(&mut buf).cell_width() as usize
 }
 
-/// The longest prefix of `text` that fits in `width` columns.
+/// `text` 里能塞进 `width` 列的最长前缀。
 pub fn truncate_columns(text: &str, width: usize) -> String {
     let mut used = 0;
     let mut end = 0;

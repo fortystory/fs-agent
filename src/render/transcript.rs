@@ -1,18 +1,14 @@
-//! The shared presentation layer: events become [`Block`]s once, and plain and
-//! TUI paint those blocks their own way.
+//! 共享的呈现层：事件只变成 [`Block`] 一次，plain 与 TUI 各按自己的方式画这些块。
 //!
-//! Two rules make this more than a formatting pass:
+//! 两条规矩让它不止是一趟格式化：
 //!
-//! * **A tool call and its result are one block, painted on the result.** The
-//!   post-hook's feedback carries no `tool_call_id` — the loop emits it immediately
-//!   after the result it annotates — so it travels as its own small block, aimed at
-//!   the call that has just been painted. Holding the call open to merge it instead
-//!   made the call invisible for its whole run: the TUI only painted it once some
-//!   later event arrived — the next answer's first streaming delta, or the turn's end
-//!   (票 02 §3).
-//! * **Incremental text passes straight through.** Deltas bypass the log, so
-//!   they cannot be re-derived later; the transcript forwards them so a renderer
-//!   can paint them as they arrive.
+//! * **一次工具调用与它的结果是一个块，由结果绘制。** 后置 hook 的反馈不带
+//!   `tool_call_id` —— 循环在它批注的那条结果之后紧接着发出它 —— 所以它作为自己的一个
+//!   小块旅行，瞄准刚画好的那次调用。曾经改成把调用一直开着去合并它，结果是这次调用在
+//!   它整个运行期间都不可见：TUI 要等到某个后来的事件到达才画它 —— 下一个回答的第一个
+//!   流式增量，或者回合结束（票 02 §3）。
+//! * **增量文本原样透传。** 增量绕过事件流，所以事后无法重新推出来；转录把它们转发
+//!   过去，好让渲染器在它们到达时就画。
 
 use serde_json::Value;
 
@@ -23,25 +19,24 @@ use crate::events::{
 
 use super::{DeltaKind, RenderEvent};
 
-/// One display-ready unit of the transcript.
+/// 转录里一个可直接显示的单元。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
-    /// Incremental model output, on its way to the renderer.
+    /// 增量模型输出，在去渲染器的路上。
     Delta {
         speaker: SpeakerId,
         kind: DeltaKind,
         text: String,
     },
-    /// A completed message. Its text was already streamed as deltas; a renderer
-    /// uses this for the message boundary, not to re-print the body.
+    /// 一条完成的消息。它的正文已经作为增量流过去了；渲染器用它来定消息边界，而不是重印
+    /// 正文。
     Message {
         speaker: SpeakerId,
         role: Role,
         text: String,
-        /// The finished reasoning trace, when the provider sent one. This is the only
-        /// place the whole trace exists — the deltas are incremental and the log has
-        /// no separate reasoning event — so it is what the transcript's "thinking
-        /// finished" line holds open for its detail view (票 02 §1).
+        /// 写完的推理 trace，供应商送了的话。整条 trace 只在这里存在 —— 增量是增量的，
+        /// 而事件流没有单独的推理事件 —— 所以转录那条「思考结束」的行就是把它留给详情
+        /// 视图的（票 02 §1）。
         reasoning: Option<String>,
     },
     RoundStarted {
@@ -56,14 +51,13 @@ pub enum Block {
         topic: String,
         positions: Vec<String>,
     },
-    /// A tool call and its result: one block, emitted as soon as the result lands.
+    /// 一次工具调用与它的结果：一个块，结果一落地就发出来。
     Tool(Box<ToolBlock>),
-    /// A post-hook's feedback for the call it annotates.
+    /// 后置 hook 对它批注的那次调用的反馈。
     ///
-    /// It travels on its own block because the call it annotates has already been
-    /// painted: the loop emits the feedback immediately after the result, and holding
-    /// the call open to wait for it is what used to hide the call line for the whole
-    /// run (票 02 §3).
+    /// 它作为自己的一个块旅行，因为它批注的那次调用已经被画出来了：循环在结果之后紧接
+    /// 着发出反馈，而把调用开着等它，正是以前让调用行整个运行期间都藏着的原因
+    /// （票 02 §3）。
     ToolFeedback {
         outcome: String,
     },
@@ -77,10 +71,9 @@ pub enum Block {
     },
     PermissionAsked {
         speaker: SpeakerId,
-        /// The tool the question is about, when the stream recorded one.
+        /// 这个问题所问的那个工具，流上记了的话。
         tool_name: Option<String>,
-        /// The arguments of the call it is asking about, so a painter can show
-        /// the command or path a person is approving.
+        /// 它正在问的那次调用的参数，好让画家显示人正在批准的命令或路径。
         args: Value,
     },
     PermissionDecided {
@@ -89,7 +82,7 @@ pub enum Block {
         source: DecisionSource,
         reason: Option<String>,
     },
-    /// A pre-hook outcome. Post-hook feedback rides on its [`ToolBlock`].
+    /// 一个前置 hook 的结果。后置 hook 的反馈搭在它的 [`ToolBlock`] 上。
     Hook {
         speaker: SpeakerId,
         point: String,
@@ -127,12 +120,11 @@ pub enum Block {
         summary: Option<String>,
     },
     Diagnostic(String),
-    /// A line that speaks for no speaker and narrates no event, shown as it is.
+    /// 一行不为任何发言者说话、也不叙述任何事件，原样显示。
     Notice(String),
 }
 
-/// One tool call, held open until its result (and any post-hook feedback) has
-/// arrived.
+/// 一次工具调用，一直开着，直到它的结果（以及任何后置 hook 的反馈）到达。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolBlock {
     pub speaker: SpeakerId,
@@ -142,7 +134,7 @@ pub struct ToolBlock {
     pub outcome: Option<ToolOutcome>,
 }
 
-/// What a finished (or abandoned) tool call produced.
+/// 一次完成（或被放弃）的工具调用产出了什么。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutcome {
     pub ok: bool,
@@ -151,12 +143,12 @@ pub struct ToolOutcome {
     pub duration_ms: u64,
 }
 
-/// The incremental event-to-block state machine.
+/// 那个增量的「事件转块」状态机。
 #[derive(Debug, Default)]
 pub struct Transcript {
     pending_tool: Option<ToolBlock>,
-    /// A call has been painted and its post-hook — which carries no `tool_call_id` —
-    /// may still be on its way. The next post-hook to arrive annotates that call.
+    /// 一次调用已经画出来了，而它的后置 hook —— 那个不带 `tool_call_id` 的 —— 可能还在
+    /// 路上。下一个到达的后置 hook 批注的就是那次调用。
     awaiting_hook: bool,
 }
 
@@ -165,12 +157,11 @@ impl Transcript {
         Self::default()
     }
 
-    /// Feed one render event and take the blocks it produced.
+    /// 喂一个渲染事件，取走它产出的块。
     ///
-    /// A tool call is painted as soon as its **result** arrives. It used to wait for
-    /// the next unrelated event so a post-hook could be merged into the same block,
-    /// which meant a call was invisible for its whole run — and, in the TUI, until the
-    /// model's *next* answer had finished streaming (票 02 §3).
+    /// 一次工具调用在它的**结果**到达时立刻被画出来。它曾经要等下一个无关事件，好把后置
+    /// hook 并进同一个块，那意味着一次调用在整个运行期间都不可见 —— 而且在 TUI 里，要等
+    /// 模型*下一个*回答流完（票 02 §3）。
     pub fn push(&mut self, event: RenderEvent) -> Vec<Block> {
         match event {
             RenderEvent::Delta {
@@ -200,14 +191,12 @@ impl Transcript {
         }
     }
 
-    /// Close an open tool block, if any.
+    /// 关上一个敞着的工具块，如果有的话。
     ///
-    /// The result is what paints a call, so this is only the fallback: a call whose
-    /// result never arrived — a stream that died mid-call. [`Plain`] calls it at end of
-    /// stream, so the line still reaches the page. The TUI cannot show it: it has no
-    /// frame after the stream closes (a cancelled call is *not* this case — the loop
-    /// writes a synthesized result for every call it started, and that result paints
-    /// the call).
+    /// 画一次调用的是结果，所以这里只是兜底：一次结果始终没到的调用 —— 一条在调用中途
+    /// 死掉的流。[`Plain`] 在流的末尾调它，所以那一行仍然到得了页面上。TUI 显示不了它：
+    /// 流关上之后它没有帧了（一次被取消的调用*不是*这种情况 —— 循环为它开始的每一次调用
+    /// 都写一条合成结果，而那条结果会画出这次调用）。
     ///
     /// [`Plain`]: crate::render::Plain
     pub fn flush(&mut self) -> Vec<Block> {
@@ -219,11 +208,9 @@ impl Transcript {
 
     fn push_logged(&mut self, event: Event) -> Vec<Block> {
         let speaker = event.speaker_id.clone();
-        // The expectation lasts exactly one event: the loop emits a call's post-hook
-        // immediately after the result it annotates, so anything else arriving first
-        // means the hook is not coming — and a hook that then turned up much later
-        // must not be pinned onto a call it never annotated. Only the matched-result
-        // arm below re-arms it.
+        // 这份期待正好只活一个事件：循环在它批注的那条结果之后紧接着发出一次调用的后置
+        // hook，所以先到的任何别的东西都意味着 hook 不来了 —— 而一个此后很久才冒出来的
+        // hook 绝不能钉到一次它从没批注过的调用上。只有下面那条匹配结果的臂会重新武装它。
         let expected_hook = std::mem::take(&mut self.awaiting_hook);
         if let EventPayload::HookExecuted { point, outcome, .. } = &event.payload {
             if point == hook_format::POINT_POST {
@@ -237,12 +224,10 @@ impl Transcript {
             }
         }
 
-        // These events belong to the interval between a call's start and its
-        // result: they are narrated, but they must not close the open block.
-        // `PermissionAsked`/`PermissionDecided` are the load-bearing case — the
-        // loop records a decision for **every** call, asked or not — and the
-        // pre-hook fires after `ToolCallStarted` too, so treating any of them as
-        // "unrelated" would split every tool call in two.
+        // 这些事件属于一次调用开始与它结果之间的那段间隔：它们被叙述，但绝不能关掉那个
+        // 敞着的块。`PermissionAsked`/`PermissionDecided` 是承重的那一例 —— 循环为
+        // **每一次**调用都记一条裁决，问没问都记 —— 而前置 hook 也在 `ToolCallStarted`
+        // 之后触发，所以把其中任何一个当成「无关」都会把每一次工具调用劈成两半。
         let inside_a_call = matches!(
             &event.payload,
             EventPayload::ToolCallCompleted { .. }
@@ -261,7 +246,7 @@ impl Transcript {
                 tool_name,
                 args,
             } => {
-                // A new call supersedes any feedback still expected for the last one.
+                // 一次新调用顶掉上一条仍在期待中的反馈。
                 self.awaiting_hook = false;
                 self.pending_tool = Some(ToolBlock {
                     speaker,
@@ -284,20 +269,20 @@ impl Transcript {
                     .as_ref()
                     .is_some_and(|tool| tool.tool_call_id == tool_call_id)
                 {
-                    let mut tool = self.pending_tool.take().expect("just matched");
+                    let mut tool = self.pending_tool.take().expect("刚匹配上");
                     tool.outcome = Some(ToolOutcome {
                         ok,
                         output,
                         error,
                         duration_ms,
                     });
-                    // This call may still be annotated by the post-hook that follows.
+                    // 这次调用仍可能被随后的后置 hook 批注。
                     self.awaiting_hook = true;
                     blocks.push(Block::Tool(Box::new(tool)));
                     return blocks;
                 }
-                // A result with no matching start: surface it rather than drop
-                // it, so the transcript still shows that something finished.
+                // 一条没有匹配开始的结果：把它浮出来，而不是丢掉，好让转录仍然显示有东西
+                // 完成了。
                 let mut blocks = self.flush();
                 blocks.push(Block::Tool(Box::new(ToolBlock {
                     speaker,
@@ -409,18 +394,17 @@ impl Transcript {
             } => {
                 blocks.push(Block::History { reason, summary });
             }
-            // The session skeleton is not narration a person reads live.
+            // 会话骨架不是一个人会实时读的叙述。
             EventPayload::SessionStarted { .. } => {}
         }
         blocks
     }
 }
 
-/// The one-line summary of a tool call's arguments.
+/// 一次工具调用参数的一行摘要。
 ///
-/// Values are rendered compactly and the whole thing is capped, so a call with a
-/// large body still reads as one line — the same reason `docs` describe the
-/// transcript as a log and not a debugger.
+/// 值紧凑地渲染，整体有上限，所以一次带大体积正文的调用仍然读作一行 —— 这也是 `docs`
+/// 把转录说成一份日志而不是一个调试器的原因。
 pub fn summarize_args(args: &Value) -> String {
     const MAX: usize = 160;
     let rendered = match args {
@@ -442,8 +426,7 @@ fn summarize_value(value: &Value) -> String {
     }
 }
 
-/// The one-line summary of what a permission question would run, from an event's
-/// `request` value. Empty when the stream recorded no arguments.
+/// 一个权限问题会跑什么的一行摘要，取自某个事件的 `request` 值。流上没记参数时是空的。
 pub fn summarize_permission_target(request: &Value) -> String {
     match crate::events::permission_format::args(request) {
         Some(args) => summarize_args(args),
@@ -451,7 +434,7 @@ pub fn summarize_permission_target(request: &Value) -> String {
     }
 }
 
-/// Truncate to `max` characters, marking that it happened.
+/// 裁到 `max` 个字符，并标记出裁过。
 pub fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();

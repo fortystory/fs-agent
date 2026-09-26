@@ -1,38 +1,33 @@
-//! How a stop reason should read.
+//! 一个收尾原因该怎么读。
 //!
-//! `Completed` must not look like `Aborted` or `Error` (spec §19, user story
-//! 135): a run that hit a wall and a run that finished are the two things a
-//! person most needs to tell apart at a glance. The discussion's four terminal
-//! reasons (`NoDivergence` / `Consensus` / `RoundsExhausted` / `BudgetExhausted`)
-//! are likewise distinguishable rather than collapsed into "done".
+//! `Completed` 绝不能看起来像 `Aborted` 或 `Error`（spec §19，用户故事 135）：一次撞
+//! 了墙的运行与一次跑完的运行，是人最需要一眼分清的两样东西。讨论的四个终止原因
+//! （`NoDivergence` / `Consensus` / `RoundsExhausted` / `BudgetExhausted`）同理，要互相
+//! 分得开，而不是塌缩成一句「完了」。
 //!
-//! This module is the one place that classification lives; the plain renderer
-//! turns it into ANSI codes and the TUI into a ratatui `Style`.
+//! 这套分类只住在这个模块里；plain 渲染器把它变成 ANSI 码，TUI 把它变成 ratatui `Style`。
 
 use crate::events::StopReason;
 
-/// How prominently a reason should read.
+/// 一个原因该有多显眼。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
-    /// The loop did what it set out to do.
+    /// 循环做成了它要做的事。
     Good,
-    /// A normal end that is not a plain success (a consensus, an exhausted
-    /// round budget).
+    /// 一个正常收尾，但不是朴素的成功（一次共识、一份用光的轮次预算）。
     Note,
-    /// The run stopped early for a reason that is not a failure (a cancel, a
-    /// turn cap).
+    /// 运行提前停了，而理由不是失败（一次取消、一条回合上限）。
     Warn,
-    /// Something went wrong, or a hard limit was hit.
+    /// 出了错，或者撞上了一条硬上限。
     Bad,
 }
 
 impl Severity {
-    /// Classify one reason.
+    /// 把一个原因归类。
     ///
-    /// The grouping is deliberate: `Completed` / `Consensus` / `NoDivergence`
-    /// are the ways a run *succeeds*; `Aborted` / `MaxIterations` /
-    /// `RoundsExhausted` stopped early but were not errors; `Error` /
-    /// `MistakeLimit` / `BudgetExhausted` are the reasons a person must not miss.
+    /// 这个分组是刻意的：`Completed` / `Consensus` / `NoDivergence` 是一次运行*成功*的
+    /// 各种方式；`Aborted` / `MaxIterations` / `RoundsExhausted` 提前停了，但不是错误；
+    /// `Error` / `MistakeLimit` / `BudgetExhausted` 是人绝不能漏看的那些理由。
     pub fn of(reason: StopReason) -> Severity {
         match reason {
             StopReason::Completed | StopReason::Consensus | StopReason::NoDivergence => {
@@ -46,9 +41,8 @@ impl Severity {
         }
     }
 
-    /// The ANSI SGR prefix for this severity. `Good` is the terminal's default
-    /// foreground; every other level is colored so the four never collapse into
-    /// each other. Callers decide whether to paint at all.
+    /// 这一档严重度的 ANSI SGR 前缀。`Good` 用终端默认前景色；其余每一档都上色，好让四
+    /// 档永不互相塌缩。画不画由调用方决定。
     pub fn ansi(self) -> &'static str {
         match self {
             Severity::Good => "\x1b[32m",
@@ -58,6 +52,6 @@ impl Severity {
         }
     }
 
-    /// The ANSI reset that closes [`Severity::ansi`].
+    /// 给 [`Severity::ansi`] 收尾的那条 ANSI 复位。
     pub const ANSI_RESET: &'static str = "\x1b[0m";
 }

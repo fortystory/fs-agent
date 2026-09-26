@@ -1,15 +1,13 @@
-//! The plain renderer: the human transcript for a pipe or a simple terminal.
+//! plain 渲染器：给管道或简单终端看的人类转录。
 //!
-//! It paints the shared [`Block`]s (see [`super::transcript`]) as text, and adds
-//! the two things a live transcript needs that a finished-stream query does not:
-//! a speaker prefix repeated on **every** line, so interleaved debaters stay
-//! readable, and a severity color on every stopping point, so `Completed` never
-//! looks like `Aborted` or `Error` (spec §19).
+//! 它把共享的 [`Block`]（见 [`super::transcript`]）画成文本，并补上一条实时转录需要、
+//! 而一次查完成的流不需要的两样东西：**每一**行都重复的发言前缀，好让交错的两个讨论者
+//! 仍然读得下去；以及每一个终止点上的严重度颜色，好让 `Completed` 永不看起来像
+//! `Aborted` 或 `Error`（spec §19）。
 //!
-//! The final product still goes to `stdout` and the narration to `stderr`, the
-//! same split the headless mode uses: `fs-agent --plain "q" 2>/dev/null` prints
-//! the answer and nothing else, while a person at a terminal sees the whole
-//! discussion.
+//! 最终产物仍然去 `stdout`，叙述去 `stderr`，与 headless 模式用的是同一种分工：
+//! `fs-agent --plain "q" 2>/dev/null` 只印出那个答案，别的什么都不印，而在终端前的人
+//! 看得见整场讨论。
 
 use std::io::Write;
 
@@ -23,29 +21,28 @@ use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent, RenderSinks};
 
-/// How much of one tool result the plain transcript shows before eliding.
+/// 一条工具结果在省略之前，plain 转录显示多少。
 const TOOL_PREVIEW: usize = 2_000;
 
-/// The plain renderer's values. `color` is decided by the front end, not read
-/// from the environment here: the library never guesses at a terminal.
+/// plain 渲染器的那些值。`color` 由前端决定，不在这里从环境里读：库永远不去猜终端。
 pub struct PlainOptions {
     pub sinks: RenderSinks,
-    /// Whether to paint severity and reasoning with ANSI escapes.
+    /// 是否用 ANSI 转义来画严重度与推理。
     pub color: bool,
 }
 
-/// The plain renderer.
+/// plain 渲染器。
 pub struct Plain {
     sinks: RenderSinks,
     color: bool,
     transcript: Transcript,
-    /// The speaker whose text stream is open, so a speaker change starts a line.
+    /// 正文流敞着的那位发言者，这样发言者一换就起一行。
     open_speaker: Option<SpeakerId>,
-    /// Whether a new prefix is owed before the next character.
+    /// 下一个字符之前欠不欠一个新前缀。
     at_line_start: bool,
-    /// Whether the reasoning marker is open.
+    /// 推理标记敞不敞着。
     in_reasoning: bool,
-    /// Whether deltas already produced the current message's body.
+    /// 增量是不是已经把当前消息的正文产出来了。
     streamed: bool,
 }
 
@@ -69,8 +66,7 @@ impl Plain {
         }
     }
 
-    /// Paint one block into the diagnostic sink (the final product is the one
-    /// thing that also reaches stdout).
+    /// 把一个块画进诊断写出口（最终产物是唯一也到 stdout 的东西）。
     fn paint(&mut self, block: Block) {
         match block {
             Block::Delta {
@@ -82,10 +78,9 @@ impl Plain {
                 speaker,
                 role,
                 text,
-                // plain shows no reasoning: its visible output is frozen, and a
-                // thinking line is a TUI affordance rather than part of the log
-                // (ADR 0001, 票 02 §5). The field is named for the compiler, not for
-                // the page.
+                // plain 不显示推理：它可见的输出是冻结的，而一条思考行是 TUI 的一种便利，
+                // 不是日志的一部分（ADR 0001，票 02 §5）。这个字段是为编译器命名的，不是
+                // 为页面命名的。
                 reasoning: _,
             } => self.message(speaker, role, &text),
             Block::RoundStarted { round, mode } => {
@@ -215,7 +210,7 @@ impl Plain {
         self.flush_sink();
     }
 
-    /// Stream incremental text with the speaker prefix repeated per line.
+    /// 流式输出增量文本，每一行都重复发言前缀。
     fn delta(&mut self, speaker: SpeakerId, kind: DeltaKind, text: String) {
         match kind {
             DeltaKind::Text => {
@@ -242,8 +237,8 @@ impl Plain {
 
     fn message(&mut self, speaker: SpeakerId, role: Role, text: &str) {
         self.close_reasoning();
-        // A provider that did not stream (or a synthesizer message assembled
-        // whole) still has to be shown: print the body only if no delta did.
+        // 一个没有流式输出的供应商（或者一条整份拼起来的合成器消息）还是得显示：只有在
+        // 没有任何增量印过时才印正文。
         if !self.streamed && !text.is_empty() {
             self.stream(&speaker, text);
         }
@@ -286,7 +281,7 @@ impl Plain {
         }
     }
 
-    /// Write `text` with a fresh `[speaker]` prefix at the start of every line.
+    /// 写 `text`，每一行开头都带一个全新的 `[speaker]` 前缀。
     fn stream(&mut self, speaker: &SpeakerId, text: &str) {
         if self.open_speaker.as_ref() != Some(speaker) && !self.at_line_start {
             self.write("\n");
@@ -316,7 +311,7 @@ impl Plain {
         }
     }
 
-    /// Finish the open line, if any.
+    /// 把敞着的那一行收尾，如果有的话。
     fn end_line(&mut self) {
         self.close_reasoning();
         if !self.at_line_start {
@@ -325,7 +320,7 @@ impl Plain {
         }
     }
 
-    /// A whole line of narration, ending the current one first.
+    /// 一整行叙述，先把当前那一行收尾。
     fn line(&mut self, text: &str) {
         self.end_line();
         self.write(text);
@@ -333,7 +328,7 @@ impl Plain {
         self.at_line_start = true;
     }
 
-    /// The session's final product also goes to stdout, like the headless mode.
+    /// 会话的最终产物也去 stdout，与 headless 模式一样。
     fn final_product(&mut self, text: &str) {
         let _ = self.sinks.stdout_result.write_all(text.as_bytes());
         let _ = self.sinks.stdout_result.write_all(b"\n");
@@ -376,7 +371,7 @@ impl Render for Plain {
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
-        // A call whose result never arrived (a cancel) is still shown.
+        // 一条结果始终没到的调用（一次取消）仍然显示出来。
         for block in plain.transcript.flush() {
             plain.paint(block);
         }
@@ -386,7 +381,7 @@ impl Render for Plain {
     }
 }
 
-/// Indent every line of `text`.
+/// 给 `text` 的每一行加缩进。
 fn indent(text: &str, spaces: usize) -> String {
     let pad = " ".repeat(spaces);
     text.lines()
