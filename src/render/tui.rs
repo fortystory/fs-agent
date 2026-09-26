@@ -505,8 +505,11 @@ pub struct TuiState {
     /// themselves are not kept: they are a pure function of the draft and the
     /// catalog, so only the choice — which is not derivable — lives here.
     slash: MenuSelection,
-    /// The numbers the panel shows, counted off the stream.
+    /// The numbers the sidebar's usage page shows, counted off the stream.
     panel: Panel,
+    /// Which sidebar page is showing. Renderer state, not an event: nothing about it
+    /// belongs on the stream, and it dies with the process (spec §3).
+    tab: Tab,
     /// Which colour each speaker's name is drawn in (票 07). Kept here rather than
     /// recomputed per line because a name first seen mid-session has to keep the slot
     /// it was given.
@@ -994,6 +997,8 @@ enum HitAction {
     Next,
     /// Submit the questionnaire.
     Submit,
+    /// Show this sidebar page, as clicking its tab does (spec §3).
+    SwitchTab(Tab),
 }
 
 /// A pointer gesture while a question owns it.
@@ -1135,6 +1140,7 @@ impl TuiState {
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             panel: Panel::new(),
+            tab: Tab::Usage,
             colors,
             reasoning: String::new(),
             thinking_speaker: crate::events::SpeakerId::System,
@@ -1588,20 +1594,25 @@ impl TuiState {
             }
             return;
         }
-        // 3. Otherwise the transcript: the wheel scrolls it, the indicator and the
-        // collapsed lines answer to a click.
+        // 3. Otherwise the frame's own parts, in the order who owns the pointer: the
+        // sidebar's tabs, then the transcript — whose wheel, indicator and collapsed
+        // lines answer to it. A tab is a control, so it is asked before the text around
+        // it is (spec §7).
         match mouse.kind {
             MouseEventKind::ScrollUp => self.pane.wheel(true),
             MouseEventKind::ScrollDown => self.pane.wheel(false),
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.indicator_hit(mouse.column, mouse.row) {
-                    self.pane.to_bottom();
-                } else {
-                    let width = layout::plan(self.area, 1).detail_width() as usize;
-                    if let Some(detail) = self.link_hit(&mouse) {
-                        self.open_detail(detail, width);
+                match self.regions.action_at(mouse.column, mouse.row) {
+                    Some(HitAction::SwitchTab(tab)) => self.tab = tab,
+                    _ if self.indicator_hit(mouse.column, mouse.row) => self.pane.to_bottom(),
+                    _ => {
+                        let width = layout::plan(self.area, 1).detail_width() as usize;
+                        if let Some(detail) = self.link_hit(&mouse) {
+                            self.open_detail(detail, width);
+                        }
                     }
                 }
+                self.dirty = true;
             }
             _ => {}
         }
@@ -1630,7 +1641,16 @@ impl TuiState {
                     (Pending::Loop { reply, .. }, HitAction::Answer(choice)) => {
                         let _ = reply.send(choice);
                     }
-                    (pending, action) => self.own_answer(pending, action),
+                    (
+                        pending @ (Pending::Paste { .. } | Pending::ClearDraft | Pending::Exit),
+                        action,
+                    ) => self.own_answer(pending, action),
+                    // A region that is not this question's own. The sidebar's tabs are
+                    // in the same table of what the frame painted, so a click on one
+                    // arrives here; the question owns the pointer, so the click does
+                    // nothing — and above all it must not close the question the reader
+                    // has not answered (spec §7, §9).
+                    (pending, _) => self.pending = Some(pending),
                 }
             }
             // The questionnaire owns the bottom input area: option rows, the custom
@@ -2488,7 +2508,12 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
 /// whose tab bar writes `├` and `┤` over the two of them — and last the main
 /// column's rules, which write `├` into the divider column at their own rows
 /// (spec §1).
-fn draw_shell(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState, area: Rect) {
+fn draw_shell(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &mut TuiState,
+    area: Rect,
+) {
     draw_border(frame, area);
     draw_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
@@ -2535,8 +2560,10 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
 /// the page the tab selects (spec §3).
 ///
 /// Everything here is drawn from the layout's decisions — which identity, which
-/// page rows — never from a size test of its own, so the ladder has one home.
-fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+/// page rows — never from a size test of its own, so the ladder has one home. The tab
+/// labels record a hit rectangle each as they are painted, so a click can only land on
+/// a tab that is really on screen.
+fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
         return;
     };
@@ -2595,9 +2622,7 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &Tui
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0u16;
     for (index, (tab, label)) in entries.iter().enumerate() {
-        // 票 03 turns this into the state's selected page; until then the sidebar
-        // shows the usage page and the bar says so.
-        let selected = matches!(tab, Tab::Usage);
+        let selected = *tab == state.tab;
         let style = if selected {
             Style::default()
                 .fg(Color::LightMagenta)
@@ -2605,8 +2630,18 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &Tui
         } else {
             dim
         };
+        let width = text_columns(label) as u16;
+        // One region per label's own text, recorded as it is painted: the pointer can
+        // only hit what is really there, and the rule that fills the rest of the row is
+        // not a tab (spec §3).
+        if used + width <= sidebar.width {
+            state.regions.cells.push(Region {
+                rect: Rect::new(tabs.x + used, tabs.y, width, 1),
+                action: HitAction::SwitchTab(*tab),
+            });
+        }
         spans.push(Span::styled((*label).to_owned(), style));
-        used += text_columns(label) as u16;
+        used += width;
         if index + 1 < entries.len() {
             spans.push(Span::styled("│", dim));
             used += 1;
@@ -2618,12 +2653,20 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &Tui
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
     // The page itself. The rows come from the layout's height ladder, so a squeezed
-    // sidebar loses fields from the tail rather than clipping the three readings
-    // that matter (spec §2).
+    // sidebar loses fields from the tail rather than clipping the three readings that
+    // matter (spec §2). A page that is not built yet says so in one row rather than
+    // showing made-up data.
     let Some(page) = panes.sidebar_page else {
         return;
     };
-    frame.render_widget(Paragraph::new(state.panel.lines(&state.facts, page)), page);
+    let rows = match state.tab {
+        Tab::Usage => state.panel.lines(&state.facts, page),
+        Tab::Trace | Tab::Files => vec![Line::from(Span::styled(
+            truncate_columns(wording::tab_placeholder(), page.width as usize),
+            dim,
+        ))],
+    };
+    frame.render_widget(Paragraph::new(rows), page);
 }
 
 /// The status row: which model, which mode, and how full the window is (spec §5).
@@ -2655,6 +2698,11 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
 /// Clicked, never keyed: `Tab` belongs to the `/` menu and `Shift+Tab` to plan mode,
 /// and this repo does not enable the keyboard-enhancement protocol. A page that is
 /// not built yet shows [`wording::tab_placeholder`] rather than made-up data.
+///
+/// The accepted cost of that: on a placeholder page the session's readings are not on
+/// screen at all, so the status row's `上下文 n%` is the only one left. It is not a
+/// bug — there is no second copy of the numbers to fall back on — and the alternative
+/// (a keyboard route through the tabs) is not available here anyway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     /// The session's readings: what the old information panel held.

@@ -12,7 +12,7 @@ use fs_agent::render::{
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
 
 fn facts() -> SessionFacts {
@@ -646,6 +646,183 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
             "{height} rows keeps the turn row: {text}"
         );
     }
+}
+
+/// The cell one tab's label starts at, read off the frame.
+///
+/// The labels are the only place those words appear, so finding the first character of
+/// one is finding the tab — and it is found the way a person finds it: on screen.
+fn tab_cell(frame: &Buffer, width: u16, height: u16, label: &str) -> (u16, u16) {
+    let first: String = label.chars().take(1).collect();
+    find_cell(frame, width, height, &first)
+        .unwrap_or_else(|| panic!("the {label} tab is on screen"))
+}
+
+#[test]
+fn the_selected_tab_is_the_bright_one_and_the_others_are_dim() {
+    // The bar says which page is showing without a word of explanation: the selected
+    // label is bright magenta and bold, the others are the narration grey (spec §3).
+    let frame = buffer(120, 24, &mut state());
+    let (column, row) = tab_cell(&frame, 120, 24, "调用量");
+    assert_eq!(
+        frame[(column, row)].fg,
+        Color::LightMagenta,
+        "the selected tab is the bright one"
+    );
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::BOLD),
+        "and it is bold"
+    );
+    for label in ["轨迹", "文件"] {
+        let (column, row) = tab_cell(&frame, 120, 24, label);
+        assert_eq!(
+            frame[(column, row)].fg,
+            Color::DarkGray,
+            "{label} is not the selected page"
+        );
+        assert!(
+            !frame[(column, row)].modifier.contains(Modifier::BOLD),
+            "{label} is not bold"
+        );
+    }
+}
+
+#[test]
+fn clicking_a_tab_switches_the_sidebar_page() {
+    use fs_agent::render::wording;
+
+    let mut state = state();
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains(wording::tab_placeholder()),
+        "the usage page is showing: {text}"
+    );
+
+    // 轨迹 is not built yet, so it says so rather than showing made-up data.
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
+    state.mouse(click(column, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(wording::tab_placeholder()),
+        "the placeholder is on the page: {text}"
+    );
+    assert!(!text.contains("token"), "and the readings are not: {text}");
+    // Which leaves the status row as the only reading — the accepted cost of the
+    // placeholder pages (spec §3).
+    assert!(
+        text.contains("上下文"),
+        "the status row's share is still there: {text}"
+    );
+
+    // The selected label moved with it.
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
+    assert_eq!(frame[(column, row)].fg, Color::LightMagenta);
+
+    // And back: 调用量 restores the fields.
+    let (column, row) = tab_cell(&frame, 120, 24, "调用量");
+    state.mouse(click(column, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("token"), "the readings are back: {text}");
+    assert!(
+        !text.contains(wording::tab_placeholder()),
+        "and the placeholder is gone: {text}"
+    );
+}
+
+#[test]
+fn only_the_tab_labels_answer_a_click() {
+    use fs_agent::render::wording;
+
+    // The rule that fills the rest of the tab row, and the glyph between two labels,
+    // are not controls: a click there does nothing, because nothing there was painted
+    // as a tab (spec §3).
+    let mut state = state();
+    let frame = buffer(120, 24, &mut state);
+    let (_, row) = tab_cell(&frame, 120, 24, "调用量");
+    let inside_the_sidebar = 2..40u16;
+    let fill = inside_the_sidebar
+        .clone()
+        .find(|x| frame[(*x, row)].symbol() == "─")
+        .expect("the row fills after the labels");
+    let separator = inside_the_sidebar
+        .clone()
+        .find(|x| frame[(*x, row)].symbol() == "│")
+        .expect("the labels are separated");
+
+    for column in [separator, fill] {
+        state.mouse(click(column, row));
+        let text = screen(120, 24, &mut state).join("\n");
+        assert!(
+            !text.contains(wording::tab_placeholder()),
+            "a click at column {column} is not a tab: {text}"
+        );
+        assert!(text.contains("token"), "the page did not move: {text}");
+    }
+}
+
+#[test]
+fn a_question_keeps_the_tabs_from_answering() {
+    use fs_agent::permissions::Answer;
+    use fs_agent::render::{wording, AnswerChoice};
+
+    // A question owns the pointer outright: a click on the tab bar reaches the
+    // question's handler and stops there. It must not switch the page, and — the trap
+    // this test was written for — it must not close the question either: the frames
+    // that paint the tabs and the overlay record their hit rectangles into one table,
+    // so a click on a tab arrives at the question as an action it does not own
+    // (spec §7, §9).
+    let mut state = idle();
+    let (request, mut answer) = ask_permission();
+    state.request(request);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
+    state.mouse(click(column, row));
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("权限询问"),
+        "the question is still up: {text}"
+    );
+    assert!(
+        !text.contains(wording::tab_placeholder()),
+        "and the page did not switch under it: {text}"
+    );
+    assert!(
+        answer.try_recv().is_err(),
+        "and nothing was answered behind the reader's back"
+    );
+    // It is still answerable, which is what "still up" has to mean.
+    state.key(Key::Char('y'));
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        AnswerChoice::Permission(Answer::Allow),
+        "the question can still be answered"
+    );
+}
+
+#[test]
+fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
+    use fs_agent::render::wording;
+
+    // Below 80 columns the sidebar is hidden whole, so the labels are not drawn at all
+    // — and a click where a tab would have been is an ordinary click on the main
+    // column (spec §2, §3).
+    let mut state = state();
+    let frame = buffer(60, 24, &mut state);
+    assert!(
+        find_cell(&frame, 60, 24, "调").is_none(),
+        "there is no tab bar at 60 columns"
+    );
+    for (column, row) in [(2u16, 1u16), (4, 3), (2, 8)] {
+        state.mouse(click(column, row));
+    }
+    let text = screen(60, 24, &mut state).join("\n");
+    assert!(
+        !text.contains(wording::tab_placeholder()),
+        "and nothing switched a page that is not there: {text}"
+    );
 }
 
 #[test]
