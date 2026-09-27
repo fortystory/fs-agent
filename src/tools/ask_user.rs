@@ -1,21 +1,16 @@
-//! The built-in `ask_user_question(questions)` tool: the model's way to ask the
-//! user (spec §7).
+//! 内建的 `ask_user_question(questions)` 工具：模型向用户提问的方式（spec §7）。
 //!
-//! The tool is a thin shell over the [`UserQuestions`] port, exactly as `task` is
-//! a shell over [`ExecutorSpawner`](crate::tools::ExecutorSpawner). Two properties
-//! are its own:
+//! 这个工具是包在 [`UserQuestions`] 端口外面的一层薄壳，正如 `task` 是包在
+//! [`ExecutorSpawner`](crate::tools::ExecutorSpawner) 外面的壳。有两条性质属于它自己：
 //!
-//! * `effect` is [`ReadOnly`](Effect::ReadOnly) because `effect` classifies
-//!   **workspace** side effects (spec §7) and asking touches no workspace path —
-//!   the same judgement `task` gets.
-//! * it is not [`delegable`](Tool::delegable), so an executor's table has no way
-//!   to ask. That is the same mechanism that keeps `task` out of an executor's
-//!   table (recursion depth one, spec §16); it is deliberately not a second rule.
+//! * `effect` 是 [`ReadOnly`](Effect::ReadOnly)，因为 `effect` 分类的是**工作区**副作用
+//!   （spec §7），而提问不碰任何工作区路径 —— 与 `task` 得到的是同一个判断。
+//! * 它不可 [`delegable`](Tool::delegable)，所以执行者的工具表根本没有办法提问。这与「让
+//!   `task` 不进执行者工具表」是同一个机制（递归深度为一，spec §16）；刻意不再来一条规则。
 //!
-//! The tool description carries the three encoding conventions (spec §7). They are
-//! not decoration: the answer is JSON the model must decode, and without them
-//! `selected: []` is indistinguishable from "never reached" and an overriding
-//! `custom` is indistinguishable from a supplementing one.
+//! 工具描述里带着那三条编码约定（spec §7）。它们不是装饰：答案是模型必须解码的 JSON，没有它们
+//! `selected: []` 就与「从没走到过」无从区分，而一个覆盖性的 `custom` 也与一个补充性的 `custom`
+//! 无从区分。
 
 use std::collections::HashSet;
 
@@ -28,15 +23,13 @@ use crate::questions::{Choice, UserQuestion};
 
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
-/// The tool name, named once so the registry, the table and the tests cannot
-/// drift apart.
+/// 工具名，只在这里命名一次，好让注册表、工具表与测试不会互相漂离。
 pub const ASK_USER_QUESTION_TOOL: &str = "ask_user_question";
 
-/// Ask the user one or more questions.
+/// 向用户提一个或多个问题。
 pub struct AskUserQuestionTool;
 
-/// The wire shape the model sends, before validation turns it into
-/// [`UserQuestion`]s.
+/// 模型发过来的线级形状，在验证把它变成 [`UserQuestion`] 之前。
 #[derive(Deserialize)]
 struct RawArgs {
     questions: Vec<RawQuestion>,
@@ -65,12 +58,10 @@ struct RawChoice {
 }
 
 impl AskUserQuestionTool {
-    /// Turn the model's arguments into questions, or refuse them with a message
-    /// the model can act on.
+    /// 把模型的参数变成问题，或者用一句模型能据以行动的消息拒掉它们。
     ///
-    /// Refusing here rather than at the port is what keeps a malformed call from
-    /// ever reaching a person: a missing or duplicated `id` would make the answer
-    /// unpairable, and an empty label would put an unselectable row on screen.
+    /// 在这里拒、而不是在端口那里拒，正是让一次畸形调用永远到不了一个人面前的东西：`id` 缺失
+    /// 或重复会让答案配不上对，而空的 label 会往屏幕上放一行选不中的东西。
     fn parse(args: &Value) -> Result<Vec<UserQuestion>, ToolError> {
         let raw: RawArgs = serde_json::from_value(args.clone())
             .map_err(|error| ToolError::message(format!("{ASK_USER_QUESTION_TOOL}: {error}")))?;
@@ -207,24 +198,21 @@ impl Tool for AskUserQuestionTool {
         }
     }
 
-    /// Asking touches no workspace path: the answer is context, not a write
-    /// (spec §7).
+    /// 提问不碰任何工作区路径：答案是上下文，不是一次写（spec §7）。
     fn effect(&self, _args: &Value) -> Effect {
         Effect::ReadOnly
     }
 
-    /// Only the main session may ask (spec §7). An executor's table is built by
-    /// filtering on this, so an executor has no `ask_user_question` to call —
-    /// the same mechanism that gives it no `task`.
+    /// 只有主会话能提问（spec §7）。执行者的工具表就是按这一条过滤出来的，所以执行者没有
+    /// `ask_user_question` 可调 —— 与它没有 `task` 是同一个机制。
     fn delegable(&self) -> bool {
         false
     }
 
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError> {
         let questions = Self::parse(&args)?;
-        // The degradation floor (spec §19): a session assembled without a question
-        // port answers with a readable error rather than hanging on an answer that
-        // can never come.
+        // 降级地板（spec §19）：一个没挂提问端口就组装起来的会话，用一条可读的错误作答，而不是
+        // 挂在一个永远来不了的答案上。
         let Some(port) = ctx.questions else {
             return Err(ToolError::message(format!(
                 "{ASK_USER_QUESTION_TOOL}: this session has no way to ask the user; no question \

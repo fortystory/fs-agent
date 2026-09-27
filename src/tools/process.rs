@@ -1,18 +1,15 @@
-//! Running one argv with a wall-clock limit and a whole-process-tree kill.
+//! 跑一条 argv，带墙钟上限与整个进程树的杀。
 //!
-//! This is the shared half of every command tool: `bash` (spec §7) and the
-//! dynamic tools declared in `config.toml` (spec §14). Two properties are the
-//! point, and both belong here rather than in either tool:
+//! 这是每个命令类工具共用的那一半：`bash`（spec §7），以及在 `config.toml` 里声明的动态工具
+//! （spec §14）。有两条性质才是要点，而两条都属于这里、不属于任何一个工具：
 //!
-//! * the argv is spawned **directly** — no shell is interposed, so a caller that
-//!   passes a value as one element cannot have it re-parsed;
-//! * the child is put in its own process group and a timeout (or a dropped call)
-//!   SIGKILLs the **group**, so a command that started children does not leave
-//!   them behind.
+//! * argv 是**直接** spawn 的 —— 中间不插 shell，所以把值作为单个元素传进来的调用者不会让它
+//!   被重新解析一遍；
+//! * 子进程被放进它自己的进程组，超时（或调用被丢掉）会 SIGKILL 整个**组**，所以一个又起了
+//!   子进程的命令不会把它们留在身后。
 //!
-//! The result always carries the exit status, stdout and stderr. A non-zero exit
-//! is a result, not a [`ToolError`]; only a failure to spawn or wait is an error,
-//! because only then is there nothing to report.
+//! 结果永远带着退出状态、stdout 与 stderr。非零退出是一条结果，不是 [`ToolError`]；只有
+//! spawn 或 wait 失败才是错误，因为只有那时才没有任何东西可报。
 
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -22,25 +19,23 @@ use tokio::process::Command;
 
 use super::tool::ToolError;
 
-/// The result's section markers, named once so tests and docs cannot drift from
-/// the format the model actually sees.
+/// 结果里那些分节标记，只在这里命名一次，好让测试与文档不会漂离模型真正看到的格式。
 pub const EXIT_CODE_PREFIX: &str = "exit code: ";
 pub const STDOUT_HEADER: &str = "--- stdout ---";
 pub const STDERR_HEADER: &str = "--- stderr ---";
 pub const TIMEOUT_PREFIX: &str = "timed out after ";
 
-/// How long the output readers get to see EOF after the process group is killed.
+/// 进程组被杀之后，输出读取者还有多久能看到 EOF。
 ///
-/// SIGKILL closes the pipes at once for every process still in the group; the
-/// grace only matters when something deliberately left the group, and in that
-/// case returning what is known beats hanging the turn.
+/// 对组里还活着的每个进程，SIGKILL 会立刻合上管道；这条宽限只在有东西刻意离开了组时才要紧，
+/// 而那种情况下，把已知的东西报出去好过把整个回合挂住。
 const KILL_GRACE: Duration = Duration::from_secs(1);
 
-/// What one finished (or killed) command produced.
+/// 一条跑完了（或被杀了）的命令产出了什么。
 pub struct CommandOutcome {
-    /// Whether this call's own timeout fired and killed the group.
+    /// 这次调用自己的超时有没有触发，并杀掉了整个组。
     pub timed_out: bool,
-    /// The cap that was in force, for the timeout line.
+    /// 当时生效的那条上限，给超时那一行用。
     pub limit: Duration,
     pub status: ExitStatus,
     pub stdout: String,
@@ -48,11 +43,10 @@ pub struct CommandOutcome {
 }
 
 impl CommandOutcome {
-    /// The result text: exit status, stdout and stderr in named sections.
+    /// 结果文本：退出状态、stdout 与 stderr，各带一个具名的分节。
     ///
-    /// Truncation happens later, in the loop's one pre-stream pipeline (spec
-    /// §10), so an oversized body spills and the stream keeps a preview plus a
-    /// pointer without any tool knowing about it.
+    /// 裁剪发生在更靠后的地方，在循环那唯一一条流前流水线里（spec §10），于是超大的正文会溢出
+    /// 落盘，而流上留下一条预览加一个指针，任何工具都不必知道这件事。
     pub fn report(&self) -> String {
         let mut text = String::new();
         if self.timed_out {
@@ -81,7 +75,7 @@ impl CommandOutcome {
     }
 }
 
-/// A human-readable exit status: the code, or the signal that killed it.
+/// 人能读的退出状态：退出码，或者杀掉它的那个信号。
 pub fn describe_status(status: &ExitStatus) -> String {
     if let Some(code) = status.code() {
         return code.to_string();
@@ -97,11 +91,9 @@ pub fn describe_status(status: &ExitStatus) -> String {
     "unknown".to_owned()
 }
 
-/// Spawn `argv` in its own process group, capture both streams, and enforce
-/// `limit`.
+/// 在它自己的进程组里 spawn `argv`，捕获两条流，并强制 `limit`。
 ///
-/// Only a spawn or wait failure is a [`ToolError`]; the command's own exit status
-/// is data.
+/// 只有 spawn 或 wait 失败才是 [`ToolError`]；命令自己的退出状态是数据。
 pub async fn run(
     cwd: &std::path::Path,
     argv: &[String],
@@ -115,17 +107,15 @@ pub async fn run(
     command
         .args(rest)
         .current_dir(cwd)
-        // Non-interactive by construction: no TTY is requested, stdin is empty,
-        // and nothing here invents `TERM`/`NO_COLOR` (spec §20, `docs/bash.md`).
+        // 构造上就非交互：不请求 TTY、stdin 是空的，这里也没有任何东西去凭空设置 `TERM` /
+        // `NO_COLOR`（spec §20、`docs/bash.md`）。
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // Its own process group (`setsid`-equivalent), so the timeout can kill
-        // the tree the command started and not just the direct child (spec §7).
+        // 它自己的进程组（等价于 `setsid`），这样超时能杀掉这条命令起的那棵树，而不只是直接的
+        // 子进程（spec §7）。
         .process_group(0)
-        // A second line of defence for the direct child if the guard below is
-        // ever disarmed early; it does not reach the tree, which is the guard's
-        // job.
+        // 直接子进程的第二道防线，万一下面那道守卫被提前解除；它够不到那棵树，那是守卫的活。
         .kill_on_drop(true);
 
     let mut child = command
@@ -143,8 +133,7 @@ pub async fn run(
         .take()
         .ok_or_else(|| ToolError::message("stderr was not piped"))?;
 
-    // Readers run as their own tasks, so a pipe cannot fill up while the command
-    // is still running and the loop below can collect output as it arrives.
+    // 读取者作为各自的任务跑，所以命令还在跑时管道不会被填满，下面的循环则可以随到随收输出。
     let mut stdout_reader = tokio::spawn(read_to_end(stdout));
     let mut stderr_reader = tokio::spawn(read_to_end(stderr));
 
@@ -158,10 +147,9 @@ pub async fn run(
     let mut stdout_open = true;
     let mut stderr_open = true;
 
-    // The limit bounds the **whole** call, not just the direct child's lifetime: a
-    // backgrounded grandchild inherits the output pipes, so `bash -lc "sleep 300 &"`
-    // exits at once while the pipes stay open. Waiting only on the child would
-    // hang the turn past the timeout.
+    // 上限管的是**整次**调用，不只是直接子进程的寿命：一个被放到后台的孙子进程会继承那些输出
+    // 管道，于是 `bash -lc "sleep 300 &"` 立刻退出，而管道仍然开着。只等子进程会让回合挂过
+    // 超时。
     loop {
         if status.is_some() && !stdout_open && !stderr_open {
             break;
@@ -170,14 +158,13 @@ pub async fn run(
             biased;
             _ = tokio::time::sleep_until(deadline) => {
                 if timed_out {
-                    // SIGKILL did not close every pipe — a process that left the
-                    // group is holding one. Report what is known rather than
-                    // hang the turn.
+                    // SIGKILL 没能合上每一条管道 —— 有个离开了组的进程还攥着一条。把已知的
+                    // 东西报出去，好过把回合挂住。
                     break;
                 }
                 timed_out = true;
                 group.kill();
-                // A short grace for the readers to see EOF after the kill.
+                // 给读取者一小段宽限，好在杀之后看到 EOF。
                 deadline = tokio::time::Instant::now() + KILL_GRACE;
             }
             result = &mut wait, if status.is_none() => {
@@ -197,9 +184,8 @@ pub async fn run(
     }
 
     group.disarm();
-    // End the wait future's borrow of `child`; re-waiting after a kill returns
-    // the status the first wait already computed, or reaps the child if the loop
-    // broke early.
+    // 结束 wait future 对 `child` 的借用；杀之后再 wait 会返回第一次 wait 已经算出的那个状态，
+    // 或者，如果上面的循环提前 break 了，就在这里回收子进程。
     drop(wait);
     let status = match status {
         Some(status) => status,
@@ -217,23 +203,21 @@ pub async fn run(
     })
 }
 
-/// Read a child stream to EOF, whatever the command wrote.
+/// 把子进程的一条流读到 EOF，无论命令写了什么。
 async fn read_to_end<R>(mut reader: R) -> Vec<u8>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut buffer = Vec::new();
-    // A read error means the stream ended; the bytes already read are still the
-    // command's output.
+    // 读出错意味着这条流结束了；已经读到的那些字节仍然是这条命令的输出。
     let _ = reader.read_to_end(&mut buffer).await;
     buffer
 }
 
-/// The child's process group, killed if the call ends before the group does.
+/// 子进程的那个进程组；如果这次调用在组结束之前就结束了，就把它杀掉。
 ///
-/// A timeout is not the only way a call stops early: the loop drops an in-flight
-/// tool when the user cancels (spec §6). Killing on drop is what keeps "the child
-/// does not linger in the background" true for both paths.
+/// 超时不是调用提前结束的唯一方式：用户取消时循环会把在飞的工具丢掉（spec §6）。drop 时杀，
+/// 正是让「子进程不会滞留在后台」对两条路径都成立的东西。
 struct ProcessGroup {
     pid: u32,
     armed: bool,
@@ -244,16 +228,15 @@ impl ProcessGroup {
         Self { pid, armed: true }
     }
 
-    /// The process is already gone; do not signal its (reusable) group id later.
+    /// 进程已经没了；之后别再给这个（可能被复用的）组 id 发信号。
     fn disarm(&mut self) {
         self.armed = false;
     }
 
-    /// SIGKILL the whole group. The child was spawned with `process_group(0)`,
-    /// so its pid is also its group id (spec §7).
+    /// SIGKILL 整个组。子进程是用 `process_group(0)` spawn 的，所以它的 pid 也是它的组 id
+    /// （spec §7）。
     fn kill(&self) {
-        // SAFETY: `killpg` only reads the id it is given; a stale or already-dead
-        // group yields `ESRCH`, which is ignored here.
+        // 安全性：`killpg` 只读它拿到的那个 id；陈旧的或已经死掉的组返回 `ESRCH`，这里忽略。
         unsafe {
             libc::killpg(self.pid as libc::pid_t, libc::SIGKILL);
         }

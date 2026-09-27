@@ -1,34 +1,32 @@
-//! The edit matching ladder (spec §8).
+//! 编辑匹配阶梯（spec §8）。
 //!
-//! A pure function over `(file content, old_string, new_string)`. The ladder is
-//! an ordered list of match levels, first-success-wins, so a small formatting
-//! deviation by the model does not fail the edit; the level that hit is reported
-//! because a downgrade must never be silent. Three guardrails reject the
-//! dangerous edits: a non-unique match, an over-large matched span, and a
-//! placeholder phrase shaped like a comment.
+//! 一个作用在 `(文件内容, old_string, new_string)` 上的纯函数。阶梯是一张有序的匹配等级表，先
+//! 成功者胜，于是模型一点小小的格式偏差不会让这次编辑失败；而命中的那一档会被报出来，因为降档
+//! 绝不允许无声。三条护栏拒掉危险的编辑：不唯一的匹配、过大的匹配区段，以及一条注释形状的占位
+//! 短语。
 
 use std::ops::Range;
 
-/// The ordered ladder. First success wins; `Exact` is always tried first.
+/// 那张有序的阶梯。先成功者胜；`Exact` 永远最先试。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MatchLevel {
-    /// Byte-for-byte equality.
+    /// 逐字节相等。
     Exact,
-    /// Equal once trailing whitespace at end of line is ignored.
+    /// 忽略行尾空白后相等。
     LineEndWhitespace,
-    /// Equal once every line is trimmed (indentation included).
+    /// 每一行都 trim 后相等（含缩进）。
     LineTrim,
 }
 
 impl MatchLevel {
-    /// Every level, in ladder order.
+    /// 每一档，按阶梯顺序。
     pub const LADDER: [MatchLevel; 3] = [
         MatchLevel::Exact,
         MatchLevel::LineEndWhitespace,
         MatchLevel::LineTrim,
     ];
 
-    /// Stable name for diagnostics and the contract text in a tool result.
+    /// 给诊断、以及工具结果里那段契约文本用的稳定名字。
     pub fn as_str(&self) -> &'static str {
         match self {
             MatchLevel::Exact => "exact",
@@ -38,26 +36,25 @@ impl MatchLevel {
     }
 }
 
-/// One accepted edit: where it lands, the bytes it replaces, and the replacement.
+/// 一处被接受的编辑：它落在哪、替换掉哪些字节，以及替换成什么。
 ///
-/// `old_text` is the **actual replaced region** from the file, not the caller's
-/// `old_string`: a downgraded level matches different bytes, and that difference
-/// is exactly what `/undo` needs to restore.
+/// `old_text` 是文件里**实际被替换的那段区域**，不是调用方给的 `old_string`：降档后的匹配会匹配
+/// 上不同的字节，而那个差异正是 `/undo` 需要用来还原的东西。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditMatch {
     pub level: MatchLevel,
-    /// Byte range replaced in the original content.
+    /// 在原内容里被替换掉的字节区间。
     pub span: Range<usize>,
-    /// The original bytes at `span`.
+    /// `span` 处原来的那些字节。
     pub old_text: String,
-    /// The bytes that take `span`'s place.
+    /// 取代 `span` 的那些字节。
     pub new_text: String,
 }
 
-/// Why a `/undo` could not reconstruct the content a snapshot came from.
+/// 一次 `/undo` 为什么重建不出快照来自的那份内容。
 ///
-/// Every variant is a refusal, never a guess: `/undo` either restores the exact
-/// bytes the edit replaced or it leaves the workspace alone (spec §11).
+/// 每个变体都是一次拒绝，绝不是一次猜测：`/undo` 要么还原这次编辑替换掉的精确字节，要么就不碰
+/// 工作区（spec §11）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RevertError {
     #[error("the file no longer contains the region this snapshot replaced")]
@@ -74,8 +71,7 @@ pub enum RevertError {
     CannotLocateDeletion,
 }
 
-/// Why an edit was refused. Every variant carries the detail the model needs to
-/// correct itself; none of them is silent.
+/// 一次编辑为什么被拒。每个变体都带着模型据以自我纠正的细节；没有一个变体是无声的。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EditError {
     #[error(
@@ -104,10 +100,9 @@ pub enum EditError {
     Placeholder { phrase: String },
 }
 
-/// Find the first successful level and return the one planned edit.
+/// 找到第一个成功的等级，并返回那一处已规划的编辑。
 ///
-/// `old_string` and `new_string` are the caller's raw strings; `content` is the
-/// file's current text.
+/// `old_string` 与 `new_string` 是调用方给的原始字符串；`content` 是文件当前的文本。
 pub fn find_match(
     content: &str,
     old_string: &str,
@@ -117,13 +112,11 @@ pub fn find_match(
     Ok(edits.remove(0))
 }
 
-/// Plan every edit for one `old_string`/`new_string` pair.
+/// 为一对 `old_string`/`new_string` 规划出每一处编辑。
 ///
-/// With `replace_all` the match is looked up at the exact level only: a
-/// downgraded level is there to absorb a formatting slip on a unique string, and
-/// silently replacing every fuzzy hit would be exactly the "changed the wrong
-/// thing" failure the guardrails exist to prevent. Without `replace_all`, more
-/// than one hit is refused instead of guessed at.
+/// 带 `replace_all` 时，匹配只在精确那一档找：降档的存在是为了吸收一个唯一字符串上的格式偏差，
+/// 而悄悄替换每一处模糊命中，正是护栏存在要防的那种「改错了东西」的失败。不带 `replace_all` 时，
+/// 命中多于一处会被拒掉，而不是去猜。
 pub fn find_matches(
     content: &str,
     old_string: &str,
@@ -171,18 +164,15 @@ pub fn find_matches(
     Err(EditError::NoMatch)
 }
 
-/// Reconstruct the file content an edit started from: the inverse of the ladder.
+/// 重建一次编辑开始前的那份文件内容：阶梯的逆。
 ///
-/// `content` is the file as it is now, `before` is the **actual replaced bytes**
-/// the edit recorded, and `old_string` / `new_string` / `replace_all` are the
-/// edit's own arguments. The stream records no byte offset, so the region is
-/// found by *verification*: a candidate restore is accepted only when replaying
-/// the ladder over it reproduces the current content exactly. That makes the
-/// answer a fact about the workspace rather than a guess, and it is what lets a
-/// downgraded (line-trim) match be undone at all.
+/// `content` 是文件现在的样子，`before` 是这次编辑记录下来的**实际被替换字节**，而 `old_string` /
+/// `new_string` / `replace_all` 是这次编辑自己的参数。流上没有记字节偏移，所以那段区域是靠*验证*
+/// 找出来的：只有当在一个候选还原结果上重放阶梯能一字不差地重现当前内容时，这个候选才被接受。这
+/// 让答案成为关于工作区的一个事实、而不是一次猜测，也正是它让一次降档（line-trim）的匹配也能被
+/// 撤销。
 ///
-/// A pure deletion (`new_string` empty) carries no position the stream could
-/// recover, so it is refused rather than guessed at.
+/// 一次纯删除（`new_string` 为空）不携带流能恢复的位置，所以它被拒掉，而不是去猜。
 pub fn revert(
     content: &str,
     before: &str,
@@ -213,17 +203,15 @@ pub fn revert(
     restored.ok_or(RevertError::Stale)
 }
 
-/// Undo one `replace_all`: every occurrence the call replaced is an exact match,
-/// so the snapshot is `old_string` repeated — which is what makes the regions
-/// countable without a stored span.
+/// 撤销一次 `replace_all`：这次调用替换掉的每一处都是精确匹配，所以快照就是 `old_string` 重复
+/// 出来的样子 —— 正是这一条让那些区域不必存 span 也能数清楚。
 fn revert_all(
     content: &str,
     before: &str,
     old_string: &str,
     new_string: &str,
 ) -> Result<String, RevertError> {
-    // An empty search string makes `before` unsegmentable, and an empty search
-    // is not a match any level would have produced.
+    // 空的搜索串会让 `before` 分不了段，而空搜索也不是任何一档会产出的匹配。
     if old_string.is_empty() || before.is_empty() {
         return Err(RevertError::Stale);
     }
@@ -239,9 +227,8 @@ fn revert_all(
         return Err(RevertError::Stale);
     }
 
-    // More or fewer `new_string`s than the call replaced means the file moved on
-    // (or `new_string` also occurred elsewhere); either way the inverse is not
-    // determined.
+    // 比这次调用替换的处数更多或更少的 `new_string`，意味着文件又往前走过了（或者 `new_string`
+    // 也在别处出现过）；无论哪种，逆都不唯一确定。
     if find_all(content, new_string).len() != count {
         return Err(RevertError::Stale);
     }
@@ -266,8 +253,8 @@ fn revert_all(
     }
 }
 
-/// Whether replaying the ladder over `candidate` really reproduces `content`,
-/// with the match landing exactly on the bytes inserted at `expected_start`.
+/// 在 `candidate` 上重放阶梯是否真的重现了 `content`，且匹配恰好落在 `expected_start` 处插入
+/// 的那些字节上。
 fn replays(
     candidate: &str,
     old_string: &str,
@@ -287,7 +274,7 @@ fn replays(
         && splice(candidate, &edit.span, new_string) == content
 }
 
-/// Replace one byte range of `text` with `replacement`.
+/// 把 `text` 的一个字节区间换成 `replacement`。
 fn splice(text: &str, span: &Range<usize>, replacement: &str) -> String {
     let mut out = String::with_capacity(text.len() - (span.end - span.start) + replacement.len());
     out.push_str(&text[..span.start]);
@@ -296,11 +283,10 @@ fn splice(text: &str, span: &Range<usize>, replacement: &str) -> String {
     out
 }
 
-/// Every candidate span at one level, left to right.
+/// 某一档上的全部候选区段，从左到右。
 ///
-/// The normalizing levels return spans into the **original** content: they walk
-/// lines and map each normalized line back to its source offset, because the
-/// matched bytes are what lands in `.before` and what the guardrails measure.
+/// 那两个归一化档返回的是指向**原内容**的区段：它们逐行走，把每个归一化后的行映射回它的源偏移，
+/// 因为落进 `.before` 的、以及护栏所度量的，是那些被匹配上的字节。
 fn locate_all(content: &str, target: &str, level: MatchLevel) -> Vec<Range<usize>> {
     match level {
         MatchLevel::Exact => find_all(content, target),
@@ -309,7 +295,7 @@ fn locate_all(content: &str, target: &str, level: MatchLevel) -> Vec<Range<usize
     }
 }
 
-/// Non-overlapping occurrences of `target`, left to right.
+/// `target` 互不重叠的出现，从左到右。
 fn find_all(haystack: &str, target: &str) -> Vec<Range<usize>> {
     if target.is_empty() {
         return Vec::new();
@@ -325,13 +311,11 @@ fn find_all(haystack: &str, target: &str) -> Vec<Range<usize>> {
     spans
 }
 
-/// Match line by line against `old_string`, returning spans into `content`.
+/// 逐行对着 `old_string` 匹配，返回指向 `content` 的区段。
 ///
-/// The compared view of a line is decided by `shape`: exact lines compare whole,
-/// trailing-whitespace-insensitive lines compare without their right blanks, and
-/// line-trim lines compare their trimmed center. The returned span keeps the
-/// line's leading blanks plus whatever the shape keeps, so the bytes that land
-/// in `.before` are the bytes actually replaced.
+/// 一行被比较的视图由 `shape` 决定：精确的行整行比较，忽略行尾空白的行去掉右侧空白再比较，
+/// line-trim 的行比较它们 trim 之后的中段。返回的区段保留该行的前导空白、加上 shape 保留的那些，
+/// 所以落进 `.before` 的字节就是实际被替换的字节。
 fn walk_lines(content: &str, target: &str, shape: LineShape) -> Vec<Range<usize>> {
     if target.is_empty() {
         return Vec::new();
@@ -341,7 +325,7 @@ fn walk_lines(content: &str, target: &str, shape: LineShape) -> Vec<Range<usize>
     let mut spans = Vec::new();
     let mut offset = 0usize;
     for line in content.split_inclusive('\n') {
-        // Every source line is a candidate start of the match.
+        // 每一行源文本都是一个候选的匹配起点。
         if let Some(end) = match_at(content, offset, &target_lines, shape) {
             spans.push(offset..end);
         }
@@ -350,7 +334,7 @@ fn walk_lines(content: &str, target: &str, shape: LineShape) -> Vec<Range<usize>
     spans
 }
 
-/// Try to match `target_lines` starting at byte `offset`; return the span's end.
+/// 试着从字节 `offset` 处开始匹配 `target_lines`；返回区段的结束位置。
 fn match_at(
     content: &str,
     offset: usize,
@@ -365,8 +349,7 @@ fn match_at(
         }
         let body = source_line.strip_suffix('\n').unwrap_or(source_line);
         let final_line = index + 1 == target_lines.len();
-        // A target without a trailing newline stops the span before the source's
-        // terminator; every other matched line keeps it.
+        // 末尾不带换行的目标让区段停在源文本那个终止符之前；其他被匹配上的行都保留它。
         let keep_terminator = !final_line || target_line.ends_with('\n');
         end += kept_len(body, shape)
             + if keep_terminator {
@@ -378,7 +361,7 @@ fn match_at(
     Some(end)
 }
 
-/// The source line starting at `offset`, if any.
+/// 从 `offset` 开始的那一行源文本，如果有的话。
 fn source_line_at(content: &str, offset: usize) -> Option<&str> {
     if offset >= content.len() {
         return None;
@@ -388,32 +371,31 @@ fn source_line_at(content: &str, offset: usize) -> Option<&str> {
     Some(&rest[..end])
 }
 
-/// Compare one line pair through `shape`, then decide whether the terminators
-/// agree. A target line without a newline is always the final one, so it may
-/// match a source line whose terminator lies just past the end of the span.
+/// 通过 `shape` 比较一对行，然后判定两个终止符是否一致。一条不带换行的目标行永远是最后一行，所以
+/// 它可以匹配上一条终止符恰好落在区段末尾之外的源行。
 fn line_matches(source_line: &str, target_line: &str, shape: LineShape) -> bool {
     let source_body = source_line.strip_suffix('\n').unwrap_or(source_line);
     let target_body = target_line.strip_suffix('\n').unwrap_or(target_line);
     if line_view(source_body, shape) != line_view(target_body, shape) {
         return false;
     }
-    // A target line that carries a newline needs a source line that carries one.
+    // 一条带换行的目标行需要一条也带换行的源行。
     !matches!(
         (source_line.ends_with('\n'), target_line.ends_with('\n')),
         (false, true)
     )
 }
 
-/// How a line is compared at a downgraded level.
+/// 在降档的等级上，一行是怎么被比较的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineShape {
-    /// Trailing spaces and tabs at end of line are ignored.
+    /// 行尾的空格与制表符被忽略。
     TrimEnd,
-    /// The whole line is compared trimmed, indentation included.
+    /// 整行 trim 后比较，含缩进。
     Trim,
 }
 
-/// The part of a line a shape compares.
+/// 一个 shape 所比较的那部分行。
 fn line_view(body: &str, shape: LineShape) -> &str {
     match shape {
         LineShape::TrimEnd => trim_line_end_whitespace(body),
@@ -421,41 +403,38 @@ fn line_view(body: &str, shape: LineShape) -> &str {
     }
 }
 
-/// How many bytes of a line the shape keeps, measured from the line's start.
+/// 一个 shape 保留一行的多少个字节，从行首算起。
 ///
-/// Leading blanks always survive (a line-trim match still replaces the real
-/// indentation); what the right-side trim removes does not.
+/// 前导空白永远留下（一次 line-trim 匹配仍然替换真实的缩进）；右侧 trim 去掉的那些不留。
 fn kept_len(body: &str, shape: LineShape) -> usize {
     let viewed = line_view(body, shape);
     match shape {
-        // `view` kept the leading blanks and dropped only the trailing ones, so
-        // the kept span runs to the real end of the line body.
+        // `view` 保住了前导空白、只丢掉尾部空白，所以保留下来的区段一直延伸到行正文的真实末尾。
         LineShape::TrimEnd => body.len(),
-        // `view` dropped the indentation; put the real indentation back.
+        // `view` 丢掉了缩进；把真实缩进放回去。
         LineShape::Trim => leading_blank_len(body) + viewed.len(),
     }
 }
 
-/// The line-end-whitespace level keeps everything up to the line's trailing
-/// blanks; `\r` counts as a blank because the CR of a CRLF is not content.
+/// line-end-whitespace 那一档保留到该行尾部空白之前的一切；`\r` 算作空白，因为 CRLF 里的 CR 不是
+/// 内容。
 fn trim_line_end_whitespace(line: &str) -> &str {
     line.trim_end_matches([' ', '\t', '\r'])
 }
 
-/// The line-trim level drops indentation as well.
+/// line-trim 那一档连缩进一起丢掉。
 fn trim_line(line: &str) -> &str {
     line.trim_matches([' ', '\t', '\r'])
 }
 
-/// How many leading spaces or tabs a line-trim comparison drops.
+/// 一次 line-trim 比较丢掉多少个前导空格或制表符。
 fn leading_blank_len(line: &str) -> usize {
     line.len() - line.trim_start_matches([' ', '\t']).len()
 }
 
-/// The three guardrails, applied to every candidate span at the winning level.
+/// 那三条护栏，施加在胜出那一档的每一个候选区段上。
 ///
-/// They return the detail the model needs to correct itself rather than letting
-/// a dangerous edit through silently.
+/// 它们返回的是模型据以自我纠正的细节，而不是让一次危险的编辑无声通过。
 fn guard_span(
     content: &str,
     spans: &[Range<usize>],
@@ -464,8 +443,8 @@ fn guard_span(
 ) -> Result<(), EditError> {
     let first = spans.first().cloned().unwrap_or(0..0);
     let last = spans.last().cloned().unwrap_or(0..0);
-    // The region a single edit would have to describe: from the first candidate
-    // to the last, which is what "matched region too large" has to measure.
+    // 单处编辑将不得不描述的那段区域：从第一个候选到最后一个候选，这正是「匹配区域过大」必须
+    // 度量的东西。
     let region = first.start..last.end;
     let bytes = region.end.saturating_sub(region.start);
     let lines = content[region].matches('\n').count();
@@ -479,9 +458,7 @@ fn guard_span(
             old_bytes: old_string.len(),
         });
     }
-    // Replacing every occurrence is a deliberate request, so it is not
-    // ambiguous; without it, more than one candidate is refused rather than
-    // guessed at.
+    // 替换每一处是一个刻意的请求，所以它不歧义；没有它时，候选多于一处会被拒掉，而不是去猜。
     if !replace_all && spans.len() > 1 {
         return Err(EditError::NonUnique {
             count: spans.len(),
@@ -491,8 +468,8 @@ fn guard_span(
     Ok(())
 }
 
-/// A placeholder is a *comment-shaped* phrase, never a bare `..`, so Rust's
-/// ranges (`..`, `..=`) are not mistaken for "and the rest of the file".
+/// 占位符是一条*注释形状*的短语，绝不是光秃秃的 `..`，所以 Rust 的范围语法（`..`、`..=`）不会
+/// 被误当成「以及文件其余部分」。
 fn placeholder_phrase(old_string: &str) -> Option<String> {
     for line in old_string.lines() {
         let Some(body) = comment_body(line) else {
@@ -505,8 +482,8 @@ fn placeholder_phrase(old_string: &str) -> Option<String> {
         if body.starts_with('…') {
             return Some("…".to_owned());
         }
-        // Only phrases that cannot be ordinary code: a bare "rest" (a variable,
-        // a word in a sentence) is not evidence of a stand-in.
+        // 只认那些不可能出现在普通代码里的短语：一个光秃秃的 "rest"（一个变量、句子里的一个词）
+        // 不是占位符的证据。
         for word in body.split_whitespace() {
             let word = word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_');
             if matches!(
@@ -524,9 +501,8 @@ fn placeholder_phrase(old_string: &str) -> Option<String> {
     None
 }
 
-/// The text after a comment marker, for every comment shape the guardrail
-/// recognises — doc comments (`///`, `//!`, `/** */`) included, since those are
-/// the most likely place a model writes "and the rest of the file".
+/// 注释标记之后的那段文本，覆盖这条护栏认得的每一种注释形状 —— 含文档注释（`///`、`//!`、
+/// `/** */`），因为那正是模型最可能写下「以及文件其余部分」的地方。
 fn comment_body(line: &str) -> Option<&str> {
     let line = line.trim_start();
     for marker in ["///", "//!", "//", "/**", "/*", "*", "#"] {
@@ -537,12 +513,12 @@ fn comment_body(line: &str) -> Option<&str> {
     None
 }
 
-/// A matched span larger than this is not the edit the model meant.
+/// 比这个还大的匹配区段，不是模型想要的那次编辑。
 const MAX_MATCH_BYTES: usize = 8 * 1024;
-/// Nor is a matched span longer than this many lines.
+/// 比这么多行还长的匹配区段同样不是。
 const MAX_MATCH_LINES: usize = 200;
-/// A matched span more than this many times the search length is suspicion
-/// enough to refuse: a short search that hops across a region never meant it.
+/// 匹配区段超过搜索长度这么多倍就足以起疑而拒掉：一段跨过从来不想匹配的区域的很短的搜索，不是
+/// 本意。
 const MAX_MATCH_RATIO: usize = 4;
 
 #[cfg(test)]
@@ -561,8 +537,7 @@ mod tests {
 
     #[test]
     fn trailing_whitespace_at_end_of_line_downgrades_to_the_second_level() {
-        // The file has a trailing space after `run();` that the model did not
-        // send. The edit still lands, and the level records the downgrade.
+        // 文件里 `run();` 后面有一个模型没发的行尾空格。编辑仍然落地，而那一档记录下了这次降档。
         let content = "fn main() {\n    run(); \n}\n";
         let found = find_match(content, "    run();\n", "    run_twice();\n").unwrap();
 
@@ -573,7 +548,7 @@ mod tests {
 
     #[test]
     fn indentation_differences_downgrade_to_the_third_level() {
-        // The file indents with a tab where the model sent four spaces.
+        // 文件缩进用的是制表符，而模型发的是四个空格。
         let content = "fn main() {\n\trun();\n}\n";
         let found = find_match(content, "    run();", "    run_twice();").unwrap();
 
@@ -596,7 +571,7 @@ mod tests {
 
         match error {
             EditError::NonUnique { count, .. } => assert_eq!(count, 2),
-            other => panic!("expected NonUnique, got {other}"),
+            other => panic!("期望 NonUnique，得到 {other}"),
         }
     }
 
@@ -612,8 +587,7 @@ mod tests {
 
     #[test]
     fn a_match_that_spans_much_more_than_the_search_is_refused() {
-        // `x` occurs throughout the file; the smallest region containing them
-        // all is the whole file, which is not the edit the model meant.
+        // `x` 遍布整个文件；把它们全包住的最小区域就是整个文件，那不是模型想要的那次编辑。
         let content = format!("{}\n{}\n", "x".repeat(40), "x".repeat(40));
         let error = find_match(&content, "x", "y").unwrap_err();
 
@@ -623,11 +597,11 @@ mod tests {
                 lines,
                 old_bytes,
             } => {
-                assert_eq!(bytes, 81, "the envelope from the first to the last hit");
-                assert_eq!(lines, 1, "newlines inside the envelope, not lines touched");
+                assert_eq!(bytes, 81, "从第一个命中到最后一个命中的包络");
+                assert_eq!(lines, 1, "包络内部的换行数，不是被触及的行数");
                 assert_eq!(old_bytes, 1);
             }
-            other => panic!("expected MatchTooLarge, got {other}"),
+            other => panic!("期望 MatchTooLarge，得到 {other}"),
         }
     }
 
@@ -637,7 +611,7 @@ mod tests {
 
         match error {
             EditError::Placeholder { phrase } => assert!(phrase.contains("..."), "{phrase}"),
-            other => panic!("expected Placeholder, got {other}"),
+            other => panic!("期望 Placeholder，得到 {other}"),
         }
     }
 
@@ -647,16 +621,15 @@ mod tests {
             let error = find_match("fn main() {}\n", old_string, "x").unwrap_err();
             assert!(
                 matches!(error, EditError::Placeholder { .. }),
-                "{old_string:?} should be a placeholder, got {error}"
+                "{old_string:?} 应该是个占位符，得到 {error}"
             );
         }
     }
 
     #[test]
     fn ordinary_comments_are_not_placeholders() {
-        // "rest" as an ordinary word, and a comment that happens to contain
-        // "remaining", must not be refused: a false positive here makes a
-        // legitimate edit impossible.
+        // 作为一个普通词的 "rest"，以及一条恰好含 "remaining" 的注释，都不许被拒：这里的假阳性会
+        // 让一次正当的编辑变得不可能。
         let content = "// the rest is computed below\nlet x = 1;\n";
         assert!(find_match(content, "let x = 1;", "let x = 2;").is_ok());
         let content = "// keep the remaining bytes\n";
@@ -665,7 +638,7 @@ mod tests {
 
     #[test]
     fn rust_range_syntax_is_not_mistaken_for_a_placeholder() {
-        // `..` and `..=` are language tokens, not "and the rest of the file".
+        // `..` 与 `..=` 是语言记号，不是「以及文件其余部分」。
         let content = "let tail = &items[1..];\nlet all = &items[..=9];\n";
         assert!(find_match(content, "items[1..]", "items[0..]").is_ok());
         assert!(find_match(content, "items[..=9]", "items[..=8]").is_ok());
@@ -680,8 +653,8 @@ mod tests {
 
     #[test]
     fn revert_restores_the_bytes_a_downgraded_match_replaced() {
-        // The model sent four spaces, the file had a tab: `.before` holds the
-        // tab, and the naive `old_string` would not match the restored file.
+        // 模型发的是四个空格，文件里是制表符：`.before` 里存的是那个制表符，而光用 `old_string`
+        // 对不上还原后的文件。
         let restored = revert(
             "fn main() {\n    run_twice();\n}\n",
             "\trun();",
@@ -711,7 +684,7 @@ mod tests {
 
     #[test]
     fn revert_refuses_when_two_regions_could_be_the_one_replaced() {
-        // Both "a b" and "b a" replay to "b b"; the snapshot cannot say which.
+        // "a b" 与 "b a" 重放后都得到 "b b"；快照说不出是哪一个。
         let error = revert("b b", "a", "a", "b", false).unwrap_err();
 
         assert_eq!(error, RevertError::Ambiguous);
@@ -726,8 +699,7 @@ mod tests {
 
     #[test]
     fn revert_refuses_when_the_replacement_also_occurs_outside_the_edit() {
-        // The call replaced two occurrences, but the file now holds a third
-        // "= 2;" that was already there: the inverse would corrupt it.
+        // 那次调用替换了两处，但文件现在多出一条本来就在那儿的 "= 2;"：这条逆会把它改坏。
         let error = revert(
             "let a = 2;\nlet c = 2;\nlet b = 2;\n",
             "= 1;= 1;",

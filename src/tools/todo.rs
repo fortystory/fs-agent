@@ -1,24 +1,19 @@
-//! The built-in `todo(items)` tool: the model's own plan, kept where it can be
-//! read back (`.scratch/todo-and-modes/spec.md` §2).
+//! 内建的 `todo(items)` 工具：模型自己的计划，保存在一个能读回来的地方
+//! （`.scratch/todo-and-modes/spec.md` §2）。
 //!
-//! The shape is the whole design: a call **submits the entire list**, and the
-//! list lives in that call's arguments. Three consequences follow, and they are
-//! the reason for the shape rather than accidents of it:
+//! 形状就是整个设计：一次调用**提交整份列表**，而列表活在那次调用的参数里。由此有三个后果，
+//! 它们是这个形状的理由，而不是它的意外：
 //!
-//! * **no schema change.** The event stream already records a tool call's
-//!   arguments, so `--continue`, `sessions replay`, an audit and the sidebar's
-//!   `todo` page all recompute the same list with nothing new to store — the
-//!   arguments are the single source of truth and the result is only a receipt.
-//! * **no permission question.** [`effect`](Tool::effect) is
-//!   [`ReadOnly`](Effect::ReadOnly), because `effect` classifies **workspace**
-//!   side effects (spec §7) and a list that lives in the call's own arguments
-//!   touches no workspace path. Two of these in one message therefore run
-//!   concurrently, ordered by `seq`, and the later one's list is the one in force
-//!   — replace-all is what makes "last one wins" well defined.
-//! * **the model owns it.** The list is a working record, not a permission stance:
-//!   nothing here forces the model to write one, and no gate reads it. That is the
-//!   line between this tool and the permission modes, which is what
-//!   `.scratch/todo-and-modes` split apart.
+//! * **不动 schema。** 事件流本来就记录一次工具调用的参数，所以 `--continue`、
+//!   `sessions replay`、一次审计、以及侧栏的 `todo` 页都能重算出同一份列表，没有任何新东西要
+//!   存 —— 参数是唯一真相源，而结果只是一句回执。
+//! * **不问权限。** [`effect`](Tool::effect) 是 [`ReadOnly`](Effect::ReadOnly)，因为 `effect`
+//!   分类的是**工作区**副作用（spec §7），而一份活在自己调用参数里的列表不碰任何工作区路径。
+//!   所以同一条消息里两次这样的调用会并发跑、按 `seq` 定序，而后落地的那份列表生效 ——
+//!   replace-all 正是让「后者胜」有确切定义的东西。
+//! * **它归模型所有。** 这份列表是一份工作记录，不是一种权限立场：这里没有任何东西强制模型写
+//!   一份，也没有哪个门读它。这就是这个工具与权限模式之间的那条线，也正是
+//!   `.scratch/todo-and-modes` 拆开的东西。
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -27,23 +22,22 @@ use crate::provider::ToolSpec;
 
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
-/// The tool name, named once so the registry, the table, the sidebar and the
-/// tests cannot drift apart.
+/// 工具名，只在这里命名一次，好让注册表、工具表、侧栏与测试不会互相漂离。
 pub const TODO_TOOL: &str = "todo";
 
-/// Where one item stands.
+/// 一项处在什么位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    /// Written down, not started.
+    /// 写下来了，还没开始。
     Pending,
-    /// The one being worked on (nothing enforces that there is at most one).
+    /// 正在做的那一项（没有任何东西强制最多只有一项）。
     InProgress,
-    /// Done.
+    /// 做完了。
     Completed,
 }
 
 impl Status {
-    /// The wire spelling: the only three words `status` accepts.
+    /// 线级拼写：`status` 只接受的这三个词。
     pub fn as_str(self) -> &'static str {
         match self {
             Status::Pending => "pending",
@@ -59,19 +53,18 @@ impl Status {
     }
 }
 
-/// One item of a list, as a call's arguments carry it.
+/// 列表里的一项，就是一次调用的参数所携带的样子。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
     pub content: String,
     pub status: Status,
 }
 
-/// The tool.
+/// 那个工具。
 pub struct TodoTool;
 
-/// How many of a list's items are done. One expression for the two readers that
-/// need it — the receipt the model gets and the sidebar's count row — so they
-/// cannot disagree about what "completed" counts.
+/// 一份列表里有几项做完了。给两个需要它的读者共用同一个表达式 —— 模型拿到的那句回执与侧栏的
+/// 计数行 —— 所以它们对「completed 数的是什么」不可能有分歧。
 pub fn completed(items: &[Item]) -> usize {
     items
         .iter()
@@ -79,29 +72,24 @@ pub fn completed(items: &[Item]) -> usize {
         .count()
 }
 
-/// Read a `todo` call's list out of its arguments.
+/// 从一次 `todo` 调用的参数里读出它的列表。
 ///
-/// This is the reader every consumer shares — the tool's own `call`, the sidebar's
-/// page and any later one — so the shape is defined once: what the tool accepts is
-/// exactly what a reader can read. A list it cannot read reads as an **empty** one
-/// (never half a list, and never a panic): the writer below refuses to record such
-/// a call in the first place, so this is a reader that must not break rather than a
-/// state a session can reach — and an empty list is a state the page already has a
-/// word for. The args stay the truth; the receipt text is parsed by nobody.
+/// 这是每个消费者共用的读者 —— 工具自己的 `call`、侧栏那一页、以及以后任何一页 —— 所以形状只
+/// 定义一次：工具接受的东西，恰好就是读者读得出的东西。读不出来的列表读成**空**列表（绝不读成
+/// 半份列表，也绝不 panic）：下面那个写入者从一开始就会拒掉这样的调用，所以这是一个不许崩的
+/// 读者，而不是一个会话能到达的状态 —— 而空列表是那一页本来就有词可说的状态。args 依旧是真相；
+/// 回执文本没有人去解析。
 pub fn read_items(args: &Value) -> Vec<Item> {
     TodoTool::parse(args).unwrap_or_default()
 }
 
 impl TodoTool {
-    /// The one parse, and it is strict: every mistake is a message the model can
-    /// act on, and a list with one bad item is refused **whole** rather than
-    /// quietly trimmed — a half-submitted list is a list the model believes
-    /// something false about. An empty or absent list is not a mistake: it is how
-    /// a list is cleared.
+    /// 唯一一次解析，而且是严格的：每个错误都是模型能据以行动的一句话，而带一个坏项的列表会被
+    /// **整份**拒掉，而不是被悄悄裁掉毛病 —— 半份提交的列表，是一份模型对之抱有错误信念的列表。
+    /// 空列表或没有列表不是错误：那是清空一份列表的方式。
     ///
-    /// Written by hand rather than with `serde`'s derive for the sake of those
-    /// messages: a derived error says "invalid type: map, expected a sequence"
-    /// without naming the field the model got wrong.
+    /// 为了那些消息，这里是手写而不是用 `serde` 的 derive：derive 出来的错误会说「invalid
+    /// type: map, expected a sequence」，却不说模型搞错的是哪个字段。
     fn parse(args: &Value) -> Result<Vec<Item>, ToolError> {
         let Some(object) = args.as_object() else {
             return Err(ToolError::message(format!(
@@ -174,9 +162,8 @@ impl TodoTool {
     }
 }
 
-/// The receipt: what the model is told the call did. Short, English (model-visible
-/// text, ADR 0001) and deliberately **not** the list — the list is the call's
-/// arguments, and repeating it here would create a second copy that can drift.
+/// 回执：说给模型的、这次调用做了什么。很短、是英文（模型可见文本，ADR 0001），而且刻意**不是**
+/// 那份列表 —— 列表就是这次调用的参数，在这里重复一遍会造出第二份可能漂移的副本。
 fn receipt(items: &[Item]) -> String {
     if items.is_empty() {
         return format!("{TODO_TOOL}: cleared");
@@ -232,17 +219,15 @@ impl Tool for TodoTool {
         }
     }
 
-    /// A list that lives in the call's own arguments writes no workspace path
-    /// (spec §7), so this is a read — and that is what lets two of them run
-    /// concurrently, ordered by `seq`.
+    /// 一份活在自己调用参数里的列表不写任何工作区路径（spec §7），所以这是一次读 —— 也正是这
+    /// 一条让两次这样的调用能并发跑、按 `seq` 定序。
     fn effect(&self, _args: &Value) -> Effect {
         Effect::ReadOnly
     }
 
     fn delegable(&self) -> bool {
-        // The default, said out loud because it is a decision: an executor keeps
-        // its own list (spec §16). A dispatcher's list and its executor's are two
-        // lists — the sidebar shows the main session's, the transcript shows both.
+        // 这是默认值，但说出来，因为这是一条决定：执行者保有自己的那份列表（spec §16）。派发者
+        // 的列表与它执行者的列表是两份列表 —— 侧栏显示主会话那份，转录两份都显示。
         true
     }
 

@@ -1,23 +1,19 @@
-//! The built-in `bash(command, timeout_ms?)` tool: run one shell command in the
-//! session workspace (spec §7, §12, §20).
+//! 内建的 `bash(command, timeout_ms?)` 工具：在会话工作区里跑一条 shell 命令（spec §7、§12、
+//! §20）。
 //!
-//! Three decisions define this tool:
+//! 三条决定定义了这个工具：
 //!
-//! * `effect()` is **always** [`Effect::Exclusive`]: a shell can write anything,
-//!   so the dispatcher takes the workspace-wide lock and the permission gate
-//!   treats the call as a write. `readonly` therefore refuses it without a
-//!   special case, and there is no write exemption left to borrow (the old plan
-//!   mode's `PLAN.md` one is gone — `docs/adr/0003-plan-leaves-the-permission-modes.md`).
-//! * the command runs as **one argv element** — `["bash", "-lc", command]`
-//!   spawned directly, never a command string spliced into a larger shell line —
-//!   so the model cannot add a second layer of shell substitution.
-//! * the timeout terminates the **process group**, not just the shell, so a
-//!   command that started children does not leave them behind. The same guard
-//!   kills the group if the call is dropped mid-flight (a cancel gesture).
+//! * `effect()` **永远**是 [`Effect::Exclusive`]：一个 shell 什么都能写，所以派发器取工作区级
+//!   的锁，权限门把这次调用当作写。于是 `readonly` 不需要特例就会拒掉它，也没有写豁免可以借了
+//!   （旧计划模式那条 `PLAN.md` 豁免已经退场 ——
+//!   `docs/adr/0003-plan-leaves-the-permission-modes.md`）。
+//! * 命令是作为**一个 argv 元素**跑的 —— `["bash", "-lc", command]` 直接 spawn，绝不是把一条
+//!   命令字符串拼进更大的 shell 行里 —— 所以模型加不了第二层 shell 替换。
+//! * 超时终止的是**进程组**，不只是那个 shell，所以一个又起了子进程的命令不会把它们留在身后。
+//!   同一条守卫在调用被半路丢掉（一次取消手势）时也会杀掉整个组。
 //!
-//! The last two are mechanics every command tool needs, so they live in
-//! [`super::process`] and are shared with the dynamic tools (spec §14); this
-//! module is the shell-specific part.
+//! 后两条是每个命令类工具都需要的机制，所以它们住在 [`super::process`] 里、与动态工具共用
+//! （spec §14）；这个模块只是 shell 特有的那部分。
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -27,16 +23,15 @@ use crate::provider::ToolSpec;
 use super::process;
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
-/// The tool name, named once so the registry, the loop and the tests cannot
-/// drift apart.
+/// 工具名，只在这里命名一次，好让注册表、循环与测试不会互相漂离。
 pub const BASH_TOOL: &str = "bash";
 
-/// The shell and the flag that make it read the command string. `-l` gives the
-/// command the user's login environment; `-c` is what takes the one argument.
+/// 那个 shell 与让它收下命令字符串的那个旗标。`-l` 给命令一份用户的登录环境；`-c` 才是收下
+/// 那一个参数的东西。
 const SHELL: &str = "bash";
 const SHELL_FLAG: &str = "-lc";
 
-/// Run one command through the system shell.
+/// 通过系统 shell 跑一条命令。
 pub struct BashTool;
 
 #[async_trait]
@@ -73,15 +68,13 @@ impl Tool for BashTool {
         }
     }
 
-    /// A shell can write anything, so this is `Exclusive` for every call,
-    /// whatever the command text says (spec §7).
+    /// 一个 shell 什么都能写，所以每次调用都是 `Exclusive`，无论命令文本写了什么（spec §7）。
     fn effect(&self, _args: &Value) -> Effect {
         Effect::Exclusive
     }
 
-    /// The argv the gate sees before anything starts: the shell, its flag, and
-    /// the command as **one** element. `CommandPrefix` matches this argv, and the
-    /// `rm` breaker reads through the wrapper to the command string.
+    /// 任何东西启动之前门看到的 argv：那个 shell、它的旗标，以及作为**一个**元素的命令。
+    /// `CommandPrefix` 匹配这条 argv，而 `rm` 断路器穿透这层包装去读那条命令字符串。
     fn command(&self, args: &Value) -> Option<Vec<String>> {
         argv(args)
     }
@@ -102,8 +95,8 @@ impl Tool for BashTool {
     }
 }
 
-/// The one argv this call runs, built from the args so [`Tool::command`] and
-/// [`Tool::call`] cannot disagree about what will execute.
+/// 这次调用要跑的那一条 argv，从 args 构造，好让 [`Tool::command`] 与 [`Tool::call`] 对「将
+/// 要执行什么」不可能有分歧。
 fn argv(args: &Value) -> Option<Vec<String>> {
     let command = args
         .get("command")
@@ -116,8 +109,8 @@ fn argv(args: &Value) -> Option<Vec<String>> {
     ])
 }
 
-/// The model's `timeout_ms`, when it sent one. A value that is present but is not
-/// a non-negative integer is an argument error rather than a silent fallback.
+/// 模型给的 `timeout_ms`，当它给了的话。一个存在但不是非负整数的值，是参数错误，而不是悄悄
+/// 回退。
 fn requested_timeout_ms(args: &Value) -> Result<Option<u64>, ToolError> {
     match args.get("timeout_ms") {
         None | Some(Value::Null) => Ok(None),

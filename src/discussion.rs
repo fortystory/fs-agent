@@ -1,15 +1,11 @@
-//! Discussion protocol boundary (spec §15).
+//! 讨论协议边界（spec §15）。
 //!
-//! This module is the protocol's **rules**: the mechanical verdict on whether two
-//! debaters agree, who took part in a round, how a round is allowed to end, and
-//! the private instructions and synthesizer prompt that the protocol is made of.
-//! It is policy, and it is pure.
+//! 这个模块是协议的**规则**：关于两个讨论者是否一致的机械裁决、谁参加了某一轮、一个轮被允许怎么
+//! 收尾，以及协议由之构成的那些私有指令与合成器提示词。它是策略，而且是纯的。
 //!
-//! The **control flow** that applies these rules — the round loop, the two
-//! concurrent turns, the closing call — lives in the `agent` layer, because that
-//! layer is the only writer of the event stream (through its one `append_event`
-//! path) and the only caller of a provider (spec §3). So `discussion` never
-//! touches `provider`: it decides, `agent` writes.
+//! 施加这些规则的**控制流** —— 轮的循环、那两次并发的回合、收尾那次调用 —— 住在 `agent` 层，因为
+//! 那一层是事件流的唯一写入者（经它唯一那条 `append_event` 路径）与 provider 的唯一调用方
+//! （spec §3）。所以 `discussion` 永不碰 `provider`：它判断，`agent` 写。
 
 pub mod protocol;
 
@@ -18,60 +14,51 @@ use std::collections::BTreeSet;
 use crate::events::{Event, EventPayload, RoundMode, StopReason};
 use protocol::round_attendance;
 
-/// How many debaters v1 runs.
+/// v1 跑几个讨论者。
 ///
-/// Fixed at two, and enforced at assembly: the mechanical verdict is a pairwise
-/// comparison, and N > 2 would reopen the "N = 2 does not arbitrate" decision
-/// (spec §15, Out of Scope).
+/// 固定为两个，并在组装期强制：那个机械裁决是一对一的比较，而 N > 2 会重新打开「N = 2 不仲裁」那条
+/// 决定（spec §15，Out of Scope）。
 pub const DEBATERS: usize = 2;
 
-/// The round cap: one independent round, then one targeted round.
+/// 轮的条数上限：一轮独立轮，然后一轮定向轮。
 pub const DEFAULT_MAX_ROUNDS: u32 = 2;
 
-/// What the protocol does after a debate round.
+/// 一个辩论轮之后协议做什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundPlan {
-    /// Stop debating, and end the round with this reason.
+    /// 停止辩论，并以这个原因结束这一轮。
     Stop(StopReason),
-    /// Open one targeted round: each side sees the other's answer and is asked to
-    /// respond to the divergence.
+    /// 开一轮定向轮：每一方看到对方的作答，并被要求回应分歧。
     TargetedRound,
 }
 
-/// Apply the round rules: does the debate stop here, and with which reason?
+/// 施加轮次规则：辩论到此停下吗，以哪个原因停？
 ///
-/// The four reasons the spec fixes for `RoundEnded` are exactly this function's
-/// `Stop` results. `BudgetExhausted` is the fifth input to that vocabulary and
-/// belongs to the budget gate (ticket 14), which stops the debate *before* this
-/// question is asked.
+/// spec 为 `RoundEnded` 定死的四个原因，恰好就是这个函数里那些 `Stop` 结果。`BudgetExhausted` 是
+/// 那套词汇的第五个输入、归预算闸门（票 14）所有，它在问到这个问题*之前*就把辩论停掉。
 pub fn plan_after_round(outcome: protocol::RoundOutcome, round: u32, max_rounds: u32) -> RoundPlan {
     use protocol::RoundOutcome;
     match outcome {
-        // Agreement after a targeted round is a convergence; agreement in the
-        // first round means no divergence ever arose, which is a different fact
-        // about the discussion and gets a different reason.
+        // 定向轮之后的一致是收敛；第一轮里的一致意味着分歧从未出现过 —— 那是关于这场讨论的另一个
+        // 事实，拿另一个原因。
         RoundOutcome::Agreed if round > 1 => RoundPlan::Stop(StopReason::Consensus),
         RoundOutcome::Agreed => RoundPlan::Stop(StopReason::NoDivergence),
         RoundOutcome::Diverged if round < max_rounds => RoundPlan::TargetedRound,
         RoundOutcome::Diverged => RoundPlan::Stop(StopReason::RoundsExhausted),
-        // Fewer than two answers: nothing was compared, so nothing was agreed.
-        // The absence is already on the stream as the missing side's own
-        // `TurnEnded { Error }`, which is why this reason may claim so little.
+        // 少于两份作答：什么都没比较过，所以什么都没达成一致。这份缺席本来就以缺席那一方自己的
+        // `TurnEnded { Error }` 在流上，所以这个原因才有资格说得这么少。
         RoundOutcome::Incomplete => RoundPlan::Stop(StopReason::NoDivergence),
     }
 }
 
-/// A debater's private identity: the protocol instruction.
+/// 一个讨论者的私有身份：协议指令。
 ///
-/// It lives here — not in the stream — because otherwise "a later round's
-/// `messages` can be recomputed from the stream" would be false the moment the
-/// instruction changed anything (spec §15).
+/// 它住在这里 —— 不在流上 —— 因为否则「后一轮的 `messages` 能从流上重算」这条在这条指令一旦改变
+/// 什么东西的那一刻就不成立了（spec §15）。
 ///
-/// It is **constant for the whole discussion** on purpose. The targeted round's
-/// rule is stated here once rather than injected per round: the system prompt is
-/// the head of the prefix, and rewriting it mid-discussion would invalidate the
-/// whole prefix cache (spec §4). The round the debater is in is visible in the
-/// projection's `[轮 N · 名字]` prefixes and in the other side's revealed answer.
+/// 它**整场讨论都不变**是有意的。定向轮那条规则在这里说一次，而不是逐轮注入：system prompt 是前缀的
+/// 头部，在讨论中途重写它会让整个前缀缓存作废（spec §4）。讨论者处在哪一轮，从投影的
+/// `[轮 N · 名字]` 前缀与对方揭示出来的作答里就能看到。
 pub fn debater_identity(name: &str) -> String {
     format!(
         "你是本次讨论中的一位讨论者，代号「{name}」。同一次讨论里还有另一位讨论者，\
@@ -89,13 +76,11 @@ pub fn debater_identity(name: &str) -> String {
     )
 }
 
-/// A persona's **soul**, framed as the character this debater answers as.
+/// 一个人物的**灵魂**，框成这个讨论者以之作答的性格。
 ///
-/// The user writes the description; the framing is a constant so the two sides agree on
-/// what they are being told. It is recorded **on the stream** (a `ContextInjected`
-/// attributed to this debater) rather than folded into the private identity, because the
-/// identity has to stay recomputable from the stream (spec §15) — and because a soul is
-/// user-authored text, exactly like the project rules, which already travel that way.
+/// 描述由用户写；框法是一个常量，好让两边对「被告知了什么」有共识。它被记**在流上**（一条署名给
+/// 这个讨论者的 `ContextInjected`），而不是折进私有身份，因为身份必须能从流上重算（spec §15）——
+/// 也因为灵魂是用户写的文本，与项目规则一模一样，而项目规则本来就是这么走的。
 pub fn persona_brief(soul: &str) -> String {
     format!(
         "你的性格设定（用户给的，整场讨论都照它来）：\n{}\n\
@@ -104,7 +89,7 @@ pub fn persona_brief(soul: &str) -> String {
     )
 }
 
-/// The synthesizer's private identity: draw the option space, never converge.
+/// 合成器的私有身份：画出选项空间，绝不收敛。
 pub fn synthesizer_identity() -> String {
     "你是本次讨论的合成器。这是一次独立的单发调用：你不参与讨论、没有工具、不发表新观点。\n\
 你的产出是把已有的回答整理成选项空间，供用户自己决定：\n\
@@ -117,19 +102,14 @@ pub fn synthesizer_identity() -> String {
         .to_owned()
 }
 
-/// The synthesizer's one user message: the question, then every round's revealed
-/// answers and every absence.
+/// 合成器唯一的那条 user 消息：问题，然后是每一轮揭示出来的作答、以及每一次缺席。
 ///
-/// Derived from the stream rather than from loop state, so "who was absent" is the
-/// same fact the log records. It reveals each debater's **speech** and never its
-/// private reasoning (spec §15): a summary of the reasoning would be the harness
-/// rewriting the argument for one side.
+/// 从流上派生、而不是从循环状态派生，所以「谁缺席了」与日志记下的是同一个事实。它揭示每个讨论者的
+/// **发言**，绝不揭示它的私有推理（spec §15）：一份对推理的摘要等于 harness 替某一方改写论证。
 ///
-/// `since_round` scopes the materials to **this** discussion. One session can carry
-/// more than one discussion (`/discuss` runs on the live stream), and rounds are
-/// numbered after whatever the stream already holds — so without the bound, the
-/// second discussion's synthesizer would be handed the first one's answers and asked
-/// to synthesize both.
+/// `since_round` 把材料限制在**这一场**讨论内。一个会话可以承载不止一场讨论（`/discuss` 跑在活的
+/// 流上），而轮次号接在流上已有的内容之后 —— 所以没有这条界，第二场讨论的合成器会拿到第一场的作答，
+/// 并被要求把两场一起合成。
 pub fn synthesis_prompt(question: &str, events: &[Event], since_round: u32) -> String {
     let mut prompt = String::from("问题：\n");
     prompt.push_str(question.trim());
@@ -156,12 +136,11 @@ pub fn synthesis_prompt(question: &str, events: &[Event], since_round: u32) -> S
     prompt
 }
 
-/// The highest round number the stream holds, or zero when it holds none.
+/// 流上持有的最大轮次号；一个都没有时是零。
 ///
-/// A discussion numbers its rounds **after the stream it writes to**, which is what
-/// keeps `round` unique inside one session: `/discuss` can run twice in a session,
-/// and `RoundStarted { round }` has to say which discussion it belongs to or every
-/// query over rounds (`round_attendance`, `sessions show --round N`) mixes them.
+/// 一场讨论把它的轮次号编在**它所写入的那条流**之后，正是这一点让 `round` 在一个会话里唯一：
+/// `/discuss` 可以在一个会话里跑两次，而 `RoundStarted { round }` 必须说得出它属于哪一场讨论，否则
+/// 每一个关于轮次的查询（`round_attendance`、`sessions show --round N`）都会把它们混起来。
 pub fn last_round(events: &[Event]) -> u32 {
     events
         .iter()
@@ -173,17 +152,13 @@ pub fn last_round(events: &[Event]) -> u32 {
         .unwrap_or(0)
 }
 
-/// Two distinct members of a pool, drawn from a seed, in pool order.
+/// 池子里两个不同的成员，由一个种子抽出，按池子顺序。
 ///
-/// A pool exists so that different discussions can ask different pairs; the draw is
-/// *deterministic from the seed* so that a session can be reproduced by pinning it and a
-/// test can assert the choice instead of the distribution. `None` when the pool cannot
-/// serve a discussion at all (fewer than two members).
+/// 池子存在是为了让不同的讨论能问不同的组合；抽取是*由种子确定的*，好让一个会话能靠钉住种子复现，
+/// 也让测试能断言那个选择、而不是分布。池子完全撑不起一场讨论时（成员少于两个）是 `None`。
 ///
-/// In pool order, because the order decides which debater records for the discussion.
-/// A cheap mix is enough: this picks which two models argue, not a cryptographic draw,
-/// and the two indices can never collide because the second is drawn from the remaining
-/// `len - 1` slots.
+/// 按池子顺序，因为顺序决定了哪个讨论者替这场讨论记录。一个便宜的混合就够了：这挑的是哪两个模型来
+/// 争论，不是一次密码学抽取，而两个下标不可能撞上，因为第二个是从剩下那 `len - 1` 个槽位里抽的。
 pub fn pick_pair(len: usize, seed: u64) -> Option<(usize, usize)> {
     if len < 2 {
         return None;
@@ -202,21 +177,19 @@ pub fn pick_pair(len: usize, seed: u64) -> Option<(usize, usize)> {
     })
 }
 
-/// The first round of the debate phase a synthesis at `synthesis_round` closes.
+/// 一次位于 `synthesis_round` 的合成所收尾的那个辩论阶段的第一轮。
 ///
-/// This is how the synthesizer's materials are scoped to **one** discussion. Rounds
-/// are numbered after the stream they are written to (so a second `/discuss` in one
-/// session numbers from where the first stopped), which means "every round in the log"
-/// is not "this discussion's rounds" any more.
+/// 这就是合成器的材料被限制在**一场**讨论里的方式。轮次号编在它们所写入的那条流之后（所以一个会话
+/// 里第二次 `/discuss` 从第一场停下的地方接着数），这意味着「日志里的每一轮」不再等于「这场讨论的
+/// 轮次」。
 ///
-/// The rule is structural: a debate phase is a run of consecutive rounds whose only
-/// possible `RoundEnded` is on its last round — a round that ended the debate closes
-/// the phase (with or without a synthesis after it), and the next debate round on the
-/// same stream opens a new one. So walking the debate rounds in order, every round
-/// that ended a phase and is followed by another debate round starts a phase.
+/// 这条规则是结构性的：一个辩论阶段是一串连续的轮，其中唯一可能的 `RoundEnded` 落在它的最后一轮上
+/// —— 一个结束了辩论的轮收掉这个阶段（后面有没有合成都一样），而同一条流上下一个辩论轮开启一个新
+/// 阶段。所以按顺序走过那些辩论轮，每一个「结束了某个阶段、且后面还跟着另一个辩论轮」的轮都开启一个
+/// 阶段。
 ///
-/// The live run and `sessions replay` both ask this question, so what the synthesizer
-/// was sent and what a replay recomputes cannot drift apart.
+/// 实跑的现场与 `sessions replay` 都会问这个问题，所以「合成器收到了什么」与「一次重放重算出来的是
+/// 什么」不可能漂开。
 pub fn debate_phase_start(events: &[Event], synthesis_round: u32) -> u32 {
     let mut debate: Vec<u32> = Vec::new();
     let mut ended: BTreeSet<u32> = BTreeSet::new();
@@ -244,11 +217,10 @@ pub fn debate_phase_start(events: &[Event], synthesis_round: u32) -> u32 {
     start
 }
 
-/// A side's position in the divergence record.
+/// 某一方在分歧记录里的立场。
 ///
-/// Its stated conclusion when it gave one. When it broke the protocol and gave
-/// none, the first line of its answer stands in: a conflict must not silently
-/// drop one of its two sides from the record.
+/// 就是它给出的那句结论。当它违反协议、什么都没给时，用它的答案第一行顶上：一份冲突绝不能把它两侧
+/// 中的一侧从记录里悄悄丢掉。
 pub fn position_of(answer: &str) -> String {
     match protocol::conclusion_of(answer) {
         Some(conclusion) => conclusion.to_owned(),
@@ -256,12 +228,12 @@ pub fn position_of(answer: &str) -> String {
     }
 }
 
-/// What a divergence is *about*: the question's first non-empty line.
+/// 一次分歧是*关于什么*的：问题文本的第一非空行。
 pub fn divergence_topic(question: &str) -> String {
     first_non_empty_line(question)
 }
 
-/// The first non-empty line of a block of text, trimmed.
+/// 一段文本的第一非空行，trim 过。
 fn first_non_empty_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -270,10 +242,9 @@ fn first_non_empty_line(text: &str) -> String {
         .to_owned()
 }
 
-/// The rounds the debate actually ran, in order, as `(round, mode)`.
+/// 辩论实际跑过的那些轮，按顺序，形如 `(轮次, 模式)`。
 ///
-/// The synthesis round is not a debate round: it is the closing call, so it never
-/// appears as material to synthesize.
+/// 合成那一轮不是辩论轮：它是收尾的那次调用，所以它永不作为可合成的材料出现。
 fn debate_rounds(events: &[Event]) -> Vec<(u32, RoundMode)> {
     let mut seen = BTreeSet::new();
     let mut rounds = Vec::new();

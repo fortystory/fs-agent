@@ -1,9 +1,8 @@
-//! The built-in file tools: `read_file`, `write_file`, `edit_file` (spec §7, §8).
+//! 内建的文件工具：`read_file`、`write_file`、`edit_file`（spec §7、§8）。
 //!
-//! The wire contract of `edit_file` is fixed: an absolute `file_path`, an
-//! `old_string`, a `new_string`, and an optional `replace_all`. Nothing else is
-//! reserved, because the place a new edit format plugs in is the registry being
-//! assembled per profile, not a field here.
+//! `edit_file` 的线级契约是固定的：绝对的 `file_path`、一个 `old_string`、一个 `new_string`，
+//! 以及可选的 `replace_all`。此外不再预留任何东西，因为新编辑格式插进来的地方是按 profile 组装
+//! 的那个注册表，而不是这里的一个字段。
 
 use std::path::PathBuf;
 
@@ -16,34 +15,28 @@ use crate::provider::ToolSpec;
 use super::edit::{find_matches, MatchLevel};
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
-/// The comment-shaped placeholder check and the match level both land in the
-/// tool result as convention text, so rendering and diagnosis share one format.
+/// 注释形状占位符的检查与匹配等级都作为约定文本落进工具结果，于是渲染与诊断共用一种格式。
 pub const MATCH_LEVEL_PREFIX: &str = "edit match level: ";
 
-/// The line every successful write begins with, naming the file it landed on.
+/// 每一次成功写开头的那一行，点名它落到了哪个文件上。
 ///
-/// The `ToolCallStarted` event records the arguments the **model** sent, and a
-/// `hook.pre` may have rewritten them afterwards; the result is the only record
-/// of the file that was actually written. Anything derived from the stream about
-/// "which files changed" (spec §16) therefore reads this line, and producing and
-/// parsing it share this constant — the same rule as [`MATCH_LEVEL_PREFIX`]
-/// (spec §18).
+/// `ToolCallStarted` 事件记录的是**模型**发的参数，而后一个 `hook.pre` 可能把它们改写过；结果
+/// 才是「实际写到哪个文件」的唯一记录。所以任何从流上派生的、关于「哪些文件变了」的东西
+/// （spec §16）都读这一行，而产生它和解析它共用这一个常量 —— 与 [`MATCH_LEVEL_PREFIX`] 同一条
+/// 规矩（spec §18）。
 pub const WROTE_PATH_PREFIX: &str = "wrote: ";
 
-/// `read_file`: read a file inside the session workspace.
+/// `read_file`：读会话工作区里的一个文件。
 pub struct ReadFile;
 
-/// The tool name each built-in file tool declares, named once so the registry,
-/// the args parsers and the tests cannot drift apart.
+/// 每个内建文件工具声明的工具名，只在这里命名一次，好让注册表、参数解析器与测试不会互相漂离。
 pub const READ_FILE: &str = "read_file";
 pub const WRITE_FILE: &str = "write_file";
 pub const EDIT_FILE: &str = "edit_file";
 
-/// The file name `/undo` reads for one edit: the bytes the edit actually
-/// replaced (spec §11).
+/// `/undo` 为一次编辑读的那个文件名：这次编辑实际替换掉的字节（spec §11）。
 ///
-/// Producing the name and finding it share this function, so the convention
-/// cannot drift the way a pair of `format!` calls would.
+/// 产生这个名字与找到它共用这个函数，所以这条例会不会像一对 `format!` 调用那样漂掉。
 pub fn before_artifact(tool_call_id: &str) -> String {
     format!("{tool_call_id}.before")
 }
@@ -60,8 +53,8 @@ impl ReadFile {
     }
 }
 
-/// A tiny accessor so `declared_path` can pull `file_path` out of any file
-/// tool's parsed arguments without the three argument types being one type.
+/// 一个很小的取值口，好让 `declared_path` 从任何文件工具已解析的参数里取出 `file_path`，而不
+/// 必让这三种参数类型变成同一个类型。
 macro_rules! file_path_arg {
     ($($args:ident),+) => {
         $(
@@ -76,14 +69,13 @@ macro_rules! file_path_arg {
 
 file_path_arg!(ReadFileArgs, WriteFileArgs, EditCall);
 
-/// The `file_path` field every file tool takes.
+/// 每个文件工具都收的 `file_path` 字段。
 trait FilePathArg {
     fn file_path(&self) -> &str;
 }
 
-/// The path a call declares, parsed through that tool's own argument type. An
-/// unparsable or empty call declares nothing, which is how a malformed call ends
-/// up with an empty write set and then fails inside the tool with a real message.
+/// 一次调用声明的路径，经该工具自己的参数类型解析。解析不了或为空的调用什么都没声明 —— 一次
+/// 畸形调用就是这样先拿到空的写集，然后在工具内部带着一条真消息失败。
 fn declared_path<T>(args: &Value) -> PathBuf
 where
     T: for<'de> Deserialize<'de> + FilePathArg,
@@ -93,7 +85,7 @@ where
         .unwrap_or_default()
 }
 
-/// The declared write targets of a call.
+/// 一次调用声明的写目标。
 fn write_targets<T>(args: &Value) -> Vec<PathBuf>
 where
     T: for<'de> Deserialize<'de> + FilePathArg,
@@ -106,9 +98,8 @@ where
     }
 }
 
-/// The `file_path` every file tool requires, or the same "required" error for
-/// each. Every file tool then resolves it through the resolver that matches its
-/// direction: reads through `read_paths`, writes through `write_paths`.
+/// 每个文件工具都要求的 `file_path`，或者说每个工具收到的都是同一句「必填」错误。此后每个文件
+/// 工具都经与它方向相符的那个解析器解析它：读经 `read_paths`，写经 `write_paths`。
 fn required_path(tool: &str, parsed_file_path: &str) -> Result<PathBuf, ToolError> {
     if parsed_file_path.is_empty() {
         return Err(ToolError::message(format!(
@@ -168,7 +159,7 @@ impl Tool for ReadFile {
     }
 }
 
-/// `write_file`: create or overwrite a file inside the session workspace.
+/// `write_file`：在会话工作区里新建或覆写一个文件。
 pub struct WriteFile;
 
 #[derive(Debug, Deserialize)]
@@ -225,14 +216,13 @@ impl Tool for WriteFile {
     }
 }
 
-/// `edit_file`: replace a matched region, reporting which level matched.
+/// `edit_file`：替换一段匹配上的区域，并报告匹配到了哪一档。
 pub struct EditFile;
 
-/// The arguments of one `edit_file` call.
+/// 一次 `edit_file` 调用的参数。
 ///
-/// Public because `/undo` re-reads them from the stream (`ToolCallStarted.args`):
-/// the shape the tool accepts and the shape undo parses are one type, so the two
-/// cannot drift.
+/// 是公开的，因为 `/undo` 从流上（`ToolCallStarted.args`）重读它们：工具接受的形状与 undo 解析
+/// 的形状是同一个类型，所以两者不可能漂掉。
 #[derive(Debug, Clone, Deserialize)]
 pub struct EditCall {
     #[serde(default, deserialize_with = "nullable_string")]
@@ -298,8 +288,7 @@ impl Tool for EditFile {
             parsed.replace_all,
         )
         .map_err(|error| match error {
-            // A failed ladder is the signal that the agent's picture of the file
-            // is stale, so the dispatcher withdraws the path's read permission.
+            // 阶梯失败就是「agent 对那个文件的图景已陈旧」的信号，所以派发器收回该路径的读权限。
             error @ super::edit::EditError::NoMatch => ToolError::InvalidatesReads {
                 message: format!("{}: {error}", path.display()),
                 path: path.clone(),
@@ -307,9 +296,8 @@ impl Tool for EditFile {
             other => ToolError::message(format!("{}: {other}", path.display())),
         })?;
 
-        // The bytes actually replaced, not the caller's `old_string`: a
-        // downgraded level matches different bytes, and `.before` is the
-        // byte-for-byte source `/undo` restores from.
+        // 实际被替换掉的那些字节，不是调用方给的 `old_string`：降档后的匹配会匹配上不同的字节，
+        // 而 `.before` 是 `/undo` 用来做字节级还原的源。
         let replaced: String = edits.iter().map(|edit| edit.old_text.clone()).collect();
         let updated = apply_edits(&content, &edits, &parsed.new_string)?;
 
@@ -320,10 +308,8 @@ impl Tool for EditFile {
                 ctx.outputs_dir.display()
             ))
         })?;
-        // The snapshot lands **before** the target: if it cannot be written,
-        // nothing has changed yet and the call fails cleanly. A snapshot that
-        // outlives a failed target write is harmless — `/undo` only ever
-        // considers an edit whose recorded result succeeded.
+        // 快照**先于**目标落盘：如果它写不进去，那就什么都还没变，这次调用干净地失败。一个活得比
+        // 失败的目标写更久的快照是无害的 —— `/undo` 只会考虑那些已记录结果为成功的编辑。
         super::paths::write_owner_only(&snapshot, replaced.as_bytes()).map_err(|error| {
             ToolError::message(format!("cannot write {}: {error}", snapshot.display()))
         })?;
@@ -348,7 +334,7 @@ impl Tool for EditFile {
     }
 }
 
-/// Apply every planned edit, back to front so earlier spans stay valid.
+/// 施加每一处已规划的编辑，从后往前，好让前面的 span 保持有效。
 fn apply_edits(
     content: &str,
     edits: &[super::edit::EditMatch],
@@ -374,7 +360,7 @@ fn parse<T: for<'de> Deserialize<'de>>(args: &Value) -> Result<T, ToolError> {
         .map_err(|error| ToolError::message(format!("invalid tool arguments: {error}")))
 }
 
-/// A model that means "no value" may send `null`; treat it as absent.
+/// 一个想表达「没有值」的模型可能会发 `null`；把它当作缺席。
 fn nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,

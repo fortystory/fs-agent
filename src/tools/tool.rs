@@ -1,10 +1,8 @@
-//! The `Tool` trait and the side-effect classification the scheduler routes on.
+//! `Tool` trait，以及调度器据以分流的副作用分类。
 //!
-//! `effect` describes **workspace** side effects, not "has side effects at all":
-//! a tool that reads a file is `ReadOnly`, and a tool that spawns an agent
-//! without touching the workspace would also be `ReadOnly` (spec §7). The
-//! scheduler partitions a batch of calls by this value, so parallel read-only
-//! execution is wiring rather than a refactor.
+//! `effect` 描述的是**工作区**副作用，而不是「有没有副作用」：读一个文件的工具是
+//! `ReadOnly`，而一个不碰工作区、只 spawn 一个 agent 的工具同样会是 `ReadOnly`（spec §7）。
+//! 调度器按这个值给一批调用分区，于是并行执行只读调用是接线，而不是一次重构。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -18,22 +16,21 @@ use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 use crate::questions::UserQuestions;
 
-/// The workspace side effect of one planned call.
+/// 一次已规划调用的工作区副作用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Reads the workspace and writes nothing. These may run concurrently.
+    /// 只读工作区，什么都不写。这些可以并发跑。
     ReadOnly,
-    /// Writes exactly these paths (each is an input the tool will resolve).
+    /// 恰好写这些路径（每一个都是工具将要去解析的输入）。
     WritePaths(Vec<PathBuf>),
-    /// Takes the workspace exclusively; nothing else may run at the same time.
+    /// 独占工作区；同一时刻别的什么都不许跑。
     ///
-    /// `bash` (spec §7) is its owner: a shell can write anything, so the
-    /// dispatcher takes the workspace-wide lock for it. `effect()` is the one
-    /// side-effect vocabulary the scheduler and the permission gate share.
+    /// `bash`（spec §7）是它的持有者：一个 shell 什么都能写，所以派发器为它取工作区级的锁。
+    /// `effect()` 是调度器与权限门共用的那一套副作用词汇。
     Exclusive,
 }
 
-/// The result of a successful tool call, ready to become a `ToolCallCompleted`.
+/// 一次成功工具调用的结果，等着变成一条 `ToolCallCompleted`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
     pub text: String,
@@ -45,9 +42,8 @@ impl ToolOutput {
     }
 }
 
-/// Why a tool call failed. `InvalidatesReads` is the one variant the dispatcher
-/// reacts to structurally: a write that could not find its match means the
-/// agent's picture of the file is stale, so its read permission is withdrawn.
+/// 一次工具调用为什么失败。`InvalidatesReads` 是派发器会在结构上做出反应的那一个变体：
+/// 一次找不到匹配的写意味着 agent 对那个文件的图景已经陈旧，于是它的读权限被收回。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ToolError {
     #[error("{0}")]
@@ -61,7 +57,7 @@ impl ToolError {
         ToolError::Message(message.into())
     }
 
-    /// The path whose read permission is withdrawn, if any.
+    /// 读权限被收回的那个路径（如果有）。
     pub fn invalidated_path(&self) -> Option<&Path> {
         match self {
             ToolError::InvalidatesReads { path, .. } => Some(path),
@@ -69,29 +65,27 @@ impl ToolError {
         }
     }
 
-    /// True when this failure means the path's read permission must be dropped.
+    /// 当这次失败意味着该路径的读权限必须被丢掉时为真。
     pub fn invalidates_reads(&self) -> bool {
         self.invalidated_path().is_some()
     }
 }
 
-/// The two wall-clock limits one `bash` call runs under (spec §7).
+/// 一次 `bash` 调用跑在其下的两条墙钟上限（spec §7）。
 ///
-/// Both come from `SessionConfig`; the tool is handed the pair rather than the
-/// whole configuration, so the only session values a command tool can read are
-/// the ones it is actually allowed to use.
+/// 两条都来自 `SessionConfig`；交到工具手里的是这一对、而不是整份配置，所以一个命令类工具
+/// 能读到的会话值，只有它真正被允许使用的那些。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BashLimits {
-    /// The cap used when the model passes no `timeout_ms`.
+    /// 模型没给 `timeout_ms` 时用的上限。
     pub default_timeout_ms: u64,
-    /// The ceiling a model-supplied `timeout_ms` is clamped to.
+    /// 模型给的 `timeout_ms` 会被夹到的天花板。
     pub max_timeout_ms: u64,
 }
 
 impl BashLimits {
-    /// The cap for one call: the model's request, clamped to the ceiling, else
-    /// the configured default. A `requested` of zero is refused by the caller
-    /// before this runs, so the result is always at least one millisecond.
+    /// 一次调用的上限：模型要的那个值夹到天花板，没给就用配置的默认值。`requested` 为零会由
+    /// 调用方在这之前拒掉，所以结果永远至少是一毫秒。
     pub fn timeout(&self, requested_ms: Option<u64>) -> Duration {
         let ms = requested_ms.unwrap_or(self.default_timeout_ms);
         Duration::from_millis(ms.clamp(1, self.max_timeout_ms.max(1)))
@@ -99,8 +93,7 @@ impl BashLimits {
 }
 
 impl Default for BashLimits {
-    /// The configured defaults, so a value built outside assembly is usable
-    /// rather than a zero-millisecond cap.
+    /// 配置里的默认值，于是在组装之外构造出来的值也是可用的，而不是一条零毫秒的上限。
     fn default() -> Self {
         Self {
             default_timeout_ms: crate::config::DEFAULT_BASH_TIMEOUT_MS,
@@ -109,68 +102,60 @@ impl Default for BashLimits {
     }
 }
 
-/// What a tool is handed for one call. The tool resolves its own paths (it knows
-/// which argument carries one), and the resolver is what keeps a model-supplied
-/// path inside the session cwd.
+/// 一次调用交到工具手里的东西。工具解析自己的路径（它知道哪个参数带路径），而解析器正是把
+/// 模型给的路径关在会话 cwd 里面的那件东西。
 pub struct ToolContext<'a> {
-    /// Paths the model may read. Reads outside the session cwd are refused.
+    /// 模型可以读的路径。会话 cwd 之外的读一律拒。
     pub read_paths: &'a dyn ReadPathResolver,
-    /// Paths the model may write.
+    /// 模型可以写的路径。
     pub write_paths: &'a dyn WritePathResolver,
-    /// Where oversized output and `.before` snapshots land.
+    /// 超大输出与 `.before` 快照落盘的地方。
     pub outputs_dir: &'a Path,
-    /// Session cwd, for display and for tools that run relative to it.
+    /// 会话 cwd，用于显示，也给那些相对它跑的工具。
     pub cwd: &'a Path,
-    /// The session's discovered skill library (spec §9). A value discovered at
-    /// assembly, so `skill(name)` looks up rather than resolving a path.
+    /// 会话已发现的技能库（spec §9）。是组装期发现好的一个值，所以 `skill(name)` 是查表，
+    /// 而不是去解析一个路径。
     pub skills: &'a Skills,
-    /// The `repo_map` tool's session inputs (spec §9): the ranking context and
-    /// the configured budget. Bundled into one field so it travels like `skills`.
+    /// `repo_map` 工具的会话输入（spec §9）：排序上下文与配置的预算。捆成一个字段，好让它像
+    /// `skills` 一样传递。
     pub repo_map: &'a RepoMapInput,
-    /// The wall-clock limits a `bash` call runs under (spec §7). Session
-    /// configuration, carried so the tool never reaches into the session.
+    /// 一次 `bash` 调用跑在其下的墙钟上限（spec §7）。是会话配置，携带进来，好让工具永不伸手
+    /// 去够那个会话。
     pub bash: &'a BashLimits,
-    /// The port that runs a nested executor, for `task` (spec §16). `None` when
-    /// the session mounted no port, in which case `task` reports that rather than
-    /// pretending to work.
+    /// 跑一个嵌套执行者的端口，给 `task`（spec §16）。会话没挂端口时是 `None`，那时 `task`
+    /// 如实报告，而不是假装在干活。
     pub executor: Option<&'a dyn ExecutorSpawner>,
-    /// The port that puts a model-initiated question to the user, for
-    /// `ask_user_question` (spec §7). `None` when the session mounted no port —
-    /// headless assembly never does — in which case the tool reports that rather
-    /// than hanging on an answer nobody can give.
+    /// 把模型发起的提问交给用户的端口，给 `ask_user_question`（spec §7）。会话没挂端口时是
+    /// `None` —— headless 组装永不挂 —— 那时工具如实报告，而不是挂在一个没人能给的答案上。
     pub questions: Option<&'a dyn UserQuestions>,
     pub tool_call_id: &'a str,
     pub args: &'a Value,
 }
 
-/// The port a tool uses to run a nested executor (spec §16).
+/// 工具用来跑一个嵌套执行者的端口（spec §16）。
 ///
-/// It lives here, and is implemented by the `agent` layer (`agent::executor`),
-/// because running an executor means driving a whole turn: that layer is the only
-/// writer of the event stream and the only caller of a provider. `tools` knows
-/// only the shape, so the dependency arrow still points down.
+/// 它住在这里、由 `agent` 层（`agent::executor`）实现，因为跑一个执行者意味着驱动一整个
+/// 回合：那一层是事件流的唯一写入者，也是 provider 的唯一调用方。`tools` 只知道形状，所以
+/// 依赖箭头依旧朝下。
 #[async_trait]
 pub trait ExecutorSpawner: Send + Sync {
-    /// Run one executor to completion for `brief`, and report back already shaped
-    /// as the `task` call's one result.
+    /// 为 `brief` 把一个执行者跑到完成，并回报 —— 回报时已经塑造成 `task` 调用那唯一一条结果。
     ///
-    /// The result is the summary plus the metadata derived from the stream
-    /// (spec §16); the executor's process reaches no one else.
+    /// 结果就是摘要加上从流上派生的元数据（spec §16）；执行者的过程不会到达任何别人那里。
     async fn spawn(&self, brief: &str) -> Result<ToolOutput, ToolError>;
 }
 
-/// Resolve a model-supplied read path against the session cwd.
+/// 把模型给的读路径解析到会话 cwd 上。
 pub trait ReadPathResolver: Send + Sync {
     fn resolve_read(&self, path: &Path) -> Result<PathBuf, ToolError>;
 }
 
-/// Resolve a model-supplied write path against the session cwd.
+/// 把模型给的写路径解析到会话 cwd 上。
 pub trait WritePathResolver: Send + Sync {
     fn resolve_write(&self, path: &Path) -> Result<PathBuf, ToolError>;
 }
 
-/// Whether a path has been read in this session. Read permission is per agent
-/// and is never inherited, in either direction (spec §16).
+/// 一条路径在这个会话里有没有被读过。读权限是逐 agent 的，且两个方向都不继承（spec §16）。
 #[derive(Debug, Default)]
 pub struct ReadSet {
     paths: HashSet<PathBuf>,
@@ -204,50 +189,44 @@ impl ReadSet {
     }
 }
 
-/// One tool in the runtime registry.
+/// 运行时注册表里的一个工具。
 ///
-/// Object safe and async: `Box<dyn Tool>` is what the registry stores, and
-/// `call` takes erased JSON so dynamic tools have a door in without a second
-/// trait.
+/// object safe 且异步：注册表存的就是 `Box<dyn Tool>`，而 `call` 收的是擦除后的 JSON，好让
+/// 动态工具有一道进来的门，而不必再开第二个 trait。
 #[async_trait]
 pub trait Tool: Send + Sync {
-    /// The wire-level declaration, sent to the provider as written.
+    /// 线级声明，原样发给 provider。
     fn spec(&self) -> ToolSpec;
 
-    /// The workspace side effect of this call. A pure function of the args.
+    /// 这次调用的工作区副作用。是 args 的纯函数。
     fn effect(&self, args: &Value) -> Effect;
 
-    /// Paths this call looked at, so the dispatcher can grant read permission.
+    /// 这次调用看过的路径，好让派发器发放读权限。
     ///
-    /// A read tool declares its own path here instead of the dispatcher guessing
-    /// at an argument name, which keeps the tool's wire contract its own.
+    /// 一个读工具在这里声明自己的路径，而不是由派发器去猜某个参数名 —— 这样工具的线级契约
+    /// 依旧是它自己的。
     fn read_paths(&self, _args: &Value) -> Vec<PathBuf> {
         Vec::new()
     }
 
-    /// The argv this call will execute, for a tool that runs a command.
+    /// 这次调用将要执行的 argv，给跑命令的工具。
     ///
-    /// `bash` is its owner; every other tool answers `None`. The permission
-    /// gate's `CommandPrefix` scope and the `rm` circuit breaker both read this,
-    /// so a command's argv must be visible **before** the process starts — which
-    /// is why the tool declares it here instead of the gate guessing at a
-    /// `command` string.
+    /// `bash` 是它的持有者；别的工具一律答 `None`。权限门的 `CommandPrefix` 范围与 `rm`
+    /// 断路器都读它，所以一条命令的 argv 必须在进程启动**之前**就可见 —— 这就是工具在这里
+    /// 声明它、而不是由门去猜某个 `command` 字符串的原因。
     fn command(&self, _args: &Value) -> Option<Vec<String>> {
         None
     }
 
-    /// Whether this tool is part of an executor's table.
+    /// 这个工具是不是执行者工具表的一部分。
     ///
-    /// Recursion depth is one (spec §16), and that is enforced by the tool table
-    /// rather than by a rule: `task` answers `false`, so an executor's tool
-    /// declaration simply has no way to dispatch another executor. A rule would
-    /// be a second, weaker line of defense — the tool would still be advertised
-    /// to the model, and a rule bug would be a recursion bug.
+    /// 递归深度为一（spec §16），而这一条由工具表强制、不由一条规则强制：`task` 答 `false`，
+    /// 于是执行者的工具声明根本没有办法派发出另一个执行者。用规则就是第二道更弱的防线 ——
+    /// 工具仍会被声明给模型，而规则里的一个 bug 就是一个递归 bug。
     fn delegable(&self) -> bool {
         true
     }
 
-    /// Arguments arrive erased; each tool parses its own shape and reports its
-    /// own errors.
+    /// 参数到手时是擦除过的；每个工具解析自己的形状、报自己的错。
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError>;
 }

@@ -1,14 +1,11 @@
-//! The built-in `repo_map(focus?)` tool: the workspace's symbols on demand.
+//! 内建的 `repo_map(focus?)` 工具：按需给出工作区的符号。
 //!
-//! The same shape as `skill(name)` (spec §9): a built-in **read-only** tool whose
-//! product is an ordinary tool result, so it is accounted for, truncated and
-//! dropped by the same machinery as any other call. It is deliberately **not**
-//! injected: an injected map would have to be refreshed as files change, and
-//! every refresh would push the history after it out of the cached prefix.
+//! 与 `skill(name)` 同一个形状（spec §9）：一个内建的**只读**工具，产物是一条普通的工具结果，
+//! 所以它被同一套机器计入用量、裁剪、丢掉。它刻意**不**注入：注入版的地图会随文件变化而需要
+//! 刷新，而每次刷新都会把它之后的历史挤出缓存前缀。
 //!
-//! It reads no workspace path the model supplied — it walks the session cwd
-//! itself — so `effect()` is [`Effect::ReadOnly`] and it declares no read paths,
-//! which keeps it available in the read-only modes.
+//! 它不读任何模型给出的工作区路径 —— 它自己走会话 cwd —— 所以 `effect()` 是
+//! [`Effect::ReadOnly`]，也不声明读路径，这使它在只读模式里依旧可用。
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -18,13 +15,13 @@ use crate::provider::ToolSpec;
 
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
-/// Render the workspace's symbol map within the configured budget.
+/// 在配置的预算内渲染工作区的符号地图。
 pub struct RepoMapTool {
     map: RepoMap,
 }
 
 impl RepoMapTool {
-    /// Compile the official tags query once, when the tool table is assembled.
+    /// 在组装工具表时把官方 tags 查询编译一次。
     pub fn new() -> Self {
         Self {
             map: RepoMap::new(),
@@ -67,8 +64,7 @@ impl Tool for RepoMapTool {
     }
 
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError> {
-        // The budget is configuration, never an argument: a `tokens` key the model
-        // sends anyway is ignored, not honoured.
+        // 预算是配置，绝不是参数：模型硬塞来的 `tokens` 键会被忽略，而不是被采纳。
         let focus = args
             .get("focus")
             .and_then(Value::as_str)

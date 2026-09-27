@@ -1,20 +1,16 @@
-//! Dynamically declared tools (spec §14).
+//! 动态声明的工具（spec §14）。
 //!
-//! A user declares a tool in `config.toml` as an argv template plus a JSON
-//! Schema; it then behaves like a built-in. Three properties are structural:
+//! 用户在 `config.toml` 里把一个工具声明成一条 argv 模板加一份 JSON Schema；此后它就像内建工具
+//! 一样干活。有三条性质是结构性的：
 //!
-//! * **It cannot claim to be read-only.** The declaration syntax has no
-//!   side-effect field, and [`Tool::effect`] is `Exclusive` for every call. A
-//!   genuinely read-only dynamic tool is therefore serialized workspace-wide —
-//!   the documented cost of not trusting a declaration — and the constraint that
-//!   remains is the permission gate, because `read-before-edit` cannot see a
-//!   `WritePaths` the tool never declares.
-//! * **It cannot inject shell.** The argv is spawned directly
-//!   ([`super::process`]); a parameter replaces one whole argv element and an
-//!   array or object becomes a single element rather than being expanded.
-//! * **Its name is lexically recognizable.** Every declared tool is
-//!   `custom__<namespace>__<tool>` and no built-in name contains `__`, so
-//!   [`is_custom_tool`] is a predicate over the string alone.
+//! * **它不能自称只读。** 声明语法里没有副作用字段，而 [`Tool::effect`] 对每次调用都是
+//!   `Exclusive`。所以一个真正只读的动态工具也会被工作区级地串行化 —— 这是「不信声明」要付的
+//!   代价，写在文档里 —— 而剩下的那道约束是权限门，因为 `read-before-edit` 看不见工具根本
+//!   没声明过的 `WritePaths`。
+//! * **它注入不了 shell。** argv 是直接 spawn 的（[`super::process`]）；一个参数替换掉一整个
+//!   argv 元素，而数组或对象会变成单个元素，而不是被展开。
+//! * **它的名字在词法上可辨认。** 每个声明出来的工具都是 `custom__<命名空间>__<工具>`，而
+//!   内建名都不含 `__`，所以 [`is_custom_tool`] 是只针对这个字符串的谓词。
 
 use std::time::Duration;
 
@@ -27,13 +23,12 @@ use crate::provider::ToolSpec;
 use super::process;
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
-/// Whether a tool name came from configuration rather than from the built-in
-/// table. No built-in name contains `__`, so the test is lexical (spec §14).
+/// 一个工具名是来自配置、还是来自内建表。内建名都不含 `__`，所以这个判定是词法的（spec §14）。
 pub fn is_custom_tool(name: &str) -> bool {
     name.contains(CUSTOM_TOOL_SEPARATOR)
 }
 
-/// One dynamically declared tool, wrapping its resolved declaration.
+/// 一个动态声明的工具，裹着它那条已解析的声明。
 pub struct CustomTool {
     declaration: ToolDeclaration,
 }
@@ -43,22 +38,20 @@ impl CustomTool {
         Self { declaration }
     }
 
-    /// The argv for one call: each `{parameter}` element is replaced by the
-    /// argument, and omitted when the argument is absent.
+    /// 一次调用的 argv：每个 `{参数}` 元素被对应的参数替换掉，参数缺席时整个元素省掉。
     ///
-    /// Substitution is by **whole argv element**. A parameter that is an array or
-    /// an object is serialized into one element, never expanded into several, so
-    /// no argument can change the shape of the command.
+    /// 替换以**整个 argv 元素**为单位。数组或对象参数会被序列化进一个元素，绝不展开成好几个，
+    /// 所以没有哪个参数能改变命令的形状。
     pub fn argv(&self, args: &Value) -> Vec<String> {
         let mut argv = Vec::with_capacity(self.declaration.command.len());
         for element in &self.declaration.command {
             let Some(name) = parameter_placeholder(element) else {
-                // A literal element is used as written.
+                // 字面元素原样使用。
                 argv.push(element.clone());
                 continue;
             };
             match args.get(name) {
-                // Absent or null omits the element entirely.
+                // 缺席或为 null 就把这个元素整个省掉。
                 None | Some(Value::Null) => {}
                 Some(value) => argv.push(render_argument(value)),
             }
@@ -77,15 +70,14 @@ impl Tool for CustomTool {
         }
     }
 
-    /// Always `Exclusive` (spec §14): the declaration has no field for an effect
-    /// class, so "this one is really read-only" has nowhere to be said. The
-    /// scheduler's conservative path needs no special case.
+    /// 永远是 `Exclusive`（spec §14）：声明里没有效果类别的字段，所以「这个其实只读」没有地方
+    /// 可说。调度器的保守路径不需要特例。
     fn effect(&self, _args: &Value) -> Effect {
         Effect::Exclusive
     }
 
-    /// The argv the permission gate's `CommandPrefix` scope reads, built the same
-    /// way [`Tool::call`] builds it so the gate and the process cannot disagree.
+    /// 权限门的 `CommandPrefix` 范围读的那条 argv，按 [`Tool::call`] 造它的同一种方式构造，
+    /// 好让门与进程不可能有分歧。
     fn command(&self, args: &Value) -> Option<Vec<String>> {
         let argv = self.argv(args);
         (!argv.is_empty()).then_some(argv)
@@ -105,11 +97,10 @@ impl Tool for CustomTool {
     }
 }
 
-/// A parameter value as one argv element.
+/// 一个参数值，作为单个 argv 元素。
 ///
-/// A string is used verbatim (no quoting layer exists to escape); every other
-/// JSON value is its compact serialization, so an array or object is one
-/// element, not a splat.
+/// 字符串原样使用（不存在要做转义的引号层）；其他每个 JSON 值都用它的紧凑序列化，所以数组或对
+/// 象是一个元素，而不是一次展开。
 fn render_argument(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),

@@ -1,32 +1,23 @@
-//! Context boundary: usable-input accounting, single-result truncation, and
-//! budget-driven dropping (spec §10).
+//! 上下文边界：可用输入的核算、单条结果的裁剪，以及按预算驱动的丢弃（spec §10）。
 //!
-//! Two mechanisms, at two different moments, over two different sets of data:
+//! 两个机制，在两个不同的时刻，作用于两组不同的数据：
 //!
-//! * **Single-result truncation** happens **before an event is appended**: an
-//!   oversized tool result is spilled to disk and the stream carries a preview
-//!   plus a pointer. The pointer is an enhancement — a missing spill file
-//!   degrades to the inline preview and never fails.
-//! * **Over-budget dropping** happens in [`trim`], *after* projection, and is
-//!   **read-only**: the log is never touched, only the `messages` sent to the
-//!   provider. The drop order is fixed (spec §10): old ordinary tool results →
-//!   old skill bodies → old whole rounds → this turn hard-fails.
+//! * **单条结果的裁剪**发生在**事件被追加之前**：一条超大的工具结果溢出落盘，流上则携带一条预览
+//!   加一个指针。指针只是增强 —— 溢出文件缺失会降级成内联预览，绝不失败。
+//! * **超预算的丢弃**发生在 [`trim`] 里、在投影*之后*，而且是**只读的**：事件流永远不动，动的只
+//!   是发给 provider 的 `messages`。丢弃顺序是固定的（spec §10）：旧的普通工具结果 → 旧的技能
+//!   正文 → 旧的整轮 → 这一回合硬失败。
 //!
-//! Both are pure functions of values, so "an agent's `messages` is recomputable
-//! from the stream + the spill files + the projection rules" holds, and the
-//! window layer needs no lock: the current budget is a value, not state.
+//! 两者都是值上的纯函数，所以「一个 agent 的 `messages` 能从流 + 溢出文件 + 投影规则重算出来」
+//! 成立，而窗口层不需要锁：当前预算是值，不是状态。
 //!
-//! Dropping a tool result **stubs its body** rather than removing the message:
-//! a provider requires exactly one `tool` message per `tool_call` (spec §5), so
-//! the paired `tool` message must survive with a shorter body. Only whole-round
-//! dropping removes messages, and it removes a round's assistant message and its
-//! results together, which keeps the pairing intact.
+//! 丢一条工具结果是**把它的正文替成桩**，而不是删掉那条消息：provider 要求每条 `tool_call` 恰好
+//! 对应一条 `tool` 消息（spec §5），所以那条配对的 `tool` 消息必须带着更短的正文活下来。只有整轮
+//! 丢弃才会删消息，而且它把一轮的助手消息与它的结果一起删掉，配对因此保持完整。
 //!
-//! [`skills`] and [`repo_map`] are the sibling concerns (spec §9). Skills keep
-//! the description catalog and load bodies on demand; the aggregate cap on
-//! loaded skill bodies is enforced here, before the window budget is even
-//! consulted. `repo_map` extracts and ranks workspace symbols for the on-demand
-//! `repo_map` tool, and its product is a tool result like any other.
+//! [`skills`] 与 [`repo_map`] 是相邻的两个关切（spec §9）。技能保留描述清单、按需加载正文；已加载
+//! 技能正文的聚合上限在这里强制，甚至早于窗口预算被看一眼。`repo_map` 为按需的 `repo_map` 工具
+//! 抽取并排序工作区符号，它的产物与其他任何东西一样是一条工具结果。
 
 pub mod repo_map;
 pub mod skills;
@@ -38,50 +29,44 @@ use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
 use skills::MAX_LOADED_SKILL_TOKENS;
 
-/// Input space reserved for the model's own output (spec §10).
+/// 为模型自己的输出预留的输入空间（spec §10）。
 ///
-/// The reserve is `min(20_000, max_output_tokens)`, so a model whose output cap
-/// is below 20k reserves only what it can actually write.
+/// 预留量是 `min(20_000, max_output_tokens)`，所以输出上限低于 20k 的模型只预留它真能写出来的量。
 pub const OUTPUT_RESERVE_TOKENS: u32 = 20_000;
 
-/// v1's crude estimator: one token per four characters (spec §10).
+/// v1 的粗略估计器：四个字符一个 token（spec §10）。
 const CHARS_PER_TOKEN: usize = 4;
 
-/// How much smaller than the per-result cap the inline preview is.
+/// 内联预览比单条结果的上限小多少倍。
 const PREVIEW_DIVISOR: u64 = 10;
 
-/// A preview never shrinks below this, so a tiny cap cannot hide the shape of a
-/// result.
+/// 预览绝不缩到这个值以下，于是一条很小的上限也藏不住一条结果的形状。
 const MIN_PREVIEW_CHARS: usize = 200;
 
-/// The body a dropped tool result is replaced with.
+/// 一条被丢掉的工具结果会替换成的正文。
 ///
-/// The message itself stays, because the wire contract pairs one `tool` message
-/// with one `tool_call` (spec §5); only its body is discarded.
+/// 消息本身留下，因为线级契约把一条 `tool` 消息与一条 `tool_call` 配成一对（spec §5）；被丢掉的
+/// 只有它的正文。
 pub const DROPPED_TOOL_RESULT: &str =
     "[dropped: this old tool result was removed from the context to fit the budget]";
 
-/// The project rules file, read once at startup and injected as the first
-/// `user` message (spec §10).
+/// 项目规则文件，启动时读一次，作为第一条 `user` 消息注入（spec §10）。
 pub const AGENTS_MD: &str = "AGENTS.md";
 
-/// The usable input budget for one agent, computed from **its own** model
-/// (spec §10). There is deliberately no session-wide budget.
+/// 一个 agent 的可用输入预算，按**它自己**的模型算出来（spec §10）。刻意没有会话级预算。
 ///
-/// Saturating on purpose: a capability table with a tiny window still has a
-/// well-defined budget rather than panicking under a subtraction.
+/// 用饱和运算是有意的：窗口很小的能力表也仍然有一个定义良好的预算，而不是在一次减法里 panic。
 pub fn usable_input(caps: &ModelCaps) -> u64 {
     let reserve = caps.max_output_tokens.min(OUTPUT_RESERVE_TOKENS);
     u64::from(caps.context_window.saturating_sub(reserve))
 }
 
-/// The crude v1 estimate for one string: characters / 4, rounded up, so any
-/// non-empty text costs at least one token.
+/// 一个字符串的 v1 粗略估计：字符数 / 4 向上取整，所以任何非空文本至少花一个 token。
 pub fn estimate_tokens(text: &str) -> u64 {
     (text.chars().count() as u64).div_ceil(CHARS_PER_TOKEN as u64)
 }
 
-/// The estimated size of a projected request.
+/// 一次已投影请求的估计大小。
 pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
     messages.iter().map(estimate_message_tokens).sum()
 }
@@ -110,18 +95,16 @@ fn option_tokens(text: Option<&str>) -> u64 {
     text.map(estimate_tokens).unwrap_or(0)
 }
 
-/// The drop policy [`trim`] reads. It is a value, not state.
+/// [`trim`] 读的丢弃策略。它是值，不是状态。
 #[derive(Debug, Clone)]
 pub struct TrimPolicy {
-    /// Tool names whose result bodies are stickier than ordinary tool results
-    /// (spec §10: a loaded skill body belongs to the model's current work).
-    /// Ticket 08 mounts the `skill` tool this names.
+    /// 结果正文比普通工具结果更黏的那些工具名（spec §10：一份已加载的技能正文属于模型当前正在做
+    /// 的工作）。票 08 挂上这里点名的那个 `skill` 工具。
     pub sticky_tool_names: Vec<String>,
-    /// Aggregate cap on the loaded skill bodies in one request (spec §9).
+    /// 一次请求里已加载技能正文的聚合上限（spec §9）。
     ///
-    /// Independent of the window: once the total exceeds it the oldest bodies are
-    /// stubbed, whatever the window budget says. Ordinary tool results are never
-    /// touched by this pre-pass.
+    /// 与窗口无关：总量一超过它，最旧的那些正文就被替成桩，无论窗口预算怎么说。普通工具结果永远
+    /// 不被这趟预扫碰到。
     pub loaded_skill_budget: u64,
 }
 
@@ -134,11 +117,10 @@ impl Default for TrimPolicy {
     }
 }
 
-/// Why a trim could not fit its budget.
+/// 一次裁剪为什么没能装进预算。
 ///
-/// This is the "real overflow" signal (spec §10): every droppable class has
-/// been exhausted, which is also the trigger a future compaction would hang
-/// from.
+/// 这是「真的溢出」那个信号（spec §10）：每一个可丢的类别都耗尽了，这同时也是将来一次压缩会挂着
+/// 的那个触发点。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TrimError {
     #[error(
@@ -148,24 +130,20 @@ pub enum TrimError {
     OverBudget { budget: u64, estimated: u64 },
 }
 
-/// Fit a projected request into `budget` tokens, dropping in the fixed order
-/// (spec §10): old ordinary tool results, then old skill bodies, then old whole
-/// rounds. Still over budget after that is a hard failure for the turn.
+/// 把一次已投影的请求装进 `budget` 个 token，按固定顺序丢（spec §10）：旧的普通工具结果，然后
+/// 旧的技能正文，然后旧的整轮。此后仍然超预算，就是这一回合的硬失败。
 ///
-/// Before any of that, the aggregate loaded-skill budget is enforced (spec §9):
-/// the oldest skill bodies are stubbed once their total exceeds
-/// [`TrimPolicy::loaded_skill_budget`], even when the window budget is generous.
+/// 在做这些之前，先强制已加载技能的聚合预算（spec §9）：一旦它们总量超过
+/// [`TrimPolicy::loaded_skill_budget`]，最旧的技能正文就被替成桩，哪怕窗口预算很宽裕。
 ///
-/// Read-only with respect to the event log: this only rewrites the `messages`
-/// value it is handed. Every pinned message (the private identity, and each
-/// `ContextInjected` wherever it sits) and the turn currently being assembled
-/// are never dropped.
+/// 对事件流而言是只读的：它只重写交到手里的那个 `messages` 值。每一条被钉住的消息（私有身份，
+/// 以及每一条 `ContextInjected`，无论它坐在哪）与当前正在组装的那个回合，永远不会被丢掉。
 pub fn trim(
     mut messages: Vec<Message>,
     budget: u64,
     policy: &TrimPolicy,
 ) -> Result<Vec<Message>, TrimError> {
-    // Names are needed by both the skill-body budget and the window drop order.
+    // 技能正文预算与窗口丢弃顺序都要用这些名字。
     let names = tool_names(&messages);
     stub_skill_bodies_over_budget(&mut messages, &names, policy);
 
@@ -173,9 +151,8 @@ pub fn trim(
         return Ok(messages);
     }
 
-    // Classes 1 and 2: old tool-result bodies, oldest first, ordinary results
-    // before skill bodies. The same shrink, applied to one stickiness class at a
-    // time, which is what makes the order strict.
+    // 第 1、2 类：旧的工具结果正文，最旧的先走，普通结果在技能正文之前。同一种收缩，一次施加在
+    // 一个黏性类别上 —— 正是这一点让顺序是严格的。
     for sticky in [false, true] {
         for index in old_result_indices(&messages, &names, policy, sticky) {
             if fits(&messages, budget) {
@@ -185,18 +162,16 @@ pub fn trim(
         }
     }
 
-    // Class 3: old whole rounds, oldest first. The active round and every pinned
-    // message stay: the model must still have the question it is answering, and
-    // the harness content it was given (spec §10, §13).
+    // 第 3 类：旧的整轮，最旧的先走。当前回合与每一条被钉住的消息都留下：模型必须还拿着它正在
+    // 回答的那个问题，以及交给它的那些 harness 内容（spec §10、§13）。
     while !fits(&messages, budget) {
         let starts = round_starts(&messages);
         if starts.len() <= 1 {
             break;
         }
-        // The round is dropped except for any pinned message inside it — a
-        // mid-session injection sits in the middle of a round and outlives it.
-        // At least one non-pinned message always goes (both `starts` are speech),
-        // so this loop makes progress.
+        // 整轮被丢掉，除了它里面任何被钉住的消息 —— 一次会话中途的注入坐在一轮中间，会比那一轮
+        // 活得久。至少有一条没被钉住的消息总会走（`starts` 的两个起点都是发言），所以这个循环一定
+        // 有进展。
         let (from, to) = (starts[0], starts[1]);
         let mut index = 0;
         messages.retain(|message| {
@@ -220,17 +195,14 @@ fn fits(messages: &[Message], budget: u64) -> bool {
     estimate_messages_tokens(messages) <= budget
 }
 
-/// Whether a message is pinned: harness content that trimming never drops and
-/// that never starts a droppable round.
+/// 一条消息是不是被钉住的：harness 内容，裁剪永不丢它，它也永不开启一个可丢弃的轮。
 ///
-/// The private identity is pinned by kind (it is also the first message), and a
-/// `ContextInjected` projection is pinned by kind wherever it sits. Pinning has
-/// to be a property of the message rather than a length of the leading run,
-/// because a `Skill` body the user loaded is injected mid-session and must
-/// survive the dropping of the rounds around it (spec §9, §10).
+/// 私有身份按种类钉住（它也是第一条消息），而一条 `ContextInjected` 投影无论坐在哪都按种类钉住。
+/// 钉住必须是消息自身的一个性质、而不是「开头连续多少条」这样一个长度，因为用户加载的一份
+/// `Skill` 正文是在会话中途注入的，必须能在周围那些轮被丢掉时活下来（spec §9、§10）。
 ///
-/// An ordinary `user` message — speech, or the error the model must correct —
-/// is deliberately *not* pinned: a nameless one is still a round boundary.
+/// 一条普通的 `user` 消息 —— 一句发言，或者模型必须纠正的那个错误 —— 刻意*不*钉住：一条没有名字
+/// 的普通消息仍然是一个轮的边界。
 fn is_pinned(message: &Message) -> bool {
     match message {
         Message::System { .. } => true,
@@ -239,9 +211,8 @@ fn is_pinned(message: &Message) -> bool {
     }
 }
 
-/// Indices where a round starts: every non-pinned `user` message. A round runs
-/// from its start to the next start (or the end), so dropping a whole round
-/// takes its assistant turns and their tool results with it.
+/// 一个轮从哪里开始的那些下标：每一条没被钉住的 `user` 消息。一个轮从它的起点跑到下一个起点
+/// （或者末尾），所以丢掉整轮会把它的那些助手回合与它们的工具结果一起带走。
 fn round_starts(messages: &[Message]) -> Vec<usize> {
     messages
         .iter()
@@ -251,9 +222,8 @@ fn round_starts(messages: &[Message]) -> Vec<usize> {
         .collect()
 }
 
-/// `tool_call_id -> tool name` for every call the projection emitted, used to
-/// tell an ordinary result from a skill body. Owned so trimming can mutate the
-/// messages while consulting the map.
+/// 投影发出的每一次调用的 `tool_call_id -> 工具名`，用来把一条普通结果与一份技能正文区分开。持有
+/// 所有权，这样裁剪在查这张表的同时还能改那些消息。
 fn tool_names(messages: &[Message]) -> BTreeMap<String, String> {
     let mut names = BTreeMap::new();
     for message in messages {
@@ -266,14 +236,13 @@ fn tool_names(messages: &[Message]) -> BTreeMap<String, String> {
     names
 }
 
-/// Live (not-yet-stubbed) tool results, oldest first, stopping before `limit`.
+/// 活的（还没被替成桩的）工具结果，最旧的先，到 `limit` 之前停。
 ///
-/// Both drop mechanisms scan the same shape; `limit` is what distinguishes them:
-/// the window order stops at the active round (the model keeps the question it
-/// is answering), while the aggregate skill budget scans the whole request.
+/// 两个丢弃机制扫的是同一个形状；区别两者的就是 `limit`：窗口顺序在活跃轮处停（模型留着它正在
+/// 回答的那个问题），而聚合技能预算扫整份请求。
 ///
-/// The scan needs no pin test of its own: a pinned message is the identity or an
-/// injection, and neither is ever a `tool` message.
+/// 这次扫描自己不需要钉住判定：一条被钉住的消息要么是身份、要么是一次注入，两者都绝不会是 `tool`
+/// 消息。
 fn live_tool_indices(messages: &[Message], limit: usize) -> Vec<usize> {
     (0..limit.min(messages.len()))
         .filter(|&index| {
@@ -282,14 +251,13 @@ fn live_tool_indices(messages: &[Message], limit: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Where the active (last) round starts, or the end when there is no round to
-/// distinguish.
+/// 活跃的（最后一个）轮从哪里开始；没有可区分的轮时就是末尾。
 fn active_round_start(messages: &[Message]) -> usize {
     let starts = round_starts(messages);
     starts.last().copied().unwrap_or(messages.len())
 }
 
-/// The old (non-active-round) tool results of one class, oldest first.
+/// 某一个类别里那些旧的（非活跃轮的）工具结果，最旧的先。
 fn old_result_indices(
     messages: &[Message],
     names: &BTreeMap<String, String>,
@@ -302,9 +270,8 @@ fn old_result_indices(
         .collect()
 }
 
-/// Whether a tool result belongs to the sticky class: its call was made by a tool
-/// named in [`TrimPolicy::sticky_tool_names`] (a loaded skill body, by default).
-/// Drives both the aggregate skill budget and the window drop order.
+/// 一条工具结果是否属于黏性类别：它的调用来自 [`TrimPolicy::sticky_tool_names`] 里点名的某个工具
+/// （默认就是一份已加载的技能正文）。聚合技能预算与窗口丢弃顺序都靠它。
 fn is_sticky_result(
     message: &Message,
     names: &BTreeMap<String, String>,
@@ -318,14 +285,11 @@ fn is_sticky_result(
     }
 }
 
-/// Enforce the aggregate loaded-skill budget (spec §9) independently of the
-/// window: while the live skill bodies total more than the policy allows, stub
-/// the oldest.
+/// 独立于窗口地强制已加载技能的聚合预算（spec §9）：只要活的技能正文总量超过策略允许的值，就把
+/// 最旧的替成桩。
 ///
-/// This is a cap on the whole request, the active turn included: a round that
-/// loads more than the budget itself loses its oldest body (and may load it
-/// again). It is a separate budget from the window, so it does not wait for the
-/// window to overflow.
+/// 这是对整份请求（含当前回合）的一条上限：一个轮如果自己加载得比预算还多，它会丢掉自己最旧的
+/// 正文（并且可能会重新加载一次）。它是一份与窗口分开的预算，所以它不等窗口溢出。
 fn stub_skill_bodies_over_budget(
     messages: &mut [Message],
     names: &BTreeMap<String, String>,
@@ -355,27 +319,23 @@ fn stub_tool_result(message: &mut Message) {
     }
 }
 
-/// A tool result after the pre-stream truncation pipeline (spec §10): the text
-/// that goes into the event (a preview plus a pointer) and where the full text
-/// landed.
+/// 经流前裁剪流水线之后的一条工具结果（spec §10）：进事件的那段文本（一条预览加一个指针），以及
+/// 全文落到了哪。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpilledResult {
-    /// What the stream carries — always complete on its own.
+    /// 流上携带的东西 —— 它自己永远是完整的。
     pub preview: String,
-    /// The spill file, when it could be written.
+    /// 那个溢出文件，当它能被写出来时。
     pub pointer: Option<PathBuf>,
-    /// Whether the text was over the cap.
+    /// 文本有没有超过上限。
     pub truncated: bool,
 }
 
-/// Truncate one tool result before it enters the stream: spill the overflow to
-/// `<outputs_dir>/<tool_call_id>.txt` and return a head/tail preview carrying
-/// the pointer.
+/// 在一条工具结果进流之前裁剪它：把溢出的部分落盘到 `<outputs_dir>/<tool_call_id>.txt`，并返回
+/// 一条带头尾、携带那个指针的预览。
 ///
-/// Never fails, and never grows the stream: a body so small that a preview plus
-/// the pointer note would be longer than the body itself is left whole (it is
-/// already too small to blow a window). A spill that cannot be written degrades
-/// to "preview only" (spec §11: a dead pointer degrades to the preview).
+/// 绝不失败，也绝不让流变大：一条小到「预览加指针说明比正文本身还长」的正文会整个留下（它本来就
+/// 已经小到撑不破窗口）。一次写不出去的溢出降级成「只有预览」（spec §11：一个死指针降级成预览）。
 pub fn truncate_result(
     text: &str,
     tool_call_id: &str,
@@ -398,9 +358,8 @@ pub fn truncate_result(
     let pointer = spilled.then_some(pointer);
     let preview = preview(text, max_tokens, pointer.as_deref());
     if preview.chars().count() >= total_chars {
-        // The pointer note costs more than the body saves: keeping the body is
-        // strictly better, and the cap exists to bound the stream, not to
-        // enforce a number.
+        // 指针说明的代价比正文省下的还多：留着正文严格更好，而这条上限存在是为了给流设界，不是
+        // 为了执行一个数字。
         return SpilledResult {
             preview: text.to_owned(),
             pointer: None,
@@ -420,7 +379,7 @@ fn preview(text: &str, max_tokens: u64, pointer: Option<&Path>) -> String {
     let wanted = ((max_tokens / PREVIEW_DIVISOR) as usize)
         .saturating_mul(CHARS_PER_TOKEN)
         .max(MIN_PREVIEW_CHARS);
-    // Keep head and tail from both covering the same characters.
+    // 让头与尾不会覆盖同一批字符。
     let preview_chars = wanted.min(total_chars.saturating_sub(1));
     let head_chars = preview_chars / 2;
     let tail_chars = preview_chars - head_chars;
@@ -439,20 +398,17 @@ fn preview(text: &str, max_tokens: u64, pointer: Option<&Path>) -> String {
     )
 }
 
-/// The marker a cut result body carries where the cut happened.
+/// 一段被切开的结果正文在切口处携带的标记。
 ///
-/// Public because it is the only way a reader of a finished event can tell the two
-/// kinds of `output` apart: an uncut result's preview **is** its whole text, while a
-/// cut one has a head, this marker, and a tail — and only the cut kind has a spilled
-/// file to go looking for. The event carries one field for both (spec §11), so the
-/// marker is the discriminator.
+/// 是公开的，因为这是读完一个事件的人区分两种 `output` 的唯一办法：一条没被切的结果，它的预览
+/// **就是**全文，而一条被切的有一条头、这个标记、一条尾 —— 并且只有被切的那种才有一个溢出文件
+/// 可找。事件对两者只带一个字段（spec §11），所以这个标记就是那个判别依据。
 pub const TRUNCATED_MARKER: &str = "[truncated: ";
 
-/// Read the project's `AGENTS.md`, if it exists and is not blank.
+/// 读项目的 `AGENTS.md`，如果它存在且不是空白。
 ///
-/// Absence is not an error: a repository without project rules simply has no
-/// pinned injection. Unreadable files behave the same way rather than stopping
-/// the session before it starts.
+/// 不存在不是错误：一个没有项目规则的仓库就是没有钉住的注入而已。读不出来的文件行为相同，而不是
+/// 在会话开始之前就把它停掉。
 pub fn load_agents_md(cwd: &Path) -> Option<String> {
     let text = std::fs::read_to_string(cwd.join(AGENTS_MD)).ok()?;
     (!text.trim().is_empty()).then_some(text)

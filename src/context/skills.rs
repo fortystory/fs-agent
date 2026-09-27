@@ -1,29 +1,23 @@
-//! Skills: progressive-disclosure instruction packs (spec §9).
+//! 技能：按需披露的指令包（spec §9）。
 //!
-//! A skill is a directory containing `SKILL.md`: a YAML frontmatter block with a
-//! `name` and a `description`, plus a Markdown body of instructions. The cheap
-//! half — the catalog of `<name>: <description>` lines — is pinned into the head
-//! of the context and is present every turn; the expensive half is loaded on
-//! demand by the built-in `skill(name)` tool and lands on the stream as an
-//! ordinary tool result appended at the tail, so the cached prefix never moves.
+//! 一个技能是一个含 `SKILL.md` 的目录：一段带 `name` 与 `description` 的 YAML frontmatter，加上
+//! 一段 Markdown 指令正文。便宜的那一半 —— `<name>: <description>` 那份清单 —— 被钉在上下文头部、
+//! 每一回合都在场；贵的那一半由内建的 `skill(name)` 工具按需加载，作为一条普通的工具结果追加在
+//! 尾部，所以缓存前缀永远不动。
 //!
-//! Discovery follows the de-facto standard, project level before user level and
-//! three roots each (`.fs-agent` > `.agents` > `.claude` under the cwd, then
-//! `~/.config/fs-agent` > `~/.agents` > `~/.claude`): a machine that already has
-//! a `.claude` or `.agents` library gets it for free. The first root that defines
-//! a name wins.
+//! 发现遵循事实标准：项目级在用户级之前，每级三个根（cwd 下的 `.fs-agent` > `.agents` > `.claude`，
+//! 然后是 `~/.config/fs-agent` > `~/.agents` > `~/.claude`）—— 一台本来就有 `.claude` 或
+//! `.agents` 技能库的机器白得它。先定义某个名字的那个根胜出。
 //!
-//! Three independent budgets, all measured with [`estimate_tokens`]:
+//! 三份互不相干的预算，都用 [`estimate_tokens`] 度量：
 //!
-//! * [`MAX_CATALOG_TOKENS`] caps the pinned description catalog;
-//! * [`MAX_SKILL_TOKENS`] caps one body, which is truncated with a pointer to the
-//!   file rather than refused;
-//! * [`MAX_LOADED_SKILL_TOKENS`] caps the bodies loaded into one request, enforced
-//!   by [`crate::context::trim`] (oldest dropped first).
+//! * [`MAX_CATALOG_TOKENS`] 限制被钉住的那份描述清单；
+//! * [`MAX_SKILL_TOKENS`] 限制单份正文，超了是裁剪并带一个指向该文件的指针，而不是拒绝；
+//! * [`MAX_LOADED_SKILL_TOKENS`] 限制一次请求里加载进来的正文总量，由 [`crate::context::trim`]
+//!   强制（最旧的先丢）。
 //!
-//! A `disable-model-invocation: true` skill is invisible to the model: it is
-//! absent from the catalog and [`Skills::load`] refuses it by name, so guessing a
-//! name cannot get around the flag.
+//! 一个 `disable-model-invocation: true` 的技能对模型是不可见的：它不在清单里，而 [`Skills::load`]
+//! 按名字拒掉它，所以猜一个名字也绕不过这个旗标。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -32,44 +26,41 @@ use crate::events::{Event, EventPayload};
 
 use super::{estimate_tokens, CHARS_PER_TOKEN};
 
-/// The built-in tool that loads a skill body. Named once here, because the
-/// skills module owns what "loading a skill" means: the tool, the sticky drop
-/// class and the recomputed loaded set all have to agree on the name.
+/// 加载一份技能正文的那个内建工具。只在这里命名一次，因为「加载一个技能」意味着什么由技能模块
+/// 拥有：工具、黏性丢弃类别与重算出来的已加载集合，都必须对这个名字达成一致。
 pub const SKILL_TOOL: &str = "skill";
 
-/// Cap on one loaded skill body (spec §9). Over it, the body is truncated with a
-/// pointer to the full file rather than refused.
+/// 单份已加载技能正文的上限（spec §9）。超了，正文被裁剪并带一个指向全文文件的指针，而不是被拒。
 pub const MAX_SKILL_TOKENS: u64 = 5_000;
 
-/// Cap on the aggregate of loaded skill bodies in one request (spec §9).
-/// Enforced by `trim`: the oldest bodies are dropped first.
+/// 一次请求里已加载技能正文的聚合上限（spec §9）。由 `trim` 强制：最旧的正文先丢。
 pub const MAX_LOADED_SKILL_TOKENS: u64 = 25_000;
 
-/// Cap on the pinned description catalog (spec §9), independent of the other two.
+/// 被钉住的描述清单的上限（spec §9），与另外两条互不相干。
 pub const MAX_CATALOG_TOKENS: u64 = 3_000;
 
-/// The file every skill directory must contain.
+/// 每个技能目录都必须含有的那个文件。
 const SKILL_FILE: &str = "SKILL.md";
 
-/// Project-level roots, most specific first (spec §9).
+/// 项目级的根，最具体的在前（spec §9）。
 const PROJECT_ROOTS: [&str; 3] = [".fs-agent", ".agents", ".claude"];
 
-/// User-level roots, relative to the injected home, most specific first.
+/// 用户级的根，相对注入进来的家目录，最具体的在前。
 const USER_ROOTS: [&str; 3] = [".config/fs-agent", ".agents", ".claude"];
 
-/// One discovered skill.
+/// 一个已发现的技能。
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub name: String,
     pub description: String,
-    /// `disable-model-invocation: true`: the model can neither see nor load it.
+    /// `disable-model-invocation: true`：模型既看不见它、也加载不了它。
     pub model_invocation_disabled: bool,
-    /// The `SKILL.md` this came from; the pointer a truncated body names.
+    /// 这一份来自的那个 `SKILL.md`；一份被裁剪的正文会点名它。
     pub path: PathBuf,
     body: String,
 }
 
-/// Why a skill cannot be loaded.
+/// 一个技能为什么加载不了。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SkillError {
     #[error(
@@ -83,19 +74,16 @@ pub enum SkillError {
     Disabled { name: String },
 }
 
-/// The discovered skills, in precedence order. A value: discovered once at
-/// assembly, carried by the session, and never mutated.
+/// 已发现的技能，按优先级顺序。是一个值：组装期发现一次、会话携带它、永不改动。
 #[derive(Debug, Clone, Default)]
 pub struct Skills {
     skills: Vec<Skill>,
 }
 
 impl Skills {
-    /// Scan the project and user roots, most specific first, and keep the first
-    /// definition of each name (spec §9).
+    /// 扫项目级与用户级的根，最具体的在前，并为每个名字保留第一个定义（spec §9）。
     ///
-    /// A missing or unreadable root contributes nothing: a repository without a
-    /// skills directory simply has no skills.
+    /// 缺失或读不出来的根什么都贡献不了：一个没有技能目录的仓库就是没有技能而已。
     pub fn discover(cwd: &Path, home: Option<&Path>) -> Self {
         let mut roots: Vec<PathBuf> = PROJECT_ROOTS
             .iter()
@@ -121,7 +109,7 @@ impl Skills {
         self.skills.is_empty()
     }
 
-    /// Every discovered name, in precedence order.
+    /// 每一个已发现的名字，按优先级顺序。
     pub fn names(&self) -> Vec<&str> {
         self.skills
             .iter()
@@ -129,13 +117,12 @@ impl Skills {
             .collect()
     }
 
-    /// Every discovered skill as `(name, description)`, in precedence order: what a
-    /// front end offers as `/<name>`, with the line that says what it is for.
+    /// 每一个已发现的技能，形如 `(名字, 描述)`，按优先级顺序：前端把它当作 `/<名字>` 提供，连同
+    /// 那句说明它是干什么的。
     ///
-    /// Unlike [`catalog`](Self::catalog) this keeps `disable-model-invocation` skills.
-    /// A front end's `/` menu is the **user's** list, and those skills exist only for
-    /// the user — a menu that dropped them would drop exactly the names the model
-    /// cannot offer on its own.
+    /// 与 [`catalog`](Self::catalog) 不同，这一份保留 `disable-model-invocation` 的技能。前端的
+    /// `/` 菜单是**用户的**列表，而那些技能只对用户存在 —— 一个把它们丢掉的菜单，恰好丢掉的就是
+    /// 模型自己提供不了的那些名字。
     pub fn entries(&self) -> Vec<(&str, &str)> {
         self.skills
             .iter()
@@ -147,18 +134,17 @@ impl Skills {
         self.skills.iter().find(|skill| skill.name == name)
     }
 
-    /// Look one up by name, or the error that names it.
+    /// 按名字查一个，或者给出点名它的那个错误。
     fn lookup(&self, name: &str) -> Result<&Skill, SkillError> {
         self.get(name).ok_or_else(|| SkillError::Unknown {
             name: name.to_owned(),
         })
     }
 
-    /// The body to put in a tool result, capped at [`MAX_SKILL_TOKENS`].
+    /// 放进工具结果的那份正文，以 [`MAX_SKILL_TOKENS`] 为上限。
     ///
-    /// Over cap the body is truncated and the truncation names the file, so the
-    /// model can read the rest; refusing instead would make a slightly long skill
-    /// unusable.
+    /// 超上限时正文被裁剪，而裁剪里点名那个文件，好让模型去读剩下的；改成拒绝会让一个稍微长一点的
+    /// 技能变得不可用。
     pub fn load(&self, name: &str) -> Result<String, SkillError> {
         let skill = self.lookup(name)?;
         if skill.model_invocation_disabled {
@@ -169,27 +155,23 @@ impl Skills {
         Ok(capped_body(skill))
     }
 
-    /// The body to put in the context when the **user** asks for a skill, as
-    /// `/<name>` does (spec §9).
+    /// **用户**要一个技能时放进上下文的那份正文，`/<名字>` 就是这么做的（spec §9）。
     ///
-    /// Unlike [`Skills::load`] this ignores `disable-model-invocation`: the flag
-    /// keeps the skill away from the *model's* guesswork, and the user naming it
-    /// is exactly the invocation it reserves. The body is capped the same way.
+    /// 与 [`Skills::load`] 不同，它不管 `disable-model-invocation`：那个旗标把技能挡在*模型的*猜测
+    /// 之外，而用户点它的名正是它所保留的那种调用。正文用同样的方式设上限。
     pub fn invoke(&self, name: &str) -> Result<String, SkillError> {
         Ok(capped_body(self.lookup(name)?))
     }
 
-    /// The pinned description catalog, or `None` when no skill is invocable.
+    /// 被钉住的那份描述清单；没有任何技能可调用时是 `None`。
     ///
-    /// Present every turn and byte-stable across turns: this text is part of the
-    /// cached prefix.
+    /// 每一回合都在场，而且跨回合逐字节稳定：这段文本是缓存前缀的一部分。
     pub fn catalog(&self) -> Option<String> {
         self.render_catalog(MAX_CATALOG_TOKENS)
     }
 
-    /// The catalog rendered within an explicit budget. Whole entries are kept and
-    /// late ones are omitted with a count, so the cap is a bound rather than a cut
-    /// through a line.
+    /// 在显式预算内渲染出来的清单。整个条目保留，靠后的条目连同计数一起省掉，于是这条上限是一个
+    /// 界，而不是从行中间切一刀。
     pub fn render_catalog(&self, budget: u64) -> Option<String> {
         const HEADER: &str =
             "Skills available on demand (call the `skill` tool with a name when its description \
@@ -208,8 +190,8 @@ impl Skills {
             return None;
         }
 
-        // Largest prefix that fits, trying the most entries first. The estimate is
-        // monotonic in length, so this finds the biggest catalog within budget.
+        // 装得下的最大前缀，从保留最多条目开始试。估计值对长度单调，所以这找到的是预算内最大的
+        // 那份清单。
         for kept in (0..=lines.len()).rev() {
             let text = catalog_text(HEADER, &lines[..kept], lines.len() - kept);
             if estimate_tokens(&text) <= budget {
@@ -249,11 +231,10 @@ fn capped_body(skill: &Skill) -> String {
     format!("{head}{note}")
 }
 
-/// The skills the model actually loaded, recomputed from the stream (spec §9):
-/// every completed `skill(name)` call, in first-load order.
+/// 模型实际加载过的那些技能，从流上重算（spec §9）：每一次完成的 `skill(name)` 调用，按首次加载
+/// 顺序。
 ///
-/// This is a query, not state, so a future compaction can re-inject the loaded
-/// set without a new field on the session.
+/// 这是一个查询，不是状态，所以将来的一次压缩可以重新注入这个已加载集合，而不必在会话上新增字段。
 pub fn loaded_skill_names(events: &[Event]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let mut pending: BTreeMap<String, String> = BTreeMap::new();
@@ -285,7 +266,7 @@ pub fn loaded_skill_names(events: &[Event]) -> Vec<String> {
     names
 }
 
-/// Every skill directory under one root, in stable name order.
+/// 一个根下的每一个技能目录，按稳定的名字顺序。
 fn skills_in_root(root: &Path) -> Vec<Skill> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
@@ -302,15 +283,14 @@ fn skills_in_root(root: &Path) -> Vec<Skill> {
         .collect()
 }
 
-/// Parse one skill directory, or `None` when it is not a usable skill.
+/// 解析一个技能目录；它不是一个可用技能时返回 `None`。
 fn skill_at(directory: &Path) -> Option<Skill> {
     let path = directory.join(SKILL_FILE);
     let text = std::fs::read_to_string(&path).ok()?;
     let fallback_name = directory.file_name()?.to_string_lossy().into_owned();
     let (frontmatter, body) = split_frontmatter(&text)?;
 
-    // The description is what the catalog is made of: without one the skill
-    // cannot be offered, so a file without a description is not a skill.
+    // 描述就是清单的原料：没有它这个技能就无法被提供，所以一个没有描述的文件不是技能。
     let description = field(&frontmatter, "description")?;
     if description.trim().is_empty() {
         return None;
@@ -331,7 +311,7 @@ fn skill_at(directory: &Path) -> Option<Skill> {
     })
 }
 
-/// Split a leading `---` frontmatter block from the body.
+/// 把开头那段 `---` frontmatter 块与正文分开。
 fn split_frontmatter(text: &str) -> Option<(String, String)> {
     let mut lines = text.lines();
     if lines.next()?.trim_end() != "---" {
@@ -356,8 +336,8 @@ fn split_frontmatter(text: &str) -> Option<(String, String)> {
     in_body.then_some((frontmatter, body))
 }
 
-/// One scalar frontmatter field. Keys are simple; a value may be bare, or
-/// wrapped in single or double quotes (with `\"`/`\\` escaped in the latter).
+/// 一个标量 frontmatter 字段。键很简单；值可以不带引号，也可以裹在单引号或双引号里（后者里的
+/// `\"` / `\\` 是转义的）。
 fn field(frontmatter: &str, key: &str) -> Option<String> {
     frontmatter.lines().find_map(|line| {
         let (candidate, value) = line.split_once(':')?;
