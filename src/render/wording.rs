@@ -1707,7 +1707,7 @@ pub fn replay_tool_call(name: &str, arguments: &str) -> String {
     format!("→ 调用 {name}({arguments})")
 }
 
-// --- `sessions stats` 的标签 ---
+// --- `sessions stats` 的标签 -----------------------------------------------
 
 /// 会话级的总计行。
 pub fn stats_session(
