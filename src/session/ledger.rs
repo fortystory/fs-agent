@@ -48,11 +48,7 @@ pub fn for_day(store: &SessionStore, day: NaiveDate) -> io::Result<DayLedger> {
     // 在当天开始之前写下的文件不可能装着当天的事件，所以这是候选过滤、绝不是正确性依赖。它走
     // store 自己的 `modified`，那条「读不出就算古老」的约定正是 store 其余部分排序时用的那
     // 一条。
-    let day_start = SystemTime::from(
-        day.and_hms_opt(0, 0, 0)
-            .expect("每一天都有午夜")
-            .and_utc(),
-    );
+    let day_start = SystemTime::from(day.and_hms_opt(0, 0, 0).expect("每一天都有午夜").and_utc());
     let mut ledger = DayLedger {
         day,
         sessions: 0,

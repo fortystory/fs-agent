@@ -4298,10 +4298,7 @@ mod tests {
                     .take(MARK_DASH_WIDTH)
                     .collect();
                 if index == expected_row {
-                    assert_eq!(
-                        cell, "▀▀▀▀",
-                        "帧 {frame}：横条落在第 {expected_row} 行"
-                    );
+                    assert_eq!(cell, "▀▀▀▀", "帧 {frame}：横条落在第 {expected_row} 行");
                 } else {
                     assert_eq!(
                         cell.trim(),

@@ -651,10 +651,7 @@ fn the_long_help_texts_are_chinese_and_keep_their_structure() {
     let discuss = wording::help_discuss();
     assert!(discuss.contains("fs-agent discuss"), "{discuss}");
     assert!(discuss.contains("[discussion] debaters"), "{discuss}");
-    assert!(
-        discuss.contains("同厂商"),
-        "同厂商被记录为允许"
-    );
+    assert!(discuss.contains("同厂商"), "同厂商被记录为允许");
     assert!(discuss.contains("CONCLUSION:"), "{discuss}");
     assert!(discuss.contains("3 次调用"), "{discuss}");
     assert!(discuss.contains("sessions show"), "{discuss}");

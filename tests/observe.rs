@@ -579,10 +579,7 @@ fn stats_price_the_session_only_when_the_caller_names_the_model() {
 
     let stats = observe::stats(&log.events(), Some(&cost));
     let expected = 600_000.0 * 1.0 / 1e6 + 400_000.0 * 0.1 / 1e6 + 100_000.0 * 2.0 / 1e6;
-    let actual = stats
-        .session
-        .cost
-        .expect("模型被点了名，所以有成本");
+    let actual = stats.session.cost.expect("模型被点了名，所以有成本");
     assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     assert_eq!(stats.speakers[0].speaker, kimi());
 }

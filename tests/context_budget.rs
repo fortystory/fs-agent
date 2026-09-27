@@ -345,10 +345,7 @@ fn truncation_never_grows_the_stream() {
         spilled.preview.chars().count() <= text.chars().count(),
         "预览绝不能比它替换掉的正文更长"
     );
-    assert_eq!(
-        spilled.preview, text,
-        "正文够小，换成指针反而会把流撑大"
-    );
+    assert_eq!(spilled.preview, text, "正文够小，换成指针反而会把流撑大");
 }
 
 #[test]

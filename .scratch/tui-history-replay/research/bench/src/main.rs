@@ -45,7 +45,10 @@ fn main() {
         }
         Some("synth") => {
             let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(50_000);
-            let out = args.get(2).cloned().unwrap_or_else(|| "/tmp/synth.jsonl".to_owned());
+            let out = args
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| "/tmp/synth.jsonl".to_owned());
             let events = synth(n);
             let mut body = String::new();
             for event in &events {
@@ -102,8 +105,10 @@ fn replay(events: &[Event], batch: usize) {
         blocks += 1;
         source_lines += render_block(&block).len();
     }
-    println!("blocks={blocks} source_lines={source_lines} caps_flushed={}",
-        source_lines / CAP);
+    println!(
+        "blocks={blocks} source_lines={source_lines} caps_flushed={}",
+        source_lines / CAP
+    );
 
     // 2) Apply-only: the real `TuiState::apply` for every event, no frames.
     let mut state = TuiState::new(facts());
@@ -115,7 +120,8 @@ fn replay(events: &[Event], batch: usize) {
 
     // 3) Apply + one drawn frame per batch: what the `select!` loop actually does.
     let mut state = TuiState::new(facts());
-    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, FRAME_HEIGHT)).expect("terminal");
+    let mut terminal =
+        Terminal::new(TestBackend::new(FRAME_WIDTH, FRAME_HEIGHT)).expect("terminal");
     let start = Instant::now();
     let mut frames = 0usize;
     for chunk in events.chunks(batch) {
@@ -245,7 +251,12 @@ fn synth(n: usize) -> Vec<Event> {
             },
             &mut events,
         );
-        push(EventPayload::TurnEnded { reason: StopReason::Completed }, &mut events);
+        push(
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+            &mut events,
+        );
         iteration += 1;
     }
     events.truncate(n);

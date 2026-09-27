@@ -240,11 +240,7 @@ async fn incremental_text_reaches_the_renderer_but_not_the_event_log() {
             )
         })
         .collect();
-    assert_eq!(
-        completed.len(),
-        1,
-        "三条增量落成一条完成单元，而不是三条"
-    );
+    assert_eq!(completed.len(), 1, "三条增量落成一条完成单元，而不是三条");
     match &completed[0].payload {
         EventPayload::MessageCompleted { text, .. } => assert_eq!(text, "alphabet"),
         other => panic!("期望 MessageCompleted，实际得到 {other:?}"),

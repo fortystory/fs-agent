@@ -166,11 +166,7 @@ async fn a_targeted_round_replays_to_what_was_sent_and_still_reveals_the_first_r
     fixture.harness.shutdown().await;
 
     let kimi_sent = fixture.kimi.requests();
-    assert_eq!(
-        kimi_sent.len(),
-        2,
-        "分歧的讨论会开出第二轮"
-    );
+    assert_eq!(kimi_sent.len(), 2, "分歧的讨论会开出第二轮");
     assert_eq!(
         replay(&events, &kimi(), Some(1), &caps()).unwrap(),
         kimi_sent[0].messages

@@ -298,14 +298,20 @@ fn transcript_lines(f: &Facts) -> Vec<String> {
             "{} 把渲染层改成四分区全屏布局，右栏放模型与 token。",
             w::SPEAKER_USER
         ),
-        format!("{} 好的，先读 src/render/tui.rs 看现在的 draw_live。", w::SPEAKER_MAIN),
+        format!(
+            "{} 好的，先读 src/render/tui.rs 看现在的 draw_live。",
+            w::SPEAKER_MAIN
+        ),
         w::tool_call("read", "path=\"src/render/tui.rs\""),
         w::TOOL_COMPLETED.to_owned(),
         w::tool_output_preview(
             "pub fn paint_scrollback(lines: &[Line<'_>], buf: &mut Buffer) { … }",
             24,
         ),
-        format!("{} 现在把 draw_live 拆成四块，用一个 plan() 算出每个 Rect。", w::SPEAKER_MAIN),
+        format!(
+            "{} 现在把 draw_live 拆成四块，用一个 plan() 算出每个 Rect。",
+            w::SPEAKER_MAIN
+        ),
         w::turn_started(1),
         w::CONTEXT_PLAN_MODE.to_owned(),
         w::HISTORY_MODE_CHANGE.to_owned(),

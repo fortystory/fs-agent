@@ -449,10 +449,7 @@ async fn scenario_5_a_pre_hook_failure_is_fail_closed_and_the_turn_continues() {
     let outcome = fixture.run_turn("write it").await;
     fixture.shutdown().await;
 
-    assert!(
-        !fixture.exists("notes.txt"),
-        "fail-closed：工具从没跑过"
-    );
+    assert!(!fixture.exists("notes.txt"), "fail-closed：工具从没跑过");
     let results = fixture.results();
     assert_eq!(results.len(), 1, "这条不变量熬过了这次失败");
     assert!(!results[0].1);
@@ -521,10 +518,7 @@ async fn scenario_6_post_hook_feedback_is_merged_into_the_tool_message() {
     let tool_messages = tool_message_contents(&requests[1]);
     assert_eq!(tool_messages.len(), 1);
     let merged = &tool_messages[0];
-    assert!(
-        merged.contains("hello"),
-        "结果还在：{merged}"
-    );
+    assert!(merged.contains("hello"), "结果还在：{merged}");
     assert!(
         merged.contains("[hook feedback] cargo test failed: 3 tests"),
         "反馈被合进了同一条消息：{merged}"
@@ -548,11 +542,7 @@ async fn scenario_7_a_skipped_call_still_gets_exactly_one_result() {
     fixture.shutdown().await;
 
     let results = fixture.results();
-    assert_eq!(
-        results.len(),
-        1,
-        "工具没跑，但结果存在"
-    );
+    assert_eq!(results.len(), 1, "工具没跑，但结果存在");
     assert!(!results[0].1);
     assert!(results[0].2.clone().unwrap().contains("hook skipped"));
     assert_eq!(
@@ -582,10 +572,7 @@ async fn a_pre_hook_timeout_is_fail_closed_too() {
     fixture.run_turn("write it").await;
     fixture.shutdown().await;
 
-    assert!(
-        !fixture.exists("notes.txt"),
-        "fail-closed：工具从没跑过"
-    );
+    assert!(!fixture.exists("notes.txt"), "fail-closed：工具从没跑过");
     assert_eq!(
         fixture.hook_events(),
         vec![(
@@ -660,11 +647,7 @@ async fn a_hook_cannot_relax_the_rm_circuit_breaker() {
         "{:?}",
         results[0].2
     );
-    assert_eq!(
-        fixture.asked_count(),
-        0,
-        "拒绝永远不会被降级成一次询问"
-    );
+    assert_eq!(fixture.asked_count(), 0, "拒绝永远不会被降级成一次询问");
     assert_eq!(asker.requests().len(), 0);
     assert_eq!(fixture.decisions()[0].0, Decision::Deny);
     assert_eq!(fixture.decisions()[0].1, DecisionSource::Policy);

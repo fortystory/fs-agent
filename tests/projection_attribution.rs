@@ -152,11 +152,7 @@ fn another_speakers_text_is_kept_but_its_tool_round_trip_shrinks_to_one_summary_
 
     let messages = project(&log.events(), &kimi(), &caps());
 
-    assert_eq!(
-        messages.len(),
-        1,
-        "只有那一块合并后的别人：{messages:?}"
-    );
+    assert_eq!(messages.len(), 1, "只有那一块合并后的别人：{messages:?}");
     let user = user_messages(&messages)[0];
     let content = text_of(user);
     assert!(content.contains("I checked the file"), "{content}");
@@ -168,10 +164,7 @@ fn another_speakers_text_is_kept_but_its_tool_round_trip_shrinks_to_one_summary_
         content.contains("轮 1") && content.contains("deepseek"),
         "每一段别人的发言都带归属：{content}"
     );
-    assert!(
-        !content.contains("SECRET-BODY"),
-        "结果正文不被投影"
-    );
+    assert!(!content.contains("SECRET-BODY"), "结果正文不被投影");
     assert!(
         !content.contains("SECRET-THINK"),
         "另一个发言者的推理不被投影"
@@ -342,10 +335,7 @@ fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_s
     let for_kimi = project(&log.events(), &kimi(), &caps());
     let for_deepseek = project(&log.events(), &deepseek(), &caps());
 
-    assert_ne!(
-        for_kimi, for_deepseek,
-        "同一批事件必须投影成不同的窗口"
-    );
+    assert_ne!(for_kimi, for_deepseek, "同一批事件必须投影成不同的窗口");
 
     // 投影是一个纯函数：重跑一遍逐字节稳定，
     // 而「能从流 + 规则重算」买到的就是这个。
@@ -467,11 +457,7 @@ fn a_context_injection_is_pinned_and_does_not_merge() {
     let messages = project(&log.events(), &synthesizer(), &caps());
     let users = user_messages(&messages);
 
-    assert_eq!(
-        users.len(),
-        3,
-        "这条注入保持是它自己的消息：{messages:?}"
-    );
+    assert_eq!(users.len(), 3, "这条注入保持是它自己的消息：{messages:?}");
     assert_eq!(text_of(users[1]), "read PLAN.md before acting");
     assert!(text_of(users[0]).contains("before"));
     assert!(text_of(users[2]).contains("after"));

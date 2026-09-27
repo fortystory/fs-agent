@@ -149,10 +149,7 @@ fn the_catalog_lists_each_invocable_skill_as_name_colon_description() {
         "{catalog}"
     );
     assert!(catalog.contains("- beta: does the beta thing"), "{catalog}");
-    assert!(
-        catalog.contains(SKILL_TOOL),
-        "技能清单点了加载工具的名"
-    );
+    assert!(catalog.contains(SKILL_TOOL), "技能清单点了加载工具的名");
     assert!(
         estimate_tokens(&catalog) <= MAX_CATALOG_TOKENS,
         "技能清单有自己独立的上限"
@@ -176,10 +173,7 @@ fn the_catalog_omits_late_entries_rather_than_growing_past_its_budget() {
     let budget = 80;
     let catalog = skills.render_catalog(budget).expect("表头装得下");
     assert!(estimate_tokens(&catalog) <= budget, "{catalog}");
-    assert!(
-        catalog.contains("omitted"),
-        "裁剪是明说的：{catalog}"
-    );
+    assert!(catalog.contains("omitted"), "裁剪是明说的：{catalog}");
     assert!(
         // 目录按名字顺序访问，所以 `two` 排在最后，是那条必须
         // 整条略去、而不是从中间切开的条目。
@@ -764,10 +758,7 @@ async fn the_user_path_reaches_a_model_disabled_skill() {
             )
         })
         .expect("这份正文以一条注入的 user 消息到达了模型");
-    assert!(
-        at > 0,
-        "会话中途的注入不是那个被钉住的头部：{messages:?}"
-    );
+    assert!(at > 0, "会话中途的注入不是那个被钉住的头部：{messages:?}");
     assert!(
         matches!(
             messages.last(),

@@ -177,11 +177,7 @@ async fn cycling_moves_the_policy_and_writes_nothing_to_the_stream() {
         Mode::Readonly,
         "按三次让会话回到它开始的地方"
     );
-    assert_eq!(
-        fixture.events().len(),
-        before,
-        "手势没有碰过历史"
-    );
+    assert_eq!(fixture.events().len(), before, "手势没有碰过历史");
     fixture.harness.shutdown().await;
 }
 
@@ -206,10 +202,7 @@ async fn a_continue_returns_to_the_configured_mode() {
     // 而且模式也不是流上任何地方的字段。
     for event in resumed.events() {
         let value = serde_json::to_value(&event).unwrap();
-        assert!(
-            !has_key_named_mode(&value),
-            "没有任何事件带着模式：{value}"
-        );
+        assert!(!has_key_named_mode(&value), "没有任何事件带着模式：{value}");
     }
     resumed.harness.shutdown().await;
 }
@@ -304,17 +297,10 @@ async fn an_executor_inherits_the_session_mode() {
 
     let outcome = fixture.harness.run_turn("delegate it").await.unwrap();
     assert_eq!(outcome.reason, StopReason::Completed);
-    assert!(
-        !fixture.exists("notes.txt"),
-        "执行者继承了这一档模式"
-    );
+    assert!(!fixture.exists("notes.txt"), "执行者继承了这一档模式");
 
     let decisions = fixture.decisions();
-    assert_eq!(
-        decisions.len(),
-        2,
-        "先是派发，然后是执行者那次写"
-    );
+    assert_eq!(decisions.len(), 2, "先是派发，然后是执行者那次写");
     assert_eq!(decisions[0].0, Decision::Allow, "派发是一次读");
     assert_eq!(decisions[1].0, Decision::Deny);
     assert!(

@@ -1140,10 +1140,7 @@ async fn the_four_round_reasons_render_distinguishably() {
         .map(|reason| fs_agent::render::wording::round_ended(2, *reason))
         .collect();
     for line in &expected {
-        assert!(
-            rendered.contains(line.as_str()),
-            "{rendered} 里缺了 {line}"
-        );
+        assert!(rendered.contains(line.as_str()), "{rendered} 里缺了 {line}");
     }
     let distinct: std::collections::BTreeSet<&String> = expected.iter().collect();
     assert_eq!(

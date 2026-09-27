@@ -142,11 +142,7 @@ fn an_array_or_object_is_one_element_not_an_expansion() {
     let argv = tool
         .command(&serde_json::json!({ "text": ["a", "b", "c"] }))
         .expect("argv");
-    assert_eq!(
-        argv.len(),
-        3,
-        "模板里一个元素仍然对应一个元素：{argv:?}"
-    );
+    assert_eq!(argv.len(), 3, "模板里一个元素仍然对应一个元素：{argv:?}");
     assert_eq!(
         argv[1],
         serde_json::to_string(&serde_json::json!(["a", "b", "c"])).unwrap()

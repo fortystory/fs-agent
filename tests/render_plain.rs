@@ -530,12 +530,6 @@ async fn a_permission_question_names_the_tool_and_the_call() {
             && line.contains("file_path=a.txt")),
         "这个问句点出了工具与那次调用：{text:?}"
     );
-    assert!(
-        !text.contains("perm-1"),
-        "请求 id 没有露面：{text:?}"
-    );
-    assert!(
-        !text.contains("call-5"),
-        "调用 id 没有露面：{text:?}"
-    );
+    assert!(!text.contains("perm-1"), "请求 id 没有露面：{text:?}");
+    assert!(!text.contains("call-5"), "调用 id 没有露面：{text:?}");
 }

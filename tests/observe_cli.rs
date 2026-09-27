@@ -232,14 +232,8 @@ fn stats_reports_the_silent_quantities_and_prices_the_named_model() {
     assert_eq!(code, ExitCode::SUCCESS);
     // 给人看的那一视图会点名它量到的事实；确切的数值要
     // 从下面的 JSON 形态里读回来。
-    assert!(
-        out.contains("line-trim"),
-        "匹配层级被报出来了：{out}"
-    );
-    assert!(
-        out.contains("deepseek"),
-        "缺席的讨论者被点了名：{out}"
-    );
+    assert!(out.contains("line-trim"), "匹配层级被报出来了：{out}");
+    assert!(out.contains("deepseek"), "缺席的讨论者被点了名：{out}");
     assert!(
         out.contains("deepseek-flash"),
         "被定价的模型被点了名：{out}"

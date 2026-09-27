@@ -321,10 +321,7 @@ fn an_empty_stream_never_enters_the_replay_state() {
     assert!(!state.replay_pending(), "空历史不是一次重放");
 
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("恢复"),
-        "也不画进度行：{text}"
-    );
+    assert!(!text.contains("恢复"), "也不画进度行：{text}");
 }
 
 #[test]
@@ -350,10 +347,7 @@ fn a_replay_in_flight_shows_partial_history_and_the_progress_count() {
 
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("恢复"),
-        "历史铺完之后进度行就没了：{text}"
-    );
+    assert!(!text.contains("恢复"), "历史铺完之后进度行就没了：{text}");
     assert!(
         text.contains("ctrl-c/ctrl-d 退出"),
         "而普通状态行回来了：{text}"
@@ -369,10 +363,7 @@ fn a_history_that_ends_exactly_on_a_batch_boundary_still_converges() {
     run_replay(&mut state);
     assert!(!state.replay_pending(), "重放自己关上了");
     let text = screen(120, 20, &mut state).join("\n");
-    assert!(
-        !text.contains("恢复"),
-        "也没在身后留下进度行：{text}"
-    );
+    assert!(!text.contains("恢复"), "也没在身后留下进度行：{text}");
 }
 
 #[test]
@@ -388,10 +379,7 @@ fn the_progress_line_degrades_at_the_minimum_frame() {
         text.contains("恢复中") && text.contains("/600") && !text.contains("恢复中 600/600"),
         "最小帧下计数活下来了：{text}"
     );
-    assert!(
-        !text.contains("恢复历史"),
-        "整个短语活不下来：{text}"
-    );
+    assert!(!text.contains("恢复历史"), "整个短语活不下来：{text}");
 }
 
 #[test]
@@ -428,23 +416,15 @@ fn enter_does_not_submit_while_a_replay_is_in_flight() {
         state.key(Key::Char(ch));
     }
     state.key(Key::Enter);
-    assert!(
-        answer.try_recv().is_err(),
-        "历史还在到达的时候什么都没提交"
-    );
+    assert!(answer.try_recv().is_err(), "历史还在到达的时候什么都没提交");
 
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("half typed"),
-        "而草稿还在那里：{text}"
-    );
+    assert!(text.contains("half typed"), "而草稿还在那里：{text}");
 
     state.key(Key::Enter);
     assert_eq!(
-        answer
-            .try_recv()
-            .expect("重放结束后提交了"),
+        answer.try_recv().expect("重放结束后提交了"),
         Some("half typed".to_owned())
     );
 }
@@ -468,10 +448,7 @@ fn ctrl_c_quits_during_a_replay_and_ctrl_d_and_esc_are_inert() {
     }
     state.key(Key::Esc);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("清空"),
-        "不提清空草稿的问题：{text}"
-    );
+    assert!(!text.contains("清空"), "不提清空草稿的问题：{text}");
 
     state.key(Key::CtrlC);
     assert!(state.should_quit(), "Ctrl-C 是重放的出路");
@@ -693,11 +670,7 @@ fn the_rail_grows_with_the_replayed_history() {
         Some('┃'),
         "而最新那个回合是焦点：{shape}"
     );
-    assert_eq!(
-        shape.matches('┃').count(),
-        1,
-        "恰好一个焦点格：{shape}"
-    );
+    assert_eq!(shape.matches('┃').count(), 1, "恰好一个焦点格：{shape}");
 
     // 接缝之后一次实时回合加上它自己的格，于是历史与这场会话共用一根
     // 回合条，而不是另起一根。
@@ -945,10 +918,7 @@ fn a_history_result_without_the_truncation_note_is_its_own_full_text() {
         text.contains("interrupted while this call was in flight"),
         "事件里的文本被显示出来：{text}"
     );
-    assert!(
-        !text.contains("全文不可用"),
-        "也没有谎称降级：{text}"
-    );
+    assert!(!text.contains("全文不可用"), "也没有谎称降级：{text}");
 }
 
 #[test]

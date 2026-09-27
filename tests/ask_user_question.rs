@@ -51,10 +51,7 @@ impl ScriptedQuestions {
     }
 
     fn asked(&self) -> Vec<Vec<UserQuestion>> {
-        self.asked
-            .lock()
-            .expect("脚本化问题端口已中毒")
-            .clone()
+        self.asked.lock().expect("脚本化问题端口已中毒").clone()
     }
 }
 
@@ -220,10 +217,7 @@ async fn an_empty_question_list_is_refused() {
         error.to_string().contains("at least one question"),
         "{error}"
     );
-    assert!(
-        port.asked().is_empty(),
-        "用户永远不会看到一份空问卷"
-    );
+    assert!(port.asked().is_empty(), "用户永远不会看到一份空问卷");
 }
 
 #[tokio::test]
@@ -248,9 +242,7 @@ async fn duplicate_question_ids_are_refused() {
             {"id": "same", "question": "two?"}
         ]
     });
-    let error = call(args, Some(&port))
-        .await
-        .expect_err("重复的 id 被拒");
+    let error = call(args, Some(&port)).await.expect_err("重复的 id 被拒");
     assert!(
         error.to_string().contains("duplicate question id"),
         "{error}"

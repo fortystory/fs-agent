@@ -113,9 +113,8 @@ impl FileSymbols {
             .filter(|(_, kind)| *kind == SymbolKind::Method)
             .map(|(name, _)| name.clone())
             .collect();
-        self.definitions.retain(|(name, kind)| {
-            !(*kind == SymbolKind::Function && has_method.contains(name))
-        });
+        self.definitions
+            .retain(|(name, kind)| !(*kind == SymbolKind::Function && has_method.contains(name)));
     }
 }
 
@@ -259,7 +258,9 @@ pub fn rank(
 ) -> Vec<Scored> {
     let mut definition_counts: BTreeMap<&str, u32> = BTreeMap::new();
     for definition in definitions {
-        *definition_counts.entry(definition.name.as_str()).or_default() += 1;
+        *definition_counts
+            .entry(definition.name.as_str())
+            .or_default() += 1;
     }
 
     let mut scored: Vec<Scored> = definitions
@@ -302,7 +303,10 @@ fn relevance_of(definition: &Definition, context: &RankContext) -> Relevance {
             .recent_paths
             .iter()
             .any(|path| path == &definition.file),
-        recent_identifier: context.recent_identifiers.iter().any(|token| token == &name),
+        recent_identifier: context
+            .recent_identifiers
+            .iter()
+            .any(|token| token == &name),
     }
 }
 
@@ -430,9 +434,9 @@ impl RepoMap {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for file in &files {
-            let fresh = cache.get(&file.path).filter(|cached| {
-                cached.modified == file.modified && cached.len == file.len
-            });
+            let fresh = cache
+                .get(&file.path)
+                .filter(|cached| cached.modified == file.modified && cached.len == file.len);
             let file_symbols = match fresh {
                 Some(cached) => cached.symbols.clone(),
                 None => {
@@ -522,9 +526,7 @@ fn extract_with(text: &str, parser: &mut Parser, query: &Query) -> FileSymbols {
 }
 
 /// 把逐文件的符号折成每一条定义，外加一张「名字 -> 引用次数」的表。
-fn index(
-    files: &[(PathBuf, FileSymbols)],
-) -> (Vec<Definition>, BTreeMap<String, u32>) {
+fn index(files: &[(PathBuf, FileSymbols)]) -> (Vec<Definition>, BTreeMap<String, u32>) {
     let mut definitions = Vec::new();
     let mut references: BTreeMap<String, u32> = BTreeMap::new();
     for (path, symbols) in files {

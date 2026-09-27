@@ -117,10 +117,7 @@ fn the_question_and_its_options_take_over_the_bottom_input_area() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("Which framework?"), "{text}");
-    assert!(
-        text.contains("1. serde"),
-        "选项是带编号的：{text}"
-    );
+    assert!(text.contains("1. serde"), "选项是带编号的：{text}");
     assert!(text.contains("2. manual"), "{text}");
 
     // 它在主列脚下那块输入区里，不是中间的覆盖层：
@@ -168,10 +165,7 @@ fn a_single_select_choice_advances_and_the_footer_pages() {
     let text = rows.join("\n");
     assert!(text.contains("Second?"), "{text}");
     assert!(text.contains("2 / 3"), "{text}");
-    assert!(
-        !text.contains("First?"),
-        "同一时刻屏幕上只有一道题：{text}"
-    );
+    assert!(!text.contains("First?"), "同一时刻屏幕上只有一道题：{text}");
 }
 
 #[test]
@@ -189,25 +183,16 @@ fn submit_is_refused_until_every_question_is_answered_or_skipped() {
     // 确认第一个答案会前进，但在它后面那些题还没处理完时，
     // 绝不能提交。
     state.key(Key::Enter);
-    assert!(
-        answer(&mut rx).is_none(),
-        "还有题没处理，提交被拒"
-    );
+    assert!(answer(&mut rx).is_none(), "还有题没处理，提交被拒");
 
     // 第二个也一样：答案已经作出，提交仍然要另外按一次。
     state.key(Key::Enter);
-    assert!(
-        answer(&mut rx).is_none(),
-        "还有一题没处理，提交被拒"
-    );
+    assert!(answer(&mut rx).is_none(), "还有一题没处理，提交被拒");
 
     // 显式跳最后一题，才让整份问卷完成；跳过这个动作
     // 本身也不提交。
     state.key(Key::Tab);
-    assert!(
-        answer(&mut rx).is_none(),
-        "跳过最后一题的那一下不提交"
-    );
+    assert!(answer(&mut rx).is_none(), "跳过最后一题的那一下不提交");
 
     state.key(Key::Enter);
     let answers = answer(&mut rx).expect("所有题都处理完了就提交");
@@ -268,10 +253,7 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
     );
     single.key(Key::Enter);
     let text = screen(120, 24, &mut single).join("\n");
-    assert!(
-        text.contains("● 1. a"),
-        "那个选择被显示成已选中：{text}"
-    );
+    assert!(text.contains("● 1. a"), "那个选择被显示成已选中：{text}");
     single.key(Key::Char('x'));
     let text = screen(120, 24, &mut single).join("\n");
     assert!(
@@ -331,10 +313,7 @@ fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
     }
     state.key(Key::Enter);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("Second?"),
-        "Enter 走到下一题：\n{text}"
-    );
+    assert!(text.contains("Second?"), "Enter 走到下一题：\n{text}");
 
     state.key(Key::Enter);
     state.key(Key::Enter);
@@ -367,10 +346,7 @@ fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
     let mut rx = ask(&mut state, vec![question("many", "Which?", &refs, false)]);
 
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("1. opt-01"),
-        "窗口从顶上开始：\n{text}"
-    );
+    assert!(text.contains("1. opt-01"), "窗口从顶上开始：\n{text}");
 
     for _ in 0..15 {
         state.key(Key::Down);
@@ -380,10 +356,7 @@ fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
         text.contains("16. opt-16"),
         "高亮那个选项被滚进了视野：\n{text}"
     );
-    assert!(
-        text.contains("Which?"),
-        "题目钉在窗口上方不动：\n{text}"
-    );
+    assert!(text.contains("Which?"), "题目钉在窗口上方不动：\n{text}");
 
     // 第十个选项往后也够得到：高亮不是靠数字键。
     state.key(Key::Enter);
@@ -495,10 +468,7 @@ fn a_question_with_no_options_is_answered_with_free_text() {
     assert!(text.contains("回答："), "显示出一行自由文本：{text}");
 
     state.key(Key::Enter);
-    assert!(
-        answer(&mut rx).is_none(),
-        "一道空的自由文本题不算作过答"
-    );
+    assert!(answer(&mut rx).is_none(), "一道空的自由文本题不算作过答");
     // 数字是普通文本：这个键盘没有数字选择，
     // 这里也没有任何选项等着它去编号。
     for ch in "v2-name".chars() {
@@ -537,20 +507,11 @@ fn escape_still_cancels_the_run_and_never_answers_the_questionnaire() {
 
     state.key(Key::Esc);
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
-    assert!(
-        answer(&mut rx).is_none(),
-        "Esc 取消这次运行，它不作答"
-    );
+    assert!(answer(&mut rx).is_none(), "Esc 取消这次运行，它不作答");
 
     // 运行的结束把问卷撤回，读作「没有答案」。
     state.request(ConsoleRequest::RunState { running: false });
     let rows = screen(120, 24, &mut state);
-    assert!(
-        !rows.join("\n").contains("Pick?"),
-        "接管跟着这次运行一起走"
-    );
-    assert!(
-        rx.try_recv().is_err(),
-        "发送端被丢掉了，而不是作了答"
-    );
+    assert!(!rows.join("\n").contains("Pick?"), "接管跟着这次运行一起走");
+    assert!(rx.try_recv().is_err(), "发送端被丢掉了，而不是作了答");
 }

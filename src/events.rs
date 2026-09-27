@@ -892,8 +892,7 @@ impl EventLog {
             speaker_id,
             payload,
         };
-        let mut line =
-            serde_json::to_string(&event).expect("事件 payload 永远都可 JSON 序列化");
+        let mut line = serde_json::to_string(&event).expect("事件 payload 永远都可 JSON 序列化");
         line.push('\n');
         inner.writer.write_all(line.as_bytes())?;
         inner.writer.flush()?;

@@ -383,10 +383,7 @@ async fn one_todo_call_gets_exactly_one_result_and_the_arguments_stand_verbatim(
             _ => None,
         })
         .expect("流上扛着这次调用");
-    assert_eq!(
-        started, args,
-        "参数按写下的样子存着：列表就是这次调用"
-    );
+    assert_eq!(started, args, "参数按写下的样子存着：列表就是这次调用");
 
     let results: Vec<&EventPayload> = events
         .iter()

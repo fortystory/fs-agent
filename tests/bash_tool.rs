@@ -250,10 +250,7 @@ async fn a_non_zero_exit_is_a_result_the_model_can_read() {
     let (_, ok, output) = fixture.results().remove(0);
     assert!(ok, "失败的命令是数据，不是 ToolError：{output:?}");
     assert!(output.contains("exit code: 3"), "{output:?}");
-    assert!(
-        output.contains("oops"),
-        "stderr 在结果里：{output:?}"
-    );
+    assert!(output.contains("oops"), "stderr 在结果里：{output:?}");
 
     fixture.harness.shutdown().await;
 }
@@ -275,10 +272,7 @@ async fn a_zero_timeout_is_refused_as_an_argument_error() {
     let (_, ok, message) = fixture.results().remove(0);
     assert!(!ok);
     assert!(message.contains("positive"), "{message}");
-    assert!(
-        !fixture.exists("made.txt"),
-        "参数被拒，什么都还没有跑"
-    );
+    assert!(!fixture.exists("made.txt"), "参数被拒，什么都还没有跑");
 
     fixture.harness.shutdown().await;
 }
@@ -433,10 +427,7 @@ async fn an_oversized_result_is_spilled_before_it_reaches_the_stream() {
         "流上扛的是那个指针：{output}"
     );
     let spilled = std::fs::read_to_string(&pointer).unwrap();
-    assert!(
-        spilled.contains(&"b".repeat(100)),
-        "整个正文都在磁盘上"
-    );
+    assert!(spilled.contains(&"b".repeat(100)), "整个正文都在磁盘上");
 
     fixture.harness.shutdown().await;
 }

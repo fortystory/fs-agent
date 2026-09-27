@@ -174,10 +174,7 @@ fn rank_breaks_ties_on_the_structural_signal() {
 
     let ranked = rank(&definitions, &references, &RankContext::default());
 
-    assert_eq!(
-        ranked[0].definition.name, "alpha",
-        "引用更多的赢下这个平手"
-    );
+    assert_eq!(ranked[0].definition.name, "alpha", "引用更多的赢下这个平手");
     assert_eq!(ranked[0].references, 7);
     assert_eq!(ranked[0].definitions, 1);
     // 那两处 `beta` 是两个文件里定义的同名符号：它们赢不了

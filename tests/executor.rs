@@ -706,11 +706,7 @@ async fn an_executors_edit_leaves_an_undo_snapshot_in_the_one_session_directory(
     // `/undo` 对执行者的编辑也管用，因为产物落在同一个会话
     // 目录下、用同一套命名约定（spec §11、§16）。
     let snapshot = fixture.session_dir.join("outputs").join("exec-edit.before");
-    assert!(
-        snapshot.exists(),
-        "预期 {} 存在",
-        snapshot.display()
-    );
+    assert!(snapshot.exists(), "预期 {} 存在", snapshot.display());
     // 快照是被替换的那一段本身，不是整个文件：`/undo`
     // 写回去的就是它（spec §8、§11）。
     assert_eq!(std::fs::read_to_string(&snapshot).unwrap(), "before");

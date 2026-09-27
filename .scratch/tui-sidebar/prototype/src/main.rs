@@ -658,7 +658,11 @@ fn plan(f: &Facts, case: &Case) -> Option<Plan> {
     // keeps its floor row (spec §2).
     let input_text_w = main_w.saturating_sub(2).max(1) as usize; // "> " is two columns
     let draft_rows = wrap_draft(case.draft, input_text_w);
-    let chrome = if status_shown { CHROME } else { CHROME_NO_STATUS };
+    let chrome = if status_shown {
+        CHROME
+    } else {
+        CHROME_NO_STATUS
+    };
     let cap = INPUT_CAP.min(h.saturating_sub(chrome + 1)).max(1);
     let input_rows = draft_rows.max(1).min(cap);
     let transcript_rows = h - chrome - input_rows;
@@ -1275,7 +1279,13 @@ struct Case {
 }
 
 impl Case {
-    fn new(file: &'static str, w: u16, h: u16, draft: &'static str, question: &'static str) -> Self {
+    fn new(
+        file: &'static str,
+        w: u16,
+        h: u16,
+        draft: &'static str,
+        question: &'static str,
+    ) -> Self {
         Self {
             file,
             w,
@@ -1298,7 +1308,9 @@ struct Rail {
 }
 
 fn main() {
-    let out_dir = std::env::args().nth(1).expect("usage: probe <prototype-dir>");
+    let out_dir = std::env::args()
+        .nth(1)
+        .expect("usage: probe <prototype-dir>");
     let out = Path::new(&out_dir);
     let frames = out.join("frames");
     fs::create_dir_all(&frames).expect("create frames dir");
@@ -1639,7 +1651,12 @@ fn geometry_table(f: &Facts) -> String {
         (120, 24),
         (174, 50),
     ] {
-        writeln!(out, "| {w}×{h} {}", geometry_row(f, w, h, DRAFT_EMPTY, None)).unwrap();
+        writeln!(
+            out,
+            "| {w}×{h} {}",
+            geometry_row(f, w, h, DRAFT_EMPTY, None)
+        )
+        .unwrap();
     }
 
     off(&mut out, "B. 两个草稿档（120×24）");
@@ -1663,7 +1680,10 @@ fn geometry_table(f: &Facts) -> String {
         .unwrap();
     }
 
-    off(&mut out, "C. 两个争议宽度档（变体，画进了 frames/ 的那几张）");
+    off(
+        &mut out,
+        "C. 两个争议宽度档（变体，画进了 frames/ 的那几张）",
+    );
     writeln!(
         out,
         "| 尺寸 | 左栏档位 | 左栏类型 | 状态行档位 | 转录行数 | 转录文本列数 | 回合条格数 | 面板字段数 |"
@@ -1671,7 +1691,12 @@ fn geometry_table(f: &Facts) -> String {
     .unwrap();
     writeln!(out, "| --- | --- | --- | --- | --- | --- | --- | --- |").unwrap();
     for (w, tier) in [(120u16, 40u16), (120, 42), (100, 34), (100, 28)] {
-        writeln!(out, "| {w}×24 {}", geometry_row(f, w, 24, DRAFT_EMPTY, Some(tier))).unwrap();
+        writeln!(
+            out,
+            "| {w}×24 {}",
+            geometry_row(f, w, 24, DRAFT_EMPTY, Some(tier))
+        )
+        .unwrap();
     }
 
     off(&mut out, "D. 宽度扫描（h=24，空草稿）—— 档位边界落在哪一列");
@@ -1680,7 +1705,11 @@ fn geometry_table(f: &Facts) -> String {
         "| w | 左栏档位 | 左栏类型 | 主列内容宽 | 状态行档位 | 转录行数 | 转录文本列数 | 回合条格数 | 提示行 |"
     )
     .unwrap();
-    writeln!(out, "| --- | --- | --- | --- | --- | --- | --- | --- | --- |").unwrap();
+    writeln!(
+        out,
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    )
+    .unwrap();
     for w in [
         40u16, 48, 60, 72, 79, 80, 88, 96, 99, 100, 104, 112, 119, 120, 128, 144, 174,
     ] {
@@ -1707,7 +1736,10 @@ fn geometry_table(f: &Facts) -> String {
         }
     }
 
-    off(&mut out, "E. 高度扫描（空草稿）—— 转录行数怎么被输入区吃掉、左栏怎么变");
+    off(
+        &mut out,
+        "E. 高度扫描（空草稿）—— 转录行数怎么被输入区吃掉、左栏怎么变",
+    );
     writeln!(
         out,
         "| w | h | 输入区行 | 转录行数 | 左栏内容行 | 左栏用了 | 左栏类型 | 面板字段数 |"

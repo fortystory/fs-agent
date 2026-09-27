@@ -44,11 +44,7 @@ fn seq_is_the_jsonl_line_number() {
     let events = read_events(&path).unwrap();
     assert_eq!(events.len(), 3);
     for (index, event) in events.iter().enumerate() {
-        assert_eq!(
-            event.seq,
-            index as u64 + 1,
-            "seq 必须等于行号"
-        );
+        assert_eq!(event.seq, index as u64 + 1, "seq 必须等于行号");
     }
 
     let raw = std::fs::read_to_string(&path).unwrap();
@@ -86,11 +82,7 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
     }
 
     let tolerated = read_events(&path).unwrap();
-    assert_eq!(
-        tolerated.len(),
-        2,
-        "被截断的末行被丢掉，而不是致命错误"
-    );
+    assert_eq!(tolerated.len(), 2, "被截断的末行被丢掉，而不是致命错误");
 
     let mut log = EventLog::open(&path).unwrap();
     assert_eq!(log.next_seq(), 3);
@@ -102,10 +94,7 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
             },
         )
         .unwrap();
-    assert_eq!(
-        appended.seq, 3,
-        "修复之后 seq 仍等于行号"
-    );
+    assert_eq!(appended.seq, 3, "修复之后 seq 仍等于行号");
 
     let events = read_events(&path).unwrap();
     assert_eq!(events.len(), 3);

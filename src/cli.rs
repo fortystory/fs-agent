@@ -2547,11 +2547,7 @@ mod tests {
             Submission::Prompt("/undo\n把 X 改成 Y")
         );
         assert_eq!(read("/undo"), Submission::Undo);
-        assert_eq!(
-            read("/undo  "),
-            Submission::Undo,
-            "结尾的空白没关系"
-        );
+        assert_eq!(read("/undo  "), Submission::Undo, "结尾的空白没关系");
     }
 
     #[test]
@@ -2582,11 +2578,7 @@ mod tests {
         ] {
             assert_eq!(args(&["--mode", written]).unwrap().mode, Some(expected));
         }
-        assert_eq!(
-            args(&[]).unwrap().mode,
-            None,
-            "不写表示由文件决定"
-        );
+        assert_eq!(args(&[]).unwrap().mode, None, "不写表示由文件决定");
         let error = args(&["--mode", "plan"]).unwrap_err();
         for word in ["plan", "readonly", "ask", "auto"] {
             assert!(error.contains(word), "`{word}` 没有出现在：{error}");

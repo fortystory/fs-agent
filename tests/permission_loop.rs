@@ -181,11 +181,7 @@ async fn a_policy_deny_never_reaches_the_tool_and_yields_one_error_result() {
     fixture.write("notes.txt", "original\n");
 
     fixture.harness.run_turn("write it").await.unwrap();
-    assert_eq!(
-        fixture.read("notes.txt"),
-        "original\n",
-        "文件没被动过"
-    );
+    assert_eq!(fixture.read("notes.txt"), "original\n", "文件没被动过");
     assert!(
         !fixture.outputs.join("call-write.before").exists(),
         "没跑过的调用不会留下快照"
@@ -201,11 +197,7 @@ async fn a_policy_deny_never_reaches_the_tool_and_yields_one_error_result() {
     assert_eq!(fixture.asked_count(), 0, "拒绝永远不会发问");
 
     let decisions = fixture.decisions();
-    assert_eq!(
-        decisions.len(),
-        1,
-        "被拒的这次调用拿到一条策略裁决"
-    );
+    assert_eq!(decisions.len(), 1, "被拒的这次调用拿到一条策略裁决");
     assert_eq!(decisions[0].0, Decision::Deny);
     assert_eq!(decisions[0].1, DecisionSource::Policy);
 

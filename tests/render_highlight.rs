@@ -74,9 +74,7 @@ fn a_diff_tag_is_independent_of_the_syntax_class() {
     let line = "-fn main() {}";
     assert_eq!(diff_tag(line), DiffTag::Removed);
     let spans = highlight_diff(line);
-    let marker = spans[0]
-        .first()
-        .expect("标记被重新挂回去，成为一个 span");
+    let marker = spans[0].first().expect("标记被重新挂回去，成为一个 span");
     assert_eq!(marker.text, "-");
     let keyword = spans[0]
         .iter()

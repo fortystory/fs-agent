@@ -368,10 +368,7 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
 
     // 两条悬着的调用各拿到正好一条结果，归属是发起它的那一个，
     // 而且两条都没有被重跑。
-    assert!(
-        pending_tool_calls(&events).is_empty(),
-        "没有任何调用悬着"
-    );
+    assert!(pending_tool_calls(&events).is_empty(), "没有任何调用悬着");
     for (id, speaker) in [
         ("call-crash", SpeakerId::Debater("kimi".into())),
         (
@@ -405,9 +402,7 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
     assert_eq!(env.read("notes.txt"), "uno\ntwo\n");
 
     // 续接的那个回合真的跑了：它的请求带着恢复出来的结果。
-    let last = requests
-        .last()
-        .expect("续接的那个回合调用了 provider");
+    let last = requests.last().expect("续接的那个回合调用了 provider");
     let recovered = last.messages.iter().find_map(|message| match message {
         Message::Tool {
             tool_call_id,

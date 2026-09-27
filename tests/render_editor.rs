@@ -85,11 +85,7 @@ fn the_cursor_maps_onto_the_row_it_is_typed_on() {
     let input = typed("abcde");
     assert_eq!(input.height(5), 1);
     let (_, cursor) = input.view(5, 10);
-    assert_eq!(
-        (cursor.row, cursor.column),
-        (0, 2 + 4),
-        "这一行的最后一格"
-    );
+    assert_eq!((cursor.row, cursor.column), (0, 2 + 4), "这一行的最后一格");
 
     // 而空草稿把它放在提示符后面第一格。
     let (_, cursor) = Input::new().view(5, 10);
@@ -132,11 +128,7 @@ fn a_new_line_opens_between_the_lines_and_the_arrows_cross_it() {
     // 从第二行行首按左键，踩到第一行的末尾。
     input.home();
     let (_, cursor) = input.view(80, 10);
-    assert_eq!(
-        (cursor.row, cursor.column),
-        (1, 2),
-        "home 是这一行的行首"
-    );
+    assert_eq!((cursor.row, cursor.column), (1, 2), "home 是这一行的行首");
     input.left();
     let (_, cursor) = input.view(80, 10);
     assert_eq!((cursor.row, cursor.column), (0, 2 + 2));
@@ -150,33 +142,21 @@ fn backspace_and_delete_join_lines_at_the_edges() {
     let mut input = typed("ab\ncd");
     input.home();
     input.backspace();
-    assert_eq!(
-        input.text(),
-        "abcd",
-        "行首的退格往上拼到上一行"
-    );
+    assert_eq!(input.text(), "abcd", "行首的退格往上拼到上一行");
 
     let mut input = typed("ab\ncd");
     input.home();
     input.up();
     input.end();
     input.delete_forward();
-    assert_eq!(
-        input.text(),
-        "abcd",
-        "行尾的删除把下一行拉上来"
-    );
+    assert_eq!(input.text(), "abcd", "行尾的删除把下一行拉上来");
 }
 
 #[test]
 fn the_emacs_chords_stay_inside_the_cursor_line() {
     let mut input = typed("one\ntwo three");
     input.kill_to_line_start();
-    assert_eq!(
-        input.text(),
-        "one\n",
-        "Ctrl-U 拿的是这一行，不是整份草稿"
-    );
+    assert_eq!(input.text(), "one\n", "Ctrl-U 拿的是这一行，不是整份草稿");
 
     let mut input = typed("one\ntwo three");
     input.home();
@@ -185,11 +165,7 @@ fn the_emacs_chords_stay_inside_the_cursor_line() {
 
     let mut input = typed("one\ntwo three");
     input.kill_word();
-    assert_eq!(
-        input.text(),
-        "one\ntwo ",
-        "Ctrl-W 只擦掉它里面的一个词"
-    );
+    assert_eq!(input.text(), "one\ntwo ", "Ctrl-W 只擦掉它里面的一个词");
 }
 
 #[test]
@@ -204,11 +180,7 @@ fn up_and_down_hold_the_visual_column_across_a_short_line() {
     }
     assert_eq!(input.view(80, 10).1.column, 2 + 4);
     input.down();
-    assert_eq!(
-        input.view(80, 10).1.column,
-        2 + 2,
-        "被短的那一行夹住了"
-    );
+    assert_eq!(input.view(80, 10).1.column, 2 + 2, "被短的那一行夹住了");
     input.down();
     assert_eq!(input.view(80, 10).1.column, 2 + 4, "那个目标列活了下来");
     input.up();
@@ -225,30 +197,18 @@ fn a_draft_taller_than_the_area_scrolls_to_keep_the_cursor_in_view() {
     let height = 5;
     let (rows, cursor) = input.view(10, height);
     assert_eq!(rows.len(), height as usize, "视图正好等于那块区域");
-    assert_eq!(
-        cursor.row,
-        height - 1,
-        "光标在最后一条可见行上"
-    );
+    assert_eq!(cursor.row, height - 1, "光标在最后一条可见行上");
     assert_eq!(cursor.column, 2 + 9);
 
     input.home();
     let (rows, cursor) = input.view(10, height);
-    assert_eq!(
-        (cursor.row, cursor.column),
-        (0, 2),
-        "home 把头部卷回来"
-    );
+    assert_eq!((cursor.row, cursor.column), (0, 2), "home 把头部卷回来");
     let head: String = rows[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(
-        head,
-        format!("{P}xxxxxxxxxx"),
-        "十列文本正好填满这一行"
-    );
+    assert_eq!(head, format!("{P}xxxxxxxxxx"), "十列文本正好填满这一行");
 }
 
 #[test]
@@ -271,11 +231,7 @@ fn the_arrows_do_not_walk_the_history() {
 fn a_multi_line_draft_is_recalled_whole_and_keeps_its_blank_lines() {
     let mut input = Input::new();
     input.insert_str("第一行\n\n第二行");
-    assert_eq!(
-        input.submitted(),
-        "第一行\n\n第二行",
-        "只裁掉两头的空白"
-    );
+    assert_eq!(input.submitted(), "第一行\n\n第二行", "只裁掉两头的空白");
     input.insert_str("next");
     input.history_previous();
     assert_eq!(input.text(), "第一行\n\n第二行");
@@ -298,11 +254,7 @@ fn submitting_clears_the_draft_and_an_empty_one_is_an_empty_line() {
     input.submitted();
     input.insert_str("draft");
     input.history_previous();
-    assert_eq!(
-        input.text(),
-        "first",
-        "那份空草稿留在历史之外"
-    );
+    assert_eq!(input.text(), "first", "那份空草稿留在历史之外");
 
     // 同一行提交两次只留一条，于是 `Ctrl-P` 不会在刚发过的
     // 重复项里一趟趟走。

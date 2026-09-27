@@ -181,11 +181,7 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     // 以交叉字符与它相接。24 行终端留给转录十四行：
     // 三行归输入区的地板、七行归外壳
     // （`.scratch/tui-input-pulse/spec.md` §1）。
-    assert_eq!(
-        transcript_rows(&rows),
-        14,
-        "120x24 给转录 14 行"
-    );
+    assert_eq!(transcript_rows(&rows), 14, "120x24 给转录 14 行");
     assert!(
         rows[15].contains('├') && rows[15].contains('┤'),
         "状态行上面那条横线横跨主列：{:?}",
@@ -232,11 +228,7 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
     // 宽档是 40 列，标记 38 列，所以两侧各得一列
     // 空气（spec §2）。分隔线占自己那一列，在第 41 列。
     let frame = buffer(120, 24, &mut state());
-    assert_eq!(
-        frame[(41, 0)].symbol(),
-        "┬",
-        "分隔线接上上边框"
-    );
+    assert_eq!(frame[(41, 0)].symbol(), "┬", "分隔线接上上边框");
     assert_eq!(frame[(41, 23)].symbol(), "┴", "下边框也一样");
     assert_eq!(frame[(1, 1)].symbol(), " ", "左边一列空气");
     assert_eq!(frame[(2, 1)].symbol(), "▄", "然后是标记");
@@ -334,11 +326,7 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
     // 左栏在 80x14 下也画 —— 四行字段不再是地板了，
     // 因为左栏自己的高度就是终端高度减掉那圈帧。
     let smallest = buffer(80, 14, &mut state());
-    assert_eq!(
-        smallest[(29, 0)].symbol(),
-        "┬",
-        "左栏在 80x14 下也画"
-    );
+    assert_eq!(smallest[(29, 0)].symbol(), "┬", "左栏在 80x14 下也画");
 }
 
 #[test]
@@ -442,24 +430,9 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     // 词：四条提示加出口再没地方留它），174 -> 五条。
     assert_eq!(hint_items(40).len(), 3, "40 列：{:?}", hint_items(40));
     assert_eq!(hint_items(80).len(), 3, "80 列：{:?}", hint_items(80));
-    assert_eq!(
-        hint_items(100).len(),
-        5,
-        "100 列：{:?}",
-        hint_items(100)
-    );
-    assert_eq!(
-        hint_items(120).len(),
-        5,
-        "120 列：{:?}",
-        hint_items(120)
-    );
-    assert_eq!(
-        hint_items(174).len(),
-        7,
-        "174 列：{:?}",
-        hint_items(174)
-    );
+    assert_eq!(hint_items(100).len(), 5, "100 列：{:?}", hint_items(100));
+    assert_eq!(hint_items(120).len(), 5, "120 列：{:?}", hint_items(120));
+    assert_eq!(hint_items(174).len(), 7, "174 列：{:?}", hint_items(174));
 
     // 在地板上，出口之前只挤得下一条提示，状态词却还在 ——
     // 40 列终端让出的是再上一档的换行提示。
@@ -541,10 +514,7 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
         text.contains("fs-agent：会话 abc"),
         "提示是转录里的一行：{text}"
     );
-    assert!(
-        text.contains("正在读文件"),
-        "流式的尾巴也在窗格里：{text}"
-    );
+    assert!(text.contains("正在读文件"), "流式的尾巴也在窗格里：{text}");
 }
 
 /// 标记在 120x24 下的五行颜色，自上而下：画家写的那一列
@@ -580,10 +550,7 @@ fn the_mark_does_not_move_while_a_run_is_in_flight() {
     ];
     let mut state = state();
     let still = dash_cell(&mut state);
-    assert_eq!(
-        still[2], "▀▀▀▀",
-        "标记停在它一直在画的那一行上：{still:?}"
-    );
+    assert_eq!(still[2], "▀▀▀▀", "标记停在它一直在画的那一行上：{still:?}");
     assert_eq!(
         still,
         fs_agent::render::wording::logo_lines()
@@ -690,10 +657,7 @@ fn the_prompts_colour_walks_the_wheel_while_a_run_is_in_flight() {
         seen.len(),
         "一次运行的每一帧都有自己的颜色：{seen:?}"
     );
-    assert!(
-        !seen.contains(&resting),
-        "而且没有一帧是静止色：{seen:?}"
-    );
+    assert!(!seen.contains(&resting), "而且没有一帧是静止色：{seen:?}");
 
     // 运行结束时提示符回到静止，下一次运行也从那儿起步 ——
     // 计数器属于某一次运行，所以静止色永远不是「它停在哪儿就是哪儿」。
@@ -954,10 +918,7 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
         );
         // 不管丢掉什么，页签条与回答「还剩多少余地」的那三项读数
         // 都留下。
-        assert!(
-            text.contains("调用量"),
-            "{height} 行留下页签条：{text}"
-        );
+        assert!(text.contains("调用量"), "{height} 行留下页签条：{text}");
         assert!(
             text.contains("上下文"),
             "{height} 行留下上下文那一行：{text}"
@@ -966,10 +927,7 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
             text.contains("token"),
             "{height} 行留下 token 那一行：{text}"
         );
-        assert!(
-            text.contains("回合"),
-            "{height} 行留下回合那一行：{text}"
-        );
+        assert!(text.contains("回合"), "{height} 行留下回合那一行：{text}");
     }
 }
 
@@ -979,8 +937,7 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
 /// 就是找到了页签 —— 而且找法跟人一样：在屏幕上找。
 fn tab_cell(frame: &Buffer, width: u16, height: u16, label: &str) -> (u16, u16) {
     let first: String = label.chars().take(1).collect();
-    find_cell(frame, width, height, &first)
-        .unwrap_or_else(|| panic!("{label} 页签在屏幕上"))
+    find_cell(frame, width, height, &first).unwrap_or_else(|| panic!("{label} 页签在屏幕上"))
 }
 
 #[test]
@@ -1035,10 +992,7 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     assert!(!text.contains("token"), "而读数不在：{text}");
     // 于是状态行成了唯一一项读数 —— 这是占位页被接受的
     // 代价（spec §3）。
-    assert!(
-        text.contains("上下文"),
-        "状态行的占比还在：{text}"
-    );
+    assert!(text.contains("上下文"), "状态行的占比还在：{text}");
 
     // 选中的标签跟着它一起挪了。
     let frame = buffer(120, 24, &mut state);
@@ -1106,18 +1060,12 @@ fn a_question_keeps_the_tabs_from_answering() {
     state.mouse(click(column, row));
 
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("权限询问"),
-        "问句还在：{text}"
-    );
+    assert!(text.contains("权限询问"), "问句还在：{text}");
     assert!(
         !text.contains(wording::tab_placeholder()),
         "它下面那一页也没有被切走：{text}"
     );
-    assert!(
-        answer.try_recv().is_err(),
-        "而且没有人在读者背后作答"
-    );
+    assert!(answer.try_recv().is_err(), "而且没有人在读者背后作答");
     // 它仍然答得了，这才是「还在」该有的意思。
     state.key(Key::Char('y'));
     assert_eq!(
@@ -1248,11 +1196,7 @@ fn the_rail_grows_one_cell_per_turn_and_keeps_the_newest_at_the_foot() {
     );
 
     turns(&mut state, 1);
-    assert_eq!(
-        turn_rail_shape(&mut state),
-        "┊┊┊┃",
-        "第四个回合添一个格子"
-    );
+    assert_eq!(turn_rail_shape(&mut state), "┊┊┊┃", "第四个回合添一个格子");
 }
 
 #[test]
@@ -1301,11 +1245,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
         Some('┃'),
         "焦点是屏幕上最老的回合：{shape}"
     );
-    assert_eq!(
-        shape.matches('┃').count(),
-        1,
-        "恰好一个格子是焦点：{shape}"
-    );
+    assert_eq!(shape.matches('┃').count(), 1, "恰好一个格子是焦点：{shape}");
 }
 
 #[test]
@@ -1545,10 +1485,7 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
     let visible = transcript_rows_at_120x24();
     state.key(Key::PageUp);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        !text.contains("第 39 行"),
-        "最新的那一行让位了：{text}"
-    );
+    assert!(!text.contains("第 39 行"), "最新的那一行让位了：{text}");
     assert!(
         text.contains(&format!("第 {} 行", 40 - visible)),
         "更早的那些行出现了：{text}"
@@ -1558,10 +1495,7 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
     state.key(Key::CtrlG);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("第 39 行"), "回到最底下：{text}");
-    assert!(
-        !text.contains("第 20 行"),
-        "那些老行不见了：{text}"
-    );
+    assert!(!text.contains("第 20 行"), "那些老行不见了：{text}");
 }
 
 /// 120x24 的一帧显示多少行转录。
@@ -1659,10 +1593,7 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
         previous = first;
     }
     let rows = screen(120, 24, &mut state);
-    assert!(
-        !rows.join("\n").contains("第 0 行"),
-        "最老的被丢掉了"
-    );
+    assert!(!rows.join("\n").contains("第 0 行"), "最老的被丢掉了");
     assert_eq!(
         first_notice(&rows),
         Some(1),
@@ -1685,10 +1616,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     state.key(Key::PageUp);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("点此到底"), "给出了回去的路：{text}");
-    assert!(
-        !text.contains("行新内容"),
-        "还没有东西到来：{text}"
-    );
+    assert!(!text.contains("行新内容"), "还没有东西到来：{text}");
     // 从底部往上一页，会留下一页的重叠：步长是
     // 窗格自己的高度减去读者保住的那两行，所以视口落在
     // 哪里是从窗格显示什么推出来的，不是记住的。
@@ -1704,10 +1632,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     // 恰好落在视口下面的全部东西。
     state.apply(RenderEvent::Notice("新的一行".to_owned()));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("↓ 1 行新内容 · 点此到底"),
-        "到了一行：{text}"
-    );
+    assert!(text.contains("↓ 1 行新内容 · 点此到底"), "到了一行：{text}");
 
     // 滚轮一格挪三行，上下都是。
     let mouse = |kind| MouseEvent {
@@ -1763,10 +1688,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     });
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("新的一行"), "回到最底下：{text}");
-    assert!(
-        !text.contains("点此到底"),
-        "指示器不见了：{text}"
-    );
+    assert!(!text.contains("点此到底"), "指示器不见了：{text}");
 }
 
 #[test]
@@ -1783,10 +1705,7 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
 
     // 跟着底部：窄一些的终端照样跟着底部。
     let narrowed = screen(80, 24, &mut state).join("\n");
-    assert!(
-        narrowed.contains("第 79 行"),
-        "仍在最底下：{narrowed}"
-    );
+    assert!(narrowed.contains("第 79 行"), "仍在最底下：{narrowed}");
 
     // 滚开时，顶上那行源代码行才是重折行后活下来的东西。
     let _ = screen(120, 24, &mut state);
@@ -1806,10 +1725,7 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
         "而且离开了最老的那一行：{before:?}"
     );
     let after = first_notice(&screen(80, 24, &mut state));
-    assert_eq!(
-        after, before,
-        "改尺寸后顶上还是同一行"
-    );
+    assert_eq!(after, before, "改尺寸后顶上还是同一行");
 }
 
 #[test]
@@ -1825,11 +1741,7 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     let mut state = state();
     state.apply(RenderEvent::Notice("x".repeat(76)));
     let frame = buffer(120, 24, &mut state);
-    assert_eq!(
-        frame[(TEXT_X, 1)].symbol(),
-        "x",
-        "这一行从主列的第一列开始"
-    );
+    assert_eq!(frame[(TEXT_X, 1)].symbol(), "x", "这一行从主列的第一列开始");
     assert_eq!(
         frame[(TEXT_X, 2)].symbol(),
         "x",
@@ -1866,10 +1778,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let mut state = state();
     let empty = screen(80, 24, &mut state);
     let rows = transcript_rows(&empty);
-    assert_eq!(
-        rows, 14,
-        "输入区三行给转录留下十四行：{empty:#?}"
-    );
+    assert_eq!(rows, 14, "输入区三行给转录留下十四行：{empty:#?}");
     let input = TRANSCRIPT_TOP + rows + 3;
     assert!(
         empty[input].contains(editor::PROMPT),
@@ -1889,10 +1798,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     state.paste("第一行\n第二行\n第三行");
     let three = screen(80, 24, &mut state);
     let rows = transcript_rows(&three);
-    assert_eq!(
-        rows, 14,
-        "三行草稿在地板之内，所以几何不动：{three:#?}"
-    );
+    assert_eq!(rows, 14, "三行草稿在地板之内，所以几何不动：{three:#?}");
     let input = TRANSCRIPT_TOP + rows + 3;
     assert!(three[input].contains("第一行"), "{:?}", three[input]);
     assert!(
@@ -2210,15 +2116,8 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("第 8 行"), "草稿在屏幕上：{text}");
-    assert_eq!(
-        transcript_rows(&rows),
-        7,
-        "草稿吃掉的是转录的行：{rows:#?}"
-    );
-    assert!(
-        text.contains("上下文"),
-        "左栏保住它的读数：{text}"
-    );
+    assert_eq!(transcript_rows(&rows), 7, "草稿吃掉的是转录的行：{rows:#?}");
+    assert!(text.contains("上下文"), "左栏保住它的读数：{text}");
     assert!(
         text.contains("模型 claude-sonnet-4-5"),
         "状态行也一样：{text}"
@@ -2311,11 +2210,7 @@ fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
     }
     assert_eq!(panel.len(), 6, "六项读数：{panel:?}");
     for (index, row) in panel.iter().enumerate() {
-        assert_eq!(
-            text_columns(row),
-            40,
-            "第 {index} 行填满左栏：{row:?}"
-        );
+        assert_eq!(text_columns(row), 40, "第 {index} 行填满左栏：{row:?}");
     }
 }
 
@@ -2352,16 +2247,8 @@ fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits
             .map(|span| span.content.as_ref())
             .collect()
     };
-    assert_eq!(
-        row(1),
-        "token   1235567 / 100000",
-        "花销不带分隔符"
-    );
-    assert_eq!(
-        row(0),
-        "上下文  1234567 / 200000",
-        "窗口也不带"
-    );
+    assert_eq!(row(1), "token   1235567 / 100000", "花销不带分隔符");
+    assert_eq!(row(0), "上下文  1234567 / 200000", "窗口也不带");
 }
 
 /// 一次针对写操作的询问，按循环从 console 通道发起的样子。
@@ -2412,10 +2299,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
     // 模式手势在等：一个问句独占键盘，直到它被回答
     // （spec §9）。
     state.key(fs_agent::render::Key::BackTab);
-    assert!(
-        state.take_events().is_empty(),
-        "Shift-Tab 不是离开问句的路"
-    );
+    assert!(state.take_events().is_empty(), "Shift-Tab 不是离开问句的路");
 
     // 主列里只有这个框自己的两条边框，别的什么都没有：左栏
     // 自己那几列在扫描范围的左边，而转录最后那两列
@@ -2556,10 +2440,7 @@ fn a_long_command_still_says_what_it_would_do() {
         .iter()
         .position(|row| row.contains("[y] 允许"))
         .unwrap_or_else(|| panic!("按钮在屏幕上：\n{text}"));
-    assert!(
-        description < keys,
-        "描述领在按钮前面：\n{text}"
-    );
+    assert!(description < keys, "描述领在按钮前面：\n{text}");
     assert!(
         text.contains("git ls-files"),
         "而命令还留在那儿可读：\n{text}"
@@ -2949,10 +2830,7 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
     );
     let page = sidebar_rows(&mut state, 120, 24).join("\n");
     assert!(page.contains("已完成 0/0"), "{page}");
-    assert!(
-        !page.contains("一件事"),
-        "而那些项随列表一起没了：{page}"
-    );
+    assert!(!page.contains("一件事"), "而那些项随列表一起没了：{page}");
 }
 
 // --- `/` 菜单 --------------------------------------------------------------
@@ -3057,20 +2935,14 @@ fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
     }
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("/ask-matt"), "{text}");
-    assert!(
-        !text.contains("/undo"),
-        "别的都被滤掉了：\n{text}"
-    );
+    assert!(!text.contains("/undo"), "别的都被滤掉了：\n{text}");
 
     // 一个什么都没指到的前缀会关上这个框，而不是显示一个空框。
     for ch in "zzz".chars() {
         state.key(Key::Char(ch));
     }
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        !text.contains("│ /"),
-        "没指到东西的前缀没有菜单：\n{text}"
-    );
+    assert!(!text.contains("│ /"), "没指到东西的前缀没有菜单：\n{text}");
 }
 
 #[test]
@@ -3238,11 +3110,7 @@ fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
             ("│", "│")
         };
         assert_eq!(frame[(x, y)].symbol(), left, "第 {y} 行，左边框");
-        assert_eq!(
-            frame[(right, y)].symbol(),
-            rightmost,
-            "第 {y} 行，右边框"
-        );
+        assert_eq!(frame[(right, y)].symbol(), rightmost, "第 {y} 行，右边框");
     }
 }
 
@@ -3251,10 +3119,7 @@ fn there_is_no_menu_before_the_loop_has_said_what_exists() {
     let mut state = state();
     state.key(Key::Char('/'));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        !text.contains("│ /"),
-        "空清单什么都提供不了：\n{text}"
-    );
+    assert!(!text.contains("│ /"), "空清单什么都提供不了：\n{text}");
 }
 
 #[test]
@@ -3283,10 +3148,7 @@ fn every_question_kind_takes_the_overlay() {
     draft.key(Key::Esc);
     let text = screen(120, 24, &mut draft).join("\n");
     assert!(text.contains("清空输入"), "{text}");
-    assert!(
-        text.contains("草稿有多行"),
-        "它会扔掉什么：{text}"
-    );
+    assert!(text.contains("草稿有多行"), "它会扔掉什么：{text}");
     assert!(text.contains("[y] 清空"), "带着它的键位：{text}");
 }
 
@@ -3550,10 +3412,7 @@ fn a_thinking_segment_opens_in_place_and_settles_in_place() {
         text.contains("[kimi] … 正在思考"),
         "未落定的那行读起来是进行中：{text}"
     );
-    assert!(
-        !text.contains("思考完成"),
-        "而且没有自称已完成：{text}"
-    );
+    assert!(!text.contains("思考完成"), "而且没有自称已完成：{text}");
 
     state.apply(text_delta("答案是 42。"));
     let rows = screen(120, 24, &mut state);
@@ -3691,18 +3550,12 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
     assert!(text.contains("── 参数 ──"), "参数那一节：{text}");
     assert!(text.contains("── 输出 ──"), "输出那一节：{text}");
     assert!(text.contains("alpha"), "整段输出：{text}");
-    assert!(
-        text.contains("esc 关闭"),
-        "页脚点出出口：{text}"
-    );
+    assert!(text.contains("esc 关闭"), "页脚点出出口：{text}");
 
     // Esc 关上它，转录回来了。
     state.key(Key::Esc);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("── 参数 ──"),
-        "Esc 关上覆盖层：{text}"
-    );
+    assert!(!text.contains("── 参数 ──"), "Esc 关上覆盖层：{text}");
     assert!(
         text.contains("调用 bash"),
         "它打开时所在的那一行还在：{text}"
@@ -3730,10 +3583,7 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
     click_row(&mut state, 120, 40, "调用 bash");
     // 正文从顶部开始，40 行时那儿是参数那一节。
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("── 参数 ──"),
-        "正文从顶部开始：{text}"
-    );
+    assert!(text.contains("── 参数 ──"), "正文从顶部开始：{text}");
 
     // 用翻页键一路走到最底下，然后单个箭头往回挪一行：
     // 箭头和翻页作用在同一段正文上。
@@ -3741,17 +3591,11 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
         state.key(Key::PageDown);
     }
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("esc 关闭"),
-        "正文走到了末尾：{text}"
-    );
+    assert!(text.contains("esc 关闭"), "正文走到了末尾：{text}");
     state.key(Key::Down);
     state.key(Key::Up);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("esc 关闭"),
-        "而箭头仍然在它里面挪动：{text}"
-    );
+    assert!(text.contains("esc 关闭"), "而箭头仍然在它里面挪动：{text}");
 
     // 滚轮把同一段正文一格挪一行。
     let before = text.clone();
@@ -3805,10 +3649,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         text.contains("with a second line the preview never carried"),
         "显示的是落盘全文，不是预览：{text}"
     );
-    assert!(
-        !text.contains("全文不可用"),
-        "而且没有降级说明：{text}"
-    );
+    assert!(!text.contains("全文不可用"), "而且没有降级说明：{text}");
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -3835,10 +3676,7 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("head of the output"), "预览：{text}");
-    assert!(
-        text.contains("全文不可用"),
-        "降级被说出来了：{text}"
-    );
+    assert!(text.contains("全文不可用"), "降级被说出来了：{text}");
 }
 
 #[test]
@@ -3863,10 +3701,7 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
         !text.contains("── 参数 ──"),
         "详情没有在问句上面打开：{text}"
     );
-    assert!(
-        text.contains("权限询问"),
-        "而屏幕上还是那个问句：{text}"
-    );
+    assert!(text.contains("权限询问"), "而屏幕上还是那个问句：{text}");
 }
 
 /// 注入名册是给定讨论者名字的状态，转录里的名字
@@ -3985,15 +3820,9 @@ fn clicking_a_question_body_or_border_does_nothing() {
     for (column, row) in [(60, 10), (60, 11), (2, 10)] {
         state.mouse(click(column, row));
     }
-    assert!(
-        answer.try_recv().is_err(),
-        "点在按钮之外不作答"
-    );
+    assert!(answer.try_recv().is_err(), "点在按钮之外不作答");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("权限询问"),
-        "而问句还在：{text}"
-    );
+    assert!(text.contains("权限询问"), "而问句还在：{text}");
 }
 
 #[test]
@@ -4061,10 +3890,7 @@ fn a_single_select_option_is_chosen_by_clicking_its_row() {
     // 唯一的那个问题上，点一下作答但**不**提交：最后一
     // 个问题仍需单独提交（票 04 §4）。
     click_text(&mut state, 120, 24, "2. 乙");
-    assert!(
-        answers.try_recv().is_err(),
-        "最后一个问题点一下只作答"
-    );
+    assert!(answers.try_recv().is_err(), "最后一个问题点一下只作答");
 
     // 所有问题都处理完之后，`Enter` 才是提交。
     state.key(Key::Enter);
@@ -4095,10 +3921,7 @@ fn a_multi_select_option_only_toggles_when_clicked() {
     });
 
     click_text(&mut state, 120, 24, "1. 甲");
-    assert!(
-        answers.try_recv().is_err(),
-        "多选上点一下不提交"
-    );
+    assert!(answers.try_recv().is_err(), "多选上点一下不提交");
     // 勾落在点击落到的那一行上。
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("[x] 1. 甲"), "选中被显示出来了：{text}");
@@ -4139,20 +3962,14 @@ fn the_questionnaire_footer_pages_with_a_click() {
 
     // 第一个问题没有 `← 上一题`；它确实有 `下一题 →`。
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        !text.contains("← 上一题"),
-        "第一个问题上没有上一题：{text}"
-    );
+    assert!(!text.contains("← 上一题"), "第一个问题上没有上一题：{text}");
     assert!(text.contains("下一题 →"), "但有下一题：{text}");
 
     // 点一下往前走，第二个问题提供回去的路。
     click_in_row(&mut state, 120, 24, 22, "下一题 →");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("2 / 2"), "这次点击翻到下一页：{text}");
-    assert!(
-        text.contains("← 上一题"),
-        "回去的路出现了：{text}"
-    );
+    assert!(text.contains("← 上一题"), "回去的路出现了：{text}");
     click_in_row(&mut state, 120, 24, 22, "← 上一题");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2"), "这次点击翻回上一页：{text}");
@@ -4188,10 +4005,7 @@ fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
 
     click_text(&mut state, 120, 24, "自定义：");
     let (_, focused) = frame_and_cursor(120, 24, &mut state);
-    assert!(
-        focused.is_some(),
-        "这次点击把光标放到自定义那一行上"
-    );
+    assert!(focused.is_some(), "这次点击把光标放到自定义那一行上");
 
     // 翻走会重置焦点：下一个问题的自定义行起步时没有焦点。
     click_in_row(&mut state, 120, 24, 22, "下一题 →");
@@ -4219,17 +4033,11 @@ fn the_wheel_moves_the_questionnaire_highlight() {
         ],
     });
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("> ○ 1. 甲"),
-        "高亮从 1 开始：{text}"
-    );
+    assert!(text.contains("> ○ 1. 甲"), "高亮从 1 开始：{text}");
 
     state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains("> ○ 2. 乙"),
-        "滚轮挪动了高亮：{text}"
-    );
+    assert!(text.contains("> ○ 2. 乙"), "滚轮挪动了高亮：{text}");
 }
 
 #[test]
@@ -4249,10 +4057,7 @@ fn one_message_never_gets_two_thinking_lines() {
         1,
         "一段思考就是一行：{text}"
     );
-    assert!(
-        !text.contains("正在思考"),
-        "进行中那一行没了：{text}"
-    );
+    assert!(!text.contains("正在思考"), "进行中那一行没了：{text}");
 }
 
 #[test]
@@ -4262,10 +4067,7 @@ fn reasoning_never_joins_the_message_body() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("这是不该出现的思考正文。"));
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("… 正在思考"),
-        "思考行在那儿：{text}"
-    );
+    assert!(text.contains("… 正在思考"), "思考行在那儿：{text}");
     assert!(
         !text.contains("这是不该出现的思考正文"),
         "而原始推理不在：{text}"
@@ -4294,10 +4096,7 @@ fn the_detail_overlay_freezes_the_transcript() {
     let _ = screen(120, 24, &mut state);
     click_row(&mut state, 120, 24, "调用 bash");
     let before = screen(120, 24, &mut state);
-    assert!(
-        before.join("\n").contains("── 参数 ──"),
-        "覆盖层起来了"
-    );
+    assert!(before.join("\n").contains("── 参数 ──"), "覆盖层起来了");
     let frozen = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&before));
 
     // 覆盖层开着的时候有新输出到来。
@@ -4308,10 +4107,7 @@ fn the_detail_overlay_freezes_the_transcript() {
     }
     let during = screen(120, 24, &mut state);
     let after = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&during));
-    assert_eq!(
-        after, frozen,
-        "覆盖层后面的转录没有动"
-    );
+    assert_eq!(after, frozen, "覆盖层后面的转录没有动");
     // 到来的那些行也不算进读者的「新行」里：位置是
     // 覆盖层在保的，所以「N 行新内容」会是在它底下数。
     let counter = |rows: &[String]| {
@@ -4320,11 +4116,7 @@ fn the_detail_overlay_freezes_the_transcript() {
             .cloned()
             .unwrap_or_default()
     };
-    assert_eq!(
-        counter(&during),
-        counter(&before),
-        "而新行计数也被按住了"
-    );
+    assert_eq!(counter(&during), counter(&before), "而新行计数也被按住了");
 }
 
 #[test]
@@ -4345,10 +4137,7 @@ fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
 
     state.request(ask_permission().0);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("── 参数 ──"),
-        "覆盖层为问句让了位：{text}"
-    );
+    assert!(!text.contains("── 参数 ──"), "覆盖层为问句让了位：{text}");
     assert!(text.contains("权限询问"), "而问句起来了：{text}");
 }
 
@@ -4408,11 +4197,7 @@ fn a_thinking_line_tints_its_speakers_name() {
     };
     // 名字正好坐在标记前面。
     let name_x = column - text_columns("▸ ") as u16 - text_columns("[kimi] ") as u16;
-    assert_eq!(
-        frame[(name_x, row)].symbol(),
-        "[",
-        "名字前缀在那儿"
-    );
+    assert_eq!(frame[(name_x, row)].symbol(), "[", "名字前缀在那儿");
     assert_eq!(
         frame[(name_x, row)].fg,
         Color::LightCyan,
@@ -4435,10 +4220,7 @@ fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
     state.apply(text_delta("第一段正文。"));
     state.apply(reasoning_delta("第二段思考。"));
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("… 正在思考"),
-        "第二段还开着：{text}"
-    );
+    assert!(text.contains("… 正在思考"), "第二段还开着：{text}");
     assert_eq!(
         text.matches("思考完成").count(),
         1,
@@ -4473,10 +4255,7 @@ fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
     assert!(!state.should_quit(), "关上不是退出");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("── 参数 ──"), "覆盖层关上了：{text}");
-    assert!(
-        !text.contains("退出会话"),
-        "而且没有问过确认：{text}"
-    );
+    assert!(!text.contains("退出会话"), "而且没有问过确认：{text}");
 }
 
 #[test]
@@ -4548,19 +4327,10 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     click_row(&mut state, 120, 40, "调用 bash");
 
     state.key(Key::CtrlC);
-    assert!(
-        !state.should_quit(),
-        "Ctrl-C 不会从覆盖层里退出"
-    );
-    assert!(
-        state.take_events().is_empty(),
-        "也不会取消任何东西"
-    );
+    assert!(!state.should_quit(), "Ctrl-C 不会从覆盖层里退出");
+    assert!(state.take_events().is_empty(), "也不会取消任何东西");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("── 参数 ──"),
-        "覆盖层还开着：{text}"
-    );
+    assert!(text.contains("── 参数 ──"), "覆盖层还开着：{text}");
 
     // 可打印的键也到不了草稿：覆盖层的键就是
     // 覆盖层的，它后面的编辑器没在被打字。
@@ -4612,10 +4382,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     asked.apply(permission_asked(2, "call-31"));
     asked.apply(permission_decided(3));
     let text = screen(120, 24, &mut asked).join("\n");
-    assert!(
-        text.contains("权限询问"),
-        "问句先被叙述出来：{text}"
-    );
+    assert!(text.contains("权限询问"), "问句先被叙述出来：{text}");
     assert!(
         !text.contains("调用 bash"),
         "而调用不会在它的结果之前画出来：{text}"
@@ -4676,10 +4443,7 @@ fn the_detail_overlay_is_wider_than_a_question() {
     click_row(&mut wide, 200, 40, "调用 bash");
     let frame = buffer(200, 40, &mut wide);
     let detail = overlay_width(&frame, 200, 40).expect("覆盖层的上边框");
-    assert_eq!(
-        detail, 135,
-        "而在宽终端上压着它的是那个上限"
-    );
+    assert_eq!(detail, 135, "而在宽终端上压着它的是那个上限");
 }
 
 /// 一个浮动框画出来的宽度，从它上边框所在的那一行读出来。
@@ -4729,10 +4493,7 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行");
     state.mouse(click(MAIN_LEFT_AT_120, row));
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("── 参数 ──"),
-        "点在转录上把它关上了：{text}"
-    );
+    assert!(!text.contains("── 参数 ──"), "点在转录上把它关上了：{text}");
 
     // 里面：什么都不发生，因为覆盖层自己没有按钮 —— 而且
     // 这包括覆盖层盖住它时那一行原本所在的屏幕行。老的
@@ -4756,10 +4517,7 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     // 落在覆盖层的矩形里，在下面读出来的两条边框之间。
     let frame = buffer(120, 40, &mut state);
     let overlay = overlay_width(&frame, 120, 40).expect("覆盖层");
-    assert_eq!(
-        overlay, 73,
-        "120 列下压着覆盖层的是主列，不是那个上限"
-    );
+    assert_eq!(overlay, 73, "120 列下压着覆盖层的是主列，不是那个上限");
     assert_eq!(
         (frame[(44, 12)].symbol(), frame[(116, 12)].symbol()),
         ("│", "│"),
@@ -4792,14 +4550,8 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    assert!(
-        text.contains("▸ ✓ 思考完成"),
-        "思考行落定了：{text}"
-    );
-    assert!(
-        text.contains("答案。"),
-        "而落定它的那段正文也在：{text}"
-    );
+    assert!(text.contains("▸ ✓ 思考完成"), "思考行落定了：{text}");
+    assert!(text.contains("答案。"), "而落定它的那段正文也在：{text}");
     let notices = rows.iter().filter(|row| row.contains("第 ")).count();
     assert!(
         notices >= 5,
@@ -4916,10 +4668,7 @@ fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
     click_row(&mut asked, 120, 40, "调用 ask_user_question");
     let text = screen(120, 40, &mut asked).join("\n");
     assert!(text.contains("── 参数 ──"), "参数那一节：{text}");
-    assert!(
-        text.contains("下一步"),
-        "而它带着具体的参数：{text}"
-    );
+    assert!(text.contains("下一步"), "而它带着具体的参数：{text}");
 }
 
 #[test]
@@ -4983,11 +4732,7 @@ fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
         }
     }
     let (x, y) = corner.expect("覆盖层的左上角");
-    assert_eq!(
-        frame[(x, y)].fg,
-        Color::LightCyan,
-        "边框穿着讨论者的颜色"
-    );
+    assert_eq!(frame[(x, y)].fg, Color::LightCyan, "边框穿着讨论者的颜色");
     assert_eq!(
         (
             frame[(x + 1, y + 1)].symbol(),
@@ -5088,25 +4833,16 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     };
 
     let (seen, total) = counts(&mut state);
-    assert!(
-        total > 100,
-        "正文长到可以滚动：{seen}/{total}"
-    );
+    assert!(total > 100, "正文长到可以滚动：{seen}/{total}");
     assert!(seen < total, "而窗口起点还在离末尾一截的地方");
 
     for _ in 0..50 {
         state.key(Key::PageDown);
     }
     let (seen, total) = counts(&mut state);
-    assert_eq!(
-        seen, total,
-        "到底时页脚读的是最后一行：{seen}/{total}"
-    );
+    assert_eq!(seen, total, "到底时页脚读的是最后一行：{seen}/{total}");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("第 200 行"),
-        "而最后一行真的在屏幕上：{text}"
-    );
+    assert!(text.contains("第 200 行"), "而最后一行真的在屏幕上：{text}");
 }
 
 /// 一次针对 shell 命令的权限询问，按循环问它的样子。
@@ -5160,8 +4896,5 @@ fn the_permission_question_describes_the_call_the_way_the_line_does() {
         .iter()
         .position(|row| row.contains("bash（command=head -5 README.md）"))
         .expect("确切的那条调用还显示着");
-    assert!(
-        description < call,
-        "而确切的那条调用在它后面：{text}"
-    );
+    assert!(description < call, "而确切的那条调用在它后面：{text}");
 }

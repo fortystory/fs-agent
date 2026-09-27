@@ -88,10 +88,7 @@ fn the_hard_stop_reads_the_summed_usage_and_not_an_estimate() {
     let budget = fs_agent::config::Budget::new().with_limit(1_000);
 
     assert!(!budget.is_exhausted(999));
-    assert!(
-        budget.is_exhausted(1_000),
-        "正好落在上限上的会话就到此为止"
-    );
+    assert!(budget.is_exhausted(1_000), "正好落在上限上的会话就到此为止");
     assert!(budget.is_exhausted(5_000));
     assert_eq!(budget.remaining(400), Some(600));
     assert_eq!(budget.remaining(5_000), Some(0));
@@ -237,10 +234,7 @@ fn the_daily_ledger_is_a_query_over_the_session_files_not_a_new_state_file() {
 
     let today_ledger = ledger::for_day(&store, today).unwrap();
     assert_eq!(today_ledger.day, today);
-    assert_eq!(
-        today_ledger.sessions, 1,
-        "只有那天有用量的会话才算进去"
-    );
+    assert_eq!(today_ledger.sessions, 1, "只有那天有用量的会话才算进去");
     assert_eq!(today_ledger.calls, 2);
     assert_eq!(today_ledger.usage.input_tokens, 300);
     assert_eq!(today_ledger.usage.output_tokens, 30);

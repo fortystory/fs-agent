@@ -215,10 +215,7 @@ impl Session {
 
     /// 记住一条会话级许可。它只改策略这个值：不写 `config.toml`、也不追加事件（spec §12）。
     pub fn remember_allow(&mut self, rule: Rule) {
-        self.policy
-            .lock()
-            .expect("策略互斥锁中毒")
-            .push(rule);
+        self.policy.lock().expect("策略互斥锁中毒").push(rule);
     }
 
     /// 这场会话当前跑在哪一档。
@@ -229,10 +226,7 @@ impl Session {
     /// 换掉会话的模式，保留它的规则。这是模式循环手势对策略的唯一作用 —— 一个值，绝不是事件，这
     /// 也正是 `--continue` 从配置里的那一档开始的原因（spec §12）。
     pub fn set_mode(&self, mode: Mode) {
-        self.policy
-            .lock()
-            .expect("策略互斥锁中毒")
-            .set_mode(mode);
+        self.policy.lock().expect("策略互斥锁中毒").set_mode(mode);
     }
 
     /// 这个 agent 的私有身份，如果有的话。

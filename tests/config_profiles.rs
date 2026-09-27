@@ -696,7 +696,10 @@ fn one_model_twice_needs_two_names() {
         ]
     );
     assert!(config.debaters_share_a_vendor("kimi-k3", "kimi-k3"));
-    assert!(config.debaters_share_a_vendor("kimi-k3", "k3"), "两家都是 Kimi");
+    assert!(
+        config.debaters_share_a_vendor("kimi-k3", "k3"),
+        "两家都是 Kimi"
+    );
     assert!(!config.debaters_share_a_vendor("kimi-k3", "deepseek-v4-pro"));
 }
 
@@ -820,8 +823,5 @@ fn an_unknown_mode_is_a_startup_error_that_names_the_three() {
     }
     // 启动路径原样打出这句话，所以丢掉一个行续反斜杠
     // 就会在句子中间塞进一串空格。
-    assert!(
-        !error.contains("  "),
-        "一句话，里面没有连续空格：{error:?}"
-    );
+    assert!(!error.contains("  "), "一句话，里面没有连续空格：{error:?}");
 }

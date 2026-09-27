@@ -289,12 +289,7 @@ fn entry_rows(entry: &Entry, width: usize, clip: Option<usize>, cfg: &Cfg) -> Ve
         .collect()
 }
 
-fn draw(
-    frame: &mut ratatui::Frame,
-    cfg: &Cfg,
-    panes: &Panes,
-    overlay_open: bool,
-) {
+fn draw(frame: &mut ratatui::Frame, cfg: &Cfg, panes: &Panes, overlay_open: bool) {
     let dim = Style::default().fg(Color::DarkGray);
     let block = || Block::default().borders(Borders::ALL).border_style(dim);
 
@@ -376,8 +371,7 @@ fn draw_overlay(frame: &mut ratatui::Frame, cfg: &Cfg, panes: &Panes) {
     let middle = Rect::new(
         panes.transcript.x,
         panes.transcript.y,
-        panes.transcript.width
-            + panes.panel.map(|p| p.width).unwrap_or_default(),
+        panes.transcript.width + panes.panel.map(|p| p.width).unwrap_or_default(),
         panes.transcript.height,
     );
     let max_w: u16 = if cfg.wide_overlay { 90 } else { 72 };
@@ -393,7 +387,10 @@ fn draw_overlay(frame: &mut ratatui::Frame, cfg: &Cfg, panes: &Panes) {
 
     let section = |rows: &mut Vec<Line>, title: &str, body: &[&str]| match cfg.section {
         Section::Rule => {
-            let rule = format!("── {title} {}", "─".repeat(content_w.saturating_sub(cols(title) + 5)));
+            let rule = format!(
+                "── {title} {}",
+                "─".repeat(content_w.saturating_sub(cols(title) + 5))
+            );
             rows.push(Line::from(Span::styled(rule, dim)));
             for line in body {
                 for row in wrap(line, content_w) {
@@ -424,7 +421,10 @@ fn draw_overlay(frame: &mut ratatui::Frame, cfg: &Cfg, panes: &Panes) {
     section(
         &mut rows,
         "参数",
-        &["command = \"cargo test --all-targets\"", "cwd = \"/home/forty/code/fortystory/fs-agent\""],
+        &[
+            "command = \"cargo test --all-targets\"",
+            "cwd = \"/home/forty/code/fortystory/fs-agent\"",
+        ],
     );
     section(
         &mut rows,
@@ -447,7 +447,10 @@ fn draw_overlay(frame: &mut ratatui::Frame, cfg: &Cfg, panes: &Panes) {
         height,
     );
     frame.render_widget(Clear, area);
-    let body: Vec<Line> = rows.into_iter().take(height.saturating_sub(2) as usize).collect();
+    let body: Vec<Line> = rows
+        .into_iter()
+        .take(height.saturating_sub(2) as usize)
+        .collect();
     frame.render_widget(
         Paragraph::new(body).block(Block::default().borders(Borders::ALL).border_style(dim)),
         area,
@@ -481,7 +484,11 @@ fn dump(backend: &TestBackend, w: u16, h: u16, cfg: &Cfg) -> String {
         "size: {w}x{h}   click: {click} | section: {section} | thinking glyph: {} | overlay: {}",
         if cfg.thinking_glyph { "on" } else { "off" },
         if cfg.overlay {
-            if cfg.wide_overlay { "open (wide 90)" } else { "open (72)" }
+            if cfg.wide_overlay {
+                "open (wide 90)"
+            } else {
+                "open (72)"
+            }
         } else {
             "closed"
         }
@@ -603,29 +610,159 @@ fn main() {
     let base = Cfg::BASE;
     let cases = vec![
         // --- clickable affordance, one size each ---------------------------
-        Case { file: "variant-click-marker.txt", cfg: Cfg { click: Click::Marker, ..base }, w: 120, h: 24 },
-        Case { file: "variant-click-underline.txt", cfg: Cfg { click: Click::Underline, ..base }, w: 120, h: 24 },
-        Case { file: "variant-click-suffix.txt", cfg: Cfg { click: Click::Suffix, ..base }, w: 120, h: 24 },
-        Case { file: "variant-click-none.txt", cfg: Cfg { click: Click::None, ..base }, w: 120, h: 24 },
+        Case {
+            file: "variant-click-marker.txt",
+            cfg: Cfg {
+                click: Click::Marker,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "variant-click-underline.txt",
+            cfg: Cfg {
+                click: Click::Underline,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "variant-click-suffix.txt",
+            cfg: Cfg {
+                click: Click::Suffix,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "variant-click-none.txt",
+            cfg: Cfg {
+                click: Click::None,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
         // --- thinking-line glyph ------------------------------------------
-        Case { file: "variant-thinking-glyph.txt", cfg: Cfg { thinking_glyph: true, ..base }, w: 120, h: 24 },
+        Case {
+            file: "variant-thinking-glyph.txt",
+            cfg: Cfg {
+                thinking_glyph: true,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
         // --- detail overlay -----------------------------------------------
-        Case { file: "variant-detail-rule.txt", cfg: Cfg { overlay: true, ..base }, w: 120, h: 24 },
-        Case { file: "variant-detail-colon.txt", cfg: Cfg { overlay: true, section: Section::Colon, ..base }, w: 120, h: 24 },
-        Case { file: "variant-detail-wide.txt", cfg: Cfg { overlay: true, wide_overlay: true, ..base }, w: 120, h: 24 },
-        Case { file: "variant-detail-80x24.txt", cfg: Cfg { overlay: true, ..base }, w: 80, h: 24 },
+        Case {
+            file: "variant-detail-rule.txt",
+            cfg: Cfg {
+                overlay: true,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "variant-detail-colon.txt",
+            cfg: Cfg {
+                overlay: true,
+                section: Section::Colon,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "variant-detail-wide.txt",
+            cfg: Cfg {
+                overlay: true,
+                wide_overlay: true,
+                ..base
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "variant-detail-80x24.txt",
+            cfg: Cfg {
+                overlay: true,
+                ..base
+            },
+            w: 80,
+            h: 24,
+        },
         // --- size coverage of the base form -------------------------------
-        Case { file: "variant-size-40x10.txt", cfg: base, w: 40, h: 10 },
-        Case { file: "variant-size-80x24.txt", cfg: base, w: 80, h: 24 },
-        Case { file: "variant-size-120x10.txt", cfg: base, w: 120, h: 10 },
-        Case { file: "variant-size-120x24.txt", cfg: base, w: 120, h: 24 },
+        Case {
+            file: "variant-size-40x10.txt",
+            cfg: base,
+            w: 40,
+            h: 10,
+        },
+        Case {
+            file: "variant-size-80x24.txt",
+            cfg: base,
+            w: 80,
+            h: 24,
+        },
+        Case {
+            file: "variant-size-120x10.txt",
+            cfg: base,
+            w: 120,
+            h: 10,
+        },
+        Case {
+            file: "variant-size-120x24.txt",
+            cfg: base,
+            w: 120,
+            h: 24,
+        },
         // --- the chosen combination (user pick, 2026-09-23) ----------------
-        Case { file: "chosen-40x10.txt", cfg: CHOSEN, w: 40, h: 10 },
-        Case { file: "chosen-80x24.txt", cfg: CHOSEN, w: 80, h: 24 },
-        Case { file: "chosen-120x10.txt", cfg: CHOSEN, w: 120, h: 10 },
-        Case { file: "chosen-120x24.txt", cfg: CHOSEN, w: 120, h: 24 },
-        Case { file: "chosen-detail-120x24.txt", cfg: Cfg { overlay: true, ..CHOSEN }, w: 120, h: 24 },
-        Case { file: "chosen-detail-80x24.txt", cfg: Cfg { overlay: true, ..CHOSEN }, w: 80, h: 24 },
+        Case {
+            file: "chosen-40x10.txt",
+            cfg: CHOSEN,
+            w: 40,
+            h: 10,
+        },
+        Case {
+            file: "chosen-80x24.txt",
+            cfg: CHOSEN,
+            w: 80,
+            h: 24,
+        },
+        Case {
+            file: "chosen-120x10.txt",
+            cfg: CHOSEN,
+            w: 120,
+            h: 10,
+        },
+        Case {
+            file: "chosen-120x24.txt",
+            cfg: CHOSEN,
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "chosen-detail-120x24.txt",
+            cfg: Cfg {
+                overlay: true,
+                ..CHOSEN
+            },
+            w: 120,
+            h: 24,
+        },
+        Case {
+            file: "chosen-detail-80x24.txt",
+            cfg: Cfg {
+                overlay: true,
+                ..CHOSEN
+            },
+            w: 80,
+            h: 24,
+        },
     ];
 
     for case in &cases {

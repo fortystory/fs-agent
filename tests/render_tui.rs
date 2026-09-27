@@ -236,15 +236,9 @@ fn ctrl_d_asks_before_it_quits_and_the_safe_answer_is_no() {
     // 够 `Enter`（票 06 §1、§2）。
     let (mut idle, _line) = state_with_prompt();
     idle.key(Key::CtrlD);
-    assert!(
-        !idle.should_quit(),
-        "确认在退出之前"
-    );
+    assert!(!idle.should_quit(), "确认在退出之前");
     idle.key(Key::Enter);
-    assert!(
-        !idle.should_quit(),
-        "Enter 是安全的答案，不是退出"
-    );
+    assert!(!idle.should_quit(), "Enter 是安全的答案，不是退出");
 
     // `Esc` 关上确认框，让会话继续跑。
     let (mut escaped, _line) = state_with_prompt();
@@ -351,11 +345,7 @@ fn a_tool_call_is_painted_by_its_result_and_annotated_by_its_hook() {
     assert!(tool.outcome.as_ref().unwrap().ok);
 
     let feedback = transcript.push(RenderEvent::Logged(hook));
-    assert_eq!(
-        feedback.len(),
-        1,
-        "hook 是自己的块：{feedback:#?}"
-    );
+    assert_eq!(feedback.len(), 1, "hook 是自己的块：{feedback:#?}");
     assert!(
         matches!(
             &feedback[0],
@@ -528,11 +518,7 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
         error: Some("no such file".to_owned()),
         duration_ms: 1,
     })))));
-    assert_eq!(
-        failed.len(),
-        1,
-        "失败的调用也是一行：{failed:#?}"
-    );
+    assert_eq!(failed.len(), 1, "失败的调用也是一行：{failed:#?}");
     let call: String = failed[0]
         .spans
         .iter()
@@ -673,10 +659,7 @@ fn a_message_continuation_indents_by_the_label_display_width() {
     });
     let prefix = lines[0].spans[0].content.as_ref().cell_width() as usize;
     let indent = lines[1].spans[0].content.as_ref().cell_width() as usize;
-    assert_eq!(
-        indent, prefix,
-        "续行对齐在第一行正文的下面"
-    );
+    assert_eq!(indent, prefix, "续行对齐在第一行正文的下面");
 }
 
 #[test]
@@ -860,11 +843,7 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.paste(&huge);
     state.key(Key::Char('n'));
     state.key(Key::Enter);
-    assert_eq!(
-        answer.try_recv().unwrap(),
-        empty,
-        "拒绝了：文本没了"
-    );
+    assert_eq!(answer.try_recv().unwrap(), empty, "拒绝了：文本没了");
 
     let (tx, mut second) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply: tx });
@@ -878,11 +857,7 @@ fn an_oversized_paste_asks_first_and_only_yes_takes_it() {
     state.paste(&huge);
     state.key(Key::Enter); // 另一个安全答案：Enter 同样拒绝
     state.key(Key::Enter); // 而这一次提交了，因为问题已经没了
-    assert_eq!(
-        enter.try_recv().unwrap(),
-        empty,
-        "那次巨大的粘贴被拒了"
-    );
+    assert_eq!(enter.try_recv().unwrap(), empty, "那次巨大的粘贴被拒了");
 
     let (tx, mut third) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply: tx });
@@ -910,10 +885,7 @@ fn a_paste_is_ignored_while_a_question_is_up() {
         .unwrap()
         .expect("这个问题活过了第二次粘贴");
     assert_eq!(pasted.chars().count(), 100_001, "它的文本也是");
-    assert!(
-        !pasted.contains("small"),
-        "那次小粘贴没有到达草稿"
-    );
+    assert!(!pasted.contains("small"), "那次小粘贴没有到达草稿");
 }
 
 #[test]
@@ -988,10 +960,7 @@ fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
 
     state.key(Key::Esc);
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
-    assert!(
-        asked.try_recv().is_err(),
-        "这个问题仍然在等它自己的键"
-    );
+    assert!(asked.try_recv().is_err(), "这个问题仍然在等它自己的键");
 }
 
 #[test]
@@ -1029,10 +998,7 @@ fn a_cancelled_run_takes_its_unanswered_question_with_it() {
     state.key(Key::Char('x'));
     state.key(Key::Enter);
     assert_eq!(line.try_recv().unwrap(), Some("x".to_owned()));
-    assert!(
-        asked.try_recv().is_err(),
-        "运行已结束的问题没有谁来回答"
-    );
+    assert!(asked.try_recv().is_err(), "运行已结束的问题没有谁来回答");
 }
 
 #[test]

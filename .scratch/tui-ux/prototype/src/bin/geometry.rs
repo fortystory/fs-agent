@@ -94,7 +94,12 @@ fn plan(w: u16, h: u16, draft_rows: u16, airy_allowed: bool) -> Option<Regions> 
     let middle_rows = h - CHROME - header_rows - input_rows - airy_rows;
 
     let header = Rect::new(0, 0, w, header_rows + BORDER_ROWS);
-    let middle = Rect::new(0, header.height + u16::from(airy), w, middle_rows + BORDER_ROWS);
+    let middle = Rect::new(
+        0,
+        header.height + u16::from(airy),
+        w,
+        middle_rows + BORDER_ROWS,
+    );
     let bottom = Rect::new(
         0,
         middle.y + middle.height + u16::from(airy),
@@ -354,7 +359,9 @@ fn render(w: u16, h: u16, draft_rows: u16) -> String {
     };
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|frame| draw(frame, &r, draft_rows)).expect("draw");
+    terminal
+        .draw(|frame| draw(frame, &r, draft_rows))
+        .expect("draw");
     dump(terminal.backend(), w, h, "NEW (no airy)")
 }
 
@@ -394,7 +401,13 @@ fn describe(w: u16, h: u16, draft: u16, airy_allowed: bool) -> String {
         None => "太小".to_owned(),
         Some(r) => {
             let panel = match r.panel {
-                Some(p) => format!("{}×{} / {}×{}", p.width + 2, p.height + 2, p.width, p.height),
+                Some(p) => format!(
+                    "{}×{} / {}×{}",
+                    p.width + 2,
+                    p.height + 2,
+                    p.width,
+                    p.height
+                ),
                 None => "隐藏".to_owned(),
             };
             format!(
@@ -419,7 +432,11 @@ fn main() {
     fs::create_dir_all(&out).expect("mkdir");
 
     let mut table = String::new();
-    writeln!(table, "# ticket 05 几何表 —— 删 airy 前 / 后（TestBackend 实测）\n").unwrap();
+    writeln!(
+        table,
+        "# ticket 05 几何表 —— 删 airy 前 / 后（TestBackend 实测）\n"
+    )
+    .unwrap();
     writeln!(
         table,
         "`旧` = 现在的 `plan()`（**已含 Mark header**）；`新` = 删掉 airy 后的 `plan()`。空白草稿，除非另注。\n"
@@ -431,7 +448,11 @@ fn main() {
     )
     .unwrap();
     writeln!(table, "| 尺寸 | 版本 | header 内容行 | airy | 中段内容行 | 右栏 | 转录 外框×内容 | 右栏 外框×内容 | 输入行 |").unwrap();
-    writeln!(table, "| --- | --- | --- | --- | --- | --- | --- | --- | --- |").unwrap();
+    writeln!(
+        table,
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    )
+    .unwrap();
 
     let sizes: [(u16, u16); 18] = [
         (39, 24),
