@@ -1,12 +1,12 @@
-//! `ask_user_question`: the model-initiated question and its answer (spec §7).
+//! `ask_user_question`：模型发起的问句与它的答案（spec §7）。
 //!
-//! Three seams are exercised here. The tool itself — the wire contract the model
-//! speaks, and the errors it gets back without a user ever seeing them. The whole
-//! loop, where the tool call goes in and exactly one result comes out (spec §19).
-//! And the plain console, which answers a questionnaire line by line.
+//! 这里练三条接缝。工具本身 —— 模型讲的那份线上契约，
+//! 以及用户从没看见过的那些报错。整个循环，
+//! 工具调用进去、正好一条结果出来（spec §19）。
+//! 还有 plain 控制台，它逐行回答一份问卷。
 //!
-//! The TUI's takeover has its own file (`ask_user_question_tui.rs`), because that
-//! half is asserted through rendered frames.
+//! TUI 的接管有它自己的文件（`ask_user_question_tui.rs`），因为那一半
+//! 是通过画出来的帧来断言的。
 
 mod support;
 
@@ -33,10 +33,10 @@ use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{AlwaysAllow, FakeProvider, Reply};
 
-/// A question port scripted with answers, recording what it was asked.
+/// 一个用答案脚本化的问题端口，记下它被问了什么。
 ///
-/// The port is what a front end implements; a test scripts it the way it scripts
-/// provider replies, so "the user picked serde" is reproducible without a terminal.
+/// 端口是前端实现的东西；测试脚本化它的方式，与脚本化
+/// provider 回复一样，于是「用户选了 serde」不用终端也能复现。
 struct ScriptedQuestions {
     answers: Mutex<VecDeque<UserAnswers>>,
     asked: Mutex<Vec<Vec<UserQuestion>>>,
@@ -53,7 +53,7 @@ impl ScriptedQuestions {
     fn asked(&self) -> Vec<Vec<UserQuestion>> {
         self.asked
             .lock()
-            .expect("scripted questions poisoned")
+            .expect("脚本化问题端口已中毒")
             .clone()
     }
 }
@@ -63,18 +63,18 @@ impl UserQuestions for ScriptedQuestions {
     async fn ask(&self, questions: &[UserQuestion]) -> Result<UserAnswers, String> {
         self.asked
             .lock()
-            .expect("scripted questions poisoned")
+            .expect("脚本化问题端口已中毒")
             .push(questions.to_vec());
         Ok(self
             .answers
             .lock()
-            .expect("scripted questions poisoned")
+            .expect("脚本化问题端口已中毒")
             .pop_front()
-            .expect("ScriptedQuestions: no scripted answer left"))
+            .expect("ScriptedQuestions: 没有脚本答案剩下了"))
     }
 }
 
-/// Call the tool with a real-by-shape context and an optional question port.
+/// 用一个形状上真实的上下文与一个可选的问题端口调用这个工具。
 async fn call(args: Value, port: Option<&dyn UserQuestions>) -> Result<ToolOutput, ToolError> {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
@@ -117,18 +117,18 @@ async fn a_question_round_trips_as_the_answers_json() {
         }]
     });
 
-    let output = call(args, Some(&port)).await.expect("the tool answers");
+    let output = call(args, Some(&port)).await.expect("工具作答了");
     assert_eq!(
         output.text,
         r#"{"answers":[{"id":"framework","selected":["serde"]}]}"#
     );
     let asked = port.asked();
-    assert_eq!(asked.len(), 1, "the port was asked once");
+    assert_eq!(asked.len(), 1, "端口被问了一次");
     assert_eq!(asked[0].len(), 1);
     assert_eq!(asked[0][0].id, "framework");
     assert_eq!(asked[0][0].question, "Which JSON framework?");
     assert_eq!(asked[0][0].header.as_deref(), Some("JSON"));
-    assert!(!asked[0][0].multi_select, "multi_select defaults to false");
+    assert!(!asked[0][0].multi_select, "multi_select 默认是 false");
     assert_eq!(
         asked[0][0].options,
         vec![Choice {
@@ -140,9 +140,9 @@ async fn a_question_round_trips_as_the_answers_json() {
 
 #[tokio::test]
 async fn custom_text_and_multi_select_round_trip() {
-    // The two encodings the model must be able to tell apart: a skipped question
-    // carries no custom text, and a multi-select answer may carry both selections
-    // and custom text (spec §7).
+    // 模型必须能分辨的两种编码：跳过的一题
+    // 不带自定义文本，而多选那个答案可以同时带上选中的项
+    // 与自定义文本（spec §7）。
     let port = ScriptedQuestions::new(vec![UserAnswers {
         answers: vec![
             UserAnswer {
@@ -165,7 +165,7 @@ async fn custom_text_and_multi_select_round_trip() {
         ]
     });
 
-    let output = call(args, Some(&port)).await.expect("the tool answers");
+    let output = call(args, Some(&port)).await.expect("工具作答了");
     assert_eq!(
         output.text,
         r#"{"answers":[{"id":"a","selected":[]},{"id":"b","selected":["x","y"],"custom":"and z"}]}"#
@@ -174,39 +174,39 @@ async fn custom_text_and_multi_select_round_trip() {
     assert!(asked[0][1].multi_select);
     assert!(
         asked[0][0].options.is_empty(),
-        "no options means the question is free text"
+        "没有选项意味着这一题是自由文本"
     );
 }
 
 #[test]
 fn the_description_carries_the_three_encoding_conventions() {
-    // The model cannot read the answer without these, so they are part of the
-    // wire contract, not prose (spec §7).
+    // 没有这些，模型就读不懂那个答案，所以它们是
+    // 线上契约的一部分，不是散文（spec §7）。
     let description = AskUserQuestionTool.spec().description;
 
-    // 1. A skip and a question that was never reached are different answers.
+    // 1. 跳过，与根本没走到的那一题，是两种不同的答案。
     assert!(description.contains("skipped"), "{description}");
     assert!(description.contains("never reached"), "{description}");
     assert!(description.contains("selected: []"), "{description}");
-    // 2. Single-select custom text overrides; multi-select custom text supplements.
+    // 2. 单选的,自定义文本是覆盖；多选的自定义文本是补充。
     assert!(description.contains("overrides"), "{description}");
     assert!(description.contains("supplements"), "{description}");
-    // 3. The recommended marker is display only: the answer keeps the label.
+    // 3. `(Recommended)` 标记只做显示：答案留下的是那个 label。
     assert!(description.contains("(Recommended)"), "{description}");
     assert!(description.contains("marker included"), "{description}");
 }
 
 #[test]
 fn the_tool_is_read_only_and_only_the_main_session_may_ask() {
-    // `effect` classifies workspace side effects, and asking touches no path
-    // (spec §7) — the same judgement `task` gets.
+    // `effect` 归类的是工作区副作用，而发问不碰任何路径
+    // （spec §7）—— 与 `task` 得到的是同一个判定。
     assert_eq!(
         AskUserQuestionTool.effect(&serde_json::json!({})),
         Effect::ReadOnly
     );
     assert!(
         !AskUserQuestionTool.delegable(),
-        "an executor's table must have no way to ask (spec §7)"
+        "执行者的工具表里必须没有任何发问的路子（spec §7）"
     );
 }
 
@@ -215,14 +215,14 @@ async fn an_empty_question_list_is_refused() {
     let port = ScriptedQuestions::new(Vec::new());
     let error = call(serde_json::json!({"questions": []}), Some(&port))
         .await
-        .expect_err("an empty questionnaire is refused");
+        .expect_err("一份空问卷被拒");
     assert!(
         error.to_string().contains("at least one question"),
         "{error}"
     );
     assert!(
         port.asked().is_empty(),
-        "the user is never shown an empty questionnaire"
+        "用户永远不会看到一份空问卷"
     );
 }
 
@@ -232,15 +232,15 @@ async fn a_question_without_an_id_is_refused() {
     let args = serde_json::json!({"questions": [{"question": "which?"}]});
     let error = call(args, Some(&port))
         .await
-        .expect_err("an id-less question is refused");
+        .expect_err("没有 id 的一题被拒");
     assert!(error.to_string().contains("non-empty `id`"), "{error}");
     assert!(port.asked().is_empty());
 }
 
 #[tokio::test]
 async fn duplicate_question_ids_are_refused() {
-    // Ids are how the model pairs answers with questions; two questions sharing
-    // one would make the answer ambiguous (spec §7).
+    // 靠 id 把答案与问题配起来的是模型；两题共用一个
+    // 会让答案有歧义（spec §7）。
     let port = ScriptedQuestions::new(Vec::new());
     let args = serde_json::json!({
         "questions": [
@@ -250,7 +250,7 @@ async fn duplicate_question_ids_are_refused() {
     });
     let error = call(args, Some(&port))
         .await
-        .expect_err("duplicate ids are refused");
+        .expect_err("重复的 id 被拒");
     assert!(
         error.to_string().contains("duplicate question id"),
         "{error}"
@@ -260,30 +260,30 @@ async fn duplicate_question_ids_are_refused() {
 
 #[tokio::test]
 async fn without_a_question_port_the_call_fails_instead_of_hanging() {
-    // The degradation floor (spec §19): a session that mounted no port gets a
-    // model-readable failure rather than an answer that can never arrive.
+    // 降级地板（spec §19）：没有挂端口的会话拿到的是一条
+    // 模型读得懂的失败，而不是一个永远到不了的答案。
     let args = serde_json::json!({
         "questions": [{"id": "q", "question": "which?"}]
     });
     let error = call(args, None)
         .await
-        .expect_err("no port is an error, not a hang");
+        .expect_err("没有端口是一个错误，不是挂住");
     assert!(error.to_string().contains("no question port"), "{error}");
 }
 
 // ---------------------------------------------------------------------------
-// The table and the assembled loop
+// 工具表与组装起来的循环
 // ---------------------------------------------------------------------------
 
-/// The tool names a table advertises, in the order the provider would see them.
+/// 一张工具表对外声明的工具名，按 provider 会看到的顺序。
 fn advertised(registry: &Registry) -> Vec<String> {
     registry.specs().into_iter().map(|spec| spec.name).collect()
 }
 
 #[test]
 fn the_table_decides_whether_the_model_may_ask() {
-    // The headless table has no answerer, so it never advertises the tool: a call
-    // that can only fail wastes a model turn (spec §19).
+    // headless 那张表没有作答者，所以它从不声明这个工具：
+    // 一次只会失败的调用白费模型一个回合（spec §19）。
     assert!(
         advertised(&fs_agent::tools::builtin(true)).contains(&ASK_USER_QUESTION_TOOL.to_owned())
     );
@@ -294,8 +294,8 @@ fn the_table_decides_whether_the_model_may_ask() {
 
 #[test]
 fn an_executors_table_has_no_way_to_ask() {
-    // `delegable() == false` is the same mechanism that keeps `task` out of an
-    // executor's table (spec §7, §16) — not a second rule.
+    // `delegable() == false` 与把 `task` 挡在执行者工具表外的
+    // 是同一个机制（spec §7、§16）—— 不是第二条规矩。
     let executor = fs_agent::tools::builtin(true).for_executor();
     assert!(executor.get(ASK_USER_QUESTION_TOOL).is_none());
     assert!(executor.get(TASK_TOOL).is_none());
@@ -303,7 +303,7 @@ fn an_executors_table_has_no_way_to_ask() {
         fs_agent::tools::builtin(true)
             .get(ASK_USER_QUESTION_TOOL)
             .is_some(),
-        "the main session's table does have it"
+        "主会话的表里确实有它"
     );
 }
 
@@ -314,7 +314,7 @@ struct Fixture {
     _dir: tempfile::TempDir,
 }
 
-/// Assemble a real session whose table and port are decided by `can_ask`/`port`.
+/// 组装一个真会话，它的工具表与端口由 `can_ask`/`port` 决定。
 async fn fixture(
     replies: Vec<Reply>,
     port: Option<Arc<ScriptedQuestions>>,
@@ -363,9 +363,9 @@ async fn fixture(
 
 #[tokio::test]
 async fn the_model_can_ask_and_the_answer_is_the_tools_one_result() {
-    // The whole point of the feature: the question leaves as a tool call, the
-    // answer comes back as that call's one result, and it is the answers JSON
-    // (spec §7, §19).
+    // 这个特性的全部意义：问句以一次工具调用离开，答案
+    // 作为那次调用的唯一结果回来，而它就是那个 answers JSON
+    // （spec §7、§19）。
     let port = Arc::new(ScriptedQuestions::new(vec![UserAnswers {
         answers: vec![UserAnswer {
             id: "q".to_owned(),
@@ -393,8 +393,8 @@ async fn the_model_can_ask_and_the_answer_is_the_tools_one_result() {
     )
     .await;
 
-    // The port is reached through the assembled session, not injected by the test
-    // into the tool directly.
+    // 端口是通过组装起来的会话够到的，而不是测试直接
+    // 往工具里注入的。
     fixture.harness.run_turn("ask me").await.unwrap();
 
     let events = read_events(&fixture.log_path).unwrap();
@@ -412,7 +412,7 @@ async fn the_model_can_ask_and_the_answer_is_the_tools_one_result() {
     assert_eq!(
         results.len(),
         1,
-        "the ask call gets exactly one result, like every tool call"
+        "这次 ask 调用正好拿到一条结果，与每一次工具调用一样"
     );
     match results[0] {
         EventPayload::ToolCallCompleted { ok, output, .. } => {
@@ -422,7 +422,7 @@ async fn the_model_can_ask_and_the_answer_is_the_tools_one_result() {
                 Some(r#"{"answers":[{"id":"q","selected":["yes"]}]}"#)
             );
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("期望 ToolCallCompleted，实际得到 {other:?}"),
     }
     let asked = port.asked();
     assert_eq!(asked.len(), 1);
@@ -433,8 +433,8 @@ async fn the_model_can_ask_and_the_answer_is_the_tools_one_result() {
 
 #[tokio::test]
 async fn a_headless_session_does_not_advertise_the_tool_to_the_model() {
-    // The model is what pays for a tool that can only fail, so the headless table
-    // simply does not carry it (spec §19).
+    // 一个只会失败的工具，买单的是模型，所以 headless 那张表
+    // 干脆不带它（spec §19）。
     let mut fixture = fixture(vec![Reply::text("hello")], None, false).await;
     fixture.harness.run_turn("hi").await.unwrap();
 
@@ -446,17 +446,17 @@ async fn a_headless_session_does_not_advertise_the_tool_to_the_model() {
         .collect();
     assert!(
         !names.contains(&ASK_USER_QUESTION_TOOL.to_owned()),
-        "headless advertises no ask tool: {names:?}"
+        "headless 不声明任何 ask 工具：{names:?}"
     );
 
     fixture.harness.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------
-// The plain console
+// plain 控制台
 // ---------------------------------------------------------------------------
 
-/// One question, with options and the multi-select flag.
+/// 一道题，带选项与多选旗标。
 fn plain_question(id: &str, text: &str, options: &[&str], multi_select: bool) -> UserQuestion {
     UserQuestion {
         id: id.to_owned(),
@@ -473,10 +473,10 @@ fn plain_question(id: &str, text: &str, options: &[&str], multi_select: bool) ->
     }
 }
 
-/// A line reader that answers from a script, `None` meaning end of input.
+/// 一个照脚本读行的读行器，`None` 表示输入结束。
 ///
-/// The plain console's only input primitive is injectable, so the line-by-line
-/// front end can be driven without a pipe.
+/// plain 控制台唯一的输入原语是可注入的，所以那个逐行的
+/// 前端不用管道也能驱动。
 fn scripted_reader(lines: Vec<Option<String>>) -> LineReader {
     let mut lines = VecDeque::from(lines);
     Box::new(move || {
@@ -500,7 +500,7 @@ async fn the_plain_console_answers_a_questionnaire_line_by_line() {
     let answers = ConsoleQuestions::from_handle(&handle)
         .ask(&questions)
         .await
-        .expect("the plain console answers");
+        .expect("plain 控制台作答了");
     assert_eq!(
         answers.answers,
         vec![
@@ -523,8 +523,8 @@ async fn the_plain_console_reads_a_multi_select_and_a_skip() {
     let (handle, port, _events) = console();
     let _console = spawn_plain_console_with(
         port,
-        // A multi-select question reads two lines (the numbers and the optional
-        // supplement); the single-select one reads the third.
+        // 多选那一题读两行（编号，以及那句可选的
+        // 补充）；单选那一题读第三行。
         scripted_reader(vec![
             Some("1, 2".to_owned()),
             Some(String::new()),
@@ -538,7 +538,7 @@ async fn the_plain_console_reads_a_multi_select_and_a_skip() {
     let answers = ConsoleQuestions::from_handle(&handle)
         .ask(&questions)
         .await
-        .expect("the plain console answers");
+        .expect("plain 控制台作答了");
     assert_eq!(
         answers.answers,
         vec![
@@ -558,9 +558,9 @@ async fn the_plain_console_reads_a_multi_select_and_a_skip() {
 
 #[tokio::test]
 async fn the_plain_console_lets_a_multi_select_answer_options_and_text_together() {
-    // `selected` and `custom` together are legal only on a multi-select question
-    // (spec §7), and the line-oriented front end's second optional line is how a
-    // pipe user expresses that.
+    // `selected` 与 `custom` 同时出现只在多选题上合法
+    // （spec §7），而面向行的前端那第二条可选行，就是管道那边的
+    // 用户表达这件事的方式。
     let (handle, port, _events) = console();
     let _console = spawn_plain_console_with(
         port,
@@ -570,7 +570,7 @@ async fn the_plain_console_lets_a_multi_select_answer_options_and_text_together(
     let answers = ConsoleQuestions::from_handle(&handle)
         .ask(&questions)
         .await
-        .expect("the plain console answers");
+        .expect("plain 控制台作答了");
     assert_eq!(
         answers.answers,
         vec![UserAnswer {
@@ -583,14 +583,14 @@ async fn the_plain_console_lets_a_multi_select_answer_options_and_text_together(
 
 #[tokio::test]
 async fn the_plain_console_fails_at_end_of_input_instead_of_looping() {
-    // The degradation floor on a pipe (spec §19): end of input is not an answer,
-    // and the call fails rather than waiting for a person who is gone.
+    // 管道上的降级地板（spec §19）：输入结束不是一个答案，
+    // 于是这次调用失败，而不是去等一个已经不在了的人。
     let (handle, port, _events) = console();
     let _console = spawn_plain_console_with(port, scripted_reader(vec![None]));
     let questions = vec![plain_question("q", "Which?", &["a"], false)];
     let error = ConsoleQuestions::from_handle(&handle)
         .ask(&questions)
         .await
-        .expect_err("end of input is not an answer");
+        .expect_err("输入结束不是一个答案");
     assert!(error.contains("input ended"), "{error}");
 }

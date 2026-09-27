@@ -1,10 +1,10 @@
-//! The built-in `todo(items)` tool (`.scratch/todo-and-modes/spec.md` §2, §3).
+//! 内置的 `todo(items)` 工具（`.scratch/todo-and-modes/spec.md` §2、§3）。
 //!
-//! The tool's contract is small and mostly about one decision: the list **is** the
-//! call's arguments. These tests drive it both ways — through the dispatch seam
-//! for the contract itself, and through a real session for the two things only a
-//! session can show (one result per call, and the args as the truth a sidebar
-//! recomputes from).
+//! 这个工具的契约很小，而且几乎只围绕一个决定：那份列表**就是**
+//! 这次调用的参数。这些测试从两头驱动它 —— 契约本身走派发接缝，
+//! 另外两件只有真会话才展得出来的事走一个真会话
+//! （每次调用一条结果，以及参数作为左栏
+//! 用来重算的真相）。
 
 mod support;
 
@@ -24,8 +24,8 @@ use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
-/// The dispatch seam, the way `tests/tools_dispatch.rs` builds it: the tool's own
-/// contract does not depend on who called it.
+/// 派发接缝，按 `tests/tools_dispatch.rs` 搭它的方式搭：工具自己的
+/// 契约不取决于是谁调的它。
 struct Fixture {
     #[allow(dead_code)]
     dir: tempfile::TempDir,
@@ -67,13 +67,13 @@ impl Fixture {
         }
     }
 
-    /// Run one call through the guardrails, exactly as the loop does.
+    /// 让一次调用过一遍护栏，与循环的做法一模一样。
     async fn dispatch(&self, call: &PendingCall) -> fs_agent::tools::DispatchOutcome {
         let mut read_set = ReadSet::default();
         let allowed = match self
             .registry
             .facts(&call.tool_name, &call.args, &self.paths)
-            .expect("a registered tool")
+            .expect("一个注册过的工具")
             .guardrails(&read_set)
         {
             fs_agent::tools::GuardedCall::Run(allowed) => allowed,
@@ -85,7 +85,7 @@ impl Fixture {
         self.registry.dispatch(call, &allowed).await
     }
 
-    /// The result text of one call, or the error text it was refused with.
+    /// 一次调用的结果文本，或者它被拒时的错误文本。
     async fn text(&self, args: serde_json::Value) -> Result<String, String> {
         let call = self.call("call-1", args);
         self.dispatch(&call)
@@ -105,7 +105,7 @@ fn items_of(list: &[(&str, &str)]) -> serde_json::Value {
     })
 }
 
-// --- the contract ---------------------------------------------------------
+// --- 契约 ------------------------------------------------------------------
 
 #[tokio::test]
 async fn a_valid_call_answers_with_a_count_of_the_whole_list() {
@@ -121,8 +121,8 @@ async fn a_valid_call_answers_with_a_count_of_the_whole_list() {
         .unwrap();
     assert_eq!(receipt, "todo: 3 items (1 completed)");
 
-    // The list is replace-all, so the receipt counts what was just submitted and
-    // nothing that came before.
+    // 这份列表是全量替换，所以回执数的是刚提交的那批，
+    // 不含之前任何东西。
     let receipt = fixture
         .text(items_of(&[("only one left", "pending")]))
         .await
@@ -132,7 +132,7 @@ async fn a_valid_call_answers_with_a_count_of_the_whole_list() {
 
 #[tokio::test]
 async fn a_missing_or_empty_list_clears_it() {
-    // The two spellings the spec fixes: an empty array, and the field left out.
+    // spec 定下来的两种写法：一个空数组，以及把这个字段留空。
     let fixture = Fixture::new();
     for args in [json!({ "items": [] }), json!({})] {
         let receipt = fixture.text(args.clone()).await.unwrap();
@@ -142,9 +142,9 @@ async fn a_missing_or_empty_list_clears_it() {
 
 #[tokio::test]
 async fn a_call_the_schema_cannot_read_is_refused_with_a_model_readable_reason() {
-    // Every one of these is a mistake the model can fix, so the message says what
-    // was wrong rather than "invalid arguments". Nothing here is a panic and
-    // nothing is silently dropped: a list with one bad item is refused whole.
+    // 每一条都是模型自己能修的错，所以消息说的是哪里不对，
+    // 而不是一句「参数无效」。这里没有一处 panic，
+    // 也没有任何东西被悄悄丢掉：列表里有一项坏，整份就被拒。
     let fixture = Fixture::new();
     let cases: Vec<(serde_json::Value, &str)> = vec![
         (
@@ -160,8 +160,8 @@ async fn a_call_the_schema_cannot_read_is_refused_with_a_model_readable_reason()
             "status",
         ),
         (json!({ "items": [{ "content": "x" }] }), "status"),
-        // The two shapes a model is most likely to get wrong, each named where it
-        // went wrong: the array itself, then the item that is not an object.
+        // 模型最容易弄错的两种形状，各自点名它错在哪儿：
+        // 数组本身，然后是那个不是对象的项。
         (
             json!({ "items": { "content": "x" } }),
             "`items` must be an array",
@@ -176,24 +176,24 @@ async fn a_call_the_schema_cannot_read_is_refused_with_a_model_readable_reason()
         let error = fixture
             .text(args.clone())
             .await
-            .expect_err(&format!("{args} is refused"));
+            .expect_err(&format!("{args} 被拒了"));
         assert!(
             error.contains(expected),
-            "{args}: the reason names `{expected}`: {error}"
+            "{args}：这个理由点出了 `{expected}`：{error}"
         );
         assert!(
             error.starts_with(TODO_TOOL),
-            "{args}: the reason names the tool: {error}"
+            "{args}：这个理由点出了工具名：{error}"
         );
     }
 }
 
 #[tokio::test]
 async fn the_tool_touches_no_workspace_path() {
-    // `effect` is the **workspace** side-effect vocabulary (spec §7), and a list
-    // that lives in the call's own arguments writes nothing. That is also what
-    // lets two of these run concurrently and what keeps the gate from ever asking
-    // about one.
+    // `effect` 是**工作区**副作用的词汇（spec §7），而一份住在
+    // 调用自己参数里的列表什么都不写。这也正是
+    // 两个这种调用可以并发、以及权限门从不为它
+    // 发问的原因。
     let fixture = Fixture::new();
     let call = fixture.call("call-1", items_of(&[("x", "pending")]));
     assert_eq!(
@@ -207,7 +207,7 @@ async fn the_tool_touches_no_workspace_path() {
             .unwrap()
             .read_paths(&call.args)
             .is_empty(),
-        "and it reads nothing either"
+        "而它也什么都不读"
     );
     assert!(
         fixture
@@ -216,14 +216,14 @@ async fn the_tool_touches_no_workspace_path() {
             .unwrap()
             .command(&call.args)
             .is_none(),
-        "no argv, so no `CommandPrefix` scope and no breaker"
+        "没有 argv，所以没有 `CommandPrefix` 范围，也没有断路器"
     );
 }
 
 #[test]
 fn the_list_a_reader_sees_is_the_arguments_of_the_call() {
-    // The truth is the args, and this is the reading of them the sidebar and any
-    // later reader uses. Nothing parses the receipt text.
+    // 真相就是那些参数，而这就是左栏与后来任何读者
+    // 用的那种读法。没有任何东西去解析回执文本。
     let args = items_of(&[
         ("first", "completed"),
         ("second", "in_progress"),
@@ -242,19 +242,19 @@ fn the_list_a_reader_sees_is_the_arguments_of_the_call() {
         ]
     );
 
-    // A call the tool would have refused contributes no list rather than half a
-    // one: the writer validates, so this is a reader that must not panic.
+    // 一次工具本来会拒掉的调用，贡献的是没有列表，而不是半份
+    // 列表：写的那一侧会校验，所以读的这一侧绝不能 panic。
     assert!(read_items(&json!({ "items": "nope" })).is_empty());
     assert!(read_items(&json!({})).is_empty());
 }
 
 #[test]
 fn a_later_call_in_the_same_message_is_the_one_in_force() {
-    // Two `todo` calls in one assistant message are two calls of a `ReadOnly`
-    // tool, so they may run concurrently — and the second one's list is the one
-    // left standing, because replace-all is the contract. Reading by `seq` is how
-    // every reader of the stream settles it, and this pins that "last one wins" is
-    // a property of the data rather than a race.
+    // 一条 assistant 消息里两次 `todo` 调用，就是两次 `ReadOnly`
+    // 工具的调用，所以它们可以并发 —— 而站着的是第二份列表，
+    // 因为契约是全量替换。按 `seq` 读，是流上每一个
+    // 读者的了断方式，而这一条钉住「后来的赢」是
+    // 数据的性质，而不是一次竞态。
     let first = items_of(&[("old", "pending")]);
     let second = items_of(&[("new", "completed")]);
     let stream = [(1u64, first), (2, second)];
@@ -266,10 +266,10 @@ fn a_later_call_in_the_same_message_is_the_one_in_force() {
 
 #[test]
 fn every_table_that_can_plan_has_the_tool() {
-    // Main sessions, debaters (they are main sessions) and executors all plan;
-    // `delegable` stays at its default `true` precisely so an executor gets it.
-    // Headless is the third renderer, and this tool needs no person — unlike
-    // `ask_user_question`, which is the one tool `can_ask` gates (spec §7, §19).
+    // 主会话、讨论者（它们就是主会话）与执行者都要做计划；
+    // `delegable` 保持默认的 `true`，正是为了让执行者也拿到它。
+    // headless 是第三种前端，而这个工具不需要人 —— 不像
+    // `ask_user_question`，那是 `can_ask` 唯一把关的工具（spec §7、§19）。
     for can_ask in [false, true] {
         let table = builtin(can_ask);
         assert!(
@@ -285,9 +285,9 @@ fn every_table_that_can_plan_has_the_tool() {
 
 #[test]
 fn the_identity_tells_the_model_to_keep_a_list() {
-    // The rules section (spec §3): guidance, not enforcement. The instruction is
-    // in the model-visible prefix of every request, so it *is* the cached prefix —
-    // adding to it is allowed, changing it is not (ADR 0001, ADR 0003).
+    // 规则那一段（spec §3）：是引导，不是强制。这条指令在
+    // 每个请求里模型看得见的前缀上，所以*它就是*那段被缓存的前缀 ——
+    // 往里加是允许的，改它不行（ADR 0001、ADR 0003）。
     let identity = fs_agent::agent::agent_identity();
     assert!(identity.contains("todo"), "{identity}");
     assert!(identity.contains("pending"), "{identity}");
@@ -296,7 +296,7 @@ fn the_identity_tells_the_model_to_keep_a_list() {
     assert!(identity.contains("Before you start"), "{identity}");
 }
 
-// --- through a real session ------------------------------------------------
+// --- 走一个真会话 ----------------------------------------------------------
 
 struct Session {
     harness: Harness,
@@ -304,7 +304,7 @@ struct Session {
     _dir: tempfile::TempDir,
 }
 
-/// A session whose model does what the script says, mounted with the real table.
+/// 一个模型照脚本行事的会话，挂的是真工具表。
 async fn session(replies: Vec<Reply>) -> Session {
     let dir = tempfile::tempdir().unwrap();
     let session_dir = dir.path().join("session");
@@ -382,10 +382,10 @@ async fn one_todo_call_gets_exactly_one_result_and_the_arguments_stand_verbatim(
             } if tool_name == TODO_TOOL => Some(args.clone()),
             _ => None,
         })
-        .expect("the stream carries the call");
+        .expect("流上扛着这次调用");
     assert_eq!(
         started, args,
-        "the arguments are stored as written: the list is the call"
+        "参数按写下的样子存着：列表就是这次调用"
     );
 
     let results: Vec<&EventPayload> = events
@@ -399,17 +399,17 @@ async fn one_todo_call_gets_exactly_one_result_and_the_arguments_stand_verbatim(
         })
         .map(|event| &event.payload)
         .collect();
-    assert_eq!(results.len(), 1, "exactly one result, no more and no fewer");
+    assert_eq!(results.len(), 1, "正好一条结果，不多也不少");
     match results[0] {
         EventPayload::ToolCallCompleted { ok, output, .. } => {
             assert!(*ok);
             assert_eq!(
                 output.as_deref(),
                 Some("todo: 2 items (0 completed)"),
-                "the receipt is the acknowledgement, not the list"
+                "回执是一个确认，不是那份列表"
             );
         }
-        other => panic!("expected a completion, got {other:?}"),
+        other => panic!("期望一条完成，实际得到 {other:?}"),
     }
 
     session.harness.shutdown().await;
@@ -417,8 +417,8 @@ async fn one_todo_call_gets_exactly_one_result_and_the_arguments_stand_verbatim(
 
 #[tokio::test]
 async fn two_calls_in_one_message_each_get_a_result_and_the_last_list_wins() {
-    // Concurrent by `effect()`, ordered by `seq`: two lists land, and the one a
-    // reader takes — the later — is the one in force.
+    // 由 `effect()` 判定并发、由 `seq` 定序：两份列表都落下来，
+    // 而读者取的那一份 —— 更晚的那份 —— 才是生效的。
     let first = items_of(&[("旧的", "pending")]);
     let second = items_of(&[("新的", "completed")]);
     let both = Reply::Stream(vec![
@@ -452,14 +452,14 @@ async fn two_calls_in_one_message_each_get_a_result_and_the_last_list_wins() {
             _ => None,
         })
         .collect();
-    assert_eq!(lists.len(), 2, "both calls are on the stream");
+    assert_eq!(lists.len(), 2, "两次调用都在流上");
 
     let results = session
         .events()
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
         .count();
-    assert_eq!(results, 2, "and each has its one result");
+    assert_eq!(results, 2, "而每一次都有它那一条结果");
 
     let in_force = read_items(lists.last().unwrap());
     assert_eq!(in_force[0].content, "新的");

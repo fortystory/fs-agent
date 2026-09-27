@@ -1,9 +1,9 @@
-//! Dynamically declared tools (ticket 19, spec §14).
+//! 动态声明的工具（票 19，spec §14）。
 //!
-//! Two seams: the declaration is a pure function of `config.toml` (parse,
-//! validate, substitute argv), and the call runs through the one assembly seam
-//! like any other tool, so the permission gate and the event stream are the same
-//! ones a built-in goes through.
+//! 两条接缝：声明是 `config.toml` 的纯函数（解析、
+//! 校验、替换 argv），而这次调用像别的工具一样走那唯一一条组装接缝，
+//! 所以经过的权限门与事件流
+//! 与内置工具经过的是同一批。
 
 mod support;
 
@@ -24,7 +24,7 @@ use fs_agent::tools::{
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
-/// A declaration that echoes one argument between a literal prefix and suffix.
+/// 一份把一个参数夹在字面前缀与后缀之间回显出来的声明。
 const ECHO_TOML: &str = r#"
 [tools.test.echo]
 description = "Echo one argument."
@@ -34,16 +34,16 @@ parameters = { type = "object", properties = { text = { type = "string" } }, req
 
 fn declarations(toml: &str) -> Vec<ToolDeclaration> {
     resolve(Some(toml), &EnvMap::new())
-        .expect("the declaration parses")
+        .expect("这份声明解析得过")
         .tools
 }
 
 fn tool(toml: &str) -> CustomTool {
     let declarations = declarations(toml);
-    CustomTool::new(declarations.into_iter().next().expect("one declaration"))
+    CustomTool::new(declarations.into_iter().next().expect("一份声明"))
 }
 
-// --- the declaration is a pure function of the config ----------------------
+// --- 声明是配置的纯函数 ----------------------------------------------------
 
 #[test]
 fn a_declaration_becomes_a_namespaced_tool() {
@@ -58,15 +58,15 @@ fn a_declaration_becomes_a_namespaced_tool() {
 
 #[test]
 fn builtin_names_never_contain_the_separator() {
-    // The lexical predicate "has `__` iff declared in configuration" only holds
-    // while no built-in name contains it (spec §14). `true` asks for the whole
-    // built-in table — the optional tool included — because the invariant is
-    // about every built-in, not about whatever a headless session happens to
-    // advertise.
+    // 「有 `__` 当且仅当在配置里声明过」这条词法判定，只有在没有任何
+    // 内置名字带它时才成立（spec §14）。`true` 要的是整张
+    // 内置表 —— 可选工具也在内 —— 因为这条不变量说的是
+    // 每一个内置工具，而不是某个 headless 会话碰巧
+    // 对外声明了什么。
     for spec in builtin(true).specs() {
         assert!(
             !is_custom_tool(&spec.name),
-            "built-in `{}` must not contain `__`",
+            "内置的 `{}` 不能带 `__`",
             spec.name
         );
     }
@@ -77,8 +77,8 @@ fn the_declared_tool_is_registered_and_recognizable() {
     let registry = with_dynamic(&declarations(ECHO_TOML), false);
     assert!(is_custom_tool("custom__test__echo"));
     assert!(registry.get("custom__test__echo").is_some());
-    // The built-in table alone does not have it — the full table, optional
-    // tools and all, is still not where a declared name comes from.
+    // 光那张内置表里没有它 —— 整张表、可选工具统统算上，
+    // 也仍然不是声明出来的名字的来源。
     assert!(builtin(true).get("custom__test__echo").is_none());
 }
 
@@ -105,7 +105,7 @@ fn the_declared_schema_is_sent_verbatim() {
     );
 }
 
-// --- argv substitution is by whole element ---------------------------------
+// --- argv 替换以整个元素为单位 ---------------------------------------------
 
 #[test]
 fn a_parameter_replaces_whole_argv_elements() {
@@ -126,18 +126,18 @@ fn an_absent_parameter_omits_its_element() {
     assert_eq!(
         tool.command(&serde_json::json!({})),
         Some(vec!["/bin/echo".to_owned(), "--done".to_owned()]),
-        "the missing element is dropped, not left empty"
+        "缺的那个元素被丢掉，而不是留空"
     );
     assert_eq!(
         tool.command(&serde_json::json!({ "text": null })),
         Some(vec!["/bin/echo".to_owned(), "--done".to_owned()]),
-        "an explicit null is absent too"
+        "显式写的 null 同样算缺席"
     );
 }
 
 #[test]
 fn an_array_or_object_is_one_element_not_an_expansion() {
-    // The whole point: a value cannot change the shape of the command.
+    // 要害就在这儿：一个值改不动这条命令的形状。
     let tool = tool(ECHO_TOML);
     let argv = tool
         .command(&serde_json::json!({ "text": ["a", "b", "c"] }))
@@ -145,7 +145,7 @@ fn an_array_or_object_is_one_element_not_an_expansion() {
     assert_eq!(
         argv.len(),
         3,
-        "still one element per template element: {argv:?}"
+        "模板里一个元素仍然对应一个元素：{argv:?}"
     );
     assert_eq!(
         argv[1],
@@ -164,7 +164,7 @@ fn an_array_or_object_is_one_element_not_an_expansion() {
 
 #[test]
 fn a_placeholder_inside_a_larger_element_is_literal() {
-    // Substitution is by whole element, so a partial splice is not performed.
+    // 替换以整个元素为单位，所以半截的拼接不会发生。
     let toml = r#"
 [tools.test.echo]
 description = "Echo."
@@ -197,11 +197,11 @@ parameters = { type = "object", properties = { n = { type = "integer" }, flag = 
     );
 }
 
-// --- validation is startup work --------------------------------------------
+// --- 校验是启动时的工作 ----------------------------------------------------
 
 fn refusal(toml: &str) -> String {
     resolve(Some(toml), &EnvMap::new())
-        .expect_err("the declaration must be refused")
+        .expect_err("这份声明必须被拒")
         .to_string()
 }
 
@@ -233,7 +233,7 @@ parameters = { type = "object", properties = { program = { type = "string" } } }
 
 #[test]
 fn a_namespace_containing_the_separator_is_refused() {
-    // `a__b` would make the name ambiguous to reparse.
+    // `a__b` 会让这个名字重新解析时歧义。
     let message = refusal(
         r#"
 [tools.a__b.echo]
@@ -258,7 +258,7 @@ parameters = { type = "object" }
     assert!(message.contains("command"), "{message}");
 }
 
-// --- the call goes through the one assembly seam ---------------------------
+// --- 这次调用走那唯一一条组装接缝 ------------------------------------------
 
 struct Fixture {
     harness: Harness,
@@ -314,7 +314,7 @@ impl Fixture {
         read_events(&self.log_path).unwrap()
     }
 
-    /// `(ok, output_or_error)` for the first completed call.
+    /// 第一次已完成的调用对应的 `(ok, output_or_error)`。
     fn first_result(&self) -> (bool, String) {
         self.events()
             .iter()
@@ -327,7 +327,7 @@ impl Fixture {
                 )),
                 _ => None,
             })
-            .expect("one completed call")
+            .expect("一次已完成的调用")
     }
 
     fn exists(&self, name: &str) -> bool {
@@ -339,7 +339,7 @@ impl Fixture {
     }
 }
 
-/// A scripted call to a declared tool, then a closing text reply.
+/// 一次对声明出来的工具的脚本化调用，然后一条收尾的文本回复。
 fn call_reply(id: &str, name: &str, args: serde_json::Value) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
@@ -356,8 +356,8 @@ fn call_reply(id: &str, name: &str, args: serde_json::Value) -> Reply {
 
 #[tokio::test]
 async fn a_dynamic_tool_runs_argv_without_a_shell() {
-    // Every shell metacharacter here is just text: the value is one argv element
-    // of a direct spawn, so nothing re-parses it (spec §14).
+    // 这里每一个 shell 元字符都只是文本：这个值是直接 spawn 时的一个
+    // argv 元素，所以没有谁重新解析它（spec §14）。
     let payload = "; touch pwned; $(touch pwned2); `touch pwned3`";
     let mut fixture = fixture(
         ECHO_TOML,
@@ -380,12 +380,12 @@ async fn a_dynamic_tool_runs_argv_without_a_shell() {
     assert!(ok, "{output:?}");
     assert!(
         output.contains(payload),
-        "the literal argument is echoed back: {output:?}"
+        "这个字面参数被原样回显出来了：{output:?}"
     );
     for marker in ["pwned", "pwned2", "pwned3"] {
         assert!(
             !fixture.exists(marker),
-            "`{marker}` must not exist: no shell interpreted the argument"
+            "`{marker}` 不能存在：没有哪条 shell 解释过这个参数"
         );
     }
 
@@ -415,11 +415,11 @@ timeout_ms = 300
     fixture.harness.run_turn("slow").await.unwrap();
     assert!(
         started.elapsed() < Duration::from_secs(10),
-        "the call returned at its own deadline"
+        "这次调用在它自己的期限上返回了"
     );
 
     let (ok, output) = fixture.first_result();
-    assert!(ok, "a timeout is a result, not a failed call: {output:?}");
+    assert!(ok, "超时是一条结果，不是一个失败的调用：{output:?}");
     assert!(output.contains(TIMEOUT_PREFIX), "{output:?}");
 
     let child = fixture.read("child.pid").trim().parse::<u32>().unwrap();
@@ -430,8 +430,8 @@ timeout_ms = 300
 
 #[tokio::test]
 async fn a_dynamic_tool_is_refused_by_the_readonly_mode() {
-    // `Exclusive` means the gate treats it as a write, so the mode refuses it
-    // without a special case (spec §12, §14).
+    // `Exclusive` 意味着权限门把它当写看待，所以那一档模式
+    // 不需要任何特例就拒了它（spec §12、§14）。
     let mut fixture = fixture(
         ECHO_TOML,
         vec![
@@ -448,7 +448,7 @@ async fn a_dynamic_tool_is_refused_by_the_readonly_mode() {
 
     fixture.harness.run_turn("echo it").await.unwrap();
     let (ok, message) = fixture.first_result();
-    assert!(!ok, "the call must be refused: {message:?}");
+    assert!(!ok, "这次调用必须被拒：{message:?}");
     assert!(
         message.to_lowercase().contains("readonly") || message.to_lowercase().contains("denied"),
         "{message:?}"
@@ -459,8 +459,8 @@ async fn a_dynamic_tool_is_refused_by_the_readonly_mode() {
 
 #[test]
 fn one_tool_rule_covers_every_dynamic_tool() {
-    // The names are namespaced so a single `Tool("custom__*")` rule is the
-    // backstop for everything declared in configuration (spec §14).
+    // 名字带命名空间，所以一条 `Tool("custom__*")` 规则就是配置里
+    // 声明的一切的兜底（spec §14）。
     let mut policy = Policy::for_mode(Mode::Auto);
     policy.push(Rule::new(
         Subject::Any,
@@ -485,7 +485,7 @@ fn one_tool_rule_covers_every_dynamic_tool() {
     assert!(verdict.reason.contains("custom__*"), "{}", verdict.reason);
 }
 
-/// Whether a process is gone (or a zombie) as seen through `/proc`.
+/// 从 `/proc` 看过去，一个进程是不是没了（或者已经是个僵尸）。
 fn process_is_gone(pid: u32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Err(_) => true,
@@ -503,5 +503,5 @@ async fn wait_until_gone(pid: u32) {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("process {pid} is still running after its group was killed");
+    panic!("进程 {pid} 在它的进程组被杀之后还在跑");
 }

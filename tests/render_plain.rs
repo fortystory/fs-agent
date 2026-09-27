@@ -1,8 +1,8 @@
-//! The plain renderer at the render seam: feed it events on the injected channel
-//! and assert the two sinks (spec §19, Testing Decisions category 10).
+//! 渲染接缝上的 plain 渲染器：往注入的通道里喂事件，
+//! 然后断言那两个 sink（spec §19，Testing Decisions 第 10 类）。
 //!
-//! Nothing here drives a real turn: the renderer's contract is over the event
-//! sequence, which is exactly what these tests supply.
+//! 这里没有任何东西去驱动一个真回合：渲染器的契约是压在那个事件
+//! 序列上的，而这些测试给的正好就是它。
 
 mod support;
 
@@ -14,8 +14,8 @@ fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
 }
 
-/// Spawn the plain renderer on an injected channel and return its handle plus
-/// the two captured sinks.
+/// 在一个注入的通道上起 plain 渲染器，返回它的把手以及
+/// 那两个被捕获的 sink。
 fn renderer(
     color: bool,
 ) -> (
@@ -50,8 +50,8 @@ async fn run(events: &[Event], color: bool) -> (CaptureBuf, CaptureBuf) {
 
 #[tokio::test]
 async fn every_streamed_line_carries_the_speaker_prefix() {
-    // A multi-agent transcript interleaves, so a prefix that appears once per
-    // block would make it unreadable (spec §19).
+    // 多 agent 的转录是交错的，所以一个块只出现一次的前缀
+    // 会让它读不下去（spec §19）。
     let (handle, _stdout, stderr, task) = renderer(false);
     handle.text_delta(&kimi(), "first line\nsecond ");
     handle.text_delta(&kimi(), "line continues");
@@ -65,9 +65,9 @@ async fn every_streamed_line_carries_the_speaker_prefix() {
 
 #[tokio::test]
 async fn a_notice_reaches_the_diagnostic_sink_verbatim() {
-    // The startup banner and the interactive loop's feedback go through the
-    // renderer instead of straight to the terminal: once a renderer owns the
-    // terminal, a second writer lands inside its live region (spec §19, §A.12).
+    // 启动横幅与交互式循环的反馈都经过渲染器，而不是
+    // 直接写终端：一旦渲染器占住了终端，第二个写者
+    // 就落进它那块活区域里了（spec §19、§A.12）。
     let (handle, stdout, stderr, task) = renderer(false);
     handle.notice("fs-agent: session abc · model m · mode ask · /tmp/x");
     drop(handle);
@@ -82,8 +82,8 @@ async fn a_notice_reaches_the_diagnostic_sink_verbatim() {
 
 #[tokio::test]
 async fn a_message_without_deltas_is_still_shown() {
-    // A provider that does not stream, or the synthesizer's whole message, has
-    // no deltas behind it — the completed message is the only copy.
+    // 一个不走流式的 provider，或者合成器那一整条消息，
+    // 背后都没有增量 —— 完成的那条消息是唯一一份。
     let events = [Event::new(
         1,
         kimi(),
@@ -122,33 +122,33 @@ async fn rounds_are_sectioned_and_divergences_are_indented() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    // Semantic, not textual: the round opens with a section line carrying its
-    // number, and no debug-formatted enum reaches the interface. The exact words
-    // belong to the wording layer's own test.
+    // 断言的是语义而不是文本：一轮以一条带着它编号的分节行开场，
+    // 而且没有任何 debug 格式的枚举到达界面。确切的字句
+    // 归文案层自己的测试。
     assert!(
         text.lines()
             .any(|line| line.starts_with("── ") && line.contains('2') && line.ends_with("──")),
-        "a round section line: {text:?}"
+        "一条轮次分节行：{text:?}"
     );
-    assert!(!text.contains("Targeted"), "no debug enum: {text:?}");
+    assert!(!text.contains("Targeted"), "没有 debug 枚举：{text:?}");
     assert!(
         text.lines()
             .any(|line| line.starts_with("!! ") && line.contains("the seam")),
-        "a divergence heading with its topic: {text:?}"
+        "带主题的分歧标题：{text:?}"
     );
     assert!(
         text.contains("  - trace it") && text.contains("  - map it"),
-        "positions are indented: {text:?}"
+        "各方立场是缩进的：{text:?}"
     );
 }
 
 #[tokio::test]
 async fn a_tool_result_and_its_post_hook_read_as_one_block() {
-    // The hook event carries no `tool_call_id`, so the call is what says which line the
-    // feedback belongs under. The call itself is painted by its **result**, not held
-    // open for the hook: holding it made the call invisible for the tool's whole run
-    // (2026-09-23, 票 02 §3). The order the reader sees is unchanged — head, result,
-    // feedback — only the moment they are written moves earlier.
+    // 钩子事件不带 `tool_call_id`，所以哪一行归哪条反馈，靠的是那次调用
+    // 自己。这次调用由它的**结果**来画，不为钩子一直开着：
+    // 一直开着会让这次调用在整个工具运行期间都看不见
+    // （2026-09-23，票 02 §3）。读者看到的顺序没变 —— 头部、结果、
+    // 反馈 —— 变的只是写下它们的时刻提前了。
     let id = ToolCallId::new("call-1");
     let events = [
         Event::new(
@@ -190,21 +190,21 @@ async fn a_tool_result_and_its_post_hook_read_as_one_block() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    // Semantic: head, result and post-hook feedback appear in that order, in one
-    // block. The exact words are the wording layer's test.
-    let head = text.find("read_file(path=src/lib.rs)").expect("tool head");
-    let output = text.find("  fn main() {}").expect("tool output");
-    let hook = text.find("feedback: looks fine").expect("hook feedback");
+    // 断的是语义：头部、结果与后置钩子的反馈按这个顺序出现在
+    // 同一个块里。确切的字句是文案层的测试。
+    let head = text.find("read_file(path=src/lib.rs)").expect("工具头部");
+    let output = text.find("  fn main() {}").expect("工具输出");
+    let hook = text.find("feedback: looks fine").expect("钩子反馈");
     assert!(head < output && output < hook, "{text:?}");
 }
 
 #[tokio::test]
 async fn a_tool_call_is_printed_when_its_result_lands() {
-    // The result paints the call, with no further event needed: plain used to hold the
-    // call until something unrelated arrived, which for a trailing tool call meant the
-    // line only reached the page at end of stream (票 02 §3). Only the three events
-    // below are fed — no trailing turn end — so an image that still waits for one
-    // would print no head at all.
+    // 结果来画这次调用，不需要再来一个事件：plain 过去会一直押着
+    // 这次调用，直到某个不相干的东西到了，而尾巴上那次工具调用
+    // 因此直到流结束才走到页面上（票 02 §3）。下面这几个事件
+    // 就是喂进去的全部 —— 没有收尾的回合结束 —— 所以仍然等一个的
+    // 画法连头部都印不出来。
     let id = ToolCallId::new("call-early");
     let events = [
         Event::new(
@@ -230,17 +230,17 @@ async fn a_tool_call_is_printed_when_its_result_lands() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    let head = text.find("bash(command=true)").expect("the call line");
-    let output = text.find("  done").expect("its output");
-    assert!(head < output, "head then output: {text:?}");
+    let head = text.find("bash(command=true)").expect("那条调用行");
+    let output = text.find("  done").expect("它的输出");
+    assert!(head < output, "头部然后输出：{text:?}");
 }
 
-/// The post-hook's feedback line on its own, with no call block in the same paint.
+/// 只有后置钩子那条反馈行，同一次画里没有调用的块。
 #[tokio::test]
 async fn a_post_hook_prints_under_the_call_it_annotates() {
-    // The feedback is now its own `Block::ToolFeedback` aimed at the call just painted,
-    // so plain has to render it as the same indented line it always did — and it must
-    // not print the hook twice.
+    // 反馈现在是它自己的 `Block::ToolFeedback`，瞄着刚画过的那次调用，
+    // 所以 plain 必须把它渲染成它一向那样的同一行缩进行 —— 而且
+    // 它绝不能把钩子印两遍。
     let id = ToolCallId::new("call-feedback");
     let events = [
         Event::new(
@@ -278,17 +278,17 @@ async fn a_post_hook_prints_under_the_call_it_annotates() {
     assert_eq!(
         text.matches("feedback: looks fine").count(),
         1,
-        "the feedback is printed exactly once: {text:?}"
+        "这条反馈正好印一次：{text:?}"
     );
-    let output = text.find("  done").expect("the output");
-    let hook = text.find("feedback: looks fine").expect("the feedback");
-    assert!(output < hook, "the feedback follows the result: {text:?}");
+    let output = text.find("  done").expect("那条输出");
+    let hook = text.find("feedback: looks fine").expect("那条反馈");
+    assert!(output < hook, "反馈跟在结果后面：{text:?}");
 }
 
 #[tokio::test]
 async fn the_post_hook_is_not_printed_as_a_separate_event() {
-    // The pre-hook stays its own line; the post-hook is merged into the call it
-    // annotates and must not also appear as a standalone row.
+    // 前置钩子占自己那一行；后置钩子被合进它注解的那次调用，
+    // 而且不能再单独占一行出现。
     let id = ToolCallId::new("call-2");
     let events = [
         Event::new(
@@ -323,8 +323,8 @@ async fn the_post_hook_is_not_printed_as_a_separate_event() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    // The feedback appears exactly once (merged into its call), and no
-    // debug-formatted mount point reaches the interface.
+    // 反馈正好出现一次（合进了它那次调用），而没有任何
+    // debug 格式的挂载点到达界面。
     assert_eq!(text.matches("feedback: ok").count(), 1, "{text:?}");
     assert!(!text.contains("post_tool_use"), "{text:?}");
 }
@@ -357,8 +357,8 @@ async fn the_synthesizers_message_is_the_only_thing_on_stdout() {
 
 #[tokio::test]
 async fn completed_and_aborted_do_not_render_the_same() {
-    // User story 135: a run that finished and a run that hit a wall must be
-    // distinguishable at a glance.
+    // 用户故事 135：跑完的一次运行与撞了墙的一次运行，
+    // 必须一眼分得出来。
     let events = [
         Event::new(
             1,
@@ -384,29 +384,29 @@ async fn completed_and_aborted_do_not_render_the_same() {
     ];
     let (_stdout, stderr) = run(&events, true).await;
     let text = stderr.text();
-    // Green for the completed turn, yellow for the abort, red for the error. The
-    // assertion is on the severity colour and the attribution, not the phrase:
-    // wording has its own exact-text test.
+    // 完成的回合是绿的，中断是黄的，错误是红的。这里断言的是
+    // 严重程度那个颜色与归属，而不是那句话：
+    // 文案有自己的精确文本测试。
     assert!(
         text.lines().any(|line| line.starts_with("\x1b[32m[kimi] ")),
-        "a good stop reads green: {text:?}"
+        "好的收尾读起来是绿的：{text:?}"
     );
     assert!(
         text.lines().any(|line| line.starts_with("\x1b[33m[kimi] ")),
-        "a warning stop reads yellow: {text:?}"
+        "警告性的收尾读起来是黄的：{text:?}"
     );
     assert!(
         text.lines().any(|line| line.starts_with("\x1b[31m[kimi] ")),
-        "an error stop reads red: {text:?}"
+        "错误的收尾读起来是红的：{text:?}"
     );
 }
 
 #[tokio::test]
 async fn a_permission_decision_between_start_and_result_does_not_split_the_call() {
-    // The loop records a `PermissionDecided` for **every** call, asked or not,
-    // and a pre-hook `HookExecuted` also fires between `ToolCallStarted` and the
-    // result. Neither may close the open block, or every live tool call would
-    // render as a resultless call plus a synthetic `?`.
+    // 循环为**每一次**调用都记一条 `PermissionDecided`，问过没问过
+    // 都一样，而前置钩子的 `HookExecuted` 也会在 `ToolCallStarted` 与
+    // 结果之间打一枪。两者都不能关掉那个开着的块，否则每一次
+    // 活着经过的工具调用都会被渲染成一次无结果的调用再加一个合成的 `?`。
     let id = ToolCallId::new("call-4");
     let events = [
         Event::new(
@@ -469,15 +469,15 @@ async fn a_permission_decision_between_start_and_result_does_not_split_the_call(
     let text = stderr.text();
     assert!(
         text.contains("write_file(path=a.txt)"),
-        "the call keeps its arguments: {text:?}"
+        "这次调用保住了它的参数：{text:?}"
     );
-    assert!(text.contains("  wrote a.txt"), "and its result: {text:?}");
+    assert!(text.contains("  wrote a.txt"), "以及它的结果：{text:?}");
     assert!(
         !text.contains("→ ?("),
-        "the completion must not become a second, anonymous block: {text:?}"
+        "这次完成绝不能变成第二个、不知名姓的块：{text:?}"
     );
-    // The decision is still narrated, just not as a block boundary: the line is
-    // attributed to the speaker and carries the gate's own reason verbatim.
+    // 裁决仍然被叙述，只是不作为块的边界：这一行
+    // 归属于那个发言者，并且原样带着权限门自己的理由。
     assert!(
         text.lines()
             .any(|line| line.starts_with("[kimi] ") && line.contains("mode auto")),
@@ -487,8 +487,8 @@ async fn a_permission_decision_between_start_and_result_does_not_split_the_call(
 
 #[tokio::test]
 async fn a_call_with_no_result_still_appears_when_the_stream_ends() {
-    // A cancel leaves a `ToolCallStarted` with no result; the block is flushed at
-    // end of stream rather than dropped (spec §19).
+    // 一次取消会留下一条没有结果的 `ToolCallStarted`；这个块在
+    // 流结束时被冲刷出去，而不是被丢掉（spec §19）。
     let id = ToolCallId::new("call-3");
     let events = [Event::new(
         1,
@@ -500,15 +500,15 @@ async fn a_call_with_no_result_still_appears_when_the_stream_ends() {
         },
     )];
     let (_stdout, stderr) = run(&events, false).await;
-    // Flushed rather than dropped: the call still reaches the transcript.
+    // 是冲刷出去而不是丢掉：这次调用仍然到了转录上。
     assert!(stderr.text().contains("sleep 300"), "{:?}", stderr.text());
 }
 
 #[tokio::test]
 async fn a_permission_question_names_the_tool_and_the_call() {
-    // The question line used to carry only ids, so a person approving a call
-    // could not see what it would run. It now names the tool and the concrete
-    // arguments; the ids stay in the event stream, not in what a person reads.
+    // 这个问句行过去只带 id，所以放行一次调用的那个人
+    // 看不出它要跑什么。现在它会点名工具与具体的参数；
+    // id 留在事件流里，不进人读的东西。
     let events = [Event::new(
         1,
         kimi(),
@@ -528,14 +528,14 @@ async fn a_permission_question_names_the_tool_and_the_call() {
         text.lines().any(|line| line.starts_with("[kimi] ")
             && line.contains("write_file")
             && line.contains("file_path=a.txt")),
-        "the question names the tool and the call: {text:?}"
+        "这个问句点出了工具与那次调用：{text:?}"
     );
     assert!(
         !text.contains("perm-1"),
-        "the request id is not shown: {text:?}"
+        "请求 id 没有露面：{text:?}"
     );
     assert!(
         !text.contains("call-5"),
-        "the call id is not shown: {text:?}"
+        "调用 id 没有露面：{text:?}"
     );
 }

@@ -1,9 +1,9 @@
-//! The syntax-highlighting and diff layers (spec §19, user story 134).
+//! 语法高亮层与 diff 层（spec §19，用户故事 134）。
 //!
-//! They are two computations on purpose: the diff tag says what a line is in the
-//! patch, the syntax class says what kind of code it is. These tests pin both,
-//! and pin that the syntax layer is the Rust grammar already in the tree rather
-//! than a new dependency.
+//! 它们是两套计算，这是故意的：diff 标签说的是这一行在补丁里算什么，
+//! 语法类别说的是它是什么种类的代码。这些测试把两边都钉住，
+//! 也钉住语法层用的就是仓库里已经有的那套 Rust 语法，而
+//! 不是一个新依赖。
 
 use fs_agent::render::highlight::{
     ansi_line, diff_tag, highlight_diff, highlight_rust, Class, DiffTag,
@@ -16,7 +16,7 @@ fn a_rust_keyword_is_its_own_span() {
     let function = lines[0]
         .iter()
         .find(|span| span.text == "fn")
-        .expect("the keyword is a span of its own");
+        .expect("关键字是自己的一个 span");
     assert_eq!(function.class, Class::Keyword);
 }
 
@@ -33,13 +33,13 @@ fn a_string_literal_is_classified_as_a_string() {
     let string = lines[0]
         .iter()
         .find(|span| span.text.contains("hello"))
-        .expect("the literal is a span");
+        .expect("这个字面量是一个 span");
     assert_eq!(string.class, Class::String);
 }
 
 #[test]
 fn highlighting_something_that_is_not_rust_still_returns_lines() {
-    // A tool result is often plain text; color degrades, it never fails.
+    // 工具结果常常就是纯文本；颜色会退化，但从不出错。
     let lines = highlight_rust("not rust at all :::\nsecond line");
     assert_eq!(lines.len(), 2);
     let text: String = lines[0].iter().map(|span| span.text.as_str()).collect();
@@ -61,34 +61,34 @@ fn the_ansi_composition_colors_a_diff_line_by_its_tag() {
     assert!(ansi_line("+added", true).starts_with("\x1b[32m"));
     assert!(ansi_line("-removed", true).starts_with("\x1b[31m"));
     assert!(ansi_line("@@ hunk @@", true).starts_with("\x1b[36m"));
-    // Context lines are painted by the syntax layer, and with color off the line
-    // comes back untouched.
+    // 上下文行由语法层上色，而关掉颜色时这一行
+    // 原样返回。
     assert_eq!(ansi_line("+added", false), "+added");
 }
 
 #[test]
 fn a_diff_tag_is_independent_of_the_syntax_class() {
-    // The two layers never consult each other: a removed keyword is still a
-    // keyword, and still a removal. The diff layer peels the marker off so the
-    // syntax layer sees code, not a patch.
+    // 两层从不互相查询：一个被删掉的关键字仍然是个
+    // 关键字，也仍然是一次删除。diff 层把标记剥下来，好让
+    // 语法层看到的是代码，而不是补丁。
     let line = "-fn main() {}";
     assert_eq!(diff_tag(line), DiffTag::Removed);
     let spans = highlight_diff(line);
     let marker = spans[0]
         .first()
-        .expect("the marker is re-attached as a span");
+        .expect("标记被重新挂回去，成为一个 span");
     assert_eq!(marker.text, "-");
     let keyword = spans[0]
         .iter()
         .find(|span| span.text == "fn")
-        .expect("the keyword survives the marker");
+        .expect("关键字从标记下面活了下来");
     assert_eq!(keyword.class, Class::Keyword);
 }
 
 #[test]
 fn a_stripped_diff_body_is_highlighted_with_cross_line_state() {
-    // Highlighting the stripped document rather than line by line is what keeps
-    // a multi-line construct parsed as one.
+    // 高亮整篇剥掉标记的文档、而不是逐行高亮，才让一个
+    // 跨行的结构被当成一个来解析。
     let spans = highlight_diff("+fn main() {\n+    // inside\n+}");
     assert_eq!(spans.len(), 3);
     assert_eq!(spans[0][0].text, "+");

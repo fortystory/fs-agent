@@ -1,9 +1,9 @@
-//! The repo's first end-to-end test: drive a whole single-agent turn through the
-//! library assembly seam with a scripted fake provider, then assert the JSONL
-//! event stream and the headless renderer's two sinks.
+//! 仓库里的第一个端到端测试：用一个脚本化的假 provider，把一整个
+//! 单一 agent 的回合穿过库的组装接缝跑一遍，然后断言 JSONL
+//! 事件流与 headless 渲染器的那两个 sink。
 //!
-//! No network, no real provider, no environment: everything the library needs is
-//! injected.
+//! 没有网络、没有真 provider、没有环境：库需要的一切都是
+//! 注入的。
 
 mod support;
 
@@ -26,16 +26,16 @@ struct Fixture {
     stdout: CaptureBuf,
     stderr: CaptureBuf,
     log_path: PathBuf,
-    /// The session workspace: `cwd` for the harness, and where tests put files
-    /// the scripts tool calls against.
+    /// 会话的工作区：harness 的 `cwd`，也是测试摆下那些供脚本里的
+    /// 工具调用去动的文件的地方。
     cwd: PathBuf,
     _dir: tempfile::TempDir,
 }
 
 async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    // Session state (the log, tool artifacts) and the workspace are siblings, so
-    // a tool writing into the workspace cannot collide with the session files.
+    // 会话状态（日志、工具产物）与工作区是平级的，所以
+    // 往工作区里写的工具撞不到会话文件。
     let session = dir.path().join("session");
     let cwd = dir.path().join("workspace");
     std::fs::create_dir_all(&session).unwrap();
@@ -59,8 +59,8 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
             session_id: SessionId::new("s-1"),
             tools: fs_agent::tools::builtin(false),
             locks: fs_agent::tools::PathLocks::new(),
-            // An interactive session: the default `ask` mode, with a user who
-            // approves every write. Permission-specific tests script their own.
+            // 一个交互式会话：默认的 `ask` 档，配一个每次都放行写的
+            // 用户。专测权限的那些测试自己脚本化自己的。
             policy: Policy::for_mode(Mode::Ask),
             asker: Some(Arc::new(AlwaysAllow)),
             questions: None,
@@ -129,7 +129,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
     assert_eq!(outcome.text, "hello from fake");
     fixture.harness.shutdown().await;
 
-    // stdout holds exactly the final product; everything else went to stderr.
+    // stdout 上正好是最终产物；别的全都去了 stderr。
     assert_eq!(fixture.stdout.text(), "hello from fake\n");
     let diagnostics = fixture.stderr.text();
     assert!(diagnostics.contains("weighing"), "{diagnostics}");
@@ -138,10 +138,10 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         diagnostics.contains(&fs_agent::render::wording::turn_ended(
             StopReason::Completed
         )),
-        "the turn's ending is narrated: {diagnostics}"
+        "这个回合的收尾被叙述了：{diagnostics}"
     );
 
-    // The event stream is the observable contract.
+    // 事件流就是那份可观察契约。
     let events = read_events(&fixture.log_path).unwrap();
     let kinds: Vec<&str> = events.iter().map(|event| event.payload.kind()).collect();
     assert_eq!(
@@ -168,13 +168,13 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
             assert_eq!(session_id.as_str(), "s-1");
             assert_eq!(*schema_version, fs_agent::events::SCHEMA_VERSION);
         }
-        other => panic!("expected SessionStarted, got {other:?}"),
+        other => panic!("期望 SessionStarted，实际得到 {other:?}"),
     }
     assert_eq!(events[1].speaker_id, SpeakerId::User);
     assert_eq!(events[2].speaker_id, kimi());
     match &events[3].payload {
         EventPayload::UsageRecorded { usage: recorded } => assert_eq!(*recorded, usage),
-        other => panic!("expected UsageRecorded, got {other:?}"),
+        other => panic!("期望 UsageRecorded，实际得到 {other:?}"),
     }
     match &events[4].payload {
         EventPayload::MessageCompleted {
@@ -186,16 +186,16 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
             assert_eq!(text, "hello from fake");
             assert_eq!(reasoning.as_deref(), Some("weighing"));
         }
-        other => panic!("expected MessageCompleted, got {other:?}"),
+        other => panic!("期望 MessageCompleted，实际得到 {other:?}"),
     }
     match &events[5].payload {
         EventPayload::TurnEnded { reason } => assert_eq!(*reason, StopReason::Completed),
-        other => panic!("expected TurnEnded, got {other:?}"),
+        other => panic!("期望 TurnEnded，实际得到 {other:?}"),
     }
 
-    // The provider saw the projection, the model, and the session cache key.
-    // The human is another speaker, so the projection names the participant;
-    // outside a discussion round there is no round label to prefix it with.
+    // provider 看到的是投影、模型与那个会话缓存键。
+    // 人是另一个发言者，所以投影点的是参与者这个名字；
+    // 在讨论轮次之外，没有轮次标签可以给它做前缀。
     let requests = fixture.provider.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].model, "fake-model");
@@ -243,18 +243,18 @@ async fn incremental_text_reaches_the_renderer_but_not_the_event_log() {
     assert_eq!(
         completed.len(),
         1,
-        "the three deltas land as one completed unit, not three"
+        "三条增量落成一条完成单元，而不是三条"
     );
     match &completed[0].payload {
         EventPayload::MessageCompleted { text, .. } => assert_eq!(text, "alphabet"),
-        other => panic!("expected MessageCompleted, got {other:?}"),
+        other => panic!("期望 MessageCompleted，实际得到 {other:?}"),
     }
 
     fixture.harness.shutdown().await;
     assert_eq!(fixture.stdout.text(), "alphabet\n");
     assert!(
         fixture.stderr.text().contains("alphabet"),
-        "the incremental deltas are streamed to the diagnostic sink"
+        "增量文本被流式送到诊断 sink"
     );
 }
 
@@ -301,7 +301,7 @@ async fn a_tool_call_gets_exactly_one_result_and_the_loop_continues() {
         .filter(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
         .collect();
     assert_eq!(starts, 1);
-    assert_eq!(results.len(), 1, "every tool_call gets exactly one result");
+    assert_eq!(results.len(), 1, "每一次 tool_call 正好拿到一条结果");
     match &results[0].payload {
         EventPayload::ToolCallCompleted {
             ok,
@@ -315,20 +315,20 @@ async fn a_tool_call_gets_exactly_one_result_and_the_loop_continues() {
             let output = output.as_deref().unwrap();
             assert!(output.contains("pub fn main() {}"), "{output}");
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("期望 ToolCallCompleted，实际得到 {other:?}"),
     }
     let turn_starts = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
         .count();
-    assert_eq!(turn_starts, 2, "the turn continued after the tool call");
+    assert_eq!(turn_starts, 2, "这次工具调用之后，回合继续了");
 
-    // The second projection replays the assistant tool call and its one result.
+    // 第二次投影重放 assistant 那次工具调用与它那一条结果。
     let second = &fixture.provider.requests()[1];
     let tail = &second.messages[second.messages.len() - 2..];
     match &tail[0] {
         Message::Assistant { tool_calls, .. } => assert_eq!(tool_calls[0].id, "call-1"),
-        other => panic!("expected Assistant with tool_calls, got {other:?}"),
+        other => panic!("期望带 tool_calls 的 Assistant，实际得到 {other:?}"),
     }
     match &tail[1] {
         Message::Tool {
@@ -338,7 +338,7 @@ async fn a_tool_call_gets_exactly_one_result_and_the_loop_continues() {
             assert_eq!(tool_call_id, "call-1");
             assert!(content.contains("pub fn main() {}"), "{content}");
         }
-        other => panic!("expected Tool result, got {other:?}"),
+        other => panic!("期望 Tool 结果，实际得到 {other:?}"),
     }
 
     fixture.harness.shutdown().await;
@@ -375,7 +375,7 @@ async fn a_turn_that_keeps_asking_for_tools_hits_max_iterations() {
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
         .count();
-    assert_eq!(turn_starts, 2, "the loop stopped at the iteration cap");
+    assert_eq!(turn_starts, 2, "循环停在迭代上限上");
     assert!(matches!(
         events.last().unwrap().payload,
         EventPayload::TurnEnded {
@@ -431,7 +431,7 @@ async fn a_stream_that_ends_without_done_is_an_error_and_logs_no_completed_messa
                 ..
             }
         )),
-        "a stream without [DONE] produced no completed unit"
+        "一条没有 [DONE] 的流没有产出任何完成单元"
     );
     assert!(matches!(
         events.last().unwrap().payload,
@@ -503,21 +503,21 @@ async fn a_tool_call_with_no_arguments_records_an_empty_object() {
             EventPayload::ToolCallStarted { args, .. } => Some(args.clone()),
             _ => None,
         })
-        .expect("a ToolCallStarted event");
-    assert_eq!(args, serde_json::json!({}), "empty arguments mean {{}}");
+        .expect("一条 ToolCallStarted 事件");
+    assert_eq!(args, serde_json::json!({}), "空参数意味着 {{}}");
 
     let second = &fixture.provider.requests()[1];
     match &second.messages[second.messages.len() - 2] {
         Message::Assistant { tool_calls, .. } => assert_eq!(tool_calls[0].arguments, "{}"),
-        other => panic!("expected Assistant with tool_calls, got {other:?}"),
+        other => panic!("期望带 tool_calls 的 Assistant，实际得到 {other:?}"),
     }
 }
 
 #[tokio::test]
 async fn the_reasoning_tier_is_pinned_for_the_whole_session() {
-    // Switching Kimi's reasoning tier mid-session throws away the prefix cache,
-    // so the tier is a session value set before the first turn, not a per-call
-    // parameter the loop may vary.
+    // 会话中途切换 Kimi 的推理档位会把前缀缓存扔掉，
+    // 所以档位是第一个回合之前设好的会话值，而不是循环
+    // 可以随便改的一次调用参数。
     let mut fixture = fixture(
         vec![Reply::text("first"), Reply::text("second")],
         SessionConfig::new("fake-model").with_reasoning_effort(ReasoningEffort::High),
@@ -535,7 +535,7 @@ async fn the_reasoning_tier_is_pinned_for_the_whole_session() {
     }
 }
 
-/// A scripted tool call that completes in one stream.
+/// 一条在一条流里完成的脚本化工具调用。
 fn tool_reply(id: &str, name: &str, arguments: &str, finish_reason: FinishReason) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallStarted {
@@ -555,9 +555,9 @@ fn tool_reply(id: &str, name: &str, arguments: &str, finish_reason: FinishReason
 
 #[tokio::test]
 async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
-    // The whole point of the tool loop: the model asks, the file really changes,
-    // the stream records start and finish, and `.before` is the bytes that were
-    // replaced (the source `/undo` restores from).
+    // 工具循环的全部意义：模型开口，文件真的变了，
+    // 流上记下开始与结束，而 `.before` 是被替换掉的那些字节
+    // （`/undo` 就是从它恢复的）。
     let mut fixture = fixture(
         vec![
             tool_reply(
@@ -583,12 +583,12 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
     assert_eq!(outcome.reason, StopReason::Completed);
     assert_eq!(outcome.text, "renamed the first line");
 
-    // The workspace really changed.
+    // 工作区真的变了。
     assert_eq!(fixture.read("notes.txt"), "uno\ntwo\n");
     let outputs_dir = fixture.harness.outputs_dir().to_path_buf();
     fixture.harness.shutdown().await;
 
-    // The stream holds exactly one start and one end for each call, in order.
+    // 流上每一次调用正好一个开始、一个结束，按顺序。
     let events = read_events(&fixture.log_path).unwrap();
     let calls: Vec<(String, &str)> = events
         .iter()
@@ -612,7 +612,7 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
         .collect();
-    assert_eq!(completed.len(), 2, "each tool_call gets exactly one result");
+    assert_eq!(completed.len(), 2, "每一次 tool_call 正好拿到一条结果");
 
     let edit_result = completed
         .iter()
@@ -623,7 +623,7 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
                     if tool_call_id.as_str() == "call-edit"
             )
         })
-        .expect("the edit call has a result");
+        .expect("这次编辑调用有一条结果");
     match &edit_result.payload {
         EventPayload::ToolCallCompleted { ok, output, .. } => {
             assert!(ok);
@@ -634,18 +634,18 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
                     fs_agent::tools::MATCH_LEVEL_PREFIX,
                     "exact"
                 )),
-                "the match level is reported as convention text: {output}"
+                "匹配层级是按约定的文本报出来的：{output}"
             );
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("期望 ToolCallCompleted，实际得到 {other:?}"),
     }
 
-    // `.before` is the actual replaced bytes, not the caller's `old_string`. It
-    // lives beside the event log, so a session stays one movable directory.
+    // `.before` 是被替换掉的真实字节，不是调用者给的 `old_string`。它
+    // 住在事件流旁边，所以一个会话始终是一个可搬运的目录。
     let snapshot = outputs_dir.join("call-edit.before");
     assert_eq!(std::fs::read_to_string(&snapshot).unwrap(), "one\n");
 
-    // The projection replays the edit result as the tool message the model sees.
+    // 投影把这次编辑的结果重放成模型看到的那个工具消息。
     let third = &fixture.provider.requests()[2];
     match third.messages.last().unwrap() {
         Message::Tool {
@@ -655,16 +655,16 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
             assert_eq!(tool_call_id, "call-edit");
             assert!(content.contains("edit match"), "{content}");
         }
-        other => panic!("expected the edit result as the last message, got {other:?}"),
+        other => panic!("期望最后一条消息是编辑的结果，实际得到 {other:?}"),
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "uno\ntwo\n");
 }
 
 #[tokio::test]
 async fn an_edit_before_a_read_is_refused_and_the_file_is_left_alone() {
-    // The guardrail is in the loop's path, not in the model's manners: a scripted
-    // edit with no preceding read is refused and produces its one required error
-    // result.
+    // 护栏在循环的路径上，不在模型的教养里：一次没有
+    // 前置读的脚本化编辑被拒，并产出它那条必需的错误
+    // 结果。
     let mut fixture = fixture(
         vec![
             tool_reply(
@@ -690,7 +690,7 @@ async fn an_edit_before_a_read_is_refused_and_the_file_is_left_alone() {
             EventPayload::ToolCallCompleted { error, ok, .. } => Some((*ok, error.clone())),
             _ => None,
         })
-        .expect("the refused call still gets a result");
+        .expect("被拒的那次调用照样拿到一条结果");
     assert!(!result.0);
     let message = result.1.unwrap();
     assert!(message.contains("read before write"), "{message}");
@@ -698,8 +698,8 @@ async fn an_edit_before_a_read_is_refused_and_the_file_is_left_alone() {
 
 #[tokio::test]
 async fn the_edit_ladder_reports_a_downgraded_match_in_the_event_stream() {
-    // The model sends spaces where the file has a tab: the edit lands at the
-    // line-trim level, and the level is visible in the stream rather than silent.
+    // 文件里是制表符而模型发的是空格：这次编辑落在
+    // line-trim 这一级上，而这一级在流上看得见，不是悄悄的。
     let mut fixture = fixture(
         vec![
             tool_reply(
@@ -738,11 +738,11 @@ async fn the_edit_ladder_reports_a_downgraded_match_in_the_event_stream() {
             } if tool_call_id.as_str() == "call-edit" => Some(output.clone()),
             _ => None,
         })
-        .expect("the edit result");
+        .expect("这次编辑的结果");
     assert!(output.contains("line-trim"), "{output}");
 
-    // `.before` carries the real replaced bytes (with the tab), which is the
-    // whole reason the level is recorded at all.
+    // `.before` 扛的是真实被替换的字节（带那个制表符），
+    // 这一级之所以被记下来，全部理由就在这儿。
     let snapshot = fixture.harness.outputs_dir().join("call-edit.before");
     assert_eq!(std::fs::read_to_string(&snapshot).unwrap(), "\trun();");
     fixture.harness.shutdown().await;
@@ -750,10 +750,10 @@ async fn the_edit_ladder_reports_a_downgraded_match_in_the_event_stream() {
 
 #[tokio::test]
 async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
-    // The hard stop is cumulative, not per turn (spec §17): the first call lands
-    // the whole allowance, the tool call it asked for still keeps its one result
-    // — the unit in flight completes — and the turn then stops instead of
-    // opening a second provider call.
+    // 硬停是累计的，不是按回合的（spec §17）：第一次调用花掉
+    // 整个额度，它要的那次工具调用照样留着它那一条结果
+    // —— 在飞的那个单元跑完 —— 随后这个回合就停了，
+    // 而不是再开一次 provider 调用。
     let limit = 1_000;
     let mut fixture = fixture(
         vec![
@@ -787,7 +787,7 @@ async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
     assert_eq!(
         fixture.provider.requests().len(),
         1,
-        "the second model call is never made"
+        "第二次模型调用从来没发出"
     );
 
     let events = read_events(&fixture.log_path).unwrap();
@@ -807,15 +807,15 @@ async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
             ))
             .count(),
         1,
-        "the call that was in flight keeps its one result"
+        "当时在飞的那次调用留住了它那一条结果"
     );
 
     fixture.harness.shutdown().await;
     let stderr = fixture.stderr.text();
     let budget = fs_agent::render::wording::turn_ended(StopReason::BudgetExhausted);
-    assert!(stderr.contains(&budget), "the reason is narrated: {stderr}");
-    // Distinct from the reasons the same line can carry: a turn that ran out of
-    // its own iterations, or one that finished, must not read the same.
+    assert!(stderr.contains(&budget), "那个理由被叙述了：{stderr}");
+    // 与同一行可能扛的别的收尾原因要分得开：一个把自己的
+    // 迭代数用光的回合，或者一个正常跑完的回合，读起来必须不一样。
     assert!(
         !stderr.contains(&fs_agent::render::wording::turn_ended(
             StopReason::MaxIterations
@@ -832,9 +832,9 @@ async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
 
 #[tokio::test]
 async fn a_call_the_pre_flight_estimate_refuses_is_never_sent() {
-    // The pre-flight half of the gate (spec §17): every droppable class fits the
-    // window, but the call plainly would not fit what is left of the session's
-    // allowance, so it is never sent — the cheap half of the hard stop.
+    // 闸门起飞前那一半（spec §17）：每一类可丢的东西都装得进
+    // 窗口，但这次调用显然装不进会话额度剩下的部分，
+    // 所以它永远不会被发出去 —— 硬停便宜的那一半。
     let mut fixture = fixture(
         vec![Reply::text("a reply the budget refuses to ask for")],
         SessionConfig::new("fake-model").with_session_token_limit(10),
@@ -846,7 +846,7 @@ async fn a_call_the_pre_flight_estimate_refuses_is_never_sent() {
     assert_eq!(outcome.reason, StopReason::BudgetExhausted);
     assert!(
         fixture.provider.requests().is_empty(),
-        "a call that would not fit is not sent"
+        "装不下的调用不会被发出去"
     );
 
     fixture.harness.shutdown().await;

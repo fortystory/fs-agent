@@ -1,5 +1,5 @@
-//! The event log's external contract: append-only JSONL, `seq` equals line
-//! number, and a torn final line is tolerated.
+//! 事件流对外的契约：只追加的 JSONL，`seq` 等于行
+//! 号，而且最后一行被截断是可容忍的。
 
 use fs_agent::events::{
     last_assistant_has_tool_calls, pending_tool_calls, read_events, total_usage, Event, EventLog,
@@ -47,13 +47,13 @@ fn seq_is_the_jsonl_line_number() {
         assert_eq!(
             event.seq,
             index as u64 + 1,
-            "seq must equal the line number"
+            "seq 必须等于行号"
         );
     }
 
     let raw = std::fs::read_to_string(&path).unwrap();
     let line_count = raw.lines().count();
-    assert_eq!(line_count, 3, "one event per JSONL line");
+    assert_eq!(line_count, 3, "每一行 JSONL 一条事件");
     assert_eq!(log.next_seq(), 4);
 }
 
@@ -76,7 +76,7 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
         .unwrap();
     }
 
-    // Simulate a crash mid-write: a partial third line with no newline.
+    // 模拟写到一半崩溃：第三行只写了一半、没有换行符。
     {
         let mut file = std::fs::OpenOptions::new()
             .append(true)
@@ -89,7 +89,7 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
     assert_eq!(
         tolerated.len(),
         2,
-        "the torn final line is dropped, not fatal"
+        "被截断的末行被丢掉，而不是致命错误"
     );
 
     let mut log = EventLog::open(&path).unwrap();
@@ -104,7 +104,7 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
         .unwrap();
     assert_eq!(
         appended.seq, 3,
-        "seq stays equal to the line number after repair"
+        "修复之后 seq 仍等于行号"
     );
 
     let events = read_events(&path).unwrap();
@@ -133,12 +133,12 @@ fn a_complete_final_line_without_a_newline_is_preserved_on_open() {
         .unwrap();
     }
 
-    // A crash can leave a *complete* final event with no terminating newline.
+    // 崩溃也可能留下一条*完整*的末尾事件，却没有结尾的换行符。
     let raw = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, raw.trim_end_matches('\n')).unwrap();
 
     let mut log = EventLog::open(&path).unwrap();
-    assert_eq!(log.events().len(), 2, "a complete event is never deleted");
+    assert_eq!(log.events().len(), 2, "完整的事件永远不会被删掉");
     assert_eq!(log.next_seq(), 3);
 
     let appended = log
@@ -256,7 +256,7 @@ fn continuation_is_decided_by_the_last_assistant_message() {
     events.push(assistant(3, "all done"));
     assert!(
         !last_assistant_has_tool_calls(&events, &kimi),
-        "a later assistant message without tool calls ends the turn"
+        "后面一条不带工具调用的 assistant 消息收尾了这个回合"
     );
 
     let other = SpeakerId::Debater("deepseek".into());

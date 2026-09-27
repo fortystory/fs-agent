@@ -1,9 +1,9 @@
-//! The permission gate, tested directly as the pure function it is.
+//! 权限门，就按它本来的样子当纯函数直接测。
 //!
-//! The truth table covers `mode × action × Scope × propagate`, plus the circuit
-//! breaker's short-circuit, the mode floors, and the `.env` family's default
-//! denial. No provider, no session, no filesystem: `(policy, caller, call)` in,
-//! verdict out.
+//! 真值表覆盖 `mode × action × Scope × propagate`，外加断路器的
+//! 短路、各档模式的地板，以及 `.env` 家族默认的
+//! 拒绝。没有 provider、没有会话、没有文件系统：`(policy, caller, call)`
+//! 进去，裁决出来。
 
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use fs_agent::events::{Decision, ParticipantId, SpeakerId};
 use fs_agent::permissions::{decide, Call, Mode, Policy, Rule, Scope, Subject, Verdict};
 use fs_agent::tools::Effect;
 
-/// One call to gate, in owned form so the tests read like a table of cases.
+/// 一次交给权限门的调用，用 owned 形式写，好让测试读起来像一张用例表。
 struct Invocation {
     tool: String,
     effect: Effect,
@@ -41,7 +41,7 @@ impl Invocation {
         Invocation::new(tool, Effect::ReadOnly)
     }
 
-    /// A `WritePaths` call whose resolved targets are these absolute paths.
+    /// 一次 `WritePaths` 调用，它解析后的目标就是这些绝对路径。
     fn write(tool: &str) -> Self {
         Invocation::new(tool, Effect::WritePaths(Vec::new()))
     }
@@ -126,7 +126,7 @@ fn deny_any() -> Rule {
     Rule::new(Subject::Any, Scope::All, Decision::Deny)
 }
 
-// --- the three modes ------------------------------------------------------
+// --- 三档模式 -------------------------------------------------------------
 
 #[test]
 fn readonly_denies_every_non_read_only_call() {
@@ -167,12 +167,12 @@ fn auto_is_not_permission_free_a_deny_rule_still_applies() {
     assert_eq!(decision(Mode::Auto, vec![rule], &write), Decision::Deny);
 }
 
-// --- the mode cycle (票 01 of `.scratch/todo-and-modes`) -------------------
+// --- 模式循环（`.scratch/todo-and-modes` 的票 01） ------------------------
 
 #[test]
 fn a_mode_cycles_readonly_ask_auto_and_back() {
-    // The gesture's whole algebra: one step per press, and three presses return
-    // a session to the mode it started in (`.scratch/todo-and-modes/spec.md` §1).
+    // 这个手势的全部代数：按一次走一步，按三次让会话
+    // 回到它开始的那一档（`.scratch/todo-and-modes/spec.md` §1）。
     assert_eq!(Mode::Readonly.next(), Mode::Ask);
     assert_eq!(Mode::Ask.next(), Mode::Auto);
     assert_eq!(Mode::Auto.next(), Mode::Readonly);
@@ -181,8 +181,8 @@ fn a_mode_cycles_readonly_ask_auto_and_back() {
 
 #[test]
 fn the_three_modes_are_the_three_words_a_configuration_may_write() {
-    // One spelling per mode, and nothing else parses: `plan` was the fourth and
-    // is gone — what took its place is the `todo` tool, not a mode.
+    // 一档模式一个拼写，别的都解析不出来：`plan` 曾经是第四档，
+    // 已经退场 —— 顶替它的是 `todo` 工具，不是一档模式。
     for mode in [Mode::Readonly, Mode::Ask, Mode::Auto] {
         assert_eq!(Mode::parse(mode.as_str()), Some(mode));
     }
@@ -195,8 +195,8 @@ fn the_three_modes_are_the_three_words_a_configuration_may_write() {
 fn every_mode_keeps_its_own_stance_on_a_write() {
     let read = Invocation::read("read_file");
     let notes = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
-    // The file the old plan mode existed to protect is now an ordinary write: no
-    // mode exempts it and none refuses it by name.
+    // 老的计划模式为保护而存在的那个文件，现在只是一次普通写：
+    // 没有任何一档为它开特例，也没有任何一档点名拒它。
     let plan = Invocation::write("write_file").writes(&["/w/PLAN.md"]);
 
     assert_eq!(decision(Mode::Readonly, vec![], &read), Decision::Allow);
@@ -208,12 +208,12 @@ fn every_mode_keeps_its_own_stance_on_a_write() {
     assert_eq!(decision(Mode::Auto, vec![], &plan), Decision::Allow);
 }
 
-// --- rules override the mode's default, never its floor -------------------
+// --- 规则覆盖模式的默认，绝不覆盖它的地板 ---------------------------------
 
 #[test]
 fn an_allow_rule_overrides_the_ask_mode_default() {
-    // This is what makes a session-scoped "always allow" mean anything: the
-    // mode is the default, and an explicit rule can settle it.
+    // 会话范围内的「总是允许」有意义，全靠这个：模式是
+    // 默认值，而一条显式的规则能把它了结。
     let write = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
     let rule = Rule::new(
         Subject::Any,
@@ -221,7 +221,7 @@ fn an_allow_rule_overrides_the_ask_mode_default() {
         Decision::Allow,
     );
     assert_eq!(decision(Mode::Ask, vec![rule], &write), Decision::Allow);
-    // A different tool still asks.
+    // 换一个工具照样要问。
     let other = Invocation::write("write_file").writes(&["/w/other.txt"]);
     let rule = Rule::new(
         Subject::Any,
@@ -233,8 +233,8 @@ fn an_allow_rule_overrides_the_ask_mode_default() {
 
 #[test]
 fn the_readonly_floor_cannot_be_lowered_by_an_allow_rule() {
-    // "No write exemption" is the mode's definition, so an allow rule cannot
-    // buy one; the user switches modes instead.
+    // 「不豁免写」是这一档的定义，所以一条放行规则买不到
+    // 豁免；用户改为切换模式。
     let write = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
     assert_eq!(
         decision(Mode::Readonly, vec![allow_any()], &write),
@@ -242,7 +242,7 @@ fn the_readonly_floor_cannot_be_lowered_by_an_allow_rule() {
     );
 }
 
-// --- one merge algebra: deny > ask > allow, ignoring specificity ----------
+// --- 一套合并代数：deny > ask > allow，不看具体程度 -----------------------
 
 #[test]
 fn a_broad_deny_beats_a_narrow_allow() {
@@ -274,16 +274,16 @@ fn ask_beats_allow_among_matching_rules() {
 
 #[test]
 fn the_decision_lattice_only_tightens() {
-    // Rules, a pre-hook's tightening (ticket 05) and inherited constraints all
-    // merge on this one order, so "a hook can only tighten" is an algebraic
-    // property rather than a runtime check.
+    // 规则、前置钩子的收紧（票 05）与继承来的约束全都
+    // 在这一条序上合并，所以「钩子只能收紧」是一条代数
+    // 性质，而不是运行时检查。
     assert_eq!(Decision::Allow.join(Decision::Ask), Decision::Ask);
     assert_eq!(Decision::Ask.join(Decision::Deny), Decision::Deny);
     assert_eq!(Decision::Allow.join(Decision::Deny), Decision::Deny);
     assert_eq!(Decision::Deny.join(Decision::Allow), Decision::Deny);
 }
 
-// --- scopes are predicates over the call ----------------------------------
+// --- 范围是对这次调用的谓词 -----------------------------------------------
 
 #[test]
 fn tool_scope_is_a_glob() {
@@ -334,7 +334,7 @@ fn path_scope_matches_write_and_read_targets() {
     );
     assert_eq!(decision(Mode::Auto, vec![rule], &read), Decision::Deny);
 
-    // A `**/` prefix also matches at the cwd root.
+    // 一个 `**/` 前缀在 cwd 根上同样匹配。
     let root = Invocation::read("read_file").reads(&["/w/lib.rs"]);
     let rule = Rule::new(
         Subject::Any,
@@ -343,7 +343,7 @@ fn path_scope_matches_write_and_read_targets() {
     );
     assert_eq!(decision(Mode::Auto, vec![rule], &root), Decision::Deny);
 
-    // `*` does not cross a directory separator.
+    // `*` 不跨目录分隔符。
     let nested = Invocation::read("read_file").reads(&["/w/src/deep/lib.rs"]);
     let rule = Rule::new(
         Subject::Any,
@@ -362,9 +362,9 @@ fn path_set_requires_the_write_set_to_be_exactly_equal() {
         Decision::Deny,
     );
 
-    // A path set is about the **whole** write set: a call that also writes
-    // elsewhere is not the call the rule describes, and `Exclusive` has no
-    // write set to match at all.
+    // 一个路径集合讲的是**整个**写集合：同时还写别处的调用
+    // 不是这条规则描述的那次调用，而 `Exclusive` 根本没有
+    // 可匹配的写集合。
     let alone = Invocation::write("write_file").writes(&[exact]);
     let borrowed = Invocation::write("write_file").writes(&[exact, "/w/src/main.rs"]);
     let exclusive = Invocation::exclusive("bash");
@@ -391,14 +391,14 @@ fn all_scope_matches_every_call() {
     );
 }
 
-// --- subject and propagation ----------------------------------------------
+// --- 主体与传播 -----------------------------------------------------------
 
 #[test]
 fn subject_scopes_who_a_rule_applies_to() {
     let write = Invocation::write("edit_file").writes(&["/w/notes.txt"]);
     let executor_deny = Rule::new(Subject::Executor, Scope::All, Decision::Deny);
 
-    // The debater is untouched by an executor rule.
+    // 一条执行者规则碰不到讨论者。
     assert_eq!(
         decision(Mode::Auto, vec![executor_deny.clone()], &write),
         Decision::Allow
@@ -438,9 +438,9 @@ fn propagate_defaults_by_action() {
     let allow = Rule::new(Subject::Any, Scope::All, Decision::Allow);
     let ask = Rule::new(Subject::Any, Scope::All, Decision::Ask);
     let deny = Rule::new(Subject::Any, Scope::All, Decision::Deny);
-    assert!(!allow.propagate, "an allowance is not inherited by default");
-    assert!(ask.propagate, "a question is a constraint and is inherited");
-    assert!(deny.propagate, "a denial is inherited");
+    assert!(!allow.propagate, "放行默认不被继承");
+    assert!(ask.propagate, "询问是一条约束，会被继承");
+    assert!(deny.propagate, "拒绝会被继承");
 }
 
 #[test]
@@ -465,8 +465,8 @@ fn an_executor_inherits_constraints_but_not_allowances() {
         .with_propagate(true),
     );
 
-    // The child's mode is its own assembly decision; only the propagating rules
-    // travel, so the parent's `auto`-style allowance can never leak.
+    // 子会话的模式是它自己的组装决定；走的只有那些会传播的规则，
+    // 所以父会话那种 `auto` 式的放行永远漏不下去。
     let mut child = Policy::for_mode(Mode::Ask);
     for rule in parent.inherited_rules() {
         assert!(rule.propagate);
@@ -479,21 +479,21 @@ fn an_executor_inherits_constraints_but_not_allowances() {
     assert_eq!(
         decide(&child, &executor(), &edit.call()).decision,
         Decision::Ask,
-        "the parent's allowance did not travel"
+        "父会话的那条放行没有走下来"
     );
     assert_eq!(
         decide(&child, &executor(), &write.call()).decision,
         Decision::Deny,
-        "the parent's denial travelled"
+        "父会话的那条拒绝走下来了"
     );
     assert_eq!(
         decide(&child, &executor(), &read.call()).decision,
         Decision::Allow,
-        "an explicit override can make an allowance travel"
+        "一次显式的覆盖能让一条放行走下来"
     );
 }
 
-// --- the circuit breaker --------------------------------------------------
+// --- 断路器 ---------------------------------------------------------------
 
 #[test]
 fn rm_at_root_or_home_is_denied_through_any_allow_rule() {
@@ -513,7 +513,7 @@ fn rm_at_root_or_home_is_denied_through_any_allow_rule() {
         assert_eq!(
             decision(Mode::Auto, vec![allow_any()], &call),
             Decision::Deny,
-            "rm {target} must be denied even with an allow-everything rule"
+            "就算有一条放行一切的规则，rm {target} 也必须被拒"
         );
     }
 
@@ -525,15 +525,15 @@ fn rm_at_root_or_home_is_denied_through_any_allow_rule() {
         assert_eq!(
             decision(Mode::Auto, vec![], &call),
             Decision::Allow,
-            "rm {target} is ordinary work in auto mode"
+            "在 auto 档下 rm {target} 是普通活儿"
         );
     }
 }
 
 #[test]
 fn rm_relative_parents_are_folded_against_the_session_cwd() {
-    // A relative `..` chain is checked against the cwd it runs in, so the
-    // relative spelling cannot slip past where the absolute one is caught.
+    // 相对的一串 `..` 是按它运行所在的 cwd 去查的，所以这种
+    // 相对写法溜不过绝对写法被抓住的地方。
     let under_home = Invocation::exclusive("bash")
         .argv(&["rm", "-rf", "../.."])
         .cwd("/home/u/proj")
@@ -543,7 +543,7 @@ fn rm_relative_parents_are_folded_against_the_session_cwd() {
         Decision::Deny
     );
 
-    // `~/a/../..` folds back to the parent of home, not to a plain `..` chain.
+    // `~/a/../..` 折回去是 home 的父目录，而不是一串平的 `..`。
     let home_relative = Invocation::exclusive("bash")
         .argv(&["rm", "-rf", "~/a/../.."])
         .home("/home/u");
@@ -552,7 +552,7 @@ fn rm_relative_parents_are_folded_against_the_session_cwd() {
         Decision::Deny
     );
 
-    // From a workspace outside the home tree, `../..` is not catastrophic.
+    // 从一个不在 home 树里的工作区看，`../..` 并不灾难。
     let elsewhere = Invocation::exclusive("bash")
         .argv(&["rm", "-rf", "../.."])
         .cwd("/tmp/a/b/proj")
@@ -562,9 +562,9 @@ fn rm_relative_parents_are_folded_against_the_session_cwd() {
 
 #[test]
 fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
-    // The `bash` tool declares `["bash", "-lc", command]` (ticket 20), so the
-    // breaker has to read the command the shell will run, not the wrapper that
-    // starts it.
+    // `bash` 工具声明的是 `["bash", "-lc", command]`（票 20），所以
+    // 断路器必须读 shell 将要跑的那条命令，而不是
+    // 起它的那层包装。
     let denied: [&[&str]; 10] = [
         &["bash", "-lc", "rm -rf /"],
         &["bash", "-lc", "cd /tmp && rm -rf /"],
@@ -572,11 +572,11 @@ fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
         &["sh", "-c", "rm -rf /home/u"],
         &["bash", "-lc", r#"rm -rf "/""#],
         &["bash", "-lc", "rm -rf '~'"],
-        // The shell's own grammar in front of the command does not hide it.
+        // 命令前面那点 shell 自己的语法盖不住它。
         &["bash", "-lc", "(rm -rf /)"],
         &["bash", "-lc", "if x; then rm -rf /; fi"],
         &["bash", "-lc", "! rm -rf ~"],
-        // A shell option that takes an argument before `-c` does not stop the scan.
+        // 一个在 `-c` 之前收参数的 shell 选项拦不住这次扫描。
         &["bash", "-o", "pipefail", "-c", "rm -rf /"],
     ];
     for argv in denied {
@@ -585,12 +585,12 @@ fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
         assert_eq!(verdict.decision, Decision::Deny, "{argv:?}");
         assert!(
             verdict.reason.contains("circuit breaker"),
-            "{argv:?}: {}",
+            "{argv:?}：{}",
             verdict.reason
         );
     }
 
-    // Ordinary work: the breaker reads commands, it does not refuse shells.
+    // 普通活儿：断路器读的是命令，它不拒 shell 本身。
     let allowed: [&[&str]; 5] = [
         &["bash", "-lc", "rm -rf build/"],
         &["bash", "-lc", "rm -rf /tmp/scratch"],
@@ -610,9 +610,9 @@ fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
 
 #[test]
 fn the_path_limit_is_a_deny_floor() {
-    // A target the workspace cannot resolve is denied in every mode, so the
-    // recorded verdict matches the refusal instead of reporting an `Allow` the
-    // call never got to use.
+    // 工作区解析不了的目标在每一档里都被拒，所以记下来的
+    // 裁决与那次拒绝对得上，而不是报一个这次调用
+    // 根本没用上的 `Allow`。
     let call = Invocation::write("write_file")
         .writes(&["/etc/hostname"])
         .path_error("path /etc/hostname is outside the session workspace /w");
@@ -630,7 +630,7 @@ fn a_write_inside_git_or_ssh_is_denied_through_any_allow_rule() {
         assert_eq!(
             decision(Mode::Auto, vec![allow_any()], &call),
             Decision::Deny,
-            "{path} is protected"
+            "{path} 受保护"
         );
     }
 }
@@ -641,14 +641,14 @@ fn shell_rc_writes_are_never_auto_approved() {
     assert_eq!(
         decision(Mode::Auto, vec![allow_any()], &call),
         Decision::Ask,
-        "an allow-everything rule still cannot auto-approve a shell rc write"
+        "一条放行一切的规则仍然放不了 shell rc 的写"
     );
 
     let npmrc = Invocation::write("write_file").writes(&["/w/.npmrc"]);
     assert_eq!(decision(Mode::Auto, vec![], &npmrc), Decision::Ask);
 }
 
-// --- the .env family ------------------------------------------------------
+// --- .env 家族 ------------------------------------------------------------
 
 #[test]
 fn the_env_family_is_denied_and_templates_are_not() {
@@ -657,13 +657,13 @@ fn the_env_family_is_denied_and_templates_are_not() {
         assert_eq!(
             decision(Mode::Auto, vec![allow_any()], &write),
             Decision::Deny,
-            "writing {path} is denied"
+            "写 {path} 被拒"
         );
         let read = Invocation::read("read_file").reads(&[path]);
         assert_eq!(
             decision(Mode::Auto, vec![allow_any()], &read),
             Decision::Deny,
-            "reading {path} is denied"
+            "读 {path} 被拒"
         );
     }
 
@@ -677,12 +677,12 @@ fn the_env_family_is_denied_and_templates_are_not() {
         assert_eq!(
             decision(Mode::Auto, vec![allow_any()], &read),
             Decision::Allow,
-            "{path} is a template and carries no secret"
+            "{path} 是模板，不带任何秘密"
         );
     }
 }
 
-// --- the reason is always filled ------------------------------------------
+// --- 理由永远被填上 -------------------------------------------------------
 
 #[test]
 fn every_verdict_carries_a_reason() {
@@ -699,7 +699,7 @@ fn every_verdict_carries_a_reason() {
             let verdict = gate(mode, vec![deny_any()], call);
             assert!(
                 !verdict.reason.is_empty(),
-                "a verdict without a reason is not diagnosable"
+                "一条没有理由的裁决是诊断不出来的"
             );
         }
     }

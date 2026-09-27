@@ -1,13 +1,13 @@
-//! `sessions replay`: the recomputability acceptance (spec §18, Testing Decisions 3).
+//! `sessions replay`：可重算性这条验收（spec §18，Testing Decisions 3）。
 //!
-//! The contract under test is the strongest one the architecture makes: the
-//! `messages` recomputed from a finished stream **equal** the `messages` that were
-//! actually handed to the provider. The fake provider records every request, so
-//! the two can be compared directly — no second implementation, no approximation.
+//! 这里测的契约是这套架构给出的最强那一份：从一条已经结束的流重算出来的
+//! `messages` **等于**真正递给 provider 的那些 `messages`。
+//! 假 provider 记下每一个请求，于是两者能直接比对 —— 不需要第二份
+//! 实现，也没有任何近似。
 //!
-//! Two shapes are covered: a single-agent turn (the whole-stream scope) and a
-//! discussion (the structural round window, both the independent and the targeted
-//! round, plus the synthesizer's single shot).
+//! 覆盖两种形状：单一个 agent 的回合（整条流那个范围），与
+//! 一场讨论（结构化的轮次窗口：独立轮与定向轮都有，外加
+//! 合成器那唯一一次调用）。
 
 mod support;
 
@@ -33,10 +33,10 @@ fn deepseek() -> SpeakerId {
 }
 
 fn caps() -> fs_agent::provider::capability::ModelCaps {
-    caps_for("deepseek-flash").expect("built-in model")
+    caps_for("deepseek-flash").expect("内置模型")
 }
 
-/// An answer as a debater writes it: prose, then the marker line.
+/// 讨论者写下的一个答案：正文，然后是那行标记。
 fn answered(body: &str, conclusion: &str) -> Reply {
     Reply::text(&format!("{body}\nCONCLUSION: {conclusion}"))
 }
@@ -137,12 +137,12 @@ async fn an_independent_round_replays_to_what_the_debaters_were_sent() {
     assert_eq!(
         replay(&events, &kimi(), Some(1), &caps()).unwrap(),
         kimi_sent[0].messages,
-        "round one for kimi recomputes byte for byte"
+        "kimi 的第一轮逐字节重算出来"
     );
     assert_eq!(
         replay(&events, &deepseek(), Some(1), &caps()).unwrap(),
         deepseek_sent[0].messages,
-        "round one for deepseek recomputes byte for byte"
+        "deepseek 的第一轮逐字节重算出来"
     );
 }
 
@@ -169,7 +169,7 @@ async fn a_targeted_round_replays_to_what_was_sent_and_still_reveals_the_first_r
     assert_eq!(
         kimi_sent.len(),
         2,
-        "a divergent discussion opens a second round"
+        "分歧的讨论会开出第二轮"
     );
     assert_eq!(
         replay(&events, &kimi(), Some(1), &caps()).unwrap(),
@@ -178,16 +178,16 @@ async fn a_targeted_round_replays_to_what_was_sent_and_still_reveals_the_first_r
     assert_eq!(
         replay(&events, &kimi(), Some(2), &caps()).unwrap(),
         kimi_sent[1].messages,
-        "the recomputed targeted round is the one that was sent"
+        "重算出来的定向轮，就是发出去的那一轮"
     );
-    // The targeted round is only meaningful if the first round is in it.
+    // 定向轮只有在第一轮也在里面时才有意义。
     let second = &kimi_sent[1].messages;
     assert!(
         second.iter().any(|message| matches!(
             message,
             Message::User { content, .. } if content.contains("各自的状态")
         )),
-        "the second round reveals the other side's first-round answer: {second:?}"
+        "第二轮暴露了对面第一轮的答案：{second:?}"
     );
 }
 
@@ -209,7 +209,7 @@ async fn the_synthesizers_single_shot_replays_to_what_was_sent() {
     assert_eq!(
         replay(&events, &SpeakerId::System, Some(2), &caps()).unwrap(),
         sent[0].messages,
-        "the closing call is its identity plus a prompt recomputed from the stream"
+        "收尾那次调用就是它的身份，加上一条从流里重算出来的提示词"
     );
 }
 
@@ -291,9 +291,9 @@ async fn a_single_agent_turn_replays_to_what_was_sent() {
 
 #[tokio::test]
 async fn the_second_call_of_a_tool_turn_replays_with_its_tool_round_trip() {
-    // The first call carries the question; the second carries the question, the
-    // assistant's tool call and its result. Replay reproduces the call, not the
-    // finished state, which is why the last request is the reproducible one.
+    // 第一次调用扛着那个问题；第二次扛着问题、assistant 的
+    // 工具调用与它的结果。重放复现的是那次调用，而不是
+    // 收尾之后的状态，所以最后一次请求才是能复现的那个。
     let mut fixture = solo(vec![
         Reply::Stream(vec![
             StreamEvent::ToolCallCompleted {
@@ -319,14 +319,14 @@ async fn the_second_call_of_a_tool_turn_replays_with_its_tool_round_trip() {
     fixture.harness.shutdown().await;
 
     let sent = fixture.provider.requests();
-    assert_eq!(sent.len(), 2, "the tool call opened a second iteration");
+    assert_eq!(sent.len(), 2, "这次工具调用开出了第二个迭代");
     assert_eq!(
         replay(&events, &SpeakerId::Debater("solo".into()), None, &caps()).unwrap(),
         sent[1].messages,
-        "the recomputed second call carries the tool call and its one result"
+        "重算出来的第二次调用扛着这次工具调用与它那一条结果"
     );
-    // The tool round trip really is in there: a projection that dropped it would
-    // still differ from the wire, but this makes the failure legible.
+    // 工具那次往返真的在里面：一个把它丢掉的投影照样
+    // 会跟线上不一致，但这一条让失败更容易看懂。
     let has_tool = sent[1]
         .messages
         .iter()
@@ -336,10 +336,10 @@ async fn the_second_call_of_a_tool_turn_replays_with_its_tool_round_trip() {
 
 #[tokio::test]
 async fn an_executors_nested_window_replays_to_what_was_sent() {
-    // The dispatcher, the executor and the dispatcher again all answer on one
-    // client, so the middle request is the executor's. Its window is its own
-    // events plus the pinned injections, and its identity is the executor's —
-    // both derived from the stream by replay (spec §16).
+    // 派发者、执行者、又是派发者，三者都在同一个客户端上作答，
+    // 所以中间那个请求是执行者的。它的窗口是自己的事件
+    // 加上被钉住的那些注入，它的身份是执行者的 ——
+    // 两者都由重放从流里推出来（spec §16）。
     let mut fixture = solo(vec![
         Reply::Stream(vec![
             StreamEvent::ToolCallCompleted {
@@ -362,15 +362,15 @@ async fn an_executors_nested_window_replays_to_what_was_sent() {
     fixture.harness.shutdown().await;
 
     let sent = fixture.provider.requests();
-    assert_eq!(sent.len(), 3, "dispatcher, executor, dispatcher");
+    assert_eq!(sent.len(), 3, "派发者、执行者、派发者");
     let executor = SpeakerId::Executor(ParticipantId::new("solo-1"));
     assert_eq!(
         replay(&events, &executor, None, &caps()).unwrap(),
         sent[1].messages,
-        "the executor's own window recomputes byte for byte"
+        "执行者自己的窗口逐字节重算出来"
     );
-    // It is genuinely the executor's window: exactly its identity and its brief,
-    // with the dispatching session's question nowhere in it (spec §16).
+    // 这确实是执行者的窗口：正好是它的身份与它的简报，
+    // 派发会话那个问题在它里面找不到（spec §16）。
     let users: Vec<&Message> = sent[1]
         .messages
         .iter()

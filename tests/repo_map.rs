@@ -1,14 +1,14 @@
-//! Repo map: an on-demand symbol map of the workspace (spec §9; ticket 09).
+//! 仓库地图：按需给的、工作区符号地图（spec §9；票 09）。
 //!
-//! Three seams are exercised:
+//! 练到三条接缝：
 //!
-//! * the **pure extraction** — the official Rust `tags.scm` through tree-sitter,
-//!   names only, with the method/function duplicate collapsed;
-//! * the **pure ranking and rendering** — [`rank`] is the replaceable seam, and
-//!   [`render`] is the only place the budget is spent;
-//! * the **assembly seam** — the model asks for the map through the built-in
-//!   `repo_map` tool, the result lands on the stream as an ordinary tool result
-//!   (never an injection), and the ranking follows what the session just read.
+//! * **纯抽取** —— 官方那份 Rust `tags.scm`，走 tree-sitter，
+//!   只要名字，方法/函数那一份重复会被合掉；
+//! * **纯排序与渲染** —— [`rank`] 是可替换的那条接缝，而
+//!   [`render`] 是唯一花掉预算的地方；
+//! * **组装接缝** —— 模型通过内置的 `repo_map` 工具要这张地图，
+//!   结果作为一条普普通通的工具结果落在流上（从不注入），
+//!   而排序跟着会话刚读过的东西走。
 
 mod support;
 
@@ -28,7 +28,7 @@ use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
-// --- pure: extraction ------------------------------------------------------
+// --- 纯函数：抽取 ----------------------------------------------------------
 
 fn definition(file: &str, name: &str, kind: SymbolKind) -> Definition {
     Definition {
@@ -87,24 +87,24 @@ impl Greet for Widget {
         "{found:?}"
     );
     assert!(found.contains(&("inner", SymbolKind::Module)), "{found:?}");
-    // The official query classifies a function inside any `declaration_list` —
-    // an `impl`, a `trait`, or a `mod` body — as a method. The map follows the
-    // query rather than second-guessing it.
+    // 官方那条查询把任何 `declaration_list` 里的函数 —— 不管是
+    // `impl`、`trait` 还是 `mod` 体内 —— 都归成方法。地图跟着
+    // 那条查询走，而不是自作聪明去改判。
     assert!(found.contains(&("nested", SymbolKind::Method)), "{found:?}");
     assert!(found.contains(&("top", SymbolKind::Function)), "{found:?}");
     assert!(found.contains(&("shout", SymbolKind::Macro)), "{found:?}");
     assert!(
         symbols.references.iter().any(|name| name == "Greet"),
-        "a trait impl references the trait: {:?}",
+        "trait 的 impl 会引用这个 trait：{:?}",
         symbols.references
     );
 }
 
 #[test]
 fn a_method_is_recorded_once_with_the_method_kind() {
-    // The official query matches a method twice: once through the impl block's
-    // `definition.method`, once through the generic `definition.function`. The
-    // map must not list it twice.
+    // 官方那条查询会把一个方法匹配到两次：一次来自 impl 块的
+    // `definition.method`，一次来自通用的 `definition.function`。
+    // 地图不能把它列两遍。
     let symbols = extract("impl Widget { pub fn build() -> Self { Widget } }\n");
     let builds: Vec<&(String, SymbolKind)> = symbols
         .definitions
@@ -115,7 +115,7 @@ fn a_method_is_recorded_once_with_the_method_kind() {
     assert_eq!(builds[0].1, SymbolKind::Method);
 }
 
-// --- pure: ranking ---------------------------------------------------------
+// --- 纯函数：排序 ----------------------------------------------------------
 
 #[test]
 fn rank_puts_session_relevant_symbols_first() {
@@ -126,11 +126,11 @@ fn rank_puts_session_relevant_symbols_first() {
     ];
     let references = BTreeMap::new();
 
-    // No context at all: the stable alphabetical tiebreak.
+    // 完全没有上下文：按字母序这个稳定的平手判定。
     let plain = rank(&definitions, &references, &RankContext::default());
     assert_eq!(names(&plain), ["alpha", "beta", "gamma"]);
 
-    // A file this session read outranks an alphabetically earlier one.
+    // 这个会话读过的一个文件，排在字母序更靠前的文件之前。
     let context = RankContext {
         recent_paths: vec![PathBuf::from("src/b.rs")],
         ..Default::default()
@@ -140,7 +140,7 @@ fn rank_puts_session_relevant_symbols_first() {
         ["beta", "alpha", "gamma"]
     );
 
-    // A name the recent conversation used is relevance too.
+    // 最近这几轮对话用过的名字也算相关性。
     let context = RankContext {
         recent_identifiers: vec!["gamma".to_owned()],
         ..Default::default()
@@ -150,7 +150,7 @@ fn rank_puts_session_relevant_symbols_first() {
         ["gamma", "alpha", "beta"]
     );
 
-    // The model's explicit focus is the strongest signal.
+    // 模型明确给出的关注点是最强的信号。
     let context = RankContext {
         focus: vec!["alpha".to_owned()],
         recent_paths: vec![PathBuf::from("src/b.rs")],
@@ -176,12 +176,12 @@ fn rank_breaks_ties_on_the_structural_signal() {
 
     assert_eq!(
         ranked[0].definition.name, "alpha",
-        "more references wins the tie"
+        "引用更多的赢下这个平手"
     );
     assert_eq!(ranked[0].references, 7);
     assert_eq!(ranked[0].definitions, 1);
-    // The two `beta` sites are the same name defined in two files: they beat
-    // nothing, and are ordered by file path.
+    // 那两处 `beta` 是两个文件里定义的同名符号：它们赢不了
+    // 任何东西，于是按文件路径排序。
     assert_eq!(names(&ranked), ["alpha", "beta", "beta"]);
     assert_eq!(ranked[1].definitions, 2);
     assert_eq!(ranked[1].definition.file, PathBuf::from("src/a.rs"));
@@ -204,7 +204,7 @@ fn focus_matches_the_file_path_as_well_as_the_name() {
     assert_eq!(ranked[1].relevance.focus_matches, 0);
 }
 
-// --- pure: rendering -------------------------------------------------------
+// --- 纯函数：渲染 ----------------------------------------------------------
 
 #[test]
 fn render_groups_names_by_file_within_the_budget() {
@@ -234,19 +234,19 @@ fn render_omits_whole_symbols_and_notes_how_many() {
         "{text}"
     );
     assert!(text.contains("more symbol(s) omitted"), "{text}");
-    // Whole names only: no half-printed symbol ever appears.
+    // 只出现完整的名字：打印了一半的符号永远不会露面。
     for line in text.lines().filter(|line| !line.starts_with('[')) {
         for name in line.split(": ").nth(1).unwrap_or_default().split(", ") {
             assert!(
                 name == "generated_symbol_000"
                     || ranked.iter().any(|scored| scored.definition.name == name),
-                "a whole symbol: {line}"
+                "一个完整的符号：{line}"
             );
         }
     }
 }
 
-// --- pure: session context -------------------------------------------------
+// --- 纯函数：会话上下文 ----------------------------------------------------
 
 #[test]
 fn session_context_collects_recent_paths_and_identifiers() {
@@ -286,7 +286,7 @@ fn session_context_collects_recent_paths_and_identifiers() {
     assert_eq!(
         context.recent_paths,
         vec![PathBuf::from("/work/src/context.rs")],
-        "only the file tools contribute, and `./` is collapsed"
+        "只有文件类工具算数，而且 `./` 被折叠掉了"
     );
     assert!(context
         .recent_identifiers
@@ -294,12 +294,12 @@ fn session_context_collects_recent_paths_and_identifiers() {
     assert!(context.recent_identifiers.contains(&"budget".to_owned()));
     assert!(
         !context.recent_identifiers.contains(&"is".to_owned()),
-        "a token shorter than the identifier minimum is not an identifier"
+        "短于标识符最小长度的 token 不算标识符"
     );
     assert!(context.focus.is_empty());
 }
 
-// --- the map over a real directory -----------------------------------------
+// --- 在一份真目录上的地图 --------------------------------------------------
 
 fn write_file(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
@@ -327,19 +327,19 @@ fn build_maps_the_workspace_and_reuses_its_cache() {
     assert!(text.contains("RootType"), "{text}");
     assert!(text.contains("src/nested/mod.rs: Nested"), "{text}");
     assert!(estimate_tokens(&text) <= DEFAULT_REPO_MAP_TOKENS);
-    assert_eq!(map.parses(), 2, "one parse per file");
+    assert_eq!(map.parses(), 2, "每个文件解析一次");
 
     let again = map.build(root, &context, DEFAULT_REPO_MAP_TOKENS);
-    assert_eq!(again, text, "a repeated call is byte-stable");
-    assert_eq!(map.parses(), 2, "unchanged files are served from the cache");
+    assert_eq!(again, text, "重复一次调用逐字节稳定");
+    assert_eq!(map.parses(), 2, "没变的文件由缓存端上来");
 
-    // A changed file is re-parsed and the map follows the change.
+    // 变了的文件会重新解析一次，地图跟着这次改动走。
     std::thread::sleep(std::time::Duration::from_millis(20));
     write_file(root, "src/lib.rs", "pub fn renamed_fn() {}\n");
     let updated = map.build(root, &context, DEFAULT_REPO_MAP_TOKENS);
     assert!(updated.contains("renamed_fn"), "{updated}");
     assert!(!updated.contains("root_fn"), "{updated}");
-    assert!(map.parses() > 2, "the changed file was parsed again");
+    assert!(map.parses() > 2, "那个变了的文件又重新解析了一遍");
 }
 
 #[test]
@@ -373,7 +373,7 @@ fn the_configured_budget_is_capped_at_the_documented_ceiling() {
     assert_eq!(
         SessionConfig::new("fake-model").repo_map_tokens,
         DEFAULT_REPO_MAP_TOKENS,
-        "the default is the documented 1k"
+        "默认值就是文档里写的 1k"
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -384,17 +384,17 @@ fn the_configured_budget_is_capped_at_the_documented_ceiling() {
             &format!("pub fn a_rather_long_symbol_name_number_{index:03}() {{}}\n"),
         );
     }
-    // Even a caller that bypasses configuration cannot exceed the ceiling.
+    // 就算调用者绕开配置，也顶不破这个天花板。
     let text = RepoMap::new().build(dir.path(), &RankContext::default(), u64::MAX);
     assert!(
         estimate_tokens(&text) <= MAX_REPO_MAP_TOKENS,
-        "~{} tokens",
+        "~{} 个 token",
         estimate_tokens(&text)
     );
     assert!(text.contains("omitted"), "{text}");
 }
 
-// --- the assembly seam -----------------------------------------------------
+// --- 组装接缝 --------------------------------------------------------------
 
 struct Fixture {
     harness: Option<Harness>,
@@ -448,7 +448,7 @@ impl Fixture {
     async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
         self.harness
             .as_mut()
-            .expect("harness already shut down")
+            .expect("harness 已经关掉了")
             .run_turn(input)
             .await
             .unwrap()
@@ -500,7 +500,7 @@ fn completed_output(events: &[Event], tool_call_id: &str) -> Result<String, Stri
             }),
             _ => None,
         })
-        .expect("the call has exactly one result")
+        .expect("这次调用正好有一条结果")
 }
 
 #[tokio::test]
@@ -531,29 +531,29 @@ async fn repo_map_lands_as_an_ordinary_tool_result_never_an_injection() {
     assert!(output.contains("MappedType"), "{output}");
     assert!(
         estimate_tokens(&output) <= DEFAULT_REPO_MAP_TOKENS,
-        "~{} tokens",
+        "~{} 个 token",
         estimate_tokens(&output)
     );
     assert!(
         !events
             .iter()
             .any(|event| matches!(event.payload, EventPayload::ContextInjected { .. })),
-        "the map is never injected: {events:?}"
+        "地图从不被注入：{events:?}"
     );
 
-    // Appended at the tail, after the call that asked for it, so the cached
-    // prefix never moves.
+    // 追加在尾巴上，排在要它那次调用之后，于是被缓存的那段
+    // 前缀永远不挪窝。
     let requests = fixture.provider.requests();
-    assert_eq!(requests.len(), 2, "one call for the map, one to answer");
+    assert_eq!(requests.len(), 2, "一次调用要地图，一次作答");
     let second = &requests[1];
     assert!(
         matches!(second.messages.first(), Some(Message::System { .. })),
-        "only the identity leads: {:?}",
+        "只有身份走在最前面：{:?}",
         second.messages
     );
     assert!(
         matches!(second.messages.get(1), Some(Message::User { .. })),
-        "then the user's question — there is no pinned injection here: {:?}",
+        "然后是用户那个问题 —— 这里没有任何被钉住的注入：{:?}",
         second.messages
     );
     assert!(
@@ -594,11 +594,11 @@ async fn repo_map_ranks_the_file_the_session_just_read_first() {
     fixture.shutdown().await;
 
     let output = completed_output(&fixture.events(), "map-1").unwrap();
-    let beta = output.find("src/beta.rs:").expect("beta in the map");
-    let alpha = output.find("src/alpha.rs:").expect("alpha in the map");
+    let beta = output.find("src/beta.rs:").expect("beta 在地图里");
+    let alpha = output.find("src/alpha.rs:").expect("alpha 在地图里");
     assert!(
         beta < alpha,
-        "the just-read file ranks first, whatever the alphabet says: {output}"
+        "刚读过的那个文件排第一，不管字母序怎么说：{output}"
     );
 }
 
@@ -629,7 +629,7 @@ async fn repo_map_ignores_a_model_supplied_tokens_argument() {
     let output = completed_output(&fixture.events(), "call-1").unwrap();
     assert!(
         estimate_tokens(&output) <= DEFAULT_REPO_MAP_TOKENS,
-        "the budget is configuration, not an argument: ~{} tokens",
+        "预算来自配置，不是一个参数：~{} 个 token",
         estimate_tokens(&output)
     );
     assert!(output.contains("omitted"), "{output}");
@@ -656,14 +656,14 @@ async fn repo_map_says_so_when_the_workspace_has_no_rust_symbols() {
     assert!(output.contains("no Rust symbols found"), "{output}");
 }
 
-// --- the recorded regression baseline --------------------------------------
+// --- 记录下来的回归基线 ----------------------------------------------------
 
-/// The measured cost of one map over a large repository, kept as the regression
-/// baseline the ticket asks for.
+/// 在一个大仓库上跑一次地图量到的成本，留作这张票要的
+/// 回归基线。
 ///
-/// Synthetic on purpose: the numbers must not depend on what happens to be on
-/// this machine. Run it with
-/// `cargo test --test repo_map -- --ignored --nocapture`.
+/// 故意用合成的数据：这些数字绝不能取决于这台机器上
+/// 碰巧有什么。这样跑它：
+/// `cargo test --test repo_map -- --ignored --nocapture`。
 #[test]
 #[ignore = "timing baseline; run explicitly with --ignored --nocapture"]
 fn large_repo_baseline() {
@@ -704,6 +704,6 @@ fn large_repo_baseline() {
         estimate_tokens(&text),
     );
 
-    assert_eq!(again, text, "the cache does not change the output");
+    assert_eq!(again, text, "缓存不改输出");
     assert!(estimate_tokens(&text) <= DEFAULT_REPO_MAP_TOKENS);
 }

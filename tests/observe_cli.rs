@@ -1,9 +1,9 @@
-//! The `sessions` CLI (spec §18).
+//! `sessions` 这个 CLI（spec §18）。
 //!
-//! The verbs are thin shells over the pure queries, so the tests drive the real
-//! entry point with captured writers and a store rooted in a temporary
-//! `XDG_DATA_HOME`. That is enough to assert the two things the ticket fixes:
-//! stdout carries only the result, and every verb has a `--json` shape.
+//! 各个动词只是那批纯查询外面的一层薄壳，所以测试用捕获写入器
+//! 和一个扎根在临时 `XDG_DATA_HOME` 里的存储去驱动真正的
+//! 入口点。这就够断言这张票钉住的那两件事了：
+//! stdout 只扛结果，而每个动词都有 `--json` 形态。
 
 mod support;
 
@@ -28,7 +28,7 @@ struct Fixture {
     id: SessionId,
 }
 
-/// A stored session with a small but complete discussion stream.
+/// 一个存着的会话，带一条小而完整的讨论事件流。
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
@@ -156,12 +156,12 @@ fn ls_lists_the_session_and_its_json_comes_from_stdout_alone() {
     let (code, out, err) = run(&fixture, &["ls"]);
     assert_eq!(code, ExitCode::SUCCESS);
     assert!(out.contains(fixture.id.as_str()), "{out}");
-    // A header row, then the session row: the table is a table.
+    // 先一行表头，再一行会话：表格就得像个表格。
     assert!(
         out.lines().count() >= 2 && !out.lines().next().unwrap().contains(fixture.id.as_str()),
-        "a header above the data: {out}"
+        "数据上面有一行表头：{out}"
     );
-    assert!(err.is_empty(), "diagnostics stay on stderr: {err}");
+    assert!(err.is_empty(), "诊断留在 stderr 上：{err}");
 
     let (code, out, _) = run(&fixture, &["ls", "--json"]);
     assert_eq!(code, ExitCode::SUCCESS);
@@ -184,7 +184,7 @@ fn show_groups_by_round_and_merges_the_tool_call_with_its_result() {
         .iter()
         .filter(|entry| entry["entry"] == "tool")
         .collect();
-    assert_eq!(tools.len(), 1, "one call is one row");
+    assert_eq!(tools.len(), 1, "一次调用一行");
     assert_eq!(tools[0]["ok"], true);
     assert_eq!(tools[0]["tool"], "edit_file");
 }
@@ -230,19 +230,19 @@ fn stats_reports_the_silent_quantities_and_prices_the_named_model() {
         &["stats", fixture.id.as_str(), "--model", "deepseek-flash"],
     );
     assert_eq!(code, ExitCode::SUCCESS);
-    // The human view names the facts it measured; the exact quantities are read
-    // back from the JSON form below.
+    // 给人看的那一视图会点名它量到的事实；确切的数值要
+    // 从下面的 JSON 形态里读回来。
     assert!(
         out.contains("line-trim"),
-        "the match level is reported: {out}"
+        "匹配层级被报出来了：{out}"
     );
     assert!(
         out.contains("deepseek"),
-        "the absent speaker is named: {out}"
+        "缺席的讨论者被点了名：{out}"
     );
     assert!(
         out.contains("deepseek-flash"),
-        "the priced model is named: {out}"
+        "被定价的模型被点了名：{out}"
     );
 
     let (code, out, _) = run(
@@ -284,13 +284,13 @@ fn replay_recomputes_the_call_from_the_stream_and_refuses_without_a_speaker() {
     assert_eq!(
         messages[0]["System"]["content"],
         fs_agent::discussion::debater_identity("kimi"),
-        "the private identity leads the recomputed request"
+        "私有身份站在重算出来的那个请求最前面"
     );
     assert!(
         messages.iter().any(|message| message["User"]["content"]
             .as_str()
             .is_some_and(|text| text.contains("怎么共享状态"))),
-        "the question is in the recomputed window: {messages:?}"
+        "那个问题在重算出来的窗口里：{messages:?}"
     );
 
     let (code, _, err) = run(
@@ -313,9 +313,9 @@ fn an_unknown_verb_fails_loudly_with_nothing_on_stdout() {
     let fixture = fixture();
     let (code, out, err) = run(&fixture, &["explain"]);
     assert_eq!(code, ExitCode::FAILURE);
-    assert!(out.is_empty(), "stdout carries only results: {out}");
+    assert!(out.is_empty(), "stdout 只扛结果：{out}");
     assert!(
         err.contains("explain"),
-        "the refusal names the verb it did not know: {err}"
+        "这次拒绝点出了它不认识的那个动词：{err}"
     );
 }

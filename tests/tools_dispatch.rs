@@ -1,8 +1,8 @@
-//! The dispatch seam: the guardrails every file tool goes through.
+//! 派发接缝：每个文件类工具都要过的那套护栏。
 //!
-//! These drive `Registry::dispatch` directly rather than through a provider,
-//! because the contract under test is "the dispatcher enforces this for every
-//! caller", which is independent of who asked for the call.
+//! 这些测试直接驱动 `Registry::dispatch`，而不是从 provider 那边绕，
+//! 因为这里测的契约是「派发器对每一个调用者都强制这一点」，
+//! 它不关心是谁要的这次调用。
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 struct Fixture {
-    /// Kept alive for the lifetime of the fixture; the paths point into it.
+    /// 在整个 fixture 存活期间保持活着；那些路径都指向它里面。
     #[allow(dead_code)]
     dir: TempDir,
     workspace: PathBuf,
@@ -55,26 +55,26 @@ impl Fixture {
             outputs_dir: self.outputs.clone(),
             paths: self.paths.clone(),
             locks: self.locks.clone(),
-            // The dispatch seam under test does not involve skills; an empty
-            // library keeps the built-in `skill` tool resolvable but inert.
+            // 这里测的派发接缝不涉及技能；一个空的技能库
+            // 让内置的 `skill` 工具解析得到但不动手。
             skills: std::sync::Arc::new(fs_agent::context::skills::Skills::default()),
-            // Likewise the repo map keeps an empty session context and the
-            // default budget: nothing in this file calls it.
+            // 仓库地图同样是空的会话上下文加默认的
+            // 上下文预算：这个文件里没有谁调它。
             repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
-            // The `bash` tool's configured limits; this file does not dispatch
-            // it, so the defaults are the honest value.
+            // `bash` 工具配置的限额；这个文件不派发它，
+            // 所以默认值就是最诚实的取值。
             bash: fs_agent::tools::BashLimits::default(),
-            // No executor port: this file drives the dispatch seam directly, and
-            // `task` is not one of the tools it dispatches.
+            // 没有执行者端口：这个文件直接驱动派发接缝，
+            // 而 `task` 不是它派发的工具之一。
             executor: None,
-            // No question port either: `ask_user_question` is not dispatched here.
+            // 也没有问题端口：`ask_user_question` 不在这里派发。
             questions: None,
         }
     }
 
-    /// The whole dispatch path for this fixture's own read set: guardrails, then
-    /// the call, then applying the decision to the read set exactly as the loop
-    /// does.
+    /// 这个 fixture 自己那份读集走的整条派发路径：先护栏，
+    /// 再这次调用，最后像循环那样把裁决落到读集上
+    /// —— 一模一样。
     async fn dispatch(&mut self, call: &PendingCall) -> fs_agent::tools::DispatchOutcome {
         let mut read_set = std::mem::take(&mut self.read_set);
         let outcome = self.dispatch_with(call, &mut read_set).await;
@@ -118,8 +118,8 @@ impl Fixture {
         }
     }
 
-    /// Resolve one call and apply the shared guardrails, for tests that assert a
-    /// decision without running the tool.
+    /// 解析一次调用并施加那套共享护栏，给那些只想断言裁决、
+    /// 不跑工具的测试用。
     fn guardrails(
         &self,
         tool: &str,
@@ -128,7 +128,7 @@ impl Fixture {
     ) -> fs_agent::tools::GuardedCall {
         self.registry
             .facts(tool, args, &self.paths)
-            .expect("a registered tool")
+            .expect("一个注册过的工具")
             .guardrails(read_set)
     }
 }
@@ -167,11 +167,11 @@ async fn a_write_to_an_unread_file_is_refused_before_the_tool_runs() {
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "one\ntwo\n",
-        "the file is untouched"
+        "文件没被动过"
     );
     assert!(
         !fixture.outputs.join("call-1.before").exists(),
-        "no snapshot was written for a call that never ran"
+        "没跑过的调用不会写快照"
     );
 }
 
@@ -201,20 +201,20 @@ async fn a_non_unique_match_is_refused_unless_replace_all_is_asked_for() {
         .dispatch(&read_call(&fixture, "call-1", &file))
         .await;
 
-    // Without replace_all the dispatcher refuses and the file is untouched: the
-    // model gets the count back rather than an arbitrary first hit.
+    // 不带 replace_all，派发器就拒绝、文件原封不动：模型拿回的是
+    // 那个计数，而不是随便挑中的第一处。
     let refused = fixture
         .dispatch(&edit_call(&fixture, "call-2", &file, "= 1;", "= 2;"))
         .await;
     let error = refused.result.unwrap_err().to_string();
     assert!(error.contains("matches 2 times"), "{error}");
-    assert!(!refused.invalidated_reads, "a refusal is not a stale read");
+    assert!(!refused.invalidated_reads, "一次拒绝不是一次读过期");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "let a = 1;\nlet b = 1;\n"
     );
 
-    // Asking for every occurrence is a deliberate request, so it lands.
+    // 明确要每一处，就是一个刻意的请求，于是它落地了。
     let replaced = fixture
         .dispatch(&fixture.call(
             "call-3",
@@ -255,8 +255,8 @@ async fn a_failed_match_withdraws_the_read_permission_for_that_path() {
     assert!(miss.result.is_err());
     assert!(miss.invalidated_reads);
 
-    // The model must re-read: the next edit is refused for lack of a read, not
-    // for lack of a match, which is the difference the invalidation makes.
+    // 模型必须重读：下一次编辑是因为缺一次读而被拒，而不是
+    // 因为没匹配上 —— 这正是那次作废带来的区别。
     let retry = fixture
         .dispatch(&edit_call(&fixture, "call-3", &file, "one", "zero"))
         .await;
@@ -266,17 +266,17 @@ async fn a_failed_match_withdraws_the_read_permission_for_that_path() {
 
 #[tokio::test]
 async fn a_failed_read_does_not_license_a_later_write() {
-    // "Read before edit" is about having actually seen the file. A read that
-    // errored saw nothing, so it must not authorize the write that follows.
+    // 「先读再改」讲的是真的看见过这个文件。一次报了错的读
+    // 什么都没看见，所以它不能给后面那次写授权。
     let mut fixture = Fixture::new();
     let missing = fixture.workspace.join("not-yet.txt");
 
-    // The read itself fails, and the file does not exist, so creating it needs
-    // no prior read — but the failed read must not have recorded anything either.
+    // 这次读本身失败，而且文件不存在，所以创建它不需要
+    // 事先读过 —— 但这次失败的读也不该记下任何东西。
     let read = fixture
         .dispatch(&read_call(&fixture, "call-1", &missing))
         .await;
-    assert!(read.result.is_err(), "the file does not exist");
+    assert!(read.result.is_err(), "文件不存在");
     assert!(
         fixture.read_set.is_empty(),
         "a failed read recorded nothing"
@@ -298,9 +298,9 @@ async fn a_failed_read_does_not_license_a_later_write() {
 
 #[tokio::test]
 async fn write_file_over_an_existing_file_needs_a_read_first_but_creating_one_does_not() {
-    // The other half of the same rule: overwriting an existing file is the case
-    // read-before-edit is for, so it is refused until the file has been read;
-    // creating a file that does not exist cannot clobber anything.
+    // 同一条规矩的另一半：覆盖一个已有的文件，正是「先读再改」
+    // 要管的情形，所以在这个文件被读过之前一律拒绝；
+    // 而创建一个不存在的文件，压不坏任何东西。
     let mut fixture = Fixture::new();
     let existing = fixture.write("exists.txt", "old\n");
     let fresh = fixture.workspace.join("fresh.txt");
@@ -330,7 +330,7 @@ async fn write_file_over_an_existing_file_needs_a_read_first_but_creating_one_do
     assert!(allowed.result.is_ok(), "{:?}", allowed.result);
     assert_eq!(std::fs::read_to_string(&existing).unwrap(), "new\n");
 
-    // A brand-new file has nothing to read and nothing to clobber.
+    // 一个全新的文件没有可读的，也没有可压坏的。
     let created = fixture
         .dispatch(&fixture.call(
             "call-4",
@@ -347,7 +347,7 @@ async fn a_read_set_is_per_agent_so_executors_do_not_inherit_reads() {
     let fixture = Fixture::new();
     let file = fixture.write("notes.txt", "one\ntwo\n");
 
-    // Agent A reads the file.
+    // 甲 agent 读了这个文件。
     let mut first_agent = ReadSet::default();
     let read = fixture
         .dispatch_with(&read_call(&fixture, "call-1", &file), &mut first_agent)
@@ -355,9 +355,9 @@ async fn a_read_set_is_per_agent_so_executors_do_not_inherit_reads() {
     assert!(read.result.is_ok());
     assert!(!first_agent.is_empty());
 
-    // Agent B has its own read set: same workspace, same registry, same lock
-    // table, but the file is unread to it. Read permission never flows across
-    // agents in either direction.
+    // 乙 agent 有自己那份读集：同一个工作区、同一个注册表、同一张
+    // 锁表，但对它来说这个文件没读过。读权限在 agent 之间
+    // 两个方向都不流动。
     let mut second_agent = ReadSet::default();
     let edit = fixture
         .dispatch_with(
@@ -372,10 +372,10 @@ async fn a_read_set_is_per_agent_so_executors_do_not_inherit_reads() {
 
 #[tokio::test]
 async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
-    // Read-only work is the partition that may run concurrently: it takes no
-    // path lock, so "parallel reads" is wiring on an already-correct dispatch
-    // rather than a scheduler rewrite. A write to the same path *does* take the
-    // lock, which is what makes the read path's absence of contention meaningful.
+    // 只读那一条分区是允许并发跑的：它不拿路径锁，所以「并行读」
+    // 是在一条本来就对的派发上接线，而不是重写调度器。
+    // 对同一条路径的写**确实**会拿锁，
+    // 读那条路没有争用这件事才有意义。
     let fixture = Fixture::new();
     let file = fixture.write("shared.txt", "start\n");
     let resolved = std::fs::canonicalize(&file).unwrap();
@@ -392,16 +392,16 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
     );
     let allowed = match (first, second) {
         (fs_agent::tools::GuardedCall::Run(a), fs_agent::tools::GuardedCall::Run(b)) => {
-            assert!(a.write_targets.is_empty(), "a read takes no write lock");
-            assert!(b.write_targets.is_empty(), "a read takes no write lock");
+            assert!(a.write_targets.is_empty(), "一次读不拿写锁");
+            assert!(b.write_targets.is_empty(), "一次读不拿写锁");
             (a, b)
         }
-        other => panic!("expected two allowed reads, got {other:?}"),
+        other => panic!("期望两次被放行的读，实际得到 {other:?}"),
     };
 
-    // The write locks the dispatcher takes are the paths `effect()` declares,
-    // resolved: the tool's own classification is the whole input, not a second
-    // list that could drift from it.
+    // 派发器拿的那些写锁就是 `effect()` 声明、再解析过的那些
+    // 路径：工具自己的分类是全部输入，而不是另一份可能
+    // 跟它漂开的清单。
     let declared = fixture.registry.get("edit_file").unwrap().effect(&json!({
         "file_path": file.to_str().unwrap(),
         "old_string": "a",
@@ -420,7 +420,7 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
     );
     let write = match edit {
         fs_agent::tools::GuardedCall::Run(allowed) => allowed.write_targets,
-        other => panic!("expected an allowed edit, got {other:?}"),
+        other => panic!("期望一次被放行的编辑，实际得到 {other:?}"),
     };
     match declared {
         Effect::WritePaths(paths) => {
@@ -430,12 +430,12 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
                 .collect();
             assert_eq!(write, declared);
         }
-        other => panic!("expected WritePaths, got {other:?}"),
+        other => panic!("期望 WritePaths，实际得到 {other:?}"),
     }
     assert_eq!(write, vec![resolved.clone()]);
 
-    // A write holds the lock in the meantime; the reads still complete, because
-    // they never ask for it.
+    // 与此同时一次写正握着锁；那两次读照样跑完，因为
+    // 它们从不要那把锁。
     let guard = fixture.locks.lock(&resolved).await;
     let first_call = fixture.call(
         "call-1",
@@ -453,7 +453,7 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
         tokio::join!(one, two)
     })
     .await
-    .expect("reads do not wait on the write lock");
+    .expect("读不等那把写锁");
     assert!(reads.0.result.is_ok(), "{:?}", reads.0.result);
     assert!(reads.1.result.is_ok(), "{:?}", reads.1.result);
     drop(guard);
@@ -461,10 +461,10 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
 
 #[tokio::test]
 async fn two_calls_to_one_path_serialize_on_the_shared_lock_table() {
-    // The lock table is shared at assembly time, so two writers of one path
-    // serialize. Holding the guard blocks the second acquisition; the same table
-    // handed to a nested session would block it too, which is the point of
-    // injecting the table instead of building one per session.
+    // 锁表在组装时共享，所以同一条路径上的两个写者会串行化。
+    // 握着那个守卫就挡住第二次获取；同一张表交给嵌套会话
+    // 也会挡住它，这正是注入这张表、
+    // 而不是每个会话各建一张的意义。
     let fixture = Fixture::new();
     let file = fixture.write("shared.txt", "start\n");
     let locks = fixture.locks.clone();
@@ -473,12 +473,12 @@ async fn two_calls_to_one_path_serialize_on_the_shared_lock_table() {
     let guard = locks.lock(&path).await;
     let blocked =
         tokio::time::timeout(std::time::Duration::from_millis(50), locks.lock(&path)).await;
-    assert!(blocked.is_err(), "the second writer waited for the first");
+    assert!(blocked.is_err(), "第二个写者等了第一个");
     drop(guard);
 
     let acquired =
         tokio::time::timeout(std::time::Duration::from_millis(500), locks.lock(&path)).await;
-    assert!(acquired.is_ok(), "the lock released when the guard dropped");
+    assert!(acquired.is_ok(), "守卫一被丢掉，锁就释放了");
 }
 
 #[tokio::test]
@@ -491,10 +491,10 @@ async fn the_scheduler_partitions_calls_by_declared_effect() {
     let edit = fixture.registry.get("edit_file").unwrap();
     match edit.effect(&json!({ "file_path": "x", "old_string": "a", "new_string": "b" })) {
         Effect::WritePaths(paths) => assert_eq!(paths, vec![PathBuf::from("x")]),
-        other => panic!("expected WritePaths, got {other:?}"),
+        other => panic!("期望 WritePaths，实际得到 {other:?}"),
     }
 
-    // A read outside the workspace is refused even though it is read-only.
+    // 工作区之外的一次读被拒，哪怕它是只读的。
     let outside = fixture
         .dispatch(&fixture.call(
             "call-1",
@@ -505,8 +505,8 @@ async fn the_scheduler_partitions_calls_by_declared_effect() {
     let error = outside.result.unwrap_err().to_string();
     assert!(error.contains("outside the session workspace"), "{error}");
 
-    // The registry is a runtime value: mounting a tool changes what specs are
-    // sent, with no global state involved.
+    // 注册表是一个运行时值：挂上一个工具就改变发出去的
+    // spec 列表，中间没有任何全局状态。
     let mut registry = Registry::new();
     assert!(registry.is_empty());
     registry.register(Box::new(fs_agent::tools::ReadFile));

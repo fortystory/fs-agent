@@ -1,5 +1,5 @@
-//! The Markdown renderer at its own seam: the constructs a coding agent emits
-//! become styled lines, and anything unrecognized survives as plain text.
+//! 自己的接缝上的 Markdown 渲染器：编码 agent 会发出的那些结构
+//! 变成带样式的行，而认不出来的一律原样存活成纯文本。
 
 use fs_agent::render::markdown::to_lines;
 use ratatui::style::{Color, Modifier};
@@ -34,7 +34,7 @@ fn headings_stand_out_and_deeper_ones_are_just_bold() {
     assert!(has_modifier(&deep[0], Modifier::BOLD));
     assert!(!has_fg(&deep[0], Color::Cyan));
 
-    // A closing hash run needs a space before it: `# C#` is a heading named `C#`.
+    // 收尾的井号串前面得有一个空格：`# C#` 是一个名叫 `C#` 的标题。
     assert_eq!(text(&to_lines("# C#")[0]), "C#");
     assert_eq!(text(&to_lines("## Title ##")[0]), "Title");
 }
@@ -44,25 +44,25 @@ fn inline_emphasis_code_and_links_are_styled() {
     let line = &to_lines("a **bold** and *italic* and `code`")[0];
     assert!(has_modifier(line, Modifier::BOLD));
     assert!(has_modifier(line, Modifier::ITALIC));
-    assert!(has_fg(line, Color::Yellow), "inline code: {line:?}");
+    assert!(has_fg(line, Color::Yellow), "行内 code：{line:?}");
     assert_eq!(text(line), "a bold and italic and code");
 
     let link = &to_lines("[docs](https://example.com/x)")[0];
     assert!(has_modifier(link, Modifier::UNDERLINED));
     assert!(
         text(link).contains("https://example.com/x"),
-        "the target is shown: {link:?}"
+        "目标显示出来了：{link:?}"
     );
 }
 
 #[test]
 fn a_fenced_block_is_kept_verbatim_and_never_parsed_as_markdown() {
     let lines = to_lines("```rust\nfn main() {}\n# not a heading\n```");
-    assert_eq!(lines.len(), 2, "the fence itself is not printed");
+    assert_eq!(lines.len(), 2, "围栏本身不打印");
     assert_eq!(text(&lines[0]), "  fn main() {}");
     assert_eq!(text(&lines[1]), "  # not a heading");
     assert!(has_fg(&lines[1], Color::Yellow));
-    assert!(!has_fg(&lines[1], Color::Cyan), "a heading inside code");
+    assert!(!has_fg(&lines[1], Color::Cyan), "代码块里面的标题");
     assert!(!has_modifier(&lines[1], Modifier::BOLD));
 }
 
@@ -72,7 +72,7 @@ fn list_items_keep_their_marker_and_task_boxes_become_checkboxes() {
     assert_eq!(text(&to_lines("1. first")[0]), "1. first");
     assert_eq!(text(&to_lines("- [x] done")[0]), "☑ done");
     assert_eq!(text(&to_lines("- [ ] todo")[0]), "☐ todo");
-    // Nesting is expressed by the source indentation.
+    // 嵌套由源码里的缩进表达。
     assert_eq!(text(&to_lines("  - nested")[0]), "  • nested");
 }
 
@@ -87,7 +87,7 @@ fn quotes_rules_and_tables_render_as_structure() {
 
     let table = to_lines("| a | b |\n|---|---|\n| 1 | 2 |");
     assert_eq!(text(&table[0]), "a │ b");
-    assert_eq!(text(&table[1]), "1 │ 2", "the separator row is dropped");
+    assert_eq!(text(&table[1]), "1 │ 2", "分隔那一行被丢掉");
 }
 
 #[test]
@@ -108,8 +108,8 @@ fn malformed_markdown_degrades_to_plain_text_rather_than_vanishing() {
         "#",
     ] {
         let lines = to_lines(source);
-        assert!(!lines.is_empty(), "{source:?} produced no lines");
+        assert!(!lines.is_empty(), "{source:?} 一行都没产出");
         let rendered: String = lines.iter().map(text).collect();
-        assert!(!rendered.is_empty(), "{source:?} rendered to nothing");
+        assert!(!rendered.is_empty(), "{source:?} 渲染成了空的");
     }
 }

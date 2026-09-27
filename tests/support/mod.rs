@@ -1,12 +1,12 @@
-//! Shared test support for the end-to-end seam.
+//! 端到端接缝共享的测试支撑。
 //!
-//! The fake provider is the acceptance instrument: neither real vendor has a
-//! `seed`, so scripted responses are the only reproducible way to drive a
-//! session. Later tickets extend its scripting; they do not add new seams.
+//! 假 provider 是验收工具：两家真厂商都没有
+//! `seed`，所以脚本化的响应是唯一能可复现地驱动一个
+//! 会话的办法。后面的票扩展它的脚本能力，而不新增接缝。
 
 #![allow(dead_code)]
-// Each integration test crate compiles this module separately and uses a
-// different subset of the fixtures.
+// 每个集成测试 crate 都单独编译这个模块，用到的
+// fixture 子集各不相同。
 #![allow(unused_imports)]
 
 mod asker;

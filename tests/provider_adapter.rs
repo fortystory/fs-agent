@@ -1,8 +1,8 @@
-//! Provider adapter behaviour: the capability table, the wire body, SSE
-//! fragment assembly, usage normalization, error classification and retry.
+//! provider 适配器的行为：能力表、线上请求体、SSE
+//! 碎片拼装、用量归一化、错误归类与重试。
 //!
-//! Every one of these goes through a public pure function, so the vendor
-//! differences are pinned down without a network call.
+//! 这里每一项都走一个公开的纯函数，于是厂商之间的差异
+//! 不用发网络请求就被钉住了。
 
 use std::time::Duration;
 
@@ -52,18 +52,18 @@ fn decode(caps: ModelCaps, frames: &[&str]) -> Vec<StreamEvent> {
     let mut decoder = StreamDecoder::new(caps);
     let mut events = Vec::new();
     for frame in frames {
-        // Each frame is one complete SSE event, blank line included.
+        // 每个帧是一条完整的 SSE 事件，空行也算在内。
         events.extend(decoder.push(format!("{frame}\n\n").as_bytes()).unwrap());
     }
     events.extend(decoder.finish().unwrap());
     events
 }
 
-// --- capability table ------------------------------------------------------
+// --- 能力表 ----------------------------------------------------------------
 
 #[test]
 fn an_unregistered_model_is_an_error_not_a_silent_downgrade() {
-    let error = caps_for("gpt-4o").expect_err("unknown ids must not be guessed");
+    let error = caps_for("gpt-4o").expect_err("认不出来的 id 不许猜");
     let message = error.to_string();
     assert!(message.contains("gpt-4o"), "{message}");
     for known in KNOWN_MODELS {
@@ -74,7 +74,7 @@ fn an_unregistered_model_is_an_error_not_a_silent_downgrade() {
 #[test]
 fn every_builtin_model_id_has_a_capability_entry() {
     for (id, _provider) in BUILTIN_MODELS {
-        caps_for(id).unwrap_or_else(|error| panic!("built-in model {id}: {error}"));
+        caps_for(id).unwrap_or_else(|error| panic!("内置模型 {id}：{error}"));
     }
 }
 
@@ -84,13 +84,13 @@ fn every_registered_model_has_a_self_consistent_window() {
         let caps = caps_for(id).unwrap();
         assert!(
             caps.max_output_tokens <= caps.context_window,
-            "{id}: output cap {} exceeds the context window {}",
+            "{id}: 输出上限 {} 超过了上下文窗口 {}",
             caps.max_output_tokens,
             caps.context_window
         );
         assert!(
             caps.min_cacheable_tokens < caps.context_window,
-            "{id}: cache floor {} is not below the context window",
+            "{id}: 缓存地板 {} 没有低于上下文窗口",
             caps.min_cacheable_tokens
         );
     }
@@ -101,21 +101,21 @@ fn the_two_vendors_differ_where_the_spec_says_they_do() {
     let kimi = kimi();
     let deepseek = deepseek();
 
-    // Kimi accepts prompt_cache_key; DeepSeek's cache is automatic.
+    // Kimi 收 prompt_cache_key；DeepSeek 的缓存是自动的。
     assert!(kimi.supports_prompt_cache_key);
     assert!(!deepseek.supports_prompt_cache_key);
-    // Kimi K3 fixes temperature/top_p; DeepSeek accepts them.
+    // Kimi K3 把 temperature/top_p 写死；DeepSeek 收它们。
     assert!(!kimi.supports_temperature);
     assert!(deepseek.supports_temperature);
-    // Different output-cap parameter names.
+    // 输出上限的参数名不一样。
     assert_eq!(kimi.max_tokens_field.field_name(), "max_completion_tokens");
     assert_eq!(deepseek.max_tokens_field.field_name(), "max_tokens");
-    // Kimi only caches above 256 prompt tokens.
+    // Kimi 只在 256 个提示 token 以上才缓存。
     assert!(kimi.min_cacheable_tokens > 256);
     assert_eq!(deepseek.min_cacheable_tokens, 0);
 }
 
-// --- request body ----------------------------------------------------------
+// --- 请求体 ----------------------------------------------------------------
 
 #[test]
 fn the_kimi_body_carries_the_session_cache_key_and_never_a_user_id() {
@@ -127,7 +127,7 @@ fn the_kimi_body_carries_the_session_cache_key_and_never_a_user_id() {
     assert_eq!(body["prompt_cache_key"], "s-1");
     assert!(
         body.get("user_id").is_none(),
-        "user_id must never be sent: {body}"
+        "user_id 永远不能发出去：{body}"
     );
 }
 
@@ -140,7 +140,7 @@ fn the_deepseek_body_omits_the_cache_key_it_does_not_support() {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(
         body.get("prompt_cache_key").is_none(),
-        "DeepSeek has no prompt_cache_key: {body}"
+        "DeepSeek 没有 prompt_cache_key：{body}"
     );
 }
 
@@ -161,10 +161,10 @@ fn the_output_cap_uses_each_vendors_own_parameter_name() {
 
 #[test]
 fn the_injection_marker_is_not_part_of_the_wire_body() {
-    // `Message::User`'s `injected` flag is what `context::trim` pins a
-    // `ContextInjected` by (spec §10, §13). It is bookkeeping on this side of
-    // the seam: the provider must never see it, and the message must still go
-    // out as an ordinary `user` turn.
+    // `Message::User` 上那个 `injected` 标记，就是 `context::trim` 拿来
+    // 钉住一条 `ContextInjected` 的东西（spec §10、§13）。它是接缝这一侧的
+    // 记账：provider 永远不该看见它，而这条消息仍然要
+    // 作为一次普普通通的 `user` 发言发出去。
     let mut chat = request("kimi-k3", GenerationParams::default());
     chat.messages = vec![Message::User {
         content: "rules".to_owned(),
@@ -266,10 +266,10 @@ fn an_assistant_turn_round_trips_its_reasoning_and_tool_calls() {
         messages[1]["tool_calls"][0]["function"]["arguments"],
         "{\"path\":\"a\"}"
     );
-    // A tool message cannot carry `name` on DeepSeek.
+    // 在 DeepSeek 上，工具消息带不了 `name`。
     assert_eq!(messages[2]["role"], "tool");
     assert!(messages[2].get("name").is_none());
-    // The tool declaration is the provider's own JSON Schema shape.
+    // 工具声明用的就是 provider 自己那套 JSON Schema 形状。
     assert_eq!(body["tools"][0]["function"]["name"], "read_file");
     assert_eq!(body["tool_choice"], "auto");
 }
@@ -286,7 +286,7 @@ fn the_chat_endpoint_is_joined_without_doubling_or_dropping_slashes() {
     );
 }
 
-// --- SSE decoding and fragment assembly ------------------------------------
+// --- SSE 解码与碎片拼装 ----------------------------------------------------
 
 #[test]
 fn kimi_tool_call_fragments_are_assembled_into_one_completed_call() {
@@ -354,7 +354,7 @@ fn deepseek_usage_rides_the_last_content_chunk() {
 
 #[test]
 fn kimi_and_deepseek_tool_calls_are_never_seen_as_fragments() {
-    // Two calls interleaved by index: the layer above sees two complete calls.
+    // 两次调用按 index 交错在一起：上面那一层看到的是两次完整的调用。
     let frames = [
         r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"beta","arguments":"{"}},{"index":0,"id":"a","function":{"name":"alpha","arguments":"{}"}}]},"finish_reason":null}]}"#,
         "data: [DONE]",
@@ -369,13 +369,13 @@ fn kimi_and_deepseek_tool_calls_are_never_seen_as_fragments() {
         StreamEvent::ToolCallCompleted { index, id, .. } => {
             assert_eq!((*index, id.as_str()), (0, "a"));
         }
-        other => panic!("expected a completed call, got {other:?}"),
+        other => panic!("期望一次已完成的调用，实际得到 {other:?}"),
     }
     match completed[1] {
         StreamEvent::ToolCallCompleted { index, id, .. } => {
             assert_eq!((*index, id.as_str()), (1, "b"));
         }
-        other => panic!("expected a completed call, got {other:?}"),
+        other => panic!("期望一次已完成的调用，实际得到 {other:?}"),
     }
 }
 
@@ -386,7 +386,7 @@ fn a_frame_split_across_transport_chunks_is_reassembled() {
     let bytes = frame.as_bytes();
     let mut decoder = StreamDecoder::new(kimi());
     let mut events = decoder.push(&bytes[..20]).unwrap();
-    assert!(events.is_empty(), "no complete frame yet: {events:?}");
+    assert!(events.is_empty(), "还没有完整的帧：{events:?}");
     events.extend(decoder.push(&bytes[20..]).unwrap());
     events.extend(decoder.push(b"\n\n").unwrap());
     assert_eq!(events, vec![StreamEvent::TextDelta("hello".to_owned())]);
@@ -404,11 +404,11 @@ fn a_stream_that_never_sees_done_produces_no_completed_unit() {
         !events
             .iter()
             .any(|event| matches!(event, StreamEvent::Finished { .. })),
-        "only [DONE] ends a stream: {events:?}"
+        "只有 [DONE] 能收尾一条流：{events:?}"
     );
 }
 
-// --- usage normalization ---------------------------------------------------
+// --- 用量归一化 ------------------------------------------------------------
 
 #[test]
 fn kimi_cached_tokens_become_cached_and_miss() {
@@ -471,7 +471,7 @@ fn a_missing_miss_count_falls_back_to_input_minus_cached() {
     assert_eq!(usage.miss_tokens, 30);
 }
 
-// --- error classification --------------------------------------------------
+// --- 错误归类 --------------------------------------------------------------
 
 #[test]
 fn the_six_error_classes_are_assigned_by_status_and_body() {
@@ -498,8 +498,8 @@ fn the_six_error_classes_are_assigned_by_status_and_body() {
         }
     );
 
-    // Kimi signals an exhausted quota with 429; the body is what separates it
-    // from a plain rate limit.
+    // Kimi 用 429 表示额度用尽；把它与一次普通限流分开的
+    // 是请求体。
     let kimi_quota = classify_status(
         429,
         r#"{"error":{"message":"Insufficient Balance"}}"#,
@@ -557,8 +557,8 @@ fn retries_are_bounded_and_only_cover_transport_and_rate_limits() {
         retry_delay(policy, 2, &transport),
         Some(Duration::from_millis(200))
     );
-    assert_eq!(retry_delay(policy, 3, &transport), None, "bounded");
-    assert_eq!(retry_delay(policy, 1, &auth), None, "auth is not retryable");
+    assert_eq!(retry_delay(policy, 3, &transport), None, "有界");
+    assert_eq!(retry_delay(policy, 1, &auth), None, "认证不可重试");
 
     let limited = ProviderError::RateLimited {
         retry_after: Some(Duration::from_secs(30)),
@@ -566,24 +566,24 @@ fn retries_are_bounded_and_only_cover_transport_and_rate_limits() {
     assert_eq!(
         retry_delay(policy, 1, &limited),
         Some(Duration::from_secs(1)),
-        "the vendor's retry-after is capped by max_delay"
+        "厂商给的 retry-after 被 max_delay 封顶"
     );
 }
 
-// --- provider construction -------------------------------------------------
+// --- provider 的构造 -------------------------------------------------------
 
 #[test]
 fn building_a_provider_without_a_key_fails_loudly() {
     let config = resolve(None, &env(&[])).unwrap();
     let error = OpenAiProvider::build(&config, "kimi-k3", silent_warnings())
         .err()
-        .expect("a keyless provider must not build");
+        .expect("没有 key 的 provider 不能构造出来");
     match error {
         BuildError::MissingKey { provider, hint } => {
             assert_eq!(provider, "kimi");
             assert!(hint.contains("MOONSHOT_API_KEY"), "{hint}");
         }
-        other => panic!("expected MissingKey, got {other}"),
+        other => panic!("期望 MissingKey，实际得到 {other}"),
     }
 }
 
@@ -596,7 +596,7 @@ fn building_a_provider_for_an_unregistered_model_fails_loudly() {
     .unwrap();
     let error = OpenAiProvider::build(&config, "gpt-4o", silent_warnings())
         .err()
-        .expect("an unregistered model must not build");
+        .expect("没注册的模型不能构造出 provider");
     assert!(matches!(error, BuildError::UnknownModel(_)), "{error}");
 }
 
@@ -611,8 +611,8 @@ fn a_keyed_builtin_provider_builds_against_its_default_host() {
 
 #[test]
 fn the_kimi_coding_plan_models_are_registered_with_their_own_windows() {
-    // `k3` is the coding-plan id for the same model as `kimi-k3`; `k3-256k` is
-    // its 256K-context variant.
+    // `k3` 是与 `kimi-k3` 同一个模型的 coding plan id；
+    // `k3-256k` 是它 256K 上下文的变体。
     let k3 = caps_for("k3").unwrap();
     let k3_256k = caps_for("k3-256k").unwrap();
     assert_eq!(k3.context_window, 1_048_576);
@@ -621,7 +621,7 @@ fn the_kimi_coding_plan_models_are_registered_with_their_own_windows() {
     assert!(k3_256k.supports_prompt_cache_key);
     assert!(k3_256k.requires_reasoning_replay);
 
-    // K2.8 Preview takes an effort tier; K2.7 HighSpeed is thinking-on only.
+    // K2.8 Preview 收一个推理档位；K2.7 HighSpeed 只有开着思考这一种。
     assert!(
         caps_for("kimi-for-coding")
             .unwrap()
@@ -661,9 +661,9 @@ fn the_coding_plan_builds_against_the_coding_endpoint() {
 
 #[test]
 fn kimi_code_plan_limits_are_read_from_the_body_not_the_status_alone() {
-    // Kimi Code reports plan limits as 403, so 403 cannot mean "bad key" by
-    // itself; quota windows are exhaustion and the concurrency cap is a rate
-    // limit, neither of which is retried as an auth problem.
+    // Kimi Code 把套餐上限报成 403，所以 403 本身不能就等于是
+    // 「key 坏了」；额度窗口算用尽，并发上限算一次限流，
+    // 两者都不会被当成认证问题去重试。
     let five_hour = classify_status(
         403,
         r#"{"error":{"message":"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends."}}"#,
@@ -694,14 +694,14 @@ fn kimi_code_plan_limits_are_read_from_the_body_not_the_status_alone() {
         "{concurrent:?}"
     );
 
-    // A 403 with no account-limit wording is still a refusal.
+    // 一条不带账号上限措辞的 403 仍然是一次拒绝。
     let forbidden = classify_status(403, "forbidden", None);
     assert!(
         matches!(forbidden, ProviderError::Auth { .. }),
         "{forbidden:?}"
     );
 
-    // Transient 429s stay rate limits.
+    // 一次性的 429 仍然是限流。
     let transient = classify_status(
         429,
         r#"{"error":{"message":"The engine is currently overloaded, please try again later"}}"#,

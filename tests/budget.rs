@@ -1,15 +1,15 @@
-//! Cost and the session's spend cap (spec §17).
+//! 成本与会话的花钱上限（spec §17）。
 //!
-//! Three seams, all of them the ones the spec already names:
+//! 三条接缝，用的都是 spec 已经点名的那几条：
 //!
-//! * the pure rules — the price table, the gate, the routing rule — are called
-//!   directly, with no provider and no event stream;
-//! * the daily ledger goes through the public store, because "derived from the
-//!   session files" is the whole point of it;
-//! * the gates themselves are exercised through the library assembly seam, in
-//!   the files that already own those fixtures: the round loop in
-//!   `discussion.rs`, the executor port in `executor.rs`, and the turn loop in
-//!   `e2e_single_turn.rs`.
+//! * 纯规则 —— 价目表、闸门、路由规则 —— 直接调用，
+//!   没有 provider、也没有事件流；
+//! * 每日账本走公开的存储，因为「从会话文件推出来」
+//!   正是它的全部意义；
+//! * 闸门本身通过库的组装接缝来练，摆在那些已经拥有这些 fixture 的
+//!   文件里：轮次循环在
+//!   `discussion.rs`，执行者端口在 `executor.rs`，回合循环在
+//!   `e2e_single_turn.rs`。
 
 use std::path::Path;
 
@@ -35,17 +35,17 @@ fn close(left: f64, right: f64) -> bool {
 
 #[test]
 fn the_session_allowance_counts_input_and_output_and_never_the_cache_split_twice() {
-    // `cached` and `miss` are a split of `input`, and both vendors already count
-    // reasoning tokens inside `output`; adding either on top would inflate the
-    // number the gate reads.
+    // `cached` 与 `miss` 是对 `input` 的一次切分，而两家厂商都已经把
+    // 推理 token 算在 `output` 里了；把其中任何一个再叠上去，
+    // 都会把闸门读到的那个数字吹大。
     assert_eq!(usage(100, 20, 80, 20).total_tokens(), 120);
 }
 
 #[test]
 fn a_cache_hit_and_a_cache_miss_are_priced_apart() {
-    // USD per million tokens: a miss costs ten times a hit, output costs ten
-    // times a miss. 0.1 Mtok miss + 0.9 Mtok hit + 0.001 Mtok out =
-    // 1.0 + 0.9 + 0.1.
+    // 单位是每百万 token 多少美元：一次未命中的价格是一次命中的十倍，
+    // 输出又是未命中的十倍。0.1 个 Mtok 未命中 + 0.9 个 Mtok 命中
+    // + 0.001 个 Mtok 输出 = 1.0 + 0.9 + 0.1。
     let pricing = Pricing::new(10.0, 1.0, 100.0);
     let mixed = usage(1_000_000, 1_000, 900_000, 100_000);
     assert!(close(pricing.cost(mixed), 2.0));
@@ -54,16 +54,16 @@ fn a_cache_hit_and_a_cache_miss_are_priced_apart() {
     let all_cached = usage(1_000_000, 0, 1_000_000, 0);
     assert!(
         pricing.cost(all_miss) > pricing.cost(all_cached),
-        "pricing the split apart has to show up in the money"
+        "把这个切分分别定价，必须体现在钱上"
     );
 }
 
 #[test]
 fn a_usage_that_reports_only_a_total_is_billed_as_a_miss_not_as_free() {
     let pricing = Pricing::new(10.0, 1.0, 0.0);
-    // 400 uncached input tokens, no cache detail at all.
+    // 400 个没走缓存的输入 token，完全没有缓存细节。
     assert!(close(pricing.cost(usage(400, 0, 0, 0)), 0.004));
-    // A partial split: 100 misses and 300 hits.
+    // 一次部分切分：100 个未命中加 300 个命中。
     assert!(close(pricing.cost(usage(400, 0, 300, 0)), 0.0013));
 }
 
@@ -74,7 +74,7 @@ fn an_unpriced_model_has_no_cost_rather_than_a_zero_one() {
     assert_eq!(
         table.cost("mystery-model", usage(1_000_000, 0, 0, 0)),
         None,
-        "\"we do not know what this costs\" must not render as \"free\""
+        "「我们不知道这个多少钱」不能渲染成「免费」"
     );
     let priced = table
         .cost("deepseek-flash", usage(1_000_000, 0, 0, 0))
@@ -90,7 +90,7 @@ fn the_hard_stop_reads_the_summed_usage_and_not_an_estimate() {
     assert!(!budget.is_exhausted(999));
     assert!(
         budget.is_exhausted(1_000),
-        "a session that lands exactly on its cap is done"
+        "正好落在上限上的会话就到此为止"
     );
     assert!(budget.is_exhausted(5_000));
     assert_eq!(budget.remaining(400), Some(600));
@@ -103,26 +103,26 @@ fn the_hard_stop_reads_the_summed_usage_and_not_an_estimate() {
 
 #[test]
 fn the_pre_flight_threshold_is_a_multiple_of_what_is_left() {
-    // The estimate is chars / 4, wrong by tens of percent, so the guard is
-    // deliberately tolerant: it refuses only once the estimate exceeds the
-    // remaining allowance by the margin.
+    // 这个估计是字符数 / 4，会错几十个百分点，所以这道
+    // 守卫是故意宽容的：只有估计值超出剩余额度、
+    // 且超出那个余量时才拒。
     let budget = fs_agent::config::Budget::new().with_limit(1_000);
     assert!(budget.admits_estimate(0, 1_500));
     assert!(!budget.admits_estimate(0, 1_501));
 
-    // What is left moves the threshold with it: 400 left, a 600 estimate fits.
+    // 剩多少，门槛就跟着挪：剩 400，一个 600 的估计装得下。
     assert!(budget.admits_estimate(600, 600));
     assert!(!budget.admits_estimate(600, 601));
 
-    // A margin of one is exactly the strict "estimate > remaining" comparison
-    // the tolerance exists to replace.
+    // 余量取 1，就正好等于那条严格的「估计 > 剩余」比较，
+    // 而宽容正是为了取代它才存在的。
     let strict = fs_agent::config::Budget::new()
         .with_limit(1_000)
         .with_estimate_margin(1.0);
     assert!(strict.admits_estimate(0, 1_000));
     assert!(!strict.admits_estimate(0, 1_001));
 
-    // No cap admits everything, at any size.
+    // 没有上限就什么都放行，不管多大。
     assert!(fs_agent::config::Budget::new().admits_estimate(u64::MAX, u64::MAX));
 }
 
@@ -137,11 +137,11 @@ fn weak_model_routing_reaches_only_the_two_landing_points() {
         "cheap-synthesizer"
     );
     assert_eq!(routed.model_for(LandingPoint::Executor), "cheap-executor");
-    // A debater is not a landing point: its own model is what it answers with.
+    // 讨论者不是落点：它用自己的模型作答。
     assert_eq!(routed.model, "discussion-model");
 
-    // v1's default: no override anywhere, so every participant runs the
-    // discussion's model until there is data to route on.
+    // v1 的默认：哪里都不覆盖，所以在有数据可路由之前，
+    // 每个参与者都跑讨论本身那个模型。
     let unrouted = SessionConfig::new("discussion-model");
     assert_eq!(
         unrouted.model_for(LandingPoint::Synthesizer),
@@ -172,10 +172,10 @@ fn a_session_config_carries_the_price_table_and_the_session_budget() {
     assert!(close(cost, 1.0));
 }
 
-// --- the daily ledger ------------------------------------------------------
+// --- 每日账本 --------------------------------------------------------------
 
 fn at(stamp: &str) -> DateTime<Utc> {
-    stamp.parse().expect("an RFC 3339 stamp")
+    stamp.parse().expect("一个 RFC 3339 时间戳")
 }
 
 fn usage_event(seq: u64, stamp: &str, input: u64, output: u64) -> Event {
@@ -189,8 +189,8 @@ fn usage_event(seq: u64, stamp: &str, input: u64, output: u64) -> Event {
     }
 }
 
-/// Write a stream by hand, so a test can place usage on a chosen UTC day: the
-/// live log stamps `at` with the clock.
+/// 手工写出一条流，这样测试就能把用量放在挑好的某个 UTC 日上：
+/// 活着的日志是拿时钟给 `at` 盖章的。
 fn write_log(path: &Path, events: &[Event]) {
     let mut text = String::new();
     text.push_str(
@@ -239,21 +239,21 @@ fn the_daily_ledger_is_a_query_over_the_session_files_not_a_new_state_file() {
     assert_eq!(today_ledger.day, today);
     assert_eq!(
         today_ledger.sessions, 1,
-        "only a session with usage that day is counted"
+        "只有那天有用量的会话才算进去"
     );
     assert_eq!(today_ledger.calls, 2);
     assert_eq!(today_ledger.usage.input_tokens, 300);
     assert_eq!(today_ledger.usage.output_tokens, 30);
     assert_eq!(today_ledger.tokens(), 330);
 
-    // Yesterday is its own row, and it spans both buckets: a ledger is a query,
-    // not a per-workspace number.
+    // 昨天是它自己那一行，而且它跨两个桶：账本是一次查询，
+    // 而不是一个按工作区算出来的数。
     let yesterday = ledger::for_day(&store, NaiveDate::from_ymd_opt(2026, 9, 20).unwrap()).unwrap();
     assert_eq!(yesterday.sessions, 2);
     assert_eq!(yesterday.calls, 2);
     assert_eq!(yesterday.tokens(), 999 + 999 + 7 + 7);
 
-    // A day with no usage is empty, not missing.
+    // 没有用量的一天是空的，而不是缺失。
     let idle = ledger::for_day(&store, NaiveDate::from_ymd_opt(2026, 9, 19).unwrap()).unwrap();
     assert_eq!(idle.sessions, 0);
     assert_eq!(idle.tokens(), 0);
@@ -266,13 +266,13 @@ fn listing_the_store_reaches_every_bucket_and_skips_directories_without_a_stream
     let mut sessions = Vec::new();
     for cwd in ["/workspace/one", "/workspace/two"] {
         let stored = store.create(Path::new(cwd)).unwrap();
-        // The assembly point creates the stream, not the store (spec §11), so a
-        // session is only listable once its log exists.
+        // 建流的是组装点，不是存储（spec §11），所以一个
+        // 会话只有在它的日志存在之后才列得出来。
         fs_agent::events::EventLog::create(&stored.log_path).unwrap();
         sessions.push(stored);
     }
-    // A directory a process left between `create` and the first `SessionStarted`
-    // holds no stream, so it is not a session.
+    // 在 `create` 与第一条 `SessionStarted` 之间，某个进程留下的
+    // 目录里没有流，所以它不是一个会话。
     std::fs::create_dir_all(dir.path().join("sessions").join("stray")).unwrap();
 
     let listed = store.list_all().unwrap();
@@ -296,7 +296,7 @@ fn the_gate_owns_the_sentence_every_site_narrates() {
     assert!(refusal.contains("9000"), "{refusal}");
     assert!(refusal.contains("1000"), "{refusal}");
 
-    // No cap: no note, ever.
+    // 没有上限：永远没有那句话。
     assert_eq!(
         fs_agent::config::Budget::new().exhausted_note(u64::MAX),
         None

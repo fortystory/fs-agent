@@ -1,12 +1,12 @@
-//! The `ask_user_question` takeover of the TUI's bottom input area (spec §7, §19).
+//! `ask_user_question` 对 TUI 底部输入区的接管（spec §7、§19）。
 //!
-//! The seam is the same one `render_layout.rs` tests through: a `TuiState` goes
-//! into [`draw_frame`] and a fixed-size `TestBackend` buffer comes out, so every
-//! assertion is about what a person would see. The keyboard assertions are about
-//! the answer the loop would receive, which is the other half of the takeover.
+//! 接缝就是 `render_layout.rs` 测过的那一条：一个 `TuiState` 进
+//! [`draw_frame`]，一块定尺的 `TestBackend` 缓冲出来，所以每一条
+//! 断言说的都是人看得见的东西。键盘那些断言说的是循环将会收到的
+//! 那个答案，那是这次接管的另一半。
 //!
-//! This lives in its own file rather than in `render_layout.rs` so the ticket that
-//! owns that file can keep editing it without colliding with this one.
+//! 它住在自己的文件里，而不是住在 `render_layout.rs` 里，好让拥有那个
+//! 文件的票能继续改它，而不跟这一个撞车。
 
 use fs_agent::questions::{UserAnswer, UserAnswers, UserQuestion};
 use fs_agent::render::{
@@ -23,8 +23,8 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
-        // The mode the session was assembled in; `ask` is the default, and a test
-        // that means another one says so in its own facts.
+        // 会话被组装时所处的模式；`ask` 是默认，想要另一档的
+        // 测试在自己的 facts 里说清楚。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: Vec::new(),
@@ -35,7 +35,7 @@ fn state() -> TuiState {
     TuiState::new(facts())
 }
 
-/// One question, with options and the multi-select flag.
+/// 一道题，带选项与多选旗标。
 fn question(id: &str, text: &str, options: &[&str], multi_select: bool) -> UserQuestion {
     UserQuestion {
         id: id.to_owned(),
@@ -52,7 +52,7 @@ fn question(id: &str, text: &str, options: &[&str], multi_select: bool) -> UserQ
     }
 }
 
-/// Put a questionnaire to the state, the way the loop would.
+/// 把一份问卷交给状态，与循环的做法一样。
 fn ask(
     state: &mut TuiState,
     questions: Vec<UserQuestion>,
@@ -65,14 +65,14 @@ fn ask(
     answers
 }
 
-/// The answer the state sent, if it sent one yet.
+/// 状态发出的那个答案 —— 如果它已经发出了的话。
 fn answer(rx: &mut oneshot::Receiver<Result<UserAnswers, String>>) -> Option<UserAnswers> {
     match rx.try_recv() {
         Ok(Ok(answers)) => Some(answers),
-        Ok(Err(reason)) => panic!("the state refused to answer: {reason}"),
+        Ok(Err(reason)) => panic!("状态拒答：{reason}"),
         Err(oneshot::error::TryRecvError::Empty) => None,
         Err(oneshot::error::TryRecvError::Closed) => {
-            panic!("the state dropped the questionnaire without answering")
+            panic!("状态没作答就把问卷丢了")
         }
     }
 }
@@ -81,7 +81,7 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
     terminal
         .draw(|frame| draw_frame(frame, state))
-        .expect("one frame");
+        .expect("一帧");
     terminal.backend().buffer().clone()
 }
 
@@ -119,29 +119,29 @@ fn the_question_and_its_options_take_over_the_bottom_input_area() {
     assert!(text.contains("Which framework?"), "{text}");
     assert!(
         text.contains("1. serde"),
-        "the options are numbered: {text}"
+        "选项是带编号的：{text}"
     );
     assert!(text.contains("2. manual"), "{text}");
 
-    // It is in the input area at the foot of the main column, not the middle overlay:
-    // its row sits under the rule above the input, and the frame is still the only box
-    // on screen.
+    // 它在主列脚下那块输入区里，不是中间的覆盖层：
+    // 它的那一行坐在输入区上面那条横线之下，而屏幕上
+    // 仍然只有外壳这一个框。
     let frame_bottom = rows
         .iter()
         .rposition(|row| row.starts_with('└'))
-        .expect("the frame's bottom border");
+        .expect("外壳的下边框");
     let question_row = rows
         .iter()
         .position(|row| row.contains("Which framework?"))
-        .expect("the question is on screen");
+        .expect("这个问句在屏幕上");
     assert!(
         question_row < frame_bottom,
-        "the question is drawn inside the frame:\n{text}"
+        "这个问句画在外壳里面：\n{text}"
     );
     let opens = rows.iter().filter(|row| row.starts_with('┌')).count();
     assert_eq!(
         opens, 1,
-        "no box floats over the transcript: only the frame's own corner:\n{text}"
+        "没有任何框浮在转录上面：只有外壳自己那个角：\n{text}"
     );
 }
 
@@ -159,10 +159,10 @@ fn a_single_select_choice_advances_and_the_footer_pages() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    assert!(text.contains("1 / 3"), "the footer pages: {text}");
+    assert!(text.contains("1 / 3"), "页脚在翻页：{text}");
 
-    // Confirming the highlighted option on a single-select question advances to
-    // the next one.
+    // 在单选题上确认高亮那个选项，就前进到
+    // 下一题。
     state.key(Key::Enter);
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
@@ -170,7 +170,7 @@ fn a_single_select_choice_advances_and_the_footer_pages() {
     assert!(text.contains("2 / 3"), "{text}");
     assert!(
         !text.contains("First?"),
-        "one question is on screen at a time: {text}"
+        "同一时刻屏幕上只有一道题：{text}"
     );
 }
 
@@ -186,31 +186,31 @@ fn submit_is_refused_until_every_question_is_answered_or_skipped() {
         ],
     );
 
-    // Confirming the first answer advances, but must not submit while the
-    // questions after it are unhandled.
+    // 确认第一个答案会前进，但在它后面那些题还没处理完时，
+    // 绝不能提交。
     state.key(Key::Enter);
     assert!(
         answer(&mut rx).is_none(),
-        "an unhandled question refuses submit"
+        "还有题没处理，提交被拒"
     );
 
-    // Same for the second: the answer is made, submit is still a separate press.
+    // 第二个也一样：答案已经作出，提交仍然要另外按一次。
     state.key(Key::Enter);
     assert!(
         answer(&mut rx).is_none(),
-        "one question still unhandled refuses submit"
+        "还有一题没处理，提交被拒"
     );
 
-    // Explicitly skipping the last is what completes the questionnaire; the
-    // skip itself does not submit either.
+    // 显式跳最后一题，才让整份问卷完成；跳过这个动作
+    // 本身也不提交。
     state.key(Key::Tab);
     assert!(
         answer(&mut rx).is_none(),
-        "skipping the last question does not submit on that key"
+        "跳过最后一题的那一下不提交"
     );
 
     state.key(Key::Enter);
-    let answers = answer(&mut rx).expect("all questions handled submits");
+    let answers = answer(&mut rx).expect("所有题都处理完了就提交");
     assert_eq!(
         answers.answers,
         vec![
@@ -235,9 +235,9 @@ fn submit_is_refused_until_every_question_is_answered_or_skipped() {
 
 #[test]
 fn a_skipped_question_is_no_answer_even_after_typing() {
-    // Skip is an explicit "no answer", and it outranks text typed before the
-    // skip: the answer is `selected: []` with no `custom` (spec §7). Typing and
-    // then deciding not to answer must not smuggle the text into the result.
+    // 跳过是一个显式的「不作答」，而且它压过跳过之前打进去的
+    // 文本：答案是 `selected: []`，没有 `custom`（spec §7）。先打字、
+    // 再决定不作答，绝不能把那文本偷渡进结果里。
     let mut state = state();
     let mut rx = ask(
         &mut state,
@@ -247,7 +247,7 @@ fn a_skipped_question_is_no_answer_even_after_typing() {
     state.key(Key::Char('x'));
     state.key(Key::Tab);
     state.key(Key::Enter);
-    let answers = answer(&mut rx).expect("the skip completes the questionnaire");
+    let answers = answer(&mut rx).expect("这次跳过让整份问卷完成");
     assert_eq!(
         answers.answers,
         vec![UserAnswer {
@@ -260,7 +260,7 @@ fn a_skipped_question_is_no_answer_even_after_typing() {
 
 #[test]
 fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() {
-    // Single-select: custom text wins, so `selected` comes back empty (spec §7).
+    // 单选：自定义文本赢，所以回来的 `selected` 是空的（spec §7）。
     let mut single = state();
     let mut single_rx = ask(
         &mut single,
@@ -270,18 +270,18 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
     let text = screen(120, 24, &mut single).join("\n");
     assert!(
         text.contains("● 1. a"),
-        "the choice is shown as picked: {text}"
+        "那个选择被显示成已选中：{text}"
     );
     single.key(Key::Char('x'));
     let text = screen(120, 24, &mut single).join("\n");
     assert!(
         text.contains("○ 1. a"),
-        "typing clears the single-select choice, because custom text overrides it: {text}"
+        "打字清掉了单选的那个选择，因为自定义文本覆盖它：{text}"
     );
     assert!(text.contains("自定义：x"), "{text}");
     single.key(Key::Enter);
     assert_eq!(
-        answer(&mut single_rx).expect("answered").answers,
+        answer(&mut single_rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "one".to_owned(),
             selected: Vec::new(),
@@ -289,7 +289,7 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
         }]
     );
 
-    // Multi-select: the choice stays, the custom text comes along with it.
+    // 多选：那个选择留着，自定义文本与它一起来。
     let mut multi = state();
     let mut multi_rx = ask(
         &mut multi,
@@ -300,11 +300,11 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
     let text = screen(120, 24, &mut multi).join("\n");
     assert!(
         text.contains("[x] 1. a"),
-        "typing leaves a multi-select choice alone, because custom text supplements it: {text}"
+        "打字没动多选的那个选择，因为自定义文本补充它：{text}"
     );
     multi.key(Key::Enter);
     assert_eq!(
-        answer(&mut multi_rx).expect("answered").answers,
+        answer(&mut multi_rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "one".to_owned(),
             selected: vec!["a".to_owned()],
@@ -315,9 +315,9 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
 
 #[test]
 fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
-    // `Enter` on an already-typed answer moves on; it does not confirm the
-    // highlight, or typed free text would be silently replaced by an option
-    // (spec §7).
+    // 在一道已经打了字的题上按 `Enter` 只是前进；它不确认那个
+    // 高亮，否则打进去的自由文本会被某个选项悄悄替换掉
+    // （spec §7）。
     let mut state = state();
     let mut rx = ask(
         &mut state,
@@ -333,13 +333,13 @@ fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("Second?"),
-        "Enter moves to the next question:\n{text}"
+        "Enter 走到下一题：\n{text}"
     );
 
     state.key(Key::Enter);
     state.key(Key::Enter);
     assert_eq!(
-        answer(&mut rx).expect("answered").answers,
+        answer(&mut rx).expect("作答了").answers,
         vec![
             UserAnswer {
                 id: "one".to_owned(),
@@ -357,10 +357,10 @@ fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
 
 #[test]
 fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
-    // The bottom block is capped (layout `MAX_INPUT_ROWS`), so a question with
-    // more options than fit must scroll its option window: the header and the
-    // question stay put, and the highlighted option is always on screen
-    // (spec §7).
+    // 底部那块是有上限的（布局里的 `MAX_INPUT_ROWS`），所以一道
+    // 选项装不下的题必须滚动它的选项窗口：题头与
+    // 题目原地不动，而高亮那个选项永远在屏幕上
+    // （spec §7）。
     let labels: Vec<String> = (1..=20).map(|n| format!("opt-{n:02}")).collect();
     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
     let mut state = state();
@@ -369,7 +369,7 @@ fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("1. opt-01"),
-        "the window starts at the top:\n{text}"
+        "窗口从顶上开始：\n{text}"
     );
 
     for _ in 0..15 {
@@ -378,18 +378,18 @@ fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("16. opt-16"),
-        "the highlighted option scrolled into view:\n{text}"
+        "高亮那个选项被滚进了视野：\n{text}"
     );
     assert!(
         text.contains("Which?"),
-        "the question stays pinned above the window:\n{text}"
+        "题目钉在窗口上方不动：\n{text}"
     );
 
-    // The tenth option onward is reachable too: the highlight is not a digit.
+    // 第十个选项往后也够得到：高亮不是靠数字键。
     state.key(Key::Enter);
     state.key(Key::Enter);
     assert_eq!(
-        answer(&mut rx).expect("answered").answers,
+        answer(&mut rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "many".to_owned(),
             selected: vec!["opt-16".to_owned()],
@@ -400,9 +400,9 @@ fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
 
 #[test]
 fn digits_are_free_text_not_selection_keys() {
-    // The decided keyboard has no digit selection, so a digit is an ordinary
-    // character even on a question that offers options — which also means no
-    // digit can be swallowed on a question that offers none (spec §7).
+    // 定下来的键盘没有数字选择，所以数字是普通的字符，
+    // 就算在一道给了选项的题上也一样 —— 这也意味着在
+    // 没有选项的题上，没有任何数字会被吞掉（spec §7）。
     let mut state = state();
     let mut rx = ask(
         &mut state,
@@ -414,11 +414,11 @@ fn digits_are_free_text_not_selection_keys() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("自定义：v2"),
-        "the digit lands in the free-text field:\n{text}"
+        "那个数字落进自由文本那一栏：\n{text}"
     );
     state.key(Key::Enter);
     assert_eq!(
-        answer(&mut rx).expect("answered").answers,
+        answer(&mut rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "q".to_owned(),
             selected: Vec::new(),
@@ -444,18 +444,18 @@ fn the_recommended_marker_is_display_only() {
     let text = rows.join("\n");
     assert!(
         text.contains("推荐"),
-        "the marker is shown as a display badge: {text}"
+        "那个标记被显示成一个展示用的徽记：{text}"
     );
     assert!(
         !text.contains("(Recommended)"),
-        "the raw marker is not what the option reads as: {text}"
+        "这个选项读出来不是那个原始标记：{text}"
     );
 
-    // The answer keeps the original string, marker included.
+    // 答案保留原串，标记也在内。
     state.key(Key::Enter);
     state.key(Key::Enter);
     assert_eq!(
-        answer(&mut rx).expect("answered").answers,
+        answer(&mut rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "one".to_owned(),
             selected: vec!["serde (Recommended)".to_owned()],
@@ -474,17 +474,17 @@ fn answering_hands_the_bottom_back_to_the_resident_input() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    assert!(!text.contains("Pick?"), "the takeover is gone:\n{text}");
+    assert!(!text.contains("Pick?"), "接管退场了：\n{text}");
     assert!(
         text.contains("esc 取消"),
-        "the resident input's hints are back:\n{text}"
+        "常驻输入区那几句提示回来了：\n{text}"
     );
 }
 
 #[test]
 fn a_question_with_no_options_is_answered_with_free_text() {
-    // The wire allows a question with no options: the answer is then the text the
-    // user typed, and an empty one is not an answer (spec §7).
+    // 线上契约允许没有选项的题：那时的答案就是用户
+    // 打进去的文本，而空的不算一个答案（spec §7）。
     let mut state = state();
     let mut rx = ask(
         &mut state,
@@ -492,21 +492,21 @@ fn a_question_with_no_options_is_answered_with_free_text() {
     );
 
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("回答："), "a free-text line is shown: {text}");
+    assert!(text.contains("回答："), "显示出一行自由文本：{text}");
 
     state.key(Key::Enter);
     assert!(
         answer(&mut rx).is_none(),
-        "an empty free-text question is not answered"
+        "一道空的自由文本题不算作过答"
     );
-    // A digit is ordinary text: the keyboard has no digit selection, and there
-    // is no option it could number here either.
+    // 数字是普通文本：这个键盘没有数字选择，
+    // 这里也没有任何选项等着它去编号。
     for ch in "v2-name".chars() {
         state.key(Key::Char(ch));
     }
     state.key(Key::Enter);
     assert_eq!(
-        answer(&mut rx).expect("answered").answers,
+        answer(&mut rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "q".to_owned(),
             selected: Vec::new(),
@@ -517,20 +517,20 @@ fn a_question_with_no_options_is_answered_with_free_text() {
 
 #[test]
 fn an_empty_questionnaire_is_refused_rather_than_panicking() {
-    // The tool refuses an empty list before it reaches a port, so this is only
-    // defense: a questionnaire with nothing to draw must not index into nothing.
+    // 工具在够到端口之前就拒了空列表，所以这里只是
+    // 兜底：一份没东西可画的问卷绝不能往空里索引。
     let mut state = state();
     let mut rx = ask(&mut state, Vec::new());
     match rx.try_recv() {
         Ok(Err(reason)) => assert!(reason.contains("at least one question"), "{reason}"),
-        other => panic!("expected a refusal, got {other:?}"),
+        other => panic!("期望一次拒绝，实际得到 {other:?}"),
     }
 }
 
 #[test]
 fn escape_still_cancels_the_run_and_never_answers_the_questionnaire() {
-    // `Esc` keeps its meaning (spec §6, §19): it does not abandon the question,
-    // it cancels the run, and the cancelled call gets its one result elsewhere.
+    // `Esc` 保持它的含义（spec §6、§19）：它不放弃这道题，
+    // 它取消这次运行，而那次被取消的调用在别处拿到它那唯一一条结果。
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a"], false)]);
@@ -539,18 +539,18 @@ fn escape_still_cancels_the_run_and_never_answers_the_questionnaire() {
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
     assert!(
         answer(&mut rx).is_none(),
-        "Esc cancels the run, it does not answer"
+        "Esc 取消这次运行，它不作答"
     );
 
-    // The run's end withdraws the questionnaire, reading as "no answer".
+    // 运行的结束把问卷撤回，读作「没有答案」。
     state.request(ConsoleRequest::RunState { running: false });
     let rows = screen(120, 24, &mut state);
     assert!(
         !rows.join("\n").contains("Pick?"),
-        "the takeover goes with the run"
+        "接管跟着这次运行一起走"
     );
     assert!(
         rx.try_recv().is_err(),
-        "the sender was dropped, not answered"
+        "发送端被丢掉了，而不是作了答"
     );
 }

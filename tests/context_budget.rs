@@ -1,9 +1,9 @@
-//! Context budget and trimming (spec §10; ticket 07).
+//! 上下文预算与裁剪（spec §10；票 07）。
 //!
-//! The pure half tests `trim`, `usable_input` and the pre-stream truncation
-//! directly — they are pure functions and need no seam. The end-to-end half
-//! drives the one assembly seam with a scripted provider and asserts what the
-//! model actually received plus what stayed on the stream.
+//! 纯函数那一半直接测 `trim`、`usable_input` 与流前截断 ——
+//! 它们是纯函数，不需要接缝。端到端那一半用脚本化 provider
+//! 驱动那唯一一条组装接缝，断言模型真正收到的东西，
+//! 以及在流上留住了什么。
 
 mod support;
 
@@ -25,11 +25,11 @@ use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{CaptureBuf, FakeProvider, Reply};
 
-// --- message builders ------------------------------------------------------
+// --- 消息构造器 ------------------------------------------------------------
 
-/// What a `ContextInjected` projects to: a `user` message with no `name`, marked
-/// as harness-injected rather than speech, so trimming pins it wherever it sits
-/// (ticket 15).
+/// 一条 `ContextInjected` 投影成什么：一条没有 `name` 的 `user` 消息，
+/// 标成 harness 注入而不是发言，所以裁剪把它钉在它所在的位置上
+/// （票 15）。
 fn injected(content: &str) -> Message {
     Message::User {
         content: content.to_owned(),
@@ -38,7 +38,7 @@ fn injected(content: &str) -> Message {
     }
 }
 
-/// A leading injection: the same shape as [`injected`], at the pinned head.
+/// 一条开头的注入：形状与 [`injected`] 一样，落在被钉住的头部。
 fn pinned(content: &str) -> Message {
     injected(content)
 }
@@ -90,7 +90,7 @@ fn tool_content(message: &Message) -> Option<&str> {
     }
 }
 
-/// Every `tool_call` still has exactly one result with its id.
+/// 每一次 `tool_call` 仍然有、且只有一条带着它 id 的结果。
 fn pairing_is_intact(messages: &[Message]) -> bool {
     let mut results: Vec<&str> = Vec::new();
     for message in messages {
@@ -106,14 +106,14 @@ fn pairing_is_intact(messages: &[Message]) -> bool {
     })
 }
 
-// --- usable input ----------------------------------------------------------
+// --- 可用输入 --------------------------------------------------------------
 
 #[test]
 fn usable_input_reserves_output_space_per_model() {
     let mut caps = caps_for("deepseek-flash").unwrap();
     assert_eq!(usable_input(&caps), u64::from(caps.context_window) - 20_000);
 
-    // A model whose output cap is under the reserve keeps only what it can write.
+    // 输出上限低于预留量的模型，只留下它写得出来的那么多。
     caps.max_output_tokens = 8_000;
     assert_eq!(usable_input(&caps), u64::from(caps.context_window) - 8_000);
 }
@@ -140,7 +140,7 @@ fn tokens_are_estimated_as_characters_over_four() {
     assert_eq!(estimate_tokens(&"x".repeat(400)), 100);
 }
 
-// --- trim ------------------------------------------------------------------
+// --- 裁剪 ------------------------------------------------------------------
 
 #[test]
 fn trim_leaves_a_request_that_fits_alone() {
@@ -165,9 +165,9 @@ fn trim_stubs_old_ordinary_tool_results_before_touching_anything_else() {
     assert_eq!(
         tool_content(&trimmed[3]),
         Some(DROPPED_TOOL_RESULT),
-        "the old result body is the thing that goes"
+        "走掉的是那条旧结果的正文"
     );
-    assert_eq!(trimmed.len(), 6, "only the body changes, not the messages");
+    assert_eq!(trimmed.len(), 6, "变的只有正文，消息本身没变");
     assert_eq!(trimmed[1], user("first question"));
     assert_eq!(trimmed[2], assistant_calling(&[("a", "read_file")]));
     assert_eq!(trimmed[4], assistant("answer"));
@@ -191,7 +191,7 @@ fn trim_prefers_ordinary_results_over_skill_bodies() {
     assert_eq!(
         tool_content(&trimmed[4]),
         Some("y".repeat(400).as_str()),
-        "a loaded skill body is stickier than an ordinary result"
+        "已加载的技能正文比普通结果更难被丢掉"
     );
 }
 
@@ -224,7 +224,7 @@ fn trim_drops_old_whole_rounds_only_once_the_bodies_are_gone() {
     ];
     let trimmed = trim(messages, 60, &TrimPolicy::default()).unwrap();
 
-    // The oldest round went as a unit: its user, its call and its result.
+    // 最旧的那一轮整块走掉：它的 user、它的调用与它的结果。
     assert_eq!(trimmed[0], pinned("rules"));
     assert_eq!(trimmed[1], user("second question"));
     assert_eq!(trimmed[2], assistant("second answer"));
@@ -239,7 +239,7 @@ fn trim_keeps_the_pinned_injection_and_the_active_round() {
         assistant(&"answer ".repeat(200)),
         user("second question"),
     ];
-    // Only the active round + the pinned head fit; the old round must go.
+    // 只有当前轮加上被钉住的头部装得下；旧的那一轮必须走。
     let trimmed = trim(messages, 30, &TrimPolicy::default()).unwrap();
 
     assert_eq!(trimmed.first(), Some(&pinned("rules")));
@@ -248,9 +248,9 @@ fn trim_keeps_the_pinned_injection_and_the_active_round() {
 
 #[test]
 fn trim_keeps_a_mid_session_injection_while_dropping_the_round_around_it() {
-    // The plan-mode instruction is injected in the middle of a round, not at the
-    // head: it must be pinned where it sits, and it must not split the round
-    // into two so that half of it escapes dropping (spec §13).
+    // 计划模式的指令注入在一轮的中途，而不是在头部：
+    // 它必须被钉在它所在的位置，而且它不能把这一轮切成
+    // 两半、让其中一半逃过丢弃（spec §13）。
     let messages = vec![
         pinned("rules"),
         user("first question"),
@@ -267,7 +267,7 @@ fn trim_keeps_a_mid_session_injection_while_dropping_the_round_around_it() {
             injected("plan mode: only PLAN.md may be written"),
             user("second question"),
         ],
-        "the old round goes as a unit and the injection stays"
+        "旧的那一轮整块走掉，而注入留着"
     );
 }
 
@@ -284,7 +284,7 @@ fn trim_hard_fails_rather_than_dropping_the_question_being_answered() {
     assert!(trim(messages, 10, &TrimPolicy::default()).is_err());
 }
 
-// --- pre-stream truncation -------------------------------------------------
+// --- 流前截断 --------------------------------------------------------------
 
 #[test]
 fn an_oversized_result_is_spilled_and_replaced_by_a_preview_with_a_pointer() {
@@ -294,13 +294,13 @@ fn an_oversized_result_is_spilled_and_replaced_by_a_preview_with_a_pointer() {
     let spilled = truncate_result(&text, "call-1", &outputs, 100);
 
     assert!(spilled.truncated);
-    let pointer = spilled.pointer.clone().expect("the overflow lands on disk");
+    let pointer = spilled.pointer.clone().expect("溢出的内容落在磁盘上");
     assert_eq!(std::fs::read_to_string(&pointer).unwrap(), text);
     assert!(spilled.preview.chars().count() < text.chars().count());
     assert!(spilled.preview.contains("truncated"), "{}", spilled.preview);
     assert!(
         spilled.preview.contains(&pointer.display().to_string()),
-        "the pointer must be in the stream: {}",
+        "那个指针必须在流上：{}",
         spilled.preview
     );
 }
@@ -317,7 +317,7 @@ fn a_result_under_the_cap_is_untouched() {
 #[test]
 fn a_failed_spill_degrades_to_the_preview_and_never_fails() {
     let dir = tempfile::tempdir().unwrap();
-    // `outputs` is a file, so creating the spill directory must fail.
+    // `outputs` 是个文件，所以建溢出目录必然失败。
     let blocked = dir.path().join("outputs");
     std::fs::write(&blocked, "not a directory").unwrap();
     let text = "x".repeat(4_000);
@@ -337,17 +337,17 @@ fn a_failed_spill_degrades_to_the_preview_and_never_fails() {
 fn truncation_never_grows_the_stream() {
     let dir = tempfile::tempdir().unwrap();
     let outputs = dir.path().join("outputs");
-    // Just over a tiny cap, but shorter than a preview plus its pointer note.
+    // 刚过一个很小的上限，但比一条预览加上它的指针附注还短。
     let text = "x".repeat(180);
     let spilled = truncate_result(&text, "call-1", &outputs, 10);
 
     assert!(
         spilled.preview.chars().count() <= text.chars().count(),
-        "a preview must never be longer than the body it replaces"
+        "预览绝不能比它替换掉的正文更长"
     );
     assert_eq!(
         spilled.preview, text,
-        "the body is small enough that replacing it with a pointer would grow the stream"
+        "正文够小，换成指针反而会把流撑大"
     );
 }
 
@@ -366,7 +366,7 @@ fn agents_md_is_read_when_present_and_skipped_when_absent() {
     assert_eq!(load_agents_md(dir.path()), None);
 }
 
-// --- the assembly seam -----------------------------------------------------
+// --- 组装接缝 --------------------------------------------------------------
 
 struct Fixture {
     harness: Option<Harness>,
@@ -415,7 +415,7 @@ async fn fixture(
             session_id: SessionId::new("s-context"),
             tools,
             locks: fs_agent::tools::PathLocks::new(),
-            // `auto` keeps a test-only read-only tool allowed without an answerer.
+            // `auto` 让一个只给测试用的只读工具，不用作答者也被放行。
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -439,7 +439,7 @@ impl Fixture {
     async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
         self.harness
             .as_mut()
-            .expect("harness already shut down")
+            .expect("harness 已经关掉了")
             .run_turn(input)
             .await
             .unwrap()
@@ -456,7 +456,7 @@ impl Fixture {
     }
 }
 
-/// A test-only read-only tool that returns a body of a fixed size.
+/// 一个只给测试用的只读工具，返回一份固定大小的正文。
 struct Blob {
     size: usize,
 }
@@ -480,7 +480,7 @@ impl Tool for Blob {
     }
 }
 
-/// A response that asks for one `blob` call.
+/// 一条要求调用一次 `blob` 的响应。
 fn blob_reply(id: &str) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
@@ -495,8 +495,8 @@ fn blob_reply(id: &str) -> Reply {
     ])
 }
 
-/// Caps whose usable input is exactly `usable` tokens **beyond the pinned
-/// identity**, which leads every request and counts against the budget too.
+/// 一份能力表，它的可用输入正好是在被钉住的身份**之外**还有
+/// `usable` 个 token —— 那个身份走在每个请求最前面，也占预算。
 fn caps_with_usable_input(usable: u32) -> ModelCaps {
     let identity = fs_agent::context::estimate_tokens(fs_agent::agent::agent_identity());
     let mut caps = caps_for("deepseek-flash").unwrap();
@@ -528,8 +528,8 @@ async fn over_budget_history_drops_an_old_whole_round_only_after_the_bodies_are_
             blob_reply("call-2"),
             Reply::text("done"),
         ],
-        // Just enough for one full round, not for two once the tool bodies can
-        // no longer absorb the difference.
+        // 正好够跑满一轮；等工具正文再也吸不掉那份差额之后，
+        // 就跑不下两轮了。
         caps_with_usable_input(190),
         SessionConfig::new("fake-model"),
         vec![Box::new(Blob { size: 400 })],
@@ -542,33 +542,33 @@ async fn over_budget_history_drops_an_old_whole_round_only_after_the_bodies_are_
     fixture.shutdown().await;
 
     let requests = fixture.provider.requests();
-    assert_eq!(requests.len(), 4, "two iterations per turn");
-    // Turn 2's first iteration still had the whole first round...
+    assert_eq!(requests.len(), 4, "每个回合两个迭代");
+    // 第二轮的第一个迭代还带着完整的第一轮……
     assert_eq!(
         tool_body(&requests[2], "call-1"),
         Some("b".repeat(400).as_str())
     );
 
-    // ...and the second iteration dropped it as a unit, not as a stubbed body:
-    // stubbing every old result was not enough, so the oldest round went.
+    // ……第二个迭代把它整块丢掉了，而不是留个被替换的正文：
+    // 把每一条旧结果都换成替身还不够，所以最旧的那一轮走了。
     let messages = &requests[3].messages;
     assert!(
         tool_body(&requests[3], "call-1").is_none(),
-        "the old round is removed whole, not stubbed"
+        "旧的那一轮被整块去掉，而不是留个替身"
     );
     assert!(
         !messages
             .iter()
             .any(|message| matches!(message, Message::User { content, .. } if content == "first")),
-        "the old round's question went with it"
+        "旧那一轮的问题跟着它一起走了"
     );
     assert!(
         !messages
             .iter()
             .any(|message| tool_content(message) == Some(DROPPED_TOOL_RESULT)),
-        "no stub is left behind: the round went as a unit"
+        "没有留下任何替身：那一轮整块走了"
     );
-    // The active round stays whole.
+    // 当前轮保持完整。
     assert_eq!(
         tool_body(&requests[3], "call-2"),
         Some("b".repeat(400).as_str())
@@ -577,7 +577,7 @@ async fn over_budget_history_drops_an_old_whole_round_only_after_the_bodies_are_
         .iter()
         .any(|message| matches!(message, Message::User { content, .. } if content == "second")));
 
-    // Still read-only: the stream keeps both full bodies.
+    // 仍然只读：流上保留着两份完整的正文。
     let events = fixture.events();
     let outputs: Vec<&String> = events
         .iter()
@@ -596,8 +596,8 @@ async fn over_budget_history_drops_an_old_whole_round_only_after_the_bodies_are_
 #[tokio::test]
 async fn an_over_budget_history_is_trimmed_without_deleting_a_log_line() {
     let mut fixture = fixture(
-        // Turn 1 calls the tool, then answers; turn 2 is a long question that
-        // pushes the *old* result out of the budget.
+        // 第一个回合调用工具、然后作答；第二个回合是一个很长的问题，
+        // 把**旧的**那条结果挤出预算。
         vec![
             blob_reply("call-blob"),
             Reply::text("done"),
@@ -617,29 +617,29 @@ async fn an_over_budget_history_is_trimmed_without_deleting_a_log_line() {
     fixture.shutdown().await;
 
     let requests = fixture.provider.requests();
-    assert_eq!(requests.len(), 3, "one request per iteration");
+    assert_eq!(requests.len(), 3, "每个迭代一个请求");
 
-    // In turn 1 the model still saw the whole result.
+    // 在第一个回合里，模型看到的还是完整的结果。
     assert_eq!(
         message_tool_content(&requests[1]),
         vec!["b".repeat(400).as_str()]
     );
 
-    // In turn 2 the oldest tool body was dropped, and only that.
+    // 在第二个回合里，最旧的工具正文被丢掉了，而且只丢了它。
     assert_eq!(
         message_tool_content(&requests[2]),
         vec![DROPPED_TOOL_RESULT],
-        "the old ordinary tool result is the class that goes first"
+        "最旧的普通工具结果是先走的那一类"
     );
     assert!(
         requests[2].messages.iter().any(
             |message| matches!(message, Message::User { content, .. } if content.len() == 260)
         ),
-        "the question being answered stays"
+        "正在被回答的那个问题留着"
     );
 
-    // Trimming is read-only: the stream still holds the full result body, and
-    // the turn appended its own events and nothing else.
+    // 裁剪是只读的：流上仍然握着完整的工具结果正文，
+    // 而这个回合只追加了它自己那些事件，别的什么都没加。
     let events = fixture.events();
     let outputs: Vec<String> = events
         .iter()
@@ -688,7 +688,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
     fixture.run_turn(&"q".repeat(260)).await;
     fixture.shutdown().await;
 
-    // The injection is on the stream, with its source.
+    // 注入在流上，带着它的来源。
     let events = fixture.events();
     let injection = events
         .iter()
@@ -698,7 +698,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
             }
             _ => None,
         })
-        .expect("AGENTS.md was injected");
+        .expect("AGENTS.md 被注入了");
     assert_eq!(injection.0, fs_agent::events::ContextSource::AgentsMd);
     assert_eq!(injection.1, rules);
     assert_eq!(
@@ -707,11 +707,11 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
             .filter(|event| matches!(event.payload, EventPayload::ContextInjected { .. }))
             .count(),
         1,
-        "the rules are recorded once per session, not once per turn"
+        "规则每个会话记一次，而不是每个回合记一次"
     );
 
-    // The identity leads, the rules are the first user message, and trimming
-    // never removed either.
+    // 身份走在最前面，规则是第一条 user 消息，而裁剪
+    // 从来没把这两样里任何一样删掉。
     for request in fixture.provider.requests() {
         assert_eq!(
             request.messages.first(),
@@ -719,7 +719,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
                 content: fs_agent::agent::agent_identity().to_owned(),
                 name: None,
             }),
-            "the program's identity leads every request"
+            "程序的身份走在每个请求最前面"
         );
         assert_eq!(
             request.messages.get(1),
@@ -728,7 +728,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
                 name: None,
                 injected: true,
             }),
-            "identity -> rules -> history, every turn"
+            "每个回合都是：身份 -> 规则 -> 历史"
         );
     }
 }
@@ -763,24 +763,24 @@ async fn an_oversized_tool_result_is_spilled_before_it_reaches_the_stream() {
             } => Some(output.clone()),
             _ => None,
         })
-        .expect("the call has a result");
+        .expect("这次调用有一条结果");
     assert!(
         output.chars().count() < 2_000,
-        "the stream carries a preview, not the whole body"
+        "流上扛的是预览，不是整份正文"
     );
     assert!(output.contains("truncated"), "{output}");
     let pointer = outputs_dir.join("call-blob.txt");
     assert!(
         output.contains(&pointer.display().to_string()),
-        "the stream carries the pointer: {output}"
+        "流上扛着那个指针：{output}"
     );
     assert_eq!(
         std::fs::read_to_string(&pointer).unwrap(),
         "b".repeat(2_000),
-        "the overflow is on disk, byte for byte"
+        "溢出的内容在磁盘上，逐字节都在"
     );
 
-    // The model sees the same preview the stream recorded.
+    // 模型看到的就是流上记下的那条预览。
     let requests = fixture.provider.requests();
     assert_eq!(message_tool_content(&requests[1]), vec![output.as_str()]);
 }
@@ -802,7 +802,7 @@ async fn a_turn_hard_fails_when_even_the_pinned_injection_does_not_fit() {
 
     assert!(
         fixture.provider.requests().is_empty(),
-        "a request that cannot fit is never sent"
+        "装不下的请求永远不会被发出去"
     );
     assert!(
         fixture.stderr.text().contains("context budget"),

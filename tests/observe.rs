@@ -1,9 +1,9 @@
-//! The observability queries (spec §18).
+//! 可观察性那批查询（spec §18）。
 //!
-//! Every view is a group-by over the event stream, so the tests build a stream
-//! by hand and assert the view — the stream is the input, the view is the
-//! contract. The two `--json` shapes are asserted through the serde value, since
-//! that is what a pipeline consumes.
+//! 每一个视图都是对事件流的一次分组，所以测试手工搭出一条流、
+//! 然后断言视图 —— 流是输入，视图才是契约。那两种 `--json`
+//! 形态通过 serde 值来断言，因为那正是
+//! 一条流水线消费的东西。
 
 use fs_agent::config::{PriceTable, Pricing};
 use fs_agent::events::{
@@ -186,7 +186,7 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
     let timeline = observe::timeline(&log.events());
     assert_eq!(timeline.session_id, Some(SessionId::new("s-1")));
     assert_eq!(timeline.cwd.as_deref(), Some("/workspace"));
-    assert_eq!(timeline.groups.len(), 2, "a prelude and round one");
+    assert_eq!(timeline.groups.len(), 2, "一段前奏加第一轮");
 
     let prelude = &timeline.groups[0];
     assert_eq!(prelude.round, None);
@@ -200,13 +200,13 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
     assert_eq!(round.mode, Some(RoundMode::Independent));
     assert_eq!(round.ended, Some(StopReason::NoDivergence));
 
-    // The tool call is one row: start, result and post-hook feedback together.
+    // 工具调用是一行：开始、结果与后置钩子的反馈合在一起。
     let tools: Vec<&Entry> = round
         .entries
         .iter()
         .filter(|entry| matches!(entry, Entry::Tool { .. }))
         .collect();
-    assert_eq!(tools.len(), 1, "one call is one row, not three: {tools:?}");
+    assert_eq!(tools.len(), 1, "一次调用一行，而不是三行：{tools:?}");
     match tools[0] {
         Entry::Tool {
             ok,
@@ -220,15 +220,15 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
             assert_eq!(duration_ms, &Some(3));
             assert_eq!(hook.as_deref(), Some("feedback: looks fine"));
         }
-        other => panic!("expected a tool row, got {other:?}"),
+        other => panic!("期望一行工具，实际得到 {other:?}"),
     }
-    // The post-hook is merged, not repeated as its own row.
+    // 后置钩子被合进去了，而不是自己再占一行。
     assert!(
         !round
             .entries
             .iter()
             .any(|entry| matches!(entry, Entry::Hook { .. })),
-        "post-hook feedback belongs to the call it annotated"
+        "后置钩子的反馈属于它注解的那次调用"
     );
 }
 
@@ -293,13 +293,13 @@ fn a_filter_keeps_only_what_it_names() {
     assert_eq!(rows.len(), 1);
     assert!(matches!(rows[0], Entry::Tool { tool, .. } if tool == "read_file"));
 
-    // The merged tool row answers to either of the two event names it replaces.
+    // 合并后的工具行，对它取代的那两个事件名都答话。
     let by_kind = timeline.filtered(&Filter {
         kind: Some("ToolCallCompleted".to_owned()),
         ..Filter::default()
     });
     let rows: Vec<&Entry> = by_kind.groups.iter().flat_map(|g| &g.entries).collect();
-    assert_eq!(rows.len(), 2, "both calls, not just the one named later");
+    assert_eq!(rows.len(), 2, "两次调用都在，不只是后面被点名的那一次");
 
     let errors = timeline.filtered(&Filter {
         only_error: true,
@@ -355,7 +355,7 @@ fn the_file_history_names_the_file_and_the_round_that_changed_it() {
         )),
         None,
     );
-    // A failed call is not a change.
+    // 失败的调用不算一次改动。
     call(
         &mut log,
         &deepseek(),
@@ -388,7 +388,7 @@ fn stats_report_the_two_silent_quantities_the_edit_ladder_and_absence() {
         },
     )
     .unwrap();
-    // The other side failed out: one-sided absence.
+    // 另一边以错误出局：单侧的缺席。
     log.append(
         deepseek(),
         EventPayload::TurnEnded {
@@ -397,8 +397,8 @@ fn stats_report_the_two_silent_quantities_the_edit_ladder_and_absence() {
     )
     .unwrap();
 
-    // A downgraded edit, a failed match (which withdraws the read permission),
-    // and a read-before-write refusal.
+    // 一次降级的编辑、一次失败的匹配（它收回了读权限），
+    // 以及一次写前先读的拒绝。
     call(
         &mut log,
         &kimi(),
@@ -423,8 +423,8 @@ fn stats_report_the_two_silent_quantities_the_edit_ladder_and_absence() {
         "edit_file",
         serde_json::json!({}),
     );
-    // The producer prefixes the path (`edit_file` reports `"<path>: {error}"`);
-    // the metric must read through that, or it silently counts zero.
+    // 生产者给路径加了前缀（`edit_file` 报的是 `"<path>: {error}"`）；
+    // 指标必须透过这层去读，否则它会悄悄数成零。
     let no_match = format!("/workspace/a.rs: {}", EditError::NoMatch);
     result(&mut log, &kimi(), "call-2", false, None, Some(&no_match));
     call(
@@ -535,7 +535,7 @@ fn stats_report_per_agent_tokens_hit_rate_rounds_and_permissions() {
     assert_eq!(stats.session.calls, 2);
     assert_eq!(stats.session.rounds, 1);
     assert_eq!(stats.session.tokens.total_tokens(), 230);
-    assert_eq!(stats.rounds[0].calls, 2, "both calls belong to round one");
+    assert_eq!(stats.rounds[0].calls, 2, "两次调用都归第一轮");
 
     let kimi_stats = stats
         .speakers
@@ -554,7 +554,7 @@ fn stats_report_per_agent_tokens_hit_rate_rounds_and_permissions() {
     assert_eq!(stats.executors.finished, 1);
     assert_eq!(stats.executors.by_reason[0].name, "MaxIterations");
 
-    // With no model named there is no money to show — the stream carries none.
+    // 没点名模型就没有钱可看 —— 流里本来也没带。
     assert_eq!(stats.session.cost, None);
     assert!(stats.speakers.iter().all(|agent| agent.cost.is_none()));
 }
@@ -582,7 +582,7 @@ fn stats_price_the_session_only_when_the_caller_names_the_model() {
     let actual = stats
         .session
         .cost
-        .expect("the model is named, so there is a cost");
+        .expect("模型被点了名，所以有成本");
     assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     assert_eq!(stats.speakers[0].speaker, kimi());
 }
@@ -632,7 +632,7 @@ fn list_summarizes_a_stored_session_from_its_own_stream() {
     assert_eq!(listings[0].messages, 1);
     assert!(listings[0].written.is_some());
 
-    // Every bucket, when the caller does not scope it.
+    // 调用者不分桶时，就是每一个桶。
     let all = observe::list(&store, None).unwrap();
     assert_eq!(all.len(), 1);
 }

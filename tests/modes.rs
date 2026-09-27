@@ -1,11 +1,11 @@
-//! The permission modes end to end: which one a session starts in, what the
-//! `Shift+Tab` gesture does to it, and what it refuses
-//! (`.scratch/todo-and-modes/spec.md` §1).
+//! 端到端看权限模式：会话从哪一档开始、`Shift+Tab` 手势
+//! 对它做了什么，以及它拒掉什么
+//! （`.scratch/todo-and-modes/spec.md` §1）。
 //!
-//! The gesture is a library call here because the key that presses it belongs to a
-//! renderer; everything else is the same contract the other end-to-end tests use:
-//! a scripted provider, a scripted answerer, and assertions on the JSONL stream
-//! and the workspace.
+//! 这里手势是一次库调用，因为按下它的那个键属于一个渲染器；
+//! 其余一切都是其他端到端测试用的同一份契约：
+//! 一个脚本化 provider、一个脚本化作答者，加上对 JSONL 流
+//! 与工作区的断言。
 
 mod support;
 
@@ -27,8 +27,8 @@ struct Fixture {
     harness: Harness,
     log_path: PathBuf,
     workspace: PathBuf,
-    /// Kept alive for the duration of the test; `None` when the fixture
-    /// continues a session whose directory an earlier fixture still owns.
+    /// 在整个测试期间保持活着；当一个更早的 fixture 还拥有
+    /// 这个会话目录时是 `None`。
     _dir: Option<tempfile::TempDir>,
 }
 
@@ -36,8 +36,8 @@ async fn fixture(replies: Vec<Reply>, mode: Mode, asker: Option<Arc<dyn Asker>>)
     fixture_at(replies, mode, asker, None).await
 }
 
-/// Build a session, optionally continuing an existing log so a test can assert
-/// what a `--continue` starts from.
+/// 搭出一个会话，可选地续上一份已有的日志，这样测试就能断言
+/// 一次 `--continue` 是从什么开始的。
 async fn fixture_at(
     replies: Vec<Reply>,
     mode: Mode,
@@ -62,8 +62,8 @@ async fn fixture_at(
     std::fs::create_dir_all(&workspace).unwrap();
     let log_path = session.join("log.jsonl");
     let provider = FakeProvider::new(replies);
-    // The built-in table, `bash` included: an `Exclusive` call is what `readonly`
-    // must refuse, and the real tool is the honest way to pin that.
+    // 内置工具表，`bash` 也在里面：`readonly` 必须拒掉的正是
+    // 一次 `Exclusive` 调用，用真工具钉住这一点最诚实。
     let tools = fs_agent::tools::builtin(false);
 
     let harness = assemble(AssemblyParts {
@@ -149,7 +149,7 @@ fn write_reply(id: &str, file: &str) -> Reply {
     )
 }
 
-// --- which mode a session runs under --------------------------------------
+// --- 会话跑在哪一档模式上 -------------------------------------------------
 
 #[tokio::test]
 async fn a_session_starts_in_the_mode_it_was_configured_with() {
@@ -162,10 +162,10 @@ async fn a_session_starts_in_the_mode_it_was_configured_with() {
 
 #[tokio::test]
 async fn cycling_moves_the_policy_and_writes_nothing_to_the_stream() {
-    // The choice this pins: a mode is a session value, so the gesture appends no
-    // event and injects no instruction — a line in the head of `messages` would
-    // throw the prefix cache away on every press (ADR 0003). The audit reads
-    // `PermissionDecided.reason` instead.
+    // 这里钉住的那个选择：模式是一个会话值，所以这个手势不追加
+    // 事件、也不注入任何指令 —— 在 `messages` 头上加一行会让
+    // 每按一次就把前缀缓存扔掉（ADR 0003）。审计改为
+    // 去看 `PermissionDecided.reason`。
     let fixture = fixture(vec![], Mode::Readonly, Some(Arc::new(AlwaysAllow))).await;
     let before = fixture.events().len();
 
@@ -175,20 +175,20 @@ async fn cycling_moves_the_policy_and_writes_nothing_to_the_stream() {
     assert_eq!(
         fixture.harness.mode(),
         Mode::Readonly,
-        "three presses return the session to where it started"
+        "按三次让会话回到它开始的地方"
     );
     assert_eq!(
         fixture.events().len(),
         before,
-        "history is untouched by the gesture"
+        "手势没有碰过历史"
     );
     fixture.harness.shutdown().await;
 }
 
 #[tokio::test]
 async fn a_continue_returns_to_the_configured_mode() {
-    // The mode does not survive a resume, because it is not in the stream: the
-    // configured value is what a reopened session runs under (spec §12).
+    // 模式熬不过一次续接，因为它不在流里：重新打开的会话
+    // 跑在配置里的那一档上（spec §12）。
     let fixture = fixture(vec![], Mode::Readonly, Some(Arc::new(AlwaysAllow))).await;
     assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Ask);
     let log_path = fixture.log_path.clone();
@@ -203,18 +203,18 @@ async fn a_continue_returns_to_the_configured_mode() {
     .await;
     assert_eq!(resumed.harness.mode(), Mode::Auto);
 
-    // And the mode is not a field anywhere on the stream, either.
+    // 而且模式也不是流上任何地方的字段。
     for event in resumed.events() {
         let value = serde_json::to_value(&event).unwrap();
         assert!(
             !has_key_named_mode(&value),
-            "no event carries the mode: {value}"
+            "没有任何事件带着模式：{value}"
         );
     }
     resumed.harness.shutdown().await;
 }
 
-// --- what a mode refuses --------------------------------------------------
+// --- 模式拒掉什么 ---------------------------------------------------------
 
 #[tokio::test]
 async fn readonly_refuses_a_write_and_cycling_to_ask_lets_the_same_call_through() {
@@ -231,26 +231,26 @@ async fn readonly_refuses_a_write_and_cycling_to_ask_lets_the_same_call_through(
     .await;
 
     fixture.harness.run_turn("write it").await.unwrap();
-    assert!(!fixture.exists("notes.txt"), "readonly denies the write");
+    assert!(!fixture.exists("notes.txt"), "readonly 拒掉这次写");
     let refused = &fixture.decisions()[0];
     assert_eq!(refused.0, Decision::Deny);
     assert_eq!(refused.1, DecisionSource::Policy);
     assert!(
         refused.2.as_deref().unwrap().contains("readonly"),
-        "the audit says which mode refused it: {:?}",
+        "审计说得出是哪一档拒的：{:?}",
         refused.2
     );
 
-    // One press moves `readonly` to `ask`, and the answerer approves: the very same
-    // call now goes through. Nothing was injected in between — the gate read the new
-    // stance because the mode is a value it reads per call.
+    // 按一次就把 `readonly` 挪到 `ask`，而作答者放行：同一次调用
+    // 现在过去了。中间什么都没注入 —— 权限门读到了新的
+    // 立场，因为模式是它每次调用都读的一个值。
     assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Ask);
     fixture.harness.run_turn("write it again").await.unwrap();
     assert_eq!(fixture.read("notes.txt"), "written\n");
     assert_eq!(
         fixture.decisions()[1].0,
         Decision::Allow,
-        "the user's approval settles it in ask mode"
+        "用户的放行让它在 ask 档下过掉"
     );
     fixture.harness.shutdown().await;
 }
@@ -275,7 +275,7 @@ async fn a_readonly_session_denies_a_shell_call_too() {
     assert_eq!(outcome.reason, StopReason::Completed);
     assert!(
         !fixture.exists("notes.txt"),
-        "the denied shell never ran, so it wrote nothing"
+        "被拒的 shell 从没跑过，所以它什么都没写"
     );
     assert_eq!(fixture.decisions()[0].0, Decision::Deny);
     fixture.harness.shutdown().await;
@@ -283,9 +283,9 @@ async fn a_readonly_session_denies_a_shell_call_too() {
 
 #[tokio::test]
 async fn an_executor_inherits_the_session_mode() {
-    // The dispatcher is in `readonly` and everything is approved, so nothing but the
-    // inherited mode can refuse the executor's write: dispatching is `ReadOnly`, and
-    // the refusal has to come from the child's own policy.
+    // 派发者在 `readonly` 档，而且一切都放行，所以能拒掉执行者这次写的
+    // 只剩继承来的模式：派发本身是 `ReadOnly`，
+    // 拒绝只能出自子会话自己的策略。
     let mut fixture = fixture(
         vec![
             tool_reply(
@@ -306,25 +306,25 @@ async fn an_executor_inherits_the_session_mode() {
     assert_eq!(outcome.reason, StopReason::Completed);
     assert!(
         !fixture.exists("notes.txt"),
-        "the executor inherits the mode"
+        "执行者继承了这一档模式"
     );
 
     let decisions = fixture.decisions();
     assert_eq!(
         decisions.len(),
         2,
-        "the dispatch, then the executor's write"
+        "先是派发，然后是执行者那次写"
     );
-    assert_eq!(decisions[0].0, Decision::Allow, "dispatching is a read");
+    assert_eq!(decisions[0].0, Decision::Allow, "派发是一次读");
     assert_eq!(decisions[1].0, Decision::Deny);
     assert!(
         decisions[1].2.as_deref().unwrap().contains("readonly"),
-        "the child's refusal is the session mode's: {:?}",
+        "子会话这次拒绝出自会话模式：{:?}",
         decisions[1].2
     );
 
-    // The refusal is attributed to the executor, not to the debater that dispatched
-    // it.
+    // 这次拒绝记在执行者头上，而不是派发它的那个
+    // 讨论者头上。
     let speakers: Vec<SpeakerId> = fixture
         .events()
         .into_iter()
@@ -341,7 +341,7 @@ async fn an_executor_inherits_the_session_mode() {
     fixture.harness.shutdown().await;
 }
 
-/// Whether any object anywhere in this JSON has a key named `mode`.
+/// 这份 JSON 里任何地方有没有哪个对象带一个叫 `mode` 的键。
 fn has_key_named_mode(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {

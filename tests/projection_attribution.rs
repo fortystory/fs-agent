@@ -1,12 +1,12 @@
-//! Projection and speaker attribution, tested as a pure function of the stream
-//! (spec §5; Testing Decisions' "directly tested pure functions" seam).
+//! 投影与发言归属，当作流上的纯函数来测
+//! （spec §5；Testing Decisions 的「直接测的纯函数」那条接缝）。
 //!
-//! The contract under test is the `messages` an agent would replay: who becomes
-//! `assistant`, who is downgraded to `user`, what survives from another
-//! speaker's tool round-trip, and how the speaker's own round-trip plus hook
-//! feedback merge. The exact spelling of the model-side prefix is deliberately
-//! not asserted (spec's Testing Decisions): the tests pin the properties that
-//! matter — attribution, visibility, merge boundaries and ordering.
+//! 这里测的契约是一个 agent 会重放的那些 `messages`：谁变成
+//! `assistant`、谁被降级成 `user`、另一个发言者的工具往返里
+//! 活下来什么，以及发言者自己那次往返与钩子反馈
+//! 如何合并。模型面前缀的确切拼法故意不去断言
+//! （spec 的 Testing Decisions）：这些测试钉的是要紧的那些
+//! 性质 —— 归属、可见性、合并的边界与顺序。
 
 use fs_agent::config::GenerationParams;
 use fs_agent::events::{
@@ -26,7 +26,7 @@ fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
 }
 
-/// A third participant's viewpoint: the synthesizer, which is `System` (spec §2).
+/// 第三个参与者的视角：合成器，它的身份是 `System`（spec §2）。
 fn synthesizer() -> SpeakerId {
     SpeakerId::System
 }
@@ -35,7 +35,7 @@ fn caps() -> ModelCaps {
     caps_for("deepseek-flash").unwrap()
 }
 
-/// Build a log from a script, keeping the temp directory alive with it.
+/// 从一个脚本搭出一份日志，并让临时目录与它一起活下来。
 fn log(script: impl FnOnce(&mut EventLog)) -> (tempfile::TempDir, EventLog) {
     let dir = tempfile::tempdir().unwrap();
     let mut log = EventLog::create(dir.path().join("log.jsonl")).unwrap();
@@ -126,7 +126,7 @@ fn text_of(message: &Message) -> &str {
     }
 }
 
-// --- another speaker's turn -------------------------------------------------
+// --- 另一个发言者的回合 -----------------------------------------------------
 
 #[test]
 fn another_speakers_text_is_kept_but_its_tool_round_trip_shrinks_to_one_summary_line() {
@@ -155,34 +155,34 @@ fn another_speakers_text_is_kept_but_its_tool_round_trip_shrinks_to_one_summary_
     assert_eq!(
         messages.len(),
         1,
-        "only the merged other block: {messages:?}"
+        "只有那一块合并后的别人：{messages:?}"
     );
     let user = user_messages(&messages)[0];
     let content = text_of(user);
     assert!(content.contains("I checked the file"), "{content}");
     assert!(
         content.contains("read_file") && content.contains("src/lib.rs"),
-        "the tool call survives as a one-line summary: {content}"
+        "这次工具调用活成一行摘要：{content}"
     );
     assert!(
         content.contains("轮 1") && content.contains("deepseek"),
-        "each other-speaker segment is attributed: {content}"
+        "每一段别人的发言都带归属：{content}"
     );
     assert!(
         !content.contains("SECRET-BODY"),
-        "result body is not projected"
+        "结果正文不被投影"
     );
     assert!(
         !content.contains("SECRET-THINK"),
-        "another speaker's reasoning is not projected"
+        "另一个发言者的推理不被投影"
     );
     assert!(
         !messages.iter().any(|m| matches!(m, Message::Tool { .. })),
-        "the paired tool result is dropped, not rewritten into a broken pair"
+        "配对的那条工具结果被丢掉，而不是被改写成一对残缺"
     );
 }
 
-// --- the speaker's own turn -------------------------------------------------
+// --- 发言者自己的回合 -------------------------------------------------------
 
 #[test]
 fn own_reasoning_is_replayed_and_the_tool_round_trip_merges_with_post_hook_feedback() {
@@ -221,13 +221,13 @@ fn own_reasoning_is_replayed_and_the_tool_round_trip_merges_with_post_hook_feedb
             assert_eq!(
                 reasoning_content.as_deref(),
                 Some("my-thoughts"),
-                "the model's own reasoning must replay"
+                "模型自己的推理必须被重放"
             );
             assert_eq!(tool_calls.len(), 1);
             assert_eq!(tool_calls[0].id, "call-1");
             assert_eq!(name.as_deref(), Some("kimi"));
         }
-        other => panic!("expected an assistant message, got {other:?}"),
+        other => panic!("期望一条 assistant 消息，实际得到 {other:?}"),
     }
     match &messages[1] {
         Message::Tool {
@@ -235,8 +235,8 @@ fn own_reasoning_is_replayed_and_the_tool_round_trip_merges_with_post_hook_feedb
             content,
         } => {
             assert_eq!(tool_call_id, "call-1");
-            // Exactly one tool message carries both the result and the hook's
-            // feedback: a provider allows one `tool` message per `tool_call`.
+            // 正好一条工具消息同时扛着结果与钩子的
+            // 反馈：provider 每次 `tool_call` 只允许一条 `tool` 消息。
             assert!(content.starts_with("file body"), "{content}");
             assert!(
                 content.contains(hook_format::FEEDBACK_MARKER)
@@ -244,7 +244,7 @@ fn own_reasoning_is_replayed_and_the_tool_round_trip_merges_with_post_hook_feedb
                 "{content}"
             );
         }
-        other => panic!("expected the merged tool message, got {other:?}"),
+        other => panic!("期望那条合并后的工具消息，实际得到 {other:?}"),
     }
 }
 
@@ -273,15 +273,15 @@ fn a_failed_post_hook_loses_its_feedback_but_keeps_the_result() {
             Message::Tool { content, .. } => Some(content),
             _ => None,
         })
-        .expect("the result still has its one tool message");
+        .expect("结果仍然有它那一条工具消息");
     assert_eq!(tool, "file body");
     assert!(!tool.contains("lint exploded"));
 }
 
 #[test]
 fn an_interleaved_other_speaker_never_leaves_a_tool_call_without_its_result() {
-    // A valid turn never interleaves, but a hand-built or future-broken log
-    // must not produce the unpaired `tool_call` the wire check rejects.
+    // 一个合法的回合从不交错，但一份手搭出来、或者将来会坏掉的
+    // 日志，绝不能产出线上检查会拒的那种没配对的 `tool_call`。
     let (_dir, log) = log(|log| {
         say(log, &kimi(), "working");
         call(log, &kimi(), "call-1", "read_file", serde_json::json!({}));
@@ -310,11 +310,11 @@ fn an_interleaved_other_speaker_never_leaves_a_tool_call_without_its_result() {
     assert_eq!(
         results,
         vec!["call-1".to_owned()],
-        "the assistant group keeps its one tool message: {messages:?}"
+        "这个 assistant 组保住它那一条工具消息：{messages:?}"
     );
 }
 
-// --- self versus other, on the same events ----------------------------------
+// --- 自己与别人，在同一批事件上 ---------------------------------------------
 
 #[test]
 fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_stable() {
@@ -344,30 +344,30 @@ fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_s
 
     assert_ne!(
         for_kimi, for_deepseek,
-        "the same events must project to different windows"
+        "同一批事件必须投影成不同的窗口"
     );
 
-    // The projection is a pure function: re-running it is byte-for-byte stable,
-    // which is what "recomputable from the stream + the rules" buys.
+    // 投影是一个纯函数：重跑一遍逐字节稳定，
+    // 而「能从流 + 规则重算」买到的就是这个。
     assert_eq!(for_kimi, project(&log.events(), &kimi(), &caps()));
     assert_eq!(for_deepseek, project(&log.events(), &deepseek(), &caps()));
 
-    // kimi sees deepseek compressed to one user block, and its own turn with
-    // its own reasoning.
+    // kimi 看到 deepseek 被压成一块 user，以及它自己那一轮
+    // 带着它自己的推理。
     let kimi_text = for_kimi.iter().map(text_of).collect::<Vec<_>>().join("\n");
     assert!(kimi_text.contains("deepseek's answer"), "{kimi_text}");
     assert!(!kimi_text.contains("d-think"), "{kimi_text}");
     let kimi_own = for_kimi
         .iter()
         .find(|message| matches!(message, Message::Assistant { .. }))
-        .expect("kimi's own message");
+        .expect("kimi 自己的消息");
     match kimi_own {
         Message::Assistant {
             reasoning_content, ..
         } => assert_eq!(reasoning_content.as_deref(), Some("k-think")),
-        other => panic!("expected assistant, got {other:?}"),
+        other => panic!("期望 assistant，实际得到 {other:?}"),
     }
-    // deepseek sees its own tool round-trip, kimi sees only a summary.
+    // deepseek 看到自己那次工具往返，kimi 只看到一句摘要。
     assert!(for_deepseek
         .iter()
         .any(|message| matches!(message, Message::Tool { .. })));
@@ -376,7 +376,7 @@ fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_s
         .any(|message| matches!(message, Message::Tool { .. })));
 }
 
-// --- merge rules ------------------------------------------------------------
+// --- 合并的规矩 -------------------------------------------------------------
 
 #[test]
 fn the_pinned_head_never_merges_and_a_round_is_a_hard_boundary() {
@@ -418,12 +418,12 @@ fn the_pinned_head_never_merges_and_a_round_is_a_hard_boundary() {
     assert_eq!(
         text_of(users[0]),
         "the task",
-        "the pinned head is byte-stable and absorbs nothing"
+        "被钉住的头部逐字节稳定，什么都不吸收"
     );
     let round_1 = text_of(users[1]);
     assert!(
         round_1.contains("round 1 from kimi") && round_1.contains("round 1 from deepseek"),
-        "consecutive others merge with no count threshold: {round_1}"
+        "连续的别人会合并，没有条数门槛：{round_1}"
     );
     assert!(!round_1.contains("round 2"), "{round_1}");
 
@@ -434,8 +434,8 @@ fn the_pinned_head_never_merges_and_a_round_is_a_hard_boundary() {
 
 #[test]
 fn the_first_user_message_does_not_absorb_a_later_speakers_speech() {
-    // No round boundary here, so the pin is the only thing keeping the head
-    // from growing with another speaker's text.
+    // 这里没有轮次边界，所以唯一挡住头部随着
+    // 另一个发言者的文本长大的就是那个钉子。
     let (_dir, log) = log(|log| {
         say(log, &kimi(), "first");
         say(log, &deepseek(), "second");
@@ -470,14 +470,14 @@ fn a_context_injection_is_pinned_and_does_not_merge() {
     assert_eq!(
         users.len(),
         3,
-        "the injection stays its own message: {messages:?}"
+        "这条注入保持是它自己的消息：{messages:?}"
     );
     assert_eq!(text_of(users[1]), "read PLAN.md before acting");
     assert!(text_of(users[0]).contains("before"));
     assert!(text_of(users[2]).contains("after"));
 }
 
-// --- executor visibility ----------------------------------------------------
+// --- 执行者的可见性 ---------------------------------------------------------
 
 #[test]
 fn an_executors_events_stay_out_of_a_debaters_projection_but_not_its_own() {
@@ -511,7 +511,7 @@ fn an_executors_events_stay_out_of_a_debaters_projection_but_not_its_own() {
         .any(|message| matches!(message, Message::Tool { .. })));
 }
 
-// --- names ------------------------------------------------------------------
+// --- 名字 -------------------------------------------------------------------
 
 #[test]
 fn names_are_sanitized_and_never_carried_on_tool_messages() {
@@ -526,20 +526,20 @@ fn names_are_sanitized_and_never_carried_on_tool_messages() {
     let own = messages
         .iter()
         .find(|message| matches!(message, Message::Assistant { .. }))
-        .expect("the speaker's own assistant message");
+        .expect("发言者自己的那条 assistant 消息");
     let name = match own {
         Message::Assistant { name, .. } => name.as_deref().unwrap(),
-        other => panic!("expected assistant, got {other:?}"),
+        other => panic!("期望 assistant，实际得到 {other:?}"),
     };
     assert!(
         name.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "name must be sanitized to [A-Za-z0-9_-]: {name}"
+        "name 必须被打码成 [A-Za-z0-9_-]：{name}"
     );
-    assert!(name.len() <= 64, "name must stay short: {name}");
+    assert!(name.len() <= 64, "name 必须保持短：{name}");
 }
 
-// --- history ----------------------------------------------------------------
+// --- 历史 -------------------------------------------------------------------
 
 #[test]
 fn superseded_ranges_are_excluded_from_the_projection() {
@@ -565,9 +565,9 @@ fn superseded_ranges_are_excluded_from_the_projection() {
 
 #[test]
 fn retiring_a_tool_call_leaves_no_empty_assistant_message() {
-    // An assistant turn that was nothing but a tool call, with that call
-    // retired: nothing is left of the group, and the wire has no shape for an
-    // assistant message with no content and no calls, so none is emitted.
+    // 一个只有工具调用的 assistant 回合，而那次调用被退休了：
+    // 这个组里什么都不剩，而线上没有一条既没有 content 也没有
+    // 调用的 assistant 消息的形状，所以一条都不发出。
     let (_dir, log) = log(|log| {
         call(
             log,
@@ -599,14 +599,14 @@ fn retiring_a_tool_call_leaves_no_empty_assistant_message() {
         !messages
             .iter()
             .any(|message| matches!(message, Message::Tool { .. })),
-        "the retired result is gone too: {messages:?}"
+        "那条被退休的结果也一并没了：{messages:?}"
     );
 }
 
 #[test]
 fn retiring_a_tool_call_keeps_the_text_the_assistant_said() {
-    // The assistant said something and then called a tool; undoing the call
-    // retires the call and its result, not the sentence.
+    // assistant 说了句话、然后调了个工具；撤销那次调用
+    // 退休的是那次调用与它的结果，不是那句话。
     let (_dir, log) = log(|log| {
         say(log, &kimi(), "let me look");
         call(
@@ -632,7 +632,7 @@ fn retiring_a_tool_call_keeps_the_text_the_assistant_said() {
     let assistant = messages
         .iter()
         .find(|message| matches!(message, Message::Assistant { .. }))
-        .expect("the sentence survives");
+        .expect("那句话活了下来");
     match assistant {
         Message::Assistant {
             content,
@@ -642,11 +642,11 @@ fn retiring_a_tool_call_keeps_the_text_the_assistant_said() {
             assert_eq!(content.as_deref(), Some("let me look"));
             assert!(tool_calls.is_empty());
         }
-        other => panic!("expected assistant, got {other:?}"),
+        other => panic!("期望 assistant，实际得到 {other:?}"),
     }
 }
 
-// --- wire serialization -----------------------------------------------------
+// --- 线上序列化 -------------------------------------------------------------
 #[test]
 fn projected_messages_serialize_into_both_vendors_wire_shapes() {
     let (_dir, log) = log(|log| {
@@ -673,34 +673,34 @@ fn projected_messages_serialize_into_both_vendors_wire_shapes() {
         ("deepseek", caps_for("deepseek-v4-pro").unwrap()),
     ] {
         let (body, warnings) = build_body(&request, caps);
-        assert!(warnings.is_empty(), "{vendor}: {warnings:?}");
+        assert!(warnings.is_empty(), "{vendor}：{warnings:?}");
         let messages = body["messages"].as_array().unwrap();
 
         let assistant = messages
             .iter()
             .find(|message| message["role"] == "assistant")
-            .unwrap_or_else(|| panic!("{vendor}: an assistant message"));
+            .unwrap_or_else(|| panic!("{vendor}：一条 assistant 消息"));
         assert_eq!(assistant["reasoning_content"], "thought", "{vendor}");
         assert_eq!(assistant["name"], "kimi", "{vendor}");
 
         let tool = messages
             .iter()
             .find(|message| message["role"] == "tool")
-            .unwrap_or_else(|| panic!("{vendor}: a tool message"));
+            .unwrap_or_else(|| panic!("{vendor}：一条工具消息"));
         assert!(
             tool.get("name").is_none(),
-            "{vendor}: a tool message must not carry `name`: {tool}"
+            "{vendor}：工具消息不能带 `name`：{tool}"
         );
         assert_eq!(tool["tool_call_id"], "call-1", "{vendor}");
 
         let user = messages
             .iter()
             .find(|message| message["role"] == "user")
-            .unwrap_or_else(|| panic!("{vendor}: the other-speaker message"));
+            .unwrap_or_else(|| panic!("{vendor}：别人的那条消息"));
         assert_eq!(user["name"], "deepseek", "{vendor}");
     }
 
-    // The output-token field really is a per-vendor difference.
+    // 输出 token 那个字段真的是按厂商不同的。
     let (kimi_body, _) = build_body(&request, caps_for("kimi-k3").unwrap());
     let (deepseek_body, _) = build_body(&request, caps_for("deepseek-v4-pro").unwrap());
     assert_eq!(kimi_body["max_completion_tokens"], 100);
@@ -722,25 +722,25 @@ fn reasoning_replay_is_data_on_the_capability_table_not_a_vendor_branch() {
             reasoning_content, ..
         } => assert!(
             reasoning_content.is_none(),
-            "a model that does not require replay gets none: {reasoning_content:?}"
+            "不要求重放的模型一条都拿不到：{reasoning_content:?}"
         ),
-        other => panic!("expected assistant, got {other:?}"),
+        other => panic!("期望 assistant，实际得到 {other:?}"),
     }
-    // The same events with the on-table fact produce the replay.
+    // 同一批事件配上表里那个事实，就产出了重放。
     let messages = project(&log.events(), &kimi(), &caps_for("deepseek-flash").unwrap());
     match &messages[0] {
         Message::Assistant {
             reasoning_content, ..
         } => assert_eq!(reasoning_content.as_deref(), Some("thought")),
-        other => panic!("expected assistant, got {other:?}"),
+        other => panic!("期望 assistant，实际得到 {other:?}"),
     }
 }
 
 #[test]
 fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
-    // The brief is the executor's first speech, not part of the pinned head: the
-    // head is the leading run of injections, and a plan-mode injection arriving
-    // later must stand alone rather than be appended to the brief (spec §5, §10).
+    // 简报是执行者的第一次发言，不是被钉住的头部的一部分：
+    // 头部是开头那一串注入，而稍后到的计划模式注入必须
+    // 独立成条，而不是被追加到简报后面（spec §5、§10）。
     let executor = SpeakerId::Executor("e-1".into());
     let (_dir, log) = log(|log| {
         log.append(
@@ -773,7 +773,7 @@ fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
     let messages = project(&log.events(), &executor, &caps());
     let users = user_messages(&messages);
 
-    assert_eq!(users.len(), 3, "head, brief, injection: {messages:?}");
+    assert_eq!(users.len(), 3, "头部、简报、注入：{messages:?}");
     assert!(text_of(users[0]).contains("project rules"));
     assert_eq!(text_of(users[1]), "count the modules under src");
     assert_eq!(text_of(users[2]), "read PLAN.md before acting");
@@ -781,11 +781,11 @@ fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
 
 #[test]
 fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitized() {
-    // A debater is a persona: `[discussion] debaters = [{ name = "保守", … }]` names a
-    // side, and two sides of one discussion have to stay distinguishable in the
-    // prefix — a mangled name would read as the same speaker twice. The `name` field
-    // is the one place a vendor's charset is undocumented, so it is sanitized on its
-    // own (spec §5).
+    // 讨论者是一个人物：`[discussion] debaters = [{ name = "保守", … }]` 给一方
+    // 起名，而同一场讨论的两方必须在前缀里保持分得开 ——
+    // 一个被弄坏的名字会被读成同一个发言者两遍。厂商的字符集
+    // 唯一没有文档的地方就是 `name` 这个字段，所以它单独过一道
+    // 打码（spec §5）。
     let persona = SpeakerId::Debater("保守".into());
     let (dir, mut log) = log(|_| {});
     log.append(
@@ -826,28 +826,28 @@ fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitiz
                 Message::User { content, .. } if content.contains("保守的看法")
             )
         })
-        .expect("the persona's turns reach the other side");
+        .expect("这个人物的发言到了对面");
     let Message::User { content, name, .. } = merged else {
         unreachable!()
     };
     assert!(
         content.contains("保守"),
-        "the prefix keeps the name the user chose: {content}"
+        "前缀保留用户挑的那个名字：{content}"
     );
     assert_eq!(
         name.as_deref(),
         Some("--"),
-        "the wire field is the sanitized shape, and the body is the attribution guarantee"
+        "线上那个字段是打码后的形状，而正文才是归属的保证"
     );
     drop(dir);
 }
 
 #[test]
 fn a_persona_is_private_to_the_side_it_describes() {
-    // A soul is recorded **on the stream** (so replay can rebuild the call), attributed
-    // to the debater it describes — and the projection hands it to nobody else: the
-    // other side is arguing *against* this character, and the synthesizer reads answers,
-    // not characters (spec §5, §15).
+    // 灵魂记在**流上**（好让重放能把那次调用重建出来），署名是
+    // 它所描述的那个讨论者 —— 而投影不把它交给任何别人：
+    // 对面正在*反对*这个人物，而合成器读的是答案，
+    // 不是人物（spec §5、§15）。
     let (dir, mut log) = log(|_| {});
     let persona = SpeakerId::Debater("张三".into());
     log.append(
@@ -884,7 +884,7 @@ fn a_persona_is_private_to_the_side_it_describes() {
             message,
             Message::User { content, .. } if content.contains("法外狂徒")
         )),
-        "the persona's own instruction reaches it: {own:?}"
+        "人物自己的那段注入到了它手里：{own:?}"
     );
     for other in [kimi(), synthesizer()] {
         let seen = project(&events, &other, &caps());
@@ -893,7 +893,7 @@ fn a_persona_is_private_to_the_side_it_describes() {
                 message,
                 Message::User { content, .. } if content.contains("法外狂徒")
             )),
-            "{other} must not read another side's persona: {seen:?}"
+            "{other} 绝不能读到另一方的灵魂：{seen:?}"
         );
     }
     drop(dir);

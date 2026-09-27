@@ -1,9 +1,9 @@
-//! Ticket 12: the session store, `--continue`, and `/undo`.
+//! 票 12：会话存储、`--continue` 与 `/undo`。
 //!
-//! The store is driven through the library seam exactly as the CLI will drive
-//! it: `SessionStore::create` allocates a session directory for a cwd,
-//! `SessionStore::latest` is what `--continue` scans, and the assembly point
-//! opens whichever stream that directory holds. No network, no environment.
+//! 存储通过库那条接缝驱动，与 CLI 将来驱动它的方式一模一样：
+//! `SessionStore::create` 为一个 cwd 分出一个会话目录，
+//! `SessionStore::latest` 是 `--continue` 扫的东西，而组装点
+//! 打开那个目录里不管哪条流。没有网络，没有环境。
 
 mod support;
 
@@ -24,8 +24,8 @@ use fs_agent::tools::{self, PathLocks};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
-/// A workspace, a store root, and the two captured sinks — everything a session
-/// needs except the provider.
+/// 一个工作区、一个存储根，以及那两个被捕获的 sink —— 一个会话
+/// 除了 provider 之外需要的一切。
 struct Env {
     store: SessionStore,
     cwd: PathBuf,
@@ -38,8 +38,8 @@ impl Env {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::new(dir.path().join("store"));
-        // Both sides are canonicalized, so the bucket key is stable no matter
-        // how the temp directory is spelled.
+        // 两边都规范化过，所以不管这个临时目录
+        // 怎么拼，分桶的键都是稳定的。
         let cwd = std::fs::canonicalize(dir.path()).unwrap().join("workspace");
         std::fs::create_dir_all(&cwd).unwrap();
         Self {
@@ -51,17 +51,17 @@ impl Env {
         }
     }
 
-    /// A second workspace, for the bucketing tests.
+    /// 第二个工作区，给分桶那些测试用。
     fn other_cwd(&self) -> PathBuf {
         let path = self._dir.path().join("other");
         std::fs::create_dir_all(&path).unwrap();
         std::fs::canonicalize(path).unwrap()
     }
 
-    /// Open the session directory `stored` through the one assembly seam.
+    /// 通过那唯一一条组装接缝打开会话目录 `stored`。
     ///
-    /// Fresh and resumed are not a flag here: the directory either holds a
-    /// stream or it does not, which is exactly the decision the store made.
+    /// 全新与续接在这里不是一个旗标：这个目录要么有一条
+    /// 流，要么没有，这正是存储做过的那个判定。
     async fn open(&self, stored: &StoredSession, provider: FakeProvider) -> Harness {
         assemble(AssemblyParts {
             provider: Box::new(provider),
@@ -99,7 +99,7 @@ impl Env {
     }
 }
 
-/// One scripted tool call, completed in one stream.
+/// 一条脚本化的工具调用，在一条流里完成。
 fn tool_reply(id: &str, name: &str, arguments: &str) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallStarted {
@@ -119,8 +119,8 @@ fn tool_reply(id: &str, name: &str, arguments: &str) -> Reply {
     ])
 }
 
-/// Append one event to an existing stream, as a process that was killed
-/// mid-tool-call would have left it.
+/// 往一条已有的流上追加一条事件，就像一个在工具调用
+/// 中途被杀掉的进程会留下的那样。
 fn append(log_path: &Path, speaker: SpeakerId, payload: EventPayload) {
     let mut log = EventLog::open(log_path).unwrap();
     log.append(speaker, payload).unwrap();
@@ -139,8 +139,8 @@ async fn a_created_session_is_a_private_directory_bound_to_its_cwd() {
     let env = Env::new();
     let stored = env.store.create(&env.cwd).unwrap();
 
-    // The directory shape is the store's job; the stream is the assembly
-    // point's, and it does not exist until a session does.
+    // 目录的形状是存储的事；流是组装点的事，
+    // 而在一个会话存在之前，它并不存在。
     assert!(stored.dir.is_dir());
     assert_eq!(
         stored.dir.file_name().unwrap().to_string_lossy(),
@@ -151,10 +151,10 @@ async fn a_created_session_is_a_private_directory_bound_to_its_cwd() {
     assert!(stored.outputs_dir.is_dir());
     assert!(!stored.log_path.exists());
 
-    // The id is `<UTC timestamp>-<short suffix>`.
+    // id 形如 `<UTC 时间戳>-<短后缀>`。
     let (stamp, suffix) = stored.id.as_str().rsplit_once('-').unwrap();
-    assert_eq!(stamp.len(), 16, "YYYYMMDDTHHMMSSZ: {stamp}");
-    assert_eq!(suffix.len(), 8, "eight hex digits: {suffix}");
+    assert_eq!(stamp.len(), 16, "YYYYMMDDTHHMMSSZ：{stamp}");
+    assert_eq!(suffix.len(), 8, "八个十六进制数字：{suffix}");
     assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()), "{suffix}");
 
     let harness = env.open(&stored, FakeProvider::new(vec![])).await;
@@ -164,17 +164,17 @@ async fn a_created_session_is_a_private_directory_bound_to_its_cwd() {
     assert!(stored.log_path.is_file());
     #[cfg(unix)]
     {
-        assert_eq!(mode(&stored.dir), 0o700, "the session directory is private");
-        assert_eq!(mode(&stored.outputs_dir), 0o700, "artifact dir is private");
-        assert_eq!(mode(&stored.log_path), 0o600, "the stream is private");
+        assert_eq!(mode(&stored.dir), 0o700, "会话目录是私有的");
+        assert_eq!(mode(&stored.outputs_dir), 0o700, "产物目录是私有的");
+        assert_eq!(mode(&stored.log_path), 0o600, "事件流是私有的");
         assert_eq!(
             mode(&env.store.bucket(&env.cwd)),
             0o700,
-            "the whole store path is private, not just the leaf"
+            "整条存储路径都是私有的，不只是最末那一层"
         );
     }
 
-    // The bucket is per workspace, and the authoritative cwd is in the stream.
+    // 桶是按工作区分的，而权威的 cwd 在流里。
     let events = read_events(&stored.log_path).unwrap();
     let recorded_cwd = events
         .iter()
@@ -182,7 +182,7 @@ async fn a_created_session_is_a_private_directory_bound_to_its_cwd() {
             EventPayload::SessionStarted { cwd, .. } => Some(cwd.clone()),
             _ => None,
         })
-        .expect("the session records its cwd");
+        .expect("会话记下了它的 cwd");
     assert_eq!(recorded_cwd, env.cwd.to_string_lossy().into_owned());
 }
 
@@ -207,11 +207,11 @@ async fn ids_do_not_collide_and_latest_follows_the_most_recently_written_stream(
     assert_eq!(
         env.store.latest(&env.cwd).unwrap().unwrap().id,
         second.id,
-        "the later session is the one --continue resumes"
+        "更晚的那个会话才是 --continue 会续的"
     );
 
-    // Activity, not creation order, decides: appending to the older stream makes
-    // it the newest again.
+    // 说话的是活跃程度而不是创建顺序：往更旧的那条流上追加，
+    // 又把它变回最新的了。
     std::thread::sleep(Duration::from_millis(10));
     append(
         &first.log_path,
@@ -225,7 +225,7 @@ async fn ids_do_not_collide_and_latest_follows_the_most_recently_written_stream(
     assert_eq!(
         env.store.latest(&env.cwd).unwrap().unwrap().id,
         first.id,
-        "mtime, not id order, is the tie-break --continue uses"
+        "mtime，而不是 id 顺序，才是 --continue 用的平手判定"
     );
 }
 
@@ -255,7 +255,7 @@ async fn a_different_workspace_is_a_different_bucket() {
         .into_iter()
         .map(|session| session.id)
         .collect();
-    assert_eq!(ids, vec![here.id], "the bucket holds only its own cwd");
+    assert_eq!(ids, vec![here.id], "这个桶里只有它自己那个 cwd");
 }
 
 #[tokio::test]
@@ -305,8 +305,8 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
     assert_eq!(env.read("notes.txt"), "uno\ntwo\n");
     first.shutdown().await;
 
-    // The crash: the process died between a call starting and its result, for a
-    // debater and for an executor it had spawned.
+    // 崩溃：进程死在一次调用开始与它的结果之间，一个讨论者
+    // 与它派出的一个执行者都是如此。
     let crash_args = serde_json::json!({
         "file_path": "notes.txt",
         "old_string": "uno\n",
@@ -340,7 +340,7 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
         },
     );
 
-    // `--continue`: the store finds the same session, and its id does not move.
+    // `--continue`：存储找到同一个会话，而它的 id 不挪窝。
     let resumed = env.store.latest(&env.cwd).unwrap().unwrap();
     assert_eq!(resumed.id, stored.id);
 
@@ -355,22 +355,22 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
 
     let events = read_events(&stored.log_path).unwrap();
 
-    // One session, one header, whatever the number of resumes.
+    // 一个会话一个表头，续接多少次都一样。
     let starts: Vec<&Event> = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::SessionStarted { .. }))
         .collect();
-    assert_eq!(starts.len(), 1, "a resume never appends a second header");
+    assert_eq!(starts.len(), 1, "一次续接永远不追加第二个表头");
     match &starts[0].payload {
         EventPayload::SessionStarted { session_id, .. } => assert_eq!(session_id, &stored.id),
-        other => panic!("expected SessionStarted, got {other:?}"),
+        other => panic!("期望 SessionStarted，实际得到 {other:?}"),
     }
 
-    // Both dangling calls got exactly one result, attributed to whoever started
-    // them, and neither was re-run.
+    // 两条悬着的调用各拿到正好一条结果，归属是发起它的那一个，
+    // 而且两条都没有被重跑。
     assert!(
         pending_tool_calls(&events).is_empty(),
-        "no call stays pending"
+        "没有任何调用悬着"
     );
     for (id, speaker) in [
         ("call-crash", SpeakerId::Debater("kimi".into())),
@@ -388,7 +388,7 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
                         if tool_call_id.as_str() == id
                 )
             })
-            .expect("the interrupted call is closed");
+            .expect("被中断的那次调用被收尾了");
         assert_eq!(result.speaker_id, speaker);
         match &result.payload {
             EventPayload::ToolCallCompleted { ok, error, .. } => {
@@ -397,17 +397,17 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
                 assert!(error.contains("unknown"), "{error}");
                 assert!(error.contains("not re-run"), "{error}");
             }
-            other => panic!("expected ToolCallCompleted, got {other:?}"),
+            other => panic!("期望 ToolCallCompleted，实际得到 {other:?}"),
         }
     }
 
-    // The workspace was not re-edited on the strength of a guess.
+    // 工作区没有凭一次猜测被重新编辑。
     assert_eq!(env.read("notes.txt"), "uno\ntwo\n");
 
-    // The resumed turn really ran: its request carried the recovered result.
+    // 续接的那个回合真的跑了：它的请求带着恢复出来的结果。
     let last = requests
         .last()
-        .expect("the resumed turn called the provider");
+        .expect("续接的那个回合调用了 provider");
     let recovered = last.messages.iter().find_map(|message| match message {
         Message::Tool {
             tool_call_id,
@@ -417,13 +417,13 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
     });
     assert!(
         recovered
-            .expect("the recovered result reaches the model")
+            .expect("恢复出来的结果到达了模型")
             .contains("unknown"),
-        "the model is told the result is unknown"
+        "模型被告知那条结果是未知的"
     );
 
-    // The id is stable across the whole chain, so both vendors' prefix caches
-    // keep hitting.
+    // 整条链上 id 都稳定，所以两家厂商的前缀缓存
+    // 一直命中。
     let session_ids: Vec<&str> = requests
         .iter()
         .map(|request| request.cache_key.as_deref().unwrap())
@@ -435,8 +435,8 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
 async fn undo_restores_a_downgraded_edit_and_retires_it_from_the_projection() {
     let env = Env::new();
     let stored = env.store.create(&env.cwd).unwrap();
-    // The file indents with a tab; the model sends spaces, so the edit lands on
-    // the line-trim level and `.before` holds bytes `old_string` does not.
+    // 文件用制表符缩进；模型发的是空格，所以这次编辑落在
+    // line-trim 这一级上，而 `.before` 里存的是 `old_string` 没有的字节。
     env.write("code.rs", "fn main() {\n\trun();\n}\n");
 
     let provider = FakeProvider::new(vec![
@@ -460,29 +460,29 @@ async fn undo_restores_a_downgraded_edit_and_retires_it_from_the_projection() {
         undone.path,
         std::fs::canonicalize(env.cwd.join("code.rs")).unwrap()
     );
-    // Byte-for-byte back to the tab the model never sent.
+    // 逐字节回到模型从没发过的那个制表符。
     assert_eq!(env.read("code.rs"), "fn main() {\n\trun();\n}\n");
 
-    // The next turn's projection no longer replays the edit at all.
+    // 下一个回合的投影完全不再重放这次编辑。
     harness.run_turn("anything else?").await.unwrap();
     let requests = provider.requests();
     let last = requests.last().unwrap();
     for message in &last.messages {
         if let Message::Tool { tool_call_id, .. } = message {
-            assert_ne!(tool_call_id, "call-edit", "the edit's result is retired");
+            assert_ne!(tool_call_id, "call-edit", "这次编辑的结果被退休了");
         }
         if let Message::Assistant { tool_calls, .. } = message {
             assert!(
                 !tool_calls.iter().any(|call| call.id == "call-edit"),
-                "the edit's tool call is retired"
+                "这次编辑的工具调用被退休了"
             );
         }
     }
 
     harness.shutdown().await;
 
-    // The stream is append-only: the retirement is a new event naming the seqs
-    // it retires, and the snapshot source is untouched.
+    // 流是只追加的：那次退休是一条新事件，点名它退休了哪些
+    // seq，而快照的来源原封不动。
     let events = read_events(&stored.log_path).unwrap();
     let superseded = events
         .iter()
@@ -494,7 +494,7 @@ async fn undo_restores_a_downgraded_edit_and_retires_it_from_the_projection() {
             } if *reason == HistoryReason::Undo => Some((targets.clone(), summary.clone())),
             _ => None,
         })
-        .expect("undo is recorded as a retirement");
+        .expect("undo 被记成一次退休");
     let (targets, summary) = superseded;
     assert_eq!(targets.len(), 2);
     let retired: Vec<&str> = events
@@ -512,7 +512,7 @@ async fn undo_restores_a_downgraded_edit_and_retires_it_from_the_projection() {
     assert_eq!(
         mode(&stored.outputs_dir.join("call-edit.before")),
         0o600,
-        "an artifact is owner-only, like the stream"
+        "产物与事件流一样，只归所有者"
     );
 }
 
@@ -552,8 +552,8 @@ async fn undo_refuses_a_stale_snapshot_and_leaves_the_file_alone() {
         .await;
     harness.run_turn("rename it").await.unwrap();
 
-    // Someone (or something) moves the file on after the edit: the snapshot can
-    // no longer say which region it replaced.
+    // 编辑之后有人（或者有什么东西）把这个文件又改了：快照
+    // 再也说不出它替换的是哪一段。
     env.write("notes.txt", "something else entirely\n");
 
     let error = harness.undo_last_edit().await.unwrap_err();
@@ -593,8 +593,8 @@ async fn repeated_undos_step_back_through_the_sessions_edits() {
     harness.run_turn("edit b").await.unwrap();
     assert_eq!(env.read("notes.txt"), "A\nB\n");
 
-    // Each undo rolls back the most recent edit, and the next one steps back one
-    // further: the walked-back query is what makes that true.
+    // 每一次 undo 回滚最近那一次编辑，而下一次再往回退一步：
+    // 那是一次回着走的查询，正是它让这件事成立。
     assert_eq!(
         harness
             .undo_last_edit()
@@ -651,9 +651,9 @@ async fn undo_restores_every_occurrence_a_replace_all_changed() {
 
 #[tokio::test]
 async fn the_event_stream_never_keeps_a_call_open_across_a_resume() {
-    // A narrower probe of the same invariant: an interrupted call is closed
-    // before any provider request of the resumed session, so invariant 2 (never
-    // call the provider while a call lacks a result) survives the crash.
+    // 对同一条不变量的更窄一次探查：被中断的调用在任何
+    // 续接会话的 provider 请求之前就被收尾，所以不变量 2（绝不在
+    // 一次调用缺结果时调用 provider）熬过了这次崩溃。
     let env = Env::new();
     let stored = env.store.create(&env.cwd).unwrap();
     env.open(&stored, FakeProvider::new(vec![]))
@@ -682,7 +682,7 @@ async fn the_event_stream_never_keeps_a_call_open_across_a_resume() {
     let closed = events
         .iter()
         .position(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
-        .expect("the call is closed");
+        .expect("这次调用被收尾了");
     let started = events
         .iter()
         .position(|event| {

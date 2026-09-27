@@ -1,8 +1,8 @@
-//! Scripted answerers for the permission gate's `Ask` path.
+//! 权限门 `Ask` 那条路上的脚本化作答者。
 //!
-//! The loop asks through the injected `Asker` port; a test scripts the answers
-//! exactly as it scripts provider replies, so "the user approved" and "the user
-//! denied" are reproducible without a terminal.
+//! 循环通过注入的 `Asker` 端口提问；测试脚本化作答的方式，与它
+//! 脚本化 provider 回复完全一样，于是「用户允许」与「用户
+//! 拒绝」不用终端也能复现。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use fs_agent::permissions::{Answer, Asker, PermissionRequest};
 
-/// An interactive user who approves every question.
+/// 每一次询问都放行的交互式用户。
 pub struct AlwaysAllow;
 
 #[async_trait]
@@ -20,8 +20,8 @@ impl Asker for AlwaysAllow {
     }
 }
 
-/// An answerer that answers by call order from a script and records every
-/// question it was handed. Cloning shares the same script and log.
+/// 按调用顺序照脚本作答、并记下递给它的每一个问句的作答者。
+/// 克隆共享同一份脚本与日志。
 #[derive(Clone, Default)]
 pub struct ScriptedAsker {
     inner: Arc<Inner>,
@@ -34,7 +34,7 @@ struct Inner {
 }
 
 impl ScriptedAsker {
-    /// An answerer with a script of permission answers, handed out in call order.
+    /// 带一份权限答案脚本的作答者，按调用顺序逐条发出。
     pub fn new(answers: Vec<Answer>) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -48,7 +48,7 @@ impl ScriptedAsker {
         self.inner
             .requests
             .lock()
-            .expect("scripted asker poisoned")
+            .expect("脚本化作答者已中毒")
             .clone()
     }
 }
@@ -59,14 +59,14 @@ impl Asker for ScriptedAsker {
         self.inner
             .requests
             .lock()
-            .expect("scripted asker poisoned")
+            .expect("脚本化作答者已中毒")
             .push(request.clone());
 
         self.inner
             .answers
             .lock()
-            .expect("scripted asker poisoned")
+            .expect("脚本化作答者已中毒")
             .pop_front()
-            .expect("ScriptedAsker: no scripted answer left for this question")
+            .expect("ScriptedAsker: 这个问句已经没有脚本答案了")
     }
 }

@@ -1,14 +1,14 @@
-//! Skills: progressive-disclosure instruction packs (spec §9; ticket 08).
+//! 技能：渐进披露的指令包（spec §9；票 08）。
 //!
-//! Three seams are exercised:
+//! 练到三条接缝：
 //!
-//! * the **pure** library in `context::skills` — discovery precedence,
-//!   frontmatter parsing, the three budgets, and the recomputed loaded set;
-//! * [`trim`] with the aggregate skill-body budget, a pure function over
-//!   `messages`;
-//! * the **assembly seam** — the catalog is injected as a pinned `user` message
-//!   and the model loads a body through the built-in `skill` tool, which lands on
-//!   the stream as an ordinary tool result appended at the tail.
+//! * `context::skills` 里那个**纯函数**库 —— 发现的优先级、
+//!   frontmatter 解析、三个预算，以及重算出来的已加载集合；
+//! * 带技能正文合计预算的 [`trim`]，一个作用在 `messages` 上的
+//!   纯函数；
+//! * **组装接缝** —— 技能清单作为一条被钉住的 `user` 消息注入，
+//!   而模型通过内置的 `skill` 工具加载一份正文，它以一条普通
+//!   工具结果的身份落在流尾巴上。
 
 mod support;
 
@@ -30,9 +30,9 @@ use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
-// --- fixtures --------------------------------------------------------------
+// --- fixture ---------------------------------------------------------------
 
-/// Write `<root>/<dir>/<name>/SKILL.md` with a frontmatter block.
+/// 写出带一段 frontmatter 的 `<root>/<dir>/<name>/SKILL.md`。
 fn write_skill(root: &Path, dir: &str, name: &str, description: &str) {
     write_skill_full(root, dir, name, description, "the body of the skill\n");
 }
@@ -53,7 +53,7 @@ fn skill_names(skills: &Skills) -> Vec<String> {
     names
 }
 
-// --- discovery -------------------------------------------------------------
+// --- 发现 ------------------------------------------------------------------
 
 #[test]
 fn discovery_reads_project_then_user_roots_in_precedence_order() {
@@ -63,11 +63,11 @@ fn discovery_reads_project_then_user_roots_in_precedence_order() {
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&home).unwrap();
 
-    // Project level: `.fs-agent` beats `.agents` beats `.claude`.
+    // 项目级：`.fs-agent` 赢 `.agents`，`.agents` 赢 `.claude`。
     write_skill(&cwd, ".fs-agent", "alpha", "project fs-agent wins");
     write_skill(&cwd, ".agents", "alpha", "project agents loses");
     write_skill(&cwd, ".claude", "beta", "project claude");
-    // User level: all three roots, plus a name that the project already owns.
+    // 用户级：三个根都扫，另加一个项目已经占掉的名字。
     write_skill(
         &home,
         ".config/fs-agent",
@@ -83,17 +83,17 @@ fn discovery_reads_project_then_user_roots_in_precedence_order() {
     assert_eq!(
         skill_names(&skills),
         vec!["alpha", "beta", "delta", "epsilon", "gamma"],
-        "both levels and all three roots are scanned"
+        "两级、三个根都扫到了"
     );
     assert_eq!(
         skills.get("alpha").unwrap().description,
         "project fs-agent wins",
-        "the most specific root wins a name collision"
+        "名字撞车时，更具体的那个根赢"
     );
     assert_eq!(
         skills.get("beta").unwrap().description,
         "project claude",
-        "project beats user even when the user root is more specific"
+        "即使用户那个根更具体，项目也压得住用户"
     );
 }
 
@@ -102,9 +102,9 @@ fn discovery_skips_directories_without_a_usable_skill_file() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().to_path_buf();
     write_skill(&cwd, ".agents", "alpha", "a real skill");
-    // A directory with no SKILL.md.
+    // 一个没有 SKILL.md 的目录。
     std::fs::create_dir_all(cwd.join(".agents/skills/nothing")).unwrap();
-    // A SKILL.md without a description cannot enter the catalog.
+    // 一份没有 description 的 SKILL.md 进不了技能清单。
     let path = cwd.join(".agents/skills/undescribed");
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(path.join("SKILL.md"), "---\nname: undescribed\n---\nbody\n").unwrap();
@@ -132,7 +132,7 @@ fn a_quoted_description_keeps_its_colons_and_quotes() {
     );
 }
 
-// --- catalog ---------------------------------------------------------------
+// --- 技能清单 --------------------------------------------------------------
 
 #[test]
 fn the_catalog_lists_each_invocable_skill_as_name_colon_description() {
@@ -143,7 +143,7 @@ fn the_catalog_lists_each_invocable_skill_as_name_colon_description() {
 
     let catalog = Skills::discover(&cwd, None)
         .catalog()
-        .expect("two invocable skills make a catalog");
+        .expect("两份可调用的技能就够成一份清单");
     assert!(
         catalog.contains("- alpha: does the alpha thing"),
         "{catalog}"
@@ -151,11 +151,11 @@ fn the_catalog_lists_each_invocable_skill_as_name_colon_description() {
     assert!(catalog.contains("- beta: does the beta thing"), "{catalog}");
     assert!(
         catalog.contains(SKILL_TOOL),
-        "the catalog names the loading tool"
+        "技能清单点了加载工具的名"
     );
     assert!(
         estimate_tokens(&catalog) <= MAX_CATALOG_TOKENS,
-        "the catalog is independently capped"
+        "技能清单有自己独立的上限"
     );
 }
 
@@ -174,17 +174,17 @@ fn the_catalog_omits_late_entries_rather_than_growing_past_its_budget() {
     let skills = Skills::discover(&cwd, None);
 
     let budget = 80;
-    let catalog = skills.render_catalog(budget).expect("the header fits");
+    let catalog = skills.render_catalog(budget).expect("表头装得下");
     assert!(estimate_tokens(&catalog) <= budget, "{catalog}");
     assert!(
         catalog.contains("omitted"),
-        "truncation is explicit: {catalog}"
+        "裁剪是明说的：{catalog}"
     );
     assert!(
-        // Directories are visited in name order, so `two` is last and is the
-        // entry that must be left out whole rather than cut through.
+        // 目录按名字顺序访问，所以 `two` 排在最后，是那条必须
+        // 整条略去、而不是从中间切开的条目。
         !catalog.contains("- two:"),
-        "a line that does not fit is left out whole: {catalog}"
+        "装不下的那一行整条略去：{catalog}"
     );
 }
 
@@ -196,7 +196,7 @@ fn there_is_no_catalog_without_an_invocable_skill() {
     assert_eq!(skills.catalog(), None);
 }
 
-// --- disable-model-invocation ---------------------------------------------
+// --- disable-model-invocation ----------------------------------------------
 
 #[test]
 fn a_disabled_skill_is_absent_from_the_catalog_and_refuses_to_load() {
@@ -213,20 +213,20 @@ fn a_disabled_skill_is_absent_from_the_catalog_and_refuses_to_load() {
 
     let skills = Skills::discover(&cwd, None);
     let catalog = skills.catalog().unwrap();
-    assert!(!catalog.contains("secret"), "not in the catalog: {catalog}");
+    assert!(!catalog.contains("secret"), "不在技能清单里：{catalog}");
     assert!(catalog.contains("public"));
 
     let error = skills.load("secret").unwrap_err().to_string();
     assert!(
         error.contains("disable-model-invocation"),
-        "the refusal names the flag: {error}"
+        "这次拒绝点出了那个旗标：{error}"
     );
     assert_eq!(skills.load("public").unwrap(), "the body of the skill");
-    // The user path ignores the flag: `/<name>` is exactly what it reserves.
+    // 用户那条路不看这个旗标：`/<name>` 正是它留下来的那一次调用。
     assert_eq!(
         skills.invoke("secret").unwrap(),
         "body",
-        "the user can load a model-disabled skill"
+        "用户能加载一份禁掉模型调用的技能"
     );
 }
 
@@ -239,7 +239,7 @@ fn loading_an_unknown_skill_is_an_error_that_points_at_the_catalog() {
     assert!(error.contains("catalog"), "{error}");
 }
 
-// --- single-skill budget ---------------------------------------------------
+// --- 单份技能的预算 --------------------------------------------------------
 
 #[test]
 fn a_body_over_the_single_skill_cap_is_truncated_with_a_pointer_to_the_file() {
@@ -252,12 +252,12 @@ fn a_body_over_the_single_skill_cap_is_truncated_with_a_pointer_to_the_file() {
     let loaded = skills.load("long").unwrap();
     assert!(
         estimate_tokens(&loaded) <= MAX_SKILL_TOKENS,
-        "the body is capped at ~{MAX_SKILL_TOKENS} tokens"
+        "正文被压到约 {MAX_SKILL_TOKENS} 个 token"
     );
     assert!(loaded.contains("truncated"), "{loaded}");
     assert!(
         loaded.contains("SKILL.md"),
-        "the pointer names the file to read in full: {loaded}"
+        "那个指针点名了要读全文的那个文件：{loaded}"
     );
 }
 
@@ -270,7 +270,7 @@ fn a_body_under_the_cap_loads_verbatim() {
     assert_eq!(skills.load("short").unwrap(), "do exactly this");
 }
 
-// --- the loaded set is recomputed, not stored ------------------------------
+// --- 已加载集合是重算出来的，不是存下来的 ----------------------------------
 
 #[test]
 fn loaded_skill_names_is_recomputed_from_the_stream() {
@@ -305,10 +305,10 @@ fn loaded_skill_names_is_recomputed_from_the_stream() {
         completed(2, "c1", true),
         call(3, "c2", "nope"),
         completed(4, "c2", false),
-        // A second load of the same skill is not a second entry.
+        // 同一份技能再加载一次，不算第二条。
         call(5, "c3", "alpha"),
         completed(6, "c3", true),
-        // A different tool that happens to take a `name` argument is not a skill.
+        // 另一个碰巧也收 `name` 参数的工具，不是技能。
         Event::new(
             7,
             debater.clone(),
@@ -324,7 +324,7 @@ fn loaded_skill_names_is_recomputed_from_the_stream() {
     assert_eq!(loaded_skill_names(&events), vec!["alpha"]);
 }
 
-// --- trim: the aggregate loaded-body budget --------------------------------
+// --- 裁剪：已加载正文的合计预算 --------------------------------------------
 
 fn assistant_calling(calls: &[(&str, &str)]) -> Message {
     Message::Assistant {
@@ -384,32 +384,32 @@ fn old_skill_bodies_are_stubbed_once_the_loaded_total_exceeds_its_budget() {
         },
     ];
 
-    // The window budget is generous: only the skill-body budget can trigger a
-    // drop, and it must reach the oldest skill body, never the ordinary result.
+    // 窗口预算很宽松：只有技能正文那个预算可能触发一次
+    // 丢弃，而且它必须够到最旧的技能正文，绝不去动普通的结果。
     let trimmed = trim(messages, 10_000, &policy).unwrap();
 
     assert_eq!(
         tool_content(&trimmed[3]),
         Some(DROPPED_TOOL_RESULT),
-        "the oldest skill body is dropped first"
+        "最旧的技能正文先被丢掉"
     );
     assert_eq!(
         tool_content(&trimmed[5]),
         Some("c".repeat(400).as_str()),
-        "the newest skill body still fits the loaded budget"
+        "最新的技能正文仍然装得进已加载预算"
     );
     assert_eq!(
         tool_content(&trimmed[4]),
         Some("b".repeat(400).as_str()),
-        "the aggregate skill budget never touches ordinary tool results"
+        "技能合计预算从不碰普通的工具结果"
     );
 }
 
 #[test]
 fn the_loaded_skill_budget_is_a_total_across_the_active_round_too() {
-    // Every body here was loaded in the active round, so the window's
-    // "never drop the current round" rule does not apply: the aggregate budget
-    // is a cap on the whole request, and the oldest body goes.
+    // 这里每一份正文都是在本轮加载的，所以窗口那条
+    // 「永远不丢当前轮」的规矩不适用：合计预算
+    // 管的是整个请求的上限，于是最旧的那份正文走人。
     let policy = TrimPolicy {
         loaded_skill_budget: 150,
         ..TrimPolicy::default()
@@ -435,12 +435,12 @@ fn the_loaded_skill_budget_is_a_total_across_the_active_round_too() {
     assert_eq!(
         tool_content(&trimmed[3]),
         Some(DROPPED_TOOL_RESULT),
-        "the oldest loaded body is dropped even inside the active round"
+        "即使在当前轮里，最旧的那份已加载正文也会被丢掉"
     );
     assert_eq!(
         tool_content(&trimmed[4]),
         Some("c".repeat(400).as_str()),
-        "only as many bodies as the budget allows survive"
+        "预算允许多少份正文，就只有多少份活下来"
     );
 }
 
@@ -451,7 +451,7 @@ fn the_default_loaded_skill_budget_is_the_spec_value() {
     assert_eq!(policy.sticky_tool_names, vec![SKILL_TOOL.to_owned()]);
 }
 
-// --- the assembly seam -----------------------------------------------------
+// --- 组装接缝 --------------------------------------------------------------
 
 struct Fixture {
     harness: Option<Harness>,
@@ -487,7 +487,7 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path) -> Fixture {
             asker: None,
             questions: None,
             hook: None,
-            // No user-level roots, so a test never reads the machine's own skills.
+            // 不扫用户级的根，于是测试永远不会读到这台机器自己的技能。
             home: None,
         },
     })
@@ -506,7 +506,7 @@ impl Fixture {
     async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
         self.harness
             .as_mut()
-            .expect("harness already shut down")
+            .expect("harness 已经关掉了")
             .run_turn(input)
             .await
             .unwrap()
@@ -523,7 +523,7 @@ impl Fixture {
     }
 }
 
-/// A response that asks for one `skill(name)` call.
+/// 一条要求调用一次 `skill(name)` 的响应。
 fn skill_reply(id: &str, name: &str) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
@@ -555,7 +555,7 @@ fn completed_output(events: &[Event], tool_call_id: &str) -> Result<String, Stri
             }),
             _ => None,
         })
-        .expect("the call has exactly one result")
+        .expect("这次调用正好有一条结果")
 }
 
 #[tokio::test]
@@ -578,8 +578,8 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
             _ => None,
         })
         .collect();
-    // Two events, each with its own source...
-    assert_eq!(injections.len(), 2, "one AGENTS.md and one skills catalog");
+    // 两条事件，各带自己的来源……
+    assert_eq!(injections.len(), 2, "一条 AGENTS.md，一条技能清单");
     assert!(matches!(
         injections[0],
         EventPayload::ContextInjected {
@@ -592,21 +592,21 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
         content,
     } = injections[1]
     else {
-        panic!("the second injection is the catalog");
+        panic!("第二条注入是技能清单");
     };
     assert!(
         content.contains("- alpha: does the alpha thing"),
         "{content}"
     );
 
-    // ...but the projection merges the leading injections into the one pinned
-    // first `user` message (spec §10: the rules and the catalog share it), so
-    // the wire never carries consecutive same-role messages. It is byte-stable
-    // every turn so the prefix cache keeps hitting. The program's identity leads.
+    // ……但投影把开头那几条注入合进那唯一一条被钉住的
+    // 首条 `user` 消息（spec §10：规则与清单共用它），所以
+    // 线上永远不会出现连着两条同角色的消息。它每一轮都逐字节稳定，
+    // 于是前缀缓存一直命中。走在最前面的是程序的身份。
     for request in fixture.provider.requests() {
         assert!(
             matches!(request.messages.first(), Some(Message::System { .. })),
-            "the identity leads: {:?}",
+            "身份走在最前面：{:?}",
             request.messages
         );
         assert_eq!(
@@ -622,7 +622,7 @@ async fn the_catalog_is_injected_once_and_stays_pinned_ahead_of_history() {
                 request.messages.get(2),
                 Some(Message::User { injected: true, .. })
             ),
-            "the catalog does not become a second pinned message: {:?}",
+            "技能清单没有变成第二条被钉住的消息：{:?}",
             request.messages
         );
     }
@@ -652,18 +652,18 @@ async fn loading_a_skill_appends_its_body_as_an_ordinary_tool_result_at_the_tail
     assert_eq!(
         completed_output(&events, "call-1").unwrap(),
         "STEP ONE: do the alpha thing",
-        "the body is a tool result, not an injection"
+        "这份正文是一条工具结果，不是一次注入"
     );
     assert_eq!(
         loaded_skill_names(&events),
         vec!["alpha"],
-        "the loaded set is recomputed from the stream"
+        "已加载集合是从流里重算出来的"
     );
 
-    // The body is appended after the history it answers, so the cached prefix
-    // never moves.
+    // 正文追加在它所回应的那段历史之后，所以被缓存的那段
+    // 前缀永远不挪窝。
     let requests = fixture.provider.requests();
-    assert_eq!(requests.len(), 2, "one call to load, one to answer");
+    assert_eq!(requests.len(), 2, "一次调用加载，一次作答");
     let second = &requests[1];
     assert_eq!(
         second.messages.last(),
@@ -671,7 +671,7 @@ async fn loading_a_skill_appends_its_body_as_an_ordinary_tool_result_at_the_tail
             tool_call_id: "call-1".to_owned(),
             content: "STEP ONE: do the alpha thing".to_owned(),
         }),
-        "the skill body is the tail"
+        "技能正文就是那条尾巴"
     );
     assert!(matches!(
         second.messages.get(1),
@@ -707,9 +707,9 @@ async fn a_disabled_skill_is_refused_by_the_tool_and_the_turn_continues() {
 
 #[tokio::test]
 async fn the_user_path_reaches_a_model_disabled_skill() {
-    // The flag reserves one invocation for the user: the skill is absent from the
-    // catalog and the tool refuses it, but `/<name>` loads it into the context at
-    // the tail, after the history, so the cached prefix never moves.
+    // 这个旗标给用户留了一次调用：技能不在技能清单里，
+    // 工具也拒它，但 `/<name>` 会把它加载进上下文、
+    // 落在历史之后的尾巴上，所以被缓存的前缀永远不挪窝。
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().to_path_buf();
     let path = workspace.join(".agents/skills/secret");
@@ -728,10 +728,10 @@ async fn the_user_path_reaches_a_model_disabled_skill() {
     fixture.run_turn("hi").await;
     {
         let harness = fixture.harness.as_mut().unwrap();
-        assert!(harness.has_skill("secret"), "the front end can offer it");
+        assert!(harness.has_skill("secret"), "前端能把它摆出来");
         assert!(
             harness.skill_names().contains(&"secret"),
-            "a disabled skill is still user-invocable: {:?}",
+            "禁掉模型调用的技能仍然可以被用户调用：{:?}",
             harness.skill_names()
         );
         harness.load_skill("secret").unwrap();
@@ -750,7 +750,7 @@ async fn the_user_path_reaches_a_model_disabled_skill() {
     assert_eq!(
         injected.as_deref(),
         Some("USER ONLY STEP"),
-        "the body is a Skill injection"
+        "这份正文是一次 Skill 注入"
     );
 
     let requests = fixture.provider.requests();
@@ -763,25 +763,25 @@ async fn the_user_path_reaches_a_model_disabled_skill() {
                 Message::User { content, injected: true, .. } if content == "USER ONLY STEP"
             )
         })
-        .expect("the body reached the model as an injected user message");
+        .expect("这份正文以一条注入的 user 消息到达了模型");
     assert!(
         at > 0,
-        "a mid-session injection is not the pinned head: {messages:?}"
+        "会话中途的注入不是那个被钉住的头部：{messages:?}"
     );
     assert!(
         matches!(
             messages.last(),
             Some(Message::User { content, injected: false, .. }) if content == "go"
         ),
-        "the task is the turn that follows it: {messages:?}"
+        "任务就是紧随其后的那个回合：{messages:?}"
     );
 }
 
 #[tokio::test]
 async fn a_bare_skill_invocation_runs_there_and_then() {
-    // `/greet` + Enter is **one** gesture: the body is loaded and the turn it starts
-    // runs, because the body *is* the instruction. A bare invocation that only loaded
-    // would be a command the user has to invoke twice.
+    // `/greet` + 回车是**一个**手势：正文被加载，而且它起的那个回合
+    // 就跑起来，因为正文*本身*就是指令。一次只加载、不跑的
+    // 裸调用，会变成用户必须调两遍的命令。
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().to_path_buf();
     let path = workspace.join(".agents/skills/greet");
@@ -803,7 +803,7 @@ async fn a_bare_skill_invocation_runs_there_and_then() {
     assert_eq!(
         outcome.reason,
         fs_agent::events::StopReason::Completed,
-        "the skill's own turn ran"
+        "技能自己那个回合跑了"
     );
     fixture.shutdown().await;
 
@@ -818,10 +818,10 @@ async fn a_bare_skill_invocation_runs_there_and_then() {
     assert_eq!(
         injected.as_deref(),
         Some("GREET STEP"),
-        "the body rode the stream as a Skill injection"
+        "这份正文以一次 Skill 注入的形式上了流"
     );
-    // The one thing that must not be there: a `user` message nobody typed. The body
-    // is a `ContextInjected`, which is what carries the instruction to the model.
+    // 唯一绝不能出现的东西：一条没人打过的 `user` 消息。这份正文
+    // 是一条 `ContextInjected`，把指令带给模型的正是它。
     assert!(
         events.iter().all(|event| !matches!(
             &event.payload,
@@ -830,20 +830,20 @@ async fn a_bare_skill_invocation_runs_there_and_then() {
                 ..
             }
         )),
-        "no prompt was invented for the bare invocation"
+        "没有为这次裸调用凭空造出一条提示词"
     );
     let requests = fixture.provider.requests();
     let messages = &requests[0].messages;
-    // In a session with no history yet the body rides the pinned head message — the
-    // projection merges injections that are adjacent — so this checks that the
-    // instruction arrived, not that it arrived alone. What matters is that it is
-    // `injected`: it is the skill speaking, not the user.
+    // 在一个还没有历史的会话里，正文搭的是那条被钉住的头部消息 ——
+    // 投影会把相邻的注入合并 —— 所以这里查的是这条指令到了，
+    // 而不是它单独到的。要紧的是它带着 `injected`：
+    // 说话的是技能，不是用户。
     assert!(
         matches!(
             messages.last(),
             Some(Message::User { content, injected: true, .. }) if content.contains("GREET STEP")
         ),
-        "the body reaches the model as an injected `user` message: {messages:?}"
+        "这份正文以一条注入的 `user` 消息到达模型：{messages:?}"
     );
 }
 

@@ -1,10 +1,10 @@
-//! The permission gate as the loop drives it: the loop synthesizes exactly one
-//! error result for a policy deny, a user deny and a headless `Ask` downgrade,
-//! and every call still gets exactly one result.
+//! 循环驱动下的权限门：策略拒绝、用户拒绝与 headless 下 `Ask`
+//! 降级这三种情况，循环都合成唯一一条错误结果，
+//! 而且每次调用仍然只拿到一条结果。
 //!
-//! These drive the one assembly seam with a scripted provider and a scripted
-//! answerer, then assert the JSONL stream and the workspace — the same
-//! observable contract the other end-to-end tests use.
+//! 这些测试用脚本化 provider 与脚本化作答者驱动那唯一一条组装接缝，
+//! 然后断言 JSONL 流与工作区 —— 与其他端到端测试用到的
+//! 是同一份可观察契约。
 
 mod support;
 
@@ -174,7 +174,7 @@ async fn a_policy_deny_never_reaches_the_tool_and_yields_one_error_result() {
         ],
         Mode::Readonly,
         vec![],
-        // An answerer being present proves the refusal is a deny, not an ask.
+        // 作答者在场，才证明这次拒绝是 deny 而不是一次询问。
         Some(Arc::new(AlwaysAllow)),
     )
     .await;
@@ -184,38 +184,38 @@ async fn a_policy_deny_never_reaches_the_tool_and_yields_one_error_result() {
     assert_eq!(
         fixture.read("notes.txt"),
         "original\n",
-        "the file is untouched"
+        "文件没被动过"
     );
     assert!(
         !fixture.outputs.join("call-write.before").exists(),
-        "no snapshot for a call that never ran"
+        "没跑过的调用不会留下快照"
     );
 
     let results = fixture.results();
-    assert_eq!(results.len(), 1, "exactly one result");
+    assert_eq!(results.len(), 1, "正好一条结果");
     assert!(!results[0].1);
     let error = results[0].2.clone().unwrap();
     assert!(error.contains("permission denied"), "{error}");
     assert!(error.contains("readonly"), "{error}");
 
-    assert_eq!(fixture.asked_count(), 0, "a deny never asks");
+    assert_eq!(fixture.asked_count(), 0, "拒绝永远不会发问");
 
     let decisions = fixture.decisions();
     assert_eq!(
         decisions.len(),
         1,
-        "the denied call gets one policy verdict"
+        "被拒的这次调用拿到一条策略裁决"
     );
     assert_eq!(decisions[0].0, Decision::Deny);
     assert_eq!(decisions[0].1, DecisionSource::Policy);
 
-    // A deny does not remove the tool from the request prefix: the second call
-    // still carries the full tool table.
+    // 一次拒绝不会把工具从请求前缀里拿掉：第二次调用
+    // 仍然带着完整的工具表。
     let requests = fixture.provider.requests();
     let tools = &requests[1].tools;
     assert!(
         tools.iter().any(|tool| tool.name == "write_file"),
-        "the denied tool stays in the tools array"
+        "被拒的工具仍然留在 tools 数组里"
     );
     fixture.harness.shutdown().await;
 }
@@ -255,7 +255,7 @@ async fn ask_mode_prompts_and_runs_when_the_user_approves() {
 
     fixture.harness.run_turn("write it").await.unwrap();
     assert_eq!(fixture.read("fresh.txt"), "written\n");
-    assert_eq!(fixture.asked_count(), 1, "the write asked exactly once");
+    assert_eq!(fixture.asked_count(), 1, "这次写只问了一遍");
     let questions = asker.requests();
     assert_eq!(questions.len(), 1);
     assert_eq!(questions[0].tool_name, "write_file");
@@ -280,7 +280,7 @@ async fn a_user_denial_yields_one_error_result() {
     .await;
 
     fixture.harness.run_turn("write it").await.unwrap();
-    assert!(!fixture.exists("fresh.txt"), "the user refused the write");
+    assert!(!fixture.exists("fresh.txt"), "用户拒绝了这次写");
     let results = fixture.results();
     assert_eq!(results.len(), 1);
     assert!(!results[0].1);
@@ -299,23 +299,23 @@ async fn ask_without_an_answerer_downgrades_to_deny_and_says_why() {
         vec![write_reply("call-write", "fresh.txt"), Reply::text("ok")],
         Mode::Ask,
         vec![],
-        // Headless: nobody can answer.
+        // headless：没有人能作答。
         None,
     )
     .await;
 
     fixture.harness.run_turn("write it").await.unwrap();
     assert!(!fixture.exists("fresh.txt"));
-    assert_eq!(fixture.asked_count(), 0, "no answerer means no question");
+    assert_eq!(fixture.asked_count(), 0, "没有作答者就没有问句");
 
     let decisions = fixture.decisions();
     assert_eq!(decisions.len(), 1);
-    assert_eq!(decisions[0].0, Decision::Deny, "the effective verdict");
+    assert_eq!(decisions[0].0, Decision::Deny, "生效裁决");
     assert_eq!(decisions[0].1, DecisionSource::Policy);
     let reason = decisions[0].2.clone().unwrap();
     assert!(
         reason.contains("no interactive answerer"),
-        "the downgrade is recorded, so it is not read as a policy denial: {reason}"
+        "降级被记下来了，所以它不会被读成一次策略拒绝：{reason}"
     );
 
     assert_eq!(fixture.results().len(), 1);
@@ -346,7 +346,7 @@ async fn always_allow_only_changes_the_session_policy() {
     assert_eq!(fixture.read("a.txt"), "written\n");
     assert_eq!(fixture.read("b.txt"), "written\n");
 
-    // The first write asked; the second was settled by the remembered rule.
+    // 第一次写发问了；第二次由记住的那条规则了结。
     assert_eq!(fixture.asked_count(), 1);
     assert_eq!(asker.requests().len(), 1);
     let decisions = fixture.decisions();
@@ -356,18 +356,18 @@ async fn always_allow_only_changes_the_session_policy() {
     assert_eq!(
         decisions[1].1,
         DecisionSource::Policy,
-        "the second call was allowed by the session policy, not by a new question"
+        "第二次调用是会话策略放行的，不是靠一次新的询问"
     );
 
-    // No `config.toml` is written anywhere the session could reach: "always
-    // allow" changes the `Session` value and nothing else.
+    // 会话够得着的任何地方都没写 `config.toml`：「总是
+    // 允许」改的是 `Session` 那个值，别的不动。
     for candidate in [
         "config.toml",
         "session/config.toml",
         "workspace/config.toml",
     ] {
         let path = fixture.dir.path().join(candidate);
-        assert!(!path.exists(), "{} must not be written", path.display());
+        assert!(!path.exists(), "{} 不能被写出来", path.display());
     }
     fixture.harness.shutdown().await;
 }
@@ -398,14 +398,14 @@ async fn the_env_family_is_denied_in_the_loop_but_templates_are_not() {
     let env = results
         .iter()
         .find(|(id, ..)| id == "call-env")
-        .expect("the .env result");
+        .expect(".env 那次结果");
     assert!(!env.1);
     assert!(env.2.clone().unwrap().contains(".env"));
 
     let template = results
         .iter()
         .find(|(id, ..)| id == "call-template")
-        .expect("the template result");
+        .expect("模板那次结果");
     assert!(template.1, "{:?}", template.2);
 
     let denied = fixture
@@ -413,14 +413,14 @@ async fn the_env_family_is_denied_in_the_loop_but_templates_are_not() {
         .iter()
         .filter(|(decision, ..)| *decision == Decision::Deny)
         .count();
-    assert_eq!(denied, 1, "only the real .env was denied");
+    assert_eq!(denied, 1, "只有真正的 .env 被拒了");
     fixture.harness.shutdown().await;
 }
 
 #[tokio::test]
 async fn a_call_outside_the_workspace_is_denied_by_the_path_limit() {
-    // The workspace limit is a gate floor, so even `auto` refuses it and the
-    // recorded verdict says `Deny` — not an `Allow` the call never got to use.
+    // 工作区限制是权限门的地板，所以连 `auto` 都拒它，
+    // 而记下来的裁决说的是 `Deny` —— 不是一次这次调用根本没用上的 `Allow`。
     let outside = "/tmp/fs-agent-permission-test-outside.txt";
     let mut fixture = fixture(
         vec![write_reply("call-out", outside), Reply::text("ok")],
@@ -440,8 +440,8 @@ async fn a_call_outside_the_workspace_is_denied_by_the_path_limit() {
     assert!(error.contains("outside the session workspace"), "{error}");
 
     let decisions = fixture.decisions();
-    assert_eq!(decisions.len(), 1, "the call still got a verdict");
+    assert_eq!(decisions.len(), 1, "这次调用仍然拿到了裁决");
     assert_eq!(decisions[0].0, Decision::Deny);
-    assert!(!PathBuf::from(outside).exists(), "nothing was written");
+    assert!(!PathBuf::from(outside).exists(), "什么都没被写出来");
     fixture.harness.shutdown().await;
 }

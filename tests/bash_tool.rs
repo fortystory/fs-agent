@@ -1,10 +1,10 @@
-//! The `bash` tool end to end (ticket 20): a real command's result, a non-zero
-//! exit, the `rm` circuit breaker through the shell wrapper, and the process
-//! tree a timeout kills.
+//! 端到端看 `bash` 工具（票 20）：一条真命令的结果、非零
+//! 退出码、经过 shell 包装层之后 `rm` 撞上的断路器，以及
+//! 超时杀掉的那棵进程树。
 //!
-//! The seam is the one the other end-to-end tests use: `assemble` with a
-//! scripted provider, assertions on the JSONL stream and the workspace. Nothing
-//! here opens a second seam.
+//! 用的接缝就是其他端到端测试用的那一条：`assemble` 配一个
+//! 脚本化 provider，断言落在 JSONL 流与工作区上。这里
+//! 没有开第二条接缝。
 
 mod support;
 
@@ -55,8 +55,8 @@ async fn fixture(replies: Vec<Reply>, mode: Mode, config: SessionConfig) -> Fixt
             tools: builtin(false),
             locks: fs_agent::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
-            // An answerer that allows everything, so nothing but the breaker or
-            // a mode can refuse a call in these tests.
+            // 一个什么都放行的作答者，于是这些测试里能拒掉一次调用的
+            // 只剩断路器或者某一档模式。
             asker: Some(Arc::new(AlwaysAllow)),
             questions: None,
             hook: None,
@@ -88,7 +88,7 @@ impl Fixture {
         read_events(&self.log_path).unwrap()
     }
 
-    /// `(tool_call_id, ok, output_or_error)` for every completed call.
+    /// 每一次已完成的调用对应的 `(tool_call_id, ok, output_or_error)`。
     fn results(&self) -> Vec<(String, bool, String)> {
         self.events()
             .iter()
@@ -122,7 +122,7 @@ impl Fixture {
     }
 }
 
-/// A scripted `bash` call.
+/// 一次脚本化的 `bash` 调用。
 fn bash_reply(id: &str, args: serde_json::Value) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
@@ -148,17 +148,17 @@ fn run_with_timeout(id: &str, command: &str, timeout_ms: u64) -> Reply {
     )
 }
 
-// --- the declared shape (no process needed) -------------------------------
+// --- 声明的形状（不需要进程） ---------------------------------------------
 
 #[test]
 fn bash_declares_one_shell_argv_and_an_exclusive_effect() {
     let registry = builtin(false);
-    let bash = registry.get("bash").expect("bash is a built-in tool");
+    let bash = registry.get("bash").expect("bash 是内置工具");
 
     assert_eq!(
         bash.effect(&serde_json::json!({ "command": "echo hi" })),
         Effect::Exclusive,
-        "a shell can write anything, so the workspace lock is taken"
+        "一条 shell 什么都能写，所以要拿住工作区锁"
     );
     assert_eq!(
         bash.command(&serde_json::json!({ "command": "echo hi" })),
@@ -167,17 +167,17 @@ fn bash_declares_one_shell_argv_and_an_exclusive_effect() {
             "-lc".to_owned(),
             "echo hi".to_owned()
         ]),
-        "the command is one argv element: the model cannot splice a second shell"
+        "命令只占一个 argv 元素：模型插不进第二条 shell"
     );
     assert_eq!(
         bash.command(&serde_json::json!({})),
         None,
-        "a call with no command declares no argv"
+        "没有 command 的调用不声明任何 argv"
     );
     assert_eq!(
         bash.command(&serde_json::json!({ "command": "   " })),
         None,
-        "a blank command declares no argv"
+        "空白的 command 不声明任何 argv"
     );
 }
 
@@ -196,11 +196,11 @@ fn the_configured_limits_are_the_default_and_a_hard_ceiling() {
     assert_eq!(
         limits.timeout(Some(u64::MAX)),
         Duration::from_millis(MAX_BASH_TIMEOUT_MS),
-        "a model may ask for less, never for more"
+        "模型可以要少一点，绝不可能要更多"
     );
 }
 
-// --- a real command -------------------------------------------------------
+// --- 一条真命令 -----------------------------------------------------------
 
 #[tokio::test]
 async fn a_real_command_reports_its_stdout_and_exit_code() {
@@ -218,16 +218,16 @@ async fn a_real_command_reports_its_stdout_and_exit_code() {
     assert_eq!(outcome.reason, StopReason::Completed);
 
     let (_, ok, output) = fixture.results().remove(0);
-    assert!(ok, "the command succeeded: {output}");
+    assert!(ok, "命令成功了：{output}");
     assert!(
         output.starts_with("exit code: 0\n"),
-        "the status leads the result: {output:?}"
+        "状态走在结果最前面：{output:?}"
     );
     assert!(output.contains(STDOUT_HEADER), "{output:?}");
     assert!(output.contains(STDERR_HEADER), "{output:?}");
     assert!(output.contains("hello"), "{output:?}");
 
-    // The workspace side effect is the point of `bash`, not just its text.
+    // 工作区里的副作用才是 `bash` 的意义所在，而不只是它的文本。
     assert_eq!(fixture.read("made.txt"), "made\n");
 
     fixture.harness.shutdown().await;
@@ -248,11 +248,11 @@ async fn a_non_zero_exit_is_a_result_the_model_can_read() {
     fixture.harness.run_turn("fail it").await.unwrap();
 
     let (_, ok, output) = fixture.results().remove(0);
-    assert!(ok, "a failing command is data, not a ToolError: {output:?}");
+    assert!(ok, "失败的命令是数据，不是 ToolError：{output:?}");
     assert!(output.contains("exit code: 3"), "{output:?}");
     assert!(
         output.contains("oops"),
-        "stderr is in the result: {output:?}"
+        "stderr 在结果里：{output:?}"
     );
 
     fixture.harness.shutdown().await;
@@ -277,17 +277,17 @@ async fn a_zero_timeout_is_refused_as_an_argument_error() {
     assert!(message.contains("positive"), "{message}");
     assert!(
         !fixture.exists("made.txt"),
-        "nothing ran for a refused argument"
+        "参数被拒，什么都还没有跑"
     );
 
     fixture.harness.shutdown().await;
 }
 
-// --- the circuit breaker --------------------------------------------------
+// --- 断路器 ---------------------------------------------------------------
 
 #[tokio::test]
 async fn rm_rf_root_is_refused_by_the_circuit_breaker() {
-    // `auto` plus an always-allow answerer: only the breaker may refuse this.
+    // `auto` 加上一个总是放行的作答者：这里只有断路器能拒它。
     let mut fixture = fixture(
         vec![run("call-bash", "rm -rf /"), Reply::text("it refused")],
         Mode::Auto,
@@ -306,19 +306,19 @@ async fn rm_rf_root_is_refused_by_the_circuit_breaker() {
             .as_deref()
             .unwrap()
             .contains("circuit breaker"),
-        "the audit names the breaker: {:?}",
+        "审计点了断路器的名：{:?}",
         decisions[0].1
     );
 
     let (_, ok, message) = fixture.results().remove(0);
-    assert!(!ok, "the shell never ran");
+    assert!(!ok, "这条 shell 从没跑过");
     assert!(message.contains("circuit breaker"), "{message}");
 }
 
-// --- the timeout and the process tree -------------------------------------
+// --- 超时与进程树 ---------------------------------------------------------
 
-/// Whether a pid has finished: its `/proc` entry is gone, or it is a zombie
-/// (killed but not yet reaped by whatever inherited it — still not running).
+/// 一个 pid 有没有结束：它的 `/proc` 条目没了，或者它是个僵尸
+/// （被杀掉了，但还没被继承它的谁收走 —— 仍然不算在跑）。
 fn process_is_gone(pid: u32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Err(_) => true,
@@ -336,13 +336,13 @@ async fn wait_until_gone(pid: u32) {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("process {pid} is still running after its group was killed");
+    panic!("进程 {pid} 在它的进程组被杀之后还在跑");
 }
 
 #[tokio::test]
 async fn a_timed_out_command_is_killed_with_its_process_tree() {
-    // The default is configuration, not a scripted value: the model sends no
-    // `timeout_ms`, and the session's configured cap is what fires.
+    // 默认来自配置，不是脚本写死的值：模型没有发 `timeout_ms`，
+    // 唱主角的是会话配的那个上限。
     let mut fixture = fixture(
         vec![
             run("call-bash", "sleep 30 & echo $! > child.pid; wait"),
@@ -357,19 +357,19 @@ async fn a_timed_out_command_is_killed_with_its_process_tree() {
     assert_eq!(
         outcome.reason,
         StopReason::Completed,
-        "a timeout is a result, not a failed turn"
+        "超时是一条结果，不是一个失败的回合"
     );
 
     let (_, ok, output) = fixture.results().remove(0);
-    assert!(ok, "the partial result is reported: {output:?}");
+    assert!(ok, "半截的结果也被报出来了：{output:?}");
     assert!(output.contains(TIMEOUT_PREFIX), "{output:?}");
     assert!(
         output.contains("killed by signal"),
-        "the shell was signalled, not exited: {output:?}"
+        "shell 是被信号带走的，不是自己退出：{output:?}"
     );
 
-    // The grandchild the command backgrounded is really gone: a `killpg` on the
-    // shell's own group reached it, which killing the shell alone would not.
+    // 命令放到后台的那个孙子进程是真的没了：落在 shell 自己那个进程组上的
+    // 一次 `killpg` 够到了它，而只杀 shell 是够不到的。
     let child = fixture.read("child.pid").trim().parse::<u32>().unwrap();
     wait_until_gone(child).await;
 
@@ -378,9 +378,9 @@ async fn a_timed_out_command_is_killed_with_its_process_tree() {
 
 #[tokio::test]
 async fn a_backgrounded_child_cannot_outlive_the_timeout() {
-    // `bash -lc "sleep 30 & echo …"` exits at once, but the backgrounded child
-    // inherits the output pipes. A timeout that watched only the shell would
-    // hang the turn for the child's whole lifetime.
+    // `bash -lc "sleep 30 & echo …"` 立刻就退出，但后台那个子进程
+    // 继承了输出的管道。一个只盯着 shell 的超时会把整个回合
+    // 挂住，一直挂到那个孩子寿终。
     let mut fixture = fixture(
         vec![
             run("call-bash", "sleep 30 & echo $! > child.pid"),
@@ -395,11 +395,11 @@ async fn a_backgrounded_child_cannot_outlive_the_timeout() {
     fixture.harness.run_turn("background it").await.unwrap();
     assert!(
         started.elapsed() < Duration::from_secs(10),
-        "the call returned at its own deadline, not the child's"
+        "这次调用在它自己的期限上返回了，而不是那个孩子的"
     );
 
     let (_, ok, output) = fixture.results().remove(0);
-    assert!(ok, "the result is reported: {output:?}");
+    assert!(ok, "结果被报出来了：{output:?}");
     assert!(output.contains(TIMEOUT_PREFIX), "{output:?}");
 
     let child = fixture.read("child.pid").trim().parse::<u32>().unwrap();
@@ -408,7 +408,7 @@ async fn a_backgrounded_child_cannot_outlive_the_timeout() {
     fixture.harness.shutdown().await;
 }
 
-// --- the existing truncation pipeline -------------------------------------
+// --- 已有的裁剪流水线 -----------------------------------------------------
 
 #[tokio::test]
 async fn an_oversized_result_is_spilled_before_it_reaches_the_stream() {
@@ -430,12 +430,12 @@ async fn an_oversized_result_is_spilled_before_it_reaches_the_stream() {
     let pointer = fixture.outputs.join("call-bash.txt");
     assert!(
         output.contains(&pointer.display().to_string()),
-        "the stream carries the pointer: {output}"
+        "流上扛的是那个指针：{output}"
     );
     let spilled = std::fs::read_to_string(&pointer).unwrap();
     assert!(
         spilled.contains(&"b".repeat(100)),
-        "the whole body is on disk"
+        "整个正文都在磁盘上"
     );
 
     fixture.harness.shutdown().await;

@@ -1,10 +1,10 @@
-//! The hook constraint algebra, tested as a pure function of values (spec §3's
-//! "directly tested pure functions" seam).
+//! 钩子约束的代数，当作值上的纯函数来测（spec §3 说的
+//! 「直接测的纯函数」那条接缝）。
 //!
-//! These are the two properties the type exists to make true: the effective
-//! verdict is the supremum on `Allow < Ask < Deny`, and no constraint can
-//! express a relaxation. The public subset is checked here too, so the closure of
-//! a hook's observation surface does not depend on the loop's wiring.
+//! 这个类型的存在意义就是让两条性质成立：生效裁决是
+//! `Allow < Ask < Deny` 上的上确界，而任何约束都表达不出
+//! 放松。公开子集也在这里检查，于是钩子观察面的封闭性
+//! 不依赖循环怎么接线。
 
 use fs_agent::events::{
     ContextSource, Decision, DecisionSource, Event, EventPayload, HistoryReason, ParticipantId,
@@ -12,7 +12,7 @@ use fs_agent::events::{
 };
 use fs_agent::hooks::{effective_verdict, public_history, Constraint, HookEvent, Tightening};
 
-/// One payload of every enum variant, with whether a hook may see it.
+/// 每个枚举变体各一条 payload，外加钩子能不能看见它。
 fn all_payloads() -> Vec<(&'static str, EventPayload, bool)> {
     let session = SessionId::new("s");
     let participant = ParticipantId::new("kimi");
@@ -192,9 +192,9 @@ fn all_payloads() -> Vec<(&'static str, EventPayload, bool)> {
     ]
 }
 
-/// The effective verdict as the loop computes it: the supremum of the gate's
-/// verdict and whatever the constraint forces. This calls the production merge,
-/// so the table below cannot drift from the loop.
+/// 循环算出来的生效裁决：权限门的裁决与约束逼出来的裁决取
+/// 上确界。这里调的是生产代码里那一次合并，
+/// 所以下面那张表不会跟循环漂开。
 fn effective(gate: Decision, constraint: &Constraint) -> Decision {
     effective_verdict(gate, constraint.tightening())
 }
@@ -211,8 +211,8 @@ fn the_merge_is_the_supremum_on_allow_ask_deny() {
         (Ask, Constraint::Tighten(Tightening::Ask), Ask),
         (Ask, Constraint::Tighten(Tightening::Deny), Deny),
         (Deny, Constraint::Continue, Deny),
-        // The direction that matters: a hook cannot lower a verdict, even when
-        // it only asks. The gate's deny stays the supremum.
+        // 要紧的方向是这一边：钩子压不低一个裁决，哪怕它
+        // 只是问一声。权限门的拒绝仍然是上确界。
         (Deny, Constraint::Tighten(Tightening::Ask), Deny),
         (Deny, Constraint::Tighten(Tightening::Deny), Deny),
     ];
@@ -221,16 +221,16 @@ fn the_merge_is_the_supremum_on_allow_ask_deny() {
         assert_eq!(
             effective(gate, &constraint),
             expected,
-            "gate {gate:?} with {constraint:?}"
+            "权限门 {gate:?} 配上 {constraint:?}"
         );
     }
 }
 
 #[test]
 fn only_tighten_forces_a_verdict_and_it_is_never_allow() {
-    // `Tightening` is the whole vocabulary of verdicts a hook may express, and
-    // the exhaustive match makes a future third case a compile error here. There
-    // is no `Allow`, which is why "hooks cannot loosen" needs no runtime check.
+    // `Tightening` 就是钩子能表达的全部裁决词汇，而这里的
+    // 穷尽匹配会让将来长出第三个变体时变成编译错误。这里
+    // 没有 `Allow`，所以「钩子松不开」不需要任何运行时检查。
     for tightening in [Tightening::Ask, Tightening::Deny] {
         let decision = match tightening {
             Tightening::Ask => Decision::Ask,
@@ -240,7 +240,7 @@ fn only_tighten_forces_a_verdict_and_it_is_never_allow() {
         assert!(decision > Decision::Allow);
     }
 
-    // Only `Tighten` contributes to the merge; the rest are flow.
+    // 只有 `Tighten` 参与那次合并；其余几个讲的是流程。
     for constraint in [
         Constraint::Continue,
         Constraint::Rewrite(serde_json::json!({})),
@@ -256,9 +256,9 @@ fn the_public_subset_is_exactly_seven_tool_permission_and_session_events() {
     let mut public = Vec::new();
     for (kind, payload, is_public) in all_payloads() {
         let projected = HookEvent::from_payload(&payload);
-        assert_eq!(projected.is_some(), is_public, "{kind} visibility");
+        assert_eq!(projected.is_some(), is_public, "{kind} 的可见性");
         if let Some(event) = projected {
-            assert_eq!(event.kind(), kind, "the projection keeps its own name");
+            assert_eq!(event.kind(), kind, "投影保留它自己的名字");
             public.push(kind);
         }
     }
@@ -274,7 +274,7 @@ fn the_public_subset_is_exactly_seven_tool_permission_and_session_events() {
             "PermissionDecided",
             "AgentError",
         ],
-        "the closed subset is tool + permission + session boundary"
+        "这个封闭子集是工具 + 权限 + 会话边界"
     );
 }
 
@@ -302,6 +302,6 @@ fn public_history_keeps_only_the_public_events_in_seq_order() {
             "PermissionDecided",
             "AgentError",
         ],
-        "messages, usage, hooks and everything else are not a hook's face"
+        "消息、用量、钩子以及其余一切都不是钩子能看到的那一面"
     );
 }

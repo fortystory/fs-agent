@@ -1,9 +1,9 @@
-//! A scripted hook for the assembly seam.
+//! 组装接缝用的脚本化钩子。
 //!
-//! The loop calls the injected `Hook` port exactly as it calls the `Asker`, so a
-//! test scripts constraints and feedback in call order and can inspect what the
-//! hook was handed. Its `history` records the kinds of the public events the
-//! hook saw, which is how the closed-subset rule is checked from the outside.
+//! 循环调用注入的 `Hook` 端口，与它调用 `Asker` 一模一样，所以
+//! 测试可以按调用顺序脚本化约束与反馈，并检查钩子收到了什么。它的
+//! `history` 记下钩子看见的那些公开事件的种类，封闭子集
+//! 这条规矩就是从外面这样检查的。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -12,30 +12,30 @@ use async_trait::async_trait;
 use fs_agent::hooks::{Constraint, Hook, HookError, PostHookCall, PreHookCall};
 use serde_json::Value;
 
-/// One `hook.pre` invocation, as observed from the hook's side.
+/// 从钩子那一侧看过去的一次 `hook.pre` 调用。
 #[derive(Debug, Clone)]
 pub struct PreCall {
     pub tool_name: String,
     pub args: Value,
-    /// The kinds of the events the hook could see, in order.
+    /// 钩子能看见的那些事件的种类，按顺序。
     pub history: Vec<&'static str>,
 }
 
-/// One `hook.post` invocation, as observed from the hook's side.
+/// 从钩子那一侧看过去的一次 `hook.post` 调用。
 #[derive(Debug, Clone)]
 pub struct PostCall {
     pub tool_name: String,
     pub ok: bool,
     pub output: Option<String>,
     pub error: Option<String>,
-    /// The kinds of the events the hook could see, in order.
+    /// 钩子能看见的那些事件的种类，按顺序。
     pub history: Vec<&'static str>,
 }
 
-/// A hook that answers by call order from a script and records every call.
+/// 按调用顺序照脚本作答、并记下每一次调用的钩子。
 ///
-/// Cloning shares the same script and log, so a test can keep a handle for
-/// assertions while the harness owns an injected copy.
+/// 克隆共享同一份脚本与日志，于是测试可以自己留一个把手做断言，
+/// 而 harness 手里握着注入的那一份。
 #[derive(Clone)]
 pub struct ScriptedHook {
     inner: Arc<Inner>,
@@ -63,7 +63,7 @@ impl ScriptedHook {
         }
     }
 
-    /// A hook that continues every call and injects no feedback.
+    /// 每一次调用都放行、且不注入任何反馈的钩子。
     pub fn continuing() -> Self {
         Self::new(vec![Ok(Constraint::Continue)], vec![Ok(None)])
     }
@@ -72,7 +72,7 @@ impl ScriptedHook {
         self.inner
             .pre_calls
             .lock()
-            .expect("scripted hook poisoned")
+            .expect("脚本化钩子已中毒")
             .clone()
     }
 
@@ -80,7 +80,7 @@ impl ScriptedHook {
         self.inner
             .post_calls
             .lock()
-            .expect("scripted hook poisoned")
+            .expect("脚本化钩子已中毒")
             .clone()
     }
 }
@@ -95,7 +95,7 @@ impl Hook for ScriptedHook {
         self.inner
             .pre_calls
             .lock()
-            .expect("scripted hook poisoned")
+            .expect("脚本化钩子已中毒")
             .push(PreCall {
                 tool_name: call.tool_name.to_owned(),
                 args: call.args.clone(),
@@ -105,16 +105,16 @@ impl Hook for ScriptedHook {
         self.inner
             .pre
             .lock()
-            .expect("scripted hook poisoned")
+            .expect("脚本化钩子已中毒")
             .pop_front()
-            .expect("ScriptedHook: no scripted pre constraint left for this call")
+            .expect("ScriptedHook: 这次调用已经没有脚本化的前置约束了")
     }
 
     async fn post(&self, call: &PostHookCall<'_>) -> Result<Option<String>, HookError> {
         self.inner
             .post_calls
             .lock()
-            .expect("scripted hook poisoned")
+            .expect("脚本化钩子已中毒")
             .push(PostCall {
                 tool_name: call.tool_name.to_owned(),
                 ok: call.ok,
@@ -126,8 +126,8 @@ impl Hook for ScriptedHook {
         self.inner
             .post
             .lock()
-            .expect("scripted hook poisoned")
+            .expect("脚本化钩子已中毒")
             .pop_front()
-            .expect("ScriptedHook: no scripted post feedback left for this call")
+            .expect("ScriptedHook: 这次调用已经没有脚本化的后置反馈了")
     }
 }

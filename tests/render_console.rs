@@ -1,8 +1,8 @@
-//! The keyboard seam: the loop asks, the front end answers, and neither reads the
-//! terminal directly (spec §19, user story 133).
+//! 键盘接缝：循环提问，前端作答，两边都不直接读终端
+//! （spec §19，用户故事 133）。
 //!
-//! These tests stand a tiny scripted front end in for a renderer, which is the
-//! point of the seam: the loop's side is exercised without a terminal.
+//! 这些测试拿一个很小的脚本化前端顶替渲染器，这正是这条接缝
+//! 的意义所在：循环那一侧不用终端就能练到。
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ async fn a_prompt_travels_out_and_the_answer_comes_back() {
             Some(ConsoleRequest::Prompt { reply }) => {
                 let _ = reply.send(Some("fix the bug".to_owned()));
             }
-            other => panic!("expected a prompt, got {other:?}"),
+            other => panic!("期望一次提示，实际得到 {other:?}"),
         }
         port
     });
@@ -49,7 +49,7 @@ async fn the_asker_routes_a_permission_question_through_the_same_keyboard() {
                 assert_eq!(ask.request.tool_name, "write_file");
                 let _ = ask.reply.send(Answer::AlwaysAllow);
             }
-            other => panic!("expected an ask, got {other:?}"),
+            other => panic!("期望一次询问，实际得到 {other:?}"),
         }
     });
 
@@ -66,7 +66,7 @@ async fn the_asker_routes_a_permission_question_through_the_same_keyboard() {
 
 #[tokio::test]
 async fn with_no_front_end_the_answer_is_the_non_acting_one() {
-    // A closed front end must not invent consent: the question is denied (spec §12).
+    // 已经关掉的前端不能凭空造出同意：这个问句被拒绝（spec §12）。
     let (handle, port, _events) = console();
     drop(port);
     let asker = ConsoleAsker::from_handle(&handle);
@@ -82,8 +82,8 @@ async fn with_no_front_end_the_answer_is_the_non_acting_one() {
 
 #[tokio::test]
 async fn a_gesture_reaches_the_loop_without_being_asked_for() {
-    // Esc and Shift+Tab are the front end's own schedule: the loop selects on
-    // this while a turn is in flight.
+    // Esc 与 Shift+Tab 是前端自己的日程：一个回合在飞的时候，
+    // 循环 select 的正是这条通道。
     let (_handle, port, mut events) = console();
     port.emit(FrontEndEvent::Cancel);
     port.emit(FrontEndEvent::CycleMode);
@@ -95,8 +95,8 @@ async fn a_gesture_reaches_the_loop_without_being_asked_for() {
 
 #[tokio::test]
 async fn a_generic_asker_handle_can_be_shared() {
-    // The gate holds an `Arc<dyn Asker>`; the asker must therefore be usable
-    // through a shared reference.
+    // 权限门手里是 `Arc<dyn Asker>`；所以作答者必须能
+    // 通过一个共享引用使用。
     let (handle, mut port, _events) = console();
     let asker: Arc<dyn Asker> = Arc::new(ConsoleAsker::from_handle(&handle));
     let front_end = tokio::spawn(async move {

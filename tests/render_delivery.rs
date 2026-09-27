@@ -1,11 +1,11 @@
-//! The render channel under a provider burst (spec §19).
+//! provider 一阵猛冲之下那条渲染通道（spec §19）。
 //!
-//! The renderer is a separate task and the channel is bounded (and deliberately
-//! lossy). That is only safe if the producer is a good runtime citizen: a decoded
-//! network chunk can carry hundreds of SSE frames, and if the pumping loop drains
-//! them without ever yielding, the renderer task is never scheduled until the
-//! bounded channel has already overflowed. The user sees `渲染器丢弃了 N 个事件`
-//! and loses the live tail.
+//! 渲染器是一个独立任务，而通道是有界的（还故意允许有损）。
+//! 只有生产者是个守规矩的运行时公民时这才能安全：一个解码后的
+//! 网络分片可能扛着几百个 SSE 帧，如果抽取循环一口气把它们抽干、
+//! 一次都不让出，渲染器任务就永远不会被调度，一直到有界
+//! 通道已经溢出为止。用户看到的是 `渲染器丢弃了 N 个事件`，
+//! 活的那截尾巴也丢了。
 
 use futures::StreamExt;
 
@@ -15,7 +15,7 @@ use fs_agent::provider::openai::sse_stream;
 use fs_agent::provider::StreamEvent;
 use fs_agent::render::{self, RENDER_CHANNEL_CAPACITY};
 
-/// One SSE frame carrying one text delta, as the wire writes it.
+/// 一个 SSE 帧扛着一条文本增量，按线上写出来的样子。
 fn sse_frame(text: &str) -> Vec<u8> {
     let chunk = serde_json::json!({
         "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": null}]
@@ -25,9 +25,9 @@ fn sse_frame(text: &str) -> Vec<u8> {
 
 #[tokio::test]
 async fn a_burst_of_decoded_deltas_does_not_starve_the_renderer() {
-    // One network chunk carrying more frames than the channel can hold. The
-    // decoder queues them all, so the stream hands them back-to-back; if nothing
-    // yields, the renderer task never runs and the channel drops its oldest.
+    // 一个网络分片扛的帧比这条通道装得下的还多。解码器把它们全部排好，
+    // 于是这条流一条接一条地连着交出来；如果没有谁让出，
+    // 渲染器任务就不会跑，而通道丢掉它最旧的那批。
     let frames = RENDER_CHANNEL_CAPACITY * 2;
     let mut body = Vec::new();
     for _ in 0..frames {
@@ -52,7 +52,7 @@ async fn a_burst_of_decoded_deltas_does_not_starve_the_renderer() {
         (received, dropped)
     });
 
-    // The pumping loop, exactly as the turn loop drives it.
+    // 抽取循环，与回合循环驱动它的方式一模一样。
     let speaker = SpeakerId::Debater("kimi".into());
     while let Some(event) = stream.next().await {
         if let Ok(StreamEvent::TextDelta(text)) = event {
@@ -62,6 +62,6 @@ async fn a_burst_of_decoded_deltas_does_not_starve_the_renderer() {
     drop(handle);
 
     let (received, dropped) = consumer.await.unwrap();
-    assert_eq!(dropped, 0, "the renderer was starved and lost events");
-    assert_eq!(received, frames, "every delta reached the renderer");
+    assert_eq!(dropped, 0, "渲染器被饿住了，丢了事件");
+    assert_eq!(received, frames, "每一条增量都到了渲染器");
 }
