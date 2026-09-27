@@ -91,6 +91,32 @@ ALLOWED = [
     ("src/provider/openai.rs", "额度"),
 ]
 
+# 混住文件里那几条**必须保持英文**的字面量（前缀匹配）：模型可见或要永久回放。
+#
+# 为什么需要这一条：①「冻结面无新增中文」是按**文件**判的，而 `agent/history.rs`、
+# `render/input.rs`、`render/tui.rs`、`cli.rs` 这些文件里，模型可见的串与给人看的串住在
+# 一起 —— 整文件冻结会连带拦住该翻的那半，整文件放开又没人看着该留的那半。所以这两类
+# 文件用**正面**检查：这几条串必须存在，且里面一个中文都没有。
+FROZEN_LITERALS = [
+    # 被杀死的进程没写下的那个工具结果（模型可见）
+    ("src/agent/history.rs", "the session was interrupted while this call was in flight"),
+    # 被杀死的回合里那些合成的工具结果（模型可见；const 名见 src/agent.rs）
+    ("src/agent.rs", "hook stopped the turn: the tool did not run"),
+    ("src/agent.rs", "the turn was cancelled: the tool did not run"),
+    ("src/agent.rs", "the turn was cancelled while this call was in flight"),
+    ("src/agent.rs", "session token budget exhausted: no new executor was"),
+    # 会话级失败的 detail（进流、永久回放）
+    ("src/agent.rs", "no debater answered this round"),
+    # 问卷端口给模型的错误文本（`ask_user_question` 的结果）
+    ("src/render/input.rs", "no questionnaire answerer is connected"),
+    ("src/render/input.rs", "the questionnaire was left unanswered"),
+    ("src/render/input.rs", "input ended before the questionnaire was answered"),
+    ("src/render/tui.rs", "a questionnaire needs at least one question"),
+    # probe 发给模型的提示词（模型可见）
+    ("src/cli.rs", "The quick brown fox jumps over the lazy dog"),
+    ("src/cli.rs", "Ignore the filler below"),
+]
+
 # --- ② docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按实测值收紧；比例留出余量，因为文档里必然有英文标识符、代码路径、
 # 引用与命令。
@@ -214,6 +240,28 @@ def check_frozen(list_allowed: bool) -> list[str]:
     return problems
 
 
+def check_frozen_literals() -> list[str]:
+    """那几条必须保持英文的串：还在，且没有变成中文。"""
+    problems = []
+    for path, prefix in FROZEN_LITERALS:
+        if not os.path.exists(path):
+            problems.append(f"{path}: 清单里的文件不存在（清单该更新了）")
+            continue
+        src = code_only(open(path, encoding="utf-8").read())
+        found = [body for _, body, _ in literals(src) if prefix in body]
+        if not found:
+            problems.append(
+                f"{path}: 找不到该保持英文的字面量 {prefix[:48]!r}…（改写或删除了？）"
+            )
+            continue
+        for body in found:
+            if CJK.search(body):
+                problems.append(
+                    f"{path}: 模型可见 / 进流的字面量被翻成了中文：{prefix[:40]!r}…"
+                )
+    return problems
+
+
 def check_docs() -> list[str]:
     problems = []
     for path, floor in sorted(DOCS_MIN_RATIO.items()):
@@ -249,9 +297,14 @@ def main() -> int:
     if list_allowed:
         print("冻结面允许的中文（白名单）：")
         check_frozen(True)
+        print("\n必须保持英文的混住字面量：")
+        for path, prefix in FROZEN_LITERALS:
+            print(f"  {path}  {prefix!r}")
         return 0
 
-    problems = check_frozen(False) + check_docs() + check_comments()
+    problems = (
+        check_frozen(False) + check_frozen_literals() + check_docs() + check_comments()
+    )
     if problems:
         print("check-language: 不通过\n")
         for problem in problems:
@@ -261,7 +314,10 @@ def main() -> int:
             "标识符、模型可见文本与进流文本留英文。"
         )
         return 1
-    print("check-language: OK（冻结面无新增中文、docs 是中文散文、注释中文行数未回退）")
+    print(
+        "check-language: OK（冻结面无新增中文、混住文件里的模型可见 / 进流串仍英文、"
+        "docs 是中文散文、注释中文行数未回退）"
+    )
     return 0
 
 

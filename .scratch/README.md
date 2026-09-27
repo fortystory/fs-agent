@@ -23,6 +23,7 @@
 | [`todo-and-modes/`](todo-and-modes/spec.md) | spec | 计划从「权限模式」改成模型自己的 `todo` 工具；模式回到 `readonly`/`ask`/`auto` 三档并补齐入口；侧栏加 `todo` 标签（推翻 `fs-agent-v1` §13，留了 [ADR 0003](../docs/adr/0003-plan-leaves-the-permission-modes.md)） | 4/4 done |
 | [`sandbox/`](sandbox/seed.md) | seed | **要做进程级沙箱**的意向（`workspace` 模式因它而暂缓）：让「工作区内自动 / 区外要审批」对 shell 也成立；一手调研在 `research/` | — |
 | [`docs-tidy/`](docs-tidy/spec.md) | spec | 文档整理：索引、陈旧数字、孤儿文档 + 各图的交棒补记（本轮） | 4/4 done |
+| [`language-migration/`](language-migration/spec.md) | spec | 语言迁移：散文一律中文，模型可见 / 进流的文本留英文（[ADR 0004](../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)）；注释与 docs 已翻完，剩最后一类给人看的错误文本 | 0/2 done |
 
 数法：`ls .scratch/*/issues/*.md | wc -l` 与 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`。**`resolved` 是 wayfinder 决策票的收尾状态，`done` 是实现票的** —— 同一个 feature 里两种都可能出现（图走完折成 spec 之后接实现票）。
 
