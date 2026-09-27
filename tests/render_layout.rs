@@ -1,11 +1,11 @@
-//! The fullscreen shell, rendered into a `TestBackend` so the geometry can be
-//! asserted without a terminal (`.scratch/tui-sidebar/spec.md` §1–§2,
-//! `Testing Decisions`).
+//! 全屏外壳画进一个 `TestBackend`，于是几何不用终端也能断言
+//! （`.scratch/tui-sidebar/spec.md` §1–§2，
+//! `Testing Decisions`）。
 //!
-//! The seam is [`draw_frame`]: a state goes in, a fixed-size buffer comes out. Every
-//! assertion below is about what a person would see — which regions exist, what the
-//! sidebar's page says, where the rail's cells are, how many hints fit — never about
-//! the rectangles the layout computes on the way there.
+//! 接缝是 [`draw_frame`]：一个状态进去，一块定尺的缓冲区出来。
+//! 下面每一条断言说的都是人看得见的东西 —— 有哪些区域、左栏那一页
+//! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
+//! 在路上算出来的那些矩形。
 
 use fs_agent::render::editor;
 use fs_agent::render::width::text_columns;
@@ -24,8 +24,8 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
-        // The mode the session was assembled in: the status row's `模式 …` field. A
-        // test that means another one overrides it in its own facts.
+        // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
+        // 测试在自己的 facts 里覆盖它。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: Vec::new(),
@@ -36,21 +36,21 @@ fn state() -> TuiState {
     TuiState::new(facts())
 }
 
-/// The injected facts for a session with this roster: one name is a session with a
-/// single speaker, two make it a discussion.
+/// 指名册的会话用的注入 facts：一个名字是单口会话，
+/// 两个名字就是一场讨论。
 fn facts_with_roster(names: &[&str]) -> SessionFacts {
     let mut facts = facts();
     facts.speaker_order = names.iter().map(|name| (*name).to_owned()).collect();
     facts
 }
 
-/// A state whose loop is **waiting for a line** — what an idle front end looks like.
+/// 循环**在等一行**的那个状态 —— 空闲的前端就是这个样子。
 ///
-/// The distinction matters: inside a run, `Esc` and `Ctrl-C` are the cancel gesture
-/// rather than "close this" / "quit" (spec §6), and the loop is what says a run is on
-/// (`ConsoleRequest::RunState`). A fresh state is idle already; what the prompt request
-/// adds is a live editor for these tests to type into. The idle-UI tests — the `/` menu,
-/// a draft `Esc` would clear, the hint ladder — are about the waiting state.
+/// 这个区分要紧：一次运行当中，`Esc` 与 `Ctrl-C` 是取消手势，而不是
+/// 「关掉这个」/「退出」（spec §6），而「在跑」这件事由循环来说
+/// （`ConsoleRequest::RunState`）。全新的状态本来就是空闲的；提示请求
+/// 加上的是给这些测试打字用的活编辑器。空闲 UI 的那些测试 —— `/` 菜单、
+/// `Esc` 会清掉的草稿、提示阶梯 —— 说的都是这个等待中的状态。
 fn idle() -> TuiState {
     let mut state = state();
     let (reply, line) = tokio::sync::oneshot::channel();
@@ -59,17 +59,17 @@ fn idle() -> TuiState {
     state
 }
 
-/// Render one frame at a fixed size and read the screen back as rows of text.
+/// 按固定尺寸画一帧，再把屏幕读回来，一行一段文本。
 fn screen(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let frame = buffer(width, height, state);
     (0..height).map(|y| row_text(&frame, y, width)).collect()
 }
 
-/// One row's text between two columns, read from the frame.
+/// 某一行的文本，取它在帧里两列之间的那一段。
 ///
-/// A wide grapheme covers the cell after it, and that cell holds a space in the
-/// backend's buffer; reading it verbatim would spell `终 端` for `终端`. Advancing by
-/// the symbol's display width is what makes the text read like the terminal.
+/// 一个宽字素会盖住它后面那一格，而那一格在后端缓冲里是一个空格；
+/// 照字面读出来会把 `终端` 拼成 `终 端`。按符号的显示宽度前进，
+/// 文本才读得像终端。
 fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
     let mut text = String::new();
     let mut x = from;
@@ -81,196 +81,196 @@ fn cells(frame: &Buffer, y: u16, from: u16, to: u16) -> String {
     text
 }
 
-/// A whole row of the buffer, as text.
+/// 缓冲的一整行，作为文本。
 fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
     cells(buffer, y, 0, width)
 }
 
-/// The transcript's first row: the row inside the frame, right under its top border.
+/// 转录的第一行：帧里的那一行，紧贴在它的上边框下面。
 ///
-/// The shell is one frame rather than one block per region, so there is no border
-/// row to search for any more; what a test that counts rows needs is where the
-/// transcript starts and how tall it is, and both are read off the frame below.
+/// 外壳是一圈帧，而不是每个区域一块，所以再没有一条边框行可找了；
+/// 需要数行的测试要的是转录从哪里开始、有多高，
+/// 两者都从下面那圈帧上读出来。
 const TRANSCRIPT_TOP: usize = 1;
 
-/// The rows the transcript occupies in a rendered frame: everything from the
-/// frame's first content row down to the rule above the status row.
+/// 一帧画出来之后转录占的那些行：从帧的第一内容行
+/// 一直到状态行上面那条横线。
 ///
-/// Measured rather than remembered, because the terminal's height, the sidebar's
-/// height ladder and the draft's all move it.
+/// 量出来的，不是记住的，因为终端高度、左栏的高度阶梯
+/// 与草稿三者都会把它挪动。
 fn transcript_rows(rows: &[String]) -> usize {
     rows.iter()
         .position(|row| row.ends_with('┤'))
-        .expect("the main column's first rule is on screen")
+        .expect("主列的第一条横线在屏幕上")
         - TRANSCRIPT_TOP
 }
 
-/// The rendered frame itself, for assertions about a particular cell.
+/// 画出来的这一帧本身，用来断言某个具体的格子。
 fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
     terminal
         .draw(|frame| draw_frame(frame, state))
-        .expect("one frame");
+        .expect("画一帧");
     terminal.backend().buffer().clone()
 }
 
 #[test]
 fn a_terminal_below_the_minimum_shows_one_centred_notice() {
-    // 39x24 is one column short of the minimum; 40x9 is one row short. Both show the
-    // notice and nothing else — no half-drawn panes (spec §2).
+    // 39x24 比下限少一列；40x9 少一行。两种都只画
+    // 那句提示，别的什么都不画 —— 不画半截的窗格（spec §2）。
     for (width, height) in [(39, 24), (40, 9)] {
         let rows = screen(width, height, &mut state());
         let text = rows.join("\n");
         assert!(
             text.contains("终端太小：至少 40×10"),
-            "{width}x{height} says why it will not draw: {text}"
+            "{width}x{height} 说明了它为什么不画：{text}"
         );
         assert!(
             !text.contains('┌') && !text.contains('└'),
-            "{width}x{height} draws no panes at all: {text}"
+            "{width}x{height} 一个窗格都没画：{text}"
         );
         let notice = rows
             .iter()
             .position(|row| row.contains("终端太小"))
-            .expect("the notice is on some row");
+            .expect("提示在某一行上");
         assert_eq!(
             notice,
             height as usize / 2,
-            "{width}x{height} centres the notice vertically"
+            "{width}x{height} 把提示纵向居中"
         );
     }
 }
 
 #[test]
 fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
-    // 120x24 is the reference size: one frame, a full-height sidebar carrying the
-    // mark, the tab bar and the six readings, and a main column of transcript,
-    // status row, input and hints — with no blank row between any of them
-    // (`.scratch/tui-sidebar/spec.md` §1).
+    // 120x24 是参考尺寸：一圈帧，一条全高左栏带着标记、
+    // 页签条与六项读数，外加主列的转录、状态行、
+    // 输入区与提示行 —— 它们之间不留一条空行
+    // （`.scratch/tui-sidebar/spec.md` §1）。
     let rows = screen(120, 24, &mut state());
 
-    // One frame around everything, closed on all four corners.
-    assert!(rows[0].starts_with('┌'), "the frame opens: {:?}", rows[0]);
-    assert!(rows[0].ends_with('┐'), "and closes: {:?}", rows[0]);
-    assert!(rows[23].starts_with('└'), "at the foot: {:?}", rows[23]);
-    assert!(rows[23].ends_with('┘'), "and on the right: {:?}", rows[23]);
+    // 一圈帧围住全部，四个角都是闭合的。
+    assert!(rows[0].starts_with('┌'), "帧开了：{:?}", rows[0]);
+    assert!(rows[0].ends_with('┐'), "而且闭合：{:?}", rows[0]);
+    assert!(rows[23].starts_with('└'), "在脚下：{:?}", rows[23]);
+    assert!(rows[23].ends_with('┘'), "在右边也一样：{:?}", rows[23]);
 
-    // The sidebar: the mark on the wide rung, centred with a column of air.
+    // 左栏：宽档上的标记，居中，两侧各留一列空气。
     assert!(
         rows[1].starts_with("│ ▄▀▀█") && rows[5].contains("▀▀▀"),
-        "the mark's first and last rows are the sidebar's first and last: {:?} / {:?}",
+        "标记的首尾两行就是左栏的首尾两行：{:?} / {:?}",
         rows[1],
         rows[5]
     );
 
-    // The tab bar: two rules with the three labels between them, and the rules join
-    // the frame's left border and the divider.
+    // 页签条：上下两条横线夹着三个标签，两条横线接上
+    // 帧的左边框与分隔线。
     assert_eq!(
         rows[6].trim_matches(|ch| ch == '├' || ch == '┤' || ch == '─' || ch == '│' || ch == ' '),
         "",
-        "the tab bar's top rule spans the sidebar: {:?}",
+        "页签条的上横线横跨整条左栏：{:?}",
         rows[6]
     );
     assert!(
         rows[7].contains("调用量") && rows[7].contains("轨迹") && rows[7].contains("文件"),
-        "the three tabs are on their own row: {:?}",
+        "三个页签占自己那一行：{:?}",
         rows[7]
     );
 
-    // The divider runs the whole height of the frame, and the main column's rules
-    // meet it with junctions. A 24-row terminal leaves the transcript fourteen rows:
-    // three go to the input's floor and seven to the chrome
-    // (`.scratch/tui-input-pulse/spec.md` §1).
+    // 分隔线跑满帧的整个高度，主列的横线
+    // 以交叉字符与它相接。24 行终端留给转录十四行：
+    // 三行归输入区的地板、七行归外壳
+    // （`.scratch/tui-input-pulse/spec.md` §1）。
     assert_eq!(
         transcript_rows(&rows),
         14,
-        "120x24 gives the transcript 14 rows"
+        "120x24 给转录 14 行"
     );
     assert!(
         rows[15].contains('├') && rows[15].contains('┤'),
-        "the rule above the status row spans the main column: {:?}",
+        "状态行上面那条横线横跨主列：{:?}",
         rows[15]
     );
     assert!(
         rows[16].contains("模型 claude-sonnet-4-5")
             && rows[16].contains("模式 询问")
             && rows[16].contains("上下文 —"),
-        "the status row names the model, the mode and the share: {:?}",
+        "状态行报出模型、模式与占比：{:?}",
         rows[16]
     );
     assert!(
         rows[18].contains(&format!("│{}", editor::PROMPT)),
-        "the input's first row carries the prompt: {:?}",
+        "输入区的第一行带着提示符：{:?}",
         rows[18]
     );
     assert!(
         rows[19].trim_matches(['│', ' ']).is_empty()
             && rows[20].trim_matches(['│', ' ']).is_empty(),
-        "and the two under it are blank rows of the same box: {:?} / {:?}",
+        "它下面两行是同一个框里的空行：{:?} / {:?}",
         rows[19],
         rows[20]
     );
     assert!(
         rows[22].contains("ctrl-c"),
-        "the hints name the way out: {:?}",
+        "提示行列出了出口：{:?}",
         rows[22]
     );
 
     assert!(
         !rows.join("\n").contains("shift+enter"),
-        "no phantom newline key"
+        "没有幽灵般的换行键"
     );
-    // The shell shows no working directory and no clock any more (spec §8).
+    // 外壳上不再有工作目录、也不再有钟（spec §8）。
     assert!(
         !rows.join("\n").contains("~/code"),
-        "the directory is not on screen: {rows:#?}"
+        "目录不在屏幕上：{rows:#?}"
     );
 }
 
 #[test]
 fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
-    // The wide rung is 40 columns and the mark is 38, so each side gets a column of
-    // air (spec §2). The divider sits in its own column at 41.
+    // 宽档是 40 列，标记 38 列，所以两侧各得一列
+    // 空气（spec §2）。分隔线占自己那一列，在第 41 列。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
         frame[(41, 0)].symbol(),
         "┬",
-        "the divider meets the top border"
+        "分隔线接上上边框"
     );
-    assert_eq!(frame[(41, 23)].symbol(), "┴", "and the bottom one");
-    assert_eq!(frame[(1, 1)].symbol(), " ", "one column of air on the left");
-    assert_eq!(frame[(2, 1)].symbol(), "▄", "then the mark");
-    // The mark is 38 columns: 2 + 38 = 40, so the last air column is 40 and the
-    // divider is 41.
-    assert_eq!(frame[(40, 1)].symbol(), " ", "and one on the right");
+    assert_eq!(frame[(41, 23)].symbol(), "┴", "下边框也一样");
+    assert_eq!(frame[(1, 1)].symbol(), " ", "左边一列空气");
+    assert_eq!(frame[(2, 1)].symbol(), "▄", "然后是标记");
+    // 标记宽 38 列：2 + 38 = 40，所以最后一列空气在 40，
+    // 分隔线在 41。
+    assert_eq!(frame[(40, 1)].symbol(), " ", "右边也有一列");
 }
 
 #[test]
 fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
-    // The mark at rest — the painter's half of it: the characters are `wording`'s, but
-    // which rows they land on and how the gradient falls is the painter's, so it is
-    // asserted where it can be seen, in the buffer, cell by cell. The moving half is
+    // 静止的标记 —— 画家负责的那一半：字符是 `wording` 的，
+    // 它们落在哪几行、渐变怎么下落却是画家的，所以在
+    // 看得见它的地方逐格断言，就在缓冲里。动的那一半是
     // `the_mark_walks_the_pulse_ring_while_a_run_is_in_flight`
-    // (`.scratch/tui-input-pulse/spec.md` §2).
+    // （`.scratch/tui-input-pulse/spec.md` §2）。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
         frame[(2, 1)].symbol(),
         "▄",
-        "the mark's first row starts at the sidebar's first content row"
+        "标记的第一行起于左栏的第一个内容行"
     );
     assert_eq!(
         frame[(2, 1)].fg,
         Color::LightMagenta,
-        "the top of the mark is the bright end"
+        "标记的顶端是亮的那一头"
     );
     assert_eq!(
         frame[(2, 5)].fg,
         Color::Magenta,
-        "and the bottom row is the dim end"
+        "而最下面那一行是暗的那一头"
     );
 
-    // The mark is the wide rung's alone: 100 columns gets the 28-column sidebar
-    // (which the mark does not fit in) and 60 columns has no sidebar at all.
+    // 标记是宽档独占的：100 列拿到的是 28 列宽的左栏
+    // （标记塞不进去），60 列干脆没有左栏。
     for (width, height, identity) in [
         (100, 24, true),
         (80, 24, true),
@@ -281,13 +281,13 @@ fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
         let rows = screen(width, height, &mut fresh);
         assert!(
             !rows.join("\n").contains('▄'),
-            "{width}x{height} is below the mark's rung: {:#?}",
+            "{width}x{height} 在标记的那一档之下：{:#?}",
             rows[1]
         );
         assert_eq!(
             rows.join("\n").contains("fs-agent"),
             identity,
-            "{width}x{height} shows the text identity where the sidebar is drawn: {:#?}",
+            "{width}x{height} 在画左栏的地方显示的是文字身份：{:#?}",
             rows[1]
         );
     }
@@ -295,9 +295,9 @@ fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
 
 #[test]
 fn the_sidebar_has_two_widths_and_a_hidden_third() {
-    // The ladder is decided by width alone — the sidebar is a column of its own, so
-    // its height is not the transcript's to spend (spec §2). 120 and up is the wide
-    // rung, 80 through 119 the narrow one, and below 80 the sidebar is gone whole.
+    // 阶梯只由宽度决定 —— 左栏是独立的一列，所以它的高度
+    // 不归转录花（spec §2）。120 往上算宽档，
+    // 80 到 119 算窄档，80 以下整条左栏不见。
     for (width, divider) in [
         (174, 41u16),
         (120, 41),
@@ -314,91 +314,91 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
         if divider == 0 {
             assert!(
                 !text.contains('┬') && !text.contains('┴'),
-                "no sidebar at {width} columns: {text}"
+                "{width} 列时没有左栏：{text}"
             );
         } else {
             assert_eq!(
                 frame[(divider, 0)].symbol(),
                 "┬",
-                "the divider is at {divider} at {width} columns"
+                "{width} 列时分隔线在第 {divider} 列"
             );
-            // The main column's rules start at the divider and end at the frame.
+            // 主列的横线从分隔线起，到帧为止。
             assert_eq!(
                 frame[(divider, 17)].symbol(),
                 "├",
-                "and the main column's rule meets it: {text}"
+                "主列的横线也接上它：{text}"
             );
         }
     }
 
-    // The sidebar is drawn at 80x14 — four rows of fields is not a floor any more,
-    // because the sidebar's own height is the terminal's less the frame.
+    // 左栏在 80x14 下也画 —— 四行字段不再是地板了，
+    // 因为左栏自己的高度就是终端高度减掉那圈帧。
     let smallest = buffer(80, 14, &mut state());
     assert_eq!(
         smallest[(29, 0)].symbol(),
         "┬",
-        "the sidebar is drawn at 80x14"
+        "左栏在 80x14 下也画"
     );
 }
 
 #[test]
 fn a_floor_sized_terminal_still_draws_the_main_column() {
-    // 40x10 is inside the minimum: the sidebar is hidden, and the main column still
-    // has its transcript, status row, input and hints (spec §2).
+    // 40x10 在下限之内：左栏被藏起来，主列仍然
+    // 有它的转录、状态行、输入区与提示行（spec §2）。
     let rows = screen(40, 10, &mut state());
     for (row, line) in rows.iter().enumerate() {
         assert!(
             line.starts_with(['┌', '│', '└', '├', '┤']),
-            "row {row} belongs to the frame: {line:?}"
+            "第 {row} 行属于帧：{line:?}"
         );
     }
-    // The input's floor is three rows, but the transcript's last row wins where the
-    // two meet: at the floor the input takes two and the transcript keeps one
-    // (`.scratch/tui-input-pulse/spec.md` §1). Its rows are 5 and 6, the rules are
-    // above and below them, and the hint row keeps the eighth either way.
-    assert_eq!(transcript_rows(&rows), 1, "one transcript row: {rows:#?}");
+    // 输入区的地板是三行，但两者相接的地方转录的最后一行优先：
+    // 在地板上输入区拿两行、转录保住一行
+    // （`.scratch/tui-input-pulse/spec.md` §1）。它的行是 5 与 6，横线
+    // 在它们上下，提示行两种情况都保住第八行。
+    assert_eq!(transcript_rows(&rows), 1, "一行转录：{rows:#?}");
     assert!(
         rows[5].starts_with(&format!("│{}", editor::PROMPT)),
-        "the input's first row is the prompt's: {:?}",
+        "输入区的第一行是提示符那一行：{:?}",
         rows[5]
     );
     assert!(
         rows[6].trim_matches(['│', ' ']).is_empty(),
-        "and it takes two rows here, not three: {:?}",
+        "而且这里它只占两行，不是三行：{:?}",
         rows[6]
     );
     assert!(
         rows[3].contains("模式 询问") && rows[3].contains("上下文 —"),
-        "the status row gives up the model at the floor: {:?}",
+        "在地板上状态行先让出模型：{:?}",
         rows[3]
     );
     assert!(
         !rows[3].contains("claude-sonnet"),
-        "which is the first thing it loses: {:?}",
+        "这是它丢掉的第一个东西：{:?}",
         rows[3]
     );
-    assert!(rows[8].contains("ctrl-c"), "the hint row: {:?}", rows[8]);
+    assert!(rows[8].contains("ctrl-c"), "提示行：{:?}", rows[8]);
     assert!(
         !rows.join("\n").contains("fs-agent"),
-        "the sidebar is hidden whole: {rows:#?}"
+        "左栏整条藏起来：{rows:#?}"
     );
 }
 
-/// How many `·`-separated items the hint row holds, for a state left as it is.
+/// 状态照原样时，提示行里有多少个 `·` 分隔的项。
 fn hint_items_of(width: u16, state: &mut TuiState) -> Vec<String> {
     let rows = screen(width, 24, state);
     let row = rows
         .iter()
         .find(|row| row.contains("ctrl-c"))
-        .expect("the hint row is on screen");
+        .expect("提示行在屏幕上");
     row.trim_matches(|ch| ch == '│' || ch == ' ')
         .split(" · ")
         .map(str::to_owned)
         .collect()
 }
 
-/// The hint row of a session **waiting for a line** — the only time it can promise
-/// `enter 发送`.
+/// 一个**在等一行**的会话的提示行 —— 只有这时它才敢承诺
+/// `enter 发送`。
 fn hint_items(width: u16) -> Vec<String> {
     let mut state = state();
     let (reply, _line) = tokio::sync::oneshot::channel();
@@ -406,8 +406,8 @@ fn hint_items(width: u16) -> Vec<String> {
     hint_items_of(width, &mut state)
 }
 
-/// The same, with a run in flight: the way out is then `ctrl-c 退出`, seven columns
-/// shorter, which is what buys the state word back at 120 columns.
+/// 同上，但有一次运行在飞：出口变成 `ctrl-c 退出`，短七列，
+/// 120 列下把那个状态词换了回来。
 fn hint_items_busy(width: u16) -> Vec<String> {
     let mut state = state();
     let (reply, _line) = tokio::sync::oneshot::channel();
@@ -418,15 +418,15 @@ fn hint_items_busy(width: u16) -> Vec<String> {
 
 #[test]
 fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
-    // Mid-turn, or inside a one-shot `discuss`: nothing is reading lines, so `enter
-    // 发送` would be a lie and the plan-mode gesture has nothing to toggle.
+    // 回合进行中，或者在一次性的 `discuss` 里：没人在读行，所以 `enter
+    // 发送` 就是假话，模式手势也没有东西可切。
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     let rows = screen(120, 24, &mut state);
     let row = rows
         .iter()
         .find(|row| row.contains("ctrl-c"))
-        .expect("the hint row is on screen");
+        .expect("提示行在屏幕上");
     assert!(row.contains("esc 取消"), "{row}");
     assert!(row.contains("PgUp/PgDn 滚动"), "{row}");
     assert!(!row.contains("enter"), "{row}");
@@ -435,58 +435,58 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
 
 #[test]
 fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
-    // The hint row's width is the **main column's** content width, not the
-    // terminal's: the sidebar's columns are not hints to give (`tui-sidebar` spec
-    // §2). The measured idle ladder is therefore 40 columns -> one hint + the way
-    // out + the state word, 80 -> two, 100 -> three, 120 -> four (and no state
-    // word: four hints and the way out leave no room for it), 174 -> five.
-    assert_eq!(hint_items(40).len(), 3, "40 columns: {:?}", hint_items(40));
-    assert_eq!(hint_items(80).len(), 3, "80 columns: {:?}", hint_items(80));
+    // 提示行的宽度是**主列的**内容宽度，不是终端的
+    // 宽度：左栏那几列不是能送出去的提示（`tui-sidebar` spec
+    // §2）。所以量出来的空闲阶梯是：40 列 -> 一条提示 + 出口
+    // + 状态词，80 -> 两条，100 -> 三条，120 -> 四条（而且没有状态
+    // 词：四条提示加出口再没地方留它），174 -> 五条。
+    assert_eq!(hint_items(40).len(), 3, "40 列：{:?}", hint_items(40));
+    assert_eq!(hint_items(80).len(), 3, "80 列：{:?}", hint_items(80));
     assert_eq!(
         hint_items(100).len(),
         5,
-        "100 columns: {:?}",
+        "100 列：{:?}",
         hint_items(100)
     );
     assert_eq!(
         hint_items(120).len(),
         5,
-        "120 columns: {:?}",
+        "120 列：{:?}",
         hint_items(120)
     );
     assert_eq!(
         hint_items(174).len(),
         7,
-        "174 columns: {:?}",
+        "174 列：{:?}",
         hint_items(174)
     );
 
-    // At the floor only one hint fits before the way out, and the state word still
-    // does — it is the newline hint, one rung up, that a 40-column terminal gives up.
+    // 在地板上，出口之前只挤得下一条提示，状态词却还在 ——
+    // 40 列终端让出的是再上一档的换行提示。
     let floor = hint_items(40);
-    assert_eq!(floor[0], "就绪", "the state word fits at 40: {floor:?}");
-    assert_eq!(floor[1], "enter 发送", "then the send hint: {floor:?}");
+    assert_eq!(floor[0], "就绪", "40 列下状态词还挤得下：{floor:?}");
+    assert_eq!(floor[1], "enter 发送", "然后是发送提示：{floor:?}");
     assert!(
         !floor.contains(&"ctrl-j 换行".to_owned()),
-        "the newline hint is what the width costs: {floor:?}"
+        "宽度的代价就是换行提示：{floor:?}"
     );
     assert_eq!(floor.last().unwrap(), "ctrl-c/ctrl-d 退出");
 
-    // 80 columns is the narrow sidebar's rung, so it has fewer hint columns than a
-    // bare 80-column terminal would: 29 of its columns are the sidebar and its
-    // divider. Two hints fit, and the state word is what goes.
+    // 80 列是窄档左栏那一档，所以它能用的提示列比光秃秃的 80 列
+    // 终端还少：它的 29 列归左栏和那条分隔线。
+    // 挤得下两条提示，让出去的是状态词。
     let narrow = hint_items(80);
-    assert_eq!(narrow[0], "enter 发送", "no state word at 80: {narrow:?}");
+    assert_eq!(narrow[0], "enter 发送", "80 列下没有状态词：{narrow:?}");
     assert!(
         !narrow.contains(&"就绪".to_owned()),
-        "the state word is the first thing given up: {narrow:?}"
+        "状态词是第一个被让出去的：{narrow:?}"
     );
     assert_eq!(narrow.last().unwrap(), "ctrl-c/ctrl-d 退出");
 
-    // 120 columns is the reference size, and it pins a deliberate outcome: four
-    // hints and the way out fit and `就绪` does not (spec §2 — "这是预期行为，不是
-    // bug"). A busy session's way out is seven columns shorter, which buys the state
-    // word back.
+    // 120 列是参考尺寸，它钉住一个刻意的结果：四条提示加出口挤得下，
+    // 而 `就绪` 挤不下（spec §2 —— 「这是预期行为，不是
+    // bug」）。忙碌会话的出口短七列，于是把状态词
+    // 换了回来。
     let wide = hint_items(120);
     assert_eq!(
         wide,
@@ -497,27 +497,27 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             "shift+tab 模式",
             "ctrl-c/ctrl-d 退出",
         ],
-        "four hints and the way out, and no state word"
+        "四条提示加出口，没有状态词"
     );
     let busy = hint_items_busy(120);
     assert_eq!(
         busy.first().map(String::as_str),
         Some("工作中"),
-        "the busy way out is shorter, so the state word fits: {busy:?}"
+        "忙碌时的出口更短，所以状态词挤得下：{busy:?}"
     );
 
-    // 174 columns can hold every hint and the state word together.
+    // 174 列能把每条提示和状态词一起放下。
     let roomy = hint_items(174);
-    assert_eq!(roomy[0], "就绪", "the state word is back: {roomy:?}");
+    assert_eq!(roomy[0], "就绪", "状态词回来了：{roomy:?}");
     assert!(
         roomy.contains(&"PgUp/PgDn 滚动".to_owned()),
-        "with the whole hint list behind it: {roomy:?}"
+        "后面还跟着整份提示表：{roomy:?}"
     );
     assert!(
         !screen(174, 24, &mut state())
             .join("\n")
             .contains("shift+enter"),
-        "no phantom newline key at any width"
+        "任何宽度下都没有幽灵换行键"
     );
 }
 
@@ -539,27 +539,27 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("fs-agent：会话 abc"),
-        "the notice is a transcript line: {text}"
+        "提示是转录里的一行：{text}"
     );
     assert!(
         text.contains("正在读文件"),
-        "the streaming tail is in the pane too: {text}"
+        "流式的尾巴也在窗格里：{text}"
     );
 }
 
-/// The mark's five row colours at 120x24, top to bottom: the column the painter
-/// writes is the sidebar's second column, and the mark's first glyph sits there on
-/// every one of its rows.
+/// 标记在 120x24 下的五行颜色，自上而下：画家写的那一列
+/// 是左栏的第二列，标记的第一个字形在它每一行上都坐在
+/// 那里。
 fn mark_colours(state: &mut TuiState) -> Vec<Color> {
     let frame = buffer(120, 24, state);
     (1..=5u16).map(|y| frame[(2, y)].fg).collect()
 }
 
-/// The mark's dash cell as a person sees it: five rows of the four columns the dash of
-/// `fs-agent` lives in, read off a 120x24 frame.
+/// 人眼里看到的标记短横格：`fs-agent` 那条短横所在的四列
+/// 里的五行，从 120x24 的一帧上读出来。
 ///
-/// The mark starts at the sidebar's second column and its dash cell starts ten columns
-/// in (`fs-agent` is eight glyph cells of four columns, one blank column apart).
+/// 标记从左栏第二列起，它的短横格从往里十列处
+/// 开始（`fs-agent` 是八个字形格、每格四列，中间隔一空列）。
 fn dash_cell(state: &mut TuiState) -> Vec<String> {
     let frame = buffer(120, 24, state);
     (1..=5u16)
@@ -569,11 +569,11 @@ fn dash_cell(state: &mut TuiState) -> Vec<String> {
 
 #[test]
 fn the_mark_does_not_move_while_a_run_is_in_flight() {
-    // 票 08 turned the falling dash off: the mark is still again, which is exactly what the
-    // maintainer asked for after seeing it on a real terminal. The code that would move it is
-    // kept (and unit-tested where it lives), so this is the assertion that keeps it off —
-    // frames ticked while a run is in flight have to come out identical.
-    // The cell as it would look if the bar had moved at all — one row up, one row down.
+    // 票 08 把下落的短横关掉了：标记又静止了，这正是维护者在真终端上
+    // 看过之后要的。会让它动的那些代码留着（并在它所在之处继续单测），
+    // 所以这里是把它按住的断言 ——
+    // 一次运行在飞时逐格打出来的帧必须完全一样。
+    // 假如横条真动过（上移一行或下移一行），那一格会长的样子。
     let moved = [
         ["▀▀▀▀", "    ", "    ", "    ", "    "],
         ["    ", "    ", "    ", "    ", "▀▀▀▀"],
@@ -582,14 +582,14 @@ fn the_mark_does_not_move_while_a_run_is_in_flight() {
     let still = dash_cell(&mut state);
     assert_eq!(
         still[2], "▀▀▀▀",
-        "the mark rests on the row it has always drawn: {still:?}"
+        "标记停在它一直在画的那一行上：{still:?}"
     );
     assert_eq!(
         still,
         fs_agent::render::wording::logo_lines()
             .map(|row| row.chars().skip(10).take(4).collect::<String>())
             .to_vec(),
-        "and that row is byte-for-byte the one `logo_lines` carries"
+        "而且那一行逐字节等于 `logo_lines` 里的那一行"
     );
 
     state.request(ConsoleRequest::RunState { running: true });
@@ -598,9 +598,9 @@ fn the_mark_does_not_move_while_a_run_is_in_flight() {
         assert_eq!(
             dash_cell(&mut state),
             still,
-            "frame {frame} of a run: the mark has not moved"
+            "运行中的第 {frame} 帧：标记没有动"
         );
-        // And it is not the colour that moved instead: the ramp is untouched.
+        // 而且动的也不是颜色：色带没被碰过。
         assert_eq!(
             mark_colours(&mut state),
             vec![
@@ -610,20 +610,20 @@ fn the_mark_does_not_move_while_a_run_is_in_flight() {
                 Color::LightMagenta,
                 Color::Magenta
             ],
-            "nor has its colour: frame {frame}"
+            "颜色也没变：第 {frame} 帧"
         );
     }
     for shape in &moved {
         assert_ne!(
             dash_cell(&mut state),
             shape.map(str::to_owned).to_vec(),
-            "and the bar is never on any other row: the fall is off"
+            "横条从不落在别的行上：下落是关着的"
         );
     }
 }
 
-/// Where the prompt is drawn: the cell holding `❱`, found on screen the way a person finds
-/// it rather than from a rectangle this test would have to keep in step with the layout.
+/// 提示符画在哪：那个装着 `❱` 的格子，按人在屏幕上找它的方式找到，
+/// 而不是从一块这个测试还得跟布局同步的矩形里找。
 fn prompt_at(width: u16, height: u16, state: &mut TuiState) -> (u16, u16) {
     let frame = buffer(width, height, state);
     for y in 0..height {
@@ -633,10 +633,10 @@ fn prompt_at(width: u16, height: u16, state: &mut TuiState) -> (u16, u16) {
             }
         }
     }
-    panic!("the prompt is on screen");
+    panic!("提示符在屏幕上");
 }
 
-/// The prompt cell of the input's first row: its symbol and the colour it was painted in.
+/// 输入区第一行里提示符那一格：它的符号，以及它被涂上的颜色。
 fn prompt_cell(state: &mut TuiState) -> (String, Color) {
     let frame = buffer(120, 24, state);
     let (x, y) = prompt_at(120, 24, state);
@@ -645,35 +645,35 @@ fn prompt_cell(state: &mut TuiState) -> (String, Color) {
 
 #[test]
 fn the_prompt_is_an_angle_bracket_that_holds_still_while_you_type() {
-    // The prompt's colour is the interface's animation, and the maintainer's rule for it is
-    // the conclusion of a long argument: **it moves while the agent works and holds still
-    // while they type** (`.scratch/tui-input-pulse/spec.md` §2b, 票 09). The resting colour
-    // is frame 0 — the frame their script started on — so it is the same colour every time
-    // the keyboard comes back to them.
+    // 提示符的颜色是这个界面的动画，维护者给它定的规矩是
+    // 一场长争论的结论：**agent 干活时它动，用户打字时它
+    // 停**（`.scratch/tui-input-pulse/spec.md` §2b，票 09）。静止色
+    // 是第 0 帧 —— 他们那条脚本起步的那一帧 —— 所以每次键盘回到
+    // 他们手里都是同一个颜色。
     let mut state = state();
     let (symbol, colour) = prompt_cell(&mut state);
-    assert_eq!(symbol, "❱", "the prompt glyph");
+    assert_eq!(symbol, "❱", "提示符字形");
     assert_eq!(
         colour,
         Color::Rgb(216, 97, 97),
-        "a prompt waiting for a line wears the script's first colour"
+        "在等一行的提示符穿的是那条脚本的第一个颜色"
     );
 
-    // Typing does not stir it: not one tick moves the colour off the resting frame.
+    // 打字不会惊动它：一个 tick 也没把颜色挪离静止帧。
     for frame in 0..5 {
         state.tick();
         assert_eq!(
             prompt_cell(&mut state).1,
             colour,
-            "tick {frame} while the keyboard is the writer's: nothing moves"
+            "键盘归写的人时第 {frame} 个 tick：什么都没动"
         );
     }
 }
 
 #[test]
 fn the_prompts_colour_walks_the_wheel_while_a_run_is_in_flight() {
-    // The other half of that rule: once a turn is in flight the colour moves, and no two
-    // frames of it wear the same colour.
+    // 那条规矩的另一半：一旦有回合在飞颜色就动起来，而且它的
+    // 任何两帧都不穿同一个颜色。
     let mut state = state();
     let resting = prompt_cell(&mut state).1;
     state.request(ConsoleRequest::RunState { running: true });
@@ -688,35 +688,35 @@ fn the_prompts_colour_walks_the_wheel_while_a_run_is_in_flight() {
     assert_eq!(
         unique.len(),
         seen.len(),
-        "every frame of a run is its own colour: {seen:?}"
+        "一次运行的每一帧都有自己的颜色：{seen:?}"
     );
     assert!(
         !seen.contains(&resting),
-        "and none of them is the resting colour: {seen:?}"
+        "而且没有一帧是静止色：{seen:?}"
     );
 
-    // When the run ends the prompt goes back to resting, and the next run starts there too —
-    // the counter belongs to one run, so the resting colour is never "wherever it stopped".
+    // 运行结束时提示符回到静止，下一次运行也从那儿起步 ——
+    // 计数器属于某一次运行，所以静止色永远不是「它停在哪儿就是哪儿」。
     state.request(ConsoleRequest::RunState { running: false });
     assert_eq!(
         prompt_cell(&mut state).1,
         resting,
-        "the run's end puts the prompt back to rest"
+        "运行结束把提示符放回静止"
     );
     state.request(ConsoleRequest::RunState { running: true });
     state.tick();
     assert_eq!(
         prompt_cell(&mut state).1,
         seen[0],
-        "and the next run walks the same frames the last one did, from the start"
+        "下一次运行从头重走上一次走过的那些帧"
     );
 }
 
 #[test]
 fn the_prompts_colour_stays_out_of_the_draft() {
-    // The prompt is its own span so it can be coloured; the draft beside it is not. A
-    // tinted draft would mean the span boundary had been lost, which the writer would see as
-    // their own text changing colour under them.
+    // 提示符是自己的一个 span，这样才能上色；挨着它的草稿不是。
+    // 被染色的草稿意味着 span 边界丢了，写的人看到的会是
+    // 自己的文字在眼皮底下变色。
     let mut state = state();
     for ch in "hello".chars() {
         state.key(Key::Char(ch));
@@ -726,29 +726,29 @@ fn the_prompts_colour_stays_out_of_the_draft() {
     let (x, y) = prompt_at(120, 24, &mut state);
     assert!(
         row_text(&frame, y, 120).contains("❱ hello"),
-        "the draft sits right after the prompt: {:?}",
+        "草稿紧跟在提示符后面：{:?}",
         row_text(&frame, y, 120)
     );
-    // The prompt's own cell carries a hue; the space behind it is part of the same span, and
-    // the draft starts one cell after that.
-    assert_eq!(frame[(x, y)].fg, prompt_cell(&mut state).1, "the hue");
+    // 提示符自己的格子带着色相；它后面那个空格属于同一个 span，
+    // 草稿从那之后再往后一格开始。
+    assert_eq!(frame[(x, y)].fg, prompt_cell(&mut state).1, "色相");
     let draft = &frame[(x + 2, y)];
     assert_eq!(
         format!("{:?}", draft.fg),
         format!("{:?}", Color::Reset),
-        "and the draft is the terminal's own foreground, untouched: {draft:?}"
+        "草稿还是终端自己的前景色，没被动过：{draft:?}"
     );
     assert!(
         draft.modifier.contains(Modifier::BOLD),
-        "though it keeps the input's weight: {draft:?}"
+        "但它保住了输入区的字重：{draft:?}"
     );
 }
 
 #[test]
 fn the_mark_stays_still_on_the_narrow_rung_too() {
-    // The text identity's falling dash went off with the mark's (票 08): the narrow rung
-    // shows the identity exactly as it did before any of this, and `identity_falling` is kept
-    // beside it, still unit-tested where it lives.
+    // 文字身份的下落短横随标记那条一起关掉了（票 08）：窄档
+    // 显示的身份和这一切之前完全一样，而 `identity_falling` 留
+    // 在它旁边，仍在它所在之处单测。
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     for frame in 0..5 {
@@ -756,16 +756,16 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
         let text = screen(100, 24, &mut state).join("\n");
         assert!(
             text.contains(&format!("fs-agent {}", env!("CARGO_PKG_VERSION"))),
-            "frame {frame}: the identity is still itself: {text}"
+            "第 {frame} 帧：身份还是它自己：{text}"
         );
     }
 }
 
 #[test]
 fn a_pulse_frame_touches_the_prompt_and_nothing_else() {
-    // What the clock moves, everywhere the shell is drawn (`.scratch/tui-input-pulse/spec.md`
-    // §2b): the prompt's colour, and nothing else — no mark, no rail, no status row. Below 80
-    // columns there is no sidebar at all, and the difference is still exactly those two cells.
+    // 钟在动的东西，出现在画外壳的每一处（`.scratch/tui-input-pulse/spec.md`
+    // §2b）：提示符的颜色，别的什么都没有 —— 没有标记、没有回合条、没有状态行。
+    // 80 列以下整条左栏都没有，差别仍然恰好是那两格。
     for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
         state.request(ConsoleRequest::RunState { running: true });
@@ -783,28 +783,28 @@ fn a_pulse_frame_touches_the_prompt_and_nothing_else() {
             .collect();
         assert_eq!(
             changed, expected,
-            "{width}x{height}: only the prompt's own cells change"
+            "{width}x{height}：只有提示符自己那两格在变"
         );
     }
 }
 
 #[test]
 fn the_colour_ring_is_kept_off_screen() {
-    // 票 05 retired the hue ring: two versions of it were tried on a real terminal and
-    // both read badly, so what is on screen is the falling dash. The palette stays in the
-    // code because the user asked for it to be kept — and a kept thing that creeps back
-    // onto the screen without anyone deciding it should is what this test is for.
+    // 票 05 退掉了色相环：在真终端上试过两个版本，
+    // 读起来都不行，所以屏幕上留的是下落的短横。调色板留在
+    // 代码里，因为用户要求留着它 —— 而一件留着的东西在没人决定
+    // 该让它出现的情况下又爬回屏幕，就是这个测试要抓的。
     let ring: Vec<String> = PULSE_PALETTE.iter().map(|c| format!("{c:?}")).collect();
-    assert_eq!(ring.len(), 6, "the ring is six hues: {ring:?}");
+    assert_eq!(ring.len(), 6, "这个环是六个色相：{ring:?}");
     for colour in &ring {
         assert!(
             colour.starts_with("Light"),
-            "one brightness, so a colour signal would never flicker: {colour}"
+            "只有一个明度，所以颜色信号永远不会闪：{colour}"
         );
     }
-    // A busy frame, drawn as large as the shell goes: not one cell wears a ring hue that
-    // the mark's own ramp does not already have in it. (LightMagenta is in both, and it
-    // is the ramp's top colour, so it is not evidence of the ring being drawn.)
+    // 一帧忙碌的画面，按外壳能到的最大的尺寸画：没有一格穿着
+    // 标记自己的色带里本来没有的环上色相。（LightMagenta 两边都有，
+    // 而且它是色带顶端的颜色，所以它不构成「环被画了」的证据。）
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     state.tick();
@@ -821,7 +821,7 @@ fn the_colour_ring_is_kept_off_screen() {
             let fg = frame[(x, y)].fg;
             assert!(
                 !off_screen.contains(&fg),
-                "nothing on screen wears the retired ring: {fg:?} at ({x}, {y})"
+                "屏幕上没有东西穿着退掉的环：({x}, {y}) 处的 {fg:?}"
             );
         }
     }
@@ -829,14 +829,14 @@ fn the_colour_ring_is_kept_off_screen() {
 
 #[test]
 fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
-    // The size matrix the spec's geometry table covers, each row asserted for the
-    // reason it is in the table: the sidebar's rung and identity, the status row's
-    // rung, and the transcript rows the chrome leaves (spec §1–§2).
+    // spec 的几何表覆盖的那张尺寸矩阵，每一行都按它进表的
+    // 理由断言：左栏的档位与身份、状态行的档位、
+    // 以及外壳让出的转录行数（spec §1–§2）。
     let cases = [
-        // width, height, sidebar tier, identity, model on the status row, transcript rows
-        // The input's floor is three rows, so every rung that has the room gives the
-        // transcript `h - 7 - 3`; at the 40x10 floor the input takes two instead and
-        // the transcript keeps its last row (`.scratch/tui-input-pulse/spec.md` §1).
+        // 宽、高、左栏档位、身份、状态行上有没有模型、转录行数
+        // 输入区的地板是三行，所以每个有余地的档位给转录
+        // `h - 7 - 3`；在 40x10 的地板上输入区改为拿两行，
+        // 转录保住它最后一行（`.scratch/tui-input-pulse/spec.md` §1）。
         (40u16, 10u16, None, "", false, 1usize),
         (40, 24, None, "", false, 14),
         (60, 24, None, "", true, 14),
@@ -851,33 +851,33 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
         let text = rows.join("\n");
         assert!(
             !text.contains("终端太小"),
-            "{width}x{height} is inside the minimum: {text}"
+            "{width}x{height} 在下限之内：{text}"
         );
         assert!(
             rows[0].starts_with('┌') && rows[0].ends_with('┐'),
-            "{width}x{height} is framed: {:?}",
+            "{width}x{height} 有外框：{:?}",
             rows[0]
         );
         assert!(
             text.contains("ctrl-c"),
-            "{width}x{height} keeps the way out: {text}"
+            "{width}x{height} 保住了出口：{text}"
         );
-        // The status row is never given up: the rung that would take it needs a main
-        // column narrower than the terminal floor allows (spec §2).
+        // 状态行从不让出：要拿走它的那个档位需要一条比终端地板
+        // 允许的更窄的主列（spec §2）。
         assert!(
             text.contains("模式 询问"),
-            "{width}x{height} always draws the status row: {text}"
+            "{width}x{height} 总是画状态行：{text}"
         );
         assert_eq!(
             transcript_rows(&rows),
             rows_expected,
-            "{width}x{height} gives the transcript {rows_expected} rows: {rows:#?}"
+            "{width}x{height} 给转录 {rows_expected} 行：{rows:#?}"
         );
-        // The first rule of the main column sits right under the transcript: the
-        // shell keeps no blank row between its parts, at any size.
+        // 主列的第一条横线紧贴在转录下面：
+        // 外壳在任何尺寸下都不在自己的各部分之间留空行。
         assert!(
             rows[TRANSCRIPT_TOP + rows_expected].ends_with('┤'),
-            "{width}x{height} draws its first rule right under the transcript: {:?}",
+            "{width}x{height} 把第一条横线画在转录正下方：{:?}",
             rows[rows_expected]
         );
         match tier {
@@ -886,41 +886,41 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
                 assert_eq!(
                     frame[(tier + 1, 0)].symbol(),
                     "┬",
-                    "{width}x{height} draws the divider at column {}",
+                    "{width}x{height} 把分隔线画在第 {} 列",
                     tier + 1
                 );
             }
             None => assert!(
                 !text.contains('┬') && !text.contains('┴'),
-                "{width}x{height} hides the sidebar whole: {text}"
+                "{width}x{height} 整条藏起左栏：{text}"
             ),
         }
         assert_eq!(
             text.contains('▄'),
             identity == "mark",
-            "{width}x{height} draws the mark only on the wide rung: {text}"
+            "{width}x{height} 只在宽档上画标记：{text}"
         );
         assert_eq!(
             text.contains("fs-agent"),
             identity == "fs-agent",
-            "{width}x{height} draws the text identity only on the narrow rung: {text}"
+            "{width}x{height} 只在窄档上画文字身份：{text}"
         );
         assert_eq!(
             text.contains("claude-sonnet-4-5"),
             model,
-            "{width}x{height} keeps the model on the status row only where it fits: {text}"
+            "{width}x{height} 只在放得下时把模型留在状态行上：{text}"
         );
     }
 }
 
 #[test]
 fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
-    // The sidebar's own height ladder (spec §2): the **mark** goes first — to the text
-    // identity, then to nothing — and only then do fields leave from the tail (缓存 →
-    // 输出 → 输入). The floor is the tab bar plus 上下文 / token / 回合, and width never
-    // plays a part in any of this.
+    // 左栏自己的高度阶梯（spec §2）：先走的是**标记** —— 退到文字
+    // 身份，再退到什么都不画 —— 这之后字段才从尾部离开（缓存 →
+    // 输出 → 输入）。地板是页签条加 上下文 / token / 回合，宽度在这
+    // 整件事里从不参与。
     let cases = [
-        // height, what the identity is, how many readings survive
+        // 高度、身份是什么、活下来几项读数
         (16u16, "mark", 6usize),
         (12, "fs-agent", 6),
         (11, "none", 6),
@@ -934,80 +934,80 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
         assert_eq!(
             mark,
             identity == "mark",
-            "{height} rows draws the mark only from sixteen up: {text}"
+            "{height} 行只在十六行往上才画标记：{text}"
         );
         assert_eq!(
             text.contains("fs-agent"),
             identity == "fs-agent",
-            "{height} rows draws the text identity only below the mark's rung: {text}"
+            "{height} 行只在标记那一档之下才画文字身份：{text}"
         );
         let page = panel_text(120, height, &mut state);
         assert_eq!(
             page.len(),
             fields,
-            "{height} rows keeps {fields} readings: {page:?}"
+            "{height} 行留下 {fields} 项读数：{page:?}"
         );
         assert_eq!(
             text.contains("缓存"),
             fields == 6,
-            "{height} rows drops the cache row before the input and output ones: {text}"
+            "{height} 行先丢缓存那一行，再丢输入与输出那两行：{text}"
         );
-        // Whatever goes, the tab bar and the three readings that answer "how much room
-        // is left" stay.
+        // 不管丢掉什么，页签条与回答「还剩多少余地」的那三项读数
+        // 都留下。
         assert!(
             text.contains("调用量"),
-            "{height} rows keeps the tab bar: {text}"
+            "{height} 行留下页签条：{text}"
         );
         assert!(
             text.contains("上下文"),
-            "{height} rows keeps the context row: {text}"
+            "{height} 行留下上下文那一行：{text}"
         );
         assert!(
             text.contains("token"),
-            "{height} rows keeps the token row: {text}"
+            "{height} 行留下 token 那一行：{text}"
         );
         assert!(
             text.contains("回合"),
-            "{height} rows keeps the turn row: {text}"
+            "{height} 行留下回合那一行：{text}"
         );
     }
 }
 
-/// The cell one tab's label starts at, read off the frame.
+/// 某个页签的标签起始的那一格，从帧上读出来。
 ///
-/// The labels are the only place those words appear, so finding the first character of
-/// one is finding the tab — and it is found the way a person finds it: on screen.
+/// 那些词只出现在标签里，所以找到其中一个的第一个字符
+/// 就是找到了页签 —— 而且找法跟人一样：在屏幕上找。
 fn tab_cell(frame: &Buffer, width: u16, height: u16, label: &str) -> (u16, u16) {
     let first: String = label.chars().take(1).collect();
     find_cell(frame, width, height, &first)
-        .unwrap_or_else(|| panic!("the {label} tab is on screen"))
+        .unwrap_or_else(|| panic!("{label} 页签在屏幕上"))
 }
 
 #[test]
 fn the_selected_tab_is_the_bright_one_and_the_others_are_dim() {
-    // The bar says which page is showing without a word of explanation: the selected
-    // label is bright magenta and bold, the others are the narration grey (spec §3).
+    // 页签条不用一个字就说明在显示哪一页：选中的标签是亮品红
+    // 加粗，其余的是叙述灰（spec §3）。
     let frame = buffer(120, 24, &mut state());
     let (column, row) = tab_cell(&frame, 120, 24, "调用量");
     assert_eq!(
         frame[(column, row)].fg,
         Color::LightMagenta,
-        "the selected tab is the bright one"
+        "选中的页签是亮的那一个"
     );
     assert!(
         frame[(column, row)].modifier.contains(Modifier::BOLD),
-        "and it is bold"
+        "而且它是粗的"
     );
     for label in ["轨迹", "文件"] {
         let (column, row) = tab_cell(&frame, 120, 24, label);
         assert_eq!(
             frame[(column, row)].fg,
             Color::DarkGray,
-            "{label} is not the selected page"
+            "{label} 不是选中的那一页"
         );
         assert!(
             !frame[(column, row)].modifier.contains(Modifier::BOLD),
-            "{label} is not bold"
+            "{label} 不粗"
         );
     }
 }
@@ -1020,39 +1020,39 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains(wording::tab_placeholder()),
-        "the usage page is showing: {text}"
+        "在显示调用量那一页：{text}"
     );
 
-    // 轨迹 is not built yet, so it says so rather than showing made-up data.
+    // 轨迹 还没做，所以它照实说，而不是显示编出来的数据。
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
     state.mouse(click(column, row));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains(wording::tab_placeholder()),
-        "the placeholder is on the page: {text}"
+        "页面上是那句占位：{text}"
     );
-    assert!(!text.contains("token"), "and the readings are not: {text}");
-    // Which leaves the status row as the only reading — the accepted cost of the
-    // placeholder pages (spec §3).
+    assert!(!text.contains("token"), "而读数不在：{text}");
+    // 于是状态行成了唯一一项读数 —— 这是占位页被接受的
+    // 代价（spec §3）。
     assert!(
         text.contains("上下文"),
-        "the status row's share is still there: {text}"
+        "状态行的占比还在：{text}"
     );
 
-    // The selected label moved with it.
+    // 选中的标签跟着它一起挪了。
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
     assert_eq!(frame[(column, row)].fg, Color::LightMagenta);
 
-    // And back: 调用量 restores the fields.
+    // 再切回来：调用量恢复了那些字段。
     let (column, row) = tab_cell(&frame, 120, 24, "调用量");
     state.mouse(click(column, row));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("token"), "the readings are back: {text}");
+    assert!(text.contains("token"), "读数回来了：{text}");
     assert!(
         !text.contains(wording::tab_placeholder()),
-        "and the placeholder is gone: {text}"
+        "占位不见了：{text}"
     );
 }
 
@@ -1060,9 +1060,9 @@ fn clicking_a_tab_switches_the_sidebar_page() {
 fn only_the_tab_labels_answer_a_click() {
     use fs_agent::render::wording;
 
-    // The rule that fills the rest of the tab row, and the glyph between two labels,
-    // are not controls: a click there does nothing, because nothing there was painted
-    // as a tab (spec §3).
+    // 填满页签行剩下部分的那条横线，以及两个标签之间的那个字形，
+    // 都不是控件：点在那儿什么也不发生，因为那儿没有东西
+    // 被画成页签（spec §3）。
     let mut state = state();
     let frame = buffer(120, 24, &mut state);
     let (_, row) = tab_cell(&frame, 120, 24, "调用量");
@@ -1070,20 +1070,20 @@ fn only_the_tab_labels_answer_a_click() {
     let fill = inside_the_sidebar
         .clone()
         .find(|x| frame[(*x, row)].symbol() == "─")
-        .expect("the row fills after the labels");
+        .expect("标签之后那一行是填充");
     let separator = inside_the_sidebar
         .clone()
         .find(|x| frame[(*x, row)].symbol() == "│")
-        .expect("the labels are separated");
+        .expect("标签之间有分隔");
 
     for column in [separator, fill] {
         state.mouse(click(column, row));
         let text = screen(120, 24, &mut state).join("\n");
         assert!(
             !text.contains(wording::tab_placeholder()),
-            "a click at column {column} is not a tab: {text}"
+            "点在第 {column} 列不是一个页签：{text}"
         );
-        assert!(text.contains("token"), "the page did not move: {text}");
+        assert!(text.contains("token"), "页没有动：{text}");
     }
 }
 
@@ -1092,12 +1092,12 @@ fn a_question_keeps_the_tabs_from_answering() {
     use fs_agent::permissions::Answer;
     use fs_agent::render::wording;
 
-    // A question owns the pointer outright: a click on the tab bar reaches the
-    // question's handler and stops there. It must not switch the page, and — the trap
-    // this test was written for — it must not close the question either: the frames
-    // that paint the tabs and the overlay record their hit rectangles into one table,
-    // so a click on a tab arrives at the question as an action it does not own
-    // (spec §7, §9).
+    // 一个问句独占了指针：点在页签条上会到达那个问句的
+    // 处理器，然后停在那儿。它不该切页，而且 —— 这个测试正是
+    // 为这个坑写的 —— 它也不该把问句关掉：画页签的那几帧
+    // 和覆盖层把各自的命中矩形记进同一张表，
+    // 所以点在页签上的点击是作为一个它并不拥有的动作到达问句的
+    // （spec §7、§9）。
     let mut state = idle();
     let (request, mut answer) = ask_permission();
     state.request(request);
@@ -1108,22 +1108,22 @@ fn a_question_keeps_the_tabs_from_answering() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("权限询问"),
-        "the question is still up: {text}"
+        "问句还在：{text}"
     );
     assert!(
         !text.contains(wording::tab_placeholder()),
-        "and the page did not switch under it: {text}"
+        "它下面那一页也没有被切走：{text}"
     );
     assert!(
         answer.try_recv().is_err(),
-        "and nothing was answered behind the reader's back"
+        "而且没有人在读者背后作答"
     );
-    // It is still answerable, which is what "still up" has to mean.
+    // 它仍然答得了，这才是「还在」该有的意思。
     state.key(Key::Char('y'));
     assert_eq!(
         answer.try_recv().unwrap(),
         Answer::Allow,
-        "the question can still be answered"
+        "这个问句仍然答得了"
     );
 }
 
@@ -1131,14 +1131,14 @@ fn a_question_keeps_the_tabs_from_answering() {
 fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     use fs_agent::render::wording;
 
-    // Below 80 columns the sidebar is hidden whole, so the labels are not drawn at all
-    // — and a click where a tab would have been is an ordinary click on the main
-    // column (spec §2, §3).
+    // 80 列以下左栏整条藏起来，所以标签根本不会画出来
+    // —— 而点在一个本该是页签的位置上，就是主列上一次
+    // 普通的点击（spec §2、§3）。
     let mut state = state();
     let frame = buffer(60, 24, &mut state);
     assert!(
         find_cell(&frame, 60, 24, "调").is_none(),
-        "there is no tab bar at 60 columns"
+        "60 列下没有页签条"
     );
     for (column, row) in [(2u16, 1u16), (4, 3), (2, 8)] {
         state.mouse(click(column, row));
@@ -1146,11 +1146,11 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     let text = screen(60, 24, &mut state).join("\n");
     assert!(
         !text.contains(wording::tab_placeholder()),
-        "and nothing switched a page that is not there: {text}"
+        "而没有东西切走了并不存在的那一页：{text}"
     );
 }
 
-/// The rail's column at 120x24: one character per transcript row, top to bottom.
+/// 120x24 下回合条那一列：每个转录行一个字符，自上而下。
 fn turn_rail_cells(state: &mut TuiState) -> Vec<char> {
     let rows = screen(120, 24, state);
     let transcript = transcript_rows(&rows);
@@ -1166,7 +1166,7 @@ fn turn_rail_cells(state: &mut TuiState) -> Vec<char> {
         .collect()
 }
 
-/// The rail's column as a compact string: `⋮` and `┃`/`┊` only, blanks dropped.
+/// 回合条那一列压成的紧凑串：只有 `⋮` 与 `┃`/`┊`，空格丢掉。
 fn turn_rail_shape(state: &mut TuiState) -> String {
     turn_rail_cells(state)
         .into_iter()
@@ -1174,7 +1174,7 @@ fn turn_rail_shape(state: &mut TuiState) -> String {
         .collect()
 }
 
-/// One `MessageCompleted` from the **user**.
+/// 一条来自 **user** 的 `MessageCompleted`。
 fn user_message(seq: u64, text: &str) -> fs_agent::render::RenderEvent {
     use fs_agent::events::{Event, EventPayload, Role, SpeakerId};
     fs_agent::render::RenderEvent::Logged(Event::new(
@@ -1188,7 +1188,7 @@ fn user_message(seq: u64, text: &str) -> fs_agent::render::RenderEvent {
     ))
 }
 
-/// One `TurnStarted`.
+/// 一条 `TurnStarted`。
 fn turn_started(seq: u64) -> fs_agent::render::RenderEvent {
     use fs_agent::events::{Event, EventPayload, SpeakerId};
     fs_agent::render::RenderEvent::Logged(Event::new(
@@ -1201,8 +1201,8 @@ fn turn_started(seq: u64) -> fs_agent::render::RenderEvent {
     ))
 }
 
-/// One whole turn: the user's question, the turn's start, one answer and the turn's
-/// end. Four source lines, so a test that wants N units asks for N of these.
+/// 一整个回合：用户的问题、回合的开始、一条答复与回合的
+/// 结束。四行源代码，所以想要 N 个单元的测试就要 N 份这个。
 fn a_turn(state: &mut TuiState, seq: u64, question: &str) {
     state.apply(user_message(seq, question));
     state.apply(turn_started(seq + 1));
@@ -1210,14 +1210,14 @@ fn a_turn(state: &mut TuiState, seq: u64, question: &str) {
     state.apply(turn_ended(seq + 3));
 }
 
-/// `count` whole turns, numbered from zero.
+/// `count` 个完整回合，从零编号。
 fn turns(state: &mut TuiState, count: u64) {
     for index in 0..count {
         a_turn(state, index * 4 + 1, &format!("问题 {index}"));
     }
 }
 
-/// The first transcript row's text, which is where a rail jump lands.
+/// 转录第一行的文本，回合条跳转就落在这儿。
 fn top_transcript_row(state: &mut TuiState) -> String {
     let rows = screen(120, 24, state);
     rows[TRANSCRIPT_TOP].clone()
@@ -1225,33 +1225,33 @@ fn top_transcript_row(state: &mut TuiState) -> String {
 
 #[test]
 fn the_rail_grows_one_cell_per_turn_and_keeps_the_newest_at_the_foot() {
-    // An empty session has an empty column: no cells, and no `⋮` pretending there is
-    // history above (spec §4).
+    // 空会话的空列：没有格子，也没有 `⋮` 假装上面
+    // 有历史（spec §4）。
     let mut fresh = state();
     assert_eq!(turn_rail_shape(&mut fresh), "");
 
     let mut state = state();
     turns(&mut state, 3);
-    // Three turns, bottom-anchored, and the newest is the bright one.
+    // 三个回合，底端锚定，最新的是亮的那一个。
     assert_eq!(turn_rail_shape(&mut state), "┊┊┃");
     assert_eq!(
         turn_rail_cells(&mut state).len(),
         transcript_rows_at_120x24(),
-        "the column is as tall as the transcript and no taller"
+        "这一列和转录一样高，不再高一丝"
     );
     let cells = turn_rail_cells(&mut state);
     assert!(
         cells[transcript_rows_at_120x24() - 3..]
             .iter()
             .all(|ch| *ch != ' '),
-        "the three cells sit at the foot: {cells:?}"
+        "三个格子坐在脚上：{cells:?}"
     );
 
     turns(&mut state, 1);
     assert_eq!(
         turn_rail_shape(&mut state),
         "┊┊┊┃",
-        "the fourth turn adds a cell"
+        "第四个回合添一个格子"
     );
 }
 
@@ -1261,31 +1261,31 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     turns(&mut state, 3);
     assert!(
         !turn_rail_shape(&mut state).contains('⋮'),
-        "nothing is cut when everything fits"
+        "全都放得下时什么都没被裁掉"
     );
 
-    // More turns than rows: the newest are shown and the top cell says older ones are
-    // above. Nothing is cut at the bottom, because the viewport is at the bottom.
+    // 回合比行多：显示最新的那些，顶上那一格说明上面
+    // 还有更早的。底下什么都没被裁，因为视口就在底部。
     let mut scrolled = TuiState::new(facts());
     turns(&mut scrolled, 30);
     let shape = turn_rail_shape(&mut scrolled);
     assert_eq!(
         shape.chars().next(),
         Some('⋮'),
-        "the top cell says there is more above: {shape}"
+        "顶上那一格说上面还有：{shape}"
     );
     assert_eq!(
         shape.chars().last(),
         Some('┃'),
-        "and the newest turn is the foot: {shape}"
+        "而最新的回合在脚上：{shape}"
     );
     assert_eq!(
         shape.matches('┃').count() + shape.matches('┊').count(),
         transcript_rows_at_120x24() - 1,
-        "the mark costs one cell: {shape}"
+        "标记占掉一格：{shape}"
     );
 
-    // Park the viewport at the very top: now it is the units **below** that are cut.
+    // 把视口停在最顶上：这时被裁的是**下面**那些单元。
     let _ = screen(120, 24, &mut scrolled);
     for _ in 0..40 {
         scrolled.key(fs_agent::render::Key::PageUp);
@@ -1294,44 +1294,44 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     assert_eq!(
         shape.chars().last(),
         Some('⋮'),
-        "the foot now says there is more below: {shape}"
+        "这下脚上那一格说下面还有：{shape}"
     );
     assert_eq!(
         shape.chars().next(),
         Some('┃'),
-        "and the focus is the oldest turn on screen: {shape}"
+        "焦点是屏幕上最老的回合：{shape}"
     );
     assert_eq!(
         shape.matches('┃').count(),
         1,
-        "exactly one cell is the focus: {shape}"
+        "恰好一个格子是焦点：{shape}"
     );
 }
 
 #[test]
 fn the_rail_window_follows_the_focus_wherever_the_viewport_is() {
-    // The prototype's hole: keeping only the newest cells left a viewport parked on an
-    // old unit with **no** bright cell at all
-    // (`prototype/frames/120x24-rail-30-units-focus-12-gap.txt`). The window moves with
-    // the focus instead, so there is always exactly one — this is that regression.
+    // 原型里的那个洞：只留最新的几格，会让视口停在一个
+    // 老单元上，**一个**亮格都没有
+    // （`prototype/frames/120x24-rail-30-units-focus-12-gap.txt`）。窗口改为跟着
+    // 焦点走，所以永远恰好有一个 —— 这就是那条回归。
     let mut state = state();
     turns(&mut state, 30);
     let _ = screen(120, 24, &mut state);
 
     let visible = transcript_rows_at_120x24();
-    // Walk up one page at a time and check the invariant at every stop, including the
-    // ones where the focus lands in the middle of the unit list.
+    // 一次往上一页，每一停都验一遍不变量，
+    // 包括焦点落在单元表中间的那些位置。
     for _ in 0..20 {
         state.key(fs_agent::render::Key::PageUp);
         let shape = turn_rail_shape(&mut state);
         assert_eq!(
             shape.matches('┃').count(),
             1,
-            "exactly one bright cell at every position: {shape}"
+            "每一个位置上恰好有一个亮格：{shape}"
         );
         assert!(
             shape.chars().filter(|ch| *ch != '⋮').count() <= visible,
-            "and no more cells than the column has rows: {shape}"
+            "格子数不超过这一列的行数：{shape}"
         );
     }
 }
@@ -1342,44 +1342,44 @@ fn the_focus_is_the_unit_the_top_row_belongs_to() {
     turns(&mut state, 30);
     let _ = screen(120, 24, &mut state);
 
-    // At the bottom the focus is the newest unit, whatever the top row happens to be —
-    // the viewport is following the conversation, and that is what "newest" means.
+    // 在底部时焦点是最新的单元，不管顶行落到哪儿 ——
+    // 视口在跟对话，这就是「最新」的意思。
     assert_eq!(
         turn_rail_cells(&mut state)
             .iter()
             .rposition(|ch| *ch == '┃'),
         Some(transcript_rows_at_120x24() - 1),
-        "following the bottom puts the focus on the last row"
+        "跟着底部走，焦点就落在最后一行"
     );
 
-    // Scrolled away, the focus is the unit the viewport's top row is inside.
+    // 滚开之后，焦点是视口顶行落在里面的那个单元。
     let question = top_transcript_row(&mut state);
     state.key(fs_agent::render::Key::PageUp);
     let shape = turn_rail_shape(&mut state);
-    assert_eq!(shape.matches('┃').count(), 1, "one focus cell: {shape}");
+    assert_eq!(shape.matches('┃').count(), 1, "一个焦点格：{shape}");
     assert_ne!(
         turn_rail_cells(&mut state)
             .iter()
             .rposition(|ch| *ch == '┃'),
         Some(transcript_rows_at_120x24() - 1),
-        "and it is no longer the newest: {shape}"
+        "而且它不再是最新的：{shape}"
     );
-    assert!(!question.is_empty(), "the top row had text: {question:?}");
+    assert!(!question.is_empty(), "顶行上有文本：{question:?}");
 }
 
 #[test]
 fn clicking_a_rail_cell_jumps_to_that_turns_question() {
-    // The story the rail exists for: click a cell, land on the question you asked —
-    // top-aligned, so every jump lands where the eye expects (spec §4).
+    // 回合条存在就是为了这件事：点一格，落到你问过的那句问题
+    // 上 —— 顶端对齐，所以每次跳转都落在眼睛预期的地方（spec §4）。
     let mut state = state();
     turns(&mut state, 30);
     let _ = screen(120, 24, &mut state);
 
-    // The window is bottom-anchored under a `⋮`: at 120x24 the transcript is fourteen
-    // rows, so one is the mark and thirteen are cells — units 17 through 30, top to
-    // bottom. Offset 1 is therefore unit 17 (thirteen turns back from the end) and
-    // offset 5 is unit 21 (nine back). Each is clicked in a fresh state, because a
-    // jump moves the viewport — and with it the window of cells.
+    // 窗口底端锚定在一个 `⋮` 下面：120x24 下转录是十四
+    // 行，所以一行是标记、十三行是格子 —— 单元 17 到 30，自上
+    // 而下。所以偏移 1 是单元 17（从末尾往回数十三个回合），
+    // 偏移 5 是单元 21（往回九个）。每一个都在全新状态里点，因为
+    // 跳转会移动视口 —— 也移动格子的窗口。
     for (offset, unit) in [(1usize, 17u64), (5, 21)] {
         let mut state = TuiState::new(facts());
         turns(&mut state, 30);
@@ -1388,11 +1388,11 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
         let mark = cells
             .iter()
             .position(|ch| *ch == '⋮')
-            .expect("the column is cut at the top");
+            .expect("这一列在顶端被裁");
         state.mouse(click(RAIL_AT_120, (TRANSCRIPT_TOP + mark + offset) as u16));
         assert!(
             top_transcript_row(&mut state).contains(&format!("[用户] 问题 {unit}")),
-            "the jump lands on that turn's own question: {:?}",
+            "跳转落在那一个回合自己的问题上：{:?}",
             top_transcript_row(&mut state)
         );
     }
@@ -1400,9 +1400,9 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
 
 #[test]
 fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
-    // The newest unit has less than a screenful left, so the jump clamps — which is the
-    // same rule read at the end of the transcript rather than a special case, and it is
-    // why clicking the focus cell usually looks like nothing happened (spec §4).
+    // 最新的单元剩下不到一屏，所以跳转会被夹住 —— 这是同一条
+    // 规矩在转录末尾的读法，不是特例，也正是
+    // 点焦点格通常看起来什么都没发生的原因（spec §4）。
     let mut state = state();
     turns(&mut state, 30);
     let _ = screen(120, 24, &mut state);
@@ -1415,12 +1415,12 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
     assert_eq!(
         top_transcript_row(&mut state),
         before,
-        "clicking the foot cell keeps the viewport where it was"
+        "点脚上那一格，视口留在原处"
     );
     assert_eq!(
         turn_rail_cells(&mut state).last(),
         Some(&'┃'),
-        "and the viewport is still following the newest turn"
+        "视口还在跟着最新的回合"
     );
 }
 
@@ -1428,9 +1428,9 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
 fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     use fs_agent::events::{Event, EventPayload, Role, RoundMode, SpeakerId, StopReason};
 
-    // `speaker_order` with more than one debater is what makes a session a discussion,
-    // and a discussion counts its rounds — `CONTEXT.md` keeps 轮次 and 回合 apart
-    // (spec §4).
+    // 有不止一个讨论者的 `speaker_order` 才让一场会话成为讨论，
+    // 而讨论会数自己的轮次 —— `CONTEXT.md` 把 轮次 与 回合 分开
+    // （spec §4）。
     let mut state = TuiState::new(facts_with_roster(&["kimi", "deepseek"]));
     let kimi = SpeakerId::Debater("kimi".into());
     state.apply(user_message(1, "讨论题目"));
@@ -1464,21 +1464,21 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
         }
     }
 
-    // Three rounds and three `TurnEnded`s: the rail counts the rounds.
+    // 三个轮次和三条 `TurnEnded`：回合条数的是轮次。
     assert_eq!(turn_rail_shape(&mut state), "┊┊┃");
 
-    // The first round's head is the user's question — the one message a discussion does
-    // carry, recorded before the first round opened...
+    // 第一个轮次的开头是用户的问题 —— 讨论确实会带的那一条
+    // 消息，记在第一个轮次开始之前……
     let first = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 3) as u16;
     state.mouse(click(RAIL_AT_120, first));
     assert!(
         top_transcript_row(&mut state).contains("[用户] 讨论题目"),
-        "the session's question is where the first cell lands: {:?}",
+        "会话的问题就是第一个格子落的地方：{:?}",
         top_transcript_row(&mut state)
     );
 
-    // ...and a later round has no user message of its own, so its cell lands on the
-    // round's opening line — the spec's fallback for a unit with nothing to aim at.
+    // ……而后面的轮次没有自己的用户消息，所以它的格子落在
+    // 轮次的开场行上 —— spec 给「没什么可瞄的单元」的兜底。
     let mut later = TuiState::new(facts_with_roster(&["kimi", "deepseek"]));
     later.apply(user_message(1, "讨论题目"));
     for round in 0..3u32 {
@@ -1507,8 +1507,8 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
             )));
         }
     }
-    // Padding, so the transcript is taller than the pane and a jump has somewhere to
-    // land: a notice is neither a user message nor a boundary, so the units stand.
+    // 垫料，让转录比窗格高，跳转才有地方
+    // 落：提示既不是用户消息也不是边界，所以单元照旧。
     for index in 0..40 {
         later.apply(fs_agent::render::RenderEvent::Notice(format!(
             "第 {index} 行"
@@ -1519,7 +1519,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     later.mouse(click(RAIL_AT_120, second));
     assert!(
         top_transcript_row(&mut later).contains("── 第 1 轮"),
-        "a round with no user message of its own lands on its first line: {:?}",
+        "没有自己用户消息的轮次落在它的第一行上：{:?}",
         top_transcript_row(&mut later)
     );
 }
@@ -1533,61 +1533,61 @@ fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
         state.apply(RenderEvent::Notice(format!("第 {index} 行")));
     }
 
-    // At rest the viewport follows the newest row.
+    // 静止时视口跟着最新的那一行。
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("第 39 行"), "the newest row is on screen");
-    assert!(!text.contains("第 0 行"), "the oldest has scrolled off");
+    assert!(text.contains("第 39 行"), "最新的那一行在屏幕上");
+    assert!(!text.contains("第 0 行"), "最老的那一行已经滚出去了");
 
-    // PgUp leaves the bottom and shows older rows. One page is the pane's own
-    // height, so the row at the top is derived from what the pane can show rather
-    // than remembered — the mark header changed it, and a fixed row number would
-    // have to change again the next time the ladder moves.
+    // PgUp 离开底部、显示更早的行。一页就是窗格自己的
+    // 高度，所以顶行是从窗格能显示什么推出来的，而不是
+    // 记住的 —— 标记表头改过它，而一个写死的行号
+    // 下次阶梯一挪还得再改。
     let visible = transcript_rows_at_120x24();
     state.key(Key::PageUp);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("第 39 行"),
-        "the newest row gives way: {text}"
+        "最新的那一行让位了：{text}"
     );
     assert!(
         text.contains(&format!("第 {} 行", 40 - visible)),
-        "older rows appear: {text}"
+        "更早的那些行出现了：{text}"
     );
 
-    // Ctrl-G comes back, and the viewport follows again.
+    // Ctrl-G 回来，视口又跟上了。
     state.key(Key::CtrlG);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("第 39 行"), "back at the bottom: {text}");
+    assert!(text.contains("第 39 行"), "回到最底下：{text}");
     assert!(
         !text.contains("第 20 行"),
-        "and the old rows are gone: {text}"
+        "那些老行不见了：{text}"
     );
 }
 
-/// How many transcript rows a 120x24 frame shows.
+/// 120x24 的一帧显示多少行转录。
 ///
-/// A page step and a wheel's reach are both measured in these, so tests that count
-/// rows ask for the number instead of remembering it — the shell's chrome has moved
-/// it more than once.
+/// 一次翻页与滚轮的一程都拿这些来量，所以数行的测试
+/// 要这个数而不是记住它 —— 外壳让过的
+/// 东西已经不止一次挪动过它。
 fn transcript_rows_at_120x24() -> usize {
     transcript_rows(&screen(120, 24, &mut state()))
 }
 
-/// The 120x24 main column, in columns: the wide sidebar (40) and its divider take
-/// 1 through 41, so the main column runs 42..119 — and its transcript keeps the last
-/// two of those for the scrollbar (117) and the rail (118), which leaves 42..116 for
-/// text.
+/// 120x24 的主列，按列算：宽档左栏（40）加它的分隔线占
+/// 1 到 41，所以主列是 42..119 —— 它的转录把其中最后
+/// 两列留给滚动条（117）与回合条（118），剩下 42..116 给
+/// 文本。
 const MAIN_LEFT_AT_120: u16 = 42;
 const TRANSCRIPT_TEXT_RIGHT_AT_120: u16 = 117;
 const SCROLLBAR_AT_120: u16 = 117;
 const RAIL_AT_120: u16 = 118;
 
-/// The transcript's text at 120x24, one string per display row.
+/// 120x24 下转录的文本，每个显示行一个字符串。
 ///
-/// The scrollbar's column is **not** in it: the scrollbar is drawn from the number of
-/// rows below the viewport, so it goes on moving while a detail overlay has the pane
-/// frozen — comparing it would be comparing the indicator against the reader's
-/// position rather than the text against the text.
+/// 滚动条那一列**不**在里面：滚动条是按视口下面还有
+/// 多少行画出来的，所以详情覆盖层把窗格冻住时它还在动
+/// —— 比它就等于拿指示器比读者的
+/// 位置，而不是拿文本比文本。
 fn transcript_text(frame: &Buffer, rows: usize) -> Vec<String> {
     (TRANSCRIPT_TOP..TRANSCRIPT_TOP + rows)
         .map(|y| {
@@ -1601,7 +1601,7 @@ fn transcript_text(frame: &Buffer, rows: usize) -> Vec<String> {
         .collect()
 }
 
-/// The index of the first `第 N 行` notice visible on screen, if any.
+/// 屏幕上可见的第一条 `第 N 行` 提示的下标，如果有的话。
 fn first_notice(rows: &[String]) -> Option<usize> {
     rows.iter().find_map(|row| {
         let rest = row.split("第 ").nth(1)?;
@@ -1610,7 +1610,7 @@ fn first_notice(rows: &[String]) -> Option<usize> {
     })
 }
 
-/// The first cell holding `needle`, as `(column, row)`.
+/// 第一个装着 `needle` 的格子，写成 `(column, row)`。
 fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
     (0..height).find_map(|y| {
         (0..width)
@@ -1623,9 +1623,9 @@ fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u
 fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
     use fs_agent::render::{Key, RenderEvent};
 
-    // Every notice wraps to three display rows, so a cap counted in display rows
-    // would keep a third of this history. That is the distinction this pins: the cap
-    // is by source line, so the same history survives at any terminal width (spec §3).
+    // 每条提示都折成三个显示行，所以按显示行算的上限
+    // 会把这批历史只留下三分之一。这就是这里钉住的区分：上限
+    // 按源代码行算，所以同一批历史在任何终端宽度下都留得住（spec §3）。
     let mut state = state();
     for index in 0..20_001 {
         state.apply(RenderEvent::Notice(format!(
@@ -1633,19 +1633,19 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
             "x".repeat(200)
         )));
     }
-    // One frame first: a page step is measured in the rows the reader can see.
+    // 先来一帧：一次翻页是按读者能看见的行来量的。
     let _ = screen(120, 24, &mut state);
 
-    // The oldest source line is gone, not merely scrolled off: paging all the way up
-    // must not bring it back, and the top is the line that followed it.
+    // 最老的源代码行是没了，不只是滚出去了：一路翻到顶
+    // 也不该把它带回来，而顶上那行就是紧跟在它后面的那一行。
     //
-    // "All the way up" is reached, not counted: a page step is a pane's worth of
-    // display rows, and each notice wraps to two of them, so the number of steps is a
-    // function of the terminal — asserting a step count would be asserting the mark
-    // header's height through three layers.
-    // A frame is only cheap relative to a page step, not free: 20 000 wrapped notices
-    // are ~40 000 display rows, so the walk checks its position every few hundred
-    // steps rather than after each one.
+    // 「一路翻到顶」是翻到的，不是数出来的：一次翻页是一窗格的
+    // 显示行，而每条提示折成两行，所以步数是终端的
+    // 函数 —— 断言步数等于隔三层去断言标记
+    // 表头的高度。
+    // 一帧只相对于一次翻页便宜，不是免费的：20 000 条折行提示
+    // 是约 40 000 显示行，所以这趟走每几百步
+    // 查一次位置，而不是每一步都查。
     let mut previous = None;
     for _ in 0..400 {
         for _ in 0..100 {
@@ -1661,12 +1661,12 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
     let rows = screen(120, 24, &mut state);
     assert!(
         !rows.join("\n").contains("第 0 行"),
-        "the oldest was dropped"
+        "最老的被丢掉了"
     );
     assert_eq!(
         first_notice(&rows),
         Some(1),
-        "the line after it is the oldest now"
+        "紧跟它后面的那一行现在是最老的"
     );
 }
 
@@ -1681,68 +1681,68 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     }
     let _ = screen(120, 24, &mut state);
 
-    // Scrolling up with nothing new to read: the indicator is only the way back.
+    // 没什么新东西可读时往上滚：指示器只是回去的路。
     state.key(Key::PageUp);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("点此到底"), "the way back is offered: {text}");
+    assert!(text.contains("点此到底"), "给出了回去的路：{text}");
     assert!(
         !text.contains("行新内容"),
-        "nothing has arrived yet: {text}"
+        "还没有东西到来：{text}"
     );
-    // One page up from the bottom leaves a page's overlap showing: the step is the
-    // pane's own height less the two rows the reader keeps, so where the viewport lands
-    // is derived from what the pane shows rather than remembered.
+    // 从底部往上一页，会留下一页的重叠：步长是
+    // 窗格自己的高度减去读者保住的那两行，所以视口落在
+    // 哪里是从窗格显示什么推出来的，不是记住的。
     let visible = transcript_rows_at_120x24();
     let after_page_up = first_notice(&screen(120, 24, &mut state));
     assert_eq!(
         after_page_up,
         Some(40 - visible - (visible - 2)),
-        "one page up lands on the pane's own height, not a remembered row"
+        "往上一页落在窗格自己的高度上，不是某个记住的行号"
     );
 
-    // A row arrives while the reader is away, and the count is what arrived — not
-    // everything that happens to be below the viewport.
+    // 读者不在的时候到了一行，而计数就是到的那一行 —— 不是
+    // 恰好落在视口下面的全部东西。
     state.apply(RenderEvent::Notice("新的一行".to_owned()));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("↓ 1 行新内容 · 点此到底"),
-        "one row arrived: {text}"
+        "到了一行：{text}"
     );
 
-    // The wheel moves three rows a notch, up and down.
+    // 滚轮一格挪三行，上下都是。
     let mouse = |kind| MouseEvent {
         kind,
         column: 10,
         row: 10,
         modifiers: KeyModifiers::empty(),
     };
-    // Notches move the viewport up and back; how many *notices* a notch crosses
-    // depends on how many rows the pane shows, so the two ends are compared with
-    // each other rather than with a remembered row — that is what "three rows a
-    // notch, and back" means at any terminal size.
+    // 一格把视口往上挪、再挪回来；一格跨过多少条*提示*
+    // 取决于窗格显示多少行，所以两端是拿彼此比，
+    // 而不是拿一个记住的行号比 —— 这就是「一格三行、
+    // 再回来」在任何终端尺寸下的意思。
     state.mouse(mouse(MouseEventKind::ScrollUp));
     let after_wheel_up = first_notice(&screen(120, 24, &mut state));
     assert!(
         after_wheel_up < after_page_up,
-        "the wheel moves the viewport up: {after_page_up:?} -> {after_wheel_up:?}"
+        "滚轮把视口往上挪：{after_page_up:?} -> {after_wheel_up:?}"
     );
     state.mouse(mouse(MouseEventKind::ScrollDown));
     assert_eq!(
         first_notice(&screen(120, 24, &mut state)),
         after_page_up,
-        "and one notch down returns to where it was"
+        "往下一格又回到原处"
     );
 
-    // A click on the indicator goes back to the bottom; a click anywhere else is
-    // ignored, because the transcript is the terminal's to select.
+    // 点指示器回到最底下；点别的地方都
+    // 不管，因为转录归终端选中。
     let frame = buffer(120, 24, &mut state);
-    let (column, row) = find_cell(&frame, 120, 24, "点").expect("the indicator is on screen");
-    // It stops one column short of the scrollbar: `点此到底` is eight columns wide
-    // and the transcript's last two columns belong to the scrollbar and the rail, so
-    // its last glyph must not straddle the scrollbar's column.
+    let (column, row) = find_cell(&frame, 120, 24, "点").expect("指示器在屏幕上");
+    // 它停在滚动条前面一列：`点此到底` 宽八列，
+    // 而转录的最后两列归滚动条与回合条，所以
+    // 它最后一个字形绝不能跨在滚动条那一列上。
     assert!(
         column + 8 <= SCROLLBAR_AT_120,
-        "the indicator stays left of the scrollbar, starting at {column}"
+        "指示器待在滚动条左边，从第 {column} 列起"
     );
     state.mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -1753,7 +1753,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     assert_eq!(
         first_notice(&screen(120, 24, &mut state)),
         after_page_up,
-        "a click in the transcript body changes nothing"
+        "点在转录正文上什么都不改"
     );
     state.mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -1762,10 +1762,10 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
         modifiers: KeyModifiers::empty(),
     });
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("新的一行"), "back at the bottom: {text}");
+    assert!(text.contains("新的一行"), "回到最底下：{text}");
     assert!(
         !text.contains("点此到底"),
-        "and the indicator is gone: {text}"
+        "指示器不见了：{text}"
     );
 }
 
@@ -1774,41 +1774,41 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
     use fs_agent::render::{Key, RenderEvent};
 
     let mut state = state();
-    // Long enough that two page steps still leave the top row short of the oldest:
-    // 40 notices are two pages at a 16-row transcript, which would pin the test's
-    // precondition to the shell's own chrome.
+    // 长到两次翻页之后顶行仍够不到最老的那条：
+    // 转录 16 行时 40 条提示算两页，那会把测试的前提
+    // 钉死在外壳自己的东西上。
     for index in 0..80 {
         state.apply(RenderEvent::Notice(format!("第 {index} 行")));
     }
 
-    // Following the bottom: a narrower terminal still follows the bottom.
+    // 跟着底部：窄一些的终端照样跟着底部。
     let narrowed = screen(80, 24, &mut state).join("\n");
     assert!(
         narrowed.contains("第 79 行"),
-        "still at the bottom: {narrowed}"
+        "仍在最底下：{narrowed}"
     );
 
-    // Scrolled away: the source line at the top is what survives the rewrap.
+    // 滚开时，顶上那行源代码行才是重折行后活下来的东西。
     let _ = screen(120, 24, &mut state);
     state.key(Key::PageUp);
     let one_page_up = first_notice(&screen(120, 24, &mut state));
     state.key(Key::PageUp);
     let before = first_notice(&screen(120, 24, &mut state));
-    // What this test is about is that the *same source line* stays pinned across the
-    // resize — so the precondition is "scrolled away from the bottom", not a
-    // particular page-step arithmetic.
+    // 这个测试要的是同一条源代码行在改尺寸前后
+    // 一直钉住 —— 所以前提是「离开底部」，而不是
+    // 某一套翻页算术。
     assert!(
         before < one_page_up,
-        "two pages up: {one_page_up:?} -> {before:?}"
+        "往上两页：{one_page_up:?} -> {before:?}"
     );
     assert!(
         before.is_some_and(|row| row > 0),
-        "and away from the oldest row: {before:?}"
+        "而且离开了最老的那一行：{before:?}"
     );
     let after = first_notice(&screen(80, 24, &mut state));
     assert_eq!(
         after, before,
-        "the same line is at the top after the resize"
+        "改尺寸后顶上还是同一行"
     );
 }
 
@@ -1816,10 +1816,10 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
 fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read() {
     use fs_agent::render::RenderEvent;
 
-    // At 120x24 the main column is 77 columns and the transcript's text is 75 of
-    // them: the last two belong to the scrollbar and the rail whether or not
-    // anything is drawn in them, so text wraps at 75 and never reflows because those
-    // columns are there (spec §1).
+    // 120x24 下主列是 77 列，转录的文本占其中 75
+    // 列：最后两列归滚动条与回合条，不管里面
+    // 画没画东西，所以文本在 75 列处折行，绝不会因为那两
+    // 列在那儿而重新排（spec §1）。
     const TEXT_X: u16 = 42;
     const SCROLLBAR_X: u16 = 117;
     let mut state = state();
@@ -1828,17 +1828,17 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     assert_eq!(
         frame[(TEXT_X, 1)].symbol(),
         "x",
-        "the row starts at the first column of the main column"
+        "这一行从主列的第一列开始"
     );
     assert_eq!(
         frame[(TEXT_X, 2)].symbol(),
         "x",
-        "76 columns of text overflow the 75-column text area onto a second row"
+        "76 列的文本溢出 75 列的文本区，落到第二行"
     );
     assert_eq!(
         frame[(SCROLLBAR_X, 6)].symbol(),
         " ",
-        "nothing is drawn in the reserved column while everything fits"
+        "全都放得下时预留的那一列什么都不画"
     );
 
     for index in 0..40 {
@@ -1851,47 +1851,47 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
         assert_ne!(
             frame[(SCROLLBAR_X, y)].symbol(),
             " ",
-            "a scrollbar appears once the transcript is longer than the pane, row {y}"
+            "转录一旦比窗格长就出现滚动条，在第 {y} 行"
         );
     }
 }
 
 #[test]
 fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_it() {
-    // The input sits under the transcript, the status row and their two rules; what a
-    // taller draft buys is transcript rows given up, not a block that moves up as a
-    // whole. Its floor is three rows, so an empty draft and a three-line one cost the
-    // transcript exactly the same — that is what the floor is for
-    // (`.scratch/tui-input-pulse/spec.md` §1).
+    // 输入区坐在转录、状态行与它们那两条横线下面；更高的草稿
+    // 换来的是让出的转录行，而不是一整块往上挪的
+    // 东西。它的地板是三行，所以空草稿与三行草稿花的转录行
+    // 完全一样 —— 地板就是为这个准备的
+    // （`.scratch/tui-input-pulse/spec.md` §1）。
     let mut state = state();
     let empty = screen(80, 24, &mut state);
     let rows = transcript_rows(&empty);
     assert_eq!(
         rows, 14,
-        "three input rows leave the transcript fourteen: {empty:#?}"
+        "输入区三行给转录留下十四行：{empty:#?}"
     );
     let input = TRANSCRIPT_TOP + rows + 3;
     assert!(
         empty[input].contains(editor::PROMPT),
-        "the prompt: {:?}",
+        "提示符：{:?}",
         empty[input]
     );
     assert!(
         empty[input + 1].trim_matches(['│', ' ']).is_empty()
             && empty[input + 2].trim_matches(['│', ' ']).is_empty(),
-        "and the two rows it holds open are blank, not a second block: {:?} / {:?}",
+        "它占住的那两行是空行，不是第二块：{:?} / {:?}",
         empty[input + 1],
         empty[input + 2]
     );
 
-    // Three lines of draft move nothing: the box was already that tall, so the
-    // transcript keeps every row it had.
+    // 三行草稿什么都不挪：这个框本来就这么高，所以
+    // 转录保住它原有的每一行。
     state.paste("第一行\n第二行\n第三行");
     let three = screen(80, 24, &mut state);
     let rows = transcript_rows(&three);
     assert_eq!(
         rows, 14,
-        "a three-row draft fits the floor, so the geometry does not move: {three:#?}"
+        "三行草稿在地板之内，所以几何不动：{three:#?}"
     );
     let input = TRANSCRIPT_TOP + rows + 3;
     assert!(three[input].contains("第一行"), "{:?}", three[input]);
@@ -1907,26 +1907,26 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     );
     assert!(
         three[input + 4].contains("ctrl-c"),
-        "the hints stay under the input: {:?}",
+        "提示行留在输入区下面：{:?}",
         three[input + 4]
     );
 
-    // From the fourth row on it grows again, one row of transcript per row of draft,
-    // and the ten-row cap still holds it (spec §1).
+    // 从第四行起它又长起来，草稿一行换转录一行，
+    // 十行的上限仍然按着它（spec §1）。
     state.paste("\n第四行\n第五行");
     let five = screen(80, 24, &mut state);
     assert_eq!(
         transcript_rows(&five),
         12,
-        "two rows past the floor cost the transcript two: {five:#?}"
+        "超地板两行让转录少两行：{five:#?}"
     );
     assert!(
         five.join("\n").contains("第五行"),
-        "the draft is on screen: {five:#?}"
+        "草稿在屏幕上：{five:#?}"
     );
 }
 
-/// One `UsageRecorded`, as the loop would log it.
+/// 一条 `UsageRecorded`，按循环会记下来的样子。
 fn usage(
     seq: u64,
     input: u64,
@@ -1950,7 +1950,7 @@ fn usage(
     ))
 }
 
-/// One `TurnEnded`.
+/// 一条 `TurnEnded`。
 fn turn_ended(seq: u64) -> fs_agent::render::RenderEvent {
     use fs_agent::events::{Event, EventPayload, SpeakerId, StopReason};
     fs_agent::render::RenderEvent::Logged(Event::new(
@@ -1962,43 +1962,43 @@ fn turn_ended(seq: u64) -> fs_agent::render::RenderEvent {
     ))
 }
 
-/// The sidebar's first page row: the row under the tab bar's bottom rule.
+/// 左栏第一页的那一行：页签条下横线下面那一行。
 ///
-/// The tab bar starts right under the identity — the mark's five rows, the text
-/// identity's one, or nothing at all — so a test that counts fields asks for the page
-/// rather than for a row number that has to be recomputed whenever that ladder moves.
+/// 页签条紧贴在身份下面 —— 标记那五行、文字
+/// 身份那一行，或者什么都没有 —— 所以数字段的测试要的是这一页
+/// 而不是某个一旦阶梯挪动就得重算的行号。
 fn sidebar_page(rows: &[String]) -> usize {
     let mut rules = rows
         .iter()
         .enumerate()
         .filter(|(_, row)| row.starts_with('├'))
         .map(|(y, _)| y);
-    rules.next().expect("the tab bar's top rule");
-    rules.next().expect("the tab bar's bottom rule") + 1
+    rules.next().expect("页签条的上横线");
+    rules.next().expect("页签条的下横线") + 1
 }
 
-/// The sidebar's half of one rendered row: from its own left border to the divider,
-/// with both columns taken off. Padding is kept, because whether a value is flush
-/// right or padded right is exactly what some of these tests are about.
+/// 某一渲染行的左栏那一半：从它自己的左边框到分隔线，
+/// 两列都取掉。留白保留，因为某个值是右贴齐还是右边留白
+/// 正是其中一些测试要问的。
 ///
-/// The divider's column is not always `│`: where a rule of the main column meets it
-/// the cell is a junction, and that ends the sidebar too.
+/// 分隔线那一列不总是 `│`：主列的横线碰到它时
+/// 那一格是个交叉字符，而它也照样终止左栏。
 fn sidebar_row(row: &str) -> String {
     let inner = row.trim_start_matches('│');
     let end = inner
         .char_indices()
         .find(|(_, ch)| matches!(ch, '│' | '├' | '┤'))
         .map(|(index, _)| index)
-        .expect("the divider ends the sidebar");
+        .expect("分隔线终止了左栏");
     inner[..end].to_owned()
 }
 
-/// The sidebar's half of one rendered row, by row index.
+/// 某一渲染行的左栏那一半，按行号取。
 fn sidebar_field(rows: &[String], row: usize) -> String {
     sidebar_row(&rows[row])
 }
 
-/// A sidebar field by its offset from the page's first row: `0` is `上下文`.
+/// 按它离这一页第一行的偏移取左栏字段：`0` 是 `上下文`。
 fn panel_field(rows: &[String], offset: usize) -> String {
     sidebar_field(rows, sidebar_page(rows) + offset)
 }
@@ -2006,91 +2006,91 @@ fn panel_field(rows: &[String], offset: usize) -> String {
 #[test]
 fn the_sidebar_shows_a_zero_and_a_dash_before_any_call() {
     let rows = screen(120, 24, &mut state());
-    // The model is the status row's now — it is visible whatever page the sidebar is
-    // showing and whatever width the sidebar has (spec §3).
+    // 模型现在归状态行 —— 不管左栏显示哪一页、
+    // 多宽，它都看得见（spec §3）。
     assert!(
         rows.iter()
             .any(|row| row.contains("模型 claude-sonnet-4-5")),
-        "the model is on the status row: {rows:#?}"
+        "模型在状态行上：{rows:#?}"
     );
     assert!(
         !panel_field(&rows, 0).contains("模型"),
-        "and nowhere in the sidebar: {:?}",
+        "而左栏里哪儿都没有：{:?}",
         panel_field(&rows, 0)
     );
     assert!(
         panel_field(&rows, 0).contains("上下文")
             && panel_field(&rows, 0).contains(fs_agent::render::wording::PANEL_UNKNOWN),
-        "no call has reported usage yet: {:?}",
+        "还没有调用报过用量：{:?}",
         panel_field(&rows, 0)
     );
     assert!(
         panel_field(&rows, 1).contains("token") && panel_field(&rows, 1).contains('0'),
-        "nothing spent yet: {:?}",
+        "还什么都没花：{:?}",
         panel_field(&rows, 1)
     );
     assert!(
         panel_field(&rows, 2).contains("回合") && panel_field(&rows, 2).contains('0'),
-        "no turn yet: {:?}",
+        "还没有回合：{:?}",
         panel_field(&rows, 2)
     );
     assert!(
         panel_field(&rows, 3).contains("输入") && panel_field(&rows, 3).contains('0'),
-        "nothing in: {:?}",
+        "输入是空的：{:?}",
         panel_field(&rows, 3)
     );
     assert!(
         panel_field(&rows, 5).contains("0 / 0"),
-        "and a cache that has never been consulted: {:?}",
+        "而缓存也从没被查过：{:?}",
         panel_field(&rows, 5)
     );
     assert!(
         !panel_field(&rows, 0).contains("费用") && !rows.join("\n").contains('$'),
-        "money is not shown at all (spec §8)"
+        "钱根本不显示（spec §8）"
     );
 }
 
 #[test]
 fn the_panel_reads_its_numbers_off_the_stream() {
     let mut state = state();
-    // input = cached + miss, and neither may be added to the total on top of input.
+    // input = cached + miss，两者都不能在 input 之上再加进总数。
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
     state.apply(turn_ended(2));
 
     let rows = screen(120, 24, &mut state);
     assert!(
         panel_field(&rows, 0).contains("9,000 / 200,000（4%）"),
-        "the window is the numerator of the last call: {:?}",
+        "窗口是最后一次调用的分子：{:?}",
         panel_field(&rows, 0)
     );
     assert!(
         panel_field(&rows, 1).contains("12,345 / 100,000"),
-        "spent is input plus output: {:?}",
+        "花掉的是输入加输出：{:?}",
         panel_field(&rows, 1)
     );
     assert!(
         panel_field(&rows, 2).contains('1'),
-        "one turn: {:?}",
+        "一个回合：{:?}",
         panel_field(&rows, 2)
     );
     assert!(
         panel_field(&rows, 3).contains("9,000"),
-        "input: {:?}",
+        "输入：{:?}",
         panel_field(&rows, 3)
     );
     assert!(
         panel_field(&rows, 4).contains("3,345"),
-        "output: {:?}",
+        "输出：{:?}",
         panel_field(&rows, 4)
     );
     assert!(
         panel_field(&rows, 5).contains("5,000 / 4,000"),
-        "the cache split: {:?}",
+        "缓存的拆分：{:?}",
         panel_field(&rows, 5)
     );
 }
 
-/// A state whose session has no token allowance at all.
+/// 会话完全没有 token 额度的状态。
 fn state_without_budget() -> TuiState {
     let mut facts = facts();
     facts.budget_limit = None;
@@ -2099,13 +2099,13 @@ fn state_without_budget() -> TuiState {
 
 #[test]
 fn the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must() {
-    // 80x14 is the narrow rung with room for all six readings: twelve content rows
-    // hold the text identity, the tab bar and six fields. What the 28-column rung
-    // costs is the percentage on the context row — `12,345 / 200,000（6%）` is 22
-    // columns and the value column is 21 (spec §2, §3).
+    // 80x14 是能容下全部六项读数的窄档：十二个内容行
+    // 装着文字身份、页签条与六个字段。28 列那一档的代价
+    // 是上下文行上的百分比 —— `12,345 / 200,000（6%）` 是 22
+    // 列，而值那一列是 21（spec §2、§3）。
     let mut state = state();
-    // The output is zero so that the spend — input plus output — is the same five
-    // digits the context pair needs, which is what makes the percentage too wide.
+    // 输出取零，好让花销 —— 输入加输出 —— 正好是上下文那一对
+    // 需要的五位数，这才让百分比也过宽。
     state.apply(usage(1, 12_345, 0, 5_000, 7_345));
     state.apply(turn_ended(2));
     let rows = screen(80, 14, &mut state);
@@ -2114,34 +2114,34 @@ fn the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must() {
     assert!(
         rows.iter()
             .any(|row| row.contains("模型 claude-sonnet-4-5")),
-        "the model is on the status row: {text}"
+        "模型在状态行上：{text}"
     );
     let panel = panel_text(80, 14, &mut state);
-    assert_eq!(panel.len(), 6, "all six readings fit: {panel:?}");
+    assert_eq!(panel.len(), 6, "六项读数全都放得下：{panel:?}");
     assert!(
         panel[0].starts_with("上下文") && panel[0].ends_with("12,345 / 200,000"),
-        "the context pair: {:?}",
+        "上下文那一对：{:?}",
         panel[0]
     );
     assert!(
         !panel[0].contains('（'),
-        "and the percentage is what the width takes: {:?}",
+        "而宽度拿走的就是百分比：{:?}",
         panel[0]
     );
-    assert!(text.contains("12,345 / 100,000"), "the spend: {text}");
-    assert!(text.contains("回合"), "the turns: {text}");
+    assert!(text.contains("12,345 / 100,000"), "花销：{text}");
+    assert!(text.contains("回合"), "回合数：{text}");
     assert!(
         panel[5].contains("5,000 / 7,345"),
-        "the cache split: {:?}",
+        "缓存的拆分：{:?}",
         panel[5]
     );
 }
 
 #[test]
 fn a_cache_split_too_wide_for_its_column_is_left_out() {
-    // The shell's two rungs both leave room for the split — 21 columns at the narrow
-    // rung and 33 at the wide one — so the drop is asserted where it lives, in the
-    // panel's own line builder, at a value column narrower than the pair (spec §3).
+    // 外壳的两档都给拆分留了地方 —— 窄档 21 列、
+    // 宽档 33 列 —— 所以这次丢下是在它所在之处断言的：
+    // 面板自己的行生成器，值列比那一对还窄时（spec §3）。
     use fs_agent::render::panel::Panel;
     use fs_agent::render::Block;
     use ratatui::layout::Rect;
@@ -2160,7 +2160,7 @@ fn a_cache_split_too_wide_for_its_column_is_left_out() {
     let mut panel = Panel::new();
     panel.observe(&block);
 
-    // 20 columns leaves 13 for a value; the split needs 21, so the row goes whole.
+    // 20 列给值留 13；拆分需要 21，所以整行都走。
     let narrow = panel.lines(&facts, Rect::new(0, 0, 20, 6));
     let narrow: Vec<String> = narrow
         .iter()
@@ -2173,9 +2173,9 @@ fn a_cache_split_too_wide_for_its_column_is_left_out() {
         .collect();
     assert!(
         !narrow.iter().any(|row| row.contains("1,234,567")),
-        "the cache row does not fit: {narrow:?}"
+        "缓存那一行放不下：{narrow:?}"
     );
-    // 29 leaves 22, which is exactly enough.
+    // 29 给值留 22，正好够。
     let wide = panel.lines(&facts, Rect::new(0, 0, 29, 6));
     let wide: String = wide
         .iter()
@@ -2183,7 +2183,7 @@ fn a_cache_split_too_wide_for_its_column_is_left_out() {
         .collect();
     assert!(
         wide.contains("1,234,567 / 9,876,543"),
-        "and comes back when it does: {wide}"
+        "放得下时它又回来了：{wide}"
     );
 }
 
@@ -2192,39 +2192,39 @@ fn a_session_with_no_allowance_shows_its_spend_alone() {
     let mut state = state_without_budget();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("12,345"), "what was spent: {text}");
+    assert!(text.contains("12,345"), "花了多少：{text}");
     assert!(
         !text.contains("12,345 / "),
-        "and no cap is invented for it: {text}"
+        "也没有给它编一个上限出来：{text}"
     );
 }
 
 #[test]
 fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
-    // The sidebar is a column of its own, so its height is the terminal's, not the
-    // transcript's: a ten-row draft eats transcript rows and leaves the readings
-    // exactly where they were (spec §2).
+    // 左栏是独立的一列，所以它的高度是终端的，不是
+    // 转录的：十行草稿吃掉转录行，而把读数留在
+    // 原处（spec §2）。
     let mut state = state();
     let draft: String = (0..10).map(|line| format!("第 {line} 行\n")).collect();
     state.paste(&draft);
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    assert!(text.contains("第 8 行"), "the draft is on screen: {text}");
+    assert!(text.contains("第 8 行"), "草稿在屏幕上：{text}");
     assert_eq!(
         transcript_rows(&rows),
         7,
-        "the draft takes the transcript's rows: {rows:#?}"
+        "草稿吃掉的是转录的行：{rows:#?}"
     );
     assert!(
         text.contains("上下文"),
-        "the sidebar keeps its readings: {text}"
+        "左栏保住它的读数：{text}"
     );
     assert!(
         text.contains("模型 claude-sonnet-4-5"),
-        "and the status row: {text}"
+        "状态行也一样：{text}"
     );
-    // The tab bar and the divider are still there: nothing about the sidebar's fate
-    // is the draft's to decide.
+    // 页签条与分隔线还在：左栏的命运不是
+    // 草稿能决定的。
     assert!(text.contains("调用量") && text.contains('┬'), "{text}");
 }
 
@@ -2232,38 +2232,38 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
 fn the_context_numerator_is_the_last_call_while_the_spend_accumulates() {
     let mut state = state();
     state.apply(usage(1, 9_000, 1_000, 5_000, 4_000));
-    // A one-digit percentage: `（15%）` would be one column too wide for a 22-column
-    // value and get dropped, which the width test covers.
+    // 一位数百分比：`（15%）` 对 22 列的值来说会宽一列
+    // 而被丢掉，宽度测试覆盖了这一点。
     state.apply(usage(2, 15_000, 2_000, 20_000, 10_000));
 
     let rows = screen(120, 24, &mut state);
     assert!(
         panel_field(&rows, 0).contains("15,000 / 200,000（7%）"),
-        "the window is what the *last* call carried: {:?}",
+        "窗口是*最后一次*调用携带的那个值：{:?}",
         panel_field(&rows, 0)
     );
     assert!(
         panel_field(&rows, 1).contains("27,000 / 100,000"),
-        "the spend is every call's input plus output: {:?}",
+        "花销是每一次调用的输入加输出：{:?}",
         panel_field(&rows, 1)
     );
     assert!(
         panel_field(&rows, 3).contains("24,000"),
-        "input summed: {:?}",
+        "输入求和：{:?}",
         panel_field(&rows, 3)
     );
     assert!(
         panel_field(&rows, 4).contains("3,000"),
-        "output summed: {:?}",
+        "输出求和：{:?}",
         panel_field(&rows, 4)
     );
 }
 
-/// The sidebar's page, one string per row, read out of a rendered frame.
+/// 左栏那一页，每行一个字符串，从渲染出来的帧里读出来。
 ///
-/// The page's rows run from under the tab bar to the last field the height ladder
-/// kept — the page rectangle is only as tall as its fields, so the first blank row is
-/// where it ends.
+/// 这一页的行从页签条下面开始，到高度阶梯留下的最后一个字段
+/// 为止 —— 页面矩形只和它的字段一样高，所以第一行空行
+/// 就是它结束的地方。
 fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let rows = screen(width, height, state);
     let mut out: Vec<String> = Vec::new();
@@ -2289,42 +2289,42 @@ fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
     state.apply(turn_ended(2));
     let panel = panel_text(120, 24, &mut state);
 
-    // Label column is six wide (`上下文` fills it), then one space, then the rest of
-    // the sidebar's forty columns as the value field — which numbers fill from the
-    // right.
+    // 标签列宽六（`上下文` 正好填满），然后一个空格，然后是
+    // 左栏剩下那三十四列作为值字段 —— 数字从
+    // 右边填起。
     assert_eq!(
         panel[0],
         format!("上下文{}{}", " ".repeat(13), "9,000 / 200,000（4%）"),
-        "the label field is six columns, then a space, then the value right-aligned in the other thirty-three"
+        "标签字段六列，然后一个空格，然后值在另外三十三列里右贴齐"
     );
     for row in [&panel[1], &panel[3], &panel[4], &panel[5]] {
         assert!(
             row.ends_with("000") || row.ends_with("345"),
-            "a number ends at the sidebar's right edge: {row:?}"
+            "数字停在左栏的右边缘上：{row:?}"
         );
     }
     for (index, row) in panel.iter().enumerate() {
         assert!(
             !row.ends_with(' '),
-            "row {index} has no padding after its value: {row:?}"
+            "第 {index} 行的值后面没有留白：{row:?}"
         );
     }
-    assert_eq!(panel.len(), 6, "the six readings: {panel:?}");
+    assert_eq!(panel.len(), 6, "六项读数：{panel:?}");
     for (index, row) in panel.iter().enumerate() {
         assert_eq!(
             text_columns(row),
             40,
-            "row {index} fills the sidebar: {row:?}"
+            "第 {index} 行填满左栏：{row:?}"
         );
     }
 }
 
 #[test]
 fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits() {
-    // The shell's narrow rung leaves 21 columns for a value and seven-digit counts
-    // fit in that, so the fallback is asserted where it lives: in the panel's own
-    // line builder, at the value column the prototype's 25-column panel used to have
-    // (spec §3 keeps the v1 path even though no rung triggers it).
+    // 外壳的窄档给值留 21 列，七位数的计数
+    // 放得下，所以这条兜底是在它所在之处断言的：面板自己的
+    // 行生成器里，值列取原型那 25 列面板曾经用过的宽度
+    // （spec §3 留着 v1 那条路径，虽然没有任何档位会触发它）。
     use fs_agent::render::panel::Panel;
     use fs_agent::render::Block;
     use ratatui::layout::Rect;
@@ -2342,8 +2342,8 @@ fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits
     };
     let mut panel = Panel::new();
     panel.observe(&block);
-    // 24 columns leaves 17 for a value: `1,235,567 / 100,000` needs 19, so the
-    // separators go and the digits stay.
+    // 24 列给值留 17：`1,235,567 / 100,000` 需要 19 列，所以
+    // 分隔符走，数字留下。
     let rows = panel.lines(&facts, Rect::new(0, 0, 24, 6));
     let row = |index: usize| -> String {
         rows[index]
@@ -2355,16 +2355,16 @@ fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits
     assert_eq!(
         row(1),
         "token   1235567 / 100000",
-        "spend without separators"
+        "花销不带分隔符"
     );
     assert_eq!(
         row(0),
         "上下文  1234567 / 200000",
-        "and the window without them"
+        "窗口也不带"
     );
 }
 
-/// The loop asking about a write, as it would through the console channel.
+/// 一次针对写操作的询问，按循环从 console 通道发起的样子。
 fn ask_permission() -> (
     fs_agent::render::ConsoleRequest,
     tokio::sync::oneshot::Receiver<fs_agent::permissions::Answer>,
@@ -2401,54 +2401,54 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("权限询问："), "{text}");
-    assert!(text.contains("[y] 允许"), "the keys come with it: {text}");
+    assert!(text.contains("[y] 允许"), "键位跟着它一起来：{text}");
 
     let modal = rows
         .iter()
         .position(|row| row.contains("权限询问"))
-        .expect("the overlay is on screen");
-    assert!(rows[modal].contains('│'), "inside a box: {:?}", rows[modal]);
+        .expect("覆盖层在屏幕上");
+    assert!(rows[modal].contains('│'), "在一个框里：{:?}", rows[modal]);
 
-    // The plan-mode gesture waits: a question owns the keyboard until it is answered
-    // (spec §9).
+    // 模式手势在等：一个问句独占键盘，直到它被回答
+    // （spec §9）。
     state.key(fs_agent::render::Key::BackTab);
     assert!(
         state.take_events().is_empty(),
-        "Shift-Tab is not a way out of a question"
+        "Shift-Tab 不是离开问句的路"
     );
 
-    // The main column holds the box's own two borders and nothing else: the sidebar's
-    // own columns are left of the scan, and the transcript's two trailing columns were
-    // blanked with the words the box covers.
+    // 主列里只有这个框自己的两条边框，别的什么都没有：左栏
+    // 自己那几列在扫描范围的左边，而转录最后那两列
+    // 随框盖住的那些字一起被抹白了。
     let row = modal as u16;
     let frame = buffer(120, 24, &mut state);
     let borders: Vec<u16> = (MAIN_LEFT_AT_120..TRANSCRIPT_TEXT_RIGHT_AT_120)
         .filter(|x| frame[(*x, row)].symbol() == "│")
         .collect();
-    assert_eq!(borders.len(), 2, "the box's borders: {borders:?}");
+    assert_eq!(borders.len(), 2, "这个框的边框：{borders:?}");
     assert!(
         borders[0] > MAIN_LEFT_AT_120 && borders[1] < TRANSCRIPT_TEXT_RIGHT_AT_120 - 1,
-        "and it is centred in the main column: {borders:?}"
+        "而且它在主列里居中：{borders:?}"
     );
-    // The box's own edges, walked out from its left border: the title is its first
-    // content row, and the rows that follow are the question's other parts.
+    // 这个框自己的几条边，从它的左边框往外走：标题是它的第一个
+    // 内容行，后面几行是问句的其余部分。
     let left = borders[0];
     let box_top = (0..row)
         .rev()
         .find(|y| frame[(left, *y)].symbol() == "┌")
-        .expect("the box's top border");
+        .expect("框的上边框");
     let box_bottom = (row..24u16)
         .find(|y| frame[(left, *y)].symbol() == "└")
-        .expect("the box's bottom border");
-    assert_eq!(box_top + 1, row, "the title leads the question");
-    // Centred in the main column, which runs from the frame's first content row to
-    // its last: the room above and below is the same, within the row the integer
-    // division leaves over.
+        .expect("框的下边框");
+    assert_eq!(box_top + 1, row, "标题领在问句前面");
+    // 在主列里居中，而主列从帧的第一个内容行一直到
+    // 它的最后一行：上下的余地一样，差的是整数
+    // 除法留下的那一行。
     let above = box_top - TRANSCRIPT_TOP as u16;
     let below = 22 - box_bottom;
     assert!(
         above.abs_diff(below) <= 1,
-        "centred: {above} rows above the box, {below} below"
+        "居中：框上面 {above} 行，下面 {below} 行"
     );
 }
 
@@ -2463,46 +2463,46 @@ fn a_question_splits_into_a_title_a_description_a_call_and_a_row_of_buttons() {
     let row_of = |needle: &str| {
         rows.iter()
             .position(|row| row.contains(needle))
-            .unwrap_or_else(|| panic!("{needle:?} is on screen:\n{text}"))
+            .unwrap_or_else(|| panic!("{needle:?} 在屏幕上：\n{text}"))
     };
 
-    // Four parts, top to bottom: what is asked, what the call is *for* (the same words
-    // the folded transcript line uses), the concrete call, and the keys that answer it.
-    // The title stopped naming the tool and the plain-sentence summary is gone, because
-    // the description row says the same thing in the words the reader has already seen
-    // (2026-09-23, user request: the popup repeated itself).
+    // 四个部分，自上而下：问的是什么、这次调用*为的*是什么（用的是
+    // 转录里那条折起行用过的同一句话）、具体的调用，以及回答它的键位。
+    // 标题不再点工具名，那句大白话摘要也没了，因为
+    // 描述行用读者已经见过的词说了同一件事
+    // （2026-09-23，用户要求：弹窗在重复自己）。
     let title = row_of("权限询问：");
     let description = row_of("调用 write_file a.rs");
     let call = row_of("write_file（path=a.rs）");
     let keys = row_of("[y] 允许");
     assert!(
         title < description && description < call && call < keys,
-        "title, description, call, then the buttons:\n{text}"
+        "标题、描述、调用，然后是按钮：\n{text}"
     );
-    // Each part keeps its own row: a command can no longer push the keys into the
-    // middle of a sentence, and the keys cannot bury the command.
+    // 每个部分保住自己那一行：命令再也不能把键位挤进
+    // 一句话中间，键位也埋不掉命令。
     assert!(
         !rows[keys].contains("path=a.rs") && !rows[keys].contains("权限询问"),
-        "the buttons have the row to themselves: {:?}",
+        "按钮独占那一行：{:?}",
         rows[keys]
     );
     assert!(
         !rows[call].contains("调用 write_file"),
-        "and the call row carries the call, not the description: {:?}",
+        "调用那一行带的是调用本身，不是描述：{:?}",
         rows[call]
     );
     assert!(
         !rows[description].contains("path=a.rs"),
-        "while the description says what it is for, not how to run it: {:?}",
+        "而描述说的是它为的什么，不是怎么跑它：{:?}",
         rows[description]
     );
 }
 
 #[test]
 fn a_cancelled_run_leaves_no_overlay_behind() {
-    // The overlay belongs to the run that raised the question. Once that run is over the
-    // loop is not waiting for an answer, so nothing may stay on screen to collect one —
-    // the next keypress would go to a question nobody is waiting for (spec §6, §9).
+    // 覆盖层属于提出这个问句的那一次运行。那次运行一结束，
+    // 循环就不再等答案，所以屏幕上不能留东西去收答案 ——
+    // 否则下一次按键会发给一个没人等的问句（spec §6、§9）。
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     let (ask, _answer) = ask_permission();
@@ -2510,7 +2510,7 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
     let rows = screen(120, 24, &mut state);
     assert!(
         rows.iter().any(|row| row.contains("权限询问")),
-        "the overlay is up while its run is:\n{}",
+        "它的运行还在时覆盖层也在：\n{}",
         rows.join("\n")
     );
 
@@ -2518,7 +2518,7 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
     let rows = screen(120, 24, &mut state);
     assert!(
         !rows.iter().any(|row| row.contains("权限询问")),
-        "the overlay went with the run:\n{}",
+        "运行走了，覆盖层也跟着走了：\n{}",
         rows.join("\n")
     );
 }
@@ -2528,9 +2528,9 @@ fn a_long_command_still_says_what_it_would_do() {
     use fs_agent::permissions::PermissionRequest;
     use fs_agent::render::AskRequest;
 
-    // The complaint this row answers: a wall of shell is not something a person can
-    // read, so the question says what the call is *for* — in the same words the folded
-    // transcript line uses — before the wall itself.
+    // 这一行回答的那句抱怨：一整墙 shell 不是人
+    // 读得下去的东西，所以问句先说这次调用*为的*是什么 —— 用的
+    // 是转录里那条折起行的同一句话 —— 然后才是那墙东西。
     let mut state = state();
     let (tx, _rx) = tokio::sync::oneshot::channel::<fs_agent::permissions::Answer>();
     state.request(ConsoleRequest::Ask(AskRequest {
@@ -2551,40 +2551,40 @@ fn a_long_command_still_says_what_it_would_do() {
     let description = rows
         .iter()
         .position(|row| row.contains("调用 bash"))
-        .unwrap_or_else(|| panic!("the description is on screen:\n{text}"));
+        .unwrap_or_else(|| panic!("描述在屏幕上：\n{text}"));
     let keys = rows
         .iter()
         .position(|row| row.contains("[y] 允许"))
-        .unwrap_or_else(|| panic!("the buttons are on screen:\n{text}"));
+        .unwrap_or_else(|| panic!("按钮在屏幕上：\n{text}"));
     assert!(
         description < keys,
-        "the description leads the buttons:\n{text}"
+        "描述领在按钮前面：\n{text}"
     );
     assert!(
         text.contains("git ls-files"),
-        "and the command is still there to read:\n{text}"
+        "而命令还留在那儿可读：\n{text}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// The mode cycle (`.scratch/todo-and-modes/spec.md` §1)
+// 模式循环（`.scratch/todo-and-modes/spec.md` §1）
 // ---------------------------------------------------------------------------
 
 #[test]
 fn shift_tab_cycles_the_status_row_through_the_three_modes_and_back() {
-    // The gesture at the frame: one press steps the mode the status row shows, and
-    // three presses return the session to the mode assembly gave it. The row is the
-    // only place the mode is visible — the plan-mode overlay and its instruction are
-    // gone with the mode itself — so this frame is the whole of the user story
-    // "see which mode I am in while I work".
+    // 手势打在帧上：按一下，状态行显示的模式往前走一档，
+    // 按三下把会话送回组装时给它的那一档。这一行是
+    // 模式唯一可见的地方 —— 计划模式覆盖层与它的注入
+    // 随模式本身一起没了 —— 所以这一帧就是整个用户故事
+    // 「干活的时候看得见自己在哪一档」。
     let mut state = idle();
     let first = screen(120, 24, &mut state).join("\n");
-    assert!(first.contains("模式 询问"), "the assembled mode: {first}");
+    assert!(first.contains("模式 询问"), "组装时给的那一档：{first}");
 
     for expected in ["模式 自动", "模式 只读", "模式 询问"] {
         state.key(Key::BackTab);
         let text = screen(120, 24, &mut state).join("\n");
-        assert!(text.contains(expected), "the row shows {expected}: {text}");
+        assert!(text.contains(expected), "这一行显示 {expected}：{text}");
     }
     assert_eq!(
         state.take_events(),
@@ -2593,15 +2593,15 @@ fn shift_tab_cycles_the_status_row_through_the_three_modes_and_back() {
             FrontEndEvent::CycleMode,
             FrontEndEvent::CycleMode
         ],
-        "one press, one gesture for the loop"
+        "按一下，给循环一个手势"
     );
 }
 
 #[test]
 fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
-    // `--mode readonly` (or `[permissions] mode`) has to be on the row from the first
-    // frame. A row that always started at 询问 would be a lie about the gate the user
-    // just configured.
+    // `--mode readonly`（或 `[permissions] mode`）必须从第一帧起
+    // 就出现在这一行上。一行老是从 询问 起步，就是对用户
+    // 刚配好的那道闸门撒了谎。
     let mut state = TuiState::new(SessionFacts {
         mode: fs_agent::permissions::Mode::Readonly,
         ..facts()
@@ -2612,22 +2612,22 @@ fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
 
 #[test]
 fn no_key_opens_a_plan_mode_any_more() {
-    // The gesture that used to exist leaves nothing behind: `Shift+Tab` steps the
-    // permission mode, and no key draws a plan overlay or injects an instruction
-    // (`.scratch/todo-and-modes/spec.md` §1).
+    // 曾经存在的那个手势什么都没留下：`Shift+Tab` 走的是
+    // 权限模式，而没有任何键会画计划覆盖层或注入一条指令
+    // （`.scratch/todo-and-modes/spec.md` §1）。
     let mut state = idle();
     state.key(Key::BackTab);
     let text = screen(120, 24, &mut state).join("\n");
     for gone in ["计划", "PLAN.md", "硬计划"] {
-        assert!(!text.contains(gone), "`{gone}` is gone: {text}");
+        assert!(!text.contains(gone), "`{gone}` 不见了：{text}");
     }
 }
 
 // ---------------------------------------------------------------------------
-// The sidebar's `todo` tab (`.scratch/todo-and-modes/spec.md` §4)
+// 左栏的 `todo` 页签（`.scratch/todo-and-modes/spec.md` §4）
 // ---------------------------------------------------------------------------
 
-/// A `todo` call's arguments: the whole list, each item `{content, status}`.
+/// 一次 `todo` 调用的参数：整份列表，每项是 `{content, status}`。
 fn todo_args(list: &[(&str, &str)]) -> serde_json::Value {
     serde_json::json!({
         "items": list
@@ -2645,8 +2645,8 @@ fn executor() -> fs_agent::events::SpeakerId {
     fs_agent::events::SpeakerId::Executor(fs_agent::events::ParticipantId::new("kimi-1"))
 }
 
-/// One `todo` call as the renderer sees it: the start carries the arguments, and the
-/// block is painted when the result lands — so both go in.
+/// 渲染器看到的一次 `todo` 调用：开始那条带着参数，
+/// 而结果落地时块才画出来 —— 所以两条都进。
 fn apply_todo(
     state: &mut TuiState,
     id: &str,
@@ -2676,8 +2676,8 @@ fn apply_todo(
     )));
 }
 
-/// The tab bar's own row, read off the frame. Empty when the terminal is too narrow
-/// for a sidebar, which is when there is no bar at all.
+/// 页签条自己那一行，从帧上读出来。终端太窄
+/// 放不下左栏时是空的，那时根本就没有条。
 fn tab_bar(state: &mut TuiState, width: u16, height: u16) -> String {
     let rows = screen(width, height, state);
     rows.iter()
@@ -2686,9 +2686,9 @@ fn tab_bar(state: &mut TuiState, width: u16, height: u16) -> String {
         .unwrap_or_default()
 }
 
-/// The sidebar's own columns, row by row. The transcript may well carry the same
-/// words — a `todo` call's arguments are on the folded line too — so an assertion
-/// about the **page** has to read the page's columns rather than the whole screen.
+/// 左栏自己那几列，逐行。转录很可能也带着同样的
+/// 词 —— 一次 `todo` 调用的参数也在折起行上 —— 所以针对
+/// **页面**的断言必须读这一页的列，而不是整个屏幕。
 fn sidebar_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
     let frame = buffer(width, height, state);
     (0..height)
@@ -2696,37 +2696,37 @@ fn sidebar_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
-/// The narrow rung's width, which is also where the sidebar stops being drawn.
+/// 窄档的宽度，也正好是左栏不再被画出来的地方。
 const SIDEBAR_COLUMNS: u16 = 41;
 
-/// The row index the tab bar's labels are on.
+/// 页签条那些标签所在的行号。
 fn tab_bar_row(state: &mut TuiState, width: u16, height: u16) -> u16 {
     screen(width, height, state)
         .iter()
         .position(|row| row.contains(wording::TAB_USAGE))
-        .expect("the tab bar is on screen") as u16
+        .expect("页签条在屏幕上") as u16
 }
 
 #[test]
 fn no_todo_tab_before_a_list_has_ever_landed() {
-    // The tab is not a fixture of the shell: a session that has never planned has
-    // three pages, at both sidebar widths — and at 60 columns there is no sidebar at
-    // all, so no bar to carry the label either.
+    // 这个页签不是外壳的固定件：从没立过待办的会话
+    // 有三个页面，两种左栏宽度下都是 —— 而 60 列下压根
+    // 没有左栏，也就没有条来带这个标签。
     for (width, height) in [(120u16, 24u16), (80, 24), (60, 24)] {
         let mut state = state_with_roster(&["kimi"]);
         let bar = tab_bar(&mut state, width, height);
         assert!(
             !bar.contains(wording::TAB_TODO),
-            "{width}x{height} has no `todo` tab before a list: {bar}"
+            "{width}x{height} 在有列表之前没有 `todo` 页签：{bar}"
         );
     }
 }
 
 #[test]
 fn the_todo_tab_appears_with_a_non_empty_list_and_then_stays() {
-    // The user chose "once seen, always there": a tab that came and went under the
-    // reader's hand would move the page they are looking at. So all-completed and
-    // cleared keep it as firmly as the first list did.
+    // 用户选了「见过一次就一直在」：一个在读者手底下
+    // 来来去去的页签会挪走他们正在看的那一页。所以全部完成和
+    // 清空都和第一份列表一样牢牢留着它。
     for (width, height) in [(120u16, 24u16), (80, 24)] {
         let mut state = state_with_roster(&["kimi"]);
         apply_todo(
@@ -2737,7 +2737,7 @@ fn the_todo_tab_appears_with_a_non_empty_list_and_then_stays() {
         );
         assert!(
             tab_bar(&mut state, width, height).contains(wording::TAB_TODO),
-            "{width}x{height} shows the tab after a list"
+            "{width}x{height} 在有列表之后显示这个页签"
         );
 
         apply_todo(
@@ -2748,7 +2748,7 @@ fn the_todo_tab_appears_with_a_non_empty_list_and_then_stays() {
         );
         assert!(
             tab_bar(&mut state, width, height).contains(wording::TAB_TODO),
-            "{width}x{height} keeps it when everything is done"
+            "{width}x{height} 全部做完时也留着它"
         );
 
         apply_todo(
@@ -2759,16 +2759,16 @@ fn the_todo_tab_appears_with_a_non_empty_list_and_then_stays() {
         );
         assert!(
             tab_bar(&mut state, width, height).contains(wording::TAB_TODO),
-            "{width}x{height} keeps it after the list is cleared"
+            "{width}x{height} 列表被清空之后也留着它"
         );
     }
 }
 
 #[test]
 fn an_executors_list_stays_out_of_the_sidebar() {
-    // A dispatcher's list and its executor's are two lists (§2). The executor's is
-    // its own record: it shows in the transcript, and the sidebar — which shows the
-    // main session's — must not even grow a tab for it.
+    // 派发者的列表和执行者的列表是两份列表（§2）。执行者的那份是
+    // 它自己的记录：它出现在转录里，而左栏 —— 显示的是
+    // 主会话那一份 —— 连为它长出一个页签都不该。
     let mut state = state_with_roster(&["kimi"]);
     apply_todo(
         &mut state,
@@ -2781,7 +2781,7 @@ fn an_executors_list_stays_out_of_the_sidebar() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("派出去的活") || text.contains("todo"),
-        "the call itself is still in the transcript: {text}"
+        "调用本身还在转录里：{text}"
     );
 }
 
@@ -2810,9 +2810,9 @@ fn the_todo_page_lists_each_item_with_its_glyph_and_counts_them() {
 
 #[test]
 fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
-    // No scrolling on this page: the height ladder gives the rows, and the last one
-    // before the count says how many items did not fit. The count row is the floor —
-    // it is what is left when nothing else is.
+    // 这一页不滚动：高度阶梯给出行数，而计数前面那
+    // 一行说明有多少项没挤下。计数那一行是地板 ——
+    // 别的都留不下时剩下的就是它。
     let items: Vec<(String, &str)> = (0..12)
         .map(|index| (format!("第 {index} 项"), "pending"))
         .collect();
@@ -2830,7 +2830,7 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
     let count = rows
         .iter()
         .position(|line| line.contains("已完成 0/12"))
-        .unwrap_or_else(|| panic!("the count row is on the page: {rows:#?}"));
+        .unwrap_or_else(|| panic!("计数那一行在页面上：{rows:#?}"));
     let shown = rows
         .iter()
         .take(count)
@@ -2839,16 +2839,16 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
     let overflow = rows[count - 1].clone();
     assert!(
         overflow.contains(&format!("＋{} 项", 12 - shown)),
-        "the row above the count says how many did not fit ({shown} shown): {rows:#?}"
+        "计数上面那一行说明有多少项没挤下（显示了 {shown} 项）：{rows:#?}"
     );
-    assert!(shown < 12, "the page did not fit them all: {rows:#?}");
+    assert!(shown < 12, "这一页没能把它们全装下：{rows:#?}");
 }
 
 #[test]
 fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
-    // Through the panel rather than a frame, because no terminal asks the layout for a
-    // one-row page — `SIDEBAR_MIN_FIELDS` is the floor — and the rule still has to
-    // hold there rather than draw a stray item.
+    // 走面板而不是走一帧，因为没有终端会向布局要一页
+    // 只有一行的页面 —— `SIDEBAR_MIN_FIELDS` 才是地板 —— 而这条规矩
+    // 在那儿仍然得成立，而不是画出一个跑出来的项。
     use fs_agent::render::todo::TodoPanel;
     use fs_agent::render::{Block, ToolBlock, ToolOutcome};
     use ratatui::layout::Rect;
@@ -2875,8 +2875,8 @@ fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
 
 #[test]
 fn the_four_tab_labels_fit_at_the_narrow_width() {
-    // 调用量│todo│轨迹│文件 is eleven cells and three separators, so the narrow rung
-    // still has room for all four — the label bar must not push one off the edge.
+    // 调用量│todo│轨迹│文件 是十一个格加三个分隔符，所以窄档
+    // 仍然放得下全部四个 —— 标签条不该把一个挤出边缘。
     let mut state = state_with_roster(&["kimi"]);
     apply_todo(
         &mut state,
@@ -2894,40 +2894,40 @@ fn the_four_tab_labels_fit_at_the_narrow_width() {
             wording::TAB_TRACE,
             wording::TAB_FILES
         )),
-        "all four labels, in order, with their separators: {bar}"
+        "四个标签按顺序、带着它们的分隔符：{bar}"
     );
 
-    // And the labels are still the only controls in the bar: the separator and the
-    // rule that fills the rest of the row are painted, not painted **as tabs**, so a
-    // click on either does nothing (`draw_tab_bar` derives the separators, the fill
-    // and the hit rectangles from the one label list).
+    // 而且标签仍然是条里唯一的控件：分隔符与
+    // 填满这一行剩下部分的那条横线是画上去的，不是**画成页签**，所以
+    // 点它们任何一个都不发生什么（`draw_tab_bar` 推出来的分隔符、填充
+    // 以及来自同一份标签列表的命中矩形）。
     let frame = buffer(80, 24, &mut state);
     let row = tab_bar_row(&mut state, 80, 24);
     let inside_the_sidebar = 2..29u16;
     let fill = inside_the_sidebar
         .clone()
         .find(|x| frame[(*x, row)].symbol() == "─")
-        .expect("the row fills after the four labels");
+        .expect("四个标签之后那一行是填充");
     let separator = inside_the_sidebar
         .clone()
         .find(|x| frame[(*x, row)].symbol() == "│")
-        .expect("the labels are separated");
+        .expect("标签之间有分隔");
     for column in [separator, fill] {
         state.mouse(click(column, row));
         let text = screen(80, 24, &mut state).join("\n");
         assert!(
             !text.contains("☐ 一件事"),
-            "a click at column {column} is not a tab: {text}"
+            "点在第 {column} 列不是一个页签：{text}"
         );
-        assert!(text.contains("token"), "the page did not move: {text}");
+        assert!(text.contains("token"), "页没有动：{text}");
     }
 }
 
 #[test]
 fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
-    // The one thing a conditional tab could do is take the page away from someone
-    // reading it. It cannot: the latch is "has ever had a list", and clearing the
-    // list leaves the page showing the count.
+    // 一个有条件的页签唯一能做的事，就是把页面从正在读它的人
+    // 手里拿走。它做不到：闩是「曾经有过列表」，而清空
+    // 列表之后页面留着，显示计数。
     let mut state = state_with_roster(&["kimi"]);
     apply_todo(
         &mut state,
@@ -2951,19 +2951,19 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
     assert!(page.contains("已完成 0/0"), "{page}");
     assert!(
         !page.contains("一件事"),
-        "and the items are gone with the list: {page}"
+        "而那些项随列表一起没了：{page}"
     );
 }
 
-// --- the `/` menu ----------------------------------------------------------
+// --- `/` 菜单 --------------------------------------------------------------
 
-/// Install the names the loop reports: the built-ins it parses, then the skills the
-/// session discovered. The renderer has no list of its own — this is the whole menu.
+/// 装进循环报出来的那些名字：它解析的内建命令，然后是会话
+/// 发现的技能。渲染器没有自己的一份 —— 这就是整个菜单。
 ///
-/// The built-in half is read off [`wording::BUILT_IN_COMMANDS`] — the same list the
-/// loop parses and the unknown-command text names — rather than written out here,
-/// so this fixture cannot drift from the real menu again (it offered `/plan` and
-/// `/endplan` for a while after those commands were retired).
+/// 内建那一半是从 [`wording::BUILT_IN_COMMANDS`] 读来的 —— 也就是
+/// 循环解析、未知命令文本点名的那同一份列表 —— 而不是在这里写死，
+/// 所以这份 fixture 不会再和真菜单漂开（那些命令退役之后
+/// 它还给 `/plan` 和 `/endplan` 供了一段日子）。
 fn install_catalog(state: &mut TuiState) {
     let mut entries: Vec<CatalogEntry> = wording::BUILT_IN_COMMANDS
         .iter()
@@ -2976,45 +2976,45 @@ fn install_catalog(state: &mut TuiState) {
     state.request(ConsoleRequest::Catalog { entries });
 }
 
-/// A prompt in flight, so a test can read back what a submission sent.
+/// 一次在飞的提示请求，好让测试读回一次提交送出去了什么。
 fn awaiting_line(state: &mut TuiState) -> tokio::sync::oneshot::Receiver<Option<String>> {
     let (reply, line) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply });
     line
 }
 
-/// Where the `/` menu drew its box: `(x, y, width, height)`.
+/// `/` 菜单把它的框画在哪：`(x, y, width, height)`。
 ///
-/// Found from the buffer, the way the border assertions above work: the row holding
-/// `needle`, the box's left border to the left of it, then its corners.
+/// 从缓冲里找，跟上面那些边框断言的做法一样：装着
+/// `needle` 的那一行，在它左边是框的左边框，然后是它的角。
 fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16, u16, u16) {
     let row = (0..height)
         .find(|y| row_text(frame, *y, width).contains(needle))
-        .unwrap_or_else(|| panic!("{needle:?} is on screen"));
+        .unwrap_or_else(|| panic!("{needle:?} 在屏幕上"));
     let column = row_text(frame, row, width).find(needle).unwrap() as u16;
     let x = (0..column)
         .rev()
         .find(|c| frame[(*c, row)].symbol() == "│")
-        .expect("the menu's left border");
+        .expect("菜单的左边框");
     let top = (0..row)
         .rev()
         .find(|y| frame[(x, *y)].symbol() == "┌")
-        .expect("the menu's top border");
+        .expect("菜单的上边框");
     let bottom = (row..height)
         .find(|y| frame[(x, *y)].symbol() == "└")
-        .expect("the menu's bottom border");
+        .expect("菜单的下边框");
     let right = (x..width)
         .find(|c| frame[(*c, top)].symbol() == "┐")
-        .expect("the menu's right border");
+        .expect("菜单的右边框");
     (x, top, right - x + 1, bottom - top + 1)
 }
 
-/// The row the draft is typed on: the prompt is the first thing in the main column,
-/// so it follows the sidebar and the divider.
+/// 草稿打在哪一行：提示符是主列里的第一样东西，
+/// 所以它跟在左栏与分隔线后面。
 fn input_row(rows: &[String]) -> usize {
     rows.iter()
         .position(|row| row.contains(&format!("│{}", editor::PROMPT)))
-        .expect("the input row")
+        .expect("输入区那一行")
 }
 
 #[test]
@@ -3026,24 +3026,24 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     for name in ["/undo", "/discuss", "/quit", "/ask-matt", "/review"] {
-        assert!(text.contains(name), "{name} is offered:\n{text}");
+        assert!(text.contains(name), "提供了 {name}：\n{text}");
     }
     assert!(
         !text.contains("/plan") && !text.contains("/endplan"),
-        "the retired commands are not offered any more:\n{text}"
+        "退役的命令不再提供了：\n{text}"
     );
     assert!(
         text.contains("回滚上一次编辑"),
-        "with what it does:\n{text}"
+        "带着它是干什么的：\n{text}"
     );
 
-    // It floats — box, borders and all — above the input it belongs to.
+    // 它是浮着的 —— 框、边框全都浮着 —— 在它所属的输入区上面。
     let frame = buffer(120, 24, &mut state);
     let (_, top, _, height) = menu_box(&frame, 120, 24, "/undo");
-    assert!(height >= 3, "a box, not a row: {height} tall");
+    assert!(height >= 3, "是一个框，不是一行：高 {height}");
     assert!(
         top as usize + height as usize <= input_row(&rows),
-        "the menu sits above the input: {top}+{height} vs {}",
+        "菜单坐在输入区上面：{top}+{height} 对 {}",
         input_row(&rows)
     );
 }
@@ -3059,17 +3059,17 @@ fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
     assert!(text.contains("/ask-matt"), "{text}");
     assert!(
         !text.contains("/undo"),
-        "everything else is filtered out:\n{text}"
+        "别的都被滤掉了：\n{text}"
     );
 
-    // A prefix that names nothing closes the box rather than showing an empty one.
+    // 一个什么都没指到的前缀会关上这个框，而不是显示一个空框。
     for ch in "zzz".chars() {
         state.key(Key::Char(ch));
     }
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("│ /"),
-        "no menu for a prefix that names nothing:\n{text}"
+        "没指到东西的前缀没有菜单：\n{text}"
     );
 }
 
@@ -3080,11 +3080,11 @@ fn the_menu_follows_the_cursor_column() {
     state.key(Key::Char('/'));
     let frame = buffer(120, 24, &mut state);
     let (before, ..) = menu_box(&frame, 120, 24, "/undo");
-    // One more character, and the box moves with the cursor that typed it.
+    // 再多一个字符，框就跟着打它的那个光标走。
     state.key(Key::Char('a'));
     let frame = buffer(120, 24, &mut state);
     let (after, ..) = menu_box(&frame, 120, 24, "/ask-matt");
-    assert_eq!(after, before + 1, "the box moved with the cursor");
+    assert_eq!(after, before + 1, "框跟着光标移动了");
 }
 
 #[test]
@@ -3098,15 +3098,15 @@ fn tab_fills_the_highlighted_name_in_and_does_not_submit_it() {
     state.key(Key::Tab);
     assert!(
         line.try_recv().is_err(),
-        "Tab fills in; it never sends what is in the draft"
+        "Tab 只补全；它从不把草稿里的东西发出去"
     );
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains(&format!("│{}/ask-matt", editor::PROMPT)),
-        "the name is in the draft:\n{text}"
+        "名字在草稿里：\n{text}"
     );
-    // And the fill-in closed the menu, so a task can be typed after it.
-    assert!(!text.contains("│ /ask-matt"), "the menu is done:\n{text}");
+    // 而且补全把菜单关上了，所以后面还能接着打一个任务名。
+    assert!(!text.contains("│ /ask-matt"), "菜单结束了：\n{text}");
 }
 
 #[test]
@@ -3121,7 +3121,7 @@ fn enter_fills_the_highlighted_name_in_and_submits_it_in_one_press() {
     assert_eq!(
         line.try_recv().unwrap(),
         Some("/ask-matt".to_owned()),
-        "`/ask` + Enter is one gesture, and the name it sent is a complete one"
+        "`/ask` + Enter 是一个手势，而它送出去的名字是完整的"
     );
 }
 
@@ -3130,8 +3130,8 @@ fn the_arrows_walk_the_matches() {
     let mut state = state();
     install_catalog(&mut state);
     let mut line = awaiting_line(&mut state);
-    // A bare `/` highlights nothing, so the first `↓` takes the first name and the
-    // second takes the one after it.
+    // 光一个 `/` 什么都不高亮，所以第一个 `↓` 拿第一个名字，
+    // 第二个拿它后面那一个。
     state.key(Key::Char('/'));
     state.key(Key::Down);
     state.key(Key::Down);
@@ -3139,14 +3139,14 @@ fn the_arrows_walk_the_matches() {
     assert_eq!(
         line.try_recv().unwrap(),
         Some("/discuss".to_owned()),
-        "the second name in the built-in list"
+        "内建列表里的第二个名字"
     );
 }
 
 #[test]
 fn enter_on_a_bare_slash_sends_what_was_typed() {
-    // Nothing is highlighted until a name is typed or an arrow walks the list, so an
-    // `Enter` pressed only to look at the menu cannot run the first command in it.
+    // 在打了名字或用箭头走过列表之前什么都不高亮，所以
+    // 只为看一眼菜单而按下的 `Enter` 不可能跑掉里面的第一条命令。
     let mut state = state();
     install_catalog(&mut state);
     let mut line = awaiting_line(&mut state);
@@ -3157,7 +3157,7 @@ fn enter_on_a_bare_slash_sends_what_was_typed() {
 
 #[test]
 fn an_arrow_on_a_bare_slash_picks_the_row_enter_takes() {
-    // The deliberate path: walk the list, take what the highlight landed on.
+    // 刻意走的那条路：走过列表，拿走高亮落到的那一个。
     let mut state = state();
     install_catalog(&mut state);
     let mut line = awaiting_line(&mut state);
@@ -3172,7 +3172,7 @@ fn the_arrows_wrap_at_the_ends() {
     let mut state = state();
     install_catalog(&mut state);
     let mut line = awaiting_line(&mut state);
-    // Up from the first match wraps to the last one.
+    // 从第一个匹配再往上，绕到最后一个。
     state.key(Key::Char('/'));
     state.key(Key::Up);
     state.key(Key::Enter);
@@ -3186,15 +3186,15 @@ fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
     state.key(Key::Char('/'));
     state.key(Key::Esc);
 
-    // The draft survives: `Esc` closed the menu, it did not start throwing the draft
-    // away, and it did not clear a one-line draft either (spec §6, §7).
+    // 草稿活下来：`Esc` 关的是菜单，它没有开始把草稿
+    // 扔掉，也没有清掉一行长的草稿（spec §6、§7）。
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains(&format!("│{}/", editor::PROMPT)),
-        "the draft is still there:\n{text}"
+        "草稿还在那儿：\n{text}"
     );
-    assert!(!text.contains("│ /undo"), "the menu is gone:\n{text}");
-    assert!(!text.contains("清空输入"), "nothing was asked:\n{text}");
+    assert!(!text.contains("│ /undo"), "菜单不见了：\n{text}");
+    assert!(!text.contains("清空输入"), "什么都没被问：\n{text}");
 }
 
 #[test]
@@ -3206,19 +3206,19 @@ fn a_question_hides_the_menu_because_it_owns_the_keyboard() {
     state.request(ask);
 
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("权限询问"), "the question is up:\n{text}");
+    assert!(text.contains("权限询问"), "问句起来了：\n{text}");
     assert!(
         !text.contains("│ /undo"),
-        "and nothing is offering keys that answer something else:\n{text}"
+        "也没有东西在提供回答别的东西的键位：\n{text}"
     );
 }
 
 #[test]
 fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
-    // A wide glyph owns two cells and the second one is skipped when a frame is diffed
-    // to the terminal, so a box whose left border landed there used to lose its
-    // top-left corner. The half-covered glyph is blanked instead — half a glyph cannot
-    // be drawn anyway — and the box stays a box.
+    // 一个宽字形占两格，而把一帧差分到终端时第二格会被跳过，
+    // 所以左边框落在那儿的框，过去会丢掉它的
+    // 左上角。被盖住一半的字形改为抹白 —— 半个字形反正也
+    // 画不出来 —— 而框还是一个框。
     let mut state = state();
     install_catalog(&mut state);
     for index in 0..40 {
@@ -3237,11 +3237,11 @@ fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
         } else {
             ("│", "│")
         };
-        assert_eq!(frame[(x, y)].symbol(), left, "row {y}, left border");
+        assert_eq!(frame[(x, y)].symbol(), left, "第 {y} 行，左边框");
         assert_eq!(
             frame[(right, y)].symbol(),
             rightmost,
-            "row {y}, right border"
+            "第 {y} 行，右边框"
         );
     }
 }
@@ -3253,7 +3253,7 @@ fn there_is_no_menu_before_the_loop_has_said_what_exists() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("│ /"),
-        "an empty catalog offers nothing:\n{text}"
+        "空清单什么都提供不了：\n{text}"
     );
 }
 
@@ -3261,23 +3261,23 @@ fn there_is_no_menu_before_the_loop_has_said_what_exists() {
 fn every_question_kind_takes_the_overlay() {
     use fs_agent::render::Key;
 
-    // The loop's permission question.
+    // 循环的权限询问。
     let mut asking = state();
     let (ask, _answer) = ask_permission();
     asking.request(ask);
     let text = screen(120, 24, &mut asking).join("\n");
-    assert!(text.contains("权限询问："), "the title: {text}");
-    assert!(text.contains("[y] 允许"), "with its keys: {text}");
+    assert!(text.contains("权限询问："), "标题：{text}");
+    assert!(text.contains("[y] 允许"), "带着它的键位：{text}");
 
-    // An oversized paste.
+    // 一次过大的粘贴。
     let mut paste = state();
     paste.paste(&"x".repeat(100_001));
     let text = screen(120, 24, &mut paste).join("\n");
-    assert!(text.contains("粘贴确认"), "the title: {text}");
+    assert!(text.contains("粘贴确认"), "标题：{text}");
     assert!(text.contains("粘贴 100001 字符"), "{text}");
-    assert!(text.contains("[y] 粘贴"), "with its keys: {text}");
+    assert!(text.contains("[y] 粘贴"), "带着它的键位：{text}");
 
-    // And `Esc` on a multi-line draft.
+    // 还有多行草稿上的 `Esc`。
     let mut draft = idle();
     draft.paste("第一行\n第二行");
     draft.key(Key::Esc);
@@ -3285,9 +3285,9 @@ fn every_question_kind_takes_the_overlay() {
     assert!(text.contains("清空输入"), "{text}");
     assert!(
         text.contains("草稿有多行"),
-        "what it would throw away: {text}"
+        "它会扔掉什么：{text}"
     );
-    assert!(text.contains("[y] 清空"), "with its keys: {text}");
+    assert!(text.contains("[y] 清空"), "带着它的键位：{text}");
 }
 
 #[test]
@@ -3301,17 +3301,17 @@ fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
     let (ask, mut asked) = ask_permission();
     state.request(ask);
 
-    // `x` is not one of the answers, so the safe one is taken — and the draft, which
-    // the question is covering, never sees the key.
+    // `x` 不是任何一个答案，所以取的是安全的那一个 —— 而问句
+    // 盖着的草稿，永远见不到这个键。
     state.key(Key::Char('x'));
     assert_eq!(asked.try_recv().unwrap(), Answer::Deny);
     state.key(Key::Enter);
-    // The draft is empty, so the line that reaches the loop is empty too — and an
-    // empty line is a line, not the end of input (the loop discards it).
+    // 草稿是空的，所以到达循环的那一行也是空的 —— 而
+    // 空行是一行，不是输入的结束（循环会丢掉它）。
     assert_eq!(
         submitted.try_recv().unwrap(),
         Some(String::new()),
-        "the draft stayed empty"
+        "草稿仍然是空的"
     );
 }
 
@@ -3338,7 +3338,7 @@ fn the_wheel_is_ignored_while_a_question_is_up() {
         modifiers: KeyModifiers::empty(),
     });
 
-    // The modal owns the pointer: the viewport is exactly where it was.
+    // 模态独占指针：视口恰好在原地。
     assert_eq!(first_notice(&screen(120, 24, &mut state)), before);
 }
 
@@ -3346,8 +3346,8 @@ fn the_wheel_is_ignored_while_a_question_is_up() {
 fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
     use fs_agent::render::Key;
 
-    // A **short** question: the room it leaves on either side is where the panel's own
-    // label sits, so anything left of the background would show up beside the words.
+    // 一个**短**问句：它两侧留出的地方正是面板自己
+    // 标签所在之处，所以背景里剩下的任何东西都会出现在这些字旁边。
     let mut state = idle();
     state.paste("第一行\n第二行");
     state.key(Key::Esc);
@@ -3355,35 +3355,35 @@ fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
     let title = rows
         .iter()
         .position(|row| row.contains("清空输入"))
-        .expect("the overlay is on screen");
+        .expect("覆盖层在屏幕上");
     let keys = rows
         .iter()
         .position(|row| row.contains("[y] 清空"))
-        .expect("its buttons are too");
+        .expect("它的按钮也在");
 
     let frame = buffer(120, 24, &mut state);
     let borders: Vec<u16> = (MAIN_LEFT_AT_120..TRANSCRIPT_TEXT_RIGHT_AT_120)
         .filter(|x| frame[(*x, title as u16)].symbol() == "│")
         .collect();
-    assert_eq!(borders.len(), 2, "the box's borders: {borders:?}");
+    assert_eq!(borders.len(), 2, "这个框的边框：{borders:?}");
     assert_eq!(
         cells(&frame, title as u16, borders[0] + 1, borders[1]).trim(),
         "清空输入",
-        "the interior holds the title and nothing that was behind it"
+        "内部装着标题，没有一样原先在它后面的东西"
     );
     assert_eq!(
         cells(&frame, keys as u16, borders[0] + 1, borders[1]).trim(),
         "[y] 清空   [n] 保留",
-        "and the buttons are the whole of their own row"
+        "而按钮就是它们自己那一整行"
     );
 }
 
-/// The rendered frame and where its cursor ended up, when it was shown at all.
+/// 渲染出来的帧，以及它被显示时——如果有显示——光标落在哪里。
 fn frame_and_cursor(width: u16, height: u16, state: &mut TuiState) -> (Buffer, Option<(u16, u16)>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
     terminal
         .draw(|frame| draw_frame(frame, state))
-        .expect("one frame");
+        .expect("画一帧");
     let backend = terminal.backend();
     let cursor = backend.cursor_visible().then(|| {
         let position = backend.cursor_position();
@@ -3402,25 +3402,25 @@ fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
         state.key(Key::Char(ch));
     }
     let (_, before) = frame_and_cursor(120, 24, &mut state);
-    let before = before.expect("the cursor sits in the draft");
+    let before = before.expect("光标坐在草稿里");
 
     let (ask, mut asked) = ask_permission();
     state.request(ask);
     let (_, during) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(during, None, "a question takes the keyboard, so no cursor");
+    assert_eq!(during, None, "问句拿走键盘，所以没有光标");
 
     state.key(Key::Char('y'));
     assert_eq!(asked.try_recv().unwrap(), Answer::Allow);
     let (_, after) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(after, Some(before), "and it comes back where it was");
+    assert_eq!(after, Some(before), "然后它回到原来那儿");
 }
 
 // ---------------------------------------------------------------------------
-// The collapse: thinking lines, tool output, and the detail overlay
-// (tickets 01/02/03)
+// 折叠：思考行、工具输出与详情覆盖层
+// （票 01/02/03）
 // ---------------------------------------------------------------------------
 
-/// One `MessageCompleted` for the debater.
+/// 一条给讨论者的 `MessageCompleted`。
 fn message(seq: u64, text: &str, reasoning: Option<&str>) -> fs_agent::render::RenderEvent {
     use fs_agent::events::{Event, EventPayload, Role, SpeakerId};
     fs_agent::render::RenderEvent::Logged(Event::new(
@@ -3434,7 +3434,7 @@ fn message(seq: u64, text: &str, reasoning: Option<&str>) -> fs_agent::render::R
     ))
 }
 
-/// One reasoning delta from the debater.
+/// 一条来自讨论者的推理增量。
 fn reasoning_delta(text: &str) -> fs_agent::render::RenderEvent {
     use fs_agent::events::SpeakerId;
     fs_agent::render::RenderEvent::Delta {
@@ -3444,7 +3444,7 @@ fn reasoning_delta(text: &str) -> fs_agent::render::RenderEvent {
     }
 }
 
-/// One body-text delta from the debater.
+/// 一条来自讨论者的正文增量。
 fn text_delta(text: &str) -> fs_agent::render::RenderEvent {
     use fs_agent::events::SpeakerId;
     fs_agent::render::RenderEvent::Delta {
@@ -3454,7 +3454,7 @@ fn text_delta(text: &str) -> fs_agent::render::RenderEvent {
     }
 }
 
-/// One `ToolCallStarted` from the debater.
+/// 一条来自讨论者的 `ToolCallStarted`。
 fn tool_started(
     seq: u64,
     id: &str,
@@ -3473,7 +3473,7 @@ fn tool_started(
     ))
 }
 
-/// One `PermissionAsked` about a call.
+/// 一条针对某次调用的 `PermissionAsked`。
 fn permission_asked(seq: u64, id: &str) -> fs_agent::render::RenderEvent {
     use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
     fs_agent::render::RenderEvent::Logged(Event::new(
@@ -3487,7 +3487,7 @@ fn permission_asked(seq: u64, id: &str) -> fs_agent::render::RenderEvent {
     ))
 }
 
-/// One `PermissionDecided`: the user said yes.
+/// 一条 `PermissionDecided`：用户说了是。
 fn permission_decided(seq: u64) -> fs_agent::render::RenderEvent {
     use fs_agent::events::{Decision, DecisionSource, Event, EventPayload, SpeakerId};
     fs_agent::render::RenderEvent::Logged(Event::new(
@@ -3502,7 +3502,7 @@ fn permission_decided(seq: u64) -> fs_agent::render::RenderEvent {
     ))
 }
 
-/// One `ToolCallCompleted` for a call that started earlier.
+/// 一条针对先前开始的调用发来的 `ToolCallCompleted`。
 fn tool_completed(
     seq: u64,
     id: &str,
@@ -3524,7 +3524,7 @@ fn tool_completed(
     ))
 }
 
-/// A click on a screen cell.
+/// 点屏幕上一个格子。
 fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
     use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     MouseEvent {
@@ -3537,9 +3537,9 @@ fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
 
 #[test]
 fn a_thinking_segment_opens_in_place_and_settles_in_place() {
-    // The whole state machine, seen from the screen: `正在思考` appears while only
-    // reasoning has arrived, the body's first delta settles that same line to
-    // `思考完成` without adding a second one, and the finished trace is kept (票 02 §1).
+    // 从屏幕上看整个状态机：只有推理到了的时候出现 `正在思考`，
+    // 正文的第一个增量把同一行落定成 `思考完成`，不多加
+    // 一行，而完成的轨迹留着（票 02 §1）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("先看依赖，"));
     state.apply(reasoning_delta("再看测试。"));
@@ -3548,11 +3548,11 @@ fn a_thinking_segment_opens_in_place_and_settles_in_place() {
     let text = rows.join("\n");
     assert!(
         text.contains("[kimi] … 正在思考"),
-        "the open line reads as in-progress: {text}"
+        "未落定的那行读起来是进行中：{text}"
     );
     assert!(
         !text.contains("思考完成"),
-        "and does not claim to be finished: {text}"
+        "而且没有自称已完成：{text}"
     );
 
     state.apply(text_delta("答案是 42。"));
@@ -3560,29 +3560,29 @@ fn a_thinking_segment_opens_in_place_and_settles_in_place() {
     let text = rows.join("\n");
     assert!(
         text.contains("[kimi] ▸ ✓ 思考完成"),
-        "the same line settles in place: {text}"
+        "同一行原地落定：{text}"
     );
     assert!(
         !text.contains("正在思考"),
-        "and the in-progress line is gone, not duplicated: {text}"
+        "进行中那一行没了，没有被复制：{text}"
     );
     assert_eq!(
         text.matches("思考完成").count(),
         1,
-        "one thinking segment is one line: {text}"
+        "一段思考就是一行：{text}"
     );
 
-    // The body still streams live after the freeze; the completed block replaces it.
+    // 冻结之后正文仍然在流；完成的块把它换掉。
     state.apply(message(2, "答案是 42。", Some("先看依赖，再看测试。")));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("[kimi] 答案是 42。") || text.contains("答案是 42。"),
-        "the answer is in the transcript: {text}"
+        "答案在转录里：{text}"
     );
     assert_eq!(
         text.matches("思考完成").count(),
         1,
-        "a recorded trace does not add a second thinking line: {text}"
+        "已记下的轨迹不会多添一行思考行：{text}"
     );
 }
 
@@ -3593,29 +3593,29 @@ fn a_turn_with_no_reasoning_adds_no_thinking_line() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("思考") && !text.contains("正在思考"),
-        "no reasoning, no thinking line: {text}"
+        "没有推理就没有思考行：{text}"
     );
 }
 
 #[test]
 fn a_synthesizer_trace_streams_but_records_nothing() {
-    // The synthesizer sends reasoning deltas and writes `reasoning: None`. The line
-    // still settles — the reader saw it thinking — and its detail says the whole text
-    // was never recorded (票 02 §1, 票 04 §3).
+    // 合成器发来推理增量，却写下 `reasoning: None`。这一行
+    // 仍然落定 —— 读者看见它在想 —— 而它的详情说整段文本
+    // 从没被记下（票 02 §1、票 04 §3）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("综合两边的意见。"));
     state.apply(message(2, "结论。", None));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("[kimi] ▸ ✓ 思考完成"),
-        "the line settles even with no recorded trace: {text}"
+        "没有记下轨迹时这一行也落定：{text}"
     );
 
     click_row(&mut state, 120, 24, "✓ 思考完成");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("本次未记录思考全文"),
-        "the detail says the text was not recorded: {text}"
+        "详情说这段文本没有被记下：{text}"
     );
 }
 
@@ -3639,14 +3639,14 @@ fn a_tool_result_is_folded_into_its_call_line() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("[kimi] ▸ 调用 bash 运行 cargo test"),
-        "the call line keeps its parameter summary and gains the marker: {text}"
+        "调用行保住它的参数摘要，还多了一个记号：{text}"
     );
     assert!(
         !text.contains("line one") && !text.contains("line two"),
-        "the output body is folded away: {text}"
+        "输出的正文被折起来了：{text}"
     );
 
-    // A failure is the same line, with `失败` at its end — never a second line.
+    // 失败是同一行，末尾加 `失败` —— 绝不是第二行。
     let mut failed = state_with_roster(&["kimi"]);
     failed.apply(tool_started(
         1,
@@ -3665,11 +3665,11 @@ fn a_tool_result_is_folded_into_its_call_line() {
     let text = rows.join("\n");
     assert!(
         text.contains("[kimi] ▸ 调用 read_file missing.rs 失败"),
-        "the failure is a suffix on the call line: {text}"
+        "失败是调用行上的一个后缀：{text}"
     );
     assert!(
         !text.contains("no such file"),
-        "and the error body is in the detail, not the transcript: {text}"
+        "错误正文在详情里，不在转录里：{text}"
     );
 }
 
@@ -3684,28 +3684,28 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
     ));
     state.apply(tool_completed(2, "call-9", true, Some("alpha\nbeta"), None));
 
-    // A tall terminal, so the whole body fits: the shortest overlay scrolls, which is
-    // the next test's subject.
+    // 一个很高的终端，好让整段正文都放得下：最短的那个覆盖层会滚动，
+    // 那是下一个测试的主题。
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "the arguments section: {text}");
-    assert!(text.contains("── 输出 ──"), "the output section: {text}");
-    assert!(text.contains("alpha"), "the whole output: {text}");
+    assert!(text.contains("── 参数 ──"), "参数那一节：{text}");
+    assert!(text.contains("── 输出 ──"), "输出那一节：{text}");
+    assert!(text.contains("alpha"), "整段输出：{text}");
     assert!(
         text.contains("esc 关闭"),
-        "the footer names the way out: {text}"
+        "页脚点出出口：{text}"
     );
 
-    // Esc closes it and the transcript is back.
+    // Esc 关上它，转录回来了。
     state.key(Key::Esc);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──"),
-        "Esc closes the overlay: {text}"
+        "Esc 关上覆盖层：{text}"
     );
     assert!(
         text.contains("调用 bash"),
-        "and the line it opened from is still there: {text}"
+        "它打开时所在的那一行还在：{text}"
     );
 }
 
@@ -3728,59 +3728,59 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
     ));
 
     click_row(&mut state, 120, 40, "调用 bash");
-    // The body starts at the top, which at 40 rows is the arguments section.
+    // 正文从顶部开始，40 行时那儿是参数那一节。
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("── 参数 ──"),
-        "the body starts at the top: {text}"
+        "正文从顶部开始：{text}"
     );
 
-    // Walk to the very bottom with the page key, then a single arrow moves one row
-    // back up: the arrows and the pages both act on the same body.
+    // 用翻页键一路走到最底下，然后单个箭头往回挪一行：
+    // 箭头和翻页作用在同一段正文上。
     for _ in 0..8 {
         state.key(Key::PageDown);
     }
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("esc 关闭"),
-        "the body reached the end: {text}"
+        "正文走到了末尾：{text}"
     );
     state.key(Key::Down);
     state.key(Key::Up);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("esc 关闭"),
-        "and the arrows still move inside it: {text}"
+        "而箭头仍然在它里面挪动：{text}"
     );
 
-    // The wheel moves the same body by one row a notch.
+    // 滚轮把同一段正文一格挪一行。
     let before = text.clone();
     state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
     let after = screen(120, 40, &mut state).join("\n");
-    assert_ne!(before, after, "the wheel moves the detail body");
+    assert_ne!(before, after, "滚轮挪动了详情正文");
 }
 
 #[test]
 fn the_detail_overlay_reads_the_spilled_tool_output() {
-    // The event carries the preview; the whole text is the file the tool call id
-    // names. `SessionFacts.cwd` is the session directory, so the overlay reads
-    // `<cwd>/outputs/<tool_call_id>.txt` (票 02 §4).
+    // 事件带的是预览；全文在那个工具调用 id 指名的文件里。
+    // `SessionFacts.cwd` 是会话目录，所以覆盖层读
+    // `<cwd>/outputs/<tool_call_id>.txt`（票 02 §4）。
     let dir = std::env::temp_dir().join(format!("fs-agent-detail-{}", std::process::id()));
     let outputs = dir.join("outputs");
-    std::fs::create_dir_all(&outputs).expect("the session's outputs directory");
+    std::fs::create_dir_all(&outputs).expect("会话的 outputs 目录");
     std::fs::write(
         outputs.join("call-11.txt"),
         "the whole output\nwith a second line the preview never carried",
     )
-    .expect("the spilled file");
+    .expect("落盘的那个文件");
 
     let mut state = TuiState::new(SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
         session_dir: dir.display().to_string(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
-        // The mode the session was assembled in: the status row's `模式 …` field. A
-        // test that means another one overrides it in its own facts.
+        // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
+        // 测试在自己的 facts 里覆盖它。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: vec!["kimi".to_owned()],
@@ -3803,11 +3803,11 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("with a second line the preview never carried"),
-        "the whole spilled text is shown, not the preview: {text}"
+        "显示的是落盘全文，不是预览：{text}"
     );
     assert!(
         !text.contains("全文不可用"),
-        "and no degradation note: {text}"
+        "而且没有降级说明：{text}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -3815,8 +3815,8 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
 
 #[test]
 fn a_missing_spilled_file_degrades_to_the_preview() {
-    // No `outputs/` directory at all: the detail shows the event's own preview and
-    // says the full text is not available (票 02 §4).
+    // 压根没有 `outputs/` 目录：详情显示事件自带的预览，
+    // 并说明全文拿不到（票 02 §4）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -3834,17 +3834,17 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("head of the output"), "the preview: {text}");
+    assert!(text.contains("head of the output"), "预览：{text}");
     assert!(
         text.contains("全文不可用"),
-        "the degradation is stated: {text}"
+        "降级被说出来了：{text}"
     );
 }
 
 #[test]
 fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
-    // A question owns the pointer: a click on a collapsed line while one is up is
-    // discarded, and no detail opens over the question (票 02 §4, 票 04 §2).
+    // 问句独占指针：它起来的时候点一条折起的行会被
+    // 丢掉，也不会在问句上面打开详情（票 02 §4、票 04 §2）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -3854,23 +3854,23 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
     ));
     state.apply(tool_completed(2, "call-13", true, Some("body"), None));
 
-    // Find the call line's row before the question covers the pane.
-    let row = row_of(&mut state, 120, 40, "调用 bash").expect("the call line is drawn");
+    // 在问句盖住窗格之前，先找到调用行那一行。
+    let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行画出来了");
     state.request(ask_permission().0);
     state.mouse(click(20, row));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──"),
-        "the detail did not open over the question: {text}"
+        "详情没有在问句上面打开：{text}"
     );
     assert!(
         text.contains("权限询问"),
-        "and the question is still the thing on screen: {text}"
+        "而屏幕上还是那个问句：{text}"
     );
 }
 
-/// A state whose injected roster is the given debater names, which is what gives the
-/// transcript's names their colours (票 07 §1).
+/// 注入名册是给定讨论者名字的状态，转录里的名字
+/// 正是靠它上色（票 07 §1）。
 fn state_with_roster(names: &[&str]) -> TuiState {
     TuiState::new(SessionFacts {
         speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
@@ -3878,7 +3878,7 @@ fn state_with_roster(names: &[&str]) -> TuiState {
     })
 }
 
-/// One wheel notch.
+/// 滚轮一格。
 fn wheel(kind: ratatui::crossterm::event::MouseEventKind) -> ratatui::crossterm::event::MouseEvent {
     use ratatui::crossterm::event::{KeyModifiers, MouseEvent};
     MouseEvent {
@@ -3889,7 +3889,7 @@ fn wheel(kind: ratatui::crossterm::event::MouseEventKind) -> ratatui::crossterm:
     }
 }
 
-/// The row a phrase is drawn on, rendered fresh.
+/// 某句话画在哪一行，重新渲染一次。
 fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option<u16> {
     let rows = screen(width, height, state);
     rows.iter()
@@ -3897,28 +3897,28 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
         .map(|row| row as u16)
 }
 
-/// Click the row a phrase is drawn on.
+/// 点某句话画在的那一行。
 ///
-/// The frame is rendered first, because only what was drawn can be clicked, and the
-/// phrase is looked up in that same frame (票 04 §1).
+/// 先渲染帧，因为只有画出来的东西才点得到，而
+/// 那句话是在同一帧里查的（票 04 §1）。
 fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let Some(row) = row_of(state, width, height, needle) else {
-        panic!("nothing on screen contains {needle:?}");
+        panic!("屏幕上没有东西包含 {needle:?}");
     };
-    // The click's column only has to be inside the line; the row is what the pane
-    // maps back to a source line.
+    // 点击的列只要落在这一行里就行；行才是窗格
+    // 映射回源代码行的东西。
     state.mouse(click(10, row));
 }
 
 // ---------------------------------------------------------------------------
-// Mouse answers on the two question shapes (ticket 04)
+// 两种问句形状上的鼠标作答（票 04）
 // ---------------------------------------------------------------------------
 
-/// The screen cell a phrase starts on, searching top to bottom.
+/// 某句话起始的那个屏幕格，自上而下搜。
 ///
-/// The match is against a row read **the way a terminal reads it** — a wide grapheme
-/// advances two columns and the cell after it is skipped — so the column a match
-/// reports is a screen column, which is what a mouse event carries.
+/// 匹配是拿一行**按终端读它的方式**读出来的 —— 一个宽字素
+/// 前进两列、它后面那一格跳过 —— 所以匹配报出来的列
+/// 是屏幕列，而鼠标事件带的正是它。
 fn cell_of(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
     for y in 0..height {
         let row = row_text(frame, y, width);
@@ -3929,25 +3929,25 @@ fn cell_of(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16
     None
 }
 
-/// Click the first cell where `needle` is drawn on the freshly rendered frame.
+/// 点新渲染出来的帧上画着 `needle` 的第一个格子。
 fn click_text(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let frame = buffer(width, height, state);
     let Some((column, row)) = cell_of(&frame, width, height, needle) else {
-        panic!("nothing on screen contains {needle:?}");
+        panic!("屏幕上没有东西包含 {needle:?}");
     };
     state.mouse(click(column, row));
 }
 
-/// Click the cell in one screen row where `needle` is drawn.
+/// 点某一屏幕行里画着 `needle` 的那个格子。
 ///
-/// The questionnaire's footer labels are also its body's wording, so the two can only
-/// be told apart by the row they are on — which is exactly the distinction the pointer
-/// makes (票 04 §4).
+/// 问卷页脚的标签同时也是它正文的用词，所以两者只能
+/// 靠它们所在的行分辨 —— 这正是指针
+/// 做的区分（票 04 §4）。
 fn click_in_row(state: &mut TuiState, width: u16, height: u16, row: u16, needle: &str) {
     let frame = buffer(width, height, state);
     let text = row_text(&frame, row, width);
     let Some(at) = text.find(needle) else {
-        panic!("row {row} does not contain {needle:?}: {text:?}");
+        panic!("第 {row} 行不包含 {needle:?}：{text:?}");
     };
     let column = text_columns(&text[..at]) as u16;
     state.mouse(click(column, row));
@@ -3965,13 +3965,13 @@ fn a_permission_question_is_answered_by_clicking_a_button() {
         state.request(request);
         click_text(&mut state, 120, 24, label);
         assert_eq!(
-            answer.try_recv().expect("the answer went out"),
+            answer.try_recv().expect("答案送出去了"),
             expected,
-            "clicking {label} answers as its key would"
+            "点 {label} 与按它对应的键一样作答"
         );
-        // The overlay is gone and the keyboard is back on the draft.
+        // 覆盖层没了，键盘回到草稿上。
         let text = screen(120, 24, &mut state).join("\n");
-        assert!(!text.contains("权限询问"), "the question closed: {text}");
+        assert!(!text.contains("权限询问"), "问句关上了：{text}");
     }
 }
 
@@ -3981,24 +3981,24 @@ fn clicking_a_question_body_or_border_does_nothing() {
     let (request, mut answer) = ask_permission();
     state.request(request);
 
-    // The title row and the middle of the overlay's body.
+    // 标题行，以及覆盖层正文的中间。
     for (column, row) in [(60, 10), (60, 11), (2, 10)] {
         state.mouse(click(column, row));
     }
     assert!(
         answer.try_recv().is_err(),
-        "a click off the buttons answers nothing"
+        "点在按钮之外不作答"
     );
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("权限询问"),
-        "and the question is still up: {text}"
+        "而问句还在：{text}"
     );
 }
 
 #[test]
 fn the_renderer_confirmations_answer_by_click() {
-    // The exit confirmation is the renderer's own: clicking `[y] 退出` quits.
+    // 退出确认是渲染器自己的：点 `[y] 退出` 就退出。
     let (mut idle, _line) = {
         let mut state = state_with_roster(&["kimi"]);
         let (reply, line) = tokio::sync::oneshot::channel();
@@ -4007,9 +4007,9 @@ fn the_renderer_confirmations_answer_by_click() {
     };
     idle.key(Key::CtrlD);
     click_text(&mut idle, 120, 24, "[y] 退出");
-    assert!(idle.should_quit(), "the click confirmed the exit");
+    assert!(idle.should_quit(), "这次点击确认了退出");
 
-    // And clicking `[n] 取消` on it leaves the session running.
+    // 而点它上面的 `[n] 取消` 让会话继续跑。
     let (mut escaped, _line) = {
         let mut state = state_with_roster(&["kimi"]);
         let (reply, line) = tokio::sync::oneshot::channel();
@@ -4018,10 +4018,10 @@ fn the_renderer_confirmations_answer_by_click() {
     };
     escaped.key(Key::CtrlD);
     click_text(&mut escaped, 120, 24, "[n] 取消");
-    assert!(!escaped.should_quit(), "the safe answer is not the exit");
+    assert!(!escaped.should_quit(), "安全的那个答案不是退出");
 }
 
-/// A questionnaire with `question` on screen, and its answer receiver.
+/// 一个屏幕上摆着 `question` 的问卷，以及它的答案接收端。
 fn questionnaire_state(
     question: fs_agent::questions::UserQuestion,
 ) -> (
@@ -4058,18 +4058,18 @@ fn a_single_select_option_is_chosen_by_clicking_its_row() {
         ],
     });
 
-    // On the only question, a click answers but does **not** submit: the last
-    // question still needs the separate submit (票 04 §4).
+    // 唯一的那个问题上，点一下作答但**不**提交：最后一
+    // 个问题仍需单独提交（票 04 §4）。
     click_text(&mut state, 120, 24, "2. 乙");
     assert!(
         answers.try_recv().is_err(),
-        "the last question only answers on a click"
+        "最后一个问题点一下只作答"
     );
 
-    // `Enter` is the submit once everything is handled.
+    // 所有问题都处理完之后，`Enter` 才是提交。
     state.key(Key::Enter);
-    let answers = answers.try_recv().expect("the questionnaire submitted");
-    let answers = answers.expect("a successful answer");
+    let answers = answers.try_recv().expect("问卷提交了");
+    let answers = answers.expect("一次成功的作答");
     assert_eq!(answers.answers.len(), 1);
     assert_eq!(answers.answers[0].selected, vec!["乙".to_owned()]);
 }
@@ -4097,18 +4097,18 @@ fn a_multi_select_option_only_toggles_when_clicked() {
     click_text(&mut state, 120, 24, "1. 甲");
     assert!(
         answers.try_recv().is_err(),
-        "a multi-select click does not submit"
+        "多选上点一下不提交"
     );
-    // The tick is on the row the click landed on.
+    // 勾落在点击落到的那一行上。
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("[x] 1. 甲"), "the pick is shown: {text}");
+    assert!(text.contains("[x] 1. 甲"), "选中被显示出来了：{text}");
 
-    // The footer's submit button appears once something is handled, and submits.
-    let row = row_of(&mut state, 120, 40, "提交").expect("the submit button is drawn");
+    // 处理过东西之后页脚的提交按钮才出现，而且能提交。
+    let row = row_of(&mut state, 120, 40, "提交").expect("提交按钮画出来了");
     click_in_row(&mut state, 120, 40, row, "提交");
-    let answers = answers.try_recv().expect("the submit button submitted");
+    let answers = answers.try_recv().expect("提交按钮提交了");
     assert_eq!(
-        answers.expect("a successful answer").answers[0].selected,
+        answers.expect("一次成功的作答").answers[0].selected,
         vec!["甲".to_owned()]
     );
 }
@@ -4137,26 +4137,26 @@ fn the_questionnaire_footer_pages_with_a_click() {
         (state, answers)
     };
 
-    // The first question has no `← 上一题`; it does have `下一题 →`.
+    // 第一个问题没有 `← 上一题`；它确实有 `下一题 →`。
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains("← 上一题"),
-        "no previous on the first: {text}"
+        "第一个问题上没有上一题：{text}"
     );
-    assert!(text.contains("下一题 →"), "but a next: {text}");
+    assert!(text.contains("下一题 →"), "但有下一题：{text}");
 
-    // A click advances, and the second question offers the way back.
+    // 点一下往前走，第二个问题提供回去的路。
     click_in_row(&mut state, 120, 24, 22, "下一题 →");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("2 / 2"), "the click paged forward: {text}");
+    assert!(text.contains("2 / 2"), "这次点击翻到下一页：{text}");
     assert!(
         text.contains("← 上一题"),
-        "and the way back appears: {text}"
+        "回去的路出现了：{text}"
     );
     click_in_row(&mut state, 120, 24, 22, "← 上一题");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("1 / 2"), "the click paged back: {text}");
-    assert!(answers.try_recv().is_err(), "paging never submits");
+    assert!(text.contains("1 / 2"), "这次点击翻回上一页：{text}");
+    assert!(answers.try_recv().is_err(), "翻页从不提交");
 }
 
 #[test]
@@ -4184,19 +4184,19 @@ fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
     };
 
     let (_, before) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(before, None, "no cursor until the row is focused");
+    assert_eq!(before, None, "这一行被聚焦之前没有光标");
 
     click_text(&mut state, 120, 24, "自定义：");
     let (_, focused) = frame_and_cursor(120, 24, &mut state);
     assert!(
         focused.is_some(),
-        "the click put the cursor on the custom row"
+        "这次点击把光标放到自定义那一行上"
     );
 
-    // Paging away resets the focus: the next question's custom row starts unfocused.
+    // 翻走会重置焦点：下一个问题的自定义行起步时没有焦点。
     click_in_row(&mut state, 120, 24, 22, "下一题 →");
     let (_, after) = frame_and_cursor(120, 24, &mut state);
-    assert_eq!(after, None, "the page turn reset the focus");
+    assert_eq!(after, None, "翻页重置了焦点");
 }
 
 #[test]
@@ -4221,24 +4221,24 @@ fn the_wheel_moves_the_questionnaire_highlight() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("> ○ 1. 甲"),
-        "the highlight starts on 1: {text}"
+        "高亮从 1 开始：{text}"
     );
 
     state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("> ○ 2. 乙"),
-        "the wheel moved the highlight: {text}"
+        "滚轮挪动了高亮：{text}"
     );
 }
 
 #[test]
 fn one_message_never_gets_two_thinking_lines() {
-    // The body's first delta settles the line long before `MessageCompleted`
-    // arrives — and the completion carries the whole trace, so a naive "open if not
-    // open" would add a second line for the same thought. No frame is drawn between
-    // the events here, which is what made the earlier version of this test pass
-    // (票 02 §1).
+    // 正文的第一个增量早早就把这行落定了，远在 `MessageCompleted`
+    // 到来之前 —— 而完成事件带着整段轨迹，所以一句天真的
+    // 「没开就开」会给同一个念头添第二行。这里事件之间
+    // 不画帧，而正是这一点让这个测试的早期版本
+    // 通过了（票 02 §1）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("先看依赖。"));
     state.apply(text_delta("答案。"));
@@ -4247,35 +4247,35 @@ fn one_message_never_gets_two_thinking_lines() {
     assert_eq!(
         text.matches("思考完成").count(),
         1,
-        "one thinking segment is one line: {text}"
+        "一段思考就是一行：{text}"
     );
     assert!(
         !text.contains("正在思考"),
-        "and the in-progress line is gone: {text}"
+        "进行中那一行没了：{text}"
     );
 }
 
 #[test]
 fn reasoning_never_joins_the_message_body() {
-    // Reasoning is folded into its own line; letting it through to the live tail would
-    // print the raw thought under `正在思考` (票 02 §3).
+    // 推理折叠进它自己那一行；放它进实时尾巴的话
+    // 会在 `正在思考` 底下打印出原始念头（票 02 §3）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("这是不该出现的思考正文。"));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("… 正在思考"),
-        "the thinking line is there: {text}"
+        "思考行在那儿：{text}"
     );
     assert!(
         !text.contains("这是不该出现的思考正文"),
-        "and the raw reasoning is not: {text}"
+        "而原始推理不在：{text}"
     );
 }
 
 #[test]
 fn the_detail_overlay_freezes_the_transcript() {
-    // A reader who opened a line keeps looking at it: output that arrives while the
-    // overlay is up must not pull the pane to the bottom (票 02 §4).
+    // 打开了一行的读者会一直看着它：覆盖层起来时到来的
+    // 输出不许把窗格往下拽（票 02 §4）。
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
         state.apply(fs_agent::render::RenderEvent::Notice(format!(
@@ -4296,11 +4296,11 @@ fn the_detail_overlay_freezes_the_transcript() {
     let before = screen(120, 24, &mut state);
     assert!(
         before.join("\n").contains("── 参数 ──"),
-        "the overlay is up"
+        "覆盖层起来了"
     );
     let frozen = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&before));
 
-    // New output arrives while the overlay is open.
+    // 覆盖层开着的时候有新输出到来。
     for index in 40..60 {
         state.apply(fs_agent::render::RenderEvent::Notice(format!(
             "第 {index} 行"
@@ -4310,10 +4310,10 @@ fn the_detail_overlay_freezes_the_transcript() {
     let after = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&during));
     assert_eq!(
         after, frozen,
-        "the transcript behind the overlay did not move"
+        "覆盖层后面的转录没有动"
     );
-    // The rows that arrived are not counted at the reader either: the overlay is
-    // holding the position, so "N new rows" would be counting under it.
+    // 到来的那些行也不算进读者的「新行」里：位置是
+    // 覆盖层在保的，所以「N 行新内容」会是在它底下数。
     let counter = |rows: &[String]| {
         rows.iter()
             .find(|row| row.contains("行新内容"))
@@ -4323,14 +4323,14 @@ fn the_detail_overlay_freezes_the_transcript() {
     assert_eq!(
         counter(&during),
         counter(&before),
-        "and the new-rows count is held too"
+        "而新行计数也被按住了"
     );
 }
 
 #[test]
 fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
-    // A question may not be drawn over the overlay: the modal underneath would be
-    // unanswerable, because the overlay is what owns the keyboard (票 02 §4).
+    // 问句不能画在覆盖层之上：底下那个模态会
+    // 没法作答，因为拥有键盘的是覆盖层（票 02 §4）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4341,23 +4341,23 @@ fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
     state.apply(tool_completed(2, "call-21", true, Some("body"), None));
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
+    assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
 
     state.request(ask_permission().0);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──"),
-        "the overlay stood down for the question: {text}"
+        "覆盖层为问句让了位：{text}"
     );
-    assert!(text.contains("权限询问"), "and the question is up: {text}");
+    assert!(text.contains("权限询问"), "而问句起来了：{text}");
 }
 
 #[test]
 fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
-    // The gaps between the footer's buttons are painted as well as counted, so the
-    // region a click lands in is the button the glyphs are in — this pins the bug
-    // where a counted-but-unpainted gap put every region three columns out
-    // (票 04 §7).
+    // 页脚按钮之间的空隙既被数也被画，所以
+    // 点击落进的区域就是那些字形所在的按钮 —— 这里钉的是
+    // 那条 bug：空隙只数不画，会把每个区域都挪出去三列
+    // （票 04 §7）。
     use fs_agent::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = {
         use fs_agent::render::QuestionnaireRequest;
@@ -4380,56 +4380,56 @@ fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
         (state, answers)
     };
 
-    // On the first question only `下一题 →` is drawn. Clicking its glyphs advances.
+    // 第一个问题上只画了 `下一题 →`。点它的字形就前进。
     click_in_row(&mut state, 120, 24, 22, "下一题 →");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("2 / 2"), "the click advanced: {text}");
+    assert!(text.contains("2 / 2"), "这次点击前进了：{text}");
 
-    // On the second, `← 上一题` is drawn first: clicking it goes back, and do not let
-    // it land on anything else.
+    // 第二个问题先画的是 `← 上一题`：点它就回去，别让
+    // 它落在别的任何东西上。
     click_in_row(&mut state, 120, 24, 22, "← 上一题");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("1 / 2"), "the click went back: {text}");
-    assert!(answers.try_recv().is_err(), "paging never submits");
+    assert!(text.contains("1 / 2"), "这次点击回去了：{text}");
+    assert!(answers.try_recv().is_err(), "翻页从不提交");
 }
 
 #[test]
 fn a_thinking_line_tints_its_speakers_name() {
-    // The thinking hint carries a `speaker_label`, so its name takes the speaker's
-    // colour while the marker and the state word stay the narration grey
-    // (票 07 §2).
+    // 思考提示带着一个 `speaker_label`，所以它的名字取讨论者的
+    // 颜色，而标记与状态词保持叙述灰
+    // （票 07 §2）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("先看依赖。"));
     state.apply(text_delta("答案。"));
 
     let frame = buffer(120, 40, &mut state);
     let Some((column, row)) = cell_of(&frame, 120, 40, "✓ 思考完成") else {
-        panic!("the thinking line is on screen");
+        panic!("思考行在屏幕上");
     };
-    // The name sits just before the marker.
+    // 名字正好坐在标记前面。
     let name_x = column - text_columns("▸ ") as u16 - text_columns("[kimi] ") as u16;
     assert_eq!(
         frame[(name_x, row)].symbol(),
         "[",
-        "the name prefix is there"
+        "名字前缀在那儿"
     );
     assert_eq!(
         frame[(name_x, row)].fg,
         Color::LightCyan,
-        "the name takes the first roster slot"
+        "这个名字取的是名册的第一个位置"
     );
     assert_eq!(
         frame[(column, row)].fg,
         Color::DarkGray,
-        "and the state word stays narration grey"
+        "而状态词保持叙述灰"
     );
 }
 
 #[test]
 fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
-    // Reasoning and body deltas interleave, so a single message can hold several
-    // thinking segments: each one settles where it stands and the next opens its own
-    // line (票 02 §1).
+    // 推理增量与正文增量交替出现，所以单条消息可以装好几
+    // 段思考：每一段在它站的地方落定，下一段开自己
+    // 那一行（票 02 §1）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("第一段思考。"));
     state.apply(text_delta("第一段正文。"));
@@ -4437,26 +4437,26 @@ fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("… 正在思考"),
-        "the second segment is open: {text}"
+        "第二段还开着：{text}"
     );
     assert_eq!(
         text.matches("思考完成").count(),
         1,
-        "and the first is settled: {text}"
+        "而第一段落定了：{text}"
     );
 
     state.apply(message(1, "第一段正文。", Some("第一段思考。第二段思考。")));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("正在思考"),
-        "the completion settles the open segment: {text}"
+        "完成事件把开着的那一段落定：{text}"
     );
 }
 
 #[test]
 fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
-    // The one exception to "the overlay ignores every other key": `Ctrl-D` closes it
-    // instead of opening the exit confirmation (票 06 §5).
+    // 「覆盖层忽略其它所有键」的唯一例外：`Ctrl-D` 关上它
+    // 而不是打开退出确认（票 06 §5）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4467,35 +4467,35 @@ fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
     state.apply(tool_completed(2, "call-22", true, Some("body"), None));
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
+    assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
 
     state.key(Key::CtrlD);
-    assert!(!state.should_quit(), "closing is not quitting");
+    assert!(!state.should_quit(), "关上不是退出");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains("── 参数 ──"), "the overlay closed: {text}");
+    assert!(!text.contains("── 参数 ──"), "覆盖层关上了：{text}");
     assert!(
         !text.contains("退出会话"),
-        "and no confirmation was asked: {text}"
+        "而且没有问过确认：{text}"
     );
 }
 
 #[test]
 fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
-    // The spilled file has no cap of its own, so the reader's does the cutting and
-    // the body says it happened (票 02 §4).
+    // 落盘文件自己没有上限，所以裁的是读者那份，
+    // 而正文说出这件事（票 02 §4）。
     let dir = std::env::temp_dir().join(format!("fs-agent-detail-big-{}", std::process::id()));
     let outputs = dir.join("outputs");
-    std::fs::create_dir_all(&outputs).expect("the session's outputs directory");
+    std::fs::create_dir_all(&outputs).expect("会话的 outputs 目录");
     let big = "x".repeat(200_001);
-    std::fs::write(outputs.join("call-23.txt"), &big).expect("the spilled file");
+    std::fs::write(outputs.join("call-23.txt"), &big).expect("落盘的那个文件");
 
     let mut state = TuiState::new(SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
         session_dir: dir.display().to_string(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
-        // The mode the session was assembled in: the status row's `模式 …` field. A
-        // test that means another one overrides it in its own facts.
+        // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
+        // 测试在自己的 facts 里覆盖它。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: vec!["kimi".to_owned()],
@@ -4506,9 +4506,9 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         "bash",
         serde_json::json!({"command": "cat big"}),
     ));
-    // The event's `output` is the **cut** preview, which is what says there is a whole
-    // file to go and read — a preview with no marker in it is the whole body, and the
-    // detail does not go looking for a file that was never written.
+    // 事件的 `output` 是**裁过**的预览，而正是它说明还有一整份
+    // 文件可去读 —— 预览里没有标记就是整段正文，而
+    // 详情不会去找一个从没写过的文件。
     state.apply(tool_completed(
         2,
         "call-23",
@@ -4521,22 +4521,22 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
     ));
     click_row(&mut state, 120, 40, "调用 bash");
 
-    // The mark is far below the visible body, so walk to the end of it.
+    // 标记远在可见正文的下面，所以走到它的末尾。
     for _ in 0..4000 {
         state.key(Key::PageDown);
     }
     let rows = screen(120, 40, &mut state);
     let text = rows.join("\n");
-    assert!(text.contains("已截断"), "the cut is stated: {text}");
+    assert!(text.contains("已截断"), "裁剪被说出来了：{text}");
 
     std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
 fn the_detail_overlay_ignores_every_key_but_its_own() {
-    // The overlay owns the keyboard: `Esc` and `Ctrl-D` close it, the arrows and the
-    // page keys scroll it, and **everything else is ignored** — `Ctrl-C` included, so
-    // a stray gesture cannot quit or cancel out from under a reader (票 02 §4).
+    // 覆盖层独占键盘：`Esc` 与 `Ctrl-D` 关上它，箭头与
+    // 翻页键滚动它，而**别的全部忽略** —— 包括 `Ctrl-C`，所以
+    // 一个误碰的手势不能从读者手底下退出或取消（票 02 §4）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4550,40 +4550,40 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     state.key(Key::CtrlC);
     assert!(
         !state.should_quit(),
-        "Ctrl-C does not quit from the overlay"
+        "Ctrl-C 不会从覆盖层里退出"
     );
     assert!(
         state.take_events().is_empty(),
-        "and it does not cancel anything either"
+        "也不会取消任何东西"
     );
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("── 参数 ──"),
-        "the overlay is still up: {text}"
+        "覆盖层还开着：{text}"
     );
 
-    // A printable key does not reach the draft either: the overlay's keys are the
-    // overlay's, and the editor behind it is not being typed into.
+    // 可打印的键也到不了草稿：覆盖层的键就是
+    // 覆盖层的，它后面的编辑器没在被打字。
     state.key(Key::Char('x'));
     let rows = screen(120, 40, &mut state);
     let input = rows
         .iter()
         .position(|row| row.contains(editor::PROMPT))
-        .expect("the input row is drawn");
+        .expect("输入区那一行画出来了");
     assert!(
         !rows[input].contains('x'),
-        "nothing landed in the draft: {:?}",
+        "草稿里什么都没落进去：{:?}",
         rows[input]
     );
 }
 
 #[test]
 fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
-    // The transcript used to hold a call open until some *later* unrelated event closed
-    // it, so the call line only appeared once the model had already answered its next
-    // iteration: for the whole tool run, and until then, the transcript showed nothing
-    // about the call at all (票 02 §3). The result is what ends the call, and it is
-    // what has to paint it.
+    // 转录过去会把一次调用开着，直到*后面*某个不相关的事件把它关掉，
+    // 所以调用行要等模型已经答完下一轮迭代才出现：
+    // 在整次工具运行的这一刻之前，转录关于这次调用
+    // 什么都没显示（票 02 §3）。结果才是结束调用的东西，也正是
+    // 必须画它的东西。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4596,12 +4596,12 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("调用 bash 查看"),
-        "the call line is up as soon as the result is: {text}"
+        "结果一落地调用行就起来了：{text}"
     );
 
-    // A permission question asked **about this call** does not delay it either: the
-    // narration is painted while the call is still in flight, and the call line arrives
-    // on the result regardless.
+    // **针对这次调用**的权限询问也不拖它：
+    // 调用还在飞的时候叙述就已经画出来了，而调用行照旧
+    // 随结果到来。
     let mut asked = state_with_roster(&["kimi"]);
     asked.apply(tool_started(
         1,
@@ -4614,24 +4614,24 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     let text = screen(120, 24, &mut asked).join("\n");
     assert!(
         text.contains("权限询问"),
-        "the question is narrated first: {text}"
+        "问句先被叙述出来：{text}"
     );
     assert!(
         !text.contains("调用 bash"),
-        "and the call is not painted before its result: {text}"
+        "而调用不会在它的结果之前画出来：{text}"
     );
     asked.apply(tool_completed(4, "call-31", true, Some("out"), None));
     let text = screen(120, 24, &mut asked).join("\n");
     assert!(
         text.contains("调用 bash 查看"),
-        "the call line is up as soon as the result is: {text}"
+        "结果一落地调用行就起来了：{text}"
     );
 }
 
 #[test]
 fn the_detail_overlay_is_wider_than_a_question() {
-    // The body is a page, so it gets the room: the ceiling went 90 → 135 and below 139
-    // columns what caps it is the overlay's own margin, not the ceiling (票 03
+    // 正文是一页，所以它拿到这份余地：上限从 90 涨到 135，而 139
+    // 列以下压着它的是覆盖层自己的边距，不是那个上限（票 03
     // §Answer，2026-09-23 加宽 50%）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
@@ -4643,28 +4643,28 @@ fn the_detail_overlay_is_wider_than_a_question() {
     state.apply(tool_completed(2, "call-41", true, Some("body"), None));
     click_row(&mut state, 120, 40, "调用 bash");
     let frame = buffer(120, 40, &mut state);
-    let detail = overlay_width(&frame, 120, 40).expect("the overlay's top border");
+    let detail = overlay_width(&frame, 120, 40).expect("覆盖层的上边框");
 
-    // A question's overlay is narrower, and it is painted the same way: ask one and
-    // measure it.
+    // 问句的覆盖层更窄，而且画法一样：问一个来
+    // 量它。
     let mut asked = state_with_roster(&["kimi"]);
     asked.request(ask_permission().0);
     let frame = buffer(120, 40, &mut asked);
-    let question = overlay_width(&frame, 120, 40).expect("the question's top border");
+    let question = overlay_width(&frame, 120, 40).expect("问句的上边框");
 
     assert!(
         detail > question,
-        "the detail overlay ({detail}) is wider than a question's ({question})"
+        "详情覆盖层（{detail}）比问句的（{question}）宽"
     );
-    // At 120 columns the main column is what caps both: 77 columns less the four the
-    // margin keeps leaves 73 for the detail (its 135-column ceiling is not reached)
-    // and 72 for the question.
-    assert_eq!(detail, 73, "the detail overlay at 120 columns");
-    assert_eq!(question, 72, "and the question's 72-column ceiling");
+    // 120 列下压着两者的是主列：77 列减去
+    // 边距留住的四列，给详情留下 73（它那个 135 列的上限到不了），
+    // 给问句留下 72。
+    assert_eq!(detail, 73, "120 列下的详情覆盖层");
+    assert_eq!(question, 72, "而问句那个 72 列的上限");
 
-    // The ceiling needs a terminal wide enough for the main column to outgrow it:
-    // 200 columns leaves 157, and the four-column margin then leaves 153 — past the
-    // 135 the detail overlay never exceeds.
+    // 要撞到上限，终端得宽到主列能长过它：
+    // 200 列留下 157，四列的边距再留下 153 —— 越过了详情
+    // 覆盖层从不超出的那个 135。
     let mut wide = state_with_roster(&["kimi"]);
     wide.apply(tool_started(
         1,
@@ -4675,22 +4675,22 @@ fn the_detail_overlay_is_wider_than_a_question() {
     wide.apply(tool_completed(2, "call-41", true, Some("body"), None));
     click_row(&mut wide, 200, 40, "调用 bash");
     let frame = buffer(200, 40, &mut wide);
-    let detail = overlay_width(&frame, 200, 40).expect("the overlay's top border");
+    let detail = overlay_width(&frame, 200, 40).expect("覆盖层的上边框");
     assert_eq!(
         detail, 135,
-        "and on a wide terminal the ceiling is what caps it"
+        "而在宽终端上压着它的是那个上限"
     );
 }
 
-/// The painted width of a floating box, read off the row its top border is on.
+/// 一个浮动框画出来的宽度，从它上边框所在的那一行读出来。
 ///
-/// The overlay is centred in the main column, whose own border sits one column
-/// outside it on either side — so the box is found by looking for a `┌` that is **not**
-/// in the first column, and measured to its matching `┐`.
+/// 覆盖层在主列里居中，而主列自己的边框在它两侧各
+/// 往外一列 —— 所以找这个框的办法是找那个**不在**第一列的 `┌`，
+/// 然后量到与它配对的 `┐`。
 fn overlay_width(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
     for y in 0..height {
-        // Columns, not byte offsets: a row with CJK in it is longer in bytes than it is
-        // wide, and the box is measured in columns.
+        // 按列算，不按字节偏移：带 CJK 的一行，字节数比
+        // 宽度长，而框是按列量的。
         let mut left = None;
         for x in 1..width {
             match frame[(x, y)].symbol() {
@@ -4709,8 +4709,8 @@ fn overlay_width(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
 
 #[test]
 fn a_click_outside_the_detail_overlay_closes_it() {
-    // The whole of the frame outside the overlay is a close target: the line it came
-    // from, the transcript around it, the panel, the footer (票 02 §4，2026-09-23
+    // 覆盖层之外整圈帧都是可以点下去的关闭目标：它来的那一
+    // 行、它周围的转录、面板、页脚（票 02 §4，2026-09-23
     // 修正，原先只认「再点同一行」）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
@@ -4722,69 +4722,69 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     state.apply(tool_completed(2, "call-40", true, Some("body"), None));
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "the overlay opened: {text}");
+    assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
 
-    // Outside: the margin the overlay leaves inside the main column, on the row the
-    // line it came from sits on.
-    let row = row_of(&mut state, 120, 40, "调用 bash").expect("the call line");
+    // 外面：覆盖层在主列里留出的边距，在它来
+    // 自的那一行上。
+    let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行");
     state.mouse(click(MAIN_LEFT_AT_120, row));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──"),
-        "a click on the transcript closed it: {text}"
+        "点在转录上把它关上了：{text}"
     );
 
-    // Inside: nothing happens, because the overlay has no buttons of its own — and
-    // that includes the screen row the line was on when the overlay covers it. The old
-    // "click the same row again" is **not** what closes a covered line; the reliable
-    // ways out are `Esc`, `Ctrl-D`, and a click outside (票 02 §4，2026-09-23 修正).
+    // 里面：什么都不发生，因为覆盖层自己没有按钮 —— 而且
+    // 这包括覆盖层盖住它时那一行原本所在的屏幕行。老的
+    // 「再点同一行」**不是**关上被盖住的行的办法；可靠的
+    // 出口是 `Esc`、`Ctrl-D`，以及在别处点一下（票 02 §4，2026-09-23 修正）。
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "reopened: {text}");
+    assert!(text.contains("── 参数 ──"), "重新打开了：{text}");
     state.mouse(click(60, 12));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("── 参数 ──"),
-        "a click inside leaves it up: {text}"
+        "在里面点一下它照样开着：{text}"
     );
-    // What decides is the **screen position**, not which transcript line is under it:
-    // a click inside the overlay's rectangle does nothing. So when the line the overlay
-    // was opened from sits under the overlay — which is where it usually is, since the
-    // overlay covers most of the main column — clicking there does nothing either, and
-    // `Esc` / `Ctrl-D` / a click outside are the ways out (票 02 §4，2026-09-23 修正).
-    // The "inside does nothing" click above is that case: (60, 12) is inside the
-    // overlay's rectangle at this size, between the two borders read back here.
+    // 决定的是**屏幕位置**，不是它底下压着哪一条转录行：
+    // 点在覆盖层矩形里面什么都不发生。所以当覆盖层是从某一行
+    // 打开来的时候，而那一行正好在覆盖层底下 —— 通常都在那儿，因为
+    // 覆盖层盖住主列的大部分 —— 点那儿也什么都不发生，
+    // 而出路是 `Esc` / `Ctrl-D` / 在别处点一下（票 02 §4，2026-09-23 修正）。
+    // 上面那次「里面什么都不发生」的点击就是这种情况：(60, 12) 在这个尺寸下
+    // 落在覆盖层的矩形里，在下面读出来的两条边框之间。
     let frame = buffer(120, 40, &mut state);
-    let overlay = overlay_width(&frame, 120, 40).expect("the overlay");
+    let overlay = overlay_width(&frame, 120, 40).expect("覆盖层");
     assert_eq!(
         overlay, 73,
-        "at 120 columns the main column, not the ceiling, is what caps the overlay"
+        "120 列下压着覆盖层的是主列，不是那个上限"
     );
     assert_eq!(
         (frame[(44, 12)].symbol(), frame[(116, 12)].symbol()),
         ("│", "│"),
-        "and those are its two edges on the row that click landed on"
+        "那就是它在那次点击落到的行上的两条边"
     );
 }
 
 #[test]
 fn a_settling_thinking_line_keeps_the_history_before_it() {
-    // A live session draws frames **between** events, and that is what fills the pane's
-    // wrap cache. A thinking line then settles *in place*, and that rewrite must not
-    // throw away the display rows of everything before it.
+    // 活的会话在事件**之间**画帧，而正是它填满窗格的
+    // 折行缓存。于是思考行会*原地*落定，而那次重写不能
+    // 把在它之前的所有显示行扔掉。
     //
-    // It did. `replace_last` cleared the whole wrapped cache while `starts` kept
-    // pointing at the old offsets, so the pane came back with almost no rows: the
-    // history vanished, the pane stopped filling its height, and PgUp had nothing to
-    // scroll. Reported as "bash 命令都没了 / 输出没有占满屏幕 / PgUp 没有反映"
-    // (2026-09-23).
+    // 它扔了。`replace_last` 清掉了整份折行缓存，而 `starts` 仍然
+    // 指着旧的偏移，所以窗格回来时几乎没有行：
+    // 历史不见了，窗格不再填满自己的高度，PgUp 也没什么
+    // 可滚的。当时报的是「bash 命令都没了 / 输出没有占满屏幕 / PgUp 没有反映」
+    // （2026-09-23）。
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
         state.apply(fs_agent::render::RenderEvent::Notice(format!(
             "第 {index} 行"
         )));
     }
-    // A frame first, then the live thinking segment with a frame in the middle of it.
+    // 先来一帧，然后是中间夹着一帧的实时思考段。
     let _ = screen(120, 24, &mut state);
     state.apply(reasoning_delta("先想一下。"));
     let _ = screen(120, 24, &mut state);
@@ -4794,33 +4794,33 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
     let text = rows.join("\n");
     assert!(
         text.contains("▸ ✓ 思考完成"),
-        "the thinking line settled: {text}"
+        "思考行落定了：{text}"
     );
     assert!(
         text.contains("答案。"),
-        "and the body that settled it is there: {text}"
+        "而落定它的那段正文也在：{text}"
     );
     let notices = rows.iter().filter(|row| row.contains("第 ")).count();
     assert!(
         notices >= 5,
-        "the history before it is still on screen ({notices} rows): {text}"
+        "它之前的历史还在屏幕上（{notices} 行）：{text}"
     );
     state.key(Key::PageUp);
     let rows = screen(120, 24, &mut state);
     assert!(
         rows.iter().any(|row| row.contains("第 2")),
-        "and PgUp still reaches further back: {}",
+        "而 PgUp 还能翻到更早：{}",
         rows.join("\n")
     );
 }
 
 #[test]
 fn a_complete_result_does_not_claim_its_text_is_unavailable() {
-    // Only a result that was **cut** has a spilled file; a short one was never written
-    // anywhere, and its preview *is* the whole body. Saying `全文不可用` about it is a
-    // lie the reader cannot see through — it reads as "this detail is incomplete"
-    // (2026-09-23, user report: every bash detail ended with `--- stderr ---
-    // 全文不可用`).
+    // 只有**被裁过**的结果才有落盘文件；短的结果从没写到
+    // 任何地方，它的预览*就是*整段正文。对它说 `全文不可用` 是
+    // 读者看不穿的谎 —— 读起来像「这份详情不完整」
+    // （2026-09-23，用户报告：每个 bash 详情末尾都是 `--- stderr ---`
+    // 全文不可用`）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4840,18 +4840,18 @@ fn a_complete_result_does_not_claim_its_text_is_unavailable() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("--- stderr ---"),
-        "the tool's own sections are shown as they are: {text}"
+        "工具自己的那些小节原样显示：{text}"
     );
     assert!(
         !text.contains("全文不可用"),
-        "and no degradation is claimed for a body that was never cut: {text}"
+        "而从没被裁过的正文不会被说成降级：{text}"
     );
 }
 
 #[test]
 fn a_cut_result_still_says_when_the_whole_text_is_gone() {
-    // The other half of the same rule: a preview that really was cut, with no file to
-    // read it back from, keeps the note.
+    // 同一条规矩的另一半：真被裁过的预览，若没有文件
+    // 可以读回来，就留着那句说明。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4871,14 +4871,14 @@ fn a_cut_result_still_says_when_the_whole_text_is_gone() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("全文不可用"),
-        "a cut body with no readable file says so: {text}"
+        "被裁过的正文没有可读文件时照实说：{text}"
     );
 }
 
 #[test]
 fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
-    // `调用 工具 描述`: the reader sees what the call was *for*, and the concrete
-    // arguments are one click away in the detail (票 02 §2，2026-09-23 修正).
+    // `调用 工具 描述`：读者看到这次调用*为的*是什么，而具体的
+    // 参数在详情里，一次点击之外（票 02 §2，2026-09-23 修正）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4890,14 +4890,14 @@ fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("[kimi] ▸ 调用 bash 查询 .scratch"),
-        "the line describes the call: {text}"
+        "这一行描述这次调用：{text}"
     );
     assert!(
         !text.contains("find .scratch -type f"),
-        "and the arguments are not printed on it: {text}"
+        "而参数不印在上面：{text}"
     );
 
-    // The questionnaire describes itself by the question's own header.
+    // 问卷用问题自己的头部来描述自己。
     let mut asked = state_with_roster(&["kimi"]);
     asked.apply(tool_started(
         1,
@@ -4909,23 +4909,23 @@ fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
     let text = screen(120, 40, &mut asked).join("\n");
     assert!(
         text.contains("[kimi] ▸ 调用 ask_user_question 下一步 失败"),
-        "the question's own summary describes the call: {text}"
+        "问题自己的摘要描述了这次调用：{text}"
     );
 
-    // The arguments are still in the detail, under their own heading.
+    // 参数还在详情里，在它们自己的标题下。
     click_row(&mut asked, 120, 40, "调用 ask_user_question");
     let text = screen(120, 40, &mut asked).join("\n");
-    assert!(text.contains("── 参数 ──"), "the args section: {text}");
+    assert!(text.contains("── 参数 ──"), "参数那一节：{text}");
     assert!(
         text.contains("下一步"),
-        "and it carries the concrete arguments: {text}"
+        "而它带着具体的参数：{text}"
     );
 }
 
 #[test]
 fn the_call_line_wears_the_narration_grey_after_its_speakers_name() {
-    // The description is narration, not the model's answer, so it wears the same grey
-    // as the thinking line; the name keeps the speaker's colour (2026-09-23).
+    // 描述是叙述，不是模型的答案，所以它穿和思考行
+    // 一样的灰；名字保持讨论者的颜色（2026-09-23）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4937,27 +4937,27 @@ fn the_call_line_wears_the_narration_grey_after_its_speakers_name() {
     let frame = buffer(120, 40, &mut state);
 
     let Some((name_x, row)) = cell_of(&frame, 120, 40, "[kimi]") else {
-        panic!("the call line is on screen");
+        panic!("调用行在屏幕上");
     };
     let Some((call_x, _)) = cell_of(&frame, 120, 40, "调用 bash") else {
-        panic!("the call line is on screen");
+        panic!("调用行在屏幕上");
     };
     assert_eq!(
         frame[(name_x, row)].fg,
         Color::LightCyan,
-        "the name keeps the speaker's colour"
+        "名字保持讨论者的颜色"
     );
     assert_eq!(
         frame[(call_x, row)].fg,
         Color::DarkGray,
-        "and the description wears the narration grey"
+        "而描述穿的是叙述灰"
     );
 }
 
 #[test]
 fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
-    // The border is the speaker's colour — whose line you are reading, before a word of
-    // it — and the words sit a cell inside it (2026-09-23).
+    // 边框是讨论者的颜色 —— 还没读到一个字，你就知道
+    // 在读谁的那一行 —— 而字坐在边框里往里一格（2026-09-23）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4969,7 +4969,7 @@ fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
     click_row(&mut state, 120, 40, "调用 bash");
     let frame = buffer(120, 40, &mut state);
 
-    // The overlay's own corner: a `┌` that is not the middle block's.
+    // 覆盖层自己的那个角：一个不是中间那块框的 `┌`。
     let mut corner = None;
     for y in 0..40 {
         for x in 2..120 {
@@ -4982,11 +4982,11 @@ fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
             break;
         }
     }
-    let (x, y) = corner.expect("the overlay's top-left corner");
+    let (x, y) = corner.expect("覆盖层的左上角");
     assert_eq!(
         frame[(x, y)].fg,
         Color::LightCyan,
-        "the border wears the speaker's colour"
+        "边框穿着讨论者的颜色"
     );
     assert_eq!(
         (
@@ -4994,16 +4994,16 @@ fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
             frame[(x + 2, y + 1)].symbol()
         ),
         (" ", " "),
-        "the cells just inside the border are air, on both axes"
+        "紧贴边框里面那几格是空气，两个轴上都是"
     );
     assert_eq!(
         frame[(x + 2, y + 2)].symbol(),
         "[",
-        "and the title starts a cell in from the border on both"
+        "而标题在两个方向上都从边框往里一格开始"
     );
 }
 
-/// The overlay's painted box on screen: its left column and its width.
+/// 覆盖层在屏幕上画出来的框：它的左列与宽度。
 fn overlay_box(frame: &Buffer, width: u16, height: u16) -> Option<(u16, u16)> {
     for y in 0..height {
         let mut left = None;
@@ -5024,36 +5024,36 @@ fn overlay_box(frame: &Buffer, width: u16, height: u16) -> Option<(u16, u16)> {
 
 #[test]
 fn the_permission_modals_buttons_are_centred() {
-    // The body is a centred paragraph and the buttons are a shorter line: centring them
-    // by their own width is what puts them under the words instead of off to the left
-    // (2026-09-23, user report).
+    // 正文是一段居中的文字，而按钮是更短的一行：按它们自己的宽度
+    // 居中，才把它们放在这些字下面，而不是偏到左边
+    // （2026-09-23，用户报告）。
     let mut state = state_with_roster(&["deepseek"]);
     state.request(ask_permission().0);
     let frame = buffer(120, 24, &mut state);
-    let (x, width) = overlay_box(&frame, 120, 24).expect("the modal's box");
+    let (x, width) = overlay_box(&frame, 120, 24).expect("模态的框");
 
-    let (first, row) = cell_of(&frame, 120, 24, "[y] 允许").expect("the first button");
-    let (last, _) = cell_of(&frame, 120, 24, "[n] 拒绝").expect("the last button");
+    let (first, row) = cell_of(&frame, 120, 24, "[y] 允许").expect("第一个按钮");
+    let (last, _) = cell_of(&frame, 120, 24, "[n] 拒绝").expect("最后一个按钮");
     let last_end = last as usize + text_columns("[n] 拒绝");
     let left_gap = first as usize - (x as usize + 1);
     let right_gap = (x as usize + width as usize - 1) - last_end;
     assert!(
         row == cell_of(&frame, 120, 24, "[n] 拒绝")
-            .expect("the last button")
+            .expect("最后一个按钮")
             .1,
-        "the buttons are one row"
+        "按钮在同一行"
     );
     assert!(
         left_gap.abs_diff(right_gap) <= 1,
-        "the button row is centred: {left_gap} columns of air on the left, {right_gap} on the right"
+        "按钮行居中：左边 {left_gap} 列空气，右边 {right_gap} 列"
     );
 }
 
 #[test]
 fn the_detail_footer_counts_the_last_row_on_screen() {
-    // A reader who has scrolled to the bottom is at the bottom: the footer counts the
-    // last row on screen, not the row the window happens to start at. It read `94/154`
-    // with the last row visible (2026-09-23, user report).
+    // 已经滚到最底下的读者就在最底下：页脚数的是
+    // 屏幕上最后一行，不是窗口恰好起始的那一行。最后一行可见时
+    // 它却读成 `94/154`（2026-09-23，用户报告）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -5071,28 +5071,28 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     ));
     click_row(&mut state, 120, 40, "调用 bash");
 
-    // The footer's two numbers, wherever they are on screen.
+    // 页脚那两个数，不管它们在屏幕上的哪儿。
     let counts = |state: &mut TuiState| -> (usize, usize) {
         let rows = screen(120, 40, state);
         let row = rows
             .iter()
             .find(|row| row.contains('↕'))
-            .expect("the footer is drawn");
-        let tail = row.split('↕').nth(1).expect("after the marker");
-        let pair = tail.split('·').next().expect("before the key").trim();
-        let (seen, total) = pair.split_once('/').expect("a pair");
+            .expect("页脚画出来了");
+        let tail = row.split('↕').nth(1).expect("标记之后");
+        let pair = tail.split('·').next().expect("键位之前").trim();
+        let (seen, total) = pair.split_once('/').expect("一对");
         (
-            seen.trim().parse().expect("a number"),
-            total.trim().parse().expect("a number"),
+            seen.trim().parse().expect("一个数字"),
+            total.trim().parse().expect("一个数字"),
         )
     };
 
     let (seen, total) = counts(&mut state);
     assert!(
         total > 100,
-        "the body is long enough to scroll: {seen}/{total}"
+        "正文长到可以滚动：{seen}/{total}"
     );
-    assert!(seen < total, "and the window starts short of the end");
+    assert!(seen < total, "而窗口起点还在离末尾一截的地方");
 
     for _ in 0..50 {
         state.key(Key::PageDown);
@@ -5100,16 +5100,16 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     let (seen, total) = counts(&mut state);
     assert_eq!(
         seen, total,
-        "at the bottom the footer reads the last row: {seen}/{total}"
+        "到底时页脚读的是最后一行：{seen}/{total}"
     );
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("第 200 行"),
-        "and the last row really is on screen: {text}"
+        "而最后一行真的在屏幕上：{text}"
     );
 }
 
-/// A permission question about a shell command, the way the loop asks one.
+/// 一次针对 shell 命令的权限询问，按循环问它的样子。
 fn ask_bash(command: &str) -> fs_agent::render::ConsoleRequest {
     use fs_agent::permissions::PermissionRequest;
     use fs_agent::render::AskRequest;
@@ -5128,13 +5128,13 @@ fn ask_bash(command: &str) -> fs_agent::render::ConsoleRequest {
 
 #[test]
 fn the_permission_question_describes_the_call_the_way_the_line_does() {
-    // The question and the folded line it is about are produced by **one** function, so
-    // they cannot drift apart — and the call as it will run stays under them, because
-    // approving is the moment the exact command has to be readable (2026-09-23, user
-    // request: the popup should read like the line, both kept).
+    // 问句和它关于的那条折起行是**同一个**函数产出的，所以
+    // 它们不可能漂开 —— 而这次调用将怎么跑就留在它们下面，因为
+    // 批准的这一刻正是那条确切命令必须可读的时刻（2026-09-23，用户
+    // 要求：弹窗要读起来像那一行，两个都留着）。
     let command = "head -5 README.md";
     let mut state = state_with_roster(&["deepseek"]);
-    // The same call, first folded into the transcript...
+    // 同一次调用，先折进转录……
     state.apply(tool_started(
         1,
         "call-80",
@@ -5142,7 +5142,7 @@ fn the_permission_question_describes_the_call_the_way_the_line_does() {
         serde_json::json!({ "command": command }),
     ));
     state.apply(tool_completed(2, "call-80", true, Some("out"), None));
-    // ...and then asked about.
+    // ……然后被问起。
     state.request(ask_bash(command));
 
     let rows = screen(120, 40, &mut state);
@@ -5150,18 +5150,18 @@ fn the_permission_question_describes_the_call_the_way_the_line_does() {
     assert_eq!(
         text.matches("调用 bash 查看 README.md").count(),
         2,
-        "the folded line and the question carry the same description: {text}"
+        "折起行和问句带着同一句描述：{text}"
     );
     let description = rows
         .iter()
         .position(|row| row.contains("调用 bash 查看 README.md") && row.contains('│'))
-        .expect("the description row in the overlay");
+        .expect("覆盖层里的描述行");
     let call = rows
         .iter()
         .position(|row| row.contains("bash（command=head -5 README.md）"))
-        .expect("the exact call is still shown");
+        .expect("确切的那条调用还显示着");
     assert!(
         description < call,
-        "and the exact call comes after it: {text}"
+        "而确切的那条调用在它后面：{text}"
     );
 }
