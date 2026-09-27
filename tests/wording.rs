@@ -1,10 +1,10 @@
-//! The wording layer at its own seam: given a domain value, which Chinese phrase
-//! comes out.
+//! 措辞层在它自己的接缝上：给定一个领域值，
+//! 出来的是哪一句中文。
 //!
-//! This is the one layer that asserts **exact text**. "One source for every
-//! human-facing phrase" is the whole claim of the feature, and only an assertion
-//! here can tell "one producer" apart from "four copies of the same words" (spec
-//! §Testing Decisions). The painters assert semantics instead.
+//! 这是唯一一个断言**精确文本**的层。「每个人类可见短语
+//! 只有一个来源」正是这个特性的全部主张，而只有这里的
+//! 断言能把「一个产出者」与「同一群字写了四份」分开
+//! （spec §Testing Decisions）。画家那边断言的是语义。
 
 use fs_agent::events::{
     ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId, StopReason, Usage,
@@ -58,7 +58,7 @@ fn every_stop_reason_has_one_explicit_chinese_phrase() {
         assert_eq!(
             wording::stop_reason(reason),
             phrase,
-            "the mapping for {reason:?} is explicit"
+            "对 {reason:?} 的映射是显式写下的"
         );
     }
 }
@@ -81,7 +81,7 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         wording::discussion_ended(StopReason::NoDivergence, 1, &[]),
         "讨论结束：无分歧（跑了 1 轮）"
     );
-    // The absent side is named: a round with one answer is not a round of agreement.
+    // 缺席的那一方会被点名：一轮里只有一方作答，不是一轮一致。
     assert_eq!(
         wording::discussion_ended(
             StopReason::NoDivergence,
@@ -91,7 +91,7 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         "讨论结束：无分歧（跑了 2 轮）；缺席：[deepseek]"
     );
     assert_eq!(wording::discussion_pair("保守", "激进"), "保守 × 激进");
-    // A debater is named by its persona, with the model beside it when they differ.
+    // 讨论者按人物命名，两者不同时把模型放在旁边。
     assert_eq!(
         wording::debater_label("保守", "deepseek-v4-pro"),
         "保守（deepseek-v4-pro）"
@@ -99,7 +99,7 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
     assert_eq!(
         wording::debater_label("kimi-k3", "kimi-k3"),
         "kimi-k3",
-        "the shorthand says it once"
+        "简写只说一遍"
     );
     assert_eq!(
         wording::needs_two_debaters("保守"),
@@ -113,7 +113,7 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         wording::discussion_replay("20260922T101500Z-ab12"),
         "会话 20260922T101500Z-ab12；复盘：fs-agent sessions show 20260922T101500Z-ab12"
     );
-    // The two ways `discuss` refuses to start say what to do instead.
+    // `discuss` 拒绝启动的那两条路都会说清该改怎么做。
     assert!(
         wording::discussion_no_roster().contains("[discussion]"),
         "{}",
@@ -125,7 +125,7 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         wording::discussion_no_roster()
     );
     assert_eq!(wording::question_prompt(), "问题> ");
-    // `/discuss` on a live session: which models, and which question.
+    // 在活着的会话上跑 `/discuss`：哪些模型、哪个问题。
     assert_eq!(
         wording::discussion_starting(
             "保守（deepseek-v4-pro）",
@@ -140,8 +140,8 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         wording::discuss_needs_in_session_question()
     );
 
-    // One vendor — or one model twice — is allowed, and said out loud rather than
-    // passing for the heterogeneous case the design assumes.
+    // 同一家厂商 —— 或者同一个模型用两次 —— 是允许的，而且会明说
+    // 出来，而不是冒充设计假设的那种异构。
     assert_eq!(
         wording::discussion_same_model("kimi-k3"),
         "提示：两个讨论者都是 kimi-k3——同一个模型问两遍，剩下的差异只有采样噪声"
@@ -223,7 +223,7 @@ fn a_usage_line_reads_in_chinese() {
 
 #[test]
 fn a_permission_ask_and_verdict_read_in_chinese() {
-    // The question shows the tool and the concrete call, never the ids.
+    // 问题显示工具与那次具体的调用，从不显示 id。
     assert_eq!(
         wording::permission_asked(Some("bash"), "command=rm -rf /"),
         "权限询问：bash（command=rm -rf /）"
@@ -262,22 +262,22 @@ fn the_input_line_prompts_read_in_chinese() {
         wording::permission_prompt_with_context("write_file", "file_path=a.txt", "mode ask"),
         "权限询问：write_file（file_path=a.txt）？原因：mode ask [y] 允许 / [a] 总是允许 / [n] 拒绝 "
     );
-    // The three modes, in the words the status row and the banner use; the fourth
-    // one (`计划`) left with the mode itself (`.scratch/todo-and-modes`).
+    // 三档模式，用的是状态行与 banner 那套词；第四档
+    // （`计划`）随模式本身一起退场了（`.scratch/todo-and-modes`）。
     assert_eq!(wording::mode_label(Mode::Readonly), "只读");
     assert_eq!(wording::mode_label(Mode::Ask), "询问");
     assert_eq!(wording::mode_label(Mode::Auto), "自动");
     assert_eq!(wording::mode_field(Mode::Auto), "模式 自动");
     assert!(
         wording::unknown_mode("plan").contains("plan"),
-        "the refusal quotes what was written"
+        "这条拒绝引用了当时写下的东西"
     );
 }
 
 #[test]
 fn a_question_has_a_title_a_body_and_a_row_of_choices() {
-    // The overlay's three parts, each named on its own: a title that says what is
-    // being asked, a body that says what it is about, and the keys (spec §9).
+    // 覆盖层的三个部分，各有各的名字：说清在问什么的标题、
+    // 说清它关于什么的正文，以及那些键（spec §9）。
     assert_eq!(wording::permission_title(), "权限询问：");
     assert_eq!(
         wording::permission_call("bash", "command=rm -rf /"),
@@ -291,8 +291,8 @@ fn a_question_has_a_title_a_body_and_a_row_of_choices() {
         wording::clear_draft_body(),
         "草稿有多行，Esc 会把它们全部丢掉"
     );
-    // One table per question, and one join for any front end that has only a line:
-    // the TUI paints the entries, the plain console prints this text.
+    // 每个问题一张表，而只有一行可用的前端走同一次拼接：
+    // TUI 画那些条目，plain 控制台打出这段文本。
     assert_eq!(
         wording::choices_text(&wording::PERMISSION_CHOICES),
         "[y] 允许 / [a] 总是允许 / [n] 拒绝"
@@ -358,7 +358,7 @@ fn bracketed_hints_read_in_chinese_with_their_enums_explained() {
 
 #[test]
 fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
-    // Wide enough: the state word, then the key hints, with the way out last.
+    // 够宽：先状态词，再键位提示，出路放最后。
     let wide = wording::status_line(false, 200);
     assert!(wide.starts_with("就绪 · "), "{wide}");
     for hint in [
@@ -373,53 +373,53 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     }
     assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
 
-    // 28 columns fit the state word and the way out; at 31 the send hint and the way
-    // out fit, and the state word is what goes — the way out is seven columns wider
-    // than it used to be, which is what moved this rung.
+    // 28 列装得下状态词与出路；31 列时发送提示与出路装得下，
+    // 而让位的是状态词 —— 出路比它过去宽了七列，
+    // 正是这一点挪动了这一档。
     assert_eq!(wording::status_line(false, 28), "就绪 · ctrl-c/ctrl-d 退出");
     assert_eq!(
         wording::status_line(false, 31),
         "enter 发送 · ctrl-c/ctrl-d 退出"
     );
-    // 45 fit the first two hints and the way out but not the state word, so the
-    // newline key stays visible on a narrow terminal.
+    // 45 列装得下前两条提示与出路、装不下状态词，所以窄终端上
+    // 换行键仍然可见。
     assert_eq!(
         wording::status_line(false, 45),
         "enter 发送 · ctrl-j 换行 · ctrl-c/ctrl-d 退出"
     );
-    // 80 is where the state word fits in front of the five-hint run; the rendered
-    // side of that ladder is asserted in `tests/render_layout.rs`.
+    // 80 列是状态词能装进那五条提示前面的地方；那条阶梯的
+    // 渲染侧断言在 `tests/render_layout.rs` 里。
     assert_eq!(
         wording::status_line(false, 80),
         "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
-    // Narrower than any hint: the way out is all that is left.
+    // 比任何提示都窄：剩下的只有出路。
     assert_eq!(wording::status_line(true, 8), wording::EXIT_HINT_BUSY);
     assert_eq!(wording::status_line(false, 3), wording::EXIT_HINT_IDLE);
-    // Only the idle line advertises `ctrl-d`: while a run is in flight it does
-    // nothing, so naming it would be the one thing the hint row must not do.
+    // 只有空闲行会宣传 `ctrl-d`：一次运行在飞的时候它什么都不做，
+    // 所以点它的名正是提示行绝不能做的那件事。
     assert!(
         !wording::status_line(true, 200).contains("ctrl-d"),
-        "the busy line does not advertise a key that does nothing"
+        "忙碌行不宣传一个什么都不做的键"
     );
     assert!(
         wording::status_line(false, 200).contains("ctrl-d"),
-        "the idle line does"
+        "空闲行会宣传"
     );
 }
 
 #[test]
 fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
-    // No line is being read (a one-shot `discuss`, or a turn in flight), so neither
-    // `enter 发送` nor the interactive loop's plan gesture is on offer.
+    // 没有一行在被读（一次性的 `discuss`，或者一个在飞的回合），
+    // 所以 `enter 发送` 与交互循环的模式手势都不在候选里。
     let wide = wording::viewer_status_line(false, 200);
     assert_eq!(
         wide, "就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出",
-        "the whole viewer line"
+        "整条查看器行"
     );
     assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
 
-    // The same ladder: the way out survives, the state word goes first.
+    // 同一条阶梯：出路活下来，状态词先让位。
     assert_eq!(
         wording::viewer_status_line(false, 28),
         "就绪 · ctrl-c/ctrl-d 退出"
@@ -429,8 +429,8 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
         "esc 取消 · ctrl-c/ctrl-d 退出"
     );
 
-    // Busy reads as busy — and while a run is in flight `ctrl-d` is ignored, so the
-    // viewer line is back to the plain `ctrl-c 退出`.
+    // 忙就读作忙 —— 而一次运行在飞的时候 `ctrl-d` 被忽略，所以
+    // 查看器行回到朴素的 `ctrl-c 退出`。
     assert!(wording::viewer_status_line(true, 200).starts_with("工作中 · "));
     assert!(!wording::viewer_status_line(true, 200).contains("ctrl-d"));
     assert_eq!(
@@ -441,15 +441,15 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
 
 #[test]
 fn the_hint_ladder_is_the_one_the_prototype_measured() {
-    // The widths the prototype measured with the one-item way out (§10, 票 06 §4),
-    // so a change to the priority order shows up here rather than on a terminal.
-    // `w=40` is the minimum: the state word, one hint, and the way out.
+    // 原型用「只有一项的出路」量出来的那些宽度（§10，票 06 §4），
+    // 于是优先级顺序一改就会在这里显出来，而不是在终端上。
+    // `w=40` 是最小值：状态词、一条提示，加上出路。
     assert_eq!(
         wording::status_line(false, 40),
         "就绪 · enter 发送 · ctrl-c/ctrl-d 退出"
     );
-    // The wider way out costs the state word from 45 columns, where the second hint
-    // and the exit fit and it does not.
+    // 更宽的出路从 45 列起让状态词付出代价：那里第二条提示
+    // 与退出都装得下，而它装不下。
     assert_eq!(
         wording::status_line(false, 60),
         "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c/ctrl-d 退出"
@@ -458,17 +458,17 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
         wording::status_line(false, 80),
         "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
-    // Busy swaps the word and the way out: at 60 the hint that loses is still
-    // `shift+tab 模式`, and `ctrl-c 退出` — without `ctrl-d` — is there.
+    // 忙把状态词与出路对调：60 列下输掉的那条提示仍然是
+    // `shift+tab 模式`，而 `ctrl-c 退出` —— 不带 `ctrl-d` —— 在那里。
     assert_eq!(
         wording::status_line(true, 60),
         "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
     let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出";
     assert_eq!(wording::status_line(false, 120), full);
-    // At the maximum the line is stable: there is nothing left to buy.
+    // 在最大宽度上行是稳定的：再没什么可买的了。
     assert_eq!(wording::status_line(false, 174), full);
-    // Busy swaps the word and the exit, not the ladder.
+    // 忙对调的是状态词与退出，不是阶梯。
     assert_eq!(
         wording::status_line(true, 120).replace("工作中", "就绪"),
         full.replace("ctrl-c/ctrl-d 退出", "ctrl-c 退出")
@@ -477,9 +477,9 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
 
 #[test]
 fn no_hint_ever_names_shift_enter() {
-    // Without the keyboard-enhancement protocol `Shift+Enter` is indistinguishable
-    // from `Enter`, which submits — so a hint that named it would be a lie, and the
-    // lie is invisible at any single width (spec §10, user story 54). Scan them all.
+    // 没有键盘增强协议时 `Shift+Enter` 与 `Enter` 分不开，而后者
+    // 会提交 —— 所以点它名的提示会是一句假话，而那句假话
+    // 在任何单一宽度下都看不出来（spec §10，用户故事 54）。把它们全扫一遍。
     for busy in [false, true] {
         for width in 1..=200 {
             let line = wording::status_line(busy, width);
@@ -493,12 +493,12 @@ fn no_hint_ever_names_shift_enter() {
 
 #[test]
 fn the_scroll_indicator_and_the_minimum_explain_themselves() {
-    // The indicator names what arrived and how to get there; without a count it is
-    // only the way back (spec §4).
+    // 指示器点名到达了什么、怎么去那里；没有计数时
+    // 它只剩回到底部（spec §4）。
     assert_eq!(wording::new_content(12), "↓ 12 行新内容 · 点此到底");
     assert_eq!(wording::new_content(1), "↓ 1 行新内容 · 点此到底");
     assert_eq!(wording::back_to_bottom(), "点此到底");
-    // A terminal below the minimum is told why it is empty, with the numbers it has.
+    // 低于下限的终端会被告诉它为什么是空的，用的还是它有的那组数字。
     assert_eq!(wording::too_small(40, 10), "终端太小：至少 40×10");
 }
 
@@ -506,7 +506,7 @@ fn the_scroll_indicator_and_the_minimum_explain_themselves() {
 fn every_panel_label_is_the_chinese_the_prototype_shows() {
     assert_eq!(wording::PANEL_MODEL, "模型");
     assert_eq!(wording::PANEL_CONTEXT, "上下文");
-    // `CONTEXT.md` has no Chinese word for a token, so it stays as it is elsewhere.
+    // `CONTEXT.md` 里 token 没有中文名，所以它在这里与别处一样。
     assert_eq!(wording::PANEL_TOKENS, "token");
     assert_eq!(wording::PANEL_TURNS, "回合");
     assert_eq!(wording::PANEL_INPUT, "输入");
@@ -516,11 +516,11 @@ fn every_panel_label_is_the_chinese_the_prototype_shows() {
 
 #[test]
 fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
-    // `scripts/tui-startup-check.py` anchors on this exact string to tell the new
-    // shell apart from anything older, and its expectation comes from the
-    // binary's own `--version` (`src/cli.rs` prints `fs-agent {version}`). The two
-    // spellings are written in two places, so this pins them together: change either
-    // and the check goes red rather than silently matching nothing.
+    // `scripts/tui-startup-check.py` 拿这个精确字符串当锚，用来区分新的
+    // 外壳与任何更旧的东西，而它的期望来自二进制自己的
+    // `--version`（`src/cli.rs` 打印 `fs-agent {version}`）。这两处写法
+    // 写在两个地方，所以这条把它们钉在一起：改任何一处
+    // 都会让检查变红，而不是悄悄什么都匹配不上。
     assert_eq!(
         wording::identity(),
         format!("fs-agent {}", env!("CARGO_PKG_VERSION"))
@@ -529,11 +529,11 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
 
 #[test]
 fn the_identities_dash_falls_without_moving_anything_else() {
-    // The busy signal on the narrow rung (`.scratch/tui-input-pulse/spec.md` §2): the dash
-    // of `fs-agent` is the only character that changes, which is what makes the line read as
-    // "working" rather than as a different string. The version and the crate's name come
-    // from `identity()`, so the startup check's anchor and the falling line cannot drift
-    // apart.
+    // 窄档上的忙碌信号（`.scratch/tui-input-pulse/spec.md` §2）：`fs-agent`
+    // 里那个短横是唯一会变的字符，正是这一点让这一行读起来像
+    // 「在干活」，而不是像另一个字符串。版本与 crate 名都来自
+    // `identity()`，所以启动检查的那个锚与这条下落的行
+    // 不可能漂开。
     let identity = wording::identity();
     let mut seen = Vec::new();
     for phase in 0..wording::DASH_FALL.len() {
@@ -541,12 +541,12 @@ fn the_identities_dash_falls_without_moving_anything_else() {
         assert_eq!(
             fallen.replace(wording::DASH_FALL[phase], "-"),
             identity,
-            "phase {phase} differs from the idle identity in the dash alone: {fallen}"
+            "第 {phase} 帧与空闲身份只差那个短横：{fallen}"
         );
         seen.push(fallen);
     }
-    // Five frames of one descent, and every frame a bar rather than a spinner: the heights
-    // walk from high to low and back to high, which a rotating glyph set would fail.
+    // 一次下落五帧，而每一帧都是横条、不是转轮：高度
+    // 从高走到低再走回高，一套旋转字形是过不了这一关的。
     let heights: Vec<char> = seen
         .iter()
         .map(|line| line.chars().nth(2).unwrap())
@@ -554,14 +554,14 @@ fn the_identities_dash_falls_without_moving_anything_else() {
     assert_eq!(
         heights,
         wording::DASH_FALL.to_vec(),
-        "the frames descend in order: {seen:?}"
+        "这些帧按顺序下落：{seen:?}"
     );
     assert!(
         heights.iter().all(|glyph| matches!(glyph, '▀' | '█' | '▄')),
-        "and every frame is the bar at some height: {seen:?}"
+        "而每一帧都是某个高度的横条：{seen:?}"
     );
-    // The fall is closed: a phase past the end wraps rather than panicking, because the
-    // pulse counter it comes from only ever grows.
+    // 下落是闭合的：越过末端的相位会绕回去而不是 panic，因为
+    // 它来自的那个脉冲计数器只会增长。
     assert_eq!(
         wording::identity_falling(wording::DASH_FALL.len()),
         wording::identity_falling(0)
@@ -570,17 +570,17 @@ fn the_identities_dash_falls_without_moving_anything_else() {
 
 #[test]
 fn the_mark_is_five_rows_of_one_width() {
-    // The sidebar shows the mark whole or not at all — `layout` decides that
-    // from `LOGO_WIDTH` before anything is drawn. A row of a different width would
-    // slip past that gate and paint over the border, so the contract is pinned here,
-    // where the characters live, rather than trusted at the painter.
+    // 左栏要么整块画标记、要么完全不画 —— `layout` 在任何东西被画出来
+    // 之前就按 `LOGO_WIDTH` 定了这件事。一行宽度不同就会溜过
+    // 那道闸、画到边框上去，所以这条契约钉在这里、钉在
+    // 字符所在的地方，而不是在画家那边指望它。
     let rows = wording::logo_lines();
-    assert_eq!(rows.len(), 5, "the mark is five rows: {rows:?}");
+    assert_eq!(rows.len(), 5, "标记是五行：{rows:?}");
     for row in rows {
         assert_eq!(
             row.chars().count(),
             fs_agent::render::layout::LOGO_WIDTH as usize,
-            "every row is the width the layout reserved: {row:?}"
+            "每一行都是布局预留的那个宽度：{row:?}"
         );
     }
 }
@@ -641,26 +641,26 @@ fn the_long_help_texts_are_chinese_and_keep_their_structure() {
 
     let interactive = wording::help_interactive();
     assert!(interactive.contains("--plain"), "{interactive}");
-    // The mode entry points the help has to name: the flag, and the gesture.
+    // help 必须点名的那些模式入口：旗标，与手势。
     assert!(interactive.contains("--mode MODE"), "{interactive}");
     assert!(interactive.contains("只读 / 询问 / 自动"), "{interactive}");
     assert!(interactive.contains("Shift+Tab"), "{interactive}");
 
-    // The discussion has a front end of its own now, and both helps say so.
+    // 讨论现在有自己的前端了，两份 help 都这么说。
     assert!(main.contains("fs-agent discuss"), "{main}");
     let discuss = wording::help_discuss();
     assert!(discuss.contains("fs-agent discuss"), "{discuss}");
     assert!(discuss.contains("[discussion] debaters"), "{discuss}");
     assert!(
         discuss.contains("同厂商"),
-        "one vendor is documented as allowed"
+        "同厂商被记录为允许"
     );
     assert!(discuss.contains("CONCLUSION:"), "{discuss}");
     assert!(discuss.contains("3 次调用"), "{discuss}");
     assert!(discuss.contains("sessions show"), "{discuss}");
     assert!(
         !discuss.contains(" 的") && !discuss.contains("永 远"),
-        "no space was left behind by a line continuation: {discuss}"
+        "行续没有留下空格：{discuss}"
     );
 
     let sessions = wording::help_sessions();
@@ -736,7 +736,7 @@ fn a_session_error_explains_the_code_and_passes_the_detail_through() {
         ),
         "[会话错误：合成失败] the synthesizer's call produced no product"
     );
-    // An unknown code is shown as itself rather than dropped.
+    // 未知的 code 原样显示，而不是被丢掉。
     assert_eq!(wording::session_error_code("future_code"), "future_code");
 }
 
@@ -773,9 +773,9 @@ fn the_replay_labels_read_in_chinese() {
 
 #[test]
 fn the_history_replay_progress_reads_in_chinese_and_degrades_by_width() {
-    // The three rungs of the progress line, and the width at which each takes over:
-    // 38 columns is the minimum frame's hint row, and the full phrase is worth its
-    // columns from the next measured rung (`.scratch/tui-history-replay/spec.md` §4).
+    // 进度行的三档，以及每一档从哪个宽度接管：
+    // 38 列是最小帧的提示行，而整句从下一档量出来的宽度起
+    // 才对得起它占的列（`.scratch/tui-history-replay/spec.md` §4）。
     assert_eq!(wording::history_progress(12, 345), "恢复历史 12/345");
     assert_eq!(wording::history_progress_narrow(12, 345), "恢复中 12/345");
     assert_eq!(wording::history_progress_minimal(), "恢复中");
@@ -815,7 +815,7 @@ fn the_stats_labels_read_in_chinese() {
         ),
         "#1 独立首轮 2 次调用，结束于 无分歧"
     );
-    // Recorded enum names are mapped too: no internal name reaches the view.
+    // 记下来的枚举名也做了映射：没有任何内部名到达视图。
     assert_eq!(wording::stop_reason_name("Completed"), "完成");
     assert_eq!(wording::stop_reason_name("BudgetExhausted"), "预算用尽");
     assert_eq!(wording::stop_reason_name("future_reason"), "future_reason");
@@ -833,7 +833,7 @@ fn a_provider_finish_reason_reads_in_chinese() {
         wording::finish_reason(&FinishReason::Length),
         "达到长度上限"
     );
-    // A vendor's own unrecognized label passes through.
+    // 厂商自己那个不认识的标签原样透传。
     assert_eq!(
         wording::finish_reason(&FinishReason::Other("vendor_specific".to_owned())),
         "vendor_specific"
@@ -842,9 +842,9 @@ fn a_provider_finish_reason_reads_in_chinese() {
 
 #[test]
 fn the_two_renderer_confirmations_read_in_chinese() {
-    // The questions the TUI asks itself: an oversized paste, and a multi-line draft
-    // `Esc` would throw away. Both default to the safe answer (spec §7), and both get
-    // the same three parts as a question from the loop — title, body, buttons.
+    // TUI 自己问自己的那些问题：一次超大粘贴，以及一份
+    // `Esc` 会丢掉的草稿。两者都默认走安全答案（spec §7），而两者
+    // 都有与循环来的问题一样的三部分 —— 标题、正文、按钮。
     assert_eq!(
         format!(
             "{}｜{}｜{}",
@@ -875,10 +875,10 @@ fn the_panel_texts_read_like_the_prototype() {
         wording::token_pair(12_345, Some(100_000)),
         "12,345 / 100,000"
     );
-    // No allowance is not a missing allowance: the cap is simply not there.
+    // 没有额度不是额度缺失：上限压根儿就不在那里。
     assert_eq!(wording::token_pair(12_345, None), "12,345");
 
-    // Before a call has reported its input, the window is unknown — not zero.
+    // 一次调用报出它的输入之前，窗口是未知的 —— 不是零。
     assert_eq!(
         wording::context_pair(None, 200_000, true),
         wording::PANEL_UNKNOWN
@@ -887,28 +887,28 @@ fn the_panel_texts_read_like_the_prototype() {
         wording::context_pair(Some(12_345), 200_000, false),
         "12,345 / 200,000"
     );
-    // The share is part of the same field, and dropping it is how that field degrades.
+    // 占比是同一个字段的一部分，丢掉它就是这个字段降级的方式。
     assert_eq!(
         wording::context_pair(Some(12_345), 200_000, true),
         "12,345 / 200,000（6%）"
     );
     assert_eq!(wording::cache_pair(9_000, 3_345), "9,000 / 3,345");
 
-    // The turns field is a *turn* count, which `CONTEXT.md` keeps apart from 轮次.
+    // 回合字段数的是*回合*，`CONTEXT.md` 把它与轮次分得很开。
     assert_eq!(wording::PANEL_TURNS, "回合");
     assert_eq!(wording::PANEL_UNKNOWN, "—");
 }
 
 #[test]
 fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
-    // The three tabs, and what a page with no content yet says instead of showing a
-    // blank or made-up data (`.scratch/tui-sidebar/spec.md` §3).
+    // 三个页签，以及还没有内容的页会说什么 —— 而不是显示
+    // 一块空白或编出来的数据（`.scratch/tui-sidebar/spec.md` §3）。
     assert_eq!(wording::TAB_USAGE, "调用量");
     assert_eq!(wording::TAB_TRACE, "轨迹");
     assert_eq!(wording::TAB_FILES, "文件");
     assert_eq!(wording::tab_placeholder(), "此页尚未实现（另有票在跟）");
-    // The rail's glyphs: an ordinary unit, the focused one, and the mark for units the
-    // column had no room for.
+    // 回合条的字形：一个普通单位、被聚焦的那个，以及这一列
+    // 装不下的单位用的标记。
     assert_eq!(wording::RAIL_CELL, "┊");
     assert_eq!(wording::RAIL_FOCUS, "┃");
     assert_eq!(wording::RAIL_TRUNCATED, "⋮");
@@ -916,19 +916,19 @@ fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
 
 #[test]
 fn the_status_row_gives_up_the_model_then_the_mode_and_never_itself() {
-    // The short form always carries its label, so a bare `6%` never appears
-    // unexplained — and before a call has reported its input it says so rather than
-    // showing a zero (spec §5).
+    // 短形永远带着自己的标签，所以不会凭空冒出一个
+    // 没有解释的 `6%` —— 而一次调用报出它的输入之前，它会说出来，
+    // 而不是显示一个零（spec §5）。
     assert_eq!(wording::context_share(Some(12_345), 200_000), "上下文 6%");
     assert_eq!(wording::context_share(None, 200_000), "上下文 —");
 
     let model = "claude-sonnet-4-5";
     let mode = wording::mode_field(Mode::Ask);
     let share = wording::context_share(Some(12_345), 200_000);
-    // Three rungs, decided by the width the main column really has (spec §2):
-    // everything, then the model dropped, then only the share — which is where it
-    // stays, because the width that would take the row away is below the terminal
-    // floor.
+    // 三档，由主列真正拥有的宽度决定（spec §2）：
+    // 全都要，然后丢掉模型，然后只剩占比 —— 而它就停在那里，
+    // 因为那个足以拿掉这一行的宽度
+    // 低于终端地板。
     assert_eq!(
         wording::status_row(model, &mode, &share, 77),
         " 模型 claude-sonnet-4-5 │ 模式 询问 │ 上下文 6% "
@@ -936,27 +936,27 @@ fn the_status_row_gives_up_the_model_then_the_mode_and_never_itself() {
     assert_eq!(
         wording::status_row(model, &mode, &share, 45),
         " 模式 询问 │ 上下文 6% ",
-        "the model is the first segment given up"
+        "模型是第一个让位的字段"
     );
     assert_eq!(
         wording::status_row(model, &mode, &share, 11),
         " 上下文 6% ",
-        "and the mode follows it"
+        "接着让位的是模式"
     );
     assert_eq!(
         wording::status_row(model, &mode, &share, 4),
         " 上下文 6% ",
-        "there is no rung that removes the row: a width too small for even the share is the painter's to truncate"
+        "没有哪一档会拿掉这一行：连占比都装不下的宽度归画家去截"
     );
 }
 
 #[test]
 fn a_questionnaire_reads_in_chinese_and_pages() {
-    // The footer is the page indicator plus the keys, so a reader always knows
-    // which question this is and what the keyboard does (spec §19).
+    // 页脚是页码指示加上那些键，所以读者总知道这是第几个问题、
+    // 键盘都干什么（spec §19）。
     assert_eq!(wording::questionnaire_progress(1, 3), "2 / 3");
-    // The footer only promises `提交` once every question is handled; until then
-    // enter continues (spec §7).
+    // 只有每个问题都处理完之后，页脚才承诺 `提交`；在那之前
+    // enter 是继续（spec §7）。
     assert_eq!(
         wording::questionnaire_status(1, 3, false),
         "2 / 3 · ↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
@@ -980,15 +980,15 @@ fn a_questionnaire_reads_in_chinese_and_pages() {
 
 #[test]
 fn a_recommended_option_keeps_its_value_when_displayed() {
-    // The marker is a display convention: what the option reads as loses the
-    // suffix, while the value an answer carries keeps the whole label (spec §7).
+    // 这个标记是显示约定：选项读出来时丢掉那个后缀，而
+    // 答案携带的值保留整段标签（spec §7）。
     assert_eq!(wording::recommended_badge(), "（推荐）");
     assert_eq!(
         wording::recommended_label("serde (Recommended)"),
         ("serde", true)
     );
     assert_eq!(wording::recommended_label("manual"), ("manual", false));
-    // Only the exact suffix at the very end counts.
+    // 只有在最末尾、分毫不差的那个后缀才算数。
     assert_eq!(
         wording::recommended_label("Recommended reading"),
         ("Recommended reading", false)
@@ -1001,8 +1001,8 @@ fn the_plain_console_asks_a_questionnaire_in_chinese() {
         wording::questionnaire_plain_options_prompt(false),
         "输入编号选择，或直接输入文本；回车跳过 > "
     );
-    // The multi-select prompt says the second line follows, so the supplement
-    // (selected and custom together) is discoverable rather than secret.
+    // 多选提示说了第二行会跟上来，于是那份补充
+    // （已选与自定义合在一起）是可发现的，而不是秘密。
     assert_eq!(
         wording::questionnaire_plain_options_prompt(true),
         "输入编号（逗号分隔）选择，或输入文本；下一行补充；回车跳过 > "

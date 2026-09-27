@@ -1,13 +1,13 @@
-//! Reopening a session: the history laid back into the transcript, and the seam
-//! between it and what this run adds (`.scratch/tui-history-replay/spec.md`).
+//! 重新打开一个会话：历史被重新铺回转录，以及它与这次运行
+//! 追加的内容之间的接缝（`.scratch/tui-history-replay/spec.md`）。
 //!
-//! The seam is the same one `render_layout.rs` and `ask_user_question_tui.rs` test
-//! through: a `TuiState` takes render events and front-end requests, a fixed-size
-//! `TestBackend` comes back out, and the keyboard assertions are about what the loop
-//! would receive. The replay is driven through the production seam — the
-//! `ConsoleRequest::Replay` the CLI pushes after assembly — and advanced with the
-//! same `replay_batch` the loop calls, so "half way through" is a state a test can
-//! stand in rather than something it has to infer.
+//! 接缝与 `render_layout.rs`、`ask_user_question_tui.rs` 测的是
+//! 同一条：一个 `TuiState` 收渲染事件与前端请求，一块定尺的
+//! `TestBackend` 出来，而键盘断言说的是循环会收到什么。重放走
+//! 生产接缝驱动 —— 组装之后 CLI 推的那条
+//! `ConsoleRequest::Replay` —— 并用循环调用的同一个 `replay_batch`
+//! 推进，于是「走到一半」是测试可以站进去的一个状态，
+//! 而不是它得去推断的东西。
 
 use std::path::Path;
 
@@ -28,8 +28,8 @@ fn facts() -> SessionFacts {
         session_dir: "~/code/fortystory/fs-agent".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
-        // The mode the session was assembled in; `ask` is the default, and a test
-        // that means another one says so in its own facts.
+        // 会话被组装时所处的模式；`ask` 是默认档，想测另一档的
+        // 测试在自己的 facts 里说清楚。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         speaker_order: vec!["kimi".to_owned()],
@@ -40,8 +40,8 @@ fn state() -> TuiState {
     TuiState::new(facts())
 }
 
-/// A state whose session directory is `dir`, which is what the tool detail reads
-/// `outputs/<id>.txt` out of.
+/// 会话目录是 `dir` 的那个状态，工具详情就是从它这里读
+/// `outputs/<id>.txt` 的。
 fn state_in(dir: &Path) -> TuiState {
     TuiState::new(SessionFacts {
         session_dir: dir.display().to_string(),
@@ -49,7 +49,7 @@ fn state_in(dir: &Path) -> TuiState {
     })
 }
 
-/// A state whose loop is waiting for a line, so `Enter` has somewhere to submit.
+/// 循环在等一行的那个状态，于是 `Enter` 有个地方可以提交。
 fn idle() -> (TuiState, tokio::sync::oneshot::Receiver<Option<String>>) {
     let mut state = state();
     let (reply, line) = tokio::sync::oneshot::channel();
@@ -58,7 +58,7 @@ fn idle() -> (TuiState, tokio::sync::oneshot::Receiver<Option<String>>) {
 }
 
 // ---------------------------------------------------------------------------
-// Events
+// 事件
 // ---------------------------------------------------------------------------
 
 fn event(seq: u64, payload: EventPayload) -> Event {
@@ -173,34 +173,34 @@ fn mode_change(seq: u64) -> Event {
 }
 
 // ---------------------------------------------------------------------------
-// Driving the replay
+// 驱动重放
 // ---------------------------------------------------------------------------
 
-/// Hand the state a history, the way the CLI does after assembly.
+/// 把一份历史交给状态，就像 CLI 在组装之后做的那样。
 fn replay(state: &mut TuiState, events: Vec<Event>) {
     state.request(ConsoleRequest::Replay { events });
 }
 
-/// Run the replay out, one batch at a time, the way the loop does.
+/// 一次一批地把重放跑完，就像循环做的那样。
 fn run_replay(state: &mut TuiState) {
     while state.replay_pending() {
         state.replay_batch();
     }
 }
 
-/// A history long enough to need more than one batch: each `TurnEnded` draws exactly
-/// one line, so 600 of them cannot arrive in a single pass and the frame between two
-/// batches is a state a test can stand in. The count is deliberately not a batch
-/// boundary: nothing here asserts how many events a batch holds.
+/// 一份长到需要不止一批的历史：每条 `TurnEnded` 恰好画
+/// 一行，所以 600 条没法一趟到达，而两批之间的那一帧
+/// 是测试可以站进去的状态。这个数字故意不落在批次
+/// 边界上：这里不断言一批装多少条事件。
 fn long_history() -> Vec<Event> {
     (1..=600).map(turn_ended).collect()
 }
 
 // ---------------------------------------------------------------------------
-// The frame
+// 那一帧
 // ---------------------------------------------------------------------------
 
-/// Render one frame at a fixed size and read the screen back as rows of text.
+/// 按固定尺寸画一帧，再把屏幕读回来，一行一段文本。
 fn screen(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let frame = buffer(width, height, state);
     (0..height).map(|y| row_text(&frame, y, width)).collect()
@@ -210,18 +210,18 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("TestBackend");
     terminal
         .draw(|frame| draw_frame(frame, state))
-        .expect("one frame");
+        .expect("画一帧");
     terminal.backend().buffer().clone()
 }
 
-/// The rail's column at 120x40: the characters drawn in it, blanks dropped.
+/// 120x40 下回合条那一列：画在其中的字符，空格丢掉。
 ///
-/// The rail sits in the transcript's last column, inside the frame at 119 — the
-/// scrollbar takes the one before it (`.scratch/tui-sidebar/spec.md` §1).
+/// 回合条坐在转录的最后一列，在帧里的 119 —— 滚动条占它
+/// 前面那一列（`.scratch/tui-sidebar/spec.md` §1）。
 fn turn_rail_shape(state: &mut TuiState) -> String {
     let frame = buffer(120, 40, state);
     (1..39u16)
-        // The transcript ends where the main column's first rule begins.
+        // 转录结束在主列第一条横线开始的地方。
         .take_while(|y| !row_text(&frame, *y, 120).ends_with('┤'))
         .map(|y| frame[(118, y)].symbol().chars().next().unwrap_or(' '))
         .filter(|ch| *ch != ' ')
@@ -262,78 +262,78 @@ fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
 
 fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let Some(row) = row_of(state, width, height, needle) else {
-        panic!("nothing on screen contains {needle:?}");
+        panic!("屏幕上没有哪一行含 {needle:?}");
     };
     state.mouse(click(10, row));
 }
 
-/// A sidebar field by its offset from the page's first row.
+/// 左栏里按距页首行的偏移取一个字段。
 ///
-/// The page starts under the tab bar — the row after its bottom rule — and the fields
-/// are the sidebar's own half of those rows, so the divider's column ends each one.
+/// 这一页从页签条下面开始 —— 它下横线的后一行 —— 而字段是
+/// 那些行里属于左栏自己的那一半，于是每个字段都以分隔线那一列收尾。
 fn panel_field(rows: &[String], offset: usize) -> String {
     let mut rules = rows
         .iter()
         .enumerate()
         .filter(|(_, row)| row.starts_with('├'))
         .map(|(y, _)| y);
-    rules.next().expect("the tab bar's top rule");
-    let top = rules.next().expect("the tab bar's bottom rule") + 1;
+    rules.next().expect("页签条的上横线");
+    let top = rules.next().expect("页签条的下横线") + 1;
     let row = &rows[top + offset];
     let inner = row.trim_start_matches('│');
     let end = inner
         .char_indices()
         .find(|(_, ch)| matches!(ch, '│' | '├' | '┤'))
         .map(|(index, _)| index)
-        .expect("the divider ends the sidebar");
+        .expect("分隔线终结了左栏");
     inner[..end].to_owned()
 }
 
 // ---------------------------------------------------------------------------
-// 票 06 — the seam, the framing and the progress line
+// 票 06 — 接缝、分帧与进度行
 // ---------------------------------------------------------------------------
 
 #[test]
 fn a_replayed_history_is_laid_into_the_transcript() {
-    // The whole point: after `--continue` the transcript holds the previous
-    // conversation rather than starting empty (spec §1, user story 1).
+    // 全部要点：`--continue` 之后转录里装着上一场
+    // 对话，而不是从空开始（spec §1，用户故事 1）。
     let mut state = state();
     replay(
         &mut state,
         vec![message(1, "昨天说的那件事，结论是 42。", None)],
     );
-    assert!(state.replay_pending(), "the request starts the replay");
+    assert!(state.replay_pending(), "这条请求开启重放");
     run_replay(&mut state);
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("昨天说的那件事，结论是 42。"),
-        "the history is on screen: {text}"
+        "历史在屏幕上：{text}"
     );
 }
 
 #[test]
 fn an_empty_stream_never_enters_the_replay_state() {
-    // There is nothing to lay down, so there is no progress line and no seam: an
-    // empty `--continue` reads exactly as it always did (spec §2, user story 25).
+    // 没有可铺的东西，所以既没有进度行也没有接缝：一次空的
+    // `--continue` 读起来与它一直以来一模一样（spec §2，用户故事 25）。
     let mut state = state();
     replay(&mut state, Vec::new());
-    assert!(!state.replay_pending(), "an empty history is not a replay");
+    assert!(!state.replay_pending(), "空历史不是一次重放");
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("恢复"),
-        "and no progress line is drawn: {text}"
+        "也不画进度行：{text}"
     );
 }
 
 #[test]
 fn a_replay_in_flight_shows_partial_history_and_the_progress_count() {
-    // The framing contract: the hint row says how far the replay has come, and the
-    // part it has reached is already on screen; when it drains, the ordinary status
-    // line comes back (spec §2, §4, user story 12). The count is asserted to be
-    // **partial**, not to be any particular number: how many events a batch holds is
-    // the implementation's business (spec §Testing Decisions).
+    // 分帧契约：提示行说重放走到哪了，而它已经走到的那部分
+    // 已经在屏幕上；等它流干，普通的状态行就回来
+    // （spec §2、§4，用户故事 12）。这里断言计数是**部分**的，
+    // 而不是某个特定数字：一批装多少事件是实现
+    // 自己的事（spec §Testing Decisions）。
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
@@ -341,44 +341,44 @@ fn a_replay_in_flight_shows_partial_history_and_the_progress_count() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("恢复历史") && text.contains("/600") && !text.contains("恢复历史 600/600"),
-        "the progress line shows how far it has come: {text}"
+        "进度行显示它走到了哪：{text}"
     );
     assert!(
         text.contains("回合结束"),
-        "and the part of the history already applied is on screen: {text}"
+        "而已经铺上去的那部分历史在屏幕上：{text}"
     );
 
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("恢复"),
-        "the progress line is gone once the history is in: {text}"
+        "历史铺完之后进度行就没了：{text}"
     );
     assert!(
         text.contains("ctrl-c/ctrl-d 退出"),
-        "and the ordinary status line is back: {text}"
+        "而普通状态行回来了：{text}"
     );
 }
 
 #[test]
 fn a_history_that_ends_exactly_on_a_batch_boundary_still_converges() {
-    // The off-by-one the boundary invites: a stream that runs out where a batch runs
-    // out must close the replay rather than leave it pending for ever.
+    // 边界招来的那个差一错误：一条在批次用尽处
+    // 用尽的流必须把重放关掉，而不是让它永远悬着。
     let mut state = state();
     replay(&mut state, (1..=1024).map(turn_ended).collect());
     run_replay(&mut state);
-    assert!(!state.replay_pending(), "the replay closed itself");
+    assert!(!state.replay_pending(), "重放自己关上了");
     let text = screen(120, 20, &mut state).join("\n");
     assert!(
         !text.contains("恢复"),
-        "and left no progress line behind: {text}"
+        "也没在身后留下进度行：{text}"
     );
 }
 
 #[test]
 fn the_progress_line_degrades_at_the_minimum_frame() {
-    // 40×10 is the smallest frame that draws at all; its hint row is 38 columns, and
-    // that is where the count survives but the phrase does not (spec §4).
+    // 40×10 是最小的、还能画出东西的帧；它的提示行是 38 列，
+    // 而计数就是在那里活了下来、短语没有（spec §4）。
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
@@ -386,19 +386,19 @@ fn the_progress_line_degrades_at_the_minimum_frame() {
     let text = screen(40, 10, &mut state).join("\n");
     assert!(
         text.contains("恢复中") && text.contains("/600") && !text.contains("恢复中 600/600"),
-        "the count survives at the minimum frame: {text}"
+        "最小帧下计数活下来了：{text}"
     );
     assert!(
         !text.contains("恢复历史"),
-        "the full phrase does not: {text}"
+        "整个短语活不下来：{text}"
     );
 }
 
 #[test]
 fn the_pointer_does_nothing_while_a_replay_is_in_flight() {
-    // The viewport is pinned to the bottom until the history is done: a wheel notch
-    // or a click would move it into rows that are still arriving (spec §5, user
-    // story 16, 34).
+    // 视口钉在底部，直到历史铺完：滚一格
+    // 或点一下都会把它挪进还在到达的行里（spec §5，
+    // 用户故事 16、34）。
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
@@ -412,14 +412,14 @@ fn the_pointer_does_nothing_while_a_replay_is_in_flight() {
     });
     state.mouse(click(10, 5));
     let after = screen(120, 40, &mut state);
-    assert_eq!(before, after, "the pointer changed nothing");
+    assert_eq!(before, after, "指针什么都没改变");
 }
 
 #[test]
 fn enter_does_not_submit_while_a_replay_is_in_flight() {
-    // Waiting time is typing time, but `Enter` must not fire a turn into a
-    // half-laid history; the draft survives and a later `Enter` sends it (spec §3,
-    // user story 15, 18).
+    // 等待的时间就是打字的时间，但 `Enter` 不许对着
+    // 铺了一半的历史开一个回合；草稿留着，之后一次 `Enter`
+    // 把它发出去（spec §3，用户故事 15、18）。
     let (mut state, mut answer) = idle();
     replay(&mut state, long_history());
     state.replay_batch();
@@ -430,39 +430,39 @@ fn enter_does_not_submit_while_a_replay_is_in_flight() {
     state.key(Key::Enter);
     assert!(
         answer.try_recv().is_err(),
-        "nothing was submitted while the history was still arriving"
+        "历史还在到达的时候什么都没提交"
     );
 
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("half typed"),
-        "and the draft is still there: {text}"
+        "而草稿还在那里：{text}"
     );
 
     state.key(Key::Enter);
     assert_eq!(
         answer
             .try_recv()
-            .expect("submitted once the replay was over"),
+            .expect("重放结束后提交了"),
         Some("half typed".to_owned())
     );
 }
 
 #[test]
 fn ctrl_c_quits_during_a_replay_and_ctrl_d_and_esc_are_inert() {
-    // A replay is not a run: there is nothing to cancel, so `Ctrl-C` is the way out;
-    // `Ctrl-D` and `Esc` do nothing at all (spec §5, user story 26, 27).
+    // 重放不是一次运行：没有东西可取消，所以 `Ctrl-C` 是出路；
+    // `Ctrl-D` 与 `Esc` 什么都不做（spec §5，用户故事 26、27）。
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
 
     state.key(Key::CtrlD);
-    assert!(!state.should_quit(), "Ctrl-D does not quit during a replay");
+    assert!(!state.should_quit(), "重放期间 Ctrl-D 不退出");
     state.key(Key::Esc);
-    assert!(!state.should_quit(), "Esc does not quit during a replay");
-    // Esc on a multi-line draft would ordinarily offer to clear it; during a replay
-    // it must not raise the question at all.
+    assert!(!state.should_quit(), "重放期间 Esc 不退出");
+    // 多行草稿上的 Esc 本来会提出清空它；重放期间
+    // 它根本不许提这个问题。
     for ch in "one\ntwo".chars() {
         state.key(Key::Char(ch));
     }
@@ -470,11 +470,11 @@ fn ctrl_c_quits_during_a_replay_and_ctrl_d_and_esc_are_inert() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("清空"),
-        "no draft-clearing question is raised: {text}"
+        "不提清空草稿的问题：{text}"
     );
 
     state.key(Key::CtrlC);
-    assert!(state.should_quit(), "Ctrl-C is the way out of a replay");
+    assert!(state.should_quit(), "Ctrl-C 是重放的出路");
 }
 
 #[test]
@@ -488,13 +488,13 @@ fn the_scroll_keys_are_ignored_during_a_replay() {
         state.key(key);
     }
     let after = screen(120, 40, &mut state);
-    assert_eq!(before, after, "the transcript stays pinned to the bottom");
+    assert_eq!(before, after, "转录保持钉在底部");
 }
 
 #[test]
 fn a_live_event_arriving_mid_replay_waits_for_the_history() {
-    // The banner is sent while the history is still being laid down; it must not
-    // appear in the middle of it (spec §3, user story 19, 21).
+    // banner 是在历史还在铺的时候发过来的；它不许
+    // 出现在历史中间（spec §3，用户故事 19、21）。
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
@@ -503,22 +503,22 @@ fn a_live_event_arriving_mid_replay_waits_for_the_history() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("fs-agent 启动"),
-        "the banner is held back while the history is arriving: {text}"
+        "历史还在到达的时候 banner 被压着：{text}"
     );
 
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("fs-agent 启动"),
-        "and lands once the history is done: {text}"
+        "历史铺完之后才落上去：{text}"
     );
 }
 
 #[test]
 fn a_logged_event_arriving_mid_replay_is_not_painted_twice() {
-    // A reopened session's recovery writes its synthesized results to the log **and**
-    // emits them on the render channel, and the replay's snapshot holds the same
-    // events. The live copy must not paint a second call line after the seam.
+    // 重新打开的会话在做恢复时，会把合成结果写进日志 **并且**
+    // 在渲染通道上发出它们，而重放的快照里握着同一批
+    // 事件。接缝之后那条实时副本不许再画一条调用行。
     let mut events: Vec<Event> = (1..=600).map(turn_ended).collect();
     events.push(tool_started(
         601,
@@ -538,19 +538,19 @@ fn a_logged_event_arriving_mid_replay_is_not_painted_twice() {
     let mut state = state();
     replay(&mut state, events);
     state.replay_batch();
-    // The same result the snapshot already holds arrives on the render channel.
+    // 快照里已经握着的那条结果从渲染通道到达。
     state.live_event(RenderEvent::Logged(recovery));
     run_replay(&mut state);
 
     let rows = screen(120, 40, &mut state);
     let calls = rows.iter().filter(|row| row.contains("▸ 调用")).count();
-    assert_eq!(calls, 1, "the recovered call is painted once: {rows:?}");
+    assert_eq!(calls, 1, "被恢复的那条调用只画一次：{rows:?}");
 }
 
 #[test]
 fn a_finished_replay_sits_at_the_bottom_with_no_indicator() {
-    // The reader is caught up: no "N new rows" bar, and the newest history row is
-    // the one at the bottom of the pane (spec §2, user story 17).
+    // 读者追上了：没有「N 行新内容」那条横条，而最新的一行历史
+    // 就是窗格底部那一行（spec §2，用户故事 17）。
     let mut state = state();
     replay(
         &mut state,
@@ -563,22 +563,22 @@ fn a_finished_replay_sits_at_the_bottom_with_no_indicator() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains(wording::back_to_bottom()),
-        "there is nowhere to go back to: {text}"
+        "没有可回到底部的地方：{text}"
     );
     assert!(
         text.contains("第 40 段历史"),
-        "and the last history row is on screen: {text}"
+        "而最后一行历史在屏幕上：{text}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// 票 07 — the divider, the panel and the header mode
+// 票 07 — 分隔行、面板与 header 的模式
 // ---------------------------------------------------------------------------
 
 #[test]
 fn the_divider_separates_history_from_what_this_run_adds() {
-    // `[history] → [divider] → [banner]`, in exactly that order (spec §6, user story
-    // 20, 21).
+    // `[历史] → [分隔行] → [banner]`，顺序正是这个
+    // （spec §6，用户故事 20、21）。
     let mut state = state();
     replay(
         &mut state,
@@ -591,25 +591,25 @@ fn the_divider_separates_history_from_what_this_run_adds() {
     let history = rows
         .iter()
         .position(|row| row.contains("上一段的回答"))
-        .expect("the history is drawn");
+        .expect("历史画出来了");
     let divider = rows
         .iter()
         .position(|row| row.contains(wording::history_divider()))
-        .expect("the seam is drawn");
+        .expect("接缝画出来了");
     let banner = rows
         .iter()
         .position(|row| row.contains("本段的 banner"))
-        .expect("the banner is drawn");
+        .expect("banner 画出来了");
     assert!(
         history < divider && divider < banner,
-        "history before seam before banner: {rows:?}"
+        "历史在接缝之前、接缝在 banner 之前：{rows:?}"
     );
 }
 
 #[test]
 fn a_history_that_drew_nothing_gets_no_divider() {
-    // An empty stream and a bare skeleton draw nothing, so there is no seam to mark
-    // (spec §6, user story 25).
+    // 一条空流与一副光秃秃的骨架什么都不画，所以没有可标记的
+    // 接缝（spec §6，用户故事 25）。
     for events in [Vec::new(), vec![session_started(1)]] {
         let mut state = state();
         replay(&mut state, events.clone());
@@ -617,15 +617,15 @@ fn a_history_that_drew_nothing_gets_no_divider() {
         let text = screen(120, 40, &mut state).join("\n");
         assert!(
             !text.contains(wording::history_divider()),
-            "{events:?} drew a divider: {text}"
+            "{events:?} 画了一条分隔行：{text}"
         );
     }
 }
 
 #[test]
 fn the_divider_is_a_render_layer_line_that_is_fresh_on_every_reopen() {
-    // It never enters the log: replaying the same assembled stream twice leaves two
-    // seams and no third one inside either history (spec §6, user story 22).
+    // 它从不进日志：把同一条组装好的流重放两次，留下两条
+    // 接缝，而两份历史里面都没有第三条（spec §6，用户故事 22）。
     let history = vec![message(1, "旧的一段", None)];
     let mut state = state();
     replay(&mut state, history.clone());
@@ -638,13 +638,13 @@ fn the_divider_is_a_render_layer_line_that_is_fresh_on_every_reopen() {
         .iter()
         .filter(|row| row.contains(wording::history_divider()))
         .count();
-    assert_eq!(seams, 2, "one fresh seam per reopen: {rows:?}");
+    assert_eq!(seams, 2, "每重新打开一次一条新接缝：{rows:?}");
 }
 
 #[test]
 fn the_panel_adds_up_the_history_and_keeps_accumulating() {
-    // The panel is a side effect of applying each block, so history counts and live
-    // usage continues from there rather than restarting (spec §7, user story 23).
+    // 面板是应用每个块带来的副作用，所以历史也计数、实时用量从
+    // 那里接着走，而不是重新开始（spec §7，用户故事 23）。
     let mut state = state();
     replay(
         &mut state,
@@ -656,7 +656,7 @@ fn the_panel_adds_up_the_history_and_keeps_accumulating() {
     );
     run_replay(&mut state);
 
-    // A live call arrives after the seam.
+    // 接缝之后到达一条实时调用。
     state.live_event(RenderEvent::Logged(usage(4, 50, 10, 0, 50)));
     state.live_event(RenderEvent::Logged(turn_ended(5)));
 
@@ -665,59 +665,59 @@ fn the_panel_adds_up_the_history_and_keeps_accumulating() {
     let turns = panel_field(&rows, 2);
     let input = panel_field(&rows, 3);
     assert!(tokens.contains("180"), "100+20+50+10: {tokens:?}");
-    assert!(turns.contains('2'), "two turns: {turns:?}");
-    assert!(input.contains("150"), "100+50 input: {input:?}");
+    assert!(turns.contains('2'), "两个回合：{turns:?}");
+    assert!(input.contains("150"), "100+50 输入：{input:?}");
 }
 
 #[test]
 fn the_rail_grows_with_the_replayed_history() {
-    // The rail is derived from the stream like everything else, so a reopened session
-    // finds its turns already on the column — and during the replay it fills a batch at
-    // a time rather than appearing whole (spec §4).
+    // 回合条与别的东西一样从流派生，所以重新打开的会话会发现自己的
+    // 那些回合已经在那一列上了 —— 而重放期间它一次填一批，
+    // 而不是整根一次出现（spec §4）。
     let mut state = state();
     let history: Vec<Event> = (1..=40).map(turn_ended).collect();
     replay(&mut state, history);
     run_replay(&mut state);
 
-    // Forty turns, all cut down to the column's own height: the mark at the top and the
-    // newest turn at the foot as the focus, because a finished replay returns the
-    // viewport to the bottom.
+    // 四十个回合，全被裁到这一列自己的高度：顶部是那个标记，
+    // 最新那个回合在脚下、是焦点，因为重放结束后视口
+    // 回到底部。
     let shape = turn_rail_shape(&mut state);
     assert_eq!(
         shape.chars().next(),
         Some('⋮'),
-        "the column says older turns are above: {shape}"
+        "这一列说更旧的回合在上面：{shape}"
     );
     assert_eq!(
         shape.chars().last(),
         Some('┃'),
-        "and the newest turn is the focus: {shape}"
+        "而最新那个回合是焦点：{shape}"
     );
     assert_eq!(
         shape.matches('┃').count(),
         1,
-        "exactly one focus cell: {shape}"
+        "恰好一个焦点格：{shape}"
     );
 
-    // A live turn after the seam adds its cell, so history and this session share one
-    // rail rather than starting a second.
+    // 接缝之后一次实时回合加上它自己的格，于是历史与这场会话共用一根
+    // 回合条，而不是另起一根。
     let before = shape.len();
     state.live_event(RenderEvent::Logged(turn_ended(41)));
     let after = turn_rail_shape(&mut state);
     assert!(
         after.len() >= before && after.ends_with('┃'),
-        "the new turn took its cell and the focus moved to it: {after}"
+        "新回合占了自己的格，焦点也移到了它上面：{after}"
     );
 }
 
 #[test]
 fn the_two_retired_variants_still_deserialize_off_an_old_stream() {
-    // Why the variants stay in the schema at all: a session written before
-    // `.scratch/todo-and-modes` carries these two events, and `--continue` parses
-    // that stream with `read_events` before any renderer sees it. Writing the lines
-    // out as JSONL and reading them back is the honest way to pin "the schema still
-    // accepts them" — removals like this one are exactly where that breaks
-    // (ADR 0003).
+    // 这两个变体为什么还留在 schema 里：在 `.scratch/todo-and-modes`
+    // 之前写下的会话带着这两条事件，而 `--continue` 在任何渲染器看到它之前
+    // 先用 `read_events` 解析那条流。把这些行写成 JSONL 再读回来，是
+    // 钉住「schema 仍然接受它们」最诚实的办法 —— 像这样的
+    // 一次移除正是它出问题的地方
+    // （ADR 0003）。
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("log.jsonl");
     let lines: Vec<String> = [plan_injected(1), mode_change(2)]
@@ -726,9 +726,9 @@ fn the_two_retired_variants_still_deserialize_off_an_old_stream() {
         .collect();
     std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
 
-    // The payloads, not the whole events: `at` is a wall-clock stamp, so two Events
-    // for one payload are equal in everything but the instant they were written.
-    let read = read_events(&path).expect("an old stream still parses");
+    // 是 payload，不是整条事件：`at` 是墙上时钟的戳，所以同一个 payload 的
+    // 两条 Event 除了写下的那一瞬间之外处处相等。
+    let read = read_events(&path).expect("旧的流仍然能解析");
     let payloads: Vec<EventPayload> = read.into_iter().map(|event| event.payload).collect();
     assert_eq!(
         payloads,
@@ -738,12 +738,12 @@ fn the_two_retired_variants_still_deserialize_off_an_old_stream() {
 
 #[test]
 fn an_old_streams_plan_events_still_replay_without_moving_the_mode() {
-    // Old streams carry the two events the plan mode used to emit — a `PlanMode`
-    // injection and the `ModeChange` that retired it. Both variants stay in the
-    // schema so such a stream still deserializes and replays (ADR 0003), and the
-    // lines still say what they said. What they no longer do is move the session's
-    // mode: a mode is a session value the front end was assembled with
-    // (`.scratch/todo-and-modes/spec.md` §1).
+    // 旧的流带着计划模式过去会发出的那两条事件 —— 一次 `PlanMode`
+    // 注入，以及退役掉它的那条 `ModeChange`。两个变体都留在
+    // schema 里，好让这样的流仍然能反序列化并重放（ADR 0003），而行上的
+    // 文本仍然说它当时说的话。它们不再做的事是挪动会话的
+    // 模式：模式是前端被组装时拿到的那个会话值
+    // （`.scratch/todo-and-modes/spec.md` §1）。
     for events in [
         vec![plan_injected(1), mode_change(2)],
         vec![plan_injected(1)],
@@ -755,12 +755,12 @@ fn an_old_streams_plan_events_still_replay_without_moving_the_mode() {
         let text = screen(120, 40, &mut state).join("\n");
         assert!(
             text.contains("模式 询问"),
-            "{events:?} keeps the assembled mode: {text}"
+            "{events:?} 保持组装时的那一档模式：{text}"
         );
     }
 
-    // The injection itself is still readable — the line names the source it came
-    // from — so an old session reads back as what it was.
+    // 注入本身仍然可读 —— 那一行点名了它来自哪个来源 ——
+    // 所以旧会话读回来还是它当时的样子。
     let mut state = state();
     replay(&mut state, vec![plan_injected(1)]);
     run_replay(&mut state);
@@ -769,14 +769,14 @@ fn an_old_streams_plan_events_still_replay_without_moving_the_mode() {
 }
 
 // ---------------------------------------------------------------------------
-// 票 08 — history lines open the same detail overlay
+// 票 08 — 历史行打开同一个详情覆盖层
 // ---------------------------------------------------------------------------
 
 #[test]
 fn a_history_tool_line_opens_the_same_detail_overlay() {
-    // History rows go through the one `apply`, so they carry the one hit table: a
-    // click on a replayed tool call opens the detail a live one would (spec §8, user
-    // story 6).
+    // 历史行走的是同一个 `apply`，所以它们带着同一张命中表：
+    // 点一条被重放的工具调用，打开的是实时调用会打开的那个详情
+    // （spec §8，用户故事 6）。
     let mut state = state();
     replay(
         &mut state,
@@ -791,15 +791,15 @@ fn a_history_tool_line_opens_the_same_detail_overlay() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("── 参数 ──"),
-        "the overlay opened on the history row: {text}"
+        "覆盖层开在那条历史行上：{text}"
     );
-    assert!(text.contains("\"command\""), "with the arguments: {text}");
+    assert!(text.contains("\"command\""), "带着参数：{text}");
 }
 
 #[test]
 fn a_history_thinking_line_opens_its_recorded_trace() {
-    // `MessageCompleted.reasoning` is where a finished trace lives, so a replayed
-    // message with one has a clickable 思考完成 line (spec §8, user story 7).
+    // `MessageCompleted.reasoning` 是走完的思考轨迹住的地方，所以一条
+    // 带着它的重放消息有一条可点的「思考完成」行（spec §8，用户故事 7）。
     let mut state = state();
     replay(
         &mut state,
@@ -814,14 +814,14 @@ fn a_history_thinking_line_opens_its_recorded_trace() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("先看依赖，再看测试。"),
-        "the recorded trace is shown: {text}"
+        "记下的轨迹被显示出来：{text}"
     );
 }
 
 #[test]
 fn a_history_without_recorded_reasoning_has_no_thinking_line() {
-    // The synthesizer's shape: deltas streamed, nothing written down. There is no
-    // trace to fake and no empty box to open (spec §8, user story 11).
+    // 合成器的形状：增量流过，什么都没写下来。没有
+    // 可伪造的轨迹，也没有可打开的空白框（spec §8，用户故事 11）。
     let mut state = state();
     replay(
         &mut state,
@@ -832,11 +832,11 @@ fn a_history_without_recorded_reasoning_has_no_thinking_line() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("思考完成"),
-        "no thinking line for a message with no trace: {text}"
+        "没有轨迹的消息就没有思考行：{text}"
     );
 }
 
-/// The replayed history for a tool call whose preview carries `output`.
+/// 一条工具调用的重放历史，它的预览带着 `output`。
 fn history_with_tool_output(id: &str, output: Option<&str>) -> Vec<Event> {
     vec![
         tool_started(1, id, "bash", serde_json::json!({"command": "cat big"})),
@@ -846,16 +846,16 @@ fn history_with_tool_output(id: &str, output: Option<&str>) -> Vec<Event> {
 
 #[test]
 fn a_history_detail_reads_the_spilled_tool_output() {
-    // The event carries the preview; the whole text is the file the call id names
-    // under the session directory (spec §8).
-    let dir = tempfile::tempdir().expect("a session directory");
+    // 事件带着预览；整段文本是调用 id 在会话目录下
+    // 点名的那个文件（spec §8）。
+    let dir = tempfile::tempdir().expect("一个会话目录");
     let outputs = dir.path().join("outputs");
-    std::fs::create_dir_all(&outputs).expect("the session's outputs directory");
+    std::fs::create_dir_all(&outputs).expect("会话的 outputs 目录");
     std::fs::write(
         outputs.join("call-h2.txt"),
         "the whole output\nwith a second line the preview never carried",
     )
-    .expect("the spilled file");
+    .expect("溢出的那个文件");
 
     let mut state = state_in(dir.path());
     replay(
@@ -868,16 +868,16 @@ fn a_history_detail_reads_the_spilled_tool_output() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("with a second line the preview never carried"),
-        "the spilled file is shown whole: {text}"
+        "溢出的那个文件整段显示：{text}"
     );
-    assert!(!text.contains("全文不可用"), "and not degraded: {text}");
+    assert!(!text.contains("全文不可用"), "而没有降级：{text}");
 }
 
 #[test]
 fn a_history_detail_degrades_when_the_spilled_file_is_gone() {
-    // `prune`, or a hand-deleted file: the preview plus the sentence that says it is
-    // not the whole thing (spec §8, user story 9).
-    let dir = tempfile::tempdir().expect("a session directory");
+    // `prune`，或者有人手删了那个文件：预览加上一句说
+    // 它不是全部的话（spec §8，用户故事 9）。
+    let dir = tempfile::tempdir().expect("一个会话目录");
     let mut state = state_in(dir.path());
     replay(
         &mut state,
@@ -890,16 +890,16 @@ fn a_history_detail_degrades_when_the_spilled_file_is_gone() {
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("head of the output"), "the preview: {text}");
-    assert!(text.contains("全文不可用"), "the degradation: {text}");
+    assert!(text.contains("head of the output"), "预览：{text}");
+    assert!(text.contains("全文不可用"), "降级：{text}");
 }
 
 #[test]
 fn a_history_detail_degrades_when_the_spilled_file_is_empty() {
-    let dir = tempfile::tempdir().expect("a session directory");
+    let dir = tempfile::tempdir().expect("一个会话目录");
     let outputs = dir.path().join("outputs");
-    std::fs::create_dir_all(&outputs).expect("the session's outputs directory");
-    std::fs::write(outputs.join("call-h4.txt"), "").expect("the empty file");
+    std::fs::create_dir_all(&outputs).expect("会话的 outputs 目录");
+    std::fs::write(outputs.join("call-h4.txt"), "").expect("空文件");
 
     let mut state = state_in(dir.path());
     replay(
@@ -913,16 +913,16 @@ fn a_history_detail_degrades_when_the_spilled_file_is_empty() {
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("head of the output"), "the preview: {text}");
-    assert!(text.contains("全文不可用"), "the degradation: {text}");
+    assert!(text.contains("head of the output"), "预览：{text}");
+    assert!(text.contains("全文不可用"), "降级：{text}");
 }
 
 #[test]
 fn a_history_result_without_the_truncation_note_is_its_own_full_text() {
-    // No note means no spilled file was ever written: the event's text **is** the
-    // whole body, and calling it unavailable would be a false warning. This is also
-    // the shape `--continue` writes for a dangling call (spec §8, user story 10).
-    let dir = tempfile::tempdir().expect("a session directory");
+    // 没有那句话就说明从没写过溢出文件：事件里的文本**就是**
+    // 全部正文，说它不可用会是一句假警告。这也是
+    // `--continue` 为一条悬着的调用写下的形状（spec §8，用户故事 10）。
+    let dir = tempfile::tempdir().expect("一个会话目录");
     let mut state = state_in(dir.path());
     replay(
         &mut state,
@@ -943,18 +943,18 @@ fn a_history_result_without_the_truncation_note_is_its_own_full_text() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("interrupted while this call was in flight"),
-        "the event text is shown: {text}"
+        "事件里的文本被显示出来：{text}"
     );
     assert!(
         !text.contains("全文不可用"),
-        "and no false degradation is claimed: {text}"
+        "也没有谎称降级：{text}"
     );
 }
 
 #[test]
 fn the_divider_and_section_lines_are_not_clickable() {
-    // Only the collapsed lines a reader can open carry the marker; the seam and the
-    // turn rules are text (spec §8).
+    // 只有读者能打开的折叠行才带那个标记；接缝与
+    // 回合横线都只是文本（spec §8）。
     let mut state = state();
     replay(
         &mut state,
@@ -970,20 +970,20 @@ fn the_divider_and_section_lines_are_not_clickable() {
     let seam = rows
         .iter()
         .position(|row| row.contains(wording::history_divider()))
-        .expect("the seam is drawn");
+        .expect("接缝画出来了");
     state.mouse(click(10, seam as u16));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──") && !text.contains("── 推理 ──"),
-        "a click on the seam opens nothing: {text}"
+        "点接缝什么都不开：{text}"
     );
 }
 
 #[test]
 fn a_history_detail_freezes_the_viewport_and_releases_it() {
-    // The overlay is the live one, so the history path inherits its viewport
-    // contract: opening freezes the transcript, output arriving meanwhile does not
-    // pull it, and closing returns to the bottom (spec §8, user story 35).
+    // 覆盖层就是实时那一个，所以历史这条路继承它的视口契约：
+    // 打开会冻住转录，其间到达的输出不会把它
+    // 拽走，而关掉会回到底部（spec §8，用户故事 35）。
     let mut state = state();
     replay(
         &mut state,
@@ -999,27 +999,27 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
         screen(120, 40, &mut state)
             .join("\n")
             .contains("── 参数 ──"),
-        "the history detail is open"
+        "历史详情是开着的"
     );
 
-    // Output arrives while the overlay is up: it is appended, not followed.
+    // 覆盖层挂着的时候输出到达：它被追加，而不是被跟随。
     state.live_event(RenderEvent::Notice("历史详情打开时的新内容".to_owned()));
     let frozen = screen(120, 40, &mut state);
     assert!(
         frozen.iter().any(|row| row.contains("── 参数 ──")),
-        "the overlay is still the thing being read: {frozen:?}"
+        "正在读的仍然是那个覆盖层：{frozen:?}"
     );
 
-    // `Esc` closes it, and the viewport is back at the bottom — including the line
-    // that arrived while it was frozen.
+    // `Esc` 关上它，视口回到最底下 —— 连它冻住期间
+    // 到达的那一行也算上。
     state.key(Key::Esc);
     let after = screen(120, 40, &mut state).join("\n");
     assert!(
         after.contains("历史详情打开时的新内容"),
-        "closing returns to the newest line: {after}"
+        "关掉会回到最新的那一行：{after}"
     );
     assert!(
         !after.contains(wording::back_to_bottom()),
-        "with the viewport following again: {after}"
+        "而视口又开始跟随了：{after}"
     );
 }

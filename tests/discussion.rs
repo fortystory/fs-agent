@@ -1,11 +1,11 @@
-//! The discussion protocol (spec §15).
+//! 讨论协议（spec §15）。
 //!
-//! Two seams are exercised here. The pure comparison functions are tested
-//! directly — the spec's Testing Decisions name "the equality / substring
-//! verdict on normalized conclusions" as one of the pure functions that needs no
-//! mock seam. The round loop itself is tested through the library assembly entry
-//! with a scripted fake provider, asserting the JSONL event stream and the two
-//! render sinks.
+//! 这里练两条接缝。纯比较函数直接测 —— spec 的
+//! Testing Decisions 把「对归一化结论的相等 / 子串判定」列为
+//! 不需要 mock 接缝的纯函数之一。轮次循环本身则走
+//! 库的组装入口，配一个脚本化的假 provider，断言
+//! JSONL 事件流与
+//! 两个渲染 sink。
 
 mod support;
 
@@ -45,7 +45,7 @@ fn executor() -> SpeakerId {
     SpeakerId::Executor("e-1".into())
 }
 
-/// Build a log from a script, keeping the temp directory alive with it.
+/// 从一个脚本搭出一份日志，并让临时目录与它一起活下来。
 fn build_log(script: impl FnOnce(&mut EventLog)) -> (tempfile::TempDir, EventLog) {
     let dir = tempfile::tempdir().unwrap();
     let mut log = EventLog::create(dir.path().join("log.jsonl")).unwrap();
@@ -95,37 +95,37 @@ fn turn_ends(log: &mut EventLog, speaker: &SpeakerId, reason: StopReason) {
         .unwrap();
 }
 
-/// An answer as a debater writes it: prose, then the marker line.
+/// 讨论者写下的一个答案：正文，然后是那行标记。
 fn answer(body: &str, conclusion: &str) -> String {
     format!("{body}\nCONCLUSION: {conclusion}")
 }
 
 #[test]
 fn a_pair_is_drawn_from_the_pool_without_repeating_a_member() {
-    // The draw is a pure function of the pool size and a seed, so a discussion can say
-    // which pair it ran and a test can pin the choice instead of the distribution.
+    // 抽取是池子大小与一个种子的纯函数，所以一场讨论可以说清
+    // 它跑的是哪一对，而测试能钉住这个选择、而不是分布。
     assert_eq!(pick_pair(2, 0), Some((0, 1)));
     assert_eq!(
         pick_pair(2, 12_345),
         Some((0, 1)),
-        "a pool of two debates as itself whatever the seed"
+        "两个的池子不论种子如何都自己跟自己讨论"
     );
-    assert_eq!(pick_pair(1, 7), None, "one member cannot hold a discussion");
+    assert_eq!(pick_pair(1, 7), None, "一个成员撑不起一场讨论");
     assert_eq!(pick_pair(0, 7), None);
 
-    // A pool of three: every draw is two distinct members, in pool order, and the seed
-    // really moves the pair (all three pairs come up over a modest range).
+    // 三个的池子：每次抽取都是两个不同成员、按池子顺序，
+    // 而种子真的会挪动这一对（在一个不大的范围里三对都会出现）。
     let mut seen = std::collections::BTreeSet::new();
     for seed in 0..40u64 {
-        let (first, second) = pick_pair(3, seed).expect("a pair");
-        assert!(first < second, "seed {seed}: {first} then {second}");
-        assert!(second < 3, "seed {seed}: {second} is out of the pool");
+        let (first, second) = pick_pair(3, seed).expect("一对");
+        assert!(first < second, "种子 {seed}：先 {first} 后 {second}");
+        assert!(second < 3, "种子 {seed}：{second} 出了池子");
         seen.insert((first, second));
     }
     assert_eq!(
         seen,
         std::collections::BTreeSet::from([(0, 1), (0, 2), (1, 2)]),
-        "a pool of three can produce every pair"
+        "三个的池子能产出每一对"
     );
 }
 
@@ -144,18 +144,18 @@ fn the_last_marker_line_wins_so_trailing_prose_cannot_hide_the_conclusion() {
 #[test]
 fn an_answer_without_the_marker_has_no_conclusion() {
     assert_eq!(conclusion_of("我只说了正文，没有给结论。"), None);
-    // A marker that is not at the start of its line is prose about the marker,
-    // not a conclusion.
+    // 不在行首的标记，是在讲标记本身的正文，
+    // 不是结论。
     assert_eq!(conclusion_of("我的 CONCLUSION: 藏在句子中间"), None);
-    // An empty conclusion is not a conclusion.
+    // 空结论不是结论。
     assert_eq!(conclusion_of("正文\nCONCLUSION:   "), None);
 }
 
 #[test]
 fn a_decorated_marker_still_reads_as_a_conclusion() {
-    // The model may wrap the marker in emphasis or a list bullet. Treating that
-    // as "no conclusion" would be a false negative: the two sides would look
-    // divergent and the protocol would buy a second round for nothing.
+    // 模型可能把标记包在强调里，或者在它前面加个列表项。把那
+    // 读成「没有结论」会是一次假阴性：两侧会看起来
+    // 分歧，而协议白白买来第二轮。
     assert_eq!(
         conclusion_of("正文\n**CONCLUSION:** 复用事件流"),
         Some("复用事件流")
@@ -186,9 +186,9 @@ fn whitespace_and_case_are_normalized_away() {
 
 #[test]
 fn a_substring_conclusion_counts_as_agreement_in_either_direction() {
-    // The spec's mechanical rule: exact equality **or** substring containment,
-    // normalized. Containment is checked both ways, so the longer answer's extra
-    // qualifier does not read as a disagreement.
+    // spec 的那条机械规则：精确相等**或**子串包含，
+    // 都先过一次归一化。包含是双向检查的，所以更长那个答案多出来的
+    // 限定语不会被读成分歧。
     let short = answer("正文 A", "复用事件流");
     let long = answer("正文 B", "应该复用事件流");
     assert!(answers_agree(&short, &long));
@@ -204,8 +204,8 @@ fn different_conclusions_do_not_agree() {
 
 #[test]
 fn an_answer_without_a_conclusion_never_agrees() {
-    // This is the dangerous misread the spec calls out: one answer (or none)
-    // must not collapse into "they agree".
+    // 这是 spec 点名的那次危险误读：一个答案（或者一个都没有）
+    // 不许坍缩成「他们一致」。
     let with_marker = answer("正文", "复用事件流");
     let without_marker = "只有正文，没有结论。";
     assert!(!answers_agree(&with_marker, without_marker));
@@ -241,9 +241,9 @@ fn a_round_reports_who_answered_and_who_was_absent() {
 
 #[test]
 fn a_side_that_answered_is_present_even_if_its_turn_then_failed() {
-    // The spec's absence query is "ended in `Error` **and** left no message":
-    // an answer that landed before the failure is still an answer, and reading
-    // it as absent would throw away a real position.
+    // spec 的缺席查询是「以 `Error` 结束**并且**没留下消息」：
+    // 在失败之前落地的那条作答仍然是作答，把它读成
+    // 缺席会丢掉一个真实的立场。
     let (_dir, log) = build_log(|log| {
         round_starts(log, 1, RoundMode::Independent);
         says(log, &kimi(), &answer("正文", "复用事件流"));
@@ -280,10 +280,10 @@ fn rounds_do_not_leak_into_each_other() {
 
 #[test]
 fn executors_and_the_synthesizer_are_not_debaters_in_a_round() {
-    // An executor's turn lands inside the round that spawned it on the same
-    // stream (spec §16), and the synthesizer's product is `System` (spec §2).
-    // Neither is a debater's answer, so neither may be counted as one — or the
-    // protocol would find agreement between a debater and its own executor.
+    // 执行者的回合落在派出它的那一轮里面，走的是同一条
+    // 流（spec §16），而合成器的产物是 `System`（spec §2）。
+    // 两者都不是讨论者的作答，所以两者都不许被算作
+    // 作答 —— 否则协议会在一个讨论者与它自己的执行者之间找到一致。
     let (_dir, log) = build_log(|log| {
         round_starts(log, 1, RoundMode::Independent);
         says(log, &kimi(), &answer("正文", "复用事件流"));
@@ -356,8 +356,8 @@ fn the_mechanical_verdict_reads_agreement_out_of_the_two_conclusions() {
 
 #[test]
 fn agreement_in_the_first_round_ends_the_debate_without_divergence() {
-    // One round, nobody disagreed: the protocol never needed a second round, and
-    // the reason says exactly that.
+    // 一轮，没有人分歧：协议从不需要第二轮，
+    // 而原因说的正是这个。
     assert_eq!(
         plan_after_round(RoundOutcome::Agreed, 1, 2),
         RoundPlan::Stop(StopReason::NoDivergence)
@@ -390,9 +390,9 @@ fn a_conflict_at_the_cap_is_rounds_exhausted() {
 
 #[test]
 fn a_one_sided_round_stops_debating_and_leaves_the_absence_to_the_stream() {
-    // Nothing was compared, so nothing was agreed. The round still ends — with
-    // the reason that claims the least — and the absent side stays visible as its
-    // own `TurnEnded { Error }` rather than as a field on this event.
+    // 什么都没比较，所以什么都没一致。这一轮照样结束 —— 用
+    // 主张最少的那条原因 —— 而缺席的那一方仍然以它自己的
+    // `TurnEnded { Error }` 可见，而不是作为这条事件上的一个字段。
     assert_eq!(
         plan_after_round(RoundOutcome::Incomplete, 1, 2),
         RoundPlan::Stop(StopReason::NoDivergence)
@@ -401,8 +401,8 @@ fn a_one_sided_round_stops_debating_and_leaves_the_absence_to_the_stream() {
 
 #[test]
 fn the_debater_identity_teaches_the_marker_the_parser_reads() {
-    // Prompt and parser share one constant; a marker the instruction teaches and
-    // the parser does not know would make every round look divergent.
+    // 提示词与解析器共用同一个常量；一条指令教了、解析器
+    // 却不认识其标记，会让每一轮都看起来分歧。
     let identity = debater_identity("kimi");
     assert!(identity.contains("kimi"));
     assert!(identity.contains(CONCLUSION_MARKER));
@@ -422,17 +422,17 @@ fn the_synthesizer_prompt_reveals_every_answer_and_names_every_absence() {
     assert!(prompt.contains("该不该复用事件流？"));
     assert!(prompt.contains("KIMI 的作答正文"));
     assert!(prompt.contains("独立"));
-    // The dangerous misread: only one answer came back, so the synthesizer must
-    // be told the other side is absent instead of reading the single answer as
-    // the consensus.
+    // 那次危险的误读：只回来一个答案，所以必须告诉合成器
+    // 另一方缺席，而不是把那唯一一个答案读成
+    // 共识。
     assert!(prompt.contains("deepseek"));
     assert!(prompt.contains("缺席"));
-    // Speech is revealed; private reasoning never is.
+    // 发言会被揭示；私有推理永远不。
     assert!(!prompt.contains("private reasoning"));
 }
 
 // ---------------------------------------------------------------------------
-// The round loop, through the assembly seam.
+// 轮次循环，走组装接缝。
 // ---------------------------------------------------------------------------
 
 struct Fixture {
@@ -478,9 +478,9 @@ async fn fixture_with(
     .await
 }
 
-/// The same, with a configuration per participant: one debater, the other, the
-/// synthesizer. A discussion shares its token allowance (spec §17), so the
-/// configurations differ only where a test is about routing.
+/// 同上，只是每个参与者各带一份配置：一个讨论者、另一个、
+/// 合成器。一场讨论共用一个 token 额度（spec §17），所以
+/// 这些配置只在测试与改派有关的地方不同。
 async fn fixture_with_configs(
     kimi_provider: FakeProvider,
     deepseek_provider: FakeProvider,
@@ -550,7 +550,7 @@ async fn fixture_with_configs(
     }
 }
 
-/// An answer as a debater writes it.
+/// 讨论者写下的一个答案。
 fn answered(body: &str, conclusion: &str) -> Reply {
     Reply::text(&answer(body, conclusion))
 }
@@ -559,7 +559,7 @@ fn kinds(events: &[Event]) -> Vec<&'static str> {
     events.iter().map(|event| event.payload.kind()).collect()
 }
 
-/// Every `RoundEnded` as `(round, reason)`, in order.
+/// 每条 `RoundEnded` 的 `(round, reason)`，按顺序。
 fn round_endings(events: &[Event]) -> Vec<(u32, StopReason)> {
     events
         .iter()
@@ -583,7 +583,7 @@ async fn a_discussion_without_divergence_takes_three_calls() {
     let outcome = fixture.harness.discuss("该不该复用事件流？").await.unwrap();
     fixture.harness.shutdown().await;
 
-    // Two debaters and one closing call. The mechanical verdict costs nothing.
+    // 两个讨论者加一次收尾调用。机械判定不花什么。
     assert_eq!(fixture.kimi.requests().len(), 1);
     assert_eq!(fixture.deepseek.requests().len(), 1);
     assert_eq!(fixture.synthesizer.requests().len(), 1);
@@ -597,8 +597,8 @@ async fn a_discussion_without_divergence_takes_three_calls() {
         round_endings(&events),
         vec![(1, StopReason::NoDivergence), (2, StopReason::Completed)]
     );
-    // The synthesizer's product is the harness's own voice (spec §2), and the
-    // question is the user's.
+    // 合成器的产物是 harness 自己的声音（spec §2），
+    // 而问题是用用户的。
     let products: Vec<&EventPayload> = events
         .iter()
         .filter(|event| {
@@ -648,8 +648,8 @@ async fn a_discussion_that_stays_divergent_takes_five_calls_and_ends_exhausted()
     assert_eq!(outcome.rounds, 2);
 
     let events = read_events(&fixture.log_path).unwrap();
-    // Only the round that ended the debate carries `RoundEnded`; the second
-    // round's boundary is the synthesis round's `RoundStarted`.
+    // 只有结束这场辩论的那一轮带 `RoundEnded`；第二轮的
+    // 边界是合成轮的 `RoundStarted`。
     assert_eq!(
         round_endings(&events),
         vec![(2, StopReason::RoundsExhausted), (3, StopReason::Completed)]
@@ -720,9 +720,9 @@ async fn agreement_in_the_targeted_round_is_consensus() {
 
 #[tokio::test]
 async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
-    // N = 2 is not an implementation detail: the "N = 2 does not arbitrate"
-    // decision is what makes the mechanical verdict enough, so a third debater
-    // has to reopen that decision rather than slip in (spec §15, Out of Scope).
+    // N = 2 不是实现细节：「N = 2 不做仲裁」这条决定
+    // 正是机械判定够用的原因，所以第三个讨论者必须重新
+    // 打开那条决定，而不是溜进来（spec §15，Out of Scope）。
     let dir = tempfile::tempdir().unwrap();
     let assembled = assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
@@ -756,7 +756,7 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
     .await;
 
     let error = match assembled {
-        Ok(_) => panic!("a one-debater roster must be refused"),
+        Ok(_) => panic!("只有一个讨论者的名册必须被拒"),
         Err(error) => error,
     };
     assert!(matches!(error, Error::Discussion(_)), "got {error:?}");
@@ -764,10 +764,10 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
 
 #[tokio::test]
 async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
-    // Two debaters may be the same *model* — one subscription is not a reason to have
-    // no discussion — but they may not be the same *participant*: every projection is
-    // a function of `speaker_id`, so one name would hand each side the other's answer
-    // as its own in the targeted round (spec §5).
+    // 两个讨论者可以是同一个*模型* —— 一份订阅不是「干脆不讨论」
+    // 的理由 —— 但它们不许是同一个*参与者*：每一次投影都是
+    // `speaker_id` 的函数，所以同一个名字会在定向轮里把
+    // 另一方的答案当作自己的交给各方（spec §5）。
     let dir = tempfile::tempdir().unwrap();
     let assembled = assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
@@ -809,7 +809,7 @@ async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
     .await;
 
     let error = match assembled {
-        Ok(_) => panic!("two debaters with one identity must be refused"),
+        Ok(_) => panic!("两个讨论者共用一个身份必须被拒"),
         Err(error) => error,
     };
     assert!(
@@ -820,9 +820,9 @@ async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
 
 #[tokio::test]
 async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
-    // The allowance is one value shared by every participant on the stream
-    // (spec §17), so two different caps are a setup error rather than a race
-    // about whose number the gate reads.
+    // 额度是流上每个参与者共用的一份
+    // （spec §17），所以两个不同的上限是组装错误，
+    // 而不是一场「闸门读谁的数字」的竞赛。
     let dir = tempfile::tempdir().unwrap();
     let assembled = assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
@@ -864,7 +864,7 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
     .await;
 
     let error = match assembled {
-        Ok(_) => panic!("a roster that disagrees about the session budget must be refused"),
+        Ok(_) => panic!("对会话预算意见不一致的名册必须被拒"),
         Err(error) => error,
     };
     assert!(
@@ -874,7 +874,7 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
 }
 
 // ---------------------------------------------------------------------------
-// Independence, the reveal, and real concurrency.
+// 独立、揭示，以及真正的并发。
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -911,14 +911,14 @@ async fn the_first_round_hides_the_other_debater_and_the_targeted_round_reveals_
         })
     };
 
-    // Round one is independent by construction, not by luck: KIMI's first
-    // request cannot see DEEPSEEK's answer even though DEEPSEEK's turn may have
-    // finished first.
+    // 第一轮按构造就是独立的，不是碰巧：KIMI 的第一次请求
+    // 看不到 DEEPSEEK 的答案，哪怕 DEEPSEEK 的回合可能
+    // 先跑完。
     assert!(asked(&kimi_rounds[0], "该不该复用事件流？"));
     assert!(!asked(&kimi_rounds[0], "DEEPSEEK-R1"));
     assert!(!asked(&deepseek_rounds[0], "KIMI-R1"));
 
-    // The targeted round is the reveal: each side sees the other's first round.
+    // 定向轮就是揭示：每一方看到对方的第一轮。
     assert!(asked(&kimi_rounds[1], "DEEPSEEK-R1"));
     assert!(asked(&deepseek_rounds[1], "KIMI-R1"));
 }
@@ -938,13 +938,13 @@ async fn the_protocol_instruction_is_a_private_identity_and_never_enters_the_str
 
     let kimi_requests = fixture.kimi.requests();
     let identity = debater_identity("kimi");
-    // The instruction reaches the model as the leading `system` message...
+    // 这条指令以领头的 `system` 消息到达模型……
     match &kimi_requests[0].messages[0] {
         fs_agent::provider::Message::System { content, .. } => assert_eq!(content, &identity),
-        other => panic!("expected a leading system message, got {other:?}"),
+        other => panic!("要的是领头那条 system 消息，得到 {other:?}"),
     }
-    // ...and never enters the stream, or a later round's `messages` could not be
-    // recomputed from the stream alone (spec §15).
+    // ……而且从不进流，否则之后某一轮的 `messages` 就没法
+    // 只从流上重算（spec §15）。
     assert!(identity.contains("作答规则"));
     let raw = std::fs::read_to_string(&fixture.log_path).unwrap();
     assert!(!raw.contains("作答规则"));
@@ -955,9 +955,9 @@ async fn the_two_debaters_are_in_flight_at_once() {
     use std::sync::Arc;
     use tokio::sync::Barrier;
 
-    // Two parties: each provider's `send` waits for the other to arrive. A loop
-    // that ran the turns one after another would block here and trip the
-    // rendezvous timeout instead of producing a stream.
+    // 两方：每个 provider 的 `send` 都等另一方到达。一个
+    // 一个接一个跑回合的循环会在这里阻塞，撞上会合的
+    // 超时，而不是产出一条流。
     let barrier = Arc::new(Barrier::new(2));
     let mut fixture = fixture_with(
         FakeProvider::meeting_at(
@@ -982,7 +982,7 @@ async fn the_two_debaters_are_in_flight_at_once() {
 }
 
 // ---------------------------------------------------------------------------
-// Failure: one side absent is not consensus, and no failure is ever re-run.
+// 失败：一方缺席不是共识，而任何失败都不会重跑。
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1000,7 +1000,7 @@ async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_que
     let outcome = fixture.harness.discuss("该不该复用事件流？").await.unwrap();
     fixture.harness.shutdown().await;
 
-    // One attempt by the failed side, one answer, one closing call.
+    // 失败那一方的一次尝试、一条作答、一次收尾调用。
     assert_eq!(fixture.deepseek.requests().len(), 1);
     assert_eq!(fixture.kimi.requests().len(), 1);
     assert_eq!(fixture.synthesizer.requests().len(), 1);
@@ -1008,9 +1008,9 @@ async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_que
     assert_eq!(outcome.rounds, 1);
     assert_eq!(outcome.absent, vec![deepseek()]);
 
-    // The absence is a query over the stream, not a field: the failed side's own
-    // `TurnEnded { Error }` plus the missing `MessageCompleted` is the whole
-    // record (spec §15).
+    // 缺席是在流上做的查询，不是某个字段：失败那一方自己的
+    // `TurnEnded { Error }` 加上缺失的那条 `MessageCompleted`
+    // 就是全部记录（spec §15）。
     let events = read_events(&fixture.log_path).unwrap();
     let attendance = round_attendance(&events, 1);
     assert_eq!(attendance.answers.len(), 1);
@@ -1023,8 +1023,8 @@ async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_que
             }
         )));
 
-    // The dangerous misread: the synthesizer is told which side is missing rather
-    // than being handed one answer to read as the consensus.
+    // 那次危险的误读：告诉合成器缺的是哪一方，而不是
+    // 交给它一个答案去读成共识。
     let closing = &fixture.synthesizer.requests()[0].messages;
     let prompt = closing
         .iter()
@@ -1032,7 +1032,7 @@ async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_que
             fs_agent::provider::Message::User { content, .. } => Some(content.clone()),
             _ => None,
         })
-        .expect("the synthesizer is given a user message");
+        .expect("给了合成器一条 user 消息");
     assert!(prompt.contains("deepseek"));
     assert!(prompt.contains("缺席"));
 }
@@ -1061,8 +1061,8 @@ async fn both_sides_failing_ends_the_session_without_a_closing_call() {
     assert_eq!(outcome.rounds, 1);
     assert!(outcome.absent.contains(&kimi()));
     assert!(outcome.absent.contains(&deepseek()));
-    // No re-run, and no closing call: the synthesis is the one call that cannot
-    // be skipped, and it cannot be made when there is nothing to synthesize.
+    // 不重跑，也没有收尾调用：合成是唯一一次不可以跳过的
+    // 调用，而在没有东西可合成时它做不出来。
     assert_eq!(fixture.kimi.requests().len(), 1);
     assert_eq!(fixture.deepseek.requests().len(), 1);
     assert_eq!(fixture.synthesizer.requests().len(), 0);
@@ -1073,8 +1073,8 @@ async fn both_sides_failing_ends_the_session_without_a_closing_call() {
 }
 
 // ---------------------------------------------------------------------------
-// Rendering (spec §19 / Testing Decisions' render category): the headless
-// renderer writes the final product to stdout and everything else to stderr.
+// 渲染（spec §19 / Testing Decisions 的渲染那一类）：headless
+// 渲染器把最终产物写到 stdout，别的都写到 stderr。
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1090,13 +1090,13 @@ async fn a_discussion_puts_only_the_synthesis_on_stdout() {
     fixture.harness.discuss("该不该复用事件流？").await.unwrap();
     fixture.harness.shutdown().await;
 
-    // Every debater turn ends `Completed` too, so "final product" cannot mean
-    // "the last completed turn" in a discussion: the closing call is the product.
+    // 讨论者的每个回合也都以 `Completed` 收尾，所以「最终产物」在一场讨论里
+    // 不可能指「最后那个完成的回合」：收尾调用才是产物。
     let stdout = fixture.stdout.text();
     assert!(stdout.contains("共识：复用事件流"));
     assert!(!stdout.contains("KIMI 正文不该出现在 stdout"));
     assert!(!stdout.contains("DEEPSEEK 正文也不该出现"));
-    // The debaters' answers are still narrated, on the diagnostic sink.
+    // 讨论者的那些作答仍然被叙述，叙述在诊断 sink 上。
     assert!(fixture.stderr.text().contains("KIMI 正文不该出现在 stdout"));
 }
 
@@ -1132,9 +1132,9 @@ async fn the_four_round_reasons_render_distinguishably() {
     let _ = task.await;
 
     let rendered = stderr.text();
-    // Each reason gets its own narration, and no two read the same: the phrase
-    // comes from the one wording source, so this pins the wiring and the
-    // distinctness together.
+    // 每条原因都有自己的一段叙述，没有两条读起来一样：短语
+    // 来自唯一那个措辞来源，所以这条把接线与
+    // 互不雷同一起钉住。
     let expected: Vec<String> = reasons
         .iter()
         .map(|reason| fs_agent::render::wording::round_ended(2, *reason))
@@ -1142,23 +1142,23 @@ async fn the_four_round_reasons_render_distinguishably() {
     for line in &expected {
         assert!(
             rendered.contains(line.as_str()),
-            "{line} missing from {rendered}"
+            "{rendered} 里缺了 {line}"
         );
     }
     let distinct: std::collections::BTreeSet<&String> = expected.iter().collect();
     assert_eq!(
         distinct.len(),
         reasons.len(),
-        "the four reasons must not collapse into one rendering: {rendered}"
+        "这四条原因不许坍缩成同一种渲染：{rendered}"
     );
-    // A round ending is narration, never a final product.
+    // 一轮结束是叙述，绝不是最终产物。
     assert_eq!(stdout.text(), "");
 }
 
 #[tokio::test]
 async fn a_one_round_cap_never_opens_a_targeted_round() {
-    // The cap is configuration, not a constant: with one round allowed, a
-    // conflict ends the debate there instead of buying a second round.
+    // 上限是配置，不是常量：只允许一轮时，冲突
+    // 就在那里结束辩论，而不是再买一轮。
     let mut fixture = fixture(
         vec![answered("KIMI 正文", "复用事件流")],
         vec![answered("DEEPSEEK 正文", "每个 agent 各写一份日志")],
@@ -1184,7 +1184,7 @@ async fn a_one_round_cap_never_opens_a_targeted_round() {
 
 #[tokio::test]
 async fn omitting_the_round_cap_takes_the_protocol_default() {
-    // "上限 2 轮（可配）": the cap has a default, and the seam can also name it.
+    // 「上限 2 轮（可配）」：上限有默认值，接缝也能点名它。
     let mut fixture = fixture(
         vec![
             answered("KIMI 第一轮", "复用事件流"),
@@ -1208,8 +1208,8 @@ async fn omitting_the_round_cap_takes_the_protocol_default() {
 
 #[tokio::test]
 async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discussion() {
-    // The whole point of `task` (spec §16): a debater can have real work done,
-    // and the other debater sees a summary — never the executor's process.
+    // `task` 的全部要点（spec §16）：讨论者可以让真实的工作被做完，
+    // 而另一个讨论者看到的是摘要 —— 绝不是执行者的过程。
     let delegated = Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
             index: 0,
@@ -1258,7 +1258,7 @@ async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discu
             .count(),
         1
     );
-    // The dispatching debater gets the summary as its own `task` result.
+    // 派发的那个讨论者以自己的 `task` 结果拿到摘要。
     let result = events
         .iter()
         .find_map(|event| match &event.payload {
@@ -1269,11 +1269,11 @@ async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discu
             } => Some(output.clone()),
             _ => None,
         })
-        .expect("the task call's result");
+        .expect("task 调用的结果");
     assert!(result.contains("EXECUTOR-ONLY: 12 modules"), "{result}");
 
-    // The executor's process reaches neither debater's window; the other debater
-    // sees at most the one-line tool summary of the `task` call itself.
+    // 执行者的过程进不了两个讨论者的窗口；另一个讨论者
+    // 至多看到 `task` 调用自身那一行工具摘要。
     let kimi_round_two = &fixture.kimi.requests()[3];
     let summary = kimi_round_two
         .messages
@@ -1282,28 +1282,28 @@ async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discu
             Message::Tool { content, .. } if content.contains("EXECUTOR-ONLY") => Some(content),
             _ => None,
         })
-        .expect("the dispatcher's own tool result is in its window");
+        .expect("派发者自己的工具结果在它的窗口里");
     assert!(summary.contains("files changed: none"), "{summary}");
 
-    // The executor's process reaches the other debater's window in no form at
-    // all — not as speech (an `executor:kimi-1` block) and not as a body. The
-    // other debater learns of the work only through KIMI's own words.
+    // 执行者的过程以任何形态都进不了另一个讨论者的窗口
+    // —— 既不是发言（一块 `executor:kimi-1`），也不是正文。
+    // 另一个讨论者只通过 KIMI 自己的话知道有这件工作。
     for request in fixture.deepseek.requests() {
         for message in &request.messages {
             let content = message_content(message);
             assert!(
                 !content.contains("EXECUTOR-ONLY"),
-                "an executor's process leaked into the other debater's window: {content}"
+                "执行者的过程漏进了另一个讨论者的窗口：{content}"
             );
             assert!(
                 !content.contains("executor:kimi-1"),
-                "an executor's events leaked into the other debater's window: {content}"
+                "执行者的事件漏进了另一个讨论者的窗口：{content}"
             );
         }
     }
 
-    // The dispatcher's own window carries the summary exactly once, and as the
-    // `task` call's tool result — never as an executor turn projected into it.
+    // 派发者自己的窗口恰好带着摘要一次，而且是以 `task`
+    // 调用的工具结果的形式 —— 绝不是一次投影进来的执行者回合。
     let dispatcher = &fixture.kimi.requests()[3];
     assert!(dispatcher.messages.iter().any(
         |message| matches!(message, Message::Tool { content, .. } if content.contains("EXECUTOR-ONLY"))
@@ -1312,21 +1312,21 @@ async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discu
         if let Message::User { content, .. } = message {
             assert!(
                 !content.contains("EXECUTOR-ONLY") && !content.contains("executor:kimi-1"),
-                "an executor is not a speaker in a debater's window: {content}"
+                "执行者不是讨论者窗口里的一个发言者：{content}"
             );
         }
     }
-    // And the first round's projection, taken before the executor existed, is
-    // untouched by any of it.
+    // 而第一轮那份在执行者存在之前取下的投影，
+    // 以上一切都没碰到它。
     for message in &fixture.kimi.requests()[0].messages {
         assert!(!message_content(message).contains("EXECUTOR-ONLY"));
     }
-    // The other debater's round two exists (the round was targeted), and knows
-    // nothing of the executor beyond what KIMI said.
+    // 另一个讨论者的第二轮存在（这一轮是定向的），而它对执行者的
+    // 了解不超过 KIMI 说过的话。
     assert_eq!(fixture.deepseek.requests().len(), 2);
 }
 
-/// The text of one wire message, whichever shape it has.
+/// 一条线上消息的文本，不论它是什么形状。
 fn message_content(message: &Message) -> &str {
     match message {
         Message::System { content, .. }
@@ -1336,7 +1336,7 @@ fn message_content(message: &Message) -> &str {
     }
 }
 
-/// An answer whose usage alone blows a budget: 600 input tokens, no output.
+/// 一个仅用量就撑爆预算的答案：600 输入 token、没有输出。
 fn answered_expensive(body: &str, conclusion: &str) -> Reply {
     Reply::Stream(vec![
         StreamEvent::TextDelta(answer(body, conclusion)),
@@ -1353,17 +1353,17 @@ fn answered_expensive(body: &str, conclusion: &str) -> Reply {
     ])
 }
 
-/// The session allowance every participant of a test discussion is given.
+/// 测试讨论里每个参与者分到的会话额度。
 fn budgeted(tokens: u64) -> SessionConfig {
     SessionConfig::new("fake-model").with_session_token_limit(tokens)
 }
 
 #[tokio::test]
 async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthesis() {
-    // The debaters' first answers are expensive and they diverge, so the
-    // protocol's own plan would buy a targeted second round. The allowance is
-    // already spent by then, so the hard stop takes that round away and the
-    // discussion degrades into the one call it may not skip (spec §17).
+    // 讨论者的第一批答案很贵，而它们分歧了，所以协议
+    // 自己的计划会买来一个定向的第二轮。到那时额度
+    // 已经花完，所以硬停拿掉了那一轮，讨论降级成
+    // 它唯一不可跳过的那个调用（spec §17）。
     let config = budgeted(1_000);
     let mut fixture = fixture_with_configs(
         FakeProvider::new(vec![answered_expensive("KIMI 正文", "复用事件流")]),
@@ -1380,7 +1380,7 @@ async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthes
     let outcome = fixture.harness.discuss("日志该怎么放？").await.unwrap();
     fixture.harness.shutdown().await;
 
-    // One call each, and the closing one still happened.
+    // 各一次调用，而收尾那一次仍然发生了。
     assert_eq!(fixture.kimi.requests().len(), 1);
     assert_eq!(fixture.deepseek.requests().len(), 1);
     assert_eq!(fixture.synthesizer.requests().len(), 1);
@@ -1397,16 +1397,16 @@ async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthes
                 mode: RoundMode::Targeted
             }
         )),
-        "the hard stop must not open a targeted round"
+        "硬停不许开启定向轮"
     );
-    // The round that the budget closed says so, and the synthesis round still
-    // ends `Completed`: the closing call is not a budget casualty.
+    // 被预算关掉的那一轮会说出来，而合成轮仍然
+    // 以 `Completed` 收尾：收尾调用不是预算的伤亡。
     assert_eq!(
         round_endings(&events),
         vec![(1, StopReason::BudgetExhausted), (2, StopReason::Completed)]
     );
-    // The reason is distinguishable from the protocol's own three, on the wire
-    // and in the narration a person reads.
+    // 这条原因在线上、在人读的叙述里，都与协议自己那三条
+    // 区分得开。
     let rendered = fixture.stderr.text();
     assert!(
         rendered.contains(&fs_agent::render::wording::round_ended(
@@ -1426,9 +1426,9 @@ async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthes
 
 #[tokio::test]
 async fn the_synthesizer_is_the_one_call_the_budget_cannot_skip() {
-    // An allowance of zero stops before the first provider call, so no debater
-    // ever speaks. The closing call is still made: degrading *past* synthesis
-    // would throw away the whole discussion (spec §17).
+    // 额度为零会在第一次 provider 调用之前就停下，于是没有讨论者
+    // 说过话。收尾调用仍然做：降级到合成**之后**就会
+    // 把整场讨论丢掉（spec §17）。
     let config = budgeted(0);
     let mut fixture = fixture_with_configs(
         FakeProvider::new(vec![]),
@@ -1449,12 +1449,12 @@ async fn the_synthesizer_is_the_one_call_the_budget_cannot_skip() {
     assert_eq!(outcome.rounds, 0);
 
     let events = read_events(&fixture.log_path).unwrap();
-    // No debate round opened, so there is no round boundary to close: the only
-    // `RoundEnded` belongs to the synthesis round.
+    // 没有开过辩论轮，所以没有轮的边界要关：唯一那条
+    // `RoundEnded` 属于合成轮。
     assert_eq!(
         round_endings(&events),
         vec![(1, StopReason::Completed)],
-        "a debate phase that ran no round closes no round"
+        "没跑过任何一轮的辩论阶段不关任何一轮"
     );
     assert!(!events.iter().any(|event| matches!(
         &event.payload,
@@ -1467,9 +1467,9 @@ async fn the_synthesizer_is_the_one_call_the_budget_cannot_skip() {
 
 #[tokio::test]
 async fn routing_a_cheap_synthesizer_moves_neither_debater() {
-    // The two landing points a cheaper model may be routed to are the
-    // synthesizer and the executors (spec §17). Routing the first must not touch
-    // the debaters: heterogeneity is the protocol's strongest lever.
+    // 更便宜的模型可以被改派到的两个落点是
+    // 合成器与执行者（spec §17）。改派第一个不许碰到
+    // 讨论者：异构是协议最强的杠杆。
     let synthesizer_config =
         SessionConfig::new("fake-model").with_synthesizer_model("cheap-synthesizer");
     let mut fixture = fixture_with_configs(
@@ -1498,11 +1498,11 @@ async fn routing_a_cheap_synthesizer_moves_neither_debater() {
 }
 
 // ---------------------------------------------------------------------------
-// A discussion on a live session (`Harness::discuss`, the `/discuss` command)
+// 在活着的会话上跑一场讨论（`Harness::discuss`，即 `/discuss` 命令）
 // ---------------------------------------------------------------------------
 
-/// One single-agent session on a temp log, with a scripted provider — the harness a
-/// `/discuss` runs inside.
+/// 一条临时日志上的单 agent 会话，配一个脚本化的 provider —— 一次
+/// `/discuss` 跑在里面的那个 harness。
 struct SessionFixture {
     harness: Option<Harness>,
     log_path: PathBuf,
@@ -1547,10 +1547,10 @@ async fn session_fixture(replies: Vec<Reply>) -> SessionFixture {
 
 impl SessionFixture {
     fn harness(&mut self) -> &mut Harness {
-        self.harness.as_mut().expect("harness already shut down")
+        self.harness.as_mut().expect("harness 已经关掉了")
     }
 
-    /// Two debaters and a synthesizer, each with its own scripted provider.
+    /// 两个讨论者加一个合成器，各带自己那个脚本化的 provider。
     fn parts(
         &self,
         first: Vec<Reply>,
@@ -1614,9 +1614,9 @@ fn round_starts_in(events: &[Event], mode: RoundMode) -> Vec<u32> {
 
 #[tokio::test]
 async fn a_discussion_on_a_live_session_inherits_its_context() {
-    // The point of `/discuss`: the debaters are siblings of the session the user is in,
-    // so their projection turns *its* turns into `user` messages — they argue about what
-    // the session is about, not about a question in a vacuum (spec §5, §15).
+    // `/discuss` 的要点：讨论者是用户所在那个会话的兄弟，
+    // 所以它们的投影把*它的*回合变成 `user` 消息 —— 它们争论的是
+    // 这个会话关于什么，而不是真空里的一个问题（spec §5、§15）。
     let mut fixture = session_fixture(vec![Reply::text("应该复用。"), Reply::text("继续。")]).await;
     fixture
         .harness()
@@ -1624,8 +1624,8 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
         .await
         .unwrap();
 
-    // Both sides conclude the same thing, so the discussion is one round: the round
-    // cut, the stream, and the synthesizer's materials are what this test is about.
+    // 两侧都得出同一个结论，所以这场讨论只有一轮：轮次的
+    // 切分、流，以及合成器拿到的材料才是这条测试关心的。
     let first = FakeProvider::with_caps(
         vec![Reply::text(&answer("甲的看法", "复用"))],
         caps_for("deepseek-flash").unwrap(),
@@ -1639,7 +1639,7 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
         caps_for("deepseek-flash").unwrap(),
     );
     let (mut debaters, synthesizer_parts) = fixture.parts(vec![], vec![], vec![]);
-    // Swap in providers this test can read back.
+    // 换成这条测试能读回来的 provider。
     debaters[0].provider = Box::new(first.clone());
     debaters[1].provider = Box::new(second.clone());
     let synthesizer_parts = SynthesizerParts {
@@ -1655,35 +1655,35 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
     assert_eq!(outcome.reason, StopReason::NoDivergence);
     assert_eq!(outcome.rounds, 1);
 
-    // What the first debater was actually sent: the session's own history, as `user`.
+    // 第一个讨论者实际被发到了什么：会话自己的历史，作为 `user`。
     let first_request = &first.requests()[0].messages;
     assert!(
         first_request.iter().any(|message| matches!(
             message,
             Message::User { content, .. } if content.contains("我们该不该复用事件流？")
         )),
-        "the session's question reached the debater: {first_request:?}"
+        "会话的问题到达了讨论者：{first_request:?}"
     );
     assert!(
         first_request.iter().any(|message| matches!(
             message,
             Message::User { content, .. } if content.contains("应该复用。")
         )),
-        "and so did the answer this session already gave, as another speaker's words: \
+        "而这个会话已经给过的答案也一样，作为另一个发言者的话：\
          {first_request:?}"
     );
 
-    // One stream: the session's own turn, then the discussion's rounds.
+    // 一条流：会话自己的回合，然后是讨论的那些轮。
     let events = fixture.events();
     assert_eq!(
         round_starts_in(&events, RoundMode::Independent),
         vec![1],
-        "the first discussion on this stream numbers from one"
+        "这条流上的第一场讨论从一轮开始编号"
     );
     assert_eq!(round_starts_in(&events, RoundMode::Synthesis), vec![2]);
 
-    // And the session is still usable afterwards: the discussion appended to its
-    // stream rather than taking it over.
+    // 而之后会话仍然可用：讨论是追加到它的流上，
+    // 而不是接管它。
     fixture
         .harness()
         .run_turn("讨论完了，继续。")
@@ -1699,9 +1699,9 @@ async fn a_discussion_on_a_live_session_inherits_its_context() {
 
 #[tokio::test]
 async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesizes_only_itself() {
-    // Two discussions in one session is exactly what `/discuss` makes possible, so the
-    // round numbers have to stay unique on the stream — and the second synthesizer must
-    // not be handed the first discussion's answers to synthesize as well.
+    // 一个会话里跑两场讨论，正是 `/discuss` 让它成为可能的，所以
+    // 轮次号必须在流上保持唯一 —— 而第二个合成器也不许
+    // 被交给第一场讨论的答案去一起合成。
     let mut fixture = session_fixture(vec![Reply::text("开场。")]).await;
     fixture.harness().run_turn("第一个问题").await.unwrap();
 
@@ -1716,8 +1716,8 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
         .await
         .unwrap();
 
-    // The second discussion runs with fresh providers, so its requests are readable on
-    // their own.
+    // 第二场讨论用全新的 provider 跑，所以它的请求可以
+    // 单独读回来。
     let second_debaters = FakeProvider::with_caps(
         vec![Reply::text(&answer("第二场的甲", "甲结论"))],
         caps_for("deepseek-flash").unwrap(),
@@ -1745,19 +1745,19 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
     assert_eq!(
         round_starts_in(&events, RoundMode::Independent),
         vec![1, 3],
-        "the second discussion numbers after the first one's rounds"
+        "第二场讨论接着第一场的轮次编号"
     );
     assert_eq!(
         round_starts_in(&events, RoundMode::Synthesis),
         vec![2, 4],
-        "and so does its synthesis"
+        "它的合成也一样"
     );
 
-    // The second synthesizer's prompt holds the second discussion only.
+    // 第二个合成器的提示词只装着第二场讨论。
     let prompt = second_synthesizer
         .requests()
         .last()
-        .expect("the synthesizer was called")
+        .expect("合成器被调用过")
         .messages
         .iter()
         .rev()
@@ -1765,15 +1765,15 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
             Message::User { content, .. } => Some(content.clone()),
             _ => None,
         })
-        .expect("a user message");
+        .expect("一条 user 消息");
     assert!(prompt.contains("第二场的甲"), "{prompt}");
     assert!(prompt.contains("第二个讨论"), "{prompt}");
     assert!(
         !prompt.contains("第一场的甲") && !prompt.contains("第一个讨论"),
-        "the first discussion is not material for the second synthesis: {prompt}"
+        "第一场讨论不是第二场合成的材料：{prompt}"
     );
-    // And the replayed prompt is the one that was sent: the invariant the whole
-    // event-stream design rests on, now with two discussions on one stream.
+    // 而重放出来的提示词就是当时发出去的那一份：整套
+    // 事件流设计所依靠的那条不变量，现在一条流上有两场讨论。
     let replayed = fs_agent::agent::replay::replay(
         &events,
         &SpeakerId::System,
@@ -1789,15 +1789,15 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
             _ => None,
         })
         .unwrap();
-    assert_eq!(replayed_prompt, prompt, "replay == what was sent");
+    assert_eq!(replayed_prompt, prompt, "重放 == 当时发出去的东西");
 }
 
 #[tokio::test]
 async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
-    // The soul is the one thing about a debater that is *not* derivable from its name,
-    // so it travels on the stream: recorded as an injection attributed to that debater,
-    // private to it, and therefore part of what `sessions replay` recomputes (spec §5,
-    // §15).
+    // 灵魂是一个讨论者身上唯一*不能*从名字推出来的东西，
+    // 所以它落在流上：记成一次归属给那个讨论者的注入、
+    // 对它私有，因此也是 `sessions replay` 会重算的一部分（spec §5、
+    // §15）。
     let mut fixture = session_fixture(vec![Reply::text("开场。")]).await;
     fixture.harness().run_turn("第一个问题").await.unwrap();
 
@@ -1828,7 +1828,7 @@ async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
         .await
         .unwrap();
 
-    // Each side is told its own character and not the other's.
+    // 每一方被告知自己的性格，而不是对方的。
     let sent = |provider: &FakeProvider| {
         provider.requests()[0]
             .messages
@@ -1847,7 +1847,7 @@ async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
     assert!(li.contains("守法好公民"), "{li}");
     assert!(!li.contains("法外狂徒"), "{li}");
 
-    // It is on the stream, attributed to the debater it describes.
+    // 它在流上，归属给它所描述的那个讨论者。
     let events = fixture.events();
     let personas: Vec<(String, String)> = events
         .iter()
@@ -1862,10 +1862,10 @@ async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
             _ => None,
         })
         .collect();
-    assert_eq!(personas.len(), 2, "one injection per debater: {personas:?}");
+    assert_eq!(personas.len(), 2, "每个讨论者一次注入：{personas:?}");
     assert!(personas[0].1.contains("法外狂徒"), "{personas:?}");
 
-    // And because it is on the stream, the replay of that call is what was sent.
+    // 而因为它在流上，那次调用的重放就是当时发出去的东西。
     let replayed = fs_agent::agent::replay::replay(
         &events,
         &SpeakerId::Debater("张三".into()),
@@ -1876,7 +1876,7 @@ async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
     assert_eq!(
         replayed.len(),
         first.requests()[0].messages.len(),
-        "same shape: {replayed:?}"
+        "形状一样：{replayed:?}"
     );
     let replayed_text = replayed
         .iter()

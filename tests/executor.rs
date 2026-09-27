@@ -1,10 +1,10 @@
-//! The executor (`task`, spec §16).
+//! 执行者（`task`，spec §16）。
 //!
-//! The seam is the assembly entry: a session assembled with a scripted fake
-//! provider, driven through the public library API, asserting the JSONL event
-//! stream, the workspace and the two render sinks. The executor runs on the
-//! provider of the session that dispatched it (spec §16: the model is inherited),
-//! so one `FakeProvider` scripts the whole nested conversation in call order.
+//! 接缝是组装入口：一个用脚本化假 provider 组装起来的
+//! 会话，经公开的库 API 驱动，断言 JSONL 事件流、工作区
+//! 与两个渲染 sink。执行者跑在派出它的那个会话的
+//! provider 上（spec §16：模型是继承来的），所以一个 `FakeProvider`
+//! 按调用顺序脚本化了整场嵌套对话。
 
 mod support;
 
@@ -30,7 +30,7 @@ fn executor(id: &str) -> SpeakerId {
     SpeakerId::Executor(ParticipantId::new(id))
 }
 
-/// One scripted assistant message that asks for one tool call.
+/// 一条脚本化的助手消息，它要一次工具调用。
 fn calls(id: &str, name: &str, args: serde_json::Value) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
@@ -52,15 +52,15 @@ struct Fixture {
     stdout: CaptureBuf,
     stderr: CaptureBuf,
     log_path: PathBuf,
-    /// The session directory: the log and the `outputs/` artifacts.
+    /// 会话目录：日志与 `outputs/` 产物。
     session_dir: PathBuf,
-    /// The session workspace, where the tools read and write.
+    /// 会话工作区，工具在这里读和写。
     cwd: PathBuf,
     _dir: tempfile::TempDir,
 }
 
-/// Assemble a session whose workspace already holds `files`, so `AGENTS.md` and
-/// the executor's world are in place before assembly reads them.
+/// 组装一个工作区里已经放着 `files` 的会话，于是 `AGENTS.md`
+/// 与执行者的世界在组装读取它们之前就已就位。
 async fn fixture(
     files: &[(&str, &str)],
     replies: Vec<Reply>,
@@ -71,7 +71,7 @@ async fn fixture(
     fixture_with(files, replies, config, policy, asker, None).await
 }
 
-/// The same, with a hook mounted.
+/// 同上，外加挂上一个 hook。
 async fn fixture_with(
     files: &[(&str, &str)],
     replies: Vec<Reply>,
@@ -143,7 +143,7 @@ impl Fixture {
     }
 }
 
-/// The one event matching `predicate`, or a panic naming what was missing.
+/// 唯一那条匹配 `predicate` 的事件，否则 panic 并指出缺了什么。
 fn only<'a>(
     events: &'a [Event],
     predicate: impl Fn(&EventPayload) -> bool,
@@ -153,12 +153,12 @@ fn only<'a>(
         .iter()
         .filter(|event| predicate(&event.payload))
         .collect();
-    assert_eq!(found.len(), 1, "expected exactly one {want}, got {found:?}");
+    assert_eq!(found.len(), 1, "{want} 恰好要有一条，得到 {found:?}");
     found[0]
 }
 
-/// The one event from `speaker` matching `predicate`, or a panic naming what was
-/// missing.
+/// `speaker` 发出的、匹配 `predicate` 的那唯一一条事件，
+/// 否则 panic 并指出缺了什么。
 fn only_speaker<'a>(
     events: &'a [Event],
     speaker: &SpeakerId,
@@ -172,12 +172,12 @@ fn only_speaker<'a>(
     assert_eq!(
         found.len(),
         1,
-        "expected exactly one {want} from {speaker}, got {found:?}"
+        "要有 {speaker} 的一条 {want}，恰好一条，得到 {found:?}"
     );
     found[0]
 }
 
-/// Every `MessageCompleted` text by one speaker, in order.
+/// 某个发言者说过的每一条 `MessageCompleted` 文本，按顺序。
 fn said(events: &[Event], speaker: &SpeakerId) -> Vec<String> {
     events
         .iter()
@@ -251,8 +251,8 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
         |payload| matches!(payload, EventPayload::ExecutorSpawned { .. }),
         "ExecutorSpawned",
     );
-    // The lifecycle events are the executor's own, so the brief can reach its
-    // projection; `parent` is what names the dispatcher.
+    // 生命周期事件是执行者自己的，于是简报能到达它的
+    // 投影；`parent` 才是给派发者命名的那个字段。
     assert_eq!(spawned.speaker_id, executor("kimi-1"));
     match &spawned.payload {
         EventPayload::ExecutorSpawned {
@@ -264,7 +264,7 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
             assert_eq!(parent.as_str(), "kimi");
             assert_eq!(brief, "count the files under src");
         }
-        other => panic!("expected ExecutorSpawned, got {other:?}"),
+        other => panic!("要的是 ExecutorSpawned，得到 {other:?}"),
     }
 
     let finished = only(
@@ -282,19 +282,19 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
             assert_eq!(*reason, StopReason::Completed);
             assert_eq!(summary, "EXECUTOR REPORT: 12 files under src");
         }
-        other => panic!("expected ExecutorFinished, got {other:?}"),
+        other => panic!("要的是 ExecutorFinished，得到 {other:?}"),
     }
 
-    // The spawn, the executor's own turn and the finish all land on the one
-    // stream, in that order.
+    // 派发、执行者自己的回合与收尾都落在同一条
+    // 流上，顺序就是这个顺序。
     assert!(spawned.seq < finished.seq);
     assert_eq!(
         said(&events, &executor("kimi-1")),
         vec!["EXECUTOR REPORT: 12 files under src".to_owned()]
     );
 
-    // The `task` call itself gets exactly one result, and that result is the
-    // summary the dispatching speaker reports to the discussion.
+    // `task` 那条调用自己恰好得到一条结果，而这条结果就是
+    // 派发它的那个发言者报给讨论的总结。
     let result = only(
         &events,
         |payload| matches!(payload, EventPayload::ToolCallCompleted { .. }),
@@ -310,48 +310,48 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
             );
             assert!(output.contains("Completed"), "{output}");
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
     }
 
     let requests = fixture.provider.requests();
-    assert_eq!(requests.len(), 3, "parent, executor, parent");
+    assert_eq!(requests.len(), 3, "父会话、执行者、父会话");
 
-    // The dispatcher's own table mounts `task`; the executor's does not, because
-    // recursion depth one is enforced by the tool table, not by a rule.
+    // 派发者自己的表里挂着 `task`；执行者的没有，因为
+    // 「递归深度为一」是靠工具表强制的，不是靠规则。
     assert!(tool_names(&requests[0]).contains(&"task".to_owned()));
     assert!(
         !tool_names(&requests[1]).contains(&"task".to_owned()),
-        "the executor's tool table must not contain `task`: {:?}",
+        "执行者的工具表里不许有 `task`：{:?}",
         tool_names(&requests[1])
     );
 
-    // The executor's window: its private identity, the pinned injections and its
-    // own events. The dispatching session's speech is not in it.
+    // 执行者的窗口：它的私有身份、钉住的那些注入，以及它
+    // 自己的事件。派发会话的发言不在里面。
     match &requests[1].messages[0] {
         Message::System { content, .. } => {
             assert!(content.contains("executor"), "{content}");
             assert!(!content.contains("CONCLUSION:"), "{content}");
         }
-        other => panic!("expected the executor's own system identity, got {other:?}"),
+        other => panic!("要的是执行者自己的系统身份，得到 {other:?}"),
     }
     let head = contents(&requests[1], &is_user).join("\n");
     assert!(
         head.contains("PROJECT RULES: always run cargo fmt"),
-        "AGENTS.md is injected for an executor like any other session: {head}"
+        "与别的会话一样，执行者也会被注入 AGENTS.md：{head}"
     );
     assert!(head.contains("count the files under src"), "{head}");
     assert!(
         !head.contains("count them for me"),
-        "the executor does not replay the dispatching session's speech: {head}"
+        "执行者不重放派发会话的发言：{head}"
     );
 
-    // And the executor's process stays out of the dispatcher's window: the
-    // summary arrives once, as the tool result, and never as speech.
+    // 而执行者的过程不进派发者的窗口：总结只以工具结果的
+    // 形式到达一次，从不作为发言出现。
     let dispatcher = &requests[2];
     let speech = contents(dispatcher, &is_user).join("\n");
     assert!(
         !speech.contains("EXECUTOR REPORT"),
-        "an executor's message must not be projected to a debater: {speech}"
+        "执行者的消息不许投影给讨论者：{speech}"
     );
     let results = contents(dispatcher, &|message| {
         matches!(message, Message::Tool { .. })
@@ -361,8 +361,8 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
 
     fixture.harness.shutdown().await;
     assert_eq!(fixture.stdout.text(), "the executor counted 12 files\n");
-    // The executor's own working is narrated for a person reading the terminal,
-    // attributed to the executor under its own speaker label.
+    // 执行者自己的干活过程会被叙述给读终端的人看，
+    // 归在它自己的发言者标签下。
     let label = fs_agent::render::wording::speaker_label(&SpeakerId::Executor("kimi-1".into()));
     assert!(
         fixture.stderr.text().contains(&label),
@@ -402,10 +402,10 @@ async fn an_executor_projects_its_own_tool_round_trip_in_full() {
         .unwrap();
     assert_eq!(outcome.reason, StopReason::Completed);
 
-    // The executor's own turn ran two iterations: its result body is replayed in
-    // full, unlike another speaker's, whose tool calls survive as one line.
+    // 执行者自己的回合跑了两轮迭代：它的结果正文是整段
+    // 重放的，不像别的发言者 —— 后者的工具调用只以一行留存。
     let requests = fixture.provider.requests();
-    assert_eq!(requests.len(), 4, "parent, executor, executor, parent");
+    assert_eq!(requests.len(), 4, "父会话、执行者、执行者、父会话");
     let executor_second = &requests[2];
     let assistant = executor_second
         .messages
@@ -414,7 +414,7 @@ async fn an_executor_projects_its_own_tool_round_trip_in_full() {
             Message::Assistant { tool_calls, .. } if !tool_calls.is_empty() => Some(tool_calls),
             _ => None,
         })
-        .expect("the executor's own tool call is replayed");
+        .expect("执行者自己那次工具调用被重放");
     assert_eq!(assistant[0].id, "exec-1");
     let result = executor_second
         .messages
@@ -426,7 +426,7 @@ async fn an_executor_projects_its_own_tool_round_trip_in_full() {
             } => Some((tool_call_id.clone(), content.clone())),
             _ => None,
         })
-        .expect("the executor's own tool result is replayed");
+        .expect("执行者自己那条工具结果被重放");
     assert_eq!(result.0, "exec-1");
     assert!(result.1.contains("the answer is 42"), "{}", result.1);
 
@@ -438,8 +438,8 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
     let mut fixture = fixture(
         &[("plan.txt", "keep me\n")],
         vec![
-            // The dispatcher reads the file itself, which licenses its own edit
-            // and nothing else.
+            // 派发者自己读了那个文件，这许可了它自己的那次编辑，
+            // 别的什么都不许可。
             calls(
                 "call-read",
                 "read_file",
@@ -450,7 +450,7 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
                 "task",
                 serde_json::json!({"brief": "edit plan.txt"}),
             ),
-            // The executor edits without reading: its read set started empty.
+            // 执行者没读就编辑：它的已读集一开始是空的。
             calls(
                 "exec-1",
                 "edit_file",
@@ -461,8 +461,8 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
         ],
         SessionConfig::new("fake-model"),
         Policy::for_mode(Mode::Auto),
-        // A user who approves every write, so the gate lets the executor's edit
-        // through and the read-before-edit guardrail is what refuses it.
+        // 一个每次都批准写的 user，于是权限门放执行者的这次编辑
+        // 过去，拒它的是「写前先读」那条护栏。
         Some(Arc::new(AlwaysAllow)),
     )
     .await;
@@ -492,8 +492,8 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
 
 #[tokio::test]
 async fn an_executors_edit_is_undoable_like_any_other() {
-    // (Ticket 12.) `/undo` walks the session's stream, not one agent's slice, so
-    // an edit an executor made rolls back the same way (spec §11, §16).
+    // （票 12。）`/undo` 走的是整个会话的流，而不是某个 agent 的那
+    // 一片，所以执行者做过的一次编辑以同样的方式回滚（spec §11、§16）。
     let mut fixture = fixture(
         &[("plan.txt", "keep me\n")],
         vec![
@@ -502,7 +502,7 @@ async fn an_executors_edit_is_undoable_like_any_other() {
                 "task",
                 serde_json::json!({"brief": "edit plan.txt"}),
             ),
-            // The executor reads first: its read set starts empty.
+            // 执行者先读：它的已读集一开始是空的。
             calls(
                 "exec-read",
                 "read_file",
@@ -530,7 +530,7 @@ async fn an_executors_edit_is_undoable_like_any_other() {
     assert_eq!(undone.tool_call_id.as_str(), "exec-edit");
     assert_eq!(fixture.read("plan.txt"), "keep me\n");
 
-    // The gesture is the user's; the stream records the retirement it caused.
+    // 手势是用户的；流记下它引起的退役。
     let events = fixture.events();
     assert!(events.iter().any(|event| matches!(
         &event.payload,
@@ -565,7 +565,7 @@ async fn a_failed_executor_is_an_error_result_and_the_dispatcher_carries_on() {
     .await;
 
     let outcome = fixture.harness.run_turn("delegate it").await.unwrap();
-    // The dispatcher's own turn is untouched by a failed executor (spec §16).
+    // 派发者自己的回合不受失败执行者的影响（spec §16）。
     assert_eq!(outcome.reason, StopReason::Completed);
     assert_eq!(outcome.text, "the executor failed, so I will do it myself");
 
@@ -578,10 +578,10 @@ async fn a_failed_executor_is_an_error_result_and_the_dispatcher_carries_on() {
     .payload
     {
         EventPayload::ExecutorFinished { reason, .. } => assert_eq!(*reason, StopReason::Error),
-        other => panic!("expected ExecutorFinished, got {other:?}"),
+        other => panic!("要的是 ExecutorFinished，得到 {other:?}"),
     }
-    // The four failure values arrive as one error-content tool result, which is
-    // what keeps "every tool_call gets exactly one result" true for `task` too.
+    // 那四个失败值到达时是一条错误内容的工具结果，这也正是
+    // 「每条 tool_call 恰好一条结果」对 `task` 同样成立的原因。
     match &only(
         &events,
         |payload| matches!(payload, EventPayload::ToolCallCompleted { .. }),
@@ -594,7 +594,7 @@ async fn a_failed_executor_is_an_error_result_and_the_dispatcher_carries_on() {
             let error = error.as_deref().unwrap();
             assert!(error.contains("executor kimi-1 finished: Error"), "{error}");
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
     }
 
     fixture.harness.shutdown().await;
@@ -610,8 +610,8 @@ async fn an_executor_runs_under_its_own_turn_cap() {
                 "task",
                 serde_json::json!({"brief": "keep reading forever"}),
             ),
-            // The executor gets two turns and then hits its own cap; the
-            // dispatcher's cap is untouched.
+            // 执行者拿到两个回合，然后撞上自己的上限；
+            // 派发者的上限没被动到。
             calls(
                 "exec-1",
                 "read_file",
@@ -644,7 +644,7 @@ async fn an_executor_runs_under_its_own_turn_cap() {
         EventPayload::ExecutorFinished { reason, .. } => {
             assert_eq!(*reason, StopReason::MaxIterations)
         }
-        other => panic!("expected ExecutorFinished, got {other:?}"),
+        other => panic!("要的是 ExecutorFinished，得到 {other:?}"),
     }
     let executor_turns = events
         .iter()
@@ -653,9 +653,9 @@ async fn an_executor_runs_under_its_own_turn_cap() {
                 && matches!(event.payload, EventPayload::TurnStarted { .. })
         })
         .count();
-    assert_eq!(executor_turns, 2, "the executor's own cap is what bound it");
-    // The dispatcher's reason is its own: `MaxIterations` on the executor does
-    // not leak upward as the session's stop reason.
+    assert_eq!(executor_turns, 2, "约束它的是执行者自己的上限");
+    // 派发者的原因是它自己的：执行者上的 `MaxIterations`
+    // 不会向上漏成这个会话的停止原因。
     let dispatcher_turns = events
         .iter()
         .filter(|event| {
@@ -690,7 +690,7 @@ async fn an_executors_edit_leaves_an_undo_snapshot_in_the_one_session_directory(
         ],
         SessionConfig::new("fake-model"),
         Policy::for_mode(Mode::Auto),
-        // The executor's own mode asks about writes; this user approves.
+        // 执行者自己那一档模式对写要问；这个用户一律批准。
         Some(Arc::new(AlwaysAllow)),
     )
     .await;
@@ -703,19 +703,19 @@ async fn an_executors_edit_leaves_an_undo_snapshot_in_the_one_session_directory(
     assert_eq!(outcome.reason, StopReason::Completed);
     assert_eq!(fixture.read("notes.txt"), "after\n");
 
-    // `/undo` works on an executor's edit because the artifacts land in the same
-    // session directory under the same naming convention (spec §11, §16).
+    // `/undo` 对执行者的编辑也管用，因为产物落在同一个会话
+    // 目录下、用同一套命名约定（spec §11、§16）。
     let snapshot = fixture.session_dir.join("outputs").join("exec-edit.before");
     assert!(
         snapshot.exists(),
-        "expected {} to exist",
+        "预期 {} 存在",
         snapshot.display()
     );
-    // The snapshot is the replaced span itself, not the whole file: that is what
-    // `/undo` writes back (spec §8, §11).
+    // 快照是被替换的那一段本身，不是整个文件：`/undo`
+    // 写回去的就是它（spec §8、§11）。
     assert_eq!(std::fs::read_to_string(&snapshot).unwrap(), "before");
 
-    // And the change is reported back as metadata, derived from the stream.
+    // 而这次改动以元数据的形式报回来，元数据从流上派生。
     let reported = fixture
         .events()
         .iter()
@@ -727,9 +727,9 @@ async fn an_executors_edit_leaves_an_undo_snapshot_in_the_one_session_directory(
             } if event.speaker_id == kimi() => Some(output.clone()),
             _ => None,
         })
-        .expect("the task call's result");
-    // The tool reports the path it resolved, so the metadata names the file the
-    // edit landed on.
+        .expect("task 调用的结果");
+    // 工具报的是它解析出来的路径，所以元数据点名的就是
+    // 这次编辑落上去的那个文件。
     assert!(reported.contains("notes.txt"), "{reported}");
 
     fixture.harness.shutdown().await;
@@ -737,9 +737,9 @@ async fn an_executors_edit_leaves_an_undo_snapshot_in_the_one_session_directory(
 
 #[tokio::test]
 async fn two_task_calls_in_one_batch_run_at_once() {
-    // Both executor calls must be in flight together: the barrier releases only
-    // when the second one arrives, and a serial dispatcher would trip its
-    // timeout instead.
+    // 两次执行者调用必须在飞的时候碰头：屏障只有在第二个
+    // 到达时才放行，而串行的派发器会先撞上自己的
+    // 超时。
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let mut fixture = fixture(
         &[],
@@ -793,11 +793,11 @@ async fn two_task_calls_in_one_batch_run_at_once() {
     assert_eq!(finished.len(), 2);
     assert!(
         spawned[1] < finished[0],
-        "both executors were dispatched before either finished: spawned {spawned:?}, \
+        "两个执行者在任何一个收尾之前都被派出去了：spawned {spawned:?}，\
          finished {finished:?}"
     );
 
-    // Each executor got its own id, and each `task` call its own result.
+    // 每个执行者得到自己的 id，每条 `task` 调用得到自己的结果。
     let ids: Vec<String> = events
         .iter()
         .filter_map(|event| match &event.payload {
@@ -823,14 +823,14 @@ async fn two_task_calls_in_one_batch_run_at_once() {
     assert!(results[1].contains("second report"), "{}", results[1]);
 
     fixture.harness.shutdown().await;
-    // Neither executor's own turn is the session's product.
+    // 两个执行者自己的回合都不是这个会话的产物。
     assert_eq!(fixture.stdout.text(), "both executors reported\n");
 }
 
 #[tokio::test]
 async fn the_batch_cap_bounds_how_many_executors_work_at_once() {
-    // Two executors meet at the barrier; the third must wait for a free slot, so
-    // its spawn is recorded after one of the pair has finished.
+    // 两个执行者在屏障处碰头；第三个必须等一个空位，
+    // 所以它的派发记在那一对里某个收尾之后。
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let task = |id: &str, brief: &str| StreamEvent::ToolCallCompleted {
         index: 0,
@@ -880,10 +880,10 @@ async fn the_batch_cap_bounds_how_many_executors_work_at_once() {
         .collect();
     assert_eq!(spawned.len(), 3);
     assert_eq!(finished.len(), 3);
-    assert!(spawned[1] < finished[0], "the first two ran together");
+    assert!(spawned[1] < finished[0], "前两个是一起跑的");
     assert!(
         finished[0] < spawned[2],
-        "the third waited for a free slot: spawned {spawned:?}, finished {finished:?}"
+        "第三个等了一个空位：spawned {spawned:?}，finished {finished:?}"
     );
 
     let results: Vec<String> = events
@@ -898,7 +898,7 @@ async fn the_batch_cap_bounds_how_many_executors_work_at_once() {
         })
         .collect();
     assert_eq!(results.len(), 3, "{results:?}");
-    // Results are recorded in the batch's order, whatever order they finished in.
+    // 结果按批次的顺序记下，不论它们以什么顺序收尾。
     assert!(results[0].contains("first report"), "{}", results[0]);
     assert!(results[1].contains("second report"), "{}", results[1]);
     assert!(results[2].contains("third report"), "{}", results[2]);
@@ -949,8 +949,8 @@ async fn a_hook_that_stops_the_turn_still_gives_a_deferred_task_its_one_result()
     assert_eq!(outcome.reason, StopReason::Aborted);
 
     let events = fixture.events();
-    // The deferred `task` was started on the stream before the hook stopped the
-    // turn, so it is still owed exactly one result — and it never ran.
+    // 被延后的 `task` 在 hook 停住回合之前已经在流上开始了，
+    // 所以它仍然欠着恰好一条结果 —— 而它从没跑过。
     let starts = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::ToolCallStarted { .. }))
@@ -968,7 +968,7 @@ async fn a_hook_that_stops_the_turn_still_gives_a_deferred_task_its_one_result()
         })
         .collect();
     assert_eq!(starts, 2);
-    assert_eq!(results.len(), 2, "every started call keeps its one result");
+    assert_eq!(results.len(), 2, "每条已开始的调用都保有自己的那条结果");
     assert!(results.iter().all(|(ok, _)| !ok));
     assert!(
         results
@@ -980,7 +980,7 @@ async fn a_hook_that_stops_the_turn_still_gives_a_deferred_task_its_one_result()
         !events
             .iter()
             .any(|event| matches!(event.payload, EventPayload::ExecutorSpawned { .. })),
-        "the executor was never dispatched"
+        "执行者从没被派出"
     );
 
     fixture.harness.shutdown().await;
@@ -992,8 +992,8 @@ async fn a_denial_travels_down_to_the_executor() {
     policy.push(Rule::new(
         Subject::Any,
         Scope::Tool("edit_file".to_owned()),
-        // `Deny` propagates by default (spec §12): it is a constraint, and a
-        // constraint can only travel.
+        // `Deny` 默认向下传播（spec §12）：它是一条约束，
+        // 而约束只能往下走。
         Decision::Deny,
     ));
     let mut fixture = fixture(
@@ -1004,8 +1004,8 @@ async fn a_denial_travels_down_to_the_executor() {
                 "task",
                 serde_json::json!({"brief": "edit plan.txt"}),
             ),
-            // The executor reads first, so the only thing standing between it and
-            // the write is the inherited denial.
+            // 执行者先读，所以挡在它和这次写之间的只有
+            // 那条继承来的拒绝。
             calls(
                 "exec-read",
                 "read_file",
@@ -1041,7 +1041,7 @@ async fn a_denial_travels_down_to_the_executor() {
                 }
             )
         },
-        "the executor's refusal",
+        "执行者的那次拒绝",
     );
     match &decided.payload {
         EventPayload::PermissionDecided {
@@ -1050,9 +1050,9 @@ async fn a_denial_travels_down_to_the_executor() {
             assert_eq!(*decision, Decision::Deny);
             assert!(reason.as_deref().unwrap().contains("rule"), "{reason:?}");
         }
-        other => panic!("expected PermissionDecided, got {other:?}"),
+        other => panic!("要的是 PermissionDecided，得到 {other:?}"),
     }
-    // `edit_file` asks about the write, so the executor never reached the tool.
+    // `edit_file` 这次要问写，所以执行者根本没走到工具。
     assert_eq!(fixture.read("plan.txt"), "keep me\n");
 
     fixture.harness.shutdown().await;
@@ -1061,9 +1061,9 @@ async fn a_denial_travels_down_to_the_executor() {
 #[tokio::test]
 async fn an_allowance_does_not_travel_down_to_the_executor() {
     let mut policy = Policy::for_mode(Mode::Ask);
-    // The dispatcher's own session-scoped allowance: `Allow` does not propagate,
-    // and a headless session has nobody to ask, so the executor's write is
-    // downgraded to a refusal rather than waved through.
+    // 派发者自己的会话级许可：`Allow` 不传播，
+    // 而 headless 会话没有人可问，所以执行者的写被
+    // 降级成拒绝，而不是挥手放过。
     policy.push(Rule::new(
         Subject::Any,
         Scope::Tool("edit_file".to_owned()),
@@ -1115,7 +1115,7 @@ async fn an_allowance_does_not_travel_down_to_the_executor() {
     assert_eq!(denied.len(), 1, "{denied:?}");
     assert!(
         denied[0].contains("no interactive answerer"),
-        "the executor's mode asks, and nobody can answer: {}",
+        "执行者的模式要问，而没有人能回答：{}",
         denied[0]
     );
     assert_eq!(fixture.read("plan.txt"), "keep me\n");
@@ -1125,10 +1125,10 @@ async fn an_allowance_does_not_travel_down_to_the_executor() {
 
 #[tokio::test]
 async fn an_executor_writes_under_the_dispatchers_auto_stance() {
-    // `auto` means "writes are allowed", and the executor is doing the work in
-    // the same session: an executor that could only read would make `task`
-    // useless exactly where it is meant to run unattended. There is no asker
-    // here, so an inherited `ask` would have refused the write outright.
+    // `auto` 的意思是「写是放行的」，而执行者干的是同一个会话里的
+    // 活：一个只能读的执行者，会让 `task` 恰恰在最该无人值守运行
+    // 的地方变得没用。这里没有应答者，所以继承一档 `ask`
+    // 本来会直接拒掉这次写。
     let mut fixture = fixture(
         &[("notes.txt", "before\n")],
         vec![
@@ -1167,8 +1167,8 @@ async fn an_executor_writes_under_the_dispatchers_auto_stance() {
 
 #[tokio::test]
 async fn a_readonly_dispatcher_keeps_its_executor_read_only() {
-    // A delegation is never the way around a hard stance. The asker approves
-    // everything, so a mode that merely *asked* would still have let this through.
+    // 委派从来不是绕过一档硬立场的路。这个应答者什么都批准，
+    // 所以仅仅「要问」的一档模式本来也会放它过去。
     let mut fixture = fixture(
         &[("notes.txt", "before\n")],
         vec![
@@ -1245,19 +1245,19 @@ async fn an_executor_model_override_routes_only_the_executor() {
     assert_eq!(requests[0].model, "dispatcher-model");
     assert_eq!(
         requests[1].model, "executor-model",
-        "the executor is routed without moving the dispatcher"
+        "改派了执行者而没有挪动派发者"
     );
     assert_eq!(
         requests[2].model, "dispatcher-model",
-        "and the dispatcher's own next call is untouched"
+        "而派发者自己下一次调用没被动到"
     );
 }
 
 #[tokio::test]
 async fn the_report_names_the_file_a_rewriting_hook_actually_wrote() {
-    // A `hook.pre` may rewrite the call after `ToolCallStarted` recorded what the
-    // model asked for. The result is the only record of the file that was really
-    // written, so that is what the report must name.
+    // 一次 `hook.pre` 可能在 `ToolCallStarted` 记下模型要的东西
+    // 之后改写这次调用。真正被写的文件只有结果里那一份记录，
+    // 所以报告该点名的就是它。
     let hook = support::ScriptedHook::new(
         vec![
             Ok(fs_agent::hooks::Constraint::Continue),
@@ -1306,17 +1306,17 @@ async fn the_report_names_the_file_a_rewriting_hook_actually_wrote() {
             } if event.speaker_id == kimi() => Some(output.clone()),
             _ => None,
         })
-        .expect("the task call's result");
+        .expect("task 调用的结果");
     assert!(reported.contains("created.txt"), "{reported}");
     assert!(!reported.contains("requested.txt"), "{reported}");
 }
 
 #[tokio::test]
 async fn an_exhausted_session_dispatches_no_new_executor() {
-    // The reply that asks for the executor already lands the whole allowance, so
-    // the dispatch is refused. Because the call was started it still gets exactly
-    // one result (invariant 1), and that result says the executor never ran — an
-    // executor that was already running would have been left to finish (spec §17).
+    // 要执行者的那条回复本身就把整份额度用满了，所以
+    // 这次派发被拒。因为那条调用已经开始了，它仍然恰好得到
+    // 一条结果（不变量 1），而那条结果说的是执行者从没跑过 ——
+    // 一个已经在跑的执行者本会被放着跑完（spec §17）。
     let limit = 1_000;
     let mut fixture = fixture(
         &[],
@@ -1355,13 +1355,13 @@ async fn an_exhausted_session_dispatches_no_new_executor() {
         !events
             .iter()
             .any(|event| matches!(event.payload, EventPayload::ExecutorSpawned { .. })),
-        "an exhausted session dispatches no new executor"
+        "额度用完的会话不派发新执行者"
     );
     let results: Vec<&Event> = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
         .collect();
-    assert_eq!(results.len(), 1, "the task call keeps its one result");
+    assert_eq!(results.len(), 1, "task 调用保有自己的那条结果");
     match &results[0].payload {
         EventPayload::ToolCallCompleted { ok, error, .. } => {
             assert!(!ok);
@@ -1369,12 +1369,12 @@ async fn an_exhausted_session_dispatches_no_new_executor() {
             assert!(error.contains("budget exhausted"), "{error}");
             assert!(error.contains("no new executor"), "{error}");
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
     }
     assert_eq!(
         fixture.provider.requests().len(),
         1,
-        "the turn stops rather than calling the provider again"
+        "回合停下了，而不是再调一次 provider"
     );
 
     fixture.harness.shutdown().await;
@@ -1382,16 +1382,16 @@ async fn an_exhausted_session_dispatches_no_new_executor() {
 
 #[tokio::test]
 async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() {
-    // "No new executors, and the ones already running finish" (spec §17). The
-    // executor's first call blows the session allowance and asks for a tool, so a
-    // gated loop would abandon it on the next iteration; it must instead run to
-    // its own turn cap, and the dispatcher's own turn is the one the hard stop
-    // ends.
+    // 「不派新的执行者，已经在跑的跑完」（spec §17）。执行者的
+    // 第一次调用把会话额度打爆了、又要一个工具，所以带闸门的
+    // 循环会在下一轮迭代把它丢掉；它必须反过来跑到
+    // 自己的回合上限，而硬停结束的是派发者
+    // 自己的那个回合。
     let limit = 500;
     let mut fixture = fixture(
         &[("notes.txt", "the notes\n")],
         vec![
-            // Inside the allowance, so the dispatch is allowed.
+            // 在额度之内，所以这次派发放行。
             Reply::Stream(vec![
                 StreamEvent::ToolCallCompleted {
                     index: 0,
@@ -1410,8 +1410,8 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
                     finish_reason: FinishReason::ToolCalls,
                 },
             ]),
-            // The executor's own call spends far past the cap and asks for a
-            // tool, so its loop would iterate a second time.
+            // 执行者自己的那次调用花得远超上限、又要一个
+            // 工具，所以它的循环本会迭代第二次。
             Reply::Stream(vec![
                 StreamEvent::ToolCallCompleted {
                     index: 0,
@@ -1454,13 +1454,13 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
             assert_eq!(
                 *reason,
                 StopReason::Completed,
-                "an executor that was already running is left to finish"
+                "已经在跑的执行者会被放着跑完"
             );
             assert_eq!(summary, "read the notes");
         }
-        other => panic!("expected ExecutorFinished, got {other:?}"),
+        other => panic!("要的是 ExecutorFinished，得到 {other:?}"),
     }
-    // Its spend still counts: the dispatcher's own next iteration is refused.
+    // 它的花费仍然算数：派发者自己下一轮迭代被拒。
     assert_eq!(outcome.reason, StopReason::BudgetExhausted);
     let reported = only(
         &events,
@@ -1474,22 +1474,22 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
                 } if output.starts_with("executor kimi-1 finished:")
             )
         },
-        "task result",
+        "task 的结果",
     );
     match &reported.payload {
         EventPayload::ToolCallCompleted { output, .. } => {
             let output = output.as_deref().unwrap();
             assert!(
                 output.contains("finished: Completed"),
-                "the task reports the executor's own finish: {output}"
+                "task 报的是执行者自己的收尾：{output}"
             );
         }
-        other => panic!("expected ToolCallCompleted, got {other:?}"),
+        other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
     }
     assert_eq!(
         fixture.provider.requests().len(),
         3,
-        "the executor's two calls happened, the dispatcher's second did not"
+        "执行者那两次调用发生了，派发者第二次没有"
     );
 
     fixture.harness.shutdown().await;

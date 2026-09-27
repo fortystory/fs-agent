@@ -1,14 +1,14 @@
-//! Cancellation propagation (spec §6, ticket 13).
+//! 取消的传播（spec §6，票 13）。
 //!
-//! One gesture — the front end's Esc — stops the turn that is in flight and
-//! travels **down** to the executors that turn dispatched. The gesture itself is
-//! not an event; what the assertable contract sees is only the shape a stop
-//! leaves behind: `TurnEnded { Aborted }`, one synthesized result for every
-//! `tool_call` that had already started, and no dangling call for a later
-//! `--continue` to have to guess at.
+//! 一个手势 —— 前端的 Esc —— 停下那个正在飞的回合，
+//! 并**向下**走到该回合派出的那些执行者。手势本身不是事件；
+//! 可断言的契约看到的只有一次停止留下的形状：
+//! `TurnEnded { Aborted }`、每条已经开始过的
+//! `tool_call` 各一条合成结果，以及不留一条悬着的调用
+//! 让后来的 `--continue` 去猜。
 //!
-//! Everything runs through the one assembly seam with a scripted fake provider,
-//! like every other end-to-end test here.
+//! 一切都走唯一那个组装接缝，配一个脚本化的假 provider，
+//! 与这里其它端到端测试一样。
 
 mod support;
 
@@ -95,7 +95,7 @@ fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
 }
 
-/// A model turn that asks for one tool call and then stops asking.
+/// 一个只要一次工具调用、此后再也不要的模型回合。
 fn calls(id: &str, name: &str, args: serde_json::Value) -> Reply {
     Reply::Stream(vec![
         StreamEvent::ToolCallCompleted {
@@ -111,12 +111,12 @@ fn calls(id: &str, name: &str, args: serde_json::Value) -> Reply {
     ])
 }
 
-/// A tool that never returns on its own.
+/// 一个永远不会自己返回的工具。
 ///
-/// The instrument for "cancel a tool that is in flight": the registry is a value
-/// injected at the one assembly seam, so a test tool is mounted the same way a
-/// built-in is, and the tool announces its entry so the test presses at a defined
-/// moment instead of sleeping.
+/// 「取消一个正在飞的工具」用的器具：注册表是在唯一那个组装接缝上
+/// 注入的一个值，所以测试工具与内建工具是从同一处挂上去的；
+/// 工具会宣告自己进场，于是测试在一个确定的时刻按下，
+/// 而不是靠睡等。
 struct StallingTool {
     started: Arc<Notify>,
 }
@@ -142,7 +142,7 @@ impl Tool for StallingTool {
     ) -> Result<ToolOutput, ToolError> {
         self.started.notify_one();
         futures::future::pending::<()>().await;
-        unreachable!("the stalling tool never returns on its own")
+        unreachable!("停住的工具永远不会自己返回")
     }
 }
 
@@ -163,16 +163,16 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
     .await;
 
     let cancel = fixture.harness.cancel_signal();
-    // The turn's future borrows the harness, so the whole gesture lives in a
-    // block: it must be dropped before the harness is shut down.
+    // 回合的 future 借用了 harness，所以整个手势活在一个块里：
+    // 它必须在 harness 关掉之前被丢掉。
     let outcome = {
         let turn = fixture.harness.run_turn("think out loud");
         tokio::pin!(turn);
-        // Cancel while the stream is really in flight, not before it opened and
-        // not after it ended.
+        // 在流真的在飞的时候取消，不是它开之前、
+        // 也不是它结束之后。
         tokio::select! {
             _ = opened.notified() => {}
-            outcome = &mut turn => panic!("the turn ended before the cancel: {outcome:?}"),
+            outcome = &mut turn => panic!("取消之前回合就结束了：{outcome:?}"),
         }
         cancel.cancel();
         turn.await.unwrap()
@@ -182,8 +182,8 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
     assert_eq!(outcome.reason, StopReason::Aborted);
     assert_eq!(fixture.provider.requests().len(), 1);
 
-    // The gesture is not in the stream: what a cancel leaves is exactly the
-    // skeleton, the user's question, the turn it stopped, and its abort.
+    // 手势不在流上：一次取消留下的恰好是骨架、
+    // 用户的问题、它停下的那个回合，以及它的中止。
     let events = read_events(&fixture.log_path).unwrap();
     assert_eq!(
         kinds(&events),
@@ -196,12 +196,12 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
         "{events:#?}"
     );
     let EventPayload::TurnEnded { reason } = events.last().unwrap().payload else {
-        unreachable!("the last event is the turn end");
+        unreachable!("最后一条事件就是回合结束");
     };
     assert_eq!(reason, StopReason::Aborted);
 
-    // A stream that never reached `[DONE]` produced no completed unit, so no
-    // partial answer lands in the log.
+    // 一条从未走到 `[DONE]` 的流没有产出完成单元，所以
+    // 不会有半截答案落进日志。
     assert!(
         !events.iter().any(
             |event| matches!(event.payload, EventPayload::MessageCompleted { .. })
@@ -214,11 +214,11 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
                     }
                 )
         ),
-        "the aborted stream's partial text must not be recorded"
+        "被中止的那条流的半截文本不许被记下来"
     );
     assert!(pending_tool_calls(&events).is_empty());
-    // Nothing was completed, so nothing reaches the final-product sink; the
-    // narration of the stop goes to the diagnostic sink instead.
+    // 什么都没完成，所以没有东西到达最终产物那个 sink；
+    // 停止的叙述改去诊断 sink。
     assert_eq!(fixture.stdout.text(), "");
     assert!(
         fixture.stderr.text().contains("cancelled"),
@@ -247,7 +247,7 @@ async fn a_cancel_during_a_tool_call_gives_that_call_its_one_result() {
         tokio::pin!(turn);
         tokio::select! {
             _ = started.notified() => {}
-            outcome = &mut turn => panic!("the turn ended before the cancel: {outcome:?}"),
+            outcome = &mut turn => panic!("取消之前回合就结束了：{outcome:?}"),
         }
         cancel.cancel();
         turn.await.unwrap()
@@ -257,9 +257,9 @@ async fn a_cancel_during_a_tool_call_gives_that_call_its_one_result() {
     assert_eq!(outcome.reason, StopReason::Aborted);
     let events = read_events(&fixture.log_path).unwrap();
 
-    // The call had already started, so it is owed exactly one result — the
-    // fifth exception path of spec §3, and the reason the invariant still holds
-    // when the gesture lands mid-tool.
+    // 这条调用已经开始过了，所以它欠着恰好一条结果 —— spec §3 的
+    // 第五条例外路径，也是手势落在工具中途时那条不变量
+    // 仍然成立的原因。
     let completed: Vec<&Event> = events
         .iter()
         .filter(|event| matches!(event.payload, EventPayload::ToolCallCompleted { .. }))
@@ -273,7 +273,7 @@ async fn a_cancel_during_a_tool_call_gives_that_call_its_one_result() {
         ..
     } = &completed[0].payload
     else {
-        unreachable!("filtered for ToolCallCompleted")
+        unreachable!("筛的是 ToolCallCompleted")
     };
     assert_eq!(tool_call_id.as_str(), "call-1");
     assert!(!ok);
@@ -328,7 +328,7 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
         tokio::pin!(turn);
         tokio::select! {
             _ = started.notified() => {}
-            outcome = &mut turn => panic!("the turn ended before the cancel: {outcome:?}"),
+            outcome = &mut turn => panic!("取消之前回合就结束了：{outcome:?}"),
         }
         cancel.cancel();
         turn.await.unwrap()
@@ -338,7 +338,7 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
     assert_eq!(outcome.reason, StopReason::Aborted);
     let events = read_events(&fixture.log_path).unwrap();
 
-    /// The one result a call got, as `(ok, text)`.
+    /// 一次调用得到的那条唯一结果，作为 `(ok, text)`。
     fn result_of(events: &[Event], want: &str) -> (bool, String) {
         let found: Vec<&Event> = events
             .iter()
@@ -350,12 +350,12 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
                 )
             })
             .collect();
-        assert_eq!(found.len(), 1, "expected exactly one result for {want}");
+        assert_eq!(found.len(), 1, "{want} 恰好该有一条结果");
         let EventPayload::ToolCallCompleted {
             ok, output, error, ..
         } = &found[0].payload
         else {
-            unreachable!("filtered for ToolCallCompleted")
+            unreachable!("筛的是 ToolCallCompleted")
         };
         (
             *ok,
@@ -363,19 +363,19 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
         )
     }
 
-    // The `task` call was recorded as started and then deferred, so it is owed
-    // exactly one result even though its executor never ran at all.
+    // `task` 那条调用被记成已开始、然后被延后，所以它欠着
+    // 恰好一条结果，尽管它的执行者根本没跑过。
     let (task_ok, task_text) = result_of(&events, "call-task");
     assert!(!task_ok);
     assert!(task_text.contains("did not run"), "{task_text:?}");
 
-    // The call that was really in flight says the other thing: the tool future
-    // was dropped, so the workspace may or may not have changed.
+    // 真正在飞的那条调用说的是另一回事：工具的 future
+    // 被丢掉了，所以工作区可能变了、也可能没变。
     let (stall_ok, stall_text) = result_of(&events, "call-stall");
     assert!(!stall_ok);
     assert!(stall_text.contains("in flight"), "{stall_text:?}");
 
-    // The deferred executor was never dispatched...
+    // 被延后的那个执行者从没被派出过……
     assert!(
         !events
             .iter()
@@ -383,12 +383,12 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
         "{events:#?}"
     );
     assert!(pending_tool_calls(&events).is_empty());
-    // ...and the stop happened before another model call.
+    // ……而停止发生在另一次模型调用之前。
     assert_eq!(fixture.provider.requests().len(), 1);
 }
 
 // ---------------------------------------------------------------------------
-// A discussion: the gesture travels down to the executors and never up.
+// 一场讨论：手势向下走到执行者，从不向上。
 // ---------------------------------------------------------------------------
 
 struct DiscussionFixture {
@@ -471,12 +471,12 @@ async fn discussion_fixture(
     }
 }
 
-/// An answer as a debater writes it.
+/// 讨论者写下的一个答案。
 fn answered(body: &str, conclusion: &str) -> Reply {
     Reply::text(&format!("{body}\nCONCLUSION: {conclusion}"))
 }
 
-/// Every `RoundEnded` as `(round, reason)`, in order.
+/// 每一条 `RoundEnded` 的 `(round, reason)`，按顺序。
 fn round_endings(events: &[Event]) -> Vec<(u32, StopReason)> {
     events
         .iter()
@@ -490,26 +490,26 @@ fn round_endings(events: &[Event]) -> Vec<(u32, StopReason)> {
 #[tokio::test]
 async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error() {
     let opened = Arc::new(Notify::new());
-    // The roster order matters here, and it is the order `join_all` polls in:
-    // the first debater answers normally and its whole turn completes in the
-    // first poll, so the other side's stalled executor is the only thing left in
-    // flight when the gesture arrives.
+    // 名册顺序在这里要紧，而它就是 `join_all` 轮询的顺序：
+    // 第一个讨论者正常作答，整个回合在第一次轮询里就走完，
+    // 于是手势到来时，在飞的只剩另一侧那个停住的
+    // 执行者这一件事。
     let mut fixture = discussion_fixture(
         vec![answered("KIMI 正文", "先做甲")],
         vec![
-            // The dispatcher asks for an executor...
+            // 派发者要一个执行者……
             calls(
                 "call-1",
                 "task",
                 serde_json::json!({"brief": "do the thing"}),
             ),
-            // ...and the executor's own stream is what the gesture interrupts.
+            // ……而执行者自己的那条流才是手势打断的东西。
             Reply::Stall(
                 opened.clone(),
                 vec![StreamEvent::TextDelta("working on it".into())],
             ),
         ],
-        // The synthesizer is never called.
+        // 合成器从没被调用过。
         vec![],
     )
     .await;
@@ -520,7 +520,7 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
         tokio::pin!(discuss);
         tokio::select! {
             _ = opened.notified() => {}
-            outcome = &mut discuss => panic!("the discussion ended before the cancel: {outcome:?}"),
+            outcome = &mut discuss => panic!("取消之前讨论就结束了：{outcome:?}"),
         }
         signal.cancel();
         discuss.await.unwrap()
@@ -529,15 +529,15 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
 
     assert_eq!(outcome.reason, StopReason::Aborted);
     assert_eq!(outcome.synthesis, "");
-    // The gesture stops the round; it does not open the closing call.
+    // 手势停下这一轮；它不会开启那一次收尾调用。
     assert_eq!(fixture.kimi.requests().len(), 1);
     assert_eq!(fixture.deepseek.requests().len(), 2);
     assert_eq!(fixture.synthesizer.requests().len(), 0);
 
     let events = read_events(&fixture.log_path).unwrap();
 
-    // The one side that got all the way through really did answer: the round is
-    // stopped, not merely incomplete.
+    // 走完全程的那一侧确实作答了：这一轮是被停下的，
+    // 而不只是没完成。
     assert!(
         events.iter().any(|event| {
             event.speaker_id == kimi()
@@ -552,8 +552,8 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
         "{events:#?}"
     );
 
-    // The executor winds down instead of being dropped: it gets a finish line,
-    // and `Aborted` — not `Error` — is what it says (spec §6).
+    // 执行者是慢慢收尾，而不是被丢掉：它拿到一条终点，
+    // 而它说的是 `Aborted` —— 不是 `Error`（spec §6）。
     let finished: Vec<(String, StopReason)> = events
         .iter()
         .filter_map(|event| match &event.payload {
@@ -570,8 +570,8 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
         vec![("deepseek-1".to_owned(), StopReason::Aborted)]
     );
 
-    // The `task` call had started, so it keeps exactly one result, and the
-    // dispatcher reads the cancellation as an ordinary failed tool result.
+    // `task` 那条调用已经开始了，所以它恰好保有一条结果，而
+    // 派发者把这次取消读成一条普通的失败工具结果。
     assert!(pending_tool_calls(&events).is_empty());
     let results: Vec<&EventPayload> = events
         .iter()
@@ -580,14 +580,14 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
         .collect();
     assert_eq!(results.len(), 1, "{events:#?}");
     let EventPayload::ToolCallCompleted { ok, error, .. } = results[0] else {
-        unreachable!("filtered for ToolCallCompleted")
+        unreachable!("筛的是 ToolCallCompleted")
     };
     assert!(!ok);
     let error = error.as_deref().unwrap_or_default();
     assert!(error.contains("Aborted"), "{error:?}");
 
-    // A cancelled round is not a debate result, and the debater that was
-    // stopped did not become an "absence read as consensus".
+    // 被取消的一轮不是一次讨论结果，而那个被停下的讨论者
+    // 也没有变成「缺席被读成共识」。
     assert_eq!(
         round_endings(&events),
         vec![(1, StopReason::Aborted)],
@@ -597,7 +597,7 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
         !events
             .iter()
             .any(|event| matches!(event.payload, EventPayload::SessionError { .. })),
-        "a cancelled discussion is not a session failure"
+        "被取消的讨论不是一次会话失败"
     );
     assert!(
         !events.iter().any(
@@ -610,11 +610,11 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
                     }
                 )
         ),
-        "the synthesizer never opens"
+        "合成器从不开场"
     );
 
-    // Nothing completed, so the final-product sink stays empty; the narration
-    // of the stop goes to the diagnostic sink instead.
+    // 什么都没完成，所以最终产物那个 sink 保持空的；停止的
+    // 叙述改去诊断 sink。
     assert_eq!(fixture.stdout.text(), "");
     assert!(
         fixture.stderr.text().contains("cancelled"),
@@ -648,16 +648,16 @@ async fn a_cancel_that_stops_both_debaters_is_still_not_a_discussion_failure() {
             _ = async {
                 tokio::join!(kimi_opened.notified(), deepseek_opened.notified());
             } => {}
-            outcome = &mut discuss => panic!("the discussion ended before the cancel: {outcome:?}"),
+            outcome = &mut discuss => panic!("取消之前讨论就结束了：{outcome:?}"),
         }
         signal.cancel();
         discuss.await.unwrap()
     };
     fixture.harness.shutdown().await;
 
-    // Nobody answered, and the round still is not the Error that "nobody
-    // answered" would be if the round had simply failed: the gesture is what
-    // stopped it (spec §6).
+    // 没有人作答，而这一轮仍然不是「没人作答」在轮次单纯
+    // 失败时会是的那种 Error：停下它的是
+    // 那个手势（spec §6）。
     assert_eq!(outcome.reason, StopReason::Aborted);
     assert_eq!(outcome.rounds, 1);
     assert_eq!(outcome.synthesis, "");
@@ -681,7 +681,7 @@ async fn a_cancel_that_reaches_the_synthesizer_ends_the_discussion_without_a_pro
     let mut fixture = discussion_fixture(
         vec![answered("KIMI 正文", "复用事件流")],
         vec![answered("DEEPSEEK 正文", "复用事件流")],
-        // The closing call is the one that stalls: the debate itself finished.
+        // 收尾调用才是停住的那一次：讨论本身已经结束了。
         vec![Reply::Stall(
             opened.clone(),
             vec![StreamEvent::TextDelta("共识：复用".into())],
@@ -695,7 +695,7 @@ async fn a_cancel_that_reaches_the_synthesizer_ends_the_discussion_without_a_pro
         tokio::pin!(discuss);
         tokio::select! {
             _ = opened.notified() => {}
-            outcome = &mut discuss => panic!("the discussion ended before the cancel: {outcome:?}"),
+            outcome = &mut discuss => panic!("取消之前讨论就结束了：{outcome:?}"),
         }
         signal.cancel();
         discuss.await.unwrap()
@@ -707,8 +707,8 @@ async fn a_cancel_that_reaches_the_synthesizer_ends_the_discussion_without_a_pro
     assert_eq!(fixture.synthesizer.requests().len(), 1);
 
     let events = read_events(&fixture.log_path).unwrap();
-    // The debate phase really did end `NoDivergence`; it is the closing round
-    // that the gesture stopped.
+    // 辩论阶段确实是以 `NoDivergence` 收的尾；手势停下的
+    // 是收尾那一轮。
     assert_eq!(
         round_endings(&events),
         vec![(1, StopReason::NoDivergence), (2, StopReason::Aborted)]
@@ -717,9 +717,9 @@ async fn a_cancel_that_reaches_the_synthesizer_ends_the_discussion_without_a_pro
         !events
             .iter()
             .any(|event| matches!(event.payload, EventPayload::SessionError { .. })),
-        "a stopped synthesizer is not a `synthesis_failed`: {events:#?}"
+        "被停下的合成器不是一次 `synthesis_failed`：{events:#?}"
     );
-    // A partial product never lands, and nothing reaches the final-product sink.
+    // 半截产物从不落地，也没有东西到达最终产物那个 sink。
     assert!(
         !events.iter().any(
             |event| matches!(event.payload, EventPayload::MessageCompleted { .. })
@@ -762,17 +762,17 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
         tokio::pin!(turn);
         tokio::select! {
             _ = opened.notified() => {}
-            outcome = &mut turn => panic!("the turn ended before the cancel: {outcome:?}"),
+            outcome = &mut turn => panic!("取消之前回合就结束了：{outcome:?}"),
         }
         signal.cancel();
-        // The second press during a cancellation forces the process down: the
-        // turn is dropped mid-flight and nothing winds down (spec §6).
+        // 取消期间按第二次会把进程压下去：
+        // 回合在半途被丢掉，什么都不会收尾（spec §6）。
     }
     harness.shutdown().await;
 
-    // The stream the killed process left behind has a `tool_call` with no
-    // result. `--continue` opens the same log under the same id, and recovery
-    // is what closes it.
+    // 被杀掉的进程留下的那条流里有一条没有结果的
+    // `tool_call`。`--continue` 在同一个 id 下打开同一份日志，
+    // 而收尾它的是恢复流程。
     let resumed = assemble(AssemblyParts {
         provider: Box::new(FakeProvider::new(vec![Reply::text("resumed")])),
         speaker: kimi(),
@@ -795,7 +795,7 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
         },
     })
     .await
-    .expect("a stream with an open call is resumable");
+    .expect("带一条未闭合调用的流是可续的");
     assert_eq!(resumed.session_id().as_str(), "s-cancel");
     resumed.shutdown().await;
 
@@ -806,7 +806,7 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
             .filter(|event| matches!(event.payload, EventPayload::SessionStarted { .. }))
             .count(),
         1,
-        "a resume never records a second session head"
+        "续跑永不记下第二个会话头"
     );
     assert!(pending_tool_calls(&events).is_empty());
     let recovered = events
@@ -820,7 +820,7 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
             } if tool_call_id.as_str() == "call-1" => Some(error.clone()),
             _ => None,
         })
-        .expect("recovery closed the call the process died on");
+        .expect("恢复收尾了进程死时那条调用");
     assert!(recovered.contains("interrupted"), "{recovered}");
 }
 
@@ -837,16 +837,16 @@ async fn a_gesture_is_scoped_to_one_run_so_a_cancelled_session_stays_usable() {
 
     let cancel = fixture.harness.cancel_signal();
     assert!(!cancel.is_cancelled());
-    // Raised while nothing is running: there is no work to stop...
+    // 在什么都没跑的时候抬起：没有活可停……
     cancel.cancel();
     assert!(cancel.is_cancelled());
 
-    // ...and the next turn does not inherit it. Without this, one Esc would
-    // wedge the session for every later question in the same process.
+    // ……而下一个回合不会继承它。少了这一条，一次 Esc 就会
+    // 把同一进程里此后每个问题的会话都卡死。
     let outcome = fixture.harness.run_turn("do something").await.unwrap();
     assert_eq!(outcome.reason, StopReason::Completed);
     assert_eq!(fixture.provider.requests().len(), 1);
-    assert!(!cancel.is_cancelled(), "a run starts from a clean gesture");
+    assert!(!cancel.is_cancelled(), "一次运行从一个干净的手势开始");
 
     let outcome = fixture.harness.run_turn("and another thing").await.unwrap();
     assert_eq!(outcome.reason, StopReason::Completed);
