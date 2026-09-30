@@ -2,10 +2,11 @@
 //!
 //! 有三条性质是结构性的，不是风格问题：
 //!
-//! * **alt screen，一帧。** TUI 画一圈全屏外框，框住一条全高左栏与一条主列：左栏放
-//!   标记与会话的读数，主列自上而下堆着转录（右边缘带滚动条与回合条）、状态行、
-//!   输入区与提示行。转录住在自己的缓冲里，而不是终端的滚动回退里 —— 内联视口那个
-//!   漂移的光标也正是这么消掉的：全屏下窗格原点永远是 `(0, 0)`。
+//! * **alt screen，一帧。** TUI 画一条全高左栏与一条主列，中间是一条竖虚线；四周没有
+//!   外框，终端自己就是边界（`.scratch/tui-chrome/spec.md` §1）。左栏放标记与会话的
+//!   读数，主列自上而下堆着转录（右边缘带滚动条与回合条）、状态行、输入区与提示行。
+//!   转录住在自己的缓冲里，而不是终端的滚动回退里 —— 内联视口那个漂移的光标也正是
+//!   这么消掉的：全屏下窗格原点永远是 `(0, 0)`。
 //! * **渲染器占着键盘。** 它是唯一读终端事件的 task，并且通过注入的 console 通道
 //!   回答循环的请求（[`ConsoleRequest`]）。输入与输出不打架，靠的就是这一条。
 //! * **`select!` 管 broadcast 与按键。** 渲染事件、循环的请求与键盘输入是三个互相
@@ -27,6 +28,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block as WidgetBlock, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
@@ -175,6 +177,14 @@ pub struct SpeakerColors {
 
 /// 讨论者的调色板，按名册把槽位发出去的顺序（票 07 §1）。
 const DEBATER_PALETTE: [Color; 2] = [Color::LightCyan, Color::LightMagenta];
+
+/// 结构性框线的颜色：比 `DarkGray` 再沉一档（`DarkGray` 在常见配色里 ≈ `#808080`，而框架
+/// 不该比内容先被看见）。
+///
+/// 它刻意是真彩色，也是这个界面里**第二处**（第一处是提示符的色相脉冲）：16 色 ANSI 里比
+/// `DarkGray` 更暗的只有 `Black`，那在深色背景上等于消失。亮背景终端要在这一点上调
+/// （`.scratch/tui-chrome/spec.md` §3）。
+const CHROME_LINE: Color = Color::Rgb(0x4a, 0x4a, 0x4a);
 
 impl SpeakerColors {
     /// 一份名册对应的调色板：按槽位发出去的顺序列出讨论者。没有名册的调用方传一个空的
@@ -511,6 +521,13 @@ pub struct TuiState {
     /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
     /// 「记住读的人真看到了什么」的规矩（票 02 §4）。
     detail_rect: Option<Rect>,
+    /// 上一帧把**中间的模态**画在哪里，好让滚轮知道指针是不是落在它上面（`tui-chrome` §5）。
+    /// 与 [`TuiState::detail_rect`] 同一条规矩：这一帧真的画了什么就记什么，没画出来就是
+    /// `None`，而那时滚轮落到转录上。
+    modal_rect: Option<Rect>,
+    /// 上一帧问卷占着的那块底部（输入区**与**提示行，连它们中间那条线一起）在哪里。问卷
+    /// 没有边框，所以它「在哪儿」只能这样记；滚轮据此决定归谁（`tui-chrome` §5）。
+    questionnaire_bottom: Option<Rect>,
     /// 上一帧把一个问题的可点部分画在了哪里。
     regions: Regions,
     /// 上一帧的整个终端区域。详情覆盖层的主体在打开时就排版好了，而那次排版需要的宽度是
@@ -1155,6 +1172,8 @@ impl TuiState {
             drawn_top: 0,
             detail: None,
             detail_rect: None,
+            modal_rect: None,
+            questionnaire_bottom: None,
             regions: Regions::default(),
             area: Rect::default(),
             prompt_reply: None,
@@ -1577,13 +1596,35 @@ impl TuiState {
             }
             return;
         }
-        // 2. 接下来是问题占着指针：滚轮不许滚动它背后的转录，而一次点击在它可答的地方回答
-        // 它。可答的是上一帧记成区域的那些，所以一个被裁掉或滚走的键干脆没有区域
-        // （spec §9，票 04 §2）。
+        // 2. 接下来是问题占着指针。**点击**照旧在它可答的地方回答它（可答的是上一帧记成区域
+        // 的那些，所以一个被裁掉或滚走的键干脆没有区域 —— spec §9，票 04 §2）；**滚轮**则按
+        // 指针落在哪一块分派：落在覆盖层自己那块里就归它，落在转录上就滚转录
+        // （`tui-chrome` §5，推翻票 04 §2 里「吃掉一切」的那半句）。
         if self.pending.is_some() {
             match mouse.kind {
-                MouseEventKind::ScrollUp => self.question_click(QuestionClick::Wheel(true)),
-                MouseEventKind::ScrollDown => self.question_click(QuestionClick::Wheel(false)),
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+                    let point = (mouse.column, mouse.row).into();
+                    let questionnaire = self
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| matches!(pending, Pending::Questionnaire(_)));
+                    // 问卷用排版给的底部块，中间的模态用它自己那个矩形（它带边框）。
+                    let owned = if questionnaire {
+                        self.questionnaire_bottom
+                            .is_some_and(|rect| rect.contains(point))
+                    } else {
+                        self.modal_rect.is_some_and(|rect| rect.contains(point))
+                    };
+                    if owned {
+                        // 模态自己没有可滚的内容，所以在自己那块里什么都不做；问卷挪高亮。
+                        if questionnaire {
+                            self.question_click(QuestionClick::Wheel(up));
+                        }
+                    } else {
+                        self.pane.wheel(up);
+                    }
+                }
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.question_click(QuestionClick::At(mouse.column, mouse.row))
                 }
@@ -2431,6 +2472,10 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 上一帧记下来的才是指针可能打中的；这一帧从什么都没有开始，只记它真画出来的东西
     // （票 04 §1）。
     state.regions.clear();
+    // 覆盖层「在哪儿」与命中区域同一条纪律：这一帧画在哪儿，指针才可能落在哪儿
+    // （`tui-chrome` §5）。两者都在下面各自画出来时被重新填上。
+    state.modal_rect = None;
+    state.questionnaire_bottom = None;
     if layout::below_minimum(area) {
         // 什么都不画，好让点击无处可落。
         state.indicator = None;
@@ -2442,6 +2487,16 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）。
     let content_rows = state.bottom_rows(area);
     let panes = layout::plan(area, content_rows);
+    // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
+    // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
+    if state.questionnaire().is_some() {
+        state.questionnaire_bottom = Some(Rect::new(
+            panes.input.x,
+            panes.input.y,
+            panes.input.width,
+            panes.hints.bottom().saturating_sub(panes.input.y),
+        ));
+    }
     draw_shell(frame, &panes, state, area);
     draw_transcript(frame, &panes, state);
     draw_status(frame, &panes, state);
@@ -2458,61 +2513,52 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     draw_detail(frame, &panes, state);
 }
 
-/// 外壳里那些不是自己一块区域的部件：外框、分隔列、左栏，以及主列的三条分隔线。
+/// 外壳里那些不是自己一块区域的部件：分隔列、左栏，以及主列的两条分隔线。
 ///
-/// 这个顺序就是绘制顺序，也正是交叉点能画完整的原因：先外框，然后沿左栏右边缘往下画的
-/// 分隔列，然后是左栏 —— 它的页签条在两者之上写出 `├` 与 `┤` —— 最后是主列的分隔线，
-/// 它们在各自的行上往分隔列里写 `├`（spec §1）。
+/// **外框已经不在**（spec §1）：每条线都画在自己该在的地方，没有哪一格要留给边框，也没有
+/// 交叉符要拼。这个顺序就是绘制顺序：先沿左栏右边缘往下画的分隔列，然后是左栏 —— 它的页签
+/// 条在两者之上画 —— 最后是主列的分隔线（spec §1–§2）。
 fn draw_shell(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
     state: &mut TuiState,
     area: Rect,
 ) {
-    draw_border(frame, area);
     draw_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
-    // 状态行、输入区与提示行各自上面那条分隔线。它们左边是分隔列 —— 没有左栏时就是外框
-    // 自己的左边框 —— 右边是外框的右边框。
-    let right = area.right().saturating_sub(1);
-    for y in [panes.status.y - 1, panes.input.y - 1, panes.hints.y - 1] {
-        paint_rule(frame, y, panes.divide.unwrap_or(area.x), right);
+    // 输入区与提示行各自上面那条分隔线 —— 状态行上方那条已经离开（spec §2），所以这里是
+    // 两条而不是三条。它们从**分隔列右边一格**起画：分隔列那一格的 `┆` 留着，于是竖线从
+    // 屏幕顶一直贯通到底，横线只是接在它旁边（2026-10-01 真机反馈：横线原先把竖线截断了）。
+    // 没有左栏时就没有那条竖线，横线从屏幕左缘起。
+    let left = panes.divide.map_or(area.x, |divide| divide + 1);
+    for y in [panes.input.y - 1, panes.hints.y - 1] {
+        paint_rule(frame, y, left, area.right());
     }
 }
 
-/// 一行横贯某个行、从 `left` 到 `right`（含两端）的分隔线，两端带 `├` 与 `┤`，好让它接到
-/// 它所处的那两条边框上，而不是横穿过去（spec §1）。
+/// 一行横贯某个行、从 `left` 到 `right`（不含 `right`）的分隔线（spec §1、§3）。
 ///
-/// 主列的分隔线与页签条用的是同一笔；它们只在跨的列上不同。
+/// 虚线，颜色是 [`CHROME_LINE`]：框架退到内容后面。主列的分隔线与页签条用的是同一笔；它们
+/// 只在跨的列上不同。
 fn paint_rule(frame: &mut ratatui::Frame, y: u16, left: u16, right: u16) {
-    let style = Style::default().fg(Color::DarkGray);
+    let style = Style::default().fg(CHROME_LINE);
     let buffer = frame.buffer_mut();
-    buffer[(left, y)].set_symbol("├").set_style(style);
-    for x in left + 1..right {
-        buffer[(x, y)].set_symbol("─").set_style(style);
+    for x in left..right {
+        buffer[(x, y)].set_symbol("┄").set_style(style);
     }
-    buffer[(right, y)].set_symbol("┤").set_style(style);
 }
 
-/// 左栏与主列共用的那一列：一条从外框上边框到底边框的竖线，两端用外框自己的交叉符，
-/// 而不是再来一条边框（spec §1）。
+/// 左栏与主列共用的那一列：一条从屏幕顶到屏幕底的竖虚线（spec §1、§3）。
 ///
-/// 页签条在它占的那两行上把各自的交叉符画在它上面。
+/// 外框走了之后，这一列不再有「上边框 / 下边框」可以接，所以两端也就是同样的 `┆`。
 fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) {
     let Some(divide) = panes.divide else {
         return;
     };
-    let style = Style::default().fg(Color::DarkGray);
+    let style = Style::default().fg(CHROME_LINE);
     let buffer = frame.buffer_mut();
     for y in area.y..area.bottom() {
-        let symbol = if y == area.y {
-            "┬"
-        } else if y == area.bottom() - 1 {
-            "┴"
-        } else {
-            "│"
-        };
-        buffer[(divide, y)].set_symbol(symbol).set_style(style);
+        buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }
 
@@ -2594,7 +2640,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
 /// 左栏的页签条：两条分隔线、标签夹在中间，选中的那个更亮（spec §3，
 /// `.scratch/todo-and-modes/spec.md` §4）。
 ///
-/// 两条线都从外框左边框开始、到分隔列结束，于是左栏读起来是一个隔间，而不是自成一体的
+/// 两条线都从屏幕左缘开始、到分隔列结束，于是左栏读起来是一个隔间，而不是自成一体的
 /// 一块。每个标签在画出来时记下一个命中矩形：指针只能打中真在那里的东西，而填满这一行
 /// 其余部分的线不是页签。
 ///
@@ -2608,11 +2654,14 @@ fn draw_tab_bar(
     tabs: Rect,
 ) {
     let dim = Style::default().fg(Color::DarkGray);
+    // 「线」与「字」在这一行上分开取色：未选中的标签是**文字**（仍旧 `DarkGray`，它得读得
+    // 出来），而两条线与它们之间的分隔符是**框架**（`CHROME_LINE`，退到后面去）。
+    let rule = Style::default().fg(CHROME_LINE);
     for y in [tabs.y - 1, tabs.y + 1] {
         paint_rule(
             frame,
             y,
-            sidebar.x - 1,
+            panes.screen.x,
             panes.divide.unwrap_or(sidebar.right()),
         );
     }
@@ -2645,13 +2694,13 @@ fn draw_tab_bar(
         spans.push(Span::styled((*label).to_owned(), style));
         used += width;
         if index + 1 < entries.len() {
-            spans.push(Span::styled("│", dim));
+            spans.push(Span::styled("┆", rule));
             used += 1;
         }
     }
     spans.push(Span::styled(
-        "─".repeat(sidebar.width.saturating_sub(used) as usize),
-        dim,
+        "┄".repeat(sidebar.width.saturating_sub(used) as usize),
+        rule,
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
 }
@@ -2753,11 +2802,15 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     let Some(area) = panes.modal(rows.len() as u16) else {
         return;
     };
+    // 滚轮要问「指针是不是落在模态上」（`tui-chrome` §5）：与点击的命中区域同一条纪律，
+    // 只记这一帧真画出来的那个矩形。
+    state.modal_rect = Some(area);
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
     frame.render_widget(
         WidgetBlock::default()
             .borders(Borders::ALL)
+            .border_set(border::LIGHT_TRIPLE_DASHED)
             .border_style(Style::default().fg(Color::Yellow)),
         area,
     );
@@ -2883,16 +2936,6 @@ fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center),
         row,
-    );
-}
-
-/// 给一个块围上外框：用暗色，好让边框把内容框起来，而不是跟它抢。
-fn draw_border(frame: &mut ratatui::Frame, area: Rect) {
-    frame.render_widget(
-        WidgetBlock::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
-        area,
     );
 }
 
@@ -3456,7 +3499,8 @@ fn draw_menu(
     frame.render_widget(
         WidgetBlock::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_set(border::LIGHT_TRIPLE_DASHED)
+            .border_style(Style::default().fg(CHROME_LINE)),
         area,
     );
     frame.render_widget(Paragraph::new(rows), layout::inner(area));
@@ -4236,6 +4280,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     frame.render_widget(
         WidgetBlock::default()
             .borders(Borders::ALL)
+            .border_set(border::LIGHT_TRIPLE_DASHED)
             .border_style(Style::default().fg(view.detail.color)),
         area,
     );

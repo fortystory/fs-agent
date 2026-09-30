@@ -220,10 +220,10 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 前面那一列（`.scratch/tui-sidebar/spec.md` §1）。
 fn turn_rail_shape(state: &mut TuiState) -> String {
     let frame = buffer(120, 40, state);
-    (1..39u16)
+    (0..39u16)
         // 转录结束在主列第一条横线开始的地方。
-        .take_while(|y| !row_text(&frame, *y, 120).ends_with('┤'))
-        .map(|y| frame[(118, y)].symbol().chars().next().unwrap_or(' '))
+        .take_while(|y| !row_text(&frame, *y, 120).ends_with('┄'))
+        .map(|y| frame[(119, y)].symbol().chars().next().unwrap_or(' '))
         .filter(|ch| *ch != ' ')
         .collect()
 }
@@ -275,18 +275,17 @@ fn panel_field(rows: &[String], offset: usize) -> String {
     let mut rules = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.starts_with('├'))
+        .filter(|(_, row)| row.starts_with('┄'))
         .map(|(y, _)| y);
     rules.next().expect("页签条的上横线");
     let top = rules.next().expect("页签条的下横线") + 1;
     let row = &rows[top + offset];
-    let inner = row.trim_start_matches('│');
-    let end = inner
+    let end = row
         .char_indices()
-        .find(|(_, ch)| matches!(ch, '│' | '├' | '┤'))
+        .find(|(_, ch)| matches!(ch, '┆' | '┄'))
         .map(|(index, _)| index)
         .expect("分隔线终结了左栏");
-    inner[..end].to_owned()
+    row[..end].to_owned()
 }
 
 // ---------------------------------------------------------------------------

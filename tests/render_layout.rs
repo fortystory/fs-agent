@@ -86,23 +86,23 @@ fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
     cells(buffer, y, 0, width)
 }
 
-/// 转录的第一行：帧里的那一行，紧贴在它的上边框下面。
-///
-/// 外壳是一圈帧，而不是每个区域一块，所以再没有一条边框行可找了；
-/// 需要数行的测试要的是转录从哪里开始、有多高，
-/// 两者都从下面那圈帧上读出来。
-const TRANSCRIPT_TOP: usize = 1;
+/// 转录的第一行。外框走了之后它就是终端的第一行
+/// （`.scratch/tui-chrome/spec.md` §1）。
+const TRANSCRIPT_TOP: usize = 0;
 
-/// 一帧画出来之后转录占的那些行：从帧的第一内容行
-/// 一直到状态行上面那条横线。
+/// 一帧画出来之后转录占的那些行：第一条横线画在输入区上面，
+/// 而它和转录之间还夹着状态行那一行。
 ///
 /// 量出来的，不是记住的，因为终端高度、左栏的高度阶梯
-/// 与草稿三者都会把它挪动。
+/// 与草稿三者都会把它挪动。外框与状态行上方那条线都走了之后，
+/// 那条横线不再有端点交叉符，所以探针找的是延伸到屏幕右缘的
+/// 那条虚线本身（页签条的两条横线到分隔列就结束，不会以它结尾）。
 fn transcript_rows(rows: &[String]) -> usize {
     rows.iter()
-        .position(|row| row.ends_with('┤'))
+        .position(|row| row.ends_with('┄'))
         .expect("主列的第一条横线在屏幕上")
         - TRANSCRIPT_TOP
+        - 1
 }
 
 /// 画出来的这一帧本身，用来断言某个具体的格子。
@@ -149,24 +149,26 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     // （`.scratch/tui-sidebar/spec.md` §1）。
     let rows = screen(120, 24, &mut state());
 
-    // 一圈帧围住全部，四个角都是闭合的。
-    assert!(rows[0].starts_with('┌'), "帧开了：{:?}", rows[0]);
-    assert!(rows[0].ends_with('┐'), "而且闭合：{:?}", rows[0]);
-    assert!(rows[23].starts_with('└'), "在脚下：{:?}", rows[23]);
-    assert!(rows[23].ends_with('┘'), "在右边也一样：{:?}", rows[23]);
-
-    // 左栏：宽档上的标记，居中，两侧各留一列空气。
+    // 四周没有边框：外框已经离开（`.scratch/tui-chrome/spec.md` §1），
+    // 终端自己就是边界。
     assert!(
-        rows[1].starts_with("│ ▄▀▀█") && rows[5].contains("▀▀▀"),
+        !rows.join("\n").contains(['┌', '┐', '└', '┘']),
+        "屏幕上没有外框：{rows:#?}"
+    );
+
+    // 左栏：宽档上的标记，居中，两侧各留一列空气。它从顶上留的
+    // 那一行空行下面开始（2026-10-01 真机反馈）。
+    assert!(
+        rows[1].contains("▄▀▀█") && rows[5].contains("▀▀▀"),
         "标记的首尾两行就是左栏的首尾两行：{:?} / {:?}",
         rows[1],
         rows[5]
     );
 
-    // 页签条：上下两条横线夹着三个标签，两条横线接上
-    // 帧的左边框与分隔线。
+    // 页签条：上下两条横线夹着三个标签，两条横线从屏幕左缘
+    // 一直画到分隔列。
     assert_eq!(
-        rows[6].trim_matches(|ch| ch == '├' || ch == '┤' || ch == '─' || ch == '│' || ch == ' '),
+        rows[6].trim_matches(|ch| ch == '┄' || ch == '┆' || ch == ' '),
         "",
         "页签条的上横线横跨整条左栏：{:?}",
         rows[6]
@@ -177,39 +179,44 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[7]
     );
 
-    // 分隔线跑满帧的整个高度，主列的横线
-    // 以交叉字符与它相接。24 行终端留给转录十四行：
-    // 三行归输入区的地板、七行归外壳
-    // （`.scratch/tui-input-pulse/spec.md` §1）。
-    assert_eq!(transcript_rows(&rows), 14, "120x24 给转录 14 行");
+    // 分隔线跑满屏幕的整个高度。24 行终端留给转录十七行：
+    // 三行归输入区的地板、四行归外壳 —— 外框的两行与
+    // 状态行上方那一行都还给了内容
+    // （`.scratch/tui-chrome/spec.md` §1–§2）。
+    assert_eq!(transcript_rows(&rows), 17, "120x24 给转录 17 行");
     assert!(
-        rows[15].contains('├') && rows[15].contains('┤'),
-        "状态行上面那条横线横跨主列：{:?}",
-        rows[15]
-    );
-    assert!(
-        rows[16].contains("模型 claude-sonnet-4-5")
-            && rows[16].contains("模式 询问")
-            && rows[16].contains("上下文 —"),
-        "状态行报出模型、模式与占比：{:?}",
+        !rows[16].contains('┄'),
+        "状态行上方那条横线已经不画了：{:?}",
         rows[16]
     );
     assert!(
-        rows[18].contains(&format!("│{}", editor::PROMPT)),
-        "输入区的第一行带着提示符：{:?}",
+        rows[17].contains("模型 claude-sonnet-4-5")
+            && rows[17].contains("模式 询问")
+            && rows[17].contains("上下文 —"),
+        "状态行报出模型、模式与占比：{:?}",
+        rows[17]
+    );
+    assert!(
+        rows[18].ends_with('┄'),
+        "输入区上面那条横线横跨主列：{:?}",
         rows[18]
     );
     assert!(
-        rows[19].trim_matches(['│', ' ']).is_empty()
-            && rows[20].trim_matches(['│', ' ']).is_empty(),
-        "它下面两行是同一个框里的空行：{:?} / {:?}",
-        rows[19],
-        rows[20]
+        rows[19].contains(&format!("┆{}", editor::PROMPT)),
+        "输入区的第一行带着提示符：{:?}",
+        rows[19]
     );
     assert!(
-        rows[22].contains("ctrl-c"),
+        rows[20].trim_matches(['┆', ' ']).is_empty()
+            && rows[21].trim_matches(['┆', ' ']).is_empty(),
+        "它下面两行是同一个框里的空行：{:?} / {:?}",
+        rows[20],
+        rows[21]
+    );
+    assert!(
+        rows[23].contains("ctrl-c"),
         "提示行列出了出口：{:?}",
-        rows[22]
+        rows[23]
     );
 
     assert!(
@@ -226,15 +233,17 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
 #[test]
 fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
     // 宽档是 40 列，标记 38 列，所以两侧各得一列
-    // 空气（spec §2）。分隔线占自己那一列，在第 41 列。
+    // 空气（spec §2）。分隔线占自己那一列，在第 40 列 ——
+    // 外框走了之后，它就是最左那一列内容加四十。
     let frame = buffer(120, 24, &mut state());
-    assert_eq!(frame[(41, 0)].symbol(), "┬", "分隔线接上上边框");
-    assert_eq!(frame[(41, 23)].symbol(), "┴", "下边框也一样");
-    assert_eq!(frame[(1, 1)].symbol(), " ", "左边一列空气");
-    assert_eq!(frame[(2, 1)].symbol(), "▄", "然后是标记");
-    // 标记宽 38 列：2 + 38 = 40，所以最后一列空气在 40，
-    // 分隔线在 41。
-    assert_eq!(frame[(40, 1)].symbol(), " ", "右边也有一列");
+    assert_eq!(frame[(40, 0)].symbol(), "┆", "分隔线从屏幕顶起");
+    assert_eq!(frame[(40, 23)].symbol(), "┆", "一直画到屏幕底");
+    // 标记从顶上留的那一行空行**下面**开始：第 1 行。
+    assert_eq!(frame[(0, 1)].symbol(), " ", "左边一列空气");
+    assert_eq!(frame[(1, 1)].symbol(), "▄", "然后是标记");
+    // 标记宽 38 列：2 + 38 = 40，所以最后一列空气在 39，
+    // 分隔线在 40。
+    assert_eq!(frame[(39, 1)].symbol(), " ", "右边也有一列");
 }
 
 #[test]
@@ -246,17 +255,17 @@ fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
     // （`.scratch/tui-input-pulse/spec.md` §2）。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
-        frame[(2, 1)].symbol(),
+        frame[(1, 1)].symbol(),
         "▄",
         "标记的第一行起于左栏的第一个内容行"
     );
     assert_eq!(
-        frame[(2, 1)].fg,
+        frame[(1, 1)].fg,
         Color::LightMagenta,
         "标记的顶端是亮的那一头"
     );
     assert_eq!(
-        frame[(2, 5)].fg,
+        frame[(1, 5)].fg,
         Color::Magenta,
         "而最下面那一行是暗的那一头"
     );
@@ -291,10 +300,10 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
     // 不归转录花（spec §2）。120 往上算宽档，
     // 80 到 119 算窄档，80 以下整条左栏不见。
     for (width, divider) in [
-        (174, 41u16),
-        (120, 41),
-        (100, 29),
-        (80, 29),
+        (174, 40u16),
+        (120, 40),
+        (100, 28),
+        (80, 28),
         (79, 0),
         (40, 0),
     ] {
@@ -304,29 +313,54 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
             .collect::<Vec<_>>()
             .join("\n");
         if divider == 0 {
-            assert!(
-                !text.contains('┬') && !text.contains('┴'),
-                "{width} 列时没有左栏：{text}"
-            );
+            assert!(!text.contains('┆'), "{width} 列时没有左栏：{text}");
         } else {
             assert_eq!(
                 frame[(divider, 0)].symbol(),
-                "┬",
+                "┆",
                 "{width} 列时分隔线在第 {divider} 列"
             );
-            // 主列的横线从分隔线起，到帧为止。
+            // 主列的横线从分隔线起，到屏幕右缘为止，而且它盖在
+            // 分隔列上（横线后画）。
             assert_eq!(
-                frame[(divider, 17)].symbol(),
-                "├",
-                "主列的横线也接上它：{text}"
+                frame[(divider, 18)].symbol(),
+                "┆",
+                "主列的横线挨着它画，竖线仍然贯通：{text}"
             );
         }
     }
 
     // 左栏在 80x14 下也画 —— 四行字段不再是地板了，
-    // 因为左栏自己的高度就是终端高度减掉那圈帧。
+    // 因为左栏自己的高度就是终端高度减掉顶上那一行留白。
     let smallest = buffer(80, 14, &mut state());
-    assert_eq!(smallest[(29, 0)].symbol(), "┬", "左栏在 80x14 下也画");
+    assert_eq!(smallest[(28, 0)].symbol(), "┆", "左栏在 80x14 下也画");
+}
+
+#[test]
+fn the_main_rules_stop_short_of_the_divide_column() {
+    // 竖线要从屏幕顶贯通到底：主列那两条横线从分隔列**右边一格**起画，
+    // 把分隔列那一格留给 `┆`（2026-10-01 真机反馈 —— 原先横线把竖线
+    // 截成了三截）。
+    let frame = buffer(120, 24, &mut state());
+    let divide = 40u16;
+    for y in [18u16, 22] {
+        assert_eq!(
+            frame[(divide, y)].symbol(),
+            "┆",
+            "第 {y} 行的分隔列仍是竖线"
+        );
+        assert_eq!(
+            frame[(divide + 1, y)].symbol(),
+            "┄",
+            "而横线紧跟在它右边：第 {y} 行"
+        );
+    }
+
+    // 没有左栏时没有竖线要让，横线从屏幕左缘起。
+    let narrow = buffer(60, 24, &mut state());
+    for y in [18u16, 22] {
+        assert_eq!(narrow[(0, y)].symbol(), "┄", "60 列下横线从第 0 列起");
+    }
 }
 
 #[test]
@@ -336,23 +370,23 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
     let rows = screen(40, 10, &mut state());
     for (row, line) in rows.iter().enumerate() {
         assert!(
-            line.starts_with(['┌', '│', '└', '├', '┤']),
-            "第 {row} 行属于帧：{line:?}"
+            !line.contains(['┌', '┐', '└', '┘']),
+            "第 {row} 行没有外框：{line:?}"
         );
     }
-    // 输入区的地板是三行，但两者相接的地方转录的最后一行优先：
-    // 在地板上输入区拿两行、转录保住一行
-    // （`.scratch/tui-input-pulse/spec.md` §1）。它的行是 5 与 6，横线
-    // 在它们上下，提示行两种情况都保住第八行。
-    assert_eq!(transcript_rows(&rows), 1, "一行转录：{rows:#?}");
+    // 外框与状态行上方那条线都走了之后，40x10 的地板宽裕了：
+    // 输入区拿满三行，转录还留三行
+    // （`.scratch/tui-chrome/spec.md` §1–§2）。输入区是第 5 到 7 行，
+    // 它上面那条横线在第 4 行，提示行在第 9 行。
+    assert_eq!(transcript_rows(&rows), 3, "三行转录：{rows:#?}");
     assert!(
-        rows[5].starts_with(&format!("│{}", editor::PROMPT)),
+        rows[5].starts_with(editor::PROMPT),
         "输入区的第一行是提示符那一行：{:?}",
         rows[5]
     );
     assert!(
-        rows[6].trim_matches(['│', ' ']).is_empty(),
-        "而且这里它只占两行，不是三行：{:?}",
+        rows[6].trim_matches(' ').is_empty(),
+        "它下面还有一行空白：{:?}",
         rows[6]
     );
     assert!(
@@ -365,7 +399,7 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
         "这是它丢掉的第一个东西：{:?}",
         rows[3]
     );
-    assert!(rows[8].contains("ctrl-c"), "提示行：{:?}", rows[8]);
+    assert!(rows[9].contains("ctrl-c"), "提示行：{:?}", rows[9]);
     assert!(
         !rows.join("\n").contains("fs-agent"),
         "左栏整条藏起来：{rows:#?}"
@@ -379,7 +413,7 @@ fn hint_items_of(width: u16, state: &mut TuiState) -> Vec<String> {
         .iter()
         .find(|row| row.contains("ctrl-c"))
         .expect("提示行在屏幕上");
-    row.trim_matches(|ch| ch == '│' || ch == ' ')
+    row.trim_matches(['┆', ' '])
         .split(" · ")
         .map(str::to_owned)
         .collect()
@@ -522,7 +556,7 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
 /// 那里。
 fn mark_colours(state: &mut TuiState) -> Vec<Color> {
     let frame = buffer(120, 24, state);
-    (1..=5u16).map(|y| frame[(2, y)].fg).collect()
+    (1..=5u16).map(|y| frame[(1, y)].fg).collect()
 }
 
 /// 人眼里看到的标记短横格：`fs-agent` 那条短横所在的四列
@@ -533,7 +567,7 @@ fn mark_colours(state: &mut TuiState) -> Vec<Color> {
 fn dash_cell(state: &mut TuiState) -> Vec<String> {
     let frame = buffer(120, 24, state);
     (1..=5u16)
-        .map(|y| cells(&frame, y, 2 + 10, 2 + 14))
+        .map(|y| cells(&frame, y, 1 + 10, 1 + 14))
         .collect()
 }
 
@@ -798,17 +832,16 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // 以及外壳让出的转录行数（spec §1–§2）。
     let cases = [
         // 宽、高、左栏档位、身份、状态行上有没有模型、转录行数
-        // 输入区的地板是三行，所以每个有余地的档位给转录
-        // `h - 7 - 3`；在 40x10 的地板上输入区改为拿两行，
-        // 转录保住它最后一行（`.scratch/tui-input-pulse/spec.md` §1）。
-        (40u16, 10u16, None, "", false, 1usize),
-        (40, 24, None, "", false, 14),
-        (60, 24, None, "", true, 14),
-        (80, 14, Some(28u16), "fs-agent", true, 4),
-        (80, 24, Some(28), "fs-agent", true, 14),
-        (100, 24, Some(28), "fs-agent", true, 14),
-        (120, 24, Some(40), "mark", true, 14),
-        (174, 50, Some(40), "mark", true, 40),
+        // 输入区的地板是三行，所以每个档位给转录 `h - 4 - 3`
+        // （`.scratch/tui-chrome/spec.md` §1–§2）。
+        (40u16, 10u16, None, "", false, 3usize),
+        (40, 24, None, "", false, 17),
+        (60, 24, None, "", true, 17),
+        (80, 14, Some(28u16), "fs-agent", true, 7),
+        (80, 24, Some(28), "fs-agent", true, 17),
+        (100, 24, Some(28), "fs-agent", true, 17),
+        (120, 24, Some(40), "mark", true, 17),
+        (174, 50, Some(40), "mark", true, 43),
     ];
     for (width, height, tier, identity, model, rows_expected) in cases {
         let rows = screen(width, height, &mut state());
@@ -818,8 +851,8 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             "{width}x{height} 在下限之内：{text}"
         );
         assert!(
-            rows[0].starts_with('┌') && rows[0].ends_with('┐'),
-            "{width}x{height} 有外框：{:?}",
+            !text.contains(['┌', '┐', '└', '┘']),
+            "{width}x{height} 没有外框：{:?}",
             rows[0]
         );
         assert!(
@@ -837,27 +870,29 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             rows_expected,
             "{width}x{height} 给转录 {rows_expected} 行：{rows:#?}"
         );
-        // 主列的第一条横线紧贴在转录下面：
-        // 外壳在任何尺寸下都不在自己的各部分之间留空行。
+        // 转录下面紧贴的是状态行（它上方那条线已经离开，
+        // `.scratch/tui-chrome/spec.md` §2），再下一行才是输入区
+        // 上面那条横线。
         assert!(
-            rows[TRANSCRIPT_TOP + rows_expected].ends_with('┤'),
-            "{width}x{height} 把第一条横线画在转录正下方：{:?}",
+            rows[TRANSCRIPT_TOP + rows_expected].contains("模式 询问"),
+            "{width}x{height} 转录正下方是状态行：{:?}",
             rows[rows_expected]
+        );
+        assert!(
+            rows[TRANSCRIPT_TOP + rows_expected + 1].ends_with('┄'),
+            "{width}x{height} 把那条横线画在状态行正下方：{:?}",
+            rows[rows_expected + 1]
         );
         match tier {
             Some(tier) => {
                 let frame = buffer(width, height, &mut state());
                 assert_eq!(
-                    frame[(tier + 1, 0)].symbol(),
-                    "┬",
-                    "{width}x{height} 把分隔线画在第 {} 列",
-                    tier + 1
+                    frame[(tier, 0)].symbol(),
+                    "┆",
+                    "{width}x{height} 把分隔线画在第 {tier} 列"
                 );
             }
-            None => assert!(
-                !text.contains('┬') && !text.contains('┴'),
-                "{width}x{height} 整条藏起左栏：{text}"
-            ),
+            None => assert!(!text.contains('┆'), "{width}x{height} 整条藏起左栏：{text}"),
         }
         assert_eq!(
             text.contains('▄'),
@@ -883,12 +918,17 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
     // 身份，再退到什么都不画 —— 这之后字段才从尾部离开（缓存 →
     // 输出 → 输入）。地板是页签条加 上下文 / token / 回合，宽度在这
     // 整件事里从不参与。
+    // 外框与状态行上方那条线离开之后，左栏的内容行**就是**终端高度
+    // （不再减二），于是「先退到文字身份、再退到什么都不画」的后两档
+    // 落到了 40×10 地板以下 —— 它们够不到了，而这也正是 40×10 现在
+    // 更宽裕的同一笔账（`.scratch/tui-chrome/spec.md` §1–§2）。
+    // 左栏顶上留的那一行空行是**花掉的**，所以阶梯看到的内容行是 `h − 1`。
     let cases = [
         // 高度、身份是什么、活下来几项读数
-        (16u16, "mark", 6usize),
-        (12, "fs-agent", 6),
-        (11, "none", 6),
-        (10, "none", 5),
+        (15u16, "mark", 6usize),
+        (14, "fs-agent", 6),
+        (11, "fs-agent", 6),
+        (10, "none", 6),
     ];
     for (height, identity, fields) in cases {
         let mut state = state();
@@ -1020,14 +1060,14 @@ fn only_the_tab_labels_answer_a_click() {
     let mut state = state();
     let frame = buffer(120, 24, &mut state);
     let (_, row) = tab_cell(&frame, 120, 24, "调用量");
-    let inside_the_sidebar = 2..40u16;
+    let inside_the_sidebar = 0..40u16;
     let fill = inside_the_sidebar
         .clone()
-        .find(|x| frame[(*x, row)].symbol() == "─")
+        .find(|x| frame[(*x, row)].symbol() == "┄")
         .expect("标签之后那一行是填充");
     let separator = inside_the_sidebar
         .clone()
-        .find(|x| frame[(*x, row)].symbol() == "│")
+        .find(|x| frame[(*x, row)].symbol() == "┆")
         .expect("标签之间有分隔");
 
     for column in [separator, fill] {
@@ -1315,12 +1355,11 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
     turns(&mut state, 30);
     let _ = screen(120, 24, &mut state);
 
-    // 窗口底端锚定在一个 `⋮` 下面：120x24 下转录是十四
-    // 行，所以一行是标记、十三行是格子 —— 单元 17 到 30，自上
-    // 而下。所以偏移 1 是单元 17（从末尾往回数十三个回合），
-    // 偏移 5 是单元 21（往回九个）。每一个都在全新状态里点，因为
-    // 跳转会移动视口 —— 也移动格子的窗口。
-    for (offset, unit) in [(1usize, 17u64), (5, 21)] {
+    // 窗口底端锚定在一个 `⋮` 下面：120x24 下转录是十七
+    // 行，所以一行是标记、十六行是格子 —— 单元 14 到 29，自上
+    // 而下。所以偏移 1 是单元 14，偏移 5 是单元 18。每一个都在
+    // 全新状态里点，因为跳转会移动视口 —— 也移动格子的窗口。
+    for (offset, unit) in [(1usize, 14u64), (5, 18)] {
         let mut state = TuiState::new(facts());
         turns(&mut state, 30);
         let _ = screen(120, 24, &mut state);
@@ -1508,13 +1547,13 @@ fn transcript_rows_at_120x24() -> usize {
 }
 
 /// 120x24 的主列，按列算：宽档左栏（40）加它的分隔线占
-/// 1 到 41，所以主列是 42..119 —— 它的转录把其中最后
-/// 两列留给滚动条（117）与回合条（118），剩下 42..116 给
+/// 0 到 40，所以主列是 41..119 —— 它的转录把其中最后
+/// 两列留给滚动条（118）与回合条（119），剩下 41..117 给
 /// 文本。
-const MAIN_LEFT_AT_120: u16 = 42;
-const TRANSCRIPT_TEXT_RIGHT_AT_120: u16 = 117;
-const SCROLLBAR_AT_120: u16 = 117;
-const RAIL_AT_120: u16 = 118;
+const MAIN_LEFT_AT_120: u16 = 41;
+const TRANSCRIPT_TEXT_RIGHT_AT_120: u16 = 118;
+const SCROLLBAR_AT_120: u16 = 118;
+const RAIL_AT_120: u16 = 119;
 
 /// 120x24 下转录的文本，每个显示行一个字符串。
 ///
@@ -1732,23 +1771,23 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
 fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read() {
     use fs_agent::render::RenderEvent;
 
-    // 120x24 下主列是 77 列，转录的文本占其中 75
+    // 120x24 下主列是 79 列，转录的文本占其中 77
     // 列：最后两列归滚动条与回合条，不管里面
-    // 画没画东西，所以文本在 75 列处折行，绝不会因为那两
+    // 画没画东西，所以文本在 77 列处折行，绝不会因为那两
     // 列在那儿而重新排（spec §1）。
-    const TEXT_X: u16 = 42;
-    const SCROLLBAR_X: u16 = 117;
+    const TEXT_X: u16 = 41;
+    const SCROLLBAR_X: u16 = 118;
     let mut state = state();
-    state.apply(RenderEvent::Notice("x".repeat(76)));
+    state.apply(RenderEvent::Notice("x".repeat(78)));
     let frame = buffer(120, 24, &mut state);
-    assert_eq!(frame[(TEXT_X, 1)].symbol(), "x", "这一行从主列的第一列开始");
+    assert_eq!(frame[(TEXT_X, 0)].symbol(), "x", "这一行从主列的第一列开始");
     assert_eq!(
-        frame[(TEXT_X, 2)].symbol(),
+        frame[(TEXT_X, 1)].symbol(),
         "x",
-        "76 列的文本溢出 75 列的文本区，落到第二行"
+        "78 列的文本溢出 77 列的文本区，落到第二行"
     );
     assert_eq!(
-        frame[(SCROLLBAR_X, 6)].symbol(),
+        frame[(SCROLLBAR_X, 5)].symbol(),
         " ",
         "全都放得下时预留的那一列什么都不画"
     );
@@ -1759,7 +1798,7 @@ fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read()
     let rows = screen(120, 24, &mut state);
     let transcript = transcript_rows(&rows) as u16;
     let frame = buffer(120, 24, &mut state);
-    for y in 1..1 + transcript {
+    for y in 0..transcript {
         assert_ne!(
             frame[(SCROLLBAR_X, y)].symbol(),
             " ",
@@ -1778,16 +1817,18 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let mut state = state();
     let empty = screen(80, 24, &mut state);
     let rows = transcript_rows(&empty);
-    assert_eq!(rows, 14, "输入区三行给转录留下十四行：{empty:#?}");
-    let input = TRANSCRIPT_TOP + rows + 3;
+    assert_eq!(rows, 17, "输入区三行给转录留下十七行：{empty:#?}");
+    // 转录下面依次是状态行与输入区上方那条横线，所以输入区
+    // 从转录底往下数第三行开始。
+    let input = TRANSCRIPT_TOP + rows + 2;
     assert!(
         empty[input].contains(editor::PROMPT),
         "提示符：{:?}",
         empty[input]
     );
     assert!(
-        empty[input + 1].trim_matches(['│', ' ']).is_empty()
-            && empty[input + 2].trim_matches(['│', ' ']).is_empty(),
+        empty[input + 1].trim_matches(['┆', ' ']).is_empty()
+            && empty[input + 2].trim_matches(['┆', ' ']).is_empty(),
         "它占住的那两行是空行，不是第二块：{:?} / {:?}",
         empty[input + 1],
         empty[input + 2]
@@ -1798,8 +1839,8 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     state.paste("第一行\n第二行\n第三行");
     let three = screen(80, 24, &mut state);
     let rows = transcript_rows(&three);
-    assert_eq!(rows, 14, "三行草稿在地板之内，所以几何不动：{three:#?}");
-    let input = TRANSCRIPT_TOP + rows + 3;
+    assert_eq!(rows, 17, "三行草稿在地板之内，所以几何不动：{three:#?}");
+    let input = TRANSCRIPT_TOP + rows + 2;
     assert!(three[input].contains("第一行"), "{:?}", three[input]);
     assert!(
         three[input + 1].contains("第二行"),
@@ -1823,7 +1864,7 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     let five = screen(80, 24, &mut state);
     assert_eq!(
         transcript_rows(&five),
-        12,
+        15,
         "超地板两行让转录少两行：{five:#?}"
     );
     assert!(
@@ -1877,26 +1918,25 @@ fn sidebar_page(rows: &[String]) -> usize {
     let mut rules = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.starts_with('├'))
+        .filter(|(_, row)| row.starts_with('┄'))
         .map(|(y, _)| y);
     rules.next().expect("页签条的上横线");
     rules.next().expect("页签条的下横线") + 1
 }
 
-/// 某一渲染行的左栏那一半：从它自己的左边框到分隔线，
-/// 两列都取掉。留白保留，因为某个值是右贴齐还是右边留白
+/// 某一渲染行的左栏那一半：从行首到分隔列，分隔列那一格取掉。
+/// 留白保留，因为某个值是右贴齐还是右边留白
 /// 正是其中一些测试要问的。
 ///
-/// 分隔线那一列不总是 `│`：主列的横线碰到它时
-/// 那一格是个交叉字符，而它也照样终止左栏。
+/// 分隔列那一格不总是 `┆`：主列的横线碰到它时
+/// 那一格是被它盖过去的 `┄`，而它也照样终止左栏。
 fn sidebar_row(row: &str) -> String {
-    let inner = row.trim_start_matches('│');
-    let end = inner
+    let end = row
         .char_indices()
-        .find(|(_, ch)| matches!(ch, '│' | '├' | '┤'))
+        .find(|(_, ch)| matches!(ch, '┆' | '┄'))
         .map(|(index, _)| index)
         .expect("分隔线终止了左栏");
-    inner[..end].to_owned()
+    row[..end].to_owned()
 }
 
 /// 某一渲染行的左栏那一半，按行号取。
@@ -2005,7 +2045,7 @@ fn state_without_budget() -> TuiState {
 
 #[test]
 fn the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must() {
-    // 80x14 是能容下全部六项读数的窄档：十二个内容行
+    // 80x14 是能容下全部六项读数的窄档：十四个内容行
     // 装着文字身份、页签条与六个字段。28 列那一档的代价
     // 是上下文行上的百分比 —— `12,345 / 200,000（6%）` 是 22
     // 列，而值那一列是 21（spec §2、§3）。
@@ -2116,7 +2156,11 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     assert!(text.contains("第 8 行"), "草稿在屏幕上：{text}");
-    assert_eq!(transcript_rows(&rows), 7, "草稿吃掉的是转录的行：{rows:#?}");
+    assert_eq!(
+        transcript_rows(&rows),
+        10,
+        "草稿吃掉的是转录的行：{rows:#?}"
+    );
     assert!(text.contains("上下文"), "左栏保住它的读数：{text}");
     assert!(
         text.contains("模型 claude-sonnet-4-5"),
@@ -2124,7 +2168,7 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
     );
     // 页签条与分隔线还在：左栏的命运不是
     // 草稿能决定的。
-    assert!(text.contains("调用量") && text.contains('┬'), "{text}");
+    assert!(text.contains("调用量") && text.contains('┆'), "{text}");
 }
 
 #[test]
@@ -2167,7 +2211,9 @@ fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
     let rows = screen(width, height, state);
     let mut out: Vec<String> = Vec::new();
     for row in rows.iter().skip(sidebar_page(&rows)) {
-        if !row.starts_with('│') {
+        // 主列的横线会在它经过的那一行把分隔列盖成 `┄`，所以两者都算
+        // 「这一行确实是左栏」的证据。
+        if !row.contains('┆') && !row.contains('┄') {
             break;
         }
         let field = sidebar_row(row);
@@ -2296,7 +2342,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
         .iter()
         .position(|row| row.contains("权限询问"))
         .expect("覆盖层在屏幕上");
-    assert!(rows[modal].contains('│'), "在一个框里：{:?}", rows[modal]);
+    assert!(rows[modal].contains('┆'), "在一个框里：{:?}", rows[modal]);
 
     // 模式手势在等：一个问句独占键盘，直到它被回答
     // （spec §9）。
@@ -2309,7 +2355,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
     let row = modal as u16;
     let frame = buffer(120, 24, &mut state);
     let borders: Vec<u16> = (MAIN_LEFT_AT_120..TRANSCRIPT_TEXT_RIGHT_AT_120)
-        .filter(|x| frame[(*x, row)].symbol() == "│")
+        .filter(|x| frame[(*x, row)].symbol() == "┆")
         .collect();
     assert_eq!(borders.len(), 2, "这个框的边框：{borders:?}");
     assert!(
@@ -2327,11 +2373,10 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
         .find(|y| frame[(left, *y)].symbol() == "└")
         .expect("框的下边框");
     assert_eq!(box_top + 1, row, "标题领在问句前面");
-    // 在主列里居中，而主列从帧的第一个内容行一直到
-    // 它的最后一行：上下的余地一样，差的是整数
-    // 除法留下的那一行。
+    // 在主列里居中，而主列如今就是整屏：上下的余地一样，
+    // 差的是整数除法留下的那一行。
     let above = box_top - TRANSCRIPT_TOP as u16;
-    let below = 22 - box_bottom;
+    let below = 23 - box_bottom;
     assert!(
         above.abs_diff(below) <= 1,
         "居中：框上面 {above} 行，下面 {below} 行"
@@ -2578,12 +2623,13 @@ fn tab_bar(state: &mut TuiState, width: u16, height: u16) -> String {
 fn sidebar_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
     let frame = buffer(width, height, state);
     (0..height)
-        .map(|y| cells(&frame, y, 1, SIDEBAR_COLUMNS))
+        .map(|y| cells(&frame, y, 0, SIDEBAR_COLUMNS))
         .collect()
 }
 
-/// 窄档的宽度，也正好是左栏不再被画出来的地方。
-const SIDEBAR_COLUMNS: u16 = 41;
+/// 宽档左栏加它那条分隔列占掉的列数：左栏 40 列，分隔线在第 40 列，
+/// 所以内容落在 0..39 上。
+const SIDEBAR_COLUMNS: u16 = 40;
 
 /// 页签条那些标签所在的行号。
 fn tab_bar_row(state: &mut TuiState, width: u16, height: u16) -> u16 {
@@ -2761,7 +2807,7 @@ fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
 
 #[test]
 fn the_four_tab_labels_fit_at_the_narrow_width() {
-    // 调用量│todo│轨迹│文件 是十一个格加三个分隔符，所以窄档
+    // 调用量┆todo┆轨迹┆文件 是十一个格加三个分隔符，所以窄档
     // 仍然放得下全部四个 —— 标签条不该把一个挤出边缘。
     let mut state = state_with_roster(&["kimi"]);
     apply_todo(
@@ -2774,7 +2820,7 @@ fn the_four_tab_labels_fit_at_the_narrow_width() {
     let bar = tab_bar(&mut state, 80, 24);
     assert!(
         bar.contains(&format!(
-            "{}│{}│{}│{}",
+            "{}┆{}┆{}┆{}",
             wording::TAB_USAGE,
             wording::TAB_TODO,
             wording::TAB_TRACE,
@@ -2789,14 +2835,14 @@ fn the_four_tab_labels_fit_at_the_narrow_width() {
     // 以及来自同一份标签列表的命中矩形）。
     let frame = buffer(80, 24, &mut state);
     let row = tab_bar_row(&mut state, 80, 24);
-    let inside_the_sidebar = 2..29u16;
+    let inside_the_sidebar = 0..28u16;
     let fill = inside_the_sidebar
         .clone()
-        .find(|x| frame[(*x, row)].symbol() == "─")
+        .find(|x| frame[(*x, row)].symbol() == "┄")
         .expect("四个标签之后那一行是填充");
     let separator = inside_the_sidebar
         .clone()
-        .find(|x| frame[(*x, row)].symbol() == "│")
+        .find(|x| frame[(*x, row)].symbol() == "┆")
         .expect("标签之间有分隔");
     for column in [separator, fill] {
         state.mouse(click(column, row));
@@ -2877,7 +2923,7 @@ fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16,
     let column = row_text(frame, row, width).find(needle).unwrap() as u16;
     let x = (0..column)
         .rev()
-        .find(|c| frame[(*c, row)].symbol() == "│")
+        .find(|c| frame[(*c, row)].symbol() == "┆")
         .expect("菜单的左边框");
     let top = (0..row)
         .rev()
@@ -2896,7 +2942,7 @@ fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16,
 /// 所以它跟在左栏与分隔线后面。
 fn input_row(rows: &[String]) -> usize {
     rows.iter()
-        .position(|row| row.contains(&format!("│{}", editor::PROMPT)))
+        .position(|row| row.contains(&format!("┆{}", editor::PROMPT)))
         .expect("输入区那一行")
 }
 
@@ -2947,7 +2993,7 @@ fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
         state.key(Key::Char(ch));
     }
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("│ /"), "没指到东西的前缀没有菜单：\n{text}");
+    assert!(!text.contains("┆ /"), "没指到东西的前缀没有菜单：\n{text}");
 }
 
 #[test]
@@ -2979,11 +3025,11 @@ fn tab_fills_the_highlighted_name_in_and_does_not_submit_it() {
     );
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(&format!("│{}/ask-matt", editor::PROMPT)),
+        text.contains(&format!("┆{}/ask-matt", editor::PROMPT)),
         "名字在草稿里：\n{text}"
     );
     // 而且补全把菜单关上了，所以后面还能接着打一个任务名。
-    assert!(!text.contains("│ /ask-matt"), "菜单结束了：\n{text}");
+    assert!(!text.contains("┆ /ask-matt"), "菜单结束了：\n{text}");
 }
 
 #[test]
@@ -3067,10 +3113,10 @@ fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
     // 扔掉，也没有清掉一行长的草稿（spec §6、§7）。
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(&format!("│{}/", editor::PROMPT)),
+        text.contains(&format!("┆{}/", editor::PROMPT)),
         "草稿还在那儿：\n{text}"
     );
-    assert!(!text.contains("│ /undo"), "菜单不见了：\n{text}");
+    assert!(!text.contains("┆ /undo"), "菜单不见了：\n{text}");
     assert!(!text.contains("清空输入"), "什么都没被问：\n{text}");
 }
 
@@ -3085,7 +3131,7 @@ fn a_question_hides_the_menu_because_it_owns_the_keyboard() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("权限询问"), "问句起来了：\n{text}");
     assert!(
-        !text.contains("│ /undo"),
+        !text.contains("┆ /undo"),
         "也没有东西在提供回答别的东西的键位：\n{text}"
     );
 }
@@ -3112,7 +3158,7 @@ fn the_menu_keeps_its_corners_over_text_that_is_not_ascii() {
         } else if y == bottom {
             ("└", "┘")
         } else {
-            ("│", "│")
+            ("┆", "┆")
         };
         assert_eq!(frame[(x, y)].symbol(), left, "第 {y} 行，左边框");
         assert_eq!(frame[(right, y)].symbol(), rightmost, "第 {y} 行，右边框");
@@ -3124,7 +3170,7 @@ fn there_is_no_menu_before_the_loop_has_said_what_exists() {
     let mut state = state();
     state.key(Key::Char('/'));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("│ /"), "空清单什么都提供不了：\n{text}");
+    assert!(!text.contains("┆ /"), "空清单什么都提供不了：\n{text}");
 }
 
 #[test]
@@ -3183,7 +3229,11 @@ fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
 }
 
 #[test]
-fn the_wheel_is_ignored_while_a_question_is_up() {
+fn the_wheel_follows_the_pointer_while_a_question_is_up() {
+    // 这是 `tui-chrome` 推翻掉的那条旧规矩的替代品：问题立着时，
+    // 滚轮**不再**被一口吃掉，而是看指针落在哪一块
+    // （`.scratch/tui-chrome/spec.md` §5）。点击的优先级没变 ——
+    // 覆盖层仍然先接点击，变的是滚轮。
     use fs_agent::render::{Key, RenderEvent};
     use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
@@ -3198,15 +3248,30 @@ fn the_wheel_is_ignored_while_a_question_is_up() {
     let (ask, _rx) = ask_permission();
     state.request(ask);
     let _ = screen(120, 24, &mut state);
+
+    // 指针落在覆盖层**之外**（这张 120x24 的屏上它横跨第 44 到 115 列，
+    // 第 8 到 14 行）——那里是左栏，于是滚轮归背后的转录。
     state.mouse(MouseEvent {
         kind: MouseEventKind::ScrollUp,
         column: 10,
         row: 10,
         modifiers: KeyModifiers::empty(),
     });
+    let outside = first_notice(&screen(120, 24, &mut state));
+    assert_ne!(outside, before, "覆盖层外的滚轮滚的是转录");
 
-    // 模态独占指针：视口恰好在原地。
-    assert_eq!(first_notice(&screen(120, 24, &mut state)), before);
+    // 落在覆盖层**里面**：模态自己没有可滚的内容，所以视口恰好停在原地。
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 60,
+        row: 10,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(
+        first_notice(&screen(120, 24, &mut state)),
+        outside,
+        "覆盖层里的滚轮不碰它背后的转录"
+    );
 }
 
 #[test]
@@ -3230,7 +3295,7 @@ fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
 
     let frame = buffer(120, 24, &mut state);
     let borders: Vec<u16> = (MAIN_LEFT_AT_120..TRANSCRIPT_TEXT_RIGHT_AT_120)
-        .filter(|x| frame[(*x, title as u16)].symbol() == "│")
+        .filter(|x| frame[(*x, title as u16)].symbol() == "┆")
         .collect();
     assert_eq!(borders.len(), 2, "这个框的边框：{borders:?}");
     assert_eq!(
@@ -3721,10 +3786,12 @@ fn state_with_roster(names: &[&str]) -> TuiState {
 /// 滚轮一格。
 fn wheel(kind: ratatui::crossterm::event::MouseEventKind) -> ratatui::crossterm::event::MouseEvent {
     use ratatui::crossterm::event::{KeyModifiers, MouseEvent};
+    // 落在问卷占着的底部块里（120x24 下输入区是第 19 到 21 行）。
+    // 详情覆盖层整块占着指针，所以这一个坐标对它没有影响。
     MouseEvent {
         kind,
-        column: 40,
-        row: 10,
+        column: 41,
+        row: 20,
         modifiers: KeyModifiers::empty(),
     }
 }
@@ -3971,11 +4038,11 @@ fn the_questionnaire_footer_pages_with_a_click() {
     assert!(text.contains("下一题 →"), "但有下一题：{text}");
 
     // 点一下往前走，第二个问题提供回去的路。
-    click_in_row(&mut state, 120, 24, 22, "下一题 →");
+    click_in_row(&mut state, 120, 24, 23, "下一题 →");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("2 / 2"), "这次点击翻到下一页：{text}");
     assert!(text.contains("← 上一题"), "回去的路出现了：{text}");
-    click_in_row(&mut state, 120, 24, 22, "← 上一题");
+    click_in_row(&mut state, 120, 24, 23, "← 上一题");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2"), "这次点击翻回上一页：{text}");
     assert!(answers.try_recv().is_err(), "翻页从不提交");
@@ -4013,7 +4080,7 @@ fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
     assert!(focused.is_some(), "这次点击把光标放到自定义那一行上");
 
     // 翻走会重置焦点：下一个问题的自定义行起步时没有焦点。
-    click_in_row(&mut state, 120, 24, 22, "下一题 →");
+    click_in_row(&mut state, 120, 24, 23, "下一题 →");
     let (_, after) = frame_and_cursor(120, 24, &mut state);
     assert_eq!(after, None, "翻页重置了焦点");
 }
@@ -4043,6 +4110,50 @@ fn the_wheel_moves_the_questionnaire_highlight() {
     state.mouse(wheel(ratatui::crossterm::event::MouseEventKind::ScrollDown));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("> ○ 2. 乙"), "滚轮挪动了高亮：{text}");
+}
+
+#[test]
+fn the_wheel_over_the_transcript_scrolls_it_while_a_questionnaire_is_up() {
+    // 问卷占着底部输入区，而转录还在上面露着 —— 指针在转录上，
+    // 滚的就是转录；问卷的高亮一动不动（`.scratch/tui-chrome/spec.md` §5）。
+    use fs_agent::questions::{Choice, UserQuestion};
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![
+            Choice {
+                label: "甲".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: "乙".to_owned(),
+                description: None,
+            },
+        ],
+    });
+    for index in 0..40 {
+        state.apply(fs_agent::render::RenderEvent::Notice(format!(
+            "第 {index} 行"
+        )));
+    }
+    let _ = screen(120, 24, &mut state);
+    let before = first_notice(&screen(120, 24, &mut state));
+
+    // 指针落在转录上（第 5 行），而问卷在下半屏。
+    state.mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 60,
+        row: 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    let after = first_notice(&screen(120, 24, &mut state));
+    assert_ne!(after, before, "指针在转录上就滚转录");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("> ○ 1. 甲"), "而高亮留在原处：{text}");
 }
 
 #[test]
@@ -4175,13 +4286,13 @@ fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
     };
 
     // 第一个问题上只画了 `下一题 →`。点它的字形就前进。
-    click_in_row(&mut state, 120, 24, 22, "下一题 →");
+    click_in_row(&mut state, 120, 24, 23, "下一题 →");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("2 / 2"), "这次点击前进了：{text}");
 
     // 第二个问题先画的是 `← 上一题`：点它就回去，别让
     // 它落在别的任何东西上。
-    click_in_row(&mut state, 120, 24, 22, "← 上一题");
+    click_in_row(&mut state, 120, 24, 23, "← 上一题");
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("1 / 2"), "这次点击回去了：{text}");
     assert!(answers.try_recv().is_err(), "翻页从不提交");
@@ -4340,6 +4451,10 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     // 可打印的键也到不了草稿：覆盖层的键就是
     // 覆盖层的，它后面的编辑器没在被打字。
     state.key(Key::Char('x'));
+    // 详情覆盖层现在屏幕居中（`.scratch/tui-chrome/spec.md` §4），
+    // 120x40 下它横跨第 2 到 117 列，把输入区的提示符也压在下面 ——
+    // 所以草稿要等覆盖层关掉之后才看得见。
+    state.key(Key::Esc);
     let rows = screen(120, 40, &mut state);
     let input = rows
         .iter()
@@ -4428,14 +4543,14 @@ fn the_detail_overlay_is_wider_than_a_question() {
         detail > question,
         "详情覆盖层（{detail}）比问句的（{question}）宽"
     );
-    // 120 列下压着两者的是主列：77 列减去
-    // 边距留住的四列，给详情留下 73（它那个 135 列的上限到不了），
-    // 给问句留下 72。
-    assert_eq!(detail, 73, "120 列下的详情覆盖层");
+    // 120 列下压着详情覆盖层的是屏幕自己的边距：120 减去
+    // 边距留住的四列，给它 116（那个 135 列的上限到不了）；
+    // 问句的覆盖层仍然对着主列量，留下 72。
+    assert_eq!(detail, 116, "120 列下的详情覆盖层");
     assert_eq!(question, 72, "而问句那个 72 列的上限");
 
-    // 要撞到上限，终端得宽到主列能长过它：
-    // 200 列留下 157，四列的边距再留下 153 —— 越过了详情
+    // 要撞到上限，终端得宽到屏幕自己长过它：
+    // 200 列留下 196，四列的边距再留下 192 —— 越过了详情
     // 覆盖层从不超出的那个 135。
     let mut wide = state_with_roster(&["kimi"]);
     wide.apply(tool_started(
@@ -4453,8 +4568,8 @@ fn the_detail_overlay_is_wider_than_a_question() {
 
 /// 一个浮动框画出来的宽度，从它上边框所在的那一行读出来。
 ///
-/// 覆盖层在主列里居中，而主列自己的边框在它两侧各
-/// 往外一列 —— 所以找这个框的办法是找那个**不在**第一列的 `┌`，
+/// 覆盖层都不贴第一列：详情居中在屏幕上，问句居中在主列里，
+/// 两者两侧都留着余地 —— 所以找这个框的办法是找那个**不在**第一列的 `┌`，
 /// 然后量到与它配对的 `┐`。
 fn overlay_width(frame: &Buffer, width: u16, height: u16) -> Option<u16> {
     for y in 0..height {
@@ -4522,11 +4637,11 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     // 落在覆盖层的矩形里，在下面读出来的两条边框之间。
     let frame = buffer(120, 40, &mut state);
     let overlay = overlay_width(&frame, 120, 40).expect("覆盖层");
-    assert_eq!(overlay, 73, "120 列下压着覆盖层的是主列，不是那个上限");
+    assert_eq!(overlay, 116, "120 列下压着详情覆盖层的是屏幕自己的边距");
     assert_eq!(
-        (frame[(44, 12)].symbol(), frame[(116, 12)].symbol()),
-        ("│", "│"),
-        "那就是它在那次点击落到的行上的两条边"
+        (frame[(2, 12)].symbol(), frame[(117, 12)].symbol()),
+        ("┆", "┆"),
+        "那就是它在那次点击落到的行上的两条边 —— 屏幕居中，所以压着左栏"
     );
 }
 
@@ -4897,7 +5012,7 @@ fn the_permission_question_describes_the_call_the_way_the_line_does() {
     );
     let description = rows
         .iter()
-        .position(|row| row.contains("调用 bash 查看 README.md") && row.contains('│'))
+        .position(|row| row.contains("调用 bash 查看 README.md") && row.contains('┆'))
         .expect("覆盖层里的描述行");
     let call = rows
         .iter()

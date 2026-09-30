@@ -12,8 +12,8 @@
 `lash` 坐在偏移 62 上，所以横幅活下来的正好就是这么多。
 
 它现在守进程的两头，因为这两头只有 pty 看得见（spec §Testing Decisions）：第一帧
-—— 状态行整行画出、横幅只出现一次、身份（左栏里的标记）在场、外框与它的分隔列
-都在 —— 以及 `Ctrl-C` 之后终端被交还回什么 —— 备用屏幕、鼠标上报、括号粘贴
+—— 状态行整行画出、横幅只出现一次、身份（左栏里的标记）在场、分隔列与主列
+那两条横线都在 —— 以及 `Ctrl-C` 之后终端被交还回什么 —— 备用屏幕、鼠标上报、括号粘贴
 （bracketed paste）、以及 tty 的规范 / 回显标志。光标、鼠标与缩放仍留在手工清单
 里（`docs/tui-manual-checklist.md`）。
 
@@ -64,12 +64,12 @@ REPLAY_PROGRESS_ANCHOR = "恢复"
 # 标记是程序在左栏里的身份，所以两者任一都证明左栏画出来了；只认文字身份的话，
 # 标记一上屏它就红。
 MARK_ROW = "▄▀▀█"
-# 一圈外框框住一切，外加左栏与主列之间的那条分隔列、主列里的三条横线 —— 外框没了，
-# 就说明外壳也跟着没了。每个方向只要三格，是刻意远低于一屏实际画出的量：这是降级
-# 护栏，不是几何断言。横竖分开数，因为分隔列是一条孤立的竖线 —— 外框没了它还在 ——
-# 把所有画框字符合起来数，会把一屏没有边框的界面判成绿。
-BORDER_H = "─"
-BORDER_V = "│"
+# 外壳的框架如今全是**虚线**（`.scratch/tui-chrome/spec.md` §3）：左栏与主列之间的
+# 那条分隔列、主列里的两条横线、以及页签条自己的两条。框架没了，就说明外壳也跟着
+# 没了。每个方向只要三格，是刻意远低于一屏实际画出的量：这是降级护栏，不是几何
+# 断言。横竖分开数，因为分隔列是一条孤立的竖线 —— 页签条那两条只在左栏里，数不到它。
+BORDER_H = "┄"
+BORDER_V = "┆"
 # 退出时要交还给终端的东西（spec §5、§19）：备用屏幕、crossterm 关掉的每一种编码的
 # 鼠标上报、以及括号粘贴。`stty`/termios 另算，因为原始模式（raw mode）是一个 termios
 # 标志，不是转义序列。
@@ -358,7 +358,7 @@ def verdict(run, devnull, identity, replay=False):
     horizontal = sum(r.count(BORDER_H) for r in rows)
     vertical = sum(r.count(BORDER_V) for r in rows)
     if horizontal < 3 or vertical < 3:
-        return False, "the pane frames are gone: %d horizontal / %d vertical" % (
+        return False, "the shell's rules are gone: %d horizontal / %d vertical" % (
             horizontal,
             vertical,
         )

@@ -7,7 +7,7 @@
 - **票**在 `issues/NN-<slug>.md`，**一票一个文件**，每票开头有 `Type:` 与 `Status:`（`ready-for-agent` / `done`；wayfinder 的决策票是 `claimed` / `resolved`），`Blocked by:` 记阻塞边；
 - **顺序**：blockers 先做；每票自包含，所以做完一票就可以把它的 context 丢掉。
 
-下表由 `ls` / `grep '^Status:'` / `head -1` 核过（2026-09-26；`todo-and-modes` 的票数与状态在这一轮收尾时改过一次；`language-migration` 那一行按 2026-09-27 两张票的落地更新过，2026-09-30 补票 03、并把票 04 记成 `ready-for-agent`；2026-10-01 `sandbox` 由 seed 折成 spec、新增 `workspace-mode` 种子，同日五张票落地并改成 `5/5 done`；同日 `workspace-mode` 的种子也折成 spec、拆出两张票并双双落地）。
+下表由 `ls` / `grep '^Status:'` / `head -1` 核过（2026-09-26；`todo-and-modes` 的票数与状态在这一轮收尾时改过一次；`language-migration` 那一行按 2026-09-27 两张票的落地更新过，2026-09-30 补票 03、并把票 04 记成 `ready-for-agent`；2026-10-01 `sandbox` 由 seed 折成 spec、新增 `workspace-mode` 种子，同日五张票落地并改成 `5/5 done`；同日 `workspace-mode` 的种子也折成 spec、拆出两张票并双双落地；同日 TUI 外壳做了减法，`tui-chrome` 的八张票一次落地 —— 第一轮六张（去外框、虚线化、详情居中、按位置滚动），随后一轮真机反馈又补了两张（左栏身份下移一行、横线不再截断竖线））。
 
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
@@ -18,6 +18,7 @@
 | [`tui-history-replay/`](tui-history-replay/spec.md) | map + spec | 重新打开会话：历史重播与历史详情 —— **已折成本目录的 spec** | 5 resolved + 4 done |
 | [`tui-ux/`](tui-ux/map.md) | map | TUI 使用体验与视觉效果优化（wayfinder 决策图）—— **已折成 [`tui-layout/spec.md`](tui-layout/spec.md) §14** | 8/8 resolved |
 | [`tui-input-pulse/`](tui-input-pulse/spec.md) | spec | 输入区三行 + 提示符色相（忙碌信号试了六版，最后落在提示符的色相上） | 9/9 done |
+| [`tui-chrome/`](tui-chrome/spec.md) | spec | TUI 外壳收干净：拆掉四周外框、状态行上方那条线离场、剩余框架虚线化并压深、详情覆盖层屏幕居中、覆盖层立着时滚轮按指针位置分派（各推翻 `tui-sidebar` spec §1 与 §7 的一半）；§6 是随后一轮真机反馈的两条微调（左栏身份下移一行、横线不再截断竖线） | 8/8 done |
 | [`chinese-ui/`](chinese-ui/spec.md) | spec | 界面中文化：给人看的文本收进一个措辞层 | 8/8 done |
 | [`ask-user-question/`](ask-user-question/seed.md) | seed | 种子材料：模型发起的「选择工具」与底部问卷接管 —— **已落成 [`fs-agent-v1` 票 32](fs-agent-v1/issues/32-ask-user-question-tool.md)（done）**，本目录不会再有 spec | — |
 | [`todo-and-modes/`](todo-and-modes/spec.md) | spec | 计划从「权限模式」改成模型自己的 `todo` 工具；模式回到 `readonly`/`ask`/`auto` 三档并补齐入口；侧栏加 `todo` 标签（推翻 `fs-agent-v1` §13，留了 [ADR 0003](../docs/adr/0003-plan-leaves-the-permission-modes.md)） | 4/4 done |

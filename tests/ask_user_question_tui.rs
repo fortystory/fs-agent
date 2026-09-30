@@ -121,24 +121,24 @@ fn the_question_and_its_options_take_over_the_bottom_input_area() {
     assert!(text.contains("2. manual"), "{text}");
 
     // 它在主列脚下那块输入区里，不是中间的覆盖层：
-    // 它的那一行坐在输入区上面那条横线之下，而屏幕上
-    // 仍然只有外壳这一个框。
-    let frame_bottom = rows
+    // 它的那一行坐在输入区上面那条横线之下，而屏幕上如今一个框角
+    // 都没有 —— 外壳没有外框，问卷自己也没有边框
+    // （`.scratch/tui-chrome/spec.md` §1）。
+    let input_rule = rows
         .iter()
-        .rposition(|row| row.starts_with('└'))
-        .expect("外壳的下边框");
+        .position(|row| row.ends_with('┄'))
+        .expect("输入区上面那条横线");
     let question_row = rows
         .iter()
         .position(|row| row.contains("Which framework?"))
         .expect("这个问句在屏幕上");
     assert!(
-        question_row < frame_bottom,
-        "这个问句画在外壳里面：\n{text}"
+        question_row > input_rule,
+        "这个问句画在底部输入区里，不是浮在中间的覆盖层：\n{text}"
     );
-    let opens = rows.iter().filter(|row| row.starts_with('┌')).count();
-    assert_eq!(
-        opens, 1,
-        "没有任何框浮在转录上面：只有外壳自己那个角：\n{text}"
+    assert!(
+        !text.contains(['┌', '┐', '└', '┘']),
+        "没有任何框浮在转录上面：\n{text}"
     );
 }
 

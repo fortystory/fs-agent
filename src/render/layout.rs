@@ -16,11 +16,17 @@ use crate::render::editor::Placed;
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 10;
 
-/// 外壳花在既不是转录也不是输入区的那些构件上的行：外框的两行、主列的三条分隔线、状态行
-/// 与提示行。`转录行 = h − CHROME − 输入行数`，这就是纵向算术的全部（spec §1）。
-const CHROME: u16 = 7;
+/// 外壳花在既不是转录也不是输入区的那些构件上的行：主列的两条分隔线、状态行与提示行。
+/// `转录行 = h − CHROME − 输入行数`，这就是纵向算术的全部（spec §1、§2）。
+///
+/// 它从 7 一路减到这里，两笔账都是 `tui-chrome` 的：外框的上下两行随外框一起离开（§1），
+/// 状态行上方那条线也离开、它占的那一行还给了转录（§2）。
+const CHROME: u16 = 4;
 
-/// 外框的两条边框列。
+/// **一个带框浮层**花掉的行列：它的内容矩形 = 四边各内缩一格。
+///
+/// 外壳不再用它 —— 外框已经离开（spec §1），内容区就是终端本身。它现在只服务那三块自己
+/// 带框的东西：问题覆盖层、`/` 菜单、详情覆盖层。
 const BORDER_COLUMNS: u16 = 2;
 
 /// 页签条花掉的行：一条分隔线、标签、一条分隔线（spec §3）。
@@ -44,6 +50,13 @@ const SIDEBAR_WIDE_FROM: u16 = 120;
 
 /// 低于这个宽度，左栏整栏隐藏，主列拿走一切。
 const SIDEBAR_NARROW_FROM: u16 = 80;
+
+/// 左栏顶上留的那一行空行：身份（标记或文字身份）从它下面一行才开始
+/// （2026-10-01 真机反馈 —— 紧贴屏幕顶上太挤）。
+///
+/// 它只花左栏自己的行（主列与转录不受影响），并且计入左栏的内容高度：留白是**花掉的**，
+/// 不是白得的，所以高度阶梯照旧由「内容行够不够」决定。
+const SIDEBAR_TOP_GAP: u16 = 1;
 
 /// 标记自己的宽度，与画家共用，好让两者不会脱节。
 pub const LOGO_WIDTH: u16 = 38;
@@ -95,7 +108,10 @@ impl SidebarKind {
 /// 一帧的那些区域，用终端坐标表示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Regions {
-    /// 主列：外框之内、分隔线右侧的一切。浮动的覆盖层就是在它里面居中的（spec §1）。
+    /// 整屏。外壳如今不再内缩，所以它就是内容区（spec §1）。详情覆盖层在**它**里面居中
+    /// （§4）——而问题覆盖层仍然在主列里，两者故意不同基准。
+    pub screen: Rect,
+    /// 主列：分隔线右侧的一切。问题覆盖层与 `/` 菜单在它里面定位。
     pub main: Rect,
     /// 转录的那些行：文字、滚动条与回合条合在一起。
     pub transcript: Rect,
@@ -154,31 +170,39 @@ impl Regions {
             .min(MODAL_MAX_WIDTH)
     }
 
-    /// 详情覆盖层的宽度：与问题一样的居中，但有自己（更宽）的上限。一段工具输出是正文，
-    /// 不是一句话，所以允许它有更多余地，免得眼睛来回跑（票 03 §Answer）。
+    /// 详情覆盖层的宽度：屏幕减去两侧边距，封顶是它自己的上限。一段工具输出是正文，不是
+    /// 一句话，所以允许它有更多余地，免得眼睛来回跑（票 03 §Answer）。
+    ///
+    /// 基准是**整屏**而不是主列（spec §4）：覆盖层居中在屏幕上，宽度也该对着屏幕量。120 列
+    /// 下封住它的仍然是边距（116 < 135），与改动前同宽；80 列下它明显变宽（76 而不是
+    /// `主列宽 − 4`）—— 那是「屏幕居中」的应有之义。
     pub fn detail_width(&self) -> u16 {
-        self.main
+        self.screen
             .width
             .saturating_sub(MODAL_MARGIN)
             .min(DETAIL_MAX_WIDTH)
     }
 
-    /// 详情覆盖层去哪儿：在主列里居中，比上下边框各短一行，好让转录在上下各留一条边。
+    /// 详情覆盖层去哪儿：**在屏幕上居中**（spec §4），比上下各短一行，好让转录在上下各留
+    /// 一条边。
+    ///
+    /// 它刻意与 [`Regions::modal`] 不同基准：问题覆盖层留在主列里（问答期间压掉左栏会盖住
+    /// 会话读数），而详情是「读一页正文」，居中在屏幕上看起来才是正的。两者不同不是笔误。
     ///
     /// 终端小到显示不出有用的正文时是 `None` —— 与 [`Regions::modal`] 给的是同一个诚实
     /// 答案，而那时详情视图干脆不打开，而不是打开成两行边框。
     pub fn detail(&self) -> Option<Rect> {
         let width = self.detail_width();
-        if width <= BORDER_COLUMNS || self.main.height <= BORDER_COLUMNS + DETAIL_MIN_ROWS {
+        if width <= BORDER_COLUMNS || self.screen.height <= BORDER_COLUMNS + DETAIL_MIN_ROWS {
             return None;
         }
         let height = self
-            .main
+            .screen
             .height
             .saturating_sub(BORDER_COLUMNS + DETAIL_MARGIN_ROWS);
         Some(Rect::new(
-            self.main.x + (self.main.width - width) / 2,
-            self.main.y + (self.main.height - height) / 2,
+            self.screen.x + (self.screen.width.saturating_sub(width)) / 2,
+            self.screen.y + (self.screen.height.saturating_sub(height)) / 2,
             width,
             height,
         ))
@@ -264,24 +288,30 @@ pub fn content_width(area: Rect) -> u16 {
 /// 长；左栏自己的高度决定它的哪些部分活下来（spec §2）。
 ///
 /// 输入区自己的阶梯是 [`MIN_INPUT_ROWS`] … [`MAX_INPUT_ROWS`]，而地板被余地夹住：两者相
-/// 撞处**转录的最后一行优先**，所以 40×10 画出一个两行的输入区、上面留一行转录，而不是三行
-/// 输入区、转录一行不剩。
+/// 撞处**转录的最后一行优先**。外框与状态行上方那条线相继离开之后（spec §1–§2），40×10
+/// 下那份余地足够让输入区拿满三行，同时转录还留三行 —— 不再是「两行输入区、一行转录」。
 pub fn plan(area: Rect, draft_rows: u16) -> Regions {
-    let inner = inner(area);
+    // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
     let tier = sidebar_tier(area.width);
-    let (sidebar_kind, fields) = sidebar_content(area.width, inner.height);
+    // 左栏顶上先让出一行空行，再算它的身份与字段 —— 留白是花掉的行，所以阶梯看到的是
+    // 减掉它之后的高度。
+    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
+    let (sidebar_kind, fields) = sidebar_content(area.width, sidebar_rows);
     let input_rows = draft_rows
         .max(MIN_INPUT_ROWS)
         .min(max_input_rows(area.height));
     let transcript_rows = area.height.saturating_sub(CHROME + input_rows);
 
-    let sidebar = tier.map(|tier| Rect::new(inner.x, inner.y, tier, inner.height));
-    let divide = tier.map(|tier| inner.x + tier);
-    let main_x = divide.map_or(inner.x, |divide| divide + 1);
-    let main = Rect::new(main_x, inner.y, main_width(area.width), inner.height);
+    let sidebar = tier.map(|tier| Rect::new(area.x, area.y + SIDEBAR_TOP_GAP, tier, sidebar_rows));
+    let divide = tier.map(|tier| area.x + tier);
+    let main_x = divide.map_or(area.x, |divide| divide + 1);
+    let main = Rect::new(main_x, area.y, main_width(area.width), area.height);
 
+    // 状态行**紧贴**转录的最后一行：它上方那条线已经不画了，省下的一行整行还给了转录
+    // （spec §2）。它下面两条线各占一行 —— 而 `bottom()` 是排他的，所以那条线正好落在
+    // `status.bottom()` / `input.bottom()` 自己那一行上，内容从下一行起。
     let transcript = Rect::new(main.x, main.y, main.width, transcript_rows);
-    let status = Rect::new(main.x, transcript.bottom() + 1, main.width, 1);
+    let status = Rect::new(main.x, transcript.bottom(), main.width, 1);
     let input = Rect::new(main.x, status.bottom() + 1, main.width, input_rows);
     let hints = Rect::new(main.x, input.bottom() + 1, main.width, 1);
     let rail = Rect::new(
@@ -292,6 +322,7 @@ pub fn plan(area: Rect, draft_rows: u16) -> Regions {
     );
 
     Regions {
+        screen: area,
         main,
         transcript,
         rail,
@@ -332,10 +363,12 @@ fn sidebar_tier(width: u16) -> Option<u16> {
     }
 }
 
-/// 主列拿到的那些列：外框的边框，以及左栏画出来时它连同分隔线那一列。
+/// 主列拿到的那些列：整屏减去左栏（它画出来时连同分隔线那一列）。
+///
+/// 外框已经不占列了（spec §1），所以这里只剩左栏这一笔账。
 fn main_width(width: u16) -> u16 {
     let sidebar = sidebar_tier(width).map_or(0, |tier| tier + 1);
-    width.saturating_sub(BORDER_COLUMNS + sidebar)
+    width.saturating_sub(sidebar)
 }
 
 /// 给定左栏自己的内容高度，它的身份以及它能显示几个用量字段。
@@ -369,7 +402,10 @@ fn sidebar_content(width: u16, content_rows: u16) -> (SidebarKind, u16) {
     (kind, fields)
 }
 
-/// 一个带框区域的内容矩形。
+/// 一个带框区域的内容矩形：四边各内缩一格。
+///
+/// 它现在只服务**自己带框**的浮层 —— 问题覆盖层、`/` 菜单、详情覆盖层。外壳不再内缩
+/// （spec §1），所以 [`plan`] 与 [`main_width`] 都不再用它。
 pub fn inner(area: Rect) -> Rect {
     Rect::new(
         area.x + 1,
@@ -381,7 +417,7 @@ pub fn inner(area: Rect) -> Rect {
 
 /// 这个尺寸下输入区最多能拿几行：它的上限，或者转录留住自己那行地板之后剩下的，两者取小。
 ///
-/// 40×10 下那份余地是两行，所以在那里给输入区的是这个 —— 不是 [`MIN_INPUT_ROWS`]。
+/// 40×10 下那份余地是 5 行，所以在那里封住输入区的是 [`MIN_INPUT_ROWS`]，不是它。
 fn max_input_rows(height: u16) -> u16 {
     let room = height.saturating_sub(CHROME + 1);
     MAX_INPUT_ROWS.min(room).max(1)
