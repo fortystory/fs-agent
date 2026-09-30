@@ -1,6 +1,6 @@
 # 语言迁移：散文一律中文
 
-Status: done（2026-09-27 收尾：两张票都落地，没有未做的了）
+Status: done（2026-09-27 两张票落地；2026-09-30 补收 ADR 那一批 —— [票 03](issues/03-adr-headings-and-jargon.md)。[票 04](issues/04-tracker-headings-in-chinese.md) 是另起的后续，未做）
 
 - **决定**：[`docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md`](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) —— **散文一律中文**（代码注释、`docs/` 下的设计文档与 `docs/agents/`、测试的断言消息、只给人看的错误文本）；**英文只留给三类**：标识符、**模型可见**的文本、**进事件流要永久回放**的文本。`docs/research/` 是一手引文，一个字不改。
 - **动机**：读者是人（注释与设计文档服务的是读代码的人），而模型可见 / 进流那一侧动一次要付两笔（前缀缓存整体作废 + 老流永久中英混排）、收益又几乎没有（那一侧的读者是模型）。
@@ -42,25 +42,31 @@ Status: done（2026-09-27 收尾：两张票都落地，没有未做的了）
 | 只给人看的错误与诊断文本（票 01，2026-09-27） | `--remaining` **6,196 → 90** 字符（10 个 `src/` 文件 + 7 个测试的 13 处断言；剩下的 90 是两条非散文） | `76a7eb1` |
 | 收尾：棘轮与数字（票 02，2026-09-27） | `COMMENT_FLOOR` 195/93 → **5,209/2,423**（精确实测值）；`DOCS_MIN_RATIO` 统一 30% → 逐份「实测 −2 点」（29–43）；README 行数 31,462/29,179 → **29,680/28,612** | `b423cc4` |
 | 分节线统一、fmt 收口 | 每个文件一套宽度；`cargo fmt --check` 全仓零漂移（含 `repo_map.rs` 那处既有漂移） | `e2bb78e`、`ef92649`、`e39434f` |
+| ADR 也走中文（票 03，2026-09-30） | 三处 `## Consequences` → `## 后果`；行话按「中文名（English）」夹注（行内视口 / 备用屏幕 / 回滚缓冲 / panic 钩子…）；`docs/adr/*.md` 进 `DOCS_MIN_RATIO`，`check-language.py` 新增「ADR 标题必须含中文」（验过会红） | `7d4d1d4` |
+| `AGENTS.md` 翻成中文（票 03 追加，2026-09-30） | 仓库里最后一份英文文档（0.2% → 正文中文）；那句过时的「`docs/*.md` 写英文」换成现行约定；五个小标题留英文（技能工具链的锚点）；进 `DOCS_MIN_RATIO`（25.8% → 23），记住「它也算散文，尽管它进 `messages`」 | `76c1d7f` |
 | todo-and-modes 那轮（上一件事） | 32+4 票落地、两轴 code-review 与文档核对 | `b223b24` … `3f22f2d`、`6186070` |
 
 **验收现状**：`cargo test` 757/0、`clippy` 干净、`cargo fmt --check` 零漂移、`check-language.py` OK、`tui-startup-check.py` 12/12 GREEN、四张 wayfinder 图 PASS。
 
 ## 还没做的
 
-**没有。两张票都已落地（2026-09-27），本 spec 收尾。**
+**本 spec 的三张内容票都已落地（票 01 / 02 于 2026-09-27，票 03 于 2026-09-30），本 spec 收尾。**
 
 - **票 01（内容）**：**已完成**（`76a7eb1`）—— 只给人看的错误与诊断文本全部翻完，`--remaining` 从 6,196 降到 90（剩下的两条不是散文）。多翻的四类、刻意不动的四类（含进流的 `HistorySuperseded.summary`）与 13 处测试改动，逐条记在 [票 01 的 Comments](issues/01-human-facing-error-text.md)。
 - **票 02（收尾）**：**已完成**（`b423cc4`）—— 棘轮提到精确实测值、`DOCS_MIN_RATIO` 逐份收紧到「实测 −2 点」、README 行数按实测改（那行本来是迁移前量的，是真漂移），以及最后一遍清扫的结论（剩下的英文注释行全是引用 / 图表 / 标识符，**没有散文**；`docs/tui-manual-checklist.md` 的 ⑩ 与 ⑰ 仍留着「待人工过一遍」）。反证与逐条判断在 [票 02 的 Comments](issues/02-ratchet-and-numbers.md)。
+- **票 03（ADR，2026-09-30）**：**已完成**（`7d4d1d4`）—— ADR 的标题与小标题也是散文：`## Consequences` 换成 `## 后果`，行话改成「中文名（English）」，护栏收到 `docs/adr/*.md`。**顺手把「还剩多少」又量了一遍**：`src/` + `tests/` 的注释与 `docs/**`（除 `research/` 与 `highlight.md`）里**没有英文散文**了，剩下的英文行全是路径引用、代码块、图表与 CLI 用法。见 [票 03 的 Comments](issues/03-adr-headings-and-jargon.md)。
+
+**另起的后续（不属于本 spec 的收尾）**：[票 04](issues/04-tracker-headings-in-chinese.md) —— `.scratch/` 里 `## Question` / `## Answer` / `## Comments` / `## Problem Statement` / `## Destination` 那批英文小标题中文化（含 `docs/agents/issue-tracker.md` 的约定与 `.scratch` 侧的护栏）。上一轮刻意没动它们：它们是 tracker 的字段名还是散文，当时没定；2026-09-30 定了要单独做，故 `Status: ready-for-agent`。
 
 ## 护栏（已有，别绕过）
 
-`python3 scripts/check-language.py` 四条检查：
+`python3 scripts/check-language.py` **五条检查**（2026-09-30 由四条增补，第 ④ 条是票 03 加的）：
 
 1. **冻结面不许出现新的中文**（按文件，白名单逐条点名今天已存在的 13 条中文：三条身份提示、讨论轮前缀与材料、上游供应商错误里的 `欠费`/`余额`/`额度` 匹配词）；
 2. **混住文件里那 12 条「模型可见 / 进流」的字面量必须仍是英文**（正面检查：存在、且不含中文）—— 因为 `agent/history.rs`、`render/input.rs`、`render/tui.rs`、`cli.rs` 这些文件里两种串住在一起，整文件冻结会拦住该翻的那半；
-3. `docs/*.md` 的中文占比 ≥ 各自的下限（2026-09-27 起按「实测 −2 点」逐份收紧，29–43%，不再统一 30%）；
-4. `src/` / `tests/` 的中文注释行数不低于棘轮。
+3. `docs/*.md` 的中文占比 ≥ 各自的下限（2026-09-27 起按「实测 −2 点」逐份收紧，29–43%，不再统一 30%；`docs/adr/*.md` 与 `AGENTS.md` 于 2026-09-30 并入，40–44% 与 23%）；
+4. **ADR 的标题与小标题必须含中文**（`docs/adr/*.md`：整条都是行内代码的标题放过，ADR 的文件名仍是标识符）；
+5. `src/` / `tests/` 的中文注释行数不低于棘轮。
 
 `--list` 打印两份清单本身。**如果检查报「冻结面里出现了中文串」，那是翻错了地方：改回去，不许往白名单里加。**
 

@@ -35,7 +35,9 @@ Blocked by: 02, 03, 04, 05, 06, 07, 08
 
 ## Answer
 
-**已完成（2026-09-21）。ADR 写在 `docs/adr/0002-fullscreen-alt-screen-tui.md`**，格式照 `0001-chinese-ui-frozen-model-text.md`（标题 + 决策与理由正文 + `## Consequences`，无状态行、无索引文件）。
+**已完成（2026-09-21）。ADR 写在 `docs/adr/0002-fullscreen-alt-screen-tui.md`**，格式照 `0001-chinese-ui-frozen-model-text.md`（标题 + 决策与理由正文 + 末尾那节「后果」，无状态行、无索引文件）。
+
+> 后加（2026-09-30）：小标题当时写作 `## Consequences`，现按 [ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 的「后加」一节改成中文 `## 后果` —— ADR 的标题也是散文。
 
 正文覆盖本票要求的六项：
 
