@@ -64,6 +64,9 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
         match &event.payload {
             // 会话骨架：身份与 harness 记账保持私有。
             EventPayload::SessionStarted { .. } => {}
+            // 沙箱状态同样是**只进日志**的 harness 记账（沙箱 spec §8）：它既不是发言、也不是注入，
+            // 所以投影是零 —— 这正是 replay 能看到它、而钉住的前缀不受它影响的原因。
+            EventPayload::SandboxStatus { .. } => {}
             // 钉住的注入属于钉住的开头，绝不与发言合并：它必须每一回合都看起来一模一样，前缀缓存
             // 才能继续命中（spec §5、§10）。开头那几条注入 —— 项目规矩与技能清单 —— 是**一条**
             // `user` 消息（spec §10、决定 09：「与 AGENTS.md 同一条」），所以连续的一串注入合并成

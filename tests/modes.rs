@@ -199,8 +199,12 @@ async fn a_continue_returns_to_the_configured_mode() {
     .await;
     assert_eq!(resumed.harness.mode(), Mode::Auto);
 
-    // 而且模式也不是流上任何地方的字段。
+    // 而且**权限模式**不是流上任何地方的字段。沙箱那一档（`SandboxStatus`）是另一件
+    // 事 —— 它正好也有一个叫 `mode` 的字段，所以这里把它排除掉，其余事件照旧严格。
     for event in resumed.events() {
+        if matches!(event.payload, EventPayload::SandboxStatus { .. }) {
+            continue;
+        }
         let value = serde_json::to_value(&event).unwrap();
         assert!(!has_key_named_mode(&value), "没有任何事件带着模式：{value}");
     }

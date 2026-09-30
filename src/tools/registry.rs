@@ -28,6 +28,7 @@ use crate::provider::ToolSpec;
 use crate::questions::UserQuestions;
 
 use super::paths::{PathLocks, SessionPaths};
+use super::sandbox::Sandbox;
 use super::tool::{
     BashLimits, Effect, ExecutorSpawner, ReadSet, Tool, ToolContext, ToolError, ToolOutput,
 };
@@ -175,6 +176,7 @@ impl Registry {
             skills: &call.skills,
             repo_map: &call.repo_map,
             bash: &call.bash,
+            sandbox: &call.sandbox,
             executor: call.executor.as_deref(),
             questions: call.questions.as_deref(),
             tool_call_id: &call.tool_call_id,
@@ -282,6 +284,9 @@ pub struct PendingCall {
     /// 一次 `bash` 调用跑在其下的墙钟上限（spec §7）。持有所有权：它是一对 `Copy` 数字，而
     /// 每次调用现构造它，就把配置挡在注册表之外。
     pub bash: BashLimits,
+    /// 这一次调用跑在哪个沙箱里（沙箱 spec §7）。与 `bash` 同一形状：从会话配置里现构造出来的
+    /// 值，而不是一个够得着会话的句柄。
+    pub sandbox: Sandbox,
     /// 跑一个嵌套执行者的端口，给 `task` 调用（spec §16）。由循环每次调用现构造 —— 循环才是
     /// 知道一个执行者需要哪个 provider 与哪个渲染器的那一层。
     pub executor: Option<Arc<dyn ExecutorSpawner>>,
@@ -303,6 +308,7 @@ impl std::fmt::Debug for PendingCall {
             .field("skills", &self.skills)
             .field("repo_map", &self.repo_map)
             .field("bash", &self.bash)
+            .field("sandbox", &self.sandbox)
             .field("executor", &self.executor.is_some())
             .field("questions", &self.questions.is_some())
             .finish()

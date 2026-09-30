@@ -18,6 +18,7 @@ pub mod paths;
 pub mod process;
 pub mod registry;
 pub mod repo_map;
+pub mod sandbox;
 pub mod skill;
 pub mod task;
 pub mod todo;
@@ -37,6 +38,7 @@ pub use registry::{
     READ_BEFORE_WRITE_PREFIX,
 };
 pub use repo_map::RepoMapTool;
+pub use sandbox::Sandbox;
 pub use skill::SkillTool;
 pub use task::{TaskTool, TASK_TOOL};
 pub use todo::{TodoTool, TODO_TOOL};

@@ -488,6 +488,8 @@ fn last_tool_entry(timeline: &mut Timeline) -> Option<&mut Option<String>> {
 fn entry_of(event: &Event) -> Option<Entry> {
     let speaker = event.speaker_id.clone();
     Some(match &event.payload {
+        // 沙箱状态是只进日志的 harness 记账（沙箱 spec §8）：它不属于 `sessions show` 的条目。
+        EventPayload::SandboxStatus { .. } => return None,
         EventPayload::MessageCompleted { role, text, .. } => Entry::Message {
             speaker,
             role: *role,
@@ -957,6 +959,8 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
         match &event.payload {
             EventPayload::SessionStarted { .. } => {}
             EventPayload::ContextInjected { .. } => {}
+            // 沙箱状态不计进任何一项统计：它是这一刻的记账，不是用量。
+            EventPayload::SandboxStatus { .. } => {}
             EventPayload::SessionEnded { reason } => {
                 *stops.entry(reason.as_str().to_owned()).or_default() += 1;
             }

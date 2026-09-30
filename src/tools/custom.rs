@@ -92,7 +92,7 @@ impl Tool for CustomTool {
             )));
         }
         let limit = Duration::from_millis(self.declaration.timeout_ms);
-        let outcome = process::run(ctx.cwd, &argv, limit).await?;
+        let outcome = process::run(ctx.cwd, &argv, limit, ctx.sandbox).await?;
         Ok(ToolOutput::new(outcome.report()))
     }
 }

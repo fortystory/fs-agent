@@ -286,6 +286,14 @@ pub enum EventPayload {
         source: ContextSource,
         content: String,
     },
+    /// 这条流开跑时沙箱处在哪一档（沙箱 spec §8）。**log-only**：投影不把它变成任何一条
+    /// `messages`，所以钉住的前缀逐字不变，而 replay 能重算出某条命令当时有没有被关着。
+    ///
+    /// `mode` 是协议标记（`"bwrap"` / `"off"`），不是散文；不可用时那句原因是。
+    SandboxStatus {
+        mode: String,
+        unavailable_reason: Option<String>,
+    },
     SessionEnded {
         reason: StopReason,
     },
@@ -383,6 +391,7 @@ impl EventPayload {
         match self {
             EventPayload::SessionStarted { .. } => "SessionStarted",
             EventPayload::ContextInjected { .. } => "ContextInjected",
+            EventPayload::SandboxStatus { .. } => "SandboxStatus",
             EventPayload::SessionEnded { .. } => "SessionEnded",
             EventPayload::RoundStarted { .. } => "RoundStarted",
             EventPayload::RoundEnded { .. } => "RoundEnded",
@@ -423,6 +432,14 @@ impl EventPayload {
             | EventPayload::UsageRecorded { .. }
             | EventPayload::TurnEnded { .. } => {}
             EventPayload::ContextInjected { content, .. } => redactor.redact(content),
+            // 模式是协议标记，原因才是散文。
+            EventPayload::SandboxStatus {
+                unavailable_reason, ..
+            } => {
+                if let Some(reason) = unavailable_reason {
+                    redactor.redact(reason);
+                }
+            }
             EventPayload::DivergenceRecorded {
                 topic, positions, ..
             } => {

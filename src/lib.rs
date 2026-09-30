@@ -38,12 +38,12 @@ pub mod tools;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::task::JoinHandle;
 
 use crate::agent::{CancelSignal, TurnOutcome};
-use crate::config::SessionConfig;
+use crate::config::{SandboxAvailability, SandboxSettings, SessionConfig};
 use crate::context::skills::Skills;
 use crate::events::{ContextSource, Event, EventLog, EventPayload, Role, SessionId, SpeakerId};
 use crate::hooks::Hook;
@@ -52,6 +52,7 @@ use crate::provider::Provider;
 use crate::questions::UserQuestions;
 use crate::render::{RenderHandle, Renderer};
 use crate::session::{Session, SessionParts};
+use crate::tools::sandbox;
 use crate::tools::{PathLocks, Registry};
 
 /// 一场会话需要的一切，除了谁在发言、用的又是哪个模型。
@@ -192,6 +193,9 @@ struct OpenedSession {
     /// 这条流是否已经带着一条 `SessionStarted`：带着的那份日志是继续中的会话，不是新的
     /// 一场。
     resuming: bool,
+    /// 沙箱那一次探测的结果（沙箱 spec §3）：组装期探一次，这场会话开出的每一个 agent 复用同一个
+    /// 答案。`mode = "off"` 或者调用方已经给了结果时，这个格子根本不会被填。
+    sandbox_probe: OnceLock<SandboxAvailability>,
     render: RenderHandle,
     render_task: JoinHandle<()>,
 }
@@ -252,13 +256,15 @@ impl OpenedSession {
             skills,
             agents_md,
             resuming,
+            sandbox_probe: OnceLock::new(),
             render,
             render_task,
         })
     }
 
     /// 开出一个 agent 的会话。便宜：每一个会话级的值都是共享的。
-    fn session(&self, config: SessionConfig, identity: Option<String>) -> Session {
+    fn session(&self, mut config: SessionConfig, identity: Option<String>) -> Session {
+        config.sandbox.availability = self.sandbox_availability(&config.sandbox);
         Session::new(SessionParts {
             id: self.id.clone(),
             cwd: self.cwd.clone(),
@@ -277,6 +283,18 @@ impl OpenedSession {
         })
     }
 
+    /// 沙箱那一次探测（沙箱 spec §3）：`mode = "off"` 或调用方已经给了结果时原样返回，否则探一次
+    /// 并记住 —— 这场会话开出的每一个 agent（讨论的两个讨论者、以及每一个执行者）拿到的都是
+    /// 同一个答案，PATH 中途变了也不重探。
+    fn sandbox_availability(&self, settings: &SandboxSettings) -> SandboxAvailability {
+        if !settings.needs_probe() {
+            return settings.availability.clone();
+        }
+        self.sandbox_probe
+            .get_or_init(|| sandbox::resolve_availability(settings, &self.cwd))
+            .clone()
+    }
+
     /// 那一次性头部工作：全新的流记下会话骨架；继续的流把被杀的进程没答完的那些调用
     /// 收尾。
     ///
@@ -287,6 +305,10 @@ impl OpenedSession {
         if !self.resuming {
             return self.record_skeleton(session);
         }
+        // 继续的流不再记骨架，但沙箱状态是**这一刻**的事实：两次运行之间这台机器上的
+        // `bwrap` 可能变得可用、也可能用不了了，而它只进日志、不进 `messages`，所以补记
+        // 一条不碰前缀稳定性（`spec §8`）。
+        self.record_sandbox_status(session)?;
         let recovered = agent::recover_pending_calls(session, &self.render)?;
         if recovered > 0 {
             self.render.diagnostic(&format!(
@@ -296,6 +318,20 @@ impl OpenedSession {
         Ok(())
     }
 
+    /// 把这一刻的沙箱状态记进流里（沙箱 spec §8）：**只进日志**，投影不把它变成
+    /// `messages`，所以钉住的前缀逐字不变。
+    fn record_sandbox_status(&self, session: &mut Session) -> Result<(), Error> {
+        let (mode, reason) = {
+            let sandbox = &session.config().sandbox;
+            let reason = match &sandbox.availability {
+                SandboxAvailability::Unavailable { reason } => Some(reason.clone()),
+                _ => None,
+            };
+            (sandbox.mode, reason)
+        };
+        agent::record_sandbox_status(session, &self.render, mode, reason.as_deref())
+    }
+
     /// 通过其中一场会话记下会话骨架：`SessionStarted`，然后那两条钉住的注入。
     ///
     /// 身份 -> 规则 -> 技能清单 -> 历史（spec §10）。缺 `AGENTS.md` 不是错误，只表示
@@ -303,6 +339,7 @@ impl OpenedSession {
     /// 钉住的头部。
     fn record_skeleton(&self, session: &mut Session) -> Result<(), Error> {
         agent::record_session_started(session, &self.render)?;
+        self.record_sandbox_status(session)?;
         if let Some(content) = &self.agents_md {
             agent::record_context_injection(
                 session,

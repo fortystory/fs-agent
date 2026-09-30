@@ -33,6 +33,7 @@ use std::time::Instant;
 
 use futures::StreamExt;
 
+use crate::config::SandboxMode;
 use crate::context;
 use crate::events::{
     hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, total_usage, ContextSource,
@@ -47,8 +48,8 @@ use crate::provider::{ChatRequest, Message, Provider, StreamEvent, ToolCall, Too
 use crate::render::RenderHandle;
 use crate::session::Session;
 use crate::tools::{
-    AllowedCall, BashLimits, CallFacts, DispatchOutcome, GuardedCall, PendingCall, ToolError,
-    ToolOutput, TASK_TOOL,
+    AllowedCall, BashLimits, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Sandbox,
+    ToolError, ToolOutput, TASK_TOOL,
 };
 use crate::Error;
 
@@ -207,6 +208,27 @@ pub fn record_session_started(session: &mut Session, render: &RenderHandle) -> R
             session_id: session.id().clone(),
             cwd: session.cwd().to_string_lossy().into_owned(),
             schema_version: SCHEMA_VERSION,
+        },
+    )
+}
+
+/// 记下这次会话开跑时的沙箱状态（沙箱 spec §8）。
+///
+/// **log-only**：投影不把它变成 `messages`，所以钉住的前缀逐字不变，而 replay 能重算出
+/// 某条命令当时有没有被关着 —— 沙箱在一个会话内基本不变，所以这条事件每条流只有一条。
+pub fn record_sandbox_status(
+    session: &mut Session,
+    render: &RenderHandle,
+    mode: SandboxMode,
+    unavailable_reason: Option<&str>,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::SandboxStatus {
+            mode: mode.as_str().to_owned(),
+            unavailable_reason: unavailable_reason.map(str::to_owned),
         },
     )
 }
@@ -708,6 +730,9 @@ async fn process_call(
             default_timeout_ms: session.config().bash_timeout_ms,
             max_timeout_ms: session.config().max_bash_timeout_ms,
         },
+        // 沙箱与它同一形状：会话配置在组装期定下来的那一份，包括探测结果（沙箱 spec §7）。同一
+        // 张工具表被主会话、讨论者与执行者共用，所以三条路径上的命令自动同等生效。
+        sandbox: Sandbox::new(&session.config().sandbox),
         executor: None,
         // 问题端口是会话的，不是循环的：带在这里，是为了让 `ask_user_question` 工具经它被
         // 派发时的上下文收到它，而执行者端口是逐次授权调用填进去的（spec §7）。

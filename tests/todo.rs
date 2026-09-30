@@ -18,7 +18,7 @@ use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::tools::todo::{read_items, Status, TODO_TOOL};
 use fs_agent::tools::{
-    builtin, BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, SessionPaths,
+    builtin, BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths,
 };
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
@@ -62,6 +62,8 @@ impl Fixture {
             skills: Arc::new(fs_agent::context::skills::Skills::default()),
             repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
             bash: BashLimits::default(),
+            // 沙箱在这个文件里是关的：这里测的是 `todo` 工具，不跑任何进程。
+            sandbox: Sandbox::new(&fs_agent::config::SandboxSettings::off()),
             executor: None,
             questions: None,
         }

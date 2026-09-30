@@ -26,6 +26,16 @@ use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 /// 工具名，只在这里命名一次，好让注册表、循环与测试不会互相漂离。
 pub const BASH_TOOL: &str = "bash";
 
+/// 工具描述里那段沙箱说明（`.scratch/sandbox/spec.md` §8）。
+///
+/// 模型可见、进请求前缀，所以它是**常量**：加一句是常量成本，一次定死，不随会话变化
+/// （工具声明是前缀缓存的一部分）。它要说清四件事 —— 命令跑在沙箱里、区外只读、被拒绝
+/// 说明越界而不是命令写错、以及 `/tmp` 每次调用都是新的。
+pub const SANDBOX_NOTE: &str =
+    "命令跑在一个文件沙箱里：工作区与一列缓存目录可写，区外只读；被沙箱拒绝说明命令越界了，\
+     不是命令写错了。`/tmp` 每次调用都是新的：同一条命令内可用、跨命令不保留。（会话把 \
+     `[sandbox] mode` 设成 \"off\" 时这一层是关着的。）";
+
 /// 那个 shell 与让它收下命令字符串的那个旗标。`-l` 给命令一份用户的登录环境；`-c` 才是收下
 /// 那一个参数的东西。
 const SHELL: &str = "bash";
@@ -39,13 +49,13 @@ impl Tool for BashTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: BASH_TOOL.to_owned(),
-            description:
+            description: format!(
                 "在工作区里跑一条 shell 命令，返回它的退出码、标准输出与标准错误。命令通过 \
-                          `bash -lc` 非交互地跑：没有 TTY、stdin 是空的，所以别启动交互式程序。\
-                          有墙钟超时（默认配置是 120s；会话可以配一个不同的默认值与上限），\
-                          超时会把整棵进程树杀掉。非零退出是正常结果。这次调用期间工作区被独占，\
-                          所以尽量跑短小、非交互的命令。"
-                    .to_owned(),
+                 `bash -lc` 非交互地跑：没有 TTY、stdin 是空的，所以别启动交互式程序。\
+                 有墙钟超时（默认配置是 120s；会话可以配一个不同的默认值与上限），\
+                 超时会把整棵进程树杀掉。非零退出是正常结果。这次调用期间工作区被独占，\
+                 所以尽量跑短小、非交互的命令。{SANDBOX_NOTE}"
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -86,7 +96,7 @@ impl Tool for BashTool {
             )));
         }
         let limit = ctx.bash.timeout(requested);
-        let outcome = process::run(ctx.cwd, &argv, limit).await?;
+        let outcome = process::run(ctx.cwd, &argv, limit, ctx.sandbox).await?;
         Ok(ToolOutput::new(outcome.report()))
     }
 }

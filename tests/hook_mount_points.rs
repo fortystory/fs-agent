@@ -307,6 +307,8 @@ async fn scenario_1_a_clean_call_in_auto_records_the_full_order() {
         fixture.kinds(),
         vec![
             "SessionStarted",
+            // 会话骨架的第二条：这一刻沙箱在哪一档（只进日志）。
+            "SandboxStatus",
             "MessageCompleted",
             "TurnStarted",
             "MessageCompleted",

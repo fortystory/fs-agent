@@ -67,6 +67,11 @@ impl Fixture {
             // `bash` 工具配置的限额；这个文件不派发它，
             // 所以默认值就是最诚实的取值。
             bash: fs_agent::tools::BashLimits::default(),
+            // 沙箱这一层在这个文件里是关的：这里测的派发接缝与它无关，
+            // 而关着的那一档对 `process::run` 就是单位函数。
+            sandbox: fs_agent::tools::Sandbox::new(
+                &fs_agent::config::SandboxSettings::off(),
+            ),
             // 没有执行者端口：这个文件直接驱动派发接缝，
             // 而 `task` 不是它派发的工具之一。
             executor: None,

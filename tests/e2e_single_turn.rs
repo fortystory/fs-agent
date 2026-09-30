@@ -141,13 +141,15 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         "这个回合的收尾被叙述了：{diagnostics}"
     );
 
-    // 事件流就是那份可观察契约。
+    // 事件流就是那份可观察契约。会话骨架那两条在前：身份，以及开跑时沙箱在哪一档
+    // （只进日志，不进 `messages`）。
     let events = read_events(&fixture.log_path).unwrap();
     let kinds: Vec<&str> = events.iter().map(|event| event.payload.kind()).collect();
     assert_eq!(
         kinds,
         vec![
             "SessionStarted",
+            "SandboxStatus",
             "MessageCompleted",
             "TurnStarted",
             "UsageRecorded",
@@ -170,13 +172,19 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         }
         other => panic!("期望 SessionStarted，实际得到 {other:?}"),
     }
-    assert_eq!(events[1].speaker_id, SpeakerId::User);
-    assert_eq!(events[2].speaker_id, kimi());
-    match &events[3].payload {
+    // 沙箱状态紧跟骨架，归属给系统，而且只进日志（不进下面的 `messages`）。
+    assert_eq!(events[1].speaker_id, SpeakerId::System);
+    match &events[1].payload {
+        EventPayload::SandboxStatus { mode, .. } => assert_eq!(mode, "off"),
+        other => panic!("期望 SandboxStatus，实际得到 {other:?}"),
+    }
+    assert_eq!(events[2].speaker_id, SpeakerId::User);
+    assert_eq!(events[3].speaker_id, kimi());
+    match &events[4].payload {
         EventPayload::UsageRecorded { usage: recorded } => assert_eq!(*recorded, usage),
         other => panic!("期望 UsageRecorded，实际得到 {other:?}"),
     }
-    match &events[4].payload {
+    match &events[5].payload {
         EventPayload::MessageCompleted {
             role,
             text,
@@ -188,7 +196,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         }
         other => panic!("期望 MessageCompleted，实际得到 {other:?}"),
     }
-    match &events[5].payload {
+    match &events[6].payload {
         EventPayload::TurnEnded { reason } => assert_eq!(*reason, StopReason::Completed),
         other => panic!("期望 TurnEnded，实际得到 {other:?}"),
     }

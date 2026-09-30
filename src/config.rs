@@ -23,6 +23,7 @@
 pub mod cost;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -67,6 +68,91 @@ pub const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 /// `bash` 超时的上限，按毫秒计（spec §7，票 20）。模型可以按调用要得更短，永远要不到更长，
 /// 所以没有任何一条命令能无限期攥着工作区级的 `Exclusive` 锁。
 pub const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
+
+/// 沙箱的那一档（沙箱 spec §7）：把命令包进 bubblewrap，还是显式放弃这一层。
+///
+/// 它与权限模式的三档是**两件不同的事**：这一档决定「跑起来能碰到什么」，权限模式决定
+/// 「跑不跑、要不要问」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// 命令包进 bubblewrap，越界由内核以 `EROFS` 打回。
+    Bwrap,
+    /// 显式放弃这一层：`wrap()` 退化成单位函数，探测根本不跑。
+    Off,
+}
+
+impl SandboxMode {
+    /// 配置与事件流里用的那个词（协议标记，英文）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SandboxMode::Bwrap => "bwrap",
+            SandboxMode::Off => "off",
+        }
+    }
+}
+
+/// 除会话 cwd 之外，缺省可写的那些工具缓存目录。
+///
+/// **这是可用性决定，不是安全决定**：没有它们，`cargo build` 会因为写不了
+/// `~/.cargo/.package-cache` 而失败。刻意不放 `~/.npm`、`~/.aws`、`~/.ssh`。
+pub const DEFAULT_SANDBOX_WRITABLE_ROOTS: &[&str] = &["~/.cargo", "~/.rustup", "~/.cache"];
+
+/// 被遮住的目录（写死，不给旋钮）：provider key 与 ssh 私钥都在这两个地方。
+///
+/// 表现是「目录还在，但是空的、且只读」——**不是「不存在」**。
+const SANDBOX_MASKS: &[&str] = &["~/.config/fs-agent", "~/.ssh"];
+
+/// 沙箱是否可用（沙箱 spec §3）。
+///
+/// 探测在组装期做**一次**，结果随会话配置携带；每条命令都不重探，也不理会 PATH 中途的
+/// 变化。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxAvailability {
+    /// 还没探过。组装期会把它换成另外两个值之一（`mode = "off"` 时原样留着）。
+    Untested,
+    /// `bwrap` 在这里起得来。
+    Available { bwrap: PathBuf },
+    /// 探过，用不了。`reason` 是给人看的一句话。
+    Unavailable { reason: String },
+}
+
+/// `[sandbox]` 这一节解析出来的值，外加组装期填进去的探测结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxSettings {
+    pub mode: SandboxMode,
+    /// 除会话 cwd 之外的可写根，`~` 已展开。不存在的那些会在拼装时被跳过。
+    pub writable_roots: Vec<PathBuf>,
+    /// 遮罩目录，`~` 已展开。
+    pub masks: Vec<PathBuf>,
+    /// 探测的结果（spec §3）。组装期填。
+    pub availability: SandboxAvailability,
+    /// 探测去哪里找 `bwrap`（就是 `PATH` 的原文）。库从不读进程环境，所以这份值由 `cli`
+    /// 从它的环境快照里带进来；测试也从同一个口子注入一个假的 PATH。
+    pub search_path: Option<OsString>,
+}
+
+impl SandboxSettings {
+    /// 没有配置过沙箱的会话：这一层是关的。
+    ///
+    /// `cli` 的每一条组装路径都经 [`Config::session_config`] 拿到配置里的值（缺省
+    /// `bwrap`），所以「默认开」是配置那一侧的事实；这里给的是「没有配置装配过」的值，
+    /// 库内直接构造的会话（测试、以及别的调用方）因此不会凭空去跑一个探测。
+    pub fn off() -> Self {
+        Self {
+            mode: SandboxMode::Off,
+            writable_roots: Vec::new(),
+            masks: Vec::new(),
+            availability: SandboxAvailability::Untested,
+            search_path: None,
+        }
+    }
+
+    /// 组装期是不是该去探一次。
+    pub fn needs_probe(&self) -> bool {
+        self.mode == SandboxMode::Bwrap
+            && matches!(self.availability, SandboxAvailability::Untested)
+    }
+}
 
 /// 每一个动态声明的工具的线级名都以它开头（spec §14）。内建名永不含 `__`，所以「这个名字
 /// 里有 `__`」是「这个工具来自配置」的词法可判定测试。
@@ -302,6 +388,9 @@ pub struct Config {
     /// 动态声明的那些工具（spec §14），按稳定的名字顺序。组装期就定死：没有任何东西会在
     /// 会话中途增删工具，因为工具数组是前缀缓存的一部分。
     pub tools: Vec<ToolDeclaration>,
+    /// `[sandbox]`：包不包 bubblewrap、额外哪些目录可写（spec §7）。探测结果在组装期填进
+    /// 会话配置里那一份。
+    pub sandbox: SandboxSettings,
 }
 
 impl Config {
@@ -345,6 +434,7 @@ impl Config {
         config.redactor = self.redactor();
         config.max_iterations = self.max_iterations;
         config.executor_max_iterations = self.executor_max_iterations;
+        config.sandbox = self.sandbox.clone();
         self.routing.apply(&mut config);
         Ok(config)
     }
@@ -429,6 +519,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         .unwrap_or(DEFAULT_EXECUTOR_MAX_ITERATIONS);
     let discussion = resolve_discussion(raw.discussion.as_ref(), &models)?;
     let tools = resolve_tools(&raw.tools)?;
+    let sandbox = resolve_sandbox(raw.sandbox.as_ref(), env)?;
 
     let default_model = raw
         .default_model
@@ -453,6 +544,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         executor_max_iterations,
         discussion,
         tools,
+        sandbox,
     })
 }
 
@@ -525,6 +617,20 @@ struct RawConfig {
     /// `[tools.<namespace>.<tool>]`：动态声明的工具（spec §14）。
     #[serde(default)]
     tools: BTreeMap<String, BTreeMap<String, RawTool>>,
+    /// `[sandbox]`：这一层包不包，以及额外哪些目录可写（spec §7）。
+    sandbox: Option<RawSandbox>,
+}
+
+/// 一张 `[sandbox]` 表。
+///
+/// 两个旋钮，只有两个：遮罩目录与保护路径是安全默认，写死在代码里，不该被人为了顺手改松。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSandbox {
+    /// `"bwrap"`（缺省）或 `"off"`。
+    mode: Option<String>,
+    /// 除会话 cwd 之外可写的目录；`~` 会展开。缺省是 [`DEFAULT_SANDBOX_WRITABLE_ROOTS`]。
+    writable_roots: Option<Vec<String>>,
 }
 
 /// 一张 `[tools.<namespace>.<tool>]` 表。
@@ -797,6 +903,66 @@ fn resolve_mode(raw: Option<&RawPermissions>) -> Result<Mode, ConfigError> {
     Mode::parse(written).ok_or_else(|| ConfigError::UnknownMode {
         mode: written.to_owned(),
     })
+}
+
+/// 把 `[sandbox]` 解析成组装期要用的那一份值（spec §7）。
+///
+/// 一个不认识的 `mode` 是启动错误，而不是静默回退到 `bwrap`：写错了模式名的人以为这层关着，
+/// 而默认值恰恰是开着。
+///
+/// `~` 用配置解析拿到的那张环境表里的 `HOME` 展开；没有 `HOME` 时带 `~` 的项保持字面形式，
+/// 拼装时因为「目标不存在」被跳过 —— 那与「没有这个目录」的结果一样。
+fn resolve_sandbox(raw: Option<&RawSandbox>, env: &EnvMap) -> Result<SandboxSettings, ConfigError> {
+    let mode = match raw.and_then(|raw| raw.mode.as_deref()) {
+        None | Some("bwrap") => SandboxMode::Bwrap,
+        Some("off") => SandboxMode::Off,
+        Some(other) => {
+            return Err(ConfigError::UnknownSandboxMode {
+                mode: other.to_owned(),
+            })
+        }
+    };
+    let home = env
+        .get("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let roots = raw
+        .and_then(|raw| raw.writable_roots.clone())
+        .unwrap_or_else(|| {
+            DEFAULT_SANDBOX_WRITABLE_ROOTS
+                .iter()
+                .map(|root| (*root).to_owned())
+                .collect()
+        });
+    Ok(SandboxSettings {
+        mode,
+        writable_roots: roots
+            .iter()
+            .map(|root| expand_home(root, home.as_deref()))
+            .collect(),
+        masks: SANDBOX_MASKS
+            .iter()
+            .map(|mask| expand_home(mask, home.as_deref()))
+            .collect(),
+        availability: SandboxAvailability::Untested,
+        search_path: env.get("PATH").filter(|value| !value.is_empty()).map(OsString::from),
+    })
+}
+
+/// 展开配置里写下的 `~` / `~/…`；别的写法原样返回。
+fn expand_home(raw: &str, home: Option<&Path>) -> PathBuf {
+    if raw == "~" {
+        return home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(raw));
+    }
+    match raw.strip_prefix("~/") {
+        Some(rest) => match home {
+            Some(home) => home.join(rest),
+            None => PathBuf::from(raw),
+        },
+        None => PathBuf::from(raw),
+    }
 }
 
 /// `[budget]` 表（spec §17）。
@@ -1318,6 +1484,8 @@ pub enum ConfigError {
         "未知的模式 `{mode}`；`[permissions] mode`（或 `--mode`）只接 `readonly`、`ask`、`auto`"
     )]
     UnknownMode { mode: String },
+    #[error("未知的沙箱模式 `{mode}`；`[sandbox] mode` 只接 `bwrap`（缺省）或 `off`")]
+    UnknownSandboxMode { mode: String },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(
@@ -1388,6 +1556,9 @@ pub struct SessionConfig {
     /// 的那一处，于是用它的组装路径都不必额外传东西。讨论还更进一步：它会**拒绝**打码器互相
     /// 不一致的名册，因为一条流对「什么算秘密」给出两个答案，就会有些事件被打码、有些没有。
     pub redactor: Redactor,
+    /// 沙箱那一层的配置与探测结果（沙箱 spec §7）。配置在解析期填好，探测结果由 `lib` 组装期
+    /// 填进来 —— 于是工具的上下文里带着的是一个定下来的值，而不是一件每次调用都要问的事。
+    pub sandbox: SandboxSettings,
 }
 
 impl SessionConfig {
@@ -1407,6 +1578,7 @@ impl SessionConfig {
             pricing: PriceTable::new(),
             budget: Budget::new(),
             redactor: Redactor::default(),
+            sandbox: SandboxSettings::off(),
         }
     }
 
@@ -1541,6 +1713,7 @@ impl Default for SessionConfig {
             pricing: PriceTable::new(),
             budget: Budget::new(),
             redactor: Redactor::default(),
+            sandbox: SandboxSettings::off(),
         }
     }
 }

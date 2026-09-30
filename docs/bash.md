@@ -104,8 +104,9 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 
 ## `bash` 不包含什么
 
-- **进程级沙箱。** spec §20：v1 靠写串行化、权限门与断路器，升级路径写明是「只做 Linux
-  的 bubblewrap」，且不预做抽象。
+- **网络隔离。** shell 跑在 **bubblewrap** 沙箱里（工作区可写、区外只读，见
+  [`sandbox.md`](sandbox.md)），但那层只管文件：这一版不加 `--unshare-net`，所以 `curl`
+  该通还是通。
 - **PTY / 交互式程序。** 不分配终端、stdin 按设计是空的。
 - **后台作业与作业控制。** 一条命令可以在它自己的 shell 里把进程放到后台，但没有任何
   东西管理或汇报作业；超时或取消杀掉整个进程组。
@@ -119,3 +120,4 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 | 默认值与上限 | `config.rs`（`SessionConfig::bash_timeout_ms` / `max_bash_timeout_ms`） |
 | `rm` 断路器与它拆 shell 的那部分 | `permissions.rs`（`rm_breaker`、`simple_commands`） |
 | 落盘 + 预览指针 | `context.rs`（`truncate_result`），由 `agent.rs` 施加上去 |
+| 沙箱（argv 包一层再 spawn） | `tools/sandbox.rs`，由 `tools/process.rs` 的 `run()` 施加（见 [`sandbox.md`](sandbox.md)） |

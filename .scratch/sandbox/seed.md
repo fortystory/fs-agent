@@ -1,7 +1,10 @@
 # 种子材料：进程级沙箱（让「工作区内自动 / 区外要审批」对 shell 也成立）
 
+> **已折成 [`spec.md`](spec.md)（2026-10-01）。** 本文件留作材料的来源与那轮路由判断的记录；
+> 《已拍但暂缓：`workspace` 模式那一版的决议》那张表已转交 [`../workspace-mode/seed.md`](../workspace-mode/seed.md)。
+>
 > **这不是 spec，也不是票。** 它是 `/grill-with-docs` 之前的路由判断与待谈分叉，
-> 外加这次调研拿到的一手结论。规格以将来那轮 grilling 的产物为准。
+> 外加这次调研拿到的一手结论。规格以那轮 grilling 的产物为准。
 >
 > **写就于 2026-09-26。** 下文凡说「**现状**」，指的都是**那一天的代码**（时间词在这里会烂，所以定死一次）。
 
@@ -64,6 +67,10 @@
 
 - [`research/01-dsh-workspace-permissions-and-shell.md`](research/01-dsh-workspace-permissions-and-shell.md) —— DSH 的权限/沙箱/shell 处理，221 行、85 处引用，含**可复制的取包命令**（必须钉 `0.1.5-rc.3`：这些包的 `latest` dist-tag 停在更旧的 `0.0.1-rc.1`）。tarball 与解出的树在 `/tmp/dsh-research`。
 - 该文件 §⑦ 是「对我们（无沙箱仓库）意味着什么」，§⑧ 是**读不出来的部分**（例如 Web 端会话的 cwd 从哪来）。
+- [`research/02-linux-sandbox-primitives-and-tools.md`](research/02-linux-sandbox-primitives-and-tools.md) —— Linux 侧的机制与工具清点：bubblewrap、Landlock（含 ABI 版本表）、seccomp、namespaces，以及 nsjail / firejail / `systemd-run --user` / rootless 容器 / gVisor / microVM / WASM 与 Rust crate 生态；末节是「机制 × 内核版本 × 需要的权限 × 发行版坑」的表。484 行、72 个一手外链。
+- [`research/03-agent-sandbox-precedents.md`](research/03-agent-sandbox-precedents.md) —— 同类产品**实际怎么做的**：Codex（Linux 的文件隔离今天用 bwrap，Landlock 是 legacy opt-in，helper 只做 `no_new_privs` + seccomp）、Claude Code 与 `sandbox-runtime`、Cursor、Devin、Goose（加过又撤掉）、E2B/Modal 等云沙箱。§⑦ 是共同踩过的坑（Ubuntu 24.04 的 AppArmor、网络与文件必须成对、fail-closed 的普遍取向）。
+- [`research/04-local-probe-bwrap-and-landlock.md`](research/04-local-probe-bwrap-and-landlock.md) —— **本机实测**，不是文献：bwrap 与 Landlock 在这台机器上都跑得通、干净对照要怎么写、网络默认不隔离、拒绝信号随 locale 变。开头一节是一条方法论警告 —— 这个会话自己就跑在 `workspace-write` 布局里（`/` 与 `/home` 只读、`/tmp` 与工作区可写），**不挑宿主可写的目标做对照就会得出无效归因**。
+- 两张**给人看的图解**（单文件 HTML，不依赖网络，浏览器直接打开）：[`eli5-sandbox.html`](eli5-sandbox.html) —— 沙箱是什么、流行五种、各自靠什么实现；[`eli5-bubblewrap.html`](eli5-bubblewrap.html) —— bubblewrap 逐段拆解。它们不是一手材料，是把上面四份的结论画出来。
 
 ## 与现有文档的关系
 

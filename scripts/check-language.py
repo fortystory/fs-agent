@@ -53,6 +53,8 @@ FROZEN_FILES = [
     "src/tools/process.rs",
     "src/tools/registry.rs",
     "src/tools/repo_map.rs",
+    # 沙箱的工具错误与探测理由都从这一份里出去（`bash` 与动态工具共用它）。
+    "src/tools/sandbox.rs",
     "src/tools/skill.rs",
     "src/tools/task.rs",
     "src/tools/todo.rs",
@@ -88,7 +90,8 @@ FROZEN_FILES = [
 #   但它属于测试，不属于模型可见文本 —— ADR 0004）；只剩一两个词的标识符、路径、
 #   schema 值也被上面那条判据天然排除。
 #
-# 进度（ADR 0005 的第 ②–⑤ 批落地后，2026-09-30）：中文 **219**、英文散文 **27**。
+# 进度（ADR 0005 的第 ②–⑤ 批落地后，2026-09-30；2026-10-01 沙箱那一批补进
+# `src/tools/sandbox.rs`）：中文 **229**、英文散文 **27**。
 # 剩下的 27 条**一条散文都没有**，全是判据的假阳性，逐条记在 ADR 0005 的「进度与收口」
 # 一节里：`fs-agent: {message}` 这类程序名前缀（25 条）与两条纯 `format!` 骨架
 # （`→ {tool_name}({rendered})`、`{text}{separator}{display}: {}`）。再往下收就要动
@@ -99,7 +102,7 @@ FROZEN_FILES = [
 
 MODEL_TEXT_FLOOR = {
     "src/tools/ask_user.rs": 16,
-    "src/tools/bash.rs": 6,
+    "src/tools/bash.rs": 7,
     "src/tools/custom.rs": 1,
     "src/tools/edit.rs": 7,
     "src/tools/file.rs": 26,
@@ -107,12 +110,13 @@ MODEL_TEXT_FLOOR = {
     "src/tools/process.rs": 14,
     "src/tools/registry.rs": 4,
     "src/tools/repo_map.rs": 3,
+    "src/tools/sandbox.rs": 8,
     "src/tools/skill.rs": 3,
     "src/tools/task.rs": 4,
     "src/tools/todo.rs": 14,
     "src/permissions.rs": 20,
     "src/discussion.rs": 8,
-    "src/agent.rs": 38,
+    "src/agent.rs": 39,
     "src/agent/executor.rs": 5,
     "src/provider/mod.rs": 6,
     "src/provider/projection.rs": 1,
@@ -131,7 +135,8 @@ ENGLISH_PROSE_CEILING = 27
 # --- ② docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是
 # `docs/agents/domain.md`，最高 45.5% 是 `docs/observability.md`；`docs/adr/*.md`
-# 是 2026-09-30 ADR 中文化那一轮加进来的，实测 42.6–46.4%；`AGENTS.md` 同一天翻的，
+# 是 2026-09-30 ADR 中文化那一轮加进来的，实测 42.6–46.4%；`docs/sandbox.md`（35.2%）
+# 与 ADR 0006（43.1%）是 2026-10-01 沙箱那一批量的；`AGENTS.md` 同一天翻的，
 # 实测 25.8% —— 它字节少、标识符密，比例天然低）。留 2 点余量是因为文档里必然有英文
 # 标识符、代码路径、引用与命令，插一段代码块就会拉低比例；但再往下掉 —— 也就是有人把
 # 整段散文翻回英文 —— 必须报红。
@@ -142,6 +147,7 @@ DOCS_MIN_RATIO = {
     "docs/adr/0003-plan-leaves-the-permission-modes.md": 41,
     "docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md": 43,
     "docs/adr/0005-model-visible-text-in-chinese.md": 36,
+    "docs/adr/0006-sandbox-by-bubblewrap.md": 41,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
@@ -151,6 +157,7 @@ DOCS_MIN_RATIO = {
     "docs/observability.md": 43,
     "docs/render.md": 42,
     "docs/repo-map.md": 43,
+    "docs/sandbox.md": 33,
     "docs/skills.md": 41,
     "docs/tui-manual-checklist.md": 46,
     "docs/agents/domain.md": 29,

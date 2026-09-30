@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>沙箱是什么 · 图解</title>
+<style>
+  :root{
+    --ink:#1a365d; --body:#2d3748; --muted:#718096;
+    --blue:#4299e1; --blue-bg:#ebf8ff; --blue-line:#90cdf4;
+    --orange:#dd6b20; --orange-bg:#fffaf0;
+    --green:#38a169; --green-bg:#f0fff4;
+    --red:#e53e3e; --red-bg:#fff5f5;
+    --paper:#fff8f0; --card:#ffffff;
+    --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; padding:0 16px 72px;
+    background:var(--paper); color:var(--body);
+    font-family:system-ui,-apple-system,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px; margin:0 auto}
+  header{text-align:center; padding:64px 0 8px}
+  h1{
+    font-size:clamp(34px,7vw,58px); color:var(--ink);
+    margin:0 0 10px; letter-spacing:.02em; line-height:1.2;
+  }
+  .sub{color:var(--muted); font-size:clamp(15px,2.4vw,19px); margin:0}
+  .card{
+    background:var(--card); border-radius:30px;
+    padding:26px 22px 32px; margin:22px 0;
+    box-shadow:0 8px 30px rgba(26,54,93,.09);
+  }
+  .card h2{
+    font-size:clamp(22px,3.8vw,32px); color:var(--ink);
+    margin:14px 0 0; text-align:center; line-height:1.35;
+  }
+  .lead{
+    font-size:clamp(18px,3vw,25px); text-align:center;
+    margin:10px 0 0; font-weight:700; color:var(--ink);
+  }
+  .small{
+    font-size:clamp(14px,2.2vw,17px); text-align:center;
+    color:var(--muted); margin:8px 0 0;
+  }
+  .fig{margin:0}
+  svg{display:block; width:100%; height:auto}
+  .kicker{
+    display:inline-block; padding:4px 14px; border-radius:999px;
+    font-size:13px; font-weight:700; letter-spacing:.06em;
+    background:var(--blue-bg); color:var(--blue);
+  }
+  .center{text-align:center}
+
+  /* 五种沙箱卡片 */
+  .grid{display:grid; gap:14px; margin-top:22px}
+  @media (min-width:720px){ .grid{grid-template-columns:1fr 1fr} }
+  .tile{
+    display:flex; gap:14px; align-items:flex-start;
+    padding:16px 18px; border-radius:20px;
+    background:var(--blue-bg); border:2px solid var(--blue-line);
+  }
+  .tile .icon{font-size:40px; line-height:1.1; flex:0 0 auto}
+  .tile h3{margin:0; font-size:clamp(17px,2.6vw,21px); color:var(--ink)}
+  .tile p{margin:4px 0 0; font-size:clamp(13px,2vw,15.5px); color:var(--body)}
+  .tile .who{
+    display:block; margin-top:6px; font-size:clamp(12px,1.9vw,14px);
+    color:var(--muted);
+  }
+  .tile.o{background:var(--orange-bg); border-color:#fbd38d}
+  .tile.g{background:var(--green-bg); border-color:#9ae6b4}
+  .tile.r{background:var(--red-bg); border-color:#feb2b2}
+
+  /* 对照表 */
+  .rows{margin-top:20px; border:2px solid var(--line); border-radius:20px; overflow:hidden}
+  .row{display:flex; flex-wrap:wrap; gap:6px 14px; padding:14px 18px; border-top:2px solid var(--line)}
+  .row:first-child{border-top:0}
+  .row .k{flex:1 1 150px; font-weight:700; color:var(--ink)}
+  .row .v{flex:2 1 260px; color:var(--body)}
+  .row:nth-child(odd){background:#fbfdff}
+
+  footer{text-align:center; margin:44px 0 0; color:var(--muted); font-size:14px}
+  .final{
+    background:var(--ink); color:#fff; border-radius:30px;
+    padding:36px 24px; text-align:center; margin-top:26px;
+  }
+  .final p{margin:0; font-size:clamp(19px,3.4vw,28px); font-weight:700; line-height:1.6}
+  .final p + p{margin-top:10px; font-size:clamp(15px,2.4vw,19px); font-weight:400; color:#cbd5e0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>沙箱是什么？</h1>
+    <p class="sub">给完全不懂的人看的图解 · 全是大白话</p>
+  </header>
+
+  <!-- ① -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 300" role="img" aria-label="一个小朋友在围栏里玩，围栏外面有文件和网络">
+        <rect width="640" height="300" rx="24" fill="#f7fafc"/>
+        <rect x="60" y="56" width="330" height="200" rx="34"
+              fill="#ebf8ff" stroke="#4299e1" stroke-width="7" stroke-dasharray="18 13"/>
+        <text x="225" y="196" font-size="112" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧒</text>
+        <text x="225" y="100" font-size="26" text-anchor="middle" fill="#2b6cb0" font-weight="700">圈里</text>
+
+        <text x="520" y="118" font-size="62" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">📁</text>
+        <text x="520" y="204" font-size="62" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🌐</text>
+        <text x="520" y="286" font-size="62" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🔑</text>
+        <text x="410" y="170" font-size="44" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🚫</text>
+      </svg>
+    </div>
+    <h2>沙箱 = 给程序划一个圈</h2>
+    <p class="lead">圈里随便玩，圈外碰不到。</p>
+    <p class="small">「沙箱」这词就是从这来的 —— 给小孩玩沙子的那个围栏。</p>
+  </section>
+
+  <!-- ② -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 240" role="img" aria-label="程序请求内核，内核去拿文件">
+        <defs>
+          <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#4299e1"/>
+          </marker>
+        </defs>
+        <rect width="640" height="240" rx="24" fill="#f7fafc"/>
+
+        <text x="80" y="132" font-size="86" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧒</text>
+        <text x="80" y="188" font-size="19" text-anchor="middle" fill="#2d3748" font-weight="700">程序</text>
+
+        <path d="M160 108 H296" stroke="#4299e1" stroke-width="6" marker-end="url(#arw)"/>
+        <text x="228" y="92" font-size="18" text-anchor="middle" fill="#2d3748">「帮我拿」</text>
+
+        <text x="376" y="132" font-size="86" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">👩‍🏫</text>
+        <text x="376" y="188" font-size="19" text-anchor="middle" fill="#2d3748" font-weight="700">内核（系统）</text>
+
+        <path d="M456 108 H576" stroke="#4299e1" stroke-width="6" marker-end="url(#arw)"/>
+        <text x="516" y="92" font-size="18" text-anchor="middle" fill="#2d3748">「拿去」</text>
+
+        <text x="606" y="132" font-size="70" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">📁</text>
+      </svg>
+    </div>
+    <h2>程序其实碰不到任何东西</h2>
+    <p class="lead">它只能说：老师，帮我拿一下。</p>
+    <p class="small">老师就是内核。老师摇头，它真的什么也拿不到。</p>
+  </section>
+
+  <!-- ③ -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 250" role="img" aria-label="老师在好几个位置可以拦下请求">
+        <rect width="640" height="250" rx="24" fill="#f7fafc"/>
+        <text x="320" y="52" font-size="22" text-anchor="middle" fill="#1a365d" font-weight="700">老师在好几个地方都能拦你</text>
+
+        <text x="86" y="152" font-size="58" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🚪</text>
+        <text x="86" y="196" font-size="16" text-anchor="middle" fill="#2d3748">门口</text>
+
+        <text x="204" y="152" font-size="58" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">👓</text>
+        <text x="204" y="196" font-size="16" text-anchor="middle" fill="#2d3748">换眼镜</text>
+
+        <text x="322" y="152" font-size="58" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">📒</text>
+        <text x="322" y="196" font-size="16" text-anchor="middle" fill="#2d3748">查本子</text>
+
+        <text x="440" y="152" font-size="58" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍🔧</text>
+        <text x="440" y="196" font-size="16" text-anchor="middle" fill="#2d3748">换个人</text>
+
+        <text x="558" y="152" font-size="58" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🏠</text>
+        <text x="558" y="196" font-size="16" text-anchor="middle" fill="#2d3748">另开一栋</text>
+      </svg>
+    </div>
+    <h2>沙箱 = 老师多看一眼</h2>
+    <p class="lead">在哪个环节看，就叫哪种沙箱。</p>
+    <p class="small">看得见什么，就管得住什么 —— 这一句后面还会用到。</p>
+  </section>
+
+  <!-- ④ -->
+  <section class="card">
+    <div class="center"><span class="kicker">流行的大概五种</span></div>
+    <h2>按「在哪拦」分成五种</h2>
+
+    <div class="grid">
+      <div class="tile">
+        <div class="icon">🚪</div>
+        <div>
+          <h3>门口搜身</h3>
+          <p>只看你「要做什么动作」，看不到你指着什么东西。</p>
+          <span class="who">seccomp · Linux</span>
+        </div>
+      </div>
+
+      <div class="tile o">
+        <div class="icon">👓</div>
+        <div>
+          <h3>换一副眼镜</h3>
+          <p>给你换掉整个房间的样子。你的房间变小了，别的地方根本不在视野里。</p>
+          <span class="who">bubblewrap、Docker/Podman 容器 · Linux</span>
+        </div>
+      </div>
+
+      <div class="tile g">
+        <div class="icon">📒</div>
+        <div>
+          <h3>查本子</h3>
+          <p>房间不变，但老师手里多一张清单。每次动手前翻一下，不在单子上就摇头。</p>
+          <span class="who">Landlock · Linux、Seatbelt · macOS、AppArmor / SELinux</span>
+        </div>
+      </div>
+
+      <div class="tile">
+        <div class="icon">🧑‍🔧</div>
+        <div>
+          <h3>换个人去干</h3>
+          <p>不让你自己去，派一个被管住的人替你去。上网就是这么管的。</p>
+          <span class="who">网络代理 · 各家沙箱、受限令牌 · Windows</span>
+        </div>
+      </div>
+
+      <div class="tile r">
+        <div class="icon">🏠</div>
+        <div>
+          <h3>另开一栋房子</h3>
+          <p>干脆搬出去住，自己一栋房子、自己一个管家。最安全，也最重。</p>
+          <span class="who">Firecracker、Kata、gVisor、云 sandbox、WebAssembly</span>
+        </div>
+      </div>
+
+      <div class="tile r">
+        <div class="icon">🧩</div>
+        <div>
+          <h3>换个身体</h3>
+          <p>让它只在一种「安全身体」里跑，身体本来就做不了危险动作。</p>
+          <span class="who">WebAssembly（WASI）</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑤ -->
+  <section class="card">
+    <h2>那它们各自靠什么实现？</h2>
+    <div class="rows">
+      <div class="row"><div class="k">🚪 门口搜身</div><div class="v">系统调用的入口装一个过滤器</div></div>
+      <div class="row"><div class="k">👓 换眼镜</div><div class="v">「命名空间」：每个程序可以有一份自己的房间清单</div></div>
+      <div class="row"><div class="k">📒 查本子</div><div class="v">内核里的安全检查钩子（LSM）</div></div>
+      <div class="row"><div class="k">🧑‍🔧 换个人</div><div class="v">换掉真正干活的程序，或中间加一道</div></div>
+      <div class="row"><div class="k">🏠 另开一栋</div><div class="v">硬件虚拟化 / 独立内核 / 语言运行时</div></div>
+    </div>
+    <p class="small" style="margin-top:18px">共同点：它们都活在「老师」这一侧，程序自己拆不掉。</p>
+  </section>
+
+  <!-- ⑥ -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 260" role="img" aria-label="网络从围栏的缺口溜出去">
+        <rect width="640" height="260" rx="24" fill="#f7fafc"/>
+        <path d="M120 40 V220" stroke="#4299e1" stroke-width="8"
+              stroke-dasharray="20 16" fill="none"/>
+        <text x="200" y="150" font-size="86" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🧒</text>
+        <text x="120" y="248" font-size="16" text-anchor="middle" fill="#2d3748">围栏</text>
+
+        <path d="M200 96 C 320 40, 420 40, 500 96" stroke="#e53e3e" stroke-width="6"
+              fill="none" stroke-dasharray="10 8"/>
+        <text x="356" y="52" font-size="18" text-anchor="middle" fill="#e53e3e" font-weight="700">缝隙</text>
+
+        <text x="540" y="120" font-size="70" text-anchor="middle"
+              font-family="system-ui,'Noto Color Emoji',sans-serif">🌐</text>
+        <text x="540" y="186" font-size="16" text-anchor="middle" fill="#e53e3e" font-weight="700">溜出去了</text>
+      </svg>
+    </div>
+    <h2>为什么沙箱也会漏？</h2>
+    <p class="lead">老师只在他看得见的地方管。</p>
+    <p class="small">网络、别的程序、你手里已经攥着的东西 —— 看不见，就管不了。</p>
+  </section>
+
+  <!-- ⑦ -->
+  <div class="final">
+    <p>沙箱 = 让老师在替程序做事之前，多问一句「行不行」。</p>
+    <p>问在哪一步，边界就在哪一步。</p>
+  </div>
+
+  <footer>图解 · 2026-09-30 · 配套调研在 .scratch/sandbox/research/</footer>
+
+</div>
+</body>
+</html>

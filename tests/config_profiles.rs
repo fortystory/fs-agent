@@ -5,10 +5,13 @@
 //! 所以没有哪个测试会改进程的环境变量，
 //! 也没有哪个测试碰网络。
 
+use std::ffi::OsStr;
 use std::fs;
+use std::path::PathBuf;
 
 use fs_agent::config::{
-    self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, Vendor, DEFAULT_MODEL,
+    self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, SandboxAvailability,
+    SandboxMode, Vendor, DEFAULT_MODEL,
 };
 use fs_agent::permissions::Mode;
 
@@ -824,4 +827,63 @@ fn an_unknown_mode_is_a_startup_error_that_names_the_three() {
     // 启动路径原样打出这句话，所以丢掉一个行续反斜杠
     // 就会在句子中间塞进一串空格。
     assert!(!error.contains("  "), "一句话，里面没有连续空格：{error:?}");
+}
+
+#[test]
+fn the_sandbox_section_defaults_to_bwrap_with_the_tool_caches_writable() {
+    let config = resolve(
+        None,
+        &env(&[("HOME", "/home/ada"), ("PATH", "/usr/bin")]),
+    )
+    .unwrap();
+
+    assert_eq!(config.sandbox.mode, SandboxMode::Bwrap);
+    assert_eq!(
+        config.sandbox.writable_roots,
+        vec![
+            PathBuf::from("/home/ada/.cargo"),
+            PathBuf::from("/home/ada/.rustup"),
+            PathBuf::from("/home/ada/.cache"),
+        ],
+        "缺省可写根：没有它们 `cargo build` 会失败。这是可用性决定，不是安全决定"
+    );
+    assert_eq!(
+        config.sandbox.masks,
+        vec![
+            PathBuf::from("/home/ada/.config/fs-agent"),
+            PathBuf::from("/home/ada/.ssh"),
+        ],
+        "遮罩目录写死、不给旋钮"
+    );
+    assert_eq!(config.sandbox.availability, SandboxAvailability::Untested);
+    assert_eq!(
+        config.sandbox.search_path.as_deref(),
+        Some(OsStr::new("/usr/bin"))
+    );
+}
+
+#[test]
+fn the_sandbox_section_takes_off_and_its_own_writable_roots() {
+    let text = "[sandbox]\nmode = \"off\"\nwritable_roots = [\"~/work\", \"/srv/cache\"]\n";
+    let config = resolve(
+        Some(text),
+        &env(&[("HOME", "/home/ada"), ("PATH", "/usr/bin")]),
+    )
+    .unwrap();
+
+    assert_eq!(config.sandbox.mode, SandboxMode::Off);
+    assert_eq!(
+        config.sandbox.writable_roots,
+        vec![PathBuf::from("/home/ada/work"), PathBuf::from("/srv/cache")]
+    );
+}
+
+#[test]
+fn an_unknown_sandbox_mode_is_a_startup_error() {
+    let text = "[sandbox]\nmode = \"seatbelt\"\n";
+    let error = resolve(Some(text), &env(&[])).unwrap_err().to_string();
+
+    assert!(error.contains("seatbelt"), "{error}");
+    assert!(error.contains("bwrap"), "{error}");
+    assert!(error.contains("off"), "{error}");
 }

@@ -16,6 +16,8 @@ use crate::context::skills::Skills;
 use crate::provider::ToolSpec;
 use crate::questions::UserQuestions;
 
+use super::sandbox::Sandbox;
+
 /// 一次已规划调用的工作区副作用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
@@ -122,6 +124,9 @@ pub struct ToolContext<'a> {
     /// 一次 `bash` 调用跑在其下的墙钟上限（spec §7）。是会话配置，携带进来，好让工具永不伸手
     /// 去够那个会话。
     pub bash: &'a BashLimits,
+    /// 这一次调用跑在哪个沙箱里（沙箱 spec §7）。同样是会话配置在组装期变成的注入值：命令类工具
+    /// 把它交给 [`super::process::run`]，而不可用时那一步就是一条工具错误。
+    pub sandbox: &'a Sandbox,
     /// 跑一个嵌套执行者的端口，给 `task`（spec §16）。会话没挂端口时是 `None`，那时 `task`
     /// 如实报告，而不是假装在干活。
     pub executor: Option<&'a dyn ExecutorSpawner>,

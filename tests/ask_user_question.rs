@@ -26,7 +26,8 @@ use fs_agent::render::{
     console, spawn_plain_console_with, ConsoleQuestions, LineReader, RenderSinks, Renderer,
 };
 use fs_agent::tools::{
-    AskUserQuestionTool, BashLimits, Effect, PathLocks, Registry, SessionPaths, Tool, ToolContext,
+    AskUserQuestionTool, BashLimits, Effect, PathLocks, Registry, Sandbox, SessionPaths, Tool,
+    ToolContext,
     ToolError, ToolOutput, ASK_USER_QUESTION_TOOL, TASK_TOOL,
 };
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
@@ -79,6 +80,8 @@ async fn call(args: Value, port: Option<&dyn UserQuestions>) -> Result<ToolOutpu
     let skills = Skills::discover(cwd, None);
     let repo_map = RepoMapInput::default();
     let bash = BashLimits::default();
+    // 沙箱在这个文件里是关的：这里测的是提问工具，不跑任何进程。
+    let sandbox = Sandbox::new(&fs_agent::config::SandboxSettings::off());
     let passed = args.clone();
     let ctx = ToolContext {
         read_paths: &paths,
@@ -88,6 +91,7 @@ async fn call(args: Value, port: Option<&dyn UserQuestions>) -> Result<ToolOutpu
         skills: &skills,
         repo_map: &repo_map,
         bash: &bash,
+        sandbox: &sandbox,
         executor: None,
         questions: port,
         tool_call_id: "call-1",

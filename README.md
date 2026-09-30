@@ -29,7 +29,8 @@
 
 ### 前提
 
-- Linux x86_64（v1 只在这上面验证；**不做进程级沙箱**）
+- Linux x86_64（v1 只在这上面验证）
+- **一个可用的 `bubblewrap`**：`bash` 与动态工具的沙箱靠它，没有它这两个工具会拒绝运行（[`docs/sandbox.md`](docs/sandbox.md)）
 - **非 root**：以 root / sudo 启动一律拒绝，且没有 bypass flag
 - Rust（edition 2021）
 - 至少一个 provider 的 key
@@ -205,9 +206,7 @@ fs-agent --help
 
 另外：模型给的路径被限制在会话 cwd 及其子树；`.env` 家族默认拒绝（`*.example` / `*.sample` / `*.template` 除外）；密钥**在入流前**按值打码（流水线是 `打码 → 截断 → 落盘`，于是**流上的文本 == 模型看到的文本**，而工具执行仍拿真值；`outputs/*.txt` 打码，`outputs/*.before` 不打码——它是 `/undo` 的字节级还原源）；以 root 启动直接拒绝。
 
-**这不是沙箱。** v1 不做进程级隔离，对「模型把密钥发到网上」基本无能为力；升级路径写明是「只做 Linux 的 bubblewrap」，且**不预做抽象**。真正的边界是别把赔不起的 key 交给它。完整边界见 [`docs/credentials.md`](docs/credentials.md)。
-
-> **沙箱：有一条明确的意向，尚未设计。** 「项目目录内自动、目录外要审批」这个想法在 shell 那一格卡住了 —— 没有进程级隔离就没有可靠的「越界」信号（候选方案与 DSH 的做法、一手引用见 [`.scratch/sandbox/seed.md`](.scratch/sandbox/seed.md)）。那一步做完之前不动权限模式。
+**`bash` 有沙箱了，但它只管文件、不管网络。** `bash` 与动态工具跑在 **bubblewrap** 里：整台机器只读挂进来，只有会话工作区、`/tmp` 与一列工具缓存目录可写，区外的写由内核以 `EROFS` 打回（不是我们预判的）；`~/.config/fs-agent`（provider key 在那儿）与 `~/.ssh` 被遮成「空且只读」。bubblewrap 用不了时**拒绝跑 shell**，另有 `[sandbox] mode = "off"` 显式关掉这层。**网络不在这层的词表里**——带 key 的 `curl` 仍然和正经工作分不出来，所以「别把赔不起的 key 交给它」这句依然成立。完整边界见 [`docs/sandbox.md`](docs/sandbox.md)、[`docs/credentials.md`](docs/credentials.md)，以及 [ADR 0006](docs/adr/0006-sandbox-by-bubblewrap.md)。
 
 ## 架构
 
@@ -230,8 +229,8 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表：**领域词汇**（事件流、投影、待办列表……）加末尾一节**流程词汇**（feature 目录 / spec / 票 / 决策图 / 分诊标签……），并写明哪两类词不收（通用编程概念、skills 工具名）（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
-| [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） |
+| [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`sandbox`](docs/sandbox.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
@@ -258,9 +257,11 @@ python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 
 最重要的一条不变量：用 `sessions replay` 重算的投影**必须等于**当时实际发给 provider 的 `messages`。这是「事件流是唯一真相源」的验收，也是投影 bug 的唯一探测器。
 
-## 明确不做
+## 这一版不做
 
-AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、MCP client、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、进程级沙箱、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、compaction 的实现、把工具打包进 skill。理由逐条写在 [spec 的 `Out of Scope`](.scratch/fs-agent-v1/spec.md)——要动它们，先改 spec，而不是在实现里悄悄加一条路径。
+AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、MCP client、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、compaction 的实现、把工具打包进 skill、网络隔离、越界之后的一次性审批。理由逐条写在 [v1 spec 的 `Out of Scope`](.scratch/fs-agent-v1/spec.md) 与各 feature 自己的 spec 里。
+
+**这是一版的范围边界，不是永久判决。** 要动其中一条，先改 spec（或者像 [`sandbox`](.scratch/sandbox/spec.md) 那样另起一个 effort），而不是在实现里悄悄加一条路径——那份 sandbox spec 做的正是这件事：把「进程级沙箱」从这份清单里拿出去了一半（文件做到了，网络与其它平台仍不做）。
 
 ## License
 

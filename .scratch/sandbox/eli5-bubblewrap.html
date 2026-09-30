@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bubblewrap 是什么 · 图解</title>
+<style>
+  :root{
+    --ink:#1a365d; --body:#2d3748; --muted:#718096;
+    --blue:#4299e1; --blue-bg:#ebf8ff; --blue-line:#90cdf4;
+    --orange:#dd6b20; --orange-bg:#fffaf0; --orange-line:#fbd38d;
+    --green:#38a169; --green-bg:#f0fff4; --green-line:#9ae6b4;
+    --red:#e53e3e; --red-bg:#fff5f5; --red-line:#feb2b2;
+    --paper:#fff8f0; --card:#ffffff; --line:#e2e8f0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; padding:0 16px 72px;
+    background:var(--paper); color:var(--body);
+    font-family:system-ui,-apple-system,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.75; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px; margin:0 auto}
+  header{text-align:center; padding:64px 0 8px}
+  h1{font-size:clamp(32px,6.5vw,56px); color:var(--ink); margin:0 0 10px; letter-spacing:.02em; line-height:1.2}
+  h1 code{font-family:var(--mono); font-size:.82em; background:var(--blue-bg); padding:2px 12px; border-radius:14px}
+  .sub{color:var(--muted); font-size:clamp(15px,2.4vw,19px); margin:0}
+  .card{background:var(--card); border-radius:30px; padding:26px 22px 32px; margin:22px 0; box-shadow:0 8px 30px rgba(26,54,93,.09)}
+  .card h2{font-size:clamp(22px,3.8vw,32px); color:var(--ink); margin:14px 0 0; text-align:center; line-height:1.35}
+  .lead{font-size:clamp(18px,3vw,25px); text-align:center; margin:10px 0 0; font-weight:700; color:var(--ink)}
+  .small{font-size:clamp(14px,2.2vw,17px); text-align:center; color:var(--muted); margin:8px 0 0}
+  .fig{margin:0}
+  svg{display:block; width:100%; height:auto}
+  .kicker{display:inline-block; padding:4px 14px; border-radius:999px; font-size:13px; font-weight:700; letter-spacing:.06em; background:var(--blue-bg); color:var(--blue)}
+  .center{text-align:center}
+
+  pre{
+    margin:18px 0 0; padding:18px 20px; border-radius:18px;
+    background:#1a202c; color:#e2e8f0; overflow-x:auto;
+    font-family:var(--mono); font-size:clamp(12.5px,1.9vw,15px); line-height:1.9;
+  }
+  pre .c{color:#68d391}
+  pre .p{color:#f6ad55}
+
+  .flags{display:grid; gap:12px; margin-top:20px}
+  @media (min-width:720px){ .flags{grid-template-columns:1fr 1fr} }
+  .flag{display:flex; gap:12px; align-items:flex-start; padding:14px 16px; border-radius:18px; background:#f7fafc; border:2px solid var(--line)}
+  .flag .ic{font-size:34px; flex:0 0 auto; line-height:1.2}
+  .flag code{font-family:var(--mono); font-size:clamp(12px,1.9vw,14px); background:var(--blue-bg); color:#2b6cb0; padding:1px 7px; border-radius:7px}
+  .flag p{margin:4px 0 0; font-size:clamp(13px,2vw,15.5px)}
+  .flag h3{margin:0; font-size:clamp(15px,2.3vw,18px); color:var(--ink)}
+  .flag.g{background:var(--green-bg); border-color:var(--green-line)}
+  .flag.o{background:var(--orange-bg); border-color:var(--orange-line)}
+  .flag.r{background:var(--red-bg); border-color:var(--red-line)}
+
+  .final{background:var(--ink); color:#fff; border-radius:30px; padding:36px 24px; text-align:center; margin-top:26px}
+  .final p{margin:0; font-size:clamp(19px,3.4vw,28px); font-weight:700; line-height:1.6}
+  .final p + p{margin-top:10px; font-size:clamp(15px,2.4vw,19px); font-weight:400; color:#cbd5e0}
+  footer{text-align:center; margin:44px 0 0; color:var(--muted); font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1><code>bubblewrap</code></h1>
+    <p class="sub">图解 · 它是干什么的，凭什么管用</p>
+  </header>
+
+  <!-- ① -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 280" role="img" aria-label="外面的世界和程序看到的世界是两份清单">
+        <rect width="640" height="280" rx="24" fill="#f7fafc"/>
+        <text x="150" y="42" font-size="20" text-anchor="middle" fill="#1a365d" font-weight="700">真实的世界</text>
+        <text x="490" y="42" font-size="20" text-anchor="middle" fill="#1a365d" font-weight="700">程序看到的世界</text>
+
+        <text x="80" y="120" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📁</text>
+        <text x="150" y="120" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🔑</text>
+        <text x="222" y="120" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🌐</text>
+        <text x="80" y="200" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📂</text>
+        <text x="150" y="200" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🗄️</text>
+        <text x="222" y="200" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📦</text>
+
+        <text x="320" y="160" font-size="46" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">👓</text>
+        <text x="320" y="212" font-size="15" text-anchor="middle" fill="#dd6b20" font-weight="700">换一副</text>
+
+        <text x="440" y="130" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📁</text>
+        <text x="510" y="130" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📂</text>
+        <text x="580" y="130" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📦</text>
+        <rect x="404" y="72" width="212" height="110" rx="20" fill="none" stroke="#4299e1" stroke-width="5" stroke-dasharray="14 10"/>
+        <text x="510" y="228" font-size="15" text-anchor="middle" fill="#2b6cb0" font-weight="700">只有清单上的东西</text>
+      </svg>
+    </div>
+    <h2>它不锁东西，它换你看到的世界</h2>
+    <p class="lead">同一台电脑，两份「房间清单」。</p>
+    <p class="small">房间里摆什么，由 bubblewrap 说了算。真实世界一点没动。</p>
+  </section>
+
+  <!-- ② -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 230" role="img" aria-label="先给一个空房间，再一件件搬东西进来">
+        <rect width="640" height="230" rx="24" fill="#f7fafc"/>
+        <text x="105" y="120" font-size="70" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📦</text>
+        <text x="105" y="182" font-size="16" text-anchor="middle" fill="#2d3748" font-weight="700">先给个空盒子</text>
+
+        <path d="M180 118 H280" stroke="#4299e1" stroke-width="6"/>
+        <path d="M280 112 L296 118 L280 124 z" fill="#4299e1"/>
+        <text x="232" y="100" font-size="16" text-anchor="middle" fill="#2d3748">再搬</text>
+
+        <rect x="320" y="52" width="280" height="136" rx="24" fill="#ebf8ff" stroke="#4299e1" stroke-width="5" stroke-dasharray="14 10"/>
+        <text x="380" y="140" font-size="52" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📁</text>
+        <text x="455" y="140" font-size="52" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📂</text>
+        <text x="530" y="140" font-size="52" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🗄️</text>
+        <text x="460" y="212" font-size="16" text-anchor="middle" fill="#2b6cb0" font-weight="700">要什么，搬什么</text>
+      </svg>
+    </div>
+    <h2>先给一个空房子，再把要的搬进来</h2>
+    <p class="lead">你不搬的，它就不存在。</p>
+    <p class="small">真的：<code>bwrap -- /bin/sh</code> 会报「找不到 /bin/sh」—— 空房子里什么都没有。</p>
+  </section>
+
+  <!-- ③ -->
+  <section class="card">
+    <div class="center"><span class="kicker">三种搬法</span></div>
+    <h2>搬进来的时候，可以贴封条</h2>
+    <div class="flags">
+      <div class="flag">
+        <div class="ic">🔒</div>
+        <div>
+          <h3>搬进来 + 贴封条</h3>
+          <p><code>--ro-bind 外面 里面</code></p>
+          <p>看得见、读得到，改不了。想写就报「只读」。</p>
+        </div>
+      </div>
+      <div class="flag g">
+        <div class="ic">✏️</div>
+        <div>
+          <h3>搬进来 + 能改</h3>
+          <p><code>--bind 外面 里面</code></p>
+          <p>这份是能动的。工作区就用这个。</p>
+        </div>
+      </div>
+      <div class="flag o">
+        <div class="ic">🧻</div>
+        <div>
+          <h3>换个一次性的</h3>
+          <p><code>--tmpfs /tmp</code></p>
+          <p>里面是新的空盒子，随便写；程序一退就没了。</p>
+        </div>
+      </div>
+      <div class="flag r">
+        <div class="ic">🚪</div>
+        <div>
+          <h3>顺手换别的清单</h3>
+          <p><code>--unshare-net</code> <code>--unshare-pid</code></p>
+          <p>网络、别的程序，也各有一份「看得见吗」的清单。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ -->
+  <section class="card">
+    <h2>一条真实的命令，逐段读</h2>
+    <pre><span class="p">bwrap</span> \
+  --ro-bind / /            <span class="c"># 整个外面：搬进来，贴封条</span>
+  --bind "$PWD" "$PWD"     <span class="c"># 工作区：这份能改</span>
+  --dev /dev               <span class="c"># 设备（不搬的话很多程序起不来）</span>
+  --proc /proc             <span class="c"># 进程信息</span>
+  --unshare-pid            <span class="c"># 连「还有谁在跑」也不让它看</span>
+  --die-with-parent        <span class="c"># 我死了，里面的东西一起死</span>
+  -- bash -lc "make test"  <span class="c"># 真正要跑的命令</span></pre>
+    <p class="small" style="margin-top:16px">最后那条命令完全不知道自己在盒子里。它只是照常跑。</p>
+  </section>
+
+  <!-- ⑤ -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 240" role="img" aria-label="程序退出后房间消失，真实世界完好">
+        <rect width="640" height="240" rx="24" fill="#f7fafc"/>
+        <text x="130" y="126" font-size="70" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">💨</text>
+        <text x="130" y="186" font-size="16" text-anchor="middle" fill="#2d3748" font-weight="700">程序退出</text>
+
+        <path d="M215 118 H330" stroke="#4299e1" stroke-width="6"/>
+        <path d="M330 112 L346 118 L330 124 z" fill="#4299e1"/>
+
+        <text x="450" y="96" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">📁</text>
+        <text x="530" y="96" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🔑</text>
+        <text x="490" y="182" font-size="54" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🗄️</text>
+        <text x="490" y="222" font-size="16" text-anchor="middle" fill="#38a169" font-weight="700">完好无损</text>
+      </svg>
+    </div>
+    <h2>程序一退，房间就没了</h2>
+    <p class="lead">外面的世界从头到尾没被改过。</p>
+    <p class="small">被换掉的只是「这份清单」。它住在程序自己身上，程序一走就散。</p>
+  </section>
+
+  <!-- ⑥ -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 220" role="img" aria-label="普通用户也能在自己的小世界里当管理员">
+        <rect width="640" height="220" rx="24" fill="#f7fafc"/>
+        <text x="140" y="122" font-size="64" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🙋</text>
+        <text x="140" y="176" font-size="16" text-anchor="middle" fill="#2d3748" font-weight="700">普通用户</text>
+
+        <path d="M216 118 H318" stroke="#4299e1" stroke-width="6"/>
+        <path d="M318 112 L334 118 L318 124 z" fill="#4299e1"/>
+
+        <rect x="356" y="46" width="248" height="132" rx="24" fill="#f0fff4" stroke="#38a169" stroke-width="5"/>
+        <text x="480" y="112" font-size="52" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">👑</text>
+        <text x="480" y="156" font-size="15" text-anchor="middle" fill="#38a169" font-weight="700">只在这个小世界里</text>
+      </svg>
+    </div>
+    <h2>它为什么不需要 root？</h2>
+    <p class="lead">每个人都能给自己开一个小世界，在里面当管理员。</p>
+    <p class="small">但这个「管理员」出了小世界一文不值 —— 所以不用给它特权。</p>
+  </section>
+
+  <!-- ⑦ -->
+  <section class="card">
+    <div class="fig">
+      <svg viewBox="0 0 640 200" role="img" aria-label="bubblewrap 自己声明不是安全边界">
+        <rect width="640" height="200" rx="24" fill="#fff5f5"/>
+        <text x="90" y="118" font-size="64" text-anchor="middle" font-family="system-ui,'Noto Color Emoji',sans-serif">🧑‍🔧</text>
+        <text x="330" y="82" font-size="19" fill="#e53e3e" font-weight="700">「我不是你和系统之间的安全边界」</text>
+        <text x="330" y="120" font-size="15" fill="#742a2a">—— 因为它能做的事，你自己写个工具也能做</text>
+        <text x="330" y="152" font-size="15" fill="#742a2a">它约束的是「程序」，不是「用户」</text>
+      </svg>
+    </div>
+    <h2>它自己说：我不是安全边界</h2>
+    <p class="lead">它管的是「别让程序乱来」，不是「防坏人」。</p>
+    <p class="small">所以它适合的场景是：给一次自动操作一个可靠的失败点。</p>
+  </section>
+
+  <div class="final">
+    <p>bubblewrap = 给程序换一份「看得见什么」的清单。</p>
+    <p>换清单这件事由内核担保，程序自己拆不掉；程序一走，清单就散。</p>
+  </div>
+
+  <footer>图解 · 2026-10-01 · 配套调研在 .scratch/sandbox/research/</footer>
+
+</div>
+</body>
+</html>

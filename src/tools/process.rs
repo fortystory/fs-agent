@@ -8,8 +8,13 @@
 //! * 子进程被放进它自己的进程组，超时（或调用被丢掉）会 SIGKILL 整个**组**，所以一个又起了
 //!   子进程的命令不会把它们留在身后。
 //!
+//! 沙箱那一层就在这里接进来（`.scratch/sandbox/spec.md` §2）：真正 spawn 的是
+//! [`Sandbox::wrap`] 拼出来的 argv，而超时、`process_group(0)`、`killpg` 与输出捕获一行都
+//! 没变 —— `bwrap` 会 exec 目标命令并透传退出码，它的子进程与它同组，所以 `killpg` 照样
+//! 收得干净。
+//!
 //! 结果永远带着退出状态、stdout 与 stderr。非零退出是一条结果，不是 [`ToolError`]；只有
-//! spawn 或 wait 失败才是错误，因为只有那时才没有任何东西可报。
+//! spawn 或 wait 失败、以及**沙箱自己没起来**才是错误，因为那些情形下没有任何东西可报。
 
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -17,6 +22,7 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use super::sandbox::Sandbox;
 use super::tool::ToolError;
 
 /// 结果里那些分节标记，只在这里命名一次，好让测试与文档不会漂离模型真正看到的格式。
@@ -32,6 +38,7 @@ pub const TIMEOUT_PREFIX: &str = "超时：";
 const KILL_GRACE: Duration = Duration::from_secs(1);
 
 /// 一条跑完了（或被杀了）的命令产出了什么。
+#[derive(Debug)]
 pub struct CommandOutcome {
     /// 这次调用自己的超时有没有触发，并杀掉了整个组。
     pub timed_out: bool,
@@ -93,12 +100,15 @@ pub fn describe_status(status: &ExitStatus) -> String {
 
 /// 在它自己的进程组里 spawn `argv`，捕获两条流，并强制 `limit`。
 ///
-/// 只有 spawn 或 wait 失败才是 [`ToolError`]；命令自己的退出状态是数据。
+/// `argv` 先经 `sandbox` 包一层（`mode = "off"` 时是单位函数）。只有 spawn 或 wait 失败、
+/// 沙箱不可用、以及 `bwrap` 自己报错才是 [`ToolError`]；命令自己的退出状态是数据。
 pub async fn run(
     cwd: &std::path::Path,
     argv: &[String],
     limit: Duration,
+    sandbox: &Sandbox,
 ) -> Result<CommandOutcome, ToolError> {
+    let argv = sandbox.wrap(argv, cwd)?;
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| ToolError::message("argv 为空，无法运行"))?;
@@ -194,13 +204,18 @@ pub async fn run(
             .await
             .map_err(|error| ToolError::message(format!("无法回收 `{program}`：{error}")))?,
     };
-    Ok(CommandOutcome {
+    let outcome = CommandOutcome {
         timed_out,
         limit,
         status,
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
-    })
+    };
+    // 「沙箱没起来」不是一条命令结果：这一次调用根本没有东西可报，所以它是一条错误。
+    if let Some(message) = sandbox.failure(&outcome.stderr) {
+        return Err(ToolError::message(message));
+    }
+    Ok(outcome)
 }
 
 /// 把子进程的一条流读到 EOF，无论命令写了什么。

@@ -182,13 +182,14 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
     assert_eq!(outcome.reason, StopReason::Aborted);
     assert_eq!(fixture.provider.requests().len(), 1);
 
-    // 手势不在流上：一次取消留下的恰好是骨架、
+    // 手势不在流上：一次取消留下的恰好是骨架（会话开始 + 那一刻的沙箱状态）、
     // 用户的问题、它停下的那个回合，以及它的中止。
     let events = read_events(&fixture.log_path).unwrap();
     assert_eq!(
         kinds(&events),
         vec![
             "SessionStarted",
+            "SandboxStatus",
             "MessageCompleted",
             "TurnStarted",
             "TurnEnded",

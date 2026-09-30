@@ -394,8 +394,9 @@ impl Transcript {
             } => {
                 blocks.push(Block::History { reason, summary });
             }
-            // 会话骨架不是一个人会实时读的叙述。
+            // 会话骨架不是一个人会实时读的叙述，沙箱状态也一样：它只进日志（沙箱 spec §8）。
             EventPayload::SessionStarted { .. } => {}
+            EventPayload::SandboxStatus { .. } => {}
         }
         blocks
     }

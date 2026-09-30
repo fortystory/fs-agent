@@ -243,7 +243,15 @@ impl Session {
     /// 这正是讨论能**跑在一场活会话上**的原因（spec §15）：它的讨论者是用户所在那场会话的兄弟，所
     /// 以它们的投影把那场会话的回合变成 `user` 消息，而它们的轮次追加到同一份流上。读集合刻意
     /// **不**继承 —— 读权限是每个 agent 各自的（spec §12），而讨论者什么都没读过。
-    pub(crate) fn fork(&self, config: SessionConfig, identity: Option<String>) -> Self {
+    ///
+    /// 沙箱是**会话**的事实，不是每个 agent 各自的（`.scratch/sandbox/spec.md` §3）：这场会话
+    /// 已经探过一次，而 fork 进来的那份配置（`cli` 用 `Config::session_config` 造出来的）里那一
+    /// 格还没探过。继承父会话定下来的那一份，而不是让讨论者在第一次 `bash` 调用时撞上「沙箱状态
+    /// 还没有定下来」——探测本来也不该有第二次，库不读进程环境。
+    pub(crate) fn fork(&self, mut config: SessionConfig, identity: Option<String>) -> Self {
+        if config.sandbox.needs_probe() {
+            config.sandbox = self.config.sandbox.clone();
+        }
         Self::new(SessionParts {
             id: self.id.clone(),
             cwd: self.cwd.clone(),

@@ -683,7 +683,12 @@ fn env_family(call: &Call<'_>) -> Option<Verdict> {
         })
 }
 
-fn is_env_file(path: &Path) -> bool {
+/// 这条路径是不是 `.env` 一族（模板后缀除外）。
+///
+/// crate 内可见，是因为沙箱的保护路径清单必须与这条地板**用同一份口径**：`bash` 里
+/// 能改动的 `.env` 家族，与文件工具里能改动的那些，不能是两份会漂离的名单
+/// （`.scratch/sandbox/issues/01-sandbox-wrap-pure-function.md` 第 5 条）。
+pub(crate) fn is_env_file(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
