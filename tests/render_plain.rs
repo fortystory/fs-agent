@@ -533,3 +533,43 @@ async fn a_permission_question_names_the_tool_and_the_call() {
     assert!(!text.contains("perm-1"), "请求 id 没有露面：{text:?}");
     assert!(!text.contains("call-5"), "调用 id 没有露面：{text:?}");
 }
+
+#[tokio::test]
+async fn the_sandbox_state_gets_one_narration_line_like_a_context_injection() {
+    // 沙箱状态与上下文注入同一档：转录里一行、不给任何发言者说话。模型上下文里没有它
+    // （log-only），但人在对话里看得见（沙箱 spec §8）。
+    let events = [
+        Event::new(
+            1,
+            SpeakerId::System,
+            EventPayload::ContextInjected {
+                source: fs_agent::events::ContextSource::AgentsMd,
+                content: "规矩".to_owned(),
+            },
+        ),
+        Event::new(
+            2,
+            SpeakerId::System,
+            EventPayload::SandboxStatus {
+                mode: "bwrap".to_owned(),
+                unavailable_reason: None,
+            },
+        ),
+        Event::new(
+            3,
+            SpeakerId::System,
+            EventPayload::SandboxStatus {
+                mode: "bwrap".to_owned(),
+                unavailable_reason: Some("PATH 上没有 `bwrap`".to_owned()),
+            },
+        ),
+    ];
+    let (_stdout, stderr) = run(&events, false).await;
+    let text = stderr.text();
+    assert!(text.contains("[上下文注入：AGENTS.md]"), "{text}");
+    assert!(text.contains("[沙箱：bwrap]"), "{text}");
+    assert!(
+        text.contains("[沙箱：bwrap · 不可用：PATH 上没有 `bwrap`]"),
+        "不可用时把原因一起摊开：{text}"
+    );
+}

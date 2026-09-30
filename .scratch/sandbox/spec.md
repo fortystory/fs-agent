@@ -201,11 +201,12 @@ user.name hack` 被拒，报的是 `无法写入配置文件 .git/config: 设备
    进去。§4 说的「清单与地板对齐但不等同、而且比地板窄」在这里再窄一处，边界写在
    [`docs/sandbox.md`](../../docs/sandbox.md) 的「压回只读」那一段。
 
-7. **`sessions show` 显示沙箱状态**（code-review 之后补的）。§8 的「界面不显示」说的是 TUI
-   左栏与状态行；而用户故事 8 要的是审计者能回头核对，复盘视图正是那个地方。最初实现把
-   `SandboxStatus` 从复盘条目里一并过滤了，于是流里有、`sessions show` 里看不见 —— 现在
-   `observe::Entry::Sandbox` 与 `wording::sandbox()` 各就各位（`[沙箱：bwrap]`，不可用时带
-   原因），`--json` 里就是那条 entry。
+7. **沙箱状态在转录里也占一行**（code-review 之后先补到复盘视图，随后按用户的要求补齐到
+   对话）。§8 的「界面不显示」说的是 TUI **左栏与状态行**——常驻 UI，不值当；但转录不是：
+   `SandboxStatus` 现在与 `[上下文注入：…]` 同一档，`Block::Sandbox` 由 plain 与 TUI 两位
+   画家各画一行暗色叙述（headless 也写一行到 stderr 诊断），`sessions show` 与 `--json` 里
+   同样有它（`observe::Entry::Sandbox` + `wording::sandbox()`）。模型那一侧仍然没有
+   （projection 是空分支）：它在沙箱里的信息一直来自 `bash` 工具描述那句常量。
 
 **测试分布**：`tests/sandbox.rs` 29 条（纯函数逐字断言、配置、探测、`process::run` 的接缝、
 经 `assemble` 的端到端，以及一条在真 `bwrap` 上跑的真机回归 —— 没有 `bwrap` 的机器上自动跳过）；

@@ -197,6 +197,12 @@ impl Plain {
             Block::ContextInjected { source } => {
                 self.line(&wording::context_injected(source));
             }
+            Block::Sandbox {
+                mode,
+                unavailable_reason,
+            } => {
+                self.line(&wording::sandbox(&mode, unavailable_reason.as_deref()));
+            }
             Block::History { reason, summary } => {
                 self.line(&wording::history(reason, summary.as_deref()));
             }

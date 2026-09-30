@@ -99,8 +99,17 @@ impl Render for Headless {
                     let speaker = &event.speaker_id;
                     match &event.payload {
                         EventPayload::SessionStarted { .. } => {}
-                        // 沙箱状态只进日志（沙箱 spec §8）：界面不显示它，机器模式也不叙述它。
-                        EventPayload::SandboxStatus { .. } => {}
+                        // 与上下文注入同一档：一行诊断（模型上下文里没有它）。
+                        EventPayload::SandboxStatus {
+                            mode,
+                            unavailable_reason,
+                        } => {
+                            let _ = writeln!(
+                                sinks.stderr_diagnostic,
+                                "{}",
+                                wording::sandbox(mode, unavailable_reason.as_deref())
+                            );
+                        }
                         EventPayload::TurnStarted { iteration, .. } => {
                             if !is_executor(speaker) {
                                 final_text.clear();

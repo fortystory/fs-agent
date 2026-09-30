@@ -115,6 +115,15 @@ pub enum Block {
     ContextInjected {
         source: ContextSource,
     },
+    /// 这条流这一刻的沙箱状态（沙箱 spec §8）。
+    ///
+    /// 与上下文注入同一档：一行叙述，不带发言者、也不进模型上下文。`sessions show` 里也有
+    /// 它 —— 两处说的是同一件事。
+    Sandbox {
+        /// 协议标记：`"bwrap"` / `"off"`。
+        mode: String,
+        unavailable_reason: Option<String>,
+    },
     History {
         reason: HistoryReason,
         summary: Option<String>,
@@ -394,9 +403,17 @@ impl Transcript {
             } => {
                 blocks.push(Block::History { reason, summary });
             }
-            // 会话骨架不是一个人会实时读的叙述，沙箱状态也一样：它只进日志（沙箱 spec §8）。
+            // 会话骨架不是一个人会实时读的叙述；沙箱状态按上下文注入那一档画一行。
             EventPayload::SessionStarted { .. } => {}
-            EventPayload::SandboxStatus { .. } => {}
+            EventPayload::SandboxStatus {
+                mode,
+                unavailable_reason,
+            } => {
+                blocks.push(Block::Sandbox {
+                    mode,
+                    unavailable_reason,
+                });
+            }
         }
         blocks
     }

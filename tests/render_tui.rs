@@ -1021,3 +1021,15 @@ fn a_second_question_does_not_displace_the_one_on_screen() {
     state.key(Key::Char('n'));
     assert_eq!(first.try_recv().unwrap(), Answer::Deny);
 }
+
+#[test]
+fn a_sandbox_block_is_one_dim_narration_line() {
+    let lines = render_block_uncoloured(&Block::Sandbox {
+        mode: "bwrap".to_owned(),
+        unavailable_reason: None,
+    });
+    assert_eq!(lines.len(), 1, "一行：{lines:#?}");
+    let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "[沙箱：bwrap]");
+    assert_eq!(lines[0].spans[0].style.fg, Some(Color::DarkGray));
+}

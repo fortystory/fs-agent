@@ -3726,6 +3726,12 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
         Block::ContextInjected { source } => {
             vec![narration(wording::context_injected(source.clone())).into()]
         }
+        Block::Sandbox {
+            mode,
+            unavailable_reason,
+        } => {
+            vec![narration(wording::sandbox(mode, unavailable_reason.as_deref())).into()]
+        }
         Block::History { reason, summary } => {
             vec![narration(wording::history(*reason, summary.as_deref())).into()]
         }
