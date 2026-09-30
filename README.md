@@ -238,12 +238,12 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 
 **约定**（新文档照这个走，别猜；这是 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 定的线）：
 
-- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
+- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
 - **只有三类东西留英文**：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **模型可见**的文本（工具声明与描述、工具结果、`AgentError.message`）；③ **进事件流、要永久回放**的文本（`PermissionDecided.reason`、`SessionError.detail`、协议标记 `CONCLUSION:`、投影的 `[轮 N · 名字]` 前缀）。
 - **术语写「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上（行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、panic 钩子（panic hook））。`cwd` / `token` / `assistant` 这类字段名与 schema 值不夹注、保持英文（CONTEXT.md 里「token 不给中文名」同一条）。
 - **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
 - 为什么后两类不动：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) —— 模型可见文本是 provider 缓存前缀的头，改它要付「缓存整体作废 + 老流永久中英混排」两笔，而那一侧的读者是模型，不是人。
-- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（冻结面无 CJK、混住文件里必须留英文的字面量仍在、`docs/*.md` 与 `docs/adr/*.md` 的中文占比下限、ADR 的标题与小标题是中文、`src/` 注释中文行的棘轮）。
+- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（冻结面无 CJK、混住文件里必须留英文的字面量仍在、`docs/*.md` 与 `docs/adr/*.md` 加 `AGENTS.md` 的中文占比下限、ADR 的标题与小标题是中文、`src/` 注释中文行的棘轮）。
 
 ## 开发
 

@@ -30,4 +30,6 @@
 
 **术语写成「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上。这一轮落的几处 —— 行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、原始模式（raw mode）、括号粘贴（bracketed paste）、panic 钩子（panic hook）、系统提示词（system prompt）、区域设置（locale）、国际化（i18n）、伪终端（pty）、空操作（no-op）、转储（dump）。**schema 值与字段名不夹注、保持英文**：`cwd` / `token` / `assistant` / `args`，与 `CONTEXT.md` 里「token 不给中文名」同一条。
 
-**护栏跟着扩**：`docs/adr/*.md` 进 `DOCS_MIN_RATIO`（照旧是逐份「实测 −2 点」），并新增一条「ADR 的标题 / 小标题必须含中文」—— 否则下一个 ADR 又会写出 `## Consequences`。检查由三条变五条（另两条是冻结面与混住文件里的英文串）。
+**`AGENTS.md` 也翻成中文**（正文）。它确实是注入进 `messages` 的 `ContextInjected { source: AgentsMd }`，但那**不属于**上面「模型可见的文本」那一类 —— 那一类指的是 provider 按 schema 读的、格式敏感的串（工具声明与描述、工具结果、`AgentError.message`）。`AGENTS.md` 是这份仓库自己的约定，与身份提示（`src/agent.rs` 里那几段中文，早就列在冻结面的白名单里）同属「harness 对模型说话」，而且是给人写、给人读的。代价照旧照 ADR 0001 记的那一笔：它在会话存在之前读一次、落在缓存前缀的头，翻它等于让新会话的前缀缓存整体换一次，老会话 `--continue` 重放出来仍是英文。它那五个小标题（`## Agent skills` 与四个 `###`）**是技能工具链的锚点、保留英文** —— 那是这份文件的 schema，不是散文。
+
+**护栏跟着扩**：`docs/adr/*.md` 与 `AGENTS.md` 进 `DOCS_MIN_RATIO`（照旧是逐份「实测 −2 点」），并新增一条「ADR 的标题 / 小标题必须含中文」—— 否则下一个 ADR 又会写出 `## Consequences`。检查由三条变五条（另两条是冻结面与混住文件里的英文串）。
