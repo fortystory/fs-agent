@@ -17,20 +17,22 @@
 //! 流的原因。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
 
 use crate::context::repo_map::RepoMapInput;
 use crate::context::skills::Skills;
+use crate::permissions::{Escalation, PathError};
 use crate::provider::ToolSpec;
 use crate::questions::UserQuestions;
 
 use super::paths::{PathLocks, SessionPaths};
-use super::sandbox::Sandbox;
+use super::sandbox::{self, Sandbox};
 use super::tool::{
-    BashLimits, Effect, ExecutorSpawner, ReadSet, Tool, ToolContext, ToolError, ToolOutput,
+    BashLimits, Effect, ExecutorSpawner, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError,
+    ToolOutput, WritePathResolver,
 };
 
 /// 一次「改前先读」拒绝开头的那段文本。
@@ -102,6 +104,7 @@ impl Registry {
         tool_name: &str,
         args: &Value,
         paths: &SessionPaths,
+        home: Option<&Path>,
     ) -> Result<CallFacts, ToolError> {
         let Some(tool) = self.get(tool_name) else {
             return Err(ToolError::message(format!("没有注册的工具：{tool_name}")));
@@ -109,13 +112,13 @@ impl Registry {
 
         let effect = tool.effect(args);
         let mut write_targets = Vec::new();
-        let mut path_error: Option<ToolError> = None;
+        let mut path_error: Option<PathError> = None;
         if let Effect::WritePaths(inputs) = &effect {
             for input in inputs {
-                match paths.resolve(input) {
+                match paths.resolve_write(input) {
                     Ok(path) => write_targets.push(path),
                     Err(error) => {
-                        path_error.get_or_insert(error);
+                        path_error.get_or_insert(PathError::write(error));
                         write_targets.push(paths.unresolved(input));
                     }
                 }
@@ -126,16 +129,28 @@ impl Registry {
         write_targets.dedup();
 
         // 读集合的候选。循环只在这次调用成功时才记录它们：一次失败的读不能给后面的写发许可。
-        // 工作区解析不了的读，与写的一样，是路径上限上的拒绝。
+        // 工作区解析不了的读，与写的一样，是路径上限上的拒绝 —— 不同的是它带的方向，门据此
+        // 给 `outside_read` 那一条裁决。
         let mut read_paths = Vec::new();
         for path in tool.read_paths(args) {
-            match paths.resolve(&path) {
+            match paths.resolve_read(&path) {
                 Ok(resolved) => read_paths.push(resolved),
                 Err(error) => {
-                    path_error.get_or_insert(error);
+                    path_error.get_or_insert(PathError::read(error));
                 }
             }
         }
+
+        // 升级申请里的路径在这里变成绝对路径：它由模型写，可能是 `~` 或相对路径，而门要拿它
+        // 与遮罩目录比、沙箱要拿它挂可写根，两处必须是同一批字符串。
+        let escalation = tool.escalation(args)?.map(|raw| Escalation {
+            justification: raw.justification,
+            writable_paths: raw
+                .writable_paths
+                .iter()
+                .map(|path| sandbox::escalation_path(path, paths.cwd(), home))
+                .collect(),
+        });
 
         Ok(CallFacts {
             tool_name: tool_name.to_owned(),
@@ -144,6 +159,7 @@ impl Registry {
             read_paths,
             argv: tool.command(args),
             path_error,
+            escalation,
         })
     }
 
@@ -168,6 +184,10 @@ impl Registry {
             guards.push(call.locks.lock(path).await);
         }
 
+        // 这一次调用额外放开的可写根：升级批准的那批路径（如果有）。`Sandbox` 是每次调用
+        // 现构造的值，所以这批路径只活这一次调用；门已经把它们判过一遍，写死的边界在那之前
+        // 就被拒了。
+        let sandbox = call.sandbox.with_grants(&allowed.sandbox_grants);
         let ctx = ToolContext {
             read_paths: &call.paths,
             write_paths: &call.paths,
@@ -176,7 +196,7 @@ impl Registry {
             skills: &call.skills,
             repo_map: &call.repo_map,
             bash: &call.bash,
-            sandbox: &call.sandbox,
+            sandbox: &sandbox,
             executor: call.executor.as_deref(),
             questions: call.questions.as_deref(),
             tool_call_id: &call.tool_call_id,
@@ -214,6 +234,9 @@ pub struct AllowedCall {
     pub read_paths: Vec<PathBuf>,
     /// 这次调用索要工作区级的锁时为真。
     pub exclusive: bool,
+    /// 这一次调用额外放开的沙箱可写根 —— 升级批准的那批路径（`.scratch/workspace-mode`
+    /// 的 spec §4）。缺省为空：没有升级就没有额外的东西。
+    pub sandbox_grants: Vec<PathBuf>,
 }
 
 /// 一次解析完的调用：权限门与护栏要读的一切。
@@ -231,9 +254,11 @@ pub struct CallFacts {
     pub read_paths: Vec<PathBuf>,
     /// 一个命令类工具将要跑的 argv，当它跑命令时。
     pub argv: Option<Vec<String>>,
-    /// 第一个没能对着会话 cwd 解析的目标。门把它读成路径上限（原始目标在 `write_targets`
-    /// 里），而万一日后绕过了门，护栏会拒掉它。
-    pub path_error: Option<ToolError>,
+    /// 第一个没能对着会话 cwd 解析的目标，带着它是读还是写。门按方向给裁决（读看
+    /// `outside_read`、写看档位），而万一日后绕过了门，护栏会拒掉它。
+    pub path_error: Option<PathError>,
+    /// 这一次调用带上的升级申请 —— 当它带了一个，且路径已经解析成绝对路径。
+    pub escalation: Option<Escalation>,
 }
 
 impl CallFacts {
@@ -245,7 +270,7 @@ impl CallFacts {
     /// 注册表。
     pub fn guardrails(&self, read_set: &ReadSet) -> GuardedCall {
         if let Some(error) = &self.path_error {
-            return GuardedCall::Refused(error.clone());
+            return GuardedCall::Refused(error.error.clone());
         }
 
         if let Some(path) = self
@@ -263,6 +288,7 @@ impl CallFacts {
             write_targets: self.write_targets.clone(),
             read_paths: self.read_paths.clone(),
             exclusive: matches!(self.effect, Effect::Exclusive),
+            sandbox_grants: Vec::new(),
         })
     }
 }

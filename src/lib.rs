@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::task::JoinHandle;
 
 use crate::agent::{CancelSignal, TurnOutcome};
-use crate::config::{SandboxAvailability, SandboxSettings, SessionConfig};
+use crate::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
 use crate::context::skills::Skills;
 use crate::events::{ContextSource, Event, EventLog, EventPayload, Role, SessionId, SpeakerId};
 use crate::hooks::Hook;
@@ -360,6 +360,41 @@ impl OpenedSession {
     }
 }
 
+/// `workspace` 档在没有可用沙箱的地方不存在（`.scratch/workspace-mode/spec.md` §6）。
+///
+/// 这一档对 shell 的承诺完全建立在沙箱上：判不出区内区外的命令先跑、被内核拒了才走升级。
+/// 没有沙箱时它的那个承诺是空的，所以宁可让这一档不存在，也不给一个看起来在保护、实际有
+/// 一个大洞的档位。
+///
+/// 判据两条，任一条成立就拒：显式写了 `[sandbox] mode = "off"`，或者探测说 `bwrap` 在这台
+/// 机器上起不来。检查发生在**组装期** —— 它是唯一同时看得到权限策略与沙箱状态的地方 ——
+/// 而 `cli` 的每一个组装点照旧把 [`Error`] 打到 stderr。
+fn workspace_needs_a_sandbox(
+    mode: Mode,
+    settings: &SandboxSettings,
+    cwd: &Path,
+) -> Result<(), Error> {
+    if mode != Mode::Workspace {
+        return Ok(());
+    }
+    let reason = if settings.mode == SandboxMode::Off {
+        Some("`[sandbox] mode` 被显式设成了 \"off\"".to_owned())
+    } else {
+        match sandbox::resolve_availability(settings, cwd) {
+            SandboxAvailability::Unavailable { reason } => Some(reason),
+            _ => None,
+        }
+    };
+    let Some(reason) = reason else {
+        return Ok(());
+    };
+    Err(Error::WorkspaceWithoutSandbox(format!(
+        "权限模式 workspace（工作区）需要一层可用的沙箱，而这里没有：{reason}。\
+         两条出路：把 `[sandbox] mode` 换回 \"bwrap\"（并让 `bwrap` 出现在 PATH 上），\
+         或者换一档（`ask` / `auto`）"
+    )))
+}
+
 /// 组装一场单 agent 会话。不读任何环境。
 pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     let AssemblyParts {
@@ -369,6 +404,8 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
         config,
         renderer,
     } = parts;
+
+    workspace_needs_a_sandbox(scaffold.policy.mode(), &config.sandbox, &scaffold.cwd)?;
 
     let opened = OpenedSession::open(scaffold, renderer)?;
     let mut session = opened.session(config, Some(agent::agent_identity()));
@@ -536,6 +573,11 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
 
     let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
     validate_roster(&debaters, &synthesizer, max_rounds)?;
+    let mode = scaffold.policy.mode();
+    for debater in &debaters {
+        workspace_needs_a_sandbox(mode, &debater.config.sandbox, &scaffold.cwd)?;
+    }
+    workspace_needs_a_sandbox(mode, &synthesizer.config.sandbox, &scaffold.cwd)?;
 
     let opened = OpenedSession::open(scaffold, renderer)?;
 
@@ -611,6 +653,12 @@ impl Harness {
     ) -> Result<agent::DiscussionOutcome, Error> {
         let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
         validate_roster(&debaters, &synthesizer, max_rounds)?;
+        let mode = self.policy.lock().expect("策略互斥锁已中毒").mode();
+        let cwd = self.session.cwd().to_path_buf();
+        for debater in &debaters {
+            workspace_needs_a_sandbox(mode, &debater.config.sandbox, &cwd)?;
+        }
+        workspace_needs_a_sandbox(mode, &synthesizer.config.sandbox, &cwd)?;
         let (roster, synthesizer) =
             discussion_participants(debaters, synthesizer, |config, identity| {
                 self.session.fork(config, identity)
@@ -848,4 +896,7 @@ pub enum Error {
     /// 用户点名的技能载入不了。
     #[error("技能加载：{0}")]
     Skill(String),
+    /// `workspace` 档在没有可用沙箱的地方不存在（`.scratch/workspace-mode/spec.md` §6）。
+    #[error("权限模式：{0}")]
+    WorkspaceWithoutSandbox(String),
 }

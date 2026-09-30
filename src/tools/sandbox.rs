@@ -164,6 +164,11 @@ pub const BWRAP_FAILURE_PREFIX: &str = "bwrap: ";
 pub struct Sandbox {
     spec: SandboxSpec,
     availability: SandboxAvailability,
+    /// 这一次调用额外放开的可写根 —— 升级批准的那批路径
+    /// （`.scratch/workspace-mode/spec.md` §4）。单独存，而不是混进 `spec.writable_roots`：
+    /// 一条**不存在**的批准路径是一条工具错误，而不是静默跳过 —— `bwrap` 只能绑已经存在的
+    /// 源，静默跳过等于用户批了一条什么都不发生的路径。
+    grants: Vec<PathBuf>,
 }
 
 impl Sandbox {
@@ -176,12 +181,28 @@ impl Sandbox {
                 masks: settings.masks.clone(),
             },
             availability: settings.availability.clone(),
+            grants: Vec::new(),
         }
     }
 
     /// 这一层是不是被显式关掉了（`mode = "off"`）。
     fn is_off(&self) -> bool {
         self.spec.mode == SandboxMode::Off
+    }
+
+    /// 这一次调用额外放开的可写根 —— 升级批准的那批路径。
+    ///
+    /// 粒度就是**声明的那个路径本身**：文件就绑文件、目录就绑目录，不做父目录提升。因为
+    /// [`Sandbox`] 是每次调用现构造的，这一批只活这一次调用：不进任何规则、不写
+    /// `config.toml`、也不进会话状态（`.scratch/workspace-mode/spec.md` §4）。
+    pub fn with_grants(&self, grants: &[PathBuf]) -> Sandbox {
+        let mut sandbox = self.clone();
+        for grant in grants {
+            if !sandbox.grants.contains(grant) {
+                sandbox.grants.push(grant.clone());
+            }
+        }
+        sandbox
     }
 
     /// 把这一次要跑的 argv 包好。
@@ -205,7 +226,19 @@ impl Sandbox {
                 "沙箱不可用，命令没有跑：{reason}。{WAYS_OUT}"
             )));
         };
-        let mut wrapped = wrap(argv, cwd, &self.spec);
+        // 升级批准的那批路径：`bwrap` 只能绑**已经存在**的源（不存在的挂载目标会让整条
+        // 命令起不来），所以不存在的那一条在这里明确失败 —— 一条不生效的批准比拒绝更糟，
+        // 用户会以为自己放开了什么。粒度仍然是声明的那条路径本身，不做父目录提升。
+        if let Some(missing) = self.grants.iter().find(|grant| !grant.exists()) {
+            return Err(ToolError::message(format!(
+                "升级批准的那条路径不存在：{}。沙箱只能放开已经存在的路径（声明什么就绑什么，\
+                 不做父目录提升）：声明它的父目录，或者先把它建出来",
+                missing.display()
+            )));
+        }
+        let mut spec = self.spec.clone();
+        spec.writable_roots.extend(self.grants.iter().cloned());
+        let mut wrapped = wrap(argv, cwd, &spec);
         wrapped[0] = bwrap.display().to_string();
         Ok(wrapped)
     }
@@ -326,6 +359,84 @@ fn protected_paths(cwd: &Path) -> Vec<PathBuf> {
     }
     paths.extend(env_files(cwd));
     paths
+}
+
+/// 这条路径是不是**写死的安全默认**之一，因而升级通道不碰它。
+///
+/// 三类：[`SandboxSpec::masks`] 里的遮罩目录（provider key 与 ssh 私钥所在）、工作区里
+/// 的 `.git/config` 与 `.git/hooks`、以及工作区里 `.env` 一族的文件。判据只有这一份 ——
+/// 权限门用它，挂载表用它，`.env` 的口径与 [`crate::permissions::is_env_file`] 共用，绝不
+/// 抄第二份会漂离的清单（`.scratch/workspace-mode/spec.md` §4、§5）。
+///
+/// 与[`protected_paths`]的唯一差别是**存在性**：这里按路径判，而不是按「磁盘上现在有
+/// 什么」。申请写一个还不存在的 `.env` 或 `.git/config` 同样是越界 —— 那样的批准会让
+/// 下一次调用以为自己在保护，实际上文件已经写下去了。
+pub fn sealed(path: &Path, cwd: &Path, masks: &[PathBuf]) -> bool {
+    let path = absolute(path, cwd);
+    let cwd = absolute(cwd, cwd);
+    if masks
+        .iter()
+        .any(|mask| path.starts_with(absolute(mask, &cwd)))
+    {
+        return true;
+    }
+    for relative in [".git/config", ".git/hooks"] {
+        let protected = absolute(&cwd.join(relative), &cwd);
+        if path == protected || path.starts_with(&protected) {
+            return true;
+        }
+    }
+    path.starts_with(&cwd) && is_env_file(&path)
+}
+
+/// 把模型声明的升级路径变成一条绝对的、`~` 已展开的路径。
+///
+/// 升级参数里的路径由模型写，可能带 `~`、也可能是相对路径；而门要拿它与遮罩目录比、
+/// 沙箱要拿它挂可写根，两处必须是同一批字符串。归一化里**不**要求目标存在：要放开的
+/// 常常正是一个还没建的目录（`~/.npm`）。
+pub fn escalation_path(raw: &Path, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    let expanded = match raw.to_str() {
+        Some("~") => home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| raw.to_path_buf()),
+        Some(text) => match text.strip_prefix("~/") {
+            Some(rest) => match home {
+                Some(home) => home.join(rest),
+                None => raw.to_path_buf(),
+            },
+            None => raw.to_path_buf(),
+        },
+        None => raw.to_path_buf(),
+    };
+    absolute(&expanded, cwd)
+}
+
+/// 一条绝对路径：能 `canonicalize` 就解析符号链接，不能就按字面折掉 `.` 与 `..`。
+fn absolute(path: &Path, cwd: &Path) -> PathBuf {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    match std::fs::canonicalize(&joined) {
+        Ok(resolved) => resolved,
+        Err(_) => fold(&joined),
+    }
+}
+
+/// 词法地折掉 `.` 与 `..`。
+fn fold(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// 工作区顶层**存在的** `.env` 家族文件，按名字排序（于是输出是确定的）。

@@ -8,7 +8,7 @@ agent 自己的 API key 就躺在同一台机器的 `~/.config/fs-agent/config.t
 
 | 路径 | 谁拦住它 |
 | --- | --- |
-| (a) **文件工具读** | `.env` 家族被策略拒掉（`permissions::env_family`），**并且**模型给的每条路径都被限制在会话 cwd 内（`tools::paths::SessionPaths`）—— key 真正的家在会话工作区之外，所以任何一个工具跑起来之前它就被拒了。**shell 那条路也堵上了**：[沙箱](sandbox.md)把 `~/.config/fs-agent` 遮成空且只读 |
+| (a) **文件工具读** | `.env` 家族被策略拒掉（`permissions::env_family`），**并且**模型给的每条路径默认都被限制在会话 cwd 内（`tools::paths::SessionPaths`）—— key 真正的家在会话工作区之外，所以任何一个工具跑起来之前它就被拒了。**这条地板有一个旋钮**：`[permissions] outside_read = "ask" \| "allow"` 会让区外读变成「问一次」或「放行」，而 `~/.config/fs-agent/config.toml` 正是那条区外路径 —— **配成 `ask` / `allow` 就等于把读 key 从「不可能」降成一次点击**。缺省 `"deny"` 不动摇，写下来才算放弃（[permissions.md](permissions.md)）。**shell 那条路也堵上了**：[沙箱](sandbox.md)把 `~/.config/fs-agent` 遮成空且只读，而升级手势对这些遮罩目录直接拒绝、不给通道 |
 | (b) **命令回显** | 打码发生在**事件被追加之前**，所以 `cat config.toml` 的产物在**进流**的路上就被洗掉（同时进文件、进渲染器、进投影，一次搞定） |
 | (c) **跨 agent** | 投影本来就会丢掉另一方的工具结果正文与推理；剩下的那一块 —— 某一方用自己的话复述一个 key —— 也被覆盖，因为打码的范围包含消息正文 |
 | (d) **出网** | **如实说：什么都没有。** 带 key 的 `curl` 和正经工作分不出来，而[沙箱](sandbox.md)只管文件、不管网络。真正的边界是别把一个你赔不起的 key 交给它 |
@@ -106,13 +106,14 @@ spec §10 定死了入流前流水线的顺序，§20 把打码放在它的最�
   是因为它一般在工作区之外；从 `$HOME` 起会话时它就在工作区里面，cwd 规则与 `.env` 规则
   都盖不住它。还成立的是打码：读一次配置文件，落到流上时那个 key 已经是 `[redacted]`。
 - **工作区限制没有基于规则的例外，这一点与 spec §20 不一致。** spec §20 说 cwd 限制的
-  例外是「一条权限规则把它放宽」；门实际把工作区外的目标当成一道**任何规则都降不下去的
-  拒绝地板**（`permissions::decide`，由
-  `tests/permission_gate.rs::the_path_limit_is_a_deny_floor` 钉住），而派发层在任何一个
-  工具跑起来之前就拒掉。之所以留着这样，是因为规则代数忽略具体程度（spec §12），于是
-  「任何匹配的 allow 都放宽范围」会意味着一条宽泛的 `Tool("read_file")` allow 悄悄给了
-  任意位置的读权限；要安全地放宽，需要一种现在还不存在的规则形状。今天保护工作区内一个
-  key 的是打码，不是规则。
+  例外是「一条权限规则把它放宽」；门实际给的是两条**策略级**的出口，而不是规则：
+  `[permissions] outside_read` 管读那一侧（四档都认它），`workspace` 档把写那一侧从
+  地板变成「问一次」（`permissions::decide`，由
+  `tests/permission_gate.rs::the_path_limit_is_a_deny_floor_in_every_mode_but_workspace`
+  钉住）。之所以不走规则，是因为规则代数忽略具体程度（spec §12），于是「任何匹配的 allow
+  都放宽范围」会意味着一条宽泛的 `Tool("read_file")` allow 悄悄给了任意位置的读权限；
+  一条**显式写下来的**策略旋钮没有这个问题。今天保护工作区内一个 key 的是打码，以及
+  「缺省仍是拒绝」这条立场。
 - **打码不是沙箱。** spec §20 把升级路径留成「只做 Linux 的 bubblewrap」，且刻意不预做
   抽象；`docs/bash.md` 列出了 `rm` 断路器看不见的东西。
 
@@ -125,7 +126,8 @@ spec §10 定死了入流前流水线的顺序，§20 把打码放在它的最�
 | 工具结果的打码 → 截断 → 落盘 | `src/agent.rs`（`emit_completed`）+ `src/context.rs`（`truncate_result`） |
 | 执行者的生命周期事件走同一条路 | `src/agent/executor.rs` |
 | 值的集合：每一个解析出来的 provider key | `src/config.rs`（`Config::redactor`、`SessionConfig::redactor`） |
-| 模型给的路径的 cwd 限制 | `src/tools/paths.rs`（`SessionPaths`） |
+| 模型给的路径的 cwd 限制 | `src/tools/paths.rs`（`SessionPaths`，按读/写两个方向分别放宽） |
+| 区外读那一条裁决 | `src/permissions.rs`（`Policy::outside_read`）+ `src/config.rs`（`[permissions] outside_read`） |
 | `.env` 家族的拒绝 | `src/permissions.rs`（`env_family`） |
 | root 拒绝 | `src/cli.rs`（`root_refusal`，在 `main` 里最先被调用） |
 | 测试 | `tests/credentials.rs` |

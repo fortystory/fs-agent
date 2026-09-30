@@ -18,6 +18,8 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::permissions::Direction;
+
 use super::tool::{ReadPathResolver, ToolError, WritePathResolver};
 
 /// 把一个会话产物按「仅属主」写盘（`0600`）。
@@ -38,10 +40,19 @@ pub fn write_owner_only(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// 把模型给的路径解析到某一个会话 cwd 上。
+///
+/// 收容检查按**方向**分成两个开关，它们缺省都是关着的（也就是照旧一律收容）。打开它们的
+/// 只有一种情形：那一次越界刚刚被策略或用户放行 —— `outside_read = "allow"`，或者
+/// `workspace` 档下一条区外写被批准。门在**之前**看到的是严格解析下的越界事实，而工具在
+/// **之后**拿到的是真正的目标（`.scratch/workspace-mode/spec.md` §2、§3）。
 #[derive(Debug, Clone)]
 pub struct SessionPaths {
     /// 规范化的会话 cwd。
     cwd: PathBuf,
+    /// 读目标落在 cwd 之外时不再报错。
+    outside_read: bool,
+    /// 写目标落在 cwd 之外时不再报错。
+    outside_write: bool,
 }
 
 impl SessionPaths {
@@ -49,17 +60,41 @@ impl SessionPaths {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         let cwd = cwd.into();
         let cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| lexical_absolute(&cwd));
-        Self { cwd }
+        Self {
+            cwd,
+            outside_read: false,
+            outside_write: false,
+        }
     }
 
     pub fn cwd(&self) -> &Path {
         &self.cwd
     }
 
-    /// 解析一条必须存在的路径（或它的父目录必须存在）。
+    /// 同一个会话、但读那一侧不再收容：那一次区外读已经被放行。
+    pub fn relaxed_read(&self) -> Self {
+        Self {
+            outside_read: true,
+            ..self.clone()
+        }
+    }
+
+    /// 同一个会话、但写那一侧不再收容：那一次区外写已经被批准。
+    pub fn relaxed_write(&self) -> Self {
+        Self {
+            outside_write: true,
+            ..self.clone()
+        }
+    }
+
+    /// 解析一条必须存在的路径（或它的父目录必须存在），按**写**那一侧的收容规则。
     ///
     /// 路径存在时结果是绝对且不含符号链接的，所以同一个文件在读集合与锁表里永远给出同一个键。
     pub fn resolve(&self, path: &Path) -> Result<PathBuf, ToolError> {
+        self.resolve_towards(path, Direction::Write)
+    }
+
+    fn resolve_towards(&self, path: &Path, direction: Direction) -> Result<PathBuf, ToolError> {
         let joined = self.join(path);
         let resolved = match std::fs::canonicalize(&joined) {
             Ok(resolved) => resolved,
@@ -77,7 +112,7 @@ impl SessionPaths {
                 }
             }
         };
-        self.check_contained(&resolved)?;
+        self.check_contained(&resolved, direction)?;
         Ok(resolved)
     }
 
@@ -98,13 +133,20 @@ impl SessionPaths {
     }
 
     /// 收容规则，按组件逐段做前缀比较，这样 `/work-evil` 冒充不了 `/work` 的子路径。
-    fn check_contained(&self, resolved: &Path) -> Result<(), ToolError> {
+    fn check_contained(&self, resolved: &Path, direction: Direction) -> Result<(), ToolError> {
         if resolved.starts_with(&self.cwd) {
             return Ok(());
         }
+        let relaxed = match direction {
+            Direction::Read => self.outside_read,
+            Direction::Write => self.outside_write,
+        };
+        if relaxed {
+            return Ok(());
+        }
         Err(ToolError::message(format!(
-            "路径 {} 在会话工作区之外（{}）；文件工具只被允许在工作区里干活，没有任何权限规则\
-             能放宽这一条",
+            "路径 {} 在会话工作区之外（{}）；文件工具只被允许在工作区里干活，要越界得由权限\
+             策略或用户放行（`[permissions] outside_read`，或 `workspace` 档下一次批准）",
             resolved.display(),
             self.cwd.display()
         )))
@@ -113,13 +155,13 @@ impl SessionPaths {
 
 impl ReadPathResolver for SessionPaths {
     fn resolve_read(&self, path: &Path) -> Result<PathBuf, ToolError> {
-        self.resolve(path)
+        self.resolve_towards(path, Direction::Read)
     }
 }
 
 impl WritePathResolver for SessionPaths {
     fn resolve_write(&self, path: &Path) -> Result<PathBuf, ToolError> {
-        self.resolve(path)
+        self.resolve_towards(path, Direction::Write)
     }
 }
 

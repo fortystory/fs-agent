@@ -467,6 +467,8 @@ fn one_tool_rule_covers_every_dynamic_tool() {
     let effect = Effect::Exclusive;
     let argv = vec!["/bin/echo".to_owned(), "hi".to_owned()];
     let call = Call {
+        escalation: None,
+        masks: &[],
         tool_name: "custom__git__status",
         effect: &effect,
         write_targets: &[],

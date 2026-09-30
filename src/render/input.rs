@@ -370,6 +370,8 @@ async fn answer_question(reader: &mut LineReader, request: &PermissionRequest) -
         &request.tool_name,
         &crate::render::transcript::summarize_args(&request.args),
         &request.reason,
+        request.speaker.as_ref(),
+        request.escalation.as_ref(),
     );
     match next_line(reader, &prompt).await.as_deref() {
         Some("y") | Some("yes") => Answer::Allow,

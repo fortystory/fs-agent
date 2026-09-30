@@ -15,9 +15,12 @@
 //! 后两条是每个命令类工具都需要的机制，所以它们住在 [`super::process`] 里、与动态工具共用
 //! （spec §14）；这个模块只是 shell 特有的那部分。
 
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::permissions::Escalation;
 use crate::provider::ToolSpec;
 
 use super::process;
@@ -35,6 +38,18 @@ pub const SANDBOX_NOTE: &str =
     "命令跑在一个文件沙箱里：工作区与一列缓存目录可写，区外只读；被沙箱拒绝说明命令越界了，\
      不是命令写错了。`/tmp` 每次调用都是新的：同一条命令内可用、跨命令不保留。（会话把 \
      `[sandbox] mode` 设成 \"off\" 时这一层是关着的。）";
+
+/// 工具描述里那段**升级手势**（`.scratch/workspace-mode/spec.md` §4）。
+///
+/// 与 [`SANDBOX_NOTE`] 同一个理由：模型可见、进请求前缀，所以是常量、一次定死。它要说清
+/// 四件事 —— 被拒是结论、越界只有带理由重试一次这一条路、不许先绕道去聊天里问、以及不许
+/// 在没被拒的时候投机性升级。
+pub const ESCALATION_NOTE: &str =
+    "命令被沙箱拒绝（内核说只读文件系统）就是这条命令的结论：那条路走不通。要越界只有一条路\
+     ——带上 `escalation`（`justification` 与 `writable_paths` 都要写、都要非空）把**同一条\
+     命令**原样重试一次，用户会就你声明的那几条路径问一次；批准只对这一次调用生效，拒绝即\
+     终局，同一条命令再被拒也不会再问。不许先绕道去聊天里问用户，也不许在没被拒的时候预先\
+     声明一个更宽的档位。";
 
 /// 那个 shell 与让它收下命令字符串的那个旗标。`-l` 给命令一份用户的登录环境；`-c` 才是收下
 /// 那一个参数的东西。
@@ -54,7 +69,7 @@ impl Tool for BashTool {
                  `bash -lc` 非交互地跑：没有 TTY、stdin 是空的，所以别启动交互式程序。\
                  有墙钟超时（默认配置是 120s；会话可以配一个不同的默认值与上限），\
                  超时会把整棵进程树杀掉。非零退出是正常结果。这次调用期间工作区被独占，\
-                 所以尽量跑短小、非交互的命令。{SANDBOX_NOTE}"
+                 所以尽量跑短小、非交互的命令。{SANDBOX_NOTE}{ESCALATION_NOTE}"
             ),
             parameters: serde_json::json!({
                 "type": "object",
@@ -68,6 +83,25 @@ impl Tool for BashTool {
                         "type": "integer",
                         "description": "可选，墙钟上限，单位毫秒。不写就用配置的默认值，并会被\
                                         配置的上限夹住"
+                    },
+                    "escalation": {
+                        "type": "object",
+                        "description": "可选，只在命令**被沙箱拒绝**之后带上：申请放开这一次\
+                                        调用要写的工作区之外的路径。理由与路径都要写、都要\
+                                        非空，成对出现。批准只对这一次调用生效",
+                        "properties": {
+                            "justification": {
+                                "type": "string",
+                                "description": "为什么要写那儿，一句话"
+                            },
+                            "writable_paths": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "这一次调用要放开的路径，就是这些路径本身，\
+                                                不做父目录提升；文件写文件，目录写目录"
+                            }
+                        },
+                        "required": ["justification", "writable_paths"]
                     }
                 },
                 "required": ["command"]
@@ -75,9 +109,17 @@ impl Tool for BashTool {
         }
     }
 
-    /// 一个 shell 什么都能写，所以每次调用都是 `Exclusive`，无论命令文本写了什么（spec §7）。
+    /// 一次 shell 什么都能写，所以每次调用都是 `Exclusive`，无论命令文本写了什么（spec §7）。
     fn effect(&self, _args: &Value) -> Effect {
         Effect::Exclusive
+    }
+
+    /// 模型带上来的升级申请，当它带了一个（`.scratch/workspace-mode/spec.md` §4）。
+    ///
+    /// 半截的写法 —— 有理由没路径、路径为空、字段类型不对 —— 是**参数错误**，不是静默
+    /// 忽略：一次被吞掉的升级申请会变成一条看起来「命令没跑成但也没人问」的谜。
+    fn escalation(&self, args: &Value) -> Result<Option<Escalation>, ToolError> {
+        escalation(args)
     }
 
     /// 任何东西启动之前门看到的 argv：那个 shell、它的旗标，以及作为**一个**元素的命令。
@@ -124,4 +166,53 @@ fn requested_timeout_ms(args: &Value) -> Result<Option<u64>, ToolError> {
             ToolError::message(format!("{BASH_TOOL}：`timeout_ms` 必须是正的整数毫秒数"))
         }),
     }
+}
+
+/// 参数里那次升级申请，当它带了的时候。
+///
+/// 形状是 `{"justification": "…", "writable_paths": ["…"]}`，两个字段都要非空、必须成对。
+/// 路径在这里只做「非空字符串」这一层校验，变成绝对路径是注册表的事（它才知道 cwd 与
+/// home），而「这些路径是不是写死的边界」是权限门的事。
+fn escalation(args: &Value) -> Result<Option<Escalation>, ToolError> {
+    let Some(value) = args.get("escalation").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let payload = value.as_object().ok_or_else(escalation_error)?;
+    let justification = payload
+        .get("justification")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(escalation_error)?;
+    let items = payload
+        .get("writable_paths")
+        .and_then(Value::as_array)
+        .ok_or_else(escalation_error)?;
+
+    let mut writable_paths = Vec::with_capacity(items.len());
+    for item in items {
+        let path = item
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(escalation_error)?;
+        writable_paths.push(PathBuf::from(path));
+    }
+    if writable_paths.is_empty() {
+        return Err(escalation_error());
+    }
+
+    Ok(Some(Escalation {
+        justification: justification.to_owned(),
+        writable_paths,
+    }))
+}
+
+/// 半截或形状不对的升级申请：一次参数错误，而不是被吞掉。
+fn escalation_error() -> ToolError {
+    ToolError::message(format!(
+        "{BASH_TOOL}：`escalation` 要写成 \
+         {{\"justification\": \"为什么要写那儿\", \"writable_paths\": [\"要放开的路径\"]}}，\
+         两个字段都要非空、必须成对；不给就整段别给"
+    ))
 }

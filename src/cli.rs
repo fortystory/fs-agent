@@ -140,7 +140,7 @@ struct InteractiveArgs {
     resume: bool,
     config: Option<PathBuf>,
     model: Option<String>,
-    /// `--mode readonly|ask|auto`：这一趟跑的权限模式，覆盖 `[permissions] mode`（spec §12）。不
+    /// `--mode readonly|ask|workspace|auto`：这一趟跑的权限模式，覆盖 `[permissions] mode`（spec §12）。不
     /// 写表示「文件怎么写就怎么来」。
     mode: Option<Mode>,
     cwd: Option<PathBuf>,
@@ -368,7 +368,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             locks: PathLocks::new(),
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
             // 用方没有应答者，于是降级。
-            policy: Policy::for_mode(mode),
+            policy: Policy::for_mode(mode).with_outside_read(config.outside_read),
             asker: Some(asker),
             questions,
             hook: None,
@@ -651,7 +651,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             locks: PathLocks::new(),
             // 文件里的模式：讨论者与任何会话一样走同一个权限门，而名册共享一个策略（spec §12、
             // §15）。
-            policy: Policy::for_mode(config.mode),
+            policy: Policy::for_mode(config.mode).with_outside_read(config.outside_read),
             asker: Some(asker),
             questions,
             hook: None,
@@ -1472,7 +1472,7 @@ async fn probe_model(
             locks: PathLocks::new(),
             // 探针是无头的、没有应答者，所以配置那一档的 `ask`（默认）会拒掉写，而不是挂在一个谁也
             // 看不见的问题上。
-            policy: Policy::for_mode(config.mode),
+            policy: Policy::for_mode(config.mode).with_outside_read(config.outside_read),
             asker: None,
             questions: None,
             // 票 05 落地挂载点；把用户声明的钩子接进 CLI 还没有归属的票，所以探针不带钩子跑。
@@ -2560,7 +2560,7 @@ mod tests {
     }
 
     #[test]
-    fn the_mode_flag_parses_the_three_modes_and_refuses_the_rest() {
+    fn the_mode_flag_parses_the_four_modes_and_refuses_the_rest() {
         use super::parse_interactive;
 
         let args = |words: &[&str]| {
@@ -2574,13 +2574,14 @@ mod tests {
         for (written, expected) in [
             ("readonly", Mode::Readonly),
             ("ask", Mode::Ask),
+            ("workspace", Mode::Workspace),
             ("auto", Mode::Auto),
         ] {
             assert_eq!(args(&["--mode", written]).unwrap().mode, Some(expected));
         }
         assert_eq!(args(&[]).unwrap().mode, None, "不写表示由文件决定");
         let error = args(&["--mode", "plan"]).unwrap_err();
-        for word in ["plan", "readonly", "ask", "auto"] {
+        for word in ["plan", "readonly", "ask", "workspace", "auto"] {
             assert!(error.contains(word), "`{word}` 没有出现在：{error}");
         }
     }

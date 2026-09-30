@@ -9,9 +9,9 @@
 
 | 部件 | 值 | 为什么 |
 | --- | --- | --- |
-| `spec()` | `bash(command: string, timeout_ms?: integer)` | 一条命令字符串、一个可选的上限 |
+| `spec()` | `bash(command: string, timeout_ms?: integer, escalation?: object)` | 一条命令字符串、一个可选的上限、一个可选的升级申请 |
 | `effect()` | **恒为 `Exclusive`** | shell 什么都能写，所以派发层拿的是全工作区的锁，权限门看到的是一次写 |
-| `command(args)` | `["bash", "-lc", command]` | 权限门、`CommandPrefix` 作用域与断路器在进程起来**之前**读 argv |
+| `command(args)` | `["bash", "-lc", command]` | 权限门、`CommandPrefix` 作用域与断路器在进程起来**之前**读 argv；`escalation` **不进** argv，它不是命令的一部分 |
 | 执行 | 对这个 argv 直接 `spawn` | 模型的命令是**一个元素**，所以它插不进第二层 shell |
 | 结果 | 退出状态 + stdout + stderr，分段 | 与别的工具结果一样的普通工具结果；非零退出是数据，不是错误 |
 
@@ -27,9 +27,40 @@
   `ReadOnly`。没有豁免可借：这个项目**曾经**有过的唯一一处写豁免（已退场的 plan 模式的
   `PLAN.md`，一种 `WritePaths` 形状、写入集**整体**就是那一个文件）随那一档模式一起
   退了场，何况 shell 根本没有写入集（见 `docs/adr/0003-plan-leaves-the-permission-modes.md`）。
-- `ask` 问；`auto` 放行，照旧受规则与断路器约束。
+- `ask` 问；`workspace` 与 `auto` 放行，照旧受规则与断路器约束。**这两档才是沙箱真正
+  补上的位置**：门判不出区内区外（`Exclusive` 没有路径集），真正的判据在内核。
 - `CommandPrefix` 规则匹配的是声明的 argv —— `["bash", "-lc", …]` —— 就按声明的样子。
   为命令自己的 argv 写规则需要把 shell 拆开，这个作用域不做这件事。
+
+### 升级手势：被内核拒之后唯一的一条路
+
+命令被沙箱拒（内核说只读文件系统）之后，模型可以带上
+
+```json
+{ "escalation": { "justification": "构建产物要写到 ~/.npm 的缓存目录",
+                  "writable_paths": ["/home/ada/.npm"] } }
+```
+
+把**同一条命令**原样重试一次。这次调用会弹一次审批；批准之后，`Sandbox` 在构造时把声明
+的那几条路径追加进可写根 —— **粒度就是那条路径本身**，文件绑文件、目录绑目录，不做父目录
+提升。
+
+四条形状，都是刻意的：
+
+- **只这一次调用**：不进规则、不写 `config.toml`、不进会话状态；`AllowedCall::sandbox_grants`
+  是它的全部归宿。
+- **只给一次重试**：同一条命令第二次被拒之后照常返回命令结果，运行时不做计数 —— 话术在
+  工具描述里（`ESCALATION_NOTE`，模型可见）。
+- **`justification` 与 `writable_paths` 都要非空、必须成对**：半截的写法是参数错误，不是
+  静默忽略。
+- **要放开的路径必须已经存在**：`bwrap` 只能绑已经存在的源，所以批准一个不存在的路径会是
+  一条工具错误（「命令没有跑」，理由写明为什么不替它猜）—— 静默跳过等于用户批了一条什么都
+  不发生的路径。要新建一个文件，就声明它**存在的那个父目录**。
+- **各档都有效，`readonly` 除外**：它请的是放宽沙箱，而沙箱不因权限模式而关。
+
+写死的边界**不给通道**：遮罩目录（`~/.config/fs-agent`、`~/.ssh`）、工作区里的
+`.git/config` 与 `.git/hooks`、以及 `.env` 一族，门里直接拒 —— 它们在挂载表里排在可写根
+之后，批准等于白批。完整决策地图见 [`permissions.md`](permissions.md)。
 
 ### `rm` 断路器看穿这层包装
 
@@ -47,8 +78,9 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 ```
 
 **这次扫描是词法的、尽力而为的，而且是有意的。** spec §12 写明断路器是为了拦住一次
-事故，不是为了关住一个对手，§20 则说 v1 不发布任何进程级沙箱。它处理引号、shell 的控制
-操作符、命令前面的语法关键字、以及 `-c` 之前的一个 shell 选项；它**不**跟着间接引用走。
+事故，不是为了关住一个对手；[沙箱](sandbox.md)管的是写边界，管不了下面这些间接引用。
+它处理引号、shell 的控制操作符、命令前面的语法关键字、以及 `-c` 之前的一个 shell 选项；
+它**不**跟着间接引用走。
 变量（`rm -rf $HOME`）、改变将要跑什么的包装程序（`sudo rm …`、`env …, rm …`、`eval`、
 `xargs`、别名）、命令替换（`$(rm …)`）、here-doc 或写到盘上的脚本、以及换个写法的混淆
 拼写，它都看不见。真正的边界是 agent 没有 root，而它手里的 key 也不是你文件系统的钥匙。
@@ -106,7 +138,9 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 
 - **网络隔离。** shell 跑在 **bubblewrap** 沙箱里（工作区可写、区外只读，见
   [`sandbox.md`](sandbox.md)），但那层只管文件：这一版不加 `--unshare-net`，所以 `curl`
-  该通还是通。
+  该通还是通。沙箱也不管读（整机可读，除那两个遮罩），不做资源限额。
+- **一条自动的越界通道。** 越界之后能走的只有「模型声明 + 批准一次」这一条
+  （见上面的升级手势）：没有候选路径推断、没有 `allow-always`、没有授权库。
 - **PTY / 交互式程序。** 不分配终端、stdin 按设计是空的。
 - **后台作业与作业控制。** 一条命令可以在它自己的 shell 里把进程放到后台，但没有任何
   东西管理或汇报作业；超时或取消杀掉整个进程组。
@@ -116,6 +150,9 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 | 部件 | 模块 |
 | --- | --- |
 | `BashTool`、argv、超时、进程组 kill、结果格式 | `tools/bash.rs` |
+| `escalation` 参数、那两个常量（`SANDBOX_NOTE`、`ESCALATION_NOTE`） | `tools/bash.rs` |
+| 升级的裁决（遮罩 / 保护路径的拒绝、其余 `Ask`） | `permissions.rs` |
+| `sealed()` 与升级路径的归一化 | `tools/sandbox.rs` |
 | `BashLimits`（交给这个工具的两个上限） | `tools/tool.rs` |
 | 默认值与上限 | `config.rs`（`SessionConfig::bash_timeout_ms` / `max_bash_timeout_ms`） |
 | `rm` 断路器与它拆 shell 的那部分 | `permissions.rs`（`rm_breaker`、`simple_commands`） |

@@ -19,6 +19,8 @@ use ratatui::style::{Color, Modifier};
 /// 一次关于 `tool_name` 的权限询问，形状与循环交给前端的一样。
 fn permission_request(tool_name: &str) -> PermissionRequest {
     PermissionRequest {
+        escalation: None,
+        speaker: None,
         request_id: "r-1".to_owned(),
         tool_call_id: "c-1".to_owned(),
         tool_name: tool_name.to_owned(),
@@ -123,6 +125,8 @@ fn a_permission_question_is_answered_by_key() {
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "write_file".to_owned(),
@@ -143,6 +147,8 @@ fn escape_answers_a_question_with_the_non_acting_choice() {
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
@@ -272,6 +278,8 @@ fn ctrl_d_is_ignored_while_a_question_is_up() {
     let (reply, mut answer) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
@@ -949,6 +957,8 @@ fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
     let (tx, mut asked) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "write_file".to_owned(),
@@ -974,6 +984,8 @@ fn a_cancelled_run_takes_its_unanswered_question_with_it() {
     let (tx, mut asked) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "write_file".to_owned(),

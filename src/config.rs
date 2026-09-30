@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::events::Redactor;
+use crate::events::{Decision, Redactor};
 use crate::permissions::Mode;
 
 pub use cost::{Budget, LandingPoint, PriceTable, Pricing, Routing};
@@ -71,7 +71,7 @@ pub const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
 /// 沙箱的那一档（沙箱 spec §7）：把命令包进 bubblewrap，还是显式放弃这一层。
 ///
-/// 它与权限模式的三档是**两件不同的事**：这一档决定「跑起来能碰到什么」，权限模式决定
+/// 它与权限模式的四档是**两件不同的事**：这一档决定「跑起来能碰到什么」，权限模式决定
 /// 「跑不跑、要不要问」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxMode {
@@ -369,8 +369,12 @@ pub struct Config {
     pub pricing: PriceTable,
     /// 会话开始时的那一档模式（spec §12；`.scratch/todo-and-modes/spec.md` §1）。会话对
     /// 「写」的立场，由**用户**选 —— `--mode` 为一次运行覆盖它，`Shift+Tab` 在会话内循环
-    /// 三档。它从不进事件流，所以 `--continue` 回到的是这个值。
+    /// 四档。它从不进事件流，所以 `--continue` 回到的是这个值。
     pub mode: Mode,
+    /// `[permissions] outside_read`：读目标落在会话 cwd 之外时给什么裁决（缺省 `deny`）。
+    /// 它与档位正交、全局生效 —— `ask` 档配上 `"allow"` 恰好就是 DSH 的「读全放、写要问」
+    /// （`.scratch/workspace-mode/spec.md` §2）。
+    pub outside_read: Decision,
     /// 会话的累计 token 额度（spec §17），供显示，也供会话组装时用的那道闸门。
     pub budget: Budget,
     /// 两个落点各用哪个模型作答（spec §17）。缺省为空：v1 一切都跑在讨论的模型上。
@@ -505,6 +509,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let models = resolve_models(&raw, &providers)?;
     let pricing = resolve_pricing(&raw, &models)?;
     let mode = resolve_mode(raw.permissions.as_ref())?;
+    let outside_read = resolve_outside_read(raw.permissions.as_ref())?;
     let budget = resolve_budget(raw.budget.as_ref())?;
     let routing = resolve_routing(raw.routing.as_ref(), &models)?;
     let max_iterations = raw
@@ -538,6 +543,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         models,
         pricing,
         mode,
+        outside_read,
         budget,
         routing,
         max_iterations,
@@ -881,15 +887,19 @@ struct RawTurn {
     executor_max_iterations: Option<u32>,
 }
 
-/// `[permissions]` 表（spec §12；`.scratch/todo-and-modes/spec.md` §1）。
+/// `[permissions]` 表（spec §12；`.scratch/todo-and-modes/spec.md` §1、
+/// `.scratch/workspace-mode/spec.md` §2）。
 ///
-/// 一个字段：会话开始时的那一档模式。其余的权限机制 —— 规则代数、断路器、`.env` 地板、路径
-/// 限制 —— 都是权限门自己的缺省值而不是配置，所以这里没什么可说的。
+/// 两个字段：会话开始时的那一档模式，以及区外**读**那一条与档位正交的旋钮。其余的权限机制
+/// —— 规则代数、断路器、`.env` 地板、路径限制 —— 都是权限门自己的缺省值而不是配置，所以
+/// 这里没什么可说的。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPermissions {
-    /// `readonly` | `ask` | `auto`；缺席表示 [`Mode::Ask`]。
+    /// `readonly` | `ask` | `workspace` | `auto`；缺席表示 [`Mode::Ask`]。
     mode: Option<String>,
+    /// `deny`（缺省）| `ask` | `allow`：读目标落在 cwd 之外时怎么办。
+    outside_read: Option<String>,
 }
 
 /// 把 `[permissions]` 解析成会话开始时的那一档模式（spec §12）。
@@ -903,6 +913,22 @@ fn resolve_mode(raw: Option<&RawPermissions>) -> Result<Mode, ConfigError> {
     Mode::parse(written).ok_or_else(|| ConfigError::UnknownMode {
         mode: written.to_owned(),
     })
+}
+
+/// 把 `[permissions] outside_read` 解析成那条区外读裁决（缺省 `deny`）。
+///
+/// 同样是一个不认识的词就是启动错误：写错的人以为自己放开了区外读、而实际仍然拒着，比
+/// 反过来更糟 —— 他会去别处找原因。缺省永远是 `deny`：这条地板是策略级的，
+/// **写下来才算放弃**（`.scratch/workspace-mode/spec.md` §2）。
+fn resolve_outside_read(raw: Option<&RawPermissions>) -> Result<Decision, ConfigError> {
+    match raw.and_then(|raw| raw.outside_read.as_deref()) {
+        None | Some("deny") => Ok(Decision::Deny),
+        Some("ask") => Ok(Decision::Ask),
+        Some("allow") => Ok(Decision::Allow),
+        Some(other) => Err(ConfigError::UnknownOutsideRead {
+            value: other.to_owned(),
+        }),
+    }
 }
 
 /// 把 `[sandbox]` 解析成组装期要用的那一份值（spec §7）。
@@ -945,7 +971,10 @@ fn resolve_sandbox(raw: Option<&RawSandbox>, env: &EnvMap) -> Result<SandboxSett
             .map(|mask| expand_home(mask, home.as_deref()))
             .collect(),
         availability: SandboxAvailability::Untested,
-        search_path: env.get("PATH").filter(|value| !value.is_empty()).map(OsString::from),
+        search_path: env
+            .get("PATH")
+            .filter(|value| !value.is_empty())
+            .map(OsString::from),
     })
 }
 
@@ -1481,9 +1510,13 @@ pub enum ConfigError {
     #[error("[budget] {reason}")]
     InvalidBudget { reason: String },
     #[error(
-        "未知的模式 `{mode}`；`[permissions] mode`（或 `--mode`）只接 `readonly`、`ask`、`auto`"
+        "未知的模式 `{mode}`；`[permissions] mode`（或 `--mode`）只接 `readonly`、`ask`、`workspace`、`auto`"
     )]
     UnknownMode { mode: String },
+    #[error(
+        "未知的 outside_read 值 `{value}`；`[permissions] outside_read` 只接 `deny`（缺省）、`ask` 或 `allow`"
+    )]
+    UnknownOutsideRead { value: String },
     #[error("未知的沙箱模式 `{mode}`；`[sandbox] mode` 只接 `bwrap`（缺省）或 `off`")]
     UnknownSandboxMode { mode: String },
     #[error("[discussion] {reason}")]

@@ -742,10 +742,12 @@ async fn process_call(
     let started = Instant::now();
     // 调用只解析一次：权限门、钩子与护栏读的是同一批事实，而这是唯一一个为了解析路径去碰
     // 文件系统的步骤。
-    let mut facts = match session
-        .tools()
-        .facts(&pending.tool_name, &pending.args, &pending.paths)
-    {
+    let mut facts = match session.tools().facts(
+        &pending.tool_name,
+        &pending.args,
+        &pending.paths,
+        session.home(),
+    ) {
         Ok(facts) => facts,
         Err(error) => {
             // 没有工具可判、也没有东西可跑：这次调用的那一个结果
@@ -800,24 +802,25 @@ async fn process_call(
                 // 权限门与工具看到的都是改写后的调用，所以两边读之前
                 // 事实要重新解析一次。
                 pending.args = new_args;
-                facts =
-                    match session
-                        .tools()
-                        .facts(&pending.tool_name, &pending.args, &pending.paths)
-                    {
-                        Ok(facts) => facts,
-                        Err(error) => {
-                            emit_completed(
-                                session,
-                                render,
-                                speaker,
-                                tool_call_id,
-                                Err(error),
-                                started,
-                            )?;
-                            return Ok(Disposition::Finished);
-                        }
-                    };
+                facts = match session.tools().facts(
+                    &pending.tool_name,
+                    &pending.args,
+                    &pending.paths,
+                    session.home(),
+                ) {
+                    Ok(facts) => facts,
+                    Err(error) => {
+                        emit_completed(
+                            session,
+                            render,
+                            speaker,
+                            tool_call_id,
+                            Err(error),
+                            started,
+                        )?;
+                        return Ok(Disposition::Finished);
+                    }
+                };
             }
             Ok(Constraint::Skip) => {
                 let skipped = ToolError::message("钩子跳过了执行：工具没有跑");
@@ -886,11 +889,45 @@ async fn process_call(
             DispatchOutcome::failure(ToolError::message(message), false),
         ),
         Authorized::Allow => {
+            // 一次被放行的越界（`workspace` 档的区外写，或者 `outside_read` 放行的区外读）：
+            // 把那一侧的收容放开、再解析一次，好让工具拿到真正的目标，而不是一条只有门看得
+            // 见的字面路径。门刚才读的是严格解析下的越界事实，这一步之后它就成了普通调用。
+            if let Some(error) = facts.path_error.as_ref() {
+                let direction = error.direction;
+                pending.paths = match direction {
+                    permissions::Direction::Read => pending.paths.relaxed_read(),
+                    permissions::Direction::Write => pending.paths.relaxed_write(),
+                };
+                facts = match session.tools().facts(
+                    &pending.tool_name,
+                    &pending.args,
+                    &pending.paths,
+                    session.home(),
+                ) {
+                    Ok(facts) => facts,
+                    Err(error) => {
+                        emit_completed(
+                            session,
+                            render,
+                            speaker,
+                            tool_call_id,
+                            Err(error),
+                            started,
+                        )?;
+                        return Ok(Disposition::Finished);
+                    }
+                };
+            }
             // 护栏是对事实加上这个 agent 的读集合的一次纯读取；决定在
             // `finish_call` 里施加到读集合上。
             match facts.guardrails(session.read_set()) {
                 GuardedCall::Refused(error) => (None, DispatchOutcome::failure(error, false)),
-                GuardedCall::Run(allowed) => {
+                GuardedCall::Run(mut allowed) => {
+                    // 升级批准的那批路径只活这一次调用：它不进规则、不写配置文件、也不进
+                    // 会话状态（`.scratch/workspace-mode/spec.md` §4）。
+                    if let Some(escalation) = &facts.escalation {
+                        allowed.sandbox_grants = escalation.writable_paths.clone();
+                    }
                     // 一次 `task` 调用经循环就地构造的端口派发：这一层才是持有 provider 与
                     // 渲染器的地方，而逐次授权调用构造端口，正是让每个执行者在关于它的任何
                     // 东西被记录之前就有自己的 id 的原因。
@@ -1665,7 +1702,6 @@ async fn authorize(
     hook_verdict: Option<Decision>,
 ) -> Result<Authorized, Error> {
     let request_id = format!("perm-{tool_call_id}");
-    let path_error = facts.path_error.as_ref().map(ToString::to_string);
     let verdict = {
         let call = permissions::Call {
             tool_name: &facts.tool_name,
@@ -1675,7 +1711,9 @@ async fn authorize(
             argv: facts.argv.as_deref(),
             cwd: session.cwd(),
             home: session.home(),
-            path_error: path_error.as_deref(),
+            path_error: facts.path_error.as_ref(),
+            escalation: facts.escalation.as_ref(),
+            masks: &session.config().sandbox.masks,
         };
         permissions::decide(&session.policy(), speaker, &call)
     };
@@ -1744,6 +1782,13 @@ async fn authorize(
                 tool_name: facts.tool_name.clone(),
                 args: args.clone(),
                 reason: ask_reason.clone(),
+                // 说话人只在发起者不是主会话时出现：主会话的私有身份就是
+                // [`agent_identity`] 本身（`lib.rs` 组装时给的那一条），于是执行者与讨论者
+                // 这两种「不是主会话」的发起者在这里被认出来，而不必新增一个「谁是主」的
+                // 字段（`.scratch/workspace-mode/spec.md` §7）。
+                speaker: (session.identity() != Some(agent_identity().as_str()))
+                    .then(|| speaker.clone()),
+                escalation: facts.escalation.clone(),
             };
             emit(
                 session,

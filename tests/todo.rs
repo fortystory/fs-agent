@@ -74,7 +74,7 @@ impl Fixture {
         let mut read_set = ReadSet::default();
         let allowed = match self
             .registry
-            .facts(&call.tool_name, &call.args, &self.paths)
+            .facts(&call.tool_name, &call.args, &self.paths, None)
             .expect("一个注册过的工具")
             .guardrails(&read_set)
         {

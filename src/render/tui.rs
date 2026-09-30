@@ -817,24 +817,39 @@ impl Pending {
     /// （spec §19），而这里对它的回答是 `None`。
     fn modal(&self) -> Option<Modal> {
         let modal = match self {
-            Pending::Loop { request, .. } => Modal {
-                title: wording::permission_title().to_owned(),
-                // 然后是折叠转录行带着的那句一行描述 —— 再*然后*是它将要跑起来的样子，
-                // 因为批准的那一刻正是确切命令必须可读的时刻（2026-09-23）。
-                description: Some(wording::tool_call_line(&request.tool_name, &request.args)),
-                detail: Some(wording::permission_call(
-                    &request.tool_name,
-                    &summarize_args(&request.args),
-                )),
-                choices: &wording::PERMISSION_CHOICES,
-                actions: wording::PERMISSION_CHOICE_ANSWERS
-                    .iter()
-                    .map(|(_, answer)| HitAction::Answer(*answer))
-                    .collect(),
-            },
+            Pending::Loop { request, .. } => {
+                // 发起者不是主会话时，第一行点名说话人：执行者与讨论者各问各的，而作答者
+                // 是人（`.scratch/workspace-mode/spec.md` §7）。
+                let call = wording::tool_call_line(&request.tool_name, &request.args);
+                let description = match &request.speaker {
+                    Some(speaker) => wording::permission_speaker_line(&call, speaker),
+                    None => call,
+                };
+                Modal {
+                    title: wording::permission_title().to_owned(),
+                    // 然后是折叠转录行带着的那句一行描述 —— 再*然后*是它将要跑起来的样子，
+                    // 因为批准的那一刻正是确切命令必须可读的时刻（2026-09-23）。
+                    description: Some(description),
+                    notes: request
+                        .escalation
+                        .as_ref()
+                        .map(wording::permission_escalation_lines)
+                        .unwrap_or_default(),
+                    detail: Some(wording::permission_call(
+                        &request.tool_name,
+                        &summarize_args(&request.args),
+                    )),
+                    choices: &wording::PERMISSION_CHOICES,
+                    actions: wording::PERMISSION_CHOICE_ANSWERS
+                        .iter()
+                        .map(|(_, answer)| HitAction::Answer(*answer))
+                        .collect(),
+                }
+            }
             Pending::Paste { chars, .. } => Modal {
                 title: wording::paste_title().to_owned(),
                 description: None,
+                notes: Vec::new(),
                 detail: Some(wording::paste_body(*chars)),
                 choices: &wording::PASTE_CHOICES,
                 actions: vec![HitAction::Paste, HitAction::Dismiss],
@@ -842,6 +857,7 @@ impl Pending {
             Pending::ClearDraft => Modal {
                 title: wording::clear_draft_title().to_owned(),
                 description: None,
+                notes: Vec::new(),
                 detail: Some(wording::clear_draft_body().to_owned()),
                 choices: &wording::CLEAR_CHOICES,
                 actions: vec![HitAction::ClearDraft, HitAction::Dismiss],
@@ -849,6 +865,7 @@ impl Pending {
             Pending::Exit => Modal {
                 title: wording::exit_title().to_owned(),
                 description: None,
+                notes: Vec::new(),
                 detail: Some(wording::exit_body().to_owned()),
                 choices: &wording::EXIT_CHOICES,
                 actions: vec![HitAction::Quit, HitAction::Dismiss],
@@ -871,6 +888,9 @@ struct Modal {
     /// 这样问题与它所问的那一行读起来一致（2026-09-23，用户要求）。不是关于工具调用的
     /// 问题没有这一项。
     description: Option<String>,
+    /// 描述与详情之间那几行：一次升级询问的「理由」与「要放开的路径」。它们排在确切命令
+    /// 之前，而命令行保持最后一行（`.scratch/workspace-mode/spec.md` §7）。
+    notes: Vec<String>,
     /// 这个问题所问的那一件具体的事：那次调用、那个路径、那个大小。
     detail: Option<String>,
     /// 回答它的那些键，画成一行按钮。
@@ -2711,6 +2731,9 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     // 这次调用是为了什么，然后是它将要跑起来的样子：先给方向，再给正在被批准的东西。
     if let Some(description) = modal.description.as_deref() {
         rows.extend(pane::wrap_text(description.trim(), inner));
+    }
+    for note in &modal.notes {
+        rows.extend(pane::wrap_text(note.trim(), inner));
     }
     if let Some(detail) = modal.detail.as_deref() {
         rows.extend(pane::wrap_text(detail.trim(), inner));

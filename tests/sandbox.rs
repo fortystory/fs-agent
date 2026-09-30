@@ -10,7 +10,7 @@ use std::time::Duration;
 use fs_agent::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
 use fs_agent::tools::process;
 use fs_agent::tools::sandbox::{
-    probe, resolve_availability, wrap, Sandbox, SandboxSpec, PROBE_PROFILE,
+    escalation_path, probe, resolve_availability, sealed, wrap, Sandbox, SandboxSpec, PROBE_PROFILE,
 };
 
 /// 一条 shell 命令将要跑的那条 argv，形状与 `bash` 工具给它的一样。
@@ -56,11 +56,7 @@ fn a_minimal_spec_is_assembled_flag_by_flag() {
     let git_config = canonical(&workspace.join(".git/config"));
     let env_file = canonical(&workspace.join(".env"));
 
-    let assembled = wrap(
-        &shell("echo hi"),
-        &workspace,
-        &spec(&[&cache], &[&ssh]),
-    );
+    let assembled = wrap(&shell("echo hi"), &workspace, &spec(&[&cache], &[&ssh]));
 
     let mut expected = strings(&[
         "bwrap",
@@ -161,11 +157,7 @@ fn a_mask_is_a_tmpfs_that_is_then_remounted_read_only() {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&keys).unwrap();
 
-    let assembled = wrap(
-        &shell("true"),
-        &canonical(&workspace),
-        &spec(&[], &[&keys]),
-    );
+    let assembled = wrap(&shell("true"), &canonical(&workspace), &spec(&[], &[&keys]));
 
     let mask = canonical(&keys).display().to_string();
     let expected = strings(&["--tmpfs", &mask, "--remount-ro", &mask]);
@@ -198,7 +190,11 @@ fn protected_paths_come_after_every_writable_bind() {
         .expect("至少有一条可写根");
     let protected = assembled
         .iter()
-        .position(|item| item == &canonical(&workspace.join(".git/config")).display().to_string())
+        .position(|item| {
+            item == &canonical(&workspace.join(".git/config"))
+                .display()
+                .to_string()
+        })
         .expect(".git/config 在保护之列");
     assert!(
         protected > last_bind,
@@ -241,7 +237,13 @@ fn the_env_family_is_protected_but_templates_are_not() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    for name in [".env", ".env.local", ".env.example", ".env.sample", ".env.template"] {
+    for name in [
+        ".env",
+        ".env.local",
+        ".env.example",
+        ".env.sample",
+        ".env.template",
+    ] {
         std::fs::write(workspace.join(name), "").unwrap();
     }
 
@@ -253,7 +255,11 @@ fn the_env_family_is_protected_but_templates_are_not() {
         .cloned()
         .collect();
     assert!(protected.contains(&canonical(&workspace.join(".env")).display().to_string()));
-    assert!(protected.contains(&canonical(&workspace.join(".env.local")).display().to_string()));
+    assert!(protected.contains(
+        &canonical(&workspace.join(".env.local"))
+            .display()
+            .to_string()
+    ));
     for name in [".env.example", ".env.sample", ".env.template"] {
         let path = canonical(&workspace.join(name)).display().to_string();
         assert!(
@@ -279,7 +285,9 @@ fn git_config_and_hooks_are_protected_but_the_index_is_not() {
         let path = canonical(&workspace.join(relative)).display().to_string();
         assert!(assembled.contains(&path), "{relative} 必须在保护之列");
     }
-    let index = canonical(&workspace.join(".git/index")).display().to_string();
+    let index = canonical(&workspace.join(".git/index"))
+        .display()
+        .to_string();
     assert!(
         !rendered.contains(&index),
         "`.git/index` 必须可写，否则 `git add` / `git commit` 全废"
@@ -317,6 +325,83 @@ fn mode_off_is_the_identity_function() {
     assert_eq!(wrap(&argv, &workspace, &off), argv);
 }
 
+// --- 写死的边界与升级路径（`.scratch/workspace-mode/issues/01`）------------
+
+#[test]
+fn sealed_covers_masks_and_protected_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".git/hooks")).unwrap();
+    std::fs::write(workspace.join(".git/config"), "").unwrap();
+    std::fs::write(workspace.join(".env"), "").unwrap();
+    std::fs::write(workspace.join(".env.example"), "").unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::create_dir_all(home.join(".npm")).unwrap();
+
+    let cwd = canonical(&workspace);
+    let masks = vec![canonical(&home.join(".ssh")), home.join(".config/fs-agent")];
+
+    assert!(
+        sealed(&cwd.join(".git/config"), &cwd, &masks),
+        ".git/config 是保护路径"
+    );
+    assert!(
+        sealed(&cwd.join(".git/hooks/pre-commit"), &cwd, &masks),
+        ".git/hooks 是保护路径"
+    );
+    assert!(sealed(&cwd.join(".env"), &cwd, &masks), ".env 是保护路径");
+    assert!(
+        sealed(&cwd.join("sub/.env"), &cwd, &masks),
+        ".env 一族整族都在列"
+    );
+    assert!(
+        !sealed(&cwd.join(".env.example"), &cwd, &masks),
+        "模板不携带真密钥"
+    );
+    assert!(
+        sealed(
+            &canonical(&home.join(".ssh")).join("authorized_keys"),
+            &cwd,
+            &masks
+        ),
+        "遮罩目录整棵都在列"
+    );
+    assert!(
+        !sealed(&home.join(".npm"), &cwd, &masks),
+        "工作区外的普通路径不在列"
+    );
+    assert!(
+        !sealed(&cwd.join("notes.txt"), &cwd, &masks),
+        "工作区内的普通路径不在列"
+    );
+}
+
+#[test]
+fn an_escalation_path_is_expanded_and_lexically_folded() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let cwd = canonical(&workspace);
+    let home = canonical(&home);
+
+    assert_eq!(
+        escalation_path(Path::new("~/.npm"), &cwd, Some(&home)),
+        home.join(".npm"),
+        "`~` 按 home 展开，目标不必存在"
+    );
+    assert_eq!(
+        escalation_path(Path::new("build/../.npm"), &cwd, Some(&home)),
+        cwd.join(".npm"),
+        "相对路径折到 cwd 上，`..` 按字面折掉"
+    );
+    assert_eq!(
+        escalation_path(Path::new("/tmp/elsewhere"), &cwd, Some(&home)),
+        PathBuf::from("/tmp/elsewhere")
+    );
+}
 
 // --- 探测（票 02）----------------------------------------------------------
 
@@ -344,10 +429,7 @@ fn probe_answers_by_the_minimal_profiles_exit_code() {
         &workspace,
     );
 
-    assert_eq!(
-        availability,
-        SandboxAvailability::Available { bwrap: bin }
-    );
+    assert_eq!(availability, SandboxAvailability::Available { bwrap: bin });
     // 探测真的跑了一条 profile，而不是只看 `--version`：profile 自己也被钉住。
     assert!(PROBE_PROFILE.contains(&"--ro-bind"));
     assert!(
@@ -437,6 +519,53 @@ fn sandbox_using(bwrap: &Path) -> Sandbox {
         bwrap: bwrap.to_path_buf(),
     };
     Sandbox::new(&settings)
+}
+
+#[test]
+fn grants_add_one_writable_root_for_this_call_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let granted = dir.path().join("granted");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&granted).unwrap();
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/true");
+    let sandbox = sandbox_using(&bwrap);
+
+    let with = sandbox
+        .with_grants(std::slice::from_ref(&granted))
+        .wrap(&shell("echo hi"), &workspace)
+        .unwrap();
+    let granted = canonical(&granted).display().to_string();
+    assert!(
+        with.windows(3)
+            .any(|window| window == ["--bind", &granted, &granted]),
+        "批准的那条路径本身进可写根，不做父目录提升：{with:?}"
+    );
+
+    let without = sandbox.wrap(&shell("echo hi"), &workspace).unwrap();
+    assert!(
+        !without.contains(&granted),
+        "批准只活这一次调用，沙箱值本身不变：{without:?}"
+    );
+}
+
+#[test]
+fn a_grant_that_does_not_exist_is_a_tool_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/true");
+    let missing = dir.path().join("not-there");
+
+    let error = sandbox_using(&bwrap)
+        .with_grants(std::slice::from_ref(&missing))
+        .wrap(&shell("echo hi"), &workspace)
+        .expect_err("批准一条不存在的路径是明确的失败，不是静默白批");
+    assert!(error.to_string().contains("不存在"), "{error}");
+    assert!(
+        error.to_string().contains("不做父目录提升"),
+        "理由要说清为什么不能替它猜：{error}"
+    );
 }
 
 #[tokio::test]
@@ -556,7 +685,6 @@ async fn with_the_sandbox_off_run_spawns_the_command_directly() {
     assert!(outcome.stdout.contains("direct"));
 }
 
-
 // --- 端到端：工具真的跑在沙箱里（票 03）-----------------------------------
 
 mod support;
@@ -564,16 +692,14 @@ mod support;
 use std::sync::Arc;
 
 use fs_agent::events::{Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::permissions::{Mode, Policy};
+use fs_agent::permissions::{Asker, Mode, Policy};
 use fs_agent::provider::capability::caps_for;
 use fs_agent::provider::projection::project;
 use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::tools::{builtin, PathLocks, Registry};
-use fs_agent::{
-    assemble, AssemblyParts, DebaterParts, Harness, SessionScaffold, SynthesizerParts,
-};
-use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
+use fs_agent::{assemble, AssemblyParts, DebaterParts, Harness, SessionScaffold, SynthesizerParts};
+use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
     harness: Harness,
@@ -591,6 +717,27 @@ async fn fixture_at(
     replies: Vec<Reply>,
     config: SessionConfig,
     tools: Registry,
+    log_path: Option<PathBuf>,
+) -> Fixture {
+    fixture_full(
+        replies,
+        config,
+        tools,
+        Policy::for_mode(Mode::Auto),
+        Some(Arc::new(AlwaysAllow)),
+        log_path,
+    )
+    .await
+}
+
+/// 完整的脚手架：策略与作答者也可以换，于是升级那条路（它在 `ask` 与 `auto` 档下就已经
+/// 有用）能在脚本化的作答者下面被端到端跑一遍。
+async fn fixture_full(
+    replies: Vec<Reply>,
+    config: SessionConfig,
+    tools: Registry,
+    policy: Policy,
+    asker: Option<Arc<dyn Asker>>,
     log_path: Option<PathBuf>,
 ) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
@@ -615,8 +762,8 @@ async fn fixture_at(
             session_id: SessionId::new("s-sandbox"),
             tools,
             locks: PathLocks::new(),
-            policy: Policy::for_mode(Mode::Auto),
-            asker: Some(Arc::new(AlwaysAllow)),
+            policy,
+            asker,
             questions: None,
             hook: None,
             home: None,
@@ -644,10 +791,7 @@ impl Fixture {
             .iter()
             .filter_map(|event| match &event.payload {
                 EventPayload::ToolCallCompleted {
-                    ok,
-                    output,
-                    error,
-                    ..
+                    ok, output, error, ..
                 } => Some((
                     *ok,
                     output.clone().or_else(|| error.clone()).unwrap_or_default(),
@@ -691,7 +835,11 @@ async fn the_bash_tool_runs_through_the_sandbox() {
     let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
     let mut fixture = fixture(
         vec![
-            call("call-bash", "bash", serde_json::json!({ "command": "echo hi" })),
+            call(
+                "call-bash",
+                "bash",
+                serde_json::json!({ "command": "echo hi" }),
+            ),
             Reply::text("done"),
         ],
         sandboxed(&bwrap),
@@ -717,11 +865,8 @@ async fn a_dynamic_tool_runs_through_the_same_sandbox() {
     // 免得哪天它变成一个偶然。
     let dir = tempfile::tempdir().unwrap();
     let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
-    let env: fs_agent::config::EnvMap = std::iter::once((
-        "HOME".to_owned(),
-        dir.path().display().to_string(),
-    ))
-    .collect();
+    let env: fs_agent::config::EnvMap =
+        std::iter::once(("HOME".to_owned(), dir.path().display().to_string())).collect();
     let text = "[tools.thing.echo]\ndescription = \"回声\"\ncommand = [\"echo\", \"{text}\"]\n\
                 parameters = { type = \"object\", properties = { text = { type = \"string\" } } }\n";
     let config = fs_agent::config::resolve(Some(text), &env).unwrap();
@@ -765,7 +910,11 @@ async fn an_unavailable_sandbox_makes_bash_a_tool_error_with_two_ways_out() {
 
     let mut fixture = fixture(
         vec![
-            call("call-bash", "bash", serde_json::json!({ "command": "echo never" })),
+            call(
+                "call-bash",
+                "bash",
+                serde_json::json!({ "command": "echo never" }),
+            ),
             Reply::text("could not run"),
         ],
         config,
@@ -779,7 +928,10 @@ async fn an_unavailable_sandbox_makes_bash_a_tool_error_with_two_ways_out() {
     assert!(!ok, "沙箱不可用是工具错误，不是一条命令结果：{message}");
     assert!(message.contains("命令没有跑"), "{message}");
     assert!(message.contains("PATH 上没有 `bwrap`"), "{message}");
-    assert!(message.contains("\"off\""), "两条出路之一要写出来：{message}");
+    assert!(
+        message.contains("\"off\""),
+        "两条出路之一要写出来：{message}"
+    );
     assert!(
         !fixture.workspace.join("made.txt").exists(),
         "命令根本没有跑"
@@ -788,12 +940,237 @@ async fn an_unavailable_sandbox_makes_bash_a_tool_error_with_two_ways_out() {
     fixture.harness.shutdown().await;
 }
 
+// --- 升级手势（`.scratch/workspace-mode/issues/01`）------------------------
+
+#[tokio::test]
+async fn an_escalation_asks_once_and_binds_the_declared_path_for_that_call() {
+    let dir = tempfile::tempdir().unwrap();
+    // `/bin/echo` 把收到的 argv 写回标准输出，于是「批准之后多了一条 `--bind`」可读。
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
+    let granted = dir.path().join("granted");
+    std::fs::create_dir_all(&granted).unwrap();
+    let granted = granted.canonicalize().unwrap().display().to_string();
+
+    let asker = ScriptedAsker::new(vec![fs_agent::permissions::Answer::Allow]);
+    let mut fixture = fixture_full(
+        vec![
+            call(
+                "call-1",
+                "bash",
+                serde_json::json!({ "command": "echo x > ~/.npm/probe" }),
+            ),
+            call(
+                "call-2",
+                "bash",
+                serde_json::json!({
+                    "command": "echo x > ~/.npm/probe",
+                    "escalation": {
+                        "justification": "构建产物要写到缓存目录",
+                        "writable_paths": [granted.clone()],
+                    }
+                }),
+            ),
+            Reply::text("done"),
+        ],
+        sandboxed(&bwrap),
+        builtin(false),
+        Policy::for_mode(Mode::Auto),
+        Some(Arc::new(asker.clone())),
+        None,
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let results = fixture.results();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(
+        !results[0].1.contains(&granted),
+        "没有升级的那一次 argv 里没有那条 bind：{}",
+        results[0].1
+    );
+    assert!(
+        results[1].1.contains(&granted),
+        "批准之后这一次调用的 argv 里多一条 `--bind <声明的路径>`：{}",
+        results[1].1
+    );
+
+    // 只问一次，而且问的是一次升级。
+    let requests = asker.requests();
+    assert_eq!(requests.len(), 1, "只问一次");
+    assert!(
+        requests[0].reason.contains("沙箱升级"),
+        "{}",
+        requests[0].reason
+    );
+    assert!(
+        requests[0].reason.contains(&granted),
+        "理由里写明了要放开的路径：{}",
+        requests[0].reason
+    );
+    assert!(
+        requests[0]
+            .escalation
+            .as_ref()
+            .is_some_and(|escalation| escalation.justification == "构建产物要写到缓存目录"),
+        "弹窗拿得到理由与路径这两行"
+    );
+
+    // 审计：两次调用各一条裁决，其中一次是升级。
+    let events = fixture.events();
+    let asked = events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::PermissionAsked { .. }))
+        .count();
+    assert_eq!(asked, 1, "事件流里只看得到那一次升级询问");
+    let decided: Vec<String> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::PermissionDecided { reason, .. } => reason.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(decided.len(), 2, "{decided:?}");
+    assert!(
+        decided.iter().any(|reason| reason.contains("沙箱升级")),
+        "裁决理由里写明这是一次升级：{decided:?}"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refused_escalation_is_a_failed_result_not_a_tool_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
+    let granted = dir.path().join("granted");
+    std::fs::create_dir_all(&granted).unwrap();
+
+    let asker = ScriptedAsker::new(vec![fs_agent::permissions::Answer::Deny]);
+    let mut fixture = fixture_full(
+        vec![
+            call(
+                "call-1",
+                "bash",
+                serde_json::json!({
+                    "command": "echo x > ~/.npm/probe",
+                    "escalation": {
+                        "justification": "构建产物要写到缓存目录",
+                        "writable_paths": [granted.display().to_string()],
+                    }
+                }),
+            ),
+            Reply::text("could not write"),
+        ],
+        sandboxed(&bwrap),
+        builtin(false),
+        Policy::for_mode(Mode::Auto),
+        Some(Arc::new(asker.clone())),
+        None,
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (ok, message) = fixture.results().remove(0);
+    assert!(!ok, "拒绝即终局：{message}");
+    assert!(message.contains("权限拒绝"), "{message}");
+    assert!(message.contains("沙箱升级"), "{message}");
+    assert_eq!(asker.requests().len(), 1);
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_escalation_into_a_mask_is_denied_without_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
+    let ssh = dir.path().join("ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let mut config = sandboxed(&bwrap);
+    config.sandbox.masks = vec![ssh.canonicalize().unwrap()];
+
+    let asker = ScriptedAsker::default();
+    let mut fixture = fixture_full(
+        vec![
+            call(
+                "call-1",
+                "bash",
+                serde_json::json!({
+                    "command": "echo x >> authorized_keys",
+                    "escalation": {
+                        "justification": "想加一把钥匙",
+                        "writable_paths": [ssh.join("authorized_keys").display().to_string()],
+                    }
+                }),
+            ),
+            Reply::text("blocked"),
+        ],
+        config,
+        builtin(false),
+        Policy::for_mode(Mode::Auto),
+        Some(Arc::new(asker.clone())),
+        None,
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (ok, message) = fixture.results().remove(0);
+    assert!(!ok, "{message}");
+    assert!(message.contains("没有任何通道放宽"), "{message}");
+    assert!(
+        asker.requests().is_empty(),
+        "写死的边界不问：问了就等于给了用户一个能批的错觉"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_half_written_escalation_is_a_parameter_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
+
+    for args in [
+        serde_json::json!({
+            "command": "echo hi",
+            "escalation": { "justification": "有理由没路径" }
+        }),
+        serde_json::json!({
+            "command": "echo hi",
+            "escalation": { "justification": "有理由没路径", "writable_paths": [] }
+        }),
+        serde_json::json!({
+            "command": "echo hi",
+            "escalation": { "justification": "  ", "writable_paths": ["/tmp/x"] }
+        }),
+    ] {
+        let mut fixture = fixture(
+            vec![call("call-1", "bash", args), Reply::text("ack")],
+            sandboxed(&bwrap),
+            builtin(false),
+        )
+        .await;
+        fixture.harness.run_turn("run it").await.unwrap();
+
+        let (ok, message) = fixture.results().remove(0);
+        assert!(!ok, "半截的升级申请是参数错误：{message}");
+        assert!(message.contains("escalation"), "{message}");
+        fixture.harness.shutdown().await;
+    }
+}
+
 // --- 模型可见的说明与状态事件（票 04）-------------------------------------
 
 #[test]
 fn the_bash_description_states_the_sandbox_terms() {
     let registry = builtin(false);
-    let description = registry.get("bash").expect("bash 是内置工具").spec().description;
+    let description = registry
+        .get("bash")
+        .expect("bash 是内置工具")
+        .spec()
+        .description;
 
     assert!(
         description.contains(fs_agent::tools::bash::SANDBOX_NOTE),
@@ -805,6 +1182,49 @@ fn the_bash_description_states_the_sandbox_terms() {
     assert!(note.contains("只读"), "{note}");
     assert!(note.contains("/tmp"), "{note}");
     assert!(note.contains("每次调用"), "{note}");
+}
+
+#[test]
+fn the_bash_description_states_the_escalation_terms() {
+    let registry = builtin(false);
+    let description = registry
+        .get("bash")
+        .expect("bash 是内置工具")
+        .spec()
+        .description;
+
+    assert!(
+        description.contains(fs_agent::tools::bash::ESCALATION_NOTE),
+        "描述里那段升级话术是常量的一部分：{description}"
+    );
+    let note = fs_agent::tools::bash::ESCALATION_NOTE;
+    // 四件事一件都不能少：被拒是结论、只有原样重试一次这一条路、不许先绕道去聊天里问、
+    // 不许投机性升级（`.scratch/workspace-mode/spec.md` §4）。
+    assert!(note.contains("被沙箱拒绝"), "{note}");
+    assert!(note.contains("结论"), "{note}");
+    assert!(note.contains("原样重试一次"), "{note}");
+    assert!(note.contains("绕道"), "{note}");
+    assert!(note.contains("没被拒"), "{note}");
+}
+
+#[test]
+fn the_escalation_argument_is_not_part_of_the_argv() {
+    let registry = builtin(false);
+    let tool = registry.get("bash").expect("bash 是内置工具");
+    let args = serde_json::json!({
+        "command": "echo hi",
+        "escalation": { "justification": "要写缓存", "writable_paths": ["/tmp/x"] }
+    });
+
+    assert_eq!(
+        tool.command(&args),
+        Some(vec![
+            "bash".to_owned(),
+            "-lc".to_owned(),
+            "echo hi".to_owned()
+        ]),
+        "`escalation` 不是 argv 的一部分：它请的是放宽沙箱，不是命令本身"
+    );
 }
 
 /// 一次新会话（脚本化 provider，什么都不做）里的事件流。
@@ -976,12 +1396,7 @@ async fn a_discussion_forked_from_a_live_session_keeps_the_sandbox() {
     // 执行者与讨论者同等生效）。
     let dir = tempfile::tempdir().unwrap();
     let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
-    let mut fixture = fixture(
-        vec![Reply::text("hi")],
-        sandboxed(&bwrap),
-        builtin(false),
-    )
-    .await;
+    let mut fixture = fixture(vec![Reply::text("hi")], sandboxed(&bwrap), builtin(false)).await;
 
     let caps = caps_for("deepseek-flash").expect("内置模型");
     let debater_config = untested_bwrap(&bwrap);
@@ -1014,7 +1429,10 @@ async fn a_discussion_forked_from_a_live_session_keeps_the_sandbox() {
     ];
     let synthesizer = SynthesizerParts {
         config: SessionConfig::new("fake-model"),
-        provider: Box::new(FakeProvider::with_caps(vec![Reply::text("共识：进沙箱")], caps)),
+        provider: Box::new(FakeProvider::with_caps(
+            vec![Reply::text("共识：进沙箱")],
+            caps,
+        )),
     };
 
     fixture
@@ -1037,12 +1455,7 @@ async fn a_resumed_session_records_the_sandbox_status_again() {
     let dir = tempfile::tempdir().unwrap();
     let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/true");
 
-    let first = fixture(
-        vec![Reply::text("hi")],
-        sandboxed(&bwrap),
-        builtin(false),
-    )
-    .await;
+    let first = fixture(vec![Reply::text("hi")], sandboxed(&bwrap), builtin(false)).await;
     let log_path = first.log_path.clone();
     let before = first
         .events()

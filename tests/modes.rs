@@ -32,6 +32,18 @@ struct Fixture {
     _dir: Option<tempfile::TempDir>,
 }
 
+/// 一份「沙箱可用」的会话配置：`workspace` 档的存在与否只问这一件事（spec §6）。
+fn sandbox_available() -> fs_agent::config::SandboxSettings {
+    use fs_agent::config::{SandboxAvailability, SandboxMode, SandboxSettings};
+
+    let mut settings = SandboxSettings::off();
+    settings.mode = SandboxMode::Bwrap;
+    settings.availability = SandboxAvailability::Available {
+        bwrap: PathBuf::from("/bin/true"),
+    };
+    settings
+}
+
 async fn fixture(replies: Vec<Reply>, mode: Mode, asker: Option<Arc<dyn Asker>>) -> Fixture {
     fixture_at(replies, mode, asker, None).await
 }
@@ -66,10 +78,16 @@ async fn fixture_at(
     // 一次 `Exclusive` 调用，用真工具钉住这一点最诚实。
     let tools = fs_agent::tools::builtin(false);
 
+    // `workspace` 档要求一层可用的沙箱（`.scratch/workspace-mode/spec.md` §6），而这份
+    // fixture 要能组装四档，所以这里给一份「可用」的状态；它不会被真跑 —— 这些测试里的
+    // 调用都是文件工具。
+    let mut config = SessionConfig::new("fake-model");
+    config.sandbox = sandbox_available();
+
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
         speaker: SpeakerId::Debater("kimi".into()),
-        config: SessionConfig::new("fake-model"),
+        config,
         renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
@@ -153,7 +171,7 @@ fn write_reply(id: &str, file: &str) -> Reply {
 
 #[tokio::test]
 async fn a_session_starts_in_the_mode_it_was_configured_with() {
-    for mode in [Mode::Readonly, Mode::Ask, Mode::Auto] {
+    for mode in [Mode::Readonly, Mode::Ask, Mode::Workspace, Mode::Auto] {
         let fixture = fixture(vec![], mode, Some(Arc::new(AlwaysAllow))).await;
         assert_eq!(fixture.harness.mode(), mode);
         fixture.harness.shutdown().await;
@@ -170,12 +188,13 @@ async fn cycling_moves_the_policy_and_writes_nothing_to_the_stream() {
     let before = fixture.events().len();
 
     assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Ask);
+    assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Workspace);
     assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Auto);
     assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Readonly);
     assert_eq!(
         fixture.harness.mode(),
         Mode::Readonly,
-        "按三次让会话回到它开始的地方"
+        "按四次让会话回到它开始的地方"
     );
     assert_eq!(fixture.events().len(), before, "手势没有碰过历史");
     fixture.harness.shutdown().await;

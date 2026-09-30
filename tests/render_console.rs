@@ -54,6 +54,8 @@ async fn the_asker_routes_a_permission_question_through_the_same_keyboard() {
     });
 
     let request = PermissionRequest {
+        escalation: None,
+        speaker: None,
         request_id: "r-1".to_owned(),
         tool_call_id: "c-1".to_owned(),
         tool_name: "write_file".to_owned(),
@@ -71,6 +73,8 @@ async fn with_no_front_end_the_answer_is_the_non_acting_one() {
     drop(port);
     let asker = ConsoleAsker::from_handle(&handle);
     let request = PermissionRequest {
+        escalation: None,
+        speaker: None,
         request_id: "r-1".to_owned(),
         tool_call_id: "c-1".to_owned(),
         tool_name: "bash".to_owned(),
@@ -105,6 +109,8 @@ async fn a_generic_asker_handle_can_be_shared() {
         }
     });
     let request = PermissionRequest {
+        escalation: None,
+        speaker: None,
         request_id: "r-2".to_owned(),
         tool_call_id: "c-2".to_owned(),
         tool_name: "edit_file".to_owned(),

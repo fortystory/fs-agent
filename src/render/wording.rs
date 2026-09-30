@@ -17,7 +17,7 @@ use crate::events::{
 };
 use serde_json::Value;
 
-use crate::permissions::Mode;
+use crate::permissions::{Escalation, Mode};
 use crate::provider::FinishReason;
 
 /// 一个轮次模式给人看的标签。
@@ -737,12 +737,68 @@ pub fn permission_call(tool_name: &str, args: &str) -> String {
 }
 
 /// plain 控制台的权限输入行，它还给权限门的理由留了位置。
-pub fn permission_prompt_with_context(tool_name: &str, args: &str, reason: &str) -> String {
-    format!(
+///
+/// 一次**升级**询问在那之前多印几行（逐行同构）：先点名说话人（发起者不是主会话时）、
+/// 再说清这是升级、理由与要放开的路径；命令行与按钮行仍然在最后
+/// （`.scratch/workspace-mode/spec.md` §7）。
+pub fn permission_prompt_with_context(
+    tool_name: &str,
+    args: &str,
+    reason: &str,
+    speaker: Option<&SpeakerId>,
+    escalation: Option<&Escalation>,
+) -> String {
+    let mut prompt = String::new();
+    if let Some(speaker) = speaker {
+        prompt.push_str(&format!(
+            "{}\n",
+            permission_speaker_line(&permission_asked(Some(tool_name), args), speaker)
+        ));
+    }
+    if let Some(escalation) = escalation {
+        for line in permission_escalation_lines(escalation) {
+            prompt.push_str(&format!("  {line}\n"));
+        }
+    }
+    prompt.push_str(&format!(
         "{}？原因：{reason} {} ",
         permission_asked(Some(tool_name), args),
         choices_text(&PERMISSION_CHOICES)
-    )
+    ));
+    prompt
+}
+
+/// 一次权限询问的第一行，发起者不是主会话时把说话人括进那一行里
+/// （`调用 bash（执行者 planner 发起）`）。
+pub fn permission_speaker_line(call: &str, speaker: &SpeakerId) -> String {
+    format!("{call}（{} 发起）", permission_speaker(speaker))
+}
+
+/// 一次询问的发起者，用中文点名。
+pub fn permission_speaker(speaker: &SpeakerId) -> String {
+    match speaker {
+        SpeakerId::Debater(id) => format!("讨论者 {id}"),
+        SpeakerId::Executor(id) => format!("执行者 {id}"),
+        SpeakerId::User => "用户".to_owned(),
+        SpeakerId::System => "系统".to_owned(),
+    }
+}
+
+/// 一次升级询问多出来的那几行：这是升级、理由、要放开的路径。
+///
+/// 顺序照 `.scratch/workspace-mode/spec.md` §7；命令行由调用它的那一处保持最后一行 ——
+/// 它是授权时唯一必须看得见确切命令的地方。
+pub fn permission_escalation_lines(escalation: &Escalation) -> Vec<String> {
+    let paths: Vec<String> = escalation
+        .writable_paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    vec![
+        "被沙箱拒绝，申请写工作区之外".to_owned(),
+        format!("理由：{}", escalation.justification),
+        format!("要放开的路径：{}", paths.join("、")),
+    ]
 }
 
 /// 过大粘贴那个问题的**标题**行。
@@ -1367,6 +1423,7 @@ pub fn mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Readonly => "只读",
         Mode::Ask => "询问",
+        Mode::Workspace => "工作区",
         Mode::Auto => "自动",
     }
 }
@@ -1469,12 +1526,12 @@ pub fn unknown_argument(arg: &str) -> String {
     format!("未知参数 {arg}")
 }
 
-/// `--mode` 的值点不出任何模式。它列出那三档，因为最可能到这里的词是 `plan` —— 这个
+/// `--mode` 的值点不出任何模式。它列出那四档，因为最可能到这里的词是 `plan` —— 这个
 /// 版本已经没有的那一档模式。
 pub fn unknown_mode(mode: &str) -> String {
     format!(
-        "--mode 只认 readonly / ask / auto，收到 `{mode}`；从前的 plan 模式已经取消，\
-         计划交给模型自己的 todo 工具"
+        "--mode 只认 readonly / ask / workspace / auto，收到 `{mode}`；从前的 plan 模式\
+         已经取消，计划交给模型自己的 todo 工具"
     )
 }
 
@@ -1646,6 +1703,9 @@ pub fn error_report(error: &crate::Error) -> String {
         crate::Error::Discussion(detail) => format!("讨论无法组装：{detail}"),
         crate::Error::Undo(detail) => format!("撤销失败：{detail}"),
         crate::Error::Skill(detail) => format!("技能加载失败：{detail}"),
+        crate::Error::WorkspaceWithoutSandbox(detail) => {
+            format!("这一档模式在这里不可用：{detail}")
+        }
     }
 }
 
@@ -1891,14 +1951,14 @@ pub fn help_interactive() -> String {
      各自作答，只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决；\
      `--debaters 保守,激进` 指定抽池子里的哪两个（不写就随机抽两个），不带问题就用本会话\
      最后一个问题。讨论的事件写进同一个会话，`sessions show` 能一起复盘。\
-     TUI 里 Esc 取消正在跑的回合（或正在跑的讨论）；Shift+Tab 在只读 / 询问 / 自动\
-     三档权限模式之间循环，当前档位显示在状态行。\n\n  \
+     TUI 里 Esc 取消正在跑的回合（或正在跑的讨论）；Shift+Tab 在只读 / 询问 / 工作区 / \
+     自动四档权限模式之间循环（按严格度排），当前档位显示在状态行。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
      --tui              使用终端界面（全屏外壳）\n  \
      --continue, -c     继续本工作区最新的会话\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \
-     --mode MODE        权限模式：readonly / ask / auto（默认：配置里的 [permissions] mode）\n  \
+     --mode MODE        权限模式：readonly / ask / workspace / auto（默认：配置里的 [permissions] mode）\n  \
      --cwd PATH         工作区（默认：当前目录）"
         .to_owned()
 }

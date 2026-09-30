@@ -223,6 +223,19 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// 这一次调用带上的升级申请 —— 当它带了一个。
+    ///
+    /// `bash` 是唯一的持有者：只有它的 schema 里有 `escalation`，动态工具的 argv 模板是
+    /// 使用者在 `config.toml` 里声明的，插不进新参数（`.scratch/workspace-mode/spec.md`
+    /// §4）。半截的写法是参数错误，所以这里返回 `Result`：一个被吞掉的升级申请会变成一条
+    /// 谁也没问过的命令。
+    fn escalation(
+        &self,
+        _args: &Value,
+    ) -> Result<Option<crate::permissions::Escalation>, ToolError> {
+        Ok(None)
+    }
+
     /// 这个工具是不是执行者工具表的一部分。
     ///
     /// 递归深度为一（spec §16），而这一条由工具表强制、不由一条规则强制：`task` 答 `false`，

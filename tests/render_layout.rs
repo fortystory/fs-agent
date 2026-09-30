@@ -2262,6 +2262,8 @@ fn ask_permission() -> (
     (
         ConsoleRequest::Ask(AskRequest {
             request: PermissionRequest {
+                escalation: None,
+                speaker: None,
                 request_id: "r-1".to_owned(),
                 tool_call_id: "c-1".to_owned(),
                 tool_name: "write_file".to_owned(),
@@ -2419,6 +2421,8 @@ fn a_long_command_still_says_what_it_would_do() {
     let (tx, _rx) = tokio::sync::oneshot::channel::<fs_agent::permissions::Answer>();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),
@@ -2452,9 +2456,9 @@ fn a_long_command_still_says_what_it_would_do() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn shift_tab_cycles_the_status_row_through_the_three_modes_and_back() {
+fn shift_tab_cycles_the_status_row_through_the_four_modes_and_back() {
     // 手势打在帧上：按一下，状态行显示的模式往前走一档，
-    // 按三下把会话送回组装时给它的那一档。这一行是
+    // 按四下把会话送回组装时给它的那一档。这一行是
     // 模式唯一可见的地方 —— 计划模式覆盖层与它的注入
     // 随模式本身一起没了 —— 所以这一帧就是整个用户故事
     // 「干活的时候看得见自己在哪一档」。
@@ -2462,7 +2466,7 @@ fn shift_tab_cycles_the_status_row_through_the_three_modes_and_back() {
     let first = screen(120, 24, &mut state).join("\n");
     assert!(first.contains("模式 询问"), "组装时给的那一档：{first}");
 
-    for expected in ["模式 自动", "模式 只读", "模式 询问"] {
+    for expected in ["模式 工作区", "模式 自动", "模式 只读", "模式 询问"] {
         state.key(Key::BackTab);
         let text = screen(120, 24, &mut state).join("\n");
         assert!(text.contains(expected), "这一行显示 {expected}：{text}");
@@ -2470,6 +2474,7 @@ fn shift_tab_cycles_the_status_row_through_the_three_modes_and_back() {
     assert_eq!(
         state.take_events(),
         vec![
+            FrontEndEvent::CycleMode,
             FrontEndEvent::CycleMode,
             FrontEndEvent::CycleMode,
             FrontEndEvent::CycleMode
@@ -4852,6 +4857,8 @@ fn ask_bash(command: &str) -> fs_agent::render::ConsoleRequest {
     let (reply, _answer) = tokio::sync::oneshot::channel();
     ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
+            escalation: None,
+            speaker: None,
             request_id: "r-1".to_owned(),
             tool_call_id: "c-1".to_owned(),
             tool_name: "bash".to_owned(),

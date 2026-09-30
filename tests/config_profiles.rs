@@ -13,6 +13,7 @@ use fs_agent::config::{
     self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, SandboxAvailability,
     SandboxMode, Vendor, DEFAULT_MODEL,
 };
+use fs_agent::events::Decision;
 use fs_agent::permissions::Mode;
 
 fn env(pairs: &[(&str, &str)]) -> EnvMap {
@@ -790,6 +791,7 @@ fn the_permissions_table_selects_the_mode_a_session_starts_in() {
     for (written, expected) in [
         ("readonly", Mode::Readonly),
         ("ask", Mode::Ask),
+        ("workspace", Mode::Workspace),
         ("auto", Mode::Auto),
     ] {
         let config = resolve(
@@ -799,6 +801,47 @@ fn the_permissions_table_selects_the_mode_a_session_starts_in() {
         .unwrap_or_else(|error| panic!("`{written}` 是一档模式：{error}"));
         assert_eq!(config.mode, expected);
     }
+}
+
+#[test]
+fn the_permissions_table_has_an_outside_read_knob_that_defaults_to_deny() {
+    // 缺省不动摇：那条地板保住的正是 provider key 所在的那条路，
+    // **写下来才算放弃**（`.scratch/workspace-mode/spec.md` §2）。
+    assert_eq!(
+        resolve(None, &env(&[])).unwrap().outside_read,
+        Decision::Deny
+    );
+    assert_eq!(
+        resolve(Some("[permissions]\n"), &env(&[]))
+            .unwrap()
+            .outside_read,
+        Decision::Deny,
+        "写了 [permissions] 却没写这一项时，缺省仍是 deny"
+    );
+    for (written, expected) in [
+        ("deny", Decision::Deny),
+        ("ask", Decision::Ask),
+        ("allow", Decision::Allow),
+    ] {
+        let config = resolve(
+            Some(&format!("[permissions]\noutside_read = \"{written}\"\n")),
+            &env(&[]),
+        )
+        .unwrap_or_else(|error| panic!("`{written}` 是这条旋钮的合法取值：{error}"));
+        assert_eq!(config.outside_read, expected);
+    }
+}
+
+#[test]
+fn an_unknown_outside_read_is_a_startup_error() {
+    // 写错的人以为自己放开了区外读、实际仍然拒着，比反过来更糟 —— 他会去别处找原因。
+    let error = resolve(Some("[permissions]\noutside_read = \"yes\"\n"), &env(&[]))
+        .expect_err("这不是三个值之一")
+        .to_string();
+    for word in ["yes", "deny", "ask", "allow"] {
+        assert!(error.contains(word), "这句里缺了 `{word}`：{error}");
+    }
+    assert!(!error.contains("  "), "一句话，里面没有连续空格：{error:?}");
 }
 
 #[test]
@@ -815,13 +858,13 @@ fn a_configuration_that_says_nothing_about_permissions_asks() {
 }
 
 #[test]
-fn an_unknown_mode_is_a_startup_error_that_names_the_three() {
+fn an_unknown_mode_is_a_startup_error_that_names_the_four() {
     // `plan` 是这次改动之前写下的配置会持有的那个值，所以
     // 该说清「改成写什么」的正是它。
     let error = resolve(Some("[permissions]\nmode = \"plan\"\n"), &env(&[]))
         .expect_err("plan 不再是某一档模式")
         .to_string();
-    for word in ["plan", "readonly", "ask", "auto"] {
+    for word in ["plan", "readonly", "ask", "workspace", "auto"] {
         assert!(error.contains(word), "这句里缺了 `{word}`：{error}");
     }
     // 启动路径原样打出这句话，所以丢掉一个行续反斜杠
@@ -831,11 +874,7 @@ fn an_unknown_mode_is_a_startup_error_that_names_the_three() {
 
 #[test]
 fn the_sandbox_section_defaults_to_bwrap_with_the_tool_caches_writable() {
-    let config = resolve(
-        None,
-        &env(&[("HOME", "/home/ada"), ("PATH", "/usr/bin")]),
-    )
-    .unwrap();
+    let config = resolve(None, &env(&[("HOME", "/home/ada"), ("PATH", "/usr/bin")])).unwrap();
 
     assert_eq!(config.sandbox.mode, SandboxMode::Bwrap);
     assert_eq!(

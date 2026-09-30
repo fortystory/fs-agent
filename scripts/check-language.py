@@ -137,7 +137,8 @@ ENGLISH_PROSE_CEILING = 27
 # `docs/agents/domain.md`，最高 45.5% 是 `docs/observability.md`；`docs/adr/*.md`
 # 是 2026-09-30 ADR 中文化那一轮加进来的，实测 42.6–46.4%；`docs/sandbox.md`（35.2%）
 # 与 ADR 0006（43.1%）是 2026-10-01 沙箱那一批量的；`AGENTS.md` 同一天翻的，
-# 实测 25.8% —— 它字节少、标识符密，比例天然低）。留 2 点余量是因为文档里必然有英文
+# 实测 25.8% —— 它字节少、标识符密，比例天然低；同一批新增的 `docs/permissions.md`
+# 实测 35.3%，收到 33）。留 2 点余量是因为文档里必然有英文
 # 标识符、代码路径、引用与命令，插一段代码块就会拉低比例；但再往下掉 —— 也就是有人把
 # 整段散文翻回英文 —— 必须报红。
 DOCS_MIN_RATIO = {
@@ -148,6 +149,7 @@ DOCS_MIN_RATIO = {
     "docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md": 43,
     "docs/adr/0005-model-visible-text-in-chinese.md": 36,
     "docs/adr/0006-sandbox-by-bubblewrap.md": 41,
+    "docs/adr/0007-workspace-permission-mode.md": 43,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
@@ -155,6 +157,7 @@ DOCS_MIN_RATIO = {
     "docs/executor.md": 38,
     "docs/highlight.md": 35,
     "docs/observability.md": 43,
+    "docs/permissions.md": 33,
     "docs/render.md": 42,
     "docs/repo-map.md": 43,
     "docs/sandbox.md": 33,

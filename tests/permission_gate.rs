@@ -8,8 +8,10 @@
 use std::path::PathBuf;
 
 use fs_agent::events::{Decision, ParticipantId, SpeakerId};
-use fs_agent::permissions::{decide, Call, Mode, Policy, Rule, Scope, Subject, Verdict};
-use fs_agent::tools::Effect;
+use fs_agent::permissions::{
+    decide, Call, Escalation, Mode, PathError, Policy, Rule, Scope, Subject, Verdict,
+};
+use fs_agent::tools::{Effect, ToolError};
 
 /// 一次交给权限门的调用，用 owned 形式写，好让测试读起来像一张用例表。
 struct Invocation {
@@ -20,7 +22,9 @@ struct Invocation {
     argv: Option<Vec<String>>,
     cwd: PathBuf,
     home: Option<PathBuf>,
-    path_error: Option<String>,
+    path_error: Option<PathError>,
+    escalation: Option<Escalation>,
+    masks: Vec<PathBuf>,
 }
 
 impl Invocation {
@@ -34,6 +38,8 @@ impl Invocation {
             cwd: PathBuf::from("/w"),
             home: None,
             path_error: None,
+            escalation: None,
+            masks: Vec::new(),
         }
     }
 
@@ -75,8 +81,29 @@ impl Invocation {
         self
     }
 
+    /// 一个越界的**写**目标（这条 helper 沿用旧测试的读法）。
     fn path_error(mut self, message: &str) -> Self {
-        self.path_error = Some(message.to_owned());
+        self.path_error = Some(PathError::write(ToolError::message(message)));
+        self
+    }
+
+    /// 一个越界的**读**目标。
+    fn read_error(mut self, message: &str) -> Self {
+        self.path_error = Some(PathError::read(ToolError::message(message)));
+        self
+    }
+
+    /// 一次升级申请：理由与要放开的路径都已解析成绝对路径。
+    fn escalation(mut self, justification: &str, paths: &[&str]) -> Self {
+        self.escalation = Some(Escalation {
+            justification: justification.to_owned(),
+            writable_paths: paths.iter().map(PathBuf::from).collect(),
+        });
+        self
+    }
+
+    fn masks(mut self, masks: &[&str]) -> Self {
+        self.masks = masks.iter().map(PathBuf::from).collect();
         self
     }
 
@@ -89,7 +116,9 @@ impl Invocation {
             argv: self.argv.as_deref(),
             cwd: &self.cwd,
             home: self.home.as_deref(),
-            path_error: self.path_error.as_deref(),
+            path_error: self.path_error.as_ref(),
+            escalation: self.escalation.as_ref(),
+            masks: &self.masks,
         }
     }
 }
@@ -116,6 +145,24 @@ fn gate(mode: Mode, rules: Vec<Rule>, call: &Invocation) -> Verdict {
 
 fn decision(mode: Mode, rules: Vec<Rule>, call: &Invocation) -> Decision {
     gate(mode, rules, call).decision
+}
+
+/// 同一个门，但把 `[permissions] outside_read` 那一档旋钮换个值。
+fn gate_with(mode: Mode, outside_read: Decision, rules: Vec<Rule>, call: &Invocation) -> Verdict {
+    decide(
+        &policy(mode, rules).with_outside_read(outside_read),
+        &kimi(),
+        &call.call(),
+    )
+}
+
+fn decision_with(
+    mode: Mode,
+    outside_read: Decision,
+    rules: Vec<Rule>,
+    call: &Invocation,
+) -> Decision {
+    gate_with(mode, outside_read, rules, call).decision
 }
 
 fn allow_any() -> Rule {
@@ -170,20 +217,22 @@ fn auto_is_not_permission_free_a_deny_rule_still_applies() {
 // --- 模式循环（`.scratch/todo-and-modes` 的票 01） ------------------------
 
 #[test]
-fn a_mode_cycles_readonly_ask_auto_and_back() {
-    // 这个手势的全部代数：按一次走一步，按三次让会话
-    // 回到它开始的那一档（`.scratch/todo-and-modes/spec.md` §1）。
+fn a_mode_cycles_readonly_ask_workspace_auto_and_back() {
+    // 这个手势的全部代数：按一次走一步，按四次让会话
+    // 回到它开始的那一档（`.scratch/todo-and-modes/spec.md` §1、
+    // `.scratch/workspace-mode/spec.md` §1）。
     assert_eq!(Mode::Readonly.next(), Mode::Ask);
-    assert_eq!(Mode::Ask.next(), Mode::Auto);
+    assert_eq!(Mode::Ask.next(), Mode::Workspace);
+    assert_eq!(Mode::Workspace.next(), Mode::Auto);
     assert_eq!(Mode::Auto.next(), Mode::Readonly);
-    assert_eq!(Mode::Ask.next().next().next(), Mode::Ask);
+    assert_eq!(Mode::Ask.next().next().next().next(), Mode::Ask);
 }
 
 #[test]
-fn the_three_modes_are_the_three_words_a_configuration_may_write() {
+fn the_four_modes_are_the_four_words_a_configuration_may_write() {
     // 一档模式一个拼写，别的都解析不出来：`plan` 曾经是第四档，
-    // 已经退场 —— 顶替它的是 `todo` 工具，不是一档模式。
-    for mode in [Mode::Readonly, Mode::Ask, Mode::Auto] {
+    // 已经退场 —— 顶替它的是 `todo` 工具，而不是一档模式。
+    for mode in [Mode::Readonly, Mode::Ask, Mode::Workspace, Mode::Auto] {
         assert_eq!(Mode::parse(mode.as_str()), Some(mode));
     }
     assert_eq!(Mode::parse("plan"), None);
@@ -609,8 +658,8 @@ fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
 }
 
 #[test]
-fn the_path_limit_is_a_deny_floor() {
-    // 工作区解析不了的目标在每一档里都被拒，所以记下来的
+fn the_path_limit_is_a_deny_floor_in_every_mode_but_workspace() {
+    // 工作区解析不了的目标在另外三档里都被拒，所以记下来的
     // 裁决与那次拒绝对得上，而不是报一个这次调用
     // 根本没用上的 `Allow`。
     let call = Invocation::write("write_file")
@@ -621,6 +670,160 @@ fn the_path_limit_is_a_deny_floor() {
         assert_eq!(verdict.decision, Decision::Deny, "{mode:?}");
         assert!(verdict.reason.contains("路径上限"), "{}", verdict.reason);
     }
+
+    // 唯独 `workspace` 档：这条地板在这一档下是 `Ask` —— 选这一档就是同意「区外要问」
+    // （`.scratch/workspace-mode/spec.md` §3）。一条放行一切的规则也降不下它。
+    let verdict = gate(Mode::Workspace, vec![allow_any()], &call);
+    assert_eq!(verdict.decision, Decision::Ask, "{}", verdict.reason);
+    assert!(
+        verdict.reason.contains("路径上限（写）"),
+        "{}",
+        verdict.reason
+    );
+}
+
+// --- 第四档 `workspace`（.scratch/workspace-mode/spec.md §1、§3）-----------
+
+#[test]
+fn workspace_allows_writes_inside_the_workspace_and_asks_outside() {
+    let inside = Invocation::write("write_file").writes(&["/w/notes.txt"]);
+    let outside = Invocation::write("write_file")
+        .writes(&["/etc/hostname"])
+        .path_error("路径 /etc/hostname 在会话工作区之外（/w）");
+
+    assert_eq!(decision(Mode::Workspace, vec![], &inside), Decision::Allow);
+    assert_eq!(decision(Mode::Workspace, vec![], &outside), Decision::Ask);
+    // 只读与 shell 也一路放行：判不出区内区外的那一类由沙箱那一侧接住。
+    let read = Invocation::read("read_file").reads(&["/w/notes.txt"]);
+    let shell = Invocation::exclusive("bash").argv(&["bash", "-lc", "cargo test"]);
+    assert_eq!(decision(Mode::Workspace, vec![], &read), Decision::Allow);
+    assert_eq!(decision(Mode::Workspace, vec![], &shell), Decision::Allow);
+}
+
+#[test]
+fn only_workspace_asks_for_an_outside_write() {
+    let outside = Invocation::write("write_file")
+        .writes(&["/etc/hostname"])
+        .path_error("路径 /etc/hostname 在会话工作区之外（/w）");
+    // `ask` 档的区外写照旧是地板：不加对称旋钮（spec §3）。
+    assert_eq!(decision(Mode::Ask, vec![], &outside), Decision::Deny);
+    assert_eq!(decision(Mode::Readonly, vec![], &outside), Decision::Deny);
+    assert_eq!(decision(Mode::Auto, vec![], &outside), Decision::Deny);
+}
+
+// --- 区外读那条全局旋钮（.scratch/workspace-mode/spec.md §2）---------------
+
+#[test]
+fn outside_read_is_deny_by_default_and_a_knob_everywhere() {
+    let outside = Invocation::read("read_file")
+        .reads(&["/home/ada/.config/fs-agent/config.toml"])
+        .read_error("路径 … 在会话工作区之外（/w）");
+
+    for mode in [Mode::Readonly, Mode::Ask, Mode::Workspace, Mode::Auto] {
+        assert_eq!(
+            decision(mode, vec![allow_any()], &outside),
+            Decision::Deny,
+            "{mode:?}"
+        );
+        assert_eq!(
+            decision_with(mode, Decision::Ask, vec![allow_any()], &outside),
+            Decision::Ask,
+            "{mode:?}"
+        );
+        assert_eq!(
+            decision_with(mode, Decision::Allow, vec![], &outside),
+            Decision::Allow,
+            "{mode:?}"
+        );
+    }
+    // `deny` 时不许出现任何 `Allow`：一条放行一切的规则也降不下这条地板。
+    for mode in [Mode::Readonly, Mode::Ask, Mode::Workspace, Mode::Auto] {
+        assert_eq!(
+            gate_with(mode, Decision::Deny, vec![allow_any()], &outside).decision,
+            Decision::Deny,
+            "{mode:?}"
+        );
+    }
+}
+
+#[test]
+fn the_outside_read_knob_does_not_touch_the_write_side() {
+    let outside_write = Invocation::write("write_file")
+        .writes(&["/etc/hostname"])
+        .path_error("路径 /etc/hostname 在会话工作区之外（/w）");
+    // 写那一侧的越界按档位给，`outside_read` 管不着它。
+    assert_eq!(
+        decision_with(Mode::Ask, Decision::Allow, vec![], &outside_write),
+        Decision::Deny
+    );
+    assert_eq!(
+        decision_with(Mode::Workspace, Decision::Allow, vec![], &outside_write),
+        Decision::Ask
+    );
+}
+
+// --- 升级手势（.scratch/workspace-mode/spec.md §4、§5）--------------------
+
+#[test]
+fn an_escalation_asks_once_in_every_mode_but_readonly() {
+    let call = Invocation::exclusive("bash")
+        .argv(&["bash", "-lc", "echo x > /home/ada/.npm/probe"])
+        .escalation("构建产物要写到 ~/.npm 的缓存目录", &["/home/ada/.npm"]);
+
+    for mode in [Mode::Ask, Mode::Workspace, Mode::Auto] {
+        let verdict = gate(mode, vec![], &call);
+        assert_eq!(verdict.decision, Decision::Ask, "{mode:?}");
+        assert!(verdict.reason.contains("沙箱升级"), "{}", verdict.reason);
+        assert!(
+            verdict.reason.contains("/home/ada/.npm"),
+            "理由里要看得到要放开的路径：{}",
+            verdict.reason
+        );
+    }
+    // `readonly` 连跑都不让，谈不上放开沙箱。
+    assert_eq!(decision(Mode::Readonly, vec![], &call), Decision::Deny);
+    // 一条「总是允许」的规则也不会让升级不再问：它只对这一次调用有效。
+    assert_eq!(
+        decision(Mode::Auto, vec![allow_any()], &call),
+        Decision::Ask
+    );
+}
+
+#[test]
+fn an_escalation_into_a_mask_or_a_protected_path_is_denied_outright() {
+    let masked = Invocation::exclusive("bash")
+        .masks(&["/home/ada/.ssh", "/home/ada/.config/fs-agent"])
+        .escalation("要写 authorized_keys", &["/home/ada/.ssh/authorized_keys"]);
+    for mode in [Mode::Ask, Mode::Workspace, Mode::Auto] {
+        let verdict = gate(mode, vec![allow_any()], &masked);
+        assert_eq!(verdict.decision, Decision::Deny, "{mode:?}");
+        assert!(
+            verdict.reason.contains("没有任何通道放宽"),
+            "{}",
+            verdict.reason
+        );
+    }
+
+    // 保护路径按**路径**判，不看在不在磁盘上：批准一条还不存在的 `.env` 同样会让下一次
+    // 调用以为自己在保护。
+    for path in [
+        "/w/.env",
+        "/w/.env.local",
+        "/w/prod.env",
+        "/w/.git/config",
+        "/w/.git/hooks/pre-commit",
+    ] {
+        let call = Invocation::exclusive("bash").escalation("想写这儿", &[path]);
+        assert_eq!(
+            decision(Mode::Auto, vec![allow_any()], &call),
+            Decision::Deny,
+            "{path} 是写死的安全默认"
+        );
+    }
+
+    // 模板不是保护路径：它不携带真密钥。
+    let template = Invocation::exclusive("bash").escalation("想写这儿", &["/w/.env.example"]);
+    assert_eq!(decision(Mode::Auto, vec![], &template), Decision::Ask);
 }
 
 #[test]

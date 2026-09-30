@@ -6,10 +6,12 @@
 //! 断言能把「一个产出者」与「同一群字写了四份」分开
 //! （spec §Testing Decisions）。画家那边断言的是语义。
 
+use std::path::PathBuf;
+
 use fs_agent::events::{
     ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId, StopReason, Usage,
 };
-use fs_agent::permissions::Mode;
+use fs_agent::permissions::{Escalation, Mode};
 use fs_agent::render::wording;
 
 #[test]
@@ -259,18 +261,53 @@ fn every_permission_decision_and_source_has_an_explicit_chinese_phrase() {
 #[test]
 fn the_input_line_prompts_read_in_chinese() {
     assert_eq!(
-        wording::permission_prompt_with_context("write_file", "file_path=a.txt", "mode ask"),
+        wording::permission_prompt_with_context(
+            "write_file",
+            "file_path=a.txt",
+            "mode ask",
+            None,
+            None
+        ),
         "权限询问：write_file（file_path=a.txt）？原因：mode ask [y] 允许 / [a] 总是允许 / [n] 拒绝 "
     );
-    // 三档模式，用的是状态行与 banner 那套词；第四档
-    // （`计划`）随模式本身一起退场了（`.scratch/todo-and-modes`）。
+    // 四档模式，用的是状态行与 banner 那套词；`计划` 随模式本身一起退场了
+    // （`.scratch/todo-and-modes`），第四档是 `workspace`（`.scratch/workspace-mode`）。
     assert_eq!(wording::mode_label(Mode::Readonly), "只读");
     assert_eq!(wording::mode_label(Mode::Ask), "询问");
+    assert_eq!(wording::mode_label(Mode::Workspace), "工作区");
     assert_eq!(wording::mode_label(Mode::Auto), "自动");
     assert_eq!(wording::mode_field(Mode::Auto), "模式 自动");
     assert!(
         wording::unknown_mode("plan").contains("plan"),
         "这条拒绝引用了当时写下的东西"
+    );
+}
+
+#[test]
+fn an_escalation_prompt_spells_out_the_reason_and_the_paths() {
+    let escalation = Escalation {
+        justification: "构建产物要写到 ~/.npm 的缓存目录".to_owned(),
+        writable_paths: vec![PathBuf::from("/home/ada/.npm")],
+    };
+    let lines = wording::permission_escalation_lines(&escalation);
+    assert_eq!(lines[0], "被沙箱拒绝，申请写工作区之外");
+    assert_eq!(lines[1], "理由：构建产物要写到 ~/.npm 的缓存目录");
+    assert_eq!(lines[2], "要放开的路径：/home/ada/.npm");
+
+    // 发起者不是主会话时点名说话人；命令行与按钮行仍在最后一行。
+    let prompt = wording::permission_prompt_with_context(
+        "bash",
+        "command=echo x",
+        "沙箱升级（一次批准）",
+        Some(&SpeakerId::Executor("planner".into())),
+        Some(&escalation),
+    );
+    assert!(prompt.contains("执行者 planner 发起"), "{prompt}");
+    assert!(prompt.contains("理由：构建产物"), "{prompt}");
+    assert!(prompt.contains("要放开的路径：/home/ada/.npm"), "{prompt}");
+    assert!(
+        prompt.trim_end().ends_with("[n] 拒绝"),
+        "按钮行在最后：{prompt}"
     );
 }
 
@@ -643,7 +680,10 @@ fn the_long_help_texts_are_chinese_and_keep_their_structure() {
     assert!(interactive.contains("--plain"), "{interactive}");
     // help 必须点名的那些模式入口：旗标，与手势。
     assert!(interactive.contains("--mode MODE"), "{interactive}");
-    assert!(interactive.contains("只读 / 询问 / 自动"), "{interactive}");
+    assert!(
+        interactive.contains("只读 / 询问 / 工作区 / 自动"),
+        "{interactive}"
+    );
     assert!(interactive.contains("Shift+Tab"), "{interactive}");
 
     // 讨论现在有自己的前端了，两份 help 都这么说。
