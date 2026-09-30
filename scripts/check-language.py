@@ -118,28 +118,33 @@ FROZEN_LITERALS = [
 ]
 
 # --- ② docs 的中文占比下限（百分数） ----------------------------------------
-# 翻译完成后按实测值收紧；比例留出余量，因为文档里必然有英文标识符、代码路径、
-# 引用与命令。
+# 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是
+# `docs/agents/domain.md`，最高 45.5% 是 `docs/observability.md`）。留 2 点余量是因为
+# 文档里必然有英文标识符、代码路径、引用与命令，插一段代码块就会拉低比例；但再往下掉
+# —— 也就是有人把整段散文翻回英文 —— 必须报红。
 DOCS_MIN_RATIO = {
-    "docs/bash.md": 30,
-    "docs/credentials.md": 30,
+    "docs/bash.md": 32,
+    "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
-    "docs/discussion.md": 30,
-    "docs/executor.md": 30,
-    "docs/observability.md": 30,
-    "docs/render.md": 30,
-    "docs/repo-map.md": 30,
-    "docs/skills.md": 30,
-    "docs/agents/domain.md": 30,
-    "docs/agents/issue-tracker.md": 30,
-    "docs/agents/triage-labels.md": 30,
+    "docs/discussion.md": 42,
+    "docs/executor.md": 38,
+    "docs/observability.md": 43,
+    "docs/render.md": 42,
+    "docs/repo-map.md": 43,
+    "docs/skills.md": 41,
+    "docs/agents/domain.md": 29,
+    "docs/agents/issue-tracker.md": 29,
+    "docs/agents/triage-labels.md": 32,
 }
 
 # --- ③ 注释中文行的棘轮 -----------------------------------------------------
-# 数字是「已翻成中文的注释行数」的下限。翻译推进后往上提，绝不往下调。
+# 数字是「已翻成中文的注释行数」的下限，**只许上升**：它守的是「翻过的地方不许被改回
+# 英文」。2026-09-27 迁移收尾时提到实测值（`src` 5,209 / `tests` 2,423）。确实要删代码、
+# 连带删掉中文注释行时，往下调这个数字是一次**显式动作** —— 请在提交信息里写明理由，
+# 别让它悄悄跟着漂。
 COMMENT_FLOOR = {
-    "src": 195,
-    "tests": 93,
+    "src": 5209,
+    "tests": 2423,
 }
 
 
