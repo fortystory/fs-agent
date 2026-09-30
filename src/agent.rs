@@ -119,9 +119,10 @@ pub(crate) fn scoped_events_slice(
 ///
 /// 后半段是 `.scratch/todo-and-modes/spec.md` §3 的**规则段**：引导模型维护一份 `todo` 列表，
 /// 不是强制。它搭在这里，是因为这是**每一次**请求里模型可见的前缀，也就是 ADR 0001 那条规矩
-/// 最严苛的版本 —— 加一行是允许的，改一行或删一行会让每一个会话的缓存前缀作废。措辞是英文，
-/// 因为它属于模型可见文本（ADR 0001）；它还是 `const` 风格的字面量，另有一个理由：有测试钉住
-/// 里面的三个状态词，所以工具的用词和这条指令没法漂开。
+/// 最严苛的版本 —— 加一行是允许的，改一行或删一行会让每一个会话的缓存前缀作废。措辞是中文
+/// （ADR 0005：这一侧的散文按「是不是标识符」分，不按「谁读它」分），而三个状态词仍是它点名的
+/// 标识符；它还是 `const` 风格的字面量，另有一个理由：有测试钉住那三个词，所以工具的用词和这
+/// 条指令没法漂开。
 pub fn agent_identity() -> &'static str {
     concat!(
         "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。",
@@ -129,11 +130,9 @@ pub fn agent_identity() -> &'static str {
         "docs/adr、.scratch 里的 spec 与 ticket）。你不是 Claude Code，也不是 Anthropic 的产品，",
         "不要自称是；被问到你是谁时，说你是 fs-agent。你没有跨会话记忆：需要上下文就读文件或问用户。",
         "\n\n",
-        "Before you start a task, write the plan down with the `todo` tool: every step as an item \
-         whose `status` is `pending`. Mark the one you are working on `in_progress`, update the \
-         list as each item finishes (`completed`), and close the work with one final call in \
-         which every item is `completed`. The list is how the user sees what you are doing and \
-         how far you have got, so keep it current rather than writing it once.",
+        "开工前先把计划写下来，用 `todo` 工具：每一步都是一项，`status` 写 `pending`。正在做的那一项标成 \
+         `in_progress`，每完成一项就更新这份列表（`completed`），最后一次调用把每一项都写成 `completed`，收尾。\
+         列表是用户看你正在做什么、做到哪一步的地方，所以要一直更新，而不是只写一次。",
     )
 }
 
@@ -295,7 +294,7 @@ pub async fn run_turn(
         // 落在迭代之间的手势会在下一个 provider 调用打开之前停下这个回合（spec §6）。在这里
         // 检查，而不是只在流内部检查，能让一个被取消的回合不去发一个它马上就会弃掉的请求。
         if cancelled.is_cancelled() {
-            render.diagnostic("turn cancelled before the next model call");
+            render.diagnostic("下一次模型调用之前，这个回合被取消了");
             return end_turn(session, render, speaker, StopReason::Aborted, last_text);
         }
 
@@ -349,7 +348,7 @@ pub async fn run_turn(
             match build_messages(&events, speaker, &caps, session.identity(), &trim_policy) {
                 Ok(messages) => messages,
                 Err(error) => {
-                    render.diagnostic(&format!("context budget: {error}"));
+                    render.diagnostic(&format!("上下文预算：{error}"));
                     return end_turn(session, render, speaker, StopReason::Error, last_text);
                 }
             };
@@ -387,7 +386,7 @@ pub async fn run_turn(
         let sent = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                render.diagnostic("turn cancelled while the model call was in flight");
+                render.diagnostic("模型调用在飞时，这个回合被取消了");
                 return end_turn(session, render, speaker, StopReason::Aborted, last_text);
             }
             sent = provider.send(request) => sent,
@@ -395,7 +394,7 @@ pub async fn run_turn(
         let mut stream = match sent {
             Ok(stream) => stream,
             Err(error) => {
-                render.diagnostic(&format!("provider error: {error}"));
+                render.diagnostic(&format!("provider 错误：{error}"));
                 return end_turn(session, render, speaker, StopReason::Error, last_text);
             }
         };
@@ -454,14 +453,14 @@ pub async fn run_turn(
                         // 这个回合的停止原因来自循环自己的续跑查询，
                         // 从不来自 provider。
                         render.diagnostic(&format!(
-                            "provider stream finished: {}",
+                            "provider 流结束：{}",
                             crate::render::wording::finish_reason(&finish_reason)
                         ));
                         saw_done = true;
                         break;
                     }
                     Some(Err(error)) => {
-                        render.diagnostic(&format!("provider stream error: {error}"));
+                        render.diagnostic(&format!("provider 流错误：{error}"));
                         failed = true;
                         break;
                     }
@@ -476,7 +475,7 @@ pub async fn run_turn(
         // provider 流」就是这个意思，也正是收到一半的文本留在日志之外的原因 —— 一个从没到
         // `[DONE]` 的回合没有产出任何完成的单位（spec §6）。
         if aborted {
-            render.diagnostic("turn cancelled while the model stream was in flight");
+            render.diagnostic("模型流在飞时，这个回合被取消了");
             return end_turn(session, render, speaker, StopReason::Aborted, text);
         }
 
@@ -484,7 +483,7 @@ pub async fn run_turn(
         // 所以什么都不落进日志。
         if failed || !saw_done {
             if !failed {
-                render.diagnostic("provider stream ended without [DONE]");
+                render.diagnostic("provider 流没有等到 [DONE] 就结束了");
             }
             return end_turn(session, render, speaker, StopReason::Error, text);
         }
@@ -517,7 +516,7 @@ pub async fn run_turn(
             // 被推迟的那些调用已经开始了，所以每一个仍然拿到它被欠的那一个结果（spec §6）。
             if cancelled.is_cancelled() {
                 close_deferred_calls(session, render, speaker, deferred, CANCELLED_BEFORE_RUN)?;
-                render.diagnostic("turn cancelled before the tool calls ran");
+                render.diagnostic("工具调用开跑之前，这个回合被取消了");
                 return end_turn(session, render, speaker, StopReason::Aborted, last_text);
             }
 
@@ -548,18 +547,17 @@ pub async fn run_turn(
 ///
 /// 只在这里命名一次，因为两者都经 [`close_deferred_calls`] 流过、而且模型会读到它们：工具
 /// 有没有跑，决定了工作区有没有可能被改过。
-const HOOK_STOPPED_TURN: &str = "hook stopped the turn: the tool did not run";
-const CANCELLED_BEFORE_RUN: &str = "the turn was cancelled: the tool did not run";
+const HOOK_STOPPED_TURN: &str = "钩子停掉了这个回合：工具没有跑";
+const CANCELLED_BEFORE_RUN: &str = "这个回合被取消了：工具没有跑";
 /// 会话 token 额度用尽时一次 `task` 调用拿到的那一个结果（spec §17）：执行者从没被派发
 /// 出去，所以工作区没被它碰过。
-const BUDGET_NO_NEW_EXECUTOR: &str = "session token budget exhausted: no new executor was \
-                                       dispatched. Work that was already running was left to \
-                                       finish.";
+const BUDGET_NO_NEW_EXECUTOR: &str =
+    "会话 token 额度已用尽：不再派发新的执行者。已经在跑的活让它跑完。";
 /// 一次抓住调用在飞时的取消：工具那个 future 被 drop 了，所以它有没有生效是未知的 —— 与
 /// 崩溃恢复那条结果携带的是同一种诚实。
-const CANCELLED_IN_FLIGHT: &str = "the turn was cancelled while this call was in flight, so its \
-                                    result is unknown. It was not re-run; check the workspace \
-                                    before relying on either outcome.";
+const CANCELLED_IN_FLIGHT: &str =
+    "这个调用在飞时回合被取消了，所以它有没有生效是未知的。它没有被重跑；在依赖任何一种结果之前先检查\
+     工作区。";
 
 /// 钩子与权限门都说过话之后，循环对一次调用必须做什么。
 enum Disposition {
@@ -776,7 +774,7 @@ async fn process_call(
                     };
             }
             Ok(Constraint::Skip) => {
-                let skipped = ToolError::message("hook skipped execution: the tool did not run");
+                let skipped = ToolError::message("钩子跳过了执行：工具没有跑");
                 emit_completed(
                     session,
                     render,
@@ -806,10 +804,10 @@ async fn process_call(
                 // 错误结果。回合继续，所以一个坏掉的钩子仍然可被诊断，
                 // 而不会变成致命的。
                 render.diagnostic(&format!(
-                    "hook.pre failed for {}: {error}; the action is blocked",
+                    "{} 的 hook.pre 失败：{error}；这次动作被挡住",
                     pending.tool_name
                 ));
-                let blocked = ToolError::message(format!("hook failed, action blocked: {error}"));
+                let blocked = ToolError::message(format!("钩子失败，动作被挡住：{error}"));
                 emit_completed(
                     session,
                     render,
@@ -857,7 +855,7 @@ async fn process_call(
                         // 执行者从没跑过。
                         let spent = total_usage(&session.events()).total_tokens();
                         if let Some(note) = session.config().budget.exhausted_note(spent) {
-                            render.diagnostic(&format!("{note}; no new executor was dispatched"));
+                            render.diagnostic(&format!("{note}；没有派发新的执行者"));
                             let refused = ToolError::message(BUDGET_NO_NEW_EXECUTOR);
                             emit_completed(
                                 session,
@@ -1191,7 +1189,7 @@ pub async fn run_discussion(
         // 这个原因只随 `DiscussionOutcome` 传出去。
         let spent = total_usage(&discussion.stream()).total_tokens();
         if let Some(note) = budget.exhausted_note(spent) {
-            render.diagnostic(&format!("{note}; going straight to synthesis"));
+            render.diagnostic(&format!("{note}；直接走向合成器"));
             if rounds > 0 {
                 record_round_ended(
                     discussion.recorder(),
@@ -1277,7 +1275,7 @@ pub async fn run_discussion(
                 discussion.recorder(),
                 render,
                 "discussion_failed",
-                "no debater answered this round",
+                "这一轮没有讨论者作答",
             )?;
             return Ok(DiscussionOutcome {
                 reason: StopReason::Error,
@@ -1366,7 +1364,7 @@ pub async fn run_discussion(
             &mut discussion.synthesizer.session,
             render,
             "synthesis_failed",
-            "the synthesizer's call produced no product",
+            "合成器这次调用没有产出",
         )?;
         StopReason::Error
     };
@@ -1444,7 +1442,7 @@ pub async fn run_single_shot(
     let sent = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            render.diagnostic("synthesizer call cancelled");
+            render.diagnostic("合成器的调用被取消了");
             return Ok(None);
         }
         sent = provider.send(request) => sent,
@@ -1452,7 +1450,7 @@ pub async fn run_single_shot(
     let mut stream = match sent {
         Ok(stream) => stream,
         Err(error) => {
-            render.diagnostic(&format!("synthesizer provider error: {error}"));
+            render.diagnostic(&format!("合成器的 provider 错误：{error}"));
             return Ok(None);
         }
     };
@@ -1463,7 +1461,7 @@ pub async fn run_single_shot(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                render.diagnostic("synthesizer call cancelled while its stream was in flight");
+                render.diagnostic("合成器的流在飞时，它的调用被取消了");
                 // 没有 `[DONE]` 就没有产出：丢掉这条流就是手势在这里的全部效果。
                 return Ok(None);
             }
@@ -1485,7 +1483,7 @@ pub async fn run_single_shot(
                 }
                 Some(Ok(StreamEvent::Finished { finish_reason })) => {
                     render.diagnostic(&format!(
-                        "synthesizer stream finished: {}",
+                        "合成器的流结束：{}",
                         crate::render::wording::finish_reason(&finish_reason)
                     ));
                     saw_done = true;
@@ -1495,10 +1493,10 @@ pub async fn run_single_shot(
                 // 不能被派发：合成器没有可派发进去的工具表。
                 Some(Ok(StreamEvent::ToolCallStarted { .. }))
                 | Some(Ok(StreamEvent::ToolCallCompleted { .. })) => {
-                    render.diagnostic("synthesizer asked for a tool; ignored");
+                    render.diagnostic("合成器要了一个工具；已忽略");
                 }
                 Some(Err(error)) => {
-                    render.diagnostic(&format!("synthesizer stream error: {error}"));
+                    render.diagnostic(&format!("合成器的流错误：{error}"));
                     break;
                 }
                 None => break,
@@ -1640,7 +1638,7 @@ async fn authorize(
     // 改变，因此它也不是被记录下来的那次决定的来源。
     let effective = hooks::effective_verdict(verdict.decision, hook_verdict);
     let tightened_by_hook = hook_verdict.is_some_and(|hook| hook > verdict.decision);
-    let hook_note = tightened_by_hook.then_some("(a hook tightened the verdict)");
+    let hook_note = tightened_by_hook.then_some("（钩子收紧了这个裁决）");
     let annotated = annotate_reason(&verdict.reason, hook_note);
 
     match effective {
@@ -1681,7 +1679,7 @@ async fn authorize(
             let Some(asker) = session.asker().cloned() else {
                 // 权限门保持它那个忠实的 `Ask`；循环才是把「没有作答者」
                 // 变成拒绝的地方，而且它说了出来。
-                let reason = format!("{ask_reason}; downgraded to deny: no interactive answerer");
+                let reason = format!("{ask_reason}；降级为拒绝：没有可交互的作答者");
                 record_decision(
                     session,
                     render,
@@ -1725,7 +1723,7 @@ async fn authorize(
                         &request_id,
                         Decision::Allow,
                         DecisionSource::User,
-                        format!("user approved: {ask_reason}"),
+                        format!("用户允许：{ask_reason}"),
                     )?;
                     Ok(Authorized::Allow)
                 }
@@ -1740,12 +1738,12 @@ async fn authorize(
                         &request_id,
                         Decision::Allow,
                         DecisionSource::User,
-                        format!("user approved always: {ask_reason}"),
+                        format!("用户总是允许：{ask_reason}"),
                     )?;
                     Ok(Authorized::Allow)
                 }
                 Answer::Deny => {
-                    let reason = format!("user denied: {ask_reason}");
+                    let reason = format!("用户拒绝：{ask_reason}");
                     record_decision(
                         session,
                         render,
@@ -1765,14 +1763,15 @@ async fn authorize(
 /// 合成出来的拒绝消息只有这一种形状，这样每一条拒绝路径在工具结果里读起来都一样。
 fn refuse(reason: &str) -> Authorized {
     Authorized::Refuse {
-        message: format!("permission denied: {reason}"),
+        message: format!("权限拒绝：{reason}"),
     }
 }
 
 /// 钩子抬高了裁决时，把它的备注附到裁决理由后面。
 fn annotate_reason(reason: &str, hook_note: Option<&str>) -> String {
     match hook_note {
-        Some(note) => format!("{reason} {note}"),
+        // 备注是中文括号里的一句话，紧贴着接上去，中间不加空格。
+        Some(note) => format!("{reason}{note}"),
         None => reason.to_owned(),
     }
 }
@@ -1924,7 +1923,7 @@ async fn run_post_hook(
         ),
         Err(error) => {
             render.diagnostic(&format!(
-                "hook.post failed for {}: {error}; the feedback is dropped",
+                "{} 的 hook.post 失败：{error}；反馈被丢掉",
                 pending.tool_name
             ));
             record_hook(

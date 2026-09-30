@@ -30,13 +30,11 @@ use super::{append_event, run_turn, CancelObserver, TurnScope};
 /// 与讨论者的协议指令一样，它从不进事件流：它是流不携带的那个请求输入之一（spec §15）。
 /// 它不含任何讨论协议 —— 执行者不辩论，它干活。
 pub(super) const EXECUTOR_IDENTITY: &str =
-    "You are an executor. Another agent dispatched you, through \
-     the `task` tool, to carry out one piece of work in this repository, and you have your own \
-     context: the repository rules and your brief, which is the last user message. Nobody sees \
-     your steps — not your tool calls and not their output — so work until the task is done, then \
-     answer with a concise report of what you did, what you found and anything the dispatcher \
-     must know. That report is the whole of what comes back. You cannot dispatch further \
-     executors. If the task cannot be done, say so plainly and explain why instead of guessing.";
+    "你是一个执行者。另一个 agent 通过 `task` 工具把你派到这个仓库里，\
+     做一件工作，而你有自己的上下文：本仓库的规则，加上你的简报 —— 它就是最后那条 user 消息。没有人\
+     看得见你的步骤 —— 你的工具调用看不见，它们的输出也看不见 —— 所以一直干到任务完成，然后用一份\
+     简短报告回答：你做了什么、你发现了什么、以及派发者必须知道的事情。那份报告就是回传的全部。\
+     你不能再派发执行者。任务做不了就直说，并解释为什么，不要猜。";
 
 /// 跑一个嵌套执行者的端口（spec §16）：[`ExecutorSpawner`]，由循环构造、经工具上下文交给
 /// `task`。
@@ -179,7 +177,7 @@ impl ExecutorPort {
             // 还能经它上报。
             Err(error) => {
                 self.render
-                    .diagnostic(&format!("executor {}: {error}", self.executor_id));
+                    .diagnostic(&format!("执行者 {}：{error}", self.executor_id));
                 (StopReason::Error, String::new())
             }
         };
@@ -222,7 +220,7 @@ impl ExecutorSpawner for ExecutorPort {
 
 /// 把一次写入失败变成 `task` 调用那条错误结果。
 fn spawn_failed(error: Error) -> ToolError {
-    ToolError::message(format!("executor: {error}"))
+    ToolError::message(format!("执行者：{error}"))
 }
 
 /// 一个发言者以什么身份行动。`parent` 是参与者 id，所以一个不是参与者的发言者（它本来也
@@ -292,15 +290,15 @@ fn executor_report(
     changed: &[String],
 ) -> String {
     let files = if changed.is_empty() {
-        "none".to_owned()
+        "无".to_owned()
     } else {
         changed.join(", ")
     };
     format!(
-        "executor {executor} finished: {reason}\n\
-         files changed: {files}\n\
-         tokens: input {}, output {}, cached {}, miss {}\n\
-         report:\n{summary}",
+        "执行者 {executor} 结束：{reason}\n\
+         改动文件：{files}\n\
+         token：input {}, output {}, cached {}, miss {}\n\
+         报告：\n{summary}",
         usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.miss_tokens,
     )
 }

@@ -191,7 +191,7 @@ async fn a_policy_deny_never_reaches_the_tool_and_yields_one_error_result() {
     assert_eq!(results.len(), 1, "正好一条结果");
     assert!(!results[0].1);
     let error = results[0].2.clone().unwrap();
-    assert!(error.contains("permission denied"), "{error}");
+    assert!(error.contains("权限拒绝"), "{error}");
     assert!(error.contains("readonly"), "{error}");
 
     assert_eq!(fixture.asked_count(), 0, "拒绝永远不会发问");
@@ -276,7 +276,7 @@ async fn a_user_denial_yields_one_error_result() {
     let results = fixture.results();
     assert_eq!(results.len(), 1);
     assert!(!results[0].1);
-    assert!(results[0].2.clone().unwrap().contains("user denied"));
+    assert!(results[0].2.clone().unwrap().contains("用户拒绝"));
 
     let decisions = fixture.decisions();
     assert_eq!(decisions.len(), 1);
@@ -306,7 +306,7 @@ async fn ask_without_an_answerer_downgrades_to_deny_and_says_why() {
     assert_eq!(decisions[0].1, DecisionSource::Policy);
     let reason = decisions[0].2.clone().unwrap();
     assert!(
-        reason.contains("no interactive answerer"),
+        reason.contains("没有可交互的作答者"),
         "降级被记下来了，所以它不会被读成一次策略拒绝：{reason}"
     );
 
@@ -315,7 +315,7 @@ async fn ask_without_an_answerer_downgrades_to_deny_and_says_why() {
         .2
         .clone()
         .unwrap()
-        .contains("downgraded"));
+        .contains("降级为拒绝"));
     fixture.harness.shutdown().await;
 }
 
@@ -428,7 +428,7 @@ async fn a_call_outside_the_workspace_is_denied_by_the_path_limit() {
     assert_eq!(results.len(), 1);
     assert!(!results[0].1);
     let error = results[0].2.clone().unwrap();
-    assert!(error.contains("permission denied"), "{error}");
+    assert!(error.contains("权限拒绝"), "{error}");
     assert!(error.contains("在会话工作区之外"), "{error}");
 
     let decisions = fixture.decisions();

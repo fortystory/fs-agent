@@ -63,13 +63,10 @@ pub struct Skill {
 /// 一个技能为什么加载不了。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SkillError {
-    #[error(
-        "no such skill: `{name}`; the skills catalog in your context lists the available names"
-    )]
+    #[error("没有这个技能：`{name}`；你上下文里的技能清单列着可用的名字")]
     Unknown { name: String },
     #[error(
-        "skill `{name}` sets `disable-model-invocation: true`; only the user can invoke it, \
-         and the model may not load it"
+        "技能 `{name}` 设了 `disable-model-invocation: true`；只有用户能调用它，模型不许加载它"
     )]
     Disabled { name: String },
 }
@@ -174,8 +171,7 @@ impl Skills {
     /// 界，而不是从行中间切一刀。
     pub fn render_catalog(&self, budget: u64) -> Option<String> {
         const HEADER: &str =
-            "Skills available on demand (call the `skill` tool with a name when its description \
-             matches the task):";
+            "按需取用的技能（某个技能的描述与任务相符时，用 `skill` 工具带上它的名字来调用）：";
 
         if estimate_tokens(HEADER) > budget {
             return None;
@@ -209,9 +205,7 @@ fn catalog_text(header: &str, lines: &[String], omitted: usize) -> String {
         text.push_str(line);
     }
     if omitted > 0 {
-        text.push_str(&format!(
-            "\n[{omitted} more skill(s) omitted to fit the catalog budget]"
-        ));
+        text.push_str(&format!("\n[为装进清单预算，另有 {omitted} 个技能被省略]"));
     }
     text
 }
@@ -221,8 +215,8 @@ fn capped_body(skill: &Skill) -> String {
         return skill.body.clone();
     }
     let note = format!(
-        "\n\n[truncated: this skill's full text exceeds the {MAX_SKILL_TOKENS}-token cap; \
-         it is at {} (use read_file when the workspace allows it)]",
+        "\n\n[已截断：这个技能的全文超过 {MAX_SKILL_TOKENS} token 的上限；它在 {}（工作区允许时用 \
+         read_file 读）]",
         skill.path.display()
     );
     let cap_chars = (MAX_SKILL_TOKENS as usize).saturating_mul(CHARS_PER_TOKEN);

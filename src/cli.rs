@@ -43,7 +43,7 @@ use crate::{
 };
 
 /// 探针第二个回合的提示词；它让转录继续变长，好让第一个回合的前缀成为缓存必须匹配的那些内容。
-const PROBE_FOLLOW_UP: &str = "Reply with exactly: done";
+const PROBE_FOLLOW_UP: &str = "严格只回复：done";
 
 /// 两次探针回合之间等多久。
 ///
@@ -53,15 +53,12 @@ const CACHE_WARMUP: std::time::Duration = std::time::Duration::from_secs(10);
 /// 探针的第一个回合。填充得远超两家厂商的缓存下限（Kimi 只缓存 256 token 以上的 prompt），这样
 /// 第二个请求才有可能显出一次命中。
 fn probe_prompt() -> String {
-    const FILLER: &str =
-        "The quick brown fox jumps over the lazy dog while the prefix cache warms up. ";
-    let mut prompt = String::from(
-        "Ignore the filler below; it only pads the prompt so prefix caching engages.\n",
-    );
+    const FILLER: &str = "敏捷的棕色狐狸跳过了那只懒狗，前缀缓存正在热起来。";
+    let mut prompt = String::from("忽略下面的填充：它只是把提示词撑长，好让前缀缓存起作用。\n");
     while prompt.len() < 2_000 {
         prompt.push_str(FILLER);
     }
-    prompt.push_str("\nReply with exactly: ok");
+    prompt.push_str("\n严格只回复：ok");
     prompt
 }
 
@@ -1495,7 +1492,7 @@ async fn probe_model(
     .map_err(ProbeError::failed)?;
 
     println!(
-        "model {model_id}  (provider {}, {})",
+        "模型 {model_id}（provider {}，{}）",
         profile.name, profile.base_url
     );
     let first = probe_prompt();

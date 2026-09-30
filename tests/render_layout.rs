@@ -3639,7 +3639,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         2,
         "call-11",
         true,
-        Some("the whole output\n[truncated: 999 chars]"),
+        Some("the whole output\n[已截断：999 字符]"),
         None,
     ));
 
@@ -3669,7 +3669,7 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
         2,
         "call-12",
         true,
-        Some("head of the output\n[truncated: 999 chars]"),
+        Some("head of the output\n[已截断：999 字符]"),
         None,
     ));
 
@@ -4293,7 +4293,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         "call-23",
         true,
         Some(
-            "head\n[truncated: 200001 chars, ~50000 tokens; full output at \
+            "head\n[已截断：200001 字符，约 50000 token；全文在 \
              /tmp/nonexistent-elsewhere/call-23.txt]\ntail",
         ),
         None,
@@ -4615,7 +4615,7 @@ fn a_cut_result_still_says_when_the_whole_text_is_gone() {
         2,
         "call-51",
         true,
-        Some("head\n[truncated: 999 chars, ~250 tokens; full output at /x/outputs/call-51.txt]\ntail"),
+        Some("head\n[已截断：999 字符，约 250 token；全文在 /x/outputs/call-51.txt]\ntail"),
         None,
     ));
     click_row(&mut state, 120, 40, "调用 bash");

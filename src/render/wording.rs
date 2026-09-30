@@ -5,9 +5,9 @@
 //! 调用方的事）。硬编码中文、没有运行时 locale：换一种语言就是改这个模块
 //! （spec §Implementation Decisions）。
 //!
-//! **模型可见的文本不在这里**（ADR 0001）：讨论者与合成器的 system prompt、投影的轮
-//! 前缀、`AgentError` 的 message，以及 fs-agent 自己那些工具结果文本，都是冻结的缓存
-//! 前缀，绝不能伸手到这个模块。
+//! **模型可见 / 进流的文本不在这里**：讨论者与合成器的 system prompt、投影的轮前缀、
+//! `AgentError` 的 message，以及 fs-agent 自己那些工具结果文本，都由产生它们的地方写成
+//! 中文（ADR 0005 起 —— 在那之前它们冻结在英文，见 ADR 0001），不靠这个模块拼。
 
 use ratatui::buffer::CellWidth;
 
@@ -233,8 +233,8 @@ pub fn divergence(topic: &str) -> String {
     format!("分歧：{topic}")
 }
 
-/// 某个发言者自己的错误，作为叙述。消息本身是冻结的（`AgentError.message` 模型可见，
-/// ADR 0001），原样透传。
+/// 某个发言者自己的错误，作为叙述。消息本身由产生它的地方写成中文（`AgentError.message`
+/// 模型可见，ADR 0005 起），这里只加中文的壳，正文原样透传。
 pub fn agent_error(message: &str) -> String {
     format!("错误：{message}")
 }
@@ -1613,7 +1613,8 @@ pub fn probe_no_key() -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// 一个会话级失败（spec §2）：code 用中文解释，持久的 detail 原样透传。detail 是诊断
-/// 线索，而事件流只追加，所以它在写下时就冻结了（ADR 0001）。
+/// 线索，而事件流只追加，所以它在写下时就定稿了 —— ADR 0005 起新流里那段文本是中文的，
+/// 升级前的老流里仍是英文。
 pub fn session_error(code: &str, detail: &str) -> String {
     format!("[会话错误：{}] {detail}", session_error_code(code))
 }

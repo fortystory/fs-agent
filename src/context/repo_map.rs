@@ -368,8 +368,8 @@ pub fn render(ranked: &[Scored], root: &Path, budget: u64) -> String {
 
 /// 一份被截断的地图用来收尾的那一行说明。
 fn note_for(omitted: usize, some_shown: bool) -> String {
-    let more = if some_shown { " more" } else { "" };
-    format!("\n[{omitted}{more} symbol(s) omitted to fit the repo map budget]")
+    let more = if some_shown { "另有 " } else { "" };
+    format!("\n[为装进仓库地图的预算，{more}{omitted} 个符号被省略]")
 }
 
 /// 一份仓库地图的来源：那条编译好的官方 Rust 查询，加上一份逐文件的 mtime 缓存。

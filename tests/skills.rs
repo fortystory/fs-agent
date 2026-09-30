@@ -173,7 +173,7 @@ fn the_catalog_omits_late_entries_rather_than_growing_past_its_budget() {
     let budget = 80;
     let catalog = skills.render_catalog(budget).expect("表头装得下");
     assert!(estimate_tokens(&catalog) <= budget, "{catalog}");
-    assert!(catalog.contains("omitted"), "裁剪是明说的：{catalog}");
+    assert!(catalog.contains("被省略"), "裁剪是明说的：{catalog}");
     assert!(
         // 目录按名字顺序访问，所以 `two` 排在最后，是那条必须
         // 整条略去、而不是从中间切开的条目。
@@ -230,7 +230,7 @@ fn loading_an_unknown_skill_is_an_error_that_points_at_the_catalog() {
     let skills = Skills::discover(dir.path(), None);
     let error = skills.load("nope").unwrap_err().to_string();
     assert!(error.contains("nope"), "{error}");
-    assert!(error.contains("catalog"), "{error}");
+    assert!(error.contains("技能清单"), "{error}");
 }
 
 // --- 单份技能的预算 --------------------------------------------------------
@@ -248,7 +248,7 @@ fn a_body_over_the_single_skill_cap_is_truncated_with_a_pointer_to_the_file() {
         estimate_tokens(&loaded) <= MAX_SKILL_TOKENS,
         "正文被压到约 {MAX_SKILL_TOKENS} 个 token"
     );
-    assert!(loaded.contains("truncated"), "{loaded}");
+    assert!(loaded.contains("已截断"), "{loaded}");
     assert!(
         loaded.contains("SKILL.md"),
         "那个指针点名了要读全文的那个文件：{loaded}"

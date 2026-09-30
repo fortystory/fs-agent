@@ -123,7 +123,7 @@ impl HookPoint {
 pub enum HookError {
     #[error("{0}")]
     Failed(String),
-    #[error("hook timed out")]
+    #[error("钩子超时")]
     Timeout,
 }
 

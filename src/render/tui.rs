@@ -1801,9 +1801,7 @@ impl TuiState {
                 // 问题会既没东西可画、也没东西可索引，所以它被拒掉，而不是放任它把渲染器
                 // panic 掉。
                 if request.questions.is_empty() {
-                    let _ = request
-                        .reply
-                        .send(Err("a questionnaire needs at least one question".to_owned()));
+                    let _ = request.reply.send(Err("一份问卷至少要有一道题".to_owned()));
                     return;
                 }
                 let drafts = request

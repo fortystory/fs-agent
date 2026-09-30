@@ -392,7 +392,7 @@ async fn scenario_3_a_gate_deny_yields_one_error_result_and_the_tool_never_runs(
     let results = fixture.results();
     assert_eq!(results.len(), 1, "正好一条合成出来的结果");
     assert!(!results[0].1);
-    assert!(results[0].2.clone().unwrap().contains("permission denied"));
+    assert!(results[0].2.clone().unwrap().contains("权限拒绝"));
     assert_eq!(fixture.asked_count(), 0);
     assert_eq!(fixture.decisions()[0].0, Decision::Deny);
     assert_eq!(fixture.decisions()[0].1, DecisionSource::Policy);
@@ -453,13 +453,13 @@ async fn scenario_5_a_pre_hook_failure_is_fail_closed_and_the_turn_continues() {
     let results = fixture.results();
     assert_eq!(results.len(), 1, "这条不变量熬过了这次失败");
     assert!(!results[0].1);
-    assert!(results[0].2.clone().unwrap().contains("hook failed"));
+    assert!(results[0].2.clone().unwrap().contains("钩子失败"));
     assert_eq!(
         fixture.hook_events(),
         vec![("pre_tool_use".to_owned(), "failed: exit 2".to_owned())]
     );
     assert!(
-        fixture.stderr.text().contains("hook.pre failed"),
+        fixture.stderr.text().contains("hook.pre 失败"),
         "这次失败被诊断出来了：{}",
         fixture.stderr.text()
     );
@@ -544,7 +544,7 @@ async fn scenario_7_a_skipped_call_still_gets_exactly_one_result() {
     let results = fixture.results();
     assert_eq!(results.len(), 1, "工具没跑，但结果存在");
     assert!(!results[0].1);
-    assert!(results[0].2.clone().unwrap().contains("hook skipped"));
+    assert!(results[0].2.clone().unwrap().contains("钩子跳过了执行"));
     assert_eq!(
         fixture.hook_events(),
         vec![("pre_tool_use".to_owned(), "skip".to_owned())],
@@ -575,15 +575,12 @@ async fn a_pre_hook_timeout_is_fail_closed_too() {
     assert!(!fixture.exists("notes.txt"), "fail-closed：工具从没跑过");
     assert_eq!(
         fixture.hook_events(),
-        vec![(
-            "pre_tool_use".to_owned(),
-            "failed: hook timed out".to_owned()
-        )]
+        vec![("pre_tool_use".to_owned(), "failed: 钩子超时".to_owned())]
     );
     let results = fixture.results();
     assert_eq!(results.len(), 1);
     assert!(!results[0].1);
-    assert!(results[0].2.clone().unwrap().contains("hook timed out"));
+    assert!(results[0].2.clone().unwrap().contains("钩子超时"));
     assert!(fixture.pending().is_empty());
 }
 
@@ -613,7 +610,7 @@ async fn a_pre_hook_rewrites_the_arguments_the_gate_and_the_tool_see() {
     assert!(!fixture.exists(".env"));
     let results = fixture.results();
     assert_eq!(results.len(), 1);
-    assert!(results[0].2.clone().unwrap().contains("permission denied"));
+    assert!(results[0].2.clone().unwrap().contains("权限拒绝"));
     assert_eq!(fixture.decisions()[0].0, Decision::Deny);
     assert_eq!(fixture.decisions()[0].1, DecisionSource::Policy);
     assert!(fixture
@@ -643,7 +640,7 @@ async fn a_hook_cannot_relax_the_rm_circuit_breaker() {
     let results = fixture.results();
     assert_eq!(results.len(), 1);
     assert!(
-        results[0].2.clone().unwrap().contains("circuit breaker"),
+        results[0].2.clone().unwrap().contains("断路器"),
         "{:?}",
         results[0].2
     );
@@ -695,7 +692,7 @@ async fn a_stopped_turn_still_leaves_exactly_one_result() {
         .2
         .clone()
         .unwrap()
-        .contains("hook stopped the turn"));
+        .contains("钩子停掉了这个回合"));
 }
 
 #[tokio::test]
@@ -795,7 +792,7 @@ async fn a_post_hook_failure_only_drops_feedback() {
             ),
         ]
     );
-    assert!(fixture.stderr.text().contains("hook.post failed"));
+    assert!(fixture.stderr.text().contains("hook.post 失败"));
 
     // 这次失败不会被合进模型的工具消息：只有反馈才会。
     let requests = fixture.provider.requests();

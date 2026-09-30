@@ -27,8 +27,7 @@ use crate::tools::{before_artifact, EditCall, ToolError, EDIT_FILE};
 /// 它说的是「未知」，不是「失败」：调用有可能在这个进程死掉之前已经生效了，所以模型不能
 /// 假定工作区没被动过 —— 也不能抱着「多半没生效」的侥幸把它重跑一遍（spec §11）。
 const INTERRUPTED: &str =
-    "the session was interrupted while this call was in flight, so its result is unknown. \
-     It was not re-run; check the workspace before relying on either outcome.";
+    "这条调用在飞时会话被中断了，所以它的结果未知。它没有被重跑；在依赖任何一种结果之前先检查工作区。";
 
 /// 把一个被中断的进程留下的、没有结果的 `tool_call` 逐个收尾。
 ///
@@ -189,7 +188,7 @@ pub async fn undo_last_edit(
         EventPayload::HistorySuperseded {
             targets: vec![edit.started_seq, edit.completed_seq],
             reason: HistoryReason::Undo,
-            summary: Some(format!("undo edit_file on {}", path.display())),
+            summary: Some(format!("撤销对 {} 的这次 edit_file", path.display())),
         },
     )?;
 

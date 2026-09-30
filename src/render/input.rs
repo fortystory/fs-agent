@@ -243,8 +243,8 @@ impl Asker for ConsoleAsker {
 /// 模型提问的那个接缝，经过前端作答（spec §7）。
 ///
 /// 它是 [`ConsoleAsker`] 在模型的问题上的镜像：循环那一侧问，前端答。错误文本是**模型
-/// 可见**的 —— 它成为 `ask_user_question` 那次调用的结果 —— 所以它是朴素英文，并且刻意
-/// 不走措辞层。
+/// 可见**的 —— 它成为 `ask_user_question` 那次调用的结果 —— 所以它按 ADR 0005 走中文，
+/// 并且刻意不走措辞层。
 pub struct ConsoleQuestions {
     requests: mpsc::UnboundedSender<ConsoleRequest>,
 }
@@ -272,13 +272,13 @@ impl UserQuestions for ConsoleQuestions {
             }))
             .is_err()
         {
-            return Err("no questionnaire answerer is connected".to_owned());
+            return Err("没有接上任何问卷作答者".to_owned());
         }
         match answer.await {
             Ok(result) => result,
             // 前端没作答就走了 —— 这次运行被取消了，或者输入结束了。永远不要挂在那里等一个
             // 已经不在的人。
-            Err(_) => Err("the questionnaire was left unanswered".to_owned()),
+            Err(_) => Err("这份问卷没被作答就搁下了".to_owned()),
         }
     }
 }
@@ -392,7 +392,7 @@ async fn answer_questionnaire(
     for (index, question) in questions.iter().enumerate() {
         print_questionnaire_question(index, questions.len(), question);
         let Some(answer) = read_plain_answer(reader, question).await else {
-            return Err("input ended before the questionnaire was answered".to_owned());
+            return Err("问卷还没答完，输入就结束了".to_owned());
         };
         answers.push(answer);
     }

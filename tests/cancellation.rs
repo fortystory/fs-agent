@@ -221,7 +221,7 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
     // 停止的叙述改去诊断 sink。
     assert_eq!(fixture.stdout.text(), "");
     assert!(
-        fixture.stderr.text().contains("cancelled"),
+        fixture.stderr.text().contains("被取消了"),
         "{}",
         fixture.stderr.text()
     );
@@ -279,7 +279,7 @@ async fn a_cancel_during_a_tool_call_gives_that_call_its_one_result() {
     assert!(!ok);
     assert!(output.is_none());
     let error = error.as_deref().unwrap_or_default();
-    assert!(error.contains("cancelled"), "{error:?}");
+    assert!(error.contains("被取消了"), "{error:?}");
     assert!(pending_tool_calls(&events).is_empty());
 
     let endings: Vec<StopReason> = events
@@ -367,13 +367,13 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
     // 恰好一条结果，尽管它的执行者根本没跑过。
     let (task_ok, task_text) = result_of(&events, "call-task");
     assert!(!task_ok);
-    assert!(task_text.contains("did not run"), "{task_text:?}");
+    assert!(task_text.contains("工具没有跑"), "{task_text:?}");
 
     // 真正在飞的那条调用说的是另一回事：工具的 future
     // 被丢掉了，所以工作区可能变了、也可能没变。
     let (stall_ok, stall_text) = result_of(&events, "call-stall");
     assert!(!stall_ok);
-    assert!(stall_text.contains("in flight"), "{stall_text:?}");
+    assert!(stall_text.contains("在飞时回合被取消了"), "{stall_text:?}");
 
     // 被延后的那个执行者从没被派出过……
     assert!(
@@ -617,7 +617,7 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
     // 叙述改去诊断 sink。
     assert_eq!(fixture.stdout.text(), "");
     assert!(
-        fixture.stderr.text().contains("cancelled"),
+        fixture.stderr.text().contains("被取消了"),
         "{}",
         fixture.stderr.text()
     );
@@ -821,7 +821,7 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
             _ => None,
         })
         .expect("恢复收尾了进程死时那条调用");
-    assert!(recovered.contains("interrupted"), "{recovered}");
+    assert!(recovered.contains("会话被中断了"), "{recovered}");
 }
 
 #[tokio::test]

@@ -47,8 +47,7 @@ const MIN_PREVIEW_CHARS: usize = 200;
 ///
 /// 消息本身留下，因为线级契约把一条 `tool` 消息与一条 `tool_call` 配成一对（spec §5）；被丢掉的
 /// 只有它的正文。
-pub const DROPPED_TOOL_RESULT: &str =
-    "[dropped: this old tool result was removed from the context to fit the budget]";
+pub const DROPPED_TOOL_RESULT: &str = "[已丢弃：这条旧的工具结果为了装进预算已从上下文里移除]";
 
 /// 项目规则文件，启动时读一次，作为第一条 `user` 消息注入（spec §10）。
 pub const AGENTS_MD: &str = "AGENTS.md";
@@ -123,10 +122,7 @@ impl Default for TrimPolicy {
 /// 的那个触发点。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TrimError {
-    #[error(
-        "context budget exceeded: ~{estimated} estimated tokens against a budget of {budget}, \
-         and nothing droppable is left"
-    )]
+    #[error("上下文预算超了：估计约 {estimated} token，预算是 {budget}，已经没有可丢的东西了")]
     OverBudget { budget: u64, estimated: u64 },
 }
 
@@ -390,11 +386,11 @@ fn preview(text: &str, max_tokens: u64, pointer: Option<&Path>) -> String {
     let tail: String = tail.into_iter().collect();
 
     let note = match pointer {
-        Some(path) => format!("full output at {}", path.display()),
-        None => "full output could not be spilled to disk".to_owned(),
+        Some(path) => format!("全文在 {}", path.display()),
+        None => "全文没能溢出落盘".to_owned(),
     };
     format!(
-        "{head}\n{TRUNCATED_MARKER}{total_chars} chars, ~{total_tokens} tokens; {note}]\n{tail}"
+        "{head}\n{TRUNCATED_MARKER}{total_chars} 字符，约 {total_tokens} token；{note}]\n{tail}"
     )
 }
 
@@ -403,7 +399,7 @@ fn preview(text: &str, max_tokens: u64, pointer: Option<&Path>) -> String {
 /// 是公开的，因为这是读完一个事件的人区分两种 `output` 的唯一办法：一条没被切的结果，它的预览
 /// **就是**全文，而一条被切的有一条头、这个标记、一条尾 —— 并且只有被切的那种才有一个溢出文件
 /// 可找。事件对两者只带一个字段（spec §11），所以这个标记就是那个判别依据。
-pub const TRUNCATED_MARKER: &str = "[truncated: ";
+pub const TRUNCATED_MARKER: &str = "[已截断：";
 
 /// 读项目的 `AGENTS.md`，如果它存在且不是空白。
 ///

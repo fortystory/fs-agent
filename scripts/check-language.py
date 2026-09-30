@@ -89,12 +89,15 @@ FROZEN_FILES = [
 #   但它属于测试，不属于模型可见文本 —— ADR 0004）；只剩一两个词的标识符、路径、
 #   schema 值也被上面那条判据天然排除。
 #
-# 进度（ADR 0005 的第 ② 批落地后，2026-09-30）：中文 **128**、英文散文 **104**
-# —— `src/tools/*` 已经翻完（英文散文 95 → 0）。剩下的是第 ③–⑤ 批：
-# `src/agent.rs` 34、`src/cli.rs` 30、`src/permissions.rs` 11、`src/provider/mod.rs` 6、
-# `src/context*.rs` 7、`src/agent/executor.rs` 2、`src/events.rs` / `src/hooks.rs` 各 1 …
-# 每翻完一批就把下限提到新的实测值、把上限收到新的实测值 —— 两条棘轮都是「实测值」，
-# 不留余量：任何一条串被改回英文（或新写一条英文散文）都会报红。
+# 进度（ADR 0005 的第 ②–⑤ 批落地后，2026-09-30）：中文 **219**、英文散文 **27**。
+# 剩下的 27 条**一条散文都没有**，全是判据的假阳性，逐条记在 ADR 0005 的「进度与收口」
+# 一节里：`fs-agent: {message}` 这类程序名前缀（25 条）与两条纯 `format!` 骨架
+# （`→ {tool_name}({rendered})`、`{text}{separator}{display}: {}`）。再往下收就要动
+# CLI 输出那 25 处的标点（ASCII 冒号换全角），那是另一件事，不在这一步里。
+#
+# 两条棘轮都是**实测值**，不留余量：任何一条串被改回英文（或新写一条英文散文）都会报红。
+# 每翻完一批就把下限提到新的实测值、把上限收到新的实测值。
+
 MODEL_TEXT_FLOOR = {
     "src/tools/ask_user.rs": 16,
     "src/tools/bash.rs": 6,
@@ -108,14 +111,23 @@ MODEL_TEXT_FLOOR = {
     "src/tools/skill.rs": 3,
     "src/tools/task.rs": 4,
     "src/tools/todo.rs": 14,
-    "src/agent.rs": 4,
+    "src/permissions.rs": 20,
     "src/discussion.rs": 8,
+    "src/agent.rs": 38,
+    "src/agent/executor.rs": 5,
+    "src/provider/mod.rs": 6,
     "src/provider/projection.rs": 1,
-    "src/agent/history.rs": 5,
-    "src/render/tui.rs": 1,
-    "src/cli.rs": 8,
+    "src/context.rs": 6,
+    "src/context/skills.rs": 5,
+    "src/context/repo_map.rs": 2,
+    "src/events.rs": 1,
+    "src/hooks.rs": 1,
+    "src/agent/history.rs": 7,
+    "src/render/input.rs": 3,
+    "src/render/tui.rs": 2,
+    "src/cli.rs": 13,
 }
-ENGLISH_PROSE_CEILING = 104
+ENGLISH_PROSE_CEILING = 27
 
 # --- ③ docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是
@@ -130,7 +142,7 @@ DOCS_MIN_RATIO = {
     "docs/adr/0002-fullscreen-alt-screen-tui.md": 40,
     "docs/adr/0003-plan-leaves-the-permission-modes.md": 41,
     "docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md": 43,
-    "docs/adr/0005-model-visible-text-in-chinese.md": 40,
+    "docs/adr/0005-model-visible-text-in-chinese.md": 36,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,

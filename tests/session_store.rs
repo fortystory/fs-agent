@@ -391,8 +391,8 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
             EventPayload::ToolCallCompleted { ok, error, .. } => {
                 assert!(!ok);
                 let error = error.as_deref().unwrap();
-                assert!(error.contains("unknown"), "{error}");
-                assert!(error.contains("not re-run"), "{error}");
+                assert!(error.contains("结果未知"), "{error}");
+                assert!(error.contains("没有被重跑"), "{error}");
             }
             other => panic!("期望 ToolCallCompleted，实际得到 {other:?}"),
         }
@@ -413,7 +413,7 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
     assert!(
         recovered
             .expect("恢复出来的结果到达了模型")
-            .contains("unknown"),
+            .contains("结果未知"),
         "模型被告知那条结果是未知的"
     );
 

@@ -584,7 +584,7 @@ fn rm_behind_a_shell_wrapper_is_denied_through_any_allow_rule() {
         let verdict = gate(Mode::Auto, vec![allow_any()], &call);
         assert_eq!(verdict.decision, Decision::Deny, "{argv:?}");
         assert!(
-            verdict.reason.contains("circuit breaker"),
+            verdict.reason.contains("断路器"),
             "{argv:?}：{}",
             verdict.reason
         );
@@ -619,7 +619,7 @@ fn the_path_limit_is_a_deny_floor() {
     for mode in [Mode::Readonly, Mode::Ask, Mode::Auto] {
         let verdict = gate(mode, vec![allow_any()], &call);
         assert_eq!(verdict.decision, Decision::Deny, "{mode:?}");
-        assert!(verdict.reason.contains("path limit"), "{}", verdict.reason);
+        assert!(verdict.reason.contains("路径上限"), "{}", verdict.reason);
     }
 }
 

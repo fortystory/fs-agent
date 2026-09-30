@@ -833,7 +833,7 @@ fn a_history_detail_reads_the_spilled_tool_output() {
     let mut state = state_in(dir.path());
     replay(
         &mut state,
-        history_with_tool_output("call-h2", Some("the whole output\n[truncated: 999 chars]")),
+        history_with_tool_output("call-h2", Some("the whole output\n[已截断：999 字符]")),
     );
     run_replay(&mut state);
 
@@ -854,10 +854,7 @@ fn a_history_detail_degrades_when_the_spilled_file_is_gone() {
     let mut state = state_in(dir.path());
     replay(
         &mut state,
-        history_with_tool_output(
-            "call-h3",
-            Some("head of the output\n[truncated: 999 chars]"),
-        ),
+        history_with_tool_output("call-h3", Some("head of the output\n[已截断：999 字符]")),
     );
     run_replay(&mut state);
 
@@ -877,10 +874,7 @@ fn a_history_detail_degrades_when_the_spilled_file_is_empty() {
     let mut state = state_in(dir.path());
     replay(
         &mut state,
-        history_with_tool_output(
-            "call-h4",
-            Some("head of the output\n[truncated: 999 chars]"),
-        ),
+        history_with_tool_output("call-h4", Some("head of the output\n[已截断：999 字符]")),
     );
     run_replay(&mut state);
 

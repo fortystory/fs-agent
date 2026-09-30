@@ -108,27 +108,27 @@ impl Mode {
             (Mode::Readonly, Effect::ReadOnly) => Stance {
                 default: Decision::Allow,
                 floor: None,
-                reason: "mode readonly: reads are allowed",
+                reason: "模式 readonly：只读调用放行",
             },
             (Mode::Readonly, _) => Stance {
                 default: Decision::Deny,
                 floor: Some(Decision::Deny),
-                reason: "mode readonly: a non-read-only call is denied (switch modes to allow it)",
+                reason: "模式 readonly：非只读调用一律拒绝（换一档才能放行）",
             },
             (Mode::Ask, Effect::ReadOnly) => Stance {
                 default: Decision::Allow,
                 floor: None,
-                reason: "mode ask: reads are allowed",
+                reason: "模式 ask：只读调用放行",
             },
             (Mode::Ask, _) => Stance {
                 default: Decision::Ask,
                 floor: None,
-                reason: "mode ask: a write asks the user",
+                reason: "模式 ask：写要问用户",
             },
             (Mode::Auto, _) => Stance {
                 default: Decision::Allow,
                 floor: None,
-                reason: "mode auto: allowed by default",
+                reason: "模式 auto：默认放行",
             },
         }
     }
@@ -185,10 +185,10 @@ impl Subject {
 
     fn describe(&self) -> String {
         match self {
-            Subject::Any => "any".to_owned(),
-            Subject::Debater => "debater".to_owned(),
-            Subject::Executor => "executor".to_owned(),
-            Subject::Participant(id) => format!("participant {id}"),
+            Subject::Any => "任何".to_owned(),
+            Subject::Debater => "讨论者".to_owned(),
+            Subject::Executor => "执行者".to_owned(),
+            Subject::Participant(id) => format!("参与者 {id}"),
         }
     }
 }
@@ -234,14 +234,14 @@ impl Scope {
 
     fn describe(&self) -> String {
         match self {
-            Scope::Tool(pattern) => format!("tool {pattern}"),
-            Scope::CommandPrefix(prefix) => format!("command {}", prefix.join(" ")),
-            Scope::Path(pattern) => format!("path {pattern}"),
+            Scope::Tool(pattern) => format!("工具 {pattern}"),
+            Scope::CommandPrefix(prefix) => format!("命令 {}", prefix.join(" ")),
+            Scope::Path(pattern) => format!("路径 {pattern}"),
             Scope::PathSet(exact) => {
                 let paths: Vec<String> = exact.iter().map(|p| p.display().to_string()).collect();
-                format!("write set exactly [{}]", paths.join(", "))
+                format!("写集恰好 [{}]", paths.join(", "))
             }
-            Scope::All => "any call".to_owned(),
+            Scope::All => "任何调用".to_owned(),
         }
     }
 }
@@ -289,7 +289,7 @@ impl Rule {
 
     fn describe(&self) -> String {
         format!(
-            "rule {} {} -> {}",
+            "规则 {} {} → {}",
             self.subject.describe(),
             self.scope.describe(),
             self.action.as_str()
@@ -424,7 +424,7 @@ pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict 
     // ④ 属于策略缺省、而不是来自文件的规则的约束：工作区的路径上限、绝不自动放行的
     //    敏感写入，以及 `.env` 一族。它们都是地板，所以没有规则能降下去。
     if let Some(message) = call.path_error {
-        parts.push((Decision::Deny, format!("path limit: {message}")));
+        parts.push((Decision::Deny, format!("路径上限：{message}")));
     }
     if let Some(verdict) = never_auto_approved(call) {
         parts.push((verdict.decision, verdict.reason));
@@ -446,7 +446,7 @@ pub fn decide(policy: &Policy, speaker: &SpeakerId, call: &Call<'_>) -> Verdict 
     reasons.dedup();
     Verdict {
         decision,
-        reason: reasons.join("; "),
+        reason: reasons.join("；"),
     }
 }
 
@@ -458,7 +458,7 @@ fn circuit_breaker(call: &Call<'_>) -> Option<Verdict> {
     protected_write(call).map(|path| Verdict {
         decision: Decision::Deny,
         reason: format!(
-            "circuit breaker: writing into {} is denied regardless of any rule",
+            "断路器：往 {} 里写一律拒绝，任何规则都不例外",
             path.display()
         ),
     })
@@ -483,9 +483,7 @@ fn rm_breaker(call: &Call<'_>) -> Option<Verdict> {
         }) {
             return Some(Verdict {
                 decision: Decision::Deny,
-                reason: format!(
-                    "circuit breaker: rm targeting {target} is denied regardless of any rule"
-                ),
+                reason: format!("断路器：冲着 {target} 去的 rm 一律拒绝，任何规则都不例外"),
             });
         }
     }
@@ -666,7 +664,7 @@ fn never_auto_approved(call: &Call<'_>) -> Option<Verdict> {
         .map(|path| Verdict {
             decision: Decision::Ask,
             reason: format!(
-                "sensitive write: {} is never auto-approved (the user may still approve it)",
+                "敏感写入：{} 绝不自动放行（用户仍然可以逐个批准）",
                 path.display()
             ),
         })
@@ -681,10 +679,7 @@ fn env_family(call: &Call<'_>) -> Option<Verdict> {
         .find(|path| is_env_file(path))
         .map(|path| Verdict {
             decision: Decision::Deny,
-            reason: format!(
-                "default policy: the .env family is denied ({})",
-                path.display()
-            ),
+            reason: format!("缺省策略：.env 一族一律拒绝（{}）", path.display()),
         })
 }
 

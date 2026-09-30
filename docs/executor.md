@@ -17,7 +17,7 @@ debater ── task(brief) ──► hook.pre ──► permission gate ──�
    ExecutorFinished{executor_id, reason, summary}
                         │
                         ▼
-   the `task` call's one ToolCallCompleted: summary + files changed + tokens
+   the `task` call's one ToolCallCompleted: 汇总 + 改动文件 + token
 ```
 
 所有东西都落在**同一条**会话流上，于是日志仍是唯一真相源，`seq` 仍是行号，执行者的改动与
@@ -85,14 +85,14 @@ debater ── task(brief) ──► hook.pre ──► permission gate ──�
 ## 失败
 
 `ExecutorFinished{reason}` 带的是循环那套单回合取值里的一个。除 `Completed` 之外的任何值，
-对那次 `task` 调用都变成**错误内容的工具结果**。`files changed:` 那一行来自执行者成功的那些
+对那次 `task` 调用都变成**错误内容的工具结果**。`改动文件：` 那一行来自执行者成功的那些
 结果 —— 是每一次写自己报出来的路径，不是模型发来的参数，因为 `hook.pre` 可能改写过它们：
 
 ```
-executor <id> finished: Error
-files changed: none
-tokens: input 0, output 0, cached 0, miss 0
-report:
+执行者 <id> 结束：Error
+改动文件：无
+token：input 0, output 0, cached 0, miss 0
+报告：
 …
 ```
 

@@ -147,16 +147,16 @@ pub enum FinishReason {
 /// （Kimi 429，DeepSeek 402）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProviderError {
-    #[error("authentication failed: {detail}")]
+    #[error("认证失败：{detail}")]
     Auth { detail: String },
-    #[error("quota exhausted: {detail}")]
+    #[error("额度用尽：{detail}")]
     QuotaExhausted { detail: String },
-    #[error("rate limited (retry_after: {retry_after:?})")]
+    #[error("被限流（retry_after: {retry_after:?}）")]
     RateLimited { retry_after: Option<Duration> },
-    #[error("invalid request: {detail}")]
+    #[error("请求无效：{detail}")]
     InvalidRequest { detail: String },
-    #[error("transport error: {detail}")]
+    #[error("传输错误：{detail}")]
     Transport { detail: String },
-    #[error("protocol error: {detail}")]
+    #[error("协议错误：{detail}")]
     Protocol { detail: String },
 }

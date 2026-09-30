@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use fs_agent::config::SessionConfig;
 use fs_agent::context::{
     estimate_tokens, load_agents_md, trim, truncate_result, usable_input, TrimError, TrimPolicy,
-    DROPPED_TOOL_RESULT,
+    DROPPED_TOOL_RESULT, TRUNCATED_MARKER,
 };
 use fs_agent::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
 use fs_agent::permissions::{Mode, Policy};
@@ -297,7 +297,11 @@ fn an_oversized_result_is_spilled_and_replaced_by_a_preview_with_a_pointer() {
     let pointer = spilled.pointer.clone().expect("溢出的内容落在磁盘上");
     assert_eq!(std::fs::read_to_string(&pointer).unwrap(), text);
     assert!(spilled.preview.chars().count() < text.chars().count());
-    assert!(spilled.preview.contains("truncated"), "{}", spilled.preview);
+    assert!(
+        spilled.preview.contains(TRUNCATED_MARKER),
+        "{}",
+        spilled.preview
+    );
     assert!(
         spilled.preview.contains(&pointer.display().to_string()),
         "那个指针必须在流上：{}",
@@ -326,7 +330,7 @@ fn a_failed_spill_degrades_to_the_preview_and_never_fails() {
     assert!(spilled.truncated);
     assert!(spilled.pointer.is_none());
     assert!(
-        spilled.preview.contains("could not be spilled"),
+        spilled.preview.contains("没能溢出落盘"),
         "{}",
         spilled.preview
     );
@@ -526,8 +530,9 @@ async fn over_budget_history_drops_an_old_whole_round_only_after_the_bodies_are_
             Reply::text("done"),
         ],
         // 正好够跑满一轮；等工具正文再也吸不掉那份差额之后，
-        // 就跑不下两轮了。
-        caps_with_usable_input(190),
+        // 就跑不下两轮了。这个数字是按**生成文本的 token 估计**调出来的
+        // （中文更短，所以账变小，预算跟着收）。
+        caps_with_usable_input(185),
         SessionConfig::new("fake-model"),
         vec![Box::new(Blob { size: 400 })],
         None,
@@ -765,7 +770,7 @@ async fn an_oversized_tool_result_is_spilled_before_it_reaches_the_stream() {
         output.chars().count() < 2_000,
         "流上扛的是预览，不是整份正文"
     );
-    assert!(output.contains("truncated"), "{output}");
+    assert!(output.contains(TRUNCATED_MARKER), "{output}");
     let pointer = outputs_dir.join("call-blob.txt");
     assert!(
         output.contains(&pointer.display().to_string()),
@@ -802,7 +807,7 @@ async fn a_turn_hard_fails_when_even_the_pinned_injection_does_not_fit() {
         "装不下的请求永远不会被发出去"
     );
     assert!(
-        fixture.stderr.text().contains("context budget"),
+        fixture.stderr.text().contains("上下文预算"),
         "{}",
         fixture.stderr.text()
     );

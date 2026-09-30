@@ -934,7 +934,7 @@ pub fn read_events(path: impl AsRef<Path>) -> io::Result<Vec<Event>> {
             Err(error) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("event log {}: line {}: {error}", path.display(), index + 1),
+                    format!("事件流 {}：第 {} 行：{error}", path.display(), index + 1),
                 ));
             }
         }

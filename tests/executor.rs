@@ -329,7 +329,7 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
     // 自己的事件。派发会话的发言不在里面。
     match &requests[1].messages[0] {
         Message::System { content, .. } => {
-            assert!(content.contains("executor"), "{content}");
+            assert!(content.contains("执行者"), "{content}");
             assert!(!content.contains("CONCLUSION:"), "{content}");
         }
         other => panic!("要的是执行者自己的系统身份，得到 {other:?}"),
@@ -596,7 +596,7 @@ async fn a_failed_executor_is_an_error_result_and_the_dispatcher_carries_on() {
         EventPayload::ToolCallCompleted { ok, error, .. } => {
             assert!(!ok);
             let error = error.as_deref().unwrap();
-            assert!(error.contains("executor kimi-1 finished: Error"), "{error}");
+            assert!(error.contains("执行者 kimi-1 结束：Error"), "{error}");
         }
         other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
     }
@@ -973,7 +973,7 @@ async fn a_hook_that_stops_the_turn_still_gives_a_deferred_task_its_one_result()
     assert!(
         results
             .iter()
-            .all(|(_, error)| error.contains("hook stopped the turn")),
+            .all(|(_, error)| error.contains("钩子停掉了这个回合")),
         "{results:?}"
     );
     assert!(
@@ -1048,7 +1048,7 @@ async fn a_denial_travels_down_to_the_executor() {
             decision, reason, ..
         } => {
             assert_eq!(*decision, Decision::Deny);
-            assert!(reason.as_deref().unwrap().contains("rule"), "{reason:?}");
+            assert!(reason.as_deref().unwrap().contains("规则"), "{reason:?}");
         }
         other => panic!("要的是 PermissionDecided，得到 {other:?}"),
     }
@@ -1114,7 +1114,7 @@ async fn an_allowance_does_not_travel_down_to_the_executor() {
         .collect();
     assert_eq!(denied.len(), 1, "{denied:?}");
     assert!(
-        denied[0].contains("no interactive answerer"),
+        denied[0].contains("没有可交互的作答者"),
         "执行者的模式要问，而没有人能回答：{}",
         denied[0]
     );
@@ -1366,8 +1366,8 @@ async fn an_exhausted_session_dispatches_no_new_executor() {
         EventPayload::ToolCallCompleted { ok, error, .. } => {
             assert!(!ok);
             let error = error.as_deref().unwrap();
-            assert!(error.contains("budget exhausted"), "{error}");
-            assert!(error.contains("no new executor"), "{error}");
+            assert!(error.contains("会话 token 额度已用尽"), "{error}");
+            assert!(error.contains("不再派发新的执行者"), "{error}");
         }
         other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
     }
@@ -1471,7 +1471,7 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
                     ok: true,
                     output: Some(output),
                     ..
-                } if output.starts_with("executor kimi-1 finished:")
+                } if output.starts_with("执行者 kimi-1 结束：")
             )
         },
         "task 的结果",
@@ -1480,7 +1480,7 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
         EventPayload::ToolCallCompleted { output, .. } => {
             let output = output.as_deref().unwrap();
             assert!(
-                output.contains("finished: Completed"),
+                output.contains("结束：Completed"),
                 "task 报的是执行者自己的收尾：{output}"
             );
         }

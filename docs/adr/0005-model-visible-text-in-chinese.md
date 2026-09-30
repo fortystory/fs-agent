@@ -37,3 +37,27 @@
 3. **`src/agent*`**：身份提示里剩下的英文段、`AgentError.message` 那一批、执行者的身份与收尾汇总、hooks 的阻塞说明。
 4. **`src/provider*` / `src/context*`**：provider 的告警与错误、投影的截断说明、skills 目录、`repo_map` 与上下文预算的说明。
 5. **剩余与收口**：`src/permissions.rs`、`src/questions.rs`、`src/discussion*`、`src/events.rs`、`src/hooks.rs`；收尾把两条棘轮提到实测值，并把 `docs/`、README《约定》、`docs/agents/` 里描述这条线的段落一起对上。
+
+## 进度与收口（2026-09-30，同日晚）
+
+**②–⑤ 批已落地**，这一侧的中文串 **26 → 219**、英文散文 **199 → 27**（`src/tools/*` 95 → 0，其余 104 → 27）。分三次提交：护栏重立（`2c382ca`）、`src/tools/*`（`a38fef7`）、其余（本提交）。验收每次都是 `cargo test` 757 passed / 0 failed、`clippy --all-targets` 干净、`cargo fmt --check` 零漂移、`check-language.py` OK。
+
+**剩下的 27 条没有一条是散文**，全是棘轮判据的假阳性，所以上限就收在 27：
+
+- `fs-agent: {message}` / `fs-agent: {error}` 这类**程序名前缀** 25 条（`src/cli.rs`）—— 判据按英文词数算，`fs-agent` 被劈成 `fs` + `agent`，再加一个占位符名就够三个词。它是标识符那一类（票 01 当年就把它记成「前缀与字段名」，刻意不动）。要把它从计数里清掉得动 CLI 输出的标点（25 处 ASCII 冒号换全角 `：`，与 `wording::startup_banner` 的 `fs-agent：会话 …` 对齐）—— **那是另一件事，没做**；
+- 两条纯 `format!` 骨架：`→ {tool_name}({rendered})`（`src/provider/projection.rs`）、`{text}{separator}{display}: {}`（`src/context/repo_map.rs`）。
+
+**刻意留在英文的三个字段值 / 标记**（ADR 0005 的「决定」把它们归进「schema 值」与「协议标记」）：
+
+- `hook_format::FAILED_PREFIX = "failed: "` 与 `FEEDBACK_PREFIX = "feedback: "`（`src/events.rs`）：它们是 `HookExecuted.outcome` 这个**字段值**的头，而且 `failed: ` 被 `src/session/observe.rs` 当成**计数依据**读（正是「代价」第 4 条说的那种约定文本）；
+- 投影里给模型看的 `[hook feedback]` 标记（`hook_format::FEEDBACK_MARKER`）：与 `CONCLUSION:` 同族。
+
+于是结果里会出现 `failed: 钩子超时` 这种**英文头 + 中文身**的形状 —— 这是刻意的：**头是机器读的，身是人读的**。要改成中文就得把这几处一次改齐（常量、`observe` 的计数、投影、以及 `tests/hook_mount_points.rs` 里那几条断言，其中 `!contains("[hook feedback]")` 一起改了才不会变成永远为真）。
+
+**实测到的一个副作用（记账）**：`context::estimate_tokens` 是「字符数 ÷ 4」，对中文**低估**，所以同一份预算现在能装进更多内容（技能清单表头 26 → 13 估 token 等）。`tests/context_budget.rs` 有一条夹具的预算按新的生成文本重调过（190 → 185），**断言本身没放宽**（仍然断言「整个旧回合走掉、不留替身」），理由写在那条夹具的注释里。其余预算类测试不需要动。
+
+**顺手统一的两处拼接**（同一个可观测串里翻一半会成中英拼盘）：`src/permissions.rs` 的 `reasons.join("; ")` → `join("；")`；`src/agent.rs` 的 `annotate_reason` 由 `"{reason} {note}"` 改成 `"{reason}{note}"`（现在是 `模式 ask：写要问用户（钩子收紧了这个裁决）`）。
+
+**收口时改到的活文档**：`docs/executor.md`（围栏块与那张图里的执行者报告格式）、`docs/adr/0003` 的 reason 引文（加日期注，不假装当年就是中文）、`docs/bash.md` 与 `docs/observability.md`（第 ② 批）、`src/render/wording.rs` 与 `src/render/plain.rs` 里那几处按 ADR 0001 写的注释。README《约定》、`AGENTS.md`、ADR 0001 / 0004 的「后加」一节在护栏那一批就对上。
+
+**没做、也不打算做的**：`.scratch/` 里老票与老 spec 正文中逐字引用旧文案的地方（它们是**当时的记录**，按仓库惯例不重写 —— 谁读到时对照本 ADR 即可）。**留给真机的一件**：模型侧的实际效果（工具声明与描述现在更短）没有实测记录，ADR 0005 的「代价」第 6 条说了要跑一次真实会话再回来记。

@@ -230,7 +230,10 @@ fn render_omits_whole_symbols_and_notes_how_many() {
         text.starts_with("src/generated.rs: generated_symbol_000"),
         "{text}"
     );
-    assert!(text.contains("more symbol(s) omitted"), "{text}");
+    assert!(
+        text.contains("另有") && text.contains("个符号被省略"),
+        "{text}"
+    );
     // 只出现完整的名字：打印了一半的符号永远不会露面。
     for line in text.lines().filter(|line| !line.starts_with('[')) {
         for name in line.split(": ").nth(1).unwrap_or_default().split(", ") {
@@ -388,7 +391,7 @@ fn the_configured_budget_is_capped_at_the_documented_ceiling() {
         "~{} 个 token",
         estimate_tokens(&text)
     );
-    assert!(text.contains("omitted"), "{text}");
+    assert!(text.contains("个符号被省略"), "{text}");
 }
 
 // --- 组装接缝 --------------------------------------------------------------
@@ -629,7 +632,7 @@ async fn repo_map_ignores_a_model_supplied_tokens_argument() {
         "预算来自配置，不是一个参数：~{} 个 token",
         estimate_tokens(&output)
     );
-    assert!(output.contains("omitted"), "{output}");
+    assert!(output.contains("被省略"), "{output}");
 }
 
 #[tokio::test]

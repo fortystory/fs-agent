@@ -293,7 +293,7 @@ fn the_identity_tells_the_model_to_keep_a_list() {
     assert!(identity.contains("pending"), "{identity}");
     assert!(identity.contains("in_progress"), "{identity}");
     assert!(identity.contains("completed"), "{identity}");
-    assert!(identity.contains("Before you start"), "{identity}");
+    assert!(identity.contains("开工前先把计划写下来"), "{identity}");
 }
 
 // --- 走一个真会话 ----------------------------------------------------------

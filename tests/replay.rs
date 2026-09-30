@@ -380,7 +380,7 @@ async fn an_executors_nested_window_replays_to_what_was_sent() {
     );
     assert!(
         matches!(&sent[1].messages[0], Message::System { content, .. }
-            if content.starts_with("You are an executor")),
+            if content.starts_with("你是一个执行者")),
         "{:?}",
         sent[1].messages[0]
     );

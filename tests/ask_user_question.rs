@@ -578,5 +578,5 @@ async fn the_plain_console_fails_at_end_of_input_instead_of_looping() {
         .ask(&questions)
         .await
         .expect_err("输入结束不是一个答案");
-    assert!(error.contains("input ended"), "{error}");
+    assert!(error.contains("输入就结束了"), "{error}");
 }

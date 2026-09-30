@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fs_agent::config::{SessionConfig, DEFAULT_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS};
+use fs_agent::context::TRUNCATED_MARKER;
 use fs_agent::events::{
     read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason,
 };
@@ -300,18 +301,14 @@ async fn rm_rf_root_is_refused_by_the_circuit_breaker() {
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0].0, Decision::Deny);
     assert!(
-        decisions[0]
-            .1
-            .as_deref()
-            .unwrap()
-            .contains("circuit breaker"),
+        decisions[0].1.as_deref().unwrap().contains("断路器"),
         "审计点了断路器的名：{:?}",
         decisions[0].1
     );
 
     let (_, ok, message) = fixture.results().remove(0);
     assert!(!ok, "这条 shell 从没跑过");
-    assert!(message.contains("circuit breaker"), "{message}");
+    assert!(message.contains("断路器"), "{message}");
 }
 
 // --- 超时与进程树 ---------------------------------------------------------
@@ -425,7 +422,7 @@ async fn an_oversized_result_is_spilled_before_it_reaches_the_stream() {
 
     let (_, ok, output) = fixture.results().remove(0);
     assert!(ok);
-    assert!(output.contains("truncated"), "{output}");
+    assert!(output.contains(TRUNCATED_MARKER), "{output}");
     let pointer = fixture.outputs.join("call-bash.txt");
     assert!(
         output.contains(&pointer.display().to_string()),

@@ -492,7 +492,7 @@ fn an_empty_questionnaire_is_refused_rather_than_panicking() {
     let mut state = state();
     let mut rx = ask(&mut state, Vec::new());
     match rx.try_recv() {
-        Ok(Err(reason)) => assert!(reason.contains("at least one question"), "{reason}"),
+        Ok(Err(reason)) => assert!(reason.contains("至少要有一道题"), "{reason}"),
         other => panic!("期望一次拒绝，实际得到 {other:?}"),
     }
 }

@@ -1280,7 +1280,7 @@ async fn a_debater_dispatches_an_executor_and_only_its_summary_reaches_the_discu
             _ => None,
         })
         .expect("派发者自己的工具结果在它的窗口里");
-    assert!(summary.contains("files changed: none"), "{summary}");
+    assert!(summary.contains("改动文件：无"), "{summary}");
 
     // 执行者的过程以任何形态都进不了另一个讨论者的窗口
     // —— 既不是发言（一块 `executor:kimi-1`），也不是正文。
