@@ -231,26 +231,26 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表：**领域词汇**（事件流、投影、待办列表……）加末尾一节**流程词汇**（feature 目录 / spec / 票 / 决策图 / 分诊标签……），并写明哪两类词不收（通用编程概念、skills 工具名）（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的五条检查） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
 
 **约定**（新文档照这个走，别猜；这是 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 定的线）：
 
-- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
-- **只有三类东西留英文**：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **模型可见**的文本（工具声明与描述、工具结果、`AgentError.message`）；③ **进事件流、要永久回放**的文本（`PermissionDecided.reason`、`SessionError.detail`、协议标记 `CONCLUSION:`、投影的 `[轮 N · 名字]` 前缀）。
+- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。**[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 起，模型可见与进流的散文也在内**：工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`。
+- **英文只留给不是散文的东西**（[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 画的新线：按**词性**分，不按「谁读它」分）：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **schema 值与协议标记**（`Ask` / `Allow` / `Deny`、`cwd` / `token` / `assistant`、`tool_call_id`、`CONCLUSION:`）；③ **路径、命令原文与代码片段**；④ `docs/research/` 的一手引文。
 - **术语写「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上（行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、panic 钩子（panic hook））。`cwd` / `token` / `assistant` 这类字段名与 schema 值不夹注、保持英文（CONTEXT.md 里「token 不给中文名」同一条）。
 - **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
-- 为什么后两类不动：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) —— 模型可见文本是 provider 缓存前缀的头，改它要付「缓存整体作废 + 老流永久中英混排」两笔，而那一侧的读者是模型，不是人。
-- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（冻结面无 CJK、混住文件里必须留英文的字面量仍在、`docs/*.md` 与 `docs/adr/*.md` 加 `AGENTS.md` 的中文占比下限、ADR 的标题与小标题是中文、`src/` 注释中文行的棘轮）。
+- 为什么模型那一侧原来冻在英文、2026-09-30 又翻开：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) 记的那两笔代价**没有消失**（老流永久中英混排 + 升级后每个新会话一次前缀未命中），只是重新判定为值得付 —— 因为**人读的是同一份文本**（详情弹窗与转录原样画工具结果与错误），冻在英文那边正好落在人眼前。原文那句「那一侧的读者是模型，不是人」是这次推翻的靶心。会话内「前缀只增不改」那条不变量没动。
+- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（模型可见 / 进流那一侧的两条棘轮：中文串只许上升、英文散文串只许下降；`docs/*.md`、`docs/adr/*.md` 与 `AGENTS.md` 的中文占比下限；ADR 的标题与小标题是中文；`src/` 与 `tests/` 注释中文行的棘轮）。
 
 ## 开发
 
 ```sh
 cargo test                              # 全量测试（条数见上面的「状态」）
 cargo clippy --all-targets
-python3 scripts/check-language.py       # 散文中文 / 冻结面英文的护栏（ADR 0004）
+python3 scripts/check-language.py       # 散文中文、英文只留给标识符的护栏（ADR 0004 / 0005）
 python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 ```
 

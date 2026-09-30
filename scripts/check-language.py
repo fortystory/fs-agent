@@ -1,34 +1,32 @@
 #!/usr/bin/env python3
-"""ADR 0004 的护栏：散文用中文，标识符与「进 messages / 进流」的文本留英文。
+"""ADR 0004 与 ADR 0005 的护栏：散文一律中文，英文只留给**不是散文**的东西
+（标识符、schema 值与协议标记、路径与命令、`docs/research/` 的一手引文）。
 
-五条检查，任一条不过就以非零码退出：
+四条检查，任一条不过就以非零码退出：
 
-① **冻结面**：模型可见或要永久回放的字符串字面量里不得出现中文。哪些文件属于
-   「冻结面」、以及**今天已经存在**的几条中文（三条身份提示、讨论轮前缀、上游供应商
-   错误里的 `欠费` / `余额` / `额度` 匹配词）逐条列在下面的表里 —— 表是白名单，不是
-   省略号：出现表外的中文串就是有人把进入 `messages` 或进入事件流的文本中文化了，
-   那是 ADR 0001 与 ADR 0004 都禁止的事（缓存前缀 + 老流永久混排）。
-   测试模块（文件末尾的 `#[cfg(test)]` 之后）不在冻结面内：那是测试数据。
+① **模型可见 / 进流那一侧的两条棘轮**（ADR 0005 起）。`FROZEN_FILES` 就是这一侧的
+   清单 —— 工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`
+   这些既进 `messages`、又进转录与详情弹窗的散文所在处。方向相反的两条棘轮：
+   **中文串数只许上升**（`MODEL_TEXT_FLOOR`：守「翻过的地方不许被改回英文」），
+   **英文散文串数只许下降**（`ENGLISH_PROSE_CEILING`：守「不许再往这一侧新增英文散文」）。
+   迁移期间两条都按实测值收紧，收尾时提到实测值。测试模块（文件末尾的 `#[cfg(test)]`
+   之后）不在这一侧内：那是测试数据，不是模型可见文本。
 
-② **混住文件里必须保持英文的字面量**：`agent/history.rs`、`render/input.rs`、
-   `render/tui.rs`、`cli.rs` 这些文件里，模型可见 / 进流的串与给人看的串住在一起，
-   所以不走①（整文件冻结会拦住该翻的那半），改正面查这几条串还在、且不含中文。
-
-③ **`docs/**/*.md` 与 `AGENTS.md` 的中文占比下限**：设计文档是散文，读者是人。
+② **`docs/**/*.md` 与 `AGENTS.md` 的中文占比下限**：设计文档是散文，读者是人。
    `docs/research/` 是上游文档的引文，`docs/highlight.md` 本来就是中文（ADR 0001 的
    例外），两者不查。`docs/adr/*.md` 也在内 —— ADR 是散文。`AGENTS.md` 虽然是
    模型可见的注入文本，正文照样用中文（ADR 0004 的「后加」一节），只有它那五个
    小标题是技能工具链的锚点、留英文。
 
-④ **ADR 的标题与小标题必须是中文**：ADR 的标题也是散文（ADR 0004 的「后加」一节），
+③ **ADR 的标题与小标题必须是中文**：ADR 的标题也是散文（ADR 0004 的「后加」一节），
    所以 `## Consequences` 那类英文小标题报红。整条都是行内代码的标题（如 `# `bash``）
    剥完是空的，放过；ADR 的**文件名**仍是标识符，留英文。
 
-⑤ **`src/` 与 `tests/` 注释的中文行数下限**：棘轮，只许上升 —— 防止翻过的地方
+④ **`src/` 与 `tests/` 注释的中文行数下限**：棘轮，只许上升 —— 防止翻过的地方
    被改回英文。
 
 用法：`python3 scripts/check-language.py`（在仓库根目录跑）。加 `--list` 会打印
-冻结面里**允许**的那几条中文，用来核对白名单本身。
+① 的两条棘轮现在盯的文件与数字，用来核对清单本身。
 """
 
 from __future__ import annotations
@@ -42,9 +40,9 @@ CJK = re.compile(r"[\u4e00-\u9fff]")
 # 断言/panic 消息所在的行：那些字面量是散文，不在冻结面内。
 ASSERTION = re.compile(r"\b(assert|assert_eq|assert_ne|debug_assert|panic|expect)\b")
 
-# --- ① 冻结面 ---------------------------------------------------------------
-# 模型可见（工具声明 / 工具结果 / 身份与轮前缀 / 投影）与进流（reason / detail /
-# summary / 协议标记）的代码所在处。
+# --- ① 模型可见 / 进流那一侧的两条棘轮（ADR 0005） -------------------------
+# 模型可见（工具声明与描述 / 工具结果 / 身份与轮前缀 / 投影）与进流（reason / detail /
+# summary / 协议标记）的散文所在处。这一侧按 ADR 0005 走中文，不再按 ADR 0001 冻在英文。
 FROZEN_FILES = [
     "src/tools/ask_user.rs",
     "src/tools/bash.rs",
@@ -73,61 +71,36 @@ FROZEN_FILES = [
     "src/events.rs",
     "src/questions.rs",
     "src/hooks.rs",
+    # 混住文件（ADR 0004 说的「混住」那一类）：模型可见 / 进流的串与给人看的串住在同一份
+    # 文件里。整份文件不会被算成「这一侧」（那会把给人看的中文与该留英文的旗标一起算进
+    # 来），但**这几份里确实有这一侧的散文**，所以照样逐条字面量盯住它们。
+    "src/agent/history.rs",
+    "src/render/input.rs",
+    "src/render/tui.rs",
+    "src/cli.rs",
 ]
 
-# 冻结面里**已经存在**的中文，逐条点名（前缀匹配）：它们不是漏网之鱼，是这一侧的
-# 既有设计 —— harness 对模型说话用的是中文（身份、轮前缀），另有三条是上游供应商
-# 错误文本里的匹配词，与语言无关。
-ALLOWED = [
-    # agent.rs：单 agent 的 system 身份，四段拼成一条（模型可见，冻结）
-    ("src/agent.rs", "你是 fs-agent"),
-    ("src/agent.rs", "你直接读写文件"),
-    ("src/agent.rs", "docs/adr、.scratch"),
-    ("src/agent.rs", "不要自称是"),
-    # discussion.rs：讨论者的身份与作答规则、用户给的 soul 的框法、合成器的身份，
-    # 以及合成器那一侧的「材料」包装（模型可见，冻结）
-    ("src/discussion.rs", "你是本次讨论中的一位讨论者"),
-    ("src/discussion.rs", "你的性格设定"),
-    ("src/discussion.rs", "你是本次讨论的合成器"),
-    ("src/discussion.rs", "问题："),
-    ("src/discussion.rs", "## 第 {round} 轮"),
-    ("src/discussion.rs", "### {speaker} 的作答"),
-    ("src/discussion.rs", "### {speaker}"),
-    ("src/discussion.rs", "请按「共识 / 分歧"),
-    # provider/projection.rs：投影写进 messages 的轮前缀（模型可见，冻结）
-    ("src/provider/projection.rs", "[轮 {round} · {speaker}]"),
-    # provider/openai.rs 的三条是**匹配词**（去认上游的欠费错误），不是散文；该文件
-    # 不在冻结面清单里，列在这里以免将来有人把它们当成注释一起翻掉。
-    ("src/provider/openai.rs", "欠费"),
-    ("src/provider/openai.rs", "余额"),
-    ("src/provider/openai.rs", "额度"),
-]
-
-# 混住文件里那几条**必须保持英文**的字面量（前缀匹配）：模型可见或要永久回放。
+# 两条方向相反的棘轮（ADR 0005），数字都是**实测值**：
 #
-# 为什么需要这一条：①「冻结面无新增中文」是按**文件**判的，而 `agent/history.rs`、
-# `render/input.rs`、`render/tui.rs`、`cli.rs` 这些文件里，模型可见的串与给人看的串住在
-# 一起 —— 整文件冻结会连带拦住该翻的那半，整文件放开又没人看着该留的那半。所以这两类
-# 文件用**正面**检查：这几条串必须存在，且里面一个中文都没有。
-FROZEN_LITERALS = [
-    # 被杀死的进程没写下的那个工具结果（模型可见）
-    ("src/agent/history.rs", "the session was interrupted while this call was in flight"),
-    # 被杀死的回合里那些合成的工具结果（模型可见；const 名见 src/agent.rs）
-    ("src/agent.rs", "hook stopped the turn: the tool did not run"),
-    ("src/agent.rs", "the turn was cancelled: the tool did not run"),
-    ("src/agent.rs", "the turn was cancelled while this call was in flight"),
-    ("src/agent.rs", "session token budget exhausted: no new executor was"),
-    # 会话级失败的 detail（进流、永久回放）
-    ("src/agent.rs", "no debater answered this round"),
-    # 问卷端口给模型的错误文本（`ask_user_question` 的结果）
-    ("src/render/input.rs", "no questionnaire answerer is connected"),
-    ("src/render/input.rs", "the questionnaire was left unanswered"),
-    ("src/render/input.rs", "input ended before the questionnaire was answered"),
-    ("src/render/tui.rs", "a questionnaire needs at least one question"),
-    # probe 发给模型的提示词（模型可见）
-    ("src/cli.rs", "The quick brown fox jumps over the lazy dog"),
-    ("src/cli.rs", "Ignore the filler below"),
-]
+# - **中文串数只许上升**：迁移期每翻完一批就往上涨，收口时提到实测值。确实要删代码、
+#   连带删掉中文串时，往下调是一次**显式动作** —— 在提交信息里写明理由，别让它悄悄漂。
+# - **英文散文串数只许下降**：判据是「≥3 个英文词、且含空格」的字面量，它守的是
+#   「不许再往这一侧新增英文散文」。断言所在那一行的字面量不计（测试的断言消息是散文，
+#   但它属于测试，不属于模型可见文本 —— ADR 0004）；只剩一两个词的标识符、路径、
+#   schema 值也被上面那条判据天然排除。
+#
+# 起点（2026-09-30，ADR 0005 落地那天，迁移才起步）：中文 **26**、英文散文 **199**。
+# 每翻完一批就把下限提到新的实测值、把上限收到新的实测值 —— 两条棘轮都是「实测值」，
+# 不留余量：任何一条串被改回英文（或新写一条英文散文）都会报红。
+MODEL_TEXT_FLOOR = {
+    "src/agent.rs": 4,
+    "src/discussion.rs": 8,
+    "src/provider/projection.rs": 1,
+    "src/agent/history.rs": 5,
+    "src/render/tui.rs": 1,
+    "src/cli.rs": 8,
+}
+ENGLISH_PROSE_CEILING = 199
 
 # --- ③ docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是
@@ -142,6 +115,7 @@ DOCS_MIN_RATIO = {
     "docs/adr/0002-fullscreen-alt-screen-tui.md": 40,
     "docs/adr/0003-plan-leaves-the-permission-modes.md": 41,
     "docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md": 43,
+    "docs/adr/0005-model-visible-text-in-chinese.md": 40,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
@@ -266,51 +240,56 @@ def code_only(src: str) -> str:
     return src if at < 0 else src[:at]
 
 
-def check_frozen(list_allowed: bool) -> list[str]:
-    if list_allowed:
-        for path, prefix in ALLOWED:
-            print(f"  允许：{path}  {prefix!r}")
-        return []
+def count_model_text() -> tuple[dict[str, int], list[tuple[str, int, str]]]:
+    """这一侧的两样东西：每个文件的**中文串数**，以及**英文散文串**的清单。"""
+    chinese: dict[str, int] = {}
+    english: list[tuple[str, int, str]] = []
+    for path in FROZEN_FILES:
+        if not os.path.exists(path):
+            continue
+        src = code_only(open(path, encoding="utf-8").read())
+        n = 0
+        for line, body, line_text in literals(src):
+            if ASSERTION.search(line_text):
+                continue  # 断言消息属于测试，不属于模型可见文本（ADR 0004）
+            if CJK.search(body):
+                n += 1
+                continue
+            flat = body.replace("\\n", " ").strip()
+            if len(re.findall(r"[A-Za-z]{2,}", flat)) >= 3 and " " in flat:
+                english.append((path, line, flat[:90]))
+        chinese[path] = n
+    return chinese, english
+
+
+def check_model_text(list_all: bool) -> list[str]:
+    """① 两条棘轮：中文串只许上升、英文散文串只许下降（ADR 0005）。"""
     problems = []
     for path in FROZEN_FILES:
         if not os.path.exists(path):
-            problems.append(f"{path}: 冻结面清单里的文件不存在（清单该更新了）")
-            continue
-        src = code_only(open(path, encoding="utf-8").read())
-        for line, body, line_text in literals(src):
-            if not CJK.search(body):
-                continue
-            head = re.sub(r"^(\\n|\\t|\s)+", "", body)
-            if any(path == p and head.startswith(prefix) for p, prefix in ALLOWED):
-                continue
-            # 断言消息是给人看的散文（ADR 0004），不是模型可见文本，也不是进流的文本：
-            # `assert!` / `panic!` / `expect(…)` 所在那一行的字面量不查。
-            if ASSERTION.search(line_text):
-                continue
-            head = body[:60].replace("\n", " ")
-            problems.append(f"{path}:{line}: 冻结面里出现了中文串 {head!r}…")
-    return problems
-
-
-def check_frozen_literals() -> list[str]:
-    """那几条必须保持英文的串：还在，且没有变成中文。"""
-    problems = []
-    for path, prefix in FROZEN_LITERALS:
-        if not os.path.exists(path):
             problems.append(f"{path}: 清单里的文件不存在（清单该更新了）")
-            continue
-        src = code_only(open(path, encoding="utf-8").read())
-        found = [body for _, body, _ in literals(src) if prefix in body]
-        if not found:
+    if problems:
+        return problems
+    chinese, english = count_model_text()
+    if list_all:
+        print("这一侧的中文串数（下限 = 棘轮）：")
+        for path in FROZEN_FILES:
+            print(f"  {chinese[path]:3d}  {path}   （下限 {MODEL_TEXT_FLOOR.get(path, 0)}）")
+        print(f"\n这一侧的英文散文串：{len(english)} 条（上限 {ENGLISH_PROSE_CEILING}）")
+        for path, line, body in english:
+            print(f"  {path}:{line}: {body}")
+        return []
+    for path, floor in sorted(MODEL_TEXT_FLOOR.items()):
+        if chinese.get(path, 0) < floor:
             problems.append(
-                f"{path}: 找不到该保持英文的字面量 {prefix[:48]!r}…（改写或删除了？）"
+                f"{path}: 中文串 {chinese.get(path, 0)} 条 < 下限 {floor}"
+                "（这一侧的散文按 ADR 0005 走中文，翻过的地方不许被改回英文）"
             )
-            continue
-        for body in found:
-            if CJK.search(body):
-                problems.append(
-                    f"{path}: 模型可见 / 进流的字面量被翻成了中文：{prefix[:40]!r}…"
-                )
+    if len(english) > ENGLISH_PROSE_CEILING:
+        problems.append(
+            f"模型可见 / 进流那一侧的英文散文 {len(english)} 条 > 上限 "
+            f"{ENGLISH_PROSE_CEILING}（不许再往这一侧新增英文散文，见 ADR 0005）"
+        )
     return problems
 
 
@@ -345,18 +324,12 @@ def check_comments() -> list[str]:
 
 
 def main() -> int:
-    list_allowed = "--list" in sys.argv[1:]
-    if list_allowed:
-        print("冻结面允许的中文（白名单）：")
-        check_frozen(True)
-        print("\n必须保持英文的混住字面量：")
-        for path, prefix in FROZEN_LITERALS:
-            print(f"  {path}  {prefix!r}")
-        return 0
+    list_all = "--list" in sys.argv[1:]
+    if list_all:
+        return 0 if not check_model_text(True) else 1
 
     problems = (
-        check_frozen(False)
-        + check_frozen_literals()
+        check_model_text(False)
         + check_docs()
         + check_adr_headings()
         + check_comments()
@@ -366,13 +339,14 @@ def main() -> int:
         for problem in problems:
             print(f"  - {problem}")
         print(
-            "\n这五条来自 ADR 0004：散文（注释 / docs / ADR / 断言消息 / 给人看的错误）用中文，"
-            "标识符、模型可见文本与进流文本留英文。"
+            "\n这四条来自 ADR 0004 与 ADR 0005：散文（注释 / docs / ADR / 断言消息 / 给人看的"
+            "错误 / 模型可见与进流的文本）用中文，只有标识符、schema 值与协议标记、路径与命令"
+            "留英文。"
         )
         return 1
     print(
-        "check-language: OK（冻结面无新增中文、混住文件里的模型可见 / 进流串仍英文、"
-        "docs 与 ADR 是中文散文、注释中文行数未回退）"
+        "check-language: OK（模型可见 / 进流那一侧的两条棘轮未回退、docs 与 ADR 是中文散文、"
+        "注释中文行数未回退）"
     )
     return 0
 
