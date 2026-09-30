@@ -17,29 +17,27 @@ path = "src/main.rs"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
-# OpenAI-compatible transport only: no vendor protocol, no SSE parsing.
-# `native-tls` links the system OpenSSL instead of pulling the aws-lc-rs C build.
+# 只走 OpenAI 兼容的传输：不实现各家自己的协议，也不自己解析 SSE。
+# `native-tls` 直接链系统的 OpenSSL，不去拉 aws-lc-rs 那套 C 构建。
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "process", "io-util"] }
-# The `bash` tool's process-tree kill: `Command::process_group(0)` puts the
-# shell in its own group, and only `killpg` terminates that whole group.
+# `bash` 工具的进程树清理：`Command::process_group(0)` 把 shell 放进它自己的进程组，
+# 而只有 `killpg` 能终止整个组。
 libc = "0.2"
-# The interactive renderer (spec §19): ratatui over the crossterm backend, with
-# the inline viewport (no alternate screen, so the transcript stays scrollable).
-# `event-stream` is what gives crossterm an async keyboard source for `select!`.
+# 交互式渲染器（spec §19）：ratatui 架在 crossterm 后端上，用行内视口（inline viewport，
+# 不开备用屏幕，转录因此仍可滚动）。`event-stream` 给 crossterm 一个能进 `select!` 的
+# 异步键盘源。
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
-# Syntax highlighting for tool output (spec §19). The Rust grammar is already a
-# dependency, so this reuses that tree; the closure has no C build step
-# (syntect's Oniguruma path is deliberately not taken).
+# 工具输出的语法高亮（spec §19）。Rust 文法本来就是依赖，所以这里复用那棵树；
+# 整个闭包不引入 C 构建步骤（syntect 的 Oniguruma 那条路是刻意不走的）。
 tree-sitter-highlight = "0.27"
 toml = "0.8"
-# Read-side symbol extraction only: the official Rust `tags.scm` is run through
-# tree-sitter to produce `(file, name, kind)`. The grammar compiles a C parser,
-# so the first build is slower than a pure-Rust dependency.
+# 只做读侧的符号提取：把官方的 Rust `tags.scm` 过一遍 tree-sitter，得到
+# `(file, name, kind)`。这个文法要编一个 C parser，所以首次构建比纯 Rust 依赖慢。
 tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
 url = "2"

@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
-"""Check a wayfinder map against its child tickets (local-markdown tracker).
+"""拿一张 wayfinder 决策图与它的子票对账（本地 markdown tracker）。
 
-The tracker in this repo is local markdown (docs/agents/issue-tracker.md), which
-has **no native sub-issue or dependency edges**. The wayfinder rule therefore
-falls back to a task list in the map body plus `Part of:` in every child, and
-this script is the "expected vs actual" check that the native-edge script would
-otherwise perform:
+本仓库的 tracker 是本地 markdown（docs/agents/issue-tracker.md），**没有子 issue、
+也没有依赖边**。于是 wayfinder 的规矩退回到「图正文里一份任务清单 + 每张子票里的
+`Part of:`」，而这个脚本就是原生 tracker 本来会做的那次「期望 vs 实际」检查：
 
-  expected = entries in the map's `## 任务清单` section
-  actual   = files under `<map-dir>/issues/*.md`
+  expected = 图里 `## 任务清单` 一节里的条目
+  actual   = `<map-dir>/issues/*.md` 下的文件
 
-It also verifies every child points back at the map (`Part of:`), that every
-`Blocked by:` number resolves to a sibling ticket, and that `Type:`/`Status:`
-are present and sane. It prints `closed/total` so a backed map can never read
-`0/0` while it still has children. Exits non-zero on any mismatch, so a caller
-must not read a rejection as success.
+它还核对每张子票都指回图（`Part of:`）、每个 `Blocked by:` 编号都能落到一张兄弟票、
+`Type:`/`Status:` 都在且说得通。它打印 `closed/total`，于是一张有子票的图永远不会读出
+`0/0`。任何不一致都以非零码退出，所以调用方不许把「被拒」读成「通过」。
 
-Usage:
+用法：
 
     python3 scripts/wayfinder-check.py .scratch/tui-ux/map.md
 """
@@ -80,9 +76,9 @@ def main(argv: list[str]) -> int:
     }
 
     failures: list[str] = []
-    # Maps written before the task-list fallback (multi-agent-architecture,
-    # tui-layout) have no `## 任务清单` and no `Part of:`. For those the tool
-    # only reports the closed/total count instead of failing the fallback check.
+    # 任务清单这条退路之前画的图（multi-agent-architecture、tui-layout）既没有
+    # `## 任务清单`、也没有 `Part of:`。对它们，工具只报 closed/total 计数，不让退路
+    # 检查去报红。
     if has_task_list:
         if expected != actual:
             failures.append(
@@ -112,8 +108,8 @@ def main(argv: list[str]) -> int:
 
         kind = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("Type:")), None)
         if kind is None:
-            # The legacy implementation tickets (tui-layout 10–16) predate the
-            # wayfinder `Type:` convention; only the task-list maps require it.
+            # 早先那些实现票（tui-layout 10–16）比 wayfinder 的 `Type:` 约定还早；
+            # 只有带任务清单的图才要求这一行。
             if has_task_list:
                 failures.append(f"{rel}: missing Type:")
         elif kind not in TYPES:
@@ -137,8 +133,8 @@ def main(argv: list[str]) -> int:
             if cleaned not in {"—", "-", "", "None", "none"}:
                 for token in cleaned.split(","):
                     number = token.strip()
-                    # Legacy maps write prose here ("29（/discuss …）"); only a
-                    # bare number is a dependency the tool can resolve.
+                    # 老图会在这里写散文（"29（/discuss …）"）；只有一个光编号才是
+                    # 这个工具解得出的依赖。
                     if not number.isdigit():
                         continue
                     if number not in by_number:

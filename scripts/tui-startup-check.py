@@ -1,42 +1,35 @@
 #!/usr/bin/env python3
-"""Guard the terminal-ownership invariant at startup (spec §19).
+"""启动时守住「终端归属」这条不变量（spec §19）。
 
-The bug this exists for: `fs-agent` printed its startup banner with `eprintln!`
-*after* the TUI renderer had been spawned. The TUI reserves its live region with
-bare line feeds and then draws into it, so the banner landed on the status row —
-and ratatui's diff renderer never learned those glyphs were there, leaving the
-part the status line did not cover on screen. The user saw:
+它守的那个 bug 长这样：`fs-agent` 在 TUI 渲染器已经被拉起来**之后**才用 `eprintln!`
+打印启动横幅。TUI 用裸换行符圈出自己的活动区、再往里画，于是横幅落在状态行上 ——
+而 ratatui 的差分渲染器从不知道那些字形存在，状态行没盖住的那截就留在了屏幕上。
+用户看到的是：
 
     ready · enter send · esc cancel · shift+tab plan · ctrl-c quitlash · mode ask · <path>
 
-`splash` there is the tail of `model deepseek-flash`: the status line is 62
-columns, and `lash` sits at offset 62 in the banner, so exactly that much of the
-banner survived.
+那里的 `splash` 是 `model deepseek-flash` 的尾巴：状态行有 62 列，而横幅里
+`lash` 坐在偏移 62 上，所以横幅活下来的正好就是这么多。
 
-It now guards both ends of the process, because they are the two things only a
-pty can see (spec §Testing Decisions): the first frame — the status row drawn
-whole, the banner once, the identity (the mark, in the sidebar), the frame and its
-divider present — and what the terminal is handed back on `Ctrl-C` — the
-alternate screen, mouse reporting, bracketed paste, and canonical/echoing tty
-flags. The cursor, the mouse and
-resizing stay on the manual list (`docs/tui-manual-checklist.md`).
+它现在守进程的两头，因为这两头只有 pty 看得见（spec §Testing Decisions）：第一帧
+—— 状态行整行画出、横幅只出现一次、身份（左栏里的标记）在场、外框与它的分隔列
+都在 —— 以及 `Ctrl-C` 之后终端被交还回什么 —— 备用屏幕、鼠标上报、括号粘贴
+（bracketed paste）、以及 tty 的规范 / 回显标志。光标、鼠标与缩放仍留在手工清单
+里（`docs/tui-manual-checklist.md`）。
 
-Why a pty script and not a Rust test: the corruption only exists on a real
-terminal (the renderer is chosen by `IsTerminal`), and the CLI builds its own
-sinks, so nothing in `cargo test` can observe what reaches the tty. This script
-is the red-capable check; the seam tests in `tests/render_tui.rs` and
-`tests/render_plain.rs` pin the mechanism the fix uses.
+为什么用 pty 脚本、不用 Rust 测试：这处污染只在真终端上存在（渲染器由 `IsTerminal`
+挑），而 CLI 自己组装 sink，所以 `cargo test` 里没有任何东西观察得到「到达 tty 的
+是什么」。这个脚本是会红的那条检查；`tests/render_tui.rs` 与 `tests/render_plain.rs`
+里的接缝测试钉住的是修复所用的那个机制。
 
-Run after `cargo build`:
+在 `cargo build` 之后跑：
 
     python3 scripts/tui-startup-check.py [binary] [runs]
 
-Each run is made once per way out: `Ctrl-C`, `/quit`, and `Ctrl-D` followed by `y`
-at the exit confirmation (票 06), plus one `--continue` reopen per run — the same
-terminal, a session that already exists, so the startup history replay is on the
-critical path. Exits 0 when every run is green. A pty that does not answer the
-cursor-position query (`ESC[6n`) makes ratatui fail to initialise, which is why
-this script answers it.
+每一轮都按出口各跑一遍：`Ctrl-C`、`/quit`、以及在退出确认处 `Ctrl-D` 后跟 `y`（票 06），
+外加每轮一次 `--continue` 重开 —— 同一个终端、一个已经存在的会话，于是启动时的历史
+重播落在关键路径上。每一遍都绿才退出 0。不回答光标位置查询（`ESC[6n`）的 pty 会让
+ratatui 初始化失败，所以这个脚本自己回答它。
 """
 import collections
 import fcntl
@@ -54,39 +47,32 @@ import unicodedata
 import time
 
 COLS, ROWS = 260, 30
-# The status line ends with this word; the verdict below checks nothing foreign
-# follows it on the row.
+# 状态行以这个词收尾；下面的判定会检查这一行里它后面没跟着别的东西。
 STATUS_TAIL = "退出"
-# ratatui positions every wide cell with an explicit cursor move, so the raw byte
-# stream is not a contiguous string once the UI is Chinese. Readiness and the
-# verdict read the emulated screen instead; these ASCII anchors survive raw.
+# ratatui 每画一个宽字符都要显式移动光标，所以界面一旦是中文，原始字节流就不再是一串
+# 连续字符串了。就绪判定与最终判定都改读仿真出来的屏幕；这几个 ASCII 锚点在原始流里
+# 依然成立。
 STATUS_ANCHOR = "ctrl-c"
-# `fs-agent` alone also matches the store path and the bucket slug, so the banner
-# anchor carries its fullwidth colon, which is written contiguously after the
-# ASCII prefix.
+# 光有 `fs-agent` 也会命中会话目录的路径与桶的 slug，所以横幅锚点带上它的全角冒号 ——
+# 这个冒号写在 ASCII 前缀后面、是连续的一串。
 BANNER_ANCHOR = "fs-agent："
-# The history replay's progress line, on the hint row until the history has
-# settled. A `--continue` run is only green when it is gone from the final screen.
+# 历史重播的进度行，在历史安定下来之前一直待在提示行。`--continue` 那一轮只有它在
+# 最终屏幕上消失才算绿。
 REPLAY_PROGRESS_ANCHOR = "恢复"
-# The sidebar shows one of two things, depending on the terminal
-# (`tui-sidebar` spec §2): the text identity when it is narrow, and **the mark** in
-# its top rows when it is wide enough — 260x30, this script's size, is the wide rung
-# (40 columns, drawn from 120 up). The mark is the program's identity in the
-# sidebar, so either one proves the sidebar was drawn; the identity alone would go
-# red the moment the mark is up.
+# 左栏按终端显示两者之一（`tui-sidebar` spec §2）：窄档是文字身份，宽到一定程度时在
+# 顶上几行画**标记** —— 260x30（本脚本的尺寸）就是宽档那一级（40 列，120 列起画）。
+# 标记是程序在左栏里的身份，所以两者任一都证明左栏画出来了；只认文字身份的话，
+# 标记一上屏它就红。
 MARK_ROW = "▄▀▀█"
-# One frame around everything, with a single divider column and three rules in the
-# main column, so if the frames are gone the shell went with them. Three cells of
-# each orientation is deliberately far below what one screen draws: this is a
-# degradation guard, not a geometry assertion. The two are counted apart because the
-# divider is a lone vertical line that survives the frame -- counting every box
-# character together would call a borderless screen green.
+# 一圈外框框住一切，外加左栏与主列之间的那条分隔列、主列里的三条横线 —— 外框没了，
+# 就说明外壳也跟着没了。每个方向只要三格，是刻意远低于一屏实际画出的量：这是降级
+# 护栏，不是几何断言。横竖分开数，因为分隔列是一条孤立的竖线 —— 外框没了它还在 ——
+# 把所有画框字符合起来数，会把一屏没有边框的界面判成绿。
 BORDER_H = "─"
 BORDER_V = "│"
-# What the terminal has to be given back on the way out (spec §5, §19): the
-# alternate screen, mouse reporting in every encoding crossterm turns off, and
-# bracketed paste. `stty`/termios is checked separately, because raw mode is a
-# termios flag rather than an escape sequence.
+# 退出时要交还给终端的东西（spec §5、§19）：备用屏幕、crossterm 关掉的每一种编码的
+# 鼠标上报、以及括号粘贴。`stty`/termios 另算，因为原始模式（raw mode）是一个 termios
+# 标志，不是转义序列。
 TEARDOWN = [
     "\x1b[?1049l",
     "\x1b[?1000l",
@@ -96,18 +82,17 @@ TEARDOWN = [
     "\x1b[?2004l",
 ]
 
-# The ways out a user actually has. All of them have to hand the terminal back, so
-# every run is made once per gesture (spec §1: `/quit`, idle `Ctrl-C`; 票 06:
-# `Ctrl-D` then `y` at the confirmation; the panic path shares the same function but
-# cannot be triggered on demand -- see the manual list).
+# 用户实际有的出口。每一个都得把终端交还回来，所以每种手势各跑一轮（spec §1：`/quit`、
+# 空闲时 `Ctrl-C`；票 06：退出确认处 `Ctrl-D` 再 `y`；panic 那条路走同一个函数，
+# 但没法按需触发 —— 见手工清单）。
 GESTURES = [("ctrl-c", b"\x03"), ("/quit", b"/quit\r"), ("ctrl-d y", b"\x04y")]
 
-# The tty flags a shell has to have back: canonical input, echo and signals.
+# shell 必须拿回去的 tty 标志：规范输入、回显与信号。
 Modes = collections.namedtuple("Modes", "canonical echo signals")
 
 
 def tty_modes(fd):
-    """The line discipline the pty was left in, as the child left it."""
+    """pty 被留在哪种线路规程（line discipline）状态 —— 子进程离开时留下的那个样子。"""
     lflag = termios.tcgetattr(fd)[3]
     return Modes(
         bool(lflag & termios.ICANON),
@@ -117,26 +102,25 @@ def tty_modes(fd):
 
 
 class Run:
-    """One pty run: what was drawn, and what the terminal was left in."""
+    """一次 pty 运行：画出了什么，以及终端被留在了什么状态。"""
 
     def __init__(self, raw, exited, status, modes, survived_empty_enter):
         self.raw = raw
         self.exited = exited
         self.status = status
         self.modes = modes
-        # An Enter on an empty draft is an empty line, not a closed stdin. It once
-        # was read as the latter and quit the session, so the run has to still be
-        # alive after one.
+        # 空草稿上按 Enter 是一个空行，不是 stdin 关闭。它曾经被读成后者、顺手把会话
+        # 退掉了，所以按过一次之后这一轮必须还活着。
         self.survived_empty_enter = survived_empty_enter
 
 
 def char_width(ch):
-    """Terminal columns one character occupies (wide CJK is two)."""
+    """一个字符占的终端列数（宽的 CJK 算两列）。"""
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 
 class Screen:
-    """Just enough VT emulation to answer "what is on the status row"."""
+    """刚够回答「状态行上是什么」的 VT 仿真。"""
 
     def __init__(self, reply_fd):
         self.reply_fd = reply_fd
@@ -202,8 +186,8 @@ class Screen:
                 width = char_width(ch)
                 if 0 <= self.cy < ROWS and 0 <= self.cx < COLS:
                     self.grid[self.cy][self.cx] = ch
-                    # A wide cell owns the column after it; blank it so joining
-                    # the row does not insert a phantom space between glyphs.
+                    # 宽字符把它后面那一列也占了；先清空，免得拼这一行时在字形之间
+                    # 插进一个假空格。
                     for trail in range(1, width):
                         if self.cx + trail < COLS:
                             self.grid[self.cy][self.cx + trail] = ""
@@ -219,11 +203,10 @@ class Screen:
 
 
 def read_once(fd, screen=None, timeout=0.2):
-    """One read from the pty.
+    """从 pty 读一次。
 
-    Returns the decoded text, `""` when nothing was ready, and `None` at end of
-    stream. `screen`, when given, also answers any cursor-position query in the
-    text: a pty that stays silent about one leaves ratatui waiting for a reply.
+    返回解码后的文本：没东西可读时返回 `""`，流结束时返回 `None`。给了 `screen` 的话，
+    还会回答文本里的光标位置查询：对查询一声不吭的 pty 会让 ratatui 一直等回答。
     """
     readable, _, _ = select.select([fd], [], [], timeout)
     if not readable:
@@ -241,7 +224,7 @@ def read_once(fd, screen=None, timeout=0.2):
 
 
 def write(fd, data):
-    """Send bytes, tolerating a pty that has already gone."""
+    """发送字节，容忍一个已经消失的 pty。"""
     try:
         os.write(fd, data)
     except OSError:
@@ -249,11 +232,10 @@ def write(fd, data):
 
 
 def tty_state(fd, tries=3):
-    """The line discipline the child left, read before the master is closed.
+    """子进程留下的线路规程，在关闭 master 之前读。
 
-    A couple of retries because the read can race the slave closing; `None` means
-    the pty would not say, which the verdict reports as itself rather than as raw
-    mode left on.
+    重试几次是因为这次读可能和 slave 关闭赛跑；`None` 表示 pty 不肯说 —— 判定会把它
+    报成「读不到」，而不是报成「原始模式还开着」。
     """
     for attempt in range(tries):
         try:
@@ -265,20 +247,17 @@ def tty_state(fd, tries=3):
 
 
 def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
-    """Run the binary on a pty until startup settles, then quit it and look behind.
+    """在 pty 上跑这个二进制，等启动安定下来，再让它退出、回头看看留下了什么。
 
-    A fixed read window is flaky: assembly (context, skills, the session
-    directory) can outlast it, so the banner would not have been emitted yet and
-    the run would look green for the wrong reason. Wait for both the status line
-    and the banner instead, plus a grace period so a duplicate write is counted.
+    固定的读窗口不可靠：组装（context、skills、会话目录）可能比它更久，那样横幅还没
+    打印出来，这一轮就会因为错误的原因看着是绿的。所以改成等状态行与横幅**都**出现，
+    再加一段宽限期，好让重复写入也被数进去。
 
-    The way out is checked here too, because it is the same run: `gesture`, then
-    wait for the process to actually go -- the terminal is only clean once it has
-    (spec §19). The escape sequences it emitted and the termios it left are read
-    after it exited, not guessed from the source.
+    出口也在这里一并查了，因为它是同一轮运行：先发 `gesture`，再等进程真的走掉 ——
+    只有它走了，终端才算干净（spec §19）。它发出的转义序列与它留下的 termios 都在
+    进程退出之后读，不从源码里猜。
 
-    `args` are extra CLI arguments; `--continue` uses them to reopen a session the
-    same `data_home` already holds.
+    `args` 是额外的 CLI 参数；`--continue` 用它重开同一个 `data_home` 里已有的会话。
     """
     pid, fd = pty.fork()
     if pid == 0:
@@ -299,8 +278,8 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
             settle_by = time.time() + 0.4
         if settle_by is not None and time.time() >= settle_by:
             break
-    # An empty Enter first: the loop discards the empty line and asks again, so the
-    # session has to still be there. This is the regression that once quit it.
+    # 先来一个空 Enter：循环会丢掉这条空行、再问一次，所以会话必须还在。这就是当年
+    # 把会话退掉的那个回归。
     write(fd, b"\r")
     time.sleep(0.4)
     reaped, wait_status = os.waitpid(pid, os.WNOHANG)
@@ -323,8 +302,8 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
         if not exited:
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
-    # Whatever was flushed as it went, then the state it left the pty in. The
-    # teardown can land in the same instant as the exit, so this is not skipped.
+    # 它退出时冲出来的都收下，再看它把 pty 留在了什么状态。收尾可能与退出落在同一
+    # 瞬间，所以这一步不能跳过。
     end = time.time() + 0.3
     while time.time() < end:
         text = read_once(fd, screen, 0.1)
@@ -340,17 +319,15 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
 
 
 def verdict(run, devnull, identity, replay=False):
-    """Judge one run: the first frame it drew, and what it left behind.
+    """判定一轮运行：它画出的第一帧，以及它留下的东西。
 
-    The whole capture is replayed rather than sliced at the first draw: a wide
-    cell is written with an explicit cursor move, so the byte offset of the status
-    line is not `raw.find(STATUS_ANCHOR)`. The same replay answers the version
-    anchor, which is split in the byte stream for the same reason.
+    整个抓取内容都被重放一遍，而不是在第一帧处切片：宽字符是带显式光标移动写出来的，
+    所以状态行的字节偏移不是 `raw.find(STATUS_ANCHOR)`。同一次重放也用来找版本锚点
+    —— 它因为同一个道理在字节流里是断开的。
 
-    `replay` marks a `--continue` run: the final screen then also has to show the
-    replay had **converged** -- the history progress line is gone and the ordinary
-    status row is what is left. The replay's *content* is not judged here; that is
-    `cargo test`'s job (`.scratch/tui-history-replay/spec.md` §Testing Decisions).
+    `replay` 标记 `--continue` 那一轮：此时最终屏幕还必须显示重播已经**收敛** ——
+    历史进度行消失，只剩普通的状态行。重播的**内容**不在这里判，那是 `cargo test`
+    的活（`.scratch/tui-history-replay/spec.md` §Testing Decisions）。
     """
     if not run.survived_empty_enter:
         return False, "the session did not survive an empty Enter"
@@ -368,9 +345,8 @@ def verdict(run, devnull, identity, replay=False):
     row = next((r for r in rows if STATUS_ANCHOR in r), None)
     if row is None:
         return False, "the status row was not on screen at the first draw"
-    # The hint row lives inside the bottom block, so the block's right border
-    # follows the last hint. Strip it (and any padding) before asking whether the
-    # row was drawn whole; anything else after the tail is still foreign text.
+    # 提示行住在底部区块里面，所以区块的右边框跟在最后一条提示后面。问这一行是否完整
+    # 画出之前先剥掉它（以及任何填充）；尾巴之后的其他东西仍然算外来文本。
     row = row.rstrip(" │")
     if not row.endswith(STATUS_TAIL):
         return False, "the status line was not drawn whole: %r" % row[-60:]
@@ -402,10 +378,10 @@ def verdict(run, devnull, identity, replay=False):
 
 
 def binary_identity(binary):
-    """What the binary calls itself, which is what its header has to show.
+    """二进制自称的名字，也就是它的头部必须显示的东西。
 
-    Asking the binary rather than reading `Cargo.toml` keeps the anchor honest:
-    the point is that the running program's own identity reached the screen.
+    问二进制本身、而不是读 `Cargo.toml`，是为了让锚点诚实：要证明的是**正在跑的
+    这个程序**自己的身份到了屏幕上。
     """
     out = subprocess.run(
         [os.path.abspath(binary), "--version"],
@@ -439,9 +415,9 @@ def main():
                         % (i + 1, label, "GREEN" if ok else "RED", why)
                     )
                     bad += 0 if ok else 1
-                # Reopen the session the runs above just made, in the same store:
-                # the history replay is then on the startup path, and its
-                # convergence and the terminal it hands back are what a pty can see.
+                # 重开上面几轮刚建出来的那个会话，还在同一个会话目录里：这样历史重播
+                # 就落在启动路径上，而它是否收敛、交还回来的终端是什么样，正是 pty
+                # 能看到的。
                 run = capture(binary, data_home, args=("--continue",))
                 ok, why = verdict(run, devnull, identity, replay=True)
                 print(
