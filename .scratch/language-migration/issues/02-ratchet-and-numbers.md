@@ -1,7 +1,7 @@
 # 收尾：棘轮提到实测值、README 数字、最后一遍清扫
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/language-migration/spec.md`。票 01 落地后才做（棘轮与行数都要在内容定稿后量）。
@@ -47,3 +47,39 @@ Blocked by: 01
 
 验收的 757/0、clippy、fmt、`tui-startup-check.py` 四条在本票落地时仍应全部成立（票 01 落地时
 它们都成立）。
+
+## Comments
+
+**实现完成（2026-09-27）**。提交 `b423cc4`（`scripts/check-language.py` + `README.md`）。
+维护者在动手前拍了两个阈值（下面前两条就是拍下来的）。
+
+1. **`COMMENT_FLOOR` 提到精确实测值**：`src` **195 → 5,209**、`tests` **93 → 2,423**
+   （用脚本自己那套数法量的：`//` 开头且含 CJK 的行）。注释里补了两句：它是**只许上升**的
+   棘轮，以及确实要删代码时的正确做法是**显式下调并在提交信息里写明理由**，别让它悄悄漂。
+   没留余量是有意的 —— 任何一行被改回英文就报红。
+2. **`DOCS_MIN_RATIO` 逐份收到「实测 −2 点」**（原来是 12 份统一 30%）：`domain` 29、
+   `issue-tracker` 29、`custom-tools` 30、`bash` 32、`triage-labels` 32、`executor` 38、
+   `credentials` 39、`skills` 41、`discussion` 42、`render` 42、`repo-map` 43、
+   `observability` 43。实测区间是 31.2%（`domain.md`，最低）– 45.5%（`observability.md`，
+   最高）；留 2 点是因为文档里必然有英文标识符 / 路径 / 命令，插一段代码块会拉低比例，而
+   整段散文被翻回英文则必须报红。余量的理由写在 `DOCS_MIN_RATIO` 上面。
+3. **README《状态》的行数是真漂移，不是照抄旧值**：那一行由 `6186070`（09-27 00:12）写下，
+   在语言迁移之前，而翻译让注释行数掉了下来 —— `src/` **31,462 → 29,680**、
+   `tests/` **29,179 → 28,612**（`wc -l`），**757 条测试不变**。
+4. **反证（护栏真的紧了吗）**：在 `git archive HEAD` 解出来的**隔离 checkout** 里做，不动
+   工作区 —— 把 `src/` 与 `tests/` 各一条中文注释改回英文，两条棘轮同时报红
+   （`5208 < 5209`、`2422 < 2423`）；再往 `docs/agents/domain.md` 追加 1,180 字符英文散文，
+   占比检查报红（`15.8% < 29%`）；改回后全绿。三条检查各报各的，互不掩盖。
+5. **最后一遍清扫的结果：没有需要翻的**。清单逐条过完：
+   - `check-translation-batch.py --remaining` 只剩 **90 字符 / 2 条**，两条都不是散文
+     （`custom_tool_name` 的格式模板、一条内置 `base_url`）；
+   - `src/` 与 `tests/` 里**整行英文**的注释行共 56 条（≥4 个英文词的 44 条 + 恰好 3 个的
+     12 条），逐条看过：全是引用 / 图表 / 标识符续行（`.scratch/*/spec.md` 的出处、
+     `spec §15`、`//! <root>/<cwd-slug>/<session-id>/` 这类路径图、`[`crate::…`]` 链接、
+     分节破折号行、`hook.pre -> permission gate -> …` 那种流水线图），**没有一条是散文**；
+   - `docs/tui-manual-checklist.md` 的 ⑰（以及 ⑩）那两节「**待人工过一遍**」的标注**原样
+     保留**，没有改口 —— 本票没有真终端可跑，它们仍然是待你手工验证的两节。
+6. **验收**：`check-language.py` OK（且按上面第 4 条确认过它真的会报红）、`cargo test`
+   **757 passed / 0 failed**、`cargo clippy --all-targets` 干净、`cargo fmt --check` 零漂移、
+   `scripts/tui-startup-check.py` **12/12 GREEN**。本票落地后 `.scratch/language-migration/spec.md`
+   的 `Status:` 与两张票的 `Status:` 一并收成 `done`（票面验收第 3 条）。
