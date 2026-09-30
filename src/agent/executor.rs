@@ -93,7 +93,12 @@ impl ExecutorPort {
         // `ask` 会话的执行者经同一个端口发问 —— 而*放行*从不随之下行，因为 `Allow` 不传播
         // （spec §12、§16）。
         let parent_policy = session.policy();
-        let mut policy = Policy::for_mode(parent_policy.mode());
+        // `outside_read` 是**策略级**的那一条旋钮，与档位正交（`.scratch/workspace-mode` 的
+        // spec §2）：它是配置写下来的立场，不是某个 agent 挣到的许可，所以执行者照旧沿用 ——
+        // 否则一个 `outside_read = "ask"` 的会话会派出一组连问都不问、直接拒的执行者，而
+        // 讨论者（走 `fork`、共享同一份 `Policy`）却不这样。
+        let mut policy =
+            Policy::for_mode(parent_policy.mode()).with_outside_read(parent_policy.outside_read());
         for rule in parent_policy.inherited_rules() {
             policy.push(rule);
         }

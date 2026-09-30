@@ -13,8 +13,10 @@ mod asker;
 mod capture;
 mod fake_provider;
 mod hook;
+mod sandbox;
 
 pub use asker::{AlwaysAllow, ScriptedAsker};
 pub use capture::CaptureBuf;
 pub use fake_provider::{FakeProvider, Reply};
 pub use hook::{PostCall, PreCall, ScriptedHook};
+pub use sandbox::available as sandbox_available;

@@ -168,6 +168,9 @@ pub struct DiscussionHarness {
     /// 三个参与者共用的那一份策略（spec §15）；留着的理由和 [`Harness`] 一样：讨论的
     /// run future 借着 harness 的时候，模式手势必须够得着。
     policy: Arc<Mutex<Policy>>,
+    /// 这台机器上有没有可用的沙箱（组装期定下来的那一件事）。`workspace` 档在循环里
+    /// 会不会被跳过就看它，见 [`ModeCycle`]。
+    workspace_available: bool,
     render_task: JoinHandle<()>,
 }
 
@@ -377,15 +380,7 @@ fn workspace_needs_a_sandbox(
     if mode != Mode::Workspace {
         return Ok(());
     }
-    let reason = if settings.mode == SandboxMode::Off {
-        Some("`[sandbox] mode` 被显式设成了 \"off\"".to_owned())
-    } else {
-        match sandbox::resolve_availability(settings, cwd) {
-            SandboxAvailability::Unavailable { reason } => Some(reason),
-            _ => None,
-        }
-    };
-    let Some(reason) = reason else {
+    let Some(reason) = sandbox_unavailable_reason(settings, cwd) else {
         return Ok(());
     };
     Err(Error::WorkspaceWithoutSandbox(format!(
@@ -393,6 +388,37 @@ fn workspace_needs_a_sandbox(
          两条出路：把 `[sandbox] mode` 换回 \"bwrap\"（并让 `bwrap` 出现在 PATH 上），\
          或者换一档（`ask` / `auto`）"
     )))
+}
+
+/// 这一份沙箱设置为什么让 `workspace` 档不成立 —— 它成立时是 `None`。
+///
+/// 判据两条，任一条成立就拒：显式写了 `[sandbox] mode = "off"`，或者探测说 `bwrap` 在这台
+/// 机器上起不来。组装期与模式循环手势（第二个入口）共用它，于是「这一档不存在」在两处
+/// 是同一个答案。
+fn sandbox_unavailable_reason(settings: &SandboxSettings, cwd: &Path) -> Option<String> {
+    if settings.mode == SandboxMode::Off {
+        return Some("`[sandbox] mode` 被显式设成了 \"off\"".to_owned());
+    }
+    match sandbox::resolve_availability(settings, cwd) {
+        SandboxAvailability::Unavailable { reason } => Some(reason),
+        _ => None,
+    }
+}
+
+/// 名册里的每一个参与者都得过 [`workspace_needs_a_sandbox`] 那一关。
+///
+/// 两个讨论组装点（一场自己的讨论、一场跑在活会话上的讨论）共用它，于是「新增一个组装
+/// 点时漏掉某一个参与者」这件事不会发生。
+fn roster_needs_a_sandbox(
+    mode: Mode,
+    debaters: &[DebaterParts],
+    synthesizer: &SynthesizerParts,
+    cwd: &Path,
+) -> Result<(), Error> {
+    for debater in debaters {
+        workspace_needs_a_sandbox(mode, &debater.config.sandbox, cwd)?;
+    }
+    workspace_needs_a_sandbox(mode, &synthesizer.config.sandbox, cwd)
 }
 
 /// 组装一场单 agent 会话。不读任何环境。
@@ -573,11 +599,15 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
 
     let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
     validate_roster(&debaters, &synthesizer, max_rounds)?;
-    let mode = scaffold.policy.mode();
-    for debater in &debaters {
-        workspace_needs_a_sandbox(mode, &debater.config.sandbox, &scaffold.cwd)?;
-    }
-    workspace_needs_a_sandbox(mode, &synthesizer.config.sandbox, &scaffold.cwd)?;
+    roster_needs_a_sandbox(
+        scaffold.policy.mode(),
+        &debaters,
+        &synthesizer,
+        &scaffold.cwd,
+    )?;
+    // 名册刚被校验过，至少两位讨论者，而它们是同一个脚手架开出来的。
+    let workspace_available =
+        sandbox_unavailable_reason(&debaters[0].config.sandbox, &scaffold.cwd).is_none();
 
     let opened = OpenedSession::open(scaffold, renderer)?;
 
@@ -598,6 +628,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
         render: opened.render,
         cancel: CancelSignal::new(),
         policy,
+        workspace_available,
         render_task: opened.render_task,
     })
 }
@@ -655,10 +686,7 @@ impl Harness {
         validate_roster(&debaters, &synthesizer, max_rounds)?;
         let mode = self.policy.lock().expect("策略互斥锁已中毒").mode();
         let cwd = self.session.cwd().to_path_buf();
-        for debater in &debaters {
-            workspace_needs_a_sandbox(mode, &debater.config.sandbox, &cwd)?;
-        }
-        workspace_needs_a_sandbox(mode, &synthesizer.config.sandbox, &cwd)?;
+        roster_needs_a_sandbox(mode, &debaters, &synthesizer, &cwd)?;
         let (roster, synthesizer) =
             discussion_participants(debaters, synthesizer, |config, identity| {
                 self.session.fork(config, identity)
@@ -764,7 +792,13 @@ impl Harness {
     pub fn mode_cycle(&self) -> ModeCycle {
         ModeCycle {
             policy: Arc::clone(&self.policy),
+            workspace_available: self.workspace_available(),
         }
+    }
+
+    /// 这一刻这台机器上有没有可用的沙箱（组装期已经定下来，探测只跑一次）。
+    fn workspace_available(&self) -> bool {
+        sandbox_unavailable_reason(&self.session.config().sandbox, self.session.cwd()).is_none()
     }
 
     pub fn session_id(&self) -> &SessionId {
@@ -830,6 +864,7 @@ impl DiscussionHarness {
     pub fn mode_cycle(&self) -> ModeCycle {
         ModeCycle {
             policy: Arc::clone(&self.policy),
+            workspace_available: self.workspace_available,
         }
     }
 
@@ -862,13 +897,20 @@ impl DiscussionHarness {
 #[derive(Clone)]
 pub struct ModeCycle {
     policy: Arc<Mutex<Policy>>,
+    /// 这台机器上有没有可用的沙箱。没有时 `workspace` 档在循环里被**跳过**：组装期已经
+    /// 拒过一次，而 `Shift+Tab` 是这一档的第二个入口 —— 「没有沙箱就没有这一档」要在两处
+    /// 是同一个答案（`.scratch/workspace-mode/spec.md` §6）。
+    workspace_available: bool,
 }
 
 impl ModeCycle {
     /// 绕循环走一档，并返回此刻生效的模式：于是前端显示的那个值就是权限门读的值。
     pub fn cycle(&self) -> Mode {
         let mut policy = self.policy.lock().expect("策略互斥锁已中毒");
-        let mode = policy.mode().next();
+        let mut mode = policy.mode().next();
+        if mode == Mode::Workspace && !self.workspace_available {
+            mode = mode.next();
+        }
         policy.set_mode(mode);
         mode
     }

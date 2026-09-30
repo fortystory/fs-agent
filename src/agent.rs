@@ -742,19 +742,10 @@ async fn process_call(
     let started = Instant::now();
     // 调用只解析一次：权限门、钩子与护栏读的是同一批事实，而这是唯一一个为了解析路径去碰
     // 文件系统的步骤。
-    let mut facts = match session.tools().facts(
-        &pending.tool_name,
-        &pending.args,
-        &pending.paths,
-        session.home(),
-    ) {
-        Ok(facts) => facts,
-        Err(error) => {
-            // 没有工具可判、也没有东西可跑：这次调用的那一个结果
-            // 就是这次失败。
-            emit_completed(session, render, speaker, tool_call_id, Err(error), started)?;
-            return Ok(Disposition::Finished);
-        }
+    let Some(mut facts) =
+        resolve_facts(session, render, speaker, &pending, &tool_call_id, started)?
+    else {
+        return Ok(Disposition::Finished);
     };
 
     // ① hook.pre。它在权限门之前跑，所以能拦下一次询问；它的约束在下面与权限门的裁决合并。
@@ -802,25 +793,12 @@ async fn process_call(
                 // 权限门与工具看到的都是改写后的调用，所以两边读之前
                 // 事实要重新解析一次。
                 pending.args = new_args;
-                facts = match session.tools().facts(
-                    &pending.tool_name,
-                    &pending.args,
-                    &pending.paths,
-                    session.home(),
-                ) {
-                    Ok(facts) => facts,
-                    Err(error) => {
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            tool_call_id,
-                            Err(error),
-                            started,
-                        )?;
-                        return Ok(Disposition::Finished);
-                    }
+                let Some(re_resolved) =
+                    resolve_facts(session, render, speaker, &pending, &tool_call_id, started)?
+                else {
+                    return Ok(Disposition::Finished);
                 };
+                facts = re_resolved;
             }
             Ok(Constraint::Skip) => {
                 let skipped = ToolError::message("钩子跳过了执行：工具没有跑");
@@ -898,25 +876,12 @@ async fn process_call(
                     permissions::Direction::Read => pending.paths.relaxed_read(),
                     permissions::Direction::Write => pending.paths.relaxed_write(),
                 };
-                facts = match session.tools().facts(
-                    &pending.tool_name,
-                    &pending.args,
-                    &pending.paths,
-                    session.home(),
-                ) {
-                    Ok(facts) => facts,
-                    Err(error) => {
-                        emit_completed(
-                            session,
-                            render,
-                            speaker,
-                            tool_call_id,
-                            Err(error),
-                            started,
-                        )?;
-                        return Ok(Disposition::Finished);
-                    }
+                let Some(re_resolved) =
+                    resolve_facts(session, render, speaker, &pending, &tool_call_id, started)?
+                else {
+                    return Ok(Disposition::Finished);
                 };
+                facts = re_resolved;
             }
             // 护栏是对事实加上这个 agent 的读集合的一次纯读取；决定在
             // `finish_call` 里施加到读集合上。
@@ -1672,6 +1637,39 @@ pub fn record_session_error(
             detail: detail.to_owned(),
         },
     )
+}
+
+/// 解析一次调用的事实；解析不了时，这次调用欠着的那一条结果就在这里补上。
+///
+/// 三条调用点共用它 —— 首次解析、钩子 `Rewrite` 之后、被放行的越界之后 —— 于是
+/// 「解析失败就是这次调用那一个结果」只写一遍，而三条路上的行为不可能漂开。
+fn resolve_facts(
+    session: &mut Session,
+    render: &RenderHandle,
+    speaker: &SpeakerId,
+    pending: &PendingCall,
+    tool_call_id: &ToolCallId,
+    started: Instant,
+) -> Result<Option<CallFacts>, Error> {
+    match session.tools().facts(
+        &pending.tool_name,
+        &pending.args,
+        &pending.paths,
+        session.home(),
+    ) {
+        Ok(facts) => Ok(Some(facts)),
+        Err(error) => {
+            emit_completed(
+                session,
+                render,
+                speaker,
+                tool_call_id.clone(),
+                Err(error),
+                started,
+            )?;
+            Ok(None)
+        }
+    }
 }
 
 /// 权限门与用户都说过话之后，循环对一次调用必须做什么。

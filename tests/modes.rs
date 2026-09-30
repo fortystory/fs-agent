@@ -21,7 +21,7 @@ use fs_agent::permissions::{Asker, Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
-use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
+use support::{sandbox_available, AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {
     harness: Harness,
@@ -32,20 +32,18 @@ struct Fixture {
     _dir: Option<tempfile::TempDir>,
 }
 
-/// 一份「沙箱可用」的会话配置：`workspace` 档的存在与否只问这一件事（spec §6）。
-fn sandbox_available() -> fs_agent::config::SandboxSettings {
-    use fs_agent::config::{SandboxAvailability, SandboxMode, SandboxSettings};
-
-    let mut settings = SandboxSettings::off();
-    settings.mode = SandboxMode::Bwrap;
-    settings.availability = SandboxAvailability::Available {
-        bwrap: PathBuf::from("/bin/true"),
-    };
-    settings
+async fn fixture(replies: Vec<Reply>, mode: Mode, asker: Option<Arc<dyn Asker>>) -> Fixture {
+    fixture_at(replies, mode, asker, None, sandbox_available()).await
 }
 
-async fn fixture(replies: Vec<Reply>, mode: Mode, asker: Option<Arc<dyn Asker>>) -> Fixture {
-    fixture_at(replies, mode, asker, None).await
+/// 同上，但把沙箱那一份设置也说出来 —— `workspace` 档在循环里会不会被跳过就看它。
+async fn fixture_with_sandbox(
+    replies: Vec<Reply>,
+    mode: Mode,
+    asker: Option<Arc<dyn Asker>>,
+    sandbox: fs_agent::config::SandboxSettings,
+) -> Fixture {
+    fixture_at(replies, mode, asker, None, sandbox).await
 }
 
 /// 搭出一个会话，可选地续上一份已有的日志，这样测试就能断言
@@ -55,6 +53,7 @@ async fn fixture_at(
     mode: Mode,
     asker: Option<Arc<dyn Asker>>,
     existing_log: Option<&std::path::Path>,
+    sandbox: fs_agent::config::SandboxSettings,
 ) -> Fixture {
     let dir = match existing_log {
         Some(_) => None,
@@ -82,7 +81,7 @@ async fn fixture_at(
     // fixture 要能组装四档，所以这里给一份「可用」的状态；它不会被真跑 —— 这些测试里的
     // 调用都是文件工具。
     let mut config = SessionConfig::new("fake-model");
-    config.sandbox = sandbox_available();
+    config.sandbox = sandbox;
 
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider.clone()),
@@ -201,6 +200,29 @@ async fn cycling_moves_the_policy_and_writes_nothing_to_the_stream() {
 }
 
 #[tokio::test]
+async fn the_cycle_skips_workspace_when_there_is_no_sandbox() {
+    // 组装期已经拒过这一档一次（`workspace_needs_a_sandbox`），而 `Shift+Tab` 是它的
+    // 第二个入口：没有沙箱的机器上，这个手势不能把会话切进一个「看起来在保护、实际有一个
+    // 大洞」的档位（`.scratch/workspace-mode/spec.md` §6）。
+    let fixture = fixture_with_sandbox(
+        vec![],
+        Mode::Ask,
+        Some(Arc::new(AlwaysAllow)),
+        fs_agent::config::SandboxSettings::off(),
+    )
+    .await;
+
+    assert_eq!(
+        fixture.harness.mode_cycle().cycle(),
+        Mode::Auto,
+        "`workspace` 被跳过，直接走到 `auto`"
+    );
+    assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Readonly);
+    assert_eq!(fixture.harness.mode_cycle().cycle(), Mode::Ask);
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_continue_returns_to_the_configured_mode() {
     // 模式熬不过一次续接，因为它不在流里：重新打开的会话
     // 跑在配置里的那一档上（spec §12）。
@@ -214,6 +236,7 @@ async fn a_continue_returns_to_the_configured_mode() {
         Mode::Auto,
         Some(Arc::new(AlwaysAllow)),
         Some(&log_path),
+        sandbox_available(),
     )
     .await;
     assert_eq!(resumed.harness.mode(), Mode::Auto);

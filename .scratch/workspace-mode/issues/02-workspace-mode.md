@@ -52,7 +52,10 @@ Blocked by: 01
   按读/写分支（读看旋钮、写看档位）。门放行一个越界目标之后，循环把那一次调用的
   `SessionPaths` 按方向放宽、重新解析一次事实 —— 门看到的是越界，工具拿到的是真正的目标。
   组装期（`lib.rs`）在 `[sandbox] mode = "off"` 或探测不可用时拒绝 `workspace` 档，文案给
-  两条出路。钉住旧地板的测试改成 `the_path_limit_is_a_deny_floor_in_every_mode_but_workspace`。
+  两条出路；**运行期的 `Shift+Tab` 是这一档的第二个入口**，所以没有可用沙箱时模式循环也
+  **跳过**它（`ask` 直接走到 `auto`）—— 两处共用同一个判据（`sandbox_unavailable_reason`）。
+  `outside_read` 是策略级的旋钮，执行者（`agent/executor.rs`）与讨论者一样沿用派发者的值，
+  否则同一场会话里讨论者读得到区外、执行者读不到。钉住旧地板的测试改成 `the_path_limit_is_a_deny_floor_in_every_mode_but_workspace`。
   文档：新增 `docs/permissions.md`（并进 `check-language.py` 的 `DOCS_MIN_RATIO`，实测 35.3%
   收到 33），README 安全模型与「这一版不做」、`docs/credentials.md`、`docs/bash.md`、
   `docs/sandbox.md`、`CONTEXT.md`（新词条「升级（Escalation）」与「区外读」、四档）、

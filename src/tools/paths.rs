@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::permissions::Direction;
@@ -175,17 +175,7 @@ fn lexical_absolute(path: &Path) -> PathBuf {
             .unwrap_or_else(|_| PathBuf::from("/"))
             .join(path)
     };
-    let mut out = PathBuf::new();
-    for component in base.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
+    crate::permissions::fold(&base)
 }
 
 /// 每条路径一把锁，外加一把工作区级的锁，由进程里每一个写入者共用。

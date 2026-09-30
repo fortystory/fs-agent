@@ -36,10 +36,10 @@ Blocked by: —
    - 有 `escalation` 且档位是 `readonly` → `Deny`（那一档连跑都不让，谈不上放开沙箱）；
    - 有 `escalation` 且声明的路径落在**遮罩目录或保护路径**里 → `Deny`，理由写清「这一条是写死的安全默认，没有任何通道放宽」；
    - 其余 → `Ask`，**一次**。批准 = 这次调用多一条可写根；拒绝 = 终局。
-4. **写死的边界判据只有一份**：`tools/sandbox.rs` 提供一个纯函数（形如 `sealed(path, cwd, masks) -> bool`），覆盖遮罩目录（`SandboxSettings.masks`）与保护路径（`cwd` 下的 `.git/config`、`.git/hooks`、存在的 `.env` 家族，`.example` / `.sample` / `.template` 除外）。权限门用它，**不要抄第二份清单**——保护路径那套口径在 `permissions::is_env_file` 与 `sandbox::protected_paths` 之间已经共享过一次。
+4. **写死的边界判据只有一份**：`tools/sandbox.rs` 提供一个纯函数（形如 `sealed(path, cwd, masks) -> bool`），覆盖遮罩目录（`SandboxSettings.masks`）与保护路径（`cwd` 下的 `.git/config`、`.git/hooks`，以及 `.env` 一族 —— **按名字判**，与权限门的地板同一口径；`.example` / `.sample` / `.template` 除外）。权限门用它，**不要抄第二份清单**——保护路径那套口径在 `permissions::is_env_file` 与 `sandbox::protected_paths` 之间已经共享过一次。
 5. **批准之后怎么跑**：`AllowedCall` 加 `sandbox_grants: Vec<PathBuf>`；派发时构造的 `Sandbox` 把这批路径追加进 `SandboxSpec.writable_roots`（`Sandbox` 是每次调用现构造的）。粒度就是**声明的那个路径本身**——文件就绑文件、目录就绑目录，**不做父目录提升**。
 6. **只这一次、只重一次**：批准只对这一次调用生效，不进任何规则、不写配置文件、不进会话状态；同一条命令第二次被拒之后照常返回命令结果（模型自己负责换做法或报告受阻，运行时不做计数——话术在描述里）。
-7. **弹窗**（走既有的 `Asker` 通道）：在现有三行之上加「理由」与「要放开的路径」两行，命令行仍是**最后一行**；发起者不是主会话时，第一行点名说话人（`执行者 <id>` / `讨论者 <id>`）。plain 前端同构。
+7. **弹窗**（走既有的 `Asker` 通道）：加上三行 —— 「被沙箱拒绝，申请写工作区之外」、理由、要放开的路径 —— 命令行仍是**最后一行**；发起者不是主会话时，第一行点名说话人（`执行者 <id>` / `讨论者 <id>`）。plain 前端同构。
 8. **事件流**：复用 `PermissionAsked` / `PermissionDecided`，`reason` 里写明这是一次升级、以及要放开的路径。不新增事件类型。
 
 ## 测试
@@ -53,7 +53,7 @@ Blocked by: —
 ## 验收
 
 - [ ] `cargo test`、`cargo clippy --all-targets`、`python3 scripts/check-language.py` 全过。
-- [ ] 真机（手工清单加一节）：真 `bwrap` 下 `echo x > ~/.npm/probe` 被拒 → 带 `escalation` 重试并批准 → 同一条命令成功、宿主上真的出现那个文件。
+- [ ] 真机（手工清单加一节）：真 `bwrap` 下 `echo x > ~/.npm/probe` 被拒 → 带 `escalation` 重试并批准（声明的路径必须已经存在）→ 同一条命令成功、宿主上真的出现那个文件。
 - [ ] `~/.ssh/authorized_keys` 与工作区里 `.env` 的升级被拒（不问、批不了）。
 - [ ] `bash` 的描述里那几句话在（逐字断言）。
 

@@ -17,7 +17,7 @@ use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
 use fs_agent::tools::{builtin, PathLocks};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
-use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
+use support::{sandbox_available, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
     harness: Harness,
@@ -46,17 +46,6 @@ impl Fixture {
             })
             .collect()
     }
-}
-
-/// 一份「沙箱可用」的会话配置：文件工具不跑命令，所以这里只要状态是可用就够 ——
-/// `workspace` 档的存在与否只问这一件事（spec §6）。
-fn sandbox_available() -> SandboxSettings {
-    let mut settings = SandboxSettings::off();
-    settings.mode = SandboxMode::Bwrap;
-    settings.availability = SandboxAvailability::Available {
-        bwrap: PathBuf::from("/bin/true"),
-    };
-    settings
 }
 
 /// 一份脚手架。回复在**工作区建好之后**才构造 —— 测试要拿工作区里（或它旁边）的真实路径

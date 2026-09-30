@@ -803,7 +803,10 @@ fn reaches_root_or_home(folded: &Path, home: Option<&Path>) -> bool {
 
 /// 词法地折掉 `.` 与 `..`。权限门没法 canonicalize —— 它是纯的 —— 而词法折叠正是
 /// 那个不碰磁盘就能逮住 `/home/u/../..` 的东西。
-fn fold(path: &Path) -> PathBuf {
+///
+/// crate 内可见，是因为它只有一份：`rm` 断路器、升级路径的归一化、以及会话 cwd 的字面
+/// 绝对化都用它，谁也不必再抄一遍。
+pub(crate) fn fold(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {

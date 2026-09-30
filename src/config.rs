@@ -979,7 +979,10 @@ fn resolve_sandbox(raw: Option<&RawSandbox>, env: &EnvMap) -> Result<SandboxSett
 }
 
 /// 展开配置里写下的 `~` / `~/…`；别的写法原样返回。
-fn expand_home(raw: &str, home: Option<&Path>) -> PathBuf {
+///
+/// crate 内可见：`[sandbox] writable_roots` 与升级申请里的路径都要同一个展开，而两份
+/// `~` 处理迟早会漂开。
+pub(crate) fn expand_home(raw: &str, home: Option<&Path>) -> PathBuf {
     if raw == "~" {
         return home
             .map(Path::to_path_buf)

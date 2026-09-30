@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::config::{SandboxAvailability, SandboxMode, SandboxSettings};
-use crate::permissions::is_env_file;
+use crate::permissions::{fold, is_env_file};
 
 use super::tool::ToolError;
 
@@ -396,16 +396,7 @@ pub fn sealed(path: &Path, cwd: &Path, masks: &[PathBuf]) -> bool {
 /// 常常正是一个还没建的目录（`~/.npm`）。
 pub fn escalation_path(raw: &Path, cwd: &Path, home: Option<&Path>) -> PathBuf {
     let expanded = match raw.to_str() {
-        Some("~") => home
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| raw.to_path_buf()),
-        Some(text) => match text.strip_prefix("~/") {
-            Some(rest) => match home {
-                Some(home) => home.join(rest),
-                None => raw.to_path_buf(),
-            },
-            None => raw.to_path_buf(),
-        },
+        Some(text) => crate::config::expand_home(text, home),
         None => raw.to_path_buf(),
     };
     absolute(&expanded, cwd)
@@ -422,21 +413,6 @@ fn absolute(path: &Path, cwd: &Path) -> PathBuf {
         Ok(resolved) => resolved,
         Err(_) => fold(&joined),
     }
-}
-
-/// 词法地折掉 `.` 与 `..`。
-fn fold(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 /// 工作区顶层**存在的** `.env` 家族文件，按名字排序（于是输出是确定的）。

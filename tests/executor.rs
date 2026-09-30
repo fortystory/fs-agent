@@ -1500,3 +1500,66 @@ async fn an_executor_already_running_finishes_even_when_the_allowance_is_gone() 
 
     fixture.harness.shutdown().await;
 }
+
+#[tokio::test]
+async fn an_executor_inherits_the_outside_read_knob() {
+    // `outside_read` 是一条**策略级**的旋钮、与档位正交（`.scratch/workspace-mode` 的
+    // spec §2）：执行者沿用派发者的立场，所以父会话把区外读放开之后，`task` 派出的执行者
+    // 也读得到 —— 否则同一场会话里讨论者读得到、执行者读不到。
+    let policy = Policy::for_mode(Mode::Ask).with_outside_read(Decision::Allow);
+    let mut fixture = fixture(
+        &[("../outside/secret.txt", "peek")],
+        vec![
+            calls(
+                "call-task",
+                "task",
+                serde_json::json!({"brief": "读一下 ../outside/secret.txt 再报告"}),
+            ),
+            calls(
+                "call-read",
+                "read_file",
+                serde_json::json!({"file_path": "../outside/secret.txt"}),
+            ),
+            Reply::text("EXECUTOR REPORT: 文件里写的是 peek"),
+            Reply::text("执行者读到了"),
+        ],
+        SessionConfig::new("fake-model"),
+        policy,
+        Some(Arc::new(AlwaysAllow)),
+    )
+    .await;
+
+    fixture.harness.run_turn("去读它").await.unwrap();
+
+    let events = fixture.events();
+    let read_id = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCallStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } if tool_name == "read_file" => Some(tool_call_id.as_str().to_owned()),
+            _ => None,
+        })
+        .expect("执行者调了 read_file");
+    let (ok, message) = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCallCompleted {
+                tool_call_id,
+                ok,
+                output,
+                error,
+                ..
+            } if tool_call_id.as_str() == read_id => Some((
+                *ok,
+                output.clone().or_else(|| error.clone()).unwrap_or_default(),
+            )),
+            _ => None,
+        })
+        .expect("read_file 拿到了结果");
+
+    assert!(ok, "执行者继承了派发者的区外读裁决：{message}");
+    assert!(message.contains("peek"), "{message}");
+}
