@@ -73,3 +73,11 @@ Blocked by: —
   测试：`tests/permission_gate.rs` 的升级矩阵、`tests/sandbox.rs` 的 `sealed()` 纯函数与假
   `bwrap` 全链路（被拒 → 带 `escalation` 重试 → 弹一次问 → argv 多一条 `--bind`）、参数形状
   与工具描述的逐字断言。真机那一条记在 `docs/tui-manual-checklist.md` ⑲。
+- 双轴 code review（Standards + Spec，fixed point `ab9b543`）之后的收口在 `df00dd4`：执行者
+  沿用派发者的 `outside_read`、模式循环在没有可用沙箱时跳过 `workspace` 档、`docs/sandbox.md`
+  里那条过时的「下一个 effort」改掉、几处重复收拢、弹窗行数与 `.env` 判据的措辞对齐。
+- **未跑的那一条如实记在这里**：验收里的**真机**那一格没有勾 —— 这台机器上没有 provider key，
+  所以 `docs/tui-manual-checklist.md` ⑲ 的九个步骤只写好了、没有逐条手工跑过。自动化那一侧
+  （`cargo test` 821 passed、`clippy`、`check-language`、`tui-startup-check`）全绿，假 `bwrap`
+  的端到端链路与纯函数矩阵都在测试里。
+
