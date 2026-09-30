@@ -186,7 +186,7 @@ fn an_idle_ctrl_c_quits_and_a_working_one_cancels() {
     idle.key(Key::CtrlC);
     assert!(idle.should_quit());
 
-    // 一次在飞的运行反着来：同一个键是取消手势。
+    // 一次进行中的运行反着来：同一个键是取消手势。
     let mut state = state_running();
     state.key(Key::CtrlC);
     assert!(!state.should_quit());
@@ -331,7 +331,7 @@ fn a_tool_call_is_painted_by_its_result_and_annotated_by_its_hook() {
 
     assert!(
         transcript.push(RenderEvent::Logged(call)).is_empty(),
-        "在飞的调用还没画"
+        "进行中的调用还没画"
     );
     let ready = transcript.push(RenderEvent::Logged(result));
     let tool = ready
@@ -942,7 +942,7 @@ fn submitting_trims_the_ends_and_keeps_the_lines_between_them() {
 
 #[test]
 fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
-    // 键位表的顺序就是 spec 的顺序：一个在飞的回合让 `Esc` 成为取消
+    // 键位表的顺序就是 spec 的顺序：一个进行中的回合让 `Esc` 成为取消
     // 手势，而一个待答的问题改不了这一点（spec §6）。这个问题
     // 等它自己的某个键 —— `Ctrl-C` 是另一条出路。
     let mut state = state_running();
@@ -965,7 +965,7 @@ fn escape_while_working_is_the_cancel_gesture_even_with_a_question_up() {
 
 #[test]
 fn a_cancelled_run_takes_its_unanswered_question_with_it() {
-    // 这条测试钉住的 bug：一次运行在飞的时候 `Esc` 是取消手势，
+    // 这条测试钉住的 bug：一次运行进行中的时候 `Esc` 是取消手势，
     // 不是答案，所以运行留着的问题从没被作答 —— 而循环那次询问随抬起它的
     // 那次运行一起死掉。前端不管怎样都留着覆盖层，于是下一次按键
     // 交给了**没人在等**的问题：它静默失败，

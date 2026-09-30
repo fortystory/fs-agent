@@ -396,7 +396,7 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     // 比任何提示都窄：剩下的只有出路。
     assert_eq!(wording::status_line(true, 8), wording::EXIT_HINT_BUSY);
     assert_eq!(wording::status_line(false, 3), wording::EXIT_HINT_IDLE);
-    // 只有空闲行会宣传 `ctrl-d`：一次运行在飞的时候它什么都不做，
+    // 只有空闲行会宣传 `ctrl-d`：一次运行进行中的时候它什么都不做，
     // 所以点它的名正是提示行绝不能做的那件事。
     assert!(
         !wording::status_line(true, 200).contains("ctrl-d"),
@@ -410,7 +410,7 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
 
 #[test]
 fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
-    // 没有一行在被读（一次性的 `discuss`，或者一个在飞的回合），
+    // 没有一行在被读（一次性的 `discuss`，或者一个进行中的回合），
     // 所以 `enter 发送` 与交互循环的模式手势都不在候选里。
     let wide = wording::viewer_status_line(false, 200);
     assert_eq!(
@@ -429,7 +429,7 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
         "esc 取消 · ctrl-c/ctrl-d 退出"
     );
 
-    // 忙就读作忙 —— 而一次运行在飞的时候 `ctrl-d` 被忽略，所以
+    // 忙就读作忙 —— 而一次运行进行中的时候 `ctrl-d` 被忽略，所以
     // 查看器行回到朴素的 `ctrl-c 退出`。
     assert!(wording::viewer_status_line(true, 200).starts_with("工作中 · "));
     assert!(!wording::viewer_status_line(true, 200).contains("ctrl-d"));

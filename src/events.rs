@@ -716,7 +716,7 @@ pub fn pending_tool_calls(events: &[Event]) -> Vec<ToolCallId> {
 
 /// 查询：`speaker` 的哪些 `tool_call` 还没有结果？
 ///
-/// 不变量 2 是按行动者算的。两个讨论者同时在飞时，一个会话级的查询会把对方没跑完的
+/// 不变量 2 是按行动者算的。两个讨论者同时进行中时，一个会话级的查询会把对方没跑完的
 /// 调用读成自己的，然后以一个与它毫不相干的理由拒绝调 provider。
 pub fn pending_tool_calls_of(events: &[Event], speaker: &SpeakerId) -> Vec<ToolCallId> {
     pending_of(events, Some(speaker))

@@ -97,7 +97,7 @@ impl FakeProvider {
     /// 在 `barrier` 的每一方都调用过 `send` 之前
     /// 不作答的假 provider。
     ///
-    /// 测试就是这样证明两个回合同时在飞的：一个把它们一个接一个跑的循环
+    /// 测试就是这样证明两个回合同时进行中的：一个把它们一个接一个跑的循环
     /// 会卡在第一次 `send` 上、撞上会合超时，
     /// 而不是安安静静地产出一条流。
     pub fn meeting_at(replies: Vec<Reply>, barrier: Arc<Barrier>) -> Self {
@@ -195,7 +195,7 @@ impl Provider for FakeProvider {
             }
             Reply::Stall(opened, events) => {
                 // 在循环有机会 poll 之前先打声招呼：测试醒来时发的
-                // 那个手势，仍然落在这一条流在飞的期间。
+                // 那个手势，仍然落在这一条流进行的时候。
                 opened.notify_one();
                 let head = stream::iter(events.into_iter().map(Ok));
                 Ok(Box::pin(head.chain(stream::pending())))

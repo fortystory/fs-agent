@@ -82,7 +82,7 @@ async fn with_no_front_end_the_answer_is_the_non_acting_one() {
 
 #[tokio::test]
 async fn a_gesture_reaches_the_loop_without_being_asked_for() {
-    // Esc 与 Shift+Tab 是前端自己的日程：一个回合在飞的时候，
+    // Esc 与 Shift+Tab 是前端自己的日程：一个回合进行中的时候，
     // 循环 select 的正是这条通道。
     let (_handle, port, mut events) = console();
     port.emit(FrontEndEvent::Cancel);

@@ -1056,7 +1056,7 @@ async fn interactive_loop(
         // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
         // 交之前什么都没在跑，而前端从第一帧起就得这么读 —— 包括在这个循环第一次提问之前。
         console.set_running(false);
-        // 回合之间循环只在等一次提示；这时候到达的手势在没有回合在飞的情况下处理掉。
+        // 回合之间循环只在等一次提示；这时候到达的手势在没有回合进行中的情况下处理掉。
         let line = loop {
             tokio::select! {
                 line = console.prompt() => break line,

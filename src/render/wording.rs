@@ -967,7 +967,7 @@ pub fn renderer_dropped(dropped: u64) -> String {
     format!("渲染器丢弃了 {dropped} 个事件")
 }
 
-/// 状态词：有没有一个回合在飞。
+/// 状态词：有没有一个回合进行中。
 pub fn status_word(busy: bool) -> &'static str {
     if busy {
         "工作中"
@@ -991,11 +991,11 @@ const KEY_HINTS: [&str; 5] = [
 /// 键在这里意思相同，而窄终端就只有那么多列（票 06 §4）。
 pub const EXIT_HINT_IDLE: &str = "ctrl-c/ctrl-d 退出";
 
-/// 一次运行在飞时的出口：`Ctrl-C` 取消，而 `Ctrl-D` 刻意被忽略 —— 提示一个什么都不做
+/// 一次运行进行中时的出口：`Ctrl-C` 取消，而 `Ctrl-D` 刻意被忽略 —— 提示一个什么都不做
 /// 的键，是提示行绝不能做的那件事（票 06 §4）。
 pub const EXIT_HINT_BUSY: &str = "ctrl-c 退出";
 
-/// 前端**没有**在读行时显示的提示：一次性 `discuss`，或者交互式会话里一个回合在飞的那
+/// 前端**没有**在读行时显示的提示：一次性 `discuss`，或者交互式会话里一个回合进行中的那
 /// 一段。
 ///
 /// 只有那时键盘真会做的事 —— 停下这次运行，以及读回它产出的东西。没有 `enter 发送`
@@ -1221,7 +1221,7 @@ pub fn identity() -> String {
 /// 增删一个条目，会让标记的循环与这一个错开。
 pub const DASH_FALL: [char; 5] = ['▀', '▀', '█', '▄', '▄'];
 
-/// 短横**落到** `phase` 那一步之后的身份行 —— 一次运行在飞时左栏那行文字显示的东西。
+/// 短横**落到** `phase` 那一步之后的身份行 —— 一次运行进行中时左栏那行文字显示的东西。
 ///
 /// 它是**从** [`identity`] 建出来的、而不是在它旁边另建一个，于是 crate 的名字与版本只有
 /// 一个拼写：`scripts/tui-startup-check.py` 与紧邻这个函数的测试都锚在那条字符串上，而在
@@ -1241,7 +1241,7 @@ pub fn identity_falling(phase: usize) -> String {
 ///
 /// 标记拼出 `fs-agent` —— 前面是分叉合成的 `fs`（「两叉一茎」，见 `CONTEXT.md`），后面
 /// 跟程序名 —— 像素网格是维护者挑的那一个。中间那条短横是它八个字形单元里的第三个，也是
-/// 画家唯一自己画的那个字形：一次运行在飞时它往下落
+/// 画家唯一自己画的那个字形：一次运行进行中时它往下落
 /// （`.scratch/tui-input-pulse/spec.md` §2）。
 pub fn logo_lines() -> [&'static str; 5] {
     [

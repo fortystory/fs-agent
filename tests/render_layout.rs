@@ -394,7 +394,7 @@ fn hint_items(width: u16) -> Vec<String> {
     hint_items_of(width, &mut state)
 }
 
-/// 同上，但有一次运行在飞：出口变成 `ctrl-c 退出`，短七列，
+/// 同上，但有一次运行进行中：出口变成 `ctrl-c 退出`，短七列，
 /// 120 列下把那个状态词换了回来。
 fn hint_items_busy(width: u16) -> Vec<String> {
     let mut state = state();
@@ -542,7 +542,7 @@ fn the_mark_does_not_move_while_a_run_is_in_flight() {
     // 票 08 把下落的短横关掉了：标记又静止了，这正是维护者在真终端上
     // 看过之后要的。会让它动的那些代码留着（并在它所在之处继续单测），
     // 所以这里是把它按住的断言 ——
-    // 一次运行在飞时逐格打出来的帧必须完全一样。
+    // 一次运行进行中时逐格打出来的帧必须完全一样。
     // 假如横条真动过（上移一行或下移一行），那一格会长的样子。
     let moved = [
         ["▀▀▀▀", "    ", "    ", "    ", "    "],
@@ -639,7 +639,7 @@ fn the_prompt_is_an_angle_bracket_that_holds_still_while_you_type() {
 
 #[test]
 fn the_prompts_colour_walks_the_wheel_while_a_run_is_in_flight() {
-    // 那条规矩的另一半：一旦有回合在飞颜色就动起来，而且它的
+    // 那条规矩的另一半：一旦有回合进行中颜色就动起来，而且它的
     // 任何两帧都不穿同一个颜色。
     let mut state = state();
     let resting = prompt_cell(&mut state).1;
@@ -2854,7 +2854,7 @@ fn install_catalog(state: &mut TuiState) {
     state.request(ConsoleRequest::Catalog { entries });
 }
 
-/// 一次在飞的提示请求，好让测试读回一次提交送出去了什么。
+/// 一次进行中的提示请求，好让测试读回一次提交送出去了什么。
 fn awaiting_line(state: &mut TuiState) -> tokio::sync::oneshot::Receiver<Option<String>> {
     let (reply, line) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Prompt { reply });
@@ -4370,7 +4370,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     );
 
     // **针对这次调用**的权限询问也不拖它：
-    // 调用还在飞的时候叙述就已经画出来了，而调用行照旧
+    // 调用还在进行中的时候叙述就已经画出来了，而调用行照旧
     // 随结果到来。
     let mut asked = state_with_roster(&["kimi"]);
     asked.apply(tool_started(

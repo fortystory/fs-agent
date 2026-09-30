@@ -754,7 +754,7 @@ async fn the_edit_ladder_reports_a_downgraded_match_in_the_event_stream() {
 async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
     // 硬停是累计的，不是按回合的（spec §17）：第一次调用花掉
     // 整个额度，它要的那次工具调用照样留着它那一条结果
-    // —— 在飞的那个单元跑完 —— 随后这个回合就停了，
+    // —— 进行中的那个单元跑完 —— 随后这个回合就停了，
     // 而不是再开一次 provider 调用。
     let limit = 1_000;
     let mut fixture = fixture(
@@ -809,7 +809,7 @@ async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
             ))
             .count(),
         1,
-        "当时在飞的那次调用留住了它那一条结果"
+        "当时进行中的那次调用留住了它那一条结果"
     );
 
     fixture.harness.shutdown().await;

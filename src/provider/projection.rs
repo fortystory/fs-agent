@@ -345,7 +345,7 @@ impl OtherBlock {
     }
 }
 
-/// 正在发言的那一位在飞的 assistant 消息与它的工具结果。
+/// 正在发言的那一位进行中的 assistant 消息与它的工具结果。
 struct PendingAssistant {
     content: Option<String>,
     reasoning_content: Option<String>,

@@ -16,7 +16,7 @@
 //! [`executor`] 是本层的子模块，而不是自己的一道边界：跑一个执行者意味着驱动一个回合，所以
 //! 它是控制流（spec §1、§16）。
 //!
-//! [`cancel`] 是那个能提前停下回合的手势的管路（spec §6）：provider 流在飞时、工具在跑时，
+//! [`cancel`] 是那个能提前停下回合的手势的管路（spec §6）：provider 流进行中时、工具在跑时，
 //! 回合 select 它；执行者持有同一套管路，于是一次手势能到达它下面整条链。
 
 mod cancel;
@@ -59,7 +59,7 @@ use executor::{spawned_executors, ExecutorPort};
 /// 单 agent 回合看到全部。讨论轮次里的一个回合看到截止到该轮 `RoundStarted`（含）的一切，
 /// 加上它自己更晚的事件 —— 永远看不到同一轮里另一个讨论者的事件（spec §15）。
 ///
-/// 这是**结构性**的切分，不是对时序的指望。两个讨论者同时在飞，所以「两边都还没作答」是一场
+/// 这是**结构性**的切分，不是对时序的指望。两个讨论者同时进行中，所以「两边都还没作答」是一场
 /// 快的假 provider 立刻就会输掉的竞态；把流切在一个 `seq` 上，是唯一一种无论两个回合如何
 /// 交错都成立的独立性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,7 +271,7 @@ pub fn record_context_injection_from(
 /// `scope` 是这个回合能看到多少流。它只会*去掉*另一个讨论者同轮的事件，所以单 agent 回合传
 /// [`TurnScope::Whole`]，看到的正是它一向看到的流。
 ///
-/// `cancelled` 是这个回合对会话取消手势的视图（spec §6）。provider 流在飞时、工具在跑时都会
+/// `cancelled` 是这个回合对会话取消手势的视图（spec §6）。provider 流进行中时、工具在跑时都会
 /// select 它，它也会被克隆进这个回合派发的每一个执行者，于是一次手势也能停下它下面的链。
 pub async fn run_turn(
     session: &mut Session,
@@ -301,12 +301,12 @@ pub async fn run_turn(
     };
 
     loop {
-        // 每次迭代一张快照：日志与另一个在飞的讨论者共享，所以对它的每一次读都是快照而不是
+        // 每次迭代一张快照：日志与另一个进行中的讨论者共享，所以对它的每一次读都是快照而不是
         // 借用。
         let events = scoped_events(session, speaker, scope);
 
         // 不变量 2：有挂着的 tool_call 就说明日志还欠一个结果，所以绝不能调用 provider。
-        // 作用域限于这个发言者：两个讨论者同时在飞时，另一个没做完的调用不是这个回合的事 ——
+        // 作用域限于这个发言者：两个讨论者同时进行中时，另一个没做完的调用不是这个回合的事 ——
         // 把它当成自己的会让这个回合以一个跟它毫不相干的错误收场。
         if !pending_tool_calls_of(&events, speaker).is_empty() {
             return end_turn(session, render, speaker, StopReason::Error, last_text);
@@ -401,13 +401,13 @@ pub async fn run_turn(
             cache_key: Some(session.id().as_str().to_owned()),
         };
 
-        // 请求自己有可能仍在飞 —— 适配器只有在传输层作答之后才交回流 —— 所以这次发送也可以
+        // 请求自己有可能仍在进行中 —— 适配器只有在传输层作答之后才交回流 —— 所以这次发送也可以
         // select：一次手势不该被迫等一条卡住的连接。
         let mut cancel = cancelled.clone();
         let sent = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                render.diagnostic("模型调用在飞时，这个回合被取消了");
+                render.diagnostic("模型调用进行中时，这个回合被取消了");
                 return end_turn(session, render, speaker, StopReason::Aborted, last_text);
             }
             sent = provider.send(request) => sent,
@@ -492,11 +492,11 @@ pub async fn run_turn(
             }
         }
 
-        // 一条被中断的流在这里被丢掉，和这个回合一起：对真实适配器来说，「停下在飞的
+        // 一条被中断的流在这里被丢掉，和这个回合一起：对真实适配器来说，「停下进行中的
         // provider 流」就是这个意思，也正是收到一半的文本留在日志之外的原因 —— 一个从没到
         // `[DONE]` 的回合没有产出任何完成的单位（spec §6）。
         if aborted {
-            render.diagnostic("模型流在飞时，这个回合被取消了");
+            render.diagnostic("模型流进行中时，这个回合被取消了");
             return end_turn(session, render, speaker, StopReason::Aborted, text);
         }
 
@@ -544,7 +544,7 @@ pub async fn run_turn(
             match process_call(session, &context, &mut executors_spawned, call).await? {
                 Disposition::Finished => {}
                 Disposition::Deferred(call) => deferred.push(*call),
-                // 一次手势停下了这个回合（前置钩子的 `Stop`，或者一次抓住调用在飞时的取消）。
+                // 一次手势停下了这个回合（前置钩子的 `Stop`，或者一次抓住调用进行中时的取消）。
                 // 那些已经启动并推迟的调用仍然各欠恰好一个结果；它们从没跑过，所以说出来。
                 Disposition::Stopped(why) => {
                     close_deferred_calls(session, render, speaker, deferred, why)?;
@@ -574,11 +574,11 @@ const CANCELLED_BEFORE_RUN: &str = "这个回合被取消了：工具没有跑";
 /// 出去，所以工作区没被它碰过。
 const BUDGET_NO_NEW_EXECUTOR: &str =
     "会话 token 额度已用尽：不再派发新的执行者。已经在跑的活让它跑完。";
-/// 一次抓住调用在飞时的取消：工具那个 future 被 drop 了，所以它有没有生效是未知的 —— 与
+/// 一次抓住调用进行中时的取消：工具那个 future 被 drop 了，所以它有没有生效是未知的 —— 与
 /// 崩溃恢复那条结果携带的是同一种诚实。
 const CANCELLED_IN_FLIGHT: &str =
-    "这个调用在飞时回合被取消了，所以它有没有生效是未知的。它没有被重跑；在依赖任何一种结果之前先检查\
-     工作区。";
+    "这个调用进行中时回合被取消了，所以它有没有生效是未知的。它没有被重跑；\
+     在依赖任何一种结果之前先检查工作区。";
 
 /// 钩子与权限门都说过话之后，循环对一次调用必须做什么。
 enum Disposition {
@@ -904,7 +904,7 @@ async fn process_call(
                         })));
                     }
                     // ④ 派发，原地：碰工作区的调用在它一向所在的地方、按这一批的顺序跑。
-                    //    手势在这里也会被 select，所以一个在飞的工具会被就地丢掉；这次调用
+                    //    手势在这里也会被 select，所以一个进行中的工具会被就地丢掉；这次调用
                     //    仍然保留它那一个必需的结果，在下面合成（spec §6）。
                     let tools = session.shared_tools();
                     let mut cancel = cancelled.clone();
@@ -1482,7 +1482,7 @@ pub async fn run_single_shot(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                render.diagnostic("合成器的流在飞时，它的调用被取消了");
+                render.diagnostic("合成器的流进行中时，它的调用被取消了");
                 // 没有 `[DONE]` 就没有产出：丢掉这条流就是手势在这里的全部效果。
                 return Ok(None);
             }

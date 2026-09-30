@@ -445,7 +445,7 @@ fn tool_choice_json(choice: &ToolChoice) -> Value {
 
 /// 一条响应的流式累加器：字节进，完成单元出。
 ///
-/// 它只持有在飞的字节与当前这条请求的部分工具调用 —— 这是传输状态，不是会话状态；`Session` 仍是
+/// 它只持有进行中的字节与当前这条请求的部分工具调用 —— 这是传输状态，不是会话状态；`Session` 仍是
 /// 唯一持有会话状态的值。同一批字节总是产出同样的单元，这正是测试直接驱动它的原因。
 ///
 /// 用 [`StreamDecoder::push`] 喂它原始响应 chunk；字节流结束时调 [`StreamDecoder::finish`]。在
@@ -828,7 +828,7 @@ pub fn classify_status(status: u16, body: &str, retry_after: Option<Duration>) -
         402 => ProviderError::QuotaExhausted { detail },
         403 => {
             if looks_like_concurrency(&detail) {
-                // 并发请求上限在在飞的请求结束后就会放开，所以它的行为像限流。
+                // 并发请求上限在进行中的请求结束后就会放开，所以它的行为像限流。
                 ProviderError::RateLimited { retry_after }
             } else if looks_like_quota(&detail) {
                 ProviderError::QuotaExhausted { detail }

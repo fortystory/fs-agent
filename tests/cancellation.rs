@@ -1,6 +1,6 @@
 //! 取消的传播（spec §6，票 13）。
 //!
-//! 一个手势 —— 前端的 Esc —— 停下那个正在飞的回合，
+//! 一个手势 —— 前端的 Esc —— 停下那个进行中的回合，
 //! 并**向下**走到该回合派出的那些执行者。手势本身不是事件；
 //! 可断言的契约看到的只有一次停止留下的形状：
 //! `TurnEnded { Aborted }`、每条已经开始过的
@@ -113,7 +113,7 @@ fn calls(id: &str, name: &str, args: serde_json::Value) -> Reply {
 
 /// 一个永远不会自己返回的工具。
 ///
-/// 「取消一个正在飞的工具」用的器具：注册表是在唯一那个组装接缝上
+/// 「取消一个进行中的工具」用的器具：注册表是在唯一那个组装接缝上
 /// 注入的一个值，所以测试工具与内建工具是从同一处挂上去的；
 /// 工具会宣告自己进场，于是测试在一个确定的时刻按下，
 /// 而不是靠睡等。
@@ -168,7 +168,7 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
     let outcome = {
         let turn = fixture.harness.run_turn("think out loud");
         tokio::pin!(turn);
-        // 在流真的在飞的时候取消，不是它开之前、
+        // 在流真的进行中的时候取消，不是它开之前、
         // 也不是它结束之后。
         tokio::select! {
             _ = opened.notified() => {}
@@ -369,11 +369,14 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
     assert!(!task_ok);
     assert!(task_text.contains("工具没有跑"), "{task_text:?}");
 
-    // 真正在飞的那条调用说的是另一回事：工具的 future
+    // 真正进行中的那条调用说的是另一回事：工具的 future
     // 被丢掉了，所以工作区可能变了、也可能没变。
     let (stall_ok, stall_text) = result_of(&events, "call-stall");
     assert!(!stall_ok);
-    assert!(stall_text.contains("在飞时回合被取消了"), "{stall_text:?}");
+    assert!(
+        stall_text.contains("进行中时回合被取消了"),
+        "{stall_text:?}"
+    );
 
     // 被延后的那个执行者从没被派出过……
     assert!(
@@ -492,7 +495,7 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
     let opened = Arc::new(Notify::new());
     // 名册顺序在这里要紧，而它就是 `join_all` 轮询的顺序：
     // 第一个讨论者正常作答，整个回合在第一次轮询里就走完，
-    // 于是手势到来时，在飞的只剩另一侧那个停住的
+    // 于是手势到来时，进行中的只剩另一侧那个停住的
     // 执行者这一件事。
     let mut fixture = discussion_fixture(
         vec![answered("KIMI 正文", "先做甲")],

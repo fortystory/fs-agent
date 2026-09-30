@@ -743,7 +743,7 @@ async fn an_executors_edit_leaves_an_undo_snapshot_in_the_one_session_directory(
 
 #[tokio::test]
 async fn two_task_calls_in_one_batch_run_at_once() {
-    // 两次执行者调用必须在飞的时候碰头：屏障只有在第二个
+    // 两次执行者调用必须都在进行中的时候碰头：屏障只有在第二个
     // 到达时才放行，而串行的派发器会先撞上自己的
     // 超时。
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
