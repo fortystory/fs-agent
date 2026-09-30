@@ -29,12 +29,20 @@ use super::{append_event, run_turn, CancelObserver, TurnScope};
 ///
 /// 与讨论者的协议指令一样，它从不进事件流：它是流不携带的那个请求输入之一（spec §15）。
 /// 它不含任何讨论协议 —— 执行者不辩论，它干活。
-pub(super) const EXECUTOR_IDENTITY: &str =
-    "你是一个执行者。另一个 agent 通过 `task` 工具把你派到这个仓库里，\
+const EXECUTOR_IDENTITY: &str = "你是一个执行者。另一个 agent 通过 `task` 工具把你派到这个仓库里，\
      做一件工作，而你有自己的上下文：本仓库的规则，加上你的简报 —— 它就是最后那条 user 消息。没有人\
      看得见你的步骤 —— 你的工具调用看不见，它们的输出也看不见 —— 所以一直干到任务完成，然后用一份\
      简短报告回答：你做了什么、你发现了什么、以及派发者必须知道的事情。那份报告就是回传的全部。\
      你不能再派发执行者。任务做不了就直说，并解释为什么，不要猜。";
+
+/// 执行者请求里打头的那条 `system` 消息：它的身份，加上那段通用条款。
+///
+/// 拼 [`THINKING_IN_CHINESE`] 的理由与另外三个身份一样：执行者的思考也进流、也进转录的详情
+/// 弹窗（TUI 里那条 `[执行者] ▸ ✓ 思考完成`）。做成函数而不是第二个常量，是因为 `concat!` 只吃
+/// 字面量，而这一句必须只有一处真相。
+pub(super) fn executor_identity() -> String {
+    [EXECUTOR_IDENTITY, "\n\n", super::THINKING_IN_CHINESE].concat()
+}
 
 /// 跑一个嵌套执行者的端口（spec §16）：[`ExecutorSpawner`]，由循环构造、经工具上下文交给
 /// `task`。
@@ -156,7 +164,7 @@ impl ExecutorPort {
             hook: self.hook.clone(),
             home: self.home.clone(),
             skills: Arc::clone(&self.skills),
-            identity: Some(EXECUTOR_IDENTITY.to_owned()),
+            identity: Some(executor_identity()),
         });
 
         // 读集合从空开始，而且两个方向都不流（spec §16）：这条护栏讲的是一个 agent 对工作区

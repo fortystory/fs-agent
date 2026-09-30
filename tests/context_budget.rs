@@ -499,7 +499,7 @@ fn blob_reply(id: &str) -> Reply {
 /// 一份能力表，它的可用输入正好是在被钉住的身份**之外**还有
 /// `usable` 个 token —— 那个身份走在每个请求最前面，也占预算。
 fn caps_with_usable_input(usable: u32) -> ModelCaps {
-    let identity = fs_agent::context::estimate_tokens(fs_agent::agent::agent_identity());
+    let identity = fs_agent::context::estimate_tokens(&fs_agent::agent::agent_identity());
     let mut caps = caps_for("deepseek-flash").unwrap();
     caps.max_output_tokens = 20_000;
     caps.context_window = 20_000 + usable + identity as u32;
@@ -718,7 +718,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
         assert_eq!(
             request.messages.first(),
             Some(&Message::System {
-                content: fs_agent::agent::agent_identity().to_owned(),
+                content: fs_agent::agent::agent_identity(),
                 name: None,
             }),
             "程序的身份走在每个请求最前面"

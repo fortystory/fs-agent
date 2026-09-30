@@ -61,3 +61,17 @@
 **收口时改到的活文档**：`docs/executor.md`（围栏块与那张图里的执行者报告格式）、`docs/adr/0003` 的 reason 引文（加日期注，不假装当年就是中文）、`docs/bash.md` 与 `docs/observability.md`（第 ② 批）、`src/render/wording.rs` 与 `src/render/plain.rs` 里那几处按 ADR 0001 写的注释。README《约定》、`AGENTS.md`、ADR 0001 / 0004 的「后加」一节在护栏那一批就对上。
 
 **没做、也不打算做的**：`.scratch/` 里老票与老 spec 正文中逐字引用旧文案的地方（它们是**当时的记录**，按仓库惯例不重写 —— 谁读到时对照本 ADR 即可）。**留给真机的一件**：模型侧的实际效果（工具声明与描述现在更短）没有实测记录，ADR 0005 的「代价」第 6 条说了要跑一次真实会话再回来记。
+
+## 后加（2026-09-30，同日）：模型自己产出的思考也在内
+
+上面那张清单讲的是 **fs-agent 生成的**文本，漏了一处：**模型自己产出的思考**。它没有独立事件，但随 `MessageCompleted.reasoning` 落进流，也随 `StreamEvent::ReasoningDelta` 到达渲染器 —— 在 TUI 里它是一条 `[名字] ▸ ✓ 思考完成` 的行，点开是一个写着 `── 思考 ──` 的详情弹窗（`DetailKind::Thinking`）。**读者还是人**：那个弹窗按 `pane::wrap_text` 把原文画出来。所以按本文同一条线（英文只留给不是散文的东西），它也该是中文。
+
+**决定**：一句 `agent::THINKING_IN_CHINESE` 定义在 `src/agent.rs`，四段身份各自拼上它 —— 本程序（`agent_identity()`）、讨论者（`discussion::debater_identity()`）、合成器（`discussion::synthesizer_identity()`）、执行者（`agent::executor::executor_identity()`）。一处定义、四处引用：在四段身份里各写一遍，就是同一个事实四处维护 —— 正是本文「为什么」第 4 条否掉映射表的同一条理由。它拼进 `system` 提示本身，不另发一条消息：`messages` 的第一条就是身份（`build_messages`），多一条消息就多一处要与 provider 和 `replay` 对齐的格式。
+
+**为什么它比别处更容易漂**：推理里夹着大量标识符、路径与代码片段，模型在这些东西中间默认就滑回英文。这是实测到的现象 —— 本文落地当天，人在详情弹窗里读到的就是英文思考。
+
+**代价**：四段身份都在缓存前缀的头部，所以加这一行让**升级之后的新会话**各未命中一次（老会话照旧命中自己那份 ——「加行」正是本文保留的那条 ADR 0001 规矩所允许的改动）。为了让四段共用一处真相，`agent_identity()` 与 `executor_identity()` 的返回类型从 `&'static str` 变成 `String`，与讨论者 / 合成器那两句一致：`concat!` 只吃字面量，拼不上一个 `const`。预算类测试不用改 —— `tests/context_budget.rs` 的 `caps_with_usable_input` 本来就按当前身份的长度算。
+
+**别处的连带**：`AGENTS.md` 顶部新增《语言》一节（项目级约定，也是人读得到的那一份）；README《约定》第一条列进了它；新增 `tests/thinking_language.rs` 断言公开的三段身份都拼上了这一句，第四段（执行者）在 `tests/executor.rs` 里从一次真实派发发出去的请求里断言 —— 它的身份不在公开 API 上。
+
+**效果留待真机**：这一句能不能让思考真的走中文，没有实测记录 —— 它与本文「代价」第 6 条那条待办（跑一次真实会话再回来记）是同一笔账。

@@ -23,7 +23,7 @@ use crate::events::{Event, EventPayload, Role, RoundMode, SpeakerId};
 use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
 
-use super::executor::EXECUTOR_IDENTITY;
+use super::executor::executor_identity;
 use super::{build_messages, scoped_events_slice, TurnScope};
 
 /// 一次请求为什么无法从流上重算出来。
@@ -149,16 +149,16 @@ fn last_call_cut(events: &[Event], speaker: &SpeakerId, round: Option<u32>) -> O
 /// 一个 agent 的请求打头的那份私有身份。
 ///
 /// 它从不进流（spec §15），所以 replay 改从流的形状上把它推出来：讨论里的讨论者拿到的是
-/// 协议指令，没有轮次的讨论者就是一个带着本程序身份的普通会话，执行者有它自己的常量。
+/// 协议指令，没有轮次的讨论者就是一个带着本程序身份的普通会话，执行者有它自己的身份。
 /// 合成器在这之前就由 [`synthesizer`] 处理掉了 —— 它的身份和它的提示词是一个整体 —— 而
 /// 用户没有身份。
 fn identity_for(events: &[Event], speaker: &SpeakerId) -> Option<String> {
     match speaker {
-        SpeakerId::Executor(_) => Some(EXECUTOR_IDENTITY.to_owned()),
+        SpeakerId::Executor(_) => Some(executor_identity()),
         SpeakerId::Debater(name) => Some(if has_rounds(events) {
             discussion::debater_identity(name.as_str())
         } else {
-            super::agent_identity().to_owned()
+            super::agent_identity()
         }),
         SpeakerId::System | SpeakerId::User => None,
     }

@@ -334,7 +334,7 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     } = parts;
 
     let opened = OpenedSession::open(scaffold, renderer)?;
-    let mut session = opened.session(config, Some(agent::agent_identity().to_owned()));
+    let mut session = opened.session(config, Some(agent::agent_identity()));
     opened.start(&mut session)?;
 
     let policy = Arc::clone(&opened.policy);

@@ -111,20 +111,38 @@ pub(crate) fn scoped_events_slice(
     events
 }
 
+/// 一段对**每一个**身份都成立的通用条款：思考用什么语言写。
+///
+/// 四个身份共用它（本程序、讨论者、合成器、执行者），所以它只写在这里一处 —— 在四段身份里各写
+/// 一遍，迟早会漂开一份。它拼进 `system` 提示本身，而不是另发一条消息：`messages` 的第一条就是
+/// 身份（[`build_messages`]），多一条消息就多一处要与 provider 和 `replay` 对齐的格式。
+///
+/// 为什么值得占掉前缀里的一行：思考文本和回答一样进流（`MessageCompleted.reasoning`），也一样
+/// 进转录的详情弹窗（`DetailKind::Thinking`），所以 ADR 0005 那条「英文只留给不是散文的东西」
+/// 管着它。它也比回答更容易漂回英文 —— 推理里夹着大量标识符、路径与代码。
+///
+/// 它是 `pub` 的，好让测试直接断言四个身份都拼上了它（`tests/thinking_language.rs`），而不是
+/// 在断言里再抄一遍这句话。
+pub const THINKING_IN_CHINESE: &str =
+    "思考也用中文写：它和你的回答一样是给人读的散文。只有标识符、路径、命令原文与 schema 值留英文。";
+
 /// 单 agent 的 `system` 提示词：本程序是什么。
 ///
 /// 讨论者与执行者各自以自己的身份打头；而普通会话本来什么都不带，于是唯一描述这个程序的东西
 /// 就是钉住的上下文 —— 模型读着一段技能正文，自我介绍成了「Claude Code」。这份身份和这里的
 /// 其它身份一样从不进日志，所以 `replay` 从流的形状上把它推出来。
 ///
-/// 后半段是 `.scratch/todo-and-modes/spec.md` §3 的**规则段**：引导模型维护一份 `todo` 列表，
+/// 中间那段是 `.scratch/todo-and-modes/spec.md` §3 的**规则段**：引导模型维护一份 `todo` 列表，
 /// 不是强制。它搭在这里，是因为这是**每一次**请求里模型可见的前缀，也就是 ADR 0001 那条规矩
 /// 最严苛的版本 —— 加一行是允许的，改一行或删一行会让每一个会话的缓存前缀作废。措辞是中文
 /// （ADR 0005：这一侧的散文按「是不是标识符」分，不按「谁读它」分），而三个状态词仍是它点名的
 /// 标识符；它还是 `const` 风格的字面量，另有一个理由：有测试钉住那三个词，所以工具的用词和这
 /// 条指令没法漂开。
-pub fn agent_identity() -> &'static str {
-    concat!(
+///
+/// 末尾拼的是 [`THINKING_IN_CHINESE`]。于是它返回 `String` 而不是 `&'static str` —— 与另外两个
+/// 身份函数（讨论者、合成器）一致，那两句各自拼同一段条款。
+pub fn agent_identity() -> String {
+    [
         "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。",
         "你直接读写文件、运行命令、搜索代码，并按这个仓库自己的约定干活（AGENTS.md、CONTEXT.md、",
         "docs/adr、.scratch 里的 spec 与 ticket）。你不是 Claude Code，也不是 Anthropic 的产品，",
@@ -133,7 +151,10 @@ pub fn agent_identity() -> &'static str {
         "开工前先把计划写下来，用 `todo` 工具：每一步都是一项，`status` 写 `pending`。正在做的那一项标成 \
          `in_progress`，每完成一项就更新这份列表（`completed`），最后一次调用把每一项都写成 `completed`，收尾。\
          列表是用户看你正在做什么、做到哪一步的地方，所以要一直更新，而不是只写一次。",
-    )
+        "\n\n",
+        THINKING_IN_CHINESE,
+    ]
+    .concat()
 }
 
 /// 投影 → 前置私有身份 → 裁剪。

@@ -331,6 +331,12 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
         Message::System { content, .. } => {
             assert!(content.contains("执行者"), "{content}");
             assert!(!content.contains("CONCLUSION:"), "{content}");
+            // 那一句思考语言的条款四段身份共用（`tests/thinking_language.rs`
+            // 断言公开的那三段）；执行者的身份不在公开 API 上，只能从这里读。
+            assert!(
+                content.contains(fs_agent::agent::THINKING_IN_CHINESE),
+                "{content}"
+            );
         }
         other => panic!("要的是执行者自己的系统身份，得到 {other:?}"),
     }

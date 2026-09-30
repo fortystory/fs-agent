@@ -23,7 +23,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **29,680** 行、`tests/` **28,612** 行（`wc -l`）、**757** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
+**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **29,680** 行、`tests/` **28,612** 行（`wc -l`）、**758** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
@@ -238,7 +238,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 
 **约定**（新文档照这个走，别猜；这是 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 定的线）：
 
-- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。**[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 起，模型可见与进流的散文也在内**：工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`。
+- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。**[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 起，模型可见与进流的散文也在内**：工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`、以及**模型自己产出的思考**（它随 `MessageCompleted.reasoning` 进流、也进详情弹窗那节 `── 思考 ──`；四段身份各自拼上 `src/agent.rs` 的 `agent::THINKING_IN_CHINESE`）。
 - **英文只留给不是散文的东西**（[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 画的新线：按**词性**分，不按「谁读它」分）：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **schema 值与协议标记**（`Ask` / `Allow` / `Deny`、`cwd` / `token` / `assistant`、`tool_call_id`、`CONCLUSION:`）；③ **路径、命令原文与代码片段**；④ `docs/research/` 的一手引文。
 - **术语写「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上（行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、panic 钩子（panic hook））。`cwd` / `token` / `assistant` 这类字段名与 schema 值不夹注、保持英文（CONTEXT.md 里「token 不给中文名」同一条）。
 - **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
