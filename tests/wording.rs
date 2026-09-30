@@ -1013,3 +1013,13 @@ fn the_plain_console_asks_a_questionnaire_in_chinese() {
         "输入回答；回车跳过 > "
     );
 }
+
+#[test]
+fn the_sandbox_line_names_the_mode_and_why_it_was_unavailable() {
+    assert_eq!(wording::sandbox("bwrap", None), "[沙箱：bwrap]");
+    assert_eq!(wording::sandbox("off", None), "[沙箱：off]");
+    assert_eq!(
+        wording::sandbox("bwrap", Some("PATH 上没有 `bwrap`")),
+        "[沙箱：bwrap · 不可用：PATH 上没有 `bwrap`]"
+    );
+}

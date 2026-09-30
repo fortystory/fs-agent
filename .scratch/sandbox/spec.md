@@ -201,6 +201,12 @@ user.name hack` 被拒，报的是 `无法写入配置文件 .git/config: 设备
    进去。§4 说的「清单与地板对齐但不等同、而且比地板窄」在这里再窄一处，边界写在
    [`docs/sandbox.md`](../../docs/sandbox.md) 的「压回只读」那一段。
 
+7. **`sessions show` 显示沙箱状态**（code-review 之后补的）。§8 的「界面不显示」说的是 TUI
+   左栏与状态行；而用户故事 8 要的是审计者能回头核对，复盘视图正是那个地方。最初实现把
+   `SandboxStatus` 从复盘条目里一并过滤了，于是流里有、`sessions show` 里看不见 —— 现在
+   `observe::Entry::Sandbox` 与 `wording::sandbox()` 各就各位（`[沙箱：bwrap]`，不可用时带
+   原因），`--json` 里就是那条 entry。
+
 **测试分布**：`tests/sandbox.rs` 29 条（纯函数逐字断言、配置、探测、`process::run` 的接缝、
 经 `assemble` 的端到端，以及一条在真 `bwrap` 上跑的真机回归 —— 没有 `bwrap` 的机器上自动跳过）；
 `tests/config_profiles.rs` 3 条配置解析；另外 `tests/cancellation.rs` 与

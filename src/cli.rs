@@ -2239,6 +2239,10 @@ fn render_entry(entry: &Entry) -> String {
             reason, summary, ..
         } => render::wording::history(*reason, summary.as_deref()),
         Entry::Context { source, .. } => render::wording::context_injected(source.clone()),
+        Entry::Sandbox {
+            mode,
+            unavailable_reason,
+        } => render::wording::sandbox(mode, unavailable_reason.as_deref()),
     }
 }
 

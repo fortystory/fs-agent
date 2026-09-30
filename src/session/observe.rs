@@ -168,6 +168,16 @@ pub enum Entry {
     SessionEnded {
         reason: StopReason,
     },
+    /// 这条流这一刻的沙箱状态（沙箱 spec §8）。
+    ///
+    /// **只进日志**：TUI 左栏不显示它（那里已经很挤，而沙箱在一个会话内基本不变），但
+    /// `sessions show` 显示 —— 审计者复盘「某条命令当时有没有被关着」正是看这里。
+    Sandbox {
+        /// 协议标记：`"bwrap"` / `"off"`。
+        mode: String,
+        /// 不可用时的原因；可用与显式关掉时是 `None`。
+        unavailable_reason: Option<String>,
+    },
     TurnStarted {
         speaker: SpeakerId,
         iteration: u32,
@@ -261,6 +271,7 @@ impl Entry {
             Entry::SessionError { .. } => "SessionError",
             Entry::History { .. } => "HistorySuperseded",
             Entry::Context { .. } => "ContextInjected",
+            Entry::Sandbox { .. } => "SandboxStatus",
         }
     }
 
@@ -284,6 +295,7 @@ impl Entry {
             Entry::RoundStarted { .. }
             | Entry::RoundEnded { .. }
             | Entry::SessionEnded { .. }
+            | Entry::Sandbox { .. }
             | Entry::Divergence { .. } => None,
         }
     }
@@ -488,8 +500,15 @@ fn last_tool_entry(timeline: &mut Timeline) -> Option<&mut Option<String>> {
 fn entry_of(event: &Event) -> Option<Entry> {
     let speaker = event.speaker_id.clone();
     Some(match &event.payload {
-        // 沙箱状态是只进日志的 harness 记账（沙箱 spec §8）：它不属于 `sessions show` 的条目。
-        EventPayload::SandboxStatus { .. } => return None,
+        // 沙箱状态是只进日志的 harness 记账（沙箱 spec §8）：TUI 不显示它，但复盘视图显示，
+        // 否则「某条命令当时有没有被关着」就没有可读的出处。
+        EventPayload::SandboxStatus {
+            mode,
+            unavailable_reason,
+        } => Entry::Sandbox {
+            mode: mode.clone(),
+            unavailable_reason: unavailable_reason.clone(),
+        },
         EventPayload::MessageCompleted { role, text, .. } => Entry::Message {
             speaker,
             role: *role,

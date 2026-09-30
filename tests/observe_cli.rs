@@ -26,6 +26,7 @@ struct Fixture {
     env: EnvMap,
     cwd: PathBuf,
     id: SessionId,
+    log_path: PathBuf,
 }
 
 /// 一个存着的会话，带一条小而完整的讨论事件流。
@@ -135,6 +136,7 @@ fn fixture() -> Fixture {
         env,
         cwd,
         id: stored.id,
+        log_path: stored.log_path,
     }
 }
 
@@ -311,5 +313,38 @@ fn an_unknown_verb_fails_loudly_with_nothing_on_stdout() {
     assert!(
         err.contains("explain"),
         "这次拒绝点出了它不认识的那个动词：{err}"
+    );
+}
+
+#[test]
+fn show_reports_the_sandbox_state_on_its_own_line() {
+    // 沙箱状态只进日志：TUI 不显示它，而复盘视图显示 —— 审计者要核对「那条命令当时
+    // 有没有被关着」，这里是唯一可读的出处（沙箱 spec §8）。
+    let fixture = fixture();
+    let mut log = EventLog::open(&fixture.log_path).unwrap();
+    log.append(
+        SpeakerId::System,
+        EventPayload::SandboxStatus {
+            mode: "bwrap".to_owned(),
+            unavailable_reason: None,
+        },
+    )
+    .unwrap();
+    log.append(
+        SpeakerId::System,
+        EventPayload::SandboxStatus {
+            mode: "bwrap".to_owned(),
+            unavailable_reason: Some("PATH 上没有 `bwrap`".to_owned()),
+        },
+    )
+    .unwrap();
+    drop(log);
+
+    let (code, out, _) = run(&fixture, &["show", fixture.id.as_str()]);
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(out.contains("[沙箱：bwrap]"), "{out}");
+    assert!(
+        out.contains("[沙箱：bwrap · 不可用：PATH 上没有 `bwrap`]"),
+        "不可用时把原因一起摊开：{out}"
     );
 }

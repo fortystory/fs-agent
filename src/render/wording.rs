@@ -922,6 +922,17 @@ pub fn context_injected(source: ContextSource) -> String {
     format!("[上下文注入：{}]", context_source(&source))
 }
 
+/// 这一刻的沙箱状态，给 `sessions show` 的复盘用（沙箱 spec §8）。
+///
+/// 模式是协议标记、原样；不可用时把原因一起摊开 —— 审计者要判断的正是「当时是不是被关着、
+/// 为什么」。
+pub fn sandbox(mode: &str, unavailable_reason: Option<&str>) -> String {
+    match unavailable_reason {
+        Some(reason) => format!("[沙箱：{mode} · 不可用：{reason}]"),
+        None => format!("[沙箱：{mode}]"),
+    }
+}
+
 /// 一个上下文来源的中文名。
 pub fn context_source(source: &ContextSource) -> String {
     match source {
