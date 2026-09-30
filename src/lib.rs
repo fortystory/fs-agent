@@ -290,7 +290,7 @@ impl OpenedSession {
         let recovered = agent::recover_pending_calls(session, &self.render)?;
         if recovered > 0 {
             self.render.diagnostic(&format!(
-                "resumed session: closed {recovered} interrupted tool call(s) with an unknown result"
+                "继续的会话：收尾了 {recovered} 个结果未知的中断工具调用"
             ));
         }
         Ok(())
@@ -361,8 +361,8 @@ fn validate_roster(
 ) -> Result<(), Error> {
     if debaters.len() != discussion::DEBATERS {
         return Err(Error::Discussion(format!(
-            "v1 runs exactly {} debaters, got {}; more would reopen the \
-             \"N = 2 does not arbitrate\" decision (spec §15, Out of Scope)",
+            "v1 固定跑 {} 位讨论者，拿到的是 {}；再多就要重开 \
+             「N = 2 does not arbitrate」那个决定（spec §15，Out of Scope）",
             discussion::DEBATERS,
             debaters.len()
         )));
@@ -370,7 +370,7 @@ fn validate_roster(
     for debater in debaters {
         if !matches!(debater.speaker, SpeakerId::Debater(_)) {
             return Err(Error::Discussion(format!(
-                "a debater must speak as a debater, got {}",
+                "讨论者必须以讨论者的身份发言，拿到的是 {}",
                 debater.speaker
             )));
         }
@@ -383,16 +383,14 @@ fn validate_roster(
     for debater in debaters {
         if !speakers.insert(debater.speaker.to_string()) {
             return Err(Error::Discussion(format!(
-                "two debaters share the speaker id {}; a discussion needs two \
-                 identities, or neither side's messages can be told apart",
+                "两位讨论者共用了 speaker id {}；一次讨论需要两个身份，\
+                 否则两边的消息分不开",
                 debater.speaker
             )));
         }
     }
     if max_rounds == 0 {
-        return Err(Error::Discussion(
-            "a discussion needs at least one round".to_owned(),
-        ));
+        return Err(Error::Discussion("一次讨论至少要有一轮".to_owned()));
     }
 
     // token 额度是**会话**级事实，由两个讨论者、合成器与它们派出的每一个执行者共享
@@ -402,16 +400,16 @@ fn validate_roster(
     for debater in debaters.iter().skip(1) {
         if debater.config.budget != budget {
             return Err(Error::Discussion(format!(
-                "{} and {} were given different token budgets; the allowance is one value \
-                 shared by the whole session (spec §17)",
+                "{} 与 {} 拿到了不同的 token 额度；额度是整个会话共用\
+                 的一个值（spec §17）",
                 debaters[0].speaker, debater.speaker
             )));
         }
     }
     if synthesizer.config.budget != budget {
         return Err(Error::Discussion(
-            "the synthesizer was given a different token budget from the debaters; the \
-             allowance is one value shared by the whole session (spec §17)"
+            "合成器拿到的 token 额度与讨论者不同；额度是整个会话共用的\
+             一个值（spec §17）"
                 .to_owned(),
         ));
     }
@@ -424,16 +422,16 @@ fn validate_roster(
     for debater in debaters.iter().skip(1) {
         if debater.config.redactor != redactor {
             return Err(Error::Discussion(format!(
-                "{} and {} were given different redactors; the values to scrub are one set \
-                 shared by the whole session (spec §20)",
+                "{} 与 {} 拿到了不同的打码器；要打掉的值是整个会话共用\
+                 的一套（spec §20）",
                 debaters[0].speaker, debater.speaker
             )));
         }
     }
     if synthesizer.config.redactor != redactor {
         return Err(Error::Discussion(
-            "the synthesizer was given a different redactor from the debaters; the values \
-             to scrub are one set shared by the whole session (spec §20)"
+            "合成器拿到的打码器与讨论者不同；要打掉的值是整个会话共用\
+             的一套（spec §20）"
                 .to_owned(),
         ));
     }
@@ -802,15 +800,15 @@ async fn drain_renderer(render: RenderHandle, render_task: JoinHandle<()>) {
 /// 类型。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("event log i/o error: {0}")]
+    #[error("事件流 i/o 错误：{0}")]
     Io(#[from] io::Error),
     /// 用来组装一次讨论的那份名册跑不了协议。
-    #[error("discussion setup: {0}")]
+    #[error("讨论组装：{0}")]
     Discussion(String),
     /// `/undo` 不能安全地把工作区回滚。
-    #[error("undo: {0}")]
+    #[error("撤销：{0}")]
     Undo(String),
     /// 用户点名的技能载入不了。
-    #[error("skill: {0}")]
+    #[error("技能加载：{0}")]
     Skill(String),
 }

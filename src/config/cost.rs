@@ -98,7 +98,7 @@ impl Budget {
     pub fn exhausted_note(&self, spent: u64) -> Option<String> {
         self.is_exhausted(spent).then(|| {
             format!(
-                "session token budget exhausted: {spent} tokens spent, {}",
+                "会话 token 额度已用尽：已经花掉 {spent} token，{}",
                 self.cap_text()
             )
         })
@@ -107,7 +107,7 @@ impl Budget {
     /// 预检估计拒掉一次调用时的那句话。
     pub fn estimate_refusal_note(&self, estimate: u64) -> String {
         format!(
-            "session token budget: a call estimated at ~{estimate} tokens does not fit {}",
+            "会话 token 额度：一次估计约 {estimate} token 的调用装不下 —— {}",
             self.cap_text()
         )
     }
@@ -115,8 +115,8 @@ impl Budget {
     /// 上限本身，按上面那几条诊断的读法。
     fn cap_text(&self) -> String {
         match self.limit {
-            Some(limit) => format!("a cap of {limit} tokens"),
-            None => "no cap".to_owned(),
+            Some(limit) => format!("上限为 {limit} token"),
+            None => "无上限".to_owned(),
         }
     }
 }

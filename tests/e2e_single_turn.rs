@@ -847,5 +847,5 @@ async fn a_call_the_pre_flight_estimate_refuses_is_never_sent() {
 
     fixture.harness.shutdown().await;
     let stderr = fixture.stderr.text();
-    assert!(stderr.contains("does not fit"), "{stderr}");
+    assert!(stderr.contains("装不下"), "{stderr}");
 }

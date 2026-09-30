@@ -577,8 +577,8 @@ fn resolve_tool(
             return Err(ConfigError::InvalidTool {
                 tool: custom_tool_name(namespace, tool),
                 reason: format!(
-                    "the {label} `{part}` must be non-empty and use only ASCII letters, digits, \
-                     `-` or `_` (and it may not contain `__`, which separates the name's parts)"
+                    "{label} `{part}` 必须非空，且只能用 ASCII 字母、数字、`-` 或 `_`\
+                     （而且不能含 `__`，那是名字各部分之间的分隔符）"
                 ),
             });
         }
@@ -586,7 +586,7 @@ fn resolve_tool(
     if raw.command.is_empty() {
         return Err(ConfigError::InvalidTool {
             tool: custom_tool_name(namespace, tool),
-            reason: "`command` must not be empty: it is the argv to run".to_owned(),
+            reason: "`command` 不能为空：它是真正要跑的那份 argv".to_owned(),
         });
     }
 
@@ -594,8 +594,8 @@ fn resolve_tool(
     if parameter_placeholder(&raw.command[0]).is_some() {
         return Err(ConfigError::InvalidTool {
             tool: custom_tool_name(namespace, tool),
-            reason: "the first `command` element is the program and must be a literal, not a \
-                     `{parameter}` placeholder"
+            reason: "`command` 的第一个元素是程序本身，必须是字面量，不能是 \
+                     `{parameter}` 占位符"
                 .to_owned(),
         });
     }
@@ -613,8 +613,8 @@ fn resolve_tool(
             return Err(ConfigError::InvalidTool {
                 tool: custom_tool_name(namespace, tool),
                 reason: format!(
-                    "`{{{name}}}` appears in `command` but the parameter schema declares no \
-                     `{name}` under `parameters.properties`"
+                    "`{{{name}}}` 出现在 `command` 里，但参数 schema 在 \
+                     `parameters.properties` 下没有声明 `{name}`"
                 ),
             });
         }
@@ -1054,9 +1054,7 @@ fn resolve_budget(raw: Option<&RawBudget>) -> Result<Budget, ConfigError> {
     if let Some(margin) = raw.estimate_margin {
         if !margin.is_finite() || margin <= 0.0 {
             return Err(ConfigError::InvalidBudget {
-                reason: format!(
-                    "estimate_margin must be a positive number of multiples, got {margin}"
-                ),
+                reason: format!("estimate_margin 必须是正的倍数，拿到的是 {margin}"),
             });
         }
         budget = budget.with_estimate_margin(margin);
@@ -1111,17 +1109,17 @@ fn resolve_discussion(
     };
     let Some(entries) = raw.debaters.as_ref() else {
         return Err(ConfigError::InvalidDiscussion {
-            reason: "needs `debaters`: the pool a discussion draws its two debaters \
-                     from, either `debaters = [\"模型\", \"另一个模型\"]` or \
-                     `[[discussion.debaters]]` tables with `name` and `model`"
+            reason: "需要 `debaters`：讨论从这里抽两位讨论者，写法是 \
+                     `debaters = [\"模型\", \"另一个模型\"]`，或者带 `name` 与 `model` 的 \
+                     `[[discussion.debaters]]` 表"
                 .to_owned(),
         });
     };
     if entries.len() < crate::discussion::DEBATERS {
         return Err(ConfigError::InvalidDiscussion {
             reason: format!(
-                "`debaters` names {} pool member(s); a discussion runs exactly two \
-                 (spec §15), so the pool needs at least two",
+                "`debaters` 只点名了 {} 个池中成员；一次讨论固定跑两位\
+                 （spec §15），所以池子至少要两个",
                 entries.len()
             ),
         });
@@ -1139,8 +1137,8 @@ fn resolve_discussion(
         if !models.contains_key(&model) {
             return Err(ConfigError::InvalidDiscussion {
                 reason: format!(
-                    "`debaters` names model `{model}`, which is not configured; use a \
-                     built-in id or declare it under [models.{model}] first"
+                    "`debaters` 点名的 model `{model}` 没有配置；用内置 id，\
+                     或者先在 [models.{model}] 下声明它"
                 ),
             });
         }
@@ -1152,17 +1150,16 @@ fn resolve_discussion(
         {
             return Err(ConfigError::InvalidDiscussion {
                 reason: format!(
-                    "`{name}` cannot be a debater's name: a name is one word with no \
-                     spaces (it becomes the participant's identity, and the projection \
-                     writes it into a `[轮 N · 名字]` prefix)"
+                    "`{name}` 不能当讨论者的名字：名字是一个不断开的词\
+                     （它是这个参与者的身份，而投影会把它写进 `[轮 N · 名字]` 前缀）"
                 ),
             });
         }
         if name.chars().count() > MAX_DEBATER_NAME {
             return Err(ConfigError::InvalidDiscussion {
                 reason: format!(
-                    "`{name}` is longer than {MAX_DEBATER_NAME} characters; a debater's \
-                     name is an identity the model reads in every round prefix"
+                    "`{name}` 超过 {MAX_DEBATER_NAME} 个字符；讨论者的名字是模型\
+                     在每一条轮次前缀里都会读到的身份"
                 ),
             });
         }
@@ -1171,16 +1168,16 @@ fn resolve_discussion(
             if soul.is_empty() {
                 return Err(ConfigError::InvalidDiscussion {
                     reason: format!(
-                        "`{name}`: an empty `soul` says nothing; drop the field or write \
-                         what this debater is like"
+                        "`{name}`：空的 `soul` 什么都没说；去掉这个字段，或者写下\
+                         这个讨论者是什么样的人"
                     ),
                 });
             }
             if soul.chars().count() > MAX_DEBATER_SOUL {
                 return Err(ConfigError::InvalidDiscussion {
                     reason: format!(
-                        "`{name}`: `soul` is longer than {MAX_DEBATER_SOUL} characters; \
-                         it is pinned context for every round, so it is capped"
+                        "`{name}`：`soul` 超过 {MAX_DEBATER_SOUL} 个字符；它是每一轮\
+                         都钉住的上下文，所以有限长"
                     ),
                 });
             }
@@ -1198,9 +1195,9 @@ fn resolve_discussion(
         {
             return Err(ConfigError::InvalidDiscussion {
                 reason: format!(
-                    "two debaters are both called `{}`; give one of them a name — \
-                     `{{ name = \"甲\", model = \"{}\" }}` — because the name is the \
-                     participant's identity on the stream",
+                    "两位讨论者都叫 `{}`；给其中一个起个名字 —— \
+                     `{{ name = \"甲\", model = \"{}\" }}` —— 因为名字是参与者\
+                     在流上的身份",
                     debater.name, debater.model
                 ),
             });
@@ -1209,9 +1206,7 @@ fn resolve_discussion(
 
     if raw.max_rounds == Some(0) {
         return Err(ConfigError::InvalidDiscussion {
-            reason: "`max_rounds` must be at least 1: a discussion with no round has \
-                     nothing to synthesize"
-                .to_owned(),
+            reason: "`max_rounds` 至少是 1：一轮都没有的讨论没有东西可合成".to_owned(),
         });
     }
     Ok(Some(DiscussionRoster {
@@ -1286,50 +1281,50 @@ pub enum ConfigError {
         #[source]
         source: Box<toml::de::Error>,
     },
-    #[error("cannot read {path}: {source}")]
+    #[error("读不了 {path}：{source}")]
     Io {
         path: String,
         #[source]
         source: std::io::Error,
     },
-    #[error("provider `{provider}` has no `base_url` and no built-in default")]
+    #[error("provider `{provider}` 既没有 `base_url`，也没有内置默认值")]
     ProviderWithoutBaseUrl { provider: String },
-    #[error("provider `{provider}`: `{base_url}` is not a valid URL (a base_url needs a scheme and host)")]
+    #[error("provider `{provider}`：`{base_url}` 不是合法的 URL（base_url 需要 scheme 与 host）")]
     InvalidBaseUrl { provider: String, base_url: String },
     #[error(
-        "model `{model}` references unknown provider `{provider}`; \
-         declare it as [providers.{provider}] or point the model at an existing provider"
+        "model `{model}` 引用了未知的 provider `{provider}`；把它声明成 \
+         [providers.{provider}]，或者把这个 model 指向一个已存在的 provider"
     )]
     UnknownProvider { model: String, provider: String },
-    #[error("model `{model}` has no `provider` and is not a built-in model id")]
+    #[error("model `{model}` 没有 `provider`，也不是内置的 model id")]
     ModelWithoutProvider { model: String },
-    #[error("unknown model `{model}`; set `default_model` or pass --model to one of the configured models")]
+    #[error("未知的 model `{model}`；设置 `default_model`，或者用 --model 指定一个已配置的 model")]
     UnknownModel { model: String },
     #[error(
-        "[pricing.{model}] names no configured model; prices are keyed by model id, so use a \
-         built-in id or declare the model under [models.{model}] first"
+        "[pricing.{model}] 点名的 model 没有配置；价格按 model id 索引，所以用内置 id，\
+         或者先在 [models.{model}] 下声明它"
     )]
     UnknownPricedModel { model: String },
     #[error(
-        "[routing] names `{model}`, which is not a configured model; routing may only point at a \
-         model id that exists in [models.*] or the built-in table"
+        "[routing] 点名的 `{model}` 不是已配置的 model；routing 只能指向 [models.*] \
+         或内置表里存在的 model id"
     )]
     UnknownRoutedModel { model: String },
-    #[error(
-        "[pricing.{model}] {field}: a price is a non-negative number of USD per million tokens"
-    )]
+    #[error("[pricing.{model}] {field}：价格是每百万 token 的美元数，不能为负")]
     InvalidPrice { model: String, field: &'static str },
     #[error("[budget] {reason}")]
     InvalidBudget { reason: String },
-    #[error("unknown mode `{mode}`; `[permissions] mode` (or `--mode`) takes `readonly`, `ask` or `auto`")]
+    #[error(
+        "未知的模式 `{mode}`；`[permissions] mode`（或 `--mode`）只接 `readonly`、`ask`、`auto`"
+    )]
     UnknownMode { mode: String },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(
-        "provider `{provider}`: base_url host `{host}` does not match the source of the key \
-         (`{key_env}` is a {vendor} key, and a {vendor} key expects {expected}). \
-         Mixing a key with another vendor's base_url returns 401. Point `base_url` at {expected}, \
-         or set `api_key` explicitly in config.toml if you really mean this pairing."
+        "provider `{provider}`：base_url 的 host `{host}` 与密钥的出身对不上 \
+         （`{key_env}` 是 {vendor} 的密钥，而 {vendor} 的密钥对应 {expected}）。\
+         把密钥与另一家的 base_url 混用会返回 401。请把 `base_url` 指向 {expected}，\
+         或者在 config.toml 里显式设置 `api_key` —— 如果你确实要这么配。"
     )]
     CrossVendorKey {
         provider: String,
@@ -1338,7 +1333,7 @@ pub enum ConfigError {
         vendor: &'static str,
         expected: String,
     },
-    #[error("tool `{tool}`: {reason}")]
+    #[error("工具 `{tool}`：{reason}")]
     InvalidTool { tool: String, reason: String },
 }
 

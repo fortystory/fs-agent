@@ -172,8 +172,8 @@ impl fmt::Display for UnknownModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "unknown model `{}`: it is not in the capability table, and fs-agent never guesses \
-             capabilities. Known model ids: {}",
+            "未知的 model `{}`：它不在能力表里，而 fs-agent 从不对能力做猜测。\
+             已知的 model id：{}",
             self.model,
             KNOWN_MODELS.join(", ")
         )

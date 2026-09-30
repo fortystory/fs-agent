@@ -149,7 +149,7 @@ impl OpenAiProvider {
         match error {
             ProviderError::Auth { detail } => ProviderError::Auth {
                 detail: format!(
-                    "{detail} (provider `{}`, base_url `{}`, key from {}). {}",
+                    "{detail}（provider `{}`，base_url `{}`，密钥来自 {}）。{}",
                     self.profile.name,
                     self.profile.base_url,
                     self.key_source_description(),
@@ -164,15 +164,13 @@ impl OpenAiProvider {
     fn auth_hint(&self) -> &'static str {
         match self.profile.vendor {
             Some(Vendor::Kimi) => {
-                "Kimi runs two separate systems: a Kimi Code (coding plan) `sk-kimi-` key goes to \
-                 https://api.kimi.com/coding/v1, while a Kimi Open Platform key goes to \
-                 https://api.moonshot.cn/v1. Keys and base URLs are not interchangeable, and a \
-                 401 can also mean the plan does not include the requested model."
+                "Kimi 有两套互不相通的系统：Kimi Code（编程套餐）的 `sk-kimi-` 密钥走 \
+                 https://api.kimi.com/coding/v1，而 Kimi Open Platform 的密钥走 \
+                 https://api.moonshot.cn/v1。密钥与 base URL 不能互换，而且一次 401 也可能 \
+                 表示这个套餐里没有你请求的那个 model。"
             }
-            Some(Vendor::DeepSeek) => {
-                "check that the key belongs to https://api.deepseek.com and is still active."
-            }
-            None => "check that the key and base_url belong together.",
+            Some(Vendor::DeepSeek) => "请确认这个密钥属于 https://api.deepseek.com 且仍然有效。",
+            None => "请确认这个密钥与 base_url 是配套的。",
         }
     }
 
@@ -238,7 +236,7 @@ impl Provider for OpenAiProvider {
         if request.model != self.model {
             return Err(ProviderError::InvalidRequest {
                 detail: format!(
-                    "this provider is bound to model `{}` but the request asked for `{}`",
+                    "这个 provider 绑定的是 model `{}`，但请求要的是 `{}`",
                     self.model, request.model
                 ),
             });
@@ -286,7 +284,7 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
             );
         } else {
             warnings.push(format!(
-                "model `{model}` does not support tools; dropped {} tool declaration(s)",
+                "model `{model}` 不支持工具；丢掉了 {} 个工具声明",
                 request.tools.len()
             ));
         }
@@ -298,7 +296,7 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
             body.insert("temperature".to_owned(), json!(temperature));
         } else {
             warnings.push(format!(
-                "model `{model}` fixes temperature; dropped the explicitly set temperature={temperature}"
+                "model `{model}` 固定 temperature；丢掉了显式设置的 temperature={temperature}"
             ));
         }
     }
@@ -307,7 +305,7 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
             body.insert("top_p".to_owned(), json!(top_p));
         } else {
             warnings.push(format!(
-                "model `{model}` fixes top_p; dropped the explicitly set top_p={top_p}"
+                "model `{model}` 固定 top_p；丢掉了显式设置的 top_p={top_p}"
             ));
         }
     }
@@ -315,7 +313,8 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
         let effective = requested.min(caps.max_output_tokens);
         if effective < requested {
             warnings.push(format!(
-                "model `{model}` caps output at {} tokens; clamped the explicitly set max_output_tokens={requested}",
+                "model `{model}` 把输出压在 {} token 以内；把显式设置的 \
+                 max_output_tokens={requested} 收了下来",
                 caps.max_output_tokens
             ));
         }
@@ -329,7 +328,7 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
             body.insert("reasoning_effort".to_owned(), json!(effort.as_str()));
         } else {
             warnings.push(format!(
-                "model `{model}` does not accept reasoning_effort; dropped the explicitly set `{}`",
+                "model `{model}` 不接受 reasoning_effort；丢掉了显式设置的 `{}`",
                 effort.as_str()
             ));
         }
@@ -490,7 +489,7 @@ impl StreamDecoder {
             let frame: Vec<u8> = self.buffer.drain(..end).collect();
             self.buffer.drain(..separator);
             let frame = String::from_utf8(frame).map_err(|error| ProviderError::Protocol {
-                detail: format!("SSE frame is not valid UTF-8: {error}"),
+                detail: format!("SSE 帧不是合法 UTF-8：{error}"),
             })?;
             self.handle_frame(&frame, &mut events)?;
             if self.terminated {
@@ -509,7 +508,7 @@ impl StreamDecoder {
         }
         let remainder = std::mem::take(&mut self.buffer);
         let frame = String::from_utf8(remainder).map_err(|error| ProviderError::Protocol {
-            detail: format!("SSE frame is not valid UTF-8: {error}"),
+            detail: format!("SSE 帧不是合法 UTF-8：{error}"),
         })?;
         self.handle_frame(&frame, &mut events)?;
         Ok(events)
@@ -540,7 +539,7 @@ impl StreamDecoder {
         }
         let chunk: Chunk =
             serde_json::from_str(&payload).map_err(|error| ProviderError::Protocol {
-                detail: format!("malformed streaming chunk: {error}: {payload}"),
+                detail: format!("流式分块解析不了：{error}：{payload}"),
             })?;
         self.handle_chunk(chunk, events);
         Ok(())
@@ -914,9 +913,9 @@ pub enum BuildError {
     #[error(transparent)]
     UnknownModel(#[from] UnknownModel),
     #[error(
-        "provider `{provider}` has no API key: set `api_key` in config.toml, or export {hint}"
+        "provider `{provider}` 没有 API key：在 config.toml 里设置 `api_key`，或者导出 {hint}"
     )]
     MissingKey { provider: String, hint: String },
-    #[error("provider `{provider}`: could not build the HTTP client: {detail}")]
+    #[error("provider `{provider}`：建不出 HTTP client：{detail}")]
     HttpClient { provider: String, detail: String },
 }

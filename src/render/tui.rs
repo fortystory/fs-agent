@@ -1610,7 +1610,7 @@ impl TuiState {
                 let Some(action) = self.regions.action_at(column, row) else {
                     return;
                 };
-                let pending = self.pending.take().expect("a question is up");
+                let pending = self.pending.take().expect("有一个问题正等着作答");
                 // 循环的问题发出按钮被建出来时带着的那个答案 —— 与它那个键发出的一样 ——
                 // 而渲染器自己的确认是自己回答自己。
                 match (pending, action) {
@@ -2999,7 +2999,7 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
     debug_assert!(
         rows.iter()
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
-        "the mark is drawn whole or not at all, so its width is the layout's contract"
+        "标记要么整个画出来，要么一个都不画，所以它的宽度是布局的契约"
     );
     let bar_row = match frame {
         Some(frame) => frame as usize % rows.len(),
@@ -4236,7 +4236,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         ))),
         Rect::new(text.x, text.y + text.height - 1, text.width, 1),
     );
-    let view = state.detail.as_mut().expect("just checked");
+    let view = state.detail.as_mut().expect("刚刚查过它不是 None");
     view.height = body_rows;
     view.top = top;
 }

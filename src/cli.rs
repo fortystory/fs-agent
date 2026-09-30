@@ -1402,7 +1402,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     for model in models {
         match probe_model(&config, &model, home.as_deref()).await {
             Ok(()) => {}
-            Err(ProbeError::Skipped(message)) => eprintln!("fs-agent: skipping {model}: {message}"),
+            Err(ProbeError::Skipped(message)) => eprintln!("fs-agent: 跳过 {model}：{message}"),
             Err(ProbeError::Failed(message)) => {
                 eprintln!("fs-agent: {model}: {message}");
                 failed = true;
@@ -1447,7 +1447,9 @@ async fn probe_model(
     let provider = match OpenAiProvider::build(config, model_id, stderr_warnings()) {
         Ok(provider) => provider,
         Err(BuildError::MissingKey { hint, .. }) => {
-            return Err(ProbeError::Skipped(format!("no API key (export {hint})")))
+            return Err(ProbeError::Skipped(format!(
+                "没有 API key（请 export {hint}）"
+            )))
         }
         Err(error) => return Err(ProbeError::failed(error)),
     };
@@ -1509,31 +1511,28 @@ async fn probe_model(
         let events = match read_events(&log_path) {
             Ok(events) => events,
             Err(error) => {
-                println!(
-                    "  turn {}: cannot read the session stream: {error}",
-                    turn + 1
-                );
+                println!("  第 {} 回合：读不了会话流：{error}", turn + 1);
                 continue;
             }
         };
         match last_usage(&events) {
             Some(usage) => println!(
-                "  turn {}: input={} output={} cached={} miss={}",
+                "  第 {} 回合：input={} output={} cached={} miss={}",
                 turn + 1,
                 usage.input_tokens,
                 usage.output_tokens,
                 usage.cached_tokens,
                 usage.miss_tokens,
             ),
-            None => println!("  turn {}: no usage recorded", turn + 1),
+            None => println!("  第 {} 回合：没有记下用量", turn + 1),
         }
         // 钱只作显示（spec §17）：模型有价格时探针显示这场会话花了多少，没有时说清缺的是哪张表。
         // `sessions stats`（票 17）才是它长期该待的地方；探针是今天真有人读的那份报告。
         let spent = total_usage(&events);
         match config.pricing.cost(model_id, spent) {
-            Some(cost) => println!("  session: {} tokens, ${cost:.6}", spent.total_tokens()),
+            Some(cost) => println!("  会话：{} token，${cost:.6}", spent.total_tokens()),
             None => println!(
-                "  session: {} tokens (no [pricing.{model_id}] entry, so no cost)",
+                "  会话：{} token（没有 [pricing.{model_id}] 条目，所以不算钱）",
                 spent.total_tokens()
             ),
         }

@@ -561,7 +561,7 @@ async fn a_discussion_refuses_a_roster_whose_redactors_disagree() {
         Err(error) => error,
     };
     assert!(
-        matches!(&error, fs_agent::Error::Discussion(message) if message.contains("redactor")),
+        matches!(&error, fs_agent::Error::Discussion(message) if message.contains("打码器")),
         "得到 {error:?}"
     );
 }

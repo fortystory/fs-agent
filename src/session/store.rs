@@ -91,7 +91,7 @@ impl SessionStore {
         }
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            "could not allocate a unique session id after 8 attempts",
+            "试了 8 次都没能分到一个唯一的会话 id",
         ))
     }
 

@@ -638,7 +638,7 @@ fn a_pool_that_cannot_serve_a_discussion_is_a_startup_error() {
     let one = resolve(Some("[discussion]\ndebaters = [\"kimi-k3\"]\n"), &env(&[]))
         .expect_err("一个成员不成其为池子")
         .to_string();
-    assert!(one.contains("at least two"), "{one}");
+    assert!(one.contains("至少要两个"), "{one}");
 
     // 空表对谁参与讨论什么都没说。
     let missing = resolve(Some("[discussion]\nmax_rounds = 2\n"), &env(&[]))
@@ -674,7 +674,7 @@ fn one_model_twice_needs_two_names() {
     )
     .expect_err("同一个模型的两个讨论者需要名字")
     .to_string();
-    assert!(error.contains("both called `kimi-k3`"), "{error}");
+    assert!(error.contains("都叫 `kimi-k3`"), "{error}");
     assert!(error.contains("name = \"甲\""), "{error}");
 
     // 起了名字，同一个模型用两次就没问题 —— 而这两个是一家厂商，
@@ -731,7 +731,7 @@ fn a_persona_can_carry_a_soul_and_it_is_capped() {
     )
     .expect_err("空的灵魂被拒")
     .to_string();
-    assert!(empty.contains("empty `soul`"), "{empty}");
+    assert!(empty.contains("空的 `soul`"), "{empty}");
 
     // 灵魂每一轮都钉着，所以它有上限。
     let long = "长".repeat(config::MAX_DEBATER_SOUL + 1);
@@ -745,7 +745,7 @@ fn a_persona_can_carry_a_soul_and_it_is_capped() {
     )
     .expect_err("过长的灵魂被拒")
     .to_string();
-    assert!(over.contains("longer than"), "{over}");
+    assert!(over.contains("超过"), "{over}");
 }
 
 #[test]
@@ -763,7 +763,7 @@ fn a_name_that_cannot_be_an_identity_is_a_startup_error() {
         )
         .expect_err(why)
         .to_string();
-        assert!(error.contains("one word"), "{why}: {error}");
+        assert!(error.contains("不断开的词"), "{why}: {error}");
     }
 
     let long = "长".repeat(config::MAX_DEBATER_NAME + 1);
@@ -777,7 +777,7 @@ fn a_name_that_cannot_be_an_identity_is_a_startup_error() {
     )
     .expect_err("过长的名字被拒")
     .to_string();
-    assert!(error.contains("longer than"), "{error}");
+    assert!(error.contains("超过"), "{error}");
 }
 
 // --- 权限模式（`.scratch/todo-and-modes` 的票 01） --------------------------------

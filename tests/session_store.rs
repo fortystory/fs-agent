@@ -552,7 +552,7 @@ async fn undo_refuses_a_stale_snapshot_and_leaves_the_file_alone() {
     env.write("notes.txt", "something else entirely\n");
 
     let error = harness.undo_last_edit().await.unwrap_err();
-    assert!(error.to_string().contains("undo"), "{error}");
+    assert!(error.to_string().contains("撤销"), "{error}");
     assert_eq!(env.read("notes.txt"), "something else entirely\n");
     harness.shutdown().await;
 }

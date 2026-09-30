@@ -29,22 +29,22 @@ use super::{build_messages, scoped_events_slice, TurnScope};
 /// 一次请求为什么无法从流上重算出来。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReplayError {
-    #[error("this session has no round {0} to replay")]
+    #[error("这个会话没有第 {0} 轮可以重放")]
     UnknownRound(u32),
     #[error(
-        "this speaker never opened a model call, so there is no request to replay; \
-         --round names a round the speaker did not answer in"
+        "这位发言人从没发起过模型调用，所以没有请求可以重放；\
+         --round 点名的是它没有作答的那一轮"
     )]
     NoProviderCall(SpeakerId),
-    #[error("this discussion has more than one round, so --round is required to pick one")]
+    #[error("这次讨论不止一轮，所以必须用 --round 挑一轮")]
     RoundRequired,
-    #[error("this session has no synthesis round to replay")]
+    #[error("这个会话没有合成轮可以重放")]
     NoSynthesis,
-    #[error("round {round} is not a synthesis round")]
+    #[error("第 {round} 轮不是合成轮")]
     NotSynthesis { round: u32 },
-    #[error("the stream records no question for the synthesizer to have answered")]
+    #[error("流上没有记下合成器作答过的问题")]
     NoQuestion,
-    #[error("the recomputed request does not fit the model's context window: {0}")]
+    #[error("重算出来的请求装不进模型的上下文窗口：{0}")]
     Trim(#[from] context::TrimError),
 }
 

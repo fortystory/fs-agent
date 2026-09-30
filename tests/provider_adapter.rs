@@ -207,7 +207,7 @@ fn an_output_cap_above_the_model_maximum_is_clamped_with_a_warning() {
 
     assert_eq!(body["max_tokens"], deepseek().max_output_tokens);
     assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0].contains("clamped"), "{warnings:?}");
+    assert!(warnings[0].contains("收了下来"), "{warnings:?}");
 }
 
 #[test]

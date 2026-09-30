@@ -150,11 +150,8 @@ pub async fn undo_last_edit(
         return Ok(None);
     };
 
-    let parsed: EditCall = serde_json::from_value(edit.args.clone()).map_err(|error| {
-        Error::Undo(format!(
-            "the recorded edit_file arguments cannot be read back: {error}"
-        ))
-    })?;
+    let parsed: EditCall = serde_json::from_value(edit.args.clone())
+        .map_err(|error| Error::Undo(format!("记下的 edit_file 参数读不回来：{error}")))?;
     let path = session
         .paths()
         .resolve(&PathBuf::from(&parsed.file_path))
@@ -165,19 +162,14 @@ pub async fn undo_last_edit(
             .outputs_dir()
             .join(before_artifact(edit.tool_call_id.as_str())),
     )
-    .map_err(|error| {
-        Error::Undo(format!(
-            "cannot read the snapshot for {}: {error}",
-            edit.tool_call_id
-        ))
-    })?;
+    .map_err(|error| Error::Undo(format!("读不了 {} 的快照：{error}", edit.tool_call_id)))?;
 
     // 与那次编辑自己拿的同一把锁（spec §11）：undo 也是这条路径的写者，
     // 所以它排在其它每一个写者后面。
     let _guard = session.path_locks().lock(&path).await;
 
     let content = std::fs::read_to_string(&path)
-        .map_err(|error| Error::Undo(format!("cannot read {}: {error}", path.display())))?;
+        .map_err(|error| Error::Undo(format!("读不了 {}：{error}", path.display())))?;
     let restored = edit::revert(
         &content,
         &before,
@@ -185,14 +177,9 @@ pub async fn undo_last_edit(
         &parsed.new_string,
         parsed.replace_all,
     )
-    .map_err(|error| {
-        Error::Undo(format!(
-            "cannot undo the edit to {}: {error}",
-            path.display()
-        ))
-    })?;
+    .map_err(|error| Error::Undo(format!("撤销不了对 {} 的这次编辑：{error}", path.display())))?;
     std::fs::write(&path, restored.as_bytes())
-        .map_err(|error| Error::Undo(format!("cannot restore {}: {error}", path.display())))?;
+        .map_err(|error| Error::Undo(format!("写不回去 {}：{error}", path.display())))?;
 
     // 手势本身从不进流；它的效果进。
     emit(

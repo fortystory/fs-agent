@@ -813,7 +813,7 @@ async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
         Err(error) => error,
     };
     assert!(
-        matches!(&error, Error::Discussion(message) if message.contains("two identities")),
+        matches!(&error, Error::Discussion(message) if message.contains("两个身份")),
         "got {error:?}"
     );
 }
@@ -868,7 +868,7 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
         Err(error) => error,
     };
     assert!(
-        matches!(&error, Error::Discussion(message) if message.contains("token budget")),
+        matches!(&error, Error::Discussion(message) if message.contains("token 额度")),
         "got {error:?}"
     );
 }

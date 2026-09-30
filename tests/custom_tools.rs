@@ -224,7 +224,7 @@ command = ["{program}", "hi"]
 parameters = { type = "object", properties = { program = { type = "string" } } }
 "#,
     );
-    assert!(message.contains("program"), "{message}");
+    assert!(message.contains("程序"), "{message}");
 }
 
 #[test]
