@@ -7,6 +7,8 @@ Status: ready-for-agent
 - **推翻的既有决策**：本 spec 推翻 `.scratch/fs-agent-v1/spec.md` §19 的 TUI 栈一行（`.scratch/fs-agent-v1/spec.md:526`）与用户故事 129 的「否决 alt screen」。记录在 **`docs/adr/0002-fullscreen-alt-screen-tui.md`**。
 - **术语**：叙述用中文，标识符用英文。词汇表在 `CONTEXT.md` —— 特别注意 **轮次（Round）≠ 回合（Turn）**：右栏数 `TurnEnded`，标签是**「回合」**。
 
+> **补记（2026-09-30）**：本 spec 的**外壳**已被 `.scratch/tui-sidebar/spec.md` 推翻 —— 下面 §2 的**四分区**改成「一圈外框 + 一条全高左栏 + 一条主列」，**整宽 header 的顶部栏**取消（标记搬进左栏、模式进状态行），**cwd 与时钟不再显示**（时钟在界面里彻底消失）。**核心决定不变**：仍是**备用屏幕（alt screen）全屏**、转录**自己持有滚动缓冲**、**光标不依赖视口位置**。这轮改版记在 `docs/adr/0002-fullscreen-alt-screen-tui.md` 的「外壳改版（后加，2026-09）」。本文件正文里的四分区、整宽 header 与 cwd / 时钟自此只作历史记录。
+
 ## Problem Statement
 
 1. **光标是坏的，而且修不好。** inline viewport 下光标不跟随 `>`、`>` 还会在后续回合消失。`e25097e` 把视口锚到最后一行之后**问题仍然存在**：根因是视口位置本身随插入漂移（`Frame::area().y` 是视口在屏幕上的位置，`insert_before` 每插一行就把它往下推）。

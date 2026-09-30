@@ -9,6 +9,7 @@
 - 实现 issue 是一票一个文件，放在 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`，从
   `01` 编号，永远不是把所有票合成一个文件
 - 分诊状态记在每个 issue 文件靠顶部的那一行 `Status:` 里（角色串见 `triage-labels.md`）
+- 实现票的 `Status:` 从 `ready-for-agent` 起步、写完走 `done`（决策票的 `claimed` → `resolved` 是另一套，见下面 wayfinder 一节；两套收尾状态记在 `CONTEXT.md` 的**票**那一条）
 - 评论与对话历史一律追加到文件的底部，放在 `## Comments` 标题之下
 
 ## 当某个技能说「发布到 issue tracker」

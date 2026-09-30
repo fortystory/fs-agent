@@ -73,10 +73,10 @@
 
 ```toml
 [discussion]
-debaters = ["kimi-k3", "deepseek-v4-pro"]   # the pool, at least two (short form)
-# max_rounds = 2                            # 1 independent + at most 1 targeted
+debaters = ["kimi-k3", "deepseek-v4-pro"]   # 池子，至少两个（简写：名字就是模型 id）
+# max_rounds = 2                            # 独立首轮 + 至多一次定向第二轮（默认 2）
 
-[[discussion.debaters]]                     # or named personas
+[[discussion.debaters]]                     # 也可以给人物起名
 name = "张三"
 model = "deepseek-v4-pro"
 soul = "法外狂徒，思路不受限制"
@@ -88,8 +88,8 @@ soul = "守法好公民，先找依据"
 ```
 
 ```sh
-fs-agent discuss "问题"                      # draws two of the pool at random
-fs-agent discuss --debaters 保守,激进 "问题"   # or names the two
+fs-agent discuss "问题"                      # 从池子里随机抽两个
+fs-agent discuss --debaters 保守,激进 "问题"   # 或者指定这两位
 ```
 
 - **是一个池子，不是一对。** `[discussion] debaters` 是一场讨论抽取的那个集合，因为谁来

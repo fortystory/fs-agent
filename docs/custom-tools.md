@@ -45,8 +45,8 @@ timeout_ms = 10000
 剩下的约束落在**权限门**上，它看得见这次调用的声明名与 argv：
 
 ```toml
-# (illustrative rule shape; rules are evaluated by the gate)
-# deny everything declared in configuration
+# （示例的规则形状；规则由权限门求值）
+# 拒绝配置里声明的一切
 tool = "custom__*"
 ```
 

@@ -23,7 +23,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **29,680** 行、`tests/` **28,612** 行（`wc -l`）、**758** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
+**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)）；`src/` **29,651** 行、`tests/` **28,658** 行（`wc -l`）、**758** 条测试（`cargo test` 的 passed 合计）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
@@ -86,7 +86,7 @@ estimate_margin = 1.5         # 发出去之前的估算宽容倍数
 
 [discussion]                  # 讨论者「池子」：`/discuss` 从里面抽两个
 debaters = ["kimi-k3", "deepseek-v4-pro"]     # 简写：名字就是模型 id
-# 也可以给人设起名 + 写「灵魂」（性格 / 立场，整场讨论都照它来）：
+# 也可以给人物起名 + 写「灵魂」（性格 / 立场，整场讨论都照它来）：
 # [[discussion.debaters]]
 # name = "张三"
 # model = "deepseek-v4-pro"
@@ -231,19 +231,19 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表：**领域词汇**（事件流、投影、待办列表……）加末尾一节**流程词汇**（feature 目录 / spec / 票 / 决策图 / 分诊标签……），并写明哪两类词不收（通用编程概念、skills 工具名）（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
 
-**约定**（新文档照这个走，别猜；这是 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 定的线）：
+**约定**（新文档照这个走，别猜；这条线由 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 立、[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 改写）：
 
 - **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。**[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 起，模型可见与进流的散文也在内**：工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`、以及**模型自己产出的思考**（它随 `MessageCompleted.reasoning` 进流、也进详情弹窗那节 `── 思考 ──`；四段身份各自拼上 `src/agent.rs` 的 `agent::THINKING_IN_CHINESE`）。
 - **英文只留给不是散文的东西**（[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 画的新线：按**词性**分，不按「谁读它」分）：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **schema 值与协议标记**（`Ask` / `Allow` / `Deny`、`cwd` / `token` / `assistant`、`tool_call_id`、`CONCLUSION:`）；③ **路径、命令原文与代码片段**；④ `docs/research/` 的一手引文。
 - **术语写「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上（行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、panic 钩子（panic hook））。`cwd` / `token` / `assistant` 这类字段名与 schema 值不夹注、保持英文（CONTEXT.md 里「token 不给中文名」同一条）。
 - **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
 - 为什么模型那一侧原来冻在英文、2026-09-30 又翻开：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) 记的那两笔代价**没有消失**（老流永久中英混排 + 升级后每个新会话一次前缀未命中），只是重新判定为值得付 —— 因为**人读的是同一份文本**（详情弹窗与转录原样画工具结果与错误），冻在英文那边正好落在人眼前。原文那句「那一侧的读者是模型，不是人」是这次推翻的靶心。会话内「前缀只增不改」那条不变量没动。
-- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（模型可见 / 进流那一侧的两条棘轮：中文串只许上升、英文散文串只许下降；`docs/*.md`、`docs/adr/*.md` 与 `AGENTS.md` 的中文占比下限；ADR 的标题与小标题是中文；`src/` 与 `tests/` 注释中文行的棘轮）。
+- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（四条：① 模型可见 / 进流那一侧的两条棘轮 —— 中文串只许上升、英文散文串只许下降；② `docs/` 的逐面文档、`docs/adr/*.md`、`docs/agents/*.md` 与 `AGENTS.md` 的中文占比下限（清单在脚本的 `DOCS_MIN_RATIO`）；③ ADR 的标题与小标题是中文；④ `src/` 与 `tests/` 注释中文行的棘轮）。
 
 ## 开发
 

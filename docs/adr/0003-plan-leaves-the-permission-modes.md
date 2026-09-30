@@ -15,10 +15,10 @@
 
 ## 后果
 
-- **模型不再被强制只读。** 「先想清楚再动手」现在是**引导**：规则段加一条（英文，模型可见），列表由模型自己维护。清单不完整、不更新，门都不会说话；想要硬约束就选 `readonly`。
+- **模型不再被强制只读。** 「先想清楚再动手」现在是**引导**：规则段加一条（英文，模型可见 —— 2026-09-30 起这条规则段是中文的：「开工前先把计划写下来，用 `todo` 工具……」，见 `src/agent.rs:151` 与 [ADR 0005](0005-model-visible-text-in-chinese.md)），列表由模型自己维护。清单不完整、不更新，门都不会说话；想要硬约束就选 `readonly`。
 - **循环不注入任何东西。** 切档会改 `messages` 头部就等于废掉前缀缓存，所以循环**只改策略值**：代价是模型不会事先知道档位变了，它第一次被拒（`PermissionDecided.reason` 里写着档位与原因 —— 2026-09-30 起这段文案是中文的：`模式 readonly：非只读调用一律拒绝（换一档才能放行）`，见 [ADR 0005](0005-model-visible-text-in-chinese.md)）才知道；好处是手势不花缓存，也不动历史。这一条与 §12「模式是 `Session` 的策略值、不进事件流」一致，`--continue` 回到配置里的那一档。
 - **`Shift+Tab` 从「切一档」变成「循环三档」。** `FrontEndEvent::TogglePlan` 改名 `CycleMode`；TUI 的状态行照旧显示 `模式 X`，前端按 `Mode::next()` 自己走一步、循环再走同一步（`ModeCycle` 句柄，理由同 `CancelSignal`：运行期那个被 pin 住的 future 借着 harness）。
 - **老的 `PlanMode` / `ModeChange` 事件仍在，但不再发射。** `events::ContextSource::PlanMode` 与 `events::HistoryReason::ModeChange` **必须留着**：老会话的流里有 `ContextInjected { source: PlanMode }` 与 `HistorySuperseded { reason: ModeChange }`，删变体会让 `--continue` 在旧会话上直接反序列化失败。它们只是不再被产生；重放时那两行照旧读得懂（措辞层保留「计划模式」/「模式变更」两个标签），但**不再改会话的档位**——档位是组装期注入的值。
 - **`PLAN.md` 文件本身不动，只是不再是任何东西的特例。** 它在 `readonly` 下不可写、在 `ask` 下要问、在 `auto` 下随便写；用户的文件也不再有任何 CLI 代码会去清空它（原来那条「覆盖」清空路径随 `/plan` 一起删了）。
-- **模型可见文本的一侧只增不改（ADR 0001）。** 规则段那条待办指令是新加的一行，落在每个会话的缓存前缀里；改动它等于让所有现存会话的前缀缓存失效一次，所以措辞写死在代码里、用英文。
+- **模型可见文本的一侧只增不改（ADR 0001）。** 规则段那条待办指令是新加的一行，落在每个会话的缓存前缀里；改动它等于让所有现存会话的前缀缓存失效一次，所以措辞写死在代码里、用英文（2026-09-30 起这段措辞是中文的，见 [ADR 0005](0005-model-visible-text-in-chinese.md) —— 但「写死在代码里、只增不改」这半个理由没变，缓存前缀那笔账照旧）。
 - **测试的落点跟着搬。** 门的真值表（`tests/permission_gate.rs`）、配置解析（`tests/config_profiles.rs`）、端到端的三档与继承（`tests/modes.rs`，原 `tests/plan_mode.rs`）、帧上的循环（`tests/render_layout.rs`）、老流的向后兼容（`tests/history_replay.rs`）。

@@ -10,6 +10,8 @@ Status: done
 
 把**只给人看**的英文错误 / 诊断 / 输出文本翻成中文：它们不进事件流、模型永远看不到（启动期错误、`sessions replay` 的报错、渲染器诊断、probe 的报告行）。**同时一个都不许翻错**：凡进 `messages` 或进事件流的英文串必须原样 —— 这一批的难点全在分类。
 
+> **注（2026-09-30）**：「一个都不许翻错」是当时的口令 —— [ADR 0005](../../../docs/adr/0005-model-visible-text-in-chinese.md) 把模型可见 / 进流那一侧**反过来**了（那一侧的散文现在也写中文）；本文件下面「不许翻（翻了就是回归）」那段之下的注是同一件事的完整记录。
+
 ## 落点与逐条清单
 
 用 `python3 scripts/check-translation-batch.py --remaining` 现查（它已排除冻结面与断言消息）。当前清单是 **6,196 字符 / 10 个文件**：
@@ -28,6 +30,9 @@ Status: done
 | `src/session/store.rs` | 55 | `could not allocate a unique session id after 8 attempts` | **翻** |
 
 **不许翻的（翻了就是回归）**：`src/tools/*` 的一切字符串（工具声明 `description`/`parameters`、`ToolOutput`、`ToolError::message`，含 `edit.rs` 的 `EditError` 全部消息）；`src/permissions.rs` 的 `reason: "mode readonly: …"`；`src/agent.rs` 的 `HOOK_STOPPED_TURN` / `CANCELLED_BEFORE_RUN` / `CANCELLED_IN_FLIGHT` / `BUDGET_NO_NEW_EXECUTOR`、`record_session_error` 的 detail、`agent_identity()`；`src/context*`、`src/discussion*`、`src/provider/projection.rs` 里注入给模型的文本与协议标记；`src/render/input.rs` 的三条问卷端口错误。这批串的清单在 `python3 scripts/check-language.py --list` 里逐条列着。
+
+> **注（2026-09-30）**：上面那条「不许翻（翻了就是回归）」的执行令现在是**历史记录** —— [ADR 0005](../../../docs/adr/0005-model-visible-text-in-chinese.md)（2026-09-30）把其中一大半接管并**反过来**了：`src/tools/*` 的工具声明与描述、`ToolOutput` / `ToolError::message`、`src/permissions.rs` 的 `reason`、`record_session_error` 的 `detail`、以及 `src/context*` / `src/discussion*` / `src/provider/projection.rs` 注入给模型的散文，现在都写中文（逐条见 ADR 0005 的「进度与收口」）。**当时把它列成「不许翻」是对的**：那一版的语言线（ADR 0004）画在「谁读它」上，本票只动只给人看的那一类，模型可见 / 进流的串一个都不许翻；ADR 0005 是从「词性」重画这条线，不是本票翻错了。
+> 仍然不翻的：上游返回的原文（HTTP body / 厂商错误文本）、以及 `looks_like_quota` 的匹配词 —— 与 Comments 第 4 条刻意的分类一致。
 
 ## 测试同步
 

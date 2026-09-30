@@ -55,6 +55,10 @@
 
 ## 高亮
 
+> **状态（2026-09-30 复核）**：这一节讲的是模块**本身**，而它现在**没有生产消费者**——
+> TUI 的工具输出改成以纯文本进详情覆盖层之后（`.scratch/tui-ux/` 票 02），最后一个调用方没了。
+> 为什么留着它、什么会让它回来或走掉，见 [`highlight.md`](highlight.md)。
+
 `render::highlight` 是两层，两者从不互相问话：
 
 - **diff 层**（`diff_tag`）说的是这一行在补丁里是什么：新增、删除、hunk 头还是上下文；
@@ -65,7 +69,8 @@
 新增的关键字两个身份都占。
 
 这套语法就是仓库地图已经依赖的那个 Rust `tree-sitter`，经由 `tree-sitter-highlight` 使用。
-没有 C 构建步骤：syntect 的 Oniguruma 那条路没有走（spec §19，Out of Scope）。
+它避开的是 syntect 的 Oniguruma 那条 C 路径（spec §19，Out of Scope）；但 tree-sitter 的 Rust
+文法自己也要编一个 C parser，所以首次构建并不比纯 Rust 依赖快（见 `Cargo.toml` 那两条注释）。
 
 ## 外壳
 
@@ -73,12 +78,12 @@
 函数（`layout::plan`，`src/render/layout.rs`）—— 画家从不重新推一遍降级阶梯。
 
 ```
-┌─ the frame ────────────────────────────────────────────────────────┐
-│ mark / text identity │ transcript        (scrollbar + rail at its  │
-│ ── tab bar ──────────┤                    right edge)               │
-│ 上下文 / token / …    ├── the status row: 模型 … │ 模式 … │ 上下文 …% │
-│                      ├── the input area                            │
-│                      ├── the hint row                              │
+┌─ 外框 ─────────────────────────────────────────────────────────────┐
+│ 标记 / 文字身份      │ 转录              （滚动条 + 回合条在它的   │
+│ ── 页签条 ───────────┤                    右缘）                    │
+│ 上下文 / token / …    ├── 状态行：模型 … │ 模式 … │ 上下文 …%         │
+│                      ├── 输入区                                    │
+│                      ├── 提示行                                    │
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
 

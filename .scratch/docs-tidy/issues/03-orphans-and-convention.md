@@ -36,7 +36,7 @@ Blocked by: 01, 02
 
 **实现完成（2026-09-26）**。落点：`AGENTS.md`、`README.md`（一行）、`docs/highlight.md`（加状态块）、`docs/research/README.md`（新增）。
 
-1. **`AGENTS.md`** 新增 `### Docs` 一节（英文，与它上面三节一致）：所有文档的索引进在 README 的 `文档` 一节（表 + 语言约定），`.scratch/` 的 feature 索引在 `.scratch/README.md`，写新文档前先读这两处、并跟邻居的风格走。README 的 `AGENTS.md` 那一行也补了「文档该往哪写、语言怎么选，也在这里指回本节」。
+1. **`AGENTS.md`** 新增 `### Docs` 一节（英文，与它上面三节一致 —— **2026-09-30 起正文是中文**：[ADR 0004](../../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 的「后加」把 `AGENTS.md` 正文翻成中文，那五个英文小标题是技能工具链的锚点、不动；见 [ADR 0005](../../../docs/adr/0005-model-visible-text-in-chinese.md)）：所有文档的索引进在 README 的 `文档` 一节（表 + 语言约定），`.scratch/` 的 feature 索引在 `.scratch/README.md`，写新文档前先读这两处、并跟邻居的风格走。README 的 `AGENTS.md` 那一行也补了「文档该往哪写、语言怎么选，也在这里指回本节」。
 2. **`docs/highlight.md`** 开头加了一段**状态块**，写明复核日期与复核方式：`grep -rn 'highlight::' src/` 除模块自己一行都没有、`render/mod.rs` 只有 `pub mod highlight;`、`pane` / `tui` 都没调它 —— 免得读者把文档里「它是什么」当成「它已经接上了」。正文一字未改。
 3. **`docs/research/README.md`（新增）**：说清这堆笔记的读者与用法 —— **材料不是结论**（结论已折进 spec 与逐面文档）、`coding-agent-features.md` 是入口、`notes/` 五份是上游正文、**不加维护**；并点明 `notes/cline-continue.md` 里的 `/sdk/plugins` 是**上游路径**，不是本仓库的坏链。
 4. **链接扫描**（脚本如下，可复用）：

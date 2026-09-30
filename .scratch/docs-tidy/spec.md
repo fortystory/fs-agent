@@ -32,6 +32,8 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 - **例外**：`docs/highlight.md` 是中文 —— 它记录的是「这个模块为什么留着、什么会让它回来」，读者是将来接手的人而不是改那个模块的人。
 - **新增文档跟邻居走**：先看它旁边那份是怎么写的；跨语言的引用保持标识符英文。
 
+> **注（2026-09-30）**：本节与 Problem Statement 第 4 条已经过时 —— 语言线后来重画过两次：[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（2026-09-27 那一轮）把散文扩到全仓，[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md) 又把模型可见与进流的**散文**也收进中文。现状：**散文一律中文**，上面「写英文的」那条清单里的逐面设计文档（`docs/*.md`）与 `docs/agents/*` 在语言迁移那一批（`.scratch/language-migration/`）就翻完了，`docs/highlight.md` 与 `docs/research/` 的一手引文仍是例外；英文只留给标识符、schema 值与协议标记。**清单里那个 `plan-mode` 的名字本身也不在了** —— `docs/plan-mode.md` 随 [ADR 0003](../../docs/adr/0003-plan-leaves-the-permission-modes.md)（「计划」从权限模式搬进 `todo` 工具）一起删除，这里只作当时的记录。
+
 ## User Stories
 
 1. 作为读者，我想从 README 一处就找到**所有**文档的入口，以便不必靠 `find` 才知道有 `docs/research/`。
@@ -53,7 +55,7 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 ## Out of Scope
 
 - **重排目录**（`docs/tui/`、`docs/tools/` 之类）与规范化文件名。
-- **翻译任何文档**（英文不译中、中文不译英）。
+- **翻译任何文档**（英文不译中、中文不译英）—— **2026-09-30 起这条范围声明作废**：`docs/` 的英文设计文档后来整批译中（[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)），模型可见与进流的散文随后也走中文（[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md)）；只有 `docs/research/` 的一手引文仍一个字不改。
 - **改 `.scratch/*/spec.md` 的内容**（它们是当时的决算记录，包括已经推翻的那些）。
 - **删 `.scratch/call-rationale/`**（本地空目录；要删由用户说）。
 - **给文档加生成器 / 检查器**（比如让 CI 校验索引完整）；本轮是手工整理一次。

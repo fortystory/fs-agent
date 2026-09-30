@@ -20,12 +20,12 @@ spec §10 定死了入流前流水线的顺序，§20 把打码放在它的最�
 `agent::append_event` 里，那是写事件流的唯一一条路径：
 
 ```
-tool runs on the TRUE value
-  └─ redact the result text            agent::emit_completed
-       └─ truncate over the cap        context::truncate_result
-            └─ spill to outputs/<id>.txt   (redacted bytes)
-  └─ redact every free-text field      EventPayload::redact
-       └─ append + render              agent::append_event  ← the only writer
+工具跑在真值上
+  └─ 对结果文本打码                    agent::emit_completed
+       └─ 超出上限就截断               context::truncate_result
+            └─ 落盘到 outputs/<id>.txt     （已打码的字节）
+  └─ 对每个自由文本字段打码            EventPayload::redact
+       └─ 追加 + 渲染                  agent::append_event  ← 唯一的写者
 ```
 
 把这条反过来讲，就是它的后果：**流上的文本等于模型看到的文本。** 投影重放的是日志里的

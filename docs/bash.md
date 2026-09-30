@@ -38,12 +38,12 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 一层而已，所以断路器看的是 shell 将要跑什么，而不是外面那层包装（spec §7）：
 
 ```
-["bash", "-lc", "rm -rf /"]            → the command is tokenized and refused
-["bash", "-lc", "cd /tmp && rm -rf /"] → split on `&&`, then refused
-["bash", "-lc", "(rm -rf /)"]          → the wrapping parens are separators
-["bash", "-lc", "if x; then rm -rf /"] → the leading `then` is grammar, dropped
-["bash", "-o", "pipefail", "-c", "rm -rf /"] → the option's argument is skipped
-["bash", "-lc", "echo rm -rf /"]       → `echo` is the command; ordinary work
+["bash", "-lc", "rm -rf /"]            → 这条命令被分词，然后被拒
+["bash", "-lc", "cd /tmp && rm -rf /"] → 先按 `&&` 拆分，然后被拒
+["bash", "-lc", "(rm -rf /)"]          → 外面那层括号就是分隔符
+["bash", "-lc", "if x; then rm -rf /"] → 打头的 `then` 是语法，被丢掉
+["bash", "-o", "pipefail", "-c", "rm -rf /"] → 这个选项的参数被跳过
+["bash", "-lc", "echo rm -rf /"]       → `echo` 才是命令；普通工作
 ```
 
 **这次扫描是词法的、尽力而为的，而且是有意的。** spec §12 写明断路器是为了拦住一次

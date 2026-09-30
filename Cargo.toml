@@ -27,9 +27,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net",
 # `bash` 工具的进程树清理：`Command::process_group(0)` 把 shell 放进它自己的进程组，
 # 而只有 `killpg` 能终止整个组。
 libc = "0.2"
-# 交互式渲染器（spec §19）：ratatui 架在 crossterm 后端上，用行内视口（inline viewport，
-# 不开备用屏幕，转录因此仍可滚动）。`event-stream` 给 crossterm 一个能进 `select!` 的
-# 异步键盘源。
+# 交互式渲染器（spec §19）：ratatui 架在 crossterm 后端上，走备用屏幕（alt screen）全屏
+# —— 行内视口（inline viewport）那条路已由 ADR 0002 整条删掉，转录因此自己持滚动缓冲。
+# `event-stream` 给 crossterm 一个能进 `select!` 的异步键盘源。
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 # 工具输出的语法高亮（spec §19）。Rust 文法本来就是依赖，所以这里复用那棵树；

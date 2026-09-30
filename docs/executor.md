@@ -8,16 +8,16 @@
 ## 一次 `task` 调用的流向
 
 ```
-debater ── task(brief) ──► hook.pre ──► permission gate ──► deferred
-                                                             │
-                        ┌────────────────────────────────────┘
+讨论者 ── task(brief) ──► hook.pre ──► 权限门 ──► 延后
+                                                   │
+                        ┌──────────────────────────┘
                         ▼
-   ExecutorSpawned{executor_id, parent, brief}        ← the executor's own event
-   TurnStarted · … the executor's own turns … · TurnEnded
+   ExecutorSpawned{executor_id, parent, brief}        ← 执行者自己的事件
+   TurnStarted · … 执行者自己的那些回合 … · TurnEnded
    ExecutorFinished{executor_id, reason, summary}
                         │
                         ▼
-   the `task` call's one ToolCallCompleted: 汇总 + 改动文件 + token
+   那次 `task` 调用唯一的一条 ToolCallCompleted：汇总 + 改动文件 + token
 ```
 
 所有东西都落在**同一条**会话流上，于是日志仍是唯一真相源，`seq` 仍是行号，执行者的改动与
