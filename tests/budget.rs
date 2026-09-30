@@ -160,7 +160,7 @@ fn a_session_config_carries_the_price_table_and_the_session_budget() {
     assert_eq!(config.budget.limit, Some(500));
     assert!(
         config.budget.estimate_margin > 1.0,
-        "the default has to be the tolerant comparison"
+        "默认值必须是那个更宽容的比较"
     );
     let cost = config
         .pricing

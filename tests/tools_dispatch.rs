@@ -277,10 +277,7 @@ async fn a_failed_read_does_not_license_a_later_write() {
         .dispatch(&read_call(&fixture, "call-1", &missing))
         .await;
     assert!(read.result.is_err(), "文件不存在");
-    assert!(
-        fixture.read_set.is_empty(),
-        "a failed read recorded nothing"
-    );
+    assert!(fixture.read_set.is_empty(), "读失败什么都没记下");
 
     let write = fixture
         .dispatch(&fixture.call(
@@ -293,7 +290,7 @@ async fn a_failed_read_does_not_license_a_later_write() {
         ))
         .await;
     assert!(write.result.is_ok(), "{:?}", write.result);
-    assert!(missing.exists(), "a new file needs no prior read");
+    assert!(missing.exists(), "新文件不需要先读一次");
 }
 
 #[tokio::test]

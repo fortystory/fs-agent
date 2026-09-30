@@ -274,11 +274,11 @@ fn every_table_that_can_plan_has_the_tool() {
         let table = builtin(can_ask);
         assert!(
             table.get(TODO_TOOL).is_some(),
-            "the built-in table offers it (can_ask = {can_ask})"
+            "内置表也把它摆进去（can_ask = {can_ask}）"
         );
         assert!(
             table.for_executor().get(TODO_TOOL).is_some(),
-            "and an executor keeps it (can_ask = {can_ask})"
+            "而执行者照样留着它（can_ask = {can_ask}）"
         );
     }
 }
