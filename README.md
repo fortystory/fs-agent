@@ -134,7 +134,7 @@ fs-agent --help
 
 ### TUI 长什么样
 
-alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：
+备用屏幕（alt screen）全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 0002](docs/adr/0002-fullscreen-alt-screen-tui.md)）：
 
 ```text
 ┌────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────┐
@@ -163,7 +163,7 @@ alt screen 全屏，**一圈外框 + 一条全高左栏 + 一条主列**（[ADR 
 └────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**左栏（全高）**放身份与读数：宽档（≥ 120 列，40 列宽）画 fs 标记（5 行字符画，亮品红→品红渐变），窄档（80–119 列，28 列宽）退成一行 `fs-agent <版本>`，再窄就**整栏隐藏**、转录吃掉全部宽度。界面里**唯一在动的东西是输入区的提示符**：它是 `❱ `，**fs-agent 干活时**颜色一直在走 —— 色相每 3.3 秒绕一圈、饱和度同时以 2.1 秒的周期轻轻呼吸（24 位真彩，取值来自一条自用脚本）；**轮到你自己打字时它停住**，停在那个固定的静止色上，一眼就能分清「它在想」和「该我说了」。左栏的 mark **完全静止**（下落动画做过、看下来不好看，已关掉，代码留着）。标记下面是 tab 条（`调用量` / `轨迹` / `文件`，**用鼠标点**切换，后两页还没做、写一句占位），再下面是六个读数（上下文 / token / 回合 / 输入 / 输出 / 缓存）。**`todo` 是第四个标签，而且是有条件的一个**：会话里第一次出现非空待办列表时它插到 `调用量` 右边，此后**不再消失**（全做完、被清空都留着——标签在读者眼皮底下消失会把页面挪走）。那一页一行一项（`☐` 待办 / `▸` 进行中 / `✓` 已完成）+ 一行 `已完成 2/5`；不滚动，装不下的项用一行 `＋3 项` 交代。执行者调 `todo` 只在转录里留一行，**不上左栏**。**去留由宽度决定，内容由高度决定**：高度不够时先丢标记、再丢身份行、最后从尾部丢字段，上下文 / token / 回合这三行最后才走。
+**左栏（全高）**放身份与读数：宽档（≥ 120 列，40 列宽）画 fs 标记（5 行字符画，亮品红→品红渐变），窄档（80–119 列，28 列宽）退成一行 `fs-agent <版本>`，再窄就**整栏隐藏**、转录吃掉全部宽度。界面里**唯一在动的东西是输入区的提示符**：它是 `❱ `，**fs-agent 干活时**颜色一直在走 —— 色相每 3.3 秒绕一圈、饱和度同时以 2.1 秒的周期轻轻呼吸（24 位真彩，取值来自一条自用脚本）；**轮到你自己打字时它停住**，停在那个固定的静止色上，一眼就能分清「它在想」和「该我说了」。左栏的 mark **完全静止**（下落动画做过、看下来不好看，已关掉，代码留着）。标记下面是页签（tab）条（`调用量` / `轨迹` / `文件`，**用鼠标点**切换，后两页还没做、写一句占位），再下面是六个读数（上下文 / token / 回合 / 输入 / 输出 / 缓存）。**`todo` 是第四个标签，而且是有条件的一个**：会话里第一次出现非空待办列表时它插到 `调用量` 右边，此后**不再消失**（全做完、被清空都留着——标签在读者眼皮底下消失会把页面挪走）。那一页一行一项（`☐` 待办 / `▸` 进行中 / `✓` 已完成）+ 一行 `已完成 2/5`；不滚动，装不下的项用一行 `＋3 项` 交代。执行者调 `todo` 只在转录里留一行，**不上左栏**。**去留由宽度决定，内容由高度决定**：高度不够时先丢标记、再丢身份行、最后从尾部丢字段，上下文 / token / 回合这三行最后才走。
 
 **主列**自上而下是：转录（右缘恒留两列 —— 滚动条与**回合条**）→ 状态行（`模型 … │ 模式 … │ 上下文 …%`，按宽度先丢模型、再丢模式，**这一行永远在**）→ 输入区（**最少三行**，草稿在第 4 行才继续把它撑高、10 行封顶；提示符 `❱ ` 会变色）→ 提示行。**回合条**一格一个回合（讨论会话一格一个轮次）：最新的一格贴底、视口所在的那一格是亮色 `┃`、其余是暗色 `┊`，溢出的一端画 `⋮`；窗口跟着焦点走，所以任何滚动位置上都有一格是亮的，点一格就跳回那一轮**你自己敲的那句**。**cwd 与时钟不再显示**（它们随旧顶栏一起退场）。
 
@@ -231,18 +231,19 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表：**领域词汇**（事件流、投影、待办列表……）加末尾一节**流程词汇**（feature 目录 / spec / 票 / 决策图 / 分诊标签……），并写明哪两类词不收（通用编程概念、skills 工具名）（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`observability`](docs/observability.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏 alt screen TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的五条检查） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
 
 **约定**（新文档照这个走，别猜；这是 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 定的线）：
 
-- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
+- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
 - **只有三类东西留英文**：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **模型可见**的文本（工具声明与描述、工具结果、`AgentError.message`）；③ **进事件流、要永久回放**的文本（`PermissionDecided.reason`、`SessionError.detail`、协议标记 `CONCLUSION:`、投影的 `[轮 N · 名字]` 前缀）。
+- **术语写「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上（行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、panic 钩子（panic hook））。`cwd` / `token` / `assistant` 这类字段名与 schema 值不夹注、保持英文（CONTEXT.md 里「token 不给中文名」同一条）。
 - **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
 - 为什么后两类不动：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) —— 模型可见文本是 provider 缓存前缀的头，改它要付「缓存整体作废 + 老流永久中英混排」两笔，而那一侧的读者是模型，不是人。
-- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（冻结面无 CJK、`docs/*.md` 的中文占比下限、`src/` 注释中文行的棘轮）。
+- 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（冻结面无 CJK、混住文件里必须留英文的字面量仍在、`docs/*.md` 与 `docs/adr/*.md` 的中文占比下限、ADR 的标题与小标题是中文、`src/` 注释中文行的棘轮）。
 
 ## 开发
 

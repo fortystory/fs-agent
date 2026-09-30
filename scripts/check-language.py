@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADR 0004 的护栏：散文用中文，标识符与「进 messages / 进流」的文本留英文。
 
-三条检查，任一条不过就以非零码退出：
+五条检查，任一条不过就以非零码退出：
 
 ① **冻结面**：模型可见或要永久回放的字符串字面量里不得出现中文。哪些文件属于
    「冻结面」、以及**今天已经存在**的几条中文（三条身份提示、讨论轮前缀、上游供应商
@@ -10,10 +10,19 @@
    那是 ADR 0001 与 ADR 0004 都禁止的事（缓存前缀 + 老流永久混排）。
    测试模块（文件末尾的 `#[cfg(test)]` 之后）不在冻结面内：那是测试数据。
 
-② **`docs/**/*.md` 的中文占比下限**：设计文档是散文，读者是人。`docs/research/` 是
-   上游文档的引文，`docs/highlight.md` 本来就是中文（ADR 0001 的例外），两者不查。
+② **混住文件里必须保持英文的字面量**：`agent/history.rs`、`render/input.rs`、
+   `render/tui.rs`、`cli.rs` 这些文件里，模型可见 / 进流的串与给人看的串住在一起，
+   所以不走①（整文件冻结会拦住该翻的那半），改正面查这几条串还在、且不含中文。
 
-③ **`src/` 与 `tests/` 注释的中文行数下限**：棘轮，只许上升 —— 防止翻过的地方
+③ **`docs/**/*.md` 的中文占比下限**：设计文档是散文，读者是人。`docs/research/` 是
+   上游文档的引文，`docs/highlight.md` 本来就是中文（ADR 0001 的例外），两者不查。
+   `docs/adr/*.md` 也在内 —— ADR 是散文。
+
+④ **ADR 的标题与小标题必须是中文**：ADR 的标题也是散文（ADR 0004 的「后加」一节），
+   所以 `## Consequences` 那类英文小标题报红。整条都是行内代码的标题（如 `# `bash``）
+   剥完是空的，放过；ADR 的**文件名**仍是标识符，留英文。
+
+⑤ **`src/` 与 `tests/` 注释的中文行数下限**：棘轮，只许上升 —— 防止翻过的地方
    被改回英文。
 
 用法：`python3 scripts/check-language.py`（在仓库根目录跑）。加 `--list` 会打印
@@ -22,6 +31,7 @@
 
 from __future__ import annotations
 
+import glob
 import os
 import re
 import sys
@@ -117,12 +127,17 @@ FROZEN_LITERALS = [
     ("src/cli.rs", "Ignore the filler below"),
 ]
 
-# --- ② docs 的中文占比下限（百分数） ----------------------------------------
+# --- ③ docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是
-# `docs/agents/domain.md`，最高 45.5% 是 `docs/observability.md`）。留 2 点余量是因为
+# `docs/agents/domain.md`，最高 45.5% 是 `docs/observability.md`；`docs/adr/*.md`
+# 是 2026-09-30 ADR 中文化那一轮加进来的，实测 42.6–46.4%）。留 2 点余量是因为
 # 文档里必然有英文标识符、代码路径、引用与命令，插一段代码块就会拉低比例；但再往下掉
 # —— 也就是有人把整段散文翻回英文 —— 必须报红。
 DOCS_MIN_RATIO = {
+    "docs/adr/0001-chinese-ui-frozen-model-text.md": 44,
+    "docs/adr/0002-fullscreen-alt-screen-tui.md": 40,
+    "docs/adr/0003-plan-leaves-the-permission-modes.md": 41,
+    "docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md": 43,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
@@ -137,7 +152,7 @@ DOCS_MIN_RATIO = {
     "docs/agents/triage-labels.md": 32,
 }
 
-# --- ③ 注释中文行的棘轮 -----------------------------------------------------
+# --- ⑤ 注释中文行的棘轮 -----------------------------------------------------
 # 数字是「已翻成中文的注释行数」的下限，**只许上升**：它守的是「翻过的地方不许被改回
 # 英文」。2026-09-27 迁移收尾时提到实测值（`src` 5,209 / `tests` 2,423）。确实要删代码、
 # 连带删掉中文注释行时，往下调这个数字是一次**显式动作** —— 请在提交信息里写明理由，
@@ -146,6 +161,34 @@ COMMENT_FLOOR = {
     "src": 5209,
     "tests": 2423,
 }
+
+
+# --- ④ ADR 的标题与小标题必须是中文 -----------------------------------------
+# ADR 的标题也是散文（ADR 0004 的「后加」一节），所以下一个 ADR 不许再写出
+# `## Consequences`。检查前先挖掉代码块与行内代码：`# `bash`` 那种标题剥完是空的，
+# 放过；ADR 的文件名仍是标识符，留英文。
+ADR_DIR = "docs/adr"
+HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*$", re.M)
+FENCE = re.compile(r"^```.*?^```", re.S | re.M)
+
+
+def check_adr_headings() -> list[str]:
+    """每份 ADR 的每个标题，剥掉代码后都要含中文。"""
+    problems = []
+    paths = sorted(glob.glob(os.path.join(ADR_DIR, "*.md")))
+    if not paths:
+        problems.append(f"{ADR_DIR}/: 一份 ADR 都没有（清单该更新了）")
+    for path in paths:
+        text = FENCE.sub("", open(path, encoding="utf-8").read())
+        for heading in HEADING.findall(text):
+            body = re.sub(r"`[^`]*`", " ", heading)  # 行内代码不算散文
+            body = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", body)  # 链接留文字
+            if body.strip() and not CJK.search(body):
+                problems.append(
+                    f"{path}: 标题里一个中文字都没有：{heading.strip()!r}"
+                    "（ADR 的标题与小标题也是散文，见 ADR 0004）"
+                )
+    return problems
 
 
 def literals(src: str):
@@ -308,20 +351,24 @@ def main() -> int:
         return 0
 
     problems = (
-        check_frozen(False) + check_frozen_literals() + check_docs() + check_comments()
+        check_frozen(False)
+        + check_frozen_literals()
+        + check_docs()
+        + check_adr_headings()
+        + check_comments()
     )
     if problems:
         print("check-language: 不通过\n")
         for problem in problems:
             print(f"  - {problem}")
         print(
-            "\n这三条来自 ADR 0004：散文（注释 / docs / 断言消息 / 给人看的错误）用中文，"
+            "\n这五条来自 ADR 0004：散文（注释 / docs / ADR / 断言消息 / 给人看的错误）用中文，"
             "标识符、模型可见文本与进流文本留英文。"
         )
         return 1
     print(
         "check-language: OK（冻结面无新增中文、混住文件里的模型可见 / 进流串仍英文、"
-        "docs 是中文散文、注释中文行数未回退）"
+        "docs 与 ADR 是中文散文、注释中文行数未回退）"
     )
     return 0
 
