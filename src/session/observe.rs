@@ -10,11 +10,11 @@
 //! * [`timeline`] —— 按轮分组的转录，供 `sessions show` 用，[`Filter`] 是它的逃生口，工具调用与
 //!   各自的结果合并在一起；
 //! * [`file_history`] —— 唯一一个按**工作区对象**而不是按时间索引的视图（「谁在那一轮改了这个文
-//!   件」），从一次成功写入所报的 `wrote:` 行推出来；
+//!   件」），从一次成功写入所报的 `已写入：` 行推出来；
 //! * [`stats`] —— 固定的指标集，其中包括别处都不露面的两个量：单边缺席率与编辑阶梯的降级分布。
 //!
-//! 派生指标所读的那些约定文本（`edit match level:`、`wrote:`、读后写的拒绝、`no match` 失败）来
-//! 自生产者用的常量，绝不是某处写第二遍的字面量：一个漂移的前缀会把一个计数悄悄变成零
+//! 派生指标所读的那些约定文本（`编辑匹配等级：`、`已写入：`、改前先读的拒绝、`NoMatch` 失败）
+//! 来自生产者用的常量，绝不是某处写第二遍的字面量：一个漂移的前缀会把一个计数悄悄变成零
 //! （spec §18）。
 
 use std::collections::BTreeMap;
@@ -699,7 +699,7 @@ pub struct FileChange {
 
 /// 按工作区对象看的视图：每一次成功的写入或编辑落在过的每一个文件。
 ///
-/// 路径来自**结果**那一行（`wrote:`），不是来自调用的参数：`hook.pre` 可能改写过参数，所以结果是
+/// 路径来自**结果**那一行（`已写入：`），不是来自调用的参数：`hook.pre` 可能改写过参数，所以结果是
 /// 「实际写下了什么」的唯一记录（spec §16、§18）。
 pub fn file_history(events: &[Event]) -> Vec<FileChange> {
     let mut round: Option<u32> = None;
@@ -1153,7 +1153,7 @@ fn tally_tool(
         guards.read_before_write += 1;
     }
     // 这次作废不是单独的字段：一次失败的匹配**就是**撤掉读权限的那种情况。生产者会给路径加前缀
-    // （`edit_file` 报的是 `"<path>: {error}"`），所以用该变体自己的渲染来匹配后缀 —— 解析器不
+    // （`edit_file` 报的是 `"<path>：{error}"`），所以用该变体自己的渲染来匹配后缀 —— 解析器不
     // 可能与生产者的文本漂移（spec §18）。
     if error.ends_with(&EditError::NoMatch.to_string()) {
         guards.invalidated_reads += 1;
@@ -1164,7 +1164,7 @@ fn tally_tool(
 
 /// 数一次成功编辑结果里报出的匹配级别。
 ///
-/// 那一行是 `edit match level: <level>: …`；级别通过生产者的前缀解析，所以两者不可能漂移
+/// 那一行是 `编辑匹配等级：<level>: …`；级别通过生产者的前缀解析，所以两者不可能漂移
 /// （spec §18）。
 fn count_levels(output: &str, levels: &mut BTreeMap<String, usize>) -> usize {
     let mut seen = 0;

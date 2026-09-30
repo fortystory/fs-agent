@@ -40,27 +40,24 @@ impl Tool for BashTool {
         ToolSpec {
             name: BASH_TOOL.to_owned(),
             description:
-                "Run a shell command in the workspace and return its exit code, stdout and \
-                          stderr. The command runs through `bash -lc`, non-interactively: there is \
-                          no TTY and stdin is empty, so do not start interactive programs. A \
-                          wall-clock timeout applies (120s in the default configuration; the \
-                          session may configure a different default and maximum) and the whole \
-                          process tree is killed when it expires. A non-zero exit is a normal \
-                          result. The workspace is held exclusively for the duration, so prefer \
-                          short, non-interactive commands."
+                "在工作区里跑一条 shell 命令，返回它的退出码、标准输出与标准错误。命令通过 \
+                          `bash -lc` 非交互地跑：没有 TTY、stdin 是空的，所以别启动交互式程序。\
+                          有墙钟超时（默认配置是 120s；会话可以配一个不同的默认值与上限），\
+                          超时会把整棵进程树杀掉。非零退出是正常结果。这次调用期间工作区被独占，\
+                          所以尽量跑短小、非交互的命令。"
                     .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The shell command to run, exactly as written. It is passed \
-                                        to `bash -lc` as a single argument."
+                        "description": "要跑的 shell 命令，按你写下的原文。它会作为单个参数\
+                                        交给 `bash -lc`"
                     },
                     "timeout_ms": {
                         "type": "integer",
-                        "description": "Optional wall-clock cap in milliseconds. Defaults to the \
-                                        configured value and is capped by the configured maximum."
+                        "description": "可选，墙钟上限，单位毫秒。不写就用配置的默认值，并会被\
+                                        配置的上限夹住"
                     }
                 },
                 "required": ["command"]
@@ -80,13 +77,12 @@ impl Tool for BashTool {
     }
 
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError> {
-        let argv = argv(&args).ok_or_else(|| {
-            ToolError::message(format!("{BASH_TOOL}: a non-empty `command` is required"))
-        })?;
+        let argv = argv(&args)
+            .ok_or_else(|| ToolError::message(format!("{BASH_TOOL}：需要一个非空的 `command`")))?;
         let requested = requested_timeout_ms(&args)?;
         if requested == Some(0) {
             return Err(ToolError::message(format!(
-                "{BASH_TOOL}: `timeout_ms` must be a positive number of milliseconds"
+                "{BASH_TOOL}：`timeout_ms` 必须是正的毫秒数"
             )));
         }
         let limit = ctx.bash.timeout(requested);
@@ -115,9 +111,7 @@ fn requested_timeout_ms(args: &Value) -> Result<Option<u64>, ToolError> {
     match args.get("timeout_ms") {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_u64().map(Some).ok_or_else(|| {
-            ToolError::message(format!(
-                "{BASH_TOOL}: `timeout_ms` must be a positive integer of milliseconds"
-            ))
+            ToolError::message(format!("{BASH_TOOL}：`timeout_ms` 必须是正的整数毫秒数"))
         }),
     }
 }

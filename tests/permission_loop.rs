@@ -429,7 +429,7 @@ async fn a_call_outside_the_workspace_is_denied_by_the_path_limit() {
     assert!(!results[0].1);
     let error = results[0].2.clone().unwrap();
     assert!(error.contains("permission denied"), "{error}");
-    assert!(error.contains("outside the session workspace"), "{error}");
+    assert!(error.contains("在会话工作区之外"), "{error}");
 
     let decisions = fixture.decisions();
     assert_eq!(decisions.len(), 1, "这次调用仍然拿到了裁决");

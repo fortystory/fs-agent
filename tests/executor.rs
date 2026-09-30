@@ -484,7 +484,11 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
         })
         .collect();
     assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].contains("read before write"), "{}", failures[0]);
+    assert!(
+        failures[0].contains(fs_agent::tools::READ_BEFORE_WRITE_PREFIX),
+        "{}",
+        failures[0]
+    );
     assert_eq!(fixture.read("plan.txt"), "keep me\n");
 
     fixture.harness.shutdown().await;

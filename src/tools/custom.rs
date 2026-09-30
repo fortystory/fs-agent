@@ -87,7 +87,7 @@ impl Tool for CustomTool {
         let argv = self.argv(&args);
         if argv.is_empty() {
             return Err(ToolError::message(format!(
-                "{}: the call produced no argv to run",
+                "{}：这次调用没有产出任何要跑的 argv",
                 self.declaration.name
             )));
         }

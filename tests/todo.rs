@@ -119,7 +119,7 @@ async fn a_valid_call_answers_with_a_count_of_the_whole_list() {
         ]))
         .await
         .unwrap();
-    assert_eq!(receipt, "todo: 3 items (1 completed)");
+    assert_eq!(receipt, "todo：3 项（1 项已完成）");
 
     // 这份列表是全量替换，所以回执数的是刚提交的那批，
     // 不含之前任何东西。
@@ -127,7 +127,7 @@ async fn a_valid_call_answers_with_a_count_of_the_whole_list() {
         .text(items_of(&[("only one left", "pending")]))
         .await
         .unwrap();
-    assert_eq!(receipt, "todo: 1 item (0 completed)");
+    assert_eq!(receipt, "todo：1 项（0 项已完成）");
 }
 
 #[tokio::test]
@@ -136,7 +136,7 @@ async fn a_missing_or_empty_list_clears_it() {
     let fixture = Fixture::new();
     for args in [json!({ "items": [] }), json!({})] {
         let receipt = fixture.text(args.clone()).await.unwrap();
-        assert_eq!(receipt, "todo: cleared", "{args}");
+        assert_eq!(receipt, "todo：已清空", "{args}");
     }
 }
 
@@ -164,9 +164,9 @@ async fn a_call_the_schema_cannot_read_is_refused_with_a_model_readable_reason()
         // 数组本身，然后是那个不是对象的项。
         (
             json!({ "items": { "content": "x" } }),
-            "`items` must be an array",
+            "`items` 必须是一个由",
         ),
-        (json!({ "items": ["x"] }), "item 0 is not an object"),
+        (json!({ "items": ["x"] }), "第 0 项不是一个对象"),
         (
             json!({ "items": [{ "content": "x", "status": "pending" }], "extra": 1 }),
             "extra",
@@ -402,7 +402,7 @@ async fn one_todo_call_gets_exactly_one_result_and_the_arguments_stand_verbatim(
             assert!(*ok);
             assert_eq!(
                 output.as_deref(),
-                Some("todo: 2 items (0 completed)"),
+                Some("todo：2 项（0 项已完成）"),
                 "回执是一个确认，不是那份列表"
             );
         }

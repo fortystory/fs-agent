@@ -247,7 +247,7 @@ fn a_filter_keeps_only_what_it_names() {
         "edit_file",
         serde_json::json!({}),
     );
-    let no_match = format!("/workspace/a.rs: {}", EditError::NoMatch);
+    let no_match = format!("/workspace/a.rs：{}", EditError::NoMatch);
     result(&mut log, &kimi(), "call-1", false, None, Some(&no_match));
     call(
         &mut log,
@@ -351,7 +351,7 @@ fn the_file_history_names_the_file_and_the_round_that_changed_it() {
         "call-2",
         true,
         Some(&format!(
-            "{WROTE_PATH_PREFIX}/workspace/a.rs\n{MATCH_LEVEL_PREFIX}line-trim: 1 replacement"
+            "{WROTE_PATH_PREFIX}/workspace/a.rs\n{MATCH_LEVEL_PREFIX}line-trim: 1 处替换"
         )),
         None,
     );
@@ -412,7 +412,7 @@ fn stats_report_the_two_silent_quantities_the_edit_ladder_and_absence() {
         "call-1",
         true,
         Some(&format!(
-            "{WROTE_PATH_PREFIX}/workspace/a.rs\n{MATCH_LEVEL_PREFIX}line-trim: 1 replacement"
+            "{WROTE_PATH_PREFIX}/workspace/a.rs\n{MATCH_LEVEL_PREFIX}line-trim: 1 处替换"
         )),
         None,
     );
@@ -425,7 +425,7 @@ fn stats_report_the_two_silent_quantities_the_edit_ladder_and_absence() {
     );
     // 生产者给路径加了前缀（`edit_file` 报的是 `"<path>: {error}"`）；
     // 指标必须透过这层去读，否则它会悄悄数成零。
-    let no_match = format!("/workspace/a.rs: {}", EditError::NoMatch);
+    let no_match = format!("/workspace/a.rs：{}", EditError::NoMatch);
     result(&mut log, &kimi(), "call-2", false, None, Some(&no_match));
     call(
         &mut log,
@@ -440,7 +440,10 @@ fn stats_report_the_two_silent_quantities_the_edit_ladder_and_absence() {
         "call-3",
         false,
         None,
-        Some(&format!("{READ_BEFORE_WRITE_PREFIX}/workspace/a.rs exists but has not been read in this session; read it first")),
+        Some(&format!(
+            "{READ_BEFORE_WRITE_PREFIX}/workspace/a.rs 已存在，但本次会话里还没读过它；\
+             先读它一遍再改"
+        )),
     );
     log.append(
         SpeakerId::System,

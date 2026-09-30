@@ -16,7 +16,7 @@ use super::edit::{find_matches, MatchLevel};
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
 /// 注释形状占位符的检查与匹配等级都作为约定文本落进工具结果，于是渲染与诊断共用一种格式。
-pub const MATCH_LEVEL_PREFIX: &str = "edit match level: ";
+pub const MATCH_LEVEL_PREFIX: &str = "编辑匹配等级：";
 
 /// 每一次成功写开头的那一行，点名它落到了哪个文件上。
 ///
@@ -24,7 +24,7 @@ pub const MATCH_LEVEL_PREFIX: &str = "edit match level: ";
 /// 才是「实际写到哪个文件」的唯一记录。所以任何从流上派生的、关于「哪些文件变了」的东西
 /// （spec §16）都读这一行，而产生它和解析它共用这一个常量 —— 与 [`MATCH_LEVEL_PREFIX`] 同一条
 /// 规矩（spec §18）。
-pub const WROTE_PATH_PREFIX: &str = "wrote: ";
+pub const WROTE_PATH_PREFIX: &str = "已写入：";
 
 /// `read_file`：读会话工作区里的一个文件。
 pub struct ReadFile;
@@ -102,9 +102,7 @@ where
 /// 工具都经与它方向相符的那个解析器解析它：读经 `read_paths`，写经 `write_paths`。
 fn required_path(tool: &str, parsed_file_path: &str) -> Result<PathBuf, ToolError> {
     if parsed_file_path.is_empty() {
-        return Err(ToolError::message(format!(
-            "{tool}: `file_path` is required"
-        )));
+        return Err(ToolError::message(format!("{tool}：`file_path` 是必填的")));
     }
     Ok(PathBuf::from(parsed_file_path))
 }
@@ -114,15 +112,14 @@ impl Tool for ReadFile {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: READ_FILE.to_owned(),
-            description: "Read a file from the workspace. Returns its contents with line numbers."
-                .to_owned(),
+            description: "读取工作区里的一个文件，返回带行号的内容".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file: absolute, or relative to the workspace root. \
-                                          Paths outside the workspace are refused."
+                        "description": "文件路径：绝对路径，或相对于工作区根目录；工作区之外的\
+                                          路径会被拒绝"
                     }
                 },
                 "required": ["file_path"]
@@ -147,9 +144,8 @@ impl Tool for ReadFile {
         let parsed: ReadFileArgs = parse(&args)?;
         let requested = required_path(READ_FILE, &parsed.file_path)?;
         let path = ctx.read_paths.resolve_read(&requested)?;
-        let content = std::fs::read_to_string(&path).map_err(|error| {
-            ToolError::message(format!("cannot read {}: {error}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| ToolError::message(format!("无法读取 {}：{error}", path.display())))?;
 
         let mut text = format!("{}\n", path.display());
         for (index, line) in content.lines().enumerate() {
@@ -175,19 +171,18 @@ impl Tool for WriteFile {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: WRITE_FILE.to_owned(),
-            description: "Write a file in the workspace, creating it or replacing its contents."
-                .to_owned(),
+            description: "在工作区里写一个文件：新建它，或替换它的内容".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file: absolute, or relative to the workspace root. \
-                                          Paths outside the workspace are refused."
+                        "description": "文件路径：绝对路径，或相对于工作区根目录；工作区之外的\
+                                          路径会被拒绝"
                     },
                     "content": {
                         "type": "string",
-                        "description": "The complete new contents of the file"
+                        "description": "要写入文件的完整内容"
                     }
                 },
                 "required": ["file_path", "content"]
@@ -204,12 +199,11 @@ impl Tool for WriteFile {
         let requested = required_path(WRITE_FILE, &parsed.file_path)?;
         let path = ctx.write_paths.resolve_write(&requested)?;
         let existed = path.exists();
-        std::fs::write(&path, parsed.content.as_bytes()).map_err(|error| {
-            ToolError::message(format!("cannot write {}: {error}", path.display()))
-        })?;
-        let verb = if existed { "replaced" } else { "created" };
+        std::fs::write(&path, parsed.content.as_bytes())
+            .map_err(|error| ToolError::message(format!("无法写入 {}：{error}", path.display())))?;
+        let verb = if existed { "替换" } else { "新建" };
         Ok(ToolOutput::new(format!(
-            "{WROTE_PATH_PREFIX}{}\nwrite_file: {verb} ({} bytes)",
+            "{WROTE_PATH_PREFIX}{}\nwrite_file：{verb}（{} 字节）",
             path.display(),
             parsed.content.len()
         )))
@@ -240,28 +234,28 @@ impl Tool for EditFile {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: EDIT_FILE.to_owned(),
-            description: "Replace `old_string` with `new_string` in a workspace file. The match \
-                          must be unique unless `replace_all` is set."
+            description: "把工作区文件里的 `old_string` 替换成 `new_string`。除非设了 \
+                          `replace_all`，匹配必须唯一"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file: absolute, or relative to the workspace root. \
-                                          Paths outside the workspace are refused."
+                        "description": "文件路径：绝对路径，或相对于工作区根目录；工作区之外的\
+                                          路径会被拒绝"
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "The exact text to replace"
+                        "description": "要被替换掉的原文，必须与文件里的文本一字不差"
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "The text to put in its place"
+                        "description": "替换上去的新文本"
                     },
                     "replace_all": {
                         "type": "boolean",
-                        "description": "Replace every occurrence instead of requiring a unique match"
+                        "description": "替换每一处，而不是要求匹配唯一"
                     }
                 },
                 "required": ["file_path", "old_string", "new_string"]
@@ -277,9 +271,8 @@ impl Tool for EditFile {
         let parsed: EditCall = parse(&args)?;
         let requested = required_path(EDIT_FILE, &parsed.file_path)?;
         let path = ctx.write_paths.resolve_write(&requested)?;
-        let content = std::fs::read_to_string(&path).map_err(|error| {
-            ToolError::message(format!("cannot read {}: {error}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| ToolError::message(format!("无法读取 {}：{error}", path.display())))?;
 
         let edits = find_matches(
             &content,
@@ -290,10 +283,10 @@ impl Tool for EditFile {
         .map_err(|error| match error {
             // 阶梯失败就是「agent 对那个文件的图景已陈旧」的信号，所以派发器收回该路径的读权限。
             error @ super::edit::EditError::NoMatch => ToolError::InvalidatesReads {
-                message: format!("{}: {error}", path.display()),
+                message: format!("{}：{error}", path.display()),
                 path: path.clone(),
             },
-            other => ToolError::message(format!("{}: {other}", path.display())),
+            other => ToolError::message(format!("{}：{other}", path.display())),
         })?;
 
         // 实际被替换掉的那些字节，不是调用方给的 `old_string`：降档后的匹配会匹配上不同的字节，
@@ -303,31 +296,26 @@ impl Tool for EditFile {
 
         let snapshot = ctx.outputs_dir.join(before_artifact(ctx.tool_call_id));
         std::fs::create_dir_all(ctx.outputs_dir).map_err(|error| {
-            ToolError::message(format!(
-                "cannot create {}: {error}",
-                ctx.outputs_dir.display()
-            ))
+            ToolError::message(format!("无法创建 {}：{error}", ctx.outputs_dir.display()))
         })?;
         // 快照**先于**目标落盘：如果它写不进去，那就什么都还没变，这次调用干净地失败。一个活得比
         // 失败的目标写更久的快照是无害的 —— `/undo` 只会考虑那些已记录结果为成功的编辑。
         super::paths::write_owner_only(&snapshot, replaced.as_bytes()).map_err(|error| {
-            ToolError::message(format!("cannot write {}: {error}", snapshot.display()))
+            ToolError::message(format!("无法写入 {}：{error}", snapshot.display()))
         })?;
-        std::fs::write(&path, updated.as_bytes()).map_err(|error| {
-            ToolError::message(format!("cannot write {}: {error}", path.display()))
-        })?;
+        std::fs::write(&path, updated.as_bytes())
+            .map_err(|error| ToolError::message(format!("无法写入 {}：{error}", path.display())))?;
 
         let level = edits
             .first()
             .map(|edit| edit.level)
             .unwrap_or(MatchLevel::Exact);
         Ok(ToolOutput::new(format!(
-            "{WROTE_PATH_PREFIX}{}\n{} {}: {} replacement{} ({} bytes -> {} bytes)",
+            "{WROTE_PATH_PREFIX}{}\n{} {}: {} 处替换（{} 字节 -> {} 字节）",
             path.display(),
             MATCH_LEVEL_PREFIX,
             level.as_str(),
             edits.len(),
-            if edits.len() == 1 { "" } else { "s" },
             content.len(),
             updated.len(),
         )))
@@ -341,14 +329,12 @@ fn apply_edits(
     new_string: &str,
 ) -> Result<String, ToolError> {
     if edits.is_empty() {
-        return Err(ToolError::message("edit_file: no edit to apply"));
+        return Err(ToolError::message("edit_file：没有可施加的编辑"));
     }
     let mut updated = content.to_owned();
     for edit in edits.iter().rev() {
         if !updated.is_char_boundary(edit.span.start) || !updated.is_char_boundary(edit.span.end) {
-            return Err(ToolError::message(
-                "edit_file: matched region is not on character boundaries",
-            ));
+            return Err(ToolError::message("edit_file：匹配上的区域不在字符边界上"));
         }
         updated.replace_range(edit.span.clone(), new_string);
     }
@@ -357,7 +343,7 @@ fn apply_edits(
 
 fn parse<T: for<'de> Deserialize<'de>>(args: &Value) -> Result<T, ToolError> {
     serde_json::from_value(args.clone())
-        .map_err(|error| ToolError::message(format!("invalid tool arguments: {error}")))
+        .map_err(|error| ToolError::message(format!("工具参数无效：{error}")))
 }
 
 /// 一个想表达「没有值」的模型可能会发 `null`；把它当作缺席。

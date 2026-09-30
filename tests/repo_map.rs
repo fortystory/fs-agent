@@ -650,7 +650,10 @@ async fn repo_map_says_so_when_the_workspace_has_no_rust_symbols() {
     fixture.shutdown().await;
 
     let output = completed_output(&fixture.events(), "call-1").unwrap();
-    assert!(output.contains("no Rust symbols found"), "{output}");
+    assert!(
+        output.contains("没有找到任何 Rust 符号"),
+        "空工作区明说自己没有符号，而不是回一段空文本：{output}"
+    );
 }
 
 // --- 记录下来的回归基线 ----------------------------------------------------

@@ -649,7 +649,10 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
             content,
         } => {
             assert_eq!(tool_call_id, "call-edit");
-            assert!(content.contains("edit match"), "{content}");
+            assert!(
+                content.contains(fs_agent::tools::MATCH_LEVEL_PREFIX),
+                "{content}"
+            );
         }
         other => panic!("期望最后一条消息是编辑的结果，实际得到 {other:?}"),
     }
@@ -689,7 +692,10 @@ async fn an_edit_before_a_read_is_refused_and_the_file_is_left_alone() {
         .expect("被拒的那次调用照样拿到一条结果");
     assert!(!result.0);
     let message = result.1.unwrap();
-    assert!(message.contains("read before write"), "{message}");
+    assert!(
+        message.contains(fs_agent::tools::READ_BEFORE_WRITE_PREFIX),
+        "{message}"
+    );
 }
 
 #[tokio::test]

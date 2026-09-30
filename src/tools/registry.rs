@@ -37,7 +37,7 @@ use super::tool::{
 /// 拒绝被记录下来的地方只有结果本身 —— 没有给它留字段 —— 所以产生它的地方与统计它的可观测
 /// 查询共用这一个常量，也就是编辑匹配等级遵循的同一条「约定文本」规矩（spec §18）。前缀一漂，
 /// 计数就会悄悄变成零。
-pub const READ_BEFORE_WRITE_PREFIX: &str = "read before write: ";
+pub const READ_BEFORE_WRITE_PREFIX: &str = "改前先读：";
 
 /// 某一个会话的工具表。
 #[derive(Default)]
@@ -103,9 +103,7 @@ impl Registry {
         paths: &SessionPaths,
     ) -> Result<CallFacts, ToolError> {
         let Some(tool) = self.get(tool_name) else {
-            return Err(ToolError::message(format!(
-                "no tool registered: {tool_name}"
-            )));
+            return Err(ToolError::message(format!("没有注册的工具：{tool_name}")));
         };
 
         let effect = tool.effect(args);
@@ -155,7 +153,7 @@ impl Registry {
     pub async fn dispatch(&self, call: &PendingCall, allowed: &AllowedCall) -> DispatchOutcome {
         let Some(tool) = self.get(&call.tool_name) else {
             return DispatchOutcome::failure(
-                ToolError::message(format!("no tool registered: {}", call.tool_name)),
+                ToolError::message(format!("没有注册的工具：{}", call.tool_name)),
                 false,
             );
         };
@@ -254,8 +252,7 @@ impl CallFacts {
             .find(|path| path.exists() && !read_set.contains(path))
         {
             return GuardedCall::Refused(ToolError::message(format!(
-                "{READ_BEFORE_WRITE_PREFIX}{} exists but has not been read in this session; \
-                 read it first",
+                "{READ_BEFORE_WRITE_PREFIX}{} 已存在，但本次会话里还没读过它；先读它一遍再改",
                 path.display()
             )));
         }

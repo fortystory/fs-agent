@@ -641,11 +641,7 @@ async fn credentials_are_blocked_at_the_filesystem_and_policy_boundaries() {
         .find(|(id, ..)| id == "call-2")
         .expect("工作区之外那次读拿到了结果");
     assert!(!outside.1, "{outside:?}");
-    assert!(
-        outside.2.contains("outside the session workspace"),
-        "{:?}",
-        outside.2
-    );
+    assert!(outside.2.contains("在会话工作区之外"), "{:?}", outside.2);
 
     // 两次试图读的东西一点都没进流：.env 文件里真正的
     // 密钥从没机会变成一条事件。

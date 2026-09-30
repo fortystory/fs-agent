@@ -19,7 +19,9 @@ use fs_agent::events::{
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, BashLimits, Effect, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
+use fs_agent::tools::{
+    builtin, BashLimits, Effect, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX,
+};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
@@ -220,7 +222,7 @@ async fn a_real_command_reports_its_stdout_and_exit_code() {
     let (_, ok, output) = fixture.results().remove(0);
     assert!(ok, "命令成功了：{output}");
     assert!(
-        output.starts_with("exit code: 0\n"),
+        output.starts_with(&format!("{EXIT_CODE_PREFIX}0\n")),
         "状态走在结果最前面：{output:?}"
     );
     assert!(output.contains(STDOUT_HEADER), "{output:?}");
@@ -249,7 +251,10 @@ async fn a_non_zero_exit_is_a_result_the_model_can_read() {
 
     let (_, ok, output) = fixture.results().remove(0);
     assert!(ok, "失败的命令是数据，不是 ToolError：{output:?}");
-    assert!(output.contains("exit code: 3"), "{output:?}");
+    assert!(
+        output.contains(&format!("{EXIT_CODE_PREFIX}3")),
+        "{output:?}"
+    );
     assert!(output.contains("oops"), "stderr 在结果里：{output:?}");
 
     fixture.harness.shutdown().await;
@@ -271,7 +276,7 @@ async fn a_zero_timeout_is_refused_as_an_argument_error() {
 
     let (_, ok, message) = fixture.results().remove(0);
     assert!(!ok);
-    assert!(message.contains("positive"), "{message}");
+    assert!(message.contains("必须是正的毫秒数"), "{message}");
     assert!(!fixture.exists("made.txt"), "参数被拒，什么都还没有跑");
 
     fixture.harness.shutdown().await;
@@ -358,7 +363,7 @@ async fn a_timed_out_command_is_killed_with_its_process_tree() {
     assert!(ok, "半截的结果也被报出来了：{output:?}");
     assert!(output.contains(TIMEOUT_PREFIX), "{output:?}");
     assert!(
-        output.contains("killed by signal"),
+        output.contains("被信号"),
         "shell 是被信号带走的，不是自己退出：{output:?}"
     );
 

@@ -615,7 +615,7 @@ fn the_path_limit_is_a_deny_floor() {
     // 根本没用上的 `Allow`。
     let call = Invocation::write("write_file")
         .writes(&["/etc/hostname"])
-        .path_error("path /etc/hostname is outside the session workspace /w");
+        .path_error("路径 /etc/hostname 在会话工作区之外（/w）");
     for mode in [Mode::Readonly, Mode::Ask, Mode::Auto] {
         let verdict = gate(mode, vec![allow_any()], &call);
         assert_eq!(verdict.decision, Decision::Deny, "{mode:?}");

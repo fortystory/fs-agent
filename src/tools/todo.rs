@@ -93,14 +93,13 @@ impl TodoTool {
     fn parse(args: &Value) -> Result<Vec<Item>, ToolError> {
         let Some(object) = args.as_object() else {
             return Err(ToolError::message(format!(
-                "{TODO_TOOL}: the arguments must be a JSON object with an `items` array"
+                "{TODO_TOOL}：参数必须是一个带 `items` 数组的 JSON 对象"
             )));
         };
         for key in object.keys() {
             if key != "items" {
                 return Err(ToolError::message(format!(
-                    "{TODO_TOOL}: unknown argument `{key}`; this tool takes `items` and nothing \
-                     else"
+                    "{TODO_TOOL}：不认识的参数 `{key}`；这个工具只收 `items`，别的都不收"
                 )));
             }
         }
@@ -109,8 +108,8 @@ impl TodoTool {
         };
         let Some(raw) = raw.as_array() else {
             return Err(ToolError::message(format!(
-                "{TODO_TOOL}: `items` must be an array of `{{content, status}}` objects; send \
-                 `[]` to clear the list"
+                "{TODO_TOOL}：`items` 必须是一个由 `{{content, status}}` 对象组成的数组；发 \
+                 `[]` 可以清空列表"
             )));
         };
 
@@ -118,14 +117,13 @@ impl TodoTool {
         for (index, raw) in raw.iter().enumerate() {
             let Some(object) = raw.as_object() else {
                 return Err(ToolError::message(format!(
-                    "{TODO_TOOL}: item {index} is not an object; every item is \
-                     `{{content, status}}`"
+                    "{TODO_TOOL}：第 {index} 项不是一个对象；每一项都是 `{{content, status}}`"
                 )));
             };
             for key in object.keys() {
                 if key != "content" && key != "status" {
                     return Err(ToolError::message(format!(
-                        "{TODO_TOOL}: item {index} has an unknown field `{key}`; every item is \
+                        "{TODO_TOOL}：第 {index} 项有一个不认识的字段 `{key}`；每一项都是 \
                          `{{content, status}}`"
                     )));
                 }
@@ -138,21 +136,21 @@ impl TodoTool {
                 .to_owned();
             if content.is_empty() {
                 return Err(ToolError::message(format!(
-                    "{TODO_TOOL}: item {index} needs a non-empty `content` — one line saying what \
-                     it is"
+                    "{TODO_TOOL}：第 {index} 项需要一个非空的 `content`——一行，说这一项是\
+                     什么"
                 )));
             }
             let status = match object.get("status").and_then(Value::as_str) {
                 Some(word) => Status::parse(word).ok_or_else(|| {
                     ToolError::message(format!(
-                        "{TODO_TOOL}: item {index} has `status` = `{word}`; the three words are \
-                         `pending`, `in_progress` and `completed`"
+                        "{TODO_TOOL}：第 {index} 项的 `status` 是 `{word}`；只有 `pending`、\
+                         `in_progress`、`completed` 这三个词"
                     ))
                 })?,
                 None => {
                     return Err(ToolError::message(format!(
-                        "{TODO_TOOL}: item {index} needs a `status` of `pending`, `in_progress` \
-                         or `completed`"
+                        "{TODO_TOOL}：第 {index} 项需要一个 `status`，取 `pending`、\
+                         `in_progress` 或 `completed`"
                     )))
                 }
             };
@@ -162,15 +160,14 @@ impl TodoTool {
     }
 }
 
-/// 回执：说给模型的、这次调用做了什么。很短、是英文（模型可见文本，ADR 0001），而且刻意**不是**
+/// 回执：说给模型的、这次调用做了什么。很短、是中文（模型可见文本，ADR 0005），而且刻意**不是**
 /// 那份列表 —— 列表就是这次调用的参数，在这里重复一遍会造出第二份可能漂移的副本。
 fn receipt(items: &[Item]) -> String {
     if items.is_empty() {
-        return format!("{TODO_TOOL}: cleared");
+        return format!("{TODO_TOOL}：已清空");
     }
-    let noun = if items.len() == 1 { "item" } else { "items" };
     format!(
-        "{TODO_TOOL}: {} {noun} ({} completed)",
+        "{TODO_TOOL}：{} 项（{} 项已完成）",
         items.len(),
         completed(items)
     )
@@ -181,34 +178,31 @@ impl Tool for TodoTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: TODO_TOOL.to_owned(),
-            description: "Record the plan you are working to, as a list of items with their \
-                          status. One call submits the whole list and replaces the previous one, \
-                          so send every item each time: leave `items` out (or send an empty \
-                          array) to clear the list. Each item is `{content, status}` with \
-                          `status` one of `pending`, `in_progress`, `completed`; `content` must \
-                          be a non-empty line. The result is a one-line receipt — the list itself \
-                          is this call's arguments, which is where you and the user read it back \
-                          from."
+            description: "把你正在照做的计划记下来：一份带状态的待办列表。一次调用提交整份列表，并\
+                          替换掉前一份，所以每次都要把所有项都发过来：不写 `items`（或发 `[]`）就\
+                          是清空列表。每一项是 `{content, status}`，`status` 取 `pending`、\
+                          `in_progress`、`completed` 之一；`content` 必须是非空的一行。结果是一行\
+                          回执——列表本身就在这次调用的参数里，你和用户都从那里读回它。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "items": {
                         "type": "array",
-                        "description": "The whole list, in the order it should be read. Omit it \
-                                        (or send `[]`) to clear the list.",
+                        "description": "整份列表，按它该被读的顺序。不写它（或发 `[]`）就是\
+                                        清空列表",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "content": {
                                     "type": "string",
-                                    "description": "One line saying what the item is."
+                                    "description": "一行，说这一项是什么"
                                 },
                                 "status": {
                                     "type": "string",
                                     "enum": ["pending", "in_progress", "completed"],
-                                    "description": "`pending` is written down, `in_progress` is \
-                                                    being worked on, `completed` is done."
+                                    "description": "`pending` 是写下来了，`in_progress` 是正在\
+                                                    做，`completed` 是做完了"
                                 }
                             },
                             "required": ["content", "status"]

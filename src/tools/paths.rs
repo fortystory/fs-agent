@@ -66,10 +66,10 @@ impl SessionPaths {
             Err(_) => {
                 // 还不存在的文件经它的父目录解析；父目录必须存在，而符号链接能逃出去靠的正是它。
                 let parent = joined.parent().ok_or_else(|| {
-                    ToolError::message(format!("{} has no parent directory", joined.display()))
+                    ToolError::message(format!("{} 没有父目录", joined.display()))
                 })?;
                 let parent = std::fs::canonicalize(parent).map_err(|error| {
-                    ToolError::message(format!("cannot resolve {}: {error}", joined.display()))
+                    ToolError::message(format!("无法解析 {}：{error}", joined.display()))
                 })?;
                 match joined.file_name() {
                     Some(name) => parent.join(name),
@@ -103,8 +103,8 @@ impl SessionPaths {
             return Ok(());
         }
         Err(ToolError::message(format!(
-            "path {} is outside the session workspace {}; file tools are confined to the \
-             workspace and no permission rule widens that",
+            "路径 {} 在会话工作区之外（{}）；文件工具只被允许在工作区里干活，没有任何权限规则\
+             能放宽这一条",
             resolved.display(),
             self.cwd.display()
         )))

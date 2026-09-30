@@ -20,10 +20,10 @@ use tokio::process::Command;
 use super::tool::ToolError;
 
 /// 结果里那些分节标记，只在这里命名一次，好让测试与文档不会漂离模型真正看到的格式。
-pub const EXIT_CODE_PREFIX: &str = "exit code: ";
-pub const STDOUT_HEADER: &str = "--- stdout ---";
-pub const STDERR_HEADER: &str = "--- stderr ---";
-pub const TIMEOUT_PREFIX: &str = "timed out after ";
+pub const EXIT_CODE_PREFIX: &str = "退出码：";
+pub const STDOUT_HEADER: &str = "--- 标准输出 ---";
+pub const STDERR_HEADER: &str = "--- 标准错误 ---";
+pub const TIMEOUT_PREFIX: &str = "超时：";
 
 /// 进程组被杀之后，输出读取者还有多久能看到 EOF。
 ///
@@ -51,7 +51,7 @@ impl CommandOutcome {
         let mut text = String::new();
         if self.timed_out {
             text.push_str(&format!(
-                "{TIMEOUT_PREFIX}{} ms; the process group was killed\n",
+                "{TIMEOUT_PREFIX}{} ms 内没有跑完；整个进程组已被杀掉\n",
                 self.limit.as_millis()
             ));
         }
@@ -85,10 +85,10 @@ pub fn describe_status(status: &ExitStatus) -> String {
         use std::os::unix::process::ExitStatusExt;
 
         if let Some(signal) = status.signal() {
-            return format!("killed by signal {signal}");
+            return format!("被信号 {signal} 杀掉");
         }
     }
-    "unknown".to_owned()
+    "未知".to_owned()
 }
 
 /// 在它自己的进程组里 spawn `argv`，捕获两条流，并强制 `limit`。
@@ -101,7 +101,7 @@ pub async fn run(
 ) -> Result<CommandOutcome, ToolError> {
     let (program, rest) = argv
         .split_first()
-        .ok_or_else(|| ToolError::message("cannot run an empty argv"))?;
+        .ok_or_else(|| ToolError::message("argv 为空，无法运行"))?;
 
     let mut command = Command::new(program);
     command
@@ -120,18 +120,18 @@ pub async fn run(
 
     let mut child = command
         .spawn()
-        .map_err(|error| ToolError::message(format!("cannot spawn `{program}`: {error}")))?;
-    let pid = child.id().ok_or_else(|| {
-        ToolError::message(format!("`{program}` exited before it could be tracked"))
-    })?;
+        .map_err(|error| ToolError::message(format!("无法启动 `{program}`：{error}")))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| ToolError::message(format!("`{program}` 在能追踪到它之前就退出了")))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| ToolError::message("stdout was not piped"))?;
+        .ok_or_else(|| ToolError::message("stdout 没有接上管道"))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| ToolError::message("stderr was not piped"))?;
+        .ok_or_else(|| ToolError::message("stderr 没有接上管道"))?;
 
     // 读取者作为各自的任务跑，所以命令还在跑时管道不会被填满，下面的循环则可以随到随收输出。
     let mut stdout_reader = tokio::spawn(read_to_end(stdout));
@@ -169,7 +169,7 @@ pub async fn run(
             }
             result = &mut wait, if status.is_none() => {
                 status = Some(result.map_err(|error| {
-                    ToolError::message(format!("cannot wait for `{program}`: {error}"))
+                    ToolError::message(format!("无法等待 `{program}`：{error}"))
                 })?);
             }
             result = &mut stdout_reader, if stdout_open => {
@@ -192,7 +192,7 @@ pub async fn run(
         None => child
             .wait()
             .await
-            .map_err(|error| ToolError::message(format!("cannot reap `{program}`: {error}")))?,
+            .map_err(|error| ToolError::message(format!("无法回收 `{program}`：{error}")))?,
     };
     Ok(CommandOutcome {
         timed_out,

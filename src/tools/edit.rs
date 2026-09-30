@@ -57,17 +57,11 @@ pub struct EditMatch {
 /// 工作区（spec §11）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RevertError {
-    #[error("the file no longer contains the region this snapshot replaced")]
+    #[error("文件里已经找不到这份快照替换掉的那段区域")]
     Stale,
-    #[error(
-        "more than one region of the file could be the one this snapshot replaced; \
-         the file has changed since the edit"
-    )]
+    #[error("文件里不止一段区域可能是这份快照替换掉的那处；这次编辑之后文件又变过了")]
     Ambiguous,
-    #[error(
-        "this edit deleted the matched region, and the stream records no position for it; \
-         it cannot be undone automatically"
-    )]
+    #[error("这次编辑删掉了匹配上的那段区域，而流上没有记下它的位置；它没法自动撤销")]
     CannotLocateDeletion,
 }
 
@@ -75,18 +69,18 @@ pub enum RevertError {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EditError {
     #[error(
-        "no match found at any level of the ladder \
-         (exact, line-end-whitespace-insensitive, line-trim)"
+        "整条匹配阶梯上都没有找到匹配（\
+         exact、line-end-whitespace-insensitive、line-trim）"
     )]
     NoMatch,
     #[error(
-        "`old_string` matches {count} times; include more surrounding context to make it unique, \
-         or pass replace_all to change every occurrence"
+        "`old_string` 匹配上了 {count} 处；多带上一些上下文让它唯一，或者传 \
+         `replace_all` 把每一处都替换掉"
     )]
     NonUnique { count: usize, old_text: String },
     #[error(
-        "matched region is {bytes} bytes / {lines} lines, too large for `old_string` \
-         ({old_bytes} bytes); include the exact text you mean to replace"
+        "匹配上的区域有 {bytes} 字节 / {lines} 行，对 `old_string`（{old_bytes} 字节）来说\
+         太大了；请把你要替换的原文一字不差地写上"
     )]
     MatchTooLarge {
         bytes: usize,
@@ -94,8 +88,8 @@ pub enum EditError {
         old_bytes: usize,
     },
     #[error(
-        "`old_string` looks like a placeholder ({phrase:?}); it is a comment-shaped stand-in, \
-         not text in the file. Pass the real text you want to replace"
+        "`old_string` 看起来是个占位符（{phrase:?}）；它是一条注释形状的替身，不是文件里的\
+         文本。请把你要替换的真实文本传进来"
     )]
     Placeholder { phrase: String },
 }

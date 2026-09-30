@@ -7,7 +7,10 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use fs_agent::tools::{builtin, Effect, PathLocks, PendingCall, ReadSet, Registry, SessionPaths};
+use fs_agent::tools::{
+    builtin, Effect, PathLocks, PendingCall, ReadSet, Registry, SessionPaths,
+    READ_BEFORE_WRITE_PREFIX,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -163,7 +166,7 @@ async fn a_write_to_an_unread_file_is_refused_before_the_tool_runs() {
         .await;
 
     let error = outcome.result.unwrap_err().to_string();
-    assert!(error.contains("read before write"), "{error}");
+    assert!(error.contains(READ_BEFORE_WRITE_PREFIX), "{error}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "one\ntwo\n",
@@ -207,7 +210,10 @@ async fn a_non_unique_match_is_refused_unless_replace_all_is_asked_for() {
         .dispatch(&edit_call(&fixture, "call-2", &file, "= 1;", "= 2;"))
         .await;
     let error = refused.result.unwrap_err().to_string();
-    assert!(error.contains("matches 2 times"), "{error}");
+    assert!(
+        error.contains("`old_string` 匹配上了 2 处"),
+        "拒绝时把那个计数原样交回：{error}"
+    );
     assert!(!refused.invalidated_reads, "一次拒绝不是一次读过期");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
@@ -261,7 +267,7 @@ async fn a_failed_match_withdraws_the_read_permission_for_that_path() {
         .dispatch(&edit_call(&fixture, "call-3", &file, "one", "zero"))
         .await;
     let error = retry.result.unwrap_err().to_string();
-    assert!(error.contains("read before write"), "{error}");
+    assert!(error.contains(READ_BEFORE_WRITE_PREFIX), "{error}");
 }
 
 #[tokio::test]
@@ -310,7 +316,7 @@ async fn write_file_over_an_existing_file_needs_a_read_first_but_creating_one_do
         ))
         .await;
     let error = overwrite.result.unwrap_err().to_string();
-    assert!(error.contains("read before write"), "{error}");
+    assert!(error.contains(READ_BEFORE_WRITE_PREFIX), "{error}");
     assert_eq!(std::fs::read_to_string(&existing).unwrap(), "old\n");
 
     let read = fixture
@@ -363,7 +369,7 @@ async fn a_read_set_is_per_agent_so_executors_do_not_inherit_reads() {
         )
         .await;
     let error = edit.result.unwrap_err().to_string();
-    assert!(error.contains("read before write"), "{error}");
+    assert!(error.contains(READ_BEFORE_WRITE_PREFIX), "{error}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "one\ntwo\n");
 }
 
@@ -500,7 +506,10 @@ async fn the_scheduler_partitions_calls_by_declared_effect() {
         ))
         .await;
     let error = outside.result.unwrap_err().to_string();
-    assert!(error.contains("outside the session workspace"), "{error}");
+    assert!(
+        error.contains("在会话工作区之外"),
+        "工作区之外的读被收容规则拒掉：{error}"
+    );
 
     // 注册表是一个运行时值：挂上一个工具就改变发出去的
     // spec 列表，中间没有任何全局状态。

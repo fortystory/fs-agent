@@ -31,19 +31,18 @@ impl Tool for TaskTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: TASK_TOOL.to_owned(),
-            description: "Dispatch an executor: a separate agent with its own context and its own \
-                          budget that carries out one task in this workspace. Write the brief so it \
-                          stands alone — the executor sees the repository rules and your brief, not \
-                          this conversation. It reports back a summary; you do not see its steps, its \
-                          tool calls or their output. It cannot dispatch further executors."
+            description: "派一个执行者：一个独立的 agent，有自己的上下文和自己的预算，在这个\
+                          工作区里完成一项任务。把 `brief` 写得能独立成立——执行者看到的是仓库\
+                          规则和你的 `brief`，不是这段对话。它回报一份摘要；它的步骤、它的工具\
+                          调用与那些输出你都看不到。它也不能再派下一个执行者。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "brief": {
                         "type": "string",
-                        "description": "The task, self-contained: what to do, where, and what the \
-                                        summary should report back."
+                        "description": "任务本身，要能独立成立：做什么、在哪里做，以及摘要该\
+                                        回报什么"
                     }
                 },
                 "required": ["brief"]
@@ -67,12 +66,10 @@ impl Tool for TaskTool {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|brief| !brief.is_empty())
-            .ok_or_else(|| {
-                ToolError::message(format!("{TASK_TOOL}: a non-empty `brief` is required"))
-            })?;
+            .ok_or_else(|| ToolError::message(format!("{TASK_TOOL}：需要一个非空的 `brief`")))?;
         let Some(spawner): Option<&dyn ExecutorSpawner> = ctx.executor else {
             return Err(ToolError::message(format!(
-                "{TASK_TOOL}: this session mounted no executor port"
+                "{TASK_TOOL}：这个会话没有挂执行者端口"
             )));
         };
         spawner.spawn(brief).await

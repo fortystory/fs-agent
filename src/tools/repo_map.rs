@@ -40,19 +40,18 @@ impl Tool for RepoMapTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: REPO_MAP_TOOL.to_owned(),
-            description: "Map this workspace's Rust symbols: each file and the functions, types, \
-                          traits, modules and macros it defines. Call it first when exploring an \
-                          unfamiliar repository. Pass `focus` (identifiers, a subsystem, a path) \
-                          to bias the map toward one part of the code. The map is ranked by what \
-                          this session recently read or mentioned and is capped by a fixed \
-                          budget; it is a snapshot of the files as they are now."
+            description: "画出这个工作区的 Rust 符号地图：每个文件，以及它定义的函数、类型、\
+                          trait、模块与宏。探索不熟的仓库时先调它。传 `focus`（标识符、某个\
+                          子系统，或一条路径）可以把地图偏向代码的某一部分。地图按本次会话最近\
+                          读过或提过的东西排序，并由一个固定预算封顶；它是这些文件此刻的快照。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "focus": {
                         "type": "string",
-                        "description": "Optional words to bias the map toward: identifiers, a subsystem, or a path. There is no `tokens` argument; the budget is configuration."
+                        "description": "可选，用来把地图偏向某些词：标识符、某个子系统或一条路径。\
+                                        没有 `tokens` 参数；预算是配置"
                     }
                 }
             }),
@@ -74,7 +73,7 @@ impl Tool for RepoMapTool {
         let map = self.map.build(ctx.cwd, &context, ctx.repo_map.tokens);
         if map.is_empty() {
             return Ok(ToolOutput::new(format!(
-                "no Rust symbols found under {}",
+                "{} 底下没有找到任何 Rust 符号",
                 ctx.cwd.display()
             )));
         }

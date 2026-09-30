@@ -79,6 +79,6 @@ fs-agent sessions stats <id> [--model ID] [--json]
 
 那些只以文本形式存在于一条已有载荷上的诊断，是通过**产出方自己的常量**读的 ——
 `MATCH_LEVEL_PREFIX`、`WROTE_PATH_PREFIX`、`READ_BEFORE_WRITE_PREFIX`，以及编辑匹配梯的
-`EditError` 渲染 —— 从不用一个抄了两遍的字面量。一次匹配梯失败落地成 `"<path>: <error>"`，
+`EditError` 渲染 —— 从不用一个抄了两遍的字面量。一次匹配梯失败落地成 `"<path>：<error>"`，
 所以读集失效的计数是按后缀匹配的。这是唯一一处一个漂移的字符串能把一个指标静默变成零的
 地方，也正因如此这条约定只有一个家（spec §18）。

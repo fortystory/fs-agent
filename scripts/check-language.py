@@ -89,10 +89,25 @@ FROZEN_FILES = [
 #   但它属于测试，不属于模型可见文本 —— ADR 0004）；只剩一两个词的标识符、路径、
 #   schema 值也被上面那条判据天然排除。
 #
-# 起点（2026-09-30，ADR 0005 落地那天，迁移才起步）：中文 **26**、英文散文 **199**。
+# 进度（ADR 0005 的第 ② 批落地后，2026-09-30）：中文 **128**、英文散文 **104**
+# —— `src/tools/*` 已经翻完（英文散文 95 → 0）。剩下的是第 ③–⑤ 批：
+# `src/agent.rs` 34、`src/cli.rs` 30、`src/permissions.rs` 11、`src/provider/mod.rs` 6、
+# `src/context*.rs` 7、`src/agent/executor.rs` 2、`src/events.rs` / `src/hooks.rs` 各 1 …
 # 每翻完一批就把下限提到新的实测值、把上限收到新的实测值 —— 两条棘轮都是「实测值」，
 # 不留余量：任何一条串被改回英文（或新写一条英文散文）都会报红。
 MODEL_TEXT_FLOOR = {
+    "src/tools/ask_user.rs": 16,
+    "src/tools/bash.rs": 6,
+    "src/tools/custom.rs": 1,
+    "src/tools/edit.rs": 7,
+    "src/tools/file.rs": 26,
+    "src/tools/paths.rs": 3,
+    "src/tools/process.rs": 14,
+    "src/tools/registry.rs": 4,
+    "src/tools/repo_map.rs": 3,
+    "src/tools/skill.rs": 3,
+    "src/tools/task.rs": 4,
+    "src/tools/todo.rs": 14,
     "src/agent.rs": 4,
     "src/discussion.rs": 8,
     "src/provider/projection.rs": 1,
@@ -100,7 +115,7 @@ MODEL_TEXT_FLOOR = {
     "src/render/tui.rs": 1,
     "src/cli.rs": 8,
 }
-ENGLISH_PROSE_CEILING = 199
+ENGLISH_PROSE_CEILING = 104
 
 # --- ③ docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是

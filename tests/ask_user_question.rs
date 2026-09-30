@@ -182,15 +182,15 @@ fn the_description_carries_the_three_encoding_conventions() {
     let description = AskUserQuestionTool.spec().description;
 
     // 1. 跳过，与根本没走到的那一题，是两种不同的答案。
-    assert!(description.contains("skipped"), "{description}");
-    assert!(description.contains("never reached"), "{description}");
+    assert!(description.contains("跳过"), "{description}");
+    assert!(description.contains("根本没走到"), "{description}");
     assert!(description.contains("selected: []"), "{description}");
     // 2. 单选的,自定义文本是覆盖；多选的自定义文本是补充。
-    assert!(description.contains("overrides"), "{description}");
-    assert!(description.contains("supplements"), "{description}");
+    assert!(description.contains("覆盖"), "{description}");
+    assert!(description.contains("补充"), "{description}");
     // 3. `(Recommended)` 标记只做显示：答案留下的是那个 label。
     assert!(description.contains("(Recommended)"), "{description}");
-    assert!(description.contains("marker included"), "{description}");
+    assert!(description.contains("标记也一起"), "{description}");
 }
 
 #[test]
@@ -213,10 +213,7 @@ async fn an_empty_question_list_is_refused() {
     let error = call(serde_json::json!({"questions": []}), Some(&port))
         .await
         .expect_err("一份空问卷被拒");
-    assert!(
-        error.to_string().contains("at least one question"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("至少要有一道题"), "{error}");
     assert!(port.asked().is_empty(), "用户永远不会看到一份空问卷");
 }
 
@@ -227,7 +224,7 @@ async fn a_question_without_an_id_is_refused() {
     let error = call(args, Some(&port))
         .await
         .expect_err("没有 id 的一题被拒");
-    assert!(error.to_string().contains("non-empty `id`"), "{error}");
+    assert!(error.to_string().contains("非空的 `id`"), "{error}");
     assert!(port.asked().is_empty());
 }
 
@@ -243,10 +240,7 @@ async fn duplicate_question_ids_are_refused() {
         ]
     });
     let error = call(args, Some(&port)).await.expect_err("重复的 id 被拒");
-    assert!(
-        error.to_string().contains("duplicate question id"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("重复了"), "{error}");
     assert!(port.asked().is_empty());
 }
 
@@ -260,7 +254,7 @@ async fn without_a_question_port_the_call_fails_instead_of_hanging() {
     let error = call(args, None)
         .await
         .expect_err("没有端口是一个错误，不是挂住");
-    assert!(error.to_string().contains("no question port"), "{error}");
+    assert!(error.to_string().contains("提问端口"), "{error}");
 }
 
 // ---------------------------------------------------------------------------

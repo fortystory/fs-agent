@@ -4571,7 +4571,7 @@ fn a_complete_result_does_not_claim_its_text_is_unavailable() {
     // 只有**被裁过**的结果才有落盘文件；短的结果从没写到
     // 任何地方，它的预览*就是*整段正文。对它说 `全文不可用` 是
     // 读者看不穿的谎 —— 读起来像「这份详情不完整」
-    // （2026-09-23，用户报告：每个 bash 详情末尾都是 `--- stderr ---`
+    // （2026-09-23，用户报告：每个 bash 详情末尾都是 `--- 标准错误 ---`
     // 全文不可用`）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
@@ -4584,14 +4584,14 @@ fn a_complete_result_does_not_claim_its_text_is_unavailable() {
         2,
         "call-50",
         true,
-        Some("退出码 0\n--- stdout ---\nhi\n--- stderr ---\n"),
+        Some("退出码：0\n--- 标准输出 ---\nhi\n--- 标准错误 ---\n"),
         None,
     ));
     click_row(&mut state, 120, 40, "调用 bash");
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
-        text.contains("--- stderr ---"),
+        text.contains("--- 标准错误 ---"),
         "工具自己的那些小节原样显示：{text}"
     );
     assert!(

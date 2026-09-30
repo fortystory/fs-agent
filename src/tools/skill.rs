@@ -21,15 +21,15 @@ impl Tool for SkillTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: SKILL_TOOL.to_owned(),
-            description: "Load a skill's full instructions by name. The skills catalog in your \
-                          context lists the available names and when each one applies."
+            description: "按名字加载一个技能的全文指令。你上下文里的技能清单列出了可用的名字，\
+                          以及每个技能什么时候适用。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Name of the skill to load, exactly as it appears in the skills catalog."
+                        "description": "要加载的技能名，与技能清单里写的完全一致"
                     }
                 },
                 "required": ["name"]
@@ -47,7 +47,7 @@ impl Tool for SkillTool {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|name| !name.is_empty())
-            .ok_or_else(|| ToolError::message("skill: a non-empty `name` is required"))?;
+            .ok_or_else(|| ToolError::message("skill：需要一个非空的 `name`"))?;
         ctx.skills
             .load(name)
             .map(ToolOutput::new)

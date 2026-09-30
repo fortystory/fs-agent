@@ -100,7 +100,7 @@ fn fixture() -> Fixture {
             tool_call_id: ToolCallId::new("call-1"),
             ok: true,
             output: Some(format!(
-                "{WROTE_PATH_PREFIX}/workspace/a.rs\n{MATCH_LEVEL_PREFIX}line-trim: 1 replacement"
+                "{WROTE_PATH_PREFIX}/workspace/a.rs\n{MATCH_LEVEL_PREFIX}line-trim: 1 处替换"
             )),
             error: None,
             duration_ms: 4,
