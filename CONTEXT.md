@@ -1,8 +1,15 @@
 # fs-agent
 
-自用 coding agent CLI（Rust，从零实现）。本文件只收录本项目**特有**的领域词汇——它是术语表，不是 spec，不含实现决策。
+自用 coding agent CLI（Rust，从零实现）。本文件收录**两类**词：
+
+- **领域词汇**——本项目特有的运行期概念（事件流、投影、待办列表……）。写代码、写文档、写票之前先在这里对齐名字。
+- **流程词汇**——本仓库自己的运转方式（feature 目录、spec、票、决策图……）。它讲 `.scratch/` 与 `docs/` 怎么组织、票怎么流转。
+
+**它不含实现决策**（那是 `docs/` 逐面文档与 `.scratch/` 的 spec 的事），也**不收两类东西**：通用编程概念（timeout、error type、工具函数那种，即使本项目到处在用），以及 skills 工具链的名字（`/grill-with-docs`、`/wayfinder`、`/handoff`……）——后者是**外来名**，只在票与文档的正文里出现，本文件最多在某个词的 `_Avoid_` 里点它一下，不给它立条目。
 
 > **每条的格式是「中文名（English）」**：**中文是叙述、文档与讨论里的正式用词；英文是代码里的标识符 / 类型名**。两者指同一个概念，不是互为别名——所以写文档时说「讨论者」，写代码时写 `Debater`。
+>
+> **流程词没有对应的代码标识符**：那一节的英文槽位放它在磁盘上或 tracker 里的位置（`spec.md`、`map.md`、`Status:`）；没有中文名的词就直接不给中文名，见**token** 那条的先例。
 >
 > `agent` 是泛称（程序名 `fs-agent`、"一个 agent 回合"），**不作为类型名**：类型名一律用下面的 **`Debater` / `Executor`**（即讨论者 / 执行者）。
 
@@ -210,3 +217,51 @@ _Avoid_: 当前回合（会被读成「最新回合」）、选中回合（会�
 **打码（Redactor）**:
 入流前的**值级、best-effort** 替换：把配置里解析出的密钥值换成 `[redacted]`，于是**流上的文本 == 模型看到的文本**，而工具执行仍拿真值；范围含消息正文与工具参数，`outputs/<tool_call_id>.txt` 打码、`<tool_call_id>.before` 不打码（它是 `/undo` 的字节级还原源）。
 _Avoid_: 脱敏、掩码、mask、sanitize
+
+## 流程
+
+**feature 目录（`.scratch/<feature-slug>/`）**:
+issue tracker 的存放单位：**一个 feature 一个目录**，它自己的 spec、决策图与票全在目录里，feature 之间不共享文件（路径后缀就是那个 slug）。总清单是 `.scratch/README.md`（**feature 索引**，一行一个 feature：形态、一句话、票数与完成度）。
+_Avoid_: 不给它中文名（全仓库都写 feature）；项目、模块（那是代码里的东西，不是 tracker 的单位）
+
+**seed（`seed.md`）**:
+还没变成 spec 的**种子材料**：一个想法、一份意向、一段对话的折叠。目录里只有它就说明这件事还没被访谈、也没被画成图，所以里面**没有票**。
+_Avoid_: 不给它中文名（一律写 `seed.md`）；草稿、草案（听着像临时文件，它长期留着当材料的来源）
+
+**spec（`spec.md`）**:
+一个 feature 的**构建计划**：一次访谈折出来的那几节决定（问题陈述、用户故事、实现与测试决定、明确的 Out of Scope）。它是实现票的**来源**——票从它拆出来，所以票不重述理由，只指回它。
+_Avoid_: 不给它中文名（写 spec，不写「规格」）；需求文档、设计文档、RFC；把它当 ADR（spec 讲怎么做，ADR 只讲当初为什么）
+
+**决策图（map，`map.md`）**:
+一次 wayfinder effort 的正文：`Notes` / `Decisions so far` / `Not yet specified`，外加一份 `## 任务清单`；底下的票全是**决策票**——产出是**决定，不是交付物**。图走完会被折成 spec（见**交棒**），而图**留着当决策记录**：所以 `map.md` 与 `spec.md` 可以同时存在，一个目录两种形态都算正常。
+_Avoid_: 路线图、roadmap（那是排期，这里的票没有时间轴）；把它当 spec 读（图里的决定还在动，spec 里的是定下来的计划）
+
+**交棒（handoff）**:
+决策图走完那一刻的动作：把图上**互相链接的决定收束成 spec**，并在 `map.md` 里补一条带日期的「交棒已发生」加上产物指向。绕开它直接开实现票，会丢掉那些决定之间的链接——所以图只有折完才算走完。
+_Avoid_: `/handoff`（那是把上下文搬去新会话的技能，跟这一步无关）、交接（那是两班人之间的说法）
+
+**票（ticket，`issues/NN-<slug>.md`）**:
+tracker 的最小单位：**一票一个文件、从 `01` 编号**，永远不把所有票合成一个文件。开头那几行就是它的全部元数据——`Type:`（决策票是 `research` / `prototype` / `grilling` / `task`，构建切片是 `implement`）、`Status:`（见**分诊标签**；收尾状态分两套：决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`）、`Blocked by:`、`Part of:`。每票**自包含**（够一个 fresh session 从零开工），所以做完一票就可以把它那份 context 丢掉；讨论追加在文件底部的 `## Comments` 之下，决策票的答案追加在 `## Answer` 之下。
+_Avoid_: issue（那是对外 tracker 的说法，本仓库的 tracker 就是 markdown）、工单、任务（`task` 是 `Type:` 的一个值，指那类要动手的决策票）
+
+**阻塞边（`Blocked by`）**:
+票顶上那一行记的依赖边：`Blocked by: NN, NN`。**列出的每个文件都变成 `resolved` 之后**这张票才解除阻塞——本地 markdown 没有原生依赖边，这条边只是**约定**，核对靠 `python3 scripts/wayfinder-check.py .scratch/<effort>/map.md`（图的 `## 任务清单` 勾选项必须恰好等于 `issues/` 里的文件，每票那四行元数据都得在、且指向同目录的兄弟票）。
+_Avoid_: 依赖、前置（听着像代码里的依赖，这条边只决定「先做哪张票」）、blocker（那是边另一端的票，不是边本身）
+
+**frontier**:
+还没被认领的**下一批票**：扫 `.scratch/<effort>/issues/`，找 open、没被阻塞、也没被认领的那些，**编号最小的当选**；`Type: implement` 一律跳过（那是构建切片，由实现会话认领，不由画图的会话认领）。设计票全关掉，图就算走完，哪怕实现票还开着。
+_Avoid_: 不给它中文名（一律写 frontier）；队列、待办（那是**待办列表**的名单，不是这里的选择规则）
+
+**分诊标签（triage label）**:
+票顶上 `Status:` 里那套角色串，五个：`needs-triage`（等人评估）/ `needs-info`（等报告者补料）/ `ready-for-agent`（写全了，可以交给 AFK agent）/ `ready-for-human`（必须人来做）/ `wontfix`（不处理）。映射与颜色记在 `docs/agents/triage-labels.md` 与 `docs/agents/label-colors.json`（后者只有远程 tracker 用得上，运行期没人读）。
+_Avoid_: 优先级、排期（那是另一码事）；状态（`Status:` 是承载它的那一行，标签是行里的值）
+
+## 文档
+
+**逐面文档（`docs/*.md`）**:
+`docs/` 下**一个面一篇**的现状文档（`bash.md`、`render.md`、`repo-map.md`……）：讲**现在怎么工作**，所以代码改了它就该跟着改。与 spec 的分工是**时态**——spec 是当初定下的计划（会过期，留着当记录），逐面文档是当前的样子。README 的「文档」表逐篇索引它（表里那一行的标签写的是「逐面说明」，同一个东西）。
+_Avoid_: 参考手册、guide、wiki；把它当 spec（spec 讲当初怎么定的，它讲现在什么样）
+
+**不可逆的决定（ADR，Architecture Decision Record）**:
+`docs/adr/` 下的一条决定，一个编号一个文件（`0003-plan-leaves-the-permission-modes.md`），标题就是那句决定本身。只收**难回头、离开上下文会显得奇怪、当初又真有替代方案**的那种决定，所以它的重头是「为什么这么定」和被否决的替代方案——**现状不在这里**：现状在 `docs/` 的逐面文档，机制在 `.scratch/` 的 spec。在决定敲定的那一刻惰性写下一条，不预先攒；README 的「文档」表逐条索引它，文档与讨论里一律写 ADR 0003。与既有 ADR 冲突时**明着挑明**，不静默推翻。
+_Avoid_: 架构决策记录（标准译名，但本仓库只收「不可逆」那一档，口径就用那个中文名）、decision log（那是清单，不是一条决定）、spec / 票 / 逐面文档（它们讲现状或怎么做，ADR 只讲当初为什么——别拿它们当同义词）
