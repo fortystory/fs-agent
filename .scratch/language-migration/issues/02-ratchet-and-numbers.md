@@ -31,3 +31,19 @@ Blocked by: 01
 
 - 不动模型可见 / 进流的那一侧；不往白名单里加东西。
 - 不为「让检查通过」而放宽阈值：抬高下限是收紧，绝不是放宽。
+
+## Comments
+
+**阻塞已解除（2026-09-27）**：票 01 落地于 `76a7eb1`，内容定稿，所以本票要量的棘轮与行数现在
+是稳定值。开工前先用这几条命令现查（数字别照抄本票或 spec 里的旧值）：
+
+- `python3 scripts/check-translation-batch.py --remaining` —— 现在只剩 **90 字符**（`src/config.rs`
+  里 `custom_tool_name` 的格式模板与一条内置 `base_url`，两条都不是散文），所以第 4 条那种
+  「零星项」的清扫面很小：真正要看的是 `src/` 与 `tests/` 里那些**只有引用 / 图表 / 标识符**的
+  续行注释；
+- 中文注释行实测值（棘轮要提到它）；
+- `wc -l src/*.rs src/**/*.rs` 与 `cargo test` 的 passed 合计（README《状态》一节）；
+- `docs/*.md` 各自的中文占比（`DOCS_MIN_RATIO` 的收紧依据）。
+
+验收的 757/0、clippy、fmt、`tui-startup-check.py` 四条在本票落地时仍应全部成立（票 01 落地时
+它们都成立）。

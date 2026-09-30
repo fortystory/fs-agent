@@ -1,7 +1,7 @@
 # 最后一类：只给人看的错误与诊断文本翻成中文
 
 Type: implement
-Status: ready-for-agent
+Status: done
 
 > 规格：`.scratch/language-migration/spec.md`（方法与验收）；决定：`docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md`。
 > 这是语言迁移的**最后一批内容**。与前面各批的唯一差别：它**会动代码里的字符串字面量**，所以允许（并要求）跑 `cargo test`，且要同步改断言这些消息的测试。
@@ -48,3 +48,52 @@ Status: ready-for-agent
 - 不动模型可见 / 进流的那一侧（ADR 0001 的冻结面，见上）。
 - 不动 `docs/research/`。
 - 不往 `scripts/check-language.py` 的白名单里加东西。
+
+## Comments
+
+**实现完成（2026-09-27）**。提交 `76a7eb1`（17 个文件：10 个 `src/` + 7 个测试）。落点与逐条判断如下。
+
+1. **`--remaining` 6,196 → 90 字符**，剩下的 90 一点都不该翻：`custom_tool_name` 的格式模板
+   `{CUSTOM_TOOL_PREFIX}{namespace}{CUSTOM_TOOL_SEPARATOR}{tool}` 与一条内置 `base_url`。
+2. **`--remaining` 漏了两条，本票一并翻了**：`src/config.rs` 里 `` `{name}` cannot be a debater's
+   name … ``（句子里嵌着 `[轮 N · 名字]`）与 `` two debaters are both called `{}` … ``（嵌着
+   `name = "甲"`）。两条都含中文示例，于是被它那条「含 CJK 即视为已翻」的判定放过了 ——
+   按这个清单收尾时别只信这个脚本。
+3. **比票面清单多翻的四类**（都是同一句里断不掉、或同族漏下的部分）：
+   - `src/config/cost.rs` 的 `cap_text()`（`a cap of {limit} tokens` / `no cap`）—— 它嵌在那两句
+     额度诊断里，不翻会出现「…，a cap of 1000 tokens」这种中英拼盘；
+   - `src/agent/history.rs` 的另外三条 `Error::Undo` 消息（`cannot read {}: {error}`、
+     `cannot restore {}: {error}`）—— 与票面点名的两条同族、同一条路径；
+   - `src/cli.rs` probe 报告里的 `turn {}: no usage recorded` 与 `session: {} tokens, ${cost:.6}`
+     —— 与票面点名的两行印在同一份报告里；
+   - `src/render/tui.rs` 的两条 `expect("…")`（`a question is up`、`just checked`）—— 与既有的
+     `expect("策略互斥锁已中毒")`（`src/lib.rs`）同类，是前几批漏下的。
+4. **刻意不动的四类**（这批的难点全在这里）：
+   - **前缀与字段名**：`fs-agent:`、`[budget] {reason}`、`[discussion] {reason}`、
+     `config.toml: {source}`、`input=`/`output=`/`cached=`/`miss=`、probe 的
+     `model {model_id} (provider {}, {})` 那一行 —— 它们是标签，不是句子；
+   - **API 名与 TOML 键**：`readonly`/`ask`/`auto`、`[models.*]`、`max_tokens`、
+     `looks_like_quota` 的匹配词、`probe_prompt()` 那两条发给模型的提示词；
+   - **`undo edit_file on {}`**（`src/agent/history.rs`）：它是 `HistorySuperseded` 的 `summary`，
+     **进事件流、要永久回放**；投影（`src/provider/projection.rs:221`）不读它，读它的是
+     `transcript.rs` / `headless.rs` 这两个给人看的画家，而且都要过措辞层（`wording::history`）。
+     所以按 ADR 0004「进事件流要永久回放的文本留英文」，它原样不动 —— 翻译该发生在措辞层，
+     不在写入时。同理，`SessionError.detail`（`no debater answered this round` 等，住在
+     `src/agent.rs`）本来就在冻结面里；
+   - **上游返回的原文**（HTTP body / 厂商错误文本）—— 原样透传。
+5. **`check-translation-batch.py --diff` 对这批不适用**：它只放行注释行与断言消息，而这一批动的
+   正是字符串字面量，所以它必然报「动了 284 行非注释代码」。改用一条只看改动行的核对：把
+   `git diff -U0` 的每一行过一遍，确认落点要么在字面量里（82 行）、要么是 `cargo fmt` 把多行
+   调用收回一行（其余）。没有一行是逻辑改动。
+6. **验收**：`cargo test` **757 passed / 0 failed**（条数未变）——13 处断言这些消息的片段同步
+   改成中文：`tests/config_profiles.rs` 6、`tests/discussion.rs` 2，`tests/credentials.rs`、
+   `tests/custom_tools.rs`、`tests/provider_adapter.rs`、`tests/session_store.rs`、
+   `tests/e2e_single_turn.rs` 各 1（票面预告的 `tests/replay.rs` 与 `tests/observe*.rs` 实测
+   没有断言这些文本，未改）。`cargo clippy --all-targets` 干净、`cargo fmt --check` 零漂移
+   （翻完跑过一次 `cargo fmt`：中文更短，6 处折行被收回，已含在本提交里）、
+   `scripts/check-language.py` OK（冻结面与那 12 条混住字面量都没被碰到）、
+   `scripts/tui-startup-check.py` 12/12 GREEN。
+7. **一条留给维护者的观察（不是本票的活）**：`crate::Error` 那四个前缀（`事件流 i/o 错误：` 等）
+   其实印不到人前 —— `wording::error_report` 早已把四个变体各译了一遍；本次一并翻了，只是让
+   「同一句话住几个地方」少一个分叉。若将来要把 `ConfigError` / `ProviderError` 这类错误文案
+   也收进措辞层，那是一次独立决定（会牵动它们的 Display 与全部调用点），本票按票面要求就地翻。

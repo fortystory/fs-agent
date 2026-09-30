@@ -1,6 +1,6 @@
 # 语言迁移：散文一律中文
 
-Status: in-progress（票 `01` 未开始，`02` 收尾；已完成的部分见下面「已经做完的」）
+Status: in-progress（票 `01` 已完成于 2026-09-27，剩 `02` 收尾；已完成的部分见下面「已经做完的」）
 
 - **决定**：[`docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md`](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) —— **散文一律中文**（代码注释、`docs/` 下的设计文档与 `docs/agents/`、测试的断言消息、只给人看的错误文本）；**英文只留给三类**：标识符、**模型可见**的文本、**进事件流要永久回放**的文本。`docs/research/` 是一手引文，一个字不改。
 - **动机**：读者是人（注释与设计文档服务的是读代码的人），而模型可见 / 进流那一侧动一次要付两笔（前缀缓存整体作废 + 老流永久中英混排）、收益又几乎没有（那一侧的读者是模型）。
@@ -39,6 +39,7 @@ Status: in-progress（票 `01` 未开始，`02` 收尾；已完成的部分见�
 | `docs/` 设计文档 | 10 份英文散文全翻（`docs/highlight.md` 本来就是中文；`docs/research/` 一字未动）；全部 ≥ 30% 中文 | `0466991`、`c9b7c3e`、`792ffc6`、`13ca8bf` |
 | `src/` 注释 | 中文注释行 **195 → 5,209**；剩下未翻的只有引用 / 图表 / 标识符续行 | `4d790f5`、`25c3d60`、`e7b4d34`、`ba19680`、`ae80ebf`、`154a3d3` |
 | `tests/` 注释 + 断言消息 | 中文注释行 **93 → 2,423**；断言消息翻成中文（被断言的字面量与测试数据未动） | `dbe3657`、`4183631`、`78aa399` |
+| 只给人看的错误与诊断文本（票 01，2026-09-27） | `--remaining` **6,196 → 90** 字符（10 个 `src/` 文件 + 7 个测试的 13 处断言；剩下的 90 是两条非散文） | `76a7eb1` |
 | 分节线统一、fmt 收口 | 每个文件一套宽度；`cargo fmt --check` 全仓零漂移（含 `repo_map.rs` 那处既有漂移） | `e2bb78e`、`ef92649`、`e39434f` |
 | todo-and-modes 那轮（上一件事） | 32+4 票落地、两轴 code-review 与文档核对 | `b223b24` … `3f22f2d`、`6186070` |
 
@@ -46,8 +47,8 @@ Status: in-progress（票 `01` 未开始，`02` 收尾；已完成的部分见�
 
 ## 还没做的
 
-- **票 01（内容）**：只给人看的英文错误与诊断文本 —— 约 **6,196 字符 / 10 个文件**（`python3 scripts/check-translation-batch.py --remaining` 随时可查）。这批会动代码里的字符串字面量，所以**允许并需要**跑 `cargo test`，并同步改断言它们的测试（见票 01 的清单）。
-- **票 02（收尾）**：把 `check-language.py` 的 `COMMENT_FLOOR` 棘轮从迁移前基线提到实测值；README「状态」一节的 `src/`/`tests/` 行数与测试数按最终值收一次；再扫一遍零星的纯标识符续行注释。
+- **票 01（内容）**：**已完成（2026-09-27，`76a7eb1`）** —— 只给人看的错误与诊断文本全部翻完，`--remaining` 从 6,196 降到 90（剩下的两条不是散文）。多翻的四类、刻意不动的四类（含进流的 `HistorySuperseded.summary`）与 13 处测试改动，逐条记在 [票 01 的 Comments](issues/01-human-facing-error-text.md)。
+- **票 02（收尾）**：把 `check-language.py` 的 `COMMENT_FLOOR` 棘轮从迁移前基线提到实测值；`DOCS_MIN_RATIO` 按实测复核收紧；README「状态」一节的 `src/`/`tests/` 行数与测试数按最终值收一次；再扫一遍零星的纯标识符续行注释。**已无阻塞**（票 01 落地时 757/0、clippy 干净、fmt 零漂移、`check-language.py` OK、`tui-startup-check.py` 12/12 GREEN）。
 
 ## 护栏（已有，别绕过）
 
