@@ -1376,31 +1376,29 @@ impl TuiState {
     fn exit_key(&mut self, key: Key) {
         let now = std::time::Instant::now();
         let raised = self.exit_gesture_raised(now);
-        if self.busy() {
-            if key == Key::CtrlD {
-                return;
-            }
-            if raised {
+        // `Ctrl-D` 在忙碌、**或任何问题立着**时什么都不做（票 01）：它是「被忽略」，不是
+        // 「别的键」，所以它也不清掉已经举起的那把手。
+        if key == Key::CtrlD && (self.busy() || self.pending.is_some()) {
+            return;
+        }
+        if raised {
+            // 第二下：按**这一把手的出身**走（spec §3）—— 空闲里举的手不会因为回合中途开跑
+            // 就变成 130，忙碌里举的手也不会因为回合已经收尾就变成 0。
+            if self.exit_gesture_busy {
                 self.events.push(FrontEndEvent::Quit);
             } else {
-                self.events.push(FrontEndEvent::Cancel);
-                self.raise_exit_gesture_at(now);
-                // 这一把的出身是忙碌：取消可能马上就落地，第二下到达时 `busy()` 已经为假，
-                // 但那次退出仍然是「忙碌中被打断而退」，得走 130 那条路（spec §3）。
-                self.exit_gesture_busy = true;
+                self.quit = true;
             }
             return;
         }
-        if !raised {
-            self.raise_exit_gesture_at(now);
-            return;
+        // 第一下：举手。忙碌时这一下同时是取消当前回合，而这一把的出身就是「忙碌」——
+        // 取消可能马上就落地，第二下到达时 `busy()` 已经为假，但那次退出仍然是「忙碌中被打断
+        // 而退」，得走 130 那条路（spec §3）。
+        if self.busy() {
+            self.events.push(FrontEndEvent::Cancel);
         }
-        if self.exit_gesture_busy {
-            // 第一下在忙碌里举的手，而回合已经收尾了：第二下仍然推给 CLI，按 130 收尾。
-            self.events.push(FrontEndEvent::Quit);
-        } else {
-            self.quit = true;
-        }
+        self.raise_exit_gesture_at(now);
+        self.exit_gesture_busy = self.busy();
     }
 
     /// 算一次标题，与上一版比对；变了就记下新的并返回它，没变答 `None`。
@@ -2446,13 +2444,6 @@ impl TuiState {
         self.sync_menu();
     }
 
-    /// 循环是否**在一次运行里面**：一个回合，或者它在驱动的一场讨论。
-    ///
-    /// 这件事由循环通过 [`ConsoleRequest::RunState`] 说出来；这里什么都不推断它。两次推断
-    /// 都失败了。从渲染流推：只有 `TurnEnded` 会清掉旧标志，而合成器那一次调用不结束任何
-    /// 回合，于是一场讨论之后 TUI 以为自己永远在工作。从「没有未决的提示」推：那个谓词在
-    /// 循环要它的*第一*行之前就是真的，于是组装期间空闲的键盘被读成工作中。两个错都把
-    /// `Ctrl-C` 变成了一个空闲循环会丢掉的取消手势 —— 一块死键盘。
     /// 从流上留一份「现在在推进哪个目标」，给终端标题用（spec §6）。
     ///
     /// 以**正在推进**为准：`events::current_goal` 只认最后一条 `GoalSelected`，目标停下
@@ -2471,6 +2462,13 @@ impl TuiState {
         }
     }
 
+    /// 循环是否**在一次运行里面**：一个回合，或者它在驱动的一场讨论。
+    ///
+    /// 这件事由循环通过 [`ConsoleRequest::RunState`] 说出来；这里什么都不推断它。两次推断
+    /// 都失败了。从渲染流推：只有 `TurnEnded` 会清掉旧标志，而合成器那一次调用不结束任何
+    /// 回合，于是一场讨论之后 TUI 以为自己永远在工作。从「没有未决的提示」推：那个谓词在
+    /// 循环要它的*第一*行之前就是真的，于是组装期间空闲的键盘被读成工作中。两个错都把
+    /// `Ctrl-C` 变成了一个空闲循环会丢掉的取消手势 —— 一块死键盘。
     fn busy(&self) -> bool {
         self.running
     }
@@ -4782,12 +4780,6 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 mod tests {
     use super::*;
 
-    /// 提示符的颜色是维护者的脚本翻进这个渲染器的结果，所以这些数字是对着脚本自己的输出钉的。
-    ///
-    /// 脚本每 **1/60 秒**走 0.005 色相、0.05 呼吸，所以两者在*某个时刻*上一致，而**不是**在
-    /// 某个下标上：一个脉冲帧是 60 ms，也就是三个半脚本帧，我们这里的帧 5 是脚本的帧 18。
-    /// 这些三元组就是 `colorsys.hsv_to_rgb` 为脚本的帧打出来的
-    /// （`.scratch/tui-input-pulse/spec.md` §2b）。
     /// 退出手势的窗口写死在 500 毫秒：它同时是提示的寿命，不做配置项
     /// （`.scratch/exit-gesture/spec.md` §1、§6）。
     #[test]
@@ -4812,6 +4804,12 @@ mod tests {
         ));
     }
 
+    /// 提示符的颜色是维护者的脚本翻进这个渲染器的结果，所以这些数字是对着脚本自己的输出钉的。
+    ///
+    /// 脚本每 **1/60 秒**走 0.005 色相、0.05 呼吸，所以两者在*某个时刻*上一致，而**不是**在
+    /// 某个下标上：一个脉冲帧是 60 ms，也就是三个半脚本帧，我们这里的帧 5 是脚本的帧 18。
+    /// 这些三元组就是 `colorsys.hsv_to_rgb` 为脚本的帧打出来的
+    /// （`.scratch/tui-input-pulse/spec.md` §2b）。
     #[test]
     fn the_prompt_colour_is_the_script_at_the_same_moment() {
         assert_eq!(PULSE_FRAME.as_millis(), 60);

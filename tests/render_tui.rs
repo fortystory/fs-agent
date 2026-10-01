@@ -349,6 +349,26 @@ fn ctrl_d_is_ignored_while_a_run_is_in_flight() {
 }
 
 #[test]
+fn a_gesture_raised_while_idle_does_not_become_a_130_when_a_turn_starts() {
+    // `exit-gesture` spec §3：空闲双击**不再**「顺便」变成 130 —— 哪怕那半秒窗口里恰好有一个
+    // 回合开跑。第二下按的是**这一把手的出身**，不是按下那一刻的忙碌状态。
+    let (mut state, _line) = state_with_prompt();
+
+    state.key(Key::CtrlC);
+    assert!(state.exit_deadline().is_some(), "空闲里举起了手");
+
+    // 窗口还没过，一个回合开跑了。
+    state.request(ConsoleRequest::RunState { running: true });
+
+    state.key(Key::CtrlC);
+    assert!(state.should_quit(), "按出身走：这是空闲那把，退 0");
+    assert!(
+        state.take_events().is_empty(),
+        "不该推 `Quit` —— 那是「忙碌中被打断」那条 130 的路"
+    );
+}
+
+#[test]
 fn ctrl_d_is_ignored_while_a_question_is_up() {
     // 一个问题占着键盘，所以 `Ctrl-D` 归那个问题忽略。下面这个
     // 权限覆盖层是循环的，而它等的那个答案不受这个
@@ -369,6 +389,14 @@ fn ctrl_d_is_ignored_while_a_question_is_up() {
     }));
     state.key(Key::CtrlD);
     assert!(!state.should_quit(), "这个键被忽略，而不是被照做");
+    assert!(
+        state.exit_deadline().is_none(),
+        "而且没有举手：它是「被忽略」，不是「别的键」"
+    );
+    // 连按两下也不该在窗口内退出 —— 被忽略的键不该因为凑够次数就作数。
+    state.key(Key::CtrlD);
+    assert!(!state.should_quit(), "连按两下仍然被忽略");
+    assert!(state.exit_deadline().is_none());
     state.key(Key::Char('y'));
     assert_eq!(
         answer.try_recv().expect("权限答案发出去了"),
