@@ -1,5 +1,9 @@
 # 种子材料：退出手势与 session id 回执
 
+> **已折成 [`spec.md`](spec.md)**（2026-10-01 一轮 `/grill-with-docs`）。本文件留作意向的来源；
+> **构建计划以 spec 为准**，其中两处前提（空闲态 `Ctrl-C` 已是一下就退、`-c` 不需要 session id）
+> 在折的过程中被纠正。
+>
 > **这不是 spec，也不是票。** 它是 2026-10-01 在一轮 `/ask-matt` 里记下的意向：连按两下
 > `Ctrl-C` / `Ctrl-D` 就退出，退出时打印 session id 好让下次 `--continue` 直接用。
 > 还没被访谈、也没有票；想推进时走 `/grill-with-docs` 把它折成 `spec.md`，再 `/to-tickets` 拆票。

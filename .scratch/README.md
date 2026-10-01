@@ -7,7 +7,7 @@
 - **票**在 `issues/NN-<slug>.md`，**一票一个文件**，每票开头有 `Type:` 与 `Status:`（`ready-for-agent` / `done`；wayfinder 的决策票是 `claimed` / `resolved`），`Blocked by:` 记阻塞边；
 - **顺序**：blockers 先做；每票自包含，所以做完一票就可以把它的 context 丢掉。
 
-下表由 `ls` / `grep '^Status:'` / `head -1` 核过（2026-09-26；`todo-and-modes` 的票数与状态在这一轮收尾时改过一次；`language-migration` 那一行按 2026-09-27 两张票的落地更新过，2026-09-30 补票 03、并把票 04 记成 `ready-for-agent`；2026-10-01 `sandbox` 由 seed 折成 spec、新增 `workspace-mode` 种子，同日五张票落地并改成 `5/5 done`；同日 `workspace-mode` 的种子也折成 spec、拆出两张票并双双落地；同日 TUI 外壳做了减法，`tui-chrome` 的八张票一次落地 —— 第一轮六张（去外框、虚线化、详情居中、按位置滚动），随后一轮真机反馈又补了两张（左栏身份下移一行、横线不再截断竖线）；2026-10-01 新增 `markdown-render`——一次 `/ask-matt` → `/research` ×2 → `/grilling` 的会话，spec 与七张票同日落地文件，紧接着同日落地实现（01–06 是代码、07 是文档收口，全部 `done`）；同日一轮 `/ask-matt` 记下 16 条只有 `seed.md` 的意向（需求池，见下表）；**同一轮讨论的后半段**又新建了 `goal-loop` —— 从「缺不缺一个跨会话的任务功能」一路走到「目标 + 翻页 + 压缩」，并把 `loop-and-goals`、`clear-command`、`context-compaction` 三条种子移交过去（那三条只留指向新目录的记录）；随后**同一轮 `/grill-with-docs`** 走完 30 个问题、关掉 14 条分叉，`goal-loop` 当天折成 [`spec.md`](goal-loop/spec.md) 并拆出 15 张票（`issues/01`–`15`，依赖边只向后、已核过）；**同一天 15 张全部落地**，那条难回头的决定（目标不进会话状态、进度从 `todo` 派生）记成 [ADR 0009](../docs/adr/0009-goals-are-files-and-progress-is-derived.md)，逐面文档是 [`docs/goals.md`](../docs/goals.md)。
+下表由 `ls` / `grep '^Status:'` / `head -1` 核过（2026-09-26；`todo-and-modes` 的票数与状态在这一轮收尾时改过一次；`language-migration` 那一行按 2026-09-27 两张票的落地更新过，2026-09-30 补票 03、并把票 04 记成 `ready-for-agent`；2026-10-01 `sandbox` 由 seed 折成 spec、新增 `workspace-mode` 种子，同日五张票落地并改成 `5/5 done`；同日 `workspace-mode` 的种子也折成 spec、拆出两张票并双双落地；同日 TUI 外壳做了减法，`tui-chrome` 的八张票一次落地 —— 第一轮六张（去外框、虚线化、详情居中、按位置滚动），随后一轮真机反馈又补了两张（左栏身份下移一行、横线不再截断竖线）；2026-10-01 新增 `markdown-render`——一次 `/ask-matt` → `/research` ×2 → `/grilling` 的会话，spec 与七张票同日落地文件，紧接着同日落地实现（01–06 是代码、07 是文档收口，全部 `done`）；同日一轮 `/ask-matt` 记下 16 条只有 `seed.md` 的意向（需求池，见下表）；**同一轮讨论的后半段**又新建了 `goal-loop` —— 从「缺不缺一个跨会话的任务功能」一路走到「目标 + 翻页 + 压缩」，并把 `loop-and-goals`、`clear-command`、`context-compaction` 三条种子移交过去（那三条只留指向新目录的记录）；随后**同一轮 `/grill-with-docs`** 走完 30 个问题、关掉 14 条分叉，`goal-loop` 当天折成 [`spec.md`](goal-loop/spec.md) 并拆出 15 张票（`issues/01`–`15`，依赖边只向后、已核过）；**同一天 15 张全部落地**，那条难回头的决定（目标不进会话状态、进度从 `todo` 派生）记成 [ADR 0009](../docs/adr/0009-goals-are-files-and-progress-is-derived.md)，逐面文档是 [`docs/goals.md`](../docs/goals.md)。同日紧接着的一轮 `/ask-matt` → `/grill-with-docs` 把需求池里的三条（`usage-stats-format` / `terminal-title` / `exit-gesture`）折成了 spec —— 三份 `spec.md` 同日落文件，并各拆出票（`3` + `3` + `5`，共 11 张 `ready-for-agent`，依赖边只向后）。
 
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
@@ -28,10 +28,10 @@
 | [`language-migration/`](language-migration/spec.md) | spec | 语言迁移：散文一律中文（[ADR 0004](../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)）—— 它那半句「模型可见 / 进流的文本留英文」已由 [ADR 0005](../docs/adr/0005-model-visible-text-in-chinese.md)（2026-09-30）推翻：模型可见与进流的**散文**也走中文，英文只留给标识符、schema 值与协议标记；注释、docs、测试断言消息、只给人看的错误文本全翻完，棘轮与数字已收到实测值；ADR 那一批（小标题 + 行话夹注 + `docs/adr` 护栏）于 2026-09-30 补收（票 03） | 3 done + 1 ready-for-agent（票 04：`.scratch` 的英文小标题中文化） |
 | [`markdown-render/`](markdown-render/spec.md) | spec | TUI 里的 Markdown：解析交给 `pulldown-cmark`、渲染仍由我们自己写 —— 表格从「join 竖线」变成真网格、代码块接回 tree-sitter 高亮并扩到 10 种语言、assistant 续行不再缩进（[ADR 0008](../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)；两份一手调研在目录里） | 7/7 done |
 | [`goal-loop/`](goal-loop/spec.md) | spec | **目标**（跨会话的工作单位）+ `/loop` 无人值守持续工作 + **翻页**（压缩、`/clear`、预算认到目标上）—— 吞并 `loop-and-goals` / `clear-command` / `context-compaction` 三条种子；同日一轮 grilling（30 问）关掉 14 条分叉后折成构建计划，并拆出 15 张自包含的票（来源与关闭记录在 [`seed.md`](goal-loop/seed.md)）；**同一天 15 张全部落地**，逐面文档在 [`docs/goals.md`](../docs/goals.md) | 15/15 done |
-| [`exit-gesture/`](exit-gesture/seed.md) | seed | 退出手势与 session id 回执：连按两下 `Ctrl-C` / `Ctrl-D`、退出时打印 session id（运行中已有双击） | — |
-| [`usage-stats-format/`](usage-stats-format/seed.md) | seed | 右侧统计：`k` / `M` / `万` / `亿` 单位（一个配置项）与用量占比（百分比或数字压进度条） | — |
+| [`exit-gesture/`](exit-gesture/spec.md) | spec | 退出手势：空闲 `Ctrl-C` / `Ctrl-D` 双击退出、举手期间提示行给回执（半秒后作废）、退出时打一行能直接粘的复盘命令；顺带修掉忙碌双击走 `exit(130)` 跳过终端恢复的缺陷 | 0/5 done |
+| [`usage-stats-format/`](usage-stats-format/spec.md) | spec | 右侧统计的书写制式（`[ui] number_style`，`cn` / `si`，默认 `cn`）与两行的占比色条；诊断通道与状态行一个字不动 | 0/3 done |
 | [`questionnaire-keys/`](questionnaire-keys/seed.md) | seed | 问卷手感：`j` / `k` 选择、移到自定义项才进文本输入、超长选项折行 | — |
-| [`terminal-title/`](terminal-title/seed.md) | seed | 终端标题带上工作内容（现在 `src/` 里没有任何 OSC 标题代码） | — |
+| [`terminal-title/`](terminal-title/spec.md) | spec | 终端标题带上工作内容：`<父>/<基名> · <状态> · <目标名>`、40 列封顶、进 TUI 时保存原标题并在退出（含 panic）时还原（现在 `src/` 里没有任何 OSC 标题代码） | 0/3 done |
 | [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 | — |
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
 | [`desktop-notifications/`](desktop-notifications/seed.md) | seed | 桌面通知：回合完成、等审批这类时刻在 Linux 上提示 | — |
@@ -49,8 +49,10 @@
 
 **需求池（2026-10-01）**：一轮 `/ask-matt` 里记下 16 条「有意向、不实现」的功能，一律只有
 `seed.md`、没有票。其中 3 条（`loop-and-goals` / `clear-command` / `context-compaction`）当天
-就被移交给了活跃 effort [`goal-loop`](goal-loop/seed.md)，所以**池子里现在剩 13 条** —— 也就是
-上表里形态为 `seed`、且没有「已移交」注记的那些行。每条的抬头都自述「这不是
+就被移交给了活跃 effort [`goal-loop`](goal-loop/seed.md)；同日另一轮 `/grill-with-docs` 又把三条
+（[`usage-stats-format`](usage-stats-format/spec.md) / [`terminal-title`](terminal-title/spec.md) /
+[`exit-gesture`](exit-gesture/spec.md)）折成了 spec，所以**池子里现在剩 10 条** —— 也就是
+上表里形态为 `seed`、且没有「已移交」或「已折成 spec」注记的那些行。每条的抬头都自述「这不是
 spec，也不是票」，正文有《现状》一节（写的时候核实过源码）与《待谈的分叉》；想推进任何一条时
 走 `/grill-with-docs` 把它折成 spec，再照常 `/to-tickets` 拆票。
 
