@@ -1188,7 +1188,8 @@ async fn interactive_loop(
                     Err(message) => message,
                     Ok(name) => {
                         let result =
-                            run_goal_loop(harness, events, goals, &name, &mut loop_running).await;
+                            run_goal_loop(harness, console, events, goals, &name, &mut loop_running)
+                                .await;
                         result.err().unwrap_or_default()
                     }
                 };
@@ -1409,6 +1410,7 @@ struct GoalSetup {
 /// `Err` 是一句说给人听的拒绝或失败。
 async fn run_goal_loop(
     harness: &mut Harness,
+    console: &ConsoleHandle,
     events: &mut ConsoleEvents,
     goals: &GoalSetup,
     name: &str,
@@ -1426,17 +1428,25 @@ async fn run_goal_loop(
     let manifest = loaded.as_ref().ok();
     let progress = manifest.map(|manifest| goal_progress(goals, name, manifest));
     let complete = progress.as_ref().is_some_and(crate::goals::Progress::is_complete);
-    if let Err(refusal) = crate::goals::check_start(manifest, complete, *running) {
+    let unattended = harness.mode().allows_unattended();
+    if let Err(refusal) = crate::goals::check_start(manifest, complete, *running, unattended) {
         return Err(match refusal {
             crate::goals::StartRefusal::AlreadyRunning => {
                 render::wording::loop_already_running(name)
             }
+            crate::goals::StartRefusal::Unattended => render::wording::loop_needs_unattended_mode(
+                render::wording::mode_label(harness.mode()),
+            ),
             crate::goals::StartRefusal::Unknown => {
                 broken.unwrap_or_else(|| render::wording::loop_unknown_goal(name))
             }
             crate::goals::StartRefusal::NoWork => render::wording::loop_no_work(name),
         });
     }
+    // 三条都过了：从那句提示开始，输入区就禁言了 —— 它由这只闩管着，离开作用域就解除，于是
+    // 每一条返回路径都恢复得回来（§5）。
+    let _muted = Muted::new(console);
+    harness.notice(render::wording::input_muted());
     let manifest = manifest.expect("check_start 放行就意味着清单在");
     let progress = progress.expect("清单在就有进度");
 
@@ -1635,9 +1645,19 @@ async fn run_goal_loop(
             }
         }
     }
+    // 走到这里只有一个原因：**手势**。取消可能是 `Esc` 确认框里选了「停下」，也可能是
+    // `Ctrl-C` 或输入结束 —— 三种都是人的意思，所以落一条「人主动停」的收尾事件（§5、§10）。
+    // 它让 `--continue` 分得出「人停的」与「崩掉的」：前者回来别自己又跑起来。
     *running = false;
-    harness.notice(&render::wording::goal_loop_stopped(name));
-    Ok(())
+    let progress = goal_progress(goals, name, manifest);
+    stop_goal_loop(
+        harness,
+        name,
+        crate::events::GoalStopReason::UserStopped,
+        0,
+        manifest,
+        &progress,
+    )
 }
 
 /// 一个目标当下的进度：扫本桶，按归属筛出属于它的会话，再把它们的 `todo` 调用合并起来
@@ -1704,6 +1724,25 @@ fn clear_session(harness: &mut Harness, goals: &GoalSetup) -> String {
         return render::wording::error_report(&error);
     }
     render::wording::cleared(&from, stored.id.as_str())
+}
+
+/// 输入区禁言的那只闩（`.scratch/goal-loop/spec.md` §5）。
+///
+/// 它一造出来就禁言，一离开作用域就解除 —— 于是「循环的每一条返回路径都恢复得回来」是构造上
+/// 的性质，而不是一句要人记住的规矩。
+struct Muted<'a>(&'a ConsoleHandle);
+
+impl<'a> Muted<'a> {
+    fn new(console: &'a ConsoleHandle) -> Self {
+        console.set_muted(true);
+        Self(console)
+    }
+}
+
+impl Drop for Muted<'_> {
+    fn drop(&mut self) {
+        self.0.set_muted(false);
+    }
 }
 
 /// provider 失败之后等多久再驱动一次那个回合（§9）。

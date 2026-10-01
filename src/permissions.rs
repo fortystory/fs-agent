@@ -76,6 +76,15 @@ struct Stance {
 }
 
 impl Mode {
+    /// 这一档能不能用来跑无人值守的目标循环（`.scratch/goal-loop/spec.md` §5）。
+    ///
+    /// 判据不是「哪一档更宽松」，而是「第一次写会不会停在等人」：`readonly` 与 `ask` 档下它会
+    /// 停，于是「无人值守」是空话；`workspace` 与 `auto` 档下区内的写自己过，区外那一次问也
+    /// 由沙箱那层兜住。所以 `workspace` 是这条线的最低档。
+    pub fn allows_unattended(self) -> bool {
+        matches!(self, Mode::Workspace | Mode::Auto)
+    }
+
     /// 模式在线级与 CLI 上的拼写。`config.toml` 的 `[permissions] mode` 写的也是它，
     /// 而且它是唯一能解析成功的拼写。
     pub fn as_str(self) -> &'static str {

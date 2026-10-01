@@ -1,7 +1,7 @@
 # 无人值守的前提：档位、输入禁用与 `Esc` 确认框
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03
 
 > 规格：`.scratch/goal-loop/spec.md` §5。

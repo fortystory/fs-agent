@@ -155,7 +155,7 @@ fn the_three_start_refusals_each_say_their_own_thing() {
 
     // 清单不在：说找不到，并提示先 `/goal new`。
     assert_eq!(
-        check_start(None, false, false),
+        check_start(None, false, false, true),
         Err(StartRefusal::Unknown)
     );
     let text = fs_agent::render::wording::loop_unknown_goal("sandbox");
@@ -164,21 +164,50 @@ fn the_three_start_refusals_each_say_their_own_thing() {
 
     // 全部完成：说没活可干。
     assert_eq!(
-        check_start(Some(&manifest), true, false),
+        check_start(Some(&manifest), true, false, true),
         Err(StartRefusal::NoWork)
     );
     assert!(fs_agent::render::wording::loop_no_work("sandbox").contains("没活可干"));
 
     // 已经有一个 loop 在跑：说正在跑 —— 而且它最先判，与另一个名字好不好无关。
     assert_eq!(
-        check_start(Some(&manifest), false, true),
+        check_start(Some(&manifest), false, true, true),
         Err(StartRefusal::AlreadyRunning)
     );
-    assert_eq!(check_start(None, true, true), Err(StartRefusal::AlreadyRunning));
+    assert_eq!(
+        check_start(None, true, true, false),
+        Err(StartRefusal::AlreadyRunning)
+    );
     assert!(fs_agent::render::wording::loop_already_running("sandbox").contains("正在跑"));
 
-    // 三条都过了才放行。
-    assert_eq!(check_start(Some(&manifest), false, false), Ok(()));
+    // 档位不够（§5）：排在清单那两条之前 —— 跑都跑不起来时，名字对不对是下一步的事。
+    assert_eq!(
+        check_start(None, false, false, false),
+        Err(StartRefusal::Unattended)
+    );
+    assert_eq!(
+        check_start(Some(&manifest), true, false, false),
+        Err(StartRefusal::Unattended)
+    );
+    let text = fs_agent::render::wording::loop_needs_unattended_mode(
+        fs_agent::render::wording::mode_label(fs_agent::permissions::Mode::Ask),
+    );
+    assert!(text.contains("无人值守"), "{text}");
+    assert!(text.contains("workspace"), "要说清换哪一档：{text}");
+
+    // 四条都过了才放行。
+    assert_eq!(check_start(Some(&manifest), false, false, true), Ok(()));
+}
+
+#[test]
+fn only_the_two_upper_permission_modes_can_run_unattended() {
+    use fs_agent::permissions::Mode;
+
+    // 判据不是「哪一档更宽松」，而是「第一次写会不会停在等人」（§5）。
+    assert!(!Mode::Readonly.allows_unattended());
+    assert!(!Mode::Ask.allows_unattended());
+    assert!(Mode::Workspace.allows_unattended());
+    assert!(Mode::Auto.allows_unattended());
 }
 
 // --- 归属是一条只追加的事件（§4） ------------------------------------------

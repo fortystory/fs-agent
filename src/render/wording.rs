@@ -1538,11 +1538,6 @@ pub fn goal_loop_started(name: &str, completed: usize, total: usize) -> String {
     format!("开始做目标 {name}（已完成 {completed}/{total}）；要停就按 Esc")
 }
 
-/// `/loop` 停了，回到空闲态等人。
-pub fn goal_loop_stopped(name: &str) -> String {
-    format!("目标 {name} 的循环停了")
-}
-
 /// 过半时注入给模型的那段话（§6）。
 ///
 /// 措辞是「把还没落流的东西落下来」，**不是**「你该收敛了」：再过一会儿历史会被压成摘要，
@@ -1561,6 +1556,42 @@ pub fn goal_reminded(percent: u64) -> String {
 pub fn goal_rolled_over(from: &str, to: &str, compacted: bool) -> String {
     let what = if compacted { "历史压成摘要" } else { "清场" };
     format!("{what}：会话 {from} → {to}（这一下会打掉前缀缓存，它是低频的）")
+}
+
+/// 目标循环跑着的时候按 `Esc`，问的那一句（§5）。
+///
+/// 安全的那一个答案排在前面，而且它也是 `Enter` 与 `Esc`：要停得**明确选**。
+pub fn goal_stop_title() -> &'static str {
+    "目标循环正在跑"
+}
+
+/// 同一个问题的那行说明：说清哪个键是哪个意思。
+pub fn goal_stop_body() -> &'static str {
+    "误按一下不该掐掉一个已经跑了很久的目标。要继续跑：`Enter` 或 `Esc`；要停下并收尾：`s`。"
+}
+
+/// 回答那个问题的键。
+pub static GOAL_STOP_CHOICES: [Choice; 2] = [
+    Choice {
+        key: 'c',
+        label: "继续跑",
+    },
+    Choice {
+        key: 's',
+        label: "停下",
+    },
+];
+
+/// 档位不够时说的人话（`.scratch/goal-loop/spec.md` §5）。
+pub fn loop_needs_unattended_mode(mode: &str) -> String {
+    format!(
+        "{mode} 档下跑不了无人值守的目标循环：第一次写就会停下来等人。换 `workspace` 或 `auto`          档（`--mode` 或 `[permissions] mode`）再试"
+    )
+}
+
+/// 输入区禁言时的那一行提示（§5）。
+pub fn input_muted() -> &'static str {
+    "无人值守的目标循环跑着，输入区在这段时间里禁言；要停就按 Esc"
 }
 
 /// `/clear` 干完了：说出会话换成了哪一个（旧的那个还在磁盘上）。

@@ -504,18 +504,26 @@ pub enum StartRefusal {
     NoWork,
     /// 这个会话已经有一个 loop 在跑。
     AlreadyRunning,
+    /// 权限档不够：`readonly` / `ask` 档下第一次写就停在等人，那时「无人值守」是空话（§5）。
+    Unattended,
 }
 
 /// 判三条启动边界。
 ///
-/// 顺序上「已经有一个 loop 在跑」最先：那是这个会话此刻的状态，与另一个名字好不好无关。
+/// 顺序上「已经有一个 loop 在跑」最先：那是这个会话此刻的状态，与另一个名字好不好无关；紧跟
+/// 着的是档位 —— 那一档不够时，跑都跑不起来，名字对不对是下一步的事。
 pub fn check_start(
     manifest: Option<&Manifest>,
     complete: bool,
     running: bool,
+    unattended: bool,
 ) -> Result<(), StartRefusal> {
     if running {
         return Err(StartRefusal::AlreadyRunning);
+    }
+    // 档位那一条排在清单前面：它说的是这个会话**能不能**无人值守，而名字对不对是下一步。
+    if !unattended {
+        return Err(StartRefusal::Unattended);
     }
     match manifest {
         None => Err(StartRefusal::Unknown),

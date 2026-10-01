@@ -85,6 +85,12 @@ pub enum ConsoleRequest {
     /// 组装之后立刻推一次，因为技能来自会话，没有什么能更早把它们列出来。一个不画菜单的
     /// 前端 —— plain 那条控制台 —— 与它无关。
     Catalog { entries: Vec<CatalogEntry> },
+    /// 输入区是不是禁言了（`.scratch/goal-loop/spec.md` §5）。
+    ///
+    /// 无人值守的目标循环跑着的时候，打字插话不是这个功能的一部分（那是
+    /// `.scratch/interjection-flow` 那条种子）：键位照旧响应，只是不落字。知道这件事的只有
+    /// 循环，所以它自己说。
+    Muted { muted: bool },
     /// 循环是不是**在一次运行里面** —— 一个回合，或它正在驱动的一场讨论。
     ///
     /// 知道这件事的只有循环，所以它自己说，而不是让前端去推断（spec §6）。从渲染流上推
@@ -145,6 +151,14 @@ impl ConsoleHandle {
     /// 循环，也没有哪条侧通道（渲染流、一个未决的提示）对每一种运行都说得出来。
     pub fn set_running(&self, running: bool) {
         let _ = self.requests.send(ConsoleRequest::RunState { running });
+    }
+
+    /// 说输入区是不是禁言了。
+    ///
+    /// 与 [`set_running`](Self::set_running) 同一个形状、同一个理由：知道目标循环何时开始与
+    /// 结束的只有循环。不想落字的那个前端忽略它。
+    pub fn set_muted(&self, muted: bool) {
+        let _ = self.requests.send(ConsoleRequest::Muted { muted });
     }
 
     /// 把重新打开的会话组装出来的历史交给前端。
@@ -328,6 +342,10 @@ pub fn spawn_plain_console_with(
                 }
                 // 面向行的前端没有菜单：名字靠那句未知命令的文案去发现。
                 ConsoleRequest::Catalog { .. } => {}
+                // 禁言对这条前端是**构造性**的：它只在循环要一行的时候读，而无人值守的循环
+                // 在它跑着的那段时间里从不索要一行（`.scratch/goal-loop/spec.md` §5）。所以
+                // 这里不需要做任何事 —— 它本来就不读。
+                ConsoleRequest::Muted { .. } => {}
                 // 这条前端上没有任何东西读按键事件，所以也没有手势会被读成错误的分支
                 // （spec §6）。
                 ConsoleRequest::RunState { .. } => {}

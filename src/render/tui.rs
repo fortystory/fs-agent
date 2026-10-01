@@ -563,6 +563,11 @@ pub struct TuiState {
     /// 之后）才被应用，所以启动横幅不会被画进历史中间（spec §3）。
     live_buffer: Vec<RenderEvent>,
     quit: bool,
+    /// 输入区是不是禁言了（`.scratch/goal-loop/spec.md` §5）：目标循环跑着的时候为真。
+    ///
+    /// 它是循环推过来的一个值（[`ConsoleRequest::Muted`]），不是从「忙」推出来的：一次普通
+    /// 回合里打字照旧落进草稿。
+    muted: bool,
 }
 
 /// 一个等着答案的问题。
@@ -585,6 +590,13 @@ enum Pending {
     /// 它是渲染器侧第五个问题，也是唯一结束应用的那个。它没有人可发答案 —— 说 yes 就是
     /// 置上 [`TuiState::quit`]，循环的 `select!` 会在下一趟看见。
     Exit,
+    /// 目标循环跑着的时候按 `Esc`：渲染器自己问一句「停下还是继续跑」
+    /// （`.scratch/goal-loop/spec.md` §5）。
+    ///
+    /// 它是渲染器侧的问题，与一次过大的粘贴、一份会被 `Esc` 丢掉的草稿同一档 —— 没有可答的
+    /// 对象，说「yes」就是推一条取消手势给循环。**默认停在「继续跑」**：只有明确选「停下」
+    /// 才推那一条。
+    GoalStop,
     /// 模型发起的问卷，它占着底部输入区（spec §7、§19）。
     ///
     /// 这是唯一**不**走 [`Pending::modal`] 的问题种类：中间覆盖层适合一行确认，而问卷是
@@ -895,6 +907,14 @@ impl Pending {
                 choices: &wording::EXIT_CHOICES,
                 actions: vec![HitAction::Quit, HitAction::Dismiss],
             },
+            Pending::GoalStop => Modal {
+                title: wording::goal_stop_title().to_owned(),
+                description: None,
+                notes: Vec::new(),
+                detail: Some(wording::goal_stop_body().to_owned()),
+                choices: &wording::GOAL_STOP_CHOICES,
+                actions: vec![HitAction::Dismiss, HitAction::StopGoal],
+            },
             Pending::Questionnaire(_) => return None,
         };
         Some(modal)
@@ -946,6 +966,8 @@ enum HitAction {
     ClearDraft,
     /// 确认退出。
     Quit,
+    /// 确认停下目标循环（§5）。
+    StopGoal,
     /// 什么都不做就关掉问题：安全的那一个答案，`Esc` 也是它。
     Dismiss,
     /// 退回上一个问题。
@@ -1225,6 +1247,8 @@ impl TuiState {
             replay: None,
             live_buffer: Vec::new(),
             quit: false,
+            // 循环开始跑目标时才会把它置上（[`ConsoleRequest::Muted`]）。
+            muted: false,
         }
     }
 
@@ -1789,7 +1813,11 @@ impl TuiState {
             // 中间覆盖层：每一个 `[键] 标签` 区间就是一个按钮，点一下跑的就是那个键会给出的
             // 答案，分毫不差（票 04 §3）。
             Some(
-                Pending::Loop { .. } | Pending::Paste { .. } | Pending::ClearDraft | Pending::Exit,
+                Pending::Loop { .. }
+                | Pending::Paste { .. }
+                | Pending::ClearDraft
+                | Pending::Exit
+                | Pending::GoalStop,
             ) => {
                 let QuestionClick::At(column, row) = click else {
                     // 滚轮在一行的问题上什么都不做。
@@ -1806,7 +1834,10 @@ impl TuiState {
                         let _ = reply.send(choice);
                     }
                     (
-                        pending @ (Pending::Paste { .. } | Pending::ClearDraft | Pending::Exit),
+                        pending @ (Pending::Paste { .. }
+                        | Pending::ClearDraft
+                        | Pending::Exit
+                        | Pending::GoalStop),
                         action,
                     ) => self.own_answer(pending, action),
                     // 一块不属于这个问题的区域。左栏的页签在同一张「这一帧画了什么」的表里，
@@ -1830,6 +1861,9 @@ impl TuiState {
             }
             (Pending::ClearDraft, HitAction::ClearDraft) => self.editor.clear(),
             (Pending::Exit, HitAction::Quit) => self.quit = true,
+            // 点「停下」与按 `s` 是同一次动作：推一条取消手势，循环据此收尾并落一条「人主动
+            // 停」的收尾事件。
+            (Pending::GoalStop, HitAction::StopGoal) => self.events.push(FrontEndEvent::Cancel),
             // `Dismiss`，以及任何不可能出现的组合，都是安全的那一个答案：问题关掉、什么都
             // 不发生，`Esc` 干的就是这个。
             _ => {}
@@ -1936,6 +1970,11 @@ impl TuiState {
         match request {
             ConsoleRequest::Prompt { reply } => self.prompt_reply = Some(reply),
             // 循环自己对「它是不是正在跑东西」的说法。这个状态里没有别的什么可以替它说话。
+            ConsoleRequest::Muted { muted } => {
+                self.muted = muted;
+                // 禁言开始的那一刻，草稿里还没有什么东西是「插话」；立着的问题也不受影响
+                // （它是循环在等答案，与打字不是一回事）。
+            }
             ConsoleRequest::RunState { running } => {
                 self.running = running;
                 // 脉冲属于某一次运行：运行结束时提示符回到它歇着的那个颜色，于是下一次从
@@ -2149,7 +2188,21 @@ impl TuiState {
             }
             Key::Esc => {
                 if self.busy() {
-                    self.events.push(FrontEndEvent::Cancel);
+                    if !self.muted {
+                        self.events.push(FrontEndEvent::Cancel);
+                    } else {
+                        // 目标循环跑着：**默认停在「继续跑」** —— 误按一下不该掐掉一个已经跑了
+                        // 两小时的目标（`.scratch/goal-loop/spec.md` §5）。
+                        match self.pending {
+                            // 已经问出来了：关掉它就是那个安全的答案。
+                            Some(Pending::GoalStop) => self.pending = None,
+                            // 别的框（模型那份问卷）属于这次运行，所以 `Esc` 对它是取消手势，
+                            // 与别处一样。
+                            Some(_) => self.events.push(FrontEndEvent::Cancel),
+                            // 没有框：先问一句。
+                            None => self.pending = Some(Pending::GoalStop),
+                        }
+                    }
                 } else if let Some(pending) = self.pending.take() {
                     self.decline(pending);
                 } else if self.slash_menu().is_some() {
@@ -2179,6 +2232,11 @@ impl TuiState {
             } else if matches!(key, Key::Char(_) | Key::Enter) {
                 self.answer_key(key);
             }
+            return;
+        }
+        // 输入区禁言（§5）：键位照旧响应 —— 方向键、翻页、`Shift+Tab` 都还做事 —— 只是编辑
+        // 与提交进不来。这不是「暂停」，循环照常跑。
+        if self.muted && matches!(key, Key::Char(_) | Key::Enter | Key::Tab) {
             return;
         }
         if key == Key::BackTab {
@@ -2394,6 +2452,12 @@ impl TuiState {
                     self.quit = true;
                 }
             }
+            // **默认停在「继续跑」**：只有明确按 `s` 才停，`Enter` 与别的键都是继续。
+            Pending::GoalStop => {
+                if matches!(key, Key::Char('s') | Key::Char('S')) {
+                    self.events.push(FrontEndEvent::Cancel);
+                }
+            }
             // 到不了：`key` 在到这之前就把问卷路由给 `questionnaire_key` 了，因为问卷认的
             // 键盘更宽。在这里丢掉它会拒掉那个工具，所以它只为了让 match 保持穷尽而留着。
             Pending::Questionnaire(_) => {}
@@ -2414,6 +2478,8 @@ impl TuiState {
             | Pending::Paste { .. }
             | Pending::ClearDraft
             | Pending::Exit => {}
+            // `Esc` 关掉它，意思就是**继续跑** —— 那个安全的答案。
+            Pending::GoalStop => {}
         }
     }
 
@@ -4553,6 +4619,104 @@ mod tests {
                 frame as f64 * PULSE_FRAME.as_secs_f64()
             );
         }
+    }
+
+    // --- 目标循环跑着时的键盘（`.scratch/goal-loop/spec.md` §5） -------------
+
+    /// 一个能收键盘的 TUI 状态：够跑那几条键的规矩。
+    fn state() -> TuiState {
+        TuiState::new(SessionFacts {
+            session_id: "s-1".to_owned(),
+            session_dir: "/tmp/s-1".to_owned(),
+            model: "fake-model".to_owned(),
+            context_window: 100_000,
+            mode: crate::permissions::Mode::Workspace,
+            budget_limit: None,
+            speaker_order: vec!["kimi".to_owned()],
+        })
+    }
+
+    #[test]
+    fn a_muted_input_area_responds_to_keys_but_does_not_take_typing() {
+        let mut state = state();
+        state.running = true;
+
+        // 没禁言时打字照旧落进草稿。
+        state.key(Key::Char('x'));
+        assert_eq!(state.editor.text(), "x");
+        state.editor.clear();
+
+        // 禁言之后不落字 —— 键位照旧响应，但编辑与提交都进不来。
+        state.muted = true;
+        for key in [Key::Char('x'), Key::Enter, Key::Tab] {
+            state.key(key);
+        }
+        assert_eq!(state.editor.text(), "", "禁言时不落字");
+        assert!(state.events.is_empty(), "也没有手势被误发出去");
+    }
+
+    #[test]
+    fn esc_while_a_goal_runs_asks_before_it_stops() {
+        let mut state = state();
+        state.running = true;
+        state.muted = true;
+
+        // 误按 Esc：不是取消，而是问一句。
+        state.key(Key::Esc);
+        assert!(
+            state.events.is_empty(),
+            "问出来的时候还没停：{:?}",
+            state.events
+        );
+        let modal = state
+            .pending
+            .as_ref()
+            .and_then(Pending::modal)
+            .expect("屏幕上立着那个确认框");
+        assert_eq!(modal.title, wording::goal_stop_title());
+        assert_eq!(
+            modal.choices.len(),
+            2,
+            "两个答案：继续跑与停下"
+        );
+        assert_eq!(
+            modal.choices[0].label, "继续跑",
+            "安全的那个答案排在前面"
+        );
+
+        // **默认停在「继续跑」**：Enter 关掉框，什么都不发生。
+        state.key(Key::Enter);
+        assert!(state.events.is_empty(), "Enter 是继续跑");
+        assert!(state.pending.is_none(), "框关掉了");
+
+        // 再误按一次 Esc，框又立起来；关掉它就是继续跑。
+        state.key(Key::Esc);
+        assert!(state.pending.is_some(), "框又立起来了");
+        state.key(Key::Esc);
+        assert!(state.events.is_empty(), "Esc 也是继续跑");
+        assert!(state.pending.is_none(), "而框关掉了");
+    }
+
+    #[test]
+    fn only_an_explicit_stop_choice_stops_the_goal_loop() {
+        let mut state = state();
+        state.running = true;
+        state.muted = true;
+        state.key(Key::Esc);
+        // 明确选「停下」：推一条取消手势，循环据此收尾并落一条「人主动停」的事件。
+        state.key(Key::Char('s'));
+        assert_eq!(state.events, vec![FrontEndEvent::Cancel]);
+        assert!(state.pending.is_none());
+    }
+
+    #[test]
+    fn without_a_goal_loop_esc_is_still_the_plain_cancel_gesture() {
+        let mut state = state();
+        state.running = true;
+        // 一次普通回合：Esc 照旧就是取消，不多问一句。
+        state.key(Key::Esc);
+        assert_eq!(state.events, vec![FrontEndEvent::Cancel]);
+        assert!(state.pending.is_none());
     }
 
     /// 色环，钉在每个实现都同意的那六个点上 —— 分区算术里一个舍入错误最先显形的那几个角。
