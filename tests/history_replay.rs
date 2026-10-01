@@ -44,10 +44,14 @@ fn state() -> TuiState {
 /// 会话目录是 `dir` 的那个状态，工具详情就是从它这里读
 /// `outputs/<id>.txt` 的。
 fn state_in(dir: &Path) -> TuiState {
-    TuiState::new(SessionFacts {
-        session_dir: dir.display().to_string(),
-        ..facts()
-    }, std::path::PathBuf::from("/x/fs-agent"), None)
+    TuiState::new(
+        SessionFacts {
+            session_dir: dir.display().to_string(),
+            ..facts()
+        },
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    )
 }
 
 /// 循环在等一行的那个状态，于是 `Enter` 有个地方可以提交。

@@ -47,7 +47,11 @@ fn facts() -> SessionFacts {
 }
 
 fn new_state() -> TuiState {
-    TuiState::new(facts(), std::path::PathBuf::from("/home/forty/code/fs-agent"), Some(std::path::PathBuf::from("/home/forty")))
+    TuiState::new(
+        facts(),
+        std::path::PathBuf::from("/home/forty/code/fs-agent"),
+        Some(std::path::PathBuf::from("/home/forty")),
+    )
 }
 
 fn state_with_prompt() -> (TuiState, tokio::sync::oneshot::Receiver<Option<String>>) {
@@ -274,7 +278,10 @@ fn ctrl_d_is_the_same_double_tap_as_ctrl_c() {
     idle.key(Key::CtrlD);
     assert!(!idle.should_quit(), "第一下只举手");
     idle.key(Key::Enter);
-    assert!(!idle.should_quit(), "Enter 不再是确认，而是一个清掉举手的普通键");
+    assert!(
+        !idle.should_quit(),
+        "Enter 不再是确认，而是一个清掉举手的普通键"
+    );
     idle.key(Key::CtrlD);
     assert!(!idle.should_quit(), "举手清掉之后，这一下又是第一下");
     idle.key(Key::CtrlD);
@@ -1250,4 +1257,3 @@ fn a_title_is_only_written_when_it_changes() {
     );
     assert!(state.sync_title().is_none(), "再问一次还是没变");
 }
-

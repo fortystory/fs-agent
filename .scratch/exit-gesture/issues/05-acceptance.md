@@ -1,7 +1,7 @@
 # 验收面收口：忙碌双击的 pty 回归与手工清单重写
 
 Type: implement
-ready-for-human
+Status: ready-for-human
 Blocked by: 03, 04
 
 > 规格：`.scratch/exit-gesture/spec.md`「测试决定」的 pty 与手工两条、§3 那个缺陷的回归、§5 的回执。

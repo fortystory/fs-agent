@@ -1078,7 +1078,12 @@ const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 /// 这就是状态词从 60 到 80 列消失的原因 —— 40 列时它还在，因为只有一条提示要付账
 /// （票 06 §4）。
 pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
-    hint_line(status_word(busy), &KEY_HINTS, exit_hint(busy, raised), width)
+    hint_line(
+        status_word(busy),
+        &KEY_HINTS,
+        exit_hint(busy, raised),
+        width,
+    )
 }
 
 /// 前端没有在读行时的状态行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
@@ -1087,7 +1092,12 @@ pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
 /// `discuss` 运行，它压根不会要一行输入 —— 否则就会为一个什么都不发的键承诺
 /// `enter 发送`（spec §6）。
 pub fn viewer_status_line(busy: bool, width: u16, raised: bool) -> String {
-    hint_line(status_word(busy), &VIEWER_HINTS, exit_hint(busy, raised), width)
+    hint_line(
+        status_word(busy),
+        &VIEWER_HINTS,
+        exit_hint(busy, raised),
+        width,
+    )
 }
 
 /// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。

@@ -1411,7 +1411,11 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 有不止一个讨论者的 `speaker_order` 才让一场会话成为讨论，
     // 而讨论会数自己的轮次 —— `CONTEXT.md` 把 轮次 与 回合 分开
     // （spec §4）。
-    let mut state = TuiState::new(facts_with_roster(&["kimi", "deepseek"]), std::path::PathBuf::from("/x/fs-agent"), None);
+    let mut state = TuiState::new(
+        facts_with_roster(&["kimi", "deepseek"]),
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    );
     let kimi = SpeakerId::Debater("kimi".into());
     state.apply(user_message(1, "讨论题目"));
     for round in 0..3u32 {
@@ -1459,7 +1463,11 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
 
     // ……而后面的轮次没有自己的用户消息，所以它的格子落在
     // 轮次的开场行上 —— spec 给「没什么可瞄的单元」的兜底。
-    let mut later = TuiState::new(facts_with_roster(&["kimi", "deepseek"]), std::path::PathBuf::from("/x/fs-agent"), None);
+    let mut later = TuiState::new(
+        facts_with_roster(&["kimi", "deepseek"]),
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    );
     later.apply(user_message(1, "讨论题目"));
     for round in 0..3u32 {
         for (offset, payload) in [
@@ -2621,10 +2629,14 @@ fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
     // `--mode readonly`（或 `[permissions] mode`）必须从第一帧起
     // 就出现在这一行上。一行老是从 询问 起步，就是对用户
     // 刚配好的那道闸门撒了谎。
-    let mut state = TuiState::new(SessionFacts {
-        mode: fs_agent::permissions::Mode::Readonly,
-        ..facts()
-    }, std::path::PathBuf::from("/x/fs-agent"), None);
+    let mut state = TuiState::new(
+        SessionFacts {
+            mode: fs_agent::permissions::Mode::Readonly,
+            ..facts()
+        },
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    );
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("模式 只读"), "{text}");
 }
@@ -3809,18 +3821,22 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
     )
     .expect("落盘的那个文件");
 
-    let mut state = TuiState::new(SessionFacts {
-        session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: dir.display().to_string(),
-        model: "claude-sonnet-4-5".to_owned(),
-        context_window: 200_000,
-        // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
-        // 测试在自己的 facts 里覆盖它。
-        mode: fs_agent::permissions::Mode::Ask,
-        budget_limit: Some(100_000),
-        number_style: fs_agent::render::wording::NumberStyle::Cn,
-        speaker_order: vec!["kimi".to_owned()],
-    }, std::path::PathBuf::from("/x/fs-agent"), None);
+    let mut state = TuiState::new(
+        SessionFacts {
+            session_id: "01J8ZQ4K7M".to_owned(),
+            session_dir: dir.display().to_string(),
+            model: "claude-sonnet-4-5".to_owned(),
+            context_window: 200_000,
+            // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
+            // 测试在自己的 facts 里覆盖它。
+            mode: fs_agent::permissions::Mode::Ask,
+            budget_limit: Some(100_000),
+            number_style: fs_agent::render::wording::NumberStyle::Cn,
+            speaker_order: vec!["kimi".to_owned()],
+        },
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    );
     state.apply(tool_started(
         1,
         "call-11",
@@ -3899,10 +3915,14 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
 /// 注入名册是给定讨论者名字的状态，转录里的名字
 /// 正是靠它上色（票 07 §1）。
 fn state_with_roster(names: &[&str]) -> TuiState {
-    TuiState::new(SessionFacts {
-        speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
-        ..facts()
-    }, std::path::PathBuf::from("/x/fs-agent"), None)
+    TuiState::new(
+        SessionFacts {
+            speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
+            ..facts()
+        },
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    )
 }
 
 /// 滚轮一格。
@@ -4053,7 +4073,10 @@ fn a_raised_gesture_replaces_the_way_out_and_keeps_the_hints() {
         busy_text.contains("已取消 · 再按一次 ctrl-c 退出"),
         "忙碌的举手文案：{busy_text}"
     );
-    assert!(busy_text.contains("esc 取消"), "键位提示照旧在：{busy_text}");
+    assert!(
+        busy_text.contains("esc 取消"),
+        "键位提示照旧在：{busy_text}"
+    );
 }
 
 /// 一个屏幕上摆着 `question` 的问卷，以及它的答案接收端。
@@ -4517,18 +4540,22 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
     let big = "x".repeat(200_001);
     std::fs::write(outputs.join("call-23.txt"), &big).expect("落盘的那个文件");
 
-    let mut state = TuiState::new(SessionFacts {
-        session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: dir.display().to_string(),
-        model: "claude-sonnet-4-5".to_owned(),
-        context_window: 200_000,
-        // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
-        // 测试在自己的 facts 里覆盖它。
-        mode: fs_agent::permissions::Mode::Ask,
-        budget_limit: Some(100_000),
-        number_style: fs_agent::render::wording::NumberStyle::Cn,
-        speaker_order: vec!["kimi".to_owned()],
-    }, std::path::PathBuf::from("/x/fs-agent"), None);
+    let mut state = TuiState::new(
+        SessionFacts {
+            session_id: "01J8ZQ4K7M".to_owned(),
+            session_dir: dir.display().to_string(),
+            model: "claude-sonnet-4-5".to_owned(),
+            context_window: 200_000,
+            // 会话被组装时所处的模式：状态行里 `模式 …` 那一栏。想测另一档的
+            // 测试在自己的 facts 里覆盖它。
+            mode: fs_agent::permissions::Mode::Ask,
+            budget_limit: Some(100_000),
+            number_style: fs_agent::render::wording::NumberStyle::Cn,
+            speaker_order: vec!["kimi".to_owned()],
+        },
+        std::path::PathBuf::from("/x/fs-agent"),
+        None,
+    );
     state.apply(tool_started(
         1,
         "call-23",

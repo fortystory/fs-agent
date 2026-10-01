@@ -169,13 +169,7 @@ fn label_columns() -> usize {
 /// 前 N 列**上底色，`N = ceil(share × 值列宽)`。底色**不占列**，所以列宽计算与降级链一点
 /// 都不用动；标签与中间那个空格不涂，右对齐的前导留白算在值列里 —— 于是色条总是从值列
 /// 左缘起，不跟着数字跑（`.scratch/usage-stats-format/spec.md` §3）。
-fn row(
-    label: &str,
-    value: &str,
-    width: usize,
-    right: bool,
-    share: Option<f64>,
-) -> Line<'static> {
+fn row(label: &str, value: &str, width: usize, right: bool, share: Option<f64>) -> Line<'static> {
     let labels = label_columns();
     let label = pad_right(&fit(label, labels), labels);
     let value = fit(value, width);

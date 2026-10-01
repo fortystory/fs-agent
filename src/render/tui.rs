@@ -333,9 +333,7 @@ impl Tui {
         let mut terminal = ratatui::init();
         // 第一版标题在这里就写：它不该跟着那场「等重放」一起等下去，而且快照也从这一刻
         // 起算，绘制路径只管之后的变化（`.scratch/terminal-title/spec.md` §4、§5）。
-        let first = state
-            .sync_title()
-            .expect("首帧之前还没有标题快照");
+        let first = state.sync_title().expect("首帧之前还没有标题快照");
         let modes = TerminalModes::enter(&first);
         let mut keys = EventStream::new();
 
@@ -2008,9 +2006,7 @@ impl TuiState {
                         let _ = reply.send(choice);
                     }
                     (
-                        pending @ (Pending::Paste { .. }
-                        | Pending::ClearDraft
-                        | Pending::GoalStop),
+                        pending @ (Pending::Paste { .. } | Pending::ClearDraft | Pending::GoalStop),
                         action,
                     ) => self.own_answer(pending, action),
                     // 一块不属于这个问题的区域。左栏的页签在同一张「这一帧画了什么」的表里，
@@ -4838,16 +4834,20 @@ mod tests {
 
     /// 一个能收键盘的 TUI 状态：够跑那几条键的规矩。
     fn state() -> TuiState {
-        TuiState::new(SessionFacts {
-            session_id: "s-1".to_owned(),
-            session_dir: "/tmp/s-1".to_owned(),
-            model: "fake-model".to_owned(),
-            context_window: 100_000,
-            mode: crate::permissions::Mode::Workspace,
-            budget_limit: None,
-            number_style: crate::render::wording::NumberStyle::Cn,
-            speaker_order: vec!["kimi".to_owned()],
-        }, std::path::PathBuf::from("/x/fs-agent"), None)
+        TuiState::new(
+            SessionFacts {
+                session_id: "s-1".to_owned(),
+                session_dir: "/tmp/s-1".to_owned(),
+                model: "fake-model".to_owned(),
+                context_window: 100_000,
+                mode: crate::permissions::Mode::Workspace,
+                budget_limit: None,
+                number_style: crate::render::wording::NumberStyle::Cn,
+                speaker_order: vec!["kimi".to_owned()],
+            },
+            std::path::PathBuf::from("/x/fs-agent"),
+            None,
+        )
     }
 
     #[test]

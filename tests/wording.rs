@@ -413,7 +413,10 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     // 28 列装得下状态词与出路；31 列时发送提示与出路装得下，
     // 而让位的是状态词 —— 出路比它过去宽了七列，
     // 正是这一点挪动了这一档。
-    assert_eq!(wording::status_line(false, 28, false), "就绪 · ctrl-c/ctrl-d 退出");
+    assert_eq!(
+        wording::status_line(false, 28, false),
+        "就绪 · ctrl-c/ctrl-d 退出"
+    );
     assert_eq!(
         wording::status_line(false, 31, false),
         "enter 发送 · ctrl-c/ctrl-d 退出"
@@ -431,8 +434,14 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
         "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
     // 比任何提示都窄：剩下的只有出路。
-    assert_eq!(wording::status_line(true, 8, false), wording::EXIT_HINT_BUSY);
-    assert_eq!(wording::status_line(false, 3, false), wording::EXIT_HINT_IDLE);
+    assert_eq!(
+        wording::status_line(true, 8, false),
+        wording::EXIT_HINT_BUSY
+    );
+    assert_eq!(
+        wording::status_line(false, 3, false),
+        wording::EXIT_HINT_IDLE
+    );
     // 只有空闲行会宣传 `ctrl-d`：一次运行进行中的时候它什么都不做，
     // 所以点它的名正是提示行绝不能做的那件事。
     assert!(
@@ -521,7 +530,10 @@ fn the_raised_exit_hints_say_the_second_press() {
 
     // 举手那三句：空闲两键对等、忙碌把「回合停了」与「再按会退出」一起说出来、重放里只有
     // `Ctrl-C` 管用。
-    assert_eq!(wording::EXIT_HINT_IDLE_RAISED, "再按一次 ctrl-c/ctrl-d 退出");
+    assert_eq!(
+        wording::EXIT_HINT_IDLE_RAISED,
+        "再按一次 ctrl-c/ctrl-d 退出"
+    );
     assert_eq!(
         wording::EXIT_HINT_BUSY_RAISED,
         "已取消 · 再按一次 ctrl-c 退出"
@@ -535,7 +547,10 @@ fn the_raised_exit_hints_say_the_second_press() {
         wording::EXIT_HINT_IDLE_RAISED
     );
     assert_eq!(wording::exit_hint(true, false), wording::EXIT_HINT_BUSY);
-    assert_eq!(wording::exit_hint(true, true), wording::EXIT_HINT_BUSY_RAISED);
+    assert_eq!(
+        wording::exit_hint(true, true),
+        wording::EXIT_HINT_BUSY_RAISED
+    );
 
     // 换掉之后，别的键位提示照旧在，而旧的出口段不再作为一个条目出现。
     let wide = wording::status_line(false, 200, true);
@@ -1193,7 +1208,10 @@ fn a_title_without_a_goal_omits_the_goal_segment() {
 fn the_home_directory_is_abbreviated_to_a_tilde() {
     let home = std::path::Path::new("/home/forty");
     assert_eq!(
-        wording::title_path(std::path::Path::new("/home/forty/code/fs-agent"), Some(home)),
+        wording::title_path(
+            std::path::Path::new("/home/forty/code/fs-agent"),
+            Some(home)
+        ),
         "~/code/fs-agent"
     );
     assert_eq!(wording::title_path(home, Some(home)), "~");
@@ -1284,16 +1302,10 @@ fn the_forty_column_cap_counts_display_columns_not_bytes() {
     // 20 列的就超了。按字节算的话 9 个汉字（27 字节）早就超了 —— 那会让这条测试红。
     let cwd = std::path::Path::new("/x/fs-agent");
     let just_fits = "目".repeat(9);
-    let title = wording::terminal_title(
-        cwd,
-        None,
-        wording::TitleState::Running,
-        Some(&just_fits),
-    );
+    let title = wording::terminal_title(cwd, None, wording::TitleState::Running, Some(&just_fits));
     assert!(title.ends_with(&just_fits), "18 列的目标留得住：{title}");
 
     let too_wide = "目".repeat(10);
     let title = wording::terminal_title(cwd, None, wording::TitleState::Running, Some(&too_wide));
     assert_eq!(title, "x/fs-agent · 运行中", "20 列的目标挤不下：{title}");
 }
-
