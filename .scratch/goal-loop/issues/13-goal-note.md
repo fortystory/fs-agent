@@ -1,7 +1,7 @@
 # `goal_note`：执行中冒出来的新工作
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03
 
 > 规格：`.scratch/goal-loop/spec.md` §11（`goal_note`）。

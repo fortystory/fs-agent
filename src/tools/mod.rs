@@ -14,6 +14,7 @@ pub mod bash;
 pub mod custom;
 pub mod edit;
 pub mod file;
+pub mod goal_note;
 pub mod paths;
 pub mod process;
 pub mod registry;
@@ -27,6 +28,7 @@ pub mod tool;
 pub use ask_user::{AskUserQuestionTool, ASK_USER_QUESTION_TOOL};
 pub use bash::{BashTool, BASH_TOOL};
 pub use custom::{is_custom_tool, CustomTool};
+pub use goal_note::{GoalNoteTool, GOAL_NOTE_TOOL};
 pub use file::{
     before_artifact, EditCall, EditFile, ReadFile, WriteFile, EDIT_FILE, MATCH_LEVEL_PREFIX,
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
@@ -62,6 +64,8 @@ pub use tool::{
 ///
 /// `todo` 刻意**不**放在 `can_ask` 后面：维护一份列表不需要有人作答，所以三个渲染器都挂它
 /// —— 这正是它与 `ask_user_question` 的分界（`.scratch/todo-and-modes/spec.md` §2）。
+/// `goal_note` 与它同一档，理由也同一档：记一行新工作不需要有人作答
+/// （`.scratch/goal-loop/spec.md` §11）。
 pub fn builtin(can_ask: bool) -> Registry {
     let mut registry = Registry::new();
     registry.register(Box::new(ReadFile));
@@ -72,6 +76,7 @@ pub fn builtin(can_ask: bool) -> Registry {
     registry.register(Box::new(RepoMapTool::new()));
     registry.register(Box::new(TaskTool));
     registry.register(Box::new(TodoTool));
+    registry.register(Box::new(GoalNoteTool));
     if can_ask {
         registry.register(Box::new(AskUserQuestionTool));
     }
