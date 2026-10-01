@@ -1387,11 +1387,7 @@ impl TuiState {
         let lines = paint_block(block, &mut self.colors, width);
         let produced = lines.len();
         for rendered in lines {
-            let link = rendered.link;
-            self.pane.push(rendered.line);
-            self.links.push_back(link);
-            self.turn_rail.push_line(is_user_message(block));
-            self.prune_links();
+            self.push_source(rendered.line, rendered.link, Some(is_user_message(block)));
         }
         // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
         // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。
@@ -1425,24 +1421,33 @@ impl TuiState {
     }
 
     /// 重放一条绘制记录。
-    fn emit_painted(&mut self, painted: &Painted, width: u16) -> usize {
+    fn emit_painted(&mut self, painted: &Painted, width: u16) {
         match painted {
-            Painted::Block(block) => self.emit_block(block, width),
+            Painted::Block(block) => {
+                self.emit_block(block, width);
+            }
             Painted::Thinking { speaker } => {
                 let line = self.thinking_in_progress_line(speaker);
-                self.pane.push(line);
-                self.links.push_back(None);
-                self.prune_links();
-                1
+                self.push_source(line, None, None);
             }
             Painted::Thought { speaker, trace } => {
                 let (line, detail) = self.thinking_settled_line(speaker, trace.clone());
-                self.pane.push(line);
-                self.links.push_back(Some(detail));
-                self.prune_links();
-                1
+                self.push_source(line, Some(detail), None);
             }
         }
+    }
+
+    /// 推进一条来源行：窗格、它的链接入口、回合条的纹理，最后裁掉两边溢出的部分。
+    ///
+    /// `user` 说这条行要不要记进回合条，`None` 是不记 —— 思考行是唯一的这种行：它属于当前
+    /// 单位，但它不是一次新的发言，也不改变单位的划分。
+    fn push_source(&mut self, line: Line<'static>, link: Option<Detail>, user: Option<bool>) {
+        self.pane.push(line);
+        self.links.push_back(link);
+        if let Some(user) = user {
+            self.turn_rail.push_line(user);
+        }
+        self.prune_links();
     }
 
     /// 这个会话数的是**轮**而不是回合。
@@ -1579,9 +1584,7 @@ impl TuiState {
         // 名字是 `speaker_label`，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
         // （票 07 §2）。
         let line = self.thinking_in_progress_line(&speaker);
-        self.pane.push(line);
-        self.links.push_back(None);
-        self.prune_links();
+        self.push_source(line, None, None);
         // 记进重放清单：宽度变化时它也要跟着回来（spec §1）。
         self.painted.push(Painted::Thinking { speaker });
         true
@@ -3673,21 +3676,28 @@ fn menu_row(
 ///
 /// 回答是一份文档，结构由 Markdown 自己给（标题、列表、代码块），那 11 格前导会把它整体
 /// 推右、又吃掉主列约七分之一。零前导就是零前导 —— 不是一串空 span。
+///
+/// `indent` 是那个前缀占的列数，也是渲染器给**需要左边界对齐的块**（表格、代码块）铺的
+/// 前导：第一行若已经以那 `indent` 个空格开头，就把它**换成**前缀，于是表头与数据行、
+/// 语言名与代码行落在同一个左边界上，而两边的总列数一模一样。
 fn attribute_document(
     speaker: &crate::events::SpeakerId,
     rows: Vec<Line<'static>>,
     colors: &mut SpeakerColors,
+    indent: u16,
 ) -> Vec<Line<'static>> {
     let prefix = format!("{} ", speaker_label(speaker));
     let name_style = name_style(speaker, colors);
     rows.into_iter()
         .enumerate()
         .map(|(index, row)| {
-            let mut spans = Vec::new();
+            let mut spans = row.spans;
             if index == 0 {
-                spans.push(Span::styled(prefix.clone(), name_style));
+                if indent > 0 {
+                    strip_leading_spaces(&mut spans, indent as usize);
+                }
+                spans.insert(0, Span::styled(prefix.clone(), name_style));
             }
-            spans.extend(row.spans);
             Line {
                 spans,
                 style: row.style,
@@ -3697,12 +3707,34 @@ fn attribute_document(
         .collect()
 }
 
+/// 从一片行首拿掉 `count` 个空格：那是渲染器给结构化块铺的前导，前缀要换成它。
+///
+/// 前导不足 `count` 列（比如第一行是一段普通正文）时什么都不动 —— 那时前缀是**插**在
+/// 前面，而不是替换。
+fn strip_leading_spaces(spans: &mut Vec<Span<'static>>, count: usize) {
+    let Some(first) = spans.first_mut() else {
+        return;
+    };
+    let leading = first.content.chars().take_while(|ch| *ch == ' ').count();
+    if leading < count {
+        return;
+    }
+    let rest: String = first.content.chars().skip(count).collect();
+    first.content = rest.into();
+    if first.content.is_empty() {
+        spans.remove(0);
+    }
+}
+
 /// 把一次**发言**归到它的发言者名下：标签引领第一行，其余行按 `[name] ` 的显示宽度缩进，
 /// 于是一条折行的或多行的消息读起来是**一次**发言（spec §3）。
 ///
 /// 用户自己的输入与非 assistant 的系统行走这条路：它们的正文里没有任何结构可依赖，
 /// 缩进就是那点结构（spec §5）。名字拿发言者自己的颜色，正文保持这一行的 —— 这个分工
 /// 就是全部的上色规矩：名字做标识，正文的意思由它的严重度说了算（票 07 §2）。
+///
+/// 骨架与 [`attribute_document`] 相似，但前导规则不同。合并成一个带开关的函数会让这两条路
+/// 看起来只差一个布尔值，而它们差的是一件别的事：一份文档有没有自己的结构。
 fn attribute_speech(
     speaker: &crate::events::SpeakerId,
     rows: Vec<Line<'static>>,
@@ -3829,13 +3861,18 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             // 回答按 Markdown 以全亮度渲染；只有发言者标签上色。答案是一份文档，所以续行
             // 顶格（spec §5）。
             //
-            // 前缀占的列要从**正文的预算**里扣掉：第一行是 `[name] ` 加上按这个预算排出来
-            // 的内容，两者相加正好是转录的宽度，不会溢出到折行。
-            let inner = width.saturating_sub(prefix_columns(speaker)).max(1);
-            attribute_document(speaker, super::markdown::to_lines(text, inner), colors)
-                .into_iter()
-                .map(RenderedLine::from)
-                .collect()
+            // 前缀占的列交给渲染器：需要左边界对齐的块（表格、代码块）整块从那一列起，
+            // 于是它们的左边界与第一行的 `[name] ` 对齐，而第一行前缀正好替换掉那段前导。
+            let indent = prefix_columns(speaker);
+            attribute_document(
+                speaker,
+                super::markdown::to_lines_indented(text, width, indent),
+                colors,
+                indent,
+            )
+            .into_iter()
+            .map(RenderedLine::from)
+            .collect()
         }
         // 用户自己的输入 —— 以及非 assistant 的系统行 —— 按写下来的样子显示：每一行都在，
         // 什么都不略去，也不上 Markdown，因为这不是一份文档。续行与第一行正文对齐（spec §3）。

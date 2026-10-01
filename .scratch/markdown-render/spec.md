@@ -44,6 +44,7 @@
 - `Cargo.toml` 加 `pulldown-cmark`，`default-features = false`。闭包实测 **5 个纯 Rust 包**（自己 + `bitflags` + `memchr` + `unicase`），无 C 构建，MSRV 1.71.1，MIT。**不开** `simd`（那会引入 `unsafe`）。
 - 开三个旗标：`ENABLE_TABLES`、`ENABLE_TASKLISTS`、`ENABLE_STRICKETHROUGH`。**不开** `ENABLE_FOOTNOTES`，也**不靠** `ENABLE_GFM` —— 实测它不是那四件套的总开关（只开 GFM 时表格仍是段落）。
 - `to_lines` 的签名改为 `to_lines(text: &str, width: u16) -> Vec<Line<'static>>`。宽度是**转录内容的可用列数**。理由：表格的列宽与超宽行的折行都需要它（§2、§3）。这推翻 `../tui-layout/spec.md` §3 里「源行缓冲**宽度无关，可复现**」那条性质的一半：宽度变化时，现在要**重跑 markdown 渲染**再重新折行，而不只是重新折行。代价可接受——每个块一次 `pulldown-cmark`，很快；且 §3 已经规定缓存按 `frame.area().width` 失效、宽度变化全量重算。
+  - **实现注记（2026-10-01）**：TUI 走的是同一族的第二个入口 `to_lines_indented(text, width, indent)`，`to_lines(text, width)` 是 `indent = 0` 的包装。`indent` 是调用方会在**第一行**前面加的那个前缀（`[kimi] `）占的列数；**需要左边界对齐的块**（表格、代码块）整块从那一列起、宽度预算扣掉它，其余块照常从第 0 列吐。这样 §2 的「表格列对得齐」与 §3 的「语言名结束在第 `width` 列」在与 §5 的「第一行有前缀、续行顶格」同时成立时不会互相打脸：调用方给第一行加前缀时，把渲染器铺的那 `indent` 个空格**换成**前缀，两边的列数一模一样。
 - 渲染器内部是一个**块级状态机**：表格与代码块需要整块缓冲（前者算列宽、后者定界），其余块逐行吐出。
 - `Text` 事件带行尾 `\n`，渲染器要把它当行边界而不是文本内容。
 - 认不出的构造一律**原样透传**——这是旧扫描器最值钱的一条性质，重写后必须保住。
@@ -120,6 +121,7 @@
   - `quotes_rules_and_tables_render_as_structure` 里那条「分隔那一行被丢掉」的断言**必须反过来写**——分隔线现在是表头信号；
   - `a_fenced_block_is_kept_verbatim_and_never_parsed_as_markdown` **一字不改**，它是这次重写最重要的安全网；
   - `malformed_markdown_degrades_to_plain_text_rather_than_vanishing` 同理不动；
+    - **实现注记（2026-10-01）**：这条测试的**形状**没动（畸形输入不消失、且留下能读的文字），但用例集换掉了两个：原清单里的 `#` 与 `>` 在 CommonMark 下是**合法但空**的结构（空标题、空引用），渲染成空本来就是对的，留在「不消失」的清单里会逼渲染器为它们编一行文本。换成了 `1.` 与 `<b` 这两个同样是畸形输入、但确实该留下文字的用例。
   - 所有调用点补上 `width` 参数。
 - **新增断言**（宁可断言结构，不要断言整份文本快照）：
   - 表格：表头 span 带 `BOLD`；分隔线存在；各列起点列号一致（对齐）；超宽时某格折成多行且同行其余格同高；表格首列从第 0 列开始（顶格）。

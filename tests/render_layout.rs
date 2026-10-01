@@ -5070,14 +5070,46 @@ fn narrowing_the_terminal_relays_a_table_out_by_the_new_width() {
             table[3].contains("22"),
             "{width} 列：第二条数据行：{table:?}"
         );
-        // 数据行的列彼此对得齐 —— 这是表内那张网格在屏幕上仍然成立。
+        // **表头与数据行**的列都对得齐 —— 前缀只替换表格整块那一段前导，网格在屏幕上
+        // 仍然是一张网格（spec §2 的「列对得齐」）。
         let bars: Vec<Vec<usize>> = table.iter().filter_map(|row| table_bars(row)).collect();
         assert_eq!(bars.len(), 3, "{width} 列：三条行带竖线：{table:?}");
         assert!(
-            bars[1..].iter().all(|row| row == &bars[1]),
-            "{width} 列：数据行的列对得齐：{bars:?}"
+            bars.iter().all(|row| row == &bars[0]),
+            "{width} 列：表头与数据行在同一组列上：{bars:?}"
         );
     }
+}
+
+#[test]
+fn a_table_at_the_head_of_an_answer_lines_up_with_its_header() {
+    // 回答的第一行带 `[name] ` 前缀，而表格的表头就是那一行：前缀占的列从表格的预算里
+    // 出，渲染器把整块推到那一列之后，前缀再把它换回来。于是表头与数据行仍在同一列。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(
+        1,
+        "| name | value |\n|---|---|\n| alpha | 1 |",
+        None,
+    ));
+    let rows = screen(120, 24, &mut state);
+    let head = rows
+        .iter()
+        .position(|row| row.contains("name") && row.contains('│'))
+        .expect("表头画出来了");
+    let header = table_bars(&rows[head]).expect("表头有竖线");
+    let data = table_bars(&rows[head + 2]).expect("数据行有竖线");
+    assert_eq!(
+        header,
+        data,
+        "表头与数据行在同一列上：{:?}",
+        &rows[head..head + 3]
+    );
+    // 而第一行确实由 `[kimi] ` 引领。
+    assert!(
+        rows[head].contains("[kimi]"),
+        "第一行是前缀加表头：{:?}",
+        rows[head]
+    );
 }
 
 #[test]

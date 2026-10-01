@@ -31,6 +31,7 @@
 1. **一个新依赖**：闭包 5 个纯 Rust 包（`pulldown-cmark` + `bitflags` + `memchr` + `unicase`），无 C 构建，MSRV 1.71.1，MIT。**不开** `simd`（那会引入 `unsafe`）。与此对照，`tui-markdown` 关掉高亮是 43 个包、开高亮是 76 个（多出来的 33 个里就有 `onig_sys`——正是 spec §19 排除的那条 Oniguruma 路径）。
 2. **`to_lines` 开始依赖宽度**。签名从 `to_lines(text)` 变成 `to_lines(text, width)`，因为表格的列宽与超宽代码行的折行都需要知道可用列数。这推翻 [`.scratch/tui-layout/spec.md`](../../.scratch/tui-layout/spec.md) §3 里「源行缓冲……**宽度无关，可复现**」那半句：宽度变化时，现在要**重跑 markdown 渲染**再重新折行，而不只是重新折行。代价判定为可接受——每个块一次 `pulldown-cmark` 很快，而 §3 本来就规定缓存按 `frame.area().width` 失效、宽度变化全量重算。
 3. **`markdown.rs` 被重写**：`is_rule` / `blockquote` / `list_item` / `task_box` / `heading` / `inline_spans` 这些手写判定全部删除，换成事件驱动的渲染。`tests/render_markdown.rs` 里断言「分隔行被丢掉」的那条要反过来写；两条降级测试（围栏逐字保留、畸形输入不消失）**一字不改**地留着当安全网。
+   - **实现注记（2026-10-01）**：围栏那条的形状与断言没变（只是现在多了一条语言名行，所以代码行的挑法换成了「第一个 span 恰好是两格缩进」）。畸形输入那条的**形状**也没变，但用例集换了两个：`#` 与 `>` 在 CommonMark 下是合法但空的结构（空标题、空引用），渲染成空才是对的。另外 `to_lines` 之外多了一个同族入口 `to_lines_indented(text, width, indent)`（`to_lines` 是 `indent = 0` 的包装），供 TUI 把 `[name] ` 前缀的列数交给渲染器 —— 表格与代码块整块从那一列起，前缀替换掉同一段前导，§2 的列对齐与 §5 的续行顶格才能同时成立。
 
 ## 被否决的替代方案
 

@@ -58,6 +58,6 @@ Status: done
 
 - 2026-10-01 落地：`src/render/markdown.rs` 重写成事件驱动的块级渲染器（表格与代码块整块缓冲，其余逐行吐），`to_lines(text, width)` 收可用列数；`tui.rs` 抽出 `push_block` / `emit_block`，并在转录宽度变化时清空窗格、按新宽度重放。
 - 与票面不同的一点：**思考行**也是源行、却不来自 `Block`，所以重放清单里记的是 `Painted::Block | Thinking | Thought` 三种。只记块会让一次 resize 把「思考完成」整行连它的详情一起抹掉 —— `tests/render_layout.rs` 里 `a_synthesizer_trace_streams_but_records_nothing` 与 `one_message_never_gets_two_thinking_lines` 抓的正是这个。
-- 宽度在 TUI 里传的是**减掉 `[name] ` 前缀**之后的列数：第一行是前缀加内容，两者相加正好是转录宽度，不溢出。
+- 宽度这条长出了一个同族入口：`to_lines_indented(text, width, indent)`（`to_lines` 是 `indent = 0` 的包装）。TUI 把 `[name] ` 的列数当 `indent` 交进渲染器：**需要左边界对齐的块**（表格、代码块）整块从那一列起、宽度预算扣掉它，其余块照常从第 0 列吐。于是第一行前缀正好替换掉渲染器铺的那段前导 —— 既不满溢，也不让表格与代码块错位。
 - 测试：`tests/render_markdown.rs` 29 条（含三条重写过的安全网）、`tests/render_layout.rs` 的 `narrowing_the_terminal_relays_a_table_out_by_the_new_width`。
 - 真机那两格没跑（这台机器上没有 provider key），步骤写进了 `docs/tui-manual-checklist.md` ㉑。

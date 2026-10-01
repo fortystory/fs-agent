@@ -6,7 +6,7 @@
 //! 文本快照。
 
 use fs_agent::render::highlight::{self, Class};
-use fs_agent::render::markdown::to_lines;
+use fs_agent::render::markdown::{to_lines, to_lines_indented};
 use fs_agent::render::width;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
@@ -424,4 +424,80 @@ fn inline_html_is_passed_through_verbatim() {
 fn image_syntax_inside_a_fence_stays_verbatim() {
     let lines = to_lines("```\n![alt](url)\n```", W);
     assert_eq!(text(&lines[0]), "  ![alt](url)");
+}
+
+// ── 首行前缀与需要左边界对齐的块（spec §1、§5）────────────────────────────
+
+#[test]
+fn an_indented_table_keeps_every_row_on_the_same_left_edge() {
+    // 调用方会在第一行前面加 `[name] `（这里假定 7 列）。表格整块从那一列起，于是表头、
+    // 分隔线与数据行的竖线都在同一列上 —— 第一行的前缀正好替换掉渲染器铺的那段前导。
+    const INDENT: u16 = 7;
+    let table = to_lines_indented("| a | b |\n|---|---|\n| 1 | 2 |", W, INDENT);
+    for line in &table {
+        assert!(
+            text(line).starts_with(&" ".repeat(INDENT as usize)),
+            "整块从第 {INDENT} 列起：{line:?}"
+        );
+    }
+    // 表头与数据行的竖线在同一列；分隔线用的是 `┼`，不算竖线。
+    assert_eq!(bar_column(&table[0]), Some(9), "{table:?}");
+    assert_eq!(bar_column(&table[1]), None, "分隔线：{:?}", text(&table[1]));
+    assert_eq!(bar_column(&table[2]), Some(9), "{table:?}");
+    // 右缘仍然撑满可用宽度。
+    assert_eq!(columns_of(&table[0]), W as usize);
+}
+
+#[test]
+fn an_indented_code_block_keeps_its_language_at_the_right_edge() {
+    const INDENT: u16 = 7;
+    let lines = to_lines_indented("```rust\nfn main() {}\n```", W, INDENT);
+    // 语言名结束在转录的右缘（第 `width` 列），哪怕它前面还有前缀。
+    assert_eq!(columns_of(&lines[0]), W as usize);
+    assert!(text(&lines[0]).ends_with("rust"));
+    // 代码行 = 前缀列 + 那两格缩进。
+    assert_eq!(
+        text(&lines[1]),
+        format!("{}  fn main() {{}}", " ".repeat(INDENT as usize))
+    );
+}
+
+// ── 一格里的行内 Markdown（spec §2 第 8 条）────────────────────────────────
+
+#[test]
+fn a_cell_renders_its_own_inline_markdown() {
+    // 标签的起点按**当前目标**算：格里的链接落在那一格自己的 span 上，而不是行上。
+    let table = to_lines("| x [docs](https://example.com/x) |\n|---|\n| y |", W);
+    assert!(
+        text(&table[0]).contains("x docs (https://example.com/x)"),
+        "{:?}",
+        text(&table[0])
+    );
+    assert!(has_modifier(&table[0], Modifier::UNDERLINED));
+}
+
+#[test]
+fn a_cell_link_whose_url_is_its_label_does_not_repeat_it() {
+    let table = to_lines("| x [docs](docs) |\n|---|\n| y |", W);
+    assert!(
+        text(&table[0]).contains("x docs"),
+        "同标签同 url 时不补：{:?}",
+        text(&table[0])
+    );
+    assert!(!text(&table[0]).contains("(docs)"), "{:?}", text(&table[0]));
+}
+
+#[test]
+fn a_cell_renders_an_image_and_code_like_a_paragraph_does() {
+    let table = to_lines("| ![图](a.png) |\n|---|\n| `code` |", W);
+    assert!(
+        text(&table[0]).contains("[图片] 图 (a.png)"),
+        "{:?}",
+        text(&table[0])
+    );
+    assert!(
+        has_fg(&table[2], Color::Yellow),
+        "行内 code：{:?}",
+        table[2]
+    );
 }

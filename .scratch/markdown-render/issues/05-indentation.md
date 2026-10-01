@@ -40,6 +40,6 @@ assistant 的回答正文不再整体缩进 11 格（`[deepseek] ` 的宽度）�
 ## Comments
 
 - 2026-10-01 落地：`attribute` 拆成两条路 —— `attribute_document`（assistant：`[name] ` 只引领第一行，其余行**零前导**）与 `attribute_speech`（用户输入与非 assistant 系统行：续行仍按 `[name] ` 的显示宽度缩进）。名字样式与正文样式没动；`plain` 渲染器本来就不走 `attribute`。
-- 与票面不同的一点：assistant 的 Markdown 按 `width − [name] 的列宽` 排版，否则第一行会溢出、被窗格折行。代价是**表格的首行相对数据行右移一个前缀宽**（表内各列仍然彼此对齐，测试钉住的是这一点）—— 取舍记在 `paint_block` 的注释里。
+- 与票面不同的一点：前缀占的列由 `to_lines_indented` 接手 —— **需要左边界对齐的块**（表格、代码块）整块从 `[name] ` 那一列起，第一行前缀再把渲染器铺的那段前导换掉。于是续行顶格（票面）与表格列对齐、语言名落在转录右缘（§2、§3）同时成立，第一行也不会溢出到折行。
 - 测试：`tests/render_tui.rs` 的 `the_answers_continuation_starts_at_the_left_edge`、`a_single_line_answer_keeps_the_same_speaker_prefix`，以及改走 `Role::User` 的 `a_message_continuation_indents_by_the_label_display_width`。
 - 真机没跑，步骤在 `docs/tui-manual-checklist.md` ㉑ 第 7 条。

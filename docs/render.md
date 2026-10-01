@@ -51,7 +51,10 @@
 Markdown 的渲染（`render::markdown::to_lines`）收**可用列数**：表格的列宽与超宽代码行的
 折行都要知道它，所以**源行本身也不再宽度无关** —— 宽度变化时 TUI 按新宽度重跑 Markdown 并
 重放全部块，而不是只重新折行（`.scratch/markdown-render/spec.md` §1、
-[ADR 0008](adr/0008-markdown-parsing-by-pulldown-cmark.md)）。
+[ADR 0008](adr/0008-markdown-parsing-by-pulldown-cmark.md)）。TUI 走的是同族的
+`to_lines_indented(text, width, indent)`：`indent` 是消息第一行那个 `[name] ` 占的列数，
+**需要左边界对齐的块**（表格、代码块）整块从那一列起、宽度预算扣掉它，于是表头与数据行、
+语言名与代码行共享同一个左边界。
 
 ## 严重度
 

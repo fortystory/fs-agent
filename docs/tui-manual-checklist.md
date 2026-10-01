@@ -477,7 +477,7 @@ provider key**，所以「经由 `bash` 工具」的整条链路由 `tests/sandb
 ## ㉑ 转录里的 Markdown：表格、代码块高亮与续行顶格
 
 这一轮（[`.scratch/markdown-render/spec.md`](../.scratch/markdown-render/spec.md)）把 Markdown 的
-**解析**交给 `pulldown-cmark`（[ADR 0008](../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)），
+**解析**交给 `pulldown-cmark`（[ADR 0008](adr/0008-markdown-parsing-by-pulldown-cmark.md)），
 渲染仍是自己的：表格从「join 竖线」变成真网格、代码块接回 tree-sitter 高亮并扩到十种语言、
 assistant 的续行不再缩进。几何与结构由 `tests/render_markdown.rs` 与 `tests/render_layout.rs`
 钉住；真终端要验的是**语法高亮与 CJK 折行的组合**——那只有真终端看得出来。

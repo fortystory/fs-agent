@@ -1,10 +1,10 @@
 # 文档收口：render、highlight、ADR 索引、scratch 索引与真机清单
 
-Type: docs
+Type: implement
 Status: done
 
 > 规格：`.scratch/markdown-render/spec.md` §8。
-> Blocked by: 02、03、04、05、06（文档写的是它们落地**之后**的事实）。
+> Blocked by: 02, 03, 04, 05, 06（文档写的是它们落地**之后**的事实）。
 
 ## 目标
 
@@ -41,3 +41,4 @@ Status: done
 - 2026-10-01 落地：`docs/highlight.md` 整篇重写（主题从「没有生产消费者」换成「代码块的高亮提供者，管十种语言」，两个单数常量名、两个对不上语言的 crate 名、延迟编译这三条坑记在里面）；`docs/render.md` 的 `[speaker]` 与高亮两节改写，并补上「`to_lines` 收宽度，所以源行也不再宽度无关」；`README.md` 的 ADR 格补 0008；`.scratch/README.md` 的索引行与日期说明更新成 `7/7 done`；`.scratch/tui-layout/spec.md` §3 的三处（源行宽度无关、assistant 不动、续行缩进）都留了带日期的交棒注记，原文没有被改写；`docs/tui-manual-checklist.md` 加 ㉑。
 - 复核：`python3 scripts/check-language.py` 通过（`docs/highlight.md` 的中文占比一度掉到 23.6%，重写成散文后回到下限之上）；本票改过的相对链接逐个核过，唯一一处错路径（从 `docs/` 出发多了一级目录）已修，其余命中都是文档里当例子的 `![图片](url)` 语法；`.scratch/README.md` 里 `markdown-render` 那一行的票数与 `ls .scratch/markdown-render/issues/*.md | wc -l` 都是 7；`docs/highlight.md` 里不再有「没有生产消费者」这类陈述。
 - 真机那一格没勾：这台机器上没有 provider key，`docs/tui-manual-checklist.md` ㉑ 的八条只写好、没有逐条手工跑过。
+- 2026-10-01 双轴 review（Standards + Spec，fixed point `70aaa3e`）之后的收口：`.scratch/markdown-render/research/` 两份笔记由英文散文翻成中文（`.scratch/**` 的散文也是中文，`docs/research/` 那个「一字不改」的例外不覆盖这里）；票 07 的 `Type: docs`（不在 `docs/agents/issue-tracker.md` 的取值里）改成 `implement`、`Blocked by` 的分隔符对齐标准写法；表格在 TUI 里的表头错位与格内链接/图片的索引错位两处由票 02、05 的收口修掉；`docs/render.md` 与 `docs/adr/0008` 各补一条实现注记。README 的状态数字按实测更新为 32,011 / 31,736 行、855 条测试。

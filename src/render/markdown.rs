@@ -37,12 +37,25 @@ const GAP_WIDTH: usize = 3;
 
 /// 把一个 Markdown 块渲染成终端行，`width` 是可用列数。
 pub fn to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+    to_lines_indented(text, width, 0)
+}
+
+/// 带「首行前缀」的渲染：`indent` 是调用方会在**第一行**前面加的那个前缀占的列数。
+///
+/// 它带来两件事（spec §1、§5）：
+///
+/// - **需要左边界对齐的块**（表格、代码块）每一行都从第 `indent` 列起，宽度预算也因此是
+///   `width - indent` —— 表头与数据行、语言名与代码行才落在同一个左边界上。调用方给第一
+///   行加前缀时，把那 `indent` 个空格**换成**前缀，两边的列数正好对上。
+/// - **其余块**（段落、标题、列表、引用）照常从第 0 列吐：调用方把消息的第一行推右
+///   `indent` 列，它们的续行顶格、占满整个 `width`。
+pub fn to_lines_indented(text: &str, width: u16, indent: u16) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     // 只开这三件。`ENABLE_GFM` 不是它们仨的总开关（实测：只开它时表格仍是段落），
     // 脚注则明确不开（spec §1）。
     options
         .insert(Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH);
-    let mut renderer = Renderer::new(width.max(1) as usize);
+    let mut renderer = Renderer::new(width.max(1) as usize, indent as usize);
     for event in Parser::new_ext(text, options) {
         renderer.event(event);
     }
@@ -103,12 +116,15 @@ struct Renderer {
     code: Option<CodeBuffer>,
     table: Option<TableBuffer>,
     frames: Vec<Frame>,
+    /// 调用方会在第一行前面加的前导占多少列（`to_lines` 走的是 0）。
+    indent: usize,
 }
 
 impl Renderer {
-    fn new(width: usize) -> Self {
+    fn new(width: usize, indent: usize) -> Self {
         Self {
             width,
+            indent,
             out: Vec::new(),
             line: Vec::new(),
             modifiers: Vec::new(),
@@ -432,7 +448,9 @@ impl Renderer {
     }
 
     fn open_frame(&mut self, url: String) {
-        let start = self.line.len();
+        // 标签写在**当前目标**上：一个格里的链接与图片落在那一格自己的 span 列表里，
+        // 而段落的落在 `self.line` 上（`target()` 分派这两者）。
+        let start = self.target().len();
         self.frames.push(Frame { url, start });
         self.modifiers.push(Modifier::UNDERLINED);
     }
@@ -489,17 +507,26 @@ impl Renderer {
 
     /// 一个围栏块（或缩进代码块）：上方一条右对齐的语言名，下面是高亮过的代码（spec §3）。
     fn write_code(&mut self, code: CodeBuffer) {
+        // 整块从第 `indent` 列起，于是语言名仍然结束在转录的**右缘**（第 `width` 列）。
+        let budget = self.width.saturating_sub(self.indent);
         if let Some(lang) = &code.lang {
-            let pad = self.width.saturating_sub(width::text_columns(lang));
+            let pad = budget.saturating_sub(width::text_columns(lang));
             let mut spans = Vec::new();
+            if self.indent > 0 {
+                spans.push(Span::raw(" ".repeat(self.indent)));
+            }
             if pad > 0 {
                 spans.push(Span::raw(" ".repeat(pad)));
             }
             spans.push(Span::styled(lang.clone(), Style::default().fg(MUTED)));
             self.out.push(Line::from(spans));
         }
-        self.out
-            .extend(code_lines(&code.text, code.lang.as_deref(), self.width));
+        self.out.extend(code_lines(
+            &code.text,
+            code.lang.as_deref(),
+            budget,
+            self.indent,
+        ));
     }
 
     /// 一整张表：表头、分隔线、按对齐排好的列，超宽就在格子里折行（spec §2）。
@@ -525,13 +552,15 @@ impl Renderer {
             }
         }
         // 装得下就把余量全给最后一列；装不下就削最宽的那一列、把额度让给它折行，
-        // 削到每列一格为止 —— 不截断（spec §2）。
+        // 削到每列一格为止 —— 不截断（spec §2）。宽度预算是 `width - indent`：整张表从
+        // 第 `indent` 列起，与调用方加在第一行上的前缀共占同一段列。
+        let budget = self.width.saturating_sub(self.indent);
         let gaps = GAP_WIDTH * (columns - 1);
         let mut total: usize = widths.iter().sum::<usize>() + gaps;
-        if total < self.width {
-            widths[columns - 1] += self.width - total;
+        if total < budget {
+            widths[columns - 1] += budget - total;
         } else {
-            while total > self.width {
+            while total > budget {
                 let Some(index) = widest(&widths) else {
                     break;
                 };
@@ -555,6 +584,9 @@ impl Renderer {
             let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
             for line_index in 0..height {
                 let mut spans = Vec::new();
+                if self.indent > 0 {
+                    spans.push(Span::raw(" ".repeat(self.indent)));
+                }
                 for (index, width) in widths.iter().enumerate() {
                     if index > 0 {
                         spans.push(Span::styled(" │ ".to_owned(), Style::default().fg(GRID)));
@@ -580,7 +612,7 @@ impl Renderer {
                 self.out.push(line);
             }
             if row.header {
-                self.out.push(separator(&widths));
+                self.out.push(separator(&widths, self.indent));
             }
         }
     }
@@ -603,7 +635,10 @@ fn first_word(info: &str) -> Option<String> {
 }
 
 /// 代码块的每一行：两格缩进、逐字保留、按宽度折行，续行保持缩进（spec §3）。
-fn code_lines(text: &str, lang: Option<&str>, width: usize) -> Vec<Line<'static>> {
+///
+/// `budget` 已经扣掉了整块那个 `indent`，而 `indent` 要补回每一行的行首 —— 于是代码块与
+/// 语言名那一行共享同一个左边界。
+fn code_lines(text: &str, lang: Option<&str>, budget: usize, indent: usize) -> Vec<Line<'static>> {
     // 围栏里的文字以一个换行收尾，那是定界符的一部分，不是一行空代码。
     let text = text.strip_suffix('\n').unwrap_or(text);
     if text.is_empty() {
@@ -620,7 +655,7 @@ fn code_lines(text: &str, lang: Option<&str>, width: usize) -> Vec<Line<'static>
             .into_iter()
             .map(|span| Span::styled(span.text, span.class.style()))
             .collect();
-        out.extend(wrap_code(&content, width));
+        out.extend(wrap_code(&content, budget, indent));
     }
     out
 }
@@ -636,19 +671,20 @@ fn plain_rows(text: &str) -> Vec<Vec<highlight::Span>> {
         .collect()
 }
 
-/// 一条代码行折到 `width` 列，续行**保持**那两格缩进 —— 交给 `pane::wrap_line` 硬折会把
-/// 续行顶到最左边、跟代码块脱节（spec §3）。
-fn wrap_code(content: &[Span<'static>], width: usize) -> Vec<Line<'static>> {
-    let budget = width.max(CODE_INDENT + 1);
+/// 一条代码行折到预算内，续行**保持**那两格缩进 —— 交给 `pane::wrap_line` 硬折会把续行
+/// 顶到最左边、跟代码块脱节（spec §3）。
+fn wrap_code(content: &[Span<'static>], budget: usize, indent: usize) -> Vec<Line<'static>> {
+    let lead = indent + CODE_INDENT;
+    let budget = budget.max(lead + 1);
     let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
     let mut row: Vec<Span<'static>> = Vec::new();
-    let mut used = CODE_INDENT;
+    let mut used = lead;
     for span in content {
         for ch in span.content.chars() {
             let columns = width::char_columns(ch);
-            if used + columns > budget && used > CODE_INDENT {
+            if used + columns > budget && used > lead {
                 rows.push(std::mem::take(&mut row));
-                used = CODE_INDENT;
+                used = lead;
             }
             pane::push_char(&mut row, ch, span.style);
             used += columns;
@@ -657,7 +693,7 @@ fn wrap_code(content: &[Span<'static>], width: usize) -> Vec<Line<'static>> {
     rows.push(row);
     rows.into_iter()
         .map(|content| {
-            let mut spans = vec![Span::raw(" ".repeat(CODE_INDENT))];
+            let mut spans = vec![Span::raw(" ".repeat(lead))];
             spans.extend(content);
             Line::from(spans)
         })
@@ -704,7 +740,7 @@ fn push_cell(
 }
 
 /// 表头下面那条 `─┼─` 分隔线：它同时就是「上一行是表头」这个信号（spec §2）。
-fn separator(widths: &[usize]) -> Line<'static> {
+fn separator(widths: &[usize], indent: usize) -> Line<'static> {
     let mut text = String::new();
     for (index, width) in widths.iter().enumerate() {
         if index > 0 {
@@ -714,7 +750,12 @@ fn separator(widths: &[usize]) -> Line<'static> {
         }
         text.push_str(&"─".repeat(*width));
     }
-    Line::from(Span::styled(text, Style::default().fg(GRID)))
+    let mut spans = Vec::new();
+    if indent > 0 {
+        spans.push(Span::raw(" ".repeat(indent)));
+    }
+    spans.push(Span::styled(text, Style::default().fg(GRID)));
+    Line::from(spans)
 }
 
 /// 最宽的那一列的列号；并列时取最后一个。

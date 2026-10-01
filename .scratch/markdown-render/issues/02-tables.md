@@ -50,3 +50,5 @@ Status: done
 - 对齐直接吃 `Tag::Table(Vec<Alignment>)`，没有再扫 `|---|---|`。
 - 测试：`tests/render_markdown.rs` 的表格五条（表头、对齐、顶格、余量、超宽等高）。
 - 真机：120 列与 80 列以下各一眼没跑，步骤在 `docs/tui-manual-checklist.md` ㉑ 第 1、2、8 条。
+- 2026-10-01 补（双轴 review 之后）：单元格里的链接与图片，标签起点原先按 `self.line.len()` 记，而格里的内容写进 `table.current` —— 于是 URL 会被补到格外面去。现在 `open_frame` 按**当前目标**取长度，格里的行内 Markdown 与段落走同一条路；测试是 `tests/render_markdown.rs` 的 `a_cell_renders_its_own_inline_markdown` 一族。
+- 2026-10-01 补：TUI 层的前缀不再让表头右移（做法见票 05 的 Comments）；`tests/render_layout.rs` 的 `a_table_at_the_head_of_an_answer_lines_up_with_its_header` 钉住表头与数据行同列。

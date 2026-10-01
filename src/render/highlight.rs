@@ -211,7 +211,7 @@ pub fn diff_tag(line: &str) -> DiffTag {
 ///
 /// 别名归我们管：`pulldown-cmark` 只把 info string 原样交出来，`rs` 与 `rust` 是同一份
 /// 文法这件事得我们说。`yaml` 不在十种语言里，所以**不映射** —— 名单之外的一律不上色。
-fn canonical(language: &str) -> Option<&'static str> {
+fn canonical_language(language: &str) -> Option<&'static str> {
     match language.to_ascii_lowercase().as_str() {
         "rust" | "rs" => Some("rust"),
         "bash" | "sh" | "shell" => Some("bash"),
@@ -332,7 +332,7 @@ fn config_for(language: &str) -> Option<&'static HighlightConfiguration> {
 /// 语言认不出、或它的文法构建失败时返回 `None`：调用方退纯文本，而不是让代码消失
 /// （`.scratch/markdown-render/spec.md` §3）。
 pub fn highlight_code(language: &str, source: &str) -> Option<Vec<Vec<Span>>> {
-    let language = canonical(language)?;
+    let language = canonical_language(language)?;
     let config = config_for(language)?;
     try_highlight(config, source)
 }
