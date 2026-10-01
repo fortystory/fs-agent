@@ -388,7 +388,7 @@ ADR 0005）。它记录的是**事实，不是决定**；中间各节刻意不�
 | 任务列表 | `Options::ENABLE_TASKLISTS` | 实测：没有它时 `- [x] done` 以三个独立的 `Text` 事件 `"["`、`"x"`、`"]"` 到达……；有它时则是 `Event::TaskListMarker(true)` / `(false)` |
 | 删除线 | `Options::ENABLE_STRIKETHROUGH` | 实测：没有它时 `a ~~b~~ c` 是一个 `Text`；有它时是 `Text("a ")`、`Start(Strikethrough)`、`Text("b")`、`End(Strikethrough)`、`Text(" c")` |
 | 脚注 | `Options::ENABLE_FOOTNOTES`（或蕴含它的 `ENABLE_OLD_FOOTNOTES`） | 实测：没有它时 `ref[^1]` 被解析为 `Link { link_type: Shortcut, dest_url: "note", id: "^1" }`；有它时是 `Event::FootnoteReference("1")` 与 `Tag::FootnoteDefinition("1")` |
-| GFM blockquote alerts（`> [!NOTE]`） | `Options::ENABLE_GFM` | 实测：`ENABLE_GFM` 产生 `Start(BlockQuote(Some(Note)))`；`Tag::BlockQuote` 的文档说，没有它时 kind 是 `None` |
+| GFM 引用块告警（`> [!NOTE]`） | `Options::ENABLE_GFM` | 实测：`ENABLE_GFM` 产生 `Start(BlockQuote(Some(Note)))`；`Tag::BlockQuote` 的文档说，没有它时 kind 是 `None` |
 
 - **`ENABLE_GFM` *不是*这四个扩展的打包开关。** 按位测试：
   `Options::ENABLE_GFM.contains(Options::ENABLE_TABLES) == false`，而且只设 `ENABLE_GFM`
@@ -436,7 +436,7 @@ crates.io API；符号名来自各 crate 随包发布的 `bindings/rust/lib.rs`�
 `tree-sitter-language` 的依赖要求来自 sparse index 的行
 （`https://index.crates.io/tr/ee/<name>`）。
 
-| 语言 | Crate | 版本（已发布） | Rust 符号（精确） | 声明的 `tree-sitter-language` 要求 | 有 C parser？ | 仓库 / owner |
+| 语言 | Crate | 版本（已发布） | Rust 符号（精确） | 声明的 `tree-sitter-language` 要求 | 有 C 解析器？ | 仓库 / owner |
 |---|---|---|---|---|---|---|
 | rust | `tree-sitter-rust` | 0.24.2 (2026-03-27) | `LANGUAGE`, `HIGHLIGHTS_QUERY`, `INJECTIONS_QUERY`, `TAGS_QUERY`, `NODE_TYPES` | `^0.1` | 有，`src/parser.c` + `src/scanner.c` | https://github.com/tree-sitter/tree-sitter-rust · `dcreager`, `maxbrunsfeld` |
 | bash | `tree-sitter-bash` | 0.25.1 (2025-12-02) | `LANGUAGE`, **`HIGHLIGHT_QUERY`**（单数）, `NODE_TYPES` | `^0.1` | 有，`src/parser.c` + `src/scanner.c` | https://github.com/tree-sitter/tree-sitter-bash · `dcreager`, `maxbrunsfeld` |
@@ -492,7 +492,7 @@ crates.io API；符号名来自各 crate 随包发布的 `bindings/rust/lib.rs`�
   选中）。把它们绑到工具链上的是 `tree-sitter-language` 的 `^0.1` 要求，而
   `tree-sitter-language 0.1.8` 本身位于 `tree-sitter 0.27.0` 自己的 `^0.1.8` 要求之内。
   https://index.crates.io/tr/ee/tree-sitter-rust · https://crates.io/api/v1/crates/tree-sitter/0.27.0/dependencies
-- **十个里的每一个都通过 `cc` build script 构建一个 C parser**（十个都把 `cc ^1.1`/`^1.2`
+- **十个里的每一个都通过 `cc` build script 构建一个 C 解析器**（十个都把 `cc ^1.1`/`^1.2`
   列为 build dependency；`ratatui-markdown` 对同一路线的存在性证明见笔记 01 §2.3）。在这里
   编译它们的是 `gcc 16.2.1`。所以「闭包里没有 C 构建步骤」对十个里的任何一个都*不*成立
   —— 这与本仓库在 `Cargo.toml` 里已经为 `tree-sitter-rust` 明确做过的取舍是同一个。
@@ -618,8 +618,8 @@ crates.io API；符号名来自各 crate 随包发布的 `bindings/rust/lib.rs`�
 
 ## 3.4 兼容性风险表
 
-行是十个目标语言；「locked TB version」是 crate 对运行期声明的要求（来自它最新版本的
-sparse-index 行），「compatible with 0.27」是 §3.2 的实测结果，最后一列是需要注意什么。
+行是十个目标语言；「锁定的（运行期）」是 crate 对运行期声明的要求（来自它最新版本的
+sparse-index 行），「与 `tree-sitter 0.27` 兼容」是 §3.2 的实测结果，最后一列是需要注意什么。
 
 | 语言 | crate | 版本 | 锁定的（运行期） | 与 `tree-sitter 0.27` | 有 `HIGHLIGHTS_QUERY`？ | 风险 |
 |---|---|---|---|---|---|---|
@@ -647,7 +647,7 @@ sparse-index 行），「compatible with 0.27」是 §3.2 的实测结果，最�
   https://crates.io/api/v1/crates/tree-sitter-markdown ·
   https://index.crates.io/tr/ee/tree-sitter-sql-bigquery
 - **另一个真实风险是 C 工具链，而不是版本错位：** 十个 `cc` build script 就是首次构建时十次
-  C parser 编译。本仓库已经为一个文法接受了这一点（`Cargo.toml`："这个文法要编一个 C
+  C 解析器编译。本仓库已经为一个文法接受了这一点（`Cargo.toml`："这个文法要编一个 C
   parser，所以首次构建比纯 Rust 依赖慢"），而 `ratatui-markdown` 为其中 39 个做了同样的
   取舍；但笔记 01 里与 `pulldown-cmark` 的对比（总共 5 个纯 Rust crate，§2.1）才是诚实的
   那个。
@@ -661,7 +661,7 @@ sparse-index 行），「compatible with 0.27」是 §3.2 的实测结果，最�
 |---|---|
 | `ratatui = "0.30"`、`crossterm = "0.29"`（带 `event-stream`） | `Cargo.toml` |
 | `tree-sitter = "0.27"`、`tree-sitter-highlight = "0.27"`、`tree-sitter-rust = "0.24"`；lockfile 钉住 0.27.0 / 0.27.0 / 0.24.2 / `tree-sitter-language 0.1.8` | `Cargo.toml`, `Cargo.lock` |
-| 有意做出的决定：**不走 syntect 的 Oniguruma 路线**；接受 tree-sitter Rust 文法的 C parser | `Cargo.toml` 注释；`docs/render.md`；`docs/highlight.md` |
+| 有意做出的决定：**不走 syntect 的 Oniguruma 路线**；接受 tree-sitter Rust 文法的 C 解析器 | `Cargo.toml` 注释；`docs/render.md`；`docs/highlight.md` |
 | 渲染器接口是 `pub fn to_lines(text: &str) -> Vec<Line<'static>>` —— 对 `text.split('\n')` 做一遍单向遍历，带一个围栏状态机；表格逐行渲染（`table_row()`/`table_line()` 用 `" │ "` 连接单元，`is_table_separator()` 丢掉分隔行），**没有列宽计算，也没有整表缓冲** | `src/render/markdown.rs#L20-L75`, `#L96-L112` |
 | 当前的折行器是 `pane::wrap_text(text, width) -> Vec<Line<'static>>`（不是 `wrap_line`），列宽算术住在 `render/width.rs`（`text_columns`、`char_columns`、`truncate_columns`，构建在 `ratatui::buffer::CellWidth` 之上） | `src/render/pane.rs#L353`, `src/render/width.rs` |
 | 现有高亮器没有生产消费者；它的配置是只给 Rust 用的单个 `OnceLock<Option<HighlightConfiguration>>`（`rust_config()`），而 `CAPTURES` 是那份 27 个名字的列表 | `docs/highlight.md`, `src/render/highlight.rs#L24-L52`, `#L190-L206` |
