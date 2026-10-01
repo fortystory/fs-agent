@@ -952,6 +952,29 @@ impl Harness {
         agent::record_goal_completed(&mut self.session, &self.opened.render, goal, summary)
     }
 
+    /// 记下一个目标停下来了，而它不是做完了（§5、§9）。
+    ///
+    /// 三种停（无进展、provider 失败、人主动停）共用这一条：恢复（§10）靠「最后有没有一条收尾
+    /// 事件」分出「正常收尾」与「异常中断」，而报告带着计数与卡住的条目 id，回头核得出来。
+    pub fn stop_goal(
+        &mut self,
+        goal: &str,
+        reason: crate::events::GoalStopReason,
+        detail: &str,
+        stuck: Vec<String>,
+        count: u32,
+    ) -> Result<(), Error> {
+        agent::record_goal_stopped(
+            &mut self.session,
+            &self.opened.render,
+            goal,
+            reason,
+            detail,
+            stuck,
+            count,
+        )
+    }
+
     /// 一个目标的收尾（`.scratch/goal-loop/spec.md` §11）：写汇总、落一条 `GoalCompleted`。
     ///
     /// 汇总由**一次模型调用**写（它是叙述性的，模板拼不出来），而那一次调用照记用量 —— 它是

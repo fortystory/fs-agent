@@ -105,6 +105,8 @@ impl Render for Headless {
                         // 汇总已经作为一条助手消息叙述过了（写它的那次单发调用记的）；这一条
                         // 是流上的记录，不再多说一遍。
                         EventPayload::GoalCompleted { .. } => {}
+                        // 停下并报告由循环说出来，这里不重复。
+                        EventPayload::GoalStopped { .. } => {}
                         // 与上下文注入同一档：一行诊断（模型上下文里没有它）。
                         EventPayload::SandboxStatus {
                             mode,

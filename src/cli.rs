@@ -1466,15 +1466,44 @@ async fn run_goal_loop(
     //
     // `reminded` 是「这一档已经提醒过」这个跨回合的标记：跨过阈值只注入一次，翻页时复位。
     let mut reminded = false;
+    // 无进展的计数（§9）：连续几次翻页零条目完成。它从这一刻的进度起算。
+    let mut no_progress = crate::goals::NoProgress::new(progress.completed());
+    // provider 失败的重试预算（§9）。
+    let mut retry = crate::goals::Retry::new(goals.settings.provider_retries);
     *running = true;
     loop {
         if harness.cancel_signal().is_cancelled() {
             break;
         }
-        if let Err(error) = run_one_turn(harness, events, TurnStart::Injected).await {
+        let outcome = match run_one_turn(harness, events, TurnStart::Injected).await {
+            Ok(outcome) => outcome,
+            // 连驱动都失败（会话 i/o，不是 provider）：这不是重试能修的那一类，所以照说、
+            // 收工。流上没有收尾事件，于是 `--continue` 会把它读成一次异常中断 —— 对一次
+            // i/o 失败来说正是该有的读法。
+            Err(error) => {
+                *running = false;
+                return Err(render::wording::error_report(&error));
+            }
+        };
+        // provider 调用失败：重试若干次，耗尽后停下并写一条收尾事件（§9）。
+        if outcome.reason == StopReason::Error {
+            if retry.failed() {
+                harness.notice(&render::wording::provider_retry(retry.failures()));
+                tokio::time::sleep(RETRY_DELAY).await;
+                continue;
+            }
             *running = false;
-            return Err(render::wording::error_report(&error));
+            return stop_goal_loop(
+                harness,
+                name,
+                crate::events::GoalStopReason::ProviderFailed,
+                retry.failures(),
+                manifest,
+                &progress,
+            );
         }
+        // 中途成功一次：计数归零。
+        retry.succeeded();
         if harness.cancel_signal().is_cancelled() {
             break;
         }
@@ -1569,6 +1598,22 @@ async fn run_goal_loop(
                     stored.id.as_str(),
                     true,
                 ));
+
+                // 无进展（§9）：**连续 N 次翻页零条目完成**就停下报告。中途完成任意一条就归零，
+                // 所以这里比的是「这次翻页前后完成数有没有涨」。
+                let completed = goal_progress(goals, name, manifest).completed();
+                let streak = no_progress.after_rollover(completed);
+                if no_progress.reached(goals.settings.no_progress_rollovers) {
+                    *running = false;
+                    return stop_goal_loop(
+                        harness,
+                        name,
+                        crate::events::GoalStopReason::NoProgress,
+                        streak,
+                        manifest,
+                        &progress,
+                    );
+                }
             }
         }
     }
@@ -1632,6 +1677,33 @@ fn clear_session(harness: &mut Harness, goals: &GoalSetup) -> String {
     render::wording::cleared(&from, stored.id.as_str())
 }
 
+/// provider 失败之后等多久再驱动一次那个回合（§9）。
+///
+/// 定死在这里，不做退避：无人值守的重试是为了盖过一次抖动，不是为了把一次真正的故障熬过去
+/// —— 后者该做的是停下报告。两秒足够让限流窗口挪一格。
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 停下并报告（`.scratch/goal-loop/spec.md` §9）：落一条收尾事件，把话说在转录里。
+///
+/// 报告里带 `count`（连续几次翻页零完成 / 失败了几次）与卡住的条目 id —— 只说「停了」没有用，
+/// 回头要核得出它是怎么卡住的。
+fn stop_goal_loop(
+    harness: &mut Harness,
+    name: &str,
+    reason: crate::events::GoalStopReason,
+    count: u32,
+    manifest: &crate::goals::Manifest,
+    progress: &crate::goals::Progress,
+) -> Result<(), String> {
+    let stuck = crate::goals::unfinished(&manifest.entries, progress);
+    let detail = render::wording::goal_stopped(name, reason, count, &stuck);
+    if let Err(error) = harness.stop_goal(name, reason, &detail, stuck, count) {
+        return Err(render::wording::error_report(&error));
+    }
+    harness.notice(&detail);
+    Ok(())
+}
+
 /// 解析 `/loop` 的参数：一个目标名字，一个不断开的词。
 fn parse_loop_line(args: &str) -> Result<String, String> {
     let name = args.trim();
@@ -1661,7 +1733,7 @@ async fn run_one_turn(
     harness: &mut Harness,
     events: &mut ConsoleEvents,
     start: TurnStart<'_>,
-) -> Result<(), crate::Error> {
+) -> Result<crate::agent::TurnOutcome, crate::Error> {
     let signal = harness.cancel_signal();
     let modes = harness.mode_cycle();
     let mut turn = Box::pin(async move {
@@ -1673,7 +1745,7 @@ async fn run_one_turn(
     });
     loop {
         tokio::select! {
-            result = &mut turn => return result.map(|_| ()),
+            result = &mut turn => return result,
             event = events.recv() => match event {
                 Some(FrontEndEvent::Cancel) => {
                     if signal.is_cancelled() {

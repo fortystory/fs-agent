@@ -13,9 +13,10 @@ use fs_agent::config::SessionConfig;
 use fs_agent::events::{
     current_goal, read_events, ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId,
 };
+use fs_agent::events::GoalStopReason;
 use fs_agent::goals::{
-    self, check_start, progress, threshold_step, Manifest, Progress, StartRefusal, ThresholdStep,
-    TodoCall,
+    self, check_start, progress, threshold_step, unfinished, Manifest, NoProgress, Progress,
+    Retry, StartRefusal, ThresholdStep, TodoCall,
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
@@ -902,6 +903,161 @@ async fn clear_is_the_same_rollover_without_a_summary_and_leaves_no_trace_on_the
     assert_eq!(latest.id, stored.id);
 
     session.harness.shutdown().await;
+}
+
+// --- 无进展与停止（§9） -----------------------------------------------------
+
+#[test]
+fn the_no_progress_counter_counts_rollovers_and_resets_on_any_completion() {
+    // 计数对象是**翻页**，不是回合；连续 `N` 次零完成才算卡住。
+    let mut counter = NoProgress::new(0);
+    assert_eq!(counter.after_rollover(0), 1);
+    assert!(!counter.reached(3), "N-1 次不停");
+    assert_eq!(counter.after_rollover(0), 2);
+    assert!(!counter.reached(3), "还是 N-1 次，不停");
+    assert_eq!(counter.after_rollover(0), 3);
+    assert!(counter.reached(3), "N 次停");
+
+    // 中途完成任意一条就归零，重新计。
+    let mut counter = NoProgress::new(0);
+    counter.after_rollover(0);
+    counter.after_rollover(0);
+    assert_eq!(counter.after_rollover(1), 0, "有进展就归零");
+    assert!(!counter.reached(3));
+    assert_eq!(counter.after_rollover(2), 0, "又有进展，还是零");
+    assert_eq!(counter.after_rollover(2), 1, "这一次没有新条目完成，从头攒");
+}
+
+#[test]
+fn the_retry_budget_is_spent_by_failures_and_refilled_by_a_success() {
+    let mut retry = Retry::new(2);
+    assert!(retry.failed(), "第一次失败之后还能再试");
+    assert!(retry.failed(), "第二次失败之后还能再试");
+    assert!(!retry.failed(), "第三次：预算耗尽，停下");
+    assert_eq!(retry.failures(), 3, "报告里要数得出试了几次");
+
+    // 中途成功一次，计数归零。
+    let mut retry = Retry::new(2);
+    retry.failed();
+    retry.failed();
+    retry.succeeded();
+    assert_eq!(retry.failures(), 0);
+    assert!(retry.failed());
+
+    // 0 次就是不重试。
+    let mut none = Retry::new(0);
+    assert!(!none.failed());
+}
+
+#[test]
+fn the_unfinished_entries_are_the_ones_the_report_names() {
+    let entries = entries(&["01", "02", "03"]);
+    let calls = [call(
+        at(10),
+        1,
+        items(&[("01", "一", "completed"), ("02", "二", "in_progress")]),
+    )];
+    let derived = progress(&entries, &calls);
+    assert_eq!(unfinished(&entries, &derived), ["02", "03"]);
+}
+
+#[tokio::test]
+async fn stopping_a_goal_records_one_event_with_the_count_and_the_stuck_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_with(dir.path(), "s-1", FakeProvider::new(Vec::new())).await;
+    session.harness.select_goal("sandbox").unwrap();
+
+    session
+        .harness
+        .stop_goal(
+            "sandbox",
+            GoalStopReason::NoProgress,
+            "连续 3 次翻页没有任何条目完成",
+            vec!["02".to_owned(), "03".to_owned()],
+            3,
+        )
+        .unwrap();
+
+    let events = session.events();
+    let stopped: Vec<(&str, u32, Vec<String>)> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::GoalStopped {
+                reason,
+                detail,
+                stuck,
+                count,
+                ..
+            } => {
+                assert_eq!(*reason, GoalStopReason::NoProgress);
+                assert!(detail.contains("连续 3 次"));
+                Some((reason.as_str(), *count, stuck.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stopped.len(), 1, "恰好一条收尾事件");
+    assert_eq!(stopped[0].0, "no_progress", "reason 是稳定短名");
+    assert_eq!(stopped[0].1, 3);
+    assert_eq!(stopped[0].2, ["02", "03"], "卡住的条目随事件一起落");
+    // 它与 `GoalCompleted` 是并列的两条：这一条流上没有「做完了」。
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event.payload, EventPayload::GoalCompleted { .. })));
+
+    // 说给人听的那一段点名了卡住的条目。
+    let line = fs_agent::render::wording::goal_stopped(
+        "sandbox",
+        GoalStopReason::NoProgress,
+        3,
+        &["02".to_owned(), "03".to_owned()],
+    );
+    assert!(line.contains("02"), "{line}");
+    assert!(line.contains("连续 3 次"), "{line}");
+
+    // 报告里那几句是散文、要打码；`goal`、条目 id 与计数都是键，不动。
+    let redactor = Redactor::new(["super-secret-key-value".to_owned()]);
+    let mut payload = EventPayload::GoalStopped {
+        goal: "super-secret-key-value".to_owned(),
+        reason: GoalStopReason::ProviderFailed,
+        detail: "试了 super-secret-key-value 次".to_owned(),
+        stuck: vec!["02".to_owned()],
+        count: 3,
+    };
+    payload.redact(&redactor);
+    match payload {
+        EventPayload::GoalStopped {
+            goal,
+            detail,
+            stuck,
+            count,
+            ..
+        } => {
+            assert_eq!(goal, "super-secret-key-value");
+            assert_eq!(detail, "试了 [redacted] 次");
+            assert_eq!(stuck, ["02"]);
+            assert_eq!(count, 3);
+        }
+        other => panic!("期望还是那条收尾，得到 {other:?}"),
+    }
+
+    session.harness.shutdown().await;
+}
+
+#[test]
+fn the_stop_reasons_are_stable_protocol_marks() {
+    // 恢复（§10）靠它们分清「正常收尾」与「异常中断」，所以它们是协议标记：换名字就是换 schema。
+    assert_eq!(GoalStopReason::NoProgress.as_str(), "no_progress");
+    assert_eq!(GoalStopReason::ProviderFailed.as_str(), "provider_failed");
+    assert_eq!(GoalStopReason::UserStopped.as_str(), "user_stopped");
+    assert_eq!(EventPayload::GoalStopped {
+        goal: "g".to_owned(),
+        reason: GoalStopReason::NoProgress,
+        detail: String::new(),
+        stuck: Vec::new(),
+        count: 0,
+    }
+    .kind(), "GoalStopped");
 }
 
 // --- 会话桶里的归属筛（§4） -------------------------------------------------

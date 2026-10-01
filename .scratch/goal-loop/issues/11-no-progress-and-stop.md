@@ -1,7 +1,7 @@
 # 无进展与停止
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 07
 
 > 规格：`.scratch/goal-loop/spec.md` §9。

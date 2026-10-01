@@ -408,6 +408,10 @@ pub struct GoalSettings {
     pub remind_at: u8,
     /// 过这个百分比就压缩并翻页。
     pub compact_at: u8,
+    /// 连续几次翻页零条目完成就停下报告（§9）。
+    pub no_progress_rollovers: u32,
+    /// provider 调用连着失败几次就停下报告（§9）。
+    pub provider_retries: u32,
 }
 
 impl Default for GoalSettings {
@@ -415,6 +419,8 @@ impl Default for GoalSettings {
         Self {
             remind_at: DEFAULT_REMIND_AT,
             compact_at: DEFAULT_COMPACT_AT,
+            no_progress_rollovers: DEFAULT_NO_PROGRESS_ROLLOVERS,
+            provider_retries: DEFAULT_PROVIDER_RETRIES,
         }
     }
 }
@@ -423,6 +429,15 @@ impl Default for GoalSettings {
 pub const DEFAULT_REMIND_AT: u8 = 50;
 /// 缺省的翻页阈值。
 pub const DEFAULT_COMPACT_AT: u8 = 80;
+/// 缺省的「连续几次翻页零完成就停下」。
+pub const DEFAULT_NO_PROGRESS_ROLLOVERS: u32 = 3;
+/// 缺省的 provider 重试次数。
+///
+/// 两次：一次重试盖得住一次抖动（限流、一次连接断掉），再多就是在拿无人值守的钱去赌一个大概
+/// 不会好的东西。
+pub const DEFAULT_PROVIDER_RETRIES: u32 = 2;
+/// provider 重试次数的上限。
+pub const MAX_PROVIDER_RETRIES: u32 = 10;
 
 /// 把 `[goals]` 解析成两个阈值。
 ///
@@ -439,6 +454,12 @@ fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
     if let Some(compact_at) = raw.compact_at {
         goals.compact_at = compact_at;
     }
+    if let Some(rollovers) = raw.no_progress_rollovers {
+        goals.no_progress_rollovers = rollovers;
+    }
+    if let Some(retries) = raw.provider_retries {
+        goals.provider_retries = retries;
+    }
     for (field, value) in [("remind_at", goals.remind_at), ("compact_at", goals.compact_at)] {
         if value == 0 || value > 100 {
             return Err(ConfigError::InvalidGoals {
@@ -449,8 +470,24 @@ fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
     if goals.remind_at >= goals.compact_at {
         return Err(ConfigError::InvalidGoals {
             reason: format!(
-                "`remind_at`（{}）必须在 `compact_at`（{}）之前，否则提醒永远轮不到 ——                  压缩先来了",
+                "`remind_at`（{}）必须在 `compact_at`（{}）之前，否则提醒永远轮不到 \
+                 压缩先来了",
                 goals.remind_at, goals.compact_at
+            ),
+        });
+    }
+    if goals.no_progress_rollovers == 0 {
+        return Err(ConfigError::InvalidGoals {
+            reason: "`no_progress_rollovers` 至少是 1：0 会让循环在第一次翻页之前就认输"
+                .to_owned(),
+        });
+    }
+    if goals.provider_retries > MAX_PROVIDER_RETRIES {
+        return Err(ConfigError::InvalidGoals {
+            reason: format!(
+                "`provider_retries` 最多 {MAX_PROVIDER_RETRIES} 次；拿到的是 {} —— \
+                 无人值守的重试是有代价的",
+                goals.provider_retries
             ),
         });
     }
@@ -712,6 +749,8 @@ struct RawConfig {
 struct RawGoals {
     remind_at: Option<u8>,
     compact_at: Option<u8>,
+    no_progress_rollovers: Option<u32>,
+    provider_retries: Option<u32>,
 }
 
 /// 一张 `[sandbox]` 表。

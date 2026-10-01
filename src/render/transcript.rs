@@ -411,6 +411,8 @@ impl Transcript {
             EventPayload::GoalSelected { .. } => {}
             // 收尾汇总已经作为一条助手消息画出来了（写它的那次单发调用记的），这里不再重复。
             EventPayload::GoalCompleted { .. } => {}
+            // 停下并报告的那一行由循环发（`notice`），所以这里不再画一遍。
+            EventPayload::GoalStopped { .. } => {}
             EventPayload::SandboxStatus {
                 mode,
                 unavailable_reason,

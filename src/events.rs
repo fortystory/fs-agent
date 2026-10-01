@@ -148,6 +148,35 @@ impl fmt::Display for StopReason {
     }
 }
 
+/// 一个目标为什么停下来了 —— 停 = **不是**「做完了」。
+///
+/// 三个值都是协议标记（进流、要稳定），人可读的那句话在 `GoalStopped.detail` 里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GoalStopReason {
+    /// 连续 N 次翻页零条目完成（§9）：卡住了。
+    NoProgress,
+    /// provider 调用重试耗尽（§9）。
+    ProviderFailed,
+    /// 人按 Esc 主动停（§5）。
+    UserStopped,
+}
+
+impl GoalStopReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GoalStopReason::NoProgress => "no_progress",
+            GoalStopReason::ProviderFailed => "provider_failed",
+            GoalStopReason::UserStopped => "user_stopped",
+        }
+    }
+}
+
+impl fmt::Display for GoalStopReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// 跨供应商归一化之后的 token 记账。
 ///
 /// `cached_tokens` 与 `miss_tokens` 是一等公民：要判断前缀缓存到底有没有在起作用，
@@ -322,6 +351,24 @@ pub enum EventPayload {
     GoalSelected {
         goal: String,
     },
+    /// 一个目标**停下来**了，而它不是做完了（§5、§9）。
+    ///
+    /// 「停」有四种：目标完成、无进展、provider 失败、人主动停。第一种是
+    /// [`GoalCompleted`](Self::GoalCompleted)，其余三种都走这一条 —— 于是恢复
+    /// （§10）能一眼分出「正常收尾」与「异常中断」，而报告带得出计数与相关 id。
+    GoalStopped {
+        goal: String,
+        reason: GoalStopReason,
+        /// 人可读的说明（散文，打码）。
+        detail: String,
+        /// 停下时还没完成、或者反复卡住的那几条的 id。报告要可核对，所以它们随事件一起落。
+        #[serde(default)]
+        stuck: Vec<String>,
+        /// 与 `reason` 配套的那个计数：无进展时是连续几次翻页零完成，provider 失败时是试了
+        /// 几次，人主动停时是 0。
+        #[serde(default)]
+        count: u32,
+    },
     /// 一个目标做完了，附上那份收尾汇总（§1、§11）。
     ///
     /// 它**不是**工具调用的产物 —— 没有 args 可依 —— 所以要自己落一条事件，否则汇总只在屏幕上
@@ -429,6 +476,7 @@ impl EventPayload {
             EventPayload::SandboxStatus { .. } => "SandboxStatus",
             EventPayload::SessionEnded { .. } => "SessionEnded",
             EventPayload::GoalSelected { .. } => "GoalSelected",
+            EventPayload::GoalStopped { .. } => "GoalStopped",
             EventPayload::GoalCompleted { .. } => "GoalCompleted",
             EventPayload::RoundStarted { .. } => "RoundStarted",
             EventPayload::RoundEnded { .. } => "RoundEnded",
@@ -472,6 +520,8 @@ impl EventPayload {
             EventPayload::ContextInjected { content, .. } => redactor.redact(content),
             // 汇总要打码：它是人写的那类叙述文本，而 `goal` 是键，不动。
             EventPayload::GoalCompleted { summary, .. } => redactor.redact(summary),
+            // 同上：说明是散文，`goal`、条目 id 与那个计数都是键。
+            EventPayload::GoalStopped { detail, .. } => redactor.redact(detail),
             // 模式是协议标记，原因才是散文。
             EventPayload::SandboxStatus {
                 unavailable_reason, ..

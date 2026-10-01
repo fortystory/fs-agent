@@ -556,6 +556,101 @@ pub fn threshold_step(percent: u64, remind_at: u8, compact_at: u8, reminded: boo
     }
 }
 
+// --- 无进展与停止（§9） -----------------------------------------------------
+
+/// 无进展的计数：**连续几次翻页零条目完成**。
+///
+/// 计数对象是**翻页**，不是回合 —— 单位更长，误判更少。它和完成判据同源（都是
+/// [`Progress`]），所以是机械可算的：没有它，一个卡住的目标会一直翻页重试到烧完预算。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoProgress {
+    streak: u32,
+    /// 上一次翻页时已完成几条。
+    completed: usize,
+}
+
+impl NoProgress {
+    /// 从一个目标的当前进度起算。
+    pub fn new(completed: usize) -> Self {
+        Self {
+            streak: 0,
+            completed,
+        }
+    }
+
+    /// 一次翻页之后记一笔，返回这一刻的连续次数。
+    ///
+    /// **中途完成任意一条就归零**，重新计 —— 那正是「有进展」的定义。
+    pub fn after_rollover(&mut self, completed: usize) -> u32 {
+        if completed > self.completed {
+            self.streak = 0;
+        } else {
+            self.streak += 1;
+        }
+        self.completed = completed;
+        self.streak
+    }
+
+    /// 这一刻连续几次翻页没有进展。
+    pub fn streak(&self) -> u32 {
+        self.streak
+    }
+
+    /// 到了停下来报告的那条线吗（连续 `limit` 次零完成）。
+    pub fn reached(&self, limit: u32) -> bool {
+        self.streak >= limit
+    }
+}
+
+/// provider 调用的重试预算（§9）。
+///
+/// 它数的是**回合级**的重试：一个回合以 `Error` 收场时再驱动一次，而不是重发一次调用 ——
+/// 失败那一次留在流上的东西照旧是真相。重试之间固定等 [`RETRY_DELAY`](crate::cli) 那一档
+/// 时间（在循环侧定死），耗尽之后停下并报告。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retry {
+    failures: u32,
+    limit: u32,
+}
+
+impl Retry {
+    pub fn new(limit: u32) -> Self {
+        Self { failures: 0, limit }
+    }
+
+    /// 记一次失败：还能再试就 `true`。
+    pub fn failed(&mut self) -> bool {
+        self.failures += 1;
+        self.failures <= self.limit
+    }
+
+    /// 记一次成功：预算回满。
+    pub fn succeeded(&mut self) {
+        self.failures = 0;
+    }
+
+    /// 到这一刻为止失败了几次（报告里要可核对）。
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
+}
+
+/// 停下时报告里点名的那些条目：还没完成的那些。
+///
+/// 报告只说「停了」没有用 —— 要说清卡在哪些条目上，回头才核对得出它是怎么卡住的。
+pub fn unfinished(entries: &[Entry], progress: &Progress) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| {
+            progress
+                .statuses
+                .get(&entry.id)
+                .is_none_or(|status| *status != Status::Completed)
+        })
+        .map(|entry| entry.id.clone())
+        .collect()
+}
+
 // --- 收尾汇总（§11） -------------------------------------------------------
 
 /// 一个目标下各会话记下的新工作。

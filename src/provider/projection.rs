@@ -71,6 +71,8 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             // 收尾汇总只进日志（§11）：那段叙述已经由写它的那次单发调用作为一条助手消息记下
             // 来了，模型在后续回合里读到的正是那一条；这一条是给审计者的记录。
             EventPayload::GoalCompleted { .. } => {}
+            // 停下并报告同理：报告落在流上是给审计者的，而循环自己会把它说到转录里。
+            EventPayload::GoalStopped { .. } => {}
             // 沙箱状态同样是**只进日志**的 harness 记账（沙箱 spec §8）：它既不是发言、也不是注入，
             // 所以投影是零 —— 这正是 replay 能看到它、而钉住的前缀不受它影响的原因。
             EventPayload::SandboxStatus { .. } => {}

@@ -37,8 +37,8 @@ use crate::config::SandboxMode;
 use crate::context;
 use crate::events::{
     hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, total_usage, ContextSource,
-    Decision, DecisionSource, Event, EventLog, EventPayload, HistoryReason, ParticipantId,
-    Redactor, Role, RoundMode, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
+    Decision, DecisionSource, Event, EventLog, EventPayload, GoalStopReason, HistoryReason,
+    ParticipantId, Redactor, Role, RoundMode, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -373,6 +373,33 @@ pub fn record_history_superseded(
             targets,
             reason,
             summary,
+        },
+    )
+}
+
+/// 记下一个目标停下来了，而它不是做完了（`.scratch/goal-loop/spec.md` §5、§9）。
+///
+/// `stuck` 与 `count` 是这份报告可核对的那一半：一条收尾只说「停了」没有用，要说清是连续几次
+/// 翻页没有进展、试了几次、卡在哪些条目上。
+pub fn record_goal_stopped(
+    session: &mut Session,
+    render: &RenderHandle,
+    goal: &str,
+    reason: GoalStopReason,
+    detail: &str,
+    stuck: Vec<String>,
+    count: u32,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::GoalStopped {
+            goal: goal.to_owned(),
+            reason,
+            detail: detail.to_owned(),
+            stuck,
+            count,
         },
     )
 }

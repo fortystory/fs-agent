@@ -506,6 +506,8 @@ fn entry_of(event: &Event) -> Option<Entry> {
         // 收尾汇总同上：写它的那次调用已经留下一条助手消息，`sessions show` 从那里读得出
         // 来；这一条是流上的记录，不再重复列一遍。
         EventPayload::GoalCompleted { .. } => return None,
+        // 停下并报告也一样：它是流上的记录，人读的是循环打出来的那一行。
+        EventPayload::GoalStopped { .. } => return None,
         // 沙箱状态是只进日志的 harness 记账（沙箱 spec §8）：TUI 不显示它，但复盘视图显示，
         // 否则「某条命令当时有没有被关着」就没有可读的出处。
         EventPayload::SandboxStatus {
@@ -987,6 +989,7 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
             // 归属与它同一档：只进日志的记账，不计进任何一项统计。
             EventPayload::GoalSelected { .. } => {}
             EventPayload::GoalCompleted { .. } => {}
+            EventPayload::GoalStopped { .. } => {}
             // 沙箱状态不计进任何一项统计：它是这一刻的记账，不是用量。
             EventPayload::SandboxStatus { .. } => {}
             EventPayload::SessionEnded { reason } => {

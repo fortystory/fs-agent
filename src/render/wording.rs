@@ -1573,6 +1573,37 @@ pub fn clear_while_looping() -> &'static str {
     "一个 loop 正在跑，输入区在那段时间里禁言；要停就按 Esc"
 }
 
+/// provider 调用失败、还要再试一次（§9）。
+pub fn provider_retry(failures: u32) -> String {
+    format!("provider 调用失败（第 {failures} 次），等一会儿再驱动这个回合")
+}
+
+/// 「停下并报告」的那一段（§5、§9）：说什么停了、为什么、卡在哪儿。
+///
+/// 它是给人读的，而**同一条事实也落了流**（`GoalStopped`）—— 报告不能只在屏幕上刷过去。
+pub fn goal_stopped(
+    name: &str,
+    reason: crate::events::GoalStopReason,
+    count: u32,
+    stuck: &[String],
+) -> String {
+    use crate::events::GoalStopReason;
+    let why = match reason {
+        GoalStopReason::NoProgress => format!(
+            "连续 {count} 次翻页没有任何条目完成，目标 {name} 卡住了，已经停下"
+        ),
+        GoalStopReason::ProviderFailed => {
+            format!("provider 调用连着失败 {count} 次，目标 {name} 已停下，不再重试")
+        }
+        GoalStopReason::UserStopped => format!("目标 {name} 被主动停下"),
+    };
+    if stuck.is_empty() {
+        why
+    } else {
+        format!("{why}；还卡在这些条目上：{}", stuck.join("、"))
+    }
+}
+
 /// 目标完成：条目情况与跨了几个会话，一行说完。汇总本身落在流上，也由那次调用写进转录。
 pub fn goal_completed_notice(name: &str, completed: usize, total: usize, sessions: usize) -> String {
     format!("目标 {name} 完成：{completed}/{total} 条，跨 {sessions} 个会话")

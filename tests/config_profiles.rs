@@ -974,3 +974,30 @@ fn a_threshold_that_could_never_fire_is_a_startup_error() {
         .to_string();
     assert!(error.contains("remind"), "{error}");
 }
+
+#[test]
+fn the_goal_stop_knobs_come_from_the_same_table() {
+    let config = resolve(None, &env(&[])).unwrap();
+    assert_eq!(config.goals.no_progress_rollovers, 3);
+    assert_eq!(config.goals.provider_retries, 2);
+
+    let config = resolve(
+        Some("[goals]\nno_progress_rollovers = 5\nprovider_retries = 0\n"),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(config.goals.no_progress_rollovers, 5);
+    assert_eq!(config.goals.provider_retries, 0, "0 次就是不重试");
+
+    // 0 次翻页会让循环在第一次翻页之前就认输。
+    let error = resolve(Some("[goals]\nno_progress_rollovers = 0\n"), &env(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no_progress_rollovers"), "{error}");
+
+    // 重试是有代价的，所以有一个上限。
+    let error = resolve(Some("[goals]\nprovider_retries = 99\n"), &env(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("provider_retries"), "{error}");
+}
