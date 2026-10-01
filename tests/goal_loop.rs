@@ -1184,6 +1184,36 @@ async fn without_a_goal_the_budget_is_the_plain_session_one() {
     session.harness.shutdown().await;
 }
 
+#[test]
+fn the_goal_budget_counts_the_other_sessions_and_not_the_current_one_twice() {
+    use fs_agent::events::Usage;
+
+    let used = |seq: u64, tokens: u64| {
+        Event::new(
+            seq,
+            SpeakerId::System,
+            EventPayload::UsageRecorded {
+                usage: Usage {
+                    input_tokens: tokens,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                    miss_tokens: 0,
+                    reasoning_tokens: None,
+                },
+            },
+        )
+    };
+    let sessions = [
+        ("s-1".to_owned(), vec![used(1, 60_000)]),
+        ("s-2".to_owned(), vec![used(1, 40_000)]),
+    ];
+
+    // 当前会话自己那份不算在「别处」里 —— 它就在自己那条流上，闸门已经数过一遍了。
+    assert_eq!(goals::usage_apart_from(&sessions, "s-2"), 60_000);
+    assert_eq!(goals::usage_apart_from(&sessions, "s-9"), 100_000);
+    assert_eq!(goals::usage_apart_from(&[], "s-1"), 0);
+}
+
 // --- 崩溃恢复与主动停（§10） ------------------------------------------------
 
 /// 一场会话跑过的东西：一个归属、一个回合，以及（可选的）一条收尾。

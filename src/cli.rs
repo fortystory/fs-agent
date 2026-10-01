@@ -1494,9 +1494,10 @@ async fn run_goal_loop(
     let manifest = manifest.expect("check_start 放行就意味着清单在");
     let progress = progress.expect("清单在就有进度");
 
-    // 预算的口径（§8）：这个目标更早那些会话已经花掉的，先填进这场会话。归属还没落流，所以
-    // 此刻扫到的正好是**别处**花的那些。
-    harness.carry_usage(goal_usage(goals, name));
+    // 预算的口径（§8）：这个目标**别处**已经花掉的，先填进这场会话 —— 当前会话自己那份不算
+    // 在里面，它就在自己这条流上。
+    let current = harness.session_id().as_str().to_owned();
+    harness.carry_usage(goal_usage(goals, name, &current));
     // 归属先落流：进度重算、预算与恢复都从它派生（§4、§8、§10）。
     if let Err(error) = harness.select_goal(name) {
         return Err(render::wording::error_report(&error));
@@ -1646,8 +1647,10 @@ async fn run_goal_loop(
                     *running = false;
                     return Err(render::wording::error_report(&error));
                 }
-                // 额度不随翻页重置（§8）：把到现在为止属于这个目标的用量一起填给新会话。
-                harness.carry_usage(goal_usage(goals, name));
+                // 额度不随翻页重置（§8）：把到现在为止属于这个目标的用量一起填给新会话（新会话
+                // 自己还是空的，所以那些就是「别处」）。
+                let current = harness.session_id().as_str().to_owned();
+                harness.carry_usage(goal_usage(goals, name, &current));
                 // 新会话要重新认领这个目标 —— 否则进度派生看不见它；清单也重新摆一次，那是它
                 // 照做的定义本身。
                 if let Err(error) = harness.select_goal(name) {
@@ -1717,15 +1720,29 @@ fn goal_progress(
     crate::goals::progress(&manifest.entries, &calls)
 }
 
-/// 这个目标在**这一刻之前**已经花掉的 token（§8）。
+/// 这个目标在**别处**已经花掉的 token（§8）：该目标下**除当前会话之外**那些会话的和。
 ///
 /// 派生的：扫本桶、按归属筛出属于它的会话，把每条流的 `UsageRecorded` 加起来。不新增状态文件
 /// —— 与日账本扫会话文件按日聚合是同一条路。
-fn goal_usage(goals: &GoalSetup, name: &str) -> u64 {
-    goal_streams(goals, name)
-        .iter()
-        .map(|events| total_usage(events).total_tokens())
-        .sum()
+///
+/// 当前会话被**排除**掉了，而那正是这个数的定义：闸门读的是「整条流的求和 + 别处已经花掉的」，
+/// 当前会话自己的花费已经在它自己那条流里了。把它算进来，一道闸门就会把同一笔钱数两遍 ——
+/// `--continue` 回到一条已经认领过目标的流时、以及同一个会话第二次 `/loop` 同一个目标时，
+/// 都会走到那条路上。
+fn goal_usage(goals: &GoalSetup, name: &str, current: &str) -> u64 {
+    let Ok(sessions) = goals.store.list(&goals.cwd) else {
+        return 0;
+    };
+    let mut claimed: Vec<(String, Vec<Event>)> = Vec::new();
+    for session in sessions {
+        let Ok(events) = read_events(&session.log_path) else {
+            continue;
+        };
+        if crate::goals::has_goal(&events, name) {
+            claimed.push((session.id.as_str().to_owned(), events));
+        }
+    }
+    crate::goals::usage_apart_from(&claimed, current)
 }
 
 /// 属于这个目标的那些会话的流（§4 的归属筛）：扫本桶、按 `GoalSelected` 过滤。

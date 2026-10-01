@@ -659,6 +659,20 @@ pub fn unfinished(entries: &[Entry], progress: &Progress) -> Vec<String> {
         .collect()
 }
 
+/// 「别处已经花掉的」那些 token（§8）：在这些**属于同一个目标**的会话里，除了 `current` 之外
+/// 每一条流的 `UsageRecorded` 之和。
+///
+/// 当前会话被排除，因为闸门读的是「整条流的求和 + 别处已经花掉的」—— 当前会话自己那份就在它
+/// 自己那条流里。把它算进来就是把同一笔钱数两遍，而 `--continue` 回到一条已经认领过目标的流
+/// 时、同一个会话第二次 `/loop` 同一个目标时，都会走到那条路上。
+pub fn usage_apart_from(sessions: &[(String, Vec<Event>)], current: &str) -> u64 {
+    sessions
+        .iter()
+        .filter(|(id, _)| id != current)
+        .map(|(_, events)| crate::events::total_usage(events).total_tokens())
+        .sum()
+}
+
 // --- 崩溃恢复与主动停（§10） -----------------------------------------------
 
 /// 一条流是怎么结束的。
