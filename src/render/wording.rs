@@ -9,6 +9,8 @@
 //! `AgentError` 的 message，以及 fs-agent 自己那些工具结果文本，都由产生它们的地方写成
 //! 中文（ADR 0005 起 —— 在那之前它们冻结在英文，见 ADR 0001），不靠这个模块拼。
 
+use std::path::Path;
+
 use ratatui::buffer::CellWidth;
 
 use crate::events::{
@@ -19,6 +21,7 @@ use serde_json::Value;
 
 use crate::permissions::{Escalation, Mode};
 use crate::provider::FinishReason;
+use crate::render::width::{text_columns, truncate_columns};
 
 /// 一个轮次模式给人看的标签。
 ///
@@ -1322,6 +1325,142 @@ pub fn too_small(width: u16, height: u16) -> String {
 /// （spec §3）。
 pub fn identity() -> String {
     format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
+/// 终端标题整条有多宽（显示列），超过就从右往左丢
+/// （`.scratch/terminal-title/spec.md` §3）。
+///
+/// 写死、不做配置：标题没有宽度反馈，任何「看情况缩」的规则都没法测。
+pub const TITLE_COLUMNS: usize = 40;
+
+/// 标题里状态那一段取哪个词（spec §2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleState {
+    /// 空闲：**没有**状态段。
+    Idle,
+    /// 回合在跑。
+    Running,
+    /// 有东西立着等人回答：审批、问卷、目标停确认。
+    Waiting,
+    /// 正在重放历史。
+    Replaying,
+}
+
+/// 状态段那一个词；空闲没有词 —— 省略整段，而不是写一个空串（spec §2）。
+pub fn title_word(state: TitleState) -> Option<&'static str> {
+    match state {
+        TitleState::Idle => None,
+        TitleState::Running => Some("运行中"),
+        TitleState::Waiting => Some("等你"),
+        TitleState::Replaying => Some("重放中"),
+    }
+}
+
+/// 把渲染器那三个布尔收成标题里的一个状态，优先级只住在这里一处（spec §2）。
+///
+/// 重放压过等你、等你压过运行中：对人来说「这个终端在等你」比「它在跑」更值得先看见，而
+/// 重放是一种连输入都不接的时刻。`muted`（禁言）不参与 —— 它是运行中的一种。
+pub fn title_state(replaying: bool, pending: bool, busy: bool) -> TitleState {
+    if replaying {
+        TitleState::Replaying
+    } else if pending {
+        TitleState::Waiting
+    } else if busy {
+        TitleState::Running
+    } else {
+        TitleState::Idle
+    }
+}
+
+/// 标题里的路径段（spec §1）。
+///
+/// 两条分支，按 `$HOME` 划：落在 `$HOME` 之下就写 `~` 加相对路径（`~/code/fs-agent`，
+/// 认人的家目录比认父目录基名有用）；其余写「父目录基名 / 当前基名」（`fortystory/fs-agent`）。
+/// 前缀按**路径分量**比（[`Path::strip_prefix`]），不做字符串前缀 —— `~/code2` 不是
+/// `~/code` 的子路径。
+///
+/// `home` 是参数、不在这里读 `$HOME`：这一层是纯函数，测试要能钉死。
+pub fn title_path(cwd: &Path, home: Option<&Path>) -> String {
+    if cwd == Path::new("/") {
+        return "/".to_owned();
+    }
+    if let Some(home) = home {
+        if cwd == home {
+            return "~".to_owned();
+        }
+        if let Ok(rest) = cwd.strip_prefix(home) {
+            return format!("~/{}", rest.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    let base = title_base(cwd);
+    match cwd.parent().and_then(Path::file_name) {
+        Some(parent) => format!("{}/{}", parent.to_string_lossy(), base),
+        None => base,
+    }
+}
+
+/// 只剩基名的路径段：40 列封顶的第三步退到这里（spec §3）。
+///
+/// `$HOME` 仍然缩成 `~`（它本身就是那个基名），`/` 仍然是 `/`。
+pub fn title_path_base(cwd: &Path, home: Option<&Path>) -> String {
+    if cwd == Path::new("/") {
+        return "/".to_owned();
+    }
+    if home.is_some_and(|home| cwd == home) {
+        return "~".to_owned();
+    }
+    title_base(cwd)
+}
+
+/// 路径最后一段的文字；拿不到时退回整条路径的文字（那只可能是根）。
+fn title_base(cwd: &Path) -> String {
+    cwd.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| cwd.to_string_lossy().into_owned())
+}
+
+/// 一整条终端标题：`<路径> · <状态> · <目标名>`，40 列封顶（spec §1、§3）。
+///
+/// 超了**从右往左丢**，一次一段，顺序固定：先目标名、再状态词、再退成只剩基名的路径、
+/// 最后硬截断。规则是固定的而不是「看情况缩」的，因为标题没有宽度反馈 —— 一条会变的
+/// 规则没法测，也没法在三种终端上复现同一件事。
+pub fn terminal_title(
+    cwd: &Path,
+    home: Option<&Path>,
+    state: TitleState,
+    goal: Option<&str>,
+) -> String {
+    let path = title_path(cwd, home);
+    let full = join_title(&path, title_word(state), goal);
+    if text_columns(&full) <= TITLE_COLUMNS {
+        return full;
+    }
+    let without_goal = join_title(&path, title_word(state), None);
+    if text_columns(&without_goal) <= TITLE_COLUMNS {
+        return without_goal;
+    }
+    let path_only = join_title(&path, None, None);
+    if text_columns(&path_only) <= TITLE_COLUMNS {
+        return path_only;
+    }
+    let base_only = join_title(&title_path_base(cwd, home), None, None);
+    if text_columns(&base_only) <= TITLE_COLUMNS {
+        return base_only;
+    }
+    truncate_columns(&base_only, TITLE_COLUMNS)
+}
+
+/// 把有名有姓的那几段用 ` · ` 接起来；缺席的段不留下多余的分隔符。
+fn join_title(path: &str, word: Option<&str>, goal: Option<&str>) -> String {
+    let mut parts = Vec::with_capacity(3);
+    parts.push(path.to_owned());
+    if let Some(word) = word {
+        parts.push(word.to_owned());
+    }
+    if let Some(goal) = goal {
+        parts.push(goal.to_owned());
+    }
+    parts.join(" · ")
 }
 
 /// `fs-agent` 里那条**下落**的短横，脉冲一帧一个字形

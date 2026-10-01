@@ -1104,3 +1104,156 @@ fn the_sandbox_line_names_the_mode_and_why_it_was_unavailable() {
         "[沙箱：bwrap · 不可用：PATH 上没有 `bwrap`]"
     );
 }
+
+// --- 终端标题：形状、状态词与 40 列封顶（`.scratch/terminal-title/spec.md` §1–§3） --
+
+#[test]
+fn a_title_is_path_status_and_goal_joined_by_middle_dots() {
+    let cwd = std::path::Path::new("/x/fortystory/fs-agent");
+    assert_eq!(
+        wording::terminal_title(cwd, None, wording::TitleState::Running, None),
+        "fortystory/fs-agent · 运行中"
+    );
+    // 目标名取 3 个汉字：`fortystory/fs-agent · 运行中 · 修文档` 是 37 列，留在 40 列里。
+    // spec §1 举的例子用的是 `修文档索引`，那条整串是 41 列 —— 按 §3 的封顶它会被丢掉，
+    // 所以这里不照抄那个例子（见这一票的 Comments）。
+    assert_eq!(
+        wording::terminal_title(cwd, None, wording::TitleState::Running, Some("修文档")),
+        "fortystory/fs-agent · 运行中 · 修文档"
+    );
+}
+
+#[test]
+fn an_idle_title_omits_the_status_segment() {
+    assert_eq!(
+        wording::terminal_title(
+            std::path::Path::new("/x/fortystory/fs-agent"),
+            None,
+            wording::TitleState::Idle,
+            None
+        ),
+        "fortystory/fs-agent"
+    );
+}
+
+#[test]
+fn a_title_without_a_goal_omits_the_goal_segment() {
+    assert_eq!(
+        wording::terminal_title(
+            std::path::Path::new("/x/fortystory/fs-agent"),
+            None,
+            wording::TitleState::Waiting,
+            None
+        ),
+        "fortystory/fs-agent · 等你"
+    );
+}
+
+#[test]
+fn the_home_directory_is_abbreviated_to_a_tilde() {
+    let home = std::path::Path::new("/home/forty");
+    assert_eq!(
+        wording::title_path(std::path::Path::new("/home/forty/code/fs-agent"), Some(home)),
+        "~/code/fs-agent"
+    );
+    assert_eq!(wording::title_path(home, Some(home)), "~");
+    // 前缀按路径分量比：`forty2` 不是 `forty` 下面的东西，所以走「父/基」那条。
+    assert_eq!(
+        wording::title_path(std::path::Path::new("/home/forty2/code"), Some(home)),
+        "forty2/code"
+    );
+}
+
+#[test]
+fn the_root_directory_and_a_home_less_run_have_their_own_paths() {
+    assert_eq!(wording::title_path(std::path::Path::new("/"), None), "/");
+    assert_eq!(
+        wording::title_path(std::path::Path::new("/home/forty/code/fs-agent"), None),
+        "code/fs-agent"
+    );
+}
+
+#[test]
+fn a_title_longer_than_forty_columns_drops_the_goal_first() {
+    // 19（路径）+ 3 + 6（状态）+ 3 + 40（目标）= 71 列；丢掉目标就只剩 28 列。
+    let goal = "修".repeat(20);
+    let title = wording::terminal_title(
+        std::path::Path::new("/x/fortystory/fs-agent"),
+        None,
+        wording::TitleState::Running,
+        Some(&goal),
+    );
+    assert_eq!(title, "fortystory/fs-agent · 运行中");
+}
+
+#[test]
+fn a_still_too_long_title_drops_the_status_next() {
+    // 路径本身 39 列：加上「 · 运行中」是 48 列，只剩路径才放得下。
+    let home = std::path::Path::new("/home/forty");
+    let long = "a".repeat(28);
+    let cwd = std::path::PathBuf::from(format!("/home/forty/{long}/fs-agent"));
+    let title = wording::terminal_title(&cwd, Some(home), wording::TitleState::Running, None);
+    assert_eq!(title, format!("~/{long}/fs-agent"));
+    assert!(!title.contains("运行中"), "状态词被丢掉了：{title}");
+}
+
+#[test]
+fn a_still_too_long_path_falls_back_to_its_base_name() {
+    // 路径 41 列；`fs-agent` 只有 8 列。退化的那一步丢的是上面的目录，不是 `~`。
+    let home = std::path::Path::new("/home/forty");
+    let long = "a".repeat(30);
+    let cwd = std::path::PathBuf::from(format!("/home/forty/{long}/fs-agent"));
+    let title = wording::terminal_title(&cwd, Some(home), wording::TitleState::Running, None);
+    assert_eq!(title, "fs-agent");
+}
+
+#[test]
+fn a_path_that_cannot_fit_is_truncated_to_forty_columns() {
+    // 基名本身 50 列（25 个汉字）；40 列就是它的前 20 个汉字 —— 宽字符不从中间劈开。
+    let base = "超长目录名".repeat(5);
+    let cwd = std::path::PathBuf::from(format!("/x/{base}"));
+    let title = wording::terminal_title(&cwd, None, wording::TitleState::Idle, None);
+    assert_eq!(title, "超长目录名".repeat(4));
+    assert_eq!(
+        fs_agent::render::width::text_columns(&title),
+        wording::TITLE_COLUMNS
+    );
+}
+
+#[test]
+fn replay_outranks_a_pending_question_which_outranks_a_running_turn() {
+    use wording::TitleState::{Idle, Replaying, Running, Waiting};
+    assert_eq!(wording::title_state(true, true, true), Replaying);
+    assert_eq!(wording::title_state(false, true, true), Waiting);
+    assert_eq!(wording::title_state(false, false, true), Running);
+    assert_eq!(wording::title_state(false, false, false), Idle);
+}
+
+#[test]
+fn an_idle_session_has_no_status_word() {
+    use wording::TitleState::{Idle, Replaying, Running, Waiting};
+    assert_eq!(wording::title_word(Idle), None);
+    assert_eq!(wording::title_word(Running), Some("运行中"));
+    assert_eq!(wording::title_word(Waiting), Some("等你"));
+    assert_eq!(wording::title_word(Replaying), Some("重放中"));
+}
+
+#[test]
+fn the_forty_column_cap_counts_display_columns_not_bytes() {
+    // `x/fs-agent · 运行中` 是 19 列；再加 ` · ` 与目标，18 列的目标正好落在 40 列上，
+    // 20 列的就超了。按字节算的话 9 个汉字（27 字节）早就超了 —— 那会让这条测试红。
+    let cwd = std::path::Path::new("/x/fs-agent");
+    let just_fits = "目".repeat(9);
+    let title = wording::terminal_title(
+        cwd,
+        None,
+        wording::TitleState::Running,
+        Some(&just_fits),
+    );
+    assert!(title.ends_with(&just_fits), "18 列的目标留得住：{title}");
+
+    let too_wide = "目".repeat(10);
+    let title = wording::terminal_title(cwd, None, wording::TitleState::Running, Some(&too_wide));
+    assert_eq!(title, "x/fs-agent · 运行中", "20 列的目标挤不下：{title}");
+}
+
