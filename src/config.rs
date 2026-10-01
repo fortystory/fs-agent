@@ -1723,6 +1723,13 @@ pub struct SessionConfig {
     /// 沙箱那一层的配置与探测结果（沙箱 spec §7）。配置在解析期填好，探测结果由 `lib` 组装期
     /// 填进来 —— 于是工具的上下文里带着的是一个定下来的值，而不是一件每次调用都要问的事。
     pub sandbox: SandboxSettings,
+    /// 这个 agent 接手之前，**别处**已经花掉、而这个额度要一起数的 token
+    /// （`.scratch/goal-loop/spec.md` §8）。
+    ///
+    /// 闸门的求和取自整条流，而每条流只看得见自己 —— 一个目标跨过的那些更早的会话不在里面。
+    /// 这个数就是那个缺口：循环按归属算出它，填进来，于是翻页开的新会话带着同一个累计继续，
+    /// **翻页不重置额度**。它是值，不是状态文件：与日账本一样，跨会话的账是派生的。
+    pub carried_tokens: u64,
 }
 
 impl SessionConfig {
@@ -1743,6 +1750,7 @@ impl SessionConfig {
             budget: Budget::new(),
             redactor: Redactor::default(),
             sandbox: SandboxSettings::off(),
+            carried_tokens: 0,
         }
     }
 
@@ -1828,6 +1836,12 @@ impl SessionConfig {
         self
     }
 
+    /// 带上「别处已经花掉的 token」（`.scratch/goal-loop/spec.md` §8）。
+    pub fn with_carried_tokens(mut self, tokens: u64) -> Self {
+        self.carried_tokens = tokens;
+        self
+    }
+
     /// 给这个会话它的累计 token 额度（spec §17）。
     pub fn with_budget(mut self, budget: Budget) -> Self {
         self.budget = budget;
@@ -1878,6 +1892,7 @@ impl Default for SessionConfig {
             budget: Budget::new(),
             redactor: Redactor::default(),
             sandbox: SandboxSettings::off(),
+            carried_tokens: 0,
         }
     }
 }

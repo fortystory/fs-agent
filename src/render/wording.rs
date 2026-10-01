@@ -1596,6 +1596,9 @@ pub fn goal_stopped(
             format!("provider 调用连着失败 {count} 次，目标 {name} 已停下，不再重试")
         }
         GoalStopReason::UserStopped => format!("目标 {name} 被主动停下"),
+        GoalStopReason::BudgetExhausted => {
+            format!("目标 {name} 撞上了 token 额度，已降级收尾")
+        }
     };
     if stuck.is_empty() {
         why

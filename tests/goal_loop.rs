@@ -13,7 +13,7 @@ use fs_agent::config::SessionConfig;
 use fs_agent::events::{
     current_goal, read_events, ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId,
 };
-use fs_agent::events::GoalStopReason;
+use fs_agent::events::{GoalStopReason, StopReason};
 use fs_agent::goals::{
     self, check_start, progress, threshold_step, unfinished, Manifest, NoProgress, Progress,
     Retry, StartRefusal, ThresholdStep, TodoCall,
@@ -40,6 +40,16 @@ async fn session(root: &Path, id: &str, replies: Vec<Reply>) -> Session {
 
 /// 同上，但调用方自己拿着那个假 provider —— 要读它收到的请求时用它。
 async fn session_with(root: &Path, id: &str, provider: FakeProvider) -> Session {
+    session_with_config(root, id, provider, SessionConfig::new("fake-model")).await
+}
+
+/// 同上，但会话的那些值也由调用方给 —— 试额度时用它。
+async fn session_with_config(
+    root: &Path,
+    id: &str,
+    provider: FakeProvider,
+    config: SessionConfig,
+) -> Session {
     let session_dir = root.join(id);
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&session_dir).unwrap();
@@ -48,7 +58,7 @@ async fn session_with(root: &Path, id: &str, provider: FakeProvider) -> Session 
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
-        config: SessionConfig::new("fake-model"),
+        config,
         renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
@@ -89,6 +99,23 @@ fn todo_reply(id: &str, args: &serde_json::Value) -> Reply {
         },
         StreamEvent::Finished {
             finish_reason: FinishReason::ToolCalls,
+        },
+    ])
+}
+
+/// 一次带用量的文本回答：额度那道闸门数的就是这个数。
+fn usage_reply(tokens: u64) -> Reply {
+    Reply::Stream(vec![
+        StreamEvent::TextDelta("好".to_owned()),
+        StreamEvent::Usage(fs_agent::events::Usage {
+            input_tokens: tokens,
+            output_tokens: 0,
+            cached_tokens: 0,
+            miss_tokens: 0,
+            reasoning_tokens: None,
+        }),
+        StreamEvent::Finished {
+            finish_reason: FinishReason::Stop,
         },
     ])
 }
@@ -1058,6 +1085,74 @@ fn the_stop_reasons_are_stable_protocol_marks() {
         count: 0,
     }
     .kind(), "GoalStopped");
+}
+
+// --- 预算认到目标上（§8） ---------------------------------------------------
+
+#[tokio::test]
+async fn a_carried_usage_counts_toward_the_goal_budget_and_a_rollover_does_not_reset_it() {
+    use fs_agent::session::SessionStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // 额度取大一点：预检那一半拿估计去比剩余量，而一份 prompt 本身就有几百个 token。
+    let budget = || SessionConfig::new("fake-model").with_session_token_limit(100_000);
+
+    // 会话 A：用掉 60。
+    let mut session = session_with_config(
+        root,
+        "s-1",
+        FakeProvider::new(vec![usage_reply(60_000), usage_reply(50_000)]),
+        budget(),
+    )
+    .await;
+    session.harness.select_goal("sandbox").unwrap();
+    session.harness.run_turn("开工").await.unwrap();
+    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    assert_eq!(spent, 60_000);
+
+    // 翻页：新会话带上到现在为止的累计 —— 循环做的就是这一件事。
+    let stored = SessionStore::new(root.join("store"))
+        .create(&root.join("workspace"))
+        .unwrap();
+    session.harness.rollover(&stored).unwrap();
+    session.harness.carry_usage(spent);
+
+    // 会话 B：自己的流里只有 50k，而闸门看到的是 60k + 50k = 110k > 100k —— 下一次调用不再打开，
+    // 回合以 `BudgetExhausted` 降级收尾。
+    let outcome = session.harness.run_turn("继续").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::Completed);
+    let outcome = session.harness.run_turn("再来一个").await.unwrap();
+    assert_eq!(
+        outcome.reason,
+        StopReason::BudgetExhausted,
+        "翻页没有重置额度：闸门在跨会话的累计上判"
+    );
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn without_a_goal_the_budget_is_the_plain_session_one() {
+    // 没有目标归属时没有东西要累计（`carried_tokens` 是 0），行为与从前完全一样。
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_with_config(
+        dir.path(),
+        "s-1",
+        FakeProvider::new(vec![usage_reply(60_000), usage_reply(30_000)]),
+        SessionConfig::new("fake-model").with_session_token_limit(100_000),
+    )
+    .await;
+
+    // 60k 花掉了，但 60k < 100k，所以第二回合照常打开调用。
+    session.harness.run_turn("第一回合").await.unwrap();
+    let outcome = session.harness.run_turn("第二回合").await.unwrap();
+    assert_eq!(outcome.reason, StopReason::Completed, "会话自己的 90k 还没撞顶");
+
+    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    assert_eq!(spent, 90_000);
+
+    session.harness.shutdown().await;
 }
 
 // --- 会话桶里的归属筛（§4） -------------------------------------------------

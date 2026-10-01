@@ -190,6 +190,21 @@ pub(crate) fn build_messages(
     context::trim(projected, context::usable_input(caps), trim_policy)
 }
 
+/// 额度要数的、这个 agent 此刻的累计花费（`.scratch/goal-loop/spec.md` §8）。
+///
+/// 整条流的求和加上「别处已经花掉的那一份」：目标预算把该目标跨过的所有会话一起数，而每条流
+/// 只看得见自己。`carried_tokens` 是循环按归属算出来填进去的 —— 于是翻页不重置额度。
+pub(crate) fn spent_tokens(session: &Session) -> u64 {
+    carried_spent(session.config().carried_tokens, &session.events())
+}
+
+/// 同上，但调用方拿着的是一批事件而不是一场会话（讨论的那两处走这一条）。
+pub(crate) fn carried_spent(carried_tokens: u64, events: &[Event]) -> u64 {
+    total_usage(events)
+        .total_tokens()
+        .saturating_add(carried_tokens)
+}
+
 /// 一次请求在**投影之后、裁剪之前**的估计大小，以及它要装进的那个窗口
 /// （`.scratch/goal-loop/spec.md` §6）。
 ///
@@ -465,7 +480,7 @@ pub async fn run_turn(
         // 执行者自己的回合是**豁免**的：硬停拒绝派发新执行者，让已经在跑的那些跑完
         // （spec §17），所以这里没有任何东西能中途停下一个。它花掉的钱照样落在流上。
         let budget = session.config().budget.clone();
-        let spent = total_usage(&session.events()).total_tokens();
+        let spent = spent_tokens(session);
         let gated = scope != TurnScope::Executor;
         if gated {
             if let Some(note) = budget.exhausted_note(spent) {
@@ -1017,7 +1032,7 @@ async fn process_call(
                         // **新的**执行者。已经在跑的执行者不受影响 —— 它们按自己的回合上限
                         // 跑完。这次调用已经启动，所以它仍然拿到那一个结果，而那条结果说
                         // 执行者从没跑过。
-                        let spent = total_usage(&session.events()).total_tokens();
+                        let spent = spent_tokens(session);
                         if let Some(note) = session.config().budget.exhausted_note(spent) {
                             render.diagnostic(&format!("{note}；没有派发新的执行者"));
                             let refused = ToolError::message(BUDGET_NO_NEW_EXECUTOR);
@@ -1340,6 +1355,9 @@ pub async fn run_discussion(
     // 会话的额度是每个参与者共用的同一个值（spec §17）；组装期会拒绝在它上面不一致的名册，
     // 所以记录者的那一份代表整场讨论。
     let budget = discussion.debaters[0].session.config().budget.clone();
+    // 同一条流上每个参与者拿到的都是同一个额度口径，所以「别处已经花掉的」取哪一位的都一样
+    // （`.scratch/goal-loop/spec.md` §8）。
+    let carried = discussion.debaters[0].session.config().carried_tokens;
 
     let reason = loop {
         // 在这一轮打开之前落下的手势什么都没打开：辩论阶段就地结束（spec §6）。
@@ -1351,7 +1369,7 @@ pub async fn run_discussion(
         // 一次绝不能跳过的调用。带着 `rounds > 0` 走到这个循环顶部，说明前一轮**没有**结束
         // 辩论，所以那一轮就是这个原因所收束的；还没跑过任何一轮时，没有轮次边界可记录，
         // 这个原因只随 `DiscussionOutcome` 传出去。
-        let spent = total_usage(&discussion.stream()).total_tokens();
+        let spent = carried_spent(carried, &discussion.stream());
         if let Some(note) = budget.exhausted_note(spent) {
             render.diagnostic(&format!("{note}；直接走向合成器"));
             if rounds > 0 {
@@ -1425,7 +1443,7 @@ pub async fn run_discussion(
         // 停下了每一方 —— 那是硬停在做它该做的事（降级收尾），把它记成故障会让闸门看起来像
         // 坏掉了（spec §17）。
         if attendance.answers.is_empty() {
-            if budget.is_exhausted(total_usage(&discussion.stream()).total_tokens()) {
+            if budget.is_exhausted(carried_spent(carried, &discussion.stream())) {
                 record_round_ended(
                     discussion.recorder(),
                     render,

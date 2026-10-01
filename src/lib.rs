@@ -825,6 +825,16 @@ impl Harness {
         self.session.cwd()
     }
 
+    /// 把「别处已经花掉的 token」填进这场会话的额度口径
+    /// （`.scratch/goal-loop/spec.md` §8）。
+    ///
+    /// 一个目标横跨的所有会话共用一个额度，而每条流只看得见自己 —— 循环按归属把更早那些会话的
+    /// `UsageRecorded` 加起来，填给当前这场。翻页开的新会话带着同一个累计继续，于是**翻页不
+    /// 重置额度**。
+    pub fn carry_usage(&mut self, tokens: u64) {
+        self.session.carry_usage(tokens);
+    }
+
     /// 记下这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
     ///
     /// 归属是一条只追加的事件，所以当前目标永远是「流上最后一条」，而切换目标就是再记一条。

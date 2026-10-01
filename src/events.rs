@@ -159,6 +159,8 @@ pub enum GoalStopReason {
     ProviderFailed,
     /// 人按 Esc 主动停（§5）。
     UserStopped,
+    /// 额度撞顶：**降级收尾**，不是中断（§8、§17）。
+    BudgetExhausted,
 }
 
 impl GoalStopReason {
@@ -167,6 +169,7 @@ impl GoalStopReason {
             GoalStopReason::NoProgress => "no_progress",
             GoalStopReason::ProviderFailed => "provider_failed",
             GoalStopReason::UserStopped => "user_stopped",
+            GoalStopReason::BudgetExhausted => "budget_exhausted",
         }
     }
 }

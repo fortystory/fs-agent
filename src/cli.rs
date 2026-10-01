@@ -1440,6 +1440,9 @@ async fn run_goal_loop(
     let manifest = manifest.expect("check_start 放行就意味着清单在");
     let progress = progress.expect("清单在就有进度");
 
+    // 预算的口径（§8）：这个目标更早那些会话已经花掉的，先填进这场会话。归属还没落流，所以
+    // 此刻扫到的正好是**别处**花的那些。
+    harness.carry_usage(goal_usage(goals, name));
     // 归属先落流：进度重算、预算与恢复都从它派生（§4、§8、§10）。
     if let Err(error) = harness.select_goal(name) {
         return Err(render::wording::error_report(&error));
@@ -1498,6 +1501,19 @@ async fn run_goal_loop(
                 name,
                 crate::events::GoalStopReason::ProviderFailed,
                 retry.failures(),
+                manifest,
+                &progress,
+            );
+        }
+        // 撞顶（§8）：沿用既有语义 —— **降级收尾，而不是中断**，并落一条收尾事件，于是恢复
+        // （§10）分得出这一次与一次崩溃。
+        if outcome.reason == StopReason::BudgetExhausted {
+            *running = false;
+            return stop_goal_loop(
+                harness,
+                name,
+                crate::events::GoalStopReason::BudgetExhausted,
+                0,
                 manifest,
                 &progress,
             );
@@ -1579,6 +1595,8 @@ async fn run_goal_loop(
                     *running = false;
                     return Err(render::wording::error_report(&error));
                 }
+                // 额度不随翻页重置（§8）：把到现在为止属于这个目标的用量一起填给新会话。
+                harness.carry_usage(goal_usage(goals, name));
                 // 新会话要重新认领这个目标 —— 否则进度派生看不见它；清单也重新摆一次，那是它
                 // 照做的定义本身。
                 if let Err(error) = harness.select_goal(name) {
@@ -1636,6 +1654,17 @@ fn goal_progress(
         .flat_map(|events| crate::goals::todo_calls(events))
         .collect();
     crate::goals::progress(&manifest.entries, &calls)
+}
+
+/// 这个目标在**这一刻之前**已经花掉的 token（§8）。
+///
+/// 派生的：扫本桶、按归属筛出属于它的会话，把每条流的 `UsageRecorded` 加起来。不新增状态文件
+/// —— 与日账本扫会话文件按日聚合是同一条路。
+fn goal_usage(goals: &GoalSetup, name: &str) -> u64 {
+    goal_streams(goals, name)
+        .iter()
+        .map(|events| total_usage(events).total_tokens())
+        .sum()
 }
 
 /// 属于这个目标的那些会话的流（§4 的归属筛）：扫本桶、按 `GoalSelected` 过滤。

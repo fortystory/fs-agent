@@ -155,6 +155,12 @@ impl Session {
         &self.cwd
     }
 
+    /// 把「别处已经花掉的 token」填进这场会话的额度口径
+    /// （`.scratch/goal-loop/spec.md` §8）：翻页开的新会话带着同一个累计继续。
+    pub fn carry_usage(&mut self, tokens: u64) {
+        self.config.carried_tokens = tokens;
+    }
+
     pub fn config(&self) -> &SessionConfig {
         &self.config
     }

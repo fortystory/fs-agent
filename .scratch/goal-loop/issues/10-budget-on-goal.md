@@ -1,7 +1,7 @@
 # 预算认到目标上
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03
 
 > 规格：`.scratch/goal-loop/spec.md` §8。
