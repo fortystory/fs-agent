@@ -32,15 +32,32 @@ libc = "0.2"
 # `event-stream` 给 crossterm 一个能进 `select!` 的异步键盘源。
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
-# 工具输出的语法高亮（spec §19）。Rust 文法本来就是依赖，所以这里复用那棵树；
-# 整个闭包不引入 C 构建步骤（syntect 的 Oniguruma 那条路是刻意不走的）。
+# 代码块的语法高亮（spec §4）。tree-sitter 是运行时，下面九个文法是十种语言里除 Rust
+# 之外的部分 —— 十个全部硬依赖，没有 feature 门控。每个文法都要编一个 C parser，所以首次
+# 构建比纯 Rust 依赖慢；syntect 的 Oniguruma 那条路是刻意不走的。
 tree-sitter-highlight = "0.27"
 toml = "0.8"
 # 只做读侧的符号提取：把官方的 Rust `tags.scm` 过一遍 tree-sitter，得到
 # `(file, name, kind)`。这个文法要编一个 C parser，所以首次构建比纯 Rust 依赖慢。
 tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
+tree-sitter-bash = "0.25"
+tree-sitter-json = "0.24"
+# toml 要的是名字里带 `-ng` 的那个：原版 `tree-sitter-toml` 停在 2022 年、锁 `^0.20`，
+# 与这里的 0.27 合不到一起。
+tree-sitter-toml-ng = "0.7"
+tree-sitter-html = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-php = "0.24"
+# sql 同理：`tree-sitter-sql` 停在 2021 年、锁 `^0.19.3`，活着的那份名字与语言对不上。
+tree-sitter-sequel = "0.3"
+tree-sitter-python = "0.25"
 url = "2"
+# Markdown 的**解析**（spec §1）：事件流交给它，渲染 —— 列宽、折行、表头、代码块 —— 仍是
+# 我们自己的。`default-features = false` 只留下 5 个纯 Rust 包（自己 + bitflags + memchr
+# + unicase），**不开** `simd`（那会引入 `unsafe`）。
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

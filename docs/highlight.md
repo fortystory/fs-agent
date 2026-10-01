@@ -1,70 +1,86 @@
-# `src/render/highlight.rs`：语法高亮与 diff 着色的现状
+# `src/render/highlight.rs`：代码块的语法高亮，外加一层还没有调用方的 diff
 
-**结论先行：这个模块现在没有生产消费者。** 它是**有意留下的**，不是漏删。这份文档记录它为什么
-还在、什么会让它回来、什么会让它消失——以便将来读代码的人不必重新推一遍。
+**结论先行：语法高亮现在是转录里代码块的高亮提供者。** 渲染器按围栏上那个语言名挑一份文法，
+把这里给出的 `Class` 铺到代码行上（规格见 [`.scratch/markdown-render/spec.md`](../.scratch/markdown-render/spec.md)
+的 §3 与 §4）。
 
-> **状态（2026-09-26 复核）**：仍然没有生产消费者 —— `grep -rn 'highlight::' src/` 除了模块自己
-> 一行都没有，`render/mod.rs` 里只有 `pub mod highlight;`，`pane` / `tui` 都没有调它。这份文档
-> 的正文写的是**它是什么、什么会让它回来**，不是「它已经接上了」。
+> **状态（2026-10-01 复核）**：渲染器里有一处调用点（`highlight_code`），十种语言的文法都已经是
+> 硬依赖。**diff 层仍然没有调用方** —— 它是为工具输出留着的，理由在下面。
 
 ## 它是什么
 
-`src/render/highlight.rs` 提供两层相互独立的着色：
+这个模块提供两层互不查询的着色。**语法层**（`Class` 与 `highlight_code`）回答「这段代码是
+什么语法元素」；**diff 层**（`DiffTag` 与 `diff_tag`）回答「这一行在补丁里是新增、删除、
+hunk 头还是上下文」。两层可以同时成立：一个被删掉的关键字既是关键字、也是一次删除，所以
+调用方把语法样式盖在 diff 样式上，而不是二选一。
 
-- **diff 层**（`DiffTag` / `diff_tag`）：这一行是新增、删除、hunk 头还是上下文？
-- **语法层**（`Class` / `highlight_rust` / `highlight_diff`）：这段代码是什么语法元素？
+语法层跑在 `tree-sitter-highlight` 上。它避开的是 syntect 那条要编 Oniguruma 的 C 路径
+（规格 §19 的 Out of Scope）；代价是十种文法自己各要编一个 C parser，首次构建因此并不比纯
+Rust 依赖快。
 
-两层可以同时成立（一个新增行里也可以有关键字），调用方把 `Class::style()` patch 到
-`DiffTag::style()` 上，而不是二选一。语法层走 `tree-sitter-highlight`（已经是本仓库的依赖；
-注意 `Cargo.toml` 的注释说明 tree-sitter 的 Rust grammar 会编译一个 C parser，所以"纯 Rust
-构建"这句话不要在这里重复）。
+## 谁在用它，怎么用
 
-## 为什么现在没人用
+渲染器是唯一的调用点。围栏块里的整段代码先交给 `highlight_code(语言名, 源码)`，拿回来的是
+**按行**切好的样式片段；渲染器再把这些行折到可用宽度，续行保持代码块那两格缩进。
 
-两次相邻的决定叠加，把它的最后一个调用点删掉了：
+语言认不出、或者那份文法的 query 编不出来时，这个函数交回空值，渲染器就按纯文本画 ——
+**代码不会消失，只是不上色**。
 
-1. **曾经**：TUI 的转录里直接显示工具输出，并用这个模块给输出上色（`src/render/tui.rs`
-   里有一个 `highlighted()` 组合函数，调用 `highlight_diff`）。
-2. **`.scratch/tui-ux/` 的 `grilling：折叠与详情覆盖层的交互契约`（票 02）** 决定：工具输出
-   **不再直接显示**——转录里只留一行调用行，正文进**详情覆盖层**，而详情层显示的是**纯文本**
-   （`── 输出 ──` 分节 + 换行，见 `src/render/tui.rs` 的 `detail_body`）。
-3. 于是 `highlighted()` 被删除（tui-ux 实现的提交 `940cd43`），`highlight_diff` / `ansi_line`
-   再也没有调用者。
+`highlight_rust` 保留成「固定用 Rust 那一份文法」的包装，`highlight_diff` 与 `ansi_line`
+仍然从它拼出来，所以 diff 那一层的行为一个字没变。
 
-现在只有两处引用它：模块自己的 `#[cfg(test)]`，以及 `tests/render_highlight.rs`。
+## 十种语言
 
-## 事实核对（想自己确认时）
+十种语言全是普通依赖，没有 feature 门控。大部分语言的名字、crate 的名字与 Rust 里的常量名
+一一对应，读起来一眼就懂：`rust` 用 `tree-sitter-rust` 的 `HIGHLIGHTS_QUERY`，`json`、`html`
+与 `python` 各用同名的 crate，`typescript` 取 `LANGUAGE_TYPESCRIPT` 而不是 `LANGUAGE_TSX`，
+`php` 取 `LANGUAGE_PHP` 而不是 `LANGUAGE_PHP_ONLY`。
 
-```sh
-# 除模块自身外，src/ 里没有任何调用点：
-grep -rn 'ansi_line\|highlight_rust\|highlight_diff\|Class::\|DiffTag::\|diff_tag' src/ \
-  | grep -v '^src/render/highlight.rs'
-# 空输出 = 确实没有生产消费者。
+三件下次升文法时最省时间的事：
 
-# 模块仍然被导出、仍然参与编译：
-grep -n 'highlight' src/render/mod.rs
-```
+1. **有两个 crate 的常量名是单数**：`bash` 与 `javascript` 导出的是 `HIGHLIGHT_QUERY`，其余
+   八种都是复数 `HIGHLIGHTS_QUERY`。两个 crate 都带同一份 `highlights.scm`，只有 Rust 常量
+   的名字不同；猜错只会在编译期报一个找不到名字的错。
+2. **有两个 crate 的名字和语言对不上**：`toml` 要 `tree-sitter-toml-ng`，因为直觉会去够的
+   `tree-sitter-toml` 停在 2022 年、锁着 `^0.20`，和这里的 0.27 合不到一起；`sql` 要
+   `tree-sitter-sequel`，同样是名字对得上的那个 `tree-sitter-sql` 停在 2021 年。
+3. **每种语言第一次用到才编 query**：每种一个延迟初始化的格子，实测首次编译从 0.05 毫秒
+   （json）到 70 毫秒（php）不等。十份全在启动时算会白付几百毫秒，而大多数会话只用得到
+   Rust 与 json。高亮器本身也按上游的建议复用，按线程存一份。
 
-## 什么会让它回来
+另外两条刻意的取舍。**别名归我们管**：`rs` 就是 `rust`，`py` 就是 `python`，`sh` 与 `shell`
+都是 `bash`，`js` 与 `ts` 同理；那张表只住一处，不散在匹配分支里。`yaml` 不在十种语言里，
+所以**不映射** —— 名单之外的一律按纯文本画。**typescript 的 JSX 那份 query 不拼接**：
+`.tsx` 里的标签不上色，这是知情的取舍（规格 §7）。
 
-- **详情覆盖层里想要语法高亮**：那是把它接回去最自然的地方——`detail_body` 现在是
-  `pane::wrap_text`，换成"先按语言高亮、再按宽度折行"即可。注意详情层的换行是按**显示列**
-  折的（`pane::wrap_text`），高亮返回的是**按行**的 span 列表，接回去时要处理这个口径差。
-- **live 的工具输出预览**：如果将来决定在转录里重新显示输出正文（那会推翻 tui-ux 票 02 的
-  折叠决定），它会再次需要。
+## capture 的覆盖面
 
-## 什么会让它消失
+`CAPTURES` 是这份渲染器认得的 capture 名。查询点到、而表里没有的名字退回纯文本，所以一次
+文法升级弄不坏渲染 —— 它只能让东西不上色。十种文法里只有三处需要专门补：html 的 `tag` 与
+`tag.error`；php 的 `module`、`module.builtin` 与 `tag`；`tree-sitter-sequel` 的
+`conditional`、`field`、`float`、`parameter` 与 `storageclass`。
 
-- **接受"详情层就是纯文本"**：那么语法高亮在这个产品里没有位置，模块连同
-  `tree-sitter-highlight` 依赖一起删掉，`tests/render_highlight.rs` 一并删。
-- 那时要注意：`tree-sitter` / `tree-sitter-rust` **不能一起删**——`src/context/repo_map.rs`
-  在读侧用它们做符号抽取，那是另一条独立的用途。只有 `tree-sitter-highlight` 这一个
-  依赖是这个模块独有的。
+`Class::of` 的前缀映射和这张表同步：`tag.*` 与 `module.*` 归 `Type`，`conditional` 与
+`storageclass` 归 `Keyword`，`float` 归 `Number`，`field` 与 `parameter` 归 `Variable`。
+`tree-sitter-sequel` 还给出一个 `spell`，那是它给「没归类的词」的兜底，**有意**留在 `Plain`：
+那本来就是「不知道是什么」。
 
-## 现在的状态是"暂时不管"
+## diff 层为什么还没有调用方
 
-维护者的决定（2026-09-23）：**留注释、留这份文档、不动代码**。所以：
+TUI 从前直接显示工具输出，并用这一层上色。后来 `.scratch/tui-ux/` 的票 02 决定工具输出
+**不再直接显示**：转录里只留一行调用行，正文进详情覆盖层，而详情层画的是**纯文本** ——
+于是那个组合函数被删掉（提交 `940cd43`），`highlight_diff` 与 `ansi_line` 再也没有调用者。
 
-- 不要因为"没人用"就顺手删它——那是一个需要决定的事，不是清理。
-- 也不要因为它还在就给新代码加调用——详情层显示纯文本是当前的决定。
-- 如果它坏了（例如 tree-sitter 升级导致编译失败），修它的理由是"它仍在编译"，而不是"它在被使用"。
+它还在，是因为**工具输出的高亮**仍然是一件可能回来的事：详情覆盖层想要颜色时，那里是把
+它接回去最自然的地方（详情正文现在是按宽度折的纯文本，改成「先按语言高亮、再按宽度折行」
+即可，注意那次折行是按显示列走的）。如果那时决定「详情层就是纯文本」，这一层与
+`tests/render_highlight.rs` 里 diff 那一半可以一起删掉；但 `tree-sitter` 与
+`tree-sitter-rust` **不能**一起删 —— `src/context/repo_map.rs` 在读侧用它们做符号抽取，
+那是另一条独立用途。
+
+## 想自己确认
+
+要确认语法层真的接上了，看渲染器里挑文法的那一处：`grep -rn highlight_code src/`。要确认
+十种文法都活着，跑 `cargo test --test render_markdown all_ten_grammars`：十种语言各一个最小
+样例，每一种都要求至少拿到一片非 `Plain` 的样式，接错了、常量名写错了、选错了语言都会在
+那里报红。

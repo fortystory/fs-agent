@@ -177,13 +177,18 @@ Status: ready-for-agent
 
 ### §3 对话面板：行缓冲与换行缓存
 
-- 面板持有的是**源行**缓冲：`Block` 展开成未换行的行。**20 000 的上限按源行算**（宽度无关，可复现）；滚动与滚动条另按**显示行**算。
+- 面板持有的是**源行**缓冲：`Block` 展开成未换行的行。**20 000 的上限按源行算**（~~宽度无关，可复现~~ —— **2026-10-01 修正**：源行本身也开始依赖宽度了，见本节末注）；滚动与滚动条另按**显示行**算。
 - 缓存 = 全量换行后的 `Vec<Line>` + **源行 → 显示行起点**索引。
 - **换行口径**：逐字符、一个 CJK 字符 2 列，把带样式的行切开并保留每个 span 的样式（`pane::wrap_line`）。**不用** `Paragraph::line_count`（默认特性下被 unstable 门挡成 `pub(crate)`），**也不开** `unstable-rendered-line-info`。列宽的算术集中在 `src/render/width.rs`（`text_columns` / `char_columns` / `truncate_columns`），转录、header、输入行与指示块共用同一份 —— 已有的 `wrap_take` 只服务无样式字符串，随票 11 删除。
 - **失效**：宽度变化（全量重算）与流式增量（只重算尾部）。新块到达**只增量换行尾部**并追加索引。
 - 缓存**在 `draw` 闭包里按 `frame.area().width` 失效**（不设单独的 resize 分支）。
-- **非 assistant 的消息不再截断**：现在那一支压成单行 + `truncate(text, 500)`，改成**保留换行的多行原样渲染**（不做 Markdown），续行按 speaker 前缀显示宽度缩进。**assistant 的消息本来就是全文 Markdown，不动。**
+- **非 assistant 的消息不再截断**：现在那一支压成单行 + `truncate(text, 500)`，改成**保留换行的多行原样渲染**（不做 Markdown），续行按 speaker 前缀显示宽度缩进（**2026-10-01 修正**：这一半留着，只对非 assistant 成立，见本节末注）。**assistant 的消息本来就是全文 Markdown，~~不动~~**（**2026-10-01 修正**：assistant 的**续行**不再缩进，见本节末注）。
 - 工具输出保持 4 000 字符 preview（`TOOL_PREVIEW`）与现有 `summarize_args`。
+
+> **交棒注记（2026-10-01）**：上面两处由 [`markdown-render/spec.md`](../markdown-render/spec.md) 推翻，两件事各自有落点。
+>
+> - **「宽度无关，可复现」那半句 → 它的 §1。** `markdown::to_lines` 开始收**可用列数**：表格的列宽与超宽代码行的折行都要知道它，所以宽度变化时要**重跑 Markdown 渲染再重新折行**，而不只是重新折行。`Tui` 因此留一份绘制清单（连思考行一起）、按新宽度重放；`Pane::clear` 是那条路的口子。决定与代价记在 [ADR 0008](../../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)。
+> - **「assistant 的消息……不动」与「续行按 speaker 前缀显示宽度缩进」的 assistant 那一半 → 它的 §5。** 回答是一份文档，`[speaker] ` 只引领第一行、其余行顶格（那 11 格把结构整体推右，还吃掉主列约七分之一）；非 assistant 那一半原样保留。assistant 的答案现在由 `pulldown-cmark` 解析后渲染（表格、代码块高亮、列表），不再是「全文原样」。
 
 ### §4 滚动、吸底与鼠标
 

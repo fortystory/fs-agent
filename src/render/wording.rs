@@ -2016,3 +2016,10 @@ pub fn help_sessions() -> String {
      标准输出只放结果，诊断走标准错误。"
         .to_owned()
 }
+
+/// Markdown 里一张图片在终端里的落点。
+///
+/// 终端暂时画不出图（真图渲染要终端图像协议，明确留在 spec 的 Out of Scope 里），
+/// 但「这儿有一张图」得说出来 —— 旧的 `!alt (url)` 里那个 `!` 只是手写扫描器的残留噪声
+/// （spec §6）。
+pub const IMAGE_PLACEHOLDER: &str = "[图片]";

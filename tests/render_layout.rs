@@ -5020,3 +5020,79 @@ fn the_permission_question_describes_the_call_the_way_the_line_does() {
         .expect("确切的那条调用还显示着");
     assert!(description < call, "而确切的那条调用在它后面：{text}");
 }
+
+/// 一行里每一根表格竖线的显示列号 —— 一张表画的还是不是一张表，看这个。
+fn table_bars(row: &str) -> Option<Vec<usize>> {
+    if !row.contains('│') {
+        return None;
+    }
+    let mut bars = Vec::new();
+    let mut column = 0;
+    for ch in row.chars() {
+        if ch == '│' {
+            bars.push(column);
+        }
+        column += fs_agent::render::width::char_columns(ch);
+    }
+    Some(bars)
+}
+
+#[test]
+fn narrowing_the_terminal_relays_a_table_out_by_the_new_width() {
+    // `to_lines` 收宽度之后，源行本身也依赖宽度：表格的列宽是**渲染时**算的，所以窗口
+    // 一变窄，那几行必须按新宽度重排，而不是把一份按旧宽度排好的旧行硬折
+    // （`.scratch/markdown-render/spec.md` §1）。
+    //
+    // 硬折与重排的区别看得见：旧行更宽，折出来的续行是空行，于是分隔线不再紧跟着表头。
+    let mut state = state();
+    state.apply(message(
+        1,
+        "| name | value |\n|---|---|\n| alpha | 1 |\n| b | 22 |",
+        None,
+    ));
+
+    for width in [120, 70] {
+        let rows = screen(width, 24, &mut state);
+        let head = rows
+            .iter()
+            .position(|row| row.contains("name") && row.contains('│'))
+            .unwrap_or_else(|| panic!("{width} 列下没有表头：{rows:?}"));
+        let table = &rows[head..head + 4];
+        assert!(
+            table[1].contains('┼'),
+            "{width} 列：分隔线紧跟表头：{table:?}"
+        );
+        assert!(
+            table[2].contains("alpha") && table[2].contains('│'),
+            "{width} 列：第一条数据行紧跟分隔线：{table:?}"
+        );
+        assert!(
+            table[3].contains("22"),
+            "{width} 列：第二条数据行：{table:?}"
+        );
+        // 数据行的列彼此对得齐 —— 这是表内那张网格在屏幕上仍然成立。
+        let bars: Vec<Vec<usize>> = table.iter().filter_map(|row| table_bars(row)).collect();
+        assert_eq!(bars.len(), 3, "{width} 列：三条行带竖线：{table:?}");
+        assert!(
+            bars[1..].iter().all(|row| row == &bars[1]),
+            "{width} 列：数据行的列对得齐：{bars:?}"
+        );
+    }
+}
+
+#[test]
+fn a_code_block_is_highlighted_within_the_transcript() {
+    // 代码块的语法高亮铺在转录里的样子：`fn` 是关键字那一档，而不是整片代码一个颜色。
+    let mut state = state();
+    state.apply(message(1, "```rust\nfn main() {}\n```", None));
+    let rows = screen(120, 24, &mut state);
+    let code = rows
+        .iter()
+        .position(|row| row.contains("fn main()"))
+        .expect("代码行画出来了");
+    assert!(
+        rows[code].contains("fn main() {}"),
+        "逐字保留：{:?}",
+        rows[code]
+    );
+}

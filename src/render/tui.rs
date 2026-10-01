@@ -471,6 +471,14 @@ pub struct TuiState {
     pane: Pane,
     /// 当前消息正在流的尾巴。
     live: String,
+    /// 已经画进窗格的那些绘制记录，按到达顺序。
+    ///
+    /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）。
+    /// 留着这份清单就是为了那时候按新宽度重放它们。代价是 `Tui` 多持一份块（与 `pane`
+    /// 已经持有的源行同量级）—— 先按「全量重放」实现，简单可靠优先。
+    painted: Vec<Painted>,
+    /// 上面那份块是按多宽的转录内容排的。
+    render_width: u16,
     /// 上一帧画完之后有没有什么东西变了。
     dirty: bool,
     /// 草稿与它的光标。
@@ -1114,6 +1122,15 @@ impl TurnRail {
         self.lines_in_unit = self.lines_in_unit.saturating_sub(dropped);
     }
 
+    /// 丢掉全部条目，好让转录按新的宽度重放一遍（spec §1）。
+    ///
+    /// 单位会随着重放的块重新关出来，所以三个字段一起清。
+    fn clear(&mut self) {
+        self.lines.clear();
+        self.heads.clear();
+        self.lines_in_unit = 0;
+    }
+
     /// 一条来源行属于哪个单位。
     fn unit_of(&self, source: usize) -> usize {
         self.lines
@@ -1126,6 +1143,23 @@ impl TurnRail {
     fn head(&self, unit: usize) -> Option<usize> {
         self.heads.get(unit).copied()
     }
+}
+
+/// 一条已经画进窗格、且能在宽度变化时重放的记录。
+///
+/// 大多数行来自一个 [`Block`]；思考行是唯一的例外 —— 它是渲染器自己的状态（票 02 §1），
+/// 由 `pane.push` / `pane.replace_last` 原地管。宽度一变两者都得回来，所以清单里两种都记
+/// （`.scratch/markdown-render/spec.md` §1）。
+enum Painted {
+    /// 一个定稿的块。
+    Block(Block),
+    /// 还开着的思考行。
+    Thinking { speaker: crate::events::SpeakerId },
+    /// 定稿的思考行；`trace` 是记下来的整段推理，`None` 是合成器那种「没记下来」。
+    Thought {
+        speaker: crate::events::SpeakerId,
+        trace: Option<String>,
+    },
 }
 
 /// 一次进行中的历史重放：组装好的事件流、其中有多少已经铺进转录、以及那产出了多少条
@@ -1154,6 +1188,10 @@ impl TuiState {
             transcript: Transcript::new(),
             pane: Pane::new(),
             live: String::new(),
+            painted: Vec::new(),
+            // 第一帧之前没有真正的宽度；先用共享渲染那个缺省把行排出来，首帧一画出来就会
+            // 发现宽度不同并按真宽度重放（spec §1）。
+            render_width: SHARED_RENDER_WIDTH,
             dirty: true,
             editor: Input::new(),
             catalog: Vec::new(),
@@ -1329,22 +1367,82 @@ impl TuiState {
             self.panel.observe(&block);
             // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
             self.todo.observe(&block);
-            let lines = paint_block(&block, &mut self.colors);
-            produced += lines.len();
-            for rendered in lines {
-                let link = rendered.link;
-                self.pane.push(rendered.line);
-                self.links.push_back(link);
-                self.turn_rail.push_line(is_user_message(&block));
-                self.prune_links();
-            }
-            // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
-            // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。
-            if is_boundary(&block, self.discussion()) {
-                self.turn_rail.close_unit();
-            }
+            produced += self.push_block(block, self.render_width);
         }
         produced
+    }
+
+    /// 把一个块排成行、推进窗格，并**记住它**，好在宽度变化时重放（spec §1）。
+    fn push_block(&mut self, block: Block, width: u16) -> usize {
+        let produced = self.emit_block(&block, width);
+        if produced > 0 {
+            // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。
+            self.painted.push(Painted::Block(block));
+        }
+        produced
+    }
+
+    /// 只把块排成行推进窗格，不记它 —— 到达时与重放时走的是同一条路。
+    fn emit_block(&mut self, block: &Block, width: u16) -> usize {
+        let lines = paint_block(block, &mut self.colors, width);
+        let produced = lines.len();
+        for rendered in lines {
+            let link = rendered.link;
+            self.pane.push(rendered.line);
+            self.links.push_back(link);
+            self.turn_rail.push_line(is_user_message(block));
+            self.prune_links();
+        }
+        // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
+        // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。
+        if is_boundary(block, self.discussion()) {
+            self.turn_rail.close_unit();
+        }
+        produced
+    }
+
+    /// 转录内容的宽度变了：清空窗格，按新宽度把绘制记录整批重放一遍（spec §1）。
+    ///
+    /// 宽度一变就不能只重新折行：表格的列宽与超宽代码行的折行是**渲染时**定下的，
+    /// 那些源行本身已经依赖宽度了。
+    fn rerender_if_width_changed(&mut self, width: u16) {
+        if width == self.render_width {
+            return;
+        }
+        self.render_width = width;
+        if self.painted.is_empty() {
+            return;
+        }
+        self.pane.clear();
+        self.links.clear();
+        self.turn_rail.clear();
+        let painted = std::mem::take(&mut self.painted);
+        for item in &painted {
+            self.emit_painted(item, width);
+        }
+        self.painted = painted;
+        self.dirty = true;
+    }
+
+    /// 重放一条绘制记录。
+    fn emit_painted(&mut self, painted: &Painted, width: u16) -> usize {
+        match painted {
+            Painted::Block(block) => self.emit_block(block, width),
+            Painted::Thinking { speaker } => {
+                let line = self.thinking_in_progress_line(speaker);
+                self.pane.push(line);
+                self.links.push_back(None);
+                self.prune_links();
+                1
+            }
+            Painted::Thought { speaker, trace } => {
+                let (line, detail) = self.thinking_settled_line(speaker, trace.clone());
+                self.pane.push(line);
+                self.links.push_back(Some(detail));
+                self.prune_links();
+                1
+            }
+        }
     }
 
     /// 这个会话数的是**轮**而不是回合。
@@ -1476,24 +1574,57 @@ impl TuiState {
             return false;
         }
         self.thinking_open = true;
-        self.thinking_speaker = speaker;
+        self.thinking_speaker = speaker.clone();
         self.reasoning.clear();
         // 名字是 `speaker_label`，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
         // （票 07 §2）。
-        let name = wording::speaker_label(&self.thinking_speaker);
-        let color = self.colors.of(&self.thinking_speaker);
-        let name_style = Style::default().fg(color);
-        let line = Line::from(vec![
-            Span::styled(format!("{name} "), name_style),
+        let line = self.thinking_in_progress_line(&speaker);
+        self.pane.push(line);
+        self.links.push_back(None);
+        self.prune_links();
+        // 记进重放清单：宽度变化时它也要跟着回来（spec §1）。
+        self.painted.push(Painted::Thinking { speaker });
+        true
+    }
+
+    /// 思考开始那一行：名字加「正在思考」。重放时按同一份构造重建。
+    fn thinking_in_progress_line(&mut self, speaker: &crate::events::SpeakerId) -> Line<'static> {
+        let name = wording::speaker_label(speaker);
+        let color = self.colors.of(speaker);
+        Line::from(vec![
+            Span::styled(format!("{name} "), Style::default().fg(color)),
             Span::styled(
                 wording::thinking_in_progress(),
                 Style::default().fg(Color::DarkGray),
             ),
+        ])
+    }
+
+    /// 思考落定那一行，以及它通向详情的入口。重放时按同一份构造重建。
+    fn thinking_settled_line(
+        &mut self,
+        speaker: &crate::events::SpeakerId,
+        trace: Option<String>,
+    ) -> (Line<'static>, Detail) {
+        let name = wording::speaker_label(speaker);
+        let color = self.colors.of(speaker);
+        // 名字后面那个 `▸` 说的是这行可以打开 —— 它跟在发言者后面，这样每一行仍然以
+        // 「谁在说话」开头（票 03 §Answer，2026-09-23 修正）。
+        let line = Line::from(vec![
+            Span::styled(format!("{name} "), Style::default().fg(color)),
+            Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                wording::thinking_finished(),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]);
-        self.pane.push(line);
-        self.links.push_back(None);
-        self.prune_links();
-        true
+        let detail = Detail {
+            // 覆盖层的标题就是被点那一行自己的文字（票 02 §4）。
+            title: line_text(&line),
+            color,
+            kind: DetailKind::Thinking { text: trace },
+        };
+        (line, detail)
     }
 
     /// 把敞开的那条思考行就地冻住：正文的第一个增量意味着模型已经不思考、开始作答了，
@@ -1518,29 +1649,22 @@ impl TuiState {
         self.reasoning.clear();
         self.thinking_open = false;
         self.thinking_done = true;
-        let name = wording::speaker_label(&self.thinking_speaker);
-        let color = self.colors.of(&self.thinking_speaker);
-        let name_style = Style::default().fg(color);
-        // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。名字后面那个
-        // `▸` 说的是这行可以打开 —— 它跟在发言者后面，这样每一行仍然以「谁在说话」开头
-        // （票 03 §Answer，2026-09-23 修正）。
-        let line = Line::from(vec![
-            Span::styled(format!("{name} "), name_style),
-            Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                wording::thinking_finished(),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-        let detail = Detail {
-            // 覆盖层的标题就是被点那一行自己的文字（票 02 §4）。
-            title: line_text(&line),
-            color,
-            kind: DetailKind::Thinking { text },
-        };
+        // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
+        let speaker = self.thinking_speaker.clone();
+        let (line, detail) = self.thinking_settled_line(&speaker, text.clone());
         self.pane.replace_last(line);
         if let Some(link) = self.links.back_mut() {
             *link = Some(detail);
+        }
+        // 重放清单里那一条也从「开着」换成「定稿」，连它的详情一起 —— 否则一次宽度变化
+        // 会把这条行变回进行中，或者把它的 trace 丢掉（spec §1）。
+        let settled = Painted::Thought {
+            speaker: speaker.clone(),
+            trace: text,
+        };
+        match self.painted.last_mut() {
+            Some(slot @ Painted::Thinking { .. }) => *slot = settled,
+            _ => self.painted.push(settled),
         }
     }
 
@@ -3107,6 +3231,8 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
 /// （spec §1、§3、§4）。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let text_area = panes.transcript_text();
+    // 宽度变了要按新宽度重排那些宽度敏感的块，而不只是重新折行（spec §1）。
+    state.rerender_if_width_changed(text_area.width);
     let rows = state
         .pane
         .view(text_area.width, text_area.height, &state.live);
@@ -3542,12 +3668,42 @@ fn menu_row(
     ])
 }
 
-/// 把一条消息的那些行归到它的发言者名下：标签引领第一行，其余的都挂在它正文下面缩进的位置，
-/// 于是一条折行的或多行的消息读起来是一次发言（spec §3）。
+/// 把 assistant 的答案归到它的发言者名下：`[name] ` 只引领**第一行**，其余行顶格
+/// （spec §5）。
 ///
-/// 名字拿发言者自己的颜色，正文保持这一行的 —— 这个分工就是全部的上色规矩：名字做标识，正文
-/// 的意思由它的严重度说了算（票 07 §2）。
-fn attribute(
+/// 回答是一份文档，结构由 Markdown 自己给（标题、列表、代码块），那 11 格前导会把它整体
+/// 推右、又吃掉主列约七分之一。零前导就是零前导 —— 不是一串空 span。
+fn attribute_document(
+    speaker: &crate::events::SpeakerId,
+    rows: Vec<Line<'static>>,
+    colors: &mut SpeakerColors,
+) -> Vec<Line<'static>> {
+    let prefix = format!("{} ", speaker_label(speaker));
+    let name_style = name_style(speaker, colors);
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let mut spans = Vec::new();
+            if index == 0 {
+                spans.push(Span::styled(prefix.clone(), name_style));
+            }
+            spans.extend(row.spans);
+            Line {
+                spans,
+                style: row.style,
+                alignment: row.alignment,
+            }
+        })
+        .collect()
+}
+
+/// 把一次**发言**归到它的发言者名下：标签引领第一行，其余行按 `[name] ` 的显示宽度缩进，
+/// 于是一条折行的或多行的消息读起来是**一次**发言（spec §3）。
+///
+/// 用户自己的输入与非 assistant 的系统行走这条路：它们的正文里没有任何结构可依赖，
+/// 缩进就是那点结构（spec §5）。名字拿发言者自己的颜色，正文保持这一行的 —— 这个分工
+/// 就是全部的上色规矩：名字做标识，正文的意思由它的严重度说了算（票 07 §2）。
+fn attribute_speech(
     speaker: &crate::events::SpeakerId,
     rows: Vec<Line<'static>>,
     colors: &mut SpeakerColors,
@@ -3572,6 +3728,13 @@ fn attribute(
             }
         })
         .collect()
+}
+
+/// 一个发言者的 `[name] ` 前缀在终端上占多少列。
+///
+/// 量的是**列**，中文名字按两列算 —— 与前缀本身的显示宽度同一把尺子。
+fn prefix_columns(speaker: &crate::events::SpeakerId) -> u16 {
+    format!("{} ", speaker_label(speaker)).as_str().cell_width()
 }
 
 /// 一个发言者的 `[name]` 前缀用什么样式画。
@@ -3621,6 +3784,12 @@ impl From<Line<'static>> for RenderedLine {
     }
 }
 
+/// 共享渲染（[`render_block`]）没有窗格宽度可依时的排版宽度。
+///
+/// TUI 自己把转录内容的宽度传给 [`paint_block`]；这个缺省只服务那些没有窗格的调用方 ——
+/// 只关心文字的测试与任何别处的共享渲染。宽度敏感的块（表格、代码块）因此按这个宽度排版。
+const SHARED_RENDER_WIDTH: u16 = 80;
+
 /// 把一个定稿的块变成带样式的终端行。
 ///
 /// 这是共享呈现层的 TUI 那一半：块已经被 [`Transcript`] 决定过一次，这里只发生绘制。
@@ -3628,7 +3797,7 @@ impl From<Line<'static>> for RenderedLine {
 /// `colors` 是转录的名字调色板。手上没有名册的调用方 —— `plain` 的那一半渲染，以及只关心文字
 /// 的测试 —— 通过 [`render_block_uncoloured`] 传一个空的进来，于是每个名字都画成叙述灰。
 pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
-    paint_block(block, colors)
+    paint_block(block, colors, SHARED_RENDER_WIDTH)
         .into_iter()
         .map(|rendered| rendered.line)
         .collect()
@@ -3641,7 +3810,10 @@ pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
 }
 
 /// 画一个块，保留每一行的链接。
-fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
+///
+/// `width` 是转录内容的可用列数：Markdown 里的表格与超宽代码行按它排版
+/// （`.scratch/markdown-render/spec.md` §1）。
+fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<RenderedLine> {
     match block {
         Block::Message {
             speaker,
@@ -3654,15 +3826,20 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
             if text.is_empty() {
                 return Vec::new();
             }
-            // 回答按 Markdown 以全亮度渲染；只有发言者标签上色。
-            attribute(speaker, super::markdown::to_lines(text), colors)
+            // 回答按 Markdown 以全亮度渲染；只有发言者标签上色。答案是一份文档，所以续行
+            // 顶格（spec §5）。
+            //
+            // 前缀占的列要从**正文的预算**里扣掉：第一行是 `[name] ` 加上按这个预算排出来
+            // 的内容，两者相加正好是转录的宽度，不会溢出到折行。
+            let inner = width.saturating_sub(prefix_columns(speaker)).max(1);
+            attribute_document(speaker, super::markdown::to_lines(text, inner), colors)
                 .into_iter()
                 .map(RenderedLine::from)
                 .collect()
         }
         // 用户自己的输入 —— 以及非 assistant 的系统行 —— 按写下来的样子显示：每一行都在，
         // 什么都不略去，也不上 Markdown，因为这不是一份文档。续行与第一行正文对齐（spec §3）。
-        Block::Message { speaker, text, .. } => attribute(
+        Block::Message { speaker, text, .. } => attribute_speech(
             speaker,
             text.split('\n')
                 .map(|raw| Line::from(raw.to_owned()))

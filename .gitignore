@@ -2,6 +2,10 @@
 debug
 target
 
+# 沙箱里 `~/.cargo/registry` 是只读的，所以构建要用一个工作区内的 CARGO_HOME
+# （`CARGO_HOME=$PWD/.cargo-home cargo build`）：里面是索引与解包出来的依赖，可再生。
+.cargo-home/
+
 # rustfmt 生成的备份文件
 **/*.rs.bk
 

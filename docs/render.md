@@ -43,8 +43,15 @@
   重算，**从不**从结果文本里解析 —— 结果只是一行回执。左栏的 `todo` 页是同一个函数的另
   一位读者（见「外壳」）。
 
-`[speaker]` 前缀是**人**这一侧的生成器，刻意与投影的模型侧前缀分开（spec §5）：人这一侧
-每行都重复，模型那一侧每个合并块只写一次。
+`[speaker]` 前缀是**人**这一侧的生成器，刻意与投影的模型侧前缀分开（spec §5）：模型那一侧
+每个合并块只写一次，而人这一侧现在**分叉** —— assistant 的答案是一份文档，`[name] ` 只引领
+第一行、其余行顶格；用户输入与非 assistant 的系统行是「一次发言」，续行仍按 `[name] ` 的
+显示宽度缩进（`.scratch/markdown-render/spec.md` §5）。
+
+Markdown 的渲染（`render::markdown::to_lines`）收**可用列数**：表格的列宽与超宽代码行的
+折行都要知道它，所以**源行本身也不再宽度无关** —— 宽度变化时 TUI 按新宽度重跑 Markdown 并
+重放全部块，而不是只重新折行（`.scratch/markdown-render/spec.md` §1、
+[ADR 0008](adr/0008-markdown-parsing-by-pulldown-cmark.md)）。
 
 ## 严重度
 
@@ -55,22 +62,27 @@
 
 ## 高亮
 
-> **状态（2026-09-30 复核）**：这一节讲的是模块**本身**，而它现在**没有生产消费者**——
-> TUI 的工具输出改成以纯文本进详情覆盖层之后（`.scratch/tui-ux/` 票 02），最后一个调用方没了。
-> 为什么留着它、什么会让它回来或走掉，见 [`highlight.md`](highlight.md)。
+> **状态（2026-10-01 复核）**：语法层有生产消费者了 —— 转录里代码块的提供者，
+> `render::markdown` 按围栏的 info string 挑文法（`.scratch/markdown-render/spec.md` §3、§4）。
+> **diff 层仍然没有调用方**，它是为工具输出留着的。十种语言、延迟编译、crate 名与常量名的
+> 那三个坑，见 [`highlight.md`](highlight.md)。
 
 `render::highlight` 是两层，两者从不互相问话：
 
-- **diff 层**（`diff_tag`）说的是这一行在补丁里是什么：新增、删除、hunk 头还是上下文；
-- **语法层**（`highlight_rust`）说的是这段代码是什么语法元素。
+- **语法层**（`highlight_code`）说的是这段代码是什么语法元素；
+- **diff 层**（`diff_tag`）说的是这一行在补丁里是什么：新增、删除、hunk 头还是上下文。
 
 `highlight_diff` 把两者合起来：diff 标记被剥掉，剩下的代码当作一整份文档来高亮（所以多行
-注释或字符串照样能解析），然后标记被贴回去。TUI 里语法类是前景、diff 标签是背景，于是一个
+注释或字符串照样能解析），然后标记被贴回去。两层的样式一个当前景、一个当背景，于是一个
 新增的关键字两个身份都占。
 
-这套语法就是仓库地图已经依赖的那个 Rust `tree-sitter`，经由 `tree-sitter-highlight` 使用。
-它避开的是 syntect 的 Oniguruma 那条 C 路径（spec §19，Out of Scope）；但 tree-sitter 的 Rust
-文法自己也要编一个 C parser，所以首次构建并不比纯 Rust 依赖快（见 `Cargo.toml` 那两条注释）。
+代码块里的那一段是「先高亮、再按宽度折行」：`highlight_code` 交回的是**按行**的 span 列表，
+渲染器再把每一行折到可用宽度、续行保持那两格缩进。语言认不出、或文法构建失败时退纯文本 ——
+**代码不消失，只是不上色**。
+
+这套语法是 `tree-sitter` 经由 `tree-sitter-highlight` 使用。它避开的是 syntect 的 Oniguruma
+那条 C 路径（spec §19，Out of Scope）；但十种文法各自都要编一个 C parser，所以首次构建并不
+比纯 Rust 依赖快（见 `Cargo.toml` 那一段注释）。
 
 ## 外壳
 

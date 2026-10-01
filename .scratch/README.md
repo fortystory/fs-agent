@@ -7,7 +7,7 @@
 - **票**在 `issues/NN-<slug>.md`，**一票一个文件**，每票开头有 `Type:` 与 `Status:`（`ready-for-agent` / `done`；wayfinder 的决策票是 `claimed` / `resolved`），`Blocked by:` 记阻塞边；
 - **顺序**：blockers 先做；每票自包含，所以做完一票就可以把它的 context 丢掉。
 
-下表由 `ls` / `grep '^Status:'` / `head -1` 核过（2026-09-26；`todo-and-modes` 的票数与状态在这一轮收尾时改过一次；`language-migration` 那一行按 2026-09-27 两张票的落地更新过，2026-09-30 补票 03、并把票 04 记成 `ready-for-agent`；2026-10-01 `sandbox` 由 seed 折成 spec、新增 `workspace-mode` 种子，同日五张票落地并改成 `5/5 done`；同日 `workspace-mode` 的种子也折成 spec、拆出两张票并双双落地；同日 TUI 外壳做了减法，`tui-chrome` 的八张票一次落地 —— 第一轮六张（去外框、虚线化、详情居中、按位置滚动），随后一轮真机反馈又补了两张（左栏身份下移一行、横线不再截断竖线））。
+下表由 `ls` / `grep '^Status:'` / `head -1` 核过（2026-09-26；`todo-and-modes` 的票数与状态在这一轮收尾时改过一次；`language-migration` 那一行按 2026-09-27 两张票的落地更新过，2026-09-30 补票 03、并把票 04 记成 `ready-for-agent`；2026-10-01 `sandbox` 由 seed 折成 spec、新增 `workspace-mode` 种子，同日五张票落地并改成 `5/5 done`；同日 `workspace-mode` 的种子也折成 spec、拆出两张票并双双落地；同日 TUI 外壳做了减法，`tui-chrome` 的八张票一次落地 —— 第一轮六张（去外框、虚线化、详情居中、按位置滚动），随后一轮真机反馈又补了两张（左栏身份下移一行、横线不再截断竖线）；2026-10-01 新增 `markdown-render`——一次 `/ask-matt` → `/research` ×2 → `/grilling` 的会话，spec 与七张票同日落地文件，紧接着同日落地实现（01–06 是代码、07 是文档收口，全部 `done`）。
 
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
@@ -26,6 +26,7 @@
 | [`workspace-mode/`](workspace-mode/spec.md) | spec | 第四档权限模式 `workspace`：区内自动、区外要问，外加被沙箱拒之后的一次升级批准（[ADR 0007](../docs/adr/0007-workspace-permission-mode.md)）—— 2026-10-01 由 seed 折成 spec、同日两张票落地；决策地图在 [`docs/permissions.md`](../docs/permissions.md)，真机清单在 [`docs/tui-manual-checklist.md`](../docs/tui-manual-checklist.md) ⑲ | 2/2 done |
 | [`docs-tidy/`](docs-tidy/spec.md) | spec | 文档整理：索引、陈旧数字、孤儿文档 + 各图的交棒补记（本轮） | 4/4 done |
 | [`language-migration/`](language-migration/spec.md) | spec | 语言迁移：散文一律中文（[ADR 0004](../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)）—— 它那半句「模型可见 / 进流的文本留英文」已由 [ADR 0005](../docs/adr/0005-model-visible-text-in-chinese.md)（2026-09-30）推翻：模型可见与进流的**散文**也走中文，英文只留给标识符、schema 值与协议标记；注释、docs、测试断言消息、只给人看的错误文本全翻完，棘轮与数字已收到实测值；ADR 那一批（小标题 + 行话夹注 + `docs/adr` 护栏）于 2026-09-30 补收（票 03） | 3 done + 1 ready-for-agent（票 04：`.scratch` 的英文小标题中文化） |
+| [`markdown-render/`](markdown-render/spec.md) | spec | TUI 里的 Markdown：解析交给 `pulldown-cmark`、渲染仍由我们自己写 —— 表格从「join 竖线」变成真网格、代码块接回 tree-sitter 高亮并扩到 10 种语言、assistant 续行不再缩进（[ADR 0008](../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)；两份一手调研在目录里） | 7/7 done |
 
 数法：`ls .scratch/*/issues/*.md | wc -l` 与 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`。**`resolved` 是 wayfinder 决策票的收尾状态，`done` 是实现票的** —— 同一个 feature 里两种都可能出现（图走完折成 spec 之后接实现票）。
 

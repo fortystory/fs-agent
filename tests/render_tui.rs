@@ -659,15 +659,59 @@ fn a_message_continuation_indents_by_the_label_display_width() {
     // 中文标签按字符数算比按列数算窄（`[用户]` 是 4 个字符、6 列），
     // 所以按 `chars().count()` 缩进会把第二行放到第一行
     // 左边两列。缩进必须量列。
+    //
+    // 走这条路的是**一次发言**（用户输入与非 assistant 的系统行）；assistant 的答案
+    // 是一份文档，续行顶格（spec §5）。
     let lines = render_block_uncoloured(&Block::Message {
         speaker: SpeakerId::User,
-        role: Role::Assistant,
+        role: Role::User,
         text: "one\ntwo".to_owned(),
         reasoning: None,
     });
     let prefix = lines[0].spans[0].content.as_ref().cell_width() as usize;
     let indent = lines[1].spans[0].content.as_ref().cell_width() as usize;
     assert_eq!(indent, prefix, "续行对齐在第一行正文的下面");
+}
+
+#[test]
+fn the_answers_continuation_starts_at_the_left_edge() {
+    // 回答是一份文档，结构由 Markdown 自己给（标题、列表、代码块）；`[name] ` 那 11 格
+    // 前缀会把它整体推右、又吃掉主列约七分之一（spec §5）。
+    let lines = render_block_uncoloured(&Block::Message {
+        speaker: kimi(),
+        role: Role::Assistant,
+        text: "# 标题\n\n正文\n第二行".to_owned(),
+        reasoning: None,
+    });
+    assert!(lines.len() >= 3, "多行答案：{lines:?}");
+    for line in &lines[1..] {
+        assert!(
+            line.spans
+                .first()
+                .is_none_or(|span| !span.content.starts_with(' ')),
+            "除第一行外都顶格：{line:?}"
+        );
+    }
+    assert!(
+        lines[0].spans[0].content.starts_with('['),
+        "第一行仍然由 `[name] ` 引领：{:?}",
+        lines[0]
+    );
+}
+
+#[test]
+fn a_single_line_answer_keeps_the_same_speaker_prefix() {
+    // 边界：单行答案的输出与今天逐字相同 —— 变的只有续行。
+    let lines = render_block_uncoloured(&Block::Message {
+        speaker: kimi(),
+        role: Role::Assistant,
+        text: "正文".to_owned(),
+        reasoning: None,
+    });
+    assert_eq!(lines.len(), 1);
+    let lead = lines[0].spans[0].content.as_ref();
+    assert!(lead.starts_with('[') && lead.ends_with(' '), "{lead:?}");
+    assert_eq!(lines[0].spans[1].content.as_ref(), "正文");
 }
 
 #[test]

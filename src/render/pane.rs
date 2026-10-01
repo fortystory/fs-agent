@@ -98,6 +98,19 @@ impl Pane {
         }
     }
 
+    /// 清空来源行，好按**新的宽度**重放它们（`.scratch/markdown-render/spec.md` §1）。
+    ///
+    /// 宽度变化时要走这条而不是只重新折行：一条来源行本身现在就是按宽度排出来的（表格的
+    /// 列宽、超宽代码行的折行），所以它们得整批重排。视口的**意图**留着 —— `follow`、
+    /// `holding`，以及视口所在的那条来源行 —— 重放之后下一帧 `view` 会照着它重新折行。
+    pub fn clear(&mut self) {
+        self.lines.clear();
+        self.starts.clear();
+        self.wrapped.clear();
+        self.wrapped_sources = 0;
+        self.width = 0;
+    }
+
     /// 一个显示行属于哪条来源行，如果有的话。
     ///
     /// 一次点击就是这样把屏幕行变回块的：窗格数的是显示行，而一次点击能打开的每样东西都
@@ -262,8 +275,13 @@ impl Pane {
         self.wrap_pending();
         if !self.follow {
             // 每一个显示行都动了，所以行号现在指的是别的东西；一次重新折行之后活下来的
-            // 是来源行（spec §4）。
-            self.top = self.starts.get(self.top_source).copied().unwrap_or(0);
+            // 是来源行（spec §4）。来源行被整批换掉时（`clear` 之后的重放）它可能已经
+            // 不在了，那就留在原地，让 `view` 去夹。
+            self.top = self
+                .starts
+                .get(self.top_source)
+                .copied()
+                .unwrap_or(self.top);
         }
     }
 
@@ -370,7 +388,8 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<Line<'static>> {
 /// 待在一列宽的窗格里照样溢出；折行做不了更好，它只需要一直往前走。
 ///
 /// 续行从第零列起 —— 窗格是一份日志，缩进会主张一种折行后的文字并没有的结构。
-fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+/// Markdown 渲染器的表格单元格复用它（那里的续行同样从第零列起）。
+pub(crate) fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -403,7 +422,7 @@ fn finish(template: &Line<'static>, spans: Vec<Span<'static>>) -> Line<'static> 
 
 /// 追加一个字符，样式相同时延长最后一个 span，好让一个折出来的行每一段样式一个 span，
 /// 而不是每个字符一个。
-fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
+pub(crate) fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
     match spans.last_mut() {
         Some(last) if last.style == style => last.content.to_mut().push(ch),
         _ => spans.push(Span::styled(ch.to_string(), style)),
