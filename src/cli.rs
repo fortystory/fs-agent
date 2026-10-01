@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use ratatui::buffer::CellWidth;
 
-use crate::agent::replay;
+use crate::agent::{replay, CancelSignal};
 use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
 use crate::events::{
     read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage,
@@ -684,7 +684,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         }
     };
 
-    let outcome = run_discussion(&mut harness, &mut events, &question).await;
+    let mut quit = ExitRequest::default();
+    let outcome = run_discussion(&mut harness, &mut events, &question, &mut quit).await;
     harness.shutdown().await;
 
     // 这行在 alt screen 恢复之后打印，因为 TUI 的转录活不过进程：用户在屏幕上漏掉的东西，会话 id
@@ -700,11 +701,11 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
                 render::wording::discussion_replay(stored.id.as_str())
             );
             // 整场失败掉的讨论是一次失败；被取消的那场正是用户要的，如同交互式会话里被取消的一个回
-            // 合（spec §6）。
+            // 合（spec §6）。举手退出（`Quit`）走 130，与交互式那条路同一个判定。
             if outcome.reason == StopReason::Error {
                 ExitCode::FAILURE
             } else {
-                ExitCode::SUCCESS
+                exit_code_after(quit.requested())
             }
         }
         Err(error) => {
@@ -906,6 +907,7 @@ async fn discuss_in_session(
     events: &mut ConsoleEvents,
     config: &Config,
     asked: String,
+    quit: &mut ExitRequest,
 ) -> Result<(), crate::Error> {
     let Some(roster) = config.discussion.clone() else {
         harness.notice(&format!(
@@ -968,6 +970,7 @@ async fn discuss_in_session(
     // 模式句柄随行，理由与取消信号相同：那个 run future 借走了 harness，而这个手势无论如何必须够
     // 得到策略。
     let modes = harness.mode_cycle();
+    // 同上：`Quit` 只记请求、让这场讨论拿到收尾，130 由 `interactive_loop` 兑现。
     // 这个 future 在它运行的整段时间里借走 harness，所以它自成一个作用域：下面的通告要把 harness
     // 拿回来。
     let outcome = {
@@ -977,19 +980,14 @@ async fn discuss_in_session(
             tokio::select! {
                 result = &mut run => break result?,
                 event = events.recv() => match event {
-                    Some(FrontEndEvent::Cancel) => {
-                        if signal.is_cancelled() {
-                            std::process::exit(130);
-                        }
-                        signal.cancel();
-                    }
-                    // 输入结束或显式退出让讨论像被取消一样落下来，所以流仍然得到它的收尾。
-                    Some(FrontEndEvent::Quit) | None => signal.cancel(),
                     // 模式是权限门每次调用都读的一个值，所以这次按键立刻生效、哪怕是在讨论中途：句
                     // 柄之所以存在，是因为 run future 借走了 harness（spec §12）。
                     Some(FrontEndEvent::CycleMode) => {
                         modes.cycle();
                     }
+                    Some(event) => quit.apply(&event, &signal),
+                    // 输入结束让讨论像被取消一样落下来，所以流仍然得到它的收尾。
+                    None => signal.cancel(),
                 },
             }
         }
@@ -1004,11 +1002,13 @@ async fn discuss_in_session(
 /// 驱动一场讨论，同时仍然盯着取消手势。
 ///
 /// 形状与 [`run_one_turn`] 相同，理由也相同：讨论占着会话，所以循环没法自己读键盘，改为监听手势。
-/// 在取消已经举起时再按一次会把进程按下去 —— 流仍然得到它的收尾，因为第一次按键已经要了它。
+/// `Quit` 同样只是「取消 + 记账」，进程的收尾与退出码归调用方
+/// （`.scratch/exit-gesture/spec.md` §3）。
 async fn run_discussion(
     harness: &mut DiscussionHarness,
     events: &mut ConsoleEvents,
     question: &str,
+    quit: &mut ExitRequest,
 ) -> Result<crate::agent::DiscussionOutcome, crate::Error> {
     let signal = harness.cancel_signal();
     let modes = harness.mode_cycle();
@@ -1017,18 +1017,13 @@ async fn run_discussion(
         tokio::select! {
             result = &mut run => return result,
             event = events.recv() => match event {
-                Some(FrontEndEvent::Cancel) => {
-                    if signal.is_cancelled() {
-                        std::process::exit(130);
-                    }
-                    signal.cancel();
-                }
-                // 输入结束或显式退出让讨论像被取消一样落下来，所以流仍然得到它的收尾。
-                Some(FrontEndEvent::Quit) | None => signal.cancel(),
                 // 一个策略盖住三位参与者，所以这与它在别处的是同一个手势（spec §12）。
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
                 }
+                Some(event) => quit.apply(&event, &signal),
+                // 输入结束让讨论像被取消一样落下来，所以流仍然得到它的收尾。
+                None => signal.cancel(),
             },
         }
     }
@@ -1070,6 +1065,9 @@ async fn interactive_loop(
     // 「已经有一个 loop 在跑」那条边界读的状态。循环体是同步跑完的，所以正常路径上不可能在它
     // 跑着的时候再收到一次提交 —— 票 06 让输入区在这段时间里禁言，这条状态正是那件事的名字。
     let mut loop_running = false;
+    // 退出账本：一次运行中途有人举手退出时，回合先收尾，码最后一起兑现
+    // （`.scratch/exit-gesture/spec.md` §3）。
+    let mut quit = ExitRequest::default();
 
     // 恢复（§10）。只对**重新打开**的会话做，而且只对认领过目标的那些：普通交互会话的
     // `--continue` 行为一个字不变。
@@ -1086,11 +1084,21 @@ async fn interactive_loop(
                         &name,
                     )));
                     console.set_running(true);
-                    if let Err(message) =
-                        run_goal_loop(harness, console, events, goals, &name, &mut loop_running)
-                            .await
+                    if let Err(message) = run_goal_loop(
+                        harness,
+                        console,
+                        events,
+                        goals,
+                        &name,
+                        &mut loop_running,
+                        &mut quit,
+                    )
+                    .await
                     {
                         harness.notice(&render::wording::fs_agent(&message));
+                    }
+                    if quit.requested() {
+                        return quit.code();
                     }
                 }
             }
@@ -1151,7 +1159,8 @@ async fn interactive_loop(
                         "fs-agent: {}",
                         render::wording::skill_started(name)
                     ));
-                    if let Err(error) = run_one_turn(harness, events, TurnStart::Skill(name)).await
+                    if let Err(error) =
+                        run_one_turn(harness, events, TurnStart::Skill(name), &mut quit).await
                     {
                         harness.notice(&format!(
                             "fs-agent: {}",
@@ -1169,7 +1178,7 @@ async fn interactive_loop(
                         render::wording::skill_loaded(name)
                     ));
                     if let Err(error) =
-                        run_one_turn(harness, events, TurnStart::Prompt(&task)).await
+                        run_one_turn(harness, events, TurnStart::Prompt(&task), &mut quit).await
                     {
                         harness.notice(&format!(
                             "fs-agent: {}",
@@ -1181,7 +1190,9 @@ async fn interactive_loop(
             // `/discuss [问题]`：在**当前会话的流上**的一场讨论（spec §15）。讨论者是这场会话的兄
             // 弟，所以继承它的上下文，并把轮次追加到它的日志上；之后用户回到提示符前。
             Submission::Discuss(question) => {
-                if let Err(error) = discuss_in_session(harness, events, config, question).await {
+                if let Err(error) =
+                    discuss_in_session(harness, events, config, question, &mut quit).await
+                {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
@@ -1220,6 +1231,7 @@ async fn interactive_loop(
                             goals,
                             &name,
                             &mut loop_running,
+                            &mut quit,
                         )
                         .await;
                         result.err().unwrap_or_default()
@@ -1231,13 +1243,20 @@ async fn interactive_loop(
             }
             // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
             Submission::Prompt(text) => {
-                if let Err(error) = run_one_turn(harness, events, TurnStart::Prompt(text)).await {
+                if let Err(error) =
+                    run_one_turn(harness, events, TurnStart::Prompt(text), &mut quit).await
+                {
                     harness.notice(&format!(
                         "fs-agent: {}",
                         render::wording::error_report(&error)
                     ));
                 }
             }
+        }
+        // 一次运行中途有人举手退出：那个回合（或那场讨论、那趟目标循环）已经拿到它的收尾，
+        // 现在把码兑现 —— 于是渲染器与终端的收尾都会跑（spec §3）。
+        if quit.requested() {
+            return quit.code();
         }
     }
 }
@@ -1479,6 +1498,7 @@ async fn run_goal_loop(
     goals: &GoalSetup,
     name: &str,
     running: &mut bool,
+    quit: &mut ExitRequest,
 ) -> Result<(), String> {
     let Some(dir) = goals.dir.as_deref() else {
         return Err(render::wording::no_goal_dir().to_owned());
@@ -1551,7 +1571,7 @@ async fn run_goal_loop(
         if harness.cancel_signal().is_cancelled() {
             break;
         }
-        let outcome = match run_one_turn(harness, events, TurnStart::Injected).await {
+        let outcome = match run_one_turn(harness, events, TurnStart::Injected, quit).await {
             Ok(outcome) => outcome,
             // 连驱动都失败（会话 i/o，不是 provider）：这不是重试能修的那一类，所以照说、
             // 收工。流上没有收尾事件，于是 `--continue` 会把它读成一次异常中断 —— 对一次
@@ -1894,15 +1914,65 @@ enum TurnStart<'a> {
     Injected,
 }
 
+/// 一条退出路径该用哪个码（`.scratch/exit-gesture/spec.md` §3）。
+///
+/// 人主动退（空闲双击、`/quit`、输入结束）= 0；忙碌中被打断而退 = 130（与 `SIGINT` 的
+/// 128 + 2 惯例一致）。空闲那条路**不许**「顺便」变成 130，所以两档只在这里定义一次。
+fn exit_code_after(quit: bool) -> ExitCode {
+    if quit {
+        ExitCode::from(130)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// 交互式会话的退出账本：人在一次运行中途有没有要求退出
+/// （`.scratch/exit-gesture/spec.md` §3、§5）。
+///
+/// 忙碌里的第二下 `Ctrl-C` 不是「立刻把进程按下去」：它**记下请求**，并让当前回合像被取消
+/// 一样拿到它的收尾事件 —— 等回合落地之后由循环用 [`exit_code_after`] 兑现那个码。这样
+/// `TerminalModes` 的 `Drop`、`ratatui::restore()` 与退出回执都会跑；旧写法
+/// ``std::process::exit`` 会跳过一切析构，把终端留在 raw + 备用屏幕里。
+#[derive(Debug, Default, Clone, Copy)]
+struct ExitRequest {
+    quit: bool,
+}
+
+impl ExitRequest {
+    /// 把一个前端手势并进这份账。
+    fn apply(&mut self, event: &FrontEndEvent, signal: &CancelSignal) {
+        match event {
+            FrontEndEvent::Quit => {
+                self.quit = true;
+                signal.cancel();
+            }
+            FrontEndEvent::Cancel => signal.cancel(),
+            // 模式循环在调用点自己处理。
+            FrontEndEvent::CycleMode => {}
+        }
+    }
+
+    /// 有没有人要求退出。
+    fn requested(&self) -> bool {
+        self.quit
+    }
+
+    /// 这一趟该用的退出码。
+    fn code(&self) -> ExitCode {
+        exit_code_after(self.quit)
+    }
+}
+
 /// 跑一个回合，同时仍然盯着取消手势。
 ///
-/// 回合占着会话，所以循环没法自己读键盘；它改为 select 控制台那些未被请求的事件。在取消已经举起时
-/// 再按一次会把进程按下去（spec §6）—— 会话永远不需要知道自己是怎么死的，因为 `--continue` 会关掉
-/// 进程留下的任何东西。
+/// 回合占着会话，所以循环没法自己读键盘；它改为 select 控制台那些未被请求的事件。取消手势让回合
+/// 拿到它的收尾事件；`Quit`（忙碌里举手之后的那第二下）同样先取消，只把「要退出」记进
+/// [`ExitRequest`] —— 进程不在这一层结束（spec §6、`.scratch/exit-gesture/spec.md` §3）。
 async fn run_one_turn(
     harness: &mut Harness,
     events: &mut ConsoleEvents,
     start: TurnStart<'_>,
+    quit: &mut ExitRequest,
 ) -> Result<crate::agent::TurnOutcome, crate::Error> {
     let signal = harness.cancel_signal();
     let modes = harness.mode_cycle();
@@ -1917,19 +1987,14 @@ async fn run_one_turn(
         tokio::select! {
             result = &mut turn => return result,
             event = events.recv() => match event {
-                Some(FrontEndEvent::Cancel) => {
-                    if signal.is_cancelled() {
-                        std::process::exit(130);
-                    }
-                    signal.cancel();
-                }
-                // 输入结束或显式退出让回合像被取消一样落下来，所以流仍然得到它的收尾。
-                Some(FrontEndEvent::Quit) | None => signal.cancel(),
                 // 权限门每次调用都读策略，所以这次按键挪动的是「下一次调用」的立场 —— 这就是「回合
                 // 中途换档」的意思。
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
                 }
+                Some(event) => quit.apply(&event, &signal),
+                // 输入结束让回合像被取消一样落下来，所以流仍然得到它的收尾。
+                None => signal.cancel(),
             },
         }
     }
@@ -3091,7 +3156,10 @@ fn print_sessions_help(out: &mut dyn Write) {
 
 #[cfg(test)]
 mod tests {
-    use super::{submission, Mode, Submission};
+    use super::{exit_code_after, submission, ExitRequest, Mode, Submission};
+    use crate::agent::CancelSignal;
+    use crate::render::FrontEndEvent;
+    use std::process::ExitCode;
 
     /// 这些测试里一场会话知道的技能。
     fn has_skill(name: &str) -> bool {
@@ -3100,6 +3168,38 @@ mod tests {
 
     fn read(text: &str) -> Submission<'_> {
         submission(text, has_skill)
+    }
+
+    #[test]
+    fn the_exit_code_is_zero_unless_someone_asked_to_quit() {
+        // `.scratch/exit-gesture/spec.md` §3：人主动退 = 0；忙碌里被打断而退 = 130
+        // （与 `SIGINT` 的 128 + 2 惯例一致）。空闲那条路不许「顺便」变成 130。
+        assert_eq!(exit_code_after(false), ExitCode::SUCCESS);
+        assert_eq!(exit_code_after(true), ExitCode::from(130));
+    }
+
+    #[test]
+    fn a_quit_gesture_is_recorded_and_cancels_instead_of_killing_the_process() {
+        // 忙碌里的第二下（举手之后的 `Quit`）不是「立刻把进程按下去」：它记下退出请求，
+        // 并让当前回合像被取消一样拿到它的收尾事件。旧写法 ``std::process::exit``
+        // 会跳过一切析构，把终端留在 raw + 备用屏幕里（§3）。
+        let signal = CancelSignal::new();
+        let mut quit = ExitRequest::default();
+        assert!(!quit.requested());
+        assert_eq!(quit.code(), ExitCode::SUCCESS);
+
+        quit.apply(&FrontEndEvent::Quit, &signal);
+        assert!(quit.requested(), "退出请求被记下来了");
+        assert!(signal.is_cancelled(), "而回合拿到了它的收尾");
+        assert_eq!(quit.code(), ExitCode::from(130));
+
+        // 普通的取消手势只取消：取消不等于退出。
+        let signal = CancelSignal::new();
+        let mut quit = ExitRequest::default();
+        quit.apply(&FrontEndEvent::Cancel, &signal);
+        assert!(signal.is_cancelled());
+        assert!(!quit.requested(), "Esc / 第一下 Ctrl-C 不是退出");
+        assert_eq!(quit.code(), ExitCode::SUCCESS);
     }
 
     #[test]
@@ -3604,6 +3704,7 @@ mod tests {
             &goals,
             "sandbox",
             &mut running,
+            &mut ExitRequest::default(),
         )
         .await
         .expect_err("ask 档下拒绝启动");
@@ -3692,6 +3793,7 @@ mod tests {
             &goals,
             "sandbox",
             &mut running,
+            &mut ExitRequest::default(),
         )
         .await
         .expect("auto 档下启动不拒绝");
@@ -3839,6 +3941,7 @@ mod tests {
             &goals,
             "sandbox",
             &mut running,
+            &mut ExitRequest::default(),
         )
         .await
         .expect("额度为 0 是一次正常的降级收尾");

@@ -1,7 +1,7 @@
 # 忙碌双击退出：有序收尾后以 130 退出
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/exit-gesture/spec.md` §3（忙碌态的退出与退出码）、§5（回执的时机前提）、§7。
@@ -55,3 +55,13 @@ Blocked by: 01
 - 不碰举手状态机与提示文案（票 01）；不碰回执打印（票 04）。
 - 不加 `exit` / `abort` 一类新命令，不给 `--plain` 加手势。
 - 不为了让 130 走出去而保留任一处 `std::process::exit`。
+
+## Comments
+
+- **落地**：新增 `exit_code_after(quit: bool) -> ExitCode`（0 / 130 两档只在这一处定义）与 `ExitRequest`（`quit: bool` + `apply(&mut self, &FrontEndEvent, &CancelSignal)` + `requested()` + `code()`）。形状取了票里给的三选一里的「一个记账值」：`Quit` 记下请求**并且** `signal.cancel()`（让回合拿到收尾），`Cancel` 只取消，`CycleMode` 在调用点处理。
+- **三处 `std::process::exit(130)` 全删**：`run_one_turn`、`run_discussion`、`discuss_in_session` 的 select 现在都走 `quit.apply(...)`。`grep -rn 'process::exit(130)' src/` 为空（只剩注释里解释历史的那句，字样也改了）。
+- **退出码的通路**：`run_one_turn` / `run_goal_loop` / `discuss_in_session` / `run_discussion` 各多收一个 `&mut ExitRequest`；`interactive_loop` 在循环体末尾统一 `if quit.requested() { return quit.code(); }`（覆盖 `/discuss`、`/loop`、三处回合调用），恢复目标那条路单独检查一次；`discuss` 子命令在它自己的收尾里 `exit_code_after(quit.requested())`。于是 130 是从 `interactive()` 的返回值出去的，`harness.shutdown()`、渲染器 task 收尾、`drop(modes)` 与 `ratatui::restore()` 都会跑。
+- **语义**：人主动退（空闲双击、`/quit`、输入结束）= 0；忙碌里打断而退 = 130。空闲那条路没有任何地方会把它变成 130。
+- **测试**：`src/cli.rs` 的 `mod tests` 新增两条 —— `the_exit_code_is_zero_unless_someone_asked_to_quit`（两档各一条）与 `a_quit_gesture_is_recorded_and_cancels_instead_of_killing_the_process`（`Quit` 记请求 + 取消信号被举起 + 码是 130；`Cancel` 只取消、码仍是 0）。`mod tests` 里三处 `run_goal_loop` 调用补了新参数。
+- **端到端那条的归属**：进程真的以 130 退出、终端真的交还干净，只有真 pty 看得见 —— 那是 [票 05](05-acceptance.md) 要加的忙碌双击路径（发 prompt、立刻两次 `Ctrl-C`、断言退出码 130 + termios + `TEARDOWN`），也是「`TurnEnded { Aborted }` 形状」那条链的另一半（回合按取消收尾本身由 `tests/cancellation.rs` 早就钉住）。本机 `python3 scripts/tui-startup-check.py` 三条空闲出口 12/12 GREEN。
+- `cargo test` 全绿（967 条）。
