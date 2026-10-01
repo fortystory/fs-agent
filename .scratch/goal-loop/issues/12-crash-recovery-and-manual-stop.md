@@ -1,7 +1,7 @@
 # 崩溃恢复与主动停
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03, 05, 07
 
 > 规格：`.scratch/goal-loop/spec.md` §10。

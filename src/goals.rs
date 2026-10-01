@@ -659,6 +659,51 @@ pub fn unfinished(entries: &[Entry], progress: &Progress) -> Vec<String> {
         .collect()
 }
 
+// --- 崩溃恢复与主动停（§10） -----------------------------------------------
+
+/// 一条流是怎么结束的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// **正常收尾**：从当前目标的归属那一刻起，流上有一条收尾事件（完成 / 无进展停 /
+    /// provider 失败停 / 人主动停 / 额度撞顶）。
+    Closed,
+    /// **异常中断**：没有收尾事件 —— 进程被杀、机器重启，或者一场崩掉的运行留下的任何样子。
+    Interrupted,
+}
+
+/// 一条收尾事件：目标完成，或者一条「停下了」。
+///
+/// 恢复只认这两种。其余任何东西 —— 包括 `SessionError` —— 都不是收尾：一次崩溃的进程也可能
+/// 刚好留下一条错误。
+pub fn is_closing(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::GoalCompleted { .. } | EventPayload::GoalStopped { .. }
+    )
+}
+
+/// 从流派生「这一次是怎么结束的」（§10）。
+///
+/// 判据取**当前目标归属那一刻之后**的那一段：一个会话做完目标 A、又 `/loop` 了目标 B、然后崩
+/// 掉，A 那条完成事件不能替 B 说话。没有归属时它答 `Interrupted` —— 调用方（`/loop` 的恢复）
+/// 先问「有没有当前目标」，不会走到这里。
+pub fn ending(events: &[Event]) -> Ending {
+    let from = events.iter().rposition(|event| {
+        matches!(event.payload, EventPayload::GoalSelected { .. })
+    });
+    let Some(from) = from else {
+        return Ending::Interrupted;
+    };
+    if events[from..]
+        .iter()
+        .any(|event| is_closing(&event.payload))
+    {
+        Ending::Closed
+    } else {
+        Ending::Interrupted
+    }
+}
+
 // --- 收尾汇总（§11） -------------------------------------------------------
 
 /// 一个目标下各会话记下的新工作。

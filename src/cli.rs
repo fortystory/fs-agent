@@ -436,6 +436,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             cwd: cwd.clone(),
             settings: config.goals,
         },
+        parsed.resume,
     )
     .await;
     harness.shutdown().await;
@@ -1067,10 +1068,38 @@ async fn interactive_loop(
     events: &mut ConsoleEvents,
     config: &Config,
     goals: &GoalSetup,
+    resumed: bool,
 ) -> ExitCode {
     // 「已经有一个 loop 在跑」那条边界读的状态。循环体是同步跑完的，所以正常路径上不可能在它
     // 跑着的时候再收到一次提交 —— 票 06 让输入区在这段时间里禁言，这条状态正是那件事的名字。
     let mut loop_running = false;
+
+    // 恢复（§10）。只对**重新打开**的会话做，而且只对认领过目标的那些：普通交互会话的
+    // `--continue` 行为一个字不变。
+    if resumed {
+        if let Some(name) = harness.current_goal() {
+            match harness.resume_goal() {
+                // 正常收尾：回来是空闲等人 —— 人主动停是人的意思，该尊重它。
+                None => harness.notice(&render::wording::fs_agent(
+                    &render::wording::resumed_closed_goal(&name),
+                )),
+                // 异常中断：接着跑，不必人点头。
+                Some(name) => {
+                    harness.notice(&render::wording::fs_agent(
+                        &render::wording::resumed_goal(&name),
+                    ));
+                    console.set_running(true);
+                    if let Err(message) =
+                        run_goal_loop(harness, console, events, goals, &name, &mut loop_running)
+                            .await
+                    {
+                        harness.notice(&render::wording::fs_agent(&message));
+                    }
+                }
+            }
+        }
+    }
+
     loop {
         // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
         // 交之前什么都没在跑，而前端从第一帧起就得这么读 —— 包括在这个循环第一次提问之前。
@@ -1474,15 +1503,12 @@ async fn run_goal_loop(
         harness.notice(&render::wording::goal_unknown_ids(name, &progress.unknown));
     }
 
-    // 一个回合接一个回合。手势的作用域是一次运行，所以每个回合开始时信号都会复位 —— 因此
-    // 「停」要在回合刚结束的那一刻读一次，否则一次取消会被下一个回合悄悄吃掉。
-    //
-    // `reminded` 是「这一档已经提醒过」这个跨回合的标记：跨过阈值只注入一次，翻页时复位。
-    let mut reminded = false;
     // 无进展的计数（§9）：连续几次翻页零条目完成。它从这一刻的进度起算。
     let mut no_progress = crate::goals::NoProgress::new(progress.completed());
     // provider 失败的重试预算（§9）。
     let mut retry = crate::goals::Retry::new(goals.settings.provider_retries);
+    // 「这一档已经提醒过」这个跨回合的标记（§6）：跨过阈值只注入一次，翻页时复位。
+    let mut reminded = false;
     *running = true;
     loop {
         if harness.cancel_signal().is_cancelled() {

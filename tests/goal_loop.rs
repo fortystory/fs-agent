@@ -1184,6 +1184,137 @@ async fn without_a_goal_the_budget_is_the_plain_session_one() {
     session.harness.shutdown().await;
 }
 
+// --- 崩溃恢复与主动停（§10） ------------------------------------------------
+
+/// 一场会话跑过的东西：一个归属、一个回合，以及（可选的）一条收尾。
+async fn session_with_ending(root: &Path, id: &str, ending: Option<&str>) -> Session {
+    let mut session = session_with(
+        root,
+        id,
+        FakeProvider::new(vec![Reply::text("干了一点活"), Reply::text("汇总")]),
+    )
+    .await;
+    session.harness.select_goal("sandbox").unwrap();
+    session.harness.run_injected_turn().await.unwrap();
+    match ending {
+        Some("completed") => {
+            session
+                .harness
+                .complete_goal("sandbox", "做完了")
+                .unwrap();
+        }
+        Some("stopped") => {
+            session
+                .harness
+                .stop_goal(
+                    "sandbox",
+                    GoalStopReason::UserStopped,
+                    "人按了停下",
+                    Vec::new(),
+                    0,
+                )
+                .unwrap();
+        }
+        _ => {}
+    }
+    session
+}
+
+#[tokio::test]
+async fn an_interrupted_stream_resumes_the_goal_it_was_working_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = session_with_ending(dir.path(), "s-1", None).await;
+
+    // 归属 + 回合 + **没有**收尾事件 = 异常中断（进程被杀、机器重启）。
+    assert_eq!(goals::ending(&session.events()), goals::Ending::Interrupted);
+    assert_eq!(
+        session.harness.resume_goal().as_deref(),
+        Some("sandbox"),
+        "接着做当前目标 —— 当前目标同样从流派生"
+    );
+    assert_eq!(session.harness.current_goal().as_deref(), Some("sandbox"));
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_completed_goal_comes_back_idle_and_does_not_resume_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = session_with_ending(dir.path(), "s-1", Some("completed")).await;
+
+    assert_eq!(goals::ending(&session.events()), goals::Ending::Closed);
+    assert_eq!(
+        session.harness.resume_goal(),
+        None,
+        "正常收尾：回来是空闲等人"
+    );
+    assert!(session.harness.current_goal().is_some(), "归属还在，只是不再跑");
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_goal_a_person_stopped_comes_back_idle_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = session_with_ending(dir.path(), "s-1", Some("stopped")).await;
+
+    // 主动停是人的意思，该尊重它：`--continue` 回来别自己又跑起来。
+    assert_eq!(goals::ending(&session.events()), goals::Ending::Closed);
+    assert_eq!(session.harness.resume_goal(), None);
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_plain_session_without_a_goal_is_left_exactly_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_with(
+        dir.path(),
+        "s-1",
+        FakeProvider::new(vec![Reply::text("聊了两句")]),
+    )
+    .await;
+    session.harness.run_turn("在吗").await.unwrap();
+
+    // 没有归属：恢复这条路一个字都不说，`--continue` 照旧只铺历史。
+    assert_eq!(session.harness.current_goal(), None);
+    assert_eq!(session.harness.resume_goal(), None);
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn deciding_whether_to_resume_writes_no_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = session_with_ending(dir.path(), "s-1", None).await;
+
+    // 判据完全从流派生：不写恢复标记，也没有第二个地方记着这件事。
+    let before = std::fs::read_dir(dir.path().join("s-1"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    let _ = session.harness.resume_goal();
+    let after = std::fs::read_dir(dir.path().join("s-1"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(before, after, "判定不写任何新文件");
+
+    session.harness.shutdown().await;
+}
+
+#[test]
+fn the_recovery_lines_are_chinese_and_say_which_of_the_two_it_is() {
+    let resumed = fs_agent::render::wording::resumed_goal("sandbox");
+    assert!(resumed.contains("接着"), "{resumed}");
+    assert!(resumed.contains("sandbox"), "{resumed}");
+
+    let closed = fs_agent::render::wording::resumed_closed_goal("sandbox");
+    assert!(closed.contains("正常收尾"), "{closed}");
+    assert!(closed.contains("sandbox"), "{closed}");
+    assert_ne!(resumed, closed, "两条路各说各的话");
+}
+
 // --- 会话桶里的归属筛（§4） -------------------------------------------------
 
 #[test]

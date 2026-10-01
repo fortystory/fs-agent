@@ -825,6 +825,28 @@ impl Harness {
         self.session.cwd()
     }
 
+    /// 这次重新打开该不该自动接着跑那个目标（`.scratch/goal-loop/spec.md` §10）。
+    ///
+    /// 完全从流派生，不写任何恢复标记：**异常中断**（没有收尾事件）才自动接着跑，而**正常收尾**
+    /// （完成、无进展停、provider 失败停、人主动停）之后回来是空闲等人 —— 主动停是人的意思，
+    /// 该尊重它。没有当前目标的会话答 `None`：普通交互会话的 `--continue` 行为一个字不变。
+    pub fn resume_goal(&self) -> Option<String> {
+        let events = self.session.events();
+        let goal = crate::events::current_goal(&events)?;
+        match crate::goals::ending(&events) {
+            crate::goals::Ending::Interrupted => Some(goal.to_owned()),
+            crate::goals::Ending::Closed => None,
+        }
+    }
+
+    /// 这条流的当前目标（§4）：流上最后一条 `GoalSelected`。
+    ///
+    /// 与 [`resume_goal`](Self::resume_goal) 分开，是因为恢复时要说的话不一样：有归属而上次
+    /// 正常收尾时说「停在这里等人」，异常中断时说「接着做」。
+    pub fn current_goal(&self) -> Option<String> {
+        crate::events::current_goal(&self.session.events()).map(str::to_owned)
+    }
+
     /// 把「别处已经花掉的 token」填进这场会话的额度口径
     /// （`.scratch/goal-loop/spec.md` §8）。
     ///

@@ -1594,6 +1594,16 @@ pub fn input_muted() -> &'static str {
     "无人值守的目标循环跑着，输入区在这段时间里禁言；要停就按 Esc"
 }
 
+/// 恢复时说的那一行（§10）：接着说。
+pub fn resumed_goal(name: &str) -> String {
+    format!("上次是异常中断，接着做目标 {name}")
+}
+
+/// 恢复时说的那一行（§10）：上次是正常收尾，所以停在这里。
+pub fn resumed_closed_goal(name: &str) -> String {
+    format!("上次的目标 {name} 是正常收尾，停在这里等人")
+}
+
 /// `/clear` 干完了：说出会话换成了哪一个（旧的那个还在磁盘上）。
 pub fn cleared(from: &str, to: &str) -> String {
     format!("已结束会话 {from}，开了新的会话 {to}（旧的还在磁盘上，`--continue` 打开最新那个）")
