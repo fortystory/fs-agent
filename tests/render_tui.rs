@@ -286,11 +286,19 @@ fn the_exit_gesture_lives_for_the_window_and_then_expires() {
     let mut state = new_state();
     let t0 = Instant::now();
     state.raise_exit_gesture_at(t0);
+    assert_eq!(
+        state.exit_deadline(),
+        Some(t0 + Duration::from_millis(500)),
+        "寿命就是那个窗口"
+    );
     assert!(state.exit_gesture_raised(t0 + Duration::from_millis(400)));
     assert!(!state.exit_gesture_raised(t0 + Duration::from_millis(600)));
     assert!(!state.should_quit(), "超时只是作废，不是退出");
 
+    state.mark_clean();
     state.expire_exit_gesture();
+    assert_eq!(state.exit_deadline(), None, "作废之后字段清掉");
+    assert!(state.is_dirty(), "作废要重画提示行（它恢复原样）");
     assert!(!state.exit_gesture_raised(t0), "作废之后就不算数了");
     assert!(!state.should_quit());
     // 作废之后要重新按两下。

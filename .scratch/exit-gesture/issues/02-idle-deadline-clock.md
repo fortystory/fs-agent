@@ -1,7 +1,7 @@
 # 空闲时的退出手势时钟：一个按需武装的 deadline
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/exit-gesture/spec.md` §6（时钟：一个按需武装的 deadline）、§7。
@@ -58,3 +58,12 @@ Blocked by: 01
 - 不改举手状态机、三句文案、`Pending::Exit` 的拆除（票 01 的活）。
 - 不给窗口加配置项，不加别的常驻定时器，不把 deadline 做成 `interval`。
 - 不改 `CONTEXT.md` 的「退出举手」词条（它已经写好了）。
+
+## Comments
+
+- **落地**：`TuiState::exit_deadline()` 只读访问；非重放那支 `select!` 与 `pulse` 并列加一支 `_ = tokio::time::sleep_until(deadline), if deadline.is_some() => state.expire_exit_gesture()`，`deadline` 在 `select!` 之前从 `state.exit_deadline()` 取成值（`Instant` 是 `Copy`），未举手时给它 `Instant::now()` 占位。每轮重新建 future，所以举手之后下一轮就生效，不需要重置逻辑。
+- **注释与词条**：`src/render/tui.rs` 那段「唯一的定时器」改写成「两个定时器，都按需武装」（`pulse` 60 ms / 退出 deadline 500 ms），`select!` 上方那段也改成「三个来源 + 两个按需武装的定时器」；`CONTEXT.md` 的「脉冲」词条把「空闲时那台时钟不存在」改成「空闲时那台时钟不存在 ……（唯一例外是那个有界的退出手势 deadline）」。
+- **纯判定**：`fn exit_gesture_due(deadline, now) -> bool` 抽出来了，`exit_gesture_raised` 委托给它（`有 deadline && !到点`），于是它不是死代码；`src/render/tui.rs` 的 `mod tests` 里加了一条单元断言（`None` 永不到点、未到点、正好到点、已过）。
+- **测试**：`tests/render_tui.rs` 的窗口那条补了 `exit_deadline()` 的断言（`Some(t0 + 500ms)`、作废后 `None`、`expire` 置 `dirty`）。
+- **实跑**：`python3 scripts/tui-startup-check.py`（本机用 `FS_AGENT_MODEL=kimi-for-coding`）12/12 GREEN —— 双击手势、举手超时之后提示行恢复、退出交还终端这几条都在真 pty 上过了一遍；主循环这根接线本身没有别的自动化面（票里说的）。
+- `cargo test` 全绿（965 条）；`cargo clippy --all-targets` 无警告。

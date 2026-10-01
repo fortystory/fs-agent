@@ -349,12 +349,18 @@ impl Tui {
             }
         }
 
-        // 脉冲的时钟：这个循环里唯一的定时器，而且**只在一次运行进行中的时候**才武装 ——
-        // 保证这一点的就是它 `select!` 分支上的 `if`，因为没武装的分支永远不会被 poll，
-        // 也就唤不醒循环（`.scratch/tui-input-pulse/spec.md` §2b，票 09）。用 `interval`
-        // 而不是每一趟新建一个 `sleep`：一个突发一千条增量的 provider 会让每轮迭代都重置
-        // 一次 sleep，于是提示符恰恰会在会话最忙的时候停住不动。`Delay` 让积压的漏帧不会
-        // 在循环从某个长帧里回来时被一次性花掉。
+        // 两个定时器，都**按需**武装（`.scratch/tui-input-pulse/spec.md` §2b，
+        // `.scratch/exit-gesture/spec.md` §6）：
+        //
+        // - `pulse`（60 ms）只在一次运行进行中的时候武装。用 `interval` 而不是每一趟新建
+        //   一个 `sleep`：一个突发一千条增量的 provider 会让每轮迭代都重置一次 sleep，
+        //   于是提示符恰恰会在会话最忙的时候停住不动。`Delay` 让积压的漏帧不会在循环从
+        //   某个长帧里回来时被一次性花掉。
+        // - 退出手势的 deadline（500 ms）只在举着手的那些帧里武装，到点就把举手作废。
+        //
+        // 两个都靠各自 `select!` 分支上的 `if` 保证「不武装就不会唤醒循环」：没武装的
+        // 分支永远不会被 poll。空闲会话因此照旧一次唤醒都没有（那个 deadline 是唯一的
+        // 有界例外）。
         let mut pulse = tokio::time::interval(PULSE_FRAME);
         pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -374,17 +380,26 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
-                // 三个来源，加上运行进行中时的脉冲定时器。曾经住在这里的重绘 tick 随它存在
-                // 的那个时钟一起走了 —— 待答的问题从 console 端口来，事件从渲染通道来，
-                // 而键就是键，所以没有*别的*东西在等着被注意到（票 05 §1）。脉冲是那个
-                // 例外：它只是时间的函数，所以它需要一个时钟 —— 那个时钟就是下面的 `if`。
-                // 空闲时这个 `select!` 又只是三个来源，键盘是唯一能唤醒它的东西
-                // （`.scratch/tui-input-pulse/spec.md` §2b）。
+                // 三个来源，加上两个按需武装的定时器。曾经住在这里的重绘 tick 随它存在的
+                // 那个时钟一起走了 —— 待答的问题从 console 端口来，事件从渲染通道来，
+                // 而键就是键，所以没有*别的*东西在等着被注意到（票 05 §1）。两个例外都只是
+                // 时间的函数：运行进行中的脉冲，与举着手的那个 deadline。空闲时这个
+                // `select!` 又只是三个来源，键盘是唯一能唤醒它的东西
+                // （`.scratch/tui-input-pulse/spec.md` §2b、
+                // `.scratch/exit-gesture/spec.md` §6）。
+                //
+                // deadline 在 `select!` 之前取成值：`Instant` 是 `Copy`，取完借用就结束，
+                // 分支里才借得到 `&mut state`。没举手时给它一个占位时刻 —— 关掉 poll 的是
+                // 分支上那个 `if`，与 `pulse` 同构。
+                let deadline = state.exit_deadline();
                 tokio::select! {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
                     _ = pulse.tick(), if state.busy() => state.tick(),
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from(
+                        deadline.unwrap_or_else(std::time::Instant::now),
+                    )), if deadline.is_some() => state.expire_exit_gesture(),
                 }
             }
 
@@ -1322,10 +1337,17 @@ impl TuiState {
         self.dirty = true;
     }
 
-    /// 这把举手还立着吗。
+    /// 这把举手还立着吗：有 deadline，而且还没到点。
     pub fn exit_gesture_raised(&self, now: std::time::Instant) -> bool {
+        self.exit_deadline.is_some() && !exit_gesture_due(self.exit_deadline, now)
+    }
+
+    /// 这把举手的截止时刻，有的话。
+    ///
+    /// 主循环用它武装那个按需的唤醒；字段本身只有 [`TuiState`] 自己改
+    /// （`.scratch/exit-gesture/spec.md` §6）。
+    pub fn exit_deadline(&self) -> Option<std::time::Instant> {
         self.exit_deadline
-            .is_some_and(|deadline| now < deadline)
     }
 
     /// 让这把举手超时作废：清字段、置 `dirty`，提示行跟着恢复。
@@ -3356,6 +3378,14 @@ pub const PULSE_PALETTE: [Color; 6] = [
 /// 而空闲的会话回到 `select!` 里的三个来源、一次唤醒都没有。
 const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
+/// 那个按需武装的 deadline 到点了没有（`None` = 永远不会到点）。
+///
+/// 抽成纯函数，好让「该不该到点」有一条单元断言 —— 主循环那根接线本身要真 pty 才跑得了
+/// （`.scratch/exit-gesture/spec.md` §6）。
+fn exit_gesture_due(deadline: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    deadline.is_some_and(|deadline| now >= deadline)
+}
+
 /// 退出手势的窗口：第一下举手之后，第二下要在这段时间内到达才算数
 /// （`.scratch/exit-gesture/spec.md` §1、§6）。
 ///
@@ -4748,6 +4778,23 @@ mod tests {
     #[test]
     fn the_exit_gesture_window_is_half_a_second() {
         assert_eq!(EXIT_GESTURE_WINDOW, std::time::Duration::from_millis(500));
+    }
+
+    /// 「该不该到点」是一条纯判定，所以它有一条单元断言；主循环那根接线本身要真 pty
+    /// （`.scratch/exit-gesture/spec.md` §6）。
+    #[test]
+    fn a_deadline_is_due_only_once_it_has_passed() {
+        let now = std::time::Instant::now();
+        assert!(!exit_gesture_due(None, now), "没有 deadline 就永远不到点");
+        assert!(!exit_gesture_due(
+            Some(now + std::time::Duration::from_millis(1)),
+            now
+        ));
+        assert!(exit_gesture_due(Some(now), now), "正好到点就算到点");
+        assert!(exit_gesture_due(
+            Some(now - std::time::Duration::from_millis(1)),
+            now
+        ));
     }
 
     #[test]
