@@ -47,7 +47,7 @@ fn facts() -> SessionFacts {
 }
 
 fn new_state() -> TuiState {
-    TuiState::new(facts())
+    TuiState::new(facts(), std::path::PathBuf::from("/home/forty/code/fs-agent"), Some(std::path::PathBuf::from("/home/forty")))
 }
 
 fn state_with_prompt() -> (TuiState, tokio::sync::oneshot::Receiver<Option<String>>) {
@@ -1090,3 +1090,93 @@ fn a_sandbox_block_is_one_dim_narration_line() {
     assert_eq!(text, "[沙箱：bwrap]");
     assert_eq!(lines[0].spans[0].style.fg, Some(Color::DarkGray));
 }
+
+// ---------------------------------------------------------------------------
+// 终端标题：状态词、目标名与「变了才写」（`.scratch/terminal-title/spec.md` §2、§5）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_title_reads_the_working_directory_and_a_state_word() {
+    let mut state = new_state();
+    assert_eq!(state.title(), "~/code/fs-agent", "空闲没有状态词");
+
+    state.request(ConsoleRequest::RunState { running: true });
+    assert_eq!(state.title(), "~/code/fs-agent · 运行中");
+}
+
+#[test]
+fn a_question_makes_the_title_say_it_is_waiting() {
+    let mut state = new_state();
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        request: permission_request("write_file"),
+        reply: tx,
+    }));
+    assert_eq!(state.title(), "~/code/fs-agent · 等你");
+}
+
+#[test]
+fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
+    let mut state = new_state();
+    state.request(ConsoleRequest::RunState { running: true });
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Ask(AskRequest {
+        request: permission_request("bash"),
+        reply: tx,
+    }));
+    assert_eq!(state.title(), "~/code/fs-agent · 等你", "等你压过运行中");
+
+    // 重放要有东西可放才立得起来（空的 `events` 什么也不做）。
+    state.request(ConsoleRequest::Replay {
+        events: vec![Event::new(
+            1,
+            SpeakerId::System,
+            EventPayload::SessionStarted {
+                session_id: fs_agent::events::SessionId::new("01J8ZQ4K7M"),
+                cwd: "/workspace".to_owned(),
+                schema_version: 1,
+            },
+        )],
+    });
+    assert_eq!(state.title(), "~/code/fs-agent · 重放中", "重放压过等你");
+}
+
+#[test]
+fn a_goal_in_the_stream_lands_in_the_title_and_leaves_when_it_ends() {
+    let mut state = new_state();
+    state.request(ConsoleRequest::RunState { running: true });
+    state.apply(RenderEvent::Logged(Event::new(
+        1,
+        SpeakerId::System,
+        EventPayload::GoalSelected {
+            goal: "修文档索引".to_owned(),
+        },
+    )));
+    assert_eq!(state.title(), "~/code/fs-agent · 运行中 · 修文档索引");
+
+    // 目标停下或做完，名字就不该再挂在标题上 —— 标题说的是**正在推进**的那一件。
+    state.apply(RenderEvent::Logged(Event::new(
+        2,
+        SpeakerId::System,
+        EventPayload::GoalCompleted {
+            goal: "修文档索引".to_owned(),
+            summary: "收尾".to_owned(),
+        },
+    )));
+    assert_eq!(state.title(), "~/code/fs-agent · 运行中");
+}
+
+#[test]
+fn a_title_is_only_written_when_it_changes() {
+    let mut state = new_state();
+    assert!(state.sync_title().is_some(), "第一版总是给出去");
+    assert!(state.sync_title().is_none(), "没变就不再写");
+
+    state.request(ConsoleRequest::RunState { running: true });
+    assert_eq!(
+        state.sync_title().expect("状态变了就该给新标题"),
+        "~/code/fs-agent · 运行中"
+    );
+    assert!(state.sync_title().is_none(), "再问一次还是没变");
+}
+

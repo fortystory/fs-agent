@@ -14,7 +14,9 @@
 它现在守进程的两头，因为这两头只有 pty 看得见（spec §Testing Decisions）：第一帧
 —— 状态行整行画出、横幅只出现一次、身份（左栏里的标记）在场、分隔列与主列
 那两条横线都在 —— 以及 `Ctrl-C` 之后终端被交还回什么 —— 备用屏幕、鼠标上报、括号粘贴
-（bracketed paste）、以及 tty 的规范 / 回显标志。光标、鼠标与缩放仍留在手工清单
+（bracketed paste）、终端标题的还原序列、以及 tty 的规范 / 回显标志。进入那一头还多
+一条标题：流里要出现一条 `OSC 0`，内容含工作目录的基名
+（`.scratch/terminal-title/spec.md` §4）。光标、鼠标与缩放仍留在手工清单
 里（`docs/tui-manual-checklist.md`）。
 
 为什么用 pty 脚本、不用 Rust 测试：这处污染只在真终端上存在（渲染器由 `IsTerminal`
@@ -71,8 +73,9 @@ MARK_ROW = "▄▀▀█"
 BORDER_H = "┄"
 BORDER_V = "┆"
 # 退出时要交还给终端的东西（spec §5、§19）：备用屏幕、crossterm 关掉的每一种编码的
-# 鼠标上报、以及括号粘贴。`stty`/termios 另算，因为原始模式（raw mode）是一个 termios
-# 标志，不是转义序列。
+# 鼠标上报、括号粘贴，以及进入时保存的那条终端标题（CSI 23 t，见
+# `.scratch/terminal-title/spec.md` §4）。`stty`/termios 另算，因为原始模式（raw mode）
+# 是一个 termios 标志，不是转义序列。
 TEARDOWN = [
     "\x1b[?1049l",
     "\x1b[?1000l",
@@ -80,7 +83,12 @@ TEARDOWN = [
     "\x1b[?1003l",
     "\x1b[?1006l",
     "\x1b[?2004l",
+    "\x1b[23;0t",
 ]
+
+# 进入时那条保存标题的序列（CSI 22 t），以及标题自己那串 `OSC 0`。
+TITLE_SAVE = "\x1b[22;0t"
+TITLE_SET = re.compile(r"\x1b\]0;([^\x07]*)\x07")
 
 # 用户实际有的出口。每一个都得把终端交还回来，所以每种手势各跑一轮（spec §1：`/quit`、
 # 空闲时 `Ctrl-C`；票 06：退出确认处 `Ctrl-D` 再 `y`；panic 那条路走同一个函数，
@@ -318,7 +326,7 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
     return Run(raw, exited, status, modes, survived_empty_enter)
 
 
-def verdict(run, devnull, identity, replay=False):
+def verdict(run, devnull, identity, replay=False, cwd_base=""):
     """判定一轮运行：它画出的第一帧，以及它留下的东西。
 
     整个抓取内容都被重放一遍，而不是在第一帧处切片：宽字符是带显式光标移动写出来的，
@@ -328,6 +336,9 @@ def verdict(run, devnull, identity, replay=False):
     `replay` 标记 `--continue` 那一轮：此时最终屏幕还必须显示重播已经**收敛** ——
     历史进度行消失，只剩普通的状态行。重播的**内容**不在这里判，那是 `cargo test`
     的活（`.scratch/tui-history-replay/spec.md` §Testing Decisions）。
+
+    `cwd_base` 是这个工作目录的基名：进入那一头必须有一条含它的标题到达终端
+    （`.scratch/terminal-title/spec.md` §4）。
     """
     if not run.survived_empty_enter:
         return False, "the session did not survive an empty Enter"
@@ -365,6 +376,14 @@ def verdict(run, devnull, identity, replay=False):
     banner = run.raw.count(BANNER_ANCHOR)
     if banner != 1:
         return False, "the startup banner reached the terminal %d times" % banner
+    if TITLE_SAVE not in run.raw:
+        return False, "the terminal title was never saved (no %r)" % TITLE_SAVE
+    titles = TITLE_SET.findall(run.raw)
+    if not any(cwd_base in title for title in titles):
+        return False, "no title naming %r reached the terminal: %r" % (
+            cwd_base,
+            titles[:3],
+        )
     if run.modes is None:
         return False, "could not read what the tty was left in"
     if not (run.modes.canonical and run.modes.echo and run.modes.signals):
@@ -398,6 +417,8 @@ def main():
     if not os.path.exists(binary):
         print("no binary at %s; run cargo build first" % binary)
         return 1
+    # 子进程继承脚本的工作目录，所以标题里的基名就是这里算出来的那个。
+    cwd_base = os.path.basename(os.getcwd())
     identity = binary_identity(binary)
     if not identity:
         print("no identity from %s --version" % binary)
@@ -409,7 +430,7 @@ def main():
             for i in range(runs):
                 for label, gesture in GESTURES:
                     run = capture(binary, data_home, gesture)
-                    ok, why = verdict(run, devnull, identity)
+                    ok, why = verdict(run, devnull, identity, cwd_base=cwd_base)
                     print(
                         "run %d (%s): %s -- %s"
                         % (i + 1, label, "GREEN" if ok else "RED", why)
@@ -419,7 +440,9 @@ def main():
                 # 就落在启动路径上，而它是否收敛、交还回来的终端是什么样，正是 pty
                 # 能看到的。
                 run = capture(binary, data_home, args=("--continue",))
-                ok, why = verdict(run, devnull, identity, replay=True)
+                ok, why = verdict(
+                    run, devnull, identity, replay=True, cwd_base=cwd_base
+                )
                 print(
                     "run %d (--continue): %s -- %s"
                     % (i + 1, "GREEN" if ok else "RED", why)

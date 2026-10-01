@@ -1,7 +1,7 @@
 # 把标题发给终端：保存、写入与还原，绘制路径上比对
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/terminal-title/spec.md` §4（搭 `TerminalModes` 的车：`\x1b[22;0t` 保存 / OSC 0 写入 / `\x1b[23;0t` 还原，含 panic 路径）、§5（`TuiState` 加 `last_title`，在绘制路径上比对，变了才写）、§6（只给 TUI 设、标题不进事件流）。
@@ -89,3 +89,12 @@ Blocked by: 01
 - 不加配置项、不做标题模板语法；不改状态行 / 提示行里已有的任何文本（spec §明确不做）。
 - 不逐 token 更新、不为 OSC 加动画 / 重绘循环（spec §5 末）。
 - 不改票 01 定下的措辞与 40 列规则；不改 `src/render/wording.rs`（除了调用它的新函数）。
+
+## Comments
+
+- **落地**：`set_terminal_title`（crossterm 的 `SetTitle`，发的就是 `OSC 0`）与 `TerminalModes::enter(title)`（先 `CSI 22 t` 保存、再写第一版）／`disable_terminal_modes`（并进 `CSI 23 t`）。`TuiOptions` 加 `cwd`（两个构造点传 `--cwd` 那一个）；`$HOME` 在 `Tui::run` 里读一次；`TuiState::new(facts, cwd, home)`，五个字段新增：`cwd` / `home` / `goal` / `last_title`。`title()` 是纯函数，`sync_title()` 做比对；第一版在 `ratatui::init()` 之后、等重放之前写，绘制路径在 `mark_clean()` 之后补后续变化。
+- **目标名**：`observe_goal` 在 `apply` 开头看 `RenderEvent::Logged` 的 payload —— `GoalSelected` 留名、`GoalStopped` / `GoalCompleted` 清名；重放走同一个 `apply`，所以 `--continue` 自然重建。
+- **测试**：`tests/render_tui.rs` 新增 5 条（空闲 / `运行中` / `等你` / `重放中`、优先级两条、目标名来去、`sync_title` 的「变了才写」）；`TuiState::new` 的调用点全部补参（`render_layout.rs`、`render_tui.rs`、`history_replay.rs`、`ask_user_question_tui.rs`、`tui.rs` 内部单测）。
+- **pty 脚本**：`TEARDOWN` 加 `\x1b[23;0t`，`verdict` 新增进入侧两条（`\x1b[22;0t` 在场、`OSC 0` 的内容含 `os.path.basename(os.getcwd())`），docstring 与 `TEARDOWN` 上方注释同步。**实跑**（本机沙箱里用 `FS_AGENT_MODEL=kimi-for-coding`，因为默认模型那个 provider 在这台机器上没有 key）：12/12 GREEN —— 三条空闲出口加 `--continue` 共四类，各自都验到标题的保存与还原序列。
+- **没做**：真终端里「标题看起来对不对」是 [票 03](03-manual-and-docs.md) 的手工面，见那一票的 Comments。
+- `cargo test` 全绿（959 条）；`python3 scripts/check-language.py` 通过。

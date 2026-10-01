@@ -34,7 +34,7 @@ fn facts() -> SessionFacts {
 }
 
 fn state() -> TuiState {
-    TuiState::new(facts())
+    TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None)
 }
 
 /// 指名册的会话用的注入 facts：一个名字是单口会话，
@@ -1251,7 +1251,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
 
     // 回合比行多：显示最新的那些，顶上那一格说明上面
     // 还有更早的。底下什么都没被裁，因为视口就在底部。
-    let mut scrolled = TuiState::new(facts());
+    let mut scrolled = TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None);
     turns(&mut scrolled, 30);
     let shape = turn_rail_shape(&mut scrolled);
     assert_eq!(
@@ -1361,7 +1361,7 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
     // 而下。所以偏移 1 是单元 14，偏移 5 是单元 18。每一个都在
     // 全新状态里点，因为跳转会移动视口 —— 也移动格子的窗口。
     for (offset, unit) in [(1usize, 14u64), (5, 18)] {
-        let mut state = TuiState::new(facts());
+        let mut state = TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None);
         turns(&mut state, 30);
         let _ = screen(120, 24, &mut state);
         let cells = turn_rail_cells(&mut state);
@@ -1411,7 +1411,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 有不止一个讨论者的 `speaker_order` 才让一场会话成为讨论，
     // 而讨论会数自己的轮次 —— `CONTEXT.md` 把 轮次 与 回合 分开
     // （spec §4）。
-    let mut state = TuiState::new(facts_with_roster(&["kimi", "deepseek"]));
+    let mut state = TuiState::new(facts_with_roster(&["kimi", "deepseek"]), std::path::PathBuf::from("/x/fs-agent"), None);
     let kimi = SpeakerId::Debater("kimi".into());
     state.apply(user_message(1, "讨论题目"));
     for round in 0..3u32 {
@@ -1459,7 +1459,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
 
     // ……而后面的轮次没有自己的用户消息，所以它的格子落在
     // 轮次的开场行上 —— spec 给「没什么可瞄的单元」的兜底。
-    let mut later = TuiState::new(facts_with_roster(&["kimi", "deepseek"]));
+    let mut later = TuiState::new(facts_with_roster(&["kimi", "deepseek"]), std::path::PathBuf::from("/x/fs-agent"), None);
     later.apply(user_message(1, "讨论题目"));
     for round in 0..3u32 {
         for (offset, payload) in [
@@ -2110,7 +2110,7 @@ fn the_share_bar_survives_the_narrow_sidebar() {
 fn state_without_budget() -> TuiState {
     let mut facts = facts();
     facts.budget_limit = None;
-    TuiState::new(facts)
+    TuiState::new(facts, std::path::PathBuf::from("/x/fs-agent"), None)
 }
 
 #[test]
@@ -2624,7 +2624,7 @@ fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
     let mut state = TuiState::new(SessionFacts {
         mode: fs_agent::permissions::Mode::Readonly,
         ..facts()
-    });
+    }, std::path::PathBuf::from("/x/fs-agent"), None);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("模式 只读"), "{text}");
 }
@@ -3820,7 +3820,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         budget_limit: Some(100_000),
         number_style: fs_agent::render::wording::NumberStyle::Cn,
         speaker_order: vec!["kimi".to_owned()],
-    });
+    }, std::path::PathBuf::from("/x/fs-agent"), None);
     state.apply(tool_started(
         1,
         "call-11",
@@ -3902,7 +3902,7 @@ fn state_with_roster(names: &[&str]) -> TuiState {
     TuiState::new(SessionFacts {
         speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
         ..facts()
-    })
+    }, std::path::PathBuf::from("/x/fs-agent"), None)
 }
 
 /// 滚轮一格。
@@ -4517,7 +4517,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         budget_limit: Some(100_000),
         number_style: fs_agent::render::wording::NumberStyle::Cn,
         speaker_order: vec!["kimi".to_owned()],
-    });
+    }, std::path::PathBuf::from("/x/fs-agent"), None);
     state.apply(tool_started(
         1,
         "call-23",

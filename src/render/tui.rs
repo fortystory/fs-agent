@@ -25,7 +25,8 @@ use ratatui::crossterm::event::{
     MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+use ratatui::crossterm::style::Print;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, SetTitle};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
@@ -36,7 +37,7 @@ use ratatui::widgets::{
 };
 use tokio::sync::broadcast;
 
-use crate::events::{Event, Role, StopReason, ToolCallId};
+use crate::events::{Event, EventPayload, Role, StopReason, ToolCallId};
 use crate::permissions::{Answer, Mode, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
@@ -288,6 +289,12 @@ pub struct SessionFacts {
 pub struct TuiOptions {
     pub port: ConsolePort,
     pub facts: SessionFacts,
+    /// 这个会话的工作目录：终端标题的路径段要回答「在哪个目录」
+    /// （`.scratch/terminal-title/spec.md` §1）。
+    ///
+    /// 它**不进** [`SessionFacts`]：那是给面板与状态行看的事实集合，而标题要的另两样东西
+    /// （`$HOME` 与工作目录）是渲染器自己的输入，随组装传进来。
+    pub cwd: std::path::PathBuf,
     /// 这个会话是不是**被重新打开**的（`--continue`），所以有一次历史重放正沿着 console
     /// 端口过来。
     ///
@@ -313,14 +320,23 @@ impl Tui {
         let TuiOptions {
             mut port,
             facts,
+            cwd,
             reopened,
         } = self.options;
-        let mut state = TuiState::new(facts);
+        // 家目录在这里读一次，不进 `TuiState::new` 的调用方：标题那一层是纯函数，读环境
+        // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let mut state = TuiState::new(facts, cwd, home);
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
         let mut terminal = ratatui::init();
-        let modes = TerminalModes::enter();
+        // 第一版标题在这里就写：它不该跟着那场「等重放」一起等下去，而且快照也从这一刻
+        // 起算，绘制路径只管之后的变化（`.scratch/terminal-title/spec.md` §4、§5）。
+        let first = state
+            .sync_title()
+            .expect("首帧之前还没有标题快照");
+        let modes = TerminalModes::enter(&first);
         let mut keys = EventStream::new();
 
         // 重新打开的会话在画任何东西之前先等这次重放。循环把它作为**第一条** console 请求
@@ -408,6 +424,12 @@ impl Tui {
                 let _ = terminal.draw(|frame| draw_frame(frame, &mut state));
                 let _ = execute!(frame_out, EndSynchronizedUpdate);
                 state.mark_clean();
+                // 标题只在真变了的时候重写：算一次期望值、与上一版比对。状态来自
+                // `running` / `pending` / `replay` / 目标名四处，逐个挂钩一定会漏，所以
+                // 比对发生在绘制路径上（`.scratch/terminal-title/spec.md` §5）。
+                if let Some(title) = state.sync_title() {
+                    set_terminal_title(&title);
+                }
             }
             if state.should_quit() {
                 break;
@@ -419,15 +441,29 @@ impl Tui {
     }
 }
 
-/// 鼠标上报与括号粘贴：进来时打开，出去时关掉。
+/// 写一条终端标题（`OSC 0`，crossterm 的 `SetTitle` 发的就是 `\x1b]0;…\x07`）。
+///
+/// 标题是**窗口属性**、不是屏幕内容，所以它不跟 alt screen 的进出绑在一起，也不进
+/// 事件流（`.scratch/terminal-title/spec.md` §4、§6）。
+fn set_terminal_title(title: &str) {
+    let _ = execute!(std::io::stdout(), SetTitle(title));
+}
+
+/// 鼠标上报、括号粘贴与终端标题：进来时管上，出去时还回去。
 ///
 /// `ratatui::init` 只管 raw 模式与 alt screen —— 它的 `TerminalOptions` 里根本没有鼠标
-/// 开关 —— 所以这两样得我们自己撤，正常路径与 panic 路径都一样。留着不管，fs-agent
+/// 开关 —— 所以这几样得我们自己撤，正常路径与 panic 路径都一样。留着不管，fs-agent
 /// 退出之后终端就没法选文字了。
 struct TerminalModes;
 
 impl TerminalModes {
-    fn enter() -> Self {
+    fn enter(title: &str) -> Self {
+        // 先请终端把原标题存起来（CSI 22 t），再写我们的第一版；`disable_terminal_modes`
+        // 用 CSI 23 t 把它换回来。不支持 push/pop 的终端上这两条是 no-op，标题会停在我们
+        // 写的那条 —— 那是一个**接受**的退化，不为它加 fallback：补发一条「清空标题」在
+        // 那种终端上会把用户原本的标题抹掉，比不还原更糟（spec §4）。
+        let _ = execute!(std::io::stdout(), Print("\x1b[22;0t"));
+        set_terminal_title(title);
         let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
         // `init` 装了一个 hook 恢复 raw 模式与 alt screen；把它包一层，让 panic 在它跑
         // 之前也把鼠标与粘贴模式还回去。
@@ -450,7 +486,9 @@ fn disable_terminal_modes() {
     let _ = execute!(
         std::io::stdout(),
         DisableMouseCapture,
-        DisableBracketedPaste
+        DisableBracketedPaste,
+        // 还原进入时保存的那条标题。
+        Print("\x1b[23;0t")
     );
 }
 
@@ -465,6 +503,17 @@ impl Render for Tui {
 pub struct TuiState {
     /// 左栏与状态行显示什么，组装时注入（spec §8）。
     facts: SessionFacts,
+    /// 会话的工作目录与用户的家目录：终端标题那一段路径的两半
+    /// （`.scratch/terminal-title/spec.md` §1）。`home` 由 [`Tui::run`] 读一次传进来，
+    /// 于是 [`TuiState::title`] 是纯函数、测试能钉死。
+    cwd: std::path::PathBuf,
+    home: Option<std::path::PathBuf>,
+    /// 正在推进的目标名：从流上那条 `GoalSelected` 留下，`GoalStopped` / `GoalCompleted`
+    /// 到了就清掉（spec §6）。目标名本来就被推到前端，只是转录层把它丢了。
+    goal: Option<String>,
+    /// 上一次写进终端的那条标题，用来在绘制路径上比对 —— 有它就不必枚举状态来源
+    /// （spec §5）。
+    last_title: Option<String>,
     /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
     /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
     /// （`.scratch/todo-and-modes/spec.md` §1）。
@@ -1206,11 +1255,19 @@ struct Replay {
 }
 
 impl TuiState {
-    pub fn new(facts: SessionFacts) -> Self {
+    pub fn new(
+        facts: SessionFacts,
+        cwd: std::path::PathBuf,
+        home: Option<std::path::PathBuf>,
+    ) -> Self {
         let colors = SpeakerColors::new(&facts.speaker_order);
         let mode = facts.mode;
         Self {
             facts,
+            cwd,
+            home,
+            goal: None,
+            last_title: None,
             mode,
             transcript: Transcript::new(),
             pane: Pane::new(),
@@ -1255,6 +1312,28 @@ impl TuiState {
             // 循环开始跑目标时才会把它置上（[`ConsoleRequest::Muted`]）。
             muted: false,
         }
+    }
+
+    /// 这一刻终端标题该是什么（`.scratch/terminal-title/spec.md` §1–§3）。
+    pub fn title(&self) -> String {
+        wording::terminal_title(
+            &self.cwd,
+            self.home.as_deref(),
+            wording::title_state(self.replay.is_some(), self.pending.is_some(), self.busy()),
+            self.goal.as_deref(),
+        )
+    }
+
+    /// 算一次标题，与上一版比对；变了就记下新的并返回它，没变答 `None`。
+    ///
+    /// 绘制路径每帧问一次，于是「只在状态变化时更新」自动成立（spec §5）。
+    pub fn sync_title(&mut self) -> Option<String> {
+        let title = self.title();
+        if self.last_title.as_deref() == Some(title.as_str()) {
+            return None;
+        }
+        self.last_title = Some(title.clone());
+        Some(title)
     }
 
     /// 上一帧画完之后有没有什么东西变了。
@@ -1316,6 +1395,7 @@ impl TuiState {
     /// 吃掉多少事件来算（`.scratch/tui-history-replay/spec.md` §2）。实时调用方不看它。
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         self.dirty = true;
+        self.observe_goal(&event);
         let mut produced = 0usize;
         for block in self.transcript.push(event) {
             // 思考行的生命周期跑在块被画出来之前：一个推理增量开出它，正文的第一个增量把它
@@ -2299,6 +2379,24 @@ impl TuiState {
     /// 回合，于是一场讨论之后 TUI 以为自己永远在工作。从「没有未决的提示」推：那个谓词在
     /// 循环要它的*第一*行之前就是真的，于是组装期间空闲的键盘被读成工作中。两个错都把
     /// `Ctrl-C` 变成了一个空闲循环会丢掉的取消手势 —— 一块死键盘。
+    /// 从流上留一份「现在在推进哪个目标」，给终端标题用（spec §6）。
+    ///
+    /// 以**正在推进**为准：`events::current_goal` 只认最后一条 `GoalSelected`，目标停下
+    /// 之后它仍会返回名字，所以停下与完成这两条都要清。重放走同一个 `apply`，于是
+    /// `--continue` 的目标名自然重建，不需要第二套路径。
+    fn observe_goal(&mut self, event: &RenderEvent) {
+        let RenderEvent::Logged(event) = event else {
+            return;
+        };
+        match &event.payload {
+            EventPayload::GoalSelected { goal } => self.goal = Some(goal.clone()),
+            EventPayload::GoalStopped { .. } | EventPayload::GoalCompleted { .. } => {
+                self.goal = None;
+            }
+            _ => {}
+        }
+    }
+
     fn busy(&self) -> bool {
         self.running
     }
@@ -4639,7 +4737,7 @@ mod tests {
             budget_limit: None,
             number_style: crate::render::wording::NumberStyle::Cn,
             speaker_order: vec!["kimi".to_owned()],
-        })
+        }, std::path::PathBuf::from("/x/fs-agent"), None)
     }
 
     #[test]

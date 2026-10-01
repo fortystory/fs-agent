@@ -33,7 +33,7 @@ fn facts() -> SessionFacts {
 }
 
 fn state() -> TuiState {
-    TuiState::new(facts())
+    TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None)
 }
 
 /// 一道题，带选项与多选旗标。

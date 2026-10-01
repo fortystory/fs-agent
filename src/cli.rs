@@ -340,6 +340,8 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         Renderer::tui(TuiOptions {
             port,
             facts,
+            // 标题的路径段用的就是这一档工作目录 —— `--cwd` 已经解析过了。
+            cwd: cwd.clone(),
             // 重新打开的会话会在横幅之前重放它的历史，所以 TUI 必须知道，在那次重放到达之前什么都
             // 不要画（`.scratch/tui-history-replay/spec.md` §1、§3）。
             reopened: parsed.resume,
@@ -629,6 +631,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         Renderer::tui(TuiOptions {
             port,
             facts,
+            cwd: cwd.clone(),
             reopened: false,
         })
     } else {
