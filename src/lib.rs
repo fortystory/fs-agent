@@ -27,6 +27,7 @@ pub mod config;
 pub mod context;
 pub mod discussion;
 pub mod events;
+pub mod goals;
 pub mod hooks;
 pub mod permissions;
 pub mod provider;
@@ -803,6 +804,11 @@ impl Harness {
 
     pub fn session_id(&self) -> &SessionId {
         self.session.id()
+    }
+
+    /// 这场会话的工作目录（`--cwd` 已经在这一层解析过），于是调用方不必去问进程的 cwd。
+    pub fn cwd(&self) -> &Path {
+        self.session.cwd()
     }
 
     /// 对前端说一句不属于任何事件的话：启动横幅，以及交互式循环那些朴素的反馈。

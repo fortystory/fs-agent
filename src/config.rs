@@ -586,16 +586,28 @@ pub fn default_path(env: &EnvMap) -> PathBuf {
 /// 两个变量都没设时是 `None`：CLI 会照说，而不是凭空造一个目录把会话写进去。存储本身把根
 /// 目录当参数收，所以库从不读它。
 pub fn sessions_dir(env: &EnvMap) -> Option<PathBuf> {
-    let base = env
-        .get("XDG_DATA_HOME")
+    Some(data_dir(env)?.join("fs-agent").join("sessions"))
+}
+
+/// 缺省的目标清单目录：`$XDG_DATA_HOME/fs-agent/goals`，否则
+/// `$HOME/.local/share/fs-agent/goals`（`.scratch/goal-loop/spec.md` §1）。
+///
+/// 与 [`sessions_dir`] 同一个数据根：清单与它跨过的那些会话属于同一个人的同一批数据。两个
+/// 变量都没设时是 `None` —— 与 `sessions_dir` 一样，CLI 会照说，而不是凭空造一个目录。
+pub fn goals_dir(env: &EnvMap) -> Option<PathBuf> {
+    Some(data_dir(env)?.join("fs-agent").join("goals"))
+}
+
+/// `$XDG_DATA_HOME`，否则 `$HOME/.local/share`；都没有时是 `None`。
+fn data_dir(env: &EnvMap) -> Option<PathBuf> {
+    env.get("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
             env.get("HOME")
                 .filter(|value| !value.is_empty())
                 .map(|home| PathBuf::from(home).join(".local").join("share"))
-        })?;
-    Some(base.join("fs-agent").join("sessions"))
+        })
 }
 
 // --- 原始 TOML 形状 -----------------------------------------------------

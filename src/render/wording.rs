@@ -1455,7 +1455,7 @@ pub struct Command {
 }
 
 /// 内建的斜杠命令，按每一份列表显示它们的顺序。
-pub static BUILT_IN_COMMANDS: [Command; 3] = [
+pub static BUILT_IN_COMMANDS: [Command; 4] = [
     Command {
         name: "undo",
         description: "回滚上一次编辑",
@@ -1465,10 +1465,37 @@ pub static BUILT_IN_COMMANDS: [Command; 3] = [
         description: "起一场多角色讨论（用本会话的上下文）",
     },
     Command {
+        name: "goal",
+        description: "从一批票生成一份目标清单：`/goal new <名字> <来源>`",
+    },
+    Command {
         name: "quit",
         description: "退出会话",
     },
 ];
+
+/// 一条诊断行的程序名前缀。
+///
+/// 它住在措辞层，于是这个前缀只有一个归宿 —— CLI 那些 `fs-agent: …` 的行都从这里出去，而
+/// 语言护栏那一侧也不必把同一个前缀数上二十几遍。
+pub fn fs_agent(message: &str) -> String {
+    format!("fs-agent: {message}")
+}
+
+/// `/goal` 的用法：参数不对时说的那句。
+pub fn goal_usage() -> &'static str {
+    "用法：/goal new <名字> <feature 目录或票路径> [--force]"
+}
+
+/// 一份目标清单生成了。
+pub fn goal_created(name: &str, entries: usize, path: &str) -> String {
+    format!("目标 {name} 已写入 {path}，{entries} 条")
+}
+
+/// 没有数据目录时，`/goal` 与 `/loop` 都无从下手。
+pub fn no_goal_dir() -> &'static str {
+    "找不到数据目录（`XDG_DATA_HOME` 或 `HOME` 都没设），目标清单没地方放"
+}
 
 /// 内建命令作为一行提示：`可用：/undo、/discuss、/quit`。
 ///

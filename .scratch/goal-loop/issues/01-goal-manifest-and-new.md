@@ -1,7 +1,7 @@
 # 目标清单文件与 `/goal new`
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：`.scratch/goal-loop/spec.md` §1（目标与清单文件）、§2（`/goal new`）。

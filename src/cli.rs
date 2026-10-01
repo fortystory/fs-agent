@@ -301,6 +301,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         .get("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
+    // 目标清单住在数据根下、会话目录的旁边（`.scratch/goal-loop/spec.md` §1）。库不读环境，所以
+    // 在这里定下来，随循环一起进去。
+    let goals_dir = config::goals_dir(env);
 
     // 这一趟从哪一档开始：旗标压过文件（spec §12）。在这里一次性定下来，因为有三样东西要同一个答
     // 案 —— 权限门跑在哪一档、横幅、以及状态行。
@@ -422,7 +425,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             .collect(),
     );
 
-    let code = interactive_loop(&mut harness, &console, &mut events, &config).await;
+    let code = interactive_loop(&mut harness, &console, &mut events, &config, goals_dir.as_deref()).await;
     harness.shutdown().await;
     code
 }
@@ -1051,6 +1054,7 @@ async fn interactive_loop(
     console: &ConsoleHandle,
     events: &mut ConsoleEvents,
     config: &Config,
+    goals_dir: Option<&Path>,
 ) -> ExitCode {
     loop {
         // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
@@ -1143,6 +1147,11 @@ async fn interactive_loop(
                     ));
                 }
             }
+            // `/goal new <名字> <来源>`：从一批票生成一份目标清单（§2）。手势，不进流。
+            Submission::Goal(args) => {
+                let message = run_goal_command(harness, goals_dir, &args);
+                harness.notice(&render::wording::fs_agent(&message));
+            }
             // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
             Submission::Prompt(text) => {
                 if let Err(error) = run_one_turn(harness, events, TurnStart::Prompt(text)).await {
@@ -1192,6 +1201,10 @@ enum Submission<'a> {
     /// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。用户没打问题时问题为空 ——
     /// 那时循环把这场会话最后一个问题交给那两位讨论者。
     Discuss(String),
+    /// `/goal new <名字> <来源> [--force]`：从一批票生成一份目标清单（`.scratch/goal-loop/spec.md`
+    /// §2）。它是一个**手势**，不是工具调用：由循环直接执行，不走工具表、不走权限门、也不进事件
+    /// 流 —— 清单文件存在即是「目标已创建」的证据。
+    Goal(String),
     /// 整条提交，含换行，作为一条 prompt。
     Prompt(&'a str),
 }
@@ -1236,6 +1249,10 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
             if name == "discuss" {
                 return Submission::Discuss(task_of(inline, rest));
             }
+            // `/goal new <名字> <来源>` 取同样的形状：它后面那一整段都是参数。
+            if name == "goal" {
+                return Submission::Goal(task_of(inline, rest));
+            }
             if !has_skill(name) {
                 if rest.trim().is_empty() {
                     return Submission::Unknown(first);
@@ -1251,6 +1268,67 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
         // 根本不是命令：整段文本，不管多少行，就是 prompt。
         _ => Submission::Prompt(text),
     }
+}
+
+/// `/goal new <名字> <来源> [--force]`：从一批票生成一份目标清单（`.scratch/goal-loop/spec.md`
+/// §2）。
+///
+/// 返回要说给人听的那句话。**手势，不是工具调用**：它不走工具表、不走权限门、也不写事件 ——
+/// 清单文件存在即是「目标已创建」的证据。
+fn run_goal_command(harness: &Harness, goals_dir: Option<&Path>, args: &str) -> String {
+    let Some(dir) = goals_dir else {
+        return render::wording::no_goal_dir().to_owned();
+    };
+    let Ok(line) = parse_goal_line(args) else {
+        return render::wording::goal_usage().to_owned();
+    };
+    // `<来源>` 相对于**会话**的 cwd 解析，而不是进程的：`--cwd` 可以指向别处。
+    let source = if Path::new(&line.source).is_absolute() {
+        PathBuf::from(&line.source)
+    } else {
+        harness.cwd().join(&line.source)
+    };
+    match crate::goals::create(&line.name, &source, dir, line.force) {
+        Ok((manifest, path)) => render::wording::goal_created(
+            &manifest.name,
+            manifest.entries.len(),
+            &path.display().to_string(),
+        ),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// `/goal` 那一行参数：`new <名字> <来源> [--force]`。
+#[derive(Debug, PartialEq, Eq)]
+struct GoalLine {
+    name: String,
+    source: String,
+    force: bool,
+}
+
+/// 解析 `/goal` 的参数。形如 `--force` 的旗标可以出现在任何位置，`<来源>` 可以带空格（它是一个
+/// 路径）。
+fn parse_goal_line(args: &str) -> Result<GoalLine, ()> {
+    let mut force = false;
+    let mut words: Vec<&str> = Vec::new();
+    for word in args.split_whitespace() {
+        if word == "--force" {
+            force = true;
+        } else {
+            words.push(word);
+        }
+    }
+    let [subcommand, name, source @ ..] = words.as_slice() else {
+        return Err(());
+    };
+    if *subcommand != "new" || source.is_empty() {
+        return Err(());
+    }
+    Ok(GoalLine {
+        name: (*name).to_owned(),
+        source: source.join(" "),
+        force,
+    })
 }
 
 /// 循环即将驱动的那个回合由什么起头。
@@ -2805,5 +2883,48 @@ mod tests {
     fn a_question_that_looks_like_a_flag_goes_after_a_double_dash() {
         let parsed = discuss_args(&["--", "--这段以横线开头"]).unwrap();
         assert_eq!(parsed.words, vec!["--这段以横线开头".to_owned()]);
+    }
+
+    // --- `/goal new`（`.scratch/goal-loop/spec.md` §2） ------------------------
+
+    use super::{parse_goal_line, GoalLine};
+
+    #[test]
+    fn goal_new_takes_a_name_and_a_source() {
+        assert_eq!(
+            read("/goal new sandbox .scratch/sandbox"),
+            Submission::Goal("new sandbox .scratch/sandbox".to_owned())
+        );
+        assert_eq!(
+            parse_goal_line("new sandbox .scratch/sandbox").unwrap(),
+            GoalLine {
+                name: "sandbox".to_owned(),
+                source: ".scratch/sandbox".to_owned(),
+                force: false,
+            }
+        );
+    }
+
+    #[test]
+    fn goal_new_reads_force_wherever_it_is_written_and_keeps_a_spaced_path_whole() {
+        let forced = parse_goal_line("--force new sandbox my tickets").unwrap();
+        assert!(forced.force);
+        assert_eq!(forced.name, "sandbox");
+        assert_eq!(
+            forced.source, "my tickets",
+            "来源是一个路径，空格是它的一部分"
+        );
+    }
+
+    #[test]
+    fn goal_without_new_a_name_and_a_source_is_a_usage_error() {
+        for args in ["", "new", "new sandbox", "list", "new sandbox --force"] {
+            assert!(parse_goal_line(args).is_err(), "`{args}` 不是一条合法的 /goal");
+        }
+        // 整条提交的形状：`/goal` 后面那一整段都是参数。
+        assert_eq!(
+            read("/goal new sandbox .scratch/sandbox\n"),
+            Submission::Goal("new sandbox .scratch/sandbox".to_owned())
+        );
     }
 }
