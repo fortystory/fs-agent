@@ -1,7 +1,7 @@
 # 验收面收口：手工清单新一节与随之更新的文档
 
 Type: implement
-Status: ready-for-human
+Status: ready-for-walkthrough
 Blocked by: 02
 
 > 规格：`.scratch/terminal-title/spec.md` §4 末（不支持 push/pop 的终端如实记一句）、§Testing Decisions 的「手工」一条（xterm / tmux / 一个 VTE 系各看一次；tmux 的 `allow-passthrough` 开与关）。
@@ -56,4 +56,4 @@ Blocked by: 02
   - 抬头的「来源」段补上 `.scratch/terminal-title/spec.md`（§1–§6、§Testing Decisions → ㉓）。
   - `docs/render.md` 的「键盘」一节末尾（挨着「`TuiState` 是可测的那一半」那段）补了一段：标题是 TUI 渲染器的副作用 —— `CSI 22 t` 保存、`OSC 0` 写入、绘制路径上比对、`CSI 23 t` 还原，不进事件流、`--plain` 与 headless 不发序列，以及不支持 push/pop 的终端上那个被接受的退化。
 - **已完成的两条自动腿**（本票不改代码，这里只记复核结果）：`cargo test` 全绿（959 条）；`python3 scripts/tui-startup-check.py` 12/12 GREEN —— 四类出口各三轮，每条都验到 `CSI 22 t`、含 cwd 基名的 `OSC 0` 与 `CSI 23 t`（本机跑时用 `FS_AGENT_MODEL=kimi-for-coding`，因为默认模型那个 provider 在这台机器上没有 key）。
-- **未做（这一票剩下的全部）**：第 1–7 条的真机验收 —— 在有 xterm / tmux / VTE 终端的机器上逐项走过，并把结果写进这一票。执行这次落地的环境里**没有真终端**（只有 pty，`scripts/tui-startup-check.py` 能跑，但没有人眼能看的那一格窗口标题），所以「标题看起来对不对、退不退出得回来」一次都没有被观察过。这也是这一票标成 `ready-for-human` 而不是 `done` 的原因：剩下的活只能由人在真终端上做，逐项记录照「验收」那一节的要求写。
+- **未做（这一票剩下的全部）**：第 1–7 条的真机验收 —— 在有 xterm / tmux / VTE 终端的机器上逐项走过，并把结果写进这一票。执行这次落地的环境里**没有真终端**（只有 pty，`scripts/tui-startup-check.py` 能跑，但没有人眼能看的那一格窗口标题），所以「标题看起来对不对、退不退出得回来」一次都没有被观察过。这也是这一票标成 `ready-for-walkthrough` 而不是 `done` 的原因：剩下的活只能由人在真终端上做，逐项记录照「验收」那一节的要求写。

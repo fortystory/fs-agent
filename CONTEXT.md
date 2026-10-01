@@ -104,7 +104,7 @@ _Avoid_: 目标条目（那只在清单文件里）、待办列表（那是 `tod
 _Avoid_: abort、stop、interrupt（`Aborted` 是收尾原因，不是手势名）
 
 **退出举手（ExitGesture）**:
-「第一下只举手、第二下才真退」的那个中间状态。空闲时 `Ctrl-C` 与 `Ctrl-D` **共用同一把举手**；运行中第一下 `Ctrl-C` 也举它（那一下同时是**取消**）。举手期间**提示行**的出口段换成「再按一次 … 退出」，**半秒**内没有第二下就作废、提示行恢复原样。它是**纯渲染器状态**，不进事件流；退出码跟着**怎么退的**走：人主动退是 `0`，运行中被打断而退是 `130`。设计在 [`.scratch/exit-gesture/spec.md`](.scratch/exit-gesture/spec.md)（2026-10-01 折出，尚未落地）。
+「第一下只举手、第二下才真退」的那个中间状态。空闲时 `Ctrl-C` 与 `Ctrl-D` **共用同一把举手**；运行中第一下 `Ctrl-C` 也举它（那一下同时是**取消**）。举手期间**提示行**的出口段换成「再按一次 … 退出」，**半秒**内没有第二下就作废、提示行恢复原样。它是**纯渲染器状态**，不进事件流；退出码跟着**怎么退的**走：人主动退是 `0`，运行中被打断而退是 `130`。设计在 [`.scratch/exit-gesture/spec.md`](.scratch/exit-gesture/spec.md)（2026-10-01 折出，2026-10-02 落地）。
 _Avoid_: 双击（那说的是按键次数，没说出「中间有个会过期的状态」）、确认框（那是弹窗，这条路刻意不做）
 
 **权限模式（Mode）**:
@@ -289,7 +289,7 @@ _Avoid_: 路线图、roadmap（那是排期，这里的票没有时间轴）；�
 _Avoid_: `/handoff`（那是把上下文搬去新会话的技能，跟这一步无关）、交接（那是两班人之间的说法）
 
 **票（ticket，`issues/NN-<slug>.md`）**:
-tracker 的最小单位：**一票一个文件、从 `01` 编号**，永远不把所有票合成一个文件。开头那几行就是它的全部元数据——`Type:`（决策票是 `research` / `prototype` / `grilling` / `task`，构建切片是 `implement`）、`Status:`（见**分诊标签**；收尾状态分两套：决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`）、`Blocked by:`、`Part of:`。每票**自包含**（够一个 fresh session 从零开工），所以做完一票就可以把它那份 context 丢掉；讨论追加在文件底部的 `## Comments` 之下，决策票的答案追加在 `## Answer` 之下。
+tracker 的最小单位：**一票一个文件、从 `01` 编号**，永远不把所有票合成一个文件。开头那几行就是它的全部元数据——`Type:`（决策票是 `research` / `prototype` / `grilling` / `task`，构建切片是 `implement`）、`Status:`（见**分诊标签**；收尾状态分三套：决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`，以及**只等人走查**的 `ready-for-walkthrough`（2026-10-02 立：代码、测试、pty 脚本与手工清单都已落地，剩下的只有人在真终端里逐项看；它与分诊标签里的 `ready-for-human`「必须由人动手实现」**不是一回事**））、`Blocked by:`、`Part of:`。每票**自包含**（够一个 fresh session 从零开工），所以做完一票就可以把它那份 context 丢掉；讨论追加在文件底部的 `## Comments` 之下，决策票的答案追加在 `## Answer` 之下。
 _Avoid_: issue（那是对外 tracker 的说法，本仓库的 tracker 就是 markdown）、工单、任务（`task` 是 `Type:` 的一个值，指那类要动手的决策票）
 
 **阻塞边（`Blocked by`）**:

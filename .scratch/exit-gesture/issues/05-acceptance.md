@@ -1,7 +1,7 @@
 # 验收面收口：忙碌双击的 pty 回归与手工清单重写
 
 Type: implement
-Status: ready-for-human
+Status: ready-for-walkthrough
 Blocked by: 03, 04
 
 > 规格：`.scratch/exit-gesture/spec.md`「测试决定」的 pty 与手工两条、§3 那个缺陷的回归、§5 的回执。
@@ -61,5 +61,5 @@ Blocked by: 03, 04
   1. **渲染器**：第一下 `Ctrl-C` 取消回合，而取消可能**在第二下之前就落地** —— 那时 `busy()` 已为假，按票 01 原本的字面（空闲第二下 = `self.quit = true`）会退成 0，与 spec §3「忙碌中被打断而退 = 130」冲突。修法是给举手记一个出身（`TuiState::exit_gesture_busy`），忙碌里举的那一把即使回合已经收尾，第二下也推 `FrontEndEvent::Quit`。回归在 `tests/render_tui.rs` 的 `a_gesture_raised_while_busy_still_quits_with_130_after_the_turn_ends`；票 01 的 Comments 里有补记。
   2. **CLI**：`interactive_loop` 在「等一次提示」那段原本 `Some(FrontEndEvent::Quit) => return ExitCode::SUCCESS`（票 03 当时按「这条分支不可达」处理）。举手出身那个修法让它**变得可达**，于是 130 会从这条路上悄悄退成 0 —— 实测就是这么红的。改成走退出账本：`quit.apply(...)` 之后 `return quit.code()`。
 - **手工清单 ⑦**：双击语义那一条与「忙碌双击退出后终端干净 + 回执打在 shell 里」那一条在票 01 里已经写好；本票复核了它与实测口径一致（回执行是 `会话 <id>；复盘：fs-agent sessions show <id>`，走 stderr）。
-- **未做（这一票剩下的全部）**：⑦ 里的真终端逐项走查 —— 起一个长回合、连按两下、`stty` 三个标志回来看、shell 里看见回执。执行这次落地的环境里没有真终端，所以这一票标 `ready-for-human`：能自动化的两条（pty 脚本、`cargo test`）都绿，剩下那半只能由人在真终端上做。
+- **未做（这一票剩下的全部）**：⑦ 里的真终端逐项走查 —— 起一个长回合、连按两下、`stty` 三个标志回来看、shell 里看见回执。执行这次落地的环境里没有真终端，所以这一票标 `ready-for-walkthrough`：能自动化的两条（pty 脚本、`cargo test`）都绿，剩下那半只能由人在真终端上做。
 - `cargo test` 全绿（969 条）；`cargo clippy --all-targets` 无警告。
