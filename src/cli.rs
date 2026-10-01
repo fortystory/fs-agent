@@ -1572,7 +1572,7 @@ async fn run_goal_loop(
                 crate::events::GoalStopReason::ProviderFailed,
                 retry.failures(),
                 manifest,
-                &progress,
+                goals,
             );
         }
         // 撞顶（§8）：沿用既有语义 —— **降级收尾，而不是中断**，并落一条收尾事件，于是恢复
@@ -1585,7 +1585,7 @@ async fn run_goal_loop(
                 crate::events::GoalStopReason::BudgetExhausted,
                 0,
                 manifest,
-                &progress,
+                goals,
             );
         }
         // 中途成功一次：计数归零。
@@ -1697,15 +1697,13 @@ async fn run_goal_loop(
                 let streak = no_progress.after_rollover(after.completed());
                 if no_progress.reached(goals.settings.no_progress_rollovers) {
                     *running = false;
-                    // 报告里的 `stuck` 取**翻页之后**这一刻的进度 —— 「卡在哪几条上」要是现在
-                    // 的样子，不是翻页前那一刻的。
                     return stop_goal_loop(
                         harness,
                         name,
                         crate::events::GoalStopReason::NoProgress,
                         streak,
                         manifest,
-                        &after,
+                        goals,
                     );
                 }
             }
@@ -1715,14 +1713,13 @@ async fn run_goal_loop(
     // `Ctrl-C` 或输入结束 —— 三种都是人的意思，所以落一条「人主动停」的收尾事件（§5、§10）。
     // 它让 `--continue` 分得出「人停的」与「崩掉的」：前者回来别自己又跑起来。
     *running = false;
-    let progress = goal_progress(goals, name, manifest);
     stop_goal_loop(
         harness,
         name,
         crate::events::GoalStopReason::UserStopped,
         0,
         manifest,
-        &progress,
+        goals,
     )
 }
 
@@ -1850,17 +1847,22 @@ fn report_unknown_goal_ids(
 
 /// 停下并报告（`.scratch/goal-loop/spec.md` §9）：落一条收尾事件，把话说在转录里。
 ///
-/// 报告里带 `count`（连续几次翻页零完成 / 失败了几次）与卡住的条目 id —— 只说「停了」没有用，
-/// 回头要核得出它是怎么卡住的。
+/// 报告里带 `count`（连续几次翻页零完成 / 失败了几次 / 试了几次）与卡住的条目 id —— 只说
+/// 「停了」没有用，回头要核得出它是怎么卡住的。
+///
+/// 那份进度**由这里自己算**（这一刻的派生值），不由调用方递进来：调用点有四条（撞顶 / 无进展 /
+/// provider 失败 / 人主动停），而「每一处都记得传刚重算的那份」是一条会失守的约定 —— 第一次真机
+/// 跑撞顶时就失守了：报告把已经做完的 01 也列成「还卡着」。
 fn stop_goal_loop(
     harness: &mut Harness,
     name: &str,
     reason: crate::events::GoalStopReason,
     count: u32,
     manifest: &crate::goals::Manifest,
-    progress: &crate::goals::Progress,
+    goals: &GoalSetup,
 ) -> Result<(), String> {
-    let stuck = crate::goals::unfinished(&manifest.entries, progress);
+    let progress = goal_progress(goals, name, manifest);
+    let stuck = crate::goals::unfinished(&manifest.entries, &progress);
     let detail = render::wording::goal_stopped(name, reason, count, &stuck);
     if let Err(error) = harness.stop_goal(name, reason, &detail, stuck, count) {
         return Err(render::wording::error_report(&error));
@@ -3713,6 +3715,148 @@ mod tests {
             "provider 失败一次就停下报告：{written:?}"
         );
         assert!(!running, "停下之后回到空闲");
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_budget_report_names_only_the_entries_that_are_still_open() {
+        // 报告里点名的必须是**这一刻**没完成的那几条。进度由 `stop_goal_loop` 自己派生，所以
+        // 这里钉的是它算对了：预造一条「已经认领目标、且已把 01 标完成」的流，再让额度为 0 ——
+        // 循环在第一个回合开头就撞顶，报告不许再把 01 列成「还卡着」（它第一次真机跑出来时正是
+        // 这么误导的：11 条全列上，而 01、02 其实已经做完）。
+        use super::{run_goal_loop, GoalSetup};
+        use crate::config::SessionConfig;
+        use crate::events::{
+            Event, EventPayload, GoalStopReason, SpeakerId, ToolCallId, SCHEMA_VERSION,
+        };
+        use crate::permissions::Policy;
+        use crate::render::{RenderSinks, Renderer};
+        use crate::session::SessionStore;
+        use crate::tools::{self, PathLocks};
+        use crate::{assemble, AssemblyParts, SessionScaffold};
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let goals_dir = dir.path().join("goals");
+        crate::goals::create(
+            "sandbox",
+            &[std::path::PathBuf::from(".scratch/sandbox")],
+            &goals_dir,
+            false,
+        )
+        .expect("清单从票生成");
+
+        let store = SessionStore::new(dir.path().join("store"));
+        let stored = store.create(&workspace).unwrap();
+        let seeded = [
+            Event::new(
+                1,
+                SpeakerId::System,
+                EventPayload::SessionStarted {
+                    session_id: stored.id.clone(),
+                    cwd: workspace.display().to_string(),
+                    schema_version: SCHEMA_VERSION,
+                },
+            ),
+            Event::new(
+                2,
+                SpeakerId::System,
+                EventPayload::GoalSelected {
+                    goal: "sandbox".to_owned(),
+                },
+            ),
+            Event::new(
+                3,
+                SpeakerId::Debater("kimi".into()),
+                EventPayload::ToolCallStarted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    tool_name: tools::TODO_TOOL.to_owned(),
+                    args: serde_json::json!({
+                        "items": [{"id": "01", "content": "一条", "status": "completed"}]
+                    }),
+                },
+            ),
+            Event::new(
+                4,
+                SpeakerId::Debater("kimi".into()),
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    ok: true,
+                    output: Some("todo：1 项（1 项已完成）".to_owned()),
+                    error: None,
+                    duration_ms: 1,
+                },
+            ),
+        ];
+        let mut jsonl = String::new();
+        for event in &seeded {
+            jsonl.push_str(&serde_json::to_string(event).unwrap());
+            jsonl.push('\n');
+        }
+        std::fs::write(&stored.log_path, jsonl).unwrap();
+
+        let mut harness = assemble(AssemblyParts {
+            provider: Box::new(NoCalls),
+            speaker: SpeakerId::Debater("kimi".into()),
+            config: SessionConfig::new("fake-model").with_session_token_limit(0),
+            renderer: Renderer::headless(RenderSinks {
+                stdout_result: Box::new(std::io::sink()),
+                stderr_diagnostic: Box::new(std::io::sink()),
+            }),
+            scaffold: SessionScaffold {
+                cwd: workspace.clone(),
+                log_path: stored.log_path.clone(),
+                session_id: stored.id.clone(),
+                tools: tools::builtin(false),
+                locks: PathLocks::new(),
+                policy: Policy::for_mode(Mode::Auto),
+                asker: None,
+                questions: None,
+                hook: None,
+                home: None,
+            },
+        })
+        .await
+        .expect("组装一场接手的会话");
+
+        let (console, _port, mut front_end) = crate::render::console();
+        let goals = GoalSetup {
+            dir: Some(goals_dir),
+            store,
+            cwd: workspace,
+            settings: crate::config::GoalSettings::default(),
+        };
+        let mut running = false;
+        run_goal_loop(
+            &mut harness,
+            &console,
+            &mut front_end,
+            &goals,
+            "sandbox",
+            &mut running,
+        )
+        .await
+        .expect("额度为 0 是一次正常的降级收尾");
+
+        let (reason, stuck) = harness
+            .events()
+            .into_iter()
+            .find_map(|event| match event.payload {
+                EventPayload::GoalStopped { reason, stuck, .. } => Some((reason, stuck)),
+                _ => None,
+            })
+            .expect("撞顶落了一条收尾");
+        assert_eq!(reason, GoalStopReason::BudgetExhausted);
+        assert!(
+            !stuck.contains(&"01".to_owned()),
+            "01 已经做完，不该出现在「还卡着」里：{stuck:?}"
+        );
+        assert!(
+            stuck.contains(&"02".to_owned()),
+            "没做的那些要在里面：{stuck:?}"
+        );
 
         harness.shutdown().await;
     }
