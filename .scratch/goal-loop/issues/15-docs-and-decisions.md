@@ -1,7 +1,7 @@
 # 收尾：文档、词条与护栏
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01, 03, 05, 07, 09
 
 > 规格：`.scratch/goal-loop/spec.md` §14。

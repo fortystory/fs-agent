@@ -44,6 +44,10 @@ ASSERTION = re.compile(r"\b(assert|assert_eq|assert_ne|debug_assert|panic|expect
 # summary / 协议标记）的散文所在处。这一侧按 ADR 0005 走中文，不再按 ADR 0001 冻在英文。
 FROZEN_FILES = [
     "src/tools/ask_user.rs",
+    # 目标循环那一侧：`goal_note` 的工具文案与 `goals.rs` 里那次汇总调用的简报都是
+    # 模型可见文本（`.scratch/goal-loop/spec.md` §11）。
+    "src/tools/goal_note.rs",
+    "src/goals.rs",
     "src/tools/bash.rs",
     "src/tools/custom.rs",
     "src/tools/edit.rs",
@@ -91,7 +95,8 @@ FROZEN_FILES = [
 #   schema 值也被上面那条判据天然排除。
 #
 # 进度（ADR 0005 的第 ②–⑤ 批落地后，2026-09-30；2026-10-01 沙箱那一批补进
-# `src/tools/sandbox.rs`）：中文 **229**、英文散文 **27**。
+# `src/tools/sandbox.rs`，同一天目标循环那一批补进 `src/tools/goal_note.rs` 与
+# `src/goals.rs`）：中文 **266**、英文散文 **27**。
 # 剩下的 27 条**一条散文都没有**，全是判据的假阳性，逐条记在 ADR 0005 的「进度与收口」
 # 一节里：`fs-agent: {message}` 这类程序名前缀（25 条）与两条纯 `format!` 骨架
 # （`→ {tool_name}({rendered})`、`{text}{separator}{display}: {}`）。再往下收就要动
@@ -114,6 +119,8 @@ MODEL_TEXT_FLOOR = {
     "src/tools/skill.rs": 3,
     "src/tools/task.rs": 4,
     "src/tools/todo.rs": 14,
+    "src/tools/goal_note.rs": 11,
+    "src/goals.rs": 26,
     "src/permissions.rs": 20,
     "src/discussion.rs": 8,
     "src/agent.rs": 39,
@@ -150,10 +157,14 @@ DOCS_MIN_RATIO = {
     "docs/adr/0005-model-visible-text-in-chinese.md": 36,
     "docs/adr/0006-sandbox-by-bubblewrap.md": 41,
     "docs/adr/0007-workspace-permission-mode.md": 43,
+    # 2026-10-01 目标循环那一批：实测 52.2%。
+    "docs/adr/0009-goals-are-files-and-progress-is-derived.md": 50,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
     "docs/discussion.md": 42,
+    # 2026-10-01 目标循环那一批：实测 41.1%。
+    "docs/goals.md": 39,
     "docs/executor.md": 38,
     "docs/highlight.md": 35,
     "docs/observability.md": 43,

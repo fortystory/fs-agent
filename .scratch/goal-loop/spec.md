@@ -190,4 +190,25 @@
 - **与 `sandbox` / `workspace-mode` 的关系**：`/loop` 要求的 `workspace` 档正是 [`workspace-mode`](../workspace-mode/spec.md) 那一档；沙箱给它兜底。
 - **与 `tui-history-replay` 的关系**：§10 的崩溃恢复复用它那条「重开时把历史铺进转录」的路径，`--continue` 的行为不变。
 - **前缀缓存的代价**：§6 的提醒与 §7 的压缩都必然打掉前缀缓存，所以两者都被设计成**低频**（跨阈值一次、过一次八成一次）。这条代价要在实现时如实记账。
-- **一条值得 ADR 的决定**：「目标不进会话状态，它的进度从各会话的 `todo` 派生」—— 难回头（它定 schema 的形状）、离开上下文会显得奇怪（为什么不存一份 goal 状态？）、且真有替代方案（存一份状态文件，像日账本当初拒绝的那样）。按本仓库「决定敲定那一刻惰性写」的规矩，在实现落地、形状不再动时补一条。
+- **一条值得 ADR 的决定**：「目标不进会话状态，它的进度从各会话的 `todo` 派生」—— 难回头（它定 schema 的形状）、离开上下文会显得奇怪（为什么不存一份 goal 状态？）、且真有替代方案（存一份状态文件，像日账本当初拒绝的那样）。**已落地**：[ADR 0009](../../docs/adr/0009-goals-are-files-and-progress-is-derived.md)，逐面文档在 [`docs/goals.md`](../../docs/goals.md)。
+
+## 实现注记（2026-10-01，15 张票落地时回改）
+
+按本仓库的规矩（实现票若改了 spec 的任何决定，必须回改 spec），这里是落地时与上文有出入的地方：
+
+- **`SCHEMA_VERSION` 没有涨**（§3 把这件事留给票 02 定）：加一个可选字段与四个新 payload 变体
+  （`GoalSelected` / `GoalCompleted` / `GoalStopped` + `ContextSource` 的三个变体）之后老流仍读得
+  回来，而跨版本从来不承诺兼容。票 03 也明说不涨。
+- **§7「收掉当前会话（写收尾）」的实际形状**：旧会话最后落的是那条
+  `HistorySuperseded { reason: Compaction }`，**没有** `SessionEnded`——今天没有任何地方产出它，
+  而 `StopReason` 里也没有一个「被翻页取代」的值。§10 的恢复判据不受影响：它看的是**最新**那条
+  流有没有收尾事件。
+- **停止事件是一个 payload 而不是几个**：`GoalStopped { goal, reason, detail, stuck, count }`，
+  `reason` 取 `no_progress` / `provider_failed` / `user_stopped` / `budget_exhausted`（§5 的主动
+  停也走它，于是恢复一眼分得出四种停）。§11 点名的「完成汇总」另有一条 `GoalCompleted`。
+- **跨会话额度落在 `SessionConfig.carried_tokens`**（§8）：闸门的求和仍是整条流，循环把「这个目标
+  更早那些会话的 `UsageRecorded` 之和」填进去 —— 值，不是状态文件。
+- **`[goals]` 有四个旋钮**：`remind_at` / `compact_at`（§6）之外，票 11 加了
+  `no_progress_rollovers`（缺省 3）与 `provider_retries`（缺省 2、上限 10）。
+- **`/loop` 的启动边界多了一条**（§5 的档位裁决也放在同一个判据里）：`check_start` 判四条 ——
+  已经在跑 / 档位不够 / 清单不在 / 没活可干。
