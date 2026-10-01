@@ -3363,6 +3363,30 @@ mod tests {
     }
 
     #[test]
+    fn the_continue_flag_parses_both_spellings_and_defaults_to_off() {
+        // `.scratch/exit-gesture/spec.md` 的「补充说明」点名要补的两条缺口之一：`exit(130)` 那条
+        // 路径与 `--continue` 的旗标解析（这里的 `mod tests` 原先只测过 `--mode`）。
+        use super::parse_interactive;
+
+        let args = |words: &[&str]| {
+            parse_interactive(
+                &words
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert!(args(&["--continue"]).unwrap().resume);
+        assert!(args(&["-c"]).unwrap().resume, "短拼写是同一个旗标");
+        assert!(!args(&[]).unwrap().resume, "不写就是不接着跑");
+        // 它与别的旗标可以混着写，顺序无所谓。
+        let mixed = args(&["--plain", "-c", "--model", "kimi-k3"]).unwrap();
+        assert!(mixed.resume);
+        assert!(mixed.plain);
+        assert_eq!(mixed.model.as_deref(), Some("kimi-k3"));
+    }
+
+    #[test]
     fn the_mode_flag_overrides_the_configuration_and_its_absence_does_not() {
         use super::{effective_mode, InteractiveArgs};
 
