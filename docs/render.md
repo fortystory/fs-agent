@@ -164,6 +164,14 @@ Markdown 的渲染（`render::markdown::to_lines`）收**可用列数**：表格
 TUI 里 `TuiState` 是可测的那一半：它持有转录、输入行与任何待答的问题，而 `Key` 是它自己的
 键位词汇，不是 crossterm 的，所以状态机不接终端也能测。
 
+终端那一半还有一个副作用：**终端标题**。进 TUI 时先发 `CSI 22 t` 把原标题存起来，再按当时
+的状态写一条 `<路径> · <状态> · <目标名>`（`OSC 0`，40 列封顶，`wording::terminal_title`）；
+此后在绘制路径上与一份快照比对，只在真变了的时候重写 —— 所以不必枚举 `running` /
+`pending` / `replay` / 目标名四个来源；退出（含 panic 路径）发 `CSI 23 t` 还原。它是渲染器
+的副作用，**不进事件流**、不落 `log.jsonl`、`--continue` 按当时的 cwd 重算，而 `--plain` 与
+headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4–§6）。不支持 push/pop 的
+终端上那两条序列是 no-op，标题会停在我们写的那条 —— 这是接受的退化，不加 fallback。
+
 ## 重新打开会话：历史重播
 
 `--continue` 重开本工作区最新的那个会话，TUI 把它的整条事件流铺回转录里，于是屏幕不是空着

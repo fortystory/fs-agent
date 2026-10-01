@@ -7,7 +7,8 @@
 来源：`.scratch/tui-layout/spec.md` 的 §Testing Decisions「手工清单」与 §2/§4/§5/§7，
 外壳改版的 `.scratch/tui-sidebar/spec.md`（§Testing Decisions 的「手工清单」），
 模式与待办那一轮的 `.scratch/todo-and-modes/spec.md`（§4、§Testing Decisions → ⑰），
-以及外壳收干净那一轮的 `.scratch/tui-chrome/spec.md`（§1–§5、§Testing Decisions → ⑳）。
+以及外壳收干净那一轮的 `.scratch/tui-chrome/spec.md`（§1–§5、§Testing Decisions → ⑳）、
+终端标题那一轮的 `.scratch/terminal-title/spec.md`（§1–§6、§Testing Decisions → ㉓）。
 布局本身按 ADR 0002：备用屏幕（alt screen）全屏，**一条全高左栏 + 一条主列**
 （转录 / 状态行 / 输入 / 提示）—— 四周那圈外框已经拆掉，两者之间只剩一条竖虚线（⑳）。
 左栏在 **≥ 120 列**时 40 列宽并画 fs 标记（5 行字符画），
@@ -530,3 +531,33 @@ assistant 的续行不再缩进。几何与结构由 `tests/render_markdown.rs` 
    `--continue` 打开的是新的那个。
 6. **过半提醒只来一次**：过 50% 时转录里出现「上下文已到 …%，已提醒模型把还没落流的东西落
    下来」。此后连续几个回合都在 50% 以上，这一行**不再重复**（每轮注入会每轮打掉前缀缓存）。
+
+## ㉓ 终端标题：内容、更新与还原
+
+这一轮（[`.scratch/terminal-title/spec.md`](../.scratch/terminal-title/spec.md)）让跑着
+fs-agent 的那一格终端说得出自己在哪个目录、在不在跑。能自动化的那两条腿已经钉住：拼法与
+40 列封顶在 `tests/wording.rs`，状态与目标名的来去在 `tests/render_tui.rs`，「我们发出了
+哪些序列」在 `scripts/tui-startup-check.py`（保存 `CSI 22 t`、写入 `OSC 0`、还原 `CSI 23 t`）。
+剩下这一半只有真终端答得了：**标题看起来对不对、退不退出得回来**。
+
+前置：`cargo build`，`cd` 进一个基名认得出的目录（仓库根就够），跑
+`./target/debug/fs-agent`。要验状态变化的那几条得能触发一次权限询问、或者让一回合跑起来。
+
+1. **内容**：跑起来看标题。路径段是工作目录的形态 —— 落在 `$HOME` 之下时写 `~/…`
+   （`~/code/fortystory/fs-agent`），别处写 `父目录/基名`；空闲时**没有**状态词。用
+   `--cwd /别的/目录` 起来，路径段跟着那个目录走。
+2. **更新**：让一回合跑起来（问一句话），标题里出现 `运行中`；出现权限询问或问卷时变成
+   `等你`；`--continue` 重放期间是 `重放中`，重放收敛后回到空闲那条。`/loop <名字>` 跑着时
+   目标名跟在后面（`… · 运行中 · <目标名>`），`/loop` 停下后它消失。
+3. **不闪**：一次长回合里盯着标题。它只在状态或目标变时写一次，**不随增量文本翻动**。
+4. **还原**：进 TUI 之前先用终端自己的办法给这一格设一条标题（例如
+   `printf '\e]0;原来的标题\a'`），然后跑 fs-agent、退出（空闲时双击 `Ctrl-C`、`/quit`
+   各一次）。退出之后标题应当回到那一条；`--continue` 退出也一样。
+5. **三种终端各走一遍**：`xterm`、`tmux`（窗格里的 TUI）、一个 VTE 系（`gnome-terminal` /
+   `Tilix` / `xfce4-terminal` 任一），每一处都做第 1–4 条。
+6. **tmux 的 `allow-passthrough`**：`tmux set -g allow-passthrough off` 与 `on` 各走一遍
+   第 1–4 条，两种结果都如实记下来（开 / 关各自是更新、还原，还是没动）。
+7. **不支持的终端如实记**：某个终端上如果保存 / 还原是 no-op、退出后标题停在我们写的那条，
+   就在这里点名记下来 —— 这是**接受**的退化，不加 fallback、也不补发「清空标题」（那会把
+   用户原本的标题抹掉，比不还原更糟，spec §4）。
+
