@@ -195,8 +195,8 @@ headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4�
   一条*进流的*活事件被丢掉，而不是缓冲，因为快照已经含有它；只有永不进流的事件
   （横幅、诊断、流式增量）被按住。分隔行从不进流，所以下一次重开插进来的是新的一条。
 - **按住的输入。** 重播进行中时草稿照样能编辑，但 `Enter` 不提交、指针被忽略、滚动键也被
-  忽略：视口一直钉在转录末尾，直到历史走完。`Ctrl-C` 退出（这不是一次运行，所以没有东西
-  可取消）；`Ctrl-D` 与 `Esc` 没有反应。
+  忽略：视口一直钉在转录末尾，直到历史走完。`Ctrl-C` 也走**双击**（第一下举手、第二下退出，
+  `.scratch/exit-gesture/spec.md` §1）；`Ctrl-D` 与 `Esc` 没有反应。
 
 这些行为在 `tests/history_replay.rs` 里对着一个固定尺寸的 `TestBackend` 断言；一次重开对
 终端的占有由 `scripts/tui-startup-check.py` 里的 `--continue` 路径守着，而大会话的观感留
