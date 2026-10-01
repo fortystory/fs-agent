@@ -1465,6 +1465,10 @@ pub struct Command {
 /// 一条内建命令，而解析认的每一个名字也都在表里。
 ///
 /// 顺序是固定的**声明顺序**，不按字母：`quit` 与 `exit` 是一对别名，挨着排。
+///
+/// **一族命令用连字符写成一条**（`/goal-new`，将来 `/goal-list` / `/goal-show` / `/goal-rm`
+/// 照走）：空格形状的子命令在 `/` 菜单里补不出来（菜单按命令名的前缀过滤，`new` 是第二个词），
+/// 而 `/goal-` 一个前缀就能把这一族全列出来。
 pub static BUILT_IN_COMMANDS: [Command; 7] = [
     Command {
         name: "undo",
@@ -1475,8 +1479,8 @@ pub static BUILT_IN_COMMANDS: [Command; 7] = [
         description: "起一场多角色讨论（用本会话的上下文）",
     },
     Command {
-        name: "goal",
-        description: "从一批票生成一份目标清单：`/goal new <名字> <来源>`",
+        name: "goal-new",
+        description: "从一批票生成一份目标清单：`/goal-new <名字> <来源>`",
     },
     Command {
         name: "loop",
@@ -1504,9 +1508,9 @@ pub fn fs_agent(message: &str) -> String {
     format!("fs-agent: {message}")
 }
 
-/// `/goal` 的用法：参数不对时说的那句。
+/// `/goal-new` 的用法：参数不对时说的那句。
 pub fn goal_usage() -> &'static str {
-    "用法：/goal new <名字> <feature 目录或票路径> [--force]"
+    "用法：/goal-new <名字> <feature 目录或票路径> [--force]"
 }
 
 /// 一份目标清单生成了。
@@ -1514,7 +1518,7 @@ pub fn goal_created(name: &str, entries: usize, path: &str) -> String {
     format!("目标 {name} 已写入 {path}，{entries} 条")
 }
 
-/// 没有数据目录时，`/goal` 与 `/loop` 都无从下手。
+/// 没有数据目录时，`/goal-new` 与 `/loop` 都无从下手。
 pub fn no_goal_dir() -> &'static str {
     "找不到数据目录（`XDG_DATA_HOME` 或 `HOME` 都没设），目标清单没地方放"
 }
@@ -1526,7 +1530,7 @@ pub fn loop_usage() -> &'static str {
 
 /// `/loop` 的三条启动边界（`.scratch/goal-loop/spec.md` §4）。每一条各说各的人话。
 pub fn loop_unknown_goal(name: &str) -> String {
-    format!("找不到目标 {name}；先用 `/goal new {name} <feature 目录或票路径>` 生成一份清单")
+    format!("找不到目标 {name}；先用 `/goal-new {name} <feature 目录或票路径>` 生成一份清单")
 }
 
 /// 目标已经全部完成：没活可干。

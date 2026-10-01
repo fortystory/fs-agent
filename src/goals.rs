@@ -5,7 +5,7 @@
 //! 派生（见 [`crate::session`] 与循环侧的重算）。所以这个模块的读者与写者都是纯函数：
 //! 给它一份文本或一个来源目录，它给你一份清单；它不读环境、不碰事件流。
 //!
-//! 清单**开工前封闭**：`/goal new` 生成一次，此后它与来源票各自独立。执行中冒出来的新工作
+//! 清单**开工前封闭**：`/goal-new` 生成一次，此后它与来源票各自独立。执行中冒出来的新工作
 //! 由模型用 `goal_note` 记（§11），不回头改这份文件。
 
 use std::collections::BTreeMap;
@@ -45,7 +45,7 @@ pub struct Manifest {
 
 /// 清单这一族动作失败的方式。
 ///
-/// 每一种都是一句能被人据以行动的话：它们大多会被打到终端上（`/goal new` 是手势，不是工具
+/// 每一种都是一句能被人据以行动的话：它们大多会被打到终端上（`/goal-new` 是手势，不是工具
 /// 调用）。
 #[derive(Debug, thiserror::Error)]
 pub enum GoalError {
@@ -304,7 +304,7 @@ pub fn store(dir: &Path, manifest: &Manifest, force: bool) -> Result<PathBuf, Go
     Ok(path)
 }
 
-/// 生成并写下——`/goal new` 的那一步（§2）。
+/// 生成并写下——`/goal-new` 的那一步（§2）。
 pub fn create(
     name: &str,
     source: &Path,
@@ -465,7 +465,7 @@ impl Progress {
     /// 全部条目都 `completed` 就算完成 —— 机械判据，不需要人点头。
     ///
     /// 信任假设：`completed` 是**模型自己填的**，所以判据机械**不等于**结果可靠。一条条目都没
-    /// 有的清单也算完成（没活可干），而 `/goal new` 从不生成这样的清单。
+    /// 有的清单也算完成（没活可干），而 `/goal-new` 从不生成这样的清单。
     pub fn is_complete(&self) -> bool {
         self.statuses
             .values()
@@ -513,7 +513,7 @@ pub fn progress(entries: &[Entry], calls: &[TodoCall]) -> Progress {
 /// 三种边界各说各的人话，而且**都在写任何事件之前**判 —— 一次被拒的启动在流上不留痕迹。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartRefusal {
-    /// 清单文件找不到：提示先 `/goal new`。
+    /// 清单文件找不到：提示先 `/goal-new`。
     Unknown,
     /// 所有条目都完成了：没活可干。
     NoWork,

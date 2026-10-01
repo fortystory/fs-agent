@@ -1183,7 +1183,7 @@ async fn interactive_loop(
                     ));
                 }
             }
-            // `/goal new <名字> <来源>`：从一批票生成一份目标清单（§2）。手势，不进流。
+            // `/goal-new <名字> <来源>`：从一批票生成一份目标清单（§2）。手势，不进流。
             Submission::Goal(args) => {
                 let message = run_goal_command(harness, goals.dir.as_deref(), &args);
                 harness.notice(&render::wording::fs_agent(&message));
@@ -1273,9 +1273,9 @@ enum Submission<'a> {
     /// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。用户没打问题时问题为空 ——
     /// 那时循环把这场会话最后一个问题交给那两位讨论者。
     Discuss(String),
-    /// `/goal new <名字> <来源> [--force]`：从一批票生成一份目标清单（`.scratch/goal-loop/spec.md`
-    /// §2）。它是一个**手势**，不是工具调用：由循环直接执行，不走工具表、不走权限门、也不进事件
-    /// 流 —— 清单文件存在即是「目标已创建」的证据。
+    /// `/goal-new <名字> <来源> [--force]`：从一批票生成一份目标清单
+    /// （`.scratch/goal-loop/spec.md` §2）。它是一个**手势**，不是工具调用：由循环直接执行，
+    /// 不走工具表、不走权限门、也不进事件流 —— 清单文件存在即是「目标已创建」的证据。
     Goal(String),
     /// `/loop <名字>`：选定目标并连续工作（§4）。参数是目标的名字，一个不断开的词。
     Loop(String),
@@ -1329,11 +1329,13 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
             if name == "discuss" {
                 return Submission::Discuss(task_of(inline, rest));
             }
-            // `/goal new <名字> <来源>` 取同样的形状：它后面那一整段都是参数。
-            if name == "goal" {
+            // `/goal-new <名字> <来源>` 取同样的形状：它后面那一整段都是参数。`/goal` 这一族
+            // 用**连字符**写成一条命令（将来的 `/goal-list` 等照走），于是 `/goal-` 一个前缀
+            // 就能在 `/` 菜单里把它们全列出来 —— 空格形状的子命令补不出来。
+            if name == "goal-new" {
                 return Submission::Goal(task_of(inline, rest));
             }
-            // `/loop <名字>`：一个参数，形状与 `/goal` 相同。
+            // `/loop <名字>`：一个参数，形状与 `/goal-new` 相同。
             if name == "loop" {
                 return Submission::Loop(task_of(inline, rest));
             }
@@ -1377,8 +1379,8 @@ fn slash_catalog(
         .collect()
 }
 
-/// `/goal new <名字> <来源> [--force]`：从一批票生成一份目标清单（`.scratch/goal-loop/spec.md`
-/// §2）。
+/// `/goal-new <名字> <来源> [--force]`：从一批票生成一份目标清单
+/// （`.scratch/goal-loop/spec.md` §2）。
 ///
 /// 返回要说给人听的那句话。**手势，不是工具调用**：它不走工具表、不走权限门、也不写事件 ——
 /// 清单文件存在即是「目标已创建」的证据。
@@ -1386,7 +1388,7 @@ fn run_goal_command(harness: &Harness, goals_dir: Option<&Path>, args: &str) -> 
     let Some(dir) = goals_dir else {
         return render::wording::no_goal_dir().to_owned();
     };
-    let Ok(line) = parse_goal_line(args) else {
+    let Ok(line) = parse_goal_new_line(args) else {
         return render::wording::goal_usage().to_owned();
     };
     // `<来源>` 相对于**会话**的 cwd 解析，而不是进程的：`--cwd` 可以指向别处。
@@ -1405,17 +1407,17 @@ fn run_goal_command(harness: &Harness, goals_dir: Option<&Path>, args: &str) -> 
     }
 }
 
-/// `/goal` 那一行参数：`new <名字> <来源> [--force]`。
+/// `/goal-new` 那一行参数：`<名字> <来源> [--force]`。
 #[derive(Debug, PartialEq, Eq)]
-struct GoalLine {
+struct GoalNewLine {
     name: String,
     source: String,
     force: bool,
 }
 
-/// 解析 `/goal` 的参数。形如 `--force` 的旗标可以出现在任何位置，`<来源>` 可以带空格（它是一个
-/// 路径）。
-fn parse_goal_line(args: &str) -> Result<GoalLine, ()> {
+/// 解析 `/goal-new` 的参数。形如 `--force` 的旗标可以出现在任何位置，`<来源>` 可以带空格（它是
+/// 一个路径）。
+fn parse_goal_new_line(args: &str) -> Result<GoalNewLine, ()> {
     let mut force = false;
     let mut words: Vec<&str> = Vec::new();
     for word in args.split_whitespace() {
@@ -1425,13 +1427,13 @@ fn parse_goal_line(args: &str) -> Result<GoalLine, ()> {
             words.push(word);
         }
     }
-    let [subcommand, name, source @ ..] = words.as_slice() else {
+    let [name, source @ ..] = words.as_slice() else {
         return Err(());
     };
-    if *subcommand != "new" || source.is_empty() {
+    if source.is_empty() {
         return Err(());
     }
-    Ok(GoalLine {
+    Ok(GoalNewLine {
         name: (*name).to_owned(),
         source: source.join(" "),
         force,
@@ -1440,7 +1442,7 @@ fn parse_goal_line(args: &str) -> Result<GoalLine, ()> {
 
 /// 目标那一族命令要的环境事实：清单目录、会话桶、cwd。
 struct GoalSetup {
-    /// 目标清单目录；没有数据根时是 `None`（`/goal` 与 `/loop` 都照说）。
+    /// 目标清单目录；没有数据根时是 `None`（`/goal-new` 与 `/loop` 都照说）。
     dir: Option<PathBuf>,
     store: SessionStore,
     cwd: PathBuf,
@@ -1469,7 +1471,7 @@ async fn run_goal_loop(
     let Some(dir) = goals.dir.as_deref() else {
         return Err(render::wording::no_goal_dir().to_owned());
     };
-    // 读不出来分两种：清单不在（提示先 `/goal new`），或者它是人手改坏的文件（照说坏在哪）。
+    // 读不出来分两种：清单不在（提示先 `/goal-new`），或者它是人手改坏的文件（照说坏在哪）。
     let loaded = crate::goals::load(dir, name);
     let broken = match &loaded {
         Ok(_) | Err(crate::goals::GoalError::Read { .. }) => None,
@@ -3424,29 +3426,35 @@ mod tests {
         assert_eq!(parsed.words, vec!["--这段以横线开头".to_owned()]);
     }
 
-    // --- `/goal new`（`.scratch/goal-loop/spec.md` §2） ------------------------
+    // --- `/goal-new`（`.scratch/goal-loop/spec.md` §2） -----------------------
 
-    use super::{parse_goal_line, GoalLine};
+    use super::{parse_goal_new_line, GoalNewLine};
 
     #[test]
-    fn goal_new_takes_a_name_and_a_source() {
+    fn goal_new_is_one_hyphenated_command_taking_a_name_and_a_source() {
+        // 连字符形状：一条命令、一个词，于是 `/goal-` 一个前缀就能在 `/` 菜单里把它列出来
+        // （空格形状的 `new` 补不出来）。
         assert_eq!(
-            read("/goal new sandbox .scratch/sandbox"),
-            Submission::Goal("new sandbox .scratch/sandbox".to_owned())
+            read("/goal-new sandbox .scratch/sandbox"),
+            Submission::Goal("sandbox .scratch/sandbox".to_owned())
         );
         assert_eq!(
-            parse_goal_line("new sandbox .scratch/sandbox").unwrap(),
-            GoalLine {
+            parse_goal_new_line("sandbox .scratch/sandbox").unwrap(),
+            GoalNewLine {
                 name: "sandbox".to_owned(),
                 source: ".scratch/sandbox".to_owned(),
                 force: false,
             }
         );
+        assert_eq!(
+            read("/goal-new sandbox .scratch/sandbox\n"),
+            Submission::Goal("sandbox .scratch/sandbox".to_owned())
+        );
     }
 
     #[test]
     fn goal_new_reads_force_wherever_it_is_written_and_keeps_a_spaced_path_whole() {
-        let forced = parse_goal_line("--force new sandbox my tickets").unwrap();
+        let forced = parse_goal_new_line("--force sandbox my tickets").unwrap();
         assert!(forced.force);
         assert_eq!(forced.name, "sandbox");
         assert_eq!(
@@ -3456,17 +3464,17 @@ mod tests {
     }
 
     #[test]
-    fn goal_without_new_a_name_and_a_source_is_a_usage_error() {
-        for args in ["", "new", "new sandbox", "list", "new sandbox --force"] {
+    fn goal_new_without_a_name_and_a_source_is_a_usage_error() {
+        for args in ["", "sandbox", "sandbox --force"] {
             assert!(
-                parse_goal_line(args).is_err(),
-                "`{args}` 不是一条合法的 /goal"
+                parse_goal_new_line(args).is_err(),
+                "`{args}` 不是一条合法的 /goal-new"
             );
         }
-        // 整条提交的形状：`/goal` 后面那一整段都是参数。
+        // 退役的空格形状是未知命令，与 `/plan` 一样的读法：命令名就是命令名。
         assert_eq!(
-            read("/goal new sandbox .scratch/sandbox\n"),
-            Submission::Goal("new sandbox .scratch/sandbox".to_owned())
+            read("/goal new sandbox .scratch/sandbox"),
+            Submission::Unknown("/goal new sandbox .scratch/sandbox")
         );
     }
 
@@ -3728,7 +3736,9 @@ mod tests {
         // 防「加了命令忘了补全」：`submission()` 认哪些名字，`/` 菜单就列出哪些。两边各有一份
         // 真相（参数形状只能各自解析），所以一致性由这条测试钉住。
         let mut parsed: Vec<&str> = Vec::new();
-        for name in ["undo", "discuss", "goal", "loop", "clear", "quit", "exit"] {
+        for name in [
+            "undo", "discuss", "goal-new", "loop", "clear", "quit", "exit",
+        ] {
             let line = format!("/{name}");
             let submission = read(&line);
             assert!(
@@ -3763,7 +3773,7 @@ mod tests {
         );
 
         // 名字是一个不断开的词，所以一个都没有、多出一个都是用法错误 —— 而这条命令读到的
-        // 是整条提交，与 `/discuss`、`/goal` 同一条规矩。
+        // 是整条提交，与 `/discuss`、`/goal-new` 同一条规矩。
         for args in ["", "   ", "sandbox extra", "两个 词"] {
             let message = parse_loop_line(args).unwrap_err();
             assert!(message.contains("/loop"), "`{args}`：{message}");

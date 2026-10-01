@@ -160,7 +160,7 @@ fn the_three_start_refusals_each_say_their_own_thing() {
     );
     let text = fs_agent::render::wording::loop_unknown_goal("sandbox");
     assert!(text.contains("sandbox"), "{text}");
-    assert!(text.contains("/goal new"), "提示先建清单：{text}");
+    assert!(text.contains("/goal-new"), "提示先建清单：{text}");
 
     // 全部完成：说没活可干。
     assert_eq!(

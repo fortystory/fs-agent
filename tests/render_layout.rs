@@ -2955,7 +2955,7 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
     // 内建命令那一组排在前面，所以先露出来的是它们。
-    for name in ["/undo", "/discuss", "/goal"] {
+    for name in ["/undo", "/discuss", "/goal-new"] {
         assert!(text.contains(name), "提供了 {name}：\n{text}");
     }
     assert!(
@@ -2965,6 +2965,28 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     assert!(
         text.contains("回滚上一次编辑"),
         "带着它是干什么的：\n{text}"
+    );
+
+    // 一族命令用连字符写成一条，所以 `/goal-` 这个前缀在菜单里列出整族（现在只有 `new`）——
+    // 空格形状的 `/goal new` 补不出第二个词，这正是改名的理由。
+    let mut family = self::state();
+    install_catalog(&mut family);
+    for ch in "/goal-".chars() {
+        family.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut family).join("\n");
+    assert!(text.contains("/goal-new"), "命令族按前缀列出来：\n{text}");
+    assert!(
+        !text.contains("/undo") && !text.contains("/loop"),
+        "别的命令被滤掉了：\n{text}"
+    );
+
+    // 而这正是改名的理由：`Tab` 把整条命令补进草稿。
+    family.key(Key::Tab);
+    let text = screen(120, 24, &mut family).join("\n");
+    assert!(
+        text.contains(&format!("┆{}/goal-new", editor::PROMPT)),
+        "Tab 补出整条命令：\n{text}"
     );
 
     // 菜单是一扇**窗口**，而技能排在命令之后：装不下的那些靠打字滤出来 —— 它们在目录里，
