@@ -308,6 +308,27 @@ pub fn record_goal_selected(
     )
 }
 
+/// 记下一个目标做完了，连同那份收尾汇总（`.scratch/goal-loop/spec.md` §1、§11）。
+///
+/// 汇总是一段叙述，不是模板拼出来的，所以它是散文：`redact` 的穷尽匹配覆盖它（`goal` 是键，
+/// 不动）。
+pub fn record_goal_completed(
+    session: &mut Session,
+    render: &RenderHandle,
+    goal: &str,
+    summary: &str,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::GoalCompleted {
+            goal: goal.to_owned(),
+            summary: summary.to_owned(),
+        },
+    )
+}
+
 /// 为 `speaker` 跑完整整一个回合，并返回它为什么停下。
 ///
 /// `scope` 是这个回合能看到多少流。它只会*去掉*另一个讨论者同轮的事件，所以单 agent 回合传

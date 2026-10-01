@@ -1451,6 +1451,42 @@ async fn run_goal_loop(
         if harness.cancel_signal().is_cancelled() {
             break;
         }
+
+        // 回合边界上重算一次进度（§1）：判据是机械的，循环自己判，不需要人点头。一个回合是一个
+        // 不可分的步子，所以「每次 `todo` 落地之后」这一刻就是它结束的时候。
+        //
+        // 信任假设：`completed` 是**模型自己填的**，所以判据机械**不等于**结果可靠。
+        let streams = goal_streams(goals, name);
+        let calls: Vec<crate::goals::TodoCall> = streams
+            .iter()
+            .flat_map(|events| crate::goals::todo_calls(events))
+            .collect();
+        let progress = crate::goals::progress(&manifest.entries, &calls);
+        if !progress.is_complete() {
+            continue;
+        }
+
+        // 收尾汇总由一次模型调用写（§11），而那一次调用照记用量 —— 它落进目标预算。调用没成
+        // 不改变「做完了」这个事实，缺的只是那段叙述，所以退回一份机械的说明。
+        let notes: Vec<String> = streams
+            .iter()
+            .flat_map(|events| crate::goals::notes_of(events))
+            .collect();
+        if let Err(error) = harness
+            .finish_goal(name, manifest, &progress, streams.len(), &notes)
+            .await
+        {
+            *running = false;
+            return Err(render::wording::error_report(&error));
+        }
+        harness.notice(&render::wording::goal_completed_notice(
+            name,
+            progress.completed(),
+            progress.total(),
+            streams.len(),
+        ));
+        *running = false;
+        return Ok(());
     }
     *running = false;
     harness.notice(&render::wording::goal_loop_stopped(name));
@@ -1461,21 +1497,35 @@ async fn run_goal_loop(
 /// （§3、§4）。
 ///
 /// 派生的，不新增任何状态文件 —— 与日账本扫会话文件是同一条路。
-fn goal_progress(goals: &GoalSetup, name: &str, manifest: &crate::goals::Manifest) -> crate::goals::Progress {
+fn goal_progress(
+    goals: &GoalSetup,
+    name: &str,
+    manifest: &crate::goals::Manifest,
+) -> crate::goals::Progress {
+    let calls: Vec<crate::goals::TodoCall> = goal_streams(goals, name)
+        .iter()
+        .flat_map(|events| crate::goals::todo_calls(events))
+        .collect();
+    crate::goals::progress(&manifest.entries, &calls)
+}
+
+/// 属于这个目标的那些会话的流（§4 的归属筛）：扫本桶、按 `GoalSelected` 过滤。
+///
+/// 扫的是磁盘上的会话文件，所以进行中的这一场也在里面 —— 它的每一行都已经刷下去了。
+fn goal_streams(goals: &GoalSetup, name: &str) -> Vec<Vec<Event>> {
     let Ok(sessions) = goals.store.list(&goals.cwd) else {
-        return crate::goals::progress(&manifest.entries, &[]);
+        return Vec::new();
     };
-    let mut calls = Vec::new();
+    let mut streams = Vec::new();
     for session in sessions {
         let Ok(events) = read_events(&session.log_path) else {
             continue;
         };
-        if !crate::goals::has_goal(&events, name) {
-            continue;
+        if crate::goals::has_goal(&events, name) {
+            streams.push(events);
         }
-        calls.extend(crate::goals::todo_calls(&events));
     }
-    crate::goals::progress(&manifest.entries, &calls)
+    streams
 }
 
 /// 解析 `/loop` 的参数：一个目标名字，一个不断开的词。

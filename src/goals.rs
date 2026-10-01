@@ -524,3 +524,90 @@ pub fn check_start(
     }
 }
 
+// --- 收尾汇总（§11） -------------------------------------------------------
+
+/// 一个目标下各会话记下的新工作。
+///
+/// 清单是封闭的，所以执行中冒出来的新工作只能由 `goal_note` 记 —— 而那里的真相同样只是那次
+/// 调用的参数。这里把它们按流上的顺序读回来，交给收尾汇总。
+pub fn notes_of(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::ToolCallStarted {
+                tool_name, args, ..
+            } if tool_name == crate::tools::goal_note::GOAL_NOTE_TOOL => {
+                Some(crate::tools::goal_note::read_notes(args))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// 收尾汇总那次模型调用的简报（§11）。
+///
+/// 四项一个都不能省：目标名、条目完成情况、跨了几个会话、执行中冒出来但没进清单的新工作 ——
+/// 最后一项最不能省，因为清单是封闭的，新工作没有别的地方交代。
+pub fn summary_prompt(
+    goal: &str,
+    manifest: &Manifest,
+    progress: &Progress,
+    sessions: usize,
+    notes: &[String],
+) -> String {
+    let mut prompt = String::from(
+        "无人值守的目标循环刚刚做完。写一段收尾汇总，给把这个目标交出去的人看。\
+         用中文，直接写那段汇总，不要标题、不要客套。必须交代这四件事：\n\
+         1. 目标名；\n\
+         2. 条目完成情况（几条完成 / 共几条）；\n\
+         3. 这个目标跨了几个会话；\n\
+         4. 执行中冒出来、但没有进清单的新工作 —— 一条一条说，一条都没有就说明没有。\n\n",
+    );
+    prompt.push_str(&format!("目标：{goal}\n\n清单：\n"));
+    for entry in &manifest.entries {
+        let status = progress
+            .statuses
+            .get(&entry.id)
+            .map(|status| status.as_str())
+            .unwrap_or("pending");
+        prompt.push_str(&format!("- {} {}（{status}）\n", entry.id, entry.content));
+    }
+    prompt.push_str(&format!(
+        "\n完成情况：{}/{} 条完成\n跨会话：{sessions} 个会话\n\n",
+        progress.completed(),
+        progress.total()
+    ));
+    if notes.is_empty() {
+        prompt.push_str("执行中冒出来的新工作：没有记下任何一条。\n");
+    } else {
+        prompt.push_str("执行中冒出来的新工作：\n");
+        for note in notes {
+            prompt.push_str(&format!("- {note}\n"));
+        }
+    }
+    prompt
+}
+
+/// 汇总那次模型调用没成时用的那份说明（§11）。
+///
+/// 判据是机械的，所以「做完了」这件事不依赖模型能不能开口；缺的只是那段叙述。这一份把四项
+/// 照原样摆出来，谁读都知道发生了什么。
+pub fn fallback_summary(goal: &str, progress: &Progress, sessions: usize, notes: &[String]) -> String {
+    let mut text = format!(
+        "目标 {goal} 完成：{} / {} 条完成，跨 {sessions} 个会话。",
+        progress.completed(),
+        progress.total()
+    );
+    if notes.is_empty() {
+        text.push_str("执行中没有记下清单外的新工作。");
+    } else {
+        text.push_str("执行中冒出来、没进清单的新工作：");
+        for note in notes {
+            text.push_str(&format!("\n- {note}"));
+        }
+    }
+    text
+}
+
+

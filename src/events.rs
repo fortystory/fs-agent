@@ -312,6 +312,16 @@ pub enum EventPayload {
     GoalSelected {
         goal: String,
     },
+    /// 一个目标做完了，附上那份收尾汇总（§1、§11）。
+    ///
+    /// 它**不是**工具调用的产物 —— 没有 args 可依 —— 所以要自己落一条事件，否则汇总只在屏幕上
+    /// 刷过去就没了，`--continue` 之后谁也读不回来。
+    ///
+    /// `goal` 是标识符（不打码），`summary` 是散文（打码）。
+    GoalCompleted {
+        goal: String,
+        summary: String,
+    },
     // 讨论协议（只占槽位；时序由协议决定）。
     RoundStarted {
         round: u32,
@@ -409,6 +419,7 @@ impl EventPayload {
             EventPayload::SandboxStatus { .. } => "SandboxStatus",
             EventPayload::SessionEnded { .. } => "SessionEnded",
             EventPayload::GoalSelected { .. } => "GoalSelected",
+            EventPayload::GoalCompleted { .. } => "GoalCompleted",
             EventPayload::RoundStarted { .. } => "RoundStarted",
             EventPayload::RoundEnded { .. } => "RoundEnded",
             EventPayload::DivergenceRecorded { .. } => "DivergenceRecorded",
@@ -449,6 +460,8 @@ impl EventPayload {
             | EventPayload::UsageRecorded { .. }
             | EventPayload::TurnEnded { .. } => {}
             EventPayload::ContextInjected { content, .. } => redactor.redact(content),
+            // 汇总要打码：它是人写的那类叙述文本，而 `goal` 是键，不动。
+            EventPayload::GoalCompleted { summary, .. } => redactor.redact(summary),
             // 模式是协议标记，原因才是散文。
             EventPayload::SandboxStatus {
                 unavailable_reason, ..

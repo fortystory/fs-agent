@@ -68,6 +68,9 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
             // 是这个会话在为谁干活，不是一句话。清单本身才是给模型看的那一条，它以
             // `ContextInjected { source: Goal }` 进来。
             EventPayload::GoalSelected { .. } => {}
+            // 收尾汇总只进日志（§11）：那段叙述已经由写它的那次单发调用作为一条助手消息记下
+            // 来了，模型在后续回合里读到的正是那一条；这一条是给审计者的记录。
+            EventPayload::GoalCompleted { .. } => {}
             // 沙箱状态同样是**只进日志**的 harness 记账（沙箱 spec §8）：它既不是发言、也不是注入，
             // 所以投影是零 —— 这正是 replay 能看到它、而钉住的前缀不受它影响的原因。
             EventPayload::SandboxStatus { .. } => {}

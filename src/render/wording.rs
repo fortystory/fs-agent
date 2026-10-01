@@ -1537,6 +1537,11 @@ pub fn goal_loop_stopped(name: &str) -> String {
     format!("目标 {name} 的循环停了")
 }
 
+/// 目标完成：条目情况与跨了几个会话，一行说完。汇总本身落在流上，也由那次调用写进转录。
+pub fn goal_completed_notice(name: &str, completed: usize, total: usize, sessions: usize) -> String {
+    format!("目标 {name} 完成：{completed}/{total} 条，跨 {sessions} 个会话")
+}
+
 /// `todo` 引用了清单里没有的 id：忽略它，但**不静默** —— 沉默会让模型以为它记下了。
 pub fn goal_unknown_ids(name: &str, ids: &[String]) -> String {
     format!(

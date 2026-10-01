@@ -33,13 +33,18 @@ struct Session {
 
 /// 一个模型照脚本行事的会话，挂在 `root` 下的一个会话目录里。
 async fn session(root: &Path, id: &str, replies: Vec<Reply>) -> Session {
+    session_with(root, id, FakeProvider::new(replies)).await
+}
+
+/// 同上，但调用方自己拿着那个假 provider —— 要读它收到的请求时用它。
+async fn session_with(root: &Path, id: &str, provider: FakeProvider) -> Session {
     let session_dir = root.join(id);
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&session_dir).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let log_path = session_dir.join("log.jsonl");
     let harness = assemble(AssemblyParts {
-        provider: Box::new(FakeProvider::new(replies)),
+        provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
         config: SessionConfig::new("fake-model"),
         renderer: Renderer::headless(RenderSinks {
@@ -216,6 +221,14 @@ fn entries(ids: &[&str]) -> Vec<goals::Entry> {
         .collect()
 }
 
+/// 一份清单：名字加几条条目。
+fn manifest(name: &str, ids: &[&str]) -> Manifest {
+    Manifest {
+        name: name.to_owned(),
+        entries: entries(ids),
+    }
+}
+
 fn at(hour: i64) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 1, hour as u32, 0, 0)
         .unwrap()
@@ -384,6 +397,177 @@ async fn two_sessions_on_one_goal_recompute_the_second_ones_progress_from_the_fi
     assert_eq!(derived.completed(), 1);
 
     second.harness.shutdown().await;
+}
+
+// --- 完成判据与汇总（§1、§11） ---------------------------------------------
+
+/// 一条 `todo` 把清单上的条目**全部**标成完成。
+fn complete_items(ids: &[&str]) -> serde_json::Value {
+    let all: Vec<(&str, &str, &str)> = ids
+        .iter()
+        .map(|id| (*id, "一件事", "completed"))
+        .collect();
+    items(&all)
+}
+
+fn completions(events: &[Event]) -> Vec<(String, String)> {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::GoalCompleted { goal, summary } => {
+                Some((goal.clone(), summary.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn usage_count(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::UsageRecorded { .. }))
+        .count()
+}
+
+#[tokio::test]
+async fn finishing_a_goal_records_one_completion_with_the_summary_the_model_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = manifest("sandbox", &["01", "02"]);
+    let provider = FakeProvider::new(vec![
+        todo_reply("call-1", &complete_items(&["01", "02"])),
+        Reply::text("记下了"),
+        Reply::text("目标做完了：两条都完成，只跨了一个会话。新工作只有一条，我记在 else 里。"),
+        Reply::text("还在"),
+    ]);
+    let mut session = session_with(dir.path(), "s-1", provider.clone()).await;
+
+    session.harness.select_goal("sandbox").unwrap();
+    session
+        .harness
+        .inject_context(ContextSource::Goal, "# sandbox\n")
+        .unwrap();
+    session.harness.run_injected_turn().await.unwrap();
+
+    // 最后一条 `todo` 把全部条目标成完成 → 判据机械地成立。
+    let events = session.events();
+    let derived = progress(&manifest.entries, &goals::todo_calls(&events));
+    assert!(derived.is_complete());
+
+    let before = usage_count(&events);
+    let summary = session
+        .harness
+        .finish_goal("sandbox", &manifest, &derived, 1, &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        summary,
+        "目标做完了：两条都完成，只跨了一个会话。新工作只有一条，我记在 else 里。",
+        "落流的是那次模型调用写出来的那段叙述"
+    );
+
+    let events = session.events();
+    assert_eq!(
+        completions(&events),
+        [("sandbox".to_owned(), summary.clone())],
+        "流上恰好一条完成，带着目标名与那段汇总"
+    );
+    assert_eq!(
+        usage_count(&events),
+        before + 1,
+        "写汇总的那次调用照记用量 —— 它是一次 provider 调用"
+    );
+
+    // 汇总那次调用的简报里带着真实的条数与会话数。
+    let requests = provider.requests();
+    let prompt = last_prompt(&requests);
+    assert!(prompt.contains("2/2 条完成"), "{prompt}");
+    assert!(prompt.contains("跨会话：1 个会话"), "{prompt}");
+    assert!(prompt.contains("01"), "清单条目在简报里：{prompt}");
+
+    // 完成后不退出：同一个 harness 还能接着跑一个回合。
+    let outcome = session.harness.run_turn("还在吗").await.unwrap();
+    assert_eq!(outcome.text, "还在");
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_failed_summary_call_still_records_the_completion_with_a_mechanical_note() {
+    // 判据是机械的，所以「做完了」不依赖模型能不能开口；缺的只是那段叙述。
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = manifest("sandbox", &["01"]);
+    let provider = FakeProvider::new(vec![
+        todo_reply("call-1", &complete_items(&["01"])),
+        Reply::text("记下了"),
+        Reply::Fail(fs_agent::provider::ProviderError::Transport {
+            detail: "断了".to_owned(),
+        }),
+    ]);
+    let mut session = session_with(dir.path(), "s-1", provider).await;
+    session.harness.select_goal("sandbox").unwrap();
+    session
+        .harness
+        .inject_context(ContextSource::Goal, "# sandbox\n")
+        .unwrap();
+    session.harness.run_injected_turn().await.unwrap();
+
+    let events = session.events();
+    let derived = progress(&manifest.entries, &goals::todo_calls(&events));
+    let summary = session
+        .harness
+        .finish_goal("sandbox", &manifest, &derived, 2, &["顺手补了个测试".to_owned()])
+        .await
+        .unwrap();
+
+    assert!(summary.contains("1 / 1 条完成"), "{summary}");
+    assert!(summary.contains("跨 2 个会话"), "{summary}");
+    assert!(summary.contains("顺手补了个测试"), "新工作不能省：{summary}");
+
+    let events = session.events();
+    assert_eq!(completions(&events).len(), 1, "汇总没写出来也照样完成");
+    assert_eq!(completions(&events)[0].1, summary);
+
+    session.harness.shutdown().await;
+}
+
+#[test]
+fn the_summary_prompt_carries_all_four_things_and_never_omits_the_new_work() {
+    let manifest = manifest("sandbox", &["01", "02"]);
+    let calls = [call(at(10), 1, complete_items_call(&["01"]))];
+    let derived = progress(&manifest.entries, &calls);
+    let prompt = goals::summary_prompt("sandbox", &manifest, &derived, 2, &["新工作".to_owned()]);
+
+    assert!(prompt.contains("sandbox"), "目标名：{prompt}");
+    assert!(prompt.contains("1/2 条完成"), "条目完成情况：{prompt}");
+    assert!(prompt.contains("跨会话：2 个会话"), "跨了几个会话：{prompt}");
+    assert!(prompt.contains("新工作"), "清单外的新工作：{prompt}");
+
+    // 一条新工作都没有时也要说出来，而不是留白。
+    let quiet = goals::summary_prompt("sandbox", &manifest, &derived, 2, &[]);
+    assert!(quiet.contains("没有记下任何一条"), "{quiet}");
+}
+
+/// 一次 `todo` 调用（纯数据版，给不跑真会话的测试用）。
+fn complete_items_call(ids: &[&str]) -> serde_json::Value {
+    let all: Vec<(&str, &str, &str)> = ids
+        .iter()
+        .map(|id| (*id, "一件事", "completed"))
+        .collect();
+    items(&all)
+}
+
+/// 假 provider 收到的最后一个请求里的那条 `user` 消息。
+fn last_prompt(requests: &[fs_agent::provider::ChatRequest]) -> String {
+    let request = requests.last().expect("汇总那次调用到达了 provider");
+    request
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            fs_agent::provider::Message::User { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("一次单发调用带着一条 user 消息")
 }
 
 // --- 会话桶里的归属筛（§4） -------------------------------------------------

@@ -409,6 +409,8 @@ impl Transcript {
             // 条事件说的是这个会话在为谁干活。清单本身以一次上下文注入到达，那一行由
             // `ContextInjected` 画出来。
             EventPayload::GoalSelected { .. } => {}
+            // 收尾汇总已经作为一条助手消息画出来了（写它的那次单发调用记的），这里不再重复。
+            EventPayload::GoalCompleted { .. } => {}
             EventPayload::SandboxStatus {
                 mode,
                 unavailable_reason,

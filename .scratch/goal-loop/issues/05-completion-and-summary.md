@@ -1,7 +1,7 @@
 # 完成判据与汇总落流
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01, 03, 04
 
 > 规格：`.scratch/goal-loop/spec.md` §1（完成判据）、§11（汇总说明）。

@@ -102,6 +102,9 @@ impl Render for Headless {
                         // 归属只说这个会话在为谁干活，没有给人看的进展可报 —— 清单与进度在
                         // 交互式那一侧；这里与上下文注入同一档，什么都不说。
                         EventPayload::GoalSelected { .. } => {}
+                        // 汇总已经作为一条助手消息叙述过了（写它的那次单发调用记的）；这一条
+                        // 是流上的记录，不再多说一遍。
+                        EventPayload::GoalCompleted { .. } => {}
                         // 与上下文注入同一档：一行诊断（模型上下文里没有它）。
                         EventPayload::SandboxStatus {
                             mode,

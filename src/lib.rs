@@ -835,6 +835,59 @@ impl Harness {
         self.drive_turn().await
     }
 
+    /// 让模型单发写一段话，照记用量。
+    ///
+    /// 目标收尾汇总（§11）与压缩摘要（§7）都走这里：它就是一次 provider 调用，所以它的用量
+    /// 自然落进预算，无人值守时的花费不会被低估。`Ok(None)` 表示这次调用没成 —— 调用方自己
+    /// 决定怎么收尾。
+    pub async fn single_shot(&mut self, prompt: &str) -> Result<Option<String>, Error> {
+        // 一次单发调用就是一次运行：手势从干净的地方开始。
+        self.cancel.reset();
+        let cancelled = self.cancel.observer();
+        let provider = Arc::clone(&self.provider);
+        agent::run_single_shot(
+            &mut self.session,
+            provider.as_ref(),
+            &self.render,
+            prompt,
+            &cancelled,
+        )
+        .await
+    }
+
+    /// 记下一个目标做完了，连同那份收尾汇总（§1、§11）。
+    pub fn complete_goal(&mut self, goal: &str, summary: &str) -> Result<(), Error> {
+        agent::record_goal_completed(&mut self.session, &self.render, goal, summary)
+    }
+
+    /// 一个目标的收尾（`.scratch/goal-loop/spec.md` §11）：写汇总、落一条 `GoalCompleted`。
+    ///
+    /// 汇总由**一次模型调用**写（它是叙述性的，模板拼不出来），而那一次调用照记用量 —— 它是
+    /// 一次 provider 调用，所以自然落进目标预算。那次调用没成不改变「做完了」这件事（判据是
+    /// 机械的），缺的只是那段叙述，于是退回一份机械的说明。
+    ///
+    /// 收尾**不退出**：它只往流上落一条事件，会话还在原地，用户接着还能用。
+    pub async fn finish_goal(
+        &mut self,
+        goal: &str,
+        manifest: &crate::goals::Manifest,
+        progress: &crate::goals::Progress,
+        sessions: usize,
+        notes: &[String],
+    ) -> Result<String, Error> {
+        let prompt = crate::goals::summary_prompt(goal, manifest, progress, sessions, notes);
+        let summary = match self.single_shot(&prompt).await? {
+            Some(text) => text,
+            None => {
+                let text = crate::goals::fallback_summary(goal, progress, sessions, notes);
+                self.notice(&text);
+                text
+            }
+        };
+        self.complete_goal(goal, &summary)?;
+        Ok(summary)
+    }
+
     /// 对前端说一句不属于任何事件的话：启动横幅，以及交互式循环那些朴素的反馈。
     ///
     /// 它走渲染通道而不是直接写终端，因为从组装那一刻起终端归渲染器：第二个写者会插进
