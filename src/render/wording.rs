@@ -1458,7 +1458,14 @@ pub struct Command {
 }
 
 /// 内建的斜杠命令，按每一份列表显示它们的顺序。
-pub static BUILT_IN_COMMANDS: [Command; 6] = [
+///
+/// 这张表管两处：`/` 菜单列出的名字（`src/cli.rs` 直接从这里建目录），以及未知命令那段文本
+/// 点名的东西。**循环解析哪些名字是另一回事** —— 各自的参数形状不同，那里只能是它自己的
+/// `match` —— 所以两边的一致性由 `src/cli.rs` 的一条测试钉住：表里的每一个名字都被解析成
+/// 一条内建命令，而解析认的每一个名字也都在表里。
+///
+/// 顺序是固定的**声明顺序**，不按字母：`quit` 与 `exit` 是一对别名，挨着排。
+pub static BUILT_IN_COMMANDS: [Command; 7] = [
     Command {
         name: "undo",
         description: "回滚上一次编辑",
@@ -1482,6 +1489,10 @@ pub static BUILT_IN_COMMANDS: [Command; 6] = [
     Command {
         name: "quit",
         description: "退出会话",
+    },
+    Command {
+        name: "exit",
+        description: "退出会话（`/quit` 的别名）",
     },
 ];
 

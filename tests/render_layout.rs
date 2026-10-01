@@ -2954,7 +2954,8 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
-    for name in ["/undo", "/discuss", "/quit", "/ask-matt", "/review"] {
+    // 内建命令那一组排在前面，所以先露出来的是它们。
+    for name in ["/undo", "/discuss", "/goal"] {
         assert!(text.contains(name), "提供了 {name}：\n{text}");
     }
     assert!(
@@ -2965,6 +2966,16 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
         text.contains("回滚上一次编辑"),
         "带着它是干什么的：\n{text}"
     );
+
+    // 菜单是一扇**窗口**，而技能排在命令之后：装不下的那些靠打字滤出来 —— 它们在目录里，
+    // 不是被丢掉了。打一个 `/rev` 就只剩 `/review`。
+    let mut narrowed = self::state();
+    install_catalog(&mut narrowed);
+    for ch in "/rev".chars() {
+        narrowed.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut narrowed).join("\n");
+    assert!(text.contains("/review"), "技能仍然在目录里：\n{text}");
 
     // 它是浮着的 —— 框、边框全都浮着 —— 在它所属的输入区上面。
     let frame = buffer(120, 24, &mut state);

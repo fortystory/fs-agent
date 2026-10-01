@@ -1,7 +1,7 @@
 # `/` 补全：命令在前、技能在后
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03, 09
 
 > 规格：`.scratch/goal-loop/spec.md` §13。

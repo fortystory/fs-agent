@@ -412,18 +412,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `/` 菜单里的名字。真正对提交作出反应的是循环，所以「有哪些名字」也由循环说了算：它解析的那
     // 些内建命令，然后是这场会话发现到的技能 —— 这正是它在这里、在组装之后、第一个提示之前发出，
     // 而不是随表头那些事实一起注入的原因。
-    console.catalog(
-        render::wording::BUILT_IN_COMMANDS
-            .iter()
-            .map(|command| render::CatalogEntry::new(command.name, command.description))
-            .chain(
-                harness
-                    .skill_catalog()
-                    .into_iter()
-                    .map(|(name, description)| render::CatalogEntry::new(name, description)),
-            )
-            .collect(),
-    );
+    console.catalog(slash_catalog(
+        &render::wording::BUILT_IN_COMMANDS,
+        &harness.skill_catalog(),
+    ));
 
     let code = interactive_loop(
         &mut harness,
@@ -1354,6 +1346,29 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
         // 根本不是命令：整段文本，不管多少行，就是 prompt。
         _ => Submission::Prompt(text),
     }
+}
+
+/// `/` 菜单的条目（`.scratch/goal-loop/spec.md` §13）：**内建命令在前、技能在后**。
+///
+/// 命令是程序自带的、技能是用户装的，所以固定项优先更可预测：打一个 `/c` 时 `/clear` 排在
+/// 用户那个恰好也叫 `c…` 的技能前面。命令按声明的固定顺序（不按字母），技能按名字。
+///
+/// 抽出这个纯函数是为了让这条次序有地方断言 —— 它原来内联在组装点里，只能靠真终端看。
+fn slash_catalog(
+    commands: &[render::wording::Command],
+    skills: &[(&str, &str)],
+) -> Vec<render::CatalogEntry> {
+    let mut skills: Vec<&(&str, &str)> = skills.iter().collect();
+    skills.sort_by(|left, right| left.0.cmp(right.0));
+    commands
+        .iter()
+        .map(|command| render::CatalogEntry::new(command.name, command.description))
+        .chain(
+            skills
+                .into_iter()
+                .map(|(name, description)| render::CatalogEntry::new(*name, *description)),
+        )
+        .collect()
 }
 
 /// `/goal new <名字> <来源> [--force]`：从一批票生成一份目标清单（`.scratch/goal-loop/spec.md`
@@ -3415,6 +3430,56 @@ mod tests {
         assert_eq!(read("  /clear  "), Submission::Clear, "去掉空白照旧");
         // 内建命令要么是整条提交，要么什么都不算：它后面的一行绝不能被丢在地上。
         assert_eq!(read("/clear\n再写点什么"), Submission::Prompt("/clear\n再写点什么"));
+    }
+
+    // --- `/` 菜单（`.scratch/goal-loop/spec.md` §13） --------------------------
+
+    use super::slash_catalog;
+    use crate::render::wording::BUILT_IN_COMMANDS;
+
+    #[test]
+    fn the_menu_lists_the_built_in_commands_before_the_skills() {
+        // 命令一组、技能一组；同前缀时命令优先，因为程序自带的那批更可预测。
+        let skills = [("clear-ish", "一个与 /c 同前缀的技能"), ("ask-matt", "审一遍")];
+        let entries = slash_catalog(&BUILT_IN_COMMANDS, &skills);
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+
+        let declared: Vec<&str> = BUILT_IN_COMMANDS.iter().map(|command| command.name).collect();
+        assert_eq!(
+            &names[..declared.len()],
+            declared.as_slice(),
+            "命令在前，组内就是声明顺序（不按字母）"
+        );
+        assert_eq!(
+            &names[declared.len()..],
+            ["ask-matt", "clear-ish"],
+            "技能在后，按名字"
+        );
+
+        let clear = names.iter().position(|name| *name == "clear").unwrap();
+        let skill = names.iter().position(|name| *name == "clear-ish").unwrap();
+        assert!(clear < skill, "同前缀时命令优先：{names:?}");
+    }
+
+    #[test]
+    fn the_menu_covers_exactly_the_commands_the_loop_parses() {
+        // 防「加了命令忘了补全」：`submission()` 认哪些名字，`/` 菜单就列出哪些。两边各有一份
+        // 真相（参数形状只能各自解析），所以一致性由这条测试钉住。
+        let mut parsed: Vec<&str> = Vec::new();
+        for name in ["undo", "discuss", "goal", "loop", "clear", "quit", "exit"] {
+            let line = format!("/{name}");
+            let submission = read(&line);
+            assert!(
+                !matches!(submission, Submission::Unknown(_) | Submission::Prompt(_)),
+                "{line} 是一条内建命令，不是未知命令、也不是 prompt"
+            );
+            parsed.push(name);
+        }
+        let listed: Vec<&str> = BUILT_IN_COMMANDS.iter().map(|command| command.name).collect();
+        assert_eq!(listed, parsed, "补全里列的就是循环解析的那些，一个不多一个不少");
+
+        // 一个真不存在的名字仍然是未知命令。
+        assert!(matches!(read("/nope"), Submission::Unknown("/nope")));
     }
 
     // --- `/loop <名字>`（`.scratch/goal-loop/spec.md` §4） ---------------------
