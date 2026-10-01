@@ -4,6 +4,7 @@
 
 - **「空闲态 `Ctrl-C` 还要再走一次确认」不对了。** 现在空闲态 `Ctrl-C` 直接退（[`src/render/tui.rs:2172-2179`](../../src/render/tui.rs)），只有 `Ctrl-D` 才弹那个「退出会话」覆盖层（[:2183-2188](../../src/render/tui.rs)）。两个键一个太急、一个太慢。
 - **「退出时打 session id 好让 `--continue` 直接用」理由不成立。** `-c` 是「继续**本工作区最新**的会话」（[`src/render/wording.rs:2177`](../../src/render/wording.rs)），它不需要 id。id 真正的用处是**跨工作区精确指认**：`fs-agent sessions show <id>`。所以这次做的是"退出时给一个能直接粘的复盘命令"，不是"让 `-c` 能用"。
+  - **2026-10-02 更正**：上面这条判断**在当时是对的，现在反过来了** —— 同一天 `-c` 吃了一个可选的 id（`fs-agent -c <id>`，另有显式拼写 `--session <id>`），于是退出回执给的**就是**能直接粘回终端的那条命令。id 的另一半用处没变（跨工作区精确指认），而且现在也能直接续上那场面别处的会话（工作目录跟着它走）。
 
 同时核出一条**既有缺陷**：忙碌时第二下 `Ctrl-C` 走的是 `std::process::exit(130)`（[`src/cli.rs:1908`](../../src/cli.rs)），而 `std::process::exit` **不运行任何析构** —— `TerminalModes::drop`（[:438-442](../../src/render/tui.rs)）与 `ratatui::restore()`（[:413](../../src/render/tui.rs)）都不会执行。也就是说**那条退出路径会把终端留在 raw mode + alternate screen**。这次动这条链路，一并修掉。
 
@@ -89,10 +90,10 @@
 
 ### §5 退出回执
 
-- 内容照 `discuss` 那句的模板：`会话 {id}；复盘：fs-agent sessions show {id}`。为此把 `wording::discussion_replay`（[:74-76](../../src/render/wording.rs)）**改名/抽成通用**（`session_receipt`），discuss 与交互式退出共用同一个生成器——它的文档注释本来就写着"给 alt screen 恢复之后打的那一行"。
+- 内容照 `discuss` 那句的模板：`会话 {id}；复盘：fs-agent sessions show {id}`（**2026-10-02 起改成 `会话 {id}；接着跑：fs-agent -c {id}`** —— 那一行现在直接粘得回去，见上面那条更正）。为此把 `wording::discussion_replay`（[:74-76](../../src/render/wording.rs)）**改名/抽成通用**（`session_receipt`），discuss 与交互式退出共用同一个生成器——它的文档注释本来就写着"给 alt screen 恢复之后打的那一行"。
 - **通道是 stderr**。理由不是"它是诊断"，而是仓库已立的规矩：stdout 只承载最终产物（[`src/render/plain.rs:337-350`](../../src/render/plain.rs)、[`docs/render.md`](../../docs/render.md)）。走 stderr，`--plain` 与管道下天然安全。
 - **时机是终端交还之后**：落点在 `interactive()` 的尾部——`interactive_loop` 返回、`harness.shutdown()` 之后那段（[`src/cli.rs:420-435`](../../src/cli.rs)），与 discuss 刻意在 shutdown 之后才 `eprintln!`（[:685-696](../../src/cli.rs)）同规矩。
-- **打几次、给谁**：交互式会话（TUI 或 `--plain`）正常结束时打一行；**启动不打**（横幅 [:404-410](../../src/cli.rs) 已经有 id）；`discuss` / `probe` / `sessions` 一族不打（discuss 有自己那行）；**不**打 `-c` 的提示——它不需要 id，写了反而误导。
+- **打几次、给谁**：交互式会话（TUI 或 `--plain`）正常结束时打一行；**启动不打**（横幅 [:404-410](../../src/cli.rs) 已经有 id）；`discuss` / `probe` / `sessions` 一族不打（discuss 有自己那行）；回执本身给的就是 `-c <id>`，所以不再另打一行「用 `-c` 续上」的提示（**2026-10-02 更正**：当时写的是「`-c` 不需要 id」，现在它需要了）。
 - 两条路径都打：正常退出（0）与忙碌双击（130）。
 
 ### §6 时钟：一个按需武装的 deadline

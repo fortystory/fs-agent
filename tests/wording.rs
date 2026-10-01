@@ -111,9 +111,15 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         wording::unknown_debater("激进", &["保守", "审查"]),
         "池子里没有叫 `激进` 的讨论者；可用：`保守`、`审查`"
     );
+    // 回执给的是**能直接续上**的那条命令：`-c <id>` 现在吃 id 了（那一行是终端交还之后给人粘的）。
     assert_eq!(
         wording::session_receipt("20260922T101500Z-ab12"),
-        "会话 20260922T101500Z-ab12；复盘：fs-agent sessions show 20260922T101500Z-ab12"
+        "会话 20260922T101500Z-ab12；接着跑：fs-agent -c 20260922T101500Z-ab12"
+    );
+    // 按 id 续上了一场面**别的工作区**的会话：横幅之前先说一句目录跟着它走了。
+    assert_eq!(
+        wording::session_followed("/home/forty/other"),
+        "接着跑的是 /home/forty/other 里的那场会话"
     );
     // `discuss` 拒绝启动的那两条路都会说清该改怎么做。
     assert!(
@@ -733,6 +739,9 @@ fn the_long_help_texts_are_chinese_and_keep_their_structure() {
 
     let interactive = wording::help_interactive();
     assert!(interactive.contains("--plain"), "{interactive}");
+    // `-c` 除了「续最新」，还吃一个可选的 id（也可以给 `--session`）—— 帮助里得写得出来。
+    assert!(interactive.contains("--continue, -c [ID]"), "{interactive}");
+    assert!(interactive.contains("--session ID"), "{interactive}");
     // help 必须点名的那些模式入口：旗标，与手势。
     assert!(interactive.contains("--mode MODE"), "{interactive}");
     assert!(

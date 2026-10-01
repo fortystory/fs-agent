@@ -72,13 +72,19 @@ pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -
     line
 }
 
-/// 一场会话可以从哪里读回来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
+/// 一场会话怎么再跑起来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
 /// 进程，所以会话 id 才是那个持久的答案。
 ///
 /// `discuss` 与交互式退出共用它：两处都是「终端交还之后，给人一条能直接粘的命令」
-/// （`.scratch/exit-gesture/spec.md` §5）。
+/// （`.scratch/exit-gesture/spec.md` §5）。给的命令是 **`fs-agent -c <id>`** —— 它现在吃 id，
+/// 于是这一行真的能直接粘回终端里（在那之前只有按 id 查的 `sessions show`）。
 pub fn session_receipt(session_id: &str) -> String {
-    format!("会话 {session_id}；复盘：fs-agent sessions show {session_id}")
+    format!("会话 {session_id}；接着跑：fs-agent -c {session_id}")
+}
+
+/// `-c <id>` 续上了一场面**别的工作区**的会话：这一趟的工作目录跟着那场会话走了。
+pub fn session_followed(dir: &str) -> String {
+    format!("接着跑的是 {dir} 里的那场会话")
 }
 
 /// 正在讨论的那一对，给只有一个字段能点名它们的前端。
@@ -2309,13 +2315,13 @@ pub fn stats_stop(name: &str, count: usize) -> String {
 pub fn help_main() -> String {
     format!(
         "fs-agent {}\n\n  \
-         usage: fs-agent [--plain|--tui] [--continue] [--config PATH] [--model ID] [--cwd PATH]\n         \
+         usage: fs-agent [--plain|--tui] [--continue [ID]] [--config PATH] [--model ID] [--cwd PATH]\n         \
          fs-agent discuss [--plain|--tui] [--config PATH] [--cwd PATH] \"问题\"\n         \
          fs-agent probe [--config PATH] [--model ID]...\n         \
          fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n         \
          fs-agent sessions <ls|show|replay|stats> [options]\n\n  \
          不带子命令时，fs-agent 在当前工作区启动一个交互会话：终端上用 TUI 渲染，否则用 \
-         plain 转录（--plain / --tui 可强制其一）。--continue 继续本工作区最新的会话。\
+         plain 转录（--plain / --tui 可强制其一）。--continue 继续本工作区最新的会话（`--continue <ID>` 或 `--session <ID>` 续指名的那一场，ID 也可以是它的会话目录）。\
          discuss 起一次多角色讨论：两个讨论者各自独立作答，只在结论冲突时开一轮定向第二轮，\
          最后由合成器画出共识 / 分歧 / 未决（见 `fs-agent discuss --help`）。\
          probe 对每个已配置的模型驱动一次真实回合，并在同一会话里再跑一次，然后打印归一化\
@@ -2364,7 +2370,8 @@ pub fn help_interactive() -> String {
      自动四档权限模式之间循环（按严格度排），当前档位显示在状态行。\n\n  \
      --plain            使用 plain 转录（不进 raw 模式）\n  \
      --tui              使用终端界面（全屏外壳）\n  \
-     --continue, -c     继续本工作区最新的会话\n  \
+     --continue, -c [ID]  接着跑：不写 ID 就是本工作区最新的会话，写了就续 ID 那一场\n  \
+     --session ID         同上，显式拼写；ID 也可以是那场会话的目录\n  \
      --config PATH      要加载的配置文件\n  \
      --model ID         要运行的模型（默认：配置里的 default_model）\n  \
      --mode MODE        权限模式：readonly / ask / workspace / auto（默认：配置里的 [permissions] mode）\n  \

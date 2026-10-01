@@ -129,6 +129,15 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
 // 交互式前端（spec §19）
 // ---------------------------------------------------------------------------
 
+/// 接着跑哪一场会话（`-c` / `--continue` / `--session`）。
+#[derive(Debug, PartialEq, Eq)]
+enum Resume {
+    /// 本工作区里最近写下的那场。
+    Latest,
+    /// 指名的那个 id，或者它会话目录的路径。
+    Session(String),
+}
+
 /// 一次已解析的交互式调用。渲染器在这里选定并注入组装，所以只会有一个模式在跑。
 #[derive(Debug, Default)]
 struct InteractiveArgs {
@@ -136,8 +145,8 @@ struct InteractiveArgs {
     plain: bool,
     /// 强制用 TUI 渲染器。
     tui: bool,
-    /// 接着跑这个工作区最新的那场会话（spec §11）。
-    resume: bool,
+    /// 接着跑哪一场会话（spec §11）：不写就是新开一场。
+    resume: Option<Resume>,
     config: Option<PathBuf>,
     model: Option<String>,
     /// `--mode readonly|ask|workspace|auto`：这一趟跑的权限模式，覆盖 `[permissions] mode`（spec §12）。不
@@ -153,7 +162,28 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
         match args[index].as_str() {
             "--plain" => parsed.plain = true,
             "--tui" => parsed.tui = true,
-            "--continue" | "-c" => parsed.resume = true,
+            // `-c` / `--continue` 后面跟一个不以 `-` 开头的词，就是**指名**续哪一场
+            // （`fs-agent -c 20261001T155845Z-7a69cbff`）；没有就是本工作区最新那场。
+            // 判的是「下一个词是不是旗标」而不是「是不是 id」：这样 `fs-agent -c --plain`
+            // 仍然是「续最新 + plain」，不会去找一场叫 `--plain` 的会话。
+            "--continue" | "-c" => {
+                parsed.resume = Some(match args.get(index + 1) {
+                    Some(id) if !id.starts_with('-') => {
+                        index += 1;
+                        Resume::Session(id.clone())
+                    }
+                    _ => Resume::Latest,
+                });
+            }
+            // 同一个意思的显式拼写，只是它**必须**给 id（而且和 `-c` 一样，旗标不算 id）。
+            "--session" => {
+                index += 1;
+                let id = args
+                    .get(index)
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or_else(|| render::wording::needs_value("--session"))?;
+                parsed.resume = Some(Resume::Session(id.clone()));
+            }
             flag @ ("--config" | "--model" | "--mode" | "--cwd") => {
                 let flag = flag.to_owned();
                 index += 1;
@@ -252,36 +282,16 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             }
         },
     };
-    let stored = if parsed.resume {
-        match store.latest(&cwd) {
-            Ok(Some(session)) => session,
-            Ok(None) => {
-                eprintln!(
-                    "fs-agent: {}",
-                    render::wording::startup_no_session_to_continue(&cwd.display().to_string())
-                );
-                return ExitCode::FAILURE;
-            }
-            Err(error) => {
-                eprintln!(
-                    "fs-agent: {}",
-                    render::wording::startup_store_read(&error.to_string())
-                );
-                return ExitCode::FAILURE;
-            }
-        }
-    } else {
-        match store.create(&cwd) {
-            Ok(session) => session,
-            Err(error) => {
-                eprintln!(
-                    "fs-agent: {}",
-                    render::wording::startup_store_create(&error.to_string())
-                );
-                return ExitCode::FAILURE;
-            }
+    // 打开哪一场，以及这一趟的工作目录 —— 按 id 续上别的工作区的会话时，cwd 跟着那场会话走。
+    let chosen = match choose_session(&store, &cwd, parsed.resume.as_ref()) {
+        Ok(chosen) => chosen,
+        Err(message) => {
+            eprintln!("fs-agent: {}", message);
+            return ExitCode::FAILURE;
         }
     };
+    let (stored, cwd) = (chosen.stored, chosen.cwd);
+    let elsewhere = chosen.elsewhere;
 
     let provider = match OpenAiProvider::build(&config, &model, stderr_warnings()) {
         Ok(provider) => provider,
@@ -344,7 +354,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             cwd: cwd.clone(),
             // 重新打开的会话会在横幅之前重放它的历史，所以 TUI 必须知道，在那次重放到达之前什么都
             // 不要画（`.scratch/tui-history-replay/spec.md` §1、§3）。
-            reopened: parsed.resume,
+            reopened: parsed.resume.is_some(),
         })
     } else {
         // plain 前端读 stdin；它是行缓冲的，所以没有 raw 模式、也没有按键事件。
@@ -398,7 +408,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 后**，而不是落在接缝中间（`.scratch/tui-history-replay/spec.md` §1）。payload 就是组装好的
     // 那份快照，所以它带着 `--continue` 的恢复为悬空工具调用写下的合成结果。新会话没有历史，所以
     // 什么都不发。
-    if parsed.resume {
+    if parsed.resume.is_some() {
         console.replay(harness.events());
     }
 
@@ -409,8 +419,15 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         &model,
         harness.mode(),
         &stored.dir.display().to_string(),
-        parsed.resume,
+        parsed.resume.is_some(),
     ));
+    // 按 id 续上了一场面别的工作区的会话：工作目录跟着它走了，所以先说一句 —— 否则下一步
+    // `ls` 出来的东西与横幅上的目录对不上，人会以为是自己敲错了。
+    if elsewhere {
+        harness.notice(&render::wording::session_followed(
+            &cwd.display().to_string(),
+        ));
+    }
 
     // `/` 菜单里的名字。真正对提交作出反应的是循环，所以「有哪些名字」也由循环说了算：它解析的那
     // 些内建命令，然后是这场会话发现到的技能 —— 这正是它在这里、在组装之后、第一个提示之前发出，
@@ -431,7 +448,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             cwd: cwd.clone(),
             settings: config.goals,
         },
-        parsed.resume,
+        parsed.resume.is_some(),
     )
     .await;
     // 会话 id 先抄下来：`shutdown` 把 harness 收走了，而回执是在那之后才打的。
@@ -2546,6 +2563,70 @@ fn search_cwd(parsed: &SessionsArgs) -> Result<PathBuf, String> {
     }
 }
 
+/// 这一趟打开的那场会话，以及它落在哪里。
+#[derive(Debug)]
+struct SessionChoice {
+    stored: StoredSession,
+    /// 这一趟的工作目录。
+    cwd: PathBuf,
+    /// 那场会话在**别的工作区**里（工作目录因此跟着它走）—— 前端要说一句。
+    elsewhere: bool,
+}
+
+/// 这一趟打开哪场会话，以及它落在哪个工作目录里。
+///
+/// `-c` 的三种含义都在这里：不带 `resume` 是新开一场；`Latest` 是这个工作区最近写下的那场；
+/// `Session(id)` 是**指名**续哪一场 —— 先在本桶找，找不到就全 store 找（id 全局唯一，
+/// `sessions show <id>` 一直是这么做的）。
+///
+/// 按 id 续上别处的那场时，工作目录取**那场会话自己的**（它流里 `SessionStarted` 记的那个），
+/// 而不是命令行上那个：续写要发生在它自己的目录里，否则工具的相对路径、前缀缓存与横幅全不对。
+/// 读不出 cwd（流坏了）就退回请求的那个。
+fn choose_session(
+    store: &SessionStore,
+    cwd: &Path,
+    resume: Option<&Resume>,
+) -> Result<SessionChoice, String> {
+    let fresh = |stored: StoredSession| SessionChoice {
+        stored,
+        cwd: cwd.to_path_buf(),
+        elsewhere: false,
+    };
+    match resume {
+        None => match store.create(cwd) {
+            Ok(stored) => Ok(fresh(stored)),
+            Err(error) => Err(render::wording::startup_store_create(&error.to_string())),
+        },
+        Some(Resume::Latest) => match store.latest(cwd) {
+            Ok(Some(stored)) => Ok(fresh(stored)),
+            Ok(None) => Err(render::wording::startup_no_session_to_continue(
+                &cwd.display().to_string(),
+            )),
+            Err(error) => Err(render::wording::startup_store_read(&error.to_string())),
+        },
+        Some(Resume::Session(id)) => {
+            let stored = find_session(store, cwd, id)?;
+            // 它在不在**请求的那个工作区**里：在就沿用请求的目录。读不出桶就当它在本桶 —— 保守：
+            // 宁可少换一次目录，也不凭一次读失败去改这一趟的工作目录。
+            let here = store.is_in_bucket(cwd, &stored.id).unwrap_or(true);
+            // 续写要发生在它自己的目录里。读不出它自己的 cwd（流坏了）就老实退回请求的那个，而且
+            // **不说**那句「跟着走了」—— 那时它说的会是假话。
+            let own = if here {
+                None
+            } else {
+                crate::session::store::session_cwd(&stored)
+            };
+            Ok(SessionChoice {
+                cwd: own
+                    .as_deref()
+                    .map_or_else(|| cwd.to_path_buf(), PathBuf::from),
+                elsewhere: own.is_some(),
+                stored,
+            })
+        }
+    }
+}
+
 /// 按 id（或按它目录的路径）找一场会话。
 fn find_session(store: &SessionStore, cwd: &Path, id: &str) -> Result<StoredSession, String> {
     let direct = PathBuf::from(id);
@@ -3215,7 +3296,7 @@ mod tests {
             let text = String::from_utf8(out).expect("回执是 utf-8");
             assert_eq!(
                 text,
-                "fs-agent: 会话 01J8ZQ4K7M；复盘：fs-agent sessions show 01J8ZQ4K7M\n"
+                "fs-agent: 会话 01J8ZQ4K7M；接着跑：fs-agent -c 01J8ZQ4K7M\n"
             );
             assert_eq!(returned, code, "一行回执不该改退出码");
         }
@@ -3366,7 +3447,7 @@ mod tests {
     fn the_continue_flag_parses_both_spellings_and_defaults_to_off() {
         // `.scratch/exit-gesture/spec.md` 的「补充说明」点名要补的两条缺口之一：`exit(130)` 那条
         // 路径与 `--continue` 的旗标解析（这里的 `mod tests` 原先只测过 `--mode`）。
-        use super::parse_interactive;
+        use super::{parse_interactive, Resume};
 
         let args = |words: &[&str]| {
             parse_interactive(
@@ -3376,14 +3457,159 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
         };
-        assert!(args(&["--continue"]).unwrap().resume);
-        assert!(args(&["-c"]).unwrap().resume, "短拼写是同一个旗标");
-        assert!(!args(&[]).unwrap().resume, "不写就是不接着跑");
+        assert_eq!(args(&["--continue"]).unwrap().resume, Some(Resume::Latest));
+        assert_eq!(
+            args(&["-c"]).unwrap().resume,
+            Some(Resume::Latest),
+            "短拼写是同一个旗标"
+        );
+        assert_eq!(args(&[]).unwrap().resume, None, "不写就是不接着跑");
         // 它与别的旗标可以混着写，顺序无所谓。
         let mixed = args(&["--plain", "-c", "--model", "kimi-k3"]).unwrap();
-        assert!(mixed.resume);
+        assert_eq!(mixed.resume, Some(Resume::Latest));
         assert!(mixed.plain);
         assert_eq!(mixed.model.as_deref(), Some("kimi-k3"));
+    }
+
+    #[test]
+    fn a_session_is_named_by_id_or_by_its_directory() {
+        // `fs-agent -c 20261001T155845Z-7a69cbff`：`-c` / `--continue` 后面跟一个不以 `-` 开头
+        // 的词就是**指名**续哪一场；`--session <id>` 是同一个意思的显式拼写。
+        use super::{parse_interactive, Resume};
+
+        let args = |words: &[&str]| {
+            parse_interactive(
+                &words
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let named = Some(Resume::Session("20261001T155845Z-7a69cbff".to_owned()));
+        assert_eq!(
+            args(&["-c", "20261001T155845Z-7a69cbff"]).unwrap().resume,
+            named
+        );
+        assert_eq!(
+            args(&["--continue", "20261001T155845Z-7a69cbff"])
+                .unwrap()
+                .resume,
+            named,
+            "长拼写也吃 id"
+        );
+        assert_eq!(
+            args(&["--session", "20261001T155845Z-7a69cbff"])
+                .unwrap()
+                .resume,
+            named
+        );
+        // 会话目录也算 id（`sessions show` 一直这么收）。
+        assert_eq!(
+            args(&[
+                "--session",
+                "/tmp/sessions/bucket/20261001T155845Z-7a69cbff"
+            ])
+            .unwrap()
+            .resume,
+            Some(Resume::Session(
+                "/tmp/sessions/bucket/20261001T155845Z-7a69cbff".to_owned()
+            ))
+        );
+
+        // `-c` 后面那个词要是旗标，就不当 id —— 否则 `fs-agent -c --plain` 会去续一场叫
+        // 「--plain」的会话。
+        let mixed = args(&["-c", "--plain"]).unwrap();
+        assert_eq!(mixed.resume, Some(Resume::Latest));
+        assert!(mixed.plain);
+        // 顺序反过来也一样。
+        let mixed = args(&["--plain", "-c"]).unwrap();
+        assert_eq!(mixed.resume, Some(Resume::Latest));
+        assert!(mixed.plain);
+
+        // `--session` 没有可选值：缺了就是打错了，而旗标也不算 id。
+        let error = args(&["--session"]).unwrap_err();
+        assert!(error.contains("--session"), "{error}");
+        let error = args(&["--session", "--plain"]).unwrap_err();
+        assert!(error.contains("--session"), "`--plain` 不是 id：{error}");
+    }
+
+    #[test]
+    fn opening_a_session_is_newest_named_or_fresh() {
+        // `choose_session` 是 `-c` 三种含义的**唯一**决定处：新开、续本工作区最新那场、按 id 续
+        // 指名的那场（先本桶、再全 store，命中别处时工作目录跟着那场会话走）。
+        use super::{choose_session, Resume};
+        use crate::events::{Event, EventPayload, SpeakerId, SCHEMA_VERSION};
+        use crate::session::SessionStore;
+
+        let dir = tempfile::tempdir().unwrap();
+        let here = dir.path().join("here");
+        let there = dir.path().join("there");
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(&there).unwrap();
+        let store = SessionStore::new(dir.path().join("store"));
+        // 一场会话开在哪里由它流里那条 `SessionStarted` 说 —— 目录名是编码过的桶名，读不回来。
+        let seed = |session: &crate::session::store::StoredSession, cwd: &std::path::Path| {
+            let event = Event::new(
+                1,
+                SpeakerId::System,
+                EventPayload::SessionStarted {
+                    session_id: session.id.clone(),
+                    cwd: cwd.display().to_string(),
+                    schema_version: SCHEMA_VERSION,
+                },
+            );
+            std::fs::write(
+                &session.log_path,
+                format!("{}\n", serde_json::to_string(&event).unwrap()),
+            )
+            .unwrap();
+        };
+
+        // 不带 `resume`：新开一场，工作目录就是请求的那个。
+        let fresh = choose_session(&store, &here, None).unwrap();
+        assert_eq!(fresh.cwd, here);
+        assert!(!fresh.elsewhere);
+        seed(&fresh.stored, &here);
+
+        // 续最新：这个桶里最近写下的那场。
+        let latest = choose_session(&store, &here, Some(&Resume::Latest)).unwrap();
+        assert_eq!(latest.stored.id, fresh.stored.id);
+        assert_eq!(latest.cwd, here);
+        assert!(!latest.elsewhere);
+
+        // 桶里一场都没有：报错，而不是悄悄新开一场 —— `-c` 是「接着跑」，接不上就要说出来。
+        let error = choose_session(&store, &there, Some(&Resume::Latest)).unwrap_err();
+        assert!(error.contains("没有可继续的会话"), "{error}");
+
+        // 按 id：本桶命中，工作目录不变。
+        let named = Resume::Session(fresh.stored.id.as_str().to_owned());
+        let found = choose_session(&store, &here, Some(&named)).unwrap();
+        assert_eq!(found.stored.id, fresh.stored.id);
+        assert_eq!(found.cwd, here);
+        assert!(!found.elsewhere, "本桶命中不算「跟着走了」");
+
+        // 按 id：那场会话在**别的工作区**里 —— 找得到（id 全局唯一），而工作目录跟着它走：
+        // 续写要发生在它自己的目录里，否则工具的相对路径、前缀缓存与横幅全不对。
+        let other = store.create(&there).unwrap();
+        seed(&other, &there);
+        let elsewhere = Resume::Session(other.id.as_str().to_owned());
+        let found = choose_session(&store, &here, Some(&elsewhere)).unwrap();
+        assert_eq!(found.stored.id, other.id);
+        assert_eq!(found.cwd, there, "续上别处的会话，工作目录跟着那场会话走");
+        assert!(found.elsewhere, "这一条要让前端说一句");
+
+        // 会话目录的路径也算 id（`sessions show` 一直这么收）。
+        let by_dir = Resume::Session(other.dir.display().to_string());
+        let found = choose_session(&store, &here, Some(&by_dir)).unwrap();
+        assert_eq!(found.stored.id, other.id);
+        assert_eq!(found.cwd, there);
+        assert!(found.elsewhere);
+
+        // 找不到：点名那个 id，并且说清搜过哪儿。
+        let missing = Resume::Session("20261001T000000Z-deadbeef".to_owned());
+        let error = choose_session(&store, &here, Some(&missing)).unwrap_err();
+        assert!(error.contains("20261001T000000Z-deadbeef"), "{error}");
+        assert!(error.contains("任何其他桶"), "说清搜过哪儿：{error}");
     }
 
     #[test]

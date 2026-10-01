@@ -174,7 +174,8 @@ headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4�
 
 ## 重新打开会话：历史重播
 
-`--continue` 重开本工作区最新的那个会话，TUI 把它的整条事件流铺回转录里，于是屏幕不是空着
+`--continue` 重开本工作区最新的那个会话（`--continue <id>` / `--session <id>` / `-c <id>` 改成重开指名的
+那一场；那一场在别的工作区时，这一趟的工作目录跟着它走、并说一句），TUI 把它的整条事件流铺回转录里，于是屏幕不是空着
 开始的。这条接缝是一个前端控制请求，不是一个渲染事件：CLI 在组装之后、启动横幅之前推进
 `ConsoleRequest::Replay { events }`（`ConsoleHandle::replay`），带着**组装好的**快照
 （`Harness::events()`），其中已经包含恢复期为悬空工具调用写下的那些合成结果。plain 模式
@@ -208,7 +209,9 @@ headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4�
 
 - 渲染器：stdout 是终端时用 TUI，否则用 plain 转录；`--plain` / `--tui` 强制选一个（两者
   互斥）；
-- `--continue` 续上本工作区最新的会话，保留它的 id；
+- `--continue` 续上本工作区最新的会话，保留它的 id；`--continue <id>` / `-c <id>` / `--session <id>` 续指名的
+  那一场 —— 先在本桶找，找不到再全 store 找（id 全局唯一；给的如果是它会话目录的路径，直接用那个
+  目录）。命中别的工作区时会切到那场会话自己的工作目录，并说一句；
 - `--config`、`--model`、`--mode`、`--cwd` 与别处一样；`--mode` 是这条路径自己的（讨论与
   `probe` 跑在 `[permissions] mode` 之下）；
 - 命令：`/undo`、`/discuss`、`/quit`；TUI 里 Esc 取消正在跑的回合，Shift+Tab 循环权限模式

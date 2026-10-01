@@ -127,8 +127,8 @@ tab 的点击、回合条的焦点只有真终端能验，见 ⑩ 与 ⑮。
 4. 备用屏幕退出后回到原屏幕，之前的 shell 内容还在。
 5. **忙碌双击退出后终端干净 + 回执打在 shell 里**：起一个长回合，连按两下 `Ctrl-C`。
    退出后 `stty -a | grep -E 'icanon|echo|isig'` 三个都带 `-` 前缀的**反面**（即
-   `icanon` / `echo` / `isig`），而且 shell 里出现一行 `fs-agent: 会话 <id>；复盘：
-   fs-agent sessions show <id>`（走 stderr；grep `会话 <id>；复盘：` 就能找到它）。这一条守的是 `std::process::exit(130)` 那个缺陷：旧实现跳过一
+   `icanon` / `echo` / `isig`），而且 shell 里出现一行 `fs-agent: 会话 <id>；接着跑：
+   fs-agent -c <id>`（走 stderr；grep `会话 <id>；接着跑：` 就能找到它，而且那一行真的粘得回去）。这一条守的是 `std::process::exit(130)` 那个缺陷：旧实现跳过一
    切析构，终端会留在 raw + 备用屏幕里。
 6. 脚本里 `Ctrl-C` 与 `/quit` 两条路径**每次跑都会各验一遍**（撤销序列 + termios）。
    **panic 路径手工复现不了**（没有可靠的触发方式），它靠 `TerminalModes::drop` 与

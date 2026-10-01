@@ -62,7 +62,7 @@ _Avoid_: conversation、thread、context
 _Avoid_: 会话文件、存档、checkpoint
 
 **会话桶（bucket）**:
-按会话 cwd 分出的目录；`--continue` 只扫本桶（cwd 的 slug 只用于分桶，权威 cwd 在 `SessionStarted` 里）。
+按会话 cwd 分出的目录；不带 id 的 `--continue` 只扫本桶（cwd 的 slug 只用于分桶，权威 cwd 在 `SessionStarted` 里 —— 按 id 续会话时先扫本桶、再全 store，命中别处那一场就用它记录里的 cwd）。
 _Avoid_: 索引、registry
 
 ## 目标

@@ -79,7 +79,8 @@ pub fn summarize(session: &StoredSession) -> io::Result<Listing> {
     let mut listing = Listing {
         id: session.id.clone(),
         dir: session.dir.clone(),
-        cwd: None,
+        // 同一条事实只有一个来源：`started_cwd`（`-c <id>` 也读它来决定工作目录）。
+        cwd: crate::session::store::started_cwd(&events),
         started: None,
         written: written_at(&session.log_path),
         ended: None,
@@ -92,7 +93,6 @@ pub fn summarize(session: &StoredSession) -> io::Result<Listing> {
             listing.started = Some(event.at);
         }
         match &event.payload {
-            EventPayload::SessionStarted { cwd, .. } => listing.cwd = Some(cwd.clone()),
             EventPayload::SessionEnded { reason } => listing.ended = Some(*reason),
             EventPayload::MessageCompleted { .. } => listing.messages += 1,
             EventPayload::RoundStarted { .. } => listing.rounds += 1,

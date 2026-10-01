@@ -126,8 +126,8 @@ fs-agent discuss --debaters 保守,激进 "问题"   # 或者指定这两位
   则会一直读到结尾（`echo 问题 | fs-agent discuss`）。
 - **看它跑**：终端上得到 TUI（包括权限覆盖层 —— 讨论者想跑什么都走它），管道里得到 plain
   转录 —— 轮次分节行与两个讨论者都走 stderr，合成器的产物单独走 **stdout**。TUI 的转录活
-  不过进程（ADR 0002），所以一次运行以打印会话 id 收尾：`fs-agent sessions show <id>` 才是
-  那份持久的记录，`sessions stats <id>` 则把花费按讨论者拆开。
+  不过进程（ADR 0002），所以一次运行以打印会话 id 收尾：`fs-agent -c <id>` 能把这一场接着跑起来，
+  `fs-agent sessions show <id>` / `sessions stats <id>` 才是不需要跑起来的那两份记录（回顾与花费）。
 - **退出码**：一场跑起来的讨论是 0（包括被取消 —— 那正是用户要的），辩论阶段本身失败则是
   非零。
 

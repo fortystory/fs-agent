@@ -9,8 +9,10 @@
 //!     outputs/
 //! ```
 //!
-//! cwd 的 slug 只用来**分桶**：权威绑定是 `SessionStarted` 里记下的 `cwd`。所以 `--continue`
-//! 永远不需要一个全局索引 —— 它扫这个目录所在的桶，取最近写下的那份日志。
+//! cwd 的 slug 只用来**分桶**：权威绑定是 `SessionStarted` 里记下的 `cwd`。所以不带 id 的
+//! `--continue` 永远不需要一个全局索引 —— 它扫这个目录所在的桶，取最近写下的那份日志。按 id 续
+//! （`-c <id>` / `--session <id>`）先扫本桶、再全 store，而续上别处那一场时工作目录取的就是那条
+//! `SessionStarted` 里的 cwd。
 //!
 //! root 是注入的，从不从环境里读：库不读任何环境，所以 store 住在哪里由调用方（CLI）决定
 //! （spec §1）。
@@ -24,12 +26,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 
-use crate::events::SessionId;
+use crate::events::{Event, EventPayload, SessionId};
 
 /// 会话目录里事件流的文件名。
 pub const LOG_FILE: &str = "log.jsonl";
 /// 会话目录里工具产物的目录名。
 pub const OUTPUTS_DIR: &str = "outputs";
+
+/// 一条流里记下的那个工作区：第一条 `SessionStarted.cwd`。
+///
+/// 桶名是编码过的、读不回来，所以这是「这场会话开在哪」唯一权威的来源。
+pub fn started_cwd(events: &[Event]) -> Option<String> {
+    events.iter().find_map(|event| match &event.payload {
+        EventPayload::SessionStarted { cwd, .. } => Some(cwd.clone()),
+        _ => None,
+    })
+}
+
+/// 一场会话开在哪里 —— 读它自己的那条流。
+///
+/// 读不出来（流坏了、或者它还在 `create` 与第一条事件之间）就答 `None`，调用方退回请求的目录。
+pub fn session_cwd(session: &StoredSession) -> Option<String> {
+    started_cwd(&crate::events::read_events(&session.log_path).ok()?)
+}
 
 /// 一个注入 root 下的各会话目录。
 #[derive(Debug, Clone)]
@@ -100,6 +119,15 @@ impl SessionStore {
         Ok(self.list(cwd)?.into_iter().next())
     }
 
+    /// 这场会话在不在这个 cwd 的桶里。
+    ///
+    /// 「按 id 接着跑一场会话」要它判「是不是在**请求的那个工作区**里」：是就沿用请求的目录，不是
+    /// 才去问那场会话自己的 cwd。判桶而不是比路径 —— `fs-agent --cwd .` 这样的相对写法与流里记的
+    /// 绝对路径不相等，但它们说的是同一个工作区。
+    pub fn is_in_bucket(&self, cwd: &Path, id: &SessionId) -> io::Result<bool> {
+        Ok(self.list(cwd)?.iter().any(|session| session.id == *id))
+    }
+
     /// 这个 cwd 的桶里每一场会话，最近写下的在前。
     ///
     /// 一个条目只有带着 `log.jsonl` 才算会话：在 `create` 与第一条 `SessionStarted` 之间进程就
@@ -113,8 +141,9 @@ impl SessionStore {
 
     /// store 里每一场会话，跨所有桶，最近写下的在前。
     ///
-    /// 以工作区为单位的问题（`--continue`、`prune`）走 [`SessionStore::list`]；这个是全日账本
-    /// 要问的全 store 版本，因为厂商的配额窗口是跨工作区一起花的（spec §17）。
+    /// 以工作区为单位的问题（不带 id 的 `--continue`、`prune`）走 [`SessionStore::list`]；这个
+    /// 是全 store 的版本：全日账本要它（厂商的配额窗口是跨工作区一起花的，spec §17），按 id 找
+    /// 一场会话也要它（`sessions show <id>`、`-c <id>`）。
     pub fn list_all(&self) -> io::Result<Vec<StoredSession>> {
         let buckets = match std::fs::read_dir(&self.root) {
             Ok(entries) => entries,
