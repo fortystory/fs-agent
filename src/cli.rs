@@ -1167,6 +1167,21 @@ async fn interactive_loop(
                 let message = run_goal_command(harness, goals.dir.as_deref(), &args);
                 harness.notice(&render::wording::fs_agent(&message));
             }
+            // `/clear`：结束当前会话、开一个新的（§12）。它复用翻页那条机制 —— 两段入口、
+            // 一段机制 —— 只是不带压缩、不带摘要注入：人是主动清场，没有「要带过去的历史」
+            // 这回事。
+            Submission::Clear => {
+                if loop_running {
+                    // 循环跑着的时候输入区是禁言的，所以这一行本来打不出来；这条拒绝是那件事
+                    // 的名字，而不是一条能走到的路径。
+                    harness.notice(&render::wording::fs_agent(
+                        render::wording::clear_while_looping(),
+                    ));
+                } else {
+                    let message = clear_session(harness, goals);
+                    harness.notice(&render::wording::fs_agent(&message));
+                }
+            }
             // `/loop <名字>`：选定目标并连续工作（§4）。三种启动边界在写任何事件之前判。
             Submission::Loop(args) => {
                 let message = match parse_loop_line(&args) {
@@ -1236,6 +1251,9 @@ enum Submission<'a> {
     Goal(String),
     /// `/loop <名字>`：选定目标并连续工作（§4）。参数是目标的名字，一个不断开的词。
     Loop(String),
+    /// `/clear`：结束当前会话、开一个新的（`.scratch/goal-loop/spec.md` §12）。**不是**「清空
+    /// 上下文继续用」—— 旧会话留在磁盘上，进程不重启，渲染器与终端留着。
+    Clear,
     /// 整条提交，含换行，作为一条 prompt。
     Prompt(&'a str),
 }
@@ -1269,6 +1287,9 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
     match first {
         "/quit" | "/exit" if whole => Submission::Quit,
         "/undo" if whole => Submission::Undo,
+        // 与 `/undo` 同一条规矩：内建命令只在作为**整条**提交时匹配，它后面的一行绝不能被丢
+        // 在地上。
+        "/clear" if whole => Submission::Clear,
         _ if first.starts_with('/') => {
             let rest_of_line = first.trim_start_matches('/');
             let (name, inline) = match rest_of_line.split_once(char::is_whitespace) {
@@ -1589,6 +1610,26 @@ fn goal_streams(goals: &GoalSetup, name: &str) -> Vec<Vec<Event>> {
         }
     }
     streams
+}
+
+/// `/clear`：结束当前会话、开一个新的（`.scratch/goal-loop/spec.md` §12）。
+///
+/// 它调的就是翻页那条机制（[`Harness::rollover`]），差别只有一处：**不带压缩、不带摘要注入**
+/// —— 人是主动清场，没有「要带过去的历史」这回事。旧会话留在磁盘上，`--continue` 打开的是
+/// 最新的那一场。
+///
+/// 手势本身不进事件流：这件事没有流上的痕迹，审计看的是**会话边界**（新会话的第一条
+/// `SessionStarted`）。
+fn clear_session(harness: &mut Harness, goals: &GoalSetup) -> String {
+    let from = harness.session_id().as_str().to_owned();
+    let stored = match goals.store.create(&goals.cwd) {
+        Ok(stored) => stored,
+        Err(error) => return format!("开不了新会话：{error}"),
+    };
+    if let Err(error) = harness.rollover(&stored) {
+        return render::wording::error_report(&error);
+    }
+    render::wording::cleared(&from, stored.id.as_str())
 }
 
 /// 解析 `/loop` 的参数：一个目标名字，一个不断开的词。
@@ -3198,6 +3239,16 @@ mod tests {
             read("/goal new sandbox .scratch/sandbox\n"),
             Submission::Goal("new sandbox .scratch/sandbox".to_owned())
         );
+    }
+
+    // --- `/clear`（`.scratch/goal-loop/spec.md` §12） --------------------------
+
+    #[test]
+    fn clear_is_a_whole_submission_and_not_a_task() {
+        assert_eq!(read("/clear"), Submission::Clear);
+        assert_eq!(read("  /clear  "), Submission::Clear, "去掉空白照旧");
+        // 内建命令要么是整条提交，要么什么都不算：它后面的一行绝不能被丢在地上。
+        assert_eq!(read("/clear\n再写点什么"), Submission::Prompt("/clear\n再写点什么"));
     }
 
     // --- `/loop <名字>`（`.scratch/goal-loop/spec.md` §4） ---------------------

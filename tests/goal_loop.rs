@@ -851,6 +851,59 @@ async fn crossing_the_compact_threshold_compacts_and_opens_a_new_session() {
     session.harness.shutdown().await;
 }
 
+// --- `/clear`：同一个 rollover 的另一段入口（§12） ---------------------------
+
+#[tokio::test]
+async fn clear_is_the_same_rollover_without_a_summary_and_leaves_no_trace_on_the_stream() {
+    use fs_agent::session::SessionStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut session = session_with(
+        root,
+        "s-1",
+        FakeProvider::new(vec![Reply::text("先聊两句")]),
+    )
+    .await;
+    session.harness.run_turn("在吗").await.unwrap();
+
+    let old_log = session.log_path.clone();
+    let before = session.events();
+    assert!(before
+        .iter()
+        .any(|event| matches!(event.payload, EventPayload::MessageCompleted { .. })));
+
+    // `/clear` 调的**就是**翻页那条机制，差别只有一处：不带压缩、不带摘要注入。
+    let store = SessionStore::new(root.join("store"));
+    let stored = store.create(&root.join("workspace")).unwrap();
+    session.harness.rollover(&stored).unwrap();
+
+    // 手势本身不进事件流：旧会话的流**一字未动** —— 没有收尾事件、什么都没有。
+    assert_eq!(read_events(&old_log).unwrap(), before);
+
+    // 新会话从空开始，开头是它自己的 `SessionStarted`：审计看的就是这个边界。
+    let new = read_events(&stored.log_path).unwrap();
+    assert!(matches!(new[0].payload, EventPayload::SessionStarted { .. }));
+    assert!(
+        !new.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::HistorySuperseded { .. } | EventPayload::ContextInjected { .. }
+        )),
+        "没有压缩、没有摘要注入：{new:?}"
+    );
+    assert_eq!(
+        session.harness.session_id().as_str(),
+        stored.id.as_str(),
+        "当前会话已经换了"
+    );
+
+    // `--continue` 打开的是**最新**的那一个 —— 也就是刚开的这场。
+    let latest = store.latest(&root.join("workspace")).unwrap().unwrap();
+    assert_eq!(latest.id, stored.id);
+
+    session.harness.shutdown().await;
+}
+
 // --- 会话桶里的归属筛（§4） -------------------------------------------------
 
 #[test]

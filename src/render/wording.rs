@@ -1458,7 +1458,7 @@ pub struct Command {
 }
 
 /// 内建的斜杠命令，按每一份列表显示它们的顺序。
-pub static BUILT_IN_COMMANDS: [Command; 5] = [
+pub static BUILT_IN_COMMANDS: [Command; 6] = [
     Command {
         name: "undo",
         description: "回滚上一次编辑",
@@ -1474,6 +1474,10 @@ pub static BUILT_IN_COMMANDS: [Command; 5] = [
     Command {
         name: "loop",
         description: "选定目标并连续工作：`/loop <名字>`",
+    },
+    Command {
+        name: "clear",
+        description: "结束当前会话、开一个新的",
     },
     Command {
         name: "quit",
@@ -1557,6 +1561,16 @@ pub fn goal_reminded(percent: u64) -> String {
 pub fn goal_rolled_over(from: &str, to: &str, compacted: bool) -> String {
     let what = if compacted { "历史压成摘要" } else { "清场" };
     format!("{what}：会话 {from} → {to}（这一下会打掉前缀缓存，它是低频的）")
+}
+
+/// `/clear` 干完了：说出会话换成了哪一个（旧的那个还在磁盘上）。
+pub fn cleared(from: &str, to: &str) -> String {
+    format!("已结束会话 {from}，开了新的会话 {to}（旧的还在磁盘上，`--continue` 打开最新那个）")
+}
+
+/// 循环跑着的时候 `/clear` 打不出来（§5、§12）：输入区在那段时间里禁言。
+pub fn clear_while_looping() -> &'static str {
+    "一个 loop 正在跑，输入区在那段时间里禁言；要停就按 Esc"
 }
 
 /// 目标完成：条目情况与跨了几个会话，一行说完。汇总本身落在流上，也由那次调用写进转录。

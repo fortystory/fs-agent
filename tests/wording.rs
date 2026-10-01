@@ -639,11 +639,11 @@ fn interactive_feedback_reads_in_chinese() {
     assert_eq!(wording::nothing_to_undo(), "没有可撤销的修改");
     assert_eq!(
         wording::unknown_command("/nope", &[]),
-        "未知命令 /nope（可用：/undo、/discuss、/goal、/loop、/quit，或直接输入 /<技能名>）"
+        "未知命令 /nope（可用：/undo、/discuss、/goal、/loop、/clear、/quit，或直接输入 /<技能名>）"
     );
     assert_eq!(
         wording::unknown_command("/nope", &["ask-matt", "release"]),
-        "未知命令 /nope（可用：/undo、/discuss、/goal、/loop、/quit；技能：/ask-matt、/release）"
+        "未知命令 /nope（可用：/undo、/discuss、/goal、/loop、/clear、/quit；技能：/ask-matt、/release）"
     );
     assert_eq!(wording::skill_loaded("ask-matt"), "已加载技能 ask-matt");
     assert_eq!(

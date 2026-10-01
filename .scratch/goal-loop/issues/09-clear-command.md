@@ -1,7 +1,7 @@
 # `/clear`：结束当前会话、开一个新的
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 07
 
 > 规格：`.scratch/goal-loop/spec.md` §12。
