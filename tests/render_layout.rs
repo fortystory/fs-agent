@@ -4020,28 +4020,40 @@ fn clicking_a_question_body_or_border_does_nothing() {
 }
 
 #[test]
-fn the_renderer_confirmations_answer_by_click() {
-    // 退出确认是渲染器自己的：点 `[y] 退出` 就退出。
+fn a_raised_gesture_replaces_the_way_out_and_keeps_the_hints() {
+    // 举手换掉的是**出口那一段**，不是往后追加（`.scratch/exit-gesture/spec.md` §2）：
+    // 宽终端里别的键位提示照旧在，而出口那一截换成了那句催促。
     let (mut idle, _line) = {
         let mut state = state_with_roster(&["kimi"]);
         let (reply, line) = tokio::sync::oneshot::channel();
         state.request(ConsoleRequest::Prompt { reply });
         (state, line)
     };
-    idle.key(Key::CtrlD);
-    click_text(&mut idle, 120, 24, "[y] 退出");
-    assert!(idle.should_quit(), "这次点击确认了退出");
+    let before = screen(120, 24, &mut idle).join("\n");
+    assert!(!before.contains("再按一次"), "没举手时没有这句：{before}");
 
-    // 而点它上面的 `[n] 取消` 让会话继续跑。
-    let (mut escaped, _line) = {
-        let mut state = state_with_roster(&["kimi"]);
-        let (reply, line) = tokio::sync::oneshot::channel();
-        state.request(ConsoleRequest::Prompt { reply });
-        (state, line)
-    };
-    escaped.key(Key::CtrlD);
-    click_text(&mut escaped, 120, 24, "[n] 取消");
-    assert!(!escaped.should_quit(), "安全的那个答案不是退出");
+    idle.key(Key::CtrlC);
+    let after = screen(120, 24, &mut idle).join("\n");
+    assert!(
+        after.contains("再按一次 ctrl-c/ctrl-d 退出"),
+        "举手之后出口段换了：{after}"
+    );
+    assert!(after.contains("enter 发送"), "别的键位提示照旧在：{after}");
+    assert!(
+        !after.contains("· ctrl-c/ctrl-d 退出"),
+        "旧的出口段是被换掉、不是被追加：{after}"
+    );
+
+    // 忙碌那一档把两件事都说出来：回合停了、再按会退出。
+    let mut busy = state_with_roster(&["kimi"]);
+    busy.request(ConsoleRequest::RunState { running: true });
+    busy.key(Key::CtrlC);
+    let busy_text = screen(120, 24, &mut busy).join("\n");
+    assert!(
+        busy_text.contains("已取消 · 再按一次 ctrl-c 退出"),
+        "忙碌的举手文案：{busy_text}"
+    );
+    assert!(busy_text.contains("esc 取消"), "键位提示照旧在：{busy_text}");
 }
 
 /// 一个屏幕上摆着 `question` 的问卷，以及它的答案接收端。
@@ -4474,9 +4486,9 @@ fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
 }
 
 #[test]
-fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
-    // 「覆盖层忽略其它所有键」的唯一例外：`Ctrl-D` 关上它
-    // 而不是打开退出确认（票 06 §5）。
+fn ctrl_d_closes_the_detail_overlay() {
+    // 「覆盖层忽略其它所有键」的唯一例外：`Ctrl-D` 关上它，而不是参与退出手势
+    // （`.scratch/exit-gesture/spec.md` §1）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(tool_started(
         1,
@@ -4493,7 +4505,6 @@ fn ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit() {
     assert!(!state.should_quit(), "关上不是退出");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("── 参数 ──"), "覆盖层关上了：{text}");
-    assert!(!text.contains("退出会话"), "而且没有问过确认：{text}");
 }
 
 #[test]

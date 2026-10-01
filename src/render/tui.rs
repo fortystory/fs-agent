@@ -514,6 +514,10 @@ pub struct TuiState {
     /// 上一次写进终端的那条标题，用来在绘制路径上比对 —— 有它就不必枚举状态来源
     /// （spec §5）。
     last_title: Option<String>,
+    /// 退出手势的那把举手：有值 = 正在举手，值是它的截止时刻
+    /// （`.scratch/exit-gesture/spec.md` §1）。纯渲染器状态，不进事件流；`should_quit()`
+    /// 只反映 [`TuiState::quit`]。
+    exit_deadline: Option<std::time::Instant>,
     /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
     /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
     /// （`.scratch/todo-and-modes/spec.md` §1）。
@@ -639,11 +643,6 @@ enum Pending {
     Paste { text: String, chars: usize },
     /// 一份多行的草稿，`Esc` 会把它清掉。
     ClearDraft,
-    /// `Ctrl-D`：渲染器自己的「你确定要出去吗」（票 06 §1）。
-    ///
-    /// 它是渲染器侧第五个问题，也是唯一结束应用的那个。它没有人可发答案 —— 说 yes 就是
-    /// 置上 [`TuiState::quit`]，循环的 `select!` 会在下一趟看见。
-    Exit,
     /// 目标循环跑着的时候按 `Esc`：渲染器自己问一句「停下还是继续跑」
     /// （`.scratch/goal-loop/spec.md` §5）。
     ///
@@ -953,14 +952,6 @@ impl Pending {
                 choices: &wording::CLEAR_CHOICES,
                 actions: vec![HitAction::ClearDraft, HitAction::Dismiss],
             },
-            Pending::Exit => Modal {
-                title: wording::exit_title().to_owned(),
-                description: None,
-                notes: Vec::new(),
-                detail: Some(wording::exit_body().to_owned()),
-                choices: &wording::EXIT_CHOICES,
-                actions: vec![HitAction::Quit, HitAction::Dismiss],
-            },
             Pending::GoalStop => Modal {
                 title: wording::goal_stop_title().to_owned(),
                 description: None,
@@ -1018,8 +1009,6 @@ enum HitAction {
     Paste,
     /// 确认清掉草稿。
     ClearDraft,
-    /// 确认退出。
-    Quit,
     /// 确认停下目标循环（§5）。
     StopGoal,
     /// 什么都不做就关掉问题：安全的那一个答案，`Esc` 也是它。
@@ -1268,6 +1257,7 @@ impl TuiState {
             home,
             goal: None,
             last_title: None,
+            exit_deadline: None,
             mode,
             transcript: Transcript::new(),
             pane: Pane::new(),
@@ -1322,6 +1312,56 @@ impl TuiState {
             wording::title_state(self.replay.is_some(), self.pending.is_some(), self.busy()),
             self.goal.as_deref(),
         )
+    }
+
+    /// 举手：记下「这一刻起，窗口之内第二下算数」（`.scratch/exit-gesture/spec.md` §1）。
+    ///
+    /// 时间从参数进来，测试不必睡真实时间；`key()` 自己传 [`std::time::Instant::now`]。
+    pub fn raise_exit_gesture_at(&mut self, now: std::time::Instant) {
+        self.exit_deadline = Some(now + EXIT_GESTURE_WINDOW);
+        self.dirty = true;
+    }
+
+    /// 这把举手还立着吗。
+    pub fn exit_gesture_raised(&self, now: std::time::Instant) -> bool {
+        self.exit_deadline
+            .is_some_and(|deadline| now < deadline)
+    }
+
+    /// 让这把举手超时作废：清字段、置 `dirty`，提示行跟着恢复。
+    ///
+    /// 它是作废的**唯一**入口 —— 主循环到点也调它（票 02），而「别的键先清旧举手」也走
+    /// 这里，于是超时与按键两条路不会各写一份。
+    pub fn expire_exit_gesture(&mut self) {
+        self.exit_deadline = None;
+        self.dirty = true;
+    }
+
+    /// `Ctrl-C` / `Ctrl-D` 共用的那一把手势（`.scratch/exit-gesture/spec.md` §1）。
+    ///
+    /// 空闲时两键完全对等：第一下举手（什么也不做），窗口内第二下退出，混按也算第二下。
+    /// 忙碌时只有 `Ctrl-C` 参与：第一下取消当前回合**并且**举手，第二下退出 —— 那一条由
+    /// CLI 走有序收尾并以 130 收尾（票 03）；`Ctrl-D` 维持忽略，而且**不清**举手，因为它是
+    /// 「被忽略」，不是「别的键」。
+    fn exit_key(&mut self, key: Key) {
+        let now = std::time::Instant::now();
+        if self.busy() {
+            if key == Key::CtrlD {
+                return;
+            }
+            if self.exit_gesture_raised(now) {
+                self.events.push(FrontEndEvent::Quit);
+            } else {
+                self.events.push(FrontEndEvent::Cancel);
+                self.raise_exit_gesture_at(now);
+            }
+            return;
+        }
+        if self.exit_gesture_raised(now) {
+            self.quit = true;
+        } else {
+            self.raise_exit_gesture_at(now);
+        }
     }
 
     /// 算一次标题，与上一版比对；变了就记下新的并返回它，没变答 `None`。
@@ -1645,10 +1685,19 @@ impl TuiState {
     /// 提交，转录的滚动键被忽略，因为下面的历史还在铺，视口钉在它的末尾（`spec` §3、§5）。
     fn replay_key(&mut self, key: Key) {
         if key == Key::CtrlC {
-            self.quit = true;
+            // 重放里 `Ctrl-C` 也走双击：第一下举手、第二下退出。误按一下不该把一次重放
+            // （以及它后面还没画出来的那些历史）直接扔掉（spec §1）。
+            let now = std::time::Instant::now();
+            if self.exit_gesture_raised(now) {
+                self.quit = true;
+            } else {
+                self.raise_exit_gesture_at(now);
+            }
             return;
         }
-        // 编辑器认的那些键全都照常工作；`Ctrl-D`、`Esc`、`Enter`、滚动键与模式手势一律忽略。
+        // 别的键清掉旧举手（§1 的总则），然后照常编辑：编辑器认的那些键全都工作，而
+        // `Ctrl-D`、`Esc`、`Enter`、滚动键与模式手势一律忽略。
+        self.expire_exit_gesture();
         self.editor_key(key);
         self.sync_menu();
     }
@@ -1901,7 +1950,6 @@ impl TuiState {
                 Pending::Loop { .. }
                 | Pending::Paste { .. }
                 | Pending::ClearDraft
-                | Pending::Exit
                 | Pending::GoalStop,
             ) => {
                 let QuestionClick::At(column, row) = click else {
@@ -1921,7 +1969,6 @@ impl TuiState {
                     (
                         pending @ (Pending::Paste { .. }
                         | Pending::ClearDraft
-                        | Pending::Exit
                         | Pending::GoalStop),
                         action,
                     ) => self.own_answer(pending, action),
@@ -1945,7 +1992,6 @@ impl TuiState {
                 self.sync_menu();
             }
             (Pending::ClearDraft, HitAction::ClearDraft) => self.editor.clear(),
-            (Pending::Exit, HitAction::Quit) => self.quit = true,
             // 点「停下」与按 `s` 是同一次动作：推一条取消手势，循环据此收尾并落一条「人主动
             // 停」的收尾事件。
             (Pending::GoalStop, HitAction::StopGoal) => self.events.push(FrontEndEvent::Cancel),
@@ -2253,57 +2299,48 @@ impl TuiState {
             }
             return;
         }
-        match key {
-            Key::CtrlC => {
-                if self.busy() {
+        // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-C` 与
+        // `Ctrl-D` 自己不在这里清 —— 它们正是要摸这把举手的那两个键。
+        if !matches!(key, Key::CtrlC | Key::CtrlD) {
+            self.expire_exit_gesture();
+        }
+        // 两键共用一把举手，按当前视图的意思是空闲还是忙碌分派；详情覆盖层与重放各有自己
+        // 的分支，已经在上面提前返回（spec §1、§7）。
+        if matches!(key, Key::CtrlC | Key::CtrlD) {
+            self.exit_key(key);
+            return;
+        }
+        if key == Key::Esc {
+            if self.busy() {
+                if !self.muted {
                     self.events.push(FrontEndEvent::Cancel);
                 } else {
-                    self.quit = true;
-                }
-                return;
-            }
-            // `Ctrl-D` 是那个「带确认的退出」手势，而它的每一道守卫都排在下面那道问题守卫
-            // 之前：循环在跑时它被直接忽略，而有任何问题立着时，忽略它归那个问题管
-            // （票 06 §1、§3）。
-            Key::CtrlD => {
-                if !self.busy() && self.pending.is_none() {
-                    self.pending = Some(Pending::Exit);
-                }
-                return;
-            }
-            Key::Esc => {
-                if self.busy() {
-                    if !self.muted {
-                        self.events.push(FrontEndEvent::Cancel);
-                    } else {
-                        // 目标循环跑着：**默认停在「继续跑」** —— 误按一下不该掐掉一个已经跑了
-                        // 两小时的目标（`.scratch/goal-loop/spec.md` §5）。
-                        match self.pending {
-                            // 已经问出来了：关掉它就是那个安全的答案。
-                            Some(Pending::GoalStop) => self.pending = None,
-                            // 别的框（模型那份问卷）属于这次运行，所以 `Esc` 对它是取消手势，
-                            // 与别处一样。
-                            Some(_) => self.events.push(FrontEndEvent::Cancel),
-                            // 没有框：先问一句。
-                            None => self.pending = Some(Pending::GoalStop),
-                        }
+                    // 目标循环跑着：**默认停在「继续跑」** —— 误按一下不该掐掉一个已经跑了
+                    // 两小时的目标（`.scratch/goal-loop/spec.md` §5）。
+                    match self.pending {
+                        // 已经问出来了：关掉它就是那个安全的答案。
+                        Some(Pending::GoalStop) => self.pending = None,
+                        // 别的框（模型那份问卷）属于这次运行，所以 `Esc` 对它是取消手势，
+                        // 与别处一样。
+                        Some(_) => self.events.push(FrontEndEvent::Cancel),
+                        // 没有框：先问一句。
+                        None => self.pending = Some(Pending::GoalStop),
                     }
-                } else if let Some(pending) = self.pending.take() {
-                    self.decline(pending);
-                } else if self.slash_menu().is_some() {
-                    // `/` 菜单是屏幕上最小的东西，所以 `Esc` 先关掉它，然后才轮到手扔草稿
-                    // （spec §6）。
-                    self.slash.dismissed = true;
-                } else if self.editor.has_multiple_lines() {
-                    // 在一份这么长的草稿上按 Esc 会丢掉真的工作，所以它先问一句 —— 而安全的
-                    // 答案是「不」（spec §7）。
-                    self.pending = Some(Pending::ClearDraft);
-                } else {
-                    self.editor.clear();
                 }
-                return;
+            } else if let Some(pending) = self.pending.take() {
+                self.decline(pending);
+            } else if self.slash_menu().is_some() {
+                // `/` 菜单是屏幕上最小的东西，所以 `Esc` 先关掉它，然后才轮到手扔草稿
+                // （spec §6）。
+                self.slash.dismissed = true;
+            } else if self.editor.has_multiple_lines() {
+                // 在一份这么长的草稿上按 Esc 会丢掉真的工作，所以它先问一句 —— 而安全的
+                // 答案是「不」（spec §7）。
+                self.pending = Some(Pending::ClearDraft);
+            } else {
+                self.editor.clear();
             }
-            _ => {}
+            return;
         }
         if self.pending.is_some() {
             // 问题占着键盘：它自己的键回答它，上面的 `Ctrl-C` 与 `Esc` 是出路，别的什么都进
@@ -2548,13 +2585,6 @@ impl TuiState {
                     self.editor.clear();
                 }
             }
-            // yes 就退出；别的任何够得到的键都是安全的那一个答案 —— 「不」—— `Esc` 也是，
-            // 它从不到这里来（票 06 §2）。
-            Pending::Exit => {
-                if agrees(key) {
-                    self.quit = true;
-                }
-            }
             // **默认停在「继续跑」**：只有明确按 `s` 才停，`Enter` 与别的键都是继续。
             Pending::GoalStop => {
                 if matches!(key, Key::Char('s') | Key::Char('S')) {
@@ -2577,28 +2607,28 @@ impl TuiState {
             // 问卷属于一次运行，所以它立着时的 `Esc` 是取消手势，从不到这里来（spec §19）。
             // 万一真来了，丢掉发送端就是诚实的「没有答案」。退出确认是渲染器自己的，而 `Esc`
             // 是它的安全答案：拒绝，留在里面。
-            Pending::Questionnaire(_)
-            | Pending::Paste { .. }
-            | Pending::ClearDraft
-            | Pending::Exit => {}
+            Pending::Questionnaire(_) | Pending::Paste { .. } | Pending::ClearDraft => {}
             // `Esc` 关掉它，意思就是**继续跑** —— 那个安全的答案。
             Pending::GoalStop => {}
         }
     }
 
     fn status_line(&self, width: u16) -> String {
-        // 重放自己会说话：它临时用自己的进度替换掉提示集合，而且没有退出提示可给 ——
-        // `Ctrl-D` 被忽略，而退出那个 `Ctrl-C` 可能做、也可能不做的事，不是人需要的提示
-        // （`spec` §4）。
+        let raised = self.exit_gesture_raised(std::time::Instant::now());
+        // 重放自己会说话：它临时用自己的进度替换掉提示集合。举手时那句催促压在进度行前面
+        // ——「再按一次」比一个 `n/m` 更急，而进度行只是暂时让位（spec §2）。
         if let Some(replay) = &self.replay {
+            if raised {
+                return wording::EXIT_HINT_REPLAY_RAISED.to_owned();
+            }
             return wording::history_progress_line(replay.next, replay.events.len(), width);
         }
         // 提示说的是键盘*现在*干什么。没有行被读的时候 —— 一个回合进行中，或者一次性的
         // `discuss` —— `enter 发送` 会是一个这个会话兑现不了的承诺（spec §6）。
         if self.prompt_reply.is_some() {
-            wording::status_line(self.busy(), width)
+            wording::status_line(self.busy(), width, raised)
         } else {
-            wording::viewer_status_line(self.busy(), width)
+            wording::viewer_status_line(self.busy(), width, raised)
         }
     }
 
@@ -3325,6 +3355,13 @@ pub const PULSE_PALETTE: [Color; 6] = [
 /// 动来动去的颜色是噪声、不是生命。于是提示符在 agent 工作时呼吸，其余时间保持它歇着的颜色，
 /// 而空闲的会话回到 `select!` 里的三个来源、一次唤醒都没有。
 const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
+
+/// 退出手势的窗口：第一下举手之后，第二下要在这段时间内到达才算数
+/// （`.scratch/exit-gesture/spec.md` §1、§6）。
+///
+/// 它同时是提示的寿命：超时作废、提示行恢复。写死、不做配置项 —— 这个手势只有「来得及
+/// 收回那一下」一个用途，给它一个旋钮只会多一件要解释的事。
+const EXIT_GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// 标记的连字符：它的单元格从哪一列开始，以及那个单元格多宽。
 ///
@@ -4706,6 +4743,13 @@ mod tests {
     /// 某个下标上：一个脉冲帧是 60 ms，也就是三个半脚本帧，我们这里的帧 5 是脚本的帧 18。
     /// 这些三元组就是 `colorsys.hsv_to_rgb` 为脚本的帧打出来的
     /// （`.scratch/tui-input-pulse/spec.md` §2b）。
+    /// 退出手势的窗口写死在 500 毫秒：它同时是提示的寿命，不做配置项
+    /// （`.scratch/exit-gesture/spec.md` §1、§6）。
+    #[test]
+    fn the_exit_gesture_window_is_half_a_second() {
+        assert_eq!(EXIT_GESTURE_WINDOW, std::time::Duration::from_millis(500));
+    }
+
     #[test]
     fn the_prompt_colour_is_the_script_at_the_same_moment() {
         assert_eq!(PULSE_FRAME.as_millis(), 60);

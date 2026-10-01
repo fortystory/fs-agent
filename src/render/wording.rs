@@ -696,19 +696,6 @@ pub static PERMISSION_CHOICE_ANSWERS: [(char, crate::permissions::Answer); 3] = 
     ('n', crate::permissions::Answer::Deny),
 ];
 
-/// 回答退出确认的那些键（票 06 §2）。对一只顺着读这一行的眼睛来说，安全的答案是先出现的
-/// 那一个：`n` 取消，`Esc` 也是取消。
-pub static EXIT_CHOICES: [Choice; 2] = [
-    Choice {
-        key: 'y',
-        label: "退出",
-    },
-    Choice {
-        key: 'n',
-        label: "取消",
-    },
-];
-
 /// 一行文本形式的按钮行：`[y] 允许 / [a] 总是允许 / [n] 拒绝`。
 ///
 /// 这是 plain 控制台那条输入行用的东西。TUI 把同样的条目画成它自己的 span，并把键挑出来
@@ -822,17 +809,6 @@ pub fn clear_draft_title() -> &'static str {
 /// 清空草稿那个问题的**正文**行。
 pub fn clear_draft_body() -> &'static str {
     "草稿有多行，Esc 会把它们全部丢掉"
-}
-
-/// `Ctrl-D` 退出确认的标题（票 06 §2）。
-pub fn exit_title() -> &'static str {
-    "退出会话"
-}
-
-/// 退出确认的正文。它把人在说「是」之前想知道的那两件事都说出来：磁盘上的转录留得住，
-/// 没发出去的草稿留不住（票 06 §2）。
-pub fn exit_body() -> &'static str {
-    "会话记录会保留；未发送的草稿会丢弃"
 }
 
 /// 问卷页脚里往回一题的路。
@@ -1068,6 +1044,18 @@ pub const EXIT_HINT_IDLE: &str = "ctrl-c/ctrl-d 退出";
 /// 的键，是提示行绝不能做的那件事（票 06 §4）。
 pub const EXIT_HINT_BUSY: &str = "ctrl-c 退出";
 
+/// 空闲、**已经举手**时的出口：再按一下就走，两键都算
+/// （`.scratch/exit-gesture/spec.md` §2）。
+pub const EXIT_HINT_IDLE_RAISED: &str = "再按一次 ctrl-c/ctrl-d 退出";
+
+/// 忙碌、已经举手时的出口。它把两件事都说出来：回合确实停了、再按会退出 —— 这正是它比只
+/// 说「退出」值钱的地方（spec §2）。
+pub const EXIT_HINT_BUSY_RAISED: &str = "已取消 · 再按一次 ctrl-c 退出";
+
+/// 重放、已经举手时的出口：重放里只有 `Ctrl-C` 管用，而进度行临时让位给这一句
+/// （spec §2）。
+pub const EXIT_HINT_REPLAY_RAISED: &str = "再按一次 ctrl-c 退出";
+
 /// 前端**没有**在读行时显示的提示：一次性 `discuss`，或者交互式会话里一个回合进行中的那
 /// 一段。
 ///
@@ -1086,8 +1074,8 @@ const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 /// 状态词。出口现在是一个条目（`ctrl-c/ctrl-d 退出`），比从前的 `ctrl-c 退出` 宽七列，
 /// 这就是状态词从 60 到 80 列消失的原因 —— 40 列时它还在，因为只有一条提示要付账
 /// （票 06 §4）。
-pub fn status_line(busy: bool, width: u16) -> String {
-    hint_line(status_word(busy), &KEY_HINTS, exit_hint(busy), width)
+pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
+    hint_line(status_word(busy), &KEY_HINTS, exit_hint(busy, raised), width)
 }
 
 /// 前端没有在读行时的状态行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
@@ -1095,17 +1083,20 @@ pub fn status_line(busy: bool, width: u16) -> String {
 /// 这条区分不是装饰。提示描述的是键盘会做什么，而一个回合跑到一半的会话 —— 或一次
 /// `discuss` 运行，它压根不会要一行输入 —— 否则就会为一个什么都不发的键承诺
 /// `enter 发送`（spec §6）。
-pub fn viewer_status_line(busy: bool, width: u16) -> String {
-    hint_line(status_word(busy), &VIEWER_HINTS, exit_hint(busy), width)
+pub fn viewer_status_line(busy: bool, width: u16, raised: bool) -> String {
+    hint_line(status_word(busy), &VIEWER_HINTS, exit_hint(busy, raised), width)
 }
 
-/// 状态行里那个出口条目：只有键盘真的能退出时才用空闲那一档措辞，而那恰好就是没有东西在
-/// 跑的时候。
-pub fn exit_hint(busy: bool) -> &'static str {
-    if busy {
-        EXIT_HINT_BUSY
-    } else {
-        EXIT_HINT_IDLE
+/// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。
+///
+/// 举手换掉的是**出口那一段**，不是往后追加 —— 屏幕上不许出现「旧出口文案 + 举手文案」
+/// 那种形态（`.scratch/exit-gesture/spec.md` §2）。
+pub fn exit_hint(busy: bool, raised: bool) -> &'static str {
+    match (busy, raised) {
+        (true, true) => EXIT_HINT_BUSY_RAISED,
+        (true, false) => EXIT_HINT_BUSY,
+        (false, true) => EXIT_HINT_IDLE_RAISED,
+        (false, false) => EXIT_HINT_IDLE,
     }
 }
 

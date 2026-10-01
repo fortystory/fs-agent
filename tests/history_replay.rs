@@ -450,8 +450,31 @@ fn ctrl_c_quits_during_a_replay_and_ctrl_d_and_esc_are_inert() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("清空"), "不提清空草稿的问题：{text}");
 
+    // `Ctrl-C` 是出路，但它也走双击（`.scratch/exit-gesture/spec.md` §1）：第一下举手、
+    // 第二下退。
     state.key(Key::CtrlC);
-    assert!(state.should_quit(), "Ctrl-C 是重放的出路");
+    assert!(!state.should_quit(), "第一下只举手");
+    state.key(Key::CtrlC);
+    assert!(state.should_quit(), "Ctrl-C 双击是重放的出路");
+}
+
+#[test]
+fn a_raised_gesture_takes_over_the_replay_progress_line() {
+    // 举手期间进度行让位给那句催促 —— 它是**整条替换**，不是追加
+    // （`.scratch/exit-gesture/spec.md` §2）。
+    let mut state = state();
+    replay(&mut state, long_history());
+    state.replay_batch();
+    let before = screen(120, 40, &mut state).join("\n");
+    assert!(before.contains("恢复历史"), "进度行本来在：{before}");
+
+    state.key(Key::CtrlC);
+    let after = screen(120, 40, &mut state).join("\n");
+    assert!(
+        after.contains("再按一次 ctrl-c 退出"),
+        "举手之后那句催促在：{after}"
+    );
+    assert!(!after.contains("恢复历史"), "而进度行让了位：{after}");
 }
 
 #[test]

@@ -396,7 +396,7 @@ fn bracketed_hints_read_in_chinese_with_their_enums_explained() {
 #[test]
 fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     // 够宽：先状态词，再键位提示，出路放最后。
-    let wide = wording::status_line(false, 200);
+    let wide = wording::status_line(false, 200, false);
     assert!(wide.starts_with("就绪 · "), "{wide}");
     for hint in [
         "enter 发送",
@@ -413,34 +413,34 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     // 28 列装得下状态词与出路；31 列时发送提示与出路装得下，
     // 而让位的是状态词 —— 出路比它过去宽了七列，
     // 正是这一点挪动了这一档。
-    assert_eq!(wording::status_line(false, 28), "就绪 · ctrl-c/ctrl-d 退出");
+    assert_eq!(wording::status_line(false, 28, false), "就绪 · ctrl-c/ctrl-d 退出");
     assert_eq!(
-        wording::status_line(false, 31),
+        wording::status_line(false, 31, false),
         "enter 发送 · ctrl-c/ctrl-d 退出"
     );
     // 45 列装得下前两条提示与出路、装不下状态词，所以窄终端上
     // 换行键仍然可见。
     assert_eq!(
-        wording::status_line(false, 45),
+        wording::status_line(false, 45, false),
         "enter 发送 · ctrl-j 换行 · ctrl-c/ctrl-d 退出"
     );
     // 80 列是状态词能装进那五条提示前面的地方；那条阶梯的
     // 渲染侧断言在 `tests/render_layout.rs` 里。
     assert_eq!(
-        wording::status_line(false, 80),
+        wording::status_line(false, 80, false),
         "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
     // 比任何提示都窄：剩下的只有出路。
-    assert_eq!(wording::status_line(true, 8), wording::EXIT_HINT_BUSY);
-    assert_eq!(wording::status_line(false, 3), wording::EXIT_HINT_IDLE);
+    assert_eq!(wording::status_line(true, 8, false), wording::EXIT_HINT_BUSY);
+    assert_eq!(wording::status_line(false, 3, false), wording::EXIT_HINT_IDLE);
     // 只有空闲行会宣传 `ctrl-d`：一次运行进行中的时候它什么都不做，
     // 所以点它的名正是提示行绝不能做的那件事。
     assert!(
-        !wording::status_line(true, 200).contains("ctrl-d"),
+        !wording::status_line(true, 200, false).contains("ctrl-d"),
         "忙碌行不宣传一个什么都不做的键"
     );
     assert!(
-        wording::status_line(false, 200).contains("ctrl-d"),
+        wording::status_line(false, 200, false).contains("ctrl-d"),
         "空闲行会宣传"
     );
 }
@@ -449,7 +449,7 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
 fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
     // 没有一行在被读（一次性的 `discuss`，或者一个进行中的回合），
     // 所以 `enter 发送` 与交互循环的模式手势都不在候选里。
-    let wide = wording::viewer_status_line(false, 200);
+    let wide = wording::viewer_status_line(false, 200, false);
     assert_eq!(
         wide, "就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出",
         "整条查看器行"
@@ -458,20 +458,20 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
 
     // 同一条阶梯：出路活下来，状态词先让位。
     assert_eq!(
-        wording::viewer_status_line(false, 28),
+        wording::viewer_status_line(false, 28, false),
         "就绪 · ctrl-c/ctrl-d 退出"
     );
     assert_eq!(
-        wording::viewer_status_line(false, 31),
+        wording::viewer_status_line(false, 31, false),
         "esc 取消 · ctrl-c/ctrl-d 退出"
     );
 
     // 忙就读作忙 —— 而一次运行进行中的时候 `ctrl-d` 被忽略，所以
     // 查看器行回到朴素的 `ctrl-c 退出`。
-    assert!(wording::viewer_status_line(true, 200).starts_with("工作中 · "));
-    assert!(!wording::viewer_status_line(true, 200).contains("ctrl-d"));
+    assert!(wording::viewer_status_line(true, 200, false).starts_with("工作中 · "));
+    assert!(!wording::viewer_status_line(true, 200, false).contains("ctrl-d"));
     assert_eq!(
-        wording::viewer_status_line(true, 3),
+        wording::viewer_status_line(true, 3, false),
         wording::EXIT_HINT_BUSY
     );
 }
@@ -482,33 +482,73 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
     // 于是优先级顺序一改就会在这里显出来，而不是在终端上。
     // `w=40` 是最小值：状态词、一条提示，加上出路。
     assert_eq!(
-        wording::status_line(false, 40),
+        wording::status_line(false, 40, false),
         "就绪 · enter 发送 · ctrl-c/ctrl-d 退出"
     );
     // 更宽的出路从 45 列起让状态词付出代价：那里第二条提示
     // 与退出都装得下，而它装不下。
     assert_eq!(
-        wording::status_line(false, 60),
+        wording::status_line(false, 60, false),
         "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c/ctrl-d 退出"
     );
     assert_eq!(
-        wording::status_line(false, 80),
+        wording::status_line(false, 80, false),
         "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
     // 忙把状态词与出路对调：60 列下输掉的那条提示仍然是
     // `shift+tab 模式`，而 `ctrl-c 退出` —— 不带 `ctrl-d` —— 在那里。
     assert_eq!(
-        wording::status_line(true, 60),
+        wording::status_line(true, 60, false),
         "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
     let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出";
-    assert_eq!(wording::status_line(false, 120), full);
+    assert_eq!(wording::status_line(false, 120, false), full);
     // 在最大宽度上行是稳定的：再没什么可买的了。
-    assert_eq!(wording::status_line(false, 174), full);
+    assert_eq!(wording::status_line(false, 174, false), full);
     // 忙对调的是状态词与退出，不是阶梯。
     assert_eq!(
-        wording::status_line(true, 120).replace("工作中", "就绪"),
+        wording::status_line(true, 120, false).replace("工作中", "就绪"),
         full.replace("ctrl-c/ctrl-d 退出", "ctrl-c 退出")
+    );
+}
+
+#[test]
+fn the_raised_exit_hints_say_the_second_press() {
+    // 没举手那两句仍然在：它们出现在没举手的状态行里
+    // （`.scratch/exit-gesture/spec.md` §2）。
+    assert_eq!(wording::EXIT_HINT_IDLE, "ctrl-c/ctrl-d 退出");
+    assert_eq!(wording::EXIT_HINT_BUSY, "ctrl-c 退出");
+
+    // 举手那三句：空闲两键对等、忙碌把「回合停了」与「再按会退出」一起说出来、重放里只有
+    // `Ctrl-C` 管用。
+    assert_eq!(wording::EXIT_HINT_IDLE_RAISED, "再按一次 ctrl-c/ctrl-d 退出");
+    assert_eq!(
+        wording::EXIT_HINT_BUSY_RAISED,
+        "已取消 · 再按一次 ctrl-c 退出"
+    );
+    assert_eq!(wording::EXIT_HINT_REPLAY_RAISED, "再按一次 ctrl-c 退出");
+
+    // 举手换掉的是**出口那一段**，四档各有一句。
+    assert_eq!(wording::exit_hint(false, false), wording::EXIT_HINT_IDLE);
+    assert_eq!(
+        wording::exit_hint(false, true),
+        wording::EXIT_HINT_IDLE_RAISED
+    );
+    assert_eq!(wording::exit_hint(true, false), wording::EXIT_HINT_BUSY);
+    assert_eq!(wording::exit_hint(true, true), wording::EXIT_HINT_BUSY_RAISED);
+
+    // 换掉之后，别的键位提示照旧在，而旧的出口段不再作为一个条目出现。
+    let wide = wording::status_line(false, 200, true);
+    assert!(wide.ends_with(wording::EXIT_HINT_IDLE_RAISED), "{wide}");
+    assert!(wide.contains("enter 发送"), "{wide}");
+    assert!(!wide.contains("· ctrl-c/ctrl-d 退出"), "{wide}");
+    assert!(
+        wording::status_line(true, 200, true).ends_with(wording::EXIT_HINT_BUSY_RAISED),
+        "忙碌那一档"
+    );
+    assert!(
+        wording::viewer_status_line(false, 200, true).ends_with(wording::EXIT_HINT_IDLE_RAISED),
+        "查看器那条也一样"
     );
 }
 
@@ -519,7 +559,7 @@ fn no_hint_ever_names_shift_enter() {
     // 在任何单一宽度下都看不出来（spec §10，用户故事 54）。把它们全扫一遍。
     for busy in [false, true] {
         for width in 1..=200 {
-            let line = wording::status_line(busy, width);
+            let line = wording::status_line(busy, width, false);
             assert!(
                 !line.to_lowercase().contains("shift+enter"),
                 "{width}: {line}"

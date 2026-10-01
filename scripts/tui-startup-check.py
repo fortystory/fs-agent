@@ -28,7 +28,8 @@
 
     python3 scripts/tui-startup-check.py [binary] [runs]
 
-每一轮都按出口各跑一遍：`Ctrl-C`、`/quit`、以及在退出确认处 `Ctrl-D` 后跟 `y`（票 06），
+每一轮都按出口各跑一遍：`Ctrl-C` 连按两下、`/quit`、以及 `Ctrl-D` 连按两下
+（`.scratch/exit-gesture/spec.md` §1 的双击手势），
 外加每轮一次 `--continue` 重开 —— 同一个终端、一个已经存在的会话，于是启动时的历史
 重播落在关键路径上。每一遍都绿才退出 0。不回答光标位置查询（`ESC[6n`）的 pty 会让
 ratatui 初始化失败，所以这个脚本自己回答它。
@@ -91,9 +92,14 @@ TITLE_SAVE = "\x1b[22;0t"
 TITLE_SET = re.compile(r"\x1b\]0;([^\x07]*)\x07")
 
 # 用户实际有的出口。每一个都得把终端交还回来，所以每种手势各跑一轮（spec §1：`/quit`、
-# 空闲时 `Ctrl-C`；票 06：退出确认处 `Ctrl-D` 再 `y`；panic 那条路走同一个函数，
-# 但没法按需触发 —— 见手工清单）。
-GESTURES = [("ctrl-c", b"\x03"), ("/quit", b"/quit\r"), ("ctrl-d y", b"\x04y")]
+# 空闲时 `Ctrl-C` 与 `Ctrl-D` 都是双击 —— `.scratch/exit-gesture/spec.md` §1；panic 那条
+# 路走同一个函数，但没法按需触发 —— 见手工清单）。两下要在 500 毫秒窗口内，所以一次
+# `write` 发两个字节即可。
+GESTURES = [
+    ("ctrl-c", b"\x03\x03"),
+    ("/quit", b"/quit\r"),
+    ("ctrl-d", b"\x04\x04"),
+]
 
 # shell 必须拿回去的 tty 标志：规范输入、回显与信号。
 Modes = collections.namedtuple("Modes", "canonical echo signals")
@@ -439,7 +445,9 @@ def main():
                 # 重开上面几轮刚建出来的那个会话，还在同一个会话目录里：这样历史重播
                 # 就落在启动路径上，而它是否收敛、交还回来的终端是什么样，正是 pty
                 # 能看到的。
-                run = capture(binary, data_home, args=("--continue",))
+                run = capture(
+                    binary, data_home, gesture=b"\x03\x03", args=("--continue",)
+                )
                 ok, why = verdict(
                     run, devnull, identity, replay=True, cwd_base=cwd_base
                 )

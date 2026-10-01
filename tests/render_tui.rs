@@ -179,25 +179,38 @@ fn ctrl_c_quits_before_the_loop_has_asked_for_its_first_line() {
     // TUI 都在原始模式下读键。那里的 `Ctrl-C` 变成了取消手势，而
     // 空闲的循环会丢掉这些手势，于是这个键什么都没做。一次 pty
     // 探针证明了它：进入约 20ms 时按一次 `Ctrl-C`，进程一直活到没人看。
+    //
+    // 现在那个键是**双击**（`.scratch/exit-gesture/spec.md` §1）：第一下只举手，
+    // 让手快的人能收回那一下；第二下才真的走。
     let mut fresh = new_state();
     fresh.key(Key::CtrlC);
-    assert!(fresh.should_quit(), "没人读的键盘会退出");
+    assert!(!fresh.should_quit(), "第一下只举手，不退");
+    assert!(fresh.take_events().is_empty(), "也没有手势发出去");
+    fresh.key(Key::CtrlC);
+    assert!(fresh.should_quit(), "没人读的键盘，第二下会退出");
     assert!(fresh.take_events().is_empty());
 }
 
 #[test]
-fn an_idle_ctrl_c_quits_and_a_working_one_cancels() {
+fn an_idle_ctrl_c_double_taps_and_a_working_one_cancels_first() {
     // 空闲意味着循环在等一行，而它有两处说法：它已经要过一行，
     // 并且报过没有东西在跑（spec §6）。
     let (mut idle, _line) = state_with_prompt();
     idle.key(Key::CtrlC);
-    assert!(idle.should_quit());
+    assert!(!idle.should_quit(), "第一下只举手");
+    // 两键共用同一把举手，所以混按也算第二下。
+    idle.key(Key::CtrlD);
+    assert!(idle.should_quit(), "Ctrl-C 之后 Ctrl-D 也算第二下");
 
-    // 一次进行中的运行反着来：同一个键是取消手势。
+    // 一次进行中的运行反着来：第一下是取消手势，第二下才退出 —— 而退出是推给 CLI 的
+    // 一条手势（它走有序收尾、以 130 收尾，票 03），渲染器自己不设 `quit`。
     let mut state = state_running();
     state.key(Key::CtrlC);
     assert!(!state.should_quit());
     assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+    state.key(Key::CtrlC);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Quit]);
+    assert!(!state.should_quit(), "退出的收尾归 CLI");
 }
 
 #[test]
@@ -221,9 +234,11 @@ fn a_run_that_never_ended_a_turn_still_leaves_ctrl_c_quitting() {
     state.request(ConsoleRequest::RunState { running: false });
 
     state.key(Key::CtrlC);
+    assert!(!state.should_quit(), "第一下只举手");
+    state.key(Key::CtrlC);
     assert!(
         state.should_quit(),
-        "即使从没有 `TurnEnded` 到达，空闲的 Ctrl-C 也退出"
+        "即使从没有 `TurnEnded` 到达，空闲的双击也退得出去"
     );
     assert!(state.take_events().is_empty());
 }
@@ -236,38 +251,70 @@ fn shift_tab_is_the_mode_gesture() {
 }
 
 #[test]
-fn ctrl_d_asks_before_it_quits_and_the_safe_answer_is_no() {
-    // 空闲时：`Ctrl-D` 打开退出确认，而不是直接退出。这个覆盖层
-    // 像渲染器自己其它的问句一样作答 —— `y` 表示是，而其它每个
-    // 可达的键（以及 `Esc`）都表示否，因为手会不看字就去
-    // 够 `Enter`（票 06 §1、§2）。
+fn ctrl_d_is_the_same_double_tap_as_ctrl_c() {
+    // 空闲时两键完全对等（`.scratch/exit-gesture/spec.md` §1）：旧的那套 `y` / `Enter` /
+    // `Esc` 确认框连同它的覆盖层一起拆了（§4），所以这里测的是双击与「别的键清举手」。
     let (mut idle, _line) = state_with_prompt();
     idle.key(Key::CtrlD);
-    assert!(!idle.should_quit(), "确认在退出之前");
+    assert!(!idle.should_quit(), "第一下只举手");
     idle.key(Key::Enter);
-    assert!(!idle.should_quit(), "Enter 是安全的答案，不是退出");
+    assert!(!idle.should_quit(), "Enter 不再是确认，而是一个清掉举手的普通键");
+    idle.key(Key::CtrlD);
+    assert!(!idle.should_quit(), "举手清掉之后，这一下又是第一下");
+    idle.key(Key::CtrlD);
+    assert!(idle.should_quit(), "第二下退出");
+}
 
-    // `Esc` 关上确认框，让会话继续跑。
-    let (mut escaped, _line) = state_with_prompt();
-    escaped.key(Key::CtrlD);
-    escaped.key(Key::Esc);
-    assert!(!escaped.should_quit());
+#[test]
+fn any_other_key_clears_a_raised_exit_gesture() {
+    // 半分钟前那一下不该莫名其妙地算数（`.scratch/exit-gesture/spec.md` §1）。
+    let mut state = new_state();
+    state.key(Key::CtrlC);
+    assert!(!state.should_quit());
+    state.key(Key::Char('a'));
+    state.key(Key::CtrlC);
+    assert!(!state.should_quit(), "旧举手被清掉了，这一下是新的第一下");
+    state.key(Key::CtrlC);
+    assert!(state.should_quit(), "举手重来之后，下一对照样退得出去");
+}
 
-    // `y` 是唯一会退出的那个键。
-    let (mut confirmed, _line) = state_with_prompt();
-    confirmed.key(Key::CtrlD);
-    confirmed.key(Key::Char('y'));
-    assert!(confirmed.should_quit(), "y 确认退出");
+#[test]
+fn the_exit_gesture_lives_for_the_window_and_then_expires() {
+    // 时间可注入，所以这条不睡真实时间（`.scratch/exit-gesture/spec.md` §1、§6）。
+    use std::time::{Duration, Instant};
+
+    let mut state = new_state();
+    let t0 = Instant::now();
+    state.raise_exit_gesture_at(t0);
+    assert!(state.exit_gesture_raised(t0 + Duration::from_millis(400)));
+    assert!(!state.exit_gesture_raised(t0 + Duration::from_millis(600)));
+    assert!(!state.should_quit(), "超时只是作废，不是退出");
+
+    state.expire_exit_gesture();
+    assert!(!state.exit_gesture_raised(t0), "作废之后就不算数了");
+    assert!(!state.should_quit());
+    // 作废之后要重新按两下。
+    state.key(Key::CtrlC);
+    assert!(!state.should_quit());
 }
 
 #[test]
 fn ctrl_d_is_ignored_while_a_run_is_in_flight() {
-    // 忙时：这个手势什么都不做 —— 不确认、不退出、不取消
-    // （票 06 §1、§3）。停下一次运行仍然靠 `Ctrl-C`。
+    // 忙时：`Ctrl-D` 什么都不做 —— 不退出、不取消（`.scratch/exit-gesture/spec.md` §1）。
+    // 停下一次运行仍然靠 `Ctrl-C`，而误退的代价比误取消大。
     let mut state = state_running();
     state.key(Key::CtrlD);
     assert!(!state.should_quit());
     assert!(state.take_events().is_empty(), "也没有取消手势");
+
+    // 而且它**不清**正在举的那把手：先 `Ctrl-C` 举手（那一下取消了回合），`Ctrl-D` 之后
+    // 再按 `Ctrl-C` 仍然算第二下。
+    state.key(Key::CtrlC);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+    state.key(Key::CtrlD);
+    assert!(state.take_events().is_empty());
+    state.key(Key::CtrlC);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Quit]);
 }
 
 #[test]

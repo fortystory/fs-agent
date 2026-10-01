@@ -1,7 +1,7 @@
 # 退出手势与提示：空闲/忙碌/重放的双击，以及拆掉退出确认覆盖层
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：`.scratch/exit-gesture/spec.md` §1（手势与窗口）、§2（提示行上的三句文案）、§4（删掉 `Pending::Exit`）、§7（明确不动的部分）。
@@ -105,3 +105,13 @@ Blocked by: —
 - `/quit`、`Esc` 取消、模式循环、目标停确认框、详情覆盖层键位、忙碌 `Ctrl-D`、`ConsoleEvents` / `FrontEndEvent` 的其余语义：都不动（spec §7）。
 - 不给窗口加配置项；不把空闲双击改成 130；不在 `--plain` 里加手势（spec「明确不做」）。
 - 不碰 `SessionFacts.session_id` 这个死字段（spec「补充说明」）。
+
+## Comments
+
+- **落地**：`TuiState` 加 `exit_deadline: Option<Instant>`；常量 `EXIT_GESTURE_WINDOW`（500 ms，与 `PULSE_FRAME` 并列，内部单测钉住）；三个方法 `raise_exit_gesture_at` / `exit_gesture_raised` / `expire_exit_gesture`（时间可注入）；`exit_key` 是 `Ctrl-C` / `Ctrl-D` 共用的那一把举手 —— 空闲两键对等（第一下举手、第二下退，混按也算），忙碌只有 `Ctrl-C` 参与（第一下 `Cancel` + 举手，第二下 `FrontEndEvent::Quit`），忙碌 `Ctrl-D` 忽略且**不清**举手。`key()` 里「不是这两键就先 `expire_exit_gesture()`」放在详情覆盖层守卫之后、问题守卫之前；`replay_key()` 里 `Ctrl-C` 同样双击，别的键先清举手。
+- **提示**：`wording` 新增 `EXIT_HINT_IDLE_RAISED` / `EXIT_HINT_BUSY_RAISED` / `EXIT_HINT_REPLAY_RAISED`，`exit_hint(busy, raised)` 四档；`status_line` / `viewer_status_line` 多一个 `raised` 参数（内部照旧走 `hint_line`，阶梯一行未改）。`TuiState::status_line` 在重放时举手优先于进度行（进度行让位，不追加）。
+- **拆覆盖层**：`Pending::Exit`、它的 modal 组装、四处 match 分支、`HitAction::Quit`，以及 `wording::exit_title` / `exit_body` / `EXIT_CHOICES` 全删；`agrees` 保留（`Paste` 与 `ClearDraft` 在用）。
+- **测试**：`tests/render_tui.rs` 改写四条（组装期、空闲/忙碌、没有 `TurnEnded`、`Ctrl-D` 那条换成双击）并新增两条（别的键清举手、可注入时间的窗口与作废）；`tests/history_replay.rs` 改写重放那条并新增「举手让位给进度行」；`tests/render_layout.rs` 删掉 `the_renderer_confirmations_answer_by_click`、`ctrl_d_closes_the_detail_overlay_rather_than_asking_to_quit` 改名并去掉「退出会话」断言、新增两条帧断言（举手替换出口段且 `enter 发送` / `esc 取消` 仍在、旧出口段不在了）；`tests/wording.rs` 新增一组举手文案断言。
+- **验收面**：`docs/tui-manual-checklist.md` ⑦ 第 1 条整条重写为双击语义（含「那个确认框已经拆了」），并新增第 5 条「忙碌双击退出后终端干净 + 回执打在 shell 里」。
+- **pty 脚本的一处连带面**（票只点了 `ctrl-d y`）：`GESTURES` 的两条都改成双击，**`--continue` 那一轮也要跟着改** —— 它走的是 `capture` 的默认手势 `b"\x03"`，改成双击之后才退得出去（只改 `GESTURES` 会让四条 `--continue` 全红，实测确认）。本机实跑 12/12 GREEN。
+- `cargo test` 全绿（964 条）；`cargo clippy --all-targets` 干净。
