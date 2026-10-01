@@ -112,7 +112,7 @@ fn a_discussion_reports_why_it_stopped_and_who_was_absent() {
         "池子里没有叫 `激进` 的讨论者；可用：`保守`、`审查`"
     );
     assert_eq!(
-        wording::discussion_replay("20260922T101500Z-ab12"),
+        wording::session_receipt("20260922T101500Z-ab12"),
         "会话 20260922T101500Z-ab12；复盘：fs-agent sessions show 20260922T101500Z-ab12"
     );
     // `discuss` 拒绝启动的那两条路都会说清该改怎么做。

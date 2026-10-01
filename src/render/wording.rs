@@ -72,9 +72,12 @@ pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -
     line
 }
 
-/// 一场讨论可以从哪里读回来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
+/// 一场会话可以从哪里读回来 —— 给 alt screen 恢复之后打的那一行：TUI 的转录活不过这个
 /// 进程，所以会话 id 才是那个持久的答案。
-pub fn discussion_replay(session_id: &str) -> String {
+///
+/// `discuss` 与交互式退出共用它：两处都是「终端交还之后，给人一条能直接粘的命令」
+/// （`.scratch/exit-gesture/spec.md` §5）。
+pub fn session_receipt(session_id: &str) -> String {
     format!("会话 {session_id}；复盘：fs-agent sessions show {session_id}")
 }
 

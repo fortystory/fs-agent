@@ -1,7 +1,7 @@
 # 会话回执：终端交还之后往 stderr 打一行
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03
 
 > 规格：`.scratch/exit-gesture/spec.md` §5（退出回执）、§7、「补充说明」。
@@ -68,3 +68,12 @@ Blocked by: 03
 - 回执里不放别的东西（不打印日志路径、模型名、花费）。
 - 不改 `discuss` 的打印时机与通道（它已经在 shutdown 之后打 stderr）。
 - 不把这行写进 TUI 的活动区域或 stdout。
+
+## Comments
+
+- **落地**：`wording::discussion_replay` → `wording::session_receipt`（内容一字不变，注释改成「一场会话可以从哪里读回来」）；`claude` 侧新增 `finish_session<W: Write>(code, session_id, out) -> ExitCode`，它写一行 `fs-agent: {session_receipt(id)}` 并原样返回 `code`（写失败吞掉，绝不改退出码）。
+- **生产调用点**：`interactive()` 的尾部 —— `interactive_loop` 返回、`harness.shutdown()` **之后**，writer 是 `std::io::stderr()`。会话 id 在 `shutdown` 之前抄下来（`shutdown` 把 harness 收走）。TUI 与 `--plain` 共用 `interactive()`，所以两处一次覆盖；0 与 130 两条路径都打（130 由票 03 带回返回值）。
+- **`discuss`**：它自己那行改走 `session_receipt`，打印时机与通道（shutdown 之后、stderr）一个字没动。
+- **不打的地方**：启动（横幅已经有 id）、`probe` / `sessions` 一族、以及 `-c` 的提示（`-c` 是「继续本工作区最新」，不需要 id）。
+- **测试**：`src/cli.rs` 的 `mod tests` 新增 `the_receipt_names_the_session_and_never_changes_the_exit_code` —— 传 `Vec<u8>` 当 writer，`ExitCode::SUCCESS` 与 `ExitCode::from(130)` 各一条，断言整行内容（含会话 id 与 `fs-agent sessions show`）与返回码不变；`tests/wording.rs` 的旧断言改名后继续用同一句期望。
+- `cargo test` 全绿（968 条）；`cargo clippy --all-targets` 无警告。

@@ -434,7 +434,26 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         parsed.resume,
     )
     .await;
+    // 会话 id 先抄下来：`shutdown` 把 harness 收走了，而回执是在那之后才打的。
+    let session_id = harness.session_id().as_str().to_owned();
     harness.shutdown().await;
+    // 终端交还之后那一行（`.scratch/exit-gesture/spec.md` §5）：stdout 只承载最终产物，
+    // 所以回执走 stderr；TUI 与 `--plain` 共用这一处收尾。启动不打它（横幅已经有 id），
+    // `probe` / `sessions` 一族也不打。
+    finish_session(code, &session_id, &mut std::io::stderr())
+}
+
+/// 交互式会话退出时的收尾：在终端交还之后往 `out` 打一行能直接粘的复盘命令，然后**原样**
+/// 返回 `code`（`.scratch/exit-gesture/spec.md` §5）。
+///
+/// 收一个 writer 是为了让它可测 —— 直接在循环里 `eprintln!` 的话没人能断言它，而「打了几
+/// 次、打给谁」正是这条需求要钉住的东西。写失败（管道断了）就吞掉：一行回执绝不该改退出码。
+pub fn finish_session<W: Write>(code: ExitCode, session_id: &str, out: &mut W) -> ExitCode {
+    let _ = writeln!(
+        out,
+        "fs-agent: {}",
+        render::wording::session_receipt(session_id)
+    );
     code
 }
 
@@ -698,7 +717,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             );
             eprintln!(
                 "fs-agent: {}",
-                render::wording::discussion_replay(stored.id.as_str())
+                render::wording::session_receipt(stored.id.as_str())
             );
             // 整场失败掉的讨论是一次失败；被取消的那场正是用户要的，如同交互式会话里被取消的一个回
             // 合（spec §6）。举手退出（`Quit`）走 130，与交互式那条路同一个判定。
@@ -3156,7 +3175,7 @@ fn print_sessions_help(out: &mut dyn Write) {
 
 #[cfg(test)]
 mod tests {
-    use super::{exit_code_after, submission, ExitRequest, Mode, Submission};
+    use super::{exit_code_after, finish_session, submission, ExitRequest, Mode, Submission};
     use crate::agent::CancelSignal;
     use crate::render::FrontEndEvent;
     use std::process::ExitCode;
@@ -3176,6 +3195,23 @@ mod tests {
         // （与 `SIGINT` 的 128 + 2 惯例一致）。空闲那条路不许「顺便」变成 130。
         assert_eq!(exit_code_after(false), ExitCode::SUCCESS);
         assert_eq!(exit_code_after(true), ExitCode::from(130));
+    }
+
+    #[test]
+    fn the_receipt_names_the_session_and_never_changes_the_exit_code() {
+        // `.scratch/exit-gesture/spec.md` §5：交互式会话（TUI 与 `--plain`）退出时在终端
+        // 交还之后打一行能直接粘的复盘命令。writer 由调用方传（生产那边是 stderr），所以
+        // 「打在哪」由调用点保证，这里钉的是内容与「绝不改退出码」。
+        for code in [ExitCode::SUCCESS, ExitCode::from(130)] {
+            let mut out: Vec<u8> = Vec::new();
+            let returned = finish_session(code, "01J8ZQ4K7M", &mut out);
+            let text = String::from_utf8(out).expect("回执是 utf-8");
+            assert_eq!(
+                text,
+                "fs-agent: 会话 01J8ZQ4K7M；复盘：fs-agent sessions show 01J8ZQ4K7M\n"
+            );
+            assert_eq!(returned, code, "一行回执不该改退出码");
+        }
     }
 
     #[test]
