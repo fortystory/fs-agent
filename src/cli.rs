@@ -1133,11 +1133,18 @@ async fn interactive_loop(
             tokio::select! {
                 line = console.prompt() => break line,
                 event = events.recv() => match event {
-                    Some(FrontEndEvent::Quit) | None => return ExitCode::SUCCESS,
+                    // 一旦运行之外收到退出举手（第一下在忙碌里举的，而回合已经收尾），它
+                    // 与输入结束一样是「人要求离开」—— 但码走 130 那一档。
+                    Some(event @ (FrontEndEvent::Quit | FrontEndEvent::Cancel)) => {
+                        quit.apply(&event, &harness.cancel_signal());
+                        if quit.requested() {
+                            return quit.code();
+                        }
+                    }
                     Some(FrontEndEvent::CycleMode) => {
                         harness.mode_cycle().cycle();
                     }
-                    Some(FrontEndEvent::Cancel) => {}
+                    None => return ExitCode::SUCCESS,
                 },
             }
         };

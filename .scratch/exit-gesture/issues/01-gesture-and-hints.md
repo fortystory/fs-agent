@@ -115,3 +115,4 @@ Blocked by: —
 - **验收面**：`docs/tui-manual-checklist.md` ⑦ 第 1 条整条重写为双击语义（含「那个确认框已经拆了」），并新增第 5 条「忙碌双击退出后终端干净 + 回执打在 shell 里」。
 - **pty 脚本的一处连带面**（票只点了 `ctrl-d y`）：`GESTURES` 的两条都改成双击，**`--continue` 那一轮也要跟着改** —— 它走的是 `capture` 的默认手势 `b"\x03"`，改成双击之后才退得出去（只改 `GESTURES` 会让四条 `--continue` 全红，实测确认）。本机实跑 12/12 GREEN。
 - `cargo test` 全绿（964 条）；`cargo clippy --all-targets` 干净。
+- **补记（票 05 收口时改的一处行为）**：票 01 写的是「空闲：举手状态下第二下 `self.quit = true`」，而忙碌那一把举手在**第一下取消已经落地、`busy()` 变成假之后**会掉进这条空闲分支 —— 那时退出码会退成 0，与 spec §3「忙碌中被打断而退 = 130」相冲（pty 实测就是这么红的）。修法：`TuiState` 多一个 `exit_gesture_busy`，忙碌里举的举手记得自己的出身，第二下即使渲染器已经空闲也推 `FrontEndEvent::Quit`；空闲举的那把仍然 `self.quit = true`。回归测试见 `tests/render_tui.rs`，票 05 的 Comments 有完整记录。

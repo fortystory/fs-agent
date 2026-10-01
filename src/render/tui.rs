@@ -533,6 +533,12 @@ pub struct TuiState {
     /// （`.scratch/exit-gesture/spec.md` §1）。纯渲染器状态，不进事件流；`should_quit()`
     /// 只反映 [`TuiState::quit`]。
     exit_deadline: Option<std::time::Instant>,
+    /// 这一把举手是在**忙碌时**举起的吗（spec §1、§3）。
+    ///
+    /// 第一下 `Ctrl-C` 会取消当前回合，而那次取消可能在第二下之前就落地 —— 那时
+    /// `busy()` 已经为假，但人的意图仍然是「打断这次运行、退出」，退出码不该退回 0。
+    /// 举手的出身记在这里，第二下照它分派。
+    exit_gesture_busy: bool,
     /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
     /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
     /// （`.scratch/todo-and-modes/spec.md` §1）。
@@ -1273,6 +1279,7 @@ impl TuiState {
             goal: None,
             last_title: None,
             exit_deadline: None,
+            exit_gesture_busy: false,
             mode,
             transcript: Transcript::new(),
             pane: Pane::new(),
@@ -1332,8 +1339,10 @@ impl TuiState {
     /// 举手：记下「这一刻起，窗口之内第二下算数」（`.scratch/exit-gesture/spec.md` §1）。
     ///
     /// 时间从参数进来，测试不必睡真实时间；`key()` 自己传 [`std::time::Instant::now`]。
+    /// 这一下算作**空闲**举起的举手；忙碌里举的那一把走 [`TuiState::exit_key`]。
     pub fn raise_exit_gesture_at(&mut self, now: std::time::Instant) {
         self.exit_deadline = Some(now + EXIT_GESTURE_WINDOW);
+        self.exit_gesture_busy = false;
         self.dirty = true;
     }
 
@@ -1356,6 +1365,7 @@ impl TuiState {
     /// 这里，于是超时与按键两条路不会各写一份。
     pub fn expire_exit_gesture(&mut self) {
         self.exit_deadline = None;
+        self.exit_gesture_busy = false;
         self.dirty = true;
     }
 
@@ -1367,22 +1377,31 @@ impl TuiState {
     /// 「被忽略」，不是「别的键」。
     fn exit_key(&mut self, key: Key) {
         let now = std::time::Instant::now();
+        let raised = self.exit_gesture_raised(now);
         if self.busy() {
             if key == Key::CtrlD {
                 return;
             }
-            if self.exit_gesture_raised(now) {
+            if raised {
                 self.events.push(FrontEndEvent::Quit);
             } else {
                 self.events.push(FrontEndEvent::Cancel);
                 self.raise_exit_gesture_at(now);
+                // 这一把的出身是忙碌：取消可能马上就落地，第二下到达时 `busy()` 已经为假，
+                // 但那次退出仍然是「忙碌中被打断而退」，得走 130 那条路（spec §3）。
+                self.exit_gesture_busy = true;
             }
             return;
         }
-        if self.exit_gesture_raised(now) {
-            self.quit = true;
-        } else {
+        if !raised {
             self.raise_exit_gesture_at(now);
+            return;
+        }
+        if self.exit_gesture_busy {
+            // 第一下在忙碌里举的手，而回合已经收尾了：第二下仍然推给 CLI，按 130 收尾。
+            self.events.push(FrontEndEvent::Quit);
+        } else {
+            self.quit = true;
         }
     }
 

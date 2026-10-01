@@ -244,6 +244,22 @@ fn a_run_that_never_ended_a_turn_still_leaves_ctrl_c_quitting() {
 }
 
 #[test]
+fn a_gesture_raised_while_busy_still_quits_with_130_after_the_turn_ends() {
+    // 第一下 `Ctrl-C` 取消了回合，而取消可能马上落地：第二下到达时渲染器已经空闲。那一把
+    // 举手记得自己是在忙碌里举起的，所以第二次仍然推 `Quit` —— CLI 按 130 收尾 —— 而不是
+    // 退回空闲语义的 0（`.scratch/exit-gesture/spec.md` §3）。
+    let mut state = state_running();
+    state.key(Key::CtrlC);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+
+    // 回合收尾，循环报出它已经不在跑。
+    state.request(ConsoleRequest::RunState { running: false });
+    state.key(Key::CtrlC);
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Quit]);
+    assert!(!state.should_quit(), "退出的收尾归 CLI");
+}
+
+#[test]
 fn shift_tab_is_the_mode_gesture() {
     let mut state = new_state();
     state.key(Key::BackTab);

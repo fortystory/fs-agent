@@ -41,11 +41,13 @@ import pty
 import re
 import select
 import signal
+import socket
 import struct
 import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import unicodedata
 import time
 
@@ -332,6 +334,121 @@ def capture(binary, data_home, gesture=b"\x03", timeout=20.0, args=()):
     return Run(raw, exited, status, modes, survived_empty_enter)
 
 
+def silent_provider():
+    """一个只接受连接、从不回话的本地端点，用来把一个回合稳稳地钉在「忙碌」上。
+
+    不回应才是重点：任何回话都会让回合继续往下走，而忙碌双击那条路要的正是**一个进行中
+    的回合**（`.scratch/exit-gesture/spec.md` §3 的回归）。临时配置把内置 `kimi` provider
+    的 `base_url` 指到这里，所以不需要网络、也不需要真 key。
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(8)
+    held = []
+
+    def accept_loop():
+        while True:
+            try:
+                connection, _ = server.accept()
+            except OSError:
+                return
+            # 收着不放、不读不写：请求就停在那里等一个永远不会来的响应。
+            held.append(connection)
+
+    threading.Thread(target=accept_loop, daemon=True).start()
+    return server, server.getsockname()[1], held
+
+
+def busy_config(directory, port):
+    """指向那个沉默端点的临时配置：默认模型仍是内置的 `kimi-k3`。"""
+    path = os.path.join(directory, "busy-config.toml")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(
+            'default_model = "kimi-k3"\n'
+            "[providers.kimi]\n"
+            'base_url = "http://127.0.0.1:%d/v1"\n' % port
+        )
+        handle.write('api_key = "sk-silent"\n')
+    return path
+
+
+def capture_busy(binary, data_home, config, timeout=20.0):
+    """跑一轮忙碌双击：点着一个回合，再在它跑着的时候连按两下 `Ctrl-C`。
+
+    与 `capture` 的两处不同：先发一条 prompt（并在同一个 write 里立刻跟上两下 `Ctrl-C`
+    之前留一段宽限期，好让回合真的起来），且不做那个「空 Enter 之后会话还在吗」的检查
+    —— 这条路的终点就是进程结束。
+    """
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ["XDG_DATA_HOME"] = data_home
+        os.environ["TERM"] = "xterm-256color"
+        os.execv(os.path.abspath(binary), [binary, "--config", config])
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+    raw, screen = "", Screen(fd)
+    deadline, settle_by = time.time() + timeout, None
+    while time.time() < deadline:
+        text = read_once(fd, screen)
+        if text is None:
+            break
+        raw += text
+        if settle_by is None and BANNER_ANCHOR in raw and any(
+            STATUS_ANCHOR in row for row in screen.rows()
+        ):
+            settle_by = time.time() + 0.4
+        if settle_by is not None and time.time() >= settle_by:
+            break
+    # 点着一个回合：假 provider 会把这次调用挂住，所以宽限期之后它一定还在跑。
+    write(fd, b"say hi\r")
+    time.sleep(0.6)
+    write(fd, b"\x03\x03")
+    exited, status = False, None
+    end = time.time() + 6.0
+    while time.time() < end:
+        text = read_once(fd, screen, 0.1)
+        if text:
+            raw += text
+            continue
+        reaped, wait_status = os.waitpid(pid, os.WNOHANG)
+        if reaped == pid:
+            exited, status = True, wait_status
+            break
+    if not exited:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+    stop = time.time() + 0.3
+    while time.time() < stop:
+        text = read_once(fd, screen, 0.1)
+        if not text:
+            break
+        raw += text
+    modes = tty_state(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return Run(raw, exited, status, modes, True)
+
+
+def verdict_busy(run):
+    """忙碌双击那条路的判定：进程结束、退出码 130、终端交还干净。
+
+    这条正是 `std::process::exit(130)` 那个缺陷的回归：旧实现跳过一切析构，所以会红在
+    termios / `TEARDOWN` 上，而不是红在退出码上（`.scratch/exit-gesture/spec.md` §3）。
+    进不了忙碌态时它红得可读 —— 屏幕尾部一起打出来，而不是随机变绿。
+    """
+    if not run.exited:
+        return False, "忙碌双击没有结束进程；屏幕尾部 %r" % run.raw[-200:]
+    code = os.waitstatus_to_exitcode(run.status)
+    if code != 130:
+        return False, "忙碌双击的退出码是 %r，不是 130；尾部 %r" % (code, run.raw[-300:])
+    handed_back = terminal_handed_back(run)
+    if handed_back is not None:
+        return False, handed_back
+    return True, "exit 130, terminal handed back"
+
+
 def verdict(run, devnull, identity, replay=False, cwd_base=""):
     """判定一轮运行：它画出的第一帧，以及它留下的东西。
 
@@ -390,16 +507,28 @@ def verdict(run, devnull, identity, replay=False, cwd_base=""):
             cwd_base,
             titles[:3],
         )
+    handed_back = terminal_handed_back(run)
+    if handed_back is not None:
+        return False, handed_back
+    return True, "status row clean, banner once, terminal handed back"
+
+
+def terminal_handed_back(run):
+    """终端被交还回什么：termios 与那一串撤销序列。
+
+    空闲出口与忙碌双击共用这一段 —— 两边要的是同一件事，只有退出码不同。
+    交还干净时返回 `None`，否则返回一句原因。
+    """
     if run.modes is None:
-        return False, "could not read what the tty was left in"
+        return "could not read what the tty was left in"
     if not (run.modes.canonical and run.modes.echo and run.modes.signals):
-        return False, "the tty was left raw: %r" % (run.modes,)
+        return "the tty was left raw: %r" % (run.modes,)
     missing = [seq for seq in TEARDOWN if seq not in run.raw]
     if missing:
-        return False, "the terminal was not given back: %s missing" % ", ".join(
+        return "the terminal was not given back: %s missing" % ", ".join(
             repr(seq) for seq in missing
         )
-    return True, "status row clean, banner once, terminal handed back"
+    return None
 
 
 def binary_identity(binary):
@@ -429,7 +558,7 @@ def main():
     if not identity:
         print("no identity from %s --version" % binary)
         return 1
-    bad, total = 0, runs * (len(GESTURES) + 1)
+    bad, total = 0, runs * (len(GESTURES) + 1) + 1
     with tempfile.TemporaryDirectory(prefix="fs-agent-tui-check-") as data_home:
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
@@ -456,6 +585,18 @@ def main():
                     % (i + 1, "GREEN" if ok else "RED", why)
                 )
                 bad += 0 if ok else 1
+            # 忙碌双击单独一轮：它要先把一个回合点着（`capture_busy` 的契约与那张表的
+            # 「一个手势、等一次退出」不同），而这一条是 `exit(130)` 那个缺陷的回归。
+            server, port, held = silent_provider()
+            try:
+                run = capture_busy(binary, data_home, busy_config(data_home, port))
+                ok, why = verdict_busy(run)
+            finally:
+                server.close()
+                for connection in held:
+                    connection.close()
+            print("busy (ctrl-c ×2): %s -- %s" % ("GREEN" if ok else "RED", why))
+            bad += 0 if ok else 1
         finally:
             os.close(devnull)
     print("\n%d/%d red" % (bad, total))
