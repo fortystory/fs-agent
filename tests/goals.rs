@@ -146,7 +146,8 @@ fn creating_a_goal_writes_the_manifest_and_refuses_to_overwrite_it_silently() {
     let dir = tempfile::tempdir().unwrap();
     let source = Path::new(SANDBOX);
 
-    let (manifest, path) = goals::create("sandbox", source, dir.path(), false).unwrap();
+    let sandbox = [source.to_path_buf()];
+    let (manifest, path) = goals::create("sandbox", &sandbox, dir.path(), false).unwrap();
     assert_eq!(manifest.entries.len(), 5);
     assert_eq!(path, dir.path().join("sandbox.md"));
     let written = std::fs::read_to_string(&path).unwrap();
@@ -154,12 +155,12 @@ fn creating_a_goal_writes_the_manifest_and_refuses_to_overwrite_it_silently() {
     assert!(goals::exists(dir.path(), "sandbox"));
 
     // 重名一律拒绝：默默覆盖会抹掉一份已生成的目标定义。
-    let error = goals::create("sandbox", source, dir.path(), false).unwrap_err();
+    let error = goals::create("sandbox", &sandbox, dir.path(), false).unwrap_err();
     assert!(matches!(error, GoalError::AlreadyExists { .. }), "{error}");
     assert!(error.to_string().contains("--force"), "报错要说怎么覆盖");
 
     // 加 --force 才覆盖。
-    let (again, _) = goals::create("sandbox", source, dir.path(), true).unwrap();
+    let (again, _) = goals::create("sandbox", &sandbox, dir.path(), true).unwrap();
     assert_eq!(again, manifest);
 }
 
@@ -192,9 +193,111 @@ fn a_source_that_is_missing_or_has_no_tickets_is_refused_with_its_own_message() 
 }
 
 #[test]
+fn several_sources_become_one_manifest_with_fresh_ids_and_a_source_on_every_entry() {
+    // 一个目标装三个 feature：11 条票、id 按顺序重排（票号在来源之间必然撞号），而每条内容前面
+    // 带着 `<来源标签>/<票号>` —— 模型读到标题之后要能直接找到那张票。
+    let sources = [
+        std::path::PathBuf::from(".scratch/usage-stats-format"),
+        std::path::PathBuf::from(".scratch/terminal-title"),
+        std::path::PathBuf::from(".scratch/exit-gesture"),
+    ];
+    let manifest = goals::generate_from("three-seeds", &sources).unwrap();
+
+    assert_eq!(manifest.name, "three-seeds");
+    assert_eq!(manifest.entries.len(), 11, "3 + 3 + 5 张票");
+    let ids: Vec<String> = manifest
+        .entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
+    assert_eq!(
+        ids,
+        (1..=11)
+            .map(|number| format!("{number:02}"))
+            .collect::<Vec<_>>(),
+        "多个来源时 id 按最终顺序分配"
+    );
+    assert!(
+        manifest.entries[0]
+            .content
+            .starts_with("usage-stats-format/01 "),
+        "{:?}",
+        manifest.entries[0]
+    );
+    assert!(
+        manifest.entries[3]
+            .content
+            .starts_with("terminal-title/01 "),
+        "第二个来源从第 4 条接着排：{:?}",
+        manifest.entries[3]
+    );
+    assert!(
+        manifest.entries[6].content.starts_with("exit-gesture/01 "),
+        "第三个来源从第 7 条接着排：{:?}",
+        manifest.entries[6]
+    );
+
+    // 每一条的凭证都真的点到一张存在的票 —— 这才是「模型找得到」。
+    for entry in &manifest.entries {
+        let (ticket, _) = entry
+            .content
+            .split_once(' ')
+            .expect("`<标签>/<票号> <标题>`");
+        let (feature, number) = ticket.split_once('/').expect("`<标签>/<票号>`");
+        let dir = std::path::Path::new(".scratch")
+            .join(feature)
+            .join("issues");
+        let prefix = format!("{number}-");
+        assert!(
+            std::fs::read_dir(&dir).unwrap().any(|file| file
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&prefix)),
+            "清单第 {} 条点不到票：{ticket}",
+            entry.id
+        );
+    }
+
+    // 渲染之后读得回来。
+    let text = manifest.render();
+    assert_eq!(
+        goals::Manifest::parse(std::path::Path::new("three-seeds.md"), &text).unwrap(),
+        manifest
+    );
+}
+
+#[test]
+fn several_sources_are_checked_one_by_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+
+    // 一个来源都没给。
+    let error = goals::generate_from("goal", &[]).unwrap_err();
+    assert!(matches!(error, GoalError::NoSource), "{error}");
+
+    // 其中一个来源不存在、或者一张票都没有：指名道姓地拒掉，不是把其余的悄悄收下。
+    let missing = [std::path::PathBuf::from(SANDBOX), dir.path().join("nope")];
+    let error = goals::generate_from("goal", &missing).unwrap_err();
+    assert!(matches!(error, GoalError::SourceNotFound { .. }), "{error}");
+
+    let no_tickets = [std::path::PathBuf::from(SANDBOX), empty];
+    let error = goals::generate_from("goal", &no_tickets).unwrap_err();
+    assert!(matches!(error, GoalError::NoTickets { .. }), "{error}");
+    assert!(error.to_string().contains("empty"), "{error}");
+}
+
+#[test]
 fn loading_a_manifest_goes_through_the_name_and_reports_a_missing_file() {
     let dir = tempfile::tempdir().unwrap();
-    goals::create("sandbox", Path::new(SANDBOX), dir.path(), false).unwrap();
+    goals::create(
+        "sandbox",
+        &[std::path::PathBuf::from(SANDBOX)],
+        dir.path(),
+        false,
+    )
+    .unwrap();
 
     let manifest = goals::load(dir.path(), "sandbox").unwrap();
     assert_eq!(manifest.entries.len(), 5);

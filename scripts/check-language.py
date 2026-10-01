@@ -120,7 +120,7 @@ MODEL_TEXT_FLOOR = {
     "src/tools/task.rs": 4,
     "src/tools/todo.rs": 14,
     "src/tools/goal_note.rs": 11,
-    "src/goals.rs": 26,
+    "src/goals.rs": 27,
     "src/permissions.rs": 20,
     "src/discussion.rs": 8,
     "src/agent.rs": 39,

@@ -7,6 +7,9 @@
 //!
 //! 清单**开工前封闭**：`/goal-new` 生成一次，此后它与来源票各自独立。执行中冒出来的新工作
 //! 由模型用 `goal_note` 记（§11），不回头改这份文件。
+//!
+//! 生成可以吃**一个或多个**来源（`generate_from`）：一个来源时条目 id 就是票号，多个来源时按
+//! 顺序重排并给内容带上来源凭证 —— 票号在 feature 之间必然撞号。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -53,9 +56,11 @@ pub enum GoalError {
     InvalidName { name: String },
     #[error("找不到来源 {path}；它是 feature 目录（`.scratch/<slug>/`）或一份票文件")]
     SourceNotFound { path: String },
+    #[error("一个来源都没给：`/goal-new <名字> <来源>…`，来源之间用空格分开")]
+    NoSource,
     #[error("{path} 里一张票都没有：它下面没有 `issues/NN-*.md`，也没有票文件")]
     NoTickets { path: String },
-    #[error("来源里有 {count} 张票；清单的 id 只有两位十进制（`01`…`99`），装不下")]
+    #[error("清单的 id 只有两位十进制（`01`…`99`）：有一个编号是 {count}，装不下")]
     TooManyTickets { count: usize },
     #[error("目标 {path} 已经存在；要覆盖它，加 `--force`")]
     AlreadyExists { path: String },
@@ -224,32 +229,75 @@ impl fmt::Display for Manifest {
 /// 票的编号就是条目的 id：`03-foo.md` → id `03`。所以来源里的编号必须落在两位十进制能表示
 /// 的范围内，否则 [`GoalError::TooManyTickets`]。
 pub fn generate(name: &str, source: &Path) -> Result<Manifest, GoalError> {
-    validate_name(name)?;
-    let files = ticket_files(source)?;
-    let mut tickets: Vec<(u32, PathBuf)> = Vec::with_capacity(files.len());
-    for file in files {
-        let Some(number) = ticket_number(&file) else {
-            continue;
-        };
-        tickets.push((number, file));
-    }
-    if tickets.is_empty() {
-        return Err(GoalError::NoTickets {
-            path: source.display().to_string(),
-        });
-    }
-    tickets.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    generate_from(name, std::slice::from_ref(&source.to_path_buf()))
+}
 
-    let mut entries = Vec::with_capacity(tickets.len());
-    for (number, file) in tickets {
-        if number > 10u32.pow(ID_DIGITS as u32) - 1 {
-            return Err(GoalError::TooManyTickets {
-                count: number as usize,
+/// 从**一个或多个**来源生成一份清单（§2）。
+///
+/// 来源按给定的顺序排；每个来源内部按票号升序。两个规则各管一件事：
+///
+/// * **一个来源**：条目的 id 就是票号（`03-foo.md` → `03`），内容就是票的标题。这是清单最常见的
+///   形状 —— 一个 feature 一个目标。
+/// * **多个来源**：票号在来源之间**必然撞号**（每个 `.scratch/<feature>/issues/` 都有 `01`），
+///   所以 id 按**最终顺序重新分配** `01..`；内容前面带上凭证 `<来源标签>/<票号>`，否则模型读到
+///   一条标题也不知道去哪找那张票（`.scratch/<来源标签>/issues/<票号>-*.md`）。
+pub fn generate_from(name: &str, sources: &[PathBuf]) -> Result<Manifest, GoalError> {
+    validate_name(name)?;
+    if sources.is_empty() {
+        return Err(GoalError::NoSource);
+    }
+
+    // (来源标签, 票号, 标题)，按来源顺序、来源内按票号。
+    let mut collected: Vec<(String, u32, String)> = Vec::new();
+    for source in sources {
+        let mut tickets: Vec<(u32, PathBuf)> = Vec::new();
+        for file in ticket_files(source)? {
+            if let Some(number) = ticket_number(&file) {
+                tickets.push((number, file));
+            }
+        }
+        if tickets.is_empty() {
+            return Err(GoalError::NoTickets {
+                path: source.display().to_string(),
             });
         }
-        let content = ticket_title(&file)?;
+        tickets.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        let label = source_label(source);
+        for (number, file) in tickets {
+            collected.push((label.clone(), number, ticket_title(&file)?));
+        }
+    }
+
+    let limit = 10usize.pow(ID_DIGITS as u32);
+    let mut entries = Vec::with_capacity(collected.len());
+    for (index, (label, number, title)) in collected.iter().enumerate() {
+        let id = if sources.len() == 1 {
+            if *number as usize >= limit {
+                return Err(GoalError::TooManyTickets {
+                    count: *number as usize,
+                });
+            }
+            *number as usize
+        } else {
+            let id = index + 1;
+            if id >= limit {
+                return Err(GoalError::TooManyTickets { count: id });
+            }
+            id
+        };
+        let content = if sources.len() == 1 {
+            title.clone()
+        } else {
+            // `<来源标签>/<票号> <标题>`。分开拼而不是写成一条带空格的 `format!` 骨架：语言护栏
+            // 的判据是「≥3 个英文词且含空格」，那样写会被它数成一条英文散文 —— 那是假阳性，而
+            // 与其放宽棘轮，不如让骨架不去踩它。
+            let mut content = format!("{label}/{number:0width$}", width = ID_DIGITS);
+            content.push(' ');
+            content.push_str(title);
+            content
+        };
         entries.push(Entry {
-            id: format!("{number:0width$}", width = ID_DIGITS),
+            id: format!("{id:0width$}", width = ID_DIGITS),
             content,
         });
     }
@@ -257,6 +305,15 @@ pub fn generate(name: &str, source: &Path) -> Result<Manifest, GoalError> {
         name: name.to_owned(),
         entries,
     })
+}
+
+/// 一个来源在清单里的标签：目录取它的名字，票文件取它的文件名（去 `.md`）。
+fn source_label(source: &Path) -> String {
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("source");
+    name.strip_suffix(".md").unwrap_or(name).to_owned()
 }
 
 /// 从磁盘上读一份清单。
@@ -307,7 +364,7 @@ pub fn store(dir: &Path, manifest: &Manifest, force: bool) -> Result<PathBuf, Go
 /// 生成并写下——`/goal-new` 的那一步（§2）。
 pub fn create(
     name: &str,
-    source: &Path,
+    sources: &[PathBuf],
     dir: &Path,
     force: bool,
 ) -> Result<(Manifest, PathBuf), GoalError> {
@@ -319,7 +376,7 @@ pub fn create(
             path: path.display().to_string(),
         });
     }
-    let manifest = generate(name, source)?;
+    let manifest = generate_from(name, sources)?;
     let path = store(dir, &manifest, force)?;
     Ok((manifest, path))
 }

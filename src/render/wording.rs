@@ -1480,7 +1480,7 @@ pub static BUILT_IN_COMMANDS: [Command; 7] = [
     },
     Command {
         name: "goal-new",
-        description: "从一批票生成一份目标清单：`/goal-new <名字> <来源>`",
+        description: "从一批票生成一份目标清单：`/goal-new <名字> <来源>…`",
     },
     Command {
         name: "loop",
@@ -1510,7 +1510,7 @@ pub fn fs_agent(message: &str) -> String {
 
 /// `/goal-new` 的用法：参数不对时说的那句。
 pub fn goal_usage() -> &'static str {
-    "用法：/goal-new <名字> <feature 目录或票路径> [--force]"
+    "用法：/goal-new <名字> <来源>… [--force]；来源是 feature 目录或票路径，多个来源用空格分开"
 }
 
 /// 一份目标清单生成了。

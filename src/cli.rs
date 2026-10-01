@@ -1183,7 +1183,7 @@ async fn interactive_loop(
                     ));
                 }
             }
-            // `/goal-new <名字> <来源>`：从一批票生成一份目标清单（§2）。手势，不进流。
+            // `/goal-new <名字> <来源>…`：从一批票生成一份目标清单（§2）。手势，不进流。
             Submission::Goal(args) => {
                 let message = run_goal_command(harness, goals.dir.as_deref(), &args);
                 harness.notice(&render::wording::fs_agent(&message));
@@ -1379,8 +1379,8 @@ fn slash_catalog(
         .collect()
 }
 
-/// `/goal-new <名字> <来源> [--force]`：从一批票生成一份目标清单
-/// （`.scratch/goal-loop/spec.md` §2）。
+/// `/goal-new <名字> <来源>… [--force]`：从一批票生成一份目标清单
+/// （`.scratch/goal-loop/spec.md` §2）。来源可以是**一个或多个**（空格分开）。
 ///
 /// 返回要说给人听的那句话。**手势，不是工具调用**：它不走工具表、不走权限门、也不写事件 ——
 /// 清单文件存在即是「目标已创建」的证据。
@@ -1391,13 +1391,19 @@ fn run_goal_command(harness: &Harness, goals_dir: Option<&Path>, args: &str) -> 
     let Ok(line) = parse_goal_new_line(args) else {
         return render::wording::goal_usage().to_owned();
     };
-    // `<来源>` 相对于**会话**的 cwd 解析，而不是进程的：`--cwd` 可以指向别处。
-    let source = if Path::new(&line.source).is_absolute() {
-        PathBuf::from(&line.source)
-    } else {
-        harness.cwd().join(&line.source)
-    };
-    match crate::goals::create(&line.name, &source, dir, line.force) {
+    // 每个来源相对于**会话**的 cwd 解析，而不是进程的：`--cwd` 可以指向别处。
+    let sources: Vec<PathBuf> = line
+        .sources
+        .iter()
+        .map(|source| {
+            if Path::new(source).is_absolute() {
+                PathBuf::from(source)
+            } else {
+                harness.cwd().join(source)
+            }
+        })
+        .collect();
+    match crate::goals::create(&line.name, &sources, dir, line.force) {
         Ok((manifest, path)) => render::wording::goal_created(
             &manifest.name,
             manifest.entries.len(),
@@ -1407,16 +1413,17 @@ fn run_goal_command(harness: &Harness, goals_dir: Option<&Path>, args: &str) -> 
     }
 }
 
-/// `/goal-new` 那一行参数：`<名字> <来源> [--force]`。
+/// `/goal-new` 那一行参数：`<名字> <来源>… [--force]`。
 #[derive(Debug, PartialEq, Eq)]
 struct GoalNewLine {
     name: String,
-    source: String,
+    /// 一个或多个来源，按写下的顺序。每个来源是一条路径（**不能带空格**：空格是来源之间的分隔）。
+    sources: Vec<String>,
     force: bool,
 }
 
-/// 解析 `/goal-new` 的参数。形如 `--force` 的旗标可以出现在任何位置，`<来源>` 可以带空格（它是
-/// 一个路径）。
+/// 解析 `/goal-new` 的参数。形如 `--force` 的旗标可以出现在任何位置；第一个词是目标名，剩下的
+/// 每一个词是一个来源 —— 于是「一个目标装几个 feature」是一条命令。
 fn parse_goal_new_line(args: &str) -> Result<GoalNewLine, ()> {
     let mut force = false;
     let mut words: Vec<&str> = Vec::new();
@@ -1427,15 +1434,15 @@ fn parse_goal_new_line(args: &str) -> Result<GoalNewLine, ()> {
             words.push(word);
         }
     }
-    let [name, source @ ..] = words.as_slice() else {
+    let [name, sources @ ..] = words.as_slice() else {
         return Err(());
     };
-    if source.is_empty() {
+    if sources.is_empty() {
         return Err(());
     }
     Ok(GoalNewLine {
         name: (*name).to_owned(),
-        source: source.join(" "),
+        sources: sources.iter().map(|source| (*source).to_owned()).collect(),
         force,
     })
 }
@@ -3442,7 +3449,7 @@ mod tests {
             parse_goal_new_line("sandbox .scratch/sandbox").unwrap(),
             GoalNewLine {
                 name: "sandbox".to_owned(),
-                source: ".scratch/sandbox".to_owned(),
+                sources: vec![".scratch/sandbox".to_owned()],
                 force: false,
             }
         );
@@ -3453,13 +3460,25 @@ mod tests {
     }
 
     #[test]
-    fn goal_new_reads_force_wherever_it_is_written_and_keeps_a_spaced_path_whole() {
-        let forced = parse_goal_new_line("--force sandbox my tickets").unwrap();
-        assert!(forced.force);
-        assert_eq!(forced.name, "sandbox");
+    fn goal_new_takes_one_or_more_sources_in_the_order_they_are_written() {
+        // 一个目标装几个 feature：第一个词是名字，剩下每一个词是一个来源。
+        let line = parse_goal_new_line("seeds .scratch/usage-stats-format .scratch/terminal-title")
+            .unwrap();
+        assert_eq!(line.name, "seeds");
         assert_eq!(
-            forced.source, "my tickets",
-            "来源是一个路径，空格是它的一部分"
+            line.sources,
+            [".scratch/usage-stats-format", ".scratch/terminal-title"]
+        );
+        assert!(!line.force);
+
+        // `--force` 照旧可以出现在任何位置，而且不占来源的位置。
+        let forced = parse_goal_new_line("--force seeds .scratch/a .scratch/b").unwrap();
+        assert!(forced.force);
+        assert_eq!(forced.sources, [".scratch/a", ".scratch/b"]);
+
+        assert_eq!(
+            read("/goal-new seeds .scratch/a .scratch/b"),
+            Submission::Goal("seeds .scratch/a .scratch/b".to_owned())
         );
     }
 
@@ -3531,7 +3550,7 @@ mod tests {
         let goals_dir = dir.path().join("goals");
         crate::goals::create(
             "sandbox",
-            std::path::Path::new(".scratch/sandbox"),
+            &[std::path::PathBuf::from(".scratch/sandbox")],
             &goals_dir,
             false,
         )
@@ -3616,7 +3635,7 @@ mod tests {
         let goals_dir = dir.path().join("goals");
         crate::goals::create(
             "sandbox",
-            std::path::Path::new(".scratch/sandbox"),
+            &[std::path::PathBuf::from(".scratch/sandbox")],
             &goals_dir,
             false,
         )
