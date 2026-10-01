@@ -31,6 +31,9 @@ use thiserror::Error;
 
 use crate::events::{Decision, Redactor};
 use crate::permissions::Mode;
+// 方向与 `Mode` 那类配置枚举相反：制式是措辞，所以它定义在措辞层里，配置只是持有它
+// （`.scratch/usage-stats-format/spec.md` §1）。
+use crate::render::wording::NumberStyle;
 
 pub use cost::{Budget, LandingPoint, PriceTable, Pricing, Routing};
 
@@ -397,6 +400,9 @@ pub struct Config {
     pub sandbox: SandboxSettings,
     /// `[goals]`：目标循环的那几个旋钮 —— 两个阈值（§6）与两条停止线（§9）。
     pub goals: GoalSettings,
+    /// `[ui] number_style`：界面上那些计数用哪套书写制式
+    /// （`.scratch/usage-stats-format/spec.md` §2）。缺省 `cn`（万 / 亿）。
+    pub number_style: NumberStyle,
 }
 
 /// 目标循环的四个旋钮：两个阈值按**窗口**的百分比，两条停止线按次数。
@@ -439,6 +445,18 @@ pub const DEFAULT_NO_PROGRESS_ROLLOVERS: u32 = 3;
 pub const DEFAULT_PROVIDER_RETRIES: u32 = 2;
 /// provider 重试次数的上限。
 pub const MAX_PROVIDER_RETRIES: u32 = 10;
+
+/// `[ui]`：显示层的选择（`.scratch/usage-stats-format/spec.md` §2）。
+///
+/// 这一节是**为以后留的口子**：颜色、密度、数字制式这类「只是给人看」的选择都住在这里，
+/// 而不是散进 `[permissions]` 那种语义小节。缺省只有一个值，所以 `Default` 就是那处缺省
+/// —— [`NumberStyle::default`] 说的那套制式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UiSettings {
+    /// 界面上那些计数用哪套书写制式（万 / 亿，或 k / M / G）；缺省由
+    /// [`NumberStyle`] 自己说。
+    pub number_style: NumberStyle,
+}
 
 /// 把 `[goals]` 解析成那四个旋钮。
 ///
@@ -496,6 +514,27 @@ fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
         });
     }
     Ok(goals)
+}
+
+/// 把 `[ui]` 解析成显示层的选择（spec §2）。
+///
+/// 一个不认识的词是启动错误，而不是静默回退到 `cn`：写 `number_style = "wan"` 的人以为
+/// 自己配好了，屏幕上却是另一套读法，那种「配了等于没配」只有报错才说得清。
+fn resolve_ui(raw: Option<&RawUi>) -> Result<UiSettings, ConfigError> {
+    let Some(written) = raw.and_then(|raw| raw.number_style.as_deref()) else {
+        return Ok(UiSettings::default());
+    };
+    match written {
+        "cn" => Ok(UiSettings {
+            number_style: NumberStyle::Cn,
+        }),
+        "si" => Ok(UiSettings {
+            number_style: NumberStyle::Si,
+        }),
+        other => Err(ConfigError::UnknownNumberStyle {
+            value: other.to_owned(),
+        }),
+    }
 }
 
 impl Config {
@@ -627,6 +666,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let tools = resolve_tools(&raw.tools)?;
     let sandbox = resolve_sandbox(raw.sandbox.as_ref(), env)?;
     let goals = resolve_goals(raw.goals.as_ref())?;
+    let ui = resolve_ui(raw.ui.as_ref())?;
 
     let default_model = raw
         .default_model
@@ -654,6 +694,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         tools,
         sandbox,
         goals,
+        number_style: ui.number_style,
     })
 }
 
@@ -742,6 +783,8 @@ struct RawConfig {
     sandbox: Option<RawSandbox>,
     /// `[goals]`：目标循环的两个阈值（`.scratch/goal-loop/spec.md` §6）。
     goals: Option<RawGoals>,
+    /// `[ui]`：显示层的选择（`.scratch/usage-stats-format/spec.md` §2）。
+    ui: Option<RawUi>,
 }
 
 /// 一张 `[goals]` 表：目标循环在窗口的哪个位置提醒、哪个位置翻页，以及两条停止线。
@@ -755,6 +798,14 @@ struct RawGoals {
     compact_at: Option<u8>,
     no_progress_rollovers: Option<u32>,
     provider_retries: Option<u32>,
+}
+
+/// 一张 `[ui]` 表：目前只有一个键，数字用哪套书写制式。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawUi {
+    /// `"cn"`（缺省，万 / 亿）或 `"si"`（k / M / G）。
+    number_style: Option<String>,
 }
 
 /// 一张 `[sandbox]` 表。
@@ -1652,6 +1703,8 @@ pub enum ConfigError {
     UnknownOutsideRead { value: String },
     #[error("未知的沙箱模式 `{mode}`；`[sandbox] mode` 只接 `bwrap`（缺省）或 `off`")]
     UnknownSandboxMode { mode: String },
+    #[error("未知的 number_style 值 `{value}`；`[ui] number_style` 只接 `cn`（缺省，万 / 亿）或 `si`（k / M / G）")]
+    UnknownNumberStyle { value: String },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(

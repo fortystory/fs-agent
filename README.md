@@ -81,6 +81,9 @@ temperature = 0.6
 session_tokens = 2000000      # 会话累计 token 上限（讨论者 / 执行者 / 合成器共用）
 estimate_margin = 1.5         # 发出去之前的估算宽容倍数
 
+[ui]
+number_style = "cn"           # "cn" 万/亿（默认）或 "si" k/M/G；小于 10000 仍是千分位
+
 [routing]                     # 弱模型分流只有两个落点；讨论者绝不被路由
 # synthesizer_model = "deepseek-flash"
 # executor_model = "deepseek-flash"
@@ -106,6 +109,8 @@ miss_input = 0.28
 cached_input = 0.028
 output = 0.42
 ```
+
+右侧统计里的数字默认写中文制式（`123.5万`），小于 `10000` 的仍写千分位（`9,999`）；`[ui] number_style = "si"` 换成 `k` / `M` / `G`。这一档只影响显示，`--plain` 的诊断行与 `sessions stats` 的输出不跟着换。
 
 动态工具（不写 Rust 就能加一个工具，线级名是 `custom__<命名空间>__<工具>`，argv 模板**不经 shell**）：
 

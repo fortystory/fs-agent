@@ -41,6 +41,7 @@ fn facts() -> SessionFacts {
         context_window: 200_000,
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
+        number_style: fs_agent::render::wording::NumberStyle::Cn,
         speaker_order: Vec::new(),
     }
 }

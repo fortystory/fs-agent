@@ -15,6 +15,7 @@ use fs_agent::config::{
 };
 use fs_agent::events::Decision;
 use fs_agent::permissions::Mode;
+use fs_agent::render::wording::NumberStyle;
 
 fn env(pairs: &[(&str, &str)]) -> EnvMap {
     pairs
@@ -1004,4 +1005,43 @@ fn the_goal_stop_knobs_come_from_the_same_table() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("provider_retries"), "{error}");
+}
+
+// --- `[ui]`：数字的书写制式（`.scratch/usage-stats-format/spec.md` §2） ------
+
+#[test]
+fn the_number_style_defaults_to_chinese_units() {
+    let config = resolve(None, &env(&[])).unwrap();
+    assert_eq!(config.number_style, NumberStyle::Cn);
+}
+
+#[test]
+fn the_number_style_comes_from_the_ui_table() {
+    let config = resolve(Some("[ui]\nnumber_style = \"si\"\n"), &env(&[])).unwrap();
+    assert_eq!(config.number_style, NumberStyle::Si);
+
+    // 写回缺省值也是合法的、也仍然是那一档。
+    let config = resolve(Some("[ui]\nnumber_style = \"cn\"\n"), &env(&[])).unwrap();
+    assert_eq!(config.number_style, NumberStyle::Cn);
+}
+
+#[test]
+fn an_unknown_number_style_is_a_startup_error() {
+    // 大小写不合与自造的词都不算数：写错了的人以为自己配好了，屏幕上却是另一套读法。
+    for value in ["CN", "wan"] {
+        let text = format!("[ui]\nnumber_style = \"{value}\"\n");
+        let error = resolve(Some(&text), &env(&[])).unwrap_err().to_string();
+        assert!(error.contains("number_style"), "{value}: {error}");
+        assert!(error.contains("cn"), "{value}: {error}");
+        assert!(error.contains("si"), "{value}: {error}");
+    }
+
+    // 一个不认识的键仍然按 `deny_unknown_fields` 拒掉。
+    let error = resolve(
+        Some("[ui]\nnumber_style = \"cn\"\nnumber_ways = 1\n"),
+        &env(&[]),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("number_ways"), "{error}");
 }

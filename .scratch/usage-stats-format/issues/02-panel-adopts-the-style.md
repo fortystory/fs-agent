@@ -1,7 +1,7 @@
 # 面板六行改用数字制式
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/usage-stats-format/spec.md` §3（底色不占列、既有降级链一行不改——本票只做前半）、§4（明确不动的三处）与「测试决定」里的回归一条。
@@ -61,3 +61,14 @@ Blocked by: 01
 - 不加色条（票 03）；`row()` 的行形状本票不动。
 - 不动降级链的代码、面板行序、标签列宽与高度裁剪。
 - 不给 `usage_summary` / `sessions stats` / headless 换单位，不给状态行加任何东西。
+
+## Comments
+
+- **落地**：`pair` / `token_pair` / `context_pair` / `cache_pair` 各加一个 `style` 参数（`thousands` 与 `usage_summary` 未动）；`SessionFacts` 加 `number_style`，两处 `SessionFacts` 字面量（`src/cli.rs`）与四处测试夹具（`render_layout.rs` ×3、`render_tui.rs`、`history_replay.rs`、`ask_user_question_tui.rs`）跟着补；面板六行的 `thousands` → `compact`，`value_columns` 的计算、百分比是否丢的判定、缓存行是否加入、`fit()`、行序与标签列宽**一行未改**。
+- **降级测试的处置**（票「具体行为 5」要求的判断），三条都只改字面量、不改降级行为：
+  - `the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must` → 改名 `..._and_their_percentage`：`1.2万 / 20万（6%）` 是 18 列、放得进 21 列的值列，「必须丢百分比」的前提不再成立，所以改成断言百分比留着（没有去动 `context_window` 之类的事实值凑溢出）。
+  - `a_cache_split_too_wide_for_its_column_is_left_out`：期望串换成 `123.5万 / 987.7万`（17 列）；窄档 13 列仍放不下 → 整行走，宽档 22 列放得下 → 回来，降级行为不变。
+  - `a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits` → 改名 `..._no_longer_needs_the_bare_form`。
+- **留给 spec 作者的一件事**：`fit()` 的「去千分位」那一档在面板里**已经不可达** —— 面板里 `thousands` 只剩 `< 10000` 的数字（最长 `9,999`，13 列），而真实值列最少 16 列。按 spec §3「降级链一行不改」保留了代码，测试改成断言 `compact` 之后的形态并在注释里写明这一档没有回退路径可达。要不要为 `fit()` 另开一票（删掉那一档或给它一个新用途），由 spec 作者决定。
+- **对齐断言**：`the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot` 的前导空格数不再手写，改成分别断言「标签列六列」「一个空格后值右贴齐」「整行 40 列」。
+- **测试**：`cargo test` 全绿；`--plain` / headless / `sessions stats` 的 `usage_summary` 断言原样通过（一个字没动）。

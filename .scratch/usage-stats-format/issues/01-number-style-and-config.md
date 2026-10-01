@@ -1,7 +1,7 @@
 # 数字制式：`compact` 与 `[ui] number_style`
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：`.scratch/usage-stats-format/spec.md` §1（单位制式与换算规则）、§2（配置项 `[ui] number_style`）、「测试决定」的前三条与「明确不做」。
@@ -96,3 +96,9 @@ Blocked by: —
 - 不改 `thousands`、`usage_summary`（`src/render/wording.rs:243-248`），也不改 `context_pair` / `token_pair` / `cache_pair` 的现有签名与输出（票 02 才动面板调用点）。
 - 不改 `src/render/panel.rs`（票 02）、不加色条（票 03）。
 - 不做「万亿 / 兆」、不做自定义单位表、不读环境变量、不加 CLI 旗标。
+
+## Comments
+
+- **落地**：`NumberStyle` / `compact` 落在 `src/render/wording.rs` 的 `thousands` 旁边，`thousands` 未动（它的三条既有断言也原样留着）。`[ui]` 的九个落点照 `[goals]` 那一套走；缺省只在 `impl Default for NumberStyle` 一处写字面量，`UiSettings::default` 复用它。非法值走新变体 `ConfigError::UnknownNumberStyle`，文案点出 `[ui] number_style` 与两个合法值。
+- **测试**：`tests/wording.rs` 新增 `a_count_is_written_in_wan_and_yi_or_in_si_prefixes`（门槛两套一致、逐档代表值、`99_999_999` / `100_000_000` 两个边界、整数去零）；`tests/config_profiles.rs` 新增三条（缺省 `cn`、`[ui]` 取值、非法值与未知键）。
+- **README**：「配置」一节补了一句（默认中文制式、小于 10000 仍是千分位、`si` 换 k/M/G），完整示例里 `[budget]` 之后加了一段 `[ui]`。

@@ -12,7 +12,7 @@ use fs_agent::events::{
     ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId, StopReason, Usage,
 };
 use fs_agent::permissions::{Escalation, Mode};
-use fs_agent::render::wording;
+use fs_agent::render::wording::{self, NumberStyle};
 
 #[test]
 fn a_round_section_names_its_number_and_mode_in_chinese() {
@@ -909,31 +909,72 @@ fn the_panel_texts_read_like_the_prototype() {
     assert_eq!(wording::thousands(1_234_567), "1,234,567");
 
     assert_eq!(
-        wording::token_pair(12_345, Some(100_000)),
-        "12,345 / 100,000"
+        wording::token_pair(12_345, Some(100_000), NumberStyle::Cn),
+        "1.2万 / 10万"
     );
     // 没有额度不是额度缺失：上限压根儿就不在那里。
-    assert_eq!(wording::token_pair(12_345, None), "12,345");
+    assert_eq!(wording::token_pair(12_345, None, NumberStyle::Cn), "1.2万");
 
     // 一次调用报出它的输入之前，窗口是未知的 —— 不是零。
     assert_eq!(
-        wording::context_pair(None, 200_000, true),
+        wording::context_pair(None, 200_000, true, NumberStyle::Cn),
         wording::PANEL_UNKNOWN
     );
     assert_eq!(
-        wording::context_pair(Some(12_345), 200_000, false),
-        "12,345 / 200,000"
+        wording::context_pair(Some(12_345), 200_000, false, NumberStyle::Cn),
+        "1.2万 / 20万"
     );
     // 占比是同一个字段的一部分，丢掉它就是这个字段降级的方式。
     assert_eq!(
-        wording::context_pair(Some(12_345), 200_000, true),
-        "12,345 / 200,000（6%）"
+        wording::context_pair(Some(12_345), 200_000, true, NumberStyle::Cn),
+        "1.2万 / 20万（6%）"
     );
-    assert_eq!(wording::cache_pair(9_000, 3_345), "9,000 / 3,345");
+    // 门槛之下仍是千分位，所以这一对不受制式影响。
+    assert_eq!(
+        wording::cache_pair(9_000, 3_345, NumberStyle::Cn),
+        "9,000 / 3,345"
+    );
 
     // 回合字段数的是*回合*，`CONTEXT.md` 把它与轮次分得很开。
     assert_eq!(wording::PANEL_TURNS, "回合");
     assert_eq!(wording::PANEL_UNKNOWN, "—");
+}
+
+#[test]
+fn a_count_is_written_in_wan_and_yi_or_in_si_prefixes() {
+    // 门槛在先：两套制式下小于 10000 的数字都是千分位 —— `1.2万` 未必比 `12,345`
+    // 好读，而 `9,999` 换成 `10.0k` 连精度都赔进去了。
+    for value in [0, 999, 9_999] {
+        assert_eq!(
+            wording::compact(value, NumberStyle::Cn),
+            wording::thousands(value),
+            "cn：{value}"
+        );
+        assert_eq!(
+            wording::compact(value, NumberStyle::Si),
+            wording::thousands(value),
+            "si：{value}"
+        );
+    }
+
+    // 逐档一个代表值，外加 `cn` 的两个上界（`99_999_999` / `100_000_000`）。
+    let cases = [
+        (10_000, "1万", "10k"),
+        (12_345, "1.2万", "12.3k"),
+        (1_234_567, "123.5万", "1.2M"),
+        (99_999_999, "10000万", "100M"),
+        (100_000_000, "1亿", "100M"),
+        (1_000_000_000, "10亿", "1G"),
+    ];
+    for (value, cn, si) in cases {
+        assert_eq!(wording::compact(value, NumberStyle::Cn), cn, "cn：{value}");
+        assert_eq!(wording::compact(value, NumberStyle::Si), si, "si：{value}");
+    }
+
+    // 恰好是整数时去掉 `.0`：规则上是一套写法，屏幕上不该多一个小数点。
+    assert_eq!(wording::compact(10_000, NumberStyle::Cn), "1万");
+    assert_eq!(wording::compact(100_000_000, NumberStyle::Cn), "1亿");
+    assert_eq!(wording::compact(1_000_000_000, NumberStyle::Si), "1G");
 }
 
 #[test]

@@ -28,6 +28,7 @@ fn facts() -> SessionFacts {
         // 测试在自己的 facts 里覆盖它。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
+        number_style: fs_agent::render::wording::NumberStyle::Cn,
         speaker_order: Vec::new(),
     }
 }
@@ -2005,12 +2006,12 @@ fn the_panel_reads_its_numbers_off_the_stream() {
 
     let rows = screen(120, 24, &mut state);
     assert!(
-        panel_field(&rows, 0).contains("9,000 / 200,000（4%）"),
+        panel_field(&rows, 0).contains("9,000 / 20万（4%）"),
         "窗口是最后一次调用的分子：{:?}",
         panel_field(&rows, 0)
     );
     assert!(
-        panel_field(&rows, 1).contains("12,345 / 100,000"),
+        panel_field(&rows, 1).contains("1.2万 / 10万"),
         "花掉的是输入加输出：{:?}",
         panel_field(&rows, 1)
     );
@@ -2036,6 +2037,75 @@ fn the_panel_reads_its_numbers_off_the_stream() {
     );
 }
 
+#[test]
+fn the_context_and_spend_rows_carry_a_share_bar() {
+    // 有分母的两行在值列左起涂一段底色（`.scratch/usage-stats-format/spec.md` §3）：
+    // 底色不占列，所以文字、右贴齐与列宽都不动。坐标是值列自己那一套 —— 标签列六列
+    // 加一个空格，于是值列从 x = 7 起。
+    let mut state = state();
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+
+    let rows = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let top = sidebar_page(&rows) as u16;
+
+    // 上下文：9,000 / 200,000 = 4.5%，33 列的值列 → ceil(1.485) = 两格。
+    for x in [7u16, 8] {
+        assert_eq!(frame[(x, top)].bg, Color::DarkGray, "上下文行第 {x} 列");
+    }
+    assert_ne!(frame[(9, top)].bg, Color::DarkGray, "两格之后就没了");
+    assert_ne!(frame[(6, top)].bg, Color::DarkGray, "标签列不涂");
+
+    // 花销：12,345 / 100,000 = 12.345% → ceil(4.07) = 五格。
+    let spend = top + 1;
+    for x in 7u16..=11 {
+        assert_eq!(frame[(x, spend)].bg, Color::DarkGray, "花销行第 {x} 列");
+    }
+    assert_ne!(frame[(12, spend)].bg, Color::DarkGray, "五格之后就没了");
+
+    // 文字没被色条改掉：两行仍是那条右贴齐的串。
+    assert!(panel_field(&rows, 0).contains("9,000 / 20万（4%）"));
+    assert!(panel_field(&rows, 1).contains("1.2万 / 10万"));
+}
+
+#[test]
+fn a_row_without_a_denominator_carries_no_share_bar() {
+    let mut state = state_without_budget();
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+
+    let rows = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let top = sidebar_page(&rows) as u16;
+
+    // 没设额度就没有分母：花销那一行一处底色都不涂。
+    let spend = top + 1;
+    for x in 7u16..40 {
+        assert_ne!(
+            frame[(x, spend)].bg,
+            Color::DarkGray,
+            "没有分母就不涂：第 {x} 列"
+        );
+    }
+    // 上下文行自带分母（窗口），所以照涂。
+    for x in [7u16, 8] {
+        assert_eq!(frame[(x, top)].bg, Color::DarkGray, "上下文行照涂");
+    }
+}
+
+#[test]
+fn the_share_bar_survives_the_narrow_sidebar() {
+    // 窄档丢的是百分比括号与缓存行，不是色条：21 列的值列下占比 4.5% → 一格。
+    let mut state = state();
+    state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
+
+    let rows = screen(80, 14, &mut state);
+    let frame = buffer(80, 14, &mut state);
+    let top = sidebar_page(&rows) as u16;
+
+    assert_eq!(frame[(7, top)].bg, Color::DarkGray, "窄档也涂");
+    assert_ne!(frame[(8, top)].bg, Color::DarkGray, "一列就够");
+}
+
 /// 会话完全没有 token 额度的状态。
 fn state_without_budget() -> TuiState {
     let mut facts = facts();
@@ -2044,11 +2114,13 @@ fn state_without_budget() -> TuiState {
 }
 
 #[test]
-fn the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must() {
+fn the_narrow_sidebar_keeps_six_fields_and_their_percentage() {
     // 80x14 是能容下全部六项读数的窄档：十四个内容行
-    // 装着文字身份、页签条与六个字段。28 列那一档的代价
-    // 是上下文行上的百分比 —— `12,345 / 200,000（6%）` 是 22
-    // 列，而值那一列是 21（spec §2、§3）。
+    // 装着文字身份、页签条与六个字段。这条曾经断言的是
+    // `12,345 / 200,000（6%）` 那 22 列放不进 21 列的值列、
+    // 于是百分比先走；数字制式换成万/亿（`1.2万 / 20万（6%）`，
+    // 18 列）之后那个前提不再成立 —— 保的是降级链本身，
+    // 所以这里改成断言百分比留了下来（`.scratch/usage-stats-format/issues/02`）。
     let mut state = state();
     // 输出取零，好让花销 —— 输入加输出 —— 正好是上下文那一对
     // 需要的五位数，这才让百分比也过宽。
@@ -2065,16 +2137,16 @@ fn the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must() {
     let panel = panel_text(80, 14, &mut state);
     assert_eq!(panel.len(), 6, "六项读数全都放得下：{panel:?}");
     assert!(
-        panel[0].starts_with("上下文") && panel[0].ends_with("12,345 / 200,000"),
+        panel[0].starts_with("上下文") && panel[0].ends_with("1.2万 / 20万（6%）"),
         "上下文那一对：{:?}",
         panel[0]
     );
     assert!(
-        !panel[0].contains('（'),
-        "而宽度拿走的就是百分比：{:?}",
+        panel[0].contains('（'),
+        "18 列放得进 21 列，所以百分比留着：{:?}",
         panel[0]
     );
-    assert!(text.contains("12,345 / 100,000"), "花销：{text}");
+    assert!(text.contains("1.2万 / 10万"), "花销：{text}");
     assert!(text.contains("回合"), "回合数：{text}");
     assert!(
         panel[5].contains("5,000 / 7,345"),
@@ -2106,7 +2178,7 @@ fn a_cache_split_too_wide_for_its_column_is_left_out() {
     let mut panel = Panel::new();
     panel.observe(&block);
 
-    // 20 列给值留 13；拆分需要 21，所以整行都走。
+    // 20 列给值留 13；拆分（`123.5万 / 987.7万`）需要 17，所以整行都走。
     let narrow = panel.lines(&facts, Rect::new(0, 0, 20, 6));
     let narrow: Vec<String> = narrow
         .iter()
@@ -2118,7 +2190,7 @@ fn a_cache_split_too_wide_for_its_column_is_left_out() {
         })
         .collect();
     assert!(
-        !narrow.iter().any(|row| row.contains("1,234,567")),
+        !narrow.iter().any(|row| row.contains("123.5万")),
         "缓存那一行放不下：{narrow:?}"
     );
     // 29 给值留 22，正好够。
@@ -2128,7 +2200,7 @@ fn a_cache_split_too_wide_for_its_column_is_left_out() {
         .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
         .collect();
     assert!(
-        wide.contains("1,234,567 / 9,876,543"),
+        wide.contains("123.5万 / 987.7万"),
         "放得下时它又回来了：{wide}"
     );
 }
@@ -2138,9 +2210,9 @@ fn a_session_with_no_allowance_shows_its_spend_alone() {
     let mut state = state_without_budget();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("12,345"), "花了多少：{text}");
+    assert!(text.contains("1.2万"), "花了多少：{text}");
     assert!(
-        !text.contains("12,345 / "),
+        !text.contains("1.2万 / "),
         "也没有给它编一个上限出来：{text}"
     );
 }
@@ -2175,23 +2247,23 @@ fn a_tall_draft_costs_the_transcript_and_never_the_sidebar() {
 fn the_context_numerator_is_the_last_call_while_the_spend_accumulates() {
     let mut state = state();
     state.apply(usage(1, 9_000, 1_000, 5_000, 4_000));
-    // 一位数百分比：`（15%）` 对 22 列的值来说会宽一列
-    // 而被丢掉，宽度测试覆盖了这一点。
+    // 上一次调用的分子只在这一行上：`1.5万 / 20万` 与
+    // 累计花销那一行是两回事。
     state.apply(usage(2, 15_000, 2_000, 20_000, 10_000));
 
     let rows = screen(120, 24, &mut state);
     assert!(
-        panel_field(&rows, 0).contains("15,000 / 200,000（7%）"),
+        panel_field(&rows, 0).contains("1.5万 / 20万（7%）"),
         "窗口是*最后一次*调用携带的那个值：{:?}",
         panel_field(&rows, 0)
     );
     assert!(
-        panel_field(&rows, 1).contains("27,000 / 100,000"),
+        panel_field(&rows, 1).contains("2.7万 / 10万"),
         "花销是每一次调用的输入加输出：{:?}",
         panel_field(&rows, 1)
     );
     assert!(
-        panel_field(&rows, 3).contains("24,000"),
+        panel_field(&rows, 3).contains("2.4万"),
         "输入求和：{:?}",
         panel_field(&rows, 3)
     );
@@ -2235,16 +2307,21 @@ fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
     let panel = panel_text(120, 24, &mut state);
 
     // 标签列宽六（`上下文` 正好填满），然后一个空格，然后是
-    // 左栏剩下那三十四列作为值字段 —— 数字从
+    // 左栏剩下那三十三列作为值字段 —— 数字从
     // 右边填起。
-    assert_eq!(
-        panel[0],
-        format!("上下文{}{}", " ".repeat(13), "9,000 / 200,000（4%）"),
-        "标签字段六列，然后一个空格，然后值在另外三十三列里右贴齐"
+    let context = "9,000 / 20万（4%）";
+    // 标签列六列、一个空格、值在剩下的列里右贴齐 —— 三件事分着断言，
+    // 这样换制式之后值变短，前导空格的数目不必再手写。
+    assert_eq!(text_columns("上下文"), 6, "标签列宽六");
+    assert!(
+        panel[0].starts_with("上下文 ") && panel[0].ends_with(context),
+        "标签字段六列，然后一个空格，然后值右贴齐：{:?}",
+        panel[0]
     );
+    assert_eq!(text_columns(&panel[0]), 40, "整行填满左栏：{:?}", panel[0]);
     for row in [&panel[1], &panel[3], &panel[4], &panel[5]] {
         assert!(
-            row.ends_with("000") || row.ends_with("345"),
+            row.ends_with("000") || row.ends_with("345") || row.ends_with('万'),
             "数字停在左栏的右边缘上：{row:?}"
         );
     }
@@ -2261,11 +2338,14 @@ fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
 }
 
 #[test]
-fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits() {
-    // 外壳的窄档给值留 21 列，七位数的计数
-    // 放得下，所以这条兜底是在它所在之处断言的：面板自己的
-    // 行生成器里，值列取原型那 25 列面板曾经用过的宽度
-    // （spec §3 留着 v1 那条路径，虽然没有任何档位会触发它）。
+fn a_number_too_wide_for_the_value_column_no_longer_needs_the_bare_form() {
+    // 这条测的曾经是 `fit()` 的第一档降级：值放不下时先去千分位。
+    // 换成万/亿制式之后面板里不再有千位分隔符可去（`thousands`
+    // 只在 < 10000 时出现，最长 13 列，而真实值列最少 16 列），
+    // 所以那一档在面板里**已经不可达**；`fit()` 本身照 spec §3 原样
+    // 留着。这里改成断言制式之后的形态，值仍然是右贴齐的。
+    // 外壳的窄档给值留 21 列，七位数的计数放得下，所以这条兜底
+    // 是在它所在之处断言的：面板自己的行生成器。
     use fs_agent::render::panel::Panel;
     use fs_agent::render::Block;
     use ratatui::layout::Rect;
@@ -2293,8 +2373,16 @@ fn a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits
             .map(|span| span.content.as_ref())
             .collect()
     };
-    assert_eq!(row(1), "token   1235567 / 100000", "花销不带分隔符");
-    assert_eq!(row(0), "上下文  1234567 / 200000", "窗口也不带");
+    assert!(
+        row(1).ends_with("123.6万 / 10万"),
+        "花销按制式写：{:?}",
+        row(1)
+    );
+    assert!(
+        row(0).ends_with("123.5万 / 20万"),
+        "窗口也按制式写：{:?}",
+        row(0)
+    );
 }
 
 /// 一次针对写操作的询问，按循环从 console 通道发起的样子。
@@ -3730,6 +3818,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         // 测试在自己的 facts 里覆盖它。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
+        number_style: fs_agent::render::wording::NumberStyle::Cn,
         speaker_order: vec!["kimi".to_owned()],
     });
     state.apply(tool_started(
@@ -4426,6 +4515,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         // 测试在自己的 facts 里覆盖它。
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
+        number_style: fs_agent::render::wording::NumberStyle::Cn,
         speaker_order: vec!["kimi".to_owned()],
     });
     state.apply(tool_started(

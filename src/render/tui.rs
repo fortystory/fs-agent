@@ -273,6 +273,11 @@ pub struct SessionFacts {
     pub mode: Mode,
     /// 会话累计的 token 额度，有的话。
     pub budget_limit: Option<u64>,
+    /// 左栏那一页数字用哪套书写制式（`.scratch/usage-stats-format/spec.md` §2）。
+    ///
+    /// 它在组装时注入，与会话中途会变的那些（模式）不同：制式是配置里定下来的一个值，
+    /// 面板要按它把同一批计数写成 `123.5万` 或 `1.2M`。
+    pub number_style: wording::NumberStyle,
     /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
     /// 名册不在流上（票 07 §1）。
@@ -4632,6 +4637,7 @@ mod tests {
             context_window: 100_000,
             mode: crate::permissions::Mode::Workspace,
             budget_limit: None,
+            number_style: crate::render::wording::NumberStyle::Cn,
             speaker_order: vec!["kimi".to_owned()],
         })
     }

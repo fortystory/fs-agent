@@ -1204,7 +1204,49 @@ pub const PANEL_CACHE: &str = "缓存";
 /// 一个字段还没有数字可显时显示的东西。
 pub const PANEL_UNKNOWN: &str = "—";
 
+/// 一个计数用哪套书写制式写给人看（`.scratch/usage-stats-format/spec.md` §1）。
+///
+/// 它住在这里、而不是 `config`：它管的是「给人看的文本怎么写」，`[ui] number_style` 只是
+/// 持有这个选择（与 `Mode` 那类配置枚举的方向相反 —— 制式是措辞，不是行为）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NumberStyle {
+    /// 万 / 亿：中文界面里更大的数字这么读更快。这是缺省，也是唯一写缺省的地方。
+    #[default]
+    Cn,
+    /// k / M / G：那些按 SI 前缀读数字的人习惯的那套。
+    Si,
+}
+
+/// 按 `style` 那套制式写一个计数（spec §1）。
+///
+/// **小于 `10_000` 一律退回 [`thousands`]**，两套制式都一样：换算只在真省列的时候才划算，
+/// `1.2万` 未必比 `12,345` 好读，而 `9,999` 换成 `10.0k` 连精度都赔进去了。
+///
+/// 档位由**原值**决定，不由格式化后的结果决定：`99_999_999` 写成 `10000万`，而不是
+/// `1亿`。舍入之后再检查一次区间，会让每个边界多一轮判断，而那里的读法并没有更好。
+///
+/// 一位小数，恰好是整数时去掉 `.0`：`10_000` → `1万`、`12_345` → `1.2万`。没有「万亿 /
+/// 兆」那一档 —— token 计数到不了，规则越少越好。
+pub fn compact(value: u64, style: NumberStyle) -> String {
+    if value < 10_000 {
+        return thousands(value);
+    }
+    let (unit, suffix) = match style {
+        NumberStyle::Cn if value < 100_000_000 => (10_000, "万"),
+        NumberStyle::Cn => (100_000_000, "亿"),
+        NumberStyle::Si if value < 1_000_000 => (1_000, "k"),
+        NumberStyle::Si if value < 1_000_000_000 => (1_000_000, "M"),
+        NumberStyle::Si => (1_000_000_000, "G"),
+    };
+    let scaled = format!("{:.1}", value as f64 / unit as f64);
+    let scaled = scaled.strip_suffix(".0").unwrap_or(&scaled);
+    format!("{scaled}{suffix}")
+}
+
 /// 带千位分隔符的计数：`12,345`。
+///
+/// 这个签名不能动：诊断通道（[`usage_summary`] 那一族与 `sessions stats`）也读它。显示层
+/// 要制式就调 [`compact`]，它在上面分派。
 pub fn thousands(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -1217,19 +1259,19 @@ pub fn thousands(value: u64) -> String {
     out
 }
 
-/// 一个字段里的两个计数：`12,345 / 100,000`。
-fn pair(left: u64, right: u64) -> String {
-    format!("{} / {}", thousands(left), thousands(right))
+/// 一个字段里的两个计数：`1.2万 / 10万`（制式见 [`compact`]）。
+fn pair(left: u64, right: u64, style: NumberStyle) -> String {
+    format!("{} / {}", compact(left, style), compact(right, style))
 }
 
 /// 这场会话花了多少，对上它的额度 —— 当它有额度时。
 ///
-/// 没有上限的会话只显示花掉的那部分：`12,345 / —` 会被读成一个缺失的上限，而不是一个从来
+/// 没有上限的会话只显示花掉的那部分：`1.2万 / —` 会被读成一个缺失的上限，而不是一个从来
 /// 没设过的上限（spec §8）。
-pub fn token_pair(used: u64, limit: Option<u64>) -> String {
+pub fn token_pair(used: u64, limit: Option<u64>, style: NumberStyle) -> String {
     match limit {
-        Some(limit) => pair(used, limit),
-        None => thousands(used),
+        Some(limit) => pair(used, limit, style),
+        None => compact(used, style),
     }
 }
 
@@ -1239,11 +1281,16 @@ pub fn token_pair(used: u64, limit: Option<u64>) -> String {
 /// `with_share` 是这一页在说值那一列还放得下百分比。它是一个参数而不是第二个函数，因为那
 /// 一对与它的占比是同一个字段：`12,345 / 200,000（6%）` 才是它说的话，而丢掉尾巴就是它
 /// 退化的方式。
-pub fn context_pair(used: Option<u64>, usable: u64, with_share: bool) -> String {
+pub fn context_pair(
+    used: Option<u64>,
+    usable: u64,
+    with_share: bool,
+    style: NumberStyle,
+) -> String {
     let Some(used) = used else {
         return PANEL_UNKNOWN.to_owned();
     };
-    let pair = pair(used, usable);
+    let pair = pair(used, usable, style);
     if with_share {
         format!("{}（{}%）", pair, used.saturating_mul(100) / usable.max(1))
     } else {
@@ -1252,8 +1299,8 @@ pub fn context_pair(used: Option<u64>, usable: u64, with_share: bool) -> String 
 }
 
 /// 一次调用输入的缓存拆分：多少由前缀缓存供给、多少不是。
-pub fn cache_pair(cached: u64, miss: u64) -> String {
-    pair(cached, miss)
+pub fn cache_pair(cached: u64, miss: u64, style: NumberStyle) -> String {
+    pair(cached, miss, style)
 }
 
 /// 那条指示器：视口滚走期间到了多少，以及这个块就是回去的路（spec §4）。

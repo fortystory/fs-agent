@@ -70,45 +70,79 @@ impl Panel {
         let context = match self.last_input {
             Some(used) => {
                 // 宽度第一个拿走的就是百分比。
-                let share = wording::context_pair(Some(used), facts.context_window, true);
+                let share = wording::context_pair(
+                    Some(used),
+                    facts.context_window,
+                    true,
+                    facts.number_style,
+                );
                 if text_columns(&share) <= value_columns {
                     share
                 } else {
-                    wording::context_pair(Some(used), facts.context_window, false)
+                    wording::context_pair(
+                        Some(used),
+                        facts.context_window,
+                        false,
+                        facts.number_style,
+                    )
                 }
             }
-            None => wording::context_pair(None, facts.context_window, false),
+            None => wording::context_pair(None, facts.context_window, false, facts.number_style),
         };
-        let tokens = wording::token_pair(self.total.total_tokens(), facts.budget_limit);
-        let cache = wording::cache_pair(self.total.cached_tokens, self.total.miss_tokens);
+        let tokens = wording::token_pair(
+            self.total.total_tokens(),
+            facts.budget_limit,
+            facts.number_style,
+        );
+        let cache = wording::cache_pair(
+            self.total.cached_tokens,
+            self.total.miss_tokens,
+            facts.number_style,
+        );
+
+        // 有分母的两行才谈得上占比：上下文按窗口，花销按额度。别的四行没有诚实的
+        // 分母 —— 给它们编一个只会让颜色骗人（`.scratch/usage-stats-format/spec.md` §3）。
+        let context_share = self
+            .last_input
+            .map(|used| used as f64 / facts.context_window.max(1) as f64);
+        let token_share = facts
+            .budget_limit
+            .map(|limit| self.total.total_tokens() as f64 / limit.max(1) as f64);
 
         // 没有 `模型` 行：它搬到了状态行，在那里无论左栏在显示哪一页、无论左栏多宽都
         // 看得见（spec §3）。
-        let mut rows: Vec<(&'static str, String, bool)> = vec![
-            (wording::PANEL_CONTEXT, context, true),
-            (wording::PANEL_TOKENS, tokens, true),
-            (wording::PANEL_TURNS, wording::thousands(self.turns), true),
+        let mut rows: Vec<(&'static str, String, bool, Option<f64>)> = vec![
+            (wording::PANEL_CONTEXT, context, true, context_share),
+            (wording::PANEL_TOKENS, tokens, true, token_share),
+            (
+                wording::PANEL_TURNS,
+                wording::compact(self.turns, facts.number_style),
+                true,
+                None,
+            ),
         ];
         // 按重要性倒着丢，所以它们加在最后：下面的高度裁剪从末尾把它们拿走。这些行刻意
         // 没有*宽度*下限 —— 面板只有内容至少 23 列时才画，所以一个值永远不少于 16 列，
         // 更宽的下限根本到不了。还是超出的值在上面被适配过。
         rows.push((
             wording::PANEL_INPUT,
-            wording::thousands(self.total.input_tokens),
+            wording::compact(self.total.input_tokens, facts.number_style),
             true,
+            None,
         ));
         rows.push((
             wording::PANEL_OUTPUT,
-            wording::thousands(self.total.output_tokens),
+            wording::compact(self.total.output_tokens, facts.number_style),
             true,
+            None,
         ));
         if text_columns(&cache) <= value_columns {
-            rows.push((wording::PANEL_CACHE, cache, true));
+            rows.push((wording::PANEL_CACHE, cache, true, None));
         }
         // 高度在这里不用裁：这些行按重要性排好了，段落会把塞不进面板内容区的东西裁掉，
         // 所以走掉的正是最后那些行。
         rows.iter()
-            .map(|(label, value, right)| row(label, value, value_columns, *right))
+            .map(|(label, value, right, share)| row(label, value, value_columns, *right, *share))
             .collect()
     }
 }
@@ -130,7 +164,18 @@ fn label_columns() -> usize {
 }
 
 /// 面板的一行：标签列里一个暗标签，然后是填满剩余空间的值 —— 数字靠右，文字靠左。
-fn row(label: &str, value: &str, width: usize, right: bool) -> Line<'static> {
+///
+/// `share` 是这一行填满了多少（`0.0`…`1.0`，超过 1 表示已经撞顶）：给了就在值列的**左起
+/// 前 N 列**上底色，`N = ceil(share × 值列宽)`。底色**不占列**，所以列宽计算与降级链一点
+/// 都不用动；标签与中间那个空格不涂，右对齐的前导留白算在值列里 —— 于是色条总是从值列
+/// 左缘起，不跟着数字跑（`.scratch/usage-stats-format/spec.md` §3）。
+fn row(
+    label: &str,
+    value: &str,
+    width: usize,
+    right: bool,
+    share: Option<f64>,
+) -> Line<'static> {
     let labels = label_columns();
     let label = pad_right(&fit(label, labels), labels);
     let value = fit(value, width);
@@ -139,10 +184,23 @@ fn row(label: &str, value: &str, width: usize, right: bool) -> Line<'static> {
     } else {
         pad_right(&value, width)
     };
+    let Some(share) = share else {
+        return Line::from(vec![
+            Span::styled(label, Style::default().fg(Color::DarkGray)),
+            Span::raw(" "),
+            Span::raw(value),
+        ]);
+    };
+    // `ceil` 保证占比一大于零就至少有一列，`min(width)` 保证撞顶时不越出值列；按显示列切，
+    // 免得从 `万` / `（` 这样的宽字素中间劈开。
+    let filled = ((share.clamp(0.0, 1.0) * width as f64).ceil() as usize).min(width);
+    let head = truncate_columns(&value, filled);
+    let tail = value[head.len()..].to_owned();
     Line::from(vec![
         Span::styled(label, Style::default().fg(Color::DarkGray)),
         Span::raw(" "),
-        Span::raw(value),
+        Span::styled(head, Style::default().bg(Color::DarkGray)),
+        Span::raw(tail),
     ])
 }
 
