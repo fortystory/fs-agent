@@ -131,10 +131,7 @@ fn a_file_without_a_heading_is_rejected_rather_than_read_as_empty() {
 #[test]
 fn a_name_must_be_one_unbroken_word_without_a_path_separator() {
     for name in ["", "两个 词", "a/b", "a\\b", ".", ".."] {
-        assert!(
-            !goals::is_valid_name(name),
-            "`{name}` 不该被当成目标名"
-        );
+        assert!(!goals::is_valid_name(name), "`{name}` 不该被当成目标名");
         assert!(matches!(
             goals::validate_name(name),
             Err(GoalError::InvalidName { .. })
@@ -171,18 +168,27 @@ fn a_source_that_is_missing_or_has_no_tickets_is_refused_with_its_own_message() 
     let dir = tempfile::tempdir().unwrap();
 
     let missing = goals::generate("goal", &dir.path().join("nope")).unwrap_err();
-    assert!(matches!(missing, GoalError::SourceNotFound { .. }), "{missing}");
+    assert!(
+        matches!(missing, GoalError::SourceNotFound { .. }),
+        "{missing}"
+    );
 
     let empty = dir.path().join("feature");
     std::fs::create_dir_all(&empty).unwrap();
     let no_tickets = goals::generate("goal", &empty).unwrap_err();
-    assert!(matches!(no_tickets, GoalError::NoTickets { .. }), "{no_tickets}");
+    assert!(
+        matches!(no_tickets, GoalError::NoTickets { .. }),
+        "{no_tickets}"
+    );
 
     // 有一个 `issues/`，但里面一张票都没有 —— 与「来源根本不存在」是两种不同的话。
     std::fs::create_dir_all(empty.join("issues")).unwrap();
     std::fs::write(empty.join("issues/readme.txt"), "不是票\n").unwrap();
     let no_tickets = goals::generate("goal", &empty).unwrap_err();
-    assert!(matches!(no_tickets, GoalError::NoTickets { .. }), "{no_tickets}");
+    assert!(
+        matches!(no_tickets, GoalError::NoTickets { .. }),
+        "{no_tickets}"
+    );
 }
 
 #[test]

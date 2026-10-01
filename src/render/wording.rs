@@ -1555,7 +1555,9 @@ pub fn goal_loop_started(name: &str, completed: usize, total: usize) -> String {
 /// 而摘要只留得住它读得到的东西 —— 只在脑子里、没写进 `todo`、没写成结论的推理会丢。这条
 /// 提醒是给它一次自救的机会。
 pub fn goal_reminder() -> &'static str {
-    "上下文已经过半。把还没落流的东西落下来：还没写进 `todo` 的下一步、还没写成结论的发现、     还没写下来的文件与命令。再过一会儿历史会被压成摘要，而摘要只留得住它读得到的东西 ——      只在脑子里、没落进流里的推理会丢。"
+    "上下文已经过半。把还没落流的东西落下来：还没写进 `todo` 的下一步、还没写成结论的发现、\
+     还没写下来的文件与命令。再过一会儿历史会被压成摘要，而摘要只留得住它读得到的东西 —— \
+     只在脑子里、没落进流里的推理会丢。"
 }
 
 /// 提醒注入了（§6）：说给用户听的一行，与给模型的那段话是两件事。
@@ -1565,7 +1567,11 @@ pub fn goal_reminded(percent: u64) -> String {
 
 /// 翻页那一下的记账（§7）：它必然打掉前缀缓存，所以别让它悄悄发生。
 pub fn goal_rolled_over(from: &str, to: &str, compacted: bool) -> String {
-    let what = if compacted { "历史压成摘要" } else { "清场" };
+    let what = if compacted {
+        "历史压成摘要"
+    } else {
+        "清场"
+    };
     format!("{what}：会话 {from} → {to}（这一下会打掉前缀缓存，它是低频的）")
 }
 
@@ -1596,7 +1602,8 @@ pub static GOAL_STOP_CHOICES: [Choice; 2] = [
 /// 档位不够时说的人话（`.scratch/goal-loop/spec.md` §5）。
 pub fn loop_needs_unattended_mode(mode: &str) -> String {
     format!(
-        "{mode} 档下跑不了无人值守的目标循环：第一次写就会停下来等人。换 `workspace` 或 `auto`          档（`--mode` 或 `[permissions] mode`）再试"
+        "{mode} 档下跑不了无人值守的目标循环：第一次写就会停下来等人。换 `workspace` 或 `auto` \
+         档（`--mode` 或 `[permissions] mode`）再试"
     )
 }
 
@@ -1641,9 +1648,9 @@ pub fn goal_stopped(
 ) -> String {
     use crate::events::GoalStopReason;
     let why = match reason {
-        GoalStopReason::NoProgress => format!(
-            "连续 {count} 次翻页没有任何条目完成，目标 {name} 卡住了，已经停下"
-        ),
+        GoalStopReason::NoProgress => {
+            format!("连续 {count} 次翻页没有任何条目完成，目标 {name} 卡住了，已经停下")
+        }
         GoalStopReason::ProviderFailed => {
             format!("provider 调用连着失败 {count} 次，目标 {name} 已停下，不再重试")
         }
@@ -1660,7 +1667,12 @@ pub fn goal_stopped(
 }
 
 /// 目标完成：条目情况与跨了几个会话，一行说完。汇总本身落在流上，也由那次调用写进转录。
-pub fn goal_completed_notice(name: &str, completed: usize, total: usize, sessions: usize) -> String {
+pub fn goal_completed_notice(
+    name: &str,
+    completed: usize,
+    total: usize,
+    sessions: usize,
+) -> String {
     format!("目标 {name} 完成：{completed}/{total} 条，跨 {sessions} 个会话")
 }
 

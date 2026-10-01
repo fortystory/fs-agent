@@ -395,13 +395,14 @@ pub struct Config {
     /// `[sandbox]`：包不包 bubblewrap、额外哪些目录可写（spec §7）。探测结果在组装期填进
     /// 会话配置里那一份。
     pub sandbox: SandboxSettings,
-    /// `[goals]`：目标循环的两个阈值（`.scratch/goal-loop/spec.md` §6）。
+    /// `[goals]`：目标循环的那几个旋钮 —— 两个阈值（§6）与两条停止线（§9）。
     pub goals: GoalSettings,
 }
 
-/// 目标循环的两个阈值，按**窗口**的百分比。
+/// 目标循环的四个旋钮：两个阈值按**窗口**的百分比，两条停止线按次数。
 ///
-/// 缺省 50 / 80：过半提醒一次（要模型把还没落流的东西落下来），过八成压缩并开一个新会话。
+/// 缺省 50 / 80：过半提醒一次（要模型把还没落流的东西落下来），过八成压缩并开一个新会话；
+/// 再加上「连续几次翻页零完成就停下」与「provider 失败重试几次」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GoalSettings {
     /// 过这个百分比就注入一次提醒。
@@ -439,10 +440,11 @@ pub const DEFAULT_PROVIDER_RETRIES: u32 = 2;
 /// provider 重试次数的上限。
 pub const MAX_PROVIDER_RETRIES: u32 = 10;
 
-/// 把 `[goals]` 解析成两个阈值。
+/// 把 `[goals]` 解析成那四个旋钮。
 ///
-/// 两条校验，都是为了避免一个「看起来配好了、实际不会发生」的组合：两个数都得落在 1..=100，
-/// 而且提醒必须在翻页之前 —— 反过来的话提醒永远轮不到，压缩先来了。
+/// 校验都是为了挡住一个「看起来配好了、实际不会发生」的组合：两个阈值都得落在 1..=100，提醒
+/// 必须在翻页之前（反过来的话提醒永远轮不到，压缩先来了），`no_progress_rollovers` 至少是 1，
+/// 而重试次数有上限 —— 无人值守的重试是有代价的。
 fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
     let mut goals = GoalSettings::default();
     let Some(raw) = raw else {
@@ -460,7 +462,10 @@ fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
     if let Some(retries) = raw.provider_retries {
         goals.provider_retries = retries;
     }
-    for (field, value) in [("remind_at", goals.remind_at), ("compact_at", goals.compact_at)] {
+    for (field, value) in [
+        ("remind_at", goals.remind_at),
+        ("compact_at", goals.compact_at),
+    ] {
         if value == 0 || value > 100 {
             return Err(ConfigError::InvalidGoals {
                 reason: format!("`{field}` 是窗口的百分比，取值落在 1..=100，拿到的是 {value}"),
@@ -478,8 +483,7 @@ fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
     }
     if goals.no_progress_rollovers == 0 {
         return Err(ConfigError::InvalidGoals {
-            reason: "`no_progress_rollovers` 至少是 1：0 会让循环在第一次翻页之前就认输"
-                .to_owned(),
+            reason: "`no_progress_rollovers` 至少是 1：0 会让循环在第一次翻页之前就认输".to_owned(),
         });
     }
     if goals.provider_retries > MAX_PROVIDER_RETRIES {
@@ -740,10 +744,10 @@ struct RawConfig {
     goals: Option<RawGoals>,
 }
 
-/// 一张 `[goals]` 表：目标循环在窗口的哪个位置提醒、哪个位置翻页。
+/// 一张 `[goals]` 表：目标循环在窗口的哪个位置提醒、哪个位置翻页，以及两条停止线。
 ///
-/// 两个数都是**窗口的百分比**（状态行那个 `上下文 n%` 的同一个数），不是预算 —— 预算
-/// 是累计 token，跨会话认到目标上去（§8）。
+/// 前两个数是**窗口的百分比**（状态行那个 `上下文 n%` 的同一个数），不是预算 —— 预算
+/// 是累计 token，跨会话认到目标上去（§8）；后两个是次数。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawGoals {

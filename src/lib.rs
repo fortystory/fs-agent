@@ -893,7 +893,12 @@ impl Harness {
     /// 只能发生在**回合边界**：会话是唯一持有可变状态的结构，而这里整个把它换掉，所以不能在
     /// 一个 `tool_call` 还挂着结果的时候翻。
     pub fn rollover(&mut self, stored: &StoredSession) -> Result<(), Error> {
-        let config = self.session.config().clone();
+        let mut config = self.session.config().clone();
+        // 新会话**不继承**「别处已经花掉的」那个口径：它是**目标**的额度口径，而翻页之后的
+        // 新会话有没有目标由调用方决定。目标循环紧接着会把它重新填上（`carry_usage`），
+        // `/clear` 不填 —— 于是清场之后那个新会话退回会话级的预算，与一个普通交互会话一样
+        // （`.scratch/goal-loop/spec.md` §8、§12）。
+        config.carried_tokens = 0;
         self.opened.reopen(stored)?;
         let mut session = self.opened.session(config, Some(agent::agent_identity()));
         self.opened.start(&mut session)?;

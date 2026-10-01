@@ -4674,15 +4674,8 @@ mod tests {
             .and_then(Pending::modal)
             .expect("屏幕上立着那个确认框");
         assert_eq!(modal.title, wording::goal_stop_title());
-        assert_eq!(
-            modal.choices.len(),
-            2,
-            "两个答案：继续跑与停下"
-        );
-        assert_eq!(
-            modal.choices[0].label, "继续跑",
-            "安全的那个答案排在前面"
-        );
+        assert_eq!(modal.choices.len(), 2, "两个答案：继续跑与停下");
+        assert_eq!(modal.choices[0].label, "继续跑", "安全的那个答案排在前面");
 
         // **默认停在「继续跑」**：Enter 关掉框，什么都不发生。
         state.key(Key::Enter);

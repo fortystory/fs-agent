@@ -1077,9 +1077,9 @@ async fn interactive_loop(
                 )),
                 // 异常中断：接着跑，不必人点头。
                 Some(name) => {
-                    harness.notice(&render::wording::fs_agent(
-                        &render::wording::resumed_goal(&name),
-                    ));
+                    harness.notice(&render::wording::fs_agent(&render::wording::resumed_goal(
+                        &name,
+                    )));
                     console.set_running(true);
                     if let Err(message) =
                         run_goal_loop(harness, console, events, goals, &name, &mut loop_running)
@@ -1208,9 +1208,15 @@ async fn interactive_loop(
                 let message = match parse_loop_line(&args) {
                     Err(message) => message,
                     Ok(name) => {
-                        let result =
-                            run_goal_loop(harness, console, events, goals, &name, &mut loop_running)
-                                .await;
+                        let result = run_goal_loop(
+                            harness,
+                            console,
+                            events,
+                            goals,
+                            &name,
+                            &mut loop_running,
+                        )
+                        .await;
                         result.err().unwrap_or_default()
                     }
                 };
@@ -1444,9 +1450,9 @@ struct GoalSetup {
 
 /// `/loop <名字>` 的一次运行（`.scratch/goal-loop/spec.md` §4）。
 ///
-/// 三种启动边界在**写任何事件之前**判；通过之后先落一条 `GoalSelected`，把清单注入上下文，
-/// 然后一个回合接一个回合地跑 —— 直到被取消。完成判据、翻页、预算与无进展判据是后面几张票
-/// 的事，它们都从这条循环里长出来。
+/// 四条启动边界在**写任何事件之前**判；通过之后先落一条 `GoalSelected`，把清单注入上下文，
+/// 然后一个回合接一个回合地跑，每个**回合边界**上依次判：完成（§1、§11）→ 阈值（§6、§7）→
+/// 无进展（§9），而额度那道闸门在每回合开头自己判（§8）。走到循环末尾只剩一个原因：手势。
 ///
 /// `running` 是这个会话「有没有一个 loop 在跑」的状态，由调用方持有：它跨过整次运行，也正是
 /// 第三条启动边界读的那个值。
@@ -1471,7 +1477,9 @@ async fn run_goal_loop(
     };
     let manifest = loaded.as_ref().ok();
     let progress = manifest.map(|manifest| goal_progress(goals, name, manifest));
-    let complete = progress.as_ref().is_some_and(crate::goals::Progress::is_complete);
+    let complete = progress
+        .as_ref()
+        .is_some_and(crate::goals::Progress::is_complete);
     let unattended = harness.mode().allows_unattended();
     if let Err(refusal) = crate::goals::check_start(manifest, complete, *running, unattended) {
         return Err(match refusal {
@@ -1514,10 +1522,9 @@ async fn run_goal_loop(
         progress.completed(),
         progress.total(),
     ));
-    // 越界的 id 被忽略，但绝不静默（§3）：沉默会让模型以为它记下了。
-    if !progress.unknown.is_empty() {
-        harness.notice(&render::wording::goal_unknown_ids(name, &progress.unknown));
-    }
+    // 越界的 id 被忽略，但绝不静默（§3）。
+    let mut reported_unknown: Vec<String> = Vec::new();
+    report_unknown_goal_ids(harness, name, &progress.unknown, &mut reported_unknown);
 
     // 无进展的计数（§9）：连续几次翻页零条目完成。它从这一刻的进度起算。
     let mut no_progress = crate::goals::NoProgress::new(progress.completed());
@@ -1542,7 +1549,7 @@ async fn run_goal_loop(
         };
         // provider 调用失败：重试若干次，耗尽后停下并写一条收尾事件（§9）。
         if outcome.reason == StopReason::Error {
-            if retry.failed() {
+            if retry.another_attempt() {
                 harness.notice(&render::wording::provider_retry(retry.failures()));
                 tokio::time::sleep(RETRY_DELAY).await;
                 continue;
@@ -1586,6 +1593,8 @@ async fn run_goal_loop(
             .flat_map(|events| crate::goals::todo_calls(events))
             .collect();
         let progress = crate::goals::progress(&manifest.entries, &calls);
+        // 运行中新冒出来的越界 id 也要有人告诉模型（§3）。
+        report_unknown_goal_ids(harness, name, &progress.unknown, &mut reported_unknown);
         if progress.is_complete() {
             // 收尾汇总由一次模型调用写（§11），而那一次调用照记用量 —— 它落进目标预算。调用
             // 没成不改变「做完了」这个事实，缺的只是那段叙述，所以退回一份机械的说明。
@@ -1657,8 +1666,8 @@ async fn run_goal_loop(
                     *running = false;
                     return Err(render::wording::error_report(&error));
                 }
-                if let Err(error) = harness
-                    .inject_context(crate::events::ContextSource::Goal, &manifest.render())
+                if let Err(error) =
+                    harness.inject_context(crate::events::ContextSource::Goal, &manifest.render())
                 {
                     *running = false;
                     return Err(render::wording::error_report(&error));
@@ -1673,17 +1682,19 @@ async fn run_goal_loop(
 
                 // 无进展（§9）：**连续 N 次翻页零条目完成**就停下报告。中途完成任意一条就归零，
                 // 所以这里比的是「这次翻页前后完成数有没有涨」。
-                let completed = goal_progress(goals, name, manifest).completed();
-                let streak = no_progress.after_rollover(completed);
+                let after = goal_progress(goals, name, manifest);
+                let streak = no_progress.after_rollover(after.completed());
                 if no_progress.reached(goals.settings.no_progress_rollovers) {
                     *running = false;
+                    // 报告里的 `stuck` 取**翻页之后**这一刻的进度 —— 「卡在哪几条上」要是现在
+                    // 的样子，不是翻页前那一刻的。
                     return stop_goal_loop(
                         harness,
                         name,
                         crate::events::GoalStopReason::NoProgress,
                         streak,
                         manifest,
-                        &progress,
+                        &after,
                     );
                 }
             }
@@ -1808,6 +1819,23 @@ impl Drop for Muted<'_> {
 /// 定死在这里，不做退避：无人值守的重试是为了盖过一次抖动，不是为了把一次真正的故障熬过去
 /// —— 后者该做的是停下报告。两秒足够让限流窗口挪一格。
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 越界 id 的报账（`.scratch/goal-loop/spec.md` §3）：只在集合**变了**的时候报。
+///
+/// 沉默会让模型以为它记下了；而每回合都刷同一行会把转录淹掉。启动时报一次，此后循环里每回合
+/// 重算发现新的再报 —— 于是「运行中新冒出来的越界 id」不会一直没人说。
+fn report_unknown_goal_ids(
+    harness: &Harness,
+    name: &str,
+    unknown: &[String],
+    reported: &mut Vec<String>,
+) {
+    if unknown.is_empty() || unknown == reported.as_slice() {
+        return;
+    }
+    *reported = unknown.to_vec();
+    harness.notice(&render::wording::goal_unknown_ids(name, unknown));
+}
 
 /// 停下并报告（`.scratch/goal-loop/spec.md` §9）：落一条收尾事件，把话说在转录里。
 ///
@@ -3430,7 +3458,10 @@ mod tests {
     #[test]
     fn goal_without_new_a_name_and_a_source_is_a_usage_error() {
         for args in ["", "new", "new sandbox", "list", "new sandbox --force"] {
-            assert!(parse_goal_line(args).is_err(), "`{args}` 不是一条合法的 /goal");
+            assert!(
+                parse_goal_line(args).is_err(),
+                "`{args}` 不是一条合法的 /goal"
+            );
         }
         // 整条提交的形状：`/goal` 后面那一整段都是参数。
         assert_eq!(
@@ -3446,7 +3477,215 @@ mod tests {
         assert_eq!(read("/clear"), Submission::Clear);
         assert_eq!(read("  /clear  "), Submission::Clear, "去掉空白照旧");
         // 内建命令要么是整条提交，要么什么都不算：它后面的一行绝不能被丢在地上。
-        assert_eq!(read("/clear\n再写点什么"), Submission::Prompt("/clear\n再写点什么"));
+        assert_eq!(
+            read("/clear\n再写点什么"),
+            Submission::Prompt("/clear\n再写点什么")
+        );
+    }
+
+    // --- 无人值守的前提：档位（`.scratch/goal-loop/spec.md` §5） ---------------
+
+    /// 一个从不被调用的 provider：拒绝发生在任何一次调用之前，所以这里被调到就是测试失败。
+    struct NoCalls;
+
+    #[async_trait::async_trait]
+    impl crate::provider::Provider for NoCalls {
+        async fn send(
+            &self,
+            _request: crate::provider::ChatRequest,
+        ) -> Result<crate::provider::EventStream, crate::provider::ProviderError> {
+            Err(crate::provider::ProviderError::Transport {
+                detail: "这个测试不该调到 provider".to_owned(),
+            })
+        }
+
+        fn caps(&self) -> crate::provider::capability::ModelCaps {
+            crate::provider::capability::caps_for("deepseek-flash").expect("内置模型")
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ask_mode_session_refuses_a_goal_loop_before_writing_anything() {
+        // 票 06 的 e2e：`ask` 档下 `/loop` 拒绝，而**流上没有** `GoalSelected` —— 拒绝发生在写
+        // 任何事件之前。走的是**组装入口 + 假 provider**，也就是 spec 说的那条接缝。
+        use super::{run_goal_loop, GoalSetup};
+        use crate::config::SessionConfig;
+        use crate::events::{EventPayload, SpeakerId};
+        use crate::permissions::Policy;
+        use crate::render::{RenderSinks, Renderer};
+        use crate::session::SessionStore;
+        use crate::tools::{self, PathLocks};
+        use crate::{assemble, AssemblyParts, SessionScaffold};
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let goals_dir = dir.path().join("goals");
+        crate::goals::create(
+            "sandbox",
+            std::path::Path::new(".scratch/sandbox"),
+            &goals_dir,
+            false,
+        )
+        .expect("清单从票生成");
+
+        let store = SessionStore::new(dir.path().join("store"));
+        let stored = store.create(&workspace).unwrap();
+        let mut harness = assemble(AssemblyParts {
+            provider: Box::new(NoCalls),
+            speaker: SpeakerId::Debater("kimi".into()),
+            config: SessionConfig::new("fake-model"),
+            renderer: Renderer::headless(RenderSinks {
+                stdout_result: Box::new(std::io::sink()),
+                stderr_diagnostic: Box::new(std::io::sink()),
+            }),
+            scaffold: SessionScaffold {
+                cwd: workspace.clone(),
+                log_path: stored.log_path.clone(),
+                session_id: stored.id.clone(),
+                tools: tools::builtin(false),
+                locks: PathLocks::new(),
+                policy: Policy::for_mode(Mode::Ask),
+                asker: None,
+                questions: None,
+                hook: None,
+                home: None,
+            },
+        })
+        .await
+        .expect("组装一场 ask 档的会话");
+
+        let (console, _port, mut events) = crate::render::console();
+        let goals = GoalSetup {
+            dir: Some(goals_dir),
+            store,
+            cwd: workspace,
+            settings: crate::config::GoalSettings::default(),
+        };
+        let mut running = false;
+        let refusal = run_goal_loop(
+            &mut harness,
+            &console,
+            &mut events,
+            &goals,
+            "sandbox",
+            &mut running,
+        )
+        .await
+        .expect_err("ask 档下拒绝启动");
+
+        assert!(refusal.contains("无人值守"), "{refusal}");
+        assert!(refusal.contains("workspace"), "要说清换哪一档：{refusal}");
+        assert!(!running, "被拒的启动没有把循环标成在跑");
+        assert!(
+            !harness
+                .events()
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::GoalSelected { .. })),
+            "拒绝发生在写事件之前：流上没有归属"
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_auto_mode_session_starts_the_loop_and_lands_its_ownership_on_the_stream() {
+        // 另一半 e2e：档位够了就真的启动 —— 归属落流、清单注入，然后跑一个回合。provider 这里
+        // 每一次都失败，而 `provider_retries = 0` 让循环当场停下（不睡那两次重试），于是这条
+        // 用例既证明「能启动」，也把「provider 失败 → 停下 + 收尾事件」走了一遍。
+        use super::{run_goal_loop, GoalSetup};
+        use crate::config::SessionConfig;
+        use crate::events::{EventPayload, SpeakerId};
+        use crate::permissions::Policy;
+        use crate::render::{RenderSinks, Renderer};
+        use crate::session::SessionStore;
+        use crate::tools::{self, PathLocks};
+        use crate::{assemble, AssemblyParts, SessionScaffold};
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let goals_dir = dir.path().join("goals");
+        crate::goals::create(
+            "sandbox",
+            std::path::Path::new(".scratch/sandbox"),
+            &goals_dir,
+            false,
+        )
+        .expect("清单从票生成");
+
+        let store = SessionStore::new(dir.path().join("store"));
+        let stored = store.create(&workspace).unwrap();
+        let mut harness = assemble(AssemblyParts {
+            provider: Box::new(NoCalls),
+            speaker: SpeakerId::Debater("kimi".into()),
+            config: SessionConfig::new("fake-model"),
+            renderer: Renderer::headless(RenderSinks {
+                stdout_result: Box::new(std::io::sink()),
+                stderr_diagnostic: Box::new(std::io::sink()),
+            }),
+            scaffold: SessionScaffold {
+                cwd: workspace.clone(),
+                log_path: stored.log_path.clone(),
+                session_id: stored.id.clone(),
+                tools: tools::builtin(false),
+                locks: PathLocks::new(),
+                policy: Policy::for_mode(Mode::Auto),
+                asker: None,
+                questions: None,
+                hook: None,
+                home: None,
+            },
+        })
+        .await
+        .expect("组装一场 auto 档的会话");
+
+        let (console, _port, mut events) = crate::render::console();
+        let goals = GoalSetup {
+            dir: Some(goals_dir),
+            store,
+            cwd: workspace,
+            settings: crate::config::GoalSettings {
+                provider_retries: 0,
+                ..crate::config::GoalSettings::default()
+            },
+        };
+        let mut running = false;
+        run_goal_loop(
+            &mut harness,
+            &console,
+            &mut events,
+            &goals,
+            "sandbox",
+            &mut running,
+        )
+        .await
+        .expect("auto 档下启动不拒绝");
+
+        let written = harness.events();
+        assert!(
+            written
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::GoalSelected { .. })),
+            "启动之后归属落流"
+        );
+        assert!(
+            written
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::ContextInjected { .. })),
+            "清单也注入了上下文"
+        );
+        assert!(
+            written.iter().any(|event| matches!(
+                &event.payload,
+                EventPayload::GoalStopped { reason, count, .. }
+                    if *reason == crate::events::GoalStopReason::ProviderFailed && *count == 1
+            )),
+            "provider 失败一次就停下报告：{written:?}"
+        );
+        assert!(!running, "停下之后回到空闲");
+
+        harness.shutdown().await;
     }
 
     // --- `/` 菜单（`.scratch/goal-loop/spec.md` §13） --------------------------
@@ -3457,11 +3696,17 @@ mod tests {
     #[test]
     fn the_menu_lists_the_built_in_commands_before_the_skills() {
         // 命令一组、技能一组；同前缀时命令优先，因为程序自带的那批更可预测。
-        let skills = [("clear-ish", "一个与 /c 同前缀的技能"), ("ask-matt", "审一遍")];
+        let skills = [
+            ("clear-ish", "一个与 /c 同前缀的技能"),
+            ("ask-matt", "审一遍"),
+        ];
         let entries = slash_catalog(&BUILT_IN_COMMANDS, &skills);
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
 
-        let declared: Vec<&str> = BUILT_IN_COMMANDS.iter().map(|command| command.name).collect();
+        let declared: Vec<&str> = BUILT_IN_COMMANDS
+            .iter()
+            .map(|command| command.name)
+            .collect();
         assert_eq!(
             &names[..declared.len()],
             declared.as_slice(),
@@ -3492,8 +3737,14 @@ mod tests {
             );
             parsed.push(name);
         }
-        let listed: Vec<&str> = BUILT_IN_COMMANDS.iter().map(|command| command.name).collect();
-        assert_eq!(listed, parsed, "补全里列的就是循环解析的那些，一个不多一个不少");
+        let listed: Vec<&str> = BUILT_IN_COMMANDS
+            .iter()
+            .map(|command| command.name)
+            .collect();
+        assert_eq!(
+            listed, parsed,
+            "补全里列的就是循环解析的那些，一个不多一个不少"
+        );
 
         // 一个真不存在的名字仍然是未知命令。
         assert!(matches!(read("/nope"), Submission::Unknown("/nope")));
@@ -3506,7 +3757,10 @@ mod tests {
     #[test]
     fn loop_takes_exactly_one_name() {
         assert_eq!(parse_loop_line(" sandbox ").unwrap(), "sandbox");
-        assert_eq!(read("/loop sandbox"), Submission::Loop("sandbox".to_owned()));
+        assert_eq!(
+            read("/loop sandbox"),
+            Submission::Loop("sandbox".to_owned())
+        );
 
         // 名字是一个不断开的词，所以一个都没有、多出一个都是用法错误 —— 而这条命令读到的
         // 是整条提交，与 `/discuss`、`/goal` 同一条规矩。

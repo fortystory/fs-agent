@@ -15,8 +15,8 @@ use fs_agent::events::{
 };
 use fs_agent::events::{GoalStopReason, StopReason};
 use fs_agent::goals::{
-    self, check_start, progress, threshold_step, unfinished, Manifest, NoProgress, Progress,
-    Retry, StartRefusal, ThresholdStep, TodoCall,
+    self, check_start, progress, threshold_step, unfinished, Manifest, NoProgress, Progress, Retry,
+    StartRefusal, ThresholdStep, TodoCall,
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
@@ -356,7 +356,10 @@ fn the_merge_order_is_session_time_first_then_the_seq_inside_it() {
         call(at(12), 1, items(&[("01", "一", "pending")])),
         call(at(10), 9, items(&[("01", "一", "completed")])),
     ];
-    assert_eq!(progress(&manifest, &calls).statuses["01"], todo::Status::Pending);
+    assert_eq!(
+        progress(&manifest, &calls).statuses["01"],
+        todo::Status::Pending
+    );
 
     // 同一场会话里按 seq（大的后落地）：与它们在调用方那边的顺序无关。
     let calls = [
@@ -372,7 +375,10 @@ fn the_merge_order_is_session_time_first_then_the_seq_inside_it() {
         call(at(10), 1, items(&[("01", "一", "completed")])),
         call(at(10), 9, items(&[("01", "一", "pending")])),
     ];
-    assert_eq!(progress(&manifest, &calls).statuses["01"], todo::Status::Pending);
+    assert_eq!(
+        progress(&manifest, &calls).statuses["01"],
+        todo::Status::Pending
+    );
 
     // 时间打平时（同一秒铸出的两场会话）仍然有确定的先后。
     let tie = [call(at(10), 1, items(&[("01", "一", "completed")]))];
@@ -386,7 +392,10 @@ fn an_id_that_is_not_on_the_manifest_is_ignored_but_never_silently() {
     let calls = [call(
         at(10),
         1,
-        items(&[("01", "一", "completed"), ("07", "清单外的一件事", "completed")]),
+        items(&[
+            ("01", "一", "completed"),
+            ("07", "清单外的一件事", "completed"),
+        ]),
     )];
     let derived = progress(&manifest, &calls);
 
@@ -461,10 +470,7 @@ async fn two_sessions_on_one_goal_recompute_the_second_ones_progress_from_the_fi
 
 /// 一条 `todo` 把清单上的条目**全部**标成完成。
 fn complete_items(ids: &[&str]) -> serde_json::Value {
-    let all: Vec<(&str, &str, &str)> = ids
-        .iter()
-        .map(|id| (*id, "一件事", "completed"))
-        .collect();
+    let all: Vec<(&str, &str, &str)> = ids.iter().map(|id| (*id, "一件事", "completed")).collect();
     items(&all)
 }
 
@@ -472,9 +478,7 @@ fn completions(events: &[Event]) -> Vec<(String, String)> {
     events
         .iter()
         .filter_map(|event| match &event.payload {
-            EventPayload::GoalCompleted { goal, summary } => {
-                Some((goal.clone(), summary.clone()))
-            }
+            EventPayload::GoalCompleted { goal, summary } => Some((goal.clone(), summary.clone())),
             _ => None,
         })
         .collect()
@@ -518,8 +522,7 @@ async fn finishing_a_goal_records_one_completion_with_the_summary_the_model_wrot
         .await
         .unwrap();
     assert_eq!(
-        summary,
-        "目标做完了：两条都完成，只跨了一个会话。新工作只有一条，我记在 else 里。",
+        summary, "目标做完了：两条都完成，只跨了一个会话。新工作只有一条，我记在 else 里。",
         "落流的是那次模型调用写出来的那段叙述"
     );
 
@@ -573,13 +576,22 @@ async fn a_failed_summary_call_still_records_the_completion_with_a_mechanical_no
     let derived = progress(&manifest.entries, &goals::todo_calls(&events));
     let summary = session
         .harness
-        .finish_goal("sandbox", &manifest, &derived, 2, &["顺手补了个测试".to_owned()])
+        .finish_goal(
+            "sandbox",
+            &manifest,
+            &derived,
+            2,
+            &["顺手补了个测试".to_owned()],
+        )
         .await
         .unwrap();
 
     assert!(summary.contains("1 / 1 条完成"), "{summary}");
     assert!(summary.contains("跨 2 个会话"), "{summary}");
-    assert!(summary.contains("顺手补了个测试"), "新工作不能省：{summary}");
+    assert!(
+        summary.contains("顺手补了个测试"),
+        "新工作不能省：{summary}"
+    );
 
     let events = session.events();
     assert_eq!(completions(&events).len(), 1, "汇总没写出来也照样完成");
@@ -597,7 +609,10 @@ fn the_summary_prompt_carries_all_four_things_and_never_omits_the_new_work() {
 
     assert!(prompt.contains("sandbox"), "目标名：{prompt}");
     assert!(prompt.contains("1/2 条完成"), "条目完成情况：{prompt}");
-    assert!(prompt.contains("跨会话：2 个会话"), "跨了几个会话：{prompt}");
+    assert!(
+        prompt.contains("跨会话：2 个会话"),
+        "跨了几个会话：{prompt}"
+    );
     assert!(prompt.contains("新工作"), "清单外的新工作：{prompt}");
 
     // 一条新工作都没有时也要说出来，而不是留白。
@@ -607,10 +622,7 @@ fn the_summary_prompt_carries_all_four_things_and_never_omits_the_new_work() {
 
 /// 一次 `todo` 调用（纯数据版，给不跑真会话的测试用）。
 fn complete_items_call(ids: &[&str]) -> serde_json::Value {
-    let all: Vec<(&str, &str, &str)> = ids
-        .iter()
-        .map(|id| (*id, "一件事", "completed"))
-        .collect();
+    let all: Vec<(&str, &str, &str)> = ids.iter().map(|id| (*id, "一件事", "completed")).collect();
     items(&all)
 }
 
@@ -703,7 +715,10 @@ async fn compaction_folds_the_history_into_a_summary_and_rollover_carries_it_ove
 
     // 新会话：从空开始，开头就有那段摘要。
     let new = read_events(&stored.log_path).unwrap();
-    assert!(matches!(new[0].payload, EventPayload::SessionStarted { .. }));
+    assert!(matches!(
+        new[0].payload,
+        EventPayload::SessionStarted { .. }
+    ));
     assert!(new.iter().any(|event| matches!(
         &event.payload,
         EventPayload::ContextInjected { source: ContextSource::Compaction, content }
@@ -804,7 +819,10 @@ fn the_reminder_lands_once_per_crossing_and_a_rollover_resets_it() {
 #[test]
 fn the_reminder_is_chinese_model_text_that_says_what_to_save() {
     let text = fs_agent::render::wording::goal_reminder();
-    assert!(text.contains("落下来"), "措辞是「把还没落流的东西落下来」：{text}");
+    assert!(
+        text.contains("落下来"),
+        "措辞是「把还没落流的东西落下来」：{text}"
+    );
     assert!(text.contains("摘要"), "它要说清再过一会儿就压缩了：{text}");
     assert!(
         text.contains("todo") || text.contains("结论"),
@@ -812,7 +830,8 @@ fn the_reminder_is_chinese_model_text_that_says_what_to_save() {
     );
     // 模型可见的散文走中文（ADR 0005）。
     assert!(
-        text.chars().any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch)),
+        text.chars()
+            .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch)),
         "{text}"
     );
 }
@@ -825,10 +844,7 @@ async fn nearly_full_session(root: &Path) -> Session {
     caps.context_window = 20_000;
     caps.max_output_tokens = 1_000;
     let provider = FakeProvider::with_caps(
-        vec![
-            Reply::text("干了一点活"),
-            Reply::text("这段是摘要"),
-        ],
+        vec![Reply::text("干了一点活"), Reply::text("这段是摘要")],
         caps,
     );
     let mut session = session_with(root, "s-1", provider).await;
@@ -875,11 +891,7 @@ async fn crossing_the_compact_threshold_compacts_and_opens_a_new_session() {
     let stored = SessionStore::new(dir.path().join("store"))
         .create(&dir.path().join("workspace"))
         .unwrap();
-    let summary = session
-        .harness
-        .compact_and_rollover(&stored)
-        .await
-        .unwrap();
+    let summary = session.harness.compact_and_rollover(&stored).await.unwrap();
     assert_eq!(summary.as_deref(), Some("这段是摘要"));
 
     // 过八成那一下：旧流上有压缩，新会话里有那段摘要，而旧文件还在。
@@ -940,7 +952,10 @@ async fn clear_is_the_same_rollover_without_a_summary_and_leaves_no_trace_on_the
 
     // 新会话从空开始，开头是它自己的 `SessionStarted`：审计看的就是这个边界。
     let new = read_events(&stored.log_path).unwrap();
-    assert!(matches!(new[0].payload, EventPayload::SessionStarted { .. }));
+    assert!(matches!(
+        new[0].payload,
+        EventPayload::SessionStarted { .. }
+    ));
     assert!(
         !new.iter().any(|event| matches!(
             event.payload,
@@ -987,22 +1002,22 @@ fn the_no_progress_counter_counts_rollovers_and_resets_on_any_completion() {
 #[test]
 fn the_retry_budget_is_spent_by_failures_and_refilled_by_a_success() {
     let mut retry = Retry::new(2);
-    assert!(retry.failed(), "第一次失败之后还能再试");
-    assert!(retry.failed(), "第二次失败之后还能再试");
-    assert!(!retry.failed(), "第三次：预算耗尽，停下");
+    assert!(retry.another_attempt(), "第一次失败之后还能再试");
+    assert!(retry.another_attempt(), "第二次失败之后还能再试");
+    assert!(!retry.another_attempt(), "第三次：预算耗尽，停下");
     assert_eq!(retry.failures(), 3, "报告里要数得出试了几次");
 
     // 中途成功一次，计数归零。
     let mut retry = Retry::new(2);
-    retry.failed();
-    retry.failed();
+    retry.another_attempt();
+    retry.another_attempt();
     retry.succeeded();
     assert_eq!(retry.failures(), 0);
-    assert!(retry.failed());
+    assert!(retry.another_attempt());
 
     // 0 次就是不重试。
     let mut none = Retry::new(0);
-    assert!(!none.failed());
+    assert!(!none.another_attempt());
 }
 
 #[test]
@@ -1106,14 +1121,17 @@ fn the_stop_reasons_are_stable_protocol_marks() {
     assert_eq!(GoalStopReason::NoProgress.as_str(), "no_progress");
     assert_eq!(GoalStopReason::ProviderFailed.as_str(), "provider_failed");
     assert_eq!(GoalStopReason::UserStopped.as_str(), "user_stopped");
-    assert_eq!(EventPayload::GoalStopped {
-        goal: "g".to_owned(),
-        reason: GoalStopReason::NoProgress,
-        detail: String::new(),
-        stuck: Vec::new(),
-        count: 0,
-    }
-    .kind(), "GoalStopped");
+    assert_eq!(
+        EventPayload::GoalStopped {
+            goal: "g".to_owned(),
+            reason: GoalStopReason::NoProgress,
+            detail: String::new(),
+            stuck: Vec::new(),
+            count: 0,
+        }
+        .kind(),
+        "GoalStopped"
+    );
 }
 
 // --- 预算认到目标上（§8） ---------------------------------------------------
@@ -1176,7 +1194,11 @@ async fn without_a_goal_the_budget_is_the_plain_session_one() {
     // 60k 花掉了，但 60k < 100k，所以第二回合照常打开调用。
     session.harness.run_turn("第一回合").await.unwrap();
     let outcome = session.harness.run_turn("第二回合").await.unwrap();
-    assert_eq!(outcome.reason, StopReason::Completed, "会话自己的 90k 还没撞顶");
+    assert_eq!(
+        outcome.reason,
+        StopReason::Completed,
+        "会话自己的 90k 还没撞顶"
+    );
 
     let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
     assert_eq!(spent, 90_000);
@@ -1214,6 +1236,48 @@ fn the_goal_budget_counts_the_other_sessions_and_not_the_current_one_twice() {
     assert_eq!(goals::usage_apart_from(&[], "s-1"), 0);
 }
 
+#[tokio::test]
+async fn a_rollover_does_not_carry_the_goal_budget_into_an_untargeted_session() {
+    use fs_agent::session::SessionStore;
+
+    // `/clear` 走的就是这一条路：清场之后的新会话**没有**当前目标，所以它的额度必须退回会话级
+    // （§8、§12）。带过去的 carried 会把上一个会话的花费算进一个与它无关的会话。
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut session = session_with_config(
+        root,
+        "s-1",
+        FakeProvider::new(vec![
+            usage_reply(60_000),
+            usage_reply(50_000),
+            usage_reply(0),
+        ]),
+        SessionConfig::new("fake-model").with_session_token_limit(100_000),
+    )
+    .await;
+    session.harness.select_goal("sandbox").unwrap();
+    session.harness.run_turn("开工").await.unwrap();
+    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    session.harness.carry_usage(spent);
+
+    let stored = SessionStore::new(root.join("store"))
+        .create(&root.join("workspace"))
+        .unwrap();
+    session.harness.rollover(&stored).unwrap();
+
+    // 新会话自己再花 50k。带着旧的 carried 时闸门看到的是 60k + 50k = 110k，第三个回合直接
+    // 降级收尾；不带时是 50k，第三个回合照常打开调用。
+    session.harness.run_turn("清场之后").await.unwrap();
+    let outcome = session.harness.run_turn("再一个回合").await.unwrap();
+    assert_eq!(
+        outcome.reason,
+        StopReason::Completed,
+        "新会话的额度从零起算：上一个会话那 60k 不该跟过来"
+    );
+
+    session.harness.shutdown().await;
+}
+
 // --- 崩溃恢复与主动停（§10） ------------------------------------------------
 
 /// 一场会话跑过的东西：一个归属、一个回合，以及（可选的）一条收尾。
@@ -1228,10 +1292,7 @@ async fn session_with_ending(root: &Path, id: &str, ending: Option<&str>) -> Ses
     session.harness.run_injected_turn().await.unwrap();
     match ending {
         Some("completed") => {
-            session
-                .harness
-                .complete_goal("sandbox", "做完了")
-                .unwrap();
+            session.harness.complete_goal("sandbox", "做完了").unwrap();
         }
         Some("stopped") => {
             session
@@ -1278,7 +1339,10 @@ async fn a_completed_goal_comes_back_idle_and_does_not_resume_itself() {
         None,
         "正常收尾：回来是空闲等人"
     );
-    assert!(session.harness.current_goal().is_some(), "归属还在，只是不再跑");
+    assert!(
+        session.harness.current_goal().is_some(),
+        "归属还在，只是不再跑"
+    );
 
     session.harness.shutdown().await;
 }
@@ -1357,9 +1421,13 @@ fn only_the_sessions_that_claimed_the_goal_count_for_it() {
                 goal: "sandbox".to_owned(),
             },
         ),
-        fs_agent::events::Event::new(2, SpeakerId::System, EventPayload::SessionEnded {
-            reason: fs_agent::events::StopReason::Completed,
-        }),
+        fs_agent::events::Event::new(
+            2,
+            SpeakerId::System,
+            EventPayload::SessionEnded {
+                reason: fs_agent::events::StopReason::Completed,
+            },
+        ),
     ];
     let other = [fs_agent::events::Event::new(
         1,
@@ -1374,8 +1442,13 @@ fn only_the_sessions_that_claimed_the_goal_count_for_it() {
     assert!(!goals::has_goal(&other, "sandbox"));
     assert_eq!(current_goal(&other), Some("grep-tool"));
     // 时间戳只用来排序，这里顺手确认派生对空调用是安全的。
-    assert_eq!(progress(&entries(&["01"]), &[]), Progress {
-        statuses: [("01".to_owned(), todo::Status::Pending)].into_iter().collect(),
-        unknown: Vec::new(),
-    });
+    assert_eq!(
+        progress(&entries(&["01"]), &[]),
+        Progress {
+            statuses: [("01".to_owned(), todo::Status::Pending)]
+                .into_iter()
+                .collect(),
+            unknown: Vec::new(),
+        }
+    );
 }

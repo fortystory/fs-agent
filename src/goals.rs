@@ -143,7 +143,10 @@ impl Manifest {
                 };
                 let heading = heading.trim();
                 if heading.is_empty() {
-                    return Err(malformed(line, "标题里没有名字：写成 `# <名字>`".to_owned()));
+                    return Err(malformed(
+                        line,
+                        "标题里没有名字：写成 `# <名字>`".to_owned(),
+                    ));
                 }
                 name = Some(heading.to_owned());
                 continue;
@@ -172,9 +175,7 @@ impl Manifest {
             if !content.is_empty() && !content.starts_with(char::is_whitespace) {
                 return Err(malformed(
                     line,
-                    format!(
-                        "条目 `{id}` 后面要有一个空格再接内容，读到的是 `{body}`"
-                    ),
+                    format!("条目 `{id}` 后面要有一个空格再接内容，读到的是 `{body}`"),
                 ));
             }
             let content = content.trim().to_owned();
@@ -242,7 +243,9 @@ pub fn generate(name: &str, source: &Path) -> Result<Manifest, GoalError> {
     let mut entries = Vec::with_capacity(tickets.len());
     for (number, file) in tickets {
         if number > 10u32.pow(ID_DIGITS as u32) - 1 {
-            return Err(GoalError::TooManyTickets { count: number as usize });
+            return Err(GoalError::TooManyTickets {
+                count: number as usize,
+            });
         }
         let content = ticket_title(&file)?;
         entries.push(Entry {
@@ -292,17 +295,22 @@ pub fn store(dir: &Path, manifest: &Manifest, force: bool) -> Result<PathBuf, Go
         path: dir.display().to_string(),
         source,
     })?;
-    crate::tools::paths::write_owner_only(&path, manifest.render().as_bytes()).map_err(|source| {
-        GoalError::Write {
+    crate::tools::paths::write_owner_only(&path, manifest.render().as_bytes()).map_err(
+        |source| GoalError::Write {
             path: path.display().to_string(),
             source,
-        }
-    })?;
+        },
+    )?;
     Ok(path)
 }
 
 /// 生成并写下——`/goal new` 的那一步（§2）。
-pub fn create(name: &str, source: &Path, dir: &Path, force: bool) -> Result<(Manifest, PathBuf), GoalError> {
+pub fn create(
+    name: &str,
+    source: &Path,
+    dir: &Path,
+    force: bool,
+) -> Result<(Manifest, PathBuf), GoalError> {
     validate_name(name)?;
     // 重名先判：默默覆盖会抹掉一份已生成的目标定义，而生成来源可能是另一批票。
     let path = manifest_path(dir, name);
@@ -327,7 +335,11 @@ fn ticket_files(source: &Path) -> Result<Vec<PathBuf>, GoalError> {
         });
     }
     let nested = source.join("issues");
-    let dir = if nested.is_dir() { nested } else { source.to_path_buf() };
+    let dir = if nested.is_dir() {
+        nested
+    } else {
+        source.to_path_buf()
+    };
     let entries = std::fs::read_dir(&dir).map_err(|_| GoalError::SourceNotFound {
         path: source.display().to_string(),
     })?;
@@ -403,7 +415,10 @@ pub struct TodoCall {
 /// 会话的开场时刻取这条流第一件事的时间：它只用来在跨会话合并时定先后，而一场会话自己的
 /// 内部顺序由 `seq` 定。
 pub fn todo_calls(events: &[Event]) -> Vec<TodoCall> {
-    let session_at = events.first().map(|event| event.at).unwrap_or_else(Utc::now);
+    let session_at = events
+        .first()
+        .map(|event| event.at)
+        .unwrap_or_else(Utc::now);
     events
         .iter()
         .filter_map(|event| match &event.payload {
@@ -554,7 +569,12 @@ pub enum ThresholdStep {
 ///
 /// 判据**只用传进来的这一个数**，所以压缩那次调用自己不会触发第二次翻页：量是在动作之前取
 /// 的。
-pub fn threshold_step(percent: u64, remind_at: u8, compact_at: u8, reminded: bool) -> ThresholdStep {
+pub fn threshold_step(
+    percent: u64,
+    remind_at: u8,
+    compact_at: u8,
+    reminded: bool,
+) -> ThresholdStep {
     if percent >= u64::from(compact_at) {
         ThresholdStep::Compact
     } else if percent >= u64::from(remind_at) && !reminded {
@@ -626,8 +646,11 @@ impl Retry {
         Self { failures: 0, limit }
     }
 
-    /// 记一次失败：还能再试就 `true`。
-    pub fn failed(&mut self) -> bool {
+    /// 记一次失败，并回答「还能不能再驱动一次」。
+    ///
+    /// 名字是那个**返回值**的名字：`if retry.another_attempt() { … continue }` 读起来就是它
+    /// 做的事（`failed()` 会读成「它失败了吗」，而那是反的）。
+    pub fn another_attempt(&mut self) -> bool {
         self.failures += 1;
         self.failures <= self.limit
     }
@@ -702,9 +725,9 @@ pub fn is_closing(payload: &EventPayload) -> bool {
 /// 掉，A 那条完成事件不能替 B 说话。没有归属时它答 `Interrupted` —— 调用方（`/loop` 的恢复）
 /// 先问「有没有当前目标」，不会走到这里。
 pub fn ending(events: &[Event]) -> Ending {
-    let from = events.iter().rposition(|event| {
-        matches!(event.payload, EventPayload::GoalSelected { .. })
-    });
+    let from = events
+        .iter()
+        .rposition(|event| matches!(event.payload, EventPayload::GoalSelected { .. }));
     let Some(from) = from else {
         return Ending::Interrupted;
     };
@@ -787,7 +810,12 @@ pub fn summary_prompt(
 ///
 /// 判据是机械的，所以「做完了」这件事不依赖模型能不能开口；缺的只是那段叙述。这一份把四项
 /// 照原样摆出来，谁读都知道发生了什么。
-pub fn fallback_summary(goal: &str, progress: &Progress, sessions: usize, notes: &[String]) -> String {
+pub fn fallback_summary(
+    goal: &str,
+    progress: &Progress,
+    sessions: usize,
+    notes: &[String],
+) -> String {
     let mut text = format!(
         "目标 {goal} 完成：{} / {} 条完成，跨 {sessions} 个会话。",
         progress.completed(),
@@ -803,5 +831,3 @@ pub fn fallback_summary(goal: &str, progress: &Progress, sessions: usize, notes:
     }
     text
 }
-
-

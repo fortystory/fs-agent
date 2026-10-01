@@ -939,7 +939,11 @@ fn the_goal_thresholds_default_to_fifty_and_eighty() {
 
 #[test]
 fn the_goal_thresholds_come_from_the_goals_table() {
-    let config = resolve(Some("[goals]\nremind_at = 30\ncompact_at = 90\n"), &env(&[])).unwrap();
+    let config = resolve(
+        Some("[goals]\nremind_at = 30\ncompact_at = 90\n"),
+        &env(&[]),
+    )
+    .unwrap();
 
     assert_eq!(config.goals.remind_at, 30);
     assert_eq!(config.goals.compact_at, 90);

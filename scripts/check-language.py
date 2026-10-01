@@ -135,7 +135,7 @@ MODEL_TEXT_FLOOR = {
     "src/agent/history.rs": 7,
     "src/render/input.rs": 3,
     "src/render/tui.rs": 2,
-    "src/cli.rs": 13,
+    "src/cli.rs": 15,
 }
 ENGLISH_PROSE_CEILING = 27
 

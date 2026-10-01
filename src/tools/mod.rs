@@ -28,11 +28,11 @@ pub mod tool;
 pub use ask_user::{AskUserQuestionTool, ASK_USER_QUESTION_TOOL};
 pub use bash::{BashTool, BASH_TOOL};
 pub use custom::{is_custom_tool, CustomTool};
-pub use goal_note::{GoalNoteTool, GOAL_NOTE_TOOL};
 pub use file::{
     before_artifact, EditCall, EditFile, ReadFile, WriteFile, EDIT_FILE, MATCH_LEVEL_PREFIX,
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
 };
+pub use goal_note::{GoalNoteTool, GOAL_NOTE_TOOL};
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
 pub use process::{CommandOutcome, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
 pub use registry::{
