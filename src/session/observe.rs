@@ -500,6 +500,9 @@ fn last_tool_entry(timeline: &mut Timeline) -> Option<&mut Option<String>> {
 fn entry_of(event: &Event) -> Option<Entry> {
     let speaker = event.speaker_id.clone();
     Some(match &event.payload {
+        // 归属是只进日志的记账（`.scratch/goal-loop/spec.md` §4）：复盘视图不把它列成一条
+        // 时间线条目 —— 它是这个会话在为谁干活的标记，不是发生了什么。
+        EventPayload::GoalSelected { .. } => return None,
         // 沙箱状态是只进日志的 harness 记账（沙箱 spec §8）：TUI 不显示它，但复盘视图显示，
         // 否则「某条命令当时有没有被关着」就没有可读的出处。
         EventPayload::SandboxStatus {
@@ -978,6 +981,8 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
         match &event.payload {
             EventPayload::SessionStarted { .. } => {}
             EventPayload::ContextInjected { .. } => {}
+            // 归属与它同一档：只进日志的记账，不计进任何一项统计。
+            EventPayload::GoalSelected { .. } => {}
             // 沙箱状态不计进任何一项统计：它是这一刻的记账，不是用量。
             EventPayload::SandboxStatus { .. } => {}
             EventPayload::SessionEnded { reason } => {

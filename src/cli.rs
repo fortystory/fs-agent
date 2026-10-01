@@ -425,7 +425,18 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             .collect(),
     );
 
-    let code = interactive_loop(&mut harness, &console, &mut events, &config, goals_dir.as_deref()).await;
+    let code = interactive_loop(
+        &mut harness,
+        &console,
+        &mut events,
+        &config,
+        &GoalSetup {
+            dir: goals_dir,
+            store: store.clone(),
+            cwd: cwd.clone(),
+        },
+    )
+    .await;
     harness.shutdown().await;
     code
 }
@@ -1054,8 +1065,11 @@ async fn interactive_loop(
     console: &ConsoleHandle,
     events: &mut ConsoleEvents,
     config: &Config,
-    goals_dir: Option<&Path>,
+    goals: &GoalSetup,
 ) -> ExitCode {
+    // 「已经有一个 loop 在跑」那条边界读的状态。循环体是同步跑完的，所以正常路径上不可能在它
+    // 跑着的时候再收到一次提交 —— 票 06 让输入区在这段时间里禁言，这条状态正是那件事的名字。
+    let mut loop_running = false;
     loop {
         // 只有循环知道有没有东西在跑，所以它告诉前端，而不是让前端去推断（spec §6）。在拿到一次提
         // 交之前什么都没在跑，而前端从第一帧起就得这么读 —— 包括在这个循环第一次提问之前。
@@ -1149,8 +1163,22 @@ async fn interactive_loop(
             }
             // `/goal new <名字> <来源>`：从一批票生成一份目标清单（§2）。手势，不进流。
             Submission::Goal(args) => {
-                let message = run_goal_command(harness, goals_dir, &args);
+                let message = run_goal_command(harness, goals.dir.as_deref(), &args);
                 harness.notice(&render::wording::fs_agent(&message));
+            }
+            // `/loop <名字>`：选定目标并连续工作（§4）。三种启动边界在写任何事件之前判。
+            Submission::Loop(args) => {
+                let message = match parse_loop_line(&args) {
+                    Err(message) => message,
+                    Ok(name) => {
+                        let result =
+                            run_goal_loop(harness, events, goals, &name, &mut loop_running).await;
+                        result.err().unwrap_or_default()
+                    }
+                };
+                if !message.is_empty() {
+                    harness.notice(&render::wording::fs_agent(&message));
+                }
             }
             // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
             Submission::Prompt(text) => {
@@ -1205,6 +1233,8 @@ enum Submission<'a> {
     /// §2）。它是一个**手势**，不是工具调用：由循环直接执行，不走工具表、不走权限门、也不进事件
     /// 流 —— 清单文件存在即是「目标已创建」的证据。
     Goal(String),
+    /// `/loop <名字>`：选定目标并连续工作（§4）。参数是目标的名字，一个不断开的词。
+    Loop(String),
     /// 整条提交，含换行，作为一条 prompt。
     Prompt(&'a str),
 }
@@ -1252,6 +1282,10 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
             // `/goal new <名字> <来源>` 取同样的形状：它后面那一整段都是参数。
             if name == "goal" {
                 return Submission::Goal(task_of(inline, rest));
+            }
+            // `/loop <名字>`：一个参数，形状与 `/goal` 相同。
+            if name == "loop" {
+                return Submission::Loop(task_of(inline, rest));
             }
             if !has_skill(name) {
                 if rest.trim().is_empty() {
@@ -1331,6 +1365,128 @@ fn parse_goal_line(args: &str) -> Result<GoalLine, ()> {
     })
 }
 
+/// 目标那一族命令要的环境事实：清单目录、会话桶、cwd。
+struct GoalSetup {
+    /// 目标清单目录；没有数据根时是 `None`（`/goal` 与 `/loop` 都照说）。
+    dir: Option<PathBuf>,
+    store: SessionStore,
+    cwd: PathBuf,
+}
+
+/// `/loop <名字>` 的一次运行（`.scratch/goal-loop/spec.md` §4）。
+///
+/// 三种启动边界在**写任何事件之前**判；通过之后先落一条 `GoalSelected`，把清单注入上下文，
+/// 然后一个回合接一个回合地跑 —— 直到被取消。完成判据、翻页、预算与无进展判据是后面几张票
+/// 的事，它们都从这条循环里长出来。
+///
+/// `running` 是这个会话「有没有一个 loop 在跑」的状态，由调用方持有：它跨过整次运行，也正是
+/// 第三条启动边界读的那个值。
+///
+/// `Err` 是一句说给人听的拒绝或失败。
+async fn run_goal_loop(
+    harness: &mut Harness,
+    events: &mut ConsoleEvents,
+    goals: &GoalSetup,
+    name: &str,
+    running: &mut bool,
+) -> Result<(), String> {
+    let Some(dir) = goals.dir.as_deref() else {
+        return Err(render::wording::no_goal_dir().to_owned());
+    };
+    // 读不出来分两种：清单不在（提示先 `/goal new`），或者它是人手改坏的文件（照说坏在哪）。
+    let loaded = crate::goals::load(dir, name);
+    let broken = match &loaded {
+        Ok(_) | Err(crate::goals::GoalError::Read { .. }) => None,
+        Err(error) => Some(error.to_string()),
+    };
+    let manifest = loaded.as_ref().ok();
+    let progress = manifest.map(|manifest| goal_progress(goals, name, manifest));
+    let complete = progress.as_ref().is_some_and(crate::goals::Progress::is_complete);
+    if let Err(refusal) = crate::goals::check_start(manifest, complete, *running) {
+        return Err(match refusal {
+            crate::goals::StartRefusal::AlreadyRunning => {
+                render::wording::loop_already_running(name)
+            }
+            crate::goals::StartRefusal::Unknown => {
+                broken.unwrap_or_else(|| render::wording::loop_unknown_goal(name))
+            }
+            crate::goals::StartRefusal::NoWork => render::wording::loop_no_work(name),
+        });
+    }
+    let manifest = manifest.expect("check_start 放行就意味着清单在");
+    let progress = progress.expect("清单在就有进度");
+
+    // 归属先落流：进度重算、预算与恢复都从它派生（§4、§8、§10）。
+    if let Err(error) = harness.select_goal(name) {
+        return Err(render::wording::error_report(&error));
+    }
+    // 清单是封闭的，所以模型得在开跑时就知道上面有哪些条目 —— 它不能往里加东西，只能按 id
+    // 标完成（§1、§3）。
+    if let Err(error) =
+        harness.inject_context(crate::events::ContextSource::Goal, &manifest.render())
+    {
+        return Err(render::wording::error_report(&error));
+    }
+    harness.notice(&render::wording::goal_loop_started(
+        name,
+        progress.completed(),
+        progress.total(),
+    ));
+    // 越界的 id 被忽略，但绝不静默（§3）：沉默会让模型以为它记下了。
+    if !progress.unknown.is_empty() {
+        harness.notice(&render::wording::goal_unknown_ids(name, &progress.unknown));
+    }
+
+    // 一个回合接一个回合。手势的作用域是一次运行，所以每个回合开始时信号都会复位 —— 因此
+    // 「停」要在回合刚结束的那一刻读一次，否则一次取消会被下一个回合悄悄吃掉。
+    *running = true;
+    loop {
+        if harness.cancel_signal().is_cancelled() {
+            break;
+        }
+        if let Err(error) = run_one_turn(harness, events, TurnStart::Injected).await {
+            *running = false;
+            return Err(render::wording::error_report(&error));
+        }
+        if harness.cancel_signal().is_cancelled() {
+            break;
+        }
+    }
+    *running = false;
+    harness.notice(&render::wording::goal_loop_stopped(name));
+    Ok(())
+}
+
+/// 一个目标当下的进度：扫本桶，按归属筛出属于它的会话，再把它们的 `todo` 调用合并起来
+/// （§3、§4）。
+///
+/// 派生的，不新增任何状态文件 —— 与日账本扫会话文件是同一条路。
+fn goal_progress(goals: &GoalSetup, name: &str, manifest: &crate::goals::Manifest) -> crate::goals::Progress {
+    let Ok(sessions) = goals.store.list(&goals.cwd) else {
+        return crate::goals::progress(&manifest.entries, &[]);
+    };
+    let mut calls = Vec::new();
+    for session in sessions {
+        let Ok(events) = read_events(&session.log_path) else {
+            continue;
+        };
+        if !crate::goals::has_goal(&events, name) {
+            continue;
+        }
+        calls.extend(crate::goals::todo_calls(&events));
+    }
+    crate::goals::progress(&manifest.entries, &calls)
+}
+
+/// 解析 `/loop` 的参数：一个目标名字，一个不断开的词。
+fn parse_loop_line(args: &str) -> Result<String, String> {
+    let name = args.trim();
+    if name.is_empty() || name.split_whitespace().count() != 1 {
+        return Err(render::wording::loop_usage().to_owned());
+    }
+    Ok(name.to_owned())
+}
+
 /// 循环即将驱动的那个回合由什么起头。
 enum TurnStart<'a> {
     /// 用户打的 prompt：它成为一条 `user` 消息，然后回合跑起来。
@@ -1338,6 +1494,8 @@ enum TurnStart<'a> {
     /// 光秃秃的 `/<skill>`：[`Harness::run_skill`] 加载正文，它自己就投影成一条 `user` 消息，所以
     /// 为它凭空造一条 prompt 是不对的。转录绝不能显示用户没打过的字。
     Skill(&'a str),
+    /// 目标循环的一个回合：起头的是刚刚注入的那条上下文（清单、提醒或摘要）。
+    Injected,
 }
 
 /// 跑一个回合，同时仍然盯着取消手势。
@@ -1356,6 +1514,7 @@ async fn run_one_turn(
         match start {
             TurnStart::Prompt(input) => harness.run_turn(input).await,
             TurnStart::Skill(name) => harness.run_skill(name).await,
+            TurnStart::Injected => harness.run_injected_turn().await,
         }
     });
     loop {
@@ -2925,6 +3084,27 @@ mod tests {
         assert_eq!(
             read("/goal new sandbox .scratch/sandbox\n"),
             Submission::Goal("new sandbox .scratch/sandbox".to_owned())
+        );
+    }
+
+    // --- `/loop <名字>`（`.scratch/goal-loop/spec.md` §4） ---------------------
+
+    use super::parse_loop_line;
+
+    #[test]
+    fn loop_takes_exactly_one_name() {
+        assert_eq!(parse_loop_line(" sandbox ").unwrap(), "sandbox");
+        assert_eq!(read("/loop sandbox"), Submission::Loop("sandbox".to_owned()));
+
+        // 名字是一个不断开的词，所以一个都没有、多出一个都是用法错误 —— 而这条命令读到的
+        // 是整条提交，与 `/discuss`、`/goal` 同一条规矩。
+        for args in ["", "   ", "sandbox extra", "两个 词"] {
+            let message = parse_loop_line(args).unwrap_err();
+            assert!(message.contains("/loop"), "`{args}`：{message}");
+        }
+        assert_eq!(
+            read("/loop sandbox\n"),
+            Submission::Loop("sandbox".to_owned())
         );
     }
 }

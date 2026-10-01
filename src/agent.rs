@@ -288,6 +288,26 @@ pub fn record_context_injection_from(
     )
 }
 
+/// 记下这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
+///
+/// 一条只追加的事件，别的什么都不写：当前目标是「流上最后一条 `GoalSelected`」
+/// （[`crate::events::current_goal`]），所以切换目标就是再记一条，而 `--continue` 之后归属
+/// 自然重建。
+pub fn record_goal_selected(
+    session: &mut Session,
+    render: &RenderHandle,
+    goal: &str,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::GoalSelected {
+            goal: goal.to_owned(),
+        },
+    )
+}
+
 /// 为 `speaker` 跑完整整一个回合，并返回它为什么停下。
 ///
 /// `scope` 是这个回合能看到多少流。它只会*去掉*另一个讨论者同轮的事件，所以单 agent 回合传

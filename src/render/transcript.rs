@@ -405,6 +405,10 @@ impl Transcript {
             }
             // 会话骨架不是一个人会实时读的叙述；沙箱状态按上下文注入那一档画一行。
             EventPayload::SessionStarted { .. } => {}
+            // 归属也是**只进日志**的记账：给人看的那一句由循环发（「开始做目标 <名字>」），而这
+            // 条事件说的是这个会话在为谁干活。清单本身以一次上下文注入到达，那一行由
+            // `ContextInjected` 画出来。
+            EventPayload::GoalSelected { .. } => {}
             EventPayload::SandboxStatus {
                 mode,
                 unavailable_reason,

@@ -811,6 +811,30 @@ impl Harness {
         self.session.cwd()
     }
 
+    /// 记下这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
+    ///
+    /// 归属是一条只追加的事件，所以当前目标永远是「流上最后一条」，而切换目标就是再记一条。
+    pub fn select_goal(&mut self, goal: &str) -> Result<(), Error> {
+        agent::record_goal_selected(&mut self.session, &self.render, goal)
+    }
+
+    /// 往这场会话的上下文尾部注入一段内容。
+    ///
+    /// 目标清单（§4）、压缩摘要（§7）与过半提醒（§6）都走这一条：注入是**一等事件**，所以
+    /// 它进流、可重放，`--continue` 之后还在。它自己投影成一条 `user` 消息，所以模型看见的
+    /// 就是这段内容 —— 转录里也不会出现用户没打过的字。
+    pub fn inject_context(&mut self, source: ContextSource, content: &str) -> Result<(), Error> {
+        agent::record_context_injection(&mut self.session, &self.render, source, content)
+    }
+
+    /// 跑一个回合，起头的是**刚刚注入的那条上下文**。
+    ///
+    /// 与 [`run_skill`](Self::run_skill) 同一条形：注入已经投影成一条 `user` 消息，所以为它再
+    /// 造一条 prompt 是替用户说话。
+    pub async fn run_injected_turn(&mut self) -> Result<TurnOutcome, Error> {
+        self.drive_turn().await
+    }
+
     /// 对前端说一句不属于任何事件的话：启动横幅，以及交互式循环那些朴素的反馈。
     ///
     /// 它走渲染通道而不是直接写终端，因为从组装那一刻起终端归渲染器：第二个写者会插进

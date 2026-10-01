@@ -1,7 +1,7 @@
 # 归属：`GoalSelected` 与 `/loop` 的启动
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：`.scratch/goal-loop/spec.md` §4（归属与 `/loop` 的启动）。

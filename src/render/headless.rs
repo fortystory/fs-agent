@@ -99,6 +99,9 @@ impl Render for Headless {
                     let speaker = &event.speaker_id;
                     match &event.payload {
                         EventPayload::SessionStarted { .. } => {}
+                        // 归属只说这个会话在为谁干活，没有给人看的进展可报 —— 清单与进度在
+                        // 交互式那一侧；这里与上下文注入同一档，什么都不说。
+                        EventPayload::GoalSelected { .. } => {}
                         // 与上下文注入同一档：一行诊断（模型上下文里没有它）。
                         EventPayload::SandboxStatus {
                             mode,

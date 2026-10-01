@@ -205,6 +205,11 @@ pub enum ContextSource {
     /// 与其他每一种注入不同，这一条**只属于它那个参与者**：它以那个讨论者为发言归属
     /// 记下来，投影也只发给它自己，因为它描述的是争论的一方。
     Persona(ParticipantId),
+    /// 这个会话在照做的那份**目标清单**（`.scratch/goal-loop/spec.md` §4）。
+    ///
+    /// 循环在选定目标之后注入一次：清单是封闭的，所以模型得在开跑时就知道上面有哪些条目
+    /// —— 它不能往里加东西，只能按 id 标完成。
+    Goal,
 }
 
 /// 一次讨论轮次跑在哪一档。
@@ -296,6 +301,16 @@ pub enum EventPayload {
     },
     SessionEnded {
         reason: StopReason,
+    },
+    /// 这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
+    ///
+    /// **只追加**，所以**当前目标 = 流上最后一条** —— 切换目标天然就是再记一条，与 `todo`
+    /// 同一条派生纪律（[`current_goal`]），`--continue` 之后自然重建。
+    ///
+    /// **log-only**：投影不把它变成任何一条 `messages`，所以钉住的前缀逐字不变。`goal` 是
+    /// 标识符（清单文件的名字），不是散文。
+    GoalSelected {
+        goal: String,
     },
     // 讨论协议（只占槽位；时序由协议决定）。
     RoundStarted {
@@ -393,6 +408,7 @@ impl EventPayload {
             EventPayload::ContextInjected { .. } => "ContextInjected",
             EventPayload::SandboxStatus { .. } => "SandboxStatus",
             EventPayload::SessionEnded { .. } => "SessionEnded",
+            EventPayload::GoalSelected { .. } => "GoalSelected",
             EventPayload::RoundStarted { .. } => "RoundStarted",
             EventPayload::RoundEnded { .. } => "RoundEnded",
             EventPayload::DivergenceRecorded { .. } => "DivergenceRecorded",
@@ -426,6 +442,7 @@ impl EventPayload {
         match self {
             EventPayload::SessionStarted { .. }
             | EventPayload::SessionEnded { .. }
+            | EventPayload::GoalSelected { .. }
             | EventPayload::RoundStarted { .. }
             | EventPayload::RoundEnded { .. }
             | EventPayload::TurnStarted { .. }
@@ -722,7 +739,19 @@ pub fn superseded_seqs(events: &[Event]) -> BTreeSet<u64> {
     retired
 }
 
-/// 查询：有哪些 `tool_call` 还没有结果？
+/// 查询：这条流上的当前目标 —— 最后一条 `GoalSelected` 的名字（`.scratch/goal-loop/spec.md`
+/// §4）。
+///
+/// 归属是派生的，不是存下来的：`--continue`、`sessions replay` 与一个刚开始的循环问的是同一个
+/// 问题，读的也是同一条规则。
+pub fn current_goal(events: &[Event]) -> Option<&str> {
+    events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::GoalSelected { goal } => Some(goal.as_str()),
+        _ => None,
+    })
+}
+
+/// 查询：一次 `tool_call` 还没有结果？
 ///
 /// 待办的工作是对事件流的一次查询，绝不是藏起来的循环状态。只要这个非空，回合循环就
 /// 不能调 provider。这个会话级的形式是给诊断与 `--continue` 恢复用的；循环用的是

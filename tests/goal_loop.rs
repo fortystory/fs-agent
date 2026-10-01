@@ -1,0 +1,422 @@
+//! 目标循环：归属、`/loop` 的启动边界与从流派生的进度
+//! （`.scratch/goal-loop/spec.md` §3、§4）。
+//!
+//! 这里断言的两种东西都在**事件流**与**纯函数**上：归属是流上的一条只追加事件，进度是它的
+//! 一次派生 —— 没有第二处存储要照看。
+
+mod support;
+
+use std::path::{Path, PathBuf};
+
+use chrono::{TimeZone, Utc};
+use fs_agent::config::SessionConfig;
+use fs_agent::events::{
+    current_goal, read_events, ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId,
+};
+use fs_agent::goals::{
+    self, check_start, progress, Manifest, Progress, StartRefusal, TodoCall,
+};
+use fs_agent::permissions::{Mode, Policy};
+use fs_agent::provider::{FinishReason, StreamEvent};
+use fs_agent::render::{RenderSinks, Renderer};
+use fs_agent::tools::{builtin, todo, PathLocks};
+use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use support::{CaptureBuf, FakeProvider, Reply};
+
+// --- 一场会话 --------------------------------------------------------------
+
+/// 一场真会话，外加它那份 JSONL 的路径 —— `sessions replay` 读的就是它。
+struct Session {
+    harness: Harness,
+    log_path: PathBuf,
+}
+
+/// 一个模型照脚本行事的会话，挂在 `root` 下的一个会话目录里。
+async fn session(root: &Path, id: &str, replies: Vec<Reply>) -> Session {
+    let session_dir = root.join(id);
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let log_path = session_dir.join("log.jsonl");
+    let harness = assemble(AssemblyParts {
+        provider: Box::new(FakeProvider::new(replies)),
+        speaker: SpeakerId::Debater("kimi".into()),
+        config: SessionConfig::new("fake-model"),
+        renderer: Renderer::headless(RenderSinks {
+            stdout_result: Box::new(CaptureBuf::default()),
+            stderr_diagnostic: Box::new(CaptureBuf::default()),
+        }),
+        scaffold: SessionScaffold {
+            cwd: workspace,
+            log_path: log_path.clone(),
+            session_id: SessionId::new(id),
+            tools: builtin(false),
+            locks: PathLocks::new(),
+            policy: Policy::for_mode(Mode::Auto),
+            asker: None,
+            questions: None,
+            hook: None,
+            home: None,
+        },
+    })
+    .await
+    .unwrap();
+    Session { harness, log_path }
+}
+
+impl Session {
+    /// 这条流，按磁盘上写下的样子 —— 也就是重放读到的那些。
+    fn events(&self) -> Vec<Event> {
+        read_events(&self.log_path).unwrap()
+    }
+}
+
+/// 一次 `todo` 调用的脚本：它带 `id` 引用清单条目。
+fn todo_reply(id: &str, args: &serde_json::Value) -> Reply {
+    Reply::Stream(vec![
+        StreamEvent::ToolCallCompleted {
+            index: 0,
+            id: id.into(),
+            name: todo::TODO_TOOL.into(),
+            arguments: args.to_string(),
+        },
+        StreamEvent::Finished {
+            finish_reason: FinishReason::ToolCalls,
+        },
+    ])
+}
+
+fn items(items: &[(&str, &str, &str)]) -> serde_json::Value {
+    serde_json::json!({
+        "items": items
+            .iter()
+            .map(|(id, content, status)| {
+                serde_json::json!({ "id": id, "content": content, "status": status })
+            })
+            .collect::<Vec<_>>()
+    })
+}
+
+fn goals_in(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::GoalSelected { goal } => Some(goal.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// --- `/loop` 的启动边界（§4） ----------------------------------------------
+
+#[test]
+fn the_three_start_refusals_each_say_their_own_thing() {
+    let manifest = Manifest {
+        name: "sandbox".to_owned(),
+        entries: vec![goals::Entry {
+            id: "01".to_owned(),
+            content: "一件事".to_owned(),
+        }],
+    };
+
+    // 清单不在：说找不到，并提示先 `/goal new`。
+    assert_eq!(
+        check_start(None, false, false),
+        Err(StartRefusal::Unknown)
+    );
+    let text = fs_agent::render::wording::loop_unknown_goal("sandbox");
+    assert!(text.contains("sandbox"), "{text}");
+    assert!(text.contains("/goal new"), "提示先建清单：{text}");
+
+    // 全部完成：说没活可干。
+    assert_eq!(
+        check_start(Some(&manifest), true, false),
+        Err(StartRefusal::NoWork)
+    );
+    assert!(fs_agent::render::wording::loop_no_work("sandbox").contains("没活可干"));
+
+    // 已经有一个 loop 在跑：说正在跑 —— 而且它最先判，与另一个名字好不好无关。
+    assert_eq!(
+        check_start(Some(&manifest), false, true),
+        Err(StartRefusal::AlreadyRunning)
+    );
+    assert_eq!(check_start(None, true, true), Err(StartRefusal::AlreadyRunning));
+    assert!(fs_agent::render::wording::loop_already_running("sandbox").contains("正在跑"));
+
+    // 三条都过了才放行。
+    assert_eq!(check_start(Some(&manifest), false, false), Ok(()));
+}
+
+// --- 归属是一条只追加的事件（§4） ------------------------------------------
+
+#[tokio::test]
+async fn selecting_a_goal_appends_one_event_and_the_stream_says_which_goal_is_current() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session(dir.path(), "s-a", Vec::new()).await;
+
+    session.harness.select_goal("foo").unwrap();
+    let events = session.events();
+    assert_eq!(goals_in(&events), ["foo"]);
+    assert_eq!(current_goal(&events), Some("foo"));
+
+    // 切换就是再记一条：不是一个字段被改写，所以两条都在流上。
+    session.harness.select_goal("bar").unwrap();
+    let events = session.events();
+    assert_eq!(goals_in(&events), ["foo", "bar"]);
+    assert_eq!(
+        current_goal(&events),
+        Some("bar"),
+        "当前目标 = 流上最后一条，所以重放算出来的就是它"
+    );
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_goal_is_visible_to_a_replay_of_the_written_stream_without_any_other_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session(dir.path(), "s-b", Vec::new()).await;
+    session.harness.select_goal("sandbox").unwrap();
+    session.harness.shutdown().await;
+
+    // 重新从磁盘读一遍：`sessions replay` 与 `--continue` 走的就是这条路。
+    let replayed = read_events(&session.log_path).unwrap();
+    assert_eq!(current_goal(&replayed), Some("sandbox"));
+    assert!(goals::has_goal(&replayed, "sandbox"));
+    assert!(!goals::has_goal(&replayed, "other"));
+}
+
+#[test]
+fn a_goal_selected_event_has_a_stable_kind_and_its_name_is_an_identifier_not_prose() {
+    let payload = EventPayload::GoalSelected {
+        goal: "sandbox".to_owned(),
+    };
+    assert_eq!(payload.kind(), "GoalSelected");
+
+    // 名字是键、不是散文：打码不碰它（打码走的是 `redact` 的穷尽匹配）。
+    let redactor = Redactor::new(["super-secret-key-value".to_owned()]);
+    let mut payload = EventPayload::GoalSelected {
+        goal: "super-secret-key-value".to_owned(),
+    };
+    payload.redact(&redactor);
+    match payload {
+        EventPayload::GoalSelected { goal } => assert_eq!(goal, "super-secret-key-value"),
+        other => panic!("期望还是那条归属，得到 {other:?}"),
+    }
+}
+
+// --- 进度：从各会话的 `todo` 调用派生（§3） --------------------------------
+
+fn entries(ids: &[&str]) -> Vec<goals::Entry> {
+    ids.iter()
+        .map(|id| goals::Entry {
+            id: (*id).to_owned(),
+            content: format!("条目 {id}"),
+        })
+        .collect()
+}
+
+fn at(hour: i64) -> chrono::DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 10, 1, hour as u32, 0, 0)
+        .unwrap()
+}
+
+fn call(session_at: chrono::DateTime<Utc>, seq: u64, args: serde_json::Value) -> TodoCall {
+    TodoCall {
+        session_at,
+        seq,
+        items: todo::read_items(&args),
+    }
+}
+
+#[test]
+fn a_goal_carries_completion_across_sessions() {
+    // 会话 1 把 `03` 标成完成；会话 2 的列表里根本没有它 —— 它仍然是完成的。这正是「一个
+    // 目标跨几个会话」要保住的信息。
+    let manifest = entries(&["01", "02", "03"]);
+    let calls = [
+        call(
+            at(10),
+            1,
+            items(&[("01", "一", "completed"), ("03", "三", "completed")]),
+        ),
+        call(at(11), 1, items(&[("02", "二", "in_progress")])),
+    ];
+    let derived = progress(&manifest, &calls);
+
+    assert_eq!(derived.total(), 3);
+    assert_eq!(derived.completed(), 2);
+    assert!(!derived.is_complete());
+    assert!(derived.unknown.is_empty());
+
+    // 会话 2 再把 `02` 补完，目标就完成了。
+    let calls = [
+        calls[0].clone(),
+        call(at(11), 1, items(&[("02", "二", "completed")])),
+    ];
+    let derived = progress(&manifest, &calls);
+    assert_eq!(derived.completed(), 3);
+    assert!(derived.is_complete(), "所有条目 completed 就是完成");
+}
+
+#[test]
+fn the_latest_call_wins_and_an_entry_nobody_mentioned_stays_pending() {
+    let manifest = entries(&["01", "02"]);
+
+    // 同一条目在后续调用里被改回 `pending`：以最新的为准。
+    let calls = [
+        call(at(10), 1, items(&[("01", "一", "completed")])),
+        call(at(10), 2, items(&[("01", "一", "pending")])),
+    ];
+    let derived = progress(&manifest, &calls);
+    assert_eq!(derived.statuses["01"], todo::Status::Pending);
+    assert_eq!(
+        derived.statuses["02"],
+        todo::Status::Pending,
+        "一条都没提过的条目是 pending（清单是封闭的，所以它始终存在）"
+    );
+}
+
+#[test]
+fn the_merge_order_is_session_time_first_then_the_seq_inside_it() {
+    // 更晚的会话赢，哪怕它的 seq 更小：排序键是（会话时间，seq）。
+    let manifest = entries(&["01"]);
+    let calls = [
+        call(at(12), 1, items(&[("01", "一", "pending")])),
+        call(at(10), 9, items(&[("01", "一", "completed")])),
+    ];
+    assert_eq!(progress(&manifest, &calls).statuses["01"], todo::Status::Pending);
+
+    // 同一场会话里按 seq（大的后落地）：与它们在调用方那边的顺序无关。
+    let calls = [
+        call(at(10), 9, items(&[("01", "一", "completed")])),
+        call(at(10), 1, items(&[("01", "一", "pending")])),
+    ];
+    assert_eq!(
+        progress(&manifest, &calls).statuses["01"],
+        todo::Status::Completed,
+        "会话 10 点这一场里，seq 9 是后落地的那份列表"
+    );
+    let calls = [
+        call(at(10), 1, items(&[("01", "一", "completed")])),
+        call(at(10), 9, items(&[("01", "一", "pending")])),
+    ];
+    assert_eq!(progress(&manifest, &calls).statuses["01"], todo::Status::Pending);
+
+    // 时间打平时（同一秒铸出的两场会话）仍然有确定的先后。
+    let tie = [call(at(10), 1, items(&[("01", "一", "completed")]))];
+    assert!(progress(&manifest, &tie).is_complete());
+}
+
+#[test]
+fn an_id_that_is_not_on_the_manifest_is_ignored_but_never_silently() {
+    // 沉默会让模型以为它记下了，所以越界的 id 被收下来，留给转录说一句。
+    let manifest = entries(&["01"]);
+    let calls = [call(
+        at(10),
+        1,
+        items(&[("01", "一", "completed"), ("07", "清单外的一件事", "completed")]),
+    )];
+    let derived = progress(&manifest, &calls);
+
+    assert_eq!(derived.total(), 1);
+    assert_eq!(derived.unknown, ["07"]);
+    assert_eq!(derived.completed(), 1, "越界的 id 不改变任何条目的状态");
+    assert!(derived.is_complete());
+
+    // 那一行说给模型听，点名是哪些 id，也点名清单是封闭的、新工作该走哪儿。
+    let line = fs_agent::render::wording::goal_unknown_ids("sandbox", &derived.unknown);
+    assert!(line.contains("07"), "{line}");
+    assert!(line.contains("goal_note"), "{line}");
+}
+
+#[test]
+fn a_call_without_ids_contributes_nothing_but_is_not_an_error() {
+    // 老调用（没有 id）照常解析，只是对目标进度没有贡献。
+    let manifest = entries(&["01"]);
+    let calls = [call(
+        at(10),
+        1,
+        serde_json::json!({ "items": [{ "content": "没有 id 的一项", "status": "completed" }] }),
+    )];
+    let derived = progress(&manifest, &calls);
+    assert_eq!(derived.completed(), 0);
+    assert!(!derived.is_complete());
+    assert!(derived.unknown.is_empty());
+}
+
+#[tokio::test]
+async fn two_sessions_on_one_goal_recompute_the_second_ones_progress_from_the_first() {
+    // 会话 A 做完一条、落流；会话 B 接着干。B 的进度是**两条流合起来**算出来的。
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = entries(&["01", "02"]);
+
+    let mut first = session(
+        dir.path(),
+        "s-1",
+        vec![
+            todo_reply("call-1", &items(&[("01", "一", "completed")])),
+            Reply::text("记下了"),
+        ],
+    )
+    .await;
+    first.harness.select_goal("sandbox").unwrap();
+    first
+        .harness
+        .inject_context(ContextSource::Goal, "# sandbox\n")
+        .unwrap();
+    first.harness.run_injected_turn().await.unwrap();
+    let first_events = first.events();
+    first.harness.shutdown().await;
+
+    let mut second = session(dir.path(), "s-2", Vec::new()).await;
+    second.harness.select_goal("sandbox").unwrap();
+    let mut calls = goals::todo_calls(&first_events);
+    calls.extend(goals::todo_calls(&second.events()));
+    let derived = progress(&manifest, &calls);
+
+    assert_eq!(
+        derived.statuses["01"],
+        todo::Status::Completed,
+        "会话 2 一句话没说，会话 1 的完成也还在"
+    );
+    assert_eq!(derived.statuses["02"], todo::Status::Pending);
+    assert_eq!(derived.completed(), 1);
+
+    second.harness.shutdown().await;
+}
+
+// --- 会话桶里的归属筛（§4） -------------------------------------------------
+
+#[test]
+fn only_the_sessions_that_claimed_the_goal_count_for_it() {
+    let claimed = [
+        fs_agent::events::Event::new(
+            1,
+            SpeakerId::System,
+            EventPayload::GoalSelected {
+                goal: "sandbox".to_owned(),
+            },
+        ),
+        fs_agent::events::Event::new(2, SpeakerId::System, EventPayload::SessionEnded {
+            reason: fs_agent::events::StopReason::Completed,
+        }),
+    ];
+    let other = [fs_agent::events::Event::new(
+        1,
+        SpeakerId::System,
+        EventPayload::GoalSelected {
+            goal: "grep-tool".to_owned(),
+        },
+    )];
+
+    assert!(goals::has_goal(&claimed, "sandbox"));
+    assert!(!goals::has_goal(&claimed, "grep-tool"));
+    assert!(!goals::has_goal(&other, "sandbox"));
+    assert_eq!(current_goal(&other), Some("grep-tool"));
+    // 时间戳只用来排序，这里顺手确认派生对空调用是安全的。
+    assert_eq!(progress(&entries(&["01"]), &[]), Progress {
+        statuses: [("01".to_owned(), todo::Status::Pending)].into_iter().collect(),
+        unknown: Vec::new(),
+    });
+}

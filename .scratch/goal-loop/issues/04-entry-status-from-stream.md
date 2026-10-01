@@ -1,7 +1,7 @@
 # 条目状态从流派生
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 02, 03
 
 > 规格：`.scratch/goal-loop/spec.md` §3（状态派生与合并规则）。

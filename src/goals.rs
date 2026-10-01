@@ -8,8 +8,14 @@
 //! 清单**开工前封闭**：`/goal new` 生成一次，此后它与来源票各自独立。执行中冒出来的新工作
 //! 由模型用 `goal_note` 记（§11），不回头改这份文件。
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Utc};
+
+use crate::events::{Event, EventPayload};
+use crate::tools::todo::{self, Item, Status};
 
 /// 一个条目 id 的位数。两位十进制、从 `01` 起（§1）。
 const ID_DIGITS: usize = 2;
@@ -378,3 +384,143 @@ fn ticket_title(path: &Path) -> Result<String, GoalError> {
     }
     Ok(title)
 }
+
+// --- 进度：从各会话的 `todo` 调用派生（§3） --------------------------------
+
+/// 一条 `todo` 调用在流上的样子。
+///
+/// 真相源是那条 `tool_call` 的参数（与 `todo` 同构），所以派生只需要事件切片 —— 不读文件、
+/// 不读环境。`session_at` 是**这个调用所在会话**的开场时刻，跨会话排序的第一把钥匙。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TodoCall {
+    pub session_at: DateTime<Utc>,
+    pub seq: u64,
+    pub items: Vec<Item>,
+}
+
+/// 从一条流上读出它所有的 `todo` 调用，按 `seq`。
+///
+/// 会话的开场时刻取这条流第一件事的时间：它只用来在跨会话合并时定先后，而一场会话自己的
+/// 内部顺序由 `seq` 定。
+pub fn todo_calls(events: &[Event]) -> Vec<TodoCall> {
+    let session_at = events.first().map(|event| event.at).unwrap_or_else(Utc::now);
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::ToolCallStarted {
+                tool_name, args, ..
+            } if tool_name == todo::TODO_TOOL => Some(TodoCall {
+                session_at,
+                seq: event.seq,
+                items: todo::read_items(args),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 这条流有没有认领某个目标（§4 的归属筛）。
+pub fn has_goal(events: &[Event], goal: &str) -> bool {
+    events.iter().any(|event| {
+        matches!(&event.payload, EventPayload::GoalSelected { goal: claimed } if claimed == goal)
+    })
+}
+
+/// 一个目标当下的进度：每个条目的状态，以及那些引用了清单外 id 的调用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Progress {
+    /// 每个条目 id 的最新状态。清单是封闭的，所以这里的键就是清单的全部条目。
+    pub statuses: BTreeMap<String, Status>,
+    /// `todo` 里出现、而清单里没有的 id：**忽略它，但不静默**（§3）。
+    pub unknown: Vec<String>,
+}
+
+impl Progress {
+    pub fn completed(&self) -> usize {
+        self.statuses
+            .values()
+            .filter(|status| **status == Status::Completed)
+            .count()
+    }
+
+    pub fn total(&self) -> usize {
+        self.statuses.len()
+    }
+
+    /// 全部条目都 `completed` 就算完成 —— 机械判据，不需要人点头。
+    ///
+    /// 信任假设：`completed` 是**模型自己填的**，所以判据机械**不等于**结果可靠。一条条目都没
+    /// 有的清单也算完成（没活可干），而 `/goal new` 从不生成这样的清单。
+    pub fn is_complete(&self) -> bool {
+        self.statuses
+            .values()
+            .all(|status| *status == Status::Completed)
+    }
+}
+
+/// 合并一个目标横跨的所有会话说出的状态（§3）。
+///
+/// **按 id 取最新**，排序键是（会话时间，`seq`）。所以「会话 1 把 `03` 标成完成、会话 2 的
+/// `todo` 里根本没有 `03`」仍然算完成 —— 那正是「一个目标跨几个会话」要保住的信息。一条都
+/// 没被提过的条目是 `pending`。
+pub fn progress(entries: &[Entry], calls: &[TodoCall]) -> Progress {
+    let mut statuses: BTreeMap<String, Status> = entries
+        .iter()
+        .map(|entry| (entry.id.clone(), Status::Pending))
+        .collect();
+    let mut unknown: Vec<String> = Vec::new();
+
+    let mut ordered: Vec<&TodoCall> = calls.iter().collect();
+    ordered.sort_by(|left, right| {
+        left.session_at
+            .cmp(&right.session_at)
+            .then_with(|| left.seq.cmp(&right.seq))
+    });
+    for call in ordered {
+        for item in &call.items {
+            let Some(id) = item.id.as_deref() else {
+                continue;
+            };
+            match statuses.get_mut(id) {
+                Some(slot) => *slot = item.status,
+                None if !unknown.iter().any(|seen| seen == id) => unknown.push(id.to_owned()),
+                None => {}
+            }
+        }
+    }
+    Progress { statuses, unknown }
+}
+
+// --- `/loop` 的启动边界（§4） ----------------------------------------------
+
+/// `/loop <名字>` 为什么不启动。
+///
+/// 三种边界各说各的人话，而且**都在写任何事件之前**判 —— 一次被拒的启动在流上不留痕迹。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartRefusal {
+    /// 清单文件找不到：提示先 `/goal new`。
+    Unknown,
+    /// 所有条目都完成了：没活可干。
+    NoWork,
+    /// 这个会话已经有一个 loop 在跑。
+    AlreadyRunning,
+}
+
+/// 判三条启动边界。
+///
+/// 顺序上「已经有一个 loop 在跑」最先：那是这个会话此刻的状态，与另一个名字好不好无关。
+pub fn check_start(
+    manifest: Option<&Manifest>,
+    complete: bool,
+    running: bool,
+) -> Result<(), StartRefusal> {
+    if running {
+        return Err(StartRefusal::AlreadyRunning);
+    }
+    match manifest {
+        None => Err(StartRefusal::Unknown),
+        Some(_) if complete => Err(StartRefusal::NoWork),
+        Some(_) => Ok(()),
+    }
+}
+

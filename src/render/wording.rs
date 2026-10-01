@@ -1002,6 +1002,7 @@ pub fn context_source(source: &ContextSource) -> String {
         // 唯一一条只属于**一个**参与者的注入，所以它说出是哪个：读转录的人应该看到谁被
         // 给了人物设定。
         ContextSource::Persona(name) => format!("人物：{name}"),
+        ContextSource::Goal => "目标清单".to_owned(),
     }
 }
 
@@ -1455,7 +1456,7 @@ pub struct Command {
 }
 
 /// 内建的斜杠命令，按每一份列表显示它们的顺序。
-pub static BUILT_IN_COMMANDS: [Command; 4] = [
+pub static BUILT_IN_COMMANDS: [Command; 5] = [
     Command {
         name: "undo",
         description: "回滚上一次编辑",
@@ -1467,6 +1468,10 @@ pub static BUILT_IN_COMMANDS: [Command; 4] = [
     Command {
         name: "goal",
         description: "从一批票生成一份目标清单：`/goal new <名字> <来源>`",
+    },
+    Command {
+        name: "loop",
+        description: "选定目标并连续工作：`/loop <名字>`",
     },
     Command {
         name: "quit",
@@ -1495,6 +1500,50 @@ pub fn goal_created(name: &str, entries: usize, path: &str) -> String {
 /// 没有数据目录时，`/goal` 与 `/loop` 都无从下手。
 pub fn no_goal_dir() -> &'static str {
     "找不到数据目录（`XDG_DATA_HOME` 或 `HOME` 都没设），目标清单没地方放"
+}
+
+/// `/loop` 的用法。
+pub fn loop_usage() -> &'static str {
+    "用法：/loop <目标名字>"
+}
+
+/// `/loop` 的三条启动边界（`.scratch/goal-loop/spec.md` §4）。每一条各说各的人话。
+pub fn loop_unknown_goal(name: &str) -> String {
+    format!("找不到目标 {name}；先用 `/goal new {name} <feature 目录或票路径>` 生成一份清单")
+}
+
+/// 目标已经全部完成：没活可干。
+pub fn loop_no_work(name: &str) -> String {
+    format!("目标 {name} 的条目已经全部完成，没活可干")
+}
+
+/// 这个会话已经有一个 loop 在跑。
+pub fn loop_already_running(name: &str) -> String {
+    format!("一个 loop 正在跑（{name}）；要停就按 Esc")
+}
+
+/// 清单文件在、但读不出来时说的话：它是人手改过的文件。
+pub fn loop_broken_manifest(message: &str) -> String {
+    format!("目标清单读不了：{message}")
+}
+
+/// `/loop` 开跑了：目标名，以及从流派生出来的进度。
+pub fn goal_loop_started(name: &str, completed: usize, total: usize) -> String {
+    format!("开始做目标 {name}（已完成 {completed}/{total}）；要停就按 Esc")
+}
+
+/// `/loop` 停了，回到空闲态等人。
+pub fn goal_loop_stopped(name: &str) -> String {
+    format!("目标 {name} 的循环停了")
+}
+
+/// `todo` 引用了清单里没有的 id：忽略它，但**不静默** —— 沉默会让模型以为它记下了。
+pub fn goal_unknown_ids(name: &str, ids: &[String]) -> String {
+    format!(
+        "目标 {name} 的清单里没有这些条目 id：{}；它们被忽略了，但清单是封闭的，\
+         新工作请用 `goal_note` 记下",
+        ids.join("、")
+    )
 }
 
 /// 内建命令作为一行提示：`可用：/undo、/discuss、/quit`。

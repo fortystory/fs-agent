@@ -64,6 +64,10 @@ pub fn project(events: &[Event], speaker: &SpeakerId, caps: &ModelCaps) -> Vec<M
         match &event.payload {
             // 会话骨架：身份与 harness 记账保持私有。
             EventPayload::SessionStarted { .. } => {}
+            // 归属同样是**只进日志**的 harness 记账（`.scratch/goal-loop/spec.md` §4）：它说的
+            // 是这个会话在为谁干活，不是一句话。清单本身才是给模型看的那一条，它以
+            // `ContextInjected { source: Goal }` 进来。
+            EventPayload::GoalSelected { .. } => {}
             // 沙箱状态同样是**只进日志**的 harness 记账（沙箱 spec §8）：它既不是发言、也不是注入，
             // 所以投影是零 —— 这正是 replay 能看到它、而钉住的前缀不受它影响的原因。
             EventPayload::SandboxStatus { .. } => {}
