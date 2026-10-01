@@ -1,7 +1,7 @@
 # `todo` 项加一个可选 `id`
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：`.scratch/goal-loop/spec.md` §3（条目身份）。

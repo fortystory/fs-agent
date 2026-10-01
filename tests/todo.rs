@@ -250,6 +250,95 @@ fn the_list_a_reader_sees_is_the_arguments_of_the_call() {
     assert!(read_items(&json!({})).is_empty());
 }
 
+// --- 目标清单的条目 id（`.scratch/goal-loop/spec.md` §3） --------------------
+
+/// 一项在照做的计划：带 id 的引用清单条目，不带 id 的照旧。
+fn items_with_ids(list: &[(&str, &str, Option<&str>)]) -> serde_json::Value {
+    json!({
+        "items": list
+            .iter()
+            .map(|(content, status, id)| match id {
+                Some(id) => json!({ "id": id, "content": content, "status": status }),
+                None => json!({ "content": content, "status": status }),
+            })
+            .collect::<Vec<_>>()
+    })
+}
+
+#[test]
+fn an_item_may_carry_the_id_of_the_manifest_entry_it_is_working_on() {
+    let args = items_with_ids(&[
+        ("补测试", "completed", Some("03")),
+        ("老形状的一项", "pending", None),
+    ]);
+    let items = read_items(&args);
+
+    assert_eq!(items[0].id.as_deref(), Some("03"));
+    assert_eq!(items[0].content, "补测试");
+    assert_eq!(items[0].status, Status::Completed);
+    assert_eq!(items[1].id, None, "缺 `id` 照旧：老调用能原样解析");
+    assert_eq!(items[1].content, "老形状的一项");
+}
+
+#[tokio::test]
+async fn an_id_that_is_not_two_decimal_digits_is_a_model_readable_error() {
+    // 格式在这一票校验；**存在性不在** —— 工具不认识清单，越界的 id 由循环在派生进度时
+    // 忽略（但不静默）。
+    let fixture = Fixture::new();
+    for bad in ["3", "003", "ab", "", "01a", " 03"] {
+        let args = items_with_ids(&[("x", "pending", Some(bad))]);
+        let error = fixture
+            .text(args.clone())
+            .await
+            .expect_err(&format!("`{bad}` 会被拒"));
+        assert!(
+            error.contains("id") && error.contains("两位"),
+            "`{bad}`：这个理由说清是哪个字段、期望什么：{error}"
+        );
+        assert!(error.starts_with(TODO_TOOL), "{error}");
+    }
+    // 合法的那几个照常通过，包括边界上的 `01` 与 `99`。
+    for good in ["01", "99"] {
+        let args = items_with_ids(&[("x", "pending", Some(good))]);
+        assert_eq!(read_items(&args)[0].id.as_deref(), Some(good));
+    }
+}
+
+#[test]
+fn the_sidebar_shows_the_id_before_the_content() {
+    use fs_agent::events::ToolCallId;
+    use fs_agent::render::todo::TodoPanel;
+    use fs_agent::render::{Block, ToolBlock};
+    use ratatui::layout::Rect;
+
+    let mut panel = TodoPanel::default();
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: SpeakerId::Debater("kimi".into()),
+        tool_call_id: ToolCallId::new("call-1"),
+        tool: TODO_TOOL.to_owned(),
+        args: items_with_ids(&[
+            ("补测试", "completed", Some("03")),
+            ("没有 id 的一项", "pending", None),
+        ]),
+        outcome: None,
+    })));
+
+    let rows: Vec<String> = panel
+        .lines(Rect::new(0, 0, 28, 4))
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "✓ 03 补测试".to_owned(),
+            "☐ 没有 id 的一项".to_owned(),
+            "已完成 1/2".to_owned(),
+        ],
+        "有 id 的项在状态字形之后带上 id，没 id 的照旧；计数行不动"
+    );
+}
+
 #[test]
 fn a_later_call_in_the_same_message_is_the_one_in_force() {
     // 一条 assistant 消息里两次 `todo` 调用，就是两次 `ReadOnly`
@@ -463,6 +552,61 @@ async fn two_calls_in_one_message_each_get_a_result_and_the_last_list_wins() {
     let in_force = read_items(lists.last().unwrap());
     assert_eq!(in_force[0].content, "新的");
     assert_eq!(in_force[0].status, Status::Completed);
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_real_session_keeps_the_id_in_the_arguments_and_the_sidebar_reads_it_back() {
+    use fs_agent::events::ToolCallId;
+    use fs_agent::render::todo::TodoPanel;
+    use fs_agent::render::{Block, ToolBlock};
+    use ratatui::layout::Rect;
+
+    let args = items_with_ids(&[
+        ("补测试", "completed", Some("03")),
+        ("写文档", "in_progress", Some("04")),
+    ]);
+    let mut session = session(vec![todo_reply("call-1", &args), Reply::text("好")]).await;
+    session.harness.run_turn("开工").await.unwrap();
+
+    let started = session
+        .events()
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ToolCallStarted {
+                tool_name, args, ..
+            } if tool_name == TODO_TOOL => Some(args.clone()),
+            _ => None,
+        })
+        .expect("流上扛着这次调用");
+    assert_eq!(
+        started, args,
+        "id 就在那次调用的参数里 —— 清单的进度正是从这里重算的"
+    );
+
+    // 侧栏读到的是同一份 args：它不认识清单，只是把 id 画出来。
+    let mut panel = TodoPanel::default();
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: SpeakerId::Debater("kimi".into()),
+        tool_call_id: ToolCallId::new("call-1"),
+        tool: TODO_TOOL.to_owned(),
+        args: started,
+        outcome: None,
+    })));
+    let rows: Vec<String> = panel
+        .lines(Rect::new(0, 0, 28, 4))
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "✓ 03 补测试".to_owned(),
+            "▸ 04 写文档".to_owned(),
+            "已完成 1/2".to_owned(),
+        ]
+    );
 
     session.harness.shutdown().await;
 }

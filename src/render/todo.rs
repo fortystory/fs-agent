@@ -93,10 +93,15 @@ impl TodoPanel {
     }
 }
 
-/// 一个条目的行：先它的状态字形，再它的内容，按页宽裁掉。
+/// 一个条目的行：先它的状态字形，再（有的话）它的目标条目 id，再它的内容，按页宽裁掉。
+///
+/// 带 id 的项写成 `✓ 03 补测试`：id 是它引用目标清单哪一条的凭据，读的人要能看见它
+/// （`.scratch/goal-loop/spec.md` §3）。没 id 的项照旧，宽度阶梯与计数行都不动。
 fn item_line(item: &Item, width: usize) -> Line<'static> {
-    Line::from(truncate_columns(
-        &format!("{} {}", wording::todo_glyph(item.status), item.content),
-        width,
-    ))
+    let glyph = wording::todo_glyph(item.status);
+    let text = match &item.id {
+        Some(id) => format!("{glyph} {id} {}", item.content),
+        None => format!("{glyph} {}", item.content),
+    };
+    Line::from(truncate_columns(&text, width))
 }

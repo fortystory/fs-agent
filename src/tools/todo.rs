@@ -56,8 +56,22 @@ impl Status {
 /// 列表里的一项，就是一次调用的参数所携带的样子。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
+    /// 这一项引用的是目标清单里的哪一条（`.scratch/goal-loop/spec.md` §3）。
+    ///
+    /// **可选**：老调用没有它，而它也正是「机械判定完成」的前提 —— 靠 `content` 文本对应会
+    /// 漂，而且那样判定就不是真机械了。格式在这一层校验（两位十进制数字），**存在性不在**：
+    /// 这个工具不认识清单，越界的 id 由循环在派生进度时忽略（但不静默）。
+    pub id: Option<String>,
     pub content: String,
     pub status: Status,
+}
+
+/// 一个条目 id 的位数：两位十进制、从 `01` 到 `99`（清单那一侧定的形状）。
+const ID_DIGITS: usize = 2;
+
+/// 校验一个条目 id 的格式。两位十进制数字，别的都不算。
+fn valid_id(word: &str) -> bool {
+    word.chars().count() == ID_DIGITS && word.chars().all(|ch| ch.is_ascii_digit())
 }
 
 /// 那个工具。
@@ -121,13 +135,29 @@ impl TodoTool {
                 )));
             };
             for key in object.keys() {
-                if key != "content" && key != "status" {
+                if key != "content" && key != "status" && key != "id" {
                     return Err(ToolError::message(format!(
                         "{TODO_TOOL}：第 {index} 项有一个不认识的字段 `{key}`；每一项都是 \
-                         `{{content, status}}`"
+                         `{{id?, content, status}}`"
                     )));
                 }
             }
+            // `id` 是可选字段，但写出来就必须是两位十进制数字：`3`、`003`、`ab` 都是模型
+            // 能据以行动的一句话，而不是被悄悄忽略的东西。
+            let id = match object.get("id") {
+                None | Some(Value::Null) => None,
+                Some(raw) => {
+                    let word = raw.as_str().unwrap_or_default();
+                    if !valid_id(word) {
+                        return Err(ToolError::message(format!(
+                            "{TODO_TOOL}：第 {index} 项的 `id` 是 `{word}`；它必须是两位十进制\
+                             数字（`01`…`99`），用来引用目标清单里的那一条；不引用清单就\
+                             整个不写这个字段"
+                        )));
+                    }
+                    Some(word.to_owned())
+                }
+            };
             let content = object
                 .get("content")
                 .and_then(Value::as_str)
@@ -154,7 +184,11 @@ impl TodoTool {
                     )))
                 }
             };
-            items.push(Item { content, status });
+            items.push(Item {
+                id,
+                content,
+                status,
+            });
         }
         Ok(items)
     }
@@ -180,9 +214,11 @@ impl Tool for TodoTool {
             name: TODO_TOOL.to_owned(),
             description: "把你正在照做的计划记下来：一份带状态的待办列表。一次调用提交整份列表，并\
                           替换掉前一份，所以每次都要把所有项都发过来：不写 `items`（或发 `[]`）就\
-                          是清空列表。每一项是 `{content, status}`，`status` 取 `pending`、\
-                          `in_progress`、`completed` 之一；`content` 必须是非空的一行。结果是一行\
-                          回执——列表本身就在这次调用的参数里，你和用户都从那里读回它。"
+                          是清空列表。每一项是 `{id?, content, status}`，`status` 取 `pending`、\
+                          `in_progress`、`completed` 之一；`content` 必须是非空的一行。引用一份\
+                          目标清单里的条目时，写 `id`（两位十进制数字，如 `03`），于是「哪条做完\
+                          了」是确定的而不是靠文本对得上；不引用目标就整个不写它。结果是\
+                          一行回执——列表本身就在这次调用的参数里，你和用户都从那里读回它。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -194,6 +230,12 @@ impl Tool for TodoTool {
                         "items": {
                             "type": "object",
                             "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "可选：这份计划在照做的那份目标清单里的条目\
+                                                    id，两位十进制数字（`01`…`99`）。只在有当前\
+                                                    目标时写它"
+                                },
                                 "content": {
                                     "type": "string",
                                     "description": "一行，说这一项是什么"
