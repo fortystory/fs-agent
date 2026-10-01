@@ -37,8 +37,8 @@ use crate::config::SandboxMode;
 use crate::context;
 use crate::events::{
     hook_format, last_assistant_has_tool_calls, pending_tool_calls_of, total_usage, ContextSource,
-    Decision, DecisionSource, Event, EventLog, EventPayload, ParticipantId, Redactor, Role,
-    RoundMode, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
+    Decision, DecisionSource, Event, EventLog, EventPayload, HistoryReason, ParticipantId,
+    Redactor, Role, RoundMode, SpeakerId, StopReason, ToolCallId, SCHEMA_VERSION,
 };
 use crate::hooks::{self, Constraint, HookPoint};
 use crate::permissions::{self, Answer, PermissionRequest};
@@ -325,6 +325,29 @@ pub fn record_goal_completed(
         EventPayload::GoalCompleted {
             goal: goal.to_owned(),
             summary: summary.to_owned(),
+        },
+    )
+}
+
+/// 记下「这段历史不再权威」（`.scratch/goal-loop/spec.md` §7）。
+///
+/// `targets` 是被替代的那批事件；`summary` 是替代它们的那段叙述（压缩时有，`/undo` 那类
+/// 操作没有）。被退掉的事件不生效，但**永远不被删**。
+pub fn record_history_superseded(
+    session: &mut Session,
+    render: &RenderHandle,
+    targets: Vec<u64>,
+    reason: HistoryReason,
+    summary: Option<String>,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::HistorySuperseded {
+            targets,
+            reason,
+            summary,
         },
     )
 }

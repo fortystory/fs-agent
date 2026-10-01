@@ -570,6 +570,142 @@ fn last_prompt(requests: &[fs_agent::provider::ChatRequest]) -> String {
         .expect("一次单发调用带着一条 user 消息")
 }
 
+// --- 翻页与压缩（§7） -------------------------------------------------------
+
+#[tokio::test]
+async fn compaction_folds_the_history_into_a_summary_and_rollover_carries_it_over() {
+    use fs_agent::events::HistoryReason;
+    use fs_agent::session::SessionStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let provider = FakeProvider::new(vec![
+        Reply::text("第一段回答，读过 src/goals.rs"),
+        Reply::text("这段是摘要：做到 01，踩过一个坑。"),
+    ]);
+    let mut session = session_with(root, "s-1", provider.clone()).await;
+    session.harness.select_goal("sandbox").unwrap();
+    session
+        .harness
+        .inject_context(ContextSource::Goal, "# sandbox\n")
+        .unwrap();
+    session.harness.run_injected_turn().await.unwrap();
+
+    let old_log = session.log_path.clone();
+    let old_events = session.events();
+    let before = usage_count(&old_events);
+    assert_eq!(
+        fs_agent::events::current_goal(&old_events),
+        Some("sandbox"),
+        "旧会话先认领了目标"
+    );
+
+    // 新会话由 store 分配 —— 与 CLI 那条路完全一样。
+    let store = SessionStore::new(root.join("store"));
+    let stored = store.create(&root.join("workspace")).unwrap();
+    let summary = session.harness.compact_and_rollover(&stored).await.unwrap();
+    assert_eq!(
+        summary.as_deref(),
+        Some("这段是摘要：做到 01，踩过一个坑。")
+    );
+
+    // 旧会话：文件**仍在**磁盘上，流是完整的，而它的收尾是一条 `HistorySuperseded`。
+    let old = read_events(&old_log).unwrap();
+    assert_eq!(
+        old.len(),
+        old_events.len() + 3,
+        "摘要那次调用（用量 + 消息）与那条取代事件都落了下来"
+    );
+    let superseded = old
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::HistorySuperseded {
+                targets,
+                reason,
+                summary,
+            } => Some((targets.clone(), *reason, summary.clone())),
+            _ => None,
+        })
+        .expect("流上记着「这段历史不再权威」");
+    assert_eq!(superseded.1, HistoryReason::Compaction);
+    assert_eq!(
+        superseded.2.as_deref(),
+        Some("这段是摘要：做到 01，踩过一个坑。")
+    );
+    assert!(
+        superseded.0.contains(&1),
+        "targets 指向被摘要替代的那批事件：{:?}",
+        superseded.0
+    );
+    assert_eq!(
+        usage_count(&old),
+        before + 1,
+        "写摘要的那次调用照记用量 —— 它就是一次 provider 调用"
+    );
+
+    // 新会话：从空开始，开头就有那段摘要。
+    let new = read_events(&stored.log_path).unwrap();
+    assert!(matches!(new[0].payload, EventPayload::SessionStarted { .. }));
+    assert!(new.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::ContextInjected { source: ContextSource::Compaction, content }
+            if content == "这段是摘要：做到 01，踩过一个坑。"
+    )));
+
+    // 摘要那次调用读的是**压缩前**那段历史。
+    let prompt = last_prompt(&provider.requests());
+    assert!(prompt.contains("第一段回答"), "{prompt}");
+
+    // `sessions replay` 对新旧两个会话都跑得通：两条流都读得回来。
+    assert!(!read_events(&old_log).unwrap().is_empty());
+    assert!(!read_events(&stored.log_path).unwrap().is_empty());
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_turn_that_never_finishes_never_rolls_over() {
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    // 翻页只能发生在回合边界：一个还没落地的回合不会自己触发它。这里用一条永不结束的流证明
+    // 这一点 —— 取消把它收下来，而流上没有任何「历史被取代」。
+    let dir = tempfile::tempdir().unwrap();
+    let opened = Arc::new(Notify::new());
+    let provider = FakeProvider::new(vec![Reply::Stall(
+        Arc::clone(&opened),
+        vec![StreamEvent::TextDelta("半句话".to_owned())],
+    )]);
+    let mut session = session_with(dir.path(), "s-1", provider).await;
+    session.harness.select_goal("sandbox").unwrap();
+
+    let signal = session.harness.cancel_signal();
+    // 与循环驱动一个回合同样的形状：流一开出来就举起手势，然后等它落下来。
+    {
+        let mut turn = Box::pin(session.harness.run_injected_turn());
+        tokio::select! {
+            _ = opened.notified() => {
+                signal.cancel();
+                let _ = turn.await;
+            }
+            result = &mut turn => {
+                let _ = result;
+            }
+        }
+    }
+
+    let events = session.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::HistorySuperseded { .. })),
+        "翻页不会在回合中途自己发生"
+    );
+    assert_eq!(goals_in(&events), ["sandbox"], "会话也还在原地");
+
+    session.harness.shutdown().await;
+}
+
 // --- 会话桶里的归属筛（§4） -------------------------------------------------
 
 #[test]

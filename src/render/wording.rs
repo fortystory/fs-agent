@@ -1003,6 +1003,7 @@ pub fn context_source(source: &ContextSource) -> String {
         // 给了人物设定。
         ContextSource::Persona(name) => format!("人物：{name}"),
         ContextSource::Goal => "目标清单".to_owned(),
+        ContextSource::Compaction => "压缩摘要".to_owned(),
     }
 }
 

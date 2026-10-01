@@ -46,13 +46,15 @@ use tokio::task::JoinHandle;
 use crate::agent::{CancelSignal, TurnOutcome};
 use crate::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
 use crate::context::skills::Skills;
-use crate::events::{ContextSource, Event, EventLog, EventPayload, Role, SessionId, SpeakerId};
+use crate::events::{
+    ContextSource, Event, EventLog, EventPayload, HistoryReason, Role, SessionId, SpeakerId,
+};
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Mode, Policy};
 use crate::provider::Provider;
 use crate::questions::UserQuestions;
 use crate::render::{RenderHandle, Renderer};
-use crate::session::{Session, SessionParts};
+use crate::session::{Session, SessionParts, StoredSession};
 use crate::tools::sandbox;
 use crate::tools::{PathLocks, Registry};
 
@@ -142,19 +144,20 @@ pub struct DiscussionParts {
 
 /// 组装好之后由调用方驱动的 harness。
 pub struct Harness {
+    /// 这场会话**开在**的那个脚手架：日志、工具、锁、策略、技能与那个渲染器。
+    ///
+    /// 留着它是为了翻页（`.scratch/goal-loop/spec.md` §7）：换一份日志与会话身份，其余原样
+    /// 留下，于是「同一进程、同一渲染器与终端，换一个新会话」是一条真实可行的事。渲染器
+    /// 只能起一次 —— 它占有终端与键盘 —— 所以翻页绝不能重新组装一个渲染器。
+    opened: OpenedSession,
     session: Session,
     /// 共享的，因为这场会话派出的执行者在同一个客户端上作答：执行者的模型是继承来的，
     /// 除非有 profile 覆盖（spec §16）。
     provider: Arc<dyn Provider>,
     speaker: SpeakerId,
-    render: RenderHandle,
     /// 这场会话自己那一端的取消手势（spec §6）。前端持有一个并举起它；各回合拿到的是
     /// 它的观察端。
     cancel: CancelSignal,
-    /// 这条流上每个 agent 共享的策略 —— 放在这里而不是从会话里够过去：模式循环手势
-    /// 必须在一个钉住的 run future 借着 harness 的时候也可用（spec §12）。
-    policy: Arc<Mutex<Policy>>,
-    render_task: JoinHandle<()>,
 }
 
 /// 组装好之后由调用方驱动的讨论。
@@ -285,6 +288,20 @@ impl OpenedSession {
             skills: Arc::clone(&self.skills),
             identity,
         })
+    }
+
+    /// 翻页的第一步（`.scratch/goal-loop/spec.md` §7）：换一份日志与会话身份，其余（工具、
+    /// 锁、策略、技能、渲染器与终端）原样留下。
+    ///
+    /// 渲染器只能起一次 —— 它占着终端与键盘 —— 所以翻页**绝不**重新组装一个渲染器，只换会话。
+    /// 旧会话的文件不动、不合并：它留在磁盘上，而 `--continue` 打开的是最新的那一场。
+    fn reopen(&mut self, stored: &StoredSession) -> Result<(), Error> {
+        self.id = stored.id.clone();
+        self.log = EventLog::create(&stored.log_path)?;
+        self.outputs_dir = stored.outputs_dir.clone();
+        // 新流还没有 `SessionStarted`，所以 `start` 会替它把骨架记一遍。
+        self.resuming = false;
+        Ok(())
     }
 
     /// 沙箱那一次探测（沙箱 spec §3）：`mode = "off"` 或调用方已经给了结果时原样返回，否则探一次
@@ -438,15 +455,12 @@ pub async fn assemble(parts: AssemblyParts) -> Result<Harness, Error> {
     let mut session = opened.session(config, Some(agent::agent_identity()));
     opened.start(&mut session)?;
 
-    let policy = Arc::clone(&opened.policy);
     Ok(Harness {
+        opened,
         session,
         provider: provider.into(),
         speaker,
-        render: opened.render,
         cancel: CancelSignal::new(),
-        policy,
-        render_task: opened.render_task,
     })
 }
 
@@ -637,7 +651,7 @@ pub async fn assemble_discussion(parts: DiscussionParts) -> Result<DiscussionHar
 impl Harness {
     /// 记下一条用户消息，并把一个回合跑到结束。
     pub async fn run_turn(&mut self, user_input: &str) -> Result<TurnOutcome, Error> {
-        agent::record_user_message(&mut self.session, &self.render, user_input)?;
+        agent::record_user_message(&mut self.session, &self.opened.render, user_input)?;
         self.drive_turn().await
     }
 
@@ -655,7 +669,7 @@ impl Harness {
             &mut self.session,
             &self.speaker,
             &self.provider,
-            &self.render,
+            &self.opened.render,
             agent::TurnScope::Whole,
             &cancelled,
         )
@@ -685,7 +699,7 @@ impl Harness {
     ) -> Result<agent::DiscussionOutcome, Error> {
         let max_rounds = max_rounds.unwrap_or(discussion::DEFAULT_MAX_ROUNDS);
         validate_roster(&debaters, &synthesizer, max_rounds)?;
-        let mode = self.policy.lock().expect("策略互斥锁已中毒").mode();
+        let mode = self.opened.policy.lock().expect("策略互斥锁已中毒").mode();
         let cwd = self.session.cwd().to_path_buf();
         roster_needs_a_sandbox(mode, &debaters, &synthesizer, &cwd)?;
         let (roster, synthesizer) =
@@ -697,7 +711,7 @@ impl Harness {
         // 一次讨论就是一次运行，像一个回合：手势从干净的地方开始。
         self.cancel.reset();
         let cancelled = self.cancel.observer();
-        agent::run_discussion(&mut discussion, &self.render, question, &cancelled).await
+        agent::run_discussion(&mut discussion, &self.opened.render, question, &cancelled).await
     }
 
     /// **用户**在这场会话里最后问的那句话，或者 `None`。
@@ -762,7 +776,7 @@ impl Harness {
             .map_err(|error| Error::Skill(error.to_string()))?;
         agent::record_context_injection(
             &mut self.session,
-            &self.render,
+            &self.opened.render,
             ContextSource::Skill,
             &body,
         )
@@ -792,7 +806,7 @@ impl Harness {
     /// 因为往 `messages` 头部注入一行会在每一次按下时把前缀缓存整个扔掉（ADR 0003）。
     pub fn mode_cycle(&self) -> ModeCycle {
         ModeCycle {
-            policy: Arc::clone(&self.policy),
+            policy: Arc::clone(&self.opened.policy),
             workspace_available: self.workspace_available(),
         }
     }
@@ -815,7 +829,72 @@ impl Harness {
     ///
     /// 归属是一条只追加的事件，所以当前目标永远是「流上最后一条」，而切换目标就是再记一条。
     pub fn select_goal(&mut self, goal: &str) -> Result<(), Error> {
-        agent::record_goal_selected(&mut self.session, &self.render, goal)
+        agent::record_goal_selected(&mut self.session, &self.opened.render, goal)
+    }
+
+    /// 压缩与翻页：**一个动作**，总是成对发生（`.scratch/goal-loop/spec.md` §7）。
+    ///
+    /// 不做「压缩后看空间够不够再决定翻不翻」那条分支 —— 少一条路径、少一种状态要测。摘要
+    /// 随翻页注入新会话（`ContextInjected { source: Compaction }`），于是它进流、可重放，
+    /// `--continue` 之后还在。
+    ///
+    /// 两个入口共用这一条路径：阈值触发走它，`/clear`（§12）走 [`rollover`](Self::rollover)
+    /// —— 人是主动清场，没有「要带过去的历史」这回事。
+    pub async fn compact_and_rollover(
+        &mut self,
+        stored: &StoredSession,
+    ) -> Result<Option<String>, Error> {
+        let summary = self.compact().await?;
+        self.rollover(stored)?;
+        if let Some(summary) = &summary {
+            self.inject_context(ContextSource::Compaction, summary)?;
+        }
+        Ok(summary)
+    }
+
+    /// 翻页（`.scratch/goal-loop/spec.md` §7）：收掉当前会话，用**同一个渲染器与终端**组装一
+    /// 个新会话，继续跑。
+    ///
+    /// 它与 `/clear`（§12）是同一个动作的两个入口 —— 两段入口、一段机制。`/clear` 只是不带
+    /// 压缩、不带摘要注入。
+    ///
+    /// 只能发生在**回合边界**：会话是唯一持有可变状态的结构，而这里整个把它换掉，所以不能在
+    /// 一个 `tool_call` 还挂着结果的时候翻。
+    pub fn rollover(&mut self, stored: &StoredSession) -> Result<(), Error> {
+        let config = self.session.config().clone();
+        self.opened.reopen(stored)?;
+        let mut session = self.opened.session(config, Some(agent::agent_identity()));
+        self.opened.start(&mut session)?;
+        self.session = session;
+        Ok(())
+    }
+
+    /// 把当前历史折成一段摘要，落既有的
+    /// [`HistorySuperseded { reason: Compaction }`](crate::events::HistoryReason::Compaction)
+    /// （§7）。
+    ///
+    /// 摘要用**一次模型调用**生成，而那次调用照记 `UsageRecorded` —— 它就是一次 provider 调用，
+    /// 所以自然落进目标预算：无人值守时的花费不会被低估。返回摘要本身，供翻页之后注入新会话；
+    /// 那次调用没成时是 `None`，于是翻页照翻、只是没有摘要可带。
+    ///
+    /// `targets` 指向被摘要替代的那批事件 —— 压缩前这一整条流。
+    pub async fn compact(&mut self) -> Result<Option<String>, Error> {
+        let targets: Vec<u64> = self
+            .session
+            .events()
+            .iter()
+            .map(|event| event.seq)
+            .collect();
+        let prompt = context::compaction_prompt(&self.session.events());
+        let summary = self.single_shot(&prompt).await?;
+        agent::record_history_superseded(
+            &mut self.session,
+            &self.opened.render,
+            targets,
+            HistoryReason::Compaction,
+            summary.clone(),
+        )?;
+        Ok(summary)
     }
 
     /// 往这场会话的上下文尾部注入一段内容。
@@ -824,7 +903,7 @@ impl Harness {
     /// 它进流、可重放，`--continue` 之后还在。它自己投影成一条 `user` 消息，所以模型看见的
     /// 就是这段内容 —— 转录里也不会出现用户没打过的字。
     pub fn inject_context(&mut self, source: ContextSource, content: &str) -> Result<(), Error> {
-        agent::record_context_injection(&mut self.session, &self.render, source, content)
+        agent::record_context_injection(&mut self.session, &self.opened.render, source, content)
     }
 
     /// 跑一个回合，起头的是**刚刚注入的那条上下文**。
@@ -848,7 +927,7 @@ impl Harness {
         agent::run_single_shot(
             &mut self.session,
             provider.as_ref(),
-            &self.render,
+            &self.opened.render,
             prompt,
             &cancelled,
         )
@@ -857,7 +936,7 @@ impl Harness {
 
     /// 记下一个目标做完了，连同那份收尾汇总（§1、§11）。
     pub fn complete_goal(&mut self, goal: &str, summary: &str) -> Result<(), Error> {
-        agent::record_goal_completed(&mut self.session, &self.render, goal, summary)
+        agent::record_goal_completed(&mut self.session, &self.opened.render, goal, summary)
     }
 
     /// 一个目标的收尾（`.scratch/goal-loop/spec.md` §11）：写汇总、落一条 `GoalCompleted`。
@@ -893,7 +972,7 @@ impl Harness {
     /// 它走渲染通道而不是直接写终端，因为从组装那一刻起终端归渲染器：第二个写者会插进
     /// 那个活着的区域里（spec §19）。
     pub fn notice(&self, message: &str) {
-        self.render.notice(message);
+        self.opened.render.notice(message);
     }
 
     /// 目前为止的整条流，按 `seq` 顺序。
@@ -910,7 +989,7 @@ impl Harness {
     /// `Ok(None)` 表示已经没有可撤销的东西了。手势只在前端存在；这是 `/undo` 调的那个
     /// 操作，而它永远不碰用户的 git。
     pub async fn undo_last_edit(&mut self) -> Result<Option<agent::UndoOutcome>, Error> {
-        agent::undo_last_edit(&mut self.session, &self.render).await
+        agent::undo_last_edit(&mut self.session, &self.opened.render).await
     }
 
     /// 这场会话的工具产物落在哪里（`outputs/<tool_call_id>.*`）。
@@ -921,7 +1000,7 @@ impl Harness {
     /// 丢掉渲染通道，并等每一条缓冲中的渲染事件都写进接收端。对捕获的接收端做断言之前
     /// 调它。
     pub async fn shutdown(self) {
-        drain_renderer(self.render, self.render_task).await;
+        drain_renderer(self.opened.render, self.opened.render_task).await;
     }
 }
 

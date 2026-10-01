@@ -25,6 +25,7 @@ pub mod skills;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::events::{ContextSource, Event, EventPayload, Role};
 use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
 use skills::MAX_LOADED_SKILL_TOKENS;
@@ -400,6 +401,83 @@ fn preview(text: &str, max_tokens: u64, pointer: Option<&Path>) -> String {
 /// **就是**全文，而一条被切的有一条头、这个标记、一条尾 —— 并且只有被切的那种才有一个溢出文件
 /// 可找。事件对两者只带一个字段（spec §11），所以这个标记就是那个判别依据。
 pub const TRUNCATED_MARKER: &str = "[已截断：";
+
+/// 压缩那次模型调用的简报（`.scratch/goal-loop/spec.md` §7）。
+///
+/// 历史在这里折成一段能读的文本：说了什么、调过哪些工具、注入过什么。工具**结果**不进简报
+/// —— 它们又长又细，而摘要要留住的是「为什么这么做、踩了什么坑」，不是某条命令的原文。整段
+/// 文本留一个长度上限：真的装不下时，丢掉的是**最旧**的那些，并如实说丢了多少条。
+pub fn compaction_prompt(events: &[Event]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for event in events {
+        let line = match &event.payload {
+            EventPayload::MessageCompleted { role, text, .. } => {
+                let speaker = match role {
+                    Role::User => "用户",
+                    Role::Assistant => "助手",
+                    Role::System => "系统",
+                };
+                format!("[{speaker}] {text}")
+            }
+            EventPayload::ToolCallStarted {
+                tool_name, args, ..
+            } => {
+                let mut args = args.to_string();
+                args.truncate(COMPACTION_TOOL_ARGS_CHARS);
+                format!("[工具调用] {tool_name} {args}")
+            }
+            EventPayload::ContextInjected { source, .. } => match source {
+                ContextSource::AgentsMd => "[注入] AGENTS.md".to_owned(),
+                ContextSource::SkillsCatalog => "[注入] 技能清单".to_owned(),
+                ContextSource::Skill => "[注入] 用户加载的技能".to_owned(),
+                ContextSource::PlanMode => "[注入] 计划模式（已退场）".to_owned(),
+                ContextSource::Persona(name) => format!("[注入] 人物：{name}"),
+                ContextSource::Goal => "[注入] 目标清单".to_owned(),
+                ContextSource::Compaction => "[注入] 压缩摘要".to_owned(),
+            },
+            // 其余的是记账：用量、权限裁决、钩子、沙箱状态、回合边界。
+            _ => continue,
+        };
+        lines.push(line);
+    }
+
+    let mut dropped = 0;
+    let mut used = 0;
+    let mut kept: Vec<&String> = Vec::new();
+    for line in lines.iter().rev() {
+        used += line.chars().count();
+        if used > COMPACTION_HISTORY_CHARS && !kept.is_empty() {
+            dropped = lines.len() - kept.len();
+            break;
+        }
+        kept.push(line);
+    }
+    kept.reverse();
+
+    let mut prompt = String::from(
+        "下面是一场 coding agent 会话的历史。把它压成一段摘要，供**另一个**会话接着干同一件\
+         活时参考。用中文，直接写摘要，不要客套。留住这些东西：已经做到哪一步、为什么这么\
+         做、踩过哪些坑、读过改过哪些文件、还有哪些没解决。不要逐条复述历史。\n\n",
+    );
+    if dropped > 0 {
+        prompt.push_str(&format!(
+            "（前面还有 {dropped} 条更早的记录没放进这里，下面的历史从中间开始。）\n\n"
+        ));
+    }
+    for line in kept {
+        prompt.push_str(line);
+        prompt.push('\n');
+    }
+    prompt
+}
+
+/// 压缩简报里一条工具调用最多留下多少字符的参数。
+const COMPACTION_TOOL_ARGS_CHARS: usize = 200;
+
+/// 压缩简报最多带多少字符的历史（约十万 token 的粗估上限）。
+///
+/// 它只在极端长的会话上生效：压缩的触发点本来就在窗口的八成，所以这份简报通常整个装得下。
+const COMPACTION_HISTORY_CHARS: usize = 400_000;
 
 /// 读项目的 `AGENTS.md`，如果它存在且不是空白。
 ///

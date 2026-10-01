@@ -1,7 +1,7 @@
 # 翻页与压缩：rollover 与摘要
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：`.scratch/goal-loop/spec.md` §7。
