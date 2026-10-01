@@ -434,6 +434,7 @@ pub fn compaction_prompt(events: &[Event]) -> String {
                 ContextSource::Persona(name) => format!("[注入] 人物：{name}"),
                 ContextSource::Goal => "[注入] 目标清单".to_owned(),
                 ContextSource::Compaction => "[注入] 压缩摘要".to_owned(),
+                ContextSource::Reminder => "[注入] 过半提醒".to_owned(),
             },
             // 其余的是记账：用量、权限裁决、钩子、沙箱状态、回合边界。
             _ => continue,

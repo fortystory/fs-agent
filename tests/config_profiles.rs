@@ -926,3 +926,51 @@ fn an_unknown_sandbox_mode_is_a_startup_error() {
     assert!(error.contains("bwrap"), "{error}");
     assert!(error.contains("off"), "{error}");
 }
+
+// --- `[goals]`：目标循环的两个阈值（`.scratch/goal-loop/spec.md` §6） -------
+
+#[test]
+fn the_goal_thresholds_default_to_fifty_and_eighty() {
+    let config = resolve(None, &env(&[])).unwrap();
+
+    assert_eq!(config.goals.remind_at, 50);
+    assert_eq!(config.goals.compact_at, 80);
+}
+
+#[test]
+fn the_goal_thresholds_come_from_the_goals_table() {
+    let config = resolve(Some("[goals]\nremind_at = 30\ncompact_at = 90\n"), &env(&[])).unwrap();
+
+    assert_eq!(config.goals.remind_at, 30);
+    assert_eq!(config.goals.compact_at, 90);
+
+    // 只写一个，另一个留在缺省上。
+    let config = resolve(Some("[goals]\nremind_at = 30\n"), &env(&[])).unwrap();
+    assert_eq!(config.goals.remind_at, 30);
+    assert_eq!(config.goals.compact_at, 80);
+}
+
+#[test]
+fn a_threshold_that_could_never_fire_is_a_startup_error() {
+    // 提醒必须在翻页之前：反过来的话它永远轮不到，压缩先来了。
+    let error = resolve(
+        Some("[goals]\nremind_at = 80\ncompact_at = 80\n"),
+        &env(&[]),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("remind_at"), "{error}");
+    assert!(error.contains("compact_at"), "{error}");
+
+    for value in ["0", "101"] {
+        let text = format!("[goals]\ncompact_at = {value}\n");
+        let error = resolve(Some(&text), &env(&[])).unwrap_err().to_string();
+        assert!(error.contains("compact_at"), "{value}: {error}");
+    }
+
+    // 一个不认识的字段仍然按 `deny_unknown_fields` 拒掉。
+    let error = resolve(Some("[goals]\nremind = 30\n"), &env(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("remind"), "{error}");
+}

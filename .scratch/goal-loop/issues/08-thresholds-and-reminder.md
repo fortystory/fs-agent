@@ -1,7 +1,7 @@
 # 阈值与提醒：50% 与 80%
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 07
 
 > 规格：`.scratch/goal-loop/spec.md` §6。

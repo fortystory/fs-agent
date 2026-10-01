@@ -434,6 +434,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             dir: goals_dir,
             store: store.clone(),
             cwd: cwd.clone(),
+            settings: config.goals,
         },
     )
     .await;
@@ -1371,6 +1372,8 @@ struct GoalSetup {
     dir: Option<PathBuf>,
     store: SessionStore,
     cwd: PathBuf,
+    /// 两个阈值（§6）。
+    settings: crate::config::GoalSettings,
 }
 
 /// `/loop <名字>` 的一次运行（`.scratch/goal-loop/spec.md` §4）。
@@ -1439,6 +1442,9 @@ async fn run_goal_loop(
 
     // 一个回合接一个回合。手势的作用域是一次运行，所以每个回合开始时信号都会复位 —— 因此
     // 「停」要在回合刚结束的那一刻读一次，否则一次取消会被下一个回合悄悄吃掉。
+    //
+    // `reminded` 是「这一档已经提醒过」这个跨回合的标记：跨过阈值只注入一次，翻页时复位。
+    let mut reminded = false;
     *running = true;
     loop {
         if harness.cancel_signal().is_cancelled() {
@@ -1462,31 +1468,88 @@ async fn run_goal_loop(
             .flat_map(|events| crate::goals::todo_calls(events))
             .collect();
         let progress = crate::goals::progress(&manifest.entries, &calls);
-        if !progress.is_complete() {
-            continue;
+        if progress.is_complete() {
+            // 收尾汇总由一次模型调用写（§11），而那一次调用照记用量 —— 它落进目标预算。调用
+            // 没成不改变「做完了」这个事实，缺的只是那段叙述，所以退回一份机械的说明。
+            let notes: Vec<String> = streams
+                .iter()
+                .flat_map(|events| crate::goals::notes_of(events))
+                .collect();
+            if let Err(error) = harness
+                .finish_goal(name, manifest, &progress, streams.len(), &notes)
+                .await
+            {
+                *running = false;
+                return Err(render::wording::error_report(&error));
+            }
+            harness.notice(&render::wording::goal_completed_notice(
+                name,
+                progress.completed(),
+                progress.total(),
+                streams.len(),
+            ));
+            *running = false;
+            return Ok(());
         }
 
-        // 收尾汇总由一次模型调用写（§11），而那一次调用照记用量 —— 它落进目标预算。调用没成
-        // 不改变「做完了」这个事实，缺的只是那段叙述，所以退回一份机械的说明。
-        let notes: Vec<String> = streams
-            .iter()
-            .flat_map(|events| crate::goals::notes_of(events))
-            .collect();
-        if let Err(error) = harness
-            .finish_goal(name, manifest, &progress, streams.len(), &notes)
-            .await
-        {
-            *running = false;
-            return Err(render::wording::error_report(&error));
+        // 阈值（§6、§7）：判据取**投影前**的估算，在回合边界比对 —— 不能在一个工具跑到一半
+        // 的时候判。
+        let percent = harness.context_percent();
+        match crate::goals::threshold_step(
+            percent,
+            goals.settings.remind_at,
+            goals.settings.compact_at,
+            reminded,
+        ) {
+            crate::goals::ThresholdStep::None => {}
+            crate::goals::ThresholdStep::Remind => {
+                // 跨过阈值时注入**一次**，不是每轮：每轮注入会每轮打掉前缀缓存，而本仓库有
+                // 「前缀只增不改」的不变量。
+                if let Err(error) = harness.inject_context(
+                    crate::events::ContextSource::Reminder,
+                    render::wording::goal_reminder(),
+                ) {
+                    *running = false;
+                    return Err(render::wording::error_report(&error));
+                }
+                reminded = true;
+                harness.notice(&render::wording::goal_reminded(percent));
+            }
+            crate::goals::ThresholdStep::Compact => {
+                // 压缩与翻页是一个动作，总是成对发生（§7）。开一个新会话 —— 旧的留在磁盘上。
+                let from = harness.session_id().as_str().to_owned();
+                let stored = match goals.store.create(&goals.cwd) {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        *running = false;
+                        return Err(format!("开不了新会话：{error}"));
+                    }
+                };
+                if let Err(error) = harness.compact_and_rollover(&stored).await {
+                    *running = false;
+                    return Err(render::wording::error_report(&error));
+                }
+                // 新会话要重新认领这个目标 —— 否则进度派生看不见它；清单也重新摆一次，那是它
+                // 照做的定义本身。
+                if let Err(error) = harness.select_goal(name) {
+                    *running = false;
+                    return Err(render::wording::error_report(&error));
+                }
+                if let Err(error) = harness
+                    .inject_context(crate::events::ContextSource::Goal, &manifest.render())
+                {
+                    *running = false;
+                    return Err(render::wording::error_report(&error));
+                }
+                // 新窗口：过线时还会再提醒一次 —— 那是**新会话**的提醒，正确。
+                reminded = false;
+                harness.notice(&render::wording::goal_rolled_over(
+                    &from,
+                    stored.id.as_str(),
+                    true,
+                ));
+            }
         }
-        harness.notice(&render::wording::goal_completed_notice(
-            name,
-            progress.completed(),
-            progress.total(),
-            streams.len(),
-        ));
-        *running = false;
-        return Ok(());
     }
     *running = false;
     harness.notice(&render::wording::goal_loop_stopped(name));

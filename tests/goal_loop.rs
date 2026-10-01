@@ -14,7 +14,8 @@ use fs_agent::events::{
     current_goal, read_events, ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId,
 };
 use fs_agent::goals::{
-    self, check_start, progress, Manifest, Progress, StartRefusal, TodoCall,
+    self, check_start, progress, threshold_step, Manifest, Progress, StartRefusal, ThresholdStep,
+    TodoCall,
 };
 use fs_agent::permissions::{Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
@@ -702,6 +703,150 @@ async fn a_turn_that_never_finishes_never_rolls_over() {
         "翻页不会在回合中途自己发生"
     );
     assert_eq!(goals_in(&events), ["sandbox"], "会话也还在原地");
+
+    session.harness.shutdown().await;
+}
+
+// --- 阈值与提醒（§6、§7） ---------------------------------------------------
+
+#[test]
+fn the_two_thresholds_are_lines_on_the_window() {
+    // 边界值：过线才算，而正好落在线上也算（`>=`，与预算那道闸门同一条规矩）。
+    for (percent, expected) in [
+        (0, ThresholdStep::None),
+        (49, ThresholdStep::None),
+        (50, ThresholdStep::Remind),
+        (51, ThresholdStep::Remind),
+        (79, ThresholdStep::Remind),
+        (80, ThresholdStep::Compact),
+        (81, ThresholdStep::Compact),
+        (100, ThresholdStep::Compact),
+    ] {
+        assert_eq!(
+            threshold_step(percent, 50, 80, false),
+            expected,
+            "{percent}% 这一刻"
+        );
+    }
+}
+
+#[test]
+fn the_reminder_lands_once_per_crossing_and_a_rollover_resets_it() {
+    // 跨过阈值只注入一次：连续多个回合都在 50% 以上，流上也只有一条提醒。
+    assert_eq!(threshold_step(60, 50, 80, true), ThresholdStep::None);
+    // 而翻页那一档不受这个标记影响 —— 它是一次动作，不是一次提醒。
+    assert_eq!(
+        threshold_step(90, 50, 80, true),
+        ThresholdStep::Compact,
+        "翻页不因为提醒过就不发生"
+    );
+    // 翻页之后标记复位：新会话过线时还会再提醒一次。
+    assert_eq!(threshold_step(60, 50, 80, false), ThresholdStep::Remind);
+}
+
+#[test]
+fn the_reminder_is_chinese_model_text_that_says_what_to_save() {
+    let text = fs_agent::render::wording::goal_reminder();
+    assert!(text.contains("落下来"), "措辞是「把还没落流的东西落下来」：{text}");
+    assert!(text.contains("摘要"), "它要说清再过一会儿就压缩了：{text}");
+    assert!(
+        text.contains("todo") || text.contains("结论"),
+        "它要点名哪些东西会丢：{text}"
+    );
+    // 模型可见的散文走中文（ADR 0005）。
+    assert!(
+        text.chars().any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch)),
+        "{text}"
+    );
+}
+
+/// 一场上下文已经超过八成、但一个 token 都没花的会话：窗口小、预算无穷。
+async fn nearly_full_session(root: &Path) -> Session {
+    use fs_agent::provider::capability::caps_for;
+
+    let mut caps = caps_for("deepseek-flash").unwrap();
+    caps.context_window = 20_000;
+    caps.max_output_tokens = 1_000;
+    let provider = FakeProvider::with_caps(
+        vec![
+            Reply::text("干了一点活"),
+            Reply::text("这段是摘要"),
+        ],
+        caps,
+    );
+    let mut session = session_with(root, "s-1", provider).await;
+    session.harness.select_goal("sandbox").unwrap();
+    // 一条足够长的注入把估算推过八成（19_000 的窗口，八成是 15_200 token ≈ 61k 字符）。
+    let filler = "长".repeat(70_000);
+    session
+        .harness
+        .inject_context(ContextSource::Goal, &filler)
+        .unwrap();
+    session.harness.run_injected_turn().await.unwrap();
+    session
+}
+
+#[tokio::test]
+async fn the_judgement_reads_the_window_and_not_the_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = nearly_full_session(dir.path()).await;
+
+    let percent = session.harness.context_percent();
+    assert!(percent >= 80, "窗口已经过八成：{percent}%");
+    assert_eq!(
+        threshold_step(percent, 50, 80, false),
+        ThresholdStep::Compact
+    );
+
+    // 判据与预算无关：这场会话一个 token 都还没花（两者混起来是本文件要防的那个错）。
+    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    assert_eq!(spent, 0, "百分比看的是窗口，不是累计 token");
+
+    session.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn crossing_the_compact_threshold_compacts_and_opens_a_new_session() {
+    use fs_agent::events::HistoryReason;
+    use fs_agent::session::SessionStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let session = nearly_full_session(dir.path()).await;
+    let mut session = session;
+    let old_log = session.log_path.clone();
+
+    let stored = SessionStore::new(dir.path().join("store"))
+        .create(&dir.path().join("workspace"))
+        .unwrap();
+    let summary = session
+        .harness
+        .compact_and_rollover(&stored)
+        .await
+        .unwrap();
+    assert_eq!(summary.as_deref(), Some("这段是摘要"));
+
+    // 过八成那一下：旧流上有压缩，新会话里有那段摘要，而旧文件还在。
+    let old = read_events(&old_log).unwrap();
+    assert!(old.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::HistorySuperseded {
+            reason: HistoryReason::Compaction,
+            ..
+        }
+    )));
+    let new = read_events(&stored.log_path).unwrap();
+    assert!(new.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::ContextInjected {
+            source: ContextSource::Compaction,
+            ..
+        }
+    )));
+    // 新会话的窗口用量回落到低位，所以标记复位之后还会再提醒一次。
+    assert!(
+        session.harness.context_percent() < 80,
+        "翻页之后窗口回到低位"
+    );
 
     session.harness.shutdown().await;
 }

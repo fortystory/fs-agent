@@ -190,6 +190,31 @@ pub(crate) fn build_messages(
     context::trim(projected, context::usable_input(caps), trim_policy)
 }
 
+/// 一次请求在**投影之后、裁剪之前**的估计大小，以及它要装进的那个窗口
+/// （`.scratch/goal-loop/spec.md` §6）。
+///
+/// 阈值判据读的是这个，而不是裁剪之后的量：[`context::trim`] 会丢掉旧内容来满足预算，所以
+/// 裁剪之后再量永远量不到「快满了」—— 「快满了」这个信号本来就要新造。
+pub fn context_fill(session: &Session, speaker: &SpeakerId, caps: &ModelCaps) -> (u64, u64) {
+    let projected = project(&session.events(), speaker, caps);
+    let messages = match session.identity() {
+        Some(identity) => {
+            let mut messages = Vec::with_capacity(projected.len() + 1);
+            messages.push(Message::System {
+                content: identity.to_owned(),
+                name: None,
+            });
+            messages.extend(projected);
+            messages
+        }
+        None => projected,
+    };
+    (
+        context::estimate_messages_tokens(&messages),
+        context::usable_input(caps),
+    )
+}
+
 /// 一个回合是怎么结束的，以及它最后一条消息里的助手文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnOutcome {

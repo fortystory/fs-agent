@@ -1004,6 +1004,7 @@ pub fn context_source(source: &ContextSource) -> String {
         ContextSource::Persona(name) => format!("人物：{name}"),
         ContextSource::Goal => "目标清单".to_owned(),
         ContextSource::Compaction => "压缩摘要".to_owned(),
+        ContextSource::Reminder => "过半提醒".to_owned(),
     }
 }
 
@@ -1536,6 +1537,26 @@ pub fn goal_loop_started(name: &str, completed: usize, total: usize) -> String {
 /// `/loop` 停了，回到空闲态等人。
 pub fn goal_loop_stopped(name: &str) -> String {
     format!("目标 {name} 的循环停了")
+}
+
+/// 过半时注入给模型的那段话（§6）。
+///
+/// 措辞是「把还没落流的东西落下来」，**不是**「你该收敛了」：再过一会儿历史会被压成摘要，
+/// 而摘要只留得住它读得到的东西 —— 只在脑子里、没写进 `todo`、没写成结论的推理会丢。这条
+/// 提醒是给它一次自救的机会。
+pub fn goal_reminder() -> &'static str {
+    "上下文已经过半。把还没落流的东西落下来：还没写进 `todo` 的下一步、还没写成结论的发现、     还没写下来的文件与命令。再过一会儿历史会被压成摘要，而摘要只留得住它读得到的东西 ——      只在脑子里、没落进流里的推理会丢。"
+}
+
+/// 提醒注入了（§6）：说给用户听的一行，与给模型的那段话是两件事。
+pub fn goal_reminded(percent: u64) -> String {
+    format!("上下文已到 {percent}%，已提醒模型把还没落流的东西落下来")
+}
+
+/// 翻页那一下的记账（§7）：它必然打掉前缀缓存，所以别让它悄悄发生。
+pub fn goal_rolled_over(from: &str, to: &str, compacted: bool) -> String {
+    let what = if compacted { "历史压成摘要" } else { "清场" };
+    format!("{what}：会话 {from} → {to}（这一下会打掉前缀缓存，它是低频的）")
 }
 
 /// 目标完成：条目情况与跨了几个会话，一行说完。汇总本身落在流上，也由那次调用写进转录。

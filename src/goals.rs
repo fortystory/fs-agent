@@ -524,6 +524,38 @@ pub fn check_start(
     }
 }
 
+// --- 阈值与提醒（§6、§7） --------------------------------------------------
+
+/// 回合边界上，窗口用量该触发什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThresholdStep {
+    /// 什么都没跨过。
+    None,
+    /// 过提醒线，而且这一档还没提醒过：注入一次提醒。
+    Remind,
+    /// 过翻页线：压缩 + 翻页（§7）。
+    Compact,
+}
+
+/// 判一次窗口用量该触发什么。
+///
+/// 翻页优先：过八成就是压缩 + 开新会话，提醒轮不到（它本来就是更早的那一档）。`reminded` 是
+/// 「这一档已经提醒过」这个跨回合的标记 —— **跨过阈值时注入一次，不是每轮**：每轮注入会每轮
+/// 打掉前缀缓存，而本仓库有「前缀只增不改」的不变量。翻页之后调用方把它复位，于是新会话过线
+/// 时还会再提醒一次 —— 那是**新会话**的提醒，正确。
+///
+/// 判据**只用传进来的这一个数**，所以压缩那次调用自己不会触发第二次翻页：量是在动作之前取
+/// 的。
+pub fn threshold_step(percent: u64, remind_at: u8, compact_at: u8, reminded: bool) -> ThresholdStep {
+    if percent >= u64::from(compact_at) {
+        ThresholdStep::Compact
+    } else if percent >= u64::from(remind_at) && !reminded {
+        ThresholdStep::Remind
+    } else {
+        ThresholdStep::None
+    }
+}
+
 // --- 收尾汇总（§11） -------------------------------------------------------
 
 /// 一个目标下各会话记下的新工作。

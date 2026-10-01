@@ -395,6 +395,66 @@ pub struct Config {
     /// `[sandbox]`：包不包 bubblewrap、额外哪些目录可写（spec §7）。探测结果在组装期填进
     /// 会话配置里那一份。
     pub sandbox: SandboxSettings,
+    /// `[goals]`：目标循环的两个阈值（`.scratch/goal-loop/spec.md` §6）。
+    pub goals: GoalSettings,
+}
+
+/// 目标循环的两个阈值，按**窗口**的百分比。
+///
+/// 缺省 50 / 80：过半提醒一次（要模型把还没落流的东西落下来），过八成压缩并开一个新会话。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoalSettings {
+    /// 过这个百分比就注入一次提醒。
+    pub remind_at: u8,
+    /// 过这个百分比就压缩并翻页。
+    pub compact_at: u8,
+}
+
+impl Default for GoalSettings {
+    fn default() -> Self {
+        Self {
+            remind_at: DEFAULT_REMIND_AT,
+            compact_at: DEFAULT_COMPACT_AT,
+        }
+    }
+}
+
+/// 缺省的提醒阈值。
+pub const DEFAULT_REMIND_AT: u8 = 50;
+/// 缺省的翻页阈值。
+pub const DEFAULT_COMPACT_AT: u8 = 80;
+
+/// 把 `[goals]` 解析成两个阈值。
+///
+/// 两条校验，都是为了避免一个「看起来配好了、实际不会发生」的组合：两个数都得落在 1..=100，
+/// 而且提醒必须在翻页之前 —— 反过来的话提醒永远轮不到，压缩先来了。
+fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
+    let mut goals = GoalSettings::default();
+    let Some(raw) = raw else {
+        return Ok(goals);
+    };
+    if let Some(remind_at) = raw.remind_at {
+        goals.remind_at = remind_at;
+    }
+    if let Some(compact_at) = raw.compact_at {
+        goals.compact_at = compact_at;
+    }
+    for (field, value) in [("remind_at", goals.remind_at), ("compact_at", goals.compact_at)] {
+        if value == 0 || value > 100 {
+            return Err(ConfigError::InvalidGoals {
+                reason: format!("`{field}` 是窗口的百分比，取值落在 1..=100，拿到的是 {value}"),
+            });
+        }
+    }
+    if goals.remind_at >= goals.compact_at {
+        return Err(ConfigError::InvalidGoals {
+            reason: format!(
+                "`remind_at`（{}）必须在 `compact_at`（{}）之前，否则提醒永远轮不到 ——                  压缩先来了",
+                goals.remind_at, goals.compact_at
+            ),
+        });
+    }
+    Ok(goals)
 }
 
 impl Config {
@@ -525,6 +585,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let discussion = resolve_discussion(raw.discussion.as_ref(), &models)?;
     let tools = resolve_tools(&raw.tools)?;
     let sandbox = resolve_sandbox(raw.sandbox.as_ref(), env)?;
+    let goals = resolve_goals(raw.goals.as_ref())?;
 
     let default_model = raw
         .default_model
@@ -551,6 +612,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         discussion,
         tools,
         sandbox,
+        goals,
     })
 }
 
@@ -637,6 +699,19 @@ struct RawConfig {
     tools: BTreeMap<String, BTreeMap<String, RawTool>>,
     /// `[sandbox]`：这一层包不包，以及额外哪些目录可写（spec §7）。
     sandbox: Option<RawSandbox>,
+    /// `[goals]`：目标循环的两个阈值（`.scratch/goal-loop/spec.md` §6）。
+    goals: Option<RawGoals>,
+}
+
+/// 一张 `[goals]` 表：目标循环在窗口的哪个位置提醒、哪个位置翻页。
+///
+/// 两个数都是**窗口的百分比**（状态行那个 `上下文 n%` 的同一个数），不是预算 —— 预算
+/// 是累计 token，跨会话认到目标上去（§8）。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGoals {
+    remind_at: Option<u8>,
+    compact_at: Option<u8>,
 }
 
 /// 一张 `[sandbox]` 表。
@@ -1551,6 +1626,8 @@ pub enum ConfigError {
     },
     #[error("工具 `{tool}`：{reason}")]
     InvalidTool { tool: String, reason: String },
+    #[error("[goals] {reason}")]
+    InvalidGoals { reason: String },
 }
 
 /// 注入给某一个 agent 回合循环的配置值。

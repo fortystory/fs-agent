@@ -914,6 +914,19 @@ impl Harness {
         self.drive_turn().await
     }
 
+    /// 这场会话的上下文用掉了窗口的百分之多少（`.scratch/goal-loop/spec.md` §6 的阈值判据）。
+    ///
+    /// 分子是**投影之后、裁剪之前**的估算，分母是 [`context::usable_input`] —— 也就是状态行
+    /// 那个百分比用的同一个数，所以用户眼睛看到的数就是触发的数。
+    pub fn context_percent(&self) -> u64 {
+        let caps = self.provider.caps();
+        let (used, window) = agent::context_fill(&self.session, &self.speaker, &caps);
+        if window == 0 {
+            return 0;
+        }
+        used.saturating_mul(100) / window
+    }
+
     /// 让模型单发写一段话，照记用量。
     ///
     /// 目标收尾汇总（§11）与压缩摘要（§7）都走这里：它就是一次 provider 调用，所以它的用量
