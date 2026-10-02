@@ -202,6 +202,52 @@ fn handle(method: &str, id: &Value, request: &Value) -> Value {
                 _ => error(id, -32601, "Unknown tool"),
             }
         }
+        // 提示词模板：给 `/` 菜单那一半用（票 17）。两个模板 —— 一个带必填参数、一个不带，
+        // 好让人在真终端里两条路都走一遍。
+        "prompts/list" => ok(
+            id,
+            json!({
+                "resultType": "complete",
+                "prompts": [
+                    {
+                        "name": "user_report",
+                        "description": "按 id 出一份报告",
+                        "arguments": [
+                            { "name": "id", "description": "用户 id", "required": true }
+                        ]
+                    },
+                    {
+                        "name": "standup",
+                        "description": "把今天做的事写成三条"
+                    }
+                ]
+            }),
+        ),
+        "prompts/get" => {
+            let name = request
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let user_id = request
+                .pointer("/params/arguments/id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let text = match name {
+                "user_report" => format!("请给用户 {user_id} 出一份报告"),
+                "standup" => "把今天做的事写成三条".to_owned(),
+                _ => return error(id, -32602, "Unknown prompt"),
+            };
+            ok(
+                id,
+                json!({
+                    "resultType": "complete",
+                    "description": "假 server 的模板",
+                    "messages": [
+                        { "role": "user", "content": { "type": "text", "text": text } }
+                    ]
+                }),
+            )
+        }
         "resources/list" => ok(
             id,
             json!({

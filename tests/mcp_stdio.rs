@@ -317,6 +317,43 @@ async fn the_meta_tools_reach_a_real_server_end_to_end() {
     harness.shutdown().await;
 }
 
+// --- 提示词模板（`/` 菜单那一半） -----------------------------------------
+
+#[tokio::test]
+async fn a_real_server_declares_prompt_templates_for_the_menu() {
+    let (_dir, cwd) = workspace();
+    let sandbox = skip_without_bwrap!(&cwd);
+    let service = connect(&settings(vec![stdio("fake", &[])]), &cwd, &sandbox).await;
+    assert_eq!(service.unavailable_reason("fake"), None);
+
+    // `/` 菜单要的就是这一份：名字是 `server:模板名`。
+    let entries = service.prompt_entries().await;
+    let names: Vec<String> = entries
+        .iter()
+        .map(|(server, prompt)| format!("{server}:{}", prompt.name))
+        .collect();
+    assert!(names.contains(&"fake:user_report".to_owned()), "{names:?}");
+    assert!(names.contains(&"fake:standup".to_owned()), "{names:?}");
+    let report = entries
+        .iter()
+        .find(|(_, prompt)| prompt.name == "user_report")
+        .unwrap();
+    assert_eq!(report.1.arguments[0].name, "id");
+    assert!(report.1.arguments[0].required);
+
+    // 渲染：参数过去，文本回来（它会成为这一轮的一条消息）。
+    let rendered = service
+        .get_prompt("fake", "user_report", json!({ "id": "42" }))
+        .await
+        .unwrap();
+    assert_eq!(rendered, "请给用户 42 出一份报告");
+    let standup = service
+        .get_prompt("fake", "standup", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(standup, "把今天做的事写成三条");
+}
+
 // --- 进程组清理 -----------------------------------------------------------
 
 /// 这一路心跳在跳吗：文件在，而且 mtime 最近动过。
