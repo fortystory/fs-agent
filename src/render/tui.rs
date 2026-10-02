@@ -2957,7 +2957,11 @@ fn questionnaire_parts(
     draft: &QuestionDraft,
     width: usize,
     options_focused: bool,
-) -> (Vec<Line<'static>>, Vec<Vec<Line<'static>>>, Vec<Line<'static>>) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<Vec<Line<'static>>>,
+    Vec<Line<'static>>,
+) {
     let mut prefix: Vec<Line<'static>> = Vec::new();
     if let Some(header) = question
         .header
@@ -2995,11 +2999,8 @@ fn questionnaire_parts(
         // 事实，可以不一致。
         let cursor = if highlighted { ">" } else { " " };
         let lead = format!("{cursor} {marker} ");
-        let body = wording::questionnaire_option(
-            index + 1,
-            &choice.label,
-            choice.description.as_deref(),
-        );
+        let body =
+            wording::questionnaire_option(index + 1, &choice.label, choice.description.as_deref());
         let mut style = if picked {
             Style::default()
                 .fg(Color::Yellow)
@@ -3973,7 +3974,10 @@ fn draw_questionnaire(
             if row >= last_option_row {
                 break;
             }
-            state.regions.options.push((panes.input.y + row as u16, index));
+            state
+                .regions
+                .options
+                .push((panes.input.y + row as u16, index));
             row += 1;
         }
         if row >= last_option_row {
@@ -4066,9 +4070,9 @@ fn draw_questionnaire_footer(
     let tail = match state.raised_gesture(std::time::Instant::now()) {
         Some(Gesture::Exit) => wording::questionnaire_exit_raised(),
         Some(Gesture::DeclineQuestion) => wording::questionnaire_decline_raised(),
-        None => wording::questionnaire_hint(
-            (panes.hints.width as usize).saturating_sub(cursor + 3),
-        ),
+        None => {
+            wording::questionnaire_hint((panes.hints.width as usize).saturating_sub(cursor + 3))
+        }
     };
     if !tail.is_empty() {
         spans.push(Span::raw("   "));

@@ -4259,7 +4259,10 @@ fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
     });
 
     let text = screen(130, 24, &mut state).join("\n");
-    assert!(text.contains("j/k 移动"), "键位提示跟在进度与按钮后面：{text}");
+    assert!(
+        text.contains("j/k 移动"),
+        "键位提示跟在进度与按钮后面：{text}"
+    );
     assert!(text.contains("esc 退出询问"), "{text}");
 
     // 举 `Esc` 的手：那一段换成回执。
@@ -4315,7 +4318,10 @@ fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
     });
 
     let wide = screen(130, 24, &mut state).join("\n");
-    assert!(wide.contains("ctrl-n/ctrl-p"), "宽终端里有 Emacs 别名：{wide}");
+    assert!(
+        wide.contains("ctrl-n/ctrl-p"),
+        "宽终端里有 Emacs 别名：{wide}"
+    );
 
     // 让这一题有着落，页脚才画得出那个「提交」按钮。
     state.key(Key::Char(' '));

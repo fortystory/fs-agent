@@ -317,7 +317,10 @@ fn typing_and_a_single_select_choice_travel_back_together() {
 fn confirming_a_selected_option_takes_it_back() {
     // 在已选项上再确认一次就是取消它（spec §3）—— 单选与多选在按键语义上是同一条。
     let mut state = state();
-    let _rx = ask(&mut state, vec![question("one", "Pick?", &["a", "b"], false)]);
+    let _rx = ask(
+        &mut state,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
     state.key(Key::Char(' '));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("● 1. a"), "第一次确认选中它：{text}");
@@ -331,7 +334,10 @@ fn confirming_a_selected_option_takes_it_back() {
 fn confirming_another_option_replaces_the_single_select_one() {
     // 单选仍是单选：确认另一个选项是**替换**，不是叠加。
     let mut state = state();
-    let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a", "b"], false)]);
+    let mut rx = ask(
+        &mut state,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
     state.key(Key::Char(' '));
     state.key(Key::Char('j'));
     state.key(Key::Char(' '));
@@ -706,7 +712,10 @@ fn a_space_still_confirms_while_nobody_is_typing() {
     single.key(Key::Char(' '));
     let text = screen(120, 24, &mut single).join("\n");
     assert!(text.contains("● 1. a"), "单选里空格确认高亮：\n{text}");
-    assert!(text.contains("First?"), "确认不翻页，翻页是 `→` 的事：\n{text}");
+    assert!(
+        text.contains("First?"),
+        "确认不翻页，翻页是 `→` 的事：\n{text}"
+    );
     single.key(Key::Right);
     single.key(Key::Enter);
     single.key(Key::Enter);
@@ -785,7 +794,11 @@ fn j_k_and_ctrl_n_ctrl_p_walk_the_same_path_in_the_options_zone() {
     vim.key(Key::Char(' '));
     vim.key(Key::Enter);
     let answers = answer(&mut vim_rx).expect("作答了").answers;
-    assert_eq!(answers[0].selected, vec!["c".to_owned()], "两次 `j` 落在第三项");
+    assert_eq!(
+        answers[0].selected,
+        vec!["c".to_owned()],
+        "两次 `j` 落在第三项"
+    );
 
     let mut emacs = state();
     let mut emacs_rx = ask(
@@ -817,7 +830,10 @@ fn walking_past_the_last_option_hands_the_keyboard_to_the_text_input() {
     state.key(Key::Char('j')); // b 之后 → 输入区
     state.key(Key::Char('j')); // 输入区里 `j` 是文本
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("自定义：j"), "输入区里的 `j` 是文本：\n{text}");
+    assert!(
+        text.contains("自定义：j"),
+        "输入区里的 `j` 是文本：\n{text}"
+    );
 
     state.key(Key::Enter);
     let answers = answer(&mut rx).expect("作答了").answers;
@@ -922,7 +938,10 @@ fn a_question_without_options_starts_in_the_text_input() {
     state.key(Key::Down); // 没有选项可挪，静默
     state.key(Key::Char('k')); // 输入区里是文本
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("回答：zk"), "没有选项的题只有输入区：\n{text}");
+    assert!(
+        text.contains("回答：zk"),
+        "没有选项的题只有输入区：\n{text}"
+    );
 
     state.key(Key::Enter);
     let answers = answer(&mut rx).expect("作答了").answers;

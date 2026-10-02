@@ -27,8 +27,7 @@ use fs_agent::render::{
 };
 use fs_agent::tools::{
     AskUserQuestionTool, BashLimits, Effect, PathLocks, Registry, Sandbox, SessionPaths, Tool,
-    ToolContext,
-    ToolError, ToolOutput, ASK_USER_QUESTION_TOOL, TASK_TOOL,
+    ToolContext, ToolError, ToolOutput, ASK_USER_QUESTION_TOOL, TASK_TOOL,
 };
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
