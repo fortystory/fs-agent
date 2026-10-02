@@ -1,7 +1,7 @@
 # 02 — DeepSeek 搜索后端：Anthropic Messages + 原生 `web_search`
 
 Type: implement
-Status: ready-for-agent
+Status: ready-for-walkthrough
 Blocked by: 01
 
 > 规格：[`../spec.md`](../spec.md) §4。事实依据：官方兼容表与定价页（2026-10-03 抓取），

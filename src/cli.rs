@@ -37,6 +37,7 @@ use crate::render::{
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
 use crate::tools::{self, PathLocks};
+use crate::web::search_deepseek::{DeepSeekSearch, DEEPSEEK_SEARCH_PROVIDER};
 use crate::web::WebService;
 use crate::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
@@ -2296,13 +2297,30 @@ fn last_usage(events: &[Event]) -> Option<Usage> {
     })
 }
 
-/// 这个会话的联网服务：`[web] enabled` 决定那两个工具在不在表里，后端在这里挂上。
+/// 这个会话的联网服务：`[web] enabled` 决定那两个工具在不在表里，后端在这里解析并挂上。
 ///
-/// 组装期建一次 —— 工具表建完不再变化，所以这不是一个运行期开关。票 01 先给出一个**没有挂
-/// 后端**的服务：调用会得到 `WEB_PROVIDER_UNAVAILABLE` 这条结构化错误，而工具照旧在表里；
-/// 真后端（DeepSeek 搜索、自己的抓取）在票 02 与票 03/04 挂上来。
+/// 组装期建一次 —— 工具表建完不再变化，所以这不是一个运行期开关。**解析不出后端（名字不认识）
+/// 或解析不出凭据时，工具仍在表里**：调用给出的是结构化错误，而不是让表随凭据状态抖动
+/// （`.scratch/web-search-tool/spec.md` §3）。
 fn web_service(config: &Config) -> WebService {
-    WebService::new(config.web.clone())
+    let settings = config.web.clone();
+    if !settings.enabled {
+        return WebService::new(settings);
+    }
+    match settings.search_provider.as_str() {
+        DEEPSEEK_SEARCH_PROVIDER => {
+            // 零新密钥：搜索复用会话这一家已经配好的那一把。
+            let key = config
+                .provider(DEEPSEEK_SEARCH_PROVIDER)
+                .and_then(|provider| provider.api_key.clone());
+            WebService::new(settings.clone()).with_search(Arc::new(DeepSeekSearch::new(
+                &settings.search_base_url,
+                key,
+            )))
+        }
+        // 不认识的名字：不挂后端，调用给出 `WEB_PROVIDER_UNAVAILABLE`，消息里点名配的是哪一家。
+        _ => WebService::new(settings),
+    }
 }
 
 fn probe_dir(model_id: &str) -> PathBuf {

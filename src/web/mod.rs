@@ -26,6 +26,8 @@ use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::config::WebSettings;
 
+pub mod search_deepseek;
+
 /// 一条搜索结果来源。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
