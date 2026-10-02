@@ -146,11 +146,14 @@ pub fn with_web(mut registry: Registry, service: crate::web::WebService) -> Regi
 ///
 /// 至今落了 `mcp_list`（票 10）与 `mcp_call`（票 11）；`mcp_resources` / `mcp_read`（票 16）
 /// 在同一处补齐，所以它们的开关始终是同一次读配置。
-pub fn with_mcp(mut registry: Registry, service: crate::mcp::McpService) -> Registry {
+pub fn with_mcp(
+    mut registry: Registry,
+    service: impl Into<std::sync::Arc<crate::mcp::McpService>>,
+) -> Registry {
+    let service: std::sync::Arc<crate::mcp::McpService> = service.into();
     if !service.settings().enabled {
         return registry;
     }
-    let service = std::sync::Arc::new(service);
     registry.register(Box::new(McpListTool::new(std::sync::Arc::clone(&service))));
     registry.register(Box::new(McpCallTool::new(std::sync::Arc::clone(&service))));
     registry.register(Box::new(McpResourcesTool::new(std::sync::Arc::clone(

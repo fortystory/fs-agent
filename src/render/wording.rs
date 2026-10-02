@@ -2081,6 +2081,31 @@ pub fn startup_config(detail: &str) -> String {
     format!("无法读取配置：{detail}")
 }
 
+/// `/` 菜单里一条模板没有说明时的那一列（票 17）。
+pub fn mcp_prompt_without_arguments(server: &str) -> String {
+    format!("{server} 的提示词模板")
+}
+
+/// `/` 菜单里一条模板的参数一览。
+pub fn mcp_prompt_arguments(server: &str, names: &[&str]) -> String {
+    format!("{server} 的提示词模板：{}", names.join("、"))
+}
+
+/// 点名了一个这一轮清单里没有的模板（清单刷新过之后才会出现）。
+pub fn mcp_prompt_unknown(server: &str, prompt: &str) -> String {
+    format!("`/{server}:{prompt}` 不在这一轮的模板清单里；重开会话再看一眼菜单")
+}
+
+/// 命令行给的参数比模板声明的多。
+pub fn mcp_prompt_too_many_arguments(name: &str) -> String {
+    format!("`/{name}` 的参数比它声明的多；把多出来的那几个去掉")
+}
+
+/// 必填参数还缺。
+pub fn mcp_prompt_missing_arguments(name: &str, missing: &[&str]) -> String {
+    format!("`/{name}` 还缺必填参数：{}", missing.join("、"))
+}
+
 /// MCP server 自己写到 stderr 的一行（`.scratch/mcp-support/spec.md` §4）。
 ///
 /// 前缀点明这句话是**外部工具**说的、不是 fs-agent 说的：server 的崩溃信息要进得了日志，但不能

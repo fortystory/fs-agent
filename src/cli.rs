@@ -30,7 +30,7 @@ use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::provider::Message;
-use crate::questions::UserQuestions;
+use crate::questions::{UserQuestion, UserQuestions};
 use crate::render::{
     self, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsoleQuestions, FrontEndEvent,
     PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
@@ -388,7 +388,11 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
     // MCP 这一层也在组装期定下：`[mcp] enabled` 与仓库根的 `.mcp.json` 都在这里读一次。
-    let mcp = mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await;
+    // 包成 `Arc`：工具表拿一份，`/` 菜单那半边（模板）也要拿一份 —— 同一次连接、同一个值。
+    let mcp = Arc::new(mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await);
+    // 模板清单是**界面层**的东西：它进 `/` 菜单，不进工具表、也不进前缀缓存。server 不可用时
+    // 它的条目根本不出现（spec §8）。
+    let prompts = mcp_prompt_entries(&mcp).await;
 
     let mut harness = match assemble(AssemblyParts {
         scaffold: SessionScaffold {
@@ -401,7 +405,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
                     tools::with_dynamic(&config.tools, questions.is_some()),
                     web_service(&config),
                 ),
-                mcp,
+                Arc::clone(&mcp),
             ),
             locks: PathLocks::new(),
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
@@ -457,6 +461,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     console.catalog(slash_catalog(
         &render::wording::BUILT_IN_COMMANDS,
         &harness.skill_catalog(),
+        &prompts,
     ));
 
     let code = interactive_loop(
@@ -471,6 +476,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             settings: config.goals,
         },
         parsed.resume.is_some(),
+        McpMenu {
+            service: &mcp,
+            prompts: &prompts,
+        },
     )
     .await;
     // 会话 id 先抄下来：`shutdown` 把 harness 收走了，而回执是在那之后才打的。
@@ -1136,6 +1145,7 @@ async fn interactive_loop(
     config: &Config,
     goals: &GoalSetup,
     resumed: bool,
+    menu: McpMenu<'_>,
 ) -> ExitCode {
     // 「已经有一个 loop 在跑」那条边界读的状态。循环体是同步跑完的，所以正常路径上不可能在它
     // 跑着的时候再收到一次提交 —— 票 06 让输入区在这段时间里禁言，这条状态正是那件事的名字。
@@ -1210,7 +1220,11 @@ async fn interactive_loop(
         // 拿到一行了，所以从这里到这个循环的下一次轮转之间，会话正在跑东西 —— 一个回合、一场讨论、
         // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
         console.set_running(true);
-        match submission(&submitted, |name| harness.has_skill(name)) {
+        match submission(
+            &submitted,
+            |name| harness.has_skill(name),
+            |name| menu.prompts.iter().any(|entry| entry.name == name),
+        ) {
             // 一个空行：没有可答的，于是再问一次。提示处返回 `None` 是唯一结束输入的东西，而那种情
             // 况就在上面处理。
             Submission::Ignore => {}
@@ -1225,6 +1239,31 @@ async fn interactive_loop(
                     render::wording::error_report(&error)
                 )),
             },
+            // 一次模板调用：收参数（命令行上的位置参数 + 缺的用问卷问）→ `prompts/get` → 那段
+            // 文本**就是这一轮的输入**（server 渲染出来的那条消息）。
+            Submission::McpPrompt {
+                server,
+                prompt,
+                inline,
+            } => {
+                match run_mcp_prompt(console, menu.service, menu.prompts, server, prompt, &inline)
+                    .await
+                {
+                    Ok(Some(text)) => {
+                        if let Err(error) =
+                            run_one_turn(harness, events, TurnStart::Prompt(&text), &mut quit).await
+                        {
+                            harness.notice(&format!(
+                                "fs-agent: {}",
+                                render::wording::error_report(&error)
+                            ));
+                        }
+                    }
+                    // 人把这次询问丢掉了：什么都不发生，回到提示行。
+                    Ok(None) => {}
+                    Err(message) => harness.notice(&format!("fs-agent: {}", message)),
+                }
+            }
             Submission::Unknown(line) => {
                 let names = harness.skill_names();
                 harness.notice(&format!(
@@ -1376,6 +1415,13 @@ enum Submission<'a> {
         name: &'a str,
         task: String,
     },
+    /// `/<server>:<模板>`：一次 MCP 提示词模板调用（票 17）。发起者是**人**：它走 `/` 菜单，
+    /// 不进工具表。`inline` 是命令行上给的位置参数，缺的那些由循环用问卷补齐。
+    McpPrompt {
+        server: &'a str,
+        prompt: &'a str,
+        inline: String,
+    },
     /// `/discuss [问题]`：在**当前会话的流上**跑一场讨论（spec §15）。用户没打问题时问题为空 ——
     /// 那时循环把这场会话最后一个问题交给那两位讨论者。
     Discuss(String),
@@ -1407,7 +1453,11 @@ enum Submission<'a> {
 ///
 /// 开头的斜杠一律剥掉（`//undo` 读作 `undo`），旧代码读技能名时也是这样。任务结尾的空白行丢掉；其
 /// 余按原样保留。
-fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission<'a> {
+fn submission<'a>(
+    text: &'a str,
+    has_skill: impl Fn(&str) -> bool,
+    has_prompt: impl Fn(&str) -> bool,
+) -> Submission<'a> {
     if text.trim().is_empty() {
         return Submission::Ignore;
     }
@@ -1445,6 +1495,17 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
             if name == "loop" {
                 return Submission::Loop(task_of(inline, rest));
             }
+            // `/<server>:<模板>`：模板条目是运行时才知道的名字，所以这里问的是那个闭包
+            // （票 17）。冒号是它与人打出来的技能名的分界。
+            if let Some((server, prompt)) = name.split_once(':') {
+                if !server.is_empty() && !prompt.is_empty() && has_prompt(name) {
+                    return Submission::McpPrompt {
+                        server,
+                        prompt,
+                        inline: task_of(inline, rest),
+                    };
+                }
+            }
             if !has_skill(name) {
                 if rest.trim().is_empty() {
                     return Submission::Unknown(first);
@@ -1468,9 +1529,117 @@ fn submission<'a>(text: &'a str, has_skill: impl Fn(&str) -> bool) -> Submission
 /// 用户那个恰好也叫 `c…` 的技能前面。命令按声明的固定顺序（不按字母），技能按名字。
 ///
 /// 抽出这个纯函数是为了让这条次序有地方断言 —— 它原来内联在组装点里，只能靠真终端看。
+/// 命令行上的位置参数按模板的声明顺序填进参数表；多出来的那几个是错误。
+fn prompt_inline_arguments(
+    display: &str,
+    prompt: &mcp::PromptSummary,
+    inline: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut arguments = serde_json::Map::new();
+    let mut words = inline.split_whitespace();
+    for argument in &prompt.arguments {
+        let Some(word) = words.next() else { break };
+        arguments.insert(
+            argument.name.clone(),
+            serde_json::Value::String(word.to_owned()),
+        );
+    }
+    if words.next().is_some() {
+        return Err(render::wording::mcp_prompt_too_many_arguments(display));
+    }
+    Ok(arguments)
+}
+
+/// 把一次 `/` 菜单里的模板调用跑完（票 17）。
+///
+/// 三步：命令行上的位置参数按声明顺序填进去 → 缺的用**同一个**问询端口逐项问 → `prompts/get`。
+/// 返回的文本会成为这一轮的一条 `user` 消息；`Ok(None)` 表示人把这次询问丢掉了。
+async fn run_mcp_prompt(
+    console: &ConsoleHandle,
+    mcp: &McpService,
+    prompts: &[McpPromptEntry],
+    server: &str,
+    prompt: &str,
+    inline: &str,
+) -> Result<Option<String>, String> {
+    let Some(entry) = prompts
+        .iter()
+        .find(|entry| entry.server == server && entry.prompt.name == prompt)
+    else {
+        return Err(render::wording::mcp_prompt_unknown(server, prompt));
+    };
+
+    let mut arguments = prompt_inline_arguments(&entry.name, &entry.prompt, inline)?;
+
+    // 缺的参数逐项问：走的是 `ask_user_question` 那条通道，不是第二套界面。
+    let missing: Vec<mcp::PromptArgument> = entry
+        .prompt
+        .arguments
+        .iter()
+        .filter(|argument| !arguments.contains_key(&argument.name))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        let questions: Vec<UserQuestion> = missing
+            .iter()
+            .map(|argument| UserQuestion {
+                id: argument.name.clone(),
+                question: argument
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| argument.name.clone()),
+                header: Some(entry.name.clone()),
+                options: Vec::new(),
+                multi_select: false,
+            })
+            .collect();
+        let port = ConsoleQuestions::from_handle(console);
+        let answers = match port.ask(&questions).await {
+            Ok(answers) => answers,
+            // 人把这次询问丢掉了（输入结束，或者这次运行被取消）：不发这次调用。
+            Err(_) => return Ok(None),
+        };
+        for question in &questions {
+            if let Some(answer) = answers
+                .answers
+                .iter()
+                .find(|answer| answer.id == question.id)
+            {
+                if let Some(value) = answer
+                    .custom
+                    .clone()
+                    .or_else(|| answer.selected.first().cloned())
+                {
+                    arguments.insert(question.id.clone(), serde_json::Value::String(value));
+                }
+            }
+        }
+    }
+
+    let missing_required: Vec<&str> = entry
+        .prompt
+        .arguments
+        .iter()
+        .filter(|argument| argument.required && !arguments.contains_key(&argument.name))
+        .map(|argument| argument.name.as_str())
+        .collect();
+    if !missing_required.is_empty() {
+        return Err(render::wording::mcp_prompt_missing_arguments(
+            &entry.name,
+            &missing_required,
+        ));
+    }
+
+    mcp.get_prompt(server, prompt, serde_json::Value::Object(arguments))
+        .await
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 fn slash_catalog(
     commands: &[render::wording::Command],
     skills: &[(&str, &str)],
+    prompts: &[McpPromptEntry],
 ) -> Vec<render::CatalogEntry> {
     let mut skills: Vec<&(&str, &str)> = skills.iter().collect();
     skills.sort_by(|left, right| left.0.cmp(right.0));
@@ -1482,6 +1651,74 @@ fn slash_catalog(
                 .into_iter()
                 .map(|(name, description)| render::CatalogEntry::new(*name, *description)),
         )
+        // 菜单的**动态那一半**：MCP server 的提示词模板（票 17）。它不进工具表、也不进前缀
+        // 缓存 —— 这里是它唯一的落点。
+        .chain(
+            prompts
+                .iter()
+                .map(|entry| render::CatalogEntry::new(&entry.name, entry.description())),
+        )
+        .collect()
+}
+
+/// `/` 菜单的动态那一半：连接与这一轮的模板条目。
+///
+/// 打包成一个值，只因为 `interactive_loop` 的参数已经够多了 —— 这两样总是成对出现。
+struct McpMenu<'a> {
+    service: &'a McpService,
+    prompts: &'a [McpPromptEntry],
+}
+
+/// `/` 菜单里的一条 MCP 模板：`/<server>:<模板名>`。
+struct McpPromptEntry {
+    server: String,
+    prompt: mcp::PromptSummary,
+    /// 菜单上那个**不带斜杠**的名字，与 `submission` 解析时看到的一样。
+    name: String,
+}
+
+impl McpPromptEntry {
+    fn new(server: String, prompt: mcp::PromptSummary) -> Self {
+        let name = format!("{server}:{}", prompt.name);
+        Self {
+            server,
+            prompt,
+            name,
+        }
+    }
+
+    /// 菜单第二列：模板自己的说明；它没写说明时，把参数名列一遍。
+    fn description(&self) -> String {
+        if let Some(description) = self.prompt.description.as_deref() {
+            let description = description.trim();
+            if !description.is_empty() {
+                return description.to_owned();
+            }
+        }
+        let names: Vec<&str> = self
+            .prompt
+            .arguments
+            .iter()
+            .map(|argument| argument.name.as_str())
+            .collect();
+        if names.is_empty() {
+            render::wording::mcp_prompt_without_arguments(&self.server)
+        } else {
+            render::wording::mcp_prompt_arguments(&self.server, &names)
+        }
+    }
+}
+
+/// 组装后拉一次模板清单 —— `/` 菜单的动态那一半。
+///
+/// **不在前缀缓存里**：它进的是菜单，不是工具表。失败的 server 直接跳过（它的模板条目根本
+/// 不出现），而不是出现之后点开报错（spec §8）。
+async fn mcp_prompt_entries(service: &McpService) -> Vec<McpPromptEntry> {
+    service
+        .prompt_entries()
+        .await
+        .into_iter()
+        .map(|(server, prompt)| McpPromptEntry::new(server, prompt))
         .collect()
 }
 
@@ -3386,7 +3623,9 @@ fn print_sessions_help(out: &mut dyn Write) {
 
 #[cfg(test)]
 mod tests {
-    use super::{exit_code_after, finish_session, submission, ExitRequest, Mode, Submission};
+    use super::{
+        exit_code_after, finish_session, submission, ExitRequest, McpPromptEntry, Mode, Submission,
+    };
     use crate::agent::CancelSignal;
     use crate::render::FrontEndEvent;
     use std::process::ExitCode;
@@ -3396,8 +3635,95 @@ mod tests {
         matches!(name, "ask-matt" | "review")
     }
 
+    /// 这一轮 `/` 菜单里的 MCP 模板条目。
+    fn has_prompt(name: &str) -> bool {
+        matches!(name, "db:user_report")
+    }
+
     fn read(text: &str) -> Submission<'_> {
-        submission(text, has_skill)
+        submission(text, has_skill, has_prompt)
+    }
+
+    #[test]
+    fn the_menu_shows_the_builtin_commands_skills_and_mcp_prompts() {
+        let prompts = vec![McpPromptEntry::new(
+            "db".to_owned(),
+            crate::mcp::PromptSummary {
+                name: "user_report".to_owned(),
+                description: Some("按 id 出一份报告".to_owned()),
+                arguments: vec![],
+            },
+        )];
+        let entries = slash_catalog(
+            &crate::render::wording::BUILT_IN_COMMANDS,
+            &[("review", "审一遍")],
+            &prompts,
+        );
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert!(names.contains(&"undo"), "常量条目照旧：{names:?}");
+        assert!(names.contains(&"review"), "技能照旧：{names:?}");
+        assert!(
+            names.contains(&"db:user_report"),
+            "运行时那一半也在菜单里：{names:?}"
+        );
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == "db:user_report")
+            .unwrap();
+        assert_eq!(entry.description, "按 id 出一份报告");
+    }
+
+    #[test]
+    fn inline_arguments_fill_the_declared_parameters_in_order() {
+        let prompt = crate::mcp::PromptSummary {
+            name: "user_report".to_owned(),
+            description: None,
+            arguments: vec![
+                crate::mcp::PromptArgument {
+                    name: "id".to_owned(),
+                    description: None,
+                    required: true,
+                },
+                crate::mcp::PromptArgument {
+                    name: "format".to_owned(),
+                    description: None,
+                    required: false,
+                },
+            ],
+        };
+        let filled = super::prompt_inline_arguments("db:user_report", &prompt, "42 json").unwrap();
+        assert_eq!(filled["id"], "42");
+        assert_eq!(filled["format"], "json");
+
+        let too_many = super::prompt_inline_arguments("db:user_report", &prompt, "42 json extra");
+        assert!(too_many.is_err(), "多出来的参数该被拒");
+    }
+
+    #[test]
+    fn a_prompt_entry_carries_its_inline_arguments() {
+        let parsed = read("/db:user_report 42");
+        match parsed {
+            Submission::McpPrompt {
+                server,
+                prompt,
+                inline,
+            } => {
+                assert_eq!(server, "db");
+                assert_eq!(prompt, "user_report");
+                assert_eq!(inline, "42");
+            }
+            other => panic!("该解析成模板调用，实际是 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_colon_name_that_is_not_in_the_menu_is_an_unknown_command() {
+        // 菜单里没有这个名字时，它与任何打错的 `/` 名字同类 —— 不会被当成模板调用。
+        assert!(matches!(read("/db:nope 42"), Submission::Unknown(_)));
+        assert!(matches!(
+            read("/db:user_report 42"),
+            Submission::McpPrompt { .. }
+        ));
     }
 
     #[test]
@@ -4395,7 +4721,7 @@ mod tests {
             ("clear-ish", "一个与 /c 同前缀的技能"),
             ("ask-matt", "审一遍"),
         ];
-        let entries = slash_catalog(&BUILT_IN_COMMANDS, &skills);
+        let entries = slash_catalog(&BUILT_IN_COMMANDS, &skills, &[]);
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
 
         let declared: Vec<&str> = BUILT_IN_COMMANDS

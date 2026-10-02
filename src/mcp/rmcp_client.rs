@@ -28,7 +28,7 @@ use process_wrap::tokio::{CommandWrap, ProcessGroup};
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ClientConfig, ContentBlock, ElicitRequestParams,
     ElicitResult, ElicitationAction, ElicitationCapability, ElicitationSchema, ErrorCode,
-    ErrorData, FormElicitationCapability, Implementation, ProtocolVersion,
+    ErrorData, FormElicitationCapability, GetPromptRequestParams, Implementation, ProtocolVersion,
     ReadResourceRequestParams, ResourceContents,
 };
 use rmcp::service::{RequestContext, RoleClient, RunningService, ServiceError};
@@ -43,7 +43,10 @@ use crate::config::{McpServerConfig, McpSettings, McpTransport, SandboxSettings}
 use crate::questions::{UserAnswers, UserQuestion, UserQuestions};
 use crate::tools::sandbox::Sandbox;
 
-use super::{McpConnection, McpError, McpService, ResourceSummary, ServerManifest, ToolSummary};
+use super::{
+    McpConnection, McpError, McpService, PromptArgument, PromptSummary, ResourceSummary,
+    ServerManifest, ToolSummary,
+};
 
 /// 组装期把配置里每一台 server 连起来：**并发起、失败的跳过**（spec §3）。
 ///
@@ -492,6 +495,36 @@ impl McpConnection for RunClient {
             })?;
         Ok(flatten_resource_contents(&result.contents))
     }
+
+    async fn list_prompts(&self) -> Result<Vec<PromptSummary>, McpError> {
+        let result = self
+            .service
+            .peer()
+            .list_prompts(None)
+            .await
+            .map_err(|error| self.failed("列模板", error))?;
+        Ok(result.prompts.into_iter().map(prompt_summary).collect())
+    }
+
+    async fn get_prompt(&self, name: &str, arguments: Value) -> Result<String, McpError> {
+        let mut params = GetPromptRequestParams::new(name.to_owned());
+        if let Some(object) = arguments.as_object() {
+            params.arguments = Some(object.clone());
+        }
+        // `RunningService::get_prompt`（不是 `peer()` 上那个）会自动驱动 MRTR，与 `call_tool`
+        // 同一条规矩。
+        let result = self
+            .service
+            .get_prompt(params)
+            .await
+            .map_err(|error| self.failed(name, error))?;
+        Ok(result
+            .messages
+            .iter()
+            .map(|message| flatten_content_blocks(std::slice::from_ref(&message.content)))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
 }
 
 impl RunClient {
@@ -523,6 +556,24 @@ fn tool_summary(tool: rmcp::model::Tool) -> ToolSummary {
         name: tool.name.into_owned(),
         description: tool.description.map(|text| text.into_owned()),
         schema: Value::Object((*tool.input_schema).clone()),
+    }
+}
+
+/// `rmcp` 的 `Prompt` → 菜单需要的那一份摘要。
+fn prompt_summary(prompt: rmcp::model::Prompt) -> PromptSummary {
+    PromptSummary {
+        name: prompt.name,
+        description: prompt.description,
+        arguments: prompt
+            .arguments
+            .unwrap_or_default()
+            .into_iter()
+            .map(|argument| PromptArgument {
+                name: argument.name,
+                description: argument.description,
+                required: argument.required.unwrap_or(false),
+            })
+            .collect(),
     }
 }
 

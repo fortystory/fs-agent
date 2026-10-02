@@ -1,7 +1,7 @@
 # 17 — 提示词模板接进 `/` 菜单
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 10, 12
 
@@ -32,3 +32,29 @@ Blocked by: 10, 12
 
 - 不让模型自发调用模板。
 - 不把模板清单塞进工具描述或系统提示词（那是缓存前缀）。
+
+## Comments
+
+- 2026-10-03 落地（`Status: done`）。落点：`src/mcp/mod.rs`（`PromptSummary` / `PromptArgument` /
+  `PromptListing`、`McpConnection::list_prompts` 与 `get_prompt`、`McpService::list_prompts` /
+  `prompt_entries` / `get_prompt`）、`src/mcp/rmcp_client.rs`（`prompts/list` 与 `prompts/get`，
+  后者走会自动驱动 MRTR 的那个入口）、`src/tools/mod.rs`（`with_mcp` 收 `impl Into<Arc<..>>`，
+  于是工具表与菜单共用同一次连接）、`src/cli.rs`（`McpPromptEntry`、`mcp_prompt_entries`、
+  `slash_catalog` 的第三参数、`Submission::McpPrompt`、`run_mcp_prompt` 与
+  `prompt_inline_arguments`）、`src/render/wording.rs`（五条新短语）、
+  `tests/mcp_prompts.rs`（新，4 条）与 `src/cli.rs` 的单元测试（+4 条）。
+- **菜单那一半怎么接的**：`/` 菜单的条目从「常量 + 技能」变成「常量 + 技能 + 运行时模板」，
+  条目名是 `/<server>:<模板名>`（冒号是它与技能名的分界）。清单在组装之后现问一次，
+  **server 不可用时它的条目根本不出现**（`McpService::prompt_entries` 直接跳过失败的 server）。
+- **填参数的界面**：命令行上跟的位置参数按模板声明的顺序填；还缺的（含必填）用
+  `ask_user_question` 那条问询端口逐项问 —— **不新开第二套界面**。参数齐了才发 `prompts/get`，
+  渲染出来的文本用既有的 `TurnStart::Prompt` 变成这一轮的一条消息。
+- 三条降级都是如实的：清单里没有这个名字是「未知命令」；参数比声明的多是给人看的一句中文；
+  必填空着不发调用；人在询问里按掉（输入结束 / 取消）就什么都不发生。
+- **验证 1 的自动化程度**：菜单条目与解析、位置参数与实参形状、`prompts/get` 的往返都由单元 /
+  集成测试钉住（`the_menu_shows_the_builtin_commands_skills_and_mcp_prompts`、
+  `inline_arguments_fill_the_declared_parameters_in_order`、`templates_are_listed_per_server_and_
+  rendered_with_the_arguments`）；「在真终端里点一次菜单、填一遍参数」那一步**没有**自动化
+  （问卷的 TUI 交互本来就走真机走查那条线），留给真机看一眼。
+- 验证：`cargo test`（全绿）· `cargo clippy --all-targets` · `cargo fmt` ·
+  `python3 scripts/check-language.py`。

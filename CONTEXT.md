@@ -235,7 +235,7 @@ MCP 那一层的四个固定名字的工具（`mcp_list` / `mcp_call` / `mcp_res
 _Avoid_: MCP 工具（那是 server 提供的那些）、代理工具、桥接工具
 
 **原语（Primitive）**:
-MCP 规范里 server 能提供的东西的四个类别：tool（可调用的动作）、resource（按 URI 读的数据）、prompt（由**人**挑的模板）、elicitation（server 向人要一个输入）。**原语**是这一层的分类词，不是某一条具体能力；fs-agent 这一版落了 tool、resource 与 elicitation，prompt 归票 17。协议只谈 2026-07-28 的无状态形态 —— sampling / roots / logging 已 deprecated、不在范围。
+MCP 规范里 server 能提供的东西的四个类别：tool（可调用的动作）、resource（按 URI 读的数据）、prompt（由**人**挑的模板）、elicitation（server 向人要一个输入）。**原语**是这一层的分类词，不是某一条具体能力；fs-agent 这一版四类都落了 —— tool 与 resource 走四个元工具，prompt 走 `/` 菜单（发起者是人），elicitation 把 server 要的输入交给既有的问询端口。协议只谈 2026-07-28 的无状态形态 —— sampling / roots / logging 已 deprecated、不在范围。
 _Avoid_: 能力（那是 `ClientCapabilities` / `ServerCapabilities` 那一侧的词）、功能
 
 **MCP server（server）**:

@@ -27,6 +27,31 @@ pub mod rmcp_client;
 
 pub use rmcp_client::{connect_all, ConnectOptions, RunClient, StderrSink, BASE_ENV_KEYS};
 
+/// 一台 server 声明的一个提示词模板（`.scratch/mcp-support/spec.md` §8）。
+///
+/// 模板**由人发起**：它只出现在 `/` 菜单里，不进工具表、也不进前缀缓存 —— 模型看不到它。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSummary {
+    pub name: String,
+    pub description: Option<String>,
+    pub arguments: Vec<PromptArgument>,
+}
+
+/// 模板要的一个参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptArgument {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
+/// 一次模板清单询问的结论：与 [`ServerListing`] 同构。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptListing {
+    pub server: String,
+    pub result: Result<Vec<PromptSummary>, McpError>,
+}
+
 /// 一条 server 声明的工具，摘出模型需要的那几样。
 ///
 /// `schema` 是 server 给的原样 JSON Schema：我们只**读**它来写摘要，绝不据此做权限判断
@@ -239,6 +264,21 @@ pub trait McpConnection: Send + Sync {
         let _ = uri;
         Err(McpError::unsupported("读资源"))
     }
+
+    /// 问一次提示词模板清单（票 17）。模板只去 `/` 菜单，模型看不到它们。
+    async fn list_prompts(&self) -> Result<Vec<PromptSummary>, McpError> {
+        Err(McpError::unsupported("列模板"))
+    }
+
+    /// 取一份模板渲染出来的文本（`prompts/get`）。
+    async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<String, McpError> {
+        let _ = (name, arguments);
+        Err(McpError::unsupported("取模板"))
+    }
 }
 
 /// 四个元工具唯一的执行路径。
@@ -407,6 +447,68 @@ impl McpService {
             return Err(self.unavailable_error(server));
         };
         connection.read_resource(uri).await
+    }
+
+    /// 问一份（或全部）server 的模板清单。形状与 [`McpService::list_tools`] 逐字同构。
+    pub async fn list_prompts(&self, server: Option<&str>) -> Result<Vec<PromptListing>, McpError> {
+        let names = match server {
+            Some(name) => {
+                if !self.has_server(name) {
+                    return Err(McpError::unknown_server(name));
+                }
+                vec![name.to_owned()]
+            }
+            None => self.server_names(),
+        };
+
+        let mut listings = Vec::new();
+        for name in names {
+            let result = match self.connections.get(&name) {
+                Some(connection) => connection.list_prompts().await,
+                None => Err(self.unavailable_error(&name)),
+            };
+            listings.push(PromptListing {
+                server: name,
+                result,
+            });
+        }
+        Ok(listings)
+    }
+
+    /// 每台可用 server 的模板，拍平成一个列表；**失败的 server 直接跳过**。
+    ///
+    /// `/` 菜单用的就是这一条：server 不可用时它的模板条目**根本不出现**，而不是出现之后点开
+    /// 报错（spec §8）。
+    pub async fn prompt_entries(&self) -> Vec<(String, PromptSummary)> {
+        let Ok(listings) = self.list_prompts(None).await else {
+            return Vec::new();
+        };
+        listings
+            .into_iter()
+            .flat_map(|listing| match listing.result {
+                Ok(prompts) => prompts
+                    .into_iter()
+                    .map(|prompt| (listing.server.clone(), prompt))
+                    .collect::<Vec<_>>(),
+                Err(_) => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// 取一份模板渲染出来的文本。发起者是人，所以这里的错误是给人看的一句话。
+    pub async fn get_prompt(
+        &self,
+        server: &str,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<String, McpError> {
+        if !self.has_server(server) {
+            return Err(McpError::unknown_server(server));
+        }
+        let Some(connection) = self.connections.get(server) else {
+            return Err(self.unavailable_error(server));
+        };
+        connection.get_prompt(name, arguments).await
     }
 
     /// 这台 server 开了 `trust_results` 吗（spec §6）。
