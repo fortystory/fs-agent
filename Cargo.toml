@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "A self-hosted coding agent CLI: append-only event stream plus per-agent windows"
 license = "MIT"
+# 仓库里有**两个** bin（产品本身 + 下面那个测试辅助的假 MCP server），所以 `cargo run` 得知道
+# 不指名时跑哪个 —— 不加这一行它会报「could not determine which binary to run」。产品是默认，
+# 那个辅助仍然可以 `cargo run --bin fake-mcp-server` 点名跑。
+default-run = "fs-agent"
 
 [lib]
 name = "fs_agent"
