@@ -4609,6 +4609,15 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "覆盖层还开着：{text}");
 
+    // `Ctrl-Z` 是那个「别的全部忽略」的唯一例外：挂起是终端层手势，不属于任何一个视图的
+    // 键位表，所以覆盖层立着也拦不住它（`.scratch/suspend-gesture/spec.md` §2）。
+    state.key(Key::CtrlZ);
+    assert!(state.take_suspend_request(), "覆盖层立着也能挂起");
+    assert!(
+        state.take_events().is_empty(),
+        "挂起不是取消，也不推任何手势"
+    );
+
     // 可打印的键也到不了草稿：覆盖层的键就是
     // 覆盖层的，它后面的编辑器没在被打字。
     state.key(Key::Char('x'));

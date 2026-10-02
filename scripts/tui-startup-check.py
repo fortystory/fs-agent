@@ -33,6 +33,10 @@
 外加每轮一次 `--continue` 重开 —— 同一个终端、一个已经存在的会话，于是启动时的历史
 重播落在关键路径上。每一遍都绿才退出 0。不回答光标位置查询（`ESC[6n`）的 pty 会让
 ratatui 初始化失败，所以这个脚本自己回答它。
+
+**挂起**另跑两轮（TUI 与 `--plain` 各一，`.scratch/suspend-gesture/spec.md` §2–§4）：
+`Ctrl-Z` 之后进程必须真的进 stopped 状态、而且那一刻终端已经交还（这条需求最容易做错的
+就是交还与停止的顺序），`SIGCONT` 之后备用屏幕重进、画面重画，最后出口照旧干净。
 """
 import collections
 import fcntl
@@ -50,6 +54,7 @@ import termios
 import threading
 import unicodedata
 import time
+import warnings
 
 COLS, ROWS = 260, 30
 # 状态行以这个词收尾；下面的判定会检查这一行里它后面没跟着别的东西。
@@ -92,6 +97,13 @@ TEARDOWN = [
 # 进入时那条保存标题的序列（CSI 22 t），以及标题自己那串 `OSC 0`。
 TITLE_SAVE = "\x1b[22;0t"
 TITLE_SET = re.compile(r"\x1b\]0;([^\x07]*)\x07")
+
+# 备用屏幕**重进**的那条序列（CSI ?1049h）：挂起的恢复必须把它发出来，否则回来的人面对
+# 的是一屏 shell 输出（`.scratch/suspend-gesture/spec.md` §4）。出去的那条在 `TEARDOWN`。
+ALT_ENTER = "\x1b[?1049h"
+# 恢复时那一次清屏（CSI 2J）。挂起期间用户可能改过窗口尺寸，所以回来必须**全量重绘**：
+# 横幅那一行会因此再出现一次，那不是重复打印。
+CLEAR_ALL = "\x1b[2J"
 
 # 用户实际有的出口。每一个都得把终端交还回来，所以每种手势各跑一轮（spec §1：`/quit`、
 # 空闲时 `Ctrl-C` 与 `Ctrl-D` 都是双击 —— `.scratch/exit-gesture/spec.md` §1；panic 那条
@@ -431,6 +443,239 @@ def capture_busy(binary, data_home, config, timeout=20.0):
     return Run(raw, exited, status, modes, True)
 
 
+def proc_state(pid):
+    """`/proc` 里那个进程的状态字母（`T` = 停住，`Z` = 已退出还没被收），没了答 `None`。
+
+    挂起路径上的进程不是本脚本的子进程 —— 它爸爸是下面那个会话头 —— 所以 `waitpid`
+    看不见它，只能从 `/proc` 读。
+    """
+    try:
+        with open("/proc/%d/stat" % pid) as handle:
+            return handle.read().split()[2]
+    except OSError:
+        return None
+
+
+def fork_with_controlling_tty(binary, data_home, args=()):
+    """在一个**有控制终端**的会话里起这个二进制，让它待在自己的进程组里。
+
+    挂起同时要两件事，而 `pty.fork()` 两件都做不到：
+
+    - **会话与前台进程组得存在**，终端驱动才会把 `Ctrl-Z` 变成 SIGTSTP 送出去 —— plain
+      走的就是这条（它不进 raw 模式，0x1A 根本到不了应用）。没有控制终端时它无处投递，
+      按键就真的什么也不会发生（实测）。
+    - **它所在的进程组不能是孤儿组**，否则内核把 SIGTSTP 直接丢掉（POSIX 这么规定，免得
+      停住的作业没人能 `fg` 回来）—— TUI 自己 `raise` 的那条也白搭。`pty.fork()` 的
+      `setsid` 让子进程成了「父不在同一会话」的会话首进程，正好落进孤儿组。
+
+    所以这里分两层：中间那层 `setsid` 并拿走控制终端，再把下面那层设成前台进程组；它自己
+    不退出，而是等孙进程结束、把它的退出状态用**自己的退出码**带回来 —— 于是脚本虽然
+    `waitpid` 不到孙进程，仍然拿得到一个可断言的退出码。
+
+    返回 `(pid, master_fd, head_pid)`。
+    """
+    master, slave = pty.openpty()
+    ready_r, ready_w = os.pipe()
+    with warnings.catch_warnings():
+        # Python 3.12 起，多线程进程里 `os.fork()` 会告警死锁风险。子进程 fork 完立刻
+        # `execv`、中间不做任何 Python 级工作，所以这条告警在这里是噪音。
+        warnings.simplefilter("ignore", DeprecationWarning)
+        head = os.fork()
+    if head == 0:
+        os.close(master)
+        os.close(ready_r)
+        try:
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        except OSError:
+            os._exit(2)
+        pid = os.fork()
+        if pid == 0:
+            os.setpgid(0, 0)
+            os.dup2(slave, 0)
+            os.dup2(slave, 1)
+            os.dup2(slave, 2)
+            if slave > 2:
+                os.close(slave)
+            os.close(ready_w)
+            os.environ["XDG_DATA_HOME"] = data_home
+            os.environ["TERM"] = "xterm-256color"
+            os.execv(os.path.abspath(binary), [binary, *args])
+        # 前台组两边都设一次，免得与子进程自己的 `setpgid` 抢；谁先到都一样。
+        try:
+            os.setpgid(pid, pid)
+        except OSError:
+            pass
+        os.tcsetpgrp(slave, pid)
+        os.write(ready_w, b"%d" % pid)
+        os.close(ready_w)
+        _, status = os.waitpid(pid, 0)
+        os._exit(0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1)
+    os.close(slave)
+    os.close(ready_w)
+    pid = int(os.read(ready_r, 32))
+    os.close(ready_r)
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+    return pid, master, head
+
+
+class SuspendRun:
+    """一次挂起运行：它怎么停的、停着的时候终端是什么样、回来之后又是什么样。"""
+
+    def __init__(
+        self,
+        raw,
+        before_stop,
+        stopped,
+        modes_while_stopped,
+        resumed,
+        exited,
+        status,
+        modes,
+    ):
+        # `before_stop` 是进程停下之前收到的全部输出，恢复之后的一切在它后面 —— 交还序列
+        # 必须落在前半段、重进序列落在后半段，这是「先交还、再停」唯一可测的形状
+        # （`.scratch/suspend-gesture/spec.md` §3、§4）。
+        self.raw = raw
+        self.before_stop = before_stop
+        self.after_resume = raw[len(before_stop) :]
+        self.stopped = stopped
+        self.modes_while_stopped = modes_while_stopped
+        self.resumed = resumed
+        self.exited = exited
+        self.status = status
+        self.modes = modes
+
+
+def capture_suspend(binary, data_home, args=(), plain=False):
+    """在 pty 上把**一次挂起**跑完：启动 → `Ctrl-Z` → 停住 → `SIGCONT` → 正常退出。
+
+    这条路径站进运行的中段，而 `capture` 只看得见两头。它要证明三件事：按下 `Ctrl-Z`
+    之后进程**真的**进了 stopped 状态；那一刻终端已经交还（raw 模式关了、备用屏幕退出
+    了、鼠标与粘贴关了）—— 交还与停止的**顺序**正是这条需求最容易做错的地方；`SIGCONT`
+    之后备用屏幕重进、画面重画，最后走一次正常出口，收尾与 `capture` 一样干净。
+
+    TUI 与 plain 各跑一遍，两者的差别正是这个 feature 的一半：TUI 里 0x1A 是 raw 模式下的
+    **按键**（fs-agent 得自己发信号），plain 里它是终端驱动产生的**信号**（应用根本不知道，
+    因为 stdin 还在行缓冲里）—— 后者就是「plain 不进 raw 模式」的回归。
+    """
+    pid, fd, head = fork_with_controlling_tty(binary, data_home, args)
+    raw, screen = "", Screen(fd)
+    # 等启动安定：TUI 要状态行与横幅都在（与 `capture` 同一套判定），plain 没有状态行，
+    # 只等横幅。
+    deadline, settle_by = time.time() + 20.0, None
+    while time.time() < deadline:
+        text = read_once(fd, screen)
+        if text is None:
+            break
+        raw += text
+        if settle_by is None and BANNER_ANCHOR in raw:
+            if plain or any(STATUS_ANCHOR in row for row in screen.rows()):
+                settle_by = time.time() + 0.4
+        if settle_by is not None and time.time() >= settle_by:
+            break
+    # 空 Enter 的存活检查与 `capture` 一样：会话必须还在，否则下面按的是个死进程。
+    write(fd, b"\r")
+    time.sleep(0.4)
+    survived_empty_enter = proc_state(pid) is not None
+
+    stopped, modes_while_stopped, resumed = False, None, False
+    exited, status = False, None
+    before_stop = raw
+    if survived_empty_enter:
+        write(fd, b"\x1a")
+        # 停止是异步的：轮询 `/proc`，直到内核说它停了（这个进程不归本脚本 `waitpid` 管）。
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            text = read_once(fd, screen, 0.05)
+            if text:
+                raw += text
+            if proc_state(pid) == "T":
+                stopped = True
+                break
+        if stopped:
+            # 停止与它写下的交还序列可能一起到达：先把 pty 里剩下的读干净，才谈得上
+            # 「停下之前它发了什么」——「先交还、再停」正是靠这一段断言的。
+            drain = time.time() + 0.3
+            while time.time() < drain:
+                text = read_once(fd, screen, 0.05)
+                if not text:
+                    break
+                raw += text
+        before_stop = raw
+        if stopped:
+            # 停着的时候读线路规程：`Ctrl-Z` 之前必须已经把 raw 模式还了回去。
+            modes_while_stopped = tty_state(fd)
+            os.kill(pid, signal.SIGCONT)
+            if plain:
+                # plain 没有备用屏幕可重进，它恢复之后只是继续等 stdin。
+                time.sleep(0.3)
+                resumed = proc_state(pid) is not None
+            else:
+                deadline = time.time() + 5.0
+                while time.time() < deadline:
+                    text = read_once(fd, screen, 0.1)
+                    if text:
+                        raw += text
+                    if ALT_ENTER in raw[len(before_stop) :]:
+                        resumed = True
+                        break
+            # 正常出口：TUI 是双击 `Ctrl-C`，plain 走那条命令（它的 `Ctrl-C` 是信号，
+            # 会被终端驱动直接送到进程，测不出别的东西）。
+            write(fd, b"/quit\r" if plain else b"\x03\x03")
+            deadline = time.time() + 6.0
+            gone = False
+            while time.time() < deadline:
+                text = read_once(fd, screen, 0.1)
+                if text:
+                    raw += text
+                    continue
+                if proc_state(pid) in (None, "Z"):
+                    gone = True
+                    break
+            if not gone:
+                os.kill(pid, signal.SIGKILL)
+        # 会话头等到孙进程结束才走，并把它自己的退出码当**这次运行的**退出码带回来
+        # （0 = 正常退出 0，1 = 别的），所以这里仍然有一个可断言的退出码。
+        try:
+            _, head_status = os.waitpid(head, 0)
+            exited = os.WIFEXITED(head_status)
+            status = os.WEXITSTATUS(head_status) if exited else None
+        except ChildProcessError:
+            exited, status = False, None
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            os.waitpid(head, 0)
+        except ChildProcessError:
+            pass
+    # 收尾可能与退出落在同一瞬间，所以这一步不能跳过。
+    end = time.time() + 0.3
+    while time.time() < end:
+        text = read_once(fd, screen, 0.1)
+        if not text:
+            break
+        raw += text
+    modes = tty_state(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return SuspendRun(
+        raw,
+        before_stop,
+        stopped,
+        modes_while_stopped,
+        resumed,
+        exited,
+        status,
+        modes,
+    )
+
+
 def verdict_busy(run):
     """忙碌双击那条路的判定：进程结束、退出码 130、终端交还干净。
 
@@ -531,6 +776,56 @@ def terminal_handed_back(run):
     return None
 
 
+def verdict_suspend(run, plain=False):
+    """判定一次挂起：停住了、停之前交还了、回来之后重进了，最后出口照旧干净。
+
+    `plain` 那一轮只判「停住 + 回来还活着 + 干净退出」：它本来就不进备用屏幕、不开鼠标
+    上报、不写终端标题，拿 TUI 的收尾清单去量它只会量出错的东西。
+    """
+    if not run.stopped:
+        return False, "Ctrl-Z did not stop the process"
+    if run.modes_while_stopped is None:
+        return False, "could not read the tty while the process was stopped"
+    if not (
+        run.modes_while_stopped.canonical
+        and run.modes_while_stopped.echo
+        and run.modes_while_stopped.signals
+    ):
+        return False, "the tty was still raw while the process was stopped: %r" % (
+            run.modes_while_stopped,
+        )
+    if not run.resumed:
+        return False, "SIGCONT did not bring the process back"
+    if not plain:
+        # 交还的全部序列必须在**停下之前**就已经发出去 —— 这就是「先交还、再停」。
+        missing = [seq for seq in TEARDOWN if seq not in run.before_stop]
+        if missing:
+            return False, "the terminal was not given back before the stop: %s missing" % (
+                ", ".join(repr(seq) for seq in missing)
+            )
+        # 启动横幅在**停下之前**恰好出现一次：`eprintln` 在渲染器起来之后才打它，就是
+        # 这个脚本当年守的那个 bug。挂起不动这一条。
+        if run.before_stop.count(BANNER_ANCHOR) != 1:
+            return False, "the startup banner reached the terminal %d times before the stop" % (
+                run.before_stop.count(BANNER_ANCHOR),
+            )
+        # 标题在恢复时被重新保存一次（进入时那一次 + 回来那一次）。
+        if run.raw.count(TITLE_SAVE) < 2:
+            return False, "the terminal title was not saved again after the resume"
+        # 回来要清屏重绘 —— 横幅那一行因此会在重绘里再出现一次，那不是重复打印。
+        if CLEAR_ALL not in run.after_resume:
+            return False, "the screen was not cleared after the resume"
+    if not run.exited:
+        return False, "the quit gesture did not end the process"
+    if run.status != 0:
+        return False, "the quit gesture left exit status %r" % (run.status,)
+    if not plain:
+        handed_back = terminal_handed_back(run)
+        if handed_back is not None:
+            return False, handed_back
+    return True, "suspended, resumed and handed back cleanly"
+
+
 def binary_identity(binary):
     """二进制自称的名字，也就是它的头部必须显示的东西。
 
@@ -558,7 +853,7 @@ def main():
     if not identity:
         print("no identity from %s --version" % binary)
         return 1
-    bad, total = 0, runs * (len(GESTURES) + 1) + 1
+    bad, total = 0, runs * (len(GESTURES) + 1) + 3
     with tempfile.TemporaryDirectory(prefix="fs-agent-tui-check-") as data_home:
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
@@ -596,6 +891,20 @@ def main():
                 for connection in held:
                     connection.close()
             print("busy (ctrl-c ×2): %s -- %s" % ("GREEN" if ok else "RED", why))
+            bad += 0 if ok else 1
+            # 挂起：TUI 与 plain 各一轮。前者走 raw 模式下的按键、后者走终端驱动产生的
+            # 信号，两条路都要真的停下来、真的交还、真的回来
+            # （`.scratch/suspend-gesture/spec.md` §2–§4）。
+            run = capture_suspend(binary, data_home)
+            ok, why = verdict_suspend(run)
+            print("suspend (ctrl-z): %s -- %s" % ("GREEN" if ok else "RED", why))
+            bad += 0 if ok else 1
+            run = capture_suspend(binary, data_home, args=("--plain",), plain=True)
+            ok, why = verdict_suspend(run, plain=True)
+            print(
+                "suspend (ctrl-z, --plain): %s -- %s"
+                % ("GREEN" if ok else "RED", why)
+            )
             bad += 0 if ok else 1
         finally:
             os.close(devnull)

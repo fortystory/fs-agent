@@ -463,6 +463,21 @@ fn ctrl_c_quits_during_a_replay_and_ctrl_d_and_esc_are_inert() {
 }
 
 #[test]
+fn ctrl_z_suspends_even_during_a_replay() {
+    // 挂起是终端层手势，不属于任何一个视图的键位表 —— 重放中它照常可用，而且它不退出、
+    // 不打断重放、也不推任何手势（`.scratch/suspend-gesture/spec.md` §2）。
+    let mut state = state();
+    replay(&mut state, long_history());
+    state.replay_batch();
+
+    state.key(Key::CtrlZ);
+    assert!(state.take_suspend_request(), "重放中也能挂起");
+    assert!(!state.should_quit(), "挂起不是退出");
+    assert!(state.replay_pending(), "重放本身照旧等着下一批");
+    assert!(state.take_events().is_empty(), "它不推任何手势");
+}
+
+#[test]
 fn a_raised_gesture_takes_over_the_replay_progress_line() {
     // 举手期间进度行让位给那句催促 —— 它是**整条替换**，不是追加
     // （`.scratch/exit-gesture/spec.md` §2）。

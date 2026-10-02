@@ -1285,3 +1285,42 @@ fn a_title_is_only_written_when_it_changes() {
     );
     assert!(state.sync_title().is_none(), "再问一次还是没变");
 }
+
+#[test]
+fn ctrl_z_asks_for_a_suspend_and_is_taken_once() {
+    // 挂起是终端层手势：状态机只置位，真正的终端动作（交还、SIGTSTP、恢复重绘）由
+    // `Tui::run` 做，所以这里能断言的只有「请求被举起」与「取走一次就没了」
+    // （`.scratch/suspend-gesture/spec.md` §2、§3）。
+    let mut idle = new_state();
+    idle.key(Key::CtrlZ);
+    assert!(idle.take_suspend_request(), "空闲时按一下就要挂起");
+    assert!(!idle.take_suspend_request(), "取走之后就没了，不会连挂两次");
+
+    let mut busy = state_running();
+    busy.key(Key::CtrlZ);
+    assert!(busy.take_suspend_request(), "回合跑着的时候也允许挂起");
+    assert!(!busy.should_quit(), "挂起不是退出");
+    assert!(busy.take_events().is_empty(), "它也不推任何手势给循环");
+
+    // 问题占着底部输入区的时候也一样：挂起不归任何视图管。
+    let (mut asked, _answer) = state_with_prompt();
+    asked.key(Key::CtrlZ);
+    assert!(asked.take_suspend_request(), "问卷立着也能挂起");
+
+    // 别的键不会顺手举起它。
+    let mut other = new_state();
+    other.key(Key::Char('z'));
+    assert!(!other.take_suspend_request(), "一个光秃秃的 `z` 是文字");
+}
+
+#[test]
+fn a_suspend_rewrites_the_title_even_when_it_did_not_change() {
+    // 交还终端时标题被 pop 回了用户原来那条，而 `last_title` 还记着挂起前那一版 ——
+    // 所以恢复后必须**强制**重写一次，否则标题会停在用户那条上
+    // （`.scratch/suspend-gesture/spec.md` §4）。
+    let mut state = new_state();
+    assert!(state.sync_title().is_some(), "第一版总是给出去");
+    assert!(state.sync_title().is_none(), "没变就不再写");
+    assert_eq!(state.retitle(), "~/code/fs-agent", "恢复后照旧写一遍");
+    assert!(state.sync_title().is_none(), "写完之后比对重新成立");
+}

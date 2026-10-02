@@ -26,7 +26,9 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::style::Print;
-use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, SetTitle};
+use ratatui::crossterm::terminal::{
+    enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, SetTitle,
+};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
@@ -108,6 +110,10 @@ pub enum Key {
     CtrlN,
     CtrlG,
     CtrlJ,
+    /// `Ctrl-Z`：**挂起** —— 交还终端、停到后台，`fg` 回来重进并重绘
+    /// （`.scratch/suspend-gesture/spec.md` §2）。它不归任何视图管，所以
+    /// [`TuiState::key`] 在一切守卫之前就把它接走。
+    CtrlZ,
     PageUp,
     PageDown,
 }
@@ -128,6 +134,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'n' => Some(Key::CtrlN),
                 'g' => Some(Key::CtrlG),
                 'j' => Some(Key::CtrlJ),
+                'z' => Some(Key::CtrlZ),
                 _ => None,
             };
         }
@@ -428,6 +435,12 @@ impl Tui {
             for event in state.take_events() {
                 port.emit(event);
             }
+            if state.take_suspend_request() {
+                // 交还终端 → 停到后台 → `fg` 回来后重进并重绘
+                // （`.scratch/suspend-gesture/spec.md` §3、§4）。这一步**阻塞**到用户把进程
+                // 调回前台，所以它排在绘制段之前：恢复之后那一帧自然就是全量的。
+                suspend_and_resume(&mut terminal, &mut state);
+            }
             if state.is_dirty() {
                 // 一帧写在一个同步区里。synchronized update（DECSET 2026）只把缓冲差分包
                 // 在里面 —— 读键盘没有任何理由待在它里面 —— 而终端不支持这一对时就当没
@@ -462,6 +475,44 @@ fn set_terminal_title(title: &str) {
     let _ = execute!(std::io::stdout(), SetTitle(title));
 }
 
+/// 挂起：交还终端 → 用 SIGTSTP 停住 → `fg` 回来后重进终端并全量重绘
+/// （`.scratch/suspend-gesture/spec.md` §3、§4）。
+///
+/// 顺序不能换：**先交还、再停**。反过来的话，停止期间终端还留在 raw 模式与 alt screen
+/// 上，用户回到 shell 面对的就是一屏不属于自己的画面。恢复走 crossterm 的底层原语而不是
+/// `ratatui::init()` —— 后者每次都会再包一层 panic hook，反复挂起会把 hook 叠起来。
+fn suspend_and_resume(terminal: &mut ratatui::DefaultTerminal, state: &mut TuiState) {
+    disable_terminal_modes();
+    ratatui::restore();
+
+    // 安全性：`SIGTSTP` 的处置是进程级属性，`signal` 只读它拿到的那个编号。
+    //
+    // 用 `raise` 而不是 `kill(0, …)`：`kill` 是**异步**的 —— 实测里它返回之后当前线程又
+    // 往前跑了半条恢复路径（`enable_raw_mode` 与 `EnterAlternateScreen` 都发了出去），信号
+    // 才被处理，于是「先交还、再停」在时间上并不成立。`raise` 把信号投给当前线程并等它处理
+    // 完：这一行返回，就是 `fg` 回来了。停止信号停的是整个线程组（也就是这个进程），所以
+    // 「只发给当前线程」不影响「整个进程停住」；glibc 手册那条「发给进程组」针对的是一个
+    // 作业里有多个进程的情形，而 fs-agent 的组里只有它自己（`bash` 与动态工具刻意各自成组）。
+    //
+    // 处置先置回默认再发：`SIGTSTP` 可以被忽略，而被忽略的处置会跨 `execve` 继承，包装器
+    // 可能把它留着 —— 那时信号被丢弃、进程不停，而终端已经交还了。发完还原，父进程若有意
+    // 忽略它，那是父进程的意图，我们借一次就还（spec §5）。
+    unsafe {
+        let previous = libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+        libc::raise(libc::SIGTSTP);
+        libc::signal(libc::SIGTSTP, previous);
+    }
+
+    // 回到前台：把进终端那套反向做一遍，然后清屏、下一帧全量重绘 —— 挂起期间用户可能
+    // 已经改过窗口尺寸了。标题要**强制**重写：交还时它被 pop 回了用户原来那条。
+    let _ = enable_raw_mode();
+    let _ = execute!(std::io::stdout(), EnterAlternateScreen);
+    let title = state.retitle();
+    enable_terminal_modes(&title);
+    let _ = terminal.clear();
+    state.mark_dirty();
+}
+
 /// 鼠标上报、括号粘贴与终端标题：进来时管上，出去时还回去。
 ///
 /// `ratatui::init` 只管 raw 模式与 alt screen —— 它的 `TerminalOptions` 里根本没有鼠标
@@ -471,15 +522,12 @@ struct TerminalModes;
 
 impl TerminalModes {
     fn enter(title: &str) -> Self {
-        // 先请终端把原标题存起来（CSI 22 t），再写我们的第一版；`disable_terminal_modes`
-        // 用 CSI 23 t 把它换回来。不支持 push/pop 的终端上这两条是 no-op，标题会停在我们
-        // 写的那条 —— 那是一个**接受**的退化，不为它加 fallback：补发一条「清空标题」在
-        // 那种终端上会把用户原本的标题抹掉，比不还原更糟（spec §4）。
-        let _ = execute!(std::io::stdout(), Print("\x1b[22;0t"));
-        set_terminal_title(title);
-        let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+        enable_terminal_modes(title);
         // `init` 装了一个 hook 恢复 raw 模式与 alt screen；把它包一层，让 panic 在它跑
         // 之前也把鼠标与粘贴模式还回去。
+        //
+        // **只在启动时装这一次**：挂起的恢复走 [`enable_terminal_modes`]、不经过这里，
+        // 否则每挂起一次就再叠一层 hook（`.scratch/suspend-gesture/spec.md` §4）。
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             disable_terminal_modes();
@@ -487,6 +535,20 @@ impl TerminalModes {
         }));
         Self
     }
+}
+
+/// 进终端那套里**可以反复做**的那一半：请终端把原标题存起来（CSI 22 t）、写我们的第一版、
+/// 开鼠标与括号粘贴；[`disable_terminal_modes`] 用 CSI 23 t 把标题换回来。
+///
+/// 启动时由 [`TerminalModes::enter`] 调一次，挂起恢复时由 [`suspend_and_resume`] 再调 ——
+/// panic hook 因此不在这里（那个只能装一次）。不支持 push/pop 的终端上这两条是 no-op，
+/// 标题会停在我们写的那条：那是一个**接受**的退化，不为它加 fallback —— 补发一条「清空
+/// 标题」在那种终端上会把用户原本的标题抹掉，比不还原更糟
+/// （`.scratch/terminal-title/spec.md` §4）。
+fn enable_terminal_modes(title: &str) {
+    let _ = execute!(std::io::stdout(), Print("\x1b[22;0t"));
+    set_terminal_title(title);
+    let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
 }
 
 impl Drop for TerminalModes {
@@ -537,6 +599,10 @@ pub struct TuiState {
     /// `busy()` 已经为假，但人的意图仍然是「打断这次运行、退出」，退出码不该退回 0。
     /// 举手的出身记在这里，第二下照它分派。
     exit_gesture_busy: bool,
+    /// 挂起请求：`Ctrl-Z` 置位，[`Tui::run`] 取走并执行「交还终端 → 停住 → 恢复重绘」
+    /// （`.scratch/suspend-gesture/spec.md` §2、§3）。纯渲染器状态，不进事件流，也不经过
+    /// 任何一次性通道。
+    suspend: bool,
     /// 会话所在的模式。用组装时的值（[`SessionFacts::mode`]）打底，此后只被那个手势挪动：
     /// 流上没有任何东西说一个会话处在什么模式，而 `Shift+Tab` 是唯一改变它的东西
     /// （`.scratch/todo-and-modes/spec.md` §1）。
@@ -1278,6 +1344,7 @@ impl TuiState {
             last_title: None,
             exit_deadline: None,
             exit_gesture_busy: false,
+            suspend: false,
             mode,
             transcript: Transcript::new(),
             pane: Pane::new(),
@@ -1411,6 +1478,14 @@ impl TuiState {
         }
         self.last_title = Some(title.clone());
         Some(title)
+    }
+
+    /// 挂起恢复后**强制**重写标题：交还终端时标题被 pop 回了用户原来那条，而 `last_title`
+    /// 的记忆还停在挂起前那一版 —— 两者已经对不上（`.scratch/suspend-gesture/spec.md` §4）。
+    /// 所以先让比对失效，再照 [`TuiState::sync_title`] 的规则算一次。
+    pub fn retitle(&mut self) -> String {
+        self.last_title = None;
+        self.sync_title().unwrap_or_else(|| self.title())
     }
 
     /// 上一帧画完之后有没有什么东西变了。
@@ -2235,6 +2310,13 @@ impl TuiState {
         self.quit
     }
 
+    /// 取走挂起请求：`true` 表示 [`Tui::run`] 该执行一次「交还 → 停 → 恢复」
+    /// （`.scratch/suspend-gesture/spec.md` §2、§3）。与 [`TuiState::take_events`] 同一种
+    /// 形状：状态机只置位，循环来取。
+    pub fn take_suspend_request(&mut self) -> bool {
+        std::mem::take(&mut self.suspend)
+    }
+
     /// 取一次 broadcast 接收。`true` 表示通道没了。
     fn take_render_event(
         &mut self,
@@ -2312,6 +2394,13 @@ impl TuiState {
     /// 处理一个按键。答案与提交通过待答的一次性通道发出去；手势排队交给循环。
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
+        // 挂起排在**一切**之前：它是终端层手势，重放、详情覆盖层、问卷、举手都拦不住它
+        // （`.scratch/suspend-gesture/spec.md` §2）。真正的终端动作由 [`Tui::run`] 做 ——
+        // 这里只置位，跟 `quit` 是同一种「状态机请求、循环执行」的形状。
+        if key == Key::CtrlZ {
+            self.suspend = true;
+            return;
+        }
         // 重放在别的一切之前就占着键盘 —— 包括详情覆盖层，它在这个阶段不可能开着 ——
         // 因为它的边界是它自己的：`Ctrl-C` 退出，`Ctrl-D` 与 `Esc` 不起作用，而编辑器照常
         // 工作（`spec` §5）。
@@ -4986,6 +5075,12 @@ mod tests {
         assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
             Some(Key::CtrlJ)
+        );
+        // 挂起：raw 模式把终端的 SIGTSTP 吃成了按键，所以这一个必须被认出来
+        // （`.scratch/suspend-gesture/spec.md` §2）。
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            Some(Key::CtrlZ)
         );
         // 一个光秃秃的 `g` 是文字，不是手势。
         assert_eq!(plain(KeyCode::Char('g')), Some(Key::Char('g')));
