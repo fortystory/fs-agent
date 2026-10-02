@@ -172,6 +172,34 @@ TUI 里 `TuiState` 是可测的那一半：它持有转录、输入行与任何�
 headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4–§6）。不支持 push/pop 的
 终端上那两条序列是 no-op，标题会停在我们写的那条 —— 这是接受的退化，不加 fallback。
 
+## 挂起与恢复
+
+TUI 里按一下 `Ctrl-Z` 把整个进程停到后台（`SIGTSTP`），在 shell 里干完活 `fg` 回来，画面
+原地继续。它是**终端层手势**：不进事件流、不落 `log.jsonl`、不打回执（shell 自己会打一行
+`Stopped`），而任何视图都拦不住它 —— 重放中、详情覆盖层立着、问卷立着、退出手势的举手正举
+着，按下去都是挂起。**单下生效**，没有举手那一层（`.scratch/suspend-gesture/spec.md` §1、§2）。
+
+顺序是这条接缝的全部内容：**先交还终端、再停**。
+
+- **交还**：关鼠标上报与括号粘贴、发 `CSI 23 t` 把标题还回用户原来那条、`ratatui::restore()`
+  关掉 raw 模式并离开备用屏幕 —— 然后才把处置置回 `SIG_DFL` 并 `raise(SIGTSTP)`。`raise` 是
+  同步的：这一行返回就是 `fg` 回来了。（`kill(0, …)` 不行 —— 它异步，调用返回之后当前线程
+  还会往前跑一段，交还与停止的先后就乱了。）
+- **恢复**：`enable_raw_mode()` 加 `EnterAlternateScreen`（crossterm 的原语，不是
+  `ratatui::init()` —— 那个每次都会再包一层 panic hook）、重新保存并写标题、重开鼠标与粘贴、
+  `terminal.clear()`，然后走正常绘制路径**全量重绘**（挂起期间用户可能已经改过窗口尺寸）。
+
+`--plain` 与 headless 不参与：plain 从不进 raw 模式，`Ctrl-Z` 是终端驱动直接产生的
+`SIGTSTP`，应用根本看不到那个字节；headless 没有键盘。这条「plain 天然就对」由
+`scripts/tui-startup-check.py` 的 `--plain` 挂起路径守着。
+
+**停着的那段时间世界照常走**：`bash` 与动态工具的子进程各自成组、收不到这次停止，会继续跑
+（输出管道填满后它们阻塞在写，恢复后接着走）；`bash` 的超时与 provider 的超时都是用户态
+计时器，挂起期间照数 —— 所以挂得比剩余超时久，回来时那一回合会以 provider 断流或命令超时
+收尾，走现有的错误呈现。**想让子进程一起停下，动作是先 `Ctrl-C` 取消、再 `Ctrl-Z`**：取消
+路径本来就会 `killpg` 掉活跃的工具进程组。这些取舍记在
+[`.scratch/suspend-gesture/spec.md`](../.scratch/suspend-gesture/spec.md) §6。
+
 ## 重新打开会话：历史重播
 
 `--continue` 重开本工作区最新的那个会话（`--continue <id>` / `--session <id>` / `-c <id>` 改成重开指名的
