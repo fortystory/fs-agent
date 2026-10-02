@@ -4243,6 +4243,97 @@ fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
 }
 
 #[test]
+fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
+    // 页脚最后那一段是键位提示；举手期间它被回执**替换**（不是追加）
+    // —— `.scratch/questionnaire-keys/spec.md` §6。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, mut answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    });
+
+    let text = screen(130, 24, &mut state).join("\n");
+    assert!(text.contains("j/k 移动"), "键位提示跟在进度与按钮后面：{text}");
+    assert!(text.contains("esc 退出询问"), "{text}");
+
+    // 举 `Esc` 的手：那一段换成回执。
+    state.key(Key::Esc);
+    let text = screen(130, 24, &mut state).join("\n");
+    assert!(text.contains("再按一次 esc 退出询问"), "{text}");
+    assert!(!text.contains("j/k 移动"), "回执替换了键位提示：{text}");
+
+    // 第二下真的退出这次询问：发送端被丢掉，而不是作答。
+    state.key(Key::Esc);
+    assert!(answers.try_recv().is_err(), "退出询问 = 丢下发送端");
+}
+
+#[test]
+fn the_questionnaire_footer_shows_the_exit_receipt_the_hint_line_cannot() {
+    // 问卷期间提示行整行被页脚替换，所以 `Ctrl-C` 举起的那只手只有落在这里才看得见
+    // —— `.scratch/questionnaire-keys/spec.md` §6。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    });
+    state.request(ConsoleRequest::RunState { running: true });
+
+    state.key(Key::CtrlC);
+    let text = screen(130, 24, &mut state).join("\n");
+    assert!(
+        text.contains("已取消 · 再按一次 ctrl-c 退出"),
+        "回执落在页脚：{text}"
+    );
+}
+
+#[test]
+fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
+    // 窄到放不下整段时，先丢教学性的那部分，进度与按钮保住
+    // （`.scratch/questionnaire-keys/spec.md` §6）。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    });
+
+    let wide = screen(130, 24, &mut state).join("\n");
+    assert!(wide.contains("ctrl-n/ctrl-p"), "宽终端里有 Emacs 别名：{wide}");
+
+    // 让这一题有着落，页脚才画得出那个「提交」按钮。
+    state.key(Key::Char(' '));
+
+    let narrow = screen(40, 24, &mut state).join("\n");
+    assert!(narrow.contains("1 / 1"), "进度永远保：{narrow}");
+    assert!(narrow.contains("提交"), "能点的按钮永远保：{narrow}");
+    assert!(
+        narrow.contains("esc 退出询问"),
+        "窄到只剩出口那一句：{narrow}"
+    );
+    assert!(
+        !narrow.contains("j/k 移动"),
+        "先丢的是教学性的键位提示：{narrow}"
+    );
+}
+
+#[test]
 fn the_wheel_moves_the_questionnaire_highlight() {
     use fs_agent::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {

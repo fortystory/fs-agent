@@ -1097,27 +1097,35 @@ fn a_questionnaire_reads_in_chinese_and_pages() {
     // 页脚是页码指示加上那些键，所以读者总知道这是第几个问题、
     // 键盘都干什么（spec §19）。
     assert_eq!(wording::questionnaire_progress(1, 3), "2 / 3");
-    // 只有每个问题都处理完之后，页脚才承诺 `提交`；在那之前
-    // enter 是继续（spec §7）。
-    assert_eq!(
-        wording::questionnaire_status(1, 3, false),
-        "2 / 3 · ↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
-    );
-    assert_eq!(
-        wording::questionnaire_hint(false),
-        "↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
-    );
-    assert_eq!(
-        wording::questionnaire_status(1, 3, true),
-        "2 / 3 · ↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
-    );
-    assert_eq!(
-        wording::questionnaire_hint(true),
-        "↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
-    );
     assert_eq!(wording::questionnaire_multi_marker(), "（可多选）");
     assert_eq!(wording::questionnaire_answer_label(), "回答：");
     assert_eq!(wording::questionnaire_custom_label(), "自定义：");
+}
+
+#[test]
+fn the_questionnaire_hint_drops_the_teaching_parts_first() {
+    // 三档递减：先丢 Emacs 别名，再丢 `j`/`k` 那一句，最后只剩出口；再窄就整段不画
+    // （`.scratch/questionnaire-keys/spec.md` §6）。
+    assert_eq!(
+        wording::questionnaire_hint(120),
+        "j/k 移动 · 空格选中 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
+    );
+    assert_eq!(
+        wording::questionnaire_hint(32),
+        "j/k 移动 · 空格选中 · esc 退出询问"
+    );
+    assert_eq!(wording::questionnaire_hint(16), "esc 退出询问");
+    assert_eq!(wording::questionnaire_hint(8), "");
+
+    // 举手那两句是**替换**段尾那段提示，不在阶梯里。
+    assert_eq!(
+        wording::questionnaire_decline_raised(),
+        "再按一次 esc 退出询问"
+    );
+    assert_eq!(
+        wording::questionnaire_exit_raised(),
+        "已取消 · 再按一次 ctrl-c 退出"
+    );
 }
 
 #[test]

@@ -840,29 +840,45 @@ pub fn questionnaire_progress(index: usize, total: usize) -> String {
     format!("{} / {}", index + 1, total)
 }
 
-/// 问卷提供的那些键，按它们显示的先后。
+/// 问卷页脚里那段键位提示，按**留给它的列数**降级
+/// （`.scratch/questionnaire-keys/spec.md` §6）。
 ///
-/// `ready` 表示每道题是否都有着落，因为正是它决定 `enter` 是提交、还是只继续（spec §7）。
-/// 在它还在一题题往下走的时候就承诺 `enter 提交`，会是界面在除最后一题之外的每一题上撒的
-/// 谎。
-pub fn questionnaire_hint(ready: bool) -> &'static str {
-    if ready {
-        "↑↓ 选择 · enter 提交 · space 确认 · tab 跳过 · ←→ 换题"
+/// 三档递减，按「先丢教学性的」排：Emacs 别名 → `j`/`k` 那一句 → 只留出口。空串表示这一段
+/// 连一句提示都放不下，页脚于是只剩进度与按钮。举手回执**不在**这条阶梯里：它在任何宽度下
+/// 都保（见 [`questionnaire_decline_raised`] 与 [`questionnaire_exit_raised`]）。
+pub fn questionnaire_hint(room: usize) -> &'static str {
+    if room >= QUESTIONNAIRE_HINT_WIDE {
+        "j/k 移动 · 空格选中 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
+    } else if room >= QUESTIONNAIRE_HINT_MEDIUM {
+        "j/k 移动 · 空格选中 · esc 退出询问"
+    } else if room >= QUESTIONNAIRE_HINT_NARROW {
+        "esc 退出询问"
     } else {
-        "↑↓ 选择 · enter 继续 · space 确认 · tab 跳过 · ←→ 换题"
+        ""
     }
 }
 
-/// 问卷的页脚：屏幕上是第几题，以及那些键都干什么。
+/// 问卷页脚里举手等第二下时的回执：**退出这次询问**那一把（`Esc`）。
 ///
-/// `ready` 传进 [`questionnaire_hint`]，于是页脚只在那个键真的会提交时才说 `提交`。
-pub fn questionnaire_status(index: usize, total: usize, ready: bool) -> String {
-    format!(
-        "{} · {}",
-        questionnaire_progress(index, total),
-        questionnaire_hint(ready)
-    )
+/// 它**替换**页脚最后那一段键位提示，不是追加 —— 与退出手势替换提示行出口段同构
+/// （`.scratch/exit-gesture/spec.md` §2）。它不参与宽度阶梯。
+pub fn questionnaire_decline_raised() -> &'static str {
+    "再按一次 esc 退出询问"
 }
+
+/// 问卷页脚里举手等第二下时的回执：**退出这次运行**那一把（`Ctrl-C`）。
+///
+/// 问卷立着时提示行整行被页脚替换，所以那句话只有落在这里才看得见
+/// （`.scratch/questionnaire-keys/spec.md` §6）。
+pub fn questionnaire_exit_raised() -> &'static str {
+    "已取消 · 再按一次 ctrl-c 退出"
+}
+
+/// 键位提示那三档的边界，量的是**留给它的列数**（不是终端宽度）：完整那句约 45 列、
+/// 去掉 Emacs 别名那句约 26 列、只剩出口那句 9 列。
+const QUESTIONNAIRE_HINT_WIDE: usize = 48;
+const QUESTIONNAIRE_HINT_MEDIUM: usize = 28;
+const QUESTIONNAIRE_HINT_NARROW: usize = 12;
 
 /// 多选题在它的文本旁边带的那条标记，好让用户知道可以选中多于一个选项。
 pub fn questionnaire_multi_marker() -> &'static str {

@@ -1,7 +1,7 @@
 # 04 — 问卷页脚：键位提示、举手回执与三档宽度阶梯
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 03
 
 > 来源：[`../spec.md`](../spec.md) §6。它同时补上一条既有的手感缺口：问卷期间 `Ctrl-C` 举起的
@@ -48,3 +48,19 @@ Blocked by: 03
 - 不动提示行本身（那是全局的，问卷外 `esc 取消` 仍然对）。
 - 不动按钮的可用性规则与它们的点击动作。
 - 不给窗口加可配时长（票 03 的窗口是常量）。
+
+## Comments
+
+- **落地（2026-10-02）**：`wording::questionnaire_status` 与 `questionnaire_hint(ready)` 删掉 ——
+  它们只被测试引用，TUI 页脚今天压根不画键位提示。换成 `questionnaire_hint(room)`（三档：
+  完整含 Emacs 别名 / 去掉别名 / 只剩 `esc 退出询问` / 整段不画）与两条举手回执
+  （`questionnaire_decline_raised`、`questionnaire_exit_raised`）。阈值是 48 / 28 / 12 列，
+  量的是**留给提示的列数**（第一版按 96/72/40 定得太苛刻，宽终端反而看不到别名）。
+- **`draw_questionnaire_footer`** 在按钮之后补最后那一段：举手时是回执（**任何宽度都保** ——
+  问卷期间提示行整行被页脚替换，那句话只有落在这里才看得见），否则是键位提示，按剩余列数降级。
+  回执是**替换**段尾提示，不是追加（与 exit-gesture §2 同构）。
+- **先红后绿**：新增 wording 一条（阶梯与两句回执）、render_layout 三条（键位提示与回执替换、
+  `Ctrl-C` 的回执落在页脚、窄终端先丢教学性的那部分）。
+- **顺手核出的一条**：页脚的按钮按可用性增删，所以**没作答完时根本没有「提交」按钮** ——
+  窄终端测试要先让那一题有着落，否则断言的是一个不存在的按钮。
+- **验收**：`cargo test` 全绿（render_layout 128 条、wording 63 条）、`cargo clippy --all-targets` 干净。

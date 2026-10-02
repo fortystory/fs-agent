@@ -3989,6 +3989,22 @@ fn draw_questionnaire_footer(
         cursor += width;
         drawn = true;
     }
+    // 最后那一段：举手时是回执 —— 任何宽度下都保，因为它回答的是「刚才那下生效了没有」；
+    // 否则是键位提示，按剩下的列数降级（`.scratch/questionnaire-keys/spec.md` §6）。
+    let tail = match state.raised_gesture(std::time::Instant::now()) {
+        Some(Gesture::Exit) => wording::questionnaire_exit_raised(),
+        Some(Gesture::DeclineQuestion) => wording::questionnaire_decline_raised(),
+        None => wording::questionnaire_hint(
+            (panes.hints.width as usize).saturating_sub(cursor + 3),
+        ),
+    };
+    if !tail.is_empty() {
+        spans.push(Span::raw("   "));
+        spans.push(Span::styled(
+            tail.to_owned(),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), panes.hints);
 }
 
