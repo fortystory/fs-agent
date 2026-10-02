@@ -1,7 +1,7 @@
 # 02 — 答案只有一个形状：`selected` 与 `custom` 并存
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 来源：[`../spec.md`](../spec.md) §3、§4。它推翻 [`fs-agent-v1` §7](../../fs-agent-v1/spec.md)
@@ -49,3 +49,17 @@ Blocked by: 01
 - 不改「跳过」与「`answers` 里没有该 `id`」两条既有约定。
 - 不动 plain 路径（它一次一行，表达不了并存，spec §10）。
 - 不动 `Esc`（票 03）、页脚（票 04）。
+
+## Comments
+
+- **落地（2026-10-02）**：删掉三处互斥（`type_custom` 的单选清空、`confirm_highlight` 的
+  `custom.clear()`、`answers()` 的单选清零），`confirm_highlight` 变成**切换**（单选集合仍至多一个，
+  确认另一项是替换）；`press` 里单选的两次 `advance` 删掉（确认不翻页），`Enter` 按区域拆
+  （选项区与空格一致、输入区前进、`all_handled()` 仍是提交）；鼠标 `select_option` 跟着不再翻页。
+- **契约回改**：`fs-agent-v1` §7 那条「单选覆盖 / 多选补充」改成「两者可以同时出现」，
+  `ask_user_question` 的工具描述与模块注释同改，`tests/ask_user_question.rs` 里钉住旧文案的那条
+  断言跟着改。
+- **先红后绿**：新增四条（并存、已选再确认=取消、确认另一项=替换、`Enter` 按区域），
+  改写两条（单选确认前进 → 翻页归 `→`；`typing_overrides...` → 并存），另有三条既有测试因为
+  「确认不前进」跟着改写。
+- **验收**：`cargo test` 全绿（问卷 TUI 那个文件 24 条）、`cargo clippy --all-targets` 干净。

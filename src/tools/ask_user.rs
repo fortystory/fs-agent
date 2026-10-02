@@ -9,8 +9,9 @@
 //!   `task` 不进执行者工具表」是同一个机制（递归深度为一，spec §16）；刻意不再来一条规则。
 //!
 //! 工具描述里带着那三条编码约定（spec §7）。它们不是装饰：答案是模型必须解码的 JSON，没有它们
-//! `selected: []` 就与「从没走到过」无从区分，而一个覆盖性的 `custom` 也与一个补充性的 `custom`
-//! 无从区分。
+//! `selected: []` 就与「从没走到过」无从区分。单选与多选**共用一个答案形状**（`selected` 与
+//! `custom` 可以并存，见 `.scratch/questionnaire-keys/spec.md` §3），所以描述里不再有
+//! 「覆盖 / 补充」那一对说法。
 
 use std::collections::HashSet;
 
@@ -127,9 +128,9 @@ impl Tool for AskUserQuestionTool {
                           {\"answers\":[{\"id\":...,\"selected\":[...],\"custom\":...}]}。按这几条\
                           规矩读它：\n- `selected` 装用户勾选的 label，`custom` 装用户自己敲的自由\
                           文本。`selected: []` 且没有 `custom`，意思是用户跳过了那道题；\
-                          `answers` 里少一个 `id`，意思是那道题根本没走到。\n- 在 `multi_select` \
-                          为 false 的题上，自定义文本覆盖所选，所以答案是 `selected: []` 加上 \
-                          `custom`。在多选题上，自定义文本是所选之外的补充，两者可以同时出现。\
+                          `answers` 里少一个 `id`，意思是那道题根本没走到。\n- `selected` 与 \
+                          `custom` **可以同时出现**：单选与多选一个形状，用户既勾了选项又自己敲了\
+                          一句时两个字段都有值（单选下 `selected` 至多一个）。两者都空才是跳过。\
                           \n- 选项有限时给出 `options`，想要自由文本就不给。要推荐某个选项，把它放\
                           在第一个，并让它的 `label` 以 `(Recommended)` 结尾；答案里的值就是那个 \
                           label 原样，标记也一起。"

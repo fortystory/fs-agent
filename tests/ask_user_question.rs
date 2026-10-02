@@ -189,9 +189,9 @@ fn the_description_carries_the_three_encoding_conventions() {
     assert!(description.contains("跳过"), "{description}");
     assert!(description.contains("根本没走到"), "{description}");
     assert!(description.contains("selected: []"), "{description}");
-    // 2. 单选的,自定义文本是覆盖；多选的自定义文本是补充。
-    assert!(description.contains("覆盖"), "{description}");
-    assert!(description.contains("补充"), "{description}");
+    // 2. 单选与多选一个形状：`selected` 与 `custom` 可以同时出现（spec §3）。
+    assert!(description.contains("可以同时出现"), "{description}");
+    assert!(description.contains("至多一个"), "{description}");
     // 3. `(Recommended)` 标记只做显示：答案留下的是那个 label。
     assert!(description.contains("(Recommended)"), "{description}");
     assert!(description.contains("标记也一起"), "{description}");

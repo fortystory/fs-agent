@@ -153,7 +153,8 @@ fn the_question_and_its_options_take_over_the_bottom_input_area() {
 }
 
 #[test]
-fn a_single_select_choice_advances_and_the_footer_pages() {
+fn the_arrows_page_between_questions_and_the_footer_says_where_we_are() {
+    // 确认之后**不**自动翻页（spec §4）：翻页归 `→` 与页脚那三个按钮。
     let mut state = state();
     let _rx = ask(
         &mut state,
@@ -168,11 +169,15 @@ fn a_single_select_choice_advances_and_the_footer_pages() {
     let text = rows.join("\n");
     assert!(text.contains("1 / 3"), "页脚在翻页：{text}");
 
-    // 在单选题上确认高亮那个选项，就前进到
-    // 下一题。
+    // 确认高亮那个选项之后仍停在这一题 —— 并存的意义之一就是还能补一句话。
     state.key(Key::Enter);
-    let rows = screen(120, 24, &mut state);
-    let text = rows.join("\n");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("First?"), "确认不翻页：{text}");
+    assert!(text.contains("1 / 3"), "{text}");
+
+    // 翻页是 `→` 的事。
+    state.key(Key::Right);
+    let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("Second?"), "{text}");
     assert!(text.contains("2 / 3"), "{text}");
     assert!(!text.contains("First?"), "同一时刻屏幕上只有一道题：{text}");
@@ -190,17 +195,18 @@ fn submit_is_refused_until_every_question_is_answered_or_skipped() {
         ],
     );
 
-    // 确认第一个答案会前进，但在它后面那些题还没处理完时，
-    // 绝不能提交。
+    // 确认第一个答案不再前进（spec §4），而在它后面那些题还没处理完时，绝不能提交。
     state.key(Key::Enter);
     assert!(answer(&mut rx).is_none(), "还有题没处理，提交被拒");
 
-    // 第二个也一样：答案已经作出，提交仍然要另外按一次。
+    // 翻页是 `→` 的事；第二题确认之后同样还不能提交。
+    state.key(Key::Right);
     state.key(Key::Enter);
     assert!(answer(&mut rx).is_none(), "还有一题没处理，提交被拒");
 
     // 显式跳最后一题，才让整份问卷完成；跳过这个动作
     // 本身也不提交。
+    state.key(Key::Right);
     state.key(Key::Tab);
     assert!(answer(&mut rx).is_none(), "跳过最后一题的那一下不提交");
 
@@ -254,8 +260,8 @@ fn a_skipped_question_is_no_answer_even_after_typing() {
 }
 
 #[test]
-fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() {
-    // 单选：自定义文本赢，所以回来的 `selected` 是空的（spec §7）。
+fn typing_and_a_single_select_choice_travel_back_together() {
+    // 单选与多选一个形状：自定义文本与所选**并存**交回（spec §3）。
     let mut single = state();
     let mut single_rx = ask(
         &mut single,
@@ -268,8 +274,8 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
     single.key(Key::Char('x'));
     let text = screen(120, 24, &mut single).join("\n");
     assert!(
-        text.contains("○ 1. a"),
-        "打字清掉了单选的那个选择，因为自定义文本覆盖它：{text}"
+        text.contains("● 1. a"),
+        "打字没动单选的那个选择，因为文本与它并存：{text}"
     );
     assert!(text.contains("自定义：x"), "{text}");
     single.key(Key::Enter);
@@ -277,7 +283,7 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
         answer(&mut single_rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "one".to_owned(),
-            selected: Vec::new(),
+            selected: vec!["a".to_owned()],
             custom: Some("x".to_owned()),
         }]
     );
@@ -305,6 +311,61 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
             custom: Some("x".to_owned()),
         }]
     );
+}
+
+#[test]
+fn confirming_a_selected_option_takes_it_back() {
+    // 在已选项上再确认一次就是取消它（spec §3）—— 单选与多选在按键语义上是同一条。
+    let mut state = state();
+    let _rx = ask(&mut state, vec![question("one", "Pick?", &["a", "b"], false)]);
+    state.key(Key::Char(' '));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("● 1. a"), "第一次确认选中它：{text}");
+
+    state.key(Key::Char(' '));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("○ 1. a"), "再确认一次就取消：{text}");
+}
+
+#[test]
+fn confirming_another_option_replaces_the_single_select_one() {
+    // 单选仍是单选：确认另一个选项是**替换**，不是叠加。
+    let mut state = state();
+    let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a", "b"], false)]);
+    state.key(Key::Char(' '));
+    state.key(Key::Char('j'));
+    state.key(Key::Char(' '));
+    state.key(Key::Enter);
+    let answers = answer(&mut rx).expect("作答了").answers;
+    assert_eq!(
+        answers[0].selected,
+        vec!["b".to_owned()],
+        "只有后确认的那一个留下"
+    );
+}
+
+#[test]
+fn enter_matches_space_in_the_options_zone_and_pages_from_the_text_input() {
+    // 选项区里 `Enter` 与空格完全一致；输入区里它是「前进」（spec §4）。
+    let mut state = state();
+    let _rx = ask(
+        &mut state,
+        vec![
+            question("one", "First?", &["a", "b"], false),
+            question("two", "Second?", &["c"], false),
+        ],
+    );
+    state.key(Key::Enter);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("● 1. a"), "选项区里 `Enter` 也是确认：{text}");
+    assert!(text.contains("First?"), "确认不翻页：{text}");
+
+    // 进输入区打字，`Enter` 在那里是前进。
+    walk_into_the_input(&mut state, 2);
+    state.key(Key::Char('x'));
+    state.key(Key::Enter);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("Second?"), "输入区里 `Enter` 前进：{text}");
 }
 
 #[test]
@@ -592,7 +653,9 @@ fn a_space_still_confirms_while_nobody_is_typing() {
     );
     single.key(Key::Char(' '));
     let text = screen(120, 24, &mut single).join("\n");
-    assert!(text.contains("Second?"), "单选里空格确认并前进：\n{text}");
+    assert!(text.contains("● 1. a"), "单选里空格确认高亮：\n{text}");
+    assert!(text.contains("First?"), "确认不翻页，翻页是 `→` 的事：\n{text}");
+    single.key(Key::Right);
     single.key(Key::Enter);
     single.key(Key::Enter);
     assert_eq!(

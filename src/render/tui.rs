@@ -797,28 +797,33 @@ impl QuestionDraft {
 impl Questionnaire {
     /// 吃一个按键。问卷被提交时返回 `true`。
     ///
-    /// 键位**按区域分派**（`.scratch/questionnaire-keys/spec.md` §2）：选项区里
-    /// `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 是同一条移动，空格与 `Enter` 确认高亮，而可打印
-    /// 字符与 `Backspace` 被吞掉 —— 键盘只在输入区让给文本。越过选项的两端就是进输入区；
-    /// 输入区里 `↑`/`↓` 回来并移动高亮（两端环绕），`j`/`k` 在那里则是字符。
+    /// 键位**按区域分派**（`.scratch/questionnaire-keys/spec.md` §2、§4）：选项区里
+    /// `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 是同一条移动，空格与 `Enter` 在高的那一项上**切换**，
+    /// 而可打印字符与 `Backspace` 被吞掉 —— 键盘只在输入区让给文本。越过选项的两端就是进
+    /// 输入区；输入区里 `↑`/`↓` 回来并移动高亮（两端环绕），`Enter` 则是「放下这题、去下一题」。
     ///
-    /// `Enter` 在还有没完成的东西时继续往前走，等全处理完了才提交，所以一个没处理的问题
-    /// 就是直接拒掉这个键。在一个还什么都没答的问题上它确认高亮的选项 —— 单选里「选中」
-    /// *就是*回答，所以那也会往前走 —— 而一个已经答过的问题（选了或打了字）只是往前走，
-    /// 于是 `Enter` 永远不会踩掉打进去的自定义文本。确认**不会**在同一次按键里提交：
-    /// 下一次 `Enter` 才是提交（spec §7、§19）。
+    /// **确认不翻页**：并存的意义就是「选项和文本可以一起给」，选完就跳走会把它取消一半，
+    /// 所以翻页留给 `←`/`→` 与页脚那三个按钮。**提交**是唯一的例外：全部题都处理完之后
+    /// `Enter` 提交整份问卷，而确认本身不会在同一次按键里提交（spec §4、§7）。
     fn press(&mut self, key: Key) -> bool {
         match key {
+            // 提交优先于一切：它是键盘上唯一的提交路径，不该被「等价」或区域吃掉。
             Key::Enter => {
                 if self.all_handled() {
                     return true;
                 }
-                if self.drafts[self.index].handled() {
-                    self.advance();
-                } else if self.has_options() {
-                    self.confirm_highlight();
-                    if !self.questions[self.index].multi_select {
-                        self.advance();
+                match self.zone {
+                    // 输入区里 `Enter` 是「放下这题、去下一题」。
+                    Zone::Input => {
+                        if self.drafts[self.index].handled() {
+                            self.advance();
+                        }
+                    }
+                    // 选项区里它与空格完全一致。
+                    Zone::Options => {
+                        if self.has_options() {
+                            self.confirm_highlight();
+                        }
                     }
                 }
             }
@@ -828,9 +833,6 @@ impl Questionnaire {
             // 也照旧是普通字符。
             Key::Char(' ') if self.has_options() && self.zone == Zone::Options => {
                 self.confirm_highlight();
-                if !self.questions[self.index].multi_select {
-                    self.advance();
-                }
             }
             // `Tab` 是那个明确的「跳过这个，继续」。
             Key::Tab => {
@@ -861,10 +863,11 @@ impl Questionnaire {
         !self.questions[self.index].options.is_empty()
     }
 
-    /// 确认高亮的那个选项（spec §7）。
+    /// 确认高亮的那个选项：**切换**它（spec §3）。
     ///
-    /// 单选问题只留下那一个选项并清掉自定义文本，因为两者是二选一，而自定义文本覆盖
-    /// 选择。多选问题是切换，因为自定义文本是对所选项的补充，而用户还没挑完。
+    /// 单选与多选在按键语义上是同一条：已选中就取消它，没选中就选中它。差别只剩单选的集合
+    /// 至多一个 —— 确认另一个选项是**替换**，不是叠加（题面上写着「单选」，交回去的就该是
+    /// 一个）。自定义文本两者都不碰：它现在与选择并存。
     fn confirm_highlight(&mut self) {
         let index = self.drafts[self.index].highlight;
         let Some(label) = self.questions[self.index]
@@ -876,16 +879,12 @@ impl Questionnaire {
         };
         let multi_select = self.questions[self.index].multi_select;
         let draft = &mut self.drafts[self.index];
-        if multi_select {
-            match draft.selected.iter().position(|picked| picked == &label) {
-                Some(at) => {
-                    draft.selected.remove(at);
-                }
-                None => draft.selected.push(label),
+        match draft.selected.iter().position(|picked| picked == &label) {
+            Some(at) => {
+                draft.selected.remove(at);
             }
-        } else {
-            draft.selected = vec![label];
-            draft.custom.clear();
+            None if multi_select => draft.selected.push(label),
+            None => draft.selected = vec![label],
         }
     }
 
@@ -916,15 +915,10 @@ impl Questionnaire {
 
     /// 添一个自由文本字符。
     ///
-    /// 在单选问题上打字会清掉选中的选项，因为自定义文本马上要覆盖它。在多选问题上所选的
-    /// 留下，因为自定义文本是对它们的补充（spec §7）。
+    /// 它**不动**选中的选项：单选与多选一个形状，文本与选择并存交回（spec §3）。想清掉文本
+    /// 就自己按 `Backspace` 删。
     fn type_custom(&mut self, ch: char) {
-        let multi_select = self.questions[self.index].multi_select;
-        let draft = &mut self.drafts[self.index];
-        if !multi_select {
-            draft.selected.clear();
-        }
-        draft.custom.push(ch);
+        self.drafts[self.index].custom.push(ch);
     }
 
     fn advance(&mut self) {
@@ -955,23 +949,17 @@ impl Questionnaire {
         self.drafts.iter().all(QuestionDraft::handled)
     }
 
-    /// 选中当前问题里下标为 `index` 的选项，跟点它那一行一样。
+    /// 确认当前问题里下标为 `index` 的选项，跟用键盘确认高亮的那一项一样。
     ///
-    /// 单选问题答完就往前走 —— 那一次点击*就是*回答 —— 最后一个问题除外，那里它只回答：
-    /// 提交仍然是另外那一下 `Enter`（票 04 §4）。多选问题只切换，因为读的人还没挑完。
+    /// 单选与多选一样是**切换**，而且都不翻页：点击回答这个问题，翻页留给 `←`/`→` 与页脚
+    /// 按钮（spec §3、§4）。点一个选项行也把键盘带回选项区。
     fn select_option(&mut self, index: usize) {
         if index >= self.questions[self.index].options.len() {
             return;
         }
-        let multi_select = self.questions[self.index].multi_select;
         self.drafts[self.index].highlight = index;
         self.zone = Zone::Options;
-        if multi_select {
-            self.confirm_highlight();
-        } else {
-            self.confirm_highlight();
-            self.advance();
-        }
+        self.confirm_highlight();
     }
 
     /// 把键盘交给自由文本行。
@@ -985,7 +973,7 @@ impl Questionnaire {
     }
 
     /// 答案，也就是工具那一条结果（spec §7）：跳过的问题写作 `selected: []` 且没有
-    /// `custom`，单选时自定义文本覆盖选择。
+    /// `custom`；其余问题把**所选与自由文本一起**交回去，单选与多选一个形状（spec §3）。
     ///
     /// 跳过的检查放在最前面，因为跳过是对整个问题的决定：`Tab` 之前打的字被丢掉，否则
     /// `selected: []` 再带一个 `custom` 会被模型读成一次刻意的自定义作答，而不是「用户
@@ -1006,14 +994,9 @@ impl Questionnaire {
                     }
                     let custom = draft.custom.trim();
                     let custom = (!custom.is_empty()).then(|| custom.to_owned());
-                    let selected = if !question.multi_select && custom.is_some() {
-                        Vec::new()
-                    } else {
-                        draft.selected.clone()
-                    };
                     UserAnswer {
                         id: question.id.clone(),
-                        selected,
+                        selected: draft.selected.clone(),
                         custom,
                     }
                 })

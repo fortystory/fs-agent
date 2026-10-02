@@ -347,8 +347,10 @@ Status: ready-for-agent
   模型面工具根本不暴露，本仓库同理——将来若要 plan-review 式的专属面板，那是**循环直接调这条接缝**，
   与模型面工具无关。
 - **三条编码约定写进工具描述**（否则模型读不懂答案）：`selected: []` 且无 `custom` = **跳过**；
-  `answers` 里没有该 `id` = **没走到那题**；**单选**下 `custom` **覆盖**已选（`selected: []`）、
-  **多选**下**补充**；推荐项放第一位并在 label 末尾追加 `(Recommended)`，而**答案值保留原串**。
+  `answers` 里没有该 `id` = **没走到那题**；`selected` 与 `custom` **可以同时出现** —— 单选与多选
+  共用一个答案形状，单选下 `selected` 至多一个（`.scratch/questionnaire-keys/spec.md` §3；2026-10-02
+  回改，原文是「**单选**下 `custom` **覆盖**已选、**多选**下**补充**」）；推荐项放第一位并在 label
+  末尾追加 `(Recommended)`，而**答案值保留原串**。
 - **只有主会话能问**：执行者的工具表里不挂它（同「执行者的表里没有 `task`」，§16）。
 - **零 schema 改动**：问题在 `tool_call` 的 args 里、答案在 result 里，§2 不动。进程死在问题挂着时，
   `--continue` 走既有的**悬空 `tool_call` 合成 unknown 结果**（§11），不为「被遗弃的问题」发明新语义。
