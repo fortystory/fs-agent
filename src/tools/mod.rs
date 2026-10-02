@@ -16,6 +16,10 @@ pub mod edit;
 pub mod file;
 pub mod goal_note;
 pub mod grep;
+mod mcp_args;
+pub mod mcp_call;
+pub mod mcp_list;
+pub mod mcp_resources;
 pub mod paths;
 pub mod process;
 pub mod registry;
@@ -37,6 +41,9 @@ pub use file::{
 };
 pub use goal_note::{GoalNoteTool, GOAL_NOTE_TOOL};
 pub use grep::{GrepTool, GREP_TOOL, MAX_MATCHES};
+pub use mcp_call::{McpCallTool, MCP_CALL_TOOL};
+pub use mcp_list::{McpListTool, MCP_LIST_TOOL, MCP_UNTRUSTED_MARKER};
+pub use mcp_resources::{McpReadTool, McpResourcesTool, MCP_READ_TOOL, MCP_RESOURCES_TOOL};
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
 pub use process::{CommandOutcome, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
 pub use registry::{
@@ -126,5 +133,29 @@ pub fn with_web(mut registry: Registry, service: crate::web::WebService) -> Regi
         &service,
     ))));
     registry.register(Box::new(WebFetchTool::new(service)));
+    registry
+}
+
+/// 把 MCP 的那四个元工具加进已组装的表（`.scratch/mcp-support/spec.md` §1、§3）。
+///
+/// 与 [`with_web`] 同一形状的组装期一步：`[mcp] enabled`（缺省关）决定它们在不在，改它要重开
+/// 会话。**四个同开同关** —— 它们是同一个开关下的一个整体，所以都在这一个函数里注册。
+///
+/// **连接挂没挂与这一步无关**：`enabled` 打开而所有 server 都连不上时工具仍在表里，调用给出的
+/// 是一条结构化错误。表随连接状态抖动是更坏的事。
+///
+/// 至今落了 `mcp_list`（票 10）与 `mcp_call`（票 11）；`mcp_resources` / `mcp_read`（票 16）
+/// 在同一处补齐，所以它们的开关始终是同一次读配置。
+pub fn with_mcp(mut registry: Registry, service: crate::mcp::McpService) -> Registry {
+    if !service.settings().enabled {
+        return registry;
+    }
+    let service = std::sync::Arc::new(service);
+    registry.register(Box::new(McpListTool::new(std::sync::Arc::clone(&service))));
+    registry.register(Box::new(McpCallTool::new(std::sync::Arc::clone(&service))));
+    registry.register(Box::new(McpResourcesTool::new(std::sync::Arc::clone(
+        &service,
+    ))));
+    registry.register(Box::new(McpReadTool::new(service)));
     registry
 }

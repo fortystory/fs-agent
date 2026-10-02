@@ -198,7 +198,7 @@ impl Registry {
             bash: &call.bash,
             sandbox: &sandbox,
             executor: call.executor.as_deref(),
-            questions: call.questions.as_deref(),
+            questions: call.questions.clone(),
             tool_call_id: &call.tool_call_id,
             args: &call.args,
         };

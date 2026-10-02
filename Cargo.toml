@@ -13,6 +13,14 @@ path = "src/lib.rs"
 name = "fs-agent"
 path = "src/main.rs"
 
+# 集成测试用的假 MCP server（`.scratch/mcp-support/spec.md` §3；票 12）：一个手写的
+# newline-delimited JSON-RPC 对端，给 `tests/mcp_stdio.rs` 走真 spawn + 沙箱包装 + 协议帧 +
+# 进程组清理那条路。**它不是产品的一部分** —— 只是 Cargo 没有「仅测试的 bin」这个概念，
+# 集成测试又想拿 `CARGO_BIN_EXE_fake-mcp-server` 这个稳定的路径。
+[[bin]]
+name = "fake-mcp-server"
+path = "tests/support/fake_mcp_server.rs"
+
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -69,9 +77,21 @@ grep-regex = "0.1"
 # 不用 `ignore` 自带的 `OverrideBuilder`：overrides 的优先级高于 `.gitignore`，于是
 # `glob` 会变成一条绕过忽略规则的逃生口 —— 而那个参数只该缩小范围，不该放宽规则。
 globset = "0.4"
+# MCP 的连接层（`.scratch/mcp-support/spec.md` §3）：`rmcp` 是 Rust 的 MCP SDK，只开 client
+# 与两种传输（stdio 子进程 + Streamable HTTP），**不开** server。TLS 明确选 `native-tls`
+# （`reqwest-native-tls` 这个 feature 是独立的一位）：选 `reqwest` 那位会把它换成 rustls，
+# 等于推翻上面 reqwest 那条既有决定。协议只谈 2026-07-28，生命周期固定 `Discover`。
+rmcp = { version = "3.5.0", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "reqwest-native-tls",
+] }
+# server 子进程的整组清理：fs-agent 的纪律是 `process_group(0)` + `killpg` 杀整棵树，而 rmcp
+# 默认的清理只保证直接子进程被杀。与 rmcp 依赖的是同一个大版本。
+process-wrap = { version = "10", features = ["tokio1"] }
+# 远端 server 的自定义请求头（`Authorization` 那一类）。
+http = "1"
 
 [dev-dependencies]
 tempfile = "3"
-# `web_fetch` 的传输层测试要从字节造一个响应（`reqwest::Response: From<http::Response<_>>`），
-# 于是「字节上限」那条路径不必起一个真的服务器就能钉住。它已经是 reqwest 的依赖。
-http = "1"

@@ -1,7 +1,7 @@
 # 16 — 资源：`mcp_resources` 与 `mcp_read`
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 10
 
@@ -34,3 +34,25 @@ Blocked by: 10
 
 - 不把资源塞进 `read_paths`、不与工作区路径互操作。
 - 不做资源的缓存（`mcp_list` 那条「每次现问」的规矩同样适用）。
+
+## Comments
+
+- 2026-10-03 落地（`Status: done`）。落点：`src/tools/mcp_resources.rs`（新，两个工具）、
+  `src/tools/mcp_args.rs`（新，四个元工具共用的参数读取：`optional_server` / `required_str` /
+  `flatten`；`mcp_list` 与 `mcp_call` 一并改用，规则只剩一处）、`src/mcp/mod.rs`
+  （`ResourceListing`、`list_resources`、`read_resource`、`trusts_results`、
+  `MCP_UNKNOWN_RESOURCE`）、`src/tools/mod.rs`、`tests/mcp_resources.rs`（新，7 条）。
+- 一处实现里定的边界：**`trust_results` 只管「内容」**——`mcp_call` 与 `mcp_read` 的成功结果；
+  `mcp_list` / `mcp_resources` 的清单照旧带那句标记。清单是元信息（有哪些工具、URI 怎么拼），
+  而「不要把它当指令」那句话防的是外部**内容**。一个开了 `trust_results` 的 server 也不会因此
+  让它的工具描述变成指令来源。
+- 验证 2 的走法：先用 `mcp_read` 读一份资源（`ReadSet` 不动），再 `edit_file` 一个没读过的
+  工作区文件 → 被「改前先读」拒；补一次 `read_file` 之后同一个编辑成功。
+- 验证：`cargo test`（新增 7 条全绿）· `cargo clippy --all-targets`（无 warning）·
+  `cargo fmt` · `python3 scripts/check-language.py` 全通过。
+
+- **审查后的修正（2026-10-03）**：三条元工具的错误结果统一成**不带**那句外部内容标记
+  （`mcp_list` / `mcp_resources` 原来带、`mcp_call` / `mcp_read` 原来不带）——错误消息是我们
+  自己写的中文，那句话说的是「下面这些字来自外面」；清单里**某台 server** 失败的那一段仍然带。
+  另：`read_resource` 的「URI 不存在」现在两种错误码都认（`-32002` 与 2026-07-28 那一版的
+  `INVALID_PARAMS(-32602)`），免得真 server 上落成 `MCP_PROVIDER_ERROR`。

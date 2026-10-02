@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -132,7 +133,11 @@ pub struct ToolContext<'a> {
     pub executor: Option<&'a dyn ExecutorSpawner>,
     /// 把模型发起的提问交给用户的端口，给 `ask_user_question`（spec §7）。会话没挂端口时是
     /// `None` —— headless 组装永不挂 —— 那时工具如实报告，而不是挂在一个没人能给的答案上。
-    pub questions: Option<&'a dyn UserQuestions>,
+    ///
+    /// 是 `Arc` 而不是一个借用（`.scratch/mcp-support/spec.md` §3）：MCP 那侧的
+    /// `ClientHandler` 要求 `'static`，它必须在连接建立时就把这条端口握在手里；两条路共用
+    /// **同一个**端口值，于是不会漂成两套实现。
+    pub questions: Option<Arc<dyn UserQuestions>>,
     pub tool_call_id: &'a str,
     pub args: &'a Value,
 }

@@ -230,6 +230,18 @@ _Avoid_: 搜索插件、搜索引擎（那是后端背后那家公司）、检�
 与服务层并列的另一半：把一个 URL 变成**有界的正文**（最终 URL、状态码、HTML / 纯文本、截断标志）。今天只有 `http`（`reqwest` 加自己做的 SSRF 防护 —— 沙箱只管文件、不管网络，所以那一层就是全部的防线）。**非 2xx 是结果不是错误**：404 是被抓资源的状态。
 _Avoid_: 爬虫（那是遍历整站的东西）、浏览器、下载器
 
+**元工具（Meta-tool）**:
+MCP 那一层的四个固定名字的工具（`mcp_list` / `mcp_call` / `mcp_resources` / `mcp_read`）。与内建工具、动态工具的分别在于：**server 的工具永远不进工具表**，模型按 `server` + `tool` 两个参数穿过这四个口子去调外部能力 —— 于是「工具表是缓存前缀的一部分」与「只有连上才知道 server 有什么」之间不再撞。它们由 `with_mcp` 在组装期一步加进表（照 `with_web` 的形状），`[mcp] enabled`（缺省关）是共同的开关；四个同开同关。逐面文档是 [`docs/mcp.md`](docs/mcp.md)。
+_Avoid_: MCP 工具（那是 server 提供的那些）、代理工具、桥接工具
+
+**原语（Primitive）**:
+MCP 规范里 server 能提供的东西的四个类别：tool（可调用的动作）、resource（按 URI 读的数据）、prompt（由**人**挑的模板）、elicitation（server 向人要一个输入）。**原语**是这一层的分类词，不是某一条具体能力；fs-agent 这一版落了 tool、resource 与 elicitation，prompt 归票 17。协议只谈 2026-07-28 的无状态形态 —— sampling / roots / logging 已 deprecated、不在范围。
+_Avoid_: 能力（那是 `ClientCapabilities` / `ServerCapabilities` 那一侧的词）、功能
+
+**MCP server（server）**:
+被 fs-agent 连上的外部进程或服务（stdio 子进程或 Streamable HTTP 端点），配置在 `[mcp.servers.<名字>]` 或仓库根的 `.mcp.json` 里，名字就是四个元工具 `server` 参数认的那个键。它**默认不可信**：内容带那句外部内容标记、工具按最严的副作用处理、进程过沙箱且只拿到白名单里的环境变量；`trust_results` 与 `trust_effects` 各自默认关，`sandbox` 则默认**过**（要写 `false` 才不过）—— 三个位各自独立、互不牵连，缺省都取最保守的那一档。写纯中文散文时也不译，直接用 server。
+_Avoid_: MCP 服务（容易与 `McpService` 混）、插件、连接器、MCP 服务器（那是跑 server 的那台机器）
+
 ## 渲染
 
 **渲染器（Renderer）**:

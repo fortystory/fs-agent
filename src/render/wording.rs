@@ -2081,6 +2081,14 @@ pub fn startup_config(detail: &str) -> String {
     format!("无法读取配置：{detail}")
 }
 
+/// MCP server 自己写到 stderr 的一行（`.scratch/mcp-support/spec.md` §4）。
+///
+/// 前缀点明这句话是**外部工具**说的、不是 fs-agent 说的：server 的崩溃信息要进得了日志，但不能
+/// 被读成我们自己的诊断。
+pub fn mcp_server_stderr(line: &str) -> String {
+    format!("[外部工具] {line}")
+}
+
 /// `XDG_DATA_HOME` 与 `HOME` 都没设，于是会话无处存放。
 pub fn startup_no_session_store() -> &'static str {
     "既没有设置 XDG_DATA_HOME 也没有设置 HOME，会话无处存放"

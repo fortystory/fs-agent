@@ -207,7 +207,7 @@ impl Tool for AskUserQuestionTool {
         let questions = Self::parse(&args)?;
         // 降级地板（spec §19）：一个没挂提问端口就组装起来的会话，用一条可读的错误作答，而不是
         // 挂在一个永远来不了的答案上。
-        let Some(port) = ctx.questions else {
+        let Some(port) = ctx.questions.as_ref() else {
             return Err(ToolError::message(format!(
                 "{ASK_USER_QUESTION_TOOL}：这个会话没有向用户提问的途径；没有挂上提问端口"
             )));

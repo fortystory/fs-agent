@@ -1,7 +1,7 @@
 # 14 — `Effect` 与信任三个位
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 10
 
@@ -35,3 +35,27 @@ Blocked by: 10
 
 - 不给 `Effect` 加第四类；不动权限门的四档矩阵。
 - 不做「按 `ToolAnnotations` 自动映射」。
+
+## Comments
+
+- 2026-10-03 落地（`Status: done`）。落点：`src/config.rs`（`McpServerConfig.read_only_tools`
+  与 `[mcp.servers.*]` 的 `read_only_tools`、解析期的「配了等于没配」校验）、
+  `src/mcp/mod.rs`（`McpService::is_tool_read_only`）、`src/tools/mcp_call.rs`（`effect()`
+  按位与名单决定 `ReadOnly` / `Exclusive`，结果按 `trusts_results` 决定带不带标记）、
+  `src/mcp/rmcp_client.rs`（`sandbox = false` 时改用 off 的沙箱）、
+  `tests/support/fake_mcp_server.rs`（`ancestors` 工具）、`tests/mcp_trust.rs`（新，4 条）、
+  `tests/mcp_process.rs`（+1 条 `sandbox` 位）。
+- **一处形状决定**：`trust_effects` 的「按配置声明较宽的 `Effect`」落地成 **`read_only_tools`
+  字符串名单**（不是一张子表）。理由是它只表达一件事（哪几条按只读处理），而 Effect 的第三类
+  `WritePaths` 是**工作区**概念，对外部工具没有意义。
+- **不由 server 自报**：`ToolAnnotations` 一个字都不读，名单是人写的（规范原文：clients should
+  never make tool use decisions based on ToolAnnotations from untrusted servers）。
+- **`sandbox` 位的验证怎么写**：断言假 server 的**直接父进程**是不是 `bwrap`（假 server 报
+  `/proc` 里的祖先链）。只看链首 —— 测试进程自己可能跑在更外层的容器里，链尾出现 `bwrap`
+  不代表这一层包了（这一轮就踩到了这一点）。
+- **验证 5「互不牵连」**：`turning_on_results_does_not_widen_the_effect` 只开 `trust_results`
+  断言副作用仍最严；`readonly_refuses_by_default_and_trust_effects_opens_exactly_the_named_tool`
+  里同一个 server 上「名单外的工具照旧拒」，也就是放宽是逐条的。
+- 验证：`cargo test --test mcp_trust --test mcp_process`（4 + 4 条全绿）·
+  `cargo clippy --all-targets`（无 warning）· `cargo fmt` · `python3 scripts/check-language.py`
+  全通过。

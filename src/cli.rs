@@ -25,6 +25,7 @@ use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
 use crate::events::{
     read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage,
 };
+use crate::mcp::{self, McpService};
 use crate::permissions::{Mode, Policy};
 use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
@@ -36,7 +37,7 @@ use crate::render::{
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
-use crate::tools::{self, PathLocks};
+use crate::tools::{self, PathLocks, Sandbox};
 use crate::web::fetch_http::HttpFetch;
 use crate::web::search_deepseek::{DeepSeekSearch, DEEPSEEK_SEARCH_PROVIDER};
 use crate::web::WebService;
@@ -244,7 +245,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let config = match load_config(parsed.config.clone(), env) {
+    let mut config = match load_config(parsed.config.clone(), env) {
         Ok(config) => config,
         Err(message) => {
             eprintln!("fs-agent: {}", render::wording::startup_config(&message));
@@ -295,6 +296,15 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     };
     let (stored, cwd) = (chosen.stored, chosen.cwd);
     let elsewhere = chosen.elsewhere;
+    // 项目级的 MCP 配置跟着这一趟的工作目录走：仓库根的 `.mcp.json` 逐台盖用户级。
+    // `[mcp] enabled = false`（缺省）时这一步连文件都不看。
+    if let Err(error) = config.load_project_mcp(&cwd) {
+        eprintln!(
+            "fs-agent: {}",
+            render::wording::startup_config(&error.to_string())
+        );
+        return ExitCode::FAILURE;
+    }
 
     let provider = match OpenAiProvider::build(&config, &model, stderr_warnings()) {
         Ok(provider) => provider,
@@ -377,15 +387,21 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let questions: Option<Arc<dyn UserQuestions>> =
         Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
+    // MCP 这一层也在组装期定下：`[mcp] enabled` 与仓库根的 `.mcp.json` 都在这里读一次。
+    let mcp = mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await;
+
     let mut harness = match assemble(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
             // 工具表在这里、在组装处定下：内建的那些加上每一个动态声明的工具（spec §14）。
-            tools: tools::with_web(
-                tools::with_dynamic(&config.tools, questions.is_some()),
-                web_service(&config),
+            tools: tools::with_mcp(
+                tools::with_web(
+                    tools::with_dynamic(&config.tools, questions.is_some()),
+                    web_service(&config),
+                ),
+                mcp,
             ),
             locks: PathLocks::new(),
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
@@ -555,7 +571,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let config = match load_config(parsed.config.clone(), env) {
+    let mut config = match load_config(parsed.config.clone(), env) {
         Ok(config) => config,
         Err(message) => {
             eprintln!("fs-agent: {}", render::wording::startup_config(&message));
@@ -608,6 +624,14 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             }
         },
     };
+    // 项目级的 MCP 配置跟着这一趟的工作目录走（spec §5）。
+    if let Err(error) = config.load_project_mcp(&cwd) {
+        eprintln!(
+            "fs-agent: {}",
+            render::wording::startup_config(&error.to_string())
+        );
+        return ExitCode::FAILURE;
+    }
     let stored = match SessionStore::new(root).create(&cwd) {
         Ok(session) => session,
         Err(error) => {
@@ -697,14 +721,20 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     let questions: Option<Arc<dyn UserQuestions>> =
         Some(Arc::new(ConsoleQuestions::from_handle(&console)));
 
+    // 讨论者与任何会话一样拿得到四个 MCP 元工具（spec §9）。
+    let mcp = mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await;
+
     let mut harness = match assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
             cwd,
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            tools: tools::with_web(
-                tools::with_dynamic(&config.tools, questions.is_some()),
-                web_service(&config),
+            tools: tools::with_mcp(
+                tools::with_web(
+                    tools::with_dynamic(&config.tools, questions.is_some()),
+                    web_service(&config),
+                ),
+                mcp,
             ),
             locks: PathLocks::new(),
             // 文件里的模式：讨论者与任何会话一样走同一个权限门，而名册共享一个策略（spec §12、
@@ -2147,7 +2177,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
     for model in models {
-        match probe_model(&config, &model, home.as_deref()).await {
+        match probe_model(&config, &model, home.as_deref(), env).await {
             Ok(()) => {}
             Err(ProbeError::Skipped(message)) => eprintln!("fs-agent: 跳过 {model}：{message}"),
             Err(ProbeError::Failed(message)) => {
@@ -2187,6 +2217,7 @@ async fn probe_model(
     config: &Config,
     model_id: &str,
     home: Option<&Path>,
+    env: &EnvMap,
 ) -> Result<(), ProbeError> {
     let (_, profile) = config
         .resolve_model(Some(model_id))
@@ -2211,6 +2242,7 @@ async fn probe_model(
     let session_config = config
         .session_config(model_id)
         .map_err(ProbeError::failed)?;
+    let mcp = mcp_service(config, &dir, env, home, None).await;
     let mut harness = assemble(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: dir,
@@ -2218,9 +2250,12 @@ async fn probe_model(
             session_id: SessionId::new(format!("probe-{model_id}")),
             // 探针要跑真实回合，所以给它真实的工具表 —— 除了 `ask_user_question`：无头没有应答者，
             // 而一个只能失败的工具会白白浪费一次模型调用（spec §19）。
-            tools: tools::with_web(
-                tools::with_dynamic(&config.tools, false),
-                web_service(config),
+            tools: tools::with_mcp(
+                tools::with_web(
+                    tools::with_dynamic(&config.tools, false),
+                    web_service(config),
+                ),
+                mcp,
             ),
             locks: PathLocks::new(),
             // 探针是无头的、没有应答者，所以配置那一档的 `ask`（默认）会拒掉写，而不是挂在一个谁也
@@ -2332,6 +2367,46 @@ fn web_service(config: &Config) -> WebService {
         // 哪一家。
         _ => service,
     }
+}
+
+/// 这个会话的 MCP 服务（`.scratch/mcp-support/spec.md` §1、§3、§5）。
+///
+/// `[mcp] enabled`（缺省关）决定四个元工具在不在表里。项目级的 `.mcp.json` 已经由
+/// [`Config::load_project_mcp`] 在 cwd 定下来之后逐台并进 `config.mcp`，所以这里读到的就是
+/// 最终那一份。
+///
+/// 打开时在组装期把每台 server **并发**连起来，失败的跳过：它的元工具调用给出的是一条结构化
+/// 错误，而其余几台照常工作（spec §3）。
+async fn mcp_service(
+    config: &Config,
+    cwd: &Path,
+    env: &EnvMap,
+    home: Option<&Path>,
+    questions: Option<Arc<dyn UserQuestions>>,
+) -> McpService {
+    let sandbox = mcp_sandbox(config, cwd);
+    // `env` 是整份环境快照；连接层只从里面挑白名单那三个键（`PATH` / `HOME` / `LANG`）——
+    // 「只给 server 该拿的」这件事在连接层强制，前端不负责挑。
+    let options = mcp::ConnectOptions::new(cwd, &sandbox, env)
+        .with_home(home)
+        // server 的输入请求走**同一个**问询端口（票 15）：两条路不会漂成两套实现。
+        .with_questions(questions)
+        .with_stderr(Arc::new(|line: &str| {
+            eprintln!("fs-agent: {}", render::wording::mcp_server_stderr(line));
+        }));
+    mcp::connect_all(&config.mcp, &options).await
+}
+
+/// 建 MCP 连接时要用的沙箱。
+///
+/// 与 `Harness::session` 用的是同一份 [`config::SandboxSettings`]，只是这里要**自己探测一次**：
+/// MCP 的连接在组装之前就建好了，那时 harness 还不存在。`mode = "off"` 时不探测也没关系。
+fn mcp_sandbox(config: &Config, cwd: &Path) -> Sandbox {
+    let mut settings = config.sandbox.clone();
+    // 走组装期那同一个入口（`resolve_availability` 自己看 `needs_probe()`），不在这一处另写
+    // 一遍「该不该探」的判断。
+    settings.availability = tools::sandbox::resolve_availability(&settings, cwd);
+    Sandbox::new(&settings)
 }
 
 fn probe_dir(model_id: &str) -> PathBuf {

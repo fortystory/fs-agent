@@ -63,6 +63,12 @@ FROZEN_FILES = [
     "src/tools/task.rs",
     "src/tools/todo.rs",
     "src/tools/tool.rs",
+    # MCP 那一轮（`.scratch/mcp-support/spec.md` §2、§7）：四个元工具的工具声明、结果形状与
+    # 那句外部内容标记都在这一侧。
+    "src/tools/mcp_list.rs",
+    "src/tools/mcp_call.rs",
+    "src/tools/mcp_resources.rs",
+    "src/tools/mcp_args.rs",
     "src/permissions.rs",
     "src/discussion.rs",
     "src/discussion/protocol.rs",
@@ -119,6 +125,11 @@ MODEL_TEXT_FLOOR = {
     "src/tools/skill.rs": 3,
     "src/tools/task.rs": 4,
     "src/tools/todo.rs": 14,
+    # 2026-10-03 MCP 那一批：实测 11 / 6 / 8 / 2。
+    "src/tools/mcp_list.rs": 11,
+    "src/tools/mcp_call.rs": 6,
+    "src/tools/mcp_resources.rs": 8,
+    "src/tools/mcp_args.rs": 2,
     "src/tools/goal_note.rs": 11,
     "src/goals.rs": 27,
     "src/permissions.rs": 20,
@@ -137,7 +148,11 @@ MODEL_TEXT_FLOOR = {
     "src/render/tui.rs": 2,
     "src/cli.rs": 15,
 }
-ENGLISH_PROSE_CEILING = 27
+# 2026-10-03 MCP 那一轮把上限从 27 提到 **29**（实测值）：新加进来的两条都是纯 `format!`
+# 骨架，与下面记着的原来那两条同类 —— `"{MCP_UNTRUSTED_MARKER}\n\n{text}"`（`mcp_call.rs`
+# 与 `mcp_resources.rs` 各一条），判据把它们读成了「4 个英文词 + 空格」，其实一个散文词都
+# 没有。这一侧仍是**零英文散文**。
+ENGLISH_PROSE_CEILING = 29
 
 # --- ② docs 的中文占比下限（百分数） ----------------------------------------
 # 翻译完成后按**实测值减 2 个百分点**逐份收紧（2026-09-27 量：最低 31.2% 是
@@ -173,6 +188,8 @@ DOCS_MIN_RATIO = {
     "docs/highlight.md": 35,
     # 2026-10-03 生命周期图那一批：全部落地后实测 20.2%。
     "docs/lifecycle.md": 18,
+    # 2026-10-03 MCP 那一批：实测 30.0%。
+    "docs/mcp.md": 28,
     "docs/observability.md": 43,
     "docs/permissions.md": 33,
     "docs/render.md": 42,

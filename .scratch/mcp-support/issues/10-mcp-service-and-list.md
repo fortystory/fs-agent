@@ -1,7 +1,7 @@
 # 10 — 服务层骨架 + `mcp_list`（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: —
 
@@ -67,3 +67,28 @@ Blocked by: —
 - 不做 `mcp_call`（票 11）、不接真连接（票 12）、不做资源与提示词（票 16 / 17）。
 - 不做 server 进程、沙箱与环境（票 12 / 13）；不做 `Effect` 与信任的放宽（票 14）——
   本票的元工具是 `ReadOnly`。
+
+## Comments
+
+- 2026-10-03 落地（`Status: done`）。落点：`src/mcp/mod.rs`（新）、`src/tools/mcp_list.rs`（新）、
+  `src/tools/mod.rs`（`with_mcp`）、`src/config.rs`（`[mcp]` 段与 `McpSettings` / `McpServerConfig` /
+  `McpTransport`、`Config::load_project_mcp`、打码器收 `env` / `headers` 的值）、`src/cli.rs`
+  （三处组装点 + `mcp_service` / `open_connections` 挂点）、`src/lib.rs`、`tests/mcp_list.rs`（新，12 条）、
+  `tests/credentials.rs`（+1 条）。
+- 两处 spec 没写死、在本票定下来的细节：
+  - `.mcp.json` 的外层键取上游惯例的 `mcpServers`，里面**每台 server 的记录与
+    `[mcp.servers.<名字>]` 逐字同形**（snake_case、`command` 是 argv 数组）。两个来源共用一个
+    反序列化结构，于是不存在第二套字段语义；两边都 `deny_unknown_fields`。
+  - 项目级的读取落在 `Config::load_project_mcp(&cwd)`，由前端在 cwd 定下来之后调用；
+    `[mcp] enabled = false`（缺省）时**连文件都不 stat**，一份坏掉的 `.mcp.json` 影响不到
+    不做 MCP 的会话。
+- `McpConnection` 的 `call_tool` / `list_resources` / `read_resource` 暂时是默认实现，返回
+  `MCP_UNSUPPORTED`：票 11 与票 16 会把它们换掉；trait 的四个方法形状本票一次定死。
+- 验证：`cargo test`（新增 12 + 1 条全绿）· `cargo clippy --all-targets`（无 warning）·
+  `cargo fmt --check` · `python3 scripts/check-language.py` 全通过。
+
+- **审查后的修正（2026-10-03）**：`.mcp.json` 内部同名 server 是启动错误这条原来只挡了 TOML
+  那一半 —— `serde_json` 默认「后者胜」。现在 `RawProjectMcp.mcpServers` 用了一个手写的
+  `UniqueServerMap` visitor（`src/config.rs`），重复键直接被拒；`tests/mcp_list.rs` 里补了
+  JSON 那一半的用例。另：`docs/mcp.md` 与这三个工具文件已纳入 `scripts/check-language.py`
+  的两条棘轮（实测：中文串 11 / 6 / 8 / 2，英文散文上限 27 → 29 全是假阳性）。

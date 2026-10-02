@@ -37,16 +37,17 @@ use support::{AlwaysAllow, FakeProvider, Reply};
 ///
 /// 端口是前端实现的东西；测试脚本化它的方式，与脚本化
 /// provider 回复一样，于是「用户选了 serde」不用终端也能复现。
+#[derive(Clone)]
 struct ScriptedQuestions {
-    answers: Mutex<VecDeque<UserAnswers>>,
-    asked: Mutex<Vec<Vec<UserQuestion>>>,
+    answers: Arc<Mutex<VecDeque<UserAnswers>>>,
+    asked: Arc<Mutex<Vec<Vec<UserQuestion>>>>,
 }
 
 impl ScriptedQuestions {
     fn new(answers: Vec<UserAnswers>) -> Self {
         Self {
-            answers: Mutex::new(answers.into()),
-            asked: Mutex::new(Vec::new()),
+            answers: Arc::new(Mutex::new(answers.into())),
+            asked: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -72,7 +73,10 @@ impl UserQuestions for ScriptedQuestions {
 }
 
 /// 用一个形状上真实的上下文与一个可选的问题端口调用这个工具。
-async fn call(args: Value, port: Option<&dyn UserQuestions>) -> Result<ToolOutput, ToolError> {
+async fn call(
+    args: Value,
+    port: Option<std::sync::Arc<dyn UserQuestions>>,
+) -> Result<ToolOutput, ToolError> {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let paths = SessionPaths::new(cwd);
@@ -117,7 +121,9 @@ async fn a_question_round_trips_as_the_answers_json() {
         }]
     });
 
-    let output = call(args, Some(&port)).await.expect("工具作答了");
+    let output = call(args, Some(std::sync::Arc::new(port.clone())))
+        .await
+        .expect("工具作答了");
     assert_eq!(
         output.text,
         r#"{"answers":[{"id":"framework","selected":["serde"]}]}"#
@@ -165,7 +171,9 @@ async fn custom_text_and_multi_select_round_trip() {
         ]
     });
 
-    let output = call(args, Some(&port)).await.expect("工具作答了");
+    let output = call(args, Some(std::sync::Arc::new(port.clone())))
+        .await
+        .expect("工具作答了");
     assert_eq!(
         output.text,
         r#"{"answers":[{"id":"a","selected":[]},{"id":"b","selected":["x","y"],"custom":"and z"}]}"#
@@ -213,9 +221,12 @@ fn the_tool_is_read_only_and_only_the_main_session_may_ask() {
 #[tokio::test]
 async fn an_empty_question_list_is_refused() {
     let port = ScriptedQuestions::new(Vec::new());
-    let error = call(serde_json::json!({"questions": []}), Some(&port))
-        .await
-        .expect_err("一份空问卷被拒");
+    let error = call(
+        serde_json::json!({"questions": []}),
+        Some(std::sync::Arc::new(port.clone())),
+    )
+    .await
+    .expect_err("一份空问卷被拒");
     assert!(error.to_string().contains("至少要有一道题"), "{error}");
     assert!(port.asked().is_empty(), "用户永远不会看到一份空问卷");
 }
@@ -224,7 +235,7 @@ async fn an_empty_question_list_is_refused() {
 async fn a_question_without_an_id_is_refused() {
     let port = ScriptedQuestions::new(Vec::new());
     let args = serde_json::json!({"questions": [{"question": "which?"}]});
-    let error = call(args, Some(&port))
+    let error = call(args, Some(std::sync::Arc::new(port.clone())))
         .await
         .expect_err("没有 id 的一题被拒");
     assert!(error.to_string().contains("非空的 `id`"), "{error}");
@@ -242,7 +253,9 @@ async fn duplicate_question_ids_are_refused() {
             {"id": "same", "question": "two?"}
         ]
     });
-    let error = call(args, Some(&port)).await.expect_err("重复的 id 被拒");
+    let error = call(args, Some(std::sync::Arc::new(port.clone())))
+        .await
+        .expect_err("重复的 id 被拒");
     assert!(error.to_string().contains("重复了"), "{error}");
     assert!(port.asked().is_empty());
 }

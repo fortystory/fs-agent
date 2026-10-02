@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -406,6 +407,9 @@ pub struct Config {
     /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。组装期读一次，
     /// 决定那两个工具在不在工具表里。
     pub web: WebSettings,
+    /// `[mcp]`：MCP 接入的部署设置（`.scratch/mcp-support/spec.md` §5）。组装期读一次，决定
+    /// 四个元工具在不在工具表里。项目级 `.mcp.json` 由前端读入后盖在它上面。
+    pub mcp: McpSettings,
 }
 
 /// 目标循环的四个旋钮：两个阈值按**窗口**的百分比，两条停止线按次数。
@@ -581,6 +585,407 @@ fn resolve_web(raw: Option<&RawWeb>) -> WebSettings {
     web
 }
 
+/// `[mcp]`：MCP 接入的部署设置（`.scratch/mcp-support/spec.md` §5）。
+///
+/// `enabled` 是**组装期**的事实、缺省关：四个元工具同开同关，改它要重开会话 —— 工具表是缓存
+/// 前缀的一部分。`connect_timeout_ms` 是部署设置、不进面向模型的 schema：模型给不了自己预算。
+/// 不打开它时这一层零影响：不读 `.mcp.json`、不起进程、不发一次请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpSettings {
+    /// 四个元工具在不在工具表里（缺省关）。
+    pub enabled: bool,
+    /// 一次 connect 的墙钟上限，按毫秒计。
+    pub connect_timeout_ms: u64,
+    /// 已配置的 server，按名字排序。名字就是元工具 `server` 参数认的那个键。
+    pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            connect_timeout_ms: DEFAULT_MCP_CONNECT_TIMEOUT_MS,
+            servers: BTreeMap::new(),
+        }
+    }
+}
+
+impl McpSettings {
+    /// 把项目级（`.mcp.json`）那批 server 盖到这份设置上：同名者以项目级为准，其余留着。
+    ///
+    /// 「项目级盖用户级」是一条**逐台**的规则，不是一个整体开关：仓库里声明了 `github` 不会
+    /// 顺手把用户目录里另外三台挤掉。
+    pub fn merge_project(&mut self, project: BTreeMap<String, McpServerConfig>) {
+        for (name, server) in project {
+            self.servers.insert(name, server);
+        }
+    }
+}
+
+/// 一台 server 的解析后配置（`.scratch/mcp-support/spec.md` §5）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerConfig {
+    /// 配置里那个键，也是 `mcp_list(server)` 认的名字。
+    pub name: String,
+    pub transport: McpTransport,
+    /// stdio 的 argv。经 `Sandbox::wrap` 包好之后才 spawn。
+    pub command: Vec<String>,
+    /// http 的端点。
+    pub url: Option<String>,
+    /// http 的请求头。值接进打码器（与 provider 密钥同一条路）。
+    pub headers: BTreeMap<String, String>,
+    /// **白名单**：只有这里显式声明的环境变量才进 server 进程，加上最小的 `PATH` / `HOME` /
+    /// `LANG`。不写就没有 —— 黑名单 fail open，而沙箱这一层的调性是 fail closed。
+    pub env: BTreeMap<String, String>,
+    /// 追加到这台 server 沙箱可写集的路径。不声明就只有「会话工作区 + 沙箱默认的那列缓存
+    /// 目录」，没有默认的 per-server 临时目录。
+    pub writable_roots: Vec<String>,
+    /// 这台 server 的结果**不带**不可信标记（缺省关）。
+    pub trust_results: bool,
+    /// 允许按配置声明较宽的 `Effect`（缺省关）。与 `trust_results` 互不牵连。
+    pub trust_effects: bool,
+    /// 哪几条工具按**只读**处理。只在 `trust_effects` 打开时才认 —— 「配了等于没配」的组合是
+    /// 启动错误，而不是静默按最严走。
+    ///
+    /// **不由 server 自报**：规范原文写着 `ToolAnnotations` 全是 hints，客户端不该据以做工具
+    /// 使用判断。这张名单是**人**写的。
+    pub read_only_tools: Vec<String>,
+    /// 过不过 bubblewrap 沙箱。缺省 `true`，只有显式写 `false` 才不过。
+    pub sandbox: bool,
+}
+
+impl McpServerConfig {
+    /// 一台 stdio server：argv 从配置原样拿来，环境与可写根都还是空的。
+    pub fn stdio(name: impl Into<String>, command: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            transport: McpTransport::Stdio,
+            command,
+            url: None,
+            headers: BTreeMap::new(),
+            env: BTreeMap::new(),
+            writable_roots: Vec::new(),
+            trust_results: false,
+            trust_effects: false,
+            read_only_tools: Vec::new(),
+            sandbox: true,
+        }
+    }
+
+    /// 一台 Streamable HTTP server。
+    pub fn http(name: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            transport: McpTransport::Http,
+            command: Vec::new(),
+            url: Some(url.into()),
+            headers: BTreeMap::new(),
+            env: BTreeMap::new(),
+            writable_roots: Vec::new(),
+            trust_results: false,
+            trust_effects: false,
+            read_only_tools: Vec::new(),
+            sandbox: true,
+        }
+    }
+}
+
+/// 这台 server 怎么连。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpTransport {
+    /// 本地子进程，走 stdio 上的协议帧。
+    Stdio,
+    /// 远端，走 Streamable HTTP。
+    Http,
+}
+
+impl McpTransport {
+    /// 配置里认的那两个字符串。**保持英文**：它们是 schema 值，不是散文。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::Http => "http",
+        }
+    }
+
+    /// 把配置里的字符串读成一种传输；不认识的写法是一条启动错误。
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "stdio" => Some(Self::Stdio),
+            "http" => Some(Self::Http),
+            _ => None,
+        }
+    }
+}
+
+/// 缺省的一次 connect 上限。
+pub const DEFAULT_MCP_CONNECT_TIMEOUT_MS: u64 = 10_000;
+
+/// 项目级 MCP 配置的文件名：仓库根的 `.mcp.json`（照上游惯例，可以随仓库走）。
+///
+/// 只认仓库根这一处，**不做**「向上逐级找」：一份跟着仓库走的配置要能被协作者预期到，
+/// 而逐级上溯会让同一个命令在两个目录里连上不同的 server。
+pub const MCP_PROJECT_FILE: &str = ".mcp.json";
+
+/// 一张 `[mcp]` 表。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMcp {
+    enabled: Option<bool>,
+    connect_timeout_ms: Option<u64>,
+    /// `[mcp.servers.<名字>]`：用户级的那一份。
+    #[serde(default)]
+    servers: BTreeMap<String, RawMcpServer>,
+}
+
+/// 一台 server 的原始记录。**两个来源共用这一个形状**：`config.toml` 的
+/// `[mcp.servers.<名字>]` 与 `.mcp.json` 里 `mcpServers.<名字>`。
+///
+/// 不接受的键一律拒（照 `[web]` 的先例）：一个拼错的 `trust_result`（少一个 `s`）静默降级成
+/// 「默认最严」是安全的，但一个拼错的 `command` 会让人对着「server 起不来」查半天。
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMcpServer {
+    /// `"stdio"` 或 `"http"`。不写时按 `command` / `url` 推断。
+    transport: Option<String>,
+    command: Option<Vec<String>>,
+    url: Option<String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    writable_roots: Vec<String>,
+    trust_results: Option<bool>,
+    trust_effects: Option<bool>,
+    /// 哪几条工具按只读处理；只在 `trust_effects` 打开时才认。
+    #[serde(default)]
+    read_only_tools: Vec<String>,
+    sandbox: Option<bool>,
+}
+
+/// 根 `.mcp.json` 的形状：上游惯例的外层键 `mcpServers`，里面每台 server 的记录与
+/// `[mcp.servers.<名字>]` 逐字同形。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProjectMcp {
+    #[serde(default, rename = "mcpServers")]
+    mcp_servers: UniqueServerMap,
+}
+
+/// 一份**拒重复键**的 server 表。
+///
+/// `serde_json` 默认「后者胜」，而重名是启动错误（spec §3）—— 「我以为两台都活着、其实只有
+/// 一台」不值得发生。`config.toml` 那一侧由 TOML 自己拒重复表，JSON 这一侧没有那道语法，
+/// 所以在这里手写一个 visitor 挡它。
+#[derive(Debug, Default)]
+struct UniqueServerMap(BTreeMap<String, RawMcpServer>);
+
+impl<'de> Deserialize<'de> for UniqueServerMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct UniqueVisitor;
+
+        impl<'de> Visitor<'de> for UniqueVisitor {
+            type Value = UniqueServerMap;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("一张 server 表")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut servers = BTreeMap::new();
+                while let Some((name, server)) = access.next_entry::<String, RawMcpServer>()? {
+                    if servers.contains_key(&name) {
+                        return Err(serde::de::Error::custom(format!(
+                            "server `{name}` 写了两遍；同名意味着「我以为两台都活着、其实只有一台」"
+                        )));
+                    }
+                    servers.insert(name, server);
+                }
+                Ok(UniqueServerMap(servers))
+            }
+        }
+
+        deserializer.deserialize_map(UniqueVisitor)
+    }
+}
+
+/// 把 `[mcp]` 解析成四个元工具的部署设置。
+///
+/// 每一台 server 的校验都在**启动期**做：一份点名了 `transport = "stdio"` 却没有 `command`
+/// 的记录，或者一个不认识的传输名，都该在一个回合开始之前失败，而不是等到模型第一次调用
+/// —— 那时模型看到的只会是「这台 server 连不上」。
+fn resolve_mcp(raw: Option<&RawMcp>) -> Result<McpSettings, ConfigError> {
+    let mut mcp = McpSettings::default();
+    let Some(raw) = raw else {
+        return Ok(mcp);
+    };
+    if let Some(enabled) = raw.enabled {
+        mcp.enabled = enabled;
+    }
+    if let Some(ms) = raw.connect_timeout_ms {
+        mcp.connect_timeout_ms = ms.max(1);
+    }
+    for (name, server) in &raw.servers {
+        if name.trim().is_empty() {
+            return Err(ConfigError::InvalidMcp {
+                reason: "server 的名字不能是空白；它就是元工具 `server` 参数认的那个键".to_owned(),
+            });
+        }
+        mcp.servers
+            .insert(name.clone(), resolve_mcp_server(name, server)?);
+    }
+    Ok(mcp)
+}
+
+/// 解析一台 server 的记录，顺带把「看起来配好了、其实连不上」的组合挡在启动期。
+fn resolve_mcp_server(name: &str, raw: &RawMcpServer) -> Result<McpServerConfig, ConfigError> {
+    let explicit = raw
+        .transport
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let transport = match explicit {
+        Some(value) => McpTransport::parse(value).ok_or_else(|| ConfigError::InvalidMcp {
+            reason: format!("server `{name}` 的 `transport` 是 `{value}`；只接 `stdio` 或 `http`"),
+        })?,
+        // 不写 transport 时按字段推断：有 `command` 就是本地子进程，有 `url` 就是远端。
+        None => match (
+            raw.command.as_ref().filter(|argv| !argv.is_empty()),
+            raw.url.as_deref().map(str::trim).filter(|v| !v.is_empty()),
+        ) {
+            (Some(_), None) => McpTransport::Stdio,
+            (None, Some(_)) => McpTransport::Http,
+            (Some(_), Some(_)) => {
+                return Err(ConfigError::InvalidMcp {
+                    reason: format!(
+                        "server `{name}` 同时写了 `command` 与 `url`；`transport` 没法推断，\
+                         请显式写 `transport = \"stdio\"` 或 `\"http\"`"
+                    ),
+                })
+            }
+            (None, None) => {
+                return Err(ConfigError::InvalidMcp {
+                    reason: format!(
+                        "server `{name}` 既没有 `command`（stdio）也没有 `url`（http），\
+                         无法连接"
+                    ),
+                })
+            }
+        },
+    };
+
+    let mut server = match transport {
+        McpTransport::Stdio => {
+            let command: Vec<String> = raw
+                .command
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect();
+            if command.is_empty() {
+                return Err(ConfigError::InvalidMcp {
+                    reason: format!(
+                        "server `{name}` 是 stdio，但没有可用的 `command`（argv 至少要有第一项）"
+                    ),
+                });
+            }
+            if raw.url.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+                return Err(ConfigError::InvalidMcp {
+                    reason: format!("server `{name}` 是 stdio，不该同时写 `url`"),
+                });
+            }
+            let mut server = McpServerConfig::stdio(name, command);
+            server.env = raw.env.clone();
+            server.writable_roots = raw.writable_roots.clone();
+            server
+        }
+        McpTransport::Http => {
+            let Some(url) = raw
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return Err(ConfigError::InvalidMcp {
+                    reason: format!("server `{name}` 是 http，但 `url` 是空的"),
+                });
+            };
+            if raw.command.as_ref().is_some_and(|argv| !argv.is_empty()) {
+                return Err(ConfigError::InvalidMcp {
+                    reason: format!(
+                        "server `{name}` 是 http，不该同时写 `command` —— 远端没有本地子进程"
+                    ),
+                });
+            }
+            let mut server = McpServerConfig::http(name, url);
+            server.headers = raw.headers.clone();
+            server
+        }
+    };
+    if let Some(trust) = raw.trust_results {
+        server.trust_results = trust;
+    }
+    if let Some(trust) = raw.trust_effects {
+        server.trust_effects = trust;
+    }
+    if let Some(sandbox) = raw.sandbox {
+        server.sandbox = sandbox;
+    }
+    server.read_only_tools = raw
+        .read_only_tools
+        .iter()
+        .map(|tool| tool.trim())
+        .filter(|tool| !tool.is_empty())
+        .map(str::to_owned)
+        .collect();
+    // 「配了等于没配」当场纠正：一张只读名单而 `trust_effects` 关着，等于它一个字都不会生效，
+    // 而人会以为自己放宽过了（spec §6 的「信任声明是一组能力」）。
+    if !server.read_only_tools.is_empty() && !server.trust_effects {
+        return Err(ConfigError::InvalidMcp {
+            reason: format!(
+                "server `{name}` 写了 `read_only_tools`，但 `trust_effects` 是关的 —— \
+                 那份名单一个字都不会生效。要放宽就先显式写 `trust_effects = true`"
+            ),
+        });
+    }
+    Ok(server)
+}
+
+/// 解析仓库根的 `.mcp.json`（项目级的那一份）。
+///
+/// 外层键是上游惯例的 `mcpServers`，里面每台 server 的记录与 `[mcp.servers.<名字>]` 逐字同形
+/// —— 两种来源因此不会有第二套字段语义。不接受的键一律拒。
+pub fn project_mcp_servers(json: &str) -> Result<BTreeMap<String, McpServerConfig>, ConfigError> {
+    let raw: RawProjectMcp =
+        serde_json::from_str(json).map_err(|source| ConfigError::ProjectMcpParse {
+            source: Box::new(source),
+        })?;
+    let mut servers = BTreeMap::new();
+    for (name, server) in &raw.mcp_servers.0 {
+        if name.trim().is_empty() {
+            return Err(ConfigError::InvalidMcp {
+                reason: ".mcp.json 里 server 的名字不能是空白".to_owned(),
+            });
+        }
+        servers.insert(name.clone(), resolve_mcp_server(name, server)?);
+    }
+    Ok(servers)
+}
+
+/// 把 `.mcp.json` 的文本盖到已经解析好的设置上。文件不存在时调用方不必调它。
+pub fn apply_project_mcp(settings: &mut McpSettings, json: &str) -> Result<(), ConfigError> {
+    settings.merge_project(project_mcp_servers(json)?);
+    Ok(())
+}
+
 /// 把 `[goals]` 解析成那四个旋钮。
 ///
 /// 校验都是为了挡住一个「看起来配好了、实际不会发生」的组合：两个阈值都得落在 1..=100，提醒
@@ -706,16 +1111,45 @@ impl Config {
         Ok(config)
     }
 
-    /// 绝不能进事件流的那些值（spec §20）：每一条解析出来的 provider 密钥。
+    /// 绝不能进事件流的那些值（spec §20）：每一条解析出来的 provider 密钥，加上 MCP 那一侧
+    /// 的 `env` 与 `headers` 值（`.scratch/mcp-support/spec.md` §5）。
     ///
-    /// 这些密钥就是这个进程被配置时的那些秘密 —— 来自 `config.toml` 或导出的环境 —— 这正是
-    /// 值级打码诚实的范围。用户手里别处存的密钥，这里并不知道，也猜不出来。
+    /// 这些密钥就是这个进程被配置时的那些秘密 —— 来自 `config.toml`、`.mcp.json` 或导出的环境
+    /// —— 这正是值级打码诚实的范围。用户手里别处存的密钥，这里并不知道，也猜不出来。
     pub fn redactor(&self) -> Redactor {
         Redactor::new(
             self.providers
                 .values()
-                .filter_map(|provider| provider.api_key.clone()),
+                .filter_map(|provider| provider.api_key.clone())
+                .chain(self.mcp.servers.values().flat_map(|server| {
+                    server
+                        .env
+                        .values()
+                        .chain(server.headers.values())
+                        .filter(|value| !value.is_empty())
+                        .cloned()
+                })),
         )
+    }
+
+    /// 读仓库根的 `.mcp.json`（项目级）并**逐台**盖到 `[mcp.servers.*]`（用户级）上。
+    ///
+    /// 只在 `[mcp] enabled` 打开时才读文件 —— 不开这一层就是零影响，连一次 `stat` 都不做。
+    /// 文件不存在不是错误：绝大多数仓库没有它。文件在但读不了、或者里面的键没见过，都是启动
+    /// 错误 —— 一份连不上的配置该在一个回合开始之前说清楚。
+    pub fn load_project_mcp(&mut self, cwd: &Path) -> Result<(), ConfigError> {
+        if !self.mcp.enabled {
+            return Ok(());
+        }
+        let path = cwd.join(MCP_PROJECT_FILE);
+        if !path.exists() {
+            return Ok(());
+        }
+        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
+        apply_project_mcp(&mut self.mcp, &text)
     }
 
     /// provider 有可用密钥的那些模型。CLI 的探测用它来判定自己实际能跑什么。
@@ -791,6 +1225,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let goals = resolve_goals(raw.goals.as_ref())?;
     let ui = resolve_ui(raw.ui.as_ref())?;
     let web = resolve_web(raw.web.as_ref());
+    let mcp = resolve_mcp(raw.mcp.as_ref())?;
 
     let default_model = raw
         .default_model
@@ -820,6 +1255,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         goals,
         number_style: ui.number_style,
         web,
+        mcp,
     })
 }
 
@@ -912,6 +1348,9 @@ struct RawConfig {
     ui: Option<RawUi>,
     /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。
     web: Option<RawWeb>,
+    /// `[mcp]`：四个元工具的部署设置与用户级的 server 清单
+    /// （`.scratch/mcp-support/spec.md` §5）。
+    mcp: Option<RawMcp>,
 }
 
 /// 一张 `[goals]` 表：目标循环在窗口的哪个位置提醒、哪个位置翻页，以及两条停止线。
@@ -1839,6 +2278,13 @@ pub enum ConfigError {
     InvalidPrice { model: String, field: &'static str },
     #[error("[budget] {reason}")]
     InvalidBudget { reason: String },
+    #[error("[mcp] {reason}")]
+    InvalidMcp { reason: String },
+    #[error(".mcp.json: {source}")]
+    ProjectMcpParse {
+        #[source]
+        source: Box<serde_json::Error>,
+    },
     #[error(
         "未知的模式 `{mode}`；`[permissions] mode`（或 `--mode`）只接 `readonly`、`ask`、`workspace`、`auto`"
     )]

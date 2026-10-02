@@ -707,3 +707,39 @@ provider = "deepseek"
         format!("x {REDACTED} y")
     );
 }
+
+#[test]
+fn mcp_env_and_header_values_become_the_sessions_redactor() {
+    // MCP 那两侧的凭据走同一条路（`.scratch/mcp-support/spec.md` §5）：
+    // server 进程的 `env` 与远端请求的 `headers` 都是「配置里的秘密」，
+    // 所以它们与 provider 密钥一样由 `Config::session_config` 交给打码器。
+    let file = r#"
+default_model = "deepseek-v4-pro"
+
+[providers.deepseek]
+api_key = "sk-deepseek-config-key"
+
+[models.deepseek-v4-pro]
+provider = "deepseek"
+
+[mcp]
+enabled = true
+
+[mcp.servers.github]
+command = ["server-github"]
+env = { GITHUB_TOKEN = "ghp-mcp-secret-0123456789" }
+
+[mcp.servers.jira]
+url = "https://jira.example.com/mcp"
+headers = { Authorization = "jira-mcp-secret-0123456789" }
+"#;
+    let config = fs_agent::config::resolve(Some(file), &fs_agent::config::EnvMap::new()).unwrap();
+    let session = config.session_config("deepseek-v4-pro").unwrap();
+    for secret in ["ghp-mcp-secret-0123456789", "jira-mcp-secret-0123456789"] {
+        assert_eq!(
+            session.redactor.redacted(&format!("x {secret} y")),
+            format!("x {REDACTED} y"),
+            "{secret} 该进打码器"
+        );
+    }
+}

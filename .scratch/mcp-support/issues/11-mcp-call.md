@@ -1,7 +1,7 @@
 # 11 — `mcp_call`：转发一次外部调用
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 10
 
@@ -37,3 +37,20 @@ Blocked by: 10
 ## 不做什么
 
 - 不做信任放宽（票 14）、不接真连接（票 12）、不做资源与提示词（票 16 / 17）。
+
+## Comments
+
+- 2026-10-03 落地（`Status: done`）。落点：`src/tools/mcp_call.rs`（新）、`src/mcp/mod.rs`
+  （`McpService::call_tool`）、`src/tools/mod.rs`（注册与 re-export）、`tests/mcp_call.rs`（新，9 条）。
+- 两处实现里定的细节：
+  - `arguments` 缺席或 `null` 当成 `{}` 透传；给了非对象（数组、字符串）是**参数错误**
+    （`Err`，不是结果）—— 「自由」指的是内部形状不校验，不是可以给个数组。
+  - 失败结果不带那句外部内容标记（web 那条工具的错误结果同样不带）：错误消息是我们自己写的
+    中文，不是外部内容；只有成功结果才以标记开头。
+- 验证 6 的后半句「跑在派发者的模式之下」不由本票新写：执行者拿的是派发者工具表的
+  `for_executor()`，而「委派向下不继承允许」那条纪律住在 `src/agent/executor.rs`，由
+  `tests/executor.rs` 的 `a_readonly_dispatcher_keeps_its_executor_read_only` 与
+  `a_denial_travels_down_to_the_executor` 覆盖；`mcp_call` 的 `effect()` 是 `Exclusive`，
+  与 `bash` 同类，所以那些覆盖原样适用。本票断言的是执行者表里有 `mcp_call`。
+- 验证：`cargo test`（新增 9 条全绿）· `cargo clippy --all-targets`（无 warning）·
+  `cargo fmt` · `python3 scripts/check-language.py` 全通过。

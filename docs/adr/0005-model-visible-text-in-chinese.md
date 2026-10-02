@@ -47,6 +47,8 @@
 - `fs-agent: {message}` / `fs-agent: {error}` 这类**程序名前缀** 25 条（`src/cli.rs`）—— 判据按英文词数算，`fs-agent` 被劈成 `fs` + `agent`，再加一个占位符名就够三个词。它是标识符那一类（票 01 当年就把它记成「前缀与字段名」，刻意不动）。要把它从计数里清掉得动 CLI 输出的标点（25 处 ASCII 冒号换全角 `：`，与 `wording::startup_banner` 的 `fs-agent：会话 …` 对齐）—— **那是另一件事，没做**；
 - 两条纯 `format!` 骨架：`→ {tool_name}({rendered})`（`src/provider/projection.rs`）、`{text}{separator}{display}: {}`（`src/context/repo_map.rs`）。
 
+**2026-10-03 的 MCP 那一轮把上限从 27 提到 29**（实测值）：新加进这一侧的四份文件（`src/tools/mcp_list.rs`、`mcp_call.rs`、`mcp_resources.rs`、`mcp_args.rs`）贡献了两条纯 `format!` 骨架 —— `"{MCP_UNTRUSTED_MARKER}\n\n{text}"`（`mcp_call.rs` 与 `mcp_resources.rs` 各一条），判据把它读成「四个英文词 + 空格」，其实一个散文词都没有。这一侧仍然是**零英文散文**（29 条全部是判据的假阳性）。同一轮把 `docs/mcp.md` 纳进 `DOCS_MIN_RATIO`（实测 30.0%，下限收到 28）。
+
 **刻意留在英文的三个字段值 / 标记**（ADR 0005 的「决定」把它们归进「schema 值」与「协议标记」）：
 
 - `hook_format::FAILED_PREFIX = "failed: "` 与 `FEEDBACK_PREFIX = "feedback: "`（`src/events.rs`）：它们是 `HookExecuted.outcome` 这个**字段值**的头，而且 `failed: ` 被 `src/session/observe.rs` 当成**计数依据**读（正是「代价」第 4 条说的那种约定文本）；

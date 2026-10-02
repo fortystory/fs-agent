@@ -15,15 +15,15 @@
 //!
 //! # 边界
 //!
-//! 十五个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` · `web` ·
-//! `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` ·
+//! 十六个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` · `web` ·
+//! `mcp` · `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` ·
 //! `goals` · `session` · `render` · `cli`。`events` 不依赖任何内部模块；
 //! [`provider::projection`] 是 `provider` 的子模块、不是一条边界。`discussion` 永远不碰
 //! `provider`：它持着协议的规则，而每一次调用都由 `agent` 层驱动。
 //!
-//! `tools → web` 是单向的：出网那一层自己发 HTTP，绝不碰会话的 provider 适配器 —— 会话模型的
-//! 调用仍只做 OpenAI 兼容那一套，而工具内部的 HTTP 是工具自己的事
-//! （`.scratch/web-search-tool/spec.md` §1）。
+//! `tools → web` 与 `tools → mcp` 都是单向的：出网与 MCP 那两层自己发 HTTP / 起进程，绝不碰
+//! 会话的 provider 适配器 —— 会话模型的调用仍只做 OpenAI 兼容那一套，而工具内部的事是工具
+//! 自己的事（`.scratch/web-search-tool/spec.md` §1、`.scratch/mcp-support/spec.md` §1）。
 
 pub mod agent;
 pub mod cli;
@@ -33,6 +33,7 @@ pub mod discussion;
 pub mod events;
 pub mod goals;
 pub mod hooks;
+pub mod mcp;
 pub mod permissions;
 pub mod provider;
 pub mod questions;
