@@ -911,6 +911,43 @@ fn printable_characters_and_backspace_are_swallowed_in_the_options_zone() {
 }
 
 #[test]
+fn escape_leaves_a_question_without_options_in_the_text_input() {
+    // 没有选项的题只有输入区，所以 `Esc` 不该把它推到一个不存在的选项区
+    // （`.scratch/questionnaire-keys/spec.md` §1、§5）。
+    let mut state = state();
+    let mut rx = ask(&mut state, vec![question("q", "Name?", &[], false)]);
+    state.key(Key::Char('x'));
+    state.key(Key::Esc); // 举手，同时「回选项区」—— 但这道题没有选项区
+    state.key(Key::Char('y'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("回答：xy"), "`Esc` 之后仍然能打字：\n{text}");
+
+    state.key(Key::Esc); // 第二下：退出这次询问
+    assert!(rx.try_recv().is_err(), "第二下 drop 掉发送端");
+}
+
+#[test]
+fn a_wrapped_custom_answer_stays_inside_the_pane() {
+    // 输入区自己折行也占行（spec §7）：续行要看得到，页脚也不能被挤掉。
+    let long = "y".repeat(120);
+    let mut state = state();
+    let _rx = ask(&mut state, vec![question("q", "Pick?", &["a", "b"], false)]);
+    state.key(Key::Char('j'));
+    state.key(Key::Char('j')); // → 输入区
+    for ch in long.chars() {
+        state.key(Key::Char(ch));
+    }
+
+    let text = screen(60, 24, &mut state).join("\n");
+    let ys = text.matches('y').count();
+    assert!(
+        ys >= 100,
+        "折行之后输入区看得见更多字符（只看到 {ys} 个）：\n{text}"
+    );
+    assert!(text.contains("1 / 1"), "页脚没被挤掉：\n{text}");
+}
+
+#[test]
 fn a_wrapped_option_keeps_all_of_its_lines_in_the_window() {
     // 超长选项折行而不是被截断；高亮落在它上面时它**整块**都在窗口里
     // （`.scratch/questionnaire-keys/spec.md` §7）。
