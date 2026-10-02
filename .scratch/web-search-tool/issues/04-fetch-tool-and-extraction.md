@@ -1,7 +1,7 @@
 # 04 — `web_fetch` 工具与正文提取：HTML → markdown
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01, 03
 
 > 规格：[`../spec.md`](../spec.md) §2、§5、§7。

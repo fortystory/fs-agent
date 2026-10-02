@@ -27,6 +27,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use crate::config::WebSettings;
 
 pub mod fetch_http;
+pub mod html;
 pub mod search_deepseek;
 
 /// 一条搜索结果来源。

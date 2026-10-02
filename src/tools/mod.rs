@@ -25,6 +25,7 @@ pub mod skill;
 pub mod task;
 pub mod todo;
 pub mod tool;
+pub mod web_fetch;
 pub mod web_search;
 
 pub use ask_user::{AskUserQuestionTool, ASK_USER_QUESTION_TOOL};
@@ -51,6 +52,7 @@ pub use tool::{
     BashLimits, Effect, ExecutorSpawner, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError,
     ToolOutput, WritePathResolver,
 };
+pub use web_fetch::{WebFetchTool, WEB_FETCH_TOOL};
 pub use web_search::{WebSearchTool, WEB_SEARCH_TOOL};
 
 /// v1 的内建工具。
@@ -119,8 +121,10 @@ pub fn with_web(mut registry: Registry, service: crate::web::WebService) -> Regi
         return registry;
     }
     let service = std::sync::Arc::new(service);
+    // 两个工具同开同关：`enabled` 是它们共同的开关，所以它们在同一处注册。
     registry.register(Box::new(WebSearchTool::new(std::sync::Arc::clone(
         &service,
     ))));
+    registry.register(Box::new(WebFetchTool::new(service)));
     registry
 }
