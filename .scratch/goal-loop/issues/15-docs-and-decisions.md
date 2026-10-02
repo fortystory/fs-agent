@@ -31,7 +31,7 @@ Blocked by: 01, 03, 05, 07, 09
 4. **`.scratch/README.md`**：`goal-loop` 那一行改成实际的票数与完成度；三条老种子的注记保持不变。
 5. **`.scratch/goal-loop/`**：`seed.md` 的抬头指向 spec 与票；spec 的 `Further Notes` 若与实现有出入就回改（本仓库的规矩：**实现票若改了 spec 的任何决定，必须回改 spec**，别只在票的评论里交接）。
 6. **手工清单**：`docs/tui-manual-checklist.md` 加一节（输入区禁用、`Esc` 确认框、翻页那一刻的观感）。
-7. **护栏**：`python3 scripts/check-language.py` OK；`cargo clippy --all-targets` 干净；新增散文与模型可见文本走中文（[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md)）。
+7. **护栏**：`python3 scripts/check-language.py` OK；`cargo clippy --all-targets` 干净；新增散文与模型可见文本走中文（[ADR 0005](../../../docs/adr/0005-model-visible-text-in-chinese.md)）。
 8. **ADR**：如果实现落地时形状已经不再动，补上 spec `Further Notes` 里点名的那一条 ——「目标不进会话状态，它的进度从各会话的 `todo` 派生」。
 
 ## 测试

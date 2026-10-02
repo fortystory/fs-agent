@@ -3,7 +3,7 @@
 Type: implement
 Status: done
 
-> 规格：`.scratch/language-migration/spec.md`；决定：[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（本轮补的「后加」一节说的就是这一批）。
+> 规格：`.scratch/language-migration/spec.md`；决定：[ADR 0004](../../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（本轮补的「后加」一节说的就是这一批）。
 > 这一批**只动文档，不动代码**：不改 `src/` / `tests/` 一个字符，所以 `cargo test` 的条数必须一条不变。
 
 ## 目标

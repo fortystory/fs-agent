@@ -65,3 +65,5 @@ Blocked by: —
 - **验收**：`cargo test` **978 passed / 0 failed**（修前 976）；`cargo clippy --all-targets` 干净；`cargo fmt`（跑完还原了它顺手改的 `tests/ask_user_question.rs` —— 那处与本票无关）。问卷那个测试文件 13 → 15 条。
 - 票 32 里那条决定已在票面标了日期更正，本票不再改写它。
 - **一处已知后果（本票按方案 A 的范围没动它，留给下一张票或 `questionnaire-keys` 的访谈）**：`↑`/`↓` 移动高亮时**不**清焦点 —— 清它的只有 `advance` / `back` / `select_option` / `unfocus_custom`。于是在这道题上打过字之后，焦点一直留在文本框里：空格继续是文本，而「用 `↑`/`↓` 挑一个选项、再按空格确认」这条路在本票之后不再成立（要让它成立得点一下选项行，那会清焦点）。这是既有行为被本票放大出来的，不是本票引入的；但它说明「焦点」这个模型在选项与文本框之间还不完整。
+
+- **2026-10-02 更正**：票里「单选确认还会把刚打进去的东西一起清掉」那半句已经不成立 —— `questionnaire-keys` 把单选与多选统一成 `selected` 与 `custom` **并存**（[spec §3](../spec.md)、[ADR 0010](../../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)）。空格守卫本身没变，仍是当时的落地。

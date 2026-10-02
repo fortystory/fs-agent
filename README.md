@@ -23,7 +23,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **32 张**实现票全部 `done`（含收尾审查补记的 30/31/32），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)；第四档 `workspace` 随后由 [ADR 0007](docs/adr/0007-workspace-permission-mode.md) 加上）；`src/` **36,423** 行、`tests/` **34,767** 行（`wc -l`）、**976** 条测试（`cargo test` 的 passed 合计）。2026-10-02 又落地三组：`usage-stats-format`（数字制式 `[ui] number_style` 与两行的占比色条）**3/3**、`terminal-title`（终端标题：保存 / 按状态写入 / 退出还原）**2/3**、`exit-gesture`（空闲与忙碌的双击退出、`exit(130)` 那条路的有序收尾、退出回执）**4/5** —— 两个 `ready-for-walkthrough` 都是「真终端上逐项看一遍」那半，自动化能覆盖的都已覆盖。同日还落地了 [`suspend-gesture`](.scratch/suspend-gesture/spec.md)（**2/2**）：TUI 里 `Ctrl-Z` 单下把进程停到后台、`fg` 回来重进终端并清屏全量重绘，任何视图都拦不住它；plain 的同一按键由终端驱动天然处理，pty 脚本为两条路各加了一轮回归（挂起的测试得先给 pty 一个真会话与前台进程组 —— `pty.fork()` 的孤儿组会把 SIGTSTP 丢掉）。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
+**状态**：v1 的 **34 张**实现票全部 `done`（含收尾审查补记的 30/31/32，以及维护者报的两个问卷 bug 票 33/34），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)；第四档 `workspace` 随后由 [ADR 0007](docs/adr/0007-workspace-permission-mode.md) 加上）；`src/` **36,664** 行、`tests/` **35,434** 行（`wc -l`）、**999** 条测试（`cargo test` 的 passed 合计：47 个 test binary、0 failed）。2026-10-02 又落地三组：`usage-stats-format`（数字制式 `[ui] number_style` 与两行的占比色条）**3/3**、`terminal-title`（终端标题：保存 / 按状态写入 / 退出还原）**2/3**、`exit-gesture`（空闲与忙碌的双击退出、`exit(130)` 那条路的有序收尾、退出回执）**4/5** —— 两个 `ready-for-walkthrough` 都是「真终端上逐项看一遍」那半，自动化能覆盖的都已覆盖。同日还落地了 [`suspend-gesture`](.scratch/suspend-gesture/spec.md)（**2/2**）：TUI 里 `Ctrl-Z` 单下把进程停到后台、`fg` 回来重进终端并清屏全量重绘，任何视图都拦不住它；plain 的同一按键由终端驱动天然处理，pty 脚本为两条路各加了一轮回归（挂起的测试得先给 pty 一个真会话与前台进程组 —— `pty.fork()` 的孤儿组会把 SIGTSTP 丢掉）。同日最后落地的是 [`questionnaire-keys`](.scratch/questionnaire-keys/spec.md)（**6/7**，剩的那张是真终端走查）：问卷的键位按**区域**分派（选项区 / 输入区，[ADR 0010](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)）、`j`/`k` 与 `Ctrl-N`/`Ctrl-P` 在选项区移动而进了输入区 `j`/`k` 就是文本、选项区吞掉可打印字符、单选与多选统一成 `selected` + `custom` 并存、`Esc` 只管「退出这次询问」（双击、drop 掉回复通道、模型继续跑）而取消归 `Ctrl-C`、长选项折行、页脚给键位提示与举手回执。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。
 
 ## 快速开始
 
@@ -138,7 +138,7 @@ fs-agent discuss --plain "…" 2>/dev/null          # 只要合成产物（讨�
 fs-agent --help
 ```
 
-会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合、**Shift+Tab** 在 `readonly` / `ask` / `workspace` / `auto` 四档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写、区外的写要不要停下来问一次，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
+会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合（问卷立着时除外 —— 那里的 `Esc` 是「退出这次询问」，取消归 `Ctrl-C`）、**Shift+Tab** 在 `readonly` / `ask` / `workspace` / `auto` 四档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写、区外的写要不要停下来问一次，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
 
 ### TUI 长什么样
 
@@ -179,7 +179,7 @@ token                       1.6万 / 10万┆
 
 转录里**中间过程是折起来的**：思考只留一行 `[kimi] ▸ ✓ 思考完成`，工具调用只留一行 `[kimi] ▸ 调用 bash 查看 git status`——描述从参数推出（`查询`/`查看`/`修改`/`运行` + 第一个路径或子命令），命令全文与输出都不铺在屏幕上。**点这两行的 `▸`** 打开详情覆盖层（**居中于屏幕**、虚线边框，颜色是被点那行说话人的颜色）：思考全文、工具参数、输出全文分节显示，可用 `PgUp`/`PgDn` 或滚轮翻，`Esc` 或点框外关掉；转录停在原处不动。
 
-说话人名字按角色着色（讨论者 1 浅青、讨论者 2 浅品红、执行者 浅黄、用户 浅绿、系统 灰），正文保留原来的语义色。鼠标还能**点击作答**：权限 / 粘贴 / 清草稿三种覆盖层的候选键，以及 `ask_user_question` 问卷的每个选项行、翻页与提交。键盘上退出是**双击**：空闲时 `Ctrl-C` 与 `Ctrl-D` 完全对等 —— 第一下只在提示行举手（`再按一次 ctrl-c/ctrl-d 退出`），半秒内第二下才真的走；忙时第一下 `Ctrl-C` 只取消当前回合（提示行说明），第二下退出（以 130 收尾，终端照常交还），忙时 `Ctrl-D` 一直忽略。退出（含忙碌那条）后 shell 里会多一行 `fs-agent: 会话 <id>；接着跑：fs-agent -c <id>`（stderr，与 `discuss` 收尾那行同一个前缀与生成器）—— 那行直接粘回终端就能续上这一场。启动横幅不打它。
+说话人名字按角色着色（讨论者 1 浅青、讨论者 2 浅品红、执行者 浅黄、用户 浅绿、系统 灰），正文保留原来的语义色。鼠标还能**点击作答**：权限 / 粘贴 / 清草稿三种覆盖层的候选键，以及 `ask_user_question` 问卷的选项行（点一下只**切换选中**、不翻页；翻页与提交走页脚那三个按钮）。键盘上退出是**双击**：空闲时 `Ctrl-C` 与 `Ctrl-D` 完全对等 —— 第一下只在提示行举手（`再按一次 ctrl-c/ctrl-d 退出`），半秒内第二下才真的走；忙时第一下 `Ctrl-C` 只取消当前回合（提示行说明），第二下退出（以 130 收尾，终端照常交还），忙时 `Ctrl-D` 一直忽略。退出（含忙碌那条）后 shell 里会多一行 `fs-agent: 会话 <id>；接着跑：fs-agent -c <id>`（stderr，与 `discuss` 收尾那行同一个前缀与生成器）—— 那行直接粘回终端就能续上这一场。启动横幅不打它。
 
 ### 子命令
 

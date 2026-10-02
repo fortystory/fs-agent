@@ -3,7 +3,7 @@
 Type: implement
 Status: ready-for-agent
 
-> 规格：`.scratch/language-migration/spec.md`；决定：[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)。
+> 规格：`.scratch/language-migration/spec.md`；决定：[ADR 0004](../../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)。
 > 这张票是 2026-09-30 单独记下来的：ADR 那一批（[票 03](03-adr-headings-and-jargon.md)）当时只做 `docs/adr/`，tracker 的标题**故意留着没动**，因为「它们是字段名还是散文」没有定。
 
 ## 目标
@@ -15,7 +15,7 @@ Status: ready-for-agent
 - **票**（`issues/NN-*.md`，131 个文件里有这批标题）：`## Comments` 82、`## Question` 49、`## Answer` 48、`## Solution` 8、`## Problem Statement` 8，另有 `## What to build`、`## What the sources leave open`、`## Frontier`、`## Findings`、`## Deliverable`、`## Agent Brief`、`#### OpenAI`、`### DeepSeek`。
 - **spec**：`## Problem Statement` / `## User Stories` / `## Solution` / `## Implementation Decisions` / `## Testing Decisions` / `## Further Notes` / `## Out of Scope`（另有一处写成 `## Out of scope`）各 8 处左右。
 - **决策图**（`map.md`）：`## Destination` / `## Notes` / `## Decisions so far` / `## Not yet specified` / `## Out of scope` / `## Frontier`。
-- **约定文档正文明写这批标题**：[`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md) 的「约定」一节（`## Comments`）、wayfinder 一节（`## Answer`、`Notes` / `Decisions so far` / `Not yet specified`）；`CONTEXT.md` 的**分叉合成**那条 `_Avoid_` 与 README 也各引了一次 `Out of Scope`。
+- **约定文档正文明写这批标题**：[`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md) 的「约定」一节（`## Comments`）、wayfinder 一节（`## Answer`、`Notes` / `Decisions so far` / `Not yet specified`）；`CONTEXT.md` 的**分叉合成**那条 `_Avoid_` 与 README 也各引了一次 `Out of Scope`。
 - 图里那个 `## 任务清单` **已经是中文**，`scripts/wayfinder-check.py` 正是按它核对的；它查的字段行是 `Type:` / `Status:` / `Part of:` / `Blocked by:`，**不查这批标题**。
 
 ## 领票后先定的三件事（别跳过）
@@ -28,7 +28,7 @@ Status: ready-for-agent
 ## 具体行为
 
 1. 按定好的译名表改 `.scratch/**/*.md` 的标题（**只动标题行**，正文一个字不改）。
-2. 改 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)：它正文里写死的 `## Comments` / `## Answer` / `Notes` / `Decisions so far` / `Not yet specified` 换成新译名。
+2. 改 [`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md)：它正文里写死的 `## Comments` / `## Answer` / `Notes` / `Decisions so far` / `Not yet specified` 换成新译名。
 3. 改 `CONTEXT.md`、`README.md` 里引到这些标题的地方（`Out of Scope`）。
 4. 复核**技能侧**有没有按这些标题找内容：本仓库只有 `scripts/wayfinder-check.py`（已确认不查它们），但 skills 是仓库外的，若它对 `## Answer` 有依赖，要在本票的 Comments 里如实记下来。
 5. **护栏**：`check-language.py` 现在只查 `docs/adr/*.md` 的标题。做完这一批，把 `.scratch/` 的标题也纳进同一条检查（哪些文件、放不放 `map.md`，在这一步定），否则下一次开票又会写回英文标题。

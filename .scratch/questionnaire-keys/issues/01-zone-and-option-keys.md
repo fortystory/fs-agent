@@ -42,7 +42,8 @@ Blocked by: —
 ## 测试
 
 - [`tests/ask_user_question_tui.rs`](../../../tests/ask_user_question_tui.rs) 新增：
-  - 选项区 `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 移动、两端环绕、越界后 `j`/`k` 变成文本；
+  - 选项区 `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 移动、越界进输入区（从输入区回来时环绕），
+    进了输入区 `j`/`k` 变成文本；
   - 输入区里 `j`/`k` 落进文本、`Ctrl-N`/`Ctrl-P` 静默、`↑`/`↓` 回选项区并移动；
   - 选项区里可打印字符与 `Backspace` 吞掉（屏幕上不多出字符、`custom` 仍为空）；
   - 没有选项的题：可打印字符直接进文本。

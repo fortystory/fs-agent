@@ -37,8 +37,8 @@ Blocked by: —
 
 ## 不做什么
 
-- 不加 `j`/`k` 导航（那是 [`.scratch/questionnaire-keys/seed.md`](../questionnaire-keys/seed.md)
-  的意向，要单独访谈）。
+- 不加 `j`/`k` 导航（那是 [`.scratch/questionnaire-keys/spec.md`](../../questionnaire-keys/spec.md)
+  的意向；[票 01](../../questionnaire-keys/issues/01-zone-and-option-keys.md) 已落地，2026-10-02 补记）。
 - 不动 `Esc` 的语义、不动单选的「自定义覆盖选择」、不动 footer 的文案与布局。
 - 不引入「选项区 / 输入区」这套命名（同上，属于那次访谈）。
 
@@ -48,3 +48,5 @@ Blocked by: —
 - **先红后绿**：`moving_the_highlight_takes_the_focus_back_to_the_options` 改前红（屏幕上是 `自定义：x`，空格被当成文本塞了进去），改后绿。问卷那个测试文件 15 → 16 条。
 - **验收**：`cargo test` **979 passed / 0 failed**（修前 978）；`cargo clippy --all-targets` 干净；`cargo fmt`（跑完还原了它顺手改的 `tests/ask_user_question.rs` —— 那处与本票无关）。
 - 票 33 的《已知后果》到此关闭：`↑`/`↓` 挑选项再按空格这条路回来了。
+
+- **2026-10-02 更正**：这张票《不做什么》里「不动单选的『自定义覆盖选择』」已被推翻 —— 单选与多选现在共用一个答案形状（[spec §3](../spec.md)），而「挪高亮收回焦点」升格成了区域表的一整行。

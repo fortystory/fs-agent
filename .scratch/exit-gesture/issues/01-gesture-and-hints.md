@@ -116,3 +116,5 @@ Blocked by: —
 - **pty 脚本的一处连带面**（票只点了 `ctrl-d y`）：`GESTURES` 的两条都改成双击，**`--continue` 那一轮也要跟着改** —— 它走的是 `capture` 的默认手势 `b"\x03"`，改成双击之后才退得出去（只改 `GESTURES` 会让四条 `--continue` 全红，实测确认）。本机实跑 12/12 GREEN。
 - `cargo test` 全绿（964 条）；`cargo clippy --all-targets` 干净。
 - **补记（票 05 收口时改的一处行为）**：票 01 写的是「空闲：举手状态下第二下 `self.quit = true`」，而忙碌那一把举手在**第一下取消已经落地、`busy()` 变成假之后**会掉进这条空闲分支 —— 那时退出码会退成 0，与 spec §3「忙碌中被打断而退 = 130」相冲（pty 实测就是这么红的）。修法：`TuiState` 多一个 `exit_gesture_busy`，忙碌里举的举手记得自己的出身，第二下即使渲染器已经空闲也推 `FrontEndEvent::Quit`；空闲举的那把仍然 `self.quit = true`。回归测试见 `tests/render_tui.rs`，票 05 的 Comments 有完整记录。
+
+- **2026-10-02 更正**：票里说的 `CONTEXT.md` 那条词条已经改名成**举手（Gesture）** —— 问卷键位那一轮往同一个槽位里加了第二把（「退出这次询问」，见 [`.scratch/questionnaire-keys/spec.md`](../../questionnaire-keys/spec.md) §5），于是词条从「退出举手（ExitGesture）」扩成两把共槽互斥的说明。本票的行为没有变。

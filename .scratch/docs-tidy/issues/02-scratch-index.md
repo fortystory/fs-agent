@@ -16,7 +16,7 @@ Blocked by: 01
 
 ## 具体行为
 
-1. 文件开头一段说清楚：这里一个 feature 一个目录、spec 是 `.scratch/<feature>/spec.md`、图是 `map.md`、票在 `issues/NN-*.md`（每票一个 `Status:` 行），并指向 [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md) 作为权威约定。
+1. 文件开头一段说清楚：这里一个 feature 一个目录、spec 是 `.scratch/<feature>/spec.md`、图是 `map.md`、票在 `issues/NN-*.md`（每票一个 `Status:` 行），并指向 [`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md) 作为权威约定。
 2. **一张表**，一行一个 feature，四列：
    - **目录**（链接到 spec 或 map）；
    - **形态**：spec / map（wayfinder 决策图）/ seed（种子材料）/ 只有票；
