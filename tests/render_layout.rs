@@ -434,6 +434,32 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
 }
 
 #[test]
+fn ctrl_o_still_works_while_a_questionnaire_is_up() {
+    // 问卷不吞键盘独占权，而左栏不在它的管辖范围内 —— 它是纯视图手势
+    // （`.scratch/sidebar-toggle/spec.md` §3 的分派表）。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "唯一".to_owned(),
+            description: None,
+        }],
+    });
+    let open = screen(120, 24, &mut state);
+    state.key(Key::CtrlO);
+    let closed = screen(120, 24, &mut state);
+    assert_ne!(open, closed, "问卷立着时 Ctrl-O 也生效");
+    assert!(
+        !closed.join("\n").contains('┆'),
+        "左栏确实收起来了：{}",
+        closed.join("\n")
+    );
+}
+
+#[test]
 fn the_hidden_sidebar_has_no_tabs_to_click() {
     // 命中矩形一律「这一帧真的画了什么就记什么」，所以页签随左栏一起
     // 消失 —— 没有第二处要同步的状态（`.scratch/sidebar-toggle/spec.md` §2）。
@@ -481,6 +507,11 @@ fn a_todo_list_landing_while_the_sidebar_is_hidden_does_not_pop_it_back() {
         tab_bar(&mut state, 120, 24).contains(wording::TAB_TODO),
         "叫回来就看得见"
     );
+
+    // 那一页的内容也在：意愿只决定栏在不在，不决定标签或页里的东西。
+    click_row(&mut state, 120, 24, wording::TAB_TODO);
+    let shown = screen(120, 24, &mut state).join("\n");
+    assert!(shown.contains("写测试"), "todo 页的内容还在：{shown}");
 }
 
 #[test]
@@ -492,6 +523,20 @@ fn hiding_the_sidebar_widens_what_the_editor_wraps_against() {
     let hidden = fs_agent::render::layout::content_width(area, false);
     assert!(hidden > shown, "收起后主列更宽：{shown} → {hidden}");
     assert_eq!(hidden, 120, "没有左栏时主列就是整屏");
+
+    // 转录正文也拿到那份宽度：`w − 2`（右缘恒留滚动条与回合条各一列），
+    // 而显示左栏时它是 `79 − 2`。
+    use fs_agent::render::layout;
+    assert_eq!(
+        layout::plan(area, 3, false).transcript_text().width,
+        118,
+        "收起后转录正文宽 = w − 2"
+    );
+    assert_eq!(
+        layout::plan(area, 3, true).transcript_text().width,
+        77,
+        "显示时转录正文宽 = 主列 79 − 2"
+    );
 }
 
 #[test]

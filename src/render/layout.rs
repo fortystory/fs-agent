@@ -359,13 +359,13 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     }
 }
 
-/// 终端宽 `width`、用户意愿 `wanted` 时左栏的内容宽度，没得画时是 `None`。
+/// 终端宽 `width`、用户意愿 `sidebar_wanted` 时左栏的内容宽度，没得画时是 `None`。
 ///
-/// 两个判据**相乘**：意愿说偏好，宽度说可行性。`wanted` 为假与宽度不够走的是同一支 ——
-/// 左栏是它自己的一列，所以它的高度不是转录可以花掉的（spec §2）。宽度那三档一个字不改
+/// 两个判据**相乘**：意愿说偏好，宽度说可行性。`sidebar_wanted` 为假与宽度不够走的是同一支
+/// —— 左栏是它自己的一列，所以它的高度不是转录可以花掉的（spec §2）。宽度那三档一个字不改
 /// （`.scratch/sidebar-toggle/spec.md` §2）。
-fn sidebar_tier(width: u16, wanted: bool) -> Option<u16> {
-    if !wanted {
+fn sidebar_tier(width: u16, sidebar_wanted: bool) -> Option<u16> {
+    if !sidebar_wanted {
         return None;
     }
     if width >= SIDEBAR_WIDE_FROM {
@@ -381,8 +381,8 @@ fn sidebar_tier(width: u16, wanted: bool) -> Option<u16> {
 ///
 /// 外框已经不占列了（spec §1），所以这里只剩左栏这一笔账。意愿为假时左栏那两笔一起让回来，
 /// 主列因此拿到整屏宽（`.scratch/sidebar-toggle/spec.md` §2）。
-fn main_width(width: u16, wanted: bool) -> u16 {
-    let sidebar = sidebar_tier(width, wanted).map_or(0, |tier| tier + 1);
+fn main_width(width: u16, sidebar_wanted: bool) -> u16 {
+    let sidebar = sidebar_tier(width, sidebar_wanted).map_or(0, |tier| tier + 1);
     width.saturating_sub(sidebar)
 }
 
@@ -390,9 +390,10 @@ fn main_width(width: u16, wanted: bool) -> u16 {
 ///
 /// 阶梯是定死的：**标记**先走（先退成文字身份，再退成没有），然后从尾部丢字段 —— 先是
 /// 缓存，再是输出，再是输入。地板是页签条加上上下文 / token / 回合，所以回答「还剩多少」的
-/// 那三个读数最后走（spec §2）。意愿为假时连门都不进：整栏让位（§2）。
-fn sidebar_content(width: u16, content_rows: u16, wanted: bool) -> (SidebarKind, u16) {
-    let Some(tier) = sidebar_tier(width, wanted) else {
+/// 那三个读数最后走（spec §2）。意愿为假时连门都不进：整栏让位
+/// （`.scratch/sidebar-toggle/spec.md` §2）。
+fn sidebar_content(width: u16, content_rows: u16, sidebar_wanted: bool) -> (SidebarKind, u16) {
+    let Some(tier) = sidebar_tier(width, sidebar_wanted) else {
         return (SidebarKind::Hidden, 0);
     };
     let mut kind = if tier >= LOGO_WIDTH {

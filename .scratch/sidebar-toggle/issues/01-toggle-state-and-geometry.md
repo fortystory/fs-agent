@@ -79,9 +79,9 @@ Blocked by: —
 7. **编辑器跟着走**：断言 `content_width(area, false) > content_width(area, true)`
    （或一条长草稿在收起后折行数变少）。
 
-## 实现完成（2026-10-02）
+## Comments
 
-全部落地，`cargo test` 全绿。
+- **落地（2026-10-02）**：全部落地，`cargo test` 全绿。
 
 - **`layout.rs`**：`sidebar_tier` / `sidebar_content` / `main_width` / `plan` / `content_width` /
   `input_text_width` 六个函数带上 `sidebar_wanted`，`!wanted` 走与 `w < 80` 完全相同的那一支；
@@ -90,6 +90,15 @@ Blocked by: —
 - **`tui.rs`**：`Key::CtrlO`、`map_key` 的 `'o'`、`TuiState.sidebar_wanted`（初值 `true`）、
   `key()` 里排在 `replay` 与 `detail_open` 之后、`expire_exit_gesture` 之前的那个 toggle；
   5 个调用点（`plan` ×2、`content_width` ×1、`input_text_width` ×2）全部带上意愿。
-- **测试**：`tests/render_layout.rs` 新增 6 条（toggle 往返、窄档无效、busy 生效、详情覆盖层
-  拦住、页签随帧消失、`todo` 不弹回、编辑器折行宽），`tests/history_replay.rs` 新增 1 条
-  （重放期间不生效、跑完恢复）。
+- **测试**：`tests/render_layout.rs` 新增 8 条（toggle 往返、窄档无效、busy 生效、详情覆盖层
+  拦住、问卷立着时生效、页签随帧消失、`todo` 不弹回且页内容还在、编辑器折行宽与转录正文宽），
+  `tests/history_replay.rs` 新增 1 条（重放期间不生效、跑完恢复）。
+- **「默认帧逐格不变」这条回归锚由既有断言承担**：`the_sidebar_has_two_widths_and_a_hidden_third`、
+  `a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column`、
+  `the_wide_sidebar_is_forty_columns_and_centres_the_mark`、
+  `the_main_rules_stop_short_of_the_divide_column` 读的就是默认帧，本次改动前后都绿 —— 这就是
+  「加开关没有顺手改默认外观」的证据。再写一条「默认帧 == 默认帧」只会是同义反复。
+- **收尾审查（`/code-review` 双轴）之后改的**：`wanted` 与 `sidebar_wanted` 统一成后者（Standards
+  轴的 Mysterious Name）；`fn sidebar_content` 的 rustdoc 把 spec 路径补全。Data Clumps
+  （六个签名都带「空间 + 意愿」）**接受为判断题、不改**：那是真实的两层判据（可行性 + 偏好），
+  包成一个类型只是把同一个布尔换个名字，而 spec §2 已经论证过为什么不把它们折成一个数。

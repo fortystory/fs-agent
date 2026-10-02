@@ -47,9 +47,9 @@ Blocked by: 01
    相等」的断言就跟着改；没有就一行不动（别预改）。
 4. 手工面写进 [票 03](03-docs-and-sweep.md) 的那一节（提示行在真终端里的可读性）。
 
-## 实现完成（2026-10-02）
+## Comments
 
-- `KEY_HINTS` 变成 `[&str; 6]`，末尾追加 `"ctrl-o 左栏"`；docstring 补上「位置就是优先级」。
+- **落地（2026-10-02）**：`KEY_HINTS` 变成 `[&str; 6]`，末尾追加 `"ctrl-o 左栏"`；docstring 补上「位置就是优先级」。
 - `status_line` 的阶梯 docstring 按实测重取：40 列三个条目、60 列四个、80 列六个、120 列八个
   （`ctrl-o 左栏` 只在最宽档出现）。
 - `tests/wording.rs`：新增 `the_sidebar_switch_is_hinted_at_the_end_of_the_line`；
@@ -58,5 +58,11 @@ Blocked by: 01
 - `tests/render_layout.rs` 的渲染侧阶梯
   （`the_hint_row_gives_up_hints_before_it_gives_up_the_way_out`）：174 列的条目数 7 → 8，
   并新增一条「左栏开关是这一档多出来的那一条」。
-- `scripts/tui-startup-check.py` **一行没动**：它的锚点是 `STATUS_ANCHOR = "ctrl-c"` 与
-  `MARK_ROW`，都不受这条提示影响。**没有在真 pty 上重跑** —— 那一步归票 03 的走查。
+- `scripts/tui-startup-check.py` **一行没动**，而且**原样跑过**：
+  `python3 scripts/tui-startup-check.py target/debug/fs-agent 1` → **7/7 GREEN**（三条出口 +
+  `--continue` + 忙碌双击 + 挂起 TUI + 挂起 plain）。它的锚点是 `STATUS_ANCHOR = "ctrl-c"` 与
+  `MARK_ROW`，而新条目插在出口**之前**，所以不受影响。
+- **收尾审查后补的一条边界**：忙碌行的出口短七列，所以它在**更窄的提示行**（97 列）上就看得见
+  这一条，而空闲行同宽还看不见 —— `tests/wording.rs` 已钉住。`status_line` 的 docstring 同时
+  写明「阶梯里的『列』是**提示行自己的列宽**，不是屏宽」（宽屏带左栏时提示行比屏窄 41 列，
+  所以屏宽 120 的帧只看得见四条提示）。

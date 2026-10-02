@@ -481,6 +481,16 @@ fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
         !narrow.contains("ctrl-o 左栏"),
         "100 列还看不到它：{narrow}"
     );
+
+    // 忙碌行的出口短七列（`ctrl-c 退出` 对 `ctrl-c/ctrl-d 退出`），所以在同一个列宽上
+    // 它比空闲行更早看到这一条 —— 同一条阶梯，两条出口。
+    let busy = wording::status_line(true, 97, false);
+    assert!(busy.contains("ctrl-o 左栏"), "忙碌行在 97 列上：{busy}");
+    let idle_here = wording::status_line(false, 97, false);
+    assert!(
+        !idle_here.contains("ctrl-o 左栏"),
+        "空闲行同宽还看不到：{idle_here}"
+    );
 }
 
 #[test]
