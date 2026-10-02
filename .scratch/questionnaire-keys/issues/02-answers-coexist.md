@@ -1,0 +1,51 @@
+# 02 — 答案只有一个形状：`selected` 与 `custom` 并存
+
+Type: implement
+Status: ready-for-agent
+Blocked by: 01
+
+> 来源：[`../spec.md`](../spec.md) §3、§4。它推翻 [`fs-agent-v1` §7](../../fs-agent-v1/spec.md)
+> 那条**模型侧可观察**的编码约定，理由在 [ADR 0010](../../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)。
+
+## 目标
+
+- **删掉三处互斥**：`type_custom` 里的单选 `selected.clear()`
+  （[:903-905](../../../src/render/tui.rs)）、`confirm_highlight` 里的 `custom.clear()`
+  （[:874-875](../../../src/render/tui.rs)）、`answers()` 里的单选清零
+  （[:979-983](../../../src/render/tui.rs)）。三处一删，并存就是结构性的。
+- **单选语义成 toggle，但集合至多一个**：高亮项未选中时确认 = **替换**现有选择；
+  已选中时确认 = **取消它**。多选维持今天的 toggle。
+- **确认不再自动前进**：删掉单选的 `advance`（[:808-810](../../../src/render/tui.rs)、
+  [:820-822](../../../src/render/tui.rs)）。翻页留给 `→` 与页脚按钮。
+- **`Enter` 按区域拆**：选项区里与空格**完全一致**（toggle），只有 `all_handled()` 时仍是**提交**
+  （保留 [:801-803](../../../src/render/tui.rs)）；输入区里 = 当前题已成立时**前进**
+  （今天 [:804-805](../../../src/render/tui.rs) 的语义整个移到这里）。删掉 [:804-805](../../../src/render/tui.rs)
+  在选项区的适用。
+- **回改契约**：[`fs-agent-v1/spec.md` §7](../../fs-agent-v1/spec.md) 那句「**单选**下 `custom`
+  **覆盖**已选（`selected: []`）、**多选**下**补充**」改成「两者都**并存**交回」，
+  `ask_user_question` 的**工具描述**同改。
+
+## 现状（2026-10-02 核实，改前先复核）
+
+- 互斥的三处如上；`answers()` 里 979-983 那条 `if !multi_select && custom.is_some() { Vec::new() }`
+  是单选覆盖的最后一站。
+- 「跳过」的编码是 `selected: []` 且无 `custom`（[:970-975](../../../src/render/tui.rs)）；
+  这两条约定**不动**。
+- `Enter` 今天的三个角色：提交（`all_handled()`）、前进（`handled()`）、确认
+  （有选项时 `confirm_highlight`）——见 [:800-812](../../../src/render/tui.rs)。
+- 钉住旧语义的测试：`tests/ask_user_question_tui.rs:248` 一带（自定义覆盖单选 / 补充多选）。
+
+## 测试
+
+- 改写 `tests/ask_user_question_tui.rs:248` 那条为**并存**：选一项再打字，提交后
+  `selected` 与 `custom` **同时**在。
+- 新增：单选 toggle 两条（已选再确认 = 取消、集合变空；确认另一项 = 替换）+ 「确认不前进」一条。
+- 新增：选项区 `Enter` 与空格等价、`all_handled()` 时 `Enter` 提交、输入区里已成立则前进。
+- 新增：`custom` 删空之后是 `None`，而 `selected` 不受影响；`selected` 空 + 无 `custom` 仍是跳过。
+- `cargo test` 全绿、`cargo clippy --all-targets` 干净。
+
+## 不做什么
+
+- 不改「跳过」与「`answers` 里没有该 `id`」两条既有约定。
+- 不动 plain 路径（它一次一行，表达不了并存，spec §10）。
+- 不动 `Esc`（票 03）、页脚（票 04）。

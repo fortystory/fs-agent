@@ -31,7 +31,7 @@
 | [`goal-loop/`](goal-loop/spec.md) | spec | **目标**（跨会话的工作单位）+ `/loop` 无人值守持续工作 + **翻页**（压缩、`/clear`、预算认到目标上）—— 吞并 `loop-and-goals` / `clear-command` / `context-compaction` 三条种子；同日一轮 grilling（30 问）关掉 14 条分叉后折成构建计划，并拆出 15 张自包含的票（来源与关闭记录在 [`seed.md`](goal-loop/seed.md)）；**同一天 15 张全部落地**，逐面文档在 [`docs/goals.md`](../docs/goals.md) | 15/15 done |
 | [`exit-gesture/`](exit-gesture/spec.md) | spec | 退出手势：空闲 `Ctrl-C` / `Ctrl-D` 双击退出、举手期间提示行给回执（半秒后作废）、退出时打一行能直接粘的复盘命令；顺带修掉忙碌双击走 `exit(130)` 跳过终端恢复的缺陷 | 4 done + 1 ready-for-walkthrough |
 | [`usage-stats-format/`](usage-stats-format/spec.md) | spec | 右侧统计的书写制式（`[ui] number_style`，`cn` / `si`，默认 `cn`）与两行的占比色条；诊断通道与状态行一个字不动 | 3/3 done |
-| [`questionnaire-keys/`](questionnaire-keys/seed.md) | seed | 问卷手感：**选项区 / 输入区**、`j`/`k` 导航、区域里的 `Esc` 与快捷键提示（2026-10-02 追加），外加 10-01 的「移到自定义项才进文本输入」与超长选项折行 | — |
+| [`questionnaire-keys/`](questionnaire-keys/spec.md) | spec | 问卷手感：**选项区 / 输入区**（`Zone` 替换布尔）、`j`/`k` 与 `Ctrl-N`/`Ctrl-P` 在选项区移动且越界进输入区、选项区吞掉可打印字符、单选与多选统一成 `selected` + `custom` 并存、`Esc` 只管「退出这次询问」（双击、drop sender、模型继续）而「取消运行」归 `Ctrl-C`、折行 + 页脚三档阶梯；10-01 与 10-02 两批意向经 18 问折成，理由记在 [ADR 0010](../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) | 7 ready-for-agent |
 | [`terminal-title/`](terminal-title/spec.md) | spec | 终端标题带上工作内容：`<父>/<基名> · <状态> · <目标名>`、40 列封顶、进 TUI 时保存原标题并在退出（含 panic）时还原 | 2 done + 1 ready-for-walkthrough |
 | [`continue-by-id/`](continue-by-id/spec.md) | spec | `-c` 吃一个可选的 id（`-c <id>`，另有 `--session <id>`）：先本桶、再全 store，命中别的工作区时工作目录跟着那场会话走；退出回执因此改成 `fs-agent -c <id>` | 1/1 done |
 | [`suspend-gesture/`](suspend-gesture/spec.md) | spec | 挂起手势：TUI 里 `Ctrl-Z` 把进程 SIGTSTP 停到后台（单下、任何视图都拦不住）、`fg` 回来重进终端并全量重绘；plain 的同一按键由终端驱动天然处理，用一条 pty 回归与文档钉住 | 2/2 done |
