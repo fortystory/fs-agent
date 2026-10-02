@@ -130,17 +130,36 @@ fn settings(servers: Vec<(&str, Arc<dyn McpConnection>)>) -> (McpSettings, McpSe
 
 #[tokio::test]
 async fn templates_are_listed_per_server_and_rendered_with_the_arguments() {
-    let db = FakeMcp::with_prompts(vec![template("user_report", true)]);
-    let jira = FakeMcp::broken();
-    let (_, service) = settings(vec![("db", Arc::new(db.clone())), ("jira", Arc::new(jira))]);
+    // 两台好的（各自一两个模板）加一台列不出来的：菜单条目是**拍平**的那一份。
+    let db = FakeMcp::with_prompts(vec![
+        template("user_report", true),
+        template("team_report", false),
+    ]);
+    let jira = FakeMcp::with_prompts(vec![template("triage", false)]);
+    let broken = FakeMcp::broken();
+    let (_, service) = settings(vec![
+        ("db", Arc::new(db.clone())),
+        ("jira", Arc::new(jira)),
+        ("broken", Arc::new(broken)),
+    ]);
 
-    // 菜单那一半：拍的清单里只有 db —— jira 那台列不出来，于是它的条目根本不出现。
     let entries = service.prompt_entries().await;
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(entries[0].0, "db");
-    assert_eq!(entries[0].1.name, "user_report");
+    let names: Vec<(String, String)> = entries
+        .iter()
+        .map(|(server, prompt)| (server.clone(), prompt.name.clone()))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("db".to_owned(), "user_report".to_owned()),
+            ("db".to_owned(), "team_report".to_owned()),
+            ("jira".to_owned(), "triage".to_owned()),
+        ],
+        "两台好的拍平、坏的整台不出现：{names:?}"
+    );
     assert_eq!(entries[0].1.arguments[0].name, "id");
     assert!(entries[0].1.arguments[0].required);
+    assert!(!entries[1].1.arguments[0].required, "可选参数照实标");
 
     // 每次现问，与工具清单同一条规矩。
     service.prompt_entries().await;

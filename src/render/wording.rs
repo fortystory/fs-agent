@@ -2081,14 +2081,13 @@ pub fn startup_config(detail: &str) -> String {
     format!("无法读取配置：{detail}")
 }
 
-/// `/` 菜单里一条模板没有说明时的那一列（票 17）。
-pub fn mcp_prompt_without_arguments(server: &str) -> String {
-    format!("{server} 的提示词模板")
-}
-
-/// `/` 菜单里一条模板的参数一览。
-pub fn mcp_prompt_arguments(server: &str, names: &[&str]) -> String {
-    format!("{server} 的提示词模板：{}", names.join("、"))
+/// `/` 菜单里一条模板的第二列（票 17）：模板自己没写说明时，把参数名列一遍。
+pub fn mcp_prompt_description(server: &str, names: &[&str]) -> String {
+    if names.is_empty() {
+        format!("{server} 的提示词模板")
+    } else {
+        format!("{server} 的提示词模板：{}", names.join("、"))
+    }
 }
 
 /// 点名了一个这一轮清单里没有的模板（清单刷新过之后才会出现）。

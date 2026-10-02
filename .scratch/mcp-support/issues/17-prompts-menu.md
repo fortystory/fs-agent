@@ -1,7 +1,7 @@
 # 17 — 提示词模板接进 `/` 菜单
 
 Type: implement
-Status: done
+Status: ready-for-walkthrough
 Part of: ../map.md
 Blocked by: 10, 12
 
@@ -58,3 +58,17 @@ Blocked by: 10, 12
   （问卷的 TUI 交互本来就走真机走查那条线），留给真机看一眼。
 - 验证：`cargo test`（全绿）· `cargo clippy --all-targets` · `cargo fmt` ·
   `python3 scripts/check-language.py`。
+
+### 审查后的修正与收尾（2026-10-03）
+
+- 两轴审查（Standards / Spec）跑过这一份 diff，修掉的：`slash_catalog` 的 rustdoc 被新函数切断
+  （文档归属已还原）；`submission` 原来收两个同类型的 `impl Fn` 闭包（写反了编译器不管），现在
+  直接收 `&[McpPromptEntry]`；措辞层里两条同格式的函数合成 `mcp_prompt_description`；补上票面
+  验证 1 要的**两个模板**（现在是三台 server、四条拍平断言）；
+- 补的测试：`missing_required_arguments`（必填缺那条路径）与「两台好的拍平、坏的那台整台不出现」。
+- **一条口径写准**：清单是在**组装期、`assemble()` 之前**现问的那一次（不是「组装之后」）。
+  因此会话中途某台 server 挂掉时，菜单里它的条目会留到本次会话结束 —— 与票面「不出现（不是出现后
+  点开报错）」的差别在于「启动那一刻的可用性」，这条差别记在这里，不在实现里假装解决。
+- **状态记 `ready-for-walkthrough`**：能自动化的部分都落地了（解析、参数、往返、降级都有测试），
+  剩下的是**在真终端里点一次菜单、填一遍参数**看那一眼 —— 问卷的 TUI 交互本来就走真机走查那条线
+  （`docs/agents/issue-tracker.md` 的约定）。

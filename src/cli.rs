@@ -1220,11 +1220,7 @@ async fn interactive_loop(
         // 拿到一行了，所以从这里到这个循环的下一次轮转之间，会话正在跑东西 —— 一个回合、一场讨论、
         // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
         console.set_running(true);
-        match submission(
-            &submitted,
-            |name| harness.has_skill(name),
-            |name| menu.prompts.iter().any(|entry| entry.name == name),
-        ) {
+        match submission(&submitted, |name| harness.has_skill(name), menu.prompts) {
             // 一个空行：没有可答的，于是再问一次。提示处返回 `None` 是唯一结束输入的东西，而那种情
             // 况就在上面处理。
             Submission::Ignore => {}
@@ -1456,7 +1452,7 @@ enum Submission<'a> {
 fn submission<'a>(
     text: &'a str,
     has_skill: impl Fn(&str) -> bool,
-    has_prompt: impl Fn(&str) -> bool,
+    prompts: &[McpPromptEntry],
 ) -> Submission<'a> {
     if text.trim().is_empty() {
         return Submission::Ignore;
@@ -1497,8 +1493,8 @@ fn submission<'a>(
             }
             // `/<server>:<模板>`：模板条目是运行时才知道的名字，所以这里问的是那个闭包
             // （票 17）。冒号是它与人打出来的技能名的分界。
-            if let Some((server, prompt)) = name.split_once(':') {
-                if !server.is_empty() && !prompt.is_empty() && has_prompt(name) {
+            if prompts.iter().any(|entry| entry.name == name) {
+                if let Some((server, prompt)) = name.split_once(':') {
                     return Submission::McpPrompt {
                         server,
                         prompt,
@@ -1523,31 +1519,17 @@ fn submission<'a>(
     }
 }
 
-/// `/` 菜单的条目（`.scratch/goal-loop/spec.md` §13）：**内建命令在前、技能在后**。
-///
-/// 命令是程序自带的、技能是用户装的，所以固定项优先更可预测：打一个 `/c` 时 `/clear` 排在
-/// 用户那个恰好也叫 `c…` 的技能前面。命令按声明的固定顺序（不按字母），技能按名字。
-///
-/// 抽出这个纯函数是为了让这条次序有地方断言 —— 它原来内联在组装点里，只能靠真终端看。
-/// 命令行上的位置参数按模板的声明顺序填进参数表；多出来的那几个是错误。
-fn prompt_inline_arguments(
-    display: &str,
-    prompt: &mcp::PromptSummary,
-    inline: &str,
-) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let mut arguments = serde_json::Map::new();
-    let mut words = inline.split_whitespace();
-    for argument in &prompt.arguments {
-        let Some(word) = words.next() else { break };
-        arguments.insert(
-            argument.name.clone(),
-            serde_json::Value::String(word.to_owned()),
-        );
-    }
-    if words.next().is_some() {
-        return Err(render::wording::mcp_prompt_too_many_arguments(display));
-    }
-    Ok(arguments)
+/// 还缺哪些**必填**参数。
+fn missing_required_arguments<'a>(
+    prompt: &'a mcp::PromptSummary,
+    arguments: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<&'a str> {
+    prompt
+        .arguments
+        .iter()
+        .filter(|argument| argument.required && !arguments.contains_key(&argument.name))
+        .map(|argument| argument.name.as_str())
+        .collect()
 }
 
 /// 把一次 `/` 菜单里的模板调用跑完（票 17）。
@@ -1566,6 +1548,8 @@ async fn run_mcp_prompt(
         .iter()
         .find(|entry| entry.server == server && entry.prompt.name == prompt)
     else {
+        // 正常情况下到不了这里：`submission` 只在菜单清单里有的名字上产生这个变体。留着是
+        // 因为它是一句人话，而不是一次 panic。
         return Err(render::wording::mcp_prompt_unknown(server, prompt));
     };
 
@@ -1616,13 +1600,7 @@ async fn run_mcp_prompt(
         }
     }
 
-    let missing_required: Vec<&str> = entry
-        .prompt
-        .arguments
-        .iter()
-        .filter(|argument| argument.required && !arguments.contains_key(&argument.name))
-        .map(|argument| argument.name.as_str())
-        .collect();
+    let missing_required = missing_required_arguments(&entry.prompt, &arguments);
     if !missing_required.is_empty() {
         return Err(render::wording::mcp_prompt_missing_arguments(
             &entry.name,
@@ -1636,6 +1614,12 @@ async fn run_mcp_prompt(
         .map_err(|error| error.to_string())
 }
 
+/// `/` 菜单的条目（`.scratch/goal-loop/spec.md` §13）：**内建命令在前、技能在后**。
+///
+/// 命令是程序自带的、技能是用户装的，所以固定项优先更可预测：打一个 `/c` 时 `/clear` 排在
+/// 用户那个恰好也叫 `c…` 的技能前面。命令按声明的固定顺序（不按字母），技能按名字。
+///
+/// 抽出这个纯函数是为了让这条次序有地方断言 —— 它原来内联在组装点里，只能靠真终端看。
 fn slash_catalog(
     commands: &[render::wording::Command],
     skills: &[(&str, &str)],
@@ -1659,6 +1643,27 @@ fn slash_catalog(
                 .map(|entry| render::CatalogEntry::new(&entry.name, entry.description())),
         )
         .collect()
+}
+
+/// 命令行上的位置参数按模板的声明顺序填进参数表；多出来的那几个是错误。
+fn prompt_inline_arguments(
+    display: &str,
+    prompt: &mcp::PromptSummary,
+    inline: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut arguments = serde_json::Map::new();
+    let mut words = inline.split_whitespace();
+    for argument in &prompt.arguments {
+        let Some(word) = words.next() else { break };
+        arguments.insert(
+            argument.name.clone(),
+            serde_json::Value::String(word.to_owned()),
+        );
+    }
+    if words.next().is_some() {
+        return Err(render::wording::mcp_prompt_too_many_arguments(display));
+    }
+    Ok(arguments)
 }
 
 /// `/` 菜单的动态那一半：连接与这一轮的模板条目。
@@ -1701,11 +1706,7 @@ impl McpPromptEntry {
             .iter()
             .map(|argument| argument.name.as_str())
             .collect();
-        if names.is_empty() {
-            render::wording::mcp_prompt_without_arguments(&self.server)
-        } else {
-            render::wording::mcp_prompt_arguments(&self.server, &names)
-        }
+        render::wording::mcp_prompt_description(&self.server, &names)
     }
 }
 
@@ -3636,12 +3637,52 @@ mod tests {
     }
 
     /// 这一轮 `/` 菜单里的 MCP 模板条目。
-    fn has_prompt(name: &str) -> bool {
-        matches!(name, "db:user_report")
+    fn prompts() -> Vec<McpPromptEntry> {
+        vec![McpPromptEntry::new(
+            "db".to_owned(),
+            crate::mcp::PromptSummary {
+                name: "user_report".to_owned(),
+                description: Some("按 id 出一份报告".to_owned()),
+                arguments: vec![],
+            },
+        )]
     }
 
     fn read(text: &str) -> Submission<'_> {
-        submission(text, has_skill, has_prompt)
+        let prompts = prompts();
+        submission(text, has_skill, &prompts)
+    }
+
+    #[test]
+    fn required_parameters_must_be_filled() {
+        let prompt = crate::mcp::PromptSummary {
+            name: "user_report".to_owned(),
+            description: None,
+            arguments: vec![
+                crate::mcp::PromptArgument {
+                    name: "id".to_owned(),
+                    description: None,
+                    required: true,
+                },
+                crate::mcp::PromptArgument {
+                    name: "format".to_owned(),
+                    description: None,
+                    required: false,
+                },
+            ],
+        };
+        let empty = serde_json::Map::new();
+        assert_eq!(
+            super::missing_required_arguments(&prompt, &empty),
+            vec!["id"]
+        );
+
+        let mut filled = serde_json::Map::new();
+        filled.insert("id".to_owned(), serde_json::Value::String("42".to_owned()));
+        assert!(
+            super::missing_required_arguments(&prompt, &filled).is_empty(),
+            "必填填上了就不该再报"
+        );
     }
 
     #[test]
