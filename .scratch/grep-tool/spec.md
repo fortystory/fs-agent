@@ -1,6 +1,6 @@
 # `grep`：一个只读、只扫工作区的搜索工具
 
-Status: 4 ready-for-agent（2026-10-02 由 [`seed.md`](seed.md) 折成 spec，同日拆出
+Status: 4/4 done（2026-10-02 由 [`seed.md`](seed.md) 折成 spec，同日拆出
 [`issues/01`](issues/01-grep-tool-tracer-bullet.md)–[`04`](issues/04-docs-and-index.md)；
 blocking edges 是 `01 → {02, 03} → 04`，每张票抬头写着自己被谁 block）
 

@@ -1,7 +1,7 @@
 # 05 — 文档与索引
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 02, 04
 
 > 规格：[`../spec.md`](../spec.md) §9。这一票不写代码，只把已经落地的两个工具写进唯一的那处

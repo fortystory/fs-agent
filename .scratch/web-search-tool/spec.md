@@ -1,6 +1,6 @@
 # `web_search` / `web_fetch`：两个联网工具（工具层 · 服务层 · 后端三层）
 
-Status: 5 ready-for-agent（2026-10-03 由 [`seed.md`](seed.md) 折成 spec，同日拆出
+Status: 4 done + 1 ready-for-walkthrough（2026-10-03 由 [`seed.md`](seed.md) 折成 spec，同日拆出
 [`issues/01`](issues/01-web-search-skeleton.md)–[`05`](issues/05-docs-and-index.md)；blocking edges 是
 `01 → {02, 03}`、`03 → 04`、`{02, 04} → 05`，每张票抬头写着自己被谁 block）
 
