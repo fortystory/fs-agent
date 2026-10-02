@@ -222,6 +222,8 @@ token                       1.6万 / 10万┆
 hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 ```
 
+这条流水线的**全貌**（进程启动与组装 → 主循环与三条子命令 → 一次 turn → 委派与嵌套 → 收尾与两条退出路径）画在 [`docs/lifecycle.md`](docs/lifecycle.md)：五张 mermaid 图 + 逐节点的 `文件:行号` 证据表。
+
 - **只追加的事件流**：信封是 `{ seq, at, speaker_id, payload }`，`seq` 就是 JSONL 行号、是唯一身份。重新生成 / 撤销 / compaction 一律追加一条 `HistorySuperseded`，历史一条不改。增量文本**不进流**，它走传输层旁路直达渲染。
 - **投影是纯函数**：`project(log, speaker, caps) → messages`，住在 provider 适配器侧、按模型能力表分叉。裁剪（`trim`）是投影**之后**的另一个纯函数，只读、日志一条不删。
 - **`Session` 是唯一持有可变状态的值**（事件流句柄 + 名册 + 预算 + 策略 + read set）。执行者是带 `parent_id` 的嵌套 `Session`，事件追加到父流。**权限档位**就是策略里的一个值：三个入口（`[permissions] mode` / `--mode` / `Shift+Tab`）改的都是它，它**不进事件流**，所以 `--continue` 从配置那一档重新开始，审计看 `PermissionDecided.reason`。
@@ -238,7 +240,8 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表：**领域词汇**（事件流、投影、待办列表……）加末尾一节**流程词汇**（feature 目录 / spec / 票 / 决策图 / 分诊标签……），并写明哪两类词不收（通用编程概念、skills 工具名）（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`goals`](docs/goals.md) · [`grep`](docs/grep.md) · [`observability`](docs/observability.md) · [`permissions`](docs/permissions.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`sandbox`](docs/sandbox.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) · [`web`](docs/web.md) |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） |
+| [`docs/lifecycle.md`](docs/lifecycle.md) | **运行时生命周期**：从敲下命令到进程退出的五张图（一张鸟瞰 + 四张分层详图）与逐节点的 `文件:行号` 证据表，把上面各份逐面说明接起来；护栏是 [`scripts/lifecycle-check.py`](scripts/lifecycle-check.py)（守指称完整性，见它的用法） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档该往哪写、语言怎么选，也在这里指回本节）；细目在 [`docs/agents/`](docs/agents/)：[issue tracker](docs/agents/issue-tracker.md) · [triage labels](docs/agents/triage-labels.md) · [domain docs](docs/agents/domain.md) |
@@ -257,7 +260,9 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 ```sh
 cargo test                              # 全量测试（条数见上面的「状态」）
 cargo clippy --all-targets
+python3 -m unittest                     # Python 护栏脚本的测试（从仓库根跑，发现 scripts/tests/）
 python3 scripts/check-language.py       # 散文中文、英文只留给标识符的护栏（ADR 0004 / 0005）
+python3 scripts/lifecycle-check.py      # docs/lifecycle.md 的图与证据表对账（ADR 0011）
 python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 ```
 

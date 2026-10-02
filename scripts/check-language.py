@@ -145,7 +145,9 @@ ENGLISH_PROSE_CEILING = 27
 # 是 2026-09-30 ADR 中文化那一轮加进来的，实测 42.6–46.4%；`docs/sandbox.md`（35.2%）
 # 与 ADR 0006（43.1%）是 2026-10-01 沙箱那一批量的；`AGENTS.md` 同一天翻的，
 # 实测 25.8% —— 它字节少、标识符密，比例天然低；同一批新增的 `docs/permissions.md`
-# 实测 35.3%，收到 33）。留 2 点余量是因为文档里必然有英文
+# 实测 35.3%，收到 33；`docs/lifecycle.md`（2026-10-03 生命周期图那一批）全部落地后实测 20.2% ——
+# 它满屏 mermaid 关键字（五张图），且几乎每个名词后面都跟一个 `路径:行号`，是这份清单里
+# 「字节少、标识符密」那一档的极端例子；同批新写的 ADR 0011 实测 34.4%）。留 2 点余量是因为文档里必然有英文
 # 标识符、代码路径、引用与命令，插一段代码块就会拉低比例；但再往下掉 —— 也就是有人把
 # 整段散文翻回英文 —— 必须报红。
 DOCS_MIN_RATIO = {
@@ -159,6 +161,8 @@ DOCS_MIN_RATIO = {
     "docs/adr/0007-workspace-permission-mode.md": 43,
     # 2026-10-01 目标循环那一批：实测 52.2%。
     "docs/adr/0009-goals-are-files-and-progress-is-derived.md": 50,
+    # 2026-10-03 生命周期图那一批：实测 34.4%。
+    "docs/adr/0011-diagrams-in-mermaid.md": 32,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
@@ -167,6 +171,8 @@ DOCS_MIN_RATIO = {
     "docs/goals.md": 39,
     "docs/executor.md": 38,
     "docs/highlight.md": 35,
+    # 2026-10-03 生命周期图那一批：全部落地后实测 20.2%。
+    "docs/lifecycle.md": 18,
     "docs/observability.md": 43,
     "docs/permissions.md": 33,
     "docs/render.md": 42,
