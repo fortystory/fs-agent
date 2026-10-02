@@ -1,7 +1,7 @@
 # 03 — `web_fetch` 的安全传输层：URL 校验、SSRF 与有界读取
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：[`../spec.md`](../spec.md) §5 —— 那一节逐条对着 DSH 的 `dsh-web-fetch-http` 写的。

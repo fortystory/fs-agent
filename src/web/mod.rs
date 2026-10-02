@@ -26,6 +26,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::config::WebSettings;
 
+pub mod fetch_http;
 pub mod search_deepseek;
 
 /// 一条搜索结果来源。
@@ -97,6 +98,8 @@ pub enum WebErrorCode {
     FetchTooLarge,
     /// 抓取超时。
     FetchTimeout,
+    /// 抓回来了，但它的类型或字符集不是这条工具能读的。
+    UnsupportedContent,
 }
 
 impl WebErrorCode {
@@ -110,6 +113,7 @@ impl WebErrorCode {
             Self::BlockedUrl => "WEB_BLOCKED_URL",
             Self::FetchTooLarge => "WEB_FETCH_TOO_LARGE",
             Self::FetchTimeout => "WEB_FETCH_TIMEOUT",
+            Self::UnsupportedContent => "WEB_UNSUPPORTED_CONTENT",
         }
     }
 }

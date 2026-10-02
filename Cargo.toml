@@ -72,3 +72,6 @@ globset = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# `web_fetch` 的传输层测试要从字节造一个响应（`reqwest::Response: From<http::Response<_>>`），
+# 于是「字节上限」那条路径不必起一个真的服务器就能钉住。它已经是 reqwest 的依赖。
+http = "1"
