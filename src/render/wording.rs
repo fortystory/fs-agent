@@ -999,6 +999,7 @@ pub fn context_source(source: &ContextSource) -> String {
     match source {
         ContextSource::AgentsMd => "AGENTS.md".to_owned(),
         ContextSource::SkillsCatalog => "技能清单".to_owned(),
+        ContextSource::McpCatalog => "MCP 加载".to_owned(),
         ContextSource::Skill => "技能".to_owned(),
         // 留着读**老**流：它点名的那一档模式已经没了，但在
         // `.scratch/todo-and-modes` 之前写下的会话仍然带着这条注入，复盘它时应该说出它

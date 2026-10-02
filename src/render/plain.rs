@@ -194,7 +194,7 @@ impl Plain {
                 let text = wording::session_ended(reason);
                 self.line(&self.paint_severity(Severity::of(reason), &text));
             }
-            Block::ContextInjected { source } => {
+            Block::ContextInjected { source, .. } => {
                 self.line(&wording::context_injected(source));
             }
             Block::Sandbox {

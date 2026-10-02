@@ -429,6 +429,7 @@ pub fn compaction_prompt(events: &[Event]) -> String {
             EventPayload::ContextInjected { source, .. } => match source {
                 ContextSource::AgentsMd => "[注入] AGENTS.md".to_owned(),
                 ContextSource::SkillsCatalog => "[注入] 技能清单".to_owned(),
+                ContextSource::McpCatalog => "[注入] MCP 加载".to_owned(),
                 ContextSource::Skill => "[注入] 用户加载的技能".to_owned(),
                 ContextSource::PlanMode => "[注入] 计划模式（已退场）".to_owned(),
                 ContextSource::Persona(name) => format!("[注入] 人物：{name}"),

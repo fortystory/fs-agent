@@ -114,6 +114,9 @@ pub enum Block {
     },
     ContextInjected {
         source: ContextSource,
+        /// 注入的正文。转录那一行只画来源名，但**详情**要它 —— 于是它随块一起传下去
+        /// （票 19）。
+        content: String,
     },
     /// 这条流这一刻的沙箱状态（沙箱 spec §8）。
     ///
@@ -395,8 +398,13 @@ impl Transcript {
             EventPayload::SessionEnded { reason } => {
                 blocks.push(Block::SessionEnded { reason });
             }
-            EventPayload::ContextInjected { source, .. } => {
-                blocks.push(Block::ContextInjected { source });
+            EventPayload::ContextInjected {
+                source, content, ..
+            } => {
+                blocks.push(Block::ContextInjected {
+                    source: source.clone(),
+                    content: content.clone(),
+                });
             }
             EventPayload::HistorySuperseded {
                 reason, summary, ..

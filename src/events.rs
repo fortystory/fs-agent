@@ -224,6 +224,12 @@ impl Usage {
 pub enum ContextSource {
     AgentsMd,
     SkillsCatalog,
+    /// 组装期这一层 MCP 加载成什么样：哪些 server 连上了、哪些没有、各自的可信配置
+    /// （`.scratch/mcp-support/issues/19-mcp-catalog-in-context.md`）。
+    ///
+    /// 与技能清单同形：进流、可重放，也投影成一条 `user` 消息 —— 模型因此知道这一场会话手里
+    /// 有哪些外部 server。**工具清单不在这里**：那是 `mcp_list` 现问的事。
+    McpCatalog,
     /// **用户**用 `/<skill>` 载入的一份技能全文（spec §9）。它落在尾部，不像钉在头部
     /// 的那些注入：模型侧的缓存前缀永远不动。
     Skill,

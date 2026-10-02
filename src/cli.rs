@@ -23,7 +23,8 @@ use ratatui::buffer::CellWidth;
 use crate::agent::{replay, CancelSignal};
 use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
 use crate::events::{
-    read_events, total_usage, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage,
+    read_events, total_usage, ContextSource, Event, EventPayload, SessionId, SpeakerId, StopReason,
+    Usage,
 };
 use crate::mcp::{self, McpService};
 use crate::permissions::{Mode, Policy};
@@ -436,6 +437,14 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 什么都不发。
     if parsed.resume.is_some() {
         console.replay(harness.events());
+    }
+
+    // MCP 这一层加载成什么样，作为一条上下文注入进流（票 19）：与技能清单同形 —— 模型因此知道
+    // 手里有哪些外部 server，而转录里那行**点得开**、详情就是同一段数据。
+    if let Some(catalog) = mcp.catalog_text() {
+        if let Err(error) = harness.inject_context(ContextSource::McpCatalog, &catalog) {
+            eprintln!("fs-agent: {}", render::wording::error_report(&error));
+        }
     }
 
     // 用户故事 A.12：在第一个问题之前说清这是哪个模型、哪一档、哪场会话。它走渲染器而不是 stderr：

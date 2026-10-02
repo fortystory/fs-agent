@@ -39,7 +39,7 @@ use ratatui::widgets::{
 };
 use tokio::sync::broadcast;
 
-use crate::events::{Event, EventPayload, Role, StopReason, ToolCallId};
+use crate::events::{ContextSource, Event, EventPayload, Role, StopReason, ToolCallId};
 use crate::permissions::{Answer, Mode, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
@@ -4588,8 +4588,19 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
         Block::SessionEnded { reason } => {
             vec![severity_line(*reason, wording::session_ended(*reason)).into()]
         }
-        Block::ContextInjected { source } => {
-            vec![narration(wording::context_injected(source.clone())).into()]
+        Block::ContextInjected { source, content } => {
+            // 这条记录**点得开**（票 19）：转录上只有一行来源名，加载数据本身在详情里。
+            let text = wording::context_injected(source.clone());
+            let line = narration(text.clone());
+            let detail = Detail {
+                title: text,
+                color: Color::DarkGray,
+                kind: DetailKind::Context {
+                    source: source.clone(),
+                    content: content.clone(),
+                },
+            };
+            vec![RenderedLine::linked(line, detail)]
         }
         Block::Sandbox {
             mode,
@@ -4824,6 +4835,11 @@ enum DetailKind {
     /// 一段已完成的思考。流记录了 trace 时 `text` 是整段 trace，而 `None` 是合成器的情形
     /// —— 增量到了、事件流里没有文本 —— 详情会把这一点说出来（票 02 §1）。
     Thinking { text: Option<String> },
+    /// 一条上下文注入的正文（票 19）。转录那一行只说来源，这里摊开内容。
+    Context {
+        source: ContextSource,
+        content: String,
+    },
     /// 一次工具调用：它的参数，以及这次调用产出了什么。
     Tool {
         /// 给落盘输出文件命名的那个 id，`outputs/<id>.txt`。
@@ -4931,6 +4947,10 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
                     Style::default().fg(Color::DarkGray),
                 ))),
             }
+        }
+        DetailKind::Context { source, content } => {
+            rows.push(section_header(&wording::context_source(source)));
+            rows.extend(pane::wrap_text(content, width));
         }
         DetailKind::Tool {
             tool_call_id,
@@ -5114,6 +5134,25 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一条上下文注入在转录里是一行，在详情里是它的正文（票 19）。
+    #[test]
+    fn a_context_injection_row_opens_its_loaded_data() {
+        let block = Block::ContextInjected {
+            source: ContextSource::McpCatalog,
+            content: "[注入] MCP 加载\n\n- `fake`（stdio）：已连接\n".to_owned(),
+        };
+        let mut colors = SpeakerColors::new(&[]);
+        let lines = paint_block(&block, &mut colors, 80);
+        assert_eq!(lines.len(), 1, "注入只占一行");
+        let detail = lines[0].link.clone().expect("这一行该点得开");
+        assert_eq!(detail.title, "[上下文注入：MCP 加载]");
+
+        let body = detail_body(&detail, "/tmp", 80);
+        let text: String = body.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("MCP 加载"), "{text}");
+        assert!(text.contains("`fake`（stdio）：已连接"), "{text}");
+    }
 
     /// 退出手势的窗口写死在 500 毫秒：它同时是提示的寿命，不做配置项
     /// （`.scratch/exit-gesture/spec.md` §1、§6）。

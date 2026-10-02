@@ -511,6 +511,42 @@ impl McpService {
         connection.get_prompt(name, arguments).await
     }
 
+    /// 组装期这一层加载成什么样，写成一段给**人和模型**看的话（票 19）。
+    ///
+    /// 没开开关、或者一台 server 都没配时是 `None` —— 那种会话不注入这一条，零影响。
+    /// **只列键名与条数，不列值**：`env` / `headers` 里的东西是秘密。
+    pub fn catalog_text(&self) -> Option<String> {
+        if !self.settings.enabled || self.settings.servers.is_empty() {
+            return None;
+        }
+        let mut text = String::from("[注入] MCP 加载\n");
+        for (name, config) in &self.settings.servers {
+            text.push_str(&format!("\n- `{name}`（{}）：", config.transport.as_str()));
+            match self.unavailable.get(name) {
+                Some(reason) => text.push_str(&format!("连不上 —— {reason}\n")),
+                None => {
+                    text.push_str("已连接\n");
+                    text.push_str(&format!(
+                        "  沙箱：{}；结果标记：{}；副作用放宽：{}；可写根 {} 条\n",
+                        if config.sandbox { "过" } else { "不过" },
+                        if config.trust_results {
+                            "不带"
+                        } else {
+                            "带"
+                        },
+                        if config.trust_effects {
+                            format!("允许（只读名单 {} 条）", config.read_only_tools.len())
+                        } else {
+                            "不允许".to_owned()
+                        },
+                        config.writable_roots.len(),
+                    ));
+                }
+            }
+        }
+        Some(text)
+    }
+
     /// 这台 server 开了 `trust_results` 吗（spec §6）。
     ///
     /// 打开后它返回的**内容**不再带那句不可信标记。名字不认识时是 `false` —— 缺省永远是最严。
