@@ -1,7 +1,7 @@
 # 01 — 问卷的选项区与导航键位（`Zone`、`j`/`k`、`Ctrl-N`/`Ctrl-P`）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 来源：[`../spec.md`](../spec.md) §1、§2。这是这一组的**第一张**：它引入 `Zone`，
@@ -54,3 +54,16 @@ Blocked by: —
   不动焦点视觉（票 06）。
 - 不给输入区加行内光标或历史（`←`/`→` 仍翻页，见 spec §10）。
 - 不加 `Ctrl-U`/`Ctrl-W`/`Ctrl-J`/`Ctrl-K`。
+
+## Comments
+
+- **落地（2026-10-02）**：`custom_focused: bool` 换成 `zone: Zone`（`Options`/`Input`，问卷级、翻页按新题
+  复位）；`move_highlight` 换成 `step` —— 选项区越过两端进输入区，输入区里回来并绕到另一端。
+  `press` 里 `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 走同一条 `step`，可打印字符与 `Backspace` 只在
+  `Zone::Input` 才动文本。滚轮同一条路（输入区静默）。构造时 `reset_zone()` 定起始区域，所以
+  没有选项的题一开始就在输入区。
+- **先红后绿**：新加的六条（`j`/`k` 与 `Ctrl-N`/`Ctrl-P` 同路、越界进输入区、输入区里两键静默、
+  选项区吞字符与 `Backspace`、无选项题只有输入区、票 34 那条按新路改写）改前全红。
+  既有五条依赖「打开就能打字」的测试跟着改成先 `walk_into_the_input()`（新增的 helper）——
+  那是这次有意改掉的行为。
+- **验收**：`cargo test` 全绿（问卷那个文件 21 条）、`cargo clippy --all-targets` 干净。

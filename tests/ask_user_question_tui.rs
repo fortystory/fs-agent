@@ -66,6 +66,15 @@ fn ask(
     answers
 }
 
+/// 把键盘送进输入区：有选项的题上，`j` 一直走到越过末项就落到那里（spec §1）。
+///
+/// 区域立起来之后，字符只在输入区进文本，所以「打开就能打字」的那些老测试都要先走这一下。
+fn walk_into_the_input(state: &mut TuiState, options: usize) {
+    for _ in 0..options {
+        state.key(Key::Char('j'));
+    }
+}
+
 /// 状态发出的那个答案 —— 如果它已经发出了的话。
 fn answer(rx: &mut oneshot::Receiver<Result<UserAnswers, String>>) -> Option<UserAnswers> {
     match rx.try_recv() {
@@ -255,6 +264,7 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
     single.key(Key::Enter);
     let text = screen(120, 24, &mut single).join("\n");
     assert!(text.contains("● 1. a"), "那个选择被显示成已选中：{text}");
+    walk_into_the_input(&mut single, 2);
     single.key(Key::Char('x'));
     let text = screen(120, 24, &mut single).join("\n");
     assert!(
@@ -279,6 +289,7 @@ fn typing_overrides_a_single_select_choice_and_supplements_a_multi_select_one() 
         vec![question("one", "Pick?", &["a", "b"], true)],
     );
     multi.key(Key::Enter);
+    walk_into_the_input(&mut multi, 2);
     multi.key(Key::Char('x'));
     let text = screen(120, 24, &mut multi).join("\n");
     assert!(
@@ -309,6 +320,7 @@ fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
             question("two", "Second?", &["c"], false),
         ],
     );
+    walk_into_the_input(&mut state, 2);
     for ch in "typed".chars() {
         state.key(Key::Char(ch));
     }
@@ -382,6 +394,7 @@ fn digits_are_free_text_not_selection_keys() {
         &mut state,
         vec![question("q", "How should it be named?", &["a", "b"], false)],
     );
+    walk_into_the_input(&mut state, 2);
     for ch in "v2".chars() {
         state.key(Key::Char(ch));
     }
@@ -529,6 +542,7 @@ fn a_space_is_text_once_the_custom_answer_has_focus() {
             question("two", "Second?", &["c"], false),
         ],
     );
+    walk_into_the_input(&mut state, 2);
     for ch in "llm".chars() {
         state.key(Key::Char(ch));
     }
@@ -621,30 +635,161 @@ fn a_space_still_confirms_while_nobody_is_typing() {
 
 #[test]
 fn moving_the_highlight_takes_the_focus_back_to_the_options() {
-    // 票 34：`↑`/`↓` 把高亮挪到选项上，光标也就回到了选项区 —— 之后空格又是「确认」，
-    // 而不是继续往自由文本里塞字符。
+    // 票 34（票 01 改写）：`↑`/`↓` 从输入区回来时把高亮挪到选项上，于是空格又是「确认」，
+    // 而不是继续往自由文本里塞字符。落进输入区的路现在是「越过选项的两端」。
     let mut state = state();
     let mut rx = ask(
         &mut state,
         vec![question("one", "First?", &["a", "b"], false)],
     );
-    state.key(Key::Char('x'));
-    let typed = screen(120, 24, &mut state).join("\n");
-    assert!(typed.contains("自定义：x"), "先打一个字进去：\n{typed}");
-
-    state.key(Key::Down);
+    state.key(Key::Down); // a → b
+    state.key(Key::Down); // b 之后越过边界 → 输入区
+    state.key(Key::Down); // 回来，两端环绕，于是绕到 a
     state.key(Key::Char(' '));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        !text.contains("自定义：x "),
-        "空格没被塞进自由文本：\n{text}"
-    );
 
     state.key(Key::Enter);
     let answers = answer(&mut rx).expect("作答了").answers;
     assert_eq!(
         answers[0].selected,
-        vec!["b".to_owned()],
-        "空格确认的是挪过去之后的那个高亮"
+        vec!["a".to_owned()],
+        "空格确认的是回到选项区之后的高亮"
     );
+    assert_eq!(answers[0].custom, None, "空格没被塞进自由文本");
+}
+
+#[test]
+fn j_k_and_ctrl_n_ctrl_p_walk_the_same_path_in_the_options_zone() {
+    // 选项区里 `j`/`k` 与 Emacs 的 `Ctrl-N`/`Ctrl-P` 是同一条分派。
+    let mut vim = state();
+    let mut vim_rx = ask(
+        &mut vim,
+        vec![question("one", "Pick?", &["a", "b", "c"], false)],
+    );
+    vim.key(Key::Char('j'));
+    vim.key(Key::Char('j'));
+    vim.key(Key::Char(' '));
+    vim.key(Key::Enter);
+    let answers = answer(&mut vim_rx).expect("作答了").answers;
+    assert_eq!(answers[0].selected, vec!["c".to_owned()], "两次 `j` 落在第三项");
+
+    let mut emacs = state();
+    let mut emacs_rx = ask(
+        &mut emacs,
+        vec![question("one", "Pick?", &["a", "b", "c"], false)],
+    );
+    emacs.key(Key::CtrlN);
+    emacs.key(Key::CtrlN);
+    emacs.key(Key::CtrlP);
+    emacs.key(Key::Char(' '));
+    emacs.key(Key::Enter);
+    let answers = answer(&mut emacs_rx).expect("作答了").answers;
+    assert_eq!(
+        answers[0].selected,
+        vec!["b".to_owned()],
+        "`Ctrl-P` 与 `k` 一样往回走一格"
+    );
+}
+
+#[test]
+fn walking_past_the_last_option_hands_the_keyboard_to_the_text_input() {
+    // 越过两端就是进输入区（spec §1），而 `j` 到了那里就是一个字符。
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
+    state.key(Key::Char('j')); // a → b
+    state.key(Key::Char('j')); // b 之后 → 输入区
+    state.key(Key::Char('j')); // 输入区里 `j` 是文本
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("自定义：j"), "输入区里的 `j` 是文本：\n{text}");
+
+    state.key(Key::Enter);
+    let answers = answer(&mut rx).expect("作答了").answers;
+    assert_eq!(answers[0].custom, Some("j".to_owned()));
+}
+
+#[test]
+fn ctrl_n_and_ctrl_p_go_quiet_in_the_text_input() {
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
+    state.key(Key::Char('j'));
+    state.key(Key::Char('j')); // → 输入区
+    state.key(Key::CtrlN);
+    state.key(Key::CtrlP);
+    state.key(Key::Char('x'));
+    state.key(Key::Enter);
+    let answers = answer(&mut rx).expect("作答了").answers;
+    assert_eq!(
+        answers[0].custom,
+        Some("x".to_owned()),
+        "`Ctrl-N`/`Ctrl-P` 在输入区里什么都不做"
+    );
+}
+
+#[test]
+fn printable_characters_and_backspace_are_swallowed_in_the_options_zone() {
+    // 键盘只在输入区让给文本（10-01 的那条意向）。
+    let mut swallowed = state();
+    let mut swallowed_rx = ask(
+        &mut swallowed,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
+    swallowed.key(Key::Char('z'));
+    let text = screen(120, 24, &mut swallowed).join("\n");
+    assert!(
+        !text.contains("自定义：z"),
+        "选项区里的字符没进文本：\n{text}"
+    );
+    swallowed.key(Key::Tab);
+    swallowed.key(Key::Enter);
+    let answers = answer(&mut swallowed_rx)
+        .expect("跳过让整份问卷完成")
+        .answers;
+    assert_eq!(
+        answers[0],
+        UserAnswer {
+            id: "one".to_owned(),
+            selected: Vec::new(),
+            custom: None,
+        }
+    );
+
+    // 回到选项区之后 `Backspace` 也静默：已经打进输入区的文本不会被它删掉。
+    let mut backspace = state();
+    let mut backspace_rx = ask(
+        &mut backspace,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
+    backspace.key(Key::Char('j'));
+    backspace.key(Key::Char('j')); // → 输入区
+    backspace.key(Key::Char('x'));
+    backspace.key(Key::Char('y'));
+    backspace.key(Key::Up); // 回选项区
+    backspace.key(Key::Backspace);
+    backspace.key(Key::Enter);
+    let answers = answer(&mut backspace_rx).expect("作答了").answers;
+    assert_eq!(
+        answers[0].custom,
+        Some("xy".to_owned()),
+        "`Backspace` 在选项区里静默"
+    );
+}
+
+#[test]
+fn a_question_without_options_starts_in_the_text_input() {
+    let mut state = state();
+    let mut rx = ask(&mut state, vec![question("q", "Name?", &[], false)]);
+    state.key(Key::Char('z'));
+    state.key(Key::Down); // 没有选项可挪，静默
+    state.key(Key::Char('k')); // 输入区里是文本
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("回答：zk"), "没有选项的题只有输入区：\n{text}");
+
+    state.key(Key::Enter);
+    let answers = answer(&mut rx).expect("作答了").answers;
+    assert_eq!(answers[0].custom, Some("zk".to_owned()));
 }

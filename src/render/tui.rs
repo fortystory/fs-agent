@@ -742,6 +742,18 @@ enum Pending {
     Questionnaire(Questionnaire),
 }
 
+/// 问卷里键盘当前落在哪一区（[`Questionnaire`]）。
+///
+/// 它是**问卷级**的状态：每题共用，翻页时按新题的样子复位。区域决定键位怎么分派 ——
+/// `j`/`k` 在选项区是移动、在输入区就是普通字符（`.scratch/questionnaire-keys/spec.md` §1）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Zone {
+    /// 选项区：高亮落在选项上，`j`/`k`、`Ctrl-N`/`Ctrl-P`、`↑`/`↓` 在这里移动它。
+    Options,
+    /// 输入区：键盘让给自由文本，`j`/`k` 在这里就是字符，`Ctrl-N`/`Ctrl-P` 什么都不做。
+    Input,
+}
+
 /// 模型发起的问卷，在它占着底部输入区的时候。
 ///
 /// 状态住在这里而不是会话里，因为问卷是键盘状态，不是会话状态：它没有任何东西被记录，
@@ -756,9 +768,8 @@ struct Questionnaire {
     drafts: Vec<QuestionDraft>,
     /// 屏幕上是第几个问题。一次一个，页脚里写作 `2 / 3`。
     index: usize,
-    /// 当前问题的自由文本行有没有光标。点那一行、或往它里面打字都会进入它，翻页时复位
-    /// （票 04 §5）。
-    custom_focused: bool,
+    /// 键盘现在在哪一区。翻页时按新题的样子复位（`.scratch/questionnaire-keys/spec.md` §1）。
+    zone: Zone,
 }
 
 /// 到目前为止用户对一个问题做了什么。
@@ -786,9 +797,10 @@ impl QuestionDraft {
 impl Questionnaire {
     /// 吃一个按键。问卷被提交时返回 `true`。
     ///
-    /// 键位是定下来的那一套（ticket 32）：`↑`/`↓` 移动高亮，`Enter` 或 `Space` 确认它，
-    /// `Tab` 跳过这个问题，`←`/`→` 翻页，而每个可打印字符都编辑自由文本栏。数字根本不是
-    /// 键，所以在哪里都是普通文字，没有一个选项够不着。
+    /// 键位**按区域分派**（`.scratch/questionnaire-keys/spec.md` §2）：选项区里
+    /// `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 是同一条移动，空格与 `Enter` 确认高亮，而可打印
+    /// 字符与 `Backspace` 被吞掉 —— 键盘只在输入区让给文本。越过选项的两端就是进输入区；
+    /// 输入区里 `↑`/`↓` 回来并移动高亮（两端环绕），`j`/`k` 在那里则是字符。
     ///
     /// `Enter` 在还有没完成的东西时继续往前走，等全处理完了才提交，所以一个没处理的问题
     /// 就是直接拒掉这个键。在一个还什么都没答的问题上它确认高亮的选项 —— 单选里「选中」
@@ -810,12 +822,11 @@ impl Questionnaire {
                     }
                 }
             }
-            // `Space` 也确认，这样人能不用那个兼作提交的键来作答 —— 但只在**焦点不在自由
-            // 文本栏**的时候：人已经在那道题上打过字（或点过「自定义」），这一下就是文本的
-            // 一部分。中文答案里夹英文词（`llm wiki` 这种）最容易撞上，而单选确认还会把刚
-            // 打进去的东西一起清掉（票 33）。没有选项的题本来就没有可确认的东西，空格在那里
+            // `Space` 也确认，这样人能不用那个兼作提交的键来作答 —— 但只在**选项区**里：
+            // 人已经在输入区打过字，这一下就是文本的一部分。中文答案里夹英文词（`llm wiki`
+            // 这种）最容易撞上（票 33）。没有选项的题本来就没有可确认的东西，空格在那里
             // 也照旧是普通字符。
-            Key::Char(' ') if self.has_options() && !self.custom_focused => {
+            Key::Char(' ') if self.has_options() && self.zone == Zone::Options => {
                 self.confirm_highlight();
                 if !self.questions[self.index].multi_select {
                     self.advance();
@@ -826,16 +837,18 @@ impl Questionnaire {
                 self.drafts[self.index].skipped = true;
                 self.advance();
             }
-            Key::Up => self.move_highlight(-1),
-            Key::Down => self.move_highlight(1),
+            // 选项区里的移动：`j`/`k` 与 Emacs 的 `Ctrl-N`/`Ctrl-P` 走同一条路。
+            Key::Up => self.step(-1),
+            Key::Down => self.step(1),
+            Key::Char('k') | Key::CtrlP if self.zone == Zone::Options => self.step(-1),
+            Key::Char('j') | Key::CtrlN if self.zone == Zone::Options => self.step(1),
             Key::Left => self.back(),
             Key::Right => self.advance(),
-            Key::Backspace => {
+            Key::Backspace if self.zone == Zone::Input => {
                 self.drafts[self.index].custom.pop();
             }
-            // 每个可打印字符都是自由文本，数字也一样。
-            Key::Char(ch) => {
-                self.custom_focused = true;
+            // 输入区里每个可打印字符都是自由文本，数字也一样。
+            Key::Char(ch) if self.zone == Zone::Input => {
                 self.type_custom(ch);
             }
             _ => {}
@@ -876,21 +889,29 @@ impl Questionnaire {
         }
     }
 
-    /// 把高亮移动 `delta`，夹在选项范围内。`Enter`/`Space` 作用的就是高亮，所以它永远
-    /// 不会越出两端。
+    /// 沿选项走一格：`j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 都走这一条。
     ///
-    /// 挪高亮就是「光标回到选项上」，所以它顺手把焦点从自由文本栏收回来 —— 与点选项行
-    /// （`select_option`）一致。没有选项可挪时什么都不做，**也就**不碰焦点：那种题只有
-    /// 输入区一个落点（票 34）。
-    fn move_highlight(&mut self, delta: isize) {
+    /// 在选项区里，越过两端就是**进输入区**（末项再往下、首项再往上）；在输入区里，它则是
+    /// **回到选项区**并把高亮挪一格，两端环绕 —— 于是「输入区」是这条循环里的一个位置，
+    /// 只是不占 `highlight` 的下标。挪高亮就是「键盘回到选项上」，与点选项行
+    /// （`select_option`）一致；没有选项可挪时什么都不做，**也就**不碰区域：那种题只有
+    /// 输入区一个落点。
+    fn step(&mut self, delta: isize) {
         let count = self.questions[self.index].options.len();
         if count == 0 {
             return;
         }
-        self.custom_focused = false;
-        let draft = &mut self.drafts[self.index];
-        let next = draft.highlight as isize + delta;
-        draft.highlight = next.clamp(0, count as isize - 1) as usize;
+        let next = self.drafts[self.index].highlight as isize + delta;
+        if self.zone == Zone::Input {
+            self.drafts[self.index].highlight = next.rem_euclid(count as isize) as usize;
+            self.zone = Zone::Options;
+            return;
+        }
+        if next < 0 || next >= count as isize {
+            self.zone = Zone::Input;
+            return;
+        }
+        self.drafts[self.index].highlight = next as usize;
     }
 
     /// 添一个自由文本字符。
@@ -909,16 +930,25 @@ impl Questionnaire {
     fn advance(&mut self) {
         if self.index + 1 < self.questions.len() {
             self.index += 1;
-            // 翻页了，所以光标回到问题自己那几行（票 04 §5）。
-            self.custom_focused = false;
+            // 翻页了，所以键盘回到新题该在的区域（票 04 §5）。
+            self.reset_zone();
         }
     }
 
     fn back(&mut self) {
         if self.index > 0 {
             self.index -= 1;
-            self.custom_focused = false;
+            self.reset_zone();
         }
+    }
+
+    /// 把区域放回这道题该有的地方：有选项就回选项区，而没有选项的题只有输入区一个落点。
+    fn reset_zone(&mut self) {
+        self.zone = if self.has_options() {
+            Zone::Options
+        } else {
+            Zone::Input
+        };
     }
 
     fn all_handled(&self) -> bool {
@@ -935,7 +965,7 @@ impl Questionnaire {
         }
         let multi_select = self.questions[self.index].multi_select;
         self.drafts[self.index].highlight = index;
-        self.custom_focused = false;
+        self.zone = Zone::Options;
         if multi_select {
             self.confirm_highlight();
         } else {
@@ -944,14 +974,14 @@ impl Questionnaire {
         }
     }
 
-    /// 把光标交给自由文本行。
+    /// 把键盘交给自由文本行。
     fn focus_custom(&mut self) {
-        self.custom_focused = true;
+        self.zone = Zone::Input;
     }
 
-    /// 翻页时把它收回来。
+    /// 翻页时把它收回来 —— 收回这道题该在的区域。
     fn unfocus_custom(&mut self) {
-        self.custom_focused = false;
+        self.reset_zone();
     }
 
     /// 答案，也就是工具那一条结果（spec §7）：跳过的问题写作 `selected: []` 且没有
@@ -2128,7 +2158,13 @@ impl TuiState {
         };
         match click {
             // 滚轮挪动选项窗口，而窗口跟着高亮走 —— 所以一格正好是一个选项的位移（票 04 §4）。
-            QuestionClick::Wheel(up) => questionnaire.move_highlight(if up { -1 } else { 1 }),
+            // 它走的是与 `j`/`k` 同一条路，所以越过两端也会落到输入区；输入区里没有可滚动
+            // 的位置，静默。
+            QuestionClick::Wheel(up) => {
+                if questionnaire.zone == Zone::Options {
+                    questionnaire.step(if up { -1 } else { 1 });
+                }
+            }
             QuestionClick::At(column, row) => {
                 // 选项行与自由文本行按屏幕行记录；页脚的按钮像别的按钮一样记成矩形，所以它们
                 // 全都从同一张表里查（票 04 §1）。
@@ -2285,13 +2321,16 @@ impl TuiState {
                     .iter()
                     .map(|_| QuestionDraft::default())
                     .collect();
-                self.pending = Some(Pending::Questionnaire(Questionnaire {
+                let mut questionnaire = Questionnaire {
                     questions: request.questions,
                     reply: request.reply,
                     drafts,
                     index: 0,
-                    custom_focused: false,
-                }));
+                    zone: Zone::Options,
+                };
+                // 没有选项的题只有输入区一个落点，所以起始区域由第一题的样子定。
+                questionnaire.reset_zone();
+                self.pending = Some(Pending::Questionnaire(questionnaire));
             }
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
@@ -3820,8 +3859,8 @@ fn draw_questionnaire(
         ));
     }
     state.regions.custom = Some(panes.input.y + custom_row as u16);
-    // 聚焦的自定义行会显示光标，跟常驻编辑器一样：它是唯一能往里打字的行（票 04 §5）。
-    if questionnaire.custom_focused {
+    // 输入区聚焦时那行显示光标，跟常驻编辑器一样：它是唯一能往里打字的行（票 04 §5）。
+    if questionnaire.zone == Zone::Input {
         let label = if question.options.is_empty() {
             wording::questionnaire_answer_label()
         } else {
