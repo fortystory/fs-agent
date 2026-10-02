@@ -1,7 +1,7 @@
 # 01 — `web_search` 的骨架：工具层 + 服务层 + 组装期开关（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：[`../spec.md`](../spec.md) §1–§3、§7、§8。本票打通「工具 → 服务层 → 假后端」整条链；

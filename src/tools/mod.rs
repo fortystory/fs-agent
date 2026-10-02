@@ -25,6 +25,7 @@ pub mod skill;
 pub mod task;
 pub mod todo;
 pub mod tool;
+pub mod web_search;
 
 pub use ask_user::{AskUserQuestionTool, ASK_USER_QUESTION_TOOL};
 pub use bash::{BashTool, BASH_TOOL};
@@ -50,6 +51,7 @@ pub use tool::{
     BashLimits, Effect, ExecutorSpawner, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError,
     ToolOutput, WritePathResolver,
 };
+pub use web_search::{WebSearchTool, WEB_SEARCH_TOOL};
 
 /// v1 的内建工具。
 ///
@@ -94,10 +96,31 @@ pub fn builtin(can_ask: bool) -> Registry {
 /// 这里是工具表的组装点：一条声明只在此处、不在别处变成一个看起来普普通通的工具，而之后
 /// 工具表不再变化 —— 工具数组是缓存前缀的一部分（spec §14）。`can_ask` 径直传给
 /// [`builtin`]，所以「模型是否拿得到 `ask_user_question`」就在建表的那一处决定。
+///
+/// **联网的两个工具不在这里**：它们由 [`with_web`] 在同一个组装期加上，因为它们的开关是
+/// `[web] enabled` 而不是 `can_ask`。
 pub fn with_dynamic(declarations: &[crate::config::ToolDeclaration], can_ask: bool) -> Registry {
     let mut registry = builtin(can_ask);
     for declaration in declarations {
         registry.register(Box::new(CustomTool::new(declaration.clone())));
     }
+    registry
+}
+
+/// 把联网的那两个工具加进已组装的表（`.scratch/web-search-tool/spec.md` §3）。
+///
+/// 是**组装期**的一步，不是运行期开关：工具表建完不再变化，所以这个决定与 `can_ask` 同一
+/// 性质 —— 改它要重开会话。`enabled = false`（缺省）时这个函数原样返回，两个工具都不进表。
+///
+/// **后端挂没挂与这一步无关**：后端缺失时工具仍在表里，调用给出的是一条结构化错误。表随凭据
+/// 状态抖动是更坏的事（spec §3）。
+pub fn with_web(mut registry: Registry, service: crate::web::WebService) -> Registry {
+    if !service.settings().enabled {
+        return registry;
+    }
+    let service = std::sync::Arc::new(service);
+    registry.register(Box::new(WebSearchTool::new(std::sync::Arc::clone(
+        &service,
+    ))));
     registry
 }

@@ -1045,3 +1045,56 @@ fn an_unknown_number_style_is_a_startup_error() {
     .to_string();
     assert!(error.contains("number_ways"), "{error}");
 }
+
+// --- `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9） ---
+
+#[test]
+fn the_web_tools_are_off_by_default_and_their_knobs_have_defaults() {
+    let config = resolve(None, &env(&[])).unwrap();
+
+    assert!(!config.web.enabled, "缺省关：工具不进表");
+    assert_eq!(config.web.search_provider, "deepseek");
+    assert_eq!(config.web.fetch_provider, "http");
+    assert_eq!(
+        config.web.search_base_url,
+        "https://api.deepseek.com/anthropic"
+    );
+    assert_eq!(config.web.search_max_results, 8);
+    assert_eq!(config.web.search_max_queries, 4);
+    assert_eq!(config.web.fetch_max_chars, 100_000);
+    assert_eq!(config.web.fetch_timeout_ms, 30_000);
+}
+
+#[test]
+fn the_web_table_comes_from_the_config_file() {
+    let config = resolve(
+        Some(
+            "[web]\nenabled = true\nsearch_max_results = 3\nsearch_max_queries = 2\n\
+             search_base_url = \"https://example.com/anthropic/\"\n",
+        ),
+        &env(&[]),
+    )
+    .unwrap();
+
+    assert!(config.web.enabled);
+    assert_eq!(config.web.search_max_results, 3);
+    assert_eq!(config.web.search_max_queries, 2);
+    assert_eq!(
+        config.web.search_base_url, "https://example.com/anthropic",
+        "尾部斜杠收干净，好与 `/v1/messages` 拼得对"
+    );
+    assert_eq!(config.web.search_provider, "deepseek", "没写的留在缺省上");
+}
+
+#[test]
+fn a_web_knob_of_zero_is_clamped_rather_than_believed() {
+    // 写 0 的人多半想要「不限制」，而实际会得到「什么都搜不到」；当场纠正比事后排查便宜。
+    let config = resolve(Some("[web]\nsearch_max_results = 0\n"), &env(&[])).unwrap();
+    assert_eq!(config.web.search_max_results, 1);
+
+    // 一个不认识的键仍然按 `deny_unknown_fields` 拒掉。
+    let error = resolve(Some("[web]\nserch_provider = \"deepseek\"\n"), &env(&[]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("serch_provider"), "{error}");
+}

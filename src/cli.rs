@@ -37,6 +37,7 @@ use crate::render::{
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
 use crate::tools::{self, PathLocks};
+use crate::web::WebService;
 use crate::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
     Harness, SessionScaffold, SynthesizerParts,
@@ -380,7 +381,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
             // 工具表在这里、在组装处定下：内建的那些加上每一个动态声明的工具（spec §14）。
-            tools: tools::with_dynamic(&config.tools, questions.is_some()),
+            tools: tools::with_web(
+                tools::with_dynamic(&config.tools, questions.is_some()),
+                web_service(&config),
+            ),
             locks: PathLocks::new(),
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
             // 用方没有应答者，于是降级。
@@ -696,7 +700,10 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             cwd,
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            tools: tools::with_dynamic(&config.tools, questions.is_some()),
+            tools: tools::with_web(
+                tools::with_dynamic(&config.tools, questions.is_some()),
+                web_service(&config),
+            ),
             locks: PathLocks::new(),
             // 文件里的模式：讨论者与任何会话一样走同一个权限门，而名册共享一个策略（spec §12、
             // §15）。
@@ -2209,7 +2216,10 @@ async fn probe_model(
             session_id: SessionId::new(format!("probe-{model_id}")),
             // 探针要跑真实回合，所以给它真实的工具表 —— 除了 `ask_user_question`：无头没有应答者，
             // 而一个只能失败的工具会白白浪费一次模型调用（spec §19）。
-            tools: tools::with_dynamic(&config.tools, false),
+            tools: tools::with_web(
+                tools::with_dynamic(&config.tools, false),
+                web_service(config),
+            ),
             locks: PathLocks::new(),
             // 探针是无头的、没有应答者，所以配置那一档的 `ask`（默认）会拒掉写，而不是挂在一个谁也
             // 看不见的问题上。
@@ -2284,6 +2294,15 @@ fn last_usage(events: &[Event]) -> Option<Usage> {
         EventPayload::UsageRecorded { usage } => Some(*usage),
         _ => None,
     })
+}
+
+/// 这个会话的联网服务：`[web] enabled` 决定那两个工具在不在表里，后端在这里挂上。
+///
+/// 组装期建一次 —— 工具表建完不再变化，所以这不是一个运行期开关。票 01 先给出一个**没有挂
+/// 后端**的服务：调用会得到 `WEB_PROVIDER_UNAVAILABLE` 这条结构化错误，而工具照旧在表里；
+/// 真后端（DeepSeek 搜索、自己的抓取）在票 02 与票 03/04 挂上来。
+fn web_service(config: &Config) -> WebService {
+    WebService::new(config.web.clone())
 }
 
 fn probe_dir(model_id: &str) -> PathBuf {

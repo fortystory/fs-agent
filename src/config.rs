@@ -403,6 +403,9 @@ pub struct Config {
     /// `[ui] number_style`：界面上那些计数用哪套书写制式
     /// （`.scratch/usage-stats-format/spec.md` §2）。缺省 `cn`（万 / 亿）。
     pub number_style: NumberStyle,
+    /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。组装期读一次，
+    /// 决定那两个工具在不在工具表里。
+    pub web: WebSettings,
 }
 
 /// 目标循环的四个旋钮：两个阈值按**窗口**的百分比，两条停止线按次数。
@@ -456,6 +459,116 @@ pub struct UiSettings {
     /// 界面上那些计数用哪套书写制式（万 / 亿，或 k / M / G）；缺省由
     /// [`NumberStyle`] 自己说。
     pub number_style: NumberStyle,
+}
+
+/// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。
+///
+/// 上限与超时是**部署设置，不是模型参数** —— 它们不出现在面向模型的 schema 里，模型给不了
+/// 自己预算。`enabled` 是组装期的事实：改它要重开会话，因为工具表是缓存前缀的一部分。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSettings {
+    /// 两个工具在不在工具表里（缺省关）。**关掉工具不等于关掉出网** —— `bash` 照样能 `curl`。
+    pub enabled: bool,
+    /// 搜索后端（缺省 `deepseek`）。名字不认识时是运行期的结构化错误、不是启动错误：凭据状态与
+    /// 后端可用性不该让工具表抖动。
+    pub search_provider: String,
+    /// 抓取后端（缺省 `http`）。
+    pub fetch_provider: String,
+    /// 搜索后端的 base url。
+    ///
+    /// 与 `[providers.deepseek]` 的 base url **分开**：会话端点走 OpenAI 兼容格式，而搜索走
+    /// Anthropic 兼容格式（`<base>/v1/messages`），两者不是同一个地址。
+    pub search_base_url: String,
+    /// 一次搜索最多回多少条来源。
+    pub search_max_results: usize,
+    /// 一次调用最多收多少条查询。
+    pub search_max_queries: usize,
+    /// 一次抓取最多解码多少字符。
+    pub fetch_max_chars: usize,
+    /// 一次抓取的墙钟上限，按毫秒计。
+    pub fetch_timeout_ms: u64,
+}
+
+impl Default for WebSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            search_provider: DEFAULT_WEB_SEARCH_PROVIDER.to_owned(),
+            fetch_provider: DEFAULT_WEB_FETCH_PROVIDER.to_owned(),
+            search_base_url: DEFAULT_WEB_SEARCH_BASE_URL.to_owned(),
+            search_max_results: DEFAULT_WEB_SEARCH_MAX_RESULTS,
+            search_max_queries: DEFAULT_WEB_SEARCH_MAX_QUERIES,
+            fetch_max_chars: DEFAULT_WEB_FETCH_MAX_CHARS,
+            fetch_timeout_ms: DEFAULT_WEB_FETCH_TIMEOUT_MS,
+        }
+    }
+}
+
+/// 缺省的搜索后端。
+pub const DEFAULT_WEB_SEARCH_PROVIDER: &str = "deepseek";
+/// 缺省的抓取后端。
+pub const DEFAULT_WEB_FETCH_PROVIDER: &str = "http";
+/// 缺省的搜索 base url（Anthropic 兼容端点的前缀）。
+pub const DEFAULT_WEB_SEARCH_BASE_URL: &str = "https://api.deepseek.com/anthropic";
+/// 缺省的一次搜索最多回多少条来源。
+pub const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 8;
+/// 缺省的一次调用最多收多少条查询。
+pub const DEFAULT_WEB_SEARCH_MAX_QUERIES: usize = 4;
+/// 缺省的一次抓取最多解码多少字符。
+pub const DEFAULT_WEB_FETCH_MAX_CHARS: usize = 100_000;
+/// 缺省的一次抓取墙钟上限。
+pub const DEFAULT_WEB_FETCH_TIMEOUT_MS: u64 = 30_000;
+
+/// 把 `[web]` 解析成两个联网工具的部署设置。
+///
+/// 数字都夹到至少 1：写 `search_max_results = 0` 的人多半想要「不限制」，而实际会得到「什么
+/// 都搜不到」，那种「配了等于没配」当场纠正比事后排查便宜。名字（后端）不校验 —— 不认识的
+/// 名字是运行期的结构化错误，于是凭据状态永远不会让工具表抖动。
+fn resolve_web(raw: Option<&RawWeb>) -> WebSettings {
+    let mut web = WebSettings::default();
+    let Some(raw) = raw else {
+        return web;
+    };
+    if let Some(enabled) = raw.enabled {
+        web.enabled = enabled;
+    }
+    if let Some(provider) = raw
+        .search_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        web.search_provider = provider.to_owned();
+    }
+    if let Some(provider) = raw
+        .fetch_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        web.fetch_provider = provider.to_owned();
+    }
+    if let Some(url) = raw
+        .search_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        web.search_base_url = url.trim_end_matches('/').to_owned();
+    }
+    if let Some(results) = raw.search_max_results {
+        web.search_max_results = results.max(1);
+    }
+    if let Some(queries) = raw.search_max_queries {
+        web.search_max_queries = queries.max(1);
+    }
+    if let Some(chars) = raw.fetch_max_chars {
+        web.fetch_max_chars = chars.max(1);
+    }
+    if let Some(ms) = raw.fetch_timeout_ms {
+        web.fetch_timeout_ms = ms.max(1);
+    }
+    web
 }
 
 /// 把 `[goals]` 解析成那四个旋钮。
@@ -667,6 +780,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let sandbox = resolve_sandbox(raw.sandbox.as_ref(), env)?;
     let goals = resolve_goals(raw.goals.as_ref())?;
     let ui = resolve_ui(raw.ui.as_ref())?;
+    let web = resolve_web(raw.web.as_ref());
 
     let default_model = raw
         .default_model
@@ -695,6 +809,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         sandbox,
         goals,
         number_style: ui.number_style,
+        web,
     })
 }
 
@@ -785,6 +900,8 @@ struct RawConfig {
     goals: Option<RawGoals>,
     /// `[ui]`：显示层的选择（`.scratch/usage-stats-format/spec.md` §2）。
     ui: Option<RawUi>,
+    /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。
+    web: Option<RawWeb>,
 }
 
 /// 一张 `[goals]` 表：目标循环在窗口的哪个位置提醒、哪个位置翻页，以及两条停止线。
@@ -806,6 +923,23 @@ struct RawGoals {
 struct RawUi {
     /// `"cn"`（缺省，万 / 亿）或 `"si"`（k / M / G）。
     number_style: Option<String>,
+}
+
+/// 一张 `[web]` 表：两个联网工具的部署设置。
+///
+/// 上限与超时在这里、不在面向模型的 schema 里；`search_base_url` 与会话端点的 base url
+/// 分开，因为两者是不同的协议格式。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWeb {
+    enabled: Option<bool>,
+    search_provider: Option<String>,
+    fetch_provider: Option<String>,
+    search_base_url: Option<String>,
+    search_max_results: Option<usize>,
+    search_max_queries: Option<usize>,
+    fetch_max_chars: Option<usize>,
+    fetch_timeout_ms: Option<u64>,
 }
 
 /// 一张 `[sandbox]` 表。

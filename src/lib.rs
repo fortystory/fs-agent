@@ -15,11 +15,15 @@
 //!
 //! # 边界
 //!
-//! 十三个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` ·
+//! 十五个顶层模块，只向下依赖：`events` · `config` · `provider` · `tools` · `web` ·
 //! `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` ·
-//! `session` · `render` · `cli`。`events` 不依赖任何内部模块；[`provider::projection`]
-//! 是 `provider` 的子模块、不是一条边界。`discussion` 永远不碰 `provider`：它持着
-//! 协议的规则，而每一次调用都由 `agent` 层驱动。
+//! `goals` · `session` · `render` · `cli`。`events` 不依赖任何内部模块；
+//! [`provider::projection`] 是 `provider` 的子模块、不是一条边界。`discussion` 永远不碰
+//! `provider`：它持着协议的规则，而每一次调用都由 `agent` 层驱动。
+//!
+//! `tools → web` 是单向的：出网那一层自己发 HTTP，绝不碰会话的 provider 适配器 —— 会话模型的
+//! 调用仍只做 OpenAI 兼容那一套，而工具内部的 HTTP 是工具自己的事
+//! （`.scratch/web-search-tool/spec.md` §1）。
 
 pub mod agent;
 pub mod cli;
@@ -35,6 +39,7 @@ pub mod questions;
 pub mod render;
 pub mod session;
 pub mod tools;
+pub mod web;
 
 use std::collections::BTreeSet;
 use std::io;

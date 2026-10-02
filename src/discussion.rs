@@ -74,9 +74,12 @@ pub fn debater_identity(name: &str) -> String {
 不要复述对方的全文，并照常以一行结论收尾。\n\
 4. 不要为了达成一致而改变判断，也不要替用户做最终决定或输出汇总——那由合成器负责。\n\
 \n\
+{web}\n\
+\n\
 {rule}",
         name = name,
         marker = protocol::CONCLUSION_MARKER,
+        web = crate::agent::WEB_GUIDANCE,
         rule = crate::agent::THINKING_IN_CHINESE,
     )
 }

@@ -41,7 +41,14 @@ const EXECUTOR_IDENTITY: &str = "你是一个执行者。另一个 agent 通过 
 /// 弹窗（TUI 里那条 `[执行者] ▸ ✓ 思考完成`）。做成函数而不是第二个常量，是因为 `concat!` 只吃
 /// 字面量，而这一句必须只有一处真相。
 pub(super) fn executor_identity() -> String {
-    [EXECUTOR_IDENTITY, "\n\n", super::THINKING_IN_CHINESE].concat()
+    [
+        EXECUTOR_IDENTITY,
+        "\n\n",
+        super::WEB_GUIDANCE,
+        "\n\n",
+        super::THINKING_IN_CHINESE,
+    ]
+    .concat()
 }
 
 /// 跑一个嵌套执行者的端口（spec §16）：[`ExecutorSpawner`]，由循环构造、经工具上下文交给

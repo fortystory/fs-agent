@@ -337,6 +337,9 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
                 content.contains(fs_agent::agent::THINKING_IN_CHINESE),
                 "{content}"
             );
+            // 联网那段指引同理（`.scratch/web-search-tool/spec.md` §8）：执行者去干活时
+            // 自己就能查，不必让讨论者把结果转述过去。
+            assert!(content.contains(fs_agent::agent::WEB_GUIDANCE), "{content}");
         }
         other => panic!("要的是执行者自己的系统身份，得到 {other:?}"),
     }
