@@ -22,7 +22,7 @@ use fs_agent::events::{
 use fs_agent::permissions::{Answer, Asker, Mode, Policy};
 use fs_agent::provider::{FinishReason, StreamEvent};
 use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, Effect, GREP_TOOL};
+use fs_agent::tools::{builtin, Effect, GREP_TOOL, MAX_MATCHES};
 use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
@@ -570,5 +570,60 @@ async fn a_malformed_glob_is_a_tool_error_rather_than_a_panic() {
 
     let error = completed_output(&fixture.events(), "call-1").unwrap_err();
     assert!(error.contains("不是合法的 glob"), "{error}");
+    fixture.shutdown().await;
+}
+
+// --- 命中太多时的收尾（票 03）---------------------------------------------
+
+#[tokio::test]
+async fn more_matches_than_the_limit_are_counted_rather_than_dumped() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply("call-1", serde_json::json!({ "pattern": "needle" })),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    // 600 条短命中：顶破条数上限，但离 token 上限还很远 —— 两条界是分开的两件事。
+    let extra = 100;
+    fixture.write("big.txt", &"needle\n".repeat(MAX_MATCHES + extra));
+    fixture.run_turn("look").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        lines.len(),
+        MAX_MATCHES + 1,
+        "列出的条数就是那个常量上限，外加一句收尾"
+    );
+    let last = lines.last().unwrap();
+    assert!(last.contains(&format!("还有 {extra} 条未列出")), "{last}");
+    assert!(last.contains("glob"), "收尾要给一句能照做的事：{last}");
+    assert!(
+        !output.contains("[已截断："),
+        "走的是工具内那条收尾，不是 token 那条截断流水线"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_search_that_stays_under_both_limits_is_verbatim() {
+    // 回归锚：两个上限都没碰到时，结果与票 01 的形状逐字相同 —— 没有收尾行、没有标记。
+    let mut fixture = fixture(
+        vec![
+            grep_reply("call-1", serde_json::json!({ "pattern": "needle" })),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "fn first() {}\nlet needle = 1;\n");
+    fixture.run_turn("look").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(output, "src/thing.rs:2:let needle = 1;\n");
     fixture.shutdown().await;
 }

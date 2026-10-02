@@ -9,7 +9,8 @@
 //! 一回事，而且它换来三条运行期依赖（spec §4）。
 //!
 //! 上限只有一条流水线：`call()` 返回字符串，溢出、指针与头尾预览全交给
-//! [`crate::context::truncate_result`]。
+//! [`crate::context::truncate_result`]。工具内另按**条数**先收一刀（[`MAX_MATCHES`]），并在
+//! 末尾如实写出省掉了多少 —— token 那条界与它无关，也不新增第二套截断。
 //!
 //! 命中的文件**不算「已读」**：`read_paths()` 是调用前的纯函数，声明不了运行时才知道的命中
 //! 文件，而这条工具不值得动 `Tool` 接口（spec §3）。
@@ -33,6 +34,13 @@ use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
 /// 工具名，只在这里命名一次，好让注册表、描述与测试不互相漂离。
 pub const GREP_TOOL: &str = "grep";
+
+/// 一次调用最多列出多少条命中，超出时在末尾如实写出还剩多少条。
+///
+/// 是常量、不是配置：先跑一段看真实用量，再决定要不要照 `repo_map_tokens` 开一个按工具的
+/// 预算字段（spec §4）。行有长有短，所以这里数的是**条数**；token 那条界仍由
+/// `max_tool_result_tokens` 与那条唯一的截断流水线管。
+pub const MAX_MATCHES: usize = 500;
 
 /// 在工作区里搜一个正则，逐行报出命中。
 pub struct GrepTool;
@@ -120,9 +128,10 @@ fn compile_glob(glob: &str) -> Result<GlobSet, ToolError> {
         .map_err(|error| ToolError::message(format!("{GREP_TOOL}：`glob` 无法编译：{error}")))
 }
 
-/// 一次遍历的产物：要交给模型的文本，以及经 `glob` 过滤后**实际搜过**的文件数。
+/// 一次遍历的产物：要交给模型的文本，经 `glob` 过滤后**实际搜过**的文件数，以及超出的条数。
 ///
-/// 那个计数只为一件事存在：把「`glob` 什么都没选上」与「选上了但这些文件里没有匹配」分开。
+/// `scanned` 只为一件事存在：把「`glob` 什么都没选上」与「选上了但这些文件里没有匹配」分开。
+/// 文本已经含末尾那句「还有 N 条未列出」，所以调用方不必再拼一次。
 struct Search {
     text: String,
     scanned: usize,
@@ -143,6 +152,8 @@ fn search(
 ) -> Result<Search, ToolError> {
     let mut text = String::new();
     let mut scanned = 0usize;
+    let mut listed = 0usize;
+    let mut skipped = 0usize;
     let mut searcher = SearcherBuilder::new().line_number(true).build();
 
     let mut builder = WalkBuilder::new(root);
@@ -164,23 +175,41 @@ fn search(
         let mut sink = Collector {
             path: relative,
             text: &mut text,
+            listed: &mut listed,
+            skipped: &mut skipped,
         };
         // 单个文件读不了（竞态、权限）不该让整次搜索失败 —— 与遍历错误同一档处理。
         let _ = searcher.search_path(matcher, path, &mut sink);
+    }
+
+    if skipped > 0 {
+        // `repo_map` 末尾那一行是同一种收尾：说清省掉了多少，并给一句能照做的事。
+        text.push_str(&format!(
+            "还有 {skipped} 条未列出：请缩小搜索范围，或用 `glob` 只搜一部分文件\n"
+        ));
     }
     Ok(Search { text, scanned })
 }
 
 /// 把命中收进一个字符串的接收端。
+///
+/// 列满 [`MAX_MATCHES`] 之后不再收集文本，但**继续数**：末尾那句「还有 N 条未列出」只有把整个
+/// 工作区数完才是诚实的。
 struct Collector<'a> {
     path: &'a Path,
     text: &'a mut String,
+    listed: &'a mut usize,
+    skipped: &'a mut usize,
 }
 
 impl Sink for Collector<'_> {
     type Error = io::Error;
 
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
+        if *self.listed >= MAX_MATCHES {
+            *self.skipped += 1;
+            return Ok(true);
+        }
         let line = mat.line_number().unwrap_or(1);
         let matched = String::from_utf8_lossy(mat.bytes());
         self.text.push_str(&format!(
@@ -188,6 +217,7 @@ impl Sink for Collector<'_> {
             self.path.display(),
             matched.trim_end_matches(&['\n', '\r'][..])
         ));
+        *self.listed += 1;
         Ok(true)
     }
 }

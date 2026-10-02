@@ -1,7 +1,7 @@
 # 03 — 命中太多时的收尾与落盘
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：[`../spec.md`](../spec.md) §5（输出形状与上限）。票 01 已经让最小的搜索跑通，

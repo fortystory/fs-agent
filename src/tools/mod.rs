@@ -34,7 +34,7 @@ pub use file::{
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
 };
 pub use goal_note::{GoalNoteTool, GOAL_NOTE_TOOL};
-pub use grep::{GrepTool, GREP_TOOL};
+pub use grep::{GrepTool, GREP_TOOL, MAX_MATCHES};
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
 pub use process::{CommandOutcome, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
 pub use registry::{
