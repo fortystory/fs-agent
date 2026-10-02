@@ -1,7 +1,7 @@
 # 01 — `grep(pattern)`：内建的只读搜索（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 规格：[`../spec.md`](../spec.md) §1–§6。一手调研：

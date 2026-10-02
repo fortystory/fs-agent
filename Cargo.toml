@@ -58,6 +58,13 @@ url = "2"
 # 我们自己的。`default-features = false` 只留下 5 个纯 Rust 包（自己 + bitflags + memchr
 # + unicase），**不开** `simd`（那会引入 `unsafe`）。
 pulldown-cmark = { version = "0.13", default-features = false }
+# `grep` 工具的搜索内核（`.scratch/grep-tool/spec.md` §4）：目录遍历与忽略规则、逐行搜索、
+# 正则后端。三个都是 ripgrep 拆出来的 `Unlicense OR MIT` 纯 Rust 库；自带它们换来一条
+# 「只读工作区」的搜索，而不是 spawn `rg` —— 后者经沙箱跑起来继承的是「整机可读」，还多出
+# 三条运行期依赖（`rg` 在不在 PATH、它自己的配置文件、退出码要自己翻译）。
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

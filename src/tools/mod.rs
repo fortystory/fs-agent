@@ -15,6 +15,7 @@ pub mod custom;
 pub mod edit;
 pub mod file;
 pub mod goal_note;
+pub mod grep;
 pub mod paths;
 pub mod process;
 pub mod registry;
@@ -33,6 +34,7 @@ pub use file::{
     READ_FILE, WRITE_FILE, WROTE_PATH_PREFIX,
 };
 pub use goal_note::{GoalNoteTool, GOAL_NOTE_TOOL};
+pub use grep::{GrepTool, GREP_TOOL};
 pub use paths::{write_owner_only, PathLocks, SessionPaths};
 pub use process::{CommandOutcome, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX};
 pub use registry::{
@@ -62,6 +64,9 @@ pub use tool::{
 /// 给模型一个注定失败的调用等于白费一次调用。这与「让 `task` 不进执行者的工具表」是同一个
 /// 「由工具表决定」的机制。
 ///
+/// `grep` 与 `repo_map` 同一档：无状态、只读、自己走会话 cwd，所以它在每一档权限模式下都
+/// 留在表里（`.scratch/grep-tool/spec.md` §1）。
+///
 /// `todo` 刻意**不**放在 `can_ask` 后面：维护一份列表不需要有人作答，所以三个渲染器都挂它
 /// —— 这正是它与 `ask_user_question` 的分界（`.scratch/todo-and-modes/spec.md` §2）。
 /// `goal_note` 与它同一档，理由也同一档：记一行新工作不需要有人作答
@@ -74,6 +79,7 @@ pub fn builtin(can_ask: bool) -> Registry {
     registry.register(Box::new(BashTool));
     registry.register(Box::new(SkillTool));
     registry.register(Box::new(RepoMapTool::new()));
+    registry.register(Box::new(GrepTool));
     registry.register(Box::new(TaskTool));
     registry.register(Box::new(TodoTool));
     registry.register(Box::new(GoalNoteTool));
