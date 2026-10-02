@@ -878,11 +878,16 @@ impl Questionnaire {
 
     /// 把高亮移动 `delta`，夹在选项范围内。`Enter`/`Space` 作用的就是高亮，所以它永远
     /// 不会越出两端。
+    ///
+    /// 挪高亮就是「光标回到选项上」，所以它顺手把焦点从自由文本栏收回来 —— 与点选项行
+    /// （`select_option`）一致。没有选项可挪时什么都不做，**也就**不碰焦点：那种题只有
+    /// 输入区一个落点（票 34）。
     fn move_highlight(&mut self, delta: isize) {
         let count = self.questions[self.index].options.len();
         if count == 0 {
             return;
         }
+        self.custom_focused = false;
         let draft = &mut self.drafts[self.index];
         let next = draft.highlight as isize + delta;
         draft.highlight = next.clamp(0, count as isize - 1) as usize;

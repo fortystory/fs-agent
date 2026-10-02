@@ -618,3 +618,33 @@ fn a_space_still_confirms_while_nobody_is_typing() {
         }]
     );
 }
+
+#[test]
+fn moving_the_highlight_takes_the_focus_back_to_the_options() {
+    // 票 34：`↑`/`↓` 把高亮挪到选项上，光标也就回到了选项区 —— 之后空格又是「确认」，
+    // 而不是继续往自由文本里塞字符。
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![question("one", "First?", &["a", "b"], false)],
+    );
+    state.key(Key::Char('x'));
+    let typed = screen(120, 24, &mut state).join("\n");
+    assert!(typed.contains("自定义：x"), "先打一个字进去：\n{typed}");
+
+    state.key(Key::Down);
+    state.key(Key::Char(' '));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        !text.contains("自定义：x "),
+        "空格没被塞进自由文本：\n{text}"
+    );
+
+    state.key(Key::Enter);
+    let answers = answer(&mut rx).expect("作答了").answers;
+    assert_eq!(
+        answers[0].selected,
+        vec!["b".to_owned()],
+        "空格确认的是挪过去之后的那个高亮"
+    );
+}
