@@ -516,3 +516,105 @@ fn escape_still_cancels_the_run_and_never_answers_the_questionnaire() {
     assert!(!rows.join("\n").contains("Pick?"), "接管跟着这次运行一起走");
     assert!(rx.try_recv().is_err(), "发送端被丢掉了，而不是作了答");
 }
+
+#[test]
+fn a_space_is_text_once_the_custom_answer_has_focus() {
+    // 票 33：一道**有选项**的题上，人已经在自定义栏里打了字（中文答案里夹英文词，
+    // `llm wiki` 这种），空格是自由文本的一部分，不是「确认高亮选项」。
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![
+            question("one", "First?", &["a", "b"], false),
+            question("two", "Second?", &["c"], false),
+        ],
+    );
+    for ch in "llm".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Char(' '));
+    for ch in "wiki".chars() {
+        state.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("First?"), "空格不把人推到下一题：\n{text}");
+    assert!(
+        text.contains("自定义：llm wiki"),
+        "空格落进了自由文本：\n{text}"
+    );
+
+    // 一路答完：那个空格随答案交回去，而不是被高亮那个选项替换掉。
+    state.key(Key::Enter);
+    state.key(Key::Enter);
+    state.key(Key::Enter);
+    assert_eq!(
+        answer(&mut rx).expect("作答了").answers,
+        vec![
+            UserAnswer {
+                id: "one".to_owned(),
+                selected: Vec::new(),
+                custom: Some("llm wiki".to_owned()),
+            },
+            UserAnswer {
+                id: "two".to_owned(),
+                selected: vec!["c".to_owned()],
+                custom: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_space_still_confirms_while_nobody_is_typing() {
+    // 票 33 的另一半：焦点不在自定义栏时空格还是那个「确认」。别把它修成
+    // 「空格永远只是文本」—— 「不用 `Enter` 也能作答」是既有键位的一部分。
+    let mut single = state();
+    let mut single_rx = ask(
+        &mut single,
+        vec![
+            question("one", "First?", &["a", "b"], false),
+            question("two", "Second?", &["c"], false),
+        ],
+    );
+    single.key(Key::Char(' '));
+    let text = screen(120, 24, &mut single).join("\n");
+    assert!(text.contains("Second?"), "单选里空格确认并前进：\n{text}");
+    single.key(Key::Enter);
+    single.key(Key::Enter);
+    assert_eq!(
+        answer(&mut single_rx).expect("作答了").answers[0].selected,
+        vec!["a".to_owned()],
+        "它确认的是高亮那个选项"
+    );
+
+    // 多选：空格是高亮选项的开关，不翻页。
+    let mut multi = state();
+    let mut multi_rx = ask(
+        &mut multi,
+        vec![question("one", "Pick?", &["a", "b"], true)],
+    );
+    multi.key(Key::Char(' '));
+    let text = screen(120, 24, &mut multi).join("\n");
+    assert!(text.contains("[x] 1. a"), "多选里空格切换高亮：\n{text}");
+    assert!(text.contains("Pick?"), "多选里它不翻页：\n{text}");
+    assert!(answer(&mut multi_rx).is_none(), "还没提交，就不该有答案");
+
+    // 没有选项的题：空格本来就是普通字符。
+    let mut free = state();
+    let mut free_rx = ask(
+        &mut free,
+        vec![question("q", "How should it be named?", &[], false)],
+    );
+    for ch in "two words".chars() {
+        free.key(Key::Char(ch));
+    }
+    free.key(Key::Enter);
+    assert_eq!(
+        answer(&mut free_rx).expect("作答了").answers,
+        vec![UserAnswer {
+            id: "q".to_owned(),
+            selected: Vec::new(),
+            custom: Some("two words".to_owned()),
+        }]
+    );
+}

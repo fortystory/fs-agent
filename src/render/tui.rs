@@ -810,9 +810,12 @@ impl Questionnaire {
                     }
                 }
             }
-            // `Space` 也确认，这样人能不用那个兼作提交的键来作答。在自由文本问题上没有
-            // 选项可确认，所以它就是一个普通的空格。
-            Key::Char(' ') if self.has_options() => {
+            // `Space` 也确认，这样人能不用那个兼作提交的键来作答 —— 但只在**焦点不在自由
+            // 文本栏**的时候：人已经在那道题上打过字（或点过「自定义」），这一下就是文本的
+            // 一部分。中文答案里夹英文词（`llm wiki` 这种）最容易撞上，而单选确认还会把刚
+            // 打进去的东西一起清掉（票 33）。没有选项的题本来就没有可确认的东西，空格在那里
+            // 也照旧是普通字符。
+            Key::Char(' ') if self.has_options() && !self.custom_focused => {
                 self.confirm_highlight();
                 if !self.questions[self.index].multi_select {
                     self.advance();
