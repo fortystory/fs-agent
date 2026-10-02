@@ -1,7 +1,7 @@
 # 05 — 选项折行，窗口改按渲染行数算
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 04
 
 > 来源：[`../spec.md`](../spec.md) §7。它是 10-01 那批里的第三条意向，与区域模型正交，
@@ -40,3 +40,17 @@ Blocked by: 04
 
 - 不做「整页滚动」「翻页键」：窗口跟着高亮走，这是今天的模型，只换单位。
 - 不动区域与键位（票 01–03）、不动页脚（票 04）。
+
+## Comments
+
+- **落地（2026-10-02）**：`questionnaire_parts` 改成返回 `Vec<Vec<Line>>`（每个选项一组行），
+  新增 `wrap_with_lead` —— 前缀（`> ○ ` 这种）算进折行宽度、续行用等宽空格缩进，所以每一行都
+  不超过窗格宽；自定义行走同一条路（空文本仍然占一行，它是输入区）。
+- **窗口换成按行算**：`option_window_start` 改收 `heights: &[usize]`，做法是把高亮那一项的底部
+  贴在窗口底部、再回退到包含那个行号的选项起点；高亮项自己超过一屏时从它的头部画。
+  `questionnaire_window` 与 `draw_questionnaire` 的 regions 都跟着改成行单位——折成几行就登记
+  几行，每一行都映射回同一个选项下标。两处「一个选项占一行」的注释一并改掉。
+- **先红后绿**：新增两条（长选项整块都在窗口里、折行之后点**第二行**也命中同一个选项）；
+  两条都对「退回截断」敏感（截断只剩一行，两条都会红）。
+- **验收**：`cargo test` 全绿（问卷 TUI 28 条、render_layout 129 条）、
+  `cargo clippy --all-targets` 干净。

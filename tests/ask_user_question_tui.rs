@@ -895,6 +895,26 @@ fn printable_characters_and_backspace_are_swallowed_in_the_options_zone() {
 }
 
 #[test]
+fn a_wrapped_option_keeps_all_of_its_lines_in_the_window() {
+    // 超长选项折行而不是被截断；高亮落在它上面时它**整块**都在窗口里
+    // （`.scratch/questionnaire-keys/spec.md` §7）。
+    let long = "x".repeat(200);
+    let mut state = state();
+    let _rx = ask(
+        &mut state,
+        vec![question("q", "Which?", &["short", &long], false)],
+    );
+    state.key(Key::Char('j')); // 高亮落到那个长选项上
+
+    let text = screen(60, 24, &mut state).join("\n");
+    let xs = text.matches('x').count();
+    assert!(
+        xs >= 190,
+        "长选项整块都在窗口里（只看到 {xs} 个 x）：\n{text}"
+    );
+}
+
+#[test]
 fn a_question_without_options_starts_in_the_text_input() {
     let mut state = state();
     let mut rx = ask(&mut state, vec![question("q", "Name?", &[], false)]);

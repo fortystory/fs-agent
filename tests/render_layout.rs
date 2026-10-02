@@ -4334,6 +4334,52 @@ fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
 }
 
 #[test]
+fn every_row_of_a_wrapped_option_answers_that_option() {
+    // 折行不改变点击：长选项的**第二行**也命中同一个选项
+    // （`.scratch/questionnaire-keys/spec.md` §7）。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let long = "x".repeat(200);
+    let (mut state, mut answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![
+            Choice {
+                label: "短的".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: long.clone(),
+                description: None,
+            },
+        ],
+    });
+
+    let rows = screen(120, 24, &mut state);
+    let wrapped: Vec<u16> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains("xxxx"))
+        .map(|(y, _)| y as u16)
+        .collect();
+    assert!(
+        wrapped.len() >= 2,
+        "长选项折成了多行：\n{}",
+        rows.join("\n")
+    );
+
+    click_in_row(&mut state, 120, 24, wrapped[1], "xxxx");
+    state.key(Key::Enter);
+    let answers = answers.try_recv().expect("提交了").expect("作答了");
+    assert_eq!(
+        answers.answers[0].selected,
+        vec![long],
+        "折行之后的每一行都还是那个选项"
+    );
+}
+
+#[test]
 fn the_wheel_moves_the_questionnaire_highlight() {
     use fs_agent::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {

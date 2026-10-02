@@ -2882,16 +2882,19 @@ fn questionnaire_lines(
     width: usize,
 ) -> Vec<Line<'static>> {
     let (mut rows, options, custom) = questionnaire_parts(question, draft, width);
-    rows.extend(options);
-    rows.push(custom);
+    rows.extend(options.into_iter().flatten());
+    rows.extend(custom);
     rows
 }
 
 /// 一个问题在 `height` 行内装得下的那些行，滚动选项窗口好让高亮的选项始终可见（spec §7）。
 ///
-/// 表头与问题文本是钉住的：它们说在问什么，把它们滚掉会让选项变得读不懂。打答案的那一行
+/// 表头与问题文本是钉住的：它们说在问什么，把它们滚掉会让选项变得读不懂。打答案的那几行
 /// 出于同样的理由钉在底部。中间那些选项就是窗口，它跟着高亮走：往下越过裁剪线时，滚出来
 /// 的是尾部，而不是把高亮留在屏幕外。
+///
+/// 窗口的**单位是行、不是选项**：一个折成三行的长选项要整块看得见
+/// （`.scratch/questionnaire-keys/spec.md` §7）。
 fn questionnaire_window(
     question: &UserQuestion,
     draft: &QuestionDraft,
@@ -2899,35 +2902,47 @@ fn questionnaire_window(
     height: usize,
 ) -> Vec<Line<'static>> {
     let (prefix, options, custom) = questionnaire_parts(question, draft, width);
-    if prefix.len() + options.len() < height {
+    let heights: Vec<usize> = options.iter().map(Vec::len).collect();
+    let total: usize = heights.iter().sum();
+    if prefix.len() + total < height {
         let mut rows = prefix;
-        rows.extend(options);
-        rows.push(custom);
+        rows.extend(options.into_iter().flatten());
+        rows.extend(custom);
         return rows;
     }
     // 前缀与答案行是预留的；剩下多少就是窗口。一个连这两样都没地方的退化终端干脆只显示
     // 前缀，那是绝不能丢掉的那部分。
     let room = height.saturating_sub(prefix.len() + 1);
-    let start = option_window_start(draft.highlight, options.len(), room);
+    let start = option_window_start(&heights, draft.highlight, room);
     let mut rows = prefix;
-    rows.extend(options.into_iter().skip(start).take(room));
-    rows.push(custom);
+    rows.extend(options.into_iter().skip(start).flatten().take(room));
+    rows.extend(custom);
     rows.truncate(height);
     rows
 }
 
-/// 为了让 `highlight` 落在一个 `room` 个选项的窗口里，第一个该画的选项。列表不回绕：一旦
-/// 高亮越过窗口，窗口就一行一行地跟着它。
-fn option_window_start(highlight: usize, count: usize, room: usize) -> usize {
-    if room == 0 || count <= room {
+/// 为了让**高亮那一项**完整落在 `room` 行的窗口里，第一个该画的选项。
+///
+/// 列表不回绕：窗口跟着高亮走。做法是把高亮那一项的底部贴在窗口底部，再回退到包含那个
+/// 行号的选项的起点；高亮项自己就超过整个窗口时不再往前退，从它的头部画起。
+fn option_window_start(heights: &[usize], highlight: usize, room: usize) -> usize {
+    if room == 0 || heights.is_empty() {
         return 0;
     }
-    let start = if highlight < room {
-        0
-    } else {
-        highlight + 1 - room
-    };
-    start.min(count - room)
+    let total: usize = heights.iter().sum();
+    if total <= room {
+        return 0;
+    }
+    let highlight = highlight.min(heights.len() - 1);
+    let end: usize = heights[..=highlight].iter().sum();
+    let bottom = end.saturating_sub(room);
+    let mut start = 0;
+    let mut drawn = 0;
+    while start < highlight && drawn + heights[start] <= bottom {
+        drawn += heights[start];
+        start += 1;
+    }
+    start
 }
 
 /// 把一个问题的钉住部分（表头与文本）、选项行、以及打答案的那一行拆开。
@@ -2938,7 +2953,7 @@ fn questionnaire_parts(
     question: &UserQuestion,
     draft: &QuestionDraft,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<Line<'static>>, Line<'static>) {
+) -> (Vec<Line<'static>>, Vec<Vec<Line<'static>>>, Vec<Line<'static>>) {
     let mut prefix: Vec<Line<'static>> = Vec::new();
     if let Some(header) = question
         .header
@@ -2959,7 +2974,7 @@ fn questionnaire_parts(
     }
     prefix.extend(pane::wrap_text(title.trim(), width));
 
-    let mut options: Vec<Line<'static>> = Vec::with_capacity(question.options.len());
+    let mut options: Vec<Vec<Line<'static>>> = Vec::with_capacity(question.options.len());
     for (index, choice) in question.options.iter().enumerate() {
         let highlighted = index == draft.highlight;
         let picked = draft
@@ -2975,9 +2990,11 @@ fn questionnaire_parts(
         // 光标说的是 `Enter`/`Space` 会确认哪个选项；标记说的是哪些被选中了。这是两个不同的
         // 事实，可以不一致。
         let cursor = if highlighted { ">" } else { " " };
-        let text = format!(
-            "{cursor} {marker} {}",
-            wording::questionnaire_option(index + 1, &choice.label, choice.description.as_deref())
+        let lead = format!("{cursor} {marker} ");
+        let body = wording::questionnaire_option(
+            index + 1,
+            &choice.label,
+            choice.description.as_deref(),
         );
         let mut style = if picked {
             Style::default()
@@ -2989,10 +3006,12 @@ fn questionnaire_parts(
         if highlighted {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        options.push(Line::from(Span::styled(
-            truncate_columns(&text, width),
-            style,
-        )));
+        // 长选项**折行**，不截断（`.scratch/questionnaire-keys/spec.md` §7）。
+        let mut lines = wrap_with_lead(&body, &lead, width);
+        for line in &mut lines {
+            line.style = style;
+        }
+        options.push(lines);
     }
 
     let label = if question.options.is_empty() {
@@ -3000,12 +3019,39 @@ fn questionnaire_parts(
     } else {
         wording::questionnaire_custom_label()
     };
-    let room = width.saturating_sub(text_columns(label));
-    let custom = Line::from(vec![
-        Span::styled(label, Style::default().fg(Color::DarkGray)),
-        Span::raw(truncate_columns(&draft.custom, room)),
-    ]);
+    let mut custom = wrap_with_lead(&draft.custom, label, width);
+    match custom.first_mut() {
+        Some(line) => {
+            if let Some(lead) = line.spans.first_mut() {
+                lead.style = Style::default().fg(Color::DarkGray);
+            }
+        }
+        // 空的自由文本仍然要占那一行：它是输入区，光标与点击都落在它上面。
+        None => custom.push(Line::from(Span::styled(
+            label,
+            Style::default().fg(Color::DarkGray),
+        ))),
+    }
     (prefix, options, custom)
+}
+
+/// 把一段文本折成若干行：第一行带 `lead`（`> ○ ` 这种），续行用等宽的空格缩进。
+///
+/// 前缀也算进折行宽度，所以每一行都不超过 `width` 列；续行缩进让折行读起来仍在同一个选项里。
+fn wrap_with_lead(body: &str, lead: &str, width: usize) -> Vec<Line<'static>> {
+    let lead_columns = text_columns(lead);
+    let body_width = width.saturating_sub(lead_columns).max(1);
+    let indent = " ".repeat(lead_columns);
+    pane::wrap_text(body, body_width)
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let pad = if index == 0 { lead } else { indent.as_str() };
+            let mut spans = vec![Span::raw(pad.to_owned())];
+            spans.extend(row.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// 画一帧外壳。
@@ -3876,19 +3922,15 @@ fn draw_questionnaire(
     let width = panes.input.width as usize;
     let (prefix, options, _custom) = questionnaire_parts(question, draft, width);
     let window = questionnaire_window(question, draft, width, panes.input.height as usize);
-    let full = prefix.len() + options.len() + 1;
-    let start = if full < panes.input.height as usize {
+    let heights: Vec<usize> = options.iter().map(Vec::len).collect();
+    let total: usize = heights.iter().sum();
+    let input_height = panes.input.height as usize;
+    let room = input_height.saturating_sub(prefix.len() + 1);
+    let start = if prefix.len() + total < input_height {
         0
     } else {
-        option_window_start(
-            draft.highlight,
-            options.len(),
-            (panes.input.height as usize).saturating_sub(prefix.len() + 1),
-        )
+        option_window_start(&heights, draft.highlight, room)
     };
-    let visible = options
-        .len()
-        .min((panes.input.height as usize).saturating_sub(prefix.len() + 1));
     // 自定义行是窗口画出的最后一行，不管它是因为裁剪被钉在那里，还是干脆结束了那个列表。
     let custom_row = window.len().saturating_sub(1);
     for (row, line) in window.iter().enumerate() {
@@ -3902,11 +3944,21 @@ fn draw_questionnaire(
             ),
         );
     }
-    for offset in 0..visible.min(window.len().saturating_sub(prefix.len())) {
-        state.regions.options.push((
-            panes.input.y + (prefix.len() + offset) as u16,
-            start + offset,
-        ));
+    // 命中的是**选项的屏幕行**：折成几行就记几行，每一行都映射回同一个选项下标
+    // （`.scratch/questionnaire-keys/spec.md` §7）。
+    let last_option_row = input_height.saturating_sub(1);
+    let mut row = prefix.len();
+    for (index, lines) in options.iter().enumerate().skip(start) {
+        for _ in lines {
+            if row >= last_option_row {
+                break;
+            }
+            state.regions.options.push((panes.input.y + row as u16, index));
+            row += 1;
+        }
+        if row >= last_option_row {
+            break;
+        }
     }
     state.regions.custom = Some(panes.input.y + custom_row as u16);
     // 输入区聚焦时那行显示光标，跟常驻编辑器一样：它是唯一能往里打字的行（票 04 §5）。
