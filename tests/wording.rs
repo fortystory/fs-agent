@@ -1111,7 +1111,7 @@ fn the_questionnaire_hint_drops_the_teaching_parts_first() {
         "j/k 移动 · 空格选中 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
     );
     assert_eq!(
-        wording::questionnaire_hint(32),
+        wording::questionnaire_hint(40),
         "j/k 移动 · 空格选中 · esc 退出询问"
     );
     assert_eq!(wording::questionnaire_hint(16), "esc 退出询问");

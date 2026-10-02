@@ -984,11 +984,6 @@ impl Questionnaire {
         self.zone = Zone::Input;
     }
 
-    /// 翻页时把它收回来 —— 收回这道题该在的区域。
-    fn unfocus_custom(&mut self) {
-        self.reset_zone();
-    }
-
     /// 答案，也就是工具那一条结果（spec §7）：跳过的问题写作 `selected: []` 且没有
     /// `custom`；其余问题把**所选与自由文本一起**交回去，单选与多选一个形状（spec §3）。
     ///
@@ -2198,11 +2193,11 @@ impl TuiState {
                 match regions.action_at(column, row) {
                     Some(HitAction::Previous) => {
                         questionnaire.back();
-                        questionnaire.unfocus_custom();
+                        questionnaire.reset_zone();
                     }
                     Some(HitAction::Next) => {
                         questionnaire.advance();
-                        questionnaire.unfocus_custom();
+                        questionnaire.reset_zone();
                     }
                     Some(HitAction::Submit) => {
                         // 这个按钮的提交与全部处理完之后 `Enter` 的提交一模一样，所以它走的
@@ -2440,10 +2435,6 @@ impl TuiState {
         }
     }
 
-    /// 给问卷喂一个按键。
-    ///
-    /// 只要问卷还有问题剩下，接管就立着；提交它的那一个按键把它丢掉，那也正是把底部输入区
-    /// 交还给常驻编辑器的那一下。
     /// 问卷立着时那一下 `Esc`（`.scratch/questionnaire-keys/spec.md` §5）。
     ///
     /// 在输入区里它先回选项区（文本不清），**并且**举手 —— 于是任何区域连按两下 `Esc` 都是
@@ -2465,6 +2456,10 @@ impl TuiState {
         self.raise_gesture_at(now, Gesture::DeclineQuestion);
     }
 
+    /// 给问卷喂一个按键。
+    ///
+    /// 只要问卷还有问题剩下，接管就立着；提交它的那一个按键把它丢掉，那也正是把底部输入区
+    /// 交还给常驻编辑器的那一下。
     fn questionnaire_key(&mut self, key: Key) {
         let Some(Pending::Questionnaire(mut questionnaire)) = self.pending.take() else {
             return;
@@ -2905,9 +2900,8 @@ fn questionnaire_window(
     options_focused: bool,
 ) -> Vec<Line<'static>> {
     let (prefix, options, custom) = questionnaire_parts(question, draft, width, options_focused);
-    let heights: Vec<usize> = options.iter().map(Vec::len).collect();
-    let total: usize = heights.iter().sum();
-    if prefix.len() + total < height {
+    let geometry = option_window_geometry(&options, draft.highlight, height, prefix.len());
+    if prefix.len() + geometry.total < height {
         let mut rows = prefix;
         rows.extend(options.into_iter().flatten());
         rows.extend(custom);
@@ -2915,13 +2909,47 @@ fn questionnaire_window(
     }
     // 前缀与答案行是预留的；剩下多少就是窗口。一个连这两样都没地方的退化终端干脆只显示
     // 前缀，那是绝不能丢掉的那部分。
-    let room = height.saturating_sub(prefix.len() + 1);
-    let start = option_window_start(&heights, draft.highlight, room);
     let mut rows = prefix;
-    rows.extend(options.into_iter().skip(start).flatten().take(room));
+    rows.extend(
+        options
+            .into_iter()
+            .skip(geometry.start)
+            .flatten()
+            .take(geometry.room),
+    );
     rows.extend(custom);
     rows.truncate(height);
     rows
+}
+
+/// 选项窗口的几何：每个选项占几行、一共几行、留给窗口几行、第一个该画的选项。
+///
+/// 画的那一遍与登记点击区域的那一遍各自要一次，所以它只算在这一处 —— 两边不会对「窗口从
+/// 哪儿开始」有分歧（`.scratch/questionnaire-keys/spec.md` §7）。
+struct OptionWindowGeometry {
+    /// 所有选项一共占几行。
+    total: usize,
+    /// 留给窗口的行数。
+    room: usize,
+    /// 第一个该画的选项。
+    start: usize,
+}
+
+fn option_window_geometry(
+    options: &[Vec<Line<'static>>],
+    highlight: usize,
+    height: usize,
+    prefix_rows: usize,
+) -> OptionWindowGeometry {
+    let heights: Vec<usize> = options.iter().map(Vec::len).collect();
+    let total: usize = heights.iter().sum();
+    let room = height.saturating_sub(prefix_rows + 1);
+    let start = if prefix_rows + total < height {
+        0
+    } else {
+        option_window_start(&heights, highlight, room)
+    };
+    OptionWindowGeometry { total, room, start }
 }
 
 /// 为了让**高亮那一项**完整落在 `room` 行的窗口里，第一个该画的选项。
@@ -3943,15 +3971,8 @@ fn draw_questionnaire(
         panes.input.height as usize,
         options_focused,
     );
-    let heights: Vec<usize> = options.iter().map(Vec::len).collect();
-    let total: usize = heights.iter().sum();
     let input_height = panes.input.height as usize;
-    let room = input_height.saturating_sub(prefix.len() + 1);
-    let start = if prefix.len() + total < input_height {
-        0
-    } else {
-        option_window_start(&heights, draft.highlight, room)
-    };
+    let geometry = option_window_geometry(&options, draft.highlight, input_height, prefix.len());
     // 自定义行是窗口画出的最后一行，不管它是因为裁剪被钉在那里，还是干脆结束了那个列表。
     let custom_row = window.len().saturating_sub(1);
     for (row, line) in window.iter().enumerate() {
@@ -3969,7 +3990,7 @@ fn draw_questionnaire(
     // （`.scratch/questionnaire-keys/spec.md` §7）。
     let last_option_row = input_height.saturating_sub(1);
     let mut row = prefix.len();
-    for (index, lines) in options.iter().enumerate().skip(start) {
+    for (index, lines) in options.iter().enumerate().skip(geometry.start) {
         for _ in lines {
             if row >= last_option_row {
                 break;

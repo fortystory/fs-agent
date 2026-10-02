@@ -844,8 +844,8 @@ pub fn questionnaire_progress(index: usize, total: usize) -> String {
 /// （`.scratch/questionnaire-keys/spec.md` §6）。
 ///
 /// 三档递减，按「先丢教学性的」排：Emacs 别名 → `j`/`k` 那一句 → 只留出口。空串表示这一段
-/// 连一句提示都放不下，页脚于是只剩进度与按钮。举手回执**不在**这条阶梯里：它在任何宽度下
-/// 都保（见 [`questionnaire_decline_raised`] 与 [`questionnaire_exit_raised`]）。
+/// 连一句提示都放不下，页脚于是只剩进度与按钮。举手回执**不在**这条阶梯里 —— 它不参与降级，
+/// 页脚一放得下就先画它（见 [`questionnaire_decline_raised`] 与 [`questionnaire_exit_raised`]）。
 pub fn questionnaire_hint(room: usize) -> &'static str {
     if room >= QUESTIONNAIRE_HINT_WIDE {
         "j/k 移动 · 空格选中 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
@@ -874,10 +874,11 @@ pub fn questionnaire_exit_raised() -> &'static str {
     "已取消 · 再按一次 ctrl-c 退出"
 }
 
-/// 键位提示那三档的边界，量的是**留给它的列数**（不是终端宽度）：完整那句约 45 列、
-/// 去掉 Emacs 别名那句约 26 列、只剩出口那句 9 列。
-const QUESTIONNAIRE_HINT_WIDE: usize = 48;
-const QUESTIONNAIRE_HINT_MEDIUM: usize = 28;
+/// 键位提示那三档的边界，量的是**留给它的列数**（不是终端宽度）：完整那句 57 列、
+/// 去掉 Emacs 别名那句 34 列、只剩出口那句 12 列 —— 阈值就是它们各自的实测宽度，否则会出现
+/// 「判成宽档、句子却放不下」而被裁掉一截。
+const QUESTIONNAIRE_HINT_WIDE: usize = 57;
+const QUESTIONNAIRE_HINT_MEDIUM: usize = 34;
 const QUESTIONNAIRE_HINT_NARROW: usize = 12;
 
 /// 多选题在它的文本旁边带的那条标记，好让用户知道可以选中多于一个选项。
