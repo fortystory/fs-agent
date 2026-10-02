@@ -50,6 +50,8 @@
 | [`loop-and-goals/`](loop-and-goals/seed.md) | seed | `/loop` 持续工作与跨轮目标 / 计划 —— **已移交 [`goal-loop`](goal-loop/seed.md)** | — |
 | [`image-input/`](image-input/seed.md) | seed | 把图片交给模型：粘贴 / 路径 / 拖拽进来的图进请求 —— 三种读法（输入侧 / 真图显示 / 只当引用），渲染侧的口子由 `markdown-render` 票 06 留着 | — |
 | [`git-worktree/`](git-worktree/seed.md) | seed | git worktree：会话级或执行者级的隔离工作区（Codex 有 `--worktree` 与 `/worktree`）；会牵动会话桶、权限档与沙箱的「工作区」定义 | — |
+| [`lifecycle-diagram/`](lifecycle-diagram/map.md) | map + spec | **fs-agent 运行时生命周期图**（wayfinder 决策图）：把「进程启动 → 一次 turn → 委派 → 退出」画成 mermaid 放进 `docs/lifecycle.md` —— 一张鸟瞰 + 四张分层详图，图配「节点/边 → `文件:行号`」证据表与 `scripts/lifecycle-check.py` 弱校验；**全 mermaid 是本仓库第一种**（代价：终端不可读、`DOCS_MIN_RATIO` 要单独设线），因此留一条 ADR 0011。**图已走完**（5/5）并**已折成 [`spec.md`](lifecycle-diagram/spec.md)**（2026-10-03），五张图定形在 [`prototype/01-drafts.md`](lifecycle-diagram/prototype/01-drafts.md)（v3），**同日已拆出 9 张实现票**（[`issues/06`](lifecycle-diagram/issues/06-doc-skeleton-and-overview-diagram.md)–[`14`](lifecycle-diagram/issues/14-close-out.md)，第一阶段是文档骨架与鸟瞰图）**同日全部落地** | 5 resolved + 8 done + 1 ready-for-walkthrough |
+| [`tui-mermaid/`](tui-mermaid/seed.md) | seed | TUI 里渲染 mermaid：把模型输出的 mermaid 围栏块画成图（今天只是一行灰色语言名 + 不着色的原文）—— **调研结论：能画、且不用浏览器**（`mermaid-text` 0.57.0 等三个纯 Rust 件），真阻力是本仓库自己的三条线（`to_lines` 纯函数、折行归 `pane::wrap_line`、TUI 单任务同步）与 ADR 门槛；与 `lifecycle-diagram` 选 mermaid 只是恰好同名，它属产品功能 | — |
 
 数法：`ls .scratch/*/issues/*.md | wc -l` 与 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`。**`resolved` 是 wayfinder 决策票的收尾状态，`done` 是实现票的** —— 同一个 feature 里两种都可能出现（图走完折成 spec 之后接实现票）。
 
@@ -59,17 +61,18 @@
 （[`usage-stats-format`](usage-stats-format/spec.md) / [`terminal-title`](terminal-title/spec.md) /
 [`exit-gesture`](exit-gesture/spec.md)）折成了 spec；2026-10-02 问卷键位那一轮收尾时同一场
 `/ask-matt` 里又记下两条（[`image-input`](image-input/seed.md) / [`git-worktree`](git-worktree/seed.md)），
-所以**池子里现在剩 9 条** —— 2026-10-02 的 `/wayfinder` 把 `grep-tool`、2026-10-03 的
+所以**池子里现在剩 10 条**（2026-10-03 的 `/wayfinder` 又记下
+[`tui-mermaid`](tui-mermaid/seed.md)）—— 2026-10-02 的 `/wayfinder` 把 `grep-tool`、2026-10-03 的
 `/grill-with-docs` 把 `web-search-tool`、同日的另一轮 `/wayfinder` 把 `mcp-support`（先成决策图、
 再交棒成 [`spec.md`](mcp-support/spec.md)）各自折了出去，累计比最初少三条。池子 = 上表里形态为
 `seed`、且没有「已移交」或「已折成 spec」注记的那些行。这笔账里有一处要说明：
 `ask-user-question` 已落成 `fs-agent-v1` 票 32（`done`），但它带的是「已落成」这个注记、不是
-「已移交 / 已折成 spec」，所以按上面那句的字面标准仍被算了进来 —— **实际还能推进的是 8 条**。
+「已移交 / 已折成 spec」，所以按上面那句的字面标准仍被算了进来 —— **实际还能推进的是 9 条**。
 每条的抬头都自述「这不是
 spec，也不是票」，正文有《现状》一节（写的时候核实过源码）与《待谈的分叉》；想推进任何一条时
 走 `/grill-with-docs` 把它折成 spec，再照常 `/to-tickets` 拆票。
 
-**四张 wayfinder 图的状态（2026-09-26 用 `scripts/wayfinder-check.py` 逐张核过，四张全 PASS）**：票都清了 —— `multi-agent-architecture` 25/25、`tui-layout` 16/16、`tui-ux` 8/8、`tui-history-replay` 9/9，没有 open 的决策票，也没有 unblocked 的 frontier 票。四张图的**交棒产物**都写在表里那一列；哪张图的抬头还写着「下一步是 `/to-spec`」而实际已经折完的，抬头下都补了一条带日期的「交棒已发生」。
+**四张 wayfinder 图的状态（2026-09-26 用 `scripts/wayfinder-check.py` 逐张核过，四张全 PASS）**：票都清了 —— `multi-agent-architecture` 25/25、`tui-layout` 16/16、`tui-ux` 8/8、`tui-history-replay` 9/9，没有 open 的决策票，也没有 unblocked 的 frontier 票。四张图的**交棒产物**都写在表里那一列；哪张图的抬头还写着「下一步是 `/to-spec`」而实际已经折完的，抬头下都补了一条带日期的「交棒已发生」。**2026-10-03 又添两张**：[`mcp-support`](mcp-support/map.md)（9 张决策票全 resolved、已交棒成 [`spec.md`](mcp-support/spec.md)，另有 9 张实现票）与 [`lifecycle-diagram`](lifecycle-diagram/map.md)（同日新建并走完，5/5 resolved、已交棒成 [`spec.md`](lifecycle-diagram/spec.md)，另有 9 张实现票并同日全部落地）。
 
 **两条如实记录**：
 
