@@ -114,6 +114,10 @@ pub enum Key {
     /// （`.scratch/suspend-gesture/spec.md` §2）。它不归任何视图管，所以
     /// [`TuiState::key`] 在一切守卫之前就把它接走。
     CtrlZ,
+    /// `Ctrl-O`：左栏的开关 —— 收起与叫回（`.scratch/sidebar-toggle/spec.md` §3）。它是纯
+    /// 视图手势，所以忙闲都生效，也不清举手；只有两个独占键盘的视图（详情覆盖层、历史重放）
+    /// 拦得住它。
+    CtrlO,
     PageUp,
     PageDown,
 }
@@ -135,6 +139,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'g' => Some(Key::CtrlG),
                 'j' => Some(Key::CtrlJ),
                 'z' => Some(Key::CtrlZ),
+                'o' => Some(Key::CtrlO),
                 _ => None,
             };
         }
@@ -658,6 +663,12 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
+    /// 用户想不想看见左栏（`Ctrl-O` 切换，`.scratch/sidebar-toggle/spec.md` §1）。
+    ///
+    /// 与选中的页签同级：只活在这一次进程里，重开回到显示，不落配置、不跨会话。它与宽度是
+    /// 两层 —— 这一位说偏好，[`layout::sidebar_tier`] 说可行性 —— 两者相乘才是屏幕上真的有
+    /// 的那一栏。
+    sidebar_wanted: bool,
     /// 每个发言者的名字用什么颜色画（票 07）。放在这里而不是每行重算，因为会话中途第一
     /// 次出现的名字得保住已经发给它的那个槽位。
     colors: SpeakerColors,
@@ -1394,6 +1405,7 @@ impl TuiState {
             panel: Panel::new(),
             todo: crate::render::TodoPanel::default(),
             tab: Tab::Usage,
+            sidebar_wanted: true,
             colors,
             reasoning: String::new(),
             thinking_speaker: crate::events::SpeakerId::System,
@@ -2092,7 +2104,8 @@ impl TuiState {
                     Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
                     _ if self.indicator_hit(mouse.column, mouse.row) => self.pane.to_bottom(),
                     _ => {
-                        let width = layout::plan(self.area, 1).detail_width() as usize;
+                        let width =
+                            layout::plan(self.area, 1, self.sidebar_wanted).detail_width() as usize;
                         if let Some(detail) = self.link_hit(&mouse) {
                             self.open_detail(detail, width);
                         }
@@ -2506,6 +2519,13 @@ impl TuiState {
             }
             return;
         }
+        // 左栏开关（`.scratch/sidebar-toggle/spec.md` §3）：排在两个「独占键盘的视图」之后
+        // —— 详情覆盖层与历史重放各自拦得住它 —— 而在清举手之前：它是纯视图手势，不该让
+        // 半分钟前那一下退出举手作废；问卷 / `/` 菜单立着时也照常生效。
+        if key == Key::CtrlO {
+            self.sidebar_wanted = !self.sidebar_wanted;
+            return;
+        }
         // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-C` 与
         // `Ctrl-D` 自己不在这里清 —— 它们正是要摸这把举手的那两个键；问卷立着时的 `Esc`
         // 也不是「别的键」，它摸的是槽位里另一把（`.scratch/questionnaire-keys/spec.md` §5）。
@@ -2859,11 +2879,13 @@ impl TuiState {
             Some(questionnaire) => questionnaire_lines(
                 &questionnaire.questions[questionnaire.index],
                 &questionnaire.drafts[questionnaire.index],
-                layout::content_width(area) as usize,
+                layout::content_width(area, self.sidebar_wanted) as usize,
                 questionnaire.zone == Zone::Options,
             )
             .len() as u16,
-            None => self.editor.height(layout::input_text_width(area)),
+            None => self
+                .editor
+                .height(layout::input_text_width(area, self.sidebar_wanted)),
         }
     }
 }
@@ -3131,7 +3153,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 草稿自己的高度决定输入区占多少位置：它随文字长高、直到排版的上限，然后就地滚动
     // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）。
     let content_rows = state.bottom_rows(area);
-    let panes = layout::plan(area, content_rows);
+    let panes = layout::plan(area, content_rows, state.sidebar_wanted);
     // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
     // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
     if state.questionnaire().is_some() {
@@ -3917,9 +3939,10 @@ fn draw_bottom(
         state.pending = Some(Pending::Questionnaire(questionnaire));
         return None;
     }
-    let (mut rows, cursor) = state
-        .editor
-        .view(layout::input_text_width(frame.area()), panes.input.height);
+    let (mut rows, cursor) = state.editor.view(
+        layout::input_text_width(frame.area(), state.sidebar_wanted),
+        panes.input.height,
+    );
     // 提示符是自己的一个 span（见 `editor::Input::view`），正是它给了提示符一个草稿永远不会
     // 拿到的颜色。只有**就是**提示符的那个 span 上色：它下面那些行的缩进是同样宽的空格，而
     // 一份长到把提示符滚出顶端的草稿，屏幕上根本没有提示符可上色

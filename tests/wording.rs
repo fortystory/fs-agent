@@ -410,6 +410,7 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
         "esc 取消",
         "shift+tab 模式",
         "PgUp/PgDn 滚动",
+        "ctrl-o 左栏",
         wording::EXIT_HINT_IDLE,
     ] {
         assert!(wide.contains(hint), "{wide}");
@@ -461,6 +462,28 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
 }
 
 #[test]
+fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
+    // 它排在最末 —— 位置就是优先级，所以只有最宽的档位看得见它
+    // （`.scratch/sidebar-toggle/spec.md` §4）。
+    let wide = wording::status_line(false, 200, false);
+    assert!(wide.contains("ctrl-o 左栏"), "{wide}");
+    assert!(
+        wide.ends_with(wording::EXIT_HINT_IDLE),
+        "出口仍在最末：{wide}"
+    );
+    assert!(
+        wide.find("ctrl-o 左栏").unwrap() > wide.find("PgUp/PgDn 滚动").unwrap(),
+        "新条目排在所有旧条目之后：{wide}"
+    );
+    // 它是窄档最先丢掉的那一条。
+    let narrow = wording::status_line(false, 100, false);
+    assert!(
+        !narrow.contains("ctrl-o 左栏"),
+        "100 列还看不到它：{narrow}"
+    );
+}
+
+#[test]
 fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
     // 没有一行在被读（一次性的 `discuss`，或者一个进行中的回合），
     // 所以 `enter 发送` 与交互循环的模式手势都不在候选里。
@@ -496,6 +519,10 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
     // 原型用「只有一项的出路」量出来的那些宽度（§10，票 06 §4），
     // 于是优先级顺序一改就会在这里显出来，而不是在终端上。
     // `w=40` 是最小值：状态词、一条提示，加上出路。
+    //
+    // `ctrl-o 左栏` 进来之后下面这三档的读数**一个都没动**：它排在最末，
+    // 所以窄档最先丢的就是它，到 120 列才轮得到它
+    // （`.scratch/sidebar-toggle/spec.md` §4）。
     assert_eq!(
         wording::status_line(false, 40, false),
         "就绪 · enter 发送 · ctrl-c/ctrl-d 退出"
@@ -516,7 +543,7 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
         wording::status_line(true, 60, false),
         "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
-    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出";
+    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
     assert_eq!(wording::status_line(false, 120, false), full);
     // 在最大宽度上行是稳定的：再没什么可买的了。
     assert_eq!(wording::status_line(false, 174, false), full);

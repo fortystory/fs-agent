@@ -371,6 +371,31 @@ fn a_history_that_ends_exactly_on_a_batch_boundary_still_converges() {
 }
 
 #[test]
+fn ctrl_o_is_ignored_while_a_replay_is_in_flight() {
+    // 重放是一次性的界面临时态，键盘归它自己（`replay_key`），所以左栏
+    // 开关在这个窗口里不生效；跑完之后照常算数
+    // （`.scratch/sidebar-toggle/spec.md` §3）。
+    let mut state = state();
+    replay(&mut state, long_history());
+    assert!(state.replay_pending(), "重放开着");
+
+    let before = screen(120, 40, &mut state);
+    assert!(before.join("\n").contains('┆'), "左栏还在");
+    state.key(Key::CtrlO);
+    let after = screen(120, 40, &mut state);
+    assert_eq!(before, after, "重放期间 Ctrl-O 什么都不做");
+
+    run_replay(&mut state);
+    state.key(Key::CtrlO);
+    let closed = screen(120, 40, &mut state);
+    assert!(
+        !closed.join("\n").contains('┆'),
+        "重放结束之后它收得起来：{}",
+        closed.join("\n")
+    );
+}
+
+#[test]
 fn the_progress_line_degrades_at_the_minimum_frame() {
     // 40×10 是最小的、还能画出东西的帧；它的提示行是 38 列，
     // 而计数就是在那里活了下来、短语没有（spec §4）。

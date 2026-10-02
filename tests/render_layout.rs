@@ -338,6 +338,163 @@ fn the_sidebar_has_two_widths_and_a_hidden_third() {
 }
 
 #[test]
+fn ctrl_o_takes_the_sidebar_away_and_brings_it_back() {
+    // `Ctrl-O` 是左栏的开关：收起时那一栏连同分隔线整列还给主列，
+    // 再按一下逐格回到原样（`.scratch/sidebar-toggle/spec.md` §2、§3）。
+    let mut state = state();
+    let open = screen(120, 24, &mut state);
+    assert!(
+        open.join("\n").contains('┆'),
+        "收起之前左栏与分隔线在：{}",
+        open.join("\n")
+    );
+
+    state.key(Key::CtrlO);
+    let closed = screen(120, 24, &mut state);
+    assert!(
+        !closed.join("\n").contains('┆'),
+        "收起之后整帧没有分隔列：{}",
+        closed.join("\n")
+    );
+    assert_ne!(open, closed, "收起改变了这一帧");
+
+    state.key(Key::CtrlO);
+    let reopened = screen(120, 24, &mut state);
+    assert_eq!(open, reopened, "再按一下逐格回到原样");
+}
+
+#[test]
+fn ctrl_o_cannot_bring_the_sidebar_back_below_eighty_columns() {
+    // 意愿与宽度相乘（`.scratch/sidebar-toggle/spec.md` §2）：窄于 80 列时左栏本来就放不下，
+    // 按开关不该改变任何东西 —— 不报错、不弹文案、帧逐格相等。
+    for (width, height) in [(79u16, 24u16), (60, 24), (40, 10)] {
+        let mut state = state();
+        let before = screen(width, height, &mut state);
+        state.key(Key::CtrlO);
+        let after = screen(width, height, &mut state);
+        assert_eq!(
+            before, after,
+            "{width}x{height} 下按 Ctrl-O 不该改变任何东西"
+        );
+    }
+
+    // 80 列是窄档的门槛：这里它收得起来，也叫得回来。
+    let mut state = state();
+    let open = screen(80, 24, &mut state);
+    state.key(Key::CtrlO);
+    let closed = screen(80, 24, &mut state);
+    assert_ne!(open, closed, "80 列下 Ctrl-O 收得起左栏");
+    state.key(Key::CtrlO);
+    assert_eq!(open, screen(80, 24, &mut state), "80 列下也叫得回来");
+}
+
+#[test]
+fn ctrl_o_works_while_a_run_is_in_flight() {
+    // 纯视图手势：跑着的时候恰恰最想多看几行转录（`.scratch/sidebar-toggle/spec.md` §3）。
+    // 与 `Ctrl-D` 相反 —— 那一个是空闲键盘的手势。
+    let mut state = state();
+    state.request(ConsoleRequest::RunState { running: true });
+    let open = screen(120, 24, &mut state);
+    assert!(open.join("\n").contains('┆'), "跑着的时候左栏还在");
+
+    state.key(Key::CtrlO);
+    let closed = screen(120, 24, &mut state);
+    assert_ne!(open, closed, "跑着的时候 Ctrl-O 也算数");
+    assert!(
+        !closed.join("\n").contains('┆'),
+        "跑着的时候也收得起来：{}",
+        closed.join("\n")
+    );
+}
+
+#[test]
+fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
+    // 详情覆盖层是自成一体的「查看态」、独占键盘，所以它拦得住这个键
+    // （`.scratch/sidebar-toggle/spec.md` §3）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-24",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-24", true, Some("body"), None));
+    click_row(&mut state, 120, 40, "调用 bash");
+    let open = screen(120, 40, &mut state);
+    assert!(
+        open.join("\n").contains("── 参数 ──"),
+        "覆盖层立着：{}",
+        open.join("\n")
+    );
+
+    state.key(Key::CtrlO);
+    let after = screen(120, 40, &mut state);
+    assert_eq!(open, after, "覆盖层立着时 Ctrl-O 一个像素都不动");
+    assert!(after.join("\n").contains("── 参数 ──"), "覆盖层也没被关掉");
+}
+
+#[test]
+fn the_hidden_sidebar_has_no_tabs_to_click() {
+    // 命中矩形一律「这一帧真的画了什么就记什么」，所以页签随左栏一起
+    // 消失 —— 没有第二处要同步的状态（`.scratch/sidebar-toggle/spec.md` §2）。
+    let mut state = state();
+    assert!(
+        screen(120, 24, &mut state).join("\n").contains("调用量"),
+        "左栏带着页签"
+    );
+
+    state.key(Key::CtrlO);
+    let closed = screen(120, 24, &mut state);
+    let text = closed.join("\n");
+    assert!(!text.contains("调用量"), "收起后页签不在：{text}");
+
+    // 原先页签所在的那一格现在是转录区：点它什么都不发生。
+    state.mouse(click(2, 6));
+    let after = screen(120, 24, &mut state);
+    assert_eq!(closed, after, "收起后点页签原来的位置没有反应");
+}
+
+#[test]
+fn a_todo_list_landing_while_the_sidebar_is_hidden_does_not_pop_it_back() {
+    // 用户刚说了「我现在不要这栏」，模型的一次工具调用不该覆盖它：标签在后台
+    // 就位，按回来才看得见（`.scratch/sidebar-toggle/spec.md` §5）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.key(Key::CtrlO);
+    assert!(
+        !tab_bar(&mut state, 120, 24).contains(wording::TAB_TODO),
+        "收起时看不见这个页签"
+    );
+
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("写测试", "pending")]),
+    );
+    assert!(
+        !tab_bar(&mut state, 120, 24).contains(wording::TAB_TODO),
+        "列表落地也不该把它弹回来"
+    );
+
+    state.key(Key::CtrlO);
+    assert!(
+        tab_bar(&mut state, 120, 24).contains(wording::TAB_TODO),
+        "叫回来就看得见"
+    );
+}
+
+#[test]
+fn hiding_the_sidebar_widens_what_the_editor_wraps_against() {
+    // 意愿必须走进「喂给编辑器多少列」，否则收起左栏后转录变宽了、
+    // 输入区还按旧宽度折行（`.scratch/sidebar-toggle/spec.md` §2）。
+    let area = ratatui::layout::Rect::new(0, 0, 120, 24);
+    let shown = fs_agent::render::layout::content_width(area, true);
+    let hidden = fs_agent::render::layout::content_width(area, false);
+    assert!(hidden > shown, "收起后主列更宽：{shown} → {hidden}");
+    assert_eq!(hidden, 120, "没有左栏时主列就是整屏");
+}
+
+#[test]
 fn the_main_rules_stop_short_of_the_divide_column() {
     // 竖线要从屏幕顶贯通到底：主列那两条横线从分隔列**右边一格**起画，
     // 把分隔列那一格留给 `┆`（2026-10-01 真机反馈 —— 原先横线把竖线
@@ -462,12 +619,15 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     // 宽度：左栏那几列不是能送出去的提示（`tui-sidebar` spec
     // §2）。所以量出来的空闲阶梯是：40 列 -> 一条提示 + 出口
     // + 状态词，80 -> 两条，100 -> 三条，120 -> 四条（而且没有状态
-    // 词：四条提示加出口再没地方留它），174 -> 五条。
+    // 词：四条提示加出口再没地方留它），174 -> 六条。
+    //
+    // `ctrl-o 左栏` 排在最末，所以它只让 174 那一档多出一个条目：
+    // 前面四档的读数一个都没动（`.scratch/sidebar-toggle/spec.md` §4）。
     assert_eq!(hint_items(40).len(), 3, "40 列：{:?}", hint_items(40));
     assert_eq!(hint_items(80).len(), 3, "80 列：{:?}", hint_items(80));
     assert_eq!(hint_items(100).len(), 5, "100 列：{:?}", hint_items(100));
     assert_eq!(hint_items(120).len(), 5, "120 列：{:?}", hint_items(120));
-    assert_eq!(hint_items(174).len(), 7, "174 列：{:?}", hint_items(174));
+    assert_eq!(hint_items(174).len(), 8, "174 列：{:?}", hint_items(174));
 
     // 在地板上，出口之前只挤得下一条提示，状态词却还在 ——
     // 40 列终端让出的是再上一档的换行提示。
@@ -520,6 +680,10 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     assert!(
         roomy.contains(&"PgUp/PgDn 滚动".to_owned()),
         "后面还跟着整份提示表：{roomy:?}"
+    );
+    assert!(
+        roomy.contains(&"ctrl-o 左栏".to_owned()),
+        "左栏开关是这一档多出来的那一条：{roomy:?}"
     );
     assert!(
         !screen(174, 24, &mut state())
