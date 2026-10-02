@@ -267,7 +267,9 @@ python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 
 ## 这一版不做
 
-AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、MCP client、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、把工具打包进 skill、网络隔离。理由逐条写在 [v1 spec 的 `Out of Scope`](.scratch/fs-agent-v1/spec.md) 与各 feature 自己的 spec 里。
+AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、把工具打包进 skill、网络隔离。理由逐条写在 [v1 spec 的 `Out of Scope`](.scratch/fs-agent-v1/spec.md) 与各 feature 自己的 spec 里。
+
+**`MCP client` 也已经从这里拿出去**：2026-10-03 起它另起了一个 effort —— [`mcp-support`](.scratch/mcp-support/map.md)（wayfinder 决策图，七张决策票），范围是 MCP **现行规范的全集**（tool / resource / prompt / elicitation + MRTR；已 deprecated 的 sampling / roots / logging 不在内）。v1 spec 的三处加了带日期的补记（两处在 `Out of Scope`、一处在 §14 自定义工具那节），原文不改写 —— 那是当初排除它的理由。
 
 **`compaction` 已经从这里拿出去**：压缩在 [`goal-loop`](.scratch/goal-loop/spec.md) 里做完了——过八成就把历史折成一段摘要、随翻页注入新会话（[`docs/goals.md`](docs/goals.md) 的「过半提醒与翻页」）。仍然不做的是压缩之外的历史管理（fork / rewind、历史编辑）。
 

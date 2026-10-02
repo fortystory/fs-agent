@@ -447,6 +447,8 @@ Status: ready-for-agent
 - **命名空间 = `custom__<ns>__<tool>`**，内建名永不含 `__` ⇒「有 `__` ⟺ 自定义工具」是**词法可判定的谓词**。
 - **可见性 = 启动即全局可见、组装期固定**（否决「挂在 skill 上」：`tools` 数组属于**前缀**，中途增删会废掉前缀缓存）。
 - **必须有超时与进程树终止**。明确不做：MCP client 本身。
+  **2026-10-03 补记**：这句里的「MCP client」已另起 effort —— [`mcp-support`](../mcp-support/map.md)
+  （wayfinder 决策图，七张决策票）。原文不改写：它是当时的理由。
 
 ### 15. 讨论协议与轮次
 
@@ -634,6 +636,8 @@ Status: ready-for-agent
 ## Out of Scope
 
 - **证据型砍掉项**（判据变化不翻它们）：AST / tree-sitter **编辑**、unified diff 编辑格式、原生多 provider 协议、**MCP client**、SWE-bench 跑分与多模型 dashboard。
+  **2026-10-03 补记**：这一串里的 **MCP client** 已另起 effort（[`mcp-support`](../mcp-support/map.md)）——
+  它不再属于这份清单；其余各项照旧，「判据变化不翻它们」这句对剩下的项仍然有效。
 - **向量检索 / RAG**：会引入第三个 API 面（embeddings）与索引存储，反向压到「只做一个 OpenAI-compatible client」；grep + 符号检索够用。
 - **形态扩展**：IDE 集成、Slack / Web / 移动端接入、会话分享。
 - **进程级沙箱**：v1 不做（升级路径写明是「只做 Linux 的 bubblewrap」，且**不预做抽象**）。
@@ -665,6 +669,9 @@ Status: ready-for-agent
 - **两条「看起来像优化、实际会毁掉前提」的操作，明令禁止**：中途切 Kimi 的 `reasoning_effort`（废掉前缀缓存）；带 tools 时丢弃 DeepSeek 自己的 `reasoning_content`（直接 400）。
 - **给 `/to-tickets` 的切片建议**：greenfield ⇒ **没有 prefactoring**。第一个 tracer bullet 应当是**垂直**的：crate 骨架 + 事件流 + 假 provider + 一个 Turn + headless 的 stdout 只放最终产物——它一次性把**唯一那条 e2e 接缝**建起来，之后的票都往这条接缝上加场景，而不是各自新开 mock 接缝。
 - **实现者请勿「顺手改进」**：向量检索、MCP、裁判、进程沙箱升级都被逐条评估过并**有理由地**排除（见 `Out of Scope`）。要动它们，先改这张 spec，而不是在实现里悄悄加一条路径。
+  **2026-10-03 补记**：其中的 **MCP** 已经走了正门 —— 另起了 [`mcp-support`](../mcp-support/map.md)
+  （wayfinder 决策图），并在上面两处加了带日期的补记；这条禁令对**剩下的**几项（向量检索、
+  裁判、进程沙箱升级）仍然成立。
 
 
 
