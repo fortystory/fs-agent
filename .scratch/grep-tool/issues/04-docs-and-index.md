@@ -1,7 +1,7 @@
 # 04 — 逐面文档与索引
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01, 02, 03
 
 > 规格：[`../spec.md`](../spec.md) §7。这一票不写代码，只把已经落地的工具写进文档索引与其
