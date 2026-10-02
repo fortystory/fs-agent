@@ -65,6 +65,10 @@ pulldown-cmark = { version = "0.13", default-features = false }
 ignore = "0.4"
 grep-searcher = "0.1"
 grep-regex = "0.1"
+# `grep` 的 `glob` 参数只用它做「搜哪些文件」的匹配（`.scratch/grep-tool/spec.md` §3）。
+# 不用 `ignore` 自带的 `OverrideBuilder`：overrides 的优先级高于 `.gitignore`，于是
+# `glob` 会变成一条绕过忽略规则的逃生口 —— 而那个参数只该缩小范围，不该放宽规则。
+globset = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

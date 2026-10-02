@@ -356,8 +356,8 @@ fn the_declaration_steers_the_model_away_from_assembling_shell_searches() {
         "只有 `pattern` 必填"
     );
     assert!(
-        spec.parameters["properties"].get("glob").is_none(),
-        "这一票的参数面只有 `pattern`"
+        spec.parameters["properties"].get("glob").is_some(),
+        "`glob` 是可选的第二个参数"
     );
 }
 
@@ -472,5 +472,103 @@ async fn a_search_too_large_for_the_result_budget_spills_to_a_file() {
         .outputs_dir()
         .join("call-1.txt");
     assert!(spilled.exists(), "全文落在 {}", spilled.display());
+    fixture.shutdown().await;
+}
+
+// --- `glob` 过滤（票 02）---------------------------------------------------
+
+#[tokio::test]
+async fn a_glob_limits_the_search_to_the_files_it_matches() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "glob": "*.rs" }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "let needle = 1;\n");
+    fixture.write("src/thing.txt", "let needle = 1;\n");
+    fixture.run_turn("look").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(output.contains("src/thing.rs:1:"), "{output}");
+    assert!(
+        !output.contains("thing.txt"),
+        "`glob` 只选文件，不改 pattern：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn without_a_glob_every_file_is_searched_again() {
+    // 回归锚：不带 `glob` 时默认行为一个字没变。
+    let mut fixture = fixture(
+        vec![
+            grep_reply("call-1", serde_json::json!({ "pattern": "needle" })),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "let needle = 1;\n");
+    fixture.write("src/thing.txt", "let needle = 1;\n");
+    fixture.run_turn("look").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(output.contains("src/thing.rs:1:"), "{output}");
+    assert!(output.contains("src/thing.txt:1:"), "{output}");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_glob_does_not_reopen_what_the_ignore_rules_close() {
+    // `glob` 不是「无视 `.gitignore`」的逃生口：点名一个被忽略的文件也搜不到它。
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "glob": "ignored.txt" }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write(".gitignore", "ignored.txt\n");
+    fixture.write("ignored.txt", "needle\n");
+    fixture.run_turn("look").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(!output.contains("ignored.txt:1:"), "{output}");
+    assert!(output.contains("没有匹配 glob"), "{output}");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_malformed_glob_is_a_tool_error_rather_than_a_panic() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "glob": "a[" }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("plain.txt", "needle\n");
+    fixture.run_turn("look").await;
+
+    let error = completed_output(&fixture.events(), "call-1").unwrap_err();
+    assert!(error.contains("不是合法的 glob"), "{error}");
     fixture.shutdown().await;
 }

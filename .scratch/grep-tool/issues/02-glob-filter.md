@@ -1,7 +1,7 @@
 # 02 — `glob` 过滤
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 规格：[`../spec.md`](../spec.md) §3（参数面）、§2（范围）。票 01 已经让 `grep(pattern)`

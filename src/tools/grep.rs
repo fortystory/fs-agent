@@ -13,11 +13,15 @@
 //!
 //! 命中的文件**不算「已读」**：`read_paths()` 是调用前的纯函数，声明不了运行时才知道的命中
 //! 文件，而这条工具不值得动 `Tool` 接口（spec §3）。
+//!
+//! 可选的 `glob` 只影响「搜哪些文件」，由 `globset` 在遍历之后过滤 —— 它缩小的范围，不放宽的是
+//! 忽略规则（spec §3、票 02）。
 
 use std::io;
 use std::path::Path;
 
 use async_trait::async_trait;
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::WalkBuilder;
@@ -50,6 +54,11 @@ impl Tool for GrepTool {
                         "type": "string",
                         "description": "要搜的正则（rg 语法）。大小写这类需求用内联语法解决，\
                                         例如 `(?i)`"
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "可选，只搜匹配这个 glob 的文件，例如 `*.rs`。它只缩小\
+                                        搜的范围，不会让被 `.gitignore` 忽略的文件重新被搜到"
                     }
                 },
                 "required": ["pattern"]
@@ -71,15 +80,52 @@ impl Tool for GrepTool {
         let matcher = RegexMatcher::new_line_matcher(pattern).map_err(|error| {
             ToolError::message(format!("{GREP_TOOL}：`pattern` 不是合法的正则：{error}"))
         })?;
+        let glob_text = args
+            .get("glob")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|glob| !glob.is_empty());
+        let glob = glob_text.map(compile_glob).transpose()?;
 
-        let hits = search(ctx.cwd, &matcher)?;
-        if hits.is_empty() {
+        let hits = search(ctx.cwd, &matcher, glob.as_ref())?;
+        if hits.text.is_empty() {
+            // 「glob 什么都没选上」与「选上了但这些文件里没有匹配」是两件事，
+            // 而模型看到的必须是能据以行动的那一句。
+            if let (Some(glob), 0) = (glob_text, hits.scanned) {
+                return Ok(ToolOutput::new(format!(
+                    "工作区里没有匹配 glob `{glob}` 的文件"
+                )));
+            }
             return Ok(ToolOutput::new(format!(
                 "在工作区里没有匹配 `{pattern}` 的行"
             )));
         }
-        Ok(ToolOutput::new(hits))
+        Ok(ToolOutput::new(hits.text))
     }
+}
+
+/// 把模型给的 `glob` 编译成一个只用于「搜哪些文件」的集合。
+///
+/// 用 `globset` 而不是 `ignore` 的 `OverrideBuilder`：overrides 的优先级高于
+/// `.gitignore`，于是 `glob` 会变成一条绕过忽略规则的逃生口（`glob: "ignored.txt"` 能让本该
+/// 被忽略的文件重新被搜到）。两条路 spec §3 都允许，这里取不动忽略规则的那条。
+fn compile_glob(glob: &str) -> Result<GlobSet, ToolError> {
+    let glob = Glob::new(glob).map_err(|error| {
+        ToolError::message(format!("{GREP_TOOL}：`glob` 不是合法的 glob：{error}"))
+    })?;
+    let mut builder = GlobSetBuilder::new();
+    builder.add(glob);
+    builder
+        .build()
+        .map_err(|error| ToolError::message(format!("{GREP_TOOL}：`glob` 无法编译：{error}")))
+}
+
+/// 一次遍历的产物：要交给模型的文本，以及经 `glob` 过滤后**实际搜过**的文件数。
+///
+/// 那个计数只为一件事存在：把「`glob` 什么都没选上」与「选上了但这些文件里没有匹配」分开。
+struct Search {
+    text: String,
+    scanned: usize,
 }
 
 /// 走一遍会话 cwd，把命中的行写成 `相对路径:行号:文本`。
@@ -87,8 +133,16 @@ impl Tool for GrepTool {
 /// 忽略规则就是 `ignore` 的默认：遵守 `.gitignore`（含 `.ignore` 与 git 的全局忽略）、跳过
 /// 隐藏文件与隐藏目录 —— 与 `rg` 的默认一致，所以换工具不改变搜索结果（spec §2）。条目按路径
 /// 排序，于是同一个工作区上的输出稳定。
-fn search(root: &Path, matcher: &RegexMatcher) -> Result<String, ToolError> {
+///
+/// `glob` 在遍历之后过滤：它只决定「搜哪些文件」，绝不参与 pattern 的匹配，也不放宽忽略规则
+/// （spec §3）。
+fn search(
+    root: &Path,
+    matcher: &RegexMatcher,
+    glob: Option<&GlobSet>,
+) -> Result<Search, ToolError> {
     let mut text = String::new();
+    let mut scanned = 0usize;
     let mut searcher = SearcherBuilder::new().line_number(true).build();
 
     let mut builder = WalkBuilder::new(root);
@@ -103,6 +157,10 @@ fn search(root: &Path, matcher: &RegexMatcher) -> Result<String, ToolError> {
         }
         let path = entry.path();
         let relative = path.strip_prefix(root).unwrap_or(path);
+        if glob.is_some_and(|glob| !glob.is_match(relative)) {
+            continue;
+        }
+        scanned += 1;
         let mut sink = Collector {
             path: relative,
             text: &mut text,
@@ -110,7 +168,7 @@ fn search(root: &Path, matcher: &RegexMatcher) -> Result<String, ToolError> {
         // 单个文件读不了（竞态、权限）不该让整次搜索失败 —— 与遍历错误同一档处理。
         let _ = searcher.search_path(matcher, path, &mut sink);
     }
-    Ok(text)
+    Ok(Search { text, scanned })
 }
 
 /// 把命中收进一个字符串的接收端。

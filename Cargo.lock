@@ -575,6 +575,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "futures",
+ "globset",
  "grep-regex",
  "grep-searcher",
  "ignore",
