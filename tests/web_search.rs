@@ -556,3 +556,28 @@ fn the_web_guidance_rides_in_the_identities_that_have_tools() {
         "合成器不参与讨论、没有工具，指引不该出现在它的身份里"
     );
 }
+
+#[tokio::test]
+async fn a_shortened_source_list_says_how_many_are_shown() {
+    // 两个查询各回一条，而合并的上限是一：第二条装不下，于是那句提示出场。
+    let provider = FakeSearch::new(vec![
+        Ok(vec![source("https://one", "One")]),
+        Ok(vec![source("https://two", "Two")]),
+    ]);
+    let mut fixture = fixture(
+        vec![
+            web_reply("call-1", serde_json::json!({ "queries": ["x", "y"] })),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+        service(Some(Arc::new(provider)), 1),
+    )
+    .await;
+    fixture.run_turn("search").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(output.contains("只列了前 1 条"), "{output}");
+    assert!(output.contains("缩小查询"), "{output}");
+    fixture.shutdown().await;
+}

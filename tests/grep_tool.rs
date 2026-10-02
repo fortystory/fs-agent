@@ -472,6 +472,12 @@ async fn a_search_too_large_for_the_result_budget_spills_to_a_file() {
         .outputs_dir()
         .join("call-1.txt");
     assert!(spilled.exists(), "全文落在 {}", spilled.display());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&spilled).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "溢出文件是 owner-only");
+    }
     fixture.shutdown().await;
 }
 
