@@ -574,6 +574,18 @@ impl Render for Tui {
     }
 }
 
+/// 举手槽位里举着的是哪一把（[`TuiState::exit_deadline`]）。
+///
+/// 两把手势的后果完全不同，屏幕上却共用那一行提示的位置，所以槽位只有一个、由这个标签说
+/// 它是哪一把：举新的就等于把旧的那把作废（`.scratch/questionnaire-keys/spec.md` §5）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gesture {
+    /// 退出手势：窗口内第二下退出（`.scratch/exit-gesture/spec.md` §1）。
+    Exit,
+    /// 问卷里的「退出这次询问」：窗口内第二下 drop 掉 sender，模型继续跑。
+    DeclineQuestion,
+}
+
 /// 显示就绪的状态，与终端拆开，好让它不用终端也能测。
 pub struct TuiState {
     /// 左栏与状态行显示什么，组装时注入（spec §8）。
@@ -589,10 +601,15 @@ pub struct TuiState {
     /// 上一次写进终端的那条标题，用来在绘制路径上比对 —— 有它就不必枚举状态来源
     /// （spec §5）。
     last_title: Option<String>,
-    /// 退出手势的那把举手：有值 = 正在举手，值是它的截止时刻
+    /// 举手槽位：有值 = 正在举手，值是它的截止时刻
     /// （`.scratch/exit-gesture/spec.md` §1）。纯渲染器状态，不进事件流；`should_quit()`
     /// 只反映 [`TuiState::quit`]。
+    ///
+    /// 槽位只有一个，所以两把手势（退出、退出这次询问）**互斥**是结构性的
+    /// （`.scratch/questionnaire-keys/spec.md` §5）。
     exit_deadline: Option<std::time::Instant>,
+    /// 槽位里举着的是哪一把。
+    exit_gesture: Gesture,
     /// 这一把举手是在**忙碌时**举起的吗（spec §1、§3）。
     ///
     /// 第一下 `Ctrl-C` 会取消当前回合，而那次取消可能在第二下之前就落地 —— 那时
@@ -1364,6 +1381,7 @@ impl TuiState {
             goal: None,
             last_title: None,
             exit_deadline: None,
+            exit_gesture: Gesture::Exit,
             exit_gesture_busy: false,
             suspend: false,
             mode,
@@ -1422,19 +1440,34 @@ impl TuiState {
         )
     }
 
-    /// 举手：记下「这一刻起，窗口之内第二下算数」（`.scratch/exit-gesture/spec.md` §1）。
+    /// 举手：记下「这一刻起，窗口之内第二下算数」，并记下这是**哪一把**
+    /// （`.scratch/exit-gesture/spec.md` §1、`.scratch/questionnaire-keys/spec.md` §5）。
     ///
-    /// 时间从参数进来，测试不必睡真实时间；`key()` 自己传 [`std::time::Instant::now`]。
-    /// 这一下算作**空闲**举起的举手；忙碌里举的那一把走 [`TuiState::exit_key`]。
-    pub fn raise_exit_gesture_at(&mut self, now: std::time::Instant) {
-        self.exit_deadline = Some(now + EXIT_GESTURE_WINDOW);
+    /// 槽位只有一个，所以举一把就等于把另一把作废 —— 两把手势的互斥是结构性的，不靠额外
+    /// 规则维持。时间从参数进来，测试不必睡真实时间；`key()` 自己传 [`std::time::Instant::now`]。
+    pub fn raise_gesture_at(&mut self, now: std::time::Instant, gesture: Gesture) {
+        self.exit_deadline = Some(now + GESTURE_WINDOW);
+        self.exit_gesture = gesture;
+        // 出身由调用方在举起之后自己盖（退出手势按 `busy()` 分派退出码）；这里先归零，
+        // 「退出这次询问」那一把永远用不到它。
         self.exit_gesture_busy = false;
         self.dirty = true;
     }
 
+    /// 举手：空闲里举起的**退出手**。
+    pub fn raise_exit_gesture_at(&mut self, now: std::time::Instant) {
+        self.raise_gesture_at(now, Gesture::Exit);
+    }
+
+    /// 槽位里现在立着的是哪一把，没有就 `None`（超时也算没有）。
+    pub fn raised_gesture(&self, now: std::time::Instant) -> Option<Gesture> {
+        (self.exit_deadline.is_some() && !exit_gesture_due(self.exit_deadline, now))
+            .then_some(self.exit_gesture)
+    }
+
     /// 这把举手还立着吗：有 deadline，而且还没到点。
     pub fn exit_gesture_raised(&self, now: std::time::Instant) -> bool {
-        self.exit_deadline.is_some() && !exit_gesture_due(self.exit_deadline, now)
+        self.raised_gesture(now).is_some()
     }
 
     /// 这把举手的截止时刻，有的话。
@@ -1463,7 +1496,9 @@ impl TuiState {
     /// 「被忽略」，不是「别的键」。
     fn exit_key(&mut self, key: Key) {
         let now = std::time::Instant::now();
-        let raised = self.exit_gesture_raised(now);
+        // 只认**退出**那一把：举着「退出这次询问」时按 `Ctrl-C` 不作数，走下面第一下的路
+        // —— 两把手势互斥（`.scratch/questionnaire-keys/spec.md` §5）。
+        let raised = self.raised_gesture(now) == Some(Gesture::Exit);
         // `Ctrl-D` 在忙碌、**或任何问题立着**时什么都不做（票 01）：它是「被忽略」，不是
         // 「别的键」，所以它也不清掉已经举起的那把手。
         if key == Key::CtrlD && (self.busy() || self.pending.is_some()) {
@@ -1485,7 +1520,7 @@ impl TuiState {
         if self.busy() {
             self.events.push(FrontEndEvent::Cancel);
         }
-        self.raise_exit_gesture_at(now);
+        self.raise_gesture_at(now, Gesture::Exit);
         self.exit_gesture_busy = self.busy();
     }
 
@@ -2409,6 +2444,27 @@ impl TuiState {
     ///
     /// 只要问卷还有问题剩下，接管就立着；提交它的那一个按键把它丢掉，那也正是把底部输入区
     /// 交还给常驻编辑器的那一下。
+    /// 问卷立着时那一下 `Esc`（`.scratch/questionnaire-keys/spec.md` §5）。
+    ///
+    /// 在输入区里它先回选项区（文本不清），**并且**举手 —— 于是任何区域连按两下 `Esc` 都是
+    /// 「退出这次询问」。举手期间的第二下把它兑现：drop 掉 sender，工具读到「没作答」，
+    /// **模型继续跑**，这一回合不中止。
+    fn questionnaire_escape(&mut self) {
+        let now = std::time::Instant::now();
+        if self.raised_gesture(now) == Some(Gesture::DeclineQuestion) {
+            if let Some(pending) = self.pending.take() {
+                self.decline(pending);
+            }
+            self.expire_exit_gesture();
+            return;
+        }
+        // 输入区那一下同时是「回选项区」：举手不改变那件事，文本也不清。
+        if let Some(Pending::Questionnaire(questionnaire)) = self.pending.as_mut() {
+            questionnaire.zone = Zone::Options;
+        }
+        self.raise_gesture_at(now, Gesture::DeclineQuestion);
+    }
+
     fn questionnaire_key(&mut self, key: Key) {
         let Some(Pending::Questionnaire(mut questionnaire)) = self.pending.take() else {
             return;
@@ -2454,9 +2510,12 @@ impl TuiState {
             return;
         }
         // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-C` 与
-        // `Ctrl-D` 自己不在这里清 —— 它们正是要摸这把举手的那两个键。
-        if !matches!(key, Key::CtrlC | Key::CtrlD) {
-            self.expire_exit_gesture();
+        // `Ctrl-D` 自己不在这里清 —— 它们正是要摸这把举手的那两个键；问卷立着时的 `Esc`
+        // 也不是「别的键」，它摸的是槽位里另一把（`.scratch/questionnaire-keys/spec.md` §5）。
+        match key {
+            Key::CtrlC | Key::CtrlD => {}
+            Key::Esc if matches!(self.pending, Some(Pending::Questionnaire(_))) => {}
+            _ => self.expire_exit_gesture(),
         }
         // 两键共用一把举手，按当前视图的意思是空闲还是忙碌分派；详情覆盖层与重放各有自己
         // 的分支，已经在上面提前返回（spec §1、§7）。
@@ -2465,6 +2524,13 @@ impl TuiState {
             return;
         }
         if key == Key::Esc {
+            // 问卷立着时 `Esc` 只管「退出这次询问」，不再按 busy / idle / 禁言分叉：那个手势
+            // 根本不掐回合，所以禁言那一支要保护的东西在这里不存在
+            // （`.scratch/questionnaire-keys/spec.md` §5）。
+            if matches!(self.pending, Some(Pending::Questionnaire(_))) {
+                self.questionnaire_escape();
+                return;
+            }
             if self.busy() {
                 if !self.muted {
                     self.events.push(FrontEndEvent::Cancel);
@@ -2474,8 +2540,7 @@ impl TuiState {
                     match self.pending {
                         // 已经问出来了：关掉它就是那个安全的答案。
                         Some(Pending::GoalStop) => self.pending = None,
-                        // 别的框（模型那份问卷）属于这次运行，所以 `Esc` 对它是取消手势，
-                        // 与别处一样。
+                        // 别的框属于这次运行，所以 `Esc` 对它是取消手势，与别处一样。
                         Some(_) => self.events.push(FrontEndEvent::Cancel),
                         // 没有框：先问一句。
                         None => self.pending = Some(Pending::GoalStop),
@@ -2768,7 +2833,9 @@ impl TuiState {
     }
 
     fn status_line(&self, width: u16) -> String {
-        let raised = self.exit_gesture_raised(std::time::Instant::now());
+        // 只有**退出**那一把会换提示行的出口段：举着「退出这次询问」时那句
+        // 「再按一次 ctrl-c/ctrl-d 退出」是错的（问卷的举手由它自己的页脚说，见票 04）。
+        let raised = self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit);
         // 重放自己会说话：它临时用自己的进度替换掉提示集合。举手时那句催促压在进度行前面
         // ——「再按一次」比一个 `n/m` 更急，而进度行只是暂时让位（spec §2）。
         if let Some(replay) = &self.replay {
@@ -3523,7 +3590,7 @@ fn exit_gesture_due(deadline: Option<std::time::Instant>, now: std::time::Instan
 ///
 /// 它同时是提示的寿命：超时作废、提示行恢复。写死、不做配置项 —— 这个手势只有「来得及
 /// 收回那一下」一个用途，给它一个旋钮只会多一件要解释的事。
-const EXIT_GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+const GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// 标记的连字符：它的单元格从哪一列开始，以及那个单元格多宽。
 ///
@@ -4903,7 +4970,7 @@ mod tests {
     /// （`.scratch/exit-gesture/spec.md` §1、§6）。
     #[test]
     fn the_exit_gesture_window_is_half_a_second() {
-        assert_eq!(EXIT_GESTURE_WINDOW, std::time::Duration::from_millis(500));
+        assert_eq!(GESTURE_WINDOW, std::time::Duration::from_millis(500));
     }
 
     /// 「该不该到点」是一条纯判定，所以它有一条单元断言；主循环那根接线本身要真 pty

@@ -573,22 +573,74 @@ fn an_empty_questionnaire_is_refused_rather_than_panicking() {
 }
 
 #[test]
-fn escape_still_cancels_the_run_and_never_answers_the_questionnaire() {
-    // `Esc` 保持它的含义（spec §6、§19）：它不放弃这道题，
-    // 它取消这次运行，而那次被取消的调用在别处拿到它那唯一一条结果。
+fn escape_asks_twice_before_it_drops_the_questionnaire() {
+    // 问卷里 `Esc` 只管「退出这次询问」（spec §5）：第一下举手，第二下 drop 掉 sender。
+    // 它**不**取消这次运行 —— 模型拿到「没作答」，继续跑。
     let mut state = state();
     state.request(ConsoleRequest::RunState { running: true });
     let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a"], false)]);
 
     state.key(Key::Esc);
-    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
-    assert!(answer(&mut rx).is_none(), "Esc 取消这次运行，它不作答");
+    assert!(state.take_events().is_empty(), "第一下不取消这次运行");
+    assert!(answer(&mut rx).is_none(), "第一下也不作答");
 
-    // 运行的结束把问卷撤回，读作「没有答案」。
-    state.request(ConsoleRequest::RunState { running: false });
-    let rows = screen(120, 24, &mut state);
-    assert!(!rows.join("\n").contains("Pick?"), "接管跟着这次运行一起走");
-    assert!(rx.try_recv().is_err(), "发送端被丢掉了，而不是作了答");
+    state.key(Key::Esc);
+    assert!(state.take_events().is_empty(), "第二下也不是取消运行");
+    assert!(rx.try_recv().is_err(), "发送端被丢掉了：工具读作「没作答」");
+    assert!(!state.should_quit(), "它也不是退出这次运行");
+}
+
+#[test]
+fn escape_from_the_text_input_goes_back_to_the_options() {
+    // 输入区那一下 `Esc` 同时做两件事：回选项区（文本不清）**并且**举手，所以任何区域
+    // 连按两下 `Esc` 都是退出询问（spec §5）。
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![question("one", "Pick?", &["a", "b"], false)],
+    );
+    state.key(Key::Char('j'));
+    state.key(Key::Char('j')); // → 输入区
+    state.key(Key::Char('x'));
+
+    state.key(Key::Esc); // 回选项区 + 举手
+    state.key(Key::Char('j')); // 在选项区里这是移动，不是文本
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("自定义：x"), "已经输入的文本不清：\n{text}");
+    assert!(
+        !text.contains("自定义：xj"),
+        "`Esc` 之后键盘在选项区：\n{text}"
+    );
+
+    state.key(Key::Esc); // 第二下：退出这次询问
+    assert!(rx.try_recv().is_err(), "第二下 drop 掉发送端");
+}
+
+#[test]
+fn the_questionnaire_gesture_expires_with_the_window() {
+    let mut state = state();
+    let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a"], false)]);
+    state.key(Key::Esc);
+    state.expire_exit_gesture(); // 超时作废：不等真实时间
+    state.key(Key::Esc);
+    assert!(answer(&mut rx).is_none(), "作废之后那一下只是新的一次起手");
+    state.key(Key::Esc);
+    assert!(rx.try_recv().is_err(), "再过一下才真的退出询问");
+}
+
+#[test]
+fn the_two_gestures_are_exclusive() {
+    // 举着「退出询问」时按 `Ctrl-C` 不作数：它走 `Ctrl-C` 自己的第一下 —— 取消这次运行、
+    // 并举起退出手（spec §5）。
+    let mut state = state();
+    state.request(ConsoleRequest::RunState { running: true });
+    let mut rx = ask(&mut state, vec![question("one", "Pick?", &["a"], false)]);
+
+    state.key(Key::Esc); // 举「退出询问」
+    state.key(Key::CtrlC); // 不作数 → 取消 + 举退出手
+    assert_eq!(state.take_events(), vec![FrontEndEvent::Cancel]);
+    assert!(answer(&mut rx).is_none(), "那一手没被兑现：问卷还在");
+    assert!(!state.should_quit());
 }
 
 #[test]

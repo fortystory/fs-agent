@@ -1,7 +1,7 @@
 # 03 — `Esc` 只管退出这次询问，取消运行归 `Ctrl-C`
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 02
 
 > 来源：[`../spec.md`](../spec.md) §5。它把「这道题不答了」这条今天**只在不忙时才存在**的语义
@@ -60,3 +60,20 @@ Blocked by: 02
 - 不动 [`exit-gesture/spec.md`](../../exit-gesture/spec.md) 本身（两把手势的关系记在 spec 与 ADR 里）。
 - **页脚的回执显示留给票 04**：本票只保证状态与分派正确。
 - 不做「给模型的合成跳过」（spec §5 已否决）。
+
+## Comments
+
+- **落地（2026-10-02）**：新增 `Gesture { Exit, DeclineQuestion }` 与 `TuiState::exit_gesture`
+  标签，举手仍是**同一个槽位**（`exit_deadline`），所以两把的互斥是结构性的；`raise_exit_gesture_at`
+  保留为「空闲里举退出手」的入口（重放与 `tests/render_tui.rs` 继续用它），新增
+  `raise_gesture_at(now, gesture)` 与 `raised_gesture(now)`。常量 `EXIT_GESTURE_WINDOW` 改名
+  `GESTURE_WINDOW`（两把手共用，值仍 500ms）。
+- **`Esc` 分派**：问卷立着时先走新的 `questionnaire_escape()` —— 输入区那一下回选项区（文本不清）
+  **并且**举手，举手期间第二下 `decline()`（drop sender）再作废槽位。它不再按 busy / idle /
+  禁言分叉。`key()` 开头那条「别的键先清旧举手」把「问卷立着时的 `Esc`」排除在外，否则第二下
+  会被自己清掉。
+- **跨键不作数**：`exit_key` 只认 `Gesture::Exit`（举着「退出询问」时按 `Ctrl-C` 走第一下）；
+  `status_line` 同理，只认退出手 —— 问卷的举手由它自己的页脚说（票 04）。
+- **先红后绿**：新增四条（双击退出询问且不取消运行、输入区那一下回选项区并举手、超时作废、
+  两把互斥），并删掉旧的那条「`Esc` 取消这次运行」——那是这次被推翻的语义。
+- **验收**：`cargo test` 全绿（问卷 TUI 那个文件 27 条）、`cargo clippy --all-targets` 干净。
