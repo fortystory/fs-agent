@@ -4380,6 +4380,55 @@ fn every_row_of_a_wrapped_option_answers_that_option() {
 }
 
 #[test]
+fn only_the_zone_that_holds_the_keyboard_is_lit() {
+    // 同一时刻只有一个视觉焦点：选项区拿着键盘时高亮反显；输入区拿着键盘时它降暗，
+    // 而自由文本那一行提亮（`.scratch/questionnaire-keys/spec.md` §8）。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![
+            Choice {
+                label: "甲".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: "乙".to_owned(),
+                description: None,
+            },
+        ],
+    });
+
+    let frame = buffer(120, 24, &mut state);
+    let (option, row) = find_cell(&frame, 120, 24, "甲").expect("选项在屏幕上");
+    assert!(
+        frame[(option, row)].modifier.contains(Modifier::REVERSED),
+        "选项区拿着键盘时高亮反显"
+    );
+
+    // 越过末项进输入区：高亮留在「乙」上，但它不再反显、只降暗。
+    state.key(Key::Char('j'));
+    state.key(Key::Char('j'));
+    let frame = buffer(120, 24, &mut state);
+    let (option, row) = find_cell(&frame, 120, 24, "乙").expect("第二个选项在屏幕上");
+    assert!(
+        !frame[(option, row)].modifier.contains(Modifier::REVERSED),
+        "输入区拿着键盘时高亮不再反显"
+    );
+    assert!(
+        frame[(option, row)].modifier.contains(Modifier::DIM),
+        "它降暗"
+    );
+    let (label, row) = find_cell(&frame, 120, 24, "自").expect("自由文本那一行在屏幕上");
+    assert!(
+        frame[(label, row)].modifier.contains(Modifier::BOLD),
+        "输入区那一行提亮"
+    );
+}
+
+#[test]
 fn the_wheel_moves_the_questionnaire_highlight() {
     use fs_agent::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {

@@ -1,7 +1,7 @@
 # 06 — 焦点视觉：同一时刻只有一个
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 05
 
 > 来源：[`../spec.md`](../spec.md) §8。`Zone` 是单一状态，屏幕上也该只有一个焦点。
@@ -31,3 +31,15 @@ Blocked by: 05
 
 - 不做「两个区域同时高亮」。
 - 不给输入区加行内光标（spec §10）。
+
+## Comments
+
+- **落地（2026-10-02）**：`questionnaire_parts` 多收一个 `options_focused`，调用链
+  （`bottom_rows`、`questionnaire_lines`、`questionnaire_window`、`draw_questionnaire`）都传
+  `questionnaire.zone == Zone::Options`。选项那一项的样式分两路：选项区拿着键盘时 `REVERSED`，
+  输入区拿着键盘时改成 `Modifier::DIM`（降暗用修饰符而不是换颜色，于是「已选」那层黄色语义
+  还在）。自由文本那一行的前导标记同样分两路：输入区拿着键盘时是默认前景 + `BOLD`，否则是
+  暗灰。
+- **先红后绿**：新增一条（只有拿着键盘的那一区是亮的：反显 / 降暗 / 提亮三处一起断言）。
+  第一版断言写错了对象 —— `j` 两次之后高亮在**第二项**，断言却盯着第一项 —— 修正后绿。
+- **验收**：`cargo test` 全绿（render_layout 130 条）、`cargo clippy --all-targets` 干净。

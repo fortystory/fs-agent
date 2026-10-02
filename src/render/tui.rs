@@ -2863,6 +2863,7 @@ impl TuiState {
                 &questionnaire.questions[questionnaire.index],
                 &questionnaire.drafts[questionnaire.index],
                 layout::content_width(area) as usize,
+                questionnaire.zone == Zone::Options,
             )
             .len() as u16,
             None => self.editor.height(layout::input_text_width(area)),
@@ -2880,8 +2881,9 @@ fn questionnaire_lines(
     question: &UserQuestion,
     draft: &QuestionDraft,
     width: usize,
+    options_focused: bool,
 ) -> Vec<Line<'static>> {
-    let (mut rows, options, custom) = questionnaire_parts(question, draft, width);
+    let (mut rows, options, custom) = questionnaire_parts(question, draft, width, options_focused);
     rows.extend(options.into_iter().flatten());
     rows.extend(custom);
     rows
@@ -2900,8 +2902,9 @@ fn questionnaire_window(
     draft: &QuestionDraft,
     width: usize,
     height: usize,
+    options_focused: bool,
 ) -> Vec<Line<'static>> {
-    let (prefix, options, custom) = questionnaire_parts(question, draft, width);
+    let (prefix, options, custom) = questionnaire_parts(question, draft, width, options_focused);
     let heights: Vec<usize> = options.iter().map(Vec::len).collect();
     let total: usize = heights.iter().sum();
     if prefix.len() + total < height {
@@ -2953,6 +2956,7 @@ fn questionnaire_parts(
     question: &UserQuestion,
     draft: &QuestionDraft,
     width: usize,
+    options_focused: bool,
 ) -> (Vec<Line<'static>>, Vec<Vec<Line<'static>>>, Vec<Line<'static>>) {
     let mut prefix: Vec<Line<'static>> = Vec::new();
     if let Some(header) = question
@@ -3004,7 +3008,13 @@ fn questionnaire_parts(
             Style::default()
         };
         if highlighted {
-            style = style.add_modifier(Modifier::REVERSED);
+            // 反显说的是「键盘在这里」；输入区拿着键盘时它降暗，屏幕上于是只有一个焦点
+            // （`.scratch/questionnaire-keys/spec.md` §8）。
+            style = if options_focused {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style.add_modifier(Modifier::DIM)
+            };
         }
         // 长选项**折行**，不截断（`.scratch/questionnaire-keys/spec.md` §7）。
         let mut lines = wrap_with_lead(&body, &lead, width);
@@ -3019,18 +3029,21 @@ fn questionnaire_parts(
     } else {
         wording::questionnaire_custom_label()
     };
+    // 输入区拿着键盘时那一行提亮：光标就在那儿（`.scratch/questionnaire-keys/spec.md` §8）。
+    let lead_style = if options_focused {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
     let mut custom = wrap_with_lead(&draft.custom, label, width);
     match custom.first_mut() {
         Some(line) => {
             if let Some(lead) = line.spans.first_mut() {
-                lead.style = Style::default().fg(Color::DarkGray);
+                lead.style = lead_style;
             }
         }
         // 空的自由文本仍然要占那一行：它是输入区，光标与点击都落在它上面。
-        None => custom.push(Line::from(Span::styled(
-            label,
-            Style::default().fg(Color::DarkGray),
-        ))),
+        None => custom.push(Line::from(Span::styled(label, lead_style))),
     }
     (prefix, options, custom)
 }
@@ -3920,8 +3933,15 @@ fn draw_questionnaire(
     let question = &questionnaire.questions[questionnaire.index];
     let draft = &questionnaire.drafts[questionnaire.index];
     let width = panes.input.width as usize;
-    let (prefix, options, _custom) = questionnaire_parts(question, draft, width);
-    let window = questionnaire_window(question, draft, width, panes.input.height as usize);
+    let options_focused = questionnaire.zone == Zone::Options;
+    let (prefix, options, _custom) = questionnaire_parts(question, draft, width, options_focused);
+    let window = questionnaire_window(
+        question,
+        draft,
+        width,
+        panes.input.height as usize,
+        options_focused,
+    );
     let heights: Vec<usize> = options.iter().map(Vec::len).collect();
     let total: usize = heights.iter().sum();
     let input_height = panes.input.height as usize;
