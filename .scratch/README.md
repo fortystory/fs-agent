@@ -47,14 +47,18 @@
 | [`grep-tool/`](grep-tool/seed.md) | seed | `grep` / `rg` 工具：把只读搜索从 `bash` 的 `Exclusive` 里救出来 | — |
 | [`clear-command/`](clear-command/seed.md) | seed | `/clear` 命令：清上下文继续用 —— **已移交 [`goal-loop`](goal-loop/seed.md)**，意向也改成了「结束当前会话、开一个新的」 | — |
 | [`loop-and-goals/`](loop-and-goals/seed.md) | seed | `/loop` 持续工作与跨轮目标 / 计划 —— **已移交 [`goal-loop`](goal-loop/seed.md)** | — |
+| [`image-input/`](image-input/seed.md) | seed | 把图片交给模型：粘贴 / 路径 / 拖拽进来的图进请求 —— 三种读法（输入侧 / 真图显示 / 只当引用），渲染侧的口子由 `markdown-render` 票 06 留着 | — |
+| [`git-worktree/`](git-worktree/seed.md) | seed | git worktree：会话级或执行者级的隔离工作区（Codex 有 `--worktree` 与 `/worktree`）；会牵动会话桶、权限档与沙箱的「工作区」定义 | — |
 
 数法：`ls .scratch/*/issues/*.md | wc -l` 与 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`。**`resolved` 是 wayfinder 决策票的收尾状态，`done` 是实现票的** —— 同一个 feature 里两种都可能出现（图走完折成 spec 之后接实现票）。
 
-**需求池（2026-10-01）**：一轮 `/ask-matt` 里记下 16 条「有意向、不实现」的功能，一律只有
+**需求池（2026-10-01，2026-10-02 追加两条）**：一轮 `/ask-matt` 里记下 16 条「有意向、不实现」的功能，一律只有
 `seed.md`、没有票。其中 3 条（`loop-and-goals` / `clear-command` / `context-compaction`）当天
 就被移交给了活跃 effort [`goal-loop`](goal-loop/seed.md)；同日另一轮 `/grill-with-docs` 又把三条
 （[`usage-stats-format`](usage-stats-format/spec.md) / [`terminal-title`](terminal-title/spec.md) /
-[`exit-gesture`](exit-gesture/spec.md)）折成了 spec，所以**池子里现在剩 10 条** —— 也就是
+[`exit-gesture`](exit-gesture/spec.md)）折成了 spec；2026-10-02 问卷键位那一轮收尾时同一场
+`/ask-matt` 里又记下两条（[`image-input`](image-input/seed.md) / [`git-worktree`](git-worktree/seed.md)），
+所以**池子里现在剩 12 条** —— 也就是
 上表里形态为 `seed`、且没有「已移交」或「已折成 spec」注记的那些行。每条的抬头都自述「这不是
 spec，也不是票」，正文有《现状》一节（写的时候核实过源码）与《待谈的分叉》；想推进任何一条时
 走 `/grill-with-docs` 把它折成 spec，再照常 `/to-tickets` 拆票。
