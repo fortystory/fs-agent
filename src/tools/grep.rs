@@ -24,7 +24,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcher;
-use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::WalkBuilder;
 use serde_json::Value;
 
@@ -154,7 +154,12 @@ fn search(
     let mut scanned = 0usize;
     let mut listed = 0usize;
     let mut skipped = 0usize;
-    let mut searcher = SearcherBuilder::new().line_number(true).build();
+    // 二进制检测要显式打开：`grep_searcher` 自己的缺省是 `BinaryDetection::None`（照单全收），
+    // 而这里要的是 rg 的默认那一档 —— 一个文件里见到 NUL 就放弃它，免得把二进制倒进上下文。
+    let mut searcher = SearcherBuilder::new()
+        .line_number(true)
+        .binary_detection(BinaryDetection::quit(0))
+        .build();
 
     let mut builder = WalkBuilder::new(root);
     builder.sort_by_file_path(|left, right| left.cmp(right));

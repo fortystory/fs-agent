@@ -627,3 +627,24 @@ async fn a_search_that_stays_under_both_limits_is_verbatim() {
     assert_eq!(output, "src/thing.rs:2:let needle = 1;\n");
     fixture.shutdown().await;
 }
+#[tokio::test]
+async fn a_binary_file_is_dropped_rather_than_dumped() {
+    // rg 的默认那一档：文件里见到 NUL 就放弃它，于是二进制不会被倒进上下文。
+    let mut fixture = fixture(
+        vec![
+            grep_reply("call-1", serde_json::json!({ "pattern": "needle" })),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("plain.txt", "needle\n");
+    fixture.write("blob.bin", "\u{0}needle\n");
+    fixture.run_turn("look").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(output.contains("plain.txt:1:needle"), "{output}");
+    assert!(!output.contains("blob.bin"), "{output}");
+    fixture.shutdown().await;
+}
