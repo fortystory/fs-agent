@@ -2310,10 +2310,13 @@ fn web_service(config: &Config) -> WebService {
     }
     // 抓取的后端是自己的 HTTP：没有服务器工具可用（DeepSeek 的兼容表里没有
     // `web_fetch_tool_result`），所以那一层的 SSRF 防护就是全部的防线。
-    let service = WebService::new(settings.clone()).with_fetch(Arc::new(HttpFetch::new(
-        settings.fetch_max_chars,
-        std::time::Duration::from_millis(settings.fetch_timeout_ms),
-    )));
+    let service = WebService::new(settings.clone()).with_fetch(Arc::new(
+        HttpFetch::new(
+            settings.fetch_max_chars,
+            std::time::Duration::from_millis(settings.fetch_timeout_ms),
+        )
+        .with_trust_proxy_dns(settings.trust_proxy_dns),
+    ));
     match settings.search_provider.as_str() {
         DEEPSEEK_SEARCH_PROVIDER => {
             // 零新密钥：搜索复用会话这一家已经配好的那一把。

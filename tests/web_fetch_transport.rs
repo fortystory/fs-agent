@@ -315,3 +315,37 @@ fn the_request_carries_an_honest_identity_and_no_credentials() {
         );
     }
 }
+
+// --- 代理接管 DNS（`[web] trust_proxy_dns`）--------------------------------
+
+#[tokio::test]
+async fn trust_proxy_dns_skips_resolution_for_hostnames() {
+    // fake-IP 的机器上，本地解析回的是 `198.18.0.0/15` 那类假地址：校验它没有意义，连接也不该
+    // 固定到它。代理路径因此**不解析**，直接答「这一次不固定」。
+    let fetch = HttpFetch::new(100_000, Duration::from_secs(30)).with_trust_proxy_dns(true);
+    let addrs = fetch
+        .resolve_public(&validate_url("https://example.com/").unwrap())
+        .await
+        .expect("代理路径上主机名不再被校验");
+    assert!(addrs.is_empty(), "代理路径不该把连接固定到任何地址");
+}
+
+#[tokio::test]
+async fn trust_proxy_dns_still_refuses_literal_internal_addresses() {
+    // 字面 IP 不需要 DNS，所以那条判据在两条路径上都成立 —— 代理**不会**替你拦内网
+    // （实测：经代理访问局域网设备返回 200，所以这条不能省）。
+    let fetch = HttpFetch::new(100_000, Duration::from_secs(30)).with_trust_proxy_dns(true);
+    for bad in [
+        "http://192.168.3.1/",
+        "http://10.0.0.1/",
+        "http://127.0.0.1/",
+        "http://169.254.169.254/",
+        "http://[::1]/",
+    ] {
+        let error = fetch
+            .resolve_public(&validate_url(bad).unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code_str(), "WEB_BLOCKED_URL", "{bad}");
+    }
+}

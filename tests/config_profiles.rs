@@ -1063,6 +1063,10 @@ fn the_web_tools_are_off_by_default_and_their_knobs_have_defaults() {
     assert_eq!(config.web.search_max_queries, 4);
     assert_eq!(config.web.fetch_max_chars, 100_000);
     assert_eq!(config.web.fetch_timeout_ms, 30_000);
+    assert!(
+        !config.web.trust_proxy_dns,
+        "缺省严格：DNS 不被代理接管，解析结果照样整体校验"
+    );
 }
 
 #[test]
@@ -1070,6 +1074,7 @@ fn the_web_table_comes_from_the_config_file() {
     let config = resolve(
         Some(
             "[web]\nenabled = true\nsearch_max_results = 3\nsearch_max_queries = 2\n\
+             trust_proxy_dns = true\n\
              search_base_url = \"https://example.com/anthropic/\"\n",
         ),
         &env(&[]),
@@ -1084,6 +1089,7 @@ fn the_web_table_comes_from_the_config_file() {
         "尾部斜杠收干净，好与 `/v1/messages` 拼得对"
     );
     assert_eq!(config.web.search_provider, "deepseek", "没写的留在缺省上");
+    assert!(config.web.trust_proxy_dns, "这台机器的 DNS 由代理接管");
 }
 
 #[test]

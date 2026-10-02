@@ -487,6 +487,12 @@ pub struct WebSettings {
     pub fetch_max_chars: usize,
     /// 一次抓取的墙钟上限，按毫秒计。
     pub fetch_timeout_ms: u64,
+    /// 这台机器的 DNS 被代理接管（Clash/Mihomo 那类 fake-IP）时为 `true`（缺省 `false`）。
+    ///
+    /// 打开之后 `web_fetch` 对**主机名**不再做解析后校验、也不把连接固定到解析结果 —— 本地 DNS
+    /// 回的是 `198.18.0.0/15` 那类假地址，解析与连接都交给代理。**URL 里字面写出来的内网 IP
+    /// 仍然拒**：那条判据不需要 DNS，而代理不会替你拦内网（实测：经代理访问局域网设备返回 200）。
+    pub trust_proxy_dns: bool,
 }
 
 impl Default for WebSettings {
@@ -500,6 +506,7 @@ impl Default for WebSettings {
             search_max_queries: DEFAULT_WEB_SEARCH_MAX_QUERIES,
             fetch_max_chars: DEFAULT_WEB_FETCH_MAX_CHARS,
             fetch_timeout_ms: DEFAULT_WEB_FETCH_TIMEOUT_MS,
+            trust_proxy_dns: false,
         }
     }
 }
@@ -531,6 +538,9 @@ fn resolve_web(raw: Option<&RawWeb>) -> WebSettings {
     };
     if let Some(enabled) = raw.enabled {
         web.enabled = enabled;
+    }
+    if let Some(trust) = raw.trust_proxy_dns {
+        web.trust_proxy_dns = trust;
     }
     if let Some(provider) = raw
         .search_provider
@@ -940,6 +950,8 @@ struct RawWeb {
     search_max_queries: Option<usize>,
     fetch_max_chars: Option<usize>,
     fetch_timeout_ms: Option<u64>,
+    /// `true` = 这台机器的 DNS 被代理接管（fake-IP），主机名的目标校验交给代理。
+    trust_proxy_dns: Option<bool>,
 }
 
 /// 一张 `[sandbox]` 表。

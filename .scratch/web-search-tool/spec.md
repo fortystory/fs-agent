@@ -1,8 +1,8 @@
 # `web_search` / `web_fetch`：两个联网工具（工具层 · 服务层 · 后端三层）
 
-Status: 4 done + 1 ready-for-walkthrough（2026-10-03 由 [`seed.md`](seed.md) 折成 spec，同日拆出
-[`issues/01`](issues/01-web-search-skeleton.md)–[`05`](issues/05-docs-and-index.md)；blocking edges 是
-`01 → {02, 03}`、`03 → 04`、`{02, 04} → 05`，每张票抬头写着自己被谁 block）
+Status: 5 done + 1 ready-for-walkthrough（2026-10-03 由 [`seed.md`](seed.md) 折成 spec，同日拆出
+[`issues/01`](issues/01-web-search-skeleton.md)–[`06`](issues/06-fake-ip-proxy.md)；blocking edges 是
+`01 → {02, 03}`、`03 → 04`、`{02, 04} → 05`，票 06 修的是维护者报的 fake-IP 代理缺陷）
 
 模型今天能出网，但只有一条路：`bash` 拼一条 `curl`。那条路上的三件事都不对。**权限账**：
 `bash` 恒为 `Effect::Exclusive`，所以在默认的 `ask` 档下每次都要打断人、`readonly` 档直接拒。
@@ -148,6 +148,14 @@ Status: 4 done + 1 ready-for-walkthrough（2026-10-03 由 [`seed.md`](seed.md) �
   不是公共单播地址就**整体拒绝**；**连接固定到已校验的地址集合**；**每跳同源重定向都重新
   解析与校验**，跨源重定向直接失败（要求模型重新调用）；IPv6 要发现 DNS64 前缀并拒绝指向
   非公开 IPv4 的转换地址。沙箱没有第二道网，所以这一层就是全部的防线。
+- **代理接管 DNS 时的例外（`[web] trust_proxy_dns`，缺省 `false`）**：开着 fake-IP 的代理
+  （Clash/Mihomo 那一类，`198.18.0.0/15` 是它的指纹）会把**每个**域名解析成一个假地址，于是
+  「解析后校验」的输入本身就是假的 —— 2026-10-03 实测：`www.accuweather.com` 解析到
+  `198.18.0.26`，工具直接报 `WEB_BLOCKED_URL`，而在代理畅通的机器上那个站点本来能访问。这个
+  开关打开后，**主机名**不再解析、也不再固定连接地址，解析与连接都交给代理。**字面 IP 判据
+  不跟着放宽**：`http://192.168.3.1/` 这类不需要 DNS，仍然拒 —— 同一次实测里，经代理访问
+  局域网设备**返回 200**，所以代理不是 SSRF 的防线，这一条不能省。缺省严格，要用了显式打开；
+  它是一次「这台机器的 DNS 不可信」的声明，不是一档放松开关。
 - **不发送凭据**：抓取是匿名的，带一个诚实的 `User-Agent`（含项目名与版本）。
 - **四道上限**：字节（DSH 5 MB）· 字符（DSH 100k）· 跳数（DSH 5）· 时间（DSH 30s，作为
   资源兜底；面向模型的工具预算归 timeout 层）。
@@ -209,7 +217,8 @@ Status: 4 done + 1 ready-for-walkthrough（2026-10-03 由 [`seed.md`](seed.md) �
   `search_base_url`（默认 `https://api.deepseek.com/anthropic` —— 与 `[providers.deepseek]` 的
   OpenAI 格式 base url 分开，照 DSH 的 `$DEEPSEEK_SEARCH_BASE_URL` 独立于会话端点的做法）·
   `search_max_results`（8）· `search_max_queries`（4）· `fetch_max_chars`（100_000）·
-  `fetch_timeout_ms`（30_000）。超时与条数是部署设置，**不出现在面向模型的 schema 里**。
+  `fetch_timeout_ms`（30_000）· `trust_proxy_dns`（缺省 `false`，见 §5 —— 这台机器的 DNS 被
+  fake-IP 代理接管时打开它）。超时与条数是部署设置，**不出现在面向模型的 schema 里**。
 
 ## 测试决定
 

@@ -53,6 +53,12 @@ pub struct HttpFetch {
     /// 前缀就在里面。**不知道前缀就没法认出转换地址**，而一个指向 `10.0.0.1` 的 DNS64
     /// 地址长得和一个普通的全球单播 IPv6 地址一模一样。
     dns64: tokio::sync::OnceCell<Option<Ipv6Addr>>,
+    /// `[web] trust_proxy_dns`：这台机器的 DNS 被代理接管（Clash/Mihomo 的 fake-IP）。
+    ///
+    /// 打开之后，**主机名**不再做「解析后校验」、也不再把连接固定到解析结果 —— 本地 DNS 回的是
+    /// `198.18.0.0/15` 那类假地址，校验它没有意义，解析与连接都交给代理。**字面写出来的内网 IP
+    /// 仍然拒**：那条判据不需要 DNS，而代理**不会**替你拦内网。
+    trust_proxy_dns: bool,
 }
 
 impl HttpFetch {
@@ -62,7 +68,16 @@ impl HttpFetch {
             max_chars: max_chars.max(1),
             timeout,
             dns64: tokio::sync::OnceCell::new(),
+            trust_proxy_dns: false,
         }
+    }
+
+    /// 打开「DNS 由代理接管」这条路径（`[web] trust_proxy_dns`，缺省关）。
+    ///
+    /// 关着的时候这一层的行为一个字不变：解析一次、整体校验、把连接固定到那批地址。
+    pub fn with_trust_proxy_dns(mut self, trust: bool) -> Self {
+        self.trust_proxy_dns = trust;
+        self
     }
 
     /// 一次 GET 的请求：**只有**身份与 `Accept` 两个头。
@@ -97,24 +112,28 @@ impl HttpFetch {
     ///
     /// 每次抓取现建一个：`resolve_to_addrs` 是按 host 的覆盖，而「固定」正是这一层的要点
     /// —— 校验过的地址与真正连上去的地址必须是同一批。
+    ///
+    /// `addrs` 为空表示这一次**不固定**（`[web] trust_proxy_dns` 那条路）：解析交给代理，
+    /// 而 `resolve_to_addrs(host, &[])` 会把那个 host 覆盖成空集，那不是「不固定」。
     fn client_for(
         &self,
         host: &str,
         addrs: &[SocketAddr],
         budget: Duration,
     ) -> Result<reqwest::Client, WebError> {
-        reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(budget)
-            .redirect(Policy::none())
-            .resolve_to_addrs(host, addrs)
-            .build()
-            .map_err(|error| {
-                WebError::new(
-                    WebErrorCode::ProviderError,
-                    format!("HTTP client 建不出来：{error}"),
-                )
-            })
+            .redirect(Policy::none());
+        if !addrs.is_empty() {
+            builder = builder.resolve_to_addrs(host, addrs);
+        }
+        builder.build().map_err(|error| {
+            WebError::new(
+                WebErrorCode::ProviderError,
+                format!("HTTP client 建不出来：{error}"),
+            )
+        })
     }
 
     /// 这个网络上的 DNS64 前缀（探测一次）。
@@ -202,6 +221,19 @@ impl HttpFetch {
     /// 是 `pub` 的，好让 SSRF 判据能在不发任何请求的前提下被逐条钉住。
     pub async fn resolve_public(&self, url: &Url) -> Result<Vec<SocketAddr>, WebError> {
         let host = lookup_host_name(url)?;
+
+        // 代理接管 DNS 这条路（`[web] trust_proxy_dns`）：本地解析出来的地址是假的，校验它没有
+        // 意义，连接也不该固定到它 —— 解析与连接都交给代理。**字面 IP 仍然校验**：`192.168.3.1`
+        // 这条判据不需要 DNS，而实测里代理**会**把局域网请求转发出去（返回 200）。
+        if self.trust_proxy_dns {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                if !is_public_unicast_with(ip, None) {
+                    return Err(blocked_error(&host, ip));
+                }
+            }
+            return Ok(Vec::new());
+        }
+
         let port = url.port_or_known_default().ok_or_else(|| {
             WebError::new(
                 WebErrorCode::InvalidUrl,
@@ -236,18 +268,24 @@ impl HttpFetch {
         };
         for addr in &addrs {
             if !is_public_unicast_with(addr.ip(), dns64) {
-                return Err(WebError::new(
-                    WebErrorCode::BlockedUrl,
-                    format!(
-                        "`{host}` 指向 {}，那不是公共单播地址（内网、环回、链路本地、\
-                         保留段与转换地址都拒）",
-                        addr.ip()
-                    ),
-                ));
+                return Err(blocked_error(&host, addr.ip()));
             }
         }
         Ok(addrs)
     }
+}
+
+/// 「这个地址不是公共单播」的那条拒绝。
+///
+/// 两条路径（代理接管 DNS / 严格校验）共用同一句措辞：对模型来说它们是同一件事 ——
+/// 这次抓取指向了一个不该去的地方。
+fn blocked_error(host: &str, ip: IpAddr) -> WebError {
+    WebError::new(
+        WebErrorCode::BlockedUrl,
+        format!(
+            "`{host}` 指向 {ip}，那不是公共单播地址（内网、环回、链路本地、保留段与转换地址都拒）"
+        ),
+    )
 }
 
 // --- 纯函数：URL、地址、跳数 ----------------------------------------------

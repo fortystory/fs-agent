@@ -46,6 +46,7 @@ search_max_results = 8
 search_max_queries = 4
 fetch_max_chars = 100000
 fetch_timeout_ms = 30000
+trust_proxy_dns = false               # fake-IP 代理的机器上打开（见「SSRF 实际做了什么」）
 ```
 
 | 字段 | 默认 | 说明 |
@@ -58,6 +59,7 @@ fetch_timeout_ms = 30000
 | `search_max_queries` | `4` | 一次调用最多收多少条查询 |
 | `fetch_max_chars` | `100000` | 一次抓取最多解码多少字符 |
 | `fetch_timeout_ms` | `30000` | 一次抓取的墙钟上限 |
+| `trust_proxy_dns` | `false` | 这台机器的 DNS 被代理接管（fake-IP）：主机名不再解析后校验、连接不固定；**字面内网 IP 照拒** |
 
 写 0 的旋钮会被夹到 1，而不是照字面执行：写 `search_max_results = 0` 的人多半想要「不限制」，
 而实际会得到「什么都搜不到」。
@@ -152,6 +154,11 @@ Fetched https://example.com/page (HTTP 200)
   没有 `Authorization`、没有 `Cookie`、没有 `Referer`。
 - **四道上限**：字节 5 MB（到这儿就拒，不截断）· 字符 `fetch_max_chars`（截断并如实说明）·
   跳数 5 · 时间 `fetch_timeout_ms`。
+- **一个例外：`[web] trust_proxy_dns`**（缺省 `false`）。开着 fake-IP 的代理会把每个域名解析
+  成 `198.18.0.0/15` 那类假地址，上面那条「解析后校验」的输入本身就失真了。这个开关打开后，
+  **主机名**不再被解析、连接也不再固定，解析与连接都交给代理；**字面 IP 判据一个字不动**
+  （`http://192.168.3.1/` 仍然拒 —— 实测里代理**会**替你转发内网请求）。缺省关，要用了显式
+  打开：它是一次「这台机器的 DNS 不可信」的声明。
 
 ## 错误码
 
