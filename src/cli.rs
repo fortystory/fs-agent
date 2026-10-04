@@ -32,6 +32,7 @@ use crate::provider::capability::caps_for;
 use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::provider::Message;
 use crate::questions::{UserQuestion, UserQuestions};
+use crate::render::token::{self, Token};
 use crate::render::{
     self, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsoleQuestions, FrontEndEvent,
     PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
@@ -1387,21 +1388,39 @@ async fn interactive_loop(
     }
 }
 
-/// 跟在命令名之后、位于它第一行上的任务或问题：那一行剩下的部分，然后是下面每一行，按原样。只丢
-/// 结尾的空白行，所以一段全是空白的续行不算任务。
+/// 一个记号两侧的文字拼成任务：记号被抹掉，**前文（含它前面的每一行）**与后文接起来。
 ///
-/// `/<skill>` 与 `/discuss` 共用一个函数，因为「用户在命令之后写了什么」是一条规则，两份拷贝迟早
-/// 会漂移。
-fn task_of(inline: &str, rest: &str) -> String {
-    let mut task = inline.to_owned();
-    let rest = rest.trim_end_matches('\n');
-    if !rest.trim().is_empty() {
+/// `请 /loop 我的目标` → `请 我的目标`；`第一行\n/loop 目标` → `第一行\n目标`（记号与后文
+/// 原来在同一行时用一个空格接上，跨行时保留那个换行）。只丢结尾的空白行，所以一段全是空白
+/// 的续行不算任务 —— 与旧 `task_of(inline, rest)` 对「记号之后」那半边的规则逐字相同
+/// （`.scratch/input-tokens/spec.md` §5）。
+fn task_around(text: &str, token: &Token) -> String {
+    let (start, end) = token_bytes(text, token);
+    let before = &text[..start];
+    let after = &text[end..];
+    let head = before.trim_end();
+    let tail = after.trim_start().trim_end_matches('\n');
+    let mut task = head.to_owned();
+    if !tail.trim().is_empty() {
         if !task.is_empty() {
-            task.push('\n');
+            task.push(if before.ends_with('\n') { '\n' } else { ' ' });
         }
-        task.push_str(rest);
+        task.push_str(tail);
     }
     task
+}
+
+/// 一个记号在 `text` 里的字节范围 —— 记号的字符下标换算一次就够，两处切片都用它。
+fn token_bytes(text: &str, token: &Token) -> (usize, usize) {
+    (byte_offset(text, token.start), byte_offset(text, token.end))
+}
+
+/// 字符下标 → 字节偏移。记号的下标是字符意义上的（`token` 模块），而切片要字节。
+fn byte_offset(text: &str, at: usize) -> usize {
+    text.char_indices()
+        .nth(at)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len())
 }
 
 /// 一次提交在要什么（spec §12）。
@@ -1445,19 +1464,23 @@ enum Submission<'a> {
 
 /// 读一次提交。
 ///
-/// 由**只看第一行**来决定这是不是一条命令，所以 `/<skill>` 后面可以跟一段多行的简报 —— 它第一行剩
-/// 下的部分和下面每一行都成为任务。第一行以 `/` 开头却点名了不认识的东西时，如果整条提交就这一行那
-/// 就是一个错字（会告诉用户，一如既往），否则就是贴进来的一段文字。
+/// 一条命令是**整个草稿里**任意行、任意位置上**最靠左**的那个 `/name`，其中 `name` 在命令表里
+/// （内建命令、技能、MCP 模板的并集）。记号前面的字（含它前面的每一行）与它后面的字**一起**成为
+/// 任务，所以 `请 /loop 我的目标` 读作 `Loop("请 我的目标")` —— 内建命令过去那条「要么整条、要么
+/// 什么都不算」的规矩要防的是丢用户写下的字，而这条规则同样一个字都不丢
+/// （`.scratch/input-tokens/spec.md` §5）。
+///
+/// **这一档是有牙的**（访谈里明码标价选下的）：`@` 被误认只是个引用，而 `/` 被误认**会真的
+/// 执行** —— `用 /loop 做目标循环` 就是一条命令。别自作主张加一条「整行起头」的守卫。
+///
+/// 无参命令（`/quit`/`/exit`/`/undo`/`/clear`）仍要求**整条只有它**，于是「请把 `/clear` 加到文档
+/// 里」是一条普通消息、不会被劫持成一次清空。草稿里一个命令记号都没有时整条仍当普通消息；唯一的
+/// 例外是一个以 `/` 开头、占满整行却不认识的名字 —— 那是错字，会告诉用户。
 ///
 /// 去掉空白后为空的提交是 [`Submission::Ignore`]：没有要发的东西，所以循环再问一次，而不是起一个回
 /// 合。
 ///
-/// 内建命令不接受任务，所以它们只在作为**整条**提交时匹配：`/undo` 后面的一行绝不能被丢在地上。这样
-/// 的提交会落到上面那几条规则上 —— `/undo` 没点名任何技能，所以带着后面的行时整条被当作一条 prompt
-/// 读，至少还让用户看见自己发了什么。
-///
-/// 开头的斜杠一律剥掉（`//undo` 读作 `undo`），旧代码读技能名时也是这样。任务结尾的空白行丢掉；其
-/// 余按原样保留。
+/// 开头的斜杠一律剥掉（`//undo` 读作 `undo`）。任务结尾的空白行丢掉；其余按原样保留。
 fn submission<'a>(
     text: &'a str,
     has_skill: impl Fn(&str) -> bool,
@@ -1466,66 +1489,77 @@ fn submission<'a>(
     if text.trim().is_empty() {
         return Submission::Ignore;
     }
-    let (first, rest) = match text.split_once('\n') {
-        Some((first, rest)) => (first.trim(), rest),
-        None => (text.trim(), ""),
+    let is_command = |name: &str| {
+        render::wording::BUILT_IN_COMMANDS
+            .iter()
+            .any(|command| command.name == name)
+            || has_skill(name)
+            || prompts.iter().any(|entry| entry.name == name)
     };
-    // 内建命令要么是整条提交，要么什么都不算：它没有任务来装后面的那些行，而丢掉它们会丢掉用户写下
-    // 的东西。
-    let whole = rest.trim().is_empty();
-    match first {
-        "/quit" | "/exit" if whole => Submission::Quit,
-        "/undo" if whole => Submission::Undo,
-        // 与 `/undo` 同一条规矩：内建命令只在作为**整条**提交时匹配，它后面的一行绝不能被丢
-        // 在地上。
-        "/clear" if whole => Submission::Clear,
-        _ if first.starts_with('/') => {
-            let rest_of_line = first.trim_start_matches('/');
-            let (name, inline) = match rest_of_line.split_once(char::is_whitespace) {
-                Some((name, task)) => (name, task.trim()),
-                None => (rest_of_line, ""),
-            };
-            // `/discuss [问题]` 是唯一带参数的内建命令，所以它取与技能的任务相同的形状：这一行剩下
-            // 的部分，然后是下面每一行。光秃秃的 `/discuss` 把问题留给循环。
-            if name == "discuss" {
-                return Submission::Discuss(task_of(inline, rest));
-            }
-            // `/goal-new <名字> <来源>` 取同样的形状：它后面那一整段都是参数。`/goal` 这一族
-            // 用**连字符**写成一条命令（将来的 `/goal-list` 等照走），于是 `/goal-` 一个前缀
-            // 就能在 `/` 菜单里把它们全列出来 —— 空格形状的子命令补不出来。
-            if name == "goal-new" {
-                return Submission::Goal(task_of(inline, rest));
-            }
-            // `/loop <名字>`：一个参数，形状与 `/goal-new` 相同。
-            if name == "loop" {
-                return Submission::Loop(task_of(inline, rest));
-            }
-            // `/<server>:<模板>`：模板条目是运行时才知道的名字，所以这里问的是那个闭包
+    let token = token::tokens(text)
+        .into_iter()
+        .filter(|token| token.prefix == '/')
+        .find(|token| is_command(command_name(text, token)));
+
+    let Some(token) = token else {
+        // 一个命令记号都没有：整条还是普通消息。唯一的例外是占满整行的一个不认识的名字 ——
+        // 那是错字，一直会被告诉用户。
+        if text.trim_start().starts_with('/') && !text.trim().contains('\n') {
+            return Submission::Unknown(text.trim());
+        }
+        return Submission::Prompt(text);
+    };
+
+    let name = command_name(text, &token);
+    // 内建命令没有任务来装记号旁边的字，所以它们只在整条只有那**一个**记号、而且它写成
+    // `/<名字>`（没有多出来的斜杠 —— `//undo` 不算）时才匹配。技能不受这一条限制。
+    let whole = text.trim().chars().count() == token.end - token.start && token.query == name;
+    if whole {
+        match name {
+            "quit" | "exit" => return Submission::Quit,
+            "undo" => return Submission::Undo,
+            "clear" => return Submission::Clear,
+            _ => {}
+        }
+    }
+    let task = task_around(text, &token);
+    match name {
+        // `/discuss [问题]`：这一条的问题就是记号旁边那一整段。光秃秃的 `/discuss` 把问题留给
+        // 循环。
+        "discuss" => Submission::Discuss(task),
+        // `/goal-new <名字> <来源>`：记号旁边那一整段都是参数。`/goal` 这一族用**连字符**写成
+        // 一条命令（将来的 `/goal-list` 等照走），于是 `/goal-` 一个前缀就能在 `/` 菜单里把它们
+        // 全列出来 —— 空格形状的子命令补不出来。
+        "goal-new" => Submission::Goal(task),
+        // `/loop <名字>`：一个参数，形状与 `/goal-new` 相同。
+        "loop" => Submission::Loop(task),
+        _ => {
+            // `/<server>:<模板>`：模板条目是运行时才知道的名字，所以这里问的是那份菜单
             // （票 17）。冒号是它与人打出来的技能名的分界。
-            if prompts.iter().any(|entry| entry.name == name) {
-                if let Some((server, prompt)) = name.split_once(':') {
+            if let Some((server, prompt)) = name.split_once(':') {
+                if prompts.iter().any(|entry| entry.name == name) {
                     return Submission::McpPrompt {
                         server,
                         prompt,
-                        inline: task_of(inline, rest),
+                        inline: task,
                     };
                 }
             }
-            if !has_skill(name) {
-                if rest.trim().is_empty() {
-                    return Submission::Unknown(first);
-                }
-                // 一段碰巧以 `/` 开头的贴进来的文字，就是一段文字。
-                return Submission::Prompt(text);
-            }
-            Submission::Skill {
-                name,
-                task: task_of(inline, rest),
+            if has_skill(name) {
+                Submission::Skill { name, task }
+            } else {
+                // 一个内建命令带着记号之外的字：整条仍是一条普通消息，用户写下的东西一个字
+                // 都不会被丢掉。
+                Submission::Prompt(text)
             }
         }
-        // 根本不是命令：整段文本，不管多少行，就是 prompt。
-        _ => Submission::Prompt(text),
     }
+}
+
+/// 一个 `/` 记号的命令名：记号里那一段剥掉开头的斜杠（`//undo` 读作 `undo`）。
+fn command_name<'a>(text: &'a str, token: &Token) -> &'a str {
+    let (start, end) = token_bytes(text, token);
+    text[start..end].trim_start_matches('/')
 }
 
 /// 还缺哪些**必填**参数。
@@ -3904,6 +3938,78 @@ mod tests {
         );
         assert_eq!(read("/undo"), Submission::Undo);
         assert_eq!(read("/undo  "), Submission::Undo, "结尾的空白没关系");
+    }
+
+    #[test]
+    fn a_doubled_slash_is_not_a_built_in_command() {
+        // 内建命令要求记号的原文就是 `/<名字>`，所以 `//undo` 不再是 `Undo` —— 旧路径把它当
+        // 错字，而 `Undo` 有回滚副作用，不该由多出来的一个斜杠换来。技能那一侧不受影响：
+        // 名字本来就是剥掉斜杠之后才比的。
+        assert_eq!(read("//undo"), Submission::Prompt("//undo"));
+        assert_eq!(read("//clear"), Submission::Prompt("//clear"));
+        assert_eq!(
+            read("//review"),
+            Submission::Skill {
+                name: "review",
+                task: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_command_can_sit_anywhere_and_earlier_words_join_the_task() {
+        // `.scratch/input-tokens/spec.md` §5：整个草稿里任意行、任意位置的 `/name` 都算命令，
+        // 取**最靠左**的那一个，而它前面的字（含前面的每一行）并入任务 —— 这一条正是为了不
+        // 重蹈「丢用户写下的字」。
+        assert_eq!(
+            read("请 /loop 我的目标"),
+            Submission::Loop("请 我的目标".to_owned())
+        );
+        assert_eq!(
+            read("第一行\n/loop 目标"),
+            Submission::Loop("第一行\n目标".to_owned()),
+            "位置不看行"
+        );
+        // 这一档是**有牙**的（访谈里明码标价选下的）：`@` 被误认没有后果，`/` 被误认会真的
+        // 执行。如实钉住这个代价，别把它当缺陷改掉。
+        assert_eq!(
+            read("用 /loop 做目标循环"),
+            Submission::Loop("用 做目标循环".to_owned())
+        );
+        // 记号在末尾时，前文就是全部任务。
+        assert_eq!(read("请 /loop"), Submission::Loop("请".to_owned()));
+        // 一个句子里只有**命令**记号算数，别的记号只是普通文字。
+        assert_eq!(
+            read("看 /tmp/x，然后 /loop 目标"),
+            Submission::Loop("看 /tmp/x，然后 目标".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_no_argument_command_still_needs_the_whole_draft() {
+        // 无参命令要么是整条、要么什么都不算 —— 一句话里提一句 `/clear` 不会被劫持成一次清空
+        // （spec §5，「明确不做」那一条）。
+        assert_eq!(
+            read("请把 /clear 加到文档里"),
+            Submission::Prompt("请把 /clear 加到文档里")
+        );
+        assert_eq!(read("请看 /undo"), Submission::Prompt("请看 /undo"));
+        // 单独一行仍旧是它自己（不变）。
+        assert_eq!(read("/clear"), Submission::Clear);
+        assert_eq!(read("/undo"), Submission::Undo);
+    }
+
+    #[test]
+    fn a_draft_without_a_command_token_is_still_a_message() {
+        // 草稿里找不到命令记号时整条仍当普通消息（不变）。
+        assert_eq!(
+            read("看 /tmp/x 这个文件"),
+            Submission::Prompt("看 /tmp/x 这个文件")
+        );
+        assert_eq!(
+            read("第一行\n/loopish 目标"),
+            Submission::Prompt("第一行\n/loopish 目标")
+        );
     }
 
     #[test]

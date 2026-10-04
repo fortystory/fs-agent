@@ -169,8 +169,9 @@ fn the_arrows_page_between_questions_and_the_footer_says_where_we_are() {
     let text = rows.join("\n");
     assert!(text.contains("1 / 3"), "页脚在翻页：{text}");
 
-    // 确认高亮那个选项之后仍停在这一题 —— 并存的意义之一就是还能补一句话。
-    state.key(Key::Enter);
+    // 空格确认高亮那个选项之后仍停在这一题 —— 并存的意义之一就是还能补一句话（回车在过去
+    // 承担这件事，§11 之后它改成「往前走」）。
+    state.key(Key::Char(' '));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("First?"), "确认不翻页：{text}");
     assert!(text.contains("1 / 3"), "{text}");
@@ -195,21 +196,20 @@ fn submit_is_refused_until_every_question_is_answered_or_skipped() {
         ],
     );
 
-    // 确认第一个答案不再前进（spec §4），而在它后面那些题还没处理完时，绝不能提交。
-    state.key(Key::Enter);
+    // 空格确认第一个答案，而且**不翻页、不提交**（spec §4 那半条没变）。
+    state.key(Key::Char(' '));
     assert!(answer(&mut rx).is_none(), "还有题没处理，提交被拒");
 
-    // 翻页是 `→` 的事；第二题确认之后同样还不能提交。
+    // `→` 往前走；第二题真作答之后仍有一题没着落，还是不能提交。
     state.key(Key::Right);
-    state.key(Key::Enter);
+    state.key(Key::Char(' '));
     assert!(answer(&mut rx).is_none(), "还有一题没处理，提交被拒");
 
-    // 显式跳最后一题，才让整份问卷完成；跳过这个动作
-    // 本身也不提交。
+    // 走到末题：`→` 只往前走，而末题上它**不提交**。
     state.key(Key::Right);
-    state.key(Key::Tab);
-    assert!(answer(&mut rx).is_none(), "跳过最后一题的那一下不提交");
+    assert!(answer(&mut rx).is_none(), "末题上 `→` 不提交");
 
+    // 回车把还没作答的第三题记成跳过，于是每题都有着落，整份交出去。
     state.key(Key::Enter);
     let answers = answer(&mut rx).expect("所有题都处理完了就提交");
     assert_eq!(
@@ -235,26 +235,34 @@ fn submit_is_refused_until_every_question_is_answered_or_skipped() {
 }
 
 #[test]
-fn a_skipped_question_is_no_answer_even_after_typing() {
-    // 跳过是一个显式的「不作答」，而且它压过跳过之前打进去的
-    // 文本：答案是 `selected: []`，没有 `custom`（spec §7）。先打字、
-    // 再决定不作答，绝不能把那文本偷渡进结果里。
+fn answering_undoes_a_skip_so_the_text_travels_back() {
+    // §11 把「跳过压过一切」那条反过来了：**作答即撤销跳过**（只清不回滚），否则
+    // `answers()` 里「跳过无条件优先」会把回头改过的答案吞掉。
     let mut state = state();
     let mut rx = ask(
         &mut state,
         vec![question("one", "Pick?", &["a", "b"], false)],
     );
 
-    state.key(Key::Char('x'));
+    // 先明确跳过：`Tab` 还是那个「跳过这个，继续」。
     state.key(Key::Tab);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("已跳过"),
+        "页脚说这一题交回去的是什么：{text}"
+    );
+
+    // 再作答：跳过被撤销，打进去的文本跟着回去。
+    walk_into_the_input(&mut state, 2);
+    state.key(Key::Char('x'));
     state.key(Key::Enter);
-    let answers = answer(&mut rx).expect("这次跳过让整份问卷完成");
+    let answers = answer(&mut rx).expect("作答了").answers;
     assert_eq!(
-        answers.answers,
+        answers,
         vec![UserAnswer {
             id: "one".to_owned(),
             selected: Vec::new(),
-            custom: None,
+            custom: Some("x".to_owned()),
         }]
     );
 }
@@ -267,7 +275,7 @@ fn typing_and_a_single_select_choice_travel_back_together() {
         &mut single,
         vec![question("one", "Pick?", &["a", "b"], false)],
     );
-    single.key(Key::Enter);
+    single.key(Key::Char(' '));
     let text = screen(120, 24, &mut single).join("\n");
     assert!(text.contains("● 1. a"), "那个选择被显示成已选中：{text}");
     walk_into_the_input(&mut single, 2);
@@ -294,7 +302,7 @@ fn typing_and_a_single_select_choice_travel_back_together() {
         &mut multi,
         vec![question("one", "Pick?", &["a", "b"], true)],
     );
-    multi.key(Key::Enter);
+    multi.key(Key::Char(' '));
     walk_into_the_input(&mut multi, 2);
     multi.key(Key::Char('x'));
     let text = screen(120, 24, &mut multi).join("\n");
@@ -351,10 +359,11 @@ fn confirming_another_option_replaces_the_single_select_one() {
 }
 
 #[test]
-fn enter_matches_space_in_the_options_zone_and_pages_from_the_text_input() {
-    // 选项区里 `Enter` 与空格完全一致；输入区里它是「前进」（spec §4）。
+fn enter_advances_in_both_zones_and_never_changes_a_selection() {
+    // §11 推翻了 §4 的「选项区里 `Enter` 与空格完全一致」：回车现在是「处置这一题、往前走」，
+    // **两个区域同一条规则**，而空格仍是唯一的选中键。
     let mut state = state();
-    let _rx = ask(
+    let mut rx = ask(
         &mut state,
         vec![
             question("one", "First?", &["a", "b"], false),
@@ -363,22 +372,29 @@ fn enter_matches_space_in_the_options_zone_and_pages_from_the_text_input() {
     );
     state.key(Key::Enter);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("● 1. a"), "选项区里 `Enter` 也是确认：{text}");
-    assert!(text.contains("First?"), "确认不翻页：{text}");
+    assert!(text.contains("Second?"), "选项区里回车往前走：{text}");
+    assert!(
+        !text.contains("● 1. a"),
+        "它没有确认高亮那一项 —— 那正是被推翻的那半条：{text}"
+    );
 
-    // 进输入区打字，`Enter` 在那里是前进。
-    walk_into_the_input(&mut state, 2);
-    state.key(Key::Char('x'));
-    state.key(Key::Enter);
+    // 翻回来：这一题被记成跳过了，页脚说出来。
+    state.key(Key::Left);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("Second?"), "输入区里 `Enter` 前进：{text}");
+    assert!(text.contains("First?"), "{text}");
+    assert!(text.contains("已跳过"), "页脚说它交回去的是什么：{text}");
+
+    // 输入区里是同一条规则：末题上回车把没作答的它记成跳过，然后整份交出去。
+    state.key(Key::Right);
+    walk_into_the_input(&mut state, 1);
+    state.key(Key::Enter);
+    assert!(answer(&mut rx).is_some(), "输入区里的回车也处置了这一题");
 }
 
 #[test]
-fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
-    // 在一道已经打了字的题上按 `Enter` 只是前进；它不确认那个
-    // 高亮，否则打进去的自由文本会被某个选项悄悄替换掉
-    // （spec §7）。
+fn enter_keeps_typed_text_instead_of_marking_the_question_skipped() {
+    // 在一道已经打了字的题上按 `Enter` 只是前进：它不确认那个高亮，也不把这题改成「跳过」
+    // —— 打进去的自由文本是用户真答的东西（spec §7、§11）。
     let mut state = state();
     let mut rx = ask(
         &mut state,
@@ -395,7 +411,7 @@ fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("Second?"), "Enter 走到下一题：\n{text}");
 
-    state.key(Key::Enter);
+    // 末题上回车：没作答的那一题记成跳过，整份问卷随这一下交出去。
     state.key(Key::Enter);
     assert_eq!(
         answer(&mut rx).expect("作答了").answers,
@@ -407,11 +423,61 @@ fn enter_keeps_typed_text_instead_of_re_confirming_an_option() {
             },
             UserAnswer {
                 id: "two".to_owned(),
-                selected: vec!["c".to_owned()],
+                selected: Vec::new(),
                 custom: None,
             },
         ]
     );
+}
+
+#[test]
+fn moving_forward_marks_a_question_skipped_but_moving_back_never_does() {
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![
+            question("one", "First?", &["a"], false),
+            question("two", "Second?", &["b"], false),
+            question("three", "Third?", &["c"], false),
+        ],
+    );
+
+    // `←` 只移动，不记任何东西；第一题上它更是无处可去。
+    state.key(Key::Left);
+    assert!(
+        screen(120, 24, &mut state).join("\n").contains("First?"),
+        "还在第一题"
+    );
+
+    // `→` 给**离开时**那道没作答的题记跳过，页脚会说出来。
+    state.key(Key::Right);
+    state.key(Key::Left);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("First?"), "{text}");
+    assert!(text.contains("已跳过"), "往回翻看得见那一笔：{text}");
+
+    // 回头真作答，再往前走时它**不该**被记成跳过。
+    state.key(Key::Right);
+    state.key(Key::Char(' '));
+    state.key(Key::Right);
+    state.key(Key::Left);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("已跳过"), "答过的题不被记成跳过：{text}");
+
+    // 走到末题，然后在末题上按 `→`：什么都不做 —— 不记、不前进、不提交。
+    state.key(Key::Right);
+    assert!(
+        screen(120, 24, &mut state).join("\n").contains("Third?"),
+        "到末题了"
+    );
+    state.key(Key::Right);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("Third?"), "末题上不前进：{text}");
+    assert!(answer(&mut rx).is_none(), "末题上 `→` 不提交");
+
+    // 提交仍旧只走回车。
+    state.key(Key::Enter);
+    assert!(answer(&mut rx).is_some(), "回车把整份交出去");
 }
 
 #[test]
@@ -438,8 +504,8 @@ fn the_option_window_scrolls_so_the_highlighted_option_stays_visible() {
     );
     assert!(text.contains("Which?"), "题目钉在窗口上方不动：\n{text}");
 
-    // 第十个选项往后也够得到：高亮不是靠数字键。
-    state.key(Key::Enter);
+    // 第十个选项往后也够得到：高亮不是靠数字键。空格确认、回车交出整份（§11）。
+    state.key(Key::Char(' '));
     state.key(Key::Enter);
     assert_eq!(
         answer(&mut rx).expect("作答了").answers,
@@ -505,8 +571,8 @@ fn the_recommended_marker_is_display_only() {
         "这个选项读出来不是那个原始标记：{text}"
     );
 
-    // 答案保留原串，标记也在内。
-    state.key(Key::Enter);
+    // 答案保留原串，标记也在内。空格确认、回车交出整份（§11）。
+    state.key(Key::Char(' '));
     state.key(Key::Enter);
     assert_eq!(
         answer(&mut rx).expect("作答了").answers,
@@ -537,21 +603,36 @@ fn answering_hands_the_bottom_back_to_the_resident_input() {
 
 #[test]
 fn a_question_with_no_options_is_answered_with_free_text() {
-    // 线上契约允许没有选项的题：那时的答案就是用户
-    // 打进去的文本，而空的不算一个答案（spec §7）。
+    // 线上契约允许没有选项的题：那时的答案就是用户打进去的文本，而空的不算一个答案
+    // （spec §7）。回车在新语义下是「把这一题记成跳过」（§11），所以它交回的是 `selected: []`
+    // 且没有 `custom` 的那种空答案 —— 而不是一个空字符串。
+    let mut skipped = state();
+    let mut skipped_rx = ask(
+        &mut skipped,
+        vec![question("q", "How should it be named?", &[], false)],
+    );
+    let text = screen(120, 24, &mut skipped).join("\n");
+    assert!(text.contains("回答："), "显示出一行自由文本：{text}");
+    skipped.key(Key::Enter);
+    assert_eq!(
+        answer(&mut skipped_rx)
+            .expect("跳过是这一题的着落，于是整份交出去")
+            .answers,
+        vec![UserAnswer {
+            id: "q".to_owned(),
+            selected: Vec::new(),
+            custom: None,
+        }],
+        "空答案不是空字符串"
+    );
+
+    // 数字是普通文本：这个键盘没有数字选择，
+    // 这里也没有任何选项等着它去编号。
     let mut state = state();
     let mut rx = ask(
         &mut state,
         vec![question("q", "How should it be named?", &[], false)],
     );
-
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("回答："), "显示出一行自由文本：{text}");
-
-    state.key(Key::Enter);
-    assert!(answer(&mut rx).is_none(), "一道空的自由文本题不算作过答");
-    // 数字是普通文本：这个键盘没有数字选择，
-    // 这里也没有任何选项等着它去编号。
     for ch in "v2-name".chars() {
         state.key(Key::Char(ch));
     }
@@ -677,9 +758,9 @@ fn a_space_is_text_once_the_custom_answer_has_focus() {
     );
 
     // 一路答完：那个空格随答案交回去，而不是被高亮那个选项替换掉。
-    state.key(Key::Enter);
-    state.key(Key::Enter);
-    state.key(Key::Enter);
+    state.key(Key::Enter); // 第一题已经打了字，回车只往前走
+    state.key(Key::Char(' ')); // 第二题用空格真作答
+    state.key(Key::Enter); // 每题都有着落，交出去
     assert_eq!(
         answer(&mut rx).expect("作答了").answers,
         vec![
@@ -717,7 +798,7 @@ fn a_space_still_confirms_while_nobody_is_typing() {
         "确认不翻页，翻页是 `→` 的事：\n{text}"
     );
     single.key(Key::Right);
-    single.key(Key::Enter);
+    // 第二题没作答，回车把它记成跳过 —— 于是整份问卷随这一下交出去。
     single.key(Key::Enter);
     assert_eq!(
         answer(&mut single_rx).expect("作答了").answers[0].selected,

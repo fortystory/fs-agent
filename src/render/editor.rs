@@ -8,8 +8,10 @@
 //! 上，所以一份多行草稿不会被一个 `Ctrl-U` 吃掉好几行，而 `↑`/`↓` 移动光标而不是翻历史
 //! —— 翻历史只有 `Ctrl-P` / `Ctrl-N` 两个键（spec §6）。
 
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use super::token::{self, Token};
 use super::width::{char_columns, text_columns};
 
 /// 草稿第一行上的提示符。
@@ -37,20 +39,21 @@ pub struct Placed {
     pub column: u16,
 }
 
-/// 光标所在的那个 `/` 记号：一个正在被打的斜杠命令。
+/// 草稿里一段要上色的字符区间。
 ///
-/// 它**只是第一行的开头**，别的都不是。循环就是在那里找命令，所以那也是菜单唯一可以提供
-/// 命令的地方：一个在后面的行里的 `/`，或者在起头的那个空格之后的 `/`，都是一个提示里的
-/// 普通字符，补全它会覆盖掉用户本来想写的东西。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlashToken {
-    /// `/` 所在的字符下标。
+/// 判据是「能兑现」—— `/` 的记要在命令表里命中、`@` 的记要在文件索引里命中 —— 而
+/// [`Input`] 两样都不认识。所以区间由 `TuiState` 算好、同步进来（与它记着的菜单选择同
+/// 构），编辑器只做**纯几何**的吸附与整块删。这条缝正是本节的重点：它让编辑器继续不认识
+/// 命令表与文件系统（`.scratch/input-tokens/spec.md` §4）。
+///
+/// 样式也一并从外面进来，所以「命令蓝、引用紫」那对常量不散写在这里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSpan {
+    /// 区间起始的字符下标。
     pub start: usize,
-    /// 名字刚过一格的字符下标：斜杠之后的第一个空白，或者草稿末尾。补全会替换掉这一整段，
-    /// 因为光标*之后*那部分名字仍然是正在打的东西的一部分。
+    /// 刚过一格的字符下标。
     pub end: usize,
-    /// 斜杠之后一直打到光标为止的东西。
-    pub prefix: String,
+    pub style: Style,
 }
 
 /// 草稿的一个显示行。
@@ -75,6 +78,11 @@ pub struct Input {
     draft: String,
     /// `↑`/`↓` 想保住的视觉列，直到别的什么东西挪动了光标。
     goal: Option<usize>,
+    /// 能兑现的那些记号区间，由 `TuiState` 同步进来。
+    ///
+    /// 它们是**不可分割的一块**：光标吸附到边界上，删除命中时整块删。区间为空时编辑器完全
+    /// 是今天那个纯文本模型。
+    spans: Vec<TokenSpan>,
 }
 
 impl Input {
@@ -86,6 +94,7 @@ impl Input {
             history_at: None,
             draft: String::new(),
             goal: None,
+            spans: Vec::new(),
         }
     }
 
@@ -129,10 +138,9 @@ impl Input {
             .take(height)
             .map(|(index, row)| {
                 let lead = if index == 0 { PROMPT } else { indent.as_str() };
-                Line::from(vec![
-                    Span::raw(lead.to_owned()),
-                    Span::raw(row.text.clone()),
-                ])
+                let mut spans = vec![Span::raw(lead.to_owned())];
+                spans.extend(self.row_spans(row));
+                Line::from(spans)
             })
             .collect();
         (
@@ -164,11 +172,14 @@ impl Input {
     }
 
     /// 删掉光标前的一个字符；在行首时它把这一行接到上一行。
+    ///
+    /// 命中一个记号时**整块**删，但不额外吞掉旁边的空白。
     pub fn backspace(&mut self) {
         if self.cursor == 0 {
             return;
         }
-        self.remove_range(self.cursor - 1, self.cursor);
+        let (from, to) = self.expand_to_tokens(self.cursor - 1, self.cursor);
+        self.remove_range(from, to);
     }
 
     /// 删掉光标后的一个字符；在行尾时它把下一行拉上来。
@@ -176,28 +187,29 @@ impl Input {
         if self.cursor >= self.len() {
             return;
         }
-        self.remove_range(self.cursor, self.cursor + 1);
+        let (from, to) = self.expand_to_tokens(self.cursor, self.cursor + 1);
+        self.remove_range(from, to);
     }
 
     pub fn left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
+        self.cursor = self.snap_left(self.cursor.saturating_sub(1));
         self.cursor_moved();
     }
 
     pub fn right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.len());
+        self.cursor = self.snap_right((self.cursor + 1).min(self.len()));
         self.cursor_moved();
     }
 
     /// 光标所在那条**行**的开头，不是草稿的开头。
     pub fn home(&mut self) {
-        self.cursor = self.line_bounds().0;
+        self.cursor = self.snap_nearest(self.line_bounds().0);
         self.cursor_moved();
     }
 
     /// 光标所在那条**行**的末尾，不是草稿的末尾。
     pub fn end(&mut self) {
-        self.cursor = self.line_bounds().1;
+        self.cursor = self.snap_nearest(self.line_bounds().1);
         self.cursor_moved();
     }
 
@@ -211,6 +223,7 @@ impl Input {
         self.cursor = start - 1;
         let line = self.line_bounds();
         self.place_at_column(line, want);
+        self.cursor = self.snap_nearest(self.cursor);
         self.goal = Some(want);
     }
 
@@ -224,20 +237,25 @@ impl Input {
         self.cursor = end + 1;
         let line = self.line_bounds();
         self.place_at_column(line, want);
+        self.cursor = self.snap_nearest(self.cursor);
         self.goal = Some(want);
     }
 
     pub fn kill_to_line_start(&mut self) {
         let start = self.line_bounds().0;
-        self.remove_range(start, self.cursor);
+        let (from, to) = self.expand_to_tokens(start, self.cursor);
+        self.remove_range(from, to);
     }
 
     pub fn kill_to_line_end(&mut self) {
         let end = self.line_bounds().1;
-        self.remove_range(self.cursor, end);
+        let (from, to) = self.expand_to_tokens(self.cursor, end);
+        self.remove_range(from, to);
     }
 
     /// `Ctrl-W`：先丢光标前的尾部空格，再丢一段非空格 —— shell 的抹词，但关在这一行之内。
+    ///
+    /// 抹到的是一个能兑现的记号时，整块删。
     pub fn kill_word(&mut self) {
         let (start, _) = self.line_bounds();
         let chars: Vec<char> = self
@@ -253,7 +271,8 @@ impl Input {
         while word > 0 && !chars[word - 1].is_whitespace() {
             word -= 1;
         }
-        self.remove_range(start + word, self.cursor);
+        let (from, to) = self.expand_to_tokens(start + word, self.cursor);
+        self.remove_range(from, to);
     }
 
     pub fn clear(&mut self) {
@@ -262,6 +281,7 @@ impl Input {
         self.history_at = None;
         self.draft.clear();
         self.goal = None;
+        self.spans.clear();
     }
 
     /// 取走草稿去提交：两端裁掉、清空、并记进历史。
@@ -276,51 +296,35 @@ impl Input {
         line
     }
 
-    // --- 斜杠记号 ----------------------------------------------------------
+    // --- 记号 --------------------------------------------------------------
 
-    /// 光标所在的那个 `/` 记号，如果它在里面的话。
-    ///
-    /// 记号必须从草稿最开头起，而且还没碰到空格：`/ask-matt` 是一个记号，
-    /// `/ask-matt 优化这个` 是一个带任务的命令，`看看 /tmp/x` 是一条路径。只看第一行，因为
-    /// 循环只在第一行找命令。
-    pub fn slash_token(&self) -> Option<SlashToken> {
-        let (line_start, _) = self.line_bounds();
-        if line_start != 0 || !self.text.starts_with('/') {
-            return None;
-        }
-        // 名字一直延到出现的第一个空白 —— 换行结束这一行，空格开始任务 —— 或者到草稿末尾。
-        let end = self
-            .text
-            .chars()
-            .position(char::is_whitespace)
-            .unwrap_or_else(|| self.len());
-        // 光标越过了名字，就是落在任务里，那里没有东西可补全。
-        if self.cursor > end {
-            return None;
-        }
-        Some(SlashToken {
-            start: 0,
-            end,
-            prefix: self
-                .text
-                .chars()
-                .skip(1)
-                .take(self.cursor.saturating_sub(1))
-                .collect(),
-        })
+    /// 光标在草稿里的**字符**下标。
+    pub fn cursor(&self) -> usize {
+        self.cursor
     }
 
-    /// 把 `/` 记号替换成 `/<name>`，光标留在它后面。
+    /// 光标所在的那个记号，如果它落在某个记号里面的话。
     ///
-    /// 光标不在一个记号里时返回 `false` —— 什么都不改 —— 于是一份过时的菜单永远写不进
-    /// 用户已经走开的草稿。
-    pub fn complete_slash(&mut self, name: &str) -> bool {
-        let Some(token) = self.slash_token() else {
+    /// 推导本身是纯函数（[`super::token`]），所以菜单、补全与提交解析看的是同一份判断 ——
+    /// 编辑器继续不认识命令表，也不认识文件索引。
+    pub fn token(&self) -> Option<Token> {
+        token::token_at(self.text(), self.cursor)
+    }
+
+    /// 把光标所在的那个记号替换成 `{prefix}{text}`，光标留在它后面。
+    ///
+    /// 光标不在这个前缀的记号里时返回 `false` —— 什么都不改 —— 于是一份过时的菜单永远
+    /// 写不进用户已经走开的草稿。
+    pub fn complete_token(&mut self, prefix: char, text: &str) -> bool {
+        let Some(token) = self.token() else {
             return false;
         };
+        if token.prefix != prefix {
+            return false;
+        }
         self.remove_range(token.start, token.end);
         self.cursor = token.start;
-        self.insert_str(&format!("/{name}"));
+        self.insert_str(&format!("{prefix}{text}"));
         true
     }
 
@@ -365,6 +369,91 @@ impl Input {
 
     fn len(&self) -> usize {
         self.text.chars().count()
+    }
+
+    // --- 记号（纯几何） ----------------------------------------------------
+
+    /// 换上新的记号区间，由 `TuiState` 在草稿或判据变化时同步进来。
+    pub fn set_token_spans(&mut self, spans: Vec<TokenSpan>) {
+        self.spans = spans;
+    }
+
+    /// 光标往**左**一步的落点：目标落在记号内部就吸附到它的左边界。
+    ///
+    /// 方向性是必要的：从记号右边界出发的 `←` 必须跨过整块，而不是被「最近边界」按回原处。
+    fn snap_left(&self, at: usize) -> usize {
+        self.spans
+            .iter()
+            .find(|span| span.start < at && at < span.end)
+            .map(|span| span.start)
+            .unwrap_or(at)
+    }
+
+    /// 光标往**右**一步的落点：目标落在记号内部就吸附到它的右边界。
+    fn snap_right(&self, at: usize) -> usize {
+        self.spans
+            .iter()
+            .find(|span| span.start < at && at < span.end)
+            .map(|span| span.end)
+            .unwrap_or(at)
+    }
+
+    /// 任意落点（`Home`/`End`/上下行）落在记号内部时，吸附到**最近**的那个边界。
+    fn snap_nearest(&self, at: usize) -> usize {
+        self.spans
+            .iter()
+            .find(|span| span.start < at && at < span.end)
+            .map(|span| {
+                if at - span.start <= span.end - at {
+                    span.start
+                } else {
+                    span.end
+                }
+            })
+            .unwrap_or(at)
+    }
+
+    /// 把删除范围扩到「碰到哪个记号就整块吃掉哪个」，但**不**吞掉记号旁边的空白。
+    fn expand_to_tokens(&self, from: usize, to: usize) -> (usize, usize) {
+        let (mut from, mut to) = (from, to);
+        for span in &self.spans {
+            if span.start < to && from < span.end {
+                from = from.min(span.start);
+                to = to.max(span.end);
+            }
+        }
+        (from, to)
+    }
+
+    /// 一个显示行的正文，按记号区间分段上色。
+    ///
+    /// 记号可能跨折行，所以分段是按**字符区间**做的，不是按显示行做的 —— 一个记号落在几行
+    /// 上，每一行拿到的都是同一份样式。
+    fn row_spans(&self, row: &Row) -> Vec<Span<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut text = String::new();
+        let mut style = Style::default();
+        for (offset, ch) in row.text.chars().enumerate() {
+            let next = self.style_at(row.start + offset);
+            if next != style && !text.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut text), style));
+            }
+            style = next;
+            text.push(ch);
+        }
+        if !text.is_empty() {
+            spans.push(Span::styled(text, style));
+        }
+        spans
+    }
+
+    /// 字符 `at` 落在哪个记号里，就给它哪个样式；不在任何记号里就是普通文本。
+    fn style_at(&self, at: usize) -> Style {
+        self.spans
+            .iter()
+            .find(|span| span.start <= at && at < span.end)
+            .map(|span| span.style)
+            .unwrap_or_default()
     }
 
     /// 字符下标 `at` 的字节偏移，夹在末尾上。
@@ -444,6 +533,7 @@ impl Input {
         self.text = text.to_owned();
         self.cursor = self.len();
         self.goal = None;
+        self.spans.clear();
     }
 
     /// 折行之后的那些行，以及光标落在它们中的哪儿。

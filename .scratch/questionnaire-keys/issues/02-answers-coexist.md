@@ -50,7 +50,7 @@ Blocked by: 01
 - 不动 plain 路径（它一次一行，表达不了并存，spec §10）。
 - 不动 `Esc`（票 03）、页脚（票 04）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：删掉三处互斥（`type_custom` 的单选清空、`confirm_highlight` 的
   `custom.clear()`、`answers()` 的单选清零），`confirm_highlight` 变成**切换**（单选集合仍至多一个，

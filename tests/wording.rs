@@ -12,6 +12,7 @@ use fs_agent::events::{
     ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId, StopReason, Usage,
 };
 use fs_agent::permissions::{Escalation, Mode};
+use fs_agent::render::width::text_columns;
 use fs_agent::render::wording::{self, NumberStyle};
 
 #[test]
@@ -1142,17 +1143,38 @@ fn a_questionnaire_reads_in_chinese_and_pages() {
 #[test]
 fn the_questionnaire_hint_drops_the_teaching_parts_first() {
     // 三档递减：先丢 Emacs 别名，再丢 `j`/`k` 那一句，最后只剩出口；再窄就整段不画
-    // （`.scratch/questionnaire-keys/spec.md` §6）。
+    // （`.scratch/questionnaire-keys/spec.md` §6）。回车那一段跟着它**实际会做什么**变：
+    // 每题都有着落时是「回车 提交」，否则「回车 下一题」（§11）。
+    const WIDE_NEXT: &str =
+        "j/k 移动 · 空格选中 · 回车 下一题 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k";
+    const WIDE_SUBMIT: &str =
+        "j/k 移动 · 空格选中 · 回车 提交 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k";
+    const MEDIUM_NEXT: &str = "j/k 移动 · 空格选中 · 回车 下一题 · esc 退出询问";
+    const MEDIUM_SUBMIT: &str = "j/k 移动 · 空格选中 · 回车 提交 · esc 退出询问";
+    assert_eq!(wording::questionnaire_hint(120, false), WIDE_NEXT);
+    assert_eq!(wording::questionnaire_hint(120, true), WIDE_SUBMIT);
+    assert_eq!(wording::questionnaire_hint(60, false), MEDIUM_NEXT);
+    assert_eq!(wording::questionnaire_hint(60, true), MEDIUM_SUBMIT);
+    assert_eq!(wording::questionnaire_hint(20, false), "esc 退出询问");
+    assert_eq!(wording::questionnaire_hint(8, false), "");
+
+    // **阈值就是文案自己的实测宽度**，不是一个另外抄下来的数字：判成某一档却放不下，会被
+    // 页脚裁掉一截。边界拿「下一题」那个更宽的变体算，两个变体共用同一条阈值。
+    let wide = text_columns(WIDE_NEXT);
+    assert_eq!(wording::questionnaire_hint(wide, false), WIDE_NEXT);
+    assert_eq!(wording::questionnaire_hint(wide - 1, false), MEDIUM_NEXT);
+    let medium = text_columns(MEDIUM_NEXT);
+    assert_eq!(wording::questionnaire_hint(medium, false), MEDIUM_NEXT);
     assert_eq!(
-        wording::questionnaire_hint(120),
-        "j/k 移动 · 空格选中 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
+        wording::questionnaire_hint(medium - 1, false),
+        "esc 退出询问"
     );
-    assert_eq!(
-        wording::questionnaire_hint(40),
-        "j/k 移动 · 空格选中 · esc 退出询问"
-    );
-    assert_eq!(wording::questionnaire_hint(16), "esc 退出询问");
-    assert_eq!(wording::questionnaire_hint(8), "");
+    let narrow = text_columns("esc 退出询问");
+    assert_eq!(wording::questionnaire_hint(narrow, false), "esc 退出询问");
+    assert_eq!(wording::questionnaire_hint(narrow - 1, false), "");
+
+    // 进度段后面那句「这一题交回去的是什么」。
+    assert_eq!(wording::questionnaire_skipped(), "已跳过");
 
     // 举手那两句是**替换**段尾那段提示，不在阶梯里。
     assert_eq!(
@@ -1362,4 +1384,24 @@ fn the_forty_column_cap_counts_display_columns_not_bytes() {
     let too_wide = "目".repeat(10);
     let title = wording::terminal_title(cwd, None, wording::TitleState::Running, Some(&too_wide));
     assert_eq!(title, "x/fs-agent · 运行中", "20 列的目标挤不下：{title}");
+}
+
+#[test]
+fn the_command_and_reference_colours_are_two_distinct_named_colours() {
+    // 草稿里两个前缀的颜色是主题层给的两个常量，不散写在绘制里
+    // （`.scratch/input-tokens/spec.md` §4）。这里钉的是「它们是两个、而且都真的在着色」——
+    // 一个被改成 `Reset`、或者两个被合成同一个值，都该报红。
+    let command = fs_agent::render::TOKEN_COMMAND;
+    let reference = fs_agent::render::TOKEN_REFERENCE;
+    assert_ne!(command, reference, "命令蓝与引用紫是两种颜色");
+    assert_ne!(
+        command,
+        ratatui::style::Color::Reset,
+        "上色不该是一个空操作"
+    );
+    assert_ne!(
+        reference,
+        ratatui::style::Color::Reset,
+        "上色不该是一个空操作"
+    );
 }

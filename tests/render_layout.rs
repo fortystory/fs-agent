@@ -1,6 +1,6 @@
 //! 全屏外壳画进一个 `TestBackend`，于是几何不用终端也能断言
 //! （`.scratch/tui-sidebar/spec.md` §1–§2，
-//! `Testing Decisions`）。
+//! `测试决定`）。
 //!
 //! 接缝是 [`draw_frame`]：一个状态进去，一块定尺的缓冲区出来。
 //! 下面每一条断言说的都是人看得见的东西 —— 有哪些区域、左栏那一页
@@ -11,7 +11,7 @@ use fs_agent::render::editor;
 use fs_agent::render::width::text_columns;
 use fs_agent::render::{
     draw_frame, wording, CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent,
-    SessionFacts, TuiState, PULSE_PALETTE,
+    SessionFacts, TuiState, PULSE_PALETTE, TOKEN_COMMAND, TOKEN_REFERENCE,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
@@ -3214,6 +3214,11 @@ fn install_catalog(state: &mut TuiState) {
     state.request(ConsoleRequest::Catalog { entries });
 }
 
+/// 给状态装一份文件索引：`@` 的候选来源（票 01 的那个会话级值）。
+fn install_files(state: &mut TuiState, paths: &[&str]) {
+    state.files_loaded(paths.iter().map(std::path::PathBuf::from).collect());
+}
+
 /// 一次进行中的提示请求，好让测试读回一次提交送出去了什么。
 fn awaiting_line(state: &mut TuiState) -> tokio::sync::oneshot::Receiver<Option<String>> {
     let (reply, line) = tokio::sync::oneshot::channel();
@@ -3336,6 +3341,27 @@ fn the_menu_filters_on_what_has_been_typed_after_the_slash() {
     }
     let text = screen(120, 24, &mut state).join("\n");
     assert!(!text.contains("┆ /"), "没指到东西的前缀没有菜单：\n{text}");
+}
+
+#[test]
+fn the_file_index_is_warmed_once_and_rescanned_after_a_submission() {
+    // 预热：进 TUI 就发一次遍历；重扫：每提交一条消息之后再发一次
+    // （`.scratch/input-tokens/spec.md` §1）。这里钉的是**什么时候**扫与**不会重发**——
+    // 遍历本身由循环用 `spawn_blocking` 去跑，所以状态机不用起任务就能测。
+    let mut state = idle();
+    assert!(state.take_file_scan(), "进 TUI 就先预热一次");
+    assert!(!state.take_file_scan(), "一次遍历还在飞，不重复发");
+    state.files_loaded(Vec::new()); // 预热那次落地
+
+    let mut line = awaiting_line(&mut state);
+    state.key(Key::Char('x'));
+    state.key(Key::Enter);
+    assert_eq!(
+        line.try_recv().expect("提交送出去了一行"),
+        Some("x".to_owned())
+    );
+    assert!(state.take_file_scan(), "提交之后重扫一次");
+    assert!(!state.take_file_scan(), "重扫也只发一次");
 }
 
 #[test]
@@ -3463,6 +3489,37 @@ fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
 }
 
 #[test]
+fn esc_keeps_its_word_per_token_not_per_query() {
+    // spec §2：`Esc` 的「否掉」按**记号**记账 —— 关掉一个不该牵连同一行里另一个记号，
+    // 哪怕两者打的是同一个名字。菜单开着时才接受 `Tab`，所以「Tab 补不补全」就是它的
+    // 可见回执。
+    let mut state = idle();
+    // `a` 让两个 `@a` 都兑现（成为 chip，光标才会吸附到记号边界）；`ab` 排在前面，
+    // 于是「菜单开着」有一个看得见的回执 —— `Tab` 把它补成 `@ab`。
+    install_files(&mut state, &["ab", "a"]);
+    for ch in "@a @a".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Esc);
+    state.key(Key::Tab);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(&format!("┆{}@a @a", editor::PROMPT)),
+        "`Esc` 关掉的那一个记号里 `Tab` 什么都补不了：\n{text}"
+    );
+
+    // 把光标移回**前**一个记号里：那是另一个记号，有自己的账，菜单该重开。
+    state.key(Key::Left);
+    state.key(Key::Left);
+    state.key(Key::Tab);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(&format!("┆{}@ab @a", editor::PROMPT)),
+        "另一个记号重新开菜单，`Tab` 于是补全了它：\n{text}"
+    );
+}
+
+#[test]
 fn a_question_hides_the_menu_because_it_owns_the_keyboard() {
     let mut state = state();
     install_catalog(&mut state);
@@ -3513,6 +3570,203 @@ fn there_is_no_menu_before_the_loop_has_said_what_exists() {
     state.key(Key::Char('/'));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(!text.contains("┆ /"), "空清单什么都提供不了：\n{text}");
+}
+
+#[test]
+fn an_at_opens_a_menu_only_once_a_character_has_been_typed() {
+    // 两个前缀共用一套浮层，但候选来源不同：`/` 是循环报上来的命令表，`@` 是文件索引
+    // （`.scratch/input-tokens/spec.md` §2、§3）。
+    let mut state = idle();
+    install_files(&mut state, &["src/", "src/main.rs", "README.md"]);
+
+    // 裸 `@` 不列候选：命令表只有几十条，「看全部」成立，而文件有几千个，它没有意义。
+    state.key(Key::Char('@'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("┆ @"), "裸 `@` 不画菜单：\n{text}");
+
+    // 打第一个字符才出现，而且只列前缀匹配上的那些 —— 文件与目录都列。
+    state.key(Key::Char('s'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("┆ @src/"), "候选画在菜单里：\n{text}");
+    assert!(text.contains("┆ @src/main.rs"), "文件也在：\n{text}");
+    assert!(!text.contains("@README.md"), "别的被滤掉了：\n{text}");
+
+    // 索引未就绪时同样什么都不显示 —— 预热让它几乎不可能被看见。
+    let mut cold = idle();
+    for ch in "@s".chars() {
+        cold.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut cold).join("\n");
+    assert!(!text.contains("┆ @"), "还没有索引就没有候选：\n{text}");
+}
+
+#[test]
+fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
+    let mut state = idle();
+    install_files(
+        &mut state,
+        &[
+            "second.txt",
+            "src/",
+            "src/main.rs",
+            "src/render/",
+            "src/render/tui.rs",
+        ],
+    );
+    for ch in "@s".chars() {
+        state.key(Key::Char(ch));
+    }
+    // 索引是排好序的，所以第一个候选是 `second.txt`；`↓` 走到 `src/` 那个目录上，
+    // `Tab` 把它补进草稿。
+    state.key(Key::Down);
+    state.key(Key::Tab);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(&format!("┆{}@src/", editor::PROMPT)),
+        "目录补进了草稿：\n{text}"
+    );
+    assert!(
+        text.contains("┆ @src/main.rs"),
+        "菜单接着列这一层：\n{text}"
+    );
+    assert!(
+        text.contains("┆ @src/render/"),
+        "子目录也在这一层里：\n{text}"
+    );
+    assert!(
+        !text.contains("@second.txt"),
+        "query 换成了新前缀，上一层的东西不再列：\n{text}"
+    );
+
+    // 反过来，接受一个**文件**就把菜单关掉。
+    let mut file = idle();
+    install_files(&mut file, &["src/main.rs", "src/map.md"]);
+    for ch in "@src/m".chars() {
+        file.key(Key::Char(ch));
+    }
+    file.key(Key::Tab);
+    let text = screen(120, 24, &mut file).join("\n");
+    assert!(
+        text.contains(&format!("┆{}@src/main.rs", editor::PROMPT)),
+        "文件补进了草稿：\n{text}"
+    );
+    assert!(!text.contains("┆ @src/map.md"), "菜单关掉了：\n{text}");
+}
+
+#[test]
+fn enter_in_the_at_menu_accepts_without_sending() {
+    let mut state = idle();
+    install_files(&mut state, &["src/main.rs"]);
+    let mut line = awaiting_line(&mut state);
+    for ch in "@s".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Enter);
+    assert!(line.try_recv().is_err(), "`@` 菜单里回车只接受，不发送");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(&format!("┆{}@src/main.rs", editor::PROMPT)),
+        "路径落进草稿：\n{text}"
+    );
+
+    // 再按一次才是发送 —— 插进去的路径只是句子的一部分（spec §2 那处刻意分叉）。
+    state.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("@src/main.rs".to_owned()));
+
+    // 而 `/` 那一半没有变：回车仍是「插入并发送」。
+    let mut slash = idle();
+    install_catalog(&mut slash);
+    let mut line = awaiting_line(&mut slash);
+    for ch in "/rev".chars() {
+        slash.key(Key::Char(ch));
+    }
+    slash.key(Key::Enter);
+    assert_eq!(line.try_recv().unwrap(), Some("/review".to_owned()));
+}
+
+/// 输入行里 `needle` 那一格的前景色。
+///
+/// 找的是**输入行**（`┆❱` 那一行）：`/` 菜单会浮在它上面，而菜单里也有同样的文字。
+fn draft_colour(frame: &Buffer, width: u16, height: u16, needle: &str) -> Color {
+    let lead = format!("┆{}", editor::PROMPT);
+    let (row, line) = (0..height)
+        .map(|y| (y, row_text(frame, y, width)))
+        .find(|(_, line)| line.contains(&lead) && line.contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} 在输入行上"));
+    let byte = line.find(needle).expect("刚刚找到过");
+    let column = text_columns(&line[..byte]) as u16;
+    frame[(column, row)].fg
+}
+
+#[test]
+fn only_a_token_that_can_be_honoured_is_coloured() {
+    // 判据只有一条：`/` 的记要在命令表里命中、`@` 的记要在索引里命中（spec §4）。上色与
+    // chip 共用它，所以这里钉的是那一判据在屏幕上的样子。
+    let mut commands = idle();
+    install_catalog(&mut commands);
+    for ch in "/undo".chars() {
+        commands.key(Key::Char(ch));
+    }
+    let frame = buffer(120, 24, &mut commands);
+    assert_eq!(
+        draft_colour(&frame, 120, 24, "/undo"),
+        TOKEN_COMMAND,
+        "命中的命令是命令蓝"
+    );
+
+    // 命中不了的保持普通文本色 —— 给 `看 /tmp/x` 里的 `/tmp/x` 上蓝色会教出错误直觉。
+    let mut paths = idle();
+    install_catalog(&mut paths);
+    for ch in "look /tmp/x".chars() {
+        paths.key(Key::Char(ch));
+    }
+    let frame = buffer(120, 24, &mut paths);
+    assert_eq!(
+        draft_colour(&frame, 120, 24, "/tmp/x"),
+        Color::Reset,
+        "命令表里没有的记号不着色"
+    );
+
+    // `@` 的那一半：索引里有的路径是引用紫，拼错的是普通文本。
+    let mut reference = idle();
+    install_files(&mut reference, &["src/render/tui.rs"]);
+    for ch in "@src/render/tui.rs".chars() {
+        reference.key(Key::Char(ch));
+    }
+    let frame = buffer(120, 24, &mut reference);
+    assert_eq!(
+        draft_colour(&frame, 120, 24, "@src/render/tui.rs"),
+        TOKEN_REFERENCE,
+        "命中索引的引用是引用紫"
+    );
+
+    let mut typo = idle();
+    install_files(&mut typo, &["src/render/tui.rs"]);
+    for ch in "@src/reneder/tui.rs".chars() {
+        typo.key(Key::Char(ch));
+    }
+    let frame = buffer(120, 24, &mut typo);
+    assert_eq!(
+        draft_colour(&frame, 120, 24, "@src/reneder/tui.rs"),
+        Color::Reset,
+        "索引里没有的路径不着色"
+    );
+}
+
+#[test]
+fn a_pasted_token_is_a_chip_like_a_typed_one() {
+    // 粘贴一视同仁：含有效记号的文本粘进来就成一块（spec §4）。一次退格把它整块带走。
+    let mut state = idle();
+    install_catalog(&mut state);
+    state.paste("改 /undo 它");
+    state.key(Key::Left);
+    state.key(Key::Left);
+    state.key(Key::Backspace);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(&format!("┆{}改  它", editor::PROMPT)),
+        "一下退格带走整块，且不吞旁边的空白：\n{text}"
+    );
 }
 
 #[test]
@@ -4415,6 +4669,40 @@ fn the_questionnaire_footer_pages_with_a_click() {
 }
 
 #[test]
+fn clicking_next_marks_the_question_skipped_like_the_arrow_key() {
+    // `.scratch/questionnaire-keys/spec.md` §11：`→` 与页脚「下一题 →」是**同一个手势**，
+    // 所以点击离开一道没作答的题时，那一笔也要记上。
+    use fs_agent::questions::{Choice, UserQuestion};
+    use fs_agent::render::QuestionnaireRequest;
+
+    let mut state = state_with_roster(&["kimi"]);
+    let (reply, _answers) = tokio::sync::oneshot::channel();
+    let question = |id: &str| UserQuestion {
+        id: id.to_owned(),
+        header: None,
+        question: format!("第 {id} 题"),
+        multi_select: false,
+        options: vec![Choice {
+            label: "唯一".to_owned(),
+            description: None,
+        }],
+    };
+    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+        questions: vec![question("q1"), question("q2")],
+        reply,
+    }));
+
+    click_in_row(&mut state, 120, 24, 23, "下一题 →");
+    // 翻回来：页脚该说这一题交回去的是什么。
+    click_in_row(&mut state, 120, 24, 23, "← 上一题");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("1 / 2 已跳过"),
+        "点击与 `→` 记的是同一笔：{text}"
+    );
+}
+
+#[test]
 fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
     use fs_agent::questions::{Choice, UserQuestion};
     let (mut state, _answers) = {
@@ -4545,6 +4833,56 @@ fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
     assert!(
         !narrow.contains("j/k 移动"),
         "先丢的是教学性的键位提示：{narrow}"
+    );
+}
+
+#[test]
+fn the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped() {
+    // `.scratch/questionnaire-keys/spec.md` §11：页脚那段提示跟着**回车实际会做什么**变，
+    // 而当前题被交回去时，进度后面跟一句 `已跳过`。
+    use fs_agent::questions::{Choice, UserQuestion};
+    use fs_agent::render::QuestionnaireRequest;
+
+    let question = |id: &str| UserQuestion {
+        id: id.to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    };
+
+    let mut state = state();
+    let (reply, _answers) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+        questions: vec![question("q1"), question("q2")],
+        reply,
+    }));
+
+    let text = screen(130, 24, &mut state).join("\n");
+    assert!(
+        text.contains("回车 下一题"),
+        "后面还有题，回车是往前走：{text}"
+    );
+    assert!(!text.contains("已跳过"), "还没人被跳过：{text}");
+
+    // 回车把第一题记成跳过、走到第二题；第二题成了末题，回车于是变成「提交」。
+    state.key(Key::Enter);
+    let text = screen(130, 24, &mut state).join("\n");
+    assert!(text.contains("2 / 2"), "{text}");
+    assert!(text.contains("回车 提交"), "每题都有着落了：{text}");
+
+    // 翻回去看得见那一笔 —— 它属于进度段，不参与提示的降级。
+    state.key(Key::Left);
+    let text = screen(130, 24, &mut state).join("\n");
+    assert!(text.contains("1 / 2 已跳过"), "进度后面跟着那一笔：{text}");
+
+    let narrow = screen(40, 24, &mut state).join("\n");
+    assert!(
+        narrow.contains("1 / 2 已跳过"),
+        "窄到只剩出口，那一笔也还在：{narrow}"
     );
 }
 

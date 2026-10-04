@@ -1,7 +1,7 @@
 # 02 — 记号抽象与 `@` 补全
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 > 来源：[`../spec.md`](../spec.md) §2、§3。它把 `/` 菜单那条链路推广成「按前缀挑候选来源」，
@@ -48,3 +48,31 @@ Blocked by: 01
 - **不做上色、不做 chip**（票 03）。
 - **不改 `cli.rs` 的命令解析**（票 04）—— 这一票只让菜单能弹出来。
 - 不上模糊匹配；不加 `$` 或别的记号。
+
+## 评论
+
+- 2026-10-05 落地：新增 `src/render/token.rs`（`Token` + `tokens` / `token_at` / `first`
+  三个纯函数，边界规则按前缀参数化）。`editor.rs` 的 `SlashToken` / `slash_token()` /
+  `complete_slash()` 换成 `token()` / `complete_token(prefix, text)` —— 补全替换的是整段
+  记号，与「一个句子里多个记号各算各的」同一条。
+- 菜单：`slash_menu()` → `token_menu()`，`SlashMenu` → `TokenMenu`（带 `sigil`），
+  `MenuSelection` 记 `(sigil, query)` 而不是只记 query —— 否则 `@a` 会接着 `/a` 的高亮。
+  候选来源按前缀挑：`/` 走 `catalog`，`@` 走票 01 的索引（裸 `@` 与未就绪都不列）。
+- 插入分叉：接受**目录**（候选以尾随斜杠结尾）时菜单保持开着、高亮回到第一个候选、query
+  换成新前缀；文件与命令照旧关菜单。另外把「等于当前 query 的那一条」从候选里滤掉 ——
+  `@src/` 下钻之后不必再列它自己。候选总量上限是 `TOKEN_MENU_CANDIDATES`（200）。
+- 两处边界的复核：`query` 是**整段名字**（打 `/ask-matt` 时光标停在中间，query 仍是
+  `ask-matt`，与「补全替换整段」一致）；`/` 的「任意位置」意味着 `src/@foo` 里的 `/foo`
+  仍然是一个 `/` 记号，只是 `@` 那一侧不放宽。
+- 测试：`tests/render_editor.rs` 的记号一组（触发边界、任意行、两个记号各算各的、补全），
+  `tests/render_layout.rs` 新增三条（裸 `@` 不画菜单与未就绪、目录下钻保持开着且文件关掉、
+  `@` 菜单回车只接受而 `/` 仍发送）。
+- **`/code-review` 之后补的四处**：① 那个「滤掉等于当前 query 的候选」原来对**文件**也生效，
+  于是 `@a`（索引里正好有个 `a`）菜单会整个消失 —— 现在只滤**目录**候选自己，文件照列；
+  ② `MenuKey` 加上**位置** `start`：`Esc` 的记账按 spec §2 是「按 token」，只比
+  `(前缀, query)` 时同一行里两个同名记号（`@a @a`）会互相牵连，`MenuSelection` 因此换成
+  `Option<MenuKey>`（顺手消掉了 `'\0'` 那个哨兵，`prefix` 改名 `query` 也不再与 `Token.prefix`
+  同名反义）；③ 零调用的 `token::first()` 删掉（提交解析要的是「最靠左的**命令**记号」，
+  与「最靠左的 `/` 记号」不是一回事，它自己的 `find` 才是对的）；④ `editor::Highlight` 改名
+  `editor::TokenSpan` —— 那个值装的是记号区间（吸附与整块删都读它），只讲「上色」的名字
+  与 `CONTEXT.md` 的**记号（Token）**词条对不上。

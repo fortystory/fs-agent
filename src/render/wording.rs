@@ -840,17 +840,35 @@ pub fn questionnaire_progress(index: usize, total: usize) -> String {
     format!("{} / {}", index + 1, total)
 }
 
-/// 问卷页脚里那段键位提示，按**留给它的列数**降级
-/// （`.scratch/questionnaire-keys/spec.md` §6）。
+/// 问卷页脚里进度段之后那句「这一题交回去的是什么」。
 ///
-/// 三档递减，按「先丢教学性的」排：Emacs 别名 → `j`/`k` 那一句 → 只留出口。空串表示这一段
-/// 连一句提示都放不下，页脚于是只剩进度与按钮。举手回执**不在**这条阶梯里 —— 它不参与降级，
-/// 页脚一放得下就先画它（见 [`questionnaire_decline_raised`] 与 [`questionnaire_exit_raised`]）。
-pub fn questionnaire_hint(room: usize) -> &'static str {
+/// 往前走会给没作答的题记上跳过，所以翻回来时得看得见那一笔，不必靠回忆
+/// （`.scratch/questionnaire-keys/spec.md` §11）。
+pub fn questionnaire_skipped() -> &'static str {
+    "已跳过"
+}
+
+/// 问卷页脚里那段键位提示，按**留给它的列数**降级
+/// （`.scratch/questionnaire-keys/spec.md` §6、§11）。
+///
+/// 三档递减，按「先丢教学性的」排：Emacs 别名 → `j`/`k` 那一句 → 只留出口。`submits` 说的是
+/// **回车这一下实际会做什么** —— 把当前题记成跳过之后每题都有着落就是「提交」，否则「下一
+/// 题」；提示段跟着它变，因为回车是这一轮的主角。空串表示这一段连一句提示都放不下，页脚于是
+/// 只剩进度与按钮。举手回执**不在**这条阶梯里 —— 它不参与降级，页脚一放得下就先画它（见
+/// [`questionnaire_decline_raised`] 与 [`questionnaire_exit_raised`]）。
+pub fn questionnaire_hint(room: usize, submits: bool) -> &'static str {
     if room >= QUESTIONNAIRE_HINT_WIDE {
-        "j/k 移动 · 空格选中 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
+        if submits {
+            "j/k 移动 · 空格选中 · 回车 提交 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
+        } else {
+            "j/k 移动 · 空格选中 · 回车 下一题 · esc 退出询问 · ctrl-n/ctrl-p 同 j/k"
+        }
     } else if room >= QUESTIONNAIRE_HINT_MEDIUM {
-        "j/k 移动 · 空格选中 · esc 退出询问"
+        if submits {
+            "j/k 移动 · 空格选中 · 回车 提交 · esc 退出询问"
+        } else {
+            "j/k 移动 · 空格选中 · 回车 下一题 · esc 退出询问"
+        }
     } else if room >= QUESTIONNAIRE_HINT_NARROW {
         "esc 退出询问"
     } else {
@@ -874,11 +892,13 @@ pub fn questionnaire_exit_raised() -> &'static str {
     "已取消 · 再按一次 ctrl-c 退出"
 }
 
-/// 键位提示那三档的边界，量的是**留给它的列数**（不是终端宽度）：完整那句 57 列、
-/// 去掉 Emacs 别名那句 34 列、只剩出口那句 12 列 —— 阈值就是它们各自的实测宽度，否则会出现
-/// 「判成宽档、句子却放不下」而被裁掉一截。
-const QUESTIONNAIRE_HINT_WIDE: usize = 57;
-const QUESTIONNAIRE_HINT_MEDIUM: usize = 34;
+/// 键位提示那三档的边界，量的是**留给它的列数**（不是终端宽度）：三档文案里最宽的那个变体
+/// 各自的实测宽度，否则会出现「判成宽档、句子却放不下」而被裁掉一截。
+///
+/// 2026-10-05 §11 把回车那一句加进来之后按新文案重算（`回车 下一题` 比 `回车 提交` 宽两列，
+/// 阈值取两者之大）。
+const QUESTIONNAIRE_HINT_WIDE: usize = 71;
+const QUESTIONNAIRE_HINT_MEDIUM: usize = 48;
 const QUESTIONNAIRE_HINT_NARROW: usize = 12;
 
 /// 多选题在它的文本旁边带的那条标记，好让用户知道可以选中多于一个选项。
@@ -2494,7 +2514,7 @@ pub fn help_sessions() -> String {
 
 /// Markdown 里一张图片在终端里的落点。
 ///
-/// 终端暂时画不出图（真图渲染要终端图像协议，明确留在 spec 的 Out of Scope 里），
+/// 终端暂时画不出图（真图渲染要终端图像协议，留在 spec 的「明确不做」那一节里），
 /// 但「这儿有一张图」得说出来 —— 旧的 `!alt (url)` 里那个 `!` 只是手写扫描器的残留噪声
 /// （spec §6）。
 pub const IMAGE_PLACEHOLDER: &str = "[图片]";

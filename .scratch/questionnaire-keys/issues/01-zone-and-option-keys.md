@@ -56,7 +56,7 @@ Blocked by: —
 - 不给输入区加行内光标或历史（`←`/`→` 仍翻页，见 spec §10）。
 - 不加 `Ctrl-U`/`Ctrl-W`/`Ctrl-J`/`Ctrl-K`。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：`custom_focused: bool` 换成 `zone: Zone`（`Options`/`Input`，问卷级、翻页按新题
   复位）；`move_highlight` 换成 `step` —— 选项区越过两端进输入区，输入区里回来并绕到另一端。

@@ -1,7 +1,7 @@
 # 01 — 会话级的文件索引（`@` 候选与将来的文件页签共用）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 来源：[`../spec.md`](../spec.md) §1。这是这一组的**第一张**：它只做一个可复用的值，
@@ -45,3 +45,22 @@ Blocked by: —
 - **不动 `grep` 与 `repo_map`**：索引借用同一条规则，不改它们一条。
 - **不给 `Tab::Files` 定型**：它到底列什么，等真做它的时候再定。
 - 不加模糊匹配依赖；不跟随符号链接（与 `grep` 保持一致）。
+
+## 评论
+
+- 2026-10-05 落地：新增 `src/render/file_index.rs`（`Idle | Loading | Ready` 三态 +
+  `scan()` + `candidates()` + `contains()`），`TuiState` 上两处挂钩（`new()` 置预热位、
+  `submit()` 后置重扫位，`take_file_scan()` 取走），渲染循环里
+  `spawn_blocking` + `tokio::sync::mpsc` 收结果，`select!` 加一支。
+- 目录也进索引，以**尾随斜杠**的形式存（`src/`）：候选要能下钻，而那个形状正好就是 `@`
+  插进草稿的文本，于是菜单显示与插入文本是同一个东西。
+- 测试：`tests/file_index.rs` 七条（隐藏/忽略不进、固定顺序、相对 cwd、空目录、非 git 仓库
+  也能走、三态、前缀过滤与行数上限、含空白不进候选、`contains` 判据），以及
+  `tests/render_layout.rs` 的 `the_file_index_is_warmed_once_and_rescanned_after_a_submission`。
+- **`/code-review` 之后补的两处**：① `Loading` 那个守卫原来只活在单测里 —— 生产路径用的是一
+  个裸 bool，于是「一次遍历还在飞时提交一条消息」会真的并发起第二份、结果互相盖掉。现在
+  `TuiState::take_file_scan()` 走 `FileIndex::begin()`：正在跑就先不发（位**留着**，等结果落地
+  后的下一轮再补发），`is_ready()` 与零调用的 `TuiState::file_index()` 一并删掉。②
+  `docs/render.md` 原来照抄了 spec §1 的「从不进任何一次按键的处理路径」，而「能兑现」的判据
+  （`contains`）本来就要在按键路径上问一次 —— 文档改成如实的样子：**遍历**不在按键路径上，
+  按键路径上只多一次内存里的查询。

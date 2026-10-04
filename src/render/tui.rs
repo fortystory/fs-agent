@@ -44,11 +44,13 @@ use crate::permissions::{Answer, Mode, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
 use super::editor::{self, Input};
+use super::file_index::{self, FileIndex};
 use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent};
 use super::layout;
 use super::pane::{self, Pane};
 use super::panel::Panel;
 use super::severity::Severity;
+use super::token;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
 use super::width::{text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
@@ -64,6 +66,22 @@ const PASTE_CONFIRM_CHARS: usize = 100_000;
 /// 一帧吸收多少个排队中的渲染事件。有界的排空让突发输出不至于把键盘饿掉整整一帧的
 /// 工作量。
 const DRAIN_LIMIT: usize = 4_096;
+
+/// `@` 菜单一次最多收多少条候选。
+///
+/// 菜单是**一扇窗口**（`layout::MENU_MAX_ROWS` 行，高亮始终可见），所以它要的候选比窗口
+/// 多，好让人用 `↓` 走下去；但也不能把几千条路径整批塞进状态里。前缀匹配通常已经把范围
+/// 收得很小。
+const TOKEN_MENU_CANDIDATES: usize = 200;
+
+/// 草稿里一条**能兑现**的 `/` 命令的颜色。
+///
+/// 「能兑现」的判据与 chip 是同一条，所以这两个常量也是那一条规则在屏幕上的样子
+/// （`.scratch/input-tokens/spec.md` §4）。
+pub const TOKEN_COMMAND: Color = Color::LightBlue;
+
+/// 草稿里一个**能兑现**的 `@` 引用的颜色。
+pub const TOKEN_REFERENCE: Color = Color::LightMagenta;
 
 /// 一次重放批次应用多少个历史事件。
 ///
@@ -348,6 +366,11 @@ impl Tui {
         let first = state.sync_title().expect("首帧之前还没有标题快照");
         let modes = TerminalModes::enter(&first);
         let mut keys = EventStream::new();
+        // 文件索引的结果从这条通道回到循环。遍历跑在 `spawn_blocking` 里，于是一次大
+        // 工作区的遍历永远不占着这个 task，也从不进任何一次按键的处理路径
+        // （`.scratch/input-tokens/spec.md` §1）。
+        let (files_tx, mut files_rx) =
+            tokio::sync::mpsc::unbounded_channel::<Vec<std::path::PathBuf>>();
 
         // 重新打开的会话在画任何东西之前先等这次重放。循环把它作为**第一条** console 请求
         // 推过来，紧接组装之后、横幅之前；与此同时组装已经在渲染通道上发出了那些恢复
@@ -376,6 +399,16 @@ impl Tui {
 
         loop {
             let mut closed = false;
+            // 预热与「提交后重扫」在这里真去起遍历：状态机置位（进 TUI 一次、每次提交再
+            // 一次），循环发活。已经在跑的时候 `take_file_scan` 不会被置位 —— 两次遍历
+            // 的结果不会互相盖掉。
+            if state.take_file_scan() {
+                let root = state.cwd().to_path_buf();
+                let tx = files_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = tx.send(file_index::scan(&root));
+                });
+            }
             if state.replay_pending() {
                 // 批次之间每个来源都会被问一遍 —— 键盘、实时流与循环的请求 —— 否则一次长
                 // 重放中的 `Ctrl-C` 就是一个死键。最后一个分支总是就绪的，所以这个 select
@@ -406,6 +439,7 @@ impl Tui {
                     received = receiver.recv() => closed = state.take_render_event(received),
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
+                    Some(paths) = files_rx.recv() => state.files_loaded(paths),
                     _ = pulse.tick(), if state.busy() => state.tick(),
                     _ = tokio::time::sleep_until(tokio::time::Instant::from(
                         deadline.unwrap_or_else(std::time::Instant::now),
@@ -648,6 +682,15 @@ pub struct TuiState {
     dirty: bool,
     /// 草稿与它的光标。
     editor: Input,
+    /// 工作区里的文件与目录：`@` 的候选，也是「能兑现」那条判据的出处
+    /// （`.scratch/input-tokens/spec.md` §1）。
+    ///
+    /// 会话级的一个值：进 TUI 预热一次、每次提交一条消息之后再扫一次。遍历本身跑在
+    /// `spawn_blocking` 里，索引从不挡住键盘。
+    files: FileIndex,
+    /// 该发一次遍历了吗。预热与提交各置一次，渲染循环取走并真去起那个 blocking 任务 ——
+    /// 于是「什么时候扫」是状态机的事，「怎么扫」是循环的事，测试不必起任务。
+    file_scan_wanted: bool,
     /// 开头的 `/` 能变成哪些名字，按循环报上来的样子。在那份报告到达之前是空的，这
     /// 正是 `/` 菜单要等它到了才开的原因。
     catalog: Vec<CatalogEntry>,
@@ -825,35 +868,23 @@ impl QuestionDraft {
 impl Questionnaire {
     /// 吃一个按键。问卷被提交时返回 `true`。
     ///
-    /// 键位**按区域分派**（`.scratch/questionnaire-keys/spec.md` §2、§4）：选项区里
-    /// `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 是同一条移动，空格与 `Enter` 在高的那一项上**切换**，
-    /// 而可打印字符与 `Backspace` 被吞掉 —— 键盘只在输入区让给文本。越过选项的两端就是进
-    /// 输入区；输入区里 `↑`/`↓` 回来并移动高亮（两端环绕），`Enter` 则是「放下这题、去下一题」。
+    /// 键位**按区域分派**（`.scratch/questionnaire-keys/spec.md` §2、§4），而**回车不在这条
+    /// 分派里**（§11 推翻了 §4 的「选项区里回车与空格完全一致」）：它在两个区域同一条规则
+    /// ——「处置这一题、往前走」：当前题还没作答就记跳过，然后每题都有着落就提交、否则前进
+    /// 一题。空格仍是唯一的选中键，`Tab` 仍是那个明确的跳过。
     ///
     /// **确认不翻页**：并存的意义就是「选项和文本可以一起给」，选完就跳走会把它取消一半，
-    /// 所以翻页留给 `←`/`→` 与页脚那三个按钮。**提交**是唯一的例外：全部题都处理完之后
-    /// `Enter` 提交整份问卷，而确认本身不会在同一次按键里提交（spec §4、§7）。
+    /// 所以翻页留给 `←`/`→` 与页脚那三个按钮。
     fn press(&mut self, key: Key) -> bool {
         match key {
-            // 提交优先于一切：它是键盘上唯一的提交路径，不该被「等价」或区域吃掉。
+            // 回车：两个区域同一条规则（§11）。「末题回车 = 提交」是它的推论 —— 往前走的每
+            // 一步都会给没作答的题记上跳过，所以走到末题时前面必然都有着落。
             Key::Enter => {
+                self.skip_if_unanswered();
                 if self.all_handled() {
                     return true;
                 }
-                match self.zone {
-                    // 输入区里 `Enter` 是「放下这题、去下一题」。
-                    Zone::Input => {
-                        if self.drafts[self.index].handled() {
-                            self.advance();
-                        }
-                    }
-                    // 选项区里它与空格完全一致。
-                    Zone::Options => {
-                        if self.has_options() {
-                            self.confirm_highlight();
-                        }
-                    }
-                }
+                self.advance();
             }
             // `Space` 也确认，这样人能不用那个兼作提交的键来作答 —— 但只在**选项区**里：
             // 人已经在输入区打过字，这一下就是文本的一部分。中文答案里夹英文词（`llm wiki`
@@ -872,8 +903,16 @@ impl Questionnaire {
             Key::Down => self.step(1),
             Key::Char('k') | Key::CtrlP if self.zone == Zone::Options => self.step(-1),
             Key::Char('j') | Key::CtrlN if self.zone == Zone::Options => self.step(1),
+            // `←` 只移动，不记任何东西：往回走是「我还没决定」，往前才是「这题我不要了」。
             Key::Left => self.back(),
-            Key::Right => self.advance(),
+            // `→` 与回车同一条「往前走」的规则，但它**不提交**：末题上什么都不做（不记、不
+            // 前进）—— 提交不可逆，不该由一个移动键承担。
+            Key::Right => {
+                if self.index + 1 < self.questions.len() {
+                    self.skip_if_unanswered();
+                    self.advance();
+                }
+            }
             Key::Backspace if self.zone == Zone::Input => {
                 self.drafts[self.index].custom.pop();
             }
@@ -884,6 +923,27 @@ impl Questionnaire {
             _ => {}
         }
         false
+    }
+
+    /// 「往前走」之前那一步：当前题还没作答就把它记成**跳过**（spec §11）。
+    ///
+    /// 只动没作答的题 —— 答过的题往前走时不该被改成「跳过」，否则 `answers()` 里那条「跳过
+    /// 无条件优先」会把用户真答的那一份吞掉。
+    fn skip_if_unanswered(&mut self) {
+        let draft = &mut self.drafts[self.index];
+        if !draft.handled() {
+            draft.skipped = true;
+        }
+    }
+
+    /// 回车这一下会不会**提交**：把当前题（若还没作答）记成跳过之后，是不是每题都有着落。
+    ///
+    /// 页脚据此说「回车 提交」还是「回车 下一题」—— 提示段跟着它实际会做什么变（§11）。
+    fn enter_submits(&self) -> bool {
+        self.drafts
+            .iter()
+            .enumerate()
+            .all(|(at, draft)| draft.handled() || at == self.index)
     }
 
     /// 屏幕上的这个问题有没有可以高亮的选项。
@@ -907,6 +967,9 @@ impl Questionnaire {
         };
         let multi_select = self.questions[self.index].multi_select;
         let draft = &mut self.drafts[self.index];
+        // 作答即**撤销跳过**（只清不回滚）：回头改过的答案不该被 `answers()` 里那条「跳过
+        // 无条件优先」吞掉（spec §11）。
+        draft.skipped = false;
         match draft.selected.iter().position(|picked| picked == &label) {
             Some(at) => {
                 draft.selected.remove(at);
@@ -944,9 +1007,11 @@ impl Questionnaire {
     /// 添一个自由文本字符。
     ///
     /// 它**不动**选中的选项：单选与多选一个形状，文本与选择并存交回（spec §3）。想清掉文本
-    /// 就自己按 `Backspace` 删。
+    /// 就自己按 `Backspace` 删。它**撤销跳过**（只清不回滚）—— 打字就是作答（spec §11）。
     fn type_custom(&mut self, ch: char) {
-        self.drafts[self.index].custom.push(ch);
+        let draft = &mut self.drafts[self.index];
+        draft.custom.push(ch);
+        draft.skipped = false;
     }
 
     fn advance(&mut self) {
@@ -1207,34 +1272,48 @@ impl Regions {
     }
 }
 
-/// `/` 菜单里需要被记住的那一半。
+/// 菜单记账的键：那一次选择挂在**哪一个**记号上。
 ///
-/// 菜单的其余部分全是推出来的：token 从草稿来，匹配从目录与那个 token 来。推不出来的是
-/// 用户挑了哪一行，所以这里留的就是它 —— 以及它是在哪个前缀下挑的。
+/// 三个字段缺一不可：前缀字符区分 `/` 与 `@`（两者的候选来源完全不同，同一个 query 在两者
+/// 下是两个菜单）；**位置**区分同一行里两个名字相同的记号（`@a @a` —— `Esc` 关掉一个不该
+/// 牵连另一个）；query 让「同一个记号里改字」重开菜单（`.scratch/input-tokens/spec.md`
+/// §2 那条「`Esc` 按 token 记账」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuKey {
+    sigil: char,
+    start: usize,
+    query: String,
+}
+
+/// 记号菜单里需要被记住的那一半。
+///
+/// 菜单的其余部分全是推出来的：token 从草稿来，匹配从候选来源与那个 token 来。推不出来的是
+/// 用户挑了哪一行，所以这里留的就是它 —— 以及它是在哪个记号上挑的。
 #[derive(Debug, Default)]
 struct MenuSelection {
-    /// 高亮是在哪个前缀下做出来的。前缀不同就意味着这是另一个菜单，于是高亮从头开始，
-    /// 而那次 `Esc` 也不再作数。
-    prefix: String,
+    /// 高亮是在哪个记号上做出来的。`None` 表示此刻草稿里没有记号。
+    token: Option<MenuKey>,
     /// 高亮落在哪个匹配上，有的话。
     ///
-    /// **裸 `/` 时是 `None`**，这就是那条安全规矩：在用户打出名字、或者用方向键走过列表
-    /// 之前，什么都没被选中，于是只为看一眼菜单而按下的键不可能跑起一条没人要的命令
-    /// （spec §7 对一个顺手按键的读法）。
+    /// **裸 `/` 与裸 `@` 时是 `None`**，这就是那条安全规矩：在用户打出名字、或者用方向键
+    /// 走过列表之前，什么都没被选中，于是只为看一眼菜单而按下的键不可能跑起一条没人要的
+    /// 命令（spec §7 对一个顺手按键的读法）。
     selected: Option<usize>,
-    /// `Esc` 关掉了菜单。只要还在打的就是它当初被关掉时的那个前缀，它就保持关着。
+    /// `Esc` 关掉了菜单。只要还在打的就是它当初被关掉时的**那一个记号**，它就保持关着。
     dismissed: bool,
 }
 
-/// 此刻的 `/` 菜单：它属于哪个 token、什么与它匹配、哪个匹配被高亮。
+/// 此刻的记号菜单：它属于哪个前缀、什么与它匹配、哪个匹配被高亮。
 ///
-/// 一个值，由草稿加目录在每帧、每次按键时建出来。菜单永远不会是可以与屏幕上所见漂移开
-/// 的状态。
+/// 一个值，由草稿加候选来源在每帧、每次按键时建出来。菜单永远不会是可以与屏幕上所见漂移
+/// 开的状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SlashMenu {
-    /// 斜杠后面已经打进去的内容。
-    prefix: String,
-    /// 匹配上的那些条目，按目录顺序，形如 `(名字, 描述)`。
+struct TokenMenu {
+    /// 开这个菜单的那个前缀字符。
+    sigil: char,
+    /// 前缀后面已经打进去的内容。
+    query: String,
+    /// 匹配上的那些条目，按来源的顺序，形如 `(名字, 描述)`。
     entries: Vec<(String, String)>,
     /// 高亮落在哪个条目上，夹进范围；没有时是 `None`。
     selected: Option<usize>,
@@ -1400,6 +1479,10 @@ impl TuiState {
             render_width: SHARED_RENDER_WIDTH,
             dirty: true,
             editor: Input::new(),
+            files: FileIndex::new(),
+            // 进 TUI 就预热一次：人真打 `@` 的时候它通常已经好了
+            // （`.scratch/input-tokens/spec.md` §1）。
+            file_scan_wanted: true,
             catalog: Vec::new(),
             slash: MenuSelection::default(),
             panel: Panel::new(),
@@ -1599,7 +1682,9 @@ impl TuiState {
         } else {
             self.editor.insert_str(&text);
             // 一次粘贴可以像任何别的按键一样是条 `/` 命令：粘进来的 `/ask-matt` 在它落地
-            // 后的那一帧打开菜单。
+            // 后的那一帧打开菜单。它也按同一条推导成为 chip —— 给粘贴单开豁免等于让同一段
+            // 文本有两种身份（spec §4）。
+            self.sync_tokens();
             self.sync_menu();
         }
     }
@@ -1873,6 +1958,7 @@ impl TuiState {
         // 别的键清掉旧举手（§1 的总则），然后照常编辑：编辑器认的那些键全都工作，而
         // `Ctrl-D`、`Esc`、`Enter`、滚动键与模式手势一律忽略。
         self.expire_exit_gesture();
+        self.sync_tokens();
         self.editor_key(key);
         self.sync_menu();
     }
@@ -1901,6 +1987,9 @@ impl TuiState {
             Key::CtrlN => self.editor.history_next(),
             _ => {}
         }
+        // 这一下把草稿改了（或只是挪了光标），记号区间要跟着重算 —— 它既是颜色的出处，
+        // 也是下一按键吸附与整块删的输入。
+        self.sync_tokens();
     }
 
     /// 开出思考行，除非已经有一条开着。它画出了一行时返回 `true`。
@@ -2209,6 +2298,10 @@ impl TuiState {
                         questionnaire.reset_zone();
                     }
                     Some(HitAction::Next) => {
+                        // 页脚这个按钮与 `→` 键是**同一个手势**：先给还没作答的当前题记一次
+                        // 跳过，再前进（spec §11）。按钮只在「后面还有题」时才画得出来，
+                        // 所以末题那条守卫在这里不必再写一遍。
+                        questionnaire.skip_if_unanswered();
                         questionnaire.advance();
                         questionnaire.reset_zone();
                     }
@@ -2360,7 +2453,11 @@ impl TuiState {
             }
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
-            ConsoleRequest::Catalog { entries } => self.catalog = entries,
+            ConsoleRequest::Catalog { entries } => {
+                self.catalog = entries;
+                // 命令表是判据的一半，它一到，草稿里的记号就该重新判一次。
+                self.sync_tokens();
+            }
             // 重新打开的会话组装时用的那段历史。空流不是一次重放：进入那个状态会为一次什么
             // 都不铺、也不标接缝的操作显示一条进度行（`spec` §2）。
             ConsoleRequest::Replay { events } => {
@@ -2490,6 +2587,9 @@ impl TuiState {
     /// 处理一个按键。答案与提交通过待答的一次性通道发出去；手势排队交给循环。
     pub fn key(&mut self, key: Key) {
         self.dirty = true;
+        // 记号区间先于这一下按键同步：吸附与整块删读的就是它，而它得反映此刻的草稿
+        // （`.scratch/input-tokens/spec.md` §4）。
+        self.sync_tokens();
         // 挂起排在**一切**之前：它是终端层手势，重放、详情覆盖层、问卷、举手都拦不住它
         // （`.scratch/suspend-gesture/spec.md` §2）。真正的终端动作由 [`Tui::run`] 做 ——
         // 这里只置位，跟 `quit` 是同一种「状态机请求、循环执行」的形状。
@@ -2565,9 +2665,10 @@ impl TuiState {
                 }
             } else if let Some(pending) = self.pending.take() {
                 self.decline(pending);
-            } else if self.slash_menu().is_some() {
-                // `/` 菜单是屏幕上最小的东西，所以 `Esc` 先关掉它，然后才轮到手扔草稿
-                // （spec §6）。
+            } else if self.token_menu().is_some() {
+                // 记号菜单是屏幕上最小的东西，所以 `Esc` 先关掉它，然后才轮到手扔草稿
+                // （spec §6）。它按记号记账：同一个记号里改字会重开（`sync_menu`），同一行
+                // 里另一个记号不受牵连。
                 self.slash.dismissed = true;
             } else if self.editor.has_multiple_lines() {
                 // 在一份这么长的草稿上按 Esc 会丢掉真的工作，所以它先问一句 —— 而安全的
@@ -2606,10 +2707,10 @@ impl TuiState {
             self.events.push(FrontEndEvent::CycleMode);
             return;
         }
-        // `/` 菜单立着时，它占着那四个本来会编辑或提交的键：`↑`/`↓` 走过匹配，`Tab` 填进
-        // 一个，`Enter` 填进一个并把它发出去。别的都落到编辑器，而编辑器正是用户继续打字时
-        // 过滤匹配的地方。
-        if self.slash_menu().is_some() {
+        // 记号菜单立着时，它占着那四个本来会编辑或提交的键：`↑`/`↓` 走过匹配，`Tab` 填进
+        // 一个，`Enter` 填进一个并把它发出去（`/`）或只填进去（`@`）。别的都落到编辑器，而
+        // 编辑器正是用户继续打字时过滤匹配的地方。
+        if let Some(menu) = self.token_menu() {
             match key {
                 Key::Down => {
                     self.menu_move(1);
@@ -2620,11 +2721,15 @@ impl TuiState {
                     return;
                 }
                 Key::Tab | Key::Enter => {
-                    // `Tab` 填进高亮的那个名字就停在那里；`Enter` 填进去**并提交**，于是
-                    // `/ask` + Enter 跑起菜单指着的那条 skill。裸 `/` 什么都没高亮：`Enter`
-                    // 把它按打出来的样子发出去，循环回一串名字。
+                    // `Tab` 填进高亮的那个候选就停在那里；`Enter` 在 `/` 菜单里填进去**并
+                    // 提交**，于是 `/ask` + Enter 跑起菜单指着的那条 skill。裸 `/` 什么都没
+                    // 高亮：`Enter` 把它按打出来的样子发出去，循环回一串名字。
+                    //
+                    // `@` 菜单里 `Enter` **只能接受**：插进去的路径只是句子的一部分，发送
+                    // 仍旧是再按一次（spec §2 那处刻意分叉）。
+                    let sigil = menu.sigil;
                     self.menu_accept();
-                    if key == Key::Enter {
+                    if key == Key::Enter && sigil == '/' {
                         self.submit();
                     }
                     return;
@@ -2696,32 +2801,117 @@ impl TuiState {
         };
         self.pane.to_bottom();
         let line = self.editor.submitted();
+        // 「改完再 `@` 它」是索引的主要用法，所以每提交一条消息就在后台重扫一次
+        // （`.scratch/input-tokens/spec.md` §1）。位在这里置，遍历由循环去发。
+        self.file_scan_wanted = true;
         let _ = reply.send(Some(line));
     }
 
-    /// 此刻草稿所要求的那个 `/` 菜单，没什么可提供时是 `None`。
+    /// 该发一次遍历了吗：取走那个位。
     ///
-    /// 推出来的，从不保存：草稿与循环的目录就是全部输入。有问题立着时什么都不显示，因为
+    /// 渲染循环每轮问一次；回答 `true` 时它自己起一个 `spawn_blocking` 的遍历，结果再从
+    /// [`TuiState::files_loaded`] 回来。
+    ///
+    /// **一次遍历还在飞就先不发**：`FileIndex` 的 `Loading` 就是那个守卫，于是两次遍历的
+    /// 结果不会互相盖掉。提交那一下想重扫、而预热还没回来时，位**留着** —— 等结果落地之后
+    /// 的下一轮，这一次重扫才发得出去。
+    pub fn take_file_scan(&mut self) -> bool {
+        if !self.file_scan_wanted || !self.files.begin() {
+            return false;
+        }
+        self.file_scan_wanted = false;
+        true
+    }
+
+    /// 一次遍历的结果回来了：换上新的索引，并请一帧 —— 候选列表与「能兑现」的判据都跟着
+    /// 它变。
+    pub fn files_loaded(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.files.loaded(paths);
+        self.sync_tokens();
+        self.dirty = true;
+    }
+
+    /// 把草稿里**能兑现**的记号区间算好同步进编辑器（`.scratch/input-tokens/spec.md` §4）。
+    ///
+    /// 判据只有一条，上色与 chip 共用它：`/` 的记要在命令表里命中、`@` 的记要在索引里
+    /// 命中。于是打字过程中一块记号会忽隐忽现，补全成功那一刻才凝固 —— 而 `Input` 继续
+    /// 不认识命令表与文件系统，它只拿到区间与样式。
+    fn sync_tokens(&mut self) {
+        let spans = token::tokens(self.editor.text())
+            .into_iter()
+            .filter_map(|token| {
+                let style = match token.prefix {
+                    '/' if self.catalog.iter().any(|entry| entry.name == token.query) => {
+                        Style::default().fg(TOKEN_COMMAND)
+                    }
+                    '@' if self.files.contains(&token.query) => {
+                        Style::default().fg(TOKEN_REFERENCE)
+                    }
+                    _ => return None,
+                };
+                Some(editor::TokenSpan {
+                    start: token.start,
+                    end: token.end,
+                    style,
+                })
+            })
+            .collect();
+        self.editor.set_token_spans(spans);
+    }
+
+    /// 这个会话的工作目录 —— 索引以它为根，索引里的路径都相对它。
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
+    /// 此刻草稿所要求的那个记号菜单，没什么可提供时是 `None`。
+    ///
+    /// 推出来的，从不保存：草稿与候选来源就是全部输入。有问题立着时什么都不显示，因为
     /// 问题占着键盘 —— 菜单会提供一些回答别的东西的键（spec §9）。
-    fn slash_menu(&self) -> Option<SlashMenu> {
+    ///
+    /// 候选来源**按前缀挑**：`/` 是循环报上来的命令表，`@` 是会话级的文件索引
+    /// （`.scratch/input-tokens/spec.md` §2、§3）。一套浮层、一套键位，只有来源不同。
+    fn token_menu(&self) -> Option<TokenMenu> {
         if self.pending.is_some() || self.slash.dismissed {
             return None;
         }
-        let token = self.editor.slash_token()?;
-        // 按大小写过滤，但提供的是目录里的那个名字：`/Ask` 找得到 `ask-matt`，而 Tab 写出
-        // 循环会认的那个拼法。
-        let typed = token.prefix.to_lowercase();
-        let entries: Vec<(String, String)> = self
-            .catalog
-            .iter()
-            .filter(|entry| entry.name.to_lowercase().starts_with(&typed))
-            .map(|entry| (entry.name.clone(), entry.description.clone()))
-            .collect();
+        let token = self.editor.token()?;
+        let entries: Vec<(String, String)> = match token.prefix {
+            '/' => {
+                // 按大小写过滤，但提供的是目录里的那个名字：`/Ask` 找得到 `ask-matt`，
+                // 而 Tab 写出循环会认的那个拼法。
+                let typed = token.query.to_lowercase();
+                self.catalog
+                    .iter()
+                    .filter(|entry| entry.name.to_lowercase().starts_with(&typed))
+                    .map(|entry| (entry.name.clone(), entry.description.clone()))
+                    .collect()
+            }
+            '@' => {
+                // **裸 `@` 不列候选**：命令表只有几十条，「裸 `/` 是一份用来看的列表」成立，
+                // 而文件有几千个，「看全部」没有意义。索引未就绪时同样什么都不显示 ——
+                // 预热让它几乎不可能被看见。
+                if token.query.is_empty() {
+                    return None;
+                }
+                self.files
+                    .candidates(&token.query, TOKEN_MENU_CANDIDATES)
+                    .into_iter()
+                    // 目录下钻之后不必再列它自己（`@src/` 的第一行不再是 `@src/`）；文件
+                    // 候选即使名字正好等于已经打完的那一段也照列 —— 那时菜单本来就要没了，
+                    // 藏起来只会让「打全即消失」显得像出错。
+                    .filter(|path| !(path.ends_with('/') && path == &token.query))
+                    .map(|path| (path, String::new()))
+                    .collect()
+            }
+            _ => return None,
+        };
         if entries.is_empty() {
             return None;
         }
-        Some(SlashMenu {
-            prefix: token.prefix,
+        Some(TokenMenu {
+            sigil: token.prefix,
+            query: token.query,
             selected: self.slash.selected.map(|at| at.min(entries.len() - 1)),
             entries,
         })
@@ -2729,7 +2919,7 @@ impl TuiState {
 
     /// 把高亮移动 `delta`，两端回绕。
     fn menu_move(&mut self, delta: isize) {
-        let Some(menu) = self.slash_menu() else {
+        let Some(menu) = self.token_menu() else {
             return;
         };
         let len = menu.entries.len() as isize;
@@ -2740,49 +2930,67 @@ impl TuiState {
             None if delta > 0 => 0,
             None => (len - 1) as usize,
         });
-        self.slash.prefix = menu.prefix;
+        self.slash.token = self.menu_key();
     }
 
-    /// 把高亮的那个名字填进草稿。
+    /// 把高亮的那个候选填进草稿。
     ///
     /// 什么都没高亮时什么都不做 —— 裸 `/` 是一份用来看的列表，不是已经做出的选择。
+    ///
+    /// **接受的是不是目录**在这里分叉：文件与命令插完就关菜单，而目录插完**保持开着**，
+    /// query 换成新的前缀、接着过滤那一层（spec §3）。判据就是那个尾随斜杠 —— 索引里的
+    /// 目录候选正是这么写的。
     fn menu_accept(&mut self) {
-        let Some(menu) = self.slash_menu() else {
+        let Some(menu) = self.token_menu() else {
             return;
         };
         let Some(selected) = menu.selected else {
             return;
         };
         let name = menu.entries[selected].0.clone();
-        if !self.editor.complete_slash(&name) {
+        if !self.editor.complete_token(menu.sigil, &name) {
             return;
         }
-        // 记住的前缀随草稿一起走，否则下一次同步会把这次补全读成一次变化，并把刚刚关掉的
+        // 记住的记号随草稿一起走，否则下一次同步会把这次补全读成一次变化，并把刚刚关掉的
         // 东西重新打开。
-        self.slash.prefix = self
-            .editor
-            .slash_token()
-            .map(|token| token.prefix)
-            .unwrap_or_default();
-        self.slash.selected = None;
-        self.slash.dismissed = true;
+        self.slash.token = self.menu_key();
+        if name.ends_with('/') {
+            // 目录：菜单接着列这一层，所以它不关，高亮回到第一个候选。
+            self.slash.selected = Some(0);
+            self.slash.dismissed = false;
+        } else {
+            self.slash.selected = None;
+            self.slash.dismissed = true;
+        }
+        // 补全成功那一刻记号就凝固：整段换成能兑现的那一个，区间与颜色当场刷新。
+        self.sync_tokens();
     }
 
-    /// 把草稿当前的 token 收进菜单记住的那个选择里。
+    /// 此刻光标所在的那个记号的记账键；草稿里没有记号时是 `None`。
+    fn menu_key(&self) -> Option<MenuKey> {
+        self.editor.token().map(|token| MenuKey {
+            sigil: token.prefix,
+            start: token.start,
+            query: token.query,
+        })
+    }
+
+    /// 把草稿当前的记号收进菜单记住的那个选择里。
     ///
-    /// 变了的前缀是另一个菜单：高亮从头开始 —— 打过名字之后落在第一个匹配上，而 token 只是
-    /// 一个斜杠时落在什么都不高亮上 —— 而那次关掉旧菜单的 `Esc` 不再作数。
+    /// 换了**记号**（前缀、位置或 query 任一变）就是另一个菜单：高亮从头开始 —— 打过名字
+    /// 之后落在第一个匹配上，而记号只是一个前缀字符时落在什么都不高亮上 —— 而那次关掉旧
+    /// 菜单的 `Esc` 不再作数。位置也在键里，所以同一行里两个名字相同的记号各记各的账。
     fn sync_menu(&mut self) {
-        let prefix = self
-            .editor
-            .slash_token()
-            .map(|token| token.prefix)
-            .unwrap_or_default();
-        if prefix != self.slash.prefix {
-            self.slash.selected = (!prefix.is_empty()).then_some(0);
-            self.slash.prefix = prefix;
-            self.slash.dismissed = false;
+        let key = self.menu_key();
+        if key == self.slash.token {
+            return;
         }
+        self.slash.selected = key
+            .as_ref()
+            .is_some_and(|key| !key.query.is_empty())
+            .then_some(0);
+        self.slash.dismissed = false;
+        self.slash.token = key;
     }
 
     /// 用一个按键回答一个问题。
@@ -2813,6 +3021,7 @@ impl TuiState {
             Pending::Paste { text, .. } => {
                 if agrees(key) {
                     self.editor.insert_str(&text);
+                    self.sync_tokens();
                     self.sync_menu();
                 }
             }
@@ -4071,14 +4280,18 @@ fn draw_questionnaire_footer(
     state: &mut TuiState,
 ) {
     let total = questionnaire.questions.len();
-    // 进度计数器与第一个按钮前那三个字宽的间隔是同一个 span，所以第一个按钮起始的列就是这个
-    // span 自己的宽度 —— 而不是对它的第二次猜测（票 04 §7）。
-    let mut cursor = text_columns(&wording::questionnaire_progress(questionnaire.index, total)) + 3;
+    // 进度计数器（当前题被交回去时后面跟一句「已跳过」）与第一个按钮前那三个字宽的间隔是同一
+    // 个 span，所以第一个按钮起始的列就是这个 span 自己的宽度 —— 而不是对它的第二次猜测
+    // （票 04 §7、§11）。
+    let progress = wording::questionnaire_progress(questionnaire.index, total);
+    let progress = if questionnaire.drafts[questionnaire.index].skipped {
+        format!("{progress} {}", wording::questionnaire_skipped())
+    } else {
+        progress
+    };
+    let mut cursor = text_columns(&progress) + 3;
     let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        format!(
-            "{}   ",
-            wording::questionnaire_progress(questionnaire.index, total)
-        ),
+        format!("{progress}   "),
         Style::default().fg(Color::DarkGray),
     )];
     let items = [
@@ -4127,9 +4340,10 @@ fn draw_questionnaire_footer(
     let tail = match state.raised_gesture(std::time::Instant::now()) {
         Some(Gesture::Exit) => wording::questionnaire_exit_raised(),
         Some(Gesture::DeclineQuestion) => wording::questionnaire_decline_raised(),
-        None => {
-            wording::questionnaire_hint((panes.hints.width as usize).saturating_sub(cursor + 3))
-        }
+        None => wording::questionnaire_hint(
+            (panes.hints.width as usize).saturating_sub(cursor + 3),
+            questionnaire.enter_submits(),
+        ),
     };
     if !tail.is_empty() {
         spans.push(Span::raw("   "));
@@ -4152,8 +4366,8 @@ fn hint_region(row: Rect, offset: usize, columns: usize) -> Option<Rect> {
     Some(Rect::new(x, row.y, columns, 1))
 }
 
-/// `/` 菜单：开头的 `/` 能变成哪些名字 —— 循环处理的内建命令，加上这个会话发现的 skills
-/// —— 浮在光标处，并按斜杠后面打了什么过滤（spec §6）。
+/// 记号菜单：`/` 后面能变成哪些名字、`@` 后面能指到哪些文件与目录 —— 浮在光标处，并按
+/// 前缀后面打了什么过滤（spec §2、§3）。
 ///
 /// 它是一个**提示**，不是一个问题：它从不会把某个键从草稿那里拿走，而它确实占着的键（`↑`、
 /// `↓`、`Tab`、`Enter`）只在它立着时才有。
@@ -4163,7 +4377,7 @@ fn draw_menu(
     state: &mut TuiState,
     anchor: editor::Placed,
 ) {
-    let Some(menu) = state.slash_menu() else {
+    let Some(menu) = state.token_menu() else {
         return;
     };
     // 要画的匹配那一窗：高亮始终可见，而它上面的行在它往下走时先被让出去。
@@ -4204,7 +4418,7 @@ fn draw_menu(
         .enumerate()
         .map(|(offset, (name, description))| {
             let selected = menu.selected == Some(first + offset);
-            menu_row(name, description, inner, name_width, selected)
+            menu_row(menu.sigil, name, description, inner, name_width, selected)
         })
         .collect();
     blank_half_covered_glyphs(frame, area);
@@ -4219,17 +4433,20 @@ fn draw_menu(
     frame.render_widget(Paragraph::new(rows), layout::inner(area));
 }
 
-/// 一行菜单：`/<名字>`，补齐到名字列宽，然后是描述。
+/// 一行菜单：`/名字` 或 `@路径`，补齐到名字列宽，然后是描述。
+///
+/// `@` 的候选没有描述，于是名字独占这一行 —— 那仍然是一个完整的提示。
 ///
 /// 高亮的那一行反色画，好让它读起来是 `Enter` 会按下的那个按钮，而不是又多了一行文字。
 fn menu_row(
+    sigil: char,
     name: &str,
     description: &str,
     inner: usize,
     name_width: usize,
     selected: bool,
 ) -> Line<'static> {
-    let label = format!("/{name}");
+    let label = format!("{sigil}{name}");
     let mut text = label.clone();
     // 描述列，在有地方放一个描述、也有它要占的那一行的时候。太窄就让名字独占这一行，那仍然是
     // 一个完整的提示。

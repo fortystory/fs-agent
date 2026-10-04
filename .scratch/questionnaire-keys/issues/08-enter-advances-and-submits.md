@@ -1,7 +1,7 @@
 # 08 — 回车是「下一题 / 提交」：空格仍是唯一的选中键
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: —
 
 > 来源：[`../spec.md`](../spec.md) §11。这一票**推翻**同一份 spec §4 里「选项区里 `Enter` 与
@@ -75,3 +75,48 @@ Blocked by: —
 - 不动空格、`Tab`、`Esc`/`Ctrl-C` 两把举手、`j`/`k` 的移动分派、折行与选项窗口滚动。
 - 不给末题的 `→` 加提交 —— 提交不可逆，不该由一个移动键承担。
 - 不做「撤销跳过」的专门按钮或快捷键：撤销就是**作答**。
+
+## 评论
+
+- 2026-10-05 落地：`Questionnaire::press` 里的 `Key::Enter` 不再按区域分叉 —— 一律
+  `skip_if_unanswered()`，然后每题都有着落就提交、否则 `advance()`。`Key::Right` 走同一条
+  「往前走」的规则，但外面套了 `if self.index + 1 < self.questions.len()`：末题上**什么都不
+  做**（不记、不前进、不提交）。`←` 照旧只 `back()`。
+- 新增 `skip_if_unanswered()`（只动没作答的题，答过的不被改成跳过）与 `enter_submits()`（把
+  当前题记成跳过之后是不是每题都有着落 —— 页脚据此选文案）。`confirm_highlight()` 与
+  `type_custom()` 各加一句 `skipped = false`，即「作答撤销跳过、只清不回滚」。`advance()`
+  与 `Tab`、空格三处一个字没动。
+- 页脚：`draw_questionnaire_footer` 的进度段在 `skipped` 时变成 `1 / 2 已跳过`（属于进度段，
+  不参与降级），尾段改成 `questionnaire_hint(room, enter_submits())`。
+- 文案与阈值：新增 `questionnaire_skipped()`；`questionnaire_hint(room, submits)` 多一个
+  参数，两档含 `回车 提交` / `回车 下一题` 两种写法，阈值按新文案**实测重算**为
+  71 / 48 / 12（`回车 下一题` 比 `回车 提交` 宽两列，取两者之大）。`tests/wording.rs` 那条
+  改成用 `text_columns()` 自己量出边界再断言 —— 阈值与文案宽度不再可能悄悄脱节。
+- 撞上的既有测试比票里预想的多两条，逐条按新语义改写（意图保留）：
+  `enter_matches_space_in_the_options_zone_and_pages_from_the_text_input` 改名并重写为
+  `enter_advances_in_both_zones_and_never_changes_a_selection`；
+  `enter_keeps_typed_text_instead_of_re_confirming_an_option` 去掉多余的一次回车，改名
+  `..._instead_of_marking_the_question_skipped`；`submit_is_refused_until_every_question_is_answered_or_skipped`
+  改用空格作答并加一条「末题 `→` 不提交」；`a_skipped_question_is_no_answer_even_after_typing`
+  反过来写成 `answering_undoes_a_skip_so_the_text_travels_back`。另外五条只是因为「回车过去
+  兼作确认」而受影响，把确认那一下换成空格：`typing_and_a_single_select_choice_travel_back_together`、
+  `the_option_window_scrolls_so_the_highlighted_option_stays_visible`、
+  `the_recommended_marker_is_display_only`、`a_space_is_text_once_the_custom_answer_has_focus`、
+  `a_space_still_confirms_while_nobody_is_typing`、`the_arrows_page_between_questions_and_the_footer_says_where_we_are`；
+  `a_question_with_no_options_is_answered_with_free_text` 拆成「回车 = 空答案（跳过）」与
+  「打字 = 文本答案」两半。
+- 新增：`moving_forward_marks_a_question_skipped_but_moving_back_never_does`（`→` 记跳过、
+  `←` 不记、答过的题不被记、末题 `→` 无动作）、`tests/render_layout.rs` 的
+  `the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped`（文案跟着
+  `enter_submits` 变、`已跳过` 不参与降级）。
+- 文档（`CONTEXT.md` 的「作答草稿」与「选项区」两条、`docs/render.md` 的问卷节、清单 ㉗）
+  在 2026-10-04 拆票时已按 §11 写好，本轮逐条核对与实现一致；`.scratch/README.md` 那一行
+  的计数改成 `7 done + 1 ready-for-walkthrough`。`check-language.py` 与 `check-doc-size.py`
+  都退出 0。
+- **`/code-review` 抓到一个真漏**：页脚那个「下一题 →」**按钮**原来只 `advance()`，没走
+  `skip_if_unanswered()` —— 键盘 `→` 做了、点击没做，而 spec §11 与 `docs/render.md` 都写着
+  这三个手势是同一个动作。后果不只在提示：点着走过一道没作答的题，`all_handled()` 仍为假，
+  末题回车会被 `skip_if_unanswered()` 记过之后卡在无处可去的 `advance()` 上。已补上，并加了
+  `tests/render_layout.rs` 的 `clicking_next_marks_the_question_skipped_like_the_arrow_key`
+  （点过去再翻回来，页脚该写 `已跳过`）—— 原来这条没有回归网。`docs/render.md` 也补了一句
+  「末题上的 `→` 什么都不做」，那是实现里有、文档里漏掉的例外。

@@ -49,7 +49,7 @@ Blocked by: 03
 - 不动按钮的可用性规则与它们的点击动作。
 - 不给窗口加可配时长（票 03 的窗口是常量）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：`wording::questionnaire_status` 与 `questionnaire_hint(ready)` 删掉 ——
   它们只被测试引用，TUI 页脚今天压根不画键位提示。换成 `questionnaire_hint(room)`（三档：

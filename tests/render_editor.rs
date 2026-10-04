@@ -6,6 +6,7 @@
 //! 让它做不到的事（ADR 0002）。
 
 use fs_agent::render::editor::{self, Input};
+use ratatui::style::{Color, Style};
 
 /// 编辑器画出来的那个提示符。这些测试关心的是折行与光标，
 /// 不是那个字形，所以它们通过这里来写这个前导：草稿前面那个记号
@@ -270,58 +271,213 @@ fn submitting_clears_the_draft_and_an_empty_one_is_an_empty_line() {
     assert_eq!(input.text(), "same", "而它前面什么都没有");
 }
 
-// --- `/` 记号 --------------------------------------------------------------
+// --- 记号 ------------------------------------------------------------------
 
 #[test]
-fn a_slash_token_is_the_head_of_the_first_line_and_ends_at_the_first_space() {
-    // 菜单据此过滤的是什么：那个斜杠，加上它后面已经打进去的东西。
+fn a_token_starts_where_it_is_typed_and_ends_at_the_first_space() {
+    // 菜单据此过滤的是什么：那个前缀字符，加上它后面已经打进去的东西。
     let input = typed("/ask");
-    let token = input.slash_token().expect("一个记号");
+    let token = input.token().expect("一个记号");
+    assert_eq!(token.prefix, '/');
     assert_eq!(token.start, 0);
-    assert_eq!(token.prefix, "ask");
+    assert_eq!(token.query, "ask");
     // 一个光秃秃的斜杠是还没打任何东西的记号：只打 `/` 菜单就开。
-    assert_eq!(typed("/").slash_token().unwrap().prefix, "");
-    // 算数的是光标，而不是草稿的末尾 —— 退到这
-    // 个名字里面，记号就缩到光标之前的那部分。
+    assert_eq!(typed("/").token().unwrap().query, "");
+    // 算数的是光标在不在记号里，而不是它在名字的哪一格：记号就是整段名字，而补全替换的
+    // 也是整段（`/ask-matt` 里的 `/ask` 被替掉之后，尾巴 `-matt` 不会留在原地）。
     let mut input = typed("/ask-matt");
     input.home();
     for _ in 0..4 {
         input.right();
     }
-    assert_eq!(input.slash_token().unwrap().prefix, "ask");
+    assert_eq!(input.token().unwrap().query, "ask-matt");
 }
 
 #[test]
-fn a_slash_in_a_prompt_or_a_path_is_not_a_token() {
-    // 循环只在第一行找命令，而且只找到第一个空格为止：
-    // 其他一切都只是提示词里的字符，去补全它
-    // 会覆盖掉用户本来想写的东西。
-    assert!(typed("看看 /tmp/x").slash_token().is_none());
-    assert!(typed("/ask-matt 优化这个").slash_token().is_none());
-    assert!(typed("第一行\n/undo").slash_token().is_none());
-    assert!(typed("ask-matt").slash_token().is_none());
-    // 一份多行草稿，只要它的*第一*行是命令，菜单照样会开
-    // —— 记号在第一行上，循环正是在那里读它。
-    let mut input = typed("/ask\n帮我做 X");
-    input.up();
-    assert_eq!(input.slash_token().unwrap().prefix, "ask");
+fn a_slash_token_can_start_anywhere_on_any_line() {
+    // 与 `@` 对等：`/` 的记号在草稿**任意行、任意位置**开头
+    // （`.scratch/input-tokens/spec.md` §2 那张表）—— 判据不同，位置的规则不该各写一套。
+    let token = typed("看看 /tmp/x").token().expect("一个记号");
+    assert_eq!((token.start, token.query.as_str()), (3, "tmp/x"));
+    let token = typed("第一行\n/undo").token().expect("第二行也算");
+    assert_eq!((token.start, token.query.as_str()), (4, "undo"));
+    assert!(typed("ask-matt").token().is_none(), "没有记号就没有");
 }
 
 #[test]
-fn completing_a_slash_token_replaces_what_was_typed_and_leaves_the_cursor_after_it() {
+fn an_at_token_starts_only_after_whitespace_or_the_start_of_the_draft() {
+    // 引用出现在句子里是常态（`帮我改 @src/a.rs`），但 `src/@foo` 不是引用 ——
+    // `@` 的边界比 `/` 严，因为一个字面 `@` 在路径与邮箱里都很常见。
+    let token = typed("帮我改 @src/a.rs").token().expect("一个记号");
+    assert_eq!(token.prefix, '@');
+    assert_eq!(token.query, "src/a.rs");
+    assert!(typed("@README.md").token().is_some(), "草稿起点算");
+    assert!(typed("a@b").token().is_none(), "紧跟在字后面的 `@` 不算");
+    assert!(typed("(a)@b").token().is_none(), "只有空白与草稿起点算");
+    // `src/@foo` 里那个 `@` 同样不是引用 —— 光标所在的是 `/foo` 那个 `/` 记号。`@` 的边界
+    // 不因为同一个位置上还有 `/` 而放宽。
+    assert_eq!(typed("src/@foo").token().unwrap().prefix, '/');
+}
+
+#[test]
+fn two_tokens_in_one_sentence_are_each_their_own() {
+    // 一个句子里可以有多个记号，只认**光标所在**的那一个（spec §2）。
+    let mut input = typed("改 @src/a.rs 和 /undo");
+    assert_eq!(input.token().unwrap().prefix, '/', "光标在末尾的记号里");
+    input.home();
+    for _ in 0..5 {
+        input.right();
+    }
+    let token = input.token().expect("走到 `@` 那个记号里");
+    assert_eq!(token.prefix, '@');
+    assert_eq!(token.query, "src/a.rs");
+}
+
+#[test]
+fn completing_a_token_replaces_what_was_typed_and_leaves_the_cursor_after_it() {
     let mut input = typed("/ask-matt 优化这个");
     // 光标在末尾，而记号不在那儿 —— 所以什么都没被补全。
-    assert!(!input.complete_slash("undo"));
+    assert!(!input.complete_token('/', "undo"));
     assert_eq!(input.text(), "/ask-matt 优化这个");
 
-    // 在记号里面时，这个名字替换掉整个记号，而空格之后
-    // 那个任务原封不动留在原处。
+    // 在记号里面时，这个名字替换掉整个记号，而空格之后那个任务原封不动留在原处。
     let mut input = typed("/ask 优化这个");
     input.home();
     for _ in 0..3 {
         input.right();
     }
-    assert!(input.complete_slash("ask-matt"));
+    assert!(input.complete_token('/', "ask-matt"));
     assert_eq!(input.text(), "/ask-matt 优化这个");
     assert_eq!(input.submitted(), "/ask-matt 优化这个");
+
+    // `@` 走同一条路：补的是那个 `@` 记号，前文一个字不动。
+    let mut input = typed("帮我改 @src/re 吧");
+    input.home();
+    for _ in 0..5 {
+        input.right();
+    }
+    assert!(input.complete_token('@', "src/render/tui.rs"));
+    assert_eq!(input.text(), "帮我改 @src/render/tui.rs 吧");
+}
+
+// --- 记号：吸附与整块删（票 03） -------------------------------------------
+
+/// 一个装好记号的编辑器：`[start, end)` 那一段是**能兑现**的记号。
+///
+/// 真实运行时这个区间由 `TuiState` 算好同步进来 —— 判据要查命令表与文件索引，而 `Input`
+/// 两样都不认识（spec §4 那条缝）。所以这里直接设：测的正是缝的另一侧，纯几何的吸附与
+/// 整块删。
+fn with_token(text: &str, start: usize, end: usize) -> Input {
+    let mut input = typed(text);
+    input.set_token_spans(vec![editor::TokenSpan {
+        start,
+        end,
+        style: Style::default().fg(Color::Magenta),
+    }]);
+    input
+}
+
+#[test]
+fn the_cursor_never_lands_inside_a_token() {
+    // `改 @src/a.rs 吧`：`@src/a.rs` 占字符区间 2..11（`改` 0、空格 1、`@` 2 … `s` 10）。
+    let mut input = with_token("改 @src/a.rs 吧", 2, 11);
+    input.end();
+    assert_eq!(input.cursor(), 13, "末尾");
+    input.left();
+    assert_eq!(input.cursor(), 12, "记号后面那一格还能走");
+    input.left();
+    assert_eq!(input.cursor(), 11, "记号右边界是合法的落脚点");
+    input.left();
+    assert_eq!(input.cursor(), 2, "再往左一步跨过整块");
+    input.right();
+    assert_eq!(input.cursor(), 11, "往右也一步跨过整块");
+    input.right();
+    assert_eq!(input.cursor(), 12, "记号之外照旧一格一格");
+
+    // `Home`/`End` 落在记号里时吸附到最近的边界。
+    input.home();
+    assert_eq!(input.cursor(), 0);
+    input.end();
+    assert_eq!(input.cursor(), 13);
+
+    // 没有记号的草稿（就是那份 highlights 为空的）一切照旧。
+    let mut plain = typed("look /tmp/x");
+    plain.end();
+    plain.left();
+    plain.left();
+    assert_eq!(plain.cursor(), 9);
+}
+
+#[test]
+fn moving_between_lines_snaps_onto_the_nearest_token_edge() {
+    // 第二行的 `@abc.rs` 占 13..20（`宽` 11、空格 12、`@` 13 … `s` 19）。
+    let mut input = with_token("0123456789\n宽 @abc.rs 尾", 13, 20);
+    input.up();
+    input.home();
+    for _ in 0..6 {
+        input.right();
+    }
+    assert_eq!(input.cursor(), 6, "第一行的第 6 格");
+    input.down();
+    // 目标列落在记号里面（字符 16），吸附到**近的那个**边界：13。
+    assert_eq!(input.cursor(), 13, "跳到最近的记号边界");
+}
+
+#[test]
+fn deleting_across_a_token_takes_the_whole_token() {
+    // 退格：光标在记号右边界，一下删掉整块，且**不**吞掉旁边的空白。
+    let mut input = with_token("改 @src/a.rs 吧", 2, 11);
+    input.end();
+    input.left();
+    input.left();
+    assert_eq!(input.cursor(), 11);
+    input.backspace();
+    assert_eq!(input.text(), "改  吧");
+    assert_eq!(input.cursor(), 2);
+
+    // 删除：光标在左边界，一下删掉整块。
+    let mut input = with_token("改 @src/a.rs 吧", 2, 11);
+    input.home();
+    input.right();
+    input.right();
+    assert_eq!(input.cursor(), 2);
+    input.delete_forward();
+    assert_eq!(input.text(), "改  吧");
+
+    // `Ctrl-W`：光标贴着记号右边界时，抹词抹到的是整块。
+    let mut input = with_token("改 @src/a.rs 吧", 2, 11);
+    input.end();
+    input.left();
+    input.left();
+    input.kill_word();
+    assert_eq!(input.text(), "改  吧");
+
+    // 没有记号时，删除照旧一格一格。
+    let mut plain = typed("look /tmp/x");
+    plain.end();
+    plain.backspace();
+    assert_eq!(plain.text(), "look /tmp/");
+}
+
+#[test]
+fn a_token_that_wraps_keeps_its_style_across_the_fold() {
+    let mut input = typed("@src/render/tui.rs");
+    input.set_token_spans(vec![editor::TokenSpan {
+        start: 0,
+        end: 18,
+        style: Style::default().fg(Color::Magenta),
+    }]);
+    let (rows, _) = input.view(5, 10);
+    let mut seen = 0;
+    for row in &rows {
+        // 第一个 span 是引子（提示符或缩进），正文从第二个起。
+        for span in row.spans.iter().skip(1) {
+            if span.content.is_empty() {
+                continue;
+            }
+            seen += span.content.chars().count();
+            assert_eq!(span.style.fg, Some(Color::Magenta), "折行之后样式还在");
+        }
+    }
+    assert_eq!(seen, 18, "整块都上色了");
 }

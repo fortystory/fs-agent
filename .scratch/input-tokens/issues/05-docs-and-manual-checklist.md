@@ -1,7 +1,7 @@
 # 05 — 文档与手工清单
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 01, 02, 03, 04
 
 > 来源：[`../spec.md`](../spec.md) §6。这一组最后一票：把四个新概念写进词表与逐面文档，
@@ -43,3 +43,22 @@ Blocked by: 01, 02, 03, 04
 - 不在这一票里改任何代码。
 - 不重写清单里已有的 ①–㉗。
 - 不给 `Tab::Files` / `Tab::Trace` 写任何语义 —— 它们都还是「还没做」。
+
+## 评论
+
+- 2026-10-05 落地：这一票要的四份落点（`CONTEXT.md` 的**记号（Token）**词条、
+  `docs/render.md` 的「输入框里的记号」一节、`docs/tui-manual-checklist.md` 的 ㉘ 与来源行、
+  [ADR 0012](../../../docs/adr/0012-input-tokens-are-atomic.md)）在 2026-10-04 拆票的那两次
+  提交里已经写好了，所以这一票的实际动作是**逐条核对它们与落地实现是否一致**：
+  - 「能兑现 = 上色 = chip」一条判据管三件事 ✓（`TuiState::sync_tokens`）；
+  - chip 的不变量与「区间由 `TuiState` 算好」✓（`editor::Highlight` + 吸附/整块删）；
+  - `@` 的文件 + 目录、目录下钻保持菜单、裸 `@` 不列候选、含空白不进候选 ✓；
+  - 索引三态 + `spawn_blocking` + 预热 + 提交后重扫 + 与 `grep` 同一条忽略规则 ✓；
+  - `/` 的任意行任意位置、前文并入任务、无参命令仍要求整条 ✓；
+  - ㉘ 那九条走查项逐条对得上实现（含「`Enter` 只接受」「第二行也一样」「用 /loop 做目标循环
+    会执行」）。
+- `.scratch/README.md` 的索引行：计数从 `5 ready-for-agent` 改成 `5/5 done`，并把描述里那句
+  「放宽到第一行任意位置」修正成「任意行任意位置」—— 那是拆票时留下的笔误，实现的规则是后者。
+- 入口棘轮这一轮只需**收紧方向**的动作：索引行没有新增，改计数让文件变小，`ENTRY_BUDGET`
+  的 8,344 / 54 不动。
+- `python3 scripts/check-doc-size.py` 与 `python3 scripts/check-language.py` 都退出 0。

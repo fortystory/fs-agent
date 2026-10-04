@@ -1,7 +1,7 @@
 # 03 — 记号的上色与 chip
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 02
 
 > 来源：[`../spec.md`](../spec.md) §4。这是这一组里最大的一张：它给草稿里的记号上色，并让
@@ -49,3 +49,24 @@ Blocked by: 02
 - 不动历史（`Ctrl-P`/`Ctrl-N`）与折行数学、不动 `submitted()` 的形状。
 - 不做「删记号时顺手吃掉旁边的空白」。
 - 不给无效记号另一种淡色：命中不了就是普通文本。
+
+## 评论
+
+- 2026-10-05 落地：`editor::Highlight { start, end, style }` 加 `Input::set_highlights()`
+  就是 spec §4 说的那条缝 —— 判据要查命令表与文件索引，而编辑器两样都不认识，所以区间与
+  样式一起从 `TuiState::sync_tokens()` 同步进来。
+- **吸附分两种**：`←`/`→` 用**方向性**吸附（`snap_left`/`snap_right`，目标落在记号内部就
+  去它那一侧的边界），`Home`/`End`/上下行用**最近**边界（`snap_nearest`）。方向性是必须
+  的：从记号右边界按 `←` 若用「最近边界」会原地不动，一个跨不过去的记号。
+- **整块删**：`expand_to_tokens(from, to)` 把删除范围扩到与它相交的每个记号的完整范围，
+  不碰记号旁边的空白。`Backspace`/`Delete`/`Ctrl-W`/`Ctrl-U`/`Ctrl-K` 五处都走它。
+- **上色**：`TOKEN_COMMAND`（`LightBlue`）与 `TOKEN_REFERENCE`（`LightMagenta`）两个常量
+  在 `tui.rs` 的主题常量区，判据与 chip 共用（`/` 精确命中 `catalog` 里的名字、`@` 精确
+  命中索引里的路径）。同步时机：`key()` 开头、`editor_key()` 末尾（编辑后立即刷新，否则
+  键入的最后一个字符不会当场凝固）、`paste()`/问卷粘贴确认、`menu_accept()`、`files_loaded()`
+  与 `Catalog` 请求各一次。
+- **鼠标点击**那一条在现状下是构造性的：输入区今天根本不接受点击落光标（`mouse()` 里没有
+  这条路径），所以没有一条路能违反它 —— 不新建一条鼠标定位光标的功能。
+- 测试：`tests/render_editor.rs` 四条（吸附、方向性跨块、跨行吸附、三种删法 +
+  无记号照旧；外带一条跨折行样式连续），`tests/render_layout.rs` 两条（四种判据各一条颜色、
+  粘贴进来的记号同样是 chip），`tests/wording.rs` 一条（两个颜色是两个、且都不是 `Reset`）。

@@ -1,0 +1,120 @@
+//! 会话级的文件索引：工作区里有哪些文件与目录（`input-tokens` 票 01）。
+//!
+//! 它是**一个值加一个查询接口**，不是渲染器私有的缓存：`Idle | Loading | Ready` 三态由
+//! 渲染循环推着走，而遍历本身（[`scan`]）是一个同步函数，跑在 `spawn_blocking` 里。索引
+//! 从不阻塞键盘，也从不进任何一次按键的处理路径。
+//!
+//! 忽略规则**逐字**照搬 `grep` 工具（`src/tools/grep.rs` 的 `search()`）：遵守
+//! `.gitignore`、跳过隐藏文件、非 git 仓库也能走、条目按路径排序。仓库里只该有一个
+//! 「什么算工作区文件」的答案 —— 否则 `grep` 找不到的文件却能在补全里选出来，而把 `.env`
+//! 一类列进候选是实打实的暴露面。
+//!
+//! 目录也进索引，并以**尾随斜杠**的形式列出来（`src/`）：那既是菜单里看得见的形状，也是
+//! `@` 插进草稿的文本，于是「选一个目录接着往下打」不必再看文件系统第二眼。
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use ignore::WalkBuilder;
+
+/// 索引此刻处在哪一态。
+#[derive(Debug, Default)]
+pub enum FileIndex {
+    /// 还没扫过。
+    #[default]
+    Idle,
+    /// 一次遍历正在跑（结果还没回来）。
+    Loading,
+    /// 扫完了：相对会话 `cwd` 的路径，文件不带尾斜杠、目录带一个。
+    Ready(Arc<Vec<PathBuf>>),
+}
+
+impl FileIndex {
+    pub fn new() -> Self {
+        Self::Idle
+    }
+
+    /// 该不该现在发一次遍历：不在跑就置位并回答 `true`，已经在跑就回答 `false`。
+    ///
+    /// 这就是「预热一次、提交后再扫一次」共用的那个开关 —— 它保证结果永远不会被两次并发
+    /// 的遍历互相盖掉。
+    pub fn begin(&mut self) -> bool {
+        match self {
+            Self::Loading => false,
+            _ => {
+                *self = Self::Loading;
+                true
+            }
+        }
+    }
+
+    /// 一次遍历的结果回来了。顺序就是遍历给的顺序（与 `grep` 工具同一条）。
+    pub fn loaded(&mut self, paths: Vec<PathBuf>) {
+        *self = Self::Ready(Arc::new(paths));
+    }
+
+    /// 按前缀过滤的候选，大小写不敏感，最多 `limit` 条。
+    ///
+    /// 返回的是索引里那个拼法（`/Ask` 找得到 `ask-matt`，而按 `Tab` 写出的是循环会认的
+    /// 那个名字）。含空白的路径一律不进候选：`@` 的记号按空白结束，插进去会当场断掉。
+    /// 索引未就绪时是空的 —— 那是一段极短的时间，预热让它几乎不可能被看见。
+    pub fn candidates(&self, query: &str, limit: usize) -> Vec<String> {
+        let Self::Ready(paths) = self else {
+            return Vec::new();
+        };
+        let needle = query.to_lowercase();
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .filter(|text| !text.contains(char::is_whitespace))
+            .filter(|text| text.to_lowercase().starts_with(&needle))
+            .take(limit)
+            .collect()
+    }
+
+    /// 「能兑现」的判据：这个相对路径在索引里**精确**存在。
+    ///
+    /// 上色与 chip 共用这一条（票 03），所以它得有一个地方被问到。线性扫描足够：文件是
+    /// 几千条，而这只在一次按键时发生，不在每一帧。
+    pub fn contains(&self, path: &str) -> bool {
+        let Self::Ready(paths) = self else {
+            return false;
+        };
+        paths
+            .iter()
+            .any(|candidate| candidate.to_string_lossy() == path)
+    }
+}
+
+/// 走一遍 `root`，把工作区里的文件与目录列出来，路径相对 `root`。
+///
+/// 这是同步的：调用方负责把它放进 `tokio::task::spawn_blocking`，好让一次大遍历永远不
+/// 挡住渲染循环。走不进去的目录（权限、竞态）与读不了的条目直接跳过 —— 与 `grep` 同一条
+/// 处理，一次不完整的遍历不该是整个索引的失败。
+pub fn scan(root: &Path) -> Vec<PathBuf> {
+    let mut builder = WalkBuilder::new(root);
+    builder.sort_by_file_path(|left, right| left.cmp(right));
+    let mut paths = Vec::new();
+    for entry in builder.build() {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        // 遍历的第一个条目是根自己；它不是工作区里的一个候选。
+        if path == root {
+            continue;
+        }
+        let Some(kind) = entry.file_type() else {
+            continue;
+        };
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        if kind.is_dir() {
+            paths.push(PathBuf::from(format!("{}/", relative.display())));
+        } else if kind.is_file() {
+            // 符号链接不跟随（`follow_links` 的缺省），于是它与 `grep` 一样不会被搜到，
+            // 也不会被补全出来。
+            paths.push(relative.to_path_buf());
+        }
+    }
+    paths
+}

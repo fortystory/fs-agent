@@ -32,7 +32,7 @@ Blocked by: 05
 - 不做「两个区域同时高亮」。
 - 不给输入区加行内光标（spec §10）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：`questionnaire_parts` 多收一个 `options_focused`，调用链
   （`bottom_rows`、`questionnaire_lines`、`questionnaire_window`、`draw_questionnaire`）都传

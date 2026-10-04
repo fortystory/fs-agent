@@ -61,7 +61,7 @@ Blocked by: 02
 - **页脚的回执显示留给票 04**：本票只保证状态与分派正确。
 - 不做「给模型的合成跳过」（spec §5 已否决）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：新增 `Gesture { Exit, DeclineQuestion }` 与 `TuiState::exit_gesture`
   标签，举手仍是**同一个槽位**（`exit_deadline`），所以两把的互斥是结构性的；`raise_exit_gesture_at`

@@ -1,7 +1,7 @@
 # 04 — `/` 的提交语义放宽：与 `@` 对等
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Blocked by: 02
 
 > 来源：[`../spec.md`](../spec.md) §5。菜单在票 02 里已经拿到了与 `@` 同一条边界；这一票让
@@ -44,3 +44,26 @@ Blocked by: 02
 - 不让无参命令出现在句子里。
 - 不动 `/discuss`、`/goal-new`、`/loop` 各自的参数形状与 `task_of()`。
 - 不加「整行起头」这类守卫：位置与 `@` 对等正是这一票定的规则。
+
+## 评论
+
+- 2026-10-05 落地：`submission()` 改为用票 02 的 `render::token::tokens()` 找**整个草稿里
+  最靠左**的那个名字在命令表里的 `/` 记号（表 = `wording::BUILT_IN_COMMANDS` ∪ 技能 ∪
+  MCP 模板）。名字仍旧剥掉开头的斜杠（`//undo` 读作 `undo`）。
+- `task_of(inline, rest)` 由 `task_around(text, token)` 接手：记号两侧拼起来，前文按原样
+  保留（尾部空白去掉），后文 trim 起始空白与结尾换行；两边之间——记号前文以换行结尾就用
+  换行、否则用空格。于是 `请 /loop 我的目标` → `Loop("请 我的目标")`、
+  `第一行\n/loop 目标` → `Loop("第一行\n目标")`。参数形状没变，只是前文也进来了。
+- 无参命令的 `whole` 换成「`text.trim()` 的字符数正好是这个记号的长度，**而且记号的原文就是
+  `/<名字>`**」，语义与原来的 `rest.trim().is_empty()` 等价，但不再需要「第一行」这个概念。
+  后半条是 `/code-review` 之后补的：只比长度时 `//undo` 会剥成 `undo` 而被执行，而旧路径把
+  它当错字（`Unknown`）—— 那是票面没要求的放宽，何况 `Undo` 有回滚副作用。现在 `//undo` 落到
+  「内建命令带着记号之外的字」那一条，整条当普通消息，不执行。
+- 未知命令那条提示窄化成「以 `/` 开头、整行只有一个不认识的名字」；只要草稿里有命令记号，
+  它就永不被当成错字 —— `看 /tmp/x` 与「提一句 `/clear`」都仍是普通消息。
+- 测试：`a_command_can_sit_anywhere_and_earlier_words_join_the_task`、
+  `a_no_argument_command_still_needs_the_whole_draft`、
+  `a_draft_without_a_command_token_is_still_a_message` 三条新测试，加上既有的
+  `a_single_line_still_reads_exactly_as_it_did` / `a_pasted_paragraph_that_opens_with_a_slash_is_a_prompt`
+  / `clear_is_a_whole_submission_and_not_a_task` / `a_built_in_takes_no_task_so_a_line_after_it_is_not_dropped`
+  全部原样通过。

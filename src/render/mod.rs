@@ -22,6 +22,7 @@
 //! 每个合并块只写一次。
 
 pub mod editor;
+pub mod file_index;
 pub mod headless;
 pub mod highlight;
 pub mod input;
@@ -32,6 +33,7 @@ pub mod panel;
 pub mod plain;
 pub mod severity;
 pub mod todo;
+pub mod token;
 pub mod transcript;
 pub mod tui;
 pub mod width;
@@ -55,7 +57,7 @@ pub use todo::TodoPanel;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
 pub use tui::{
     draw_frame, render_block, render_block_uncoloured, Key, SessionFacts, SpeakerColors, Tui,
-    TuiOptions, TuiState, PULSE_PALETTE,
+    TuiOptions, TuiState, PULSE_PALETTE, TOKEN_COMMAND, TOKEN_REFERENCE,
 };
 
 /// 一个慢消费者开始丢事件之前，能缓冲多少个渲染事件。丢掉一个增量是输出降级，绝不是
