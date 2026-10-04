@@ -6,7 +6,7 @@
 
 来源是 2026-10-01 的一轮 grilling（Q1–Q24），材料与一手引用在 [`.scratch/sandbox/research/`](research/)（五份调研 + 两份本机实测/图解）。
 
-## Problem Statement
+## 问题陈述
 
 **shell 是权限门唯一管不住的工具。** 别的工具都有写集合：`write_file` 的路径被 [`SessionPaths`](../../src/tools/paths.rs) 限制在会话 cwd 内，`.env` 家族与 `.git` / `.ssh` 是任何规则都降不下去的拒绝地板。`bash` 没有写入集——它的 [`effect()` 恒为 `Exclusive`](../../src/tools/bash.rs)，意思是「它能写任何东西」，于是权限门只能决定**跑不跑**，决定不了**写哪里**。
 
@@ -14,7 +14,7 @@
 
 **判据只能来自内核。** 调研的结论一致：同类产品里没有一家是「猜 argv」的（[03 §①](research/03-agent-sandbox-precedents.md)），因为 shell 的间接性让静态形状与真实行为脱钩（变量、`eval`、解释器、写脚本再执行）。可靠的做法只有一个：**让内核在写发生的那一刻说不行**。
 
-## Solution
+## 方案
 
 在**唯一那处 spawn** 上加一层包装。`src/tools/process.rs` 的 `run()` 是 `bash` 与动态工具共用的那一半（超时、进程组 kill、输出捕获都在那），沙箱在那里把 argv 包成一个 bubblewrap 调用：
 
@@ -34,7 +34,7 @@ bwrap
 
 **探测一次，在组装期**，而且必须真跑一条最小 profile——装了 bubblewrap 不等于它在这个环境里能用（Ubuntu 24.04 的 AppArmor 限制、容器里、WSL1 都会让它起不来）。探测失败就 **fail closed**：拒绝跑 shell，并给出可操作的出路；另有一个显式的 `[sandbox] mode = "off"` 让用户自己决定放弃这层。
 
-## User Stories
+## 用户故事
 
 1. 作为用户，我想让 `auto` 档下的 `bash` **写不出工作区**，这样我不用逐条读命令就能放心让它跑构建与测试。
 2. 作为用户，我想让**工作区内的修改照常**——包括新建文件、删除文件、跑 `cargo test`——不必为沙箱额外做任何事。
@@ -45,7 +45,7 @@ bwrap
 7. 作为模型，我想在 `bash` 工具的描述里**读到自己在沙箱里**，这样我不会对着区外反复试。
 8. 作为审计者，我想在事件流里看到**每次会话的沙箱状态**，以便回头核对某条命令当时到底有没有被关着。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 形状：一条纯函数，不是一套抽象
 
@@ -127,12 +127,12 @@ writable_roots = ["~/.cargo", "~/.rustup", "~/.cache"]
 
 - 新增 **`docs/sandbox.md`**（决策地图，形状同 `docs/bash.md`：形状表、边界、代码住哪）。
 - 新增 **ADR 0006**，记默认行为与 fail-closed 的取舍。
-- 改 **README**：《安全模型》里「这不是沙箱」那段重写；「明确不做」整节改名「**这一版不做**」（它混了「有证据支撑不做」与「这一版不做」两类，spec 的 `Out of Scope` 里本来就分着）。
+- 改 **README**：《安全模型》里「这不是沙箱」那段重写；「明确不做」整节改名「**这一版不做**」（它混了「有证据支撑不做」与「这一版不做」两类，spec 的 `明确不做` 里本来就分着）。
 - 改 **`docs/bash.md`**：`bash` 不包含什么——那条「进程级沙箱」删掉，指向 `docs/sandbox.md`。
 - 改 **`docs/credentials.md`**：(d) 出网那一行补一句「进程级沙箱只管文件，不解决出网」。
 - 改 **`CONTEXT.md`**：加词条「沙箱（Sandbox）」，写明它管文件、判据在内核（挂载表）、**不管网络**，与「权限模式」「断路器」是三件不同的事。
 
-## Testing Decisions
+## 测试决定
 
 三层，与仓库先例一致（`TestBackend` + pty 脚本 + 手工清单）：
 
@@ -140,7 +140,7 @@ writable_roots = ["~/.cargo", "~/.rustup", "~/.cache"]
 2. **集成**——沙箱不可用时是**工具错误**而不是命令结果；事件流里那条 log-only 事件写对了；`bwrap: ` 前缀被认出来、命令自己的非零退出不被误认。
 3. **真机（手工清单 / pty）**——只有这一层能验「内核真的拦住了」：写工作区成功、写 `$HOME` 报只读、`cat ~/.config/fs-agent/config.toml` 读不到、`echo x > .env` 失败、`cargo test` 能跑。加进 `docs/tui-manual-checklist.md` 那一类清单。
 
-## Out of Scope
+## 明确不做
 
 **这一版不做**（不是永久决定，是范围边界）：
 
@@ -151,14 +151,14 @@ writable_roots = ["~/.cargo", "~/.rustup", "~/.cache"]
 - **权限模式的改动**：`readonly` / `ask` / `auto` 三档不动。`workspace` 模式另开 effort（[`.scratch/workspace-mode/`](../workspace-mode/seed.md)）。
 - **自动降级 / `--no-proc` 之类的退路**：不可用就是 fail closed。
 
-## Further Notes
+## 补记
 
-- **小节标题沿用现有 spec 的英文锚点**（`## Problem Statement` 这一批），因为把 `.scratch` 的小标题中文化是另一张票（`.scratch/language-migration/issues/04-tracker-headings-in-chinese.md`，状态 `ready-for-agent`）的范围，它有自己定好的译名表。正文散文一律中文。
+- **小节标题沿用现有 spec 的英文锚点**（`## 问题陈述` 这一批），因为把 `.scratch` 的小标题中文化是另一张票（`.scratch/language-migration/issues/04-tracker-headings-in-chinese.md`，状态 `ready-for-agent`）的范围，它有自己定好的译名表。正文散文一律中文。
 - **这一版的真正价值不在安全，在失败点**：bubblewrap 自己的 `SECURITY.md` 写着它不是安全边界。它约束的是「程序别乱来」，给 agent 的误操作一个可靠的、内核给的失败点——这与仓库里「断路器存在是为了拦住事故，不是为了圈禁对手」是同一个立场。
 - **五份调研**：[01](research/01-dsh-workspace-permissions-and-shell.md)（DSH）、[02](research/02-linux-sandbox-primitives-and-tools.md)（Linux 机制与工具）、[03](research/03-agent-sandbox-precedents.md)（同类产品）、[04](research/04-local-probe-bwrap-and-landlock.md)（本机实测与一条方法论警告）、[05](research/05-platform-portability-macos-windows-harmonyos.md)（平台可移植性）。
 - **两份图解**：[eli5-sandbox.html](eli5-sandbox.html)、[eli5-bubblewrap.html](eli5-bubblewrap.html)（给人看的，不是一手材料）。
 
-## Landing Notes (2026-10-01)
+## 落地记录（2026-10-01）
 
 五张票同日落地，全部 `done`。落点：票 01 给了 `tools/sandbox.rs` 的 `wrap()` 纯函数与
 `tests/sandbox.rs`；票 02 给了 `config.rs` 的 `[sandbox]` 节、探测、fail closed 与组装期注入；

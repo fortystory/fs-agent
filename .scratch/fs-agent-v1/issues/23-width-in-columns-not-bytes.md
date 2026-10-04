@@ -53,7 +53,7 @@ Status: done
 2. **`tui.rs:543` 的续行缩进是 `chars().count()`**：`" ".repeat(speaker_label(speaker).chars().count() + 1)`。`[user]` 是 6 字符 6 列，今天**巧合正确**；换成 `[用户]` 是 4 字符但 **6 列**，缩进会少 2 列。**中文 UI 改 `speaker_label` 的那一刻必须同时改这里。**
 3. `truncate(text, 500)` 按**字符**截（`transcript.rs:427`）。它是用 `chars().take()` 实现的，所以安全、不会 panic；而且它是**内容预算**不是布局宽度，行为可以接受——但同样的字符数下中文占两倍列宽，块会高一倍。要不要改成按列，属于中文 UI 那批要定的口径。
 
-## Comments
+## 评论
 
 - 票 22 结尾记的「仓库里现在有三种 unicode 宽度相关的东西，值得一次收口」到本票为止**全部关掉**：`paint_scrollback` 的尾格（票 22）、`live_lines` 的折行、`cursor_column` 的光标列（本票）。
 - 本票执行的是 `/grill-with-docs` 会话敲定的 Q4：**先修这两个宽度 bug，再上中文 UI**。上面三条发现就是这次排序买到的——如果不先修，它们会和「刚换成中文」混在一起，分不清是谁的锅。

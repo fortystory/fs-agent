@@ -102,7 +102,7 @@ Blocked by: —
 - 不碰 `docs/`、`CONTEXT.md`、`.scratch/README.md`（归 [票 02](02-docs-and-acceptance.md)）。
 - 不动 exit-gesture 的举手语义与 `Ctrl-C` / `Ctrl-D` 键位。
 
-## Comments
+## 评论
 
 - **落地**：`Key::CtrlZ`（`map_key` 的 CONTROL 分支加 `'z'`）；`TuiState` 加 `suspend` 与 `take_suspend_request()`；`key()` 在**一切守卫之前**接走 `CtrlZ`（重放、详情覆盖层、问卷、举手都拦不住它 —— 只置位，不推任何 `FrontEndEvent`）；`Tui::run` 在 `take_events()` 之后、绘制段之前消费请求并调 `suspend_and_resume`。
 - **终端进出**：`TerminalModes::enter` 拆出可反复调用的 `enable_terminal_modes(title)`（push 标题、写标题、开鼠标与粘贴），panic hook 因此只在启动时装一次。`suspend_and_resume` 的顺序是 `disable_terminal_modes` → `ratatui::restore` → 处置 `SIG_DFL` → `raise` → 还原处置 → `enable_raw_mode` + `EnterAlternateScreen` → 强制重写标题 → `terminal.clear()` + `mark_dirty`。新增 `TuiState::retitle()`：交还时标题被 pop 回了用户那条，`last_title` 的记忆已经不作数，所以恢复必须强制重写一次。

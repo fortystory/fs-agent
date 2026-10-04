@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 冻结项 12 选了「图 + 证据表 + 一个弱校验脚本」。在 `/to-spec` 把这个脚本写进构建计划之前，要先把
 **它能校验什么、会怎么误报**查清。
@@ -26,9 +26,9 @@ Blocked by: —
 
 ## 交付
 
-设计报告由 subagent 写到 `research/03-lifecycle-check-design.md`；票底 `## Answer` 写结论 + 指向它。
+设计报告由 subagent 写到 `research/03-lifecycle-check-design.md`；票底 `## 作答` 写结论 + 指向它。
 
-## Answer
+## 作答
 
 （2026-10-03）设计报告：[`research/02-lifecycle-check-design.md`](../research/02-lifecycle-check-design.md)
 （282 行，逐条带 `文件:行号`）。结论如下。

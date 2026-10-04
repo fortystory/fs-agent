@@ -17,7 +17,7 @@ Status: done
 - [x] 定位写进文档：prompt injection 是「降低上限」而非解决问题——门是 `(policy, tool, args)` 的纯函数、从不读对话文本，所以破坏半径 = 你的策略允许的半径
 - [x] e2e：让一个假密钥流经工具输出与消息正文，断言事件流与 `.txt` 里是打码值、而工具实际拿到真值；`.before` 里是真值
 
-## Comments
+## 评论
 
 实现落点：`src/events.rs`（`Redactor` / `REDACTED` / `EventPayload::redact`）、`src/config.rs`（`Config::redactor` 与 `SessionConfig::redactor` / `with_redactor`）、`src/agent.rs`（`append_event` 入流前打码、`emit_completed` 的「打码 → 截断 → 落盘」、`end_turn` / `run_single_shot` 的返回值同源打码）、`src/agent/executor.rs`（两处生命周期事件）、`src/cli.rs`（`root_refusal`，`main` 的第一件事）。测试：`tests/credentials.rs`（12 例）。文档：`docs/credentials.md`（新增）、`CONTEXT.md`（新增「安全」节与「打码（Redactor）」条目）。
 

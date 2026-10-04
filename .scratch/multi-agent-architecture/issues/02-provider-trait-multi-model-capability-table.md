@@ -3,7 +3,7 @@
 Type: grilling
 Status: resolved
 
-## Question
+## 问题
 
 决定 provider 抽象层的接缝。范围：**只做一个 OpenAI-compatible client**（`base_url` 可配），不做原生 Anthropic / Gemini 协议。
 
@@ -21,7 +21,7 @@ Status: resolved
    - `tool_choice: required`：只有 `kimi-k3` 支持，其余传了报错；DeepSeek thinking 下 `required` 与具名选择 400
    - `response_format`：Kimi 有 `json_schema`(MFJS)，DeepSeek Chat 面只有 `json_object`
    - 请求体上限（Kimi 100 MB / DeepSeek 48 MiB）、欠费错误码（429 quota / **402**）
-   能力表是**编译期常量**还是配置文件？它要不要为 Anthropic / OpenAI 预留（见 map 的 `Not yet specified`）？
+   能力表是**编译期常量**还是配置文件？它要不要为 Anthropic / OpenAI 预留（见 map 的 `尚未明确`）？
 4. **statelessness 的后果**：两家都没有服务端会话原语 → **每次调用必须全量重放历史**。这对 trait 的签名有什么要求（比如不能假设"继续上一次"）？
 5. **流式解析的两处陷阱**：
    - **usage chunk 形状不同**：Kimi 单独发一个 `choices: []` 的统计 chunk；DeepSeek **不发单独 chunk**，usage 搭在最后一个 content chunk 上，且 `stream_options` 与 `stream:false` 同用直接 **400**
@@ -31,7 +31,7 @@ Status: resolved
 
 答案定到接口级即可（trait 签名 + 关键类型 + 能力表结构），不要实现细节。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。事实来源：`research/02-provider-call-surface.md`（逐字段）与票 08 的 Rust 生态结论。**
 
@@ -130,7 +130,7 @@ model    = "kimi-k3"
 
 ### 4. 能力表：`provider` 持内置表，`config` 可覆盖；**adapter 是执行点**
 
-- **只建模现有两家，只按 `model id` 建表，不为 Anthropic / OpenAI 预留字段。** 原生 Anthropic 协议已是**证据型砍掉项**（Out of scope）；"再加一家"的真实成本是**加一条静态表项**（数据），不是改结构。
+- **只建模现有两家，只按 `model id` 建表，不为 Anthropic / OpenAI 预留字段。** 原生 Anthropic 协议已是**证据型砍掉项**（明确不做）；"再加一家"的真实成本是**加一条静态表项**（数据），不是改结构。
 - **按 `model id` 而不是 vendor 建表**：`tool_choice: required` 只有 `kimi-k3` 有；`temperature` K3 固定 1.0 而 K2.6 非 thinking 是 0.6；窗口 K3 1M / K2.x 256K。vendor 级粒度会错。
 - **前向兼容靠机制，不靠预留字段**：`#[non_exhaustive]` + **未登记的 model id 在启动时报错**（不猜、不给保守默认）。config 可以**逐字段覆盖**；要完全自定义一个未登记模型，必须提供完整能力集，否则报错。
 - **只有 adapter 内部能归一化的东西一律不进表**（usage chunk 形状、`index` 缺口、错误码 429/402、`stream_options` 的 400）。表只留"上层必须知道才能不发错请求"的事实。
@@ -189,7 +189,7 @@ pub enum ProviderError {
 
 - **两家欠费错误码不同**（Kimi 429 `exceeded_current_quota_error` / DeepSeek 402），所以 `QuotaExhausted` 必须与 `RateLimited` 分开——适配器不能统一按 429 处理。
 - **adapter 拥有传输级重试**（chat completion 请求天然幂等）：只重试 `RateLimited` 与 `Transport`，有界次数、尊重 `Retry-After`；`QuotaExhausted` / `Auth` / `InvalidRequest` **永不重试**。终态错误抛回 agent Turn 决定这个 Turn 失败。
-- **不决定的**：跨切面的失败呈现（429 怎么显示、讨论某轮失败是否重开、执行者失败如何回传）仍在 map 的雾里。（**该雾已清空**——由票 05/14/16 答掉；map 现在没有 `Not yet specified`）
+- **不决定的**：跨切面的失败呈现（429 怎么显示、讨论某轮失败是否重开、执行者失败如何回传）仍在 map 的雾里。（**该雾已清空**——由票 05/14/16 答掉；map 现在没有 `尚未明确`）
 
 ### 8. 无状态的后果与唯一的会话级提示
 
@@ -203,7 +203,7 @@ pub enum ProviderError {
 - 投影的纯函数规则与 `reasoning_content` 的回放策略（含跨说话者）→ **票 17**。
 - 悬空 `tool_call` 在会话恢复时的收尾 → **票 07**。
 - 预算公式怎么用 `context_window` / `max_output_tokens` → **票 06**；成本闸门 → **票 18**。
-- 跨切面的失败语义与呈现 → 仍在 map 的 `Not yet specified`。（**该雾已清空**——由票 05/14/16 答掉；map 现在没有 `Not yet specified`）
+- 跨切面的失败语义与呈现 → 仍在 map 的 `尚未明确`。（**该雾已清空**——由票 05/14/16 答掉；map 现在没有 `尚未明确`）
 - SSE 解析 crate 选型、重试的具体次数与退避曲线 → 实现细节，`/to-spec` 之后。
 
 **票 07 交接来的答案（2026-09-13）**：你在第 8 节与「明确不决定」里交给票 07 的两件事都关了。

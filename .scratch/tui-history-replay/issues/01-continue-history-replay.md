@@ -5,13 +5,13 @@ Status: resolved
 Blocked by: 02
 Part of: ../map.md
 
-## Question
+## 问题
 
 把「`--continue` 时把历史事件加载进 TUI 转录」的**接缝与调度**定到可实现级。
 
 **范围级决定已在 charting 冻死**（见 `map.md` Notes 的冻结项）：只覆盖 `--continue`；重播整条日志；每帧 ≤ 512 条事件的分帧 + 底部状态行进度；重播期间不接受提交、live 事件缓冲到完成后按序追加；banner 在重播完成后追加；原样重播全部块。**本票只定「怎么做」**，不重开这些。
 
-**本票的前身**：`.scratch/tui-history-replay/issues/01-continue-history-replay.md` 原本是 tui-ux 图判出 scope 后另立的独立票，它的「要不要做」已由本次 charting 回答；`## Question` 已改写为接缝与调度。
+**本票的前身**：`.scratch/tui-history-replay/issues/01-continue-history-replay.md` 原本是 tui-ux 图判出 scope 后另立的独立票，它的「要不要做」已由本次 charting 回答；`## 问题` 已改写为接缝与调度。
 
 ## 需要定
 
@@ -38,11 +38,11 @@ Part of: ../map.md
 
 ## 进度
 
-**100%** —— 完成。一轮 grilling、6 条决定，票面 6 个「需要定」全部覆盖；契约见 `## Answer`。
+**100%** —— 完成。一轮 grilling、6 条决定，票面 6 个「需要定」全部覆盖；契约见 `## 作答`。
 
 **下一步**：无（已 resolved）。解锁 `grilling：保真度、面板与 header 的历史重建` 与 `grilling：历史详情覆盖层的复用与降级` 的实现细节引用。
 
-## Answer
+## 作答
 
 **契约（2026-09-23，6 条决定）。**
 
@@ -68,7 +68,7 @@ Part of: ../map.md
 - **缓冲**：`TuiState` 加 `live_buffer: Vec<RenderEvent>`。重播期间收到的 live 事件——banner、诊断、以及恢复补写的 `ToolCallCompleted`——**先入缓冲**，重播完成后按**到达顺序** flush（到达顺序就是发送顺序，票 02 事实 7）。
 - **不设上限**：重播期间循环是空闲的（没有回合在跑），真正会到的只有组装后的 banner / 诊断这类少数消息。
 - **「`Enter` 不提交」拦在 `submit()` 之前**：`submit()` 开头 `if self.replay.is_some() { return; }`。草稿编辑与光标键照常。
-- **滚动**：重播期间**吸底**，`PgUp` / `PgDn` / `Ctrl-G` / 滚轮一律忽略；完成后恢复正常滚动。（这条把 `map.md` 的 `Not yet specified` 里那条雾升成决定。）
+- **滚动**：重播期间**吸底**，`PgUp` / `PgDn` / `Ctrl-G` / 滚轮一律忽略；完成后恢复正常滚动。（这条把 `map.md` 的 `尚未明确` 里那条雾升成决定。）
 
 ### §4 进度状态行
 

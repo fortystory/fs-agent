@@ -22,11 +22,11 @@ Status: done
 - [x] 措辞新增：面板中文标签、`—`、`token_pair(used, limit)`、`context_pair(used, usable)`、`cache_pair(cached, miss)`
 - [x] 用例：首回合之前（`0` 与 `—`）；provider 不返回 usage；`budget.limit: None`；极窄内容宽（丢 `（6%）`、丢缓存、丢输入/输出）；`120×24` 草稿涨到 10 行时**右栏整栏消失**
 
-## Comments
+## 评论
 
 - **票 10 交接**（2026-09-21）：右栏的**空框与共用接缝已经在票 10 画好了**（`layout::Regions::panel` + `draw_seam`；该结构在票 11 的评审收口里由 `Panes` 改名为 `Regions`），本票只需填内容。票 10 票面 checklist 里那句「措辞层新增面板标签 / `—` / 配对函数」**没有在票 10 落地**，有意留给本票 —— 在被消费的这张票里加，才有测试可写。也就是本票要补：`PANEL_MODEL` / `PANEL_CONTEXT` / `PANEL_TOKENS` / `PANEL_TURNS` / `PANEL_INPUT` / `PANEL_OUTPUT` / `PANEL_CACHE`、`PANEL_UNKNOWN`（`—`）、`token_pair` / `context_pair` / `cache_pair`。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-21）**。落点：新增 `src/render/panel.rs`（`Panel` 计数器 + `lines()` 排版 + 三个内边距 helper）；`src/render/tui.rs` 新增 `panel` 字段、`apply()` 交给 `Panel::observe`、`draw_transcript` 在右栏画面板；`src/render/wording.rs` 新增七个标签、`PANEL_UNKNOWN`、`thousands` 与三个配对函数；`tests/render_layout.rs` 新增 6 个用例、`tests/wording.rs` 新增 1 个。
 

@@ -39,7 +39,7 @@ Blocked by:
 
 tab 切换与占位页（`03`）、回合条（`04`）、`TICK` 删除与文档收尾（`05`）；键位表零改动；plain / headless 零改动。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/layout.rs`（整段重写 `plan()` 与 `Regions`）、`src/render/tui.rs`（`draw_shell` / `draw_divide` / `draw_sidebar` / `draw_status` / `draw_transcript` / `draw_bottom`，删掉 header 一族）、`src/render/wording.rs`（新增 tab 标签 / 占位符 / `context_share` / `status_row` / 回合条字形，删 `clock` / `clock_short`）、`src/render/panel.rs`（去掉 `模型` 行）、`src/cli.rs`（facts 改名）、`tests/render_layout.rs` / `tests/wording.rs` / `tests/history_replay.rs` / `tests/ask_user_question_tui.rs`。
 

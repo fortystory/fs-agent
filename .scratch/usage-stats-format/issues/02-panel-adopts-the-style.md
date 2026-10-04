@@ -62,7 +62,7 @@ Blocked by: 01
 - 不动降级链的代码、面板行序、标签列宽与高度裁剪。
 - 不给 `usage_summary` / `sessions stats` / headless 换单位，不给状态行加任何东西。
 
-## Comments
+## 评论
 
 - **落地**：`pair` / `token_pair` / `context_pair` / `cache_pair` 各加一个 `style` 参数（`thousands` 与 `usage_summary` 未动）；`SessionFacts` 加 `number_style`，两处 `SessionFacts` 字面量（`src/cli.rs`）与四处测试夹具（`render_layout.rs` ×3、`render_tui.rs`、`history_replay.rs`、`ask_user_question_tui.rs`）跟着补；面板六行的 `thousands` → `compact`，`value_columns` 的计算、百分比是否丢的判定、缓存行是否加入、`fit()`、行序与标签列宽**一行未改**。
 - **降级测试的处置**（票「具体行为 5」要求的判断），三条都只改字面量、不改降级行为：

@@ -2,11 +2,11 @@
 
 Status: ready-for-agent
 
-- **来源**：`.scratch/multi-agent-architecture/map.md`（wayfinder 地图，25 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外见 `Further Notes` 的「spec 期新增的一条决定」。
+- **来源**：`.scratch/multi-agent-architecture/map.md`（wayfinder 地图，25 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外见 `补记` 的「spec 期新增的一条决定」。
 - **实现票落点**：`.scratch/fs-agent-v1/issues/NN-*.md`（由 `/to-tickets` 生成）。**不要写回 `multi-agent-architecture/`**——那个目录是决策图，编号已被决策票占用。
 - **术语**：叙述用中文（讨论者 / 执行者 / 发言归属 / 合成器 / 事件 / 事件流 / 投影 / 会话 / 轮次 / 回合），代码标识符用英文（`Debater` / `Executor` / `SpeakerId` / `Synthesizer` / `Event` / `EventLog` / `project()` / `Session` / `Round` / `Turn`）。正式词汇表在根目录 `CONTEXT.md`。
 
-## Problem Statement
+## 问题陈述
 
 我想要一个**自己的 coding agent CLI**：在终端里对着一个真实仓库干活——读代码、改文件、跑命令——但我不想要一个「一次一个 agent 闷头干」的黑盒。
 
@@ -19,7 +19,7 @@ Status: ready-for-agent
 5. **我要能复盘。** 多 agent 讨论会产生一份读不动的 transcript。我想事后能问它：这一轮为什么停？是谁在哪一轮改了这个文件？这次编辑走了降级匹配吗？
 6. **我不想被框架绑死。** 将来要加第三个讨论者、要加一个裁判、要加一个动态工具时，我希望加的是**配置或一个变体**，不是重构半张架构图。
 
-## Solution
+## 方案
 
 一个 Rust 从零实现的**单 crate CLI**（`fs-agent`），核心是一个**共享只追加事件流**加**每个 agent 自己的窗口**：
 
@@ -31,7 +31,7 @@ Status: ready-for-agent
 - **默认安全**：`readonly` / `ask` / `auto` / `plan` 四个内置模式、断路器短路 deny、`.env` 家族默认拒、cwd 路径限制、秘密在入流前打码、会话目录 `0700`、root 拒绝启动。
 - **三个前端**（plain / TUI / headless）共用一个渲染接缝与一条广播通道，headless 的 stdout 只有最终产物。
 
-## User Stories
+## 用户故事
 
 ### A. 会话与启动
 
@@ -199,11 +199,11 @@ Status: ready-for-agent
 134. 作为用户，我想让语法高亮用 tree-sitter（不引 C 构建依赖），并让 diff 着色与语法高亮分成两层，以便高亮不拖累构建。
 135. 作为用户，我想让终止原因在显示上区分（完成与中止 / 错误不能同色），以便撞墙与完成一眼可分。
 
-## Implementation Decisions
+## 实现决定
 
 ### 1. Crate 与模块布局
 
-- **单 crate**：一个薄的二进制入口 + 一个公开的库入口。库入口是**组装点**，provider、路径锁、渲染 sink、配置都从参数注入，**不在库里读环境**——这是 e2e 用假 provider 的唯一入口（见 `Testing Decisions`）。
+- **单 crate**：一个薄的二进制入口 + 一个公开的库入口。库入口是**组装点**，provider、路径锁、渲染 sink、配置都从参数注入，**不在库里读环境**——这是 e2e 用假 provider 的唯一入口（见 `测试决定`）。
 - **13 个顶层边界**（2026-09-26 回改：原文写 12，漏了票 32 为「模型发起的用户提问」加的 `questions`；同一处的清单也补上了它），依赖**只沿 DAG 向下**，不允许环：
 
   `events` · `config` · `provider` · `tools` · `permissions` · `questions` · `hooks` · `context` · `agent` · `discussion` · `session` · `render` · `cli`
@@ -583,7 +583,7 @@ Status: ready-for-agent
 - **prompt injection 定位为「降低上限」而非「解决问题」**：门是 `(policy, tool, args)` 的纯函数、**从不读对话文本** ⇒ 注入不可能说服门放行；**破坏半径 = 你的策略允许的半径**；缓解三条（身份指令 / 他人工具结果不投 / 门不看文本），**不把发言降权、不让门读对话**。
 - **root / sudo 时拒绝启动、不给 bypass flag**（任何一次误判都变成系统级，而护栏都假设「最坏只到工作区」）。
 
-## Testing Decisions
+## 测试决定
 
 ### 什么样的测试是好测试
 
@@ -633,7 +633,7 @@ Status: ready-for-agent
 11. **动态工具**：argv 元素替换**不展开**、不经 shell、超时与进程树终止、命名空间词法判定。
 12. **`/undo`**：按 `outputs/<tool_call_id>.before` 还原的是**实际被替换的区段**（含走了降级匹配的那次）。
 
-## Out of Scope
+## 明确不做
 
 - **证据型砍掉项**（判据变化不翻它们）：AST / tree-sitter **编辑**、unified diff 编辑格式、原生多 provider 协议、**MCP client**、SWE-bench 跑分与多模型 dashboard。
   **2026-10-03 补记**：这一串里的 **MCP client** 已另起 effort（[`mcp-support`](../mcp-support/map.md)）——
@@ -650,9 +650,9 @@ Status: ready-for-agent
 - **交互式 transcript 浏览器。**
 - **弱模型分流的取值**：机制留好（合成器 + 执行者可配覆盖），但「哪些任务默认给哪个弱模型」**等数据**，v1 全用讨论者模型。
 
-## Further Notes
+## 补记
 
-- **spec 期新增的一条决定**：**取消传播**（Implementation Decisions §6）。它不是从地图折叠来的——地图**故意把它留空**（既没毕业成票，也没进 `Not yet specified`）。本 spec 定了最小语义：手势不进流、复用既有的 `Aborted`、只对进行中的 `tool_call` 合成第 5 条失败结果、取消只向下不向父。**不动 schema**（`StopReason::Aborted` 与 `ExecutorFinished{reason: Aborted}` 都已在枚举里）。**票 13 回改**：手势的作用域是「一次运行」（每次 `run_turn` / `discuss` 开始时清零），取消落在讨论里时该轮以 `RoundEnded { Aborted }` 收尾、不记 `SessionError`、不再开新轮也不合成——原文的「讨论继续 / 讨论不因此中断」只指「这条失败不中断讨论」，见 §6 与 §16。
+- **spec 期新增的一条决定**：**取消传播**（Implementation Decisions §6）。它不是从地图折叠来的——地图**故意把它留空**（既没毕业成票，也没进 `尚未明确`）。本 spec 定了最小语义：手势不进流、复用既有的 `Aborted`、只对进行中的 `tool_call` 合成第 5 条失败结果、取消只向下不向父。**不动 schema**（`StopReason::Aborted` 与 `ExecutorFinished{reason: Aborted}` 都已在枚举里）。**票 13 回改**：手势的作用域是「一次运行」（每次 `run_turn` / `discuss` 开始时清零），取消落在讨论里时该轮以 `RoundEnded { Aborted }` 收尾、不记 `SessionError`、不再开新轮也不合成——原文的「讨论继续 / 讨论不因此中断」只指「这条失败不中断讨论」，见 §6 与 §16。
 - **术语照 `CONTEXT.md`。** 地图里有两处**有意留下的别名**（票 16 §2 标题的「聚合器」、票 14/22 的「子 agent / subagent」）：实现与票面都按词汇表走（**合成器 / 执行者**），不要跟着那两处写。
 - **地图做过一次全图审计**（2026-09-13）：修掉 24 处正文与交接块不一致 / 别名，收口 5 处 schema 缺口。**元发现值得带进 `/to-tickets`**：那 24 处里约一半的根因是「先写答案、后来由别的票修正它，但**没回改正文**」。所以：**实现票若改变了本 spec 的任何决定，必须回改本 spec**，别只在票的评论区里交接。
 - **票 02 回改**（2026-09-14）：真实调用核出 Kimi 的两套系统（Open Platform / Kimi Code）与 Kimi Code 的 403/401 限额语义，已折进 §4、§17——票 14 的成本闸门依赖 §17 那句原本写成「只有 429」的措辞。
@@ -662,13 +662,13 @@ Status: ready-for-agent
   只有主会话能问、零 schema 改动）与 §19（接管的形态与分页/跳过规则、接管只给这一类、`Esc` 保持原义、
   三个渲染器各自的降级）。它**不改 §2**：问题在 `tool_call` args、答案在 result，`--continue` 撞上
   挂起的问题复用既有的悬空调用合成结果。
-- **`.scratch/tui-history-replay/` 回改**（2026-09-23）：`--continue` 的历史重播折回 **§19**（新的前端控制请求、分帧预算、进度行、历史分隔行、详情复用与四种降级、失败不阻塞启动），恢复结果同时进转录折回 **§11**。那份 spec（`.scratch/tui-history-replay/spec.md`）是本项的可建计划；它的 `Further Notes` 记了两处勘误：设计票说手工清单新增 ⑫，实际应是 **⑭**（`tui-ux` 已占用 ⑫/⑬）；设计票说回改落在 §7，实际是 §19 与 §11（§7 是工具 trait，与「转录从空开始」无关）。**顺带修掉 §19 里 `inline viewport` / 「否决 alt screen」那一行**——它早已由 `.scratch/tui-layout/spec.md` 与 `docs/adr/0002-fullscreen-alt-screen-tui.md` 推翻，正文一直没跟（同一段提到 `:526` 的行号也已漂移）。
+- **`.scratch/tui-history-replay/` 回改**（2026-09-23）：`--continue` 的历史重播折回 **§19**（新的前端控制请求、分帧预算、进度行、历史分隔行、详情复用与四种降级、失败不阻塞启动），恢复结果同时进转录折回 **§11**。那份 spec（`.scratch/tui-history-replay/spec.md`）是本项的可建计划；它的 `补记` 记了两处勘误：设计票说手工清单新增 ⑫，实际应是 **⑭**（`tui-ux` 已占用 ⑫/⑬）；设计票说回改落在 §7，实际是 §19 与 §11（§7 是工具 trait，与「转录从空开始」无关）。**顺带修掉 §19 里 `inline viewport` / 「否决 alt screen」那一行**——它早已由 `.scratch/tui-layout/spec.md` 与 `docs/adr/0002-fullscreen-alt-screen-tui.md` 推翻，正文一直没跟（同一段提到 `:526` 的行号也已漂移）。
 - **票 10 回改**（2026-09-21）：讨论协议落成三层——`discussion`（纯策略：结论判定、轮次策略、身份与合成提示）、`agent`（控制流：轮次循环、两个并发回合、单发合成调用，仍是唯一写流者）、组装层（`assemble_discussion`：一块 `SessionScaffold` 开两个讨论者会话 + 一个合成器会话）。§15 新增的六条机制里有两条会束缚后续票——**轮次投影窗口**（票 17 的 replay 必须复现）与**常量私有身份**（system 是缓存前缀的头）——所以折回正文而不只写在票的评论里。**边界未变**：`discussion` 不碰 `provider`，provider 调用全在 `agent`。为让两个讨论者并发写同一条流，`EventLog` 变成可 `Clone` 的共享句柄（内部 `Mutex`，每条事件仍原子落入、`seq` 仍是行号），`project()` 的入参从 `&EventLog` 收窄成 `&[Event]`（更纯，也让轮次窗口自然）。两个讨论者会话共享一份**权限策略**：用户在同一个终端上说的「本会话记住允许」是会话级事实，不是某个讨论者的私产——§12 的「不继承允许」讲的是**委派链向下**（讨论者 → 执行者），兄弟会话之间不在那条链上。
 - **回数 / 成本的事实**（用来判断实现是否走样）：一次讨论 3 或 5 次调用；执行者默认 25 轮、并发上限 5；单 agent 默认 100 回合；一次机械判定不花钱。
 - **三条不变量，任何实现票都不许绕**：(1) 每个 `tool_call` 恰好一条结果；(2) 存在未出结果的 `tool_call` 时**绝不**调 provider（pending 是对事件流的查询，**作用域 = 发起调用的那个 agent**：票 10 起两个讨论者同时进行中，**对方**未出结果的 `tool_call` 不是本方的欠账，会话级那次全量查询留给 `--continue` 的悬空恢复）;（3）**只有循环写事件流**。
 - **两条「看起来像优化、实际会毁掉前提」的操作，明令禁止**：中途切 Kimi 的 `reasoning_effort`（废掉前缀缓存）；带 tools 时丢弃 DeepSeek 自己的 `reasoning_content`（直接 400）。
 - **给 `/to-tickets` 的切片建议**：greenfield ⇒ **没有 prefactoring**。第一个 tracer bullet 应当是**垂直**的：crate 骨架 + 事件流 + 假 provider + 一个 Turn + headless 的 stdout 只放最终产物——它一次性把**唯一那条 e2e 接缝**建起来，之后的票都往这条接缝上加场景，而不是各自新开 mock 接缝。
-- **实现者请勿「顺手改进」**：向量检索、MCP、裁判、进程沙箱升级都被逐条评估过并**有理由地**排除（见 `Out of Scope`）。要动它们，先改这张 spec，而不是在实现里悄悄加一条路径。
+- **实现者请勿「顺手改进」**：向量检索、MCP、裁判、进程沙箱升级都被逐条评估过并**有理由地**排除（见 `明确不做`）。要动它们，先改这张 spec，而不是在实现里悄悄加一条路径。
   **2026-10-03 补记**：其中的 **MCP** 已经走了正门 —— 另起了 [`mcp-support`](../mcp-support/map.md)
   （wayfinder 决策图），并在上面两处加了带日期的补记；这条禁令对**剩下的**几项（向量检索、
   裁判、进程沙箱升级）仍然成立。

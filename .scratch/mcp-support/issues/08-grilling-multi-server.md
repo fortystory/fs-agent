@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 同一台机器上配了多台 MCP server 时：
 
@@ -16,7 +16,7 @@ Blocked by: —
 3. **重名**：配置里两台 server 同名 —— 是**启动错误**（早说早好，与 `deny_unknown_fields` 同一
    调性）还是后一台盖掉前一题？工具重名不存在：元工具方案下工具名拆成 `server` + `tool` 两个参数。
 
-## Answer
+## 作答
 
 **并发起，失败的跳过；不做数量上限；重名是启动错误。**
 

@@ -58,7 +58,7 @@ Blocked by: —
 - [ ] `bash` 的描述里那几句话在（逐字断言）。
 
 
-## Comments
+## 评论
 
 - 2026-10-01 落地。`bash` 的 `escalation`（`justification` + `writable_paths`，成对非空，
   半截是参数错误）→ `CallFacts::escalation`（路径已解析成绝对）→ 门里的裁决

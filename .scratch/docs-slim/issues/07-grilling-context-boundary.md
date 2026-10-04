@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: 02
 
-## Question
+## 问题
 
 [`CONTEXT.md`](../../../CONTEXT.md) 自称**不含实现决策**，但实测密布实现指称（`Config::debaters_share_a_vendor`、`discussion::pick_pair`、`spec §5`）。它是「每次上手读一次」的那一层，也是**术语的唯一来源** —— 所以剥过头会把「只有这里定义过」的东西弄丢。
 
@@ -20,7 +20,7 @@ Blocked by: 02
 3. **剥离与铁律的关系**：`CONTEXT.md` 里那些「不做 / 永远不 / 一律」的硬约束（例如「模型文本按值打码」「hook 只能收紧」）算不算「实现决策」？它们是术语定义的一部分，还是该搬去 `docs/`？这是本票最需要判断的一处。
 4. **它要不要也受段落 ≤500 管**：它在 scope 内，实测最长段 574。
 5. **三个「格式必需」的名字在 `src/` 查无此名**（票 02 实测）：`PromptHue` / `FallingDash` / `StatusRow` 的真实形态是 `PROMPT_HUE_PER_SECOND` / `DASH_FALL` / `wording::status_row` —— 它们由 `.scratch/tui-input-pulse/spec.md` 那轮为 spec 立的概念名。**术语表里的英文槽位该对代码、还是对 spec**？这是 `CONTEXT.md` 开头「英文是代码里的标识符 / 类型名」那条规矩第一次被证伪。
-6. **`CONTEXT.md` 被上游 spec 当术语落点主动加词条**：`.scratch/tui-input-pulse/spec.md`:6 明写「术语：`CONTEXT.md`（§渲染）**新增** 提示符色相 / 脉冲 / 下落短横」—— 这是**仍在生效的流程**，不只是历史残留，与本图 `Not yet specified` 的「流程本身在制造胖点」是同一个病根。**本票要不要顺带定一条「新术语往哪写」的规矩**？也可以明确留给那片雾。
+6. **`CONTEXT.md` 被上游 spec 当术语落点主动加词条**：`.scratch/tui-input-pulse/spec.md`:6 明写「术语：`CONTEXT.md`（§渲染）**新增** 提示符色相 / 脉冲 / 下落短横」—— 这是**仍在生效的流程**，不只是历史残留，与本图 `尚未明确` 的「流程本身在制造胖点」是同一个病根。**本票要不要顺带定一条「新术语往哪写」的规矩**？也可以明确留给那片雾。
 
 **依赖**：本票要读 [票 02](02-research-context-implementation-details.md)（`Status: resolved`）的清点表。它的关键输入：72 个词条里纯实现细节 **246 处指称 + 193 条描述**、格式必需 **78 处**；被剥内容 **92% 在 `docs/` 逐面或 `.scratch/*/spec.md` 已有一份**（66 个 full + 4 个 partial，2 个 none）；剥完 **14 个词条会空掉或只剩标题**（渲染节占 8 个）。
 
@@ -30,7 +30,7 @@ Blocked by: 02
 - `spec §` 引用换成链接还是删掉。
 - 硬约束句算不算术语定义。
 
-## Answer
+## 作答
 
 **结论：剥到「一句定义 + 可选 `docs/` 指针」；6 个「别处没有」的词条的独有内容搬进 `docs/`；9 处 `§N` 换成 `docs/` 链接；硬约束句全部当定义留下；`CONTEXT.md` 与其余 35 份同受单元 ≤500 管；四个「造名」槽位保留、改第 10 行的规矩；新术语的落点当场定死。**（2026-10-04 与维护者的 live exchange，七问。**Q4 与推荐不同**——维护者选了「硬约束句全留」而不是「按区分性拆开」，答案按前者落。）
 
@@ -96,7 +96,7 @@ Blocked by: 02
 
 > **新术语：定义进 `CONTEXT.md`（一句 + 可选指针），机制进 `docs/` 逐面。不许在 `CONTEXT.md` 里写机制。**
 
-它治的正是 [`.scratch/tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md):6 那条**仍在生效**的流程——不加这条，剥完会以同样的方式长回来。map 的 `Not yet specified` 里那半条（「术语落点」）随本票毕业；**更宽的那半**（每次 feature 收尾往入口文档追加逐日经过）仍留在雾里。
+它治的正是 [`.scratch/tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md):6 那条**仍在生效**的流程——不加这条，剥完会以同样的方式长回来。map 的 `尚未明确` 里那半条（「术语落点」）随本票毕业；**更宽的那半**（每次 feature 收尾往入口文档追加逐日经过）仍留在雾里。
 
 ### 交给 `/to-spec` 的执行要点
 

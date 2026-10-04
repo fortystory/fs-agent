@@ -3,7 +3,7 @@
 Type: research
 Status: resolved
 
-## Question
+## 问题
 
 本票为**票 13（渲染接缝：plain / TUI / headless）**提供外部事实。票面第 5 条点名了这个缺口，并且已核实：`ratatui` / `crossterm` / `tui` 在当时的 `.scratch/v1-architecture/research/`（那份笔记今在 `research/08-rust-ecosystem.md`；v1-architecture 图已删除，见 git 历史 `b510e6b`）、`.scratch/multi-agent-architecture/research/` 与 `docs/research/coding-agent-features.md` 里**全部零命中**。票面同时保留了"diff 语法高亮"（明确不做的只是"高亮之外的编辑器能力"），所以高亮库也要一并查。
 
@@ -32,7 +32,7 @@ Status: resolved
 
 **本票不决定任何事**——它是票 13 的事实输入。
 
-## Answer
+## 作答
 
 **已解（2026-09-13，AFK，由 research 子代理执行）。**
 

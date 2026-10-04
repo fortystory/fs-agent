@@ -6,7 +6,7 @@ Part of: ../map.md
 Blocked by: —
 
 > 规格：[`../spec.md`](../spec.md) §7。**完整草稿已经写在
-> [票 05 的 `## Answer`](05-grilling-doc-skeleton-and-adr.md) 里** —— 本票是把它落成文件，
+> [票 05 的 `## 作答`](05-grilling-doc-skeleton-and-adr.md) 里** —— 本票是把它落成文件，
 > 不是重新论证。
 
 ## 目标

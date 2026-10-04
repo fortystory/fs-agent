@@ -5,7 +5,7 @@ Status: resolved
 Blocked by: —
 Part of: ../map.md
 
-## Question
+## 问题
 
 为 `grilling：折叠与详情覆盖层的交互契约`、`prototype：折叠提示行、详情覆盖层与工具行的形态`、`grilling：鼠标点击作答的命中与焦点契约` 提供**本仓库源码级事实**。
 
@@ -34,11 +34,11 @@ Part of: ../map.md
 
 **不写建议、不选赢家。** 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Comments
+## 评论
 
 - 2026-09-23 charting：本票由 charting 会话的后台 research subagent 认领（`Status: claimed` 由认领者落笔）。
 
-## Answer
+## 作答
 
 已按票面八问逐条给出源码级事实，完整答案见 [research/01-collapse-detail-data-sources.md](../research/01-collapse-detail-data-sources.md)（68 条编号事实 + 8 条「⚪ 未证实 / 查不到」）。要点：
 

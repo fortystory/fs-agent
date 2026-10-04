@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 01
 
-> 规格：[`.scratch/sidebar-toggle/spec.md`](../spec.md) §4、`Testing Decisions`。
+> 规格：[`.scratch/sidebar-toggle/spec.md`](../spec.md) §4、`测试决定`。
 > 键位与几何归 [票 01](01-toggle-state-and-geometry.md)；本票只动措辞层与它的档位断言。
 > **必须等票 01 落地**：在 `Ctrl-O` 真的能用之前，这条提示是在承诺一个什么都不做的键 ——
 > 那是提示行绝不能做的事（`wording::EXIT_HINT_BUSY` 的 rustdoc 写着这条纪律）。
@@ -47,7 +47,7 @@ Blocked by: 01
    相等」的断言就跟着改；没有就一行不动（别预改）。
 4. 手工面写进 [票 03](03-docs-and-sweep.md) 的那一节（提示行在真终端里的可读性）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：`KEY_HINTS` 变成 `[&str; 6]`，末尾追加 `"ctrl-o 左栏"`；docstring 补上「位置就是优先级」。
 - `status_line` 的阶梯 docstring 按实测重取：40 列三个条目、60 列四个、80 列六个、120 列八个

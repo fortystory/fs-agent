@@ -33,7 +33,7 @@ server 子进程只拿到「配置里显式声明的环境变量 + 最小必需�
 - 不做信任位（票 14）—— 本票只做「默认过沙箱、默认白名单」。
 - 不动 `bash` 那一侧的环境处理。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/mcp/rmcp_client.rs`（`ConnectOptions` /
   `StderrSink` / `BASE_ENV_KEYS`，`stdio_transport` 里的 `env_clear()` + 白名单 +

@@ -2,7 +2,7 @@
 
 Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail.md)–[`12`](issues/12-remainder-and-close-out.md)，
 2026-10-04 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 十条冻结项 + 七张决策票全部 `resolved`，同日 5 张实现票全部落地；
-依赖边见各票抬头。三份 research 与四张 grilling 的完整答案在各票的 `## Answer` 里，本文件是它们的构建计划）
+依赖边见各票抬头。三份 research 与四张 grilling 的完整答案在各票的 `## 作答` 里，本文件是它们的构建计划）
 
 这 36 份活文档按「被读的方式」分层：`AGENTS.md` **每轮全文注入**（最贵）；`README.md` / `CONTEXT.md` /
 `.scratch/README.md` **每次上手读一次**；`docs/` 逐面与 `docs/adr/` **按需读一份**；`.scratch/*/issues/`
@@ -14,7 +14,7 @@ Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail
 来源与依据：
 
 - 决策图 [`map.md`](map.md)：**十条冻结项**（charting 四轮 grilling 定下）+ **七张决策票**（全部
-  `resolved`）。每条决定的完整理由与取舍都在票的 `## Answer` 里：三张 research（[手工清单条目现状](issues/01-research-manual-checklist-entries.md)、
+  `resolved`）。每条决定的完整理由与取舍都在票的 `## 作答` 里：三张 research（[手工清单条目现状](issues/01-research-manual-checklist-entries.md)、
   [`CONTEXT.md` 实现细节清点](issues/02-research-context-implementation-details.md)、[超长文本块分类与豁免判据](issues/03-research-long-paragraph-triage.md)）
   与四张 grilling（[入口三份的重写形状](issues/04-grilling-entry-docs-shape.md)、[护栏脚本的契约](issues/05-grilling-guardrail-contract.md)、
   [清单与 lifecycle 的处置](issues/06-grilling-checklist-and-lifecycle.md)、[`CONTEXT.md` 的词条边界](issues/07-grilling-context-boundary.md)）。
@@ -59,7 +59,7 @@ Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail
    只压一处同文件内部的复述，图与证据表一个字不动。
 6. **新术语的落点当场定死**（定义进 `CONTEXT.md`、机制进 `docs/`），否则剥完会以同样的方式长回来。
 
-## User Stories
+## 用户故事
 
 1. 作为**刚接手这个仓库的开发者**，我想要入口文档只讲结论与指针，以便我上手时不必读一份逐日流水账。
 2. 作为**每轮都在付注入成本的会话**，我想要 `AGENTS.md` 只留「索引在哪」而不复述语言约定，以便每轮的固定开销更小。
@@ -85,7 +85,7 @@ Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail
 21. 作为**维护者**，我想要手工清单的 `①–㉖` 与 `⑫ / ⑯ / ⑱ / ⑳` 的二级编号都不重排，以便 8 处外部引用（含「⑱ 第 3 条」这类）不失效。
 22. 作为**读 `docs/` 逐面文档的人**，我想要那 6 条从术语表搬过来的实现细节读起来仍是中文散文，以便中文占比不因此被拉低。
 
-## Implementation Decisions
+## 实现决定
 
 ### 1. 指标与口径（冻结项 5 + [超长文本块分类与豁免判据](issues/03-research-long-paragraph-triage.md)）
 
@@ -219,7 +219,7 @@ Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail
 - **`docs/tui-manual-checklist.md` 的条目编号被外部引用**至少 8 个点（`docs/render.md` 的 ⑭、`docs/goals.md` 的 ㉒、
   `.scratch/sandbox/spec.md` 的 ⑱ ×3、`.scratch/tui-chrome/spec.md` 的 ⑳ ×2、`.scratch/sidebar-toggle/spec.md` 的 ㉖）→ 见 §5 的编号禁改。
 
-## Testing Decisions
+## 测试决定
 
 **只在一个 seam 上测：`scripts/check-doc-size.py` 的命令行接口（退出码 + stdout）。** 这是该脚本对外的唯一接口，
 也是这个 feature 全部自动可验部分的承担者 —— 文档改动本身没有别的可自动断言的面。
@@ -254,10 +254,10 @@ Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail
 - **不处理两条比本 spec 更宽的流程问题**：① 每次 feature 收尾「往入口文档追加逐日经过」该改成什么（本 spec 的
   预算棘轮只让它变得可见）；② 入口文档的「状态」段该不该由 `.scratch/` 派生而不是手写。两者留给后续 effort。
 
-## Further Notes
+## 补记
 
-- **这份 spec 不重复细节**：每条决定的完整理由、取舍与被否掉的替代方案都在七张票的 `## Answer` 里；[`map.md`](map.md)
-  的 `Decisions so far` 是一行式索引。本文件是构建计划，票是决策记录。
+- **这份 spec 不重复细节**：每条决定的完整理由、取舍与被否掉的替代方案都在七张票的 `## 作答` 里；[`map.md`](map.md)
+  的 `已定的决定` 是一行式索引。本文件是构建计划，票是决策记录。
 - **这一轮到目前为止只产决策**：`docs-slim` 走完七张票的过程中**没有改动任何一份文档**，改的只有 `.scratch/docs-slim/` 里的票与那张图。
 - **验收顺序建议**：先落 `scripts/check-doc-size.py` 与它的测试（首装即绿，成为后面每一步的尺子），
   再改 `CONTEXT.md`（最大的一块），再改三份入口文档（有明确数值目标），最后是手工清单与 lifecycle 的两处小改动；

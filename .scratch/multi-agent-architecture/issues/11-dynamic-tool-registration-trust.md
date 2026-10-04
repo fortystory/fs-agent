@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 03, 05
 
-## Question
+## 问题
 
 ratify 第 3 条翻案把「自定义工具注册」加进了范围。**这一条与已定的扩展档位 (iii) 直接冲突** —— (iii) 的原文是"**不**做配置驱动的动态加载（MCP / 插件）"。所以档位已被 superseded 为「hook 挂载点 **+** 动态工具注册」。本票要把新增的那一半定形。
 
@@ -30,7 +30,7 @@ ratify 第 3 条翻案把「自定义工具注册」加进了范围。**这一�
 
 **票 03 交接来的具体接口（2026-09-12）**：内建工具的副作用类别由 `Tool::effect(&self, args) -> SideEffect` 在**编译期常量**层面确定（只读工具无条件返回 `ReadOnly`），可信。**动态工具的同一个方法返回什么，就是本票的必答题**：是由声明推导（例如"shell 命令一律 `Exclusive`"）、声明即信任、还是强制不可并发。相关的既有接口：`ToolRegistry::register(Box<dyn Tool>)` 是唯一挂载点；args 是 `serde_json::Value`；`ToolSpec`（name/description/JSON Schema）内建与动态**同一套**（票 03 第 2 节）。
 
-## Answer
+## 作答
 
 **已定（2026-09-13，grilling，4 问一轮确认）。** 挂载点（`ToolRegistry::register`）与线级形状（`ToolSpec`）来自票 03；调用次序与权限门来自票 05。
 

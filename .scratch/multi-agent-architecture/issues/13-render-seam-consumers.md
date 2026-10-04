@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 15, 25
 
-## Question
+## 问题
 
 决定渲染接缝。**本票已改写**：原先的"一条总线还是两条"归到票 15（事件流骨架）去了，本票专注**消费者侧**。
 
@@ -47,7 +47,7 @@ Blocked by: 15, 25
 - **"覆盖 / 追加 / 保留"是进入模式时的一次手势交互**（`/plan` 撞上已存在的 `PLAN.md` 时问一次），**不是流上的事件**——它是 CLI/TUI 的提问，产出的是对文件的处置。
 - 顺带：`PLAN.md` 的写入是 plan 模式下**唯一被放行**的写，所以会出现一条很反常的组合（模式是只读，却有一次写成功）——别把它当 bug。
 
-## Answer
+## 作答
 
 **已定（2026-09-13，grilling 两轮 + 一个 research 票）。** 事实来源：`research/06-tui-and-highlighting-crates.md`（票 25 的产物，712 行）。
 

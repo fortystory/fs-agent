@@ -8,7 +8,7 @@
   ▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀
 ```
 
-**fs** = **Forked Synthesis**（分叉合成）：两个异构讨论者**分叉**作答，合成器把分叉**收束**成共识 / 分歧 / 未决——前者是机制，后者是产出。`fs-agent` 即「分叉合成的 agent」；`fs` 只是叙述里的框架名，**不是**命令行或路径的一部分（命令仍是 `fs-agent`，落盘仍是 `~/.config/fs-agent/`）。`Forked` 的「分叉」只指讨论协议这一步，与 Out of Scope 里的 `fork/rewind` 手势无关。
+**fs** = **Forked Synthesis**（分叉合成）：两个异构讨论者**分叉**作答，合成器把分叉**收束**成共识 / 分歧 / 未决——前者是机制，后者是产出。`fs-agent` 即「分叉合成的 agent」；`fs` 只是叙述里的框架名，**不是**命令行或路径的一部分（命令仍是 `fs-agent`，落盘仍是 `~/.config/fs-agent/`）。`Forked` 的「分叉」只指讨论协议这一步，与「明确不做」一节里的 `fork/rewind` 手势无关。
 
 自用 coding agent CLI（Rust，从零实现）。核心是**一条只追加的事件流**加**每个 agent 自己的窗口**：事件流是会话的唯一真相源，每个讨论者 / 执行者这次调用要重放的 `messages` 都是从事件流加投影规则**重算**出来的纯函数产物——没有隐藏状态，历史永远可复盘。
 
@@ -242,7 +242,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | 去哪看 | 是什么 |
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | 正式词汇表：**领域词汇**（事件流、投影、待办列表……）加末尾一节**流程词汇**（feature 目录 / spec / 票 / 决策图 / 分诊标签……），并写明哪两类词不收（通用编程概念、skills 工具名）（含名字：`fs` = Forked Synthesis / 分叉合成）。写文档、写代码、写票之前先看它 |
-| [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的 Out of Scope |
+| [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的「明确不做」 |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`goals`](docs/goals.md) · [`grep`](docs/grep.md) · [`observability`](docs/observability.md) · [`permissions`](docs/permissions.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`sandbox`](docs/sandbox.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) · [`web`](docs/web.md) · [`mcp`](docs/mcp.md) |
 | [`docs/lifecycle.md`](docs/lifecycle.md) | **运行时生命周期**：从敲下命令到进程退出的五张图（一张鸟瞰 + 四张分层详图）与逐节点的 `文件:行号` 证据表，把上面各份逐面说明接起来；护栏是 [`scripts/lifecycle-check.py`](scripts/lifecycle-check.py)（守指称完整性，见它的用法） |
 | [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） |
@@ -278,9 +278,9 @@ python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 
 ## 这一版不做
 
-AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、把工具打包进 skill、网络隔离。理由逐条写在 [v1 spec 的 `Out of Scope`](.scratch/fs-agent-v1/spec.md) 与各 feature 自己的 spec 里。
+AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、把工具打包进 skill、网络隔离。理由逐条写在 [v1 spec 的 `明确不做`](.scratch/fs-agent-v1/spec.md) 与各 feature 自己的 spec 里。
 
-**`MCP client` 也已经从这里拿出去**：2026-10-03 起它另起了一个 effort（同日落地，见 [`docs/mcp.md`](docs/mcp.md)） —— [`mcp-support`](.scratch/mcp-support/map.md)（wayfinder 决策图，七张决策票），范围是 MCP **现行规范的全集**（tool / resource / prompt / elicitation + MRTR；已 deprecated 的 sampling / roots / logging 不在内）。v1 spec 的三处加了带日期的补记（两处在 `Out of Scope`、一处在 §14 自定义工具那节），原文不改写 —— 那是当初排除它的理由。
+**`MCP client` 也已经从这里拿出去**：2026-10-03 起它另起了一个 effort（同日落地，见 [`docs/mcp.md`](docs/mcp.md)） —— [`mcp-support`](.scratch/mcp-support/map.md)（wayfinder 决策图，七张决策票），范围是 MCP **现行规范的全集**（tool / resource / prompt / elicitation + MRTR；已 deprecated 的 sampling / roots / logging 不在内）。v1 spec 的三处加了带日期的补记（两处在 `明确不做`、一处在 §14 自定义工具那节），原文不改写 —— 那是当初排除它的理由。
 
 **`compaction` 已经从这里拿出去**：压缩在 [`goal-loop`](.scratch/goal-loop/spec.md) 里做完了——过八成就把历史折成一段摘要、随翻页注入新会话（[`docs/goals.md`](docs/goals.md) 的「过半提醒与翻页」）。仍然不做的是压缩之外的历史管理（fork / rewind、历史编辑）。
 

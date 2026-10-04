@@ -17,7 +17,7 @@ Status: done
 - [x] 这是给**人**用的 CLI，**不新增 agent 工具**
 - [x] 验收（最重要的一条）：用 `replay` 重算出来的投影 **== 当时实际发给 provider 的 `messages`**——这条是「事件流是唯一真相源」的验收
 
-## Comments
+## 评论
 
 实现落点：`src/agent/replay.rs`（`replay` / `ReplayError`：把一件事重算出来）、`src/agent.rs`（新增 `build_messages`，`run_turn` 与 `replay` 共用这一条流水线；`scoped_events_slice` 让窗口过滤能吃一个显式切片）、`src/session/observe.rs`（`list` / `summarize` / `timeline` / `Filter` / `file_history` / `stats` / `CostModel`）、`src/cli.rs`（`run_sessions` 与四个动词、表格与 `--json` 渲染）、`src/tools/registry.rs`（新增 `READ_BEFORE_WRITE_PREFIX`）、`src/lib.rs`（`Harness::events`）。测试：`tests/replay.rs`（7 例）、`tests/observe.rs`（9 例）、`tests/observe_cli.rs`（7 例）。文档：`docs/observability.md`（新增）。
 

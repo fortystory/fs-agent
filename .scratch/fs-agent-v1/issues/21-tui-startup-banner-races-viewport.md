@@ -57,7 +57,7 @@ TUI 活着时 `cli.rs` 还有几处裸 `eprintln!`，都会落进 live region：
 - **推荐**：把启动横幅做成接缝上的一个块（与 `[context injected: …]` 同路），由渲染器 `insert_before` 推进 scrollback。这样「只有一个写入者」由结构保证而不是靠调用顺序，顺带它变得可测（`tests/render_tui.rs` 那种无终端测试）。
 - 次选：把 `eprintln!` 挪到 `Harness` 构造之前。能修好 banner，但「渲染器启动后不许写 tty」这条纪律仍然没有落点，上面那几处 `eprintln!` 还会复现同一个 bug。
 
-## Comments
+## 评论
 
 - 本票是 raw bug report 的记录（`/triage` 的产物）。**标 `needs-triage` 的原因**：修复方向二选一需要维护者拍板，以及要确认范围是「只修 banner」还是「这一类写入一起修」。拍板后即可改 `ready-for-agent`。
 - 观察（未验证，可能超范围）：spec §A.12 要的是「模型、模式与**预算**」，而横幅只打了 model / mode / 会话目录，没打预算。做接缝化时可能顺手补齐——先确认预算是否已在别处显示。

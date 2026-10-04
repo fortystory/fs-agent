@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 03
 
-## Question
+## 问题
 
 决定 `edit_file` 内部策略的接缝。综述说编辑是"整条链路失败率最高的地方"——模型生成的 `old_string` 少一个空格就整块失败；而**真正的差异化在「编辑失败之后」**（opencode、cline、gemini-cli 三家各自独立收敛到同一类自愈层）。
 
@@ -19,7 +19,7 @@ Blocked by: 03
 
 答案定到分层结构与每层的接口，不要实现。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。证据来源：`docs/research/coding-agent-features.md` 第 2 节；接口受票 03 的 `Tool` trait 约束。**
 

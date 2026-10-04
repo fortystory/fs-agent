@@ -483,7 +483,7 @@ fn validate_roster(
     if debaters.len() != discussion::DEBATERS {
         return Err(Error::Discussion(format!(
             "v1 固定跑 {} 位讨论者，拿到的是 {}；再多就要重开 \
-             「N = 2 does not arbitrate」那个决定（spec §15，Out of Scope）",
+             「N = 2 does not arbitrate」那个决定（spec §15，明确不做）",
             discussion::DEBATERS,
             debaters.len()
         )));

@@ -5,7 +5,7 @@ Status: resolved
 Blocked by: 01, 03, 04
 Part of: ../map.md
 
-## Question
+## 问题
 
 把本图所有决定的**可验证性**定下来：哪些进 `cargo test`、哪些进 pty、哪些只能进真终端手工清单；以及要为「重开一个已存在的会话」造什么 fixture。沿用 `.scratch/tui-ux/issues/08-grilling-test-and-verification-migration.md` 的分层先例。
 
@@ -35,15 +35,15 @@ Part of: ../map.md
 
 ## 进度
 
-**100%** —— 完成。一轮 grilling、4 条决定，票面 8 个「需要定」全部覆盖；契约见 `## Answer`。
+**100%** —— 完成。一轮 grilling、4 条决定，票面 8 个「需要定」全部覆盖；契约见 `## 作答`。
 
 **下一步**：无（已 resolved）。本图 5/5，按 wayfinder 交接到 `/to-spec`。
 
-## Answer
+## 作答
 
 **验证契约（2026-09-23，4 条决定）。**
 
-### §1 fixture
+### §1 夹具
 
 - 在 `tests/support/` 加一个 **session fixture**：`tempfile::tempdir()` + 照 `tests/session_store.rs:124` 既有的 `append(log_path, speaker, payload)` 写法直接落一条 `log.jsonl`；需要 `outputs/` 时再写 `outputs/<tool_call_id>.txt`。**不走 provider、不跑真 harness。**
 - **大多数重播断言根本不需要文件**：直接构造 `Vec<Event>`，喂 `ConsoleRequest::Replay { events }`，再 `TestBackend` 出帧。临时会话目录只服务 `outputs/` 详情（§3）与 pty / CLI 路径。
@@ -68,7 +68,7 @@ Part of: ../map.md
 | 含注记 | 存在但为空 | 预览 + `全文不可用` |
 | **不含注记** | （从不尝试读） | 事件文本即全文（不出现 `全文不可用`） |
 
-### §4 pty
+### §4 伪终端（pty）
 
 - 脚本加一条 **`--continue` 路径**：在同一临时 `XDG_DATA_HOME` 里**先造一个会话**（跑一次普通启动即可，或直接写最小 `log.jsonl`），再 `--continue` 启动。
 - 断言：**不崩**、首帧 / 重播**收敛**（进度行消失）、退出后终端**交还干净**（alt screen / mouse / paste / termios）。

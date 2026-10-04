@@ -3,9 +3,9 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-09-23，两轮 grilling）。本图只做**规划**，不产实现代码。
-**✅ 设计部分已完成（2026-09-23）**：5 张决策票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；交棒产物是 `.scratch/tui-history-replay/spec.md`，`/to-tickets` 已在同一 `issues/` 下切出 **4 张实现票（`06`–`09`，`Type: implement`）**。**不要再往这张图加决策票**——实现票由 `/implement` 认领，wayfinder 会话跳过它们（见 `## Notes` 与 tracker 文档）。
+**✅ 设计部分已完成（2026-09-23）**：5 张决策票全部 resolved、`尚未明确` 为空 ⇒ 路线 clear；交棒产物是 `.scratch/tui-history-replay/spec.md`，`/to-tickets` 已在同一 `issues/` 下切出 **4 张实现票（`06`–`09`，`Type: implement`）**。**不要再往这张图加决策票**——实现票由 `/implement` 认领，wayfinder 会话跳过它们（见 `## 笔记` 与 tracker 文档）。
 
-## Destination
+## 目的地
 
 一份 **spec-ready 的「重新打开会话」决策集**，交给 `/to-spec` 折叠成实现计划。
 
@@ -15,16 +15,16 @@ Charting: **已完成**（2026-09-23，两轮 grilling）。本图只做**规划
 
 **判据**：只动 TUI 与 CLI 组装；**不改 `events` schema**；plain / headless 不动。
 
-## Notes
+## 笔记
 
 - **领域**：`fs-agent` —— 自用 coding agent CLI，Rust。本图与已完成的 `.scratch/tui-ux/` 图（`TUI 使用体验与视觉效果优化`）**紧邻**：那张图定义了折叠提示行与**详情覆盖层**的形态与命中契约，本图要让**历史块**也走同一套。**tui-ux 已在 2026-09-23 落地并提交**（八张票全实现，基线 `664 passed`）——本图要贴的接缝已经是代码，见下面「已落地的 tui-ux 接缝」。
-- **本图承接的既有票据**：`.scratch/tui-history-replay/issues/01-continue-history-replay.md` 原本是一张独立票（由 tui-ux 图的 `grilling：折叠与详情覆盖层的交互契约` 判出 scope 后另立）。它现在是**本图的子票 01**，`## Question` 已改写为「接缝与调度」——「要不要做 / 重播多少 / 保真度 / 详情复用 / 派生信息」这些**范围级决定已在 charting 冻死**（见下）。
+- **本图承接的既有票据**：`.scratch/tui-history-replay/issues/01-continue-history-replay.md` 原本是一张独立票（由 tui-ux 图的 `grilling：折叠与详情覆盖层的交互契约` 判出 scope 后另立）。它现在是**本图的子票 01**，`## 问题` 已改写为「接缝与调度」——「要不要做 / 重播多少 / 保真度 / 详情复用 / 派生信息」这些**范围级决定已在 charting 冻死**（见下）。
 - **每张票的答案必须自足**：`/implement` 会在 `/clear` 之后的新会话里读它，看不到本图与 charting 对话。
 - **要咨询的 skills**：`/grilling`（HITL 票默认）、`/domain-modeling`（若引入新词）、`/research`（research 票）、`/code-review`（核对实现时）。形态若真的需要看图，用 `/prototype`（复用 `.scratch/tui-ux/prototype/` 的探针套路）。
 
 ### Tracker 事实与降级（本图适用）
 
-- 本仓库 issue tracker = **local markdown**：map = `.scratch/tui-history-replay/map.md`，child = `.scratch/tui-history-replay/issues/NN-*.md`，阻塞 = 票面 `Blocked by: NN`，claim = 票面 `Status: claimed`，resolve = `## Answer` + `Status: resolved` + 追加到本文件 `Decisions so far`。
+- 本仓库 issue tracker = **local markdown**：map = `.scratch/tui-history-replay/map.md`，child = `.scratch/tui-history-replay/issues/NN-*.md`，阻塞 = 票面 `Blocked by: NN`，claim = 票面 `Status: claimed`，resolve = `## 作答` + `Status: resolved` + 追加到本文件 `已定的决定`。
 - 该后端**没有 native sub-issue / 原生依赖边**，所以按既定规则**回退**：本文件用 `## 任务清单` 逐条引用子票（条目数 == 子票文件数），每张子票顶部写 `Part of: ../map.md`。**阻塞关系以正文 `Blocked by:` 为权威**。
 - 校验：`python3 scripts/wayfinder-check.py .scratch/tui-history-replay/map.md`（数量 / `Part of` / `Blocked by` 解析 / `closed-total`；对不上非零退出）。
 - **`Status:` 与 triage 共用**：triage 状态也记在 `Status:`（canonical 角色串），category 记 `Category:` 行。**frontier 判定 = 非 `resolved`/`done`/`closed` + unblocked + unclaimed + `Type` ≠ `implement`**——`06`–`09` 是实现票，虽在同一目录、`Status: ready-for-agent`，也**不是**本图的 frontier（`docs/agents/issue-tracker.md` 已写明这条）。
@@ -75,7 +75,7 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 
 共 **9** 张子票（**5** 张决策票全部 resolved + **4** 张实现票 2026-09-23 全部实现、`Status: done`）；实现票的依赖边 = `07 ← 06`、`08 ← 06`、`09 ← 06, 07, 08`。
 
-## Decisions so far
+## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里，本文件不复述。按名字引用，不写裸编号。 -->
 
@@ -85,13 +85,13 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 - [grilling：历史详情覆盖层的复用与降级](issues/04-grilling-history-detail-overlay.md): 契约 4 条——**不新增形态**：历史详情就是 tui-ux 票 02/03 的覆盖层，命中沿用 tui-ux 票 04 的**绘制时当帧记录**（天然吸收 `evict` 的显示行平移）。可点范围 = 历史 `✓ 思考完成` 与工具行带 `▸`；**分隔行不可点**；**重播期间鼠标一律不响应**。工具全文的判据 = 事件文本里有没有 **`full output at <path>`** 注记：有 → 读 `<会话目录>/outputs/<id>.txt`，读不到 / 空 → 预览 + `全文不可用`；**没有注记 → 事件文本就是全文**（不误报不可用，悬空调用的 `INTERRUPTED` 结果走这条）。思考详情只来自 `MessageCompleted.reasoning`；合成器 `None` 的历史没有思考行、也就没有可点的思考详情（不伪造）。覆盖层行为与 live 完全一致（`Esc`/再点关闭、内滚、打开时视口冻结、关闭后恢复吸底）。
 - [grilling：测试与验证迁移](issues/05-grilling-test-and-verification-migration.md): 分层定死——**行为进 `cargo test`**（`tests/support/` 加 session fixture：`tempfile::tempdir()` + `append(log_path, speaker, payload)`；多数断言直接构造 `Vec<Event>` 喂 `ConsoleRequest::Replay`）、**终端归属进 pty**（加 `--continue` 路径：先造会话再重开，断言不崩 / 收敛 / 退出交还干净）、**手感进手工清单**（新增 ⑫「`--continue` 重开」+ ⑦ 补「重开后退出」；**编号勘误：实际落 ⑭**，见 `## 进度`）。逐条列了：内容与顺序（`历史块 → 分隔行 → banner`）、分帧中途（部分历史 + 进度行）、面板 / 模式（含 `PlanMode`→`ModeChange` 的两个例子）、四种文件状态的详情、`Enter` 不提交与 live 缓冲顺序、空 / 1 / 512 / 513 边界、吸底。既有测试只改**编译期被逼改**的 `ConsoleRequest` match（TUI `request()` + plain 侧），现有断言预期不变、基线 **664**（tui-ux 落地后）开工前复核。spec 回改清单交给 `/to-spec`（`fs-agent-v1/spec.md`、`docs/render.md`、手工清单、pty 脚本、新文案）。实现顺序应在 `tui-ux` 实现之后。
 
-## Not yet specified
+## 尚未明确
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票。不要预先切成票那么大。 -->
 
-<!-- 当前**没有**未指定的雾：本图 5 张票全部 resolved，原有的 `Pane::evict` 优化问题已判出 scope（见 `## Out of scope`）。 -->
+<!-- 当前**没有**未指定的雾：本图 5 张票全部 resolved，原有的 `Pane::evict` 优化问题已判出 scope（见 `## 明确不做`）。 -->
 
-## Out of scope
+## 明确不做
 
 <!-- 有意识排除在本次 effort 之外的工作；永不毕业。 -->
 
@@ -106,7 +106,7 @@ tui-ux 八张票**已实现并提交**（`7e437a0` / `940cd43` / `0641c57` / `b4
 
 ## 进度
 
-**决策部分 100%** —— **本图完成（2026-09-23）**：5/5 张**决策票**全部 resolved、`Not yet specified` 为空 ⇒ 通往 destination 的决策已 clear。随后 `/to-tickets` 又在同一目录切出 **4 张实现票**（`06`–`09`）：它们计入 `## 任务清单` 的条目数，但**不计入本图的路线完成度**。
+**决策部分 100%** —— **本图完成（2026-09-23）**：5/5 张**决策票**全部 resolved、`尚未明确` 为空 ⇒ 通往 destination 的决策已 clear。随后 `/to-tickets` 又在同一目录切出 **4 张实现票**（`06`–`09`）：它们计入 `## 任务清单` 的条目数，但**不计入本图的路线完成度**。
 
 **下一步 = handoff，不是 build**：`/to-spec` 把 5 张票的 decisions 折成可建计划（按 `grilling：测试与验证迁移` §7 回改 `fs-agent-v1/spec.md`、`docs/render.md`、手工清单与 pty 脚本）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。**`tui-ux` 已落地（2026-09-23），本图实现可直接开始**；**历史行必须经 `TuiState::apply`**（`links`）才有 `▸` 命中。**本图不再加决策票**（实现票是实现交棒的产物，见 `## 进度` 末两段）。
 

@@ -5,7 +5,7 @@ Status: resolved
 Blocked by: —
 Part of: ../map.md
 
-## Question
+## 问题
 
 为 `grilling：重播的接缝、分帧与顺序契约`、`grilling：保真度、面板与 header 的历史重建`、`grilling：历史详情覆盖层的复用与降级` 提供**本仓库源码级事实与一次成本实测**。
 
@@ -40,7 +40,7 @@ Part of: ../map.md
 - `src/session/`（store / ledger / observe）
 - `.scratch/tui-ux/research/01-collapse-detail-data-sources.md`（同一套源码的既有事实，避免重复）
 
-## Answer
+## 作答
 
 **完整事实 + 来源行号 + 成本表在 [`../research/02-replay-seam-and-cost.md`](../research/02-replay-seam-and-cost.md)**（自足；每条事实末尾标注它约束哪张票）。这里只摘最承重的几条。
 

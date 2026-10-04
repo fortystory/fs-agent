@@ -36,7 +36,7 @@ ADR 自己是不是「散文」——这个老问题在这一批里答掉，并�
 - **不动 `.scratch/` 里的英文小标题**（`## Question` / `## Answer` / `## Comments` / `## Problem Statement` / `## Destination`……）：它们是 tracker 的字段名还是散文，当时没定；留成[票 04](04-tracker-headings-in-chinese.md)。
 - 不动 `docs/research/`（一手引文）、不动任何模型可见 / 进流的字符串。
 
-## Comments
+## 评论
 
 **2026-09-30 收尾**：落地在 `7d4d1d4`（`docs(language): ADR 也走中文 —— 小标题、行话夹注与 docs/adr 的护栏`）。
 

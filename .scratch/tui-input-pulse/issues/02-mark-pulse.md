@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 01
 
-> 规格：`.scratch/tui-input-pulse/spec.md` §2、§4、`Testing Decisions`（用户故事 7–13）。
+> 规格：`.scratch/tui-input-pulse/spec.md` §2、§4、`测试决定`（用户故事 7–13）。
 
 ## 目标
 
@@ -43,7 +43,7 @@ Blocked by: 01
 
 mark 之外的任何动画（状态字转轮 / 输入框律动 / 转录底部动效）；窄档身份行变色；脉冲的可配置化；事件流里的任何新东西（脉冲是纯渲染器状态）。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`、`src/render/mod.rs`（导出 `PULSE_PALETTE`）、`tests/render_layout.rs`、`tests/render_tui.rs`。
 

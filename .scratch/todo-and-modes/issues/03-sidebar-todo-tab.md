@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 02
 
-> 规格：`.scratch/todo-and-modes/spec.md` §4、`Testing Decisions`。
+> 规格：`.scratch/todo-and-modes/spec.md` §4、`测试决定`。
 
 ## 目标
 

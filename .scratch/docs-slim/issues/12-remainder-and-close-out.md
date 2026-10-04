@@ -5,7 +5,7 @@ Status: done
 Part of: ../map.md
 Blocked by: 09, 10, 11
 
-> 规格：[`../spec.md`](../spec.md) 的 Testing Decisions 与 Further Notes 的验收顺序。这一票不写新内容，
+> 规格：[`../spec.md`](../spec.md) 的 Testing Decisions 与 补记 的验收顺序。这一票不写新内容，
 > 只把**最后两处散落的超长单元**清掉、把基线收到实测、把索引对齐，并把整件事验完。
 
 ## 目标
@@ -66,7 +66,7 @@ Blocked by: 09, 10, 11
 - **不为了让脚本通过而放松脚本** —— 宁可改文档。
 - 不动 `docs/research/` 与 `.scratch/*/spec.md`（冻结项 3）。
 
-## Comments
+## 评论
 
 ### 结果（2026-10-04）
 
@@ -122,8 +122,8 @@ Blocked by: 09, 10, 11
 ### 2026-10-04 `/code-review` 后的修正
 
 两轴（Standards + Spec）的发现与处置：本票的收口记录原先用顶级 `## 结果`，违反
-`docs/agents/issue-tracker.md`「评论与对话历史一律追加到文件底部、放在 `## Comments` 之下」——
-已改成 `## Comments` + 本 `### 结果` 子标题（`lifecycle-diagram` 的收口票用的是顶级 `## 结果`，
+`docs/agents/issue-tracker.md`「评论与对话历史一律追加到文件底部、放在 `## 评论` 之下」——
+已改成 `## 评论` + 本 `### 结果` 子标题（`lifecycle-diagram` 的收口票用的是顶级 `## 结果`，
 那是它的破例，不跟着学）。`.scratch/README.md:3` 的相对链接补回 `../`（重写时漏了，成了断链）。
 另外两处跨票发现落在票 08（单元第 ② 步、`--list` 自检、`--root`）与票 09（词条与 `docs/` 的重复）。
 

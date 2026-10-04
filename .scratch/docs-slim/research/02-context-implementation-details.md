@@ -75,7 +75,7 @@
 ### 名字
 
 **分叉合成（Forked Synthesis，`fs`）** L18-21 ｜ ①2 ②0 ③0 ④1 ｜ F：`fs`、`Forked Synthesis` ｜ 别处 full（`docs/credentials.md`、`README.md` 的路径；`docs/goals.md`）
-- ①：`fs-agent`（命令 / crate 名）、`fork/rewind`（与 Out of Scope 的手势混用的反例名）
+- ①：`fs-agent`（命令 / crate 名）、`fork/rewind`（与 明确不做 的手势混用的反例名）
 - ④：命令、crate 名与落盘路径一律保持 `fs-agent`，不随框架名改写
 
 ### 参与者
@@ -353,16 +353,16 @@
 - ④：它是实现票的来源 —— 票从它拆出来，所以票不重述理由、只指回它
 
 **决策图（map，`map.md`）** L316-319 ｜ ①4 ②0 ③0 ④2 ｜ F：`map`、`map.md` ｜ 别处 full（`docs/agents/issue-tracker.md`；`.scratch/README.md`）
-- ①：`Notes`、`Decisions so far`、`Not yet specified`、`## 任务清单`
-- ④：正文由 `Notes` / `Decisions so far` / `Not yet specified` 加一份 `## 任务清单` 组成；图走完会被折成 spec 而图留着当决策记录，所以 `map.md` 与 `spec.md` 可以同时存在
+- ①：`笔记`、`已定的决定`、`尚未明确`、`## 任务清单`
+- ④：正文由 `笔记` / `已定的决定` / `尚未明确` 加一份 `## 任务清单` 组成；图走完会被折成 spec 而图留着当决策记录，所以 `map.md` 与 `spec.md` 可以同时存在
 
 **交棒（handoff）** L320-323 ｜ ①1 ②0 ③0 ④1 ｜ F：`handoff` ｜ 别处 full（`docs/agents/issue-tracker.md`）
 - ①：`map.md`（正文再出现的文件名）
 - ④：决策图走完那一刻把图上互相链接的决定收束成 spec，并在 `map.md` 里补一条带日期的「交棒已发生」加上产物指向
 
 **票（ticket，`issues/NN-<slug>.md`）** L324-327 ｜ ①15 ②0 ③0 ④4 ｜ F：`ticket`、`issues/NN-<slug>.md` ｜ 别处 full（`docs/agents/issue-tracker.md`；`docs/agents/triage-labels.md`）
-- ①：`01`（编号起点）、`Type:`、`research`、`prototype`、`grilling`、`task`、`implement`、`Status:`、`claimed`、`resolved`、`ready-for-agent`、`done`、`ready-for-walkthrough`、`ready-for-human`、`Blocked by:`、`Part of:`、`## Comments`、`## Answer`（去重后 15）
-- ④：一票一个文件、从 `01` 编号、永远不把所有票合成一个文件；开头那几行就是全部元数据（`Type:` / `Status:` / `Blocked by:` / `Part of:`）；收尾状态分三套（决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`，以及只等人走查的 `ready-for-walkthrough`，它与分诊标签里的 `ready-for-human` 不是一回事）；每票自包含；讨论追加在 `## Comments` 之下、决策票的答案追加在 `## Answer` 之下
+- ①：`01`（编号起点）、`Type:`、`research`、`prototype`、`grilling`、`task`、`implement`、`Status:`、`claimed`、`resolved`、`ready-for-agent`、`done`、`ready-for-walkthrough`、`ready-for-human`、`Blocked by:`、`Part of:`、`## 评论`、`## 作答`（去重后 15）
+- ④：一票一个文件、从 `01` 编号、永远不把所有票合成一个文件；开头那几行就是全部元数据（`Type:` / `Status:` / `Blocked by:` / `Part of:`）；收尾状态分三套（决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`，以及只等人走查的 `ready-for-walkthrough`，它与分诊标签里的 `ready-for-human` 不是一回事）；每票自包含；讨论追加在 `## 评论` 之下、决策票的答案追加在 `## 作答` 之下
 
 **阻塞边（`Blocked by`）** L328-331 ｜ ①4 ②0 ③0 ④3 ｜ F：`Blocked by` ｜ 别处 full（`docs/agents/issue-tracker.md` L33-45）
 - ①：`Blocked by: NN, NN`（行格式）、`resolved`、`python3 scripts/wayfinder-check.py .scratch/<effort>/map.md`、`## 任务清单`

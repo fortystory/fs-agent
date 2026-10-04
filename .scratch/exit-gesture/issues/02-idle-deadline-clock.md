@@ -59,7 +59,7 @@ Blocked by: 01
 - 不给窗口加配置项，不加别的常驻定时器，不把 deadline 做成 `interval`。
 - 不改 `CONTEXT.md` 的「退出举手」词条（它已经写好了）。
 
-## Comments
+## 评论
 
 - **落地**：`TuiState::exit_deadline()` 只读访问；非重放那支 `select!` 与 `pulse` 并列加一支 `_ = tokio::time::sleep_until(deadline), if deadline.is_some() => state.expire_exit_gesture()`，`deadline` 在 `select!` 之前从 `state.exit_deadline()` 取成值（`Instant` 是 `Copy`），未举手时给它 `Instant::now()` 占位。每轮重新建 future，所以举手之后下一轮就生效，不需要重置逻辑。
 - **注释与词条**：`src/render/tui.rs` 那段「唯一的定时器」改写成「两个定时器，都按需武装」（`pulse` 60 ms / 退出 deadline 500 ms），`select!` 上方那段也改成「三个来源 + 两个按需武装的定时器」；`CONTEXT.md` 的「脉冲」词条把「空闲时那台时钟不存在」改成「空闲时那台时钟不存在 ……（唯一例外是那个有界的退出手势 deadline）」。

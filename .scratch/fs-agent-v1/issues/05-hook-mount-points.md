@@ -17,7 +17,7 @@ Status: done
 - [x] `hook.pre` 失败这条异常路径也合成结果 ⇒ 与正常路径、权限拒绝、用户拒绝、无交互降级合起来，每个 `tool_call` 仍恰好一条结果
 - [x] 原型 `05-hook-permission-ordering.html` 里那 7 个剧本**逐个**变成测试用例
 
-## Comments
+## 评论
 
 实现落点：`src/hooks.rs`（约束 / 收紧 / 公开子集 / `Hook` trait）、`src/events.rs`（`hook_format` 文本约定）、`src/agent.rs`（循环里的两个挂载点与合成结果）、`src/provider/projection.rs`（后置反馈合并）、`src/session.rs` / `src/lib.rs`（`hook` 注入）。测试在 `tests/hook_constraints.rs`（纯函数：上确界、无放松、7 变体闭合）与 `tests/hook_mount_points.rs`（组装接缝：7 个剧本 + 异常路径）。
 

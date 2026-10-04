@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 02
 
-## Question
+## 问题
 
 决定上下文管理的接缝。综述把它称为 agent 最硬的物理约束。**本票已改写**：多 agent 让它从"一个窗口"变成"每 agent 一个窗口 + 一个共享流"。
 
@@ -23,7 +23,7 @@ Blocked by: 02
 
 答案定到接缝位置与状态归属，不要实现。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。输入事实：`docs/research/coding-agent-features.md` 第 3、4 节；票 02 的能力表。**
 

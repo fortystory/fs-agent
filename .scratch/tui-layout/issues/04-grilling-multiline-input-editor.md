@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 01
 
-## Question
+## 问题
 
 输入区要从单行升成多行。这是本轮新增的 scope（见 map Notes 第 4 条），它会把刚做完的单行编辑器（`TuiState` + 26 个测试）重做一遍 —— 本票要定下新的语义与重写范围。
 
@@ -46,7 +46,7 @@ Blocked by: 01
 - 现有键盘分支只处理 `KeyEventKind::Press`（`src/render/tui.rs`）—— `Event::Paste` 不是 `Key`，别被那个过滤顺手丢掉。
 - `Frame::set_cursor_position` 经 Backend **原样** `MoveTo(x, y)`，即终端绝对坐标（§5）。全屏下 `area()` 是 `(0, 0, w, h)`，所以光标坐标**可以从显示行/列直接算出来**，不再是 inline 时代「视口偏移 + 累加维护」的形状 —— 这正是本票第 6 问要的「唯一真相源」的落点。
 
-## Answer
+## 作答
 
 **已定（2026-09-21，grilling 两轮 + 用户逐条确认）。本票只产决策，不含实现。**
 

@@ -36,7 +36,7 @@ Status: done
 - [ ] `.scratch/README.md` 里 `markdown-render` 那一行的票数与 `ls .scratch/markdown-render/issues/*.md | wc -l` 一致。
 - [ ] `docs/highlight.md` 里不再有「没有生产消费者」这类陈述。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地：`docs/highlight.md` 整篇重写（主题从「没有生产消费者」换成「代码块的高亮提供者，管十种语言」，两个单数常量名、两个对不上语言的 crate 名、延迟编译这三条坑记在里面）；`docs/render.md` 的 `[speaker]` 与高亮两节改写，并补上「`to_lines` 收宽度，所以源行也不再宽度无关」；`README.md` 的 ADR 格补 0008；`.scratch/README.md` 的索引行与日期说明更新成 `7/7 done`；`.scratch/tui-layout/spec.md` §3 的三处（源行宽度无关、assistant 不动、续行缩进）都留了带日期的交棒注记，原文没有被改写；`docs/tui-manual-checklist.md` 加 ㉑。
 - 复核：`python3 scripts/check-language.py` 通过（`docs/highlight.md` 的中文占比一度掉到 23.6%，重写成散文后回到下限之上）；本票改过的相对链接逐个核过，唯一一处错路径（从 `docs/` 出发多了一级目录）已修，其余命中都是文档里当例子的 `![图片](url)` 语法；`.scratch/README.md` 里 `markdown-render` 那一行的票数与 `ls .scratch/markdown-render/issues/*.md | wc -l` 都是 7；`docs/highlight.md` 里不再有「没有生产消费者」这类陈述。

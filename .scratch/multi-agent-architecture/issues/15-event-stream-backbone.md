@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 01, 03
 
-## Question
+## 问题
 
 **本票是新的，也是本图的承重墙。** 新目的地要求一个**共享只追加事件流**作为唯一真相源，而同一个机制要同时服务四件事：
 
@@ -31,7 +31,7 @@ Blocked by: 01, 03
 
 **这条接缝定完之后，票 05、07、13、16、17、19 才有落脚点**——这也是它们全部阻塞在本票上的原因。
 
-## Answer
+## 作答
 
 **已定（2026-09-13，grilling 四轮，每问均与用户逐条确认）。** 事实来源：`research/05-event-schema-precedents.md`（票 24 的产物；OpenHands / Cline / Claude Code 一手对照）。
 

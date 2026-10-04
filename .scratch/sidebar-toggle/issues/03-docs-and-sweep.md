@@ -52,7 +52,7 @@ python3 scripts/check-language.py                       # 文档护栏
 手工清单那一节要在真终端里走过一遍才写 `done`；没走完就按仓库规矩写 `ready-for-walkthrough` 并
 在票里说清剩下哪几条（见 `.scratch/README.md` 对这两个状态的区分）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：文档全部落地。
 
@@ -77,7 +77,7 @@ python3 scripts/check-language.py                       # 文档护栏
 - **收尾审查（`/code-review` 双轴）之后还改了**：`.scratch/sidebar-toggle/spec.md` 的六个英文
   小标题改成中文（`问题陈述` / `方案` / `实现决定` / `测试决定` / `明确不做` / `补充说明`，照
   `suspend-gesture` 的写法 —— AGENTS.md 把票与 spec 的散文一并算中文）；三张票的落地记录从
-  顶层 `## 实现完成` 挪到 `## Comments` 之下（`docs/agents/issue-tracker.md` 的约定）；
+  顶层 `## 实现完成` 挪到 `## 评论` 之下（`docs/agents/issue-tracker.md` 的约定）；
   `spec.md` 里一处「侧栏」改成「左栏」（CONTEXT.md 的 `_Avoid_`）。
 
 **剩下的是人**（所以这票是 `ready-for-walkthrough`，不是 `done`）：拿 ㉖ 在真终端里走一遍 ——

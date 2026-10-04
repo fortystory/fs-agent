@@ -41,9 +41,9 @@ Blocked by: 06
 
 加缓冲帧（落到底停一拍）；改转速；回归左右移动 / 旋转 / 颜色；给色环做任何事。
 
-## Comments
+## 评论
 
-**实现完成（2026-09-26）**。落点：`src/render/wording.rs`（`DASH_FALL` / `identity_falling`，`DASH_TURN` / `identity_turning` 删掉）、`src/render/tui.rs`（`DASH_BAR` + `mark_lines` 按行落）、`tests/`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（§2 重写、用户故事 7–15、Testing Decisions、Out of Scope）。
+**实现完成（2026-09-26）**。落点：`src/render/wording.rs`（`DASH_FALL` / `identity_falling`，`DASH_TURN` / `identity_turning` 删掉）、`src/render/tui.rs`（`DASH_BAR` + `mark_lines` 按行落）、`tests/`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（§2 重写、用户故事 7–15、Testing Decisions、明确不做）。
 
 1. **mark 那一格 = 会落的横线**：那一格就是 mark 的五行（第 10…13 列在**每一行**都是空白 —— mark 是八个 4 列字形格、中间隔一列空格，短横独占第三格），所以帧 `n` 把同一行 `▀▀▀▀` 画在第 `n % 5` 行。真机帧已 dump 确认：第 1 行 → 第 2 行 → …… → 第 5 行 → 回第 1 行，**形状每帧都一样**。
 2. **静止仍是原来那一行**（`rows.len() / 2` = 第 3 行 = `logo_lines` 自己那四列），所以空闲的 mark 与本轮所有改动之前逐字节相同；那条拿 `logo_lines` 第 10…13 列逐字符比对的回归断言照旧，并且依旧是本票最有价值的那条。

@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 [`CONTEXT.md`](../../../CONTEXT.md) 开头自己立了界：
 
@@ -28,7 +28,7 @@ Blocked by: —
 
 **本票只清点，不做「剥到哪」的决定** —— 那个决定归 [票 07](07-grilling-context-boundary.md)。
 
-## Answer
+## 作答
 
 清点了 `CONTEXT.md` 15 节 / 72 个词条的实现指称；完整 findings（逐词条四类片段表、格式必需 vs 纯实现细节的分类、剥离三档、别处 coverage 与抽查路径）在 [`../research/02-context-implementation-details.md`](../research/02-context-implementation-details.md)。
 

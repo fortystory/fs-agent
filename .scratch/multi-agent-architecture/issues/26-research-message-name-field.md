@@ -3,7 +3,7 @@
 Type: research
 Status: resolved
 
-## Question
+## 问题
 
 本票为**票 17（发言归属与投影接缝）**提供外部事实。票面第 5 条要求核实 `name` 的"合法字符集与长度限制"，并预判"若文件里没有，需要补一次 research"。
 
@@ -25,7 +25,7 @@ Status: resolved
 
 **本票不决定任何事**——它是票 17 的事实输入。
 
-## Answer
+## 作答
 
 **已解（2026-09-13，AFK，由 research 子代理执行）。**
 

@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 01, 02
 
-> 规格：`.scratch/tui-input-pulse/spec.md` §1–§4、`Testing Decisions`。
+> 规格：`.scratch/tui-input-pulse/spec.md` §1–§4、`测试决定`。
 
 ## 目标
 
@@ -36,7 +36,7 @@ Blocked by: 01, 02
 
 不改任何键位；不给脉冲加配置项；不动 plain / headless 渲染器与事件 schema。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`README.md`、`docs/render.md`、`docs/tui-manual-checklist.md`、`CONTEXT.md`、`.scratch/tui-sidebar/spec.md`、`.scratch/tui-sidebar/prototype/geometry-table.md`。
 

@@ -5,7 +5,7 @@ Status: resolved
 Blocked by: —
 Part of: ../map.md
 
-## Question
+## 问题
 
 `AIRY_ROWS` 删掉后，四分区几何与降级阶梯要**重新实测**，并把 Mark header 的间距改成「logo 5 行 + 空 1 行 + 信息 1 行」。既有几何数字的唯一来源是 `.scratch/tui-layout/prototype/`（`TestBackend` 实测像素）；本票产出的新数字将成为 `/to-spec` 回改 tui-layout spec §2 的依据。
 
@@ -30,7 +30,7 @@ Part of: ../map.md
 
 ## 产出
 
-`.scratch/tui-ux/prototype/` 下的几何表与快照；本票 `## Answer` 记选定数字与「哪些旧结论被推翻」。
+`.scratch/tui-ux/prototype/` 下的几何表与快照；本票 `## 作答` 记选定数字与「哪些旧结论被推翻」。
 
 ## 先读
 
@@ -41,11 +41,11 @@ Part of: ../map.md
 
 ## 进度
 
-**100%** —— 完成。几何探针落在 `.scratch/tui-ux/prototype/src/bin/geometry.rs`（同一 throwaway crate 的第二个 bin），产物在 `.scratch/tui-ux/prototype/geometry/`：`geometry-table.md`（旧→新逐尺寸对照）+ 9 张真渲染快照。用户已确认采用公式值 `LOGO_MIN_HEIGHT = 18` 并接受其余派生数字。结论见 `## Answer`。
+**100%** —— 完成。几何探针落在 `.scratch/tui-ux/prototype/src/bin/geometry.rs`（同一 throwaway crate 的第二个 bin），产物在 `.scratch/tui-ux/prototype/geometry/`：`geometry-table.md`（旧→新逐尺寸对照）+ 9 张真渲染快照。用户已确认采用公式值 `LOGO_MIN_HEIGHT = 18` 并接受其余派生数字。结论见 `## 作答`。
 
 **下一步**：无（已 resolved）。`/to-spec` 按 §7 的回改清单改 tui-layout spec §2。
 
-## Answer
+## 作答
 
 **几何定稿（2026-09-23，`TestBackend` 实测）。** 探针 = `.scratch/tui-ux/prototype/src/bin/geometry.rs`；产物 = `.scratch/tui-ux/prototype/geometry/`（`geometry-table.md` + `geometry-*.txt`）。
 

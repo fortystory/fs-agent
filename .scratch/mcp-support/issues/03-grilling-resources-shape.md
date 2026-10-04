@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 冻结项 5/6 把**工具**收进了两个元工具（`mcp_list` / `mcp_call`）。**资源**（resources）是
 第二类原语，它的发起方本来不是模型 —— 但在 fs-agent 里，能让模型看见外部数据的路只有工具。
@@ -23,7 +23,7 @@ Blocked by: —
 2. **上限与截断**：一份资源可能很大；沿用既有的那条截断流水线（`context::truncate_result` +
    指针），还是需要自己的形状。
 
-## Answer
+## 作答
 
 **再加两个元工具**：`mcp_resources(server?)`（列某台 server 的资源）与 `mcp_read(server, uri)`
 （读一份）。元工具从两个变成四个 —— 这**不与冻结项 6 冲突**：那一条讲的是「MCP 的**工具**不进

@@ -1,4 +1,4 @@
-# 08: skills
+# 08 — 技能（skills）
 
 **What to build:** skill 作为「渐进披露的指令包」可用——描述清单每轮都在场（便宜），全文按需用一个工具取（贵，但只在真需要时付）。
 
@@ -17,7 +17,7 @@ Status: done
 - [x] 边界规则写进文档：>80% 每轮都要 → `AGENTS.md`；按任务 / 长 → skill；必须无条件执行 → hook
 - [x] v1 的 skills **只装指令**（不把工具打包进 skill——那会与「工具表组装期固定」冲突）
 
-## Comments
+## 评论
 
 实现落点：`src/context/skills.rs`（新：`Skills` / `Skill` / `discover` / `parse` / `catalog` / `load` / `loaded_skill_names`）、`src/context.rs`（`TrimPolicy::loaded_skill_budget` + `trim` 的聚合上限前置 pass）、`src/tools/skill.rs`（新：`SkillTool`）、`src/tools/{mod,tool,registry}.rs`（`builtin()` 挂 `skill`；`Skills` 经 `ToolContext` / `PendingCall` 下发）、`src/session.rs`（`skills` 值）、`src/lib.rs`（组装期发现 + 记一条 `SkillsCatalog` 注入）。文档：`docs/skills.md`（边界规则 + 发现路径 + 预算）。测试：`tests/skills.rs` 18 例（纯函数 14 + e2e 4）。
 

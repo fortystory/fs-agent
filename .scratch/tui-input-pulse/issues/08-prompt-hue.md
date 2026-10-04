@@ -60,7 +60,7 @@ Blocked by: 07
 
 删掉下落 / 色环的代码；给提示符颜色加配置项；改 mark 的静止字形；动 plain / headless。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/editor.rs`、`src/render/tui.rs`、`src/render/wording.rs`（只改 rustdoc）、`tests/render_editor.rs`、`tests/render_layout.rs`、`tests/render_tui.rs`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`。
 

@@ -117,7 +117,7 @@ HTTP 只把 transport 换掉：`StreamableHttpClientTransport::from_uri("http://
 
 对 fs-agent 的直接含义：`Tool::call` 只认 `ToolError`（`src/tools/tool.rs:49-74`），所以每个
 MCP 错误都要在那个边界上换成一条带 `code` 的中文句子 —— 这正是「`mcp_call` 的错误码形状」
-那条雾要定的事（`map.md` 的 `Not yet specified`）。
+那条雾要定的事（`map.md` 的 `尚未明确`）。
 
 ## 3. 与 fs-agent 的接法
 

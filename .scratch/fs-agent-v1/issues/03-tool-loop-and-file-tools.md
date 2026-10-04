@@ -19,7 +19,7 @@ Status: done
 - [x] 正常路径下每个 `tool_call` 恰好一条 `ToolCallCompleted`
 - [x] e2e：假 provider 发一次 `edit_file`，断言文件真的改了、事件流有起止两条、`.before` 内容 == 被替换的原文
 
-## Comments
+## 评论
 
 实现落点：`src/tools/`（`tool` / `paths` / `edit` / `file` / `registry`）、`src/session.rs`、`src/agent.rs`、`src/lib.rs`。
 

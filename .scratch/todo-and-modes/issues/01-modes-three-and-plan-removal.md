@@ -3,7 +3,7 @@
 Type: implement
 Status: done
 
-> 规格：`.scratch/todo-and-modes/spec.md` §1、§5（删除清单）、`Testing Decisions`。
+> 规格：`.scratch/todo-and-modes/spec.md` §1、§5（删除清单）、`测试决定`。
 > 这是本轮**唯一**需要 ADR 的票：它推翻 `.scratch/fs-agent-v1/spec.md` §13 那条「进出 plan 只由用户手势」的安全论证。
 
 ## 目标

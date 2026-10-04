@@ -38,7 +38,7 @@ Blocked by: 10
 
 - 不做信任放宽（票 14）、不接真连接（票 12）、不做资源与提示词（票 16 / 17）。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/tools/mcp_call.rs`（新）、`src/mcp/mod.rs`
   （`McpService::call_tool`）、`src/tools/mod.rs`（注册与 re-export）、`tests/mcp_call.rs`（新，9 条）。

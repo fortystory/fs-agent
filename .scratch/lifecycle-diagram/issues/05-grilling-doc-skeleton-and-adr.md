@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: 01
 
-## Question
+## 问题
 
 图定形之后，剩下的都是「这份文档怎么落地」的拍板问题。**HITL**：这些要跟维护者逐个过。
 
@@ -21,7 +21,7 @@ Blocked by: 01
 4. **`CONTEXT.md` 要不要收「生命周期图」这个词**（`/domain-modeling` 的口径）。
 5. **README 三处落点**：「架构」一节那一行指向、`## 文档` 表那一行、
    [`.scratch/README.md`](../../README.md) 的 feature 行。
-6. **`docs/lifecycle.md` 要不要拆**：见 map 的 `Not yet specified` 第一条。
+6. **`docs/lifecycle.md` 要不要拆**：见 map 的 `尚未明确` 第一条。
 
 ## 要咨询的 skills
 
@@ -29,9 +29,9 @@ Blocked by: 01
 
 ## 交付
 
-答案落进票底 `## Answer`：骨架大纲、ADR 0011 的完整草稿、其余每条的决定。
+答案落进票底 `## 作答`：骨架大纲、ADR 0011 的完整草稿、其余每条的决定。
 
-## Answer
+## 作答
 
 （2026-10-03，与维护者的 live exchange）六条全部采纳。图与证据表已经定形
 （[`prototype/01-drafts.md`](../prototype/01-drafts.md) v2、[`research/04-node-evidence.md`](../research/04-node-evidence.md)）。

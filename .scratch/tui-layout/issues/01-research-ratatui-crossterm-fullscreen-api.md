@@ -4,7 +4,7 @@ Type: research
 Status: resolved
 Blocked by: —
 
-## Question
+## 问题
 
 为票 02（布局原型）、票 03（对话面板滚动）、票 04（多行输入）、票 07（渲染管线）提供**外部事实**。
 
@@ -44,11 +44,11 @@ Blocked by: —
 
 **不写建议、不选赢家。** 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Comments
+## 评论
 
 - 2026-09-14 charting：本票由 charting 会话的后台 research subagent 认领。启动时前沿只剩本票与票 05（grilling，需要用户在场）。
 
-## Answer
+## 作答
 
 完整事实与逐条来源（文件路径 + 行号 / URL + 抓取日期）见
 `.scratch/tui-layout/research/01-ratatui-crossterm-fullscreen-api.md`（抓取 2026-09-21，全部为本机 vendored 源码）。

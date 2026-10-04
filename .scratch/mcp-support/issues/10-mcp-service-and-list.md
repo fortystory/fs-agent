@@ -68,7 +68,7 @@ Blocked by: —
 - 不做 server 进程、沙箱与环境（票 12 / 13）；不做 `Effect` 与信任的放宽（票 14）——
   本票的元工具是 `ReadOnly`。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/mcp/mod.rs`（新）、`src/tools/mcp_list.rs`（新）、
   `src/tools/mod.rs`（`with_mcp`）、`src/config.rs`（`[mcp]` 段与 `McpSettings` / `McpServerConfig` /

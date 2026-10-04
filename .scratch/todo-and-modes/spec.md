@@ -7,20 +7,20 @@ Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现�
 - **术语**：`CONTEXT.md` 删 **硬计划模式（Plan mode）**，新增 **待办列表（Todo）** 与 **待办工具（`todo`）**；**询问（Ask）** 那条里的 `PlanConflict` 例子要一起改（它随 plan 模式退场）。
 - **落点**：`src/permissions.rs`、`src/lib.rs`、`src/cli.rs`、`src/config.rs`、`src/tools/`（新工具）、`src/agent.rs`（规则段）、`src/render/{input,tui,layout,wording}.rs`、`src/context.rs`、`docs/`、`CONTEXT.md`、`README.md`、`.scratch/fs-agent-v1/spec.md`（§12/§13 回改）。
 
-## Problem Statement
+## 问题陈述
 
 1. **两件事被绑在一档里。** 今天的 plan 模式同时承载「权限」（只读 + 一条写豁免）与「计划的载体」（`PLAN.md` + 一条钉住的注入指令 + 一套进出/撤回/重放修补的机制，牵动 18 个文件、119 处符号）。用户想「先想清楚再动手」时，被迫接受「连写都不能写」；反过来，想要一份能看进度的计划清单，也不得不进这一档。
 2. **权限那一轴被浪费了。** 四档里 `readonly` 与 `auto` 实现完整、测试齐（`tests/permission_gate.rs` 里 `Mode::Auto` 33 处、`Mode::Readonly` 4 处），但**没有任何入口**（三处组装点硬编码 `Ask`），而 `plan` 却占了唯一的运行期手势（`Shift+Tab`）。用户要的「工作区里随便干、外面要问」也是被这一条卡住的（见 `.scratch/sandbox/seed.md`）。
 3. **「计划」应该是模型自己的事。** 一份待办列表是模型的工作记录，不是权限问题：它该是一个它能随时读写的工具、在界面上看得见（侧栏），而不是一个把整套权限机制卷进来的模式。
 
-## Solution
+## 方案
 
 - **权限回到三档**：`readonly` / `ask` / `auto`，`plan` 整个退场（`Mode::Plan`、`PLAN.md` 写豁免、`/plan`·`/endplan`、冲突询问、钉住指令、`ModeChange` 的撤回用途、`docs/plan-mode.md`）。入口补齐：`[permissions] mode` 配置 + `--mode` 旗标 + `Shift+Tab` 在会话内循环三档。
 - **计划变成工具**：内建工具 `todo(list)`，一次提交整份列表（每项 `{content, status}`，`status ∈ pending|in_progress|completed`）。列表就活在那条 `tool_call` 的 args / result 里 —— **零 schema 改动**（`ask_user_question` 已经证明这个形状），`--continue` / `replay` / 审计 / 侧栏重算全部免费。
 - **规则段加一句**（模型可见文本，英文）：开工前先立待办、每完成一项更新它。这是**引导**不是强制（用户选的那一档）。
 - **侧栏加 `todo` 标签**：会话里**一旦出现过非空列表就常驻**，页里显示列表与完成计数；主会话的列表与执行者各自的列表互不干扰。
 
-## User Stories
+## 用户故事
 
 1. 作为用户，我想让 `readonly` / `auto` 真的能选到（配置或旗标），以便我不用被迫待在「写都问」这一档。
 2. 作为用户，我想在会话里用 `Shift+Tab` 循环三档，并在状态行看到当前档，以便边干边改权限。
@@ -33,7 +33,7 @@ Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现�
 9. 作为用户，我想让老会话仍然能打开（老流里有 `PlanMode` 注入与 `ModeChange` 撤回），以便升级不砸掉我的历史。
 10. 作为维护者，我想让这次推翻有一条 ADR，以便下一个人知道为什么「计划」从权限里搬了出来。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 模式三档与入口（票 01）
 
@@ -74,7 +74,7 @@ Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现�
 - **保留（向后兼容，硬约束）**：`ContextSource::PlanMode` 与 `HistoryReason::ModeChange` **两个枚举变体必须留下** —— 老会话的流里有 `ContextInjected { source: PlanMode }` 与 `HistorySuperseded { reason: ModeChange }`，删变体会让 `--continue` 在旧会话上反序列化失败。它们只是**不再被发射**；加一条测试钉住「老事件仍可反序列化」。
 - **`PLAN.md`**：文件本身不动（用户的东西），只是不再有任何豁免 —— 它在 `readonly` 下不可写、在 `ask` 下要问、在 `auto` 下随便写。
 
-## Testing Decisions
+## 测试决定
 
 - **模式（`tests/permission_gate.rs` / `tests/config_profiles.rs`）**：三档的 stance 表；`plan` 相关用例删除；配置解析（三档合法、未知值报错、缺省 `ask`）；`--mode` 覆盖配置；`Shift+Tab` 循环三次回到原点（TUI 层，`TestBackend` 帧 + 状态行文案）。
 - **工具（新 `tests/todo.rs`）**：合法调用回执与 args 形状；`items` 缺省/空 = 清空；`content` 空、`status` 非法被拒；`effect() == ReadOnly`；主会话与执行者的表里都有它、headless 的表里也有；端到端：假 provider 起真会话，模型调 `todo`，断言流上那条 `tool_call` 有且只有一条结果，且**侧栏读到的是 args 里的列表**。
@@ -83,7 +83,7 @@ Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现�
 - **向后兼容**：老事件（`ContextInjected{PlanMode}`、`HistorySuperseded{ModeChange}`）仍能反序列化；用 `tests/history_replay.rs` 那种「喂一段老流」的方式钉住。
 - **手工清单**：`Shift+Tab` 循环三档在真终端里的观感（状态行变化、不再有模式弹窗）、`todo` 标签出现/常驻/切换、`＋N 项` 那一行在 28 档下读起来是否清楚。
 
-## Out of Scope
+## 明确不做
 
 - **沙箱 / `workspace` 模式**：`.scratch/sandbox/seed.md` 那份意向不动；这次只把模式**变成可选**，不新增档位。
 - **待办列表的高级形状**：依赖关系、优先级、owner、截止时间、子任务、跨会话持久、`TODO.md` 落盘、编号与点击跳转、侧栏滚动。
@@ -91,7 +91,7 @@ Status: done（一次 grilling 的折叠：九个决议由用户拍定；实现�
 - **权限门的其它部分**：规则代数、断路器、`.env` 家族、cwd 限制、沿委派链传播，一条不改。
 - **DSH 那套 upgrade + justification 审批**：属于沙箱那条线。
 
-## Further Notes
+## 补记
 
 **实现期与本文不一致或本文没写的地方（2026-09-26 落地时记下）**：
 

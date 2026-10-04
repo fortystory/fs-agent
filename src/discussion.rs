@@ -17,7 +17,7 @@ use protocol::round_attendance;
 /// v1 跑几个讨论者。
 ///
 /// 固定为两个，并在组装期强制：那个机械裁决是一对一的比较，而 N > 2 会重新打开「N = 2 不仲裁」那条
-/// 决定（spec §15，Out of Scope）。
+/// 决定（spec §15，明确不做）。
 pub const DEBATERS: usize = 2;
 
 /// 轮的条数上限：一轮独立轮，然后一轮定向轮。

@@ -15,7 +15,7 @@ Status: done
 - [x] **测试**：`an_idle_ctrl_c_quits_and_a_working_one_cancels` 改用「有 prompt 在飞」表示空闲；新增 `a_run_that_never_ended_a_turn_still_leaves_ctrl_c_quitting`（旧逻辑下必红）；`escape_answers_a_question_with_the_non_acting_choice` 与三个 idle-UI 布局测试改用新的 `idle()` 辅助函数
 - [x] **端到端（pty）**：起真 TUI → 打 `/discuss --debaters 张三,李四 …` → 讨论画面上出现「第 1 轮 / 张三 / 李四」→ 第一个 `^C` 让讨论以「已取消」收尾 → 第二个 `^C` 让进程以 0 退出
 
-## Comments
+## 评论
 
 **2026-09-22（实现）** 这条 bug 是「用不完整的事件清单去猜一个状态」的必然结果：`busy` 要回答的是「循环现在在不在跑东西」，而那个事实只有循环自己知道；事件流能表达的只是「某次调用开始了」（`Delta`/`Tool`），并没有「一次调用结束了」的通用事件——回合有 `TurnEnded`，合成器的单发调用没有。改成派生之后，这类缺口不会再出现（新增非回合调用也不会再破坏 Ctrl-C）。
 

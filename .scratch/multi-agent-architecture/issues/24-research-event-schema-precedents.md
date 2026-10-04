@@ -3,7 +3,7 @@
 Type: research
 Status: resolved
 
-## Question
+## 问题
 
 本票为**票 15（事件流骨架与事件 schema）**提供外部事实：它的 payload 枚举（票面第 1 条）该长什么样，别处已经趟过。综述只给了结论（"OpenHands 以 event stream 为唯一真相源"），没给 schema；而枚举设计最怕凭空发明。
 
@@ -23,7 +23,7 @@ Status: resolved
 
 **本票不决定任何事**——它是票 15 的事实输入。
 
-## Answer
+## 作答
 
 **已解（2026-09-12，AFK，由 research 子代理执行）。**
 

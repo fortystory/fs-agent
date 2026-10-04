@@ -18,7 +18,7 @@ Status: done
 - [x] v1 = 字符/4 估 token + 粗暴丢弃；compaction **后置**（形状已定，本票不建）
 - [x] e2e：塞进超预算历史，断言丢掉的确实是那几类里的、且事件流条数不变
 
-## Comments
+## 评论
 
 实现落点：`src/context.rs`（重写：`usable_input` / `estimate_tokens` / `trim` / `truncate_result` / `load_agents_md`）、`src/config.rs`（`SessionConfig::max_tool_result_tokens`，默认 `DEFAULT_MAX_TOOL_RESULT_TOKENS = 25_000`）、`src/events.rs`（`total_usage` 查询）、`src/agent.rs`（`record_context_injection`、每回合投影后裁一次、`emit_completed` 入流前截断）、`src/lib.rs`（`assemble` 读 `AGENTS.md` 并记注入）。测试：`tests/context_budget.rs`（纯函数 17 例 + e2e 5 例）、`tests/event_log.rs`（累计 2 例）。
 

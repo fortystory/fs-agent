@@ -3,11 +3,11 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划**，不产实现代码。
-**✅ 本图已完成（2026-09-23）**：8 张子票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
+**✅ 本图已完成（2026-09-23）**：8 张子票全部 resolved、`尚未明确` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
 
 > **交棒已发生（2026-09-26 补记）**：这八张票的增量已经折进 **[`.scratch/tui-layout/spec.md`](../tui-layout/spec.md) §14「使用体验与视觉效果」**，该 spec 的 §2 几何数字与 Mark header 阈值也按本图（含 `prototype/geometry/geometry-table.md` 的「新」列）回改过；实现由 `/implement` 逐票落地（提交见 `7e437a0` / `940cd43` / `0641c57` / `b48871c` / `538c4aa` / `530a191`）。本图至此**只作决策存档**，不再是待办。
 
-## Destination
+## 目的地
 
 一份 **spec-ready 的 TUI 使用体验与视觉效果决策集**，交给 `/to-spec` 折叠进既有 TUI spec（`.scratch/tui-layout/spec.md`，本图会推翻它若干条已实现的决定）并生成实现票。
 
@@ -21,7 +21,7 @@ Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划
 
 **判据**：改动**只落在 TUI 渲染层**（`src/render/tui.rs` 与 `pane` / `layout` / `editor` / `panel` 等同侪）；**plain 与 headless 一个字节不动**；**不改 `events` schema**。
 
-## Notes
+## 笔记
 
 - **领域**：`fs-agent` —— 自用 coding agent CLI，Rust，从零实现。TUI 栈 = `ratatui 0.30` + `crossterm 0.29`（`event-stream`），**不加新 crate**。相关既有产物：`.scratch/tui-layout/`（四分区全屏 TUI 的 map + spec + 实现票 10–16，全部已落地）、`.scratch/fs-agent-v1/issues/30`（问题覆盖层改成「标题 + 正文 + 候选键行」）、`32`（`ask_user_question` 接管底部输入区）、`docs/tui-manual-checklist.md`、`scripts/tui-startup-check.py`。
 
@@ -31,7 +31,7 @@ Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划
 
 ### Tracker 事实与降级（本图适用）
 
-- 本仓库 issue tracker = **local markdown**：map = `.scratch/tui-ux/map.md`，child = `.scratch/tui-ux/issues/NN-*.md`，阻塞 = 票面 `Blocked by: NN`，claim = 票面 `Status: claimed`，resolve = `## Answer` + `Status: resolved` + 追加到本文件 `Decisions so far`。
+- 本仓库 issue tracker = **local markdown**：map = `.scratch/tui-ux/map.md`，child = `.scratch/tui-ux/issues/NN-*.md`，阻塞 = 票面 `Blocked by: NN`，claim = 票面 `Status: claimed`，resolve = `## 作答` + `Status: resolved` + 追加到本文件 `已定的决定`。
 - **`Status:` 与 triage 共用**：按 `docs/agents/issue-tracker.md`，triage 状态也记在 `Status:`（canonical 角色串，如 `ready-for-agent`），category 记在新 `Category: bug|enhancement` 行。因此 **frontier 判定 = 非 `resolved`/`done`/`closed` + unblocked + unclaimed**（`ready-for-agent` 仍是可拿的前沿票）；wayfinder 认领时把它改成 `claimed`。
 - **该后端没有 native sub-issue / 原生依赖边**（`docs/agents/issue-tracker.md` 只定义正文约定）。因此按既定规则**回退**：本文件用 `## 任务清单` 逐条引用子票（条目数 == 子票文件数），每张子票顶部写 `Part of: ../map.md`（相对 `issues/` 解析）。**阻塞关系仍以正文 `Blocked by:` 为权威**（没有脚本可建的原生边可依据）。
 - 校验脚本：`scripts/wayfinder-check.py .scratch/tui-ux/map.md`，校验「任务清单条目数 == 子票数」「每张票 `Part of` 指向本图」「每个 `Blocked by:` 都能解析」，并打印 `closed/total`；对不上时非零退出。
@@ -82,7 +82,7 @@ Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划
 
 共 **8** 张子票，当前 **8 resolved / 0 open**。
 
-## Decisions so far
+## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里，本文件不复述。按名字引用，不写裸编号。 -->
 
@@ -95,13 +95,13 @@ Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划
 - [grilling：角色配色的落点与绘制边界](issues/07-grilling-speaker-name-colours.md): 契约 5 条——**凡出现 `speaker_label` 的行都染名字**（消息 / 工具行 / 全部 speaker narration；无 speaker 的行不动），名字用角色色、**正文仍按原语义色**（需把单串拆成「名字 span + 正文 span」）；讨论者序号靠 `SessionFacts` 新增的 `speaker_order`（组装期有序名册）取 `DEBATER_PALETTE = [LightCyan, LightMagenta]`，会话中途 `/discuss` 抽到名册外人时按首次出现补未占用槽、用尽回退 `Gray`；执行者 `LightYellow`、用户 `LightGreen`、系统 `Gray`。**只染转录**（面板 / header / 问卷 / 详情标题不动）、**不加 BOLD**（浅色背景的可读性是已知取舍）。`speaker_color` 住画家侧，`wording::speaker_label` 保持纯文本。
 - [grilling：测试与验证迁移](issues/08-grilling-test-and-verification-migration.md): 分层定死——**行为进 `cargo test`**（合成 `Mouse`/`Key` + `TestBackend`）、**终端归属进 pty**（`GESTURES` 新增 `ctrl-d → y` 第三条退出路径）、**手感进手工清单**。逐条列出：新增断言（鼠标命中 / 折叠与详情 / 几何新数字 / 提示行梯子 / `fg` 精确配色 / Ctrl-D 边界）、既有测试改动（`tests/wording.rs` 的提示行梯子；`tests/render_layout.rs` 的 airy 断言、高草稿注释、Mark 阈值、floor 尺寸）、pty 锚点复核、手工清单 ④/⑦/⑨/⑩（顺手把 ⑩ 的 `41×19` 漂移改成实测 `42×18`）与新增项、基线 633 passed、以及给 `/to-spec` 的 §2–§10 回改汇总（含两处既有漂移）。
 
-## Not yet specified
+## 尚未明确
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票。不要预先切成票那么大。 -->
 
-<!-- 当前**没有**未指定的雾：本图 8 张票全部 resolved，原有的两条雾（悬停反馈、详情覆盖层的内容操作）已判出 scope（见 `## Out of scope`）。 -->
+<!-- 当前**没有**未指定的雾：本图 8 张票全部 resolved，原有的两条雾（悬停反馈、详情覆盖层的内容操作）已判出 scope（见 `## 明确不做`）。 -->
 
-## Out of scope
+## 明确不做
 
 <!-- 有意识排除在本次 effort 之外的工作；永不毕业。 -->
 
@@ -109,8 +109,8 @@ Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划
 - **事件 schema 改动 / reasoning 逐段增量落流**：沿用 OpenHands 先例（增量是 UX affordance，不进持久记录）；完成后的整段已有 `MessageCompleted.reasoning`。
 - **主题 / 配色配置项与 truecolor**：角色配色用现有 ratatui 命名色，不引入主题系统。
 - **鼠标点选文本 / 鼠标驱动的焦点切换**：选文本仍走终端原生 Shift+拖拽；本图只加「点击作答」「点击看详情」两类明确命中。
-- **鼠标悬停反馈（hover）**：终端要开 any-motion 才有 `MouseEventKind::Moved`；本图只做点击命中。原 `Not yet specified` 的雾，判出 scope。
-- **详情覆盖层里的复制 / 导出 / 搜索**：本图只做「点开看全文」；这些内容操作与既有的「会话内搜索 / 过滤」同族，超出目的地。原 `Not yet specified` 的雾，判出 scope。
+- **鼠标悬停反馈（hover）**：终端要开 any-motion 才有 `MouseEventKind::Moved`；本图只做点击命中。原 `尚未明确` 的雾，判出 scope。
+- **详情覆盖层里的复制 / 导出 / 搜索**：本图只做「点开看全文」；这些内容操作与既有的「会话内搜索 / 过滤」同族，超出目的地。原 `尚未明确` 的雾，判出 scope。
 - **修 inline viewport 的光标 bug**：tui-layout 图已选择绕开，理由（ADR 0002）不变。
 - **会话内搜索 / 过滤 / 分页浏览工具输出**：折叠与详情是本次要做的；搜索、过滤、全文检索仍排除。
 - **todo 列表 / todo 工具**：fs-agent 没有 todo 状态也没有 todo 工具，没有数据源。
@@ -120,7 +120,7 @@ Charting: **已完成**（2026-09-23，三轮 grilling）。本图只做**规划
 
 ## 进度
 
-**100%** —— **本图完成（2026-09-23）**：8/8 张子票全部 resolved，`Not yet specified` 为空 ⇒ 通往 destination 的决策已 clear。
+**100%** —— **本图完成（2026-09-23）**：8/8 张子票全部 resolved，`尚未明确` 为空 ⇒ 通往 destination 的决策已 clear。
 
 **下一步 = handoff，不是 build**：`/to-spec` 把互链的 decisions 折成可建计划（按 `grilling：测试与验证迁移` §7 回改 tui-layout spec §2–§10，并修正 Mark header 的既有漂移）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。**本图不再加票。**
 

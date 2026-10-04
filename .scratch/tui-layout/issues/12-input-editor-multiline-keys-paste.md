@@ -25,9 +25,9 @@ Status: done
 - [x] 输入区超出 10 行时内部滚动**跟随光标**
 - [x] 用例：软换行行列映射（含宽字符）、goal column、全部键位、跨行退格、`Ctrl-J`、`↑/↓` 不动历史而 `Ctrl-P/N` 动、粘贴归一且不提交、两个确认的键位与默认答案、单行 Esc 直接清空
 
-## Comments
+## 评论
 
-## Comments
+## 评论
 
 **实现完成（2026-09-21）**。落点：新增 `src/render/editor.rs`（`Input`：软换行、光标推导、键位、历史、粘贴归一）；`src/render/tui.rs` 换成持有一个 `Input` 并把 `Pending` 拆成三态；`src/render/layout.rs` 新增 `input_text_width`；`src/render/wording.rs` 新增两条确认文案；新增 `tests/render_editor.rs`（12 个用例）并改写/新增 `tests/render_tui.rs`、`tests/render_layout.rs` 的 9 个。
 

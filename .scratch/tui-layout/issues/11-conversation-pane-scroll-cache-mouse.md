@@ -24,9 +24,9 @@ Status: done
 - [x] 措辞：`↓ {n} 行新内容 · 点此到底` 与 `点此到底` 进 `wording.rs`
 - [x] 用例：滚动/吸底/脱离/提交回底；20 000 源行上限丢最旧；resize 锚点（两种态）；滚轮 3 行；「点此到底」命中矩形；其它区域点击无效；非 assistant 消息多行渲染；assistant 仍走 Markdown
 
-## Comments
+## 评论
 
-## Comments
+## 评论
 
 **实现完成（2026-09-21）**。落点：新增 `src/render/pane.rs`（面板本体：源行缓冲、换行缓存、索引、吸底、命中矩形）；`src/render/tui.rs` 换成持有一个 `Pane`、新增鼠标入口与滚动键；`src/render/wording.rs` 新增两条指示文案；`tests/render_layout.rs` 新增 6 个用例；`tests/render_tui.rs` 改写 1 个、新增 1 个；`src/render/tui.rs` 内新增一个 `#[cfg(test)]` 单元测试。
 

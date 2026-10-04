@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: 01
 
-## Question
+## 问题
 
 决定了冻结项 5–8、18、19（元工具方案、默认最严的 `Effect`、stdio + Streamable HTTP、只谈
 2026-07-28）之后，最后一根是**谁来发那些请求**：
@@ -17,9 +17,9 @@ Blocked by: 01
   可以复用 [`src/tools/process.rs`](../../../src/tools/process.rs) 的形状。
 
 先读上一条票的答案（契合度事实），再在 live exchange 里拍板。拍板要连同**理由**一起写进
-`## Answer`，因为这是一个以后不容易回头的选择（换 SDK 要重写 client 层）。
+`## 作答`，因为这是一个以后不容易回头的选择（换 SDK 要重写 client 层）。
 
-## Answer
+## 作答
 
 **用 `rmcp` 3.5.0，`default-features = false`，TLS 选 `reqwest-native-tls`。** 理由（详据见
 [`../research/02-rmcp-fit.md`](../research/02-rmcp-fit.md)）：① `ClientLifecycleMode::Discover`

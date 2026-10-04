@@ -54,7 +54,7 @@ Status: done
 - 不动 `docs/research/`。
 - 不往 `scripts/check-language.py` 的白名单里加东西。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-27）**。提交 `76a7eb1`（17 个文件：10 个 `src/` + 7 个测试）。落点与逐条判断如下。
 

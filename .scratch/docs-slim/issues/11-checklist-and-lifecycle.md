@@ -6,7 +6,7 @@ Part of: ../map.md
 Blocked by: 08
 
 > 规格：[`../spec.md`](../spec.md) §5。逐条判定与旧数字的一手出处见
-> [清单与 lifecycle 的处置](06-grilling-checklist-and-lifecycle.md) 的 `## Answer` 与
+> [清单与 lifecycle 的处置](06-grilling-checklist-and-lifecycle.md) 的 `## 作答` 与
 > [`../research/01-manual-checklist-entries.md`](../research/01-manual-checklist-entries.md)。
 
 ## 目标
@@ -66,7 +66,7 @@ Blocked by: 08
 - 不给清单设字符 / 行数目标：目标是「该文件单元违规归零」。
 - 不为了过脚本而放松脚本 —— 宁可改文档。
 
-## Comments
+## 评论
 
 **2026-10-04 落地。** 落点是 `docs/tui-manual-checklist.md` 与 `docs/lifecycle.md` 两份。
 

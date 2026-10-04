@@ -4,7 +4,7 @@ Type: prototype
 Status: resolved
 Blocked by: 15
 
-## Question
+## 问题
 
 用**粗糙可跑的代码**回答一个问题：**工具调用前后的事件挂载点与权限门，谁拥有控制流？**
 
@@ -33,7 +33,7 @@ Blocked by: 15
 - `HookExecuted { point, command, outcome }` 的字段照 OpenHands 磨过的形状（`hook_event_type` / `command` / `success` / `blocked` / `exit_code` / `stdout` / `stderr` / `reason`）。
 - **对第 2 条（`PostToolUse` 回灌形态）的直接约束**：日志只记**完成单元**，且**事件永不修改、永不截断**——所以"**改写工具结果**"这个选项已经被排除。回灌只能是一条**追加事件**：要么追加一条新的工具结果语义事件，要么用 `HistorySuperseded` 声明原结果被替代。请在原型里选一个并说明它如何保住票 02 那条"每个 `tool_call` 恰好一条结果"的不变量。
 
-## Answer
+## 作答
 
 **已定（2026-09-13，prototype + grilling，5 问逐条确认）。**
 

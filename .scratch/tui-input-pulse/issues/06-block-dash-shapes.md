@@ -43,7 +43,7 @@ mark 里那个短横的空闲样子**回到原来的 `▀▀▀▀`**；四个�
 
 改转速（仍然 250ms/朝向）；改窄档的线字形；给色环做任何事。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`、`src/render/wording.rs`（只改 rustdoc）、`tests/render_layout.rs`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（§2）。
 

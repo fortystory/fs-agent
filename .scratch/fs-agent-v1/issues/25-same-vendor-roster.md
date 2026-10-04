@@ -15,7 +15,7 @@ Status: done
 - [x] **文档同步**：README 配置示例、`docs/discussion.md`（intro + Running one）、`CONTEXT.md` 的「讨论者」词条、`discuss --help`、缺 roster 的提示文案
 - [x] **测试**：同厂商 / 同模型都被接受且 `heterogeneous == false`（配置层）；`speakers()` 去重（配置层）；同身份 roster 被拒（库层）；两条提示文案（措辞层）
 
-## Comments
+## 评论
 
 **2026-09-22（实现）** 为什么是「允许 + 一行提示」而不是「允许但静默」：异构是这套设计最强的那根杠杆（spec §15），静默接受同模型会让人把「同一家的两个样本」当成「两个独立判断」。所以事实被解析进 `heterogeneous`，前台每次运行说一遍。要更安静的话，删掉 `discuss()` 里那一个 `if` 即可。
 

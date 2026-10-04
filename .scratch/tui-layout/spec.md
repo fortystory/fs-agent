@@ -2,14 +2,14 @@
 
 Status: ready-for-agent
 
-- **来源**：`.scratch/tui-layout/map.md`（wayfinder 地图，9 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定 —— 唯一例外见 `Further Notes`。
+- **来源**：`.scratch/tui-layout/map.md`（wayfinder 地图，9 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定 —— 唯一例外见 `补记`。
 - **实现票落点**：`.scratch/tui-layout/issues/NN-*.md`，**编号从 `10` 起**（`01`–`09` 是设计票，不要覆盖）。
 - **推翻的既有决策**：本 spec 推翻 `.scratch/fs-agent-v1/spec.md` §19 的 TUI 栈一行（`.scratch/fs-agent-v1/spec.md:526`）与用户故事 129 的「否决 alt screen」。记录在 **`docs/adr/0002-fullscreen-alt-screen-tui.md`**。
 - **术语**：叙述用中文，标识符用英文。词汇表在 `CONTEXT.md` —— 特别注意 **轮次（Round）≠ 回合（Turn）**：右栏数 `TurnEnded`，标签是**「回合」**。
 
 > **补记（2026-09-30）**：本 spec 的**外壳**已被 `.scratch/tui-sidebar/spec.md` 推翻 —— 下面 §2 的**四分区**改成「一圈外框 + 一条全高左栏 + 一条主列」，**整宽 header 的顶部栏**取消（标记搬进左栏、模式进状态行），**cwd 与时钟不再显示**（时钟在界面里彻底消失）。**核心决定不变**：仍是**备用屏幕（alt screen）全屏**、转录**自己持有滚动缓冲**、**光标不依赖视口位置**。这轮改版记在 `docs/adr/0002-fullscreen-alt-screen-tui.md` 的「外壳改版（后加，2026-09）」。本文件正文里的四分区、整宽 header 与 cwd / 时钟自此只作历史记录。
 
-## Problem Statement
+## 问题陈述
 
 1. **光标是坏的，而且修不好。** inline viewport 下光标不跟随 `>`、`>` 还会在后续回合消失。`e25097e` 把视口锚到最后一行之后**问题仍然存在**：根因是视口位置本身随插入漂移（`Frame::area().y` 是视口在屏幕上的位置，`insert_before` 每插一行就把它往下推）。
 2. **转录不可控。** 回看完全依赖终端 scrollback：应用内没有滚动缓冲、没有位置感、无法在窄终端里定位；live 区只有 8 行，一次工具输出就把它冲掉。
@@ -17,7 +17,7 @@ Status: ready-for-agent
 4. **输入只能单行。** 粘一段代码、写多段 brief 都得挤成一行，斜杠命令后面跟多行任务也做不到。
 5. **摘要视图回看价值低。** 现在**用户自己输入的消息**被压成单行 + 截断 500 字符（assistant 的回答本来就是全文 Markdown）；粘 20 行进来只留前 500 字。
 
-## Solution
+## 方案
 
 把 TUI 从「inline 视口 + 往 scrollback 插行」换成**全屏 alt screen 四分区**：
 
@@ -30,7 +30,7 @@ Status: ready-for-agent
 
 不动的：plain 与 headless 两个渲染器、语法高亮与 diff 着色、Markdown 渲染器、ADR 0001 冻结的模型可见文本。
 
-## User Stories
+## 用户故事
 
 ### A. 布局与基础信息
 
@@ -110,7 +110,7 @@ Status: ready-for-agent
 59. 作为用户，我想让模型可见文本（system prompt、投影前缀、`AgentError.message`、工具结果）**一个字节都不变**，以便前缀缓存不被废掉。
 60. 作为用户，我想让 `cargo test` 全绿、`cargo clippy` 干净、`cargo fmt --check` 只留既有的两处漂移，以便改动可验收。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 全屏与终端生命周期
 
@@ -289,7 +289,7 @@ Status: ready-for-agent
 
 - 保留 `wording::status_line(busy, width)` 的形态（状态词 + 提示），**状态词在最左**。
 - 提示集换成**六条**：`enter 发送` / `ctrl-j 换行` / `esc 取消` / `shift+tab 计划` / `PgUp/PgDn 滚动` / `ctrl-c 退出`。**绝不出现 `shift+enter`**；不加 `ctrl-g`（脱离吸底时底部已显示「点此到底」）。
-- **降级算法改**（实现期按实测修正过一次，见 `Further Notes`）：提示从左边填、`ctrl-c 退出` 预留，**状态词只在提示后面还放得下时才加在最左** —— 窄终端宁可少一个 `就绪`，也不能少 `ctrl-j 换行`。实测：`w=40` → 3 项（无状态词）、`60` → 5、`80` → 6、`120+` → 7（首项是状态词）。
+- **降级算法改**（实现期按实测修正过一次，见 `补记`）：提示从左边填、`ctrl-c 退出` 预留，**状态词只在提示后面还放得下时才加在最左** —— 窄终端宁可少一个 `就绪`，也不能少 `ctrl-j 换行`。实测：`w=40` → 3 项（无状态词）、`60` → 5、`80` → 6、`120+` → 7（首项是状态词）。
 - 新增措辞（全部落在 `src/render/wording.rs`）：面板标签（模型 / 上下文 / token / 回合 / 输入 / 输出 / 缓存）、`—`、`token_pair(used, limit)`、`context_pair(used, usable)`、`cache_pair(cached, miss)`、`↓ {n} 行新内容 · 点此到底`、`点此到底`、`终端太小：至少 40×10`、`粘贴 {n} 字符？`、`清空输入？`。
 - **配色沿用现有六种 + BOLD**（DarkGray 边框与提示、Yellow 询问与反馈、Cyan 轮次、Red 错误、Magenta 分歧、Green 成功）。**不需要 truecolor，不加主题配置项。**
 - 通知与诊断（技能加载、unknown command、渲染器丢弃、终止原因）**全部进转录**，不引入 toast。
@@ -372,7 +372,7 @@ Status: ready-for-agent
   一处**不改变任何输出**的解构；headless 不消费 `Block`，完全不受影响。
   `events` schema 未改。
 
-## Testing Decisions
+## 测试决定
 
 ### 什么算好测试
 
@@ -406,7 +406,7 @@ Status: ready-for-agent
 8. 忙碌时 `Ctrl-C` 取消、空闲 `Ctrl-C` 退出。
 9. `120×24` 输入写到 10 行 → 右栏消失（预期）。
 
-## Out of Scope
+## 明确不做
 
 - **修 inline viewport 的光标 bug**：本 effort 选择绕开；相关调试痕迹不再追。
 - **todo 列表 / todo 工具**：fs-agent 没有 todo 状态也没有 todo 工具，没有数据源。
@@ -417,7 +417,7 @@ Status: ready-for-agent
 - **两进程拆分（TUI / agent server）**：`.scratch/fs-agent-v1/spec.md` §19 已否决，理由仍成立。
 - **主题/配色配置项**。
 
-## Further Notes
+## 补记
 
 - **本 spec 的三条决定推翻了先前冻结项，都已如实记录**：①inline viewport → alt screen（ADR 0002，动机是修不好的光标 bug，不是审美）；②`Shift+Enter` **不能**换行（不启用键盘增强协议，它在协议层与 `Enter` 不可区分）；③鼠标捕获**改判为开**（换来滚轮与可点击的「到最下」，代价是**复制要按住 Shift 拖拽**）。
 - **spec 期修正的两处表述**（折叠时发现，已回改设计票）：①被截断 500 字的是**非 assistant** 的消息（主要是用户自己的输入），assistant 本来就是全文 Markdown；②`Paragraph::line_count` 语义正确但被 unstable 特性挡成 `pub(crate)`，因此**换行口径坚持自己算**（现在落在 `pane::wrap_line` + `src/render/width.rs`），不为一个计数开不稳定特性。

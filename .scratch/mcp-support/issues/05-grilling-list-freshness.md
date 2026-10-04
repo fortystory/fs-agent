@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 元工具方案把「工具表冻结 vs `notifications/tools/list_changed`」那个撞点绕开了（冻结项 5）：
 表里只有两个固定的工具，server 侧的增删只影响 `mcp_list` 的**返回**。所以问题从「表要不要变」
@@ -21,7 +21,7 @@ Blocked by: —
 顺带要定：缓存（若做）在 **server 崩了 / 重连之后**怎么失效 —— 这与冻结项 14（不自动重连）
 是一致的：重连发生在**下一次调用时**，那时清单也就自然重取。
 
-## Answer
+## 作答
 
 **每次现问**：`mcp_list` 每次都向 server 发一次 `tools/list`（`server?` 给了就只问那一台）。
 

@@ -3,9 +3,9 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判据 / 范围 / 验收 / 矛盾 / 门槛 / AGENTS.md / 删的边界 / 两个大户 / 体量指标）。本图只做**规划**，不产文档改动。
-交棒：**已折成 [`spec.md`](spec.md)**（2026-10-04，`/to-spec` —— 七张票的 `## Answer` 就是它的来源；那一条测试 seam 已与维护者确认：只测 `scripts/check-doc-size.py` 的 CLI）。**实现票已由 `/to-tickets` 拆出五张**：08 护栏落地（tracer bullet，frontier）→ 09 / 10 / 11（并行，都被 08 block）→ 12 收口（被 09–11 block）；依赖边见各票抬头。
+交棒：**已折成 [`spec.md`](spec.md)**（2026-10-04，`/to-spec` —— 七张票的 `## 作答` 就是它的来源；那一条测试 seam 已与维护者确认：只测 `scripts/check-doc-size.py` 的 CLI）。**实现票已由 `/to-tickets` 拆出五张**：08 护栏落地（tracer bullet，frontier）→ 09 / 10 / 11（并行，都被 08 block）→ 12 收口（被 09–11 block）；依赖边见各票抬头。
 
-## Destination
+## 目的地
 
 一份**可执行的文档瘦身 spec** —— 交给 `/to-spec` 折成构建计划。它要给 36 份活文档定下统一的「压表达」规则（单元 ≤500 字符、只拆 + 只删「别处已有一份的复述」、不动 `DOCS_MIN_RATIO`），指名每份该改哪里，并留下一条可复核的护栏脚本。
 
@@ -13,7 +13,7 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 
 **不删任何文件。** 「减存量」在本轮被重新定义为「删掉入口文档里的复述」，不是删除过程产物。
 
-## Notes
+## 笔记
 
 - **领域**：fs-agent —— 自用 coding agent CLI（Rust）。文档体系的现状见 [`README.md`](../../README.md) 的「文档」一节与 [`.scratch/README.md`](../README.md)。
 - **文档按「被读的方式」分层**（本图的首要发现，实测自 `src/context.rs` / `src/lib.rs`）：
@@ -43,7 +43,7 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 
 1. **destination 是一份 spec**，由 `/to-spec` 折成；本图只产决策，不写文档改动。
 2. **范围**（Q3）：入口三份 + `.scratch/README.md` + `docs/*.md` 逐面 + `docs/adr/`。
-3. **不删任何文件**（Q5）：`.scratch/*/issues/`、`spec.md`、`map.md`、`seed.md`、`docs/research/`、`.scratch/*/research/` 一律不动 —— 归本文 `Out of scope`。
+3. **不删任何文件**（Q5）：`.scratch/*/issues/`、`spec.md`、`map.md`、`seed.md`、`docs/research/`、`.scratch/*/research/` 一律不动 —— 归本文 `明确不做`。
 4. **「瘦」= 压表达**（Q2 → Q5）：**只删「别处已有一份的复述」**（各 feature 的 spec / 票里已经写过的逐日经过），其余**只拆段落**、不改信息量（Q8）。
 5. **单元 ≤500 字符**（Q6）是唯一的内容密度指标，口径按 [票 03](issues/03-research-long-paragraph-triage.md) §4.1 修正为**「单元」**：散文段，或一个顶层清单项连同它的续行与嵌套子项；表格单元格单独算单元。**不是「空行分隔的整块」** —— 那个口径把本 scope 的 335 个清单项压成 79 块，其中 60 块是伪问题。可复现基线：**单元 ≥500 有 22、≥800 有 4、≥1500 有 2；单元格 ≥500 有 5、≥200 有 14**（整块口径的 79 / 31 / 8 只用于对账）。豁免按票 03 的规则：**R1 引文（引用行 ≥50%）与 R2 纯指针枚举（链接跨度 ≥50% 且 `·`/`、` ≥4）自动放行；R3 单一长句 / R4 不可断因果链 / R5 次序步骤只打印复核、不非零退出**。今天全语料只自动豁免 `README.md` 文档表的 2 个单元格，**整段零豁免、白名单空着起步**。
 6. **只拆不删、不动 `DOCS_MIN_RATIO`**（Q6）：拆段落只加换行；删中文散文会撞红中文占比下限（`docs/tui-manual-checklist.md` 实测 46.2% / 下限 46，**余量 0.2%**；[`docs/agents/triage-labels.md`](../../docs/agents/triage-labels.md) 0.9%；[`docs/goals.md`](../../docs/goals.md) 1.0%；`docs/adr/0003` 1.4%；[`docs/render.md`](../../docs/render.md) 1.9%）。**这几份文档里「删复述」都可能直接撞红，优先拆、不优先删。**
@@ -61,7 +61,7 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 
 ### Tracker 事实与降级（本图适用）
 
-- map = `.scratch/docs-slim/map.md`，child = `.scratch/docs-slim/issues/NN-*.md`；阻塞 = 票面 `Blocked by: NN`；claim = `Status: claimed`；resolve = 票底 `## Answer` + `Status: resolved` + 追加一行到本文 `Decisions so far`。
+- map = `.scratch/docs-slim/map.md`，child = `.scratch/docs-slim/issues/NN-*.md`；阻塞 = 票面 `Blocked by: NN`；claim = `Status: claimed`；resolve = 票底 `## 作答` + `Status: resolved` + 追加一行到本文 `已定的决定`。
 - **没有 native sub-issue / 依赖边**，所以回退到正文约定：本文的 `## 任务清单` 逐条引用子票（条目数 == 子票文件数），每张子票顶部写 `Part of: ../map.md`。
 - 校验：`python3 scripts/wayfinder-check.py .scratch/docs-slim/map.md`。宣布图走完之前必须 PASS。
 
@@ -91,7 +91,7 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 五张实现票 `ready-for-agent`，**frontier = [08 — 护栏落地](issues/08-doc-size-guardrail.md)**（09 / 10 / 11 被它 block，
 12 被 09–11 block）。决策票走完这张图就算走完了 —— 实现票住在同一个目录里，由 `/implement` 认领，不由 wayfinder 会话认领。
 
-## Decisions so far
+## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里。按名字引用，不写裸编号。 -->
 
@@ -103,14 +103,14 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 - [grilling：清单与 lifecycle 的处置](issues/06-grilling-checklist-and-lifecycle.md) — 26 条**一个不删**（票 01 判 0 条失效）；过时数字**直接改正**并在抬头留一行带日期的校正记录（不保留错误原文——这是操作清单不是历史记录）：④.5 → 转录 **10** 行、⑨.3 → **17** 行、⑯.3 → 输入区 **3** 行 / 转录 **3** 行、⑫.2 → **屏幕居中**且宽度基准由主列变屏幕（`min(屏幕宽−4,135)`，120 列下 **116** 而非 73；139 列才封顶）——**最后这处宽度票 01 没点出来**；⑨ 降级成指向两条测试的指针但**保留编号位置**（抬头的 `①③⑤⑥⑨` 去掉 ⑨）；`docs/lifecycle.md` 只压一处**同文件内部**的复述（L299-307 → 一句图注，权威在 §1.3 / §5），图 / 246 行证据表 / §1 规则是显式禁改项，且实测单元口径 **0 项**超长（票面「最长段 799」复现不出来）；清单**不设独立体量目标**（目标就是单元违规归零：今天 1 项 = 抬头 L7 的 737 字符枚举）；`①–㉖` 与 `⑫/⑯/⑱/⑳` 的二级编号**都不重排**（实测 8 个引用点，含「⑱ 第 3 条」「⑳ 第 5 条」这类条内引用）。
 - [grilling：`CONTEXT.md` 的词条边界](issues/07-grilling-context-boundary.md) — 剥到**「一句定义 + 可选 `docs/` 指针」**（删 246 处指称 + 193 条描述，指针必须落到票 02 §7.3 那批真实来源）；**14 个「会空掉」的词条各补一句纯领域定义**，不许只剩标题；6 个别处没有的词条（问卷请求 / 问题选项 / 作答草稿 / 问卷文案 → `docs/render.md`，价目表 → `docs/observability.md`，落点 → `docs/discussion.md`）**把独有内容搬进 `docs/`**，不新增文件；9 处 `§N` 换成 `docs/` 链接（`spec §7` 存疑那处删），换完**归零**；**硬约束句全留**（维护者选了「全留」而非「按区分性拆」）——边界因此改为按**句子性质**分：留规范句、删描述句，一句两半就留规范那半；与其余 35 份**同受单元 ≤500 管**（实算 8 项违规，全 scope 最多）；四个「造名」槽位（`PromptHue` / `FallingDash` / `StatusRow` / `Pulse`）保留，改第 10 行的规矩为「也接受文档已采用的概念名」；**新术语规矩当场定死**：定义进 `CONTEXT.md`、机制进 `docs/`，不许在术语表里写机制。
 
-## Not yet specified
+## 尚未明确
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票。不要预先切成票那么大。 -->
 
 - **收尾时「往哪写」还没有规矩**（原「流程本身在制造胖点」的后半，前半已随票毕业）。证据仍在：`.scratch/README.md` 近 60 次提交里被改了 **26 次**（全仓最高 churn），README 的「状态」段同理 —— 每次 feature 收尾都往入口文档**追加**一段逐日经过；[grilling：护栏脚本的契约](issues/05-grilling-guardrail-contract.md) 的预算棘轮只把这件事变成**可见**，没有改变它。**术语那一半已由 [grilling：`CONTEXT.md` 的词条边界](issues/07-grilling-context-boundary.md) 毕业**（新术语：定义进 `CONTEXT.md`、机制进 `docs/`，不许在术语表里写机制）。剩下这半要动的是**收尾流程本身**，比本图的 destination（一份文档瘦身 spec）更宽 —— 本图不处理，留给后续 effort。
 - **入口文档的「状态」该由什么承担。** README 的「状态」段在替代一份本可以从 `.scratch/` 派生出来的索引（票数 / 完成度 / 测试数都能用命令数出来）。要不要让它是派生的、而不是手写的，还没想清 —— 同样比本图的 destination 更宽。
 
-## Out of scope
+## 明确不做
 
 <!-- 有意识排除在本次 effort 之外的工作；永不毕业。 -->
 
@@ -128,6 +128,6 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 
 **决策票 7/7，实现票 5/5** —— 七张决策票全部 `resolved`（2026-10-04；其中三张 HITL 票在同一个 session 里连走：护栏脚本的契约、清单与 lifecycle 的处置、`CONTEXT.md` 的词条边界），并已折成 [`spec.md`](spec.md)、由 `/to-tickets` 拆出五张实现票（08–12）。**两条路都走完了**（同日）：08 护栏落地（`scripts/check-doc-size.py` + 15 条只打 CLI 的测试 + `README.md` 接线）→ 09 / 10 / 11 并行（`CONTEXT.md` 剥到「一句定义 + 指针」、入口三份重写、手工清单与 lifecycle 的处置）→ 12 收口（两份 ADR 与 `docs/skills.md` 的最后三处、基线清零、四处索引对齐、全量复核）。收口时 36 份文档**单元违规全为 0**、入口三份都在预算内。
 
-**决策这条路走完了**：36 份文档各自该改哪里、改到什么程度、用什么护栏复核，以及三处最容易出错的地方（手工清单的 5 处旧数字、lifecycle 的禁改边界、术语表的剥离线）都已写死在票的 `## Answer` 里。
+**决策这条路走完了**：36 份文档各自该改哪里、改到什么程度、用什么护栏复核，以及三处最容易出错的地方（手工清单的 5 处旧数字、lifecycle 的禁改边界、术语表的剥离线）都已写死在票的 `## 作答` 里。
 
 **本图只产决策**：charting 与七张决策票的整个过程没有改动任何一份文档，改的只是 `.scratch/docs-slim/` 里的票、spec 与这张图。

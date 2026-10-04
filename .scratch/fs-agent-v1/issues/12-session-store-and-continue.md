@@ -17,7 +17,7 @@ Status: done
 - [x] 会话目录创建即 `0700` / 文件 `0600`；**不自动清理**，提供手动 `prune`
 - [x] e2e：跑一次会话 → 杀掉 → `--continue` → 断言 id 不变、悬空调用被合成收尾、继续对话正常
 
-## Comments
+## 评论
 
 **落点。** `src/session/store.rs`（目录形状、id、权限、`latest`/`list`/`prune`）、`src/agent/history.rs`（悬空收尾 + `/undo`）、`src/tools/edit.rs::revert`（编辑梯的逆）。根目录由 CLI 从 `$XDG_DATA_HOME` / `$HOME/.local/share` 算出（`config::sessions_dir`）后**注入**，库仍然不读环境。
 

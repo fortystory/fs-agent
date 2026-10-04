@@ -1,4 +1,4 @@
-# 09: repo map
+# 09 — 仓库符号地图（repo map）
 
 **What to build:** 模型能按需取一份仓库符号地图帮忙定位——成本可预期（固定预算）、结果可解释（朴素排序），且**不注入**（所以不会把历史反复挤出缓存前缀）。
 
@@ -14,7 +14,7 @@ Status: done
 - [x] 排序 = **朴素可解释的纯函数**（会话相关度为主 + 结构信号为辅），**不做**整图 PageRank；`rank()` 是可替换的纯函数接缝
 - [x] 大仓库下取一次 map 的耗时与产物体量在预算内（记下实测数字，作为回归基线）
 
-## Comments
+## 评论
 
 实现落点：`src/context/repo_map.rs`（新：`RepoMap` / `extract` / `rank` / `render` / `RankContext` / `RepoMapInput` / `SymbolKind` / `Definition` / `Scored`，含 mtime 缓存与 `parses()` 计数）、`src/tools/repo_map.rs`（新：`RepoMapTool`，薄壳）、`src/tools/{mod,tool,registry}.rs`（`builtin()` 挂 `repo_map`；`ToolContext`/`PendingCall` 增 `repo_map: RepoMapInput`）、`src/config.rs`（`SessionConfig::repo_map_tokens` 默认 1k、`MAX_REPO_MAP_TOKENS = 4_096`、`with_repo_map_tokens` 钳制）、`src/agent.rs`（仅当 `tool_name == repo_map` 时从事件流重算 `RankContext`）。文档：`docs/repo-map.md`（边界规则 + 预算 + 排序 + 实测基线）+ `CONTEXT.md` 词条「仓库地图（RepoMap）」。测试：`tests/repo_map.rs` 16 例（纯函数 + 集成）+ 1 例 `#[ignore]` 计时基线。
 

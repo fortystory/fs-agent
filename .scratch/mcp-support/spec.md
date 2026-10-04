@@ -16,11 +16,11 @@ Status: 9 张实现票 `ready-for-agent`（[`issues/10`](issues/10-mcp-service-a
 来源与依据：
 
 - 决策图 [`map.md`](map.md)：**二十条冻结项**（charting 的 grilling 定下）+ **九张决策票**
-  （`issues/01`–`09`，全部 resolved）。每一条决定的完整理由与取舍都在票的 `## Answer` 里。
+  （`issues/01`–`09`，全部 resolved）。每一条决定的完整理由与取舍都在票的 `## 作答` 里。
 - 一手调研：[`research/01-mcp-client-implementation.md`](research/01-mcp-client-implementation.md)
   （规范要点、DSH 的做法、上游八个实现、fs-agent 侧的撞点）与
   [`research/02-rmcp-fit.md`](research/02-rmcp-fit.md)（`rmcp` 3.5.0 的契合度）。
-- 范围修订已办：v1 的 `Out of Scope` 三处与 [README.md](../../README.md) 的「这一版不做」都加了
+- 范围修订已办：v1 的 `明确不做` 三处与 [README.md](../../README.md) 的「这一版不做」都加了
   带日期的补记（票 07），原文未改写。
 
 ## 问题陈述
@@ -59,7 +59,7 @@ Status: 9 张实现票 `ready-for-agent`（[`issues/10`](issues/10-mcp-service-a
   fall back; a legacy server is an error.*）。
 - **默认全关**：不开 `[mcp] enabled`，会话行为逐字不变。
 
-## User Stories
+## 用户故事
 
 1. 作为**模型**，我想要一份「这台 server 现在有哪些工具、各要什么参数」的清单，以便在不认识这个
    server 的情况下也能正确地调它。
@@ -97,7 +97,7 @@ Status: 9 张实现票 `ready-for-agent`（[`issues/10`](issues/10-mcp-service-a
 20. 作为**维护者**，我想要整件事在 `[mcp] enabled = false` 时**零影响**，以便不做它的时候没有任何
     新增的启动成本与行为变化。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 三层与「元工具」这个选择
 
@@ -273,7 +273,7 @@ sandbox = true
 - **`CONTEXT.md` 加词条**：这次引入的名词要进词汇表 —— **元工具**、**原语**（tool / resource /
   prompt / elicitation）、**server**；措辞在实现票里定。
 
-## Testing Decisions
+## 测试决定
 
 **接缝两个：既有的组装入口，加一个真 stdio 的集成测试。**
 
@@ -332,7 +332,7 @@ sandbox = true
 - **资源进 `ReadSet`**、**资源与工作区路径互操作**：两套坐标系。
 - **本 spec 的执行**：它只产决策；「做」发生在 `/to-tickets` → 实现票 → `/implement`。
 
-## Further Notes
+## 补记
 
 - **分阶段落地**：§1–§7、§9 是**第一阶段**（工具）；§8 的资源、提示词、边角各自是一个后续阶段。
   拆票时按这个顺序，依赖边只向后。
@@ -347,5 +347,5 @@ sandbox = true
   要不要一个同样的开关，在实现票里定（届时 `[web] trust_proxy_dns` 的形状可以直接照用）。
 - **两份调研是材料，不是结论**：`research/` 里的事实以写就当天（2026-10-03）的外部文档为准；
   落地前重读供应商与协议侧的链接（计价、feature 名、协议版本都可能漂）。
-- **决策图留着当记录**：[`map.md`](map.md) 的二十条冻结项与九张票的 `## Answer` 是这份 spec 的
+- **决策图留着当记录**：[`map.md`](map.md) 的二十条冻结项与九张票的 `## 作答` 是这份 spec 的
   依据；实现若改变了其中任何一条，**回改 spec 与本图**，而不是只写在票的评论区里。

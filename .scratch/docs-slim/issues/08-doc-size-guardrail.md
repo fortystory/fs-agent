@@ -6,7 +6,7 @@ Part of: ../map.md
 Blocked by: —
 
 > 规格：[`../spec.md`](../spec.md) §1（单元口径）与 §2（护栏脚本契约）。契约的完整理由与取舍在
-> [护栏脚本的契约](05-grilling-guardrail-contract.md) 的 `## Answer` 里；可直接实现的判据片段与校准样本在
+> [护栏脚本的契约](05-grilling-guardrail-contract.md) 的 `## 作答` 里；可直接实现的判据片段与校准样本在
 > [`../research/03-long-paragraph-triage.md`](../research/03-long-paragraph-triage.md) §4.1–4.3。
 > **本票是这一轮唯一的 prefactor**：它是后面每一张票的尺子，所以它先落地。
 
@@ -71,7 +71,7 @@ Blocked by: —
 - 不加 CI 配置：仓库没有 CI 入口，spec 已确认没有「加进 CI」这一步。
 - 不为「好看」调阈值：500 是冻结项。
 
-## Comments
+## 评论
 
 **2026-10-04 落地。** 三个落点：`scripts/check-doc-size.py`（新，约 380 行）、
 `scripts/tests/test_check_doc_size.py`（新，15 条只打 CLI 的用例）、`README.md` 的「开发」一节加一行。

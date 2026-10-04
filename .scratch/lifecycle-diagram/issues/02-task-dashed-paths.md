@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 冻结项 7 说「可注入但 CLI 不注入」与「尚未实现」的路径画虚线。**哪些路径属于这两类，是一件要
 取证的事、不是一个要 decide 的问题** —— 所以它是 task：做完它，五张图才知道哪条边该虚。
@@ -30,7 +30,7 @@ Blocked by: —
 
 ## 交付
 
-清单落到 `research/02-dashed-inventory.md`，票底 `## Answer` 写一张分三类的表 + 每一类的画法建议
+清单落到 `research/02-dashed-inventory.md`，票底 `## 作答` 写一张分三类的表 + 每一类的画法建议
 （虚线 / 旁注 / 不画）。
 
 ## 不做什么
@@ -38,7 +38,7 @@ Blocked by: —
 - 不改代码、不给 CLI 加 hook 注入点。
 - 不判断「该不该给 CLI 加 hook 注入」—— 那是另一个 effort。
 
-## Answer
+## 作答
 
 （2026-10-03）交付物：[`research/02-dashed-inventory.md`](../research/02-dashed-inventory.md)，103 行 ——
 逐项比对 + 判据 + 存疑核对 + 结论。

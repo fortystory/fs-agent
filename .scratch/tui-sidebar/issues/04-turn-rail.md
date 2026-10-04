@@ -37,7 +37,7 @@ Blocked by: 02
 
 键位（不加键）；讨论会话里轮次的配色或标签；`轨迹` / `文件` 页里的任何内容。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`（`Rail` 结构、`rail_rows()`、`is_user_message()` / `is_boundary()`、`draw_rail()`、`TuiState::focused_unit()` / `jump_to_unit()`、`HitAction::RailUnit`、鼠标分派）、`src/render/pane.rs`（新增 `Pane::scroll_to_source`）、`tests/render_layout.rs`（7 个用例）、`tests/history_replay.rs`（1 个用例）。
 

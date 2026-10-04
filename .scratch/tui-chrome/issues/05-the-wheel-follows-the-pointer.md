@@ -82,7 +82,7 @@ Status: done
 - [ ] `cargo clippy --all-targets` 无新增告警；`cargo fmt --check` 只留既有漂移。
 - [ ] 真机：`ask_user_question` 弹出来时，鼠标放在转录上滚 → 转录滚；放到问卷上滚 → 选项列表动。权限确认弹出时，指针在弹窗外滚 → 转录滚。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地。
 - 状态里加了两个字段（`modal_rect`、`questionnaire_bottom`），都遵守「这一帧真的画了什么就记什么」：`draw_frame` 一进来两个都清成 `None`，`draw_modal` 拿到矩形时才填，问卷占着底部时才填。

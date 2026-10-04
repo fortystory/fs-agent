@@ -6,7 +6,7 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 - **范围**（用户拍定）：**索引 + 陈旧数字 + 孤儿文档**。**不动路径**（`docs/` 不重排）、**不改语言**（英文的设计文档不翻译，中文的清单/词汇表也不翻译），只把**没有写下来的约定写下来**。
 - **落点**：`README.md`、`.scratch/README.md`（新增）、`AGENTS.md`、`docs/highlight.md`（只在必要时加一行状态）。
 
-## Problem Statement
+## 问题陈述
 
 摸底一轮查出来的，都是**可验证**的出入，不是风格意见：
 
@@ -17,7 +17,7 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 5. **一条「死链」是假警报**：`docs/research/notes/cline-continue.md` 里那个 `/sdk/plugins` 是**研究笔记引用的上游路径**，不是本仓库的链接 —— 不动，但写进 spec 免得下一个人再查一遍。
 6. **一处本地残留**：`.scratch/call-rationale/issues/` 是**空目录**、不在 git 里（`git ls-files` 没有它）—— 本轮**不擅自删**，记在这里，用户要删一句话的事。
 
-## Solution
+## 方案
 
 1. **README 的《文档》表补全**，并把 `.scratch/` 的那一行改成指向一份新的 **`.scratch/README.md`**（feature 索引）。
 2. **`.scratch/README.md`（新增）**：一张表，一行一个 feature —— 目录名、形态（spec / map / seed / 只有票）、一句话（取 spec 或 map 的第一行）、票数与完成度（`done`/总数）。
@@ -34,7 +34,7 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 
 > **注（2026-09-30）**：本节与 Problem Statement 第 4 条已经过时 —— 语言线后来重画过两次：[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（2026-09-27 那一轮）把散文扩到全仓，[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md) 又把模型可见与进流的**散文**也收进中文。现状：**散文一律中文**，上面「写英文的」那条清单里的逐面设计文档（`docs/*.md`）与 `docs/agents/*` 在语言迁移那一批（`.scratch/language-migration/`）就翻完了，`docs/highlight.md` 与 `docs/research/` 的一手引文仍是例外；英文只留给标识符、schema 值与协议标记。**清单里那个 `plan-mode` 的名字本身也不在了** —— `docs/plan-mode.md` 随 [ADR 0003](../../docs/adr/0003-plan-leaves-the-permission-modes.md)（「计划」从权限模式搬进 `todo` 工具）一起删除，这里只作当时的记录。
 
-## User Stories
+## 用户故事
 
 1. 作为读者，我想从 README 一处就找到**所有**文档的入口，以便不必靠 `find` 才知道有 `docs/research/`。
 2. 作为读者，我想看到**准确**的数字（票数、测试数、行数），并且知道怎么复核，以便不信一个会过期的数。
@@ -42,7 +42,7 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 4. 作为将来写文档的人（或 agent），我想看到**语言约定**，以便新文档不用猜该写中文还是英文。
 5. 作为维护者，我想让这些数字的**出处**写在旁边，以便下次它们过期时改的人知道数什么。
 
-## Testing Decisions
+## 测试决定
 
 - 核对用命令（写进 spec 与票里，供复核）：
   - 测试数：`cargo test 2>&1 | grep -E '^test result' | awk -F'[ ;]' '{p+=$4} END {print p}'`
@@ -52,7 +52,7 @@ Status: done（一次 grilling 的折叠；实现票 `01`–`03` 全部完成）
 - 链接：本轮的改动只动 markdown 链接目标，改完全仓 `python3` 扫一遍相对链接（那一小段脚本写进票 03 的 Comments，供下次复用）。
 - `cargo test` / `cargo clippy` / `cargo fmt` 的基线不变（本轮不碰 Rust）。
 
-## Out of Scope
+## 明确不做
 
 - **重排目录**（`docs/tui/`、`docs/tools/` 之类）与规范化文件名。
 - **翻译任何文档**（英文不译中、中文不译英）—— **2026-09-30 起这条范围声明作废**：`docs/` 的英文设计文档后来整批译中（[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)），模型可见与进流的散文随后也走中文（[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md)）；只有 `docs/research/` 的一手引文仍一个字不改。

@@ -3,7 +3,7 @@
 Type: research
 Status: resolved
 
-## Question
+## 问题
 
 本票为**票 16（讨论协议与轮次）**提供外部事实。它是 AFK 的：由子代理读一手文档，产出带来源链接的简报，**不给方案**。
 
@@ -29,7 +29,7 @@ Status: resolved
 
 **明确不要**：不要报告"多 agent 讨论是否提升准确率"（`research/01` 已覆盖），也不要报告 provider 参数（`research/02` 已覆盖）。
 
-## Answer
+## 作答
 
 **已解决**（2026-09-12，research 子代理）。产物：`.scratch/multi-agent-architecture/research/03-orchestration-frameworks-turn-management.md` —— 729 行、68 条来源链接（11 个唯一域名），全篇标注框架版本。主代理已核实文件存在且关键论断全部命中。
 

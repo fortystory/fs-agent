@@ -3,7 +3,7 @@
 Type: implement
 Status: done
 
-> 规格：`.scratch/tui-input-pulse/spec.md` §1、`Testing Decisions`（用户故事 1–6）。
+> 规格：`.scratch/tui-input-pulse/spec.md` §1、`测试决定`（用户故事 1–6）。
 
 ## 目标
 
@@ -40,7 +40,7 @@ Status: done
 
 输入区的独立边框；草稿底部对齐；`MAX_INPUT_ROWS` 的调整；任何编辑器行为（`Esc` / 粘贴 / 光标）；脉冲（那是票 02）。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/layout.rs`（`MIN_INPUT_ROWS = 3` + `plan` 的 clamp + 三段 rustdoc）、`tests/render_layout.rs`。
 

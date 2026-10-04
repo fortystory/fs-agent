@@ -4,14 +4,14 @@ Type: grilling
 Status: resolved
 Blocked by: 02, 04
 
-## Question
+## 问题
 
 现有 TUI 已经会显示一批东西 —— 权限询问、忙碌状态、斜杠命令反馈、技能加载、narration 行、丢弃警告、终止原因。四分区布局里它们各自去哪儿？**改的是"显示在哪"，不是"显示什么"**：`src/render/wording.rs` 是人面向中文措辞的唯一真相源，不得绕过它自己拼字符串（见 map 的领域约束）。
 
 ## 需要定
 
 1. **权限询问**。模态覆盖层（浮在中段之上）还是"转录里一块 + 底部提示行"？是/否怎么按（现有是 y/n？查代码确认）？询问出现时输入区**还让不让编辑**（锁定？还是允许先打好字）？`wording::permission_asked` / `permission_prompt` 的文案是否保留原样（应当保留）。
-2. **忙碌状态**。`wording::status_line(busy, width)` 在新的 header + 右栏里是**保留、被吸收、还是删除**？如果保留，放哪一行。**这是 map 的「Not yet specified」里点名可能毕业的一项** —— 在本票给出结论。
+2. **忙碌状态**。`wording::status_line(busy, width)` 在新的 header + 右栏里是**保留、被吸收、还是删除**？如果保留，放哪一行。**这是 map 的「尚未明确」里点名可能毕业的一项** —— 在本票给出结论。
 3. **诊断信息**。`wording::renderer_dropped`（渲染器丢弃事件）、`finish_reason` / `stop_reason_name`（终止原因）、`decision_name` 各显示在哪（header？转录末尾？footer 临时行？）。
 4. **斜杠命令反馈**。`unknown_command`、`skill_loaded`、裸技能加载后的 `已加载技能 <name>；请输入你的任务。` —— 进转录，还是 footer 的临时提示（toast，几秒后消失）？**定下一个统一规则**，不要一类一个样。
 5. **工具调用摘要与 narration**。现在每个工具调用一行摘要、narration 缩进 —— 这些缩进/前缀/颜色在新面板里变不变（面板更窄了，缩进预算更少）。
@@ -27,7 +27,7 @@ Blocked by: 02, 04
 
 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Answer
+## 作答
 
 **已定（2026-09-21，grilling + 用户确认）。本票只产决策，不含实现。**
 

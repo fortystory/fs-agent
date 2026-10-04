@@ -35,7 +35,7 @@ Blocked by: 10
 - 不把资源塞进 `read_paths`、不与工作区路径互操作。
 - 不做资源的缓存（`mcp_list` 那条「每次现问」的规矩同样适用）。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/tools/mcp_resources.rs`（新，两个工具）、
   `src/tools/mcp_args.rs`（新，四个元工具共用的参数读取：`optional_server` / `required_str` /

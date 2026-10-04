@@ -36,7 +36,7 @@ Blocked by: 10
 - 不给 `Effect` 加第四类；不动权限门的四档矩阵。
 - 不做「按 `ToolAnnotations` 自动映射」。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/config.rs`（`McpServerConfig.read_only_tools`
   与 `[mcp.servers.*]` 的 `read_only_tools`、解析期的「配了等于没配」校验）、

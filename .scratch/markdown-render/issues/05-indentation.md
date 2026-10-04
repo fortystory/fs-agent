@@ -37,7 +37,7 @@ assistant 的回答正文不再整体缩进 11 格（`[deepseek] ` 的宽度）�
 - [ ] `cargo clippy --all-targets` 无新增告警。
 - [ ] 真机：`cargo run` 问一句长的，回答的每一行都从最左边起；自己按 `Ctrl-J` 敲一条多行消息，续行仍然对齐缩进。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地：`attribute` 拆成两条路 —— `attribute_document`（assistant：`[name] ` 只引领第一行，其余行**零前导**）与 `attribute_speech`（用户输入与非 assistant 系统行：续行仍按 `[name] ` 的显示宽度缩进）。名字样式与正文样式没动；`plain` 渲染器本来就不走 `attribute`。
 - 与票面不同的一点：前缀占的列由 `to_lines_indented` 接手 —— **需要左边界对齐的块**（表格、代码块）整块从 `[name] ` 那一列起，第一行前缀再把渲染器铺的那段前导换掉。于是续行顶格（票面）与表格列对齐、语言名落在转录右缘（§2、§3）同时成立，第一行也不会溢出到折行。

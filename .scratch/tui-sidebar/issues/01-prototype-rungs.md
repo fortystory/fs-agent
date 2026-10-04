@@ -6,7 +6,7 @@ Blocked by:
 
 > 设计票（prototype）。产出是**帧**，不是产品代码。票面规格见 `.scratch/tui-sidebar/spec.md`。
 
-## Question
+## 问题
 
 spec §1–§2 的几何规则能不能画出可读的界面？其中四条是「不看图定不下来」的：
 
@@ -15,7 +15,7 @@ spec §1–§2 的几何规则能不能画出可读的界面？其中四条是�
 3. **焦点格的颜色** —— 黄（现有「可以动手」语义）还是亮品红（mark 同族）。
 4. **40×10 地板尺寸** —— 外框 + 1 列回合条 + 1 列滚动条 + 状态行 + 提示行之后，转录还剩几列、还读不读得懂。
 
-## What to build
+## 要做什么
 
 `.scratch/tui-sidebar/prototype/` 下一个 **throwaway** 探针 crate（自带 `[workspace]`，只有 `ratatui = "0.30"`，`publish = false`，`CARGO_TARGET_DIR` 指到 `/tmp`）。**不要动仓库的 `src/`、`tests/`、根 `Cargo.toml`。** 照抄 `.scratch/tui-layout/prototype/` 的做法：`ratatui::Terminal::new(TestBackend::new(w, h))` + `terminal.draw(...)`，把整屏 dump 成 txt。那里的 README 说明了 `TestBackend` 在默认特性下可用、以及「哪些是实测、哪些是近似」。
 
@@ -29,14 +29,14 @@ spec §1–§2 的几何规则能不能画出可读的界面？其中四条是�
 
 **回合条**至少画两个状态：① 3 个单位（焦点在最新）；② 30 个单位（溢出、最上一格 `⋮`、焦点在第 12 个）。
 
-## Deliverable
+## 交付物
 
 - `prototype/frames/*.txt`（真实渲染色，一张一档）
 - `prototype/geometry-table.md`（每档的行列数与左栏/状态行/转录各占多少，实测）
 - `prototype/README.md`（怎么跑；哪些数字实测、哪些近似；探针里编码了哪些 spec 规则；已知简化）
 - 回话里报告：四条争议档各自的图看起来如何、以及**实现 spec 时发现哪里含糊或做不到**。
 
-## Answer
+## 作答
 
 探针在 `.scratch/tui-sidebar/prototype/`，19 张帧 + 几何表全部由 ratatui `TestBackend` 实测
 （重跑命令见该目录 `README.md`，已验证可复现）。**四条争议档的结果**（前三条是看图决定、留给用户；

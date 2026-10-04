@@ -17,7 +17,7 @@ Status: done
 - [x] 终止原因在显示上可区分（`Completed` 与 `Aborted` / `Error` **不能同色**）
 - [x] headless 的 stdout 纯净性**不被本次改动破坏**（第 01 票那条回归断言仍然绿）
 
-## Comments
+## 评论
 
 **落地（2026-09-22）。** `render` 从单文件变成边界：
 

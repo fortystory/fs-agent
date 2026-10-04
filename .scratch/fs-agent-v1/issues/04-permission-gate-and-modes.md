@@ -19,7 +19,7 @@ Status: done
 - [x] 权限拒绝 / 用户拒绝 / 无交互降级三条异常路径各**由循环合成**一条错误结果 ⇒ 加上正常路径，「恰好一条结果」仍成立
 - [x] 门是纯函数；真值表测试覆盖 `模式 × 动作 × Scope × propagate`，外加断路器短路与上确界合并
 
-## Comments
+## 评论
 
 实现落点：`src/permissions.rs`（门）、`src/tools/{tool,registry,paths}.rs`（调用事实）、`src/session.rs` / `src/lib.rs`（策略与注入）、`src/agent.rs`（循环）。测试在 `tests/permission_gate.rs`（纯函数真值表）与 `tests/permission_loop.rs`（组装接缝）。
 

@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: —
 
-> 规格：[`.scratch/sidebar-toggle/spec.md`](../spec.md) §1–§3、`Testing Decisions`。
+> 规格：[`.scratch/sidebar-toggle/spec.md`](../spec.md) §1–§3、`测试决定`。
 > 本票动状态机与排版；提示行那一条文案归 [票 02](02-hint-line-entry.md)，文档与 `CONTEXT.md`
 > 的词条回改归 [票 03](03-docs-and-sweep.md)。
 
@@ -79,7 +79,7 @@ Blocked by: —
 7. **编辑器跟着走**：断言 `content_width(area, false) > content_width(area, true)`
    （或一条长草稿在收起后折行数变少）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：全部落地，`cargo test` 全绿。
 

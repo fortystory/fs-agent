@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 03
 
-> 规格：`.scratch/sandbox/spec.md` 的 `Testing Decisions` 第 3 层。
+> 规格：`.scratch/sandbox/spec.md` 的 `测试决定` 第 3 层。
 
 ## 目标
 

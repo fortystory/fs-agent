@@ -1,7 +1,7 @@
 # `.scratch/` 里的英文小标题中文化
 
 Type: implement
-Status: ready-for-agent
+Status: done
 
 > 规格：`.scratch/language-migration/spec.md`；决定：[ADR 0004](../../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)。
 > 这张票是 2026-09-30 单独记下来的：ADR 那一批（[票 03](03-adr-headings-and-jargon.md)）当时只做 `docs/adr/`，tracker 的标题**故意留着没动**，因为「它们是字段名还是散文」没有定。
@@ -45,3 +45,75 @@ Status: ready-for-agent
 - 不改票与图里的**正文**（那是上一轮已经做完的散文）。
 - 不改 `Type:` / `Status:` / `Part of:` / `Blocked by:` 这类**字段行** —— 它们是 schema，与 `spec.md` / `map.md` 一样按 `CONTEXT.md` 的规矩留原样。
 - 不动 `docs/research/`（一手引文）。
+
+## 评论
+
+- 2026-10-05 落地。**译名表**（全仓一个词一个译法，术语跟 `CONTEXT.md` 走）：
+  `## Comments` → `## 评论`、`## Question` → `## 问题`、`## Answer` → `## 作答`、
+  `## Problem Statement` → `## 问题陈述`、`## Solution` → `## 方案`、
+  `## User Stories` → `## 用户故事`、`## Implementation Decisions` → `## 实现决定`、
+  `## Testing Decisions` → `## 测试决定`、`## Out of Scope` / `## Out of scope` →
+  `## 明确不做`、`## Further Notes` → `## 补记`、`## Destination` → `## 目的地`、
+  `## Notes` → `## 笔记`、`## Decisions so far` → `## 已定的决定`、
+  `## Not yet specified` → `## 尚未明确`、`## Frontier` → `## 前沿`、
+  `## What to build` → `## 要做什么`、`## Deliverable` → `## 交付物`、
+  `## Agent Brief` → `## 给 agent 的简报`、`## Findings` → `## 发现`、
+  `## What the sources leave open` → `## 来源留下的口子`、
+  `## Landing Notes (2026-10-01)` → `## 落地记录（2026-10-01）`。
+  零散的 6 处：`# 08: skills` → `# 08 — 技能（skills）`、`# 09: repo map` →
+  `# 09 — 仓库符号地图（repo map）`、`### §7 ADR 0011` → `### §7 决定记录：ADR 0011`、
+  `### §1 fixture` → `### §1 夹具`、`### §4 pty` → `### §4 伪终端（pty）`、
+  `### §8 handoff` → `### §8 交棒（handoff）`。
+- 规模：**230 个文件、433 个标题**只动标题行；**194 处引用**跟着对上 ——
+  [`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md) 的「约定」与
+  wayfinder 两节（`## Comments` / `## Answer` / `Notes` / `Decisions so far` /
+  `Not yet specified`）、`CONTEXT.md` 的「构建计划」「决策图」「票」三条与**分叉合成**的
+  `_Avoid_`、`README.md` 的三处 `Out of Scope`，以及 `docs/highlight.md`、`docs/render.md`、
+  `src/render/highlight.rs`、`src/render/wording.rs`、`src/discussion.rs`、`src/lib.rs`、
+  `tests/discussion.rs` 里「spec 的 `Out of Scope`」那类指路句。
+- **刻意跳过的三份**：`language-migration/spec.md`、`issues/03`、`issues/04`。它们描述的
+  就是这批标题本身（票面那张「`## Comments` 82、`## Question` 49 …」是改动前的实测统计，
+  spec §59 是在派这一票的活），替换会让叙述自相矛盾 —— 它们是这次改动的**记录**，不是要
+  对上的引用。
+- **护栏**：[`scripts/check-language.py`](../../../scripts/check-language.py) 加了第 ⑤ 条 ——
+  `.scratch` 里 tracker 的标题也要含中文。判据与 ③ 的 ADR 检查**共用一份**：剥掉行内代码与
+  链接后，**只有带字母的才算散文**，所以 `### §12 \`/clear\``、`### 1. \`docs/render.md\``
+  这类剥完只剩编号与路径的**指路标题**放过；围栏改按**行**配对挖除（原来的正则会被一个
+  不成对的围栏吃掉下半篇，那些标题就漏检了）。**验过会红**：把
+  `input-tokens/issues/01-file-index.md` 的 `## 目标` 临时改成 `## Goals`，脚本报红并以 1
+  退出，还原后重新 OK。
+- **`research/` 整档不查**：那是一手引文与专名笔记，留英文的是产品名与技术小节（护栏口径下
+  66 处，如 `### DeepSeek`、`### petgraph`、`### firejail`、`### nsjail（Google）`、
+  `### ② bubblewrap`）—— 票的验收把「引文小节」与「专名」列为允许的残留。`docs/research/`
+  与 `.scratch/*/research/` 的**文件身份**照旧。按验收 grep 的残留因此分两档：
+  - 非 research：**0 处**「带字母且无中文」的标题。剩下的英文开头标题要么含中文
+    （`# research：…`、`### A. 布局与基础信息`），要么剥掉行内代码后不含字母
+    （`### §12 \`/clear\``、`### 6. \`ToolOutput\` / \`ToolError\``、
+    `### 3. \`.scratch/README.md\``）。
+  - research：上面那 66 处专名小节。
+- 复核**技能侧**有没有按这些标题找内容：本仓库里只有
+  [`scripts/wayfinder-check.py`](../../../scripts/wayfinder-check.py) 读 tracker 的 markdown，
+  它只认 `## 任务清单` 与 `Type:` / `Status:` / `Part of:` / `Blocked by:` 四行字段（改前改后
+  一致）；仓库外的 skills 不在这棵树上，无法在本票里核对，如实记在这里。
+- 验收：`python3 scripts/check-language.py` 退出 0（新纳进来的 `.scratch` 检查验过会红）；
+  `python3 scripts/check-doc-size.py` 退出 0；`cargo test` 全绿（exit 0）。
+- **`/code-review` 之后补的一轮**：上一轮的引用对齐只认带 `## ` 前缀的那几种形态，漏掉了
+  **指路句**里的另一些写法 —— 现在把 `` `Notes` ``（7）、`` `Testing Decisions` ``（19）、
+  `Further Notes`（26）、`Decisions so far`（9）、`Not yet specified`（8）共 **55 处**一起对上
+  （`docs/agents/issue-tracker.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、
+  `src/agent/history.rs` 与各 spec 正文；`.scratch/language-migration/` 那三份描述这批标题自身
+  的文件照旧跳过）。`language-migration/spec.md` 里两处过时的状态（第 3 行的「未做」与第 59 行
+  的 `Status: ready-for-agent`）也改成已落地。
+- **ADR 0012 顺手对了两处**：决定里原来写「`/` 与 `@` 共用一条**边界规则**……任意位置」，
+  与 spec §2 那张两条边界的表冲突（ADR 自己的「被否决」一节倒是对的）—— 改成「共用一套浮层、
+  键位与位置判据，而**边界各按前缀**」；「为什么」第 4 条引的 `src/cli.rs:1473-1474` 在这次
+  改动后已经漂到别的行，换成不带行号的 `submission()`（行号在这种散文里本来就会烂）。
+- **护栏当场抓了我一次**：给本票写 Comments 时标题顺手写成 `## Comments`，`check-language.py`
+  第 ⑤ 条立刻报红 —— 改成 `## 评论` 才过。这是它该做的事，记在这里当一次现场验证。
+
+（`/` 解析那一侧还有一处收紧，记在同一轮的 [input-tokens 票 04](../../input-tokens/issues/04-slash-anywhere.md)
+的评论里。）
+- **`wayfinder-check.py` 一处如实记下**：三张图 PASS，
+  [`mcp-support/map.md`](../../../.scratch/mcp-support/map.md) **FAIL，而且改动前就 FAIL** ——
+  `issues/19-mcp-catalog-in-context.md` 不在图的 `## 任务清单` 里，HEAD 版本的清单里也没有它，
+  那是票 19 落地时留下的存量欠账（不是这次改名造成的）。本票不碰图的正文，所以原样留着。

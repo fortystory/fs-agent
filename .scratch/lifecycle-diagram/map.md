@@ -3,14 +3,14 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读取证）。本图只做**规划**：不画图、不写 `docs/lifecycle.md`、不写脚本、不动 `src/`。
-**✅ 本图已完成（2026-10-03）**：5 张子票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
+**✅ 本图已完成（2026-10-03）**：5 张子票全部 resolved、`尚未明确` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
 
-> **交棒已发生（2026-10-03）**：十五条冻结项与五张票的 `## Answer` 已经折进 [`spec.md`](spec.md)
+> **交棒已发生（2026-10-03）**：十五条冻结项与五张票的 `## 作答` 已经折进 [`spec.md`](spec.md)
 > —— 五张图（[`prototype/01-drafts.md`](prototype/01-drafts.md) v3）、虚实判据、对账脚本的七条校验、
-> 文档骨架、ADR 0011 草稿。七步落地清单在 spec 的 `## Further Notes`。本图至此**只作决策存档**，
+> 文档骨架、ADR 0011 草稿。七步落地清单在 spec 的 `## 补记`。本图至此**只作决策存档**，
 > 不再是待办；「做」由 `/to-tickets` 拆出的实现票与 `/implement` 接手。
 
-## Destination
+## 目的地
 
 一份 **spec-ready 的「fs-agent 运行时生命周期图」设计** —— 交给 `/to-spec` 折成构建计划。它要
 回答「把 fs-agent 从进程启动到退出画成 mermaid、放进 [`docs/lifecycle.md`](../../docs/lifecycle.md)」
@@ -21,7 +21,7 @@ Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读
 `probe` / `prune` / `sessions` 在鸟瞰里各占一个节点、不再展开；**可注入但 CLI 不注入**的
 （hook、headless 渲染器）与**尚未实现**的（MCP）走虚线或旁注。
 
-## Notes
+## 笔记
 
 - **领域**：fs-agent —— 自用 coding agent CLI（Rust）。三条先决事实：**事件流是唯一真相源**
   （`messages` 永远重算）、**工具表组装后不变**（它是缓存前缀的一部分）、**权限门在沙箱之外
@@ -36,8 +36,8 @@ Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读
 ### Tracker 事实与降级（本图适用）
 
 - map = `.scratch/lifecycle-diagram/map.md`，child = `issues/NN-*.md`；阻塞 = 票面
-  `Blocked by: NN`；claim = `Status: claimed`；resolve = 票底 `## Answer` + `Status: resolved`
-  + 追加一行到本文 `Decisions so far`。
+  `Blocked by: NN`；claim = `Status: claimed`；resolve = 票底 `## 作答` + `Status: resolved`
+  + 追加一行到本文 `已定的决定`。
 - **没有 native sub-issue / 依赖边**，所以回退到正文约定：本文的 `## 任务清单` 逐条引用子票
   （条目数 == 子票文件数），每张子票顶部写 `Part of: ../map.md`。
 - 校验：`python3 scripts/wayfinder-check.py .scratch/lifecycle-diagram/map.md`。宣布图走完之前
@@ -122,7 +122,7 @@ Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读
 共 **14** 张票（**5 决策 + 9 实现**），当前 **5 resolved / 8 done + 1 ready-for-walkthrough** ——
 实现票全部落地；票 14 剩下的只有「人在 GitHub 上看一眼五张图渲染出来」（见 `## 进度`）。
 
-## Decisions so far
+## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里。按名字引用，不写裸编号。 -->
 
@@ -132,16 +132,16 @@ Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读
 - [task：逐节点证据表](issues/04-task-evidence-table.md): 交付 [`research/04-node-evidence.md`](research/04-node-evidence.md)（343 行）—— 五张图逐节点（14 / 24 / 5 参与者 / 18 / 19，每个带 `文件:行号` + 符号）、每图边表、12 条不变量的边映射、五条存疑复核、一节诚实清单。**推翻侦察报告一处**：`probe` 子命令在 `src/cli.rs:2238` 真的构造 `Renderer::headless`（测试模块之外），所以图 5 的 headless 不再是虚线。**图已按诚实清单改成 v2**（九处改动，见 [`prototype/01-drafts.md`](prototype/01-drafts.md)），改完自检仍过。**另一条是检查器的错**：五张图 id 跨图撞名（`cmd` / `loop` / `ok` / `gate` / `red` / `goal`）会让 C4/C5 判不了 —— 裁决是**改检查器**（按图分别比对），不是给图加 `g1_` 前缀，已作为第三处修订记进票 03。
 - [grilling：文档骨架、ADR 0011 与语言护栏](issues/05-grilling-doc-skeleton-and-adr.md): 六条全部采纳 —— 骨架是「§1 画法约定 → 鸟瞰 → 启动与收尾 → 一次 turn → 委派 → 基础设施 → §7 图上不能断的边（12 条不变量的映射）→ 附录逐图证据表」；图**编号**（图 1–5，别的文档可引用）；画法约定**只住在** `docs/lifecycle.md` §1，脚本 docstring 指向它、不做两份全文；`CONTEXT.md` **不收**「生命周期图」（那是文档名、不是领域概念）；文档**不拆**（脚本要同时读图和表，且篇幅远没到）。**ADR 0011 的完整草稿写在票里**：Context 是「仓库零 mermaid 图 + 5 处 ASCII 手工图」，Decision 是「`docs/` 的流程图用 mermaid + 受约束方言 + 证据表对账」，代价四条（终端读不到图、`DOCS_MIN_RATIO` 要单独降低限、两种图语言并存、护栏守不住语义）。选 mermaid 的**首要理由是图的节点集合机器可读**（ASCII 没有可解析结构，C4/C5 那条检查无从谈起），不是好看。
 
-## Not yet specified
+## 尚未明确
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票，不要预先切成票那么大。 -->
 
 <!-- 当前**没有**未指定的雾：原有的四条各自有了归宿 —— 「文档会不会大到该拆」与「`CONTEXT.md` 要不要
 收这个词」由票 05 定死（**不拆**、**不收**）；「MCP 落地后虚线怎么转实线」由票 02 收窄成一句话（它属
 「尚未实现」那一类，落地时把旁注换成实线即可，不需要单独的票）；「五张 mermaid 在 GitHub 上的实际
-渲染」不是待决事项，而是**实现阶段的验收项**（写进 spec 的落地清单，见票 05 的 `## Answer`）。 -->
+渲染」不是待决事项，而是**实现阶段的验收项**（写进 spec 的落地清单，见票 05 的 `## 作答`）。 -->
 
-## Out of scope
+## 明确不做
 
 <!-- 有意识排除在本次 effort 之外的工作；永不毕业。 -->
 
@@ -157,7 +157,7 @@ Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读
 
 **charting 100%（2026-10-03）**：destination 与 15 条冻结项已定，5 张子票已建。
 
-**100% —— 本图完成（2026-10-03）**：5/5 张子票全部 resolved，`Not yet specified` 为空 ⇒ 通往
+**100% —— 本图完成（2026-10-03）**：5/5 张子票全部 resolved，`尚未明确` 为空 ⇒ 通往
 destination 的路线已 clear。
 
 **五个决定 + 三份取证 + 一份定形的图** = 那份 spec-ready 的设计：
@@ -166,7 +166,7 @@ destination 的路线已 clear。
 - 证据：[`research/04-node-evidence.md`](research/04-node-evidence.md)（逐节点 `文件:行号` + 12 条不变量的边映射）。
 - 判据：[`research/02-dashed-inventory.md`](research/02-dashed-inventory.md) §2（虚实 + 方言 + 对账，可直接抄进 §1）。
 - 脚本：[`research/02-lifecycle-check-design.md`](research/02-lifecycle-check-design.md)（七条校验 + 告警）。
-- 文档：票 05 的 `## Answer`（骨架 + ADR 0011 草稿 + 落地清单）。
+- 文档：票 05 的 `## 作答`（骨架 + ADR 0011 草稿 + 落地清单）。
 - 底料：[`research/01-runtime-lifecycle-facts.md`](research/01-runtime-lifecycle-facts.md)（侦察；其中「headless 从不构造」一条已被票 04 推翻）。
 
 **交棒已完成（2026-10-03）**：上面这些折成 [`spec.md`](spec.md)（313 行），并由 `/to-tickets` 拆出

@@ -722,7 +722,7 @@ async fn agreement_in_the_targeted_round_is_consensus() {
 async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
     // N = 2 不是实现细节：「N = 2 不做仲裁」这条决定
     // 正是机械判定够用的原因，所以第三个讨论者必须重新
-    // 打开那条决定，而不是溜进来（spec §15，Out of Scope）。
+    // 打开那条决定，而不是溜进来（spec §15，明确不做）。
     let dir = tempfile::tempdir().unwrap();
     let assembled = assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {

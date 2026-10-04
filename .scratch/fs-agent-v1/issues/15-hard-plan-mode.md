@@ -18,7 +18,7 @@ Status: done
 - [x] 模式表四条不变量对 plan 同样成立（断路器最外、hook 只能收紧、传播 `Deny`/`Ask`、无交互降级）
 - [x] e2e：进 plan 模式 → 断言写别的文件被拒、写 `PLAN.md` 被放行、`bash` 被拒、退出后恢复
 
-## Comments
+## 评论
 
 实现落点：`src/permissions.rs`（`Mode::Plan` / `PlanConflict` / `is_plan_write` / `Asker::ask_plan_conflict`）、`src/lib.rs`（`Harness::enter_plan_mode` / `exit_plan_mode` / `mode`）、`src/session/mod.rs`（`Session::mode` / `set_mode`）、`src/context.rs`（`plan_mode_instruction` + `trim` 的 pin 判据）、`src/provider/mod.rs` + `provider/projection.rs`（`Message::User` 的 `injected` 标记）、`tests/support/asker.rs`（三问脚本）。测试在 `tests/permission_gate.rs`（门真值表 4 例）与 `tests/plan_mode.rs`（e2e 11 例）。文档：`docs/plan-mode.md`。
 

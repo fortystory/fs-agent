@@ -552,7 +552,7 @@ Kimi Open Platform 是两套密钥、两套 base URL（[`src/provider/openai.rs:
 
 另外两条**不属于拍板、但必须知道**的事实：
 
-- `.scratch/fs-agent-v1/spec.md:634-647` 的 `Out of Scope` 一节**没有** web 搜索这一项
+- `.scratch/fs-agent-v1/spec.md:634-647` 的 `明确不做` 一节**没有** web 搜索这一项
   （被明文排除的是 MCP、RAG、AST 编辑、进程级沙箱等），所以这件事**没有被 v1 的 spec 挡在门外**
   ——与 MCP、RAG 不同。
 - 上游材料里的日期属于它们自己写就的那一天；[`docs/research/README.md:18-21`](../../../docs/research/README.md)
@@ -592,7 +592,7 @@ Kimi Open Platform 是两套密钥、两套 base URL（[`src/provider/openai.rs:
 - [`docs/permissions.md`](../../../docs/permissions.md) —— 四档表（:13-32）、打码是值级 best-effort（:44-50）、升级手势（:57-70）
 - [`docs/repo-map.md`](../../../docs/repo-map.md) —— 预算与「末尾一行写出被省掉多少」（:24-37）
 - [`CONTEXT.md`](../../../CONTEXT.md) —— 「打码（Redactor）」（:278-280）
-- [`.scratch/fs-agent-v1/spec.md`](../../fs-agent-v1/spec.md) —— `Out of Scope`（:634-647）
+- [`.scratch/fs-agent-v1/spec.md`](../../fs-agent-v1/spec.md) —— `明确不做`（:634-647）
 - [`.scratch/web-search-tool/seed.md`](../seed.md) —— 本轮的种子材料（:1-24）
 
 ### `docs/research/`（上游正文引文，一个字不改）

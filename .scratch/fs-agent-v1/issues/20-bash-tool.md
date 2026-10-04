@@ -22,7 +22,7 @@ Status: done
 
 **明确不做**：进程级沙箱（spec §20：v1 升级路径是「只做 Linux 的 bubblewrap」，且不预做抽象）；PTY / 交互式程序；后台任务与作业控制。
 
-## Comments
+## 评论
 
 实现落点：`src/tools/bash.rs`（工具本体、argv、超时、进程组终止、结果格式）、`src/tools/tool.rs`（`BashLimits` + `ToolContext::bash`）、`src/tools/registry.rs`（`PendingCall::bash`）、`src/config.rs`（`bash_timeout_ms` / `max_bash_timeout_ms` 与两个构造器）、`src/agent.rs`（每次调用从 `SessionConfig` 造 `BashLimits`）、`src/permissions.rs`（`rm` 断路器看穿 shell 包装）、`src/tools/mod.rs`（注册与导出）。测试：`tests/bash_tool.rs`（8 例）、`tests/permission_gate.rs`（新增 1 例 × 11 组 argv）、`tests/plan_mode.rs`（替身换真工具）。文档：`docs/bash.md`（新增）、`docs/plan-mode.md`。
 

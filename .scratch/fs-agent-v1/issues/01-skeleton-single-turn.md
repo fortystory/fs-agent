@@ -17,7 +17,7 @@ Status: done
 - [x] 假 provider 能按调用序脚本化返回文本 / 推理 / usage，并能演成流式分片
 - [x] 仓库里第一个 e2e 测试：从组装入口注入假 provider 跑完整闭环，断言 JSONL 事件流与两个 sink
 
-## Comments
+## 评论
 
 实现完成（agent）。落点：`src/{events,agent,render,session,lib,cli,provider}.rs`；测试在 `tests/{e2e_single_turn,event_log}.rs` 与 `tests/support/{fake_provider,capture}.rs`。产出提交 `5710978`，评审收口 `2d2dc8a`。
 

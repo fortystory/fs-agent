@@ -33,7 +33,7 @@ Blocked by: 10, 12
 - 不让模型自发调用模板。
 - 不把模板清单塞进工具描述或系统提示词（那是缓存前缀）。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/mcp/mod.rs`（`PromptSummary` / `PromptArgument` /
   `PromptListing`、`McpConnection::list_prompts` 与 `get_prompt`、`McpService::list_prompts` /

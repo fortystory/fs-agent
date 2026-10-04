@@ -38,7 +38,7 @@ Blocked by: 01
 
 给 feature 目录改名 / 合并；补写缺失的 spec；动 `issues/` 里的任何文件。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`.scratch/README.md`（新增）。
 

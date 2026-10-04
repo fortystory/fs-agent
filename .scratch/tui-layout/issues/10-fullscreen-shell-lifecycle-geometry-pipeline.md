@@ -19,17 +19,17 @@ Status: done
 - [x] 降级阶梯**顺序固定（先隐藏右栏、再压 header）**：`w<40 或 h<10` → 只显示 `终端太小：至少 40×10`；`w<80` 或中段内容 <4 行 → 隐藏整栏；右栏最小出现尺寸 80×16；`w<60` → header 压 1 行并丢 cwd；`h≤11` → 丢 airy
 - [x] **40×10 渲染完整降级布局**（1 header + 1 转录 + 1 输入 + 1 提示），不是「太小」
 - [x] 底部块：输入区行数 `clamp(草稿折行数, 1, min(10, h−7−header内容行−airy))`，超出显示尾部；最后一行是提示行（内宽 `w−2`）
-- [x] 提示行：状态词在最左 + **六条**提示（`enter 发送` / `ctrl-j 换行` / `esc 取消` / `shift+tab 计划` / `PgUp/PgDn 滚动` / `ctrl-c 退出`）；**降级算法：提示从左边填、`ctrl-c 退出` 预留，状态词只在还放得下时加在最左**（票面原措辞「状态词先占位」按实测修正，见 `## Comments`）；实测条目数 40→3 / 60→5 / 80→6 / 120→7（数与票面差 1 是因为票面那组数字没把状态词算进去）
+- [x] 提示行：状态词在最左 + **六条**提示（`enter 发送` / `ctrl-j 换行` / `esc 取消` / `shift+tab 计划` / `PgUp/PgDn 滚动` / `ctrl-c 退出`）；**降级算法：提示从左边填、`ctrl-c 退出` 预留，状态词只在还放得下时加在最左**（票面原措辞「状态词先占位」按实测修正，见 `## 评论`）；实测条目数 40→3 / 60→5 / 80→6 / 120→7（数与票面差 1 是因为票面那组数字没把状态词算进去）
 - [x] 提示集与任何文案里**绝不出现 `shift+enter`**
-- [x] 措辞层新增：`终端太小：至少 40×10`、`identity` / `mode_field` / `clock` / `clock_short`、提示集条目；配色沿用现有六种 + BOLD，不加主题配置项。**面板标签 / `—` / 配对函数有意未落**，见 `## Comments`
+- [x] 措辞层新增：`终端太小：至少 40×10`、`identity` / `mode_field` / `clock` / `clock_short`、提示集条目；配色沿用现有六种 + BOLD，不加主题配置项。**面板标签 / `—` / 配对函数有意未落**，见 `## 评论`
 - [x] 渲染管线：保留 `select!` 四路；**每轮末尾 `try_recv` 整批 drain（单轮上限 4096）再画一帧**；synchronized update **只包 `terminal.draw`**；脏标记驱动、**无脏不画**；tick 120ms 只比较时钟分钟
 - [x] 流式增量仍进 `live` 尾缓冲（上限 4 000 字符），`Message` 块到达时清空并作为永久副本
 - [x] **plain 与 headless 一行不动**；`sse_stream` 的 `YIELD_EVERY` 不动
 - [x] `TestBackend` 用例：尺寸矩阵（`40×10` / `40×12` / `60×24` / `80×16` / `80×24` / `120×24` / `174×50` / `39×24`）上四区锚点与几何；降级阶梯逐档；`ctrl-c 退出` 恒在；提示行条目数；无 `shift+enter`
 
-## Comments
+## 评论
 
-## Comments
+## 评论
 
 **实现完成（2026-09-21）**。落点：新增 `src/render/layout.rs`（几何与降级阶梯，纯函数）；`src/render/tui.rs` 删 inline 路径并重写循环；`src/render/wording.rs` 改提示集与降级算法、新增 `too_small` / `identity` / `mode_field` / `clock` / `clock_short`；`src/render/mod.rs` 换导出；`src/cli.rs` 注入 `SessionFacts`；新增 `tests/render_layout.rs`（6 个用例）。
 

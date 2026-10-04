@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 01, 02, 03, 04, 05
 
-> 规格：`.scratch/tui-chrome/spec.md` §1–§5 与 `Testing Decisions`、`Further Notes`。
+> 规格：`.scratch/tui-chrome/spec.md` §1–§5 与 `测试决定`、`补记`。
 > 依赖票 01–05 全部落地：本票只收它们留下的账。
 
 ## 目标
@@ -46,7 +46,7 @@ Blocked by: 01, 02, 03, 04, 05
 - [ ] 真机清单那一节按上面的条目走一遍，把「`CHROME_LINE` 在维护者背景色上的实测」写下来。
 - [ ] `.scratch/README.md` 的表格与「数法」那一段都跟得上实际。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地。
 - `scripts/tui-startup-check.py`：`BORDER_H` / `BORDER_V` 从 `─` / `│` 改成 `┄` / `┆`，阈值仍是「每个方向 ≥ 3 格」（降级护栏，不是几何断言）。改前实测 `0 horizontal / 2 vertical`（那 2 是状态行自己的 `│` 分隔符），改后 **12/12 GREEN**；脚本抬头与锚点注释里「一圈外框」的说法一并改掉。

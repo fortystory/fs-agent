@@ -14,7 +14,7 @@ fs-agent 有 15 个顶层边界、3 个前端、4 档权限模式、3 类问询�
 来源与依据：
 
 - 决策图 [`map.md`](map.md)：**十五条冻结项**（charting 的两轮 grilling 定下）+ **五张决策票**
-  （全部 resolved）。每条决定的完整理由与取舍都在票的 `## Answer` 里。
+  （全部 resolved）。每条决定的完整理由与取舍都在票的 `## 作答` 里。
 - 图（**已定形**）：[`prototype/01-drafts.md`](prototype/01-drafts.md) —— 五张 mermaid，票 04 与
   票 02 的修正都已落进去。
 - 三份只读取证：[`research/01-runtime-lifecycle-facts.md`](research/01-runtime-lifecycle-facts.md)
@@ -58,7 +58,7 @@ fs-agent 有 15 个顶层边界、3 个前端、4 档权限模式、3 类问询�
 - 这条线顺带在 `docs/` 里开一个先例：**流程图用 mermaid**（今天仓库零 mermaid 图，五处全是
   手绘 ASCII）。它值得一条 ADR，因为未来读者一定会问「为什么只有这份文档不是 ASCII」。
 
-## User Stories
+## 用户故事
 
 1. 作为**刚接手这个仓库的开发者**，我想要一张一眼看得到「敲下命令到退出」全貌的图，以便我不必
    先读完 15 个模块的代码就能问对问题。
@@ -100,7 +100,7 @@ fs-agent 有 15 个顶层边界、3 个前端、4 档权限模式、3 类问询�
 22. 作为**给文档改索引的人**，我想要 `README.md` 的「架构」一节与「文档」表各指向新文档一次，
     以便它不会变成孤儿文档。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 落点与交付物
 
@@ -199,11 +199,11 @@ CLI：`python3 scripts/lifecycle-check.py [docs/lifecycle.md]`（缺省盯这一
 五张图的节点 id 天然会撞名（`cmd` / `loop` / `ok` / `gate` / `red` / `goal`），逼它们全局唯一只会
 长出 `g1_boot` 这种噪音前缀。**让检查器适应图，不是让图适应检查器。**
 
-### §7 ADR 0011
+### §7 决定记录：ADR 0011
 
 新建 `docs/adr/0011-diagrams-in-mermaid.md`，照邻居（`docs/adr/0010-*.md`）的四节结构：
 `## 决定` / `## 为什么` / `## 代价` / `## 被否决的替代方案`。**完整草稿已经写在
-[票 05 的 `## Answer`](issues/05-grilling-doc-skeleton-and-adr.md) 里**，实现时照抄。
+[票 05 的 `## 作答`](issues/05-grilling-doc-skeleton-and-adr.md) 里**，实现时照抄。
 
 其中把选 mermaid 的**首要理由**写死为：**图的节点集合是机器可读的** —— ASCII 图没有可解析的
 结构，C4/C5 那条检查根本无从谈起。不是好看。
@@ -215,7 +215,7 @@ TUI 只把它当普通代码块渲染；要真正在终端画图是另一个 eff
 
 ### §8 标题与用词
 
-- 章节骨架照[票 05 的 `## Answer`](issues/05-grilling-doc-skeleton-and-adr.md)：
+- 章节骨架照[票 05 的 `## 作答`](issues/05-grilling-doc-skeleton-and-adr.md)：
   开头一段（这张文档是什么 / 怎么读 / 与逐面文档的分工）→ §1 画法约定 → 五张图各一节 →
   §7 图上不能断的边 → 附录逐图证据表。每节除图之外要有「这张图在讲什么」+ 一张「细则在哪」
   的指向表。
@@ -225,7 +225,7 @@ TUI 只把它当普通代码块渲染；要真正在终端画图是另一个 eff
   `README.md`，`CONTEXT.md` 不该变成第二个索引。
 - **文档不拆**：脚本要同时读图和表；篇幅也没到（估 300–400 行）。
 
-## Testing Decisions
+## 测试决定
 
 **接缝一个：`scripts/lifecycle-check.py` 的命令行接口。**
 
@@ -285,7 +285,7 @@ TUI 只把它当普通代码块渲染；要真正在终端画图是另一个 eff
   事，本 spec 只按现行为新文档设一条下限。
 - **语义正确性**：图是否如实描述运行时，工具测不了 —— 那是人读图的事，docstring 里要写明。
 
-## Further Notes
+## 补记
 
 **落地清单**（实现票的推荐拆法，按依赖排）：
 

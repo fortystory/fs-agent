@@ -57,7 +57,7 @@ Blocked by: 01
 - [ ] `cargo clippy --all-targets` 无新增告警；`cargo fmt --check` 只留既有漂移。
 - [ ] 真机：三层虚线（`┄` / `┆` / 回合条的 `┊`）在同一屏上读起来分得开；`CHROME_LINE` 的深度在自己背景色上是否合适——不合适就调那一个常量，并在票 06 的手工清单里记下实测值。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地，**与票 01、02 同批**：端点交叉符删掉之后，`paint_rule` / `draw_divide` 的字形与颜色紧接着在同一批里换掉，免得对同一批断言返工两次。
 - 字形取**三重**虚线（`┄` / `┆`），与回合条已有的四重 `┊` 分开。`Block` 那边用现成的 `ratatui::symbols::border::LIGHT_TRIPLE_DASHED`；它的四个角仍从 `NORMAL` 继承，所以框角还是 `┌┐└┘` —— Unicode 的框线区没有虚线角，这是现成的取舍。

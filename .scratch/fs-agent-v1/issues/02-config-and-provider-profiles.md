@@ -19,7 +19,7 @@ Status: done
 - [x] `prompt_cache_key` = 会话 id；不发 `user_id`；Kimi 的推理档位在会话开始前定死（中途切档会废掉前缀缓存）
 - [x] 手工验收：用自己的 key 对两家各跑通一次真实回合；第二次请求的 usage 显示缓存命中
 
-## Comments
+## 评论
 
 实现完成（agent）。落点：
 

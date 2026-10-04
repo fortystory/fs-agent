@@ -20,7 +20,7 @@ Status: done
 - [x] **测试**：活会话继承上下文（断言实发 messages）、同一会话两场讨论的轮次号与合成材料、replay == 实发（字节相等）、`/discuss` 解析、文案
 - [x] **端到端**：假 provider 起一个真会话，跑「一轮对话 → `/discuss`（2 轮 + 合成）→ `/discuss 换角度`（2 轮 + 合成）→ `/quit`」，`sessions show` 读出第 1–6 轮，`sessions replay --speaker system --round 6` 与实发提示词逐字节相同
 
-## Comments
+## 评论
 
 **2026-09-22（实现）** 三条设计取舍：
 

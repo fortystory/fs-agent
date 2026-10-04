@@ -17,7 +17,7 @@
 
 **分叉合成（Forked Synthesis，`fs`）**:
 框架名，不是类型，也不是命令：`fs` 展开为 `Forked Synthesis`，指「异构讨论者分叉作答 → 合成器收束成共识 / 分歧 / 未决」这条机制；`fs-agent` 读作「分叉合成的 agent」。命令、crate 名与落盘路径**一律保持 `fs-agent`**，不随框架名改写。细节见 [docs/discussion.md](docs/discussion.md)。
-_Avoid_: 把 `fs` 读成 filesystem / file system；与 Out of Scope 的 `fork/rewind` 手势混用「分叉」（那个叫 fork，指回退，不是本词）
+_Avoid_: 把 `fs` 读成 filesystem / file system；与「明确不做」里的 `fork/rewind` 手势混用「分叉」（那个叫 fork，指回退，不是本词）
 
 ## 参与者
 
@@ -304,11 +304,11 @@ _Avoid_: 不给它中文名（全仓库都写 feature）；项目、模块（那
 _Avoid_: 不给它中文名（一律写 `seed.md`）；草稿、草案（听着像临时文件，它长期留着当材料的来源）
 
 **spec（`spec.md`）**:
-一个 feature 的**构建计划**：一次访谈折出来的那几节决定（问题陈述、用户故事、实现与测试决定、明确的 Out of Scope）。它是实现票的**来源**——票从它拆出来，所以票不重述理由，只指回它。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
+一个 feature 的**构建计划**：一次访谈折出来的那几节决定（问题陈述、用户故事、实现与测试决定、明确的「明确不做」）。它是实现票的**来源**——票从它拆出来，所以票不重述理由，只指回它。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
 _Avoid_: 不给它中文名（写 spec，不写「规格」）；需求文档、设计文档、RFC；把它当 ADR（spec 讲怎么做，ADR 只讲当初为什么）
 
 **决策图（map，`map.md`）**:
-一次 wayfinder effort 的正文：`Notes` / `Decisions so far` / `Not yet specified` 几节，外加一份 `## 任务清单`；底下的票全是**决策票**——产出是**决定，不是交付物**。图走完会被折成 spec（见**交棒**），而图**留着当决策记录**：所以 `map.md` 与 `spec.md` 可以同时存在。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
+一次 wayfinder effort 的正文：`笔记` / `已定的决定` / `尚未明确` 几节，外加一份 `## 任务清单`；底下的票全是**决策票**——产出是**决定，不是交付物**。图走完会被折成 spec（见**交棒**），而图**留着当决策记录**：所以 `map.md` 与 `spec.md` 可以同时存在。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
 _Avoid_: 路线图、roadmap（那是排期，这里的票没有时间轴）；把它当 spec 读（图里的决定还在动，spec 里的是定下来的计划）
 
 **交棒（handoff）**:
@@ -318,7 +318,7 @@ _Avoid_: `/handoff`（那是把上下文搬去新会话的技能，跟这一步�
 **票（ticket，`issues/NN-<slug>.md`）**:
 tracker 的最小单位：**一票一个文件、从 `01` 编号**，永远不把所有票合成一个文件；开头那几行就是它的全部元数据（`Type:` / `Status:` / `Blocked by:` / `Part of:`）。**每票自包含**，所以做完一票就可以把它那份 context 丢掉。
 
-收尾状态分三套：决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`，以及**只等人走查**的 `ready-for-walkthrough`（它与分诊标签里的 `ready-for-human` **不是一回事**）。讨论追加在文件底部的 `## Comments` 之下，决策票的答案追加在 `## Answer` 之下。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
+收尾状态分三套：决策票 `claimed` → `resolved`，实现票 `ready-for-agent` → `done`，以及**只等人走查**的 `ready-for-walkthrough`（它与分诊标签里的 `ready-for-human` **不是一回事**）。讨论追加在文件底部的 `## 评论` 之下，决策票的答案追加在 `## 作答` 之下。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
 _Avoid_: issue（那是对外 tracker 的说法，本仓库的 tracker 就是 markdown）、工单、任务（`task` 是 `Type:` 的一个值，指那类要动手的决策票）
 
 **阻塞边（`Blocked by`）**:

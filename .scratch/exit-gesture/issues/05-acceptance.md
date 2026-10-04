@@ -53,7 +53,7 @@ Blocked by: 03, 04
 - 不把忙碌路径改写成 Rust 测试 —— pty 的事归 pty 脚本（spec「测试决定」的分工）。
 - 不动 `docs/tui-manual-checklist.md` ⑦ 以外的节，也不动 `docs/research/`。
 
-## Comments
+## 评论
 
 - **pty 脚本新增忙碌双击路径**：`capture_busy`（点着一个回合再连按两下 `Ctrl-C`）+ `verdict_busy`（进程结束、退出码 **130**、termios 与 `TEARDOWN` 与空闲那三条同一套判定）+ `terminal_handed_back`（把终端交还那段抽出来给两条路共用）。忙碌窗口用票里说的「本地假 provider」那一招坐实：`silent_provider()` 起一个只接受连接、从不回话的本地端点，`busy_config()` 写一份把内置 `kimi` 的 `base_url` 指过去、`api_key` 写死的临时配置 —— 于是不需要网络、也不需要真 key，回合稳稳挂在等待响应上。判定红得可读（打印退出码与字节流尾部），不会随机变绿。
 - **实测**：`python3 scripts/tui-startup-check.py` 13/13 GREEN —— 三条空闲出口 ×3 轮 + `--continue` ×3 轮 + 忙碌双击那一轮，最后一行是 `busy (ctrl-c ×2): GREEN -- exit 130, terminal handed back`。

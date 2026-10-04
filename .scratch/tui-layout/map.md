@@ -4,7 +4,7 @@ Label: `wayfinder:map`
 Tracker: local markdown —— 见 `docs/agents/issue-tracker.md`
 Charting: **已完成**（2026-09-14）。本图只做**规划**，不产实现代码。
 
-## Destination
+## 目的地
 
 一份 **spec-ready 的四分区全屏 TUI 决策集**，交给 `/to-spec` 折叠成 `.scratch/tui-layout/spec.md` + 实现票。
 
@@ -13,9 +13,9 @@ Charting: **已完成**（2026-09-14）。本图只做**规划**，不产实现�
 **直接动机**：inline viewport 下光标不跟随 `>`、`>` 在后续回合消失（`e25097e` 底部锚定之后**仍然存在**）。用户决定**用换布局绕过**——让对话面板没有光标——而**不是**继续调 inline 光标。因此：
 
 - 本图会**推翻 spec §19 的 inline viewport 决策**（`.scratch/fs-agent-v1/spec.md:526`；用户故事 129 的"否决 alt screen"），需要一条 ADR 记录后果 —— 见票 09。
-- 修 inline 光标 bug **不在本图范围内**，也不在 spec 范围内（见 Out of scope）。
+- 修 inline 光标 bug **不在本图范围内**，也不在 spec 范围内（见 明确不做）。
 
-## Notes
+## 笔记
 
 - **领域**：`fs-agent` —— 自用 coding agent CLI，Rust，从零实现，单进程单二进制。现有渲染层在 `src/render/`（`tui.rs` / `markdown.rs` / `wording.rs` + plain / headless 两个兄弟渲染器）；TUI 栈 = `ratatui 0.30` + `crossterm 0.29`（`event-stream`），**不加新 crate**（本机 registry 只读，`cargo add` 拉不下来）。
 - **本轮 charting 的 grilling 结果 —— 已定，票里不得重开**：
@@ -23,14 +23,14 @@ Charting: **已完成**（2026-09-14）。本图只做**规划**，不产实现�
   2. **上 alt screen**，接受"终端原生选择只覆盖可见区"。header = 名称+版本 / cwd / 模式 / 时钟。右栏内容 = 模型 / token（已用+预算）/ 上下文用量 / 轮次。**降级顺序：先隐藏右栏，再压 header**；最小尺寸 **40×10**。**删除 TUI 的 inline 路径**（`insert_before` / `paint_scrollback` / 视口保留 / `MoveTo` 底部锚定）。
   3. ~~**不开鼠标捕获**~~ → **2026-09-21 票 03 grilling 改判：开鼠标捕获**（换来①滚轮滚转录，每格 3 行 ②可点击的「到最下」；代价 = 选文本/复制要按住 Shift 拖拽）。转录历史**上限 20 000 源行**（宽度无关；滚动与滚动条另按显示行算），超出丢最旧。**吸底，但用户上滚后不抢**；提交时无条件回到底部。
   4. **多行输入这一轮就要**：**Enter 提交**；**Ctrl-J 换行**（唯一可靠的换行键）；**Shift+Enter 等同提交** —— 2026-09-21 票 04 grilling **修正**：用户选择**不启用**键盘增强协议，Shift+Enter 与 Enter 在协议层不可区分（research §7.2），因此它**不得被广告成「换行」**；输入区**随内容长高、上限 10 行**；**启用 bracketed paste**（粘贴多行不得触发提交，超 100 000 字符先确认）；**Esc 清空多行草稿前先确认**；斜杠命令**只看第一行**。
-- **数据源事实（决定了范围边界）**：模型名、token 用量（`UsageRecorded`）、预算、上下文用量（`context::usable_input`）都有来源；**fs-agent 没有 todo 状态、也没有 todo 工具**（`todo_write` 属于 DSH harness，不是 fs-agent 的能力）——所以原始提案里的"todo 列表"在右栏**没有数据源**，见 Out of scope。时间/日期由系统时钟提供。
+- **数据源事实（决定了范围边界）**：模型名、token 用量（`UsageRecorded`）、预算、上下文用量（`context::usable_input`）都有来源；**fs-agent 没有 todo 状态、也没有 todo 工具**（`todo_write` 属于 DSH harness，不是 fs-agent 的能力）——所以原始提案里的"todo 列表"在右栏**没有数据源**，见 明确不做。时间/日期由系统时钟提供。
 - **领域约束（不得违反）**：`src/render/wording.rs` 是**人面向中文措辞的唯一真相源**，新布局只能改"显示在哪"，不能绕过它自己拼字符串；ADR 0001 冻结的是**模型可见文本**（debater/synthesizer system prompt、投影的 `[轮 N · 名字]` 前缀、`AgentError.message`、fs-agent 工具结果），**冻结清单上没有渲染层文案**，所以本 effort 不触碰冻结面。
 - **验收基线（新票不得让它变红）**：`cargo test` 489 passed / 0 failed；`cargo clippy --all-targets` 干净；`cargo fmt --check` 除 `src/context/repo_map.rs` 与 `tests/repo_map.rs` 的既有漂移外干净（**不要**顺手格式化这两个文件）。渲染相关的既有测试：`tests/render_tui.rs`（26 个）、`tests/render_markdown.rs`、`tests/wording.rs`、`tests/render_delivery.rs`（provider 突发导致渲染器饥饿的回归，修法是 `sse_stream` 每 16 个解码事件 yield 一次）。
 - **每张票的答案必须自足**：`/implement` 会在 `/clear` 之后的新会话里读它，看不到本图与 charting 对话。
 - **架构深度 = 决策级**：布局几何、模块/接缝归属、可验证的检查清单。**不要**定到逐个私有函数，也不要顺手写实现。
-- **跨票约束**：票 05 已要求 `TuiOptions`（`src/render/tui.rs:128`）新增注入字段，票 07 大概率也要动终端初始化与同一个结构 —— 改一张时别忘另一张。票 05 还把「**模式**从流上推」定死了（见 Decisions so far），header 的呈现必须用同一来源，不许另维护一份。票 03 与票 04 必须共用**同一张键位表**（两票票面已互相点名）。
+- **跨票约束**：票 05 已要求 `TuiOptions`（`src/render/tui.rs:128`）新增注入字段，票 07 大概率也要动终端初始化与同一个结构 —— 改一张时别忘另一张。票 05 还把「**模式**从流上推」定死了（见「已定的决定」），header 的呈现必须用同一来源，不许另维护一份。票 03 与票 04 必须共用**同一张键位表**（两票票面已互相点名）。
 
-## Frontier
+## 前沿
 
 **本图 9 张票全部 `resolved`（01–09），已折叠完成，本图关闭。** 产物：
 
@@ -43,7 +43,7 @@ Charting: **已完成**（2026-09-14）。本图只做**规划**，不产实现�
 
 实现收尾（2026-09-21）：票 10–16 全部完成，各自过了一轮两轴 `/code-review`。**spec 无需回改** —— 票 16 实测的提示行阶梯（40→3 / 60→5 / 80→6 / 120→7）与 §10 记的一致，`fmt` 基线也仍是 §13 记的既有漂移。票 16 计划里被实测推翻的两处（header 锚点改为取自二进制自己的 `--version`、且在重建后的屏幕上匹配；边框断言按横竖分开数 —— 转录与面板之间的接缝会活下来）记在票面勾选项里。实现期另修掉一个用户报告的回归：**空输入行按回车会退出会话**（`submit()` 把空草稿发成 `None`，被循环读成 stdin 结束）。
 
-## Decisions so far
+## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里，本文件不复述。按名字引用，不写裸编号。 -->
 
@@ -57,16 +57,16 @@ Charting: **已完成**（2026-09-14）。本图只做**规划**，不产实现�
 - [grilling：测试与验证策略的迁移](issues/08-grilling-test-and-verification-migration.md): `render_block` 那批用例**全部保留**；编辑器四个用例改写为对着新 `Input` 断言；`a_notice_is_a_scrollback_line_shown_as_it_is` 改名（"scrollback" 随 inline 视口一起没了）。**布局可以进 `cargo test`**（`TestBackend` 无特性门），覆盖尺寸矩阵、降级阶梯、提示行条目数（40→3 / 60→4 / 80→5 / 120→6）、`ctrl-c 退出` 恒在、右栏无数据文案。`scripts/tui-startup-check.py` 的锚点 `ctrl-c` 与 `fs-agent：` **仍然有效**，但判定要改（新底部块带边框，`退出` 后面多了 `│`，`endswith` 会失败），并新增 header 版本串锚点。
 - [task：ADR —— 以全屏 alt screen 取代 inline viewport](issues/09-task-adr-alt-screen-over-inline-viewport.md): 写在 `docs/adr/0002-fullscreen-alt-screen-tui.md`，逐条覆盖决策、被推翻的 spec §19、**如实写出的动机（inline 光标 bug）**、代价、被否决的替代方案、与 ADR 0001 的关系。代价写的是「复制要按住 Shift 拖拽」，**不是**已作废的「滚轮不能用」。
 
-## Not yet specified
+## 尚未明确
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票。不要预先切成票那么大。 -->
 
 - **转录是否落盘 / 与会话日志复用**：20 000 行上限把转录变成纯内存结构，退出即清（票 06 已定**不 dump**）。如果用户日后要「翻回三天前的输出」，就要接会话日志或 transcript 落盘。现在没这个需求，先记着。
 - **输入历史跨会话**：票 04 已定**保持进程内**；真要持久化时，落点与会话目录的关系需要重新设计。留一句备忘，不是待办。
 
-（原先挂在这里的另外三项已经关掉：**主题与配色** → 票 06 定了「沿用现有调色板、不需 truecolor」；**`wording::status_line` 的去留** → 票 06 定了「保留但并入提示行」；**超宽屏第三栏** → 移到 `## Out of scope`。）
+（原先挂在这里的另外三项已经关掉：**主题与配色** → 票 06 定了「沿用现有调色板、不需 truecolor」；**`wording::status_line` 的去留** → 票 06 定了「保留但并入提示行」；**超宽屏第三栏** → 移到 `## 明确不做`。）
 
-## Out of scope
+## 明确不做
 
 <!-- 有意识排除在本次 effort 之外的工作；永不毕业。 -->
 

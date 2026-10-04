@@ -2,12 +2,12 @@
 
 Status: ready-for-agent
 
-- **来源**：`.scratch/tui-history-replay/map.md`（wayfinder 地图，5 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外是 `Further Notes` 记的两处勘误。
+- **来源**：`.scratch/tui-history-replay/map.md`（wayfinder 地图，5 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外是 `补记` 记的两处勘误。
 - **实现票落点**：`.scratch/tui-history-replay/issues/NN-*.md`，**编号从 `06` 起**（`01`–`05` 是设计票，不要覆盖）。`/to-tickets` 已切出 **`06`–`09`**：接缝与分帧重播 → 分隔行/面板/模式 → 历史详情 → 验证迁移与文档；`06` 是开工点，`07` 与 `08` 互不阻塞但共用同一个新测试文件（建议串行）。
 - **回改的既有 spec**：`.scratch/fs-agent-v1/spec.md` §19（新增历史重播一条、修掉过时的 inline viewport 一行）与 §11（恢复结果同时进转录）已由本 spec 折回正文。
 - **术语**：叙述用中文，标识符用英文。词汇表在 `CONTEXT.md`——本项目**只有概念「事件」，没有「重播」这个领域词**：它是渲染侧的动作（把历史事件按同一 `apply` 路径喂给转录），不新增词汇，也不与 `sessions replay`（那是**投影重算**）混用。
 
-## Problem Statement
+## 问题陈述
 
 `--continue` 重新打开一个已有会话时，屏幕是空的。用户昨天那一段对话、其中的「思考完成」行与工具调用行、以及那些行背后的详情，一个都看不到——像是开了一个新会话，尽管模型其实还带着全部上下文。
 
@@ -18,7 +18,7 @@ Status: ready-for-agent
 3. **派生信息一起归零。** 信息面板的 token 累计与回合数、header 的模式，都是从事件流推出来的；历史不重放，它们就从零开始，与「模型记得的上下文」不一致。
 4. **「看不见」是真正的痛点，不是「丢数据」。** 数据一直在盘上、也一直进了模型；缺的是把它呈现给人。
 
-## Solution
+## 方案
 
 **启动时把整条事件流重播进转录**，分帧推进、不冻结界面，进度显示在底部提示行；重播完成后插一条历史分隔行，启动 banner 排在其后。
 
@@ -28,7 +28,7 @@ Status: ready-for-agent
 - **一次性、可打断**：重播是一过性状态，期间不接受提交（草稿照打）、live 事件先缓冲、`Ctrl-C` 直接退出。
 - **边界**：只动 TUI 与 CLI 组装；**不改事件 schema**；plain 与 headless 一行不动。
 
-## User Stories
+## 用户故事
 
 ### A. 看到历史
 
@@ -83,7 +83,7 @@ Status: ready-for-agent
 34. 作为用户，我想让历史详情在重播期间对鼠标完全无响应，以便与键盘边界保持一致。
 35. 作为用户，我想让历史详情打开时视口冻结、关闭后恢复吸底，以便行为与 live 完全一致。
 
-## Implementation Decisions
+## 实现决定
 
 ### 1. 接缝：组装后推一条控制请求
 
@@ -186,7 +186,7 @@ Status: ready-for-agent
 - 新增前端控制请求变体与对应 handle 方法（§1）。
 - **不改**：事件 schema、转录的块定义、投影、plain / headless。
 
-## Testing Decisions
+## 测试决定
 
 ### 什么样的测试是好测试
 
@@ -245,7 +245,7 @@ Status: ready-for-agent
 - 现有断言（提示行 / 几何 / 面板 / 模式 / 问卷接管）**预期不变**；开工前重新核实 `cargo test --all-targets` 的通过数（**tui-ux 落地后是 664 passed**）。
 - `cargo clippy --all-targets` 干净；`cargo fmt --check` 只留 `src/context/repo_map.rs` 与 `tests/repo_map.rs` 的既有漂移（**不**顺手格式化）。
 
-## Out of Scope
+## 明确不做
 
 - **新增恢复入口**（按 id 恢复 / 从会话列表里挑一个）：本 spec 只覆盖现有 `--continue`（取当前工作区桶里最近一个会话）。
 - **历史搜索 / 过滤 / 分页浏览**。
@@ -257,7 +257,7 @@ Status: ready-for-agent
 - **历史块的高亮 / 语法着色**：工具输出走折叠 + 详情纯文本（`tui-ux` 已如此），本 spec 不回调。
 - **本次 effort 的执行本身**：本 spec 只产可建计划，实现发生在后续实现票。
 
-## Further Notes
+## 补记
 
 - **本 spec 是折叠，不是新决定。** 五张设计票的契约（接缝与调度、保真度与派生信息、详情复用与降级、验证分层）是全部内容的来源；只有下面两处勘误是本 spec 新增的。
 - **勘误一（编号）**：设计票 05 说手工清单「新增 ⑫」，但 `tui-ux` 落地后 ⑫ / ⑬ 已被占用，实际应为 **⑭**（同时把「重开后退出」补进既有的退出项下）。

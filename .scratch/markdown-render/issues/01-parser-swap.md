@@ -54,7 +54,7 @@ Status: done
 - [ ] `Cargo.lock` 里 `pulldown-cmark` 只出现一份。
 - [ ] 真机：`cargo run` 起 TUI，普通回答渲染正常；拖动终端宽度，表格跟着重排而不是碎成一堆错位的列。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地：`src/render/markdown.rs` 重写成事件驱动的块级渲染器（表格与代码块整块缓冲，其余逐行吐），`to_lines(text, width)` 收可用列数；`tui.rs` 抽出 `push_block` / `emit_block`，并在转录宽度变化时清空窗格、按新宽度重放。
 - 与票面不同的一点：**思考行**也是源行、却不来自 `Block`，所以重放清单里记的是 `Painted::Block | Thinking | Thought` 三种。只记块会让一次 resize 把「思考完成」整行连它的详情一起抹掉 —— `tests/render_layout.rs` 里 `a_synthesizer_trace_streams_but_records_nothing` 与 `one_message_never_gets_two_thinking_lines` 抓的正是这个。

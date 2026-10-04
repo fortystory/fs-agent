@@ -5,7 +5,7 @@ Status: resolved
 Blocked by: 01
 Part of: ../map.md
 
-## Question
+## 问题
 
 定下「折叠思考与工具输出 + 覆盖层看详情」的完整交互契约。这是本图最大的一个决定，答案要能直接喂 `/prototype` 与实现票。
 
@@ -43,7 +43,7 @@ Part of: ../map.md
 
 答案要定到**可实现的契约级**：提示文案表、状态转移、命中与关闭规则、失败降级表。不要写实现代码。
 
-## Answer
+## 作答
 
 **契约定稿（2026-09-23，两轮 grilling，共 11 个决定）。** 状态机、文案表、点击/详情规则、降级与颜色如下；**几何与绘制**留给 `prototype：折叠提示行、详情覆盖层与工具行的形态`（票 03）定。
 
@@ -140,7 +140,7 @@ Part of: ../map.md
 ### 5. `--continue` 与历史
 
 - 票 01 事实 18：`--continue` **不把历史重播进 TUI**（全仓库唯一 `render.logged` 在 `src/agent.rs:2148` 的 `append_event`），pane 从空开始。因此提示行**只在本次进程内**存在。
-- 「TUI 启动时把历史事件重播进 pane」被判为**本图 out of scope**，另立独立票（见 map 的 `## Out of scope`）。
+- 「TUI 启动时把历史事件重播进 pane」被判为**本图 out of scope**，另立独立票（见 map 的 `## 明确不做`）。
 
 ### 6. 实现落点提示（不写代码；形态由票 03 定）
 

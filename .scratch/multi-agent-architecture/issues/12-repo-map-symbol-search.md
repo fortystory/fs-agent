@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 01, 03, 06, 23
 
-## Question
+## 问题
 
 ratify 第 4 条翻案把它加进范围。综述原本的砍掉理由：「需要 tree-sitter + 图排序的**独立工程**；对中小仓库收益有限」。
 
@@ -22,23 +22,23 @@ ratify 第 4 条翻案把它加进范围。综述原本的砍掉理由：「需�
 
 **不要**做：AST / tree-sitter **编辑**（第 5 条已砍）。
 
-## Comments
+## 评论
 
-**进行中（2026-09-12）**：本票已认领（claimed）。票面第 3 条已决议，其余三条等 research 票 23 返回后一并写入 `## Answer`。
+**进行中（2026-09-12）**：本票已认领（claimed）。票面第 3 条已决议，其余三条等 research 票 23 返回后一并写入 `## 作答`。
 
 - **范围（票面第 3 条）已定**：**只做符号检索；向量检索判为 out of scope**。理由：综述指出代表性实现里**没有以 RAG 为核心卖点**的，而 grep + 模型自己找更可解释；且向量检索会引入**第三个 API 面（embeddings）+ 索引存储 + 切块策略**，并反向压到票 02 的"只做一个 OpenAI-compatible client"前提。→ 本票范围收窄为「repo map / 符号检索」。
 
 **为什么剩下三条要等**：第 1 条（动态伸缩 vs 固定预算）、第 2 条（启动注入 vs 按需重算、与票 06 的预算归属）、第 5 条（照抄 aider 的图排序 vs 更朴素的按符号名匹配）**全部压在"tree-sitter 在 Rust 里到底多贵"这个事实上**。该事实由 **`.scratch/multi-agent-architecture/issues/23-research-tree-sitter-rust.md`** 提供（票 08 的产物对 tree-sitter **零覆盖**，已核实），产出文件为 `.scratch/multi-agent-architecture/research/04-tree-sitter-and-symbol-extraction.md`。
 
-> 以上"进行中"记录已由下方 `## Answer` 全部覆盖。
+> 以上"进行中"记录已由下方 `## 作答` 全部覆盖。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。事实来源：`research/04-tree-sitter-and-symbol-extraction.md`（票 23 的产物）；接口受票 03 的 `Tool` trait 与票 06 的预算约束。**
 
 ### 1. 范围（票面第 3 条）
 
-**只做符号检索（repo map）；向量检索 / RAG 判为 out of scope。** 依据：代表性实现里**没有以 RAG 为核心卖点**的；向量检索会引入**第三个 API 面（embeddings）+ 索引存储 + 切块策略**，并反向压到票 02 "只做一个 OpenAI-compatible client" 的前提。→ 已记入 map 的 `Out of scope`。
+**只做符号检索（repo map）；向量检索 / RAG 判为 out of scope。** 依据：代表性实现里**没有以 RAG 为核心卖点**的；向量检索会引入**第三个 API 面（embeddings）+ 索引存储 + 切块策略**，并反向压到票 02 "只做一个 OpenAI-compatible client" 的前提。→ 已记入 map 的 `明确不做`。
 
 ### 2. 怎么到达模型 + 何时构建（票面第 2 条）
 
@@ -73,7 +73,7 @@ ratify 第 4 条翻案把它加进范围。综述原本的砍掉理由：「需�
 
 ### 5. 明确不做
 
-- **向量检索 / RAG**（第 1 节，已入 map 的 `Out of scope`）。
+- **向量检索 / RAG**（第 1 节，已入 map 的 `明确不做`）。
 - **AST / tree-sitter 编辑**（票面已注明：与"用于读"方向相反的赌注，证据型砍掉项）。
 - v1 不做：签名渲染、增量解析、跨语言（只 `tree-sitter-rust`）、图排序。
 

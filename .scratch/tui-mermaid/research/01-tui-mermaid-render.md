@@ -177,7 +177,7 @@ Chromium；`graphviz-rust` 那条则要系统里先有 `dot`。
 
 1. **「这一版不做」清单**：`README.md:268-270` 列了 AST 编辑、向量检索、两进程渲染、内置
    编辑器、交互式 transcript 浏览器、网络隔离等。**没有任何一条点名 mermaid 或图表渲染**。
-   v1 spec 的 `Out of Scope` 同样没有（`.scratch/fs-agent-v1/spec.md:636-652`），但里面
+   v1 spec 的 `明确不做` 同样没有（`.scratch/fs-agent-v1/spec.md:636-652`），但里面
    **有「两进程渲染」**（`spec.md:646`）—— 若 (b) 的形态是「渲染器 fork 一个外部进程」，
    它至少与这一条的**精神**接壤，需要显式判定。同一份 spec 的
    `:671` 写着「实现者请勿顺手改进……要动它们，先改这张 spec」。结论：mermaid **不在禁区**，

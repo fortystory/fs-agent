@@ -18,9 +18,9 @@ Status: done
 - [x] e2e（假 provider 数调用次数）：无分歧 = **3 次**调用、有分歧 = **5 次**
 - [x] `RoundEnded` 四个值（含 `BudgetExhausted`）在渲染上可区分
 
-## Comments
+## 评论
 
-实现落点：`src/discussion.rs`（协议策略：`DEBATERS = 2` / `DEFAULT_MAX_ROUNDS = 2` / `plan_after_round` / `RoundPlan` / `debater_identity` / `synthesizer_identity` / `synthesis_prompt` / `position_of` / `divergence_topic`）、`src/discussion/protocol.rs`（新，纯函数：`CONCLUSION_MARKER` / `conclusion_of` / `normalize` / `answers_agree` / `round_attendance` / `round_outcome`）、`src/agent.rs`（`TurnScope` + `scoped_events` / `Debater` / `SingleShot` / `Discussion` / `DiscussionOutcome` / `run_discussion` / `run_single_shot` / `record_round_started|ended` + `record_divergence` + `record_session_error`）、`src/events.rs`（`pending_tool_calls_of`；`EventLog` 可变共享句柄）、`src/session.rs`（`Arc<Registry>`、共享 `Policy`、私有 `identity`）、`src/lib.rs`（`SessionScaffold` 抽取 + `assemble_discussion` + `DiscussionHarness`）、`src/render.rs`（轮次边界 + 合成产物独占 stdout）、`src/context.rs`（`pinned_len` 认首条 `system`）。测试：`tests/discussion.rs` 36 例（纯函数 + e2e 剧本）、`tests/support/fake_provider.rs` 增会合点 `meeting_at`。文档：`docs/discussion.md`（三层分工 + 轮次结构 + 两条不许破的规则 + 失败矩阵）。回改：spec §15 六条机制 + `Further Notes` 的「票 10 回改」+ 不变量 (2) 的作用域。
+实现落点：`src/discussion.rs`（协议策略：`DEBATERS = 2` / `DEFAULT_MAX_ROUNDS = 2` / `plan_after_round` / `RoundPlan` / `debater_identity` / `synthesizer_identity` / `synthesis_prompt` / `position_of` / `divergence_topic`）、`src/discussion/protocol.rs`（新，纯函数：`CONCLUSION_MARKER` / `conclusion_of` / `normalize` / `answers_agree` / `round_attendance` / `round_outcome`）、`src/agent.rs`（`TurnScope` + `scoped_events` / `Debater` / `SingleShot` / `Discussion` / `DiscussionOutcome` / `run_discussion` / `run_single_shot` / `record_round_started|ended` + `record_divergence` + `record_session_error`）、`src/events.rs`（`pending_tool_calls_of`；`EventLog` 可变共享句柄）、`src/session.rs`（`Arc<Registry>`、共享 `Policy`、私有 `identity`）、`src/lib.rs`（`SessionScaffold` 抽取 + `assemble_discussion` + `DiscussionHarness`）、`src/render.rs`（轮次边界 + 合成产物独占 stdout）、`src/context.rs`（`pinned_len` 认首条 `system`）。测试：`tests/discussion.rs` 36 例（纯函数 + e2e 剧本）、`tests/support/fake_provider.rs` 增会合点 `meeting_at`。文档：`docs/discussion.md`（三层分工 + 轮次结构 + 两条不许破的规则 + 失败矩阵）。回改：spec §15 六条机制 + `补记` 的「票 10 回改」+ 不变量 (2) 的作用域。
 
 实现期把票面留白写实的几处（都不改 spec 的决定）：
 
@@ -51,8 +51,8 @@ Status: done
 
 **Spec** 报 1 处真漂移 + 1 处死代码 + 1 处健壮性 + 2 处（已记录的）越界。已改：
 
-- **真漂移**：不变量 (2) 的作用域从「会话级」收窄成「发起调用的那个 agent」（`pending_tool_calls_of`）。这是并发讨论的必要条件，但 spec 明说三条不变量不许绕——**已回改 `Further Notes` 的不变量 (2)**，写清作用域与会话级查询的用途（`--continue` 悬空恢复）。
+- **真漂移**：不变量 (2) 的作用域从「会话级」收窄成「发起调用的那个 agent」（`pending_tool_calls_of`）。这是并发讨论的必要条件，但 spec 明说三条不变量不许绕——**已回改 `补记` 的不变量 (2)**，写清作用域与会话级查询的用途（`--continue` 悬空恢复）。
 - **死代码**：`DEFAULT_MAX_ROUNDS` 原来没人读。改成 `DiscussionParts::max_rounds: Option<u32>`，`None` 取默认 2、`Some` 覆盖、`Some(0)` 报错；新增 `omitting_the_round_cap_takes_the_protocol_default` 钉住默认值真的接上了。
 - **健壮性**：`conclusion_of` 原来只认字面前缀，`**CONCLUSION:** x` / `- CONCLUSION: x` 会被读成「无结论」——那是假阴性（白买一轮）。现在容忍标记的装饰（`MARKER_LEAD` + 抽取后再 `trim_matches(IGNORED)`），有测试。
-- **越界但有意保留**：(a) 两个讨论者共享权限策略——用户批准方案时就包含这条，现已把理由写进 spec §15 回改（§12 的「不继承允许」讲的是委派链向下，兄弟会话不在那条链上）；(b) `position_of` 在无结论时退回作答首行——写入 `## Comments` 第 6 条，为的是分歧记录不静默丢掉破协议的那一方。
+- **越界但有意保留**：(a) 两个讨论者共享权限策略——用户批准方案时就包含这条，现已把理由写进 spec §15 回改（§12 的「不继承允许」讲的是委派链向下，兄弟会话不在那条链上）；(b) `position_of` 在无结论时退回作答首行——写入 `## 评论` 第 6 条，为的是分歧记录不静默丢掉破协议的那一方。
 - **可辩护、已记录**：非终局轮不发 `RoundEnded`（下一个 `RoundStarted` 是边界）、合成轮以 `Completed` 收尾、单侧缺席取 `NoDivergence`（主张最少的理由，缺席另有可查证据）。

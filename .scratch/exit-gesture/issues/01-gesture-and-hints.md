@@ -106,7 +106,7 @@ Blocked by: —
 - 不给窗口加配置项；不把空闲双击改成 130；不在 `--plain` 里加手势（spec「明确不做」）。
 - 不碰 `SessionFacts.session_id` 这个死字段（spec「补充说明」）。
 
-## Comments
+## 评论
 
 - **落地**：`TuiState` 加 `exit_deadline: Option<Instant>`；常量 `EXIT_GESTURE_WINDOW`（500 ms，与 `PULSE_FRAME` 并列，内部单测钉住）；三个方法 `raise_exit_gesture_at` / `exit_gesture_raised` / `expire_exit_gesture`（时间可注入）；`exit_key` 是 `Ctrl-C` / `Ctrl-D` 共用的那一把举手 —— 空闲两键对等（第一下举手、第二下退，混按也算），忙碌只有 `Ctrl-C` 参与（第一下 `Cancel` + 举手，第二下 `FrontEndEvent::Quit`），忙碌 `Ctrl-D` 忽略且**不清**举手。`key()` 里「不是这两键就先 `expire_exit_gesture()`」放在详情覆盖层守卫之后、问题守卫之前；`replay_key()` 里 `Ctrl-C` 同样双击，别的键先清举手。
 - **提示**：`wording` 新增 `EXIT_HINT_IDLE_RAISED` / `EXIT_HINT_BUSY_RAISED` / `EXIT_HINT_REPLAY_RAISED`，`exit_hint(busy, raised)` 四档；`status_line` / `viewer_status_line` 多一个 `raised` 参数（内部照旧走 `hint_line`，阶梯一行未改）。`TuiState::status_line` 在重放时举手优先于进度行（进度行让位，不追加）。

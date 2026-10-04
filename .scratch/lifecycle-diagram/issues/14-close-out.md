@@ -5,7 +5,7 @@ Status: ready-for-walkthrough
 Part of: ../map.md
 Blocked by: 07, 08, 13
 
-> 规格：[`../spec.md`](../spec.md) 的 Further Notes（落地清单第 7 步与验收一节）。这一票不写新内容，
+> 规格：[`../spec.md`](../spec.md) 的「补记」（落地清单第 7 步与验收一节）。这一票不写新内容，
 > 只把整件事验完并把四处索引对齐。
 
 ## 目标

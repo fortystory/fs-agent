@@ -6,7 +6,7 @@ Part of: ../map.md
 Blocked by: 08
 
 > 规格：[`../spec.md`](../spec.md) §3。形状与数值目标的完整理由在
-> [入口三份的重写形状与净行数目标](04-grilling-entry-docs-shape.md) 的 `## Answer` 里；
+> [入口三份的重写形状与净行数目标](04-grilling-entry-docs-shape.md) 的 `## 作答` 里；
 > 复述块的判定在 [`../research/03-long-paragraph-triage.md`](../research/03-long-paragraph-triage.md) §3。
 
 ## 目标
@@ -63,7 +63,7 @@ Blocked by: 08
 - 不动 `AGENTS.md` 的五个英文小标题（技能工具链的锚点）。
 - 不更新 `docs-slim` 自己那一行索引（归票 12）。
 
-## Comments
+## 评论
 
 **2026-10-04 落地。** 三份都进了票 04 定的终点，且都是**只拆 + 只删「别处已有一份的复述」**。
 

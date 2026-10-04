@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 02, 03, 04
 
-> 规格：`.scratch/tui-sidebar/spec.md` §8（不变量与删除清单）、§2（阶梯）、`Testing Decisions`。
+> 规格：`.scratch/tui-sidebar/spec.md` §8（不变量与删除清单）、§2（阶梯）、`测试决定`。
 
 ## 目标
 
@@ -33,7 +33,7 @@ Blocked by: 02, 03, 04
 
 `轨迹` / `文件` 页的内容；任何键位新增；plain / headless。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`（删 `TICK`）、`src/render/wording.rs` / `src/render/{mod,width}.rs` / `src/render/tui.rs` 的注释、`scripts/tui-startup-check.py`（只改注释）、`docs/render.md`、`docs/tui-manual-checklist.md`、`README.md`、`docs/adr/0002-fullscreen-alt-screen-tui.md`、`.scratch/tui-sidebar/spec.md`。
 

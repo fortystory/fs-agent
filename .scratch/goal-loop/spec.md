@@ -4,7 +4,7 @@
 
 来源：2026-10-01 的一轮 grilling（Q1–Q30）。种子材料在 [`seed.md`](seed.md)（本文件把它折成构建计划，14 条分叉的关闭记录也在那里）。它吞并了 `loop-and-goals`、`clear-command`、`context-compaction` 三条老种子，那三条只留指向 [`seed.md`](seed.md) 的记录。
 
-## Problem Statement
+## 问题陈述
 
 **fs-agent 今天只能一段一段地干，而且必须有人守着。** 三个具体缺口：
 
@@ -14,7 +14,7 @@
 
 结果是：长活必须有人守着，每隔一阵回一句「继续」。
 
-## Solution
+## 方案
 
 - **目标** = 一份具名的清单文件：`~/.local/share/fs-agent/goals/<名字>.md`，**只有条目与 id，不带状态**。
 - **`/goal-new <名字> <来源>…`** 从一批票生成它，一次性；此后清单独立，票再变也不跟。
@@ -25,7 +25,7 @@
 - **收尾落流**：完成汇总与失败收尾各一条事件；执行中冒出来的新工作由 `goal_note` 记，**args 即真相**。
 - **`/clear`** 结束当前会话、开一个新的（名字保持），旧的留在磁盘上。
 
-## User Stories
+## 用户故事
 
 1. 作为用户，我想给 fs-agent 一个目标就不再管它，回来时看到「做完了什么、还有什么冒出来」。
 2. 作为用户，我想在走开**之前**就知道它不会卡在权限询问上 —— 不该跑的组合直接拒绝启动，而不是跑到一半停住。
@@ -39,7 +39,7 @@
 10. 作为模型，我想有一个 `goal_note` 把执行中冒出来的新工作记下来，而不必去改那份封了口的清单。
 11. 作为审计者，我想在流上看到目标选定、完成汇总与失败收尾，以便回头核对某一次无人值守到底干了什么。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 目标与清单文件
 
@@ -155,7 +155,7 @@
 - [`CONTEXT.md`](../../CONTEXT.md) 要立词条：**目标**（跨会话的工作单元；注一句别和**落点**那条 `_Avoid_` 里的「路由目标」混）、**翻页**（rollover）、**`goal_note`**，并更新**待办列表**那条（加 id、跨会话派生）。
 - 手艺记录：`.scratch/goal-loop/` 保持「seed 是来源、spec 是计划」的分工；`loop-and-goals` / `clear-command` / `context-compaction` 三条只留指向这里的记录。
 
-## Testing Decisions
+## 测试决定
 
 同既有约定：断言的对象是**事件流**（JSONL 里的 `seq` + payload）与**工作区副作用**，不是内部结构；不断言 `at` 时间戳；provider 全部是假 provider。
 
@@ -184,7 +184,7 @@
 
 - `python3 scripts/check-language.py` OK；新增的散文与模型可见文本走中文（[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md)）。
 
-## Out of Scope
+## 明确不做
 
 - **清单的自动同步**：票变了清单跟着变 —— 清单是生成一次的产物，独立。
 - **`/goal` 的 `list` / `show` / `rm`**。
@@ -196,9 +196,9 @@
 - **跨目标的排序与优先级**：`/loop <名字>` 一次只认一个。
 - **压缩之外的历史管理**（fork / rewind、历史编辑）。
 
-## Further Notes
+## 补记
 
-- **与 `todo-and-modes` 的关系**：`todo` 加可选 `id` 是那份 spec §2 的 schema 扩展 —— 它当时把「跨会话持久」列为 Out of Scope，理由是「要新存储」；本 spec 走的是**派生**那条路，所以那个理由不成立，但**执行中的清单封闭**仍然成立（那是另一回事）。
+- **与 `todo-and-modes` 的关系**：`todo` 加可选 `id` 是那份 spec §2 的 schema 扩展 —— 它当时把「跨会话持久」列为 明确不做，理由是「要新存储」；本 spec 走的是**派生**那条路，所以那个理由不成立，但**执行中的清单封闭**仍然成立（那是另一回事）。
 - **与 `sandbox` / `workspace-mode` 的关系**：`/loop` 要求的 `workspace` 档正是 [`workspace-mode`](../workspace-mode/spec.md) 那一档；沙箱给它兜底。
 - **与 `tui-history-replay` 的关系**：§10 的崩溃恢复复用它那条「重开时把历史铺进转录」的路径，`--continue` 的行为不变。
 - **前缀缓存的代价**：§6 的提醒与 §7 的压缩都必然打掉前缀缓存，所以两者都被设计成**低频**（跨阈值一次、过一次八成一次）。这条代价要在实现时如实记账。

@@ -38,7 +38,7 @@ server 回 `input_required` 时，问题经**既有的**问询通道交给用户
 - 不新开第四类发起者；不自己做 MRTR 重试回路（`rmcp` 的 `call_tool` 已经驱动）。
 - 不做 URL 模式的 elicitation（先只 form）。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/tools/tool.rs`（`ToolContext.questions` 从
   `Option<&'a dyn UserQuestions>` 换成 `Option<Arc<dyn UserQuestions>>`）、

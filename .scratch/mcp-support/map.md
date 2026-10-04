@@ -3,19 +3,19 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-03，一轮广度 grilling 二十问 + 一份一手调研）。本图只做**规划**，不产实现代码。
-**✅ 本图已完成（2026-10-03）**：9 张子票全部 resolved、`Not yet specified` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
+**✅ 本图已完成（2026-10-03）**：9 张子票全部 resolved、`尚未明确` 为空 ⇒ 路线 clear；下一步是 `/to-spec`（见 `## 进度`）。**不要再往这张图加票。**
 
-> **交棒已发生（2026-10-03）**：二十条冻结项与九张票的 `## Answer` 已经折进
+> **交棒已发生（2026-10-03）**：二十条冻结项与九张票的 `## 作答` 已经折进
 > [`spec.md`](spec.md) —— 四个元工具（第一阶段两个：`mcp_list` / `mcp_call`）、`rmcp` 3.5.0
 > （`Discover` 生命周期、`reqwest-native-tls`）、按四阶段落地（工具 → 资源 → 提示词 → 边角）。
 > 本图至此**只作决策存档**，不再是待办；「做」由实现票与 `/implement` 接手。
 > 同日由 `/to-tickets` 拆出 **9 张实现票**（`issues/10`–`18`，见下面任务清单的第二段；第一张是
 > [服务层骨架 + `mcp_list`](issues/10-mcp-service-and-list.md)）。
 
-## Destination
+## 目的地
 
 一份 **spec-ready 的 MCP 接入决策集** —— 交给 `/to-spec` 折成构建计划。它要能回答「怎么把外部
-MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回改 v1 的 `Out of Scope`**（MCP client
+MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回改 v1 的 `明确不做`**（MCP client
 那一行加一条带日期的补记，原文不改写）。
 
 **范围 = 现行 MCP 规范（2026-07-28）的全集**：tool / resource / prompt / elicitation + MRTR，
@@ -23,7 +23,7 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 
 落地分阶段，图里按依赖排：**工具 → 资源 → 提示词模板 → 边角（MRTR / 其余 capability）**。
 
-## Notes
+## 笔记
 
 - **领域**：`fs-agent` —— 自用 coding agent CLI（Rust）。两条与之相关的既有事实：**事件流是唯一
   真相源**、**工具表在组装期建好之后不再变化**（它是缓存前缀的一部分）。
@@ -41,8 +41,8 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 ### Tracker 事实与降级（本图适用）
 
 - map = `.scratch/mcp-support/map.md`，child = `.scratch/mcp-support/issues/NN-*.md`；阻塞 = 票面
-  `Blocked by: NN`；claim = `Status: claimed`；resolve = 票底 `## Answer` + `Status: resolved` +
-  追加一行到本文 `Decisions so far`。
+  `Blocked by: NN`；claim = `Status: claimed`；resolve = 票底 `## 作答` + `Status: resolved` +
+  追加一行到本文 `已定的决定`。
 - **没有 native sub-issue / 依赖边**，所以回退到正文约定：本文的 `## 任务清单` 逐条引用子票
   （条目数 == 子票文件数），每张子票顶部写 `Part of: ../map.md`。
 - 校验：`python3 scripts/wayfinder-check.py .scratch/mcp-support/map.md`。宣布图走完之前必须 PASS。
@@ -50,12 +50,12 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 ### 冻结项（charting 的 grilling 定下，票里不得重开）
 
 1. **destination 是一份 spec**，不是「只做一个决定」，也不含实现落地。
-2. **v1 的 `Out of Scope` 另起 effort + 补记**：`fs-agent-v1/spec.md` 的 `:449` / `:636` / `:667`
+2. **v1 的 `明确不做` 另起 effort + 补记**：`fs-agent-v1/spec.md` 的 `:449` / `:636` / `:667`
    与 [`README.md`](../../README.md) 的「这一版不做」清单**原文不改写**，各加一条带日期的补记
    （照 `sandbox` 的先例）。
 3. **scope = 现行规范全集**（tool / resource / prompt / elicitation + MRTR）。
 4. **已 deprecated 的 sampling / roots / logging 不做**（SEP-2577，最早 2027-07-28 后移除）——
-   归本文 `Out of scope`。
+   归本文 `明确不做`。
 5. **不扩工具表**：MCP 的工具**不进** `builtin()` / `with_dynamic()` 那张表。这条直接绕开
    「工具表冻结 vs `notifications/tools/list_changed`」那个撞点 —— 表里只有两个固定的元工具，
    server 侧工具的增删只影响 `mcp_list` 的**返回**，前缀一个字不动。
@@ -88,7 +88,7 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 
 ### 会撞的既有决定（`/to-spec` 时回改，不在本图改）
 
-- **`fs-agent-v1/spec.md` 的 `Out of Scope`**：`:449`（「明确不做：MCP client 本身」）、`:636`
+- **`fs-agent-v1/spec.md` 的 `明确不做`**：`:449`（「明确不做：MCP client 本身」）、`:636`
   （「证据型砍掉项」）、`:667`（「实现者请勿顺手改进」），与 [`README.md`](../../README.md) 的
   「这一版不做」清单。
 - **「工具表组装后不变」那条不变量**（[`src/tools/mod.rs`](../../src/tools/mod.rs) 顶部注释与
@@ -135,7 +135,7 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 
 共 **18** 张票（**9 决策 + 9 实现**），当前 **9 resolved / 9 ready-for-agent**。
 
-## Decisions so far
+## 已定的决定
 
 <!-- 索引：每条一行，够判断相关性即可；细节住在票里。按名字引用，不写裸编号。 -->
 
@@ -145,11 +145,11 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 - [grilling：prompts 模板的人机入口](issues/04-grilling-prompts-entry.md): **接进 `/` 菜单** —— 这个 effort 因此把「`/` 菜单支持运行时条目 + 一个填参数的界面」纳入 scope（今天的菜单条目是常量，而模板清单是运行时从 server 拉的）。边界：模板仍由**人**挑、模型不自发调用；菜单的动态部分不进工具表、不进前缀缓存；server 不可用时它的模板条目不出现。
 - [grilling：`mcp_list` 的新鲜度与 `listChanged`](issues/05-grilling-list-freshness.md): **每次现问**（每次都向 server 发一次 `tools/list`）—— 不订阅 `toolsListChanged`、不做会话内缓存。没有缓存就没有失效；与冻结项 14（不自动重连）不矛盾 —— 它天然会探到 server 的当前状态。
 - [grilling：server 进程的环境与可写根](issues/06-grilling-server-process.md): **环境走白名单** —— `env_clear()` 后只注入配置里显式声明的 `env` 加最小必需的 `PATH`/`HOME`/`LANG`（黑名单是 fail-open，与沙箱 fail-closed 的调性不合；且 `rmcp` 不做清洗，清洗必须发生在交给它之前）。**可写根逐台声明**，不给默认临时目录。
-- [task：v1 的范围补记](issues/07-task-v1-scope-note.md): 四处落点都改完 —— v1 spec 的 §14、`Out of Scope` 的证据型砍掉项、`Further Notes` 的「请勿顺手改进」各加一条带日期的补记；README 的「这一版不做」清单**移除** `MCP client` 并新加一段说明。**原文一个字没有改写**。
+- [task：v1 的范围补记](issues/07-task-v1-scope-note.md): 四处落点都改完 —— v1 spec 的 §14、`明确不做` 的证据型砍掉项、`补记` 的「请勿顺手改进」各加一条带日期的补记；README 的「这一版不做」清单**移除** `MCP client` 并新加一段说明。**原文一个字没有改写**。
 - [grilling：多台 server 的启动与命名](issues/08-grilling-multi-server.md): **并发起、失败的跳过**（每台各自一个超时；谁起不来谁经 `mcp_list` 报成结构化错误）；**不做数量上限**；**重名是启动错误**（不用「后盖前」——那会让人以为两台都活着）。
 - [grilling：第三方 server 的信任分级](issues/09-grilling-trust-tiers.md): **允许逐台声明，且声明是一组能力** —— 三个各自默认关的位：`trust_results` / `trust_effects` / 不过沙箱。不捆成一个 `trusted = true`，否则会让人为了省一句标记把写权限一起放出去。
 
-## Not yet specified
+## 尚未明确
 
 <!-- 在范围内、但现在还说不精确的雾。随前沿推进毕业成票。不要预先切成票那么大。 -->
 
@@ -158,7 +158,7 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 「资源 URI 与 `ReadSet`」由票 03 定死（不登记、两套坐标系）；「`mcp_call` 的墙钟与错误码形状」由
 票 02 选定的 `rmcp` 收窄 —— 它现在是 `/to-spec` 时的一条实现决定，不再是需要单独拍板的雾。 -->
 
-## Out of scope
+## 明确不做
 
 <!-- 有意识排除在本次 effort 之外的工作；永不毕业。 -->
 
@@ -174,7 +174,7 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 
 ## 进度
 
-**100%** —— **本图完成（2026-10-03）**：9/9 张子票全部 resolved，`Not yet specified` 为空 ⇒ 通往
+**100%** —— **本图完成（2026-10-03）**：9/9 张子票全部 resolved，`尚未明确` 为空 ⇒ 通往
 destination 的决策已 clear。二十条冻结项 + 九张票的答案合起来就是那份 spec-ready 的决策集。
 
 **交棒已完成（2026-10-03）**：折成 [`spec.md`](spec.md) —— 三层的四个元工具、`rmcp` 3.5.0、

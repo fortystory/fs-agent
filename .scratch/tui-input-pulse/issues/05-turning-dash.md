@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 04
 
-> 规格：`.scratch/tui-input-pulse/spec.md` §2（本次改写它）、§3、`Testing Decisions`。
+> 规格：`.scratch/tui-input-pulse/spec.md` §2（本次改写它）、§3、`测试决定`。
 > 来源：用户看过真机之后的第二句话 —— 「这次的颜色变换也不是很好看，变的很突然。先不让它变色了，代码留着。换一种方式，让 `fs-agent` 中的 `-` 旋转起来表示正在工作」。
 
 ## 目标
@@ -45,9 +45,9 @@ Blocked by: 04
 
 删掉色环代码（用户明确要留）；给两个渲染器（plain / headless）加任何东西；给短横加配置项；改脉冲的机制。
 
-## Comments
+## 评论
 
-**实现完成（2026-09-26）**。落点：`src/render/wording.rs`、`src/render/tui.rs`、`tests/render_layout.rs`、`tests/wording.rs`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（§2 重写 + 用户故事 7–14 + Testing Decisions + Out of Scope）。
+**实现完成（2026-09-26）**。落点：`src/render/wording.rs`、`src/render/tui.rs`、`tests/render_layout.rs`、`tests/wording.rs`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（§2 重写 + 用户故事 7–14 + Testing Decisions + 明确不做）。
 
 1. **短横的四个朝向**：`wording::DASH_TURN = ['─', '╲', '│', '╱']`（顺时针，从静止的平横起）+ `identity_turning(phase)` —— 后者从 `identity()` 里换掉那一个短横，所以前缀与版本号只有一份拼法（启动检查脚本锚在那条串上）。用 box-drawing 而非 ASCII `- \ | /`：对角是真对角、四个字形同一条基线。
 2. **mark 那一格**：mark 拼的是 `fs-agent`（八个 4 列字形格、中间隔一列空格），短横是第三格（第 10…13 列、五行里那一格）。`mark_lines(turning: Option<u64>)` 先把那格清空再按一张四朝向的格子表画线：`─` 平铺中行、`╲`/`╱` 走对角、`│` 立中间列。4 宽 5 高的格子里，四格长的线没法真的绕一点转 —— 所以让**长度不变、中点留着**，读起来是「一根针在转」。**接受的代价**：空闲的 mark 里那一格从半块 `▀▀▀▀` 换成线 `────`（四个朝向要用同一族字形）。

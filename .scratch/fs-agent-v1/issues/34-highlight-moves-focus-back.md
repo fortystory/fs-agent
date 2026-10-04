@@ -42,7 +42,7 @@ Blocked by: —
 - 不动 `Esc` 的语义、不动单选的「自定义覆盖选择」、不动 footer 的文案与布局。
 - 不引入「选项区 / 输入区」这套命名（同上，属于那次访谈）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-02）**：`move_highlight` 在有选项时置 `custom_focused = false` —— 就一行，放在 `count == 0` 早退**之后**，所以没有选项的题不碰焦点。别的没动。
 - **先红后绿**：`moving_the_highlight_takes_the_focus_back_to_the_options` 改前红（屏幕上是 `自定义：x`，空格被当成文本塞了进去），改后绿。问卷那个测试文件 15 → 16 条。

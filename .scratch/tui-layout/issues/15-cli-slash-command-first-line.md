@@ -15,9 +15,9 @@ Status: done
 - [x] `/ask-matt` + 多行 brief 能作为**一次** skill 任务跑起来（task 含换行）
 - [x] 用例：多行 `/skill` + task 拼装正确；多行以 `/` 开头的非命令文本走 prompt；单行各内建命令不回归
 
-## Comments
+## 评论
 
-## Comments
+## 评论
 
 **实现完成（2026-09-21）**。落点：`src/cli.rs` —— 把原来那串 `match command { … other if other.starts_with('/') }` 换成**先分类、再执行**：新增私有的 `Submission` 枚举与纯函数 `submission(text, has_skill) -> Submission`，循环只负责按分类跑（`Quit` / `Undo` / `Plan` / `EndPlan` / `Unknown` / `Skill { name, task }` / `Prompt`）。文件末尾新增 `#[cfg(test)] mod tests`（4 个用例）。
 

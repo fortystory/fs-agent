@@ -49,7 +49,7 @@ Streamable HTTP server；多台并发起、失败的跳过、重名在启动时�
 
 - 不做环境白名单与可写根（票 13）、不做 `Effect` 与信任（票 14）、不做 MRTR（票 15）。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/mcp/rmcp_client.rs`（新：`connect_all` +
   `RunClient`）、`src/mcp/mod.rs`（`pub mod rmcp_client`、`McpService::with_unavailable` /

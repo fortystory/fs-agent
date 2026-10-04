@@ -86,7 +86,7 @@ CARGO_TARGET_DIR=/tmp/tui-ux-probe-target \
 - `chosen-40x10.txt` / `chosen-80x24.txt` / `chosen-120x10.txt` / `chosen-120x24.txt` —— 折叠提示行（覆盖层关闭），尺寸矩阵
 - `chosen-detail-120x24.txt` / `chosen-detail-80x24.txt` —— 同一组合 + 详情覆盖层打开
 
-结果写入票 03 的 `## Answer` 与 `.scratch/tui-ux/map.md` 的 `Decisions so far`。
+结果写入票 03 的 `## 作答` 与 `.scratch/tui-ux/map.md` 的 `已定的决定`。
 
 ---
 

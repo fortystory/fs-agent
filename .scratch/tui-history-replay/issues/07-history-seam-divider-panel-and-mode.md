@@ -25,7 +25,7 @@ Part of: ../map.md
 - [x] 完成后仍吸底（`follow = true`、`seen = total`、无指示条）；live 缓冲结束时为空。
 - [x] `cargo test --all-targets` 不低于 **664 passed**；clippy 干净；fmt 只留既有漂移。
 
-## Comments
+## 评论
 
 - 2026-09-23 实现落地：分隔行在 `finish_replay` 里于「历史 apply 完、flush 缓冲之前」以渲染层 `Notice` 插入（仅当 `replay.lines > 0`），文案 `wording::history_divider()`；banner 因此排在分隔行与 flush 之后。面板与 header 模式不写重建逻辑——逐条 `apply` 的自然结果（`panel.observe` / `ContextInjected{PlanMode}` / `HistorySuperseded{ModeChange}`）。
 - 断言：`tests/history_replay.rs` 的 `the_divider_separates_history_from_what_this_run_adds` / `a_history_that_drew_nothing_gets_no_divider` / `the_divider_is_a_render_layer_line_that_is_fresh_on_every_reopen` / `the_panel_adds_up_the_history_and_keeps_accumulating` / `the_header_mode_is_whatever_the_history_ended_on`。`cargo test --all-targets` = 704 passed / 0 failed。

@@ -32,7 +32,7 @@ Blocked by: 01, 02
 
 删 `.scratch/call-rationale/`；改写 `docs/research/` 的笔记正文；给 `highlight.md` 补内容。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`AGENTS.md`、`README.md`（一行）、`docs/highlight.md`（加状态块）、`docs/research/README.md`（新增）。
 

@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: —
 
-## Question
+## 问题
 
 中右面板要显示什么、每个数从哪里来、什么时候刷新。范围已被用户收窄为**模型 / token / 上下文用量 / 轮次**（见 map Notes 第 1、2 条），本票把它们逐个落到**代码位置**上。
 
@@ -28,7 +28,7 @@ Blocked by: —
 
 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Answer
+## 作答
 
 **已定（2026-09-21，grilling 逐轮与用户确认）。本票只产决策，不含实现。**
 

@@ -3,7 +3,7 @@
 Type: grilling
 Status: resolved
 
-## Question
+## 问题
 
 决定 `fs-agent` 的 crate 与模块骨架。这是其余所有接缝的落脚点。
 
@@ -24,7 +24,7 @@ Status: resolved
 
 不要定到文件级，也不要定到逐个函数签名（本图整体是边界级，见 map 的 Notes）。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。本票只产决策，不含实现。**
 
@@ -105,7 +105,7 @@ cli         → 全部
 - 投影的纯函数规则（role 合并、`name`）→ **票 17**。
 - 权限门与 hook 的控制流次序 → **票 05**。
 - 会话拓扑的具体表达 → **票 07**。
-- 端到端验收契约（mock provider + 临时 git 仓库）→ `/to-spec`（本图 Out of scope）。
+- 端到端验收契约（mock provider + 临时 git 仓库）→ `/to-spec`（本图 明确不做）。
 
 **票 13 交接来的一条边界事实（2026-09-13）**：
 

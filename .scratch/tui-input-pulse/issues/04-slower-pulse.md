@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 01, 02
 
-> 规格：`.scratch/tui-input-pulse/spec.md` §2（本次改写它）、`Testing Decisions`。
+> 规格：`.scratch/tui-input-pulse/spec.md` §2（本次改写它）、`测试决定`。
 > 来源：用户看过真机之后的一句话 —— 「这个 mark 闪烁的太快了，只变色就行不用闪烁」。
 
 ## 目标
@@ -42,7 +42,7 @@ Blocked by: 01, 02
 
 改机制（守卫、归零、窄屏不画）；24 位真彩平滑渐变（用户没选）；窄档身份行跟着变色。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`、`tests/render_layout.rs`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（回改 §2 与用户故事 8）。
 

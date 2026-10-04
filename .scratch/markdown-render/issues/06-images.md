@@ -19,7 +19,7 @@ Status: done
 1. `![alt](url)` → **`[图片] alt (url)`**：`[图片]` 用 `MUTED`（灰），`alt` 用下划线（与链接标签一致），` (url)` 用 `MUTED`。
 2. `alt` 为空时（`![](url)`）→ `[图片] (url)`，不留一个空的下划线 span。
 3. url 与 alt 相同时不重复补 ` (url)`（与链接那条规则一致）。
-4. **不做真图渲染**——那需要终端图像协议（kitty graphics / iTerm2 inline images / sixel），明确留在 spec 的 Out of Scope 里，等单独一轮。
+4. **不做真图渲染**——那需要终端图像协议（kitty graphics / iTerm2 inline images / sixel），明确留在 spec 的 明确不做 里，等单独一轮。
 5. 内联 HTML 与 HTML 块**原样透传**，顺手确认这条在票 01 的透传路径里是好的（同一张票里加个断言）。
 
 ## 测试
@@ -36,7 +36,7 @@ Status: done
 - [ ] `cargo clippy --all-targets` 无新增告警。
 - [ ] 真机：让模型吐一段带图片语法的回答，看到的是 `[图片] …` 而不是 `!…`。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地：`![alt](url)` → `[图片] alt (url)`（`[图片]` 与 ` (url)` 灰、`alt` 下划线）；`alt` 为空时不留空的下划线 span；`url == alt` 时不重复；内联 HTML 与 HTML 块原样透传（`<b>x</b>` 逐字出现在行里）。
 - 「图片」那个词是给人看的，所以它住在 `wording::IMAGE_PLACEHOLDER`，不散在渲染器里。

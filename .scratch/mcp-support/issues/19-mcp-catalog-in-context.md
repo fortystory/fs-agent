@@ -44,7 +44,7 @@ Blocked by: 18
 - 不列 `env` / `headers` 的值；
 - 不为它新增第二个详情视图（复用既有的那一个）。
 
-## Comments
+## 评论
 
 - 2026-10-03 落地（`Status: done`）。落点：`src/events.rs`（`ContextSource::McpCatalog`）、
   `src/mcp/mod.rs`（`McpService::catalog_text`）、`src/cli.rs`（组装之后、第一个回合之前

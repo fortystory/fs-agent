@@ -10,7 +10,7 @@
 //! 没有调用方：它是为工具输出留着的。
 //!
 //! 语法层通过 `tree-sitter-highlight` 跑文法；syntect 会走的 Oniguruma 那条路没有走
-//! （spec §19，Out of Scope）。
+//! （spec §19，明确不做）。
 
 use std::cell::RefCell;
 use std::sync::OnceLock;

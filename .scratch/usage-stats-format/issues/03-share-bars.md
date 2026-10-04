@@ -60,7 +60,7 @@ Blocked by: 02
 - 不给状态行加色条；不动 `usage_summary`；不动降级链与列宽计算。
 - 不新增主题/配置项，不用 `DarkGray` 以外的底色。
 
-## Comments
+## 评论
 
 - **落地**：`Panel::lines` 的行元组加了第四个字段 `Option<f64>`（占比），`row()` 多收一个 `share`；底色只涂值列左起 `N = ceil(占比 × 值列宽)` 列，切段走 `truncate_columns`（按显示列，不从 `万` / `（` 中间劈开），`clamp(0.0, 1.0)` 保证撞顶时正好涂满、不越出值列。标签与中间那个空格不涂，右对齐的前导留白算在值列里 —— 色条从值列左缘起。
 - **只有两行有占比**：上下文按 `context_window`、花销按 `budget_limit`；`last_input` 或 `budget_limit` 为 `None` 时不涂（`回合` / `输入` / `输出` / `缓存` 一律 `None`）。`value_columns` 的计算、百分比是否丢的判定、缓存行是否加入、`fit()`、行序与标签列宽**一行未改**。

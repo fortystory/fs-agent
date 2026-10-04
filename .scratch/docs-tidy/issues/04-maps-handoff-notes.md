@@ -27,7 +27,7 @@ Status: done
 
 删任何图；给图加新票；改写图里的历史决算；动 `issues/` 里的任何文件。
 
-## Comments
+## 评论
 
 **完成（2026-09-26）**。落点：`multi-agent-architecture/map.md`、`tui-ux/map.md`、`.scratch/README.md`。
 

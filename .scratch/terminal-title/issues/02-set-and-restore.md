@@ -90,7 +90,7 @@ Blocked by: 01
 - 不逐 token 更新、不为 OSC 加动画 / 重绘循环（spec §5 末）。
 - 不改票 01 定下的措辞与 40 列规则；不改 `src/render/wording.rs`（除了调用它的新函数）。
 
-## Comments
+## 评论
 
 - **落地**：`set_terminal_title`（crossterm 的 `SetTitle`，发的就是 `OSC 0`）与 `TerminalModes::enter(title)`（先 `CSI 22 t` 保存、再写第一版）／`disable_terminal_modes`（并进 `CSI 23 t`）。`TuiOptions` 加 `cwd`（两个构造点传 `--cwd` 那一个）；`$HOME` 在 `Tui::run` 里读一次；`TuiState::new(facts, cwd, home)`，五个字段新增：`cwd` / `home` / `goal` / `last_title`。`title()` 是纯函数，`sync_title()` 做比对；第一版在 `ratatui::init()` 之后、等重放之前写，绘制路径在 `mark_clean()` 之后补后续变化。
 - **目标名**：`observe_goal` 在 `apply` 开头看 `RenderEvent::Logged` 的 payload —— `GoalSelected` 留名、`GoalStopped` / `GoalCompleted` 清名；重放走同一个 `apply`，所以 `--continue` 自然重建。

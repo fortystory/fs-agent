@@ -72,7 +72,7 @@ pty harness 里输入 4 个汉字再回车，然后看 app 写出去的原始字
 
 还没试过的条件：用户那边插入的是**一整条多行长回复**，会走进 `insert_before` 的滚动分支（`while buffer_height + viewport_height > screen_height` → `scroll_up`）。如果 `last_known_area` 的记账被软换行带偏，live region 的绝对定位重绘就可能压到状态行的某一列上——这与「两个字符被换成空格」相符。要定论需要一条能产出多行长中文回复的路径（真 provider，或把 fake provider 接进二进制）。
 
-## Comments
+## 评论
 
 - 顺带发现、**本次未动**的两个宽度 bug（同一类「全程没有 display width 概念」，但症状不同，需要各自的复现）：
   - `TuiState::live_lines` 按**字节下标**当列宽折行（`take_while(|(index, _)| *index < width)`），中文会在约 1/3 宽度处提前折行。

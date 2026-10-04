@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 02, 04
 
-## Question
+## 问题
 
 新布局会让一批现有测试和脚本失效或变味。本票定下**验证策略**：什么用 `TestBackend` 断言、什么必须上 pty、什么必须人眼在真终端里看。
 
@@ -24,7 +24,7 @@ Blocked by: 02, 04
 
 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Answer
+## 作答
 
 **已定（2026-09-21，grilling）。本票只产决策，不含实现。**
 

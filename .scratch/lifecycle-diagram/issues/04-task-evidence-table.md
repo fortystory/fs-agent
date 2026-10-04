@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: 01
 
-## Question
+## 问题
 
 冻结项 12 要的「节点/边 → `文件:行号`」证据表，是这份 spec 的核心素材：`/to-spec` 之后写文档的人
 靠它保证每个节点都能落到代码，`lifecycle-check.py` 靠它做校验。
@@ -27,7 +27,7 @@ Blocked by: 01
 `research/04-node-evidence.md`：一张大表（节点/边 → `路径:行号` → 一句话） + 一节「图上画了但
 代码里没找到」的诚实清单。
 
-## Answer
+## 作答
 
 （2026-10-03）交付物：[`research/04-node-evidence.md`](../research/04-node-evidence.md)，343 行 ——
 五张图**逐节点**表（图 1 的 14 个 · 图 2 的 24 个 · 图 3 的 5 个参与者 · 图 4 的 18 个 · 图 5 的 19 个，

@@ -25,7 +25,7 @@ Status: done
 - [x] 手工清单写成仓库里可照做的文字：`docs/tui-manual-checklist.md`（九项，每项都是「怎么做 + 该看见什么」）。顺带修掉 `docs/render.md` 里「Inline viewport」那一行 —— ADR 0002 之后它已经不成立 —— 并从那里指向清单
 - [x] 基线：`cargo test` **550 passed / 0 failed**（37 个测试目标；spec 记的 489 + 新增 61，评审收口又补了 1 个 `src/cli.rs` 用例）；`cargo clippy --all-targets` 干净；`cargo fmt --check` **只剩** `src/context/repo_map.rs` 的既有漂移（5 处）；`python3 scripts/tui-startup-check.py target/debug/fs-agent 3` → `3/3 GREEN`
 
-## Comments
+## 评论
 
 - **本票没有再补布局 / 降级用例**：spec §Testing Decisions 点的那批（尺寸矩阵、提示行条目数、`ctrl-c 退出` 恒在、右栏无数据文案、`120×24` 草稿 10 行右栏消失）已随实现落在 `tests/render_layout.rs`，这里补的是断言的**另外两面**：措辞层与 pty 层。
 - **`cargo fmt --check` 的教训**：别 `head -N` 看它 —— 既有漂移正好占满前五行，会把新文件的漂移截掉。本票就是这么漏掉了 `51f4da4`（现 `ac4ea65`）里一行没折行的断言，已回 amend。

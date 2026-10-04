@@ -17,9 +17,9 @@ Status: done
 - [x] 措辞新增：`粘贴 {n} 字符？`、`清空输入？`，以及四种问题各自的可接受键提示
 - [x] 用例：四种问题各渲染一次（`TestBackend` 断言覆盖层出现且背景被遮住）；默认答案正确；模态期间字符键不改变输入缓冲
 
-## Comments
+## 评论
 
-## Comments
+## 评论
 
 **实现完成（2026-09-21）**。落点：`src/render/tui.rs` 新增 `draw_modal`（在 `draw_frame` 最后调用，压在中段之上）、`mouse` 的 pending 守卫、`draw_bottom` 改为**总是画草稿**（问题期间只收起光标）；`src/render/wording.rs` 给两个新确认补上可接受键；`tests/render_layout.rs` 新增 5 个用例、`tests/wording.rs` 改 1 个。
 

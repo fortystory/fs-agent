@@ -17,7 +17,7 @@ Status: done
 - [x] `BudgetExhausted` 与 `Completed` / `MaxIterations` / `RoundsExhausted` 在显示上**可区分**
 - [x] e2e：把累计上限调到很低 → 断言讨论不开第二轮、直接进合成、落 `BudgetExhausted`
 
-## Comments
+## 评论
 
 落地（2026-09-21），已按 `/code-review` 的两轴复审改过一轮；机制细节折回 spec §17（票 14 段）。
 

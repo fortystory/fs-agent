@@ -43,7 +43,7 @@ Blocked by: 01
 - [ ] 六处文档都改到，且 `docs/permissions.md` 进了 `scripts/check-language.py` 的 `DOCS_MIN_RATIO`（按实测值减 2 收紧）。
 
 
-## Comments
+## 评论
 
 - 2026-10-01 落地（依赖票 01，同日完成）。`Mode::Workspace`（`as_str` = `"workspace"`，
   标签「工作区」，`next()` 按严格度：`readonly → ask → workspace → auto`）；

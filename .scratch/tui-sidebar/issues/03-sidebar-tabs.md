@@ -33,7 +33,7 @@ Blocked by: 02
 
 `轨迹` / `文件` 的真实内容；tab 的键位；tab 的键盘焦点。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`（`TuiState.tab`、`HitAction::SwitchTab`、`draw_sidebar` 记命中矩形并按选中页画、`mouse()` 的第三段分派）、`tests/render_layout.rs`（5 个新用例）。
 

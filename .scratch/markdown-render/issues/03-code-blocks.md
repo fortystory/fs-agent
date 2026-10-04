@@ -46,7 +46,7 @@ Status: done
 - [ ] `cargo clippy --all-targets` 无新增告警。
 - [ ] 真机：`cargo run`，让模型吐一段 Rust，关键字/字符串/注释颜色分得开，语言名贴在最右。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地：语言名单独一行、右对齐到转录内容右缘（那一行不缩进）；取 info string 第一个词、保留作者大小写；光秃秃的 ``` 不画那一行；认不出的语言照原文显示、代码退纯文本。
 - 高亮接回 `render::highlight::highlight_code`：**先高亮、再按宽度折行**，续行保持两格缩进（没有交给 `pane::wrap_line` 硬折）。`Highlighter` 改成 `thread_local!` 里复用一份。

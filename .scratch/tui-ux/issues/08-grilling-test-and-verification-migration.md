@@ -5,7 +5,7 @@ Status: resolved
 Blocked by: 02, 03, 04, 05, 06, 07
 Part of: ../map.md
 
-## Question
+## 问题
 
 把本图所有决定的**可验证性**定下来：哪些进 `cargo test`、哪些只能进 pty 脚本、哪些只能进真终端手工清单；以及哪些既有测试与文档要改。沿用 `.scratch/tui-layout/issues/08`（测试与验证迁移）的先例。
 
@@ -26,7 +26,7 @@ Part of: ../map.md
 - `tests/support/`（既有 fixture 形态）
 - `scripts/tui-startup-check.py`（docstring 与锚点）
 - `docs/tui-manual-checklist.md`
-- `.scratch/tui-layout/spec.md` 的 `Testing Decisions` 与 `Further Notes`（几何数字的唯一来源口径）
+- `.scratch/tui-layout/spec.md` 的 `测试决定` 与 `补记`（几何数字的唯一来源口径）
 - `.scratch/tui-layout/issues/08-grilling-test-and-verification-migration.md`（先例）
 - `docs/agents/issue-tracker.md`（本图产物与 `Part of` / `Blocked by` 约定）
 
@@ -36,11 +36,11 @@ Part of: ../map.md
 
 ## 进度
 
-**100%** —— 完成。一轮 grilling、4 条决定；契约见 `## Answer`（分层、新增断言清单、既有测试逐条改动、pty 增删、手工项、基线、spec 回改汇总）。
+**100%** —— 完成。一轮 grilling、4 条决定；契约见 `## 作答`（分层、新增断言清单、既有测试逐条改动、pty 增删、手工项、基线、spec 回改汇总）。
 
 **下一步**：无（已 resolved）。本图随 `08` 达到 **8/8**；实现按本票的清单落地，spec 由 `/to-spec` 回改。
 
-## Answer
+## 作答
 
 **验证契约（2026-09-23，4 条决定）。**
 
@@ -83,7 +83,7 @@ Part of: ../map.md
 - ⑦ 退出后干净：加 `Ctrl-D → y` 路径。
 - ⑩：**修既有漂移**——把 `41×19` 改成实测 **`42×18`**（宽 42 = 38 标记 + 2 边框 + 2 留白；高 18 由票 05 重算）。
 - 新增项：折叠提示与详情覆盖层（点 `▸`、滚动、`Esc` / 再点关闭、打开时冻结）；鼠标点击作答（四种模态 + 问卷，含多选 / 翻页 / 提交）；角色配色（四种角色的真配色、浅色主题下的可读性）；`Ctrl-D` 的行为边界（忙 / 详情 / 问题）。
-- 明确**不列** hover（any-motion 未开，见 map 的 Out of scope）。
+- 明确**不列** hover（any-motion 未开，见 map 的 明确不做）。
 
 ### §6 基线与纪律
 
@@ -100,6 +100,6 @@ Part of: ../map.md
 - **§10**：提示行两个 exit 常量与新梯子；角色配色（`speaker_color` / `DEBATER_PALETTE` / `SessionFacts.speaker_order`）。
 - **两处既有漂移**（本图发现、不是本图引入）：spec §2 几何表早于 Mark header（归 `/to-spec`）；`docs/tui-manual-checklist.md` ⑩ 的 `41×19` vs 代码 `42×20`（归本票 §5 修）。
 
-### §8 handoff
+### §8 交棒（handoff）
 
 - 本图 8/8 resolved 且雾清空 ⇒ 路线 clear。**不要直接 `/implement`**：`/to-spec`（含 §7 回改）→ `/to-tickets` → 每票一次 `/implement`（fresh session、票间 `/clear`）→ `/code-review` 双轴。

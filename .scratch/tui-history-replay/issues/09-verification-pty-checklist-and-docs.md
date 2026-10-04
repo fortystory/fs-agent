@@ -9,7 +9,7 @@ Part of: ../map.md
 
 **Blocked by:** 06、07、08 —— 清单里的「历史详情点击」与「分帧中途上滚」要等前两张落地；pty 的收敛断言也要功能完整才有意义。
 
-**来源：** `.scratch/tui-history-replay/spec.md` 的 `Testing Decisions` 分层一节与 `Further Notes` 的文档回改清单。**注**：设计票写的编号是 ⑫，但 `tui-ux` 已占用 ⑫ / ⑬，实际落 **⑭**。
+**来源：** `.scratch/tui-history-replay/spec.md` 的 `测试决定` 分层一节与 `补记` 的文档回改清单。**注**：设计票写的编号是 ⑫，但 `tui-ux` 已占用 ⑫ / ⑬，实际落 **⑭**。
 
 **验收：**
 
@@ -19,11 +19,11 @@ Part of: ../map.md
 - [x] 手工清单退出项补一条「**重开后退出**」：`--continue` → `Ctrl-C` / `Ctrl-D` → 终端干净。
 - [x] `docs/render.md` 补一节历史重播：新的前端控制请求、历史行经同一条 apply、分隔行、分帧与进度行。
 - [x] 渲染层文案模块已落新一族（`history_progress` / `history_divider`，见 spec §10）；`docs/render.md` 不必逐字重复文案。
-- [x] spec 的 `Further Notes` 文档回改清单逐条清空（v1 spec 的 §19 / §11 已在 `/to-spec` 阶段折回）。
+- [x] spec 的 `补记` 文档回改清单逐条清空（v1 spec 的 §19 / §11 已在 `/to-spec` 阶段折回）。
 - [x] `cargo test --all-targets` 基线复核（开工前与收尾各一次，不低于 **664 passed**）；`cargo clippy --all-targets` 干净。
 
-## Comments
+## 评论
 
-- 2026-09-23 实现落地：`scripts/tui-startup-check.py` 的每条 run 追加一次 `--continue`（用前面几条 run 在同一 `XDG_DATA_HOME` 里造出的会话），`verdict(replay=True)` 断言末屏无 `恢复`（重播收敛）+ 原有终端交还检查；手工清单新增 **⑭**、⑦ 下补「重开后退出」；`docs/render.md` 新增历史重播一节；spec 的 Further Notes 文档回改清单已逐条清空。
+- 2026-09-23 实现落地：`scripts/tui-startup-check.py` 的每条 run 追加一次 `--continue`（用前面几条 run 在同一 `XDG_DATA_HOME` 里造出的会话），`verdict(replay=True)` 断言末屏无 `恢复`（重播收敛）+ 原有终端交还检查；手工清单新增 **⑭**、⑦ 下补「重开后退出」；`docs/render.md` 新增历史重播一节；spec 的「补记」文档回改清单已逐条清空。
 - pty 实测（`python3 scripts/tui-startup-check.py target/debug/fs-agent 1`）：4/4 GREEN（ctrl-c / /quit / ctrl-d y / --continue）。
 - 基线复核：开工前 `cargo test --all-targets` = **677 passed / 0 failed**，收尾 **704 passed / 0 failed**；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只留 `src/context/repo_map.rs` 既有漂移。

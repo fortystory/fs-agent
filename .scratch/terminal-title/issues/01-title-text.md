@@ -76,7 +76,7 @@ Blocked by: —
 - 不改 `src/render/wording.rs` 里现有的任何函数与文本，也不改状态行 / 提示行的任何一句（spec §明确不做）。
 - 不读 `$HOME` / 不读终端响应；路径与 `home` 都是参数（spec §明确不做「不读终端响应」）。
 
-## Comments
+## 评论
 
 - **落地**：`src/render/wording.rs` 里新增 `TITLE_COLUMNS`、`TitleState`、`title_word`、`title_state`、`title_path`、`title_path_base`、`terminal_title`（加上私有的 `title_base` 与 `join_title`）。`home` 是参数，这一层不读 `$HOME`；前缀按 `Path::strip_prefix` 的分量语义比。
 - **一处与 spec 例子对不上**（本票补判，写在这里供 spec 作者改）：spec §1 举的例子 `fortystory/fs-agent · 运行中 · 修文档索引` 按 §3 的 40 列封顶算**是 41 列** —— 它会被规则丢掉目标名，留下 `fortystory/fs-agent · 运行中`。本票以 §3 那条固定规则为准（规则是可测的那一条），测试里把目标名换成 `修文档`（整串 37 列）。spec §1 那个例子要么改短，要么得承认它只是形状示意。

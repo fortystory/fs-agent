@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 01
 
-## Question
+## 问题
 
 对话面板从"往 scrollback 里插行"变成"一块带自己滚动缓冲的面板"（见 map Notes 第 2、3 条：上 alt screen、PgUp/PgDn 滚动、20 000 行上限、吸底但上滚后不抢）。要定下它的状态模型与缓存策略。
 
@@ -39,7 +39,7 @@ Blocked by: 01
 - Fullscreen 下 `Frame::area()` = `(0, 0, w, h)`（§5）。
 - `insert_before` **没有被移除**（对 Fullscreen 是 no-op）；要删的 `paint_scrollback` 是 fs-agent 自己的函数（`src/render/tui.rs:773`），删它要顺带清 `src/render/mod.rs:52` 的再导出（§12.2）。
 
-## Answer
+## 作答
 
 **已定（2026-09-21，grilling 两轮 + 用户逐条确认）。本票只产决策，不含实现。**
 

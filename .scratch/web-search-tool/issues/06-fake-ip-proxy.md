@@ -54,7 +54,7 @@ SSRF 的防线。放宽必须只针对「本地 DNS 不可信」这一件事，�
 - 不动严格路径的任何一条判据；不动搜索这一侧。
 - 不把 `no_proxy` 的语义接进来（打开开关后，主机名的目标校验整条交给代理）。
 
-## Comments
+## 评论
 
 - **落地（2026-10-03）**：`HttpFetch` 加 `trust_proxy_dns` 与 `with_trust_proxy_dns()`；
   `resolve_public` 加代理分支；`client_for` 在地址集为空时跳过 `resolve_to_addrs`；

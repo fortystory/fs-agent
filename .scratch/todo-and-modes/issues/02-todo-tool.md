@@ -4,7 +4,7 @@ Type: implement
 Status: done
 Blocked by: 01
 
-> 规格：`.scratch/todo-and-modes/spec.md` §2、§3、`Testing Decisions`。
+> 规格：`.scratch/todo-and-modes/spec.md` §2、§3、`测试决定`。
 > 依赖票 01：`plan` 退场之后，「计划」这件事才由这个工具独占（否则两套机制同时在讲同一件事）。
 
 ## 目标

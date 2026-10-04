@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 01, 06
 
-## Question
+## 问题
 
 决定 skills 的接缝。ratify 第 3 条翻案把它从"砍掉"改成"要做"。
 
@@ -21,7 +21,7 @@ Blocked by: 01, 06
 
 **不要**做：自定义工具注册 —— 它是**票 11**，已从本条拆出（ratify 第 3 条内部是两件事）。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。环境事实为本机实测（2026-09-12）：`~/.claude/skills/` 40 个、`~/.agents/skills/` 38 个，两者 **38 个同名且不是软链**；`SKILL.md` = YAML frontmatter（`name` / `description`）+ Markdown 正文；`disable-model-invocation: true` 在现有 skill 里已被实际使用。**
 

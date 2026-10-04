@@ -1,12 +1,12 @@
 # research：DSH 的 ask_user_question 与 composer takeover
 
-## Question
+## 问题
 
 模型需要一个「向人提问并把答案当工具结果拿回来」的能力，DSH 已经把它做成了 first-party 实现：一个模型面工具、一个 `ctx.userQuestions` seam、一个 Web 端的「底部输入框接管」问卷界面，外加 plan-review 这条 intent 分支。本note 只做事实清点：读完已安装的编译产物，把这四层各自的契约、边界、取消/失败路径摊开，并对照 fs-agent 现有的事件流、工具表、四种问题覆盖层与三个渲染器，把五个待谈分叉分别标注为「sources 已经 settle 了什么」与「sources 留开了什么」。
 
 **路径约定**：下文所有 `<pkg>/...` 相对 `/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/`；在逐包小节里，裸 `lib/...` 指该小节所讲的那个包。代码是发布的编译 JS，结论以「文件 + 行号」给出；凡是从编译代码推导而文档没有明写的，正文里写明依据，不当作文档事实。
 
-## Findings
+## 发现
 
 ### 调用链全貌（模型发出 → 人答 → 工具结果）
 
@@ -105,7 +105,7 @@
 - `dsh-tools/lib/types/schema.d.ts:178-208`、`lib/types/schema.js:68-82,238-247`：`defineTool` 能声明什么、schema 怎么编译。理由：证明该工具没有 effect/permission 分类，且根 schema 的开放性。
 - `dsh-client-connection/lib/client.js:5599-5622`：测试 fixture 里 `user-questions/request` 的 waterfall 形状（`{questions: fixtureQuestions}`，无 signal）。理由：唯一一处能看到该事件在线上的样例形状。
 
-## What the sources leave open
+## 来源留下的口子
 
 - **`signal` 是否真的跨 Remote 线、绑定到谁的取消**：类型里它是请求的一部分（`dsh-user-questions/lib/types/types.d.ts:66`），客户端 `PendingQuestion` 也监听它（`lib/client.js:98-107`），但 `dsh-api-remotes` 只把 `request` 原样转发，shipped fixture 的请求不含 `signal`。产物里读不出浏览器端拿到的是哪个 signal。
 - **哪些 preset 挂了 `ask_user_question`**：本 install 中没有任何组装配置引用 `dsh-tool-ask-user`（全 scope grep 只命中它自己的文件与 UI 包 README 的链接）；Web 插件 node half 的 `apply()` 为空。只能确定设计意图（「belongs to the presets that include it and to the TUI composition」），读不出实际名单。

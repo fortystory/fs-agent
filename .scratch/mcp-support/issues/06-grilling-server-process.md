@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 冻结项 9 定了「随会话起、随会话停、过 bubblewrap 沙箱」。剩下两件具体的：
 
@@ -29,7 +29,7 @@ Blocked by: —
 - 默认给一个 per-server 的临时目录（`/tmp` 每次调用都是新的，跨调用不保留）
 - 什么都不给（server 写不了就是它的事）
 
-## Answer
+## 作答
 
 **环境走白名单**：`env_clear()` 之后只注入两样 —— server 配置里 `env` 显式声明的几项，加最小必需的
 `PATH` / `HOME` / `LANG`（具体清单归实现票，原则是「不声明就没有」）。

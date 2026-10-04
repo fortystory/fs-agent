@@ -1,6 +1,6 @@
 # 语言迁移：散文一律中文
 
-Status: done（2026-09-27 两张票落地；2026-09-30 补收 ADR 那一批 —— [票 03](issues/03-adr-headings-and-jargon.md)。[票 04](issues/04-tracker-headings-in-chinese.md) 是另起的后续，未做）
+Status: done（2026-09-27 两张票落地；2026-09-30 补收 ADR 那一批 —— [票 03](issues/03-adr-headings-and-jargon.md)；[票 04](issues/04-tracker-headings-in-chinese.md) 是另起的后续，2026-10-05 落地）
 
 - **决定**：[`docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md`](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) —— **散文一律中文**（代码注释、`docs/` 下的设计文档与 `docs/agents/`、测试的断言消息、只给人看的错误文本）；**英文只留给三类**：标识符、**模型可见**的文本、**进事件流要永久回放**的文本。`docs/research/` 是一手引文，一个字不改。
 - **动机**：读者是人（注释与设计文档服务的是读代码的人），而模型可见 / 进流那一侧动一次要付两笔（前缀缓存整体作废 + 老流永久中英混排）、收益又几乎没有（那一侧的读者是模型）。
@@ -56,7 +56,7 @@ Status: done（2026-09-27 两张票落地；2026-09-30 补收 ADR 那一批 —�
 - **票 02（收尾）**：**已完成**（`b423cc4`）—— 棘轮提到精确实测值、`DOCS_MIN_RATIO` 逐份收紧到「实测 −2 点」、README 行数按实测改（那行本来是迁移前量的，是真漂移），以及最后一遍清扫的结论（剩下的英文注释行全是引用 / 图表 / 标识符，**没有散文**；`docs/tui-manual-checklist.md` 的 ⑩ 与 ⑰ 仍留着「待人工过一遍」）。反证与逐条判断在 [票 02 的 Comments](issues/02-ratchet-and-numbers.md)。
 - **票 03（ADR，2026-09-30）**：**已完成**（`7d4d1d4`）—— ADR 的标题与小标题也是散文：`## Consequences` 换成 `## 后果`，行话改成「中文名（English）」，护栏收到 `docs/adr/*.md`。**顺手把「还剩多少」又量了一遍**：`src/` + `tests/` 的注释与 `docs/**`（除 `research/` 与 `highlight.md`）里**没有英文散文**了，剩下的英文行全是路径引用、代码块、图表与 CLI 用法。见 [票 03 的 Comments](issues/03-adr-headings-and-jargon.md)。
 
-**另起的后续（不属于本 spec 的收尾）**：[票 04](issues/04-tracker-headings-in-chinese.md) —— `.scratch/` 里 `## Question` / `## Answer` / `## Comments` / `## Problem Statement` / `## Destination` 那批英文小标题中文化（含 `docs/agents/issue-tracker.md` 的约定与 `.scratch` 侧的护栏）。上一轮刻意没动它们：它们是 tracker 的字段名还是散文，当时没定；2026-09-30 定了要单独做，故 `Status: ready-for-agent`。
+**另起的后续（不属于本 spec 的收尾）**：[票 04](issues/04-tracker-headings-in-chinese.md) —— `.scratch/` 里 `## Question` / `## Answer` / `## Comments` / `## Problem Statement` / `## Destination` 那批英文小标题中文化（含 `docs/agents/issue-tracker.md` 的约定与 `.scratch` 侧的护栏）。上一轮刻意没动它们：它们是 tracker 的字段名还是散文，当时没定；2026-09-30 定了要单独做，2026-10-05 落地（票 04）。
 
 ## 护栏（已有，别绕过）
 

@@ -9,13 +9,13 @@
 - [`src/render/markdown.rs`](../../src/render/markdown.rs) 开头那句「它刻意不是 CommonMark……**不依赖任何 parser**」——姿态改写成「不手写解析器」，见 [ADR 0008](../../docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)；
 - [`../tui-layout/spec.md`](../tui-layout/spec.md) §3 里「**assistant 的消息本来就是全文 Markdown，不动**」与「续行按 speaker 前缀显示宽度缩进」的**后半句**——非 assistant 那一半留着，assistant 那一半改成不缩进（§5）。
 
-## Problem Statement
+## 问题陈述
 
 1. **表格画出来不是表格。** `table_line` 把各格用 `" │ "` 接起来，没有列宽、没有对齐；`is_table_separator` 认出的那条 `|---|---|` 被判为「不带内容」而整行丢掉——而它恰好是**唯一**能标出「上一行是表头」的信号。于是表头既认不出、也无从对齐，单元格里的行内 Markdown 也不渲染。
 2. **代码块只有一种颜色。** `code_line` 给整行上 `Color::Yellow`，围栏上的语言标签被 `opening_fence` 丢掉（它只返回 `(字符, 长度)`）。而仓库里 [`src/render/highlight.rs`](../../src/render/highlight.rs) 有一整套 tree-sitter 语法高亮——**它没有生产消费者**，[`docs/highlight.md`](../../docs/highlight.md) 整篇记的就是这件事，其中「什么会让它回来」一节描述的正是这个场景。
 3. **每条消息的每一行前面都有 11 格空格。** `attribute` 给块里**每一行**都加 `[speaker] ` 宽度的前导。对用户输入那样「一次发言」是对的；对 assistant 的回答——那是一份**文档**，结构由 Markdown 自己给（标题、列表、代码块）——这 11 格把结构整体推右，还吃掉主列约七分之一。
 
-## Solution
+## 方案
 
 - **解析层换血**（§1）：引入 `pulldown-cmark`（`default-features = false`，5 个纯 Rust 包）**只做解析**；`markdown.rs` 重写成事件驱动的渲染器。渲染决定（`Line`/span/列宽/折行/表头样式/代码块）一条都不外包。
 - **表格**（§2）：表头加粗 + `─┼─` 分隔线；列宽按内容自适应、余量给最后一列；超宽时单元格内折行、**整行等高**；表格顶格。
@@ -25,7 +25,7 @@
 - **行内与降级**（§6）：图片落成 `[图片] alt (url)`，内联 HTML 与 HTML 块原样透传。
 - **明确不动**（§7）：流式期间仍是纯文本；换行仍归 `pane::wrap_line`。
 
-## User Stories
+## 用户故事
 
 1. 作为读转录的人，我希望表格的表头与数据行分得开，这样我能一眼看出哪一行是列名。
 2. 作为读转录的人，我希望表格的列对得齐，这样我能沿着列竖直读下去。
@@ -37,7 +37,7 @@
 8. 作为读转录的人，我希望认不出的语言、没写语言的围栏、画不出来的图片都**降级成能读的文本**，而不是消失。
 9. 作为维护者，我希望 Markdown 的解析交给一个被复核过的库，这样表格对齐、行内嵌套、转义这些边角不再靠手写扫描器扛。
 
-## Implementation Decisions
+## 实现决定
 
 ### §1 解析层：`pulldown-cmark` 只做解析
 
@@ -115,7 +115,7 @@
 - [`../tui-layout/spec.md`](../tui-layout/spec.md) §3：把「assistant 的消息本来就是全文 Markdown，**不动**」与「续行按 speaker 前缀显示宽度缩进」两句改成指向本 spec §5 的交叉引用，并改掉「宽度无关」那半句。
 - [`../../docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md)：加一条真机项（表格、代码块高亮、10 种语言各看一眼）。
 
-## Testing Decisions
+## 测试决定
 
 - **`tests/render_markdown.rs` 是主战场**，它已经建在自己的接缝上（直接调 `to_lines`）。现有测试：
   - `quotes_rules_and_tables_render_as_structure` 里那条「分隔那一行被丢掉」的断言**必须反过来写**——分隔线现在是表头信号；
@@ -132,7 +132,7 @@
 - **真机**：`docs/tui-manual-checklist.md` 那一条新项——表格、代码块、10 种语言至少各看一次，因为语法高亮与 CJK 折行的组合只有真终端看得出来。
 - **回归风险最高的一处**是 `to_lines` 的签名变化：所有调用点（`tui.rs` 的 `paint_block`、`plain.rs`、测试）都要跟着走。
 
-## Out of Scope
+## 明确不做
 
 - **终端图像协议的真图渲染**（kitty graphics / iTerm2 inline images / sixel）。维护者的终端支持显示图片，这是明确留到后面做的一件事；这一轮图片只落成 `[图片] alt (url)`。
 - **脚注**（`ENABLE_FOOTNOTES`）。终端里脚注需要另设计一套「引用标记 + 文末列表」的呈现，不该混在修表格与高亮里。
@@ -141,7 +141,7 @@
 - **`ratatui-markdown` / `tui-markdown` / `markdown-ratatui` 三个现成渲染器**。全部出局，理由与一手事实在 [research/01](research/01-markdown-crate-selection.md)：`tui-markdown` 关掉高亮仍有 43 个 registry crate、语言标签只能靠字符串抠、且 `Options::table_width` **只对表格折行**（200 字符段落回来仍是 1 行 200 列），违反「渲染器必须交回未换行的行」这条约束；`ratatui-markdown` 的已发布版本是 `ratatui ^0.29` 且锁 `tree-sitter 0.26`（与我们的 0.27 会双份共存），包体 8.37 MB；`markdown-ratatui` 完全没有高亮，且首发三周、84 次下载。
 - **Rust 之外的高亮文法裁剪 / feature 门控**。10 种全部硬依赖。
 
-## Further Notes
+## 补记
 
 - **两份一手笔记**：[research/01-markdown-crate-selection.md](research/01-markdown-crate-selection.md)（三个 crate 的依赖、表格、高亮、接口形状）、[research/02-parser-interface-and-grammars.md](research/02-parser-interface-and-grammars.md)（`pulldown-cmark` 的事件模型、10 个 grammar 的兼容性实测）。
 - **10 个 grammar 全部与 `tree-sitter 0.27` / `tree-sitter-highlight 0.27` 兼容**，已实测编译：12 个配置（10 语言 + tsx + php_only）全部构造成功，lockfile 里只有一份 `0.27.0` + 一份 `tree-sitter-language 0.1.8`。原因是 grammar 只锁 `tree-sitter-language ^0.1`，而 `LanguageFn` 从 0.1.1 到 0.1.8 结构未变。

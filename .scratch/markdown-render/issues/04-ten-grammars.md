@@ -54,7 +54,7 @@ Status: done
 - [ ] 冷构建时间记一笔实测值（10 个 C parser），写进 Comments——它是一次性的，但值得知道。
 - [ ] 真机：10 种语言各贴一段看一眼。
 
-## Comments
+## 评论
 
 - 2026-10-01 落地：十种文法全部硬依赖（`Cargo.toml` 里新增九条 + 既有的 `tree-sitter-rust`），每种一个 `OnceLock`，第一次用到才编 query；别名表 `canonical`（`rs` / `py` / `js` / `ts` / `sh` / `shell`，`yaml` 不映射）；`CAPTURES` 补齐 html 的 `tag` / `tag.error`、php 的 `module` / `module.builtin` / `tag`、sequel 的 `conditional` / `field` / `float` / `parameter` / `storageclass`，`Class::of` 同步。sequel 的 `spell` 有意留在 `Plain`（那本来就是「不知道是什么」）。
 - 两个常量名按实测：`bash` 与 `javascript` 是**单数** `HIGHLIGHT_QUERY`；crate 名按实测：toml 用 `tree-sitter-toml-ng`、sql 用 `tree-sitter-sequel`。

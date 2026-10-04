@@ -2,7 +2,7 @@
 """ADR 0004 与 ADR 0005 的护栏：散文一律中文，英文只留给**不是散文**的东西
 （标识符、schema 值与协议标记、路径与命令、`docs/research/` 的一手引文）。
 
-四条检查，任一条不过就以非零码退出：
+五条检查，任一条不过就以非零码退出：
 
 ① **模型可见 / 进流那一侧的两条棘轮**（ADR 0005 起）。`FROZEN_FILES` 就是这一侧的
    清单 —— 工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`
@@ -23,6 +23,10 @@
 
 ④ **`src/` 与 `tests/` 注释的中文行数下限**：棘轮，只许上升 —— 防止翻过的地方
    被改回英文。
+
+⑤ **`.scratch/` 里 tracker 的标题必须是中文**（2026-10-05，language-migration 票 04 起）：
+   判据与 ③ 同一条。`research/` 整档不查 —— 那是一手引文与专名笔记（`### DeepSeek`、
+   `### petgraph` …），产品名小节本来就该留英文。
 
 用法：`python3 scripts/check-language.py`（在仓库根目录跑）。加 `--list` 会打印
 ① 的两条棘轮现在盯的文件与数字，用来核对清单本身。
@@ -213,13 +217,52 @@ COMMENT_FLOOR = {
 }
 
 
-# --- ③ ADR 的标题与小标题必须是中文 -----------------------------------------
+# --- ③ ADR 与 `.scratch` tracker 的标题必须是中文 ----------------------------
 # ADR 的标题也是散文（ADR 0004 的「后加」一节），所以下一个 ADR 不许再写出
-# `## Consequences`。检查前先挖掉代码块与行内代码：`# `bash`` 那种标题剥完是空的，
-# 放过；ADR 的文件名仍是标识符，留英文。
+# `## Consequences`。2026-10-05（language-migration 票 04）起把 `.scratch` 里 tracker 的小节
+# 标题也纳进同一条判据 —— `## 问题` / `## 作答` / `## 评论` / `## 方案` 那批，与 ADR 的标题
+# 是同一种东西，上一轮只因为它们写在 tracker 的约定里，被当成字段名放过了。检查前先挖掉代码
+# 块与行内代码：`# `bash`` 那种标题剥完是空的，放过；文件名仍是标识符，留英文。
 ADR_DIR = "docs/adr"
+SCRATCH_DIR = ".scratch"
 HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*$", re.M)
-FENCE = re.compile(r"^```.*?^```", re.S | re.M)
+
+
+def strip_fences(text: str) -> str:
+    """挖掉围栏代码块。按行配对 —— 正则会被一个不成对的围栏吃掉下半篇，那些标题就漏检了。"""
+    out, fence = [], False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        if not fence:
+            out.append(line)
+    return "\n".join(out)
+
+
+def bare_heading(title: str) -> str:
+    """标题剥掉行内代码与链接之后剩下的字（两者都不算散文）。"""
+    body = re.sub(r"`[^`]*`", " ", title)
+    body = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", body)
+    return body.strip()
+
+
+def prose_heading(title: str) -> bool:
+    """这个标题是不是**散文**（于是要求含中文）。
+
+    只有带字母的才算散文：`### §12 `/clear``、`### 1. `docs/render.md`` 这类剥完只剩编号与
+    符号的标题是**指路**，不是散文 —— 它与 ADR 那条「整条都是行内代码的标题剥完是空的，
+    放过」是同一条判据的延伸。
+    """
+    return bool(re.search(r"[A-Za-z]", bare_heading(title)))
+
+
+def headings_without_chinese(path: str, text: str, why: str) -> list[str]:
+    problems = []
+    for heading in HEADING.findall(strip_fences(text)):
+        if prose_heading(heading) and not CJK.search(bare_heading(heading)):
+            problems.append(f"{path}: 标题里一个中文字都没有：{heading.strip()!r}（{why}）")
+    return problems
 
 
 def check_adr_headings() -> list[str]:
@@ -229,15 +272,31 @@ def check_adr_headings() -> list[str]:
     if not paths:
         problems.append(f"{ADR_DIR}/: 一份 ADR 都没有（清单该更新了）")
     for path in paths:
-        text = FENCE.sub("", open(path, encoding="utf-8").read())
-        for heading in HEADING.findall(text):
-            body = re.sub(r"`[^`]*`", " ", heading)  # 行内代码不算散文
-            body = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", body)  # 链接留文字
-            if body.strip() and not CJK.search(body):
-                problems.append(
-                    f"{path}: 标题里一个中文字都没有：{heading.strip()!r}"
-                    "（ADR 的标题与小标题也是散文，见 ADR 0004）"
-                )
+        text = open(path, encoding="utf-8").read()
+        problems += headings_without_chinese(
+            path, text, "ADR 的标题与小标题也是散文，见 ADR 0004"
+        )
+    return problems
+
+
+def check_scratch_headings() -> list[str]:
+    """`.scratch` 里每个 tracker 标题，剥掉代码后都要含中文。
+
+    `research/` 整档不查：那是一手引文与专名笔记（`### DeepSeek`、`### petgraph`、
+    `### firejail` …），产品名小节本来就该留英文 —— 票 04 的验收也把「引文小节」与「专名」
+    列为允许的残留。
+    """
+    problems = []
+    paths = sorted(glob.glob(os.path.join(SCRATCH_DIR, "**", "*.md"), recursive=True))
+    if not paths:
+        problems.append(f"{SCRATCH_DIR}/: 一份 tracker 文件都没有（清单该更新了）")
+    for path in paths:
+        if f"{os.sep}research{os.sep}" in path:
+            continue
+        text = open(path, encoding="utf-8").read()
+        problems += headings_without_chinese(
+            path, text, "tracker 的小节标题也是散文，见 ADR 0004"
+        )
     return problems
 
 
@@ -405,20 +464,21 @@ def main() -> int:
         + check_docs()
         + check_adr_headings()
         + check_comments()
+        + check_scratch_headings()
     )
     if problems:
         print("check-language: 不通过\n")
         for problem in problems:
             print(f"  - {problem}")
         print(
-            "\n这四条来自 ADR 0004 与 ADR 0005：散文（注释 / docs / ADR / 断言消息 / 给人看的"
-            "错误 / 模型可见与进流的文本）用中文，只有标识符、schema 值与协议标记、路径与命令"
-            "留英文。"
+            "\n这五条来自 ADR 0004 与 ADR 0005：散文（注释 / docs / ADR / tracker 标题 / 断言"
+            "消息 / 给人看的错误 / 模型可见与进流的文本）用中文，只有标识符、schema 值与协议"
+            "标记、路径与命令留英文。"
         )
         return 1
     print(
-        "check-language: OK（模型可见 / 进流那一侧的两条棘轮未回退、docs 与 ADR 是中文散文、"
-        "注释中文行数未回退）"
+        "check-language: OK（模型可见 / 进流那一侧的两条棘轮未回退、docs / ADR / tracker 的"
+        "标题是中文散文、注释中文行数未回退）"
     )
     return 0
 

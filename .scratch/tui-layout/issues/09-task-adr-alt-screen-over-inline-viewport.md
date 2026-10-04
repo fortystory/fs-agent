@@ -4,7 +4,7 @@ Type: task
 Status: resolved
 Blocked by: 02, 03, 04, 05, 06, 07, 08
 
-## Question
+## 问题
 
 写一条新 ADR（编号照 `docs/adr/` 现状顺延），把本 effort 对 spec §19 的推翻正式记录在案。**必须在其余票都定了之后再写** —— 因为 ADR 的「代价」一节要引用它们的结论。
 
@@ -29,11 +29,11 @@ Blocked by: 02, 03, 04, 05, 06, 07, 08
 - **`docs/adr/0002-fullscreen-alt-screen-tui.md`**（`docs/adr/` 现在只有 `0001-chinese-ui-frozen-model-text.md`，所以新号是 **0002**）。格式随 `0001`：标题、状态、背景、决策、后果。
 - **没有 ADR 索引文件**（已核实：`docs/adr/` 下只有那一个 ADR，`CONTEXT.md` 与 `docs/agents/domain.md` 都没有清单）——所以**不要**新建索引，也不要往 `CONTEXT.md` 里塞一条。照 `docs/agents/domain.md` 的约定，ADR 就是独立文件，用的时候被读。
 - 按 `docs/agents/domain.md` 的「Flag ADR conflicts」惯例，ADR 正文里**显式写明它推翻了 `spec §19` 的哪一条**（spec 不是 ADR，但冲突要露面，不能悄悄覆盖）。
-- 在 `map.md` 的 `## Decisions so far` 追加一行指针。
+- 在 `map.md` 的 `## 已定的决定` 追加一行指针。
 
 **本票只写文档，不改代码。** 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Answer
+## 作答
 
 **已完成（2026-09-21）。ADR 写在 `docs/adr/0002-fullscreen-alt-screen-tui.md`**，格式照 `0001-chinese-ui-frozen-model-text.md`（标题 + 决策与理由正文 + 末尾那节「后果」，无状态行、无索引文件）。
 

@@ -3,7 +3,7 @@
 Type: grilling
 Status: resolved
 
-## Question
+## 问题
 
 决定工具层的接缝。这是整个 ACI（agent-computer interface）的骨架，综述说它是"最影响成败的一环"。
 
@@ -18,7 +18,7 @@ Status: resolved
 
 答案定到 trait 签名与注册表数据结构，不要实现细节。
 
-## Answer
+## 作答
 
 **已定（2026-09-12，grilling 与用户逐轮确认）。证据来源：`docs/research/coding-agent-features.md` 第 1 节（并发五数据点）与第 2 节（ACI），以及票 02 的 `parallel_tool_calls` 事实。**
 

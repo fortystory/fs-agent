@@ -6,7 +6,7 @@ Part of: ../map.md
 Blocked by: 08
 
 > 规格：[`../spec.md`](../spec.md) §4。判据来自 [`CONTEXT.md` 的词条边界](07-grilling-context-boundary.md)
-> 的 `## Answer`；逐词条的四类片段清点与「别处是否已有一份」的落点表在
+> 的 `## 作答`；逐词条的四类片段清点与「别处是否已有一份」的落点表在
 > [`../research/02-context-implementation-details.md`](../research/02-context-implementation-details.md)。
 
 ## 目标
@@ -69,7 +69,7 @@ Blocked by: 08
 - 不新增文件；不动 `docs/research/` 与 `.scratch/*/spec.md`（冻结项 3）。
 - 不在这张票里改入口三份、手工清单或 lifecycle（各有自己的票）。
 
-## Comments
+## 评论
 
 （2026-10-04，实现会话。落点只有 `CONTEXT.md`、`docs/render.md`、`docs/observability.md`、`docs/discussion.md`
 四个文件；没建分支、没提交，交给 Lead 统一提交。）

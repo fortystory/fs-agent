@@ -17,7 +17,7 @@ Status: done
 - [x] 模型侧前缀与界面侧前缀是**两套、不共用生成器**
 - [x] e2e：同一批事件、两个不同发言归属，投影结果不同且各自快照稳定；`messages` 能被序列化成两家的线级形状
 
-## Comments
+## 评论
 
 实现落点：`src/provider/projection.rs`（重写）、`src/provider/mod.rs`（`Provider::caps()`）、`src/provider/openai.rs`（trait 实现）、`src/session.rs`（`Session::log()`）、`src/agent.rs`（把能力交给投影）。测试在 `tests/projection_attribution.rs`（纯函数 13 例）与更新后的 `tests/e2e_single_turn.rs`。
 

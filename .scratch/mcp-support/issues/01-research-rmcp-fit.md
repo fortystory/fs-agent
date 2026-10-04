@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 要用官方 Rust SDK（`rmcp` 3.5.0）来接 MCP，还是自己写 client？在拍板之前先把**契合度**查清
 —— 不是「它能不能用」，而是「它嵌进 fs-agent 要付多少代价」。
@@ -33,7 +33,7 @@ Blocked by: —
    `tools/list` 与 `tools/call`、stdio 帧与 Streamable HTTP 的会话头、MRTR 的重试回路、
    进度/取消通知）—— 给一个「大概多少代码」的量级估计，别估精确行数。
 
-## Answer
+## 作答
 
 推荐 `rmcp` 3.5.0（`default-features = false`）。① `Discover` 只用 `server/discover`、不回退，
 合冻结项 19；② `call_tool` 自带 MRTR，elicitation 走 `create_elicitation` 回调，但要

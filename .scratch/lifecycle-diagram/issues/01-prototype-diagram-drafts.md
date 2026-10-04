@@ -5,7 +5,7 @@ Status: resolved
 Part of: ../map.md
 Blocked by: —
 
-## Question
+## 问题
 
 在拍板「`docs/lifecycle.md` 到底长什么样」之前，先把五张图**粗糙地画出来** —— 不追求准确、不
 追求好看，只要具体到能指着说「这张不对 / 这个节点不该在这儿」。prototype 的产物是 discussion
@@ -48,7 +48,7 @@ fidelity，不是最终文档。
 - 节点用 `CONTEXT.md` 的正式用词（`/domain-modeling`）。
 - 自评三条写全，且至少有一条是「这张图可能是错的 / 多余的」。
 
-## Answer
+## 作答
 
 （2026-10-03，与维护者的 live exchange）五张草稿画完并自检通过：
 [`prototype/01-drafts.md`](../prototype/01-drafts.md) —— 五张图、每张三条自评、末尾四处待拍板的冲突。

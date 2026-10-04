@@ -56,7 +56,7 @@ Blocked by: 01
 - 不加 `exit` / `abort` 一类新命令，不给 `--plain` 加手势。
 - 不为了让 130 走出去而保留任一处 `std::process::exit`。
 
-## Comments
+## 评论
 
 - **落地**：新增 `exit_code_after(quit: bool) -> ExitCode`（0 / 130 两档只在这一处定义）与 `ExitRequest`（`quit: bool` + `apply(&mut self, &FrontEndEvent, &CancelSignal)` + `requested()` + `code()`）。形状取了票里给的三选一里的「一个记账值」：`Quit` 记下请求**并且** `signal.cancel()`（让回合拿到收尾），`Cancel` 只取消，`CycleMode` 在调用点处理。
 - **三处 `std::process::exit(130)` 全删**：`run_one_turn`、`run_discussion`、`discuss_in_session` 的 select 现在都走 `quit.apply(...)`。`grep -rn 'process::exit(130)' src/` 为空（只剩注释里解释历史的那句，字样也改了）。

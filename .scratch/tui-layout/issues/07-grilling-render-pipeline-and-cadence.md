@@ -4,7 +4,7 @@ Type: grilling
 Status: resolved
 Blocked by: 01, 03
 
-## Question
+## 问题
 
 现有 TUI 循环是为 **inline viewport** 写的：`hide_cursor` → `autoresize` → 在底部保留视口 → 插入 scrollback → `draw_live`，外面包一层 `BeginSynchronizedUpdate` / `EndSynchronizedUpdate`（commits `b64c9e1`、`723bd61`、`333d104`、`e25097e`）。全屏四分区之后这套形状不再适用。本票定下新管线的形状与节拍，并处理"渲染器被 provider 突发饿死"那条既有回归。
 
@@ -26,7 +26,7 @@ Blocked by: 01, 03
 
 答案必须自足（`/implement` 在 `/clear` 后读它）。
 
-## Answer
+## 作答
 
 **已定（2026-09-21，grilling）。技术决策为主，逐条附既有代码位置。本票只产决策，不含实现。**
 

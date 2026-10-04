@@ -38,7 +38,7 @@ Blocked by: 08
 
 改颜色公式；让静止色可配置；mark 的任何动法；把提示符在空闲时画成默认前景色（那会变成「有颜色 == 在工作」的另一种读法，用户没要）。
 
-## Comments
+## 评论
 
 **实现完成（2026-09-26）**。落点：`src/render/tui.rs`、`tests/render_layout.rs`、`tests/render_tui.rs`、`README.md`、`docs/render.md`、`CONTEXT.md`、`docs/tui-manual-checklist.md`、`.scratch/tui-input-pulse/spec.md`（§2b 与用户故事）。
 

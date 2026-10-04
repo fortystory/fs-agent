@@ -18,7 +18,7 @@ Status: done
 - [x] `task` 同 Turn 内**阻塞**到执行者结束（因果紧，不需要异步投递）
 - [x] `/undo` 对执行者造成的编辑**同样有效**（同一会话目录、同一命名约定）
 
-## Comments
+## 评论
 
 **落地（票 11）**。代码：`src/tools/task.rs`（`task` 外壳 + `TASK_TOOL`）、
 `src/tools/tool.rs`（`ExecutorSpawner` 端口 + `Tool::delegable`）、
