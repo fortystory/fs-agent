@@ -146,3 +146,45 @@ fn only_a_path_that_is_in_the_index_can_be_honoured() {
     assert!(!index.contains("src/reneder/tui.rs"), "拼错的就是兑现不了");
     assert!(!index.contains("src"));
 }
+
+#[test]
+fn a_dot_directory_can_be_reached_with_at_but_dot_files_still_cannot() {
+    // 真机反馈：`@.scratch/` 选不到。`@` 的候选来自这份索引，而 `ignore` 的缺省把隐藏条目
+    // 整个跳过 —— 修法是**放行隐藏目录、仍挡隐藏文件与 `.git/`**：`.scratch/` 这类工作区
+    // 材料要能一路钻下去，而 `.env` 一类的名字不进候选。
+    let root = TempDir::new().expect("临时工作区");
+    fs::create_dir(root.path().join(".scratch")).expect(".scratch");
+    fs::write(root.path().join(".scratch/ticket.md"), "").expect("票");
+    fs::create_dir(root.path().join(".git")).expect(".git");
+    fs::write(root.path().join(".git/HEAD"), "").expect("HEAD");
+    fs::write(root.path().join(".env"), "SECRET=1").expect(".env");
+    fs::write(root.path().join("README.md"), "").expect("README");
+
+    let mut index = FileIndex::new();
+    index.loaded(file_index::scan(root.path()));
+
+    // 隐藏目录进候选（前缀匹配按字符串来，所以钻进去之后那一层也一起匹配 —— 与
+    // `@src` 同时列出 `src/` 和 `src/main.rs` 是同一条规则）。
+    let dotted = index.candidates(".", 10);
+    assert!(
+        dotted.contains(&".scratch/".to_owned()),
+        "点目录进候选：{dotted:?}"
+    );
+    assert_eq!(
+        index.candidates(".scratch/", 10),
+        vec![".scratch/", ".scratch/ticket.md"],
+        "钻进去之后那一层也看得见"
+    );
+
+    // `.git/` 是版本库的内部结构，照旧不列（整棵子树一起剪掉）。
+    assert!(
+        index
+            .candidates(".", 10)
+            .iter()
+            .all(|path| !path.starts_with(".git")),
+        "`.git/` 不进候选"
+    );
+    // 隐藏**文件**仍不进候选 —— 那正是「跳过隐藏」要防的暴露面。
+    assert_eq!(index.candidates(".e", 10), Vec::<String>::new());
+    assert!(!index.contains(".env"), "`.env` 兑现不了，也就上不了色");
+}

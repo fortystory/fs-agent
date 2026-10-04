@@ -64,3 +64,11 @@ Blocked by: —
   `docs/render.md` 原来照抄了 spec §1 的「从不进任何一次按键的处理路径」，而「能兑现」的判据
   （`contains`）本来就要在按键路径上问一次 —— 文档改成如实的样子：**遍历**不在按键路径上，
   按键路径上只多一次内存里的查询。
+- **2026-10-05 真机反馈追修（`@.scratch/` 选不到）**：`ignore` 的缺省把隐藏条目（文件与**目录**）
+  整个跳过，于是任何点目录都进不了候选 —— 而 `.scratch/` 正是这个仓库里最常要 `@` 的材料。
+  修法是 [`scan`](../../../src/render/file_index.rs) 打开 `hidden(false)`，再用 `filter_entry`
+  挡回隐藏**文件**（`.env` 一类，那才是「跳过隐藏」要防的暴露面）与 `.git/`：**目录放行、
+  文件不放行**。索引与 `grep` 因此在这一点上**有意分家**（`grep` 仍跳过整棵隐藏子树）——
+  spec §1 已加同日期的修订说明，`docs/render.md` 与手工清单 ㉘ 各补了一处。回归测试是
+  `tests/file_index.rs` 的
+  `a_dot_directory_can_be_reached_with_at_but_dot_files_still_cannot`。

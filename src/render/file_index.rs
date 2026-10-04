@@ -4,10 +4,15 @@
 //! 渲染循环推着走，而遍历本身（[`scan`]）是一个同步函数，跑在 `spawn_blocking` 里。索引
 //! 从不阻塞键盘，也从不进任何一次按键的处理路径。
 //!
-//! 忽略规则**逐字**照搬 `grep` 工具（`src/tools/grep.rs` 的 `search()`）：遵守
-//! `.gitignore`、跳过隐藏文件、非 git 仓库也能走、条目按路径排序。仓库里只该有一个
-//! 「什么算工作区文件」的答案 —— 否则 `grep` 找不到的文件却能在补全里选出来，而把 `.env`
-//! 一类列进候选是实打实的暴露面。
+//! 忽略规则**照搬** `grep` 工具（`src/tools/grep.rs` 的 `search()`）：遵守 `.gitignore`、
+//! 非 git 仓库也能走、条目按路径排序。仓库里只该有一个「什么算工作区文件」的答案 —— 否则
+//! `grep` 找不到的文件却能在补全里选出来，而把 `.env` 一类列进候选是实打实的暴露面。
+//!
+//! **与 `grep` 有意分家的一处**（2026-10-05，来自真机反馈「`@.scratch/` 选不到」）：
+//! `grep` 跳过整棵隐藏子树，而这里放行隐藏**目录**、只挡隐藏**文件**与 `.git/`。理由：
+//! `.scratch/`、`.github/` 这样的目录是工作区里正常的材料，`@` 选不到它们等于让人手抄路径；
+//! 而那条暴露面说的是**文件**（`.env` 的内容），目录名本身不泄露什么。分家的代价是
+//! 「`grep` 搜不到的路径却能在补全里选出来」—— 这一点如实记在 `docs/render.md` 里。
 //!
 //! 目录也进索引，并以**尾随斜杠**的形式列出来（`src/`）：那既是菜单里看得见的形状，也是
 //! `@` 插进草稿的文本，于是「选一个目录接着往下打」不必再看文件系统第二眼。
@@ -94,6 +99,11 @@ impl FileIndex {
 pub fn scan(root: &Path) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(root);
     builder.sort_by_file_path(|left, right| left.cmp(right));
+    // `ignore` 的缺省是把隐藏条目整个跳过。那个缺省要挡的是 `.env` 一类的**文件**（内容
+    // 泄露），但 `.scratch/`、`.github/` 这样的**目录**是工作区里正常的材料 —— 所以这里
+    // 放开隐藏，再用 [`visible_entry`] 把隐藏文件与 `.git/` 挡回去。
+    builder.hidden(false);
+    builder.filter_entry(visible_entry);
     let mut paths = Vec::new();
     for entry in builder.build() {
         let Ok(entry) = entry else {
@@ -117,4 +127,19 @@ pub fn scan(root: &Path) -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+/// 放开隐藏之后，这一条重新挡回**不进候选**的东西。
+///
+/// - `.git/`：版本库的内部结构，列出来没有用处，而且很大；
+/// - 隐藏**文件**（`.env`、`.gitignore`、`.hidden` …）：那正是「跳过隐藏」要防的暴露面；
+/// - 其余一切（含隐藏**目录**）放行，于是 `@.scratch/` 能一路钻下去。
+///
+/// 它是 `filter_entry` 的剪枝判据：对一个目录返回 `false` 会连带它的整棵子树一起剪掉。
+fn visible_entry(entry: &ignore::DirEntry) -> bool {
+    let name = entry.file_name().to_string_lossy();
+    if !name.starts_with('.') {
+        return true;
+    }
+    entry.file_type().is_some_and(|kind| kind.is_dir()) && name != ".git"
 }
