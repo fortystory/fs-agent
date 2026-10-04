@@ -360,6 +360,18 @@ fn completing_a_token_replaces_what_was_typed_and_leaves_the_cursor_after_it() {
     assert_eq!(input.text(), "帮我改 @src/render/tui.rs 吧");
 }
 
+#[test]
+fn the_editor_can_look_at_the_character_after_the_cursor() {
+    // 补全用它决定要不要补一个分隔空格：末尾要，后面已经是空白就不要再补一个。
+    let mut input = typed("ab");
+    input.home();
+    assert_eq!(input.next_char(), Some('a'));
+    input.right();
+    assert_eq!(input.next_char(), Some('b'));
+    input.end();
+    assert_eq!(input.next_char(), None, "末尾后面什么都没有");
+}
+
 // --- 记号：吸附与整块删（票 03） -------------------------------------------
 
 /// 一个装好记号的编辑器：`[start, end)` 那一段是**能兑现**的记号。

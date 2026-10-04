@@ -2951,8 +2951,15 @@ impl TuiState {
         if !self.editor.complete_token(menu.sigil, &name) {
             return;
         }
+        // 命令与**文件**补完之后再补一个空格：记号到此为止，接着写下一样东西（这一段任务、
+        // 下一句话），不必自己记得敲那个分隔。**目录不补** —— 补全它要的是「钻进去」，而
+        // 一个空格会把记号当场结束在目录上，下一层就过滤不出来了。后面已经是一个空白时也
+        // 不补：那会写出两个连着的空格。
+        if !name.ends_with('/') && !self.editor.next_char().is_some_and(char::is_whitespace) {
+            self.editor.insert_char(' ');
+        }
         // 记住的记号随草稿一起走，否则下一次同步会把这次补全读成一次变化，并把刚刚关掉的
-        // 东西重新打开。
+        // 东西重新打开。补过空格的记号光标在它**后面**，记账因此落到 `None`，正合「补完了」。
         self.slash.token = self.menu_key();
         if name.ends_with('/') {
             // 目录：菜单接着列这一层，所以它不关，高亮回到第一个候选。

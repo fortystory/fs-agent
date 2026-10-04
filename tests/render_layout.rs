@@ -3295,12 +3295,19 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
         "别的命令被滤掉了：\n{text}"
     );
 
-    // 而这正是改名的理由：`Tab` 把整条命令补进草稿。
+    // 而这正是改名的理由：`Tab` 把整条命令补进草稿 —— 后面还跟一个**分隔的空格**，
+    // 于是接着打的就是这一段任务的第一个字。
     family.key(Key::Tab);
     let text = screen(120, 24, &mut family).join("\n");
     assert!(
         text.contains(&format!("┆{}/goal-new", editor::PROMPT)),
         "Tab 补出整条命令：\n{text}"
+    );
+    family.key(Key::Char('x'));
+    let text = screen(120, 24, &mut family).join("\n");
+    assert!(
+        text.contains(&format!("┆{}/goal-new x", editor::PROMPT)),
+        "补全自带一个分隔空格：\n{text}"
     );
 
     // 菜单是一扇**窗口**，而技能排在命令之后：装不下的那些靠打字滤出来 —— 它们在目录里，
@@ -3651,6 +3658,14 @@ fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
         "文件补进了草稿：\n{text}"
     );
     assert!(!text.contains("┆ @src/map.md"), "菜单关掉了：\n{text}");
+
+    // 补完之后自带一个**分隔的空格**：接着打就是下一样东西，不会粘在路径上。
+    file.key(Key::Char('x'));
+    let text = screen(120, 24, &mut file).join("\n");
+    assert!(
+        text.contains(&format!("┆{}@src/main.rs x", editor::PROMPT)),
+        "补全自带一个分隔空格：\n{text}"
+    );
 }
 
 #[test]

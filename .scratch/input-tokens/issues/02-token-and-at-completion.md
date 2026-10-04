@@ -76,3 +76,11 @@ Blocked by: 01
   与「最靠左的 `/` 记号」不是一回事，它自己的 `find` 才是对的）；④ `editor::Highlight` 改名
   `editor::TokenSpan` —— 那个值装的是记号区间（吸附与整块删都读它），只讲「上色」的名字
   与 `CONTEXT.md` 的**记号（Token）**词条对不上。
+- **2026-10-05 真机反馈追修（补完之后还得自己敲空格）**：`Tab`/`Enter` 接受一个**命令或文件**
+  候选之后，再补一个**分隔空格**；后面已经是一个空白时不补（否则写出两个连着的空格）。于是
+  接着打的就是下一样东西 —— 这一段任务、下一句话。**目录不补** —— 补全它要的是「钻进去」，
+  一个空格会把记号当场结束在目录上，下一层就过滤不出来了。`Enter` 那侧「插入并发送」不受
+  影响：提交前两端会裁掉空白。`Input` 为此多了一个 `next_char()`。测试：
+  `a_slash_opens_a_menu_of_the_names_the_loop_reported` 与
+  `accepting_a_directory_keeps_the_menu_open_on_the_next_level` 各补了一条「补完接着打」的
+  断言，`render_editor.rs` 加了 `the_editor_can_look_at_the_character_after_the_cursor`。
