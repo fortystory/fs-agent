@@ -29,6 +29,7 @@
 | [`exit-gesture/`](exit-gesture/spec.md) | spec | 退出手势：空闲 `Ctrl-C` / `Ctrl-D` 双击退出、举手期间提示行给回执（半秒后作废）、退出时打一行能直接粘的复盘命令；顺带修掉忙碌双击走 `exit(130)` 跳过终端恢复的缺陷 | 4 done + 1 ready-for-walkthrough |
 | [`usage-stats-format/`](usage-stats-format/spec.md) | spec | 右侧统计的书写制式（`[ui] number_style`，`cn` / `si`，默认 `cn`）与两行的占比色条；诊断通道与状态行一个字不动 | 3/3 done |
 | [`questionnaire-keys/`](questionnaire-keys/spec.md) | spec | 问卷手感：选项区 / 输入区、`j`/`k` 移动、答案并存、`Esc` 退出询问、折行 + 页脚三档阶梯；10-02 两批 18 问折成（理由在 [ADR 0010](../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)），10-04 第三批 13 问折成 §11（回车改「下一题 / 提交」） | 6 done + 1 ready-for-agent（票 08）+ 1 ready-for-walkthrough；seed 里另有一条**未访谈**的意向（输入区的 Emacs 编辑键） |
+| [`input-tokens/`](input-tokens/spec.md) | spec | 输入框里的**记号**：`@` 提工作区文件（会话级索引，规则跟 `grep` 工具一致）、`/` 与 `@` 共用一套浮层与键位、能兑现的记号上色并成为**不可分割**的一块（[ADR 0012](../docs/adr/0012-input-tokens-are-atomic.md)）、`/` 的提交语义放宽到第一行任意位置；codex 那侧的一手调研在目录里 | 5 ready-for-agent |
 | [`terminal-title/`](terminal-title/spec.md) | spec | 终端标题带上工作内容：`<父>/<基名> · <状态> · <目标名>`、40 列封顶、进 TUI 时保存原标题并在退出（含 panic）时还原 | 2 done + 1 ready-for-walkthrough |
 | [`continue-by-id/`](continue-by-id/spec.md) | spec | `-c` 吃一个可选的 id（`-c <id>`，另有 `--session <id>`）：先本桶、再全 store，命中别的工作区时工作目录跟着那场会话走；退出回执因此改成 `fs-agent -c <id>` | 1/1 done |
 | [`suspend-gesture/`](suspend-gesture/spec.md) | spec | 挂起手势：TUI 里 `Ctrl-Z` 把进程 SIGTSTP 停到后台（单下、任何视图都拦不住）、`fg` 回来重进终端并全量重绘；plain 的同一按键由终端驱动天然处理，用一条 pty 回归与文档钉住 | 2/2 done |

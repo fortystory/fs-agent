@@ -38,9 +38,9 @@ import re
 import sys
 from dataclasses import dataclass
 
-# --- 清单：36 份活文档 -------------------------------------------------------
+# --- 清单：37 份活文档 -------------------------------------------------------
 # scope 与 `.scratch/docs-slim/research/03` 一致：入口三份 + `CONTEXT.md`、`docs/` 逐面
-# 18 份、`docs/adr/` 11 份、`docs/agents/` 3 份。**不含** `docs/research/`（一手引文）、
+# 18 份、`docs/adr/` 12 份、`docs/agents/` 3 份。**不含** `docs/research/`（一手引文）、
 # `.scratch/*/issues/`、`.scratch/*/spec.md`、`.scratch/*/research/`。
 DOC_FILES = [
     "README.md",
@@ -76,6 +76,7 @@ DOC_FILES = [
     "docs/adr/0009-goals-are-files-and-progress-is-derived.md",
     "docs/adr/0010-questionnaire-keys-dispatch-by-zone.md",
     "docs/adr/0011-diagrams-in-mermaid.md",
+    "docs/adr/0012-input-tokens-are-atomic.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
     "docs/agents/triage-labels.md",
@@ -248,11 +249,15 @@ def review_rules(unit: Unit) -> list[str]:
 # **2026-10-04 票 12 收口时又按实测收紧一次**：把删自 `docs/render.md` 的三处信息
 #   （`--tui` 与互斥、`--config`、`--continue` 的查找顺序）并回「跑」一节之后，`README.md`
 #   是 16,993 / 292 —— 仍远低于终点，棘轮跟着实测走。
+# **2026-10-05 新增 `input-tokens` 索引行时再跟着实测调一次**：`.scratch/README.md`
+#   8,203 / 53 → 8,344 / 54 —— 与票 12 同一种「先加信息、再跟着调棘轮」的显式动作。
+#   这一档与 `README.md` 那两次不同：那条是**改写**挤出来的空间，这条是 feature 索引
+#   天然随 feature 增长，所以它只会往上走，直到撞上 ≤13,500 / ≤100 那个终点。
 # 行数比票 04 的「现在」高是**预期**的：拆段落必然加行，票 04 承认「行数不得增」不成立，
 # 行数上限是「拆完之后的新上限」，此后拦住「再往入口文档追加」。
 ENTRY_BUDGET = {
     "README.md": {"chars": 16993, "lines": 292, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 8203, "lines": 53, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 8344, "lines": 54, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 905, "lines": 26, "target_chars": 950, "target_lines": 30},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，
