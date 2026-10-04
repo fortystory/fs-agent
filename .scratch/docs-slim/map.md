@@ -126,8 +126,8 @@ Charting: **已完成**（2026-10-04，四轮 grilling 共十问：终点 / 判�
 
 ## 进度
 
-**决策票 7/7，实现票 0/5** —— 七张决策票全部 `resolved`（2026-10-04；其中三张 HITL 票在同一个 session 里连走：护栏脚本的契约、清单与 lifecycle 的处置、`CONTEXT.md` 的词条边界），并已折成 [`spec.md`](spec.md)、由 `/to-tickets` 拆出五张实现票（08–12）。**决策这条路走完了**：36 份文档各自该改哪里、改到什么程度、用什么护栏复核，以及三处最容易出错的地方（手工清单的 5 处旧数字、lifecycle 的禁改边界、术语表的剥离线）都已写死在票的 `## Answer` 里。
+**决策票 7/7，实现票 5/5** —— 七张决策票全部 `resolved`（2026-10-04；其中三张 HITL 票在同一个 session 里连走：护栏脚本的契约、清单与 lifecycle 的处置、`CONTEXT.md` 的词条边界），并已折成 [`spec.md`](spec.md)、由 `/to-tickets` 拆出五张实现票（08–12）。**两条路都走完了**（同日）：08 护栏落地（`scripts/check-doc-size.py` + 15 条只打 CLI 的测试 + `README.md` 接线）→ 09 / 10 / 11 并行（`CONTEXT.md` 剥到「一句定义 + 指针」、入口三份重写、手工清单与 lifecycle 的处置）→ 12 收口（两份 ADR 与 `docs/skills.md` 的最后三处、基线清零、四处索引对齐、全量复核）。收口时 36 份文档**单元违规全为 0**、入口三份都在预算内。
 
-**frontier（实现）= [08 — 护栏落地](issues/08-doc-size-guardrail.md)**：它是唯一的 prefactor，09 / 10 / 11 被它 block 且彼此写者不重叠（可并行），12 被 09–11 block。实现票由 `/implement` 认领，不由 wayfinder 会话认领。
+**决策这条路走完了**：36 份文档各自该改哪里、改到什么程度、用什么护栏复核，以及三处最容易出错的地方（手工清单的 5 处旧数字、lifecycle 的禁改边界、术语表的剥离线）都已写死在票的 `## Answer` 里。
 
 **本图只产决策**：charting 与七张决策票的整个过程没有改动任何一份文档，改的只是 `.scratch/docs-slim/` 里的票、spec 与这张图。

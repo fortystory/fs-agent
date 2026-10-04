@@ -37,6 +37,7 @@
   | 用户 | `~/.config/fs-agent/skills/` → `~/.agents/skills/` → `~/.claude/skills/` |
 
   跟随 `.agents` 与 `.claude` 这两套约定，意味着已有的技能库不用挪动任何东西就能用。
+
 - **`disable-model-invocation: true`。** 带这个旗标的技能既不在清单里，也不能由
   `skill(name)` 加载：模型没法绕过这个旗标去猜它的名字。只有用户能调它。
 - **用户调用。** 交互式会话里的 `/<name> [task]` 会加载用户点名的技能 —— 包括标了

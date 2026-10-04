@@ -110,10 +110,10 @@ Markdown 的渲染（`render::markdown::to_lines`）收**可用列数**：表格
   命中矩形随帧一起消失（`.scratch/sidebar-toggle/spec.md` §2）。
 - **标记**是五行块状阴影拼出的 `fs` 标记，在宽档里居中。这些字符住在 `wording::logo_lines`，
   与每一个别的给人看的短语一起；让它们读起来像字形的那条颜色坡道住在画家那里
-  （`mark_lines`），只设前景、不设背景，所以不跟终端正在跑的任何主题打架。**这里什么都
-  不动**：标记与文字身份都长过的那条下落短横、以及它之前的那圈色相环，都在真终端上试过、
+  （`mark_lines`），只设前景、不设背景，所以不跟终端正在跑的任何主题打架。
+- **这里什么都不动**：标记与文字身份都长过的那条下落短横、以及它之前的那圈色相环，都在真终端上试过、
   然后关掉了（`.scratch/tui-input-pulse/spec.md` §2，票 04–08）。两者都还在模块里 ——
-  `mark_lines` 接受它本该落在的那一帧，`wording::identity_falling` 构造另一档的那一行 ——
+  `mark_lines` 接受它本该落在的那一帧，`wording::DASH_FALL` 与 `wording::identity_falling` 构造另一档的那一行 ——
   而且两者都在它们所在的地方有单元测试，但 `draw_sidebar_identity` 传的是 `None` 与
   `identity()`，所以左栏是静止的。这个信号的两个颜色版本在真终端上试过，两个都退了休 ——
   12 帧亮/普通色、100 ms 一帧，读起来像闪（票 04）；六个亮色相、400 ms，读起来像生硬
@@ -121,7 +121,7 @@ Markdown 的渲染（`render::markdown::to_lines`）收**可用列数**：表格
   （票 05）。
 - **页签条**给左栏翻页：调用量是会话的读数，轨迹与文件还没实现、并且会自己说出来。页签是
   **点出来的，从不给键位** —— `Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环 —— 而在占位页上，
-  状态行的 `上下文 n%` 是唯一剩下的读数。左栏自己有一个键位 `Ctrl-O`，那是**整栏**的开关，
+  状态行（三段由 `wording::status_row` 生成）只剩 `上下文 n%` 这一个读数。左栏自己有一个键位 `Ctrl-O`，那是**整栏**的开关，
   不是给页签的。
 - **`todo` 是唯一来去的那一页签**（`.scratch/todo-and-modes/spec.md` §4）。第一次有**非执行者**
   提交一次参数里带非空列表的 `todo` 调用时它出现，此后整个会话都在：全完成的
@@ -152,7 +152,7 @@ Markdown 的渲染（`render::markdown::to_lines`）收**可用列数**：表格
   循环、退出）。它们是两个值，因为循环同时 select 两者。
 - 前端持有 `ConsolePort`。TUI 用自己的 `select!` 在 broadcast / console port / 键盘上加
   **一个计时器**来应答它，这个计时器**只在一次运行进行中时**才 arm：那就是给提示符的 `❱`
-  上色的脉冲（`.scratch/tui-input-pulse/spec.md` §2b，票 09）。没有别的东西在等着被*注意到*
+  上色的脉冲（色相的变化量是 `PROMPT_HUE_PER_SECOND`；`.scratch/tui-input-pulse/spec.md` §2b，票 09）。没有别的东西在等着被*注意到*
   —— 待答的问题从 console port 来、事件从渲染通道来、按键就是按键 —— 但一个沿色相环
   走的颜色只是时间的函数，所以它需要一台时钟；空闲时那条分支被守掉，这个 `select!` 又只剩
   三个源。它是一条 `interval`，而不是每一次循环新建的 sleep，因为一次突发里的每个事件都会把
@@ -201,6 +201,25 @@ headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4�
 
 答案只有一个形状：`selected` 与 `custom` 可以同时出现（单选与多选一样），`selected: []`
 且没有 `custom` 才是跳过。
+
+问卷到达前端之前要先经过一条**端口**：循环把整批问题交给前端的那个值，带一条一次性回复
+通道。**丢掉回复通道就等于「没有答案」**——取消、问卷里双击 `Esc` 的「退出这次询问」，或
+输入结束都会走到这里——所以工具永远不必挂住等一个不会来的答案。它与权限门的那个请求并列：
+问卷是**第三类发起者**，那条 `Asker` 接缝不为它扩展。
+
+**一道题的选项**是模型在 `questions[].options[]` 里给的数据：`label`（原串就是答案值，
+`(Recommended)` 只做显示）加可选 `description`。前端按钮的词汇里有一个同名的 `Choice`
+（一个键加一句中文标签），两者**同名不同物**：前者是模型给的选项数据，后者是前端按钮的
+键位定义，共同点只有「都可被选中」；保留两个名字是更小的改动，各自的层各自命名。
+
+**一道题的作答草稿**活在键盘那一侧、每题一份、可来回翻页：已选 `selected`、自定义文本
+`custom`、高亮下标 `highlight`、是否跳过 `skipped` 四项。`skipped` 是显式的「不作答」，
+无论之前打过什么字都编码成 `selected: []` 且无 `custom`；`selected` 与 `custom` 可以同时
+成立，单选与多选一个形状。
+
+问卷一族的人类可见文案住在 `render::wording` 里，用 `questionnaire_*` 这个前缀命名
+（`questionnaire_hint`、`questionnaire_option`、`questionnaire_plain_*` 等）。TUI 与 plain
+共享同一个生成器；模型面文本不经过这里。
 
 `Esc` 与 `Ctrl-C` 在问卷里问的是两个不同的问题，各有一把**举手**（共用一个槽位，所以互斥）：
 
@@ -274,18 +293,8 @@ TUI 里按一下 `Ctrl-Z` 把整个进程停到后台（`SIGTSTP`），在 shell
 
 ## 交互式 CLI
 
-不带子命令的 `fs-agent` 在当前工作区里开一个交互式会话：
-
-- 渲染器：stdout 是终端时用 TUI，否则用 plain 转录；`--plain` / `--tui` 强制选一个（两者
-  互斥）；
-- `--continue` 续上本工作区最新的会话，保留它的 id；`--continue <id>` / `-c <id>` / `--session <id>` 续指名的
-  那一场 —— 先在本桶找，找不到再全 store 找（id 全局唯一；给的如果是它会话目录的路径，直接用那个
-  目录）。命中别的工作区时会切到那场会话自己的工作目录，并说一句；
-- `--config`、`--model`、`--mode`、`--cwd` 与别处一样；`--mode` 是这条路径自己的（讨论与
-  `probe` 跑在 `[permissions] mode` 之下）；
-- 命令：`/undo`、`/discuss`、`/quit`；TUI 里 Esc 取消正在跑的回合（**问卷立着时除外**，
-  那里的 `Esc` 是「退出这次询问」，取消归 `Ctrl-C`），Shift+Tab 循环权限模式
-  `readonly → ask → workspace → auto → readonly`。
+不带子命令的 `fs-agent` 在当前工作区里开一个交互式会话。渲染器怎么选、`--continue` 怎么续
+哪一场、`--mode` 覆盖哪一档，都见 [`README.md`](../README.md) 的「跑」一节。
 
 会话从配置的那一档模式起步 —— `[permissions] mode`，或在其上覆盖的 `--mode`，默认 `ask`
 —— 而组装把 console asker 注入进来，所以一次写在提示符来的同一个键盘上发问。模式是会话上

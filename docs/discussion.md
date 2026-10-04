@@ -122,6 +122,8 @@ fs-agent discuss --debaters 保守,激进 "问题"   # 或者指定这两位
   `Config::debaters_share_a_vendor` 对**真正上场**的那一对判定）。
 - **合成器**是路由表的另一个落点（`[routing].synthesizer_model`）；没有路由任何东西时，它
   就是第一个讨论者的模型。一个值，一种写法。
+- **全系统只有两个落点**：合成器与执行者（可用 `[routing]` 覆盖）；**讨论者绝不是落点**——
+  异构是这场讨论里最强的多样性杠杆，所以 `[routing]` 里刻意没有讨论者的键。
 - **问题**来自命令行（`fs-agent discuss "…"`），或者来自 stdin：终端上会提示你打一行，管道
   则会一直读到结尾（`echo 问题 | fs-agent discuss`）。
 - **看它跑**：终端上得到 TUI（包括权限覆盖层 —— 讨论者想跑什么都走它），管道里得到 plain

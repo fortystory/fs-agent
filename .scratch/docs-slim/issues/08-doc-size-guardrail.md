@@ -1,7 +1,7 @@
 # 08 — 护栏落地：`scripts/check-doc-size.py` 与它的测试（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: —
 
@@ -70,3 +70,43 @@ Blocked by: —
 - 不在这张票里改任何文档内容 —— 入口三份、`CONTEXT.md`、手工清单、lifecycle 各有自己的票。
 - 不加 CI 配置：仓库没有 CI 入口，spec 已确认没有「加进 CI」这一步。
 - 不为「好看」调阈值：500 是冻结项。
+
+## Comments
+
+**2026-10-04 落地。** 三个落点：`scripts/check-doc-size.py`（新，约 380 行）、
+`scripts/tests/test_check_doc_size.py`（新，15 条只打 CLI 的用例）、`README.md` 的「开发」一节加一行。
+
+- **首装即绿**：`python3 scripts/check-doc-size.py` 退出 0；`python3 -m unittest` 33 条全绿
+  （原有 18 + 新 15）；`check-language.py`、`lifecycle-check.py` 未受影响。
+- **单元口径核对**：`--list` 实测 **2,997 个单元**，>500 的 27 个 = 散文 / 清单侧 **22** + 单元格侧 **5**，
+  与票 05 的 22 + 5 精确对上；R2 自动豁免 2 项（`README.md:242` 571、`README.md:244` 1,241），
+  R1 / R3 / R4 / R5 今日命中 0。
+- **有效违规实测 25 项**（票 05 的底账是 23，差 2 项，在 spec 允许的 1–3 项口径差内）：
+  `CONTEXT.md` 8 / `.scratch/README.md` 6 / `README.md` 5 / `docs/tui-manual-checklist.md` **2** /
+  `docs/render.md` 1 / `docs/skills.md` **1** / `docs/adr/0003` 1 / `docs/adr/0008` 1。
+  多出来的两处：`docs/tui-manual-checklist.md:126`（908 字符 —— L126 是散文行、L128 起才是 `3.`
+  编号项，按「块首匹配清单才算清单块」的定义整块算一个单元，不是票 05 记的抬头那 737 一处）与
+  `docs/skills.md:39`（778 字符，票 05 没列）。**两处都没有别的票管，归票 12 一并清**。
+- **基线初值**（按文件，实测）：上表八个数；`> 基线` 才报红，每一项违规的位置永远打印。
+- **入口三份的上限**：`README.md` 那条改成 **20,017 字符 / 287 行** —— 是**接线这一行之后**的实测
+  （19,954 → 20,017），棘轮从今天的真实体量起步，票 10 再往 ≤18,500 / ≤300 收。
+  `.scratch/README.md` 实测 18,309 / 82（票面 18,100 略低，以脚本为准）、`AGENTS.md` 1,225 / 26。
+- **手工破坏两次**（票面「验证」第 3 条）：① 往 `docs/bash.md` 尾巴塞一个 524 字符段落 →
+  退出 1 并指出 `docs/bash.md:162`、报「违规 1 项 > 基线 0」，改回后复原；
+  ② 建一份 `docs/zz-probe.md` → 打出 `warn:` 提示且**退出码仍为 0**，删掉后复原。
+  占比 warn 在真实仓库上今天只有 `docs/tui-manual-checklist.md` 一条（余量 0.19 点）。
+- **`--root <目录>`** 这个口子不在票面契约里，是测试需要的：fixture 全在临时目录里，不依赖真实
+  仓库文件（与 `test_lifecycle_check.py` 同一形态）。默认 `.`，仓库里的用法一个字不变。
+
+**2026-10-04 `/code-review` 后的修正**（Standards + Spec 两轴的发现）：
+
+- **单元定义第 ② 步补全**：块首是散文、块里又出现清单项时，**块首到第一个清单项之间的散文
+  另算一个单元**（此前只在块首本身是清单项时才拆项）—— 票里那两处「加空行绕过」从此不再需要
+  （空行留着，markdown 上也更清楚）。
+- **`--list` 不再吞掉自检**：缺清单里的文件时它也非零退出（此前无条件 `return 0`）。
+- **去掉 `--root`**：它不在票 05 / spec §2 的 CLI 契约里（那里只有 `--list`）。测试改成把**工作
+  目录**切到 fixture —— 脚本的路径本来就相对当前目录，少一个旗标就少一条契约外的口子。
+- **测试补到 19 条**：R4（不可断因果链）与 R5（次序操作序列）各一条、单元第 ② 步一条、
+  「缺文件 + `--list`」一条（原 15 条）。
+- `python3 scripts/check-doc-size.py --list | head` 不再抛 `BrokenPipeError` 栈（下游关管道不是错误）。
+

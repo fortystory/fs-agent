@@ -23,7 +23,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **34 张**实现票全部 `done`（含收尾审查补记的 30/31/32，以及维护者报的两个问卷 bug 票 33/34），`todo-and-modes` 的 **4 张**也已落地（模式回到三档、计划交给模型的 `todo` 工具，见 [ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)；第四档 `workspace` 随后由 [ADR 0007](docs/adr/0007-workspace-permission-mode.md) 加上）；`src/` **41,781** 行、`tests/` **41,575** 行（`wc -l`）、**1,140** 条测试（`cargo test` 的 passed 合计：61 个 test binary、0 failed）。2026-10-02 又落地三组：`usage-stats-format`（数字制式 `[ui] number_style` 与两行的占比色条）**3/3**、`terminal-title`（终端标题：保存 / 按状态写入 / 退出还原）**2/3**、`exit-gesture`（空闲与忙碌的双击退出、`exit(130)` 那条路的有序收尾、退出回执）**4/5** —— 两个 `ready-for-walkthrough` 都是「真终端上逐项看一遍」那半，自动化能覆盖的都已覆盖。同日还落地了 [`suspend-gesture`](.scratch/suspend-gesture/spec.md)（**2/2**）：TUI 里 `Ctrl-Z` 单下把进程停到后台、`fg` 回来重进终端并清屏全量重绘，任何视图都拦不住它；plain 的同一按键由终端驱动天然处理，pty 脚本为两条路各加了一轮回归（挂起的测试得先给 pty 一个真会话与前台进程组 —— `pty.fork()` 的孤儿组会把 SIGTSTP 丢掉）。同日最后落地的是 [`questionnaire-keys`](.scratch/questionnaire-keys/spec.md)（**6/7**，剩的那张是真终端走查）：问卷的键位按**区域**分派（选项区 / 输入区，[ADR 0010](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)）、`j`/`k` 与 `Ctrl-N`/`Ctrl-P` 在选项区移动而进了输入区 `j`/`k` 就是文本、选项区吞掉可打印字符、单选与多选统一成 `selected` + `custom` 并存、`Esc` 只管「退出这次询问」（双击、drop 掉回复通道、模型继续跑）而取消归 `Ctrl-C`、长选项折行、页脚给键位提示与举手回执。讨论的 CLI 入口已经接上：`fs-agent discuss "问题"` 起一次多角色讨论（讨论者是配置里的「人物」池，一次讨论抽两个、3 或 5 次调用）；活会话里也能用 `/discuss` 就地讨论。库层的组装入口仍是 `assemble` / `assemble_discussion`。同日还落地了 [`sidebar-toggle`](.scratch/sidebar-toggle/spec.md)（**2/3**，剩的那张是真终端走查）：左栏的去留从「只由宽度决定」变成「**用户意愿 × 宽度档**」—— `Ctrl-O` 一次收起 / 叫回（意愿只活在这一次进程里），`w < 80` 时叫不回来（宽度是可行性、意愿是偏好），收起时那 41 列（40 + 分隔线）整列还给主列、页签的命中矩形随帧消失；提示行最末多一条 `ctrl-o 左栏`（位置即优先级，只在最宽档看得见）。2026-10-03 又落地三组：`mcp-support`（**8 done + 1 ready-for-walkthrough**）—— 接入 MCP：**不扩工具表**，四个固定名字的元工具 `mcp_list` / `mcp_call` / `mcp_resources` / `mcp_read` 按 `server` + `tool` 调外部能力，连接层取 `rmcp` 3.5.0（只谈 2026-07-28 的无状态形态、固定 `Discover`、不回退），server 进程过沙箱 + 环境白名单 + 整组清理，外来工具默认最严（`trust_results` / `trust_effects` / `sandbox` 三个位各自独立），server 要人补输入时走 `ask_user_question` 那条问询端口（MRTR），提示词模板由**人**从 `/` 菜单发起；逐面文档是 [`docs/mcp.md`](docs/mcp.md)；剩下那半张是「在真终端里点一次菜单、填一遍参数」，步骤写在文档的提示词模板一节。`grep-tool`（**4/4**）—— 内建的只读搜索工具 `grep(pattern, glob?)`，`Effect::ReadOnly` 让它在四档权限模式下全放行、也不取工作区锁，遍历走 `ignore` 的默认（遵守 `.gitignore`、跳过隐藏、见到 NUL 就放弃那个文件），`glob` 只缩范围不放宽忽略规则，命中超过 500 条时先收一刀并把省掉的条数写在末尾，逐面文档是 [`docs/grep.md`](docs/grep.md)；`web-search-tool`（**4 done + 1 ready-for-walkthrough**）—— 两个内建联网工具 `web_search` / `web_fetch`，三层（工具 / 服务 / 后端），搜索走 DeepSeek 的 Anthropic 兼容端点 + 原生 `web_search` 服务器工具（零新密钥），抓取自己发 HTTP 并自己做 SSRF 防护，HTML 在工具层转 markdown，`[web] enabled`（缺省 `false`）是组装期的一步、后端挂没挂与它无关，逐面文档是 [`docs/web.md`](docs/web.md)；剩下的那半张是「发一次真调用、读一次 `usage` 钉死计费口径」，步骤写在那份文档的走查一节。
+**状态**：v1 的 **34 张**实现票全部 `done`；`todo-and-modes` 的 **4 张**也全部落地（[ADR 0003](docs/adr/0003-plan-leaves-the-permission-modes.md)，第四档 `workspace` 见 [ADR 0007](docs/adr/0007-workspace-permission-mode.md)）。各 feature 的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)。规模：`src/` **41,921** 行、`tests/` **41,807** 行（`wc -l`）、**1,146** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
 
 ## 快速开始
 
@@ -127,18 +127,22 @@ parameters = { type = "object", properties = {} }
 
 ```sh
 fs-agent                        # 交互会话：终端上用 TUI，管道里用 plain 转录
-fs-agent --plain                # 强制 plain
+fs-agent --plain                # 强制 plain 转录
+fs-agent --tui                  # 强制 TUI（与 --plain 互斥）
 fs-agent --continue             # 接着跑本工作区最新的会话（会话 id 不变，前缀缓存继续命中）
-fs-agent -c 20261001T155845Z-7a69cbff   # 按 id 续指定的一场（不带 id 就是最新；它在别的工作区时会切到那个目录）
+fs-agent -c 20261001T155845Z-7a69cbff   # 按 id 续指定的一场（不带 id 就是最新；先在本桶找、再全 store；它在别的工作区时会切到那个目录）
 fs-agent --session 20261001T155845Z-7a69cbff   # 同一个意思的显式拼写
 fs-agent --model deepseek-v4-pro
+fs-agent --config /path/to/config.toml  # 换一份配置文件
 fs-agent --cwd /path/to/repo
 fs-agent discuss "把权限模型换成 X，风险在哪？"   # 两个异构讨论者 + 合成器
 fs-agent discuss --plain "…" 2>/dev/null          # 只要合成产物（讨论过程走 stderr）
 fs-agent --help
 ```
 
-会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出；TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合（问卷立着时除外 —— 那里的 `Esc` 是「退出这次询问」，取消归 `Ctrl-C`）、**Shift+Tab** 在 `readonly` / `ask` / `workspace` / `auto` 四档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写、区外的写要不要停下来问一次，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
+会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出。
+
+TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合（问卷立着时除外 —— 那里的 `Esc` 是「退出这次询问」，取消归 `Ctrl-C`）、**Shift+Tab** 在 `readonly` / `ask` / `workspace` / `auto` 四档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写、区外的写要不要停下来问一次，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
 
 ### TUI 长什么样
 
@@ -171,7 +175,7 @@ token                       1.6万 / 10万┆
                                         ┆就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出
 ```
 
-**左栏（全高）**顶上先留一行空行，身份与读数从第 1 行起：宽档（≥ 120 列，40 列宽）画 fs 标记（5 行字符画，亮品红→品红渐变），窄档（80–119 列，28 列宽）退成一行 `fs-agent <版本>`，再窄就**整栏隐藏**、转录吃掉全部宽度。界面里**唯一在动的东西是输入区的提示符**：它是 `❱ `，**fs-agent 干活时**颜色一直在走 —— 色相每 3.3 秒绕一圈、饱和度同时以 2.1 秒的周期轻轻呼吸（24 位真彩，取值来自一条自用脚本）；**轮到你自己打字时它停住**，停在那个固定的静止色上，一眼就能分清「它在想」和「该我说了」。左栏的 mark **完全静止**（下落动画做过、看下来不好看，已关掉，代码留着）。标记下面是页签（tab）条（`调用量` / `轨迹` / `文件`，**用鼠标点**切换，后两页还没做、写一句占位），再下面是六个读数（上下文 / token / 回合 / 输入 / 输出 / 缓存）。**`todo` 是第四个标签，而且是有条件的一个**：会话里第一次出现非空待办列表时它插到 `调用量` 右边，此后**不再消失**（全做完、被清空都留着——标签在读者眼皮底下消失会把页面挪走）。那一页一行一项（`☐` 待办 / `▸` 进行中 / `✓` 已完成）+ 一行 `已完成 2/5`；不滚动，装不下的项用一行 `＋3 项` 交代。执行者调 `todo` 只在转录里留一行，**不上左栏**。**去留由宽度决定，内容由高度决定**：高度不够时先丢标记、再丢身份行、最后从尾部丢字段，上下文 / token / 回合这三行最后才走。
+**左栏（全高）**的宽度档、身份与六个读数、页签、`todo` 标签、以及那唯一一处动效（提示符的色相与呼吸），逐项在 [`docs/render.md`](docs/render.md) 的「外壳」一节；左栏的去留由 [`CONTEXT.md`](CONTEXT.md) 的「左栏」说清。
 
 **主列**自上而下是：转录（右缘恒留两列 —— 滚动条与**回合条**）→ 状态行（`模型 … │ 模式 … │ 上下文 …%`，按宽度先丢模型、再丢模式，**这一行永远在**）→ 输入区（**最少三行**，草稿在第 4 行才继续把它撑高、10 行封顶；提示符 `❱ ` 会变色）→ 提示行。**回合条**一格一个回合（讨论会话一格一个轮次）：最新的一格贴底、视口所在的那一格是亮色 `┃`、其余是暗色 `┊`，溢出的一端画 `⋮`；窗口跟着焦点走，所以任何滚动位置上都有一格是亮的，点一格就跳回那一轮**你自己敲的那句**。**cwd 与时钟不再显示**（它们随旧顶栏一起退场）。
 
@@ -214,7 +218,7 @@ token                       1.6万 / 10万┆
 
 另外：模型给的路径被限制在会话 cwd 及其子树——**区外读**默认仍是拒绝，唯一出口是 `[permissions] outside_read = "deny" | "ask" | "allow"`（缺省 `"deny"`，四档都认它），**区外写**只有 `workspace` 档那个出口；`.env` 家族默认拒绝（`*.example` / `*.sample` / `*.template` 除外）；密钥**在入流前**按值打码（流水线是 `打码 → 截断 → 落盘`，于是**流上的文本 == 模型看到的文本**，而工具执行仍拿真值；`outputs/*.txt` 打码，`outputs/*.before` 不打码——它是 `/undo` 的字节级还原源）；以 root 启动直接拒绝。
 
-**`bash` 有沙箱了，但它只管文件、不管网络。** `bash` 与动态工具跑在 **bubblewrap** 里：整台机器只读挂进来，只有会话工作区、`/tmp` 与一列工具缓存目录可写，区外的写由内核以 `EROFS` 打回（不是我们预判的）；`~/.config/fs-agent`（provider key 在那儿）与 `~/.ssh` 被遮成「空且只读」。bubblewrap 用不了时**拒绝跑 shell**，另有 `[sandbox] mode = "off"` 显式关掉这层（关掉之后 `workspace` 档也不存在——它对这个档位的承诺全都建立在沙箱上）。内核拒了之后模型有一条**升级手势**：带上理由与要放开的路径把同一条命令原样重试一次，你批一条路径，这次调用就多一条可写根；只批这一次，`.env` / `.git/config` / `.git/hooks` 与那两个遮罩目录**不给任何通道**。**网络不在这层的词表里**——带 key 的 `curl` 仍然和正经工作分不出来，所以「别把赔不起的 key 交给它」这句依然成立。完整边界见 [`docs/sandbox.md`](docs/sandbox.md)、[`docs/permissions.md`](docs/permissions.md)、[`docs/credentials.md`](docs/credentials.md)，以及 [ADR 0006](docs/adr/0006-sandbox-by-bubblewrap.md)。
+**`bash` 有沙箱了，但它只管文件、不管网络。** 完整边界（整机只读挂载、可写根、被遮成空的目录、bubblewrap 用不了时拒绝跑 shell、内核拒了之后的升级手势、以及「网络不在这层的词表里」这句）见 [`docs/sandbox.md`](docs/sandbox.md)、[`docs/permissions.md`](docs/permissions.md)、[`docs/credentials.md`](docs/credentials.md) 与 [ADR 0006](docs/adr/0006-sandbox-by-bubblewrap.md)。
 
 ## 架构
 
@@ -248,11 +252,12 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 
 **约定**（新文档照这个走，别猜；这条线由 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 立、[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 改写）：
 
-- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。**[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 起，模型可见与进流的散文也在内**：工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`、以及**模型自己产出的思考**（它随 `MessageCompleted.reasoning` 进流、也进详情弹窗那节 `── 思考 ──`；四段身份各自拼上 `src/agent.rs` 的 `agent::THINKING_IN_CHINESE`）。
+- **散文一律中文**：代码注释、`docs/` 下的逐面设计文档与 `docs/agents/`、`docs/adr/` 下的 ADR（含它的标题与小标题）、`AGENTS.md` 的正文（它的五个小标题是技能工具链的锚点、留英文）、`.scratch/` 下的 spec / map / 票、测试的断言消息、以及只在启动时打印给人的错误文本（`ConfigError`、harness 的 `Error`、provider 的告警）。
+- **[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 起，模型可见与进流的散文也在内**：工具声明与描述、工具结果与错误、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`、以及**模型自己产出的思考**（它随 `MessageCompleted.reasoning` 进流、也进详情弹窗那节 `── 思考 ──`；四段身份各自拼上 `src/agent.rs` 的 `agent::THINKING_IN_CHINESE`）。
 - **英文只留给不是散文的东西**（[ADR 0005](docs/adr/0005-model-visible-text-in-chinese.md) 画的新线：按**词性**分，不按「谁读它」分）：① **标识符**（类型、函数、字段、文件名、CLI 旗标、事件 schema 的名字）；② **schema 值与协议标记**（`Ask` / `Allow` / `Deny`、`cwd` / `token` / `assistant`、`tool_call_id`、`CONCLUSION:`）；③ **路径、命令原文与代码片段**；④ `docs/research/` 的一手引文。
 - **术语写「中文名（English）」**：中文是叙述里的正式用词，英文只夹注一次，供人对到 API 上（行内视口（inline viewport）、备用屏幕（alt screen）、回滚缓冲（scrollback）、panic 钩子（panic hook））。`cwd` / `token` / `assistant` 这类字段名与 schema 值不夹注、保持英文（CONTEXT.md 里「token 不给中文名」同一条）。
 - **`docs/research/` 的原始笔记一个字不改**：那是上游文档的引文，它存在的意义是可核对。
-- 为什么模型那一侧原来冻在英文、2026-09-30 又翻开：[ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) 记的那两笔代价**没有消失**（老流永久中英混排 + 升级后每个新会话一次前缀未命中），只是重新判定为值得付 —— 因为**人读的是同一份文本**（详情弹窗与转录原样画工具结果与错误），冻在英文那边正好落在人眼前。原文那句「那一侧的读者是模型，不是人」是这次推翻的靶心。会话内「前缀只增不改」那条不变量没动。
+- 为什么模型那一侧原来冻在英文、2026-09-30 又翻开，连同那两笔代价，都在 [ADR 0001](docs/adr/0001-chinese-ui-frozen-model-text.md) 里。
 - 三条推论：**新增文档跟邻居走**；**中文文档里保留标识符英文**（写 `Session`、`project()`、`[permissions] mode`）；**这条线可以检查** —— `python3 scripts/check-language.py`（四条：① 模型可见 / 进流那一侧的两条棘轮 —— 中文串只许上升、英文散文串只许下降；② `docs/` 的逐面文档、`docs/adr/*.md`、`docs/agents/*.md` 与 `AGENTS.md` 的中文占比下限（清单在脚本的 `DOCS_MIN_RATIO`）；③ ADR 的标题与小标题是中文；④ `src/` 与 `tests/` 注释中文行的棘轮）。
 
 ## 开发
@@ -262,6 +267,7 @@ cargo test                              # 全量测试（条数见上面的「�
 cargo clippy --all-targets
 python3 -m unittest                     # Python 护栏脚本的测试（从仓库根跑，发现 scripts/tests/）
 python3 scripts/check-language.py       # 散文中文、英文只留给标识符的护栏（ADR 0004 / 0005）
+python3 scripts/check-doc-size.py       # 36 份活文档的密度（单元 ≤500 / 入口三份的预算 / 占比余量）
 python3 scripts/lifecycle-check.py      # docs/lifecycle.md 的图与证据表对账（ADR 0011）
 python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 ```

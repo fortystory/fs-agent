@@ -294,17 +294,7 @@ sequenceDiagram
 **固定顺序**：`hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加`，走完看还有没有
 `tool_call` 决定是否再迭代一轮。
 
-三处必须说清的地方：
-
-1. **固定顺序里两个 hook 步骤在 CLI 下恒不发生。** 三个生产组装点全传 `hook: None`
-   （`src/cli.rs:396`、`src/cli.rs:715`、`src/cli.rs:2232`），`src/` 内没有任何 `Hook` 实现 ——
-   只有库调用方与测试挂得上（`tests/hook_mount_points.rs`）。所以图里它们被压成一条 `Note`，
-   不占步骤的位置。
-2. **`权限门` 是抽象的参与者。** 没有对象持有「询问 → 人答」这次往返：裁决合成在 `authorize`
-   （`src/agent.rs:1954-1995`），问出去的那一问是 `asker.ask(...)` 经 `ConsoleAsker`
-   （`src/render/input.rs:251`）。去代码里找一个叫 `gate` 的结构会扑空。
-3. **「还有挂着的 `tool_call` 就不调 provider」是守卫，不是步骤。** 它几乎从不触发
-   （`src/agent.rs:478-480`），画进来是为了说明不变量 2（每个 `tool_call` 恰好一个结果）。
+图 1 与图 2 的三处注记：两个 hook 步骤在 CLI 下恒不发生（三个生产组装点全传 `hook: None` —— `src/cli.rs:396` / `src/cli.rs:715` / `src/cli.rs:2232`，`src/` 内没有任何 `Hook` 实现、只有库调用方与测试挂得上，所以图里被压成一条 `Note`、不占步骤的位置，见 §1.3 与 §5）；`权限门` 是抽象的参与者，没有对象持有「询问 → 人答」这次往返（裁决合成在 `src/agent.rs:1954-1995`，问出去的那一问是 `asker.ask(...)` 经 `ConsoleAsker`，去代码里找一个叫 `gate` 的结构会扑空）；「还有挂着的 `tool_call` 就不调 provider」是守卫而不是步骤，它几乎从不触发（`src/agent.rs:478-480`），画进来只为说明不变量 2。
 
 [`README.md`](../README.md) 的「架构」一节有一行式版本
 （`hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件`）—— 那是这条链的另一面，

@@ -1,8 +1,8 @@
 # 文档瘦身：36 份活文档的压表达与一条护栏脚本
 
-Status: 5 张实现票 `ready-for-agent`（[`issues/08`](issues/08-doc-size-guardrail.md)–[`12`](issues/12-remainder-and-close-out.md)，
-2026-10-04 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 十条冻结项 + 七张决策票全部 `resolved`；依赖边见各票抬头。
-三份 research 与四张 grilling 的完整答案在各票的 `## Answer` 里，本文件是它们的构建计划）
+Status: 5 张实现票全部 `done`（[`issues/08`](issues/08-doc-size-guardrail.md)–[`12`](issues/12-remainder-and-close-out.md)，
+2026-10-04 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 十条冻结项 + 七张决策票全部 `resolved`，同日 5 张实现票全部落地；
+依赖边见各票抬头。三份 research 与四张 grilling 的完整答案在各票的 `## Answer` 里，本文件是它们的构建计划）
 
 这 36 份活文档按「被读的方式」分层：`AGENTS.md` **每轮全文注入**（最贵）；`README.md` / `CONTEXT.md` /
 `.scratch/README.md` **每次上手读一次**；`docs/` 逐面与 `docs/adr/` **按需读一份**；`.scratch/*/issues/`

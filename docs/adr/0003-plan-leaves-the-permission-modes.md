@@ -1,6 +1,8 @@
 # 「计划」从权限模式里搬出来：模式回到三档，计划交给模型的 `todo` 工具
 
-权限**回到三档** `readonly` / `ask` / `auto`，`plan` 整个退场：`Mode::Plan` 与它那一档立场（stance）、`is_plan_write`、`PLAN_FILE_NAME`、`/plan` 与 `/endplan`、进出/撤回/重放那套补丁、`docs/plan-mode.md` 全部删掉；`Shift+Tab` 从「切进 / 切出 plan」变成**在会话内循环三档**，`--mode` 与 `[permissions] mode` 补上入口。「计划」这件事改由模型自己的内建工具 `todo(list)` 承担（一次提交整份列表，列表就活在 `tool_call` 的 args 里，零 schema 改动），规则段里引导它开工前立待办、每完成一项更新。这**推翻 `.scratch/fs-agent-v1/spec.md` §13 的一整节**（及用户故事 78/80/82–84 关于 plan 的那几条），也把 §12 的模式表从四行改回三行。来源是用户提出的一轮改动 + grilling 的九个决议，折叠在 `.scratch/todo-and-modes/spec.md`。
+权限**回到三档** `readonly` / `ask` / `auto`，`plan` 整个退场：`Mode::Plan` 与它那一档立场（stance）、`is_plan_write`、`PLAN_FILE_NAME`、`/plan` 与 `/endplan`、进出/撤回/重放那套补丁、`docs/plan-mode.md` 全部删掉；`Shift+Tab` 从「切进 / 切出 plan」变成**在会话内循环三档**，`--mode` 与 `[permissions] mode` 补上入口。
+
+「计划」这件事改由模型自己的内建工具 `todo(list)` 承担（一次提交整份列表，列表就活在 `tool_call` 的 args 里，零 schema 改动），规则段里引导它开工前立待办、每完成一项更新。这**推翻 `.scratch/fs-agent-v1/spec.md` §13 的一整节**（及用户故事 78/80/82–84 关于 plan 的那几条），也把 §12 的模式表从四行改回三行。来源是用户提出的一轮改动 + grilling 的九个决议，折叠在 `.scratch/todo-and-modes/spec.md`。
 
 ## 为什么当初是模式，而不是一条规则
 
