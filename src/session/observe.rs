@@ -1070,7 +1070,7 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
                 if hook_format::feedback_text(outcome).is_some() {
                     hooks.feedback += 1;
                 }
-                if outcome.starts_with(hook_format::FAILED_PREFIX) {
+                if hook_format::is_failed(outcome) {
                     hooks.failed += 1;
                 }
                 *hook_outcomes.entry(outcome.clone()).or_default() += 1;

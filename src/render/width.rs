@@ -1,9 +1,11 @@
-//! 显示宽度的算术：一段文字占多少终端列。
+//! 显示宽度的算术，以及它的两个出口：一段文字占多少终端列，怎么把它裁到某个宽度。
 //!
-//! 只住一处，因为渲染器有两处需要同一个答案 —— 对话窗格把带样式的行折到某个宽度，
+//! 算术只住一处，因为渲染器有两处需要同一个答案 —— 窗格把带样式的行折到某个宽度，
 //! 左栏、提示行与指示器把文字裁到某一个 —— 而第二份拷贝就是 `终` 被算成一列的由来。
+//! 截断因此也在这里：`truncate_columns` 交回纯文本，`ellipsize_line` 保住每一片的样式。
 
 use ratatui::buffer::CellWidth;
+use ratatui::text::{Line, Span};
 
 /// `text` 的显示宽度，单位是终端列。
 pub fn text_columns(text: &str) -> usize {
@@ -35,4 +37,39 @@ pub fn truncate_columns(text: &str, width: usize) -> String {
         end = index + ch.len_utf8();
     }
     text[..end].to_owned()
+}
+
+/// 把一条带样式的行裁到 `width` 列，并用一个 `…` 收尾。
+///
+/// 与 [`truncate_columns`] 是同一把尺子的两个出口：那个交回纯文本，这一个保住每一片的样式
+/// —— 轨迹页里被截的那条消息行还带着发言者的颜色，砍掉样式会一并砍掉「谁在说话」。
+pub fn ellipsize_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let budget = width.saturating_sub(1);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for span in line.spans {
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let columns = char_columns(ch);
+            if used + columns > budget {
+                break;
+            }
+            kept.push(ch);
+            used += columns;
+        }
+        if !kept.is_empty() {
+            spans.push(Span::styled(kept, span.style));
+        }
+        if used >= budget {
+            break;
+        }
+    }
+    // `…` 跟着最后一片的样式，好让它读起来是那一行的一部分。
+    let style = spans.last().map(|span| span.style).unwrap_or_default();
+    spans.push(Span::styled("…", style));
+    Line {
+        spans,
+        style: line.style,
+        alignment: line.alignment,
+    }
 }

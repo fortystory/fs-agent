@@ -736,6 +736,11 @@ pub mod hook_format {
         format!("{FAILED_PREFIX}{message}")
     }
 
+    /// 这条 outcome 是不是一次失败（或超时）—— 判据只此一处，读的人不必自己写前缀比较。
+    pub fn is_failed(outcome: &str) -> bool {
+        outcome.starts_with(FAILED_PREFIX)
+    }
+
     /// 一条 outcome 携带的反馈；它不带反馈时是 `None`（一条普通的 `continue`、一次
     /// 失败，或一条前置钩子 outcome）。
     pub fn feedback_text(outcome: &str) -> Option<&str> {

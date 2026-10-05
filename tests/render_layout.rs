@@ -1969,10 +1969,11 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("↓ 1 行新内容 · 点此到底"), "到了一行：{text}");
 
-    // 滚轮一格挪三行，上下都是。
+    // 滚轮一格挪三行，上下都是。指针落在**转录**上 —— 左栏页矩形里的滚轮归轨迹页
+    // （`.scratch/trace-tab/spec.md` §5）。
     let mouse = |kind| MouseEvent {
         kind,
-        column: 10,
+        column: 60,
         row: 10,
         modifiers: KeyModifiers::empty(),
     };
@@ -3947,11 +3948,12 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
     state.request(ask);
     let _ = screen(120, 24, &mut state);
 
-    // 指针落在覆盖层**之外**（这张 120x24 的屏上它横跨第 44 到 115 列，
-    // 第 8 到 14 行）——那里是左栏，于是滚轮归背后的转录。
+    // 指针落在覆盖层**之外**、且还在转录上：这张 120x24 的屏上覆盖层横跨第 44 到 115 列、
+    // 第 8 到 14 行，所以主列靠左那一小条（第 41 到 43 列）是覆盖层外的转录。左栏页矩形里
+    // 的滚轮归轨迹页（`.scratch/trace-tab/spec.md` §5），所以这里不取那一档。
     state.mouse(MouseEvent {
         kind: MouseEventKind::ScrollUp,
-        column: 10,
+        column: 42,
         row: 10,
         modifiers: KeyModifiers::empty(),
     });
@@ -6811,4 +6813,23 @@ fn closing_a_conversation_detail_that_was_at_the_bottom_still_follows() {
     state.apply(RenderEvent::Notice("关掉之后到的新内容".to_owned()));
     let text = conversation_rows(&mut state, 120, 24).join("\n");
     assert!(text.contains("关掉之后到的新内容"), "还在跟随：{text}");
+}
+
+/// 指针在左栏、但显示的不是轨迹页时，滚轮仍归转录：轨迹 pane 这一帧没被画出来，滚它会
+/// 算出错的落点。判据是「轨迹页在不在屏幕上」，不是「指针在不在左栏」。
+#[test]
+fn the_wheel_over_the_sidebar_goes_to_the_conversation_when_the_trace_page_is_hidden() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    let _ = screen(120, 24, &mut state);
+    let conversation_before = conversation_rows(&mut state, 120, 24);
+
+    state.mouse(wheel_at(10, 12, true));
+    assert_ne!(
+        conversation_rows(&mut state, 120, 24),
+        conversation_before,
+        "调用量页上滚的是转录"
+    );
 }

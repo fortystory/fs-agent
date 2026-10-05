@@ -52,7 +52,7 @@ use super::panel::Panel;
 use super::severity::Severity;
 use super::token;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
-use super::width::{char_columns, text_columns, truncate_columns};
+use super::width::{ellipsize_line, text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
 
@@ -767,6 +767,10 @@ pub struct TuiState {
     trace_drawn: Drawn,
     /// 上一帧把轨迹页画在哪里，好让滚轮与点击按指针落在哪个视口分派。没画轨迹页就是
     /// `None`（与 [`TuiState::detail_rect`] 同一条「记住读的人真看到了什么」的纪律）。
+    ///
+    /// 判据刻意是**轨迹页这一帧画出来了没有**，而不是「指针在不在左栏页矩形里」：轨迹
+    /// pane 没被画出来时它的取景高度是陈旧的，滚它会算出错的落点（`.scratch/trace-tab/spec.md`
+    /// §5 那句「指针在左栏页矩形里就滚轨迹 pane」说的正是轨迹页在屏幕上的那些帧）。
     trace_rect: Option<Rect>,
     /// 详情覆盖层，开着的时候。
     detail: Option<DetailView>,
@@ -2392,8 +2396,8 @@ impl TuiState {
         // 那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西背后的
         // 转录（票 04 §2，`tui-sidebar` spec §7）。
         self.dirty = true;
-        // 指针落在轨迹页上吗？滚轮与点击按它分派（票 09）。`trace_rect` 只在上一帧真的画了
-        // 轨迹页时才有值，所以「记住读的人真看到了什么」这条纪律也管着视口的选择。
+        // 指针落在轨迹页上吗？滚轮与点击都按它分派（票 09）：`trace_rect` 只在上一帧真的
+        // 画了轨迹页时才有值，所以「记住读的人真看到了什么」这条纪律也管着视口的选择。
         let over_trace = self
             .trace_rect
             .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
@@ -5057,7 +5061,7 @@ fn paint_block(
             if text.is_empty() {
                 return Vec::new();
             }
-            let indent = style.prefix(speaker).as_str().cell_width();
+            let indent = prefix_columns(speaker, style);
             let rows = attribute_document(
                 speaker,
                 super::markdown::to_lines_indented(text, width, indent),
@@ -5440,41 +5444,6 @@ fn trace_message_row(
     RenderedLine::linked(head, detail)
 }
 
-/// 把一条带样式的行裁到 `width` 列，并用一个 `…` 收尾。
-///
-/// 与 [`truncate_columns`] 的区别是它保住每一片的样式：轨迹页那条消息行还带着发言者的
-/// 颜色，砍掉它会一并砍掉「谁在说话」。
-fn ellipsize_line(line: Line<'static>, width: usize) -> Line<'static> {
-    let budget = width.saturating_sub(1);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut used = 0usize;
-    for span in line.spans {
-        let mut kept = String::new();
-        for ch in span.content.chars() {
-            let columns = char_columns(ch);
-            if used + columns > budget {
-                break;
-            }
-            kept.push(ch);
-            used += columns;
-        }
-        if !kept.is_empty() {
-            spans.push(Span::styled(kept, span.style));
-        }
-        if used >= budget {
-            break;
-        }
-    }
-    // `…` 跟着最后一片的样式，好让它读起来是那一行的一部分。
-    let style = spans.last().map(|span| span.style).unwrap_or_default();
-    spans.push(Span::styled("…", style));
-    Line {
-        spans,
-        style: line.style,
-        alignment: line.alignment,
-    }
-}
-
 /// 一条来源行是不是用户自己的消息，那正是回合条一格跳转所瞄准的（spec §4）。
 fn is_user_message(block: &Block) -> bool {
     matches!(
@@ -5510,9 +5479,7 @@ fn selects(view: Viewport, block: &Block) -> bool {
         | Block::PermissionAsked { .. }
         | Block::PermissionDecided { .. } => true,
         // hook 只在**失败**时是说给用户的；成功的那条留在轨迹里。
-        Block::Hook { outcome, .. } => {
-            outcome.starts_with(crate::events::hook_format::FAILED_PREFIX)
-        }
+        Block::Hook { outcome, .. } => crate::events::hook_format::is_failed(outcome),
         // 边界行是对话的分段线（spec §2）。
         Block::TurnStarted { .. }
         | Block::TurnEnded { .. }
