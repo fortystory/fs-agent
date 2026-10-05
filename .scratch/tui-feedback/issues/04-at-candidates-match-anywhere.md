@@ -1,7 +1,7 @@
 # 04 — `@` 候选放宽：分段前缀、可从任意一段起
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../spec.md
 Blocked by: —
 

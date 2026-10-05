@@ -58,7 +58,13 @@ impl FileIndex {
         *self = Self::Ready(Arc::new(paths));
     }
 
-    /// 按前缀过滤的候选，大小写不敏感，最多 `limit` 条。
+    /// 按 `query` 过滤的候选，大小写不敏感，最多 `limit` 条。
+    ///
+    /// 匹配是**分段**的（`.scratch/tui-feedback/spec.md` §4）：query 与路径都按 `/` 切段、空段
+    /// 丢掉（`src/` 与 `src` 因此等价），query 的每一段按前缀落在路径的某一段上、段序保持，
+    /// 而**第一段可以从路径的任意一段起** —— 于是 `cli` 配得到 `src/cli.rs`，`src/cli` 与
+    /// `render/tui` 也各配得到它们的那一份。匹配起点更靠前段者排在前面，同分保持索引里的
+    /// 路径序，所以 `src/cli.rs`（起点 1）排在 `vendor/x/cli-tool`（起点 2）之前。
     ///
     /// 返回的是索引里那个拼法（`/Ask` 找得到 `ask-matt`，而按 `Tab` 写出的是循环会认的
     /// 那个名字）。含空白的路径一律不进候选：`@` 的记号按空白结束，插进去会当场断掉。
@@ -67,13 +73,18 @@ impl FileIndex {
         let Self::Ready(paths) = self else {
             return Vec::new();
         };
-        let needle = query.to_lowercase();
-        paths
+        let mut matched: Vec<(usize, String)> = paths
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
             .filter(|text| !text.contains(char::is_whitespace))
-            .filter(|text| text.to_lowercase().starts_with(&needle))
+            .filter_map(|text| match_start(&text, query).map(|start| (start, text)))
+            .collect();
+        // 稳定排序：同分那些保持索引里的路径序（`scan` 已经按路径排过）。
+        matched.sort_by_key(|(start, _)| *start);
+        matched
+            .into_iter()
             .take(limit)
+            .map(|(_, text)| text)
             .collect()
     }
 
@@ -89,6 +100,37 @@ impl FileIndex {
             .iter()
             .any(|candidate| candidate.to_string_lossy() == path)
     }
+}
+
+/// `query` 按段落在 `path` 上的匹配起点：第一段匹配到的那个段号，不匹配是 `None`。
+///
+/// 段按 `/` 切、空段丢掉，每段按前缀匹配（大小写不敏感），且后一段必须落在前一段**之后**。
+/// query 一段都没有时（空串、光一个 `/`）算作匹配、起点 0 —— 那是「还没打字」的样子，`@` 的
+/// 菜单在那时本来就不开，但这个函数不必为此编一个假的判据。
+fn match_start(path: &str, query: &str) -> Option<usize> {
+    let segments = |text: &str| -> Vec<String> {
+        text.split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let needle = segments(query);
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let hay = segments(path);
+    let start = hay
+        .iter()
+        .position(|segment| segment.starts_with(&needle[0]))?;
+    let mut cursor = start;
+    for segment in &needle[1..] {
+        let rest = &hay[cursor + 1..];
+        let offset = rest
+            .iter()
+            .position(|candidate| candidate.starts_with(segment.as_str()))?;
+        cursor += 1 + offset;
+    }
+    Some(start)
 }
 
 /// 走一遍 `root`，把工作区里的文件与目录列出来，路径相对 `root`。

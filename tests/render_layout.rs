@@ -3933,6 +3933,23 @@ fn an_at_opens_a_menu_only_once_a_character_has_been_typed() {
 }
 
 #[test]
+fn the_at_menu_finds_a_file_by_a_later_path_segment() {
+    // 打 `cli` 要配得到 `src/cli.rs`（`.scratch/tui-feedback/spec.md` §4）：候选的用处正是
+    // 「我不记得它在哪一层」，而前缀匹配恰好要求你记得。
+    let mut state = idle();
+    install_files(
+        &mut state,
+        &["src/", "src/main.rs", "src/cli.rs", "docs/cli.md"],
+    );
+    for ch in "@cli".chars() {
+        state.key(Key::Char(ch));
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("┆ @src/cli.rs"), "菜单里有它：\n{text}");
+    assert!(!text.contains("@src/main.rs"), "没指到的不列：\n{text}");
+}
+
+#[test]
 fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
     let mut state = idle();
     install_files(

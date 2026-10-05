@@ -335,6 +335,11 @@ headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4�
 文件有几千个，「看全部」没有意义。**含空白的路径不进候选**：`@` 的记号按空白结束，插进去会
 当场断掉。
 
+**`@` 的匹配是分段的**（`.scratch/tui-feedback/spec.md` §4）：query 与路径都按 `/` 切段，query
+的每一段按前缀落在路径的某一段上、段序保持，**第一段可以从路径的任意一段起** —— 于是 `cli`
+配得到 `src/cli.rs`，`render/tui` 配得到 `src/render/tui.rs`。匹配起点更靠前段者排在前面，同分
+保持索引里的字典序。上色与 chip 的「能兑现」判据不受影响：它照旧要求那条路径**精确**存在。
+
 **工作区文件索引**是会话级的一个共享值（`Idle` / `Loading` / `Ready`）：在 `spawn_blocking` 里
 用 `ignore::WalkBuilder` 遍历，规则与 `grep` 工具**同源**（遵守 `.gitignore`、非 git 仓库也能走、
 固定字典序），而**隐藏条目这一处有意分家**：隐藏**目录**放行（`@.scratch/` 要能一路钻下去 ——

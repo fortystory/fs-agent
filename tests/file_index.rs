@@ -25,6 +25,7 @@ fn workspace() -> TempDir {
     fs::write(at.join("ignored.txt"), "被忽略").expect("ignored.txt");
     fs::create_dir_all(at.join("src/nested")).expect("src/nested");
     fs::write(at.join("src/main.rs"), "fn main() {}").expect("src/main.rs");
+    fs::write(at.join("src/cli.rs"), "// 一个只被名字找到的文件").expect("src/cli.rs");
     fs::write(at.join("src/nested/deep.rs"), "").expect("src/nested/deep.rs");
     fs::create_dir(at.join("empty")).expect("empty");
     root
@@ -51,6 +52,7 @@ fn the_scan_keeps_hidden_and_ignored_files_out_and_fixes_the_order() {
             "b.txt",
             "empty/",
             "src/",
+            "src/cli.rs",
             "src/main.rs",
             "src/nested/",
             "src/nested/deep.rs",
@@ -121,6 +123,53 @@ fn candidates_filter_by_prefix_without_regard_to_case_and_stop_at_the_limit() {
     assert_eq!(index.candidates("SRC/", 10), vec!["src/", "src/main.rs"]);
     assert_eq!(index.candidates("s", 1), vec!["src/"], "行数上限先收一刀");
     assert!(index.candidates("zzz", 10).is_empty(), "没指到就是空");
+}
+
+#[test]
+fn candidates_match_a_path_segment_from_any_depth() {
+    // 打 `cli` 要配得到 `src/cli.rs`：判据从整条路径的前缀换成**分段前缀、可从任意一段起**
+    // （`.scratch/tui-feedback/spec.md` §4）。候选的用处正是「我不记得它在哪一层」。
+    let root = workspace();
+    let mut index = FileIndex::new();
+    index.loaded(file_index::scan(root.path()));
+
+    assert_eq!(
+        index.candidates("cli", 5),
+        vec!["src/cli.rs"],
+        "从第二段起也命中"
+    );
+    assert_eq!(
+        index.candidates("nested/deep", 5),
+        vec!["src/nested/deep.rs"],
+        "跨段，段序保持"
+    );
+    assert_eq!(
+        index.candidates("CLI", 5),
+        vec!["src/cli.rs"],
+        "大小写不敏感"
+    );
+    // 前缀那一条不退化：`src` 与 `src/` 同一串，而且 `src/` 自己排在最前。
+    let plain = index.candidates("src", 10);
+    assert_eq!(plain, index.candidates("src/", 10));
+    assert_eq!(plain.first().map(String::as_str), Some("src/"));
+    assert!(plain.contains(&"src/main.rs".to_owned()), "{plain:?}");
+}
+
+#[test]
+fn candidates_rank_the_earlier_matching_segment_first() {
+    // 匹配起点更靠前的排在前面（`src/cli.rs` 的起点是第 1 段，`vendor/x/cli-tool` 的是第 2
+    // 段）；同分的保持索引里的路径序。
+    let mut index = FileIndex::new();
+    index.loaded(vec![
+        PathBuf::from("vendor/x/cli-tool"),
+        PathBuf::from("docs/cli.md"),
+        PathBuf::from("src/cli.rs"),
+    ]);
+    assert_eq!(
+        index.candidates("cli", 10),
+        vec!["docs/cli.md", "src/cli.rs", "vendor/x/cli-tool"],
+        "起点 1 的两条保持索引顺序在前，起点 2 的在后"
+    );
 }
 
 #[test]
