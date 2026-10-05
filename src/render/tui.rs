@@ -1865,7 +1865,7 @@ impl TuiState {
     /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
     fn emit_block(&mut self, block: &Block, targets: Targets) -> usize {
         let mut produced = 0;
-        if targets.conversation {
+        if targets.conversation && selects(Viewport::Conversation, block) {
             let width = self.conversation_width;
             let lines = paint_block(block, &mut self.colors, width, Viewport::Conversation);
             produced = produced.max(lines.len());
@@ -1878,7 +1878,7 @@ impl TuiState {
                 );
             }
         }
-        if targets.trace {
+        if targets.trace && selects(Viewport::Trace, block) {
             let width = self.trace_width;
             let lines = paint_block(block, &mut self.colors, width, Viewport::Trace);
             produced = produced.max(lines.len());
@@ -2154,12 +2154,10 @@ impl TuiState {
         true
     }
 
-    /// 把「正在思考」那一行推进每条选中的视口。
+    /// 把「正在思考」那一行推进轨迹视图。
+    ///
+    /// 思考是一条**过程行**，只归轨迹（冻结项 2、8）：对话视图里它除了打断阅读什么都不做。
     fn paint_thinking_line(&mut self, speaker: &crate::events::SpeakerId, targets: Targets) {
-        if targets.conversation {
-            let line = self.thinking_in_progress_line(speaker, Viewport::Conversation);
-            self.push_line(Viewport::Conversation, line, None, None);
-        }
         if targets.trace {
             let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
             self.push_line(Viewport::Trace, line, None, None);
@@ -2170,7 +2168,7 @@ impl TuiState {
     ///
     /// `in_place` 说它是**就地重写**还是**追加**：实时路径上那条「正在思考」已经在窗格里，
     /// 冻住它就是重写最后一行；重放路径上窗格刚被清空，定稿那条要重新画出来
-    /// （票 02 §1、票 09）。每个视口各画一遍：思考行的构造依赖视图宽度（前缀分档）。
+    /// （票 02 §1、票 09）。只喂轨迹视图 —— 思考行是过程行（票 10）。
     fn paint_settled_thinking(
         &mut self,
         speaker: &crate::events::SpeakerId,
@@ -2178,18 +2176,6 @@ impl TuiState {
         targets: Targets,
         in_place: bool,
     ) {
-        if targets.conversation {
-            let (line, detail) =
-                self.thinking_settled_line(speaker, text.clone(), Viewport::Conversation);
-            if in_place {
-                self.conversation.replace_last(line);
-                if let Some(link) = self.conversation_links.back_mut() {
-                    *link = Some(detail);
-                }
-            } else {
-                self.push_line(Viewport::Conversation, line, Some(detail), None);
-            }
-        }
         if targets.trace {
             let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
             if in_place {
@@ -5022,17 +5008,24 @@ fn paint_block(
         }
         // 用户自己的输入 —— 以及非 assistant 的系统行 —— 按写下来的样子显示：每一行都在，
         // 什么都不略去，也不上 Markdown，因为这不是一份文档。续行与第一行正文对齐（spec §3）。
-        Block::Message { speaker, text, .. } => attribute_speech(
-            speaker,
-            text.split('\n')
-                .map(|raw| Line::from(raw.to_owned()))
-                .collect(),
-            colors,
-            style,
-        )
-        .into_iter()
-        .map(RenderedLine::from)
-        .collect(),
+        Block::Message { speaker, text, .. } => {
+            let mut rows = attribute_speech(
+                speaker,
+                text.split('\n')
+                    .map(|raw| Line::from(raw.to_owned()))
+                    .collect(),
+                colors,
+                style,
+            );
+            // 例外一：用户自己的话在**对话视图**里右对齐 —— 「我说的话靠右」那种聊天感
+            // （`.scratch/trace-tab/spec.md` §2）。轨迹视图仍左对齐，助手也仍左对齐。
+            if view == Viewport::Conversation && matches!(speaker, crate::events::SpeakerId::User) {
+                for row in &mut rows {
+                    row.alignment = Some(Alignment::Right);
+                }
+            }
+            rows.into_iter().map(RenderedLine::from).collect()
+        }
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
             wording::round_section(*round, *mode),
@@ -5164,11 +5157,16 @@ fn paint_block(
         }
         Block::ContextInjected { source, content } => {
             // 这条记录**点得开**（票 19）：转录上只有一行来源名，加载数据本身在详情里。
+            // 它拿一个**专色**（票 10，`.scratch/trace-tab/spec.md` §2 例外二）：注入行
+            // 与别的叙述行同灰，于是「注入 / 用户 / 助手」在轨迹页上分不开。
             let text = wording::context_injected(source.clone());
-            let line = narration(text.clone());
+            let line = Line::from(Span::styled(
+                text.clone(),
+                Style::default().fg(Color::LightBlue),
+            ));
             let detail = Detail {
                 title: text,
-                color: Color::DarkGray,
+                color: Color::LightBlue,
                 kind: DetailKind::Context {
                     source: source.clone(),
                     content: content.clone(),
@@ -5363,6 +5361,49 @@ fn is_user_message(block: &Block) -> bool {
             ..
         }
     )
+}
+
+/// 一个块进不进这个视图 —— 分工的**唯一**判据（`.scratch/trace-tab/spec.md` §2）。
+///
+/// 轨迹视图是**全量**；对话视图只留用户文本、assistant 正文，加一份枚举出来的保留清单：
+/// 错误、会话中断、权限裁决、失败的 hook、`Notice` 整类，以及回合 / 轮次边界行 —— 它们是
+/// 对话的分段线，不是过程行。其余全归轨迹。
+fn selects(view: Viewport, block: &Block) -> bool {
+    if view == Viewport::Trace {
+        return true;
+    }
+    match block {
+        // 执行者自己的字全归轨迹（冻结项 10）。
+        Block::Message {
+            speaker: crate::events::SpeakerId::Executor(_),
+            ..
+        } => false,
+        // 用户文本与 assistant 正文 —— 对话本来就该只有这些。
+        Block::Message { .. } => true,
+        // 「为什么没有回答」的那几类立刻要知道（冻结项 8）。
+        Block::AgentError { .. }
+        | Block::SessionError { .. }
+        | Block::SessionEnded { .. }
+        | Block::PermissionAsked { .. }
+        | Block::PermissionDecided { .. } => true,
+        // hook 只在**失败**时是说给用户的；成功的那条留在轨迹里。
+        Block::Hook { outcome, .. } => {
+            outcome.starts_with(crate::events::hook_format::FAILED_PREFIX)
+        }
+        // 边界行是对话的分段线（spec §2）。
+        Block::TurnStarted { .. }
+        | Block::TurnEnded { .. }
+        | Block::RoundStarted { .. }
+        | Block::RoundEnded { .. } => true,
+        // `Notice` 整类留下（冻结项 8、票 06）：命令回执、启动横幅、错误报告、目标与重试
+        // 提示、历史分隔线都在内。
+        Block::Notice(_) => true,
+        // 诊断也是一句说给人听的话。
+        Block::Diagnostic(_) => true,
+        // 其余全进轨迹：工具与它的反馈、用量、分歧、沙箱、历史、上下文注入、执行者进出、
+        // 流式增量。
+        _ => false,
+    }
 }
 
 /// 这个块是否结束回合条计数的那个单位。
@@ -5801,6 +5842,214 @@ mod tests {
         assert_eq!(state.conversation.sources(), pane::CAP);
         assert_eq!(state.conversation_links.len(), state.conversation.sources());
         assert_eq!(state.turn_rail.lines.len(), state.conversation.sources());
+    }
+
+    /// 每一类块进哪个视图 —— 分工是一个穷尽的 match，所以穷举地测它，而不是只在帧里
+    /// 间接覆盖（`.scratch/trace-tab/spec.md` §2 与它的测试决定）。
+    #[test]
+    fn every_kind_of_block_lands_in_the_views_the_split_names() {
+        use crate::events::{
+            hook_format, Decision, DecisionSource, HistoryReason, ParticipantId, RoundMode,
+            SpeakerId, Usage,
+        };
+        use crate::render::transcript::{ToolBlock, ToolOutcome};
+
+        let debater = SpeakerId::Debater("kimi".into());
+        let executor = SpeakerId::Executor(ParticipantId::new("kimi-1"));
+        let tool = |speaker: SpeakerId| {
+            Block::Tool(Box::new(ToolBlock {
+                speaker,
+                tool_call_id: ToolCallId::new("c-1"),
+                tool: "bash".to_owned(),
+                args: serde_json::json!({"command": "ls"}),
+                outcome: Some(ToolOutcome {
+                    ok: true,
+                    output: Some("out".to_owned()),
+                    error: None,
+                    duration_ms: 1,
+                }),
+            }))
+        };
+        let message = |speaker: SpeakerId, text: &str| Block::Message {
+            speaker,
+            role: Role::Assistant,
+            text: text.to_owned(),
+            reasoning: None,
+        };
+        // （块，留在对话视图吗）
+        let cases: Vec<(Block, bool)> = vec![
+            (
+                Block::Message {
+                    speaker: SpeakerId::User,
+                    role: Role::User,
+                    text: "问".to_owned(),
+                    reasoning: None,
+                },
+                true,
+            ),
+            (message(debater.clone(), "答"), true),
+            (message(executor.clone(), "派出去的活"), false),
+            (
+                Block::TurnStarted {
+                    speaker: debater.clone(),
+                    iteration: 1,
+                },
+                true,
+            ),
+            (
+                Block::TurnEnded {
+                    speaker: debater.clone(),
+                    reason: StopReason::Completed,
+                },
+                true,
+            ),
+            (
+                Block::RoundStarted {
+                    round: 1,
+                    mode: RoundMode::Independent,
+                },
+                true,
+            ),
+            (
+                Block::RoundEnded {
+                    round: 1,
+                    reason: StopReason::Completed,
+                },
+                true,
+            ),
+            (
+                Block::AgentError {
+                    speaker: debater.clone(),
+                    message: "炸了".to_owned(),
+                },
+                true,
+            ),
+            (
+                Block::SessionError {
+                    code: "x".to_owned(),
+                    detail: "细节".to_owned(),
+                },
+                true,
+            ),
+            (
+                Block::SessionEnded {
+                    reason: StopReason::Aborted,
+                },
+                true,
+            ),
+            (
+                Block::PermissionAsked {
+                    speaker: debater.clone(),
+                    tool_name: Some("bash".to_owned()),
+                    args: serde_json::json!({}),
+                },
+                true,
+            ),
+            (
+                Block::PermissionDecided {
+                    speaker: debater.clone(),
+                    decision: Decision::Allow,
+                    source: DecisionSource::User,
+                    reason: None,
+                },
+                true,
+            ),
+            (
+                Block::Hook {
+                    speaker: debater.clone(),
+                    point: hook_format::POINT_PRE.to_owned(),
+                    outcome: hook_format::failed("拒绝"),
+                },
+                true,
+            ),
+            (
+                Block::Hook {
+                    speaker: debater.clone(),
+                    point: hook_format::POINT_PRE.to_owned(),
+                    outcome: hook_format::OUTCOME_CONTINUE.to_owned(),
+                },
+                false,
+            ),
+            (Block::Notice("回执".to_owned()), true),
+            (Block::Diagnostic("诊断".to_owned()), true),
+            (tool(debater.clone()), false),
+            (tool(executor), false),
+            (
+                Block::ToolFeedback {
+                    outcome: "[钩子] 反馈".to_owned(),
+                },
+                false,
+            ),
+            (
+                Block::Usage {
+                    speaker: debater.clone(),
+                    usage: Usage::default(),
+                },
+                false,
+            ),
+            (
+                Block::Divergence {
+                    topic: "题".to_owned(),
+                    positions: Vec::new(),
+                },
+                false,
+            ),
+            (
+                Block::Sandbox {
+                    mode: "bwrap".to_owned(),
+                    unavailable_reason: None,
+                },
+                false,
+            ),
+            (
+                Block::History {
+                    reason: HistoryReason::Undo,
+                    summary: None,
+                },
+                false,
+            ),
+            (
+                Block::ContextInjected {
+                    source: ContextSource::McpCatalog,
+                    content: "正文".to_owned(),
+                },
+                false,
+            ),
+            (
+                Block::ExecutorSpawned {
+                    speaker: debater.clone(),
+                    executor_id: ParticipantId::new("kimi-1"),
+                },
+                false,
+            ),
+            (
+                Block::ExecutorFinished {
+                    executor_id: ParticipantId::new("kimi-1"),
+                    reason: StopReason::Completed,
+                    summary: "完了".to_owned(),
+                },
+                false,
+            ),
+            (
+                Block::Delta {
+                    speaker: debater,
+                    kind: DeltaKind::Text,
+                    text: "增量".to_owned(),
+                },
+                false,
+            ),
+        ];
+        for (block, kept) in cases {
+            assert_eq!(
+                selects(Viewport::Conversation, &block),
+                kept,
+                "对话视图：{block:?}"
+            );
+            assert!(
+                selects(Viewport::Trace, &block),
+                "轨迹视图是全量：{block:?}"
+            );
+        }
     }
 
     /// 一条上下文注入在转录里是一行，在详情里是它的正文（票 19）。

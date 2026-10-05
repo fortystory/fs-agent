@@ -419,6 +419,7 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-24", true, Some("body"), None));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let open = screen(120, 40, &mut state);
     assert!(
@@ -3096,10 +3097,13 @@ fn an_executors_list_stays_out_of_the_sidebar() {
     );
 
     assert!(!tab_bar(&mut state, 120, 24).contains(wording::TAB_TODO));
+    // 执行者的调用是一条 Tool 行，只住在轨迹页里（票 10）—— 而左栏的 `todo` 页显示的
+    // 是主会话那一份，所以这次调用不会让它长出一个页签。
+    open_trace_tab(&mut state, 120, 24);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("派出去的活") || text.contains("todo"),
-        "调用本身还在转录里：{text}"
+        "调用本身还在轨迹页里：{text}"
     );
 }
 
@@ -4169,6 +4173,8 @@ fn a_thinking_segment_opens_in_place_and_settles_in_place() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("先看依赖，"));
     state.apply(reasoning_delta("再看测试。"));
+    // 思考行只住在轨迹页上（票 10）。
+    open_trace_tab(&mut state, 120, 24);
 
     let rows = screen(120, 24, &mut state);
     let text = rows.join("\n");
@@ -4228,6 +4234,8 @@ fn a_synthesizer_trace_streams_but_records_nothing() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("综合两边的意见。"));
     state.apply(message(2, "结论。", None));
+    // 思考行是一条过程行，只在轨迹页上（票 10）。
+    open_trace_tab(&mut state, 120, 24);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains("[kimi] ▸ ✓ 思考完成"),
@@ -4258,6 +4266,7 @@ fn a_tool_result_is_folded_into_its_call_line() {
         Some("line one\nline two\nline three"),
         None,
     ));
+    open_trace_tab(&mut state, 120, 24);
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
@@ -4284,6 +4293,7 @@ fn a_tool_result_is_folded_into_its_call_line() {
         None,
         Some("no such file"),
     ));
+    open_trace_tab(&mut failed, 120, 24);
     let rows = screen(120, 24, &mut failed);
     let text = rows.join("\n");
     assert!(
@@ -4306,6 +4316,7 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-9", true, Some("alpha\nbeta"), None));
+    open_trace_tab(&mut state, 120, 40);
 
     // 一个很高的终端，好让整段正文都放得下：最短的那个覆盖层会滚动，
     // 那是下一个测试的主题。
@@ -4344,6 +4355,7 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
         None,
     ));
 
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     // 正文从顶部开始，40 行时那儿是参数那一节。
     let text = screen(120, 40, &mut state).join("\n");
@@ -4412,6 +4424,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
         None,
     ));
 
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
@@ -4442,6 +4455,7 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
         None,
     ));
 
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("head of the output"), "预览：{text}");
@@ -4460,6 +4474,7 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-13", true, Some("body"), None));
+    open_trace_tab(&mut state, 120, 40);
 
     // 在问句盖住窗格之前，先找到调用行那一行。
     let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行画出来了");
@@ -5161,6 +5176,7 @@ fn one_message_never_gets_two_thinking_lines() {
     state.apply(reasoning_delta("先看依赖。"));
     state.apply(text_delta("答案。"));
     state.apply(message(1, "答案。", Some("先看依赖。")));
+    open_trace_tab(&mut state, 120, 40);
     let text = screen(120, 40, &mut state).join("\n");
     assert_eq!(
         text.matches("思考完成").count(),
@@ -5176,6 +5192,7 @@ fn reasoning_never_joins_the_message_body() {
     // 会在 `正在思考` 底下打印出原始念头（票 02 §3）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("这是不该出现的思考正文。"));
+    open_trace_tab(&mut state, 120, 40);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("… 正在思考"), "思考行在那儿：{text}");
     assert!(
@@ -5201,7 +5218,8 @@ fn the_detail_overlay_freezes_the_transcript() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-20", true, Some("body"), None));
-    let _ = screen(120, 24, &mut state);
+    // 调用行住在轨迹页里（票 10），转录那一半（Notice）照旧在主列。
+    open_trace_tab(&mut state, 120, 24);
 
     let _ = screen(120, 24, &mut state);
     click_row(&mut state, 120, 24, "调用 bash");
@@ -5241,6 +5259,8 @@ fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-21", true, Some("body"), None));
+    // 工具行只住在轨迹页里（票 10），所以先把左栏切过去。
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
@@ -5300,6 +5320,7 @@ fn a_thinking_line_tints_its_speakers_name() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(reasoning_delta("先看依赖。"));
     state.apply(text_delta("答案。"));
+    open_trace_tab(&mut state, 120, 40);
 
     let frame = buffer(120, 40, &mut state);
     let Some((column, row)) = cell_of(&frame, 120, 40, "✓ 思考完成") else {
@@ -5329,6 +5350,7 @@ fn reasoning_that_interleaves_opens_a_new_line_per_segment() {
     state.apply(reasoning_delta("第一段思考。"));
     state.apply(text_delta("第一段正文。"));
     state.apply(reasoning_delta("第二段思考。"));
+    open_trace_tab(&mut state, 120, 40);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("… 正在思考"), "第二段还开着：{text}");
     assert_eq!(
@@ -5357,6 +5379,7 @@ fn ctrl_d_closes_the_detail_overlay() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-22", true, Some("body"), None));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
@@ -5412,6 +5435,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
         ),
         None,
     ));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
 
     // 标记远在可见正文的下面，所以走到它的末尾。
@@ -5438,6 +5462,7 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-24", true, Some("body"), None));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
 
     state.key(Key::CtrlC);
@@ -5489,6 +5514,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
         serde_json::json!({"command": "ls -la"}),
     ));
     state.apply(tool_completed(2, "call-30", true, Some("total 0"), None));
+    open_trace_tab(&mut state, 120, 24);
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
@@ -5508,6 +5534,7 @@ fn a_tool_call_is_on_screen_as_soon_as_its_result_arrives() {
     ));
     asked.apply(permission_asked(2, "call-31"));
     asked.apply(permission_decided(3));
+    open_trace_tab(&mut asked, 120, 24);
     let text = screen(120, 24, &mut asked).join("\n");
     assert!(text.contains("权限询问"), "问句先被叙述出来：{text}");
     assert!(
@@ -5535,6 +5562,7 @@ fn the_detail_overlay_is_wider_than_a_question() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-41", true, Some("body"), None));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let frame = buffer(120, 40, &mut state);
     let detail = overlay_width(&frame, 120, 40).expect("覆盖层的上边框");
@@ -5567,6 +5595,7 @@ fn the_detail_overlay_is_wider_than_a_question() {
         serde_json::json!({"command": "ls"}),
     ));
     wide.apply(tool_completed(2, "call-41", true, Some("body"), None));
+    open_trace_tab(&mut wide, 200, 40);
     click_row(&mut wide, 200, 40, "调用 bash");
     let frame = buffer(200, 40, &mut wide);
     let detail = overlay_width(&frame, 200, 40).expect("覆盖层的上边框");
@@ -5611,14 +5640,14 @@ fn a_click_outside_the_detail_overlay_closes_it() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-40", true, Some("body"), None));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
 
-    // 外面：覆盖层在主列里留出的边距，在它来
-    // 自的那一行上。
-    let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行");
-    state.mouse(click(MAIN_LEFT_AT_120, row));
+    // 外面：覆盖层在屏幕上留出的上边距（第 0 行）——整圈框都是关闭目标，
+    // 而这里的覆盖层压住了它下面几乎每一行（120×40 下它占 2..38）。
+    state.mouse(click(MAIN_LEFT_AT_120, 0));
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("── 参数 ──"), "点在转录上把它关上了：{text}");
 
@@ -5669,8 +5698,9 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
             "第 {index} 行"
         )));
     }
-    // 先来一帧，然后是中间夹着一帧的实时思考段。
-    let _ = screen(120, 24, &mut state);
+    // 先来一帧，然后是中间夹着一帧的实时思考段。左栏先切到轨迹页：思考行住在那里
+    // （票 10），而转录那一半的窗口不受它影响。
+    open_trace_tab(&mut state, 120, 24);
     state.apply(reasoning_delta("先想一下。"));
     let _ = screen(120, 24, &mut state);
     state.apply(text_delta("答案。"));
@@ -5714,6 +5744,7 @@ fn a_complete_result_does_not_claim_its_text_is_unavailable() {
         Some("退出码：0\n--- 标准输出 ---\nhi\n--- 标准错误 ---\n"),
         None,
     ));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
 
     let text = screen(120, 40, &mut state).join("\n");
@@ -5745,6 +5776,7 @@ fn a_cut_result_still_says_when_the_whole_text_is_gone() {
         Some("head\n[已截断：999 字符，约 250 token；全文在 /x/outputs/call-51.txt]\ntail"),
         None,
     ));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
 
     let text = screen(120, 40, &mut state).join("\n");
@@ -5766,6 +5798,7 @@ fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
         serde_json::json!({"command": "find .scratch -type f"}),
     ));
     state.apply(tool_completed(2, "call-60", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("[kimi] ▸ 调用 bash 查询 .scratch"),
@@ -5785,9 +5818,11 @@ fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
         serde_json::json!({"questions": [{"id": "q", "header": "下一步", "question": "接着做哪个？"}]}),
     ));
     asked.apply(tool_completed(2, "call-61", false, None, Some("declined")));
+    open_trace_tab(&mut asked, 120, 40);
     let text = screen(120, 40, &mut asked).join("\n");
+    // 轨迹页只有 40 列，所以这一行会折成两行 —— 断言两段都在，而不是那一整句。
     assert!(
-        text.contains("[kimi] ▸ 调用 ask_user_question 下一步 失败"),
+        text.contains("调用 ask_user_question 下一步") && text.contains("失败"),
         "问题自己的摘要描述了这次调用：{text}"
     );
 
@@ -5810,6 +5845,7 @@ fn the_call_line_wears_the_narration_grey_after_its_speakers_name() {
         serde_json::json!({"command": "ls -la"}),
     ));
     state.apply(tool_completed(2, "call-62", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
     let frame = buffer(120, 40, &mut state);
 
     let Some((name_x, row)) = cell_of(&frame, 120, 40, "[kimi]") else {
@@ -5842,6 +5878,7 @@ fn the_detail_overlay_wears_the_speakers_colour_and_keeps_a_cell_of_air() {
         serde_json::json!({"command": "ls"}),
     ));
     state.apply(tool_completed(2, "call-63", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let frame = buffer(120, 40, &mut state);
 
@@ -5941,6 +5978,7 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
         Some(&body.join("\n")),
         None,
     ));
+    open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
 
     // 页脚那两个数，不管它们在屏幕上的哪儿。
@@ -6007,6 +6045,8 @@ fn the_permission_question_describes_the_call_the_way_the_line_does() {
         serde_json::json!({ "command": command }),
     ));
     state.apply(tool_completed(2, "call-80", true, Some("out"), None));
+    // 折起行住在轨迹页里（票 10），所以先把左栏切过去；问句随后立在主列上。
+    open_trace_tab(&mut state, 120, 40);
     // ……然后被问起。
     state.request(ask_bash(command));
 
@@ -6394,4 +6434,104 @@ fn a_width_change_replays_the_trace_page_too() {
         .filter(|row| row.contains("句话"))
         .count();
     assert!(lines <= 24, "对话视图没有被推第二遍：{conversation:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// 两个视图的分工（`.scratch/trace-tab/spec.md` §2；票 10）
+// ---------------------------------------------------------------------------
+
+/// 一条上下文注入。
+fn injected(seq: u64, content: &str) -> fs_agent::render::RenderEvent {
+    use fs_agent::events::{ContextSource, Event, EventPayload, SpeakerId};
+    fs_agent::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::System,
+        EventPayload::ContextInjected {
+            source: ContextSource::McpCatalog,
+            content: content.to_owned(),
+        },
+    ))
+}
+
+/// 主列只剩对话：用户文本、assistant 正文、保留清单；过程行全在轨迹页
+/// （票 10 验证 1）。
+#[test]
+fn the_split_keeps_the_process_rows_out_of_the_conversation() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "我问的问题"));
+    state.apply(tool_started(
+        2,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "call-1", true, Some("out"), None));
+    state.apply(reasoning_delta("一段推理。"));
+    state.apply(message(4, "助手的回答。", None));
+    state.apply(injected(5, "注入的正文"));
+    state.apply(RenderEvent::Notice("命令回执".to_owned()));
+
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(conversation.contains("我问的问题"), "{conversation}");
+    assert!(conversation.contains("助手的回答。"), "{conversation}");
+    assert!(conversation.contains("命令回执"), "{conversation}");
+    assert!(
+        !conversation.contains("调用 bash"),
+        "工具行进轨迹：{conversation}"
+    );
+    assert!(
+        !conversation.contains("思考完成") && !conversation.contains("正在思考"),
+        "思考行进轨迹：{conversation}"
+    );
+    assert!(
+        !conversation.contains("上下文注入"),
+        "注入行进轨迹：{conversation}"
+    );
+
+    // 轨迹页是全量：过程行与对话本身都在。
+    open_trace_tab(&mut state, 120, 24);
+    let page = trace_page(&mut state, 120, 24).join("\n");
+    assert!(page.contains("调用 bash"), "{page}");
+    assert!(page.contains("思考完成"), "{page}");
+    assert!(page.contains("上下文注入"), "{page}");
+    assert!(page.contains("我问的问题"), "{page}");
+    assert!(page.contains("助手的回答。"), "{page}");
+}
+
+/// 例外一：用户的话在对话视图里靠右，助手仍靠左（票 10 验证 2）。
+#[test]
+fn the_user_message_sits_on_the_right_and_the_assistant_on_the_left() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "我说的这句话"));
+    state.apply(message(2, "助手说的那句话", None));
+    let frame = buffer(120, 24, &mut state);
+    let (user_x, _) = cell_of(&frame, 120, 24, "我说的这句话").expect("用户那一行");
+    let (assistant_x, _) = cell_of(&frame, 120, 24, "助手说的那句话").expect("助手那一行");
+    assert!(user_x > 90, "用户的话靠右（列 {user_x}）");
+    assert!(assistant_x < 60, "助手的话靠左（列 {assistant_x}）");
+}
+
+/// 例外二：注入、用户、助手三类前缀各一色（票 10 验证 2）。
+///
+/// 注入行只住在轨迹页，所以这次比对在轨迹页上做 —— 三种前缀在那里同框。
+#[test]
+fn the_three_prefixes_wear_three_colours() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(injected(1, "注入的正文"));
+    state.apply(user_message(2, "问题"));
+    state.apply(message(3, "回答", None));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let colour = |frame: &Buffer, needle: &str| {
+        let (x, y) = cell_of(frame, 120, 24, needle).unwrap_or_else(|| panic!("{needle} 在屏幕上"));
+        frame[(x, y)].fg
+    };
+    let injected = colour(&frame, "[上下文注入");
+    let user = colour(&frame, "[用户]");
+    let assistant = colour(&frame, "[kimi]");
+    assert_eq!(injected, Color::LightBlue, "注入行有自己的专色");
+    assert_eq!(user, Color::LightGreen, "用户照旧");
+    assert_eq!(assistant, Color::LightCyan, "助手照旧");
+    assert_ne!(injected, user);
+    assert_ne!(injected, assistant);
 }

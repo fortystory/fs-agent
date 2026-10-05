@@ -265,6 +265,13 @@ fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
     }
 }
 
+/// 切到轨迹页：工具行与思考行现在只住在那里（`.scratch/trace-tab/spec.md` §2）。
+fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
+    let row = row_of(state, width, height, wording::TAB_TRACE).expect("页签条在屏幕上");
+    state.mouse(click(10, row));
+    let _ = screen(width, height, state);
+}
+
 fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let Some(row) = row_of(state, width, height, needle) else {
         panic!("屏幕上没有哪一行含 {needle:?}");
@@ -585,6 +592,7 @@ fn a_logged_event_arriving_mid_replay_is_not_painted_twice() {
     // 快照里已经握着的那条结果从渲染通道到达。
     state.live_event(RenderEvent::Logged(recovery));
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     let rows = screen(120, 40, &mut state);
     let calls = rows.iter().filter(|row| row.contains("▸ 调用")).count();
@@ -804,6 +812,8 @@ fn an_old_streams_plan_events_still_replay_without_moving_the_mode() {
     let mut state = state();
     replay(&mut state, vec![plan_injected(1)]);
     run_replay(&mut state);
+    // 注入行住在轨迹页里（票 10），状态行上的模式两边都看得见。
+    open_trace_tab(&mut state, 120, 40);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("上下文注入：计划模式"), "{text}");
 }
@@ -826,6 +836,7 @@ fn a_history_tool_line_opens_the_same_detail_overlay() {
         ],
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -849,6 +860,7 @@ fn a_history_thinking_line_opens_its_recorded_trace() {
         ],
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "思考完成");
     let text = screen(120, 40, &mut state).join("\n");
@@ -903,6 +915,7 @@ fn a_history_detail_reads_the_spilled_tool_output() {
         history_with_tool_output("call-h2", Some("the whole output\n[已截断：999 字符]")),
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -924,6 +937,7 @@ fn a_history_detail_degrades_when_the_spilled_file_is_gone() {
         history_with_tool_output("call-h3", Some("head of the output\n[已截断：999 字符]")),
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -944,6 +958,7 @@ fn a_history_detail_degrades_when_the_spilled_file_is_empty() {
         history_with_tool_output("call-h4", Some("head of the output\n[已截断：999 字符]")),
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -972,6 +987,7 @@ fn a_history_result_without_the_truncation_note_is_its_own_full_text() {
         ],
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
@@ -1024,6 +1040,7 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
         ],
     );
     run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
     assert!(

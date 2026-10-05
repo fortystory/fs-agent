@@ -1,7 +1,7 @@
 # 10 — 对话视图的过滤与形态
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 09
 
@@ -41,3 +41,30 @@ Blocked by: 09
 - 不改块层（`Block` 的产生）、不改 plain / headless。
 - 不做降级退回全量（[11](11-fallback-when-sidebar-hidden.md)）。
 - 不给轨迹页加底色（[12](12-trace-round-stripes.md)）。
+
+## 作答（2026-10-05）
+
+- **分工的纯函数**是 `src/render/tui.rs` 的 `selects(view, block)`：轨迹视图一律 `true`，
+  对话视图只留用户文本、assistant 正文、`AgentError` / `SessionError` / `SessionEnded` /
+  `PermissionAsked` / `PermissionDecided`、**失败的** `Hook`（`outcome` 以
+  `hook_format::FAILED_PREFIX` 开头）、`Notice` 整类、`Diagnostic`，以及回合 / 轮次边界行
+  （`TurnStarted` / `TurnEnded` / `RoundStarted` / `RoundEnded`）。`Block::Message` 里
+  `SpeakerId::Executor` 的全部行、工具与工具反馈、用量、分歧、沙箱、历史、上下文注入、
+  执行者进出与流式增量都归轨迹。`emit_block` 按它过滤；`turn_rail.close_unit()` 仍只看
+  `targets.conversation`（边界块在对话视图里可能一行都不留，而那一格照旧要长出来）。
+- **思考行只进轨迹**：`paint_thinking_line` / `paint_settled_thinking` 的对话分支删掉。
+- **例外一**：`Block::Message` 里 `SpeakerId::User` 的行在**对话视图**设
+  `Alignment::Right`（折行时保留）；轨迹视图与助手仍左对齐。
+- **例外二**：`Block::ContextInjected` 那一行与它的详情边框从叙述灰改成
+  `Color::LightBlue`；用户 `LightGreen`、助手 `LightCyan` 不动。
+- **测试改动**（预期的大面积）：`tests/render_layout.rs` 30 条与
+  `tests/history_replay.rs` 9 条工具行 / 思考行用例改成「先把左栏切到轨迹页，再点/断言」
+  —— 新增两个文件各自的 `open_trace_tab` helper；`a_tool_call_line_describes_the_call_...`
+  里那句 40 列下会折成两行，断言放宽成两段；`a_click_outside_the_detail_overlay_closes_it`
+  改点覆盖层上方那条边距（覆盖层在 120×40 下占 2..38 行，主列的旧落点已被它盖住）。
+  新增：`selects` 的**穷举单测**（30 条 case，每一类块一条）与三条帧断言
+  （过程行不在对话、在轨迹；用户靠右 / 助手靠左；三类前缀三色）。
+- `cargo test` 全绿（render_layout 162 + history_replay 31 + 其余）、
+  `cargo clippy --all-targets` 无警告、`cargo fmt --check` 干净。
+- **已知缺口（票 11 的活）**：左栏不可见（`w < 80` 或 `Ctrl-O` 收起）时轨迹视图不物化，
+  过程行此时没有任何去处 —— 降级判据归下一张票。
