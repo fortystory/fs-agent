@@ -763,15 +763,14 @@ pub struct TuiState {
     thinking_done: bool,
     /// 回合条的单位与它们的分段头。
     turn_rail: TurnRail,
-    /// 对话视图每条来源行背后的详情，与它平行，并且按它自己窗格的上限一起裁剪，好让两者
-    /// 永不脱节。不是任何入口的那些行是 `None`。
-    conversation_links: std::collections::VecDeque<Option<Detail>>,
-    /// 轨迹视图的同一份表。
+    /// 轨迹页每条来源行背后的详情，与那个窗格平行、按它的上限一起裁剪，好让两者永不脱节。
+    /// 不是入口的那些行是 `None`。
+    ///
+    /// **只有轨迹页有一份**：那是它独有的入口 —— 对话页画的是全文，点它不打开任何东西
+    /// （`.scratch/tui-feedback/spec.md` §9）。
     trace_links: std::collections::VecDeque<Option<Detail>>,
-    /// 上一帧对话视图把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧
-    /// 重建，与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
-    conversation_drawn: Drawn,
-    /// 轨迹视图的同一份映射。每视口一套：两个视口的窗口不必相同（票 09）。
+    /// 上一帧轨迹页把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧重建，
+    /// 与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
     trace_drawn: Drawn,
     /// 上一帧把轨迹页画在哪里，好让滚轮与点击按指针落在哪个视口分派。没画轨迹页就是
     /// `None`（与 [`TuiState::detail_rect`] 同一条「记住读的人真看到了什么」的纪律）。
@@ -1615,9 +1614,7 @@ impl TuiState {
             thinking_open: false,
             thinking_done: false,
             turn_rail: TurnRail::default(),
-            conversation_links: std::collections::VecDeque::new(),
             trace_links: std::collections::VecDeque::new(),
-            conversation_drawn: Drawn::default(),
             trace_drawn: Drawn::default(),
             trace_rect: None,
             detail: None,
@@ -2035,7 +2032,6 @@ impl TuiState {
         self.trace_width = trace_width;
         if conversation {
             self.conversation.clear();
-            self.conversation_links.clear();
             // 跨块排版的记账与窗格平行，所以它也跟着一起清。
             self.conversation_flow = Flow::default();
             // 回合条的源行下标与对话 pane 平行，所以它跟着对话 pane 一起重建。
@@ -2098,18 +2094,17 @@ impl TuiState {
         let blank = line.spans.iter().all(|span| span.content.trim().is_empty());
         let dropped = match view {
             Viewport::Conversation => self.conversation.push(line),
-            Viewport::Trace => self.trace.push(line),
+            Viewport::Trace => {
+                let dropped = self.trace.push(line);
+                // 链接表跟着窗格交回来的丢弃数裁，不自己数 `CAP`：一条来源行在两边要么意思
+                // 相同、要么两边都没有（票 04 §1、票 07）。
+                self.trace_links.push_back(link);
+                for _ in 0..dropped {
+                    self.trace_links.pop_front();
+                }
+                dropped
+            }
         };
-        let links = match view {
-            Viewport::Conversation => &mut self.conversation_links,
-            Viewport::Trace => &mut self.trace_links,
-        };
-        links.push_back(link);
-        // 平行表跟着窗格交回来的丢弃数裁，不再自己数 `CAP`：一条来源行在两边要么意思相同、
-        // 要么两边都没有（票 04 §1、票 07）。
-        for _ in 0..dropped {
-            links.pop_front();
-        }
         if view == Viewport::Conversation {
             if let Some(user) = user {
                 self.turn_rail.push_line(user, blank);
@@ -2725,21 +2720,16 @@ impl TuiState {
                 let over_trace = self
                     .trace_rect
                     .is_some_and(|rect| rect.contains((column, row).into()));
-                let panes = layout::plan(self.area, 1, self.sidebar_wanted);
-                // 指针落在哪个窗格里，这一击就算谁的：轨迹页只认主列内容区那一块
-                // （`.scratch/trace-in-main/spec.md` §4），对话只认同一块（票 09）。
-                // 落在别处 —— 左栏、分隔列、状态行、输入区 —— 什么都不点：那里没有可点开的行，
-                // 而行号是**屏幕**行号，拿它去取另一个视图的详情会点到同一横行的别的行上
-                // （在 `todo` 页里点一项，开着的是转录里那条详情）。
-                let view = if over_trace {
-                    Viewport::Trace
-                } else if panes.transcript.contains((column, row).into()) {
-                    Viewport::Conversation
-                } else {
+                // 落点不在轨迹页的内容区里就什么都不点：左栏、分隔列、状态行、输入区、对话页
+                // 都没有可点开的行 —— 对话页画的是全文，点它不打开任何东西
+                // （`.scratch/tui-feedback/spec.md` §9）。行号是**屏幕**行号，拿它去取别处的
+                // 详情会点到同一横行的别的行上。
+                if !over_trace {
                     return;
-                };
-                if let Some(detail) = self.link_hit(view, row) {
-                    self.open_detail(detail, panes.detail_width() as usize, view);
+                }
+                let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+                if let Some(detail) = self.trace_link_at(row) {
+                    self.open_detail(detail, panes.detail_width() as usize);
                 }
             }
         }
@@ -2888,19 +2878,15 @@ impl TuiState {
         self.conversation.scroll_to_source(head);
     }
 
-    /// 一次点击落到的那个可点链接，拷成它要打开的东西。
+    /// 轨迹页里一次点击落到的那个可点链接，拷成它要打开的东西。
     ///
-    /// 覆盖层将在哪个宽度上打开，来自上一帧，那是中间块几何唯一已知的地方（票 04 §1）。
-    /// 两个视口各有自己的窗口与平行表，所以按指针落在哪个视口取数（票 09）。行号是**屏幕**
-    /// 行号：一次点击按它换回那条来源行。
-    fn link_hit(&self, view: Viewport, row: u16) -> Option<Detail> {
-        let (drawn, links) = match view {
-            Viewport::Conversation => (&self.conversation_drawn, &self.conversation_links),
-            Viewport::Trace => (&self.trace_drawn, &self.trace_links),
-        };
-        let offset = (row.checked_sub(drawn.top)?) as usize;
-        let source = (*drawn.rows.get(offset)?)?;
-        links.get(source)?.clone()
+    /// 覆盖层将在哪个宽度上打开，来自上一帧，那是中间块几何唯一已知的地方（票 04 §1）。行号是
+    /// **屏幕**行号：一次点击按它换回那条来源行。**只有轨迹页有入口** —— 对话页画的是全文，
+    /// 点它不打开任何东西（`.scratch/tui-feedback/spec.md` §9）。
+    fn trace_link_at(&self, row: u16) -> Option<Detail> {
+        let offset = (row.checked_sub(self.trace_drawn.top)?) as usize;
+        let source = (*self.trace_drawn.rows.get(offset)?)?;
+        self.trace_links.get(source)?.clone()
     }
 
     /// 一次点击是否落在了「回到末尾」指示器上。每个视口各有一个（票 09）。
@@ -4628,16 +4614,9 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             let rows = state
                 .conversation
                 .view(text_area.width, text_area.height, &live);
-            // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于
-            // 哪条来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
-            let top = state.conversation.top();
-            state.conversation_drawn.top = text_area.y;
-            state.conversation_drawn.rows = (0..rows.len())
-                .map(|offset| state.conversation.source_at(top + offset))
-                .collect();
             // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
-            // （`.scratch/tui-feedback/spec.md` §5–§6）。
-            let folded = soft_folds(&state.conversation, top, rows.len());
+            // （`.scratch/tui-feedback/spec.md` §5–§6）。对话页不记链接表 —— 它没有入口。
+            let folded = soft_folds(&state.conversation, state.conversation.top(), rows.len());
             note_rows(state, text_area, &rows, &folded);
             frame.render_widget(Paragraph::new(rows), text_area);
             draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
@@ -4787,9 +4766,10 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, 
         Viewport::Conversation => &state.conversation,
         Viewport::Trace => &state.trace,
     };
-    // 详情覆盖层占着**打开它的那个视图**的时候，回去的路是覆盖层自己的页脚：指示器的计数
-    // 暂停了，它的点击不属于任何人（票 02 §4）。另一个视图的指示器照画（票 13）。
-    let frozen = state.detail_open() && state.detail_opener.map(|mark| mark.view) == Some(view);
+    // 详情覆盖层占着**打开它的那一页**的时候，回去的路是覆盖层自己的页脚：指示器的计数暂停了，
+    // 它的点击不属于任何人（票 02 §4）。对话页的指示器照画（票 13）—— 今天打开方恒为轨迹页
+    // （`.scratch/tui-feedback/spec.md` §9）。
+    let frozen = state.detail_open() && view == Viewport::Trace;
     if pane.following() || frozen || area.width == 0 || area.height == 0 {
         match view {
             Viewport::Conversation => state.indicator = None,
@@ -5464,12 +5444,14 @@ fn paint_block(
             // 回答从下一行起、**顶格** —— 前缀不再占正文的列，所以 Markdown 的前导是零
             // （2026-10-05 维护者的排版修订）。
             let body = super::markdown::to_lines_indented(text, width, 0);
-            let rows = if name {
+            if name {
                 named_rows(speaker, body, colors, style)
             } else {
                 body
-            };
-            named_body_rows(speaker, rows, text, name, colors)
+            }
+            .into_iter()
+            .map(RenderedLine::from)
+            .collect()
         }
         // 轨迹视图里用户（或非 assistant 的系统行）的消息同样只画首行 + `…`。
         Block::Message { speaker, text, .. } if view == Viewport::Trace => {
@@ -5506,7 +5488,7 @@ fn paint_block(
                     row.alignment = Some(Alignment::Right);
                 }
             }
-            named_body_rows(speaker, rows, text, name, colors)
+            rows.into_iter().map(RenderedLine::from).collect()
         }
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
@@ -5811,50 +5793,6 @@ fn tool_block_lines(
     vec![RenderedLine::linked(Line::from(call), detail)]
 }
 
-/// 对话视图里的一条消息行，连同它的详情入口。
-///
-/// 对话视图画的是全文，所以这个入口不省任何东西 —— 但它让「详情是从哪个视图打开的」这条
-/// 机制在两个视图上都成立（`.scratch/trace-tab/issues/13-detail-returns-to-opener.md`）。
-fn message_line(
-    speaker: &crate::events::SpeakerId,
-    text: &str,
-    line: Line<'static>,
-    colors: &mut SpeakerColors,
-) -> RenderedLine {
-    let detail = Detail {
-        title: line_text(&line),
-        color: colors.of(speaker),
-        kind: DetailKind::Message {
-            text: text.to_owned(),
-        },
-    };
-    RenderedLine::linked(line, detail)
-}
-
-/// 一条消息的那些行，连同它们的详情入口：**名字行不给入口**。
-///
-/// 名字独占一行之后它成了一个假入口 —— 点 `[kimi]` 弹出一份正文详情，而读者点的是一行标签
-/// （`.scratch/tui-feedback/spec.md` §3）。所以名字行（`named` 为真时的第一条）退回去做标签，
-/// 正文行才是入口。`named` 为假时没有名字行，全部照旧。
-fn named_body_rows(
-    speaker: &crate::events::SpeakerId,
-    rows: Vec<Line<'static>>,
-    text: &str,
-    named: bool,
-    colors: &mut SpeakerColors,
-) -> Vec<RenderedLine> {
-    rows.into_iter()
-        .enumerate()
-        .map(|(index, line)| {
-            if named && index == 0 {
-                RenderedLine::from(line)
-            } else {
-                message_line(speaker, text, line, colors)
-            }
-        })
-        .collect()
-}
-
 /// 对话视图里一条消息的排版：**名字独占一行**，话从下一行起、顶格
 /// （2026-10-05 维护者的排版修订）。
 fn named_rows(
@@ -6128,9 +6066,7 @@ enum DetailKind {
 /// 一份要还原的是打开它的那个视图（`.scratch/trace-tab/spec.md` §5）。
 #[derive(Debug, Clone, Copy)]
 struct ScrollMark {
-    /// 是哪个视图打开它的。
-    view: Viewport,
-    /// 打开时那个视图视口顶端所在的显示行。
+    /// 打开时轨迹页视口顶端所在的显示行。
     top: usize,
     /// 打开时它跟不跟底。
     follow: bool,
@@ -6209,16 +6145,12 @@ impl TuiState {
     /// 为读的人点的那一行打开详情覆盖层。
     ///
     /// 主体在这里、在打开的那一刻读，并按覆盖层将被画出来的宽度排版，于是此后滚动是纯算术。
-    fn open_detail(&mut self, detail: Detail, width: usize, view: Viewport) {
-        // 记下是谁打开的、以及它当时在哪儿：关掉时状态还原给**它**（票 13）。
-        let pane = match view {
-            Viewport::Conversation => &self.conversation,
-            Viewport::Trace => &self.trace,
-        };
+    fn open_detail(&mut self, detail: Detail, width: usize) {
+        // 记下打开时轨迹页在哪儿：关掉时状态还原给**它**（票 13）。今天只有轨迹页会打开详情
+        // —— 对话页画的是全文，它的行不是入口（`.scratch/tui-feedback/spec.md` §9）。
         self.detail_opener = Some(ScrollMark {
-            view,
-            top: pane.top(),
-            follow: pane.following(),
+            top: self.trace.top(),
+            follow: self.trace.following(),
         });
         let body = detail_body(&detail, &self.facts.session_dir, width);
         self.detail = Some(DetailView {
@@ -6235,15 +6167,11 @@ impl TuiState {
     /// 的冻结，会把一个已经往上滚的读的人拽回底部（票 02 §4）。
     fn close_detail(&mut self) {
         if self.detail.take().is_some() {
-            // 还原给**打开它的那个视图**，另一个完全不动（票 13）。打开前贴底时
-            // `follow` 为真，还原就等于回到底部 —— 与改动前逐字相同。
+            // 还原给轨迹页，对话页完全不动（票 13）。打开前贴底时 `follow` 为真，还原就等于
+            // 回到底部 —— 与改动前逐字相同。
             if let Some(mark) = self.detail_opener.take() {
-                let pane = match mark.view {
-                    Viewport::Conversation => &mut self.conversation,
-                    Viewport::Trace => &mut self.trace,
-                };
-                pane.set_holding(false);
-                pane.restore(mark.top, mark.follow);
+                self.trace.set_holding(false);
+                self.trace.restore(mark.top, mark.follow);
             }
         }
     }
@@ -6408,19 +6336,12 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         state.detail_rect = None;
         return;
     };
-    // 打开它的那个视图冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让
-    // 「N 行新内容」的计数在他们正读的覆盖层底下往上爬（票 02 §4）。**只冻打开方**：
-    // 另一个视图继续跟着新内容（票 13）。
-    match state.detail_opener.map(|mark| mark.view) {
-        Some(Viewport::Conversation) => {
-            state.conversation.set_following(false);
-            state.conversation.set_holding(true);
-        }
-        Some(Viewport::Trace) => {
-            state.trace.set_following(false);
-            state.trace.set_holding(true);
-        }
-        None => {}
+    // 打开它的那一页冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让
+    // 「N 行新内容」的计数在他们正读的覆盖层底下往上爬（票 02 §4）。**只冻打开方**：对话页
+    // 继续跟着新内容（票 13）。今天打开方恒为轨迹页（`.scratch/tui-feedback/spec.md` §9）。
+    if state.detail_opener.is_some() {
+        state.trace.set_following(false);
+        state.trace.set_holding(true);
     }
     // 框外的一次点击能打中什么，只有记下来之后才存在。
     state.detail_rect = Some(area);
@@ -6508,13 +6429,22 @@ mod tests {
     /// 仍与窗格的源行一一对应（`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
     #[test]
     fn the_link_table_keeps_pace_with_the_pane_at_the_cap() {
-        let mut state = state();
+        let mut trace_page = state();
         for _ in 0..pane::CAP + 2 {
-            state.push_line(Viewport::Conversation, Line::from("x"), None, Some(false));
+            trace_page.push_line(Viewport::Trace, Line::from("x"), None, Some(false));
         }
-        assert_eq!(state.conversation.sources(), pane::CAP);
-        assert_eq!(state.conversation_links.len(), state.conversation.sources());
-        assert_eq!(state.turn_rail.lines.len(), state.conversation.sources());
+        assert_eq!(trace_page.trace.sources(), pane::CAP);
+        assert_eq!(trace_page.trace_links.len(), trace_page.trace.sources());
+        // 回合条与对话窗格平行（链接表只服务轨迹页），所以它跟着对话那一侧。
+        let mut conversation = state();
+        for _ in 0..pane::CAP + 2 {
+            conversation.push_line(Viewport::Conversation, Line::from("x"), None, Some(false));
+        }
+        assert_eq!(conversation.conversation.sources(), pane::CAP);
+        assert_eq!(
+            conversation.turn_rail.lines.len(),
+            conversation.conversation.sources()
+        );
     }
 
     /// 每一类块进哪个视图 —— 分工是一个穷尽的 match，所以穷举地测它，而不是只在帧里

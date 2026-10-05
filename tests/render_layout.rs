@@ -1143,29 +1143,32 @@ fn a_speaker_who_says_several_things_in_a_row_is_named_once() {
     assert!(row_of("护栏") > second, "第三段在第二段下面：{text}");
 }
 
-/// 名字行**不是**详情入口：点 `[kimi]` / `[用户]` 那一行不该弹出正文详情，正文那一行才该
-/// （`.scratch/tui-feedback/spec.md` §3 —— 名字独占一行之后它成了一个假入口）。
+/// **对话页里的消息不是入口**：名字那一行与它下面的正文点了都不弹窗 —— 这一页画的就是全文，
+/// 覆盖层不省任何东西（`.scratch/tui-feedback/spec.md` §9）。轨迹页照旧：那里的消息只画
+/// 首行 + `…`，点开才看得到全文。
 #[test]
-fn the_name_row_is_not_an_entry() {
+fn a_message_in_the_conversation_is_not_an_entry() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(1, "正文在这里", None));
     state.apply(user_message(2, "我问一句"));
 
-    for name in ["[kimi]", "[用户]"] {
+    for needle in ["[kimi]", "正文在这里", "[用户]", "我问一句"] {
         let frame = buffer(120, 24, &mut state);
-        let (column, row) =
-            cell_of(&frame, 120, 24, name).unwrap_or_else(|| panic!("{name} 在屏幕上"));
+        let (column, row) = cell_of(&frame, 120, 24, needle).expect("在屏幕上");
         click(&mut state, column, row);
         let text = screen(120, 24, &mut state).join("\n");
-        assert!(!text.contains("── 正文 ──"), "点 {name} 不弹详情：{text}");
+        assert!(!text.contains("── 正文 ──"), "点 {needle} 不弹窗：{text}");
     }
 
-    // 正文那一行照旧开。
-    let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
-    click(&mut state, column, row);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "点正文行开详情：{text}");
+    // 轨迹页那一侧一个字没改：点它的消息行照旧开全文。
+    let mut trace = state_with_roster(&["kimi"]);
+    trace.apply(message(1, "第一行在这里\n第二行在那里", None));
+    open_trace_tab(&mut trace, 120, 24);
+    let frame = buffer(120, 24, &mut trace);
+    let (column, row) = cell_of(&frame, 120, 24, "第一行在这里").expect("轨迹页上那行消息");
+    click(&mut trace, column, row);
+    let text = screen(120, 24, &mut trace).join("\n");
+    assert!(text.contains("第二行在那里"), "轨迹页照旧开全文：{text}");
 }
 
 /// 拖选：按住、拖过两格，那一带反白；抬起时**不**走原来那次点击的路子
@@ -1269,37 +1272,19 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     assert!(!text.contains("已复制"), "点一下不留回执：{text}");
 }
 
-/// 没拖动的按下-抬起仍是一次普通点击；**两格**以内的抖动也算不上拖。
-///
-/// 门槛是 2026-10-06 从一格提到两格的：真机反馈「点名字下面那段正文不弹窗了」—— 一次真实的
-/// 点击很容易带两格位移，那两格被读成拖选就把点击吃掉了（`.scratch/tui-feedback/spec.md` §9）。
+/// 没拖动的按下-抬起仍是一次普通点击；**挪一格**就已经是拖了（门槛是一格 —— 真机试过两格之后
+/// 撤回，见 `.scratch/tui-feedback/spec.md` §9）。
 #[test]
-fn a_press_release_within_two_cells_of_wobble_is_still_a_click() {
-    for wobble in [0u16, 1, 2] {
-        let mut state = state_with_roster(&["kimi"]);
-        state.apply(message(1, "正文在这里", None));
-        let frame = buffer(120, 24, &mut state);
-        let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
-        state.mouse(press(column, row));
-        state.mouse(drag_to(column + wobble, row));
-        state.mouse(release(column + wobble, row));
-        let text = screen(120, 24, &mut state).join("\n");
-        assert!(
-            text.contains("── 正文 ──"),
-            "抖 {wobble} 格仍是一次点击：{text}"
-        );
-    }
-    // 第三格起才是拖选：它不再开详情，而去复制。
+fn a_press_and_release_without_a_drag_is_still_a_click() {
     let mut state = state_with_roster(&["kimi"]);
-    state.apply(message(1, "正文在这里", None));
+    state.apply(message(1, "被点开的消息", None));
+    open_trace_tab(&mut state, 120, 24);
     let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
+    let (column, row) = cell_of(&frame, 120, 24, "被点开的消息").expect("轨迹页上那行消息");
     state.mouse(press(column, row));
-    state.mouse(drag_to(column + 3, row));
-    state.mouse(release(column + 3, row));
+    state.mouse(release(column, row));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("── 正文 ──"), "三格起是拖选：{text}");
-    assert!(text.contains("已复制"), "而且它复制了：{text}");
+    assert!(text.contains("── 正文 ──"), "没拖动就是一次点击：{text}");
 }
 
 /// 在主列页签上按住拖开、再松开：页签**不**切。
@@ -1324,8 +1309,9 @@ fn a_drag_that_starts_on_a_tab_does_not_switch_the_page() {
 fn a_drag_inside_the_detail_overlay_selects_instead_of_closing_it() {
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(1, "第一段正文\n第二段正文", None));
+    open_trace_tab(&mut state, 120, 24);
     let frame = buffer(120, 24, &mut state);
-    let (column, row) = cell_of(&frame, 120, 24, "第一段正文").expect("正文行在屏幕上");
+    let (column, row) = cell_of(&frame, 120, 24, "第一段正文").expect("轨迹页上那行消息");
     click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("── 正文 ──"), "详情开着：{text}");
@@ -5701,9 +5687,10 @@ fn the_detail_overlay_freezes_the_transcript() {
             "第 {index} 行"
         )));
     }
-    // 打开方是**对话视图**：这条测试说的正是覆盖层把它背后的转录冻住（票 13 把冻结
-    // 收窄到打开方之后仍然成立）。
+    // 打开方是**轨迹页**（今天唯一有入口的一页）：这条测试说的正是覆盖层把它背后的那一页冻住
+    // （票 13 把冻结收窄到打开方之后仍然成立）。
     state.apply(message(41, "被点开的消息", None));
+    open_trace_tab(&mut state, 120, 24);
 
     let _ = screen(120, 24, &mut state);
     click_row(&mut state, 120, 24, "被点开的消息");
@@ -7783,68 +7770,6 @@ fn closing_a_trace_detail_returns_to_where_it_was_opened() {
         conversation_before,
         "对话视图没动"
     );
-}
-
-/// 从对话视图、在**回看**态打开的详情，关掉之后回到原处 —— 不再被弹到底部
-/// （票 13 验证 3）。
-#[test]
-fn closing_a_conversation_detail_returns_to_the_reading_position() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..20 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
-    }
-    state.apply(message(21, "被点开的消息", None));
-    for index in 0..20 {
-        state.apply(RenderEvent::notice(format!("后 {index} 句话")));
-    }
-    let _ = screen(120, 24, &mut state);
-    // 指针在转录上：往上滚两格，进入回看态。
-    state.mouse(wheel_at(90, 12, true));
-    state.mouse(wheel_at(90, 12, true));
-    let before = conversation_rows(&mut state, 120, 24);
-    assert!(
-        !before.iter().any(|row| row.contains("后 19 句话")),
-        "确实在回看：{before:#?}"
-    );
-    let row = before
-        .iter()
-        .position(|line| line.contains("被点开的消息"))
-        .expect("回看态里那条消息可见") as u16;
-
-    click(&mut state, 60, row);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
-
-    state.key(Key::Esc);
-    assert_eq!(
-        conversation_rows(&mut state, 120, 24),
-        before,
-        "回到打开前的位置"
-    );
-}
-
-/// 在贴底态打开的详情，关掉之后照旧跟着新内容 —— 与今天逐字相同
-/// （票 13 验证 3）。
-#[test]
-fn closing_a_conversation_detail_that_was_at_the_bottom_still_follows() {
-    let mut state = state_with_roster(&["kimi"]);
-    for index in 0..40 {
-        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
-    }
-    state.apply(message(41, "被点开的消息", None));
-    let _ = screen(120, 24, &mut state);
-    let row = conversation_rows(&mut state, 120, 24)
-        .iter()
-        .position(|line| line.contains("被点开的消息"))
-        .expect("贴底时那条消息在屏幕上") as u16;
-    click(&mut state, 60, row);
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
-
-    state.key(Key::Esc);
-    state.apply(RenderEvent::notice("关掉之后到的新内容".to_owned()));
-    let text = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(text.contains("关掉之后到的新内容"), "还在跟随：{text}");
 }
 
 /// 指针在左栏、但显示的不是轨迹页时，滚轮仍归转录：轨迹 pane 这一帧没被画出来，滚它会
