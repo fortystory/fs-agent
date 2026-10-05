@@ -6833,3 +6833,38 @@ fn the_wheel_over_the_sidebar_goes_to_the_conversation_when_the_trace_page_is_hi
         "调用量页上滚的是转录"
     );
 }
+
+/// 思考行在轨迹页上也穿轮次底色：实时路径是**就地重写**（`replace_last`），绕开了
+/// `push_line` 那条打底的路，所以它得自己带上（票 12 的 code-review 修正）。
+#[test]
+fn the_thinking_line_wears_the_stripe_too() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖。"));
+    state.apply(text_delta("答案。"));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = left_row_of(&mut state, "思考完成");
+    assert_ne!(
+        frame[(1, row)].bg,
+        Color::Reset,
+        "思考行也在它那个单位的底色里"
+    );
+}
+
+/// 关掉再打开底色之后，轮次**仍然交替**：重放要把回合条一起重建，否则整页是同一个单位号
+/// （票 12 的 code-review 修正）。
+#[test]
+fn turning_the_stripes_back_on_still_alternates_them() {
+    let mut state = state_with_roster(&["kimi"]);
+    turns(&mut state, 3);
+    state.set_stripes(false);
+    state.set_stripes(true);
+    open_trace_tab(&mut state, 120, 24);
+    let rows = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let top = sidebar_page(&rows) as u16;
+    let stripe = |row: u16| frame[(1, row)].bg;
+    assert_ne!(stripe(top), Color::Reset, "底色又铺上了");
+    assert_ne!(stripe(top), stripe(top + 4), "下一个回合换一块");
+    assert_eq!(stripe(top), stripe(top + 8), "第三段又回到第一块");
+}

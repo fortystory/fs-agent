@@ -41,13 +41,12 @@ Blocked by: 09
 
 ## 作答（2026-10-05）
 
-- **轨迹自己的单位索引**：`TuiState::trace_units` 与轨迹 pane 的源行平行，按它自己交回来的
-  丢弃数裁（回合条那份索引与**对话** pane 平行，两个视图的源行集合不同，所以不能共用）。
-- **行生成期打底色**：`push_line(Viewport::Trace, ...)` 里按 `turn_rail.units()` 取单位序号
-  ——那是已完成单位的个数，也就是正在建的那个，所以第一个边界之前的行归第一段 ——
-  再把 `line.style.bg` 设成 `TRACE_STRIPES[unit % 2]`（`Color::Indexed(235)` /
-  `Indexed(236)`）。底色因此住在行上，滚动时跟着内容走；折行（`pane::wrap_line`）与
-  取景（`Pane::window`）都保留行样式。对话视图与 plain 一个字不改。
+- **单位号取自回合条那份记账**：`turn_rail.units()` 是**已完成**单位的个数 —— 它由
+  `is_boundary` 驱动、与视图无关，所以正在建的那个单位拿到的是自己的号，第一个边界之前的行
+  因此归第一段。底色在 `push_line(Viewport::Trace, ...)` 里当场设
+  `line.style.bg = TRACE_STRIPES[unit % 2]`（`Color::Indexed(235)` / `Indexed(236)`）。
+  底色因此住在行上，滚动时跟着内容走；折行（`pane::wrap_line`）与取景（`Pane::window`）都
+  保留行样式。对话视图与 plain 一个字不改。
 - **退化终端**：`TuiState::set_stripes(bool)` 是那个开关，`Tui::run` 组装时按通用约定
   `NO_COLOR` 关掉它；关/开都会清空轨迹视图并按当前宽度整批重排（底色已经在行上，不重排
   会留旧底色）。
@@ -56,3 +55,14 @@ Blocked by: 09
   而内容照旧。
 - `cargo test` 全绿（render_layout 169 + 其余）、`cargo clippy --all-targets` 无警告、
   `cargo fmt --check` 干净。
+
+**2026-10-05 `/code-review` 后的修正**（Spec 轴的两条发现）：
+
+- **就地重写的思考行也补底色**：实时路径的 `settle_thinking` 走
+  `trace.replace_last(line)`，绕开了 `push_line` 那一步打底；现在 `in_place` 分支自己设一次
+  `bg`（重放路径本来就走 `push_line`），两条路同色。回归在
+  `the_thinking_line_wears_the_stripe_too`。
+- **`replay_trace` 改成重放两个视图**：轮次底色的单位号由回合条推进，而回合条只在重放**对话**
+  视图时重建（`close_unit` 与对话目标绑定）—— 只重放轨迹会让整页打上同一个单位号、色块不再
+  交替。那个只写不读的 `trace_units` 平行表随之删掉。回归在
+  `turning_the_stripes_back_on_still_alternates_them`。

@@ -753,10 +753,6 @@ pub struct TuiState {
     conversation_links: std::collections::VecDeque<Option<Detail>>,
     /// 轨迹视图的同一份表。
     trace_links: std::collections::VecDeque<Option<Detail>>,
-    /// 轨迹视图每条源行属于哪个**单位**（交互数回合、讨论数轮次），与它自己的源行平行，
-    /// 并按它自己的裁剪一起裁。回合条那份索引与对话 pane 平行，而两个视图的源行集合不同，
-    /// 所以底色要自己一份（`.scratch/trace-tab/spec.md` §3）。
-    trace_units: std::collections::VecDeque<usize>,
     /// 轨迹页铺不铺轮次底色。`NO_COLOR` 在的时候由组装关掉它 —— 退化终端因此与这次改动
     /// 之前逐字一致（票 12）。
     stripes: bool,
@@ -1571,7 +1567,6 @@ impl TuiState {
             turn_rail: TurnRail::default(),
             conversation_links: std::collections::VecDeque::new(),
             trace_links: std::collections::VecDeque::new(),
-            trace_units: std::collections::VecDeque::new(),
             stripes: true,
             conversation_drawn: Drawn::default(),
             trace_drawn: Drawn::default(),
@@ -1875,6 +1870,16 @@ impl TuiState {
         }
     }
 
+    /// 一条轨迹行该穿的轮次底色；`stripes` 关掉时是 `None`（退化终端不做底色）。
+    ///
+    /// 单位序号取自回合条那份记账：`units()` 是**已完成**单位的个数 —— 与视图无关，
+    /// 也就是正在建的那个单位的序号，所以第一个边界之前的行归第一段
+    /// （`.scratch/trace-tab/spec.md` §3）。
+    fn trace_stripe(&self) -> Option<Color> {
+        self.stripes
+            .then(|| TRACE_STRIPES[self.turn_rail.units() % TRACE_STRIPES.len()])
+    }
+
     /// 轨迹页铺不铺轮次底色。组装时按 `NO_COLOR` 关掉它（票 12）。
     ///
     /// 已经打上的底色住在行上，所以关掉（或打开）之后得让轨迹视图整批重排一次 ——
@@ -1887,19 +1892,25 @@ impl TuiState {
         self.replay_trace();
     }
 
-    /// 按当前宽度把共享源重放给轨迹视图，好让它整批重排（底色开关用它）。
+    /// 按当前宽度把共享源重放给两个视图，好让轨迹整批重排（底色开关用它）。
+    ///
+    /// 对话视图跟着一起重放：轮次底色的单位号由回合条推进，而回合条只在重放**对话**视图时
+    /// 重建（`close_unit` 与对话目标绑定）—— 只重放轨迹会让整页打上同一个单位号，色块不再
+    /// 交替。两个视图的滚动意图都由 `Pane::clear` 留着。
     fn replay_trace(&mut self) {
+        self.conversation.clear();
+        self.conversation_links.clear();
+        self.turn_rail.clear();
         self.trace.clear();
         self.trace_links.clear();
-        self.trace_units.clear();
-        if self.painted.is_empty() || self.trace_width == 0 {
+        if self.painted.is_empty() {
             self.dirty = true;
             return;
         }
         let painted = std::mem::take(&mut self.painted);
         let targets = Targets {
-            conversation: false,
-            trace: true,
+            conversation: true,
+            trace: self.trace_width != 0,
         };
         for item in &painted {
             self.emit_painted(item, targets);
@@ -1995,7 +2006,6 @@ impl TuiState {
         if trace {
             self.trace.clear();
             self.trace_links.clear();
-            self.trace_units.clear();
         }
         if self.painted.is_empty() {
             self.dirty = true;
@@ -2049,23 +2059,13 @@ impl TuiState {
         let mut line = line;
         if view == Viewport::Trace {
             // **行生成期**就打上底色：它跟着这一行走，滚动时色块不会重排
-            // （`.scratch/trace-tab/spec.md` §3）。`turn_rail.units()` 是已完成单位的个数，
-            // 也就是正在建的那个单位的序号 —— 第一个边界之前的行因此归第一段。
-            let unit = self.turn_rail.units();
-            if self.stripes {
-                line.style.bg = Some(TRACE_STRIPES[unit % TRACE_STRIPES.len()]);
-            }
-            self.trace_units.push_back(unit);
+            // （`.scratch/trace-tab/spec.md` §3）。
+            line.style.bg = self.trace_stripe();
         }
         let dropped = match view {
             Viewport::Conversation => self.conversation.push(line),
             Viewport::Trace => self.trace.push(line),
         };
-        if view == Viewport::Trace {
-            for _ in 0..dropped {
-                self.trace_units.pop_front();
-            }
-        }
         let links = match view {
             Viewport::Conversation => &mut self.conversation_links,
             Viewport::Trace => &mut self.trace_links,
@@ -2267,8 +2267,11 @@ impl TuiState {
         in_place: bool,
     ) {
         if targets.trace {
-            let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
+            let (mut line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
             if in_place {
+                // `replace_last` 绕开了 [`TuiState::push_line`] 那条打底的路，所以这里自己
+                // 带上 —— 同一行在重放路径上走 `push_line`，两条路必须同色（票 12）。
+                line.style.bg = self.trace_stripe();
                 self.trace.replace_last(line);
                 if let Some(link) = self.trace_links.back_mut() {
                     *link = Some(detail);

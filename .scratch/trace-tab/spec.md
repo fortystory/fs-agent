@@ -164,6 +164,10 @@ Status: ready-for-agent（决策图 [`map.md`](map.md) **6/6 已走完**，可�
 
 ## 补记
 
+- **`Diagnostic` 也留在对话视图**（2026-10-05，实现票 10 时补）：§2 枚举的六类与回合 / 轮次
+  边界行之外，它是唯一一个「说给人听、却没有任何别的去处」的块 —— 挤进轨迹视图会让它从
+  屏幕上消失。这条偏离在 `selects` 的穷举单测与 `docs/render.md` 的同一份清单里都写着。
+
 - **决策图 6/6 已走完**（2026-10-05）：[保留清单（`Notice` 那一类）](issues/06-grilling-conversation-view-keep-list.md)（整类留下）与[对话视图瘦身之后的形态](issues/02-prototype-conversation-view.md)（形态照旧、只做过滤）都已 resolved —— §2 的两处已回填，可以交给 `/to-tickets` 拆实现票。
 - **实现切片顺序**（来自[共享 `painted` 的改造面](issues/05-research-shared-painted-two-panes.md)）：0）pane 的 push 返回丢弃数、平行表按它裁（纯重构，应全绿）→ 1）两个 pane 持有者 + 两组宽度（机械，应全绿）→ 2）目标掩码重放 + 只对对话目标收边界 + 共享源的记入判据 → 3）每视口点击与滚轮 → 4）过滤接上（测试改动最大）+ 颜色分配与绘制解耦 → 5）页高。
 - **未证实**：28 列下 markdown 表格的真实渲染；详情还原那条的既有测试波及面只按 grep 给到最小集合。
