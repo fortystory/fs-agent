@@ -552,12 +552,7 @@ fn the_recommended_marker_is_display_only() {
     let mut state = state();
     let mut rx = ask(
         &mut state,
-        vec![question(
-            "one",
-            "Pick?",
-            &["serde (Recommended)", "manual"],
-            false,
-        )],
+        vec![question("one", "Pick?", &["serde (推荐)", "manual"], false)],
     );
 
     let rows = screen(120, 24, &mut state);
@@ -567,7 +562,7 @@ fn the_recommended_marker_is_display_only() {
         "那个标记被显示成一个展示用的徽记：{text}"
     );
     assert!(
-        !text.contains("(Recommended)"),
+        !text.contains("(推荐)"),
         "这个选项读出来不是那个原始标记：{text}"
     );
 
@@ -578,7 +573,7 @@ fn the_recommended_marker_is_display_only() {
         answer(&mut rx).expect("作答了").answers,
         vec![UserAnswer {
             id: "one".to_owned(),
-            selected: vec!["serde (Recommended)".to_owned()],
+            selected: vec!["serde (推荐)".to_owned()],
             custom: None,
         }]
     );

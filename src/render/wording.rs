@@ -1001,9 +1001,8 @@ pub fn questionnaire_plain_answer_prompt() -> &'static str {
 /// 起来是什么样」的改动不可能只落在其中一个上。调用方在这一行旁边加上它自己前端显示的那点
 /// 状态 —— TUI 那个选中/高亮的标记 —— 因为那是两者唯一不共享的东西。
 ///
-/// `(Recommended)` 后缀是一条显示约定：它在这里被 [`recommended_badge`] 换掉，而答案
-/// 携带的值保留整条 label（[`recommended_label`]）。那个编号是阅读序号、不是键：定下来的
-/// 键盘上没有它。
+/// 后缀是一条显示约定：它在这里被 [`recommended_badge`] 换掉，而答案携带的值保留整条 label
+/// （[`recommended_label`]）。那个编号是阅读序号、不是键：定下来的键盘上没有它。
 pub fn questionnaire_option(number: usize, label: &str, description: Option<&str>) -> String {
     let (label, recommended) = recommended_label(label);
     let mut text = format!("{number}. {label}");
@@ -1020,8 +1019,14 @@ pub fn questionnaire_option(number: usize, label: &str, description: Option<&str
     text
 }
 
-/// 模型推荐一个选项时接的后缀（spec §7）。
-pub const RECOMMENDED_SUFFIX: &str = "(Recommended)";
+/// 模型推荐一个选项时接的后缀（`.scratch/tui-feedback/spec.md` §1）。
+pub const RECOMMENDED_SUFFIX: &str = "(推荐)";
+
+/// 旧的后缀，只为读**已经写进事件流**的那些会话与旧 label 而留：判定两种都认，屏幕上一样剥掉。
+///
+/// 2026-10-06 之前这里是 `(Recommended)`（`fs-agent-v1` 票 32 的约定）。模型可见的散文一律走
+/// 中文（[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md)），这一处当时漏了。
+pub const RECOMMENDED_SUFFIX_LEGACY: &str = "(Recommended)";
 
 /// label 以 [`RECOMMENDED_SUFFIX`] 结尾的选项上显示的那枚徽标。
 pub fn recommended_badge() -> &'static str {
@@ -1032,12 +1037,15 @@ pub fn recommended_badge() -> &'static str {
 ///
 /// 这个后缀是**显示**约定：它被剥掉，好让选项读起来是个可选项、而不是一句话，而答案携带的
 /// 值仍是原来那条 label、连标记一起（spec §7）。匹配区分大小写、而且只在结尾，所以一条
-/// 只是提到这个词的 label 不会被动。
+/// 只是提到这个词的 label 不会被动。新后缀与 [`RECOMMENDED_SUFFIX_LEGACY`] 都算数。
 pub fn recommended_label(label: &str) -> (&str, bool) {
-    match label.trim_end().strip_suffix(RECOMMENDED_SUFFIX) {
-        Some(rest) => (rest.trim_end(), true),
-        None => (label, false),
+    let trimmed = label.trim_end();
+    for suffix in [RECOMMENDED_SUFFIX, RECOMMENDED_SUFFIX_LEGACY] {
+        if let Some(rest) = trimmed.strip_suffix(suffix) {
+            return (rest.trim_end(), true);
+        }
     }
+    (label, false)
 }
 
 /// 人的 `[speaker]` 前缀：一个生成器，每个面向人的渲染器都用它，而且刻意不是模型侧的

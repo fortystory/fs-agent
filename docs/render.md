@@ -279,7 +279,9 @@ headless 一个转义序列都不多发（`.scratch/terminal-title/spec.md` §4�
 问卷是**第三类发起者**，那条 `Asker` 接缝不为它扩展。
 
 **一道题的选项**是模型在 `questions[].options[]` 里给的数据：`label`（原串就是答案值，
-`(Recommended)` 只做显示）加可选 `description`。前端按钮的词汇里有一个同名的 `Choice`
+`(推荐)` 只做显示；旧会话里那条 `(Recommended)` 同样认，见
+[`.scratch/tui-feedback/spec.md`](../.scratch/tui-feedback/spec.md) §1）加可选 `description`。前端
+按钮的词汇里有一个同名的 `Choice`
 （一个键加一句中文标签），两者**同名不同物**：前者是模型给的选项数据，后者是前端按钮的
 键位定义，共同点只有「都可被选中」；保留两个名字是更小的改动，各自的层各自命名。
 

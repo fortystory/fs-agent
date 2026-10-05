@@ -1178,15 +1178,43 @@ fn a_recommended_option_keeps_its_value_when_displayed() {
     // 这个标记是显示约定：选项读出来时丢掉那个后缀，而
     // 答案携带的值保留整段标签（spec §7）。
     assert_eq!(wording::recommended_badge(), "（推荐）");
+    assert_eq!(wording::recommended_label("serde (推荐)"), ("serde", true));
+    assert_eq!(wording::recommended_label("manual"), ("manual", false));
+    // 只有在最末尾、分毫不差的那个后缀才算数。
+    assert_eq!(wording::recommended_label("推荐阅读"), ("推荐阅读", false));
+    assert_eq!(
+        wording::recommended_label("serde（推荐）"),
+        ("serde（推荐）", false),
+        "全角括号那条是**徽标**，不是后缀"
+    );
+}
+
+#[test]
+fn the_old_english_suffix_still_earns_its_badge() {
+    // 约定改成中文之后（`.scratch/tui-feedback/spec.md` §1），已经写进事件流的历史 label
+    // 与旧会话里的 `(Recommended)` 照旧被剥掉 —— 否则那些选项会带着一串英文后缀显示出来。
     assert_eq!(
         wording::recommended_label("serde (Recommended)"),
         ("serde", true)
     );
-    assert_eq!(wording::recommended_label("manual"), ("manual", false));
-    // 只有在最末尾、分毫不差的那个后缀才算数。
+    assert_eq!(
+        wording::questionnaire_option(1, "serde (Recommended)", None),
+        "1. serde（推荐）"
+    );
+    // 新旧两种在同一个生成器下产出同一行。
+    assert_eq!(
+        wording::questionnaire_option(1, "serde (推荐)", None),
+        wording::questionnaire_option(1, "serde (Recommended)", None)
+    );
+    // 只是提到这个词的 label 一律不动。
     assert_eq!(
         wording::recommended_label("Recommended reading"),
         ("Recommended reading", false)
+    );
+    assert_eq!(
+        wording::recommended_label("推荐 (推荐) 吗"),
+        ("推荐 (推荐) 吗", false),
+        "中间出现的不算数"
     );
 }
 

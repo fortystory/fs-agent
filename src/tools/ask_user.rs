@@ -132,7 +132,7 @@ impl Tool for AskUserQuestionTool {
                           `custom` **可以同时出现**：单选与多选一个形状，用户既勾了选项又自己敲了\
                           一句时两个字段都有值（单选下 `selected` 至多一个）。两者都空才是跳过。\
                           \n- 选项有限时给出 `options`，想要自由文本就不给。要推荐某个选项，把它放\
-                          在第一个，并让它的 `label` 以 `(Recommended)` 结尾；答案里的值就是那个 \
+                          在第一个，并让它的 `label` 以 `(推荐)` 结尾；答案里的值就是那个 \
                           label 原样，标记也一起。"
                 .to_owned(),
             parameters: serde_json::json!({

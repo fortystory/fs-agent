@@ -199,9 +199,14 @@ fn the_description_carries_the_three_encoding_conventions() {
     // 2. 单选与多选一个形状：`selected` 与 `custom` 可以同时出现（spec §3）。
     assert!(description.contains("可以同时出现"), "{description}");
     assert!(description.contains("至多一个"), "{description}");
-    // 3. `(Recommended)` 标记只做显示：答案留下的是那个 label。
-    assert!(description.contains("(Recommended)"), "{description}");
+    // 3. `(推荐)` 标记只做显示：答案留下的是那个 label（后缀 2026-10-06 起走中文，
+    //    `.scratch/tui-feedback/spec.md` §1）。
+    assert!(description.contains("(推荐)"), "{description}");
     assert!(description.contains("标记也一起"), "{description}");
+    assert!(
+        !description.contains("(Recommended)"),
+        "约定里不再出现英文后缀：{description}"
+    );
 }
 
 #[test]
