@@ -38,9 +38,9 @@ import re
 import sys
 from dataclasses import dataclass
 
-# --- 清单：37 份活文档 -------------------------------------------------------
+# --- 清单：38 份活文档 -------------------------------------------------------
 # scope 与 `.scratch/docs-slim/research/03` 一致：入口三份 + `CONTEXT.md`、`docs/` 逐面
-# 18 份、`docs/adr/` 12 份、`docs/agents/` 3 份。**不含** `docs/research/`（一手引文）、
+# 18 份、`docs/adr/` 12 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
 # `.scratch/*/issues/`、`.scratch/*/spec.md`、`.scratch/*/research/`。
 DOC_FILES = [
     "README.md",
@@ -77,6 +77,7 @@ DOC_FILES = [
     "docs/adr/0010-questionnaire-keys-dispatch-by-zone.md",
     "docs/adr/0011-diagrams-in-mermaid.md",
     "docs/adr/0012-input-tokens-are-atomic.md",
+    "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
     "docs/agents/triage-labels.md",
