@@ -66,3 +66,12 @@ Blocked by: 09
   视图时重建（`close_unit` 与对话目标绑定）—— 只重放轨迹会让整页打上同一个单位号、色块不再
   交替。那个只写不读的 `trace_units` 平行表随之删掉。回归在
   `turning_the_stripes_back_on_still_alternates_them`。
+
+**2026-10-05 维护者把底色换成了分隔线**（推翻本票的做法）：
+
+- `TRACE_STRIPES`、`stripes` / `set_stripes`、`trace_stripe`、`replay_trace` 与组装处的
+  `NO_COLOR` 分支**全部删掉**；改成单位结束之后在轨迹页插一整行虚线（`trace_rule`，穿外壳
+  同一种框架色 `CHROME_LINE`）。它同样是**行**，同样跟着内容滚动，两边都不再有底色。
+- 测试换成 `the_trace_page_draws_a_rule_between_units`、
+  `the_trace_rule_travels_with_the_content`、`neither_view_paints_a_stripe_background`；
+  手工清单 ㉙ 第 7 条、`docs/render.md` 与 `CONTEXT.md` 跟着改。

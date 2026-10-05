@@ -357,11 +357,6 @@ impl Tui {
         // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let mut state = TuiState::new(facts, cwd, home);
-        // 退化终端不铺轮次底色：`NO_COLOR` 是那条通用约定，而它在组装处读一次
-        // （`.scratch/trace-tab/spec.md` §3）。
-        if std::env::var_os("NO_COLOR").is_some() {
-            state.set_stripes(false);
-        }
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
@@ -753,9 +748,6 @@ pub struct TuiState {
     conversation_links: std::collections::VecDeque<Option<Detail>>,
     /// 轨迹视图的同一份表。
     trace_links: std::collections::VecDeque<Option<Detail>>,
-    /// 轨迹页铺不铺轮次底色。`NO_COLOR` 在的时候由组装关掉它 —— 退化终端因此与这次改动
-    /// 之前逐字一致（票 12）。
-    stripes: bool,
     /// 上一帧对话视图把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧
     /// 重建，与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
     conversation_drawn: Drawn,
@@ -1567,7 +1559,6 @@ impl TuiState {
             turn_rail: TurnRail::default(),
             conversation_links: std::collections::VecDeque::new(),
             trace_links: std::collections::VecDeque::new(),
-            stripes: true,
             conversation_drawn: Drawn::default(),
             trace_drawn: Drawn::default(),
             trace_rect: None,
@@ -1870,55 +1861,6 @@ impl TuiState {
         }
     }
 
-    /// 一条轨迹行该穿的轮次底色；`stripes` 关掉时是 `None`（退化终端不做底色）。
-    ///
-    /// 单位序号取自回合条那份记账：`units()` 是**已完成**单位的个数 —— 与视图无关，
-    /// 也就是正在建的那个单位的序号，所以第一个边界之前的行归第一段
-    /// （`.scratch/trace-tab/spec.md` §3）。
-    fn trace_stripe(&self) -> Option<Color> {
-        self.stripes
-            .then(|| TRACE_STRIPES[self.turn_rail.units() % TRACE_STRIPES.len()])
-    }
-
-    /// 轨迹页铺不铺轮次底色。组装时按 `NO_COLOR` 关掉它（票 12）。
-    ///
-    /// 已经打上的底色住在行上，所以关掉（或打开）之后得让轨迹视图整批重排一次 ——
-    /// 否则屏幕上留的还是旧底色。
-    pub fn set_stripes(&mut self, stripes: bool) {
-        if stripes == self.stripes {
-            return;
-        }
-        self.stripes = stripes;
-        self.replay_trace();
-    }
-
-    /// 按当前宽度把共享源重放给两个视图，好让轨迹整批重排（底色开关用它）。
-    ///
-    /// 对话视图跟着一起重放：轮次底色的单位号由回合条推进，而回合条只在重放**对话**视图时
-    /// 重建（`close_unit` 与对话目标绑定）—— 只重放轨迹会让整页打上同一个单位号，色块不再
-    /// 交替。两个视图的滚动意图都由 `Pane::clear` 留着。
-    fn replay_trace(&mut self) {
-        self.conversation.clear();
-        self.conversation_links.clear();
-        self.turn_rail.clear();
-        self.trace.clear();
-        self.trace_links.clear();
-        if self.painted.is_empty() {
-            self.dirty = true;
-            return;
-        }
-        let painted = std::mem::take(&mut self.painted);
-        let targets = Targets {
-            conversation: true,
-            trace: self.trace_width != 0,
-        };
-        for item in &painted {
-            self.emit_painted(item, targets);
-        }
-        self.painted = painted;
-        self.dirty = true;
-    }
-
     /// 把一个块排成行、推进窗格，并**记住它**，好在宽度变化时重放（spec §1）。
     fn push_block(&mut self, block: Block, targets: Targets) -> usize {
         let produced = self.emit_block(&block, targets);
@@ -1964,6 +1906,12 @@ impl TuiState {
                     rendered.link,
                     Some(is_user_message(block)),
                 );
+            }
+            // 单位之间一条分隔线：轨迹页拿它当轮次的边界（2026-10-05 维护者的修订，
+            // 取代了原先那套隔行底色）。
+            if is_boundary(block, self.discussion()) {
+                let rule = trace_rule(width);
+                self.push_line(Viewport::Trace, rule, None, None);
             }
         }
         // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
@@ -2056,12 +2004,6 @@ impl TuiState {
         link: Option<Detail>,
         user: Option<bool>,
     ) {
-        let mut line = line;
-        if view == Viewport::Trace {
-            // **行生成期**就打上底色：它跟着这一行走，滚动时色块不会重排
-            // （`.scratch/trace-tab/spec.md` §3）。
-            line.style.bg = self.trace_stripe();
-        }
         let dropped = match view {
             Viewport::Conversation => self.conversation.push(line),
             Viewport::Trace => self.trace.push(line),
@@ -2267,11 +2209,8 @@ impl TuiState {
         in_place: bool,
     ) {
         if targets.trace {
-            let (mut line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
+            let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
             if in_place {
-                // `replace_last` 绕开了 [`TuiState::push_line`] 那条打底的路，所以这里自己
-                // 带上 —— 同一行在重放路径上走 `push_line`，两条路必须同色（票 12）。
-                line.style.bg = self.trace_stripe();
                 self.trace.replace_last(line);
                 if let Some(link) = self.trace_links.back_mut() {
                     *link = Some(detail);
@@ -4972,9 +4911,6 @@ impl From<Line<'static>> for RenderedLine {
     }
 }
 
-/// 轨迹页两块轮次底色的色值：256 色的两块深灰（`.scratch/trace-tab/spec.md` §3）。
-const TRACE_STRIPES: [Color; 2] = [Color::Indexed(235), Color::Indexed(236)];
-
 /// 共享渲染（[`render_block`]）没有窗格宽度可依时的排版宽度。
 ///
 /// TUI 自己把转录内容的宽度传给 [`paint_block`]；这个缺省只服务那些没有窗格的调用方 ——
@@ -5302,6 +5238,14 @@ fn paint_block(
     }
 }
 
+/// 轨迹页里两个单位之间的那条分隔线：一整行虚线，穿外壳同一种框架色。
+fn trace_rule(width: u16) -> Line<'static> {
+    Line::from(Span::styled(
+        "┄".repeat(width as usize),
+        Style::default().fg(CHROME_LINE),
+    ))
+}
+
 /// 一条**中间**叙述行：用暗色，好让模型那个以全亮度渲染的回答成为显眼的东西。带严重度的行
 /// 改为保持自己的颜色（见 [`severity_line`]）。
 fn narration(text: String) -> Line<'static> {
@@ -5461,8 +5405,9 @@ fn is_user_message(block: &Block) -> bool {
 /// 一个块进不进这个视图 —— 分工的**唯一**判据（`.scratch/trace-tab/spec.md` §2）。
 ///
 /// 轨迹视图是**全量**；对话视图只留用户文本、assistant 正文，加一份枚举出来的保留清单：
-/// 错误、会话中断、权限裁决、失败的 hook、`Notice` 整类，以及回合 / 轮次边界行 —— 它们是
-/// 对话的分段线，不是过程行。其余全归轨迹。
+/// 错误、会话中断、失败的 hook、`Notice` 整类，以及**非正常**的收尾行（`TurnEnded` /
+/// `RoundEnded` 里严重度不是 `Good` 的那些）。其余全归轨迹 —— 回合与轮次的开始、权限询问与
+/// 裁决、诊断、工具、思考、用量、注入这些过程行都不在对话视图里（2026-10-05 维护者收紧）。
 fn selects(view: Viewport, block: &Block) -> bool {
     if view == Viewport::Trace {
         return true;
@@ -5476,25 +5421,19 @@ fn selects(view: Viewport, block: &Block) -> bool {
         // 用户文本与 assistant 正文 —— 对话本来就该只有这些。
         Block::Message { .. } => true,
         // 「为什么没有回答」的那几类立刻要知道（冻结项 8）。
-        Block::AgentError { .. }
-        | Block::SessionError { .. }
-        | Block::SessionEnded { .. }
-        | Block::PermissionAsked { .. }
-        | Block::PermissionDecided { .. } => true,
+        Block::AgentError { .. } | Block::SessionError { .. } | Block::SessionEnded { .. } => true,
         // hook 只在**失败**时是说给用户的；成功的那条留在轨迹里。
         Block::Hook { outcome, .. } => crate::events::hook_format::is_failed(outcome),
-        // 边界行是对话的分段线（spec §2）。
-        Block::TurnStarted { .. }
-        | Block::TurnEnded { .. }
-        | Block::RoundStarted { .. }
-        | Block::RoundEnded { .. } => true,
+        // 收尾行：**正常**的收尾是过程行，进轨迹；非正常的收尾是说给人听的「为什么停下来」，
+        // 留在对话视图（2026-10-05 维护者收紧，取代了「边界行都留对话」那条）。
+        Block::TurnEnded { reason, .. } | Block::RoundEnded { reason, .. } => {
+            Severity::of(*reason) != Severity::Good
+        }
         // `Notice` 整类留下（冻结项 8、票 06）：命令回执、启动横幅、错误报告、目标与重试
         // 提示、历史分隔线都在内。
         Block::Notice(_) => true,
-        // 诊断也是一句说给人听的话。
-        Block::Diagnostic(_) => true,
-        // 其余全进轨迹：工具与它的反馈、用量、分歧、沙箱、历史、上下文注入、执行者进出、
-        // 流式增量。
+        // 其余全进轨迹：回合 / 轮次的**开始**、权限询问与裁决、工具与它的反馈、用量、分歧、
+        // 沙箱、历史、上下文注入、执行者进出、诊断、流式增量。
         _ => false,
     }
 }
@@ -6022,17 +5961,27 @@ mod tests {
             ),
             (message(debater.clone(), "答"), true),
             (message(executor.clone(), "派出去的活"), false),
+            // 回合 / 轮次的**开始**是过程行：只住在轨迹页（2026-10-05 维护者收紧）。
             (
                 Block::TurnStarted {
                     speaker: debater.clone(),
                     iteration: 1,
                 },
-                true,
+                false,
             ),
+            // 正常的收尾也是过程行……
             (
                 Block::TurnEnded {
                     speaker: debater.clone(),
                     reason: StopReason::Completed,
+                },
+                false,
+            ),
+            // ……而**非正常**的收尾是说给人听的「为什么停下来」，留在对话视图。
+            (
+                Block::TurnEnded {
+                    speaker: debater.clone(),
+                    reason: StopReason::Error,
                 },
                 true,
             ),
@@ -6041,12 +5990,19 @@ mod tests {
                     round: 1,
                     mode: RoundMode::Independent,
                 },
-                true,
+                false,
             ),
             (
                 Block::RoundEnded {
                     round: 1,
                     reason: StopReason::Completed,
+                },
+                false,
+            ),
+            (
+                Block::RoundEnded {
+                    round: 1,
+                    reason: StopReason::BudgetExhausted,
                 },
                 true,
             ),
@@ -6070,13 +6026,14 @@ mod tests {
                 },
                 true,
             ),
+            // 权限询问与裁决也是过程行：只住在轨迹页。
             (
                 Block::PermissionAsked {
                     speaker: debater.clone(),
                     tool_name: Some("bash".to_owned()),
                     args: serde_json::json!({}),
                 },
-                true,
+                false,
             ),
             (
                 Block::PermissionDecided {
@@ -6085,7 +6042,7 @@ mod tests {
                     source: DecisionSource::User,
                     reason: None,
                 },
-                true,
+                false,
             ),
             (
                 Block::Hook {
@@ -6104,7 +6061,8 @@ mod tests {
                 false,
             ),
             (Block::Notice("回执".to_owned()), true),
-            (Block::Diagnostic("诊断".to_owned()), true),
+            // 诊断也进轨迹：它是模型的运行日志，不是对话。
+            (Block::Diagnostic("诊断".to_owned()), false),
             (tool(debater.clone()), false),
             (tool(executor), false),
             (

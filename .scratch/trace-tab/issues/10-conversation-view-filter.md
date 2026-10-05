@@ -68,3 +68,13 @@ Blocked by: 09
   `cargo clippy --all-targets` 无警告、`cargo fmt --check` 干净。
 - **已知缺口（票 11 的活）**：左栏不可见（`w < 80` 或 `Ctrl-O` 收起）时轨迹视图不物化，
   过程行此时没有任何去处 —— 降级判据归下一张票。
+
+**2026-10-05 维护者收紧**（推翻本票的保留清单，`.scratch/trace-tab/spec.md` §2 与补记跟着改）：
+
+- 进轨迹的多了：回合 / 轮次的**开始**、**正常的**收尾、权限询问与裁决、诊断 —— 它们是运行
+  日志。对话视图只留用户 / assistant 正文、错误与中断、失败的 hook、`Notice` 整类，外加
+  **非正常**的收尾行（`TurnEnded` / `RoundEnded` 里严重度不是 `Good` 的），后者保住
+  「为什么停下来」。
+- `selects` 的穷举单测跟着改成新期望（含非正常收尾那两条）；新增帧断言
+  `the_run_log_lines_stay_out_of_the_conversation`；讨论会话 rail 的兜底断言从
+  `── 第 1 轮` 放宽到那一轮的第一条发言（轮次开始那行现在只住在轨迹页）。

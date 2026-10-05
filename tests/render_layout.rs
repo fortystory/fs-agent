@@ -1792,9 +1792,11 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     assert_eq!(turn_rail_shape(&mut later), "┊┊┃");
     let second = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 2) as u16;
     later.mouse(click(RAIL_AT_120, second));
+    // 轮次开始那一行现在只住在轨迹页（2026-10-05 维护者收紧），所以兜底落点是那一轮
+    // **第一条留在对话里的行** —— 它的第一条发言。
     assert!(
-        top_transcript_row(&mut later).contains("── 第 1 轮"),
-        "没有自己用户消息的轮次落在它的第一行上：{:?}",
+        top_transcript_row(&mut later).contains("第 1 轮"),
+        "没有自己用户消息的轮次落在它留下的第一行上：{:?}",
         top_transcript_row(&mut later)
     );
 }
@@ -6626,78 +6628,80 @@ fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
 }
 
 // ---------------------------------------------------------------------------
-// 轨迹页按轮次隔行底色（`.scratch/trace-tab/spec.md` §3；票 12）
+// 轨迹页用分隔线分开轮次（`.scratch/trace-tab/spec.md` §3；票 12 的 2026-10-05 修订）
 // ---------------------------------------------------------------------------
 
-/// 左栏里含 `needle` 的那一行，以及它的底色 —— 只在左栏里找，因为主列的对话视图里也有
-/// 同一句话。
-fn stripe_of(frame: &Buffer, needle: &str) -> Option<(u16, Color)> {
-    (0..24).find_map(|y| {
-        cells(frame, y, 0, SIDEBAR_COLUMNS)
-            .contains(needle)
-            .then(|| (y, frame[(1, y)].bg))
-    })
+/// 左栏里那个含 `needle` 的行，以及它上面最近的那条分隔线的行。
+fn rule_before(state: &mut TuiState, needle: &str) -> Option<(u16, u16)> {
+    let frame = buffer(120, 24, state);
+    let row = (0..24).find(|y| cells(&frame, *y, 0, SIDEBAR_COLUMNS).contains(needle))?;
+    let rule = (0..row).rev().find(|y| {
+        let line = cells(&frame, *y, 0, SIDEBAR_COLUMNS);
+        line.contains('┄') && line.trim_end().chars().all(|ch| ch == '┄')
+    })?;
+    Some((row, rule))
 }
 
-/// 轨迹页里一个单位的所有行共用一块底色，相邻单位交替（票 12 验证 1）。
+/// 轨迹页里两个单位之间画一条横向虚线 —— 那条线就是轮次的边界，没有底色
+/// （票 12 的 2026-10-05 修订）。
 #[test]
-fn the_trace_page_stripes_one_block_per_unit() {
+fn the_trace_page_draws_a_rule_between_units() {
     let mut state = state_with_roster(&["kimi"]);
     turns(&mut state, 3);
     open_trace_tab(&mut state, 120, 24);
-    let rows = screen(120, 24, &mut state);
-    let frame = buffer(120, 24, &mut state);
-    let top = sidebar_page(&rows) as u16;
-    let stripe = |row: u16| frame[(1, row)].bg;
+    let rows = sidebar_rows(&mut state, 120, 24);
+    let top = sidebar_page(&rows);
+    let page: Vec<String> = rows[top..]
+        .iter()
+        .filter(|row| !row.trim().is_empty())
+        .cloned()
+        .collect();
 
-    // 每个回合四行：问题、回合开始、回答、回合结束。所以边界落在 `top + 3` 之后。
-    assert_eq!(stripe(top), stripe(top + 3), "第一段是同一种底色");
-    assert_ne!(stripe(top), stripe(top + 4), "下一个回合换一块");
-    assert_eq!(stripe(top + 4), stripe(top + 7), "第二段自己也一致");
-    assert_eq!(stripe(top), stripe(top + 8), "第三段又回到第一块");
-    assert_ne!(stripe(top), Color::Reset, "底色真的铺上了");
+    // 每个回合四行加一条线：问题、回合开始、回答、回合结束、线 × 3。
+    let rules: Vec<usize> = page
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains('┄') && row.trim_end().chars().all(|ch| ch == '┄'))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(rules.len(), 3, "三个回合三条线：{page:#?}");
+    for rule in &rules {
+        assert!(
+            page[rule - 1].contains("回合结束"),
+            "线紧跟在那个回合的收尾之后：{page:#?}"
+        );
+    }
 }
 
-/// 底色打在行生成期，所以滚动时它跟着**内容**走，不跟着屏幕行重排（票 12 验证 2）。
+/// 线是**行**，所以滚动时它跟着内容走，不跟着屏幕行重排（票 12 的修订）。
 #[test]
-fn the_trace_stripes_travel_with_the_content() {
+fn the_trace_rule_travels_with_the_content() {
     let mut state = state_with_roster(&["kimi"]);
     turns(&mut state, 6);
     open_trace_tab(&mut state, 120, 24);
     let _ = screen(120, 24, &mut state);
-    let frame = buffer(120, 24, &mut state);
-    let before = stripe_of(&frame, "问题 5").expect("最后一个回合的问题在屏幕上");
+    let before = rule_before(&mut state, "问题 5").expect("最后一个回合的问题在屏幕上");
     state.mouse(wheel_at(10, 12, true));
-    let frame = buffer(120, 24, &mut state);
-    let after = stripe_of(&frame, "问题 5").expect("它还在屏幕上");
-    assert_ne!(before.0, after.0, "它挪了屏幕行");
-    assert_eq!(before.1, after.1, "而底色跟着它一起挪");
+    let after = rule_before(&mut state, "问题 5").expect("它还在屏幕上");
+    assert_ne!(before.0, after.0, "内容挪了屏幕行");
+    assert_eq!(
+        before.0 - before.1,
+        after.0 - after.1,
+        "而它上面那条线跟着它一起挪"
+    );
 }
 
-/// 对话视图不铺底：底色只在轨迹页上（票 12 验证 3）。
+/// 轨迹页与主列都不铺底：区分轮次的是那条线，不是色块（票 12 的修订）。
 #[test]
-fn the_conversation_view_carries_no_stripes() {
+fn neither_view_paints_a_stripe_background() {
     let mut state = state_with_roster(&["kimi"]);
     turns(&mut state, 3);
-    let frame = buffer(120, 24, &mut state);
-    for y in 0..24 {
-        assert_eq!(frame[(50, y)].bg, Color::Reset, "主列第 {y} 行没有底色");
-    }
-}
-
-/// 无底色开关打开时画面与没铺时一致（票 12 验证 3）。
-#[test]
-fn the_stripes_can_be_turned_off() {
-    let mut state = state_with_roster(&["kimi"]);
-    turns(&mut state, 3);
-    state.set_stripes(false);
     open_trace_tab(&mut state, 120, 24);
     let frame = buffer(120, 24, &mut state);
     for y in 0..24 {
-        assert_eq!(frame[(1, y)].bg, Color::Reset, "第 {y} 行不铺底");
+        assert_eq!(frame[(1, y)].bg, Color::Reset, "左栏第 {y} 行没有底色");
+        assert_eq!(frame[(50, y)].bg, Color::Reset, "主列第 {y} 行没有底色");
     }
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("问题 0"), "内容照旧：{text}");
 }
 
 // ---------------------------------------------------------------------------
@@ -6834,37 +6838,34 @@ fn the_wheel_over_the_sidebar_goes_to_the_conversation_when_the_trace_page_is_hi
     );
 }
 
-/// 思考行在轨迹页上也穿轮次底色：实时路径是**就地重写**（`replace_last`），绕开了
-/// `push_line` 那条打底的路，所以它得自己带上（票 12 的 code-review 修正）。
+/// 维护者 2026-10-05 列的那几类运行日志只在轨迹页：回合 / 轮次的开始、正常的收尾、
+/// 权限裁决、诊断（`.scratch/trace-tab/spec.md` §2 的收紧）。
 #[test]
-fn the_thinking_line_wears_the_stripe_too() {
+fn the_run_log_lines_stay_out_of_the_conversation() {
     let mut state = state_with_roster(&["kimi"]);
-    state.apply(reasoning_delta("先看依赖。"));
-    state.apply(text_delta("答案。"));
-    open_trace_tab(&mut state, 120, 24);
-    let frame = buffer(120, 24, &mut state);
-    let row = left_row_of(&mut state, "思考完成");
-    assert_ne!(
-        frame[(1, row)].bg,
-        Color::Reset,
-        "思考行也在它那个单位的底色里"
-    );
-}
+    state.apply(user_message(1, "问题"));
+    state.apply(turn_started(2));
+    state.apply(message(3, "回答。", None));
+    state.apply(permission_asked(4, "call-1"));
+    state.apply(permission_decided(5));
+    state.apply(turn_ended(6));
+    state.apply(RenderEvent::Diagnostic(
+        "provider 流结束：正常停止".to_owned(),
+    ));
 
-/// 关掉再打开底色之后，轮次**仍然交替**：重放要把回合条一起重建，否则整页是同一个单位号
-/// （票 12 的 code-review 修正）。
-#[test]
-fn turning_the_stripes_back_on_still_alternates_them() {
-    let mut state = state_with_roster(&["kimi"]);
-    turns(&mut state, 3);
-    state.set_stripes(false);
-    state.set_stripes(true);
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(conversation.contains("问题"), "{conversation}");
+    assert!(conversation.contains("回答。"), "{conversation}");
+    for absent in ["回合开始", "回合结束", "权限裁决", "诊断"] {
+        assert!(
+            !conversation.contains(absent),
+            "{absent} 不在对话视图里：{conversation}"
+        );
+    }
+
     open_trace_tab(&mut state, 120, 24);
-    let rows = screen(120, 24, &mut state);
-    let frame = buffer(120, 24, &mut state);
-    let top = sidebar_page(&rows) as u16;
-    let stripe = |row: u16| frame[(1, row)].bg;
-    assert_ne!(stripe(top), Color::Reset, "底色又铺上了");
-    assert_ne!(stripe(top), stripe(top + 4), "下一个回合换一块");
-    assert_eq!(stripe(top), stripe(top + 8), "第三段又回到第一块");
+    let page = trace_page(&mut state, 120, 24).join("\n");
+    for present in ["回合开始", "回合结束", "权限裁决", "诊断"] {
+        assert!(page.contains(present), "{present} 在轨迹页里：{page}");
+    }
 }

@@ -193,12 +193,16 @@ fn run_replay(state: &mut TuiState) {
     }
 }
 
-/// 一份长到需要不止一批的历史：每条 `TurnEnded` 恰好画
-/// 一行，所以 600 条没法一趟到达，而两批之间的那一帧
-/// 是测试可以站进去的状态。这个数字故意不落在批次
-/// 边界上：这里不断言一批装多少条事件。
+/// 一份长到需要不止一批的历史：每条恰好画一行，所以 600 条没法一趟到达，而两批之间的
+/// 那一帧是测试可以站进去的状态。这个数字故意不落在批次边界上：这里不断言一批装多少条
+/// 事件。
+///
+/// 内容取 assistant 消息：它留在**对话视图**里。收尾行（`TurnEnded`）自 2026-10-05 起只
+/// 住在轨迹页，用它当垫料会让这些测试在空屏上断言。
 fn long_history() -> Vec<Event> {
-    (1..=600).map(turn_ended).collect()
+    (1..=600)
+        .map(|seq| message(seq, &format!("第 {seq} 行"), None))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -351,8 +355,9 @@ fn a_replay_in_flight_shows_partial_history_and_the_progress_count() {
         text.contains("恢复历史") && text.contains("/600") && !text.contains("恢复历史 600/600"),
         "进度行显示它走到了哪：{text}"
     );
+    // 视口贴着底部，所以屏幕上是最新铺下来的那几行 —— 数它们，不认某一行。
     assert!(
-        text.contains("回合结束"),
+        text.matches("[kimi] 第 ").count() >= 5,
         "而已经铺上去的那部分历史在屏幕上：{text}"
     );
 
