@@ -22,8 +22,9 @@ use futures::StreamExt;
 use ratatui::buffer::CellWidth;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::style::Print;
@@ -125,7 +126,9 @@ pub enum Key {
     CtrlP,
     CtrlN,
     CtrlG,
-    CtrlJ,
+    /// **换行**：`Ctrl-J`，以及支持键盘增强协议的终端上的 `Shift+Enter`
+    /// （`.scratch/tui-feedback/spec.md` §9）。
+    Newline,
     /// `Ctrl-Z`：**挂起** —— 交还终端、停到后台，`fg` 回来重进并重绘
     /// （`.scratch/suspend-gesture/spec.md` §2）。它不归任何视图管，所以
     /// [`TuiState::key`] 在一切守卫之前就把它接走。
@@ -153,12 +156,18 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'p' => Some(Key::CtrlP),
                 'n' => Some(Key::CtrlN),
                 'g' => Some(Key::CtrlG),
-                'j' => Some(Key::CtrlJ),
+                'j' => Some(Key::Newline),
                 'z' => Some(Key::CtrlZ),
                 'o' => Some(Key::CtrlO),
                 _ => None,
             };
         }
+    }
+    // `Shift+Enter` 与 `Ctrl-J` 是同一个动作。它只在支持键盘增强协议的终端里到得了这里 ——
+    // 别的终端发来的是不带修饰的 `Enter`（提交），与从前一样
+    // （`.scratch/tui-feedback/spec.md` §9）。
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
+        return Some(Key::Newline);
     }
     match key.code {
         KeyCode::Esc => Some(Key::Esc),
@@ -580,6 +589,14 @@ fn enable_terminal_modes(title: &str) {
     let _ = execute!(std::io::stdout(), Print("\x1b[22;0t"));
     set_terminal_title(title);
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+    // 键盘增强协议（Kitty keyboard protocol）：请终端把 `Shift+Enter` 这类带修饰的键报成
+    // `CSI 13;2u`，而不是一个与裸 `Enter` 分不开的字节 —— 没有它，「Shift+Enter 换行」在
+    // 协议层就是一句空话（`.scratch/tui-feedback/spec.md` §9）。不支持的终端把这一串当没
+    // 看见，于是那些终端里的 `Shift+Enter` 仍旧提交；挂起恢复会成对地弹了再推。
+    let _ = execute!(
+        std::io::stdout(),
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
 }
 
 impl Drop for TerminalModes {
@@ -591,6 +608,7 @@ impl Drop for TerminalModes {
 fn disable_terminal_modes() {
     let _ = execute!(
         std::io::stdout(),
+        PopKeyboardEnhancementFlags,
         DisableMouseCapture,
         DisableBracketedPaste,
         // 还原进入时保存的那条标题。
@@ -2342,9 +2360,11 @@ impl TuiState {
     fn editor_key(&mut self, key: Key) {
         match key {
             Key::Char(ch) => self.editor.insert_char(ch),
-            // 唯一可靠的换行键：在没有 keyboard-enhancement 协议的终端上 Shift+Enter 到达时
-            // 就是一个普通的 Enter，所以它会提交（spec §6）。
-            Key::CtrlJ => self.editor.insert_char('\n'),
+            // 换行有两个键：`Ctrl-J` 到处都到得了，`Shift+Enter` 只在支持键盘增强协议的终端上
+            // 到得了（那些终端由 [`enable_terminal_modes`] 推了标志）。别的终端里 `Shift+Enter`
+            // 到达时就是一个普通的 `Enter`，于是它提交 —— 提示行因此只写 `ctrl-j`
+            // （`.scratch/tui-feedback/spec.md` §9、spec §6）。
+            Key::Newline => self.editor.insert_char('\n'),
             Key::Backspace => self.editor.backspace(),
             Key::Delete => self.editor.delete_forward(),
             Key::Left => self.editor.left(),
@@ -6930,7 +6950,18 @@ mod tests {
         // 换行键：整个多行编辑器就挂在这一个键上。
         assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
-            Some(Key::CtrlJ)
+            Some(Key::Newline)
+        );
+        // `Shift+Enter` 是同一个动作 —— 支持键盘增强协议的终端会把它报成带修饰的 `Enter`
+        // （`.scratch/tui-feedback/spec.md` §9）。
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Some(Key::Newline)
+        );
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())),
+            Some(Key::Enter),
+            "裸 `Enter` 照旧是提交"
         );
         // 挂起：raw 模式把终端的 SIGTSTP 吃成了按键，所以这一个必须被认出来
         // （`.scratch/suspend-gesture/spec.md` §2）。

@@ -112,9 +112,12 @@ impl Drag {
 
 /// 越过多远才算**拖**。
 ///
-/// 判据是「走过的格数 **> 这个数**」，所以 1 的意思是：按住之后挪**一格**仍算手抖，走到第二格
+/// 判据是「走过的格数 **> 这个数**」，所以 2 的意思是：按住之后挪**两格**仍算手抖，走到第三格
 /// 才是拖。它与 `selecting` 是「这次抬起到手算点击还是算选择」的唯一分歧点。
-const DRAG_THRESHOLD: u16 = 1;
+///
+/// 2026-10-06 从 1 提到 2：真机反馈是「点名字下面那段正文不弹窗了」—— 一次真实的点击很容易带
+/// 两格位移，于是它被读成拖选、点击被吃掉。两格之上再起选，手感上没有代价（拖选本来就比那长）。
+const DRAG_THRESHOLD: u16 = 2;
 
 impl Drag {
     /// 指针动到 `head`：越过门槛之后这次按下才算拖选。
@@ -159,8 +162,15 @@ impl Drag {
 ///
 /// 它只碰缓冲（`Modifier::REVERSED`），不动任何绘制函数 —— 于是覆盖层、菜单、问卷、名字的
 /// 颜色与字形都不会因为选择而改形。调用点是 `draw_frame` 的最后一步，所以它盖在所有层之上。
+///
+/// **行尾的填充空白不反白**（2026-10-06 真机反馈「显示的是一个矩形，不是选中的文本反色」）：
+/// 反白只铺到这一行最后一个有字的格子，于是看起来是**文字**被选中，而不是屏幕上一块方块。
+/// 行**内**的空白仍然反白 —— 那是选中的文本自己的间隔。
 pub fn paint(frame: &mut Frame, text: &ScreenText, drag: Option<&Drag>) {
     let Some(drag) = drag else {
+        return;
+    };
+    let Some(block) = drag.block(text) else {
         return;
     };
     let Some(rect) = drag.cover(text) else {
@@ -168,7 +178,13 @@ pub fn paint(frame: &mut Frame, text: &ScreenText, drag: Option<&Drag>) {
     };
     let buffer = frame.buffer_mut();
     for y in rect.y..rect.bottom() {
-        for x in rect.x..rect.right() {
+        let row = (y.saturating_sub(block.rect.y)) as usize;
+        let filled = block
+            .rows
+            .get(row)
+            .map_or(0, |row| width::text_columns(row.text.trim_end()));
+        let right = (block.rect.x + filled as u16).min(rect.right());
+        for x in rect.x..right {
             buffer[(x, y)].modifier.insert(Modifier::REVERSED);
         }
     }

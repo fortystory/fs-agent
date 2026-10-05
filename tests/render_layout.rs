@@ -1198,6 +1198,31 @@ fn dragging_across_the_transcript_highlights_it_and_swallows_the_click() {
         "选区之外不动"
     );
 
+    // 行尾的填充空白不反白：看起来是**文字**被选中，而不是屏幕上一块矩形
+    // （`.scratch/tui-feedback/spec.md` §9）。
+    let mut wide = state_with_roster(&["kimi"]);
+    wide.apply(message(1, "短句", None));
+    let frame = buffer(120, 24, &mut wide);
+    let (column, row) = cell_of(&frame, 120, 24, "短句").expect("正文行在屏幕上");
+    wide.mouse(press(column, row));
+    wide.mouse(drag_to(100, row));
+    let frame = buffer(120, 24, &mut wide);
+    // 「短句」占 4 列（两个宽字素各两格，而后一格在缓冲里是跳过格）。所以看第 1 格与第 3 格：
+    // 都在文字里、都反白；第 5 格起是它右边那块填充，不反白。
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::REVERSED)
+            && frame[(column + 2, row)]
+                .modifier
+                .contains(Modifier::REVERSED),
+        "文字那两格反白"
+    );
+    assert!(
+        !frame[(column + 4, row)]
+            .modifier
+            .contains(Modifier::REVERSED),
+        "文字右边那些空白格不反白"
+    );
+
     // 抬起：那一次点击被拖选拦下（正文详情不开），反白跟着走掉。
     state.mouse(release(column + 4, row + 1));
     let text = screen(120, 24, &mut state).join("\n");
@@ -1244,18 +1269,37 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     assert!(!text.contains("已复制"), "点一下不留回执：{text}");
 }
 
-/// 没拖动的按下-抬起仍是一次普通点击；一格的抖动也算不上拖。
+/// 没拖动的按下-抬起仍是一次普通点击；**两格**以内的抖动也算不上拖。
+///
+/// 门槛是 2026-10-06 从一格提到两格的：真机反馈「点名字下面那段正文不弹窗了」—— 一次真实的
+/// 点击很容易带两格位移，那两格被读成拖选就把点击吃掉了（`.scratch/tui-feedback/spec.md` §9）。
 #[test]
-fn a_press_and_release_without_a_drag_is_still_a_click() {
+fn a_press_release_within_two_cells_of_wobble_is_still_a_click() {
+    for wobble in [0u16, 1, 2] {
+        let mut state = state_with_roster(&["kimi"]);
+        state.apply(message(1, "正文在这里", None));
+        let frame = buffer(120, 24, &mut state);
+        let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
+        state.mouse(press(column, row));
+        state.mouse(drag_to(column + wobble, row));
+        state.mouse(release(column + wobble, row));
+        let text = screen(120, 24, &mut state).join("\n");
+        assert!(
+            text.contains("── 正文 ──"),
+            "抖 {wobble} 格仍是一次点击：{text}"
+        );
+    }
+    // 第三格起才是拖选：它不再开详情，而去复制。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(1, "正文在这里", None));
     let frame = buffer(120, 24, &mut state);
     let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
     state.mouse(press(column, row));
-    state.mouse(drag_to(column + 1, row));
-    state.mouse(release(column + 1, row));
+    state.mouse(drag_to(column + 3, row));
+    state.mouse(release(column + 3, row));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "仍是一次点击：{text}");
+    assert!(!text.contains("── 正文 ──"), "三格起是拖选：{text}");
+    assert!(text.contains("已复制"), "而且它复制了：{text}");
 }
 
 /// 在主列页签上按住拖开、再松开：页签**不**切。
