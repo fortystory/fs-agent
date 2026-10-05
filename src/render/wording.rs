@@ -597,7 +597,7 @@ fn cut(text: &str, max: usize) -> String {
         return text.to_owned();
     }
     let mut out: String = text.chars().take(max).collect();
-    out.push('…');
+    out.push_str(ELLIPSIS);
     out
 }
 
@@ -1126,6 +1126,30 @@ pub fn status_word(busy: bool) -> &'static str {
     }
 }
 
+/// 「在跑」的字形循环：四分之一圈一格
+/// （`.scratch/tui-visual-language/spec.md` §30–§31）。
+///
+/// **不靠颜色、不靠变暗** —— 在任何终端上看到的一样。四个码位与框架线同为 Ambiguous 宽度，
+/// 所以一个把它们画成双倍的终端会把它显示成两列；那一条记在手工清单上，与 [`PROMPT`] 的
+/// 同一条并列（`scripts/tui-startup-check.py` 那两个锚点仍在）。
+pub const PULSE_GLYPHS: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// 空闲时每换一格要几帧。运行中是它的四分之一 —— 同一个时钟，两种速度（§31）。
+const IDLE_FRAMES_PER_GLYPH: u64 = 32;
+
+/// 状态词前那个字形，取第 `frame` 帧。
+///
+/// 空闲每 32 帧（≈1.9 秒）换一格，运行中每 8 帧（≈0.5 秒）—— 于是「在跑」有自己的信息
+/// 通道，而不是又一种颜色（§30）。
+pub fn status_spinner(frame: u64, busy: bool) -> &'static str {
+    let step = if busy {
+        IDLE_FRAMES_PER_GLYPH / 4
+    } else {
+        IDLE_FRAMES_PER_GLYPH
+    };
+    PULSE_GLYPHS[(frame / step) as usize % PULSE_GLYPHS.len()]
+}
+
 /// 活着的键位提示，按它们显示的先后：最常用的在前。出口是 [`EXIT_HINT_IDLE`] /
 /// [`EXIT_HINT_BUSY`]（由 [`exit_hint`] 挑），它是**预留**的、不是追加的，所以任何宽度
 /// 下它都活下来。
@@ -1170,41 +1194,25 @@ pub const EXIT_HINT_REPLAY_RAISED: &str = "再按一次 ctrl-c 退出";
 /// 可回去的提示行）。
 const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 
-/// 一个 `width` **列**宽终端的状态行。
+/// 一个 `width` **列**宽终端的提示行。
 ///
-/// 提示从左边填，出口（`exit`）预留在它们末尾，状态词只在还装得下时才摆在它们前面 —— 于是
-/// 窄终端保住它的出口*以及*解释键位的提示，让掉的是 `就绪`、而不是 `ctrl-j 换行`。状态词
-/// 的位置永远是左缘；退化的是它到底出不出现。
+/// **状态词不在这里**：它搬到了状态行的最后一段，因为那里永远在场，而提示行的阶梯会把它丢掉
+/// （`.scratch/tui-visual-language/spec.md` §18）。这一行只剩键位提示与出口。
 ///
-/// 提示阶梯，按画出来的帧实测：40 列三个条目（状态词 + 一条提示 + 出口），60 列四个
-/// （三条提示 + 出口），80 列六个（状态词 + 四条提示 + 出口），120 列八个（六条提示全上，
-/// 再加状态词与出口）。**这里的「列」是提示行自己的列宽**（`hint_line` 收到的那一个），
-/// 不是屏宽 —— 宽屏带着左栏时提示行比屏窄 41 列，所以屏宽 120 的帧上只看得见四条提示。
-/// 出口现在是一个条目（`ctrl-c/ctrl-d 退出`），比从前的 `ctrl-c 退出` 宽七列，
-/// 这就是状态词从 60 到 80 列消失的原因 —— 40 列时它还在，因为只有一条提示要付账
-/// （票 06 §4）。`ctrl-o 左栏` 排在最末，所以它只在最宽的档位上出现
-/// （`.scratch/sidebar-toggle/spec.md` §4）。
+/// 提示从左边填，出口（`exit`）预留在它们末尾 —— 于是窄终端保住它的出口*以及*排在前面的那些
+/// 提示，让掉的是排在最末的 `ctrl-o 左栏`。位置就是优先级：`ctrl-o 左栏` 挂最后，因为滚动
+/// 比它常用得多（`.scratch/sidebar-toggle/spec.md` §4）。
 pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
-    hint_line(
-        status_word(busy),
-        &KEY_HINTS,
-        exit_hint(busy, raised),
-        width,
-    )
+    hint_line(&KEY_HINTS, exit_hint(busy, raised), width)
 }
 
-/// 前端没有在读行时的状态行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
+/// 前端没有在读行时的提示行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
 ///
 /// 这条区分不是装饰。提示描述的是键盘会做什么，而一个回合跑到一半的会话 —— 或一次
 /// `discuss` 运行，它压根不会要一行输入 —— 否则就会为一个什么都不发的键承诺
 /// `enter 发送`（spec §6）。
 pub fn viewer_status_line(busy: bool, width: u16, raised: bool) -> String {
-    hint_line(
-        status_word(busy),
-        &VIEWER_HINTS,
-        exit_hint(busy, raised),
-        width,
-    )
+    hint_line(&VIEWER_HINTS, exit_hint(busy, raised), width)
 }
 
 /// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。
@@ -1220,31 +1228,26 @@ pub fn exit_hint(busy: bool, raised: bool) -> &'static str {
     }
 }
 
-/// 两条状态行共用的阶梯：提示从左来，出口预留在末尾，状态词只在还装得下时才打头。
-fn hint_line(state: &str, hints: &[&str], exit: &str, width: u16) -> String {
+/// 两条提示行共用的阶梯：提示从左来，出口预留在末尾。提示从前往后填，装不下下一条就停 ——
+/// 位置就是优先级。
+fn hint_line(hints: &[&str], exit: &str, width: u16) -> String {
     let exit_columns = exit.cell_width();
     let mut chosen = String::new();
     for hint in hints {
         let candidate = if chosen.is_empty() {
             (*hint).to_owned()
         } else {
-            format!("{chosen} · {hint}")
+            format!("{chosen}{SEP}{hint}")
         };
-        if candidate.cell_width() + " · ".cell_width() + exit_columns > width {
+        if candidate.cell_width() + SEP.cell_width() + exit_columns > width {
             break;
         }
         chosen = candidate;
     }
-    let run = if chosen.is_empty() {
+    if chosen.is_empty() {
         exit.to_owned()
     } else {
-        format!("{chosen} · {exit}")
-    };
-    let with_state = format!("{state} · {run}");
-    if with_state.cell_width() <= width {
-        with_state
-    } else {
-        run
+        format!("{chosen}{SEP}{exit}")
     }
 }
 
@@ -1571,32 +1574,7 @@ fn join_title(path: &str, word: Option<&str>, goal: Option<&str>) -> String {
     if let Some(goal) = goal {
         parts.push(goal.to_owned());
     }
-    parts.join(" · ")
-}
-
-/// `fs-agent` 里那条**下落**的短横，脉冲一帧一个字形
-/// （`.scratch/tui-input-pulse/spec.md` §2）。
-///
-/// 这些是**文字**身份的字形 —— 窄档那行 `fs-agent 0.1.0`，短横是 `fs` 与 `agent` 之间
-/// 的一个字符。一行没有可以往下落的纵深，所以它只能按一个单元能落的方式落：横条先停在偏
-/// 上，然后填满这个单元，再沉到底部，然后重来。用半块而不是一个转动的 spinner
-/// （`-`、`/`、`|`、`\`）：形状一直是根横条，动的只有它的高度，这与标记拿它那五行做的
-/// 是同一件事。
-///
-/// **标记**穿过那五行往下落，带着它一直就有的那个形状（`crate::render::tui` 里的
-/// `mark_lines`）。两者由同一个帧下标索引，所以一个脉冲帧就是一次下落里的一个位置；这里
-/// 增删一个条目，会让标记的循环与这一个错开。
-pub const DASH_FALL: [char; 5] = ['▀', '▀', '█', '▄', '▄'];
-
-/// 短横**落到** `phase` 那一步之后的身份行 —— 一次运行进行中时左栏那行文字显示的东西。
-///
-/// 它是**从** [`identity`] 建出来的、而不是在它旁边另建一个，于是 crate 的名字与版本只有
-/// 一个拼写：`scripts/tui-startup-check.py` 与紧邻这个函数的测试都锚在那条字符串上，而在
-/// 这里另造一个 `fs-agent …` 就是多了一样要跟着同步的东西。`fs-agent <version>` 正好只有
-/// 一条短横；哪天不再如此，这条规则就得换一个，而那会在测试里显出来。
-pub fn identity_falling(phase: usize) -> String {
-    let dash = DASH_FALL[phase % DASH_FALL.len()].to_string();
-    identity().replacen('-', &dash, 1)
+    parts.join(SEP)
 }
 
 /// 宽档左栏带的那个标记，五行块状明暗。
@@ -1607,9 +1585,7 @@ pub fn identity_falling(phase: usize) -> String {
 /// 事。
 ///
 /// 标记拼出 `fs-agent` —— 前面是分叉合成的 `fs`（「两叉一茎」，见 `CONTEXT.md`），后面
-/// 跟程序名 —— 像素网格是维护者挑的那一个。中间那条短横是它八个字形单元里的第三个，也是
-/// 画家唯一自己画的那个字形：一次运行进行中时它往下落
-/// （`.scratch/tui-input-pulse/spec.md` §2）。
+/// 跟程序名 —— 像素网格是维护者挑的那一个。中间那条短横是它八个字形单元里的第三个。
 pub fn logo_lines() -> [&'static str; 5] {
     [
         "▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀",
@@ -1618,11 +1594,6 @@ pub fn logo_lines() -> [&'static str; 5] {
         "░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░ ",
         "▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀ ",
     ]
-}
-
-/// 模式作为一个字段：状态行显示的那个，也是从前头部那行事实显示过的那个。
-pub fn mode_field(mode: Mode) -> String {
-    format!("模式 {}", mode_label(mode))
 }
 
 // ---------------------------------------------------------------------------
@@ -1639,10 +1610,60 @@ pub const TAB_TODO: &str = "todo";
 pub const TAB_TRACE: &str = "轨迹";
 pub const TAB_FILES: &str = "文件";
 
+// ---------------------------------------------------------------------------
+// 符号表与字符级间距
+// （`.scratch/tui-visual-language/spec.md` §12–§15）
+//
+// 一个语义一个具名常量。**字形一个都不改**：表里每一个都早已在仓库里上过屏。
+// ---------------------------------------------------------------------------
+
+/// **有折起来的内容**：这一行点得开。思考行、工具行、上下文注入行、轨迹视图的消息行都有；
+/// **对话视图的消息行不给** —— 它已经把全文显出来了。
+///
+/// **双义**：同一个字形在 todo 页里是「进行中」（[`TODO_IN_PROGRESS`]）。两处靠**区域**区分
+/// —— todo 页整页都是 todo 行，不会与转录混。这条写在表里，别让它当暗知识。
+pub const FOLDABLE: &str = "▸";
+
 /// 一条 `todo` 项那一行开头的三个字形：等待、在做、做完。
 pub const TODO_PENDING: &str = "☐";
-pub const TODO_IN_PROGRESS: &str = "▸";
+pub const TODO_IN_PROGRESS: &str = FOLDABLE;
 pub const TODO_COMPLETED: &str = "✓";
+
+/// 提示符。它后面那个空格算在这个常量里 —— 布局留出的列数就是它的宽度
+/// （[`crate::render::editor::prompt_columns`]），所以不另立一个「提示符 + 空格」。
+pub const PROMPT: &str = "❱ ";
+
+/// 回合条三格：焦点、普通、这一列没地方放的单位。
+pub const RAIL_FOCUS: &str = "┃";
+pub const RAIL_CELL: &str = "┊";
+pub const RAIL_TRUNCATED: &str = "⋮";
+
+/// 问卷选项的四个标记：多选已选 / 多选未选 / 单选已选 / 单选未选。光标（`>`）与它们正交 ——
+/// 光标说 `Enter` 会确认哪个，标记说哪些被选中了。
+pub const CHOICE_CHECKED: &str = "[x]";
+pub const CHOICE_UNCHECKED: &str = "[ ]";
+pub const CHOICE_PICKED: &str = "●";
+pub const CHOICE_UNPICKED: &str = "○";
+
+/// 行内截断：一行放不下时由它收尾。
+pub const ELLIPSIS: &str = "…";
+
+/// 占比条的满格与空格。它归符号表，因为它是屏幕上的一格字形，而不是某个模块私有的画法。
+pub const BAR_FULL: char = '▓';
+pub const BAR_EMPTY: char = '░';
+
+/// 状态行四段之间的那条线。**是框架那套虚线**（`┆`），不是内容那套实线 —— 它按
+/// `.scratch/tui-visual-language/spec.md` §12 归符号表，也归 [`CHROME`](super::palette::CHROME)。
+pub const STATUS_SEPARATOR: &str = "┆";
+
+/// 附属行的缩进：2 格。界面上只有这一个字符级的「往后退一档」。
+pub const INDENT: &str = "  ";
+
+/// 并列控件之间的距离：3 格（按钮之间，以及问卷页脚的进度与第一个按钮之间）。
+pub const GAP: &str = "   ";
+
+/// 一行里各条目的分隔。
+pub const SEP: &str = " · ";
 
 /// 一项那一行开头的字形。一张 [`mode_label`] 那样的表，于是「哪个字形是什么意思」只有
 /// 一个归宿，左栏那一页自己一个都不留。
@@ -1670,53 +1691,114 @@ pub fn tab_placeholder() -> &'static str {
     "此页尚未实现（另有票在跟）"
 }
 
-/// 状态行里模型窗口有多满的短形式：`上下文 6%`，或者在还没有一次调用报出输入 token 之前
-/// 是 `上下文 —`。
+/// 状态行里模型窗口有多满的那个**值**：`6%`，或者在还没有一次调用报出输入 token 之前是
+/// `—`。标签由 [`status_row`] 补。
 ///
-/// 短，是因为状态行那一条线要与模型、模式共享：带上限与括号里百分比的完整那一对是左栏的
-/// 字段（spec §5）。
-pub fn context_share(used: Option<u64>, usable: u64) -> String {
+/// 短，是因为状态行那一条线要与模型、模式、状态词共享：带上限与括号里百分比的完整那一对是
+/// 左栏的字段（spec §5）。
+pub fn context_share_value(used: Option<u64>, usable: u64) -> String {
     match used {
-        Some(used) => format!(
-            "{} {}%",
-            PANEL_CONTEXT,
-            used.saturating_mul(100) / usable.max(1)
-        ),
-        None => format!("{} {}", PANEL_CONTEXT, PANEL_UNKNOWN),
+        Some(used) => format!("{}%", used.saturating_mul(100) / usable.max(1)),
+        None => PANEL_UNKNOWN.to_owned(),
     }
 }
 
-/// 状态行：`模型 … │ 模式 … │ 上下文 …%`，宽度阶梯折在里面。
+/// 状态行里一段的角色（`.scratch/tui-visual-language/spec.md` §17）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    /// 段里的标签：退后一档。
+    Label,
+    /// 段里的值：正文档。
+    Value,
+    /// 段与段之间那条线。
+    Separator,
+}
+
+/// 状态行里的一段：`kind` 说它该长什么样，`text` 是它写什么。
 ///
-/// 三档，而顺序才是重点：**模型**先走（它最长，且在一次会话里不变），然后是**模式**，剩下
-/// 的是唯一回答「还有多少地方」的那个读数 —— 仍然带着它的标签，于是一个光秃秃的 `6%`
-/// 永远不会毫无解释地出现（spec §2、§5）。
+/// 分成两件事，是因为「标签退后、值靠前、分隔符只是线」这条层级只有画家能兑现，而宽度阶梯
+/// 只有这里知道 —— 一个纯文本的 `String` 到不了前者（§17）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusPart {
+    pub kind: StatusKind,
+    pub text: String,
+}
+
+impl StatusPart {
+    fn label(text: impl Into<String>) -> Self {
+        Self {
+            kind: StatusKind::Label,
+            text: text.into(),
+        }
+    }
+
+    fn value(text: impl Into<String>) -> Self {
+        Self {
+            kind: StatusKind::Value,
+            text: text.into(),
+        }
+    }
+
+    fn separator(text: impl Into<String>) -> Self {
+        Self {
+            kind: StatusKind::Separator,
+            text: text.into(),
+        }
+    }
+}
+
+/// 状态行：`模型 X │ Y │ 上下文 n% │ 状态词`，宽度阶梯折在里面。
+///
+/// 四段、三档角色：标签退后、值靠前、分隔符只是线（§17）。**标签只有 `模型` 与 `上下文`
+/// 两个**：模式的名字自己就是一个值（prototype 的 `模型 kimi │ 询问 │ 上下文 42%`）。
+///
+/// 降级顺序是**先丢模型、再丢模式，最后剩「上下文 + 状态词」** —— 「在跑」最后才丢，它住在
+/// 永远在场的那一行上（§16–§18）。
 ///
 /// 刻意**没有**一档是把整行拿走。那需要的宽度比 [`super::layout::MIN_WIDTH`] 还窄，所以
 /// 这一行永远会画；一个连最后一档都放不下的 `width` 由画家去截。
-pub fn status_row(model: &str, mode: &str, share: &str, width: usize) -> String {
-    let segment = |text: &str| format!(" {text} ");
-    let full = format!(
-        "{}│{}│{}",
-        segment(&format!("{PANEL_MODEL} {model}")),
-        segment(mode),
-        segment(share)
-    );
-    if usize::from(full.cell_width()) <= width {
-        return full;
+pub fn status_row(
+    model: &str,
+    mode: Mode,
+    share: &str,
+    word: &str,
+    width: usize,
+) -> Vec<StatusPart> {
+    // 一段 = 标签 + 值；模式与状态词两段只有值。段与段之间是 ` │ `，整行前面留一格。
+    let segments: [Vec<StatusPart>; 4] = [
+        vec![
+            StatusPart::label(format!("{PANEL_MODEL} ")),
+            StatusPart::value(model),
+        ],
+        vec![StatusPart::value(mode_label(mode))],
+        vec![
+            StatusPart::label(format!("{PANEL_CONTEXT} ")),
+            StatusPart::value(share),
+        ],
+        vec![StatusPart::value(word)],
+    ];
+    let row = |segments: &[Vec<StatusPart>]| {
+        let mut parts = vec![StatusPart::value(" ")];
+        for (index, segment) in segments.iter().enumerate() {
+            if index > 0 {
+                parts.push(StatusPart::separator(format!(" {STATUS_SEPARATOR} ")));
+            }
+            parts.extend(segment.iter().cloned());
+        }
+        parts
+    };
+    for rung in [&segments[..], &segments[1..], &segments[2..]] {
+        let parts = row(rung);
+        let columns: usize = parts
+            .iter()
+            .map(|part| part.text.cell_width() as usize)
+            .sum();
+        if columns <= width {
+            return parts;
+        }
     }
-    let two = format!("{}│{}", segment(mode), segment(share));
-    if usize::from(two.cell_width()) <= width {
-        return two;
-    }
-    segment(share)
+    row(&segments[2..])
 }
-
-/// 回合条上的三个字形：一个普通单位、焦点那个单位，以及这一列没地方放的单位所用的标记
-/// （spec §4）。
-pub const RAIL_CELL: &str = "┊";
-pub const RAIL_FOCUS: &str = "┃";
-pub const RAIL_TRUNCATED: &str = "⋮";
 
 /// 一场会话跑在其下的 `Mode`，用中文点名。
 pub fn mode_label(mode: Mode) -> &'static str {
@@ -2014,7 +2096,7 @@ pub fn unknown_command(command: &str, skills: &[&str]) -> String {
         .map(|name| format!("/{name}"))
         .collect();
     if skills.len() > LISTED {
-        names.push("…".to_owned());
+        names.push(ELLIPSIS.to_owned());
     }
     format!(
         "未知命令 {command}（{built_ins}；技能：{}）",

@@ -18,6 +18,8 @@ use std::sync::OnceLock;
 use ratatui::style::{Color, Modifier, Style};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+use super::palette;
+
 /// 这个渲染器认得的 capture 名。查询点到、而这里没有的名字退回纯文本，这就是为什么一次
 /// 语法更新弄不坏渲染 —— 它只能让东西不上色。
 const CAPTURES: &[&str] = &[
@@ -121,6 +123,9 @@ impl Class {
     }
 
     /// 这一类的 ANSI SGR 前缀；不上色时是 `""`。
+    ///
+    /// 这是**另一张表**：它服务 diff 那套 ANSI 组合（[`ansi_line`]），不是 TUI 色板
+    /// （[`Class::style`]）。两者故意各写各的 —— 改一处观感读色板，改纯文本输出读这里。
     pub fn ansi(self) -> &'static str {
         match self {
             Class::Plain => "",
@@ -136,18 +141,23 @@ impl Class {
     }
 
     /// 这一类的 TUI 样式。
+    ///
+    /// 取色归色板的**内容域**那一节（[`super::palette`] §3）：这些值即使与界面域某一条相同，
+    /// 也是刻意的撞值 —— 代码块内部上下文明确，`Green` 既是「成功」又是「字符串」不会被
+    /// 读混。
     pub fn style(self) -> Style {
         match self {
             Class::Plain | Class::Variable => Style::default(),
-            Class::Keyword => Style::default().fg(Color::Magenta),
-            Class::Function => Style::default().fg(Color::Blue),
-            Class::Type => Style::default().fg(Color::Cyan),
-            Class::String => Style::default().fg(Color::Green),
+            Class::Keyword => Style::default().fg(palette::CODE_KEYWORD),
+            Class::Function => Style::default().fg(palette::CODE_FUNCTION),
+            Class::Type => Style::default().fg(palette::CODE_TYPE),
+            Class::String => Style::default().fg(palette::CODE_STRING),
             Class::Comment => Style::default()
-                .fg(Color::DarkGray)
+                .fg(palette::CODE_QUIET)
                 .add_modifier(Modifier::ITALIC),
-            Class::Number | Class::Constant => Style::default().fg(Color::Yellow),
-            Class::Operator | Class::Punctuation => Style::default().fg(Color::Gray),
+            Class::Number | Class::Constant => Style::default().fg(palette::CODE_NUMBER),
+            // 标点与注释复用内容域同一档，不再单立两个灰值（§16）。
+            Class::Operator | Class::Punctuation => Style::default().fg(palette::CODE_QUIET),
         }
     }
 }

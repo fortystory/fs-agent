@@ -8,17 +8,16 @@
 //!
 //! 这一页到底画不画、它的几行放得下，由几何说了算（`layout::Regions::sidebar_page`，
 //! 它的高度**就是**那个数）。一行的样子来自 prototype：一条与最宽标签同宽的标签列、一个
-//! 空格，然后是一个数字靠右、文字靠左填进去的值。丢东西由宽度与高度决定：百分比与缓存行
-//! 按宽度走，尾部那些行按高度走（它们排在最后，段落把它们裁掉）。两条按宽度丢的路从外壳
-//! 自己那几档都到不了 —— 窄档下 21 列正好是最宽的那个值需要的 —— 留着它们，只是它们一
-//! 直以来的那层保险。
+//! 空格，然后是一个数字靠右、文字靠左填进去的值；有占比的行在值前面多一条**占列**的块字符
+//! 条。丢东西只看高度：这些行按重要性排好，尾部那些行排在最后，段落把它们裁掉。
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::events::Usage;
 
+use super::palette;
 use super::transcript::Block;
 use super::tui::SessionFacts;
 use super::width::{text_columns, truncate_columns};
@@ -136,9 +135,10 @@ impl Panel {
             true,
             None,
         ));
-        if text_columns(&cache) <= value_columns {
-            rows.push((wording::PANEL_CACHE, cache, true, None));
-        }
+        // 缓存那一行总是加进来：它**没有**按宽度丢的那条路 —— 那一条从外壳自己那几档都到不了
+        // （最宽的缓存拆分 17 列，短于真实的 21 列值列），本 effort 把它删了
+        // （`.scratch/tui-visual-language/issues/14` §5）。放不下时由 `fit()` 的省略号收尾。
+        rows.push((wording::PANEL_CACHE, cache, true, None));
         // 高度在这里不用裁：这些行按重要性排好了，段落会把塞不进面板内容区的东西裁掉，
         // 所以走掉的正是最后那些行。
         rows.iter()
@@ -163,40 +163,55 @@ fn label_columns() -> usize {
     .unwrap_or(0)
 }
 
-/// 面板的一行：标签列里一个暗标签，然后是填满剩余空间的值 —— 数字靠右，文字靠左。
+/// 面板的一行：标签列里一个静音标签，然后是填充的占比条（只有有占比的行）与值 —— 数字靠右，
+/// 文字靠左。
 ///
-/// `share` 是这一行填满了多少（`0.0`…`1.0`，超过 1 表示已经撞顶）：给了就在值列的**左起
-/// 前 N 列**上底色，`N = ceil(share × 值列宽)`。底色**不占列**，所以列宽计算与降级链一点
-/// 都不用动；标签与中间那个空格不涂，右对齐的前导留白算在值列里 —— 于是色条总是从值列
-/// 左缘起，不跟着数字跑（`.scratch/usage-stats-format/spec.md` §3）。
+/// `share` 是这一行填满了多少（`0.0`…`1.0`，超过 1 表示已经撞顶）：给了就画一条 [`BAR_COLUMNS`]
+/// 列宽的块字符条（`▓` 满 / `░` 空，前景静音档），`N = ceil(share × 条宽)`。条**占列**，
+/// 所以值列要先给它让出地方（`.scratch/tui-visual-language/issues/07` 决定 3）。
 fn row(label: &str, value: &str, width: usize, right: bool, share: Option<f64>) -> Line<'static> {
     let labels = label_columns();
     let label = pad_right(&fit(label, labels), labels);
-    let value = fit(value, width);
+    // 数字比条值钱：值先拿到它需要的那些列，剩下的才给条，而条最多 [`BAR_COLUMNS`] 列。
+    // 于是宽档下两张条一样长（值都短于余地），窄档下条自己缩短，读数一个字都不丢。
+    let needed = text_columns(value).min(width);
+    let (value_width, bar_columns) = match share {
+        Some(_) if width > needed + 1 => {
+            let bar = BAR_COLUMNS.min(width - needed - 1);
+            (width - bar - 1, bar)
+        }
+        _ => (width, 0),
+    };
+    let value = fit(value, value_width);
     let value = if right {
-        pad_left(&value, width)
+        pad_left(&value, value_width)
     } else {
-        pad_right(&value, width)
+        pad_right(&value, value_width)
     };
-    let Some(share) = share else {
-        return Line::from(vec![
-            Span::styled(label, Style::default().fg(Color::DarkGray)),
-            Span::raw(" "),
-            Span::raw(value),
-        ]);
-    };
-    // `ceil` 保证占比一大于零就至少有一列，`min(width)` 保证撞顶时不越出值列；按显示列切，
-    // 免得从 `万` / `（` 这样的宽字素中间劈开。
-    let filled = ((share.clamp(0.0, 1.0) * width as f64).ceil() as usize).min(width);
-    let head = truncate_columns(&value, filled);
-    let tail = value[head.len()..].to_owned();
-    Line::from(vec![
-        Span::styled(label, Style::default().fg(Color::DarkGray)),
+    let mut spans = vec![
+        Span::styled(label, Style::default().fg(palette::MUTED)),
         Span::raw(" "),
-        Span::styled(head, Style::default().bg(Color::DarkGray)),
-        Span::raw(tail),
-    ])
+    ];
+    if bar_columns > 0 {
+        // `ceil` 保证占比一大于零就至少有一格，`min(bar_columns)` 保证撞顶时不越出条。
+        let share = share.unwrap_or(0.0).clamp(0.0, 1.0);
+        let filled = ((share * bar_columns as f64).ceil() as usize).min(bar_columns);
+        // 字形归符号表（`wording::BAR_FULL` / `BAR_EMPTY`）。
+        let bar = format!(
+            "{}{}",
+            wording::BAR_FULL.to_string().repeat(filled),
+            wording::BAR_EMPTY.to_string().repeat(bar_columns - filled)
+        );
+        spans.push(Span::styled(bar, Style::default().fg(palette::MUTED)));
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::raw(value));
+    Line::from(spans)
 }
+
+/// 占比条占的列数上限（`.scratch/tui-visual-language/issues/07` 决定 3：一共 10 列的读数区）。
+/// 余地不够时条自己缩短，最低到一格 —— 数字先得到它要的列。
+const BAR_COLUMNS: usize = 10;
 
 /// 把 `text` 适配到 `width` 列。
 ///
@@ -211,7 +226,7 @@ fn fit(text: &str, width: usize) -> String {
         return bare;
     }
     let mut cut = truncate_columns(&bare, width.saturating_sub(1));
-    cut.push('…');
+    cut.push_str(wording::ELLIPSIS);
     cut
 }
 

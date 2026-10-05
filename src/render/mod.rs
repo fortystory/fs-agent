@@ -10,7 +10,7 @@
 //! * [`headless`] —— 机器模式。它的纯粹性是结构性的：它只往两个显式的写出口写，而
 //!   `stdout` 只收最终产物，别的什么都不收（票 01 的回归断言）。
 //! * [`plain`] —— 给管道或简单终端看的人类转录。
-//! * [`tui`] —— ratatui 界面：alt screen 上一条全高左栏与一条主列，中间一条竖虚线
+//! * [`tui`] —— ratatui 界面：alt screen 上一条左栏与一条主列，中间一条竖虚线
 //!   （ADR 0002；外面那圈框已经拆掉，`.scratch/tui-chrome/spec.md` §1）。它占着键盘，
 //!   并把转录养在自己的滚动缓冲里。
 //!
@@ -28,6 +28,7 @@ pub mod highlight;
 pub mod input;
 pub mod layout;
 pub mod markdown;
+pub mod palette;
 pub mod pane;
 pub mod panel;
 pub mod plain;
@@ -57,7 +58,7 @@ pub use todo::TodoPanel;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
 pub use tui::{
     draw_frame, render_block, render_block_uncoloured, Key, SessionFacts, SpeakerColors, Tui,
-    TuiOptions, TuiState, PULSE_PALETTE, TOKEN_COMMAND, TOKEN_REFERENCE,
+    TuiOptions, TuiState, TOKEN_COMMAND, TOKEN_REFERENCE,
 };
 
 /// 一个慢消费者开始丢事件之前，能缓冲多少个渲染事件。丢掉一个增量是输出降级，绝不是

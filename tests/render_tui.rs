@@ -9,6 +9,7 @@ use fs_agent::events::{
     ToolCallId,
 };
 use fs_agent::permissions::{Answer, PermissionRequest};
+use fs_agent::render::palette;
 use fs_agent::render::{
     pane, render_block_uncoloured, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
     Key, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
@@ -71,15 +72,15 @@ fn state_running() -> TuiState {
 }
 
 #[test]
-fn the_pulse_moves_only_while_a_run_is_in_flight() {
-    // 时钟的那一帧就是提示符的颜色，而提示符只在 agent 干活的时候动：
-    // 空闲的一次 tick 连一帧都不该要，否则打字的人手底下那个
-    // 颜色会一直动（`.scratch/tui-input-pulse/spec.md` §2b，票 09 ——
-    // 票 08 是反过来的，理由是「什么都没跑的时候提示符也在屏幕上」）。
+fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
+    // 时钟的那一帧既驱动提示符的色相，也驱动状态行那个字形循环
+    // （`.scratch/tui-visual-language/spec.md` §30–§32）。票 09 曾让空闲的 tick「连一帧都不该
+    // 要」；§32 推翻了它：动的不再是提示符（空闲时它仍歇在帧 0 的颜色上），而是状态词前面
+    // 那个字形 —— 那是新的一条信息通道，不是给静态元素加装饰。代价是空闲不再零唤醒。
     let mut state = new_state();
     state.mark_clean();
     state.tick();
-    assert!(!state.is_dirty(), "空闲的一次 tick 不是一帧");
+    assert!(state.is_dirty(), "空闲的一次 tick 也要下一帧：字形在动");
 
     state.request(ConsoleRequest::RunState { running: true });
     state.mark_clean();
@@ -89,7 +90,26 @@ fn the_pulse_moves_only_while_a_run_is_in_flight() {
     state.request(ConsoleRequest::RunState { running: false });
     state.mark_clean();
     state.tick();
-    assert!(!state.is_dirty(), "而这台时钟随运行一起停");
+    assert!(state.is_dirty(), "这台时钟不再随运行一起停");
+}
+
+/// 字形循环的速率：运行中每 8 帧换一格，空闲每 32 帧 —— 同一个时钟，两种速度。
+#[test]
+fn the_status_glyph_changes_every_eight_frames_running_and_thirty_two_idle() {
+    use fs_agent::render::wording;
+
+    assert_eq!(wording::status_spinner(0, true), "◐");
+    assert_eq!(wording::status_spinner(7, true), "◐");
+    assert_eq!(wording::status_spinner(8, true), "◓");
+    assert_eq!(wording::status_spinner(16, true), "◑");
+    assert_eq!(wording::status_spinner(24, true), "◒");
+    assert_eq!(wording::status_spinner(32, true), "◐", "一圈之后回到起点");
+
+    assert_eq!(wording::status_spinner(0, false), "◐");
+    assert_eq!(wording::status_spinner(31, false), "◐", "空闲慢下来");
+    assert_eq!(wording::status_spinner(32, false), "◓");
+    assert_eq!(wording::status_spinner(96, false), "◒");
+    assert_eq!(wording::status_spinner(128, false), "◐");
 }
 
 #[test]
@@ -484,11 +504,12 @@ fn a_completed_turn_and_an_aborted_one_render_in_different_colors() {
         reason: StopReason::Error,
     });
     // 这一行是两段 span 拼的 `[name] text`：名字带发言者色、
-    // 正文带严重性，所以严重性断言在第二段上。
+    // 正文带严重性，所以严重性断言在第二段上。`Good` 与 `Note` 退成静音档 —— 正常完成不再
+    // 抢注意力，只有出问题时屏幕才亮（`.scratch/tui-visual-language/spec.md` §4、§6）。
     for (line, color) in [
-        (&good[0], Color::Green),
-        (&aborted[0], Color::Yellow),
-        (&bad[0], Color::Red),
+        (&good[0], palette::MUTED),
+        (&aborted[0], palette::WARN),
+        (&bad[0], palette::BAD),
     ] {
         assert_eq!(
             line.spans[1].style.fg,
@@ -496,8 +517,8 @@ fn a_completed_turn_and_an_aborted_one_render_in_different_colors() {
             "正文保持严重性：{line:?}"
         );
     }
-    // 名册为空时每个名字都是叙述灰，绝不是严重性色。
-    assert_eq!(good[0].spans[0].style.fg, Some(Color::DarkGray));
+    // 名册为空时每个名字与「系统」同一种灰，绝不是严重性色。
+    assert_eq!(good[0].spans[0].style.fg, Some(palette::SYSTEM));
 }
 
 #[test]
@@ -567,6 +588,30 @@ fn a_speakers_name_is_drawn_in_its_role_colour() {
         name(vec![Block::Notice(String::new())], &["kimi", "claude"]),
         Some(Color::DarkGray),
         "没有发言者的行保持叙述灰"
+    );
+    assert_eq!(
+        name(
+            vec![Block::TurnStarted {
+                speaker: SpeakerId::System,
+                iteration: 1,
+            }],
+            &["kimi", "claude"],
+        ),
+        Some(palette::SYSTEM),
+        "系统色是冻结的那一档"
+    );
+    // 「没有名字册」与「系统」用**同一种灰**（用户故事 5）：同一个语义不该在屏幕上出现
+    // 两种样子。
+    assert_eq!(
+        render_block_uncoloured(&Block::TurnStarted {
+            speaker: SpeakerId::Debater("kimi".into()),
+            iteration: 1,
+        })[0]
+            .spans[0]
+            .style
+            .fg,
+        Some(palette::SYSTEM),
+        "没有名册时每个名字都用系统那一种灰"
     );
 
     // 名册没点名的讨论者 —— 会话中途 `/discuss` 那种情况 —— 取
@@ -736,10 +781,12 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
         source: DecisionSource::User,
         reason: Some("mode ask".to_owned()),
     });
+    // 叙述读的是**正文那一段**（第二段）；名字那一段是发言者色，不是叙述色
+    // （`.scratch/tui-visual-language/spec.md` §6）。
     assert_eq!(
-        verdict[0].spans[0].style.fg,
-        Some(Color::DarkGray),
-        "权限裁决是叙述"
+        verdict[0].spans[1].style.fg,
+        Some(palette::MUTED),
+        "权限裁决的正文是叙述"
     );
 
     let asked = render_block_uncoloured(&Block::PermissionAsked {
@@ -747,7 +794,7 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
         tool_name: Some("bash".to_owned()),
         args: serde_json::json!({"command": "ls"}),
     });
-    assert_eq!(asked[0].spans[0].style.fg, Some(Color::DarkGray));
+    assert_eq!(asked[0].spans[1].style.fg, Some(palette::MUTED));
 
     let answer = render_block_uncoloured(&Block::Message {
         speaker: kimi(),
@@ -758,7 +805,7 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
     // 第一行是名字，正文在它下面一行（2026-10-05 的排版修订）。
     assert_ne!(
         answer[1].spans[0].style.fg,
-        Some(Color::DarkGray),
+        Some(palette::MUTED),
         "答案正文没有调暗"
     );
 }

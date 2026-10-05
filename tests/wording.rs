@@ -283,7 +283,6 @@ fn the_input_line_prompts_read_in_chinese() {
     assert_eq!(wording::mode_label(Mode::Ask), "询问");
     assert_eq!(wording::mode_label(Mode::Workspace), "工作区");
     assert_eq!(wording::mode_label(Mode::Auto), "自动");
-    assert_eq!(wording::mode_field(Mode::Auto), "模式 自动");
     assert!(
         wording::unknown_mode("plan").contains("plan"),
         "这条拒绝引用了当时写下的东西"
@@ -401,10 +400,10 @@ fn bracketed_hints_read_in_chinese_with_their_enums_explained() {
 }
 
 #[test]
-fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
-    // 够宽：先状态词，再键位提示，出路放最后。
+fn the_status_line_keeps_the_way_out_and_fills_hints_from_the_front() {
+    // 够宽：六条键位提示都在，出口放最后 —— 而状态词**不在**这里，它住在状态行的最后一段
+    // （`.scratch/tui-visual-language/spec.md` §18）。
     let wide = wording::status_line(false, 200, false);
-    assert!(wide.starts_with("就绪 · "), "{wide}");
     for hint in [
         "enter 发送",
         "ctrl-j 换行",
@@ -417,38 +416,20 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
         assert!(wide.contains(hint), "{wide}");
     }
     assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
+    assert!(!wide.contains("就绪"), "状态词不在这里：{wide}");
 
-    // 28 列装得下状态词与出路；31 列时发送提示与出路装得下，
-    // 而让位的是状态词 —— 出路比它过去宽了七列，
-    // 正是这一点挪动了这一档。
+    // 阶梯按画出来的宽度实测：空闲的出口是 18 列，一条提示连起来要 31 列。
     assert_eq!(
-        wording::status_line(false, 28, false),
-        "就绪 · ctrl-c/ctrl-d 退出"
+        wording::status_line(false, 30, false),
+        wording::EXIT_HINT_IDLE
     );
     assert_eq!(
         wording::status_line(false, 31, false),
         "enter 发送 · ctrl-c/ctrl-d 退出"
     );
-    // 45 列装得下前两条提示与出路、装不下状态词，所以窄终端上
-    // 换行键仍然可见。
     assert_eq!(
         wording::status_line(false, 45, false),
         "enter 发送 · ctrl-j 换行 · ctrl-c/ctrl-d 退出"
-    );
-    // 80 列是状态词能装进那五条提示前面的地方；那条阶梯的
-    // 渲染侧断言在 `tests/render_layout.rs` 里。
-    assert_eq!(
-        wording::status_line(false, 80, false),
-        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
-    );
-    // 比任何提示都窄：剩下的只有出路。
-    assert_eq!(
-        wording::status_line(true, 8, false),
-        wording::EXIT_HINT_BUSY
-    );
-    assert_eq!(
-        wording::status_line(false, 3, false),
-        wording::EXIT_HINT_IDLE
     );
     // 只有空闲行会宣传 `ctrl-d`：一次运行进行中的时候它什么都不做，
     // 所以点它的名正是提示行绝不能做的那件事。
@@ -459,6 +440,15 @@ fn the_status_line_keeps_the_way_out_and_gives_up_the_state_word_when_narrow() {
     assert!(
         wording::status_line(false, 200, false).contains("ctrl-d"),
         "空闲行会宣传"
+    );
+    // 比任何提示都窄：剩下的只有出路。
+    assert_eq!(
+        wording::status_line(true, 8, false),
+        wording::EXIT_HINT_BUSY
+    );
+    assert_eq!(
+        wording::status_line(false, 3, false),
+        wording::EXIT_HINT_IDLE
     );
 }
 
@@ -483,11 +473,11 @@ fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
         "100 列还看不到它：{narrow}"
     );
 
-    // 忙碌行的出口短七列（`ctrl-c 退出` 对 `ctrl-c/ctrl-d 退出`），所以在同一个列宽上
+    // 忙碌行的出口短八列（`ctrl-c 退出` 对 `ctrl-c/ctrl-d 退出`），所以在同一个列宽上
     // 它比空闲行更早看到这一条 —— 同一条阶梯，两条出口。
-    let busy = wording::status_line(true, 97, false);
-    assert!(busy.contains("ctrl-o 左栏"), "忙碌行在 97 列上：{busy}");
-    let idle_here = wording::status_line(false, 97, false);
+    let busy = wording::status_line(true, 99, false);
+    assert!(busy.contains("ctrl-o 左栏"), "忙碌行在 99 列上：{busy}");
+    let idle_here = wording::status_line(false, 99, false);
     assert!(
         !idle_here.contains("ctrl-o 左栏"),
         "空闲行同宽还看不到：{idle_here}"
@@ -500,24 +490,23 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
     // 所以 `enter 发送` 与交互循环的模式手势都不在候选里。
     let wide = wording::viewer_status_line(false, 200, false);
     assert_eq!(
-        wide, "就绪 · esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出",
+        wide, "esc 取消 · PgUp/PgDn 滚动 · ctrl-c/ctrl-d 退出",
         "整条查看器行"
     );
     assert!(wide.ends_with(wording::EXIT_HINT_IDLE), "{wide}");
 
-    // 同一条阶梯：出路活下来，状态词先让位。
+    // 同一条阶梯：提示从前往后填，出口永远预留，装不下下一条就停。
     assert_eq!(
         wording::viewer_status_line(false, 28, false),
-        "就绪 · ctrl-c/ctrl-d 退出"
+        wording::EXIT_HINT_IDLE
     );
     assert_eq!(
-        wording::viewer_status_line(false, 31, false),
+        wording::viewer_status_line(false, 29, false),
         "esc 取消 · ctrl-c/ctrl-d 退出"
     );
 
     // 忙就读作忙 —— 而一次运行进行中的时候 `ctrl-d` 被忽略，所以
     // 查看器行回到朴素的 `ctrl-c 退出`。
-    assert!(wording::viewer_status_line(true, 200, false).starts_with("工作中 · "));
     assert!(!wording::viewer_status_line(true, 200, false).contains("ctrl-d"));
     assert_eq!(
         wording::viewer_status_line(true, 3, false),
@@ -527,41 +516,37 @@ fn the_viewer_status_line_hints_only_at_what_a_viewer_can_do() {
 
 #[test]
 fn the_hint_ladder_is_the_one_the_prototype_measured() {
-    // 原型用「只有一项的出路」量出来的那些宽度（§10，票 06 §4），
-    // 于是优先级顺序一改就会在这里显出来，而不是在终端上。
-    // `w=40` 是最小值：状态词、一条提示，加上出路。
+    // 原型量出来的那些宽度（§10，票 06 §4），于是优先级顺序一改就会在这里显出来，
+    // 而不是在终端上。状态词在 `.scratch/tui-visual-language/spec.md` §18 搬去状态行之后，
+    // 这一行只填键位提示 —— 于是同一个宽度上比从前多看得见一条。
     //
-    // `ctrl-o 左栏` 进来之后下面这三档的读数**一个都没动**：它排在最末，
-    // 所以窄档最先丢的就是它，到 120 列才轮得到它
+    // `ctrl-o 左栏` 排在最末：位置就是优先级，所以窄档最先丢的就是它
     // （`.scratch/sidebar-toggle/spec.md` §4）。
     assert_eq!(
         wording::status_line(false, 40, false),
-        "就绪 · enter 发送 · ctrl-c/ctrl-d 退出"
+        "enter 发送 · ctrl-c/ctrl-d 退出"
     );
-    // 更宽的出路从 45 列起让状态词付出代价：那里第二条提示
-    // 与退出都装得下，而它装不下。
     assert_eq!(
         wording::status_line(false, 60, false),
         "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c/ctrl-d 退出"
     );
     assert_eq!(
         wording::status_line(false, 80, false),
-        "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
+        "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · ctrl-c/ctrl-d 退出"
     );
-    // 忙把状态词与出路对调：60 列下输掉的那条提示仍然是
-    // `shift+tab 模式`，而 `ctrl-c 退出` —— 不带 `ctrl-d` —— 在那里。
+    // 忙那一档的出口短八列，所以同一个列宽上它多装得下一条。
     assert_eq!(
         wording::status_line(true, 60, false),
-        "工作中 · enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
+        "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
-    let full = "就绪 · enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
+    let full = "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
     assert_eq!(wording::status_line(false, 120, false), full);
     // 在最大宽度上行是稳定的：再没什么可买的了。
     assert_eq!(wording::status_line(false, 174, false), full);
-    // 忙对调的是状态词与退出，不是阶梯。
+    // 忙只换出口那一段，不换阶梯。
     assert_eq!(
-        wording::status_line(true, 120, false).replace("工作中", "就绪"),
-        full.replace("ctrl-c/ctrl-d 退出", "ctrl-c 退出")
+        wording::status_line(true, 120, false).replace("ctrl-c 退出", "ctrl-c/ctrl-d 退出"),
+        full
     );
 }
 
@@ -660,47 +645,6 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
     assert_eq!(
         wording::identity(),
         format!("fs-agent {}", env!("CARGO_PKG_VERSION"))
-    );
-}
-
-#[test]
-fn the_identities_dash_falls_without_moving_anything_else() {
-    // 窄档上的忙碌信号（`.scratch/tui-input-pulse/spec.md` §2）：`fs-agent`
-    // 里那个短横是唯一会变的字符，正是这一点让这一行读起来像
-    // 「在干活」，而不是像另一个字符串。版本与 crate 名都来自
-    // `identity()`，所以启动检查的那个锚与这条下落的行
-    // 不可能漂开。
-    let identity = wording::identity();
-    let mut seen = Vec::new();
-    for phase in 0..wording::DASH_FALL.len() {
-        let fallen = wording::identity_falling(phase);
-        assert_eq!(
-            fallen.replace(wording::DASH_FALL[phase], "-"),
-            identity,
-            "第 {phase} 帧与空闲身份只差那个短横：{fallen}"
-        );
-        seen.push(fallen);
-    }
-    // 一次下落五帧，而每一帧都是横条、不是转轮：高度
-    // 从高走到低再走回高，一套旋转字形是过不了这一关的。
-    let heights: Vec<char> = seen
-        .iter()
-        .map(|line| line.chars().nth(2).unwrap())
-        .collect();
-    assert_eq!(
-        heights,
-        wording::DASH_FALL.to_vec(),
-        "这些帧按顺序下落：{seen:?}"
-    );
-    assert!(
-        heights.iter().all(|glyph| matches!(glyph, '▀' | '█' | '▄')),
-        "而每一帧都是某个高度的横条：{seen:?}"
-    );
-    // 下落是闭合的：越过末端的相位会绕回去而不是 panic，因为
-    // 它来自的那个脉冲计数器只会增长。
-    assert_eq!(
-        wording::identity_falling(wording::DASH_FALL.len()),
-        wording::identity_falling(0)
     );
 }
 
@@ -1094,39 +1038,56 @@ fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
     assert_eq!(wording::RAIL_TRUNCATED, "⋮");
 }
 
+/// 状态行的纯文本：段落按顺序连起来。
+fn status_text(parts: &[wording::StatusPart]) -> String {
+    parts.iter().map(|part| part.text.as_str()).collect()
+}
+
 #[test]
 fn the_status_row_gives_up_the_model_then_the_mode_and_never_itself() {
     // 短形永远带着自己的标签，所以不会凭空冒出一个
     // 没有解释的 `6%` —— 而一次调用报出它的输入之前，它会说出来，
     // 而不是显示一个零（spec §5）。
-    assert_eq!(wording::context_share(Some(12_345), 200_000), "上下文 6%");
-    assert_eq!(wording::context_share(None, 200_000), "上下文 —");
+    assert_eq!(wording::context_share_value(Some(12_345), 200_000), "6%");
+    assert_eq!(wording::context_share_value(None, 200_000), "—");
 
     let model = "claude-sonnet-4-5";
-    let mode = wording::mode_field(Mode::Ask);
-    let share = wording::context_share(Some(12_345), 200_000);
-    // 三档，由主列真正拥有的宽度决定（spec §2）：
-    // 全都要，然后丢掉模型，然后只剩占比 —— 而它就停在那里，
-    // 因为那个足以拿掉这一行的宽度
-    // 低于终端地板。
+    let share = wording::context_share_value(Some(12_345), 200_000);
+    // 四段，降级顺序是**先丢模型、再丢模式，最后剩「上下文 + 状态词」**
+    // —— 「在跑」最后才丢（`.scratch/tui-visual-language/spec.md` §17）。
+    // 标签只有 `模型` 与 `上下文`：模式的名字自己就是一个值。
     assert_eq!(
-        wording::status_row(model, &mode, &share, 77),
-        " 模型 claude-sonnet-4-5 │ 模式 询问 │ 上下文 6% "
+        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 77)),
+        " 模型 claude-sonnet-4-5 ┆ 询问 ┆ 上下文 6% ┆ 就绪"
     );
     assert_eq!(
-        wording::status_row(model, &mode, &share, 45),
-        " 模式 询问 │ 上下文 6% ",
+        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 45)),
+        " 询问 ┆ 上下文 6% ┆ 就绪",
         "模型是第一个让位的字段"
     );
     assert_eq!(
-        wording::status_row(model, &mode, &share, 11),
-        " 上下文 6% ",
-        "接着让位的是模式"
+        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 17)),
+        " 上下文 6% ┆ 就绪",
+        "接着让位的是模式，最后剩的读数与状态词都在"
     );
     assert_eq!(
-        wording::status_row(model, &mode, &share, 4),
-        " 上下文 6% ",
-        "没有哪一档会拿掉这一行：连占比都装不下的宽度归画家去截"
+        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 4)),
+        " 上下文 6% ┆ 就绪",
+        "没有哪一档会拿掉这一行：连这一档都装不下的宽度归画家去截"
+    );
+}
+
+#[test]
+fn the_status_row_marks_labels_values_and_separators() {
+    use wording::StatusKind::{Label, Separator, Value};
+    // 行内三档：标签退后、值靠前、分隔符只是线（§17）。
+    // 整行前面那一格是留白，算一个值段。
+    let parts = wording::status_row("m", Mode::Ask, "6%", "就绪", 80);
+    let kinds: Vec<wording::StatusKind> = parts.iter().map(|part| part.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![Value, Label, Value, Separator, Value, Separator, Label, Value, Separator, Value],
+        "四段、三档：{parts:?}"
     );
 }
 

@@ -17,6 +17,7 @@ use crate::events::{
     ParticipantId, Role, RoundMode, SpeakerId, StopReason, ToolCallId, Usage,
 };
 
+use super::wording;
 use super::{DeltaKind, RenderEvent};
 
 /// 转录里一个可直接显示的单元。
@@ -474,6 +475,6 @@ pub fn truncate(text: &str, max: usize) -> String {
         return text.to_owned();
     }
     let mut out: String = text.chars().take(max).collect();
-    out.push('…');
+    out.push_str(wording::ELLIPSIS);
     out
 }

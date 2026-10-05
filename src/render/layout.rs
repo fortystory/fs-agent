@@ -4,10 +4,10 @@
 //! 拆开，正是让降级阶梯恰好只有一个家的原因 —— 渲染器里没有 —— 也让人能一口气把那些
 //! 阈值读完，而不是从四个调用点往回重建。
 //!
-//! 外壳是**一圈外框、一条全高左栏、一条主列**：外框是终端的边框，左栏放标记、页签条与
-//! 会话读数，主列自上而下堆着转录、状态行、输入区与提示行。左栏的去留由**宽度与用户意愿
-//! 相乘**决定：宽度档在这里算，意愿由调用方作为 `wanted` 传进来 —— 两者不同层，谁也不能替
-//! 谁说话（`.scratch/sidebar-toggle/spec.md` §2）。
+//! 外壳是**一条左栏、一条主列**：左栏放标记、页签条与会话读数，主列自上而下堆着转录、
+//! 状态行、输入区与提示行。四周没有外框 —— 终端自己就是边界（`.scratch/tui-chrome/spec.md`
+//! §1）。左栏的去留由**宽度与用户意愿相乘**决定：宽度档在这里算，意愿由调用方作为 `wanted`
+//! 传进来 —— 两者不同层，谁也不能替谁说话（`.scratch/sidebar-toggle/spec.md` §2）。
 
 use ratatui::layout::Rect;
 
@@ -168,6 +168,28 @@ impl Regions {
         )
     }
 
+    /// 左栏页的正文区：页宽减掉右缘永远留着的那两列。
+    ///
+    /// 轨迹页复用同一份 2 列预留，滚动条画在**最右列** —— 那里没有回合条，所以两列里用得上
+    /// 的只有一列，另一列是给「文字不因转录长高而重新折行」留的
+    /// （`.scratch/tui-visual-language/issues/07` 决定 2、`spec §21`）。
+    pub fn sidebar_page_text(&self) -> Option<Rect> {
+        self.sidebar_page.map(|page| {
+            Rect::new(
+                page.x,
+                page.y,
+                page.width.saturating_sub(TRAILING_COLUMNS),
+                page.height,
+            )
+        })
+    }
+
+    /// 左栏页最右那一列：轨迹页的滚动条画在这里。
+    pub fn sidebar_page_scrollbar(&self) -> Option<Rect> {
+        self.sidebar_page
+            .map(|page| Rect::new(page.right().saturating_sub(1), page.y, 1, page.height))
+    }
+
     /// 主列里问题覆盖层的宽度。
     pub fn modal_width(&self) -> u16 {
         self.main
@@ -301,9 +323,10 @@ pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
 pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
     let tier = sidebar_tier(area.width, sidebar_wanted);
-    // 左栏顶上先让出一行空行，再算它的身份与页区行数 —— 留白是花掉的行，所以阶梯看到的
-    // 是减掉它之后的高度。
-    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
+    // 左栏顶上先让出一行空行，**底下还要让出提示行那一行** —— 提示行跨整屏，左栏画到它上面
+    // 一行为止（`.scratch/tui-visual-language/spec.md` §16）。于是 120×24 下页区从 15 行变
+    // 14 行：页高的公式不变，变的只是剩余高度。
+    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP + 1);
     let (sidebar_kind, page_rows) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
     let input_rows = draft_rows
         .max(MIN_INPUT_ROWS)
@@ -326,7 +349,9 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     let transcript = Rect::new(main.x, main.y, main.width, transcript_rows);
     let status = Rect::new(main.x, transcript.bottom(), main.width, 1);
     let input = Rect::new(main.x, status.bottom() + 1, main.width, input_rows);
-    let hints = Rect::new(main.x, input.bottom() + 1, main.width, 1);
+    // 提示行跨**整屏**（`.scratch/tui-visual-language/spec.md` §16）—— 左栏与主列都让出这一
+    // 行，于是 `ctrl-o 左栏` 那条按设计排在最末的提示真的看得见。
+    let hints = Rect::new(area.x, input.bottom() + 1, area.width, 1);
     let rail = Rect::new(
         transcript.right().saturating_sub(1),
         transcript.y,

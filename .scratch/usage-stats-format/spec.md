@@ -56,9 +56,9 @@
 
 - **只涂两行**：上下文行（分母 `SessionFacts::context_window`）与 token 行（分母 `SessionFacts::budget_limit`）。「回合」没有分母；「输入 / 输出」是累计量而不是"满不满"；「缓存」是命中/未中——给它们编一个分母只会让颜色骗人。
 - **没有分母就不涂**：`budget_limit` 为 `None`（没设额度）或 `last_input` 为 `None`（还没报过用量）时那一行保持纯文本。
-- **形状**：在 `row()` 的值列里，把**左起前 N 列**上底色，`N = ceil(占比 × value_columns)`，占比夹到 `[0.0, 1.0]`（超过 100% 就是涂满，不越出值列）。文字与对齐方式（值列右对齐）都不动，前景色不动。
-- **颜色**：底色取暗档（`Color::DarkGray`），与 `render::severity` 的暗色一致；不引入主题系统。
-- **不参与列宽降级**（这是本 spec 最不显然的一条）：底色**不占列**，所以 `value_columns` 的计算与既有降级链（先把上下文行的百分比括号去掉 → 整条缓存行不加入 → `fit()` 去千分位 → 省略号）**一行都不改**。改了制式之后，既有降级链的**行为一行不改**，但那两条既有测试的**前提会变**——数字变短了：
+- **形状**（2026-10-06 由 [`tui-visual-language`](../tui-visual-language/issues/14-sidebar-and-transcript-edge.md) 推翻）：条改画**块字符**（`▓` 满 / `░` 空，前景静音档），最多 10 列，`N = ceil(占比 × 条宽)`，占比夹到 `[0.0, 1.0]`（超过 100% 就是满，不越出条）。它**占列** —— 值列先拿到自己需要的那些列，剩下的才给条 —— 于是数字一个字不丢，宽档下两张条一样长。文字与对齐方式（值列右对齐）都不动。
+- **颜色**：条取静音档（`palette::MUTED`），与面板标签同一档；不引入主题系统。
+- **降级链**（同一轮改口径）：条占列，所以 `value_columns` 的计算里已经算上它。既有降级链（先把上下文行的百分比括号去掉 → 整条缓存行不加入 → `fit()` 去千分位 → 省略号）**行为一行不改**，变的只是"值列还剩多少"；下面那两条测试前提的变化仍然成立。
   - `the_narrow_sidebar_keeps_six_fields_and_drops_the_percentage_when_it_must` 的 fixture 在新制式下放得进值列，"必须丢百分比"的场景不再成立；
   - `a_number_too_wide_for_the_value_column_loses_its_separators_before_its_digits` 里那条 `fit()` 的"去千分位"档，在面板里**再也触达不到**（面板里 `thousands` 只剩 `< 10000` 的数字，最长 13 列，短于值列下限 16）。
   - **口径是"保降级行为、改测试前提"**：前一条改成断言百分比留着，后一条改成断言 `compact` 的输出并注明那一档已不可达；`a_cache_split_too_wide_for_its_column_is_left_out` 的期望串跟着换。
@@ -67,7 +67,7 @@
 ### §4 明确不动的三处
 
 - **`usage_summary`**（`wording.rs:243-248`，`用量 in=… out=… cached=… miss=…`）与它的四个调用点（`render/plain.rs`、`render/headless.rs`、`render/tui.rs`、`cli.rs` 的 `sessions stats`）**保持原样**。它是诊断/机器可读通道，stdout 只放产物的契约（[`docs/render.md`](../../docs/render.md)）不为显示制式让路。
-- **状态行的 `上下文 n%`**（`wording.rs` 的 `context_share`）保持纯文本。状态行有自己的降级阶梯（先丢模型、再丢模式），不该再叠一层视觉，而且它窄档最先挨刀。
+- **状态行的 `上下文 n%`**（`wording.rs` 的 `context_share_value`）保持纯文本。状态行有自己的降级阶梯（先丢模型、再丢模式），不该再叠一层视觉，而且它窄档最先挨刀。
 - **面板的百分比括号**（`context_pair` 的 `（6%）`）：留着，它说的是精度，色条说的是比例。
 
 ## 测试决定

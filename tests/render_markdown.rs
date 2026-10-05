@@ -7,6 +7,7 @@
 
 use fs_agent::render::highlight::{self, Class};
 use fs_agent::render::markdown::{to_lines, to_lines_indented};
+use fs_agent::render::palette;
 use fs_agent::render::width;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
@@ -53,12 +54,12 @@ fn headings_stand_out_and_deeper_ones_are_just_bold() {
     let top = to_lines("# Title", W);
     assert_eq!(text(&top[0]), "Title");
     assert!(has_modifier(&top[0], Modifier::BOLD));
-    assert!(has_fg(&top[0], Color::Cyan));
+    assert!(has_fg(&top[0], palette::CODE_HEADING));
 
     let deep = to_lines("### Note", W);
     assert_eq!(text(&deep[0]), "Note");
     assert!(has_modifier(&deep[0], Modifier::BOLD));
-    assert!(!has_fg(&deep[0], Color::Cyan));
+    assert!(!has_fg(&deep[0], palette::CODE_HEADING));
 
     // 收尾的井号串前面得有一个空格：`# C#` 是一个名叫 `C#` 的标题。
     assert_eq!(text(&to_lines("# C#", W)[0]), "C#");
@@ -70,7 +71,7 @@ fn inline_emphasis_code_and_links_are_styled() {
     let line = &to_lines("a **bold** and *italic* and `code`", W)[0];
     assert!(has_modifier(line, Modifier::BOLD));
     assert!(has_modifier(line, Modifier::ITALIC));
-    assert!(has_fg(line, Color::Yellow), "行内 code：{line:?}");
+    assert!(has_fg(line, palette::CODE_QUIET), "行内 code：{line:?}");
     assert_eq!(text(line), "a bold and italic and code");
 
     let link = &to_lines("[docs](https://example.com/x)", W)[0];
@@ -96,8 +97,33 @@ fn a_fenced_block_is_kept_verbatim_and_never_parsed_as_markdown() {
     assert_eq!(code.len(), 2, "两行代码：{lines:?}");
     assert_eq!(text(code[0]), "  fn main() {}");
     assert_eq!(text(code[1]), "  # not a heading");
-    assert!(!has_fg(code[1], Color::Cyan), "代码块里面的标题");
+    assert!(!has_fg(code[1], palette::CODE_HEADING), "代码块里面的标题");
     assert!(!has_modifier(code[1], Modifier::BOLD));
+}
+
+/// 内容域的取色：语法数字与界面上的警告不同色，注释与标点复用同一档退后
+/// （`.scratch/tui-visual-language/spec.md` §3、票 16）。
+#[test]
+fn syntax_classes_take_their_colours_from_the_content_palette() {
+    let lines = to_lines("```rust\n// note\nlet x = 42;\n```", W);
+    let spans: Vec<&ratatui::text::Span<'_>> =
+        lines.iter().flat_map(|line| line.spans.iter()).collect();
+    let comment = spans
+        .iter()
+        .find(|span| span.content.contains("note"))
+        .expect("注释是它自己的一个 span");
+    assert_eq!(comment.style.fg, Some(palette::CODE_QUIET));
+    assert!(comment.style.add_modifier.contains(Modifier::ITALIC));
+    let number = spans
+        .iter()
+        .find(|span| span.content.as_ref() == "42")
+        .expect("数字是它自己的一个 span");
+    assert_eq!(number.style.fg, Some(palette::CODE_NUMBER));
+    assert_ne!(
+        palette::CODE_NUMBER,
+        palette::WARN,
+        "代码里的数字不再与界面上的警告同色"
+    );
 }
 
 #[test]
@@ -117,7 +143,7 @@ fn list_items_keep_their_marker_and_task_boxes_become_checkboxes() {
 fn quotes_rules_and_tables_render_as_structure() {
     let quote = &to_lines("> quoted", W)[0];
     assert_eq!(text(quote), "│ quoted");
-    assert!(has_fg(quote, Color::Gray));
+    assert!(has_fg(quote, palette::CODE_QUIET));
 
     let rule = &to_lines("---", W)[0];
     assert!(text(rule).chars().all(|ch| ch == '─'), "{rule:?}");
@@ -129,6 +155,14 @@ fn quotes_rules_and_tables_render_as_structure() {
         .spans
         .iter()
         .all(|span| span.content.chars().all(|ch| ch == '─' || ch == '┼')));
+    assert!(
+        table[1]
+            .spans
+            .iter()
+            .all(|span| span.style.fg == Some(palette::CODE_QUIET)),
+        "网格线用内容域的退后一档：{:?}",
+        table[1]
+    );
     assert_eq!(text(&table[2]).trim_end(), "1 │ 2");
 }
 
@@ -496,7 +530,7 @@ fn a_cell_renders_an_image_and_code_like_a_paragraph_does() {
         text(&table[0])
     );
     assert!(
-        has_fg(&table[2], Color::Yellow),
+        has_fg(&table[2], palette::CODE_QUIET),
         "行内 code：{:?}",
         table[2]
     );

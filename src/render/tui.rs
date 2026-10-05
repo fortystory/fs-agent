@@ -2,7 +2,7 @@
 //!
 //! 有三条性质是结构性的，不是风格问题：
 //!
-//! * **alt screen，一帧。** TUI 画一条全高左栏与一条主列，中间是一条竖虚线；四周没有
+//! * **alt screen，一帧。** TUI 画一条左栏与一条主列，中间是一条竖虚线；四周没有
 //!   外框，终端自己就是边界（`.scratch/tui-chrome/spec.md` §1）。左栏放标记与会话的
 //!   读数，主列自上而下堆着转录（右边缘带滚动条与回合条）、状态行、输入区与提示行。
 //!   转录住在自己的缓冲里，而不是终端的滚动回退里 —— 内联视口那个漂移的光标也正是
@@ -12,9 +12,9 @@
 //! * **`select!` 管 broadcast 与按键。** 渲染事件、循环的请求与键盘输入是三个互相
 //!   独立的来源；`select!` 是它们合流的方式，不用再引入一条顺序未定义的第二通道。
 //!   已经排进队列的在画帧之前先排空，所以一个爆发输出的 provider 花掉的是帧而不是
-//!   事件。循环里唯一的定时器是标记的脉冲，而且**只在一次运行进行中的时候**才武装
-//!   （`.scratch/tui-input-pulse/spec.md` §2）：空闲的会话仍然只等这三个来源，别的
-//!   什么都不等。
+//!   事件。循环里有**两个**定时器：提示符与状态行字形循环共用的脉冲
+//!   （**一直在走**，`.scratch/tui-visual-language/spec.md` §32 —— 空闲不再零唤醒），
+//!   以及退出手势的 deadline（只在第一下举手之后，`.scratch/exit-gesture/spec.md` §6）。
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -47,6 +47,7 @@ use super::editor::{self, Input};
 use super::file_index::{self, FileIndex};
 use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent};
 use super::layout;
+use super::palette;
 use super::pane::{self, Pane};
 use super::panel::Panel;
 use super::severity::Severity;
@@ -74,14 +75,9 @@ const DRAIN_LIMIT: usize = 4_096;
 /// 收得很小。
 const TOKEN_MENU_CANDIDATES: usize = 200;
 
-/// 草稿里一条**能兑现**的 `/` 命令的颜色。
-///
-/// 「能兑现」的判据与 chip 是同一条，所以这两个常量也是那一条规则在屏幕上的样子
-/// （`.scratch/input-tokens/spec.md` §4）。
-pub const TOKEN_COMMAND: Color = Color::LightBlue;
-
-/// 草稿里一个**能兑现**的 `@` 引用的颜色。
-pub const TOKEN_REFERENCE: Color = Color::LightMagenta;
+/// 草稿里两条能兑现的记号的颜色。定义住在色板里 —— 颜色值集中一处；判据（「能兑现」与
+/// chip 是同一条）仍归 `.scratch/input-tokens/spec.md` §4，这里只是给那个模块的读者留个名字。
+pub use super::palette::{TOKEN_COMMAND, TOKEN_REFERENCE};
 
 /// 一次重放批次应用多少个历史事件。
 ///
@@ -206,17 +202,6 @@ pub struct SpeakerColors {
     uncoloured: bool,
 }
 
-/// 讨论者的调色板，按名册把槽位发出去的顺序（票 07 §1）。
-const DEBATER_PALETTE: [Color; 2] = [Color::LightCyan, Color::LightMagenta];
-
-/// 结构性框线的颜色：比 `DarkGray` 再沉一档（`DarkGray` 在常见配色里 ≈ `#808080`，而框架
-/// 不该比内容先被看见）。
-///
-/// 它刻意是真彩色，也是这个界面里**第二处**（第一处是提示符的色相脉冲）：16 色 ANSI 里比
-/// `DarkGray` 更暗的只有 `Black`，那在深色背景上等于消失。亮背景终端要在这一点上调
-/// （`.scratch/tui-chrome/spec.md` §3）。
-const CHROME_LINE: Color = Color::Rgb(0x4a, 0x4a, 0x4a);
-
 impl SpeakerColors {
     /// 一份名册对应的调色板：按槽位发出去的顺序列出讨论者。没有名册的调用方传一个空的
     /// 进来，于是每个名字都是灰的。
@@ -224,8 +209,8 @@ impl SpeakerColors {
         let roster = roster.to_vec();
         // 名册按位置认领调色板槽位：第 `n` 个讨论者拿槽位 `n`。讨论者比颜色多时多出来的
         // 槽位会绕回来，所以这里的认领是 `slot < len` 而不是整个名册。
-        let claimed: Vec<usize> = (0..roster.len().min(DEBATER_PALETTE.len())).collect();
-        let free_slots = (0..DEBATER_PALETTE.len())
+        let claimed: Vec<usize> = (0..roster.len().min(palette::DEBATERS.len())).collect();
+        let free_slots = (0..palette::DEBATERS.len())
             .filter(|slot| !claimed.contains(slot))
             .collect();
         Self {
@@ -243,19 +228,21 @@ impl SpeakerColors {
     fn of(&mut self, speaker: &crate::events::SpeakerId) -> Color {
         use crate::events::SpeakerId;
         if self.uncoloured {
-            return Color::DarkGray;
+            // 「没有名字册」与「系统」用**同一种灰**（`.scratch/tui-visual-language/spec.md`
+            // 用户故事 5）：同一个语义不该在屏幕上出现两种样子。
+            return palette::SYSTEM;
         }
         match speaker {
             SpeakerId::Debater(id) => self.debater(id.as_str()),
-            SpeakerId::Executor(_) => Color::LightYellow,
-            SpeakerId::User => Color::LightGreen,
-            SpeakerId::System => Color::Gray,
+            SpeakerId::Executor(_) => palette::EXECUTOR,
+            SpeakerId::User => palette::USER,
+            SpeakerId::System => palette::SYSTEM,
         }
     }
 
     fn debater(&mut self, id: &str) -> Color {
         if let Some(slot) = self.roster.iter().position(|name| name == id) {
-            return DEBATER_PALETTE[slot % DEBATER_PALETTE.len()];
+            return palette::DEBATERS[slot % palette::DEBATERS.len()];
         }
         // 注入的名册不认识的名字，也就是会话中途敲的 `/discuss` 造出来的那种。它第一次
         // 露面时拿走名册没认领的第一个调色板槽位；下面那句记忆把它变成此后每次露面都相同
@@ -269,8 +256,8 @@ impl SpeakerColors {
             }
         };
         match self.free_slots.get(slot) {
-            Some(slot) => DEBATER_PALETTE[*slot],
-            None => Color::Gray,
+            Some(slot) => palette::DEBATERS[*slot],
+            None => palette::SYSTEM,
         }
     }
 }
@@ -382,18 +369,15 @@ impl Tui {
             }
         }
 
-        // 两个定时器，都**按需**武装（`.scratch/tui-input-pulse/spec.md` §2b，
-        // `.scratch/exit-gesture/spec.md` §6）：
+        // 两个定时器（`.scratch/tui-input-pulse/spec.md` §2b，`.scratch/exit-gesture/spec.md` §6）：
         //
-        // - `pulse`（60 ms）只在一次运行进行中的时候武装。用 `interval` 而不是每一趟新建
-        //   一个 `sleep`：一个突发一千条增量的 provider 会让每轮迭代都重置一次 sleep，
-        //   于是提示符恰恰会在会话最忙的时候停住不动。`Delay` 让积压的漏帧不会在循环从
-        //   某个长帧里回来时被一次性花掉。
+        // - `pulse`（60 ms）**一直在走**。用 `interval` 而不是每一趟新建一个 `sleep`：一个
+        //   突发一千条增量的 provider 会让每轮迭代都重置一次 sleep，于是动画恰恰会在会话最忙
+        //   的时候停住。`Delay` 让积压的漏帧不会在循环从某个长帧里回来时被一次性花掉。
+        //   **它曾经只在一次运行进行中的时候武装**；`.scratch/tui-visual-language/spec.md` §32
+        //   把它放宽到始终 —— 空闲时状态行那个字形循环也在动，只是慢下来。代价明码标价：
+        //   空闲不再是零唤醒。
         // - 退出手势的 deadline（500 ms）只在举着手的那些帧里武装，到点就把举手作废。
-        //
-        // 两个都靠各自 `select!` 分支上的 `if` 保证「不武装就不会唤醒循环」：没武装的
-        // 分支永远不会被 poll。空闲会话因此照旧一次唤醒都没有（那个 deadline 是唯一的
-        // 有界例外）。
         let mut pulse = tokio::time::interval(PULSE_FRAME);
         pulse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -423,13 +407,12 @@ impl Tui {
                 }
                 state.replay_batch();
             } else {
-                // 三个来源，加上两个按需武装的定时器。曾经住在这里的重绘 tick 随它存在的
-                // 那个时钟一起走了 —— 待答的问题从 console 端口来，事件从渲染通道来，
-                // 而键就是键，所以没有*别的*东西在等着被注意到（票 05 §1）。两个例外都只是
-                // 时间的函数：运行进行中的脉冲，与举着手的那个 deadline。空闲时这个
-                // `select!` 又只是三个来源，键盘是唯一能唤醒它的东西
-                // （`.scratch/tui-input-pulse/spec.md` §2b、
-                // `.scratch/exit-gesture/spec.md` §6）。
+                // 四个来源，加上两个定时器。曾经住在这里的重绘 tick 随它存在的那个时钟一起
+                // 走了 —— 待答的问题从 console 端口来，事件从渲染通道来，而键就是键，所以
+                // 没有*别的*东西在等着被注意到（票 05 §1）。两个定时器都只是时间的函数：
+                // 一直在走的脉冲（提示符的色相与状态行的字形循环），与举着手的那个 deadline
+                // （`.scratch/tui-visual-language/spec.md` §32、`.scratch/exit-gesture/spec.md`
+                // §6）。
                 //
                 // deadline 在 `select!` 之前取成值：`Instant` 是 `Copy`，取完借用就结束，
                 // 分支里才借得到 `&mut state`。没举手时给它一个占位时刻 —— 关掉 poll 的是
@@ -440,7 +423,7 @@ impl Tui {
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
                     Some(paths) = files_rx.recv() => state.files_loaded(paths),
-                    _ = pulse.tick(), if state.busy() => state.tick(),
+                    _ = pulse.tick() => state.tick(),
                     _ = tokio::time::sleep_until(tokio::time::Instant::from(
                         deadline.unwrap_or_else(std::time::Instant::now),
                     )), if deadline.is_some() => state.expire_exit_gesture(),
@@ -687,6 +670,16 @@ pub struct TuiState {
     conversation_width: u16,
     /// 轨迹视图的源行是按多宽排的；**零**表示这一帧轨迹视图不被物化（左栏不可见）。
     trace_width: u16,
+    /// 上一个推进**对话视图**的块是谁说的 —— 换人要空一行时用它
+    /// （`.scratch/tui-visual-language/spec.md` §23）。窗格清空重放时它跟着一起清。
+    conversation_speaker: Option<crate::events::SpeakerId>,
+    /// 轨迹视图那一份，同上。
+    trace_speaker: Option<crate::events::SpeakerId>,
+    /// 轨迹页**自己的**宽度档（40 / 28 / 0）：前缀带不带方括号看它，不看正文列数。
+    ///
+    /// `.scratch/tui-visual-language/issues/07` 决定 2 之后正文比页面窄两列（滚动条那一列），
+    /// 于是「宽档 40 列」这条判据必须继续量页面，不能量正文 —— 否则 38 列会被读成窄档。
+    trace_tier_width: u16,
     /// 上一帧画完之后有没有什么东西变了。
     dirty: bool,
     /// 草稿与它的光标。
@@ -1540,6 +1533,9 @@ impl TuiState {
             // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
             conversation_width: SHARED_RENDER_WIDTH,
             trace_width: SHARED_RENDER_WIDTH,
+            conversation_speaker: None,
+            trace_speaker: None,
+            trace_tier_width: 0,
             dirty: true,
             editor: Input::new(),
             files: FileIndex::new(),
@@ -1718,15 +1714,13 @@ impl TuiState {
 
     /// 把脉冲推进一帧（`.scratch/tui-input-pulse/spec.md` §2b）。
     ///
-    /// 循环在它于一次运行进行中时武装的那个定时器里调它，所以空闲的前端从来到不了这里；
-    /// 这个守卫还是照写一遍，因为一个在它的写作者正打字时变了色的提示符，就是动画挡了路
-    /// （票 09）。它推进的是脉冲的帧、别的什么都不是：**不是**一个通用的「重画点什么」的
-    /// 钩子，任何需要一帧的东西都应该通过那个改变了它的事件说出来。
+    /// **空闲也走**：时钟从「仅运行时武装」放宽到「始终」之后，状态行那个字形循环在空闲时
+    /// 也在动，只是慢下来（`.scratch/tui-visual-language/spec.md` §31、§32）。这是本 effort
+    /// 最贵的一笔 —— 空闲不再是零唤醒。它推进的是脉冲的帧、别的什么都不是：**不是**一个通用
+    /// 的「重画点什么」的钩子，任何需要一帧的东西都应该通过那个改变了它的事件说出来。
     pub fn tick(&mut self) {
-        if self.busy() {
-            self.pulse = self.pulse.wrapping_add(1);
-            self.dirty = true;
-        }
+        self.pulse = self.pulse.wrapping_add(1);
+        self.dirty = true;
     }
 
     /// 括号粘贴是作为文本到达的，不是作为按键。
@@ -1888,29 +1882,33 @@ impl TuiState {
         // 收起左栏就是「过程行暂时看不到」，规则只有一个。
         if targets.conversation && selects(Viewport::Conversation, block) {
             let width = self.conversation_width;
-            let lines = paint_block(block, &mut self.colors, width, Viewport::Conversation);
+            let style = prefix_style(Viewport::Conversation, width);
+            let lines = paint_block(
+                block,
+                &mut self.colors,
+                width,
+                style,
+                Viewport::Conversation,
+            );
             produced = produced.max(lines.len());
-            for rendered in lines {
-                self.push_line(
-                    Viewport::Conversation,
-                    rendered.line,
-                    rendered.link,
-                    Some(is_user_message(block)),
-                );
-            }
+            self.push_view_lines(
+                Viewport::Conversation,
+                block_speaker(block),
+                lines,
+                Some(is_user_message(block)),
+            );
         }
         if targets.trace && selects(Viewport::Trace, block) {
             let width = self.trace_width;
-            let lines = paint_block(block, &mut self.colors, width, Viewport::Trace);
+            let style = prefix_style(Viewport::Trace, self.trace_tier_width);
+            let lines = paint_block(block, &mut self.colors, width, style, Viewport::Trace);
             produced = produced.max(lines.len());
-            for rendered in lines {
-                self.push_line(
-                    Viewport::Trace,
-                    rendered.line,
-                    rendered.link,
-                    Some(is_user_message(block)),
-                );
-            }
+            self.push_view_lines(
+                Viewport::Trace,
+                block_speaker(block),
+                lines,
+                Some(is_user_message(block)),
+            );
             // 单位之间一条分隔线：轨迹页拿它当轮次的边界（2026-10-05 维护者的修订，
             // 取代了原先那套隔行底色）。
             if is_boundary(block, self.discussion()) {
@@ -1947,12 +1945,15 @@ impl TuiState {
         if conversation {
             self.conversation.clear();
             self.conversation_links.clear();
+            // 空行的记账与窗格平行，所以它也跟着一起清。
+            self.conversation_speaker = None;
             // 回合条的源行下标与对话 pane 平行，所以它跟着对话 pane 一起重建。
             self.turn_rail.clear();
         }
         if trace {
             self.trace.clear();
             self.trace_links.clear();
+            self.trace_speaker = None;
         }
         if self.painted.is_empty() {
             self.dirty = true;
@@ -2027,6 +2028,45 @@ impl TuiState {
         }
     }
 
+    /// 把一个视图要的那些行推进窗格，并在**换发言者**时先空一行
+    /// （`.scratch/tui-visual-language/spec.md` §23）。
+    ///
+    /// 插入点是**块序列生成期**、不是绘制期：两个视图各记各的「上一个发言者」（重放时跟着
+    /// 窗格一起清），于是各自的空行也各归各的，而且滚动时不会重排。同一人连发的块之间不空行
+    /// —— 一组动作读起来是一组。
+    fn push_view_lines(
+        &mut self,
+        view: Viewport,
+        speaker: Option<&crate::events::SpeakerId>,
+        lines: Vec<RenderedLine>,
+        user: Option<bool>,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        let changes_speaker = speaker.is_some_and(|speaker| {
+            let last = match view {
+                Viewport::Conversation => self.conversation_speaker.as_ref(),
+                Viewport::Trace => self.trace_speaker.as_ref(),
+            };
+            last.is_some_and(|last| last != speaker)
+        });
+        if changes_speaker {
+            // 空行也走 `push_line`：回合条的平行表按来源行下标记账，跳过它会把格子指到
+            // 隔壁去。它不是一个用户消息，所以那一格记 `false`。
+            self.push_line(view, Line::default(), None, Some(false));
+        }
+        if let Some(speaker) = speaker {
+            match view {
+                Viewport::Conversation => self.conversation_speaker = Some(speaker.clone()),
+                Viewport::Trace => self.trace_speaker = Some(speaker.clone()),
+            }
+        }
+        for rendered in lines {
+            self.push_line(view, rendered.line, rendered.link, user);
+        }
+    }
+
     /// 记下「现在在跑哪个工具」—— 对话视图末尾那句「正在做什么」用的就是它。
     fn observe_running_tool(&mut self, event: &RenderEvent) {
         let RenderEvent::Logged(event) = event else {
@@ -2086,7 +2126,7 @@ impl TuiState {
             };
             rows.push(Line::from(Span::styled(
                 text,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::MUTED),
             )));
         } else {
             rows.extend(Self::live_rows(&self.live));
@@ -2288,7 +2328,7 @@ impl TuiState {
     fn prefix_style_of(&self, view: Viewport) -> PrefixStyle {
         let width = match view {
             Viewport::Conversation => self.conversation_width,
-            Viewport::Trace => self.trace_width,
+            Viewport::Trace => self.trace_tier_width,
         };
         prefix_style(view, width)
     }
@@ -2305,7 +2345,7 @@ impl TuiState {
             Span::styled(style.prefix(speaker), Style::default().fg(color)),
             Span::styled(
                 wording::thinking_in_progress(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::MUTED),
             ),
         ])
     }
@@ -2323,10 +2363,13 @@ impl TuiState {
         // 「谁在说话」开头（票 03 §Answer，2026-09-23 修正）。
         let line = Line::from(vec![
             Span::styled(style.prefix(speaker), Style::default().fg(color)),
-            Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ", wording::FOLDABLE),
+                Style::default().fg(palette::MUTED),
+            ),
             Span::styled(
                 wording::thinking_finished(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::MUTED),
             ),
         ]);
         let detail = Detail {
@@ -2678,11 +2721,11 @@ impl TuiState {
             }
             ConsoleRequest::RunState { running } => {
                 self.running = running;
-                // 脉冲属于某一次运行：运行结束时提示符回到它歇着的那个颜色，于是下一次从
-                // 同一个地方开始 —— 而歇着的颜色是一个常量，不是上一次回合恰好停下来的地方
-                // （`.scratch/tui-input-pulse/spec.md` §2b，票 09）。
+                // 时钟现在**一直**在走（§32），所以相位要在这里对齐：一次运行总是从帧 0 开始
+                // 呼吸，空闲时提示符歇在帧 0 的颜色上 —— 输入区因此仍然完全静止，动的是状态行
+                // 那个字形循环（`.scratch/tui-visual-language/spec.md` §30–§33）。
+                self.pulse = 0;
                 if !running {
-                    self.pulse = 0;
                     // 一次运行结束：「正在做什么」没有主语了。
                     self.running_tool = None;
                 }
@@ -3365,7 +3408,9 @@ impl TuiState {
         }
     }
 
-    fn status_line(&self, width: u16) -> String {
+    /// 提示行的文字：键位提示与出口。**状态词不在这里** —— 它在状态行的最后一段
+    /// （`.scratch/tui-visual-language/spec.md` §18）。
+    fn hint_line(&self, width: u16) -> String {
         // 只有**退出**那一把会换提示行的出口段：举着「退出这次询问」时那句
         // 「再按一次 ctrl-c/ctrl-d 退出」是错的（问卷的举手由它自己的页脚说，见票 04）。
         let raised = self.raised_gesture(std::time::Instant::now()) == Some(Gesture::Exit);
@@ -3546,8 +3591,9 @@ fn questionnaire_parts(
         .filter(|header| !header.is_empty())
     {
         for mut row in pane::wrap_text(header, width) {
+            // 表头归正文档 + `BOLD`（§29）。
             row.style = Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::PLAIN)
                 .add_modifier(Modifier::BOLD);
             prefix.push(row);
         }
@@ -3566,10 +3612,10 @@ fn questionnaire_parts(
             .iter()
             .any(|selected| selected == &choice.label);
         let marker = match (question.multi_select, picked) {
-            (true, true) => "[x]",
-            (true, false) => "[ ]",
-            (false, true) => "●",
-            (false, false) => "○",
+            (true, true) => wording::CHOICE_CHECKED,
+            (true, false) => wording::CHOICE_UNCHECKED,
+            (false, true) => wording::CHOICE_PICKED,
+            (false, false) => wording::CHOICE_UNPICKED,
         };
         // 光标说的是 `Enter`/`Space` 会确认哪个选项；标记说的是哪些被选中了。这是两个不同的
         // 事实，可以不一致。
@@ -3578,20 +3624,14 @@ fn questionnaire_parts(
         let body =
             wording::questionnaire_option(index + 1, &choice.label, choice.description.as_deref());
         let mut style = if picked {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            // 已选不用颜色：`BOLD` 与标记（`[x]` / `●`）已经说了这件事（§29）。
+            Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
-        if highlighted {
-            // 反显说的是「键盘在这里」；输入区拿着键盘时它降暗，屏幕上于是只有一个焦点
-            // （`.scratch/questionnaire-keys/spec.md` §8）。
-            style = if options_focused {
-                style.add_modifier(Modifier::REVERSED)
-            } else {
-                style.add_modifier(Modifier::DIM)
-            };
+        if highlighted && options_focused {
+            // 反显说的只有一件事：键盘在这里。全屏的 `REVERSED` 永远只允许有一个（§29）。
+            style = style.add_modifier(Modifier::REVERSED);
         }
         // 长选项**折行**，不截断（`.scratch/questionnaire-keys/spec.md` §7）。
         let mut lines = wrap_with_lead(&body, &lead, width);
@@ -3606,11 +3646,12 @@ fn questionnaire_parts(
     } else {
         wording::questionnaire_custom_label()
     };
-    // 输入区拿着键盘时那一行提亮：光标就在那儿（`.scratch/questionnaire-keys/spec.md` §8）。
+    // 键盘在输入区时反显的就是这一行：于是「键盘在哪」永远只有一个答案，`DIM` 退场
+    // （§29）。
     let lead_style = if options_focused {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::MUTED)
     } else {
-        Style::default().add_modifier(Modifier::BOLD)
+        Style::default().add_modifier(Modifier::REVERSED)
     };
     let mut custom = wrap_with_lead(&draft.custom, label, width);
     match custom.first_mut() {
@@ -3677,7 +3718,12 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 物化（宽度为零 = 不物化），而它的宽度就是左栏页的宽度 —— 与现在显示哪一页无关，
     // 因为它常驻，切页、收起再叫回才不会漏内容（票 09）。
     let conversation_width = panes.transcript_text().width;
-    let trace_width = panes.sidebar_page.map_or(0, |page| page.width);
+    // 轨迹页正文的宽度是左栏页减掉右缘那两列（滚动条在最右列）；与现在显示哪一页无关，
+    // 因为它常驻，切页、收起再叫回才不会漏内容（票 09）。
+    let trace_width = panes.sidebar_page_text().map_or(0, |text| text.width);
+    // 前缀分档量的是左栏**页**的宽度（40 / 28），不是正文那 38 / 26 列
+    // （`.scratch/tui-visual-language/issues/07` 决定 2）。
+    state.trace_tier_width = panes.sidebar_page.map_or(0, |page| page.width);
     state.rerender_if_width_changed(conversation_width, trace_width);
     // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
     // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
@@ -3730,10 +3776,10 @@ fn draw_shell(
 
 /// 一行横贯某个行、从 `left` 到 `right`（不含 `right`）的分隔线（spec §1、§3）。
 ///
-/// 虚线，颜色是 [`CHROME_LINE`]：框架退到内容后面。主列的分隔线与页签条用的是同一笔；它们
+/// 虚线，颜色是 [`palette::CHROME`]：框架退到内容后面。主列的分隔线与页签条用的是同一笔；它们
 /// 只在跨的列上不同。
 fn paint_rule(frame: &mut ratatui::Frame, y: u16, left: u16, right: u16) {
-    let style = Style::default().fg(CHROME_LINE);
+    let style = Style::default().fg(palette::CHROME);
     let buffer = frame.buffer_mut();
     for x in left..right {
         buffer[(x, y)].set_symbol("┄").set_style(style);
@@ -3747,9 +3793,11 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     let Some(divide) = panes.divide else {
         return;
     };
-    let style = Style::default().fg(CHROME_LINE);
+    let style = Style::default().fg(palette::CHROME);
     let buffer = frame.buffer_mut();
-    for y in area.y..area.bottom() {
+    // 竖虚线跟左栏一样，画到提示行上一行为止 —— 提示行跨整屏，那一行上没有它
+    // （`.scratch/tui-visual-language/spec.md` §16）。
+    for y in area.y..panes.hints.y {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }
@@ -3774,15 +3822,15 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
 /// 短横与文字身份的那一半都在票 08 关掉了（`.scratch/tui-input-pulse/spec.md` §2），这个
 /// 界面里全部的动画如今都活在提示符的颜色里。
 fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, sidebar: Rect) {
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(palette::MUTED);
     match panes.sidebar_kind {
         layout::SidebarKind::Mark => {
             // 标记是 38 列，而宽档是 40 列，所以它居中时左右各留一列白；比标记还窄的档位
             // 根本不会要这几行（spec §2）。
             let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
-            // `None`：标记不动（票 08）。下落短横还在这里 —— 它的帧就在它旁边有单元测试
-            // —— 但维护者把它关了，左栏回到了这一切之前那个静止的标记。
-            let lines: Vec<Line<'static>> = mark_lines(None)
+            // 标记不动：下落短横随票 08 的关停一起离开渲染路径，这里画的就是那个静止的
+            // 标记（`.scratch/tui-visual-language/spec.md` §34）。
+            let lines: Vec<Line<'static>> = mark_lines()
                 .into_iter()
                 .map(|(text, color)| Line::from(Span::styled(text, Style::default().fg(color))))
                 .collect();
@@ -3798,8 +3846,8 @@ fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, si
             );
         }
         layout::SidebarKind::Text => {
-            // 静止的身份：窄档那一半下落短横随标记的一起退出了屏幕（票 08）。
-            // `wording::identity_falling` 就留在它旁边，等那个想法回来。
+            // 静止的身份：窄档那一半下落短横随标记的一起退出了屏幕（票 08），而它的代码
+            // 也随本 effort 的死代码收口一起删掉（`.scratch/tui-visual-language/spec.md` §34）。
             let identity = wording::identity();
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(identity, dim))),
@@ -3822,16 +3870,22 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     // —— 与转录走的是同一条纪律（票 04 §1、票 09）。
     if state.tab == Tab::Trace {
         // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
+        // 正文减掉右缘那两列，滚动条画在最右列 —— 那里没有回合条，所以不挤
+        // （`.scratch/tui-visual-language/issues/07` 决定 2）。
+        let text = panes.sidebar_page_text().unwrap_or(page);
         let live = TuiState::live_rows(&state.live);
-        let rows = state.trace.view(page.width, page.height, &live);
-        state.trace_drawn.top = page.y;
+        let rows = state.trace.view(text.width, text.height, &live);
+        state.trace_drawn.top = text.y;
         state.trace_drawn.rows = (0..rows.len())
             .map(|offset| state.trace.source_at(state.trace.top() + offset))
             .collect();
         // 滚轮与点击按它分派：指针落在这一块里就归轨迹视图。
         state.trace_rect = Some(page);
-        frame.render_widget(Paragraph::new(rows), page);
-        draw_indicator(frame, page, state, Viewport::Trace);
+        frame.render_widget(Paragraph::new(rows), text);
+        if let Some(bar) = panes.sidebar_page_scrollbar() {
+            draw_scrollbar(frame, bar, &state.trace);
+        }
+        draw_indicator(frame, text, state, Viewport::Trace);
         return;
     }
     let rows = match state.tab {
@@ -3839,7 +3893,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
         Tab::Todo => state.todo.lines(page),
         Tab::Files => vec![Line::from(Span::styled(
             truncate_columns(wording::tab_placeholder(), page.width as usize),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::MUTED),
         ))],
         // 上面那个分支已经接走了它。
         Tab::Trace => Vec::new(),
@@ -3863,10 +3917,10 @@ fn draw_tab_bar(
     sidebar: Rect,
     tabs: Rect,
 ) {
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(palette::MUTED);
     // 「线」与「字」在这一行上分开取色：未选中的标签是**文字**（仍旧 `DarkGray`，它得读得
-    // 出来），而两条线与它们之间的分隔符是**框架**（`CHROME_LINE`，退到后面去）。
-    let rule = Style::default().fg(CHROME_LINE);
+    // 出来），而两条线与它们之间的分隔符是**框架**（`palette::CHROME`，退到后面去）。
+    let rule = Style::default().fg(palette::CHROME);
     for y in [tabs.y - 1, tabs.y + 1] {
         paint_rule(
             frame,
@@ -3888,8 +3942,9 @@ fn draw_tab_bar(
     for (index, (tab, label)) in entries.iter().enumerate() {
         let selected = *tab == state.tab;
         let style = if selected {
+            // 常驻选中 = `ACCENT` + `BOLD`（`.scratch/tui-visual-language/spec.md` §8）。
             Style::default()
-                .fg(Color::LightMagenta)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
             dim
@@ -3915,25 +3970,41 @@ fn draw_tab_bar(
     frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
 }
 
-/// 状态行：哪个模型、哪个模式，以及窗口有多满（spec §5）。
+/// 状态行：哪个模型、哪个模式、窗口有多满，以及**在不在跑**（spec §5、
+/// `.scratch/tui-visual-language/spec.md` §17–§18）。
 ///
-/// 三段是画出来的，不可点：这一行上没有任何东西是控件，所以这里什么都不记命中区域。宽度的
-/// 阶梯住在 [`wording::status_row`] 里；这一行本身总是画出来的，连它最后一档都容不下的宽度
-/// 会被截断而不是丢掉（spec §2）。
+/// 四段共享一条线，行内分三档：标签退后、值靠前、分隔符只是线。宽度阶梯住在
+/// [`wording::status_row`] 里；这一行本身总是画出来的，连它最后一档都容不下的宽度会被截断
+/// 而不是丢掉（spec §2）。
 fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
-    let share = wording::context_share(state.panel.last_input(), state.facts.context_window);
+    let share = wording::context_share_value(state.panel.last_input(), state.facts.context_window);
     let width = panes.status.width as usize;
-    let text = wording::status_row(
+    let parts = wording::status_row(
         &state.facts.model,
-        &wording::mode_field(state.mode),
+        state.mode,
         &share,
+        &format!(
+            "{} {}",
+            wording::status_spinner(state.pulse, state.busy()),
+            wording::status_word(state.busy())
+        ),
         width,
     );
+    let spans: Vec<Span<'static>> = parts
+        .into_iter()
+        .map(|part| {
+            let colour = match part.kind {
+                wording::StatusKind::Label => palette::MUTED,
+                wording::StatusKind::Value => palette::PLAIN,
+                wording::StatusKind::Separator => palette::CHROME,
+            };
+            Span::styled(part.text, Style::default().fg(colour))
+        })
+        .collect();
+    // 状态行永远画得出来（[`wording::status_row`] 没有一档把整行拿走），所以截断只在比它的
+    // 最后一档还窄的帧上兜底 —— 那不是真终端能到的宽度。截断本身归 [`super::width`]。
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            truncate_columns(&text, width),
-            Style::default().fg(Color::DarkGray),
-        ))),
+        Paragraph::new(ellipsize_line(Line::from(spans), width)),
         panes.status,
     );
 }
@@ -3954,10 +4025,28 @@ enum Tab {
     /// agent 的待办列表，也是唯一不总在条上的页签：主会话第一次提交一次列表时它出现，此后
     /// 整个会话都在（`.scratch/todo-and-modes/spec.md` §4）。
     Todo,
-    /// 调用轨迹。还没做。
+    /// 调用轨迹：左栏的一页，画全量块（`.scratch/trace-tab/spec.md`）。
     Trace,
     /// 这个会话碰过的文件。还没做。
     Files,
+}
+
+/// 四个浮层表面共用的框架：`CHROME` 的虚线，**四角为空**
+/// （`.scratch/tui-visual-language/spec.md` §25）。
+///
+/// 角本来就由 `border::Set` 定，不必自绘；ratatui 那套三重虚线的四个角是**实线**，正是要拆掉
+/// 的第三套语法。框色也只剩 [`palette::CHROME`] 一个（问卷没有框，不参与）。
+fn chrome_block() -> WidgetBlock<'static> {
+    WidgetBlock::default()
+        .borders(Borders::ALL)
+        .border_set(border::Set {
+            top_left: " ",
+            top_right: " ",
+            bottom_left: " ",
+            bottom_right: " ",
+            ..border::LIGHT_TRIPLE_DASHED
+        })
+        .border_style(Style::default().fg(palette::CHROME))
 }
 
 /// 问题被问出来时所在的覆盖层（spec §9）。
@@ -4017,13 +4106,9 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
     state.modal_rect = Some(area);
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        WidgetBlock::default()
-            .borders(Borders::ALL)
-            .border_set(border::LIGHT_TRIPLE_DASHED)
-            .border_style(Style::default().fg(Color::Yellow)),
-        area,
-    );
+    // 边框归框架：`CHROME` 的虚线、空角。模态不再整块一个颜色 —— 框、话、要按的键各是各的
+    // （`.scratch/tui-visual-language/spec.md` §26）。
+    frame.render_widget(chrome_block(), area);
     // 主体与按钮行分开画，这样按钮的列能被准确记下来：问题占着它们，而一次点击必须落在它看
     // 起来落在的那个按钮上（票 04 §3）。
     let inner_area = layout::inner(area);
@@ -4033,9 +4118,10 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         inner_area.width,
         body_rows.min(inner_area.height),
     );
+    // 正文是居中的**文本**：它不可点，所以这里不需要那个偏移，交给 ratatui 摆即可。
     frame.render_widget(
         Paragraph::new(rows)
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(palette::PLAIN))
             .alignment(Alignment::Center),
         body,
     );
@@ -4050,7 +4136,7 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
         1,
     );
     frame.render_widget(
-        Paragraph::new(line).style(Style::default().fg(Color::Yellow)),
+        Paragraph::new(line).style(Style::default().fg(palette::ACCENT)),
         buttons_area,
     );
     state
@@ -4068,6 +4154,11 @@ fn draw_modal(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut T
 }
 
 /// 一个 `width` 列宽的东西在一个 `room` 列宽的区域里从哪一列开始，好让它在其中居中。
+///
+/// **它与 [`Alignment::Center`] 同时存在，不是同一需求的两份实现**，别把其中一个当遗留删掉：
+/// `Alignment::Center` 把摆放交给 ratatui 在渲染时做，调用方拿不到那个偏移；而这里（模态的
+/// 按钮行、问卷的回执行）要的正是那个偏移 —— 画家画在哪一列，命中测试就得按哪一列算，两件事
+/// 必须是**同一份算术**（票 04 §7）。换成 `Alignment::Center` 之后按钮照常画出来，然后点不中。
 fn centred_inset(room: u16, width: Option<usize>) -> u16 {
     let width = width.unwrap_or(0).min(room as usize) as u16;
     room.saturating_sub(width) / 2
@@ -4086,7 +4177,7 @@ fn button_regions(
     let mut offset = 0usize;
     for (index, choice) in choices.iter().enumerate() {
         if index > 0 {
-            offset += text_columns("   ");
+            offset += text_columns(wording::GAP);
         }
         let width = text_columns(&button_text(choice));
         // 动作列表与选项来自同一个地方，所以两者不会对「哪个按钮是什么意思」有分歧
@@ -4109,13 +4200,13 @@ fn buttons_row(
     actions: &[HitAction],
 ) -> (Line<'static>, Vec<(usize, usize, HitAction)>) {
     let key_style = Style::default()
-        .fg(Color::Yellow)
+        .fg(palette::ACCENT)
         .add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(Color::Yellow);
+    let label_style = Style::default().fg(palette::ACCENT);
     let mut spans = Vec::new();
     for (index, choice) in choices.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::raw("   "));
+            spans.push(Span::raw(wording::GAP));
         }
         spans.push(Span::styled(format!("[{}]", choice.key), key_style));
         spans.push(Span::styled(format!(" {}", choice.label), label_style));
@@ -4143,7 +4234,7 @@ fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
     let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
     frame.render_widget(
         Paragraph::new(wording::too_small(layout::MIN_WIDTH, layout::MIN_HEIGHT))
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(palette::MUTED))
             .alignment(Alignment::Center),
         row,
     );
@@ -4157,87 +4248,19 @@ fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
 /// 计数器复位，所以歇着的提示符永远穿帧 0 的颜色（票 09）。
 /// 呼吸的意义正在于此：只变色相就是换了个颜色，而一个还会胀缩的颜色，读起来才像活的。
 ///
-/// 它是 24 位色，这个界面里唯一不是 16 色 ANSI 码的地方 —— 提示符两边都坐在终端自己的背景
-/// 上，而一个必须在十六个名字里挑一个的色相会看得见台阶。整个函数是帧的纯函数，所以测试
-/// 不必有终端就能说出帧 0 长什么样。
+/// 颜色本身归色板（[`palette::prompt_colour`]）；这里只把帧换成秒。
 fn prompt_colour(frame: u64) -> Color {
-    let seconds = frame as f64 * PULSE_FRAME.as_secs_f64();
-    let hue = (seconds * PROMPT_HUE_PER_SECOND) % 1.0;
-    let saturation =
-        PROMPT_SATURATION + PROMPT_SATURATION_BREATH * (seconds * PROMPT_BREATH_PER_SECOND).sin();
-    let (red, green, blue) = hsv_to_rgb(hue, saturation, PROMPT_VALUE);
-    Color::Rgb(red, green, blue)
+    palette::prompt_colour(frame as f64 * PULSE_FRAME.as_secs_f64())
 }
-
-/// 提示符的色相走色环有多快，单位是每秒圈数。维护者的脚本每 1/60 秒走 0.005，这三个常量就是
-/// 那个：脚本的速率换成秒，这样换个帧长，样子还留得住。
-const PROMPT_HUE_PER_SECOND: f64 = 0.3;
-
-/// 提示符呼吸的中心饱和度、它摆多远，以及摆多快（每秒弧度：脚本里的每 1/60 秒 0.05）。
-const PROMPT_SATURATION: f64 = 0.55;
-const PROMPT_SATURATION_BREATH: f64 = 0.2;
-const PROMPT_BREATH_PER_SECOND: f64 = 3.0;
-
-/// 提示符保持的明度（亮度）：在暗色主题上够亮、读得清，在亮色主题上够暗、不刺眼。
-const PROMPT_VALUE: f64 = 0.85;
-
-/// HSV 转 RGB，按它来源那个脚本里 `colorsys.hsv_to_rgb` 的算法 —— 包括截到 8 位，这样同一帧
-/// 给出的颜色与脚本当年给出的一样。
-fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> (u8, u8, u8) {
-    // 色环的每六分之一是一个色相升、下一个色相降；`sector` 是第几个六分之一，`offset` 是在
-    // 里面走了多远。
-    let scaled = (hue.fract() * 6.0).rem_euclid(6.0);
-    let sector = scaled.floor();
-    let offset = scaled - sector;
-    let (rising, falling) = (
-        value * (1.0 - saturation * (1.0 - offset)),
-        value * (1.0 - saturation * offset),
-    );
-    let (red, green, blue) = match sector as u32 {
-        0 => (value, rising, value * (1.0 - saturation)),
-        1 => (falling, value, value * (1.0 - saturation)),
-        2 => (value * (1.0 - saturation), value, rising),
-        3 => (value * (1.0 - saturation), falling, value),
-        4 => (rising, value * (1.0 - saturation), value),
-        _ => (value, value * (1.0 - saturation), falling),
-    };
-    let byte = |channel: f64| (channel * 255.0).clamp(0.0, 255.0) as u8;
-    (byte(red), byte(green), byte(blue))
-}
-
-/// 界面对「它在工作吗？」曾经给过的最忙的一个答案，做成一圈颜色 —— **留着，而且刻意不在屏幕上**
-/// （`.scratch/tui-input-pulse/spec.md` §2，票 05）。
-///
-/// 它有两个版本在真终端上跑过，两个都被否了：12 帧亮/普通成对、100 ms 一帧，读起来像*闪*；
-/// 6 个亮色相、400 ms，读起来像*生硬切换* —— 一圈颜色会把整个标记一次换掉，而眼睛在帧与帧
-/// 之间没有东西可跟。今天在屏幕上的是 `fs-agent` 里下落的那根短横（见 [`mark_lines`]）；
-/// 这圈颜色留在这里，因为用户要求把代码留着而不是删掉，也因为一旦有了让它动起来而不是跳过去
-/// 的办法，一个颜色信号是合理得会再想要的东西。
-///
-/// **每一个条目都是亮色变体，这条性质是承重的**：一个颜色信号要读起来不像闪，就得只有一个
-/// 亮度。一个测试钉住它，另一个钉住现在屏幕上没有任何东西穿这套调色板。
-///
-/// 六个色相，按顺序绕过色环；帧 0 是标记自己亮的那一端，这样一个颜色信号不会让空闲的标记挨
-/// 一次跳。只用标准 ANSI 颜色：标记坐在用户已经有的任何主题上，而一个 24 位的值会是那个主题
-/// 答不上来的颜色。
-pub const PULSE_PALETTE: [Color; 6] = [
-    Color::LightMagenta,
-    Color::LightBlue,
-    Color::LightCyan,
-    Color::LightGreen,
-    Color::LightYellow,
-    Color::LightRed,
-];
 
 /// 一个脉冲帧：大约每秒十六帧，这是一个走色环的颜色要读起来像在旋转、而不是一串跳跃所需要的
 /// 速度（`.scratch/tui-input-pulse/spec.md` §2b：维护者自己的脚本跑在 60 fps，而这是同一个
-/// 样子、步长更粗）。它是**每一个**脉冲驱动的动画的帧长，所以重新武装的下落短横也会以这个
-/// 步频走。
+/// 样子、步长更粗）。它是这个界面上**每一个**由脉冲驱动的动画共用的帧长。
 ///
-/// **这个时钟只在一次运行进行中的时候武装**（票 09）。票 08 让它一直跑，理由是提示符 —— 它上色
-/// 的那个东西 —— 在什么都没跑的时候也在屏幕上；维护者自己的回答是，一个在他们打字时手底下
-/// 动来动去的颜色是噪声、不是生命。于是提示符在 agent 工作时呼吸，其余时间保持它歇着的颜色，
-/// 而空闲的会话回到 `select!` 里的三个来源、一次唤醒都没有。
+/// **这个时钟一直在走**：票 09 曾让它在空闲时停掉（「一个在他们打字时手底下动来动去的颜色
+/// 是噪声」），`.scratch/tui-visual-language/spec.md` §32 推翻了它 —— 动的不再是提示符（它空闲
+/// 时仍歇在帧 0 的颜色上），而是**状态行那个字形循环**，那是新的一条信息通道，不是给静态元素
+/// 加装饰。代价写在明面上：空闲的会话不再零唤醒。
 const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
 /// 那个按需武装的 deadline 到点了没有（`None` = 永远不会到点）。
@@ -4255,76 +4278,33 @@ fn exit_gesture_due(deadline: Option<std::time::Instant>, now: std::time::Instan
 /// 收回那一下」一个用途，给它一个旋钮只会多一件要解释的事。
 const GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// 标记的连字符：它的单元格从哪一列开始，以及那个单元格多宽。
-///
-/// 标记用八个字形单元格拼出 `fs-agent`，每个四列、之间空一列（[`wording::logo_lines`] 里的
-/// 一张标签；38 列网格里 `全空的列：4、9、14、……`）。短横是第三个单元格，所以它那四列是 10
-/// 到 13，而除了中间那一行，它们在每一行都是空的 —— 那正是下落横条需要的空间：五行可以落，
-/// 一行都没被占用。
-const MARK_DASH_COLUMN: usize = 10;
-const MARK_DASH_WIDTH: usize = 4;
-
-/// 下落短横用什么字形画：与空闲标记携带的那根半块横条同一个。
-///
-/// 它永远不变 —— 变的是它落在哪一行（票 07）。这个动画的第一个版本把横条转过四个方向，第二个
-/// 每个方向画一个不同的字形；两者都让标记自己那根短横在一次运行进行中时变成了另一个东西。一根
-/// 横条、在单元格里往下走，是那个读起来像运动、却不会变成新字形的做法。
-const DASH_BAR: char = '▀';
-
-/// 标记的那些行与它们的颜色，它的短横落到 `frame` 指定的那一行上 —— 什么都没在跑时是
-/// `None`，也就是标记一直画它的那一行。
+/// 标记的那些行与它们的颜色。
 ///
 /// 文字是 [`wording::logo_lines`] 的；让它读起来像字形的那条颜色坡道住在这里，与别的绘制在
-/// 一起。行越靠上越亮，于是标记读起来像从上方照亮 —— **永远如此**，不管在不在工作：颜色信号
-/// 在票 05 退休了（见 [`PULSE_PALETTE`]），所以这个标记里动的只有那根短横
-/// （`.scratch/tui-input-pulse/spec.md` §2）。短横**保持它的形状、每帧往下一行**，从标记的
-/// 最后一行回绕到第一行：那个单元格就是标记自己的五行，而空闲位置是中间那一行，所以一个静止
-/// 的标记与这个动画存在之前逐字节相同。
+/// 一起。行越靠上越亮，于是标记读起来像从上方照亮 —— **永远如此**：那个按帧下落的短横在
+/// 票 08 就退出了屏幕，它的分支与常量也随本 effort 的死代码收口一起删掉
+/// （`.scratch/tui-visual-language/spec.md` §34），所以这个标记是静止的。
 ///
 /// 只设前景，而且是刻意不设背景：标记坐在用户主题已有的任何背景上，填掉那些半阴影行会在它能
 /// 匹配的同样多的终端上与那个主题打架。
-fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
+fn mark_lines() -> Vec<(String, Color)> {
     let rows = wording::logo_lines();
     debug_assert!(
         rows.iter()
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
         "标记要么整个画出来，要么一个都不画，所以它的宽度是布局的契约"
     );
-    let bar_row = match frame {
-        Some(frame) => frame as usize % rows.len(),
-        // 中间那一行：`logo_lines` 自己画短横的位置，因此也就是空闲标记的样子。它是下落的第三
-        // 帧，所以一次运行的第一帧是最上面那一行 —— 横条在上方重新出现、再落一次（票 07）。
-        None => rows.len() / 2,
-    };
-    let mut lines: Vec<(Vec<char>, Color)> = rows
-        .iter()
+    let rows_len = rows.len();
+    rows.into_iter()
         .enumerate()
         .map(|(row, text)| {
-            let color = if row < rows.len() - 1 {
-                Color::LightMagenta
+            let color = if row < rows_len - 1 {
+                palette::MARK_BRIGHT
             } else {
-                Color::Magenta
+                palette::MARK_DIM
             };
-            let mut line: Vec<char> = text.chars().collect();
-            // 短横自己的单元格先让出来：标记空闲时的连字符画在它里面，而除了平的那一个，每个
-            // 方向都会往今天放着别的东西的行里放字形。
-            for cell in line.iter_mut().skip(MARK_DASH_COLUMN).take(MARK_DASH_WIDTH) {
-                *cell = ' ';
-            }
-            (line, color)
+            (text.to_owned(), color)
         })
-        .collect();
-    for cell in lines[bar_row]
-        .0
-        .iter_mut()
-        .skip(MARK_DASH_COLUMN)
-        .take(MARK_DASH_WIDTH)
-    {
-        *cell = DASH_BAR;
-    }
-    lines
-        .into_iter()
-        .map(|(line, color)| (line.into_iter().collect(), color))
         .collect()
 }
 
@@ -4367,9 +4347,9 @@ fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
         return;
     }
     let focus = state.focused_turn().unwrap_or(units - 1);
-    let style = Style::default().fg(Color::DarkGray);
+    let style = Style::default().fg(palette::MUTED);
     let focus_style = Style::default()
-        .fg(Color::LightMagenta)
+        .fg(palette::ACCENT)
         .add_modifier(Modifier::BOLD);
     for (offset, slot) in turn_rail_rows(rows, units, focus).into_iter().enumerate() {
         let (symbol, style, unit) = match slot {
@@ -4395,16 +4375,21 @@ fn draw_turn_rail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &m
 }
 
 /// 转录的滚动条：只在内容多于一屏时才画，画在排版一直为它留的那一列里。
+/// 转录（或轨迹页）右缘的位置指示：**只画滑块，不画轨道**。
+///
+/// 轨道与紧邻的回合条是同一族细竖线，两条并排读起来是噪音（`.scratch/tui-visual-language/
+/// issues/07` 决定 1）；位置靠滑块本身表达。`TRAILING_COLUMNS` 那两列的预留**不动** —— 它防
+/// 的是文字重新折行，与画不画无关。
 fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
     if track.width == 0 || pane.total() <= track.height as usize {
         return;
     }
     // 跟着末尾与在读历史看起来不一样，所以位置不用读数字就看得出来。
     let thumb = if pane.following() {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::MUTED)
     } else {
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(palette::MUTED)
             .add_modifier(Modifier::BOLD)
     };
     let mut scrollbar = ScrollbarState::new(pane.total())
@@ -4412,7 +4397,10 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
         .viewport_content_length(track.height as usize);
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .track_style(Style::default().fg(Color::DarkGray))
+            // 轨道与它两端的箭头都不画：只留滑块，位置靠它自己表达。
+            .track_symbol(None)
+            .begin_symbol(None)
+            .end_symbol(None)
             .thumb_style(thumb),
         track,
         &mut scrollbar,
@@ -4455,8 +4443,9 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             truncate_columns(&text, width as usize),
+            // 新内容指示器归焦点色（`.scratch/tui-visual-language/spec.md` §6）。
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ))),
         rect,
@@ -4504,17 +4493,19 @@ fn draw_bottom(
     // 拿到的颜色。只有**就是**提示符的那个 span 上色：它下面那些行的缩进是同样宽的空格，而
     // 一份长到把提示符滚出顶端的草稿，屏幕上根本没有提示符可上色
     // （`.scratch/tui-input-pulse/spec.md` §2b）。
-    let prompt_style = Style::default().fg(prompt_colour(state.pulse));
+    // 提示符的色相只在一次运行进行中走：空闲时它歇在帧 0 的颜色上，于是输入区**完全静止**
+    // ——动的是状态行那个字形循环（`.scratch/tui-visual-language/spec.md` §30–§33）。
+    let prompt_frame = if state.busy() { state.pulse } else { 0 };
+    let prompt_style = Style::default().fg(prompt_colour(prompt_frame));
     for row in &mut rows {
         match row.spans.first_mut() {
             Some(lead) if lead.content.as_ref() == editor::PROMPT => lead.style = prompt_style,
             _ => {}
         }
     }
-    frame.render_widget(
-        Paragraph::new(rows).style(Style::default().add_modifier(Modifier::BOLD)),
-        panes.input,
-    );
+    // 草稿归正文档：整段 `BOLD` 随本 effort 退场（`.scratch/tui-visual-language/spec.md` §19），
+    // 提示符 `❱` 仍是界面上唯一会动的专色、唯一焦点。
+    frame.render_widget(Paragraph::new(rows), panes.input);
     // 草稿在问题之下仍然可见 —— 那是用户正在写的东西 —— 但光标收起来：键盘正在回答，不是在
     // 编辑（spec §9）。光标是按刚画出来的那些行摆的，从不按帧与帧之间保存的状态摆，正是后者
     // 让内联视口的光标漂移（ADR 0002）。
@@ -4527,8 +4518,8 @@ fn draw_bottom(
     }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            state.status_line(panes.hints.width),
-            Style::default().fg(Color::DarkGray),
+            state.hint_line(panes.hints.width),
+            Style::default().fg(palette::MUTED),
         ))),
         panes.hints,
     );
@@ -4637,10 +4628,10 @@ fn draw_questionnaire_footer(
     } else {
         progress
     };
-    let mut cursor = text_columns(&progress) + 3;
+    let mut cursor = text_columns(&progress) + text_columns(wording::GAP);
     let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        format!("{progress}   "),
-        Style::default().fg(Color::DarkGray),
+        format!("{progress}{}", wording::GAP),
+        Style::default().fg(palette::MUTED),
     )];
     let items = [
         (
@@ -4669,8 +4660,8 @@ fn draw_questionnaire_footer(
         // 间隔只出现在**画出来的按钮之间**，而且它是**画出来**的、不是只在心里记个数：由一段
         // 不在屏幕上的间隔推出来的区域，是一个指着按钮旁边三个列开外的区域（票 04 §7）。
         if drawn {
-            spans.push(Span::raw("   "));
-            cursor += 3;
+            spans.push(Span::raw(wording::GAP));
+            cursor += text_columns(wording::GAP);
         }
         let width = text_columns(label);
         if let Some(rect) = hint_region(panes.hints, cursor, width) {
@@ -4678,7 +4669,7 @@ fn draw_questionnaire_footer(
         }
         spans.push(Span::styled(
             label.to_owned(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::MUTED),
         ));
         cursor += width;
         drawn = true;
@@ -4689,15 +4680,15 @@ fn draw_questionnaire_footer(
         Some(Gesture::Exit) => wording::questionnaire_exit_raised(),
         Some(Gesture::DeclineQuestion) => wording::questionnaire_decline_raised(),
         None => wording::questionnaire_hint(
-            (panes.hints.width as usize).saturating_sub(cursor + 3),
+            (panes.hints.width as usize).saturating_sub(cursor + text_columns(wording::GAP)),
             questionnaire.enter_submits(),
         ),
     };
     if !tail.is_empty() {
-        spans.push(Span::raw("   "));
+        spans.push(Span::raw(wording::GAP));
         spans.push(Span::styled(
             tail.to_owned(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::MUTED),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), panes.hints);
@@ -4771,13 +4762,7 @@ fn draw_menu(
         .collect();
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        WidgetBlock::default()
-            .borders(Borders::ALL)
-            .border_set(border::LIGHT_TRIPLE_DASHED)
-            .border_style(Style::default().fg(CHROME_LINE)),
-        area,
-    );
+    frame.render_widget(chrome_block(), area);
     frame.render_widget(Paragraph::new(rows), layout::inner(area));
 }
 
@@ -4806,13 +4791,11 @@ fn menu_row(
     // 开头一列内边距，然后是这一行，然后是剩下的部分 —— 于是文字永远不碰边框，而高亮盖住整行。
     let body = truncate_columns(&text, inner.saturating_sub(1));
     let padding = inner.saturating_sub(1 + text_columns(&body));
+    // 菜单去黄（§27）：未选中行归正文档，光标行是**临时光标** —— 反显，不占颜色。
     let style = if selected {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        Style::default().add_modifier(Modifier::REVERSED)
     } else {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(palette::PLAIN)
     };
     Line::from(vec![
         Span::styled(format!(" {body}"), style),
@@ -5020,10 +5003,17 @@ fn prefix_style(view: Viewport, width: u16) -> PrefixStyle {
 /// `colors` 是转录的名字调色板。手上没有名册的调用方 —— `plain` 的那一半渲染，以及只关心文字
 /// 的测试 —— 通过 [`render_block_uncoloured`] 传一个空的进来，于是每个名字都画成叙述灰。
 pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
-    paint_block(block, colors, SHARED_RENDER_WIDTH, Viewport::Conversation)
-        .into_iter()
-        .map(|rendered| rendered.line)
-        .collect()
+    let style = prefix_style(Viewport::Conversation, SHARED_RENDER_WIDTH);
+    paint_block(
+        block,
+        colors,
+        SHARED_RENDER_WIDTH,
+        style,
+        Viewport::Conversation,
+    )
+    .into_iter()
+    .map(|rendered| rendered.line)
+    .collect()
 }
 
 /// 不带名册地画一个块：每个发言者的名字都是叙述灰。这是名字有颜色之前共享渲染的样子，留给那些
@@ -5035,16 +5025,16 @@ pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
 /// 画一个块，保留每一行的链接。
 ///
 /// `width` 是转录内容的可用列数：Markdown 里的表格与超宽代码行按它排版
-/// （`.scratch/markdown-render/spec.md` §1）。
+/// （`.scratch/markdown-render/spec.md` §1）。`style` 是发言者前缀的分档 —— 它由调用方按
+/// **视图与那个视图的档位宽**算好传来，因为轨迹页的正文比页面窄两列（滚动条那一列），前缀的
+/// 「宽档 40 列」不能拿正文列数去量（`.scratch/tui-visual-language/issues/07` 决定 2）。
 fn paint_block(
     block: &Block,
     colors: &mut SpeakerColors,
     width: u16,
+    style: PrefixStyle,
     view: Viewport,
 ) -> Vec<RenderedLine> {
-    // 前缀的分档只看视图与它自己的宽度：同一块按两个宽度各画一次，各自都写对
-    // （票 09）。
-    let style = prefix_style(view, width);
     match block {
         // 轨迹视图里的一条 assistant 消息：只画**首行 + `…`**，全文进详情覆盖层
         // （`.scratch/trace-tab/spec.md` §3）。
@@ -5130,7 +5120,7 @@ fn paint_block(
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
             wording::round_section(*round, *mode),
             Style::default()
-                .fg(ratatui::style::Color::Cyan)
+                .fg(palette::MUTED)
                 .add_modifier(Modifier::BOLD),
         ))
         .into()],
@@ -5141,12 +5131,12 @@ fn paint_block(
             let mut lines: Vec<RenderedLine> = vec![Line::from(Span::styled(
                 format!("!! {}", wording::divergence(topic)),
                 Style::default()
-                    .fg(ratatui::style::Color::Magenta)
+                    .fg(palette::PLAIN)
                     .add_modifier(Modifier::BOLD),
             ))
             .into()];
             for position in positions {
-                lines.push(Line::from(format!("  - {position}")).into());
+                lines.push(Line::from(format!("{}- {position}", wording::INDENT)).into());
             }
             lines
         }
@@ -5154,14 +5144,14 @@ fn paint_block(
         // 后置 hook 的反馈，关于刚画出来的那次调用：一行普通的缩进行，黄色，因为说话的是策略
         // 而不是工具。
         Block::ToolFeedback { outcome, .. } => vec![Line::from(Span::styled(
-            format!("  {}", wording::hook_feedback(outcome)),
-            Style::default().fg(Color::Yellow),
+            format!("{}{}", wording::INDENT, wording::hook_feedback(outcome)),
+            Style::default().fg(palette::WARN),
         ))
         .into()],
         Block::TurnStarted { speaker, iteration } => vec![speaker_line(
             speaker,
             wording::turn_started(*iteration),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            Style::default().fg(palette::MUTED),
             colors,
             style,
         )
@@ -5183,7 +5173,7 @@ fn paint_block(
         } => vec![speaker_line(
             speaker,
             wording::permission_asked(tool_name.as_deref(), &summarize_args(args)),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            Style::default().fg(palette::MUTED),
             colors,
             style,
         )
@@ -5196,7 +5186,7 @@ fn paint_block(
         } => vec![speaker_line(
             speaker,
             wording::permission_decided(*decision, *source, reason.as_deref()),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            Style::default().fg(palette::MUTED),
             colors,
             style,
         )
@@ -5208,7 +5198,7 @@ fn paint_block(
         } => vec![speaker_line(
             speaker,
             wording::hook(point, outcome),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            Style::default().fg(palette::MUTED),
             colors,
             style,
         )
@@ -5219,7 +5209,7 @@ fn paint_block(
         } => vec![speaker_line(
             speaker,
             wording::executor_spawned(executor_id.as_str()),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            Style::default().fg(palette::MUTED),
             colors,
             style,
         )
@@ -5236,7 +5226,7 @@ fn paint_block(
         Block::Usage { speaker, usage } => vec![speaker_line(
             speaker,
             wording::usage_summary(usage),
-            Style::default().fg(ratatui::style::Color::DarkGray),
+            Style::default().fg(palette::MUTED),
             colors,
             style,
         )
@@ -5260,13 +5250,18 @@ fn paint_block(
             // 它拿一个**专色**（票 10，`.scratch/trace-tab/spec.md` §2 例外二）：注入行
             // 与别的叙述行同灰，于是「注入 / 用户 / 助手」在轨迹页上分不开。
             let text = wording::context_injected(source.clone());
-            let line = Line::from(Span::styled(
-                text.clone(),
-                Style::default().fg(Color::LightBlue),
-            ));
+            // `▸` 说这一行点得开 —— 注入行是**折起来**的：屏幕上只有来源名，加载数据本身在
+            // 详情里，所以它按判据拿这个字形（`.scratch/tui-visual-language/spec.md` §13）。
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", wording::FOLDABLE),
+                    Style::default().fg(palette::MUTED),
+                ),
+                Span::styled(text.clone(), Style::default().fg(palette::INJECTED)),
+            ]);
             let detail = Detail {
                 title: text,
-                color: Color::LightBlue,
+                color: palette::INJECTED,
                 kind: DetailKind::Context {
                     source: source.clone(),
                     content: content.clone(),
@@ -5285,7 +5280,7 @@ fn paint_block(
         }
         Block::Diagnostic(message) => vec![Line::from(Span::styled(
             wording::diagnostic(message),
-            Style::default().fg(ratatui::style::Color::Yellow),
+            Style::default().fg(palette::WARN),
         ))
         .into()],
         Block::Notice(message) => vec![narration(message.clone()).into()],
@@ -5296,17 +5291,14 @@ fn paint_block(
 fn trace_rule(width: u16) -> Line<'static> {
     Line::from(Span::styled(
         "┄".repeat(width as usize),
-        Style::default().fg(CHROME_LINE),
+        Style::default().fg(palette::CHROME),
     ))
 }
 
-/// 一条**中间**叙述行：用暗色，好让模型那个以全亮度渲染的回答成为显眼的东西。带严重度的行
-/// 改为保持自己的颜色（见 [`severity_line`]）。
+/// 一条**中间**叙述行：用静音档，好让模型那个以正文档渲染的回答成为显眼的东西。带严重度的
+/// 行改为问色板（见 [`severity_line`]）。
 fn narration(text: String) -> Line<'static> {
-    Line::from(Span::styled(
-        text,
-        Style::default().fg(ratatui::style::Color::DarkGray),
-    ))
+    Line::from(Span::styled(text, Style::default().fg(palette::MUTED)))
 }
 
 fn severity_line(reason: StopReason, text: String) -> Line<'static> {
@@ -5325,16 +5317,11 @@ fn severity_speaker_line(
     speaker_line(speaker, text, severity_style(reason), colors, style)
 }
 
-/// 一个停止点把它那一行画成什么颜色。
+/// 一个停止点把它那一行画成什么颜色：语义归属仍只有 [`Severity::of`] 一处，颜色问色板
+/// （`.scratch/tui-visual-language/spec.md` §4）。`Good` 与 `Note` 因此退成静音 —— 正常完成
+/// 不再抢注意力，只有出问题时屏幕才亮。
 fn severity_style(reason: StopReason) -> Style {
-    match Severity::of(reason) {
-        Severity::Good => Style::default().fg(ratatui::style::Color::Green),
-        Severity::Note => Style::default().fg(ratatui::style::Color::Cyan),
-        Severity::Warn => Style::default().fg(ratatui::style::Color::Yellow),
-        Severity::Bad => Style::default()
-            .fg(ratatui::style::Color::Red)
-            .add_modifier(Modifier::BOLD),
-    }
+    palette::style(Severity::of(reason))
 }
 
 /// 一次已完成的工具调用，折成一行：读的人能打开的**那次调用**，整份输出在它后面（票 02 §3）。
@@ -5353,20 +5340,24 @@ fn tool_block_lines(
         // 名字打头，于是每条转录行都以谁在说话开头；它后面那个标记说的是这行可以打开。它是
         // 绘制、不是文案，所以不是那句话的一部分（票 03 §Answer）。
         Span::styled(style.prefix(&tool.speaker), Style::default().fg(color)),
-        Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
-        // 这次调用是*为了*什么，用思考行穿的那个叙述灰 —— 参数本身离一次点击之遥
+        Span::styled(
+            format!("{} ", wording::FOLDABLE),
+            Style::default().fg(palette::MUTED),
+        ),
+        // 这次调用是*为了*什么：一条**过程**行，所以穿静音档；参数本身离一次点击之遥
         // （票 02 §2，2026-09-23 修正）。
         Span::styled(
             wording::tool_call_line(&tool.tool, &tool.args),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(palette::MUTED)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
     if failed {
+        // 失败是**信号**：界面域里只有它和诊断这一类会亮（§6）。
         call.push(Span::styled(
             format!(" {}", wording::tool_failed()),
-            Style::default().fg(Color::Red),
+            Style::default().fg(palette::BAD),
         ));
     }
     let detail = Detail {
@@ -5446,6 +5437,17 @@ fn trace_message_row(
             Style::default().fg(colors.of(speaker)),
         ))
     });
+    // 轨迹视图的消息行只画首行，全文在详情里 —— 谁把内容折起来谁就有 `▸`，所以这一行有，
+    // 而对话视图那条（已显全文）没有（`.scratch/tui-visual-language/spec.md` §13）。
+    if !head.spans.is_empty() {
+        head.spans.insert(
+            1,
+            Span::styled(
+                format!("{} ", wording::FOLDABLE),
+                Style::default().fg(palette::MUTED),
+            ),
+        );
+    }
     let more = rows.next().is_some();
     let over = text_columns(&line_text(&head)) > width as usize;
     if more || over {
@@ -5470,6 +5472,27 @@ fn is_user_message(block: &Block) -> bool {
             ..
         }
     )
+}
+
+/// 一个块是谁说的（不说话的那些是 `None`）。
+///
+/// 「换发言者空一行」只认它：叙述行、轮次边界、上下文注入这些没有发言者的块**不改写**上一次
+/// 的发言者，于是两次之间不会凭空多出空行。
+fn block_speaker(block: &Block) -> Option<&crate::events::SpeakerId> {
+    match block {
+        Block::Delta { speaker, .. }
+        | Block::Message { speaker, .. }
+        | Block::TurnStarted { speaker, .. }
+        | Block::TurnEnded { speaker, .. }
+        | Block::PermissionAsked { speaker, .. }
+        | Block::PermissionDecided { speaker, .. }
+        | Block::Hook { speaker, .. }
+        | Block::ExecutorSpawned { speaker, .. }
+        | Block::Usage { speaker, .. }
+        | Block::AgentError { speaker, .. } => Some(speaker),
+        Block::Tool(tool) => Some(&tool.speaker),
+        _ => None,
+    }
 }
 
 /// 一个块进不进这个视图 —— 分工的**唯一**判据（`.scratch/trace-tab/spec.md` §2）。
@@ -5772,7 +5795,7 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
                 // （票 02 §1）。
                 _ => rows.push(Line::from(Span::styled(
                     wording::detail_reasoning_unrecorded(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::MUTED),
                 ))),
             }
         }
@@ -5794,7 +5817,7 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
             if *no_result {
                 rows.push(Line::from(Span::styled(
                     wording::no_tool_result(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::MUTED),
                 )));
             } else if let Some(error) = error {
                 rows.extend(pane::wrap_text(error, width));
@@ -5804,13 +5827,13 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
                 if truncated {
                     rows.push(Line::from(Span::styled(
                         wording::detail_truncated(),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette::MUTED),
                     )));
                 }
             } else {
                 rows.push(Line::from(Span::styled(
                     wording::detail_output_unavailable(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::MUTED),
                 )));
             }
         }
@@ -5822,7 +5845,7 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
 fn section_header(name: &str) -> Line<'static> {
     Line::from(Span::styled(
         wording::detail_section(name),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(palette::MUTED),
     ))
 }
 
@@ -5931,20 +5954,17 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
-    // 边框穿发言者的颜色：这个框属于一行，而它属于谁的行，应该在你读它一个字之前就看得出来
-    // （2026-09-23）。
-    frame.render_widget(
-        WidgetBlock::default()
-            .borders(Borders::ALL)
-            .border_set(border::LIGHT_TRIPLE_DASHED)
-            .border_style(Style::default().fg(view.detail.color)),
-        area,
-    );
+    // 边框回归框架（`CHROME` + 空角），而「这是谁的行」退到标题行上 —— 那条记录的意图
+    // （不读一个字就知道是谁的行）没丢，标题本来就在框内第一行、紧挨边框
+    // （`.scratch/tui-visual-language/spec.md` §28）。
+    frame.render_widget(chrome_block(), area);
     // 标题行是被点那一行自己的文字，这样读的人知道他们打开的是哪一行。
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             truncate_columns(&title, text.width as usize),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(view.detail.color)
+                .add_modifier(Modifier::BOLD),
         ))),
         Rect::new(text.x, text.y, text.width, 1),
     );
@@ -5960,7 +5980,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             footer,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::MUTED),
         ))),
         Rect::new(text.x, text.y + text.height - 1, text.width, 1),
     );
@@ -6221,7 +6241,13 @@ mod tests {
             content: "[注入] MCP 加载\n\n- `fake`（stdio）：已连接\n".to_owned(),
         };
         let mut colors = SpeakerColors::new(&[]);
-        let lines = paint_block(&block, &mut colors, 80, Viewport::Conversation);
+        let lines = paint_block(
+            &block,
+            &mut colors,
+            80,
+            PrefixStyle::Bracketed,
+            Viewport::Conversation,
+        );
         assert_eq!(lines.len(), 1, "注入只占一行");
         let detail = lines[0].link.clone().expect("这一行该点得开");
         assert_eq!(detail.title, "[上下文注入：MCP 加载]");
@@ -6374,53 +6400,6 @@ mod tests {
         state.key(Key::Esc);
         assert_eq!(state.events, vec![FrontEndEvent::Cancel]);
         assert!(state.pending.is_none());
-    }
-
-    /// 色环，钉在每个实现都同意的那六个点上 —— 分区算术里一个舍入错误最先显形的那几个角。
-    #[test]
-    fn hsv_to_rgb_matches_the_shortcut_table() {
-        assert_eq!(hsv_to_rgb(0.0, 0.0, 1.0), (255, 255, 255));
-        assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), (255, 0, 0));
-        assert_eq!(hsv_to_rgb(1.0 / 3.0, 1.0, 1.0), (0, 255, 0));
-        assert_eq!(hsv_to_rgb(2.0 / 3.0, 1.0, 1.0), (0, 0, 255));
-        // 色环闭合：色相 1 就是色相 0，而越过它的色相会回绕而不是 panic。
-        assert_eq!(hsv_to_rgb(1.0, 0.4, 0.8), hsv_to_rgb(0.0, 0.4, 0.8));
-        assert_eq!(hsv_to_rgb(2.25, 0.4, 0.8), hsv_to_rgb(0.25, 0.4, 0.8));
-    }
-
-    /// 下落短横**在这里**做单元测试，因为它已经不在屏幕上了（票 08）：`draw_sidebar_identity`
-    /// 传的是 `None`，所以没有集成测试能把它那些帧从一份渲染出来的缓冲里走一遍。这段代码留给
-    /// 下一个关于标记该怎么动的想法，而这就是在此期间让它保持诚实的东西 —— 一个悄悄停摆了的
-    /// 保留动画，比根本没有动画更糟。
-    #[test]
-    fn the_falling_dash_steps_down_one_row_per_frame_and_wraps() {
-        let rows = wording::logo_lines();
-        for frame in 0..10u64 {
-            let expected_row = (frame as usize) % rows.len();
-            let lines = mark_lines(Some(frame));
-            for (index, (line, _)) in lines.iter().enumerate() {
-                let cell: String = line
-                    .chars()
-                    .skip(MARK_DASH_COLUMN)
-                    .take(MARK_DASH_WIDTH)
-                    .collect();
-                if index == expected_row {
-                    assert_eq!(cell, "▀▀▀▀", "帧 {frame}：横条落在第 {expected_row} 行");
-                } else {
-                    assert_eq!(
-                        cell.trim(),
-                        "",
-                        "帧 {frame}：第 {index} 行是空的，所以横条从不分开"
-                    );
-                }
-            }
-        }
-        // 而静止的标记就是 `logo_lines` 画它那根短横的那一行 —— 中间那一行。
-        assert_eq!(
-            mark_lines(None)[rows.len() / 2].0,
-            rows[rows.len() / 2],
-            "空闲的标记保持标记一直画的那一行"
-        );
     }
 
     /// `map_key` 是 crossterm 的词汇表变成这个渲染器词汇表的唯一地方，而这里漏掉一个键就是一个

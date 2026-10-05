@@ -402,8 +402,9 @@ fn ctrl_o_is_ignored_while_a_replay_is_in_flight() {
     run_replay(&mut state);
     state.key(Key::CtrlO);
     let closed = screen(120, 40, &mut state);
+    // 按左栏自己的内容判它收没收起来 —— 状态行那几段之间也用 `┆`，不能拿它当左栏的证据。
     assert!(
-        !closed.join("\n").contains('┆'),
+        !closed.join("\n").contains("调用量"),
         "重放结束之后它收得起来：{}",
         closed.join("\n")
     );
@@ -809,7 +810,7 @@ fn an_old_streams_plan_events_still_replay_without_moving_the_mode() {
         run_replay(&mut state);
         let text = screen(120, 40, &mut state).join("\n");
         assert!(
-            text.contains("模式 询问"),
+            text.contains("┆ 询问 ┆"),
             "{events:?} 保持组装时的那一档模式：{text}"
         );
     }

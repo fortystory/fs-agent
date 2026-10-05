@@ -7,6 +7,8 @@
 use ratatui::buffer::CellWidth;
 use ratatui::text::{Line, Span};
 
+use super::wording;
+
 /// `text` 的显示宽度，单位是终端列。
 pub fn text_columns(text: &str) -> usize {
     text.cell_width() as usize
@@ -66,7 +68,7 @@ pub fn ellipsize_line(line: Line<'static>, width: usize) -> Line<'static> {
     }
     // `…` 跟着最后一片的样式，好让它读起来是那一行的一部分。
     let style = spans.last().map(|span| span.style).unwrap_or_default();
-    spans.push(Span::styled("…", style));
+    spans.push(Span::styled(wording::ELLIPSIS, style));
     Line {
         spans,
         style: line.style,

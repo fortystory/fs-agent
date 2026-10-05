@@ -6,26 +6,22 @@
 //! —— 仍是我们自己的。姿态是「不手写解析器」：它认不出的东西一律原样透传，所以不完美的
 //! 输入会降级成纯文本，而不是消失。
 //!
-//! 调色板是**答案的**：这里没有任何东西被调暗成叙述的灰色。发言前缀与块的续行缩进归
-//! 调用方管（spec §5）。
+//! 调色板是**答案的**，值住在 [`super::palette`] 的**内容域**那一节（§3）：内容域回答
+//! 「这是什么」，界面域回答「要不要注意 / 有没有被选中」，两域允许撞值。发言前缀与块的续行
+//! 缩进归调用方管（spec §5）。
 //!
 //! `width` 是转录内容的可用列数。表格的列宽与超宽代码行的折行都要知道它，于是**源行不
 //! 再宽度无关**：宽度变了要按新宽度重跑这里，而不是只重新折行（spec §1）。
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::highlight::{self, Class};
+use super::palette::{CODE_HEADING, CODE_QUIET};
 use super::wording;
 use super::{pane, width};
 
-/// 行内代码与围栏块里认不出语言时的底色。
-const CODE: Color = Color::Yellow;
-/// 静音的结构：引用条、分隔线、链接目标、代码块的语言名。
-const MUTED: Color = Color::Gray;
-/// 表格的网格线。
-const GRID: Color = Color::Gray;
 /// 一条主题分隔画多长。
 const RULE_WIDTH: usize = 24;
 /// 列表每嵌套一层缩进几格（spec §6）。解析器给的是嵌套**结构**，原始缩进已经没有了。
@@ -152,7 +148,7 @@ impl Renderer {
             Event::End(tag) => self.end(tag),
             Event::Text(text) => self.write_text(&text),
             Event::Code(code) => {
-                let style = self.style().fg(CODE);
+                let style = self.style().fg(CODE_QUIET);
                 self.write_piece(&code, style);
             }
             // 终端画不出 HTML，剥标签等于替作者做了一次有损翻译；透传至少保真（spec §6）。
@@ -162,7 +158,7 @@ impl Renderer {
                 self.blank_if_pending();
                 self.out.push(Line::from(Span::styled(
                     "─".repeat(RULE_WIDTH),
-                    Style::default().fg(MUTED),
+                    Style::default().fg(CODE_QUIET),
                 )));
                 self.pending_blank = true;
             }
@@ -375,7 +371,7 @@ impl Renderer {
     /// 当前行的基础样式：引用里的一切都是叙述灰（spec §6）。
     fn style(&self) -> Style {
         let base = if self.quote > 0 {
-            Style::default().fg(MUTED)
+            Style::default().fg(CODE_QUIET)
         } else {
             Style::default()
         };
@@ -400,7 +396,10 @@ impl Renderer {
         }
         let mut spans = Vec::with_capacity(self.line.len() + 2);
         for _ in 0..self.quote {
-            spans.push(Span::styled("│ ".to_owned(), Style::default().fg(MUTED)));
+            spans.push(Span::styled(
+                "│ ".to_owned(),
+                Style::default().fg(CODE_QUIET),
+            ));
         }
         if indent > 0 {
             spans.push(Span::raw(" ".repeat(indent)));
@@ -472,7 +471,7 @@ impl Renderer {
             }
         };
         if label != frame.url {
-            let style = Style::default().fg(MUTED);
+            let style = Style::default().fg(CODE_QUIET);
             self.target()
                 .push(Span::styled(format!(" ({})", frame.url), style));
         }
@@ -493,7 +492,7 @@ impl Renderer {
             }
         };
         let alt_text: String = alt.iter().map(|span| span.content.as_ref()).collect();
-        let muted = Style::default().fg(MUTED);
+        let muted = Style::default().fg(CODE_QUIET);
         let mut spans = vec![Span::styled(wording::IMAGE_PLACEHOLDER.to_owned(), muted)];
         if !alt_text.is_empty() {
             spans.push(Span::styled(" ".to_owned(), muted));
@@ -518,7 +517,7 @@ impl Renderer {
             if pad > 0 {
                 spans.push(Span::raw(" ".repeat(pad)));
             }
-            spans.push(Span::styled(lang.clone(), Style::default().fg(MUTED)));
+            spans.push(Span::styled(lang.clone(), Style::default().fg(CODE_QUIET)));
             self.out.push(Line::from(spans));
         }
         self.out.extend(code_lines(
@@ -589,7 +588,10 @@ impl Renderer {
                 }
                 for (index, width) in widths.iter().enumerate() {
                     if index > 0 {
-                        spans.push(Span::styled(" │ ".to_owned(), Style::default().fg(GRID)));
+                        spans.push(Span::styled(
+                            " │ ".to_owned(),
+                            Style::default().fg(CODE_QUIET),
+                        ));
                     }
                     let empty = Vec::new();
                     let content = wrapped
@@ -618,11 +620,11 @@ impl Renderer {
     }
 }
 
-/// 标题自己那一行：`#`/`##` 用青色挑出来，更深的只加粗。
+/// 标题自己那一行：`#`/`##` 用内容域的标题色挑出来，更深的只加粗。
 fn heading_style(level: Option<HeadingLevel>) -> Style {
     let style = Style::default().add_modifier(Modifier::BOLD);
     if matches!(level, Some(HeadingLevel::H1 | HeadingLevel::H2)) {
-        style.fg(Color::Cyan)
+        style.fg(CODE_HEADING)
     } else {
         style
     }
@@ -754,7 +756,7 @@ fn separator(widths: &[usize], indent: usize) -> Line<'static> {
     if indent > 0 {
         spans.push(Span::raw(" ".repeat(indent)));
     }
-    spans.push(Span::styled(text, Style::default().fg(GRID)));
+    spans.push(Span::styled(text, Style::default().fg(CODE_QUIET)));
     Line::from(spans)
 }
 
