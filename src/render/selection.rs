@@ -15,24 +15,6 @@ use ratatui::Frame;
 
 use crate::render::width;
 
-/// 一块能被拖选的区域是哪一类。
-///
-/// 它现在只用来读代码时认人（谁在哪一层），判断从不用它：换行语义按 `folded` 走、取值只能在
-/// 所属区域的矩形内。留着它是为了 `block_at` 的调试与将来可能的分档。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockKind {
-    /// 转录：对话页或轨迹页画出来的那些显示行。
-    Transcript,
-    /// 详情覆盖层的主体。
-    Detail,
-    /// 左栏的页（调用量 / todo / 文件）。
-    Sidebar,
-    /// 问卷的那些行（表头、题目、选项、自由文本行）。
-    Questionnaire,
-    /// 输入区的草稿。
-    Draft,
-}
-
 /// 一条显示行：它的文本，以及它是不是上一行**软折**出来的续行。
 ///
 /// `folded` 就是「复制时该不该在这里换行」的全部判据：同一来源行折出来的下一片要拼回去，
@@ -54,10 +36,12 @@ impl TextRow {
 }
 
 /// 一块画在屏幕上的文本区域：它在哪，以及它画了哪些行。
+///
+/// 没有「这是哪一类区域」那个字段：换行语义按每行的 `folded` 走、取值只能在 `rect` 内，而谁盖在
+/// 谁上面由**入栈顺序**说了算 —— 一个只写不读的类别枚举只会是下一次改动要维护的假接口。
 #[derive(Debug, Clone)]
 pub struct TextBlock {
     pub rect: Rect,
-    pub kind: BlockKind,
     pub rows: Vec<TextRow>,
 }
 
@@ -76,11 +60,11 @@ impl ScreenText {
     /// 记下一块区域这一帧画了什么。
     ///
     /// 空矩形或没有行时什么都不记 —— 一块看不见的区域不该接得住指针。
-    pub fn push(&mut self, rect: Rect, kind: BlockKind, rows: Vec<TextRow>) {
+    pub fn push(&mut self, rect: Rect, rows: Vec<TextRow>) {
         if rect.width == 0 || rect.height == 0 || rows.is_empty() {
             return;
         }
-        self.blocks.push(TextBlock { rect, kind, rows });
+        self.blocks.push(TextBlock { rect, rows });
     }
 
     /// 指针落进哪一块：**最后画的那一块**（它盖在上面）。详情覆盖层因此在转录之上。
@@ -108,6 +92,13 @@ pub struct Drag {
 }
 
 impl Drag {
+    /// 这次拖选所属的那一块，没有就是 `None`。
+    ///
+    /// 三处要用它（反白、取值、拖动时夹住头的落点），所以它有一个名字、只写一遍。
+    pub fn block<'a>(&self, text: &'a ScreenText) -> Option<&'a TextBlock> {
+        self.block.and_then(|index| text.block(index))
+    }
+
     /// 一次按下的起点：还没有选什么。
     pub fn press(anchor: (u16, u16), block: Option<usize>) -> Self {
         Self {
@@ -121,8 +112,8 @@ impl Drag {
 
 /// 越过多远才算**拖**。
 ///
-/// 一格就够：手抖是半格的事，而按住不放走一格已经是一次有意的动作。它与 `selecting` 是
-/// 「这次抬起到手算点击还是算选择」的唯一分歧点。
+/// 判据是「走过的格数 **> 这个数**」，所以 1 的意思是：按住之后挪**一格**仍算手抖，走到第二格
+/// 才是拖。它与 `selecting` 是「这次抬起到手算点击还是算选择」的唯一分歧点。
 const DRAG_THRESHOLD: u16 = 1;
 
 impl Drag {
@@ -144,8 +135,7 @@ impl Drag {
         if !self.selecting {
             return None;
         }
-        let block = self.block.and_then(|index| text.block(index))?;
-        let rect = block.rect;
+        let rect = self.block(text)?.rect;
         let (left, right) = if self.anchor.0 <= self.head.0 {
             (self.anchor.0, self.head.0)
         } else {
@@ -191,7 +181,7 @@ pub fn paint(frame: &mut Frame, text: &ScreenText, drag: Option<&Drag>) {
 /// 它的软折续行就**不**落换行，否则落一个 —— 于是被折过的长命令复制回来仍是一条，而区域自己的
 /// 硬换行（Markdown 段落、代码块的多行）保留。
 pub fn text(text: &ScreenText, drag: &Drag) -> String {
-    let Some(block) = drag.block.and_then(|index| text.block(index)) else {
+    let Some(block) = drag.block(text) else {
         return String::new();
     };
     let Some(cover) = drag.cover(text) else {
@@ -268,7 +258,6 @@ mod tests {
         let mut text = ScreenText::default();
         text.push(
             Rect::new(41, 2, 20, 4),
-            BlockKind::Transcript,
             vec![
                 TextRow::plain("第一行".to_owned()),
                 TextRow {
@@ -286,7 +275,6 @@ mod tests {
         // 后画的一块盖在同样位置上：详情覆盖层与转录的关系。
         text.push(
             Rect::new(41, 2, 20, 2),
-            BlockKind::Detail,
             vec![TextRow::plain("覆盖层".to_owned())],
         );
         assert_eq!(text.block_at(41, 2), Some(1), "最上层的那一块");
@@ -316,7 +304,6 @@ mod tests {
         let mut text = ScreenText::default();
         text.push(
             Rect::new(0, 0, 10, 3),
-            BlockKind::Transcript,
             vec![
                 TextRow::plain("第一段 前半".to_owned()),
                 TextRow {

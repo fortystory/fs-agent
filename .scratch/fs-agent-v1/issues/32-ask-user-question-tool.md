@@ -153,6 +153,8 @@ Status: done
   wire 与 plain 无此限制）——这一条票面没写，记在这里。
 - `(Recommended)` 在 TUI/plain 里**从显示中剥掉**、换成中文徽标 `（推荐）`，答案值仍是原串（含
   标记）——这是 research 里 DSH `parseRecommendedLabel` 的读法，也是「只做显示标记」的自然实现。
+  **2026-10-06 推翻后缀本身**：约定改成 `(推荐)`（模型可见的散文一律走中文，ADR 0005），
+  判定同时认旧的 `(Recommended)`；徽标一个字不改 —— `.scratch/tui-feedback/spec.md` §1。
 - 讨论的讨论者（`SpeakerId::Debater`，属主会话）也挂了这个工具；只有执行者没有。票面「只有主会话能问」
   按此落地。
 - 顺手在 `docs/render.md` 的键盘一节补了一条 `ConsoleQuestions`/接管说明，保持该文档与实现一致。

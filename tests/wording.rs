@@ -1219,18 +1219,28 @@ fn the_old_english_suffix_still_earns_its_badge() {
 }
 
 #[test]
-fn the_copy_receipt_reads_in_chinese_and_yields_the_row_to_the_hints() {
-    // 复制的回执排在最前，放不下时后面的提示让步（`.scratch/tui-feedback/spec.md` §6）。
+fn the_copy_receipt_leads_the_hint_row_and_never_evicts_the_way_out() {
+    // 回执排在最前，而**出口永远保住**（`.scratch/tui-feedback/spec.md` §6；那条契约在
+    // `exit-gesture` §2 与 `sidebar-toggle` §4 里）。
     assert_eq!(wording::copied(12, 2), "已复制 12 字 · 2 行");
-    assert_eq!(
-        wording::with_receipt("已复制 12 字 · 2 行", "enter 发送 · ctrl-c 退出", 80),
-        "已复制 12 字 · 2 行 · enter 发送 · ctrl-c 退出"
+    let wide = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 120, false);
+    assert!(
+        wide.starts_with("已复制 12 字 · 2 行 · enter 发送"),
+        "回执打头、提示跟在后面：{wide}"
     );
-    // 窄到放不下整行时只留回执：它是刚发生的事，而提示随时读得到。
+    assert!(wide.ends_with("ctrl-c/ctrl-d 退出"), "出口在末尾：{wide}");
+
+    // 45 列：放得下回执与出口，放不下任何一条提示 —— 提示让位，出口不让。
+    let middle = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 45, false);
     assert_eq!(
-        wording::with_receipt("已复制 12 字 · 2 行", "enter 发送 · ctrl-c 退出", 12),
-        "已复制 12 字 · 2 行"
+        middle, "已复制 12 字 · 2 行 · ctrl-c/ctrl-d 退出",
+        "{middle}"
     );
+
+    // 20 列：连回执都放不下，于是退回那条不带回执的提示行 —— 出口照旧在场。
+    let narrow = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 20, false);
+    assert_eq!(narrow, wording::status_line(false, 20, false), "{narrow}");
+    assert!(narrow.contains("ctrl-c/ctrl-d 退出"), "{narrow}");
 }
 
 #[test]

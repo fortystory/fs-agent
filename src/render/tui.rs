@@ -459,6 +459,13 @@ impl Tui {
             for event in state.take_events() {
                 port.emit(event);
             }
+            if let Some(payload) = state.take_clipboard() {
+                // OSC 52 —— 终端自己的剪贴板通道。这条通道是单向的，没有回话的地方，所以写不
+                // 进去也不报错、更不探测；shift 原生选择照旧可用
+                // （`.scratch/tui-feedback/spec.md` §6）。
+                let mut clipboard_out = std::io::stdout();
+                let _ = execute!(clipboard_out, Print(payload));
+            }
             if state.take_suspend_request() {
                 // 交还终端 → 停到后台 → `fg` 回来后重进并重绘
                 // （`.scratch/suspend-gesture/spec.md` §3、§4）。这一步**阻塞**到用户把进程
@@ -779,6 +786,11 @@ pub struct TuiState {
     /// 最近一次复制：`(时刻, 字数, 行数)`。提示行那句回执从这里来，寿命由
     /// [`COPIED_WINDOW`] 定（`.scratch/tui-feedback/spec.md` §6）。
     copied: Option<(std::time::Instant, usize, usize)>,
+    /// 一次复制要写出去的那串字节（OSC 52），等着运行期取走。
+    ///
+    /// 与 `quit` / `suspend` / 标题同一种形状：**状态机算、运行期写** —— `TuiState` 因此仍然
+    /// 「不接终端也能测」，跑一次拖选不会真的往测试进程的 stdout 吐一个剪贴板序列。
+    clipboard: Option<String>,
     /// 上一帧的整个终端区域。详情覆盖层的主体在打开时就排版好了，而那次排版需要的宽度是
     /// 终端尺寸的函数 —— 在覆盖层被画出来之前就知道，所以一次点击不必等一帧（票 04 §1）。
     area: Rect,
@@ -1599,6 +1611,7 @@ impl TuiState {
             screen_text: selection::ScreenText::default(),
             drag: None,
             copied: None,
+            clipboard: None,
             area: Rect::default(),
             prompt_reply: None,
             // 空闲，直到循环另说：在它要第一行之前没有任何东西在跑，而键盘必须读起来就是
@@ -1755,6 +1768,11 @@ impl TuiState {
     pub fn tick(&mut self) {
         self.pulse = self.pulse.wrapping_add(1);
         self.dirty = true;
+        // 复制回执到点就作废：判据与提示行读它时是**同一条**（`.scratch/tui-feedback/spec.md`
+        // §6）—— 脉冲一直在走，所以这里总会走到。
+        if copy_receipt(self.copied, std::time::Instant::now()).is_none() {
+            self.copied = None;
+        }
     }
 
     /// 括号粘贴是作为文本到达的，不是作为按键。
@@ -2607,8 +2625,7 @@ impl TuiState {
     fn drag_to(&mut self, column: u16, row: u16) {
         let Some(rect) = self
             .drag
-            .and_then(|drag| drag.block)
-            .and_then(|index| self.screen_text.block(index))
+            .and_then(|drag| drag.block(&self.screen_text))
             .map(|block| block.rect)
         else {
             return;
@@ -2633,20 +2650,24 @@ impl TuiState {
     /// 把这次拖选取到的文本交给剪贴板，并在提示行留一句回执
     /// （`.scratch/tui-feedback/spec.md` §6）。
     ///
-    /// 写出的是 **OSC 52** —— 终端自己的剪贴板通道。这条通道是单向的，没有回话的地方，所以
-    /// 写不进去也不报错、更不探测；shift 原生选择照旧可用。选区取出来是空的时候什么都不做，
-    /// 也不留回执。
+    /// 这里只**算出**要写的字节（OSC 52）与那句回执：写出去是运行期的事，与标题同一个形状。
+    /// 选区取出来是空的时候什么都不做，也不留回执。
     fn copy(&mut self, drag: &selection::Drag) {
         let text = selection::text(&self.screen_text, drag);
         if text.is_empty() {
             return;
         }
-        let _ = execute!(std::io::stdout(), Print(selection::osc52(&text)));
+        self.clipboard = Some(selection::osc52(&text));
         self.copied = Some((
             std::time::Instant::now(),
             text.chars().count(),
             text.lines().count(),
         ));
+    }
+
+    /// 取走这次复制要写出的字节，没有就是 `None`。运行期把它原样交给终端。
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
 
     /// 一次点击落到哪儿：五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则
@@ -2972,6 +2993,10 @@ impl TuiState {
             // 都不铺、也不标接缝的操作显示一条进度行（`spec` §2）。
             ConsoleRequest::Replay { events } => {
                 if !events.is_empty() {
+                    // 重放占着指针（`mouse()` 在重放期间整个早退），所以一次进行中的拖选到
+                    // 这里必须作废：它的区域编号指的还是重放前那一帧的屏幕文本
+                    // （`.scratch/tui-feedback/spec.md` §5）。
+                    self.drag = None;
                     self.replay = Some(Replay {
                         events,
                         next: 0,
@@ -3598,17 +3623,14 @@ impl TuiState {
             return wording::history_progress_line(replay.next, replay.events.len(), width);
         }
         // 提示说的是键盘*现在*干什么。没有行被读的时候 —— 一个回合进行中，或者一次性的
-        // `discuss` —— `enter 发送` 会是一个这个会话兑现不了的承诺（spec §6）。
-        let rest = if self.prompt_reply.is_some() {
-            wording::status_line(self.busy(), width, raised)
+        // `discuss` —— `enter 发送` 会是一个这个会话兑现不了的承诺（spec §6）。复制的回执
+        // 排在提示集合**之前**（`.scratch/tui-feedback/spec.md` §6），而出口那一段由
+        // `wording::hint_row` 保住 —— 回执不许把它挤掉。
+        let receipt = self.copy_receipt();
+        if self.prompt_reply.is_some() {
+            wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
         } else {
-            wording::viewer_status_line(self.busy(), width, raised)
-        };
-        // 复制的回执排在提示集合**之前**：它说的是刚发生的事（`.scratch/tui-feedback/spec.md`
-        // §6），放不下时后面的提示让步。
-        match self.copy_receipt() {
-            Some(receipt) => wording::with_receipt(&receipt, &rest, width),
-            None => rest,
+            wording::viewer_status_line_with(receipt.as_deref(), self.busy(), width, raised)
         }
     }
 
@@ -4075,7 +4097,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     };
     // 左栏这一块也进屏幕文本层：三页的画法各不相同，但都是「一页已经排好的行」，没有软折
     // 可言（`.scratch/tui-feedback/spec.md` §5）。
-    note_rows(state, page, selection::BlockKind::Sidebar, &rows, &[]);
+    note_rows(state, page, &rows, &[]);
     frame.render_widget(Paragraph::new(rows), page);
 }
 
@@ -4596,13 +4618,7 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
             // （`.scratch/tui-feedback/spec.md` §5–§6）。
             let folded = soft_folds(&state.conversation, top, rows.len());
-            note_rows(
-                state,
-                text_area,
-                selection::BlockKind::Transcript,
-                &rows,
-                &folded,
-            );
+            note_rows(state, text_area, &rows, &folded);
             frame.render_widget(Paragraph::new(rows), text_area);
             draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
             draw_turn_rail(frame, panes, state);
@@ -4618,13 +4634,7 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
                 .map(|offset| state.trace.source_at(top + offset))
                 .collect();
             let folded = soft_folds(&state.trace, top, rows.len());
-            note_rows(
-                state,
-                text_area,
-                selection::BlockKind::Transcript,
-                &rows,
-                &folded,
-            );
+            note_rows(state, text_area, &rows, &folded);
             // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
             // 只是现在它等于主列的内容区）。
             state.trace_rect = Some(text_area);
@@ -4653,13 +4663,7 @@ fn soft_folds(pane: &Pane, top: usize, rows: usize) -> Vec<bool> {
 /// 把一块区域这一帧画出来的行记进屏幕文本层（`.scratch/tui-feedback/spec.md` §5）。
 ///
 /// `folded` 与 `rows` 平行，短了就当作「没有软折」。
-fn note_rows(
-    state: &mut TuiState,
-    rect: Rect,
-    kind: selection::BlockKind,
-    rows: &[Line<'static>],
-    folded: &[bool],
-) {
+fn note_rows(state: &mut TuiState, rect: Rect, rows: &[Line<'static>], folded: &[bool]) {
     let text: Vec<selection::TextRow> = rows
         .iter()
         .enumerate()
@@ -4668,7 +4672,7 @@ fn note_rows(
             folded: folded.get(index).copied().unwrap_or(false),
         })
         .collect();
-    state.screen_text.push(rect, kind, text);
+    state.screen_text.push(rect, text);
 }
 
 /// 一个视图里跨块的排版状态（`.scratch/tui-visual-language/spec.md` §23）。
@@ -4854,7 +4858,7 @@ fn draw_bottom(
     // 草稿归正文档：整段 `BOLD` 随本 effort 退场（`.scratch/tui-visual-language/spec.md` §19），
     // 提示符 `❱` 仍是界面上唯一会动的专色、唯一焦点。
     // 输入区也进屏幕文本层（没有软折：草稿的换行是用户自己敲的）。
-    note_rows(state, panes.input, selection::BlockKind::Draft, &rows, &[]);
+    note_rows(state, panes.input, &rows, &[]);
     frame.render_widget(Paragraph::new(rows), panes.input);
     // 草稿在问题之下仍然可见 —— 那是用户正在写的东西 —— 但光标收起来：键盘正在回答，不是在
     // 编辑（spec §9）。光标是按刚画出来的那些行摆的，从不按帧与帧之间保存的状态摆，正是后者
@@ -4923,7 +4927,6 @@ fn draw_questionnaire(
             panes.input.width,
             rows.len().min(panes.input.height as usize) as u16,
         ),
-        selection::BlockKind::Questionnaire,
         &rows,
         &[],
     );
@@ -6463,7 +6466,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     );
     // 详情正文是最常被复制的东西（一段工具输出、一段解释），所以它也进屏幕文本层
     // （`.scratch/tui-feedback/spec.md` §5）。
-    note_rows(state, body, selection::BlockKind::Detail, &lines, &folded);
+    note_rows(state, body, &lines, &folded);
     frame.render_widget(Paragraph::new(lines), body);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(

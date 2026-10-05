@@ -1217,7 +1217,12 @@ const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 /// 提示，让掉的是排在最末的 `ctrl-o 左栏`。位置就是优先级：`ctrl-o 左栏` 挂最后，因为滚动
 /// 比它常用得多（`.scratch/sidebar-toggle/spec.md` §4）。
 pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
-    hint_line(&KEY_HINTS, exit_hint(busy, raised), width)
+    status_line_with(None, busy, width, raised)
+}
+
+/// 同上，但把一个**回执**排在最前（`.scratch/tui-feedback/spec.md` §6）。
+pub fn status_line_with(receipt: Option<&str>, busy: bool, width: u16, raised: bool) -> String {
+    hint_row(receipt, &KEY_HINTS, exit_hint(busy, raised), width)
 }
 
 /// 前端没有在读行时的提示行：同样的阶梯，铺在 [`VIEWER_HINTS`] 上。
@@ -1226,22 +1231,22 @@ pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
 /// `discuss` 运行，它压根不会要一行输入 —— 否则就会为一个什么都不发的键承诺
 /// `enter 发送`（spec §6）。
 pub fn viewer_status_line(busy: bool, width: u16, raised: bool) -> String {
-    hint_line(&VIEWER_HINTS, exit_hint(busy, raised), width)
+    viewer_status_line_with(None, busy, width, raised)
+}
+
+/// 同上，但把一个**回执**排在最前。
+pub fn viewer_status_line_with(
+    receipt: Option<&str>,
+    busy: bool,
+    width: u16,
+    raised: bool,
+) -> String {
+    hint_row(receipt, &VIEWER_HINTS, exit_hint(busy, raised), width)
 }
 
 /// 一次复制之后提示行打头的那句回执（`.scratch/tui-feedback/spec.md` §6）。
 pub fn copied(chars: usize, lines: usize) -> String {
     format!("已复制 {chars} 字 · {lines} 行")
-}
-
-/// 把回执排到提示行**最前面**：它说的是刚发生的事，放不下时后面的提示让步。
-pub fn with_receipt(receipt: &str, rest: &str, width: u16) -> String {
-    let joined = format!("{receipt}{SEP}{rest}");
-    if joined.cell_width() as u16 <= width {
-        joined
-    } else {
-        receipt.to_owned()
-    }
 }
 
 /// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。
@@ -1257,21 +1262,34 @@ pub fn exit_hint(busy: bool, raised: bool) -> &'static str {
     }
 }
 
-/// 两条提示行共用的阶梯：提示从左来，出口预留在末尾。提示从前往后填，装不下下一条就停 ——
-/// 位置就是优先级。
-fn hint_line(hints: &[&str], exit: &str, width: u16) -> String {
+/// 提示行的唯一排版器：一个可选的**回执**排在最前，然后是提示，**出口永远保住**。
+///
+/// 位置就是优先级：提示从左来、从前往后填、装不下下一条就停；而出口（含举手那句催促）无论多窄
+/// 都在 —— 那条契约在 `.scratch/exit-gesture/spec.md` §2 与 `.scratch/sidebar-toggle/spec.md`
+/// §4 里写着，一个回执不许把它挤掉。回执自己放不下时让掉的也是回执，不是出口
+/// （`.scratch/tui-feedback/spec.md` §6）。
+fn hint_row(receipt: Option<&str>, hints: &[&str], exit: &str, width: u16) -> String {
     let exit_columns = exit.cell_width();
-    let mut chosen = String::new();
-    for hint in hints {
+    // 拼上 `item` 之后还放得下出口吗 —— 放得下就是新的候选，放不下就 `None`。
+    let fits = |chosen: &str, item: &str| -> Option<String> {
         let candidate = if chosen.is_empty() {
-            (*hint).to_owned()
+            item.to_owned()
         } else {
-            format!("{chosen}{SEP}{hint}")
+            format!("{chosen}{SEP}{item}")
         };
-        if candidate.cell_width() + SEP.cell_width() + exit_columns > width {
-            break;
+        (candidate.cell_width() + SEP.cell_width() + exit_columns <= width).then_some(candidate)
+    };
+    let mut chosen = String::new();
+    if let Some(receipt) = receipt {
+        if let Some(candidate) = fits(&chosen, receipt) {
+            chosen = candidate;
         }
-        chosen = candidate;
+    }
+    for hint in hints {
+        match fits(&chosen, hint) {
+            Some(candidate) => chosen = candidate,
+            None => break,
+        }
     }
     if chosen.is_empty() {
         exit.to_owned()

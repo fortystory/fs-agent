@@ -1223,6 +1223,17 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     assert!(text.contains("已复制"), "提示行给回执：{text}");
     assert!(text.contains("字"), "带着字数：{text}");
 
+    // 交给剪贴板的那串字节：OSC 52，载荷是取到的那段文本的 base64。它由**运行期**写出去，
+    // 状态机只把它放在这里（`.scratch/tui-feedback/spec.md` §6）—— 测试因此不会往自己的
+    // stdout 吐一个剪贴板序列。
+    let expected = fs_agent::render::selection::osc52("第一行正文\n第二");
+    assert_eq!(
+        state.take_clipboard().as_deref(),
+        Some(expected.as_str()),
+        "选区的文本按区域取行"
+    );
+    assert!(state.take_clipboard().is_none(), "取走即清");
+
     // 没拖起来的那一次（一次普通点击）不留回执。
     let mut plain = state_with_roster(&["kimi"]);
     plain.apply(message(1, "正文在这里", None));
@@ -1247,7 +1258,10 @@ fn a_press_and_release_without_a_drag_is_still_a_click() {
     assert!(text.contains("── 正文 ──"), "仍是一次点击：{text}");
 }
 
-/// 在主列页签上按住拖开：页签**不**切 —— 那次点击属于一条已经变成拖选的按下。
+/// 在主列页签上按住拖开、再松开：页签**不**切。
+///
+/// 页签那一行不是文本块，所以这一次按下没有所属区域、也就成不了拖选（票 05 的 `Drag.block`
+/// 是 `None`）—— 松开仍然按一次点击处理，只是落点是拖到的那一格，而不是原来的标签。
 #[test]
 fn a_drag_that_starts_on_a_tab_does_not_switch_the_page() {
     let mut state = state_with_roster(&["kimi"]);
