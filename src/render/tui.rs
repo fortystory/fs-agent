@@ -2563,15 +2563,21 @@ impl TuiState {
                         self.conversation.to_bottom()
                     }
                     _ => {
-                        let width =
-                            layout::plan(self.area, 1, self.sidebar_wanted).detail_width() as usize;
+                        let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+                        // 指针落在哪个窗格里，这一击就算谁的：轨迹页只认左栏页那一块，
+                        // 对话只认转录那一块（票 09）。落在别处 —— 左栏的其它页、分隔列、
+                        // 状态行、输入区 —— 什么都不点：那里没有可点开的行，而行号是**屏幕**
+                        // 行号，拿它去取另一个视图的详情会点到同一横行的别的行上（在 `todo`
+                        // 页里点一项，开着的是转录里那条详情）。
                         let view = if over_trace {
                             Viewport::Trace
-                        } else {
+                        } else if panes.transcript.contains((mouse.column, mouse.row).into()) {
                             Viewport::Conversation
+                        } else {
+                            return;
                         };
                         if let Some(detail) = self.link_hit(view, &mouse) {
-                            self.open_detail(detail, width, view);
+                            self.open_detail(detail, panes.detail_width() as usize, view);
                         }
                     }
                 }

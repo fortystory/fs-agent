@@ -3375,6 +3375,54 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
     assert!(!page.contains("一件事"), "而那些项随列表一起没了：{page}");
 }
 
+/// 左栏 `todo` 页里的行不是可点开的东西。
+///
+/// 那一页与转录**共用同一批屏幕行**，可两列说的不是一回事 —— 它没有可点开的条目。
+/// 点它以转录的行号去取详情，开着的是另一个视图里的东西；指针落在哪一列正是这件事
+/// 的判据。
+#[test]
+fn clicking_a_todo_row_opens_nothing() {
+    let mut state = state_with_roster(&["kimi"]);
+    let items: Vec<(String, &str)> = (0..8)
+        .map(|index| (format!("第 {index} 项"), "pending"))
+        .collect();
+    let borrowed: Vec<(&str, &str)> = items
+        .iter()
+        .map(|(content, status)| (content.as_str(), *status))
+        .collect();
+    apply_todo(&mut state, "call-1", kimi(), todo_args(&borrowed));
+
+    // 把转录填到左栏页区里去：对话视图里的一条消息正是可点开的那种行。
+    for index in 0..12 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    state.apply(message(1, "被点开的消息", None));
+
+    let rows = screen(120, 24, &mut state);
+    let page_top = sidebar_page(&rows);
+    let clickable = rows
+        .iter()
+        .position(|row| row.contains("被点开的消息"))
+        .expect("转录里那条消息画出来了");
+    assert!(
+        clickable >= page_top,
+        "布置：可点的那一行要落在左栏页区里（第 {clickable} 行，页从第 {page_top} 行起）"
+    );
+
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    let frame = buffer(120, 24, &mut state);
+    let (column, _) = cell_of(&frame, 120, 24, "☐ 第 2 项").expect("todo 页上那一项");
+    let before = screen(120, 24, &mut state);
+
+    state.mouse(click(column, clickable as u16));
+    assert_eq!(
+        screen(120, 24, &mut state),
+        before,
+        "点左栏 todo 页里的一项，屏幕上什么都不该动"
+    );
+}
+
 // --- `/` 菜单 --------------------------------------------------------------
 
 /// 装进循环报出来的那些名字：它解析的内建命令，然后是会话
@@ -4622,17 +4670,14 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
         .map(|row| row as u16)
 }
 
-/// 点某句话画在的那一行。
+/// 点某句话画在的那一行 —— 就点它画着的那个格子。
 ///
 /// 先渲染帧，因为只有画出来的东西才点得到，而
-/// 那句话是在同一帧里查的（票 04 §1）。
+/// 那句话是在同一帧里查的（票 04 §1）。**列不是无所谓的**：点击按指针落在哪个
+/// 窗格里分派（`.scratch/trace-tab/spec.md` §1），所以点在文字上才是真实的点击 ——
+/// 一个固定在左栏列上的坐标会点到左栏的页上，而不是这句话身上。
 fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
-    let Some(row) = row_of(state, width, height, needle) else {
-        panic!("屏幕上没有东西包含 {needle:?}");
-    };
-    // 点击的列只要落在这一行里就行；行才是窗格
-    // 映射回源代码行的东西。
-    state.mouse(click(10, row));
+    click_text(state, width, height, needle);
 }
 
 // ---------------------------------------------------------------------------
