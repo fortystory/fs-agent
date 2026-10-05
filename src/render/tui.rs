@@ -5277,9 +5277,7 @@ fn paint_block(
             } else {
                 body
             };
-            rows.into_iter()
-                .map(|line| message_line(speaker, text, line, colors))
-                .collect()
+            named_body_rows(speaker, rows, text, name, colors)
         }
         // 轨迹视图里用户（或非 assistant 的系统行）的消息同样只画首行 + `…`。
         Block::Message { speaker, text, .. } if view == Viewport::Trace => {
@@ -5316,9 +5314,7 @@ fn paint_block(
                     row.alignment = Some(Alignment::Right);
                 }
             }
-            rows.into_iter()
-                .map(|line| message_line(speaker, text, line, colors))
-                .collect()
+            named_body_rows(speaker, rows, text, name, colors)
         }
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
@@ -5641,6 +5637,30 @@ fn message_line(
         },
     };
     RenderedLine::linked(line, detail)
+}
+
+/// 一条消息的那些行，连同它们的详情入口：**名字行不给入口**。
+///
+/// 名字独占一行之后它成了一个假入口 —— 点 `[kimi]` 弹出一份正文详情，而读者点的是一行标签
+/// （`.scratch/tui-feedback/spec.md` §3）。所以名字行（`named` 为真时的第一条）退回去做标签，
+/// 正文行才是入口。`named` 为假时没有名字行，全部照旧。
+fn named_body_rows(
+    speaker: &crate::events::SpeakerId,
+    rows: Vec<Line<'static>>,
+    text: &str,
+    named: bool,
+    colors: &mut SpeakerColors,
+) -> Vec<RenderedLine> {
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if named && index == 0 {
+                RenderedLine::from(line)
+            } else {
+                message_line(speaker, text, line, colors)
+            }
+        })
+        .collect()
 }
 
 /// 对话视图里一条消息的排版：**名字独占一行**，话从下一行起、顶格

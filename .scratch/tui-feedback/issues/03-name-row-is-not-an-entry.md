@@ -1,7 +1,7 @@
 # 03 — 名字行不是详情入口
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../spec.md
 Blocked by: —
 

@@ -1143,6 +1143,31 @@ fn a_speaker_who_says_several_things_in_a_row_is_named_once() {
     assert!(row_of("护栏") > second, "第三段在第二段下面：{text}");
 }
 
+/// 名字行**不是**详情入口：点 `[kimi]` / `[用户]` 那一行不该弹出正文详情，正文那一行才该
+/// （`.scratch/tui-feedback/spec.md` §3 —— 名字独占一行之后它成了一个假入口）。
+#[test]
+fn the_name_row_is_not_an_entry() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "正文在这里", None));
+    state.apply(user_message(2, "我问一句"));
+
+    for name in ["[kimi]", "[用户]"] {
+        let frame = buffer(120, 24, &mut state);
+        let (column, row) =
+            cell_of(&frame, 120, 24, name).unwrap_or_else(|| panic!("{name} 在屏幕上"));
+        state.mouse(click(column, row));
+        let text = screen(120, 24, &mut state).join("\n");
+        assert!(!text.contains("── 正文 ──"), "点 {name} 不弹详情：{text}");
+    }
+
+    // 正文那一行照旧开。
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
+    state.mouse(click(column, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "点正文行开详情：{text}");
+}
+
 #[test]
 fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
     // spec 的几何表覆盖的那张尺寸矩阵，每一行都按它进表的
