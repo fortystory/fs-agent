@@ -1,7 +1,7 @@
 # 12 — 轨迹页按轮次隔行底色
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 09
 
@@ -38,3 +38,21 @@ Blocked by: 09
 
 - 不动前景色（三类前缀的颜色不变）。
 - 不给超长单位做「内部再分档」——那条边界先记着，是以后的决定。
+
+## 作答（2026-10-05）
+
+- **轨迹自己的单位索引**：`TuiState::trace_units` 与轨迹 pane 的源行平行，按它自己交回来的
+  丢弃数裁（回合条那份索引与**对话** pane 平行，两个视图的源行集合不同，所以不能共用）。
+- **行生成期打底色**：`push_line(Viewport::Trace, ...)` 里按 `turn_rail.units()` 取单位序号
+  ——那是已完成单位的个数，也就是正在建的那个，所以第一个边界之前的行归第一段 ——
+  再把 `line.style.bg` 设成 `TRACE_STRIPES[unit % 2]`（`Color::Indexed(235)` /
+  `Indexed(236)`）。底色因此住在行上，滚动时跟着内容走；折行（`pane::wrap_line`）与
+  取景（`Pane::window`）都保留行样式。对话视图与 plain 一个字不改。
+- **退化终端**：`TuiState::set_stripes(bool)` 是那个开关，`Tui::run` 组装时按通用约定
+  `NO_COLOR` 关掉它；关/开都会清空轨迹视图并按当前宽度整批重排（底色已经在行上，不重排
+  会留旧底色）。
+- 新增四条帧断言：三个回合两块交替底色且边界落在回合结束之后、
+  `问题 5` 滚动前后底色跟着它、主列每一行都没有底色、`set_stripes(false)` 之后整屏无底色
+  而内容照旧。
+- `cargo test` 全绿（render_layout 169 + 其余）、`cargo clippy --all-targets` 无警告、
+  `cargo fmt --check` 干净。

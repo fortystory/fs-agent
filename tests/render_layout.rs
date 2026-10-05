@@ -6628,3 +6628,78 @@ fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
         "轨迹页仍在最新那一行：{page:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 轨迹页按轮次隔行底色（`.scratch/trace-tab/spec.md` §3；票 12）
+// ---------------------------------------------------------------------------
+
+/// 左栏里含 `needle` 的那一行，以及它的底色 —— 只在左栏里找，因为主列的对话视图里也有
+/// 同一句话。
+fn stripe_of(frame: &Buffer, needle: &str) -> Option<(u16, Color)> {
+    (0..24).find_map(|y| {
+        cells(frame, y, 0, SIDEBAR_COLUMNS)
+            .contains(needle)
+            .then(|| (y, frame[(1, y)].bg))
+    })
+}
+
+/// 轨迹页里一个单位的所有行共用一块底色，相邻单位交替（票 12 验证 1）。
+#[test]
+fn the_trace_page_stripes_one_block_per_unit() {
+    let mut state = state_with_roster(&["kimi"]);
+    turns(&mut state, 3);
+    open_trace_tab(&mut state, 120, 24);
+    let rows = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let top = sidebar_page(&rows) as u16;
+    let stripe = |row: u16| frame[(1, row)].bg;
+
+    // 每个回合四行：问题、回合开始、回答、回合结束。所以边界落在 `top + 3` 之后。
+    assert_eq!(stripe(top), stripe(top + 3), "第一段是同一种底色");
+    assert_ne!(stripe(top), stripe(top + 4), "下一个回合换一块");
+    assert_eq!(stripe(top + 4), stripe(top + 7), "第二段自己也一致");
+    assert_eq!(stripe(top), stripe(top + 8), "第三段又回到第一块");
+    assert_ne!(stripe(top), Color::Reset, "底色真的铺上了");
+}
+
+/// 底色打在行生成期，所以滚动时它跟着**内容**走，不跟着屏幕行重排（票 12 验证 2）。
+#[test]
+fn the_trace_stripes_travel_with_the_content() {
+    let mut state = state_with_roster(&["kimi"]);
+    turns(&mut state, 6);
+    open_trace_tab(&mut state, 120, 24);
+    let _ = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let before = stripe_of(&frame, "问题 5").expect("最后一个回合的问题在屏幕上");
+    state.mouse(wheel_at(10, 12, true));
+    let frame = buffer(120, 24, &mut state);
+    let after = stripe_of(&frame, "问题 5").expect("它还在屏幕上");
+    assert_ne!(before.0, after.0, "它挪了屏幕行");
+    assert_eq!(before.1, after.1, "而底色跟着它一起挪");
+}
+
+/// 对话视图不铺底：底色只在轨迹页上（票 12 验证 3）。
+#[test]
+fn the_conversation_view_carries_no_stripes() {
+    let mut state = state_with_roster(&["kimi"]);
+    turns(&mut state, 3);
+    let frame = buffer(120, 24, &mut state);
+    for y in 0..24 {
+        assert_eq!(frame[(50, y)].bg, Color::Reset, "主列第 {y} 行没有底色");
+    }
+}
+
+/// 无底色开关打开时画面与没铺时一致（票 12 验证 3）。
+#[test]
+fn the_stripes_can_be_turned_off() {
+    let mut state = state_with_roster(&["kimi"]);
+    turns(&mut state, 3);
+    state.set_stripes(false);
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    for y in 0..24 {
+        assert_eq!(frame[(1, y)].bg, Color::Reset, "第 {y} 行不铺底");
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("问题 0"), "内容照旧：{text}");
+}

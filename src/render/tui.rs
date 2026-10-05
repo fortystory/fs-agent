@@ -357,6 +357,11 @@ impl Tui {
         // 只发生在组装处（`.scratch/terminal-title/spec.md` §5）。
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let mut state = TuiState::new(facts, cwd, home);
+        // 退化终端不铺轮次底色：`NO_COLOR` 是那条通用约定，而它在组装处读一次
+        // （`.scratch/trace-tab/spec.md` §3）。
+        if std::env::var_os("NO_COLOR").is_some() {
+            state.set_stripes(false);
+        }
 
         // alt screen、raw 模式，以及一个把它们恢复回去的 panic hook。鼠标上报与括号粘贴
         // 归我们管：`ratatui::init` 这两样都不碰（spec §1）。
@@ -748,6 +753,13 @@ pub struct TuiState {
     conversation_links: std::collections::VecDeque<Option<Detail>>,
     /// 轨迹视图的同一份表。
     trace_links: std::collections::VecDeque<Option<Detail>>,
+    /// 轨迹视图每条源行属于哪个**单位**（交互数回合、讨论数轮次），与它自己的源行平行，
+    /// 并按它自己的裁剪一起裁。回合条那份索引与对话 pane 平行，而两个视图的源行集合不同，
+    /// 所以底色要自己一份（`.scratch/trace-tab/spec.md` §3）。
+    trace_units: std::collections::VecDeque<usize>,
+    /// 轨迹页铺不铺轮次底色。`NO_COLOR` 在的时候由组装关掉它 —— 退化终端因此与这次改动
+    /// 之前逐字一致（票 12）。
+    stripes: bool,
     /// 上一帧对话视图把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧
     /// 重建，与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
     conversation_drawn: Drawn,
@@ -1553,6 +1565,8 @@ impl TuiState {
             turn_rail: TurnRail::default(),
             conversation_links: std::collections::VecDeque::new(),
             trace_links: std::collections::VecDeque::new(),
+            trace_units: std::collections::VecDeque::new(),
+            stripes: true,
             conversation_drawn: Drawn::default(),
             trace_drawn: Drawn::default(),
             trace_rect: None,
@@ -1854,6 +1868,39 @@ impl TuiState {
         }
     }
 
+    /// 轨迹页铺不铺轮次底色。组装时按 `NO_COLOR` 关掉它（票 12）。
+    ///
+    /// 已经打上的底色住在行上，所以关掉（或打开）之后得让轨迹视图整批重排一次 ——
+    /// 否则屏幕上留的还是旧底色。
+    pub fn set_stripes(&mut self, stripes: bool) {
+        if stripes == self.stripes {
+            return;
+        }
+        self.stripes = stripes;
+        self.replay_trace();
+    }
+
+    /// 按当前宽度把共享源重放给轨迹视图，好让它整批重排（底色开关用它）。
+    fn replay_trace(&mut self) {
+        self.trace.clear();
+        self.trace_links.clear();
+        self.trace_units.clear();
+        if self.painted.is_empty() || self.trace_width == 0 {
+            self.dirty = true;
+            return;
+        }
+        let painted = std::mem::take(&mut self.painted);
+        let targets = Targets {
+            conversation: false,
+            trace: true,
+        };
+        for item in &painted {
+            self.emit_painted(item, targets);
+        }
+        self.painted = painted;
+        self.dirty = true;
+    }
+
     /// 把一个块排成行、推进窗格，并**记住它**，好在宽度变化时重放（spec §1）。
     fn push_block(&mut self, block: Block, targets: Targets) -> usize {
         let produced = self.emit_block(&block, targets);
@@ -1941,6 +1988,7 @@ impl TuiState {
         if trace {
             self.trace.clear();
             self.trace_links.clear();
+            self.trace_units.clear();
         }
         if self.painted.is_empty() {
             self.dirty = true;
@@ -1991,10 +2039,26 @@ impl TuiState {
         link: Option<Detail>,
         user: Option<bool>,
     ) {
+        let mut line = line;
+        if view == Viewport::Trace {
+            // **行生成期**就打上底色：它跟着这一行走，滚动时色块不会重排
+            // （`.scratch/trace-tab/spec.md` §3）。`turn_rail.units()` 是已完成单位的个数，
+            // 也就是正在建的那个单位的序号 —— 第一个边界之前的行因此归第一段。
+            let unit = self.turn_rail.units();
+            if self.stripes {
+                line.style.bg = Some(TRACE_STRIPES[unit % TRACE_STRIPES.len()]);
+            }
+            self.trace_units.push_back(unit);
+        }
         let dropped = match view {
             Viewport::Conversation => self.conversation.push(line),
             Viewport::Trace => self.trace.push(line),
         };
+        if view == Viewport::Trace {
+            for _ in 0..dropped {
+                self.trace_units.pop_front();
+            }
+        }
         let links = match view {
             Viewport::Conversation => &mut self.conversation_links,
             Viewport::Trace => &mut self.trace_links,
@@ -4896,6 +4960,9 @@ impl From<Line<'static>> for RenderedLine {
         Self { line, link: None }
     }
 }
+
+/// 轨迹页两块轮次底色的色值：256 色的两块深灰（`.scratch/trace-tab/spec.md` §3）。
+const TRACE_STRIPES: [Color; 2] = [Color::Indexed(235), Color::Indexed(236)];
 
 /// 共享渲染（[`render_block`]）没有窗格宽度可依时的排版宽度。
 ///
