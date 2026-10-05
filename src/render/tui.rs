@@ -1851,12 +1851,12 @@ impl TuiState {
     /// `user` 说这条行要不要记进回合条，`None` 是不记 —— 思考行是唯一的这种行：它属于当前
     /// 单位，但它不是一次新的发言，也不改变单位的划分。
     fn push_source(&mut self, line: Line<'static>, link: Option<Detail>, user: Option<bool>) {
-        self.pane.push(line);
+        let dropped = self.pane.push(line);
         self.links.push_back(link);
         if let Some(user) = user {
             self.turn_rail.push_line(user);
         }
-        self.prune_links();
+        self.prune_links(dropped);
     }
 
     /// 这个会话数的是**轮**而不是回合。
@@ -2093,17 +2093,16 @@ impl TuiState {
         }
     }
 
-    /// 一直丢掉最老的链接，直到这个列表不比窗格的上限长，这是两者保持平行的唯一办法：
-    /// 一条来源行在两边要么意思相同、要么两边都没有（票 04 §1）。
+    /// 丢掉窗格这一次丢掉的那些最老条目 —— `dropped` 就是 [`Pane::push`] 报回来的数，
+    /// 绘制侧不再自己数 `CAP`：一条来源行在两边要么意思相同、要么两边都没有（票 04 §1、
+    /// `.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
     ///
     /// 回合条的逐行索引也在同一口气里裁掉，理由相同：一条来源行属于哪个单位，是按窗格
     /// 交回来的下标去查的。
-    fn prune_links(&mut self) {
-        let before = self.links.len();
-        while self.links.len() > pane::CAP {
+    fn prune_links(&mut self, dropped: usize) {
+        for _ in 0..dropped {
             self.links.pop_front();
         }
-        let dropped = before - self.links.len();
         if dropped > 0 {
             self.turn_rail.prune(dropped);
         }
@@ -5358,6 +5357,19 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 平行表跟着窗格交回来的丢弃数裁，而不是自己数 `CAP`：推过上限之后，行链接与回合条
+    /// 仍与窗格的源行一一对应（`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
+    #[test]
+    fn the_link_table_keeps_pace_with_the_pane_at_the_cap() {
+        let mut state = state();
+        for _ in 0..pane::CAP + 2 {
+            state.push_source(Line::from("x"), None, Some(false));
+        }
+        assert_eq!(state.pane.sources(), pane::CAP);
+        assert_eq!(state.links.len(), state.pane.sources());
+        assert_eq!(state.turn_rail.lines.len(), state.pane.sources());
+    }
 
     /// 一条上下文注入在转录里是一行，在详情里是它的正文（票 19）。
     #[test]

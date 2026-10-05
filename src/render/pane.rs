@@ -70,11 +70,15 @@ impl Pane {
         }
     }
 
-    /// 追加一条来源行；到了 [`CAP`] 就把最旧的丢掉。
-    pub fn push(&mut self, line: Line<'static>) {
+    /// 追加一条来源行；到了 [`CAP`] 就把最旧的丢掉，并**报出丢了几条**。
+    ///
+    /// 那个返回数是裁剪的**唯一权威**：平行表（行链接、每源行索引、回合条）全都按它裁，
+    /// 于是「平行表与窗格的源行窗口同进同出」是契约而不是巧合
+    /// （`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
+    pub fn push(&mut self, line: Line<'static>) -> usize {
         self.lines.push_back(line);
         self.wrap_pending();
-        self.evict();
+        self.evict()
     }
 
     /// 替换最新那条来源行。给转录里唯一那条会变的行用：思考提示在它开始时写下，在 trace
@@ -257,6 +261,11 @@ impl Pane {
         self.total
     }
 
+    /// 窗格现在持有多少条来源行 —— 平行表该有的长度。
+    pub fn sources(&self) -> usize {
+        self.lines.len()
+    }
+
     /// 视口顶端的那一个显示行。
     pub fn top(&self) -> usize {
         self.top
@@ -302,12 +311,14 @@ impl Pane {
         }
     }
 
-    /// 丢掉最旧的来源行，直到上限重新成立。
-    fn evict(&mut self) {
+    /// 丢掉最旧的来源行，直到上限重新成立；返回这次丢掉的条数（没丢就是 0）。
+    fn evict(&mut self) -> usize {
+        let mut dropped = 0;
         while self.lines.len() > CAP {
             if self.wrapped_sources == 0 {
                 // 还什么都没折过行，所以这条行没有别的代价。
                 self.lines.pop_front();
+                dropped += 1;
                 continue;
             }
             let height = match self.starts.get(1) {
@@ -329,7 +340,9 @@ impl Pane {
             self.total = self.total.saturating_sub(height);
             self.seen = self.seen.saturating_sub(height);
             self.top_source = self.top_source.saturating_sub(1);
+            dropped += 1;
         }
+        dropped
     }
 
     /// 记下视口顶端落在哪条来源行里，供下一次重新折行用。
@@ -426,5 +439,35 @@ pub(crate) fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) 
     match spans.last_mut() {
         Some(last) if last.style == style => last.content.to_mut().push(ch),
         _ => spans.push(Span::styled(ch.to_string(), style)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 推过上限之后，`push` 报的数是它真丢掉的那些源行 —— 绘制侧的平行表就靠这个数跟窗格
+    /// 同进同出（[`super::CAP`]，`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
+    #[test]
+    fn push_reports_the_source_lines_the_cap_dropped() {
+        let mut pane = Pane::new();
+        let mut dropped = 0;
+        for _ in 0..CAP + 2 {
+            dropped += pane.push(Line::from("x"));
+        }
+        assert_eq!(dropped, 2, "推过上限两条，就该报两条");
+        assert_eq!(pane.sources(), CAP, "报的条数与真留下的条数对得上");
+    }
+
+    /// 记账是按**这一次丢了几条**回答的，不是一个 0/1 的开关：一次性超限三条就得报三条。
+    /// `push` 一次只加一行，所以这里直接把它放到上限之上，逼出那条一次丢多条的路径。
+    #[test]
+    fn evicting_can_drop_several_source_lines_at_once() {
+        let mut pane = Pane::new();
+        for _ in 0..CAP + 3 {
+            pane.lines.push_back(Line::from("x"));
+        }
+        assert_eq!(pane.evict(), 3);
+        assert_eq!(pane.sources(), CAP);
     }
 }

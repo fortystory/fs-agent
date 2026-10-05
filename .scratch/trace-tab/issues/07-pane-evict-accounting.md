@@ -1,7 +1,7 @@
 # 07 — 把裁剪记账归还给 pane（prefactor）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: —
 
@@ -39,3 +39,16 @@ Blocked by: —
 
 - 不做「两个 pane」——那是[轨迹视图第一次活起来](09-trace-page-alive.md)的事。
 - 不改 `CAP` 的值，也不改共享源的保留策略（它今天全量保留）。
+
+## 作答（2026-10-05）
+
+- `src/render/pane.rs`：`Pane::push` 返回本次丢掉的源行数，`evict` 返回它丢的条数（一次
+  可以多条，按循环累计）；新增 `Pane::sources()` 给平行表对账用。
+- `src/render/tui.rs`：`prune_links(dropped)` 改成按 `Pane::push` 报回来的数裁 `links` 与
+  `turn_rail`，那个自己数 `pane::CAP` 的 `while` 循环删掉。
+- 新增三条单测：`pane::tests::push_reports_the_source_lines_the_cap_dropped`、
+  `pane::tests::evicting_can_drop_several_source_lines_at_once`、
+  `tui::tests::the_link_table_keeps_pace_with_the_pane_at_the_cap`（推过上限后
+  `links.len() == turn_rail.lines.len() == pane.sources()`）。
+- `cargo test` 全绿（既有帧断言一字未改）、`cargo clippy --all-targets` 无警告、
+  `cargo fmt --check` 无漂移。
