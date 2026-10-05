@@ -1229,6 +1229,21 @@ pub fn viewer_status_line(busy: bool, width: u16, raised: bool) -> String {
     hint_line(&VIEWER_HINTS, exit_hint(busy, raised), width)
 }
 
+/// 一次复制之后提示行打头的那句回执（`.scratch/tui-feedback/spec.md` §6）。
+pub fn copied(chars: usize, lines: usize) -> String {
+    format!("已复制 {chars} 字 · {lines} 行")
+}
+
+/// 把回执排到提示行**最前面**：它说的是刚发生的事，放不下时后面的提示让步。
+pub fn with_receipt(receipt: &str, rest: &str, width: u16) -> String {
+    let joined = format!("{receipt}{SEP}{rest}");
+    if joined.cell_width() as u16 <= width {
+        joined
+    } else {
+        receipt.to_owned()
+    }
+}
+
 /// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。
 ///
 /// 举手换掉的是**出口那一段**，不是往后追加 —— 屏幕上不许出现「旧出口文案 + 举手文案」

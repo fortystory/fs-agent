@@ -1219,6 +1219,21 @@ fn the_old_english_suffix_still_earns_its_badge() {
 }
 
 #[test]
+fn the_copy_receipt_reads_in_chinese_and_yields_the_row_to_the_hints() {
+    // 复制的回执排在最前，放不下时后面的提示让步（`.scratch/tui-feedback/spec.md` §6）。
+    assert_eq!(wording::copied(12, 2), "已复制 12 字 · 2 行");
+    assert_eq!(
+        wording::with_receipt("已复制 12 字 · 2 行", "enter 发送 · ctrl-c 退出", 80),
+        "已复制 12 字 · 2 行 · enter 发送 · ctrl-c 退出"
+    );
+    // 窄到放不下整行时只留回执：它是刚发生的事，而提示随时读得到。
+    assert_eq!(
+        wording::with_receipt("已复制 12 字 · 2 行", "enter 发送 · ctrl-c 退出", 12),
+        "已复制 12 字 · 2 行"
+    );
+}
+
+#[test]
 fn the_plain_console_asks_a_questionnaire_in_chinese() {
     assert_eq!(
         wording::questionnaire_plain_options_prompt(false),

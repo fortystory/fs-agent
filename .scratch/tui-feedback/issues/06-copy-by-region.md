@@ -1,7 +1,7 @@
 # 06 — 复制：按区域取行、软折拼回、OSC 52 与提示行回执
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../spec.md
 Blocked by: 05
 

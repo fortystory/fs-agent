@@ -41,6 +41,26 @@ pub fn truncate_columns(text: &str, width: usize) -> String {
     text[..end].to_owned()
 }
 
+/// `text` 里从第 `from` 列到第 `to` 列（不含）的那一段。
+///
+/// 按**显示列**切，宽字符不切半：跨过边界的那个宽字素整个丢掉，而不是留下半个（拖选取文本时
+/// 宁可少取一个字符，也不能取回半个）。`from >= to` 或整段都在范围外时是空串。
+pub fn slice_columns(text: &str, from: usize, to: usize) -> String {
+    let mut out = String::new();
+    let mut column = 0usize;
+    for ch in text.chars() {
+        let columns = char_columns(ch);
+        if column + columns > to {
+            break;
+        }
+        if column >= from {
+            out.push(ch);
+        }
+        column += columns;
+    }
+    out
+}
+
 /// 把一条带样式的行裁到 `width` 列，并用一个 `…` 收尾。
 ///
 /// 与 [`truncate_columns`] 是同一把尺子的两个出口：那个交回纯文本，这一个保住每一片的样式

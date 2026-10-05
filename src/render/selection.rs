@@ -13,6 +13,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::Frame;
 
+use crate::render::width;
+
 /// 一块能被拖选的区域是哪一类。
 ///
 /// 它现在只用来读代码时认人（谁在哪一层），判断从不用它：换行语义按 `folded` 走、取值只能在
@@ -182,6 +184,82 @@ pub fn paint(frame: &mut Frame, text: &ScreenText, drag: Option<&Drag>) {
     }
 }
 
+/// 选区里的文本：按**那块区域**的行结构取，TUI 自己软折出来的续行拼回一条
+/// （`.scratch/tui-feedback/spec.md` §6）。
+///
+/// 取法是逐显示行切 `[列区间)`（按显示列，宽字符不切半），行尾的填充空白去掉；一行后面若跟着
+/// 它的软折续行就**不**落换行，否则落一个 —— 于是被折过的长命令复制回来仍是一条，而区域自己的
+/// 硬换行（Markdown 段落、代码块的多行）保留。
+pub fn text(text: &ScreenText, drag: &Drag) -> String {
+    let Some(block) = drag.block.and_then(|index| text.block(index)) else {
+        return String::new();
+    };
+    let Some(cover) = drag.cover(text) else {
+        return String::new();
+    };
+    let first = cover.y.saturating_sub(block.rect.y) as usize;
+    let last = (cover.bottom().saturating_sub(1)).saturating_sub(block.rect.y) as usize;
+    let left = cover.x.saturating_sub(block.rect.x) as usize;
+    let right = (cover.right().saturating_sub(1)).saturating_sub(block.rect.x) as usize;
+    let mut out = String::new();
+    let mut written = 0usize;
+    for (index, row) in block.rows.iter().enumerate() {
+        if index < first || index > last {
+            continue;
+        }
+        // 首行从选区起点那一列起，末行到终点那一列止，中间那几行整行。
+        let from = if index == first { left } else { 0 };
+        let to = if index == last { right + 1 } else { usize::MAX };
+        let piece = width::slice_columns(&row.text, from, to);
+        // 软折的续行接在上一行后面：这就是「按区域换行，而不是按终端换行」。
+        if written > 0 && !row.folded {
+            out.push('\n');
+        }
+        out.push_str(piece.trim_end());
+        written += 1;
+    }
+    out.trim_end().to_owned()
+}
+
+/// 把一段文本交给系统剪贴板的那个转义序列：`ESC ] 52 ; c ; <base64> BEL`（spec §6）。
+///
+/// 写不进去也不报错：这条通道是**单向**的，终端没有回话的地方，所以探测只会换来一次没用的
+/// 等待。shift 原生选择照旧可用，这条路是它之外多出来的一条。
+pub fn osc52(payload: &str) -> String {
+    format!("\x1b]52;c;{}\x07", base64(payload))
+}
+
+/// 标准 base64（RFC 4648，`=` 补齐）。
+///
+/// 自己编：这里只要一张编码表、二十行的事，而为它引一个依赖，换回来的是一个不值得维护的
+/// 直接依赖（仓库里那些 base64 条目都是别人的传递依赖）。
+fn base64(text: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let packed = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(packed >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(packed >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(packed >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[packed as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +308,64 @@ mod tests {
         // 拖出区域：头被夹在区域里，不会选到隔壁去。
         drag.moved((200, 200), Rect::new(41, 2, 20, 4));
         assert_eq!(drag.head, (60, 5));
+    }
+
+    #[test]
+    fn the_text_of_a_selection_joins_soft_wraps_and_keeps_hard_ones() {
+        // 一个软折的续行拼回一条；区域自己的换行落一个 `\n`（spec §6）。
+        let mut text = ScreenText::default();
+        text.push(
+            Rect::new(0, 0, 10, 3),
+            BlockKind::Transcript,
+            vec![
+                TextRow::plain("第一段 前半".to_owned()),
+                TextRow {
+                    text: "后半".to_owned(),
+                    folded: true,
+                },
+                TextRow::plain("第二段".to_owned()),
+            ],
+        );
+        // 整块选中：第 0 行第 0 列到第 2 行最后一列。
+        let mut drag = Drag::press((0, 0), Some(0));
+        drag.moved((9, 2), Rect::new(0, 0, 10, 3));
+        assert_eq!(text_of(&text, &drag), "第一段 前半后半\n第二段");
+        // 只选第一行的前四列（`第一` 各占两列）。
+        let mut narrow = Drag::press((0, 0), Some(0));
+        narrow.moved((3, 0), Rect::new(0, 0, 10, 3));
+        assert_eq!(text_of(&text, &narrow), "第一");
+        // 前六列：`第一段`。
+        let mut three = Drag::press((0, 0), Some(0));
+        three.moved((5, 0), Rect::new(0, 0, 10, 3));
+        assert_eq!(text_of(&text, &three), "第一段");
+    }
+
+    /// 选区取值的一个短名字（测试里读起来顺一点）。
+    fn text_of(text: &ScreenText, drag: &Drag) -> String {
+        super::text(text, drag)
+    }
+
+    #[test]
+    fn slice_columns_never_cuts_a_wide_character_in_half() {
+        // 一个 CJK 字占两列：从第 1 列切进去时它整个丢掉（`width::slice_columns`）。
+        assert_eq!(width::slice_columns("中文abc", 0, 4), "中文");
+        assert_eq!(width::slice_columns("中文abc", 1, 5), "文a");
+        assert_eq!(width::slice_columns("中文abc", 4, 7), "abc");
+        assert_eq!(width::slice_columns("中文abc", 3, 3), "");
+    }
+
+    #[test]
+    fn osc52_wraps_the_payload_in_base64() {
+        // 载荷是 UTF-8 字节的 base64；序列本身是 `ESC ] 52 ; c ; <载荷> BEL`。
+        assert_eq!(base64(""), "");
+        assert_eq!(base64("f"), "Zg==");
+        assert_eq!(base64("fo"), "Zm8=");
+        assert_eq!(base64("foo"), "Zm9v");
+        assert_eq!(base64("foob"), "Zm9vYg==");
+        assert_eq!(base64("fooba"), "Zm9vYmE=");
+        assert_eq!(base64("foobar"), "Zm9vYmFy");
+        assert_eq!(base64("中"), "5Lit");
+        assert_eq!(osc52("foobar"), "\x1b]52;c;Zm9vYmFy\x07");
     }
 
     #[test]

@@ -776,6 +776,9 @@ pub struct TuiState {
     screen_text: selection::ScreenText,
     /// 按下到抬起之间的一次拖选，没有就是 `None`。
     drag: Option<selection::Drag>,
+    /// 最近一次复制：`(时刻, 字数, 行数)`。提示行那句回执从这里来，寿命由
+    /// [`COPIED_WINDOW`] 定（`.scratch/tui-feedback/spec.md` §6）。
+    copied: Option<(std::time::Instant, usize, usize)>,
     /// 上一帧的整个终端区域。详情覆盖层的主体在打开时就排版好了，而那次排版需要的宽度是
     /// 终端尺寸的函数 —— 在覆盖层被画出来之前就知道，所以一次点击不必等一帧（票 04 §1）。
     area: Rect,
@@ -1595,6 +1598,7 @@ impl TuiState {
             regions: Regions::default(),
             screen_text: selection::ScreenText::default(),
             drag: None,
+            copied: None,
             area: Rect::default(),
             prompt_reply: None,
             // 空闲，直到循环另说：在它要第一行之前没有任何东西在跑，而键盘必须读起来就是
@@ -2620,10 +2624,29 @@ impl TuiState {
             return;
         };
         if drag.selecting {
-            // 复制接在票 06 上；这一步先只结束这次选择（反白跟着 `drag` 一起消失）。
+            self.copy(&drag);
             return;
         }
         self.click_at(column, row);
+    }
+
+    /// 把这次拖选取到的文本交给剪贴板，并在提示行留一句回执
+    /// （`.scratch/tui-feedback/spec.md` §6）。
+    ///
+    /// 写出的是 **OSC 52** —— 终端自己的剪贴板通道。这条通道是单向的，没有回话的地方，所以
+    /// 写不进去也不报错、更不探测；shift 原生选择照旧可用。选区取出来是空的时候什么都不做，
+    /// 也不留回执。
+    fn copy(&mut self, drag: &selection::Drag) {
+        let text = selection::text(&self.screen_text, drag);
+        if text.is_empty() {
+            return;
+        }
+        let _ = execute!(std::io::stdout(), Print(selection::osc52(&text)));
+        self.copied = Some((
+            std::time::Instant::now(),
+            text.chars().count(),
+            text.lines().count(),
+        ));
     }
 
     /// 一次点击落到哪儿：五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则
@@ -3576,11 +3599,24 @@ impl TuiState {
         }
         // 提示说的是键盘*现在*干什么。没有行被读的时候 —— 一个回合进行中，或者一次性的
         // `discuss` —— `enter 发送` 会是一个这个会话兑现不了的承诺（spec §6）。
-        if self.prompt_reply.is_some() {
+        let rest = if self.prompt_reply.is_some() {
             wording::status_line(self.busy(), width, raised)
         } else {
             wording::viewer_status_line(self.busy(), width, raised)
+        };
+        // 复制的回执排在提示集合**之前**：它说的是刚发生的事（`.scratch/tui-feedback/spec.md`
+        // §6），放不下时后面的提示让步。
+        match self.copy_receipt() {
+            Some(receipt) => wording::with_receipt(&receipt, &rest, width),
+            None => rest,
         }
+    }
+
+    /// 最近一次复制的那句回执，还在寿命内的话。
+    ///
+    /// 寿命由既有的脉冲 tick 走着 —— 不为它另起一个时钟（`.scratch/tui-feedback/spec.md` §6）。
+    fn copy_receipt(&self) -> Option<String> {
+        copy_receipt(self.copied, std::time::Instant::now())
     }
 
     /// 底部块这一帧要多少内容行。
@@ -4489,6 +4525,22 @@ fn exit_gesture_due(deadline: Option<std::time::Instant>, now: std::time::Instan
 /// 它同时是提示的寿命：超时作废、提示行恢复。写死、不做配置项 —— 这个手势只有「来得及
 /// 收回那一下」一个用途，给它一个旋钮只会多一件要解释的事。
 const GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// 复制回执在提示行上待多久（`.scratch/tui-feedback/spec.md` §6）。
+///
+/// 比退出手势那半秒长：它说的是「刚刚发生了什么」，而读它的人手还在鼠标上。写死、不做配置项。
+const COPIED_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// 一次复制留下的那句话，还在寿命内的话：`None` 就是「这一帧不该有回执」。
+///
+/// 时刻由调用方给，于是寿命是一条能直接断言的算术，而不是一个要等三秒的测试。
+fn copy_receipt(
+    copied: Option<(std::time::Instant, usize, usize)>,
+    now: std::time::Instant,
+) -> Option<String> {
+    let (at, chars, lines) = copied?;
+    (now.duration_since(at) < COPIED_WINDOW).then(|| wording::copied(chars, lines))
+}
 
 /// 标记的那些行与它们的颜色。
 ///
@@ -6697,6 +6749,24 @@ mod tests {
             .join("\n");
         assert!(text.contains("MCP 加载"), "{text}");
         assert!(text.contains("`fake`（stdio）：已连接"), "{text}");
+    }
+
+    /// 复制回执的寿命是 3 秒：过了就不该再有那句回执（`.scratch/tui-feedback/spec.md` §6）。
+    #[test]
+    fn the_copy_receipt_expires_after_three_seconds() {
+        let now = std::time::Instant::now();
+        let copied = Some((now, 12, 2));
+        assert_eq!(
+            copy_receipt(copied, now),
+            Some("已复制 12 字 · 2 行".to_owned())
+        );
+        assert_eq!(
+            copy_receipt(copied, now + std::time::Duration::from_millis(2_999)),
+            Some("已复制 12 字 · 2 行".to_owned()),
+            "差一毫秒还在"
+        );
+        assert_eq!(copy_receipt(copied, now + COPIED_WINDOW), None, "到点就走");
+        assert_eq!(copy_receipt(None, now), None, "没复制过就没有回执");
     }
 
     /// 退出手势的窗口写死在 500 毫秒：它同时是提示的寿命，不做配置项

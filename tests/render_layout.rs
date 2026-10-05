@@ -1209,6 +1209,30 @@ fn dragging_across_the_transcript_highlights_it_and_swallows_the_click() {
     );
 }
 
+/// 拖选之后提示行给一句回执：字数与行数（`.scratch/tui-feedback/spec.md` §6）。
+#[test]
+fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "第一行正文\n第二行正文", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第一行正文").expect("正文行在屏幕上");
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 3, row + 1));
+    state.mouse(release(column + 3, row + 1));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("已复制"), "提示行给回执：{text}");
+    assert!(text.contains("字"), "带着字数：{text}");
+
+    // 没拖起来的那一次（一次普通点击）不留回执。
+    let mut plain = state_with_roster(&["kimi"]);
+    plain.apply(message(1, "正文在这里", None));
+    let frame = buffer(120, 24, &mut plain);
+    let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
+    click(&mut plain, column, row);
+    let text = screen(120, 24, &mut plain).join("\n");
+    assert!(!text.contains("已复制"), "点一下不留回执：{text}");
+}
+
 /// 没拖动的按下-抬起仍是一次普通点击；一格的抖动也算不上拖。
 #[test]
 fn a_press_and_release_without_a_drag_is_still_a_click() {
