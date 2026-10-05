@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "A self-hosted coding agent CLI: append-only event stream plus per-agent windows"
 license = "MIT"
-# 仓库里有**两个** bin（产品本身 + 下面那个测试辅助的假 MCP server），所以 `cargo run` 得知道
-# 不指名时跑哪个 —— 不加这一行它会报「could not determine which binary to run」。产品是默认，
-# 那个辅助仍然可以 `cargo run --bin fake-mcp-server` 点名跑。
+# 仓库里有**三个** bin（产品本身 + 时间 server + 下面那个测试辅助的假 MCP server），所以
+# `cargo run` 得知道不指名时跑哪个 —— 不加这一行它会报「could not determine which binary to
+# run」。产品是默认；另两个可以 `cargo run --bin fs-agent-mcp-time` /
+# `cargo run --bin fake-mcp-server` 点名跑。
 default-run = "fs-agent"
 
 [lib]
@@ -16,6 +17,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "fs-agent"
 path = "src/main.rs"
+
+# 仓库自带的时间 server（`.scratch/time-mcp/spec.md`）：一台 stdio MCP server，只提供一个工具
+# `get_current_time`。它**手写**三条协议方法（`server/discover` / `tools/list` / `tools/call`），
+# 不开 `rmcp` 的 server 侧 —— 理由写在那份源码的模块注释里。不写盘、不出网、不读配置，所以能过
+# 缺省的沙箱；怎么把它挂上见 `docs/mcp.md`。
+[[bin]]
+name = "fs-agent-mcp-time"
+path = "src/bin/mcp_time.rs"
 
 # 集成测试用的假 MCP server（`.scratch/mcp-support/spec.md` §3；票 12）：一个手写的
 # newline-delimited JSON-RPC 对端，给 `tests/mcp_stdio.rs` 走真 spawn + 沙箱包装 + 协议帧 +
@@ -28,6 +37,9 @@ path = "tests/support/fake_mcp_server.rs"
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+# `fs-agent-mcp-time` 报的那一行里要有时区名（`Asia/Shanghai`）—— `chrono::Local` 只给得出
+# 偏移。这个包本来就在 `Cargo.lock` 里（`chrono` 自己的传递依赖），这里只是把它提成直接依赖。
+iana-time-zone = "0.1"
 futures = "0.3"
 # 只走 OpenAI 兼容的传输：不实现各家自己的协议，也不自己解析 SSE。
 # `native-tls` 直接链系统的 OpenSSL，不去拉 aws-lc-rs 那套 C 构建。

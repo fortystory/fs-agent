@@ -266,11 +266,14 @@ def review_rules(unit: Unit) -> list[str]:
 #   8,724 / 55 → 9,060 / 56（feature 索引天然随 feature 增长，与 `input-tokens`、`trace-tab` 两次同因）；
 #   同日该 feature 九张实现票落地、索引行也跟着改到「10 resolved + 9 ready-for-walkthrough」，
 #   9,060 → **9,201 / 56** —— 同一类显式动作，不另起一条注。
+# **2026-10-06 新增 `time-mcp` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   9,201 / 56 → **9,420 / 57**（feature 索引天然随 feature 增长，与 `input-tokens`、`trace-tab`、
+#   `tui-visual-language` 三次同因；同日该 feature 三张实现票落地，索引行的票数直接写 `3/3 done`）。
 # 行数比票 04 的「现在」高是**预期**的：拆段落必然加行，票 04 承认「行数不得增」不成立，
 # 行数上限是「拆完之后的新上限」，此后拦住「再往入口文档追加」。
 ENTRY_BUDGET = {
     "README.md": {"chars": 16993, "lines": 292, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 9201, "lines": 56, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 9420, "lines": 57, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 905, "lines": 26, "target_chars": 950, "target_lines": 30},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，

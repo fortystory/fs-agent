@@ -212,13 +212,53 @@ argv 先过 `Sandbox::wrap` 这个纯函数（与 `bash` 同一个），再交�
 - 必填参数空着、或者参数比声明的多，都只给人一句中文说明，不发出调用。
 - 菜单的动态那一半**不进工具表、也不进前缀缓存**：它是界面层的东西。
 
+## 自带的 time server
+
+`fs-agent-mcp-time` 是本仓库自带的一台 stdio server（`cargo install --path .` 会装到 `PATH`）。
+它只答三条方法（`server/discover` / `tools/list` / `tools/call`），只提供一个工具
+`get_current_time`：读一次本地时钟，回一行
+
+```text
+本机现在：2026-10-06 14:32:05 +08:00 星期二（Asia/Shanghai）
+```
+
+本机时区的时间，带 UTC 偏移、时区名与星期几（时区名取不到时省掉尾部的括号）。它不写盘、不出
+网、不读配置，所以缺省就过得了沙箱，也不必声明 `writable_roots`。
+
+挂上它有两种写法。项目级那份跟着仓库走：
+
+```json
+{ "mcpServers": { "time": { "command": ["fs-agent-mcp-time"] } } }
+```
+
+或者写进 `config.toml`（`[mcp] enabled` 缺省关，打开才有那四个元工具）：
+
+```toml
+[mcp]
+enabled = true
+
+[mcp.servers.time]
+command = ["fs-agent-mcp-time"]
+trust_effects = true
+read_only_tools = ["get_current_time"]
+```
+
+`trust_effects` + `read_only_tools` 建议开：读时钟不是工作区副作用，不开的话它在 `readonly`
+档会被拒（`mcp_call` 缺省按最严的 `Exclusive` 算）。`trust_results` 建议保持缺省 —— 「这台是
+我们自己写的」按本仓库的纪律不蕴含「它的结果可以当指令读」。
+
+身份里那句指引（`src/agent.rs` 的 `TIME_GUIDANCE`）按名字点它，而它**不带时间的值**：身份既是
+缓存前缀，又是 `replay` 复现当时请求时会再调一次的那个函数。规格与逐条取舍在
+[`.scratch/time-mcp/spec.md`](../.scratch/time-mcp/spec.md)。
+
 ## 没做的
 
 - **模型的模板自发调用**：模板的发起者是人，模型没有这个工具。
 - **把 server 的工具铺进表**：这是整个设计的支点，永不做。
 - **已 deprecated 的原语**：sampling / roots / logging。
 - **旧版协议回退**、**legacy HTTP+SSE 传输**、**自动重连**、**server 数量上限**、
-  **给模型上限与超时参数**、**资源与工作区路径互操作**。
+  **给模型上限与超时参数**、**资源与工作区路径互操作**、**时间 server 的参数**
+  （`get_current_time` 不吃参数：时区换算与时间戳转换不在它的话上）。
 
 ## 代码落点
 
@@ -227,6 +267,8 @@ argv 先过 `Sandbox::wrap` 这个纯函数（与 `bash` 同一个），再交�
   `src/tools/mcp_args.rs`（四个元工具共用的参数读取）；
 - 配置：`src/config.rs`（`[mcp]` 段、`McpSettings` / `McpServerConfig`、`Config::load_project_mcp`、
   打码器收 `env` / `headers` 的值）；
+- 自带的时间 server：`src/bin/mcp_time.rs`（那个手写的二进制）与 `tests/mcp_time_server.rs`
+  （裸协议 + 端到端两条验收路）；
 - 测试：`tests/mcp_list.rs`、`tests/mcp_call.rs`、`tests/mcp_resources.rs`、`tests/mcp_trust.rs`、
   `tests/mcp_process.rs`、`tests/mcp_stdio.rs`、`tests/mcp_mrtr.rs`，以及那个手写的假 server
   `tests/support/fake_mcp_server.rs`（真 spawn + 沙箱包装 + 协议帧 + 进程组清理那条路）。

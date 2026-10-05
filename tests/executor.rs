@@ -340,6 +340,12 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
             // 联网那段指引同理（`.scratch/web-search-tool/spec.md` §8）：执行者去干活时
             // 自己就能查，不必让讨论者把结果转述过去。
             assert!(content.contains(fs_agent::agent::WEB_GUIDANCE), "{content}");
+            // 而时间那句**只**拼在本程序的身份上（`.scratch/time-mcp/spec.md` §5）：执行者的
+            // 工具表里没有 MCP 那一套，指它反而是指一条不存在的路。
+            assert!(
+                !content.contains(fs_agent::agent::TIME_GUIDANCE),
+                "{content}"
+            );
         }
         other => panic!("要的是执行者自己的系统身份，得到 {other:?}"),
     }
