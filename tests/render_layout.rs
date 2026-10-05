@@ -6208,16 +6208,13 @@ fn trace_page(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
 
 /// 主列那一半的行，左栏不算 —— 用来断言「转录一个字没动」。
 ///
-/// 左栏的两档宽度不同，所以起点跟着宽度走，而不是写死一个 40。
+/// 起点按**这一帧真的画了没有**分栏来定（分隔列 `┆` 就在左栏右边那一格），而不是按宽度
+/// 猜一档：`Ctrl-O` 收起与窄终端走的是同一支降级，两者都让主列从第 0 列起（票 11）。
 fn conversation_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
-    let left = if width >= 120 {
-        41
-    } else if width >= 80 {
-        29
-    } else {
-        0
-    };
     let frame = buffer(width, height, state);
+    let left = (0..width)
+        .find(|x| frame[(*x, 0)].symbol() == "┆")
+        .map_or(0, |x| x + 1);
     (0..height).map(|y| cells(&frame, y, left, width)).collect()
 }
 
@@ -6534,4 +6531,100 @@ fn the_three_prefixes_wear_three_colours() {
     assert_eq!(assistant, Color::LightCyan, "助手照旧");
     assert_ne!(injected, user);
     assert_ne!(injected, assistant);
+}
+
+// ---------------------------------------------------------------------------
+// 降级：左栏不可见时对话视图退回全量（`.scratch/trace-tab/spec.md` §6；票 11）
+// ---------------------------------------------------------------------------
+
+/// 一场带过程行的会话：用户的话、一次调用、一段思考、一条回答。
+fn a_session_with_process_rows(state: &mut TuiState) {
+    state.apply(user_message(1, "问题"));
+    state.apply(tool_started(
+        2,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "call-1", true, Some("out"), None));
+    state.apply(reasoning_delta("一段推理。"));
+    state.apply(message(4, "回答。", None));
+}
+
+/// `Ctrl-O` 收起左栏之后过程行回到对话视图，叫回来又只剩对话
+/// （票 11 验证 1）。
+#[test]
+fn hiding_the_sidebar_brings_the_process_rows_back_to_the_conversation() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        !conversation.contains("调用 bash"),
+        "左栏在：{conversation}"
+    );
+    assert!(conversation.contains("回答。"), "{conversation}");
+
+    state.key(Key::CtrlO);
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        conversation.contains("调用 bash"),
+        "收起左栏之后过程行有去处了：{conversation}"
+    );
+    assert!(conversation.contains("思考完成"), "{conversation}");
+    assert!(conversation.contains("回答。"), "{conversation}");
+
+    state.key(Key::CtrlO);
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        !conversation.contains("调用 bash"),
+        "叫回来之后又只剩对话：{conversation}"
+    );
+    assert!(conversation.contains("回答。"), "{conversation}");
+}
+
+/// 80 列以下左栏本来就不存在，所以同一支降级生效（票 11 验证 2）。
+#[test]
+fn a_narrow_terminal_keeps_the_process_rows_in_the_conversation() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    let conversation = conversation_rows(&mut state, 60, 24).join("\n");
+    assert!(
+        conversation.contains("调用 bash"),
+        "窄终端上过程行没有别的去处：{conversation}"
+    );
+    assert!(conversation.contains("思考完成"), "{conversation}");
+    assert!(conversation.contains("回答。"), "{conversation}");
+}
+
+/// 收起与叫回不改动滚动意图：来回之后两个视图都还在底部，指示器不出现
+/// （票 11 验证 3）。
+#[test]
+fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let _ = screen(120, 24, &mut state);
+
+    state.key(Key::CtrlO);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        !rows.iter().any(|row| row.contains("行新内容")),
+        "收起不把任何视图踢出底部：{}",
+        rows.join("\n")
+    );
+
+    state.key(Key::CtrlO);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        !rows.iter().any(|row| row.contains("行新内容")),
+        "叫回来也一样：{}",
+        rows.join("\n")
+    );
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("第 39 句话")),
+        "轨迹页仍在最新那一行：{page:#?}"
+    );
 }

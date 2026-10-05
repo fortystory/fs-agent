@@ -1,7 +1,7 @@
 # 11 — 降级：左栏不可见时对话视图退回全量
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 10
 
@@ -37,3 +37,20 @@ Blocked by: 10
 
 - 不改左栏的档位门槛与 `Ctrl-O` 的语义。
 - 不给窄终端另做一套排版。
+
+## 作答（2026-10-05）
+
+- 判据就是 `trace_width == 0`（页矩形为 `None`：宽度不够或意愿为假走同一支）。`TuiState`
+  多一个 `conversation_full` 位记「对话视图这一帧是不是全量」，`emit_block` 的对话分支改成
+  `targets.conversation && (self.conversation_full || selects(...))` —— 全量时所有块都进
+  对话视图。块的产生、详情入口与排版都没变，所以这是视图选择，不是第二条渲染路径。
+- **全量位也是重放判据**：`rerender_if_width_changed` 把 `full != self.conversation_full`
+  并进「对话视图变了」，所以收起/叫回时对话视图即使宽度没变也会清空并按新集合重放；
+  轨迹视图这一帧不物化时（`full`）它不参与重放（刚被清空，重放只会喂给一个零宽窗格）。
+- 思考行跟着降级：`paint_thinking_line` / `paint_settled_thinking` 在轨迹不物化时把行喂给
+  对话视图。
+- 新增三条帧断言：`Ctrl-O` 收起后过程行回到主列、叫回后又只剩对话；窄终端（60 列）同一支
+  降级；收起/叫回不改变两个视图的滚动意图（指示器不出现、轨迹页仍贴底）。测试里
+  `conversation_rows` 的分栏起点改成按帧上的 `┆` 找，而不是按宽度猜档。
+- `cargo test` 全绿（render_layout 165 + 其余）、`cargo clippy --all-targets` 无警告、
+  `cargo fmt --check` 干净。
