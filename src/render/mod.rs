@@ -32,6 +32,7 @@ pub mod palette;
 pub mod pane;
 pub mod panel;
 pub mod plain;
+pub mod selection;
 pub mod severity;
 pub mod todo;
 pub mod token;

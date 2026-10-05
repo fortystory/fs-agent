@@ -1,7 +1,7 @@
 # 05 — 拖选与反白：Down / Drag / Up 三段，选区归属一块文本区域
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../spec.md
 Blocked by: —
 

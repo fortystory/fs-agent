@@ -283,14 +283,35 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
         .map(|row| row as u16)
 }
 
-fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+/// 一次左键**按下**与它的抬起：点击动作发生在**抬起**上
+/// （`.scratch/tui-feedback/spec.md` §5 —— 拖选正是这样拦下它的）。
+fn mouse_event(
+    kind: ratatui::crossterm::event::MouseEventKind,
+    column: u16,
+    row: u16,
+) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent};
     MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
+        kind,
         column,
         row,
         modifiers: KeyModifiers::empty(),
     }
+}
+
+/// 点屏幕上一个格子。
+fn click(state: &mut TuiState, column: u16, row: u16) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    state.mouse(mouse_event(
+        MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+    ));
+    state.mouse(mouse_event(
+        MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+    ));
 }
 
 /// 切到轨迹页：工具行与思考行现在只住在那里，而那一页是主列页签条上的第二个标签
@@ -312,7 +333,7 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
         .find(needle)
         .unwrap_or_else(|| panic!("第 {row} 行不含 {needle:?}：{text:?}"));
     let column = fs_agent::render::width::text_columns(&text[..at]) as u16;
-    state.mouse(click(column, row));
+    click(state, column, row);
 }
 
 /// 左栏里按距页首行的偏移取一个字段。
@@ -474,7 +495,7 @@ fn the_pointer_does_nothing_while_a_replay_is_in_flight() {
         row: 10,
         modifiers: ratatui::crossterm::event::KeyModifiers::empty(),
     });
-    state.mouse(click(10, 5));
+    click(&mut state, 10, 5);
     let after = screen(120, 40, &mut state);
     assert_eq!(before, after, "指针什么都没改变");
 }
@@ -1058,7 +1079,7 @@ fn the_divider_and_section_lines_are_not_clickable() {
         .iter()
         .position(|row| row.contains(wording::history_divider()))
         .expect("接缝画出来了");
-    state.mouse(click(10, seam as u16));
+    click(&mut state, 10, seam as u16);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──") && !text.contains("── 推理 ──"),

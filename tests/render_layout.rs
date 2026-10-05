@@ -498,7 +498,7 @@ fn the_hidden_sidebar_has_no_tabs_to_click() {
     assert!(!text.contains("调用量"), "收起后页签不在：{text}");
 
     // 原先页签所在的那一格现在是转录区：点它什么都不发生。
-    state.mouse(click(2, 6));
+    click(&mut state, 2, 6);
     let after = screen(120, 24, &mut state);
     assert_eq!(closed, after, "收起后点页签原来的位置没有反应");
 }
@@ -1155,7 +1155,7 @@ fn the_name_row_is_not_an_entry() {
         let frame = buffer(120, 24, &mut state);
         let (column, row) =
             cell_of(&frame, 120, 24, name).unwrap_or_else(|| panic!("{name} 在屏幕上"));
-        state.mouse(click(column, row));
+        click(&mut state, column, row);
         let text = screen(120, 24, &mut state).join("\n");
         assert!(!text.contains("── 正文 ──"), "点 {name} 不弹详情：{text}");
     }
@@ -1163,9 +1163,99 @@ fn the_name_row_is_not_an_entry() {
     // 正文那一行照旧开。
     let frame = buffer(120, 24, &mut state);
     let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("── 正文 ──"), "点正文行开详情：{text}");
+}
+
+/// 拖选：按住、拖过两格，那一带反白；抬起时**不**走原来那次点击的路子
+/// （`.scratch/tui-feedback/spec.md` §5）。台面上的点击从此发生在抬起上，这一条就是那次挪动的
+/// 全部理由。
+#[test]
+fn dragging_across_the_transcript_highlights_it_and_swallows_the_click() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "第一行正文\n第二行正文", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第一行正文").expect("正文行在屏幕上");
+
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 4, row + 1));
+    let frame = buffer(120, 24, &mut state);
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::REVERSED),
+        "起点反白"
+    );
+    assert!(
+        frame[(column + 4, row + 1)]
+            .modifier
+            .contains(Modifier::REVERSED),
+        "终点也反白"
+    );
+    assert!(
+        !frame[(column + 6, row)]
+            .modifier
+            .contains(Modifier::REVERSED),
+        "选区之外不动"
+    );
+
+    // 抬起：那一次点击被拖选拦下（正文详情不开），反白跟着走掉。
+    state.mouse(release(column + 4, row + 1));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("── 正文 ──"), "拖选不吃成一次点击：{text}");
+    let frame = buffer(120, 24, &mut state);
+    assert!(
+        !frame[(column, row)].modifier.contains(Modifier::REVERSED),
+        "抬起之后反白走掉"
+    );
+}
+
+/// 没拖动的按下-抬起仍是一次普通点击；一格的抖动也算不上拖。
+#[test]
+fn a_press_and_release_without_a_drag_is_still_a_click() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "正文在这里", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "正文在这里").expect("正文行在屏幕上");
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 1, row));
+    state.mouse(release(column + 1, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "仍是一次点击：{text}");
+}
+
+/// 在主列页签上按住拖开：页签**不**切 —— 那次点击属于一条已经变成拖选的按下。
+#[test]
+fn a_drag_that_starts_on_a_tab_does_not_switch_the_page() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "问题", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, wording::TAB_TRACE).expect("页签在屏幕上");
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 6, row));
+    state.mouse(release(column + 6, row));
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(conversation.contains("问题"), "还在对话页：{conversation}");
+}
+
+/// 详情覆盖层里按住拖动：覆盖层**不**关 —— 框内的拖动是在选它的正文。
+#[test]
+fn a_drag_inside_the_detail_overlay_selects_instead_of_closing_it() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "第一段正文\n第二段正文", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第一段正文").expect("正文行在屏幕上");
+    click(&mut state, column, row);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
+
+    // 覆盖层里那一行正文：拖过两格。
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第二段正文").expect("覆盖层里有全文");
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 2, row));
+    state.mouse(release(column + 2, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "覆盖层还开着：{text}");
 }
 
 #[test]
@@ -1445,7 +1535,7 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     // （`.scratch/trace-in-main/spec.md` §2）。
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_FILES);
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         text.contains(wording::tab_placeholder()),
@@ -1463,7 +1553,7 @@ fn clicking_a_tab_switches_the_sidebar_page() {
 
     // 再切回来：调用量恢复了那些字段。
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_USAGE);
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("token"), "读数回来了：{text}");
     assert!(
@@ -1493,7 +1583,7 @@ fn only_the_tab_labels_answer_a_click() {
         .expect("标签之间有分隔");
 
     for column in [separator, fill] {
-        state.mouse(click(column, row));
+        click(&mut state, column, row);
         let text = screen(120, 24, &mut state).join("\n");
         assert!(
             !text.contains(wording::tab_placeholder()),
@@ -1519,7 +1609,7 @@ fn a_question_keeps_the_tabs_from_answering() {
     state.request(request);
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("权限询问"), "问句还在：{text}");
@@ -1551,7 +1641,7 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
         "60 列下没有页签条"
     );
     for (column, row) in [(2u16, 1u16), (4, 3), (2, 8)] {
-        state.mouse(click(column, row));
+        click(&mut state, column, row);
     }
     let text = screen(60, 24, &mut state).join("\n");
     assert!(
@@ -1824,7 +1914,11 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
             .iter()
             .position(|ch| *ch == '⋮')
             .expect("这一列在顶端被裁");
-        state.mouse(click(RAIL_AT_120, (TRANSCRIPT_TOP + mark + offset) as u16));
+        click(
+            &mut state,
+            RAIL_AT_120,
+            (TRANSCRIPT_TOP + mark + offset) as u16,
+        );
         // 名字独占一行，所以落点是名字那一行，话在它下面一行（2026-10-05 的排版修订）。
         let rows = screen(120, 24, &mut state);
         assert!(
@@ -1846,10 +1940,11 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
     let _ = screen(120, 24, &mut state);
 
     let before = top_transcript_row(&mut state);
-    state.mouse(click(
+    click(
+        &mut state,
         RAIL_AT_120,
         (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 1) as u16,
-    ));
+    );
     assert_eq!(
         top_transcript_row(&mut state),
         before,
@@ -1912,7 +2007,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 第一个轮次的开头是用户的问题 —— 讨论确实会带的那一条
     // 消息，记在第一个轮次开始之前……
     let first = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 3) as u16;
-    state.mouse(click(RAIL_AT_120, first));
+    click(&mut state, RAIL_AT_120, first);
     let rows = screen(120, 24, &mut state);
     assert!(
         rows[TRANSCRIPT_TOP].contains("[用户]") && rows[TRANSCRIPT_TOP + 1].contains("讨论题目"),
@@ -1963,7 +2058,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     }
     assert_eq!(turn_rail_shape(&mut later), "┊┊┃");
     let second = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 2) as u16;
-    later.mouse(click(RAIL_AT_120, second));
+    click(&mut later, RAIL_AT_120, second);
     // 轮次开始那一行现在只住在轨迹页（2026-10-05 维护者收紧），所以兜底落点是那一轮
     // **第一条留在对话里的行** —— 它的第一条发言。
     let rows = screen(120, 24, &mut later);
@@ -2116,7 +2211,6 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
 #[test]
 fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
     use fs_agent::render::{Key, RenderEvent};
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     let mut state = state();
     for index in 0..40 {
@@ -2148,23 +2242,23 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
 
     // 滚轮一格挪三行，上下都是。指针落在**转录**上 —— 左栏页矩形里的滚轮归轨迹页
     // （`.scratch/trace-tab/spec.md` §5）。
-    let mouse = |kind| MouseEvent {
+    let mouse = |kind| ratatui::crossterm::event::MouseEvent {
         kind,
         column: 60,
         row: 10,
-        modifiers: KeyModifiers::empty(),
+        modifiers: ratatui::crossterm::event::KeyModifiers::empty(),
     };
     // 一格把视口往上挪、再挪回来；一格跨过多少条*提示*
     // 取决于窗格显示多少行，所以两端是拿彼此比，
     // 而不是拿一个记住的行号比 —— 这就是「一格三行、
     // 再回来」在任何终端尺寸下的意思。
-    state.mouse(mouse(MouseEventKind::ScrollUp));
+    state.mouse(mouse(ratatui::crossterm::event::MouseEventKind::ScrollUp));
     let after_wheel_up = first_notice(&screen(120, 24, &mut state));
     assert!(
         after_wheel_up < after_page_up,
         "滚轮把视口往上挪：{after_page_up:?} -> {after_wheel_up:?}"
     );
-    state.mouse(mouse(MouseEventKind::ScrollDown));
+    state.mouse(mouse(ratatui::crossterm::event::MouseEventKind::ScrollDown));
     assert_eq!(
         first_notice(&screen(120, 24, &mut state)),
         after_page_up,
@@ -2182,23 +2276,13 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
         column + 8 <= SCROLLBAR_AT_120,
         "指示器待在滚动条左边，从第 {column} 列起"
     );
-    state.mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: 10,
-        row: 10,
-        modifiers: KeyModifiers::empty(),
-    });
+    click(&mut state, 10, 10);
     assert_eq!(
         first_notice(&screen(120, 24, &mut state)),
         after_page_up,
         "点在转录正文上什么都不改"
     );
-    state.mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column,
-        row,
-        modifiers: KeyModifiers::empty(),
-    });
+    click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("新的一行"), "回到最底下：{text}");
     assert!(!text.contains("点此到底"), "指示器不见了：{text}");
@@ -3428,7 +3512,7 @@ fn the_three_tab_labels_fit_at_the_narrow_width() {
         .find(|x| frame[(*x, row)].symbol() == "┆")
         .expect("标签之间有分隔");
     for column in [separator, fill] {
-        state.mouse(click(column, row));
+        click(&mut state, column, row);
         let text = screen(80, 24, &mut state).join("\n");
         assert!(
             !text.contains("☐ 一件事"),
@@ -3507,7 +3591,7 @@ fn clicking_a_todo_row_opens_nothing() {
     let (column, _) = cell_of(&frame, 120, 24, "☐ 第 2 项").expect("todo 页上那一项");
     let before = screen(120, 24, &mut state);
 
-    state.mouse(click(column, clickable as u16));
+    click(&mut state, column, clickable as u16);
     assert_eq!(
         screen(120, 24, &mut state),
         before,
@@ -4410,8 +4494,11 @@ fn tool_completed(
     ))
 }
 
-/// 点屏幕上一个格子。
-fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
+/// 一次左键**按下**。
+///
+/// 它与 [`release`] 配对才是完整的一次点击：`.scratch/tui-feedback/spec.md` §5 之后，点击动作
+/// 发生在**抬起**上 —— 拖选正是这样拦下它的。
+fn press(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
     use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -4419,6 +4506,34 @@ fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
         row,
         modifiers: KeyModifiers::empty(),
     }
+}
+
+/// 同上的抬起。
+fn release(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+/// 一次按住并移动：拖选的中间那一段。
+fn drag_to(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+/// 点屏幕上一个格子：按下 + 抬起。
+fn click(state: &mut TuiState, column: u16, row: u16) {
+    state.mouse(press(column, row));
+    state.mouse(release(column, row));
 }
 
 #[test]
@@ -4736,7 +4851,7 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
     // 在问句盖住窗格之前，先找到调用行那一行。
     let row = row_of(&mut state, 120, 40, "调用 bash").expect("调用行画出来了");
     state.request(ask_permission().0);
-    state.mouse(click(20, row));
+    click(&mut state, 20, row);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         !text.contains("── 参数 ──"),
@@ -4814,7 +4929,7 @@ fn click_text(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let Some((column, row)) = cell_of(&frame, width, height, needle) else {
         panic!("屏幕上没有东西包含 {needle:?}");
     };
-    state.mouse(click(column, row));
+    click(state, column, row);
 }
 
 /// 点某一屏幕行里画着 `needle` 的那个格子。
@@ -4829,7 +4944,7 @@ fn click_in_row(state: &mut TuiState, width: u16, height: u16, row: u16, needle:
         panic!("第 {row} 行不包含 {needle:?}：{text:?}");
     };
     let column = text_columns(&text[..at]) as u16;
-    state.mouse(click(column, row));
+    click(state, column, row);
 }
 
 #[test]
@@ -4862,7 +4977,7 @@ fn clicking_a_question_body_or_border_does_nothing() {
 
     // 标题行，以及覆盖层正文的中间。
     for (column, row) in [(60, 10), (60, 11), (2, 10)] {
-        state.mouse(click(column, row));
+        click(&mut state, column, row);
     }
     assert!(answer.try_recv().is_err(), "点在按钮之外不作答");
     let text = screen(120, 24, &mut state).join("\n");
@@ -5949,7 +6064,7 @@ fn a_click_outside_the_detail_overlay_closes_it() {
 
     // 外面：覆盖层在屏幕上留出的上边距（第 0 行）——整圈框都是关闭目标，
     // 而这里的覆盖层压住了它下面几乎每一行（120×40 下它占 2..38）。
-    state.mouse(click(MAIN_LEFT_AT_120, 0));
+    click(&mut state, MAIN_LEFT_AT_120, 0);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(!text.contains("── 参数 ──"), "点在转录上把它关上了：{text}");
 
@@ -5960,7 +6075,7 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("── 参数 ──"), "重新打开了：{text}");
-    state.mouse(click(60, 12));
+    click(&mut state, 60, 12);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("── 参数 ──"),
@@ -6628,7 +6743,7 @@ fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
             screen(120, 24, &mut state)
         );
     };
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
     let page = trace_page(&mut state, 120, 24);
     assert!(
         page.iter().any(|row| row.contains("第 39 句话")),
@@ -6686,7 +6801,7 @@ fn a_row_in_the_trace_page_opens_its_detail() {
     let Some((column, row)) = cell_of(&frame, 120, 24, "调用 bash") else {
         panic!("轨迹页上该有那次调用");
     };
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("参数"), "详情覆盖层开着：{text}");
     assert!(text.contains("ls -la"), "里面是这次调用的参数：{text}");
@@ -6711,7 +6826,7 @@ fn a_message_in_the_trace_page_is_one_line_that_opens_its_full_text() {
 
     let frame = buffer(120, 24, &mut state);
     let (column, row) = cell_of(&frame, 120, 24, "第一行在这里").expect("轨迹页上那行消息");
-    state.mouse(click(column, row));
+    click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("第二行在那里"), "详情里有全文：{text}");
 }
@@ -7571,7 +7686,7 @@ fn closing_a_trace_detail_returns_to_where_it_was_opened() {
     );
 
     let row = main_row_of(&mut state, "被点开的消息");
-    state.mouse(click(MAIN_LEFT_AT_120, row));
+    click(&mut state, MAIN_LEFT_AT_120, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("── 正文 ──"), "详情开着：{text}");
 
@@ -7614,7 +7729,7 @@ fn closing_a_conversation_detail_returns_to_the_reading_position() {
         .position(|line| line.contains("被点开的消息"))
         .expect("回看态里那条消息可见") as u16;
 
-    state.mouse(click(60, row));
+    click(&mut state, 60, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("── 正文 ──"), "详情开着：{text}");
 
@@ -7640,7 +7755,7 @@ fn closing_a_conversation_detail_that_was_at_the_bottom_still_follows() {
         .iter()
         .position(|line| line.contains("被点开的消息"))
         .expect("贴底时那条消息在屏幕上") as u16;
-    state.mouse(click(60, row));
+    click(&mut state, 60, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("── 正文 ──"), "详情开着：{text}");
 

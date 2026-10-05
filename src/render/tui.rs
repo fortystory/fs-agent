@@ -51,6 +51,7 @@ use super::layout;
 use super::palette;
 use super::pane::{self, Pane};
 use super::panel::Panel;
+use super::selection;
 use super::severity::Severity;
 use super::token;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
@@ -770,6 +771,11 @@ pub struct TuiState {
     questionnaire_bottom: Option<Rect>,
     /// 上一帧把一个问题的可点部分画在了哪里。
     regions: Regions,
+    /// 上一帧每块区域画了哪些显示行 —— 拖选取文本用的那一层
+    /// （`.scratch/tui-feedback/spec.md` §5）。与 [`TuiState::regions`] 同一套纪律：每帧重建。
+    screen_text: selection::ScreenText,
+    /// 按下到抬起之间的一次拖选，没有就是 `None`。
+    drag: Option<selection::Drag>,
     /// 上一帧的整个终端区域。详情覆盖层的主体在打开时就排版好了，而那次排版需要的宽度是
     /// 终端尺寸的函数 —— 在覆盖层被画出来之前就知道，所以一次点击不必等一帧（票 04 §1）。
     area: Rect,
@@ -1587,6 +1593,8 @@ impl TuiState {
             modal_rect: None,
             questionnaire_bottom: None,
             regions: Regions::default(),
+            screen_text: selection::ScreenText::default(),
+            drag: None,
             area: Rect::default(),
             prompt_reply: None,
             // 空闲，直到循环另说：在它要第一行之前没有任何东西在跑，而键盘必须读起来就是
@@ -2528,124 +2536,148 @@ impl TuiState {
         }
     }
 
+    /// 指针事件的入口：按**手势**分派，再按谁占着指针分派。
+    ///
+    /// 左键是**三段**的（`.scratch/tui-feedback/spec.md` §5）：按下只记起点，拖动越过门槛就成为
+    /// 一次拖选，抬起时要么复制（§6）、要么把这一次按下的**点击**交给原来那套分派。点击动作
+    /// 从 `Down` 挪到 `Up` 正是为了让拖选拦得住它 —— 否则一次「按下就开始选」的拖动会先切页签。
     pub fn mouse(&mut self, mouse: MouseEvent) {
         // 重放靠忽略来占着指针：历史还在一个钉在末尾的视口下面铺，所以滚轮一格与一次点击
         // 都不许挪动它、也不许打开一行还没到达完的行（`spec` §5）。
         if self.replay.is_some() {
             return;
         }
-        // 五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则是这一帧自己的
-        // 那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西背后的
-        // 转录（票 04 §2，`tui-sidebar` spec §7）。
         self.dirty = true;
-        // 指针落在轨迹页上吗？点击按它分派：`trace_rect` 只在上一帧真的画了轨迹页时才有值，
-        // 所以「记住读的人真看到了什么」这条纪律也管着视口的选择。滚轮不再问它
-        // （`.scratch/trace-in-main/spec.md` §4）。
-        let over_trace = self
-            .trace_rect
-            .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
-        // 1. 详情覆盖层直接占着指针。它的整个主体都滚，而再点一次它来自的那一行会关掉它
-        // （票 02 §4）。
-        if self.detail_open() {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => self.detail_scroll(-1),
-                MouseEventKind::ScrollDown => self.detail_scroll(1),
-                MouseEventKind::Down(MouseButton::Left) => {
-                    // 框外的一次点击关掉它 —— 它来自的那一行、转录、页脚，什么都行
-                    // （票 02 §4；2026-09-23 修正，原先只认「再点同一行」）。框内的点击是
-                    // 覆盖层自己的、什么都不做，因为它没有自己的按钮。
-                    let inside = self
-                        .detail_rect
-                        .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
-                    if !inside {
-                        self.close_detail();
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-        // 2. 接下来是问题占着指针。**点击**照旧在它可答的地方回答它（可答的是上一帧记成区域
-        // 的那些，所以一个被裁掉或滚走的键干脆没有区域 —— spec §9，票 04 §2）；**滚轮**则按
-        // 指针落在哪一块分派：落在覆盖层自己那块里就归它，落在转录上就滚转录
-        // （`tui-chrome` §5，推翻票 04 §2 里「吃掉一切」的那半句）。
-        if self.pending.is_some() {
-            match mouse.kind {
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                    let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
-                    let point = (mouse.column, mouse.row).into();
-                    let questionnaire = self
-                        .pending
-                        .as_ref()
-                        .is_some_and(|pending| matches!(pending, Pending::Questionnaire(_)));
-                    // 问卷用排版给的底部块，中间的模态用它自己那个矩形（它带边框）。
-                    let owned = if questionnaire {
-                        self.questionnaire_bottom
-                            .is_some_and(|rect| rect.contains(point))
-                    } else {
-                        self.modal_rect.is_some_and(|rect| rect.contains(point))
-                    };
-                    if owned {
-                        // 模态自己没有可滚的内容，所以在自己那块里什么都不做；问卷挪高亮。
-                        if questionnaire {
-                            self.question_click(QuestionClick::Wheel(up));
-                        }
-                    } else {
-                        // 不在覆盖层自己那块里就滚当前显示的那一页
-                        // （`.scratch/trace-in-main/spec.md` §4）。
-                        self.wheel_current(up);
-                    }
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.question_click(QuestionClick::At(mouse.column, mouse.row))
-                }
-                _ => {}
-            }
-            return;
-        }
-        // 3. 否则就是这一帧自己的部件，按谁占着指针排序：左栏的页签，然后是转录 —— 它的
-        // 滚轮、指示器与折叠行都回应它。页签是个控件，所以它在周围的文字之前被问
-        // （spec §7）。
         match mouse.kind {
-            // 滚轮滚**当前显示的那一页**：两个视图住在同一块内容区里，同一时刻只有一页在屏幕
-            // 上，所以「按指针位置分派给哪个窗格」这条分派随轨迹视图搬进主列一起消失
-            // （`.scratch/trace-in-main/spec.md` §4，推翻 `tui-chrome` §5 的那半句）。
-            MouseEventKind::ScrollUp => self.wheel_current(true),
-            MouseEventKind::ScrollDown => self.wheel_current(false),
-            MouseEventKind::Down(MouseButton::Left) => {
-                match self.regions.action_at(mouse.column, mouse.row) {
-                    Some(HitAction::SwitchTab(tab)) => self.tab = tab,
-                    Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
-                    Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
-                    _ if self.indicator_hit(Viewport::Trace, mouse.column, mouse.row) => {
-                        self.trace.to_bottom()
-                    }
-                    _ if self.indicator_hit(Viewport::Conversation, mouse.column, mouse.row) => {
-                        self.conversation.to_bottom()
-                    }
-                    _ => {
-                        let panes = layout::plan(self.area, 1, self.sidebar_wanted);
-                        // 指针落在哪个窗格里，这一击就算谁的：轨迹页只认主列内容区那一块
-                        // （`.scratch/trace-in-main/spec.md` §4），对话只认同一块（票 09）。
-                        // 落在别处 —— 左栏、分隔列、
-                        // 状态行、输入区 —— 什么都不点：那里没有可点开的行，而行号是**屏幕**
-                        // 行号，拿它去取另一个视图的详情会点到同一横行的别的行上（在 `todo`
-                        // 页里点一项，开着的是转录里那条详情）。
-                        let view = if over_trace {
-                            Viewport::Trace
-                        } else if panes.transcript.contains((mouse.column, mouse.row).into()) {
-                            Viewport::Conversation
-                        } else {
-                            return;
-                        };
-                        if let Some(detail) = self.link_hit(view, &mouse) {
-                            self.open_detail(detail, panes.detail_width() as usize, view);
-                        }
-                    }
-                }
-                self.dirty = true;
-            }
+            MouseEventKind::ScrollUp => self.wheel_at(mouse.column, mouse.row, true),
+            MouseEventKind::ScrollDown => self.wheel_at(mouse.column, mouse.row, false),
+            MouseEventKind::Down(MouseButton::Left) => self.press_at(mouse.column, mouse.row),
+            MouseEventKind::Drag(MouseButton::Left) => self.drag_to(mouse.column, mouse.row),
+            MouseEventKind::Up(MouseButton::Left) => self.release_at(mouse.column, mouse.row),
             _ => {}
+        }
+    }
+
+    /// 滚轮一格：详情覆盖层直接占着它；否则是问题那一块（问卷挪高亮，中间的模态什么都不做）；
+    /// 否则滚**当前显示的那一页**（票 04 §2、`tui-chrome` §5、`.scratch/trace-in-main/spec.md` §4）。
+    fn wheel_at(&mut self, column: u16, row: u16, up: bool) {
+        if self.detail_open() {
+            self.detail_scroll(if up { -1 } else { 1 });
+            return;
+        }
+        if self.pending.is_some() {
+            let point = (column, row).into();
+            let questionnaire = self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| matches!(pending, Pending::Questionnaire(_)));
+            // 问卷用排版给的底部块，中间的模态用它自己那个矩形（它带边框）。
+            let owned = if questionnaire {
+                self.questionnaire_bottom
+                    .is_some_and(|rect| rect.contains(point))
+            } else {
+                self.modal_rect.is_some_and(|rect| rect.contains(point))
+            };
+            if owned {
+                if questionnaire {
+                    self.question_click(QuestionClick::Wheel(up));
+                }
+                return;
+            }
+        }
+        self.wheel_current(up);
+    }
+
+    /// 左键按下：记下起点与它落进的那块**文本区域**，别的什么都不做 —— 那一次点击属于抬起。
+    ///
+    /// 落进哪一块由上一帧的 [`selection::ScreenText`] 说了算：指针只能选中真画出来的东西
+    /// （与命中区域同一条纪律）。
+    fn press_at(&mut self, column: u16, row: u16) {
+        let block = self.screen_text.block_at(column, row);
+        self.drag = Some(selection::Drag::press((column, row), block));
+    }
+
+    /// 按住移动：越过门槛就进入选择态，头的落点夹在所属区域里。
+    ///
+    /// 没落进任何文本块（状态行、页签条、空白）时这次按下不产生选区，抬起照旧按一次点击处理。
+    fn drag_to(&mut self, column: u16, row: u16) {
+        let Some(rect) = self
+            .drag
+            .and_then(|drag| drag.block)
+            .and_then(|index| self.screen_text.block(index))
+            .map(|block| block.rect)
+        else {
+            return;
+        };
+        if let Some(drag) = self.drag.as_mut() {
+            drag.moved((column, row), rect);
+        }
+    }
+
+    /// 左键抬起：这是一次拖选就复制，否则把这一次点击交给 [`TuiState::click_at`]。
+    fn release_at(&mut self, column: u16, row: u16) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        if drag.selecting {
+            // 复制接在票 06 上；这一步先只结束这次选择（反白跟着 `drag` 一起消失）。
+            return;
+        }
+        self.click_at(column, row);
+    }
+
+    /// 一次点击落到哪儿：五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则
+    /// 是这一帧自己的那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西
+    /// 背后的转录（票 04 §2，`tui-sidebar` spec §7）。
+    fn click_at(&mut self, column: u16, row: u16) {
+        if self.detail_open() {
+            // 框外的一次点击关掉它 —— 它来自的那一行、转录、页脚，什么都行
+            // （票 02 §4；2026-09-23 修正，原先只认「再点同一行」）。框内的点击是覆盖层自己的、
+            // 什么都不做，因为它没有自己的按钮（拖选它的正文是另外一条路）。
+            let inside = self
+                .detail_rect
+                .is_some_and(|rect| rect.contains((column, row).into()));
+            if !inside {
+                self.close_detail();
+            }
+            return;
+        }
+        if self.pending.is_some() {
+            self.question_click(QuestionClick::At(column, row));
+            return;
+        }
+        match self.regions.action_at(column, row) {
+            Some(HitAction::SwitchTab(tab)) => self.tab = tab,
+            Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
+            Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
+            _ if self.indicator_hit(Viewport::Trace, column, row) => self.trace.to_bottom(),
+            _ if self.indicator_hit(Viewport::Conversation, column, row) => {
+                self.conversation.to_bottom()
+            }
+            _ => {
+                // 指针落在轨迹页上吗？`trace_rect` 只在上一帧真的画了轨迹页时才有值，所以
+                // 「记住读的人真看到了什么」这条纪律也管着视口的选择
+                // （`.scratch/trace-in-main/spec.md` §4）。
+                let over_trace = self
+                    .trace_rect
+                    .is_some_and(|rect| rect.contains((column, row).into()));
+                let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+                // 指针落在哪个窗格里，这一击就算谁的：轨迹页只认主列内容区那一块
+                // （`.scratch/trace-in-main/spec.md` §4），对话只认同一块（票 09）。
+                // 落在别处 —— 左栏、分隔列、状态行、输入区 —— 什么都不点：那里没有可点开的行，
+                // 而行号是**屏幕**行号，拿它去取另一个视图的详情会点到同一横行的别的行上
+                // （在 `todo` 页里点一项，开着的是转录里那条详情）。
+                let view = if over_trace {
+                    Viewport::Trace
+                } else if panes.transcript.contains((column, row).into()) {
+                    Viewport::Conversation
+                } else {
+                    return;
+                };
+                if let Some(detail) = self.link_hit(view, row) {
+                    self.open_detail(detail, panes.detail_width() as usize, view);
+                }
+            }
         }
     }
 
@@ -2795,15 +2827,16 @@ impl TuiState {
     /// 一次点击落到的那个可点链接，拷成它要打开的东西。
     ///
     /// 覆盖层将在哪个宽度上打开，来自上一帧，那是中间块几何唯一已知的地方（票 04 §1）。
-    /// 两个视口各有自己的窗口与平行表，所以按指针落在哪个视口取数（票 09）。
-    fn link_hit(&self, view: Viewport, mouse: &MouseEvent) -> Option<Detail> {
+    /// 两个视口各有自己的窗口与平行表，所以按指针落在哪个视口取数（票 09）。行号是**屏幕**
+    /// 行号：一次点击按它换回那条来源行。
+    fn link_hit(&self, view: Viewport, row: u16) -> Option<Detail> {
         let (drawn, links) = match view {
             Viewport::Conversation => (&self.conversation_drawn, &self.conversation_links),
             Viewport::Trace => (&self.trace_drawn, &self.trace_links),
         };
-        let offset = (mouse.row.checked_sub(drawn.top)?) as usize;
-        let row = (*drawn.rows.get(offset)?)?;
-        links.get(row)?.clone()
+        let offset = (row.checked_sub(drawn.top)?) as usize;
+        let source = (*drawn.rows.get(offset)?)?;
+        links.get(source)?.clone()
     }
 
     /// 一次点击是否落在了「回到末尾」指示器上。每个视口各有一个（票 09）。
@@ -3049,6 +3082,12 @@ impl TuiState {
         // 这里只置位，跟 `quit` 是同一种「状态机请求、循环执行」的形状。
         if key == Key::CtrlZ {
             self.suspend = true;
+            return;
+        }
+        // 一次拖选最先被 `Esc` 取消：它是一次还没落地的指针手势，而 `Esc` 在任何视图里都是
+        // 「撤掉手上这一手」（`.scratch/tui-feedback/spec.md` §5）。
+        if key == Key::Esc && self.drag.is_some() {
+            self.drag = None;
             return;
         }
         // 重放在别的一切之前就占着键盘 —— 包括详情覆盖层，它在这个阶段不可能开着 ——
@@ -3809,6 +3848,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 上一帧记下来的才是指针可能打中的；这一帧从什么都没有开始，只记它真画出来的东西
     // （票 04 §1）。
     state.regions.clear();
+    // 屏幕文本跟着一起重建：拖选要知道这一帧每块区域画了什么，而上一帧的内容不该接得住指针
+    // （`.scratch/tui-feedback/spec.md` §5）。
+    state.screen_text.clear();
     // 覆盖层「在哪儿」与命中区域同一条纪律：这一帧画在哪儿，指针才可能落在哪儿
     // （`tui-chrome` §5）。两者都在下面各自画出来时被重新填上。
     state.modal_rect = None;
@@ -3863,6 +3905,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 详情覆盖层盖在所有这一切之上。它不可能与一个问题同时立着 —— 打开它需要一个空闲的
     // 键盘 —— 所以两者之间的顺序只是形式（票 02 §4）。
     draw_detail(frame, &panes, state);
+    // 拖选的这一层反白画在最后：它只碰缓冲，所以它盖在所有东西之上，而没有任何绘制函数
+    // 知道它存在（`.scratch/tui-feedback/spec.md` §5）。
+    selection::paint(frame, &state.screen_text, state.drag.as_ref());
 }
 
 /// 外壳里那些不是自己一块区域的部件：分隔列、左栏，以及主列的两条分隔线。
@@ -3992,6 +4037,9 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
             Style::default().fg(palette::MUTED),
         ))],
     };
+    // 左栏这一块也进屏幕文本层：三页的画法各不相同，但都是「一页已经排好的行」，没有软折
+    // 可言（`.scratch/tui-feedback/spec.md` §5）。
+    note_rows(state, page, selection::BlockKind::Sidebar, &rows, &[]);
     frame.render_widget(Paragraph::new(rows), page);
 }
 
@@ -4488,14 +4536,21 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
                 .view(text_area.width, text_area.height, &live);
             // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于
             // 哪条来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
+            let top = state.conversation.top();
             state.conversation_drawn.top = text_area.y;
             state.conversation_drawn.rows = (0..rows.len())
-                .map(|offset| {
-                    state
-                        .conversation
-                        .source_at(state.conversation.top() + offset)
-                })
+                .map(|offset| state.conversation.source_at(top + offset))
                 .collect();
+            // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
+            // （`.scratch/tui-feedback/spec.md` §5–§6）。
+            let folded = soft_folds(&state.conversation, top, rows.len());
+            note_rows(
+                state,
+                text_area,
+                selection::BlockKind::Transcript,
+                &rows,
+                &folded,
+            );
             frame.render_widget(Paragraph::new(rows), text_area);
             draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
             draw_turn_rail(frame, panes, state);
@@ -4505,10 +4560,19 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
             let live = TuiState::live_rows(&state.live);
             let rows = state.trace.view(text_area.width, text_area.height, &live);
+            let top = state.trace.top();
             state.trace_drawn.top = text_area.y;
             state.trace_drawn.rows = (0..rows.len())
-                .map(|offset| state.trace.source_at(state.trace.top() + offset))
+                .map(|offset| state.trace.source_at(top + offset))
                 .collect();
+            let folded = soft_folds(&state.trace, top, rows.len());
+            note_rows(
+                state,
+                text_area,
+                selection::BlockKind::Transcript,
+                &rows,
+                &folded,
+            );
             // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
             // 只是现在它等于主列的内容区）。
             state.trace_rect = Some(text_area);
@@ -4517,6 +4581,42 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             draw_indicator(frame, text_area, state, Viewport::Trace);
         }
     }
+}
+
+/// 一段被画出来的显示行里，哪些是**软折续行**：同一个来源行折出来的下一片。
+///
+/// 判据来自窗格自己：显示行 `i` 与 `i−1` 属于同一条来源行就说明前者是后者折出来的。没有来源
+/// 行的那些显示行（正在流的那条尾巴）一律不算 —— 它们还没定稿，复制它们本就是少见的事，而
+/// 猜错一次会把两行粘成一行。
+fn soft_folds(pane: &Pane, top: usize, rows: usize) -> Vec<bool> {
+    (0..rows)
+        .map(|index| {
+            index > 0
+                && pane.source_at(top + index).is_some()
+                && pane.source_at(top + index) == pane.source_at(top + index - 1)
+        })
+        .collect()
+}
+
+/// 把一块区域这一帧画出来的行记进屏幕文本层（`.scratch/tui-feedback/spec.md` §5）。
+///
+/// `folded` 与 `rows` 平行，短了就当作「没有软折」。
+fn note_rows(
+    state: &mut TuiState,
+    rect: Rect,
+    kind: selection::BlockKind,
+    rows: &[Line<'static>],
+    folded: &[bool],
+) {
+    let text: Vec<selection::TextRow> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, line)| selection::TextRow {
+            text: line_text(line),
+            folded: folded.get(index).copied().unwrap_or(false),
+        })
+        .collect();
+    state.screen_text.push(rect, kind, text);
 }
 
 /// 一个视图里跨块的排版状态（`.scratch/tui-visual-language/spec.md` §23）。
@@ -4701,6 +4801,8 @@ fn draw_bottom(
     }
     // 草稿归正文档：整段 `BOLD` 随本 effort 退场（`.scratch/tui-visual-language/spec.md` §19），
     // 提示符 `❱` 仍是界面上唯一会动的专色、唯一焦点。
+    // 输入区也进屏幕文本层（没有软折：草稿的换行是用户自己敲的）。
+    note_rows(state, panes.input, selection::BlockKind::Draft, &rows, &[]);
     frame.render_widget(Paragraph::new(rows), panes.input);
     // 草稿在问题之下仍然可见 —— 那是用户正在写的东西 —— 但光标收起来：键盘正在回答，不是在
     // 编辑（spec §9）。光标是按刚画出来的那些行摆的，从不按帧与帧之间保存的状态摆，正是后者
@@ -4758,6 +4860,21 @@ fn draw_questionnaire(
     );
     // 自定义行是窗口画出的最后一行，不管它是因为裁剪被钉在那里，还是干脆结束了那个列表。
     let custom_row = window.len().saturating_sub(1);
+    // 问卷这一块也进屏幕文本层：它画的就是这个窗口，行是排好的、没有软折
+    // （`.scratch/tui-feedback/spec.md` §5）。
+    let rows: Vec<Line<'static>> = window.clone();
+    note_rows(
+        state,
+        Rect::new(
+            panes.input.x,
+            panes.input.y,
+            panes.input.width,
+            rows.len().min(panes.input.height as usize) as u16,
+        ),
+        selection::BlockKind::Questionnaire,
+        &rows,
+        &[],
+    );
     for (row, line) in window.iter().enumerate() {
         frame.render_widget(
             Paragraph::new(line.clone()),
@@ -5952,11 +6069,53 @@ struct DetailView {
     /// 正在显示什么。
     detail: Detail,
     /// 主体，按它被打开时的宽度排版。
-    body: Vec<Line<'static>>,
+    body: Vec<DetailLine>,
     /// 屏幕上主体的第一行。
     top: usize,
     /// 覆盖层一次能显示多少主体行。
     height: usize,
+}
+
+/// 详情主体的一条显示行：它自己，以及它是不是上一行**折出来**的续行。
+///
+/// 折行信息是给拖选用的（`.scratch/tui-feedback/spec.md` §6）：主体按覆盖层的宽度排过版，复制
+/// 时那些续行要拼回一条，而正文里自己带的换行保留。
+#[derive(Debug, Clone)]
+struct DetailLine {
+    line: Line<'static>,
+    folded: bool,
+}
+
+impl DetailLine {
+    /// 一条没有软折的行（小节标题、一句话的降级说明）。
+    fn plain(line: Line<'static>) -> Self {
+        Self {
+            line,
+            folded: false,
+        }
+    }
+}
+
+/// 一段正文按 `width` 折行，并标出哪些是折出来的**续行**。
+///
+/// 与 [`pane::wrap_text`] 同一套折法，只是多带一个「这一行是哪个逻辑段折出来的第几片」——
+/// 换行按逻辑段判，不按显示行判。
+fn folded_text(text: &str, width: usize) -> Vec<DetailLine> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    text.split('\n')
+        .flat_map(|raw| {
+            pane::wrap_line(&Line::from(raw.to_owned()), width)
+                .into_iter()
+                .enumerate()
+                .map(|(index, line)| DetailLine {
+                    line,
+                    folded: index > 0,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// 详情覆盖层在边框与文字之间留的那一列空气。
@@ -6041,30 +6200,36 @@ impl TuiState {
 ///
 /// 主体缺席不是错误：每个都有一句话说出来，因为一次点开一个空框的点击，比一次根本没打开的
 /// 点击更糟。
-fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'static>> {
-    let mut rows: Vec<Line<'static>> = Vec::new();
+fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<DetailLine> {
+    let mut rows: Vec<DetailLine> = Vec::new();
     match &detail.kind {
         DetailKind::Message { text } => {
-            rows.push(section_header(wording::detail_message_section()));
-            rows.extend(pane::wrap_text(text, width));
+            rows.push(DetailLine::plain(section_header(
+                wording::detail_message_section(),
+            )));
+            rows.extend(folded_text(text, width));
         }
         DetailKind::Thinking { text } => {
-            rows.push(section_header(wording::detail_thinking_section()));
+            rows.push(DetailLine::plain(section_header(
+                wording::detail_thinking_section(),
+            )));
             match text {
                 Some(text) if !text.trim().is_empty() => {
-                    rows.extend(pane::wrap_text(text.trim_end(), width));
+                    rows.extend(folded_text(text.trim_end(), width));
                 }
                 // 没有记录下来的 trace —— 合成器的形状 —— 所以主体把它说出来，而不是开成空白
                 // （票 02 §1）。
-                _ => rows.push(Line::from(Span::styled(
+                _ => rows.push(DetailLine::plain(Line::from(Span::styled(
                     wording::detail_reasoning_unrecorded(),
                     Style::default().fg(palette::MUTED),
-                ))),
+                )))),
             }
         }
         DetailKind::Context { source, content } => {
-            rows.push(section_header(&wording::context_source(source)));
-            rows.extend(pane::wrap_text(content, width));
+            rows.push(DetailLine::plain(section_header(&wording::context_source(
+                source,
+            ))));
+            rows.extend(folded_text(content, width));
         }
         DetailKind::Tool {
             tool_call_id,
@@ -6073,31 +6238,35 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'st
             args,
             no_result,
         } => {
-            rows.push(section_header(wording::detail_args_section()));
+            rows.push(DetailLine::plain(section_header(
+                wording::detail_args_section(),
+            )));
             let args = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
-            rows.extend(pane::wrap_text(&args, width));
-            rows.push(section_header(wording::detail_output_section()));
+            rows.extend(folded_text(&args, width));
+            rows.push(DetailLine::plain(section_header(
+                wording::detail_output_section(),
+            )));
             if *no_result {
-                rows.push(Line::from(Span::styled(
+                rows.push(DetailLine::plain(Line::from(Span::styled(
                     wording::no_tool_result(),
                     Style::default().fg(palette::MUTED),
-                )));
+                ))));
             } else if let Some(error) = error {
-                rows.extend(pane::wrap_text(error, width));
+                rows.extend(folded_text(error, width));
             } else if let Some(output) = output {
                 let (body, truncated) = read_tool_body(tool_call_id, output, session_dir);
-                rows.extend(pane::wrap_text(&body, width));
+                rows.extend(folded_text(&body, width));
                 if truncated {
-                    rows.push(Line::from(Span::styled(
+                    rows.push(DetailLine::plain(Line::from(Span::styled(
                         wording::detail_truncated(),
                         Style::default().fg(palette::MUTED),
-                    )));
+                    ))));
                 }
             } else {
-                rows.push(Line::from(Span::styled(
+                rows.push(DetailLine::plain(Line::from(Span::styled(
                     wording::detail_output_unavailable(),
                     Style::default().fg(palette::MUTED),
-                )));
+                ))));
             }
         }
     }
@@ -6200,7 +6369,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     let body_rows = text.height.saturating_sub(2) as usize;
     let max_top = view.body.len().saturating_sub(body_rows);
     let top = view.top.min(max_top);
-    let rows: Vec<Line<'static>> = view
+    let rows: Vec<DetailLine> = view
         .body
         .iter()
         .skip(top)
@@ -6214,6 +6383,9 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         view.body.len().max(1),
     );
     let title = view.detail.title.clone();
+    let color = view.detail.color;
+    let lines: Vec<Line<'static>> = rows.iter().map(|row| row.line.clone()).collect();
+    let folded: Vec<bool> = rows.iter().map(|row| row.folded).collect();
 
     blank_half_covered_glyphs(frame, area);
     frame.render_widget(Clear, area);
@@ -6225,9 +6397,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             truncate_columns(&title, text.width as usize),
-            Style::default()
-                .fg(view.detail.color)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ))),
         Rect::new(text.x, text.y, text.width, 1),
     );
@@ -6239,7 +6409,10 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         text.width,
         text.height.saturating_sub(2),
     );
-    frame.render_widget(Paragraph::new(rows), body);
+    // 详情正文是最常被复制的东西（一段工具输出、一段解释），所以它也进屏幕文本层
+    // （`.scratch/tui-feedback/spec.md` §5）。
+    note_rows(state, body, selection::BlockKind::Detail, &lines, &folded);
+    frame.render_widget(Paragraph::new(lines), body);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             footer,
@@ -6517,7 +6690,11 @@ mod tests {
         assert_eq!(detail.title, "[上下文注入：MCP 加载]");
 
         let body = detail_body(&detail, "/tmp", 80);
-        let text: String = body.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        let text: String = body
+            .iter()
+            .map(|row| line_text(&row.line))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("MCP 加载"), "{text}");
         assert!(text.contains("`fake`（stdio）：已连接"), "{text}");
     }
