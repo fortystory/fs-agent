@@ -1073,3 +1073,28 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
         "而视口又开始跟随了：{after}"
     );
 }
+
+/// 重放历史时**轨迹页也长出来**：`--continue` 的重播与实时事件走同一条 push 路径
+/// （`.scratch/trace-tab/issues/09-trace-page-alive.md` 验证 4）。
+#[test]
+fn a_replayed_history_grows_in_the_trace_page_too() {
+    let mut state = state();
+    replay(
+        &mut state,
+        vec![
+            tool_started(1, "call-h7", "bash", serde_json::json!({"command": "ls"})),
+            tool_completed(2, "call-h7", true, Some("body"), None),
+        ],
+    );
+    run_replay(&mut state);
+
+    // 对话视图里没有工具行（票 10），而轨迹页里有。
+    let conversation = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !conversation.contains("调用 bash"),
+        "对话视图只有对话：{conversation}"
+    );
+    open_trace_tab(&mut state, 120, 40);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("调用 bash"), "轨迹页跟着历史长出来：{text}");
+}
