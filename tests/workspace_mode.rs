@@ -199,6 +199,131 @@ async fn a_workspace_write_inside_never_asks() {
     fixture.harness.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_workspace_write_inside_a_directory_that_does_not_exist_yet_never_asks() {
+    // 第一次写一份新 spec：目标的多级父目录都还不存在，而路径本身清清楚楚在工作区内。
+    // 这一档的存在意义就是「区内一路放行」，所以一次询问都不该有。
+    let asker = ScriptedAsker::new(vec![Answer::Allow]);
+    let mut fixture = fixture_with(
+        sandbox_available(),
+        Policy::for_mode(Mode::Workspace),
+        Some(Arc::new(asker.clone())),
+        |_workspace| {
+            vec![
+                call(
+                    "call-1",
+                    "write_file",
+                    serde_json::json!({
+                        "file_path": ".scratch/time-mcp/spec.md",
+                        "content": "hi"
+                    }),
+                ),
+                Reply::text("wrote it"),
+            ]
+        },
+    )
+    .await;
+
+    fixture.harness.run_turn("write it").await.unwrap();
+
+    assert!(
+        asker.requests().is_empty(),
+        "工作区内、父目录还没建的路径不该问：{:?}",
+        asker.requests()
+    );
+    let (ok, message) = fixture.results().remove(0);
+    assert!(ok, "{message}");
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace.join(".scratch/time-mcp/spec.md")).unwrap(),
+        "hi"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_workspace_write_outside_a_directory_that_does_not_exist_yet_still_asks() {
+    // 修「区内的新目录」不能顺手把区外那一侧也放过：一条还不存在的区外路径照样问一次。
+    let asker = ScriptedAsker::new(vec![Answer::Deny]);
+    let mut fixture = fixture_with(
+        sandbox_available(),
+        Policy::for_mode(Mode::Workspace),
+        Some(Arc::new(asker.clone())),
+        |workspace| {
+            let outside = workspace.parent().unwrap().join("new-dir/notes.txt");
+            vec![
+                call(
+                    "call-1",
+                    "write_file",
+                    serde_json::json!({
+                        "file_path": outside.display().to_string(),
+                        "content": "hello"
+                    }),
+                ),
+                Reply::text("skipped"),
+            ]
+        },
+    )
+    .await;
+
+    fixture.harness.run_turn("write it").await.unwrap();
+
+    let requests = asker.requests();
+    assert_eq!(requests.len(), 1, "区外的新目录照样只问一次：{requests:?}");
+    assert!(
+        requests[0].reason.contains("路径上限（写）"),
+        "{}",
+        requests[0].reason
+    );
+    let (ok, message) = fixture.results().remove(0);
+    assert!(!ok, "拒绝之后这次调用不跑：{message}");
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_workspace_write_cannot_climb_out_with_dot_dot() {
+    // `..` 不能骗过收容：按字面折叠之后它落在工作区之外，于是照旧问一次。
+    let asker = ScriptedAsker::new(vec![Answer::Deny]);
+    let mut fixture = fixture_with(
+        sandbox_available(),
+        Policy::for_mode(Mode::Workspace),
+        Some(Arc::new(asker.clone())),
+        |_workspace| {
+            vec![
+                call(
+                    "call-1",
+                    "write_file",
+                    serde_json::json!({
+                        "file_path": "gone/../../escaped.txt",
+                        "content": "hello"
+                    }),
+                ),
+                Reply::text("skipped"),
+            ]
+        },
+    )
+    .await;
+
+    fixture.harness.run_turn("write it").await.unwrap();
+
+    let requests = asker.requests();
+    assert_eq!(requests.len(), 1, "折叠后落在区外，要问一次：{requests:?}");
+    assert!(
+        requests[0].reason.contains("路径上限（写）"),
+        "{}",
+        requests[0].reason
+    );
+    assert!(!fixture
+        .workspace
+        .parent()
+        .unwrap()
+        .join("escaped.txt")
+        .exists());
+
+    fixture.harness.shutdown().await;
+}
+
 // --- 区外读：那条与档位正交的旋钮（spec §2）--------------------------------
 
 #[tokio::test]

@@ -87,9 +87,11 @@ impl SessionPaths {
         }
     }
 
-    /// 解析一条必须存在的路径（或它的父目录必须存在），按**写**那一侧的收容规则。
+    /// 解析一条还不存在的路径所**要落到**的位置，按**写**那一侧的收容规则。
     ///
     /// 路径存在时结果是绝对且不含符号链接的，所以同一个文件在读集合与锁表里永远给出同一个键。
+    /// 目标还不存在时经它**最深的已存在祖先**解析 —— 只回退一层父目录是不够的，见
+    /// [`resolve_missing`]。
     pub fn resolve(&self, path: &Path) -> Result<PathBuf, ToolError> {
         self.resolve_towards(path, Direction::Write)
     }
@@ -98,19 +100,7 @@ impl SessionPaths {
         let joined = self.join(path);
         let resolved = match std::fs::canonicalize(&joined) {
             Ok(resolved) => resolved,
-            Err(_) => {
-                // 还不存在的文件经它的父目录解析；父目录必须存在，而符号链接能逃出去靠的正是它。
-                let parent = joined.parent().ok_or_else(|| {
-                    ToolError::message(format!("{} 没有父目录", joined.display()))
-                })?;
-                let parent = std::fs::canonicalize(parent).map_err(|error| {
-                    ToolError::message(format!("无法解析 {}：{error}", joined.display()))
-                })?;
-                match joined.file_name() {
-                    Some(name) => parent.join(name),
-                    None => parent,
-                }
-            }
+            Err(_) => resolve_missing(&joined)?,
         };
         self.check_contained(&resolved, direction)?;
         Ok(resolved)
@@ -151,6 +141,37 @@ impl SessionPaths {
             self.cwd.display()
         )))
     }
+}
+
+/// 解析一条还不存在的路径：走到它**最深的已存在祖先**（`canonicalize` 在那里把符号链接
+/// 解开，所以「靠一个指向区外的链接逃出去」仍然在这里被逮住），再把还不存在的尾巴接回它下面。
+///
+/// 只回退**一层**父目录是不够的：`workspace` 档下第一次写一份新 spec 时，目标的多级父目录
+/// 都还没建，而那种路径会被误报成越界、白问用户一次（`.scratch/workspace-mode/spec.md` §3
+/// 的「区内一律放行」正是这一档存在的意义）。尾巴按字面折叠，于是路径里那些 `..` 不能把
+/// 收容检查骗过去。
+fn resolve_missing(joined: &Path) -> Result<PathBuf, ToolError> {
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut ancestor = joined;
+    let existing = loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(existing) => break existing,
+            Err(_) => {
+                let name = ancestor.file_name().ok_or_else(|| {
+                    ToolError::message(format!("无法解析 {}：没有已存在的祖先", joined.display()))
+                })?;
+                tail.push(name);
+                ancestor = ancestor.parent().ok_or_else(|| {
+                    ToolError::message(format!("{} 没有父目录", joined.display()))
+                })?;
+            }
+        }
+    };
+    let mut resolved = existing;
+    for name in tail.into_iter().rev() {
+        resolved.push(name);
+    }
+    Ok(crate::permissions::fold(&resolved))
 }
 
 impl ReadPathResolver for SessionPaths {

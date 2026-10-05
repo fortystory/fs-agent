@@ -171,7 +171,9 @@ impl Tool for WriteFile {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: WRITE_FILE.to_owned(),
-            description: "在工作区里写一个文件：新建它，或替换它的内容".to_owned(),
+            description: "在工作区里写一个文件：新建它，或替换它的内容；缺失的父目录会被\
+                           一并建出来"
+                .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -198,6 +200,13 @@ impl Tool for WriteFile {
         let parsed: WriteFileArgs = parse(&args)?;
         let requested = required_path(WRITE_FILE, &parsed.file_path)?;
         let path = ctx.write_paths.resolve_write(&requested)?;
+        // 第一次往一个新目录里写（一份新 spec）要把缺失的父目录建出来。这里的 `path` 已经
+        // 过了收容检查，所以建的是工作区里的目录。
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                ToolError::message(format!("无法创建 {}：{error}", parent.display()))
+            })?;
+        }
         let existed = path.exists();
         std::fs::write(&path, parsed.content.as_bytes())
             .map_err(|error| ToolError::message(format!("无法写入 {}：{error}", path.display())))?;
