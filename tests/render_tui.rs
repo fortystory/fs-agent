@@ -93,27 +93,27 @@ fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
     assert!(state.is_dirty(), "这台时钟不再随运行一起停");
 }
 
-/// 字形循环的速率：运行中每 8 帧换一格，空闲每 32 帧 —— 同一个时钟，两种速度。
+/// 字形循环的速率：运行中每 2 帧换一格，空闲每 8 帧 —— 同一个时钟，两种速度。
 ///
-/// 一轮是**八格月相**（`.scratch/tui-visual-language/spec.md` §30）：运行中 8 × 8 帧 ≈ 3.8 秒
-/// 走完一轮，空闲 8 × 32 帧 ≈ 15.4 秒。
+/// 一轮是**八格月相**（`.scratch/tui-visual-language/spec.md` §30）：运行中 8 × 2 帧 ≈ 0.96 秒
+/// 走完一轮，空闲 8 × 8 帧 ≈ 3.8 秒（2026-10-06 维护者把速率加快了一档）。
 #[test]
-fn the_status_glyph_changes_every_eight_frames_running_and_thirty_two_idle() {
+fn the_status_glyph_changes_every_two_frames_running_and_eight_idle() {
     use fs_agent::render::wording;
 
     assert_eq!(wording::status_spinner(0, true), "🌑");
-    assert_eq!(wording::status_spinner(7, true), "🌑");
-    assert_eq!(wording::status_spinner(8, true), "🌒");
-    assert_eq!(wording::status_spinner(16, true), "🌓");
-    assert_eq!(wording::status_spinner(24, true), "🌔");
-    assert_eq!(wording::status_spinner(32, true), "🌕");
-    assert_eq!(wording::status_spinner(64, true), "🌑", "一轮之后回到起点");
+    assert_eq!(wording::status_spinner(1, true), "🌑");
+    assert_eq!(wording::status_spinner(2, true), "🌒");
+    assert_eq!(wording::status_spinner(4, true), "🌓");
+    assert_eq!(wording::status_spinner(6, true), "🌔");
+    assert_eq!(wording::status_spinner(8, true), "🌕");
+    assert_eq!(wording::status_spinner(16, true), "🌑", "一轮之后回到起点");
 
     assert_eq!(wording::status_spinner(0, false), "🌑");
-    assert_eq!(wording::status_spinner(31, false), "🌑", "空闲慢下来");
-    assert_eq!(wording::status_spinner(32, false), "🌒");
-    assert_eq!(wording::status_spinner(224, false), "🌘");
-    assert_eq!(wording::status_spinner(256, false), "🌑");
+    assert_eq!(wording::status_spinner(7, false), "🌑", "空闲慢下来");
+    assert_eq!(wording::status_spinner(8, false), "🌒");
+    assert_eq!(wording::status_spinner(56, false), "🌘");
+    assert_eq!(wording::status_spinner(64, false), "🌑");
 }
 
 #[test]

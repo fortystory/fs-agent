@@ -670,11 +670,12 @@ pub struct TuiState {
     conversation_width: u16,
     /// 轨迹视图的源行是按多宽排的；**零**表示这一帧轨迹视图不被物化（左栏不可见）。
     trace_width: u16,
-    /// 上一个推进**对话视图**的块是谁说的 —— 换人要空一行时用它
-    /// （`.scratch/tui-visual-language/spec.md` §23）。窗格清空重放时它跟着一起清。
-    conversation_speaker: Option<crate::events::SpeakerId>,
-    /// 轨迹视图那一份，同上。
-    trace_speaker: Option<crate::events::SpeakerId>,
+    /// 对话视图的跨块排版状态（上一个发言者、上一条是不是消息）：换人空一行、同一人连发的
+    /// 多段正文只留一个名字，都靠它（`.scratch/tui-visual-language/spec.md` §23）。窗格清空
+    /// 重放时它跟着一起清。
+    conversation_flow: Flow,
+    /// 轨迹视图那一份：它只按发言者空行，消息行每条都带名字。
+    trace_flow: Flow,
     /// 轨迹页**自己的**宽度档（40 / 28 / 0）：前缀带不带方括号看它，不看正文列数。
     ///
     /// `.scratch/tui-visual-language/issues/07` 决定 2 之后正文比页面窄两列（滚动条那一列），
@@ -1404,6 +1405,9 @@ struct TurnRailLine {
     unit: usize,
     /// 它是不是用户自己的消息。一个单位的头是它里面第一条这样的行。
     user: bool,
+    /// 它是不是一条**分段用的空行**（§23 插进来的那种）。单位没有用户消息时，头退到它里面
+    /// 第一条**非空**行 —— 点一格该落到正文上，不是落到它上面那条空隙里。
+    blank: bool,
 }
 
 impl TurnRail {
@@ -1413,12 +1417,13 @@ impl TurnRail {
     }
 
     /// 记下一条被画出来的来源行。
-    fn push_line(&mut self, user_message: bool) {
+    fn push_line(&mut self, user_message: bool, blank: bool) {
         // 一行属于的那个单位就是正在建的那个：`units()` 是已经完成的个数，所以那就是这一行
         // 在它回合结束时将拿到的下标。
         self.lines.push_back(TurnRailLine {
             unit: self.heads.len(),
             user: user_message,
+            blank,
         });
         self.lines_in_unit += 1;
     }
@@ -1432,6 +1437,7 @@ impl TurnRail {
         let start = self.lines.len().saturating_sub(self.lines_in_unit);
         let head = (start..self.lines.len())
             .find(|index| self.lines[*index].user)
+            .or_else(|| (start..self.lines.len()).find(|index| !self.lines[*index].blank))
             .unwrap_or(start);
         self.heads.push(head);
         self.lines_in_unit = 0;
@@ -1533,8 +1539,8 @@ impl TuiState {
             // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
             conversation_width: SHARED_RENDER_WIDTH,
             trace_width: SHARED_RENDER_WIDTH,
-            conversation_speaker: None,
-            trace_speaker: None,
+            conversation_flow: Flow::default(),
+            trace_flow: Flow::default(),
             trace_tier_width: 0,
             dirty: true,
             editor: Input::new(),
@@ -1883,17 +1889,27 @@ impl TuiState {
         if targets.conversation && selects(Viewport::Conversation, block) {
             let width = self.conversation_width;
             let style = prefix_style(Viewport::Conversation, width);
+            let speaker = block_speaker(block);
+            let is_message = matches!(block, Block::Message { .. });
+            // 同一个人连着说的几段正文只在**第一段**画名字 —— 后面几段由它们前面那个空行
+            // 分段，名字重复出现在屏幕上只是噪音（2026-10-06 维护者，§23）。
+            let carry_name = !is_message
+                || speaker.is_none()
+                || self.conversation_flow.speaker.as_ref() != speaker
+                || !self.conversation_flow.message;
             let lines = paint_block(
                 block,
                 &mut self.colors,
                 width,
                 style,
                 Viewport::Conversation,
+                carry_name,
             );
             produced = produced.max(lines.len());
             self.push_view_lines(
                 Viewport::Conversation,
-                block_speaker(block),
+                speaker,
+                is_message,
                 lines,
                 Some(is_user_message(block)),
             );
@@ -1901,11 +1917,13 @@ impl TuiState {
         if targets.trace && selects(Viewport::Trace, block) {
             let width = self.trace_width;
             let style = prefix_style(Viewport::Trace, self.trace_tier_width);
-            let lines = paint_block(block, &mut self.colors, width, style, Viewport::Trace);
+            // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
+            let lines = paint_block(block, &mut self.colors, width, style, Viewport::Trace, true);
             produced = produced.max(lines.len());
             self.push_view_lines(
                 Viewport::Trace,
                 block_speaker(block),
+                matches!(block, Block::Message { .. }),
                 lines,
                 Some(is_user_message(block)),
             );
@@ -1945,15 +1963,15 @@ impl TuiState {
         if conversation {
             self.conversation.clear();
             self.conversation_links.clear();
-            // 空行的记账与窗格平行，所以它也跟着一起清。
-            self.conversation_speaker = None;
+            // 跨块排版的记账与窗格平行，所以它也跟着一起清。
+            self.conversation_flow = Flow::default();
             // 回合条的源行下标与对话 pane 平行，所以它跟着对话 pane 一起重建。
             self.turn_rail.clear();
         }
         if trace {
             self.trace.clear();
             self.trace_links.clear();
-            self.trace_speaker = None;
+            self.trace_flow = Flow::default();
         }
         if self.painted.is_empty() {
             self.dirty = true;
@@ -2004,6 +2022,9 @@ impl TuiState {
         link: Option<Detail>,
         user: Option<bool>,
     ) {
+        // 空行只有分段那一个用途，所以它按内容判：没有字就是空行。它在 `line` 被移进窗格
+        // 之前取出来。
+        let blank = line.spans.iter().all(|span| span.content.trim().is_empty());
         let dropped = match view {
             Viewport::Conversation => self.conversation.push(line),
             Viewport::Trace => self.trace.push(line),
@@ -2020,7 +2041,7 @@ impl TuiState {
         }
         if view == Viewport::Conversation {
             if let Some(user) = user {
-                self.turn_rail.push_line(user);
+                self.turn_rail.push_line(user, blank);
             }
             if dropped > 0 {
                 self.turn_rail.prune(dropped);
@@ -2031,36 +2052,49 @@ impl TuiState {
     /// 把一个视图要的那些行推进窗格，并在**换发言者**时先空一行
     /// （`.scratch/tui-visual-language/spec.md` §23）。
     ///
-    /// 插入点是**块序列生成期**、不是绘制期：两个视图各记各的「上一个发言者」（重放时跟着
-    /// 窗格一起清），于是各自的空行也各归各的，而且滚动时不会重排。同一人连发的块之间不空行
-    /// —— 一组动作读起来是一组。
+    /// 插入点是**块序列生成期**、不是绘制期：两个视图各记各的 [`Flow`]（重放时跟着窗格一起清），
+    /// 于是各自的空行也各归各的，而且滚动时不会重排。
+    ///
+    /// 空行的两条规矩：**换发言者**要空（把两个人的话分开）；对话视图里**两条消息之间**也要空
+    /// —— 一条消息是一段（2026-10-06 维护者：同一个人连说几段时，只留一个名字，段与段之间
+    /// 空一行）。同一人连发的**工具行**不空：一组动作读起来是一组。
     fn push_view_lines(
         &mut self,
         view: Viewport,
         speaker: Option<&crate::events::SpeakerId>,
+        is_message: bool,
         lines: Vec<RenderedLine>,
         user: Option<bool>,
     ) {
         if lines.is_empty() {
             return;
         }
-        let changes_speaker = speaker.is_some_and(|speaker| {
-            let last = match view {
-                Viewport::Conversation => self.conversation_speaker.as_ref(),
-                Viewport::Trace => self.trace_speaker.as_ref(),
+        let blank = {
+            let flow = match view {
+                Viewport::Conversation => &self.conversation_flow,
+                Viewport::Trace => &self.trace_flow,
             };
-            last.is_some_and(|last| last != speaker)
-        });
-        if changes_speaker {
+            let changes_speaker = speaker
+                .is_some_and(|speaker| flow.speaker.as_ref().is_some_and(|last| last != speaker));
+            // 两者都成立时也只空一行。
+            changes_speaker || (view == Viewport::Conversation && is_message && flow.message)
+        };
+        if blank {
             // 空行也走 `push_line`：回合条的平行表按来源行下标记账，跳过它会把格子指到
             // 隔壁去。它不是一个用户消息，所以那一格记 `false`。
             self.push_line(view, Line::default(), None, Some(false));
         }
-        if let Some(speaker) = speaker {
-            match view {
-                Viewport::Conversation => self.conversation_speaker = Some(speaker.clone()),
-                Viewport::Trace => self.trace_speaker = Some(speaker.clone()),
+        {
+            let flow = match view {
+                Viewport::Conversation => &mut self.conversation_flow,
+                Viewport::Trace => &mut self.trace_flow,
+            };
+            if let Some(speaker) = speaker {
+                flow.speaker = Some(speaker.clone());
             }
+            // 叙述、诊断这些块不带发言者，也要断开「同一人连续几段」这条线：下一段消息
+            // 因此重新带上名字。
+            flow.message = is_message;
         }
         for rendered in lines {
             self.push_line(view, rendered.line, rendered.link, user);
@@ -2098,6 +2132,9 @@ impl TuiState {
     ///
     /// 名字行在等待与流式两个阶段都留在原地，所以正文一开始流、以及 markdown 完成那一刻
     /// 排版换过来的瞬间，`[名字]` 都不会闪掉（2026-10-05 维护者报告的观感问题）。
+    /// **上一段就是同一个人说的话时反过来**：不重复名字、而且先空一行 —— 与定稿之后
+    /// [`emit_block`] 画出来的那一段逐字一致，否则名字会在完成那一刻消失
+    /// （`.scratch/tui-visual-language/spec.md` §23）。
     ///
     /// 等待阶段（正文尾巴还空着）：名字下面那行是它**在做什么** —— 有工具在跑就说那个工具，
     /// 否则说它在想。流式阶段：名字下面是正在流的那几行正文。
@@ -2114,11 +2151,18 @@ impl TuiState {
                 .map(|name| crate::events::SpeakerId::Debater(name.as_str().into()))
                 .unwrap_or(crate::events::SpeakerId::System)
         });
-        let colour = self.colors.of(&speaker);
-        let mut rows = vec![Line::from(Span::styled(
-            wording::speaker_label(&speaker),
-            Style::default().fg(colour),
-        ))];
+        let continues = self.conversation_flow.message
+            && self.conversation_flow.speaker.as_ref() == Some(&speaker);
+        let mut rows = Vec::new();
+        if continues {
+            rows.push(Line::default());
+        } else {
+            let colour = self.colors.of(&speaker);
+            rows.push(Line::from(Span::styled(
+                wording::speaker_label(&speaker),
+                Style::default().fg(colour),
+            )));
+        }
         if self.live.is_empty() {
             let text = match &self.running_tool {
                 Some((tool, args)) => wording::working(tool, args),
@@ -4342,6 +4386,15 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     draw_indicator(frame, text_area, state, Viewport::Conversation);
 }
 
+/// 一个视图里跨块的排版状态（`.scratch/tui-visual-language/spec.md` §23）。
+#[derive(Debug, Default)]
+struct Flow {
+    /// 上一条画出来的块是谁说的。
+    speaker: Option<crate::events::SpeakerId>,
+    /// 上一条画出来的是不是一条**消息**（不是工具行、不是叙述）。
+    message: bool,
+}
+
 /// 回合条：每个回合一格（讨论里是每一轮），沿转录的右边缘往下（spec §4）。
 ///
 /// 视口所在的那一格是亮的，而它是从窗格正在显示的东西**推出来**的 —— 从不保存 —— 所以它不会
@@ -5020,6 +5073,7 @@ pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'stat
         SHARED_RENDER_WIDTH,
         style,
         Viewport::Conversation,
+        true,
     )
     .into_iter()
     .map(|rendered| rendered.line)
@@ -5038,12 +5092,15 @@ pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
 /// （`.scratch/markdown-render/spec.md` §1）。`style` 是发言者前缀的分档 —— 它由调用方按
 /// **视图与那个视图的档位宽**算好传来，因为轨迹页的正文比页面窄两列（滚动条那一列），前缀的
 /// 「宽档 40 列」不能拿正文列数去量（`.scratch/tui-visual-language/issues/07` 决定 2）。
+/// `name` 是**对话视图**要不要画那一行名字：同一个人连着说的第二段起不画
+/// （`.scratch/tui-visual-language/spec.md` §23）；轨迹页与 [`render_block`] 一律画。
 fn paint_block(
     block: &Block,
     colors: &mut SpeakerColors,
     width: u16,
     style: PrefixStyle,
     view: Viewport,
+    name: bool,
 ) -> Vec<RenderedLine> {
     match block {
         // 轨迹视图里的一条 assistant 消息：只画**首行 + `…`**，全文进详情覆盖层
@@ -5081,12 +5138,12 @@ fn paint_block(
             // 回答按 Markdown 以全亮度渲染；只有发言者标签上色（spec §5）。名字独占一行，
             // 回答从下一行起、**顶格** —— 前缀不再占正文的列，所以 Markdown 的前导是零
             // （2026-10-05 维护者的排版修订）。
-            let rows = named_rows(
-                speaker,
-                super::markdown::to_lines_indented(text, width, 0),
-                colors,
-                style,
-            );
+            let body = super::markdown::to_lines_indented(text, width, 0);
+            let rows = if name {
+                named_rows(speaker, body, colors, style)
+            } else {
+                body
+            };
             rows.into_iter()
                 .map(|line| message_line(speaker, text, line, colors))
                 .collect()
@@ -5114,7 +5171,11 @@ fn paint_block(
                     .map(|raw| Line::from(raw.to_owned()))
                     .collect()
             };
-            let mut rows = named_rows(speaker, body, colors, style);
+            let mut rows = if name {
+                named_rows(speaker, body, colors, style)
+            } else {
+                body
+            };
             // 例外一：用户自己的话在**对话视图**里右对齐 —— 「我说的话靠右」那种聊天感
             // （`.scratch/trace-tab/spec.md` §2）。轨迹视图仍左对齐，助手也仍左对齐。
             if matches!(speaker, crate::events::SpeakerId::User) {
@@ -6257,6 +6318,7 @@ mod tests {
             80,
             PrefixStyle::Bracketed,
             Viewport::Conversation,
+            true,
         );
         assert_eq!(lines.len(), 1, "注入只占一行");
         let detail = lines[0].link.clone().expect("这一行该点得开");

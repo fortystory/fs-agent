@@ -1056,14 +1056,10 @@ fn the_status_glyph_moves_while_idle_too() {
 
     let mut state = state();
     assert_eq!(glyph(&mut state), "🌑");
-    for _ in 0..32 {
+    for _ in 0..8 {
         state.tick();
     }
-    assert_eq!(
-        glyph(&mut state),
-        "🌒",
-        "空闲时它也在走，只是慢到 32 帧一格"
-    );
+    assert_eq!(glyph(&mut state), "🌒", "空闲时它也在走，只是慢到 8 帧一格");
     // 而提示符在空闲时**不动**：它歇在帧 0 的颜色上。
     let (x, y) = prompt_at(120, 24, &mut state);
     let idle_prompt = buffer(120, 24, &mut state)[(x, y)].fg;
@@ -1075,6 +1071,45 @@ fn the_status_glyph_moves_while_idle_too() {
         idle_prompt,
         "输入区仍然完全静止"
     );
+}
+
+/// 同一个人连着说的几段正文：屏幕上**只留一个名字**，段与段之间空一行
+/// （2026-10-06 维护者的优化，`.scratch/tui-visual-language/spec.md` §23）。
+#[test]
+fn a_speaker_who_says_several_things_in_a_row_is_named_once() {
+    let mut state = state();
+    state.apply(message(1, "方案定了，我记一下计划。", None));
+    state.apply(message(2, "票的格式清楚了。", None));
+    state.apply(message(3, "开始写 spec 前先确认两条文档护栏。", None));
+
+    let rows = screen(120, 24, &mut state);
+    // 只看主列：左栏那几行里也有字，混进来会把「空行」判错。
+    let main =
+        |row: &String| -> String { row.chars().skip(41).collect::<String>().trim().to_owned() };
+    let spoken: Vec<String> = rows.iter().map(main).collect();
+    let text = spoken.join("\n");
+    assert_eq!(text.matches("[kimi]").count(), 1, "名字只出现一次：{text}");
+
+    let row_of = |needle: &str| {
+        spoken
+            .iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} 在屏幕上：{text}"))
+    };
+    let first = row_of("计划");
+    assert!(
+        spoken[first - 1].contains("[kimi]"),
+        "名字就在第一段上面一行：{:?}",
+        &spoken[first - 1]
+    );
+    let second = row_of("格式");
+    assert_eq!(
+        spoken[first + 1..second],
+        [""],
+        "两段之间正好一条空行：{:?}",
+        &spoken[first..second]
+    );
+    assert!(row_of("护栏") > second, "第三段在第二段下面：{text}");
 }
 
 #[test]
@@ -1845,8 +1880,10 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 轮次开始那一行现在只住在轨迹页（2026-10-05 维护者收紧），所以兜底落点是那一轮
     // **第一条留在对话里的行** —— 它的第一条发言。
     let rows = screen(120, 24, &mut later);
+    // 名字只画在**一段连续发言的第一段**上（2026-10-06 的优化），而这三轮都是 kimi 一个人说
+    // 的，所以兜底落点就是正文那一行 —— 上面那条空行是分段用的，回合条会跳过它。
     assert!(
-        rows[TRANSCRIPT_TOP].contains("[kimi]") && rows[TRANSCRIPT_TOP + 1].contains("第 1 轮"),
+        rows[TRANSCRIPT_TOP].contains("第 1 轮"),
         "没有自己用户消息的轮次落在它留下的第一行上：{:?}",
         &rows[TRANSCRIPT_TOP..TRANSCRIPT_TOP + 2]
     );
