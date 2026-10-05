@@ -783,6 +783,10 @@ pub struct TuiState {
     /// 就是零 —— 推动它的是循环的定时器，所以空闲的会话把它原样留在上次运行留下的位置，
     /// 也就是零（`.scratch/tui-input-pulse/spec.md` §2）。
     pulse: u64,
+    /// 此刻**正在跑**的那个工具，以及它的参数 —— 对话视图末尾那句「正在做什么」用的就是
+    /// 它（2026-10-05 维护者的优化）。由 `ToolCallStarted` 置上、`ToolCallCompleted`
+    /// 或一次收尾清掉。
+    running_tool: Option<(String, serde_json::Value)>,
     /// 一个等着按键的问题。
     pending: Option<Pending>,
     /// 要交回给循环的手势。
@@ -1568,6 +1572,7 @@ impl TuiState {
             // 这个样子（spec §6）。
             running: false,
             pulse: 0,
+            running_tool: None,
             pending: None,
             events: Vec::new(),
             indicator: None,
@@ -1756,6 +1761,7 @@ impl TuiState {
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         self.dirty = true;
         self.observe_goal(&event);
+        self.observe_running_tool(&event);
         // 这一整趟的收件人：轨迹视图此刻物不物化，决定它收不收（`.scratch/trace-tab/spec.md` §1）。
         let targets = self.targets();
         let mut produced = 0usize;
@@ -2015,6 +2021,23 @@ impl TuiState {
         }
     }
 
+    /// 记下「现在在跑哪个工具」—— 对话视图末尾那句「正在做什么」用的就是它。
+    fn observe_running_tool(&mut self, event: &RenderEvent) {
+        let RenderEvent::Logged(event) = event else {
+            return;
+        };
+        match &event.payload {
+            EventPayload::ToolCallStarted {
+                tool_name, args, ..
+            } => self.running_tool = Some((tool_name.clone(), args.clone())),
+            // 一次调用结束、一个回合结束、一场会话收尾：都说明没有工具在跑了。
+            EventPayload::ToolCallCompleted { .. }
+            | EventPayload::TurnEnded { .. }
+            | EventPayload::SessionEnded { .. } => self.running_tool = None,
+            _ => {}
+        }
+    }
+
     /// 一段正在流的文字折行之前的样子：每个逻辑行一条。
     ///
     /// 折行归窗格（[`Pane::view`] 收的就是这些行）。
@@ -2026,19 +2049,36 @@ impl TuiState {
 
     /// 对话视图末尾那条正在流的东西：正文尾巴，或者**等待提示**。
     ///
-    /// 模型还没吐出第一个字时（循环在跑、正文尾巴还空着）末尾给一条会走的
-    /// 「正在思考…」，第一个正文增量一到它就消失（2026-10-05 维护者的优化）。
-    fn conversation_live(&self) -> Vec<Line<'static>> {
+    /// 模型还没吐出第一个字时（循环在跑、正文尾巴还空着）末尾给两行：**谁在答**，以及它
+    /// **在做什么** —— 有工具在跑就说那个工具在干什么，否则说它在想；第一个正文增量一到
+    /// 两行都消失（2026-10-05 维护者的两条优化）。
+    fn conversation_live(&mut self) -> Vec<Line<'static>> {
         if !self.live.is_empty() {
             return Self::live_rows(&self.live);
         }
         if !self.running {
             return Vec::new();
         }
-        vec![Line::from(Span::styled(
-            wording::waiting(self.pulse),
-            Style::default().fg(Color::DarkGray),
-        ))]
+        // 谁在答：名册的第一个。讨论里几轮之间会换人，而这一刻流上还没有归属 —— 提示本身
+        // 也是推测的，所以取一个稳定的名字。
+        let speaker = self
+            .facts
+            .speaker_order
+            .first()
+            .map(|name| crate::events::SpeakerId::Debater(name.as_str().into()))
+            .unwrap_or(crate::events::SpeakerId::System);
+        let text = match &self.running_tool {
+            Some((tool, args)) => wording::working(tool, args),
+            None => wording::waiting(self.pulse),
+        };
+        let colour = self.colors.of(&speaker);
+        vec![
+            Line::from(Span::styled(
+                wording::speaker_label(&speaker),
+                Style::default().fg(colour),
+            )),
+            Line::from(Span::styled(text, Style::default().fg(Color::DarkGray))),
+        ]
     }
 
     /// 这个会话数的是**轮**而不是回合。
@@ -2630,6 +2670,8 @@ impl TuiState {
                 // （`.scratch/tui-input-pulse/spec.md` §2b，票 09）。
                 if !running {
                     self.pulse = 0;
+                    // 一次运行结束：「正在做什么」没有主语了。
+                    self.running_tool = None;
                 }
                 // 问题属于把它提出来的那次运行，所以那次运行的结束就是它变馊的原因：循环
                 // 不再等答案，它那次询问也随运行一起死了。把覆盖层留在屏幕上，会把下一个

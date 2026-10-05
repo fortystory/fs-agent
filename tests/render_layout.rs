@@ -6934,3 +6934,62 @@ fn the_conversation_shows_a_waiting_hint_while_the_model_is_quiet() {
     assert!(!third.contains("正在思考"), "正文到了提示就走：{third}");
     assert!(third.contains("答案。"), "{third}");
 }
+
+/// 等待提示长什么样：`[名字]` 一行，它**在做什么**一行 —— 有工具在跑就说那个工具在干什么，
+/// 否则说它在想（2026-10-05 的两条优化）。
+#[test]
+fn the_waiting_hint_names_the_speaker_and_what_it_is_doing() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "问题"));
+    state.request(ConsoleRequest::RunState { running: true });
+
+    // 没有工具在跑：它在想。
+    let thinking = conversation_rows(&mut state, 120, 24);
+    let name = thinking
+        .iter()
+        .rposition(|row| row.trim() == "[kimi]")
+        .expect("名字那一行");
+    assert!(thinking[name + 1].contains("正在思考."), "{thinking:#?}");
+
+    // 读文件：说它正在看哪一份。
+    state.apply(tool_started(
+        2,
+        "c1",
+        "read_file",
+        serde_json::json!({"path": "CONTEXT.md"}),
+    ));
+    let reading = conversation_rows(&mut state, 120, 24);
+    let name = reading
+        .iter()
+        .rposition(|row| row.trim() == "[kimi]")
+        .expect("名字那一行");
+    assert!(
+        reading[name + 1].contains("正在查看 CONTEXT.md…"),
+        "{reading:#?}"
+    );
+
+    // 写文件：说它正在写哪一份。
+    state.apply(tool_started(
+        3,
+        "c2",
+        "write_file",
+        serde_json::json!({"path": "docs/render.md"}),
+    ));
+    let writing = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(writing.contains("正在写 docs/render.md…"), "{writing}");
+
+    // shell：命令自己的描述已经带着动词。
+    state.apply(tool_started(
+        4,
+        "c3",
+        "bash",
+        serde_json::json!({"command": "cargo test"}),
+    ));
+    let running = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(running.contains("正在运行 cargo test…"), "{running}");
+
+    // 结果一到，提示回到「在想」。
+    state.apply(tool_completed(5, "c3", true, Some("ok"), None));
+    let settled = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(settled.contains("正在思考."), "{settled}");
+}

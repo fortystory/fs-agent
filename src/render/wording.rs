@@ -318,6 +318,47 @@ pub fn detail_section(name: &str) -> String {
     format!("── {name} ──")
 }
 
+/// 内建工具的名字（措辞层本地钉一份，与 `crate::tools` 里那份同名）。
+///
+/// 名字是**协议的一部分**（模型按它调用），而措辞层按名字挑动词 —— 与上面的
+/// [`ASK_USER_QUESTION_TOOL`] 同一条规矩：这里不为此依赖工具层。
+const READ_FILE_TOOL: &str = "read_file";
+const WRITE_FILE_TOOL: &str = "write_file";
+const EDIT_FILE_TOOL: &str = "edit_file";
+const GREP_TOOL: &str = "grep";
+const BASH_TOOL: &str = "bash";
+const TODO_TOOL: &str = "todo";
+const WEB_SEARCH_TOOL: &str = "web_search";
+const WEB_FETCH_TOOL: &str = "web_fetch";
+const TASK_TOOL: &str = "task";
+
+/// 一次工具调用正在跑时，对话视图末尾那句话：按工具说它**在做什么**，而不是笼统的
+/// 「正在思考」——写文件就说正在写哪一份，读文件就说正在看哪一份（2026-10-05 维护者的优化）。
+pub fn working(tool: &str, args: &Value) -> String {
+    let description = tool_description(tool, args);
+    match working_verb(tool) {
+        // shell 命令的描述**自带**动词（`运行 cargo test`），所以只加「正在」。
+        None if !description.is_empty() => format!("正在{description}…"),
+        None => format!("正在运行 {tool}…"),
+        Some(verb) if !description.is_empty() => format!("正在{verb}{description}…"),
+        Some(verb) => format!("正在{verb}{tool}…"),
+    }
+}
+
+/// 一个工具在做的事该配哪个动词；`None` 表示它的描述自带动词。
+fn working_verb(tool: &str) -> Option<&'static str> {
+    match tool {
+        READ_FILE_TOOL => Some("查看 "),
+        WRITE_FILE_TOOL | EDIT_FILE_TOOL => Some("写 "),
+        GREP_TOOL | WEB_SEARCH_TOOL => Some("搜索 "),
+        BASH_TOOL => None,
+        TODO_TOOL => Some("更新待办 "),
+        WEB_FETCH_TOOL => Some("抓取 "),
+        TASK_TOOL => Some("派活 "),
+        _ => Some("调用 "),
+    }
+}
+
 /// 模型还没吐出第一个字时，对话视图末尾那条会走的提示
 /// （2026-10-05 维护者的优化）：点号每 8 帧挪一格 —— 帧是 60 ms，所以大约半秒一步。
 pub fn waiting(frame: u64) -> String {
