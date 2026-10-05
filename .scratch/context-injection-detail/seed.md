@@ -4,6 +4,18 @@
 > `AGENTS.md` 这些被注入对话的东西，也要能看到详情。
 > 还没被访谈、也没有票；想推进时走 `/grill-with-docs` 把它折成 `spec.md`，再 `/to-tickets` 拆票。
 > **写就于 2026-10-01**；下面《现状》一节核实于同一天。
+>
+> **✅ 这张种子已经做完（2026-10-05 补记）**：落点是 **`.scratch/mcp-support/issues/19-mcp-catalog-in-context.md`（`Status: done`，`f14868e`）**。
+> 它建的是**通用**的那条路，不只 MCP：`Block::ContextInjected` 的每一行都 `RenderedLine::linked(...)`，
+> 详情是 `DetailKind::Context { source, content }` —— 标题取 `wording::context_source`，正文就是注入的那段原文。
+> 于是技能清单、`AGENTS.md`、用户加载的技能、目标清单、压缩摘要、过半提醒、人物、MCP 加载**全都在内**。
+> 本目录**不会**再长出 spec。下面三个分叉各自的落点：
+>
+> | 分叉 | 落在哪 |
+> | --- | --- |
+> | 1. 入口是什么 | **点转录上那条记录**（`▸` 那一族），不另加快捷键、也不加 `/` 命令 |
+> | 2. 实际注入的原文，还是预测 | **实际注入的那段原文**：详情读的是事件流里 `Block::ContextInjected { content }`，跟模型当时看到的一致（含按预算截断后的形态） |
+> | 3. 大块内容怎么截断 | 就着注入侧已经定型的 `content` 整段折行、**可滚动**；覆盖层不设 `DETAIL_MAX_CHARS`（那个上限只管工具输出的落盘文件），也不在详情里再截一刀 |
 
 ## 它要什么
 
@@ -11,6 +23,8 @@
 而不是只知道「注入了」。
 
 ## 现状
+
+> **2026-10-05 补记**：这一节是 10-01 的核实，现在已经不成立 —— 覆盖层多了 `DetailKind::Context`（见上面的补记）。
 
 注入在 `src/context.rs` 与 `src/context/`（`skills.rs`、`repo_map.rs`）。覆盖层当前只有五种
 （`Pending::Loop` / `Paste` / `ClearDraft` / `Exit` / `Questionnaire`），**没有**「查看注入」

@@ -253,11 +253,17 @@ def review_rules(unit: Unit) -> list[str]:
 #   8,203 / 53 → 8,344 / 54 —— 与票 12 同一种「先加信息、再跟着调棘轮」的显式动作。
 #   这一档与 `README.md` 那两次不同：那条是**改写**挤出来的空间，这条是 feature 索引
 #   天然随 feature 增长，所以它只会往上走，直到撞上 ≤13,500 / ≤100 那个终点。
+# **2026-10-05 需求池两条注记时再跟一次**：`context-injection-detail` 落成 `mcp-support`
+#   票 19 之后，它的索引行与需求池那段各加了一句注记（同类注记的另一条是 `ask-user-question`，
+#   早就在表里），`.scratch/README.md` 8,513 / 54 —— 与 `input-tokens` 那次同一种显式动作。
+# **2026-10-05 新增 `trace-tab` 决策图索引行时再跟一次**：wayfinder 的图也是 feature 索引的一行
+#   （它的子票住在 `.scratch/trace-tab/issues/`，不占这份入口文档），`.scratch/README.md` 8,724 / 55
+#   —— 含票数一路改到「6 resolved + 8 ready-for-agent」（`/to-tickets` 拆出八张实现票之后）。
 # 行数比票 04 的「现在」高是**预期**的：拆段落必然加行，票 04 承认「行数不得增」不成立，
 # 行数上限是「拆完之后的新上限」，此后拦住「再往入口文档追加」。
 ENTRY_BUDGET = {
     "README.md": {"chars": 16993, "lines": 292, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 8344, "lines": 54, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 8724, "lines": 55, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 905, "lines": 26, "target_chars": 950, "target_lines": 30},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，

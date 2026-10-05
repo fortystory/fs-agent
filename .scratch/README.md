@@ -6,7 +6,7 @@
 
 数法：`ls .scratch/*/issues/*.md | wc -l` 与 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`。
 
-**需求池**：16 条「有意向、不实现」的意向如今剩 10 条只有 `seed.md`（判据 = 下表里形态为 `seed`、且没有「已移交」或「已折成 spec」注记的那些行；`ask-user-question` 按字面也算了进来，**实际还能推进 9 条**）。想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
+**需求池**：16 条「有意向、不实现」的意向如今剩 10 条只有 `seed.md`（判据 = 下表里形态为 `seed`、且没有「已移交」或「已折成 spec」注记的那些行；其中 `ask-user-question` 与 `context-injection-detail` 已落成实票（分别是 `fs-agent-v1` 票 32 与 `mcp-support` 票 19）、按字面也算了进来，**实际还能推进 8 条**）。想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
 | [`fs-agent-v1/`](fs-agent-v1/spec.md) | spec | fs-agent v1：可扩展核心 + 多 agent 讨论 | 34/34 done |
@@ -34,7 +34,7 @@
 | [`continue-by-id/`](continue-by-id/spec.md) | spec | `-c` 吃一个可选的 id（`-c <id>`，另有 `--session <id>`）：先本桶、再全 store，命中别的工作区时工作目录跟着那场会话走；退出回执因此改成 `fs-agent -c <id>` | 1/1 done |
 | [`suspend-gesture/`](suspend-gesture/spec.md) | spec | 挂起手势：TUI 里 `Ctrl-Z` 把进程 SIGTSTP 停到后台（单下、任何视图都拦不住）、`fg` 回来重进终端并全量重绘；plain 的同一按键由终端驱动天然处理，用一条 pty 回归与文档钉住 | 2/2 done |
 | [`sidebar-toggle/`](sidebar-toggle/spec.md) | spec | 左栏开关：`Ctrl-O` 收起与叫回 —— 意愿与宽度档**相乘**（< 80 列叫不回来）、意愿只活在进程内、提示行最末加一条 `ctrl-o 左栏`；推翻 `tui-sidebar` spec §2 与 `CONTEXT.md` 左栏词条里「去留只由宽度决定」那半句（2026-10-02，一次十问的 grilling，不建图） | 2 done + 1 ready-for-walkthrough（票 03 剩 ㉖ 的真机走查） |
-| [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 | — |
+| [`context-injection-detail/`](context-injection-detail/seed.md) | seed | 注入的上下文（技能、`AGENTS.md`）可查看详情 —— **已落成 [`mcp-support` 票 19](mcp-support/issues/19-mcp-catalog-in-context.md)（done）**：注入那条记录点得开、`DetailKind::Context` 通吃所有来源，本目录不会再有 spec | — |
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
 | [`desktop-notifications/`](desktop-notifications/seed.md) | seed | 桌面通知：回合完成、等审批这类时刻在 Linux 上提示 | — |
 | [`interjection-flow/`](interjection-flow/seed.md) | seed | 运行中插入对话：排队等到边界，或立刻打断 | — |
@@ -51,3 +51,4 @@
 | [`lifecycle-diagram/`](lifecycle-diagram/map.md) | map + spec | **fs-agent 运行时生命周期图**（wayfinder 决策图）：把「进程启动 → 一次 turn → 委派 → 退出」画成 mermaid 放进 [`docs/lifecycle.md`](../docs/lifecycle.md) —— 一张鸟瞰 + 四张分层详图，配「节点/边 → `文件:行号`」证据表与 `scripts/lifecycle-check.py` 弱校验；全 mermaid 是本仓库第一种，留了 [ADR 0011](../docs/adr/0011-diagrams-in-mermaid.md)。 | 5 resolved + 8 done + 1 ready-for-walkthrough |
 | [`tui-mermaid/`](tui-mermaid/seed.md) | seed | TUI 里渲染 mermaid：把模型输出的 mermaid 围栏块画成图（今天只是一行灰色语言名 + 不着色的原文）—— **调研结论：能画、且不用浏览器**（`mermaid-text` 0.57.0 等三个纯 Rust 件），真阻力是本仓库自己的三条线（`to_lines` 纯函数、折行归 `pane::wrap_line`、TUI 单任务同步）与 ADR 门槛；与 `lifecycle-diagram` 选 mermaid 只是恰好同名，它属产品功能 | — |
 | [`docs-slim/`](docs-slim/map.md) | map + spec | **文档瘦身**（wayfinder 决策图 + 折出来的 spec，2026-10-04 建）：给 36 份活文档定「压表达」规则 —— 单元 ≤500 字符、只拆 + 只删「别处已有一份的复述」、不动 `DOCS_MIN_RATIO`；**不删任何文件**。图 7/7、实现票 5/5（[`issues/08`](docs-slim/issues/08-doc-size-guardrail.md)–[`12`](docs-slim/issues/12-remainder-and-close-out.md)，08 是护栏脚本那个 tracer bullet），护栏是 [`scripts/check-doc-size.py`](../scripts/check-doc-size.py)，36 份的违规已清零 | 7 resolved + 5 done |
+| [`trace-tab/`](trace-tab/spec.md) | map + spec | 轨迹视图与对话视图的分工：转录拆成两个视图 —— 左栏 `轨迹` 页画**全量块**、主列只留用户文本与 assistant 正文加保留清单；两个 pane 共享 `painted` 源、左栏页高从「用量字段数」解耦。决策图四张票已 resolved，**已折成 spec**（两处 TBD 等剩下两张票） | 6 resolved + 8 ready-for-agent |
