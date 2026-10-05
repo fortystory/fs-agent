@@ -73,3 +73,10 @@ Blocked by: —
 - `wording.rs`：`status_word` 的消费者从 `hint_line` 换成 `status_row`；`status_row` 多一段并重排降级。
 - `tui.rs`：`prompt_colour` 旁边加 `spinner_frame(pulse, busy)`；`draw_status` 应用它；`PULSE` 的武装条件从「运行时」放宽到「始终」。
 - `docs/render.md`：「键盘」那条（提示符脉冲、`PROMPT_HUE_PER_SECOND`）与状态行那节都要改；[`tui-input-pulse/spec.md`](../tui-input-pulse/spec.md) 的两条「明确不做」要划掉并写明被本票推翻。
+
+## 补记（2026-10-06）：字形集换成了月相
+
+本票定的是「状态词带一个字形循环」，当时选的具名集是 `◐ ◓ ◑ ◒`（U+25D0–U+25D3，1 列、与框架线同为 Ambiguous 宽度）。
+维护者同日改定为**一轮月相 `🌑 … 🌘`**（8 格、Emoji、2 列）；判据（不靠颜色、不靠 `DIM`、空闲更慢）一条没变，
+代价与理由见 `../spec.md` §30 与 [票 18](18-busy-spinner-and-idle-clock.md) 的补记。
+

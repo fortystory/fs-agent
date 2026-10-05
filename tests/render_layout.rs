@@ -195,7 +195,8 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[17].contains("模型 claude-sonnet-4-5")
             && rows[17].contains("┆ 询问 ┆")
             && rows[17].contains("上下文 —")
-            && rows[17].contains("◐ 就绪"),
+            && rows[17].contains("🌑 就绪")
+            && !rows[17].contains('…'),
         "状态行报出模型、模式、占比与带字形循环的状态词：{:?}",
         rows[17]
     );
@@ -1054,11 +1055,15 @@ fn the_status_glyph_moves_while_idle_too() {
     };
 
     let mut state = state();
-    assert_eq!(glyph(&mut state), "◐");
+    assert_eq!(glyph(&mut state), "🌑");
     for _ in 0..32 {
         state.tick();
     }
-    assert_eq!(glyph(&mut state), "◓", "空闲时它也在走，只是慢到 32 帧一格");
+    assert_eq!(
+        glyph(&mut state),
+        "🌒",
+        "空闲时它也在走，只是慢到 32 帧一格"
+    );
     // 而提示符在空闲时**不动**：它歇在帧 0 的颜色上。
     let (x, y) = prompt_at(120, 24, &mut state);
     let idle_prompt = buffer(120, 24, &mut state)[(x, y)].fg;
@@ -2476,10 +2481,18 @@ fn the_narrow_sidebar_keeps_six_fields_and_their_percentage() {
     let rows = screen(80, 14, &mut state);
     let text = rows.join("\n");
 
+    // 月相是 Emoji：一格占 **2 列**，所以状态行比 `◐` 那套宽一格 —— 80 列的窄档（主列 51 列）
+    // 因此放不下整行，**先让位的是模型**（`.scratch/tui-visual-language/issues/11` 的降级顺序）。
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("模型 claude-sonnet-4-5")),
+        "80 列下模型先让位：{text}"
+    );
     assert!(
         rows.iter()
-            .any(|row| row.contains("模型 claude-sonnet-4-5")),
-        "模型在状态行上：{text}"
+            .any(|row| row.contains("询问 ┆") && row.contains("上下文") && row.contains("就绪")),
+        "剩下的三段都还在：{text}"
     );
     let panel = panel_text(80, 14, &mut state);
     assert_eq!(panel.len(), 6, "六项读数全都放得下：{panel:?}");

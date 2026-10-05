@@ -4001,12 +4001,22 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
             Span::styled(part.text, Style::default().fg(colour))
         })
         .collect();
+    let line = Line::from(spans);
     // 状态行永远画得出来（[`wording::status_row`] 没有一档把整行拿走），所以截断只在比它的
-    // 最后一档还窄的帧上兜底 —— 那不是真终端能到的宽度。截断本身归 [`super::width`]。
-    frame.render_widget(
-        Paragraph::new(ellipsize_line(Line::from(spans), width)),
-        panes.status,
-    );
+    // 最后一档还窄的帧上兜底 —— 那不是真终端能到的宽度。截断归 [`super::width`]，但
+    // [`ellipsize_line`] 是**给确定要截的调用方**的（它无条件加 `…`），所以这里先量一下：
+    // 放得下就原样画，放不下才交给它。
+    let columns: usize = line
+        .spans
+        .iter()
+        .map(|span| text_columns(&span.content))
+        .sum();
+    let line = if columns > width {
+        ellipsize_line(line, width)
+    } else {
+        line
+    };
+    frame.render_widget(Paragraph::new(line), panes.status);
 }
 
 /// 正在显示左栏的哪一页（spec §3）。
