@@ -355,9 +355,11 @@ fn a_replay_in_flight_shows_partial_history_and_the_progress_count() {
         text.contains("恢复历史") && text.contains("/600") && !text.contains("恢复历史 600/600"),
         "进度行显示它走到了哪：{text}"
     );
-    // 视口贴着底部，所以屏幕上是最新铺下来的那几行 —— 数它们，不认某一行。
+    // 视口贴着底部，所以屏幕上是最新铺下来的那几行 —— 数它们，不认某一行。名字自
+    // 2026-10-05 起独占一行，所以数的是正文行。
+    let history_lines = text.matches("第 ").count();
     assert!(
-        text.matches("[kimi] 第 ").count() >= 5,
+        history_lines >= 5,
         "而已经铺上去的那部分历史在屏幕上：{text}"
     );
 

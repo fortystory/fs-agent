@@ -139,9 +139,15 @@ impl Pane {
     ///
     /// 折行缓存也是在这里被更新到最新的，这就是它收 `&mut self` 的原因：要紧的那个宽度是
     /// 这一帧真正画出来的宽度，而那个只在这里知道。
-    pub fn view(&mut self, width: u16, height: u16, live: &str) -> Vec<Line<'static>> {
+    pub fn view(&mut self, width: u16, height: u16, live: &[Line<'static>]) -> Vec<Line<'static>> {
         self.ensure(width);
-        let live_rows = wrap_text(live, width.max(1) as usize);
+        let width = width.max(1) as usize;
+        // 尾巴是**带样式的行**，不是一段文字：等待提示与正文尾巴都从这里过，各自的样式
+        // 才不会在折行时丢掉。
+        let live_rows: Vec<Line<'static>> = live
+            .iter()
+            .flat_map(|line| wrap_line(line, width))
+            .collect();
         self.height = height;
         self.total = self.wrapped.len() + live_rows.len();
 

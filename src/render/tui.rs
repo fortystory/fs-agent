@@ -2028,6 +2028,32 @@ impl TuiState {
         }
     }
 
+    /// 一段正在流的文字折行之前的样子：每个逻辑行一条。
+    ///
+    /// 折行归窗格（[`Pane::view`] 收的就是这些行）。
+    fn live_rows(text: &str) -> Vec<Line<'static>> {
+        text.split('\n')
+            .map(|raw| Line::from(raw.to_owned()))
+            .collect()
+    }
+
+    /// 对话视图末尾那条正在流的东西：正文尾巴，或者**等待提示**。
+    ///
+    /// 模型还没吐出第一个字时（循环在跑、正文尾巴还空着）末尾给一条会走的
+    /// 「正在思考…」，第一个正文增量一到它就消失（2026-10-05 维护者的优化）。
+    fn conversation_live(&self) -> Vec<Line<'static>> {
+        if !self.live.is_empty() {
+            return Self::live_rows(&self.live);
+        }
+        if !self.running {
+            return Vec::new();
+        }
+        vec![Line::from(Span::styled(
+            wording::waiting(self.pulse),
+            Style::default().fg(Color::DarkGray),
+        ))]
+    }
+
     /// 这个会话数的是**轮**而不是回合。
     ///
     /// 注入而不是推断：讨论就是一个有不止一个讨论者的会话，而这属于组装已经知道的东西
@@ -3767,7 +3793,9 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     // 轨迹页是**视图**：它自己那个窗格取景，并按这一帧真画出来的行填它自己的点击映射
     // —— 与转录走的是同一条纪律（票 04 §1、票 09）。
     if state.tab == Tab::Trace {
-        let rows = state.trace.view(page.width, page.height, &state.live);
+        // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
+        let live = TuiState::live_rows(&state.live);
+        let rows = state.trace.view(page.width, page.height, &live);
         state.trace_drawn.top = page.y;
         state.trace_drawn.rows = (0..rows.len())
             .map(|offset| state.trace.source_at(state.trace.top() + offset))
@@ -4276,9 +4304,10 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
 /// （spec §1、§3、§4）。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let text_area = panes.transcript_text();
+    let live = state.conversation_live();
     let rows = state
         .conversation
-        .view(text_area.width, text_area.height, &state.live);
+        .view(text_area.width, text_area.height, &live);
     // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于哪条
     // 来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
     state.conversation_drawn.top = text_area.y;
@@ -5021,22 +5050,18 @@ fn paint_block(
             if text.is_empty() {
                 return Vec::new();
             }
-            // 回答按 Markdown 以全亮度渲染；只有发言者标签上色。答案是一份文档，所以续行
-            // 顶格（spec §5）。
-            //
-            // 前缀占的列交给渲染器：需要左边界对齐的块（表格、代码块）整块从那一列起，
-            // 于是它们的左边界与第一行的 `[name] ` 对齐，而第一行前缀正好替换掉那段前导。
-            let indent = prefix_columns(speaker, style);
-            attribute_document(
+            // 回答按 Markdown 以全亮度渲染；只有发言者标签上色（spec §5）。名字独占一行，
+            // 回答从下一行起、**顶格** —— 前缀不再占正文的列，所以 Markdown 的前导是零
+            // （2026-10-05 维护者的排版修订）。
+            let rows = named_rows(
                 speaker,
-                super::markdown::to_lines_indented(text, width, indent),
+                super::markdown::to_lines_indented(text, width, 0),
                 colors,
-                indent,
                 style,
-            )
-            .into_iter()
-            .map(|line| message_line(speaker, text, line, colors))
-            .collect()
+            );
+            rows.into_iter()
+                .map(|line| message_line(speaker, text, line, colors))
+                .collect()
         }
         // 轨迹视图里用户（或非 assistant 的系统行）的消息同样只画首行 + `…`。
         Block::Message { speaker, text, .. } if view == Viewport::Trace => {
@@ -5051,19 +5076,20 @@ fn paint_block(
             vec![trace_message_row(speaker, rows, text, width, colors, style)]
         }
         // 用户自己的输入 —— 以及非 assistant 的系统行 —— 按写下来的样子显示：每一行都在，
-        // 什么都不略去，也不上 Markdown，因为这不是一份文档。续行与第一行正文对齐（spec §3）。
+        // 什么都不略去，也不上 Markdown，因为这不是一份文档（spec §3）。名字独占一行，
+        // 话从下一行起、顶格（2026-10-05 维护者的排版修订）。
         Block::Message { speaker, text, .. } => {
-            let mut rows = attribute_speech(
-                speaker,
+            let body: Vec<Line<'static>> = if text.is_empty() {
+                Vec::new()
+            } else {
                 text.split('\n')
                     .map(|raw| Line::from(raw.to_owned()))
-                    .collect(),
-                colors,
-                style,
-            );
+                    .collect()
+            };
+            let mut rows = named_rows(speaker, body, colors, style);
             // 例外一：用户自己的话在**对话视图**里右对齐 —— 「我说的话靠右」那种聊天感
             // （`.scratch/trace-tab/spec.md` §2）。轨迹视图仍左对齐，助手也仍左对齐。
-            if view == Viewport::Conversation && matches!(speaker, crate::events::SpeakerId::User) {
+            if matches!(speaker, crate::events::SpeakerId::User) {
                 for row in &mut rows {
                     row.alignment = Some(Alignment::Right);
                 }
@@ -5353,6 +5379,22 @@ fn message_line(
         },
     };
     RenderedLine::linked(line, detail)
+}
+
+/// 对话视图里一条消息的排版：**名字独占一行**，话从下一行起、顶格
+/// （2026-10-05 维护者的排版修订）。
+fn named_rows(
+    speaker: &crate::events::SpeakerId,
+    rows: Vec<Line<'static>>,
+    colors: &mut SpeakerColors,
+    style: PrefixStyle,
+) -> Vec<Line<'static>> {
+    let mut out = vec![Line::from(Span::styled(
+        style.label(speaker),
+        name_style(speaker, colors),
+    ))];
+    out.extend(rows);
+    out
 }
 
 /// 轨迹视图里的一条消息行：**首行 + `…`**，全文挂在详情里

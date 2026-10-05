@@ -1657,10 +1657,13 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
             .position(|ch| *ch == '⋮')
             .expect("这一列在顶端被裁");
         state.mouse(click(RAIL_AT_120, (TRANSCRIPT_TOP + mark + offset) as u16));
+        // 名字独占一行，所以落点是名字那一行，话在它下面一行（2026-10-05 的排版修订）。
+        let rows = screen(120, 24, &mut state);
         assert!(
-            top_transcript_row(&mut state).contains(&format!("[用户] 问题 {unit}")),
+            rows[TRANSCRIPT_TOP].contains("[用户]")
+                && rows[TRANSCRIPT_TOP + 1].contains(&format!("问题 {unit}")),
             "跳转落在那一个回合自己的问题上：{:?}",
-            top_transcript_row(&mut state)
+            &rows[TRANSCRIPT_TOP..TRANSCRIPT_TOP + 2]
         );
     }
 }
@@ -1742,10 +1745,11 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 消息，记在第一个轮次开始之前……
     let first = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 3) as u16;
     state.mouse(click(RAIL_AT_120, first));
+    let rows = screen(120, 24, &mut state);
     assert!(
-        top_transcript_row(&mut state).contains("[用户] 讨论题目"),
+        rows[TRANSCRIPT_TOP].contains("[用户]") && rows[TRANSCRIPT_TOP + 1].contains("讨论题目"),
         "会话的问题就是第一个格子落的地方：{:?}",
-        top_transcript_row(&mut state)
+        &rows[TRANSCRIPT_TOP..TRANSCRIPT_TOP + 2]
     );
 
     // ……而后面的轮次没有自己的用户消息，所以它的格子落在
@@ -1794,10 +1798,11 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     later.mouse(click(RAIL_AT_120, second));
     // 轮次开始那一行现在只住在轨迹页（2026-10-05 维护者收紧），所以兜底落点是那一轮
     // **第一条留在对话里的行** —— 它的第一条发言。
+    let rows = screen(120, 24, &mut later);
     assert!(
-        top_transcript_row(&mut later).contains("第 1 轮"),
+        rows[TRANSCRIPT_TOP].contains("[kimi]") && rows[TRANSCRIPT_TOP + 1].contains("第 1 轮"),
         "没有自己用户消息的轮次落在它留下的第一行上：{:?}",
-        top_transcript_row(&mut later)
+        &rows[TRANSCRIPT_TOP..TRANSCRIPT_TOP + 2]
     );
 }
 
@@ -6128,8 +6133,8 @@ fn narrowing_the_terminal_relays_a_table_out_by_the_new_width() {
 
 #[test]
 fn a_table_at_the_head_of_an_answer_lines_up_with_its_header() {
-    // 回答的第一行带 `[name] ` 前缀，而表格的表头就是那一行：前缀占的列从表格的预算里
-    // 出，渲染器把整块推到那一列之后，前缀再把它换回来。于是表头与数据行仍在同一列。
+    // 名字独占一行之后，表格从**第 0 列**起画，表头与数据行自然在同一列
+    // （2026-10-05 的排版修订把前缀移出了正文那一行）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(message(
         1,
@@ -6149,11 +6154,11 @@ fn a_table_at_the_head_of_an_answer_lines_up_with_its_header() {
         "表头与数据行在同一列上：{:?}",
         &rows[head..head + 3]
     );
-    // 而第一行确实由 `[kimi] ` 引领。
+    // 而表头上一行确实是 `[kimi]`。
     assert!(
-        rows[head].contains("[kimi]"),
-        "第一行是前缀加表头：{:?}",
-        rows[head]
+        rows[head - 1].contains("[kimi]"),
+        "名字在表头上一行：{:?}",
+        &rows[head - 1..head + 1]
     );
 }
 
@@ -6868,4 +6873,50 @@ fn the_run_log_lines_stay_out_of_the_conversation() {
     for present in ["回合开始", "回合结束", "权限裁决", "诊断"] {
         assert!(page.contains(present), "{present} 在轨迹页里：{page}");
     }
+}
+
+/// 名字独占一行，话在下一行（2026-10-05 维护者的排版优化）。
+#[test]
+fn the_name_sits_on_its_own_row_in_the_conversation() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "我问的问题"));
+    state.apply(message(2, "助手的回答。", None));
+    let rows = conversation_rows(&mut state, 120, 24);
+
+    let user = rows
+        .iter()
+        .position(|row| row.trim() == "[用户]")
+        .expect("用户的名字独占一行");
+    assert!(rows[user + 1].contains("我问的问题"), "{rows:#?}");
+
+    let assistant = rows
+        .iter()
+        .position(|row| row.trim() == "[kimi]")
+        .expect("助手的名字独占一行");
+    assert!(rows[assistant + 1].contains("助手的回答。"), "{rows:#?}");
+}
+
+/// 模型还没吐出第一个字时，对话视图末尾有一条会走的「正在思考…」；正文一到它就消失
+/// （2026-10-05 维护者的优化）。
+#[test]
+fn the_conversation_shows_a_waiting_hint_while_the_model_is_quiet() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "问题"));
+    state.request(ConsoleRequest::RunState { running: true });
+
+    let first = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(first.contains("正在思考."), "还没出字时有等待提示：{first}");
+
+    // 点号每 8 帧挪一格（一帧 60 ms）。
+    for _ in 0..8 {
+        state.tick();
+    }
+    let second = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(second.contains("正在思考.."), "点号往前走了一格：{second}");
+
+    // 第一个正文增量一到，提示让位。
+    state.apply(text_delta("答案。"));
+    let third = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(!third.contains("正在思考"), "正文到了提示就走：{third}");
+    assert!(third.contains("答案。"), "{third}");
 }

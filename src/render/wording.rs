@@ -318,6 +318,13 @@ pub fn detail_section(name: &str) -> String {
     format!("── {name} ──")
 }
 
+/// 模型还没吐出第一个字时，对话视图末尾那条会走的提示
+/// （2026-10-05 维护者的优化）：点号每 8 帧挪一格 —— 帧是 60 ms，所以大约半秒一步。
+pub fn waiting(frame: u64) -> String {
+    let dots = 1 + (frame / 8) % 3;
+    format!("正在思考{}", ".".repeat(dots as usize))
+}
+
 /// 详情视图思考那一节的小标题。
 pub fn detail_thinking_section() -> &'static str {
     "思考"

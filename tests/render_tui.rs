@@ -13,7 +13,6 @@ use fs_agent::render::{
     pane, render_block_uncoloured, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
     Key, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
 };
-use ratatui::buffer::CellWidth;
 use ratatui::style::{Color, Modifier};
 
 /// 一次关于 `tool_name` 的权限询问，形状与循环交给前端的一样。
@@ -664,13 +663,14 @@ fn the_synthesizers_product_renders_with_the_system_speaker() {
         text: "consensus".to_owned(),
         reasoning: None,
     });
-    // 第一段是发言者前缀。它的字面用词归措辞层；
+    // 第一行是发言者前缀**独占的一行**（2026-10-05 的排版修订）。它的字面用词归措辞层；
     // 这里它只需要是一个带方括号的归属。
     let prefix = lines[0].spans[0].content.as_ref();
     assert!(
-        prefix.starts_with('[') && prefix.ends_with("] "),
+        prefix.starts_with('[') && prefix.ends_with(']'),
         "一个带方括号的发言者前缀：{prefix:?}"
     );
+    assert_eq!(lines[1].spans[0].content.as_ref(), "consensus");
 }
 
 #[test]
@@ -699,7 +699,8 @@ fn the_answer_block_is_rendered_as_markdown() {
         text: "# 标题\n\n- 一\n- 二\n".to_owned(),
         reasoning: None,
     });
-    let heading = &lines[0];
+    // 第一行是名字，标题在它下面一行（2026-10-05 的排版修订）。
+    let heading = &lines[1];
     assert!(
         heading
             .spans
@@ -754,30 +755,28 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
         text: "正文".to_owned(),
         reasoning: None,
     });
+    // 第一行是名字，正文在它下面一行（2026-10-05 的排版修订）。
     assert_ne!(
-        answer[0].spans[1].style.fg,
+        answer[1].spans[0].style.fg,
         Some(Color::DarkGray),
         "答案正文没有调暗"
     );
 }
 
 #[test]
-fn a_message_continuation_indents_by_the_label_display_width() {
-    // 中文标签按字符数算比按列数算窄（`[用户]` 是 4 个字符、6 列），
-    // 所以按 `chars().count()` 缩进会把第二行放到第一行
-    // 左边两列。缩进必须量列。
-    //
-    // 走这条路的是**一次发言**（用户输入与非 assistant 的系统行）；assistant 的答案
-    // 是一份文档，续行顶格（spec §5）。
+fn a_message_body_starts_on_its_own_line() {
+    // 名字独占一行，话从下一行起、顶格 —— 用户输入与非 assistant 的系统行走这条路
+    // （2026-10-05 的排版修订）。
     let lines = render_block_uncoloured(&Block::Message {
         speaker: SpeakerId::User,
         role: Role::User,
         text: "one\ntwo".to_owned(),
         reasoning: None,
     });
-    let prefix = lines[0].spans[0].content.as_ref().cell_width() as usize;
-    let indent = lines[1].spans[0].content.as_ref().cell_width() as usize;
-    assert_eq!(indent, prefix, "续行对齐在第一行正文的下面");
+    assert_eq!(lines.len(), 3, "名字一行，正文每行各占一行");
+    assert_eq!(lines[0].spans[0].content.as_ref(), "[用户]");
+    assert_eq!(lines[1].spans[0].content.as_ref(), "one");
+    assert_eq!(lines[2].spans[0].content.as_ref(), "two");
 }
 
 #[test]
@@ -807,18 +806,17 @@ fn the_answers_continuation_starts_at_the_left_edge() {
 }
 
 #[test]
-fn a_single_line_answer_keeps_the_same_speaker_prefix() {
-    // 边界：单行答案的输出与今天逐字相同 —— 变的只有续行。
+fn a_single_line_answer_is_a_name_row_and_a_body_row() {
+    // 边界：单行答案也占两行 —— 名字一行、正文一行（2026-10-05 的排版修订）。
     let lines = render_block_uncoloured(&Block::Message {
         speaker: kimi(),
         role: Role::Assistant,
         text: "正文".to_owned(),
         reasoning: None,
     });
-    assert_eq!(lines.len(), 1);
-    let lead = lines[0].spans[0].content.as_ref();
-    assert!(lead.starts_with('[') && lead.ends_with(' '), "{lead:?}");
-    assert_eq!(lines[0].spans[1].content.as_ref(), "正文");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].spans[0].content.as_ref(), "[kimi]");
+    assert_eq!(lines[1].spans[0].content.as_ref(), "正文");
 }
 
 #[test]
@@ -961,20 +959,11 @@ fn a_users_message_keeps_its_lines_and_its_length() {
                 .collect()
         })
         .collect();
-    assert_eq!(rendered.len(), 3, "消息每一行占一行");
-    assert!(rendered[0].ends_with("第一行"), "{:?}", rendered[0]);
-    assert!(rendered[1].contains(&long), "什么都没被省略");
-    assert!(rendered[2].ends_with("第三行"), "{:?}", rendered[2]);
-
-    // 续行对齐在第一行正文下面，
-    // 而不是归属下面。
-    let indent = rendered[0].chars().count() - "第一行".chars().count();
-    for continuation in &rendered[1..] {
-        assert!(
-            continuation.starts_with(&" ".repeat(indent)),
-            "对齐在正文下面：{continuation:?}"
-        );
-    }
+    assert_eq!(rendered.len(), 4, "名字一行，消息每一行各占一行");
+    assert_eq!(rendered[0], "[用户]");
+    assert!(rendered[1].ends_with("第一行"), "{:?}", rendered[1]);
+    assert!(rendered[2].contains(&long), "什么都没被省略");
+    assert!(rendered[3].ends_with("第三行"), "{:?}", rendered[3]);
 }
 
 #[test]
