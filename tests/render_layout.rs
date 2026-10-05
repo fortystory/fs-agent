@@ -7378,6 +7378,99 @@ fn a_wrapped_block_carries_its_stamp_on_the_first_line_only() {
     );
 }
 
+/// 一个 `HH:MM:SS ` 戳的形状：不读真时钟，因为推理增量没有信封，开着的行的时刻只能是
+/// 「收到它的那一刻」（`.scratch/trace-thought-stamp/spec.md` §1）。
+fn looks_like_a_stamp(text: &str) -> bool {
+    let columns = fs_agent::render::layout::STAMP_COLUMNS as usize;
+    let bytes = text.as_bytes();
+    bytes.len() >= columns
+        && bytes[..columns - 1]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                2 | 5 => *byte == b':',
+                _ => byte.is_ascii_digit(),
+            })
+        && bytes[columns - 1] == b' '
+}
+
+/// 还开着的那一行也有时刻：**思考开始**那一刻（`.scratch/trace-thought-stamp/spec.md` §1，
+/// 推翻 `trace-in-main` 用户故事 21 的后半句）。
+#[test]
+fn an_open_thinking_line_carries_the_moment_its_thinking_started() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖，"));
+    open_trace_tab(&mut state, 120, 24);
+
+    let page = trace_page(&mut state, 120, 24);
+    let row = page
+        .iter()
+        .find(|row| row.contains("… 正在思考"))
+        .expect("思考行在轨迹页上");
+    assert!(looks_like_a_stamp(row), "行首是一个时刻：{row:?}");
+    assert_eq!(
+        without_stamp(row).trim_end(),
+        "[kimi] … 正在思考",
+        "戳只占行首那几列"
+    );
+}
+
+/// 定稿时同一行的时间戳跳成完成那一刻（`.scratch/trace-thought-stamp/spec.md` §2）。
+#[test]
+fn a_settling_thinking_line_jumps_to_the_moment_it_finished() {
+    use fs_agent::events::{EventPayload, Role};
+
+    let done = fixed_at(4, 16, 53);
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖，"));
+    state.apply(at_event(
+        2,
+        done,
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "答案是 42。".to_owned(),
+            reasoning: Some("先看依赖，".to_owned()),
+        },
+    ));
+    open_trace_tab(&mut state, 120, 24);
+
+    let page = trace_page(&mut state, 120, 24);
+    let row = page
+        .iter()
+        .find(|row| row.contains("思考完成"))
+        .expect("定稿的那一行");
+    assert!(
+        row.starts_with(&wording::stamp(done)),
+        "定稿后写的是完成那一刻（{}）：{row:?}",
+        wording::stamp(done)
+    );
+}
+
+/// 宽度变化会把轨迹页整批重放，重放出来的那一行带着同一个戳
+/// （`.scratch/trace-thought-stamp/spec.md` §3）。
+#[test]
+fn a_replayed_open_thinking_line_keeps_its_stamp() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(reasoning_delta("先看依赖，"));
+    open_trace_tab(&mut state, 120, 24);
+    let before = trace_page(&mut state, 120, 24)
+        .into_iter()
+        .find(|row| row.contains("… 正在思考"))
+        .expect("思考行在轨迹页上");
+
+    let page = trace_page(&mut state, 100, 24);
+    let after = page
+        .iter()
+        .find(|row| row.contains("… 正在思考"))
+        .expect("重放出来的思考行");
+    assert!(looks_like_a_stamp(after), "重放出来的行也有戳：{after:?}");
+    assert_eq!(
+        without_stamp(after).trim_end(),
+        without_stamp(&before).trim_end(),
+        "重放不改变这一行的内容"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 详情按视图还原（`.scratch/trace-tab/spec.md` §5；票 13）
 // ---------------------------------------------------------------------------

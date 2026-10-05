@@ -1495,9 +1495,13 @@ enum Painted {
     /// 一个定稿的块，以及产生它的那一刻（`.scratch/trace-in-main/spec.md` §5）。轨迹页把这个
     /// 时刻画在行的开头，而重放要把它一起带回来。
     Block { block: Block, at: DateTime<Utc> },
-    /// 还开着的思考行。它刻意**不带**时刻：这一刻还不知道这个想法属于哪条消息，所以轨迹页里
-    /// 它头上没有时间戳（§5）。
-    Thinking { speaker: crate::events::SpeakerId },
+    /// 还开着的思考行，以及**思考开始那一刻** —— 第一条推理增量到达的时候
+    /// （`.scratch/trace-thought-stamp/spec.md` §1，推翻 `trace-in-main` 用户故事 21 的后半句）。
+    /// 带 `at` 是为了宽度变化重放出来的那一行仍有同一个戳。
+    Thinking {
+        speaker: crate::events::SpeakerId,
+        at: DateTime<Utc>,
+    },
     /// 定稿的思考行；`trace` 是记下来的整段推理，`None` 是合成器那种「没记下来」。
     Thought {
         speaker: crate::events::SpeakerId,
@@ -1795,7 +1799,9 @@ impl TuiState {
             {
                 match kind {
                     DeltaKind::Reasoning => {
-                        produced += usize::from(self.open_thinking(speaker.clone()));
+                        // `at` 就是收到这条增量的时候：推理增量没有信封，所以「思考开始那一刻」
+                        // 只能是它（`.scratch/trace-thought-stamp/spec.md` §1）。
+                        produced += usize::from(self.open_thinking(speaker.clone(), at));
                         self.reasoning.push_str(text);
                     }
                     DeltaKind::Text => self.freeze_thinking(at),
@@ -1817,7 +1823,7 @@ impl TuiState {
                         Some(text) => {
                             let text = text.clone();
                             if !self.thinking_open && !self.thinking_done {
-                                produced += usize::from(self.open_thinking(speaker.clone()));
+                                produced += usize::from(self.open_thinking(speaker.clone(), at));
                             }
                             self.settle_thinking(Some(text), at);
                         }
@@ -2015,8 +2021,8 @@ impl TuiState {
             Painted::Block { block, at } => {
                 self.emit_block(block, *at, targets);
             }
-            Painted::Thinking { speaker } => {
-                self.paint_thinking_line(speaker, targets);
+            Painted::Thinking { speaker, at } => {
+                self.paint_thinking_line(speaker, *at, targets);
             }
             Painted::Thought { speaker, trace, at } => {
                 // 重放是**追加**：窗格刚被清空，定稿的那一条要重新画出来（实时路径才是
@@ -2334,7 +2340,7 @@ impl TuiState {
     ///
     /// 这一行是普通的转录行 —— 它照算窗格的上限，也跟别的一切一起滚 —— 而且刻意**还**
     /// 不可点：完整 trace 只在 `MessageCompleted` 上才有（票 02 §1）。
-    fn open_thinking(&mut self, speaker: crate::events::SpeakerId) -> bool {
+    fn open_thinking(&mut self, speaker: crate::events::SpeakerId, at: DateTime<Utc>) -> bool {
         if self.thinking_open {
             return false;
         }
@@ -2343,9 +2349,9 @@ impl TuiState {
         self.reasoning.clear();
         // 名字打头，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
         // （票 07 §2）。两个视口各画一遍：它们的前缀分档可能不同（票 09）。
-        self.paint_thinking_line(&speaker, self.targets());
-        // 记进重放清单：宽度变化时它也要跟着回来（spec §1）。
-        self.painted.push(Painted::Thinking { speaker });
+        self.paint_thinking_line(&speaker, at, self.targets());
+        // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
+        self.painted.push(Painted::Thinking { speaker, at });
         true
     }
 
@@ -2353,10 +2359,17 @@ impl TuiState {
     ///
     /// 思考是一条**过程行**，只归轨迹（冻结项 2、8）：对话视图里它除了打断阅读什么都不做。
     /// 左栏不在时它也不回对话视图（2026-10-05 维护者推翻 §6）。
-    fn paint_thinking_line(&mut self, speaker: &crate::events::SpeakerId, targets: Targets) {
+    fn paint_thinking_line(
+        &mut self,
+        speaker: &crate::events::SpeakerId,
+        at: DateTime<Utc>,
+        targets: Targets,
+    ) {
         if targets.trace {
             let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
-            self.push_line(Viewport::Trace, line, None, None);
+            // 开着的行也有时刻：思考**开始**那一刻（`.scratch/trace-thought-stamp/spec.md`
+            // §1）。它会在定稿时就地重写成完成那一刻（§2）。
+            self.push_line(Viewport::Trace, stamped_line(line, at), None, None);
         }
     }
 
