@@ -333,6 +333,12 @@ pub fn detail_output_section() -> &'static str {
     "输出"
 }
 
+/// 详情视图正文那一节的小标题：轨迹页里那条消息只画了首行，全文住在这里
+/// （`.scratch/trace-tab/spec.md` §3）。
+pub fn detail_message_section() -> &'static str {
+    "正文"
+}
+
 /// 详情视图的页脚：读者读到全文的哪里，以及怎么离开。
 pub fn detail_footer(position: usize, total: usize) -> String {
     format!("↕ {position}/{total} · esc 关闭")

@@ -52,7 +52,7 @@ use super::panel::Panel;
 use super::severity::Severity;
 use super::token;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
-use super::width::{text_columns, truncate_columns};
+use super::width::{char_columns, text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
 
@@ -665,9 +665,13 @@ pub struct TuiState {
     mode: Mode,
     /// plain 渲染器共用的那个「事件转块」的合并器。
     transcript: Transcript,
-    /// 对话窗格：每个完成块的行按画出来的宽度折行，带自己的视口。转录归这个窗格所有，
-    /// 而不是归终端的滚动回退。
-    pane: Pane,
+    /// 对话视图的窗格：主列那些行按画出来的宽度折行，带自己的视口（`.scratch/trace-tab/spec.md` §1）。
+    conversation: Pane,
+    /// 轨迹视图的窗格：左栏 `轨迹` 页画它。与对话视图共用同一份共享源（`painted`），但各持
+    /// 折行缓存、宽度、视口与「新行」计数。
+    ///
+    /// 左栏不可见时它不被物化（[`TuiState::trace_width`] 为零），内容也不推给它。
+    trace: Pane,
     /// 当前消息正在流的尾巴。
     live: String,
     /// 已经画进窗格的那些绘制记录，按到达顺序。
@@ -676,8 +680,13 @@ pub struct TuiState {
     /// 留着这份清单就是为了那时候按新宽度重放它们。代价是 `Tui` 多持一份块（与 `pane`
     /// 已经持有的源行同量级）—— 先按「全量重放」实现，简单可靠优先。
     painted: Vec<Painted>,
-    /// 上面那份块是按多宽的转录内容排的。
-    render_width: u16,
+    /// 对话视图的源行是按多宽排的。
+    ///
+    /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
+    /// 它是重放判据的一半，另一半是 [`TuiState::trace_width`]。
+    conversation_width: u16,
+    /// 轨迹视图的源行是按多宽排的；**零**表示这一帧轨迹视图不被物化（左栏不可见）。
+    trace_width: u16,
     /// 上一帧画完之后有没有什么东西变了。
     dirty: bool,
     /// 草稿与它的光标。
@@ -729,15 +738,19 @@ pub struct TuiState {
     thinking_done: bool,
     /// 回合条的单位与它们的分段头。
     turn_rail: TurnRail,
-    /// 窗格每一条来源行背后的详情，与它平行，并且按窗格自己的上限一起裁剪，好让两者
+    /// 对话视图每条来源行背后的详情，与它平行，并且按它自己窗格的上限一起裁剪，好让两者
     /// 永不脱节。不是任何入口的那些行是 `None`。
-    links: std::collections::VecDeque<Option<Detail>>,
-    /// 上一帧把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧重建，
-    /// 与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
-    drawn_rows: Vec<Option<usize>>,
-    /// 转录第一条被画出来的行所在的屏幕行，好把鼠标行（它是屏幕坐标）变成 `drawn_rows`
-    /// 的下标。
-    drawn_top: u16,
+    conversation_links: std::collections::VecDeque<Option<Detail>>,
+    /// 轨迹视图的同一份表。
+    trace_links: std::collections::VecDeque<Option<Detail>>,
+    /// 上一帧对话视图把每一个显示行画在了哪里，好把一次点击换回它落在的那条来源行。每帧
+    /// 重建，与问题覆盖层的命中区域一样，因为只有真画出来的行才会回应指针（票 04 §1）。
+    conversation_drawn: Drawn,
+    /// 轨迹视图的同一份映射。每视口一套：两个视口的窗口不必相同（票 09）。
+    trace_drawn: Drawn,
+    /// 上一帧把轨迹页画在哪里，好让滚轮与点击按指针落在哪个视口分派。没画轨迹页就是
+    /// `None`（与 [`TuiState::detail_rect`] 同一条「记住读的人真看到了什么」的纪律）。
+    trace_rect: Option<Rect>,
     /// 详情覆盖层，开着的时候。
     detail: Option<DetailView>,
     /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
@@ -768,8 +781,10 @@ pub struct TuiState {
     pending: Option<Pending>,
     /// 要交回给循环的手势。
     events: Vec<FrontEndEvent>,
-    /// 上一帧把「回到末尾」指示器画在哪里，好让一次点击跟用户真看见的东西对得上。
+    /// 上一帧把主列的「回到末尾」指示器画在哪里，好让一次点击跟用户真看见的东西对得上。
     indicator: Option<Rect>,
+    /// 轨迹页的同一份矩形（票 09）。
+    trace_indicator: Option<Rect>,
     /// 进行中的那次历史重放，有的话。`Some` 是一个一次性的启动状态：在它排空之前，键盘、
     /// 指针与循环的行为都不一样（`.scratch/tui-history-replay/spec.md` §2）。
     replay: Option<Replay>,
@@ -1327,6 +1342,39 @@ fn agrees(key: Key) -> bool {
     matches!(key, Key::Char('y') | Key::Char('Y'))
 }
 
+/// 一块转录可以去的两个视图（`.scratch/trace-tab/spec.md` §1）。
+///
+/// 两个视口共用同一份共享源（[`Painted`]），但各持折行缓存、宽度、视口与「新行」计数 ——
+/// 凡是「哪个窗格」「哪张平行表」「哪个指示器」的取数都按它分派。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Viewport {
+    /// 主列：对话视图。
+    Conversation,
+    /// 左栏 `轨迹` 页：轨迹视图。
+    Trace,
+}
+
+/// 这一次要把块喂给哪些视图。
+///
+/// 实时到达时由「轨迹视图此刻物不物化」推出来；重放时由宽度掩码给出来 —— 只重放宽度真变了
+/// 的那个 pane，对没清空过的 pane 重放会把它整份推第二遍（票 09）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Targets {
+    conversation: bool,
+    trace: bool,
+}
+
+/// 上一帧一个视图把每个显示行画在了哪里，好把一次点击换回它落在的那条来源行。
+///
+/// 每帧重建，**每个视图一套**：两个视口的窗口不必相同，共用一份映射会让点击指错行。
+#[derive(Default)]
+struct Drawn {
+    /// 那个显示行对应的源行下标；不是任何入口的那些行是 `None`。
+    rows: Vec<Option<usize>>,
+    /// 这个视图第一条被画出来的行的屏幕 y。
+    top: u16,
+}
+
 /// 回合条的记账：每个完成的回合（讨论里是每一轮）一个单位，以及每个单位从哪里开始
 /// （`.scratch/tui-sidebar/spec.md` §4）。
 ///
@@ -1471,12 +1519,14 @@ impl TuiState {
             suspend: false,
             mode,
             transcript: Transcript::new(),
-            pane: Pane::new(),
+            conversation: Pane::new(),
+            trace: Pane::new(),
             live: String::new(),
             painted: Vec::new(),
             // 第一帧之前没有真正的宽度；先用共享渲染那个缺省把行排出来，首帧一画出来就会
-            // 发现宽度不同并按真宽度重放（spec §1）。
-            render_width: SHARED_RENDER_WIDTH,
+            // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
+            conversation_width: SHARED_RENDER_WIDTH,
+            trace_width: SHARED_RENDER_WIDTH,
             dirty: true,
             editor: Input::new(),
             files: FileIndex::new(),
@@ -1495,9 +1545,11 @@ impl TuiState {
             thinking_open: false,
             thinking_done: false,
             turn_rail: TurnRail::default(),
-            links: std::collections::VecDeque::new(),
-            drawn_rows: Vec::new(),
-            drawn_top: 0,
+            conversation_links: std::collections::VecDeque::new(),
+            trace_links: std::collections::VecDeque::new(),
+            conversation_drawn: Drawn::default(),
+            trace_drawn: Drawn::default(),
+            trace_rect: None,
             detail: None,
             detail_rect: None,
             modal_rect: None,
@@ -1512,6 +1564,7 @@ impl TuiState {
             pending: None,
             events: Vec::new(),
             indicator: None,
+            trace_indicator: None,
             replay: None,
             live_buffer: Vec::new(),
             quit: false,
@@ -1696,6 +1749,8 @@ impl TuiState {
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         self.dirty = true;
         self.observe_goal(&event);
+        // 这一整趟的收件人：轨迹视图此刻物不物化，决定它收不收（`.scratch/trace-tab/spec.md` §1）。
+        let targets = self.targets();
         let mut produced = 0usize;
         for block in self.transcript.push(event) {
             // 思考行的生命周期跑在块被画出来之前：一个推理增量开出它，正文的第一个增量把它
@@ -1776,87 +1831,173 @@ impl TuiState {
             self.panel.observe(&block);
             // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
             self.todo.observe(&block);
-            produced += self.push_block(block, self.render_width);
+            produced += self.push_block(block, targets);
         }
         produced
     }
 
+    /// 这一刻该把块喂给哪些视图。
+    ///
+    /// 实时事件到达时不问「现在显示哪一页」：轨迹视图只要左栏在就常驻（这样切页、收起再叫回
+    /// 都不会漏内容，发言者配色槽位也不随可见性变），所以判据是它有没有被物化
+    /// —— [`TuiState::trace_width`] 是不是零（票 09）。
+    fn targets(&self) -> Targets {
+        Targets {
+            conversation: true,
+            trace: self.trace_width != 0,
+        }
+    }
+
     /// 把一个块排成行、推进窗格，并**记住它**，好在宽度变化时重放（spec §1）。
-    fn push_block(&mut self, block: Block, width: u16) -> usize {
-        let produced = self.emit_block(&block, width);
+    fn push_block(&mut self, block: Block, targets: Targets) -> usize {
+        let produced = self.emit_block(&block, targets);
         if produced > 0 {
-            // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。
+            // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
+            // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
             self.painted.push(Painted::Block(block));
         }
         produced
     }
 
     /// 只把块排成行推进窗格，不记它 —— 到达时与重放时走的是同一条路。
-    fn emit_block(&mut self, block: &Block, width: u16) -> usize {
-        let lines = paint_block(block, &mut self.colors, width);
-        let produced = lines.len();
-        for rendered in lines {
-            self.push_source(rendered.line, rendered.link, Some(is_user_message(block)));
+    ///
+    /// 对每个被选中的目标各排版一次：分派点必须在这里，因为只有这里同时知道「画给谁」与
+    /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
+    fn emit_block(&mut self, block: &Block, targets: Targets) -> usize {
+        let mut produced = 0;
+        if targets.conversation {
+            let width = self.conversation_width;
+            let lines = paint_block(block, &mut self.colors, width, Viewport::Conversation);
+            produced = produced.max(lines.len());
+            for rendered in lines {
+                self.push_line(
+                    Viewport::Conversation,
+                    rendered.line,
+                    rendered.link,
+                    Some(is_user_message(block)),
+                );
+            }
+        }
+        if targets.trace {
+            let width = self.trace_width;
+            let lines = paint_block(block, &mut self.colors, width, Viewport::Trace);
+            produced = produced.max(lines.len());
+            for rendered in lines {
+                self.push_line(
+                    Viewport::Trace,
+                    rendered.line,
+                    rendered.link,
+                    Some(is_user_message(block)),
+                );
+            }
         }
         // 回合的结束关掉一个单位；讨论里一轮的结束也是 —— 那里单位是**轮**，因为那才是
-        // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。
-        if is_boundary(block, self.discussion()) {
+        // 讨论计数的东西（`CONTEXT.md` 把轮次与回合分开，spec §4）。回合条只与对话 pane
+        // 平行，所以这条记账只看对话目标在不在，**不看那个块有没有真的画出来**：边界块在
+        // 对话视图里可能一行都不留，而一格照旧要长出来。
+        if targets.conversation && is_boundary(block, self.discussion()) {
             self.turn_rail.close_unit();
         }
         produced
     }
 
-    /// 转录内容的宽度变了：清空窗格，按新宽度把绘制记录整批重放一遍（spec §1）。
+    /// 某个视图的内容宽度变了：清空它，按新宽度把绘制记录整批重放一遍（spec §1）。
     ///
     /// 宽度一变就不能只重新折行：表格的列宽与超宽代码行的折行是**渲染时**定下的，
     /// 那些源行本身已经依赖宽度了。
-    fn rerender_if_width_changed(&mut self, width: u16) {
-        if width == self.render_width {
+    ///
+    /// **只清、只重放宽度真变了的那个视口**（票 09）：`emit_painted` 是追加，对没清空过的
+    /// pane 再放一遍会把它整份推第二遍。零表示那个视口这一帧不被物化 —— 它照样走「变了」这
+    /// 一支，好把内容清干净、等左栏回来时整批重建。
+    fn rerender_if_width_changed(&mut self, conversation_width: u16, trace_width: u16) {
+        let conversation = conversation_width != self.conversation_width;
+        let trace = trace_width != self.trace_width;
+        if !conversation && !trace {
             return;
         }
-        self.render_width = width;
+        self.conversation_width = conversation_width;
+        self.trace_width = trace_width;
+        if conversation {
+            self.conversation.clear();
+            self.conversation_links.clear();
+            // 回合条的源行下标与对话 pane 平行，所以它跟着对话 pane 一起重建。
+            self.turn_rail.clear();
+        }
+        if trace {
+            self.trace.clear();
+            self.trace_links.clear();
+        }
         if self.painted.is_empty() {
+            self.dirty = true;
             return;
         }
-        self.pane.clear();
-        self.links.clear();
-        self.turn_rail.clear();
         let painted = std::mem::take(&mut self.painted);
         for item in &painted {
-            self.emit_painted(item, width);
+            self.emit_painted(
+                item,
+                Targets {
+                    conversation,
+                    trace,
+                },
+            );
         }
         self.painted = painted;
         self.dirty = true;
     }
 
-    /// 重放一条绘制记录。
-    fn emit_painted(&mut self, painted: &Painted, width: u16) {
+    /// 重放一条绘制记录。`targets` 说这一趟要把记录喂给谁 —— 宽度没变的那个视口不在里面，
+    /// 它原样留着自己那份内容。
+    fn emit_painted(&mut self, painted: &Painted, targets: Targets) {
         match painted {
             Painted::Block(block) => {
-                self.emit_block(block, width);
+                self.emit_block(block, targets);
             }
             Painted::Thinking { speaker } => {
-                let line = self.thinking_in_progress_line(speaker);
-                self.push_source(line, None, None);
+                self.paint_thinking_line(speaker, targets);
             }
             Painted::Thought { speaker, trace } => {
-                let (line, detail) = self.thinking_settled_line(speaker, trace.clone());
-                self.push_source(line, Some(detail), None);
+                // 重放是**追加**：窗格刚被清空，定稿的那一条要重新画出来（实时路径才是
+                // 就地重写那条「正在思考」）。
+                self.paint_settled_thinking(speaker, trace.clone(), targets, false);
             }
         }
     }
 
-    /// 推进一条来源行：窗格、它的链接入口、回合条的纹理，最后裁掉两边溢出的部分。
+    /// 把一条来源行推进它那个视图的窗格：折行缓存、链接入口、回合条的纹理，最后按窗格报回来
+    /// 的丢弃数裁掉两边溢出的部分。
     ///
     /// `user` 说这条行要不要记进回合条，`None` 是不记 —— 思考行是唯一的这种行：它属于当前
-    /// 单位，但它不是一次新的发言，也不改变单位的划分。
-    fn push_source(&mut self, line: Line<'static>, link: Option<Detail>, user: Option<bool>) {
-        let dropped = self.pane.push(line);
-        self.links.push_back(link);
-        if let Some(user) = user {
-            self.turn_rail.push_line(user);
+    /// 单位，但它不是一次新的发言，也不改变单位的划分。回合条只与对话 pane 平行，所以只有
+    /// 那个视口会喂它。
+    fn push_line(
+        &mut self,
+        view: Viewport,
+        line: Line<'static>,
+        link: Option<Detail>,
+        user: Option<bool>,
+    ) {
+        let dropped = match view {
+            Viewport::Conversation => self.conversation.push(line),
+            Viewport::Trace => self.trace.push(line),
+        };
+        let links = match view {
+            Viewport::Conversation => &mut self.conversation_links,
+            Viewport::Trace => &mut self.trace_links,
+        };
+        links.push_back(link);
+        // 平行表跟着窗格交回来的丢弃数裁，不再自己数 `CAP`：一条来源行在两边要么意思相同、
+        // 要么两边都没有（票 04 §1、票 07）。
+        for _ in 0..dropped {
+            links.pop_front();
         }
-        self.prune_links(dropped);
+        if view == Viewport::Conversation {
+            if let Some(user) = user {
+                self.turn_rail.push_line(user);
+            }
+            if dropped > 0 {
+                self.turn_rail.prune(dropped);
+            }
+        }
     }
 
     /// 这个会话数的是**轮**而不是回合。
@@ -1934,7 +2075,9 @@ impl TuiState {
             self.apply(event);
         }
         // 读的人追上来了：转录就是历史，视口在它的末尾，而一个刚开出来的会话本来就该在那里。
-        self.pane.to_bottom();
+        // 两个视口都回到末尾：历史重放长出来的内容两边都有（票 09）。
+        self.conversation.to_bottom();
+        self.trace.to_bottom();
         self.dirty = true;
     }
 
@@ -2003,21 +2146,82 @@ impl TuiState {
         self.thinking_open = true;
         self.thinking_speaker = speaker.clone();
         self.reasoning.clear();
-        // 名字是 `speaker_label`，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
-        // （票 07 §2）。
-        let line = self.thinking_in_progress_line(&speaker);
-        self.push_source(line, None, None);
+        // 名字打头，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
+        // （票 07 §2）。两个视口各画一遍：它们的前缀分档可能不同（票 09）。
+        self.paint_thinking_line(&speaker, self.targets());
         // 记进重放清单：宽度变化时它也要跟着回来（spec §1）。
         self.painted.push(Painted::Thinking { speaker });
         true
     }
 
+    /// 把「正在思考」那一行推进每条选中的视口。
+    fn paint_thinking_line(&mut self, speaker: &crate::events::SpeakerId, targets: Targets) {
+        if targets.conversation {
+            let line = self.thinking_in_progress_line(speaker, Viewport::Conversation);
+            self.push_line(Viewport::Conversation, line, None, None);
+        }
+        if targets.trace {
+            let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
+            self.push_line(Viewport::Trace, line, None, None);
+        }
+    }
+
+    /// 把定稿的思考行喂给每条选中的视口，并把它变成通向详情的入口。
+    ///
+    /// `in_place` 说它是**就地重写**还是**追加**：实时路径上那条「正在思考」已经在窗格里，
+    /// 冻住它就是重写最后一行；重放路径上窗格刚被清空，定稿那条要重新画出来
+    /// （票 02 §1、票 09）。每个视口各画一遍：思考行的构造依赖视图宽度（前缀分档）。
+    fn paint_settled_thinking(
+        &mut self,
+        speaker: &crate::events::SpeakerId,
+        text: Option<String>,
+        targets: Targets,
+        in_place: bool,
+    ) {
+        if targets.conversation {
+            let (line, detail) =
+                self.thinking_settled_line(speaker, text.clone(), Viewport::Conversation);
+            if in_place {
+                self.conversation.replace_last(line);
+                if let Some(link) = self.conversation_links.back_mut() {
+                    *link = Some(detail);
+                }
+            } else {
+                self.push_line(Viewport::Conversation, line, Some(detail), None);
+            }
+        }
+        if targets.trace {
+            let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
+            if in_place {
+                self.trace.replace_last(line);
+                if let Some(link) = self.trace_links.back_mut() {
+                    *link = Some(detail);
+                }
+            } else {
+                self.push_line(Viewport::Trace, line, Some(detail), None);
+            }
+        }
+    }
+
+    /// 这个视口里发言者前缀怎么写。
+    fn prefix_style_of(&self, view: Viewport) -> PrefixStyle {
+        let width = match view {
+            Viewport::Conversation => self.conversation_width,
+            Viewport::Trace => self.trace_width,
+        };
+        prefix_style(view, width)
+    }
+
     /// 思考开始那一行：名字加「正在思考」。重放时按同一份构造重建。
-    fn thinking_in_progress_line(&mut self, speaker: &crate::events::SpeakerId) -> Line<'static> {
-        let name = wording::speaker_label(speaker);
+    fn thinking_in_progress_line(
+        &mut self,
+        speaker: &crate::events::SpeakerId,
+        view: Viewport,
+    ) -> Line<'static> {
+        let style = self.prefix_style_of(view);
         let color = self.colors.of(speaker);
         Line::from(vec![
-            Span::styled(format!("{name} "), Style::default().fg(color)),
+            Span::styled(style.prefix(speaker), Style::default().fg(color)),
             Span::styled(
                 wording::thinking_in_progress(),
                 Style::default().fg(Color::DarkGray),
@@ -2030,13 +2234,14 @@ impl TuiState {
         &mut self,
         speaker: &crate::events::SpeakerId,
         trace: Option<String>,
+        view: Viewport,
     ) -> (Line<'static>, Detail) {
-        let name = wording::speaker_label(speaker);
+        let style = self.prefix_style_of(view);
         let color = self.colors.of(speaker);
         // 名字后面那个 `▸` 说的是这行可以打开 —— 它跟在发言者后面，这样每一行仍然以
         // 「谁在说话」开头（票 03 §Answer，2026-09-23 修正）。
         let line = Line::from(vec![
-            Span::styled(format!("{name} "), Style::default().fg(color)),
+            Span::styled(style.prefix(speaker), Style::default().fg(color)),
             Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 wording::thinking_finished(),
@@ -2076,11 +2281,7 @@ impl TuiState {
         self.thinking_done = true;
         // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
         let speaker = self.thinking_speaker.clone();
-        let (line, detail) = self.thinking_settled_line(&speaker, text.clone());
-        self.pane.replace_last(line);
-        if let Some(link) = self.links.back_mut() {
-            *link = Some(detail);
-        }
+        self.paint_settled_thinking(&speaker, text.clone(), self.targets(), true);
         // 重放清单里那一条也从「开着」换成「定稿」，连它的详情一起 —— 否则一次宽度变化
         // 会把这条行变回进行中，或者把它的 trace 丢掉（spec §1）。
         let settled = Painted::Thought {
@@ -2090,21 +2291,6 @@ impl TuiState {
         match self.painted.last_mut() {
             Some(slot @ Painted::Thinking { .. }) => *slot = settled,
             _ => self.painted.push(settled),
-        }
-    }
-
-    /// 丢掉窗格这一次丢掉的那些最老条目 —— `dropped` 就是 [`Pane::push`] 报回来的数，
-    /// 绘制侧不再自己数 `CAP`：一条来源行在两边要么意思相同、要么两边都没有（票 04 §1、
-    /// `.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
-    ///
-    /// 回合条的逐行索引也在同一口气里裁掉，理由相同：一条来源行属于哪个单位，是按窗格
-    /// 交回来的下标去查的。
-    fn prune_links(&mut self, dropped: usize) {
-        for _ in 0..dropped {
-            self.links.pop_front();
-        }
-        if dropped > 0 {
-            self.turn_rail.prune(dropped);
         }
     }
 
@@ -2123,6 +2309,11 @@ impl TuiState {
         // 那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西背后的
         // 转录（票 04 §2，`tui-sidebar` spec §7）。
         self.dirty = true;
+        // 指针落在轨迹页上吗？滚轮与点击按它分派（票 09）。`trace_rect` 只在上一帧真的画了
+        // 轨迹页时才有值，所以「记住读的人真看到了什么」这条纪律也管着视口的选择。
+        let over_trace = self
+            .trace_rect
+            .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
         // 1. 详情覆盖层直接占着指针。它的整个主体都滚，而再点一次它来自的那一行会关掉它
         // （票 02 §4）。
         if self.detail_open() {
@@ -2169,8 +2360,11 @@ impl TuiState {
                         if questionnaire {
                             self.question_click(QuestionClick::Wheel(up));
                         }
+                    } else if over_trace {
+                        // 问题立着、指针却在左栏轨迹页上：滚的是轨迹（票 09）。
+                        self.trace.wheel(up);
                     } else {
-                        self.pane.wheel(up);
+                        self.conversation.wheel(up);
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -2184,17 +2378,31 @@ impl TuiState {
         // 滚轮、指示器与折叠行都回应它。页签是个控件，所以它在周围的文字之前被问
         // （spec §7）。
         match mouse.kind {
-            MouseEventKind::ScrollUp => self.pane.wheel(true),
-            MouseEventKind::ScrollDown => self.pane.wheel(false),
+            // 滚轮落在哪个视口，就看指针在哪儿：左栏轨迹页里滚轨迹、转录上滚对话
+            // （票 09；冻结项 13 把它定为轨迹视图唯一的键盘/指针入口）。
+            MouseEventKind::ScrollUp if over_trace => self.trace.wheel(true),
+            MouseEventKind::ScrollDown if over_trace => self.trace.wheel(false),
+            MouseEventKind::ScrollUp => self.conversation.wheel(true),
+            MouseEventKind::ScrollDown => self.conversation.wheel(false),
             MouseEventKind::Down(MouseButton::Left) => {
                 match self.regions.action_at(mouse.column, mouse.row) {
                     Some(HitAction::SwitchTab(tab)) => self.tab = tab,
                     Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
-                    _ if self.indicator_hit(mouse.column, mouse.row) => self.pane.to_bottom(),
+                    _ if self.indicator_hit(Viewport::Trace, mouse.column, mouse.row) => {
+                        self.trace.to_bottom()
+                    }
+                    _ if self.indicator_hit(Viewport::Conversation, mouse.column, mouse.row) => {
+                        self.conversation.to_bottom()
+                    }
                     _ => {
                         let width =
                             layout::plan(self.area, 1, self.sidebar_wanted).detail_width() as usize;
-                        if let Some(detail) = self.link_hit(&mouse) {
+                        let view = if over_trace {
+                            Viewport::Trace
+                        } else {
+                            Viewport::Conversation
+                        };
+                        if let Some(detail) = self.link_hit(view, &mouse) {
                             self.open_detail(detail, width);
                         }
                     }
@@ -2330,10 +2538,10 @@ impl TuiState {
         if units == 0 {
             return None;
         }
-        if self.pane.following() {
+        if self.conversation.following() {
             return Some(units - 1);
         }
-        let source = self.pane.source_at(self.pane.top())?;
+        let source = self.conversation.source_at(self.conversation.top())?;
         Some(self.turn_rail.unit_of(source).min(units - 1))
     }
 
@@ -2345,21 +2553,30 @@ impl TuiState {
         let Some(head) = self.turn_rail.head(unit) else {
             return;
         };
-        self.pane.scroll_to_source(head);
+        self.conversation.scroll_to_source(head);
     }
 
     /// 一次点击落到的那个可点链接，拷成它要打开的东西。
     ///
     /// 覆盖层将在哪个宽度上打开，来自上一帧，那是中间块几何唯一已知的地方（票 04 §1）。
-    fn link_hit(&self, mouse: &MouseEvent) -> Option<Detail> {
-        let offset = (mouse.row.checked_sub(self.drawn_top)?) as usize;
-        let row = (*self.drawn_rows.get(offset)?)?;
-        self.links.get(row)?.clone()
+    /// 两个视口各有自己的窗口与平行表，所以按指针落在哪个视口取数（票 09）。
+    fn link_hit(&self, view: Viewport, mouse: &MouseEvent) -> Option<Detail> {
+        let (drawn, links) = match view {
+            Viewport::Conversation => (&self.conversation_drawn, &self.conversation_links),
+            Viewport::Trace => (&self.trace_drawn, &self.trace_links),
+        };
+        let offset = (mouse.row.checked_sub(drawn.top)?) as usize;
+        let row = (*drawn.rows.get(offset)?)?;
+        links.get(row)?.clone()
     }
 
-    /// 一次点击是否落在了「回到末尾」指示器上。
-    fn indicator_hit(&self, column: u16, row: u16) -> bool {
-        self.indicator.is_some_and(|rect| {
+    /// 一次点击是否落在了「回到末尾」指示器上。每个视口各有一个（票 09）。
+    fn indicator_hit(&self, view: Viewport, column: u16, row: u16) -> bool {
+        let slot = match view {
+            Viewport::Conversation => self.indicator,
+            Viewport::Trace => self.trace_indicator,
+        };
+        slot.is_some_and(|rect| {
             column >= rect.x
                 && column < rect.x.saturating_add(rect.width)
                 && row >= rect.y
@@ -2738,9 +2955,10 @@ impl TuiState {
         }
         match key {
             Key::Enter => self.submit(),
-            Key::PageUp => self.pane.page(true),
-            Key::PageDown => self.pane.page(false),
-            Key::CtrlG => self.pane.to_bottom(),
+            // 键盘三键仍只作用于对话视图：轨迹视图只吃滚轮（票 09，代价显式接受）。
+            Key::PageUp => self.conversation.page(true),
+            Key::PageDown => self.conversation.page(false),
+            Key::CtrlG => self.conversation.to_bottom(),
             // 编辑器认的每一个别的键；两条路径共用它们。
             _ => self.editor_key(key),
         }
@@ -2798,7 +3016,7 @@ impl TuiState {
         let Some(reply) = self.prompt_reply.take() else {
             return;
         };
-        self.pane.to_bottom();
+        self.conversation.to_bottom();
         let line = self.editor.submitted();
         // 「改完再 `@` 它」是索引的主要用法，所以每提交一条消息就在后台重扫一次
         // （`.scratch/input-tokens/spec.md` §1）。位在这里置，遍历由循环去发。
@@ -3358,6 +3576,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （`tui-chrome` §5）。两者都在下面各自画出来时被重新填上。
     state.modal_rect = None;
     state.questionnaire_bottom = None;
+    // 轨迹页的矩形与指示器同理：这一帧真画了才有值，指针只回应真看见的东西（票 09）。
+    state.trace_rect = None;
+    state.trace_indicator = None;
     if layout::below_minimum(area) {
         // 什么都不画，好让点击无处可落。
         state.indicator = None;
@@ -3369,6 +3590,12 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）。
     let content_rows = state.bottom_rows(area);
     let panes = layout::plan(area, content_rows, state.sidebar_wanted);
+    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：轨迹视图只在左栏可见时
+    // 物化（宽度为零 = 不物化），而它的宽度就是左栏页的宽度 —— 与现在显示哪一页无关，
+    // 因为它常驻，切页、收起再叫回才不会漏内容（票 09）。
+    let conversation_width = panes.transcript_text().width;
+    let trace_width = panes.sidebar_page.map_or(0, |page| page.width);
+    state.rerender_if_width_changed(conversation_width, trace_width);
     // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
     // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
     if state.questionnaire().is_some() {
@@ -3504,17 +3731,33 @@ fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, si
 ///
 /// 这些行来自排版的高度阶梯，所以被压扁的左栏是从尾部丢字段，而不是把三个要紧的读数裁掉
 /// （spec §2）。还没做出来的页面用一行说出来，而不是显示编出来的数据。
-fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let Some(page) = panes.sidebar_page else {
         return;
     };
+    // 轨迹页是**视图**：它自己那个窗格取景，并按这一帧真画出来的行填它自己的点击映射
+    // —— 与转录走的是同一条纪律（票 04 §1、票 09）。
+    if state.tab == Tab::Trace {
+        let rows = state.trace.view(page.width, page.height, &state.live);
+        state.trace_drawn.top = page.y;
+        state.trace_drawn.rows = (0..rows.len())
+            .map(|offset| state.trace.source_at(state.trace.top() + offset))
+            .collect();
+        // 滚轮与点击按它分派：指针落在这一块里就归轨迹视图。
+        state.trace_rect = Some(page);
+        frame.render_widget(Paragraph::new(rows), page);
+        draw_indicator(frame, page, state, Viewport::Trace);
+        return;
+    }
     let rows = match state.tab {
         Tab::Usage => state.panel.lines(&state.facts, page),
         Tab::Todo => state.todo.lines(page),
-        Tab::Trace | Tab::Files => vec![Line::from(Span::styled(
+        Tab::Files => vec![Line::from(Span::styled(
             truncate_columns(wording::tab_placeholder(), page.width as usize),
             Style::default().fg(Color::DarkGray),
         ))],
+        // 上面那个分支已经接走了它。
+        Tab::Trace => Vec::new(),
     };
     frame.render_widget(Paragraph::new(rows), page);
 }
@@ -4004,21 +4247,23 @@ fn mark_lines(frame: Option<u64>) -> Vec<(String, Color)> {
 /// （spec §1、§3、§4）。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let text_area = panes.transcript_text();
-    // 宽度变了要按新宽度重排那些宽度敏感的块，而不只是重新折行（spec §1）。
-    state.rerender_if_width_changed(text_area.width);
     let rows = state
-        .pane
+        .conversation
         .view(text_area.width, text_area.height, &state.live);
     // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于哪条
     // 来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
-    state.drawn_top = text_area.y;
-    state.drawn_rows = (0..rows.len())
-        .map(|offset| state.pane.source_at(state.pane.top() + offset))
+    state.conversation_drawn.top = text_area.y;
+    state.conversation_drawn.rows = (0..rows.len())
+        .map(|offset| {
+            state
+                .conversation
+                .source_at(state.conversation.top() + offset)
+        })
         .collect();
     frame.render_widget(Paragraph::new(rows), text_area);
-    draw_scrollbar(frame, panes.scrollbar(), &state.pane);
+    draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
     draw_turn_rail(frame, panes, state);
-    draw_indicator(frame, text_area, state);
+    draw_indicator(frame, text_area, state, Viewport::Conversation);
 }
 
 /// 回合条：每个回合一格（讨论里是每一轮），沿转录的右边缘往下（spec §4）。
@@ -4091,14 +4336,21 @@ fn draw_scrollbar(frame: &mut ratatui::Frame, track: Rect, pane: &Pane) {
 /// 窗格右下那个「来了什么、以及回去的路」的指示器。
 ///
 /// 它的整块都是点击目标，所以这个矩形记在窗格上 —— 一次点击只能落在上一帧画出来的东西上。
-fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) {
+fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, view: Viewport) {
+    let pane = match view {
+        Viewport::Conversation => &state.conversation,
+        Viewport::Trace => &state.trace,
+    };
     // 详情覆盖层占着转录的时候，回去的路是覆盖层自己的页脚：指示器的计数暂停了，它的点击不
     // 属于任何人（票 02 §4）。
-    if state.pane.following() || state.detail_open() || area.width == 0 || area.height == 0 {
-        state.indicator = None;
+    if pane.following() || state.detail_open() || area.width == 0 || area.height == 0 {
+        match view {
+            Viewport::Conversation => state.indicator = None,
+            Viewport::Trace => state.trace_indicator = None,
+        }
         return;
     }
-    let fresh = state.pane.fresh();
+    let fresh = pane.fresh();
     let text = if fresh == 0 {
         wording::back_to_bottom().to_owned()
     } else {
@@ -4122,7 +4374,10 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState) 
         ))),
         rect,
     );
-    state.indicator = Some(rect);
+    match view {
+        Viewport::Conversation => state.indicator = Some(rect),
+        Viewport::Trace => state.trace_indicator = Some(rect),
+    }
 }
 
 /// 主列的脚：输入行，以及它下面那行说明按键干什么的提示行。
@@ -4492,8 +4747,9 @@ fn attribute_document(
     rows: Vec<Line<'static>>,
     colors: &mut SpeakerColors,
     indent: u16,
+    style: PrefixStyle,
 ) -> Vec<Line<'static>> {
-    let prefix = format!("{} ", speaker_label(speaker));
+    let prefix = style.prefix(speaker);
     let name_style = name_style(speaker, colors);
     rows.into_iter()
         .enumerate()
@@ -4546,8 +4802,9 @@ fn attribute_speech(
     speaker: &crate::events::SpeakerId,
     rows: Vec<Line<'static>>,
     colors: &mut SpeakerColors,
+    style: PrefixStyle,
 ) -> Vec<Line<'static>> {
-    let prefix = format!("{} ", speaker_label(speaker));
+    let prefix = style.prefix(speaker);
     let indent = " ".repeat(prefix.as_str().cell_width() as usize);
     let name_style = name_style(speaker, colors);
     rows.into_iter()
@@ -4572,8 +4829,8 @@ fn attribute_speech(
 /// 一个发言者的 `[name] ` 前缀在终端上占多少列。
 ///
 /// 量的是**列**，中文名字按两列算 —— 与前缀本身的显示宽度同一把尺子。
-fn prefix_columns(speaker: &crate::events::SpeakerId) -> u16 {
-    format!("{} ", speaker_label(speaker)).as_str().cell_width()
+fn prefix_columns(speaker: &crate::events::SpeakerId, style: PrefixStyle) -> u16 {
+    style.prefix(speaker).as_str().cell_width()
 }
 
 /// 一个发言者的 `[name]` 前缀用什么样式画。
@@ -4591,9 +4848,10 @@ fn speaker_line(
     text: String,
     body: Style,
     colors: &mut SpeakerColors,
+    style: PrefixStyle,
 ) -> Line<'static> {
     Line::from(vec![
-        Span::styled(speaker_label(speaker), name_style(speaker, colors)),
+        Span::styled(style.label(speaker), name_style(speaker, colors)),
         Span::styled(format!(" {text}"), body),
     ])
 }
@@ -4629,6 +4887,45 @@ impl From<Line<'static>> for RenderedLine {
 /// 只关心文字的测试与任何别处的共享渲染。宽度敏感的块（表格、代码块）因此按这个宽度排版。
 const SHARED_RENDER_WIDTH: u16 = 80;
 
+/// 发言者前缀怎么写：宽档 `[名字] `，窄档把方括号去掉省给内容
+/// （`.scratch/trace-tab/spec.md` §3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrefixStyle {
+    Bracketed,
+    Bare,
+}
+
+impl PrefixStyle {
+    /// 这个名字在这一档里怎么写。
+    fn label(self, speaker: &crate::events::SpeakerId) -> String {
+        let label = speaker_label(speaker);
+        match self {
+            Self::Bracketed => label,
+            Self::Bare => label
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_owned(),
+        }
+    }
+
+    /// 名字加它后面那个空格 —— 每一条带名字的行都以它开头。
+    fn prefix(self, speaker: &crate::events::SpeakerId) -> String {
+        format!("{} ", self.label(speaker))
+    }
+}
+
+/// 一条带名字的行在这个视图里怎么写前缀。
+///
+/// 对话视图永远照旧带方括号；轨迹视图按左栏自己的两档来 —— 宽档 40 列带方括号、窄档 28 列
+/// 去掉（票 09）。
+fn prefix_style(view: Viewport, width: u16) -> PrefixStyle {
+    match view {
+        Viewport::Conversation => PrefixStyle::Bracketed,
+        Viewport::Trace if width >= layout::SIDEBAR_WIDE => PrefixStyle::Bracketed,
+        Viewport::Trace => PrefixStyle::Bare,
+    }
+}
+
 /// 把一个定稿的块变成带样式的终端行。
 ///
 /// 这是共享呈现层的 TUI 那一半：块已经被 [`Transcript`] 决定过一次，这里只发生绘制。
@@ -4636,7 +4933,7 @@ const SHARED_RENDER_WIDTH: u16 = 80;
 /// `colors` 是转录的名字调色板。手上没有名册的调用方 —— `plain` 的那一半渲染，以及只关心文字
 /// 的测试 —— 通过 [`render_block_uncoloured`] 传一个空的进来，于是每个名字都画成叙述灰。
 pub fn render_block(block: &Block, colors: &mut SpeakerColors) -> Vec<Line<'static>> {
-    paint_block(block, colors, SHARED_RENDER_WIDTH)
+    paint_block(block, colors, SHARED_RENDER_WIDTH, Viewport::Conversation)
         .into_iter()
         .map(|rendered| rendered.line)
         .collect()
@@ -4652,8 +4949,37 @@ pub fn render_block_uncoloured(block: &Block) -> Vec<Line<'static>> {
 ///
 /// `width` 是转录内容的可用列数：Markdown 里的表格与超宽代码行按它排版
 /// （`.scratch/markdown-render/spec.md` §1）。
-fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<RenderedLine> {
+fn paint_block(
+    block: &Block,
+    colors: &mut SpeakerColors,
+    width: u16,
+    view: Viewport,
+) -> Vec<RenderedLine> {
+    // 前缀的分档只看视图与它自己的宽度：同一块按两个宽度各画一次，各自都写对
+    // （票 09）。
+    let style = prefix_style(view, width);
     match block {
+        // 轨迹视图里的一条 assistant 消息：只画**首行 + `…`**，全文进详情覆盖层
+        // （`.scratch/trace-tab/spec.md` §3）。
+        Block::Message {
+            speaker,
+            role: Role::Assistant,
+            text,
+            reasoning: _,
+        } if view == Viewport::Trace => {
+            if text.is_empty() {
+                return Vec::new();
+            }
+            let indent = style.prefix(speaker).as_str().cell_width();
+            let rows = attribute_document(
+                speaker,
+                super::markdown::to_lines_indented(text, width, indent),
+                colors,
+                indent,
+                style,
+            );
+            vec![trace_message_row(speaker, rows, text, width, colors, style)]
+        }
         Block::Message {
             speaker,
             role: Role::Assistant,
@@ -4670,16 +4996,29 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             //
             // 前缀占的列交给渲染器：需要左边界对齐的块（表格、代码块）整块从那一列起，
             // 于是它们的左边界与第一行的 `[name] ` 对齐，而第一行前缀正好替换掉那段前导。
-            let indent = prefix_columns(speaker);
+            let indent = prefix_columns(speaker, style);
             attribute_document(
                 speaker,
                 super::markdown::to_lines_indented(text, width, indent),
                 colors,
                 indent,
+                style,
             )
             .into_iter()
             .map(RenderedLine::from)
             .collect()
+        }
+        // 轨迹视图里用户（或非 assistant 的系统行）的消息同样只画首行 + `…`。
+        Block::Message { speaker, text, .. } if view == Viewport::Trace => {
+            let rows = attribute_speech(
+                speaker,
+                text.split('\n')
+                    .map(|raw| Line::from(raw.to_owned()))
+                    .collect(),
+                colors,
+                style,
+            );
+            vec![trace_message_row(speaker, rows, text, width, colors, style)]
         }
         // 用户自己的输入 —— 以及非 assistant 的系统行 —— 按写下来的样子显示：每一行都在，
         // 什么都不略去，也不上 Markdown，因为这不是一份文档。续行与第一行正文对齐（spec §3）。
@@ -4689,6 +5028,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
                 .map(|raw| Line::from(raw.to_owned()))
                 .collect(),
             colors,
+            style,
         )
         .into_iter()
         .map(RenderedLine::from)
@@ -4717,7 +5057,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             }
             lines
         }
-        Block::Tool(tool) => tool_block_lines(tool, colors),
+        Block::Tool(tool) => tool_block_lines(tool, colors, style),
         // 后置 hook 的反馈，关于刚画出来的那次调用：一行普通的缩进行，黄色，因为说话的是策略
         // 而不是工具。
         Block::ToolFeedback { outcome, .. } => vec![Line::from(Span::styled(
@@ -4730,13 +5070,18 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             wording::turn_started(*iteration),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
+            style,
         )
         .into()],
         Block::TurnEnded { speaker, reason } => {
-            vec![
-                severity_speaker_line(speaker, *reason, wording::turn_ended(*reason), colors)
-                    .into(),
-            ]
+            vec![severity_speaker_line(
+                speaker,
+                *reason,
+                wording::turn_ended(*reason),
+                colors,
+                style,
+            )
+            .into()]
         }
         Block::PermissionAsked {
             speaker,
@@ -4747,6 +5092,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             wording::permission_asked(tool_name.as_deref(), &summarize_args(args)),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
+            style,
         )
         .into()],
         Block::PermissionDecided {
@@ -4759,6 +5105,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             wording::permission_decided(*decision, *source, reason.as_deref()),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
+            style,
         )
         .into()],
         Block::Hook {
@@ -4770,6 +5117,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             wording::hook(point, outcome),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
+            style,
         )
         .into()],
         Block::ExecutorSpawned {
@@ -4780,6 +5128,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             wording::executor_spawned(executor_id.as_str()),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
+            style,
         )
         .into()],
         Block::ExecutorFinished {
@@ -4796,6 +5145,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             wording::usage_summary(usage),
             Style::default().fg(ratatui::style::Color::DarkGray),
             colors,
+            style,
         )
         .into()],
         Block::AgentError { speaker, message } => vec![severity_speaker_line(
@@ -4803,6 +5153,7 @@ fn paint_block(block: &Block, colors: &mut SpeakerColors, width: u16) -> Vec<Ren
             StopReason::Error,
             wording::agent_error(message),
             colors,
+            style,
         )
         .into()],
         Block::SessionError { code, detail } => {
@@ -4863,8 +5214,9 @@ fn severity_speaker_line(
     reason: StopReason,
     text: String,
     colors: &mut SpeakerColors,
+    style: PrefixStyle,
 ) -> Line<'static> {
-    speaker_line(speaker, text, severity_style(reason), colors)
+    speaker_line(speaker, text, severity_style(reason), colors, style)
 }
 
 /// 一个停止点把它那一行画成什么颜色。
@@ -4884,16 +5236,17 @@ fn severity_style(reason: StopReason) -> Style {
 /// 失败是同一行在**末尾**多一个 `失败` —— 不是第二行 —— 而错误正文移进详情。后置 hook 的反馈
 /// 是自己的一个块、留在屏幕上：它是策略的反馈，不是工具输出，所以不点也必须是可读的
 /// （票 02 §3）。
-fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<RenderedLine> {
+fn tool_block_lines(
+    tool: &ToolBlock,
+    colors: &mut SpeakerColors,
+    style: PrefixStyle,
+) -> Vec<RenderedLine> {
     let failed = matches!(&tool.outcome, Some(outcome) if !outcome.ok);
     let color = colors.of(&tool.speaker);
     let mut call = vec![
         // 名字打头，于是每条转录行都以谁在说话开头；它后面那个标记说的是这行可以打开。它是
         // 绘制、不是文案，所以不是那句话的一部分（票 03 §Answer）。
-        Span::styled(
-            format!("{} ", speaker_label(&tool.speaker)),
-            Style::default().fg(color),
-        ),
+        Span::styled(style.prefix(&tool.speaker), Style::default().fg(color)),
         Span::styled("▸ ", Style::default().fg(Color::DarkGray)),
         // 这次调用是*为了*什么，用思考行穿的那个叙述灰 —— 参数本身离一次点击之遥
         // （票 02 §2，2026-09-23 修正）。
@@ -4928,6 +5281,77 @@ fn tool_block_lines(tool: &ToolBlock, colors: &mut SpeakerColors) -> Vec<Rendere
         },
     };
     vec![RenderedLine::linked(Line::from(call), detail)]
+}
+
+/// 轨迹视图里的一条消息行：**首行 + `…`**，全文挂在详情里
+/// （`.scratch/trace-tab/spec.md` §3）。
+///
+/// `rows` 是这条消息按轨迹宽度照排出来的那些行 —— 只取第一行，所以表格、代码块的首行走的
+/// 仍是它们本来的排版。还有更多行、或者首行本身就超宽时，就截到那一行并加 `…`。
+fn trace_message_row(
+    speaker: &crate::events::SpeakerId,
+    rows: Vec<Line<'static>>,
+    text: &str,
+    width: u16,
+    colors: &mut SpeakerColors,
+    style: PrefixStyle,
+) -> RenderedLine {
+    let mut rows = rows.into_iter();
+    let mut head = rows.next().unwrap_or_else(|| {
+        // 一条空消息也要有个名字，好让读者知道这里有一条消息。
+        Line::from(Span::styled(
+            style.prefix(speaker),
+            Style::default().fg(colors.of(speaker)),
+        ))
+    });
+    let more = rows.next().is_some();
+    let over = text_columns(&line_text(&head)) > width as usize;
+    if more || over {
+        head = ellipsize_line(head, width as usize);
+    }
+    let detail = Detail {
+        title: line_text(&head),
+        color: colors.of(speaker),
+        kind: DetailKind::Message {
+            text: text.to_owned(),
+        },
+    };
+    RenderedLine::linked(head, detail)
+}
+
+/// 把一条带样式的行裁到 `width` 列，并用一个 `…` 收尾。
+///
+/// 与 [`truncate_columns`] 的区别是它保住每一片的样式：轨迹页那条消息行还带着发言者的
+/// 颜色，砍掉它会一并砍掉「谁在说话」。
+fn ellipsize_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let budget = width.saturating_sub(1);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for span in line.spans {
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let columns = char_columns(ch);
+            if used + columns > budget {
+                break;
+            }
+            kept.push(ch);
+            used += columns;
+        }
+        if !kept.is_empty() {
+            spans.push(Span::styled(kept, span.style));
+        }
+        if used >= budget {
+            break;
+        }
+    }
+    // `…` 跟着最后一片的样式，好让它读起来是那一行的一部分。
+    let style = spans.last().map(|span| span.style).unwrap_or_default();
+    spans.push(Span::styled("…", style));
+    Line {
+        spans,
+        style: line.style,
+        alignment: line.alignment,
+    }
 }
 
 /// 一条来源行是不是用户自己的消息，那正是回合条一格跳转所瞄准的（spec §4）。
@@ -5063,6 +5487,9 @@ enum DetailKind {
         source: ContextSource,
         content: String,
     },
+    /// 一条消息的全文 —— 轨迹视图里那行只画首行 + `…`，正文住在这里
+    /// （`.scratch/trace-tab/spec.md` §3）。
+    Message { text: String },
     /// 一次工具调用：它的参数，以及这次调用产出了什么。
     Tool {
         /// 给落盘输出文件命名的那个 id，`outputs/<id>.txt`。
@@ -5122,8 +5549,9 @@ impl TuiState {
     fn close_detail(&mut self) {
         if self.detail.take().is_some() {
             // 阅读位置是覆盖层的；放开它就是把转录送回底部，而计数也从那里重新起算。
-            self.pane.set_holding(false);
-            self.pane.set_following(true);
+            // 按视图还原打开前的位置是下一张票（13）的事，这里先保持旧行为。
+            self.conversation.set_holding(false);
+            self.conversation.set_following(true);
         }
     }
 
@@ -5157,6 +5585,10 @@ impl TuiState {
 fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<Line<'static>> {
     let mut rows: Vec<Line<'static>> = Vec::new();
     match &detail.kind {
+        DetailKind::Message { text } => {
+            rows.push(section_header(wording::detail_message_section()));
+            rows.extend(pane::wrap_text(text, width));
+        }
         DetailKind::Thinking { text } => {
             rows.push(section_header(wording::detail_thinking_section()));
             match text {
@@ -5275,8 +5707,8 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     };
     // 转录冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让「N 行新内容」的计数在
     // 他们正读的覆盖层底下往上爬（票 02 §4）。
-    state.pane.set_following(false);
-    state.pane.set_holding(true);
+    state.conversation.set_following(false);
+    state.conversation.set_holding(true);
     // 框外的一次点击能打中什么，只有记下来之后才存在。
     state.detail_rect = Some(area);
     let Some(view) = state.detail.as_ref() else {
@@ -5364,11 +5796,11 @@ mod tests {
     fn the_link_table_keeps_pace_with_the_pane_at_the_cap() {
         let mut state = state();
         for _ in 0..pane::CAP + 2 {
-            state.push_source(Line::from("x"), None, Some(false));
+            state.push_line(Viewport::Conversation, Line::from("x"), None, Some(false));
         }
-        assert_eq!(state.pane.sources(), pane::CAP);
-        assert_eq!(state.links.len(), state.pane.sources());
-        assert_eq!(state.turn_rail.lines.len(), state.pane.sources());
+        assert_eq!(state.conversation.sources(), pane::CAP);
+        assert_eq!(state.conversation_links.len(), state.conversation.sources());
+        assert_eq!(state.turn_rail.lines.len(), state.conversation.sources());
     }
 
     /// 一条上下文注入在转录里是一行，在详情里是它的正文（票 19）。
@@ -5379,7 +5811,7 @@ mod tests {
             content: "[注入] MCP 加载\n\n- `fake`（stdio）：已连接\n".to_owned(),
         };
         let mut colors = SpeakerColors::new(&[]);
-        let lines = paint_block(&block, &mut colors, 80);
+        let lines = paint_block(&block, &mut colors, 80, Viewport::Conversation);
         assert_eq!(lines.len(), 1, "注入只占一行");
         let detail = lines[0].link.clone().expect("这一行该点得开");
         assert_eq!(detail.title, "[上下文注入：MCP 加载]");

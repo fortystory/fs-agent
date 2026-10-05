@@ -43,7 +43,10 @@ const TRAILING_COLUMNS: u16 = 2;
 
 /// 左栏的两个内容宽度（spec §2）。两者之间刻意没有档：prototype 量过中间那一档，它换回来
 /// 的 `（6%）` 已经在状态行里了。
-const SIDEBAR_WIDE: u16 = 40;
+///
+/// 宽档是公开的，因为轨迹视图的前缀分档要问「这是不是宽档」—— 宽档带方括号、窄档去掉
+/// （`.scratch/trace-tab/spec.md` §3）。判据只此一处，渲染器不再自己写一个 40。
+pub const SIDEBAR_WIDE: u16 = 40;
 const SIDEBAR_NARROW: u16 = 28;
 
 /// 左栏每一档开始的宽度。

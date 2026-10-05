@@ -1295,20 +1295,26 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     use fs_agent::render::wording;
 
     let mut state = state();
+    state.live_event(RenderEvent::Notice("换页之前的一句话".to_owned()));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
         !text.contains(wording::tab_placeholder()),
         "在显示调用量那一页：{text}"
     );
 
-    // 轨迹 还没做，所以它照实说，而不是显示编出来的数据。
+    // 轨迹页现在是真视图：切过去看到的是轨迹内容，不再是一句
+    // 「尚未实现」（trace-tab 票 09）。
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, "轨迹");
     state.mouse(click(column, row));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(wording::tab_placeholder()),
-        "页面上是那句占位：{text}"
+        !text.contains(wording::tab_placeholder()),
+        "轨迹页不再是占位：{text}"
+    );
+    assert!(
+        text.contains("换页之前的一句话"),
+        "轨迹页画着转录里的东西：{text}"
     );
     assert!(!text.contains("token"), "而读数不在：{text}");
     // 于是状态行成了唯一一项读数 —— 这是占位页被接受的
@@ -6128,4 +6134,264 @@ fn a_code_block_is_highlighted_within_the_transcript() {
         "逐字保留：{:?}",
         rows[code]
     );
+}
+
+// ---------------------------------------------------------------------------
+// 轨迹视图（`.scratch/trace-tab/spec.md` §1、§3、§5；票 09）
+// ---------------------------------------------------------------------------
+
+/// 指定坐标上的一格滚轮 —— 两个视口按指针位置分派，所以坐标是这件事的一部分。
+fn wheel_at(column: u16, row: u16, up: bool) -> ratatui::crossterm::event::MouseEvent {
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    MouseEvent {
+        kind: if up {
+            MouseEventKind::ScrollUp
+        } else {
+            MouseEventKind::ScrollDown
+        },
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+/// 左栏页区里的那些行：身份与页签条都不算，空行也不占位置。
+fn trace_page(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let rows = sidebar_rows(state, width, height);
+    let top = sidebar_page(&rows);
+    rows[top..]
+        .iter()
+        .filter(|row| !row.trim().is_empty())
+        .cloned()
+        .collect()
+}
+
+/// 主列那一半的行，左栏不算 —— 用来断言「转录一个字没动」。
+///
+/// 左栏的两档宽度不同，所以起点跟着宽度走，而不是写死一个 40。
+fn conversation_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let left = if width >= 120 {
+        41
+    } else if width >= 80 {
+        29
+    } else {
+        0
+    };
+    let frame = buffer(width, height, state);
+    (0..height).map(|y| cells(&frame, y, left, width)).collect()
+}
+
+/// 切到轨迹页，跟点它的页签一样。
+///
+/// 切换之后**再画一帧**：`trace_rect` 记的是上一帧真画出来的东西，指针分派就靠它
+/// （票 04 §1 的那条纪律）。
+fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
+    let row = tab_bar_row(state, width, height);
+    click_in_row(state, width, height, row, wording::TAB_TRACE);
+    let _ = screen(width, height, state);
+}
+
+/// 轨迹页是一条真视图：它画着转录里的东西，而且贴底跟随。
+#[test]
+fn the_trace_page_carries_the_transcript_and_sits_at_the_bottom() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("第 39 句话")),
+        "最新那句贴底可见：{page:#?}"
+    );
+    assert!(
+        !page.iter().any(|row| row.contains("第 0 句话")),
+        "更老的那些被滚出了页区：{page:#?}"
+    );
+}
+
+/// 滚轮按指针位置分派：左栏里滚轨迹、转录上滚对话，互不打扰（票 09 验证 1）。
+#[test]
+fn the_wheel_over_the_trace_page_scrolls_it_and_leaves_the_conversation_alone() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let conversation_before = conversation_rows(&mut state, 120, 24);
+    // 指针落在左栏页区里：滚的是轨迹页。
+    state.mouse(wheel_at(10, 12, true));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        !page.iter().any(|row| row.contains("第 39 句话")),
+        "轨迹页往上滚了：{page:#?}"
+    );
+    assert_eq!(
+        conversation_rows(&mut state, 120, 24),
+        conversation_before,
+        "转录一个字没动"
+    );
+    // 指针落在转录上：滚的是对话视图。
+    state.mouse(wheel_at(90, 12, true));
+    assert_ne!(
+        conversation_rows(&mut state, 120, 24),
+        conversation_before,
+        "转录跟着滚了"
+    );
+}
+
+/// 轨迹页离开底部之后也画「N 条新行」，而且那个块点得动。
+#[test]
+fn the_trace_page_offers_a_clickable_way_back_to_the_bottom() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    state.mouse(wheel_at(10, 12, true));
+    let frame = buffer(120, 24, &mut state);
+    let Some((column, row)) = cell_of(&frame, 120, 24, "点此到底") else {
+        panic!(
+            "轨迹页上该出现回去的指示器：{:?}",
+            screen(120, 24, &mut state)
+        );
+    };
+    state.mouse(click(column, row));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("第 39 句话")),
+        "点它回到了最新：{page:#?}"
+    );
+}
+
+/// 切页不丢阅读进度：轨迹页的位置在切走再切回之后还在（票 09 验证 1）。
+#[test]
+fn the_trace_page_keeps_its_place_across_a_tab_switch() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    state.mouse(wheel_at(10, 12, true));
+    let before = trace_page(&mut state, 120, 24);
+    let top_before = before.first().cloned().expect("轨迹页有内容");
+
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_USAGE);
+    let _ = screen(120, 24, &mut state);
+    assert!(
+        trace_page(&mut state, 120, 24)
+            .iter()
+            .any(|row| row.contains("上下文")),
+        "调用量页在显示它自己的字段"
+    );
+    open_trace_tab(&mut state, 120, 24);
+    let after = trace_page(&mut state, 120, 24);
+    assert_eq!(
+        after.first().cloned(),
+        Some(top_before),
+        "位置还在：{after:#?}"
+    );
+}
+
+/// 轨迹页里点一行开得出详情（票 09 验证 1）。
+#[test]
+fn a_row_in_the_trace_page_opens_its_detail() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls -la"}),
+    ));
+    state.apply(tool_completed(2, "call-1", true, Some("全部文件"), None));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let Some((column, row)) = cell_of(&frame, 120, 24, "调用 bash") else {
+        panic!("轨迹页上该有那次调用");
+    };
+    state.mouse(click(column, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("参数"), "详情覆盖层开着：{text}");
+    assert!(text.contains("ls -la"), "里面是这次调用的参数：{text}");
+}
+
+/// 轨迹页里的一条消息只占**首行 + `…`**，点开才看得到全文（票 09 验证 2）。
+#[test]
+fn a_message_in_the_trace_page_is_one_line_that_opens_its_full_text() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(message(1, "第一行在这里\n第二行在那里", None));
+    open_trace_tab(&mut state, 120, 24);
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter()
+            .any(|row| row.contains("第一行在这里") && row.contains('…')),
+        "首行带省略号：{page:#?}"
+    );
+    assert!(
+        !page.iter().any(|row| row.contains("第二行在那里")),
+        "第二行不在轨迹页上：{page:#?}"
+    );
+
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第一行在这里").expect("轨迹页上那行消息");
+    state.mouse(click(column, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("第二行在那里"), "详情里有全文：{text}");
+}
+
+/// 窄档（28 列）的前缀去掉方括号，宽档照旧（票 09 验证 3）。
+#[test]
+fn the_narrow_trace_page_drops_the_brackets_from_the_prefix() {
+    let mut narrow = state_with_roster(&["kimi"]);
+    narrow.apply(user_message(1, "问题"));
+    open_trace_tab(&mut narrow, 80, 24);
+    let page = trace_page(&mut narrow, 80, 24);
+    assert!(
+        page.iter().any(|row| row.starts_with("用户 ")),
+        "窄档的前缀不带方括号：{page:#?}"
+    );
+    assert!(
+        !page.iter().any(|row| row.starts_with("[用户]")),
+        "{page:#?}"
+    );
+
+    let mut wide = state_with_roster(&["kimi"]);
+    wide.apply(user_message(1, "问题"));
+    open_trace_tab(&mut wide, 120, 24);
+    let page = trace_page(&mut wide, 120, 24);
+    assert!(
+        page.iter().any(|row| row.starts_with("[用户] ")),
+        "宽档照旧：{page:#?}"
+    );
+}
+
+/// 宽度变化按目标掩码重放：两个视口都按新宽度重建，且共享源只被放一遍
+/// （票 09 验证 4 走的就是这条 `emit_painted` 路径 —— `--continue` 的重放与实时
+/// 共用它）。
+#[test]
+fn a_width_change_replays_the_trace_page_too() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let _ = screen(120, 24, &mut state);
+
+    // 缩到 80 列：左栏从 40 变 28，两个视口的源行都得按新宽度重排。
+    let page = trace_page(&mut state, 80, 24);
+    assert!(
+        page.iter().any(|row| row.contains("第 39 句话")),
+        "重放之后轨迹页仍贴底：{page:#?}"
+    );
+    let conversation = conversation_rows(&mut state, 80, 24);
+    assert!(
+        conversation.iter().any(|row| row.contains("第 39 句话")),
+        "对话视图也还在：{conversation:#?}"
+    );
+    let lines = conversation
+        .iter()
+        .filter(|row| row.contains("句话"))
+        .count();
+    assert!(lines <= 24, "对话视图没有被推第二遍：{conversation:#?}");
 }
