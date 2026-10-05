@@ -34,6 +34,13 @@ pub const READ_FILE: &str = "read_file";
 pub const WRITE_FILE: &str = "write_file";
 pub const EDIT_FILE: &str = "edit_file";
 
+/// 一次 `read_file` 不给 `limit` 时最多读多少行。
+///
+/// 数字照抄 codex 的 `DEFAULT_MAX_LINES_TEXT_FILE`（`docs/research/notes/codex-gemini.md`）：
+/// 行式窗口是这一层的共识，不需要自己发明一个。它落在单次结果的上限（缺省 25k 估算 token）之下，
+/// 所以一个默认窗口自己不该撞上截断。
+pub const DEFAULT_READ_LINES: usize = 2000;
+
 /// `/undo` 为一次编辑读的那个文件名：这次编辑实际替换掉的字节（spec §11）。
 ///
 /// 产生这个名字与找到它共用这个函数，所以这条例会不会像一对 `format!` 调用那样漂掉。
@@ -45,6 +52,57 @@ pub fn before_artifact(tool_call_id: &str) -> String {
 struct ReadFileArgs {
     #[serde(default, deserialize_with = "nullable_string")]
     file_path: String,
+}
+
+/// 一次 `read_file` 的读窗口：从哪一行开始、最多读多少行。
+///
+/// `offset` 是**文件里的** 1-based 行号（不是窗口内的序号），所以结果里的行号、模型写给
+/// `edit_file` 的上下文与落盘的全文共用同一个坐标系（spec §2）。`offset` 留着 `Option`
+/// 是因为「没给」与「给了 1」在空文件上判得不一样（spec §4）。
+struct ReadWindow {
+    offset: Option<usize>,
+    limit: usize,
+}
+
+impl ReadWindow {
+    /// 模型没给 `offset` 时的起点。
+    fn start(&self) -> usize {
+        self.offset.unwrap_or(1)
+    }
+}
+
+fn read_window(args: &Value) -> Result<ReadWindow, ToolError> {
+    Ok(ReadWindow {
+        offset: positive_line_arg(args, "offset", "行号")?,
+        limit: positive_line_arg(args, "limit", "行数")?.unwrap_or(DEFAULT_READ_LINES),
+    })
+}
+
+/// 一个存在就必须是正整数的可选参数，用法照 `bash` 的 `requested_timeout_ms`：一个存在但不是
+/// 正整数的值是参数错误，而不是悄悄回退到默认值。
+fn positive_line_arg(args: &Value, name: &str, unit: &str) -> Result<Option<usize>, ToolError> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .map(Some)
+            .ok_or_else(|| {
+                ToolError::message(format!("{READ_FILE}：`{name}` 必须是 ≥ 1 的整数{unit}"))
+            }),
+    }
+}
+
+/// 还有未读行时，结果末尾那一行：读到了哪一段、文件一共多长、接着从哪读。
+///
+/// 它只在还有未读行时出现，所以一个读完的小文件输出与加窗口之前一字不差（spec §3）。它与截断
+/// 标记是两回事：截断说的是「这条结果被流水线裁过」，这一行说的是「这个文件你还没读完」。
+fn resume_note(first: usize, last: usize, total: usize) -> String {
+    format!(
+        "（第 {first}–{last} 行，共 {total} 行；续读 offset={}）\n",
+        last + 1
+    )
 }
 
 impl ReadFile {
@@ -112,7 +170,11 @@ impl Tool for ReadFile {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: READ_FILE.to_owned(),
-            description: "读取工作区里的一个文件，返回带行号的内容".to_owned(),
+            description: format!(
+                "读取工作区里的一个文件，返回带行号的内容（行号是文件里的行号）。不写 `limit` \
+                 时最多读 {DEFAULT_READ_LINES} 行；还有没读到的行时，结果末尾会给出接着读的 \
+                 `offset`"
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -120,6 +182,15 @@ impl Tool for ReadFile {
                         "type": "string",
                         "description": "文件路径：绝对路径，或相对于工作区根目录；工作区之外的\
                                           路径会被拒绝"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "可选，从第几行开始读：1 开始计的行号，不写就从第 1 行开始"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "可选，最多读多少行，不写就是上面那个默认值。接着往下读\
+                                          时用结果末尾给出的 `offset`"
                     }
                 },
                 "required": ["file_path"]
@@ -143,13 +214,34 @@ impl Tool for ReadFile {
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<ToolOutput, ToolError> {
         let parsed: ReadFileArgs = parse(&args)?;
         let requested = required_path(READ_FILE, &parsed.file_path)?;
+        let window = read_window(&args)?;
         let path = ctx.read_paths.resolve_read(&requested)?;
         let content = std::fs::read_to_string(&path)
             .map_err(|error| ToolError::message(format!("无法读取 {}：{error}", path.display())))?;
 
+        let lines: Vec<&str> = content.lines().collect();
+        let total = lines.len();
+        let start = window.start();
+        // 一次落在文件之外的窗口是一次参数错，不是「图景陈旧」：读权限没有理由被收回。空文件只
+        // 在模型**显式**指了行号时才算落在外面 —— 不指行号地读一个空文件仍然读得动。
+        if (total == 0 || start > total) && window.offset.is_some() {
+            return Err(ToolError::message(format!(
+                "{READ_FILE}：{} 没有第 {start} 行，文件只有 {total} 行",
+                path.display()
+            )));
+        }
+        // 空文件没有行可打印，但也不是一次失败（显式指行号的那种已经在上一条被拒了）。
+        let first = if total == 0 { 1 } else { start };
+        // 加法的两头都可能顶到 `usize` 的天花板（模型给一个荒唐的 `limit`），所以这里饱和相加：
+        // 一个极大的窗口就是「读到末尾」，而 debug 构建下的一次溢出 panic 比一个夸张的数字糟。
+        let end = total.min(first.saturating_sub(1).saturating_add(window.limit));
+
         let mut text = format!("{}\n", path.display());
-        for (index, line) in content.lines().enumerate() {
-            text.push_str(&format!("{}\t{line}\n", index + 1));
+        for (index, line) in lines[first - 1..end].iter().enumerate() {
+            text.push_str(&format!("{}\t{line}\n", first + index));
+        }
+        if end < total {
+            text.push_str(&resume_note(first, end, total));
         }
         Ok(ToolOutput::new(text))
     }

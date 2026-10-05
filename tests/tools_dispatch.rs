@@ -522,3 +522,219 @@ async fn the_scheduler_partitions_calls_by_declared_effect() {
     assert_eq!(registry.specs().len(), 1);
     assert_eq!(registry.specs()[0].name, "read_file");
 }
+
+// ── `read_file` 的读窗口：`offset` / `limit`（`.scratch/file-read-window/spec.md`） ──
+//
+// 这一组钉三件互相独立的事：窗口取的是哪一段、行号是谁的坐标系、以及读完之后还能不能改。
+
+/// 造一个 `lines` 行的文件，第 n 行是 `line-n`。
+fn numbered_file(fixture: &Fixture, name: &str, lines: usize) -> PathBuf {
+    let content: String = (1..=lines).map(|n| format!("line-{n}\n")).collect();
+    fixture.write(name, &content)
+}
+
+/// 一次带窗口参数的 `read_file` 调用：`extra` 里的键并进基本参数。
+fn window_call(fixture: &Fixture, file: &Path, extra: serde_json::Value) -> PendingCall {
+    let mut args = json!({ "file_path": file.to_str().unwrap() });
+    let object = args.as_object_mut().expect("一个对象");
+    for (key, value) in extra.as_object().cloned().unwrap_or_default() {
+        object.insert(key, value);
+    }
+    fixture.call("call-read", "read_file", args)
+}
+
+async fn read_text(fixture: &mut Fixture, file: &Path, extra: serde_json::Value) -> String {
+    let call = window_call(fixture, file, extra);
+    fixture
+        .dispatch(&call)
+        .await
+        .result
+        .expect("这次读成功")
+        .text
+}
+
+#[tokio::test]
+async fn a_window_reads_that_stretch_with_the_files_own_line_numbers() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 5);
+
+    let text = read_text(&mut fixture, &file, json!({ "offset": 2, "limit": 2 })).await;
+
+    assert!(text.contains("2\tline-2"), "{text}");
+    assert!(text.contains("3\tline-3"), "{text}");
+    assert!(!text.contains("1\tline-1"), "窗口前的行不出现：{text}");
+    assert!(!text.contains("4\tline-4"), "窗口后的行不出现：{text}");
+    assert!(
+        text.contains("续读 offset=4"),
+        "还有未读行就说清下一句：{text}"
+    );
+    assert!(text.contains("共 5 行"), "{text}");
+}
+
+#[tokio::test]
+async fn the_default_window_stops_at_the_default_line_count_and_says_where_to_resume() {
+    let mut fixture = Fixture::new();
+    let default = fs_agent::tools::DEFAULT_READ_LINES;
+    let file = numbered_file(&fixture, "big.txt", default + 1);
+
+    let text = read_text(&mut fixture, &file, json!({})).await;
+
+    assert!(
+        text.contains(&format!("{default}\tline-{default}")),
+        "读到第 {default} 行：{text}"
+    );
+    assert!(
+        !text.contains(&format!("{}\tline-{}", default + 1, default + 1)),
+        "第 {} 行还没读：{text}",
+        default + 1
+    );
+    assert!(text.contains(&format!("共 {} 行", default + 1)), "{text}");
+    assert!(
+        text.contains(&format!("续读 offset={}", default + 1)),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_small_file_still_reads_exactly_like_before() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "small.txt", 3);
+
+    let text = read_text(&mut fixture, &file, json!({})).await;
+
+    assert_eq!(
+        text,
+        format!("{}\n1\tline-1\n2\tline-2\n3\tline-3\n", file.display()),
+        "整读一个小文件：输出与加窗口之前一字不差（没有续读那一行）"
+    );
+}
+
+#[tokio::test]
+async fn a_window_that_reaches_the_end_has_no_resume_note() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 5);
+
+    let text = read_text(&mut fixture, &file, json!({ "offset": 4, "limit": 100 })).await;
+
+    assert!(text.contains("5\tline-5"), "{text}");
+    assert!(!text.contains("续读"), "读到末尾就没什么可续的：{text}");
+}
+
+#[tokio::test]
+async fn an_offset_past_the_end_reports_how_long_the_file_is() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 3);
+
+    let call = window_call(&fixture, &file, json!({ "offset": 99 }));
+    let outcome = fixture.dispatch(&call).await;
+
+    assert!(!outcome.invalidated_reads, "参数错不该收回读权限");
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("文件只有 3 行"), "{error}");
+}
+
+#[tokio::test]
+async fn a_window_read_authorizes_an_edit_outside_that_window() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 5);
+
+    // 只读了第 1 行……
+    let _ = read_text(&mut fixture, &file, json!({ "offset": 1, "limit": 1 })).await;
+    // ……改第 5 行照样放行：读集按路径登记，没有行区间（spec §5 的已知边界）。
+    let outcome = fixture
+        .dispatch(&edit_call(&fixture, "call-edit", &file, "line-5", "edited"))
+        .await;
+
+    assert!(outcome.is_ok(), "窗口读之后 edit_file 照常放行");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("edited"));
+}
+
+#[tokio::test]
+async fn a_failed_window_does_not_authorize_a_write() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 3);
+
+    let call = window_call(&fixture, &file, json!({ "offset": 99 }));
+    let _ = fixture.dispatch(&call).await;
+
+    let outcome = fixture
+        .dispatch(&edit_call(&fixture, "call-edit", &file, "line-1", "x"))
+        .await;
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(
+        error.contains(READ_BEFORE_WRITE_PREFIX),
+        "失败读不留授权：{error}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_offsets_and_limits_are_argument_errors() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 3);
+
+    let cases = [
+        (json!({ "offset": 0 }), "offset"),
+        (json!({ "offset": -1 }), "offset"),
+        (json!({ "offset": "2" }), "offset"),
+        (json!({ "limit": 0 }), "limit"),
+        (json!({ "limit": "many" }), "limit"),
+    ];
+    for (extra, field) in cases {
+        let call = window_call(&fixture, &file, extra.clone());
+        let outcome = fixture.dispatch(&call).await;
+        let error = outcome
+            .result
+            .unwrap_err()
+            .to_string()
+            .replace("read_file", "");
+        assert!(
+            error.contains(&format!("`{field}`")),
+            "{extra} 该报 {field} 的参数错误：{error}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "line-1\nline-2\nline-3\n",
+        "参数错不会碰文件"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_file_reads_empty_and_an_explicit_offset_says_zero_lines() {
+    let mut fixture = Fixture::new();
+    let file = fixture.write("empty.txt", "");
+
+    let text = read_text(&mut fixture, &file, json!({})).await;
+    assert_eq!(text, format!("{}\n", file.display()), "空文件仍然读得动");
+
+    let call = window_call(&fixture, &file, json!({ "offset": 1 }));
+    let error = fixture
+        .dispatch(&call)
+        .await
+        .result
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("文件只有 0 行"), "{error}");
+}
+
+#[tokio::test]
+async fn a_window_read_is_still_read_only() {
+    let fixture = Fixture::new();
+    let read = fixture.registry.get("read_file").unwrap();
+    assert_eq!(
+        read.effect(&json!({ "file_path": "x", "offset": 40001, "limit": 200 })),
+        Effect::ReadOnly,
+        "窗口是参数，不是新能力"
+    );
+}
+
+#[tokio::test]
+async fn an_absurd_limit_reads_to_the_end_instead_of_overflowing() {
+    let mut fixture = Fixture::new();
+    let file = numbered_file(&fixture, "notes.txt", 3);
+
+    let text = read_text(&mut fixture, &file, json!({ "limit": u64::MAX })).await;
+
+    assert!(text.contains("3\tline-3"), "{text}");
+    assert!(!text.contains("续读"), "读到末尾就没什么可续的：{text}");
+}

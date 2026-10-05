@@ -12,6 +12,10 @@
 - 实现票的 `Status:` 从 `ready-for-agent` 起步、写完走 `done`；**能自动化的部分都做完、只剩人在真终端里逐项走查**的，走 `ready-for-walkthrough`（2026-10-02 立，与分诊标签里的 `ready-for-human` 不是一回事）。决策票的 `claimed` → `resolved` 是另一套，见下面 wayfinder 一节；这几套收尾状态记在 `CONTEXT.md` 的**票**那一条
 - 评论与对话历史一律追加到文件的底部，放在 `## 评论` 标题之下
 
+想数一遍票时：`ls .scratch/*/issues/*.md | wc -l`，按状态分组用
+`grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`（`.scratch/README.md` 的 feature
+索引只写它自己那张表的内容，不记这两条命令会算出来的数字）。
+
 ## 当某个技能说「发布到 issue tracker」
 
 在 `.scratch/<feature-slug>/` 下新建一个文件（该建目录时就把目录一并建出来）。

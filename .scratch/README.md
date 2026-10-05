@@ -4,9 +4,7 @@
 
 一个 feature 一个目录，三种形态：**`spec.md`**（构建计划）、**`map.md`**（wayfinder 的决策图）、**`seed.md`**（种子材料，还没变成 spec）；票在 `issues/NN-<slug>.md`，一票一个文件，抬头的 `Status:` 记状态 —— 实现票走 `ready-for-agent` → `done`（能自动化的部分都做完、只剩人在真终端里逐项走查的走 `ready-for-walkthrough`），wayfinder 的决策票走 `claimed` → `resolved`。
 
-数法：`ls .scratch/*/issues/*.md | wc -l` 与 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`。
-
-**需求池**：16 条「有意向、不实现」的意向如今剩 10 条只有 `seed.md`（判据 = 下表里形态为 `seed`、且没有「已移交」或「已折成 spec」注记的那些行；其中 `ask-user-question` 与 `context-injection-detail` 已落成实票（分别是 `fs-agent-v1` 票 32 与 `mcp-support` 票 19）、按字面也算了进来，**实际还能推进 8 条**）。想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
+**需求池**：下表里形态为 `seed`、且没写「已移交」或「已折成 spec」的那些行，就是还能推进的意向（按表格数，不在这里记会漂的数字）；想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
 | [`fs-agent-v1/`](fs-agent-v1/spec.md) | spec | fs-agent v1：可扩展核心 + 多 agent 讨论 | 34/34 done |
@@ -54,3 +52,4 @@
 | [`trace-tab/`](trace-tab/spec.md) → [`trace-in-main/`](trace-in-main/spec.md) | spec | 轨迹视图：转录拆成两个视图 —— 轨迹页画**全量块**、主列只留对话加保留清单。**2026-10-06 搬进主列**（多一条页签条、行首加时刻），推翻「轨迹 = 左栏的一页」与 §6 | 6 resolved + 9 done + 1 walkthrough |
 | [`tui-visual-language/`](tui-visual-language/spec.md) | map + spec | **TUI 视觉语言**：把屏幕上人眼看到的样式收进两层 —— 语义色板（绘制代码只引用语义名）+ 字形语法（框架一套虚线、内容一套实线），色彩**收敛**（层级交给结构与字形，颜色只留给要预警与分类的语义），并收口退场死代码与 `docs/render.md` 的文档矛盾。wayfinder 决策图 2026-10-05 建并**同日走完**（十张决策票全关），**已折成 [`spec.md`](tui-visual-language/spec.md)**；九张实现票（11–19）**2026-10-06 全部落地**（自动化部分全绿：1216 测试、clippy、fmt、两套文档护栏、启动检查 15/15），只剩真终端走查 —— 校正记在 [`docs/tui-manual-checklist.md`](../docs/tui-manual-checklist.md) 的 2026-10-06 那一节 | 10 resolved + 9 ready-for-walkthrough |
 | [`time-mcp/`](time-mcp/spec.md) | spec | 时间：仓库自带一台 stdio MCP server `fs-agent-mcp-time`（只答三条方法、只提供一个工具 `get_current_time`，读一次本地时钟回一行「本机现在：…」，带 UTC 偏移、时区名与星期几），而系统提示词里只加一句静态指引、**不放时间的值**（身份是缓存前缀，也是 replay 复现当时请求时会再调一次的那个函数） | 3/3 done |
+| [`file-read-window/`](file-read-window/spec.md) | spec | `read_file` 的读窗口：`offset`（行号）/ `limit`（行数），默认封顶 2000 行 + 续读提示；越界报「文件只有 N 行」；读一段后 `edit_file` 照常放行 | 1/1 done |
