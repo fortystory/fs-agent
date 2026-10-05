@@ -190,12 +190,12 @@ impl Transcript {
                 });
                 blocks
             }
-            RenderEvent::Diagnostic(message) => {
+            RenderEvent::Diagnostic { message, .. } => {
                 let mut blocks = self.flush();
                 blocks.push(Block::Diagnostic(message));
                 blocks
             }
-            RenderEvent::Notice(message) => {
+            RenderEvent::Notice { message, .. } => {
                 let mut blocks = self.flush();
                 blocks.push(Block::Notice(message));
                 blocks

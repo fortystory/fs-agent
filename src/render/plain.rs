@@ -372,7 +372,7 @@ impl Render for Plain {
             match receiver.recv().await {
                 Ok(event) => plain.emit(event),
                 Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                    plain.emit(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
+                    plain.emit(RenderEvent::diagnostic(wording::renderer_dropped(dropped)));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }

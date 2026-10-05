@@ -1029,6 +1029,7 @@ fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
     // 一块空白或编出来的数据（`.scratch/tui-sidebar/spec.md` §3）。
     assert_eq!(wording::TAB_USAGE, "调用量");
     assert_eq!(wording::TAB_TRACE, "轨迹");
+    assert_eq!(wording::TAB_CONVERSATION, "对话");
     assert_eq!(wording::TAB_FILES, "文件");
     assert_eq!(wording::tab_placeholder(), "此页尚未实现（另有票在跟）");
     // 回合条的字形：一个普通单位、被聚焦的那个，以及这一列
@@ -1036,6 +1037,30 @@ fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
     assert_eq!(wording::RAIL_CELL, "┊");
     assert_eq!(wording::RAIL_FOCUS, "┃");
     assert_eq!(wording::RAIL_TRUNCATED, "⋮");
+}
+
+#[test]
+fn a_stamp_is_seconds_in_the_local_zone_and_nine_columns_wide() {
+    use chrono::TimeZone;
+
+    // 时刻按**本地时区**显示、精确到秒，而且连它后面那个空格一起正好是
+    // `layout::STAMP_COLUMNS` 那九列（`.scratch/trace-in-main/spec.md` §5）。
+    let at = chrono::Utc
+        .with_ymd_and_hms(2026, 10, 6, 4, 6, 7)
+        .single()
+        .expect("那是一个真实的时刻");
+    let stamp = wording::stamp(at);
+    assert_eq!(
+        stamp,
+        format!("{} ", at.with_timezone(&chrono::Local).format("%H:%M:%S")),
+        "本地时区、秒级，外加一个分隔的空格"
+    );
+    assert_eq!(
+        text_columns(&stamp),
+        fs_agent::render::layout::STAMP_COLUMNS as usize,
+        "宽度就是那个常数"
+    );
+    assert!(stamp.ends_with(' '), "空格在最后：{stamp:?}");
 }
 
 /// 状态行的纯文本：段落按顺序连起来。

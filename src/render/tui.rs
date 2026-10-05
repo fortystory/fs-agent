@@ -17,6 +17,7 @@
 //!   以及退出手势的 deadline（只在第一下举手之后，`.scratch/exit-gesture/spec.md` §6）。
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use ratatui::buffer::CellWidth;
 use ratatui::crossterm::event::{
@@ -438,7 +439,7 @@ impl Tui {
                 match receiver.try_recv() {
                     Ok(event) => state.live_event(event),
                     Err(broadcast::error::TryRecvError::Lagged(dropped)) => {
-                        state.live_event(RenderEvent::Diagnostic(wording::renderer_dropped(
+                        state.live_event(RenderEvent::diagnostic(wording::renderer_dropped(
                             dropped,
                         )));
                     }
@@ -650,10 +651,10 @@ pub struct TuiState {
     transcript: Transcript,
     /// 对话视图的窗格：主列那些行按画出来的宽度折行，带自己的视口（`.scratch/trace-tab/spec.md` §1）。
     conversation: Pane,
-    /// 轨迹视图的窗格：左栏 `轨迹` 页画它。与对话视图共用同一份共享源（`painted`），但各持
+    /// 轨迹视图的窗格：主列 `轨迹` 页画它。与对话视图共用同一份共享源（`painted`），但各持
     /// 折行缓存、宽度、视口与「新行」计数。
     ///
-    /// 左栏不可见时它不被物化（[`TuiState::trace_width`] 为零），内容也不推给它。
+    /// 它**常驻**：轨迹视图住在主列里，而主列永远在（`.scratch/trace-in-main/spec.md` §3）。
     trace: Pane,
     /// 当前消息正在流的尾巴。
     live: String,
@@ -668,7 +669,7 @@ pub struct TuiState {
     /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
     /// 它是重放判据的一半，另一半是 [`TuiState::trace_width`]。
     conversation_width: u16,
-    /// 轨迹视图的源行是按多宽排的；**零**表示这一帧轨迹视图不被物化（左栏不可见）。
+    /// 轨迹视图的源行是按多宽排的 —— 主列的内容宽（两个视图同源，也都常驻）。
     trace_width: u16,
     /// 对话视图的跨块排版状态（上一个发言者、上一条是不是消息）：换人空一行、同一人连发的
     /// 多段正文只留一个名字，都靠它（`.scratch/tui-visual-language/spec.md` §23）。窗格清空
@@ -676,10 +677,11 @@ pub struct TuiState {
     conversation_flow: Flow,
     /// 轨迹视图那一份：它只按发言者空行，消息行每条都带名字。
     trace_flow: Flow,
-    /// 轨迹页**自己的**宽度档（40 / 28 / 0）：前缀带不带方括号看它，不看正文列数。
+    /// 轨迹页**自己的**宽度档：前缀带不带方括号看它，不看正文列数。
     ///
-    /// `.scratch/tui-visual-language/issues/07` 决定 2 之后正文比页面窄两列（滚动条那一列），
-    /// 于是「宽档 40 列」这条判据必须继续量页面，不能量正文 —— 否则 38 列会被读成窄档。
+    /// 判据量的是**主列页宽**，而主列最小 40 列（终端下界就是它），所以它恒为宽档 —— 那个去
+    /// 括号的分支还留在 [`prefix_style`] 里（它与共享渲染那条路径共用签名），只是到不了屏幕
+    /// （`.scratch/trace-in-main/spec.md` §3）。
     trace_tier_width: u16,
     /// 上一帧画完之后有没有什么东西变了。
     dirty: bool,
@@ -709,6 +711,9 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
+    /// 正在显示主列的哪一页：`对话` 还是 `轨迹`（`.scratch/trace-in-main/spec.md` §2）。
+    /// 与 [`TuiState::tab`] 同级：只活在这一次进程里，不落配置，重开回到对话。
+    main_tab: MainTab,
     /// 用户想不想看见左栏（`Ctrl-O` 切换，`.scratch/sidebar-toggle/spec.md` §1）。
     ///
     /// 与选中的页签同级：只活在这一次进程里，重开回到显示，不落配置、不跨会话。它与宽度是
@@ -1237,6 +1242,8 @@ enum HitAction {
     Submit,
     /// 显示左栏的这一页，跟点它的页签一样（spec §3）。
     SwitchTab(Tab),
+    /// 显示主列的这一页，跟点它的页签一样（`.scratch/trace-in-main/spec.md` §2）。
+    SwitchMainTab(MainTab),
     /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
     TurnRailUnit(usize),
 }
@@ -1355,16 +1362,17 @@ fn agrees(key: Key) -> bool {
 /// 凡是「哪个窗格」「哪张平行表」「哪个指示器」的取数都按它分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Viewport {
-    /// 主列：对话视图。
+    /// 主列页签条的第一页：对话视图。
     Conversation,
-    /// 左栏 `轨迹` 页：轨迹视图。
+    /// 主列页签条的第二页：轨迹视图。
     Trace,
 }
 
 /// 这一次要把块喂给哪些视图。
 ///
-/// 实时到达时由「轨迹视图此刻物不物化」推出来；重放时由宽度掩码给出来 —— 只重放宽度真变了
-/// 的那个 pane，对没清空过的 pane 重放会把它整份推第二遍（票 09）。
+/// 两个视图都常驻，所以这一趟**两个目标都在**的时候是常态；之所以还留着这张表，是因为宽度
+/// 变化时的重放只喂**真的清了**的那个 pane —— 对没清空过的 pane 重放会把它整份推第二遍
+/// （票 09、`.scratch/trace-in-main/spec.md` §3）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Targets {
     conversation: bool,
@@ -1484,14 +1492,17 @@ impl TurnRail {
 /// 由 `pane.push` / `pane.replace_last` 原地管。宽度一变两者都得回来，所以清单里两种都记
 /// （`.scratch/markdown-render/spec.md` §1）。
 enum Painted {
-    /// 一个定稿的块。
-    Block(Block),
-    /// 还开着的思考行。
+    /// 一个定稿的块，以及产生它的那一刻（`.scratch/trace-in-main/spec.md` §5）。轨迹页把这个
+    /// 时刻画在行的开头，而重放要把它一起带回来。
+    Block { block: Block, at: DateTime<Utc> },
+    /// 还开着的思考行。它刻意**不带**时刻：这一刻还不知道这个想法属于哪条消息，所以轨迹页里
+    /// 它头上没有时间戳（§5）。
     Thinking { speaker: crate::events::SpeakerId },
     /// 定稿的思考行；`trace` 是记下来的整段推理，`None` 是合成器那种「没记下来」。
     Thought {
         speaker: crate::events::SpeakerId,
         trace: Option<String>,
+        at: DateTime<Utc>,
     },
 }
 
@@ -1553,6 +1564,7 @@ impl TuiState {
             panel: Panel::new(),
             todo: crate::render::TodoPanel::default(),
             tab: Tab::Usage,
+            main_tab: MainTab::Conversation,
             sidebar_wanted: true,
             colors,
             reasoning: String::new(),
@@ -1764,9 +1776,12 @@ impl TuiState {
     /// 吃掉多少事件来算（`.scratch/tui-history-replay/spec.md` §2）。实时调用方不看它。
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         self.dirty = true;
+        // 这一刻属于这条事件：轨迹页把它的时刻画在块的开头，重放时从同一处取
+        // （`.scratch/trace-in-main/spec.md` §5）。
+        let at = event_at(&event);
         self.observe_goal(&event);
         self.observe_running_tool(&event);
-        // 这一整趟的收件人：轨迹视图此刻物不物化，决定它收不收（`.scratch/trace-tab/spec.md` §1）。
+        // 这一整趟的收件人（两个视图都常驻，所以通常两个都在）。
         let targets = self.targets();
         let mut produced = 0usize;
         for block in self.transcript.push(event) {
@@ -1783,7 +1798,7 @@ impl TuiState {
                         produced += usize::from(self.open_thinking(speaker.clone()));
                         self.reasoning.push_str(text);
                     }
-                    DeltaKind::Text => self.freeze_thinking(),
+                    DeltaKind::Text => self.freeze_thinking(at),
                 }
             }
             if let Block::Message {
@@ -1804,11 +1819,11 @@ impl TuiState {
                             if !self.thinking_open && !self.thinking_done {
                                 produced += usize::from(self.open_thinking(speaker.clone()));
                             }
-                            self.settle_thinking(Some(text));
+                            self.settle_thinking(Some(text), at);
                         }
                         None => {
                             if self.thinking_open {
-                                self.settle_thinking(None);
+                                self.settle_thinking(None, at);
                             }
                         }
                     }
@@ -1850,30 +1865,32 @@ impl TuiState {
             self.panel.observe(&block);
             // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
             self.todo.observe(&block);
-            produced += self.push_block(block, targets);
+            produced += self.push_block(block, at, targets);
         }
         produced
     }
 
     /// 这一刻该把块喂给哪些视图。
     ///
-    /// 实时事件到达时不问「现在显示哪一页」：轨迹视图只要左栏在就常驻（这样切页、收起再叫回
-    /// 都不会漏内容，发言者配色槽位也不随可见性变），所以判据是它有没有被物化
-    /// —— [`TuiState::trace_width`] 是不是零（票 09）。
+    /// 实时事件到达时**不问「现在显示哪一页」**：两个视图都常驻，切页与 `Ctrl-O` 都不会漏
+    /// 内容，发言者配色槽位也不随可见性变（票 09、`.scratch/trace-in-main/spec.md` §3）。
     fn targets(&self) -> Targets {
         Targets {
             conversation: true,
-            trace: self.trace_width != 0,
+            // 轨迹视图与对话视图一样常驻：它住在主列里，而主列永远在
+            // （`.scratch/trace-in-main/spec.md` §3）。
+            trace: true,
         }
     }
 
-    /// 把一个块排成行、推进窗格，并**记住它**，好在宽度变化时重放（spec §1）。
-    fn push_block(&mut self, block: Block, targets: Targets) -> usize {
-        let produced = self.emit_block(&block, targets);
+    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻），好在宽度变化时重放
+    /// （spec §1）。
+    fn push_block(&mut self, block: Block, at: DateTime<Utc>, targets: Targets) -> usize {
+        let produced = self.emit_block(&block, at, targets);
         if produced > 0 {
             // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
             // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
-            self.painted.push(Painted::Block(block));
+            self.painted.push(Painted::Block { block, at });
         }
         produced
     }
@@ -1882,7 +1899,7 @@ impl TuiState {
     ///
     /// 对每个被选中的目标各排版一次：分派点必须在这里，因为只有这里同时知道「画给谁」与
     /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
-    fn emit_block(&mut self, block: &Block, targets: Targets) -> usize {
+    fn emit_block(&mut self, block: &Block, at: DateTime<Utc>, targets: Targets) -> usize {
         let mut produced = 0;
         // 对话视图只收保留清单；左栏不在时**也不退回全量**（2026-10-05 维护者推翻 §6）——
         // 收起左栏就是「过程行暂时看不到」，规则只有一个。
@@ -1915,7 +1932,9 @@ impl TuiState {
             );
         }
         if targets.trace && selects(Viewport::Trace, block) {
-            let width = self.trace_width;
+            // 行首那几列归时间戳，所以轨迹内容的排版宽度是主列内容宽减掉它们
+            // （`.scratch/trace-in-main/spec.md` §5）。
+            let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
             let style = prefix_style(Viewport::Trace, self.trace_tier_width);
             // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
             let lines = paint_block(block, &mut self.colors, width, style, Viewport::Trace, true);
@@ -1924,13 +1943,13 @@ impl TuiState {
                 Viewport::Trace,
                 block_speaker(block),
                 matches!(block, Block::Message { .. }),
-                lines,
+                stamp_lines(lines, at),
                 Some(is_user_message(block)),
             );
             // 单位之间一条分隔线：轨迹页拿它当轮次的边界（2026-10-05 维护者的修订，
-            // 取代了原先那套隔行底色）。
+            // 取代了原先那套隔行底色）。它不是块，所以横跨整条正文 —— 时间戳那几列也在内。
             if is_boundary(block, self.discussion()) {
-                let rule = trace_rule(width);
+                let rule = trace_rule(self.trace_width);
                 self.push_line(Viewport::Trace, rule, None, None);
             }
         }
@@ -1950,8 +1969,8 @@ impl TuiState {
     /// 那些源行本身已经依赖宽度了。
     ///
     /// **只清、只重放宽度真变了的那个视口**（票 09）：`emit_painted` 是追加，对没清空过的
-    /// pane 再放一遍会把它整份推第二遍。零表示那个视口这一帧不被物化 —— 它照样走「变了」这
-    /// 一支，好把内容清干净、等左栏回来时整批重建。
+    /// pane 再放一遍会把它整份推第二遍。两个视图都常驻，所以这里不再有「宽度为零 = 不物化」
+    /// 那一支（`.scratch/trace-in-main/spec.md` §3）。
     fn rerender_if_width_changed(&mut self, conversation_width: u16, trace_width: u16) {
         let conversation = conversation_width != self.conversation_width;
         let trace = trace_width != self.trace_width;
@@ -1978,11 +1997,9 @@ impl TuiState {
             return;
         }
         let painted = std::mem::take(&mut self.painted);
-        // 轨迹视图这一帧不物化时它不收任何东西 —— 它也刚被清空，重放进去只会喂给一个
-        // 宽度为零的窗格。
         let replay = Targets {
             conversation,
-            trace: trace && trace_width != 0,
+            trace,
         };
         for item in &painted {
             self.emit_painted(item, replay);
@@ -1995,16 +2012,16 @@ impl TuiState {
     /// 它原样留着自己那份内容。
     fn emit_painted(&mut self, painted: &Painted, targets: Targets) {
         match painted {
-            Painted::Block(block) => {
-                self.emit_block(block, targets);
+            Painted::Block { block, at } => {
+                self.emit_block(block, *at, targets);
             }
             Painted::Thinking { speaker } => {
                 self.paint_thinking_line(speaker, targets);
             }
-            Painted::Thought { speaker, trace } => {
+            Painted::Thought { speaker, trace, at } => {
                 // 重放是**追加**：窗格刚被清空，定稿的那一条要重新画出来（实时路径才是
                 // 就地重写那条「正在思考」）。
-                self.paint_settled_thinking(speaker, trace.clone(), targets, false);
+                self.paint_settled_thinking(speaker, trace.clone(), *at, targets, false);
             }
         }
     }
@@ -2247,7 +2264,7 @@ impl TuiState {
     /// 而下一次 `--continue` 会插入新的一条、而不是重放旧的那条。
     fn finish_replay(&mut self, replay: Replay) {
         if replay.lines > 0 {
-            self.apply(RenderEvent::Notice(wording::history_divider().to_owned()));
+            self.apply(RenderEvent::notice(wording::history_divider()));
         }
         for event in std::mem::take(&mut self.live_buffer) {
             self.apply(event);
@@ -2352,11 +2369,13 @@ impl TuiState {
         &mut self,
         speaker: &crate::events::SpeakerId,
         text: Option<String>,
+        at: DateTime<Utc>,
         targets: Targets,
         in_place: bool,
     ) {
         if targets.trace {
             let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
+            let line = stamped_line(line, at);
             if in_place {
                 self.trace.replace_last(line);
                 if let Some(link) = self.trace_links.back_mut() {
@@ -2427,20 +2446,23 @@ impl TuiState {
 
     /// 把敞开的那条思考行就地冻住：正文的第一个增量意味着模型已经不思考、开始作答了，
     /// 于是这行定下来（票 02 §1）。
-    fn freeze_thinking(&mut self) {
+    fn freeze_thinking(&mut self, at: DateTime<Utc>) {
         if !self.thinking_open {
             return;
         }
         let text = std::mem::take(&mut self.reasoning);
         let recorded = !text.is_empty();
-        self.settle_thinking(recorded.then_some(text));
+        self.settle_thinking(recorded.then_some(text), at);
     }
 
     /// 把思考行定下来 —— 不管有没有记录下来的 trace —— 并把它变成通向它详情的入口。
     ///
     /// `Some` 是记录下来的 trace；`None` 是合成器的形状 —— 增量流过了，事件流里没有整段
     /// 文本 —— 它的详情会说出来。一个根本没有敞开思考行的回合什么都不加（票 02 §1）。
-    fn settle_thinking(&mut self, text: Option<String>) {
+    ///
+    /// `at` 是这段思考**到此为止**的那一刻：实时路径上它是正文第一个增量到达的时候，重放
+    /// 路径上它是那条 `MessageCompleted` 的时刻（`.scratch/trace-in-main/spec.md` §5）。
+    fn settle_thinking(&mut self, text: Option<String>, at: DateTime<Utc>) {
         if !self.thinking_open {
             return;
         }
@@ -2449,12 +2471,13 @@ impl TuiState {
         self.thinking_done = true;
         // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
         let speaker = self.thinking_speaker.clone();
-        self.paint_settled_thinking(&speaker, text.clone(), self.targets(), true);
-        // 重放清单里那一条也从「开着」换成「定稿」，连它的详情一起 —— 否则一次宽度变化
-        // 会把这条行变回进行中，或者把它的 trace 丢掉（spec §1）。
+        self.paint_settled_thinking(&speaker, text.clone(), at, self.targets(), true);
+        // 重放清单里那一条也从「开着」换成「定稿」，连它的详情与时刻一起 —— 否则一次宽度变化
+        // 会把这条行变回进行中，或者把它的 trace 与时刻丢掉（spec §1）。
         let settled = Painted::Thought {
             speaker: speaker.clone(),
             trace: text,
+            at,
         };
         match self.painted.last_mut() {
             Some(slot @ Painted::Thinking { .. }) => *slot = settled,
@@ -2467,6 +2490,31 @@ impl TuiState {
     /// 有五样东西可以回应指针，它们之间的顺序就是谁占着它：开着的详情覆盖层，然后是问题，
     /// 然后是回合条，然后是左栏的页签，最后是转录 —— 它的滚轮、指示器与折叠行都回应它。
     /// 没有一样认领的就忽略：终端自己的选择是用户的，而这里什么都不抢焦点（spec §4、§7）。
+    /// 滚轮一格：滚的是**当前显示的那一页**
+    /// （`.scratch/trace-in-main/spec.md` §4）。
+    fn wheel_current(&mut self, up: bool) {
+        match self.main_tab {
+            MainTab::Conversation => self.conversation.wheel(up),
+            MainTab::Trace => self.trace.wheel(up),
+        }
+    }
+
+    /// 翻页两键：翻的是**当前显示的那一页**（§4）。
+    fn page_current(&mut self, up: bool) {
+        match self.main_tab {
+            MainTab::Conversation => self.conversation.page(up),
+            MainTab::Trace => self.trace.page(up),
+        }
+    }
+
+    /// 回底键：回的是**当前显示的那一页**的底（§4）。
+    fn current_page_to_bottom(&mut self) {
+        match self.main_tab {
+            MainTab::Conversation => self.conversation.to_bottom(),
+            MainTab::Trace => self.trace.to_bottom(),
+        }
+    }
+
     pub fn mouse(&mut self, mouse: MouseEvent) {
         // 重放靠忽略来占着指针：历史还在一个钉在末尾的视口下面铺，所以滚轮一格与一次点击
         // 都不许挪动它、也不许打开一行还没到达完的行（`spec` §5）。
@@ -2477,8 +2525,9 @@ impl TuiState {
         // 那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西背后的
         // 转录（票 04 §2，`tui-sidebar` spec §7）。
         self.dirty = true;
-        // 指针落在轨迹页上吗？滚轮与点击都按它分派（票 09）：`trace_rect` 只在上一帧真的
-        // 画了轨迹页时才有值，所以「记住读的人真看到了什么」这条纪律也管着视口的选择。
+        // 指针落在轨迹页上吗？点击按它分派：`trace_rect` 只在上一帧真的画了轨迹页时才有值，
+        // 所以「记住读的人真看到了什么」这条纪律也管着视口的选择。滚轮不再问它
+        // （`.scratch/trace-in-main/spec.md` §4）。
         let over_trace = self
             .trace_rect
             .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
@@ -2528,11 +2577,10 @@ impl TuiState {
                         if questionnaire {
                             self.question_click(QuestionClick::Wheel(up));
                         }
-                    } else if over_trace {
-                        // 问题立着、指针却在左栏轨迹页上：滚的是轨迹（票 09）。
-                        self.trace.wheel(up);
                     } else {
-                        self.conversation.wheel(up);
+                        // 不在覆盖层自己那块里就滚当前显示的那一页
+                        // （`.scratch/trace-in-main/spec.md` §4）。
+                        self.wheel_current(up);
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -2546,15 +2594,15 @@ impl TuiState {
         // 滚轮、指示器与折叠行都回应它。页签是个控件，所以它在周围的文字之前被问
         // （spec §7）。
         match mouse.kind {
-            // 滚轮落在哪个视口，就看指针在哪儿：左栏轨迹页里滚轨迹、转录上滚对话
-            // （票 09；冻结项 13 把它定为轨迹视图唯一的键盘/指针入口）。
-            MouseEventKind::ScrollUp if over_trace => self.trace.wheel(true),
-            MouseEventKind::ScrollDown if over_trace => self.trace.wheel(false),
-            MouseEventKind::ScrollUp => self.conversation.wheel(true),
-            MouseEventKind::ScrollDown => self.conversation.wheel(false),
+            // 滚轮滚**当前显示的那一页**：两个视图住在同一块内容区里，同一时刻只有一页在屏幕
+            // 上，所以「按指针位置分派给哪个窗格」这条分派随轨迹视图搬进主列一起消失
+            // （`.scratch/trace-in-main/spec.md` §4，推翻 `tui-chrome` §5 的那半句）。
+            MouseEventKind::ScrollUp => self.wheel_current(true),
+            MouseEventKind::ScrollDown => self.wheel_current(false),
             MouseEventKind::Down(MouseButton::Left) => {
                 match self.regions.action_at(mouse.column, mouse.row) {
                     Some(HitAction::SwitchTab(tab)) => self.tab = tab,
+                    Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
                     Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
                     _ if self.indicator_hit(Viewport::Trace, mouse.column, mouse.row) => {
                         self.trace.to_bottom()
@@ -2564,8 +2612,9 @@ impl TuiState {
                     }
                     _ => {
                         let panes = layout::plan(self.area, 1, self.sidebar_wanted);
-                        // 指针落在哪个窗格里，这一击就算谁的：轨迹页只认左栏页那一块，
-                        // 对话只认转录那一块（票 09）。落在别处 —— 左栏的其它页、分隔列、
+                        // 指针落在哪个窗格里，这一击就算谁的：轨迹页只认主列内容区那一块
+                        // （`.scratch/trace-in-main/spec.md` §4），对话只认同一块（票 09）。
+                        // 落在别处 —— 左栏、分隔列、
                         // 状态行、输入区 —— 什么都不点：那里没有可点开的行，而行号是**屏幕**
                         // 行号，拿它去取另一个视图的详情会点到同一横行的别的行上（在 `todo`
                         // 页里点一项，开着的是转录里那条详情）。
@@ -2892,7 +2941,7 @@ impl TuiState {
             // 丢掉的渲染器增量损害的是输出，从不是正确性，所以它像任何别的实时事件一样被
             // 叙述出来 —— 并且和横幅同一个理由，在重放期间被缓冲。
             Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                self.live_event(RenderEvent::Diagnostic(wording::renderer_dropped(dropped)));
+                self.live_event(RenderEvent::diagnostic(wording::renderer_dropped(dropped)));
                 false
             }
             Err(broadcast::error::RecvError::Closed) => true,
@@ -3131,10 +3180,11 @@ impl TuiState {
         }
         match key {
             Key::Enter => self.submit(),
-            // 键盘三键仍只作用于对话视图：轨迹视图只吃滚轮（票 09，代价显式接受）。
-            Key::PageUp => self.conversation.page(true),
-            Key::PageDown => self.conversation.page(false),
-            Key::CtrlG => self.conversation.to_bottom(),
+            // 键盘三键归**当前显示的那一页**（`.scratch/trace-in-main/spec.md` §4）：轨迹视图
+            // 搬进主列之后不再是「只吃滚轮」那个例外（推翻 `trace-tab` 用户故事 32）。
+            Key::PageUp => self.page_current(true),
+            Key::PageDown => self.page_current(false),
+            Key::CtrlG => self.current_page_to_bottom(),
             // 编辑器认的每一个别的键；两条路径共用它们。
             _ => self.editor_key(key),
         }
@@ -3750,9 +3800,12 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （`tui-chrome` §5）。两者都在下面各自画出来时被重新填上。
     state.modal_rect = None;
     state.questionnaire_bottom = None;
-    // 轨迹页的矩形与指示器同理：这一帧真画了才有值，指针只回应真看见的东西（票 09）。
+    // 两个视图的矩形与指示器同理：这一帧真画了才有值，指针只回应真看见的东西（票 09）。
+    // 主列页签让同一时刻只有一页在屏幕上，所以没被画出来的那一页必须失去它的命中区域 ——
+    // 否则点击会落在上一帧留下的位置上（`.scratch/trace-in-main/spec.md` §4）。
     state.trace_rect = None;
     state.trace_indicator = None;
+    state.indicator = None;
     if layout::below_minimum(area) {
         // 什么都不画，好让点击无处可落。
         state.indicator = None;
@@ -3764,16 +3817,14 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）。
     let content_rows = state.bottom_rows(area);
     let panes = layout::plan(area, content_rows, state.sidebar_wanted);
-    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：轨迹视图只在左栏可见时
-    // 物化（宽度为零 = 不物化），而它的宽度就是左栏页的宽度 —— 与现在显示哪一页无关，
-    // 因为它常驻，切页、收起再叫回才不会漏内容（票 09）。
+    // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：两个视图都画在主列那块
+    // 内容区里，所以宽度同源，而且都**常驻** —— 与现在显示哪一页无关，切页才不会漏内容
+    // （`.scratch/trace-in-main/spec.md` §3）。
     let conversation_width = panes.transcript_text().width;
-    // 轨迹页正文的宽度是左栏页减掉右缘那两列（滚动条在最右列）；与现在显示哪一页无关，
-    // 因为它常驻，切页、收起再叫回才不会漏内容（票 09）。
-    let trace_width = panes.sidebar_page_text().map_or(0, |text| text.width);
-    // 前缀分档量的是左栏**页**的宽度（40 / 28），不是正文那 38 / 26 列
-    // （`.scratch/tui-visual-language/issues/07` 决定 2）。
-    state.trace_tier_width = panes.sidebar_page.map_or(0, |page| page.width);
+    let trace_width = conversation_width;
+    // 前缀分档量的是主列**页**的宽度：主列最小 40 列（终端下界就是它），所以轨迹视图恒为
+    // 宽档、恒带方括号（`.scratch/trace-in-main/spec.md` §3）。
+    state.trace_tier_width = panes.main.width;
     state.rerender_if_width_changed(conversation_width, trace_width);
     // 问卷没有边框：它占的就是排版给底部的那两块（输入区与提示行，连中间那条线一起）。
     // 没有问卷时它就是 `None`，滚轮于是落到转录上（`tui-chrome` §5）。
@@ -3805,7 +3856,8 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
 ///
 /// **外框已经不在**（spec §1）：每条线都画在自己该在的地方，没有哪一格要留给边框，也没有
 /// 交叉符要拼。这个顺序就是绘制顺序：先沿左栏右边缘往下画的分隔列，然后是左栏 —— 它的页签
-/// 条在两者之上画 —— 最后是主列的分隔线（spec §1–§2）。
+/// 条在两者之上画 —— 再是主列的页签条（两者可能落在同一个屏幕行上，但跨的列不相交），最后是
+/// 主列的分隔线（spec §1–§2；`.scratch/trace-in-main/spec.md` §1）。
 fn draw_shell(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -3814,6 +3866,7 @@ fn draw_shell(
 ) {
     draw_divide(frame, panes, area);
     draw_sidebar(frame, panes, state);
+    draw_main_tab_bar(frame, panes, state);
     // 输入区与提示行各自上面那条分隔线 —— 状态行上方那条已经离开（spec §2），所以这里是
     // 两条而不是三条。它们从**分隔列右边一格**起画：分隔列那一格的 `┆` 留着，于是竖线从
     // 屏幕顶一直贯通到底，横线只是接在它旁边（2026-10-01 真机反馈：横线原先把竖线截断了）。
@@ -3912,32 +3965,13 @@ fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, si
 ///
 /// 这些行来自排版的高度阶梯，所以被压扁的左栏是从尾部丢字段，而不是把三个要紧的读数裁掉
 /// （spec §2）。还没做出来的页面用一行说出来，而不是显示编出来的数据。
+///
+/// 轨迹不在这里：它搬进了主列，成了那条页签条上的第二页
+/// （`.scratch/trace-in-main/spec.md` §2）。
 fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let Some(page) = panes.sidebar_page else {
         return;
     };
-    // 轨迹页是**视图**：它自己那个窗格取景，并按这一帧真画出来的行填它自己的点击映射
-    // —— 与转录走的是同一条纪律（票 04 §1、票 09）。
-    if state.tab == Tab::Trace {
-        // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
-        // 正文减掉右缘那两列，滚动条画在最右列 —— 那里没有回合条，所以不挤
-        // （`.scratch/tui-visual-language/issues/07` 决定 2）。
-        let text = panes.sidebar_page_text().unwrap_or(page);
-        let live = TuiState::live_rows(&state.live);
-        let rows = state.trace.view(text.width, text.height, &live);
-        state.trace_drawn.top = text.y;
-        state.trace_drawn.rows = (0..rows.len())
-            .map(|offset| state.trace.source_at(state.trace.top() + offset))
-            .collect();
-        // 滚轮与点击按它分派：指针落在这一块里就归轨迹视图。
-        state.trace_rect = Some(page);
-        frame.render_widget(Paragraph::new(rows), text);
-        if let Some(bar) = panes.sidebar_page_scrollbar() {
-            draw_scrollbar(frame, bar, &state.trace);
-        }
-        draw_indicator(frame, text, state, Viewport::Trace);
-        return;
-    }
     let rows = match state.tab {
         Tab::Usage => state.panel.lines(&state.facts, page),
         Tab::Todo => state.todo.lines(page),
@@ -3945,21 +3979,16 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
             truncate_columns(wording::tab_placeholder(), page.width as usize),
             Style::default().fg(palette::MUTED),
         ))],
-        // 上面那个分支已经接走了它。
-        Tab::Trace => Vec::new(),
     };
     frame.render_widget(Paragraph::new(rows), page);
 }
 
-/// 左栏的页签条：两条分隔线、标签夹在中间，选中的那个更亮（spec §3，
+/// 左栏的页签条：两条分隔线、标签夹在中间（spec §3，
 /// `.scratch/todo-and-modes/spec.md` §4）。
 ///
 /// 两条线都从屏幕左缘开始、到分隔列结束，于是左栏读起来是一个隔间，而不是自成一体的
-/// 一块。每个标签在画出来时记下一个命中矩形：指针只能打中真在那里的东西，而填满这一行
-/// 其余部分的线不是页签。
-///
-/// 标签列表是建出来的而不是写死的，因为 `todo` 是有条件的 —— 会话有了列表它才在条上 ——
-/// 别的都从它推出来：分隔符、填充与命中矩形都从同一份列表来，所以没被画出来的标签点不到。
+/// 一块。标签列表是建出来的而不是写死的，因为 `todo` 是有条件的 —— 会话有了列表它才在条上
+/// （`.scratch/trace-in-main/spec.md` §2）。
 fn draw_tab_bar(
     frame: &mut ratatui::Frame,
     panes: &layout::Regions,
@@ -3967,10 +3996,6 @@ fn draw_tab_bar(
     sidebar: Rect,
     tabs: Rect,
 ) {
-    let dim = Style::default().fg(palette::MUTED);
-    // 「线」与「字」在这一行上分开取色：未选中的标签是**文字**（仍旧 `DarkGray`，它得读得
-    // 出来），而两条线与它们之间的分隔符是**框架**（`palette::CHROME`，退到后面去）。
-    let rule = Style::default().fg(palette::CHROME);
     for y in [tabs.y - 1, tabs.y + 1] {
         paint_rule(
             frame,
@@ -3979,19 +4004,73 @@ fn draw_tab_bar(
             panes.divide.unwrap_or(sidebar.right()),
         );
     }
-    // 标签、之间一个分隔符，这一行其余部分用线填满，于是这一行读起来是一根条，而不是几个
-    // 落单的词。
-    let mut entries = vec![(Tab::Usage, wording::TAB_USAGE)];
+    let mut entries = vec![(
+        wording::TAB_USAGE,
+        state.tab == Tab::Usage,
+        HitAction::SwitchTab(Tab::Usage),
+    )];
     if state.todo.visible() {
-        entries.push((Tab::Todo, wording::TAB_TODO));
+        entries.push((
+            wording::TAB_TODO,
+            state.tab == Tab::Todo,
+            HitAction::SwitchTab(Tab::Todo),
+        ));
     }
-    entries.push((Tab::Trace, wording::TAB_TRACE));
-    entries.push((Tab::Files, wording::TAB_FILES));
+    entries.push((
+        wording::TAB_FILES,
+        state.tab == Tab::Files,
+        HitAction::SwitchTab(Tab::Files),
+    ));
+    draw_label_bar(frame, state, tabs, &entries);
+}
+
+/// 主列的页签条：`对话 ┆ 轨迹`，同一份转录的两个视图
+/// （`.scratch/trace-in-main/spec.md` §1、§2）。
+///
+/// 它只画标签下面那一条线 —— 屏幕第一行就是标签那一行，上边界就是屏幕自己，不必再画一条。
+/// 点标签切页、从不给键位：照左栏那条既有的规矩（`Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环）。
+fn draw_main_tab_bar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    paint_rule(
+        frame,
+        panes.main_tabs.y + 1,
+        panes.main.x,
+        panes.screen.right(),
+    );
+    let entries = [
+        (
+            wording::TAB_CONVERSATION,
+            state.main_tab == MainTab::Conversation,
+            HitAction::SwitchMainTab(MainTab::Conversation),
+        ),
+        (
+            wording::TAB_TRACE,
+            state.main_tab == MainTab::Trace,
+            HitAction::SwitchMainTab(MainTab::Trace),
+        ),
+    ];
+    draw_label_bar(frame, state, panes.main_tabs, &entries);
+}
+
+/// 一条页签条的标签行：标签、之间一个分隔符、这一行其余部分用线填满，选中的那个更亮
+/// （spec §3；`.scratch/trace-in-main/spec.md` §2）。
+///
+/// 左栏与主列各有一条，用的是同一段画法：唯一的区别是跨哪些列、以及每个标签点下去落到哪个
+/// 动作上。每个标签在画出来时记下一个命中矩形 —— 指针只能打中真在那里的东西，而填满这一行
+/// 其余部分的线不是页签。线条由调用方画：左栏那条夹在身份与页区之间，主列那条只在标签下面。
+fn draw_label_bar(
+    frame: &mut ratatui::Frame,
+    state: &mut TuiState,
+    row: Rect,
+    entries: &[(&'static str, bool, HitAction)],
+) {
+    let dim = Style::default().fg(palette::MUTED);
+    // 「线」与「字」在这一行上分开取色：未选中的标签是**文字**（仍旧 `DarkGray`，它得读得
+    // 出来），而线与它们之间的分隔符是**框架**（`palette::CHROME`，退到后面去）。
+    let rule = Style::default().fg(palette::CHROME);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0u16;
-    for (index, (tab, label)) in entries.iter().enumerate() {
-        let selected = *tab == state.tab;
-        let style = if selected {
+    for (index, (label, selected, action)) in entries.iter().enumerate() {
+        let style = if *selected {
             // 常驻选中 = `ACCENT` + `BOLD`（`.scratch/tui-visual-language/spec.md` §8）。
             Style::default()
                 .fg(palette::ACCENT)
@@ -4000,10 +4079,10 @@ fn draw_tab_bar(
             dim
         };
         let width = text_columns(label) as u16;
-        if used + width <= sidebar.width {
+        if used + width <= row.width {
             state.regions.cells.push(Region {
-                rect: Rect::new(tabs.x + used, tabs.y, width, 1),
-                action: HitAction::SwitchTab(*tab),
+                rect: Rect::new(row.x + used, row.y, width, 1),
+                action: *action,
             });
         }
         spans.push(Span::styled((*label).to_owned(), style));
@@ -4014,10 +4093,10 @@ fn draw_tab_bar(
         }
     }
     spans.push(Span::styled(
-        "┄".repeat(sidebar.width.saturating_sub(used) as usize),
+        "┄".repeat(row.width.saturating_sub(used) as usize),
         rule,
     ));
-    frame.render_widget(Paragraph::new(Line::from(spans)), tabs);
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
 }
 
 /// 状态行：哪个模型、哪个模式、窗口有多满，以及**在不在跑**（spec §5、
@@ -4078,6 +4157,9 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
 /// 接受它的代价是：在占位页上，会话的读数根本不在屏幕上，于是状态行的 `上下文 n%` 是唯一
 /// 剩下的那个。这不是 bug —— 没有第二份数字可以退回 —— 而另一条路（用键盘走页签）在这里
 /// 本来也不通。
+///
+/// `轨迹` 曾经是这一列上的第三页；2026-10-06 起它搬进了主列，成了 [`MainTab`] 的第二个标签
+/// （`.scratch/trace-in-main/spec.md` §2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     /// 会话的读数：旧信息面板装着的那些。
@@ -4085,10 +4167,20 @@ enum Tab {
     /// agent 的待办列表，也是唯一不总在条上的页签：主会话第一次提交一次列表时它出现，此后
     /// 整个会话都在（`.scratch/todo-and-modes/spec.md` §4）。
     Todo,
-    /// 调用轨迹：左栏的一页，画全量块（`.scratch/trace-tab/spec.md`）。
-    Trace,
     /// 这个会话碰过的文件。还没做。
     Files,
+}
+
+/// 正在显示主列的哪一页：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
+///
+/// 与 [`Tab`] 同一套规矩：点出来的、从不给键位、只活在这一次进程里。默认是 `Conversation`
+/// —— 起步与拆分之前一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainTab {
+    /// 对话视图：用户文本、assistant 正文与保留清单。
+    Conversation,
+    /// 轨迹视图：全量块（`.scratch/trace-tab/spec.md` §2）。
+    Trace,
 }
 
 /// 四个浮层表面共用的框架：`CHROME` 的虚线，**四角为空**
@@ -4368,28 +4460,51 @@ fn mark_lines() -> Vec<(String, Color)> {
         .collect()
 }
 
-/// 转录：它对着窗格滚动缓冲的那扇窗、它右边缘的滚动条与回合条，以及说出视口在哪里的指示器
-/// （spec §1、§3、§4）。
+/// 主列的内容区：这条转录的两个视图之一，加上它右边缘的滚动条、指示器，以及（只在对话页上
+/// 的）回合条。
+///
+/// 画哪一页看 [`TuiState::main_tab`]（`.scratch/trace-in-main/spec.md` §3）：两页共用同一块
+/// 矩形、同一条滚动条列，各自的窗格、滚动位置、跟随与链接表互不影响。回合条只画在对话页上
+/// —— 它量的是对话视口的单位位置，画在轨迹页上会指着一个跟它无关的视口（§4）。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let text_area = panes.transcript_text();
-    let live = state.conversation_live();
-    let rows = state
-        .conversation
-        .view(text_area.width, text_area.height, &live);
-    // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于哪条
-    // 来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
-    state.conversation_drawn.top = text_area.y;
-    state.conversation_drawn.rows = (0..rows.len())
-        .map(|offset| {
-            state
+    match state.main_tab {
+        MainTab::Conversation => {
+            let live = state.conversation_live();
+            let rows = state
                 .conversation
-                .source_at(state.conversation.top() + offset)
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(rows), text_area);
-    draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
-    draw_turn_rail(frame, panes, state);
-    draw_indicator(frame, text_area, state, Viewport::Conversation);
+                .view(text_area.width, text_area.height, &live);
+            // 一次点击能打中的就是这一帧真画出来的，逐行算。窗格回答每一条被画出来的显示行属于
+            // 哪条来源行，而来源行正是这次点击的链接所按的键（票 04 §1）。
+            state.conversation_drawn.top = text_area.y;
+            state.conversation_drawn.rows = (0..rows.len())
+                .map(|offset| {
+                    state
+                        .conversation
+                        .source_at(state.conversation.top() + offset)
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(rows), text_area);
+            draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
+            draw_turn_rail(frame, panes, state);
+            draw_indicator(frame, text_area, state, Viewport::Conversation);
+        }
+        MainTab::Trace => {
+            // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
+            let live = TuiState::live_rows(&state.live);
+            let rows = state.trace.view(text_area.width, text_area.height, &live);
+            state.trace_drawn.top = text_area.y;
+            state.trace_drawn.rows = (0..rows.len())
+                .map(|offset| state.trace.source_at(state.trace.top() + offset))
+                .collect();
+            // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
+            // 只是现在它等于主列的内容区）。
+            state.trace_rect = Some(text_area);
+            frame.render_widget(Paragraph::new(rows), text_area);
+            draw_scrollbar(frame, panes.scrollbar(), &state.trace);
+            draw_indicator(frame, text_area, state, Viewport::Trace);
+        }
+    }
 }
 
 /// 一个视图里跨块的排版状态（`.scratch/tui-visual-language/spec.md` §23）。
@@ -5362,6 +5477,45 @@ fn paint_block(
         .into()],
         Block::Notice(message) => vec![narration(message.clone()).into()],
     }
+}
+
+/// 一条渲染事件发生在什么时候（`.scratch/trace-in-main/spec.md` §5）。
+///
+/// 进流的那些带着信封，所以时刻是准的；渲染层自己那两条（告知与诊断）的时刻由源头打上 ——
+/// 它们不是事件，没有别的信封可依。增量绕过事件流、本就没有时刻，用收到它的那一刻顶上：
+/// 它产出的行只有那条活尾巴与还开着的思考行，而思考行定稿时用的正是这里给的那一刻。
+fn event_at(event: &RenderEvent) -> DateTime<Utc> {
+    match event {
+        RenderEvent::Logged(event) => event.at,
+        RenderEvent::Diagnostic { at, .. } | RenderEvent::Notice { at, .. } => *at,
+        RenderEvent::Delta { .. } => Utc::now(),
+    }
+}
+
+/// 给一行按上它的时刻（块的**首行**与定稿的思考行都走它）。
+fn stamped_line(line: Line<'static>, at: DateTime<Utc>) -> Line<'static> {
+    let mut line = line;
+    line.spans.insert(
+        0,
+        Span::styled(wording::stamp(at), Style::default().fg(palette::MUTED)),
+    );
+    line
+}
+
+/// 给一个块画出来的那些行按上时刻：只有**第一条**行带它，续行原样
+/// （`.scratch/trace-in-main/spec.md` §5）。
+///
+/// 折行（一条太长的叙述被窗格切成几行）发生在**窗格**里，所以那些续行从第 0 列起 —— 一块
+/// 一个时刻读起来仍然清楚，而让每一行都重复时刻反而是噪音。块自己排出来的续行（markdown
+/// 折行的那几种）也一样：时刻是**块**的属性，不是每一行的。
+fn stamp_lines(mut lines: Vec<RenderedLine>, at: DateTime<Utc>) -> Vec<RenderedLine> {
+    if let Some(head) = lines.first_mut() {
+        head.line.spans.insert(
+            0,
+            Span::styled(wording::stamp(at), Style::default().fg(palette::MUTED)),
+        );
+    }
+    lines
 }
 
 /// 轨迹页里两个单位之间的那条分隔线：一整行虚线，穿外壳同一种框架色。

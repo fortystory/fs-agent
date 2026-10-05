@@ -70,6 +70,26 @@ fn event(seq: u64, payload: EventPayload) -> Event {
     Event::new(seq, SpeakerId::Debater("kimi".into()), payload)
 }
 
+/// 一个固定的时刻：时间戳的断言要可复现，所以不读真时钟
+/// （`.scratch/trace-in-main/spec.md` §5）。
+fn fixed_at(hour: u32, minute: u32, second: u32) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Utc
+        .with_ymd_and_hms(2026, 10, 6, hour, minute, second)
+        .single()
+        .expect("那是一个真实的时刻")
+}
+
+/// 一条带**固定时刻**的事件。
+fn event_at(seq: u64, at: chrono::DateTime<chrono::Utc>, payload: EventPayload) -> Event {
+    Event {
+        seq,
+        at,
+        speaker_id: SpeakerId::Debater("kimi".into()),
+        payload,
+    }
+}
+
 fn session_started(seq: u64) -> Event {
     event(
         seq,
@@ -226,10 +246,14 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 120x40 下回合条那一列：画在其中的字符，空格丢掉。
 ///
 /// 回合条坐在转录的最后一列，在帧里的 119 —— 滚动条占它
-/// 前面那一列（`.scratch/tui-sidebar/spec.md` §1）。
+/// 前面那一列（`.scratch/tui-sidebar/spec.md` §1）。它只在对话页上画，所以这一列从转录的
+/// 第一行起量；主列页签条自己那条线也画到屏幕右缘，量进去就什么都不剩
+/// （`.scratch/trace-in-main/spec.md` §3）。
+const TRANSCRIPT_TOP: u16 = 2;
+
 fn turn_rail_shape(state: &mut TuiState) -> String {
     let frame = buffer(120, 40, state);
-    (0..39u16)
+    (TRANSCRIPT_TOP..39u16)
         // 转录结束在主列第一条横线开始的地方。
         .take_while(|y| !row_text(&frame, *y, 120).ends_with('┄'))
         .map(|y| frame[(119, y)].symbol().chars().next().unwrap_or(' '))
@@ -269,18 +293,26 @@ fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
     }
 }
 
-/// 切到轨迹页：工具行与思考行现在只住在那里（`.scratch/trace-tab/spec.md` §2）。
+/// 切到轨迹页：工具行与思考行现在只住在那里，而那一页是主列页签条上的第二个标签
+/// （`.scratch/trace-in-main/spec.md` §2）。
 fn open_trace_tab(state: &mut TuiState, width: u16, height: u16) {
-    let row = row_of(state, width, height, wording::TAB_TRACE).expect("页签条在屏幕上");
-    state.mouse(click(10, row));
+    click_row(state, width, height, wording::TAB_TRACE);
     let _ = screen(width, height, state);
 }
 
+/// 点屏幕上有 `needle` 的那一行里的那一格 —— 列按它画出来的位置算，因为点击按指针落在哪个
+/// 窗格里分派（`.scratch/trace-tab/spec.md` §1），而主列从 41 列起。
 fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let Some(row) = row_of(state, width, height, needle) else {
         panic!("屏幕上没有哪一行含 {needle:?}");
     };
-    state.mouse(click(10, row));
+    let frame = buffer(width, height, state);
+    let text = row_text(&frame, row, width);
+    let at = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("第 {row} 行不含 {needle:?}：{text:?}"));
+    let column = fs_agent::render::width::text_columns(&text[..at]) as u16;
+    state.mouse(click(column, row));
 }
 
 /// 左栏里按距页首行的偏移取一个字段。
@@ -557,7 +589,7 @@ fn a_live_event_arriving_mid_replay_waits_for_the_history() {
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
-    state.live_event(RenderEvent::Notice("fs-agent 启动".to_owned()));
+    state.live_event(RenderEvent::notice("fs-agent 启动".to_owned()));
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
@@ -644,7 +676,7 @@ fn the_divider_separates_history_from_what_this_run_adds() {
         &mut state,
         vec![session_started(1), message(2, "上一段的回答", None)],
     );
-    state.live_event(RenderEvent::Notice("本段的 banner".to_owned()));
+    state.live_event(RenderEvent::notice("本段的 banner".to_owned()));
     run_replay(&mut state);
 
     let rows = screen(120, 40, &mut state);
@@ -1059,7 +1091,7 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
     );
 
     // 覆盖层挂着的时候输出到达：它被追加，而不是被跟随。
-    state.live_event(RenderEvent::Notice("历史详情打开时的新内容".to_owned()));
+    state.live_event(RenderEvent::notice("历史详情打开时的新内容".to_owned()));
     let frozen = screen(120, 40, &mut state);
     assert!(
         frozen.iter().any(|row| row.contains("── 参数 ──")),
@@ -1084,6 +1116,50 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
 
 /// 重放历史时**轨迹页也长出来**：`--continue` 的重播与实时事件走同一条 push 路径
 /// （`.scratch/trace-tab/issues/09-trace-page-alive.md` 验证 4）。
+/// `--continue` 重放出来的历史带着**当初**那些时刻，而不是重放那一刻
+/// （`.scratch/trace-in-main/spec.md` §5）。
+#[test]
+fn a_replayed_history_keeps_the_times_it_was_written_with() {
+    let mut state = state();
+    let early = fixed_at(4, 16, 53);
+    let late = fixed_at(9, 5, 1);
+    replay(
+        &mut state,
+        vec![
+            event_at(
+                1,
+                early,
+                EventPayload::TurnStarted {
+                    agent: SpeakerId::Debater("kimi".into()),
+                    iteration: 1,
+                },
+            ),
+            event_at(
+                2,
+                late,
+                EventPayload::TurnEnded {
+                    reason: StopReason::Completed,
+                },
+            ),
+        ],
+    );
+    run_replay(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    let text = screen(120, 40, &mut state).join("\n");
+    let early_stamp = wording::stamp(early);
+    let late_stamp = wording::stamp(late);
+    assert_ne!(early_stamp, late_stamp, "两个时刻读起来不同");
+    assert!(
+        text.contains(&early_stamp),
+        "回合开始那一行带着当初的时刻（{early_stamp}）：{text}"
+    );
+    assert!(
+        text.contains(&late_stamp),
+        "收尾那一行也带着当初的时刻（{late_stamp}）：{text}"
+    );
+}
+
 #[test]
 fn a_replayed_history_grows_in_the_trace_page_too() {
     let mut state = state();

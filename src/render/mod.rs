@@ -41,6 +41,7 @@ pub mod width;
 pub mod wording;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
@@ -81,13 +82,38 @@ pub enum RenderEvent {
         text: String,
     },
     Logged(Event),
-    /// 只给渲染器看的叙述，不是事件。
-    Diagnostic(String),
+    /// 只给渲染器看的叙述，不是事件。`at` 是它**发生**的那一刻：它不是事件、没有信封可依，
+    /// 所以时刻在源头打上（`.scratch/trace-in-main/spec.md` §5）。
+    Diagnostic {
+        at: DateTime<Utc>,
+        message: String,
+    },
     /// 一行不为任何事件说话的界面文字：启动横幅与交互循环的朴素反馈。
     ///
     /// 不是 [`RenderEvent::Diagnostic`]：诊断是系统在报什么，并且被标成那样，而一条告知
-    /// 就是那一行本身。
-    Notice(String),
+    /// 就是那一行本身。`at` 同理，时间在源头打上。
+    Notice {
+        at: DateTime<Utc>,
+        message: String,
+    },
+}
+
+impl RenderEvent {
+    /// 一条诊断，时刻取现在。实时路径与不需要钉死时刻的测试走它。
+    pub fn diagnostic(message: impl Into<String>) -> Self {
+        Self::Diagnostic {
+            at: Utc::now(),
+            message: message.into(),
+        }
+    }
+
+    /// 一条界面告知，时刻取现在。
+    pub fn notice(message: impl Into<String>) -> Self {
+        Self::Notice {
+            at: Utc::now(),
+            message: message.into(),
+        }
+    }
 }
 
 /// headless 渲染器的两个显式写出口，组装时注入。
@@ -131,11 +157,10 @@ impl RenderHandle {
         let _ = self.sender.send(RenderEvent::Logged(event.clone()));
     }
 
-    /// 一条只给渲染器看的诊断，不是事件。
+    /// 一条只给渲染器看的诊断，不是事件。时刻在这里打上 —— 它不是事件，没有信封可依
+    /// （`.scratch/trace-in-main/spec.md` §5）。
     pub fn diagnostic(&self, message: &str) {
-        let _ = self
-            .sender
-            .send(RenderEvent::Diagnostic(message.to_owned()));
+        let _ = self.sender.send(RenderEvent::diagnostic(message));
     }
 
     /// 一行原样显示的界面文字。
@@ -143,7 +168,7 @@ impl RenderHandle {
     /// 这条接缝存在，是为了让持有 harness 的调用方永远不必自己 print：渲染器一旦占住
     /// 终端，第二个写入者就会落进活动区域里（spec §19）。
     pub fn notice(&self, message: &str) {
-        let _ = self.sender.send(RenderEvent::Notice(message.to_owned()));
+        let _ = self.sender.send(RenderEvent::notice(message));
     }
 }
 

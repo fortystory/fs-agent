@@ -4,8 +4,9 @@
 //! 拆开，正是让降级阶梯恰好只有一个家的原因 —— 渲染器里没有 —— 也让人能一口气把那些
 //! 阈值读完，而不是从四个调用点往回重建。
 //!
-//! 外壳是**一条左栏、一条主列**：左栏放标记、页签条与会话读数，主列自上而下堆着转录、
-//! 状态行、输入区与提示行。四周没有外框 —— 终端自己就是边界（`.scratch/tui-chrome/spec.md`
+//! 外壳是**一条左栏、一条主列**：左栏放标记、页签条与会话读数，主列自上而下堆着**它自己的
+//! 页签条**（`对话` / `轨迹`）、转录、状态行、输入区与提示行。四周没有外框 —— 终端自己就是
+//! 边界（`.scratch/tui-chrome/spec.md` §1；主列那条页签条见 `.scratch/trace-in-main/spec.md`
 //! §1）。左栏的去留由**宽度与用户意愿相乘**决定：宽度档在这里算，意愿由调用方作为 `wanted`
 //! 传进来 —— 两者不同层，谁也不能替谁说话（`.scratch/sidebar-toggle/spec.md` §2）。
 
@@ -17,12 +18,19 @@ use crate::render::editor::Placed;
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 10;
 
-/// 外壳花在既不是转录也不是输入区的那些构件上的行：主列的两条分隔线、状态行与提示行。
+/// 外壳花在既不是转录也不是输入区的那些构件上的行：**主列页签条的两行**（标签、它下面那条
+/// 线）、输入区与提示行各自上面那条线、状态行与提示行。
 /// `转录行 = h − CHROME − 输入行数`，这就是纵向算术的全部（spec §1、§2）。
 ///
 /// 它从 7 一路减到这里，两笔账都是 `tui-chrome` 的：外框的上下两行随外框一起离开（§1），
-/// 状态行上方那条线也离开、它占的那一行还给了转录（§2）。
-const CHROME: u16 = 4;
+/// 状态行上方那条线也离开、它占的那一行还给了转录（§2）。2026-10-06 起它涨到 6：主列顶上
+/// 多了一条页签条（标签行 + 一条线，屏幕上缘就是它的上边界），轨迹视图从左栏搬进主列
+/// （`.scratch/trace-in-main/spec.md` §1）。
+const CHROME: u16 = 6;
+
+/// 主列页签条花掉的行：标签行与它下面那条线（`.scratch/trace-in-main/spec.md` §1）。它比
+/// 左栏那条少一行 —— 主列顶上就是屏幕边缘，不需要再画一条线把它跟什么分开。
+const MAIN_TABS_ROWS: u16 = 2;
 
 /// **一个带框浮层**花掉的行列：它的内容矩形 = 四边各内缩一格。
 ///
@@ -30,7 +38,8 @@ const CHROME: u16 = 4;
 /// 带框的东西：问题覆盖层、`/` 菜单、详情覆盖层。
 const BORDER_COLUMNS: u16 = 2;
 
-/// 页签条花掉的行：一条分隔线、标签、一条分隔线（spec §3）。
+/// 页签条花掉的行：一条分隔线、标签、一条分隔线（spec §3）。左栏与主列各有一条页签条，用的是
+/// 同一个常数（`.scratch/trace-in-main/spec.md` §1）。
 const TAB_ROWS: u16 = 3;
 
 /// 页签条顶端那条分隔线与它的标签之间的行：就是那条分隔线本身。写在 [`TAB_ROWS`] 旁边，
@@ -41,11 +50,19 @@ const TAB_RULE_ROWS: u16 = 1;
 /// 转录长高了而重新折行（spec §1）。
 const TRAILING_COLUMNS: u16 = 2;
 
+/// 轨迹页行首那个时间戳占的列：`HH:MM:SS` 八列加它后面那个空格
+/// （`.scratch/trace-in-main/spec.md` §5）。
+///
+/// 轨迹内容的排版宽度要把它扣掉，而且同一个块的续行按它补白 —— 两处公用这一个常数，
+/// 于是时刻列不会与正文抢列。
+pub const STAMP_COLUMNS: u16 = 9;
+
 /// 左栏的两个内容宽度（spec §2）。两者之间刻意没有档：prototype 量过中间那一档，它换回来
 /// 的 `（6%）` 已经在状态行里了。
 ///
 /// 宽档是公开的，因为轨迹视图的前缀分档要问「这是不是宽档」—— 宽档带方括号、窄档去掉
-/// （`.scratch/trace-tab/spec.md` §3）。判据只此一处，渲染器不再自己写一个 40。
+/// （`.scratch/trace-tab/spec.md` §3）。判据只此一处，渲染器不再自己写一个 40；2026-10-06
+/// 起它量的是**主列页宽**，因为轨迹视图搬进了主列（`.scratch/trace-in-main/spec.md` §3）。
 pub const SIDEBAR_WIDE: u16 = 40;
 const SIDEBAR_NARROW: u16 = 28;
 
@@ -118,6 +135,9 @@ pub struct Regions {
     pub screen: Rect,
     /// 主列：分隔线右侧的一切。问题覆盖层与 `/` 菜单在它里面定位。
     pub main: Rect,
+    /// 主列页签条的标签行：`对话 ┆ 轨迹`（`.scratch/trace-in-main/spec.md` §1）。它上下各一条
+    /// 虚线，转录从它下面一行起 —— 与左栏那条页签条同一种画法，只是跨的是主列。
+    pub main_tabs: Rect,
     /// 转录的那些行：文字、滚动条与回合条合在一起。
     pub transcript: Rect,
     /// 回合条的那一列，在转录的右缘。会话有没有单位放进去都画。
@@ -166,28 +186,6 @@ impl Regions {
             TRAILING_COLUMNS - 1,
             self.transcript.height,
         )
-    }
-
-    /// 左栏页的正文区：页宽减掉右缘永远留着的那两列。
-    ///
-    /// 轨迹页复用同一份 2 列预留，滚动条画在**最右列** —— 那里没有回合条，所以两列里用得上
-    /// 的只有一列，另一列是给「文字不因转录长高而重新折行」留的
-    /// （`.scratch/tui-visual-language/issues/07` 决定 2、`spec §21`）。
-    pub fn sidebar_page_text(&self) -> Option<Rect> {
-        self.sidebar_page.map(|page| {
-            Rect::new(
-                page.x,
-                page.y,
-                page.width.saturating_sub(TRAILING_COLUMNS),
-                page.height,
-            )
-        })
-    }
-
-    /// 左栏页最右那一列：轨迹页的滚动条画在这里。
-    pub fn sidebar_page_scrollbar(&self) -> Option<Rect> {
-        self.sidebar_page
-            .map(|page| Rect::new(page.right().saturating_sub(1), page.y, 1, page.height))
     }
 
     /// 主列里问题覆盖层的宽度。
@@ -346,7 +344,11 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     // 状态行**紧贴**转录的最后一行：它上方那条线已经不画了，省下的一行整行还给了转录
     // （spec §2）。它下面两条线各占一行 —— 而 `bottom()` 是排他的，所以那条线正好落在
     // `status.bottom()` / `input.bottom()` 自己那一行上，内容从下一行起。
-    let transcript = Rect::new(main.x, main.y, main.width, transcript_rows);
+    //
+    // 主列顶上先让出页签条那两行（`.scratch/trace-in-main/spec.md` §1）：标签行就是屏幕第一
+    // 行，转录从它下面那条线之后再起。
+    let main_tabs = Rect::new(main.x, main.y, main.width, 1);
+    let transcript = Rect::new(main.x, main.y + MAIN_TABS_ROWS, main.width, transcript_rows);
     let status = Rect::new(main.x, transcript.bottom(), main.width, 1);
     let input = Rect::new(main.x, status.bottom() + 1, main.width, input_rows);
     // 提示行跨**整屏**（`.scratch/tui-visual-language/spec.md` §16）—— 左栏与主列都让出这一
@@ -362,6 +364,7 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     Regions {
         screen: area,
         main,
+        main_tabs,
         transcript,
         rail,
         status,

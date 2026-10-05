@@ -11,6 +11,7 @@
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use ratatui::buffer::CellWidth;
 
 use crate::events::{
@@ -1602,18 +1603,33 @@ pub fn logo_lines() -> [&'static str; 5] {
 }
 
 // ---------------------------------------------------------------------------
-// 外壳：左栏的页签、状态行与回合条
-// （`.scratch/tui-sidebar/spec.md` §3、§5、§6）
+// 外壳：左栏与主列的页签、状态行与回合条
+// （`.scratch/tui-sidebar/spec.md` §3、§5、§6；`.scratch/trace-in-main/spec.md` §2）
 // ---------------------------------------------------------------------------
 
 /// 左栏的页签标签，按它们画出来的先后（spec §3）。
 ///
 /// `todo` 排第二，而且是唯一一个不是常在那儿的标签：会话有了列表之后它才出现
-/// （`.scratch/todo-and-modes/spec.md` §4）。四个标签加它们的间隔，在窄档仍然放得下。
+/// （`.scratch/todo-and-modes/spec.md` §4）。三个标签加它们的间隔，在窄档仍然放得下。
+///
+/// `轨迹` **不在这一列里**：2026-10-06 起它是主列页签条上的第二个标签，与 `对话` 并列
+/// （`.scratch/trace-in-main/spec.md` §2）。
 pub const TAB_USAGE: &str = "调用量";
 pub const TAB_TODO: &str = "todo";
-pub const TAB_TRACE: &str = "轨迹";
 pub const TAB_FILES: &str = "文件";
+
+/// 主列页签条上的两个标签：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
+pub const TAB_CONVERSATION: &str = "对话";
+pub const TAB_TRACE: &str = "轨迹";
+
+/// 轨迹页里一条块行开头的那个时刻：**本地时区**、秒级，连它后面那个分隔的空格一起
+/// —— 八个字符加一列空白就是 [`crate::render::layout::STAMP_COLUMNS`] 那九列
+/// （`.scratch/trace-in-main/spec.md` §5）。
+///
+/// 时刻本身来自产生这个块的那条事件的 `at`，所以 `--continue` 重放出来的是当初那一刻。
+pub fn stamp(at: DateTime<Utc>) -> String {
+    format!("{} ", at.with_timezone(&chrono::Local).format("%H:%M:%S"))
+}
 
 // ---------------------------------------------------------------------------
 // 符号表与字符级间距
