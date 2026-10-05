@@ -1123,51 +1123,44 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
 }
 
 #[test]
-fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
-    // 左栏自己的高度阶梯（spec §2）：先走的是**标记** —— 退到文字
-    // 身份，再退到什么都不画 —— 这之后字段才从尾部离开（缓存 →
-    // 输出 → 输入）。地板是页签条加 上下文 / token / 回合，宽度在这
-    // 整件事里从不参与。
-    // 外框与状态行上方那条线离开之后，左栏的内容行**就是**终端高度
-    // （不再减二），于是「先退到文字身份、再退到什么都不画」的后两档
-    // 落到了 40×10 地板以下 —— 它们够不到了，而这也正是 40×10 现在
-    // 更宽裕的同一笔账（`.scratch/tui-chrome/spec.md` §1–§2）。
+fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
+    // 左栏自己的高度阶梯（`.scratch/trace-tab/spec.md` §4）：**标记**先走
+    // —— 退到文字身份，再退到什么都不画 —— 只要页区还保得住那三行地板。
+    // 宽度在这整件事里从不参与，页高也不再随「读数有几项」走。
     // 左栏顶上留的那一行空行是**花掉的**，所以阶梯看到的内容行是 `h − 1`。
+    use fs_agent::render::layout::{plan, SidebarKind};
+    use ratatui::layout::Rect;
+
     let cases = [
-        // 高度、身份是什么、活下来几项读数
-        (15u16, "mark", 6usize),
-        (14, "fs-agent", 6),
-        (11, "fs-agent", 6),
-        (10, "none", 6),
+        // 高度、身份、页区行数
+        (24u16, SidebarKind::Mark, 15u16), // 23 − 5 − 3
+        (15, SidebarKind::Mark, 6),        // 14 − 5 − 3
+        (12, SidebarKind::Mark, 3),        // 11 − 5 − 3，正好是地板
+        (11, SidebarKind::Text, 6),        // 10 − 1 − 3：标记让位换回页高
+        (10, SidebarKind::Text, 5),        // 9 − 1 − 3
     ];
-    for (height, identity, fields) in cases {
+    for (height, kind, page_rows) in cases {
         let mut state = state();
         let rows = screen(120, height, &mut state);
         let text = rows.join("\n");
-        let mark = text.contains('▄');
         assert_eq!(
-            mark,
-            identity == "mark",
-            "{height} 行只在十六行往上才画标记：{text}"
+            text.contains('▄'),
+            kind == SidebarKind::Mark,
+            "{height} 行画不画标记：{text}"
         );
         assert_eq!(
             text.contains("fs-agent"),
-            identity == "fs-agent",
-            "{height} 行只在标记那一档之下才画文字身份：{text}"
+            kind == SidebarKind::Text,
+            "{height} 行的文字身份：{text}"
         );
-        let page = panel_text(120, height, &mut state);
+        let regions = plan(Rect::new(0, 0, 120, height), 1, true);
+        assert_eq!(regions.sidebar_kind, kind, "{height} 行的身份档");
         assert_eq!(
-            page.len(),
-            fields,
-            "{height} 行留下 {fields} 项读数：{page:?}"
+            regions.sidebar_page.expect("左栏在").height,
+            page_rows,
+            "{height} 行的页区"
         );
-        assert_eq!(
-            text.contains("缓存"),
-            fields == 6,
-            "{height} 行先丢缓存那一行，再丢输入与输出那两行：{text}"
-        );
-        // 不管丢掉什么，页签条与回答「还剩多少余地」的那三项读数
-        // 都留下。
+        // 页签条与回答「还剩多少余地」的那三项读数在每一档都留下。
         assert!(text.contains("调用量"), "{height} 行留下页签条：{text}");
         assert!(
             text.contains("上下文"),
@@ -1179,6 +1172,84 @@ fn the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks() {
         );
         assert!(text.contains("回合"), "{height} 行留下回合那一行：{text}");
     }
+}
+
+/// 页区撑满之后左栏三档的实测（`.scratch/trace-tab/spec.md` §4）：
+/// 高度 = 内容行 − 身份 − 页签条，「用量字段数」那个常数退休。
+#[test]
+fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
+    use fs_agent::render::layout::{plan, SidebarKind};
+    use ratatui::layout::Rect;
+
+    let cases = [
+        // 宽、高、身份、页区行数
+        (120u16, 24u16, SidebarKind::Mark, 15u16), // 23 − 5 − 3
+        (80, 24, SidebarKind::Text, 19),           // 23 − 1 − 3
+        (80, 10, SidebarKind::Text, 5),            // 9 − 1 − 3
+    ];
+    for (width, height, kind, page_rows) in cases {
+        let regions = plan(Rect::new(0, 0, width, height), 1, true);
+        assert_eq!(regions.sidebar_kind, kind, "{width}x{height} 的身份");
+        let page = regions.sidebar_page.expect("左栏在");
+        assert_eq!(page.height, page_rows, "{width}x{height} 的页区：{page:?}");
+    }
+}
+
+/// 极矮终端里那行文字身份回来了：新阶梯给出的地板是「页签条 + 3 行」，
+/// 不再拿身份去换那六行读数（`.scratch/trace-tab/issues/08-sidebar-page-fills-height.md`）。
+#[test]
+fn the_tiny_terminal_keeps_its_text_identity() {
+    let rows = screen(80, 10, &mut state());
+    let text = rows.join("\n");
+    assert!(text.contains("fs-agent"), "80×10 保住文字身份：{text}");
+    assert!(
+        text.contains(wording::TAB_USAGE) && text.contains(wording::TAB_TRACE),
+        "页签条照旧：{text}"
+    );
+}
+
+/// 调用量页不看高度：页区有 15 行时它仍然贴顶画它的六项读数。
+#[test]
+fn the_usage_page_still_draws_its_six_fields_from_the_top() {
+    let page = panel_text(120, 24, &mut state());
+    assert_eq!(page.len(), 6, "六项读数照旧：{page:?}");
+    assert!(page[0].contains("上下文"), "{page:?}");
+    assert!(page[5].contains("缓存"), "{page:?}");
+}
+
+/// 页高撑满之后 todo 页白捡了更多条目：12 项在 120×24 里全部画下，
+/// 不再有 `＋N 项` 那一行（`.scratch/trace-tab/spec.md` §4）。
+#[test]
+fn the_todo_page_fits_more_items_now_that_the_page_fills_the_height() {
+    let items: Vec<(String, &str)> = (0..12)
+        .map(|index| (format!("第 {index} 项"), "pending"))
+        .collect();
+    let borrowed: Vec<(&str, &str)> = items
+        .iter()
+        .map(|(content, status)| (content.as_str(), *status))
+        .collect();
+
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(&mut state, "call-1", kimi(), todo_args(&borrowed));
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
+
+    let rows = sidebar_rows(&mut state, 120, 24);
+    let shown = (0..12)
+        .filter(|index| {
+            rows.iter()
+                .any(|line| line.contains(&format!("第 {index} 项")))
+        })
+        .count();
+    assert_eq!(shown, 12, "15 行的页区把 12 项都装下了：{rows:#?}");
+    assert!(
+        !rows.iter().any(|line| line.contains("＋")),
+        "没有溢出行：{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|line| line.contains("已完成 0/12")),
+        "计数行照旧：{rows:#?}"
+    );
 }
 
 /// 某个页签的标签起始的那一格，从帧上读出来。
@@ -3051,10 +3122,12 @@ fn the_todo_page_lists_each_item_with_its_glyph_and_counts_them() {
 
 #[test]
 fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
-    // 这一页不滚动：高度阶梯给出行数，而计数前面那
-    // 一行说明有多少项没挤下。计数那一行是地板 ——
+    // 这一页不滚动：页区给出的行数里，计数行先被留出来，
+    // 塞不下的在它上面用一行说明。计数那一行是地板 ——
     // 别的都留不下时剩下的就是它。
-    let items: Vec<(String, &str)> = (0..12)
+    // 页区撑满之后（`.scratch/trace-tab/spec.md` §4）这一页高 15 行，
+    // 所以要 30 项才逼得出溢出行。
+    let items: Vec<(String, &str)> = (0..30)
         .map(|index| (format!("第 {index} 项"), "pending"))
         .collect();
     let borrowed: Vec<(&str, &str)> = items
@@ -3070,25 +3143,29 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
     let rows = sidebar_rows(&mut state, 120, 24);
     let count = rows
         .iter()
-        .position(|line| line.contains("已完成 0/12"))
+        .position(|line| line.contains("已完成 0/30"))
         .unwrap_or_else(|| panic!("计数那一行在页面上：{rows:#?}"));
     let shown = rows
         .iter()
         .take(count)
-        .filter(|line| (0..12).any(|index| line.contains(&format!("第 {index} 项"))))
+        .filter(|line| (0..30).any(|index| line.contains(&format!("第 {index} 项"))))
         .count();
     let overflow = rows[count - 1].clone();
     assert!(
-        overflow.contains(&format!("＋{} 项", 12 - shown)),
+        overflow.contains(&format!("＋{} 项", 30 - shown)),
         "计数上面那一行说明有多少项没挤下（显示了 {shown} 项）：{rows:#?}"
     );
-    assert!(shown < 12, "这一页没能把它们全装下：{rows:#?}");
+    assert!(shown < 30, "这一页没能把它们全装下：{rows:#?}");
+    assert_eq!(
+        shown, 13,
+        "15 行的页区里条目拿 14 行，其中一行归溢出：{rows:#?}"
+    );
 }
 
 #[test]
 fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
     // 走面板而不是走一帧，因为没有终端会向布局要一页
-    // 只有一行的页面 —— `SIDEBAR_MIN_FIELDS` 才是地板 —— 而这条规矩
+    // 只有一行的页面 —— `SIDEBAR_MIN_PAGE_ROWS` 才是地板 —— 而这条规矩
     // 在那儿仍然得成立，而不是画出一个跑出来的项。
     use fs_agent::render::todo::TodoPanel;
     use fs_agent::render::{Block, ToolBlock, ToolOutcome};

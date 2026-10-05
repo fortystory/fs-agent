@@ -1,7 +1,7 @@
 # 08 — 左栏页高撑满
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: —
 
@@ -38,3 +38,21 @@ Blocked by: —
 
 - 不改左栏宽度、档位门槛与 `Ctrl-O` 的行为。
 - 不给轨迹页写任何内容 —— 它此时还是占位符。
+
+## 作答（2026-10-05）
+
+- `src/render/layout.rs`：`SIDEBAR_FIELDS = 6` 退休；`SIDEBAR_MIN_FIELDS` 改成
+  `SIDEBAR_MIN_PAGE_ROWS = 3`（页的地板）；`sidebar_content` 的判据改成
+  `kind.rows() + TAB_ROWS + SIDEBAR_MIN_PAGE_ROWS <= content_rows`，返回的第二个值从
+  「字段数」变成「页区行数 = 内容行 − 身份 − 页签条」。`plan` 与 `Regions::sidebar_page`
+  的注释跟着改。调用量页与 todo 页**零代码改动**。
+- 新增三条帧/几何断言：`the_sidebar_page_fills_the_height_the_identity_and_tabs_leave`
+  （120×24 → 15、80×24 → 19、80×10 → 5）、`the_tiny_terminal_keeps_its_text_identity`、
+  `the_usage_page_still_draws_its_six_fields_from_the_top`、
+  `the_todo_page_fits_more_items_now_that_the_page_fills_the_height`（12 项全部画下、无溢出行）。
+- 两条既有测试随新阶梯改写：`the_sidebar_gives_up_its_identity_then_its_fields_as_it_shrinks`
+  → `the_sidebar_gives_up_its_identity_before_the_page_floor`（12 行正好是页地板、11 行让出标记
+  换回 6 行页）；`the_todo_page_shows_what_fits_then_says_how_many_more_there_are` 的项数从
+  12 提到 30（页高 15 之后 12 项装得下了）。
+- `cargo test` 全绿、`cargo clippy --all-targets` 无警告、`cargo fmt --check` 干净、
+  `python3 scripts/tui-startup-check.py` 仍是 0/15 red。

@@ -66,10 +66,11 @@ pub const LOGO_WIDTH: u16 = 38;
 const LOGO_ROWS: u16 = 5;
 const IDENTITY_ROWS: u16 = 1;
 
-/// 什么都不挤时左栏调用量页持有的字段，以及它最少保留的几个：上下文 / token / 回合
-/// （spec §2）。
-const SIDEBAR_FIELDS: u16 = 6;
-const SIDEBAR_MIN_FIELDS: u16 = 3;
+/// 页区在身份与页签条之外**最少**保留的行数（`.scratch/trace-tab/spec.md` §4）。
+///
+/// 它是「用量字段数」那个常数的接替者：页高不再是「调用量页有几项读数」，而是「内容行
+/// 减掉身份与页签条之后剩下的一切」；这个常数只说「剩这么少就不值当再让身份一步了」。
+const SIDEBAR_MIN_PAGE_ROWS: u16 = 3;
 
 /// 输入区最多持有的输入行数（spec §2）。
 const MAX_INPUT_ROWS: u16 = 10;
@@ -128,8 +129,9 @@ pub struct Regions {
     pub sidebar: Option<Rect>,
     /// 页签条的标签行，在左栏画了的时候。
     pub tabs: Option<Rect>,
-    /// 左栏的页行 —— 高度阶梯每留下一个字段就一行，所以这个矩形自己的高度就是那个数
-    /// （spec §2、§3）。
+    /// 左栏的页行 —— **内容行减掉身份与页签条之后剩下的一切**
+    /// （`.scratch/trace-tab/spec.md` §4）。每页自己决定怎么用这些行：调用量页贴顶画它的
+    /// 六项读数，todo 页按高度自适应。
     pub sidebar_page: Option<Rect>,
     /// 左栏与主列共有的那一列。
     pub divide: Option<u16>,
@@ -296,10 +298,10 @@ pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
 pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
     let tier = sidebar_tier(area.width, sidebar_wanted);
-    // 左栏顶上先让出一行空行，再算它的身份与字段 —— 留白是花掉的行，所以阶梯看到的是
-    // 减掉它之后的高度。
+    // 左栏顶上先让出一行空行，再算它的身份与页区行数 —— 留白是花掉的行，所以阶梯看到的
+    // 是减掉它之后的高度。
     let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
-    let (sidebar_kind, fields) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
+    let (sidebar_kind, page_rows) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
     let input_rows = draft_rows
         .max(MIN_INPUT_ROWS)
         .min(max_input_rows(area.height));
@@ -351,7 +353,7 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
                 sidebar.x,
                 sidebar.y + sidebar_kind.rows() + TAB_ROWS,
                 sidebar.width,
-                fields,
+                page_rows,
             )
         }),
         divide,
@@ -386,11 +388,11 @@ fn main_width(width: u16, sidebar_wanted: bool) -> u16 {
     width.saturating_sub(sidebar)
 }
 
-/// 给定左栏自己的内容高度，它的身份以及它能显示几个用量字段。
+/// 给定左栏自己的内容高度，它的身份以及页区拿几行。
 ///
-/// 阶梯是定死的：**标记**先走（先退成文字身份，再退成没有），然后从尾部丢字段 —— 先是
-/// 缓存，再是输出，再是输入。地板是页签条加上上下文 / token / 回合，所以回答「还剩多少」的
-/// 那三个读数最后走（spec §2）。意愿为假时连门都不进：整栏让位
+/// 阶梯是定死的：**标记**先走（先退成文字身份，再退成没有），让位给页区那条
+/// [`SIDEBAR_MIN_PAGE_ROWS`] 的地板；页区本身拿走剩下的一切 —— 页高与「调用量页有几项
+/// 读数」不再是一回事（`.scratch/trace-tab/spec.md` §4）。意愿为假时连门都不进：整栏让位
 /// （`.scratch/sidebar-toggle/spec.md` §2）。
 fn sidebar_content(width: u16, content_rows: u16, sidebar_wanted: bool) -> (SidebarKind, u16) {
     let Some(tier) = sidebar_tier(width, sidebar_wanted) else {
@@ -401,21 +403,20 @@ fn sidebar_content(width: u16, content_rows: u16, sidebar_wanted: bool) -> (Side
     } else {
         SidebarKind::Text
     };
-    let mut fields = SIDEBAR_FIELDS;
     loop {
-        if kind.rows() + TAB_ROWS + fields <= content_rows {
+        if kind.rows() + TAB_ROWS + SIDEBAR_MIN_PAGE_ROWS <= content_rows {
             break;
         }
         match kind {
             SidebarKind::Mark => kind = SidebarKind::Text,
             SidebarKind::Text => kind = SidebarKind::Hidden,
-            SidebarKind::Hidden if fields > SIDEBAR_MIN_FIELDS => fields -= 1,
-            // 地板：页签条与那三个读数。连这些也放不下的终端在 [`MIN_HEIGHT`] 以下，永远
+            // 地板：页签条与那三行页。连这些也放不下的终端在 [`MIN_HEIGHT`] 以下，永远
             // 到不了这里。
             SidebarKind::Hidden => break,
         }
     }
-    (kind, fields)
+    let page_rows = content_rows.saturating_sub(kind.rows() + TAB_ROWS);
+    (kind, page_rows)
 }
 
 /// 一个带框区域的内容矩形：四边各内缩一格。
