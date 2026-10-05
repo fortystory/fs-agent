@@ -54,3 +54,4 @@
 | [`time-mcp/`](time-mcp/spec.md) | spec | 时间：仓库自带一台 stdio MCP server `fs-agent-mcp-time`（只答三条方法、只提供一个工具 `get_current_time`，读一次本地时钟回一行「本机现在：…」，带 UTC 偏移、时区名与星期几），而系统提示词里只加一句静态指引、**不放时间的值**（身份是缓存前缀，也是 replay 复现当时请求时会再调一次的那个函数） | 3/3 done |
 | [`file-read-window/`](file-read-window/spec.md) | spec | `read_file` 的读窗口：`offset`（行号）/ `limit`（行数），默认封顶 2000 行 + 续读提示；越界报「文件只有 N 行」；读一段后 `edit_file` 照常放行 | 1/1 done |
 | [`trace-thought-stamp/`](trace-thought-stamp/spec.md) | spec | 轨迹页里「… 正在思考」那一行也有时间戳（开始那一刻，定稿时换成完成时刻） | 1/1 done |
+| [`tui-feedback/`](tui-feedback/spec.md) | spec | 真机走查后的五条：提示行回到输入框下（只跨主列，推翻 `tui-visual-language` §16）、消息的名字行不再是详情入口、推荐标记约定改中文 `(推荐)`（旧 `(Recommended)` 仍认）、`@` 候选改分段匹配（`cli` 找得到 `src/cli.rs`）、鼠标拖选 + OSC 52 复制（按区域取行、软折拼回） | 6/6 done |
