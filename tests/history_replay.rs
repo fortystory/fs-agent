@@ -1058,13 +1058,15 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
         "正在读的仍然是那个覆盖层：{frozen:?}"
     );
 
-    // `Esc` 关上它，视口回到最底下 —— 连它冻住期间
-    // 到达的那一行也算上。
+    // `Esc` 关上它，视口回到**打开前的位置** —— 打开时它就在最新那一行，所以这就是
+    // 回到最新，连冻住期间到达的那一行也算上（`.scratch/trace-tab/spec.md` §5，票 13：
+    // 打开前在回看的那一支由 `tests/render_layout.rs` 的
+    // `closing_a_*_detail_*` 三条钉住）。
     state.key(Key::Esc);
     let after = screen(120, 40, &mut state).join("\n");
     assert!(
         after.contains("历史详情打开时的新内容"),
-        "关掉会回到最新的那一行：{after}"
+        "关掉会回到打开前的位置：{after}"
     );
     assert!(
         !after.contains(wording::back_to_bottom()),

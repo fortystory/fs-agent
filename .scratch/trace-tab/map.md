@@ -67,7 +67,7 @@ Charting: **已完成**（2026-10-05，两轮 grilling 共十四问：终点 / �
 - [x] [10 — 对话视图的过滤与形态](issues/10-conversation-view-filter.md)
 - [x] [11 — 降级：左栏不可见时对话视图退回全量](issues/11-fallback-when-sidebar-hidden.md)
 - [x] [12 — 轨迹页按轮次隔行底色](issues/12-trace-round-stripes.md)
-- [ ] [13 — 详情按视图还原](issues/13-detail-returns-to-opener.md)
+- [x] [13 — 详情按视图还原](issues/13-detail-returns-to-opener.md)
 - [ ] [14 — 收口：文档、脚本锚点与全量复核](issues/14-close-out.md)
 
 **决策这条路走完了**（六张 `resolved`）。实现票的 **frontier 是 [07](issues/07-pane-evict-accounting.md) 与 [08](issues/08-sidebar-page-fills-height.md)** —— 两张都能立刻开；其余各被自己的 blockers 挡着，依赖边看每张票的抬头。
@@ -103,4 +103,4 @@ Charting: **已完成**（2026-10-05，两轮 grilling 共十四问：终点 / �
 
 ## 进度
 
-**决策 6/6，实现 6/8**（2026-10-05）。六张决策票全部 resolved，并已折成 [`spec.md`](spec.md)（`/to-spec`）；`/to-tickets` 从 spec 拆出八张实现票（07–14），frontier 现在是 [13 — 详情按视图还原](issues/13-detail-returns-to-opener.md)（它的两个 blocker [09](issues/09-trace-page-alive.md) 与 [10](issues/10-conversation-view-filter.md) 都已落地）。决策票的产物：`prototype/frames.txt`、`prototype/trace-pages.txt`、`prototype/split-view.txt`、`research/01-pane-and-two-view-feasibility.md`、`research/02-shared-painted-change-surface.md`。**保留清单那张是 charting 收尾时从 research 的测试清点里长出来的** —— `Block::Notice` 承载命令回执、错误报告与启动横幅，按冻结项 2 + 8 字面执行会把它挤出对话视图。**下一步由 `/implement` 认领 frontier 那两张。**
+**决策 6/6，实现 7/8**（2026-10-05）。六张决策票全部 resolved，并已折成 [`spec.md`](spec.md)（`/to-spec`）；`/to-tickets` 从 spec 拆出八张实现票（07–14），frontier 现在是 [14 — 收口：文档、脚本锚点与全量复核](issues/14-close-out.md)（它的三个 blocker [11](issues/11-fallback-when-sidebar-hidden.md)、[12](issues/12-trace-round-stripes.md)、[13](issues/13-detail-returns-to-opener.md) 都已落地）。决策票的产物：`prototype/frames.txt`、`prototype/trace-pages.txt`、`prototype/split-view.txt`、`research/01-pane-and-two-view-feasibility.md`、`research/02-shared-painted-change-surface.md`。**保留清单那张是 charting 收尾时从 research 的测试清点里长出来的** —— `Block::Notice` 承载命令回执、错误报告与启动横幅，按冻结项 2 + 8 字面执行会把它挤出对话视图。**下一步由 `/implement` 认领 frontier 那两张。**

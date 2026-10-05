@@ -770,6 +770,8 @@ pub struct TuiState {
     trace_rect: Option<Rect>,
     /// 详情覆盖层，开着的时候。
     detail: Option<DetailView>,
+    /// 打开这个覆盖层的那个视图，以及它打开前的滚动状态；关掉时还原给它（票 13）。
+    detail_opener: Option<ScrollMark>,
     /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
     /// 「记住读的人真看到了什么」的规矩（票 02 §4）。
     detail_rect: Option<Rect>,
@@ -1571,6 +1573,7 @@ impl TuiState {
             trace_drawn: Drawn::default(),
             trace_rect: None,
             detail: None,
+            detail_opener: None,
             detail_rect: None,
             modal_rect: None,
             questionnaire_bottom: None,
@@ -2483,7 +2486,7 @@ impl TuiState {
                             Viewport::Conversation
                         };
                         if let Some(detail) = self.link_hit(view, &mouse) {
-                            self.open_detail(detail, width);
+                            self.open_detail(detail, width, view);
                         }
                     }
                 }
@@ -4421,9 +4424,10 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, 
         Viewport::Conversation => &state.conversation,
         Viewport::Trace => &state.trace,
     };
-    // 详情覆盖层占着转录的时候，回去的路是覆盖层自己的页脚：指示器的计数暂停了，它的点击不
-    // 属于任何人（票 02 §4）。
-    if pane.following() || state.detail_open() || area.width == 0 || area.height == 0 {
+    // 详情覆盖层占着**打开它的那个视图**的时候，回去的路是覆盖层自己的页脚：指示器的计数
+    // 暂停了，它的点击不属于任何人（票 02 §4）。另一个视图的指示器照画（票 13）。
+    let frozen = state.detail_open() && state.detail_opener.map(|mark| mark.view) == Some(view);
+    if pane.following() || frozen || area.width == 0 || area.height == 0 {
         match view {
             Viewport::Conversation => state.indicator = None,
             Viewport::Trace => state.trace_indicator = None,
@@ -5088,7 +5092,7 @@ fn paint_block(
                 style,
             )
             .into_iter()
-            .map(RenderedLine::from)
+            .map(|line| message_line(speaker, text, line, colors))
             .collect()
         }
         // 轨迹视图里用户（或非 assistant 的系统行）的消息同样只画首行 + `…`。
@@ -5121,7 +5125,9 @@ fn paint_block(
                     row.alignment = Some(Alignment::Right);
                 }
             }
-            rows.into_iter().map(RenderedLine::from).collect()
+            rows.into_iter()
+                .map(|line| message_line(speaker, text, line, colors))
+                .collect()
         }
         Block::Delta { .. } => Vec::new(),
         Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
@@ -5376,6 +5382,26 @@ fn tool_block_lines(
         },
     };
     vec![RenderedLine::linked(Line::from(call), detail)]
+}
+
+/// 对话视图里的一条消息行，连同它的详情入口。
+///
+/// 对话视图画的是全文，所以这个入口不省任何东西 —— 但它让「详情是从哪个视图打开的」这条
+/// 机制在两个视图上都成立（`.scratch/trace-tab/issues/13-detail-returns-to-opener.md`）。
+fn message_line(
+    speaker: &crate::events::SpeakerId,
+    text: &str,
+    line: Line<'static>,
+    colors: &mut SpeakerColors,
+) -> RenderedLine {
+    let detail = Detail {
+        title: line_text(&line),
+        color: colors.of(speaker),
+        kind: DetailKind::Message {
+            text: text.to_owned(),
+        },
+    };
+    RenderedLine::linked(line, detail)
 }
 
 /// 轨迹视图里的一条消息行：**首行 + `…`**，全文挂在详情里
@@ -5639,6 +5665,20 @@ enum DetailKind {
     },
 }
 
+/// 详情覆盖层打开前，那个视图的滚动状态。
+///
+/// 它住在覆盖层**旁边**，不是覆盖层自己那份位置里：覆盖层那份数的是它自己的正文行，而这
+/// 一份要还原的是打开它的那个视图（`.scratch/trace-tab/spec.md` §5）。
+#[derive(Debug, Clone, Copy)]
+struct ScrollMark {
+    /// 是哪个视图打开它的。
+    view: Viewport,
+    /// 打开时那个视图视口顶端所在的显示行。
+    top: usize,
+    /// 打开时它跟不跟底。
+    follow: bool,
+}
+
 /// 详情覆盖层的打开状态（票 02 §4）。
 ///
 /// 它是一个**视图模式，不是一个待答的问题**：转录冻在原处，键盘与滚轮在它被关掉之前归主体
@@ -5670,7 +5710,17 @@ impl TuiState {
     /// 为读的人点的那一行打开详情覆盖层。
     ///
     /// 主体在这里、在打开的那一刻读，并按覆盖层将被画出来的宽度排版，于是此后滚动是纯算术。
-    fn open_detail(&mut self, detail: Detail, width: usize) {
+    fn open_detail(&mut self, detail: Detail, width: usize, view: Viewport) {
+        // 记下是谁打开的、以及它当时在哪儿：关掉时状态还原给**它**（票 13）。
+        let pane = match view {
+            Viewport::Conversation => &self.conversation,
+            Viewport::Trace => &self.trace,
+        };
+        self.detail_opener = Some(ScrollMark {
+            view,
+            top: pane.top(),
+            follow: pane.following(),
+        });
         let body = detail_body(&detail, &self.facts.session_dir, width);
         self.detail = Some(DetailView {
             detail,
@@ -5686,10 +5736,16 @@ impl TuiState {
     /// 的冻结，会把一个已经往上滚的读的人拽回底部（票 02 §4）。
     fn close_detail(&mut self) {
         if self.detail.take().is_some() {
-            // 阅读位置是覆盖层的；放开它就是把转录送回底部，而计数也从那里重新起算。
-            // 按视图还原打开前的位置是下一张票（13）的事，这里先保持旧行为。
-            self.conversation.set_holding(false);
-            self.conversation.set_following(true);
+            // 还原给**打开它的那个视图**，另一个完全不动（票 13）。打开前贴底时
+            // `follow` 为真，还原就等于回到底部 —— 与改动前逐字相同。
+            if let Some(mark) = self.detail_opener.take() {
+                let pane = match mark.view {
+                    Viewport::Conversation => &mut self.conversation,
+                    Viewport::Trace => &mut self.trace,
+                };
+                pane.set_holding(false);
+                pane.restore(mark.top, mark.follow);
+            }
         }
     }
 
@@ -5843,10 +5899,20 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
         state.detail_rect = None;
         return;
     };
-    // 转录冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让「N 行新内容」的计数在
-    // 他们正读的覆盖层底下往上爬（票 02 §4）。
-    state.conversation.set_following(false);
-    state.conversation.set_holding(true);
+    // 打开它的那个视图冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让
+    // 「N 行新内容」的计数在他们正读的覆盖层底下往上爬（票 02 §4）。**只冻打开方**：
+    // 另一个视图继续跟着新内容（票 13）。
+    match state.detail_opener.map(|mark| mark.view) {
+        Some(Viewport::Conversation) => {
+            state.conversation.set_following(false);
+            state.conversation.set_holding(true);
+        }
+        Some(Viewport::Trace) => {
+            state.trace.set_following(false);
+            state.trace.set_holding(true);
+        }
+        None => {}
+    }
     // 框外的一次点击能打中什么，只有记下来之后才存在。
     state.detail_rect = Some(area);
     let Some(view) = state.detail.as_ref() else {

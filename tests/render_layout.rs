@@ -5211,20 +5211,14 @@ fn the_detail_overlay_freezes_the_transcript() {
             "第 {index} 行"
         )));
     }
-    state.apply(tool_started(
-        1,
-        "call-20",
-        "bash",
-        serde_json::json!({"command": "ls"}),
-    ));
-    state.apply(tool_completed(2, "call-20", true, Some("body"), None));
-    // 调用行住在轨迹页里（票 10），转录那一半（Notice）照旧在主列。
-    open_trace_tab(&mut state, 120, 24);
+    // 打开方是**对话视图**：这条测试说的正是覆盖层把它背后的转录冻住（票 13 把冻结
+    // 收窄到打开方之后仍然成立）。
+    state.apply(message(41, "被点开的消息", None));
 
     let _ = screen(120, 24, &mut state);
-    click_row(&mut state, 120, 24, "调用 bash");
+    click_row(&mut state, 120, 24, "被点开的消息");
     let before = screen(120, 24, &mut state);
-    assert!(before.join("\n").contains("── 参数 ──"), "覆盖层起来了");
+    assert!(before.join("\n").contains("── 正文 ──"), "覆盖层起来了");
     let frozen = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&before));
 
     // 覆盖层开着的时候有新输出到来。
@@ -6702,4 +6696,119 @@ fn the_stripes_can_be_turned_off() {
     }
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("问题 0"), "内容照旧：{text}");
+}
+
+// ---------------------------------------------------------------------------
+// 详情按视图还原（`.scratch/trace-tab/spec.md` §5；票 13）
+// ---------------------------------------------------------------------------
+
+/// 左栏里含 `needle` 的那一屏行。
+fn left_row_of(state: &mut TuiState, needle: &str) -> u16 {
+    let frame = buffer(120, 24, state);
+    (0..24)
+        .find(|y| cells(&frame, *y, 0, SIDEBAR_COLUMNS).contains(needle))
+        .unwrap_or_else(|| panic!("左栏里没有含 {needle:?} 的行"))
+}
+
+/// 从轨迹页打开的详情，关掉之后回到轨迹页打开前的位置，而对话视图一个字没动
+/// （票 13 验证 2）。
+#[test]
+fn closing_a_trace_detail_returns_to_where_it_was_opened() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..10 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    state.apply(message(11, "被点开的消息", None));
+    for index in 0..10 {
+        state.apply(RenderEvent::Notice(format!("后 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    let _ = screen(120, 24, &mut state);
+    // 往上滚一格，进入回看态。
+    state.mouse(wheel_at(10, 12, true));
+    let page_before = trace_page(&mut state, 120, 24);
+    let conversation_before = conversation_rows(&mut state, 120, 24);
+    assert!(
+        page_before.iter().any(|row| row.contains("被点开的消息")),
+        "那条消息还在页上：{page_before:#?}"
+    );
+
+    let row = left_row_of(&mut state, "被点开的消息");
+    state.mouse(click(10, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
+
+    state.key(Key::Esc);
+    assert_eq!(
+        trace_page(&mut state, 120, 24),
+        page_before,
+        "轨迹页回到打开前的位置"
+    );
+    assert_eq!(
+        conversation_rows(&mut state, 120, 24),
+        conversation_before,
+        "对话视图没动"
+    );
+}
+
+/// 从对话视图、在**回看**态打开的详情，关掉之后回到原处 —— 不再被弹到底部
+/// （票 13 验证 3）。
+#[test]
+fn closing_a_conversation_detail_returns_to_the_reading_position() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..20 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    state.apply(message(21, "被点开的消息", None));
+    for index in 0..20 {
+        state.apply(RenderEvent::Notice(format!("后 {index} 句话")));
+    }
+    let _ = screen(120, 24, &mut state);
+    // 指针在转录上：往上滚两格，进入回看态。
+    state.mouse(wheel_at(90, 12, true));
+    state.mouse(wheel_at(90, 12, true));
+    let before = conversation_rows(&mut state, 120, 24);
+    assert!(
+        !before.iter().any(|row| row.contains("后 19 句话")),
+        "确实在回看：{before:#?}"
+    );
+    let row = before
+        .iter()
+        .position(|line| line.contains("被点开的消息"))
+        .expect("回看态里那条消息可见") as u16;
+
+    state.mouse(click(60, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
+
+    state.key(Key::Esc);
+    assert_eq!(
+        conversation_rows(&mut state, 120, 24),
+        before,
+        "回到打开前的位置"
+    );
+}
+
+/// 在贴底态打开的详情，关掉之后照旧跟着新内容 —— 与今天逐字相同
+/// （票 13 验证 3）。
+#[test]
+fn closing_a_conversation_detail_that_was_at_the_bottom_still_follows() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::Notice(format!("第 {index} 句话")));
+    }
+    state.apply(message(41, "被点开的消息", None));
+    let _ = screen(120, 24, &mut state);
+    let row = conversation_rows(&mut state, 120, 24)
+        .iter()
+        .position(|line| line.contains("被点开的消息"))
+        .expect("贴底时那条消息在屏幕上") as u16;
+    state.mouse(click(60, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
+
+    state.key(Key::Esc);
+    state.apply(RenderEvent::Notice("关掉之后到的新内容".to_owned()));
+    let text = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(text.contains("关掉之后到的新内容"), "还在跟随：{text}");
 }

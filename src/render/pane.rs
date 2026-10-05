@@ -217,6 +217,21 @@ impl Pane {
         self.sync_top_source();
     }
 
+    /// 把视口放回记下来的那个位置：`top` 是显示行，`follow` 是当时跟不跟底。
+    ///
+    /// 内容从那时起可能长了或短了，所以位置会被夹回合法范围；`follow` 为真时直接回到底部
+    /// —— 那正是打开前贴底的情形，而它与 [`Pane::set_following`] 逐字相同。
+    pub fn restore(&mut self, top: usize, follow: bool) {
+        if follow {
+            self.to_bottom();
+            return;
+        }
+        let max_top = self.total.saturating_sub(self.height as usize);
+        self.top = top.min(max_top);
+        self.follow = false;
+        self.sync_top_source();
+    }
+
     /// 视口此刻是不是跟着底部走。
     pub fn following(&self) -> bool {
         self.follow

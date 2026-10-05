@@ -1,7 +1,7 @@
 # 13 — 详情按视图还原
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 09, 10
 
@@ -39,3 +39,26 @@ Blocked by: 09, 10
 
 - 不改覆盖层自己的滚动（它那份位置照旧，与视图无关）。
 - 不做跨视图联动（[`../spec.md`](../spec.md) 的「明确不做」）。
+
+## 作答（2026-10-05）
+
+- **打开方与它的位置**记在 `TuiState::detail_opener: Option<ScrollMark>`，`ScrollMark` 是
+  `{ view, top, follow }` —— 它与覆盖层自己那份正文位置分开放（票面要求）。
+  `open_detail(detail, width, view)` 从打开方那个 pane 读 `top()` / `following()`。
+- **`Pane::restore(top, follow)`**：`follow` 为真直接回底（与改动前的
+  `set_following(true)` 逐字相同），否则把 `top` 夹回合法范围、保持不跟随。
+  `close_detail` 把 `set_holding(false)` 与 `restore` 都施加给**打开方**，另一个视图一个字
+  都不动。
+- **每帧的冻结只作用打开方**（`draw_detail` 按 `detail_opener.view` 分派）；
+  `draw_indicator` 也只清打开方的指示器，另一个视图在回看时照旧显示它。
+- **一处 spec 缺口，这里补上**：票 10 之后对话视图里**没有任何可点的行**（工具、思考、注入、
+  消息的入口都在轨迹页），而本票验证 3 要求「从对话视图开详情」。所以对话视图的消息行也
+  挂上 `DetailKind::Message`（新的 `message_line`）—— 对话视图画的是全文，这个入口不省任何
+  东西，但它让「谁打开的详情」这条机制在两个视图上都成立。轨迹页那边一字不改。
+- 测试：新增三条帧断言（从轨迹页开详情 → 关掉后轨迹页回原处、对话视图没动；从对话视图在
+  **回看**态开 → 关掉后回原处；贴底态开 → 关掉后继续跟随）。`history_replay` 的
+  `a_history_detail_freezes_the_viewport_and_releases_it` 措辞改成「回到打开前的位置」并
+  指向这三条；`the_detail_overlay_freezes_the_transcript` 改用对话视图的消息行（原来用
+  `open_trace_tab` 打开，冻结的就成了轨迹页）。
+- `cargo test` 全绿（render_layout 172 + 其余）、`cargo clippy --all-targets` 无警告、
+  `cargo fmt --check` 干净。
