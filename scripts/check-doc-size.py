@@ -244,8 +244,9 @@ def review_rules(unit: Unit) -> list[str]:
 
 # --- ② 入口三份的体量预算 -----------------------------------------------------
 # 上限**初始值 = 首次运行的实测**，只许降；收紧是一次显式动作，在提交信息里写理由
-# （与 `MODEL_TEXT_FLOOR` / `COMMENT_FLOOR` 同风格）。
-# **唯一的上调例外**：`.scratch/README.md` 是 feature 索引，它天然随 feature 增长 —— 每加一个
+# （与 `MODEL_TEXT_FLOOR` / `COMMENT_FLOOR` 同风格）。**放宽是同一类显式动作** —— 维护者要它
+# 长就跟着长，理由同样写在提交信息里，并在这里记一条带日期的注（见末尾那条 `AGENTS.md`）。
+# **一类常规的上调例外**：`.scratch/README.md` 是 feature 索引，它天然随 feature 增长 —— 每加一个
 # feature 就在上面那几次的先例里显式上调一次并记日期（`input-tokens` / `trace-tab` /
 # `tui-visual-language`），直到撞上 ≤13,500 / ≤100 那个终点。其余两份照旧只许降。
 # **2026-10-04 票 10 落地后收紧到实测**：三份都进了票 04 定的终点（`.scratch/docs-slim/issues/10-entry-docs-rewrite.md`：
@@ -272,10 +273,16 @@ def review_rules(unit: Unit) -> list[str]:
 #   `tui-visual-language` 三次同因；同日该 feature 三张实现票落地，索引行的票数直接写 `3/3 done`）。
 # 行数比票 04 的「现在」高是**预期**的：拆段落必然加行，票 04 承认「行数不得增」不成立，
 # 行数上限是「拆完之后的新上限」，此后拦住「再往入口文档追加」。
+# **2026-10-06 维护者放宽 `AGENTS.md`（第一份被放宽的入口文档）**：它当时 904 / 25，贴着
+#   905 / 26 的棘轮，维护者的原话是「想加点啥有点费劲」—— 追加一条约定的代价因此高到要把别处
+#   的句子削掉（`docs/agents/commits.md` 那一轮就是这么落成的）。新上限 **5,000 / 140**、终点
+#   **5,500 / 150**：按现有密度（约 36 字符/行）折算是六倍体量。放宽与收紧同一条规矩 ——
+#   显式动作、理由写进提交信息，决定也记进 `.scratch/docs-slim/issues/05` 的 `## 评论`。
+#   其余两份照旧只许降。
 ENTRY_BUDGET = {
     "README.md": {"chars": 16993, "lines": 292, "target_chars": 18500, "target_lines": 300},
     ".scratch/README.md": {"chars": 9420, "lines": 57, "target_chars": 13500, "target_lines": 100},
-    "AGENTS.md": {"chars": 905, "lines": 26, "target_chars": 950, "target_lines": 30},
+    "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，
 # 比 `wc -l` 多半行，因为末行没有换行符也算一行）。

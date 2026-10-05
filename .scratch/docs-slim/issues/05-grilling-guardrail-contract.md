@@ -106,3 +106,12 @@ Blocked by: 03
 - 脚本是**新文件** `scripts/check-doc-size.py`，**不改** `check-language.py`。
 - 判据全部来自本票，不要在 spec 里重开：口径（Q1）、阈值（Q2）、豁免（Q3）、字典（Q4）、预算与基线（Q5 / Q7）、接线（Q6）。
 - `docs/adr/0008` / `0010` 漏在 `check-language.py` 的 `DOCS_MIN_RATIO` 之外，是**另一件事**（那份清单的维护），本图 scope 不动它；Q4 的第 ② 条自检在 `check-doc-size.py` 里防同类问题。
+
+## 评论
+
+- **2026-10-06 维护者放宽了 `AGENTS.md` 那一档** —— 本票 Q5 + Q7 的 a1「初始值取今天实测、
+  只许降」在它身上被改宽。来由：它当时 904 / 25，贴着上限 905 / 26，追加一条约定的代价高到
+  要削掉别处的句子（`docs/agents/commits.md` 那一轮就是这么做成的），维护者的原话是
+  「想加点啥有点费劲」。新上限 **5,000 / 140**、终点 **5,500 / 150**（`scripts/check-doc-size.py`
+  的 `ENTRY_BUDGET`，注释里记了同一条）。`README.md` 与 `.scratch/README.md` 照旧只许降；
+  放宽与收紧同一条规矩：**显式动作，理由写在提交信息里**。

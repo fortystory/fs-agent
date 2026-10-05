@@ -110,3 +110,6 @@ Blocked by: —
   「缺文件 + `--list`」一条（原 15 条）。
 - `python3 scripts/check-doc-size.py --list | head` 不再抛 `BrokenPipeError` 栈（下游关管道不是错误）。
 
+- **2026-10-06 同上**：`AGENTS.md` 的预算从 905 / 26 放宽到 **5,000 / 140**（终点 5,500 / 150）——
+  本票第 5 条「初始值取今天实测、只许降」的这次例外由维护者显式给出，来由与细节见
+  [`05` 的 `## 评论`](05-grilling-guardrail-contract.md)。
