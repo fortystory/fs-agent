@@ -6537,10 +6537,11 @@ fn the_three_prefixes_wear_three_colours() {
 }
 
 // ---------------------------------------------------------------------------
-// 降级：左栏不可见时对话视图退回全量（`.scratch/trace-tab/spec.md` §6；票 11）
+// 左栏不可见时过程行也只在轨迹里（`.scratch/trace-tab/spec.md` §6 的 2026-10-05 推翻）
 // ---------------------------------------------------------------------------
 
-/// 一场带过程行的会话：用户的话、一次调用、一段思考、一条回答。
+/// 一场带过程行的会话：用户的话、一次调用、一段思考、一条回答、一次注入、一对
+/// 回合边界行与一条诊断。
 fn a_session_with_process_rows(state: &mut TuiState) {
     state.apply(user_message(1, "问题"));
     state.apply(tool_started(
@@ -6552,51 +6553,64 @@ fn a_session_with_process_rows(state: &mut TuiState) {
     state.apply(tool_completed(3, "call-1", true, Some("out"), None));
     state.apply(reasoning_delta("一段推理。"));
     state.apply(message(4, "回答。", None));
+    state.apply(injected(5, "注入的正文"));
+    state.apply(turn_started(6));
+    state.apply(turn_ended(7));
+    state.apply(RenderEvent::Diagnostic(
+        "provider 流结束：正常停止".to_owned(),
+    ));
 }
 
-/// `Ctrl-O` 收起左栏之后过程行回到对话视图，叫回来又只剩对话
-/// （票 11 验证 1）。
-#[test]
-fn hiding_the_sidebar_brings_the_process_rows_back_to_the_conversation() {
-    let mut state = state_with_roster(&["kimi"]);
-    a_session_with_process_rows(&mut state);
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(
-        !conversation.contains("调用 bash"),
-        "左栏在：{conversation}"
-    );
-    assert!(conversation.contains("回答。"), "{conversation}");
-
-    state.key(Key::CtrlO);
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(
-        conversation.contains("调用 bash"),
-        "收起左栏之后过程行有去处了：{conversation}"
-    );
-    assert!(conversation.contains("思考完成"), "{conversation}");
-    assert!(conversation.contains("回答。"), "{conversation}");
-
-    state.key(Key::CtrlO);
-    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
-    assert!(
-        !conversation.contains("调用 bash"),
-        "叫回来之后又只剩对话：{conversation}"
-    );
-    assert!(conversation.contains("回答。"), "{conversation}");
+/// 这些过程行在该在的地方，不在对话视图里。
+fn assert_process_rows_are_out_of_the_conversation(conversation: &str) {
+    for present in ["问题", "回答。"] {
+        assert!(conversation.contains(present), "{conversation}");
+    }
+    for absent in [
+        "调用 bash",
+        "思考完成",
+        "上下文注入",
+        "回合开始",
+        "回合结束",
+        "诊断",
+    ] {
+        assert!(
+            !conversation.contains(absent),
+            "{absent} 不该出现在对话视图里：{conversation}"
+        );
+    }
 }
 
-/// 80 列以下左栏本来就不存在，所以同一支降级生效（票 11 验证 2）。
+/// `Ctrl-O` 收起左栏**不再**把过程行放回对话视图：收起就是「过程行暂时看不到」
+/// （2026-10-05 维护者选的这一支，推翻了原先的降级）。
 #[test]
-fn a_narrow_terminal_keeps_the_process_rows_in_the_conversation() {
+fn hiding_the_sidebar_leaves_the_process_rows_out_of_the_conversation() {
     let mut state = state_with_roster(&["kimi"]);
     a_session_with_process_rows(&mut state);
-    let conversation = conversation_rows(&mut state, 60, 24).join("\n");
-    assert!(
-        conversation.contains("调用 bash"),
-        "窄终端上过程行没有别的去处：{conversation}"
+    assert_process_rows_are_out_of_the_conversation(
+        &conversation_rows(&mut state, 120, 24).join("\n"),
     );
-    assert!(conversation.contains("思考完成"), "{conversation}");
-    assert!(conversation.contains("回答。"), "{conversation}");
+
+    state.key(Key::CtrlO);
+    assert_process_rows_are_out_of_the_conversation(
+        &conversation_rows(&mut state, 120, 24).join("\n"),
+    );
+
+    // 叫回来也一样。
+    state.key(Key::CtrlO);
+    assert_process_rows_are_out_of_the_conversation(
+        &conversation_rows(&mut state, 120, 24).join("\n"),
+    );
+}
+
+/// 80 列以下左栏本来就不存在，规则不变：过程行此时哪儿都不显示。
+#[test]
+fn a_narrow_terminal_leaves_the_process_rows_out_of_the_conversation() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    assert_process_rows_are_out_of_the_conversation(
+        &conversation_rows(&mut state, 60, 24).join("\n"),
+    );
 }
 
 /// 收起与叫回不改动滚动意图：来回之后两个视图都还在底部，指示器不出现

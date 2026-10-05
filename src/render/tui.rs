@@ -687,11 +687,6 @@ pub struct TuiState {
     conversation_width: u16,
     /// 轨迹视图的源行是按多宽排的；**零**表示这一帧轨迹视图不被物化（左栏不可见）。
     trace_width: u16,
-    /// 对话视图这一帧是不是**全量** —— 左栏不可见时它退回全量，好让过程行有地方显示
-    /// （`.scratch/trace-tab/spec.md` §6）。
-    ///
-    /// 它也是重放的判据之一：这个位一变，对话视图的内容集合就变了，哪怕宽度没变。
-    conversation_full: bool,
     /// 上一帧画完之后有没有什么东西变了。
     dirty: bool,
     /// 草稿与它的光标。
@@ -1538,7 +1533,6 @@ impl TuiState {
             // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
             conversation_width: SHARED_RENDER_WIDTH,
             trace_width: SHARED_RENDER_WIDTH,
-            conversation_full: false,
             dirty: true,
             editor: Input::new(),
             files: FileIndex::new(),
@@ -1878,11 +1872,9 @@ impl TuiState {
     /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
     fn emit_block(&mut self, block: &Block, targets: Targets) -> usize {
         let mut produced = 0;
-        // 左栏不可见时对话视图退回全量：这是**视图选择**，不是第二条渲染路径
-        // （`.scratch/trace-tab/spec.md` §6）—— 块的产生、详情入口与排版都不变。
-        if targets.conversation
-            && (self.conversation_full || selects(Viewport::Conversation, block))
-        {
+        // 对话视图只收保留清单；左栏不在时**也不退回全量**（2026-10-05 维护者推翻 §6）——
+        // 收起左栏就是「过程行暂时看不到」，规则只有一个。
+        if targets.conversation && selects(Viewport::Conversation, block) {
             let width = self.conversation_width;
             let lines = paint_block(block, &mut self.colors, width, Viewport::Conversation);
             produced = produced.max(lines.len());
@@ -1933,18 +1925,13 @@ impl TuiState {
     /// pane 再放一遍会把它整份推第二遍。零表示那个视口这一帧不被物化 —— 它照样走「变了」这
     /// 一支，好把内容清干净、等左栏回来时整批重建。
     fn rerender_if_width_changed(&mut self, conversation_width: u16, trace_width: u16) {
-        // 左栏不可见（宽度为零）就是对话视图退回全量的那一档；这个位一变，对话视图的
-        // 内容集合就变了，所以它和宽度一样是重放判据（票 11）。
-        let full = trace_width == 0;
-        let conversation =
-            conversation_width != self.conversation_width || full != self.conversation_full;
+        let conversation = conversation_width != self.conversation_width;
         let trace = trace_width != self.trace_width;
         if !conversation && !trace {
             return;
         }
         self.conversation_width = conversation_width;
         self.trace_width = trace_width;
-        self.conversation_full = full;
         if conversation {
             self.conversation.clear();
             self.conversation_links.clear();
@@ -1964,7 +1951,7 @@ impl TuiState {
         // 宽度为零的窗格。
         let replay = Targets {
             conversation,
-            trace: trace && !full,
+            trace: trace && trace_width != 0,
         };
         for item in &painted {
             self.emit_painted(item, replay);
@@ -2211,14 +2198,11 @@ impl TuiState {
     /// 把「正在思考」那一行推进轨迹视图。
     ///
     /// 思考是一条**过程行**，只归轨迹（冻结项 2、8）：对话视图里它除了打断阅读什么都不做。
+    /// 左栏不在时它也不回对话视图（2026-10-05 维护者推翻 §6）。
     fn paint_thinking_line(&mut self, speaker: &crate::events::SpeakerId, targets: Targets) {
         if targets.trace {
             let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
             self.push_line(Viewport::Trace, line, None, None);
-        } else if targets.conversation && self.conversation_full {
-            // 左栏不在：过程行退回对话视图（票 11）。
-            let line = self.thinking_in_progress_line(speaker, Viewport::Conversation);
-            self.push_line(Viewport::Conversation, line, None, None);
         }
     }
 
@@ -2243,17 +2227,6 @@ impl TuiState {
                 }
             } else {
                 self.push_line(Viewport::Trace, line, Some(detail), None);
-            }
-        } else if targets.conversation && self.conversation_full {
-            // 左栏不在：过程行退回对话视图（票 11）。
-            let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Conversation);
-            if in_place {
-                self.conversation.replace_last(line);
-                if let Some(link) = self.conversation_links.back_mut() {
-                    *link = Some(detail);
-                }
-            } else {
-                self.push_line(Viewport::Conversation, line, Some(detail), None);
             }
         }
     }

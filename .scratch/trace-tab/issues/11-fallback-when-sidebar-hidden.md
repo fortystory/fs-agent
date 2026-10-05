@@ -54,3 +54,12 @@ Blocked by: 10
   `conversation_rows` 的分栏起点改成按帧上的 `┆` 找，而不是按宽度猜档。
 - `cargo test` 全绿（render_layout 165 + 其余）、`cargo clippy --all-targets` 无警告、
   `cargo fmt --check` 干净。
+
+**2026-10-05 维护者推翻了这张票**（选了「不再退回」那一支）：
+
+- 收起左栏之后过程行**仍然不在**对话视图里 —— 规则只剩一条：`selects` 与左栏在不在无关。
+  原先「主列刚被清干净、收起又全冒回来」的那套两规则，维护者在真终端里看过之后否掉了。
+- 代码上删掉了 `conversation_full` 与重放里的那一位判据、`paint_thinking_line` /
+  `paint_settled_thinking` 的对话分支；测试反过来断言过程行**不**回到主列，
+  `a_narrow_terminal_leaves_the_process_rows_out_of_the_conversation` 同理。
+  `spec.md` §6、`docs/render.md`、`CONTEXT.md`、手工清单 ㉙ 第 8 条都改过了。
