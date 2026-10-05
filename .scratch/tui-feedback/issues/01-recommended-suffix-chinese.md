@@ -1,7 +1,7 @@
 # 01 — 推荐标记中文化：约定改成 `(推荐)`，旧后缀仍认
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../spec.md
 Blocked by: —
 
