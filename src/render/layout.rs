@@ -321,10 +321,10 @@ pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
 pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
     let tier = sidebar_tier(area.width, sidebar_wanted);
-    // 左栏顶上先让出一行空行，**底下还要让出提示行那一行** —— 提示行跨整屏，左栏画到它上面
-    // 一行为止（`.scratch/tui-visual-language/spec.md` §16）。于是 120×24 下页区从 15 行变
-    // 14 行：页高的公式不变，变的只是剩余高度。
-    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP + 1);
+    // 左栏顶上让出一行空行，底下**不再让给提示行** —— 提示行回到了主列里，左栏因此恢复全高
+    // （`.scratch/tui-feedback/spec.md` §2，推翻 `tui-visual-language` §16）。于是 120×24 下
+    // 页区从 14 行回到 15 行：页高的公式不变，变的只是剩余高度。
+    let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
     let (sidebar_kind, page_rows) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
     let input_rows = draft_rows
         .max(MIN_INPUT_ROWS)
@@ -351,9 +351,11 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     let transcript = Rect::new(main.x, main.y + MAIN_TABS_ROWS, main.width, transcript_rows);
     let status = Rect::new(main.x, transcript.bottom(), main.width, 1);
     let input = Rect::new(main.x, status.bottom() + 1, main.width, input_rows);
-    // 提示行跨**整屏**（`.scratch/tui-visual-language/spec.md` §16）—— 左栏与主列都让出这一
-    // 行，于是 `ctrl-o 左栏` 那条按设计排在最末的提示真的看得见。
-    let hints = Rect::new(area.x, input.bottom() + 1, area.width, 1);
+    // 提示行落在**主列**里：与输入区同列同宽、就在它正下方
+    // （`.scratch/tui-feedback/spec.md` §2，推翻 `tui-visual-language` §16 那条「跨整屏」）。
+    // 代价是提示的宽度从终端宽度变成主列宽：120 列下少一条 `ctrl-o 左栏`，而它在真机上本来
+    // 就找不到（提示从第 0 列起，眼睛在输入框上）。
+    let hints = Rect::new(main.x, input.bottom() + 1, main.width, 1);
     let rail = Rect::new(
         transcript.right().saturating_sub(1),
         transcript.y,

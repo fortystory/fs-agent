@@ -3881,12 +3881,11 @@ fn draw_shell(
     draw_sidebar(frame, panes, state);
     draw_main_tab_bar(frame, panes, state);
     // 输入区与提示行各自上面那条分隔线 —— 状态行上方那条已经离开（spec §2），所以这里是
-    // 两条而不是三条。它们从**分隔列右边一格**起画：分隔列那一格的 `┆` 留着，于是竖线从
-    // 屏幕顶一直贯通到底，横线只是接在它旁边（2026-10-01 真机反馈：横线原先把竖线截断了）。
-    // 没有左栏时就没有那条竖线，横线从屏幕左缘起。
-    let left = panes.divide.map_or(area.x, |divide| divide + 1);
+    // 两条而不是三条。两条都**只画在主列里**：提示行回到主列之后，左栏与它们无关了
+    // （`.scratch/tui-feedback/spec.md` §2）。左栏不存在时主列就是整屏，与改动前逐字相同。
+    let (left, right) = (panes.main.x, panes.main.right());
     for y in [panes.input.y - 1, panes.hints.y - 1] {
-        paint_rule(frame, y, left, area.right());
+        paint_rule(frame, y, left, right);
     }
 }
 
@@ -3911,9 +3910,9 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
     };
     let style = Style::default().fg(palette::CHROME);
     let buffer = frame.buffer_mut();
-    // 竖虚线跟左栏一样，画到提示行上一行为止 —— 提示行跨整屏，那一行上没有它
-    // （`.scratch/tui-visual-language/spec.md` §16）。
-    for y in area.y..panes.hints.y {
+    // 竖虚线跟左栏同高：画到屏幕最后一行（`.scratch/tui-feedback/spec.md` §2 —— 提示行回到
+    // 主列之后，左栏不再为它让出底下那一行）。
+    for y in area.y..area.bottom() {
         buffer[(divide, y)].set_symbol("┆").set_style(style);
     }
 }

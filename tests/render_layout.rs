@@ -253,13 +253,13 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
     // 外框走了之后，它就是最左那一列内容加四十。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(frame[(40, 0)].symbol(), "┆", "分隔线从屏幕顶起");
-    // 提示行跨整屏，所以竖虚线画到**它上面一行**为止（`.scratch/tui-visual-language/spec.md`
-    // §16）：第 22 行还有，第 23 行（提示行）没有。
-    assert_eq!(frame[(40, 22)].symbol(), "┆", "画到提示行上面一行");
-    assert_ne!(
+    // 提示行只跨**主列**（`.scratch/tui-feedback/spec.md` §2），所以竖虚线跟左栏同高、一直
+    // 画到屏幕最后一行。
+    assert_eq!(frame[(40, 22)].symbol(), "┆", "画到屏幕倒数第二行");
+    assert_eq!(
         frame[(40, 23)].symbol(),
         "┆",
-        "提示行那一行没有竖虚线：它跨整屏，内容直接画到那里"
+        "最后一行（提示行那一行）也有它：左栏恢复全高"
     );
     // 标记从顶上留的那一行空行**下面**开始：第 1 行。
     assert_eq!(frame[(0, 1)].symbol(), " ", "左边一列空气");
@@ -687,18 +687,20 @@ fn a_session_with_no_line_being_read_promises_only_what_the_keyboard_does() {
 
 #[test]
 fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
-    // 提示行跨**整屏**（`.scratch/tui-visual-language/spec.md` §16）之后，宽度就是终端宽度：
-    // 量出来的空闲阶梯是 40 列 -> 一条提示 + 出口，80 -> 四条，100 -> 五条，120 -> 六条全在。
+    // 提示行落在**主列**里（`.scratch/tui-feedback/spec.md` §2），所以它的宽度是主列内容宽、
+    // 不再是终端宽度：120 列终端给出 79 列提示，80 列给出 51 列。量出来的阶梯因此是
+    // 40 列 -> 一条提示 + 出口，80 -> 三条，100 -> 四条，120 -> 五条。
     //
     // `ctrl-o 左栏` 排在最末，所以只有最宽那一档看得见它
     // （`.scratch/sidebar-toggle/spec.md` §4）。
     assert_eq!(hint_items(40).len(), 2, "40 列：{:?}", hint_items(40));
-    assert_eq!(hint_items(80).len(), 5, "80 列：{:?}", hint_items(80));
-    assert_eq!(hint_items(100).len(), 6, "100 列：{:?}", hint_items(100));
-    assert_eq!(hint_items(120).len(), 7, "120 列：{:?}", hint_items(120));
+    assert_eq!(hint_items(80).len(), 3, "80 列：{:?}", hint_items(80));
+    assert_eq!(hint_items(100).len(), 4, "100 列：{:?}", hint_items(100));
+    assert_eq!(hint_items(120).len(), 5, "120 列：{:?}", hint_items(120));
     assert_eq!(hint_items(174).len(), 7, "174 列：{:?}", hint_items(174));
 
-    // 在地板上，出口之前只挤得下一条提示 —— 而 `就绪` 不在这里，它住在状态行里。
+    // 在地板上，出口之前只挤得下一条提示 —— 而 `就绪` 不在这里，它住在状态行里。左栏在地板
+    // 上本来就不画，所以提示行拿到的就是整屏 40 列。
     let floor = hint_items(40);
     assert_eq!(
         floor,
@@ -706,21 +708,15 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         "40 列：{floor:?}"
     );
 
-    // 80 列这一档四条提示就都看得见了 —— 左栏那 29 列不再从提示里扣。
+    // 80 列终端的主列是 51 列（窄左栏 28 + 分隔列），出口之前放得下两条提示。
     let narrow = hint_items(80);
     assert_eq!(
         narrow,
-        vec![
-            "enter 发送",
-            "ctrl-j 换行",
-            "esc 取消",
-            "shift+tab 模式",
-            "ctrl-c/ctrl-d 退出",
-        ],
+        vec!["enter 发送", "ctrl-j 换行", "ctrl-c/ctrl-d 退出"],
         "80 列：{narrow:?}"
     );
 
-    // 120 列是参考尺寸：六条提示全在。
+    // 120 列是参考尺寸：主列 79 列，出口之前放得下四条提示。
     let wide = hint_items(120);
     assert_eq!(
         wide,
@@ -729,13 +725,11 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             "ctrl-j 换行",
             "esc 取消",
             "shift+tab 模式",
-            "PgUp/PgDn 滚动",
-            "ctrl-o 左栏",
             "ctrl-c/ctrl-d 退出",
         ],
-        "六条提示加出口"
+        "四条提示加出口"
     );
-    // 忙碌那一档的出口短八列，但状态词不在这一行上，不论忙闲 —— 它住在状态行里。
+    // 忙碌那一档的出口短六列，但状态词不在这一行上，不论忙闲 —— 它住在状态行里。
     let busy = hint_items_busy(120);
     assert_eq!(
         busy,
@@ -744,8 +738,6 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             "ctrl-j 换行",
             "esc 取消",
             "shift+tab 模式",
-            "PgUp/PgDn 滚动",
-            "ctrl-o 左栏",
             "ctrl-c 退出",
         ],
         "忙碌只换出口那一段：{busy:?}"
@@ -768,6 +760,34 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             .contains("shift+enter"),
         "任何宽度下都没有幽灵换行键"
     );
+}
+
+#[test]
+fn the_hint_row_sits_under_the_input_and_inside_the_main_column() {
+    // 提示行与输入区同列同宽、就在它正下方（`.scratch/tui-feedback/spec.md` §2，推翻
+    // `tui-visual-language` §16）。120 列下的落点是第 41 列（分隔列右边一格）到主列右缘 ——
+    // 左栏那一行的最后一格仍然是左栏自己的东西。
+    let mut state = idle();
+    let frame = buffer(120, 24, &mut state);
+    let hints = (0..24)
+        .find(|y| row_text(&frame, *y, 120).contains("enter 发送"))
+        .expect("提示行在屏幕上");
+    assert_eq!(hints, 23, "提示行是屏幕最后一行");
+    assert_eq!(frame[(40, hints)].symbol(), "┆", "分隔列照旧到底");
+    let left = cells(&frame, hints, 0, 41);
+    assert!(
+        !left.contains("enter"),
+        "提示不再从屏幕最左列起（那是左栏底下）：{left:?}"
+    );
+    assert_eq!(frame[(41, hints)].symbol(), "e", "它从主列起点起");
+
+    // 几何层：它就是输入区那一块的正下方，同列同宽。
+    use fs_agent::render::layout::plan;
+    use ratatui::layout::Rect;
+    let regions = plan(Rect::new(0, 0, 120, 24), 3, true);
+    assert_eq!(regions.hints.x, regions.input.x, "同列");
+    assert_eq!(regions.hints.width, regions.input.width, "同宽");
+    assert_eq!(regions.hints.y, regions.input.bottom() + 1, "就在它正下方");
 }
 
 #[test]
@@ -1218,19 +1238,19 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
     // 左栏自己的高度阶梯（`.scratch/trace-tab/spec.md` §4）：**标记**先走
     // —— 退到文字身份，再退到什么都不画 —— 只要页区还保得住那三行地板。
     // 宽度在这整件事里从不参与，页高也不再随「读数有几项」走。
-    // 左栏顶上留的那一行空行是**花掉的**，底下还要让出跨整屏的提示行那一行，所以阶梯看到的
-    // 内容行是 `h − 2`（`.scratch/tui-visual-language/spec.md` §16）。
+    // 左栏顶上留的那一行空行是**花掉的**，而底下不再让给提示行：提示行回到了主列里
+    // （`.scratch/tui-feedback/spec.md` §2），所以阶梯看到的内容行是 `h − 1`。
     use fs_agent::render::layout::{plan, SidebarKind};
     use ratatui::layout::Rect;
 
     let cases = [
         // 高度、身份、页区行数
-        (24u16, SidebarKind::Mark, 14u16), // 22 − 5 − 3
-        (15, SidebarKind::Mark, 5),        // 13 − 5 − 3
-        (13, SidebarKind::Mark, 3),        // 11 − 5 − 3，正好是地板
-        (12, SidebarKind::Text, 6),        // 10 − 1 − 3：标记让位换回页高
-        (11, SidebarKind::Text, 5),        // 9 − 1 − 3
-        (10, SidebarKind::Text, 4),        // 8 − 1 − 3
+        (24u16, SidebarKind::Mark, 15u16), // 23 − 5 − 3
+        (15, SidebarKind::Mark, 6),        // 14 − 5 − 3
+        (13, SidebarKind::Mark, 4),        // 12 − 5 − 3
+        (12, SidebarKind::Mark, 3),        // 11 − 5 − 3，正好是地板
+        (11, SidebarKind::Text, 6),        // 10 − 1 − 3：标记让位换回页高
+        (10, SidebarKind::Text, 5),        // 9 − 1 − 3
     ];
     for (height, kind, page_rows) in cases {
         let mut state = state();
@@ -1276,9 +1296,9 @@ fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
 
     let cases = [
         // 宽、高、身份、页区行数
-        (120u16, 24u16, SidebarKind::Mark, 14u16), // 22 − 5 − 3
-        (80, 24, SidebarKind::Text, 18),           // 22 − 1 − 3
-        (80, 10, SidebarKind::Text, 4),            // 8 − 1 − 3
+        (120u16, 24u16, SidebarKind::Mark, 15u16), // 23 − 5 − 3
+        (80, 24, SidebarKind::Text, 19),           // 23 − 1 − 3
+        (80, 10, SidebarKind::Text, 5),            // 9 − 1 − 3
     ];
     for (width, height, kind, page_rows) in cases {
         let regions = plan(Rect::new(0, 0, width, height), 1, true);
@@ -3305,8 +3325,8 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
     );
     assert!(shown < 30, "这一页没能把它们全装下：{rows:#?}");
     assert_eq!(
-        shown, 12,
-        "14 行的页区里条目拿 13 行，其中一行归溢出：{rows:#?}"
+        shown, 13,
+        "15 行的页区里条目拿 14 行，其中一行归溢出：{rows:#?}"
     );
 }
 

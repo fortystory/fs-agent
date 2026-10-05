@@ -1,7 +1,7 @@
 # 02 — 提示行回到输入框下：只跨主列，左栏恢复全高
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../spec.md
 Blocked by: —
 
