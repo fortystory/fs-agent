@@ -3,7 +3,7 @@
 Status: ready-for-agent（决策图 [`map.md`](map.md) **10/10 已走完**，可以交给 `/to-tickets` 拆实现票）
 
 - **来源**：wayfinder 决策图 [`map.md`](map.md)（charting 两轮 grilling 八问）+ 十张已 resolved 的决策票。底料是两份调研（[终端能力边界](research/01-terminal-capability-bounds.md)、[样式改动的测试与文档契约面](research/02-style-change-surface.md)）与五份 prototype（[配色表](prototype/palette.md)、[两档与符号表](prototype/glyph-grammar.md)、[底部三条](prototype/bottom-three-rows.md)、[右缘与左栏](prototype/transcript-edge-and-sidebar.md)、[四表面对照](prototype/overlays-and-questionnaire.md)），各配一个可跑的真终端对照脚本。
-- **术语**：沿用 [`CONTEXT.md`](../../CONTEXT.md) 的渲染词条（渲染器 / 转录 / 对话视图 / 轨迹视图 / 左栏 / 输入区 / 记号 / 提示符色相 / 脉冲 / 状态行 / 跟随 / 回合条 / 焦点回合 / 问卷 / 选项区）。本 effort 在正文里新用两个词：**语义色板**（颜色值集中一处、绘制代码只引用语义名）与**字形语法**（框架一套、内容一套）；**若词汇表要收它们，交棒时补进 `CONTEXT.md`** —— 本 spec 不擅自改词表。
+- **术语**：沿用 [`CONTEXT.md`](../../CONTEXT.md) 的渲染词条（渲染器 / 转录 / 对话视图 / 轨迹视图 / 左栏 / 输入区 / 记号 / 提示符色相 / 脉冲 / 状态行 / 跟随 / 回合条 / 焦点回合 / 问卷 / 选项区）。本 effort 在正文里新用两个词：**语义色板**（颜色值集中一处、绘制代码只引用语义名）与**字形语法**（框架一套、内容一套）；**若词汇表要收它们，交棒时补进 `CONTEXT.md`** —— 本 spec 不擅自改词表。（**2026-10-06 交棒时已收**：`CONTEXT.md` 的「渲染」一节新增 **语义色板（Palette）**、**字形语法（GlyphGrammar）**、**字形循环（PulseGlyph）** 三条，并回改了左栏 / 状态行 / 脉冲 / 提示符色相 / 下落短横 / 轨迹视图 / 对话视图共七条。）
 - **推翻**：三处既有 spec 的决定 —— ① [`sidebar-toggle`](../sidebar-toggle/spec.md) / [`trace-tab`](../trace-tab/spec.md) 写下的**「全高左栏」**（为提示行让出宽度）；② 详情覆盖层**「整框穿发言者色」**（2026-09-23 的记录）；③ [`tui-input-pulse`](../tui-input-pulse/spec.md) 的两条**「明确不做」**（「输入区以外任何忙碌动画都不取」与「空闲时一次唤醒都没有」）。三条的理由都在对应票的 `## 作答` 里。
 
 ## 问题陈述
