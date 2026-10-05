@@ -783,6 +783,9 @@ pub struct TuiState {
     /// 就是零 —— 推动它的是循环的定时器，所以空闲的会话把它原样留在上次运行留下的位置，
     /// 也就是零（`.scratch/tui-input-pulse/spec.md` §2）。
     pulse: u64,
+    /// 正在流的正文属于哪个发言者 —— 等待块与流式正文那一行名字用的就是它（正文一完成，
+    /// 名字改由那条源行自己带）。还没有增量时是 `None`，那时用名册的第一个。
+    live_speaker: Option<crate::events::SpeakerId>,
     /// 此刻**正在跑**的那个工具，以及它的参数 —— 对话视图末尾那句「正在做什么」用的就是
     /// 它（2026-10-05 维护者的优化）。由 `ToolCallStarted` 置上、`ToolCallCompleted`
     /// 或一次收尾清掉。
@@ -1572,6 +1575,7 @@ impl TuiState {
             // 这个样子（spec §6）。
             running: false,
             pulse: 0,
+            live_speaker: None,
             running_tool: None,
             pending: None,
             events: Vec::new(),
@@ -1822,7 +1826,8 @@ impl TuiState {
                     kind: DeltaKind::Reasoning,
                     ..
                 } => {}
-                Block::Delta { text, .. } => {
+                Block::Delta { speaker, text, .. } => {
+                    self.live_speaker = Some(speaker.clone());
                     self.live.push_str(text);
                     if self.live.len() > LIVE_BUFFER {
                         let cut = self.live.len() - LIVE_BUFFER;
@@ -1836,6 +1841,7 @@ impl TuiState {
                 Block::Message { .. } => {
                     // 增量是那一版实时的视图；块才是永久的那一版，所以尾巴可以走了。
                     self.live.clear();
+                    self.live_speaker = None;
                 }
                 _ => {}
             }
@@ -2047,38 +2053,45 @@ impl TuiState {
             .collect()
     }
 
-    /// 对话视图末尾那条正在流的东西：正文尾巴，或者**等待提示**。
+    /// 对话视图末尾那条正在流的东西：正文尾巴，或者**等待提示** —— 两种情形下都**先有
+    /// 一行名字**。
     ///
-    /// 模型还没吐出第一个字时（循环在跑、正文尾巴还空着）末尾给两行：**谁在答**，以及它
-    /// **在做什么** —— 有工具在跑就说那个工具在干什么，否则说它在想；第一个正文增量一到
-    /// 两行都消失（2026-10-05 维护者的两条优化）。
+    /// 名字行在等待与流式两个阶段都留在原地，所以正文一开始流、以及 markdown 完成那一刻
+    /// 排版换过来的瞬间，`[名字]` 都不会闪掉（2026-10-05 维护者报告的观感问题）。
+    ///
+    /// 等待阶段（正文尾巴还空着）：名字下面那行是它**在做什么** —— 有工具在跑就说那个工具，
+    /// 否则说它在想。流式阶段：名字下面是正在流的那几行正文。
     fn conversation_live(&mut self) -> Vec<Line<'static>> {
-        if !self.live.is_empty() {
-            return Self::live_rows(&self.live);
-        }
-        if !self.running {
+        if self.live.is_empty() && !self.running {
             return Vec::new();
         }
-        // 谁在答：名册的第一个。讨论里几轮之间会换人，而这一刻流上还没有归属 —— 提示本身
-        // 也是推测的，所以取一个稳定的名字。
-        let speaker = self
-            .facts
-            .speaker_order
-            .first()
-            .map(|name| crate::events::SpeakerId::Debater(name.as_str().into()))
-            .unwrap_or(crate::events::SpeakerId::System);
-        let text = match &self.running_tool {
-            Some((tool, args)) => wording::working(tool, args),
-            None => wording::waiting(self.pulse),
-        };
+        // 谁在答：正在流的那条正文的发言者；还没有增量时退回名册的第一个（讨论里几轮之间会
+        // 换人，而这一刻流上还没有归属）。
+        let speaker = self.live_speaker.clone().unwrap_or_else(|| {
+            self.facts
+                .speaker_order
+                .first()
+                .map(|name| crate::events::SpeakerId::Debater(name.as_str().into()))
+                .unwrap_or(crate::events::SpeakerId::System)
+        });
         let colour = self.colors.of(&speaker);
-        vec![
-            Line::from(Span::styled(
-                wording::speaker_label(&speaker),
-                Style::default().fg(colour),
-            )),
-            Line::from(Span::styled(text, Style::default().fg(Color::DarkGray))),
-        ]
+        let mut rows = vec![Line::from(Span::styled(
+            wording::speaker_label(&speaker),
+            Style::default().fg(colour),
+        ))];
+        if self.live.is_empty() {
+            let text = match &self.running_tool {
+                Some((tool, args)) => wording::working(tool, args),
+                None => wording::waiting(self.pulse),
+            };
+            rows.push(Line::from(Span::styled(
+                text,
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            rows.extend(Self::live_rows(&self.live));
+        }
+        rows
     }
 
     /// 这个会话数的是**轮**而不是回合。

@@ -6993,3 +6993,35 @@ fn the_waiting_hint_names_the_speaker_and_what_it_is_doing() {
     let settled = conversation_rows(&mut state, 120, 24).join("\n");
     assert!(settled.contains("正在思考."), "{settled}");
 }
+
+/// 正文一开始流，`[名字]` **不许消失** —— 它一直留在那行上，直到 markdown 完成、名字改由
+/// 源行带来（2026-10-05 维护者报告的观感问题）。
+#[test]
+fn the_name_row_survives_the_streaming_body() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "问题"));
+    state.request(ConsoleRequest::RunState { running: true });
+    state.apply(text_delta("答案的第一段。"));
+
+    let rows = conversation_rows(&mut state, 120, 24);
+    let name = rows
+        .iter()
+        .rposition(|row| row.trim() == "[kimi]")
+        .expect("流式正文上面那一行名字还在");
+    assert!(rows[name + 1].contains("答案的第一段。"), "{rows:#?}");
+    assert!(
+        !rows.join("\n").contains("正在思考"),
+        "提示让位给正文了：{rows:#?}"
+    );
+
+    // 完成之后名字仍在那儿 —— 这一回由**源行**带来。一轮收尾，末尾不再有等待块
+    // （有的话它是新一组的名字，不是这条消息的）。
+    state.apply(message(2, "答案的第一段。", None));
+    state.request(ConsoleRequest::RunState { running: false });
+    let rows = conversation_rows(&mut state, 120, 24);
+    let name = rows
+        .iter()
+        .position(|row| row.trim() == "[kimi]")
+        .expect("完成之后名字也在");
+    assert!(rows[name + 1].contains("答案的第一段。"), "{rows:#?}");
+}
