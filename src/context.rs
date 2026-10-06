@@ -427,6 +427,9 @@ pub fn compaction_prompt(events: &[Event]) -> String {
                 format!("[工具调用] {tool_name} {args}")
             }
             EventPayload::ContextInjected { source, .. } => match source {
+                // 身份不进事件流，所以这一枚到不了这里；给它一句人读得懂的话，而不是 panic
+                // —— 这条路径是投影与压缩，崩掉的代价比一句话大得多。
+                ContextSource::Identity => "[注入] 系统提示词".to_owned(),
                 ContextSource::AgentsMd => "[注入] AGENTS.md".to_owned(),
                 ContextSource::SkillsCatalog => "[注入] 技能清单".to_owned(),
                 ContextSource::McpCatalog => "[注入] MCP 加载".to_owned(),

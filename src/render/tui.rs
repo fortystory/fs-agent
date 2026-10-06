@@ -5585,8 +5585,15 @@ fn draw_bottom(
     // 草稿在问题之下仍然可见 —— 那是用户正在写的东西 —— 但光标收起来：键盘正在回答，不是在
     // 编辑（spec §9）。光标是按刚画出来的那些行摆的，从不按帧与帧之间保存的状态摆，正是后者
     // 让内联视口的光标漂移（ADR 0002）。
+    // 菜单的锚点与「光标露不露面」是两件事：锚点只问有没有东西占着键盘（`/` 菜单按它算
+    // 位置），而光标还多两层判据（键盘真在输入区、以及此刻是不是亮着那一半）。
     let anchor = state.pending.is_none().then_some(cursor);
-    if anchor.is_some() {
+    // 光标只在**键盘真的在输入区**时出现，并且按脉冲闪（2026-10-06 维护者要的）。
+    //
+    // 它要回答的是「焦点在哪」：键盘交给文件页、详情覆盖层或文件查看器立着时都不该有它 ——
+    // 否则屏幕上那个静止的光标在说谎，而人分不出自己敲的字会落到哪里。问卷有自己的光标
+    // （上面那条分支已经返回了）。
+    if keyboard_in_the_input(state) && blink_on(state.pulse) {
         frame.set_cursor_position((
             (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
             panes.input.y + cursor.row,
@@ -6390,6 +6397,8 @@ fn event_at(event: &RenderEvent) -> DateTime<Utc> {
         RenderEvent::Logged(event) => event.at,
         RenderEvent::Diagnostic { at, .. } | RenderEvent::Notice { at, .. } => *at,
         RenderEvent::Delta { .. } => Utc::now(),
+        // 系统提示词不属于任何一刻：它是**当前**的拼法，不是"那时"发生的事。
+        RenderEvent::Identity { .. } => Utc::now(),
         // 它到不了这里：`apply` 在那之前就把它接走了。给一个当下的时刻只是为了 match 完整。
         RenderEvent::WorkspaceChanged => Utc::now(),
     }
@@ -7238,6 +7247,28 @@ fn draw_file_viewer(frame: &mut ratatui::Frame, panes: &layout::Regions, state: 
     }
 }
 
+/// 光标这一帧亮着吗：每 [`BLINK_FRAMES`] 帧翻一次。
+///
+/// 脉冲是 60 ms 一跳，所以八帧 ≈ 0.5 秒一次翻转 —— 与终端自己的光标闪烁同量级。
+/// 空闲时脉冲照旧在走（`.scratch/tui-visual-language/spec.md` §32），所以闪也不停。
+fn blink_on(pulse: u64) -> bool {
+    (pulse / BLINK_FRAMES) % 2 == 0
+}
+
+/// 光标闪一下要几帧。
+const BLINK_FRAMES: u64 = 8;
+
+/// 键盘现在在输入区吗 —— 输入区那个光标据此决定露不露面。
+///
+/// 三个「键盘不在输入区」的情形：键盘交给了文件页（`sidebar_keyboard`）、一块覆盖层立着
+/// （详情或文件查看器）、问卷占着底部（它有自己的光标与自己的区域）。
+fn keyboard_in_the_input(state: &TuiState) -> bool {
+    state.pending.is_none()
+        && !state.sidebar_keyboard
+        && state.detail.is_none()
+        && state.file_viewer.is_none()
+}
+
 fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     if state.detail.is_none() {
         state.detail_rect = None;
@@ -7961,6 +7992,57 @@ mod tests {
         assert_eq!(
             layout::plan(Rect::new(0, 0, 40, 20), 1, true).viewer_width(135),
             36
+        );
+    }
+
+    #[test]
+    fn the_identity_becomes_a_foldable_injection_record() {
+        // 拼好的系统提示词借「注入的上下文」那条记录现身：一条**可点开**的行，来源名自己
+        // 说清它是按当前代码拼的、不进事件流。它走的是渲染通道，所以这里喂的也是渲染事件
+        // —— 事件流上一个字都不多。
+        let mut transcript = crate::render::transcript::Transcript::new();
+
+        let blocks = transcript.push(RenderEvent::identity(
+            "你是 fs-agent，一个自用的 coding agent CLI…",
+        ));
+
+        match blocks.as_slice() {
+            [crate::render::transcript::Block::ContextInjected { source, content }] => {
+                assert_eq!(*source, crate::events::ContextSource::Identity);
+                assert_eq!(content, "你是 fs-agent，一个自用的 coding agent CLI…");
+            }
+            _ => panic!("期望正好一条注入记录（可点开的那一种）"),
+        }
+    }
+
+    #[test]
+    fn the_cursor_blinks_and_only_when_the_keyboard_is_in_the_input_area() {
+        // 闪：每八帧翻一次。
+        assert!(blink_on(0));
+        assert!(blink_on(7));
+        assert!(!blink_on(8));
+        assert!(!blink_on(15));
+        assert!(blink_on(16), "十六帧之后又亮起来");
+
+        // 露面：只有键盘真的在输入区时。
+        // （`Pending` 那几个先构造：`state()` 这个名字在下面会被变量遮住。）
+        let mut modal = state();
+        modal.pending = Some(Pending::ClearDraft);
+        assert!(!keyboard_in_the_input(&modal), "中间的模态占着键盘");
+
+        let mut state = state();
+        assert!(keyboard_in_the_input(&state));
+        state.sidebar_keyboard = true;
+        assert!(
+            !keyboard_in_the_input(&state),
+            "键盘在文件页时输入区没有光标"
+        );
+        state.sidebar_keyboard = false;
+
+        let (viewer, _) = state_with_viewer();
+        assert!(
+            !keyboard_in_the_input(&viewer),
+            "文件查看器立着时输入区没有光标"
         );
     }
 

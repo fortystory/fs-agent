@@ -49,6 +49,8 @@ impl Render for Headless {
 
         loop {
             match receiver.recv().await {
+                // 拼好的系统提示词：机器模式不养转录，也没有人读它。
+                Ok(RenderEvent::Identity { .. }) => {}
                 Ok(RenderEvent::Delta {
                     kind: DeltaKind::Text,
                     text,

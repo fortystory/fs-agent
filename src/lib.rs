@@ -1054,6 +1054,11 @@ impl Harness {
         self.opened.render.notice(message);
     }
 
+    /// 拼好的系统提示词摆进转录（轨迹页看得到的那一条，不进事件流）。
+    pub fn identity(&self, text: &str) {
+        self.opened.render.identity(text);
+    }
+
     /// 目前为止的整条流，按 `seq` 顺序。
     ///
     /// [`DiscussionHarness::events`] 的单 agent 对应物：两个 harness 一个取值形状，

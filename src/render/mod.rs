@@ -105,6 +105,14 @@ pub enum RenderEvent {
         at: DateTime<Utc>,
         message: String,
     },
+    /// 拼给模型的那段**私有身份**（系统提示词），给读的人看的一条记录。
+    ///
+    /// 它不是事件、也永远不进事件流（身份在每次请求里现拼、从不落盘 —— `build_messages`，
+    /// spec §15）。所以这一条是**按当前代码拼的一份**：`--continue` 重开看到的是今天的拼法，
+    /// 不是当时那份。它点得开、看得全，但不进模型上下文、也不写 `log.jsonl`。
+    Identity {
+        text: String,
+    },
 }
 
 impl RenderEvent {
@@ -114,6 +122,11 @@ impl RenderEvent {
             at: Utc::now(),
             message: message.into(),
         }
+    }
+
+    /// 拼好的系统提示词，给读的人看。没有时刻：它不属于任何一刻，是**当前**的拼法。
+    pub fn identity(text: impl Into<String>) -> Self {
+        Self::Identity { text: text.into() }
     }
 
     /// 一条界面告知，时刻取现在。
@@ -178,6 +191,11 @@ impl RenderHandle {
     /// 终端，第二个写入者就会落进活动区域里（spec §19）。
     pub fn notice(&self, message: &str) {
         let _ = self.sender.send(RenderEvent::notice(message));
+    }
+
+    /// 把拼好的系统提示词摆进转录（轨迹页看得到的那一条；不进事件流）。
+    pub fn identity(&self, text: &str) {
+        let _ = self.sender.send(RenderEvent::identity(text));
     }
 
     /// 对前端说一句「工作区变了」：不画一行、不进事件流，只请握着文件索引的那一端重扫一次

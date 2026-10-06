@@ -200,6 +200,17 @@ impl Transcript {
                 blocks.push(Block::Notice(message));
                 blocks
             }
+            // 拼好的系统提示词：一条**可点开**的注入记录，与别处那一排注入同一个画法。
+            // 类型上它与进流的注入长得一样（同一个 `Block`），差别在来源那一枚的措辞里
+            // —— 那是这一条唯一说得清事实的地方：它不是事件。
+            RenderEvent::Identity { text } => {
+                let mut blocks = self.flush();
+                blocks.push(Block::ContextInjected {
+                    source: ContextSource::Identity,
+                    content: text,
+                });
+                blocks
+            }
             // 静默信号：它不产任何块 —— 屏幕上的东西一个都不变
             // （`.scratch/files-page/spec.md` §2）。
             RenderEvent::WorkspaceChanged => Vec::new(),

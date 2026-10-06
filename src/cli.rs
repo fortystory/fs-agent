@@ -451,6 +451,10 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
 
     // 用户故事 A.12：在第一个问题之前说清这是哪个模型、哪一档、哪场会话。它走渲染器而不是 stderr：
     // TUI 在 harness 组装时就已经启动，第二个往终端写的人会落在它的活动区域里、盖在状态行上。
+    // 拼给模型的那段私有身份，给读的人留一条记录。它**不进事件流**（身份每次请求现拼、
+    // 从不落盘，spec §15），所以轨迹页看到的是「按当前代码拼的一份」—— 那句话由来源名自己
+    // 说出来。摆在横幅之前：那是模型看到的**第一样东西**。
+    harness.identity(&crate::agent::agent_identity());
     harness.notice(&render::wording::banner(
         harness.session_id().as_str(),
         &model,
