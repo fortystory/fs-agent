@@ -6,13 +6,13 @@ Charting: **已完成**（2026-10-06，五轮 grilling 共 22 问：终点形态
 点击语义 / 行与树的画法 / 插入手势 / 键盘进出 / 弹窗读法与高亮 / 重扫的触发与进程模型）。
 本图只做**规划**，不产代码改动。
 
-> **交棒已发生（2026-10-06 补记）**：维护者在这一轮 charting 之后直接要求折 spec，所以
-> [`spec.md`](spec.md) 已经产出；同日六张实现票全部落地（`Status: ready-for-walkthrough`），
-> 只剩真机走查。而**这张图本身还差一张票** ——
-> [prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md)（`ready-for-human`）
-> 没走。据此：**spec 是权威**（实现按它走），那张 prototype 票留作**校正那几处可调数值**的帧
-> 草图（密度、焦点行取哪一档、折叠字形、弹窗的列宽口径、加载与空态文案）；冲突时以 spec 为准并
-> 回改票。
+> **交棒与收口（2026-10-06 建，2026-10-07 收）**：维护者在那轮 charting 之后直接要求折 spec，所以
+> [`spec.md`](spec.md) 已经产出；同日六张实现票（05–10）全部落地，**2026-10-07 六张一并收成
+> `done`**（验收逐条勾上、断言全绿）。**spec 是权威**（实现按它走）——
+> [prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md) 没有单独跑原型：
+> 它那六个可调数值在实现里已经取定，票底收成 `## 作答`（密度、焦点行、字形、弹窗列宽与空态，
+> 外加窄档的正面回答），帧草图不再补。真机观感项仍列在
+> [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㉛。
 
 ## 目的地
 
@@ -94,7 +94,7 @@ Charting: **已完成**（2026-10-06，五轮 grilling 共 22 问：终点形态
 **决策票**（四张）：
 
 - [x] [grilling：文件页的形态与手势（charting 当场拍板）](issues/01-page-shape.md)
-- [ ] [prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md)
+- [x] [prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md)
 - [x] [research：详情覆盖层与语法高亮的接线](issues/03-research-overlay-and-highlight.md)
 - [x] [research：重扫通知通道与有界读盘](issues/04-research-rescan-and-bounds.md)
 
@@ -108,11 +108,9 @@ Charting: **已完成**（2026-10-06，五轮 grilling 共 22 问：终点形态
 - [x] [09 — 弹窗里的语法高亮与行号](issues/09-highlight-and-line-numbers.md)
 - [x] [10 — 工作区变了就重扫](issues/10-rescan-on-workspace-change.md)
 
-**frontier**（实现）= 空：六张实现票 2026-10-06 全部落地，各自收在 `ready-for-walkthrough`
-（能自动化的部分都做完，只剩真终端里逐项走查 —— 条目见
-[`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) 的 ㉛）。剩下唯一开着的是
-[02 — prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md)：它不阻塞任何
-东西，校正的是几处**可调数值**（密度、焦点行取哪一档、字形、列宽口径、空态文案）的推荐值。
+**frontier** = 空（2026-10-07）：决策四张、实现六张全部关闭 —— 六张实现票收成 `done`（能自动化的
+部分都做完；真机观感项见 [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㉛），
+prototype 票收成 `resolved`（问题由实现回答，见它的 `## 作答`）。
 
 ## 已定的决定
 
@@ -128,6 +126,11 @@ Charting: **已完成**（2026-10-06，五轮 grilling 共 22 问：终点形态
 
 - [research：详情覆盖层与语法高亮的接线](issues/03-research-overlay-and-highlight.md) — 覆盖层是「打开那一刻排好版的静态正文 + 一个 `top` 偏移」（`detail_body` → `folded_text` → `pane::wrap_line`，**不是** `wrap_text`），加第五个变体是三处活儿；高亮层 `highlight_code` 吃「整段源码 + 语言名」、吐逐行 span，而**按扩展名挑语言的映射今天不存在**；行号可借「先拆逻辑行、再逐条折行」的顺序在折行前插前缀（`stamp_lines` 那个块级形状不对）；**行数上限、字节上限、二进制检测在渲染层都没有现成件**（`read_file` 那套绑死在工具层），是新的活；「不进事件流、不进模型上下文」成立（渲染层对文件系统的唯一调用是一次只读 `read_to_string`，不 emit、不碰 `Session`）。另查明两处既有落差：正文排版宽度用的是**框宽**而实际文本区窄 4 列；打开详情会把**轨迹页**冻住，且「打开方恒为轨迹页」是硬编码。
 - [research：重扫的触发点落在哪一层](issues/04-research-rescan-and-bounds.md) — `Effect` 只在循环那一层被算出来（`Registry::facts` 的唯一调用者，上游是 `process_call`），而收尾函数手里已经没有它（`AllowedCall` 只剩 `exclusive` 这一个投影，`ReadOnly` 与 `WritePaths` 分不开）⇒ 触发点只能落在每次 `process_call`；`ConsoleRequest` 是唯一合身的「循环→前端、静默」通道（`Muted` / `RunState` 是先例）；执行者与讨论者的调用都落在**同一条父流、同一个渲染器**上；**`/undo` 不走工具派发**（直接 `fs::write` 加一条 `HistorySuperseded`），要在它自己那条分支上单独触发；`begin()` 的守卫在「bool 置位、`Loading` 时不清位」的形状下把 N 次触发合并成 1 次且**不丢更新**（最多延后一轮），例外仍是遍历永不返回时钉死 `Loading`。
+
+- [prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md) — **没有单独跑原型**：
+  六个可调数值在实现里取定 —— 缩进每层 2 列、不封顶；折叠字形收起 `▸` / 展开 `▾`；焦点行取
+  常驻选中（`ACCENT` + `BOLD`）；名字超宽用 `…` 收尾；两条空态文案 `正在读取工作区…` 与
+  `工作区里没有文件`；弹窗按文本区宽排版、行号占「最大行号位数 + 1」列且续行顶格。
 
 ## 尚未明确
 
@@ -158,11 +161,12 @@ Charting: **已完成**（2026-10-06，五轮 grilling 共 22 问：终点形态
 
 ## 进度
 
-**决策 3/4；实现 6/6（2026-10-06）。** [grilling：文件页的形态与手势](issues/01-page-shape.md) 是
-charting 当场拍板的结果；两张 research 票已由子代理解决。spec 折出来了（[`spec.md`](spec.md)），
-`/to-tickets` 又拆出六张实现票（05–10）—— 同一天六张全部落地，各自收在 `ready-for-walkthrough`。
-实现期有两处如实记在票里的取舍（票 07 的吃键范围收窄到文件页、票 10 的端到端测试边界），
-以及一处既有落差（票 05：窗口 resize 不重排**已经打开**的正文）。
+**决策 4/4；实现 6/6（2026-10-06 落地，2026-10-07 收口）。** [grilling：文件页的形态与手势](issues/01-page-shape.md) 是
+charting 当场拍板的结果；两张 research 票已由子代理解决；[prototype：树与弹窗在两档宽度下的排版](issues/02-prototype-tree-layout.md)
+没有单独跑原型 —— 它那六个可调数值由实现取定，票底收成 `## 作答`。spec 折出来了（[`spec.md`](spec.md)），
+`/to-tickets` 又拆出六张实现票（05–10）—— 同一天六张全部落地，**2026-10-07 收成 `done`**（验收逐条
+勾上、断言全绿）。实现期有两处如实记在票里的取舍（票 07 的吃键范围收窄到文件页、票 10 的端到端测试
+边界），以及一处既有落差（票 05：窗口 resize 不重排**已经打开**的正文）。
 
 六张票是一条链：**05** 是 prefactor（不修它，弹窗那张票就要在一个既有缺陷上动手），**06** 是
 tracer bullet（索引 → 排版 → 绘制 → 命中 → 状态），**07 / 10** 各挂在它后面补上键盘与重扫，

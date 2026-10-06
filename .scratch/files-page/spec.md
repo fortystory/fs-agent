@@ -1,6 +1,6 @@
 # 文件页：左栏「文件」页签
 
-Status: 3 resolved + 1 ready-for-human（票 02 的原型）+ 6 ready-for-walkthrough（实现票 05–10 已落地，只差真机走查）
+Status: 4 resolved + 6 done（决策票 01–04 全关，实现票 05–10 已落地并于 2026-10-07 收口）
 
 - **来源**：维护者 2026-10-06 的要求 ——「实现一下左边栏的文件标签页」。核实下来它不是照
   spec 填空：`trace-tab/spec.md` 的「明确不做」与 `tui-visual-language` 票 07 的「接受的边界」
@@ -246,10 +246,11 @@ Status: 3 resolved + 1 ready-for-human（票 02 的原型）+ 6 ready-for-walkth
 
 ## 补记
 
-- **`02` 那张 prototype 票仍然开着**（`ready-for-human`）：40 / 28 两档下的帧草图还没做 ——
+- **`02` 那张 prototype 票已收成 `resolved`（2026-10-07）**：40 / 28 两档下的帧草图**没有单独做** ——
   密度（一屏几行）、焦点行取哪一档（`ACCENT` + `BOLD` 的常驻选中，还是 `REVERSED` 的临时光标）、
-  折叠字形的最终字形、名字与弹窗里行号的列宽口径、加载与空态那两句文案。本 spec 在这几处给的是
-  **可调的推荐值**，帧草图做完之后按它校正 —— 那几处不构成「还要再决定什么」，只是要挑一个数。
+  折叠字形的最终字形、名字与弹窗里行号的列宽口径、加载与空态那两句文案，这几处本 spec 给的是
+  **可调的推荐值**，而实现把它们**直接取定了**（逐条见那张票的 `## 作答`）。真机观感项留在
+  [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) ㉛。
 - **两处既有落差要在实现时处理**（[findings](research/01-overlay-and-highlight.md) 记着证据）：
   详情正文的排版宽度口径（框宽 vs 文本区），以及「打开方恒为轨迹页」的记账。它们不是这次引入
   的，但这次会踩到。

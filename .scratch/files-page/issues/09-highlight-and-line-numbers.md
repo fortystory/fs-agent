@@ -1,7 +1,7 @@
 # 09 — 弹窗里的语法高亮与行号
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 08
 
@@ -13,11 +13,11 @@ Blocked by: 08
 
 ## 验收
 
-- [ ] 按扩展名认语言；认不出的按纯文本画，不报错、不画错色
-- [ ] 高亮走既有的那一层（与 markdown 代码块同一个源），窄档下不溢出、不挤掉正文
-- [ ] 行号只画在**逻辑行的第一行**上，折出来的续行不带
-- [ ] 行号与正文的列宽口径对齐（行号不会把正文挤出文本区）
-- [ ] 高亮与行号只画在弹窗里，不牵动转录、不进流
+- [x] 按扩展名认语言；认不出的按纯文本画，不报错、不画错色
+- [x] 高亮走既有的那一层（与 markdown 代码块同一个源），窄档下不溢出、不挤掉正文
+- [x] 行号只画在**逻辑行的第一行**上，折出来的续行不带
+- [x] 行号与正文的列宽口径对齐（行号不会把正文挤出文本区）
+- [x] 高亮与行号只画在弹窗里，不牵动转录、不进流
 
 ## 评论
 
@@ -29,3 +29,6 @@ Blocked by: 08
 - 断言：`the_extension_picks_the_language_the_highlighter_knows`（单测）、
   `the_overlay_highlights_the_code_it_knows`、`a_language_it_does_not_know_is_still_drawn_as_text`、
   `line_numbers_sit_on_the_first_display_line_of_a_logical_line`。
+
+- **收口（2026-10-07）**：五条验收逐条勾上；票底点名的四条断言全在 `tests/render_layout.rs`
+  与 `src/render/files.rs` 的单测里，全量 `cargo test` 1366 passed / 0 failed。

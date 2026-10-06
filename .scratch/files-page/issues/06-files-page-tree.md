@@ -1,7 +1,7 @@
 # 06 — 文件页画出一棵能点开的树（tracer bullet）
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: —
 
@@ -15,15 +15,15 @@ Blocked by: —
 
 ## 验收
 
-- [ ] `文件` 页画出工作区顶层（文件与目录），不再画占位行
-- [ ] 缩进每层 2 列；同一层里目录排在文件前面、同类之内保持索引给的顺序
-- [ ] 初始全部收起；目录行带尾斜杠与折叠字形、文件行没有；两者只靠结构区分，**不给颜色**
-- [ ] 点目录展开、再点收起；展开状态在重绘与切页之后都活着
-- [ ] 滚轮悬在左栏页区内时滚这一页，指针在主列时照旧滚主列（覆盖层与问卷的优先级不动）
-- [ ] 名字超出宽度时截断，40 列与 28 列两档都读得下去
-- [ ] 索引未就绪与工作区为空各画各的，都不显示空白或编出来的数据
-- [ ] 文件行的点击动作**这一票不做**（由 [08 — 文件内容弹窗](08-file-content-overlay.md) 接上）
-- [ ] 树的数据来自那份会话级索引，它的遍历规则一个字不改
+- [x] `文件` 页画出工作区顶层（文件与目录），不再画占位行
+- [x] 缩进每层 2 列；同一层里目录排在文件前面、同类之内保持索引给的顺序
+- [x] 初始全部收起；目录行带尾斜杠与折叠字形、文件行没有；两者只靠结构区分，**不给颜色**
+- [x] 点目录展开、再点收起；展开状态在重绘与切页之后都活着
+- [x] 滚轮悬在左栏页区内时滚这一页，指针在主列时照旧滚主列（覆盖层与问卷的优先级不动）
+- [x] 名字超出宽度时截断，40 列与 28 列两档都读得下去
+- [x] 索引未就绪与工作区为空各画各的，都不显示空白或编出来的数据
+- [x] 文件行的点击动作**这一票不做**（由 [08 — 文件内容弹窗](08-file-content-overlay.md) 接上）
+- [x] 树的数据来自那份会话级索引，它的遍历规则一个字不改
 
 ## 评论
 
@@ -38,3 +38,6 @@ Blocked by: —
   `clicking_a_directory_expands_and_collapses_it`、`the_tree_keeps_its_shape_across_repaints_and_a_tab_switch`、
   `the_files_page_names_the_two_empty_states`、`the_wheel_over_the_files_page_scrolls_the_tree`、
   `a_narrow_sidebar_still_reads_the_tree`；纯函数那几条在 `files.rs` 的单测里。
+
+- **收口（2026-10-07）**：九条验收逐条勾上；票底点名的七条断言全在 `tests/render_layout.rs`
+  与 `src/render/files.rs` 的单测里，全量 `cargo test` 1366 passed / 0 failed。
