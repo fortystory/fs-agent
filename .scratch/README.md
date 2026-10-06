@@ -56,3 +56,4 @@
 | [`trace-thought-stamp/`](trace-thought-stamp/spec.md) | spec | 轨迹页里「… 正在思考」那一行也有时间戳（开始那一刻，定稿时换成完成时刻） | 1/1 done |
 | [`tui-feedback/`](tui-feedback/spec.md) | spec | 真机走查后的五条：提示行回到输入框下（只跨主列，推翻 `tui-visual-language` §16）、消息的名字行不再是详情入口、推荐标记约定改中文 `(推荐)`（旧 `(Recommended)` 仍认）、`@` 候选改分段匹配（`cli` 找得到 `src/cli.rs`）、鼠标拖选 + OSC 52 复制（按区域取行、软折拼回）；随后两条真机反馈又补上拖选的手感（门槛两格、反白只铺到文字）与 `Shift+Enter` 换行 | 8/8 done |
 | [`files-page/`](files-page/spec.md) | map + spec | 左栏「文件」页：工作区文件树（与 `@` 同源的那份索引、同层目录在前）、键盘焦点行与插 `@路径`、文件内容弹窗（直接读盘 + 高亮 + 行号）、非只读调用之后重扫 —— 2026-10-06 由 22 问的 charting 折成 spec，六张实现票同日落地 | 3 resolved + 1 ready-for-human（决策）+ 6 ready-for-walkthrough（实现） |
+| [`todo-page/`](todo-page/seed.md) | seed | 左栏 `todo` 页的呈现：进度行（`3/11 1个正在进行` / `11/11 完成`）、样式、进度行上的按钮点开详情弹窗看完整列表（长文本折行，不截断） | — |

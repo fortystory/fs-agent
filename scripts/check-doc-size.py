@@ -279,6 +279,9 @@ def review_rules(unit: Unit) -> list[str]:
 #   9,677 / 58 → **9,899 / 59**（feature 索引天然随 feature 增长，与 `input-tokens`、`trace-tab`、
 #   `tui-visual-language`、`time-mcp`、`tui-feedback` 五次同因；六张实现票同日落地，索引行的
 #   票数与描述一起改就成了这个样子）。
+# **2026-10-06 新增 `todo-page` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
+#   9,899 / 59 → **10,007 / 60**（feature 索引天然随 feature 增长，与前六次同因；这一行是
+#   一条新 seed 而不是落地票，所以描述里只写三条意向）。
 # 行数比票 04 的「现在」高是**预期**的：拆段落必然加行，票 04 承认「行数不得增」不成立，
 # 行数上限是「拆完之后的新上限」，此后拦住「再往入口文档追加」。
 # **2026-10-06 维护者放宽 `AGENTS.md`（第一份被放宽的入口文档）**：它当时 904 / 25，贴着
@@ -289,7 +292,7 @@ def review_rules(unit: Unit) -> list[str]:
 #   其余两份照旧只许降。
 ENTRY_BUDGET = {
     "README.md": {"chars": 16993, "lines": 292, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 9899, "lines": 59, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 10007, "lines": 60, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，
