@@ -15,6 +15,8 @@ use ratatui::Frame;
 
 use crate::render::width;
 
+use super::links::Hotspot;
+
 /// 一条显示行：它的文本，它是不是上一行**软折**出来的续行，以及它在屏幕上从哪一列起。
 ///
 /// `folded` 就是「复制时该不该在这里换行」的全部判据：同一来源行折出来的下一片要拼回去，
@@ -23,20 +25,27 @@ use crate::render::width;
 /// `lead` 是**靠右**排出来的行才有的东西（用户消息的气泡、它上面那行名字）：文本从
 /// `rect.x + lead` 列起，它左边那些列是这个区域自己的留白 —— 既不该反白，也不该进复制
 /// （`.scratch/trace-tab/spec.md` §2 的补记）。左对齐的行是零。
+///
+/// `hotspots` 是这一行里点得开的候选，列同样从这一行的第 0 列起（`lead` 不在里面 ——
+/// 命中时两者相加才是屏幕列）。它在**画之前**由 [`crate::render::links::mark`] 认出来，
+/// 与这一行的文本出自同一次识别，所以「点得到的」与「看见的」不会漂开
+/// （`.scratch/clickable-links/spec.md` §2）。
 #[derive(Debug, Clone)]
 pub struct TextRow {
     pub text: String,
     pub folded: bool,
     pub lead: u16,
+    pub hotspots: Vec<Hotspot>,
 }
 
 impl TextRow {
-    /// 一条没有软折、从区域左缘起的显示行。
+    /// 一条没有软折、从区域左缘起、没有可点候选的显示行。
     pub fn plain(text: String) -> Self {
         Self {
             text,
             folded: false,
             lead: 0,
+            hotspots: Vec::new(),
         }
     }
 }
@@ -296,6 +305,7 @@ mod tests {
                     text: "续行".to_owned(),
                     folded: true,
                     lead: 0,
+                    hotspots: Vec::new(),
                 },
             ],
         );
@@ -343,6 +353,7 @@ mod tests {
                     text: "后半".to_owned(),
                     folded: true,
                     lead: 0,
+                    hotspots: Vec::new(),
                 },
                 TextRow::plain("第二段".to_owned()),
             ],
@@ -377,6 +388,7 @@ mod tests {
                 text: "气泡里的字  ".to_owned(),
                 folded: false,
                 lead: 8,
+                hotspots: Vec::new(),
             }],
         );
         let mut drag = Drag::press((0, 0), Some(0));

@@ -1229,6 +1229,20 @@ fn the_copy_receipt_leads_the_hint_row_and_never_evicts_the_way_out() {
     // 回执排在最前，而**出口永远保住**（`.scratch/tui-feedback/spec.md` §6；那条契约在
     // `exit-gesture` §2 与 `sidebar-toggle` §4 里）。
     assert_eq!(wording::copied(12, 2), "已复制 12 字 · 2 行");
+    // 打开的那两句与它同一个形状、同一条寿命（`.scratch/clickable-links/spec.md` §4）。
+    assert_eq!(
+        wording::opened("https://example.com/x"),
+        "已打开 https://example.com/x"
+    );
+    assert_eq!(
+        wording::open_failed("No such file or directory"),
+        "打开失败：No such file or directory"
+    );
+    let opened = wording::status_line_with(Some("已打开 .scratch/x.html"), false, 120, false);
+    assert!(
+        opened.starts_with("已打开 .scratch/x.html · "),
+        "打开的回执也打头：{opened}"
+    );
     let wide = wording::status_line_with(Some("已复制 12 字 · 2 行"), false, 120, false);
     assert!(
         wide.starts_with("已复制 12 字 · 2 行 · enter 发送"),

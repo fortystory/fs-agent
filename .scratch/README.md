@@ -58,3 +58,4 @@
 | [`files-page/`](files-page/spec.md) | map + spec | 左栏「文件」页：工作区文件树（与 `@` 同源的那份索引、同层目录在前）、键盘焦点行与插 `@路径`、文件内容弹窗（直接读盘 + 高亮 + 行号）、非只读调用之后重扫 —— 2026-10-06 由 22 问的 charting 折成 spec，六张实现票同日落地 | 3 resolved + 1 ready-for-human（决策）+ 6 ready-for-walkthrough（实现） |
 | [`todo-page/`](todo-page/seed.md) | seed | 左栏 `todo` 页的呈现：进度行（`3/11 1个正在进行` / `11/11 完成`）、样式、进度行上的按钮点开详情弹窗看完整列表（长文本折行，不截断） | — |
 | [`nvim-file-viewer/`](nvim-file-viewer/spec.md) | spec | **文件查看器**：`[ui] file_viewer = "nvim"` 时内容弹窗换成一屏真 nvim（只读、不折行、去框留白、键盘独占、`Ctrl-C` 或框外点击关）—— 先在 `prototype/embed-nvim` 分支上验完三问再落地（[ADR 0013](../docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)） | 1/1 done |
+| [`clickable-links/`](clickable-links/spec.md) | spec | **可点链接**：对话视图里点一下 URL 或工作区内真存在的文件路径（`/eli5` 的 `.html` 就是后者），由宿主 spawn `xdg-open` 打开 —— 识别与**选区**同层、拖选照旧只复制、只有人的指针能触发 | 3/3 done |

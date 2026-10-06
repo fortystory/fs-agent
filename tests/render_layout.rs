@@ -8775,3 +8775,193 @@ fn the_name_row_survives_the_streaming_body() {
         .expect("完成之后名字也在");
     assert!(rows[name + 1].contains("答案的第一段。"), "{rows:#?}");
 }
+
+/// 一帧里第一行含有 `needle` 的那一行：它是第几行，文本是什么。
+fn row_holding(frame: &Buffer, needle: &str) -> (u16, String) {
+    let area = frame.area;
+    for y in 0..area.height {
+        let text = cells(frame, y, area.x, area.right());
+        if text.contains(needle) {
+            return (y, text);
+        }
+    }
+    panic!("画出来的帧里没有一行含有 {needle:?}");
+}
+
+#[test]
+fn the_addresses_in_the_conversation_are_drawn_underlined() {
+    // `.scratch/clickable-links/spec.md` §4：对话视图里点得开的那几列看得见地带上划线，
+    // 别的一列都不带。识别本身是纯函数（`render::links`），这一条说的是**屏幕上**的事。
+    let path = ".scratch/sandbox/eli5-sandbox.html";
+    let url = "https://example.com/x";
+    let mut state = state();
+    state.apply(message(1, &format!("产物在 {path}，另见 {url}。"), None));
+    let frame = buffer(120, 24, &mut state);
+    let (row, text) = row_holding(&frame, path);
+
+    let mut expected = vec![false; frame.area.width as usize];
+    for target in [path, url] {
+        let at = text.find(target).expect("两个目标都在这条正文行里");
+        let start = text_columns(&text[..at]);
+        let width = text_columns(target);
+        expected[start..start + width].fill(true);
+    }
+    for (column, hot) in expected.iter().enumerate() {
+        let cell = &frame[(column as u16, row)];
+        assert_eq!(
+            cell.modifier.contains(Modifier::UNDERLINED),
+            *hot,
+            "第 {column} 列该不该带下划线不对（这一行是 {text:?}）"
+        );
+    }
+    assert!(
+        expected.iter().filter(|hot| **hot).count() > 20,
+        "两段地址都得认出来，不然这条测试什么都没测"
+    );
+}
+
+// --- 链接热区：点一下就打开（`.scratch/clickable-links/spec.md` §1、§3） ------------
+
+/// 工作目录就是**仓库根**的状态。
+///
+/// 这一组不能拿 `state()` 那个不存在的 `/x/fs-agent`：热区里的路径要真存在、真在区内才解析
+/// 得出目标（§3），而那个判据正是这几条测试要问的。
+fn state_at_repo() -> TuiState {
+    TuiState::new(
+        facts(),
+        std::env::current_dir().expect("测试的工作目录"),
+        None,
+    )
+}
+
+/// 一次拖选：按住、挪过门槛、松手。
+fn drag(state: &mut TuiState, from: (u16, u16), to: (u16, u16)) {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    for (kind, (column, row)) in [
+        (MouseEventKind::Down(MouseButton::Left), from),
+        (MouseEventKind::Drag(MouseButton::Left), to),
+        (MouseEventKind::Up(MouseButton::Left), to),
+    ] {
+        state.mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        });
+    }
+}
+
+#[test]
+fn clicking_a_url_in_the_conversation_asks_to_open_it() {
+    let mut state = state_at_repo();
+    state.apply(message(1, "见 https://example.com/x 那一页", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "https://example.com/x").expect("画在屏幕上");
+
+    click(&mut state, column + 5, row);
+
+    assert_eq!(
+        state.take_open_request(),
+        Some("https://example.com/x".to_owned()),
+        "点 URL 中段：目标就是它本身"
+    );
+    assert_eq!(state.take_open_request(), None, "取走一次就没了");
+}
+
+#[test]
+fn clicking_a_workspace_file_asks_to_open_its_absolute_path() {
+    let mut state = state_at_repo();
+    state.apply(message(1, "跑完了：Cargo.toml", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "Cargo.toml").expect("画在屏幕上");
+
+    click(&mut state, column + 2, row);
+
+    let root = std::env::current_dir()
+        .expect("测试的工作目录")
+        .canonicalize()
+        .expect("仓库根");
+    assert_eq!(
+        state.take_open_request(),
+        Some(root.join("Cargo.toml").to_string_lossy().into_owned()),
+        "文件传绝对路径，交给系统去挑程序"
+    );
+}
+
+#[test]
+fn clicking_plain_text_asks_for_nothing() {
+    let mut state = state_at_repo();
+    state.apply(message(1, "见 https://example.com/x 那一页", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "https://example.com/x").expect("画在屏幕上");
+
+    click(&mut state, column.saturating_sub(2), row);
+
+    assert_eq!(state.take_open_request(), None, "点普通文字什么都不发生");
+}
+
+#[test]
+fn a_missing_or_outside_path_asks_for_nothing() {
+    for text in ["没有这个文件.html", "/etc/hostname"] {
+        let mut state = state_at_repo();
+        state.apply(message(1, text, None));
+        let frame = buffer(120, 24, &mut state);
+        let (column, row) = cell_of(&frame, 120, 24, text).expect("画在屏幕上");
+
+        click(&mut state, column + 1, row);
+
+        assert_eq!(state.take_open_request(), None, "{text} 不该被打开");
+    }
+}
+
+#[test]
+fn dragging_across_an_address_copies_it_instead_of_opening_it() {
+    let mut state = state_at_repo();
+    state.apply(message(1, "见 https://example.com/x 那一页", None));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "https://example.com/x").expect("画在屏幕上");
+
+    drag(&mut state, (column, row), (column + 8, row));
+
+    assert_eq!(state.take_open_request(), None, "拖选永不打开");
+    assert!(state.take_clipboard().is_some(), "拖选照旧只复制");
+}
+
+#[test]
+fn clicking_away_from_the_conversation_asks_for_nothing() {
+    let mut state = state_at_repo();
+    state.apply(message(1, "见 https://example.com/x 那一页", None));
+    let _ = buffer(120, 24, &mut state);
+
+    // 左栏里的一格与提示行里的一格：两处都没有链接热区。
+    for (column, row) in [(3, 3), (60, 23)] {
+        click(&mut state, column, row);
+        assert_eq!(
+            state.take_open_request(),
+            None,
+            "({column}, {row}) 上什么都没有"
+        );
+    }
+}
+
+#[test]
+fn the_receipt_of_an_open_lands_in_the_hint_row() {
+    // 运行期把结果写回来（`note_open_receipt`），提示行照着说 —— 这一条跨的是那一小段路
+    // （`.scratch/clickable-links/spec.md` §4）。成功与失败各说各的。
+    let mut state = state_at_repo();
+    state.apply(message(1, "见 https://example.com/x 那一页", None));
+    assert!(
+        !screen(120, 24, &mut state).join("\n").contains("已打开"),
+        "还没点，什么都不该有"
+    );
+
+    for receipt in [
+        wording::opened("https://example.com/x"),
+        wording::open_failed("No such file or directory"),
+    ] {
+        state.note_open_receipt(receipt.clone());
+        let rows = screen(120, 24, &mut state).join("\n");
+        assert!(rows.contains(&receipt), "提示行该说 {receipt:?}：{rows}");
+    }
+}

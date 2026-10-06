@@ -1277,6 +1277,19 @@ pub fn copied(chars: usize, lines: usize) -> String {
     format!("已复制 {chars} 字 · {lines} 行")
 }
 
+/// 一次打开之后提示行打头的那句回执（`.scratch/clickable-links/spec.md` §4）。
+pub fn opened(target: &str) -> String {
+    format!("已打开 {target}")
+}
+
+/// 打开没成：这是读的人唯一会看到的一句。
+///
+/// 点了一段**解析不出目标**的文本是不留回执的（那与点普通文字一样，本就该没有反应），
+/// 所以走到这里意味着「确实去开了，但没开成」—— 系统那条错误原文跟在冒号后面。
+pub fn open_failed(reason: &str) -> String {
+    format!("打开失败：{reason}")
+}
+
 /// 状态行里那个出口条目：没举手时按忙闲挑一句，举手之后换成那一档的催促。
 ///
 /// 举手换掉的是**出口那一段**，不是往后追加 —— 屏幕上不许出现「旧出口文案 + 举手文案」

@@ -283,6 +283,11 @@ def review_rules(unit: Unit) -> list[str]:
 # **2026-10-06 新增 `todo-page` 索引行时再跟一次**：同一类显式动作，`.scratch/README.md`
 #   9,899 / 59 → **10,007 / 60**（feature 索引天然随 feature 增长，与前六次同因；这一行是
 #   一条新 seed 而不是落地票，所以描述里只写三条意向）。
+# **2026-10-06 新增 `clickable-links` 索引行时再跟一次**：同一类显式动作。10,007 / 60 之后随
+#   `nvim-file-viewer` 等几次索引更新走到 **10,244 / 61**（贴着 10,255 / 61 的棘轮、余 11 字符），
+#   本次新增一行、描述压到 176 字符并重测 → **10,420 / 62**（feature 索引天然随 feature 增长，
+#   与 `input-tokens`、`trace-tab`、`tui-visual-language`、`time-mcp`、`tui-feedback`、
+#   `files-page`、`todo-page` 七次同因；这一行是 spec 落盘 + 三张 `ready-for-agent` 的实现票）。
 # 行数比票 04 的「现在」高是**预期**的：拆段落必然加行，票 04 承认「行数不得增」不成立，
 # 行数上限是「拆完之后的新上限」，此后拦住「再往入口文档追加」。
 # **2026-10-06 维护者放宽 `AGENTS.md`（第一份被放宽的入口文档）**：它当时 904 / 25，贴着
@@ -293,7 +298,7 @@ def review_rules(unit: Unit) -> list[str]:
 #   其余两份照旧只许降。
 ENTRY_BUDGET = {
     "README.md": {"chars": 17447, "lines": 296, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 10255, "lines": 61, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 10420, "lines": 62, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，

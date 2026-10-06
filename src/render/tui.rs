@@ -51,6 +51,8 @@ use super::files;
 use super::highlight;
 use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent};
 use super::layout;
+use super::links;
+use super::opener;
 use super::palette;
 use super::pane::{self, Pane};
 use super::panel::Panel;
@@ -488,6 +490,16 @@ impl Tui {
                 let mut clipboard_out = std::io::stdout();
                 let _ = execute!(clipboard_out, Print(payload));
             }
+            if let Some(target) = state.take_open_request() {
+                // 交给系统默认程序（`.scratch/clickable-links/spec.md` §3、§5）：宿主侧、
+                // argv 直传、不经过 `bash` 工具、不过权限门、不进沙箱。成没成由这里写回一句
+                // 回执 —— 状态机只交出一个字符串，它不知道进程这一层。
+                let receipt = match opener::open(&target) {
+                    Ok(()) => wording::opened(&target),
+                    Err(error) => wording::open_failed(&error.to_string()),
+                };
+                state.note_open_receipt(receipt);
+            }
             if state.take_suspend_request() {
                 // 交还终端 → 停到后台 → `fg` 回来后重进并重绘
                 // （`.scratch/suspend-gesture/spec.md` §3、§4）。这一步**阻塞**到用户把进程
@@ -841,13 +853,29 @@ pub struct TuiState {
     /// 按下到抬起之间的一次拖选，没有就是 `None`。
     drag: Option<selection::Drag>,
     /// 最近一次复制：`(时刻, 字数, 行数)`。提示行那句回执从这里来，寿命由
-    /// [`COPIED_WINDOW`] 定（`.scratch/tui-feedback/spec.md` §6）。
+    /// [`RECEIPT_WINDOW`] 定（`.scratch/tui-feedback/spec.md` §6）。
     copied: Option<(std::time::Instant, usize, usize)>,
     /// 一次复制要写出去的那串字节（OSC 52），等着运行期取走。
     ///
     /// 与 `quit` / `suspend` / 标题同一种形状：**状态机算、运行期写** —— `TuiState` 因此仍然
     /// 「不接终端也能测」，跑一次拖选不会真的往测试进程的 stdout 吐一个剪贴板序列。
     clipboard: Option<String>,
+    /// 最近一次打开的回执：`(时刻, 那句话)`，成功与失败都走这里
+    /// （`.scratch/clickable-links/spec.md` §4）。它由**运行期**写回来 —— 点了链接之后
+    /// `xdg-open` 成不成，只有真去 spawn 的那一侧知道，而状态机不该自己起进程。
+    opened: Option<(std::time::Instant, String)>,
+    /// 一次点击命中的那个目标，等着运行期取走并打开。
+    ///
+    /// 与 [`TuiState::clipboard`] 同一个形状，理由也一样：点击只**解析**（`Target::resolve`，
+    /// 一次 `canonicalize`），把「起一个进程」留给唯一那处运行期代码
+    /// （`.scratch/clickable-links/spec.md` §3）。测试因此能逐字断言一次点击要打开什么，
+    /// 而它一个浏览器都不会开。
+    open_request: Option<String>,
+    /// 对话视图这一帧画出来的转录矩形，没有就是这一页没画。
+    ///
+    /// 与 `trace_rect` 对称、同样只服务点击：落在它里面的一次点击才可能命中**链接热区** ——
+    /// 别处的可点文字各有各的语义（`.scratch/clickable-links/spec.md` §1）。
+    conversation_rect: Option<Rect>,
     /// 上一帧的整个终端区域。详情覆盖层的主体在打开时就排版好了，而那次排版需要的宽度是
     /// 终端尺寸的函数 —— 在覆盖层被画出来之前就知道，所以一次点击不必等一帧（票 04 §1）。
     area: Rect,
@@ -1675,6 +1703,9 @@ impl TuiState {
             drag: None,
             copied: None,
             clipboard: None,
+            opened: None,
+            open_request: None,
+            conversation_rect: None,
             area: Rect::default(),
             prompt_reply: None,
             // 空闲，直到循环另说：在它要第一行之前没有任何东西在跑，而键盘必须读起来就是
@@ -1832,9 +1863,14 @@ impl TuiState {
         self.pulse = self.pulse.wrapping_add(1);
         self.dirty = true;
         // 复制回执到点就作废：判据与提示行读它时是**同一条**（`.scratch/tui-feedback/spec.md`
-        // §6）—— 脉冲一直在走，所以这里总会走到。
-        if copy_receipt(self.copied, std::time::Instant::now()).is_none() {
+        // §6）—— 脉冲一直在走，所以这里总会走到。打开的回执（成功或失败）共用这一条寿命
+        // （`.scratch/clickable-links/spec.md` §4）。
+        let now = std::time::Instant::now();
+        if copy_receipt(self.copied, now).is_none() {
             self.copied = None;
+        }
+        if open_receipt(self.opened.as_ref(), now).is_none() {
+            self.opened = None;
         }
     }
 
@@ -2775,6 +2811,21 @@ impl TuiState {
         self.clipboard.take()
     }
 
+    /// 取走这次点击要打开的目标，没有就是 `None`。运行期把它交给系统默认程序
+    /// （`.scratch/clickable-links/spec.md` §3）。
+    pub fn take_open_request(&mut self) -> Option<String> {
+        self.open_request.take()
+    }
+
+    /// 运行期把一次打开的结果写回来：这就是提示行那句回执的**唯一**来源。
+    ///
+    /// 措辞由运行期算（它才知道成没成），这里只管记下来并请一帧 —— 于是「打开」这件事在
+    /// 状态机里只剩一个字符串，测试不必起进程就能钉住点击要打开什么。
+    pub fn note_open_receipt(&mut self, text: String) {
+        self.opened = Some((std::time::Instant::now(), text));
+        self.mark_dirty();
+    }
+
     /// 一次点击落到哪儿：五次分派，按谁占着指针排序。详情覆盖层直接占着它；否则是问题；否则
     /// 是这一帧自己的那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西
     /// 背后的转录（票 04 §2，`tui-sidebar` spec §7）。
@@ -2845,6 +2896,12 @@ impl TuiState {
                 if !questioning && self.files_click(column, row) {
                     return;
                 }
+                // 对话视图里点到一段可点的文本（链接热区）：解析出目标就交给运行期去打开
+                // （`.scratch/clickable-links/spec.md` §1、§3）。它排在轨迹页之前 —— 两页
+                // 共用同一块矩形，但各自的矩形只在真画了那一页时才有值，所以不会互相抢。
+                if !questioning && self.follow_link(column, row) {
+                    return;
+                }
                 // 指针落在轨迹页上吗？`trace_rect` 只在上一帧真的画了轨迹页时才有值，所以
                 // 「记住读的人真看到了什么」这条纪律也管着视口的选择
                 // （`.scratch/trace-in-main/spec.md` §4）。
@@ -2852,7 +2909,7 @@ impl TuiState {
                     .trace_rect
                     .is_some_and(|rect| rect.contains((column, row).into()));
                 // 落点不在轨迹页的内容区里就什么都不点：左栏、分隔列、状态行、输入区、对话页
-                // 都没有可点开的行 —— 对话页画的是全文，点它不打开任何东西
+                // 里**没点中链接的那几列**都没有可点开的行
                 // （`.scratch/tui-feedback/spec.md` §9）。行号是**屏幕**行号，拿它去取别处的
                 // 详情会点到同一横行的别的行上。
                 if !over_trace {
@@ -3380,6 +3437,48 @@ impl TuiState {
             return;
         };
         self.conversation.scroll_to_source(head);
+    }
+
+    /// 一次点击落在**对话视图的一段可点文本**上吗：落在上面就把它解析掉，交给运行期去打开
+    /// （`.scratch/clickable-links/spec.md` §1、§3）。
+    ///
+    /// 判据按顺序，一条不成立就当没点：落在对话转录区里、落在这一帧真画出来的那一块上、
+    /// 那一行的列（扣掉 `lead`）落在某个候选里、候选解析得出目标。解析不出来（不存在、区外、
+    /// 不可解析）就**什么都不发生、也不留回执** —— 点一段普通文字本来就该没有反应。
+    ///
+    /// 只有一个副作用：把目标放进 `open_request`。起进程是运行期的事，状态机因此仍然不必
+    /// 碰终端，也不必起浏览器。
+    fn follow_link(&mut self, column: u16, row: u16) -> bool {
+        let Some(area) = self.conversation_rect else {
+            return false;
+        };
+        if !area.contains((column, row).into()) {
+            return false;
+        }
+        let Some(index) = self.screen_text.block_at(column, row) else {
+            return false;
+        };
+        let Some(block) = self.screen_text.block(index) else {
+            return false;
+        };
+        // 盖在转录上的东西（详情覆盖层、菜单）是最上层那一块 —— 点到的是它们，不是转录。
+        if block.rect != area {
+            return false;
+        }
+        let Some(line) = block.rows.get(usize::from(row - area.y)) else {
+            return false;
+        };
+        // `lead` 是这一段自己的留白（气泡与它上面那行名字），候选的列从文本第 0 列起。
+        let at = usize::from(column - area.x).saturating_sub(usize::from(line.lead));
+        let Some(hot) = line.hotspots.iter().find(|hot| hot.covers(at)) else {
+            return false;
+        };
+        let Some(target) = hot.target.resolve(&self.cwd) else {
+            return false;
+        };
+        self.open_request = Some(target);
+        self.mark_dirty();
+        true
     }
 
     /// 轨迹页里一次点击落到的那个可点链接，拷成它要打开的东西。
@@ -4160,8 +4259,10 @@ impl TuiState {
         // 提示说的是键盘*现在*干什么。没有行被读的时候 —— 一个回合进行中，或者一次性的
         // `discuss` —— `enter 发送` 会是一个这个会话兑现不了的承诺（spec §6）。复制的回执
         // 排在提示集合**之前**（`.scratch/tui-feedback/spec.md` §6），而出口那一段由
-        // `wording::hint_row` 保住 —— 回执不许把它挤掉。
-        let receipt = self.copy_receipt();
+        // `wording::hint_row` 保住 —— 回执不许把它挤掉。打开的回执排在同一位、更靠前一点：
+        // 两者同时新鲜是几乎不可能的事，真撞上了就让更重的那件事说话
+        // （`.scratch/clickable-links/spec.md` §4）。
+        let receipt = self.open_receipt().or_else(|| self.copy_receipt());
         if self.prompt_reply.is_some() {
             wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
         } else {
@@ -4174,6 +4275,11 @@ impl TuiState {
     /// 寿命由既有的脉冲 tick 走着 —— 不为它另起一个时钟（`.scratch/tui-feedback/spec.md` §6）。
     fn copy_receipt(&self) -> Option<String> {
         copy_receipt(self.copied, std::time::Instant::now())
+    }
+
+    /// 最近一次打开的那句回执（成功或失败），还在寿命内的话。
+    fn open_receipt(&self) -> Option<String> {
+        open_receipt(self.opened.as_ref(), std::time::Instant::now())
     }
 
     /// 底部块这一帧要多少内容行。
@@ -4492,6 +4598,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 主列页签让同一时刻只有一页在屏幕上，所以没被画出来的那一页必须失去它的命中区域 ——
     // 否则点击会落在上一帧留下的位置上（`.scratch/trace-in-main/spec.md` §4）。
     state.trace_rect = None;
+    state.conversation_rect = None;
     state.trace_indicator = None;
     state.indicator = None;
     if layout::below_minimum(area) {
@@ -4687,7 +4794,7 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     state.files_page.rect = None;
     // 左栏这一块也进屏幕文本层：三页的画法各不相同，但都是「一页已经排好的行」，没有软折
     // 可言（`.scratch/tui-feedback/spec.md` §5）。
-    note_rows(state, page, &rows, &[]);
+    note_rows(state, page, &rows, &[], &[]);
     frame.render_widget(Paragraph::new(rows), page);
 }
 
@@ -4726,7 +4833,7 @@ fn draw_files_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState)
     // 记的是**全部**可见行，不只是窗口里那几行：一次点击是拿屏幕行换成行下标，
     // 而键盘（下一张票）还要能在窗口之外走动。
     state.files_page.rows = tree;
-    note_rows(state, page, &lines, &[]);
+    note_rows(state, page, &lines, &[], &[]);
     frame.render_widget(Paragraph::new(lines), page);
 }
 
@@ -4785,7 +4892,7 @@ fn draw_sidebar_note(frame: &mut ratatui::Frame, page: Rect, note: &str, state: 
         truncate_columns(note, page.width as usize),
         Style::default().fg(palette::MUTED),
     ));
-    note_rows(state, page, std::slice::from_ref(&line), &[]);
+    note_rows(state, page, std::slice::from_ref(&line), &[], &[]);
     frame.render_widget(Paragraph::new(line), page);
 }
 
@@ -5261,10 +5368,12 @@ fn exit_gesture_due(deadline: Option<std::time::Instant>, now: std::time::Instan
 /// 收回那一下」一个用途，给它一个旋钮只会多一件要解释的事。
 const GESTURE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// 复制回执在提示行上待多久（`.scratch/tui-feedback/spec.md` §6）。
+/// 一条**回执**在提示行上待多久（`.scratch/tui-feedback/spec.md` §6）。
 ///
 /// 比退出手势那半秒长：它说的是「刚刚发生了什么」，而读它的人手还在鼠标上。写死、不做配置项。
-const COPIED_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+/// 复制与打开共用它 —— 两类回执是同一件事的两种，没有理由各走一条寿命
+/// （`.scratch/clickable-links/spec.md` §4）。
+const RECEIPT_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// 一次复制留下的那句话，还在寿命内的话：`None` 就是「这一帧不该有回执」。
 ///
@@ -5274,7 +5383,19 @@ fn copy_receipt(
     now: std::time::Instant,
 ) -> Option<String> {
     let (at, chars, lines) = copied?;
-    (now.duration_since(at) < COPIED_WINDOW).then(|| wording::copied(chars, lines))
+    (now.duration_since(at) < RECEIPT_WINDOW).then(|| wording::copied(chars, lines))
+}
+
+/// 一次打开留下的那句话（成功或失败），还在寿命内的话
+/// （`.scratch/clickable-links/spec.md` §4）。
+///
+/// 与 [`copy_receipt`] 同一条寿命、同一个形状：话是运行期写进来的，这里只管它还能不能露脸。
+fn open_receipt(
+    opened: Option<&(std::time::Instant, String)>,
+    now: std::time::Instant,
+) -> Option<String> {
+    let (at, text) = opened?;
+    (now.duration_since(*at) < RECEIPT_WINDOW).then(|| text.clone())
 }
 
 /// 标记的那些行与它们的颜色。
@@ -5318,13 +5439,21 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
     match state.main_tab {
         MainTab::Conversation => {
             let live = state.conversation_live();
-            let rows = state
+            // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
+            // （`.scratch/tui-feedback/spec.md` §5–§6）。
+            //
+            // 这个视图是**唯一**认可点链接的地方（`.scratch/clickable-links/spec.md` §1）：
+            // 认一遍，结果一分为二 —— 下划线就地铺在这一行上，候选跟着进屏幕文本层供点击
+            // 命中。认在画之前，所以两处用的是同一次识别的同一份答案。
+            let mut rows = state
                 .conversation
                 .view(text_area.width, text_area.height, &live);
-            // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
-            // （`.scratch/tui-feedback/spec.md` §5–§6）。对话页不记链接表 —— 它没有入口。
             let folded = soft_folds(&state.conversation, state.conversation.top(), rows.len());
-            note_rows(state, text_area, &rows, &folded);
+            let hotspots = links::mark(&mut rows, &folded);
+            note_rows(state, text_area, &rows, &folded, &hotspots);
+            // 这一页画在哪儿：点击要拿它判「落在对话的转录里吗」。与轨迹页那条同一条纪律，
+            // 每帧重填（`.scratch/clickable-links/spec.md` §1）。
+            state.conversation_rect = Some(text_area);
             frame.render_widget(Paragraph::new(rows), text_area);
             draw_scrollbar(frame, panes.scrollbar(), &state.conversation);
             draw_turn_rail(frame, panes, state);
@@ -5340,7 +5469,7 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
                 .map(|offset| state.trace.source_at(top + offset))
                 .collect();
             let folded = soft_folds(&state.trace, top, rows.len());
-            note_rows(state, text_area, &rows, &folded);
+            note_rows(state, text_area, &rows, &folded, &[]);
             // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
             // 只是现在它等于主列的内容区）。
             state.trace_rect = Some(text_area);
@@ -5369,7 +5498,18 @@ fn soft_folds(pane: &Pane, top: usize, rows: usize) -> Vec<bool> {
 /// 把一块区域这一帧画出来的行记进屏幕文本层（`.scratch/tui-feedback/spec.md` §5）。
 ///
 /// `folded` 与 `rows` 平行，短了就当作「没有软折」。
-fn note_rows(state: &mut TuiState, rect: Rect, rows: &[Line<'static>], folded: &[bool]) {
+///
+/// `hotspots` 同样与 `rows` 平行：**[`links::mark`] 的返回值**。它由调用方在画之前算出来
+/// （那一次调用同时就把下划线铺在这一行上了），所以这里只负责记 —— 记的与画的出自同一次
+/// 识别（`.scratch/clickable-links/spec.md` §2）。除对话视图之外的每一块都传空表：那些地方的
+/// 点击各有各的语义（轨迹页开详情、左栏切页、文件页展收）。
+fn note_rows(
+    state: &mut TuiState,
+    rect: Rect,
+    rows: &[Line<'static>],
+    folded: &[bool],
+    hotspots: &[Vec<links::Hotspot>],
+) {
     let text: Vec<selection::TextRow> = rows
         .iter()
         .enumerate()
@@ -5377,6 +5517,7 @@ fn note_rows(state: &mut TuiState, rect: Rect, rows: &[Line<'static>], folded: &
             text: line_text(line),
             folded: folded.get(index).copied().unwrap_or(false),
             lead: row_lead(line, rect.width),
+            hotspots: hotspots.get(index).cloned().unwrap_or_default(),
         })
         .collect();
     state.screen_text.push(rect, text);
@@ -5580,7 +5721,7 @@ fn draw_bottom(
     // 草稿归正文档：整段 `BOLD` 随本 effort 退场（`.scratch/tui-visual-language/spec.md` §19），
     // 提示符 `❱` 仍是界面上唯一会动的专色、唯一焦点。
     // 输入区也进屏幕文本层（没有软折：草稿的换行是用户自己敲的）。
-    note_rows(state, panes.input, &rows, &[]);
+    note_rows(state, panes.input, &rows, &[], &[]);
     frame.render_widget(Paragraph::new(rows), panes.input);
     // 草稿在问题之下仍然可见 —— 那是用户正在写的东西 —— 但光标收起来：键盘正在回答，不是在
     // 编辑（spec §9）。光标是按刚画出来的那些行摆的，从不按帧与帧之间保存的状态摆，正是后者
@@ -5657,6 +5798,7 @@ fn draw_questionnaire(
             rows.len().min(panes.input.height as usize) as u16,
         ),
         &rows,
+        &[],
         &[],
     );
     for (row, line) in window.iter().enumerate() {
@@ -7353,7 +7495,7 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     );
     // 详情正文是最常被复制的东西（一段工具输出、一段解释），所以它也进屏幕文本层
     // （`.scratch/tui-feedback/spec.md` §5）。
-    note_rows(state, body, &lines, &folded);
+    note_rows(state, body, &lines, &folded, &[]);
     frame.render_widget(Paragraph::new(lines), body);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -7664,7 +7806,7 @@ mod tests {
             Some("已复制 12 字 · 2 行".to_owned()),
             "差一毫秒还在"
         );
-        assert_eq!(copy_receipt(copied, now + COPIED_WINDOW), None, "到点就走");
+        assert_eq!(copy_receipt(copied, now + RECEIPT_WINDOW), None, "到点就走");
         assert_eq!(copy_receipt(None, now), None, "没复制过就没有回执");
     }
 
@@ -8056,5 +8198,38 @@ mod tests {
 
         assert!(state.detail.is_some());
         assert!(state.file_viewer.is_none());
+    }
+
+    #[test]
+    fn note_rows_keeps_the_hotspots_it_just_marked() {
+        // 两件事出自**同一次**识别：下划线铺在这一行上，候选跟着进屏幕文本层
+        // （`.scratch/clickable-links/spec.md` §2）。命中那一半要等点击那条路（票 02），
+        // 这一条钉住的是记下来的账本身 —— 列区间与画出来的文本对齐。
+        let mut state = state();
+        let mut rows = vec![Line::from("见 x.html 与 https://a.example/b")];
+        let folded = [false];
+        let hotspots = links::mark(&mut rows, &folded);
+
+        note_rows(
+            &mut state,
+            Rect::new(0, 0, 40, 1),
+            &rows,
+            &folded,
+            &hotspots,
+        );
+
+        let block = state.screen_text.block(0).expect("记下来了一块");
+        assert_eq!(block.rows[0].text, "见 x.html 与 https://a.example/b");
+        let row = &block.rows[0];
+        assert_eq!(
+            row.hotspots
+                .iter()
+                .map(|hot| hot.columns.clone())
+                .collect::<Vec<_>>(),
+            vec![3..9, 13..32]
+        );
+        assert!(row.hotspots[0].covers(3) && row.hotspots[0].covers(8));
+        assert!(!row.hotspots[0].covers(2), "`见` 那两列不是候选");
+        assert!(!row.hotspots[1].covers(12), "`与` 后面那个空格不是候选");
     }
 }
