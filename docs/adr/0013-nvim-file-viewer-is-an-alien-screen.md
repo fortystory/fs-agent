@@ -4,6 +4,8 @@
 - 背景：[`.scratch/nvim-file-viewer/spec.md`](../../.scratch/nvim-file-viewer/spec.md)；
   原型与它的实测在 `prototype/embed-nvim` 分支的 README 里。
 
+> **2026-10-06 补注（正文不改，只记更名）**：程序已更名为**衡**（`heng`），本文里作为产品名的 `fs-agent` 读作「衡」（[ADR 0014](0014-renamed-to-heng.md)）。
+
 ## 决定
 
 `[ui] file_viewer = "nvim"` 时，文件页点开一个文件不再走内置的只读预览（详情覆盖层 +

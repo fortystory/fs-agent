@@ -6,6 +6,8 @@
 [`lifecycle.md`](../lifecycle.md) 要画 fs-agent 的运行时生命周期 —— 一张鸟瞰 + 四张分层详图，
 最大一张 24 个节点。手绘 ASCII 撑不住这个规模。这一篇记的是那条线上的决定与它的代价。
 
+> **2026-10-06 补注（正文不改，只记更名）**：程序已更名为**衡**（`heng`），本文里作为产品名的 `fs-agent` 读作「衡」（[ADR 0014](0014-renamed-to-heng.md)）。
+
 规格在 [`.scratch/lifecycle-diagram/`](../../.scratch/lifecycle-diagram/spec.md)。
 
 ## 决定

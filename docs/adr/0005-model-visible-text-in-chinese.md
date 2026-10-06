@@ -4,6 +4,8 @@
 
 **除此之外的散文一律中文，不问谁读它**：工具声明与描述（`ToolSpec.description`、各参数的 `description`）、工具结果（fs-agent 自己生成的**错误文本**、写入回执、截断说明、shell 的 `exit code:` / `--- stdout ---` 那一批）、`AgentError.message`、`SessionError.detail`、`PermissionDecided.reason`、`HistorySuperseded.summary`、skills 目录与 `repo_map` 的省略说明、上下文丢弃与预算说明、执行者的身份提示与收尾汇总。
 
+> **2026-10-06 补注（正文不改，只记更名）**：程序已更名为**衡**（`heng`），本文里作为产品名的 `fs-agent` 读作「衡」，旧程序名前缀 `fs-agent: ` 如今是 `heng: `（[ADR 0014](0014-renamed-to-heng.md)）。
+
 这条**取代** [ADR 0001](0001-chinese-ui-frozen-model-text.md) 里「模型可见文本冻结成英文」的那一半与 [ADR 0004](0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 里「英文只留给三类东西」那张清单（ADR 0004 的「被否决的替代方案」里明写「不做」，本文就是把它重新打开）。**ADR 0001 的另一半原样保留、且仍然最硬**：**一个会话的前缀在会话内只增不改** —— 中途切 `reasoning_effort`、中途改 `tools`、逐轮重写 system 都还是禁止的。本文改的是**字面量本身**，也就是新会话前缀头里那几段文字，不是「会话进行中动前缀」。
 
 ## 为什么重新打开

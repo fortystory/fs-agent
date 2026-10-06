@@ -12,6 +12,8 @@
 
 `SessionPaths` 的 cwd 收容是这三条地板里最值钱的一条：它保住的正是 `~/.config/fs-agent/config.toml`（provider key 就在那儿），而打码只是**值级 best-effort**。把它降成「问」，等于把「读 key」变成一次点击。所以缺省不动。
 
+> **2026-10-06 补注（正文不改，只记更名）**：程序已更名为**衡**（`heng`），本文里的 `~/.config/fs-agent` 读作 `~/.config/heng`（[ADR 0014](0014-renamed-to-heng.md)）。
+
 要放开的人可以写下来：`[permissions] outside_read = "deny" | "ask" | "allow"`（缺省 `"deny"`），**全局**生效——这条地板是策略级的，与档位正交，`ask` 档配上 `"allow"` 恰好就是 DSH 的「读全放、写要问」。这与 `[sandbox] mode = "off"` 是同一个立场：**显式写下来才算放弃**。
 
 区外**写**不给对称的旋钮：它只有 `workspace` 档这一个出口，因为这一档本身就是那个声明。于是 `SessionPaths` 的路径上限在这一档下从 `Deny` 变 `Ask`——**选这一档就是同意「区外要问」**，不需要第二处配置。
