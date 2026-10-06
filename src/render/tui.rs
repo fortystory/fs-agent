@@ -7252,7 +7252,7 @@ fn draw_file_viewer(frame: &mut ratatui::Frame, panes: &layout::Regions, state: 
 /// 脉冲是 60 ms 一跳，所以八帧 ≈ 0.5 秒一次翻转 —— 与终端自己的光标闪烁同量级。
 /// 空闲时脉冲照旧在走（`.scratch/tui-visual-language/spec.md` §32），所以闪也不停。
 fn blink_on(pulse: u64) -> bool {
-    (pulse / BLINK_FRAMES) % 2 == 0
+    (pulse / BLINK_FRAMES).is_multiple_of(2)
 }
 
 /// 光标闪一下要几帧。
