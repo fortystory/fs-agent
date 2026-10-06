@@ -561,7 +561,7 @@ flowchart TD
 | `cmd` | 子命令分派：`--version` / `--help` / `probe` / `discuss` / `prune` / `sessions`，其余交互式 | `src/cli.rs:105-129` | `fn run` |
 | `setup` | 组装：配置 · 凭据 · provider · 工具表 · 沙箱 | `src/cli.rs:234-411` | `fn interactive` |
 | `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:289-297`、`src/cli.rs:2633-2677` | `fn choose_session` |
-| `render` | 渲染器选定 TUI / plain（headless 见 §6） | `src/cli.rs:327-372`、`src/render/mod.rs:161-200` | `fn tui`、`fn plain` |
+| `render` | 渲染器选定 TUI / plain（headless 见 §6） | `src/cli.rs:327-372`、`src/render/mod.rs:216-226` | `fn tui`、`fn plain` |
 | `loop` | 主循环：等一行或手势 | `src/cli.rs:1102-1313` | `fn interactive_loop` |
 | `route` | 分派 `Submission` | `src/cli.rs:1183-1307`、`src/cli.rs:1380-1433` | `fn submission` |
 | `turn` | 一次 turn | `src/lib.rs:658-682`、`src/agent.rs:443-732` | `fn run_turn` |
@@ -745,10 +745,10 @@ flowchart TD
 | `red` | 打码在追加之前，于是「流上文本 == 模型看到的文本」 | `src/agent.rs:2223`、`src/events.rs:513-530`、`src/events.rs:641-665` | `fn redact` |
 | `log` | `EventLog::append`：JSONL 一行一事件 | `src/events.rs:1009-1038` | `fn append` |
 | `disk` | 会话目录：JSONL + `outputs/` | `src/events.rs:948-1002`、`src/lib.rs:233-236` | `fn create`、`fn open` |
-| `rlog` | `render.logged`：广播通道 | `src/render/mod.rs:104-145` | `fn logged` |
-| `tui` | 渲染器 TUI | `src/cli.rs:353-361`、`src/render/mod.rs:179`、`src/render/mod.rs:194-197` | `fn tui` |
-| `plain` | 渲染器 plain | `src/cli.rs:364-371`、`src/render/mod.rs:175`、`src/render/mod.rs:190-193` | `fn plain` |
-| `headless` | 渲染器 headless（生产组装点只有 `probe`，见 §6） | `src/render/mod.rs:171`、`src/render/mod.rs:186-189`、`src/cli.rs:2238` | `fn headless` |
+| `rlog` | `render.logged`：广播通道 | `src/render/mod.rs:147-191` | `fn logged` |
+| `tui` | 渲染器 TUI | `src/cli.rs:353-361`、`src/render/mod.rs:224`、`src/render/mod.rs:231-234` | `fn tui` |
+| `plain` | 渲染器 plain | `src/cli.rs:364-371`、`src/render/mod.rs:220`、`src/render/mod.rs:227-230` | `fn plain` |
+| `headless` | 渲染器 headless（生产组装点只有 `probe`，见 §6） | `src/render/mod.rs:216`、`src/render/mod.rs:223-226`、`src/cli.rs:2238` | `fn headless` |
 | `proj` | `project`：纯函数 → `messages` | `src/provider/projection.rs:46` | `fn project` |
 | `trim` | `trim`：纯函数，只读、不删日志 | `src/context.rs:138-180` | `fn trim` |
 | `req` | provider 请求 | `src/agent.rs:562-569` | — |
@@ -780,6 +780,6 @@ flowchart TD
 | `ask --> console` | `src/render/input.rs:251` | `ConsoleAsker` |
 | `uq --> console` | `src/render/input.rs:278` | `ConsoleQuestions`（第三类发起者，不扩展 `Asker`） |
 | `console --> emit` | `src/render/input.rs:133`、`src/cli.rs:1158-1160` | 提示经循环变成 `user` 消息 |
-| `rlog --> tui` | `src/render/mod.rs:184-199` | 一个进程恰好一个渲染器 |
-| `rlog --> plain` | `src/render/mod.rs:184-199` | 同上 |
-| `rlog --> headless` | `src/render/mod.rs:184-199` | 同上；生产组装点只有 `probe` |
+| `rlog --> tui` | `src/render/mod.rs:230-245` | 一个进程恰好一个渲染器 |
+| `rlog --> plain` | `src/render/mod.rs:230-245` | 同上 |
+| `rlog --> headless` | `src/render/mod.rs:230-245` | 同上；生产组装点只有 `probe` |
