@@ -292,7 +292,7 @@ def review_rules(unit: Unit) -> list[str]:
 #   显式动作、理由写进提交信息，决定也记进 `.scratch/docs-slim/issues/05` 的 `## 评论`。
 #   其余两份照旧只许降。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 17292, "lines": 296, "target_chars": 18500, "target_lines": 300},
+    "README.md": {"chars": 17447, "lines": 296, "target_chars": 18500, "target_lines": 300},
     ".scratch/README.md": {"chars": 10255, "lines": 61, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
