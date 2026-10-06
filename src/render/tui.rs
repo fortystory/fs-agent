@@ -58,7 +58,7 @@ use super::selection;
 use super::severity::Severity;
 use super::token;
 use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
-use super::width::{ellipsize_line, text_columns, truncate_columns};
+use super::width::{char_columns, ellipsize_line, text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
 
@@ -1991,7 +1991,7 @@ impl TuiState {
                 || speaker.is_none()
                 || self.conversation_flow.speaker.as_ref() != speaker
                 || !self.conversation_flow.message;
-            let lines = paint_block(
+            let mut lines = paint_block(
                 block,
                 &mut self.colors,
                 width,
@@ -1999,6 +1999,11 @@ impl TuiState {
                 Viewport::Conversation,
                 carry_name,
             );
+            // 例外一：用户自己的话在**对话视图**里排成一个气泡（`bubble`）。它只在**这里**
+            // 发生：轨迹视图仍左对齐、`plain` 也仍顶格，因为两边都不走这个窗格。
+            if is_user_message(block) {
+                bubble(&mut lines, width, carry_name);
+            }
             produced = produced.max(lines.len());
             self.push_view_lines(
                 Viewport::Conversation,
@@ -4700,11 +4705,7 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
     // 最后一档还窄的帧上兜底 —— 那不是真终端能到的宽度。截断归 [`super::width`]，但
     // [`ellipsize_line`] 是**给确定要截的调用方**的（它无条件加 `…`），所以这里先量一下：
     // 放得下就原样画，放不下才交给它。
-    let columns: usize = line
-        .spans
-        .iter()
-        .map(|span| text_columns(&span.content))
-        .sum();
+    let columns = line_columns(&line);
     let line = if columns > width {
         ellipsize_line(line, width)
     } else {
@@ -5136,9 +5137,24 @@ fn note_rows(state: &mut TuiState, rect: Rect, rows: &[Line<'static>], folded: &
         .map(|(index, line)| selection::TextRow {
             text: line_text(line),
             folded: folded.get(index).copied().unwrap_or(false),
+            lead: row_lead(line, rect.width),
         })
         .collect();
     state.screen_text.push(rect, text);
+}
+
+/// 一条显示行的文本在屏幕上从区域的第几列起。
+///
+/// 只认**靠右**排出来的行：它们的左边界是算出来的 —— 区域宽减行宽 —— 而靠右是用户消息的气泡
+/// 与它上面那一行名字贴右缘的手段（`.scratch/trace-tab/spec.md` §2 的补记）。左对齐的行一律从
+/// 第零列起：这里不去猜「这一行前导有几个空格」，因为代码块与缩进正文本身就以待空格开头，猜错
+/// 一次就会从复制出来的文本里啃掉一段缩进。
+fn row_lead(line: &Line<'static>, width: u16) -> u16 {
+    if line.alignment != Some(Alignment::Right) {
+        return 0;
+    }
+    let columns = line_columns(line).min(usize::from(width));
+    width.saturating_sub(columns as u16)
 }
 
 /// 一个视图里跨块的排版状态（`.scratch/tui-visual-language/spec.md` §23）。
@@ -5943,18 +5959,14 @@ fn paint_block(
                     .map(|raw| Line::from(raw.to_owned()))
                     .collect()
             };
-            let mut rows = if name {
+            let rows = if name {
                 named_rows(speaker, body, colors, style)
             } else {
                 body
             };
-            // 例外一：用户自己的话在**对话视图**里右对齐 —— 「我说的话靠右」那种聊天感
-            // （`.scratch/trace-tab/spec.md` §2）。轨迹视图仍左对齐，助手也仍左对齐。
-            if matches!(speaker, crate::events::SpeakerId::User) {
-                for row in &mut rows {
-                    row.alignment = Some(Alignment::Right);
-                }
-            }
+            // 例外一（靠右）不在这里：那是**对话视图窗格**的排版，不是这一行的内容 ——
+            // 共享渲染还要把它交给 `plain`，而那里的用户话照旧顶格（见
+            // [`TuiState::emit_block`] 与 `.scratch/trace-tab/spec.md` §2）。
             rows.into_iter().map(RenderedLine::from).collect()
         }
         Block::Delta { .. } => Vec::new(),
@@ -6276,6 +6288,63 @@ fn named_rows(
     ))];
     out.extend(rows);
     out
+}
+
+/// 用户自己的话在**对话视图**里排成一个**气泡**：一块等宽的底色，贴着转录的右缘，宽度封在
+/// 可用列数的 [`BUBBLE_WIDTH`] 以内（`.scratch/trace-tab/spec.md` §2 的补记）。
+///
+/// 名字行**不进气泡** —— 它自己一行，右端与气泡的右缘对齐。
+///
+/// 靠右用的是 `Alignment::Right`，而左边界由**等宽**保证：每一行右侧都补齐到同一个宽度，于是
+/// 右对齐之后每一行从同一列起。补齐的那些空格留在行尾，取文本时被 `trim_end` 去掉，所以拖选
+/// 复制出来的只有正文本身（`.scratch/tui-feedback/spec.md` §6）。底色铺在行自己的样式上，
+/// 填充那些空格也带着它 —— 于是这一块是**一个**矩形，而不是每行各一条。
+fn bubble(lines: &mut Vec<RenderedLine>, width: u16, named: bool) {
+    let named_rows = usize::from(named);
+    // 名字行先行：连正文都没有的那条消息（空文本）也留着一个靠右的名字。
+    for row in lines.iter_mut().take(named_rows) {
+        row.line.alignment = Some(Alignment::Right);
+    }
+    if lines.len() <= named_rows {
+        return;
+    }
+    let inner = bubble_inner(width);
+    // 先按气泡的宽度折行，再拿**折出来的最宽那行**当块宽：一条短消息的气泡就是窄的。
+    let mut body: Vec<Line<'static>> = Vec::new();
+    for line in lines.drain(named_rows..) {
+        body.extend(pane::wrap_line(&line.line, inner));
+    }
+    let block = body.iter().map(line_columns).max().unwrap_or(0).min(inner);
+    for line in &mut body {
+        let pad = block.saturating_sub(line_columns(line));
+        if pad > 0 {
+            line.spans.push(Span::raw(" ".repeat(pad)));
+        }
+        line.style = Style::default().bg(palette::BUBBLE);
+        line.alignment = Some(Alignment::Right);
+    }
+    lines.extend(body.into_iter().map(RenderedLine::from));
+}
+
+/// 气泡里的内容能占几列。
+fn bubble_inner(width: u16) -> usize {
+    let (numerator, denominator) = BUBBLE_WIDTH;
+    (usize::from(width) * usize::from(numerator) / usize::from(denominator)).max(1)
+}
+
+/// 一个气泡最多占转录内容宽度的几分之几。
+///
+/// 留白是气泡感的来源：一条顶满宽度的用户消息读起来与助手正文没有分别，而右边那一大片空白
+/// 正是「这句是我说的」最省事的说法（`.scratch/trace-tab/spec.md` §2 的补记）。
+const BUBBLE_WIDTH: (u16, u16) = (2, 3);
+
+/// 一条带样式的显示行占多少列。
+fn line_columns(line: &Line<'static>) -> usize {
+    line.spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .map(char_columns)
+        .sum()
 }
 
 /// 轨迹视图里的一条消息行：**首行 + `…`**，全文挂在详情里

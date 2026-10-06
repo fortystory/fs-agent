@@ -15,22 +15,28 @@ use ratatui::Frame;
 
 use crate::render::width;
 
-/// 一条显示行：它的文本，以及它是不是上一行**软折**出来的续行。
+/// 一条显示行：它的文本，它是不是上一行**软折**出来的续行，以及它在屏幕上从哪一列起。
 ///
 /// `folded` 就是「复制时该不该在这里换行」的全部判据：同一来源行折出来的下一片要拼回去，
 /// 而区域自己带的换行（Markdown 段落、代码块的多行）保留（spec §6）。
+///
+/// `lead` 是**靠右**排出来的行才有的东西（用户消息的气泡、它上面那行名字）：文本从
+/// `rect.x + lead` 列起，它左边那些列是这个区域自己的留白 —— 既不该反白，也不该进复制
+/// （`.scratch/trace-tab/spec.md` §2 的补记）。左对齐的行是零。
 #[derive(Debug, Clone)]
 pub struct TextRow {
     pub text: String,
     pub folded: bool,
+    pub lead: u16,
 }
 
 impl TextRow {
-    /// 一条没有软折的显示行。
+    /// 一条没有软折、从区域左缘起的显示行。
     pub fn plain(text: String) -> Self {
         Self {
             text,
             folded: false,
+            lead: 0,
         }
     }
 }
@@ -179,12 +185,14 @@ pub fn paint(frame: &mut Frame, text: &ScreenText, drag: Option<&Drag>) {
     let buffer = frame.buffer_mut();
     for y in rect.y..rect.bottom() {
         let row = (y.saturating_sub(block.rect.y)) as usize;
-        let filled = block
-            .rows
-            .get(row)
-            .map_or(0, |row| width::text_columns(row.text.trim_end()));
-        let right = (block.rect.x + filled as u16).min(rect.right());
-        for x in rect.x..right {
+        let (left, filled) = block.rows.get(row).map_or((block.rect.x, 0), |row| {
+            (
+                block.rect.x + row.lead,
+                width::text_columns(row.text.trim_end()),
+            )
+        });
+        let right = (left + filled as u16).min(rect.right());
+        for x in rect.x.max(left)..right {
             buffer[(x, y)].modifier.insert(Modifier::REVERSED);
         }
     }
@@ -196,6 +204,9 @@ pub fn paint(frame: &mut Frame, text: &ScreenText, drag: Option<&Drag>) {
 /// 取法是逐显示行切 `[列区间)`（按显示列，宽字符不切半），行尾的填充空白去掉；一行后面若跟着
 /// 它的软折续行就**不**落换行，否则落一个 —— 于是被折过的长命令复制回来仍是一条，而区域自己的
 /// 硬换行（Markdown 段落、代码块的多行）保留。
+///
+/// 列区间先减去那一行自己的 `lead`：靠右排出来的行左边是**留白**，光标扫过它也不该捞出空格
+/// （`.scratch/trace-tab/spec.md` §2 的补记）。
 pub fn text(text: &ScreenText, drag: &Drag) -> String {
     let Some(block) = drag.block(text) else {
         return String::new();
@@ -214,9 +225,14 @@ pub fn text(text: &ScreenText, drag: &Drag) -> String {
             continue;
         }
         // 首行从选区起点那一列起，末行到终点那一列止，中间那几行整行。
-        let from = if index == first { left } else { 0 };
-        let to = if index == last { right + 1 } else { usize::MAX };
-        let piece = width::slice_columns(&row.text, from, to);
+        let from = (if index == first { left } else { 0 }).saturating_sub(row.lead as usize);
+        let to =
+            (if index == last { right + 1 } else { usize::MAX }).saturating_sub(row.lead as usize);
+        let piece = if to == 0 {
+            String::new()
+        } else {
+            width::slice_columns(&row.text, from, to)
+        };
         // 软折的续行接在上一行后面：这就是「按区域换行，而不是按终端换行」。
         if written > 0 && !row.folded {
             out.push('\n');
@@ -279,6 +295,7 @@ mod tests {
                 TextRow {
                     text: "续行".to_owned(),
                     folded: true,
+                    lead: 0,
                 },
             ],
         );
@@ -325,6 +342,7 @@ mod tests {
                 TextRow {
                     text: "后半".to_owned(),
                     folded: true,
+                    lead: 0,
                 },
                 TextRow::plain("第二段".to_owned()),
             ],
@@ -346,6 +364,28 @@ mod tests {
     /// 选区取值的一个短名字（测试里读起来顺一点）。
     fn text_of(text: &ScreenText, drag: &Drag) -> String {
         super::text(text, drag)
+    }
+
+    #[test]
+    fn a_right_aligned_row_is_copied_without_its_leading_padding() {
+        // 靠右排出来的行左边是**留白**：光标扫过它也不该捞出空格
+        // （`.scratch/trace-tab/spec.md` §2 的补记）。
+        let mut text = ScreenText::default();
+        text.push(
+            Rect::new(0, 0, 20, 1),
+            vec![TextRow {
+                text: "气泡里的字  ".to_owned(),
+                folded: false,
+                lead: 8,
+            }],
+        );
+        let mut drag = Drag::press((0, 0), Some(0));
+        drag.moved((19, 0), Rect::new(0, 0, 20, 1));
+        assert_eq!(text_of(&text, &drag), "气泡里的字");
+        // 只选中文本之前那段留白：什么也取不到。
+        let mut pad = Drag::press((0, 0), Some(0));
+        pad.moved((7, 0), Rect::new(0, 0, 20, 1));
+        assert_eq!(text_of(&text, &pad), "");
     }
 
     #[test]

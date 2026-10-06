@@ -7790,6 +7790,77 @@ fn the_user_message_sits_on_the_right_and_the_assistant_on_the_left() {
     assert!(assistant_x < 60, "助手的话靠左（列 {assistant_x}）");
 }
 
+#[test]
+fn a_multi_line_user_message_keeps_one_left_edge() {
+    // 用户消息是一个**气泡**：等宽、贴右缘。靠右的是块，不是每一行 —— 各自贴右缘会把一段
+    // 三行的输入折成参差的一列，长行往左伸、短行缩到最右边
+    // （`.scratch/trace-tab/spec.md` §2 的补记）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "长一点的这一段\n短\n中等的这一段"));
+    let frame = buffer(120, 24, &mut state);
+    let at = |needle: &str| {
+        cell_of(&frame, 120, 24, needle)
+            .unwrap_or_else(|| panic!("{needle} 在屏幕上"))
+            .0
+    };
+    let (long, short, medium) = (at("长一点的这一段"), at("短"), at("中等的这一段"));
+    assert_eq!(long, short, "气泡里每一行从同一条左边界起");
+    assert_eq!(short, medium, "气泡里每一行从同一条左边界起");
+    // 那条左边界由「最宽的那一行」与「贴右缘」一起定：气泡右缘就是转录的右缘。
+    let area = transcript_area();
+    let width = text_columns("长一点的这一段") as u16;
+    assert_eq!(area.x + area.width - width, long, "气泡贴着转录的右缘");
+}
+
+#[test]
+fn a_bubble_never_grows_past_two_thirds_of_the_transcript() {
+    // 宽度封顶才有气泡感：一条顶满宽度的用户消息读起来与助手正文没有分别
+    // （`.scratch/trace-tab/spec.md` §2 的补记）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, &"x".repeat(200)));
+    let frame = buffer(120, 24, &mut state);
+    let area = transcript_area();
+    let inner = area.width as usize * 2 / 3;
+    let (start, _) = cell_of(&frame, 120, 24, "xxx").expect("气泡的第一行");
+    assert_eq!(
+        start,
+        area.x + area.width - inner as u16,
+        "气泡的左边界由那条三分之二定"
+    );
+    // 一行都没丢：都折在气泡里。
+    let xs: usize = (0..24)
+        .map(|y| row_text(&frame, y, 120).matches('x').count())
+        .sum();
+    assert_eq!(xs, 200, "200 个字全都画了出来");
+}
+
+#[test]
+fn copying_a_bubble_takes_only_the_text() {
+    // 气泡里的填充与它左边那片留白都是**装饰**：拖选复制只带走正文，而你自己写下的缩进
+    // 一个字不动（`.scratch/trace-tab/spec.md` §2 的补记）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "第一行\n  缩进的第二行"));
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第一行").expect("气泡在屏幕上");
+    // 起点落在气泡左边那片留白里，终点越过第二行的末尾 —— 两头都是装饰。
+    state.mouse(press(column - 10, row));
+    state.mouse(drag_to(column + 20, row + 1));
+    state.mouse(release(column + 20, row + 1));
+    let expected = fs_agent::render::selection::osc52("第一行\n  缩进的第二行");
+    assert_eq!(
+        state.take_clipboard().as_deref(),
+        Some(expected.as_str()),
+        "复制出来的是正文本身"
+    );
+}
+
+/// 一帧里转录正文那块矩形（`120×24`，左栏在）。
+fn transcript_area() -> ratatui::layout::Rect {
+    use fs_agent::render::layout::plan;
+    use ratatui::layout::Rect;
+    plan(Rect::new(0, 0, 120, 24), 3, true).transcript_text()
+}
+
 /// 例外二：注入、用户、助手三类前缀各一色（票 10 验证 2）。
 ///
 /// 注入行只住在轨迹页，所以这次比对在轨迹页上做 —— 三种前缀在那里同框。

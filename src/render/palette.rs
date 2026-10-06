@@ -41,6 +41,13 @@ pub const BAD: Color = Color::Red;
 /// （注入 / 用户 / 助手）要分得开（§2、用户故事 8）。
 pub const INJECTED: Color = Color::LightBlue;
 
+/// 用户消息那块**气泡**的底色（`.scratch/trace-tab/spec.md` §2 的补记）。
+///
+/// 它不是一个前景色：气泡靠一块等宽的底色与它右缘的留白说「这是我说的」，而不用边框字符 ——
+/// 字符会被拖选复制带走，底色不会。值取得很暗，于是它在一块本来就暗的终端上是一层哑光，
+/// 而不是一个抢注意力的色块。
+pub const BUBBLE: Color = Color::Rgb(0x33, 0x33, 0x33);
+
 /// 草稿里一条**能兑现**的 `/` 命令的颜色。
 ///
 /// 它与 [`INJECTED`] 撞值、[`TOKEN_REFERENCE`] 与 [`ACCENT`] 撞值，都是**刻意的**：两个记号
