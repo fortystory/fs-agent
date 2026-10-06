@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文档密度的护栏：36 份活文档的「单元 ≤500」、入口三份的体量预算、中文占比余量。
+"""文档密度的护栏：40 份活文档的「单元 ≤500」、入口三份的体量预算、中文占比余量。
 
 来源是 `.scratch/docs-slim/spec.md`（§1 单元口径、§2 护栏契约）。它守的是**不许恶化**，
 不是「瘦身做完了没」——装上就是绿的，存量欠账按文件的**违规计数基线**记着。
@@ -38,9 +38,9 @@ import re
 import sys
 from dataclasses import dataclass
 
-# --- 清单：38 份活文档 -------------------------------------------------------
-# scope 与 `.scratch/docs-slim/research/03` 一致：入口三份 + `CONTEXT.md`、`docs/` 逐面
-# 18 份、`docs/adr/` 12 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
+# --- 清单：40 份活文档 -------------------------------------------------------
+# scope 与 `.scratch/docs-slim/research/03` 一致：入口三份（README / CONTEXT / AGENTS）+
+# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 14 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
 # `.scratch/*/issues/`、`.scratch/*/spec.md`、`.scratch/*/research/`。
 DOC_FILES = [
     "README.md",
@@ -449,7 +449,7 @@ def print_list(report: Report) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="36 份活文档的密度护栏（单元 ≤500 / 入口预算 / 占比余量）")
+    parser = argparse.ArgumentParser(description="40 份活文档的密度护栏（单元 ≤500 / 入口预算 / 占比余量）")
     parser.add_argument("--list", action="store_true", help="打印全部单元与每条规则的当日命中数")
     args = parser.parse_args()
 

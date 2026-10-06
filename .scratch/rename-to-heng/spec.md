@@ -89,7 +89,7 @@
 - **标识符与配置路径**（票 01，`done`）：`fs-agent` → `heng`、`fs_agent` → `heng`、`FS_AGENT_MODEL` → `HENG_MODEL`、`.fs-agent` → `.heng`、`fs-agent-mcp-time` → `heng-mcp-time`，外加一个驼峰变体 `FsAgentHandler` → `HengHandler`。186 个文件、约 1 900 处。
 - **文档与 ADR**（票 02，`done`）：README（标题 / banner / 定位句）、`CONTEXT.md` 的名字与分叉合成两条词条、`docs/**`，新增 [ADR 0014](../../docs/adr/0014-renamed-to-heng.md)，旧 ADR 0002 与 0009 各加一行补注。
 - **标记**（票 03，`done`）：`logo_lines()` 换成五行网格里的「`héng` / 衡」，README 的 banner 与帧、`docs/render.md`、手动清单同步；布局契约（5 行 × 38 列）不变，相关断言改成按**显示宽度**与整块比较。
-- **迁移与远端**（票 04，`ready-for-walkthrough`）：旧状态已搬（3 个会话桶、2 个目标，配置里的 `fs-agent-mcp-time` 也改成 `heng-mcp-time`），GitHub 已改名 `fortystory/heng`；**只剩本地目录改名**，留给维护者 —— 当前会话的 cwd 与文件沙箱的工作区都钉在旧路径上。
+- **迁移与远端**（票 04，`done`）：旧状态已搬（3 个会话桶、2 个目标，配置里的 `fs-agent-mcp-time` 也改成 `heng-mcp-time`），GitHub 已改名 `fortystory/heng`；本地目录改名 `~/code/fortystory/fs-agent` → `~/code/fortystory/heng` 由维护者于 2026-10-07 完成（旧路径只剩一个空目录，`sessions ls --all` 仍看得到旧桶里的会话）。
 - 顺带修掉改名暴露的两条过时期望：`tests/wording.rs` 里两条按名字宽度算的标题测试（`fs-agent` 8 列 → `heng` 4 列，40 列标题能多放下一段路径与一个目标）。
 
 验收：`cargo test` **1,366 passed / 0 failed**（cargo exit 0）；范围内（`Cargo.toml`、`src`、`tests`、`scripts`、`README.md`、`CONTEXT.md`、`docs/**` 除 `research/` 与旧 ADR 正文）搜不到旧名，只剩两处**有意保留**：`CONTEXT.md` 的 `_Avoid_` 点名旧名、README 指向历史 feature 目录 `.scratch/fs-agent-v1/`。

@@ -2,7 +2,7 @@
 
 测的是**脚本的 CLI**：断言只打在「退出码」与「stdout 里有没有那一项」上，不打内部函数 ——
 内部实现可以随意重构而不动这里。fixture 全部写在临时目录里（跑脚本时把工作目录切过去），
-不依赖真实仓库文件；真实 36 份文档的状态由 `python3 scripts/check-doc-size.py` 本身与人工走查核。
+不依赖真实仓库文件；真实 40 份文档的状态由 `python3 scripts/check-doc-size.py` 本身与人工走查核。
 
 形态照 `scripts/tests/test_lifecycle_check.py`：一票一条用例，跑法是 `python3 -m unittest`。
 覆盖清单见 `.scratch/docs-slim/issues/08-doc-size-guardrail.md` 的「验证」一节。
@@ -37,7 +37,7 @@ SHORT = "# 标题\n\n这是一句短话，用中文写。\n"
 
 @contextmanager
 def fixture(overrides=None, drop=None, extra=None):
-    """在临时目录里搭一个「仓库根」：36 份清单文档齐全，再按需替换 / 删除 / 追加。"""
+    """在临时目录里搭一个「仓库根」：40 份清单文档齐全，再按需替换 / 删除 / 追加。"""
     overrides, drop, extra = overrides or {}, drop or [], extra or {}
     with tempfile.TemporaryDirectory() as root:
         for rel in DOC_FILES:
