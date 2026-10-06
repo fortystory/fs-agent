@@ -1024,14 +1024,15 @@ fn a_count_is_written_in_wan_and_yi_or_in_si_prefixes() {
 }
 
 #[test]
-fn the_sidebar_names_its_pages_and_says_which_are_not_built() {
-    // 三个页签，以及还没有内容的页会说什么 —— 而不是显示
-    // 一块空白或编出来的数据（`.scratch/tui-sidebar/spec.md` §3）。
+fn the_sidebar_names_its_pages() {
+    // 三个页签都有内容了，而左栏那两句空态各有各的说法
+    // （`.scratch/files-page/spec.md` §1）。
     assert_eq!(wording::TAB_USAGE, "调用量");
     assert_eq!(wording::TAB_TRACE, "轨迹");
     assert_eq!(wording::TAB_CONVERSATION, "对话");
     assert_eq!(wording::TAB_FILES, "文件");
-    assert_eq!(wording::tab_placeholder(), "此页尚未实现（另有票在跟）");
+    assert_eq!(wording::files_loading(), "正在读取工作区…");
+    assert_eq!(wording::files_empty(), "工作区里没有文件");
     // 回合条的字形：一个普通单位、被聚焦的那个，以及这一列
     // 装不下的单位用的标记。
     assert_eq!(wording::RAIL_CELL, "┊");

@@ -314,6 +314,22 @@ pub fn detail_truncated() -> &'static str {
     "已截断"
 }
 
+/// 文件内容弹窗里那三种「画不出正文」的情形，各一句 —— 一句实话好过一块空白
+/// （`.scratch/files-page/spec.md` §6）。
+pub fn file_binary() -> &'static str {
+    "这是二进制文件，不显示内容"
+}
+
+/// 文件读不了时的那句话：不存在、没有权限，或者根本读不动。
+pub fn file_unreadable() -> &'static str {
+    "打不开这个文件"
+}
+
+/// 读到的字节不是 UTF-8 文本时的那句话。
+pub fn file_not_text() -> &'static str {
+    "不是 UTF-8 文本，不显示内容"
+}
+
 /// 详情视图一节的小标题，画在一条横线里：`── 思考 ──`（票 03 §Answer）。
 pub fn detail_section(name: &str) -> String {
     format!("── {name} ──")
@@ -1686,6 +1702,11 @@ pub fn stamp(at: DateTime<Utc>) -> String {
 /// —— todo 页整页都是 todo 行，不会与转录混。这条写在表里，别让它当暗知识。
 pub const FOLDABLE: &str = "▸";
 
+/// **折着的内容摊开了**：文件页里一个展开着的目录。收起态复用 [`FOLDABLE`]，两者按
+/// 「这一行里有没有折着的东西」读 —— 与 todo 页那个「进行中」的双义靠**区域**区分
+/// （`.scratch/files-page/spec.md` §3）。
+pub const UNFOLDED: &str = "▾";
+
 /// 一条 `todo` 项那一行开头的三个字形：等待、在做、做完。
 pub const TODO_PENDING: &str = "☐";
 pub const TODO_IN_PROGRESS: &str = FOLDABLE;
@@ -1747,10 +1768,16 @@ pub fn todo_overflow(hidden: usize) -> String {
     format!("＋{hidden} 项")
 }
 
-/// 页还没建出来的页签说的话。是一句话而不是一块空面板，于是读的人知道它是**没做完**、
-/// 不是坏了，而点出票号让这个原因可以核对（spec §3）。
-pub fn tab_placeholder() -> &'static str {
-    "此页尚未实现（另有票在跟）"
+/// 文件页在索引还没就绪时说的那一句：说清它在等，而不是显示一块空白或者编出来的数据
+/// （`.scratch/files-page/spec.md` §1，用户故事 31）。
+pub fn files_loading() -> &'static str {
+    "正在读取工作区…"
+}
+
+/// 文件页在工作区里真的什么都没有时说的那一句。它与上一句是**两回事**：
+/// 一个在等数据，一个已经读完、而答案就是「没有」。
+pub fn files_empty() -> &'static str {
+    "工作区里没有文件"
 }
 
 /// 状态行里模型窗口有多满的那个**值**：`6%`，或者在还没有一次调用报出输入 token 之前是

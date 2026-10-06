@@ -48,7 +48,7 @@ use crate::provider::{ChatRequest, Message, Provider, StreamEvent, ToolCall, Too
 use crate::render::RenderHandle;
 use crate::session::Session;
 use crate::tools::{
-    AllowedCall, BashLimits, CallFacts, DispatchOutcome, GuardedCall, PendingCall, Sandbox,
+    AllowedCall, BashLimits, CallFacts, DispatchOutcome, Effect, GuardedCall, PendingCall, Sandbox,
     ToolError, ToolOutput, TASK_TOOL,
 };
 use crate::Error;
@@ -784,6 +784,9 @@ struct DeferredCall {
     pending: PendingCall,
     allowed: AllowedCall,
     started: Instant,
+    /// 这次调用声明的副作用。它一路上跟着调用走，为的是收尾时能回答「工作区被碰过吗」——
+    /// 那是文件索引重扫的判据（`.scratch/files-page/spec.md` §2）。
+    effect: Effect,
 }
 
 /// 在回合结束、[`run_deferred`] 还没来得及走到时，给一批里每一个已启动但未派发的调用
@@ -817,6 +820,8 @@ struct CallCompletion<'a> {
     /// 这次调用可以碰的路径，当它过了权限门那个「是」的时候。
     allowed: Option<&'a AllowedCall>,
     started: Instant,
+    /// 这次调用声明的副作用：收尾时按它决定要不要请前端重扫一次文件索引。
+    effect: Effect,
     /// 工具是不是真的跑过：只有跑过，后置钩子才挂上去。
     dispatched: bool,
     outcome: DispatchOutcome,
@@ -1094,6 +1099,7 @@ async fn process_call(
                             pending,
                             allowed,
                             started,
+                            effect: facts.effect.clone(),
                         })));
                     }
                     // ④ 派发，原地：碰工作区的调用在它一向所在的地方、按这一批的顺序跑。
@@ -1125,6 +1131,7 @@ async fn process_call(
                             pending: &pending,
                             allowed: Some(&allowed),
                             started,
+                            effect: facts.effect.clone(),
                             dispatched: true,
                             outcome,
                         },
@@ -1144,6 +1151,7 @@ async fn process_call(
             pending: &pending,
             allowed,
             started,
+            effect: facts.effect.clone(),
             dispatched: false,
             outcome,
         },
@@ -1190,6 +1198,7 @@ async fn run_deferred(
                 pending: &call.pending,
                 allowed: Some(&call.allowed),
                 started: call.started,
+                effect: call.effect,
                 dispatched: true,
                 outcome,
             },
@@ -1202,6 +1211,14 @@ async fn run_deferred(
 /// 一次已决策的调用之后的一切：读集合、这次调用的那一个结果，以及后置钩子。
 ///
 /// 两条派发路径共用一份实现，所以无论工具实际在哪条路径上跑过，不变量都成立：一次读只有
+/// 这次调用会不会碰工作区：`Effect` 里只有 [`Effect::ReadOnly`] 那一档不会。
+///
+/// 它是文件索引重扫的判据，也是**唯一**那一处：「非只读」这件事在仓库里已经有词了，就不
+/// 再维护一张工具名单（`.scratch/files-page/spec.md` §2）。
+fn touches_workspace(effect: &Effect) -> bool {
+    !matches!(effect, Effect::ReadOnly)
+}
+
 /// 在成功时才算读，一次失败的匹配会撤回那条路径的读权限，而结果在后置钩子跑之前就进日志
 /// （一个卡住的钩子藏不住一条渲染器本该已经看见的结果）。
 async fn finish_call(
@@ -1214,6 +1231,7 @@ async fn finish_call(
         pending,
         allowed,
         started,
+        effect,
         dispatched,
         outcome,
     } = completion;
@@ -1246,6 +1264,14 @@ async fn finish_call(
         outcome.result,
         started,
     )?;
+
+    // 这次调用碰过工作区就请前端重扫一次文件索引
+    // （`.scratch/files-page/spec.md` §2）。判据是既有的 [`Effect`]，**不是**一张工具名单：
+    // 只认 `write_file` / `edit_file` 会漏掉 `bash` 里的 `mv`、`mkdir`、`git checkout`。
+    // 只读调用一个字都不惊动，而连着几次触发由前端那个位合并成一次遍历。
+    if touches_workspace(&effect) {
+        render.workspace_changed();
+    }
 
     // ⑤ hook.post。只有工具真的跑了它才跑，而它的失败最多只能丢掉反馈。
     if dispatched {
@@ -2273,4 +2299,18 @@ fn emit_returning(
         speaker.clone(),
         payload,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 重扫的判据只有一档不触发：只读。另外两档都碰得到工作区
+    /// （`.scratch/files-page/spec.md` §2）。
+    #[test]
+    fn only_a_read_only_call_leaves_the_workspace_alone() {
+        assert!(!touches_workspace(&Effect::ReadOnly));
+        assert!(touches_workspace(&Effect::WritePaths(vec!["a.txt".into()])));
+        assert!(touches_workspace(&Effect::Exclusive));
+    }
 }

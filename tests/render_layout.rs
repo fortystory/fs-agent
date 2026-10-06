@@ -1593,25 +1593,21 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     let mut state = state();
     state.live_event(RenderEvent::notice("换页之前的一句话".to_owned()));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        !text.contains(wording::tab_placeholder()),
-        "在显示调用量那一页：{text}"
-    );
+    assert!(text.contains("token"), "在显示调用量那一页：{text}");
 
-    // 切到 `文件`：还没做出来的那一页用一行说出来，读数让位
-    // （spec §3）。左栏的页签只剩三页 —— `轨迹` 搬进了主列
+    // 切到 `文件`：这一页现在画的是工作区那棵树（还没有索引时说的是它在等），
+    // 读数让位（spec §3）。左栏的页签只剩三页 —— `轨迹` 搬进了主列
     // （`.scratch/trace-in-main/spec.md` §2）。
     let frame = buffer(120, 24, &mut state);
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_FILES);
     click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(wording::tab_placeholder()),
-        "文件页说它还没做：{text}"
+        text.contains(wording::files_loading()),
+        "文件页说它在等工作区那份索引：{text}"
     );
     assert!(!text.contains("token"), "而读数不在：{text}");
-    // 于是状态行成了唯一一项读数 —— 这是占位页被接受的
-    // 代价（spec §3）。
+    // 于是状态行成了唯一一项读数（spec §3）。
     assert!(text.contains("上下文"), "状态行的占比还在：{text}");
 
     // 选中的标签跟着它一起挪了。
@@ -1625,15 +1621,665 @@ fn clicking_a_tab_switches_the_sidebar_page() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("token"), "读数回来了：{text}");
     assert!(
-        !text.contains(wording::tab_placeholder()),
-        "占位不见了：{text}"
+        !text.contains(wording::files_loading()),
+        "文件页那句话不见了：{text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 文件页：左栏那个 `文件` 页签画什么
+// （`.scratch/files-page/spec.md` §1、§3、§4）
+// ---------------------------------------------------------------------------
+
+/// 点左栏的 `文件` 页签，然后重画一帧 —— 页区与命中区域都按画出来的那一帧算。
+fn open_files_page(state: &mut TuiState, width: u16, height: u16) {
+    let frame = buffer(width, height, state);
+    let (column, row) = tab_cell(&frame, width, height, wording::TAB_FILES);
+    click(state, column, row);
+    let _ = screen(width, height, state);
+}
+
+#[test]
+fn the_files_page_lists_the_workspace_top_level() {
+    // 这一页的数据是 `@` 那份会话级索引（`.scratch/files-page/spec.md` §1）：
+    // 目录带尾斜杠，子项在目录收起时不出现。
+    let mut state = state();
+    install_files(&mut state, &["README.md", "src/", "src/a.rs", "z.rs"]);
+    open_files_page(&mut state, 120, 24);
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("src/"), "目录带尾斜杠画出来：{text}");
+    assert!(
+        text.contains("README.md") && text.contains("z.rs"),
+        "顶层的文件也在：{text}"
+    );
+    assert!(!text.contains("a.rs"), "初始全部收起，子项不露面：{text}");
+}
+
+#[test]
+fn the_tree_is_two_columns_per_level_and_puts_directories_first() {
+    // 同层里目录排在文件前面，缩进每层两列 —— 而**顺序是渲染层重排的**：
+    // 索引序里 `README.md` 在 `src/` 之前（`.scratch/files-page/spec.md` §1、§3）。
+    let mut state = state();
+    install_files(
+        &mut state,
+        &["README.md", "src/", "src/a.rs", "sub/", "sub/deep/"],
+    );
+    open_files_page(&mut state, 120, 24);
+
+    let rows = screen(120, 24, &mut state);
+    let page = sidebar_page(&rows);
+    assert_eq!(
+        sidebar_row(&rows[page]).trim_end(),
+        "▸ src/",
+        "顶层的第一个是目录，带折叠字形与尾斜杠"
+    );
+    assert_eq!(
+        sidebar_row(&rows[page + 1]).trim_end(),
+        "▸ sub/",
+        "同类之间保持索引序"
+    );
+    assert_eq!(
+        sidebar_row(&rows[page + 2]).trim_end(),
+        "README.md",
+        "文件排在目录后面，而且没有折叠字形"
+    );
+}
+
+#[test]
+fn clicking_a_directory_expands_and_collapses_it() {
+    let mut state = state();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    assert!(!screen(120, 24, &mut state).join("\n").contains("a.rs"));
+
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows.join("\n").contains("a.rs"),
+        "点一下目录就摊开：{rows:#?}"
+    );
+    assert_eq!(
+        sidebar_row(&rows[page + 1]).trim_end(),
+        "  a.rs",
+        "子项缩进两列"
+    );
+    assert_eq!(
+        sidebar_row(&rows[page]).trim_end(),
+        "▾ src/",
+        "展开态换一个字形"
+    );
+
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+    assert!(
+        !screen(120, 24, &mut state).join("\n").contains("a.rs"),
+        "再点一下收起"
+    );
+}
+
+#[test]
+fn the_tree_keeps_its_shape_across_repaints_and_a_tab_switch() {
+    // 展开状态活在进程里，重画与切页都不该把它丢掉
+    // （`.scratch/files-page/spec.md` §1）。
+    let mut state = state();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+
+    // 切到调用量再切回来。
+    for label in [wording::TAB_USAGE, wording::TAB_FILES] {
+        let frame = buffer(120, 24, &mut state);
+        let (column, row) = tab_cell(&frame, 120, 24, label);
+        click(&mut state, column, row);
+    }
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows.join("\n").contains("a.rs"),
+        "切页回来仍然是摊开的：{rows:#?}"
+    );
+}
+
+#[test]
+fn the_files_page_names_the_two_empty_states() {
+    // 还没扫过 / 一次遍历在飞：说它在等。工作区真的是空的：说它是空的。
+    // 两者都不画一块空白，也不编数据（`.scratch/files-page/spec.md` §1，用户故事 31）。
+    let mut pending = state();
+    open_files_page(&mut pending, 120, 24);
+    let text = screen(120, 24, &mut pending).join("\n");
+    assert!(text.contains(wording::files_loading()), "还没就绪：{text}");
+    assert!(
+        !text.contains(wording::files_empty()),
+        "这不是「空」：{text}"
+    );
+
+    let mut empty = state();
+    install_files(&mut empty, &[]);
+    open_files_page(&mut empty, 120, 24);
+    let text = screen(120, 24, &mut empty).join("\n");
+    assert!(
+        text.contains(wording::files_empty()),
+        "读完了就是空的：{text}"
+    );
+    assert!(
+        !text.contains(wording::files_loading()),
+        "它不等什么了：{text}"
+    );
+}
+
+#[test]
+fn the_wheel_over_the_files_page_scrolls_the_tree() {
+    let mut state = state();
+    let paths: Vec<String> = (0..40).map(|index| format!("file-{index:02}.rs")).collect();
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    install_files(&mut state, &paths);
+    open_files_page(&mut state, 120, 24);
+
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    let before = screen(120, 24, &mut state);
+    assert!(before.join("\n").contains("file-00.rs"), "从顶上开始");
+
+    // 指针落在左栏页区里（第一列就是左栏），滚轮归这一页。
+    state.mouse(wheel_at(2, page as u16 + 1, false));
+    let after = screen(120, 24, &mut state);
+    assert!(
+        !after.join("\n").contains("file-00.rs") && after.join("\n").contains("file-01.rs"),
+        "滚轮挪动了这一页：{after:#?}"
+    );
+
+    // 指针在主列里时照旧滚主列那一页。
+    state.mouse(wheel_at(100, 5, false));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("file-01.rs"), "主列上的滚轮没有动这一页");
+}
+
+#[test]
+fn a_narrow_sidebar_still_reads_the_tree() {
+    // 80 列下左栏是 28 列那一档：长名字被截断，而树读得下去
+    // （`.scratch/files-page/spec.md` §3）。
+    let mut state = state();
+    install_files(
+        &mut state,
+        &["src/", "src/a-very-long-file-name-that-will-not-fit.rs"],
+    );
+    open_files_page(&mut state, 80, 24);
+    let page = sidebar_page(&screen(80, 24, &mut state));
+    click_in_row(&mut state, 80, 24, page as u16, "src/");
+
+    let rows = screen(80, 24, &mut state);
+    let child = sidebar_row(&rows[page + 1]);
+    assert!(child.contains('…'), "放不下的名字被截断：{child:?}");
+    assert!(
+        text_columns(child.trim_end()) <= 28,
+        "而它没有溢出左栏：{child:?}"
+    );
+}
+
+#[test]
+fn clicking_the_tree_hands_it_the_keyboard_and_the_arrows_walk_the_rows() {
+    // 点左栏一处就把键盘交给这一页，焦点行落在点的那一行上；`↑` / `↓` 沿着
+    // 可见行移动，到顶不越界（`.scratch/files-page/spec.md` §5，用户故事 14、15、20）。
+    let mut state = state();
+    install_files(&mut state, &["a.rs", "b.rs", "c.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+
+    click_in_row(&mut state, 120, 24, page as u16 + 2, "c.rs");
+    // 点文件行会打开内容弹窗（票 08）：这一条只问焦点行，所以先把它关掉 ——
+    // `Esc` 一次关一层，键盘仍留在这一页上。
+    state.key(Key::Esc);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "c.rs").expect("c.rs 在屏幕上");
+    assert_eq!(
+        frame[(column, row)].fg,
+        Color::LightMagenta,
+        "焦点行是亮的那一个"
+    );
+    assert!(
+        frame[(column, row)].modifier.contains(Modifier::BOLD),
+        "而且它是粗的"
+    );
+
+    state.key(Key::Up);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "b.rs").expect("b.rs 在屏幕上");
+    assert_eq!(
+        frame[(column, row)].fg,
+        Color::LightMagenta,
+        "焦点往上挪一格"
+    );
+
+    // 到顶再按不越界：焦点停在第 0 行，而那一行仍然是亮的。
+    state.key(Key::Up);
+    state.key(Key::Up);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "a.rs").expect("a.rs 在屏幕上");
+    assert_eq!(frame[(column, row)].fg, Color::LightMagenta, "停在第一行");
+    assert_eq!(frame[(column, row)].modifier, Modifier::BOLD);
+}
+
+#[test]
+fn the_arrows_open_and_collapse_a_directory_and_enter_inserts_the_path() {
+    let mut state = idle();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+
+    state.key(Key::Right);
+    assert!(
+        screen(120, 24, &mut state).join("\n").contains("a.rs"),
+        "→ 摊开目录"
+    );
+    state.key(Key::Left);
+    assert!(
+        !screen(120, 24, &mut state).join("\n").contains("a.rs"),
+        "← 收起目录"
+    );
+
+    // `Enter` 把这一行的路径作为 `@路径` 插进草稿（目录带尾斜杠），
+    // 并把键盘还给输入区 —— 插完接着就要打字（用户故事 17、18）。
+    state.key(Key::Enter);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("@src/"), "路径进了草稿：{text}");
+
+    state.key(Key::Char('x'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("@src/x"),
+        "接着打的字落在同一个草稿里：{text}"
+    );
+}
+
+#[test]
+fn the_tree_keys_do_not_reach_the_draft() {
+    // 键盘在这一页时，走树的那几个键归这一页：草稿一个字不动
+    // （`.scratch/files-page/spec.md` §5，用户故事 16）。
+    let mut state = idle();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    for ch in "hi".chars() {
+        state.key(Key::Char(ch));
+    }
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+
+    for key in [Key::Down, Key::Up, Key::Right, Key::Left] {
+        state.key(key);
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("hi"), "草稿还在：{text}");
+    assert!(!text.contains("@src/"), "那几个键一个都没落进草稿：{text}");
+
+    // 打字也不落进草稿 —— 键盘确实在左栏，而不是「那几个键恰好被吃掉了」。
+    state.key(Key::Char('z'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("hiz"), "打字没有落到草稿里：{text}");
+}
+
+#[test]
+fn escape_hands_the_keyboard_back_without_cancelling_the_turn() {
+    // `Esc` 只把键盘还回去 —— 一次手势一层，它**不**取消正在跑的回合
+    // （`.scratch/files-page/spec.md` §5）。要取消就等键盘回去之后再按一下。
+    let mut state = idle();
+    install_files(&mut state, &["src/"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+    state.request(ConsoleRequest::RunState { running: true });
+    let _ = state.take_events();
+
+    state.key(Key::Esc);
+    assert!(state.take_events().is_empty(), "第一下只还键盘，不取消回合");
+    state.key(Key::Down);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("src/"),
+        "键盘回去了，走树的键也不再被吃：{text}"
+    );
+
+    state.key(Key::Esc);
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::Cancel],
+        "键盘回去之后再按一下才按忙碌那一支取消"
+    );
+}
+
+#[test]
+fn the_tab_row_also_hands_the_keyboard_to_the_sidebar() {
+    // 「点左栏任意处」把页签条也算进去：切到文件页那一下就够了，不必再点页区
+    // （`.scratch/files-page/spec.md` §5）。
+    let mut state = state();
+    install_files(&mut state, &["a.rs", "b.rs"]);
+    open_files_page(&mut state, 120, 24);
+
+    state.key(Key::Down);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "b.rs").expect("b.rs 在屏幕上");
+    assert_eq!(
+        frame[(column, row)].fg,
+        Color::LightMagenta,
+        "↓ 走动了这一页的焦点行"
+    );
+}
+
+/// 一个临时工作区：文件页的弹窗按 `TuiState.cwd` 读盘
+/// （`.scratch/files-page/spec.md` §6）。
+fn workspace(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fs-agent-files-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("临时工作区");
+    dir
+}
+
+/// 一个以 `dir` 为工作目录、索引里装着 `paths` 的文件页。
+fn files_in(dir: &std::path::Path, paths: &[&str]) -> TuiState {
+    let mut state = TuiState::new(facts(), dir.to_path_buf(), None);
+    install_files(&mut state, paths);
+    state
+}
+
+#[test]
+fn a_workspace_file_opens_in_the_detail_overlay() {
+    let dir = workspace("open");
+    std::fs::create_dir_all(dir.join("src")).expect("一个目录");
+    std::fs::write(dir.join("src/hello.rs"), "fn main() {}\n").expect("写一个文件");
+    let mut state = files_in(&dir, &["src/", "src/hello.rs"]);
+    open_files_page(&mut state, 120, 24);
+    // 先把目录摊开：关掉弹窗之后这一页要停在原处，摊开的状态也是其中一部分
+    // （用户故事 12）。
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+    assert!(screen(120, 24, &mut state).join("\n").contains("hello.rs"));
+
+    click_row(&mut state, 120, 24, "hello.rs");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("fn main() {}"), "文件内容画出来了：{text}");
+    assert!(text.contains("esc 关闭"), "页脚点出出口：{text}");
+    assert!(
+        state.take_events().is_empty(),
+        "看一眼文件既不推任何前端事件、也不进事件流"
+    );
+
+    // 关掉之后这一页停在原处：树还摊开着。
+    state.key(Key::Esc);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("hello.rs"),
+        "回到那棵树，而且它还摊着：{text}"
+    );
+    assert!(!text.contains("esc 关闭"), "弹窗关上了：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_file_key_opens_the_same_overlay() {
+    let dir = workspace("key");
+    std::fs::write(dir.join("hello.rs"), "fn main() {}\n").expect("写一个文件");
+    let mut state = files_in(&dir, &["hello.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "hello.rs");
+
+    state.key(Key::Right);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("fn main() {}"), "→ 也打开它：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_binary_file_only_gets_one_line() {
+    let dir = workspace("binary");
+    std::fs::write(dir.join("blob.bin"), [0u8, 1, 2, 3, b'a', 0xFF, 0xFE]).expect("写一个二进制");
+    let mut state = files_in(&dir, &["blob.bin"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "blob.bin");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains(wording::file_binary()), "只报一句：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_that_cannot_be_read_says_so() {
+    let dir = workspace("missing");
+    // 索引里有它，盘上没有：读不了要是一句话，不是一块空白。
+    let mut state = files_in(&dir, &["missing.rs"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "missing.rs");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains(wording::file_unreadable()), "读不了：{text}");
+    assert!(
+        text.contains("esc 关闭"),
+        "而它仍然是一个能关掉的弹窗：{text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_that_is_not_utf8_says_so() {
+    let dir = workspace("not-text");
+    std::fs::write(dir.join("latin.txt"), [0xE4, 0xBD, 0x20, 0xE5]).expect("写一段坏字节");
+    let mut state = files_in(&dir, &["latin.txt"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "latin.txt");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains(wording::file_not_text()), "不是文本：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_long_file_is_truncated_and_says_so() {
+    let dir = workspace("long");
+    let body: Vec<String> = (0..3_000).map(|line| format!("line {line}")).collect();
+    std::fs::write(dir.join("long.txt"), body.join("\n")).expect("写一个长文件");
+    let mut state = files_in(&dir, &["long.txt"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "long.txt");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("line 0"), "从头开始画：{text}");
+
+    // 翻到底：这个高度下一屏十三行，两千行要一百多下。
+    for _ in 0..250 {
+        state.key(Key::PageDown);
+    }
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(wording::detail_truncated()),
+        "说明截断了：{text}"
+    );
+    assert!(!text.contains("line 2999"), "末尾那一行没读进来：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_wide_line_wraps_to_the_text_area() {
+    let dir = workspace("wide");
+    let wide = format!("{}TAIL", "y".repeat(300));
+    std::fs::write(dir.join("wide.txt"), wide).expect("写一条长行");
+    let mut state = files_in(&dir, &["wide.txt"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "wide.txt");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("TAIL"),
+        "长行折到文本区宽，尾巴看得见：{text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_overlay_highlights_the_code_it_knows() {
+    // 按扩展名认语言，走既有的那一层高亮（与 markdown 代码块同一个源）
+    // （`.scratch/files-page/spec.md` §6，用户故事 23）。
+    let dir = workspace("highlight");
+    std::fs::write(dir.join("hi.rs"), "fn main() {}\n").expect("写一个 rust 文件");
+    let mut state = files_in(&dir, &["hi.rs"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "hi.rs");
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "fn").expect("那一段代码在屏幕上");
+    assert_eq!(
+        frame[(column, row)].fg,
+        Color::Magenta,
+        "关键字是内容域的关键字色"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_language_it_does_not_know_is_still_drawn_as_text() {
+    let dir = workspace("plain-text");
+    std::fs::write(dir.join("notes.weird"), "just some words\n").expect("写一个认不出的文件");
+    let mut state = files_in(&dir, &["notes.weird"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "notes.weird");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("just some words"), "照旧画出来：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn line_numbers_sit_on_the_first_display_line_of_a_logical_line() {
+    // 行号插在折行**之前**：折出来的续行自然不带行号
+    // （`.scratch/files-page/spec.md` §6，用户故事 23）。
+    let dir = workspace("numbers");
+    std::fs::write(dir.join("wide.rs"), format!("{}\n", "x".repeat(300))).expect("写一条长行");
+    let mut state = files_in(&dir, &["wide.rs"]);
+    open_files_page(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "wide.rs");
+    let rows = screen(120, 24, &mut state);
+    let first = rows
+        .iter()
+        .position(|row| row.contains("1 xxx"))
+        .unwrap_or_else(|| panic!("逻辑行的第一行带着行号：{rows:#?}"));
+    let next: String = rows[first + 1]
+        .trim_start_matches(['┆', '┄', ' '])
+        .to_owned();
+    assert!(
+        next.starts_with("xxxx"),
+        "折出来的续行不带行号，也不缩进：{:?}",
+        rows[first + 1]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_workspace_change_asks_for_a_rescan_and_never_draws_a_line() {
+    // 模型改过工作区之后这一页要跟上（`.scratch/files-page/spec.md` §2、用户故事 28–30）：
+    // 循环侧推一条**静默**信号，前端置位，渲染循环下一轮真去起遍历。
+    let mut state = state();
+    assert!(state.take_file_scan(), "进 TUI 先预热一次");
+    state.files_loaded(vec!["a.rs".into()]);
+    let before = screen(120, 24, &mut state).join("\n");
+
+    // 连着三次改动：一个位，因此是一次遍历。屏幕上一个字都不变。
+    for _ in 0..3 {
+        state.live_event(RenderEvent::WorkspaceChanged);
+    }
+    let after = screen(120, 24, &mut state).join("\n");
+    assert_eq!(before, after, "这条信号不画任何东西");
+    assert!(state.take_file_scan(), "它请了一次重扫");
+    assert!(!state.take_file_scan(), "一次遍历还在飞，不并发");
+
+    // 遍历在飞的时候又改了一次：位留着，结果落地之后的下一轮补发。
+    state.live_event(RenderEvent::WorkspaceChanged);
+    assert!(!state.take_file_scan(), "飞着的那次不被抢");
+    state.files_loaded(vec!["a.rs".into(), "b.rs".into()]);
+    assert!(state.take_file_scan(), "补发的那一次仍然发得出去");
+}
+
+#[test]
+fn the_keyboard_goes_back_when_the_sidebar_is_not_the_files_page() {
+    // 键盘归属只对文件页成立：另外两页没有能用方向键走的东西，把它扣在那儿只会让输入区静默
+    // 失灵；收起左栏同理（与「没地方画覆盖层就关掉它」同一条纪律）。
+    let mut state = idle();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+
+    // 点 `调用量` 页签：打字照旧落进草稿。
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_USAGE);
+    click(&mut state, column, row);
+    state.key(Key::Char('x'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("❱ x"), "输入区收得到字：{text}");
+
+    // 文件页里按 `Ctrl-O` 收起左栏：键盘跟着还回去。
+    open_files_page(&mut state, 120, 24);
+    state.key(Key::CtrlO);
+    state.key(Key::Char('y'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("❱ xy"), "收起左栏之后打字也落得进去：{text}");
+}
+
+#[test]
+fn the_files_page_can_still_be_dragged_and_copied() {
+    // 新增的点击动作不该把这一页的拖选吃掉：它是屏幕上的一块文本区域，与左栏另外两页一样
+    // （`.scratch/files-page/spec.md` §4，用户故事 13）。
+    let mut state = state();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "src/").expect("目录行在屏幕上");
+
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 3, row));
+    state.mouse(release(column + 3, row));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("已复制"), "拖选出文本、提示行给回执：{text}");
+    let expected = fs_agent::render::selection::osc52("src/");
+    assert_eq!(
+        state.take_clipboard().as_deref(),
+        Some(expected.as_str()),
+        "取到的是那一行文字"
+    );
+    assert!(
+        screen(120, 24, &mut state).join("\n").contains("src/"),
+        "而这一次拖选没有顺手把目录展开或收起"
+    );
+}
+
+#[test]
+fn a_rescan_drops_the_expansion_of_a_directory_that_left_the_index() {
+    // 「一次重扫之后，不在索引里的路径直接丢掉」（`.scratch/files-page/spec.md` §1）：
+    // 目录回到工作区时是收起的，而不是带着上一次的展开状态复活。
+    let mut state = state();
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    click_in_row(&mut state, 120, 24, page as u16, "src/");
+    assert!(screen(120, 24, &mut state).join("\n").contains("a.rs"));
+
+    install_files(&mut state, &["other.rs"]);
+    install_files(&mut state, &["src/", "src/a.rs"]);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        !rows.join("\n").contains("a.rs"),
+        "展开状态跟着那一次索引一起走了：{rows:#?}"
     );
 }
 
 #[test]
 fn only_the_tab_labels_answer_a_click() {
-    use fs_agent::render::wording;
-
     // 填满页签行剩下部分的那条横线，以及两个标签之间的那个字形，
     // 都不是控件：点在那儿什么也不发生，因为那儿没有东西
     // 被画成页签（spec §3）。
@@ -1654,10 +2300,9 @@ fn only_the_tab_labels_answer_a_click() {
         click(&mut state, column, row);
         let text = screen(120, 24, &mut state).join("\n");
         assert!(
-            !text.contains(wording::tab_placeholder()),
-            "点在第 {column} 列不是一个页签：{text}"
+            text.contains("token"),
+            "点在第 {column} 列不是一个页签，页没有动：{text}"
         );
-        assert!(text.contains("token"), "页没有动：{text}");
     }
 }
 
@@ -1682,7 +2327,7 @@ fn a_question_keeps_the_tabs_from_answering() {
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("权限询问"), "问句还在：{text}");
     assert!(
-        !text.contains(wording::tab_placeholder()),
+        !text.contains(wording::files_loading()),
         "它下面那一页也没有被切走：{text}"
     );
     assert!(answer.try_recv().is_err(), "而且没有人在读者背后作答");
@@ -1711,10 +2356,12 @@ fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
     for (column, row) in [(2u16, 1u16), (4, 3), (2, 8)] {
         click(&mut state, column, row);
     }
+    // 那一栏整个没画出来，所以「切页」在这块屏幕上没有别的可观察结果：能断言的是那几行
+    // 点击什么都没打开。
     let text = screen(60, 24, &mut state).join("\n");
     assert!(
-        !text.contains(wording::tab_placeholder()),
-        "而没有东西切走了并不存在的那一页：{text}"
+        !text.contains(wording::files_loading()),
+        "而没有东西被切到：{text}"
     );
 }
 
@@ -4774,6 +5421,31 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
     assert!(
         text.contains("调用 bash"),
         "它打开时所在的那一行还在：{text}"
+    );
+}
+
+#[test]
+fn the_detail_body_is_wrapped_to_the_real_text_width() {
+    // 详情正文排版的宽度是**文本区**的宽度 —— 框宽减掉两列边框与两侧内边距 ——
+    // 而不是框宽。按框宽排出来的行，尾部四列会被 `Paragraph` 裁掉，
+    // 读的人永远看不到（`.scratch/files-page/spec.md` §6，票 05）。
+    let mut state = state_with_roster(&["kimi"]);
+    // 120 列下框宽 116、文本区 112：这一行正好落在两者之间。
+    let long = format!("{}TAIL", "x".repeat(112));
+    state.apply(tool_started(
+        1,
+        "call-wide",
+        "bash",
+        serde_json::json!({"command": "cat wide"}),
+    ));
+    state.apply(tool_completed(2, "call-wide", true, Some(&long), None));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("TAIL"),
+        "正文的尾巴没有被框边裁掉，而是折到了下一行：{text}"
     );
 }
 

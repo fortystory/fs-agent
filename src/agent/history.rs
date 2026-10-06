@@ -192,6 +192,10 @@ pub async fn undo_last_edit(
         },
     )?;
 
+    // `/undo` 不走工具派发，所以它自己那一次触发得补在这里：它刚刚把工作区改回去了
+    // （`.scratch/files-page/spec.md` §2）。
+    render.workspace_changed();
+
     Ok(Some(UndoOutcome {
         tool_call_id: edit.tool_call_id,
         path,

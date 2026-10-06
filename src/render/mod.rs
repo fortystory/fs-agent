@@ -23,6 +23,7 @@
 
 pub mod editor;
 pub mod file_index;
+pub mod files;
 pub mod headless;
 pub mod highlight;
 pub mod input;
@@ -89,6 +90,12 @@ pub enum RenderEvent {
         at: DateTime<Utc>,
         message: String,
     },
+    /// 工作区刚被改过：一次非只读的工具调用收尾了，或者一次 `/undo` 落了盘。
+    ///
+    /// 它是一条**静默信号**，不是给人看的一行：不画进转录、不进事件流 —— 握着会话级文件
+    /// 索引的那一端靠它知道该重扫一次（`.scratch/files-page/spec.md` §2）。三个渲染器里
+    /// 只有 TUI 养着那份索引，另外两个把它当没看见。
+    WorkspaceChanged,
     /// 一行不为任何事件说话的界面文字：启动横幅与交互循环的朴素反馈。
     ///
     /// 不是 [`RenderEvent::Diagnostic`]：诊断是系统在报什么，并且被标成那样，而一条告知
@@ -170,6 +177,15 @@ impl RenderHandle {
     /// 终端，第二个写入者就会落进活动区域里（spec §19）。
     pub fn notice(&self, message: &str) {
         let _ = self.sender.send(RenderEvent::notice(message));
+    }
+
+    /// 对前端说一句「工作区变了」：不画一行、不进事件流，只请握着文件索引的那一端重扫一次
+    /// （`.scratch/files-page/spec.md` §2）。
+    ///
+    /// 触发点在工具收尾那一层 —— 判据是既有的 [`crate::tools::Effect`]，所以 `bash` 里的
+    /// `mv` / `git checkout` 也算，而不必维护一张工具名单。
+    pub fn workspace_changed(&self) {
+        let _ = self.sender.send(RenderEvent::WorkspaceChanged);
     }
 }
 

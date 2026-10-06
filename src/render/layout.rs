@@ -209,6 +209,16 @@ impl Regions {
             .min(DETAIL_MAX_WIDTH)
     }
 
+    /// 详情覆盖层正文的文字区宽度：框宽减掉两列边框与两侧内边距。
+    ///
+    /// 正文是按**这个**宽度排的，不是按框宽：画它的 `Paragraph` 不折行，而文字区比框窄
+    /// 四列，所以按框宽排出来的行尾部会被裁掉（`.scratch/files-page/spec.md` §6、票 05）。
+    /// 内边距只在空间够时才让出来，这里与 [`Regions::detail`] 的绘制路径用同一个判据。
+    pub fn detail_text_width(&self) -> u16 {
+        let inner = inner(Rect::new(0, 0, self.detail_width(), 1));
+        inner.width.saturating_sub(detail_padding(inner).0 * 2)
+    }
+
     /// 详情覆盖层去哪儿：**在屏幕上居中**（spec §4），比上下各短一行，好让转录在上下各留
     /// 一条边。
     ///
@@ -487,6 +497,24 @@ const DETAIL_MAX_WIDTH: u16 = 135;
 
 /// 值得为详情覆盖层打开的最少正文行数。
 const DETAIL_MIN_ROWS: u16 = 1;
+
+/// 详情覆盖层在边框与文字之间留的那一列空气。它是**被让出来**的，不是吃掉的：空间不够时
+/// 它退让，正文因此拿回那两列。
+pub const DETAIL_PADDING: u16 = 1;
+
+/// 详情覆盖层自己的文字在有内边距之前需要的行数：一行标题、两行主体，加上页脚。
+const DETAIL_MIN_TEXT_ROWS: u16 = 4;
+
+/// 详情覆盖层在框内让出的内边距：`(左右各一列, 上下各一行)`，各自是 `0` 或
+/// [`DETAIL_PADDING`]。
+///
+/// 绘制路径与 [`Regions::detail_text_width`] 共用它 —— 正文按多宽排版这件事只有一处事实源，
+/// 两边各写一遍那条不等式正是「行号也会被算错」的由来（`.scratch/files-page/spec.md` §6）。
+pub fn detail_padding(inner: Rect) -> (u16, u16) {
+    let pad_x = u16::from(inner.width > DETAIL_PADDING * 3);
+    let pad_y = u16::from(inner.height >= DETAIL_PADDING * 2 + DETAIL_MIN_TEXT_ROWS);
+    (DETAIL_PADDING * pad_x, DETAIL_PADDING * pad_y)
+}
 
 /// 详情覆盖层两边各留一行转录显示，上下各一行，好让读者保住他点进来的那个位置。
 const DETAIL_MARGIN_ROWS: u16 = 2;

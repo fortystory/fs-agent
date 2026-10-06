@@ -100,6 +100,17 @@ impl FileIndex {
             .iter()
             .any(|candidate| candidate.to_string_lossy() == path)
     }
+
+    /// 这一份索引里那些路径；还没就绪、或者一次遍历正在飞时是 `None`。
+    ///
+    /// 文件页要的是**整个列表**（它自己把它排成树），而 `@` 要的是按 query 过滤之后的候选
+    /// —— 两个出口，同一份数据（`.scratch/files-page/spec.md` §1）。
+    pub fn paths(&self) -> Option<&[PathBuf]> {
+        match self {
+            Self::Ready(paths) => Some(paths),
+            _ => None,
+        }
+    }
 }
 
 /// `query` 按段落在 `path` 上的匹配起点：第一段匹配到的那个段号，不匹配是 `None`。

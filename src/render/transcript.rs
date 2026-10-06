@@ -200,6 +200,9 @@ impl Transcript {
                 blocks.push(Block::Notice(message));
                 blocks
             }
+            // 静默信号：它不产任何块 —— 屏幕上的东西一个都不变
+            // （`.scratch/files-page/spec.md` §2）。
+            RenderEvent::WorkspaceChanged => Vec::new(),
             RenderEvent::Logged(event) => self.push_logged(event),
         }
     }

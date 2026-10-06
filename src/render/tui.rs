@@ -47,6 +47,8 @@ use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
 use super::editor::{self, Input};
 use super::file_index::{self, FileIndex};
+use super::files;
+use super::highlight;
 use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent};
 use super::layout;
 use super::palette;
@@ -737,6 +739,20 @@ pub struct TuiState {
     /// 正在显示左栏的哪一页。是渲染器状态，不是事件：它的任何一部分都不该在流上，而且
     /// 它随进程一起死（spec §3）。
     tab: Tab,
+    /// 文件页那一页自己的状态（`.scratch/files-page/spec.md` §1、§5）。
+    ///
+    /// 与 [`Panel`]、[`TodoPanel`] 同一族：一页的状态收在一个值里，而它整个只活在进程内 ——
+    /// 不进事件流、不落盘。
+    files_page: FilesPage,
+    /// 上一帧左栏页签条的标签行画在哪 —— 「点左栏」把页签条也算进去
+    /// （`.scratch/files-page/spec.md` §5）。
+    tabs_rect: Option<Rect>,
+    /// 键盘交给左栏了吗。
+    ///
+    /// 它与既有的两个「独占键盘的视图」（详情覆盖层、历史重放）同一族，只是不占满屏：立着
+    /// 的时候走树的那几个键归文件页，`Esc` 把键盘还回输入区
+    /// （`.scratch/files-page/spec.md` §5）。
+    sidebar_keyboard: bool,
     /// 正在显示主列的哪一页：`对话` 还是 `轨迹`（`.scratch/trace-in-main/spec.md` §2）。
     /// 与 [`TuiState::tab`] 同级：只活在这一次进程里，不落配置，重开回到对话。
     main_tab: MainTab,
@@ -781,8 +797,9 @@ pub struct TuiState {
     trace_rect: Option<Rect>,
     /// 详情覆盖层，开着的时候。
     detail: Option<DetailView>,
-    /// 打开这个覆盖层的那个视图，以及它打开前的滚动状态；关掉时还原给它（票 13）。
-    detail_opener: Option<ScrollMark>,
+    /// 打开这个覆盖层的那个视图，以及它打开前的滚动状态；关掉时还原给它
+    /// （票 13、`.scratch/files-page/spec.md` §5）。
+    detail_opener: Option<DetailOpener>,
     /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
     /// 「记住读的人真看到了什么」的规矩（票 02 §4）。
     detail_rect: Option<Rect>,
@@ -1606,6 +1623,9 @@ impl TuiState {
             panel: Panel::new(),
             todo: crate::render::TodoPanel::default(),
             tab: Tab::Usage,
+            files_page: FilesPage::default(),
+            tabs_rect: None,
+            sidebar_keyboard: false,
             main_tab: MainTab::Conversation,
             sidebar_wanted: true,
             colors,
@@ -1824,6 +1844,12 @@ impl TuiState {
     /// 这个计数就是历史重放批次预算的量度：一帧的成本由它铺下去的文字定界，而不是只按它
     /// 吃掉多少事件来算（`.scratch/tui-history-replay/spec.md` §2）。实时调用方不看它。
     pub fn apply(&mut self, event: RenderEvent) -> usize {
+        // 「工作区变了」是一条静默信号：它不画任何东西，只请一次重扫 —— 索引落地时那一帧
+        // 自己会脏（`.scratch/files-page/spec.md` §2）。
+        if matches!(event, RenderEvent::WorkspaceChanged) {
+            self.file_scan_wanted = true;
+            return 0;
+        }
         self.dirty = true;
         // 这一刻属于这条事件：轨迹页把它的时刻画在块的开头，重放时从同一处取
         // （`.scratch/trace-in-main/spec.md` §5）。
@@ -2596,7 +2622,9 @@ impl TuiState {
     }
 
     /// 滚轮一格：详情覆盖层直接占着它；否则是问题那一块（问卷挪高亮，中间的模态什么都不做）；
-    /// 否则滚**当前显示的那一页**（票 04 §2、`tui-chrome` §5、`.scratch/trace-in-main/spec.md` §4）。
+    /// 否则是左栏的文件页（指针落在它的页区里时）；否则滚**当前显示的那一页**
+    /// （票 04 §2、`tui-chrome` §5、`.scratch/trace-in-main/spec.md` §4、
+    /// `.scratch/files-page/spec.md` §4）。
     fn wheel_at(&mut self, column: u16, row: u16, up: bool) {
         if self.detail_open() {
             self.detail_scroll(if up { -1 } else { 1 });
@@ -2622,7 +2650,30 @@ impl TuiState {
                 return;
             }
         }
+        // 指针落在左栏页区里时这一格归文件页（`.scratch/files-page/spec.md` §4）：
+        // 与覆盖层、问卷分派同一条「指针在哪就管哪」的规矩。别的页照旧滚主列当前那一页。
+        if self.tab == Tab::Files
+            && self
+                .files_page
+                .rect
+                .is_some_and(|page| page.contains((column, row).into()))
+        {
+            self.files_wheel(up);
+            return;
+        }
         self.wheel_current(up);
+    }
+
+    /// 文件页滚一格：一个可见行。
+    fn files_wheel(&mut self, up: bool) {
+        let window = self.files_page.rect.map_or(0, |page| page.height as usize);
+        let max_top = self.files_page.rows.len().saturating_sub(window);
+        self.files_page.scroll = if up {
+            self.files_page.scroll.saturating_sub(1)
+        } else {
+            (self.files_page.scroll + 1).min(max_top)
+        };
+        self.dirty = true;
     }
 
     /// 左键按下：记下起点与它落进的那块**文本区域**，别的什么都不做 —— 那一次点击属于抬起。
@@ -2705,8 +2756,20 @@ impl TuiState {
             self.question_click(QuestionClick::At(column, row));
             return;
         }
+        // 点左栏任意处把键盘交给这一页 —— 页签条与页区都算，而这一下同时仍然是它本来
+        // 那件事（切页、展开、开弹窗）（`.scratch/files-page/spec.md` §5）。
+        self.take_sidebar_keyboard(column, row);
         match self.regions.action_at(column, row) {
-            Some(HitAction::SwitchTab(tab)) => self.tab = tab,
+            Some(HitAction::SwitchTab(tab)) => {
+                self.tab = tab;
+                // 点页签条也是一次「点左栏」：切到文件页时键盘跟着交给它，并先给第一行焦点，
+                // 于是 `↓` 立刻走得动（`.scratch/files-page/spec.md` §5）。切到另外两页则把
+                // 键盘还回去 —— 它们没有能用方向键走的东西。
+                self.sidebar_keyboard = tab == Tab::Files;
+                if tab == Tab::Files && self.files_page.focus.is_none() {
+                    self.files_page.focus = Some(0);
+                }
+            }
             Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
             Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
             _ if self.indicator_hit(Viewport::Trace, column, row) => self.trace.to_bottom(),
@@ -2714,6 +2777,11 @@ impl TuiState {
                 self.conversation.to_bottom()
             }
             _ => {
+                // 文件页上的点击先于转录：左栏页区里的一行是这一页自己的东西
+                // （`.scratch/files-page/spec.md` §4）。
+                if self.files_click(column, row) {
+                    return;
+                }
                 // 指针落在轨迹页上吗？`trace_rect` 只在上一帧真的画了轨迹页时才有值，所以
                 // 「记住读的人真看到了什么」这条纪律也管着视口的选择
                 // （`.scratch/trace-in-main/spec.md` §4）。
@@ -2729,10 +2797,257 @@ impl TuiState {
                 }
                 let panes = layout::plan(self.area, 1, self.sidebar_wanted);
                 if let Some(detail) = self.trace_link_at(row) {
-                    self.open_detail(detail, panes.detail_width() as usize);
+                    // 打开方先算好：`open_detail` 借 `&mut self`。
+                    let opener = DetailOpener::Trace {
+                        top: self.trace.top(),
+                        follow: self.trace.following(),
+                    };
+                    self.open_detail(detail, panes.detail_text_width() as usize, opener);
                 }
             }
         }
+    }
+
+    /// 一次点击落在文件页上吗：落在哪一行就动那一行 —— 目录展开或收起，
+    /// 而文件行的一次点击由内容弹窗那一张票接上（`.scratch/files-page/spec.md` §4）。
+    ///
+    /// 回答 `true` 表示这一下归这一页，调用方因此不再按转录那一套分派。落在页区之外、
+    /// 或者这一帧根本没画文件页时回答 `false`。
+    fn files_click(&mut self, column: u16, row: u16) -> bool {
+        if self.tab != Tab::Files || !self.files_page_contains(column, row) {
+            return false;
+        }
+        let Some(index) = self.files_index_at(row) else {
+            return false;
+        };
+        self.files_page.focus = Some(index);
+        match (self.files_dir_at(index), self.file_path_at(index)) {
+            (Some(dir), _) => self.toggle_directory(&dir),
+            // 文件行：点一下打开内容弹窗（`.scratch/files-page/spec.md` §4）。
+            (None, Some(path)) => self.open_file_detail(&path),
+            (None, None) => {}
+        }
+        true
+    }
+
+    /// 这一格是不是落在文件页的页区里。
+    fn files_page_contains(&self, column: u16, row: u16) -> bool {
+        self.files_page
+            .rect
+            .is_some_and(|page| page.contains((column, row).into()))
+    }
+
+    /// 屏幕行 `row` 对应的可见行下标；落在页区之外或超出那一份可见行时是 `None`。
+    ///
+    /// `files_rows` 是上一帧画出来的那一份，而它从滚动位置起 —— 与「只有真画出来的行才回应
+    /// 指针」是同一条纪律。
+    fn files_index_at(&self, row: u16) -> Option<usize> {
+        let page = self.files_page.rect?;
+        if row < page.y {
+            return None;
+        }
+        let index = self.files_page.scroll + (row - page.y) as usize;
+        (index < self.files_page.rows.len()).then_some(index)
+    }
+
+    /// 那一行是个目录时它的路径（索引里的拼法，带尾斜杠）。
+    fn files_dir_at(&self, index: usize) -> Option<String> {
+        let row = self.files_page.rows.get(index)?;
+        row.dir.then(|| row.path.clone())
+    }
+
+    /// 那一行的路径（索引里的拼法）。
+    fn file_path_at(&self, index: usize) -> Option<String> {
+        self.files_page.rows.get(index).map(|row| row.path.clone())
+    }
+
+    /// 把一个工作区文件的内容打开在详情覆盖层里
+    /// （`.scratch/files-page/spec.md` §6）。
+    ///
+    /// 正文在**这里**、在打开的那一刻读盘，并按正文文本区宽排版 —— 与轨迹页的详情同一个形状。
+    /// 打开方记成 [`DetailOrigin::Files`]：覆盖层立着时文件页既不冻也不还原，所以关掉它之后
+    /// 这一页停在原处。
+    ///
+    /// 这个弹窗不进事件流、不进模型上下文：渲染器不 emit 任何东西，权限门约束的也不是人在
+    /// 自己的终端里点开自己的文件。
+    fn open_file_detail(&mut self, path: &str) {
+        if path.is_empty() {
+            return;
+        }
+        let body = files::read(&self.cwd, path);
+        let detail = Detail {
+            title: path.to_owned(),
+            // 文件不是谁说的话：标题用正文档那一档，与树里那一行同一个颜色。
+            color: palette::PLAIN,
+            kind: DetailKind::File { body },
+        };
+        let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
+        self.open_detail(detail, width, DetailOpener::Files);
+    }
+
+    /// 焦点所在的那一行。
+    fn focused_file_row(&self) -> Option<files::Row> {
+        if self.tab != Tab::Files {
+            return None;
+        }
+        self.files_page.rows.get(self.files_page.focus?).cloned()
+    }
+
+    /// 点左栏的**文件页**：键盘交给这一页，焦点行落在点的那一行上。
+    ///
+    /// 只认得**真画出来**的那两块矩形（页签条与页区），与指针分派同一条纪律；也只认文件页
+    /// —— 另外两页没有能用方向键走的东西，键盘扣在它们上面只会让输入区静默失灵。落在页签条
+    /// 上时焦点行没有对应的树行，就保持原样；还没有焦点时先给第一行，于是 `↓` 立刻走得动。
+    fn take_sidebar_keyboard(&mut self, column: u16, row: u16) {
+        if self.tab != Tab::Files {
+            return;
+        }
+        let point = (column, row).into();
+        let in_page = self
+            .files_page
+            .rect
+            .is_some_and(|page| page.contains(point));
+        let in_tabs = self.tabs_rect.is_some_and(|tabs| tabs.contains(point));
+        if !in_page && !in_tabs {
+            return;
+        }
+        self.sidebar_keyboard = true;
+        if in_page {
+            if let Some(index) = self.files_index_at(row) {
+                self.files_page.focus = Some(index);
+                return;
+            }
+        }
+        if self.files_page.focus.is_none() && !self.files_page.rows.is_empty() {
+            self.files_page.focus = Some(0);
+        }
+    }
+
+    /// 把键盘还给输入区。切页签与收起左栏都走它 —— 那一页没有键盘语义，而收起来的那一栏更
+    /// 不该扣着键盘（与「没地方画覆盖层就关掉它」同一条纪律）。
+    fn release_sidebar_keyboard(&mut self) {
+        self.sidebar_keyboard = false;
+    }
+
+    /// 键盘在左栏时的一个按键：归这一页回答 `true`。
+    ///
+    /// 认的只有走树的那几个键；别的键照旧落到它们本来去的地方 —— 点一下左栏不该把打字的手感
+    /// 弄丢。`Esc` 与 `Enter` 明确是「把键盘还回去」
+    /// （`.scratch/files-page/spec.md` §5）。
+    fn sidebar_key(&mut self, key: Key) -> bool {
+        match key {
+            // 一次手势一层：这一下只把键盘还回去。要取消回合，等键盘回去之后再按一下 ——
+            // 那一下仍按既有的忙碌 / 空闲分叉走。
+            Key::Esc => self.sidebar_keyboard = false,
+            Key::Up => self.files_move_focus(-1),
+            Key::Down => self.files_move_focus(1),
+            Key::Left => self.files_collapse_focus(),
+            Key::Right => self.files_open_focus(),
+            Key::Enter => self.files_insert_focus(),
+            // 打字不落进草稿：键盘确实在左栏。控制键（`Ctrl-*`）、`Tab` / `Shift+Tab` 与
+            // 翻页键照常穿透 —— 退出、挂起、左栏开关、模式循环、翻页都不该因为点了一下左栏
+            // 而失灵（`.scratch/files-page/spec.md` §5）。
+            Key::Char(_) => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// `↑` / `↓`：焦点行挪一格，两端不越界；它挪出窗口时视口跟着走。
+    fn files_move_focus(&mut self, delta: isize) {
+        if self.tab != Tab::Files || self.files_page.rows.is_empty() {
+            return;
+        }
+        let last = self.files_page.rows.len() - 1;
+        let at = match self.files_page.focus {
+            Some(at) => (at as isize + delta).clamp(0, last as isize) as usize,
+            None if delta > 0 => 0,
+            None => last,
+        };
+        self.files_page.focus = Some(at);
+        self.files_scroll_to_focus();
+        self.dirty = true;
+    }
+
+    /// 焦点行滚进窗口里：键盘走到窗口之外时，视口跟着它走。
+    fn files_scroll_to_focus(&mut self) {
+        let window = self.files_page.rect.map_or(0, |page| page.height as usize);
+        let Some(at) = self.files_page.focus else {
+            return;
+        };
+        if window == 0 {
+            return;
+        }
+        if at < self.files_page.scroll {
+            self.files_page.scroll = at;
+        } else if at >= self.files_page.scroll + window {
+            self.files_page.scroll = at + 1 - window;
+        }
+    }
+
+    /// `→`：目录摊开，文件打开内容弹窗（`.scratch/files-page/spec.md` §5）。
+    fn files_open_focus(&mut self) {
+        let Some(row) = self.focused_file_row() else {
+            return;
+        };
+        if row.dir {
+            if !row.expanded {
+                self.toggle_directory(&row.path);
+            }
+        } else {
+            self.open_file_detail(&row.path);
+        }
+    }
+
+    /// `←`：目录收起。
+    fn files_collapse_focus(&mut self) {
+        let Some(row) = self.focused_file_row() else {
+            return;
+        };
+        if row.dir && row.expanded {
+            self.toggle_directory(&row.path);
+        }
+    }
+
+    /// `Enter`：把焦点行的路径作为 `@路径` 插进草稿，然后把键盘还给输入区 ——
+    /// 插完接着就要打字（`.scratch/files-page/spec.md` §5）。
+    fn files_insert_focus(&mut self) {
+        let Some(row) = self.focused_file_row() else {
+            return;
+        };
+        // 记号以空白结束：草稿里已经有别的内容时先隔一个空格，否则两个记号会粘成一个。
+        let lead = match self.editor.text().chars().last() {
+            None => "",
+            Some(ch) if ch.is_whitespace() => "",
+            Some(_) => " ",
+        };
+        self.editor.insert_str(&format!("{lead}@{}", row.path));
+        self.sync_tokens();
+        self.sidebar_keyboard = false;
+        self.dirty = true;
+    }
+
+    /// 目录的展开与收起：同一个目录再点一下（或再按一下 `←` / `→`）就是收起。
+    ///
+    /// 收起会连带藏起它下面那些行，所以可见行**立刻**重算一次：焦点行与滚动位置不能指着
+    /// 一份已经不存在的清单（下一帧还会再算一遍，两处用的是同一个纯函数）。
+    fn toggle_directory(&mut self, path: &str) {
+        if !self.files_page.expanded.remove(path) {
+            self.files_page.expanded.insert(path.to_owned());
+        }
+        self.refresh_files_rows();
+        self.dirty = true;
+    }
+
+    /// 按当前的索引与展开状态重算可见行，并把焦点与滚动位置收回范围内。
+    fn refresh_files_rows(&mut self) {
+        self.files_page.rows = files_tree(self).unwrap_or_default();
+        let last = self.files_page.rows.len().saturating_sub(1);
+        if let Some(at) = self.files_page.focus {
+            self.files_page.focus = Some(at.min(last));
+        }
+        self.files_page.scroll = self.files_page.scroll.min(last);
+        self.files_scroll_to_focus();
     }
 
     /// 问题占着指针时，对一次点击或滚轮一格作出反应。
@@ -3166,11 +3481,20 @@ impl TuiState {
             }
             return;
         }
+        // 键盘在左栏时，走树的那几个键归文件页（`.scratch/files-page/spec.md` §5）。它排在
+        // 详情覆盖层之后 —— 覆盖层立着时它上面的左栏读不到键盘，`Esc` 先关覆盖层、再还键盘。
+        if self.sidebar_keyboard && self.sidebar_key(key) {
+            return;
+        }
         // 左栏开关（`.scratch/sidebar-toggle/spec.md` §3）：排在两个「独占键盘的视图」之后
         // —— 详情覆盖层与历史重放各自拦得住它 —— 而在清举手之前：它是纯视图手势，不该让
         // 半分钟前那一下退出举手作废；问卷 / `/` 菜单立着时也照常生效。
         if key == Key::CtrlO {
             self.sidebar_wanted = !self.sidebar_wanted;
+            // 收起来的那一栏不该扣着键盘：下一次打字要落进输入区。
+            if !self.sidebar_wanted {
+                self.release_sidebar_keyboard();
+            }
             return;
         }
         // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-C` 与
@@ -3376,6 +3700,16 @@ impl TuiState {
     /// 它变。
     pub fn files_loaded(&mut self, paths: Vec<std::path::PathBuf>) {
         self.files.loaded(paths);
+        // 一次重扫之后，不在索引里的路径**直接丢掉**：留在展开集合里的每一个目录都还在索引
+        // 里，于是它下次回到工作区时是收起的，而不是带着上一次的展开状态复活
+        // （`.scratch/files-page/spec.md` §1）。
+        if let Some(paths) = self.files.paths() {
+            let known: std::collections::HashSet<String> = paths
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            self.files_page.expanded.retain(|path| known.contains(path));
+        }
         self.sync_tokens();
         self.dirty = true;
     }
@@ -4032,6 +4366,9 @@ fn draw_divide(frame: &mut ratatui::Frame, panes: &layout::Regions, area: Rect) 
 /// 左栏在哪、它的各部件多高，是排版的事，绝不在这里重写一遍尺寸判断。
 fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let (Some(sidebar), Some(tabs)) = (panes.sidebar, panes.tabs) else {
+        // 整栏没画出来：那两块命中矩形也跟着失效，否则一次点击会落到一条不在屏幕上的栏上。
+        state.tabs_rect = None;
+        state.files_page.rect = None;
         return;
     };
     draw_sidebar_identity(frame, panes, sidebar);
@@ -4096,15 +4433,116 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     let rows = match state.tab {
         Tab::Usage => state.panel.lines(&state.facts, page),
         Tab::Todo => state.todo.lines(page),
-        Tab::Files => vec![Line::from(Span::styled(
-            truncate_columns(wording::tab_placeholder(), page.width as usize),
-            Style::default().fg(palette::MUTED),
-        ))],
+        // 文件页自己画：它要多记一份「哪些行画在哪」（点击与键盘要用），
+        // 而另外两页画的是纯读数。
+        Tab::Files => {
+            draw_files_page(frame, page, state);
+            return;
+        }
     };
+    state.files_page.rect = None;
     // 左栏这一块也进屏幕文本层：三页的画法各不相同，但都是「一页已经排好的行」，没有软折
     // 可言（`.scratch/tui-feedback/spec.md` §5）。
     note_rows(state, page, &rows, &[]);
     frame.render_widget(Paragraph::new(rows), page);
+}
+
+/// 文件页：一棵从会话级索引排出来的工作区文件树
+/// （`.scratch/files-page/spec.md` §1、§3）。
+///
+/// 这一页**不给色**：目录与文件只靠结构区分 —— 缩进、折叠字形、尾斜杠 —— 所以每一行都是
+/// 正文档那一个默认样式。索引还没就绪与工作区真的是空的各说各的，都不画一块空白。
+fn draw_files_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
+    state.files_page.rect = Some(page);
+    let Some(tree) = files_tree(state) else {
+        return draw_sidebar_note(frame, page, wording::files_loading(), state);
+    };
+    if tree.is_empty() {
+        return draw_sidebar_note(frame, page, wording::files_empty(), state);
+    }
+    let window = page.height as usize;
+    let top = state
+        .files_page
+        .scroll
+        .min(tree.len().saturating_sub(window));
+    state.files_page.scroll = top;
+    let lines: Vec<Line<'static>> = tree
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(window)
+        .map(|(index, row)| {
+            files_line(
+                row,
+                page.width as usize,
+                state.files_page.focus == Some(index),
+            )
+        })
+        .collect();
+    // 记的是**全部**可见行，不只是窗口里那几行：一次点击是拿屏幕行换成行下标，
+    // 而键盘（下一张票）还要能在窗口之外走动。
+    state.files_page.rows = tree;
+    note_rows(state, page, &lines, &[]);
+    frame.render_widget(Paragraph::new(lines), page);
+}
+
+/// 这一帧的树；索引还没就绪（或一次遍历正在飞）时是 `None`。
+///
+/// 展开状态活在 `TuiState` 里，而 `files::rows` 拿它当输入 —— 于是「哪些行看得见」是一次
+/// 纯计算，没有第二份状态要同步。
+fn files_tree(state: &TuiState) -> Option<Vec<files::Row>> {
+    let paths = state.files.paths()?;
+    Some(files::rows(paths, &state.files_page.expanded))
+}
+
+/// 树的一行：缩进、折叠字形（只有目录有）、名字（目录带尾斜杠）。
+///
+/// 名字超宽时截断 —— 28 列的窄档是这一页最容易读不下去的地方。
+fn files_line(row: &files::Row, width: usize, focused: bool) -> Line<'static> {
+    let glyph = if row.dir {
+        let mark = if row.expanded {
+            wording::UNFOLDED
+        } else {
+            wording::FOLDABLE
+        };
+        format!("{mark} ")
+    } else {
+        String::new()
+    };
+    let slash = if row.dir { "/" } else { "" };
+    let text = format!(
+        "{}{glyph}{}{slash}",
+        wording::INDENT.repeat(row.depth),
+        row.name
+    );
+    // 「过程退后、内容保持、信号着色」：目录与文件之间只靠结构区分，而**焦点行**是信号
+    // —— 它用常驻选中那一档（`ACCENT` + `BOLD`），与页签条的选中同一个档
+    // （`.scratch/files-page/spec.md` §3）。
+    let style = if focused {
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette::PLAIN)
+    };
+    // 放不下就用一个 `…` 收尾（而不是悄悄少几个字）：28 列的窄档里，读的人要知道这一行
+    // 还有下文。
+    if text_columns(&text) > width {
+        return ellipsize_line(Line::from(Span::styled(text, style)), width);
+    }
+    Line::from(Span::styled(text, style))
+}
+
+/// 一页只有一句话时的那一行：静音、截到页宽。文件页的两个空态走它 ——
+/// 「在等数据」与「读完了，就是空的」是两句话，但形状是同一种。
+fn draw_sidebar_note(frame: &mut ratatui::Frame, page: Rect, note: &str, state: &mut TuiState) {
+    state.files_page.rows.clear();
+    let line = Line::from(Span::styled(
+        truncate_columns(note, page.width as usize),
+        Style::default().fg(palette::MUTED),
+    ));
+    note_rows(state, page, std::slice::from_ref(&line), &[]);
+    frame.render_widget(Paragraph::new(line), page);
 }
 
 /// 左栏的页签条：两条分隔线、标签夹在中间（spec §3，
@@ -4120,6 +4558,9 @@ fn draw_tab_bar(
     sidebar: Rect,
     tabs: Rect,
 ) {
+    // 页签条也是一处「点左栏」的落点（`.scratch/files-page/spec.md` §5），所以它画在哪要
+    // 记下来 —— 与页区同一套「只认真画出来的东西」的规矩。
+    state.tabs_rect = Some(tabs);
     for y in [tabs.y - 1, tabs.y + 1] {
         paint_rule(
             frame,
@@ -4272,15 +4713,39 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
     frame.render_widget(Paragraph::new(line), panes.status);
 }
 
+/// 文件页那一页自己的状态。
+///
+/// 与 [`Panel`]、[`TodoPanel`] 同一族，也与 [`DetailView`] 共用同一条纪律：状态由画它的那一处
+/// 顺手记下（「记住读的人真看到了什么」），只有真画出来的行才回应指针与键盘。
+#[derive(Default)]
+struct FilesPage {
+    /// 展开着的目录，装的是索引里的拼法（目录带尾斜杠）。
+    ///
+    /// 一次重扫之后不在索引里的路径直接丢掉 —— 展开一个已经不存在的目录没有意义
+    /// （`.scratch/files-page/spec.md` §1）。
+    expanded: std::collections::HashSet<String>,
+    /// 滚到第几个可见行。
+    scroll: usize,
+    /// 上一帧的那些**可见行**（不只是窗口里那几行 —— 键盘要能在窗口之外移焦点）。
+    rows: Vec<files::Row>,
+    /// 上一帧页区画在哪；没画文件页时是 `None`。一次点击、一格滚轮按它判定落没落在这
+    /// 一页上（与 [`TuiState::detail_rect`] 同一条规矩）。
+    rect: Option<Rect>,
+    /// 焦点行：它在 [`FilesPage::rows`] 里的下标。`None` 表示还没有一行拿过焦点。
+    ///
+    /// `Enter` 会插的就是这一行，所以它要看得见 —— 画成常驻选中那一个档
+    /// （`ACCENT` + `BOLD`）。
+    focus: Option<usize>,
+}
+
 /// 正在显示左栏的哪一页（spec §3）。
 ///
-/// 点出来的，从不给键位：`Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环，而这个仓库不启用
-/// keyboard-enhancement 协议。还没做出来的页面显示 [`wording::tab_placeholder`]，而不是编
-/// 出来的数据。
+/// 点出来的，从不给键位：`Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环。
 ///
-/// 接受它的代价是：在占位页上，会话的读数根本不在屏幕上，于是状态行的 `上下文 n%` 是唯一
-/// 剩下的那个。这不是 bug —— 没有第二份数字可以退回 —— 而另一条路（用键盘走页签）在这里
-/// 本来也不通。
+/// 三页各有各的内容（读数、`todo` 列表、工作区那棵树），所以在一页上时会话的读数不在屏幕上
+/// —— 那时状态行的 `上下文 n%` 是唯一剩下的那个。这不是 bug：没有第二份数字可以退回，而另
+/// 一条路（用键盘走页签）在这里本来也不通。键位只有**文件页**那一套（[`TuiState::sidebar_key`]），
+/// 它不切页。
 ///
 /// `轨迹` 曾经是这一列上的第三页；2026-10-06 起它搬进了主列，成了 [`MainTab`] 的第二个标签
 /// （`.scratch/trace-in-main/spec.md` §2）。
@@ -4291,7 +4756,9 @@ enum Tab {
     /// agent 的待办列表，也是唯一不总在条上的页签：主会话第一次提交一次列表时它出现，此后
     /// 整个会话都在（`.scratch/todo-and-modes/spec.md` §4）。
     Todo,
-    /// 这个会话碰过的文件。还没做。
+    /// 工作区里的文件与目录：一棵从会话级索引排出来的树
+    /// （`.scratch/files-page/spec.md` §1、§3）。它回答的是「工作区长什么样」，
+    /// **不是**「这个会话碰过哪些文件」—— 后者归 `sessions show --files`。
     Files,
 }
 
@@ -5671,6 +6138,8 @@ fn event_at(event: &RenderEvent) -> DateTime<Utc> {
         RenderEvent::Logged(event) => event.at,
         RenderEvent::Diagnostic { at, .. } | RenderEvent::Notice { at, .. } => *at,
         RenderEvent::Delta { .. } => Utc::now(),
+        // 它到不了这里：`apply` 在那之前就把它接走了。给一个当下的时刻只是为了 match 完整。
+        RenderEvent::WorkspaceChanged => Utc::now(),
     }
 }
 
@@ -6049,6 +6518,9 @@ enum DetailKind {
     /// 一条消息的全文 —— 轨迹视图里那行只画首行 + `…`，正文住在这里
     /// （`.scratch/trace-tab/spec.md` §3）。
     Message { text: String },
+    /// 工作区里的一个文件的内容（`.scratch/files-page/spec.md` §6）。正文在**打开那一刻**
+    /// 由渲染器直接读盘，带着它自己的有界截断 —— 这个弹窗不进事件流、不进模型上下文。
+    File { body: files::FileBody },
     /// 一次工具调用：它的参数，以及这次调用产出了什么。
     Tool {
         /// 给落盘输出文件命名的那个 id，`outputs/<id>.txt`。
@@ -6060,16 +6532,23 @@ enum DetailKind {
     },
 }
 
-/// 详情覆盖层打开前，那个视图的滚动状态。
+/// 打开详情覆盖层的那个视图，以及它打开前的滚动状态；关掉时还原给**它**
+/// （`.scratch/files-page/spec.md` §5、§6）。
 ///
-/// 它住在覆盖层**旁边**，不是覆盖层自己那份位置里：覆盖层那份数的是它自己的正文行，而这
-/// 一份要还原的是打开它的那个视图（`.scratch/trace-tab/spec.md` §5）。
+/// 打开方决定覆盖层立着时**谁冻在原处**，以及关掉时把什么还原回去 —— 那件事过去写死是轨迹页，
+/// 因为它是唯一的打开方（票 05）。只有轨迹页需要冻住与还原：文件页在覆盖层下面的位置由它自己
+/// 那份滚动与展开状态拿着，关掉一个弹窗不该动它。
 #[derive(Debug, Clone, Copy)]
-struct ScrollMark {
-    /// 打开时轨迹页视口顶端所在的显示行。
-    top: usize,
-    /// 打开时它跟不跟底。
-    follow: bool,
+enum DetailOpener {
+    /// 轨迹页打开：记下它当时在哪儿（视口顶端那一个显示行与它跟不跟底），关掉时还原。
+    Trace {
+        /// 打开时轨迹页视口顶端所在的显示行。
+        top: usize,
+        /// 打开时它跟不跟底。
+        follow: bool,
+    },
+    /// 文件页打开：不冻也不还原任何视图。
+    Files,
 }
 
 /// 详情覆盖层的打开状态（票 02 §4）。
@@ -6129,12 +6608,6 @@ fn folded_text(text: &str, width: usize) -> Vec<DetailLine> {
         .collect()
 }
 
-/// 详情覆盖层在边框与文字之间留的那一列空气。
-const DETAIL_PADDING: u16 = 1;
-
-/// 覆盖层自己的文字在有内边距之前需要的行数：一行标题、两行主体，加上页脚。
-const DETAIL_MIN_TEXT_ROWS: u16 = 4;
-
 /// 一个详情主体会从落盘的工具输出里读的最多字符数。
 ///
 /// 一条工具结果在进事件流之前就被截过，但落盘的那个文件没有：这是读的人自己的上限，超过它
@@ -6144,14 +6617,14 @@ const DETAIL_MAX_CHARS: usize = 200_000;
 impl TuiState {
     /// 为读的人点的那一行打开详情覆盖层。
     ///
-    /// 主体在这里、在打开的那一刻读，并按覆盖层将被画出来的宽度排版，于是此后滚动是纯算术。
-    fn open_detail(&mut self, detail: Detail, width: usize) {
-        // 记下打开时轨迹页在哪儿：关掉时状态还原给**它**（票 13）。今天只有轨迹页会打开详情
-        // —— 对话页画的是全文，它的行不是入口（`.scratch/tui-feedback/spec.md` §9）。
-        self.detail_opener = Some(ScrollMark {
-            top: self.trace.top(),
-            follow: self.trace.following(),
-        });
+    /// 主体在这里、在打开的那一刻读，并按**正文文本区**将被画出来的宽度排版（框宽减掉边框
+    /// 与内边距），于是此后滚动是纯算术，而正文不会被框边裁掉一截
+    /// （`.scratch/files-page/spec.md` §6）。
+    ///
+    /// 打开方一起记下来：覆盖层立着时**只冻打开它的那一页**，关掉时也只还原它
+    /// （票 05）。轨迹页那条路径的行为与改动前逐字相同。
+    fn open_detail(&mut self, detail: Detail, width: usize, opener: DetailOpener) {
+        self.detail_opener = Some(opener);
         let body = detail_body(&detail, &self.facts.session_dir, width);
         self.detail = Some(DetailView {
             detail,
@@ -6167,11 +6640,14 @@ impl TuiState {
     /// 的冻结，会把一个已经往上滚的读的人拽回底部（票 02 §4）。
     fn close_detail(&mut self) {
         if self.detail.take().is_some() {
-            // 还原给轨迹页，对话页完全不动（票 13）。打开前贴底时 `follow` 为真，还原就等于
-            // 回到底部 —— 与改动前逐字相同。
-            if let Some(mark) = self.detail_opener.take() {
-                self.trace.set_holding(false);
-                self.trace.restore(mark.top, mark.follow);
+            // 还原给**打开它的那一页**：轨迹页回到底部或原处，文件页什么都不动
+            // （票 13、`.scratch/files-page/spec.md` §5）。
+            match self.detail_opener.take() {
+                Some(DetailOpener::Trace { top, follow }) => {
+                    self.trace.set_holding(false);
+                    self.trace.restore(top, follow);
+                }
+                Some(DetailOpener::Files) | None => {}
             }
         }
     }
@@ -6228,6 +6704,34 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<DetailLi
                 )))),
             }
         }
+        DetailKind::File { body } => {
+            // 路径本身就是标题，正文里不再重复一个小节标题。
+            match body {
+                files::FileBody::Text { text, truncated } => {
+                    rows.extend(file_body_lines(&detail.title, text, width));
+                    if *truncated {
+                        rows.push(DetailLine::plain(Line::from(Span::styled(
+                            wording::detail_truncated(),
+                            Style::default().fg(palette::MUTED),
+                        ))));
+                    }
+                }
+                files::FileBody::Binary => rows.push(DetailLine::plain(Line::from(Span::styled(
+                    wording::file_binary(),
+                    Style::default().fg(palette::MUTED),
+                )))),
+                files::FileBody::Unreadable => {
+                    rows.push(DetailLine::plain(Line::from(Span::styled(
+                        wording::file_unreadable(),
+                        Style::default().fg(palette::MUTED),
+                    ))))
+                }
+                files::FileBody::NotText => rows.push(DetailLine::plain(Line::from(Span::styled(
+                    wording::file_not_text(),
+                    Style::default().fg(palette::MUTED),
+                )))),
+            }
+        }
         DetailKind::Context { source, content } => {
             rows.push(DetailLine::plain(section_header(&wording::context_source(
                 source,
@@ -6274,6 +6778,54 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<DetailLi
         }
     }
     rows
+}
+
+/// 一个文件正文的那些行：语法高亮（按路径扩展名认语言）加上每个逻辑行前面的行号
+/// （`.scratch/files-page/spec.md` §6）。
+///
+/// 语言那一层与 markdown 代码块**同一个源**：认出的语言交给 `highlight_code`，它吐逐行的
+/// 样式 span；认不出（或那一层没有这份文法）时正文退纯文本，但**不消失**。
+///
+/// 行号插在折行**之前** —— 折出来的续行因此自然不带行号，这是那份 spec 选中的形状。行号
+/// 那一列从折行预算里扣掉，所以它不会把正文挤出文本区，窄档也一样。
+fn file_body_lines(path: &str, text: &str, width: usize) -> Vec<DetailLine> {
+    let highlighted =
+        files::language_for(path).and_then(|language| highlight::highlight_code(language, text));
+    let logical: Vec<Vec<Span<'static>>> = match highlighted {
+        Some(rows) => rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|span| Span::styled(span.text, span.class.style()))
+                    .collect()
+            })
+            .collect(),
+        None => text
+            .split('\n')
+            .map(|line| vec![Span::raw(line.to_owned())])
+            .collect(),
+    };
+    let digits = logical.len().to_string().len();
+    let budget = width.saturating_sub(digits + 1).max(1);
+    logical
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, row)| {
+            let mut spans = vec![Span::styled(
+                format!("{:>digits$} ", index + 1),
+                Style::default().fg(palette::MUTED),
+            )];
+            spans.extend(row);
+            pane::wrap_line(&Line::from(spans), budget)
+                .into_iter()
+                .enumerate()
+                .map(|(folded, line)| DetailLine {
+                    line,
+                    folded: folded > 0,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// 一个小节标题，画成一道分隔线：文字嵌在一串 `─` 里。
@@ -6338,8 +6890,9 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     };
     // 打开它的那一页冻在原处：读的人正在看一行，一波输出不许把它拽走 —— 也不许让
     // 「N 行新内容」的计数在他们正读的覆盖层底下往上爬（票 02 §4）。**只冻打开方**：对话页
-    // 继续跟着新内容（票 13）。今天打开方恒为轨迹页（`.scratch/tui-feedback/spec.md` §9）。
-    if state.detail_opener.is_some() {
+    // 继续跟着新内容（票 13），文件页由它自己那份滚动与展开状态守着
+    // （`.scratch/files-page/spec.md` §5）。
+    if matches!(state.detail_opener, Some(DetailOpener::Trace { .. })) {
         state.trace.set_following(false);
         state.trace.set_holding(true);
     }
@@ -6352,13 +6905,14 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     // 边框里面一列空气，好让文字不碰外框。它是被**让出来**的，而不是吃掉主体：在低于「主体
     // 两行加标题与页脚」的那个高度时，内边距会藏起读的人正是为了它才打开覆盖层的内容
     // （2026-09-23）。
-    let pad_x = u16::from(inner.width > DETAIL_PADDING * 3);
-    let pad_y = u16::from(inner.height >= DETAIL_PADDING * 2 + DETAIL_MIN_TEXT_ROWS);
+    // 判据与 [`layout::Regions::detail_text_width`] 共用一处 —— 「正文按多宽排版」与「正文画
+    // 在哪儿」必须是同一个答案，两边各写一遍那条不等式正是行号会被算错的由来。
+    let (pad_x, pad_y) = layout::detail_padding(inner);
     let text = Rect::new(
-        inner.x + DETAIL_PADDING * pad_x,
-        inner.y + DETAIL_PADDING * pad_y,
-        inner.width.saturating_sub(DETAIL_PADDING * 2 * pad_x),
-        inner.height.saturating_sub(DETAIL_PADDING * 2 * pad_y),
+        inner.x + pad_x,
+        inner.y + pad_y,
+        inner.width.saturating_sub(pad_x * 2),
+        inner.height.saturating_sub(pad_y * 2),
     );
     // 下面的一切都按**带内边距**的矩形定尺寸：一个比显示它的框高一行的主体窗口，会把末尾几行
     // 裁掉，内边距当初就是这样吃掉了它正在为之腾地方的那份主体的一行。
