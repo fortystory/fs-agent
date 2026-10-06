@@ -44,7 +44,7 @@
 | [`grep-tool/`](grep-tool/spec.md) | spec | `grep` 工具：只读、只扫工作区（`Effect::ReadOnly`，四档全放行），输出 `path:line:文本`；可选的 `glob` 只缩小文件范围、不放宽忽略规则；命中超过 500 条时先收一刀并在末尾如实写清省掉多少，token 溢出仍走统一的截断与指针；实现取自带 ripgrep 拆出的库（`ignore` + `grep-searcher` + `grep-regex`）—— 2026-10-02 由 seed 折成 spec、同日拆出 4 张实现票，**2026-10-03 四张全部落地**，逐面文档是 [`docs/grep.md`](../docs/grep.md) | 4/4 done |
 | [`clear-command/`](clear-command/seed.md) | seed | `/clear` 命令：清上下文继续用 —— **已移交 [`goal-loop`](goal-loop/seed.md)**，意向也改成了「结束当前会话、开一个新的」 | — |
 | [`loop-and-goals/`](loop-and-goals/seed.md) | seed | `/loop` 持续工作与跨轮目标 / 计划 —— **已移交 [`goal-loop`](goal-loop/seed.md)** | — |
-| [`image-input/`](image-input/seed.md) | seed | 把图片交给模型：粘贴 / 路径 / 拖拽进来的图进请求 —— 三种读法（输入侧 / 真图显示 / 只当引用），渲染侧的口子由 `markdown-render` 票 06 留着 | — |
+| [`image-input/`](image-input/seed.md) | seed | 把图片交给模型（输入侧 / 真图显示 / 只当引用）：粘贴 / 路径 / 拖拽；10-06 追加选图弹窗（预览 + 文件树）与直接粘贴图片（自己读剪贴板） | — |
 | [`git-worktree/`](git-worktree/seed.md) | seed | git worktree：会话级或执行者级的隔离工作区（Codex 有 `--worktree` 与 `/worktree`）；会牵动会话桶、权限档与沙箱的「工作区」定义 | — |
 | [`lifecycle-diagram/`](lifecycle-diagram/map.md) | map + spec | **fs-agent 运行时生命周期图**（wayfinder 决策图）：把「进程启动 → 一次 turn → 委派 → 退出」画成 mermaid 放进 [`docs/lifecycle.md`](../docs/lifecycle.md) —— 一张鸟瞰 + 四张分层详图，配「节点/边 → `文件:行号`」证据表与 `scripts/lifecycle-check.py` 弱校验；全 mermaid 是本仓库第一种，留了 [ADR 0011](../docs/adr/0011-diagrams-in-mermaid.md)。 | 5 resolved + 8 done + 1 ready-for-walkthrough |
 | [`tui-mermaid/`](tui-mermaid/seed.md) | seed | TUI 里渲染 mermaid：把模型输出的 mermaid 围栏块画成图（今天只是一行灰色语言名 + 不着色的原文）—— **调研结论：能画、且不用浏览器**（`mermaid-text` 0.57.0 等三个纯 Rust 件），真阻力是本仓库自己的三条线（`to_lines` 纯函数、折行归 `pane::wrap_line`、TUI 单任务同步）与 ADR 门槛；与 `lifecycle-diagram` 选 mermaid 只是恰好同名，它属产品功能 | — |
