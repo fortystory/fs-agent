@@ -1,6 +1,6 @@
 # 全高左栏、回合条与状态行：TUI 外壳改版
 
-Status: ready-for-agent（`issues/01` 的帧已跑完，争议档已定并折回下文；实现票 `02`–`05`）
+Status: 1 resolved + 4 done（`issues/01` 的帧已跑完，争议档已定并折回下文；实现票 `02`–`05` 已落地）
 
 - **来源**：一次 grilling（本文件是那轮问答的折叠）+ 用户手绘的布局草图。**不是** wayfinder 图。
 - **推翻了 `.scratch/tui-layout/spec.md` §2 的四条**：

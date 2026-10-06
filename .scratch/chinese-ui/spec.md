@@ -1,6 +1,6 @@
 # 界面中文化：给人看的文本收进一个措辞层
 
-Status: ready-for-agent
+Status: 8/8 done
 
 - **来源**：一次 `/grill-with-docs` 访谈敲定的 12 条决定，其中「哪些文本可以翻、哪些冻结」的边界已落成 `docs/adr/0001-chinese-ui-frozen-model-text.md`。本 spec 是那次访谈的折叠，不是新决定。
 - **实现票落点**：`.scratch/chinese-ui/issues/NN-*.md`（由 `/to-tickets` 生成）。

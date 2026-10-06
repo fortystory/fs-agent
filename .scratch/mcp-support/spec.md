@@ -1,6 +1,6 @@
 # MCP 接入：四个元工具（工具层 · 服务层 · 连接层）
 
-Status: 9 张实现票 `ready-for-agent`（[`issues/10`](issues/10-mcp-service-and-list.md)–[`18`](issues/18-docs-and-index.md)，
+Status: 9 resolved + 9 done + 1 ready-for-walkthrough（实现票 [`issues/10`](issues/10-mcp-service-and-list.md)–[`19`](issues/19-mcp-catalog-in-context.md)，
 2026-10-03 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 二十条冻结项 + 九张决策票；依赖边见各票抬头）
 
 模型今天只能用内建的那几个工具加 `config.toml` 里静态声明的 `custom__*`。**外部能力进不来**：

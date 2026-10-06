@@ -11,6 +11,10 @@
 - 分诊状态记在每个 issue 文件靠顶部的那一行 `Status:` 里（角色串见 `triage-labels.md`）
 - 实现票的 `Status:` 从 `ready-for-agent` 起步、写完走 `done`；**能自动化的部分都做完、只剩人在真终端里逐项走查**的，走 `ready-for-walkthrough`（2026-10-02 立，与分诊标签里的 `ready-for-human` 不是一回事）。决策票的 `claimed` → `resolved` 是另一套，见下面 wayfinder 一节；这几套收尾状态记在 `CONTEXT.md` 的**票**那一条
 - 评论与对话历史一律追加到文件的底部，放在 `## 评论` 标题之下
+- **`spec.md` / `map.md` 抬头的 `Status:` 跟着票走**：这个 feature 的票全部落地（图则全部走完）
+  之后，把那行改成实际的完成度（`34/34 done`、`9 resolved + 7 done`、`9 done + 1 ready-for-walkthrough`…）。
+  停在 `ready-for-agent` 或「可以交给 `/to-tickets`」会让下一个读的人以为还没开工 —— 2026-10-07
+  收口时一次抓到九份停在旧值
 
 想数一遍票时：`ls .scratch/*/issues/*.md | wc -l`，按状态分组用
 `grep -h '^Status:' .scratch/*/issues/*.md | sort | uniq -c`（`.scratch/README.md` 的 feature

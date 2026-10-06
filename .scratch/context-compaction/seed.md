@@ -17,6 +17,11 @@
 
 ## 现状
 
+> **2026-10-07 补注**：这段「未实现」已经过期 —— 压缩在 [`goal-loop`](../goal-loop/spec.md) 里
+> 做完了（`src/lib.rs` 的 `compact()` 把历史折成摘要、随 `HistorySuperseded` 产出
+> `HistoryReason::Compaction`；过半提醒与翻页见 [`docs/goals.md`](../../docs/goals.md)）。
+> 下面保持当日原样，留作来源记录。
+
 **未实现，但地基和占位都在**：
 
 - `HistoryReason::Compaction` 只是事件里的一个枚举值加中文措辞（`src/events.rs:223`、

@@ -1,6 +1,6 @@
 # 重新打开会话：历史重播与历史详情
 
-Status: ready-for-agent
+Status: 5 resolved + 4 done
 
 - **来源**：`.scratch/tui-history-replay/map.md`（wayfinder 地图，5 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外是 `补记` 记的两处勘误。
 - **实现票落点**：`.scratch/tui-history-replay/issues/NN-*.md`，**编号从 `06` 起**（`01`–`05` 是设计票，不要覆盖）。`/to-tickets` 已切出 **`06`–`09`**：接缝与分帧重播 → 分隔行/面板/模式 → 历史详情 → 验证迁移与文档；`06` 是开工点，`07` 与 `08` 互不阻塞但共用同一个新测试文件（建议串行）。

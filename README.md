@@ -143,7 +143,7 @@ heng discuss --plain "…" 2>/dev/null          # 只要合成产物（讨论过
 heng --help
 ```
 
-会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出。
+会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/goal-new <名字> <来源>…` 从一批票生成目标清单、`/loop <名字>` 选定目标并连续工作、`/clear` 结束当前会话开一个新的、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出（`/exit` 是它的别名）。
 
 TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合（问卷立着时除外 —— 那里的 `Esc` 是「退出这次询问」，取消归 `Ctrl-C`）、**Shift+Tab** 在 `readonly` / `ask` / `workspace` / `auto` 四档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写、区外的写要不要停下来问一次，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
 
@@ -249,7 +249,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`goals`](docs/goals.md) · [`grep`](docs/grep.md) · [`observability`](docs/observability.md) · [`permissions`](docs/permissions.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`sandbox`](docs/sandbox.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) · [`web`](docs/web.md) · [`mcp`](docs/mcp.md) |
 | [`docs/lifecycle.md`](docs/lifecycle.md) | **运行时生命周期**：从敲下命令到进程退出的五张图（一张鸟瞰 + 四张分层详图）与逐节点的 `文件:行号` 证据表，把上面各份逐面说明接起来；护栏是 [`scripts/lifecycle-check.py`](scripts/lifecycle-check.py)（守指称完整性，见它的用法） |
 | [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） · [输入框里的记号是不可分割的一块](docs/adr/0012-input-tokens-are-atomic.md)（`@路径` 与 `/命令` 整块删、整块移） · [文件页那一档可以换成一块外来屏幕（内嵌 nvim）](docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)（`[ui] file_viewer = "nvim"`；三处例外见该 ADR） · [名字从 `fs-agent` 改成衡（`heng`）](docs/adr/0014-renamed-to-heng.md)（汉字是正身、`heng` 是拼音；历史不追改，`Forked Synthesis` 退作机制名） |
-| [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 796KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
+| [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 792KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档往哪写、语言怎么选、提交怎么写）；它的四个细目（issue tracker / triage labels / domain docs / commits）在 [`docs/agents/`](docs/agents/) |
 
@@ -283,7 +283,7 @@ python3 scripts/tui-startup-check.py    # TUI 启动冒烟（需要真终端）
 
 AST / tree-sitter 编辑、unified diff 编辑格式、原生多 provider 协议、向量检索 / RAG、IDE 与 IM 集成、两进程渲染、syntect 的 C 路径、内置编辑器、交互式 transcript 浏览器、裁判 / 仲裁者、N > 2 的讨论者、fork / rewind 手势、shadow git、SQLite、全局会话索引、自动清理、每次编辑自动 git commit、把工具打包进 skill、网络隔离。理由逐条写在 [v1 spec 的 `明确不做`](.scratch/fs-agent-v1/spec.md) 与各 feature 自己的 spec 里。
 
-**`MCP client` 也已经从这里拿出去**：2026-10-03 起它另起了一个 effort（同日落地，见 [`docs/mcp.md`](docs/mcp.md)） —— [`mcp-support`](.scratch/mcp-support/map.md)（wayfinder 决策图，七张决策票），范围是 MCP **现行规范的全集**（tool / resource / prompt / elicitation + MRTR；已 deprecated 的 sampling / roots / logging 不在内）。v1 spec 的三处加了带日期的补记（两处在 `明确不做`、一处在 §14 自定义工具那节），原文不改写 —— 那是当初排除它的理由。
+**`MCP client` 也已经从这里拿出去**：2026-10-03 起它另起了一个 effort（同日落地，见 [`docs/mcp.md`](docs/mcp.md)） —— [`mcp-support`](.scratch/mcp-support/map.md)（wayfinder 决策图，九张决策票），范围是 MCP **现行规范的全集**（tool / resource / prompt / elicitation + MRTR；已 deprecated 的 sampling / roots / logging 不在内）。v1 spec 的三处加了带日期的补记（两处在 `明确不做`、一处在 §14 自定义工具那节），原文不改写 —— 那是当初排除它的理由。
 
 **`compaction` 已经从这里拿出去**：压缩在 [`goal-loop`](.scratch/goal-loop/spec.md) 里做完了——过八成就把历史折成一段摘要、随翻页注入新会话（[`docs/goals.md`](docs/goals.md) 的「过半提醒与翻页」）。仍然不做的是压缩之外的历史管理（fork / rewind、历史编辑）。
 

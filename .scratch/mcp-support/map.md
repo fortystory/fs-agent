@@ -133,7 +133,7 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 - [ ] [提示词模板接进 `/` 菜单](issues/17-prompts-menu.md)
 - [ ] [文档与索引](issues/18-docs-and-index.md)
 
-共 **18** 张票（**9 决策 + 9 实现**），当前 **9 resolved / 9 ready-for-agent**。
+共 **19** 张票（**9 决策 + 10 实现**），当前 **9 resolved / 9 done / 1 ready-for-walkthrough**。
 
 ## 已定的决定
 

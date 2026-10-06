@@ -1,6 +1,6 @@
 # 轨迹视图与对话视图的分工：构建计划
 
-Status: ready-for-agent（决策图 [`map.md`](map.md) **6/6 已走完**，可以交给 `/to-tickets` 拆实现票）
+Status: 6 resolved + 9 done（决策图 [`map.md`](map.md) **6/6 已走完**；实现票已全部落地）
 
 - **来源**：wayfinder 决策图 [`map.md`](map.md)（charting 两轮 grilling 十四问）+ 四张已 resolved 的决策票：[页高撑满之后左栏三页的形态](issues/03-prototype-sidebar-page-height.md)、[轨迹视图在 40/28 列里的排版与密度](issues/01-prototype-trace-page-layout.md)、[两个视图的滚动与跟随语义](issues/04-grilling-scroll-and-follow.md)、[两个 Pane 共享 `painted` 的改造面](issues/05-research-shared-painted-two-panes.md)。产物在 [`prototype/`](prototype/) 与 [`research/`](research/)。
 - **术语**：`转录`（Transcript）仍是「事件流 → 展示单元的**共享层**」；本 effort 新增**轨迹视图（Trace）**（左栏 `轨迹` 页）与**对话视图（Conversation）**（主列那块区域）；`跟随（Follow）` 是一个视图自己的滚动意志。三个词条已进 [`CONTEXT.md`](../../CONTEXT.md)。

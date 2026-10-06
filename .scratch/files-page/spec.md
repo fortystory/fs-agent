@@ -1,6 +1,6 @@
 # 文件页：左栏「文件」页签
 
-Status: ready-for-walkthrough
+Status: 3 resolved + 1 ready-for-human（票 02 的原型）+ 6 ready-for-walkthrough（实现票 05–10 已落地，只差真机走查）
 
 - **来源**：维护者 2026-10-06 的要求 ——「实现一下左边栏的文件标签页」。核实下来它不是照
   spec 填空：`trace-tab/spec.md` 的「明确不做」与 `tui-visual-language` 票 07 的「接受的边界」

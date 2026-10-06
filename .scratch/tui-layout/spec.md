@@ -1,6 +1,6 @@
 # 四分区全屏 TUI：布局、多行输入与信息面板
 
-Status: ready-for-agent
+Status: 9 resolved + 7 done
 
 - **来源**：`.scratch/tui-layout/map.md`（wayfinder 地图，9 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定 —— 唯一例外见 `补记`。
 - **实现票落点**：`.scratch/tui-layout/issues/NN-*.md`，**编号从 `10` 起**（`01`–`09` 是设计票，不要覆盖）。
