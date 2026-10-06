@@ -1125,6 +1125,11 @@ fn a_questionnaire_reads_in_chinese_and_pages() {
     assert_eq!(wording::questionnaire_multi_marker(), "（可多选）");
     assert_eq!(wording::questionnaire_answer_label(), "回答：");
     assert_eq!(wording::questionnaire_custom_label(), "自定义：");
+    // 被削掉的题面自己说一声（`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+    assert_eq!(
+        wording::questionnaire_question_clipped(7),
+        "…（题面还有 7 行未显示）"
+    );
 }
 
 #[test]

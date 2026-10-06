@@ -919,6 +919,15 @@ pub fn questionnaire_skipped() -> &'static str {
     "已跳过"
 }
 
+/// 题面长过底部区时，那一行说明还有多少行没画出来。
+///
+/// 题面是问卷里唯一可以让位的那一块（选项窗口与打答案的行都要留着），所以它被削掉时得自己
+/// 说一声：读者拿一份不完整的题面作答，比少读几行糟得多
+/// （`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+pub fn questionnaire_question_clipped(hidden: usize) -> String {
+    format!("…（题面还有 {hidden} 行未显示）")
+}
+
 /// 问卷页脚里那段键位提示，按**留给它的列数**降级
 /// （`.scratch/questionnaire-keys/spec.md` §6、§11）。
 ///

@@ -5815,6 +5815,71 @@ fn a_single_select_option_is_chosen_by_clicking_its_row() {
 }
 
 #[test]
+fn the_main_tabs_still_answer_clicks_while_a_questionnaire_is_up() {
+    // 问卷占的是**底部输入区**，不是整个指针：主列上方的页签条、转录与左栏照旧归它们本来管的
+    // 人。以前它把每一次点击都吃掉，于是问卷一立起来，「轨迹」就点不动了。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    });
+    // 注入行只住在轨迹页，所以它是「现在这一页是哪一页」的判据。
+    state.apply(injected(1, "注入的正文"));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("[上下文注入"), "对话页不画注入行：{text}");
+
+    open_trace_tab(&mut state, 120, 24);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("[上下文注入"),
+        "点「轨迹」之后它在那儿：{text}"
+    );
+    assert!(text.contains("1. 甲"), "切页不动问卷，它仍在底部：{text}");
+}
+
+#[test]
+fn a_sidebar_tab_click_while_a_questionnaire_is_up_switches_but_keeps_the_keyboard() {
+    // 切页可以，键盘不跟着走：那一页平时会收走键盘（`.scratch/files-page/spec.md` §5），而问
+    // 卷还立着，`j` 仍该是问卷的键（`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+    use fs_agent::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![
+            Choice {
+                label: "甲".to_owned(),
+                description: None,
+            },
+            Choice {
+                label: "乙".to_owned(),
+                description: None,
+            },
+        ],
+    });
+
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_FILES);
+    click(&mut state, column, row);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(wording::files_loading()),
+        "左栏切到文件页了：{text}"
+    );
+
+    state.key(Key::Char('j'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("> ○ 2. 乙"), "键盘还在问卷里：{text}");
+}
+
+#[test]
 fn a_multi_select_option_only_toggles_when_clicked() {
     use fs_agent::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = questionnaire_state(UserQuestion {

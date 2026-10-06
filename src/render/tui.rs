@@ -2757,22 +2757,45 @@ impl TuiState {
             }
             return;
         }
-        if self.pending.is_some() {
+        // 问卷占着的是**底部输入区**，不是整个指针：它只吃自己那块区域里的点击 —— 主列上方的
+        // 页签条、转录与左栏都还在屏幕上，点它们照旧归它们本来管的人。滚轮早就是这条判据
+        // （`wheel_at` 的 `owned`），点击跟上它（`.scratch/questionnaire-keys/spec.md` §7 的
+        // 补记）。
+        //
+        // 而**键盘仍归问卷**：问卷立着时这些点击可以切页、可以滚到底，却不打开详情、也不把键盘
+        // 交给别的视图（`key` 里那条分派要的就是这个）—— 否则一个还没答完的问卷会被一页正文
+        // 压住，或者 `j`/`k` 悄悄落到文件页去，而「全屏唯一的反显就是键盘所在」也随之说谎。
+        let questioning = self.questionnaire().is_some();
+        if questioning {
+            let owned = self
+                .questionnaire_bottom
+                .is_some_and(|rect| rect.contains((column, row).into()));
+            if owned {
+                self.question_click(QuestionClick::At(column, row));
+                return;
+            }
+        } else if self.pending.is_some() {
+            // 中间那三种确认是**覆盖层**，它们占着**指针**：一次落在别处的点击什么都不做 ——
+            // 尤其是，它绝不许关掉一个读的人还没回答的问题（spec §7、§9）。
             self.question_click(QuestionClick::At(column, row));
             return;
         }
         // 点左栏任意处把键盘交给这一页 —— 页签条与页区都算，而这一下同时仍然是它本来
         // 那件事（切页、展开、开弹窗）（`.scratch/files-page/spec.md` §5）。
-        self.take_sidebar_keyboard(column, row);
+        if !questioning {
+            self.take_sidebar_keyboard(column, row);
+        }
         match self.regions.action_at(column, row) {
             Some(HitAction::SwitchTab(tab)) => {
                 self.tab = tab;
                 // 点页签条也是一次「点左栏」：切到文件页时键盘跟着交给它，并先给第一行焦点，
                 // 于是 `↓` 立刻走得动（`.scratch/files-page/spec.md` §5）。切到另外两页则把
                 // 键盘还回去 —— 它们没有能用方向键走的东西。
-                self.sidebar_keyboard = tab == Tab::Files;
-                if tab == Tab::Files && self.files_page.focus.is_none() {
-                    self.files_page.focus = Some(0);
+                if !questioning {
+                    self.sidebar_keyboard = tab == Tab::Files;
+                    if tab == Tab::Files && self.files_page.focus.is_none() {
+                        self.files_page.focus = Some(0);
+                    }
                 }
             }
             Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
@@ -2783,8 +2806,9 @@ impl TuiState {
             }
             _ => {
                 // 文件页上的点击先于转录：左栏页区里的一行是这一页自己的东西
-                // （`.scratch/files-page/spec.md` §4）。
-                if self.files_click(column, row) {
+                // （`.scratch/files-page/spec.md` §4）。问卷立着时它也不接这一下 —— 它会打开
+                // 一个覆盖层，而键盘要留在问卷那里。
+                if !questioning && self.files_click(column, row) {
                     return;
                 }
                 // 指针落在轨迹页上吗？`trace_rect` 只在上一帧真的画了轨迹页时才有值，所以
@@ -2798,6 +2822,11 @@ impl TuiState {
                 // （`.scratch/tui-feedback/spec.md` §9）。行号是**屏幕**行号，拿它去取别处的
                 // 详情会点到同一横行的别的行上。
                 if !over_trace {
+                    return;
+                }
+                // 问卷立着时到此为止：详情覆盖层与问卷不会同时立着（`draw_frame` 的前提），
+                // 而一个还没答完的问卷不该被一页正文压住。
+                if questioning {
                     return;
                 }
                 let panes = layout::plan(self.area, 1, self.sidebar_wanted);
@@ -4026,9 +4055,12 @@ fn questionnaire_lines(
 
 /// 一个问题在 `height` 行内装得下的那些行，滚动选项窗口好让高亮的选项始终可见（spec §7）。
 ///
-/// 表头与问题文本是钉住的：它们说在问什么，把它们滚掉会让选项变得读不懂。打答案的那几行
+/// 表头与问题文本尽量钉住：它们说在问什么，把它们滚掉会让选项变得读不懂。打答案的那几行
 /// 出于同样的理由钉在底部。中间那些选项就是窗口，它跟着高亮走：往下越过裁剪线时，滚出来
 /// 的是尾部，而不是把高亮留在屏幕外。
+///
+/// 三条一起放不下时，**让位的是题面**（[`QUESTION_FLOOR_ROWS`]）：一份二十行的题面不该把
+/// 选项与打答案的那一行挤得一行不剩。题面被削时它自己会用一行说明削掉了多少。
 ///
 /// 窗口的**单位是行、不是选项**：一个折成三行的长选项要整块看得见
 /// （`.scratch/questionnaire-keys/spec.md` §7）。
@@ -4047,33 +4079,51 @@ fn questionnaire_window(
         prefix.len(),
         custom.len(),
     );
-    // 装得下就全画，装不下就开窗 —— 两种形态最后都按 `height` 收口，于是输入区折出来的
-    // 续行既不会被截成一行，也不会画到窗格外面去（`.scratch/questionnaire-keys/spec.md` §7）。
-    let fits = prefix.len() + geometry.total + custom.len() <= height;
-    let mut rows = prefix;
-    if fits {
-        rows.extend(options.into_iter().flatten());
-    } else {
-        rows.extend(
-            options
-                .into_iter()
-                .skip(geometry.start)
-                .flatten()
-                .take(geometry.room),
-        );
-    }
+    // 题面按几何留下的行数收口，然后选项窗口取它那一段，最后是打答案的那几行 —— 三种形态都
+    // 按 `height` 收口，于是输入区折出来的续行既不会被截成一行，也不会画到窗格外面去
+    // （`.scratch/questionnaire-keys/spec.md` §7）。
+    let mut rows = clip_question(prefix, geometry.prefix_rows);
+    rows.extend(
+        options
+            .into_iter()
+            .skip(geometry.start)
+            .flatten()
+            .take(geometry.room),
+    );
     rows.extend(custom);
     rows.truncate(height);
     rows
 }
 
-/// 选项窗口的几何：每个选项占几行、一共几行、留给窗口几行、第一个该画的选项。
+/// 题面留下 `kept` 行；被削掉的那些换成一行说明。
+///
+/// 说明行自己占掉留下的最后一格，所以「还有几行」是剩下没画出来的全部行数 —— 一句话说完，
+/// 而不是让读者自己数一道被切断的句子。只剩一行可留时留的是**题面自己那一行**：那种尺寸下
+/// 一行题目比一行「还有几行没显示」有用。
+fn clip_question(prefix: Vec<Line<'static>>, kept: usize) -> Vec<Line<'static>> {
+    if prefix.len() <= kept {
+        return prefix;
+    }
+    if kept <= 1 {
+        return prefix.into_iter().take(kept).collect();
+    }
+    let mut rows = prefix;
+    let hidden = rows.len() - (kept - 1);
+    rows.truncate(kept - 1);
+    rows.push(Line::from(Span::styled(
+        wording::questionnaire_question_clipped(hidden),
+        Style::default().fg(palette::MUTED),
+    )));
+    rows
+}
+
+/// 选项窗口的几何：题面留下几行、留给窗口几行、第一个该画的选项。
 ///
 /// 画的那一遍与登记点击区域的那一遍各自要一次，所以它只算在这一处 —— 两边不会对「窗口从
 /// 哪儿开始」有分歧（`.scratch/questionnaire-keys/spec.md` §7）。
 struct OptionWindowGeometry {
-    /// 所有选项一共占几行。
-    total: usize,
+    /// 题面（表头与题目正文）留下几行 —— 装得下时就是它的全部行数。
+    prefix_rows: usize,
     /// 留给窗口的行数。
     room: usize,
     /// 第一个该画的选项。
@@ -4084,21 +4134,40 @@ fn option_window_geometry(
     options: &[Vec<Line<'static>>],
     highlight: usize,
     height: usize,
-    prefix_rows: usize,
+    question_rows: usize,
     custom_rows: usize,
 ) -> OptionWindowGeometry {
     let heights: Vec<usize> = options.iter().map(Vec::len).collect();
     let total: usize = heights.iter().sum();
-    // 题面（前缀）与输入区那几行都是**钉住**的：它们先占，剩下的才是选项窗口。输入区自己
-    // 折了几行就占几行（`.scratch/questionnaire-keys/spec.md` §7）。
+    // 三样的优先级是：打答案的那几行 > 选项窗口的地板 > 题面。前面的都是「没有就问不出
+    // 答案」，而题面少读几行仍然答得了 —— 所以一起放不下时先削它
+    // （`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+    let floor = total.min(OPTION_FLOOR_ROWS);
+    let wanted = question_rows + custom_rows + floor;
+    let mut prefix_rows = question_rows;
+    if wanted > height {
+        let give = (wanted - height).min(question_rows.saturating_sub(QUESTION_FLOOR_ROWS));
+        prefix_rows = question_rows - give;
+    }
     let room = height.saturating_sub(prefix_rows + custom_rows);
     let start = if prefix_rows + total + custom_rows <= height {
         0
     } else {
         option_window_start(&heights, highlight, room)
     };
-    OptionWindowGeometry { total, room, start }
+    OptionWindowGeometry {
+        prefix_rows,
+        room,
+        start,
+    }
 }
+
+/// 选项窗口在底部区里至少占的行数：题面再长也要给它留下这几行，否则读者对着一份没有选项的
+/// 问卷，只能看见页脚在教他怎么选（`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+const OPTION_FLOOR_ROWS: usize = 3;
+
+/// 题面被削时至少留下的行数：一行题面也比一行都没有强 —— 至少要知道在问什么。
+const QUESTION_FLOOR_ROWS: usize = 1;
 
 /// 为了让**高亮那一项**完整落在 `room` 行的窗口里，第一个该画的选项。
 ///
@@ -4272,9 +4341,14 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         return;
     }
     // 草稿自己的高度决定输入区占多少位置：它随文字长高、直到排版的上限，然后就地滚动
-    // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）。
+    // （spec §2）。问卷用自己的高度替换掉它，于是输入区长高到装下问题（spec §19）—— 而那条
+    // 上限也是问卷自己的：一份题面与选项要一起放下来的问卷，不该被草稿的十行夹住。
     let content_rows = state.bottom_rows(area);
-    let panes = layout::plan(area, content_rows, state.sidebar_wanted);
+    let panes = if state.questionnaire().is_some() {
+        layout::plan_questionnaire(area, content_rows, state.sidebar_wanted)
+    } else {
+        layout::plan(area, content_rows, state.sidebar_wanted)
+    };
     // 两个视口各自的源行宽度，在排版之后、画任何东西之前定下来：两个视图都画在主列那块
     // 内容区里，所以宽度同源，而且都**常驻** —— 与现在显示哪一页无关，切页才不会漏内容
     // （`.scratch/trace-in-main/spec.md` §3）。
@@ -5426,9 +5500,10 @@ fn draw_questionnaire(
     }
     // 命中的是**选项的屏幕行**：折成几行就记几行，每一行都映射回同一个选项下标
     // （`.scratch/questionnaire-keys/spec.md` §7）。
-    // 输入区那几行钉在底部，选项最多画到它们之前。
+    // 输入区那几行钉在底部，选项最多画到它们之前；题面写下的行数取几何留下的那个 ——
+    // 题面被削时它就在更上面。
     let last_option_row = input_height.saturating_sub(custom.len());
-    let mut row = prefix.len();
+    let mut row = geometry.prefix_rows;
     for (index, lines) in options.iter().enumerate().skip(geometry.start) {
         for _ in lines {
             if row >= last_option_row {

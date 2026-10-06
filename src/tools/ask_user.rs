@@ -133,7 +133,9 @@ impl Tool for AskUserQuestionTool {
                           一句时两个字段都有值（单选下 `selected` 至多一个）。两者都空才是跳过。\
                           \n- 选项有限时给出 `options`，想要自由文本就不给。要推荐某个选项，把它放\
                           在第一个，并让它的 `label` 以 `(推荐)` 结尾；答案里的值就是那个 \
-                          label 原样，标记也一起。"
+                          label 原样，标记也一起。\n- 题面（`question`）宜短，几行以内：它显示在界面\
+                          底部，装不下的部分会被裁掉。长解释放进题目的第一段，或者选项的 \
+                          `description`。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",

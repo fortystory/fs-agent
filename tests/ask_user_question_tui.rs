@@ -1060,3 +1060,98 @@ fn a_question_without_options_starts_in_the_text_input() {
     let answers = answer(&mut rx).expect("作答了").answers;
     assert_eq!(answers[0].custom, Some("zk".to_owned()));
 }
+
+/// 一条真实的 payload：题面二十来行，长过一个底部区（`.scratch/questionnaire-keys/spec.md`
+/// §7 的补记就是照它写的）。
+fn a_long_question() -> UserQuestion {
+    UserQuestion {
+        id: "scan_process".to_owned(),
+        header: Some("重扫跑在哪".to_owned()),
+        question: concat!(
+            "❓ Q18（追）—— 重扫要不要单开一个进程？\n\n",
+            "我核实到的事实：`scan()` 是个同步函数（`FileIndex::scan`，用 `ignore` 的",
+            "`WalkBuilder`），跑在 `tokio::task::spawn_blocking` 里——**它已经在渲染循环之外**，",
+            "单线程池里的一个线程，键盘与绘制从不被它挡住（票 01 的验收就是这条）。遍历是流式",
+            "目录读，几千个文件是几十到几百毫秒级。它不启子进程、不发网络，所以进程隔离能挡的",
+            "那类风险（内存、崩溃、权限）在这里本来就不在。\n\n",
+            "独立进程的**代价**是一整套既有件都要重新想一遍：结果怎么回来（几千条路径走 pipe）、",
+            "进程何时回收、退出与 `--continue` 时怎么收尾、它过不过沙箱、拿哪些环境变量——仓库里 ",
+            "MCP server 那一层就是为这些才那么厚。\n\n",
+            "➡️ 我的推荐：**保持 `spawn_blocking`**。它已经解决了真实需求（不挡渲染循环），",
+            "而进程模型在这个尺度上买不到东西。\n\n",
+            "一个成本要说清：一个**永不返回**的遍历（网络文件系统上某一条 `stat` 挂住）会让 ",
+            "`Loading` 卡住，之后的每一次重扫都被那个守卫吃掉，索引就永远陈旧了——这是这个方案",
+            "的已知弱点，独立进程 + 超时能治它，但那是另一个量级的复杂度。",
+        )
+        .to_owned(),
+        options: vec![
+            fs_agent::questions::Choice {
+                label: "(推荐) 保持现状：`spawn_blocking` 的线程".to_owned(),
+                description: Some(
+                    "沿用票 01 已经落地的形状；渲染循环已经从不被它挡住".to_owned(),
+                ),
+            },
+            fs_agent::questions::Choice {
+                label: "独立进程".to_owned(),
+                description: Some(
+                    "多一层 IPC、进程生命周期与失败处理（沙箱 / 环境白名单那一套也要想），换来能被强杀"
+                        .to_owned(),
+                ),
+            },
+            fs_agent::questions::Choice {
+                label: "独立进程 + 超时杀掉重来".to_owned(),
+                description: Some(
+                    "把「挂住就换一个」也收进来；代价是上面那些复杂度全都要付".to_owned(),
+                ),
+            },
+        ],
+        multi_select: false,
+    }
+}
+
+#[test]
+fn a_long_question_leaves_room_for_its_options() {
+    // 题面是唯一可以让位的那一块：它长过底部区时先削它，选项窗口与打答案的那一行留着
+    // （`.scratch/questionnaire-keys/spec.md` §7 的补记）。以前它把两者一起挤掉 —— 屏幕上只剩
+    // 一截题面，和一句教人怎么选的页脚。
+    let mut state = state();
+    let _rx = ask(&mut state, vec![a_long_question()]);
+
+    for (width, height) in [(120, 40), (120, 24), (80, 24), (40, 10)] {
+        let text = screen(width, height, &mut state).join("\n");
+        assert!(
+            text.contains("1. (推荐)"),
+            "{width}×{height} 下第一个选项在屏幕上：\n{text}"
+        );
+        assert!(
+            text.contains("自定义："),
+            "{width}×{height} 下打答案的那一行在屏幕上：\n{text}"
+        );
+    }
+}
+
+#[test]
+fn a_clipped_question_says_how_much_is_hidden() {
+    // 被削掉的题面自己说一声：拿一份不完整的题面作答，比少读几行糟得多
+    // （`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+    let mut state = state();
+    let _rx = ask(&mut state, vec![a_long_question()]);
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("题面还有"), "被削的题面给一行说明：\n{text}");
+}
+
+#[test]
+fn a_roomy_terminal_shows_the_whole_question() {
+    // 问卷不是草稿：它长高是为了把题面与选项一起放下来，所以它不再被那条十行上限夹住
+    // （`.scratch/questionnaire-keys/spec.md` §7 的补记）。
+    let mut state = state();
+    let _rx = ask(&mut state, vec![a_long_question()]);
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("题面还有"),
+        "40 行终端上整段题面都在，不必削：\n{text}"
+    );
+    assert!(text.contains("3. 独立进程"), "三个选项也都放得下：\n{text}");
+}

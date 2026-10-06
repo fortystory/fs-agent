@@ -102,6 +102,13 @@ const MAX_INPUT_ROWS: u16 = 10;
 /// 在光标下面跳。
 const MIN_INPUT_ROWS: u16 = 3;
 
+/// 问卷立着时，转录保底留下的行数。
+///
+/// 问卷是那时唯一的交互焦点，它值得吃掉转录的行 —— 一份读不完的问卷比少读几行上下文糟得多。
+/// 但转录不该整个消失：读者还要看得见自己在答什么之上的那段。余地下到连
+/// [`MIN_INPUT_ROWS`] 都画不出问卷时这条偏好让位（见 [`questionnaire_input_rows`]）。
+const TRANSCRIPT_FLOOR_WITH_QUESTIONNAIRE: u16 = 3;
+
 /// 一帧画左栏三种身份里的哪一种。
 ///
 /// 阶梯在这里、在 [`sidebar_content`] 里定，所以画家问这里，而不是从左栏的高度自己重推
@@ -328,7 +335,22 @@ pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
 /// 输入区自己的阶梯是 [`MIN_INPUT_ROWS`] … [`MAX_INPUT_ROWS`]，而地板被余地夹住：两者相
 /// 撞处**转录的最后一行优先**。外框与状态行上方那条线相继离开之后（spec §1–§2），40×10
 /// 下那份余地足够让输入区拿满三行，同时转录还留三行 —— 不再是「两行输入区、一行转录」。
+///
+/// 问卷占着底部时走 [`plan_questionnaire`]：只有那条上限不同，其余一字不差。
 pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
+    plan_with(area, draft_rows, sidebar_wanted, false)
+}
+
+/// 排出一帧的版面，而底部那块由**问卷**占着（spec §19）。
+///
+/// 与 [`plan`] 只差底部长高的上限：问卷不是草稿，它长高是为了把题面与选项一起放下来，所以
+/// 它换一条更宽的上限（[`questionnaire_input_rows`]），其余每一个矩形、每一条降级阶梯与
+/// [`plan`] 完全同源 —— 同名同义的两处算术正是两半会漂移的由来。
+pub fn plan_questionnaire(area: Rect, rows: u16, sidebar_wanted: bool) -> Regions {
+    plan_with(area, rows, sidebar_wanted, true)
+}
+
+fn plan_with(area: Rect, rows: u16, sidebar_wanted: bool, questionnaire: bool) -> Regions {
     // 内容区就是终端：外框已经离开（spec §1），没有哪一圈要内缩。
     let tier = sidebar_tier(area.width, sidebar_wanted);
     // 左栏顶上让出一行空行，底下**不再让给提示行** —— 提示行回到了主列里，左栏因此恢复全高
@@ -336,9 +358,12 @@ pub fn plan(area: Rect, draft_rows: u16, sidebar_wanted: bool) -> Regions {
     // 页区从 14 行回到 15 行：页高的公式不变，变的只是剩余高度。
     let sidebar_rows = area.height.saturating_sub(SIDEBAR_TOP_GAP);
     let (sidebar_kind, page_rows) = sidebar_content(area.width, sidebar_rows, sidebar_wanted);
-    let input_rows = draft_rows
-        .max(MIN_INPUT_ROWS)
-        .min(max_input_rows(area.height));
+    let cap = if questionnaire {
+        questionnaire_input_rows(area.height)
+    } else {
+        max_input_rows(area.height)
+    };
+    let input_rows = rows.max(MIN_INPUT_ROWS).min(cap);
     let transcript_rows = area.height.saturating_sub(CHROME + input_rows);
 
     let sidebar = tier.map(|tier| Rect::new(area.x, area.y + SIDEBAR_TOP_GAP, tier, sidebar_rows));
@@ -481,6 +506,23 @@ pub fn inner(area: Rect) -> Rect {
 fn max_input_rows(height: u16) -> u16 {
     let room = height.saturating_sub(CHROME + 1);
     MAX_INPUT_ROWS.min(room).max(1)
+}
+
+/// 问卷占着底部时，它能长到几行（spec §19）。
+///
+/// 上限与 [`max_input_rows`] 不同源：那条 [`MAX_INPUT_ROWS`] 是**草稿**的上限（一份长草稿该
+/// 就地滚动，而不是把转录吃光），而问卷长高是为了把题面与选项一起放下来 —— 它拿的是转录让出
+/// 的行，只给转录留 [`TRANSCRIPT_FLOOR_WITH_QUESTIONNAIRE`] 行。
+///
+/// 余地下到连 [`MIN_INPUT_ROWS`] 都画不出问卷时（40×10 那个下界上只剩一行），这条偏好让位：
+/// 退回与草稿同一条「给转录留一行」的余地。一份画不出来的问卷比少一行转录糟得多 ——
+/// 前者是**问不出来**。
+fn questionnaire_input_rows(height: u16) -> u16 {
+    height
+        .saturating_sub(CHROME + TRANSCRIPT_FLOOR_WITH_QUESTIONNAIRE)
+        .max(MIN_INPUT_ROWS)
+        .min(height.saturating_sub(CHROME + 1))
+        .max(1)
 }
 
 /// 问题覆盖层最宽能到多少。比这更宽眼睛就得来回跑了：一个问题是一句话，不是一页
