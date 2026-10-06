@@ -109,5 +109,11 @@ process-wrap = { version = "10", features = ["tokio1"] }
 # 远端 server 的自定义请求头（`Authorization` 那一类）。
 http = "1"
 
+# 文件页那一档「用 nvim 看文件」（`[ui] file_viewer = "nvim"`）：在 pty 里跑 nvim，
+# 再用一个终端仿真器把它的输出解析成网格画进浮层。这两个件与
+# `prototype/embed-nvim` 分支上验过的同一对（那边记着为什么是这两个、以及应答层要做什么）。
+portable-pty = "0.9"
+vt100 = "0.16"
+
 [dev-dependencies]
 tempfile = "3"

@@ -11,6 +11,7 @@
 
 use std::path::Path;
 
+use fs_agent::config::FileViewerSettings;
 use fs_agent::events::{
     read_events, ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId,
     StopReason, ToolCallId, Usage,
@@ -33,6 +34,7 @@ fn facts() -> SessionFacts {
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         number_style: fs_agent::render::wording::NumberStyle::Cn,
+        file_viewer: FileViewerSettings::default(),
         speaker_order: vec!["kimi".to_owned()],
     }
 }

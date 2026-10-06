@@ -358,6 +358,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             mode,
             budget_limit: session_config.budget.limit,
             number_style: config.number_style,
+            file_viewer: config.file_viewer,
             // 单 agent 会话以它的档案发言，所以那就是转录的名字配色需要安排的全部名册
             // （票 07 §1）。
             speaker_order: vec![profile.name.clone()],
@@ -707,6 +708,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             // `session_config` 原样拷贝 `[budget]`，所以文件里的值就是这场会话的值。
             budget_limit: config.budget.limit,
             number_style: config.number_style,
+            file_viewer: config.file_viewer,
             // 这一对，按名册顺序 —— 与 `pick_pair` 产出的顺序相同，正是它把第一个调色板槽位给了第
             // 一位讨论者（票 07 §1）。
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],

@@ -8,6 +8,7 @@
 //! 它住在自己的文件里，而不是住在 `render_layout.rs` 里，好让拥有那个
 //! 文件的票能继续改它，而不跟这一个撞车。
 
+use fs_agent::config::FileViewerSettings;
 use fs_agent::questions::{UserAnswer, UserAnswers, UserQuestion};
 use fs_agent::render::{
     draw_frame, ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts, TuiState,
@@ -28,6 +29,7 @@ fn facts() -> SessionFacts {
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         number_style: fs_agent::render::wording::NumberStyle::Cn,
+        file_viewer: FileViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }

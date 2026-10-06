@@ -404,6 +404,9 @@ pub struct Config {
     /// `[ui] number_style`：界面上那些计数用哪套书写制式
     /// （`.scratch/usage-stats-format/spec.md` §2）。缺省 `cn`（万 / 亿）。
     pub number_style: NumberStyle,
+    /// `[ui] file_viewer` 与 `file_viewer_width`：点开一个工作区文件时用哪个查看器、
+    /// 它多宽（`.scratch/nvim-file-viewer/spec.md` §2）。缺省是内置只读预览、135 列。
+    pub file_viewer: FileViewerSettings,
     /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。组装期读一次，
     /// 决定那两个工具在不在工具表里。
     pub web: WebSettings,
@@ -463,7 +466,50 @@ pub struct UiSettings {
     /// 界面上那些计数用哪套书写制式（万 / 亿，或 k / M / G）；缺省由
     /// [`NumberStyle`] 自己说。
     pub number_style: NumberStyle,
+    /// 点开一个工作区文件时用哪个查看器、它多宽；缺省由 [`FileViewerSettings`] 说。
+    pub file_viewer: FileViewerSettings,
 }
+
+/// `[ui] file_viewer`：点开一个工作区文件时，用哪一个查看器
+/// （`.scratch/nvim-file-viewer/spec.md` §2）。
+///
+/// 缺省是**内置**：渲染器自己读盘、高亮、带行号 —— 同步、瞬时、不起任何进程，也不碰
+/// 读的人自己的编辑器。`nvim` 那一档把内容弹窗换成一屏真 nvim：**在配置里写了它**才走那条路。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileViewer {
+    /// 内置的只读预览（`.scratch/files-page/spec.md` §6）。
+    #[default]
+    Builtin,
+    /// 在浮层里嵌一个真的 `nvim`（只读、不折行、独占键盘）。
+    Nvim,
+}
+
+/// `[ui]` 里与文件查看器有关的那两项。
+///
+/// **宽度只对 [`FileViewer::Nvim`] 有效**：内置预览的宽度是 `layout::DETAIL_MAX_WIDTH`
+/// 定下的 135，不跟这个键走（要改它得动那份 spec）—— 一本配置项管一件事，比一个值影响两处
+/// 好读。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileViewerSettings {
+    pub kind: FileViewer,
+    /// 浮层宽度上限（列）。窄终端上还要受「屏幕宽 − 4」压着。
+    pub width: u16,
+}
+
+impl Default for FileViewerSettings {
+    fn default() -> Self {
+        Self {
+            kind: FileViewer::Builtin,
+            width: DEFAULT_FILE_VIEWER_WIDTH,
+        }
+    }
+}
+
+/// `file_viewer_width` 的缺省值 —— 与内置预览那档的 `DETAIL_MAX_WIDTH` 同值。
+pub const DEFAULT_FILE_VIEWER_WIDTH: u16 = 135;
+
+/// `file_viewer_width` 的下界：比这更窄的浮层放不下一屏 nvim（一行正文加一条状态行）。
+const MIN_FILE_VIEWER_WIDTH: u16 = 20;
 
 /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。
 ///
@@ -1049,20 +1095,43 @@ fn resolve_goals(raw: Option<&RawGoals>) -> Result<GoalSettings, ConfigError> {
 /// 一个不认识的词是启动错误，而不是静默回退到 `cn`：写 `number_style = "wan"` 的人以为
 /// 自己配好了，屏幕上却是另一套读法，那种「配了等于没配」只有报错才说得清。
 fn resolve_ui(raw: Option<&RawUi>) -> Result<UiSettings, ConfigError> {
-    let Some(written) = raw.and_then(|raw| raw.number_style.as_deref()) else {
-        return Ok(UiSettings::default());
+    let number_style = match raw.and_then(|raw| raw.number_style.as_deref()) {
+        None => NumberStyle::default(),
+        Some("cn") => NumberStyle::Cn,
+        Some("si") => NumberStyle::Si,
+        Some(other) => {
+            return Err(ConfigError::UnknownNumberStyle {
+                value: other.to_owned(),
+            })
+        }
     };
-    match written {
-        "cn" => Ok(UiSettings {
-            number_style: NumberStyle::Cn,
-        }),
-        "si" => Ok(UiSettings {
-            number_style: NumberStyle::Si,
-        }),
-        other => Err(ConfigError::UnknownNumberStyle {
-            value: other.to_owned(),
-        }),
+    // 查看器与制式同一个道理：不认识的词是启动错误，不静默回退 —— 写了 `vim` 的人以为
+    // 点开文件会进自己的编辑器，屏幕上却是内置预览，那种「配了等于没配」只有报错说得清。
+    let kind = match raw.and_then(|raw| raw.file_viewer.as_deref()) {
+        None => FileViewer::default(),
+        Some("builtin") => FileViewer::Builtin,
+        Some("nvim") => FileViewer::Nvim,
+        Some(other) => {
+            return Err(ConfigError::UnknownFileViewer {
+                value: other.to_owned(),
+            })
+        }
+    };
+    let width = raw
+        .and_then(|raw| raw.file_viewer_width)
+        .unwrap_or(DEFAULT_FILE_VIEWER_WIDTH);
+    // 一个窄到放不下一屏 nvim 的宽度是**配错了**，不是「小一点也行」：留 10 列的话，
+    // 打开文件看到的是一块画不出东西的浮层，而配置里那行字看着像配好了。
+    if width < MIN_FILE_VIEWER_WIDTH {
+        return Err(ConfigError::FileViewerWidthTooNarrow {
+            width,
+            min: MIN_FILE_VIEWER_WIDTH,
+        });
     }
+    Ok(UiSettings {
+        number_style,
+        file_viewer: FileViewerSettings { kind, width },
+    })
 }
 
 impl Config {
@@ -1254,6 +1323,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         sandbox,
         goals,
         number_style: ui.number_style,
+        file_viewer: ui.file_viewer,
         web,
         mcp,
     })
@@ -1366,12 +1436,17 @@ struct RawGoals {
     provider_retries: Option<u32>,
 }
 
-/// 一张 `[ui]` 表：目前只有一个键，数字用哪套书写制式。
+/// 一张 `[ui]` 表：数字用哪套书写制式，以及点开文件时用哪个查看器。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawUi {
     /// `"cn"`（缺省，万 / 亿）或 `"si"`（k / M / G）。
     number_style: Option<String>,
+    /// `"builtin"`（缺省，内置只读预览）或 `"nvim"`（在浮层里嵌一个真 nvim）。
+    file_viewer: Option<String>,
+    /// 浮层宽度上限（列），缺省 [`DEFAULT_FILE_VIEWER_WIDTH`]，下界
+    /// [`MIN_FILE_VIEWER_WIDTH`]。
+    file_viewer_width: Option<u16>,
 }
 
 /// 一张 `[web]` 表：两个联网工具的部署设置。
@@ -2297,6 +2372,12 @@ pub enum ConfigError {
     UnknownSandboxMode { mode: String },
     #[error("未知的 number_style 值 `{value}`；`[ui] number_style` 只接 `cn`（缺省，万 / 亿）或 `si`（k / M / G）")]
     UnknownNumberStyle { value: String },
+    #[error("未知的 file_viewer 值 `{value}`；`[ui] file_viewer` 只接 `builtin`（缺省，内置只读预览）或 `nvim`（在浮层里嵌一个真 nvim）")]
+    UnknownFileViewer { value: String },
+    #[error(
+        "`[ui] file_viewer_width = {width}` 太窄了：至少要 {min} 列，否则浮层里放不下一屏 nvim"
+    )]
+    FileViewerWidthTooNarrow { width: u16, min: u16 },
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(

@@ -39,6 +39,7 @@ pub mod todo;
 pub mod token;
 pub mod transcript;
 pub mod tui;
+pub mod viewer;
 pub mod width;
 pub mod wording;
 

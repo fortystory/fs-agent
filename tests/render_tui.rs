@@ -4,6 +4,7 @@
 //! 一个键是什么意思的状态。把它与终端拆开，正是让这件事
 //! 可测的原因（spec §Testing Decisions）。
 
+use fs_agent::config::FileViewerSettings;
 use fs_agent::events::{
     hook_format, Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason,
     ToolCallId,
@@ -42,6 +43,7 @@ fn facts() -> SessionFacts {
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         number_style: fs_agent::render::wording::NumberStyle::Cn,
+        file_viewer: FileViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }

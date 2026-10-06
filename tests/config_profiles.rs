@@ -10,8 +10,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use fs_agent::config::{
-    self, default_path, resolve, EnvMap, KeySource, ReasoningEffort, SandboxAvailability,
-    SandboxMode, Vendor, DEFAULT_MODEL,
+    self, default_path, resolve, EnvMap, FileViewer, KeySource, ReasoningEffort,
+    SandboxAvailability, SandboxMode, Vendor, DEFAULT_FILE_VIEWER_WIDTH, DEFAULT_MODEL,
 };
 use fs_agent::events::Decision;
 use fs_agent::permissions::Mode;
@@ -1103,4 +1103,59 @@ fn a_web_knob_of_zero_is_clamped_rather_than_believed() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("serch_provider"), "{error}");
+}
+
+#[test]
+fn the_file_viewer_defaults_to_the_builtin_preview() {
+    // 没配就一个字都不变：内置预览是这一档的缺省（`.scratch/nvim-file-viewer/spec.md` §2）。
+    let config = resolve(None, &env(&[])).unwrap();
+
+    assert_eq!(config.file_viewer.kind, FileViewer::Builtin);
+    assert_eq!(config.file_viewer.width, DEFAULT_FILE_VIEWER_WIDTH);
+}
+
+#[test]
+fn the_file_viewer_comes_from_the_ui_table() {
+    let config = resolve(
+        Some("[ui]\nfile_viewer = \"nvim\"\nfile_viewer_width = 100\n"),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(config.file_viewer.kind, FileViewer::Nvim);
+    assert_eq!(config.file_viewer.width, 100);
+
+    // 写回缺省值也合法：宽度不写就跟着缺省走，与查看器那一档分开。
+    let config = resolve(Some("[ui]\nfile_viewer = \"builtin\"\n"), &env(&[])).unwrap();
+    assert_eq!(config.file_viewer.kind, FileViewer::Builtin);
+    assert_eq!(config.file_viewer.width, DEFAULT_FILE_VIEWER_WIDTH);
+}
+
+#[test]
+fn an_unknown_file_viewer_is_a_startup_error() {
+    // 大小写不合、以及「写着自己编辑器的名字」都拒掉：写了 `vim` 的人以为点开文件会进
+    // 自己的编辑器，屏幕上却是内置预览 —— 那种「配了等于没配」只有报错说得清。
+    for value in ["Nvim", "vim", "less"] {
+        let text = format!("[ui]\nfile_viewer = \"{value}\"\n");
+        let error = resolve(Some(&text), &env(&[])).unwrap_err().to_string();
+        assert!(error.contains("file_viewer"), "{value}: {error}");
+        assert!(error.contains("builtin"), "{value}: {error}");
+        assert!(error.contains("nvim"), "{value}: {error}");
+    }
+}
+
+#[test]
+fn a_file_viewer_width_that_could_never_hold_nvim_is_a_startup_error() {
+    for width in [0, 19] {
+        let text = format!("[ui]\nfile_viewer = \"nvim\"\nfile_viewer_width = {width}\n");
+        let error = resolve(Some(&text), &env(&[])).unwrap_err().to_string();
+        assert!(error.contains("file_viewer_width"), "{width}: {error}");
+    }
+
+    // 下界那一格自己合法 —— 边界是「放得下一屏」。
+    let config = resolve(
+        Some("[ui]\nfile_viewer = \"nvim\"\nfile_viewer_width = 20\n"),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(config.file_viewer.width, 20);
 }

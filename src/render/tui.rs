@@ -61,6 +61,7 @@ use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
 use super::width::{char_columns, ellipsize_line, text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
+use crate::render::viewer::{self, Viewer};
 
 /// 流式文本保留多少才裁成一条尾巴。转录不需要整条消息都活着：完成的 `Message` 块会
 /// 把它整段重画一遍。
@@ -309,6 +310,11 @@ pub struct SessionFacts {
     /// 它在组装时注入，与会话中途会变的那些（模式）不同：制式是配置里定下来的一个值，
     /// 面板要按它把同一批计数写成 `123.5万` 或 `1.2M`。
     pub number_style: wording::NumberStyle,
+    /// 点开一个工作区文件时用哪个查看器、它多宽（`[ui] file_viewer` 与 `file_viewer_width`）。
+    ///
+    /// 与 `number_style` 同一条：配置里定下来的值，组装时注入一次，会话中途不变
+    /// （`.scratch/nvim-file-viewer/spec.md` §2）。
+    pub file_viewer: crate::config::FileViewerSettings,
     /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
     /// 名册不在流上（票 07 §1）。
@@ -366,6 +372,10 @@ impl Tui {
         let first = state.sync_title().expect("首帧之前还没有标题快照");
         let modes = TerminalModes::enter(&first);
         let mut keys = EventStream::new();
+        // 「文件查看器有新画面」的通知：读线程每收到字节就叫一声，循环据此重绘。60 ms 的
+        // 脉冲太慢 —— 打字会钝（`.scratch/nvim-file-viewer/spec.md` §5）。
+        let (viewer_tx, mut viewer_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        state.set_viewer_wake(viewer_tx);
         // 文件索引的结果从这条通道回到循环。遍历跑在 `spawn_blocking` 里，于是一次大
         // 工作区的遍历永远不占着这个 task，也从不进任何一次按键的处理路径
         // （`.scratch/input-tokens/spec.md` §1）。
@@ -436,6 +446,7 @@ impl Tui {
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
                     Some(paths) = files_rx.recv() => state.files_loaded(paths),
+                    Some(()) = viewer_rx.recv() => state.mark_dirty(),
                     _ = pulse.tick() => state.tick(),
                     _ = tokio::time::sleep_until(tokio::time::Instant::from(
                         deadline.unwrap_or_else(std::time::Instant::now),
@@ -797,6 +808,18 @@ pub struct TuiState {
     trace_rect: Option<Rect>,
     /// 详情覆盖层，开着的时候。
     detail: Option<DetailView>,
+    /// 文件查看器那一档的浮层（`[ui] file_viewer = "nvim"`）。
+    ///
+    /// 它与 `detail` **互斥**：同一时刻屏幕上只有一块浮层。状态分开，是因为它管的是一块
+    /// **外来**的屏幕（一个进程、一条 pty，键盘与鼠标全给它），而不是我们排版出来的行
+    /// （`.scratch/nvim-file-viewer/spec.md` §1）。
+    file_viewer: Option<FileViewerPane>,
+    /// 上一次真画出来的查看器浮层矩形 —— 鼠标靠它判框内框外，与 `detail_rect` 同一条
+    /// 「指针只回应真看见的东西」的纪律。
+    file_viewer_rect: Option<Rect>,
+    /// 「查看器有新画面」的通知口。由 [`Tui::run`] 注入；测试里是 `None`（测试不跑那个循环，
+    /// 也就不必被叫醒）。
+    viewer_wake: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     /// 打开这个覆盖层的那个视图，以及它打开前的滚动状态；关掉时还原给它
     /// （票 13、`.scratch/files-page/spec.md` §5）。
     detail_opener: Option<DetailOpener>,
@@ -1638,6 +1661,9 @@ impl TuiState {
             trace_drawn: Drawn::default(),
             trace_rect: None,
             detail: None,
+            file_viewer: None,
+            file_viewer_rect: None,
+            viewer_wake: None,
             detail_opener: None,
             detail_rect: None,
             modal_rect: None,
@@ -2616,6 +2642,12 @@ impl TuiState {
             return;
         }
         self.dirty = true;
+        // 查看器立着时指针全归它（含滚轮与拖动）：框外关掉、框内转发。排在别的分派之前，
+        // 与「覆盖层立着时滚轮按指针位置分派」同一条来路。
+        if self.file_viewer.is_some() {
+            self.viewer_mouse(mouse);
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => self.wheel_at(mouse.column, mouse.row, true),
             MouseEventKind::ScrollDown => self.wheel_at(mouse.column, mouse.row, false),
@@ -2857,8 +2889,9 @@ impl TuiState {
         self.files_page.focus = Some(index);
         match (self.files_dir_at(index), self.file_path_at(index)) {
             (Some(dir), _) => self.toggle_directory(&dir),
-            // 文件行：点一下打开内容弹窗（`.scratch/files-page/spec.md` §4）。
-            (None, Some(path)) => self.open_file_detail(&path),
+            // 文件行：点一下打开内容弹窗（`.scratch/files-page/spec.md` §4），至于是内置
+            // 预览还是嵌一个 nvim，由配置挑（`.scratch/nvim-file-viewer/spec.md` §2）。
+            (None, Some(path)) => self.open_file(&path),
             (None, None) => {}
         }
         true
@@ -2895,6 +2928,125 @@ impl TuiState {
         self.files_page.rows.get(index).map(|row| row.path.clone())
     }
 
+    /// 注入「查看器有新画面」的通知口（[`Tui::run`] 调；测试不调）。
+    pub fn set_viewer_wake(&mut self, wake: tokio::sync::mpsc::UnboundedSender<()>) {
+        self.viewer_wake = Some(wake);
+    }
+
+    /// 点开一个工作区文件：按配置挑哪一档查看器
+    /// （`.scratch/nvim-file-viewer/spec.md` §2）。
+    ///
+    /// 这是那一个岔口 —— 鼠标单击与 `→` 都从这里进，所以「配了就用 nvim」在两个入口上
+    /// 不可能走岔。
+    fn open_file(&mut self, path: &str) {
+        use crate::config::FileViewer;
+        match self.facts.file_viewer.kind {
+            FileViewer::Builtin => self.open_file_detail(path),
+            FileViewer::Nvim => self.open_file_viewer(path),
+        }
+    }
+
+    /// 把一屏 nvim 打开在浮层里（`[ui] file_viewer = "nvim"`）。
+    ///
+    /// 起不来就**回退到内置预览**：配置里写着 `nvim` 而 PATH 上没有它是能发生的事，那时该
+    /// 看见文件的内容，而不是一块空白（`wording::viewer_unavailable` 在提示行说一句）。
+    ///
+    /// 它是只读的、不折行、鼠标给 nvim —— 三条都写在
+    /// [`viewer::NvimViewer::spawn`] 里，因为它们是同一件事的三个面：这一档进来是**看**文件。
+    fn open_file_viewer(&mut self, path: &str) {
+        if path.is_empty() {
+            return;
+        }
+        // 两块浮层互斥：开着详情时点开文件查看器，先把详情收掉。
+        self.close_detail();
+        let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+        let Some(area) = panes.overlay_area(panes.viewer_width(self.facts.file_viewer.width))
+        else {
+            // 没地方画：与详情覆盖层给同一个诚实答案 —— 不开，而不是开成两行。
+            return;
+        };
+        let grid = layout::inner(area);
+        match viewer::NvimViewer::spawn(
+            &self.cwd,
+            path,
+            grid.width,
+            grid.height,
+            self.viewer_wake.clone(),
+        ) {
+            Ok(spawned) => {
+                self.file_viewer = Some(FileViewerPane {
+                    viewer: Box::new(spawned),
+                    grid,
+                });
+            }
+            // 起不来（PATH 上没有 nvim、或 pty 开不出来）：**回退到内置预览**。读的人
+            // 照样看得见文件的内容 —— 这一档唯一的降级，也是唯一一处不声张的地方：
+            // 打开文件失败而不给内容，比给内容少一样东西更让人摸不着头脑。
+            Err(_) => self.open_file_detail(path),
+        }
+    }
+
+    /// 收掉查看器那一块。没开着时是空操作。
+    ///
+    /// 顺手请一次重扫：那一档是只读的（改不动文件），但这条契约不该压在「它只读」上 ——
+    /// nvim 里跑的任何东西都可能碰过工作区，而重扫是一条静默信号，宽一点没有代价。
+    fn close_file_viewer(&mut self) {
+        if let Some(mut pane) = self.file_viewer.take() {
+            pane.viewer.kill();
+            self.file_scan_wanted = true;
+        }
+        self.file_viewer_rect = None;
+    }
+
+    /// 查看器里的一个按键：归它回答 `true`。
+    ///
+    /// **`Ctrl-C` 关掉浮层** —— 这个手势在整个 fs-agent 里就是「退出当前这件事」（举手退出、
+    /// 取消回合）。`Esc` 与 `Ctrl-D` **不**留给前端：它们在 nvim 里是退出插入模式与向下翻
+    /// 半屏，抢走就等于把编辑器弄坏了。这是与详情覆盖层**有意不同**的一处（那边 `Esc` 与
+    /// `Ctrl-D` 是关），也是这一档唯一两处「覆盖层关法不一样」之一。
+    ///
+    /// `Ctrl-Z` 返回 `false`：它是终端层手势，`TuiState::key` 在一切守卫之前就把它接走了
+    /// （`.scratch/suspend-gesture/spec.md` §1），这里只是不替它做主。
+    fn viewer_key(&mut self, key: Key) -> bool {
+        match key {
+            Key::CtrlC => {
+                self.close_file_viewer();
+                true
+            }
+            Key::CtrlZ => false,
+            other => {
+                if let Some(bytes) = viewer::key_bytes(&other) {
+                    if let Some(pane) = &mut self.file_viewer {
+                        pane.viewer.feed(&bytes);
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// 查看器里的一次鼠标事件。
+    ///
+    /// 两条都照详情覆盖层的老规矩：**框外一次左键**关掉它、且那一下**不再穿透**；框内但
+    /// 落在留白上的那几格算覆盖层自己的，什么都不做。别的（拖动、滚轮）原样转给 nvim。
+    fn viewer_mouse(&mut self, mouse: MouseEvent) {
+        let Some(pane) = self.file_viewer.as_ref() else {
+            return;
+        };
+        let area = self.file_viewer_rect.unwrap_or(pane.grid);
+        let grid = pane.grid;
+        let inside = area.contains((mouse.column, mouse.row).into());
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) && !inside {
+            self.close_file_viewer();
+            return;
+        }
+        if let Some(bytes) = viewer::mouse_bytes(mouse, grid) {
+            if let Some(pane) = &mut self.file_viewer {
+                pane.viewer.feed(&bytes);
+            }
+        }
+    }
+
     /// 把一个工作区文件的内容打开在详情覆盖层里
     /// （`.scratch/files-page/spec.md` §6）。
     ///
@@ -2908,6 +3060,7 @@ impl TuiState {
         if path.is_empty() {
             return;
         }
+        self.close_file_viewer();
         let body = files::read(&self.cwd, path);
         let detail = Detail {
             title: path.to_owned(),
@@ -3029,7 +3182,7 @@ impl TuiState {
                 self.toggle_directory(&row.path);
             }
         } else {
-            self.open_file_detail(&row.path);
+            self.open_file(&row.path);
         }
     }
 
@@ -3498,6 +3651,12 @@ impl TuiState {
         // 工作（`spec` §5）。
         if self.replay.is_some() {
             self.replay_key(key);
+            return;
+        }
+        // 文件查看器立着时**独占键盘**（`.scratch/nvim-file-viewer/spec.md` §4）：它是一块
+        // 外来的屏幕，除了 `Ctrl-C`，别的键都该原样进去 —— 不然在浮层里按 `j` 会落到草稿上。
+        // 它排在重放之后、详情之前：三者互斥，顺序与它们的来路一致。
+        if self.file_viewer.is_some() && self.viewer_key(key) {
             return;
         }
         // 详情覆盖层是一个自成一体的视图模式：它立着的时候占着键盘，而它下面的转录冻在
@@ -4337,6 +4496,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
         // 什么都不画，好让点击无处可落。
         state.indicator = None;
         state.detail_rect = None;
+        // 查看器是一块**进程**，看不见它时留着没有意义（详情覆盖层不一样：它不占别的资源，
+        // 收起来反而会丢掉读的人翻到的那一页）—— 收掉，别把键盘扣在看不见的东西上。
+        state.close_file_viewer();
         draw_too_small(frame, area);
         return;
     }
@@ -4382,6 +4544,7 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     // 详情覆盖层盖在所有这一切之上。它不可能与一个问题同时立着 —— 打开它需要一个空闲的
     // 键盘 —— 所以两者之间的顺序只是形式（票 02 §4）。
     draw_detail(frame, &panes, state);
+    draw_file_viewer(frame, &panes, state);
     // 拖选的这一层反白画在最后：它只碰缓冲，所以它盖在所有东西之上，而没有任何绘制函数
     // 知道它存在（`.scratch/tui-feedback/spec.md` §5）。
     selection::paint(frame, &state.screen_text, state.drag.as_ref());
@@ -6699,6 +6862,16 @@ enum DetailOpener {
 ///
 /// 它是一个**视图模式，不是一个待答的问题**：转录冻在原处，键盘与滚轮在它被关掉之前归主体
 /// 所有，而且没有置任何 `pending` —— 这正是让问题守卫不会把瞄准覆盖层的滚轮吞掉的原因。
+/// 文件查看器那一档的浮层：一屏外来画面，加上它上一次被画在哪一块网格上。
+///
+/// 与 [`DetailView`] 同一族，也共用同一条纪律：这些值由**画它的那一处**填上，指针只回应
+/// 这一帧真画出来的东西。
+struct FileViewerPane {
+    viewer: Box<dyn Viewer>,
+    /// 交给 nvim 的那块网格。它变了才 `resize` —— 每帧都发一次 `TIOCSWINSZ` 是白花的开销。
+    grid: Rect,
+}
+
 struct DetailView {
     /// 正在显示什么。
     detail: Detail,
@@ -7021,6 +7194,48 @@ fn read_tool_body(tool_call_id: &ToolCallId, preview: &str, session_dir: &str) -
 ///
 /// 它立着的时候占着键盘与滚轮，而转录冻在原处 —— 一个阅读位置，不是一个会动的位置
 /// （票 02 §4）。
+/// 把文件查看器那一屏画在浮层里（`[ui] file_viewer = "nvim"`）。
+///
+/// **没有框线**：nvim 自己会把那块底色铺满（它的每一格都带背景色），那一整块色块就是它与
+/// 转录的分界；四周留的那一格白让内容不顶到屏幕边缘
+/// （`.scratch/nvim-file-viewer/spec.md` §3，维护者 2026-10-06 定的那一档）。
+fn draw_file_viewer(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
+    if state.file_viewer.is_none() {
+        state.file_viewer_rect = None;
+        return;
+    }
+    let Some(area) = panes.overlay_area(panes.viewer_width(state.facts.file_viewer.width)) else {
+        // 没地方画它：收掉，别把键盘扣在一个没人看得见的进程上。
+        state.close_file_viewer();
+        return;
+    };
+    // 这一帧画在哪儿，指针才可能落在哪儿（与 `detail_rect` 同一条纪律）。
+    state.file_viewer_rect = Some(area);
+    let grid = layout::inner(area);
+    let Some(pane) = state.file_viewer.as_mut() else {
+        return;
+    };
+    // 尺寸跟着浮层走：终端 resize、`Ctrl-O` 收起左栏、切边框档都从这条路进来。
+    if pane.grid != grid {
+        pane.viewer.resize(grid.width, grid.height);
+        pane.grid = grid;
+    }
+    let screen = pane.viewer.screen();
+    let alive = pane.viewer.alive();
+    frame.render_widget(viewer::ScreenWidget { screen: &screen }, grid);
+    if !screen.hide_cursor() {
+        let (row, col) = screen.cursor_position();
+        if row < grid.height && col < grid.width {
+            frame.set_cursor_position(ratatui::layout::Position::new(grid.x + col, grid.y + row));
+        }
+    }
+    // 它自己退了（`:q`）：浮层跟着收 —— 那是最自然的一条出路，不必再让读的人按一次
+    // `Ctrl-C`。
+    if !alive {
+        state.close_file_viewer();
+    }
+}
+
 fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     if state.detail.is_none() {
         state.detail_rect = None;
@@ -7481,6 +7696,7 @@ mod tests {
                 mode: crate::permissions::Mode::Workspace,
                 budget_limit: None,
                 number_style: crate::render::wording::NumberStyle::Cn,
+                file_viewer: crate::config::FileViewerSettings::default(),
                 speaker_order: vec!["kimi".to_owned()],
             },
             std::path::PathBuf::from("/x/fs-agent"),
@@ -7599,5 +7815,162 @@ mod tests {
         );
         // 一个光秃秃的 `g` 是文字，不是手势。
         assert_eq!(plain(KeyCode::Char('g')), Some(Key::Char('g')));
+    }
+
+    // --- 文件查看器（`[ui] file_viewer = "nvim"`） ---------------------------
+    // 这一档的全部分支都在这里：它跑一块真屏幕，而真屏幕不该出现在测试里。
+
+    /// 一个开着**假**查看器的状态：浮层按 100x30 的屏幕算，观测口一起交出来。
+    fn state_with_viewer() -> (TuiState, viewer::FakeWatcher) {
+        let mut state = state();
+        state.area = Rect::new(0, 0, 100, 30);
+        let panes = layout::plan(state.area, 1, state.sidebar_wanted);
+        let area = panes
+            .overlay_area(panes.viewer_width(crate::config::DEFAULT_FILE_VIEWER_WIDTH))
+            .expect("100x30 放得下浮层");
+        let fake = viewer::FakeViewer::default();
+        let watch = fake.watch();
+        state.file_viewer = Some(FileViewerPane {
+            viewer: Box::new(fake),
+            grid: layout::inner(area),
+        });
+        state.file_viewer_rect = Some(area);
+        (state, watch)
+    }
+
+    #[test]
+    fn esc_goes_into_the_viewer_instead_of_closing_it() {
+        // `Esc` 在 nvim 里是退出插入模式：抢走它就等于把编辑器弄坏。这是与详情覆盖层
+        // 有意不同的一处（那边 `Esc` 是关）。
+        let (mut state, watch) = state_with_viewer();
+
+        state.key(Key::Esc);
+
+        assert_eq!(watch.fed(), b"\x1b");
+        assert!(state.file_viewer.is_some(), "`Esc` 不该关掉浮层");
+    }
+
+    #[test]
+    fn ctrl_c_closes_the_viewer_and_asks_for_a_rescan() {
+        let (mut state, watch) = state_with_viewer();
+
+        state.key(Key::CtrlC);
+
+        assert!(state.file_viewer.is_none());
+        assert_eq!(watch.kills(), 1);
+        assert!(state.take_file_scan(), "收掉它时补一次重扫");
+    }
+
+    #[test]
+    fn ctrl_z_stays_a_suspend_gesture_inside_the_viewer() {
+        // `.scratch/suspend-gesture/spec.md` §1：终端层手势，任何视图都拦不住它。
+        let (mut state, watch) = state_with_viewer();
+
+        state.key(Key::CtrlZ);
+
+        assert!(state.take_suspend_request());
+        assert!(watch.fed().is_empty(), "它不该被转发进 nvim");
+    }
+
+    #[test]
+    fn every_other_key_goes_to_the_viewer() {
+        // 独占键盘：`j` 该进 nvim，而不是落进草稿。
+        let (mut state, watch) = state_with_viewer();
+
+        for key in [
+            Key::Char('j'),
+            Key::CtrlU,
+            Key::Enter,
+            Key::Up,
+            Key::PageDown,
+        ] {
+            state.key(key);
+        }
+
+        assert_eq!(watch.fed(), b"j\x15\r\x1b[A\x1b[6~");
+    }
+
+    #[test]
+    fn a_click_outside_the_frame_closes_the_viewer() {
+        // 浮层是居中的 96x26（屏幕 100x30），所以 (0, 0) 在它外面。
+        let (mut state, watch) = state_with_viewer();
+
+        state.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert!(state.file_viewer.is_none());
+        assert_eq!(watch.kills(), 1);
+    }
+
+    #[test]
+    fn a_click_inside_the_frame_goes_to_the_viewer_as_sgr() {
+        // 外框从 (2, 2) 起（宽 96、高 26，屏幕 100x30 居中），留白一格 → nvim 的网格从
+        // (3, 3) 起；nvim 收的是 1 起算的相对坐标，所以终端 (5, 4) 是网格里的 (3, 2)。
+        let (mut state, watch) = state_with_viewer();
+
+        state.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(watch.fed(), b"\x1b[<0;3;2M");
+        assert!(state.file_viewer.is_some());
+    }
+
+    #[test]
+    fn the_wheel_inside_the_frame_goes_to_the_viewer() {
+        let (mut state, watch) = state_with_viewer();
+
+        state.mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 5,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(watch.fed(), b"\x1b[<64;3;2M");
+    }
+
+    #[test]
+    fn the_viewer_frame_is_one_cell_inside_the_overlay() {
+        // 「去框留白」那一档：外框再内缩一格，那一格就是留白（`.scratch/nvim-file-viewer` §3）。
+        let mut state = state();
+        state.area = Rect::new(0, 0, 100, 30);
+        let panes = layout::plan(state.area, 1, state.sidebar_wanted);
+
+        let area = panes
+            .overlay_area(panes.viewer_width(crate::config::DEFAULT_FILE_VIEWER_WIDTH))
+            .expect("放得下");
+        assert_eq!((area.width, area.height), (96, 26));
+        let grid = layout::inner(area);
+        assert_eq!((grid.width, grid.height), (94, 24));
+
+        // 宽度上限来自配置；窄终端上被「屏幕宽 − 4」压着。
+        assert_eq!(
+            panes.overlay_area(panes.viewer_width(60)).unwrap().width,
+            60
+        );
+        assert_eq!(
+            layout::plan(Rect::new(0, 0, 40, 20), 1, true).viewer_width(135),
+            36
+        );
+    }
+
+    #[test]
+    fn the_builtin_viewer_still_opens_the_detail_overlay() {
+        // 回归：没配 `file_viewer` 时点开文件走的是老路，一个进程都不起。
+        let mut state = state();
+        state.facts.file_viewer.kind = crate::config::FileViewer::Builtin;
+
+        state.open_file("README.md");
+
+        assert!(state.detail.is_some());
+        assert!(state.file_viewer.is_none());
     }
 }

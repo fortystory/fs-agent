@@ -77,6 +77,7 @@ DOC_FILES = [
     "docs/adr/0010-questionnaire-keys-dispatch-by-zone.md",
     "docs/adr/0011-diagrams-in-mermaid.md",
     "docs/adr/0012-input-tokens-are-atomic.md",
+    "docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -291,8 +292,8 @@ def review_rules(unit: Unit) -> list[str]:
 #   显式动作、理由写进提交信息，决定也记进 `.scratch/docs-slim/issues/05` 的 `## 评论`。
 #   其余两份照旧只许降。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 16993, "lines": 292, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 10007, "lines": 60, "target_chars": 13500, "target_lines": 100},
+    "README.md": {"chars": 17292, "lines": 296, "target_chars": 18500, "target_lines": 300},
+    ".scratch/README.md": {"chars": 10255, "lines": 61, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，

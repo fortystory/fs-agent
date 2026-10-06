@@ -7,6 +7,7 @@
 //! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
 //! 在路上算出来的那些矩形。
 
+use fs_agent::config::FileViewerSettings;
 use fs_agent::render::editor;
 use fs_agent::render::palette;
 use fs_agent::render::width::text_columns;
@@ -30,6 +31,7 @@ fn facts() -> SessionFacts {
         mode: fs_agent::permissions::Mode::Ask,
         budget_limit: Some(100_000),
         number_style: fs_agent::render::wording::NumberStyle::Cn,
+        file_viewer: FileViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }
@@ -5517,6 +5519,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
             mode: fs_agent::permissions::Mode::Ask,
             budget_limit: Some(100_000),
             number_style: fs_agent::render::wording::NumberStyle::Cn,
+            file_viewer: FileViewerSettings::default(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/fs-agent"),
@@ -6619,6 +6622,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
             mode: fs_agent::permissions::Mode::Ask,
             budget_limit: Some(100_000),
             number_style: fs_agent::render::wording::NumberStyle::Cn,
+            file_viewer: FileViewerSettings::default(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/fs-agent"),

@@ -83,6 +83,8 @@ estimate_margin = 1.5         # 发出去之前的估算宽容倍数
 
 [ui]
 number_style = "cn"           # "cn" 万/亿（默认）或 "si" k/M/G；小于 10000 仍是千分位
+file_viewer = "builtin"       # "builtin" 内置只读预览（默认）或 "nvim" 在浮层里嵌一个 nvim
+file_viewer_width = 135       # 浮层宽度上限（列）；只对 nvim 那一档有效，下界 20
 
 [routing]                     # 弱模型分流只有两个落点；讨论者绝不被路由
 # synthesizer_model = "deepseek-flash"
@@ -109,6 +111,8 @@ miss_input = 0.28
 cached_input = 0.028
 output = 0.42
 ```
+
+文件页点开一个文件时，浮层里默认是**内置的只读预览**（渲染器读盘、高亮、带行号，瞬时、不起进程）。`[ui] file_viewer = "nvim"` 换成**一屏真的 nvim**：读你自己的 `~/.config/nvim`（`XDG_CONFIG_HOME` / `NVIM_APPNAME` 照常生效），只读（`-M -R`，状态行亮 `[RO]`）、不折行，键盘与鼠标都归它 —— `Ctrl-C` 或点浮层外面退出，`:q` 也行；宽度上限 `file_viewer_width`（缺省 135），起不来就回退内置预览。它不进事件流、不进模型上下文，也不过沙箱。
 
 右侧统计里的数字默认写中文制式（`123.5万`），小于 `10000` 的仍写千分位（`9,999`）；`[ui] number_style = "si"` 换成 `k` / `M` / `G`。这一档只影响显示，`--plain` 的诊断行与 `sessions stats` 的输出不跟着换。
 

@@ -235,7 +235,24 @@ impl Regions {
     /// 终端小到显示不出有用的正文时是 `None` —— 与 [`Regions::modal`] 给的是同一个诚实
     /// 答案，而那时详情视图干脆不打开，而不是打开成两行边框。
     pub fn detail(&self) -> Option<Rect> {
-        let width = self.detail_width();
+        self.overlay_area(self.detail_width())
+    }
+
+    /// 文件查看器那一档的浮层宽度：屏幕减去两侧边距，再封顶在**配置**给的那一档
+    /// （`[ui] file_viewer_width`）。
+    ///
+    /// 与 [`Self::detail_width`] 分成两个方法是有意的：内置预览的宽度是它自己的 spec 定下的
+    /// 135，而这个键只管 nvim 那一档 —— 一个键影响两处，读的人就得同时记两件事。
+    pub fn viewer_width(&self, max_width: u16) -> u16 {
+        self.screen
+            .width
+            .saturating_sub(MODAL_MARGIN)
+            .min(max_width)
+    }
+
+    /// 一块居中的浮层，宽度由调用方给。详情覆盖层与文件查看器共用它，只换那个上限
+    /// （`.scratch/nvim-file-viewer/spec.md` §2、§3）。
+    pub fn overlay_area(&self, width: u16) -> Option<Rect> {
         if width <= BORDER_COLUMNS || self.screen.height <= BORDER_COLUMNS + DETAIL_MIN_ROWS {
             return None;
         }
