@@ -5,10 +5,10 @@
 //! 落在**结构**上：表头带粗体、分隔线存在、各列起点一致、语言名结束在右缘 —— 而不是整份
 //! 文本快照。
 
-use fs_agent::render::highlight::{self, Class};
-use fs_agent::render::markdown::{to_lines, to_lines_indented};
-use fs_agent::render::palette;
-use fs_agent::render::width;
+use heng::render::highlight::{self, Class};
+use heng::render::markdown::{to_lines, to_lines_indented};
+use heng::render::palette;
+use heng::render::width;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 

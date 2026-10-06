@@ -5,8 +5,8 @@
 //! 每一回合都在场；贵的那一半由内建的 `skill(name)` 工具按需加载，作为一条普通的工具结果追加在
 //! 尾部，所以缓存前缀永远不动。
 //!
-//! 发现遵循事实标准：项目级在用户级之前，每级三个根（cwd 下的 `.fs-agent` > `.agents` > `.claude`，
-//! 然后是 `~/.config/fs-agent` > `~/.agents` > `~/.claude`）—— 一台本来就有 `.claude` 或
+//! 发现遵循事实标准：项目级在用户级之前，每级三个根（cwd 下的 `.heng` > `.agents` > `.claude`，
+//! 然后是 `~/.config/heng` > `~/.agents` > `~/.claude`）—— 一台本来就有 `.claude` 或
 //! `.agents` 技能库的机器白得它。先定义某个名字的那个根胜出。
 //!
 //! 三份互不相干的预算，都用 [`estimate_tokens`] 度量：
@@ -43,10 +43,10 @@ pub const MAX_CATALOG_TOKENS: u64 = 3_000;
 const SKILL_FILE: &str = "SKILL.md";
 
 /// 项目级的根，最具体的在前（spec §9）。
-const PROJECT_ROOTS: [&str; 3] = [".fs-agent", ".agents", ".claude"];
+const PROJECT_ROOTS: [&str; 3] = [".heng", ".agents", ".claude"];
 
 /// 用户级的根，相对注入进来的家目录，最具体的在前。
-const USER_ROOTS: [&str; 3] = [".config/fs-agent", ".agents", ".claude"];
+const USER_ROOTS: [&str; 3] = [".config/heng", ".agents", ".claude"];
 
 /// 一个已发现的技能。
 #[derive(Debug, Clone)]

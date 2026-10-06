@@ -1,6 +1,6 @@
 # 出网：`web_search` 与 `web_fetch`
 
-fs-agent 有两个内建的联网工具：
+heng 有两个内建的联网工具：
 
 - **`web_search(queries)`** 在互联网上搜索，拿回**带 URL 的结构化来源**；
 - **`web_fetch(url)`** 取一个地址的正文，HTML 转成 markdown。
@@ -150,7 +150,7 @@ Fetched https://example.com/page (HTTP 200)
   `64:ff9b:1::/48`。另外按 RFC 7050 查一次 `ipv4only.arpa`，把**这个网络上**的 DNS64 前缀也
   探出来 —— 不知道前缀就认不出转换地址，而一个指向 `10.0.0.1` 的 DNS64 地址长得和普通的全球
   单播 IPv6 地址一模一样。（只在真出现全球单播 IPv6 地址时才探，免得每次抓取都多查一次。）
-- **不发任何凭据**：请求只有诚实的 `User-Agent`（`fs-agent/<版本>`）与 `Accept`，
+- **不发任何凭据**：请求只有诚实的 `User-Agent`（`heng/<版本>`）与 `Accept`，
   没有 `Authorization`、没有 `Cookie`、没有 `Referer`。
 - **四道上限**：字节 5 MB（到这儿就拒，不截断）· 字符 `fetch_max_chars`（截断并如实说明）·
   跳数 5 · 时间 `fetch_timeout_ms`。

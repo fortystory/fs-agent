@@ -15,15 +15,15 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     pending_tool_calls, read_events, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent, ToolSpec};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{Effect, Registry, Tool, ToolContext, ToolError, ToolOutput};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent, ToolSpec};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{Effect, Registry, Tool, ToolContext, ToolError, ToolOutput};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 use tokio::sync::Notify;
 
@@ -38,7 +38,7 @@ struct Fixture {
 }
 
 async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
-    fixture_with_tools(replies, config, fs_agent::tools::builtin(false)).await
+    fixture_with_tools(replies, config, heng::tools::builtin(false)).await
 }
 
 async fn fixture_with_tools(
@@ -69,7 +69,7 @@ async fn fixture_with_tools(
             log_path: log_path.clone(),
             session_id: SessionId::new("s-cancel"),
             tools,
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -210,7 +210,7 @@ async fn a_cancel_stops_an_in_flight_provider_stream_without_entering_the_log() 
                 && matches!(
                     event.payload,
                     EventPayload::MessageCompleted {
-                        role: fs_agent::events::Role::Assistant,
+                        role: heng::events::Role::Assistant,
                         ..
                     }
                 )
@@ -296,7 +296,7 @@ async fn a_cancel_during_a_tool_call_gives_that_call_its_one_result() {
 #[tokio::test]
 async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
     let started = Arc::new(Notify::new());
-    let mut tools = fs_agent::tools::builtin(false);
+    let mut tools = heng::tools::builtin(false);
     tools.register(Box::new(StallingTool {
         started: started.clone(),
     }));
@@ -396,7 +396,7 @@ async fn a_cancel_closes_a_deferred_task_call_with_the_result_it_owes() {
 // ---------------------------------------------------------------------------
 
 struct DiscussionFixture {
-    harness: fs_agent::DiscussionHarness,
+    harness: heng::DiscussionHarness,
     kimi: FakeProvider,
     deepseek: FakeProvider,
     synthesizer: FakeProvider,
@@ -423,13 +423,13 @@ async fn discussion_fixture(
     let deepseek_provider = FakeProvider::new(deepseek_replies);
     let synthesizer_provider = FakeProvider::new(synthesizer_replies);
 
-    let harness = fs_agent::assemble_discussion(fs_agent::DiscussionParts {
+    let harness = heng::assemble_discussion(heng::DiscussionParts {
         scaffold: SessionScaffold {
             cwd,
             log_path: log_path.clone(),
             session_id: SessionId::new("s-cancel-discussion"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -437,20 +437,20 @@ async fn discussion_fixture(
             home: None,
         },
         debaters: vec![
-            fs_agent::DebaterParts {
+            heng::DebaterParts {
                 speaker: kimi(),
                 config: SessionConfig::new("fake-model"),
                 provider: Box::new(kimi_provider.clone()),
                 soul: None,
             },
-            fs_agent::DebaterParts {
+            heng::DebaterParts {
                 speaker: SpeakerId::Debater("deepseek".into()),
                 config: SessionConfig::new("fake-model"),
                 provider: Box::new(deepseek_provider.clone()),
                 soul: None,
             },
         ],
-        synthesizer: fs_agent::SynthesizerParts {
+        synthesizer: heng::SynthesizerParts {
             config: SessionConfig::new("fake-model"),
             provider: Box::new(synthesizer_provider.clone()),
         },
@@ -548,7 +548,7 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
                 && matches!(
                     &event.payload,
                     EventPayload::MessageCompleted {
-                        role: fs_agent::events::Role::Assistant,
+                        role: heng::events::Role::Assistant,
                         ..
                     }
                 )
@@ -609,7 +609,7 @@ async fn a_cancel_reaches_a_running_executor_and_the_discussion_is_not_an_error(
                 && matches!(
                     event.payload,
                     EventPayload::RoundStarted {
-                        mode: fs_agent::events::RoundMode::Synthesis,
+                        mode: heng::events::RoundMode::Synthesis,
                         ..
                     }
                 )
@@ -789,8 +789,8 @@ async fn a_killed_cancelled_session_resumes_and_closes_the_call_it_left_open() {
             cwd,
             log_path: log_path.clone(),
             session_id: SessionId::new("s-cancel"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,

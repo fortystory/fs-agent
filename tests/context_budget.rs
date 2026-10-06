@@ -10,18 +10,18 @@ mod support;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use fs_agent::config::SessionConfig;
-use fs_agent::context::{
+use heng::config::SessionConfig;
+use heng::context::{
     estimate_tokens, load_agents_md, trim, truncate_result, usable_input, TrimError, TrimPolicy,
     DROPPED_TOOL_RESULT, TRUNCATED_MARKER,
 };
-use fs_agent::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::capability::{caps_for, ModelCaps};
-use fs_agent::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::permissions::{Mode, Policy};
+use heng::provider::capability::{caps_for, ModelCaps};
+use heng::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -66,7 +66,7 @@ fn assistant_calling(calls: &[(&str, &str)]) -> Message {
         reasoning_content: None,
         tool_calls: calls
             .iter()
-            .map(|(id, name)| fs_agent::provider::ToolCall {
+            .map(|(id, name)| heng::provider::ToolCall {
                 id: (*id).to_owned(),
                 name: (*name).to_owned(),
                 arguments: "{}".to_owned(),
@@ -397,7 +397,7 @@ async fn fixture(
     let stdout = CaptureBuf::default();
     let stderr = CaptureBuf::default();
 
-    let mut tools = fs_agent::tools::builtin(false);
+    let mut tools = heng::tools::builtin(false);
     for tool in extra_tools {
         tools.register(tool);
     }
@@ -415,7 +415,7 @@ async fn fixture(
             log_path: log_path.clone(),
             session_id: SessionId::new("s-context"),
             tools,
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             // `auto` 让一个只给测试用的只读工具，不用作答者也被放行。
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
@@ -437,7 +437,7 @@ async fn fixture(
 }
 
 impl Fixture {
-    async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
+    async fn run_turn(&mut self, input: &str) -> heng::agent::TurnOutcome {
         self.harness
             .as_mut()
             .expect("harness 已经关掉了")
@@ -499,7 +499,7 @@ fn blob_reply(id: &str) -> Reply {
 /// 一份能力表，它的可用输入正好是在被钉住的身份**之外**还有
 /// `usable` 个 token —— 那个身份走在每个请求最前面，也占预算。
 fn caps_with_usable_input(usable: u32) -> ModelCaps {
-    let identity = fs_agent::context::estimate_tokens(&fs_agent::agent::agent_identity());
+    let identity = heng::context::estimate_tokens(&heng::agent::agent_identity());
     let mut caps = caps_for("deepseek-flash").unwrap();
     caps.max_output_tokens = 20_000;
     caps.context_window = 20_000 + usable + identity as u32;
@@ -701,7 +701,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
             _ => None,
         })
         .expect("AGENTS.md 被注入了");
-    assert_eq!(injection.0, fs_agent::events::ContextSource::AgentsMd);
+    assert_eq!(injection.0, heng::events::ContextSource::AgentsMd);
     assert_eq!(injection.1, rules);
     assert_eq!(
         events
@@ -718,7 +718,7 @@ async fn the_agents_md_injection_is_recorded_once_and_stays_the_first_message() 
         assert_eq!(
             request.messages.first(),
             Some(&Message::System {
-                content: fs_agent::agent::agent_identity(),
+                content: heng::agent::agent_identity(),
                 name: None,
             }),
             "程序的身份走在每个请求最前面"

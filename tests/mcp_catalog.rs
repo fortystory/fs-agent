@@ -9,13 +9,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use fs_agent::config::{McpServerConfig, McpSettings, SessionConfig};
-use fs_agent::events::{read_events, ContextSource, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{McpConnection, McpError, McpService, ServerManifest};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::builtin;
-use fs_agent::{assemble, AssemblyParts, SessionScaffold};
+use heng::config::{McpServerConfig, McpSettings, SessionConfig};
+use heng::events::{read_events, ContextSource, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{McpConnection, McpError, McpService, ServerManifest};
+use heng::permissions::{Mode, Policy};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::builtin;
+use heng::{assemble, AssemblyParts, SessionScaffold};
 use support::{CaptureBuf, FakeProvider};
 
 /// 一个最简的假连接：这份测试只关心「这台连上了」这个事实。
@@ -97,7 +97,7 @@ async fn the_catalog_lands_in_the_stream_as_one_injection() {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-mcp-catalog"),
             tools: builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,

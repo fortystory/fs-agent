@@ -11,14 +11,12 @@
 
 use std::path::Path;
 
-use fs_agent::config::FileViewerSettings;
-use fs_agent::events::{
+use heng::config::FileViewerSettings;
+use heng::events::{
     read_events, ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId,
     StopReason, ToolCallId, Usage,
 };
-use fs_agent::render::{
-    draw_frame, wording, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState,
-};
+use heng::render::{draw_frame, wording, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::Terminal;
@@ -26,21 +24,21 @@ use ratatui::Terminal;
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/heng".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         // 会话被组装时所处的模式；`ask` 是默认档，想测另一档的
         // 测试在自己的 facts 里说清楚。
-        mode: fs_agent::permissions::Mode::Ask,
+        mode: heng::permissions::Mode::Ask,
         budget_limit: Some(100_000),
-        number_style: fs_agent::render::wording::NumberStyle::Cn,
+        number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         speaker_order: vec!["kimi".to_owned()],
     }
 }
 
 fn state() -> TuiState {
-    TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None)
+    TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None)
 }
 
 /// 会话目录是 `dir` 的那个状态，工具详情就是从它这里读
@@ -51,7 +49,7 @@ fn state_in(dir: &Path) -> TuiState {
             session_dir: dir.display().to_string(),
             ..facts()
         },
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     )
 }
@@ -334,7 +332,7 @@ fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     let at = text
         .find(needle)
         .unwrap_or_else(|| panic!("第 {row} 行不含 {needle:?}：{text:?}"));
-    let column = fs_agent::render::width::text_columns(&text[..at]) as u16;
+    let column = heng::render::width::text_columns(&text[..at]) as u16;
     click(state, column, row);
 }
 
@@ -612,20 +610,17 @@ fn a_live_event_arriving_mid_replay_waits_for_the_history() {
     let mut state = state();
     replay(&mut state, long_history());
     state.replay_batch();
-    state.live_event(RenderEvent::notice("fs-agent 启动".to_owned()));
+    state.live_event(RenderEvent::notice("heng 启动".to_owned()));
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
-        !text.contains("fs-agent 启动"),
+        !text.contains("heng 启动"),
         "历史还在到达的时候 banner 被压着：{text}"
     );
 
     run_replay(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("fs-agent 启动"),
-        "历史铺完之后才落上去：{text}"
-    );
+    assert!(text.contains("heng 启动"), "历史铺完之后才落上去：{text}");
 }
 
 #[test]

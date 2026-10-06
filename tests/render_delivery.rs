@@ -9,11 +9,11 @@
 
 use futures::StreamExt;
 
-use fs_agent::events::SpeakerId;
-use fs_agent::provider::capability::caps_for;
-use fs_agent::provider::openai::sse_stream;
-use fs_agent::provider::StreamEvent;
-use fs_agent::render::{self, RENDER_CHANNEL_CAPACITY};
+use heng::events::SpeakerId;
+use heng::provider::capability::caps_for;
+use heng::provider::openai::sse_stream;
+use heng::provider::StreamEvent;
+use heng::render::{self, RENDER_CHANNEL_CAPACITY};
 
 /// 一个 SSE 帧扛着一条文本增量，按线上写出来的样子。
 fn sse_frame(text: &str) -> Vec<u8> {

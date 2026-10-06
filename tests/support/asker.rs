@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::permissions::{Answer, Asker, PermissionRequest};
+use heng::permissions::{Answer, Asker, PermissionRequest};
 
 /// 每一次询问都放行的交互式用户。
 pub struct AlwaysAllow;

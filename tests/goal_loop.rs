@@ -9,20 +9,20 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use chrono::{TimeZone, Utc};
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     current_goal, read_events, ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId,
 };
-use fs_agent::events::{GoalStopReason, StopReason};
-use fs_agent::goals::{
+use heng::events::{GoalStopReason, StopReason};
+use heng::goals::{
     self, check_start, progress, threshold_step, unfinished, Manifest, NoProgress, Progress, Retry,
     StartRefusal, ThresholdStep, TodoCall,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, todo, PathLocks};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, todo, PathLocks};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- 一场会话 --------------------------------------------------------------
@@ -107,7 +107,7 @@ fn todo_reply(id: &str, args: &serde_json::Value) -> Reply {
 fn usage_reply(tokens: u64) -> Reply {
     Reply::Stream(vec![
         StreamEvent::TextDelta("好".to_owned()),
-        StreamEvent::Usage(fs_agent::events::Usage {
+        StreamEvent::Usage(heng::events::Usage {
             input_tokens: tokens,
             output_tokens: 0,
             cached_tokens: 0,
@@ -158,7 +158,7 @@ fn the_three_start_refusals_each_say_their_own_thing() {
         check_start(None, false, false, true),
         Err(StartRefusal::Unknown)
     );
-    let text = fs_agent::render::wording::loop_unknown_goal("sandbox");
+    let text = heng::render::wording::loop_unknown_goal("sandbox");
     assert!(text.contains("sandbox"), "{text}");
     assert!(text.contains("/goal-new"), "提示先建清单：{text}");
 
@@ -167,7 +167,7 @@ fn the_three_start_refusals_each_say_their_own_thing() {
         check_start(Some(&manifest), true, false, true),
         Err(StartRefusal::NoWork)
     );
-    assert!(fs_agent::render::wording::loop_no_work("sandbox").contains("没活可干"));
+    assert!(heng::render::wording::loop_no_work("sandbox").contains("没活可干"));
 
     // 已经有一个 loop 在跑：说正在跑 —— 而且它最先判，与另一个名字好不好无关。
     assert_eq!(
@@ -178,7 +178,7 @@ fn the_three_start_refusals_each_say_their_own_thing() {
         check_start(None, true, true, false),
         Err(StartRefusal::AlreadyRunning)
     );
-    assert!(fs_agent::render::wording::loop_already_running("sandbox").contains("正在跑"));
+    assert!(heng::render::wording::loop_already_running("sandbox").contains("正在跑"));
 
     // 档位不够（§5）：排在清单那两条之前 —— 跑都跑不起来时，名字对不对是下一步的事。
     assert_eq!(
@@ -189,8 +189,8 @@ fn the_three_start_refusals_each_say_their_own_thing() {
         check_start(Some(&manifest), true, false, false),
         Err(StartRefusal::Unattended)
     );
-    let text = fs_agent::render::wording::loop_needs_unattended_mode(
-        fs_agent::render::wording::mode_label(fs_agent::permissions::Mode::Ask),
+    let text = heng::render::wording::loop_needs_unattended_mode(
+        heng::render::wording::mode_label(heng::permissions::Mode::Ask),
     );
     assert!(text.contains("无人值守"), "{text}");
     assert!(text.contains("workspace"), "要说清换哪一档：{text}");
@@ -201,7 +201,7 @@ fn the_three_start_refusals_each_say_their_own_thing() {
 
 #[test]
 fn only_the_two_upper_permission_modes_can_run_unattended() {
-    use fs_agent::permissions::Mode;
+    use heng::permissions::Mode;
 
     // 判据不是「哪一档更宽松」，而是「第一次写会不会停在等人」（§5）。
     assert!(!Mode::Readonly.allows_unattended());
@@ -405,7 +405,7 @@ fn an_id_that_is_not_on_the_manifest_is_ignored_but_never_silently() {
     assert!(derived.is_complete());
 
     // 那一行说给模型听，点名是哪些 id，也点名清单是封闭的、新工作该走哪儿。
-    let line = fs_agent::render::wording::goal_unknown_ids("sandbox", &derived.unknown);
+    let line = heng::render::wording::goal_unknown_ids("sandbox", &derived.unknown);
     assert!(line.contains("07"), "{line}");
     assert!(line.contains("goal_note"), "{line}");
 }
@@ -560,7 +560,7 @@ async fn a_failed_summary_call_still_records_the_completion_with_a_mechanical_no
     let provider = FakeProvider::new(vec![
         todo_reply("call-1", &complete_items(&["01"])),
         Reply::text("记下了"),
-        Reply::Fail(fs_agent::provider::ProviderError::Transport {
+        Reply::Fail(heng::provider::ProviderError::Transport {
             detail: "断了".to_owned(),
         }),
     ]);
@@ -627,14 +627,14 @@ fn complete_items_call(ids: &[&str]) -> serde_json::Value {
 }
 
 /// 假 provider 收到的最后一个请求里的那条 `user` 消息。
-fn last_prompt(requests: &[fs_agent::provider::ChatRequest]) -> String {
+fn last_prompt(requests: &[heng::provider::ChatRequest]) -> String {
     let request = requests.last().expect("汇总那次调用到达了 provider");
     request
         .messages
         .iter()
         .rev()
         .find_map(|message| match message {
-            fs_agent::provider::Message::User { content, .. } => Some(content.clone()),
+            heng::provider::Message::User { content, .. } => Some(content.clone()),
             _ => None,
         })
         .expect("一次单发调用带着一条 user 消息")
@@ -644,8 +644,8 @@ fn last_prompt(requests: &[fs_agent::provider::ChatRequest]) -> String {
 
 #[tokio::test]
 async fn compaction_folds_the_history_into_a_summary_and_rollover_carries_it_over() {
-    use fs_agent::events::HistoryReason;
-    use fs_agent::session::SessionStore;
+    use heng::events::HistoryReason;
+    use heng::session::SessionStore;
 
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -665,7 +665,7 @@ async fn compaction_folds_the_history_into_a_summary_and_rollover_carries_it_ove
     let old_events = session.events();
     let before = usage_count(&old_events);
     assert_eq!(
-        fs_agent::events::current_goal(&old_events),
+        heng::events::current_goal(&old_events),
         Some("sandbox"),
         "旧会话先认领了目标"
     );
@@ -818,7 +818,7 @@ fn the_reminder_lands_once_per_crossing_and_a_rollover_resets_it() {
 
 #[test]
 fn the_reminder_is_chinese_model_text_that_says_what_to_save() {
-    let text = fs_agent::render::wording::goal_reminder();
+    let text = heng::render::wording::goal_reminder();
     assert!(
         text.contains("落下来"),
         "措辞是「把还没落流的东西落下来」：{text}"
@@ -838,7 +838,7 @@ fn the_reminder_is_chinese_model_text_that_says_what_to_save() {
 
 /// 一场上下文已经超过八成、但一个 token 都没花的会话：窗口小、预算无穷。
 async fn nearly_full_session(root: &Path) -> Session {
-    use fs_agent::provider::capability::caps_for;
+    use heng::provider::capability::caps_for;
 
     let mut caps = caps_for("deepseek-flash").unwrap();
     caps.context_window = 20_000;
@@ -872,7 +872,7 @@ async fn the_judgement_reads_the_window_and_not_the_budget() {
     );
 
     // 判据与预算无关：这场会话一个 token 都还没花（两者混起来是本文件要防的那个错）。
-    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    let spent = heng::events::total_usage(&session.events()).total_tokens();
     assert_eq!(spent, 0, "百分比看的是窗口，不是累计 token");
 
     session.harness.shutdown().await;
@@ -880,8 +880,8 @@ async fn the_judgement_reads_the_window_and_not_the_budget() {
 
 #[tokio::test]
 async fn crossing_the_compact_threshold_compacts_and_opens_a_new_session() {
-    use fs_agent::events::HistoryReason;
-    use fs_agent::session::SessionStore;
+    use heng::events::HistoryReason;
+    use heng::session::SessionStore;
 
     let dir = tempfile::tempdir().unwrap();
     let session = nearly_full_session(dir.path()).await;
@@ -924,7 +924,7 @@ async fn crossing_the_compact_threshold_compacts_and_opens_a_new_session() {
 
 #[tokio::test]
 async fn clear_is_the_same_rollover_without_a_summary_and_leaves_no_trace_on_the_stream() {
-    use fs_agent::session::SessionStore;
+    use heng::session::SessionStore;
 
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -1077,7 +1077,7 @@ async fn stopping_a_goal_records_one_event_with_the_count_and_the_stuck_entries(
         .any(|event| matches!(event.payload, EventPayload::GoalCompleted { .. })));
 
     // 说给人听的那一段点名了卡住的条目。
-    let line = fs_agent::render::wording::goal_stopped(
+    let line = heng::render::wording::goal_stopped(
         "sandbox",
         GoalStopReason::NoProgress,
         3,
@@ -1138,7 +1138,7 @@ fn the_stop_reasons_are_stable_protocol_marks() {
 
 #[tokio::test]
 async fn a_carried_usage_counts_toward_the_goal_budget_and_a_rollover_does_not_reset_it() {
-    use fs_agent::session::SessionStore;
+    use heng::session::SessionStore;
 
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -1155,7 +1155,7 @@ async fn a_carried_usage_counts_toward_the_goal_budget_and_a_rollover_does_not_r
     .await;
     session.harness.select_goal("sandbox").unwrap();
     session.harness.run_turn("开工").await.unwrap();
-    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    let spent = heng::events::total_usage(&session.events()).total_tokens();
     assert_eq!(spent, 60_000);
 
     // 翻页：新会话带上到现在为止的累计 —— 循环做的就是这一件事。
@@ -1200,7 +1200,7 @@ async fn without_a_goal_the_budget_is_the_plain_session_one() {
         "会话自己的 90k 还没撞顶"
     );
 
-    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    let spent = heng::events::total_usage(&session.events()).total_tokens();
     assert_eq!(spent, 90_000);
 
     session.harness.shutdown().await;
@@ -1208,7 +1208,7 @@ async fn without_a_goal_the_budget_is_the_plain_session_one() {
 
 #[test]
 fn the_goal_budget_counts_the_other_sessions_and_not_the_current_one_twice() {
-    use fs_agent::events::Usage;
+    use heng::events::Usage;
 
     let used = |seq: u64, tokens: u64| {
         Event::new(
@@ -1238,7 +1238,7 @@ fn the_goal_budget_counts_the_other_sessions_and_not_the_current_one_twice() {
 
 #[tokio::test]
 async fn a_rollover_does_not_carry_the_goal_budget_into_an_untargeted_session() {
-    use fs_agent::session::SessionStore;
+    use heng::session::SessionStore;
 
     // `/clear` 走的就是这一条路：清场之后的新会话**没有**当前目标，所以它的额度必须退回会话级
     // （§8、§12）。带过去的 carried 会把上一个会话的花费算进一个与它无关的会话。
@@ -1257,7 +1257,7 @@ async fn a_rollover_does_not_carry_the_goal_budget_into_an_untargeted_session() 
     .await;
     session.harness.select_goal("sandbox").unwrap();
     session.harness.run_turn("开工").await.unwrap();
-    let spent = fs_agent::events::total_usage(&session.events()).total_tokens();
+    let spent = heng::events::total_usage(&session.events()).total_tokens();
     session.harness.carry_usage(spent);
 
     let stored = SessionStore::new(root.join("store"))
@@ -1399,11 +1399,11 @@ async fn deciding_whether_to_resume_writes_no_new_file() {
 
 #[test]
 fn the_recovery_lines_are_chinese_and_say_which_of_the_two_it_is() {
-    let resumed = fs_agent::render::wording::resumed_goal("sandbox");
+    let resumed = heng::render::wording::resumed_goal("sandbox");
     assert!(resumed.contains("接着"), "{resumed}");
     assert!(resumed.contains("sandbox"), "{resumed}");
 
-    let closed = fs_agent::render::wording::resumed_closed_goal("sandbox");
+    let closed = heng::render::wording::resumed_closed_goal("sandbox");
     assert!(closed.contains("正常收尾"), "{closed}");
     assert!(closed.contains("sandbox"), "{closed}");
     assert_ne!(resumed, closed, "两条路各说各的话");
@@ -1414,22 +1414,22 @@ fn the_recovery_lines_are_chinese_and_say_which_of_the_two_it_is() {
 #[test]
 fn only_the_sessions_that_claimed_the_goal_count_for_it() {
     let claimed = [
-        fs_agent::events::Event::new(
+        heng::events::Event::new(
             1,
             SpeakerId::System,
             EventPayload::GoalSelected {
                 goal: "sandbox".to_owned(),
             },
         ),
-        fs_agent::events::Event::new(
+        heng::events::Event::new(
             2,
             SpeakerId::System,
             EventPayload::SessionEnded {
-                reason: fs_agent::events::StopReason::Completed,
+                reason: heng::events::StopReason::Completed,
             },
         ),
     ];
-    let other = [fs_agent::events::Event::new(
+    let other = [heng::events::Event::new(
         1,
         SpeakerId::System,
         EventPayload::GoalSelected {

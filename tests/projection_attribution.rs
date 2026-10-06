@@ -8,15 +8,15 @@
 //! （spec 的 Testing Decisions）：这些测试钉的是要紧的那些
 //! 性质 —— 归属、可见性、合并的边界与顺序。
 
-use fs_agent::config::GenerationParams;
-use fs_agent::events::{
+use heng::config::GenerationParams;
+use heng::events::{
     hook_format, ContextSource, EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId,
     StopReason, ToolCallId,
 };
-use fs_agent::provider::capability::{caps_for, ModelCaps};
-use fs_agent::provider::openai::build_body;
-use fs_agent::provider::projection::project;
-use fs_agent::provider::{ChatRequest, Message, ToolChoice};
+use heng::provider::capability::{caps_for, ModelCaps};
+use heng::provider::openai::build_body;
+use heng::provider::projection::project;
+use heng::provider::{ChatRequest, Message, ToolChoice};
 
 fn deepseek() -> SpeakerId {
     SpeakerId::Debater("deepseek".into())
@@ -44,7 +44,7 @@ fn log(script: impl FnOnce(&mut EventLog)) -> (tempfile::TempDir, EventLog) {
         EventPayload::SessionStarted {
             session_id: SessionId::new("s-1"),
             cwd: "/workspace".to_owned(),
-            schema_version: fs_agent::events::SCHEMA_VERSION,
+            schema_version: heng::events::SCHEMA_VERSION,
         },
     )
     .unwrap();
@@ -536,7 +536,7 @@ fn superseded_ranges_are_excluded_from_the_projection() {
             SpeakerId::System,
             EventPayload::HistorySuperseded {
                 targets: vec![2],
-                reason: fs_agent::events::HistoryReason::Regenerate,
+                reason: heng::events::HistoryReason::Regenerate,
                 summary: None,
             },
         )
@@ -567,7 +567,7 @@ fn retiring_a_tool_call_leaves_no_empty_assistant_message() {
             SpeakerId::User,
             EventPayload::HistorySuperseded {
                 targets: vec![2, 3],
-                reason: fs_agent::events::HistoryReason::Undo,
+                reason: heng::events::HistoryReason::Undo,
                 summary: None,
             },
         )
@@ -607,7 +607,7 @@ fn retiring_a_tool_call_keeps_the_text_the_assistant_said() {
             SpeakerId::User,
             EventPayload::HistorySuperseded {
                 targets: vec![3, 4],
-                reason: fs_agent::events::HistoryReason::Undo,
+                reason: heng::events::HistoryReason::Undo,
                 summary: None,
             },
         )
@@ -740,8 +740,8 @@ fn a_mid_session_injection_does_not_merge_into_an_executors_brief() {
         log.append(
             executor.clone(),
             EventPayload::ExecutorSpawned {
-                executor_id: fs_agent::events::ParticipantId::new("e-1"),
-                parent: fs_agent::events::ParticipantId::new("kimi"),
+                executor_id: heng::events::ParticipantId::new("e-1"),
+                parent: heng::events::ParticipantId::new("kimi"),
                 brief: "count the modules under src".to_owned(),
             },
         )

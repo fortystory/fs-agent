@@ -9,17 +9,17 @@ mod support;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use fs_agent::config::{self, EnvMap};
-use fs_agent::events::{read_events, EventPayload, SessionId, SpeakerId};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_web, WEB_SEARCH_TOOL};
-use fs_agent::web::search_deepseek::{
+use heng::config::{self, EnvMap};
+use heng::events::{read_events, EventPayload, SessionId, SpeakerId};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_web, WEB_SEARCH_TOOL};
+use heng::web::search_deepseek::{
     parse_sources, request_body, DeepSeekSearch, DEEPSEEK_SEARCH_MODEL, DEEPSEEK_SEARCH_PROVIDER,
 };
-use fs_agent::web::{SearchProvider, Source, WebError, WebService};
-use fs_agent::{assemble, AssemblyParts, SessionScaffold};
+use heng::web::{SearchProvider, Source, WebError, WebService};
+use heng::{assemble, AssemblyParts, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- 请求体 ---------------------------------------------------------------
@@ -194,9 +194,9 @@ async fn a_secret_that_reaches_the_stream_through_web_results_is_redacted() {
     // 搜索走的是同一个进程里的工具调用，不需要真的调模型。
     session.model = "fake-model".to_owned();
 
-    let settings = fs_agent::config::WebSettings {
+    let settings = heng::config::WebSettings {
         enabled: true,
-        ..fs_agent::config::WebSettings::default()
+        ..heng::config::WebSettings::default()
     };
     let service = WebService::new(settings).with_search(Arc::new(LeakySearch {
         secret: SECRET.to_owned(),
@@ -236,7 +236,7 @@ async fn a_secret_that_reaches_the_stream_through_web_results_is_redacted() {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-web-secret"),
             tools: with_web(builtin(false), service),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,

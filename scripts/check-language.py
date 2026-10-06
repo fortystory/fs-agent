@@ -108,7 +108,7 @@ FROZEN_FILES = [
 # `src/tools/sandbox.rs`，同一天目标循环那一批补进 `src/tools/goal_note.rs` 与
 # `src/goals.rs`）：中文 **266**、英文散文 **27**。
 # 剩下的 27 条**一条散文都没有**，全是判据的假阳性，逐条记在 ADR 0005 的「进度与收口」
-# 一节里：`fs-agent: {message}` 这类程序名前缀（25 条）与两条纯 `format!` 骨架
+# 一节里：`heng: {message}` 这类程序名前缀（25 条）与两条纯 `format!` 骨架
 # （`→ {tool_name}({rendered})`、`{text}{separator}{display}: {}`）。再往下收就要动
 # CLI 输出那 25 处的标点（ASCII 冒号换全角），那是另一件事，不在这一步里。
 #

@@ -11,23 +11,23 @@ mod support;
 
 use std::path::PathBuf;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::discussion::protocol::{
+use heng::config::SessionConfig;
+use heng::discussion::protocol::{
     answers_agree, conclusion_of, normalize, round_attendance, round_outcome, RoundOutcome,
     CONCLUSION_MARKER,
 };
-use fs_agent::discussion::{
+use heng::discussion::{
     debater_identity, pick_pair, plan_after_round, synthesis_prompt, RoundPlan,
 };
-use fs_agent::events::{
+use heng::events::{
     read_events, ContextSource, Event, EventLog, EventPayload, Role, RoundMode, SessionId,
     SpeakerId, StopReason, Usage, SCHEMA_VERSION,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::capability::caps_for;
-use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{
+use heng::permissions::{Mode, Policy};
+use heng::provider::capability::caps_for;
+use heng::provider::{FinishReason, Message, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
     Error, Harness, SessionScaffold, SynthesizerParts,
 };
@@ -503,8 +503,8 @@ async fn fixture_with_configs(
             cwd: workspace,
             log_path: log_path.clone(),
             session_id: SessionId::new("s-discussion"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -729,8 +729,8 @@ async fn a_discussion_refuses_a_roster_that_is_not_two_debaters() {
             cwd: dir.path().to_path_buf(),
             log_path: dir.path().join("log.jsonl"),
             session_id: SessionId::new("s-discussion"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -774,8 +774,8 @@ async fn a_discussion_refuses_two_debaters_that_share_one_identity() {
             cwd: dir.path().to_path_buf(),
             log_path: dir.path().join("log.jsonl"),
             session_id: SessionId::new("s-discussion"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -829,8 +829,8 @@ async fn a_discussion_refuses_a_roster_whose_token_budget_disagrees() {
             cwd: dir.path().to_path_buf(),
             log_path: dir.path().join("log.jsonl"),
             session_id: SessionId::new("s-discussion"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -900,14 +900,14 @@ async fn the_first_round_hides_the_other_debater_and_the_targeted_round_reveals_
     let deepseek_rounds = fixture.deepseek.requests();
     assert_eq!(kimi_rounds.len(), 2);
 
-    let asked = |request: &fs_agent::provider::ChatRequest, needle: &str| {
+    let asked = |request: &heng::provider::ChatRequest, needle: &str| {
         request.messages.iter().any(|message| match message {
-            fs_agent::provider::Message::User { content, .. }
-            | fs_agent::provider::Message::System { content, .. } => content.contains(needle),
-            fs_agent::provider::Message::Assistant { content, .. } => {
+            heng::provider::Message::User { content, .. }
+            | heng::provider::Message::System { content, .. } => content.contains(needle),
+            heng::provider::Message::Assistant { content, .. } => {
                 content.as_deref().is_some_and(|text| text.contains(needle))
             }
-            fs_agent::provider::Message::Tool { content, .. } => content.contains(needle),
+            heng::provider::Message::Tool { content, .. } => content.contains(needle),
         })
     };
 
@@ -940,7 +940,7 @@ async fn the_protocol_instruction_is_a_private_identity_and_never_enters_the_str
     let identity = debater_identity("kimi");
     // 这条指令以领头的 `system` 消息到达模型……
     match &kimi_requests[0].messages[0] {
-        fs_agent::provider::Message::System { content, .. } => assert_eq!(content, &identity),
+        heng::provider::Message::System { content, .. } => assert_eq!(content, &identity),
         other => panic!("要的是领头那条 system 消息，得到 {other:?}"),
     }
     // ……而且从不进流，否则之后某一轮的 `messages` 就没法
@@ -989,7 +989,7 @@ async fn the_two_debaters_are_in_flight_at_once() {
 async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_queryable() {
     let mut fixture = fixture(
         vec![answered("KIMI 正文", "复用事件流")],
-        vec![Reply::Fail(fs_agent::provider::ProviderError::Transport {
+        vec![Reply::Fail(heng::provider::ProviderError::Transport {
             detail: "stream died".to_owned(),
         })],
         vec![Reply::text("共识：无（只有一方作答）")],
@@ -1029,7 +1029,7 @@ async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_que
     let prompt = closing
         .iter()
         .find_map(|message| match message {
-            fs_agent::provider::Message::User { content, .. } => Some(content.clone()),
+            heng::provider::Message::User { content, .. } => Some(content.clone()),
             _ => None,
         })
         .expect("给了合成器一条 user 消息");
@@ -1040,12 +1040,10 @@ async fn a_failed_side_is_absent_the_discussion_continues_and_the_absence_is_que
 #[tokio::test]
 async fn both_sides_failing_ends_the_session_without_a_closing_call() {
     let mut fixture = fixture(
-        vec![Reply::Fail(
-            fs_agent::provider::ProviderError::QuotaExhausted {
-                detail: "no quota".to_owned(),
-            },
-        )],
-        vec![Reply::Fail(fs_agent::provider::ProviderError::Transport {
+        vec![Reply::Fail(heng::provider::ProviderError::QuotaExhausted {
+            detail: "no quota".to_owned(),
+        })],
+        vec![Reply::Fail(heng::provider::ProviderError::Transport {
             detail: "stream died".to_owned(),
         })],
         vec![Reply::text("这一条不该被用到")],
@@ -1104,7 +1102,7 @@ async fn a_discussion_puts_only_the_synthesis_on_stdout() {
 async fn the_four_round_reasons_render_distinguishably() {
     let stdout = CaptureBuf::default();
     let stderr = CaptureBuf::default();
-    let (render, receiver) = fs_agent::render::channel();
+    let (render, receiver) = heng::render::channel();
     let task = Renderer::headless(RenderSinks {
         stdout_result: Box::new(stdout.clone()),
         stderr_diagnostic: Box::new(stderr.clone()),
@@ -1137,7 +1135,7 @@ async fn the_four_round_reasons_render_distinguishably() {
     // 互不雷同一起钉住。
     let expected: Vec<String> = reasons
         .iter()
-        .map(|reason| fs_agent::render::wording::round_ended(2, *reason))
+        .map(|reason| heng::render::wording::round_ended(2, *reason))
         .collect();
     for line in &expected {
         assert!(rendered.contains(line.as_str()), "{rendered} 里缺了 {line}");
@@ -1406,14 +1404,14 @@ async fn an_exhausted_session_opens_no_second_round_and_goes_straight_to_synthes
     // 区分得开。
     let rendered = fixture.stderr.text();
     assert!(
-        rendered.contains(&fs_agent::render::wording::round_ended(
+        rendered.contains(&heng::render::wording::round_ended(
             1,
             StopReason::BudgetExhausted
         )),
         "{rendered}"
     );
     assert!(
-        !rendered.contains(&fs_agent::render::wording::round_ended(
+        !rendered.contains(&heng::render::wording::round_ended(
             1,
             StopReason::RoundsExhausted
         )),
@@ -1524,8 +1522,8 @@ async fn session_fixture(replies: Vec<Reply>) -> SessionFixture {
             cwd: dir.path().to_path_buf(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-live"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -1771,7 +1769,7 @@ async fn a_second_discussion_on_one_session_numbers_after_the_first_and_synthesi
     );
     // 而重放出来的提示词就是当时发出去的那一份：整套
     // 事件流设计所依靠的那条不变量，现在一条流上有两场讨论。
-    let replayed = fs_agent::agent::replay::replay(
+    let replayed = heng::agent::replay::replay(
         &events,
         &SpeakerId::System,
         Some(4),
@@ -1863,7 +1861,7 @@ async fn a_persona_reaches_its_own_side_only_and_the_call_stays_recomputable() {
     assert!(personas[0].1.contains("法外狂徒"), "{personas:?}");
 
     // 而因为它在流上，那次调用的重放就是当时发出去的东西。
-    let replayed = fs_agent::agent::replay::replay(
+    let replayed = heng::agent::replay::replay(
         &events,
         &SpeakerId::Debater("张三".into()),
         Some(1),

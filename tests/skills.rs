@@ -14,20 +14,20 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use fs_agent::config::SessionConfig;
-use fs_agent::context::skills::{
+use heng::config::SessionConfig;
+use heng::context::skills::{
     loaded_skill_names, Skills, MAX_CATALOG_TOKENS, MAX_LOADED_SKILL_TOKENS, MAX_SKILL_TOKENS,
     SKILL_TOOL,
 };
-use fs_agent::context::{estimate_tokens, trim, TrimPolicy, DROPPED_TOOL_RESULT};
-use fs_agent::events::{
+use heng::context::{estimate_tokens, trim, TrimPolicy, DROPPED_TOOL_RESULT};
+use heng::events::{
     read_events, ContextSource, Event, EventPayload, SessionId, SpeakerId, ToolCallId,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::capability::caps_for;
-use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Mode, Policy};
+use heng::provider::capability::caps_for;
+use heng::provider::{FinishReason, Message, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- fixture ---------------------------------------------------------------
@@ -63,18 +63,18 @@ fn discovery_reads_project_then_user_roots_in_precedence_order() {
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&home).unwrap();
 
-    // 项目级：`.fs-agent` 赢 `.agents`，`.agents` 赢 `.claude`。
-    write_skill(&cwd, ".fs-agent", "alpha", "project fs-agent wins");
+    // 项目级：`.heng` 赢 `.agents`，`.agents` 赢 `.claude`。
+    write_skill(&cwd, ".heng", "alpha", "project heng wins");
     write_skill(&cwd, ".agents", "alpha", "project agents loses");
     write_skill(&cwd, ".claude", "beta", "project claude");
     // 用户级：三个根都扫，另加一个项目已经占掉的名字。
     write_skill(
         &home,
-        ".config/fs-agent",
+        ".config/heng",
         "beta",
-        "user fs-agent loses to the project",
+        "user heng loses to the project",
     );
-    write_skill(&home, ".config/fs-agent", "gamma", "user fs-agent");
+    write_skill(&home, ".config/heng", "gamma", "user heng");
     write_skill(&home, ".agents", "delta", "user agents");
     write_skill(&home, ".claude", "epsilon", "user claude");
 
@@ -87,7 +87,7 @@ fn discovery_reads_project_then_user_roots_in_precedence_order() {
     );
     assert_eq!(
         skills.get("alpha").unwrap().description,
-        "project fs-agent wins",
+        "project heng wins",
         "名字撞车时，更具体的那个根赢"
     );
     assert_eq!(
@@ -326,7 +326,7 @@ fn assistant_calling(calls: &[(&str, &str)]) -> Message {
         reasoning_content: None,
         tool_calls: calls
             .iter()
-            .map(|(id, name)| fs_agent::provider::ToolCall {
+            .map(|(id, name)| heng::provider::ToolCall {
                 id: (*id).to_owned(),
                 name: (*name).to_owned(),
                 arguments: "{}".to_owned(),
@@ -475,8 +475,8 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path) -> Fixture {
             cwd: workspace.to_path_buf(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-skills"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -497,7 +497,7 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path) -> Fixture {
 }
 
 impl Fixture {
-    async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
+    async fn run_turn(&mut self, input: &str) -> heng::agent::TurnOutcome {
         self.harness
             .as_mut()
             .expect("harness 已经关掉了")
@@ -693,7 +693,7 @@ async fn a_disabled_skill_is_refused_by_the_tool_and_the_turn_continues() {
     let outcome = fixture.run_turn("load secret").await;
     fixture.shutdown().await;
 
-    assert_eq!(outcome.reason, fs_agent::events::StopReason::Completed);
+    assert_eq!(outcome.reason, heng::events::StopReason::Completed);
     let error = completed_output(&fixture.events(), "call-1").unwrap_err();
     assert!(error.contains("disable-model-invocation"), "{error}");
     assert_eq!(loaded_skill_names(&fixture.events()), Vec::<String>::new());
@@ -793,7 +793,7 @@ async fn a_bare_skill_invocation_runs_there_and_then() {
         .unwrap();
     assert_eq!(
         outcome.reason,
-        fs_agent::events::StopReason::Completed,
+        heng::events::StopReason::Completed,
         "技能自己那个回合跑了"
     );
     fixture.shutdown().await;
@@ -817,7 +817,7 @@ async fn a_bare_skill_invocation_runs_there_and_then() {
         events.iter().all(|event| !matches!(
             &event.payload,
             EventPayload::MessageCompleted {
-                role: fs_agent::events::Role::User,
+                role: heng::events::Role::User,
                 ..
             }
         )),
@@ -849,7 +849,7 @@ async fn an_unknown_skill_gets_a_normal_error_result() {
     let outcome = fixture.run_turn("load ghost").await;
     fixture.shutdown().await;
 
-    assert_eq!(outcome.reason, fs_agent::events::StopReason::Completed);
+    assert_eq!(outcome.reason, heng::events::StopReason::Completed);
     let error = completed_output(&fixture.events(), "call-1").unwrap_err();
     assert!(error.contains("ghost"), "{error}");
 }

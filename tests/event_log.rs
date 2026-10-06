@@ -1,7 +1,7 @@
 //! 事件流对外的契约：只追加的 JSONL，`seq` 等于行
 //! 号，而且最后一行被截断是可容忍的。
 
-use fs_agent::events::{
+use heng::events::{
     last_assistant_has_tool_calls, pending_tool_calls, read_events, total_usage, Event, EventLog,
     EventPayload, Role, SessionId, SpeakerId, StopReason, ToolCallId, Usage, SCHEMA_VERSION,
 };

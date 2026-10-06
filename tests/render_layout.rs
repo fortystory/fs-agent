@@ -7,11 +7,11 @@
 //! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
 //! 在路上算出来的那些矩形。
 
-use fs_agent::config::FileViewerSettings;
-use fs_agent::render::editor;
-use fs_agent::render::palette;
-use fs_agent::render::width::text_columns;
-use fs_agent::render::{
+use heng::config::FileViewerSettings;
+use heng::render::editor;
+use heng::render::palette;
+use heng::render::width::text_columns;
+use heng::render::{
     draw_frame, wording, CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent,
     SessionFacts, TuiState, TOKEN_COMMAND, TOKEN_REFERENCE,
 };
@@ -23,21 +23,21 @@ use ratatui::Terminal;
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/heng".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         // 会话被组装时所处的模式：状态行里模式那一栏。想测另一档的
         // 测试在自己的 facts 里覆盖它。
-        mode: fs_agent::permissions::Mode::Ask,
+        mode: heng::permissions::Mode::Ask,
         budget_limit: Some(100_000),
-        number_style: fs_agent::render::wording::NumberStyle::Cn,
+        number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }
 
 fn state() -> TuiState {
-    TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None)
+    TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None)
 }
 
 /// 指名册的会话用的注入 facts：一个名字是单口会话，
@@ -165,12 +165,13 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     );
 
     // 左栏：宽档上的标记，居中，两侧各留一列空气。它从顶上留的
-    // 那一行空行下面开始（2026-10-01 真机反馈）。
+    // 那一行空行下面开始（2026-10-01 真机反馈）；标记本身是一块五行网格，
+    // 拼音在第 2 行、汉字在第 3 行。
     assert!(
-        rows[1].contains("▄▀▀█") && rows[5].contains("▀▀▀"),
-        "标记的首尾两行就是左栏的首尾两行：{:?} / {:?}",
-        rows[1],
-        rows[5]
+        rows[2].contains("héng") && rows[3].contains('衡'),
+        "标记的拼音与汉字落在左栏的那两行上：{:?} / {:?}",
+        rows[2],
+        rows[3]
     );
 
     // 左栏的页签条：上下两条横线夹着三个标签（`轨迹` 不在这一列里了），两条横线从屏幕左缘
@@ -263,9 +264,10 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
         "┆",
         "最后一行（提示行那一行）也有它：左栏恢复全高"
     );
-    // 标记从顶上留的那一行空行**下面**开始：第 1 行。
+    // 标记从顶上留的那一行空行**下面**开始：第 1 行；五行网格里汉字在第 3 行，
+    // 从往里十七列处开始（列 1 + 17 = 18）。
     assert_eq!(frame[(0, 1)].symbol(), " ", "左边一列空气");
-    assert_eq!(frame[(1, 1)].symbol(), "▄", "然后是标记");
+    assert_eq!(frame[(18, 3)].symbol(), "衡", "然后是标记");
     // 标记宽 38 列：2 + 38 = 40，所以最后一列空气在 39，
     // 分隔线在 40。
     assert_eq!(frame[(39, 1)].symbol(), " ", "右边也有一列");
@@ -273,16 +275,21 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
 
 #[test]
 fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
-    // 静止的标记 —— 画家负责的那一半：字符是 `wording` 的，
+    // 静止的标记 —— 画家负责的那一半：字形是 `wording` 的，
     // 它们落在哪几行、渐变怎么下落却是画家的，所以在
     // 看得见它的地方逐格断言，就在缓冲里。动的那一半是
-    // `the_mark_walks_the_pulse_ring_while_a_run_is_in_flight`
+    // `the_mark_does_not_move_while_a_run_is_in_flight`
     // （`.scratch/tui-input-pulse/spec.md` §2）。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
-        frame[(1, 1)].symbol(),
-        "▄",
-        "标记的第一行起于左栏的第一个内容行"
+        frame[(17, 2)].symbol(),
+        "h",
+        "拼音起于标记五行里的第二行（往里十六列处）"
+    );
+    assert_eq!(
+        frame[(18, 3)].symbol(),
+        "衡",
+        "汉字在它下一行，与拼音中心对齐"
     );
     assert_eq!(
         frame[(1, 1)].fg,
@@ -306,12 +313,12 @@ fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
         let mut fresh = state();
         let rows = screen(width, height, &mut fresh);
         assert!(
-            !rows.join("\n").contains('▄'),
+            !rows.join("\n").contains('衡'),
             "{width}x{height} 在标记的那一档之下：{:#?}",
             rows[1]
         );
         assert_eq!(
-            rows.join("\n").contains("fs-agent"),
+            rows.join("\n").contains("heng"),
             identity,
             "{width}x{height} 在画左栏的地方显示的是文字身份：{:#?}",
             rows[1]
@@ -462,7 +469,7 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
 fn ctrl_o_still_works_while_a_questionnaire_is_up() {
     // 问卷不吞键盘独占权，而左栏不在它的管辖范围内 —— 它是纯视图手势
     // （`.scratch/sidebar-toggle/spec.md` §3 的分派表）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -544,14 +551,14 @@ fn hiding_the_sidebar_widens_what_the_editor_wraps_against() {
     // 意愿必须走进「喂给编辑器多少列」，否则收起左栏后转录变宽了、
     // 输入区还按旧宽度折行（`.scratch/sidebar-toggle/spec.md` §2）。
     let area = ratatui::layout::Rect::new(0, 0, 120, 24);
-    let shown = fs_agent::render::layout::content_width(area, true);
-    let hidden = fs_agent::render::layout::content_width(area, false);
+    let shown = heng::render::layout::content_width(area, true);
+    let hidden = heng::render::layout::content_width(area, false);
     assert!(hidden > shown, "收起后主列更宽：{shown} → {hidden}");
     assert_eq!(hidden, 120, "没有左栏时主列就是整屏");
 
     // 转录正文也拿到那份宽度：`w − 2`（右缘恒留滚动条与回合条各一列），
     // 而显示左栏时它是 `79 − 2`。
-    use fs_agent::render::layout;
+    use heng::render::layout;
     assert_eq!(
         layout::plan(area, 3, false).transcript_text().width,
         118,
@@ -633,7 +640,7 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
     );
     assert!(rows[9].contains("ctrl-c"), "提示行：{:?}", rows[9]);
     assert!(
-        !rows.join("\n").contains("fs-agent"),
+        !rows.join("\n").contains("heng"),
         "左栏整条藏起来：{rows:#?}"
     );
 }
@@ -784,7 +791,7 @@ fn the_hint_row_sits_under_the_input_and_inside_the_main_column() {
     assert_eq!(frame[(41, hints)].symbol(), "e", "它从主列起点起");
 
     // 几何层：它就是输入区那一块的正下方，同列同宽。
-    use fs_agent::render::layout::plan;
+    use heng::render::layout::plan;
     use ratatui::layout::Rect;
     let regions = plan(Rect::new(0, 0, 120, 24), 3, true);
     assert_eq!(regions.hints.x, regions.input.x, "同列");
@@ -794,12 +801,12 @@ fn the_hint_row_sits_under_the_input_and_inside_the_main_column() {
 
 #[test]
 fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
-    use fs_agent::events::SpeakerId;
-    use fs_agent::render::{DeltaKind, RenderEvent};
+    use heng::events::SpeakerId;
+    use heng::render::{DeltaKind, RenderEvent};
 
     let mut state = state();
     state.apply(RenderEvent::notice(
-        "fs-agent：会话 abc · 模型 m · 模式 询问 · /tmp/x".to_owned(),
+        "heng：会话 abc · 模型 m · 模式 询问 · /tmp/x".to_owned(),
     ));
     state.apply(RenderEvent::Delta {
         speaker: SpeakerId::Debater("kimi".into()),
@@ -809,7 +816,7 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
 
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains("fs-agent：会话 abc"),
+        text.contains("heng：会话 abc"),
         "提示是转录里的一行：{text}"
     );
     assert!(text.contains("正在读文件"), "流式的尾巴也在窗格里：{text}");
@@ -823,45 +830,36 @@ fn mark_colours(state: &mut TuiState) -> Vec<Color> {
     (1..=5u16).map(|y| frame[(1, y)].fg).collect()
 }
 
-/// 人眼里看到的标记短横格：`fs-agent` 那条短横所在的四列
-/// 里的五行，从 120x24 的一帧上读出来。
+/// 人眼里看到的整块标记：从 120x24 的一帧上读出的五行、它预留的整幅宽度。
 ///
-/// 标记从左栏第二列起，它的短横格从往里十列处
-/// 开始（`fs-agent` 是八个字形格、每格四列，中间隔一空列）。
-fn dash_cell(state: &mut TuiState) -> Vec<String> {
+/// 标记从左栏第二列起（`mark_colours` 也是这么找它的），宽 `LOGO_WIDTH` 列。它的正身
+/// 如今是汉字「衡」，所以这里读的是**格**、不是字符 —— `cells` 按显示宽度走。
+fn mark_rows(state: &mut TuiState) -> Vec<String> {
     let frame = buffer(120, 24, state);
-    (1..=5u16)
-        .map(|y| cells(&frame, y, 1 + 10, 1 + 14))
-        .collect()
+    let width = heng::render::layout::LOGO_WIDTH;
+    (1..=5u16).map(|y| cells(&frame, y, 1, 1 + width)).collect()
 }
 
 #[test]
 fn the_mark_does_not_move_while_a_run_is_in_flight() {
-    // 票 08 把下落的短横关掉了：标记又静止了，这正是维护者在真终端上
-    // 看过之后要的。会让它动的那些代码留着（并在它所在之处继续单测），
-    // 所以这里是把它按住的断言 ——
-    // 一次运行进行中时逐格打出来的帧必须完全一样。
-    // 假如横条真动过（上移一行或下移一行），那一格会长的样子。
-    let moved = [
-        ["▀▀▀▀", "    ", "    ", "    ", "    "],
-        ["    ", "    ", "    ", "    ", "▀▀▀▀"],
-    ];
+    // 标记（汉字「衡」与它上面标注的拼音）在运行中逐格不变。它曾经会动 —— 一条下落的
+    // 短横，票 08 之后静止了 —— 所以这里按住的是一整块：五行文字与它们的颜色一起，
+    // 都不许漂。
     let mut state = state();
-    let still = dash_cell(&mut state);
-    assert_eq!(still[2], "▀▀▀▀", "标记停在它一直在画的那一行上：{still:?}");
+    let still = mark_rows(&mut state);
     assert_eq!(
         still,
-        fs_agent::render::wording::logo_lines()
-            .map(|row| row.chars().skip(10).take(4).collect::<String>())
+        heng::render::wording::logo_lines()
+            .map(str::to_owned)
             .to_vec(),
-        "而且那一行逐字节等于 `logo_lines` 里的那一行"
+        "屏幕上那五行就是 `logo_lines` 里的那五行"
     );
 
     state.request(ConsoleRequest::RunState { running: true });
     for frame in 0..8 {
         state.tick();
         assert_eq!(
-            dash_cell(&mut state),
+            mark_rows(&mut state),
             still,
             "运行中的第 {frame} 帧：标记没有动"
         );
@@ -876,13 +874,6 @@ fn the_mark_does_not_move_while_a_run_is_in_flight() {
                 Color::Magenta
             ],
             "颜色也没变：第 {frame} 帧"
-        );
-    }
-    for shape in &moved {
-        assert_ne!(
-            dash_cell(&mut state),
-            shape.map(str::to_owned).to_vec(),
-            "横条从不落在别的行上：下落是关着的"
         );
     }
 }
@@ -1016,7 +1007,7 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
         state.tick();
         let text = screen(100, 24, &mut state).join("\n");
         assert!(
-            text.contains(&format!("fs-agent {}", env!("CARGO_PKG_VERSION"))),
+            text.contains(&format!("heng {}", env!("CARGO_PKG_VERSION"))),
             "第 {frame} 帧：身份还是它自己：{text}"
         );
     }
@@ -1027,15 +1018,15 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
     // 钟在动的东西（`.scratch/tui-visual-language/spec.md` §30–§32）：提示符的颜色，加上
     // 状态行那个字形循环 —— 别的什么都没有（没有标记、没有回合条、没有别的状态行文字）。
     // 80 列以下整条左栏都没有，差别仍然恰好是那几格。
-    use fs_agent::render::wording;
+    use heng::render::wording;
     for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
         state.request(ConsoleRequest::RunState { running: true });
         // 让正文尾巴非空：否则对话视图末尾那条「正在思考…」也在走它的点号（2026-10-05 的
         // 另一条时钟动画），会把这条断言的靶子弄糊。
         state.apply(RenderEvent::Delta {
-            speaker: fs_agent::events::SpeakerId::Debater("kimi".into()),
-            kind: fs_agent::render::DeltaKind::Text,
+            speaker: heng::events::SpeakerId::Debater("kimi".into()),
+            kind: heng::render::DeltaKind::Text,
             text: "正在读文件".to_owned(),
         });
         let before = buffer(width, height, &mut state);
@@ -1049,7 +1040,7 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
             .flat_map(|y| (0..width).map(move |x| (x, y)))
             .filter(|(x, y)| before[(*x, *y)] != after[(*x, *y)])
             .collect();
-        let mut expected: Vec<(u16, u16)> = (0..fs_agent::render::editor::prompt_columns())
+        let mut expected: Vec<(u16, u16)> = (0..heng::render::editor::prompt_columns())
             .map(|offset| (prompt_x + offset, prompt_y))
             .collect();
         // 状态行上那个字形格：新一帧穿的还是循环里的字形，而不是空白。
@@ -1075,7 +1066,7 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
 /// （`.scratch/tui-visual-language/spec.md` §31、§32）。
 #[test]
 fn the_status_glyph_moves_while_idle_too() {
-    use fs_agent::render::wording;
+    use heng::render::wording;
     let glyph = |state: &mut TuiState| -> String {
         let frame = buffer(120, 24, state);
         let y = (0..24)
@@ -1260,7 +1251,7 @@ fn a_drag_that_selects_text_receipts_it_on_the_hint_row() {
     // 交给剪贴板的那串字节：OSC 52，载荷是取到的那段文本的 base64。它由**运行期**写出去，
     // 状态机只把它放在这里（`.scratch/tui-feedback/spec.md` §6）—— 测试因此不会往自己的
     // stdout 吐一个剪贴板序列。
-    let expected = fs_agent::render::selection::osc52("第一行正文\n第二");
+    let expected = heng::render::selection::osc52("第一行正文\n第二");
     assert_eq!(
         state.take_clipboard().as_deref(),
         Some(expected.as_str()),
@@ -1344,9 +1335,9 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
         (40u16, 10u16, None, "", false, 1usize),
         (40, 24, None, "", false, 15),
         (60, 24, None, "", true, 15),
-        (80, 14, Some(28u16), "fs-agent", true, 5),
-        (80, 24, Some(28), "fs-agent", true, 15),
-        (100, 24, Some(28), "fs-agent", true, 15),
+        (80, 14, Some(28u16), "heng", true, 5),
+        (80, 24, Some(28), "heng", true, 15),
+        (100, 24, Some(28), "heng", true, 15),
         (120, 24, Some(40), "mark", true, 15),
         (174, 50, Some(40), "mark", true, 41),
     ];
@@ -1405,13 +1396,13 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             ),
         }
         assert_eq!(
-            text.contains('▄'),
+            text.contains('衡'),
             identity == "mark",
             "{width}x{height} 只在宽档上画标记：{text}"
         );
         assert_eq!(
-            text.contains("fs-agent"),
-            identity == "fs-agent",
+            text.contains("heng"),
+            identity == "heng",
             "{width}x{height} 只在窄档上画文字身份：{text}"
         );
         assert_eq!(
@@ -1429,7 +1420,7 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
     // 宽度在这整件事里从不参与，页高也不再随「读数有几项」走。
     // 左栏顶上留的那一行空行是**花掉的**，而底下不再让给提示行：提示行回到了主列里
     // （`.scratch/tui-feedback/spec.md` §2），所以阶梯看到的内容行是 `h − 1`。
-    use fs_agent::render::layout::{plan, SidebarKind};
+    use heng::render::layout::{plan, SidebarKind};
     use ratatui::layout::Rect;
 
     let cases = [
@@ -1446,12 +1437,12 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
         let rows = screen(120, height, &mut state);
         let text = rows.join("\n");
         assert_eq!(
-            text.contains('▄'),
+            text.contains('衡'),
             kind == SidebarKind::Mark,
             "{height} 行画不画标记：{text}"
         );
         assert_eq!(
-            text.contains("fs-agent"),
+            text.contains("heng"),
             kind == SidebarKind::Text,
             "{height} 行的文字身份：{text}"
         );
@@ -1480,7 +1471,7 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
 /// 高度 = 内容行 − 身份 − 页签条，「用量字段数」那个常数退休。
 #[test]
 fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
-    use fs_agent::render::layout::{plan, SidebarKind};
+    use heng::render::layout::{plan, SidebarKind};
     use ratatui::layout::Rect;
 
     let cases = [
@@ -1503,7 +1494,7 @@ fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
 fn the_tiny_terminal_keeps_its_text_identity() {
     let rows = screen(80, 10, &mut state());
     let text = rows.join("\n");
-    assert!(text.contains("fs-agent"), "80×10 保住文字身份：{text}");
+    assert!(text.contains("heng"), "80×10 保住文字身份：{text}");
     assert!(
         text.contains(wording::TAB_USAGE) && text.contains(wording::TAB_TRACE),
         "页签条照旧：{text}"
@@ -1594,7 +1585,7 @@ fn the_selected_tab_is_the_bright_one_and_the_others_are_dim() {
 
 #[test]
 fn clicking_a_tab_switches_the_sidebar_page() {
-    use fs_agent::render::wording;
+    use heng::render::wording;
 
     let mut state = state();
     state.live_event(RenderEvent::notice("换页之前的一句话".to_owned()));
@@ -1974,7 +1965,7 @@ fn the_tab_row_also_hands_the_keyboard_to_the_sidebar() {
 /// 一个临时工作区：文件页的弹窗按 `TuiState.cwd` 读盘
 /// （`.scratch/files-page/spec.md` §6）。
 fn workspace(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("fs-agent-files-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("heng-files-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("临时工作区");
     dir
@@ -2252,7 +2243,7 @@ fn the_files_page_can_still_be_dragged_and_copied() {
     state.mouse(release(column + 3, row));
     let text = screen(120, 24, &mut state).join("\n");
     assert!(text.contains("已复制"), "拖选出文本、提示行给回执：{text}");
-    let expected = fs_agent::render::selection::osc52("src/");
+    let expected = heng::render::selection::osc52("src/");
     assert_eq!(
         state.take_clipboard().as_deref(),
         Some(expected.as_str()),
@@ -2314,8 +2305,8 @@ fn only_the_tab_labels_answer_a_click() {
 
 #[test]
 fn a_question_keeps_the_tabs_from_answering() {
-    use fs_agent::permissions::Answer;
-    use fs_agent::render::wording;
+    use heng::permissions::Answer;
+    use heng::render::wording;
 
     // 一个问句独占了指针：点在页签条上会到达那个问句的
     // 处理器，然后停在那儿。它不该切页，而且 —— 这个测试正是
@@ -2348,7 +2339,7 @@ fn a_question_keeps_the_tabs_from_answering() {
 
 #[test]
 fn a_terminal_with_no_sidebar_has_no_tabs_to_click() {
-    use fs_agent::render::wording;
+    use heng::render::wording;
 
     // 80 列以下左栏整条藏起来，所以标签根本不会画出来
     // —— 而点在一个本该是页签的位置上，就是主列上一次
@@ -2409,19 +2400,19 @@ fn fixed_at(hour: u32, minute: u32, second: u32) -> chrono::DateTime<chrono::Utc
 fn at_event(
     seq: u64,
     at: chrono::DateTime<chrono::Utc>,
-    payload: fs_agent::events::EventPayload,
-) -> fs_agent::render::RenderEvent {
-    fs_agent::render::RenderEvent::Logged(fs_agent::events::Event {
+    payload: heng::events::EventPayload,
+) -> heng::render::RenderEvent {
+    heng::render::RenderEvent::Logged(heng::events::Event {
         seq,
         at,
-        speaker_id: fs_agent::events::SpeakerId::System,
+        speaker_id: heng::events::SpeakerId::System,
         payload,
     })
 }
 
 /// 轨迹页里一条块行去掉行首那个时间戳之后的样子 —— 它是定宽的一列，所以按列切。
 fn without_stamp(row: &str) -> &str {
-    let columns = fs_agent::render::layout::STAMP_COLUMNS as usize;
+    let columns = heng::render::layout::STAMP_COLUMNS as usize;
     if row.len() >= columns && row.is_char_boundary(columns) {
         &row[columns..]
     } else {
@@ -2430,9 +2421,9 @@ fn without_stamp(row: &str) -> &str {
 }
 
 /// 一条来自 **user** 的 `MessageCompleted`。
-fn user_message(seq: u64, text: &str) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, Role, SpeakerId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn user_message(seq: u64, text: &str) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, Role, SpeakerId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::User,
         EventPayload::MessageCompleted {
@@ -2444,9 +2435,9 @@ fn user_message(seq: u64, text: &str) -> fs_agent::render::RenderEvent {
 }
 
 /// 一条 `TurnStarted`。
-fn turn_started(seq: u64) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, SpeakerId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn turn_started(seq: u64) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::TurnStarted {
@@ -2517,7 +2508,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
 
     // 回合比行多：显示最新的那些，顶上那一格说明上面
     // 还有更早的。底下什么都没被裁，因为视口就在底部。
-    let mut scrolled = TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None);
+    let mut scrolled = TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None);
     turns(&mut scrolled, 30);
     let shape = turn_rail_shape(&mut scrolled);
     assert_eq!(
@@ -2539,7 +2530,7 @@ fn the_truncation_mark_appears_only_where_units_were_cut() {
     // 把视口停在最顶上：这时被裁的是**下面**那些单元。
     let _ = screen(120, 24, &mut scrolled);
     for _ in 0..40 {
-        scrolled.key(fs_agent::render::Key::PageUp);
+        scrolled.key(heng::render::Key::PageUp);
     }
     let shape = turn_rail_shape(&mut scrolled);
     assert_eq!(
@@ -2569,7 +2560,7 @@ fn the_rail_window_follows_the_focus_wherever_the_viewport_is() {
     // 一次往上一页，每一停都验一遍不变量，
     // 包括焦点落在单元表中间的那些位置。
     for _ in 0..20 {
-        state.key(fs_agent::render::Key::PageUp);
+        state.key(heng::render::Key::PageUp);
         let shape = turn_rail_shape(&mut state);
         assert_eq!(
             shape.matches('┃').count(),
@@ -2601,7 +2592,7 @@ fn the_focus_is_the_unit_the_top_row_belongs_to() {
 
     // 滚开之后，焦点是视口顶行落在里面的那个单元。
     let question = top_transcript_row(&mut state);
-    state.key(fs_agent::render::Key::PageUp);
+    state.key(heng::render::Key::PageUp);
     let shape = turn_rail_shape(&mut state);
     assert_eq!(shape.matches('┃').count(), 1, "一个焦点格：{shape}");
     assert_ne!(
@@ -2627,7 +2618,7 @@ fn clicking_a_rail_cell_jumps_to_that_turns_question() {
     // 而下。所以偏移 1 是单元 16，偏移 5 是单元 20。每一个都在
     // 全新状态里点，因为跳转会移动视口 —— 也移动格子的窗口。
     for (offset, unit) in [(1usize, 16u64), (5, 20)] {
-        let mut state = TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None);
+        let mut state = TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None);
         turns(&mut state, 30);
         let _ = screen(120, 24, &mut state);
         let cells = turn_rail_cells(&mut state);
@@ -2680,14 +2671,14 @@ fn a_rail_cell_jump_at_the_end_clamps_to_the_bottom() {
 
 #[test]
 fn a_discussion_counts_rounds_where_a_session_counts_turns() {
-    use fs_agent::events::{Event, EventPayload, Role, RoundMode, SpeakerId, StopReason};
+    use heng::events::{Event, EventPayload, Role, RoundMode, SpeakerId, StopReason};
 
     // 有不止一个讨论者的 `speaker_order` 才让一场会话成为讨论，
     // 而讨论会数自己的轮次 —— `CONTEXT.md` 把 轮次 与 回合 分开
     // （spec §4）。
     let mut state = TuiState::new(
         facts_with_roster(&["kimi", "deepseek"]),
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     );
     let kimi = SpeakerId::Debater("kimi".into());
@@ -2714,7 +2705,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
         .into_iter()
         .enumerate()
         {
-            state.apply(fs_agent::render::RenderEvent::Logged(Event::new(
+            state.apply(heng::render::RenderEvent::Logged(Event::new(
                 2 + u64::from(round) * 4 + offset as u64,
                 kimi.clone(),
                 payload,
@@ -2740,7 +2731,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 轮次的开场行上 —— spec 给「没什么可瞄的单元」的兜底。
     let mut later = TuiState::new(
         facts_with_roster(&["kimi", "deepseek"]),
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     );
     later.apply(user_message(1, "讨论题目"));
@@ -2763,7 +2754,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
         .into_iter()
         .enumerate()
         {
-            later.apply(fs_agent::render::RenderEvent::Logged(Event::new(
+            later.apply(heng::render::RenderEvent::Logged(Event::new(
                 2 + u64::from(round) * 3 + offset as u64,
                 kimi.clone(),
                 payload,
@@ -2773,9 +2764,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
     // 垫料，让转录比窗格高，跳转才有地方
     // 落：提示既不是用户消息也不是边界，所以单元照旧。
     for index in 0..40 {
-        later.apply(fs_agent::render::RenderEvent::notice(format!(
-            "第 {index} 行"
-        )));
+        later.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
     }
     assert_eq!(turn_rail_shape(&mut later), "┊┊┃");
     let second = (TRANSCRIPT_TOP + transcript_rows_at_120x24() - 2) as u16;
@@ -2794,7 +2783,7 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
 
 #[test]
 fn the_pane_scrolls_back_through_the_transcript_and_returns_to_the_bottom() {
-    use fs_agent::render::{Key, RenderEvent};
+    use heng::render::{Key, RenderEvent};
 
     let mut state = state();
     for index in 0..40 {
@@ -2883,7 +2872,7 @@ fn find_cell(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u
 
 #[test]
 fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
-    use fs_agent::render::{Key, RenderEvent};
+    use heng::render::{Key, RenderEvent};
 
     // 每条提示都折成三个显示行，所以按显示行算的上限
     // 会把这批历史只留下三分之一。这就是这里钉住的区分：上限
@@ -2931,7 +2920,7 @@ fn the_transcript_keeps_the_newest_twenty_thousand_source_lines() {
 
 #[test]
 fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
-    use fs_agent::render::{Key, RenderEvent};
+    use heng::render::{Key, RenderEvent};
 
     let mut state = state();
     for index in 0..40 {
@@ -3011,7 +3000,7 @@ fn the_indicator_counts_what_arrived_and_the_wheel_moves_three_rows() {
 
 #[test]
 fn a_resize_keeps_the_reader_on_the_same_line() {
-    use fs_agent::render::{Key, RenderEvent};
+    use heng::render::{Key, RenderEvent};
 
     let mut state = state();
     // 长到两次翻页之后顶行仍够不到最老的那条：
@@ -3048,7 +3037,7 @@ fn a_resize_keeps_the_reader_on_the_same_line() {
 
 #[test]
 fn the_scrollbar_column_is_reserved_and_filled_only_when_there_is_more_to_read() {
-    use fs_agent::render::RenderEvent;
+    use heng::render::RenderEvent;
 
     // 120x24 下主列是 79 列，转录的文本占其中 77
     // 列：最后两列归滚动条与回合条，不管里面
@@ -3161,15 +3150,9 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
 }
 
 /// 一条 `UsageRecorded`，按循环会记下来的样子。
-fn usage(
-    seq: u64,
-    input: u64,
-    output: u64,
-    cached: u64,
-    miss: u64,
-) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, SpeakerId, Usage};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn usage(seq: u64, input: u64, output: u64, cached: u64, miss: u64) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId, Usage};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::UsageRecorded {
@@ -3185,9 +3168,9 @@ fn usage(
 }
 
 /// 一条 `TurnEnded`。
-fn turn_ended(seq: u64) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, SpeakerId, StopReason};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn turn_ended(seq: u64) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId, StopReason};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::TurnEnded {
@@ -3253,7 +3236,7 @@ fn the_sidebar_shows_a_zero_and_a_dash_before_any_call() {
     );
     assert!(
         panel_field(&rows, 0).contains("上下文")
-            && panel_field(&rows, 0).contains(fs_agent::render::wording::PANEL_UNKNOWN),
+            && panel_field(&rows, 0).contains(heng::render::wording::PANEL_UNKNOWN),
         "还没有调用报过用量：{:?}",
         panel_field(&rows, 0)
     );
@@ -3396,7 +3379,7 @@ fn the_share_bar_survives_the_narrow_sidebar() {
 fn state_without_budget() -> TuiState {
     let mut facts = facts();
     facts.budget_limit = None;
-    TuiState::new(facts, std::path::PathBuf::from("/x/fs-agent"), None)
+    TuiState::new(facts, std::path::PathBuf::from("/x/heng"), None)
 }
 
 #[test]
@@ -3539,7 +3522,7 @@ fn panel_text(width: u16, height: u16, state: &mut TuiState) -> Vec<String> {
 
 #[test]
 fn the_panel_pads_its_labels_and_aligns_its_values_like_the_snapshot() {
-    use fs_agent::render::width::text_columns;
+    use heng::render::width::text_columns;
 
     let mut state = state();
     state.apply(usage(1, 9_000, 3_345, 5_000, 4_000));
@@ -3586,14 +3569,14 @@ fn a_number_too_wide_for_the_value_column_no_longer_needs_the_bare_form() {
     // 留着。这里改成断言制式之后的形态，值仍然是右贴齐的。
     // 外壳的窄档给值留 21 列，七位数的计数放得下，所以这条兜底
     // 是在它所在之处断言的：面板自己的行生成器。
-    use fs_agent::render::panel::Panel;
-    use fs_agent::render::Block;
+    use heng::render::panel::Panel;
+    use heng::render::Block;
     use ratatui::layout::Rect;
 
     let facts = facts();
     let block = Block::Usage {
-        speaker: fs_agent::events::SpeakerId::System,
-        usage: fs_agent::events::Usage {
+        speaker: heng::events::SpeakerId::System,
+        usage: heng::events::Usage {
             input_tokens: 1_234_567,
             output_tokens: 1_000,
             cached_tokens: 0,
@@ -3627,12 +3610,12 @@ fn a_number_too_wide_for_the_value_column_no_longer_needs_the_bare_form() {
 
 /// 一次针对写操作的询问，按循环从 console 通道发起的样子。
 fn ask_permission() -> (
-    fs_agent::render::ConsoleRequest,
-    tokio::sync::oneshot::Receiver<fs_agent::permissions::Answer>,
+    heng::render::ConsoleRequest,
+    tokio::sync::oneshot::Receiver<heng::permissions::Answer>,
 ) {
-    use fs_agent::permissions::PermissionRequest;
-    use fs_agent::render::{AskRequest, ConsoleRequest};
-    let (tx, rx) = tokio::sync::oneshot::channel::<fs_agent::permissions::Answer>();
+    use heng::permissions::PermissionRequest;
+    use heng::render::{AskRequest, ConsoleRequest};
+    let (tx, rx) = tokio::sync::oneshot::channel::<heng::permissions::Answer>();
     (
         ConsoleRequest::Ask(AskRequest {
             request: PermissionRequest {
@@ -3652,7 +3635,7 @@ fn ask_permission() -> (
 
 #[test]
 fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
-    use fs_agent::render::RenderEvent;
+    use heng::render::RenderEvent;
 
     let mut state = state();
     for index in 0..40 {
@@ -3674,7 +3657,7 @@ fn a_permission_question_lands_in_the_middle_as_a_covered_overlay() {
 
     // 模式手势在等：一个问句独占键盘，直到它被回答
     // （spec §9）。
-    state.key(fs_agent::render::Key::BackTab);
+    state.key(heng::render::Key::BackTab);
     assert!(state.take_events().is_empty(), "Shift-Tab 不是离开问句的路");
 
     // 主列里只有这个框自己的两条边框，别的什么都没有：左栏
@@ -3827,14 +3810,14 @@ fn a_cancelled_run_leaves_no_overlay_behind() {
 
 #[test]
 fn a_long_command_still_says_what_it_would_do() {
-    use fs_agent::permissions::PermissionRequest;
-    use fs_agent::render::AskRequest;
+    use heng::permissions::PermissionRequest;
+    use heng::render::AskRequest;
 
     // 这一行回答的那句抱怨：一整墙 shell 不是人
     // 读得下去的东西，所以问句先说这次调用*为的*是什么 —— 用的
     // 是转录里那条折起行的同一句话 —— 然后才是那墙东西。
     let mut state = state();
-    let (tx, _rx) = tokio::sync::oneshot::channel::<fs_agent::permissions::Answer>();
+    let (tx, _rx) = tokio::sync::oneshot::channel::<heng::permissions::Answer>();
     state.request(ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
             escalation: None,
@@ -3906,10 +3889,10 @@ fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
     // 刚配好的那道闸门撒了谎。
     let mut state = TuiState::new(
         SessionFacts {
-            mode: fs_agent::permissions::Mode::Readonly,
+            mode: heng::permissions::Mode::Readonly,
             ..facts()
         },
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     );
     let text = screen(120, 24, &mut state).join("\n");
@@ -3943,12 +3926,12 @@ fn todo_args(list: &[(&str, &str)]) -> serde_json::Value {
     })
 }
 
-fn kimi() -> fs_agent::events::SpeakerId {
-    fs_agent::events::SpeakerId::Debater("kimi".into())
+fn kimi() -> heng::events::SpeakerId {
+    heng::events::SpeakerId::Debater("kimi".into())
 }
 
-fn executor() -> fs_agent::events::SpeakerId {
-    fs_agent::events::SpeakerId::Executor(fs_agent::events::ParticipantId::new("kimi-1"))
+fn executor() -> heng::events::SpeakerId {
+    heng::events::SpeakerId::Executor(heng::events::ParticipantId::new("kimi-1"))
 }
 
 /// 渲染器看到的一次 `todo` 调用：开始那条带着参数，
@@ -3956,16 +3939,16 @@ fn executor() -> fs_agent::events::SpeakerId {
 fn apply_todo(
     state: &mut TuiState,
     id: &str,
-    speaker: fs_agent::events::SpeakerId,
+    speaker: heng::events::SpeakerId,
     args: serde_json::Value,
 ) {
-    use fs_agent::events::{Event, EventPayload, ToolCallId};
+    use heng::events::{Event, EventPayload, ToolCallId};
     state.apply(RenderEvent::Logged(Event::new(
         1,
         speaker.clone(),
         EventPayload::ToolCallStarted {
             tool_call_id: ToolCallId::new(id),
-            tool_name: fs_agent::tools::TODO_TOOL.to_owned(),
+            tool_name: heng::tools::TODO_TOOL.to_owned(),
             args,
         },
     )));
@@ -4165,15 +4148,15 @@ fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
     // 走面板而不是走一帧，因为没有终端会向布局要一页
     // 只有一行的页面 —— `SIDEBAR_MIN_PAGE_ROWS` 才是地板 —— 而这条规矩
     // 在那儿仍然得成立，而不是画出一个跑出来的项。
-    use fs_agent::render::todo::TodoPanel;
-    use fs_agent::render::{Block, ToolBlock, ToolOutcome};
+    use heng::render::todo::TodoPanel;
+    use heng::render::{Block, ToolBlock, ToolOutcome};
     use ratatui::layout::Rect;
 
     let mut panel = TodoPanel::default();
     panel.observe(&Block::Tool(Box::new(ToolBlock {
         speaker: kimi(),
-        tool_call_id: fs_agent::events::ToolCallId::new("call-1"),
-        tool: fs_agent::tools::TODO_TOOL.to_owned(),
+        tool_call_id: heng::events::ToolCallId::new("call-1"),
+        tool: heng::tools::TODO_TOOL.to_owned(),
         args: todo_args(&[("一件事", "pending")]),
         outcome: Some(ToolOutcome {
             ok: true,
@@ -4933,7 +4916,7 @@ fn a_pasted_token_is_a_chip_like_a_typed_one() {
 
 #[test]
 fn every_question_kind_takes_the_overlay() {
-    use fs_agent::render::Key;
+    use heng::render::Key;
 
     // 循环的权限询问。
     let mut asking = state();
@@ -4963,8 +4946,8 @@ fn every_question_kind_takes_the_overlay() {
 
 #[test]
 fn a_character_key_answers_the_question_and_never_reaches_the_draft() {
-    use fs_agent::permissions::Answer;
-    use fs_agent::render::{ConsoleRequest, Key};
+    use heng::permissions::Answer;
+    use heng::render::{ConsoleRequest, Key};
 
     let mut state = state();
     let (tx, mut submitted) = tokio::sync::oneshot::channel();
@@ -4992,7 +4975,7 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
     // 滚轮**不再**被一口吃掉，而是看指针落在哪一块
     // （`.scratch/tui-chrome/spec.md` §5）。点击的优先级没变 ——
     // 覆盖层仍然先接点击，变的是滚轮。
-    use fs_agent::render::{Key, RenderEvent};
+    use heng::render::{Key, RenderEvent};
     use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
     let mut state = state();
@@ -5035,7 +5018,7 @@ fn the_wheel_follows_the_pointer_while_a_question_is_up() {
 
 #[test]
 fn the_overlay_blanks_what_is_behind_it_rather_than_drawing_over_it() {
-    use fs_agent::render::Key;
+    use heng::render::Key;
 
     // 一个**短**问句：它两侧留出的地方正是面板自己
     // 标签所在之处，所以背景里剩下的任何东西都会出现在这些字旁边。
@@ -5085,8 +5068,8 @@ fn frame_and_cursor(width: u16, height: u16, state: &mut TuiState) -> (Buffer, O
 
 #[test]
 fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
-    use fs_agent::permissions::Answer;
-    use fs_agent::render::Key;
+    use heng::permissions::Answer;
+    use heng::render::Key;
 
     let mut state = state();
     for ch in "hi".chars() {
@@ -5112,9 +5095,9 @@ fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
 // ---------------------------------------------------------------------------
 
 /// 一条给讨论者的 `MessageCompleted`。
-fn message(seq: u64, text: &str, reasoning: Option<&str>) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, Role, SpeakerId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn message(seq: u64, text: &str, reasoning: Option<&str>) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, Role, SpeakerId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::MessageCompleted {
@@ -5126,21 +5109,21 @@ fn message(seq: u64, text: &str, reasoning: Option<&str>) -> fs_agent::render::R
 }
 
 /// 一条来自讨论者的推理增量。
-fn reasoning_delta(text: &str) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::SpeakerId;
-    fs_agent::render::RenderEvent::Delta {
+fn reasoning_delta(text: &str) -> heng::render::RenderEvent {
+    use heng::events::SpeakerId;
+    heng::render::RenderEvent::Delta {
         speaker: SpeakerId::Debater("kimi".into()),
-        kind: fs_agent::render::DeltaKind::Reasoning,
+        kind: heng::render::DeltaKind::Reasoning,
         text: text.to_owned(),
     }
 }
 
 /// 一条来自讨论者的正文增量。
-fn text_delta(text: &str) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::SpeakerId;
-    fs_agent::render::RenderEvent::Delta {
+fn text_delta(text: &str) -> heng::render::RenderEvent {
+    use heng::events::SpeakerId;
+    heng::render::RenderEvent::Delta {
         speaker: SpeakerId::Debater("kimi".into()),
-        kind: fs_agent::render::DeltaKind::Text,
+        kind: heng::render::DeltaKind::Text,
         text: text.to_owned(),
     }
 }
@@ -5151,9 +5134,9 @@ fn tool_started(
     id: &str,
     tool: &str,
     args: serde_json::Value,
-) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::ToolCallStarted {
@@ -5165,9 +5148,9 @@ fn tool_started(
 }
 
 /// 一条针对某次调用的 `PermissionAsked`。
-fn permission_asked(seq: u64, id: &str) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn permission_asked(seq: u64, id: &str) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::PermissionAsked {
@@ -5179,9 +5162,9 @@ fn permission_asked(seq: u64, id: &str) -> fs_agent::render::RenderEvent {
 }
 
 /// 一条 `PermissionDecided`：用户说了是。
-fn permission_decided(seq: u64) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Decision, DecisionSource, Event, EventPayload, SpeakerId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn permission_decided(seq: u64) -> heng::render::RenderEvent {
+    use heng::events::{Decision, DecisionSource, Event, EventPayload, SpeakerId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::PermissionDecided {
@@ -5200,9 +5183,9 @@ fn tool_completed(
     ok: bool,
     output: Option<&str>,
     error: Option<&str>,
-) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{Event, EventPayload, SpeakerId, ToolCallId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::Debater("kimi".into()),
         EventPayload::ToolCallCompleted {
@@ -5503,7 +5486,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
     // 事件带的是预览；全文在那个工具调用 id 指名的文件里。
     // `SessionFacts.cwd` 是会话目录，所以覆盖层读
     // `<cwd>/outputs/<tool_call_id>.txt`（票 02 §4）。
-    let dir = std::env::temp_dir().join(format!("fs-agent-detail-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("heng-detail-{}", std::process::id()));
     let outputs = dir.join("outputs");
     std::fs::create_dir_all(&outputs).expect("会话的 outputs 目录");
     std::fs::write(
@@ -5520,13 +5503,13 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
             context_window: 200_000,
             // 会话被组装时所处的模式：状态行里模式那一栏。想测另一档的
             // 测试在自己的 facts 里覆盖它。
-            mode: fs_agent::permissions::Mode::Ask,
+            mode: heng::permissions::Mode::Ask,
             budget_limit: Some(100_000),
-            number_style: fs_agent::render::wording::NumberStyle::Cn,
+            number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
             speaker_order: vec!["kimi".to_owned()],
         },
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     );
     state.apply(tool_started(
@@ -5615,7 +5598,7 @@ fn state_with_roster(names: &[&str]) -> TuiState {
             speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
             ..facts()
         },
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     )
 }
@@ -5697,9 +5680,9 @@ fn click_in_row(state: &mut TuiState, width: u16, height: u16, row: u16, needle:
 #[test]
 fn a_permission_question_is_answered_by_clicking_a_button() {
     for (label, expected) in [
-        ("[y] 允许", fs_agent::permissions::Answer::Allow),
-        ("[a] 总是允许", fs_agent::permissions::Answer::AlwaysAllow),
-        ("[n] 拒绝", fs_agent::permissions::Answer::Deny),
+        ("[y] 允许", heng::permissions::Answer::Allow),
+        ("[a] 总是允许", heng::permissions::Answer::AlwaysAllow),
+        ("[n] 拒绝", heng::permissions::Answer::Deny),
     ] {
         let mut state = state_with_roster(&["kimi"]);
         let (request, mut answer) = ask_permission();
@@ -5773,12 +5756,12 @@ fn a_raised_gesture_replaces_the_way_out_and_keeps_the_hints() {
 
 /// 一个屏幕上摆着 `question` 的问卷，以及它的答案接收端。
 fn questionnaire_state(
-    question: fs_agent::questions::UserQuestion,
+    question: heng::questions::UserQuestion,
 ) -> (
     TuiState,
-    tokio::sync::oneshot::Receiver<Result<fs_agent::questions::UserAnswers, String>>,
+    tokio::sync::oneshot::Receiver<Result<heng::questions::UserAnswers, String>>,
 ) {
-    use fs_agent::render::QuestionnaireRequest;
+    use heng::render::QuestionnaireRequest;
     let mut state = state_with_roster(&["kimi"]);
     let (reply, answers) = tokio::sync::oneshot::channel();
     state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
@@ -5790,7 +5773,7 @@ fn questionnaire_state(
 
 #[test]
 fn a_single_select_option_is_chosen_by_clicking_its_row() {
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -5825,7 +5808,7 @@ fn a_single_select_option_is_chosen_by_clicking_its_row() {
 fn the_main_tabs_still_answer_clicks_while_a_questionnaire_is_up() {
     // 问卷占的是**底部输入区**，不是整个指针：主列上方的页签条、转录与左栏照旧归它们本来管的
     // 人。以前它把每一次点击都吃掉，于是问卷一立起来，「轨迹」就点不动了。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -5854,7 +5837,7 @@ fn the_main_tabs_still_answer_clicks_while_a_questionnaire_is_up() {
 fn a_sidebar_tab_click_while_a_questionnaire_is_up_switches_but_keeps_the_keyboard() {
     // 切页可以，键盘不跟着走：那一页平时会收走键盘（`.scratch/files-page/spec.md` §5），而问
     // 卷还立着，`j` 仍该是问卷的键（`.scratch/questionnaire-keys/spec.md` §7 的补记）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -5888,7 +5871,7 @@ fn a_sidebar_tab_click_while_a_questionnaire_is_up_switches_but_keeps_the_keyboa
 
 #[test]
 fn a_multi_select_option_only_toggles_when_clicked() {
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -5924,9 +5907,9 @@ fn a_multi_select_option_only_toggles_when_clicked() {
 
 #[test]
 fn the_questionnaire_footer_pages_with_a_click() {
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = {
-        use fs_agent::render::QuestionnaireRequest;
+        use heng::render::QuestionnaireRequest;
         let mut state = state_with_roster(&["kimi"]);
         let (reply, answers) = tokio::sync::oneshot::channel();
         let question = |id: &str| UserQuestion {
@@ -5966,8 +5949,8 @@ fn the_questionnaire_footer_pages_with_a_click() {
 fn clicking_next_marks_the_question_skipped_like_the_arrow_key() {
     // `.scratch/questionnaire-keys/spec.md` §11：`→` 与页脚「下一题 →」是**同一个手势**，
     // 所以点击离开一道没作答的题时，那一笔也要记上。
-    use fs_agent::questions::{Choice, UserQuestion};
-    use fs_agent::render::QuestionnaireRequest;
+    use heng::questions::{Choice, UserQuestion};
+    use heng::render::QuestionnaireRequest;
 
     let mut state = state_with_roster(&["kimi"]);
     let (reply, _answers) = tokio::sync::oneshot::channel();
@@ -5998,9 +5981,9 @@ fn clicking_next_marks_the_question_skipped_like_the_arrow_key() {
 
 #[test]
 fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = {
-        use fs_agent::render::QuestionnaireRequest;
+        use heng::render::QuestionnaireRequest;
         let mut state = state_with_roster(&["kimi"]);
         let (reply, answers) = tokio::sync::oneshot::channel();
         let question = |id: &str| UserQuestion {
@@ -6037,7 +6020,7 @@ fn clicking_the_custom_row_hands_it_the_cursor_and_paging_takes_it_back() {
 fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
     // 页脚最后那一段是键位提示；举手期间它被回执**替换**（不是追加）
     // —— `.scratch/questionnaire-keys/spec.md` §6。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -6071,7 +6054,7 @@ fn the_questionnaire_footer_carries_the_keys_and_the_gesture_receipt() {
 fn the_questionnaire_footer_shows_the_exit_receipt_the_hint_line_cannot() {
     // 问卷期间提示行整行被页脚替换，所以 `Ctrl-C` 举起的那只手只有落在这里才看得见
     // —— `.scratch/questionnaire-keys/spec.md` §6。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -6096,7 +6079,7 @@ fn the_questionnaire_footer_shows_the_exit_receipt_the_hint_line_cannot() {
 fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
     // 窄到放不下整段时，先丢教学性的那部分，进度与按钮保住
     // （`.scratch/questionnaire-keys/spec.md` §6）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -6134,8 +6117,8 @@ fn the_questionnaire_footer_drops_the_teaching_hint_before_the_buttons() {
 fn the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped() {
     // `.scratch/questionnaire-keys/spec.md` §11：页脚那段提示跟着**回车实际会做什么**变，
     // 而当前题被交回去时，进度后面跟一句 `已跳过`。
-    use fs_agent::questions::{Choice, UserQuestion};
-    use fs_agent::render::QuestionnaireRequest;
+    use heng::questions::{Choice, UserQuestion};
+    use heng::render::QuestionnaireRequest;
 
     let question = |id: &str| UserQuestion {
         id: id.to_owned(),
@@ -6184,7 +6167,7 @@ fn the_questionnaire_footer_says_what_enter_would_do_and_what_was_skipped() {
 fn every_row_of_a_wrapped_option_answers_that_option() {
     // 折行不改变点击：长选项的**第二行**也命中同一个选项
     // （`.scratch/questionnaire-keys/spec.md` §7）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let long = "x".repeat(200);
     let (mut state, mut answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
@@ -6230,7 +6213,7 @@ fn every_row_of_a_wrapped_option_answers_that_option() {
 fn only_the_zone_that_holds_the_keyboard_is_lit() {
     // 同一时刻只有一个视觉焦点：选项区拿着键盘时高亮反显；输入区拿着键盘时它降暗，
     // 而自由文本那一行提亮（`.scratch/questionnaire-keys/spec.md` §8）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -6280,7 +6263,7 @@ fn only_the_zone_that_holds_the_keyboard_is_lit() {
 /// §29）。
 #[test]
 fn a_questionnaire_frame_has_exactly_one_reversed_row() {
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
 
     let reversed_rows = |state: &mut TuiState| -> usize {
         let frame = buffer(120, 24, state);
@@ -6316,7 +6299,7 @@ fn a_questionnaire_frame_has_exactly_one_reversed_row() {
 
 #[test]
 fn the_wheel_moves_the_questionnaire_highlight() {
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, _answers) = questionnaire_state(UserQuestion {
         id: "q1".to_owned(),
         header: None,
@@ -6345,7 +6328,7 @@ fn the_wheel_moves_the_questionnaire_highlight() {
 fn the_wheel_over_the_transcript_scrolls_it_while_a_questionnaire_is_up() {
     // 问卷占着底部输入区，而转录还在上面露着 —— 指针在转录上，
     // 滚的就是转录；问卷的高亮一动不动（`.scratch/tui-chrome/spec.md` §5）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
     let (mut state, _answers) = questionnaire_state(UserQuestion {
@@ -6365,9 +6348,7 @@ fn the_wheel_over_the_transcript_scrolls_it_while_a_questionnaire_is_up() {
         ],
     });
     for index in 0..40 {
-        state.apply(fs_agent::render::RenderEvent::notice(format!(
-            "第 {index} 行"
-        )));
+        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
     }
     let _ = screen(120, 24, &mut state);
     let before = first_notice(&screen(120, 24, &mut state));
@@ -6427,9 +6408,7 @@ fn the_detail_overlay_freezes_the_transcript() {
     // 输出不许把窗格往下拽（票 02 §4）。
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(fs_agent::render::RenderEvent::notice(format!(
-            "第 {index} 行"
-        )));
+        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
     }
     // 打开方是**轨迹页**（今天唯一有入口的一页）：这条测试说的正是覆盖层把它背后的那一页冻住
     // （票 13 把冻结收窄到打开方之后仍然成立）。
@@ -6444,9 +6423,7 @@ fn the_detail_overlay_freezes_the_transcript() {
 
     // 覆盖层开着的时候有新输出到来。
     for index in 40..60 {
-        state.apply(fs_agent::render::RenderEvent::notice(format!(
-            "第 {index} 行"
-        )));
+        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
     }
     let during = screen(120, 24, &mut state);
     let after = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&during));
@@ -6492,9 +6469,9 @@ fn the_questionnaire_footer_buttons_hit_where_they_are_drawn() {
     // 点击落进的区域就是那些字形所在的按钮 —— 这里钉的是
     // 那条 bug：空隙只数不画，会把每个区域都挪出去三列
     // （票 04 §7）。
-    use fs_agent::questions::{Choice, UserQuestion};
+    use heng::questions::{Choice, UserQuestion};
     let (mut state, mut answers) = {
-        use fs_agent::render::QuestionnaireRequest;
+        use heng::render::QuestionnaireRequest;
         let mut state = state_with_roster(&["kimi"]);
         let (reply, answers) = tokio::sync::oneshot::channel();
         let question = |id: &str| UserQuestion {
@@ -6609,7 +6586,7 @@ fn ctrl_d_closes_the_detail_overlay() {
 fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
     // 落盘文件自己没有上限，所以裁的是读者那份，
     // 而正文说出这件事（票 02 §4）。
-    let dir = std::env::temp_dir().join(format!("fs-agent-detail-big-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("heng-detail-big-{}", std::process::id()));
     let outputs = dir.join("outputs");
     std::fs::create_dir_all(&outputs).expect("会话的 outputs 目录");
     let big = "x".repeat(200_001);
@@ -6623,13 +6600,13 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
             context_window: 200_000,
             // 会话被组装时所处的模式：状态行里模式那一栏。想测另一档的
             // 测试在自己的 facts 里覆盖它。
-            mode: fs_agent::permissions::Mode::Ask,
+            mode: heng::permissions::Mode::Ask,
             budget_limit: Some(100_000),
-            number_style: fs_agent::render::wording::NumberStyle::Cn,
+            number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
             speaker_order: vec!["kimi".to_owned()],
         },
-        std::path::PathBuf::from("/x/fs-agent"),
+        std::path::PathBuf::from("/x/heng"),
         None,
     );
     state.apply(tool_started(
@@ -6925,9 +6902,7 @@ fn a_settling_thinking_line_keeps_the_history_before_it() {
     // （2026-09-23）。
     let mut state = state_with_roster(&["kimi"]);
     for index in 0..40 {
-        state.apply(fs_agent::render::RenderEvent::notice(format!(
-            "第 {index} 行"
-        )));
+        state.apply(heng::render::RenderEvent::notice(format!("第 {index} 行")));
     }
     // 先来一帧，然后是中间夹着一帧的实时思考段。左栏先切到轨迹页：思考行住在那里
     // （票 10），而转录那一半的窗口不受它影响。
@@ -7225,9 +7200,9 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
 }
 
 /// 一次针对 shell 命令的权限询问，按循环问它的样子。
-fn ask_bash(command: &str) -> fs_agent::render::ConsoleRequest {
-    use fs_agent::permissions::PermissionRequest;
-    use fs_agent::render::AskRequest;
+fn ask_bash(command: &str) -> heng::render::ConsoleRequest {
+    use heng::permissions::PermissionRequest;
+    use heng::render::AskRequest;
     let (reply, _answer) = tokio::sync::oneshot::channel();
     ConsoleRequest::Ask(AskRequest {
         request: PermissionRequest {
@@ -7293,7 +7268,7 @@ fn table_bars(row: &str) -> Option<Vec<usize>> {
         if ch == '│' {
             bars.push(column);
         }
-        column += fs_agent::render::width::char_columns(ch);
+        column += heng::render::width::char_columns(ch);
     }
     Some(bars)
 }
@@ -7698,9 +7673,9 @@ fn a_width_change_replays_the_trace_page_too() {
 // ---------------------------------------------------------------------------
 
 /// 一条上下文注入。
-fn injected(seq: u64, content: &str) -> fs_agent::render::RenderEvent {
-    use fs_agent::events::{ContextSource, Event, EventPayload, SpeakerId};
-    fs_agent::render::RenderEvent::Logged(Event::new(
+fn injected(seq: u64, content: &str) -> heng::render::RenderEvent {
+    use heng::events::{ContextSource, Event, EventPayload, SpeakerId};
+    heng::render::RenderEvent::Logged(Event::new(
         seq,
         SpeakerId::System,
         EventPayload::ContextInjected {
@@ -7919,7 +7894,7 @@ fn copying_a_bubble_takes_only_the_text() {
     state.mouse(press(column - 10, row));
     state.mouse(drag_to(column + 20, row + 1));
     state.mouse(release(column + 20, row + 1));
-    let expected = fs_agent::render::selection::osc52("第一行\n  缩进的第二行");
+    let expected = heng::render::selection::osc52("第一行\n  缩进的第二行");
     assert_eq!(
         state.take_clipboard().as_deref(),
         Some(expected.as_str()),
@@ -7929,7 +7904,7 @@ fn copying_a_bubble_takes_only_the_text() {
 
 /// 一帧里转录正文那块矩形（`120×24`，左栏在）。
 fn transcript_area() -> ratatui::layout::Rect {
-    use fs_agent::render::layout::plan;
+    use heng::render::layout::plan;
     use ratatui::layout::Rect;
     plan(Rect::new(0, 0, 120, 24), 3, true).transcript_text()
 }
@@ -8345,7 +8320,7 @@ fn the_page_keys_follow_the_page_on_screen() {
 /// 轨迹页里每个块的开头都是**产生它的那一刻**：不同事件的两个块读起来就是两个时刻。
 #[test]
 fn every_block_on_the_trace_page_opens_with_its_own_time() {
-    use fs_agent::events::{EventPayload, SpeakerId, StopReason};
+    use heng::events::{EventPayload, SpeakerId, StopReason};
 
     let mut state = state_with_roster(&["kimi"]);
     let early = fixed_at(4, 16, 53);
@@ -8383,7 +8358,7 @@ fn every_block_on_the_trace_page_opens_with_its_own_time() {
 /// 对话视图里**没有**时间戳：时刻只长在轨迹页上（`.scratch/trace-in-main/spec.md` §5）。
 #[test]
 fn the_conversation_page_carries_no_stamps() {
-    use fs_agent::events::{EventPayload, Role};
+    use heng::events::{EventPayload, Role};
 
     let at = fixed_at(4, 16, 53);
     let mut state = state_with_roster(&["kimi"]);
@@ -8434,8 +8409,8 @@ fn a_wrapped_block_carries_its_stamp_on_the_first_line_only() {
         rows[1]
     );
     assert_eq!(
-        text_columns(&rows[0][..fs_agent::render::layout::STAMP_COLUMNS as usize]),
-        fs_agent::render::layout::STAMP_COLUMNS as usize,
+        text_columns(&rows[0][..heng::render::layout::STAMP_COLUMNS as usize]),
+        heng::render::layout::STAMP_COLUMNS as usize,
         "时刻列宽就是那个常数"
     );
 }
@@ -8443,7 +8418,7 @@ fn a_wrapped_block_carries_its_stamp_on_the_first_line_only() {
 /// 一个 `HH:MM:SS ` 戳的形状：不读真时钟，因为推理增量没有信封，开着的行的时刻只能是
 /// 「收到它的那一刻」（`.scratch/trace-thought-stamp/spec.md` §1）。
 fn looks_like_a_stamp(text: &str) -> bool {
-    let columns = fs_agent::render::layout::STAMP_COLUMNS as usize;
+    let columns = heng::render::layout::STAMP_COLUMNS as usize;
     let bytes = text.as_bytes();
     bytes.len() >= columns
         && bytes[..columns - 1]
@@ -8480,7 +8455,7 @@ fn an_open_thinking_line_carries_the_moment_its_thinking_started() {
 /// 定稿时同一行的时间戳跳成完成那一刻（`.scratch/trace-thought-stamp/spec.md` §2）。
 #[test]
 fn a_settling_thinking_line_jumps_to_the_moment_it_finished() {
-    use fs_agent::events::{EventPayload, Role};
+    use heng::events::{EventPayload, Role};
 
     let done = fixed_at(4, 16, 53);
     let mut state = state_with_roster(&["kimi"]);
@@ -8824,7 +8799,7 @@ fn the_addresses_in_the_conversation_are_drawn_underlined() {
 
 /// 工作目录就是**仓库根**的状态。
 ///
-/// 这一组不能拿 `state()` 那个不存在的 `/x/fs-agent`：热区里的路径要真存在、真在区内才解析
+/// 这一组不能拿 `state()` 那个不存在的 `/x/heng`：热区里的路径要真存在、真在区内才解析
 /// 得出目标（§3），而那个判据正是这几条测试要问的。
 fn state_at_repo() -> TuiState {
     TuiState::new(

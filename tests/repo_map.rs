@@ -15,17 +15,17 @@ mod support;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use fs_agent::config::{SessionConfig, DEFAULT_REPO_MAP_TOKENS, MAX_REPO_MAP_TOKENS};
-use fs_agent::context::estimate_tokens;
-use fs_agent::context::repo_map::{
+use heng::config::{SessionConfig, DEFAULT_REPO_MAP_TOKENS, MAX_REPO_MAP_TOKENS};
+use heng::context::estimate_tokens;
+use heng::context::repo_map::{
     extract, rank, render, Definition, RankContext, Relevance, RepoMap, Scored, SymbolKind,
     REPO_MAP_TOOL,
 };
-use fs_agent::events::{read_events, Event, EventPayload, Role, SessionId, SpeakerId, ToolCallId};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::events::{read_events, Event, EventPayload, Role, SessionId, SpeakerId, ToolCallId};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, Message, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- 纯函数：抽取 ----------------------------------------------------------
@@ -424,8 +424,8 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path, config: SessionConfig) -
             cwd: workspace.to_path_buf(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-repo-map"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -445,7 +445,7 @@ async fn fixture(replies: Vec<Reply>, workspace: &Path, config: SessionConfig) -
 }
 
 impl Fixture {
-    async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
+    async fn run_turn(&mut self, input: &str) -> heng::agent::TurnOutcome {
         self.harness
             .as_mut()
             .expect("harness 已经关掉了")

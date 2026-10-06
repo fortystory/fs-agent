@@ -7,11 +7,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
-use fs_agent::web::fetch_http::{
+use heng::web::fetch_http::{
     decode_body, is_global_v6, is_public_unicast, next_hop, read_bounded, validate_url, HttpFetch,
     MAX_RESPONSE_BYTES, MAX_URL_CHARS,
 };
-use fs_agent::web::{FetchProvider, FetchedContent};
+use heng::web::{FetchProvider, FetchedContent};
 use reqwest::header::{ACCEPT, AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, USER_AGENT};
 use url::Url;
 
@@ -118,11 +118,11 @@ fn ipv6_special_ranges_and_translated_addresses_are_refused() {
 fn a_discovered_dns64_prefix_is_honoured_too() {
     // 运营商自建的前缀（RFC 7050 探出来的那种）：前缀之下的地址，判的是内嵌的那个 IPv4。
     let prefix: Ipv6Addr = "2001:db8:64::".parse().unwrap();
-    assert!(!fs_agent::web::fetch_http::is_public_unicast_with(
+    assert!(!heng::web::fetch_http::is_public_unicast_with(
         v6("2001:db8:64::a00:1"),
         Some(prefix)
     ));
-    assert!(fs_agent::web::fetch_http::is_public_unicast_with(
+    assert!(heng::web::fetch_http::is_public_unicast_with(
         v6("2001:db8:64::808:808"),
         Some(prefix)
     ));
@@ -300,10 +300,7 @@ fn the_request_carries_an_honest_identity_and_no_credentials() {
 
     let headers = request.headers();
     assert!(
-        headers[USER_AGENT]
-            .to_str()
-            .unwrap()
-            .starts_with("fs-agent/"),
+        headers[USER_AGENT].to_str().unwrap().starts_with("heng/"),
         "诚实的身份：{:?}",
         headers[USER_AGENT]
     );

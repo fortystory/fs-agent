@@ -6,8 +6,8 @@
 
 mod support;
 
-use fs_agent::events::{hook_format, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId};
-use fs_agent::render::{channel, PlainOptions, RenderHandle, RenderSinks, Renderer};
+use heng::events::{hook_format, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId};
+use heng::render::{channel, PlainOptions, RenderHandle, RenderSinks, Renderer};
 use support::CaptureBuf;
 
 fn kimi() -> SpeakerId {
@@ -69,14 +69,14 @@ async fn a_notice_reaches_the_diagnostic_sink_verbatim() {
     // 直接写终端：一旦渲染器占住了终端，第二个写者
     // 就落进它那块活区域里了（spec §19、§A.12）。
     let (handle, stdout, stderr, task) = renderer(false);
-    handle.notice("fs-agent: session abc · model m · mode ask · /tmp/x");
+    handle.notice("heng: session abc · model m · mode ask · /tmp/x");
     drop(handle);
     task.await.unwrap();
 
     assert_eq!(stdout.text(), "");
     assert_eq!(
         stderr.text(),
-        "fs-agent: session abc · model m · mode ask · /tmp/x\n"
+        "heng: session abc · model m · mode ask · /tmp/x\n"
     );
 }
 
@@ -107,7 +107,7 @@ async fn rounds_are_sectioned_and_divergences_are_indented() {
             SpeakerId::System,
             EventPayload::RoundStarted {
                 round: 2,
-                mode: fs_agent::events::RoundMode::Targeted,
+                mode: heng::events::RoundMode::Targeted,
             },
         ),
         Event::new(
@@ -441,8 +441,8 @@ async fn a_permission_decision_between_start_and_result_does_not_split_the_call(
             kimi(),
             EventPayload::PermissionDecided {
                 request_id: "r-1".to_owned(),
-                decision: fs_agent::events::Decision::Allow,
-                source: fs_agent::events::DecisionSource::Policy,
+                decision: heng::events::Decision::Allow,
+                source: heng::events::DecisionSource::Policy,
                 reason: Some("mode auto".to_owned()),
             },
         ),
@@ -515,7 +515,7 @@ async fn a_permission_question_names_the_tool_and_the_call() {
         EventPayload::PermissionAsked {
             request_id: "perm-1".to_owned(),
             tool_call_id: ToolCallId::new("call-5"),
-            request: fs_agent::events::permission_format::request(
+            request: heng::events::permission_format::request(
                 "write_file",
                 &serde_json::json!({"file_path": "a.txt"}),
                 "mode ask",
@@ -543,7 +543,7 @@ async fn the_sandbox_state_gets_one_narration_line_like_a_context_injection() {
             1,
             SpeakerId::System,
             EventPayload::ContextInjected {
-                source: fs_agent::events::ContextSource::AgentsMd,
+                source: heng::events::ContextSource::AgentsMd,
                 content: "规矩".to_owned(),
             },
         ),

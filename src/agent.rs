@@ -150,13 +150,13 @@ pub const WEB_GUIDANCE: &str =
 /// 一次配置就把每一个会话的前缀作废一次。代价是没配那台 server 的会话里这句话落空 —— 所以措辞
 /// 是条件式的「若会话里有……」，而不是一句会指向不存在工具的命令。
 ///
-/// `time` 与 `get_current_time` 是 `fs-agent-mcp-time` 那台 server 的契约
+/// `time` 与 `get_current_time` 是 `heng-mcp-time` 那台 server 的契约
 /// （`.scratch/time-mcp/spec.md` §2、§4）：改了工具名，这里要跟着改。
 ///
 /// [`replay`]: crate::agent::replay
 pub const TIME_GUIDANCE: &str =
     "需要当下时间（几点、几号、星期几）时不要凭上下文猜：若会话里有提供时间的 MCP server\
-     （本仓库自带 `fs-agent-mcp-time`），用 `mcp_call` 调它的 `get_current_time`。";
+     （本仓库自带 `heng-mcp-time`），用 `mcp_call` 调它的 `get_current_time`。";
 
 /// 单 agent 的 `system` 提示词：本程序是什么。
 ///
@@ -181,9 +181,9 @@ pub const TIME_GUIDANCE: &str =
 /// 身份函数（讨论者、合成器）一致，那两句各自拼同一段条款。
 pub fn agent_identity() -> String {
     [
-        "你是 fs-agent，一个自用的 coding agent CLI（Rust 实现），运行在用户自己的机器与工作区里。",
+        "你是衡（heng），一套自用的 coding agent harness（Rust 实现），运行在用户自己的机器与工作区里。",
         "你直接读写文件、运行命令、搜索代码，并按这个仓库自己的约定干活（AGENTS.md、CONTEXT.md、",
-        "docs/adr、.scratch 里的 spec 与 ticket）。被问到你是谁时，说你是 fs-agent。你没有跨会话",
+        "docs/adr、.scratch 里的 spec 与 ticket）。被问到你是谁时，说你是衡（heng）。你没有跨会话",
         "记忆：需要上下文就读文件或问用户。",
         "\n\n",
         "开工前先把计划写下来，用 `todo` 工具：每一步都是一项，`status` 写 `pending`。正在做的那一项标成 \

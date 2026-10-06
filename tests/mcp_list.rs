@@ -11,14 +11,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{McpServerConfig, McpSettings};
-use fs_agent::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{McpConnection, McpError, McpService, ServerManifest, ToolSummary};
-use fs_agent::permissions::{Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_mcp, MCP_LIST_TOOL};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::config::{McpServerConfig, McpSettings};
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{McpConnection, McpError, McpService, ServerManifest, ToolSummary};
+use heng::permissions::{Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_mcp, MCP_LIST_TOOL};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
@@ -178,7 +178,7 @@ async fn fixture(
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
-        config: fs_agent::config::SessionConfig::new("fake-model"),
+        config: heng::config::SessionConfig::new("fake-model"),
         renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
@@ -189,7 +189,7 @@ async fn fixture(
             session_id: SessionId::new("s-mcp"),
             // 组装期的那一步：`enabled` 与连接挂没挂是两件事。
             tools: with_mcp(builtin(false), mcp),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
             questions: None,
@@ -438,7 +438,7 @@ async fn readonly_allows_listing_and_ask_does_not_interrupt_it() {
 // --- 配置：两个来源与优先级 -----------------------------------------------
 
 fn resolved_mcp(toml_text: &str) -> McpSettings {
-    fs_agent::config::resolve(Some(toml_text), &BTreeMap::new())
+    heng::config::resolve(Some(toml_text), &BTreeMap::new())
         .expect("这份配置是合法的")
         .mcp
 }
@@ -490,7 +490,7 @@ url = "https://jira.example.com/mcp"
     );
     assert_eq!(settings.servers.len(), 2);
 
-    fs_agent::config::apply_project_mcp(
+    heng::config::apply_project_mcp(
         &mut settings,
         r#"{"mcpServers": {"github": {"command": ["project-github"]}}}"#,
     )
@@ -509,21 +509,21 @@ url = "https://jira.example.com/mcp"
 
 #[test]
 fn an_unknown_key_in_either_source_is_refused() {
-    let user = fs_agent::config::resolve(
+    let user = heng::config::resolve(
         Some("[mcp.servers.github]\ncommand = [\"x\"]\ntrust_result = true\n"),
         &BTreeMap::new(),
     );
     assert!(user.is_err(), "少一个 `s` 的信任位要被拒：{user:?}");
 
-    let section = fs_agent::config::resolve(Some("[mcp]\nenable = true\n"), &BTreeMap::new());
+    let section = heng::config::resolve(Some("[mcp]\nenable = true\n"), &BTreeMap::new());
     assert!(section.is_err(), "[mcp] 段里的未知键要被拒：{section:?}");
 
-    let project = fs_agent::config::project_mcp_servers(
+    let project = heng::config::project_mcp_servers(
         r#"{"mcpServers": {"github": {"command": ["x"], "trusted": true}}}"#,
     );
     assert!(project.is_err(), ".mcp.json 里的未知键要被拒：{project:?}");
 
-    let outer = fs_agent::config::project_mcp_servers(r#"{"servers": {}}"#);
+    let outer = heng::config::project_mcp_servers(r#"{"servers": {}}"#);
     assert!(outer.is_err(), "外层键只认 `mcpServers`：{outer:?}");
 }
 
@@ -538,28 +538,27 @@ fn the_project_file_is_read_from_the_working_directory() {
     .unwrap();
 
     // 开着开关：仓库根的那一份生效。
-    let mut on =
-        fs_agent::config::resolve(Some("[mcp]\nenabled = true\n"), &BTreeMap::new()).unwrap();
+    let mut on = heng::config::resolve(Some("[mcp]\nenabled = true\n"), &BTreeMap::new()).unwrap();
     on.load_project_mcp(dir.path())
         .expect("这份 .mcp.json 是合法的");
     assert_eq!(on.mcp.servers["github"].command, vec!["from-project"]);
 
     // 关着开关：连文件都不看 —— 一份坏掉的 `.mcp.json` 也影响不到不做它的会话。
     std::fs::write(&path, "{ 这不是 JSON").unwrap();
-    let mut off = fs_agent::config::resolve(None, &BTreeMap::new()).unwrap();
+    let mut off = heng::config::resolve(None, &BTreeMap::new()).unwrap();
     off.load_project_mcp(dir.path())
         .expect("不开这一层就不读文件");
     assert!(off.mcp.servers.is_empty());
 
     // 开着开关而文件坏了：启动错误，而不是等到模型第一次调用。
     let mut broken =
-        fs_agent::config::resolve(Some("[mcp]\nenabled = true\n"), &BTreeMap::new()).unwrap();
+        heng::config::resolve(Some("[mcp]\nenabled = true\n"), &BTreeMap::new()).unwrap();
     assert!(broken.load_project_mcp(dir.path()).is_err());
 }
 
 #[test]
 fn a_broken_server_record_fails_at_startup() {
-    let no_command = fs_agent::config::resolve(
+    let no_command = heng::config::resolve(
         Some("[mcp.servers.github]\ntransport = \"stdio\"\n"),
         &BTreeMap::new(),
     );
@@ -568,7 +567,7 @@ fn a_broken_server_record_fails_at_startup() {
         "点名 stdio 却没有 command 是启动错误：{no_command:?}"
     );
 
-    let unknown_transport = fs_agent::config::resolve(
+    let unknown_transport = heng::config::resolve(
         Some("[mcp.servers.github]\ntransport = \"sse\"\ncommand = [\"x\"]\n"),
         &BTreeMap::new(),
     );
@@ -577,7 +576,7 @@ fn a_broken_server_record_fails_at_startup() {
         "不认识的传输名是启动错误：{unknown_transport:?}"
     );
 
-    let both = fs_agent::config::resolve(
+    let both = heng::config::resolve(
         Some("[mcp.servers.github]\ncommand = [\"x\"]\nurl = \"https://a/mcp\"\n"),
         &BTreeMap::new(),
     );
@@ -588,7 +587,7 @@ fn a_broken_server_record_fails_at_startup() {
 fn two_servers_with_the_same_name_are_a_startup_error() {
     // 同名意味着「我以为两台都活着、其实只有一台」。TOML 自己就拒重复表，于是这是一条启动
     // 错误，而不是最后一台静默盖掉第一台（票 12 验证 3）。
-    let duplicated = fs_agent::config::resolve(
+    let duplicated = heng::config::resolve(
         Some(
             "[mcp.servers.github]\ncommand = [\"a\"]\n\n\
              [mcp.servers.github]\ncommand = [\"b\"]\n",
@@ -601,7 +600,7 @@ fn two_servers_with_the_same_name_are_a_startup_error() {
     );
 
     // `.mcp.json` 那一侧：JSON 没有「拒重复表」的语法，由 `UniqueServerMap` 挡。
-    let duplicated_json = fs_agent::config::project_mcp_servers(
+    let duplicated_json = heng::config::project_mcp_servers(
         r#"{"mcpServers": {"github": {"command": ["a"]}, "github": {"command": ["b"]}}}"#,
     );
     assert!(

@@ -1,7 +1,7 @@
-//! `fs-agent-mcp-time` 的两条验收路（`.scratch/time-mcp/spec.md` §6.1–§6.2；票 01）。
+//! `heng-mcp-time` 的两条验收路（`.scratch/time-mcp/spec.md` §6.1–§6.2；票 01）。
 //!
 //! 一路是**裸协议**：spawn 那个二进制、自己按行读写 JSON-RPC —— 看它答得对不对。
-//! 另一路是**端到端**：让 fs-agent 自己连它（沙箱包装 + `Discover` 握手 + 协议帧），
+//! 另一路是**端到端**：让 heng 自己连它（沙箱包装 + `Discover` 握手 + 协议帧），
 //! 再让工具层真调一次。**端到端那一半才是握手形状的真验收**：手写的帧与 client 的期望差一个
 //! 字段，它就红。
 //!
@@ -13,16 +13,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use fs_agent::config::{
+use heng::config::{
     McpServerConfig, McpSettings, SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig,
 };
-use fs_agent::events::{read_events, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{connect_all, ConnectOptions, McpService};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_mcp, Sandbox, MCP_CALL_TOOL};
-use fs_agent::{assemble, AssemblyParts, SessionScaffold};
+use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{connect_all, ConnectOptions, McpService};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_mcp, Sandbox, MCP_CALL_TOOL};
+use heng::{assemble, AssemblyParts, SessionScaffold};
 use serde_json::{json, Value};
 use support::{CaptureBuf, FakeProvider, Reply};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -30,7 +30,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 
 /// 仓库自带的时间 server。Cargo 把它的路径喂给集成测试。
 fn server_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_fs-agent-mcp-time")
+    env!("CARGO_BIN_EXE_heng-mcp-time")
 }
 
 // --- 裸协议那条路 ---------------------------------------------------------
@@ -188,7 +188,7 @@ async fn the_banner_goes_to_stderr_and_stdout_stays_clean() {
 
     assert_eq!(output.status.code(), Some(0));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("fs-agent-mcp-time"),
+        String::from_utf8_lossy(&output.stderr).contains("heng-mcp-time"),
         "自述该走 stderr：{:?}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -280,7 +280,7 @@ fn sandbox_for(cwd: &Path) -> Option<Sandbox> {
     let mut settings = SandboxSettings::off();
     settings.mode = SandboxMode::Bwrap;
     settings.search_path = std::env::var_os("PATH");
-    settings.availability = fs_agent::tools::sandbox::probe(settings.search_path.as_deref(), cwd);
+    settings.availability = heng::tools::sandbox::probe(settings.search_path.as_deref(), cwd);
     if matches!(
         settings.availability,
         SandboxAvailability::Unavailable { .. }
@@ -373,7 +373,7 @@ async fn the_meta_tool_brings_the_time_back_into_the_session() {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-time-mcp"),
             tools: with_mcp(builtin(false), service),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,

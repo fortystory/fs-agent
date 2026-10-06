@@ -6,14 +6,14 @@
 
 use std::time::Duration;
 
-use fs_agent::config::{resolve, EnvMap, ReasoningEffort, BUILTIN_MODELS};
-use fs_agent::events::Usage;
-use fs_agent::provider::capability::{caps_for, ModelCaps, KNOWN_MODELS};
-use fs_agent::provider::openai::{
+use heng::config::{resolve, EnvMap, ReasoningEffort, BUILTIN_MODELS};
+use heng::events::Usage;
+use heng::provider::capability::{caps_for, ModelCaps, KNOWN_MODELS};
+use heng::provider::openai::{
     build_body, chat_completions_url, classify_status, normalize_usage, parse_retry_after,
     retry_delay, silent_warnings, BuildError, OpenAiProvider, RetryPolicy, StreamDecoder,
 };
-use fs_agent::provider::{
+use heng::provider::{
     ChatRequest, FinishReason, GenerationParams, Message, Provider, ProviderError, StreamEvent,
     ToolCall, ToolChoice, ToolSpec,
 };
@@ -413,7 +413,7 @@ fn a_stream_that_never_sees_done_produces_no_completed_unit() {
 #[test]
 fn kimi_cached_tokens_become_cached_and_miss() {
     let usage = normalize_usage(
-        fs_agent::config::Vendor::Kimi,
+        heng::config::Vendor::Kimi,
         &serde_json::json!({
             "prompt_tokens": 100,
             "completion_tokens": 10,
@@ -436,7 +436,7 @@ fn kimi_cached_tokens_become_cached_and_miss() {
 #[test]
 fn deepseek_hit_and_miss_tokens_become_cached_and_miss() {
     let usage = normalize_usage(
-        fs_agent::config::Vendor::DeepSeek,
+        heng::config::Vendor::DeepSeek,
         &serde_json::json!({
             "prompt_tokens": 100,
             "completion_tokens": 10,
@@ -460,7 +460,7 @@ fn deepseek_hit_and_miss_tokens_become_cached_and_miss() {
 #[test]
 fn a_missing_miss_count_falls_back_to_input_minus_cached() {
     let usage = normalize_usage(
-        fs_agent::config::Vendor::DeepSeek,
+        heng::config::Vendor::DeepSeek,
         &serde_json::json!({
             "prompt_tokens": 100,
             "completion_tokens": 1,

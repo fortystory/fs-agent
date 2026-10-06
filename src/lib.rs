@@ -1,4 +1,4 @@
-//! fs-agent：一个自用的 coding agent CLI。
+//! 衡（heng）：一套自用的 coding agent harness。
 //!
 //! 一条只追加的事件流，加上每个 agent 一份投影。事件流是唯一真相源；agent 的
 //! `messages` 由它重算，从不存下来。

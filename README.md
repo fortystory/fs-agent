@@ -1,16 +1,15 @@
-# fs-agent
+# 衡（heng）
 
 ```text
-  ▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀
-  ▓▄▄  ▓         ▓▄▄▓ ▓ ▀▓ ▓▄▄  ▓▄ ▓  ▓   fs
-  ▒     ▀▀▄ ▀▀▀▀ ▒  ▒ ▒  ▒ ▒    ▒ ▀▒  ▒   forked synthesis · 分叉合成
-  ░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░   two forks, one stem
-  ▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀
+                 héng
+                  衡
+                           一套自用的 coding agent harness
+                           forked synthesis · 分叉合成 · two forks, one stem
 ```
 
-**fs** = **Forked Synthesis**（分叉合成）：两个异构讨论者**分叉**作答，合成器把分叉**收束**成共识 / 分歧 / 未决——前者是机制，后者是产出。`fs-agent` 即「分叉合成的 agent」；`fs` 只是叙述里的框架名，**不是**命令行或路径的一部分（命令仍是 `fs-agent`，落盘仍是 `~/.config/fs-agent/`）。`Forked` 的「分叉」只指讨论协议这一步，与「明确不做」一节里的 `fork/rewind` 手势无关。
+**衡（heng）**：一套自用的 coding agent harness（Rust，从零实现）。名字取「**衡量**」——合成器**不是裁判**，它只把两方判断放到秤上，画出共识 / 分歧 / 未决的选项空间，决定权在你。**分叉合成（Forked Synthesis）**是讨论协议那一步的机制名：两个异构讨论者分叉作答，合成器把分叉收束——前者是机制，后者是产出；它与「明确不做」一节里的 `fork/rewind` 手势无关。
 
-自用 coding agent CLI（Rust，从零实现）。核心是**一条只追加的事件流**加**每个 agent 自己的窗口**：事件流是会话的唯一真相源，每个讨论者 / 执行者这次调用要重放的 `messages` 都是从事件流加投影规则**重算**出来的纯函数产物——没有隐藏状态，历史永远可复盘。
+自用 coding agent harness（Rust，从零实现）。核心是**一条只追加的事件流**加**每个 agent 自己的窗口**：事件流是会话的唯一真相源，每个讨论者 / 执行者这次调用要重放的 `messages` 都是从事件流加投影规则**重算**出来的纯函数产物——没有隐藏状态，历史永远可复盘。
 
 > 术语以 [`CONTEXT.md`](CONTEXT.md) 为准：叙述、文档与 UI 用中文（讨论者 / 执行者 / 事件流 / 投影 / 会话 / 轮次 / 回合 / 技能），代码标识符用其中的英文名（`Debater` / `Executor` / `EventLog` / `project()`）。
 
@@ -23,7 +22,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **34 张**实现票全部 `done`，此后每个 feature 也各自落了地，逐行的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)，其中几条只剩**真机走查**（`ready-for-walkthrough`，清单在 [`docs/tui-manual-checklist.md`](docs/tui-manual-checklist.md)）。规模：`src/` **47,695** 行、`tests/` **46,706** 行（`wc -l`）、**1,339** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
+**状态**：v1 的 **34 张**实现票全部 `done`，此后每个 feature 也各自落了地，逐行的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)，其中几条只剩**真机走查**（`ready-for-walkthrough`，清单在 [`docs/tui-manual-checklist.md`](docs/tui-manual-checklist.md)）。规模：`src/` **48,551** 行、`tests/` **46,906** 行（`wc -l`）、**1,366** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
 
 ## 快速开始
 
@@ -45,7 +44,7 @@ cargo install --path .
 
 ### 配置
 
-配置在 `~/.config/fs-agent/config.toml`（认 `XDG_CONFIG_HOME`）。优先级是 **`config.toml` > 已导出环境变量 > 内置默认**；**项目里的 `.env` 永远不会被加载**，所以 clone 下来的仓库改不了你的行为。
+配置在 `~/.config/heng/config.toml`（认 `XDG_CONFIG_HOME`）。优先级是 **`config.toml` > 已导出环境变量 > 内置默认**；**项目里的 `.env` 永远不会被加载**，所以 clone 下来的仓库改不了你的行为。
 
 内置三个 provider profile（Kimi 的两套系统 key 互不通用，所以是两个）：
 
@@ -55,12 +54,12 @@ cargo install --path .
 | `kimi-code` | `https://api.kimi.com/coding/v1` | `KIMI_API_KEY`（或 `KIMI_CODE_API_KEY`） |
 | `deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 
-内置模型 id：`kimi-k3`、`k3`、`k3-256k`、`kimi-for-coding`、`kimi-for-coding-highspeed`、`deepseek-v4-pro`、`deepseek-flash`。默认 `kimi-k3`（也可用 `FS_AGENT_MODEL` 覆盖）。**未登记的 model id 在启动时报错，不静默降级。**
+内置模型 id：`kimi-k3`、`k3`、`k3-256k`、`kimi-for-coding`、`kimi-for-coding-highspeed`、`deepseek-v4-pro`、`deepseek-flash`。默认 `kimi-k3`（也可用 `HENG_MODEL` 覆盖）。**未登记的 model id 在启动时报错，不静默降级。**
 
 一份够用的配置：
 
 ```toml
-# ~/.config/fs-agent/config.toml
+# ~/.config/heng/config.toml
 default_model = "kimi-k3"
 
 # key 也可以只导出环境变量；写在 base_url 旁边即显式配对
@@ -130,18 +129,18 @@ parameters = { type = "object", properties = {} }
 ### 跑
 
 ```sh
-fs-agent                        # 交互会话：终端上用 TUI，管道里用 plain 转录
-fs-agent --plain                # 强制 plain 转录
-fs-agent --tui                  # 强制 TUI（与 --plain 互斥）
-fs-agent --continue             # 接着跑本工作区最新的会话（会话 id 不变，前缀缓存继续命中）
-fs-agent -c 20261001T155845Z-7a69cbff   # 按 id 续指定的一场（不带 id 就是最新；先在本桶找、再全 store；它在别的工作区时会切到那个目录）
-fs-agent --session 20261001T155845Z-7a69cbff   # 同一个意思的显式拼写
-fs-agent --model deepseek-v4-pro
-fs-agent --config /path/to/config.toml  # 换一份配置文件
-fs-agent --cwd /path/to/repo
-fs-agent discuss "把权限模型换成 X，风险在哪？"   # 两个异构讨论者 + 合成器
-fs-agent discuss --plain "…" 2>/dev/null          # 只要合成产物（讨论过程走 stderr）
-fs-agent --help
+heng                        # 交互会话：终端上用 TUI，管道里用 plain 转录
+heng --plain                # 强制 plain 转录
+heng --tui                  # 强制 TUI（与 --plain 互斥）
+heng --continue             # 接着跑本工作区最新的会话（会话 id 不变，前缀缓存继续命中）
+heng -c 20261001T155845Z-7a69cbff   # 按 id 续指定的一场（不带 id 就是最新；先在本桶找、再全 store；它在别的工作区时会切到那个目录）
+heng --session 20261001T155845Z-7a69cbff   # 同一个意思的显式拼写
+heng --model deepseek-v4-pro
+heng --config /path/to/config.toml  # 换一份配置文件
+heng --cwd /path/to/repo
+heng discuss "把权限模型换成 X，风险在哪？"   # 两个异构讨论者 + 合成器
+heng discuss --plain "…" 2>/dev/null          # 只要合成产物（讨论过程走 stderr）
+heng --help
 ```
 
 会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出。
@@ -154,11 +153,11 @@ TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按�
 
 ```text
                                         ┆对话┆轨迹┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀ ┆┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ▓▄▄  ▓         ▓▄▄▓ ▓ ▀▓ ▓▄▄  ▓▄ ▓  ▓  ┆
- ▒     ▀▀▄ ▀▀▀▀ ▒  ▒ ▒  ▒ ▒    ▒ ▀▒  ▒  ┆                                                                         [用户]
- ░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░  ┆                                                         看看这个仓库现在什么样
- ▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀  ┆
+                                        ┆┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+                 héng                   ┆
+                  衡                    ┆                                                                         [用户]
+                                        ┆                                                         看看这个仓库现在什么样
+                                        ┆
                                         ┆[kimi]
 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┆工作区是干净的。
 调用量┆文件┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┆
@@ -187,23 +186,23 @@ enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚
 
 转录里**中间过程是折起来的**：思考只留一行 `[kimi] ▸ ✓ 思考完成`，工具调用只留一行 `[kimi] ▸ 调用 bash 查看 git status`——描述从参数推出（`查询`/`查看`/`修改`/`运行` + 第一个路径或子命令），命令全文与输出都不铺在屏幕上。**点这两行的 `▸`** 打开详情覆盖层（**居中于屏幕**、虚线边框四角为空；发言者色落在**标题行**）：思考全文、工具参数、输出全文分节显示，可用 `PgUp`/`PgDn` 或滚轮翻，`Esc` 或点框外关掉；转录停在原处不动。
 
-说话人名字按角色着色（讨论者 1 浅青、讨论者 2 浅品红、执行者 浅黄、用户 浅绿、系统 灰），正文保留原来的语义色。鼠标还能**点击作答**：权限 / 粘贴 / 清草稿三种覆盖层的候选键，以及 `ask_user_question` 问卷的选项行（点一下只**切换选中**、不翻页；翻页与提交走页脚）。键盘上退出是**双击**：空闲时 `Ctrl-C` 与 `Ctrl-D` 完全对等 —— 第一下只在提示行举手（`再按一次 ctrl-c/ctrl-d 退出`），半秒内第二下才真的走；忙时第一下 `Ctrl-C` 只取消当前回合（提示行说明），第二下退出（以 130 收尾，终端照常交还），忙时 `Ctrl-D` 一直忽略。退出（含忙碌那条）后 shell 里会多一行 `fs-agent: 会话 <id>；接着跑：fs-agent -c <id>`（stderr，与 `discuss` 收尾那行同一个前缀与生成器）—— 那行直接粘回终端就能续上这一场。启动横幅不打它。
+说话人名字按角色着色（讨论者 1 浅青、讨论者 2 浅品红、执行者 浅黄、用户 浅绿、系统 灰），正文保留原来的语义色。鼠标还能**点击作答**：权限 / 粘贴 / 清草稿三种覆盖层的候选键，以及 `ask_user_question` 问卷的选项行（点一下只**切换选中**、不翻页；翻页与提交走页脚）。键盘上退出是**双击**：空闲时 `Ctrl-C` 与 `Ctrl-D` 完全对等 —— 第一下只在提示行举手（`再按一次 ctrl-c/ctrl-d 退出`），半秒内第二下才真的走；忙时第一下 `Ctrl-C` 只取消当前回合（提示行说明），第二下退出（以 130 收尾，终端照常交还），忙时 `Ctrl-D` 一直忽略。退出（含忙碌那条）后 shell 里会多一行 `heng: 会话 <id>；接着跑：heng -c <id>`（stderr，与 `discuss` 收尾那行同一个前缀与生成器）—— 那行直接粘回终端就能续上这一场。启动横幅不打它。
 
 ### 子命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `fs-agent discuss "问题" [--plain\|--tui] [--config PATH] [--cwd PATH] [--debaters A,B]` | 起一次多角色讨论：从 `[discussion] debaters` 池子里抽两个讨论者（`--debaters` 指定），各自独立作答（不同厂商最好；同厂商或同模型也允许），只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决。讨论落在真会话里，`sessions show` 可复盘 |
-| `fs-agent probe [--model ID]...` | 对每个已配置 key 的模型发两次真实请求，打印归一化用量，用来看前缀缓存是否命中 |
-| `fs-agent prune [--keep N] [--cwd PATH] [--dry-run]` | 手动删除本工作区的会话目录，保留最新 N 个（默认 1）。除此之外没有任何东西会删你的会话 |
-| `fs-agent sessions ls [--all] [--limit N]` | 列出本工作区（`--all` 为全部桶）的会话 |
-| `fs-agent sessions show <id> [--round N] [--speaker X] [--kind K] [--tool T] [--only-error] [--files]` | 按轮次分组的转录，工具调用与结果归成一处；`--files` 是「谁在哪一轮改了这个文件」的工作区对象视图 |
-| `fs-agent sessions replay <id> --speaker X [--round N] [--model ID]` | 只从事件流**重算**某一次调用实际发给 provider 的内容——调投影 bug 的唯一手段 |
-| `fs-agent sessions stats <id> [--model ID]` | 固定指标集：token、费用、单侧缺席率、编辑匹配梯降级分布等 |
+| `heng discuss "问题" [--plain\|--tui] [--config PATH] [--cwd PATH] [--debaters A,B]` | 起一次多角色讨论：从 `[discussion] debaters` 池子里抽两个讨论者（`--debaters` 指定），各自独立作答（不同厂商最好；同厂商或同模型也允许），只在结论冲突时开一轮定向第二轮，最后由合成器画出共识 / 分歧 / 未决。讨论落在真会话里，`sessions show` 可复盘 |
+| `heng probe [--model ID]...` | 对每个已配置 key 的模型发两次真实请求，打印归一化用量，用来看前缀缓存是否命中 |
+| `heng prune [--keep N] [--cwd PATH] [--dry-run]` | 手动删除本工作区的会话目录，保留最新 N 个（默认 1）。除此之外没有任何东西会删你的会话 |
+| `heng sessions ls [--all] [--limit N]` | 列出本工作区（`--all` 为全部桶）的会话 |
+| `heng sessions show <id> [--round N] [--speaker X] [--kind K] [--tool T] [--only-error] [--files]` | 按轮次分组的转录，工具调用与结果归成一处；`--files` 是「谁在哪一轮改了这个文件」的工作区对象视图 |
+| `heng sessions replay <id> --speaker X [--round N] [--model ID]` | 只从事件流**重算**某一次调用实际发给 provider 的内容——调投影 bug 的唯一手段 |
+| `heng sessions stats <id> [--model ID]` | 固定指标集：token、费用、单侧缺席率、编辑匹配梯降级分布等 |
 
 `--json` 都可用；**stdout 只放结果，诊断走 stderr**，所以能直接接进管道。这些命令是给人用的，不是给 agent 的新工具。
 
-会话落盘在 `~/.local/share/fs-agent/sessions/<cwd-slug>/<session-id>/`（认 `XDG_DATA_HOME`），一个会话就是一个可搬运的目录：JSONL 事件流 + `outputs/`（工具输出落盘）。目录 `0700`、文件 `0600`。
+会话落盘在 `~/.local/share/heng/sessions/<cwd-slug>/<session-id>/`（认 `XDG_DATA_HOME`），一个会话就是一个可搬运的目录：JSONL 事件流 + `outputs/`（工具输出落盘）。目录 `0700`、文件 `0600`。
 
 ## 安全模型
 

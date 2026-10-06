@@ -34,7 +34,7 @@ outside_read = "deny"        # "deny"（缺省）| "ask" | "allow"
 
 它管的是**读**目标落在会话 cwd 之外的情形，**全局**生效：四档都认它，因为它是一条策略级的地板、与档位正交。`ask` 档配上 `"allow"` 恰好就是 DSH 的「读全放、写要问」。
 
-缺省永远是 `deny`，因为这条地板保住的正是 `~/.config/fs-agent/config.toml`——provider key 就在那儿，而打码只是**值级 best-effort**。这与 `[sandbox] mode = "off"` 是同一个立场：**显式写下来才算放弃**；改它会改变 key 的暴露面，见 [credentials.md](credentials.md)。
+缺省永远是 `deny`，因为这条地板保住的正是 `~/.config/heng/config.toml`——provider key 就在那儿，而打码只是**值级 best-effort**。这与 `[sandbox] mode = "off"` 是同一个立场：**显式写下来才算放弃**；改它会改变 key 的暴露面，见 [credentials.md](credentials.md)。
 
 区外**写**没有对称的旋钮：它只有 `workspace` 档这一个出口。
 
@@ -66,7 +66,7 @@ bash(command: "echo x > ~/.npm/probe",
 
 | 类别 | 清单 | 为什么 |
 | --- | --- | --- |
-| 遮罩目录 | `~/.config/fs-agent`、`~/.ssh` | provider key 与 ssh 私钥在那儿；挂载表里它们是空且只读的 tmpfs |
+| 遮罩目录 | `~/.config/heng`、`~/.ssh` | provider key 与 ssh 私钥在那儿；挂载表里它们是空且只读的 tmpfs |
 | 保护路径 | 工作区里的 `.git/config`、`.git/hooks`，以及 `.env` 一族的文件（`.example` / `.sample` / `.template` 除外） | 改 remote、换 hooks、把凭据写进工作区 |
 
 它们在挂载表里排在可写根**之后**，所以就算批准把其中的路径加进可写根，那条遮罩或只读挂载也会盖掉它——**批准等于白批，而用户会以为自己批准了**。门里直接拒，是唯一诚实的做法。

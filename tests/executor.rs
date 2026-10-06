@@ -11,15 +11,15 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     read_events, Decision, Event, EventPayload, ParticipantId, Role, SessionId, SpeakerId,
     StopReason, Usage,
 };
-use fs_agent::permissions::{Asker, Mode, Policy, Rule, Scope, Subject};
-use fs_agent::provider::{FinishReason, Message, ProviderError, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Asker, Mode, Policy, Rule, Scope, Subject};
+use heng::provider::{FinishReason, Message, ProviderError, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 fn kimi() -> SpeakerId {
@@ -78,7 +78,7 @@ async fn fixture_with(
     config: SessionConfig,
     policy: Policy,
     asker: Option<Arc<dyn Asker>>,
-    hook: Option<Arc<dyn fs_agent::hooks::Hook>>,
+    hook: Option<Arc<dyn heng::hooks::Hook>>,
 ) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let session_dir = dir.path().join("session");
@@ -109,8 +109,8 @@ async fn fixture_with(
             cwd: cwd.clone(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-executor"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy,
             asker,
             questions: None,
@@ -193,14 +193,11 @@ fn said(events: &[Event], speaker: &SpeakerId) -> Vec<String> {
         .collect()
 }
 
-fn tool_names(request: &fs_agent::provider::ChatRequest) -> Vec<String> {
+fn tool_names(request: &heng::provider::ChatRequest) -> Vec<String> {
     request.tools.iter().map(|tool| tool.name.clone()).collect()
 }
 
-fn contents(
-    request: &fs_agent::provider::ChatRequest,
-    want: &dyn Fn(&Message) -> bool,
-) -> Vec<String> {
+fn contents(request: &heng::provider::ChatRequest, want: &dyn Fn(&Message) -> bool) -> Vec<String> {
     request
         .messages
         .iter()
@@ -334,18 +331,15 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
             // 那一句思考语言的条款四段身份共用（`tests/thinking_language.rs`
             // 断言公开的那三段）；执行者的身份不在公开 API 上，只能从这里读。
             assert!(
-                content.contains(fs_agent::agent::THINKING_IN_CHINESE),
+                content.contains(heng::agent::THINKING_IN_CHINESE),
                 "{content}"
             );
             // 联网那段指引同理（`.scratch/web-search-tool/spec.md` §8）：执行者去干活时
             // 自己就能查，不必让讨论者把结果转述过去。
-            assert!(content.contains(fs_agent::agent::WEB_GUIDANCE), "{content}");
+            assert!(content.contains(heng::agent::WEB_GUIDANCE), "{content}");
             // 而时间那句**只**拼在本程序的身份上（`.scratch/time-mcp/spec.md` §5）：执行者的
             // 工具表里没有 MCP 那一套，指它反而是指一条不存在的路。
-            assert!(
-                !content.contains(fs_agent::agent::TIME_GUIDANCE),
-                "{content}"
-            );
+            assert!(!content.contains(heng::agent::TIME_GUIDANCE), "{content}");
         }
         other => panic!("要的是执行者自己的系统身份，得到 {other:?}"),
     }
@@ -378,7 +372,7 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
     assert_eq!(fixture.stdout.text(), "the executor counted 12 files\n");
     // 执行者自己的干活过程会被叙述给读终端的人看，
     // 归在它自己的发言者标签下。
-    let label = fs_agent::render::wording::speaker_label(&SpeakerId::Executor("kimi-1".into()));
+    let label = heng::render::wording::speaker_label(&SpeakerId::Executor("kimi-1".into()));
     assert!(
         fixture.stderr.text().contains(&label),
         "{}",
@@ -500,7 +494,7 @@ async fn an_executors_read_set_starts_empty_and_the_dispatchers_does_not_travel(
         .collect();
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(
-        failures[0].contains(fs_agent::tools::READ_BEFORE_WRITE_PREFIX),
+        failures[0].contains(heng::tools::READ_BEFORE_WRITE_PREFIX),
         "{}",
         failures[0]
     );
@@ -554,7 +548,7 @@ async fn an_executors_edit_is_undoable_like_any_other() {
     assert!(events.iter().any(|event| matches!(
         &event.payload,
         EventPayload::HistorySuperseded {
-            reason: fs_agent::events::HistoryReason::Undo,
+            reason: heng::events::HistoryReason::Undo,
             ..
         }
     )));
@@ -925,8 +919,8 @@ async fn the_batch_cap_bounds_how_many_executors_work_at_once() {
 async fn a_hook_that_stops_the_turn_still_gives_a_deferred_task_its_one_result() {
     let hook = support::ScriptedHook::new(
         vec![
-            Ok(fs_agent::hooks::Constraint::Continue),
-            Ok(fs_agent::hooks::Constraint::Stop),
+            Ok(heng::hooks::Constraint::Continue),
+            Ok(heng::hooks::Constraint::Stop),
         ],
         Vec::new(),
     );
@@ -1275,8 +1269,8 @@ async fn the_report_names_the_file_a_rewriting_hook_actually_wrote() {
     // 所以报告该点名的就是它。
     let hook = support::ScriptedHook::new(
         vec![
-            Ok(fs_agent::hooks::Constraint::Continue),
-            Ok(fs_agent::hooks::Constraint::Rewrite(serde_json::json!({
+            Ok(heng::hooks::Constraint::Continue),
+            Ok(heng::hooks::Constraint::Rewrite(serde_json::json!({
                 "file_path": "created.txt",
                 "content": "from the hook\n"
             }))),

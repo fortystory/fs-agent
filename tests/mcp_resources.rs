@@ -11,16 +11,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{McpServerConfig, McpSettings};
-use fs_agent::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{McpConnection, McpError, McpService, ResourceSummary};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{
-    builtin, with_mcp, MCP_READ_TOOL, MCP_RESOURCES_TOOL, READ_BEFORE_WRITE_PREFIX,
-};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::config::{McpServerConfig, McpSettings};
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{McpConnection, McpError, McpService, ResourceSummary};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_mcp, MCP_READ_TOOL, MCP_RESOURCES_TOOL, READ_BEFORE_WRITE_PREFIX};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -64,7 +62,7 @@ impl FakeMcp {
 
 #[async_trait]
 impl McpConnection for FakeMcp {
-    async fn list_tools(&self) -> Result<fs_agent::mcp::ServerManifest, McpError> {
+    async fn list_tools(&self) -> Result<heng::mcp::ServerManifest, McpError> {
         Err(McpError::unsupported("列工具"))
     }
 
@@ -161,7 +159,7 @@ async fn fixture(replies: Vec<Reply>, mcp: McpService) -> Fixture {
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
-        config: fs_agent::config::SessionConfig::new("fake-model"),
+        config: heng::config::SessionConfig::new("fake-model"),
         renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
@@ -171,7 +169,7 @@ async fn fixture(replies: Vec<Reply>, mcp: McpService) -> Fixture {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-mcp-res"),
             tools: with_mcp(builtin(false), mcp),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -299,18 +297,18 @@ async fn reading_a_resource_does_not_unlock_a_workspace_edit() {
             // 于是改一个没读过的文件仍然被「改前先读」拒。
             tool_call(
                 "call-2",
-                fs_agent::tools::EDIT_FILE,
+                heng::tools::EDIT_FILE,
                 json!({ "file_path": note, "old_string": "旧", "new_string": "新" }),
             ),
             // 真读一遍之后才放行。
             tool_call(
                 "call-3",
-                fs_agent::tools::READ_FILE,
+                heng::tools::READ_FILE,
                 json!({ "file_path": note }),
             ),
             tool_call(
                 "call-4",
-                fs_agent::tools::EDIT_FILE,
+                heng::tools::EDIT_FILE,
                 json!({ "file_path": note, "old_string": "旧", "new_string": "新" }),
             ),
             Reply::text("done"),

@@ -11,17 +11,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     pending_tool_calls, read_events, Event, EventLog, EventPayload, HistoryReason, ParticipantId,
     Role, SessionId, SpeakerId, StopReason, ToolCallId,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::session::{SessionStore, StoredSession};
-use fs_agent::tools::{self, PathLocks};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, Message, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::session::{SessionStore, StoredSession};
+use heng::tools::{self, PathLocks};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 /// 一个工作区、一个存储根，以及那两个被捕获的 sink —— 一个会话

@@ -13,17 +13,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     pending_tool_calls, read_events, Decision, DecisionSource, Event, EventPayload, SessionId,
     SpeakerId, StopReason,
 };
-use fs_agent::hooks::{Constraint, Hook, HookError, Tightening};
-use fs_agent::permissions::{Answer, Asker, Mode, Policy, Rule};
-use fs_agent::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::hooks::{Constraint, Hook, HookError, Tightening};
+use heng::permissions::{Answer, Asker, Mode, Policy, Rule};
+use heng::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker, ScriptedHook};
 
@@ -72,7 +72,7 @@ async fn fixture_with_tools(
         session_policy.push(rule);
     }
 
-    let mut tools = fs_agent::tools::builtin(false);
+    let mut tools = heng::tools::builtin(false);
     for tool in extra_tools {
         tools.register(tool);
     }
@@ -90,7 +90,7 @@ async fn fixture_with_tools(
             log_path: log_path.clone(),
             session_id: SessionId::new("s-hooks"),
             tools,
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: session_policy,
             asker,
             questions: None,
@@ -114,7 +114,7 @@ async fn fixture_with_tools(
 
 impl Fixture {
     /// 记下一条用户消息，再跑完一个回合。
-    async fn run_turn(&mut self, input: &str) -> fs_agent::agent::TurnOutcome {
+    async fn run_turn(&mut self, input: &str) -> heng::agent::TurnOutcome {
         self.harness
             .as_mut()
             .expect("harness 已经关掉了")

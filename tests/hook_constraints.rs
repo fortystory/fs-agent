@@ -6,11 +6,11 @@
 //! 放松。公开子集也在这里检查，于是钩子观察面的封闭性
 //! 不依赖循环怎么接线。
 
-use fs_agent::events::{
+use heng::events::{
     ContextSource, Decision, DecisionSource, Event, EventPayload, HistoryReason, ParticipantId,
     Role, RoundMode, SessionId, SpeakerId, StopReason, ToolCallId, Usage,
 };
-use fs_agent::hooks::{effective_verdict, public_history, Constraint, HookEvent, Tightening};
+use heng::hooks::{effective_verdict, public_history, Constraint, HookEvent, Tightening};
 
 /// 每个枚举变体各一条 payload，外加钩子能不能看见它。
 fn all_payloads() -> Vec<(&'static str, EventPayload, bool)> {

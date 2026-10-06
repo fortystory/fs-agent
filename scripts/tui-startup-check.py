@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """启动时守住「终端归属」这条不变量（spec §19）。
 
-它守的那个 bug 长这样：`fs-agent` 在 TUI 渲染器已经被拉起来**之后**才用 `eprintln!`
+它守的那个 bug 长这样：`heng` 在 TUI 渲染器已经被拉起来**之后**才用 `eprintln!`
 打印启动横幅。TUI 用裸换行符圈出自己的活动区、再往里画，于是横幅落在状态行上 ——
 而 ratatui 的差分渲染器从不知道那些字形存在，状态行没盖住的那截就留在了屏幕上。
 用户看到的是：
@@ -63,9 +63,9 @@ STATUS_TAIL = "退出"
 # 连续字符串了。就绪判定与最终判定都改读仿真出来的屏幕；这几个 ASCII 锚点在原始流里
 # 依然成立。
 STATUS_ANCHOR = "ctrl-c"
-# 光有 `fs-agent` 也会命中会话目录的路径与桶的 slug，所以横幅锚点带上它的全角冒号 ——
+# 光有 `heng` 也会命中会话目录的路径与桶的 slug，所以横幅锚点带上它的全角冒号 ——
 # 这个冒号写在 ASCII 前缀后面、是连续的一串。
-BANNER_ANCHOR = "fs-agent："
+BANNER_ANCHOR = "heng："
 # 历史重播的进度行，在历史安定下来之前一直待在提示行。`--continue` 那一轮只有它在
 # 最终屏幕上消失才算绿。
 REPLAY_PROGRESS_ANCHOR = "恢复"
@@ -559,7 +559,7 @@ def capture_suspend(binary, data_home, args=(), plain=False):
     之后备用屏幕重进、画面重画，最后走一次正常出口，收尾与 `capture` 一样干净。
 
     TUI 与 plain 各跑一遍，两者的差别正是这个 feature 的一半：TUI 里 0x1A 是 raw 模式下的
-    **按键**（fs-agent 得自己发信号），plain 里它是终端驱动产生的**信号**（应用根本不知道，
+    **按键**（heng 得自己发信号），plain 里它是终端驱动产生的**信号**（应用根本不知道，
     因为 stdin 还在行缓冲里）—— 后者就是「plain 不进 raw 模式」的回归。
     """
     pid, fd, head = fork_with_controlling_tty(binary, data_home, args)
@@ -845,7 +845,7 @@ def binary_identity(binary):
 
 
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/fs-agent"
+    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/heng"
     runs = int(sys.argv[2]) if len(sys.argv) > 2 else 3
     if not os.path.exists(binary):
         print("no binary at %s; run cargo build first" % binary)
@@ -857,7 +857,7 @@ def main():
         print("no identity from %s --version" % binary)
         return 1
     bad, total = 0, runs * (len(GESTURES) + 1) + 3
-    with tempfile.TemporaryDirectory(prefix="fs-agent-tui-check-") as data_home:
+    with tempfile.TemporaryDirectory(prefix="heng-tui-check-") as data_home:
         devnull = os.open(os.devnull, os.O_WRONLY)
         try:
             for i in range(runs):

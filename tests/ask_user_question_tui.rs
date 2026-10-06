@@ -8,9 +8,9 @@
 //! 它住在自己的文件里，而不是住在 `render_layout.rs` 里，好让拥有那个
 //! 文件的票能继续改它，而不跟这一个撞车。
 
-use fs_agent::config::FileViewerSettings;
-use fs_agent::questions::{UserAnswer, UserAnswers, UserQuestion};
-use fs_agent::render::{
+use heng::config::FileViewerSettings;
+use heng::questions::{UserAnswer, UserAnswers, UserQuestion};
+use heng::render::{
     draw_frame, ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts, TuiState,
 };
 use ratatui::backend::TestBackend;
@@ -21,21 +21,21 @@ use tokio::sync::oneshot;
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/heng".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
         // 会话被组装时所处的模式；`ask` 是默认，想要另一档的
         // 测试在自己的 facts 里说清楚。
-        mode: fs_agent::permissions::Mode::Ask,
+        mode: heng::permissions::Mode::Ask,
         budget_limit: Some(100_000),
-        number_style: fs_agent::render::wording::NumberStyle::Cn,
+        number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }
 
 fn state() -> TuiState {
-    TuiState::new(facts(), std::path::PathBuf::from("/x/fs-agent"), None)
+    TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None)
 }
 
 /// 一道题，带选项与多选旗标。
@@ -46,7 +46,7 @@ fn question(id: &str, text: &str, options: &[&str], multi_select: bool) -> UserQ
         header: None,
         options: options
             .iter()
-            .map(|label| fs_agent::questions::Choice {
+            .map(|label| heng::questions::Choice {
                 label: (*label).to_owned(),
                 description: None,
             })
@@ -1088,20 +1088,20 @@ fn a_long_question() -> UserQuestion {
         )
         .to_owned(),
         options: vec![
-            fs_agent::questions::Choice {
+            heng::questions::Choice {
                 label: "(推荐) 保持现状：`spawn_blocking` 的线程".to_owned(),
                 description: Some(
                     "沿用票 01 已经落地的形状；渲染循环已经从不被它挡住".to_owned(),
                 ),
             },
-            fs_agent::questions::Choice {
+            heng::questions::Choice {
                 label: "独立进程".to_owned(),
                 description: Some(
                     "多一层 IPC、进程生命周期与失败处理（沙箱 / 环境白名单那一套也要想），换来能被强杀"
                         .to_owned(),
                 ),
             },
-            fs_agent::questions::Choice {
+            heng::questions::Choice {
                 label: "独立进程 + 超时杀掉重来".to_owned(),
                 description: Some(
                     "把「挂住就换一个」也收进来；代价是上面那些复杂度全都要付".to_owned(),

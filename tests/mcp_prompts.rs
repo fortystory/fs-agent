@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{McpServerConfig, McpSettings};
-use fs_agent::mcp::{
+use heng::config::{McpServerConfig, McpSettings};
+use heng::mcp::{
     McpConnection, McpError, McpService, PromptArgument, PromptSummary, ServerManifest,
 };
-use fs_agent::tools::{
+use heng::tools::{
     builtin, with_mcp, MCP_CALL_TOOL, MCP_LIST_TOOL, MCP_READ_TOOL, MCP_RESOURCES_TOOL,
 };
 

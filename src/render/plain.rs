@@ -6,7 +6,7 @@
 //! `Aborted` 或 `Error`（spec §19）。
 //!
 //! 最终产物仍然去 `stdout`，叙述去 `stderr`，与 headless 模式用的是同一种分工：
-//! `fs-agent --plain "q" 2>/dev/null` 只印出那个答案，别的什么都不印，而在终端前的人
+//! `heng --plain "q" 2>/dev/null` 只印出那个答案，别的什么都不印，而在终端前的人
 //! 看得见整场讨论。
 
 use std::io::Write;

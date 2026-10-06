@@ -11,14 +11,14 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     read_events, Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId,
 };
-use fs_agent::permissions::{Answer, Asker, Mode, Policy, Rule, Scope, Subject};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Answer, Asker, Mode, Policy, Rule, Scope, Subject};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
@@ -61,8 +61,8 @@ async fn fixture(
             cwd: workspace.clone(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-perm"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: session_policy,
             asker,
             questions: None,
@@ -413,7 +413,7 @@ async fn the_env_family_is_denied_in_the_loop_but_templates_are_not() {
 async fn a_call_outside_the_workspace_is_denied_by_the_path_limit() {
     // 工作区限制是权限门的地板，所以连 `auto` 都拒它，
     // 而记下来的裁决说的是 `Deny` —— 不是一次这次调用根本没用上的 `Allow`。
-    let outside = "/tmp/fs-agent-permission-test-outside.txt";
+    let outside = "/tmp/heng-permission-test-outside.txt";
     let mut fixture = fixture(
         vec![write_reply("call-out", outside), Reply::text("ok")],
         Mode::Auto,

@@ -8,16 +8,16 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::goal_note::{read_notes, GOAL_NOTE_TOOL};
-use fs_agent::tools::{
+use heng::config::SessionConfig;
+use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::goal_note::{read_notes, GOAL_NOTE_TOOL};
+use heng::tools::{
     builtin, BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths,
 };
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -55,16 +55,16 @@ impl Fixture {
             outputs_dir: self.outputs.clone(),
             paths: self.paths.clone(),
             locks: self.locks.clone(),
-            skills: Arc::new(fs_agent::context::skills::Skills::default()),
-            repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
+            skills: Arc::new(heng::context::skills::Skills::default()),
+            repo_map: heng::context::repo_map::RepoMapInput::default(),
             bash: BashLimits::default(),
-            sandbox: Sandbox::new(&fs_agent::config::SandboxSettings::off()),
+            sandbox: Sandbox::new(&heng::config::SandboxSettings::off()),
             executor: None,
             questions: None,
         }
     }
 
-    async fn dispatch(&self, call: &PendingCall) -> fs_agent::tools::DispatchOutcome {
+    async fn dispatch(&self, call: &PendingCall) -> heng::tools::DispatchOutcome {
         let mut read_set = ReadSet::default();
         let allowed = match self
             .registry
@@ -72,9 +72,9 @@ impl Fixture {
             .expect("一个注册过的工具")
             .guardrails(&read_set)
         {
-            fs_agent::tools::GuardedCall::Run(allowed) => allowed,
-            fs_agent::tools::GuardedCall::Refused(error) => {
-                return fs_agent::tools::DispatchOutcome::failure(error, false)
+            heng::tools::GuardedCall::Run(allowed) => allowed,
+            heng::tools::GuardedCall::Refused(error) => {
+                return heng::tools::DispatchOutcome::failure(error, false)
             }
         };
         read_set.record_all(allowed.read_paths.iter().cloned());

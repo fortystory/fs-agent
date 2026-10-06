@@ -7,7 +7,7 @@
 
 ## 清单文件
 
-`~/.local/share/fs-agent/goals/<名字>.md`（`$XDG_DATA_HOME/fs-agent/goals/`，两者都没设时
+`~/.local/share/heng/goals/<名字>.md`（`$XDG_DATA_HOME/heng/goals/`，两者都没设时
 `/goal-new` 与 `/loop` 都会说找不到数据目录）。
 
 ```markdown
@@ -177,7 +177,7 @@ provider_retries = 2      # provider 失败重试几次（缺省 2，上限 10�
 
 | 东西 | 在哪 |
 | --- | --- |
-| 清单文件 | `~/.local/share/fs-agent/goals/<名字>.md`（只有条目与 id） |
+| 清单文件 | `~/.local/share/heng/goals/<名字>.md`（只有条目与 id） |
 | 归属 | `GoalSelected { goal }`（只追加；当前目标 = 最后一条） |
 | 提醒 / 清单 / 摘要 | `ContextInjected { source: Reminder / Goal / Compaction }` |
 | 压缩 | `HistorySuperseded { reason: Compaction, summary }`（旧会话那条流上） |

@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use fs_agent::tools::{
+use heng::tools::{
     builtin, Effect, PathLocks, PendingCall, ReadSet, Registry, SessionPaths,
     READ_BEFORE_WRITE_PREFIX,
 };
@@ -60,16 +60,16 @@ impl Fixture {
             locks: self.locks.clone(),
             // 这里测的派发接缝不涉及技能；一个空的技能库
             // 让内置的 `skill` 工具解析得到但不动手。
-            skills: std::sync::Arc::new(fs_agent::context::skills::Skills::default()),
+            skills: std::sync::Arc::new(heng::context::skills::Skills::default()),
             // 仓库地图同样是空的会话上下文加默认的
             // 上下文预算：这个文件里没有谁调它。
-            repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
+            repo_map: heng::context::repo_map::RepoMapInput::default(),
             // `bash` 工具配置的限额；这个文件不派发它，
             // 所以默认值就是最诚实的取值。
-            bash: fs_agent::tools::BashLimits::default(),
+            bash: heng::tools::BashLimits::default(),
             // 沙箱这一层在这个文件里是关的：这里测的派发接缝与它无关，
             // 而关着的那一档对 `process::run` 就是单位函数。
-            sandbox: fs_agent::tools::Sandbox::new(&fs_agent::config::SandboxSettings::off()),
+            sandbox: heng::tools::Sandbox::new(&heng::config::SandboxSettings::off()),
             // 没有执行者端口：这个文件直接驱动派发接缝，
             // 而 `task` 不是它派发的工具之一。
             executor: None,
@@ -81,7 +81,7 @@ impl Fixture {
     /// 这个 fixture 自己那份读集走的整条派发路径：先护栏，
     /// 再这次调用，最后像循环那样把裁决落到读集上
     /// —— 一模一样。
-    async fn dispatch(&mut self, call: &PendingCall) -> fs_agent::tools::DispatchOutcome {
+    async fn dispatch(&mut self, call: &PendingCall) -> heng::tools::DispatchOutcome {
         let mut read_set = std::mem::take(&mut self.read_set);
         let outcome = self.dispatch_with(call, &mut read_set).await;
         self.read_set = read_set;
@@ -92,19 +92,19 @@ impl Fixture {
         &self,
         call: &PendingCall,
         read_set: &mut ReadSet,
-    ) -> fs_agent::tools::DispatchOutcome {
+    ) -> heng::tools::DispatchOutcome {
         let facts = match self
             .registry
             .facts(&call.tool_name, &call.args, &call.paths, None)
         {
             Ok(facts) => facts,
-            Err(error) => return fs_agent::tools::DispatchOutcome::failure(error, false),
+            Err(error) => return heng::tools::DispatchOutcome::failure(error, false),
         };
         match facts.guardrails(read_set) {
-            fs_agent::tools::GuardedCall::Refused(error) => {
-                fs_agent::tools::DispatchOutcome::failure(error, false)
+            heng::tools::GuardedCall::Refused(error) => {
+                heng::tools::DispatchOutcome::failure(error, false)
             }
-            fs_agent::tools::GuardedCall::Run(allowed) => {
+            heng::tools::GuardedCall::Run(allowed) => {
                 let outcome = self.registry.dispatch(call, &allowed).await;
                 if outcome.is_ok() {
                     read_set.record_all(allowed.read_paths.iter().cloned());
@@ -114,7 +114,7 @@ impl Fixture {
                         .result
                         .as_ref()
                         .err()
-                        .and_then(fs_agent::tools::ToolError::invalidated_path)
+                        .and_then(heng::tools::ToolError::invalidated_path)
                     {
                         read_set.invalidate(path);
                     }
@@ -131,7 +131,7 @@ impl Fixture {
         tool: &str,
         args: &serde_json::Value,
         read_set: &ReadSet,
-    ) -> fs_agent::tools::GuardedCall {
+    ) -> heng::tools::GuardedCall {
         self.registry
             .facts(tool, args, &self.paths, None)
             .expect("一个注册过的工具")
@@ -397,7 +397,7 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
         &ReadSet::default(),
     );
     let allowed = match (first, second) {
-        (fs_agent::tools::GuardedCall::Run(a), fs_agent::tools::GuardedCall::Run(b)) => {
+        (heng::tools::GuardedCall::Run(a), heng::tools::GuardedCall::Run(b)) => {
             assert!(a.write_targets.is_empty(), "一次读不拿写锁");
             assert!(b.write_targets.is_empty(), "一次读不拿写锁");
             (a, b)
@@ -425,7 +425,7 @@ async fn read_only_calls_of_one_path_do_not_contend_for_the_write_lock() {
         &read_set,
     );
     let write = match edit {
-        fs_agent::tools::GuardedCall::Run(allowed) => allowed.write_targets,
+        heng::tools::GuardedCall::Run(allowed) => allowed.write_targets,
         other => panic!("期望一次被放行的编辑，实际得到 {other:?}"),
     };
     match declared {
@@ -518,7 +518,7 @@ async fn the_scheduler_partitions_calls_by_declared_effect() {
     // spec 列表，中间没有任何全局状态。
     let mut registry = Registry::new();
     assert!(registry.is_empty());
-    registry.register(Box::new(fs_agent::tools::ReadFile));
+    registry.register(Box::new(heng::tools::ReadFile));
     assert_eq!(registry.specs().len(), 1);
     assert_eq!(registry.specs()[0].name, "read_file");
 }
@@ -574,7 +574,7 @@ async fn a_window_reads_that_stretch_with_the_files_own_line_numbers() {
 #[tokio::test]
 async fn the_default_window_stops_at_the_default_line_count_and_says_where_to_resume() {
     let mut fixture = Fixture::new();
-    let default = fs_agent::tools::DEFAULT_READ_LINES;
+    let default = heng::tools::DEFAULT_READ_LINES;
     let file = numbered_file(&fixture, "big.txt", default + 1);
 
     let text = read_text(&mut fixture, &file, json!({})).await;

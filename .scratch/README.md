@@ -59,3 +59,4 @@
 | [`todo-page/`](todo-page/seed.md) | seed | 左栏 `todo` 页的呈现：进度行（`3/11 1个正在进行` / `11/11 完成`）、样式、进度行上的按钮点开详情弹窗看完整列表（长文本折行，不截断） | — |
 | [`nvim-file-viewer/`](nvim-file-viewer/spec.md) | spec | **文件查看器**：`[ui] file_viewer = "nvim"` 时内容弹窗换成一屏真 nvim（只读、不折行、去框留白、键盘独占、`Ctrl-C` 或框外点击关）—— 先在 `prototype/embed-nvim` 分支上验完三问再落地（[ADR 0013](../docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)） | 1/1 done |
 | [`clickable-links/`](clickable-links/spec.md) | spec | **可点链接**：对话视图里点一下 URL 或工作区内真存在的文件路径（`/eli5` 的 `.html` 就是后者），由宿主 spawn `xdg-open` 打开 —— 识别与**选区**同层、拖选照旧只复制、只有人的指针能触发 | 3/3 done |
+| [`rename-to-heng/`](rename-to-heng/spec.md) | spec | **改名**：`fs-agent` → **衡（heng）**（[ADR 0014](../docs/adr/0014-renamed-to-heng.md)）：`fs` 歧义 + 产品定位是 harness；标识符、路径、文档与左栏标记一起换，历史不追改 | 3 done + 1 ready-for-walkthrough |

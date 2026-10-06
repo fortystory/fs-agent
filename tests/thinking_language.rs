@@ -9,8 +9,8 @@
 //! 标识符与代码，它比回答更容易漂）。第四处是执行者：它的身份不在公开 API 上，所以那条断言
 //! 住在 `tests/executor.rs`，从一次真实派发发出去的请求里读。
 
-use fs_agent::agent::{agent_identity, THINKING_IN_CHINESE};
-use fs_agent::discussion::{debater_identity, synthesizer_identity};
+use heng::agent::{agent_identity, THINKING_IN_CHINESE};
+use heng::discussion::{debater_identity, synthesizer_identity};
 
 #[test]
 fn every_public_identity_carries_the_thinking_rule() {

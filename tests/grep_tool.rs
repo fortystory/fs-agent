@@ -15,15 +15,15 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     read_events, Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId,
 };
-use fs_agent::permissions::{Answer, Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, Effect, GREP_TOOL, MAX_MATCHES};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Answer, Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, Effect, GREP_TOOL, MAX_MATCHES};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 /// 一次工具调用的脚本化回复。
@@ -98,7 +98,7 @@ async fn fixture(replies: Vec<Reply>, mode: Mode, asker: Option<Arc<dyn Asker>>)
             log_path: log_path.clone(),
             session_id: SessionId::new("s-grep"),
             tools: builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
             questions: None,

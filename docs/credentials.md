@@ -1,6 +1,6 @@
 # 凭据、打码，以及围着它们的那些边界
 
-agent 自己的 API key 就躺在同一台机器的 `~/.config/fs-agent/config.toml` 里，而这个 agent
+agent 自己的 API key 就躺在同一台机器的 `~/.config/heng/config.toml` 里，而这个 agent
 能读文件、写文件、跑命令。spec §20 管这一面；这份文件是给人看的决策地图，以及这些决策
 住在代码的哪里。
 
@@ -8,7 +8,7 @@ agent 自己的 API key 就躺在同一台机器的 `~/.config/fs-agent/config.t
 
 | 路径 | 谁拦住它 |
 | --- | --- |
-| (a) **文件工具读** | `.env` 家族被策略拒掉（`permissions::env_family`），**并且**模型给的每条路径默认都被限制在会话 cwd 内（`tools::paths::SessionPaths`）—— key 真正的家在会话工作区之外，所以任何一个工具跑起来之前它就被拒了。**这条地板有一个旋钮**：`[permissions] outside_read = "ask" \| "allow"` 会让区外读变成「问一次」或「放行」，而 `~/.config/fs-agent/config.toml` 正是那条区外路径 —— **配成 `ask` / `allow` 就等于把读 key 从「不可能」降成一次点击**。缺省 `"deny"` 不动摇，写下来才算放弃（[permissions.md](permissions.md)）。**shell 那条路也堵上了**：[沙箱](sandbox.md)把 `~/.config/fs-agent` 遮成空且只读，而升级手势对这些遮罩目录直接拒绝、不给通道 |
+| (a) **文件工具读** | `.env` 家族被策略拒掉（`permissions::env_family`），**并且**模型给的每条路径默认都被限制在会话 cwd 内（`tools::paths::SessionPaths`）—— key 真正的家在会话工作区之外，所以任何一个工具跑起来之前它就被拒了。**这条地板有一个旋钮**：`[permissions] outside_read = "ask" \| "allow"` 会让区外读变成「问一次」或「放行」，而 `~/.config/heng/config.toml` 正是那条区外路径 —— **配成 `ask` / `allow` 就等于把读 key 从「不可能」降成一次点击**。缺省 `"deny"` 不动摇，写下来才算放弃（[permissions.md](permissions.md)）。**shell 那条路也堵上了**：[沙箱](sandbox.md)把 `~/.config/heng` 遮成空且只读，而升级手势对这些遮罩目录直接拒绝、不给通道 |
 | (b) **命令回显** | 打码发生在**事件被追加之前**，所以 `cat config.toml` 的产物在**进流**的路上就被洗掉（同时进文件、进渲染器、进投影，一次搞定） |
 | (c) **跨 agent** | 投影本来就会丢掉另一方的工具结果正文与推理；剩下的那一块 —— 某一方用自己的话复述一个 key —— 也被覆盖，因为打码的范围包含消息正文 |
 | (d) **出网** | **如实说：什么都没有。** 带 key 的 `curl` 和正经工作分不出来，而[沙箱](sandbox.md)只管文件、不管网络。真正的边界是别把一个你赔不起的 key 交给它 |
@@ -102,7 +102,7 @@ spec §10 定死了入流前流水线的顺序，§20 把打码放在它的最�
   还会一直留着它。
 - **落盘文件的权限位**是 `0600`，落在 `0700` 的会话目录里
   （`tools::paths::write_owner_only`），所以连一份打过码的产物也不是谁都能读。
-- **cwd 就是你家目录的会话。** cwd 规则之所以让 `~/.config/fs-agent/config.toml` 够不着，
+- **cwd 就是你家目录的会话。** cwd 规则之所以让 `~/.config/heng/config.toml` 够不着，
   是因为它一般在工作区之外；从 `$HOME` 起会话时它就在工作区里面，cwd 规则与 `.env` 规则
   都盖不住它。还成立的是打码：读一次配置文件，落到流上时那个 key 已经是 `[redacted]`。
 - **工作区限制没有基于规则的例外，这一点与 spec §20 不一致。** spec §20 说 cwd 限制的

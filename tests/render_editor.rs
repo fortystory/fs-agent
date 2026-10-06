@@ -5,7 +5,7 @@
 //! 就能问的纯问题 —— 而这恰恰是内联视口
 //! 让它做不到的事（ADR 0002）。
 
-use fs_agent::render::editor::{self, Input};
+use heng::render::editor::{self, Input};
 use ratatui::style::{Color, Style};
 
 /// 编辑器画出来的那个提示符。这些测试关心的是折行与光标，
@@ -99,7 +99,7 @@ fn the_prompt_and_the_indent_are_the_same_width() {
     // 两边必须一致，否则每一行折出来的位置都差一列。
     assert_eq!(
         editor::prompt_columns() as usize,
-        fs_agent::render::width::text_columns(editor::PROMPT)
+        heng::render::width::text_columns(editor::PROMPT)
     );
     // 两列，与 `> ` 当初一样：草稿前面那个字形在票 08 换了，
     // 正是这一条说明那次改动没有挪动任何人的文本。`❱` 是模糊宽度 ——

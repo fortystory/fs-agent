@@ -11,14 +11,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use fs_agent::cli::run_sessions;
-use fs_agent::config::EnvMap;
-use fs_agent::events::{
+use heng::cli::run_sessions;
+use heng::config::EnvMap;
+use heng::events::{
     EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId, StopReason, ToolCallId,
     SCHEMA_VERSION,
 };
-use fs_agent::session::SessionStore;
-use fs_agent::tools::{MATCH_LEVEL_PREFIX, WROTE_PATH_PREFIX};
+use heng::session::SessionStore;
+use heng::tools::{MATCH_LEVEL_PREFIX, WROTE_PATH_PREFIX};
 use support::CaptureBuf;
 
 struct Fixture {
@@ -37,7 +37,7 @@ fn fixture() -> Fixture {
         "XDG_DATA_HOME".to_owned(),
         data.to_string_lossy().into_owned(),
     )]);
-    let store = SessionStore::new(data.join("fs-agent").join("sessions"));
+    let store = SessionStore::new(data.join("heng").join("sessions"));
     let cwd = dir.path().join("workspace");
     std::fs::create_dir_all(&cwd).unwrap();
     let stored = store.create(&cwd).unwrap();
@@ -279,7 +279,7 @@ fn replay_recomputes_the_call_from_the_stream_and_refuses_without_a_speaker() {
     let messages: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
     assert_eq!(
         messages[0]["System"]["content"],
-        fs_agent::discussion::debater_identity("kimi"),
+        heng::discussion::debater_identity("kimi"),
         "私有身份站在重算出来的那个请求最前面"
     );
     assert!(

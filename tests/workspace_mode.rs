@@ -10,13 +10,13 @@ mod support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use fs_agent::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
-use fs_agent::events::{Decision, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::permissions::{Answer, Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, PathLocks};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
+use heng::events::{Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::permissions::{Answer, Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, PathLocks};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{sandbox_available, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
@@ -28,7 +28,7 @@ struct Fixture {
 
 impl Fixture {
     fn events(&self) -> Vec<Event> {
-        fs_agent::events::read_events(&self.log_path).unwrap()
+        heng::events::read_events(&self.log_path).unwrap()
     }
 
     /// 每一次已完成的调用对应的 `(ok, output_or_error)`。
@@ -353,7 +353,7 @@ async fn outside_read_defaults_to_deny_and_can_be_opened() {
 async fn outside_read_case(
     outside_read: Decision,
     answer: Option<Answer>,
-) -> (bool, String, Vec<fs_agent::permissions::PermissionRequest>) {
+) -> (bool, String, Vec<heng::permissions::PermissionRequest>) {
     let asker = ScriptedAsker::new(answer.into_iter().collect());
     let mut fixture = fixture_with(
         sandbox_available(),

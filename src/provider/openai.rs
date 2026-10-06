@@ -41,7 +41,7 @@ pub fn silent_warnings() -> WarningSink {
 
 /// 把告警送到 stderr，带一个稳定的前缀。CLI 注入的是这个。
 pub fn stderr_warnings() -> WarningSink {
-    Arc::new(|message| eprintln!("fs-agent: warning: {message}"))
+    Arc::new(|message| eprintln!("heng: warning: {message}"))
 }
 
 /// 有上界的传输重试策略。重试按每次 `send` 调用计数，且刻意很小：上层不重跑一个回合。

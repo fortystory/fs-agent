@@ -69,7 +69,7 @@
 
 ## 跑一场
 
-`fs-agent discuss "问题"` 是前端：配置挑名册，子命令把它组装起来，转录就是界面。
+`heng discuss "问题"` 是前端：配置挑名册，子命令把它组装起来，转录就是界面。
 
 ```toml
 [discussion]
@@ -88,8 +88,8 @@ soul = "守法好公民，先找依据"
 ```
 
 ```sh
-fs-agent discuss "问题"                      # 从池子里随机抽两个
-fs-agent discuss --debaters 保守,激进 "问题"   # 或者指定这两位
+heng discuss "问题"                      # 从池子里随机抽两个
+heng discuss --debaters 保守,激进 "问题"   # 或者指定这两位
 ```
 
 - **是一个池子，不是一对。** `[discussion] debaters` 是一场讨论抽取的那个集合，因为谁来
@@ -124,12 +124,12 @@ fs-agent discuss --debaters 保守,激进 "问题"   # 或者指定这两位
   就是第一个讨论者的模型。一个值，一种写法。
 - **全系统只有两个落点**：合成器与执行者（可用 `[routing]` 覆盖）；**讨论者绝不是落点**——
   异构是这场讨论里最强的多样性杠杆，所以 `[routing]` 里刻意没有讨论者的键。
-- **问题**来自命令行（`fs-agent discuss "…"`），或者来自 stdin：终端上会提示你打一行，管道
-  则会一直读到结尾（`echo 问题 | fs-agent discuss`）。
+- **问题**来自命令行（`heng discuss "…"`），或者来自 stdin：终端上会提示你打一行，管道
+  则会一直读到结尾（`echo 问题 | heng discuss`）。
 - **看它跑**：终端上得到 TUI（包括权限覆盖层 —— 讨论者想跑什么都走它），管道里得到 plain
   转录 —— 轮次分节行与两个讨论者都走 stderr，合成器的产物单独走 **stdout**。TUI 的转录活
-  不过进程（ADR 0002），所以一次运行以打印会话 id 收尾：`fs-agent -c <id>` 能把这一场接着跑起来，
-  `fs-agent sessions show <id>` / `sessions stats <id>` 才是不需要跑起来的那两份记录（回顾与花费）。
+  不过进程（ADR 0002），所以一次运行以打印会话 id 收尾：`heng -c <id>` 能把这一场接着跑起来，
+  `heng sessions show <id>` / `sessions stats <id>` 才是不需要跑起来的那两份记录（回顾与花费）。
 - **退出码**：一场跑起来的讨论是 0（包括被取消 —— 那正是用户要的），辩论阶段本身失败则是
   非零。
 
@@ -165,7 +165,7 @@ fs-agent discuss --debaters 保守,激进 "问题"   # 或者指定这两位
 （`Harness::last_question`）。还没问过任何东西时就没什么可讨论的，循环会直说，而不是编一个
 问题出来。
 
-`fs-agent discuss "问题"` 仍是另一条入口：一场**自己有一条流**的讨论 —— 一个新会话、没有
+`heng discuss "问题"` 仍是另一条入口：一场**自己有一条流**的讨论 —— 一个新会话、没有
 继承来的上下文、事后有它自己的 id 可以交给 `sessions show`。两者的差别恰好就是 `fork`：
 `assemble_discussion` 从它刚创建的那个 scaffold 开出会话，`Harness::discuss` 则 fork 那个
 活着的。

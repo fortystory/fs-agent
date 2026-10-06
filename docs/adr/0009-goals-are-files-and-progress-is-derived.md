@@ -8,6 +8,9 @@
 规格在 [`.scratch/goal-loop/spec.md`](../../.scratch/goal-loop/spec.md)，现状说明在
 [`docs/goals.md`](../../docs/goals.md)。
 
+> **2026-10-06 补注（正文不改，只记更名）**：程序已更名为**衡**（`heng`），本文里的 `fs-agent`
+> 读作「衡」，落盘根随之变成 `~/.local/share/heng/goals/`。见 [ADR 0014](0014-renamed-to-heng.md)。
+
 ## 决定
 
 > 一个目标的**定义**是输入数据，落文件；它的**进度**、**归属**与**跨会话花费**都是派生量，

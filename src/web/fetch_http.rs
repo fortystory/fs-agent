@@ -64,7 +64,7 @@ pub struct HttpFetch {
 impl HttpFetch {
     pub fn new(max_chars: usize, timeout: Duration) -> Self {
         Self {
-            user_agent: format!("fs-agent/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("heng/{}", env!("CARGO_PKG_VERSION")),
             max_chars: max_chars.max(1),
             timeout,
             dns64: tokio::sync::OnceCell::new(),

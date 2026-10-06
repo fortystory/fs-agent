@@ -7,9 +7,9 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fs_agent::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
-use fs_agent::tools::process;
-use fs_agent::tools::sandbox::{
+use heng::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
+use heng::tools::process;
+use heng::tools::sandbox::{
     escalation_path, probe, resolve_availability, sealed, wrap, Sandbox, SandboxSpec, PROBE_PROFILE,
 };
 
@@ -340,7 +340,7 @@ fn sealed_covers_masks_and_protected_paths() {
     std::fs::create_dir_all(home.join(".npm")).unwrap();
 
     let cwd = canonical(&workspace);
-    let masks = vec![canonical(&home.join(".ssh")), home.join(".config/fs-agent")];
+    let masks = vec![canonical(&home.join(".ssh")), home.join(".config/heng")];
 
     assert!(
         sealed(&cwd.join(".git/config"), &cwd, &masks),
@@ -460,7 +460,7 @@ fn probe_reports_unavailable_when_the_profile_fails() {
 #[test]
 fn probe_reports_unavailable_when_there_is_no_bwrap_at_all() {
     let dir = tempfile::tempdir().unwrap();
-    let availability = probe(Some(OsStr::new("/nonexistent-fs-agent-bin")), dir.path());
+    let availability = probe(Some(OsStr::new("/nonexistent-heng-bin")), dir.path());
 
     assert!(matches!(
         availability,
@@ -691,14 +691,14 @@ mod support;
 
 use std::sync::Arc;
 
-use fs_agent::events::{Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::permissions::{Asker, Mode, Policy};
-use fs_agent::provider::capability::caps_for;
-use fs_agent::provider::projection::project;
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, PathLocks, Registry};
-use fs_agent::{assemble, AssemblyParts, DebaterParts, Harness, SessionScaffold, SynthesizerParts};
+use heng::events::{Event, EventPayload, SessionId, SpeakerId};
+use heng::permissions::{Asker, Mode, Policy};
+use heng::provider::capability::caps_for;
+use heng::provider::projection::project;
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, PathLocks, Registry};
+use heng::{assemble, AssemblyParts, DebaterParts, Harness, SessionScaffold, SynthesizerParts};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
@@ -782,7 +782,7 @@ async fn fixture_full(
 
 impl Fixture {
     fn events(&self) -> Vec<Event> {
-        fs_agent::events::read_events(&self.log_path).unwrap()
+        heng::events::read_events(&self.log_path).unwrap()
     }
 
     /// 每一次已完成的调用对应的 `(ok, output_or_error)`。
@@ -865,12 +865,12 @@ async fn a_dynamic_tool_runs_through_the_same_sandbox() {
     // 免得哪天它变成一个偶然。
     let dir = tempfile::tempdir().unwrap();
     let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/echo");
-    let env: fs_agent::config::EnvMap =
+    let env: heng::config::EnvMap =
         std::iter::once(("HOME".to_owned(), dir.path().display().to_string())).collect();
     let text = "[tools.thing.echo]\ndescription = \"回声\"\ncommand = [\"echo\", \"{text}\"]\n\
                 parameters = { type = \"object\", properties = { text = { type = \"string\" } } }\n";
-    let config = fs_agent::config::resolve(Some(text), &env).unwrap();
-    let tools = fs_agent::tools::with_dynamic(&config.tools, false);
+    let config = heng::config::resolve(Some(text), &env).unwrap();
+    let tools = heng::tools::with_dynamic(&config.tools, false);
 
     let mut fixture = fixture(
         vec![
@@ -951,7 +951,7 @@ async fn an_escalation_asks_once_and_binds_the_declared_path_for_that_call() {
     std::fs::create_dir_all(&granted).unwrap();
     let granted = granted.canonicalize().unwrap().display().to_string();
 
-    let asker = ScriptedAsker::new(vec![fs_agent::permissions::Answer::Allow]);
+    let asker = ScriptedAsker::new(vec![heng::permissions::Answer::Allow]);
     let mut fixture = fixture_full(
         vec![
             call(
@@ -1046,7 +1046,7 @@ async fn a_refused_escalation_is_a_failed_result_not_a_tool_error() {
     let granted = dir.path().join("granted");
     std::fs::create_dir_all(&granted).unwrap();
 
-    let asker = ScriptedAsker::new(vec![fs_agent::permissions::Answer::Deny]);
+    let asker = ScriptedAsker::new(vec![heng::permissions::Answer::Deny]);
     let mut fixture = fixture_full(
         vec![
             call(
@@ -1173,10 +1173,10 @@ fn the_bash_description_states_the_sandbox_terms() {
         .description;
 
     assert!(
-        description.contains(fs_agent::tools::bash::SANDBOX_NOTE),
+        description.contains(heng::tools::bash::SANDBOX_NOTE),
         "描述里那句沙箱说明是常量的一部分：{description}"
     );
-    let note = fs_agent::tools::bash::SANDBOX_NOTE;
+    let note = heng::tools::bash::SANDBOX_NOTE;
     assert!(note.contains("沙箱"), "{note}");
     assert!(note.contains("工作区"), "{note}");
     assert!(note.contains("只读"), "{note}");
@@ -1194,10 +1194,10 @@ fn the_bash_description_states_the_escalation_terms() {
         .description;
 
     assert!(
-        description.contains(fs_agent::tools::bash::ESCALATION_NOTE),
+        description.contains(heng::tools::bash::ESCALATION_NOTE),
         "描述里那段升级话术是常量的一部分：{description}"
     );
-    let note = fs_agent::tools::bash::ESCALATION_NOTE;
+    let note = heng::tools::bash::ESCALATION_NOTE;
     // 四件事一件都不能少：被拒是结论、只有原样重试一次这一条路、不许先绕道去聊天里问、
     // 不许投机性升级（`.scratch/workspace-mode/spec.md` §4）。
     assert!(note.contains("被沙箱拒绝"), "{note}");
@@ -1358,7 +1358,7 @@ async fn the_real_bubblewrap_keeps_writes_inside_the_workspace() {
     );
 
     // 区外写不动，而且宿主上真的没有那个文件。
-    let outside = home.join(".fs-agent-sandbox-probe");
+    let outside = home.join(".heng-sandbox-probe");
     let _ = std::fs::remove_file(&outside);
     let escaped = process::run(
         &workspace,

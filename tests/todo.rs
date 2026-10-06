@@ -11,16 +11,16 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::todo::{read_items, Status, TODO_TOOL};
-use fs_agent::tools::{
+use heng::config::SessionConfig;
+use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::todo::{read_items, Status, TODO_TOOL};
+use heng::tools::{
     builtin, BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths,
 };
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
@@ -59,18 +59,18 @@ impl Fixture {
             outputs_dir: self.outputs.clone(),
             paths: self.paths.clone(),
             locks: self.locks.clone(),
-            skills: Arc::new(fs_agent::context::skills::Skills::default()),
-            repo_map: fs_agent::context::repo_map::RepoMapInput::default(),
+            skills: Arc::new(heng::context::skills::Skills::default()),
+            repo_map: heng::context::repo_map::RepoMapInput::default(),
             bash: BashLimits::default(),
             // 沙箱在这个文件里是关的：这里测的是 `todo` 工具，不跑任何进程。
-            sandbox: Sandbox::new(&fs_agent::config::SandboxSettings::off()),
+            sandbox: Sandbox::new(&heng::config::SandboxSettings::off()),
             executor: None,
             questions: None,
         }
     }
 
     /// 让一次调用过一遍护栏，与循环的做法一模一样。
-    async fn dispatch(&self, call: &PendingCall) -> fs_agent::tools::DispatchOutcome {
+    async fn dispatch(&self, call: &PendingCall) -> heng::tools::DispatchOutcome {
         let mut read_set = ReadSet::default();
         let allowed = match self
             .registry
@@ -78,9 +78,9 @@ impl Fixture {
             .expect("一个注册过的工具")
             .guardrails(&read_set)
         {
-            fs_agent::tools::GuardedCall::Run(allowed) => allowed,
-            fs_agent::tools::GuardedCall::Refused(error) => {
-                return fs_agent::tools::DispatchOutcome::failure(error, false)
+            heng::tools::GuardedCall::Run(allowed) => allowed,
+            heng::tools::GuardedCall::Refused(error) => {
+                return heng::tools::DispatchOutcome::failure(error, false)
             }
         };
         read_set.record_all(allowed.read_paths.iter().cloned());
@@ -306,9 +306,9 @@ async fn an_id_that_is_not_two_decimal_digits_is_a_model_readable_error() {
 
 #[test]
 fn the_sidebar_shows_the_id_before_the_content() {
-    use fs_agent::events::ToolCallId;
-    use fs_agent::render::todo::TodoPanel;
-    use fs_agent::render::{Block, ToolBlock};
+    use heng::events::ToolCallId;
+    use heng::render::todo::TodoPanel;
+    use heng::render::{Block, ToolBlock};
     use ratatui::layout::Rect;
 
     let mut panel = TodoPanel::default();
@@ -379,7 +379,7 @@ fn the_identity_tells_the_model_to_keep_a_list() {
     // 规则那一段（spec §3）：是引导，不是强制。这条指令在
     // 每个请求里模型看得见的前缀上，所以*它就是*那段被缓存的前缀 ——
     // 往里加是允许的，改它不行（ADR 0001、ADR 0003）。
-    let identity = fs_agent::agent::agent_identity();
+    let identity = heng::agent::agent_identity();
     assert!(identity.contains("todo"), "{identity}");
     assert!(identity.contains("pending"), "{identity}");
     assert!(identity.contains("in_progress"), "{identity}");
@@ -558,9 +558,9 @@ async fn two_calls_in_one_message_each_get_a_result_and_the_last_list_wins() {
 
 #[tokio::test]
 async fn a_real_session_keeps_the_id_in_the_arguments_and_the_sidebar_reads_it_back() {
-    use fs_agent::events::ToolCallId;
-    use fs_agent::render::todo::TodoPanel;
-    use fs_agent::render::{Block, ToolBlock};
+    use heng::events::ToolCallId;
+    use heng::render::todo::TodoPanel;
+    use heng::render::{Block, ToolBlock};
     use ratatui::layout::Rect;
 
     let args = items_with_ids(&[

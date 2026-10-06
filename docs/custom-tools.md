@@ -7,7 +7,7 @@
 ## 声明
 
 ```toml
-# ~/.config/fs-agent/config.toml
+# ~/.config/heng/config.toml
 
 [tools.git.status]
 description = "Show the working tree status as porcelain."

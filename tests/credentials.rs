@@ -16,15 +16,15 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     read_events, Event, EventPayload, Redactor, SessionId, SpeakerId, StopReason, REDACTED,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, PathLocks};
-use fs_agent::{
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, Message, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, PathLocks};
+use heng::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionParts, Harness,
     SessionScaffold, SynthesizerParts,
 };
@@ -491,7 +491,7 @@ async fn undo_still_works_when_the_edit_does_not_touch_the_secret() {
                 serde_json::json!({
                     "file_path": "notes.txt",
                     "old_string": "name: placeholder",
-                    "new_string": "name: fs-agent",
+                    "new_string": "name: heng",
                 }),
             ),
             Reply::text("edited"),
@@ -503,7 +503,7 @@ async fn undo_still_works_when_the_edit_does_not_touch_the_secret() {
     fixture.harness.run_turn("rename the field").await.unwrap();
     assert_eq!(
         fixture.read("notes.txt"),
-        format!("token: {SECRET}\nname: fs-agent\n")
+        format!("token: {SECRET}\nname: heng\n")
     );
 
     let undone = fixture.harness.undo_last_edit().await.unwrap();
@@ -561,7 +561,7 @@ async fn a_discussion_refuses_a_roster_whose_redactors_disagree() {
         Err(error) => error,
     };
     assert!(
-        matches!(&error, fs_agent::Error::Discussion(message) if message.contains("打码器")),
+        matches!(&error, heng::Error::Discussion(message) if message.contains("打码器")),
         "得到 {error:?}"
     );
 }
@@ -674,15 +674,15 @@ fn message_text(message: &Message) -> String {
 
 #[test]
 fn running_as_root_is_refused_with_no_bypass() {
-    let refusal = fs_agent::cli::root_refusal(0).expect("root 被拒");
+    let refusal = heng::cli::root_refusal(0).expect("root 被拒");
     assert_eq!(
         refusal,
-        fs_agent::render::wording::root_refusal(),
+        heng::render::wording::root_refusal(),
         "这条拒绝就是措辞层的文本"
     );
 
-    assert_eq!(fs_agent::cli::root_refusal(1), None);
-    assert_eq!(fs_agent::cli::root_refusal(1000), None);
+    assert_eq!(heng::cli::root_refusal(1), None);
+    assert_eq!(heng::cli::root_refusal(1000), None);
 }
 
 #[test]
@@ -699,7 +699,7 @@ api_key = "sk-deepseek-config-key"
 [models.deepseek-v4-pro]
 provider = "deepseek"
 "#;
-    let config = fs_agent::config::resolve(Some(file), &fs_agent::config::EnvMap::new()).unwrap();
+    let config = heng::config::resolve(Some(file), &heng::config::EnvMap::new()).unwrap();
     let session = config.session_config("deepseek-v4-pro").unwrap();
     assert!(!session.redactor.is_empty());
     assert_eq!(
@@ -733,7 +733,7 @@ env = { GITHUB_TOKEN = "ghp-mcp-secret-0123456789" }
 url = "https://jira.example.com/mcp"
 headers = { Authorization = "jira-mcp-secret-0123456789" }
 "#;
-    let config = fs_agent::config::resolve(Some(file), &fs_agent::config::EnvMap::new()).unwrap();
+    let config = heng::config::resolve(Some(file), &heng::config::EnvMap::new()).unwrap();
     let session = config.session_config("deepseek-v4-pro").unwrap();
     for secret in ["ghp-mcp-secret-0123456789", "jira-mcp-secret-0123456789"] {
         assert_eq!(

@@ -122,7 +122,7 @@ impl SessionStore {
     /// 这场会话在不在这个 cwd 的桶里。
     ///
     /// 「按 id 接着跑一场会话」要它判「是不是在**请求的那个工作区**里」：是就沿用请求的目录，不是
-    /// 才去问那场会话自己的 cwd。判桶而不是比路径 —— `fs-agent --cwd .` 这样的相对写法与流里记的
+    /// 才去问那场会话自己的 cwd。判桶而不是比路径 —— `heng --cwd .` 这样的相对写法与流里记的
     /// 绝对路径不相等，但它们说的是同一个工作区。
     pub fn is_in_bucket(&self, cwd: &Path, id: &SessionId) -> io::Result<bool> {
         Ok(self.list(cwd)?.iter().any(|session| session.id == *id))

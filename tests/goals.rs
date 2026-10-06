@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use fs_agent::goals::{self, GoalError};
+use heng::goals::{self, GoalError};
 
 /// 一个真实存在的 feature 目录：五张票，编号连着。
 const SANDBOX: &str = ".scratch/sandbox";

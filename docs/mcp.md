@@ -4,7 +4,7 @@
 issue、一张工单、一份远端数据。MCP（Model Context Protocol）就是为这件事定的协议：一个 agent
 连上外部**进程或服务**（下称 **server**），把它提供的能力拿来用。
 
-难点不在协议，而在**形状**。fs-agent 的工具表是**组装期**建好的、之后不再变化（它是缓存前缀的
+难点不在协议，而在**形状**。heng 的工具表是**组装期**建好的、之后不再变化（它是缓存前缀的
 一部分），而 MCP 的 server 有哪些工具**只有连上才知道**。这一层的选择是把撞点整个绕开：
 
 > **不把 server 的工具铺进工具表**，只加**四个固定名字的元工具**，让模型按 `server` + `tool`
@@ -214,7 +214,7 @@ argv 先过 `Sandbox::wrap` 这个纯函数（与 `bash` 同一个），再交�
 
 ## 自带的 time server
 
-`fs-agent-mcp-time` 是本仓库自带的一台 stdio server（`cargo install --path .` 会装到 `PATH`）。
+`heng-mcp-time` 是本仓库自带的一台 stdio server（`cargo install --path .` 会装到 `PATH`）。
 它只答三条方法（`server/discover` / `tools/list` / `tools/call`），只提供一个工具
 `get_current_time`：读一次本地时钟，回一行
 
@@ -228,7 +228,7 @@ argv 先过 `Sandbox::wrap` 这个纯函数（与 `bash` 同一个），再交�
 挂上它有两种写法。项目级那份跟着仓库走：
 
 ```json
-{ "mcpServers": { "time": { "command": ["fs-agent-mcp-time"] } } }
+{ "mcpServers": { "time": { "command": ["heng-mcp-time"] } } }
 ```
 
 或者写进 `config.toml`（`[mcp] enabled` 缺省关，打开才有那四个元工具）：
@@ -238,7 +238,7 @@ argv 先过 `Sandbox::wrap` 这个纯函数（与 `bash` 同一个），再交�
 enabled = true
 
 [mcp.servers.time]
-command = ["fs-agent-mcp-time"]
+command = ["heng-mcp-time"]
 trust_effects = true
 read_only_tools = ["get_current_time"]
 ```

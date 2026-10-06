@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use fs_agent::events::Usage;
-use fs_agent::provider::capability::{caps_for, ModelCaps};
-use fs_agent::provider::{
+use futures::{stream, StreamExt};
+use heng::events::Usage;
+use heng::provider::capability::{caps_for, ModelCaps};
+use heng::provider::{
     ChatRequest, EventStream, FinishReason, Provider, ProviderError, StreamEvent,
 };
-use futures::{stream, StreamExt};
 use tokio::sync::{Barrier, Notify};
 
 /// 一次会合等多久才判定两次调用并不并发。长到在

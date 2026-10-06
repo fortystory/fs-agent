@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{
+use heng::config::{
     McpServerConfig, McpSettings, SandboxAvailability, SandboxMode, SandboxSettings,
 };
-use fs_agent::mcp::{connect_all, ConnectOptions, McpService};
-use fs_agent::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
-use fs_agent::tools::Sandbox;
+use heng::mcp::{connect_all, ConnectOptions, McpService};
+use heng::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
+use heng::tools::Sandbox;
 
 // --- 假的问询端口 ---------------------------------------------------------
 
@@ -98,7 +98,7 @@ fn sandbox_for(cwd: &Path) -> Option<Sandbox> {
     let mut settings = SandboxSettings::off();
     settings.mode = SandboxMode::Bwrap;
     settings.search_path = std::env::var_os("PATH");
-    settings.availability = fs_agent::tools::sandbox::probe(settings.search_path.as_deref(), cwd);
+    settings.availability = heng::tools::sandbox::probe(settings.search_path.as_deref(), cwd);
     if matches!(
         settings.availability,
         SandboxAvailability::Unavailable { .. }

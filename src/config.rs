@@ -104,7 +104,7 @@ pub const DEFAULT_SANDBOX_WRITABLE_ROOTS: &[&str] = &["~/.cargo", "~/.rustup", "
 /// 被遮住的目录（写死，不给旋钮）：provider key 与 ssh 私钥都在这两个地方。
 ///
 /// 表现是「目录还在，但是空的、且只读」——**不是「不存在」**。
-const SANDBOX_MASKS: &[&str] = &["~/.config/fs-agent", "~/.ssh"];
+const SANDBOX_MASKS: &[&str] = &["~/.config/heng", "~/.ssh"];
 
 /// 沙箱是否可用（沙箱 spec §3）。
 ///
@@ -391,7 +391,7 @@ pub struct Config {
     /// 而不是靠一条要人记住的规则。
     pub executor_max_iterations: u32,
     /// 配置了 `[discussion]` 时谁参与辩论（spec §15）。缺席表示这份配置是给单 agent 会话用
-    /// 的；`fs-agent discuss` 会照说，而不是凭空编一份名册。
+    /// 的；`heng discuss` 会照说，而不是凭空编一份名册。
     pub discussion: Option<DiscussionRoster>,
     /// 动态声明的那些工具（spec §14），按稳定的名字顺序。组装期就定死：没有任何东西会在
     /// 会话中途增删工具，因为工具数组是前缀缓存的一部分。
@@ -1299,7 +1299,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     let default_model = raw
         .default_model
         .clone()
-        .or_else(|| env.get("FS_AGENT_MODEL").filter(|v| !v.is_empty()).cloned())
+        .or_else(|| env.get("HENG_MODEL").filter(|v| !v.is_empty()).cloned())
         .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
     if !models.contains_key(&default_model) {
         return Err(ConfigError::UnknownModel {
@@ -1339,8 +1339,8 @@ pub fn load(path: &Path, env: &EnvMap) -> Result<Config, ConfigError> {
     resolve(Some(&text), env)
 }
 
-/// 缺省的配置路径：`$XDG_CONFIG_HOME/fs-agent/config.toml`，否则
-/// `$HOME/.config/fs-agent/config.toml`。
+/// 缺省的配置路径：`$XDG_CONFIG_HOME/heng/config.toml`，否则
+/// `$HOME/.config/heng/config.toml`。
 pub fn default_path(env: &EnvMap) -> PathBuf {
     let base = env
         .get("XDG_CONFIG_HOME")
@@ -1352,25 +1352,25 @@ pub fn default_path(env: &EnvMap) -> PathBuf {
                 .map(|home| PathBuf::from(home).join(".config"))
         })
         .unwrap_or_else(|| PathBuf::from(".config"));
-    base.join("fs-agent").join("config.toml")
+    base.join("heng").join("config.toml")
 }
 
-/// 缺省的会话存储根目录：`$XDG_DATA_HOME/fs-agent/sessions`，否则
-/// `$HOME/.local/share/fs-agent/sessions`（spec §11）。
+/// 缺省的会话存储根目录：`$XDG_DATA_HOME/heng/sessions`，否则
+/// `$HOME/.local/share/heng/sessions`（spec §11）。
 ///
 /// 两个变量都没设时是 `None`：CLI 会照说，而不是凭空造一个目录把会话写进去。存储本身把根
 /// 目录当参数收，所以库从不读它。
 pub fn sessions_dir(env: &EnvMap) -> Option<PathBuf> {
-    Some(data_dir(env)?.join("fs-agent").join("sessions"))
+    Some(data_dir(env)?.join("heng").join("sessions"))
 }
 
-/// 缺省的目标清单目录：`$XDG_DATA_HOME/fs-agent/goals`，否则
-/// `$HOME/.local/share/fs-agent/goals`（`.scratch/goal-loop/spec.md` §1）。
+/// 缺省的目标清单目录：`$XDG_DATA_HOME/heng/goals`，否则
+/// `$HOME/.local/share/heng/goals`（`.scratch/goal-loop/spec.md` §1）。
 ///
 /// 与 [`sessions_dir`] 同一个数据根：清单与它跨过的那些会话属于同一个人的同一批数据。两个
 /// 变量都没设时是 `None` —— 与 `sessions_dir` 一样，CLI 会照说，而不是凭空造一个目录。
 pub fn goals_dir(env: &EnvMap) -> Option<PathBuf> {
-    Some(data_dir(env)?.join("fs-agent").join("goals"))
+    Some(data_dir(env)?.join("heng").join("goals"))
 }
 
 /// `$XDG_DATA_HOME`，否则 `$HOME/.local/share`；都没有时是 `None`。

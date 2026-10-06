@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use fs_agent::config::{SandboxAvailability, SandboxMode, SandboxSettings};
+use heng::config::{SandboxAvailability, SandboxMode, SandboxSettings};
 
 /// 一份「沙箱可用」的 `[sandbox]` 设置。
 pub fn available() -> SandboxSettings {

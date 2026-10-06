@@ -6,7 +6,7 @@
 //! （spec §Implementation Decisions）。
 //!
 //! **模型可见 / 进流的文本不在这里**：讨论者与合成器的 system prompt、投影的轮前缀、
-//! `AgentError` 的 message，以及 fs-agent 自己那些工具结果文本，都由产生它们的地方写成
+//! `AgentError` 的 message，以及 heng 自己那些工具结果文本，都由产生它们的地方写成
 //! 中文（ADR 0005 起 —— 在那之前它们冻结在英文，见 ADR 0001），不靠这个模块拼。
 
 use std::path::Path;
@@ -55,7 +55,7 @@ pub fn round_ended(round: u32, reason: StopReason) -> String {
     format!("第 {round} 轮结束：{}", stop_reason(reason))
 }
 
-/// `fs-agent discuss` 在讨论结束、屏幕变回来之后报的那段：为什么停、实际跑了几轮，以及
+/// `heng discuss` 在讨论结束、屏幕变回来之后报的那段：为什么停、实际跑了几轮，以及
 /// 谁缺席。
 ///
 /// 点名缺席的那一方，是因为它是事件流记了、读的人却容易漏掉的那一件事：只有一方作答的
@@ -77,10 +77,10 @@ pub fn discussion_ended(reason: StopReason, rounds: u32, absent: &[SpeakerId]) -
 /// 进程，所以会话 id 才是那个持久的答案。
 ///
 /// `discuss` 与交互式退出共用它：两处都是「终端交还之后，给人一条能直接粘的命令」
-/// （`.scratch/exit-gesture/spec.md` §5）。给的命令是 **`fs-agent -c <id>`** —— 它现在吃 id，
+/// （`.scratch/exit-gesture/spec.md` §5）。给的命令是 **`heng -c <id>`** —— 它现在吃 id，
 /// 于是这一行真的能直接粘回终端里（在那之前只有按 id 查的 `sessions show`）。
 pub fn session_receipt(session_id: &str) -> String {
-    format!("会话 {session_id}；接着跑：fs-agent -c {session_id}")
+    format!("会话 {session_id}；接着跑：heng -c {session_id}")
 }
 
 /// `-c <id>` 续上了一场面**别的工作区**的会话：这一趟的工作目录跟着那场会话走了。
@@ -154,7 +154,7 @@ pub fn discussion_one_vendor(first: &str, second: &str) -> String {
     format!("提示：两个讨论者来自同一厂商（{first} × {second}），多样性比设计假设的弱")
 }
 
-/// 命令行上没给问题时，`fs-agent discuss` 在终端上打的那个提示。
+/// 命令行上没给问题时，`heng discuss` 在终端上打的那个提示。
 pub fn question_prompt() -> &'static str {
     "问题> "
 }
@@ -1049,7 +1049,7 @@ pub const RECOMMENDED_SUFFIX: &str = "(推荐)";
 
 /// 旧的后缀，只为读**已经写进事件流**的那些会话与旧 label 而留：判定两种都认，屏幕上一样剥掉。
 ///
-/// 2026-10-06 之前这里是 `(Recommended)`（`fs-agent-v1` 票 32 的约定）。模型可见的散文一律走
+/// 2026-10-06 之前这里是 `(Recommended)`（`heng-v1` 票 32 的约定）。模型可见的散文一律走
 /// 中文（[ADR 0005](../../docs/adr/0005-model-visible-text-in-chinese.md)），这一处当时漏了。
 pub const RECOMMENDED_SUFFIX_LEGACY: &str = "(Recommended)";
 
@@ -1576,8 +1576,8 @@ pub fn title_state(replaying: bool, pending: bool, busy: bool) -> TitleState {
 
 /// 标题里的路径段（spec §1）。
 ///
-/// 两条分支，按 `$HOME` 划：落在 `$HOME` 之下就写 `~` 加相对路径（`~/code/fs-agent`，
-/// 认人的家目录比认父目录基名有用）；其余写「父目录基名 / 当前基名」（`fortystory/fs-agent`）。
+/// 两条分支，按 `$HOME` 划：落在 `$HOME` 之下就写 `~` 加相对路径（`~/code/heng`，
+/// 认人的家目录比认父目录基名有用）；其余写「父目录基名 / 当前基名」（`fortystory/heng`）。
 /// 前缀按**路径分量**比（[`Path::strip_prefix`]），不做字符串前缀 —— `~/code2` 不是
 /// `~/code` 的子路径。
 ///
@@ -1665,22 +1665,23 @@ fn join_title(path: &str, word: Option<&str>, goal: Option<&str>) -> String {
     parts.join(SEP)
 }
 
-/// 宽档左栏带的那个标记，五行块状明暗。
+/// 宽档左栏带的那个标记：**衡**是正身，它上面一行是拼音。
 ///
-/// 这些字符全是文本；让它们读起来像字母的那道颜色渐变是画家的事
-/// （[`crate::render::tui`]），与这个模块里其他每一条短语完全一样。窄到放不下整个标记的
-/// 左栏压根不会要这几行 —— [`crate::render::layout`] 事先就定了，所以这里不用想裁剪的
-/// 事。
+/// 这些字符全是文本；让它们读起来像字形的那道颜色坡道是画家的事
+/// （[`crate::render::tui`] 的 `mark_lines`），与这个模块里其他每一条短语完全一样。窄到放不下
+/// 整个标记的左栏压根不会要这几行 —— [`crate::render::layout`] 事先就定了，所以这里不用想
+/// 裁剪的事。
 ///
-/// 标记拼出 `fs-agent` —— 前面是分叉合成的 `fs`（「两叉一茎」，见 `CONTEXT.md`），后面
-/// 跟程序名 —— 像素网格是维护者挑的那一个。中间那条短横是它八个字形单元里的第三个。
+/// 每行的**显示宽度**都等于 [`crate::render::layout::LOGO_WIDTH`]（38）—— 那是布局与画家之间的
+/// 契约（`mark_lines` 里有断言）。汉字占两列，所以宽度由宽度算术算，不按字符数。五行里只有
+/// 中间两行有字，其余是留给布局的空白：标记照旧占满它被预留的那几行。
 pub fn logo_lines() -> [&'static str; 5] {
     [
-        "▄▀▀█ ▄▀▀█      ▄▀▀▄ ▄▀▀▀ ▄▀▀█ █  █ ▀█▀",
-        "▓▄▄  ▓         ▓▄▄▓ ▓ ▀▓ ▓▄▄  ▓▄ ▓  ▓ ",
-        "▒     ▀▀▄ ▀▀▀▀ ▒  ▒ ▒  ▒ ▒    ▒ ▀▒  ▒ ",
-        "░    ░  ░      ░  ░ ░  ░ ░  ▄ ░  ░  ░ ",
-        "▀    ▀▀▀       ▀  ▀  ▀▀▀  ▀▀▀ ▀  ▀  ▀ ",
+        "                                      ",
+        "                héng                  ",
+        "                 衡                   ",
+        "                                      ",
+        "                                      ",
     ]
 }
 
@@ -1928,7 +1929,7 @@ pub fn mode_label(mode: Mode) -> &'static str {
 pub fn banner(session: &str, model: &str, mode: Mode, dir: &str, continued: bool) -> String {
     let tail = if continued { "（已继续）" } else { "" };
     format!(
-        "fs-agent：会话 {session} · 模型 {model} · 模式 {} · {dir}{tail}",
+        "heng：会话 {session} · 模型 {model} · 模式 {} · {dir}{tail}",
         mode_label(mode)
     )
 }
@@ -1995,10 +1996,10 @@ pub static BUILT_IN_COMMANDS: [Command; 7] = [
 
 /// 一条诊断行的程序名前缀。
 ///
-/// 它住在措辞层，于是这个前缀只有一个归宿 —— CLI 那些 `fs-agent: …` 的行都从这里出去，而
+/// 它住在措辞层，于是这个前缀只有一个归宿 —— CLI 那些 `heng: …` 的行都从这里出去，而
 /// 语言护栏那一侧也不必把同一个前缀数上二十几遍。
-pub fn fs_agent(message: &str) -> String {
-    format!("fs-agent: {message}")
+pub fn heng(message: &str) -> String {
+    format!("heng: {message}")
 }
 
 /// `/goal-new` 的用法：参数不对时说的那句。
@@ -2378,7 +2379,7 @@ pub fn mcp_prompt_missing_arguments(name: &str, missing: &[&str]) -> String {
 
 /// MCP server 自己写到 stderr 的一行（`.scratch/mcp-support/spec.md` §4）。
 ///
-/// 前缀点明这句话是**外部工具**说的、不是 fs-agent 说的：server 的崩溃信息要进得了日志，但不能
+/// 前缀点明这句话是**外部工具**说的、不是 heng 说的：server 的崩溃信息要进得了日志，但不能
 /// 被读成我们自己的诊断。
 pub fn mcp_server_stderr(line: &str) -> String {
     format!("[外部工具] {line}")
@@ -2643,37 +2644,37 @@ pub fn stats_stop(name: &str, count: usize) -> String {
 /// 顶层的 `--help`。
 pub fn help_main() -> String {
     format!(
-        "fs-agent {}\n\n  \
-         usage: fs-agent [--plain|--tui] [--continue [ID]] [--config PATH] [--model ID] [--cwd PATH]\n         \
-         fs-agent discuss [--plain|--tui] [--config PATH] [--cwd PATH] \"问题\"\n         \
-         fs-agent probe [--config PATH] [--model ID]...\n         \
-         fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n         \
-         fs-agent sessions <ls|show|replay|stats> [options]\n\n  \
-         不带子命令时，fs-agent 在当前工作区启动一个交互会话：终端上用 TUI 渲染，否则用 \
+        "heng {}\n\n  \
+         usage: heng [--plain|--tui] [--continue [ID]] [--config PATH] [--model ID] [--cwd PATH]\n         \
+         heng discuss [--plain|--tui] [--config PATH] [--cwd PATH] \"问题\"\n         \
+         heng probe [--config PATH] [--model ID]...\n         \
+         heng prune [--keep N] [--cwd PATH] [--dry-run]\n         \
+         heng sessions <ls|show|replay|stats> [options]\n\n  \
+         不带子命令时，heng 在当前工作区启动一个交互会话：终端上用 TUI 渲染，否则用 \
          plain 转录（--plain / --tui 可强制其一）。--continue 继续本工作区最新的会话（`--continue <ID>` 或 `--session <ID>` 续指名的那一场，ID 也可以是它的会话目录）。\
          discuss 起一次多角色讨论：两个讨论者各自独立作答，只在结论冲突时开一轮定向第二轮，\
-         最后由合成器画出共识 / 分歧 / 未决（见 `fs-agent discuss --help`）。\
+         最后由合成器画出共识 / 分歧 / 未决（见 `heng discuss --help`）。\
          probe 对每个已配置的模型驱动一次真实回合，并在同一会话里再跑一次，然后打印归一化\
          后的用量，以便看到前缀缓存是否命中。prune 手动删除本工作区的会话目录，保留最新的 \
          N 个（默认 1）。sessions 只从会话自己的事件流回答关于一个已结束会话的问题\
-         （ls / show / replay / stats；见 `fs-agent sessions --help`）。配置位于 \
-         ~/.config/fs-agent/config.toml（支持 XDG）；项目里的 .env 永远不会被加载。",
+         （ls / show / replay / stats；见 `heng sessions --help`）。配置位于 \
+         ~/.config/heng/config.toml（支持 XDG）；项目里的 .env 永远不会被加载。",
         env!("CARGO_PKG_VERSION")
     )
 }
 
-/// 没有 `[discussion]` 表时的 `fs-agent discuss`：该写什么。
+/// 没有 `[discussion]` 表时的 `heng discuss`：该写什么。
 ///
 /// 刻意没有缺省名册：替别人挑两个模型，等于把他的钱花在一份他从没选过的配置上。
 pub fn discussion_no_roster() -> &'static str {
     "config.toml 里没有 [discussion]：讨论需要两个讨论者，加 `[discussion]` 与 \
      `debaters = [\"kimi-k3\", \"deepseek-v4-pro\"]`（至少两个池子成员；不同厂商最好， \
-     同厂商甚至同一个模型也能跑，只是多样性会弱），见 `fs-agent discuss --help`"
+     同厂商甚至同一个模型也能跑，只是多样性会弱），见 `heng discuss --help`"
 }
 
-/// 没有问题可问的 `fs-agent discuss`。
+/// 没有问题可问的 `heng discuss`。
 pub fn discuss_needs_question() -> &'static str {
-    "discuss 需要一个问句：`fs-agent discuss \"问题\"`，或者把问题从 stdin 传进来"
+    "discuss 需要一个问句：`heng discuss \"问题\"`，或者把问题从 stdin 传进来"
 }
 
 /// `/discuss` 自己没带题、*而且*会话里也还没有题的时侯。
@@ -2687,7 +2688,7 @@ pub fn discuss_needs_in_session_question() -> &'static str {
 
 /// 交互式会话的 `--help`。
 pub fn help_interactive() -> String {
-    "fs-agent [options]\n\n  \
+    "heng [options]\n\n  \
      在当前工作区启动一个交互会话。命令：/undo 回滚上一次编辑，/quit 退出；输入 /技能名 直接运行一个技能（可带任务，例如 \
      `/ask-matt 帮我看一下`），包括标了 `disable-model-invocation: true` 的技能。\
      输入 / 会弹出补全窗口，列出全部命令与技能。\
@@ -2710,7 +2711,7 @@ pub fn help_interactive() -> String {
 
 /// `discuss --help`。
 pub fn help_discuss() -> String {
-    "fs-agent discuss [--plain|--tui] [--config PATH] [--cwd PATH] [--debaters A,B] \"问题\"\n\n  \
+    "heng discuss [--plain|--tui] [--config PATH] [--cwd PATH] [--debaters A,B] \"问题\"\n\n  \
      起一次多角色讨论：两个讨论者从配置的 `[discussion] debaters` **池子**里抽——\
      `--debaters 保守,激进` 指定抽哪两个（名字来自池子里的 `name`），不写就随机抽两个。\
      池子成员是「名字 + 模型」：不同厂商最好，同厂商甚至同一个模型也允许，只是多样性会弱\
@@ -2720,7 +2721,7 @@ pub fn help_discuss() -> String {
      （有分歧）。合成器沿用 `[routing].synthesizer_model`（没配就用第一个讨论者的模型）；\
      讨论者永远不会被路由到弱模型。\n\n  \
      问句没写在命令行上时：stdin 是终端就问你要一行，是管道就读到结尾（`echo 问题 | \
-     fs-agent discuss`）。讨论落在真会话里，`fs-agent sessions show <id>` 可以复盘（TUI \
+     heng discuss`）。讨论落在真会话里，`heng sessions show <id>` 可以复盘（TUI \
      退出后转录不留，完整记录在会话日志里）。\n\n  \
      --plain            使用 plain 转录（讨论过程走 stderr，合成产物走 stdout）\n  \
      --tui              使用终端界面（终端上默认就是它）\n  \
@@ -2731,7 +2732,7 @@ pub fn help_discuss() -> String {
 
 /// `probe --help`。
 pub fn help_probe() -> String {
-    "fs-agent probe [--config PATH] [--model ID]...\n\n  \
+    "heng probe [--config PATH] [--model ID]...\n\n  \
      对每个模型在同一会话里发送两次真实回合，并打印每次的 input/output/cached/miss。\
      不带 --model 时探测每一个 provider 有密钥的模型。"
         .to_owned()
@@ -2739,7 +2740,7 @@ pub fn help_probe() -> String {
 
 /// `prune --help`。
 pub fn help_prune() -> String {
-    "fs-agent prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
+    "heng prune [--keep N] [--cwd PATH] [--dry-run]\n\n  \
      删除一个工作区（当前目录，或 --cwd）的会话目录。保留最新的 N 个会话（默认 1：即 \
      --continue 会继续的那个）。一个会话就是一个目录，所以删除是整会话的；--dry-run \
      只列出将删除的内容。除此之外没有任何东西会删除会话。"
@@ -2748,7 +2749,7 @@ pub fn help_prune() -> String {
 
 /// `sessions --help`。
 pub fn help_sessions() -> String {
-    "fs-agent sessions <verb> [options]\n\n  \
+    "heng sessions <verb> [options]\n\n  \
      ls [--all] [--cwd PATH] [--limit N] [--json]\n      \
      列出本工作区的会话（--all 扫描每个桶），最新的在前。\n  \
      show <id> [--round N] [--speaker X] [--kind K] [--tool T] [--only-error] [--files] [--json]\n      \

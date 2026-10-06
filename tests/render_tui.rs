@@ -4,14 +4,14 @@
 //! 一个键是什么意思的状态。把它与终端拆开，正是让这件事
 //! 可测的原因（spec §Testing Decisions）。
 
-use fs_agent::config::FileViewerSettings;
-use fs_agent::events::{
+use heng::config::FileViewerSettings;
+use heng::events::{
     hook_format, Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason,
     ToolCallId,
 };
-use fs_agent::permissions::{Answer, PermissionRequest};
-use fs_agent::render::palette;
-use fs_agent::render::{
+use heng::permissions::{Answer, PermissionRequest};
+use heng::render::palette;
+use heng::render::{
     pane, render_block_uncoloured, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
     Key, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
 };
@@ -37,12 +37,12 @@ fn kimi() -> SpeakerId {
 fn facts() -> SessionFacts {
     SessionFacts {
         session_id: "01J8ZQ4K7M".to_owned(),
-        session_dir: "~/code/fortystory/fs-agent".to_owned(),
+        session_dir: "~/code/fortystory/heng".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
         context_window: 200_000,
-        mode: fs_agent::permissions::Mode::Ask,
+        mode: heng::permissions::Mode::Ask,
         budget_limit: Some(100_000),
-        number_style: fs_agent::render::wording::NumberStyle::Cn,
+        number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         speaker_order: Vec::new(),
     }
@@ -51,7 +51,7 @@ fn facts() -> SessionFacts {
 fn new_state() -> TuiState {
     TuiState::new(
         facts(),
-        std::path::PathBuf::from("/home/forty/code/fs-agent"),
+        std::path::PathBuf::from("/home/forty/code/heng"),
         Some(std::path::PathBuf::from("/home/forty")),
     )
 }
@@ -102,7 +102,7 @@ fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
 #[test]
 fn the_status_glyph_changes_every_two_frames_running_and_eight_idle() {
     // 相位**倒着**走（2026-10-06 维护者定）：第一格是残月 `🌘`，往后一格一格走向新月。
-    use fs_agent::render::wording;
+    use heng::render::wording;
 
     assert_eq!(wording::status_spinner(0, true), "🌘");
     assert_eq!(wording::status_spinner(1, true), "🌘");
@@ -530,7 +530,7 @@ fn a_completed_turn_and_an_aborted_one_render_in_different_colors() {
 
 #[test]
 fn a_speakers_name_is_drawn_in_its_role_colour() {
-    use fs_agent::render::{render_block, SpeakerColors};
+    use heng::render::{render_block, SpeakerColors};
 
     let name = |blocks: Vec<Block>, roster: &[&str]| {
         let roster: Vec<String> = roster.iter().map(|name| (*name).to_owned()).collect();
@@ -731,7 +731,7 @@ fn a_notice_is_a_transcript_line_shown_as_it_is() {
     // 属于转录 —— 在那里它待着不动，而不是随着它刻意
     // 避开的流式尾巴一起滚走
     // （spec §A.12、§3）。
-    let banner = "fs-agent: session abc · model m · mode ask · /tmp/x";
+    let banner = "heng: session abc · model m · mode ask · /tmp/x";
     let lines = render_block_uncoloured(&Block::Notice(banner.to_owned()));
     let text: String = lines[0]
         .spans
@@ -1247,10 +1247,10 @@ fn a_sandbox_block_is_one_dim_narration_line() {
 #[test]
 fn the_title_reads_the_working_directory_and_a_state_word() {
     let mut state = new_state();
-    assert_eq!(state.title(), "~/code/fs-agent", "空闲没有状态词");
+    assert_eq!(state.title(), "~/code/heng", "空闲没有状态词");
 
     state.request(ConsoleRequest::RunState { running: true });
-    assert_eq!(state.title(), "~/code/fs-agent · 运行中");
+    assert_eq!(state.title(), "~/code/heng · 运行中");
 }
 
 #[test]
@@ -1261,7 +1261,7 @@ fn a_question_makes_the_title_say_it_is_waiting() {
         request: permission_request("write_file"),
         reply: tx,
     }));
-    assert_eq!(state.title(), "~/code/fs-agent · 等你");
+    assert_eq!(state.title(), "~/code/heng · 等你");
 }
 
 #[test]
@@ -1273,7 +1273,7 @@ fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
         request: permission_request("bash"),
         reply: tx,
     }));
-    assert_eq!(state.title(), "~/code/fs-agent · 等你", "等你压过运行中");
+    assert_eq!(state.title(), "~/code/heng · 等你", "等你压过运行中");
 
     // 重放要有东西可放才立得起来（空的 `events` 什么也不做）。
     state.request(ConsoleRequest::Replay {
@@ -1281,13 +1281,13 @@ fn a_replay_outranks_a_question_which_outranks_a_running_turn() {
             1,
             SpeakerId::System,
             EventPayload::SessionStarted {
-                session_id: fs_agent::events::SessionId::new("01J8ZQ4K7M"),
+                session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
                 cwd: "/workspace".to_owned(),
                 schema_version: 1,
             },
         )],
     });
-    assert_eq!(state.title(), "~/code/fs-agent · 重放中", "重放压过等你");
+    assert_eq!(state.title(), "~/code/heng · 重放中", "重放压过等你");
 }
 
 #[test]
@@ -1301,7 +1301,7 @@ fn a_goal_in_the_stream_lands_in_the_title_and_leaves_when_it_ends() {
             goal: "修文档索引".to_owned(),
         },
     )));
-    assert_eq!(state.title(), "~/code/fs-agent · 运行中 · 修文档索引");
+    assert_eq!(state.title(), "~/code/heng · 运行中 · 修文档索引");
 
     // 目标停下或做完，名字就不该再挂在标题上 —— 标题说的是**正在推进**的那一件。
     state.apply(RenderEvent::Logged(Event::new(
@@ -1312,7 +1312,7 @@ fn a_goal_in_the_stream_lands_in_the_title_and_leaves_when_it_ends() {
             summary: "收尾".to_owned(),
         },
     )));
-    assert_eq!(state.title(), "~/code/fs-agent · 运行中");
+    assert_eq!(state.title(), "~/code/heng · 运行中");
 }
 
 #[test]
@@ -1324,7 +1324,7 @@ fn a_title_is_only_written_when_it_changes() {
     state.request(ConsoleRequest::RunState { running: true });
     assert_eq!(
         state.sync_title().expect("状态变了就该给新标题"),
-        "~/code/fs-agent · 运行中"
+        "~/code/heng · 运行中"
     );
     assert!(state.sync_title().is_none(), "再问一次还是没变");
 }
@@ -1364,6 +1364,6 @@ fn a_suspend_rewrites_the_title_even_when_it_did_not_change() {
     let mut state = new_state();
     assert!(state.sync_title().is_some(), "第一版总是给出去");
     assert!(state.sync_title().is_none(), "没变就不再写");
-    assert_eq!(state.retitle(), "~/code/fs-agent", "恢复后照旧写一遍");
+    assert_eq!(state.retitle(), "~/code/heng", "恢复后照旧写一遍");
     assert!(state.sync_title().is_none(), "写完之后比对重新成立");
 }

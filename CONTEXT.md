@@ -1,6 +1,6 @@
-# fs-agent
+# 衡（heng）
 
-自用 coding agent CLI（Rust，从零实现）。本文件收录**两类**词：
+自用 coding agent harness（Rust，从零实现）。本文件收录**两类**词：
 
 - **领域词汇**——本项目特有的运行期概念（事件流、投影、待办列表……）。写代码、写文档、写票之前先在这里对齐名字。
 - **流程词汇**——本仓库自己的运转方式（feature 目录、spec、票、决策图……）。它讲 `.scratch/` 与 `docs/` 怎么组织、票怎么流转。
@@ -11,13 +11,17 @@
 >
 > **流程词没有对应的代码标识符**：那一节的英文槽位放它在磁盘上或 tracker 里的位置（`spec.md`、`map.md`、`Status:`）；没有中文名的词就直接不给中文名，见**token** 那条的先例。
 >
-> `agent` 是泛称（程序名 `fs-agent`、"一个 agent 回合"），**不作为类型名**：类型名一律用下面的 **`Debater` / `Executor`**（即讨论者 / 执行者）。
+> `agent` 是泛称（程序名「衡」，命令 `heng`；"一个 agent 回合"），**不作为类型名**：类型名一律用下面的 **`Debater` / `Executor`**（即讨论者 / 执行者）。
 
 ## 名字
 
-**分叉合成（Forked Synthesis，`fs`）**:
-框架名，不是类型，也不是命令：`fs` 展开为 `Forked Synthesis`，指「异构讨论者分叉作答 → 合成器收束成共识 / 分歧 / 未决」这条机制；`fs-agent` 读作「分叉合成的 agent」。命令、crate 名与落盘路径**一律保持 `fs-agent`**，不随框架名改写。细节见 [docs/discussion.md](docs/discussion.md)。
-_Avoid_: 把 `fs` 读成 filesystem / file system；与「明确不做」里的 `fork/rewind` 手势混用「分叉」（那个叫 fork，指回退，不是本词）
+**衡（heng）**:
+本程序的名字：**汉字是正身，`heng` 是它的拼音**。命令、crate 名与落盘路径一律写 `heng`（`~/.config/heng/`、`$XDG_DATA_HOME/heng/`、技能根 `.heng`）。**衡**取「衡量」——合成器不是裁判，只把两方判断放到秤上，共识 / 分歧 / 未决就是秤上的读数；它同时是个名词（衡器），于是这个名字指向一件**装置**，而不是一个 agent。改名的两条理由与来路见 [ADR 0014](docs/adr/0014-renamed-to-heng.md)。
+_Avoid_: 把它当缩略语读（`heng` 是拼音，不是 `fs` 那样的缩写）；在任何新文档里写旧名 `fs-agent`
+
+**分叉合成（Forked Synthesis）**:
+**讨论协议**这条机制的框架名，不是产品名、不是类型、也不是命令：指「异构讨论者分叉作答 → 合成器收束成共识 / 分歧 / 未决」这条机制。提到它时写全称或「分叉合成」，缩写 `fs` 只留在历史文档里。细节见 [docs/discussion.md](docs/discussion.md)。
+_Avoid_: 拿它当程序名（那是**衡**）；与「明确不做」里的 `fork/rewind` 手势混用「分叉」（那个叫 fork，指回退，不是本词）
 
 ## 参与者
 
@@ -92,7 +96,7 @@ _Avoid_: 目标条目（那只在清单文件里）、待办列表（那是 `tod
 _Avoid_: abort、stop、interrupt（`Aborted` 是收尾原因，不是手势名）
 
 **挂起（Suspend）**:
-一次用户手势：`Ctrl-Z` 把整个 fs-agent 进程停住、shell 拿回提示符，`fg` 回到原地继续——**真暂停**，不是「画布让位、回合继续跑」（后者要 daemon 化，是另一件事）。**单下生效**，不做举手；**只有 TUI 有这个手势**，plain 的同一按键由终端驱动直接处理、headless 没有键盘。手势本身**不进事件流**，也**不打回执**；停着的那段时间里子进程与各种 deadline **照旧走**，所以想连子进程一起停下时的动作是「先**取消**、再挂起」。细节见 [docs/render.md](docs/render.md)。
+一次用户手势：`Ctrl-Z` 把整个 heng 进程停住、shell 拿回提示符，`fg` 回到原地继续——**真暂停**，不是「画布让位、回合继续跑」（后者要 daemon 化，是另一件事）。**单下生效**，不做举手；**只有 TUI 有这个手势**，plain 的同一按键由终端驱动直接处理、headless 没有键盘。手势本身**不进事件流**，也**不打回执**；停着的那段时间里子进程与各种 deadline **照旧走**，所以想连子进程一起停下时的动作是「先**取消**、再挂起」。细节见 [docs/render.md](docs/render.md)。
 _Avoid_: 暂停（听着像暂停某一次调用）、后台任务（那是 `background-services`）、休眠、`/suspend` 命令
 
 **举手（Gesture）**:
@@ -230,7 +234,7 @@ MCP 规范里 server 能提供的东西的四个类别：tool（可调用的动�
 _Avoid_: 能力（那是 `ClientCapabilities` / `ServerCapabilities` 那一侧的词）、功能
 
 **MCP server（server）**:
-被 fs-agent 连上的外部进程或服务（stdio 子进程或 Streamable HTTP 端点），名字就是四个元工具认的那个键。它**默认不可信**：内容带外部内容标记、工具按最严的副作用处理、进程过沙箱且只拿到白名单里的环境变量；三个信任位（结果可信 / 副作用可信 / 过沙箱）**各自独立、互不牵连**，缺省都取最保守的那一档。写纯中文散文时也不译，直接用 server。细节见 [docs/mcp.md](docs/mcp.md)。
+被 heng 连上的外部进程或服务（stdio 子进程或 Streamable HTTP 端点），名字就是四个元工具认的那个键。它**默认不可信**：内容带外部内容标记、工具按最严的副作用处理、进程过沙箱且只拿到白名单里的环境变量；三个信任位（结果可信 / 副作用可信 / 过沙箱）**各自独立、互不牵连**，缺省都取最保守的那一档。写纯中文散文时也不译，直接用 server。细节见 [docs/mcp.md](docs/mcp.md)。
 _Avoid_: MCP 服务（容易与 `McpService` 混）、插件、连接器、MCP 服务器（那是跑 server 的那台机器）
 
 ## 渲染

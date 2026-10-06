@@ -1,21 +1,21 @@
 [package]
-name = "fs-agent"
+name = "heng"
 version = "0.1.0"
 edition = "2021"
-description = "A self-hosted coding agent CLI: append-only event stream plus per-agent windows"
+description = "衡（heng）：自用的 coding agent harness —— 只追加的事件流 + 按 agent 投影"
 license = "MIT"
 # 仓库里有**三个** bin（产品本身 + 时间 server + 下面那个测试辅助的假 MCP server），所以
 # `cargo run` 得知道不指名时跑哪个 —— 不加这一行它会报「could not determine which binary to
-# run」。产品是默认；另两个可以 `cargo run --bin fs-agent-mcp-time` /
+# run」。产品是默认；另两个可以 `cargo run --bin heng-mcp-time` /
 # `cargo run --bin fake-mcp-server` 点名跑。
-default-run = "fs-agent"
+default-run = "heng"
 
 [lib]
-name = "fs_agent"
+name = "heng"
 path = "src/lib.rs"
 
 [[bin]]
-name = "fs-agent"
+name = "heng"
 path = "src/main.rs"
 
 # 仓库自带的时间 server（`.scratch/time-mcp/spec.md`）：一台 stdio MCP server，只提供一个工具
@@ -23,7 +23,7 @@ path = "src/main.rs"
 # 不开 `rmcp` 的 server 侧 —— 理由写在那份源码的模块注释里。不写盘、不出网、不读配置，所以能过
 # 缺省的沙箱；怎么把它挂上见 `docs/mcp.md`。
 [[bin]]
-name = "fs-agent-mcp-time"
+name = "heng-mcp-time"
 path = "src/bin/mcp_time.rs"
 
 # 集成测试用的假 MCP server（`.scratch/mcp-support/spec.md` §3；票 12）：一个手写的
@@ -37,7 +37,7 @@ path = "tests/support/fake_mcp_server.rs"
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-# `fs-agent-mcp-time` 报的那一行里要有时区名（`Asia/Shanghai`）—— `chrono::Local` 只给得出
+# `heng-mcp-time` 报的那一行里要有时区名（`Asia/Shanghai`）—— `chrono::Local` 只给得出
 # 偏移。这个包本来就在 `Cargo.lock` 里（`chrono` 自己的传递依赖），这里只是把它提成直接依赖。
 iana-time-zone = "0.1"
 futures = "0.3"
@@ -103,7 +103,7 @@ rmcp = { version = "3.5.0", default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "reqwest-native-tls",
 ] }
-# server 子进程的整组清理：fs-agent 的纪律是 `process_group(0)` + `killpg` 杀整棵树，而 rmcp
+# server 子进程的整组清理：heng 的纪律是 `process_group(0)` + `killpg` 杀整棵树，而 rmcp
 # 默认的清理只保证直接子进程被杀。与 rmcp 依赖的是同一个大版本。
 process-wrap = { version = "10", features = ["tokio1"] }
 # 远端 server 的自定义请求头（`Authorization` 那一类）。

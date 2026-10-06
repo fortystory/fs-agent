@@ -557,7 +557,7 @@ fn suspend_and_resume(terminal: &mut ratatui::DefaultTerminal, state: &mut TuiSt
     // 才被处理，于是「先交还、再停」在时间上并不成立。`raise` 把信号投给当前线程并等它处理
     // 完：这一行返回，就是 `fg` 回来了。停止信号停的是整个线程组（也就是这个进程），所以
     // 「只发给当前线程」不影响「整个进程停住」；glibc 手册那条「发给进程组」针对的是一个
-    // 作业里有多个进程的情形，而 fs-agent 的组里只有它自己（`bash` 与动态工具刻意各自成组）。
+    // 作业里有多个进程的情形，而 heng 的组里只有它自己（`bash` 与动态工具刻意各自成组）。
     //
     // 处置先置回默认再发：`SIGTSTP` 可以被忽略，而被忽略的处置会跨 `execve` 继承，包装器
     // 可能把它留着 —— 那时信号被丢弃、进程不停，而终端已经交还了。发完还原，父进程若有意
@@ -581,7 +581,7 @@ fn suspend_and_resume(terminal: &mut ratatui::DefaultTerminal, state: &mut TuiSt
 /// 鼠标上报、括号粘贴与终端标题：进来时管上，出去时还回去。
 ///
 /// `ratatui::init` 只管 raw 模式与 alt screen —— 它的 `TerminalOptions` 里根本没有鼠标
-/// 开关 —— 所以这几样得我们自己撤，正常路径与 panic 路径都一样。留着不管，fs-agent
+/// 开关 —— 所以这几样得我们自己撤，正常路径与 panic 路径都一样。留着不管，heng
 /// 退出之后终端就没法选文字了。
 struct TerminalModes;
 
@@ -3059,7 +3059,7 @@ impl TuiState {
 
     /// 查看器里的一个按键：归它回答 `true`。
     ///
-    /// **`Ctrl-C` 关掉浮层** —— 这个手势在整个 fs-agent 里就是「退出当前这件事」（举手退出、
+    /// **`Ctrl-C` 关掉浮层** —— 这个手势在整个 heng 里就是「退出当前这件事」（举手退出、
     /// 取消回合）。`Esc` 与 `Ctrl-D` **不**留给前端：它们在 nvim 里是退出插入模式与向下翻
     /// 半屏，抢走就等于把编辑器弄坏了。这是与详情覆盖层**有意不同**的一处（那边 `Esc` 与
     /// `Ctrl-D` 是关），也是这一档唯一两处「覆盖层关法不一样」之一。
@@ -7874,7 +7874,7 @@ mod tests {
                 file_viewer: crate::config::FileViewerSettings::default(),
                 speaker_order: vec!["kimi".to_owned()],
             },
-            std::path::PathBuf::from("/x/fs-agent"),
+            std::path::PathBuf::from("/x/heng"),
             None,
         )
     }
@@ -8145,13 +8145,13 @@ mod tests {
         let mut transcript = crate::render::transcript::Transcript::new();
 
         let blocks = transcript.push(RenderEvent::identity(
-            "你是 fs-agent，一个自用的 coding agent CLI…",
+            "你是衡（heng），一套自用的 coding agent harness…",
         ));
 
         match blocks.as_slice() {
             [crate::render::transcript::Block::ContextInjected { source, content }] => {
                 assert_eq!(*source, crate::events::ContextSource::Identity);
-                assert_eq!(content, "你是 fs-agent，一个自用的 coding agent CLI…");
+                assert_eq!(content, "你是衡（heng），一套自用的 coding agent harness…");
             }
             _ => panic!("期望正好一条注入记录（可点开的那一种）"),
         }

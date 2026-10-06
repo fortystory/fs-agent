@@ -33,8 +33,8 @@
 
   | 层级 | 根（左边胜过右边） |
   | --- | --- |
-  | 项目 | `<repo>/.fs-agent/skills/` → `<repo>/.agents/skills/` → `<repo>/.claude/skills/` |
-  | 用户 | `~/.config/fs-agent/skills/` → `~/.agents/skills/` → `~/.claude/skills/` |
+  | 项目 | `<repo>/.heng/skills/` → `<repo>/.agents/skills/` → `<repo>/.claude/skills/` |
+  | 用户 | `~/.config/heng/skills/` → `~/.agents/skills/` → `~/.claude/skills/` |
 
   跟随 `.agents` 与 `.claude` 这两套约定，意味着已有的技能库不用挪动任何东西就能用。
 

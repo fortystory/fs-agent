@@ -10,15 +10,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{SessionConfig, WebSettings};
-use fs_agent::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::permissions::{Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_web, WEB_FETCH_TOOL};
-use fs_agent::web::html::{to_markdown, OMITTED_MARKER};
-use fs_agent::web::{FetchOutcome, FetchProvider, FetchedContent, WebError, WebService};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::config::{SessionConfig, WebSettings};
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::permissions::{Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_web, WEB_FETCH_TOOL};
+use heng::web::html::{to_markdown, OMITTED_MARKER};
+use heng::web::{FetchOutcome, FetchProvider, FetchedContent, WebError, WebService};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 // --- HTML → markdown ------------------------------------------------------
@@ -259,7 +259,7 @@ async fn fixture(
             log_path: log_path.clone(),
             session_id: SessionId::new("s-fetch"),
             tools: with_web(builtin(false), web),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
             questions: None,
@@ -282,7 +282,7 @@ impl Fixture {
         read_events(&self.log_path).unwrap()
     }
 
-    fn decisions(&self) -> Vec<(Decision, fs_agent::events::DecisionSource, Option<String>)> {
+    fn decisions(&self) -> Vec<(Decision, heng::events::DecisionSource, Option<String>)> {
         self.events()
             .iter()
             .filter_map(|event| match &event.payload {
@@ -431,7 +431,7 @@ async fn a_truncated_body_says_so() {
 #[tokio::test]
 async fn a_blocked_target_is_a_readable_result_with_its_code() {
     let provider = FakeFetch::new(vec![Err(WebError::new(
-        fs_agent::web::WebErrorCode::BlockedUrl,
+        heng::web::WebErrorCode::BlockedUrl,
         "`169.254.169.254` 指向 169.254.169.254，那不是公共单播地址",
     ))]);
     let mut fixture = fixture(

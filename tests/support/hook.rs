@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::hooks::{Constraint, Hook, HookError, PostHookCall, PreHookCall};
+use heng::hooks::{Constraint, Hook, HookError, PostHookCall, PreHookCall};
 use serde_json::Value;
 
 /// 从钩子那一侧看过去的一次 `hook.pre` 调用。

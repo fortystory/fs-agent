@@ -78,6 +78,7 @@ DOC_FILES = [
     "docs/adr/0011-diagrams-in-mermaid.md",
     "docs/adr/0012-input-tokens-are-atomic.md",
     "docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md",
+    "docs/adr/0014-renamed-to-heng.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -298,7 +299,7 @@ def review_rules(unit: Unit) -> list[str]:
 #   其余两份照旧只许降。
 ENTRY_BUDGET = {
     "README.md": {"chars": 17447, "lines": 296, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 10420, "lines": 62, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 10612, "lines": 63, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，

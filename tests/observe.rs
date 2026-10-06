@@ -5,15 +5,15 @@
 //! 形态通过 serde 值来断言，因为那正是
 //! 一条流水线消费的东西。
 
-use fs_agent::config::{PriceTable, Pricing};
-use fs_agent::events::{
+use heng::config::{PriceTable, Pricing};
+use heng::events::{
     Decision, DecisionSource, EventLog, EventPayload, ParticipantId, Role, RoundMode, SessionId,
     SpeakerId, StopReason, ToolCallId, Usage, SCHEMA_VERSION,
 };
-use fs_agent::session::observe::{self, CostModel, Entry, Filter};
-use fs_agent::session::SessionStore;
-use fs_agent::tools::edit::EditError;
-use fs_agent::tools::{MATCH_LEVEL_PREFIX, READ_BEFORE_WRITE_PREFIX, WROTE_PATH_PREFIX};
+use heng::session::observe::{self, CostModel, Entry, Filter};
+use heng::session::SessionStore;
+use heng::tools::edit::EditError;
+use heng::tools::{MATCH_LEVEL_PREFIX, READ_BEFORE_WRITE_PREFIX, WROTE_PATH_PREFIX};
 
 fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
@@ -124,7 +124,7 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
     log.append(
         SpeakerId::User,
         EventPayload::ContextInjected {
-            source: fs_agent::events::ContextSource::AgentsMd,
+            source: heng::events::ContextSource::AgentsMd,
             content: "rules".to_owned(),
         },
     )
@@ -161,9 +161,9 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
     log.append(
         kimi(),
         EventPayload::HookExecuted {
-            point: fs_agent::events::hook_format::POINT_POST.to_owned(),
+            point: heng::events::hook_format::POINT_POST.to_owned(),
             command: "fmt".to_owned(),
-            outcome: fs_agent::events::hook_format::feedback("looks fine"),
+            outcome: heng::events::hook_format::feedback("looks fine"),
         },
     )
     .unwrap();
@@ -501,9 +501,9 @@ fn stats_report_per_agent_tokens_hit_rate_rounds_and_permissions() {
     log.append(
         kimi(),
         EventPayload::HookExecuted {
-            point: fs_agent::events::hook_format::POINT_PRE.to_owned(),
+            point: heng::events::hook_format::POINT_PRE.to_owned(),
             command: "guard".to_owned(),
-            outcome: fs_agent::events::hook_format::OUTCOME_CONTINUE.to_owned(),
+            outcome: heng::events::hook_format::OUTCOME_CONTINUE.to_owned(),
         },
     )
     .unwrap();

@@ -9,13 +9,13 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 
-use fs_agent::config::{
+use heng::config::{
     self, default_path, resolve, EnvMap, FileViewer, KeySource, ReasoningEffort,
     SandboxAvailability, SandboxMode, Vendor, DEFAULT_FILE_VIEWER_WIDTH, DEFAULT_MODEL,
 };
-use fs_agent::events::Decision;
-use fs_agent::permissions::Mode;
-use fs_agent::render::wording::NumberStyle;
+use heng::events::Decision;
+use heng::permissions::Mode;
+use heng::render::wording::NumberStyle;
 
 fn env(pairs: &[(&str, &str)]) -> EnvMap {
     pairs
@@ -335,11 +335,11 @@ fn the_default_path_prefers_xdg_config_home_then_home() {
             ("XDG_CONFIG_HOME", "/tmp/xdg"),
             ("HOME", "/home/someone")
         ])),
-        std::path::PathBuf::from("/tmp/xdg/fs-agent/config.toml")
+        std::path::PathBuf::from("/tmp/xdg/heng/config.toml")
     );
     assert_eq!(
         default_path(&env(&[("HOME", "/home/someone")])),
-        std::path::PathBuf::from("/home/someone/.config/fs-agent/config.toml")
+        std::path::PathBuf::from("/home/someone/.config/heng/config.toml")
     );
 }
 
@@ -352,12 +352,12 @@ fn the_session_store_root_prefers_xdg_data_home_then_home() {
             ("XDG_DATA_HOME", "/tmp/data"),
             ("HOME", "/home/someone")
         ])),
-        Some(std::path::PathBuf::from("/tmp/data/fs-agent/sessions"))
+        Some(std::path::PathBuf::from("/tmp/data/heng/sessions"))
     );
     assert_eq!(
         config::sessions_dir(&env(&[("HOME", "/home/someone")])),
         Some(std::path::PathBuf::from(
-            "/home/someone/.local/share/fs-agent/sessions"
+            "/home/someone/.local/share/heng/sessions"
         ))
     );
     assert_eq!(config::sessions_dir(&env(&[])), None);
@@ -407,7 +407,7 @@ fn a_price_table_is_configuration_and_prices_a_hit_apart_from_a_miss() {
     )
     .unwrap();
 
-    let usage = fs_agent::events::Usage {
+    let usage = heng::events::Usage {
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
         cached_tokens: 900_000,
@@ -514,17 +514,17 @@ fn routing_is_configuration_and_reaches_only_the_two_landing_points() {
     let config = routed.session_config("kimi-k3").unwrap();
     assert_eq!(config.model, "kimi-k3");
     assert_eq!(
-        config.model_for(fs_agent::config::LandingPoint::Synthesizer),
+        config.model_for(heng::config::LandingPoint::Synthesizer),
         "deepseek-flash"
     );
     assert_eq!(
-        config.model_for(fs_agent::config::LandingPoint::Executor),
+        config.model_for(heng::config::LandingPoint::Executor),
         "deepseek-flash"
     );
     // 没配改派的会话，一切都用自己的模型作答。
     let plain = unrouted.session_config("kimi-k3").unwrap();
     assert_eq!(
-        plain.model_for(fs_agent::config::LandingPoint::Synthesizer),
+        plain.model_for(heng::config::LandingPoint::Synthesizer),
         "kimi-k3"
     );
 }
@@ -890,7 +890,7 @@ fn the_sandbox_section_defaults_to_bwrap_with_the_tool_caches_writable() {
     assert_eq!(
         config.sandbox.masks,
         vec![
-            PathBuf::from("/home/ada/.config/fs-agent"),
+            PathBuf::from("/home/ada/.config/heng"),
             PathBuf::from("/home/ada/.ssh"),
         ],
         "遮罩目录写死、不给旋钮"

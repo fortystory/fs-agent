@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use fs_agent::permissions::{Answer, Asker, PermissionRequest};
-use fs_agent::render::{console, ConsoleAsker, ConsoleRequest, FrontEndEvent};
+use heng::permissions::{Answer, Asker, PermissionRequest};
+use heng::render::{console, ConsoleAsker, ConsoleRequest, FrontEndEvent};
 
 #[tokio::test]
 async fn a_prompt_travels_out_and_the_answer_comes_back() {

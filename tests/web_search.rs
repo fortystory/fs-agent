@@ -11,18 +11,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::agent::{agent_identity, WEB_GUIDANCE};
-use fs_agent::config::{SessionConfig, WebSettings};
-use fs_agent::discussion::{debater_identity, synthesizer_identity};
-use fs_agent::events::{
+use heng::agent::{agent_identity, WEB_GUIDANCE};
+use heng::config::{SessionConfig, WebSettings};
+use heng::discussion::{debater_identity, synthesizer_identity};
+use heng::events::{
     read_events, Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId,
 };
-use fs_agent::permissions::{Answer, Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_web, WEB_SEARCH_TOOL};
-use fs_agent::web::{SearchProvider, Source, WebError, WebService};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Answer, Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_web, WEB_SEARCH_TOOL};
+use heng::web::{SearchProvider, Source, WebError, WebService};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 // --- 假的搜索后端 ---------------------------------------------------------
@@ -183,7 +183,7 @@ async fn fixture(
             session_id: SessionId::new("s-web"),
             // 组装期的那一步：`enabled` 与后端挂没挂是两件事。
             tools: with_web(builtin(false), web),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
             questions: None,

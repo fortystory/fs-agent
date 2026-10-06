@@ -7,11 +7,11 @@
 
 use std::path::PathBuf;
 
-use fs_agent::events::{Decision, ParticipantId, SpeakerId};
-use fs_agent::permissions::{
+use heng::events::{Decision, ParticipantId, SpeakerId};
+use heng::permissions::{
     decide, Call, Escalation, Mode, PathError, Policy, Rule, Scope, Subject, Verdict,
 };
-use fs_agent::tools::{Effect, ToolError};
+use heng::tools::{Effect, ToolError};
 
 /// 一次交给权限门的调用，用 owned 形式写，好让测试读起来像一张用例表。
 struct Invocation {
@@ -716,7 +716,7 @@ fn only_workspace_asks_for_an_outside_write() {
 #[test]
 fn outside_read_is_deny_by_default_and_a_knob_everywhere() {
     let outside = Invocation::read("read_file")
-        .reads(&["/home/ada/.config/fs-agent/config.toml"])
+        .reads(&["/home/ada/.config/heng/config.toml"])
         .read_error("路径 … 在会话工作区之外（/w）");
 
     for mode in [Mode::Readonly, Mode::Ask, Mode::Workspace, Mode::Auto] {
@@ -792,7 +792,7 @@ fn an_escalation_asks_once_in_every_mode_but_readonly() {
 #[test]
 fn an_escalation_into_a_mask_or_a_protected_path_is_denied_outright() {
     let masked = Invocation::exclusive("bash")
-        .masks(&["/home/ada/.ssh", "/home/ada/.config/fs-agent"])
+        .masks(&["/home/ada/.ssh", "/home/ada/.config/heng"])
         .escalation("要写 authorized_keys", &["/home/ada/.ssh/authorized_keys"]);
     for mode in [Mode::Ask, Mode::Workspace, Mode::Auto] {
         let verdict = gate(mode, vec![allow_any()], &masked);

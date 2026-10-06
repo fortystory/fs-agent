@@ -6,11 +6,11 @@
 加一次内存里的过滤。
 
 ```
-fs-agent sessions ls [--all] [--cwd PATH] [--limit N] [--json]
-fs-agent sessions show <id> [--round N] [--speaker X] [--kind K] [--tool T]
+heng sessions ls [--all] [--cwd PATH] [--limit N] [--json]
+heng sessions show <id> [--round N] [--speaker X] [--kind K] [--tool T]
                            [--only-error] [--files] [--json]
-fs-agent sessions replay <id> --speaker X [--round N] [--model ID] [--json]
-fs-agent sessions stats <id> [--model ID] [--json]
+heng sessions replay <id> --speaker X [--round N] [--model ID] [--json]
+heng sessions stats <id> [--model ID] [--json]
 ```
 
 `<id>` 是一个会话 id，或者一个会话目录的路径（会话是可搬运的目录，所以那常常是最顺手的

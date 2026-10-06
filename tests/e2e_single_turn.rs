@@ -10,14 +10,14 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::{ReasoningEffort, SessionConfig};
-use fs_agent::events::{
+use heng::config::{ReasoningEffort, SessionConfig};
+use heng::events::{
     read_events, Event, EventPayload, Role, SessionId, SpeakerId, StopReason, Usage,
 };
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, Message, ProviderError, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, Message, ProviderError, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {
@@ -57,8 +57,8 @@ async fn fixture(replies: Vec<Reply>, config: SessionConfig) -> Fixture {
             cwd: cwd.clone(),
             log_path: log_path.clone(),
             session_id: SessionId::new("s-1"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             // 一个交互式会话：默认的 `ask` 档，配一个每次都放行写的
             // 用户。专测权限的那些测试自己脚本化自己的。
             policy: Policy::for_mode(Mode::Ask),
@@ -135,9 +135,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
     assert!(diagnostics.contains("weighing"), "{diagnostics}");
     assert!(diagnostics.contains("hello from fake"), "{diagnostics}");
     assert!(
-        diagnostics.contains(&fs_agent::render::wording::turn_ended(
-            StopReason::Completed
-        )),
+        diagnostics.contains(&heng::render::wording::turn_ended(StopReason::Completed)),
         "这个回合的收尾被叙述了：{diagnostics}"
     );
 
@@ -168,7 +166,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
             ..
         } => {
             assert_eq!(session_id.as_str(), "s-1");
-            assert_eq!(*schema_version, fs_agent::events::SCHEMA_VERSION);
+            assert_eq!(*schema_version, heng::events::SCHEMA_VERSION);
         }
         other => panic!("期望 SessionStarted，实际得到 {other:?}"),
     }
@@ -212,7 +210,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
         requests[0].messages,
         vec![
             Message::System {
-                content: fs_agent::agent::agent_identity().to_owned(),
+                content: heng::agent::agent_identity().to_owned(),
                 name: None,
             },
             Message::User {
@@ -633,11 +631,7 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
             assert!(ok);
             let output = output.as_deref().unwrap();
             assert!(
-                output.contains(&format!(
-                    "{} {}",
-                    fs_agent::tools::MATCH_LEVEL_PREFIX,
-                    "exact"
-                )),
+                output.contains(&format!("{} {}", heng::tools::MATCH_LEVEL_PREFIX, "exact")),
                 "匹配层级是按约定的文本报出来的：{output}"
             );
         }
@@ -658,7 +652,7 @@ async fn an_edit_file_call_changes_the_file_and_records_the_replaced_bytes() {
         } => {
             assert_eq!(tool_call_id, "call-edit");
             assert!(
-                content.contains(fs_agent::tools::MATCH_LEVEL_PREFIX),
+                content.contains(heng::tools::MATCH_LEVEL_PREFIX),
                 "{content}"
             );
         }
@@ -701,7 +695,7 @@ async fn an_edit_before_a_read_is_refused_and_the_file_is_left_alone() {
     assert!(!result.0);
     let message = result.1.unwrap();
     assert!(
-        message.contains(fs_agent::tools::READ_BEFORE_WRITE_PREFIX),
+        message.contains(heng::tools::READ_BEFORE_WRITE_PREFIX),
         "{message}"
     );
 }
@@ -822,20 +816,18 @@ async fn a_turn_that_has_spent_the_session_allowance_ends_budget_exhausted() {
 
     fixture.harness.shutdown().await;
     let stderr = fixture.stderr.text();
-    let budget = fs_agent::render::wording::turn_ended(StopReason::BudgetExhausted);
+    let budget = heng::render::wording::turn_ended(StopReason::BudgetExhausted);
     assert!(stderr.contains(&budget), "那个理由被叙述了：{stderr}");
     // 与同一行可能扛的别的收尾原因要分得开：一个把自己的
     // 迭代数用光的回合，或者一个正常跑完的回合，读起来必须不一样。
     assert!(
-        !stderr.contains(&fs_agent::render::wording::turn_ended(
+        !stderr.contains(&heng::render::wording::turn_ended(
             StopReason::MaxIterations
         )),
         "{stderr}"
     );
     assert!(
-        !stderr.contains(&fs_agent::render::wording::turn_ended(
-            StopReason::Completed
-        )),
+        !stderr.contains(&heng::render::wording::turn_ended(StopReason::Completed)),
         "{stderr}"
     );
 }

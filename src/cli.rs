@@ -84,7 +84,7 @@ pub fn main() -> ExitCode {
     // SAFETY: `geteuid` 只读调用进程的 uid，不会失败。
     let euid = unsafe { libc::geteuid() };
     if let Some(message) = root_refusal(euid) {
-        eprintln!("fs-agent: {message}");
+        eprintln!("heng: {message}");
         return ExitCode::FAILURE;
     }
     let env: EnvMap = std::env::vars().collect();
@@ -96,7 +96,7 @@ pub fn main() -> ExitCode {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!(
-                "fs-agent: {}",
+                "heng: {}",
                 render::wording::startup_runtime(&error.to_string())
             );
             return ExitCode::FAILURE;
@@ -108,7 +108,7 @@ pub fn main() -> ExitCode {
 async fn run(args: &[String], env: &EnvMap) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("--version") | Some("-V") => {
-            println!("fs-agent {}", env!("CARGO_PKG_VERSION"));
+            println!("heng {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some("--help") | Some("-h") => {
@@ -126,7 +126,7 @@ async fn run(args: &[String], env: &EnvMap) -> ExitCode {
             run_sessions(&args[1..], env, &mut out, &mut err)
         }
         // 没有子命令（或者只有一个裸旗标）就是交互式会话：常见情形就是在某个工作区里直接跑
-        // `fs-agent`。`interactive` 自己解析自己那批参数，并拒掉任何它不认识的东西。
+        // `heng`。`interactive` 自己解析自己那批参数，并拒掉任何它不认识的东西。
         _ => interactive(args, env).await,
     }
 }
@@ -169,8 +169,8 @@ fn parse_interactive(args: &[String]) -> Result<InteractiveArgs, String> {
             "--plain" => parsed.plain = true,
             "--tui" => parsed.tui = true,
             // `-c` / `--continue` 后面跟一个不以 `-` 开头的词，就是**指名**续哪一场
-            // （`fs-agent -c 20261001T155845Z-7a69cbff`）；没有就是本工作区最新那场。
-            // 判的是「下一个词是不是旗标」而不是「是不是 id」：这样 `fs-agent -c --plain`
+            // （`heng -c 20261001T155845Z-7a69cbff`）；没有就是本工作区最新那场。
+            // 判的是「下一个词是不是旗标」而不是「是不是 id」：这样 `heng -c --plain`
             // 仍然是「续最新 + plain」，不会去找一场叫 `--plain` 的会话。
             "--continue" | "-c" => {
                 parsed.resume = Some(match args.get(index + 1) {
@@ -242,7 +242,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let parsed = match parse_interactive(args) {
         Ok(parsed) => parsed,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("heng: {message}");
             println!("{}", render::wording::help_interactive());
             return ExitCode::FAILURE;
         }
@@ -250,13 +250,13 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let mut config = match load_config(parsed.config.clone(), env) {
         Ok(config) => config,
         Err(message) => {
-            eprintln!("fs-agent: {}", render::wording::startup_config(&message));
+            eprintln!("heng: {}", render::wording::startup_config(&message));
             return ExitCode::FAILURE;
         }
     };
     // 没登记的模型是启动错误，绝不是悄悄降级。
     if let Err(message) = validate_models(&config) {
-        eprintln!("fs-agent: {message}");
+        eprintln!("heng: {message}");
         return ExitCode::FAILURE;
     }
     let model = parsed
@@ -266,12 +266,12 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let profile = match config.resolve_model(Some(&model)) {
         Ok((_, profile)) => profile.clone(),
         Err(error) => {
-            eprintln!("fs-agent: {error}");
+            eprintln!("heng: {error}");
             return ExitCode::FAILURE;
         }
     };
     let Some(root) = config::sessions_dir(env) else {
-        eprintln!("fs-agent: {}", render::wording::startup_no_session_store());
+        eprintln!("heng: {}", render::wording::startup_no_session_store());
         return ExitCode::FAILURE;
     };
     let store = SessionStore::new(root);
@@ -280,10 +280,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         None => match std::env::current_dir() {
             Ok(dir) => dir,
             Err(error) => {
-                eprintln!(
-                    "fs-agent: {}",
-                    render::wording::startup_cwd(&error.to_string())
-                );
+                eprintln!("heng: {}", render::wording::startup_cwd(&error.to_string()));
                 return ExitCode::FAILURE;
             }
         },
@@ -292,7 +289,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let chosen = match choose_session(&store, &cwd, parsed.resume.as_ref()) {
         Ok(chosen) => chosen,
         Err(message) => {
-            eprintln!("fs-agent: {}", message);
+            eprintln!("heng: {}", message);
             return ExitCode::FAILURE;
         }
     };
@@ -302,7 +299,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // `[mcp] enabled = false`（缺省）时这一步连文件都不看。
     if let Err(error) = config.load_project_mcp(&cwd) {
         eprintln!(
-            "fs-agent: {}",
+            "heng: {}",
             render::wording::startup_config(&error.to_string())
         );
         return ExitCode::FAILURE;
@@ -311,14 +308,14 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     let provider = match OpenAiProvider::build(&config, &model, stderr_warnings()) {
         Ok(provider) => provider,
         Err(error) => {
-            eprintln!("fs-agent: {error}");
+            eprintln!("heng: {error}");
             return ExitCode::FAILURE;
         }
     };
     let session_config = match config.session_config(&model) {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("fs-agent: {error}");
+            eprintln!("heng: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -346,7 +343,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
         let caps = match caps_for(&model) {
             Ok(caps) => caps,
             Err(error) => {
-                eprintln!("fs-agent: {error}");
+                eprintln!("heng: {error}");
                 return ExitCode::FAILURE;
             }
         };
@@ -428,7 +425,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     {
         Ok(harness) => harness,
         Err(error) => {
-            eprintln!("fs-agent: {error}");
+            eprintln!("heng: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -445,7 +442,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 手里有哪些外部 server，而转录里那行**点得开**、详情就是同一段数据。
     if let Some(catalog) = mcp.catalog_text() {
         if let Err(error) = harness.inject_context(ContextSource::McpCatalog, &catalog) {
-            eprintln!("fs-agent: {}", render::wording::error_report(&error));
+            eprintln!("heng: {}", render::wording::error_report(&error));
         }
     }
 
@@ -514,7 +511,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
 pub fn finish_session<W: Write>(code: ExitCode, session_id: &str, out: &mut W) -> ExitCode {
     let _ = writeln!(
         out,
-        "fs-agent: {}",
+        "heng: {}",
         render::wording::session_receipt(session_id)
     );
     code
@@ -524,7 +521,7 @@ pub fn finish_session<W: Write>(code: ExitCode, session_id: &str, out: &mut W) -
 // 讨论前端（spec §15）
 // ---------------------------------------------------------------------------
 
-/// 一次已解析的 `fs-agent discuss` 调用。
+/// 一次已解析的 `heng discuss` 调用。
 ///
 /// 刻意没有 `--model`：谁参与讨论是一件配置事实（`[discussion] debaters`），而一个能替换掉两者之
 /// 一的旗标会是说同一件事的第二种方式。剩下可选的只是这场讨论怎么看。
@@ -590,7 +587,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     let parsed = match parse_discuss(args) {
         Ok(parsed) => parsed,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("heng: {message}");
             println!("{}", render::wording::help_discuss());
             return ExitCode::FAILURE;
         }
@@ -598,41 +595,41 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     let mut config = match load_config(parsed.config.clone(), env) {
         Ok(config) => config,
         Err(message) => {
-            eprintln!("fs-agent: {}", render::wording::startup_config(&message));
+            eprintln!("heng: {}", render::wording::startup_config(&message));
             return ExitCode::FAILURE;
         }
     };
     // 没登记的模型是启动错误，绝不是悄悄降级。
     if let Err(message) = validate_models(&config) {
-        eprintln!("fs-agent: {message}");
+        eprintln!("heng: {message}");
         return ExitCode::FAILURE;
     }
     // 文件里没有名册不算错误 —— 大多数配置都是给单 agent 会话用的 —— 但对这个子命令算。
     let Some(roster) = config.discussion.clone() else {
-        eprintln!("fs-agent: {}", render::wording::discussion_no_roster());
+        eprintln!("heng: {}", render::wording::discussion_no_roster());
         return ExitCode::FAILURE;
     };
     // 池子里哪两位参与讨论：命令行点了名的，或者抽出来的。
     let pair = match pick_debaters(&roster, parsed.debaters.clone(), discussion_seed()) {
         Ok(pair) => pair,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("heng: {message}");
             return ExitCode::FAILURE;
         }
     };
     for line in advisory_lines(&config, &pair) {
-        eprintln!("fs-agent: {line}");
+        eprintln!("heng: {line}");
     }
 
     // 问题在任何东西被组装之前就要拿到：读它可能在终端上阻塞，而那时终端必须还在 cooked 模式下
     // （组装会把 TUI 切进 raw 模式，并从那一刻起占住屏幕）。
     let Some(question) = question(&parsed.words) else {
-        eprintln!("fs-agent: {}", render::wording::discuss_needs_question());
+        eprintln!("heng: {}", render::wording::discuss_needs_question());
         return ExitCode::FAILURE;
     };
 
     let Some(root) = config::sessions_dir(env) else {
-        eprintln!("fs-agent: {}", render::wording::startup_no_session_store());
+        eprintln!("heng: {}", render::wording::startup_no_session_store());
         return ExitCode::FAILURE;
     };
     let cwd = match parsed.cwd.clone() {
@@ -640,10 +637,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         None => match std::env::current_dir() {
             Ok(dir) => dir,
             Err(error) => {
-                eprintln!(
-                    "fs-agent: {}",
-                    render::wording::startup_cwd(&error.to_string())
-                );
+                eprintln!("heng: {}", render::wording::startup_cwd(&error.to_string()));
                 return ExitCode::FAILURE;
             }
         },
@@ -651,7 +645,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     // 项目级的 MCP 配置跟着这一趟的工作目录走（spec §5）。
     if let Err(error) = config.load_project_mcp(&cwd) {
         eprintln!(
-            "fs-agent: {}",
+            "heng: {}",
             render::wording::startup_config(&error.to_string())
         );
         return ExitCode::FAILURE;
@@ -660,7 +654,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         Ok(session) => session,
         Err(error) => {
             eprintln!(
-                "fs-agent: {}",
+                "heng: {}",
                 render::wording::startup_store_create(&error.to_string())
             );
             return ExitCode::FAILURE;
@@ -676,12 +670,12 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     let (debaters, synthesizer) = match discussion_participants(&config, &pair) {
         Ok(parts) => parts,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("heng: {message}");
             return ExitCode::FAILURE;
         }
     };
     eprintln!(
-        "fs-agent: {}",
+        "heng: {}",
         render::wording::discussion_starting(
             &render::wording::debater_label(&pair[0].name, &pair[0].model),
             &render::wording::debater_label(&pair[1].name, &pair[1].model),
@@ -695,7 +689,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
         let caps = match caps_for(&pair[0].model) {
             Ok(caps) => caps,
             Err(error) => {
-                eprintln!("fs-agent: {error}");
+                eprintln!("heng: {error}");
                 return ExitCode::FAILURE;
             }
         };
@@ -779,7 +773,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     {
         Ok(harness) => harness,
         Err(error) => {
-            eprintln!("fs-agent: {error}");
+            eprintln!("heng: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -793,11 +787,11 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     match outcome {
         Ok(outcome) => {
             eprintln!(
-                "fs-agent: {}",
+                "heng: {}",
                 render::wording::discussion_ended(outcome.reason, outcome.rounds, &outcome.absent)
             );
             eprintln!(
-                "fs-agent: {}",
+                "heng: {}",
                 render::wording::session_receipt(stored.id.as_str())
             );
             // 整场失败掉的讨论是一次失败；被取消的那场正是用户要的，如同交互式会话里被取消的一个回
@@ -809,7 +803,7 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             }
         }
         Err(error) => {
-            eprintln!("fs-agent: {}", render::wording::error_report(&error));
+            eprintln!("heng: {}", render::wording::error_report(&error));
             ExitCode::FAILURE
         }
     }
@@ -1011,7 +1005,7 @@ async fn discuss_in_session(
 ) -> Result<(), crate::Error> {
     let Some(roster) = config.discussion.clone() else {
         harness.notice(&format!(
-            "fs-agent: {}",
+            "heng: {}",
             render::wording::discussion_no_roster()
         ));
         return Ok(());
@@ -1020,7 +1014,7 @@ async fn discuss_in_session(
     let line = match parse_discuss_line(&asked) {
         Ok(line) => line,
         Err(message) => {
-            harness.notice(&format!("fs-agent: {message}"));
+            harness.notice(&format!("heng: {message}"));
             return Ok(());
         }
     };
@@ -1031,7 +1025,7 @@ async fn discuss_in_session(
             Some(last) => last,
             None => {
                 harness.notice(&format!(
-                    "fs-agent: {}",
+                    "heng: {}",
                     render::wording::discuss_needs_in_session_question()
                 ));
                 return Ok(());
@@ -1043,22 +1037,22 @@ async fn discuss_in_session(
     let pair = match pick_debaters(&roster, line.debaters, discussion_seed()) {
         Ok(pair) => pair,
         Err(message) => {
-            harness.notice(&format!("fs-agent: {message}"));
+            harness.notice(&format!("heng: {message}"));
             return Ok(());
         }
     };
     let (debaters, synthesizer) = match discussion_participants(config, &pair) {
         Ok(parts) => parts,
         Err(message) => {
-            harness.notice(&format!("fs-agent: {message}"));
+            harness.notice(&format!("heng: {message}"));
             return Ok(());
         }
     };
     for line in advisory_lines(config, &pair) {
-        harness.notice(&format!("fs-agent: {line}"));
+        harness.notice(&format!("heng: {line}"));
     }
     harness.notice(&format!(
-        "fs-agent: {}",
+        "heng: {}",
         render::wording::discussion_starting(
             &render::wording::debater_label(&pair[0].name, &pair[0].model),
             &render::wording::debater_label(&pair[1].name, &pair[1].model),
@@ -1093,7 +1087,7 @@ async fn discuss_in_session(
         }
     };
     harness.notice(&format!(
-        "fs-agent: {}",
+        "heng: {}",
         render::wording::discussion_ended(outcome.reason, outcome.rounds, &outcome.absent)
     ));
     Ok(())
@@ -1132,7 +1126,7 @@ async fn run_discussion(
 /// 那个问题：用它被给进来时的那些词，或者 stdin。
 ///
 /// 终端上给一个提示 —— 还没有任何东西进过 raw 模式，所以 cooked 读仍然可用 —— 而管道读到结尾，这
-/// 正是 `echo 问题 | fs-agent discuss` 需要的。
+/// 正是 `echo 问题 | heng discuss` 需要的。
 fn question(words: &[String]) -> Option<String> {
     let typed = words.join(" ");
     if !typed.trim().is_empty() {
@@ -1176,12 +1170,12 @@ async fn interactive_loop(
         if let Some(name) = harness.current_goal() {
             match harness.resume_goal() {
                 // 正常收尾：回来是空闲等人 —— 人主动停是人的意思，该尊重它。
-                None => harness.notice(&render::wording::fs_agent(
+                None => harness.notice(&render::wording::heng(
                     &render::wording::resumed_closed_goal(&name),
                 )),
                 // 异常中断：接着跑，不必人点头。
                 Some(name) => {
-                    harness.notice(&render::wording::fs_agent(&render::wording::resumed_goal(
+                    harness.notice(&render::wording::heng(&render::wording::resumed_goal(
                         &name,
                     )));
                     console.set_running(true);
@@ -1196,7 +1190,7 @@ async fn interactive_loop(
                     )
                     .await
                     {
-                        harness.notice(&render::wording::fs_agent(&message));
+                        harness.notice(&render::wording::heng(&message));
                     }
                     if quit.requested() {
                         return quit.code();
@@ -1244,12 +1238,11 @@ async fn interactive_loop(
             Submission::Undo => match harness.undo_last_edit().await {
                 Ok(Some(_)) => {}
                 Ok(None) => {
-                    harness.notice(&format!("fs-agent: {}", render::wording::nothing_to_undo()))
+                    harness.notice(&format!("heng: {}", render::wording::nothing_to_undo()))
                 }
-                Err(error) => harness.notice(&format!(
-                    "fs-agent: {}",
-                    render::wording::error_report(&error)
-                )),
+                Err(error) => {
+                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)))
+                }
             },
             // 一次模板调用：收参数（命令行上的位置参数 + 缺的用问卷问）→ `prompts/get` → 那段
             // 文本**就是这一轮的输入**（server 渲染出来的那条消息）。
@@ -1266,20 +1259,20 @@ async fn interactive_loop(
                             run_one_turn(harness, events, TurnStart::Prompt(&text), &mut quit).await
                         {
                             harness.notice(&format!(
-                                "fs-agent: {}",
+                                "heng: {}",
                                 render::wording::error_report(&error)
                             ));
                         }
                     }
                     // 人把这次询问丢掉了：什么都不发生，回到提示行。
                     Ok(None) => {}
-                    Err(message) => harness.notice(&format!("fs-agent: {}", message)),
+                    Err(message) => harness.notice(&format!("heng: {}", message)),
                 }
             }
             Submission::Unknown(line) => {
                 let names = harness.skill_names();
                 harness.notice(&format!(
-                    "fs-agent: {}",
+                    "heng: {}",
                     render::wording::unknown_command(line, &names)
                 ));
             }
@@ -1288,35 +1281,20 @@ async fn interactive_loop(
             // 是**指令 —— 而打了任务时，任务作为一条普通 user 消息跟在它后面。
             Submission::Skill { name, task } => {
                 if task.is_empty() {
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::skill_started(name)
-                    ));
+                    harness.notice(&format!("heng: {}", render::wording::skill_started(name)));
                     if let Err(error) =
                         run_one_turn(harness, events, TurnStart::Skill(name), &mut quit).await
                     {
-                        harness.notice(&format!(
-                            "fs-agent: {}",
-                            render::wording::error_report(&error)
-                        ));
+                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                     }
                 } else if let Err(error) = harness.load_skill(name) {
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::error_report(&error)
-                    ));
+                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 } else {
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::skill_loaded(name)
-                    ));
+                    harness.notice(&format!("heng: {}", render::wording::skill_loaded(name)));
                     if let Err(error) =
                         run_one_turn(harness, events, TurnStart::Prompt(&task), &mut quit).await
                     {
-                        harness.notice(&format!(
-                            "fs-agent: {}",
-                            render::wording::error_report(&error)
-                        ));
+                        harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                     }
                 }
             }
@@ -1326,16 +1304,13 @@ async fn interactive_loop(
                 if let Err(error) =
                     discuss_in_session(harness, events, config, question, &mut quit).await
                 {
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::error_report(&error)
-                    ));
+                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 }
             }
             // `/goal-new <名字> <来源>…`：从一批票生成一份目标清单（§2）。手势，不进流。
             Submission::Goal(args) => {
                 let message = run_goal_command(harness, goals.dir.as_deref(), &args);
-                harness.notice(&render::wording::fs_agent(&message));
+                harness.notice(&render::wording::heng(&message));
             }
             // `/clear`：结束当前会话、开一个新的（§12）。它复用翻页那条机制 —— 两段入口、
             // 一段机制 —— 只是不带压缩、不带摘要注入：人是主动清场，没有「要带过去的历史」
@@ -1344,12 +1319,12 @@ async fn interactive_loop(
                 if loop_running {
                     // 循环跑着的时候输入区是禁言的，所以这一行本来打不出来；这条拒绝是那件事
                     // 的名字，而不是一条能走到的路径。
-                    harness.notice(&render::wording::fs_agent(
+                    harness.notice(&render::wording::heng(
                         render::wording::clear_while_looping(),
                     ));
                 } else {
                     let message = clear_session(harness, goals);
-                    harness.notice(&render::wording::fs_agent(&message));
+                    harness.notice(&render::wording::heng(&message));
                 }
             }
             // `/loop <名字>`：选定目标并连续工作（§4）。三种启动边界在写任何事件之前判。
@@ -1371,7 +1346,7 @@ async fn interactive_loop(
                     }
                 };
                 if !message.is_empty() {
-                    harness.notice(&render::wording::fs_agent(&message));
+                    harness.notice(&render::wording::heng(&message));
                 }
             }
             // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
@@ -1379,10 +1354,7 @@ async fn interactive_loop(
                 if let Err(error) =
                     run_one_turn(harness, events, TurnStart::Prompt(text), &mut quit).await
                 {
-                    harness.notice(&format!(
-                        "fs-agent: {}",
-                        render::wording::error_report(&error)
-                    ));
+                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
                 }
             }
         }
@@ -2424,7 +2396,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     let parsed = match parse_probe(args) {
         Ok(parsed) => parsed,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("heng: {message}");
             println!("{}", render::wording::help_probe());
             return ExitCode::FAILURE;
         }
@@ -2432,14 +2404,14 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     let config = match load_config(parsed.config, env) {
         Ok(config) => config,
         Err(message) => {
-            eprintln!("fs-agent: {}", render::wording::startup_config(&message));
+            eprintln!("heng: {}", render::wording::startup_config(&message));
             return ExitCode::FAILURE;
         }
     };
 
     // 没登记的模型 id 是启动错误，绝不是悄悄降级：探测任何东西之前先查整张表。
     if let Err(message) = validate_models(&config) {
-        eprintln!("fs-agent: {message}");
+        eprintln!("heng: {message}");
         return ExitCode::FAILURE;
     }
 
@@ -2453,7 +2425,7 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
         parsed.models
     };
     if models.is_empty() {
-        eprintln!("fs-agent: {}", render::wording::probe_no_key());
+        eprintln!("heng: {}", render::wording::probe_no_key());
         return ExitCode::FAILURE;
     }
 
@@ -2466,9 +2438,9 @@ async fn probe(args: &[String], env: &EnvMap) -> ExitCode {
     for model in models {
         match probe_model(&config, &model, home.as_deref(), env).await {
             Ok(()) => {}
-            Err(ProbeError::Skipped(message)) => eprintln!("fs-agent: 跳过 {model}：{message}"),
+            Err(ProbeError::Skipped(message)) => eprintln!("heng: 跳过 {model}：{message}"),
             Err(ProbeError::Failed(message)) => {
-                eprintln!("fs-agent: {model}: {message}");
+                eprintln!("heng: {model}: {message}");
                 failed = true;
             }
         }
@@ -2679,7 +2651,7 @@ async fn mcp_service(
         // server 的输入请求走**同一个**问询端口（票 15）：两条路不会漂成两套实现。
         .with_questions(questions)
         .with_stderr(Arc::new(|line: &str| {
-            eprintln!("fs-agent: {}", render::wording::mcp_server_stderr(line));
+            eprintln!("heng: {}", render::wording::mcp_server_stderr(line));
         }));
     mcp::connect_all(&config.mcp, &options).await
 }
@@ -2701,7 +2673,7 @@ fn probe_dir(model_id: &str) -> PathBuf {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect();
-    std::env::temp_dir().join("fs-agent-probe").join(slug)
+    std::env::temp_dir().join("heng-probe").join(slug)
 }
 
 #[derive(Debug)]
@@ -2759,7 +2731,7 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
     let parsed = match parse_prune(args) {
         Ok(parsed) => parsed,
         Err(message) => {
-            eprintln!("fs-agent: {message}");
+            eprintln!("heng: {message}");
             println!("{}", render::wording::help_prune());
             return ExitCode::FAILURE;
         }
@@ -2769,16 +2741,13 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
         None => match std::env::current_dir() {
             Ok(dir) => dir,
             Err(error) => {
-                eprintln!(
-                    "fs-agent: {}",
-                    render::wording::startup_cwd(&error.to_string())
-                );
+                eprintln!("heng: {}", render::wording::startup_cwd(&error.to_string()));
                 return ExitCode::FAILURE;
             }
         },
     };
     let Some(root) = config::sessions_dir(env) else {
-        eprintln!("fs-agent: {}", render::wording::startup_no_session_store());
+        eprintln!("heng: {}", render::wording::startup_no_session_store());
         return ExitCode::FAILURE;
     };
     let store = SessionStore::new(root);
@@ -2799,7 +2768,7 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
             }
             Err(error) => {
                 eprintln!(
-                    "fs-agent: {}",
+                    "heng: {}",
                     render::wording::startup_store_read(&error.to_string())
                 );
                 ExitCode::FAILURE
@@ -2822,7 +2791,7 @@ fn prune(args: &[String], env: &EnvMap) -> ExitCode {
         }
         Err(error) => {
             eprintln!(
-                "fs-agent: {}",
+                "heng: {}",
                 render::wording::startup_store_prune(&error.to_string())
             );
             ExitCode::FAILURE
@@ -2922,7 +2891,7 @@ pub fn run_sessions(
     let parsed = match parse_sessions(args) {
         Ok(parsed) => parsed,
         Err(message) => {
-            let _ = writeln!(err, "fs-agent: {message}");
+            let _ = writeln!(err, "heng: {message}");
             print_sessions_help(err);
             return ExitCode::FAILURE;
         }
@@ -2934,14 +2903,14 @@ pub fn run_sessions(
         "replay" => sessions_replay(&parsed, env, out),
         "stats" => sessions_stats(&parsed, env, out),
         "" => {
-            let _ = writeln!(err, "fs-agent: {}", render::wording::sessions_needs_verb());
+            let _ = writeln!(err, "heng: {}", render::wording::sessions_needs_verb());
             print_sessions_help(err);
             return ExitCode::FAILURE;
         }
         other => {
             let _ = writeln!(
                 err,
-                "fs-agent: {}",
+                "heng: {}",
                 render::wording::unknown_sessions_verb(other)
             );
             print_sessions_help(err);
@@ -2951,7 +2920,7 @@ pub fn run_sessions(
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            let _ = writeln!(err, "fs-agent: {message}");
+            let _ = writeln!(err, "heng: {message}");
             ExitCode::FAILURE
         }
     }
@@ -3101,7 +3070,7 @@ fn sessions_ls(
         return write_json(out, &listings);
     }
     if listings.is_empty() {
-        let _ = writeln!(err, "fs-agent: {}", render::wording::no_sessions());
+        let _ = writeln!(err, "heng: {}", render::wording::no_sessions());
         return Ok(());
     }
     // 表头是按**显示列宽**补齐的：一个中文列名按字符数算比按列宽算要窄，所以 `{:<36}` 会让它相对
@@ -3833,10 +3802,7 @@ mod tests {
             let mut out: Vec<u8> = Vec::new();
             let returned = finish_session(code, "01J8ZQ4K7M", &mut out);
             let text = String::from_utf8(out).expect("回执是 utf-8");
-            assert_eq!(
-                text,
-                "fs-agent: 会话 01J8ZQ4K7M；接着跑：fs-agent -c 01J8ZQ4K7M\n"
-            );
+            assert_eq!(text, "heng: 会话 01J8ZQ4K7M；接着跑：heng -c 01J8ZQ4K7M\n");
             assert_eq!(returned, code, "一行回执不该改退出码");
         }
     }
@@ -4084,7 +4050,7 @@ mod tests {
 
     #[test]
     fn a_session_is_named_by_id_or_by_its_directory() {
-        // `fs-agent -c 20261001T155845Z-7a69cbff`：`-c` / `--continue` 后面跟一个不以 `-` 开头
+        // `heng -c 20261001T155845Z-7a69cbff`：`-c` / `--continue` 后面跟一个不以 `-` 开头
         // 的词就是**指名**续哪一场；`--session <id>` 是同一个意思的显式拼写。
         use super::{parse_interactive, Resume};
 
@@ -4127,7 +4093,7 @@ mod tests {
             ))
         );
 
-        // `-c` 后面那个词要是旗标，就不当 id —— 否则 `fs-agent -c --plain` 会去续一场叫
+        // `-c` 后面那个词要是旗标，就不当 id —— 否则 `heng -c --plain` 会去续一场叫
         // 「--plain」的会话。
         let mixed = args(&["-c", "--plain"]).unwrap();
         assert_eq!(mixed.resume, Some(Resume::Latest));

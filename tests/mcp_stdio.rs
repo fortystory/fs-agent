@@ -13,16 +13,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fs_agent::config::{
+use heng::config::{
     McpServerConfig, McpSettings, SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig,
 };
-use fs_agent::events::{read_events, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{connect_all, ConnectOptions, McpService};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_mcp, Sandbox, MCP_CALL_TOOL, MCP_LIST_TOOL};
-use fs_agent::{assemble, AssemblyParts, SessionScaffold};
+use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{connect_all, ConnectOptions, McpService};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_mcp, Sandbox, MCP_CALL_TOOL, MCP_LIST_TOOL};
+use heng::{assemble, AssemblyParts, SessionScaffold};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -75,7 +75,7 @@ fn sandbox_for(cwd: &Path) -> Option<Sandbox> {
     let mut settings = SandboxSettings::off();
     settings.mode = SandboxMode::Bwrap;
     settings.search_path = std::env::var_os("PATH");
-    settings.availability = fs_agent::tools::sandbox::probe(settings.search_path.as_deref(), cwd);
+    settings.availability = heng::tools::sandbox::probe(settings.search_path.as_deref(), cwd);
     if matches!(
         settings.availability,
         SandboxAvailability::Unavailable { .. }
@@ -187,10 +187,7 @@ async fn a_legacy_only_server_is_refused_not_silently_downgraded() {
 async fn one_dead_server_does_not_take_the_others_down() {
     let (_dir, cwd) = workspace();
     let sandbox = skip_without_bwrap!(&cwd);
-    let dead = McpServerConfig::stdio(
-        "dead",
-        vec!["/nonexistent/fs-agent-fake-mcp-server".to_owned()],
-    );
+    let dead = McpServerConfig::stdio("dead", vec!["/nonexistent/heng-fake-mcp-server".to_owned()]);
     // 三台一起发：两台好的、一台起不来的（票 12 验证 2）。
     let service = connect(
         &settings(vec![stdio("good", &[]), stdio("also-good", &[]), dead]),
@@ -292,7 +289,7 @@ async fn the_meta_tools_reach_a_real_server_end_to_end() {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-mcp-stdio"),
             tools: with_mcp(builtin(false), service),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,

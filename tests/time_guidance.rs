@@ -3,8 +3,8 @@
 //! 两件事一起钉住：模型**知道该问谁**，而身份里**没有任何时间的值**。后者是这份 feature 的支点
 //! —— 身份既是缓存前缀的一部分，又是 `replay` 复现当时那次请求时会**再调一次**的那个函数。
 
-use fs_agent::agent::{agent_identity, TIME_GUIDANCE};
-use fs_agent::discussion::{debater_identity, synthesizer_identity};
+use heng::agent::{agent_identity, TIME_GUIDANCE};
+use heng::discussion::{debater_identity, synthesizer_identity};
 
 #[test]
 fn the_program_identity_carries_the_time_guidance() {

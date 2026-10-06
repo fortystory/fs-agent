@@ -15,21 +15,21 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::SessionConfig;
-use fs_agent::context::repo_map::RepoMapInput;
-use fs_agent::context::skills::Skills;
-use fs_agent::events::{read_events, EventPayload, SessionId, SpeakerId};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::questions::{Choice, UserAnswer, UserAnswers, UserQuestion, UserQuestions};
-use fs_agent::render::{
+use heng::config::SessionConfig;
+use heng::context::repo_map::RepoMapInput;
+use heng::context::skills::Skills;
+use heng::events::{read_events, EventPayload, SessionId, SpeakerId};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::questions::{Choice, UserAnswer, UserAnswers, UserQuestion, UserQuestions};
+use heng::render::{
     console, spawn_plain_console_with, ConsoleQuestions, LineReader, RenderSinks, Renderer,
 };
-use fs_agent::tools::{
+use heng::tools::{
     AskUserQuestionTool, BashLimits, Effect, PathLocks, Registry, Sandbox, SessionPaths, Tool,
     ToolContext, ToolError, ToolOutput, ASK_USER_QUESTION_TOOL, TASK_TOOL,
 };
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::Value;
 use support::{AlwaysAllow, FakeProvider, Reply};
 
@@ -84,7 +84,7 @@ async fn call(
     let repo_map = RepoMapInput::default();
     let bash = BashLimits::default();
     // 沙箱在这个文件里是关的：这里测的是提问工具，不跑任何进程。
-    let sandbox = Sandbox::new(&fs_agent::config::SandboxSettings::off());
+    let sandbox = Sandbox::new(&heng::config::SandboxSettings::off());
     let passed = args.clone();
     let ctx = ToolContext {
         read_paths: &paths,
@@ -291,23 +291,19 @@ fn advertised(registry: &Registry) -> Vec<String> {
 fn the_table_decides_whether_the_model_may_ask() {
     // headless 那张表没有作答者，所以它从不声明这个工具：
     // 一次只会失败的调用白费模型一个回合（spec §19）。
-    assert!(
-        advertised(&fs_agent::tools::builtin(true)).contains(&ASK_USER_QUESTION_TOOL.to_owned())
-    );
-    assert!(
-        !advertised(&fs_agent::tools::builtin(false)).contains(&ASK_USER_QUESTION_TOOL.to_owned())
-    );
+    assert!(advertised(&heng::tools::builtin(true)).contains(&ASK_USER_QUESTION_TOOL.to_owned()));
+    assert!(!advertised(&heng::tools::builtin(false)).contains(&ASK_USER_QUESTION_TOOL.to_owned()));
 }
 
 #[test]
 fn an_executors_table_has_no_way_to_ask() {
     // `delegable() == false` 与把 `task` 挡在执行者工具表外的
     // 是同一个机制（spec §7、§16）—— 不是第二条规矩。
-    let executor = fs_agent::tools::builtin(true).for_executor();
+    let executor = heng::tools::builtin(true).for_executor();
     assert!(executor.get(ASK_USER_QUESTION_TOOL).is_none());
     assert!(executor.get(TASK_TOOL).is_none());
     assert!(
-        fs_agent::tools::builtin(true)
+        heng::tools::builtin(true)
             .get(ASK_USER_QUESTION_TOOL)
             .is_some(),
         "主会话的表里确实有它"
@@ -348,7 +344,7 @@ async fn fixture(
             cwd,
             log_path: log_path.clone(),
             session_id: SessionId::new("s-1"),
-            tools: fs_agent::tools::builtin(can_ask),
+            tools: heng::tools::builtin(can_ask),
             locks: PathLocks::new(),
             policy: Policy::for_mode(Mode::Ask),
             asker: Some(Arc::new(AlwaysAllow)),

@@ -1,4 +1,4 @@
-//! `fs-agent-mcp-time`：仓库自带的时间 server（`.scratch/time-mcp/spec.md` §1–§3）。
+//! `heng-mcp-time`：仓库自带的时间 server（`.scratch/time-mcp/spec.md` §1–§3）。
 //!
 //! 它是一个**手写**的 stdio MCP server，与 `tests/support/fake_mcp_server.rs` 同一形状（那个是
 //! 测试辅助，这个进产品）。只答三条方法 —— `server/discover`、`tools/list`、`tools/call` —— 只
@@ -23,7 +23,7 @@ const TOOL_NAME: &str = "get_current_time";
 
 fn main() {
     // 人看的话走 stderr（client 把它接住、交给诊断口 `[外部工具] …`），stdout 只出现协议帧。
-    eprintln!("fs-agent-mcp-time: 起来了");
+    eprintln!("heng-mcp-time: 起来了");
 
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();

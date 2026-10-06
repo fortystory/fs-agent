@@ -8,15 +8,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{McpServerConfig, McpSettings, SessionConfig};
-use fs_agent::context::TRUNCATED_MARKER;
-use fs_agent::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{McpConnection, McpError, McpService};
-use fs_agent::permissions::{Answer, Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_mcp, MCP_CALL_TOOL};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::config::{McpServerConfig, McpSettings, SessionConfig};
+use heng::context::TRUNCATED_MARKER;
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{McpConnection, McpError, McpService};
+use heng::permissions::{Answer, Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_mcp, MCP_CALL_TOOL};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
@@ -50,7 +50,7 @@ impl FakeMcp {
 
 #[async_trait]
 impl McpConnection for FakeMcp {
-    async fn list_tools(&self) -> Result<fs_agent::mcp::ServerManifest, McpError> {
+    async fn list_tools(&self) -> Result<heng::mcp::ServerManifest, McpError> {
         Err(McpError::unsupported("列工具"))
     }
 
@@ -175,7 +175,7 @@ async fn fixture(
             log_path: log_path.clone(),
             session_id: SessionId::new("s-mcp-call"),
             tools: with_mcp(builtin(false), mcp),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
             questions: None,

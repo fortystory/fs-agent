@@ -12,15 +12,15 @@ mod support;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{
+use heng::config::SessionConfig;
+use heng::events::{
     read_events, Decision, DecisionSource, Event, EventPayload, ParticipantId, SessionId,
     SpeakerId, StopReason,
 };
-use fs_agent::permissions::{Asker, Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::permissions::{Asker, Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{sandbox_available, AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {
@@ -41,7 +41,7 @@ async fn fixture_with_sandbox(
     replies: Vec<Reply>,
     mode: Mode,
     asker: Option<Arc<dyn Asker>>,
-    sandbox: fs_agent::config::SandboxSettings,
+    sandbox: heng::config::SandboxSettings,
 ) -> Fixture {
     fixture_at(replies, mode, asker, None, sandbox).await
 }
@@ -53,7 +53,7 @@ async fn fixture_at(
     mode: Mode,
     asker: Option<Arc<dyn Asker>>,
     existing_log: Option<&std::path::Path>,
-    sandbox: fs_agent::config::SandboxSettings,
+    sandbox: heng::config::SandboxSettings,
 ) -> Fixture {
     let dir = match existing_log {
         Some(_) => None,
@@ -75,7 +75,7 @@ async fn fixture_at(
     let provider = FakeProvider::new(replies);
     // 内置工具表，`bash` 也在里面：`readonly` 必须拒掉的正是
     // 一次 `Exclusive` 调用，用真工具钉住这一点最诚实。
-    let tools = fs_agent::tools::builtin(false);
+    let tools = heng::tools::builtin(false);
 
     // `workspace` 档要求一层可用的沙箱（`.scratch/workspace-mode/spec.md` §6），而这份
     // fixture 要能组装四档，所以这里给一份「可用」的状态；它不会被真跑 —— 这些测试里的
@@ -96,7 +96,7 @@ async fn fixture_at(
             log_path: log_path.clone(),
             session_id: SessionId::new("s-mode"),
             tools,
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker,
             questions: None,
@@ -208,7 +208,7 @@ async fn the_cycle_skips_workspace_when_there_is_no_sandbox() {
         vec![],
         Mode::Ask,
         Some(Arc::new(AlwaysAllow)),
-        fs_agent::config::SandboxSettings::off(),
+        heng::config::SandboxSettings::off(),
     )
     .await;
 

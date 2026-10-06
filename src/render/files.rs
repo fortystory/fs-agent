@@ -299,7 +299,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fs-agent-files-read-{name}"));
+        let dir = std::env::temp_dir().join(format!("heng-files-read-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("临时目录");
         dir

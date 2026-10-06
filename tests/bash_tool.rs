@@ -12,18 +12,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use fs_agent::config::{SessionConfig, DEFAULT_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS};
-use fs_agent::context::TRUNCATED_MARKER;
-use fs_agent::events::{
-    read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason,
-};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{
+use heng::config::{SessionConfig, DEFAULT_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS};
+use heng::context::TRUNCATED_MARKER;
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{
     builtin, BashLimits, Effect, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX,
 };
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {
@@ -56,7 +54,7 @@ async fn fixture(replies: Vec<Reply>, mode: Mode, config: SessionConfig) -> Fixt
             log_path: log_path.clone(),
             session_id: SessionId::new("s-bash"),
             tools: builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             // 一个什么都放行的作答者，于是这些测试里能拒掉一次调用的
             // 只剩断路器或者某一档模式。

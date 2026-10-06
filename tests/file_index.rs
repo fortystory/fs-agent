@@ -1,13 +1,13 @@
 //! 会话级文件索引：一次遍历加上一个查询接口（`input-tokens` 票 01）。
 //!
-//! 接缝是 [`fs_agent::render::file_index`] 的公开 API。索引刻意只是一个**值**
+//! 接缝是 [`heng::render::file_index`] 的公开 API。索引刻意只是一个**值**
 //! （`Idle | Loading | Ready`），遍历与查询分开，于是「什么算工作区文件」这条规则
 //! 不用终端、也不用真键盘就能钉死 —— 它就是 `grep` 工具那条规则的第二份使用者。
 
 use std::fs;
 use std::path::PathBuf;
 
-use fs_agent::render::file_index::{self, FileIndex};
+use heng::render::file_index::{self, FileIndex};
 use tempfile::TempDir;
 
 /// 一个工作区：普通文件、子目录、空目录、藏起来的文件，以及一条 `.gitignore`。

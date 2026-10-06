@@ -5,7 +5,7 @@
 //! 也钉住语法层用的就是仓库里已经有的那套 Rust 语法，而
 //! 不是一个新依赖。
 
-use fs_agent::render::highlight::{
+use heng::render::highlight::{
     ansi_line, diff_tag, highlight_diff, highlight_rust, Class, DiffTag,
 };
 

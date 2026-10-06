@@ -14,10 +14,10 @@
 use std::path::Path;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use fs_agent::config::{LandingPoint, PriceTable, Pricing, SessionConfig};
-use fs_agent::events::{Event, EventPayload, SessionId, SpeakerId, Usage, SCHEMA_VERSION};
-use fs_agent::session::ledger;
-use fs_agent::session::SessionStore;
+use heng::config::{LandingPoint, PriceTable, Pricing, SessionConfig};
+use heng::events::{Event, EventPayload, SessionId, SpeakerId, Usage, SCHEMA_VERSION};
+use heng::session::ledger;
+use heng::session::SessionStore;
 
 fn usage(input: u64, output: u64, cached: u64, miss: u64) -> Usage {
     Usage {
@@ -85,7 +85,7 @@ fn an_unpriced_model_has_no_cost_rather_than_a_zero_one() {
 
 #[test]
 fn the_hard_stop_reads_the_summed_usage_and_not_an_estimate() {
-    let budget = fs_agent::config::Budget::new().with_limit(1_000);
+    let budget = heng::config::Budget::new().with_limit(1_000);
 
     assert!(!budget.is_exhausted(999));
     assert!(budget.is_exhausted(1_000), "正好落在上限上的会话就到此为止");
@@ -93,7 +93,7 @@ fn the_hard_stop_reads_the_summed_usage_and_not_an_estimate() {
     assert_eq!(budget.remaining(400), Some(600));
     assert_eq!(budget.remaining(5_000), Some(0));
 
-    let uncapped = fs_agent::config::Budget::new();
+    let uncapped = heng::config::Budget::new();
     assert_eq!(uncapped.remaining(u64::MAX), None);
     assert!(!uncapped.is_exhausted(u64::MAX));
 }
@@ -103,7 +103,7 @@ fn the_pre_flight_threshold_is_a_multiple_of_what_is_left() {
     // 这个估计是字符数 / 4，会错几十个百分点，所以这道
     // 守卫是故意宽容的：只有估计值超出剩余额度、
     // 且超出那个余量时才拒。
-    let budget = fs_agent::config::Budget::new().with_limit(1_000);
+    let budget = heng::config::Budget::new().with_limit(1_000);
     assert!(budget.admits_estimate(0, 1_500));
     assert!(!budget.admits_estimate(0, 1_501));
 
@@ -113,14 +113,14 @@ fn the_pre_flight_threshold_is_a_multiple_of_what_is_left() {
 
     // 余量取 1，就正好等于那条严格的「估计 > 剩余」比较，
     // 而宽容正是为了取代它才存在的。
-    let strict = fs_agent::config::Budget::new()
+    let strict = heng::config::Budget::new()
         .with_limit(1_000)
         .with_estimate_margin(1.0);
     assert!(strict.admits_estimate(0, 1_000));
     assert!(!strict.admits_estimate(0, 1_001));
 
     // 没有上限就什么都放行，不管多大。
-    assert!(fs_agent::config::Budget::new().admits_estimate(u64::MAX, u64::MAX));
+    assert!(heng::config::Budget::new().admits_estimate(u64::MAX, u64::MAX));
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn listing_the_store_reaches_every_bucket_and_skips_directories_without_a_stream
         let stored = store.create(Path::new(cwd)).unwrap();
         // 建流的是组装点，不是存储（spec §11），所以一个
         // 会话只有在它的日志存在之后才列得出来。
-        fs_agent::events::EventLog::create(&stored.log_path).unwrap();
+        heng::events::EventLog::create(&stored.log_path).unwrap();
         sessions.push(stored);
     }
     // 在 `create` 与第一条 `SessionStarted` 之间，某个进程留下的
@@ -280,7 +280,7 @@ fn listing_the_store_reaches_every_bucket_and_skips_directories_without_a_stream
 
 #[test]
 fn the_gate_owns_the_sentence_every_site_narrates() {
-    let budget = fs_agent::config::Budget::new().with_limit(1_000);
+    let budget = heng::config::Budget::new().with_limit(1_000);
     assert_eq!(budget.exhausted_note(999), None);
     let note = budget.exhausted_note(1_200).unwrap();
     assert!(note.contains("1200"), "{note}");
@@ -291,8 +291,5 @@ fn the_gate_owns_the_sentence_every_site_narrates() {
     assert!(refusal.contains("1000"), "{refusal}");
 
     // 没有上限：永远没有那句话。
-    assert_eq!(
-        fs_agent::config::Budget::new().exhausted_note(u64::MAX),
-        None
-    );
+    assert_eq!(heng::config::Budget::new().exhausted_note(u64::MAX), None);
 }

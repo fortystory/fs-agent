@@ -14,14 +14,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use fs_agent::config::{McpServerConfig, McpSettings, SessionConfig};
-use fs_agent::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
-use fs_agent::mcp::{McpConnection, McpError, McpService, ServerManifest};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{builtin, with_mcp, MCP_CALL_TOOL};
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::config::{McpServerConfig, McpSettings, SessionConfig};
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::mcp::{McpConnection, McpError, McpService, ServerManifest};
+use heng::permissions::{Mode, Policy};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{builtin, with_mcp, MCP_CALL_TOOL};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -157,7 +157,7 @@ async fn fixture(replies: Vec<Reply>, mode: Mode, mcp: McpService) -> Fixture {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-mcp-trust"),
             tools: with_mcp(builtin(false), mcp),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(mode),
             asker: None,
             questions: None,
@@ -320,7 +320,7 @@ async fn turning_on_results_does_not_widen_the_effect() {
 #[test]
 fn a_read_only_list_without_trust_effects_is_a_startup_error() {
     // 「配了等于没配」当场纠正：名单一个字都不会生效的组合不该静默通过。
-    let refused = fs_agent::config::resolve(
+    let refused = heng::config::resolve(
         Some(
             "[mcp.servers.github]\ncommand = [\"x\"]\n\
              read_only_tools = [\"get_issue\"]\n",
@@ -332,7 +332,7 @@ fn a_read_only_list_without_trust_effects_is_a_startup_error() {
         "没开 `trust_effects` 的名单要被拒：{refused:?}"
     );
 
-    let accepted = fs_agent::config::resolve(
+    let accepted = heng::config::resolve(
         Some(
             "[mcp.servers.github]\ncommand = [\"x\"]\n\
              trust_effects = true\nread_only_tools = [\"get_issue\"]\n",

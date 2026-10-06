@@ -11,17 +11,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fs_agent::config::{resolve, EnvMap, ToolDeclaration, DEFAULT_CUSTOM_TOOL_TIMEOUT_MS};
-use fs_agent::events::{
-    read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason,
-};
-use fs_agent::permissions::{decide, Call, Mode, Policy, Rule, Scope, Subject};
-use fs_agent::provider::{FinishReason, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::tools::{
+use heng::config::{resolve, EnvMap, ToolDeclaration, DEFAULT_CUSTOM_TOOL_TIMEOUT_MS};
+use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::permissions::{decide, Call, Mode, Policy, Rule, Scope, Subject};
+use heng::provider::{FinishReason, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::tools::{
     builtin, is_custom_tool, with_dynamic, CustomTool, Effect, Tool, TIMEOUT_PREFIX,
 };
-use fs_agent::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 /// 一份把一个参数夹在字面前缀与后缀之间回显出来的声明。
@@ -276,7 +274,7 @@ async fn fixture(toml: &str, replies: Vec<Reply>, policy: Policy) -> Fixture {
     let harness = assemble(AssemblyParts {
         provider: Box::new(provider),
         speaker: SpeakerId::Debater("kimi".into()),
-        config: fs_agent::config::SessionConfig::new("fake-model"),
+        config: heng::config::SessionConfig::new("fake-model"),
         renderer: Renderer::headless(RenderSinks {
             stdout_result: Box::new(CaptureBuf::default()),
             stderr_diagnostic: Box::new(CaptureBuf::default()),
@@ -286,7 +284,7 @@ async fn fixture(toml: &str, replies: Vec<Reply>, policy: Policy) -> Fixture {
             log_path: log_path.clone(),
             session_id: SessionId::new("s-custom"),
             tools: with_dynamic(&declarations, false),
-            locks: fs_agent::tools::PathLocks::new(),
+            locks: heng::tools::PathLocks::new(),
             policy,
             asker: Some(Arc::new(AlwaysAllow)),
             questions: None,

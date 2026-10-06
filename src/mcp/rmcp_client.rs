@@ -9,7 +9,7 @@
 //! * **连接归会话**：`[mcp] enabled` 打开时这些连接在组装期建、随会话活。关闭走 `Drop` 兜底
 //!   （`close` 要 `&mut self`，而 `Tool` 只给 `&self`）；**不自动重连** —— server 崩了之后同一场
 //!   会话里不再重试，重开会话才重连（与 web 的失败语义同一条线）。
-//! * **子进程整组清理**：`rmcp` 的默认清理只保证直接子进程被杀，而 fs-agent 的纪律是
+//! * **子进程整组清理**：`rmcp` 的默认清理只保证直接子进程被杀，而 heng 的纪律是
 //!   `process_group(0)` + `killpg` 杀整棵树（`bash` 那一侧已经这样做了）。所以 stdio 传输在
 //!   `CommandWrap` 上叠了 process-wrap 的 `ProcessGroup::leader()`。
 //! * **argv 先过沙箱**：与 `bash` 走的是同一个纯函数 [`Sandbox::wrap`]（票 13 再补环境白名单
@@ -149,7 +149,7 @@ pub const BASE_ENV_KEYS: [&str; 3] = ["PATH", "HOME", "LANG"];
 /// 一条已经握过手的连接。
 pub struct RunClient {
     server: String,
-    service: RunningService<RoleClient, FsAgentHandler>,
+    service: RunningService<RoleClient, HengHandler>,
 }
 
 impl RunClient {
@@ -161,7 +161,7 @@ impl RunClient {
         config: &McpServerConfig,
         options: &ConnectOptions<'_>,
     ) -> Result<Self, McpError> {
-        let handler = FsAgentHandler::new(options.questions.clone());
+        let handler = HengHandler::new(options.questions.clone());
         let service = match config.transport {
             McpTransport::Stdio => {
                 let transport = stdio_transport(config, options)?;
@@ -204,12 +204,12 @@ fn discover() -> ClientLifecycleMode {
 /// （`.scratch/mcp-support/spec.md` §3；票 15）—— 不新开第四类发起者。端口是组装期握进来的
 /// 那个 `Arc`，与 `ask_user_question` 用的是**同一个**值。
 #[derive(Clone)]
-struct FsAgentHandler {
+struct HengHandler {
     info: ClientConfig,
     questions: Option<Arc<dyn UserQuestions>>,
 }
 
-impl FsAgentHandler {
+impl HengHandler {
     fn new(questions: Option<Arc<dyn UserQuestions>>) -> Self {
         let mut capabilities = ClientCapabilities::default();
         // 声明 elicitation 能力：server 看到它之后才会发 `input_required`（`Discover` 模式下
@@ -221,14 +221,14 @@ impl FsAgentHandler {
         Self {
             info: ClientConfig::new(
                 capabilities,
-                Implementation::new("fs-agent", env!("CARGO_PKG_VERSION")),
+                Implementation::new("heng", env!("CARGO_PKG_VERSION")),
             ),
             questions,
         }
     }
 }
 
-impl ClientHandler for FsAgentHandler {
+impl ClientHandler for HengHandler {
     fn get_info(&self) -> ClientConfig {
         self.info.clone()
     }

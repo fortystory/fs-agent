@@ -11,14 +11,14 @@
 
 mod support;
 
-use fs_agent::agent::replay::{replay, ReplayError};
-use fs_agent::config::SessionConfig;
-use fs_agent::events::{Event, ParticipantId, SessionId, SpeakerId};
-use fs_agent::permissions::{Mode, Policy};
-use fs_agent::provider::capability::caps_for;
-use fs_agent::provider::{FinishReason, Message, StreamEvent};
-use fs_agent::render::{RenderSinks, Renderer};
-use fs_agent::{
+use heng::agent::replay::{replay, ReplayError};
+use heng::config::SessionConfig;
+use heng::events::{Event, ParticipantId, SessionId, SpeakerId};
+use heng::permissions::{Mode, Policy};
+use heng::provider::capability::caps_for;
+use heng::provider::{FinishReason, Message, StreamEvent};
+use heng::render::{RenderSinks, Renderer};
+use heng::{
     assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
     Harness, SessionScaffold, SynthesizerParts,
 };
@@ -32,7 +32,7 @@ fn deepseek() -> SpeakerId {
     SpeakerId::Debater("deepseek".into())
 }
 
-fn caps() -> fs_agent::provider::capability::ModelCaps {
+fn caps() -> heng::provider::capability::ModelCaps {
     caps_for("deepseek-flash").expect("内置模型")
 }
 
@@ -72,8 +72,8 @@ async fn discussion(
             cwd: workspace,
             log_path: session.join("log.jsonl"),
             session_id: SessionId::new("s-replay"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
@@ -246,8 +246,8 @@ async fn solo(replies: Vec<Reply>) -> SoloFixture {
             cwd: workspace,
             log_path: session.join("log.jsonl"),
             session_id: SessionId::new("s-solo"),
-            tools: fs_agent::tools::builtin(false),
-            locks: fs_agent::tools::PathLocks::new(),
+            tools: heng::tools::builtin(false),
+            locks: heng::tools::PathLocks::new(),
             policy: Policy::for_mode(Mode::Auto),
             asker: None,
             questions: None,
