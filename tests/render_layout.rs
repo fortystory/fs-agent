@@ -209,7 +209,7 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[17].contains("模型 claude-sonnet-4-5")
             && rows[17].contains("┆ 询问 ┆")
             && rows[17].contains("上下文 —")
-            && rows[17].contains("🌑 就绪")
+            && rows[17].contains("🌘 就绪")
             && !rows[17].contains('…'),
         "状态行报出模型、模式、占比与带字形循环的状态词：{:?}",
         rows[17]
@@ -1088,11 +1088,15 @@ fn the_status_glyph_moves_while_idle_too() {
     };
 
     let mut state = state();
-    assert_eq!(glyph(&mut state), "🌑");
+    assert_eq!(glyph(&mut state), "🌘");
     for _ in 0..8 {
         state.tick();
     }
-    assert_eq!(glyph(&mut state), "🌒", "空闲时它也在走，只是慢到 8 帧一格");
+    assert_eq!(
+        glyph(&mut state),
+        "🌗",
+        "空闲时它也在走，只是慢到 8 帧一格 —— 而相位是**倒着**走的（2026-10-06）"
+    );
     // 而提示符在空闲时**不动**：它歇在帧 0 的颜色上。
     let (x, y) = prompt_at(120, 24, &mut state);
     let idle_prompt = buffer(120, 24, &mut state)[(x, y)].fg;

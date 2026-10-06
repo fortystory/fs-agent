@@ -836,9 +836,10 @@ fn a_space_still_confirms_while_nobody_is_typing() {
 }
 
 #[test]
-fn moving_the_highlight_takes_the_focus_back_to_the_options() {
-    // 票 34（票 01 改写）：`↑`/`↓` 从输入区回来时把高亮挪到选项上，于是空格又是「确认」，
-    // 而不是继续往自由文本里塞字符。落进输入区的路现在是「越过选项的两端」。
+fn esc_takes_the_focus_back_to_the_options() {
+    // 2026-10-06：回选项区不再是 `↑`/`↓`（它们在输入区里静默了，见
+    // `the_arrows_go_quiet_in_the_input_zone`），而是 `Esc` —— 而且高亮**停在原处**，
+    // 不再「回来时挪一格、两端环绕」（那条是 `↑`/`↓` 那条路的一部分，一起作废）。
     let mut state = state();
     let mut rx = ask(
         &mut state,
@@ -846,15 +847,15 @@ fn moving_the_highlight_takes_the_focus_back_to_the_options() {
     );
     state.key(Key::Down); // a → b
     state.key(Key::Down); // b 之后越过边界 → 输入区
-    state.key(Key::Down); // 回来，两端环绕，于是绕到 a
+    state.key(Key::Esc); // 回选项区：高亮还在 b 上
     state.key(Key::Char(' '));
 
     state.key(Key::Enter);
     let answers = answer(&mut rx).expect("作答了").answers;
     assert_eq!(
         answers[0].selected,
-        vec!["a".to_owned()],
-        "空格确认的是回到选项区之后的高亮"
+        vec!["b".to_owned()],
+        "空格确认的是回到选项区之后的高亮（它停在离开时的 b 上）"
     );
     assert_eq!(answers[0].custom, None, "空格没被塞进自由文本");
 }
@@ -977,7 +978,7 @@ fn printable_characters_and_backspace_are_swallowed_in_the_options_zone() {
     backspace.key(Key::Char('j')); // → 输入区
     backspace.key(Key::Char('x'));
     backspace.key(Key::Char('y'));
-    backspace.key(Key::Up); // 回选项区
+    backspace.key(Key::Esc); // 回选项区（2026-10-06 起 `↑` 在输入区里静默）
     backspace.key(Key::Backspace);
     backspace.key(Key::Enter);
     let answers = answer(&mut backspace_rx).expect("作答了").answers;
@@ -1156,4 +1157,37 @@ fn a_roomy_terminal_shows_the_whole_question() {
         "40 行终端上整段题面都在，不必削：\n{text}"
     );
     assert!(text.contains("3. 独立进程"), "三个选项也都放得下：\n{text}");
+}
+
+#[test]
+fn the_arrows_go_quiet_in_the_input_zone() {
+    // 2026-10-06 推翻 `questionnaire-keys` §2 那张表的旧版：输入区里 `↑`/`↓` 不再回选项区、
+    // `←`/`→` 不再翻页。维护者报的是「在输入文本时方向键还是会移动焦点」—— 而那本来是
+    // spec 明写的行为，所以这是**一次推翻**，不是补一个漏掉的守卫。
+    let mut state = state();
+    let mut rx = ask(
+        &mut state,
+        vec![question("one", "First?", &["a", "b"], false)],
+    );
+    walk_into_the_input(&mut state, 2);
+    state.key(Key::Char('x'));
+    for key in [Key::Up, Key::Down, Key::Left, Key::Right] {
+        state.key(key);
+    }
+    state.key(Key::Char('y'));
+
+    // 两下都该落进文本：中间那四个键要是把键盘挪走了，`y` 会被选项区吞掉（那里可打印字符
+    // 一律吞）。
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("自定义：xy"), "{text}");
+
+    state.key(Key::Enter);
+    assert_eq!(
+        answer(&mut rx).expect("作答了").answers,
+        vec![UserAnswer {
+            id: "one".to_owned(),
+            selected: Vec::new(),
+            custom: Some("xy".to_owned()),
+        }]
+    );
 }

@@ -1003,16 +1003,20 @@ impl Questionnaire {
                 self.drafts[self.index].skipped = true;
                 self.advance();
             }
-            // 选项区里的移动：`j`/`k` 与 Emacs 的 `Ctrl-N`/`Ctrl-P` 走同一条路。
-            Key::Up => self.step(-1),
-            Key::Down => self.step(1),
+            // 选项区里的移动：`j`/`k`、Emacs 的 `Ctrl-N`/`Ctrl-P` 与**四个方向键**走
+            // 同一条路 —— 所以它们在输入区里什么都不做（2026-10-06 推翻，see §2 那张表：
+            // 输入区那三格的旧值是「回选项区并移动高亮」与「同左」）。人在输入区打自由
+            // 文本，方向键的每一次挪动都是一次没被要求的状态变化；想离开那里有 `Esc`、
+            // `Tab`、`Enter` 三条路。
+            Key::Up if self.zone == Zone::Options => self.step(-1),
+            Key::Down if self.zone == Zone::Options => self.step(1),
             Key::Char('k') | Key::CtrlP if self.zone == Zone::Options => self.step(-1),
             Key::Char('j') | Key::CtrlN if self.zone == Zone::Options => self.step(1),
             // `←` 只移动，不记任何东西：往回走是「我还没决定」，往前才是「这题我不要了」。
-            Key::Left => self.back(),
+            Key::Left if self.zone == Zone::Options => self.back(),
             // `→` 与回车同一条「往前走」的规则，但它**不提交**：末题上什么都不做（不记、不
             // 前进）—— 提交不可逆，不该由一个移动键承担。
-            Key::Right => {
+            Key::Right if self.zone == Zone::Options => {
                 if self.index + 1 < self.questions.len() {
                     self.skip_if_unanswered();
                     self.advance();
@@ -1097,11 +1101,9 @@ impl Questionnaire {
             return;
         }
         let next = self.drafts[self.index].highlight as isize + delta;
-        if self.zone == Zone::Input {
-            self.drafts[self.index].highlight = next.rem_euclid(count as isize) as usize;
-            self.zone = Zone::Options;
-            return;
-        }
+        // 「从输入区回来时高亮挪一格、两端环绕」那一支随 §1 那条一起作废（2026-10-06）：
+        // 能走到这里的只有选项区里的 `j`/`k`/`Ctrl-N`/`Ctrl-P`/`↑`/`↓` 与滚轮，而它们
+        // 在输入区里都静默了 —— 回选项区只有 `Esc`，那条路不经过这里（`reset_zone`）。
         if next < 0 || next >= count as isize {
             self.zone = Zone::Input;
             return;
