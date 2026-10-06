@@ -1,7 +1,7 @@
 # 19 — 退场死代码与文档收口
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: —
 

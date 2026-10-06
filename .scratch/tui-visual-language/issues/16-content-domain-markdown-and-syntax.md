@@ -1,7 +1,7 @@
 # 16 — 内容域：markdown 与语法高亮
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 11
 

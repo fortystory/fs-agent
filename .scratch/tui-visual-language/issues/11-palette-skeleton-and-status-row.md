@@ -1,7 +1,7 @@
 # 11 — 语义色板的骨架与状态行（tracer bullet）
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: —
 

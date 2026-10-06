@@ -1,7 +1,7 @@
 # 17 — 字形符号表与三个间距常量
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: —
 

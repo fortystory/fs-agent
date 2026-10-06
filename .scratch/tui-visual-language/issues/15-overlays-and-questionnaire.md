@@ -1,7 +1,7 @@
 # 15 — 四个浮层表面与问卷
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 11
 

@@ -1,7 +1,7 @@
 # 13 — 转录取色、换发言者空行、严重度收敛
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 11
 

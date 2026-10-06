@@ -1,7 +1,7 @@
 # 14 — 左栏与转录右缘
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 11
 

@@ -1,7 +1,7 @@
 # 12 — 提示行跨整屏、左栏让位、输入区去粗
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 11
 

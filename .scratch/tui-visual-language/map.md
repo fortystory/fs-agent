@@ -3,9 +3,11 @@
 Label: `wayfinder:map`
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-05，两轮 grilling 共八问：终点形态 / 美化口径 / 当前痛点 / 色板层 / 色彩策略 / 字形语法 / effort 边界 / 在跑反馈）。本图只做**规划**，不产代码改动。
-**✅ 本图已完成（2026-10-05）**：十张决策票全部 `resolved`、`wayfinder-check.py` PASS ⇒ 路线 clear；下一步是**交棒**（`/to-spec`，见 `## 进度`）。**不要再往这张图加票。**
+**✅ 本图已完成（2026-10-05）**：十张决策票全部 `resolved`、`wayfinder-check.py` PASS ⇒ 路线 clear；交棒（`/to-spec`）与九张实现票也都收了口（见下面的补记与 `## 进度`）。**不要再往这张图加票。**
 
-> **交棒已发生（2026-10-05 补记）**：十张票的决定已经收束成 [`spec.md`](spec.md)（`/to-spec`），状态 `ready-for-agent`，50 条用户故事。那张 spec 是决定**收束后**的样子，本图的十张票是它们**当时的推理** —— 两者都留着；冲突时以 spec 为准并回改票。spec 的测试接缝只有一个：**逐格缓冲快照**（`TestBackend` 渲染整帧 → 读 `Buffer` 断言字符与 `Style`），不新增 seam。本图至此**只作决策存档**，下一步是 `/to-tickets` 从 spec 拆实现票。
+> **交棒已发生（2026-10-05 补记）**：十张票的决定已经收束成 [`spec.md`](spec.md)（`/to-spec`），50 条用户故事。那张 spec 是决定**收束后**的样子，本图的十张票是它们**当时的推理** —— 两者都留着；冲突时以 spec 为准并回改票。spec 的测试接缝只有一个：**逐格缓冲快照**（`TestBackend` 渲染整帧 → 读 `Buffer` 断言字符与 `Style`），不新增 seam。本图至此**只作决策存档**。
+>
+> **实现已收口（2026-10-07）**：`/to-tickets` 拆出的九张实现票（11–19）在 2026-10-06 全部落地（各自的 `## 实现记录` 写着当时的全绿数字），**2026-10-07 一并收成 `done`**。剩下的只有真终端观感项，在 [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md) 的 2026-10-06 那一节（⑮ / ⑯ / ㉑ / ㉕ / ㉙…）；走查发现偏差就回退对应那张票。
 
 ## 目的地
 
@@ -74,19 +76,19 @@ Charting: **已完成**（2026-10-05，两轮 grilling 共八问：终点形态 
 
 **实现票**（`/to-tickets` 从 [`spec.md`](spec.md) 拆出的九张，2026-10-05）：
 
-- [ ] [11 — 语义色板的骨架与状态行（tracer bullet）](issues/11-palette-skeleton-and-status-row.md)
-- [ ] [12 — 提示行跨整屏、左栏让位、输入区去粗](issues/12-hint-line-spans-the-screen.md)
-- [ ] [13 — 转录取色、换发言者空行、严重度收敛](issues/13-transcript-colours-and-turn-gap.md)
-- [ ] [14 — 左栏与转录右缘](issues/14-sidebar-and-transcript-edge.md)
-- [ ] [15 — 四个浮层表面与问卷](issues/15-overlays-and-questionnaire.md)
-- [ ] [16 — 内容域：markdown 与语法高亮](issues/16-content-domain-markdown-and-syntax.md)
-- [ ] [17 — 字形符号表与三个间距常量](issues/17-glyph-table-and-spacing.md)
-- [ ] [18 — 「在跑」：状态词的字形循环与空闲时钟](issues/18-busy-spinner-and-idle-clock.md)
-- [ ] [19 — 退场死代码与文档收口](issues/19-dead-code-and-docs.md)
+- [x] [11 — 语义色板的骨架与状态行（tracer bullet）](issues/11-palette-skeleton-and-status-row.md)
+- [x] [12 — 提示行跨整屏、左栏让位、输入区去粗](issues/12-hint-line-spans-the-screen.md)
+- [x] [13 — 转录取色、换发言者空行、严重度收敛](issues/13-transcript-colours-and-turn-gap.md)
+- [x] [14 — 左栏与转录右缘](issues/14-sidebar-and-transcript-edge.md)
+- [x] [15 — 四个浮层表面与问卷](issues/15-overlays-and-questionnaire.md)
+- [x] [16 — 内容域：markdown 与语法高亮](issues/16-content-domain-markdown-and-syntax.md)
+- [x] [17 — 字形符号表与三个间距常量](issues/17-glyph-table-and-spacing.md)
+- [x] [18 — 「在跑」：状态词的字形循环与空闲时钟](issues/18-busy-spinner-and-idle-clock.md)
+- [x] [19 — 退场死代码与文档收口](issues/19-dead-code-and-docs.md)
 
-**决策这条路走完了**（十张全 `resolved`），实现票已从 [`spec.md`](spec.md) 拆出。
+**决策这条路走完了**（十张全 `resolved`），实现票九张也全部关闭（11–19 全 `done`）。
 
-**实现 frontier** = [11 语义色板的骨架与状态行](issues/11-palette-skeleton-and-status-row.md)、[17 字形符号表与三个间距常量](issues/17-glyph-table-and-spacing.md)、[19 退场死代码与文档收口](issues/19-dead-code-and-docs.md) —— 三张无阻塞，可以立刻开；**11 是本轮的 tracer bullet**（它把「色板 → 绘制 → 测试 → 真终端」这条路径整个走通一遍）。
+**frontier = 空（2026-10-07）**：九张实现票 2026-10-06 全部落地（各自的 `## 实现记录`）、2026-10-07 收成 `done`。**11 是本轮的 tracer bullet**（它把「色板 → 绘制 → 测试 → 真终端」这条路径整个走通一遍）。剩下的只有真终端观感项 —— 手工清单的 2026-10-06 那一节。
 
 ## 已定的决定
 
@@ -133,8 +135,8 @@ Charting: **已完成**（2026-10-05，两轮 grilling 共八问：终点形态 
 
 ## 进度
 
-**决策 10/10（2026-10-05）。** 十张决策票全部 resolved，`wayfinder-check.py` PASS。**交棒已完成**：决定收束成 [`spec.md`](spec.md)，`/to-tickets` 又拆出九张实现票（11–19）。
+**决策 10/10（2026-10-05）；实现 9/9（2026-10-06 落地，2026-10-07 收口）。** 十张决策票全部 resolved，`wayfinder-check.py` 报 19/19 closed。**交棒已完成**：决定收束成 [`spec.md`](spec.md)，`/to-tickets` 拆出的九张实现票（11–19）也全部 `done`。
 
 十张票的决定是咬合的：**01 / 02** 两张调研给了事实底线（`DIM` 不可承重、颜色不降级、89 处断言里只有 9 处钉色值）；**03**（色板）与 **04**（字形）给了词汇；**05**（层级）把它们落成一句可判定的判据；**06 / 07 / 08** 三张形态票把判据铺到屏幕的每一块；**09** 收了间距；**10** 关了最后一条。中途有三处**回头修正**前票（`Good`/`Note` 的归属、`▸` 的判据、两处既有 spec 的决定），每一处都在原票留了补记，没有静默覆盖。
 
-**下一步 = 交棒**：`/to-spec` 把互链的决定收束成 `spec.md`，再由 `/to-tickets` 拆实现票；此后每票一次 `/implement`（fresh session、票间 `/clear`），收尾走 `/code-review` 双轴。实现期要回改的既有 spec（`sidebar-toggle` 的全高、`tui-input-pulse` 的两条明确不做、`usage-stats-format` 的占比条、`docs/render.md` 的若干节）已在各票「给下游 / spec 的落点」里逐条列出。
+**交棒与实现都已完成**：`/to-spec` 把互链的决定收束成 `spec.md`，`/to-tickets` 拆出九张实现票，每票一次 `/implement`、收尾走 `/code-review` 双轴 —— 九张 2026-10-06 全部落地、2026-10-07 收成 `done`。实现期要回改的既有 spec（`sidebar-toggle` 的全高、`tui-input-pulse` 的两条明确不做、`usage-stats-format` 的占比条、`docs/render.md` 的若干节）在各票「给下游 / spec 的落点」里都逐条对过；真终端观感项在手工清单的 2026-10-06 那一节。

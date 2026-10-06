@@ -1,7 +1,7 @@
 # 18 — 「在跑」：状态词的字形循环与空闲时钟
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 11
 
