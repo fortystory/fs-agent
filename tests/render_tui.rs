@@ -101,21 +101,22 @@ fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
 /// 走完一轮，空闲 8 × 8 帧 ≈ 3.8 秒（2026-10-06 维护者把速率加快了一档）。
 #[test]
 fn the_status_glyph_changes_every_two_frames_running_and_eight_idle() {
+    // 相位**倒着**走（2026-10-06 维护者定）：第一格是残月 `🌘`，往后一格一格走向新月。
     use fs_agent::render::wording;
 
-    assert_eq!(wording::status_spinner(0, true), "🌑");
-    assert_eq!(wording::status_spinner(1, true), "🌑");
-    assert_eq!(wording::status_spinner(2, true), "🌒");
-    assert_eq!(wording::status_spinner(4, true), "🌓");
-    assert_eq!(wording::status_spinner(6, true), "🌔");
-    assert_eq!(wording::status_spinner(8, true), "🌕");
-    assert_eq!(wording::status_spinner(16, true), "🌑", "一轮之后回到起点");
+    assert_eq!(wording::status_spinner(0, true), "🌘");
+    assert_eq!(wording::status_spinner(1, true), "🌘");
+    assert_eq!(wording::status_spinner(2, true), "🌗");
+    assert_eq!(wording::status_spinner(4, true), "🌖");
+    assert_eq!(wording::status_spinner(6, true), "🌕");
+    assert_eq!(wording::status_spinner(8, true), "🌔");
+    assert_eq!(wording::status_spinner(16, true), "🌘", "一轮之后回到起点");
 
-    assert_eq!(wording::status_spinner(0, false), "🌑");
-    assert_eq!(wording::status_spinner(7, false), "🌑", "空闲慢下来");
-    assert_eq!(wording::status_spinner(8, false), "🌒");
-    assert_eq!(wording::status_spinner(56, false), "🌘");
-    assert_eq!(wording::status_spinner(64, false), "🌑");
+    assert_eq!(wording::status_spinner(0, false), "🌘");
+    assert_eq!(wording::status_spinner(7, false), "🌘", "空闲慢下来");
+    assert_eq!(wording::status_spinner(8, false), "🌗");
+    assert_eq!(wording::status_spinner(56, false), "🌑");
+    assert_eq!(wording::status_spinner(64, false), "🌘");
 }
 
 #[test]
