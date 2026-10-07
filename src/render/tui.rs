@@ -512,7 +512,7 @@ impl Tui {
                 // 看见。
                 let mut frame_out = std::io::stdout();
                 let _ = execute!(frame_out, BeginSynchronizedUpdate);
-                let _ = terminal.draw(|frame| draw_frame(frame, &mut state));
+                paint_frame(&mut terminal, &mut state);
                 let _ = execute!(frame_out, EndSynchronizedUpdate);
                 state.mark_clean();
                 // 标题只在真变了的时候重写：算一次期望值、与上一版比对。状态来自
@@ -4659,6 +4659,23 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     selection::paint(frame, &state.screen_text, state.drag.as_ref());
 }
 
+/// 把一帧落到终端上，并收好光标的**可见性**。
+///
+/// 位置在 [`draw_frame`] 里、可见性在这里，分成两处是因为 ratatui 的 `Frame` 只有「光标在
+/// 哪」这一个旋钮：给了位置就一定 `Show`。于是「暗」的那一半不能靠不设位置来实现 —— 不设
+/// 位置就是 `Hide`，而 `Hide` 不移动光标，终端会把它留在最后写入的那一格（空闲时那是状态
+/// 行的月相），输入法的预编辑于是长在 `🌑` 与「就绪」之间。`draw_frame` 把位置钉在输入区
+/// 那个光标上，这里只负责把不该露面的那一半收起来。
+pub fn paint_frame<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    state: &mut TuiState,
+) {
+    let _ = terminal.draw(|frame| draw_frame(frame, state));
+    if keyboard_in_the_input(state) && !blink_on(state.pulse) {
+        let _ = terminal.hide_cursor();
+    }
+}
+
 /// 外壳里那些不是自己一块区域的部件：分隔列、左栏，以及主列的两条分隔线。
 ///
 /// **外框已经不在**（spec §1）：每条线都画在自己该在的地方，没有哪一格要留给边框，也没有
@@ -5827,12 +5844,17 @@ fn draw_bottom(
     // 菜单的锚点与「光标露不露面」是两件事：锚点只问有没有东西占着键盘（`/` 菜单按它算
     // 位置），而光标还多两层判据（键盘真在输入区、以及此刻是不是亮着那一半）。
     let anchor = state.pending.is_none().then_some(cursor);
-    // 光标只在**键盘真的在输入区**时出现，并且按脉冲闪（2026-10-06 维护者要的）。
+    // 光标只在**键盘真的在输入区**时出现；闪不闪由 `paint_frame` 收放，这里只管它在哪。
+    //
+    // 位置必须**每一帧都落在同一格**，连不露面的那一半也不例外：终端的光标被隐藏时停在最后
+    // 写入的那一格（ratatui 的 `hide_cursor` 一个移动光标的字节都不发），而输入法的预编辑
+    // 正是画在物理光标上的 —— 空闲时唯一在动的是状态行那个月相，于是攒拼音的字母会长在
+    // `🌑` 与「就绪」之间。可见性分出去，位置才留得住。
     //
     // 它要回答的是「焦点在哪」：键盘交给文件页、详情覆盖层或文件查看器立着时都不该有它 ——
     // 否则屏幕上那个静止的光标在说谎，而人分不出自己敲的字会落到哪里。问卷有自己的光标
     // （上面那条分支已经返回了）。
-    if keyboard_in_the_input(state) && blink_on(state.pulse) {
+    if keyboard_in_the_input(state) {
         frame.set_cursor_position((
             (panes.input.x + cursor.column).min(panes.input.right().saturating_sub(1)),
             panes.input.y + cursor.row,

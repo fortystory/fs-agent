@@ -5256,6 +5256,156 @@ fn the_cursor_comes_back_to_the_draft_once_a_question_is_answered() {
 }
 
 // ---------------------------------------------------------------------------
+// 终端物理光标：`TestBackend` 看不见的那一半
+// ---------------------------------------------------------------------------
+
+/// 后端写出来的字节留在一份共享缓冲里，好让 vt100 回放它们。
+#[derive(Clone, Default)]
+struct Bytes(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Bytes {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("字节缓冲已中毒")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// 真的 crossterm 后端，只把尺寸钉死 —— 测试里没有 tty，`size()` 去问终端会失败。
+///
+/// 除了尺寸，一切都走真后端：这一层要看的正是**真后端会发出的字节**，自己写一个模拟
+/// 后端只会让断言断言回自己身上。
+struct GhostBackend {
+    inner: ratatui::backend::CrosstermBackend<Bytes>,
+    size: ratatui::layout::Size,
+}
+
+impl ratatui::backend::Backend for GhostBackend {
+    type Error = std::io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> std::io::Result<()> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> std::io::Result<()> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> std::io::Result<ratatui::layout::Position> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> std::io::Result<()> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> std::io::Result<()> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> std::io::Result<ratatui::layout::Size> {
+        Ok(self.size)
+    }
+
+    fn window_size(&mut self) -> std::io::Result<ratatui::backend::WindowSize> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// 一帧一帧地画，每画完一帧回答「终端**物理**光标在哪」。
+///
+/// 与 `frame_and_cursor` 的差别只在最后那个问题上：`TestBackend` 记得的是 ratatui 想不想
+/// 露光标，而光标隐藏时终端把它停在**最后写入的那一格** —— ratatui 的 `hide_cursor` 只发
+/// `\x1b[?25l`，一个移动光标的字节都不发。输入法的预编辑画的就是这个位置。
+struct PhysicalCursor {
+    terminal: Terminal<GhostBackend>,
+    bytes: Bytes,
+    seen: usize,
+    screen: vt100::Parser,
+}
+
+impl PhysicalCursor {
+    fn new(width: u16, height: u16) -> Self {
+        let bytes = Bytes::default();
+        let backend = GhostBackend {
+            inner: ratatui::backend::CrosstermBackend::new(bytes.clone()),
+            size: ratatui::layout::Size::new(width, height),
+        };
+        Self {
+            terminal: Terminal::new(backend).expect("幽灵后端"),
+            bytes,
+            seen: 0,
+            screen: vt100::Parser::new(height, width, 0),
+        }
+    }
+
+    /// 画一帧，返回物理光标的 `(row, col)` 以及此刻光标是不是收着。
+    fn draw(&mut self, state: &mut TuiState) -> ((u16, u16), bool) {
+        heng::render::paint_frame(&mut self.terminal, state);
+        let written = self.bytes.0.lock().expect("字节缓冲已中毒").clone();
+        self.screen.process(&written[self.seen..]);
+        self.seen = written.len();
+        let screen = self.screen.screen();
+        (screen.cursor_position(), screen.hide_cursor())
+    }
+}
+
+#[test]
+fn a_hidden_cursor_still_marks_the_input_area_not_the_status_row() {
+    // 用户看见的那条路：输入法把预编辑的字形画在**终端物理光标**上。光标藏起来的那一半
+    // 里，ratatui 不移动光标，于是终端把它留在最后写入的那一格 —— 空闲时唯一在动的是状态
+    // 行那个月相，于是它停在月亮与「就绪」之间，攒拼音的字母就长在那里（症状是
+    // `🌑a 就绪`）。
+    //
+    // 组合期间 heng 一个字符都收不到，所以这条什么都不输入：让它自己空转，脉冲照走。
+    use heng::render::layout::plan;
+    use ratatui::layout::Rect;
+
+    let (width, height) = (120u16, 24u16);
+    let mut probe = PhysicalCursor::new(width, height);
+    let mut state = state();
+    let input = plan(Rect::new(0, 0, width, height), 1, true).input;
+    for frame in 0..16 {
+        if frame > 0 {
+            state.tick();
+        }
+        let ((row, col), hidden) = probe.draw(&mut state);
+        assert!(
+            input.x <= col && col < input.right() && input.y <= row && row < input.bottom(),
+            "第 {frame} 帧：物理光标落在输入区之外（{col},{row}，输入区是 {input:?}）——\
+             输入法会把预编辑画在那里"
+        );
+        // 闪还在：八帧一翻，收起的那一半只是把可见性收走，位置不许跟着走。
+        let should_hide = !(frame / 8u32).is_multiple_of(2);
+        assert_eq!(hidden, should_hide, "第 {frame} 帧的露面/收起与脉冲对不上");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 折叠：思考行、工具输出与详情覆盖层
 // （票 01/02/03）
 // ---------------------------------------------------------------------------
