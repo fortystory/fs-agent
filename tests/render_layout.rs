@@ -4517,11 +4517,13 @@ fn clicking_a_todo_row_opens_nothing() {
 fn install_catalog(state: &mut TuiState) {
     let mut entries: Vec<CatalogEntry> = wording::BUILT_IN_COMMANDS
         .iter()
-        .map(|command| CatalogEntry::new(command.name, command.description))
+        .map(|command| CatalogEntry::command(command.name, command.description))
         .collect();
     entries.extend([
-        CatalogEntry::new("ask-matt", "不知道用哪个 skill 时问它"),
-        CatalogEntry::new("review", "审查一个变更"),
+        CatalogEntry::skill("ask-matt", "不知道用哪个 skill 时问它"),
+        CatalogEntry::skill("review", "审查一个变更"),
+        // 第三类来源也摆上（票 09）：三色各有一条，才谈得上「看得出是三类」。
+        CatalogEntry::template("db:user_report", "按 id 出一份报告"),
     ]);
     state.request(ConsoleRequest::Catalog { entries });
 }
@@ -4546,7 +4548,10 @@ fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16,
     let row = (0..height)
         .find(|y| row_text(frame, *y, width).contains(needle))
         .unwrap_or_else(|| panic!("{needle:?} 在屏幕上"));
-    let column = row_text(frame, row, width).find(needle).unwrap() as u16;
+    let text = row_text(frame, row, width);
+    // 列号**不是**字节号：这一行里的中文一个字三字节，于是 `find` 的偏移会比它所在的列大出
+    // 一截。菜单变宽之后（票 09）描述整句落进这一行，按字节当列号取坐标会直接跑到屏幕外面。
+    let column = text_columns(&text[..text.find(needle).unwrap()]) as u16;
     let x = (0..column)
         .rev()
         .find(|c| frame[(*c, row)].symbol() == "┆")
@@ -4641,6 +4646,84 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
         top as usize + height as usize <= input_row(&rows),
         "菜单坐在输入区上面：{top}+{height} 对 {}",
         input_row(&rows)
+    );
+}
+
+/// 菜单里名字第一格的前景色。
+fn menu_colour(frame: &Buffer, width: u16, height: u16, needle: &str) -> Color {
+    let (row, line) = (0..height)
+        .map(|y| (y, row_text(frame, y, width)))
+        .find(|(_, line)| line.contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} 在菜单里"));
+    let byte = line.find(needle).expect("刚刚找到过");
+    let column = text_columns(&line[..byte]) as u16;
+    frame[(column, row)].fg
+}
+
+#[test]
+fn the_menu_colours_each_kind_of_name_differently() {
+    // 三类来源共用一个菜单，而人得一眼看出哪些是程序自带的、哪些是装进来的
+    // （`.scratch/tui-feedback/spec.md` §11）。判据是屏幕上的颜色，不是那个枚举本身。
+    let mut state = state();
+    install_catalog(&mut state);
+    state.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut state);
+
+    assert_eq!(
+        menu_colour(&frame, 120, 24, "/undo"),
+        palette::TOKEN_COMMAND,
+        "命令：与草稿里那个名字同色"
+    );
+    assert_eq!(
+        menu_colour(&frame, 120, 24, "/review"),
+        palette::MENU_SKILL,
+        "技能"
+    );
+    assert_eq!(
+        menu_colour(&frame, 120, 24, "/db:user_report"),
+        palette::MENU_TEMPLATE,
+        "MCP 模板"
+    );
+
+    // 描述留在正文档：它是一句解释，不参与分类。
+    let (row, line) = (0..24)
+        .map(|y| (y, row_text(&frame, y, 120)))
+        .find(|(_, line)| line.contains("/undo"))
+        .expect("菜单里那一行");
+    let column = text_columns(&line[..line.find("回滚上一次编辑").unwrap()]) as u16;
+    assert_eq!(frame[(column, row)].fg, palette::PLAIN, "描述归正文档");
+
+    // 光标行是**临时光标**：反显，不叠类别色（`tui-visual-language` §27 的另一半照旧）。
+    state.key(Key::Down);
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        menu_colour(&frame, 120, 24, "/undo"),
+        palette::PLAIN,
+        "高亮那一行不占颜色"
+    );
+}
+
+#[test]
+fn a_long_description_gets_the_wider_menu_before_it_is_cut() {
+    // 票 09：上限 72 → 96。描述被截在半句上，菜单就在教人按 `Tab` 去猜后半句。
+    let description = "说明".repeat(20);
+    let mut state = state();
+    state.request(ConsoleRequest::Catalog {
+        entries: vec![CatalogEntry::command("demo", description.clone())],
+    });
+    state.key(Key::Char('/'));
+    let frame = buffer(200, 24, &mut state);
+
+    let rows: Vec<String> = (0..24).map(|y| row_text(&frame, y, 200)).collect();
+    assert!(
+        rows.join("\n").contains(&description),
+        "描述整句都在屏幕上：\n{}",
+        rows.join("\n")
+    );
+    let (_, _, width, _) = menu_box(&frame, 200, 24, "/demo");
+    assert!(
+        width > 74,
+        "菜单宽过旧上限（74 = 旧上限 72 加两条边框），实际 {width}"
     );
 }
 
@@ -4783,11 +4866,12 @@ fn the_arrows_wrap_at_the_ends() {
     let mut state = state();
     install_catalog(&mut state);
     let mut line = awaiting_line(&mut state);
-    // 从第一个匹配再往上，绕到最后一个。
+    // 从第一个匹配再往上，绕到最后一个 —— 目录里的末条是那条 MCP 模板（票 09 起它也在
+    // fixture 里，好让三类来源各有代表）。
     state.key(Key::Char('/'));
     state.key(Key::Up);
     state.key(Key::Enter);
-    assert_eq!(line.try_recv().unwrap(), Some("/review".to_owned()));
+    assert_eq!(line.try_recv().unwrap(), Some("/db:user_report".to_owned()));
 }
 
 #[test]

@@ -58,6 +58,16 @@ pub const TOKEN_COMMAND: Color = Color::LightBlue;
 /// 草稿里一个**能兑现**的 `@` 引用的颜色。
 pub const TOKEN_REFERENCE: Color = Color::LightMagenta;
 
+/// `/` 菜单里一条**技能**的名字（`.scratch/tui-feedback/spec.md` §11）。
+///
+/// 与 [`TOKEN_REFERENCE`] 撞值是刻意的：两者都是「用户自己装进来的东西」那一档品红。命令
+/// 那一档**不在这里**——它直接用 [`TOKEN_COMMAND`]，于是同一个名字在草稿里与菜单里长得一样。
+pub const MENU_SKILL: Color = Color::LightMagenta;
+
+/// `/` 菜单里一条 **MCP 提示词模板**的名字。三类来源里它最弱（要一台 server 才可能出现），
+/// 于是给最暗的一档青。
+pub const MENU_TEMPLATE: Color = Color::Cyan;
+
 // --- 冻结的角色五色 ----------------------------------------------------------
 //
 // `tui-ux` 冻结项 9，本 effort 一个字不动（§2、用户故事 9）。它们只回答「谁在说」。
@@ -190,6 +200,18 @@ fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/` 菜单的三类来源各一色、互不相同 —— 「看得出是三类」就是这一条
+    /// （`.scratch/tui-feedback/spec.md` §11）。撞成同一个值时，配色那一层就白改了。
+    #[test]
+    fn the_menu_kinds_are_three_distinct_colours() {
+        let kinds = [TOKEN_COMMAND, MENU_SKILL, MENU_TEMPLATE];
+        for (index, left) in kinds.iter().enumerate() {
+            for right in &kinds[index + 1..] {
+                assert_ne!(left, right, "菜单里两类来源撞了同一个颜色");
+            }
+        }
+    }
 
     /// 色环，钉在每个实现都同意的那六个点上 —— 分区算术里一个舍入错误最先显形的那几个角。
     #[test]

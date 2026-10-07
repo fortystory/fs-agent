@@ -43,6 +43,19 @@ pub struct QuestionnaireRequest {
     pub reply: oneshot::Sender<Result<UserAnswers, String>>,
 }
 
+/// 菜单里一个 `/` 名字的**来处**：三样东西共用一个菜单，而它们该看得出是三类。
+///
+/// 它只影响名字的颜色（颜色住在 `/` 菜单那一节的调色板里）—— 分派仍旧只看名字，与类别无关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogKind {
+    /// 程序自带的命令。
+    Command,
+    /// 会话里装着的技能。
+    Skill,
+    /// 某个 MCP server 的提示词模板。
+    Template,
+}
+
 /// 开头的 `/` 能变成的一个名字，以及一句说它是干什么的话。
 ///
 /// 这份目录是**循环的**列表，不是渲染器的：把一次提交变成动作的是循环，所以知道存在哪些
@@ -53,13 +66,35 @@ pub struct CatalogEntry {
     pub name: String,
     /// 菜单第二列的一句话。没什么可说时是空的。
     pub description: String,
+    /// 这个名字从哪儿来：命令、技能，还是 MCP 模板（票 09）。
+    pub kind: CatalogKind,
 }
 
 impl CatalogEntry {
-    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+    /// 一个内建命令（`wording::BUILT_IN_COMMANDS` 里的那批）。
+    pub fn command(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
+            kind: CatalogKind::Command,
+        }
+    }
+
+    /// 一个会话里装着的技能。
+    pub fn skill(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            kind: CatalogKind::Skill,
+        }
+    }
+
+    /// 一个 MCP server 的提示词模板（`name` 已经是 `server:prompt` 的形状）。
+    pub fn template(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            kind: CatalogKind::Template,
         }
     }
 }

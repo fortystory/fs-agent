@@ -1446,6 +1446,49 @@ struct MenuSelection {
     dismissed: bool,
 }
 
+/// 菜单里的一行：名字、描述，以及它**来自哪一类**。
+///
+/// 类别只决定名字的颜色（`.scratch/tui-feedback/spec.md` §11）：`/` 的三类来源共用一个菜单，
+/// 而人得一眼看出哪几个是程序自带的命令、哪几个是装进来的技能。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuEntry {
+    name: String,
+    description: String,
+    kind: MenuKind,
+}
+
+/// 一行的来处。`@` 的候选不是任何一类名字，它只是路径 —— 于是归正文档色，与从前一样。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuKind {
+    Command,
+    Skill,
+    Template,
+    Path,
+}
+
+impl From<crate::render::CatalogKind> for MenuKind {
+    fn from(kind: crate::render::CatalogKind) -> Self {
+        use crate::render::CatalogKind;
+        match kind {
+            CatalogKind::Command => Self::Command,
+            CatalogKind::Skill => Self::Skill,
+            CatalogKind::Template => Self::Template,
+        }
+    }
+}
+
+impl MenuEntry {
+    /// 这一行名字的颜色。三类来源各一色，路径归正文档。
+    fn colour(&self) -> Color {
+        match self.kind {
+            MenuKind::Command => palette::TOKEN_COMMAND,
+            MenuKind::Skill => palette::MENU_SKILL,
+            MenuKind::Template => palette::MENU_TEMPLATE,
+            MenuKind::Path => palette::PLAIN,
+        }
+    }
+}
+
 /// 此刻的记号菜单：它属于哪个前缀、什么与它匹配、哪个匹配被高亮。
 ///
 /// 一个值，由草稿加候选来源在每帧、每次按键时建出来。菜单永远不会是可以与屏幕上所见漂移
@@ -1456,8 +1499,8 @@ struct TokenMenu {
     sigil: char,
     /// 前缀后面已经打进去的内容。
     query: String,
-    /// 匹配上的那些条目，按来源的顺序，形如 `(名字, 描述)`。
-    entries: Vec<(String, String)>,
+    /// 匹配上的那些条目，按来源的顺序。
+    entries: Vec<MenuEntry>,
     /// 高亮落在哪个条目上，夹进范围；没有时是 `None`。
     selected: Option<usize>,
 }
@@ -4230,7 +4273,7 @@ impl TuiState {
             return None;
         }
         let token = self.editor.token()?;
-        let entries: Vec<(String, String)> = match token.prefix {
+        let entries: Vec<MenuEntry> = match token.prefix {
             '/' => {
                 // 按大小写过滤，但提供的是目录里的那个名字：`/Ask` 找得到 `ask-matt`，
                 // 而 Tab 写出循环会认的那个拼法。
@@ -4238,7 +4281,11 @@ impl TuiState {
                 self.catalog
                     .iter()
                     .filter(|entry| entry.name.to_lowercase().starts_with(&typed))
-                    .map(|entry| (entry.name.clone(), entry.description.clone()))
+                    .map(|entry| MenuEntry {
+                        name: entry.name.clone(),
+                        description: entry.description.clone(),
+                        kind: entry.kind.into(),
+                    })
                     .collect()
             }
             '@' => {
@@ -4255,7 +4302,11 @@ impl TuiState {
                     // 候选即使名字正好等于已经打完的那一段也照列 —— 那时菜单本来就要没了，
                     // 藏起来只会让「打全即消失」显得像出错。
                     .filter(|path| !(path.ends_with('/') && path == &token.query))
-                    .map(|path| (path, String::new()))
+                    .map(|name| MenuEntry {
+                        name,
+                        description: String::new(),
+                        kind: MenuKind::Path,
+                    })
                     .collect()
             }
             _ => return None,
@@ -4301,7 +4352,7 @@ impl TuiState {
         let Some(selected) = menu.selected else {
             return;
         };
-        let name = menu.entries[selected].0.clone();
+        let name = menu.entries[selected].name.clone();
         if !self.editor.complete_token(menu.sigil, &name) {
             return;
         }
@@ -6275,12 +6326,15 @@ fn draw_menu(
     // 左右各一列内边距，名字列与最宽的名字一样宽，然后两个空格，然后是放得下的描述。
     let name_width = visible
         .iter()
-        .map(|(name, _)| text_columns(name) + 1)
+        .map(|entry| text_columns(&entry.name) + 1)
         .max()
         .unwrap_or(0);
+    // 一行实际要占的列数：一列左内边距 + 名字列（`/名字` 补齐到最宽的那个名字）+ 两列间隔
+    // + 描述 + 一列右内边距 + 行尾那一列「不碰边框」的留白。少算最后那一列时，最长的一条
+    // 会掉最后两个字 —— 宽度上限抬到多少都救不了它（`.scratch/tui-feedback/spec.md` §11）。
     let widest = visible
         .iter()
-        .map(|(_, description)| 2 + name_width + 2 + text_columns(description))
+        .map(|entry| name_width + 5 + text_columns(&entry.description))
         .max()
         .unwrap_or(0);
     let width = (widest as u16).min(layout::MENU_MAX_WIDTH);
@@ -6292,9 +6346,9 @@ fn draw_menu(
     let rows: Vec<Line<'static>> = visible
         .iter()
         .enumerate()
-        .map(|(offset, (name, description))| {
+        .map(|(offset, entry)| {
             let selected = menu.selected == Some(first + offset);
-            menu_row(menu.sigil, name, description, inner, name_width, selected)
+            menu_row(menu.sigil, entry, inner, name_width, selected)
         })
         .collect();
     blank_half_covered_glyphs(frame, area);
@@ -6307,36 +6361,53 @@ fn draw_menu(
 ///
 /// `@` 的候选没有描述，于是名字独占这一行 —— 那仍然是一个完整的提示。
 ///
-/// 高亮的那一行反色画，好让它读起来是 `Enter` 会按下的那个按钮，而不是又多了一行文字。
+/// **名字按类别上色**（`.scratch/tui-feedback/spec.md` §11）：命令、技能、MCP 模板各一色，
+/// 于是「哪些是程序自带的」一眼看得出；描述留在正文档，它是一句解释，不参与分类。高亮的那
+/// 一行仍反色画，好让它读起来是 `Enter` 会按下的那个按钮，而且**不叠类别色** —— 光标是临时
+/// 的，颜色说的是这一行是什么（`tui-visual-language` §27 的另一半照旧）。
 fn menu_row(
     sigil: char,
-    name: &str,
-    description: &str,
+    entry: &MenuEntry,
     inner: usize,
     name_width: usize,
     selected: bool,
 ) -> Line<'static> {
-    let label = format!("{sigil}{name}");
-    let mut text = label.clone();
+    let label = format!("{sigil}{}", entry.name);
     // 描述列，在有地方放一个描述、也有它要占的那一行的时候。太窄就让名字独占这一行，那仍然是
     // 一个完整的提示。
     let gap = name_width.saturating_sub(text_columns(&label)) + 2;
-    if !description.is_empty() && text_columns(&label) + gap + 2 <= inner {
-        text.push_str(&" ".repeat(gap));
-        text.push_str(description);
-    }
+    let fits = !entry.description.is_empty() && text_columns(&label) + gap + 2 <= inner;
+    let head = if fits {
+        format!("{label}{}", " ".repeat(gap))
+    } else {
+        label
+    };
+    let tail = if fits { entry.description.as_str() } else { "" };
+
     // 开头一列内边距，然后是这一行，然后是剩下的部分 —— 于是文字永远不碰边框，而高亮盖住整行。
-    let body = truncate_columns(&text, inner.saturating_sub(1));
+    let body = truncate_columns(&format!("{head}{tail}"), inner.saturating_sub(1));
+    // 整行截断之后，名字与描述的分界仍在同一个地方：`head` 没被截断时它整个是 `body` 的前缀，
+    // 被截断时它已经把这一行占满、描述一个字都没进来。
+    let shown_head = truncate_columns(&head, inner.saturating_sub(1));
+    let shown_tail = &body[shown_head.len().min(body.len())..];
     let padding = inner.saturating_sub(1 + text_columns(&body));
-    // 菜单去黄（§27）：未选中行归正文档，光标行是**临时光标** —— 反显，不占颜色。
-    let style = if selected {
+
+    let name_style = if selected {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().fg(entry.colour())
+    };
+    // 菜单去黄（§27）：未选中行归正文档，光标行是**临时光标** —— 反显，不占颜色。分类色只上
+    // 名字，描述与整行的底子都归正文档。
+    let plain = if selected {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default().fg(palette::PLAIN)
     };
     Line::from(vec![
-        Span::styled(format!(" {body}"), style),
-        Span::styled(" ".repeat(padding), style),
+        Span::styled(format!(" {shown_head}"), name_style),
+        Span::styled(shown_tail.to_owned(), plain),
+        Span::styled(" ".repeat(padding), plain),
     ])
 }
 

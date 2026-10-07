@@ -1647,6 +1647,9 @@ async fn run_mcp_prompt(
 /// 命令是程序自带的、技能是用户装的，所以固定项优先更可预测：打一个 `/c` 时 `/clear` 排在
 /// 用户那个恰好也叫 `c…` 的技能前面。命令按声明的固定顺序（不按字母），技能按名字。
 ///
+/// 每一条带着它的**类别**（`.scratch/tui-feedback/spec.md` §11）：三样东西共用一个菜单，
+/// 而它们该看得出是三类 —— 名字借类别上色，次序与分派一个字不改。
+///
 /// 抽出这个纯函数是为了让这条次序有地方断言 —— 它原来内联在组装点里，只能靠真终端看。
 fn slash_catalog(
     commands: &[render::wording::Command],
@@ -1657,18 +1660,18 @@ fn slash_catalog(
     skills.sort_by(|left, right| left.0.cmp(right.0));
     commands
         .iter()
-        .map(|command| render::CatalogEntry::new(command.name, command.description))
+        .map(|command| render::CatalogEntry::command(command.name, command.description))
         .chain(
             skills
                 .into_iter()
-                .map(|(name, description)| render::CatalogEntry::new(*name, *description)),
+                .map(|(name, description)| render::CatalogEntry::skill(*name, *description)),
         )
         // 菜单的**动态那一半**：MCP server 的提示词模板（票 17）。它不进工具表、也不进前缀
         // 缓存 —— 这里是它唯一的落点。
         .chain(
             prompts
                 .iter()
-                .map(|entry| render::CatalogEntry::new(&entry.name, entry.description())),
+                .map(|entry| render::CatalogEntry::template(&entry.name, entry.description())),
         )
         .collect()
 }

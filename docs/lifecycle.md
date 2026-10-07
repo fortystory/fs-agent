@@ -56,7 +56,7 @@
 ### 1.3 虚实：哪些路径画虚线
 
 **实线**：这条路径在**至少一个 CLI 生产组装点**上会被真实走到 —— 三个组装点是交互式
-（`src/cli.rs:380`）、`discuss`（`src/cli.rs:700`）、`probe`（`src/cli.rs:2214`）。
+（`src/cli.rs:380`）、`discuss`（`src/cli.rs:700`）、`probe`（`src/cli.rs:2224`）。
 「会被走到」不只算主路径：由配置开关打开的（`[web] enabled`、`--tui`）、以及一条 **`None`
 的降级分支**（probe 的 `asker: None` 让 `Ask` 降级为 `Deny`），都算走到了。
 
@@ -165,7 +165,7 @@ flowchart TD
 1. **`render` 与 `sess` 是兄弟，不是父子。** 渲染器在组装期选定（`src/cli.rs:327-372`），
    图 1 把它画成 `setup` 之后的一步只是为了压住总图；真正的先后在图 2 里。
 2. **`goal --> turn` 的标签是「每回合边界」。** 目标循环用 `TurnStart::Injected` 驱动每一次
-   `run_one_turn`（`src/cli.rs:1626`），不是「进入 turn 之后就不回来了」。
+   `run_one_turn`（`src/cli.rs:1633`），不是「进入 turn 之后就不回来了」。
 3. **并发画不出来。** 讨论者、执行者都是并发跑各自回合、往同一条流上写，靠 `seq` 切窗而不是
    时序（图 4、图 5）。这张图只表达「存在」。
 
@@ -295,7 +295,7 @@ sequenceDiagram
 **固定顺序**：`hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加`，走完看还有没有
 `tool_call` 决定是否再迭代一轮。
 
-图 1 与图 2 的三处注记：两个 hook 步骤在 CLI 下恒不发生（三个生产组装点全传 `hook: None` —— `src/cli.rs:396` / `src/cli.rs:715` / `src/cli.rs:2232`，`src/` 内没有任何 `Hook` 实现、只有库调用方与测试挂得上，所以图里被压成一条 `Note`、不占步骤的位置，见 §1.3 与 §5）；`权限门` 是抽象的参与者，没有对象持有「询问 → 人答」这次往返（裁决合成在 `src/agent.rs:1954-1995`，问出去的那一问是 `asker.ask(...)` 经 `ConsoleAsker`，去代码里找一个叫 `gate` 的结构会扑空）；「还有挂着的 `tool_call` 就不调 provider」是守卫而不是步骤，它几乎从不触发（`src/agent.rs:478-480`），画进来只为说明不变量 2。
+图 1 与图 2 的三处注记：两个 hook 步骤在 CLI 下恒不发生（三个生产组装点全传 `hook: None` —— `src/cli.rs:396` / `src/cli.rs:715` / `src/cli.rs:2242`，`src/` 内没有任何 `Hook` 实现、只有库调用方与测试挂得上，所以图里被压成一条 `Note`、不占步骤的位置，见 §1.3 与 §5）；`权限门` 是抽象的参与者，没有对象持有「询问 → 人答」这次往返（裁决合成在 `src/agent.rs:1954-1995`，问出去的那一问是 `asker.ask(...)` 经 `ConsoleAsker`，去代码里找一个叫 `gate` 的结构会扑空）；「还有挂着的 `tool_call` 就不调 provider」是守卫而不是步骤，它几乎从不触发（`src/agent.rs:478-480`），画进来只为说明不变量 2。
 
 [`README.md`](../README.md) 的「架构」一节有一行式版本
 （`hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件`）—— 那是这条链的另一面，
@@ -427,14 +427,14 @@ flowchart TD
 四件事必须说清：
 
 1. **两条回路不是一条。** `emit → red → log → proj → trim → req` 每个回合都走；
-   `goal ↔ compact` 是跨会话的，过阈值才走（`src/cli.rs:1711-1716`、`src/goals.rs:629-640`）。
+   `goal ↔ compact` 是跨会话的，过阈值才走（`src/cli.rs:1721-1726`、`src/goals.rs:629-640`）。
    画在一起容易被读成一条。
 2. **`append_event` 是唯一写路径，打码在它之前。** 于是流上的文本 == 模型看到的文本；
    `outputs/*.txt` 打码、`outputs/*.before` 不打码 —— 后者是 `/undo` 的字节级还原源。
 3. **两类问询发起者不共用接缝。** `ask`（询问：harness 发起，答案是闸门）走 `Asker` /
    `ConsoleAsker`；`uq`（用户提问：模型发起，答案是上下文）走 `UserQuestions` /
    `ConsoleQuestions`。两条端口，同一个键盘 —— 图里合并到 `console` 是简化。
-4. **`headless` 不是虚线。** 它在 `probe` 子命令里真被构造（`src/cli.rs:2238`，在
+4. **`headless` 不是虚线。** 它在 `probe` 子命令里真被构造（`src/cli.rs:2248`，在
    `#[cfg(test)]` 之外）—— 别写成「CLI 不构造」，也别画成 §1.3 的第二类虚线。
 
 | 想细看 | 去哪 |
@@ -561,17 +561,17 @@ flowchart TD
 | `boot` | 进程入口，`main` 只调 `cli::main()` | `src/main.rs:1-3`、`src/cli.rs:78-103` | `fn main` |
 | `cmd` | 子命令分派：`--version` / `--help` / `probe` / `discuss` / `prune` / `sessions`，其余交互式 | `src/cli.rs:105-129` | `fn run` |
 | `setup` | 组装：配置 · 凭据 · provider · 工具表 · 沙箱 | `src/cli.rs:234-411` | `fn interactive` |
-| `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:2964-2972`、`src/cli.rs:2633-2677` | `fn choose_session` |
+| `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:2974-2982`、`src/cli.rs:2643-2687` | `fn choose_session` |
 | `render` | 渲染器选定 TUI / plain（headless 见 §6） | `src/cli.rs:327-372`、`src/render/mod.rs:241-255` | `fn tui`、`fn plain` |
-| `loop` | 主循环：等一行或手势 | `src/cli.rs:1102-1313` | `fn interactive_loop` |
-| `route` | 分派 `Submission` | `src/cli.rs:1462-1586`、`src/cli.rs:1380-1433` | `fn submission` |
+| `loop` | 主循环：等一行或手势 | `src/cli.rs:1102-1320` | `fn interactive_loop` |
+| `route` | 分派 `Submission` | `src/cli.rs:1469-1593`、`src/cli.rs:1387-1440` | `fn submission` |
 | `turn` | 一次 turn | `src/lib.rs:658-682`、`src/agent.rs:443-732` | `fn run_turn` |
 | `disc` | 讨论：`--discuss` 子命令与会话内 `/discuss` | `src/cli.rs:545-770`、`src/cli.rs:950-1052`、`src/agent.rs:1334-1585` | `fn run_discussion` |
-| `goal` | 目标循环 `/loop` | `src/cli.rs:1835-2092` | `fn run_goal_loop` |
-| `maint` | `probe` · `prune` · `sessions` 三条独立子命令，各自退出 | `src/cli.rs:2881-2890`、`src/cli.rs:2102`、`src/cli.rs:2392`、`src/cli.rs:2550` | `fn run_sessions` |
+| `goal` | 目标循环 `/loop` | `src/cli.rs:1845-2102` | `fn run_goal_loop` |
+| `maint` | `probe` · `prune` · `sessions` 三条独立子命令，各自退出 | `src/cli.rs:2891-2900`、`src/cli.rs:2112`、`src/cli.rs:2402`、`src/cli.rs:2560` | `fn run_sessions` |
 | `tail` | 收尾：排空渲染通道 + 续接回执 | `src/cli.rs:511-525`、`src/lib.rs:1086-1087` | `fn finish_session`、`fn shutdown` |
-| `ok` | 退出 0（空输入、`/quit`、`Ignore`、正常收尾） | `src/cli.rs:2262-2272`、`src/cli.rs:1973-1978` | `fn exit_code_after` |
-| `aborted` | 退出 130（忙碌中被举手退出，等回合收尾后兑现） | `src/cli.rs:2278-2280`、`src/cli.rs:2278-2305` | `struct ExitRequest` |
+| `ok` | 退出 0（空输入、`/quit`、`Ignore`、正常收尾） | `src/cli.rs:2272-2282`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
+| `aborted` | 退出 130（忙碌中被举手退出，等回合收尾后兑现） | `src/cli.rs:2288-2290`、`src/cli.rs:2288-2315` | `struct ExitRequest` |
 
 ### 图 1 的边
 
@@ -580,22 +580,22 @@ flowchart TD
 | `boot --> cmd` | `src/main.rs:1-3` | `main` 无逻辑，直接进 `cli::main` |
 | `cmd -->\|交互式\| setup` | `src/cli.rs:127` | 没有子命令就是交互式 |
 | `cmd -->\|--discuss\| disc` | `src/cli.rs:116` | `discuss` 子命令独立组装 |
-| `cmd -->\|probe / prune / sessions\| maint` | `src/cli.rs:2881-2890` | 三条各自 `return` 自己的 `ExitCode` |
-| `setup --> sess` | `src/cli.rs:2964-2972` | `choose_session` 决定开哪一场 |
+| `cmd -->\|probe / prune / sessions\| maint` | `src/cli.rs:2891-2900` | 三条各自 `return` 自己的 `ExitCode` |
+| `setup --> sess` | `src/cli.rs:2974-2982` | `choose_session` 决定开哪一场 |
 | `setup --> render` | `src/cli.rs:327-372` | 渲染器在组装前选定并注入 |
 | `sess --> loop` | `src/cli.rs:446-459` | `interactive_loop(...)` 被调 |
 | `render --> loop` | `src/cli.rs:446-459` | 同上；两条入边是图 1 的有意合并 |
-| `loop --> route` | `src/cli.rs:1183` | 拿到一行后交给 `submission` |
-| `route -->\|一句提示\| turn` | `src/cli.rs:1297-1306`、`src/cli.rs:2033` | `Submission::Prompt` → `TurnStart::Prompt` |
-| `route -->\|/discuss\| disc` | `src/cli.rs:1244-1253` | 走 `discuss_in_session` |
-| `route -->\|/loop\| goal` | `src/cli.rs:1275-1295` | 走 `run_goal_loop` |
-| `route -->\|/quit 或空行\| tail` | `src/cli.rs:2262-2272` | `None` 与 `Quit` 都 `ExitCode::SUCCESS` |
-| `turn --> loop` | `src/cli.rs:1307` | 处理完回到循环顶 |
-| `disc --> loop` | `src/cli.rs:1307` | 讨论结束回到循环顶 |
-| `goal --> turn` | `src/cli.rs:1626` | 每回合边界用 `TurnStart::Injected` 驱动 |
-| `tail --> ok` | `src/cli.rs:1973-1978` | `exit_code_after(false)` |
-| `loop -->\|两下 Ctrl-C\| tail` | `src/cli.rs:1164-1168` | 空闲时收到 `Quit` |
-| `loop -->\|取消后收尾\| aborted` | `src/cli.rs:2044-2052`、`src/cli.rs:2278-2280` | 忙时先取消，回合收尾后兑现 130 |
+| `loop --> route` | `src/cli.rs:1195` | 拿到一行后交给 `submission` |
+| `route -->\|一句提示\| turn` | `src/cli.rs:1304-1313`、`src/cli.rs:2043` | `Submission::Prompt` → `TurnStart::Prompt` |
+| `route -->\|/discuss\| disc` | `src/cli.rs:1310-1315` | 走 `discuss_in_session` |
+| `route -->\|/loop\| goal` | `src/cli.rs:1282-1302` | 走 `run_goal_loop` |
+| `route -->\|/quit 或空行\| tail` | `src/cli.rs:2272-2282` | `None` 与 `Quit` 都 `ExitCode::SUCCESS` |
+| `turn --> loop` | `src/cli.rs:1314` | 处理完回到循环顶 |
+| `disc --> loop` | `src/cli.rs:1314` | 讨论结束回到循环顶 |
+| `goal --> turn` | `src/cli.rs:1633` | 每回合边界用 `TurnStart::Injected` 驱动 |
+| `tail --> ok` | `src/cli.rs:1983-1988` | `exit_code_after(false)` |
+| `loop -->\|两下 Ctrl-C\| tail` | `src/cli.rs:1176-1180` | 空闲时收到 `Quit` |
+| `loop -->\|取消后收尾\| aborted` | `src/cli.rs:2054-2062`、`src/cli.rs:2288-2290` | 忙时先取消，回合收尾后兑现 130 |
 
 ### 图 2 的节点
 
@@ -608,7 +608,7 @@ flowchart TD
 | `rt` | 多线程 tokio runtime，失败即退 | `src/cli.rs:89-102` | — |
 | `cmd` | 子命令分派 | `src/cli.rs:105-129` | `fn run` |
 | `parse` | 交互式参数解析，两渲染器互斥 | `src/cli.rs:161-219` | `fn parse_interactive` |
-| `cfg` | 显式 `--config` 必须存在，否则默认路径 | `src/cli.rs:2377-2383`、`src/cli.rs:2087-2100` | `fn load_config` |
+| `cfg` | 显式 `--config` 必须存在，否则默认路径 | `src/cli.rs:2387-2393`、`src/cli.rs:2097-2110` | `fn load_config` |
 | `red` | 每条 provider key 解析一次，打码器持全部值 | `src/config.rs:1188-1195`、`src/events.rs:611-630` | `fn redactor` |
 | `prov` | provider 装配 + 能力表（双保险） | `src/cli.rs:299-305`、`src/cli.rs:334-340`、`src/provider/openai.rs:101-127`、`src/provider/capability.rs:83` | `fn build`、`fn caps_for` |
 | `scfg` | `SessionConfig`：预算 · 迭代上限 · 沙箱 · 落点 | `src/cli.rs:306-312`、`src/config.rs:1170-1180` | `fn session_config` |
@@ -620,10 +620,10 @@ flowchart TD
 | `skel` | 新流：`SessionStarted` + 沙箱状态 + 钉住注入 | `src/lib.rs:366-386` | `fn record_skeleton` |
 | `resume` | 续流：补记沙箱状态 · 收尾悬空 `tool_call` · 重放历史 | `src/lib.rs:330-345`、`src/agent/history.rs:40-61`、`src/cli.rs:417-419` | `fn start`、`fn recover_pending_calls` |
 | `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:1993` | `fn banner` |
-| `loop` | 主循环 | `src/cli.rs:1102-1313` | `fn interactive_loop` |
+| `loop` | 主循环 | `src/cli.rs:1102-1320` | `fn interactive_loop` |
 | `quit` | 排空渲染通道，然后 stderr 打续接回执 | `src/cli.rs:511-525`、`src/lib.rs:1167-1170` | `fn finish_session`、`fn drain_renderer` |
-| `ok` | 退出 0 | `src/cli.rs:2262-2272`、`src/cli.rs:1973-1978` | `fn exit_code_after` |
-| `cc` | 退出 130：忙时第一下取消、第二下记 `ExitRequest` | `src/cli.rs:2278-2305`、`src/cli.rs:2044-2052` | `struct ExitRequest` |
+| `ok` | 退出 0 | `src/cli.rs:2272-2282`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
+| `cc` | 退出 130：忙时第一下取消、第二下记 `ExitRequest` | `src/cli.rs:2288-2315`、`src/cli.rs:2054-2062` | `struct ExitRequest` |
 | `panic` | TUI 的 panic 钩子 + `Drop` 还原终端（见 §3 正文） | `src/render/tui.rs:586-623`、`src/render/tui.rs:470-471` | `struct TerminalModes` |
 
 ### 图 2 的边
@@ -650,9 +650,9 @@ flowchart TD
 | `skel --> banner` | `src/cli.rs:417-429` | 骨架先于横幅 |
 | `resume --> banner` | `src/cli.rs:417-429` | 重放先于横幅 |
 | `banner --> loop` | `src/cli.rs:446-459` | 进主循环 |
-| `loop -->\|/quit 或空行\| quit` | `src/cli.rs:2262-2272`、`src/cli.rs:462` | `harness.shutdown()` |
-| `loop -->\|忙碌时两下 Ctrl-C\| cc` | `src/cli.rs:2044-2052` | 先等回合收尾，再兑现 130 |
-| `quit --> ok` | `src/cli.rs:1973-1978` | `finish_session` 原样返回 `code` |
+| `loop -->\|/quit 或空行\| quit` | `src/cli.rs:2272-2282`、`src/cli.rs:462` | `harness.shutdown()` |
+| `loop -->\|忙碌时两下 Ctrl-C\| cc` | `src/cli.rs:2054-2062` | 先等回合收尾，再兑现 130 |
+| `quit --> ok` | `src/cli.rs:1983-1988` | `finish_session` 原样返回 `code` |
 
 ### 图 3 的参与者
 
@@ -661,8 +661,8 @@ flowchart TD
 
 | 参与者 | 一句话 | 证据 | 符号 |
 | --- | --- | --- | --- |
-| `human` | 键盘：提示、手势、权限询问与用户提问共用同一个终端端口 | `src/render/input.rs:127-140`、`src/render/input.rs:205-215` | `struct ConsoleHandle`、`fn console` |
-| `core` | 循环：驱动回合、盯手势 | `src/cli.rs:1102-1313`、`src/cli.rs:2023-2053`、`src/lib.rs:667-682` | `fn run_one_turn`、`fn drive_turn` |
+| `human` | 键盘：提示、手势、权限询问与用户提问共用同一个终端端口 | `src/render/input.rs:162-175`、`src/render/input.rs:240-250` | `struct ConsoleHandle`、`fn console` |
+| `core` | 循环：驱动回合、盯手势 | `src/cli.rs:1102-1320`、`src/cli.rs:2033-2063`、`src/lib.rs:667-682` | `fn run_one_turn`、`fn drive_turn` |
 | `prov` | provider：请求、流式返回 | `src/provider/mod.rs:34-42` | `trait Provider` |
 | `gate` | 权限门：纯函数裁决 + 询问往返（抽象参与者，见 §4） | `src/permissions.rs:530-640`、`src/agent.rs:1841-1998` | `fn decide`、`fn authorize` |
 | `tools` | 工具表：锁与派发 | `src/tools/registry.rs:170-216` | `fn dispatch` |
@@ -671,7 +671,7 @@ flowchart TD
 
 | 消息 | 证据 | 说明 |
 | --- | --- | --- |
-| `human->>core: 一句提示` | `src/render/input.rs:133`、`src/cli.rs:1158-1160` | `console.prompt()` |
+| `human->>core: 一句提示` | `src/render/input.rs:168`、`src/cli.rs:1170-1172` | `console.prompt()` |
 | `core->>core: cancel.reset()` | `src/lib.rs:667-672` | 手势范围限一次运行 |
 | `core->>core: 挂着的 tool_call？→ TurnEnded` | `src/agent.rs:478-480` | 守卫，不变量 2，直接 `StopReason::Error` |
 | `core->>core: 预算 / 迭代上限 / 取消 三处预检` | `src/agent.rs:484-521` | 顺序是取消 → 预算 → 迭代上限 |
@@ -685,7 +685,7 @@ flowchart TD
 | `core->>core: MessageCompleted 落流` | `src/agent.rs:679-690` | — |
 | `Note over core: 固定顺序` | `src/agent.rs:1-7`、`src/hooks.rs:99`、`src/agent.rs:896-1131` | `hook.pre` / `hook.post` 在 CLI 下恒不发生，见 §4 |
 | `core->>gate: 权限门 + 钩子约束取上确界` | `src/agent.rs:1890-1899`、`src/hooks.rs:99` | `Allow < Ask < Deny` |
-| `gate->>human: Ask 时问一次` | `src/agent.rs:1904-1954`、`src/permissions.rs:974-1012`、`src/render/input.rs:251` | 没有 asker 则降级 `Deny` |
+| `gate->>human: Ask 时问一次` | `src/agent.rs:1904-1954`、`src/permissions.rs:974-1012`、`src/render/input.rs:286` | 没有 asker 则降级 `Deny` |
 | `human-->>gate: 允许 / 总是允许 / 拒绝` | `src/agent.rs:1954-1995`、`src/permissions.rs:996-1004` | `Answer` 三值 |
 | `gate-->>core: 裁决` | `src/agent.rs:1890-1899` | 与钩子约束取上确界之后 |
 | `core->>tools: dispatch（工作区锁 → 路径锁）` | `src/agent.rs:1078-1112`、`src/tools/registry.rs:178-185` | — |
@@ -749,17 +749,17 @@ flowchart TD
 | `rlog` | `render.logged`：广播通道 | `src/render/mod.rs:147-191` | `fn logged` |
 | `tui` | 渲染器 TUI | `src/cli.rs:353-361`、`src/render/mod.rs:245`、`src/render/mod.rs:231-234` | `fn tui` |
 | `plain` | 渲染器 plain | `src/cli.rs:364-371`、`src/render/mod.rs:241`、`src/render/mod.rs:227-230` | `fn plain` |
-| `headless` | 渲染器 headless（生产组装点只有 `probe`，见 §6） | `src/render/mod.rs:237`、`src/render/mod.rs:223-226`、`src/cli.rs:2238` | `fn headless` |
+| `headless` | 渲染器 headless（生产组装点只有 `probe`，见 §6） | `src/render/mod.rs:237`、`src/render/mod.rs:223-226`、`src/cli.rs:2248` | `fn headless` |
 | `proj` | `project`：纯函数 → `messages` | `src/provider/projection.rs:46` | `fn project` |
 | `trim` | `trim`：纯函数，只读、不删日志 | `src/context.rs:138-180` | `fn trim` |
 | `req` | provider 请求 | `src/agent.rs:562-569` | — |
 | `cont` | `--continue`：补骨架之外的状态 | `src/lib.rs:244-252`、`src/lib.rs:330-345`、`src/cli.rs:417-419` | `fn start` |
-| `replay` | `sessions replay`：同一 `build_messages` 重算 | `src/agent/replay.rs:55-85`、`src/cli.rs:2870` | `fn replay` |
-| `goal` | `/loop`：每回合边界重算进度 | `src/cli.rs:1835-1915`、`src/lib.rs:838-845`、`src/lib.rs:880-912` | `fn run_goal_loop`、`fn compact_and_rollover` |
+| `replay` | `sessions replay`：同一 `build_messages` 重算 | `src/agent/replay.rs:55-85`、`src/cli.rs:2880` | `fn replay` |
+| `goal` | `/loop`：每回合边界重算进度 | `src/cli.rs:1845-1925`、`src/lib.rs:838-845`、`src/lib.rs:880-912` | `fn run_goal_loop`、`fn compact_and_rollover` |
 | `compact` | 压缩 + 翻页：一个动作，成对发生 | `src/lib.rs:880-890`、`src/lib.rs:923-929` | `fn compact` |
-| `ask` | 询问 Ask：harness 发起，答案是闸门 | `src/permissions.rs:974-1012`、`src/render/input.rs:223-256` | `trait Asker` |
-| `uq` | 用户提问：模型发起，答案是上下文 | `src/questions.rs:70-78`、`src/render/input.rs:259-300`、`src/tools/ask_user.rs:201-220` | `trait UserQuestions` |
-| `console` | 终端端口 Console：同一个键盘 | `src/render/input.rs:205-215` | `fn console` |
+| `ask` | 询问 Ask：harness 发起，答案是闸门 | `src/permissions.rs:974-1012`、`src/render/input.rs:258-291` | `trait Asker` |
+| `uq` | 用户提问：模型发起，答案是上下文 | `src/questions.rs:70-78`、`src/render/input.rs:294-335`、`src/tools/ask_user.rs:201-220` | `trait UserQuestions` |
+| `console` | 终端端口 Console：同一个键盘 | `src/render/input.rs:240-250` | `fn console` |
 
 ### 图 5 的边
 
@@ -773,14 +773,14 @@ flowchart TD
 | `proj --> trim` | `src/agent.rs:535-542` | 两个纯函数，串联 |
 | `trim --> req` | `src/agent.rs:562-569` | — |
 | `disk --> cont` | `src/lib.rs:244-252` | 由「日志里有没有 `SessionStarted`」判定 |
-| `disk --> replay` | `src/cli.rs:2870` | 从会话目录读回 |
+| `disk --> replay` | `src/cli.rs:2880` | 从会话目录读回 |
 | `cont --> proj` | `src/agent.rs:181-205` | 与 `replay` 走同一个 `build_messages` |
 | `replay --> proj` | `src/agent/replay.rs:80-85` | 同上 |
-| `goal -->\|过阈值\| compact` | `src/cli.rs:1711-1716`、`src/goals.rs:629-640` | 只在回合边界判 |
-| `compact --> goal` | `src/cli.rs:1745-1762` | 重新认领目标、重摆清单、额度不重置 |
-| `ask --> console` | `src/render/input.rs:251` | `ConsoleAsker` |
-| `uq --> console` | `src/render/input.rs:278` | `ConsoleQuestions`（第三类发起者，不扩展 `Asker`） |
-| `console --> emit` | `src/render/input.rs:133`、`src/cli.rs:1158-1160` | 提示经循环变成 `user` 消息 |
+| `goal -->\|过阈值\| compact` | `src/cli.rs:1721-1726`、`src/goals.rs:629-640` | 只在回合边界判 |
+| `compact --> goal` | `src/cli.rs:1755-1772` | 重新认领目标、重摆清单、额度不重置 |
+| `ask --> console` | `src/render/input.rs:286` | `ConsoleAsker` |
+| `uq --> console` | `src/render/input.rs:313` | `ConsoleQuestions`（第三类发起者，不扩展 `Asker`） |
+| `console --> emit` | `src/render/input.rs:168`、`src/cli.rs:1170-1172` | 提示经循环变成 `user` 消息 |
 | `rlog --> tui` | `src/render/mod.rs:230-245` | 一个进程恰好一个渲染器 |
 | `rlog --> plain` | `src/render/mod.rs:230-245` | 同上 |
 | `rlog --> headless` | `src/render/mod.rs:230-245` | 同上；生产组装点只有 `probe` |

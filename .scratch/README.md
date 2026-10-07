@@ -55,7 +55,7 @@
 | [`file-read-window/`](file-read-window/spec.md) | spec | `read_file` 的读窗口：`offset`（行号）/ `limit`（行数），默认封顶 2000 行 + 续读提示；越界报「文件只有 N 行」；读一段后 `edit_file` 照常放行 | 1/1 done |
 | [`trace-thought-stamp/`](trace-thought-stamp/spec.md) | spec | 轨迹页里「… 正在思考」那一行也有时间戳（开始那一刻，定稿时换成完成时刻） | 1/1 done |
 | [`trace-usage-tail/`](trace-usage-tail/spec.md) | spec | **用量不再是独立一行**：它长在产生它的那次模型调用的行尾（`in=… out=…`），一次发言跨 ≥2 次调用时收尾那一行多一条 `合计`；顺手修掉两处既有错位（[ADR 0016](../docs/adr/0016-usage-rides-the-row-of-its-call.md)） | 2 done + 1 walkthrough |
-| [`tui-feedback/`](tui-feedback/spec.md) | spec | 真机走查后的五条：提示行回到输入框下（只跨主列，推翻 `tui-visual-language` §16）、消息的名字行不再是详情入口、推荐标记约定改中文 `(推荐)`（旧 `(Recommended)` 仍认）、`@` 候选改分段匹配（`cli` 找得到 `src/cli.rs`）、鼠标拖选 + OSC 52 复制（按区域取行、软折拼回）；随后两条真机反馈又补上拖选的手感（门槛两格、反白只铺到文字）与 `Shift+Enter` 换行 | 8/8 done |
+| [`tui-feedback/`](tui-feedback/spec.md) | spec | 真机走查后的五条：提示行回到输入框下（只跨主列，推翻 `tui-visual-language` §16）、消息的名字行不再是详情入口、推荐标记约定改中文 `(推荐)`（旧 `(Recommended)` 仍认）、`@` 候选改分段匹配（`cli` 找得到 `src/cli.rs`）、鼠标拖选 + OSC 52 复制（按区域取行、软折拼回）；随后两条真机反馈又补上拖选的手感（门槛两格、反白只铺到文字）与 `Shift+Enter` 换行 | 9/9 done |
 | [`files-page/`](files-page/spec.md) | map + spec | 左栏「文件」页：工作区文件树（与 `@` 同源的那份索引、同层目录在前）、键盘焦点行与插 `@路径`、文件内容弹窗（直接读盘 + 高亮 + 行号）、非只读调用之后重扫 —— 2026-10-06 由 22 问的 charting 折成 spec，六张实现票同日落地、2026-10-07 收口 | 4 resolved + 6 done |
 | [`todo-page/`](todo-page/seed.md) | seed | 左栏 `todo` 页的呈现：进度行（`3/11 1个正在进行` / `11/11 完成`）、样式、进度行上的按钮点开详情弹窗看完整列表（长文本折行，不截断） | — |
 | [`nvim-file-viewer/`](nvim-file-viewer/spec.md) | spec | **文件查看器**：`[ui] file_viewer = "nvim"` 时内容弹窗换成一屏真 nvim（只读、不折行、去框留白、键盘独占、`Ctrl-C` 或框外点击关）—— 先在 `prototype/embed-nvim` 分支上验完三问再落地（[ADR 0013](../docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)） | 1/1 done |

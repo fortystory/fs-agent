@@ -54,7 +54,7 @@ use crate::events::{Event, SpeakerId};
 
 pub use headless::Headless;
 pub use input::{
-    AskRequest, CatalogEntry, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsolePort,
+    AskRequest, CatalogEntry, CatalogKind, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsolePort,
     ConsoleQuestions, ConsoleRequest, FrontEndEvent, LineReader, QuestionnaireRequest, console,
     spawn_plain_console, spawn_plain_console_with,
 };
