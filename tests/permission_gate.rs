@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use heng::events::{Decision, ParticipantId, SpeakerId};
 use heng::permissions::{
-    decide, Call, Escalation, Mode, PathError, Policy, Rule, Scope, Subject, Verdict,
+    Call, Escalation, Mode, PathError, Policy, Rule, Scope, Subject, Verdict, decide,
 };
 use heng::tools::{Effect, ToolError};
 

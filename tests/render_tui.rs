@@ -6,14 +6,14 @@
 
 use heng::config::FileViewerSettings;
 use heng::events::{
-    hook_format, Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason,
-    ToolCallId,
+    Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId,
+    hook_format,
 };
 use heng::permissions::{Answer, PermissionRequest};
 use heng::render::palette;
 use heng::render::{
-    pane, render_block_uncoloured, AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent,
-    Key, RenderEvent, SessionFacts, ToolBlock, ToolOutcome, Transcript, TuiState,
+    AskRequest, Block, ConsoleRequest, DeltaKind, FrontEndEvent, Key, RenderEvent, SessionFacts,
+    ToolBlock, ToolOutcome, Transcript, TuiState, pane, render_block_uncoloured,
 };
 use ratatui::style::{Color, Modifier};
 
@@ -530,7 +530,7 @@ fn a_completed_turn_and_an_aborted_one_render_in_different_colors() {
 
 #[test]
 fn a_speakers_name_is_drawn_in_its_role_colour() {
-    use heng::render::{render_block, SpeakerColors};
+    use heng::render::{SpeakerColors, render_block};
 
     let name = |blocks: Vec<Block>, roster: &[&str]| {
         let roster: Vec<String> = roster.iter().map(|name| (*name).to_owned()).collect();

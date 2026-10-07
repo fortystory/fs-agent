@@ -12,13 +12,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use heng::config::{McpServerConfig, McpSettings};
-use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId};
+use heng::events::{Decision, Event, EventPayload, SessionId, SpeakerId, read_events};
 use heng::mcp::{McpConnection, McpError, McpService, ServerManifest, ToolSummary};
 use heng::permissions::{Asker, Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, with_mcp, MCP_LIST_TOOL};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::tools::{MCP_LIST_TOOL, builtin, with_mcp};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 

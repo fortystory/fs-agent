@@ -181,7 +181,7 @@ impl TodoTool {
                     return Err(ToolError::message(format!(
                         "{TODO_TOOL}：第 {index} 项需要一个 `status`，取 `pending`、\
                          `in_progress` 或 `completed`"
-                    )))
+                    )));
                 }
             };
             items.push(Item {

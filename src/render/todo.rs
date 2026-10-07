@@ -16,7 +16,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use crate::events::SpeakerId;
-use crate::tools::todo::{read_items, Item, TODO_TOOL};
+use crate::tools::todo::{Item, TODO_TOOL, read_items};
 
 use super::transcript::Block;
 use super::width::truncate_columns;

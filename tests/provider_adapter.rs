@@ -6,12 +6,12 @@
 
 use std::time::Duration;
 
-use heng::config::{resolve, EnvMap, ReasoningEffort, BUILTIN_MODELS};
+use heng::config::{BUILTIN_MODELS, EnvMap, ReasoningEffort, resolve};
 use heng::events::Usage;
-use heng::provider::capability::{caps_for, ModelCaps, KNOWN_MODELS};
+use heng::provider::capability::{KNOWN_MODELS, ModelCaps, caps_for};
 use heng::provider::openai::{
-    build_body, chat_completions_url, classify_status, normalize_usage, parse_retry_after,
-    retry_delay, silent_warnings, BuildError, OpenAiProvider, RetryPolicy, StreamDecoder,
+    BuildError, OpenAiProvider, RetryPolicy, StreamDecoder, build_body, chat_completions_url,
+    classify_status, normalize_usage, parse_retry_after, retry_delay, silent_warnings,
 };
 use heng::provider::{
     ChatRequest, FinishReason, GenerationParams, Message, Provider, ProviderError, StreamEvent,
@@ -191,9 +191,11 @@ fn parameters_a_model_does_not_support_are_dropped_with_a_warning() {
     assert!(body.get("temperature").is_none(), "{body}");
     assert!(body.get("top_p").is_none(), "{body}");
     assert_eq!(warnings.len(), 2, "{warnings:?}");
-    assert!(warnings
-        .iter()
-        .any(|warning| warning.contains("temperature")));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("temperature"))
+    );
     assert!(warnings.iter().any(|warning| warning.contains("top_p")));
 }
 

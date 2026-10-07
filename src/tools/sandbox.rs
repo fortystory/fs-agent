@@ -19,8 +19,7 @@ use super::tool::ToolError;
 pub const BWRAP: &str = "bwrap";
 
 /// 探测失败时给出的两条出路（沙箱 spec §3）。
-pub const WAYS_OUT: &str =
-    "装一个 bubblewrap（让 `bwrap` 出现在 PATH 上），或者把 `[sandbox] mode` 设成 \"off\" \
+pub const WAYS_OUT: &str = "装一个 bubblewrap（让 `bwrap` 出现在 PATH 上），或者把 `[sandbox] mode` 设成 \"off\" \
      显式放弃这一层";
 
 /// 探测跑的那条最小 profile（沙箱 spec §3）。

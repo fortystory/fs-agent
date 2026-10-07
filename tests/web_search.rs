@@ -11,18 +11,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use heng::agent::{agent_identity, WEB_GUIDANCE};
+use heng::agent::{WEB_GUIDANCE, agent_identity};
 use heng::config::{SessionConfig, WebSettings};
 use heng::discussion::{debater_identity, synthesizer_identity};
 use heng::events::{
-    read_events, Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId,
+    Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId, read_events,
 };
 use heng::permissions::{Answer, Asker, Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, with_web, WEB_SEARCH_TOOL};
+use heng::tools::{WEB_SEARCH_TOOL, builtin, with_web};
 use heng::web::{SearchProvider, Source, WebError, WebService};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 // --- 假的搜索后端 ---------------------------------------------------------

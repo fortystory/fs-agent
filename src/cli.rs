@@ -20,17 +20,17 @@ use std::sync::Arc;
 
 use ratatui::buffer::CellWidth;
 
-use crate::agent::{replay, CancelSignal};
+use crate::agent::{CancelSignal, replay};
 use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
 use crate::events::{
-    read_events, total_usage, ContextSource, Event, EventPayload, SessionId, SpeakerId, StopReason,
-    Usage,
+    ContextSource, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage, read_events,
+    total_usage,
 };
 use crate::mcp::{self, McpService};
 use crate::permissions::{Mode, Policy};
-use crate::provider::capability::caps_for;
-use crate::provider::openai::{stderr_warnings, BuildError, OpenAiProvider};
 use crate::provider::Message;
+use crate::provider::capability::caps_for;
+use crate::provider::openai::{BuildError, OpenAiProvider, stderr_warnings};
 use crate::questions::{UserQuestion, UserQuestions};
 use crate::render::token::{self, Token};
 use crate::render::{
@@ -40,12 +40,12 @@ use crate::render::{
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
 use crate::tools::{self, PathLocks, Sandbox};
-use crate::web::fetch_http::HttpFetch;
-use crate::web::search_deepseek::{DeepSeekSearch, DEEPSEEK_SEARCH_PROVIDER};
 use crate::web::WebService;
+use crate::web::fetch_http::HttpFetch;
+use crate::web::search_deepseek::{DEEPSEEK_SEARCH_PROVIDER, DeepSeekSearch};
 use crate::{
-    assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
-    Harness, SessionScaffold, SynthesizerParts,
+    AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts, Harness, SessionScaffold,
+    SynthesizerParts, assemble, assemble_discussion,
 };
 
 /// 探针第二个回合的提示词；它让转录继续变长，好让第一个回合的前缀成为缓存必须匹配的那些内容。
@@ -563,7 +563,7 @@ fn parse_discuss(args: &[String]) -> Result<DiscussArgs, String> {
                 break;
             }
             other if other.starts_with("--") => {
-                return Err(render::wording::unknown_argument(other))
+                return Err(render::wording::unknown_argument(other));
             }
             other => parsed.words.push(other.to_owned()),
         }
@@ -841,7 +841,7 @@ fn parse_discuss_line(text: &str) -> Result<DiscussLine, String> {
                         return Ok(DiscussLine {
                             debaters: Some(split_names(tail)?),
                             question: String::new(),
-                        })
+                        });
                     }
                 }
             }
@@ -849,16 +849,16 @@ fn parse_discuss_line(text: &str) -> Result<DiscussLine, String> {
                 return Ok(DiscussLine {
                     debaters,
                     question: tail.trim_start().to_owned(),
-                })
+                });
             }
             other if other.starts_with("--") => {
-                return Err(render::wording::unknown_argument(other))
+                return Err(render::wording::unknown_argument(other));
             }
             _ => {
                 return Ok(DiscussLine {
                     debaters,
                     question: rest.to_owned(),
-                })
+                });
             }
         }
     }
@@ -2486,7 +2486,7 @@ async fn probe_model(
         Err(BuildError::MissingKey { hint, .. }) => {
             return Err(ProbeError::Skipped(format!(
                 "没有 API key（请 export {hint}）"
-            )))
+            )));
         }
         Err(error) => return Err(ProbeError::failed(error)),
     };
@@ -2863,7 +2863,7 @@ fn parse_sessions(args: &[String]) -> Result<SessionsArgs, String> {
                 }
             }
             other if other.starts_with('-') => {
-                return Err(render::wording::unknown_argument(other))
+                return Err(render::wording::unknown_argument(other));
             }
             other if parsed.verb.is_empty() => parsed.verb = other.to_owned(),
             other if parsed.id.is_none() => parsed.id = Some(other.to_owned()),
@@ -3643,7 +3643,7 @@ fn print_sessions_help(out: &mut dyn Write) {
 #[cfg(test)]
 mod tests {
     use super::{
-        exit_code_after, finish_session, submission, ExitRequest, McpPromptEntry, Mode, Submission,
+        ExitRequest, McpPromptEntry, Mode, Submission, exit_code_after, finish_session, submission,
     };
     use crate::agent::CancelSignal;
     use crate::render::FrontEndEvent;
@@ -4024,7 +4024,7 @@ mod tests {
     fn the_continue_flag_parses_both_spellings_and_defaults_to_off() {
         // `.scratch/exit-gesture/spec.md` 的「补充说明」点名要补的两条缺口之一：`exit(130)` 那条
         // 路径与 `--continue` 的旗标解析（这里的 `mod tests` 原先只测过 `--mode`）。
-        use super::{parse_interactive, Resume};
+        use super::{Resume, parse_interactive};
 
         let args = |words: &[&str]| {
             parse_interactive(
@@ -4052,7 +4052,7 @@ mod tests {
     fn a_session_is_named_by_id_or_by_its_directory() {
         // `heng -c 20261001T155845Z-7a69cbff`：`-c` / `--continue` 后面跟一个不以 `-` 开头
         // 的词就是**指名**续哪一场；`--session <id>` 是同一个意思的显式拼写。
-        use super::{parse_interactive, Resume};
+        use super::{Resume, parse_interactive};
 
         let args = |words: &[&str]| {
             parse_interactive(
@@ -4114,8 +4114,8 @@ mod tests {
     fn opening_a_session_is_newest_named_or_fresh() {
         // `choose_session` 是 `-c` 三种含义的**唯一**决定处：新开、续本工作区最新那场、按 id 续
         // 指名的那场（先本桶、再全 store，命中别处时工作目录跟着那场会话走）。
-        use super::{choose_session, Resume};
-        use crate::events::{Event, EventPayload, SpeakerId, SCHEMA_VERSION};
+        use super::{Resume, choose_session};
+        use crate::events::{Event, EventPayload, SCHEMA_VERSION, SpeakerId};
         use crate::session::SessionStore;
 
         let dir = tempfile::tempdir().unwrap();
@@ -4191,7 +4191,7 @@ mod tests {
 
     #[test]
     fn the_mode_flag_overrides_the_configuration_and_its_absence_does_not() {
-        use super::{effective_mode, InteractiveArgs};
+        use super::{InteractiveArgs, effective_mode};
 
         // 那一条入口点规则的两个方向：旗标设了就根本不看文件，没设时文件正是这场会话开始于的那一档
         // （`.scratch/todo-and-modes/spec.md` §1）。
@@ -4334,9 +4334,11 @@ mod tests {
         let after = parse_discuss_line("-- --看起来像参数的题目").unwrap();
         assert_eq!(after.question, "--看起来像参数的题目");
 
-        assert!(parse_discuss_line("--nope x")
-            .unwrap_err()
-            .contains("--nope"));
+        assert!(
+            parse_discuss_line("--nope x")
+                .unwrap_err()
+                .contains("--nope")
+        );
         assert!(split_names("保守").unwrap_err().contains("两个名字"));
         assert_eq!(
             split_names("保守, 激进").unwrap(),
@@ -4350,14 +4352,16 @@ mod tests {
         let parsed = discuss_args(&["--debaters", "保守,激进", "问题"]).unwrap();
         assert_eq!(parsed.debaters.unwrap(), ["保守", "激进"]);
         assert_eq!(parsed.words, vec!["问题".to_owned()]);
-        assert!(discuss_args(&["--debaters", "只有一个", "问题"])
-            .unwrap_err()
-            .contains("两个名字"));
+        assert!(
+            discuss_args(&["--debaters", "只有一个", "问题"])
+                .unwrap_err()
+                .contains("两个名字")
+        );
     }
 
     // --- 讨论的参数（spec §15） ----------------------------------------------
 
-    use super::{parse_discuss, question, DiscussArgs};
+    use super::{DiscussArgs, parse_discuss, question};
 
     fn discuss_args(args: &[&str]) -> Result<DiscussArgs, String> {
         parse_discuss(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
@@ -4390,18 +4394,24 @@ mod tests {
     #[test]
     fn a_discussion_rejects_what_it_cannot_honour() {
         // 两个渲染器，一个进程。
-        assert!(discuss_args(&["--plain", "--tui", "q"])
-            .unwrap_err()
-            .contains("互斥"));
+        assert!(
+            discuss_args(&["--plain", "--tui", "q"])
+                .unwrap_err()
+                .contains("互斥")
+        );
         // 一个不存在的旗标，以及一个缺了值的旗标。
-        assert!(discuss_args(&["--model", "kimi-k3"])
-            .unwrap_err()
-            .contains("--model"));
+        assert!(
+            discuss_args(&["--model", "kimi-k3"])
+                .unwrap_err()
+                .contains("--model")
+        );
         assert!(discuss_args(&["--cwd"]).unwrap_err().contains("--cwd"));
         // 没有 `--continue`：一场讨论是一个问题、一个 harness。
-        assert!(discuss_args(&["--continue"])
-            .unwrap_err()
-            .contains("--continue"));
+        assert!(
+            discuss_args(&["--continue"])
+                .unwrap_err()
+                .contains("--continue")
+        );
     }
 
     #[test]
@@ -4412,7 +4422,7 @@ mod tests {
 
     // --- `/goal-new`（`.scratch/goal-loop/spec.md` §2） -----------------------
 
-    use super::{parse_goal_new_line, GoalNewLine};
+    use super::{GoalNewLine, parse_goal_new_line};
 
     #[test]
     fn goal_new_is_one_hyphenated_command_taking_a_name_and_a_source() {
@@ -4512,14 +4522,14 @@ mod tests {
     async fn an_ask_mode_session_refuses_a_goal_loop_before_writing_anything() {
         // 票 06 的 e2e：`ask` 档下 `/loop` 拒绝，而**流上没有** `GoalSelected` —— 拒绝发生在写
         // 任何事件之前。走的是**组装入口 + 假 provider**，也就是 spec 说的那条接缝。
-        use super::{run_goal_loop, GoalSetup};
+        use super::{GoalSetup, run_goal_loop};
         use crate::config::SessionConfig;
         use crate::events::{EventPayload, SpeakerId};
         use crate::permissions::Policy;
         use crate::render::{RenderSinks, Renderer};
         use crate::session::SessionStore;
         use crate::tools::{self, PathLocks};
-        use crate::{assemble, AssemblyParts, SessionScaffold};
+        use crate::{AssemblyParts, SessionScaffold, assemble};
 
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().join("workspace");
@@ -4598,14 +4608,14 @@ mod tests {
         // 另一半 e2e：档位够了就真的启动 —— 归属落流、清单注入，然后跑一个回合。provider 这里
         // 每一次都失败，而 `provider_retries = 0` 让循环当场停下（不睡那两次重试），于是这条
         // 用例既证明「能启动」，也把「provider 失败 → 停下 + 收尾事件」走了一遍。
-        use super::{run_goal_loop, GoalSetup};
+        use super::{GoalSetup, run_goal_loop};
         use crate::config::SessionConfig;
         use crate::events::{EventPayload, SpeakerId};
         use crate::permissions::Policy;
         use crate::render::{RenderSinks, Renderer};
         use crate::session::SessionStore;
         use crate::tools::{self, PathLocks};
-        use crate::{assemble, AssemblyParts, SessionScaffold};
+        use crate::{AssemblyParts, SessionScaffold, assemble};
 
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().join("workspace");
@@ -4700,16 +4710,16 @@ mod tests {
         // 这里钉的是它算对了：预造一条「已经认领目标、且已把 01 标完成」的流，再让额度为 0 ——
         // 循环在第一个回合开头就撞顶，报告不许再把 01 列成「还卡着」（它第一次真机跑出来时正是
         // 这么误导的：11 条全列上，而 01、02 其实已经做完）。
-        use super::{run_goal_loop, GoalSetup};
+        use super::{GoalSetup, run_goal_loop};
         use crate::config::SessionConfig;
         use crate::events::{
-            Event, EventPayload, GoalStopReason, SpeakerId, ToolCallId, SCHEMA_VERSION,
+            Event, EventPayload, GoalStopReason, SCHEMA_VERSION, SpeakerId, ToolCallId,
         };
         use crate::permissions::Policy;
         use crate::render::{RenderSinks, Renderer};
         use crate::session::SessionStore;
         use crate::tools::{self, PathLocks};
-        use crate::{assemble, AssemblyParts, SessionScaffold};
+        use crate::{AssemblyParts, SessionScaffold, assemble};
 
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().join("workspace");

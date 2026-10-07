@@ -7,11 +7,11 @@
 
 use heng::config::{PriceTable, Pricing};
 use heng::events::{
-    Decision, DecisionSource, EventLog, EventPayload, ParticipantId, Role, RoundMode, SessionId,
-    SpeakerId, StopReason, ToolCallId, Usage, SCHEMA_VERSION,
+    Decision, DecisionSource, EventLog, EventPayload, ParticipantId, Role, RoundMode,
+    SCHEMA_VERSION, SessionId, SpeakerId, StopReason, ToolCallId, Usage,
 };
-use heng::session::observe::{self, CostModel, Entry, Filter};
 use heng::session::SessionStore;
+use heng::session::observe::{self, CostModel, Entry, Filter};
 use heng::tools::edit::EditError;
 use heng::tools::{MATCH_LEVEL_PREFIX, READ_BEFORE_WRITE_PREFIX, WROTE_PATH_PREFIX};
 
@@ -190,10 +190,12 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
 
     let prelude = &timeline.groups[0];
     assert_eq!(prelude.round, None);
-    assert!(prelude
-        .entries
-        .iter()
-        .any(|entry| matches!(entry, Entry::Message { text, .. } if text == "怎么共享状态？")));
+    assert!(
+        prelude
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Message { text, .. } if text == "怎么共享状态？"))
+    );
 
     let round = &timeline.groups[1];
     assert_eq!(round.round, Some(1));
@@ -279,11 +281,13 @@ fn a_filter_keeps_only_what_it_names() {
         speaker: Some(kimi()),
         ..Filter::default()
     });
-    assert!(by_speaker
-        .groups
-        .iter()
-        .flat_map(|group| &group.entries)
-        .all(|entry| entry.speaker() == Some(&kimi()) || entry.speaker().is_none()));
+    assert!(
+        by_speaker
+            .groups
+            .iter()
+            .flat_map(|group| &group.entries)
+            .all(|entry| entry.speaker() == Some(&kimi()) || entry.speaker().is_none())
+    );
 
     let by_tool = timeline.filtered(&Filter {
         tool: Some("read_file".to_owned()),
@@ -668,9 +672,11 @@ fn a_view_serializes_to_json_a_pipeline_can_read() {
 fn an_empty_filter_is_recognized() {
     let filter = Filter::default();
     assert!(filter.is_empty());
-    assert!(!Filter {
-        only_error: true,
-        ..Filter::default()
-    }
-    .is_empty());
+    assert!(
+        !Filter {
+            only_error: true,
+            ..Filter::default()
+        }
+        .is_empty()
+    );
 }

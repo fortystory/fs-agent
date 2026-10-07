@@ -17,13 +17,13 @@ use std::sync::Arc;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    read_events, Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId,
+    Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId, read_events,
 };
 use heng::permissions::{Answer, Asker, Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, Effect, GREP_TOOL, MAX_MATCHES};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::tools::{Effect, GREP_TOOL, MAX_MATCHES, builtin};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 /// 一次工具调用的脚本化回复。

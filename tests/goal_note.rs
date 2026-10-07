@@ -9,15 +9,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use heng::config::SessionConfig;
-use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::events::{Event, EventPayload, SessionId, SpeakerId, StopReason, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::goal_note::{read_notes, GOAL_NOTE_TOOL};
+use heng::tools::goal_note::{GOAL_NOTE_TOOL, read_notes};
 use heng::tools::{
-    builtin, BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths,
+    BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths, builtin,
 };
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -74,7 +74,7 @@ impl Fixture {
         {
             heng::tools::GuardedCall::Run(allowed) => allowed,
             heng::tools::GuardedCall::Refused(error) => {
-                return heng::tools::DispatchOutcome::failure(error, false)
+                return heng::tools::DispatchOutcome::failure(error, false);
             }
         };
         read_set.record_all(allowed.read_paths.iter().cloned());
@@ -295,9 +295,11 @@ async fn one_call_gets_exactly_one_result_and_the_arguments_are_the_truth() {
     );
 
     // 不为它新增任何事件：这条流上多出来的只有那两条 `tool_call`。
-    assert!(events
-        .iter()
-        .all(|event| !matches!(event.payload, EventPayload::ContextInjected { .. })));
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event.payload, EventPayload::ContextInjected { .. }))
+    );
 
     session.harness.shutdown().await;
 }

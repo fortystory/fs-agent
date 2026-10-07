@@ -12,7 +12,7 @@
 use std::io::{BufRead, Write};
 
 use chrono::{DateTime, Datelike, Local, TimeZone, Weekday};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 只认这一个版本，与 client 侧固定 `ClientLifecycleMode::Discover` 是同一条纪律。
 const PROTOCOL_VERSION: &str = "2026-07-28";

@@ -54,17 +54,17 @@ use crate::events::{Event, SpeakerId};
 
 pub use headless::Headless;
 pub use input::{
-    console, spawn_plain_console, spawn_plain_console_with, AskRequest, CatalogEntry, ConsoleAsker,
-    ConsoleEvents, ConsoleHandle, ConsolePort, ConsoleQuestions, ConsoleRequest, FrontEndEvent,
-    LineReader, QuestionnaireRequest,
+    AskRequest, CatalogEntry, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsolePort,
+    ConsoleQuestions, ConsoleRequest, FrontEndEvent, LineReader, QuestionnaireRequest, console,
+    spawn_plain_console, spawn_plain_console_with,
 };
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;
 pub use todo::TodoPanel;
 pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
 pub use tui::{
-    draw_frame, paint_frame, render_block, render_block_uncoloured, Key, SessionFacts,
-    SpeakerColors, Tui, TuiOptions, TuiState, TOKEN_COMMAND, TOKEN_REFERENCE,
+    Key, SessionFacts, SpeakerColors, TOKEN_COMMAND, TOKEN_REFERENCE, Tui, TuiOptions, TuiState,
+    draw_frame, paint_frame, render_block, render_block_uncoloured,
 };
 
 /// 一个慢消费者开始丢事件之前，能缓冲多少个渲染事件。丢掉一个增量是输出降级，绝不是

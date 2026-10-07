@@ -13,15 +13,15 @@ use std::time::Duration;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    pending_tool_calls, read_events, Event, EventLog, EventPayload, HistoryReason, ParticipantId,
-    Role, SessionId, SpeakerId, StopReason, ToolCallId,
+    Event, EventLog, EventPayload, HistoryReason, ParticipantId, Role, SessionId, SpeakerId,
+    StopReason, ToolCallId, pending_tool_calls, read_events,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, Message, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::session::{SessionStore, StoredSession};
 use heng::tools::{self, PathLocks};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 /// 一个工作区、一个存储根，以及那两个被捕获的 sink —— 一个会话

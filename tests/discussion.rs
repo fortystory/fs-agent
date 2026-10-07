@@ -13,23 +13,23 @@ use std::path::PathBuf;
 
 use heng::config::SessionConfig;
 use heng::discussion::protocol::{
-    answers_agree, conclusion_of, normalize, round_attendance, round_outcome, RoundOutcome,
-    CONCLUSION_MARKER,
+    CONCLUSION_MARKER, RoundOutcome, answers_agree, conclusion_of, normalize, round_attendance,
+    round_outcome,
 };
 use heng::discussion::{
-    debater_identity, pick_pair, plan_after_round, synthesis_prompt, RoundPlan,
+    RoundPlan, debater_identity, pick_pair, plan_after_round, synthesis_prompt,
 };
 use heng::events::{
-    read_events, ContextSource, Event, EventLog, EventPayload, Role, RoundMode, SessionId,
-    SpeakerId, StopReason, Usage, SCHEMA_VERSION,
+    ContextSource, Event, EventLog, EventPayload, Role, RoundMode, SCHEMA_VERSION, SessionId,
+    SpeakerId, StopReason, Usage, read_events,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::capability::caps_for;
 use heng::provider::{FinishReason, Message, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::{
-    assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
-    Error, Harness, SessionScaffold, SynthesizerParts,
+    AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts, Error, Harness,
+    SessionScaffold, SynthesizerParts, assemble, assemble_discussion,
 };
 use support::{CaptureBuf, FakeProvider, Reply};
 

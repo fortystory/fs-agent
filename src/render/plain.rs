@@ -17,7 +17,7 @@ use tokio::sync::broadcast;
 use crate::events::{Role, SpeakerId};
 
 use super::severity::Severity;
-use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
+use super::transcript::{Block, ToolBlock, Transcript, summarize_args};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent, RenderSinks};
 

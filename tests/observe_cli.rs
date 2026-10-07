@@ -14,8 +14,8 @@ use std::process::ExitCode;
 use heng::cli::run_sessions;
 use heng::config::EnvMap;
 use heng::events::{
-    EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId, StopReason, ToolCallId,
-    SCHEMA_VERSION,
+    EventLog, EventPayload, Role, RoundMode, SCHEMA_VERSION, SessionId, SpeakerId, StopReason,
+    ToolCallId,
 };
 use heng::session::SessionStore;
 use heng::tools::{MATCH_LEVEL_PREFIX, WROTE_PATH_PREFIX};

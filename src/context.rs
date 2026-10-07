@@ -26,8 +26,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::events::{ContextSource, Event, EventPayload, Role};
-use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
+use crate::provider::capability::ModelCaps;
 use skills::MAX_LOADED_SKILL_TOKENS;
 
 /// 为模型自己的输出预留的输入空间（spec §10）。

@@ -14,14 +14,14 @@ use std::sync::Arc;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    read_events, Decision, DecisionSource, Event, EventPayload, ParticipantId, SessionId,
-    SpeakerId, StopReason,
+    Decision, DecisionSource, Event, EventPayload, ParticipantId, SessionId, SpeakerId, StopReason,
+    read_events,
 };
 use heng::permissions::{Asker, Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
-use support::{sandbox_available, AlwaysAllow, CaptureBuf, FakeProvider, Reply};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
+use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, sandbox_available};
 
 struct Fixture {
     harness: Harness,

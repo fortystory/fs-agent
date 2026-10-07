@@ -8,8 +8,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use heng::tools::{
-    builtin, Effect, PathLocks, PendingCall, ReadSet, Registry, SessionPaths,
-    READ_BEFORE_WRITE_PREFIX,
+    Effect, PathLocks, PendingCall, READ_BEFORE_WRITE_PREFIX, ReadSet, Registry, SessionPaths,
+    builtin,
 };
 use serde_json::json;
 use tempfile::TempDir;

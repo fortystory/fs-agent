@@ -16,18 +16,18 @@ use std::path::{Path, PathBuf};
 
 use heng::config::SessionConfig;
 use heng::context::skills::{
-    loaded_skill_names, Skills, MAX_CATALOG_TOKENS, MAX_LOADED_SKILL_TOKENS, MAX_SKILL_TOKENS,
-    SKILL_TOOL,
+    MAX_CATALOG_TOKENS, MAX_LOADED_SKILL_TOKENS, MAX_SKILL_TOKENS, SKILL_TOOL, Skills,
+    loaded_skill_names,
 };
-use heng::context::{estimate_tokens, trim, TrimPolicy, DROPPED_TOOL_RESULT};
+use heng::context::{DROPPED_TOOL_RESULT, TrimPolicy, estimate_tokens, trim};
 use heng::events::{
-    read_events, ContextSource, Event, EventPayload, SessionId, SpeakerId, ToolCallId,
+    ContextSource, Event, EventPayload, SessionId, SpeakerId, ToolCallId, read_events,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::capability::caps_for;
 use heng::provider::{FinishReason, Message, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- fixture ---------------------------------------------------------------

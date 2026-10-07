@@ -16,7 +16,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use reqwest::header::{HeaderValue, ACCEPT, LOCATION, USER_AGENT};
+use reqwest::header::{ACCEPT, HeaderValue, LOCATION, USER_AGENT};
 use reqwest::redirect::Policy;
 use url::Url;
 
@@ -317,7 +317,7 @@ pub fn validate_url(raw: &str) -> Result<Url, WebError> {
             return Err(WebError::new(
                 WebErrorCode::InvalidUrl,
                 format!("只抓 `http` / `https`，拿到的是 `{other}`"),
-            ))
+            ));
         }
     }
     if !url.username().is_empty() || url.password().is_some() {

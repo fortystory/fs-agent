@@ -151,10 +151,12 @@ fn quotes_rules_and_tables_render_as_structure() {
     // 表格现在是真网格：表头行，一条 `─┼─` 分隔线，然后是数据行。
     let table = to_lines("| a | b |\n|---|---|\n| 1 | 2 |", W);
     assert_eq!(text(&table[0]).trim_end(), "a │ b");
-    assert!(table[1]
-        .spans
-        .iter()
-        .all(|span| span.content.chars().all(|ch| ch == '─' || ch == '┼')));
+    assert!(
+        table[1]
+            .spans
+            .iter()
+            .all(|span| span.content.chars().all(|ch| ch == '─' || ch == '┼'))
+    );
     assert!(
         table[1]
             .spans
@@ -212,10 +214,12 @@ fn a_table_header_is_bold_and_the_separator_is_drawn() {
         has_modifier(&table[0], Modifier::BOLD),
         "表头加粗：{table:?}"
     );
-    assert!(table[0]
-        .spans
-        .iter()
-        .all(|span| span.style.add_modifier.contains(Modifier::BOLD)));
+    assert!(
+        table[0]
+            .spans
+            .iter()
+            .all(|span| span.style.add_modifier.contains(Modifier::BOLD))
+    );
     assert!(!has_modifier(&table[2], Modifier::BOLD), "数据行不加粗");
     assert!(
         text(&table[1]).contains('┼'),
@@ -293,10 +297,12 @@ fn an_unknown_language_still_names_itself() {
     assert_eq!(text(&lines[0]), format!("{}brainfuck", " ".repeat(11)));
     // 认不出的是**高亮**，不是标签：代码行只有默认样式。
     assert_eq!(text(&lines[1]), "  +++");
-    assert!(lines[1]
-        .spans
-        .iter()
-        .all(|span| span.style == Style::default()));
+    assert!(
+        lines[1]
+            .spans
+            .iter()
+            .all(|span| span.style == Style::default())
+    );
 }
 
 #[test]

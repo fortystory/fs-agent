@@ -16,13 +16,13 @@ use std::time::Duration;
 use heng::config::{
     McpServerConfig, McpSettings, SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig,
 };
-use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId};
-use heng::mcp::{connect_all, ConnectOptions, McpService};
+use heng::events::{Event, EventPayload, SessionId, SpeakerId, read_events};
+use heng::mcp::{ConnectOptions, McpService, connect_all};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, with_mcp, Sandbox, MCP_CALL_TOOL, MCP_LIST_TOOL};
-use heng::{assemble, AssemblyParts, SessionScaffold};
+use heng::tools::{MCP_CALL_TOOL, MCP_LIST_TOOL, Sandbox, builtin, with_mcp};
+use heng::{AssemblyParts, SessionScaffold, assemble};
 use serde_json::json;
 use support::{CaptureBuf, FakeProvider, Reply};
 

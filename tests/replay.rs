@@ -11,7 +11,7 @@
 
 mod support;
 
-use heng::agent::replay::{replay, ReplayError};
+use heng::agent::replay::{ReplayError, replay};
 use heng::config::SessionConfig;
 use heng::events::{Event, ParticipantId, SessionId, SpeakerId};
 use heng::permissions::{Mode, Policy};
@@ -19,8 +19,8 @@ use heng::provider::capability::caps_for;
 use heng::provider::{FinishReason, Message, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::{
-    assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts,
-    Harness, SessionScaffold, SynthesizerParts,
+    AssemblyParts, DebaterParts, DiscussionHarness, DiscussionParts, Harness, SessionScaffold,
+    SynthesizerParts, assemble, assemble_discussion,
 };
 use support::{CaptureBuf, FakeProvider, Reply};
 

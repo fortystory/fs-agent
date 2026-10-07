@@ -10,7 +10,7 @@ use std::time::Duration;
 use heng::config::{SandboxAvailability, SandboxMode, SandboxSettings, SessionConfig};
 use heng::tools::process;
 use heng::tools::sandbox::{
-    escalation_path, probe, resolve_availability, sealed, wrap, Sandbox, SandboxSpec, PROBE_PROFILE,
+    PROBE_PROFILE, Sandbox, SandboxSpec, escalation_path, probe, resolve_availability, sealed, wrap,
 };
 
 /// 一条 shell 命令将要跑的那条 argv，形状与 `bash` 工具给它的一样。
@@ -255,11 +255,13 @@ fn the_env_family_is_protected_but_templates_are_not() {
         .cloned()
         .collect();
     assert!(protected.contains(&canonical(&workspace.join(".env")).display().to_string()));
-    assert!(protected.contains(
-        &canonical(&workspace.join(".env.local"))
-            .display()
-            .to_string()
-    ));
+    assert!(
+        protected.contains(
+            &canonical(&workspace.join(".env.local"))
+                .display()
+                .to_string()
+        )
+    );
     for name in [".env.example", ".env.sample", ".env.template"] {
         let path = canonical(&workspace.join(name)).display().to_string();
         assert!(
@@ -697,8 +699,8 @@ use heng::provider::capability::caps_for;
 use heng::provider::projection::project;
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, PathLocks, Registry};
-use heng::{assemble, AssemblyParts, DebaterParts, Harness, SessionScaffold, SynthesizerParts};
+use heng::tools::{PathLocks, Registry, builtin};
+use heng::{AssemblyParts, DebaterParts, Harness, SessionScaffold, SynthesizerParts, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {

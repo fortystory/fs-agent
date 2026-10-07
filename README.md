@@ -52,7 +52,7 @@
 - Linux x86_64（v1 只在这上面验证）
 - **一个可用的 `bubblewrap`**：`bash` 与动态工具的沙箱靠它，没有它这两个工具会拒绝运行（[`docs/sandbox.md`](docs/sandbox.md)）
 - **非 root**：以 root / sudo 启动一律拒绝，且没有 bypass flag
-- Rust（edition 2021）
+- Rust（edition 2024）
 - 至少一个 provider 的 key
 
 ### 构建

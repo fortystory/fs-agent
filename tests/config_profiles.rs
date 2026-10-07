@@ -10,8 +10,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use heng::config::{
-    self, default_path, resolve, EnvMap, FileViewer, KeySource, ReasoningEffort,
-    SandboxAvailability, SandboxMode, Vendor, DEFAULT_FILE_VIEWER_WIDTH, DEFAULT_MODEL,
+    self, DEFAULT_FILE_VIEWER_WIDTH, DEFAULT_MODEL, EnvMap, FileViewer, KeySource, ReasoningEffort,
+    SandboxAvailability, SandboxMode, Vendor, default_path, resolve,
 };
 use heng::events::Decision;
 use heng::permissions::Mode;

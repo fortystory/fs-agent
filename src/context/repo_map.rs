@@ -18,8 +18,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator};

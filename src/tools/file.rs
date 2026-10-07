@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::provider::ToolSpec;
 
-use super::edit::{find_matches, MatchLevel};
+use super::edit::{MatchLevel, find_matches};
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};
 
 /// 注释形状占位符的检查与匹配等级都作为约定文本落进工具结果，于是渲染与诊断共用一种格式。

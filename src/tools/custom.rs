@@ -17,7 +17,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::config::{parameter_placeholder, ToolDeclaration, CUSTOM_TOOL_SEPARATOR};
+use crate::config::{CUSTOM_TOOL_SEPARATOR, ToolDeclaration, parameter_placeholder};
 use crate::provider::ToolSpec;
 
 use super::process;

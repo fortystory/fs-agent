@@ -12,15 +12,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use heng::config::SessionConfig;
-use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::events::{Event, EventPayload, SessionId, SpeakerId, StopReason, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::todo::{read_items, Status, TODO_TOOL};
+use heng::tools::todo::{Status, TODO_TOOL, read_items};
 use heng::tools::{
-    builtin, BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths,
+    BashLimits, Effect, PathLocks, PendingCall, ReadSet, Registry, Sandbox, SessionPaths, builtin,
 };
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use serde_json::json;
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
@@ -80,7 +80,7 @@ impl Fixture {
         {
             heng::tools::GuardedCall::Run(allowed) => allowed,
             heng::tools::GuardedCall::Refused(error) => {
-                return heng::tools::DispatchOutcome::failure(error, false)
+                return heng::tools::DispatchOutcome::failure(error, false);
             }
         };
         read_set.record_all(allowed.read_paths.iter().cloned());

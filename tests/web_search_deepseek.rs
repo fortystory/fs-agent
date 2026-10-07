@@ -10,16 +10,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use heng::config::{self, EnvMap};
-use heng::events::{read_events, EventPayload, SessionId, SpeakerId};
+use heng::events::{EventPayload, SessionId, SpeakerId, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, with_web, WEB_SEARCH_TOOL};
+use heng::tools::{WEB_SEARCH_TOOL, builtin, with_web};
 use heng::web::search_deepseek::{
-    parse_sources, request_body, DeepSeekSearch, DEEPSEEK_SEARCH_MODEL, DEEPSEEK_SEARCH_PROVIDER,
+    DEEPSEEK_SEARCH_MODEL, DEEPSEEK_SEARCH_PROVIDER, DeepSeekSearch, parse_sources, request_body,
 };
 use heng::web::{SearchProvider, Source, WebError, WebService};
-use heng::{assemble, AssemblyParts, SessionScaffold};
+use heng::{AssemblyParts, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- 请求体 ---------------------------------------------------------------

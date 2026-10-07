@@ -13,8 +13,8 @@
 use serde_json::Value;
 
 use crate::events::{
-    hook_format, ContextSource, Decision, DecisionSource, Event, EventPayload, HistoryReason,
-    ParticipantId, Role, RoundMode, SpeakerId, StopReason, ToolCallId, Usage,
+    ContextSource, Decision, DecisionSource, Event, EventPayload, HistoryReason, ParticipantId,
+    Role, RoundMode, SpeakerId, StopReason, ToolCallId, Usage, hook_format,
 };
 
 use super::wording;

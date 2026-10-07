@@ -12,16 +12,16 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use heng::config::SessionConfig;
 use heng::context::{
-    estimate_tokens, load_agents_md, trim, truncate_result, usable_input, TrimError, TrimPolicy,
-    DROPPED_TOOL_RESULT, TRUNCATED_MARKER,
+    DROPPED_TOOL_RESULT, TRUNCATED_MARKER, TrimError, TrimPolicy, estimate_tokens, load_agents_md,
+    trim, truncate_result, usable_input,
 };
-use heng::events::{read_events, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::events::{Event, EventPayload, SessionId, SpeakerId, StopReason, read_events};
 use heng::permissions::{Mode, Policy};
-use heng::provider::capability::{caps_for, ModelCaps};
+use heng::provider::capability::{ModelCaps, caps_for};
 use heng::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use serde_json::Value;
 use support::{CaptureBuf, FakeProvider, Reply};
 
@@ -575,9 +575,11 @@ async fn over_budget_history_drops_an_old_whole_round_only_after_the_bodies_are_
         tool_body(&requests[3], "call-2"),
         Some("b".repeat(400).as_str())
     );
-    assert!(messages
-        .iter()
-        .any(|message| matches!(message, Message::User { content, .. } if content == "second")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| matches!(message, Message::User { content, .. } if content == "second"))
+    );
 
     // 仍然只读：流上保留着两份完整的正文。
     let events = fixture.events();

@@ -10,10 +10,10 @@
 
 use heng::config::GenerationParams;
 use heng::events::{
-    hook_format, ContextSource, EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId,
-    StopReason, ToolCallId,
+    ContextSource, EventLog, EventPayload, Role, RoundMode, SessionId, SpeakerId, StopReason,
+    ToolCallId, hook_format,
 };
-use heng::provider::capability::{caps_for, ModelCaps};
+use heng::provider::capability::{ModelCaps, caps_for};
 use heng::provider::openai::build_body;
 use heng::provider::projection::project;
 use heng::provider::{ChatRequest, Message, ToolChoice};
@@ -358,12 +358,16 @@ fn the_same_events_project_differently_for_each_speaker_and_each_projection_is_s
         other => panic!("期望 assistant，实际得到 {other:?}"),
     }
     // deepseek 看到自己那次工具往返，kimi 只看到一句摘要。
-    assert!(for_deepseek
-        .iter()
-        .any(|message| matches!(message, Message::Tool { .. })));
-    assert!(!for_kimi
-        .iter()
-        .any(|message| matches!(message, Message::Tool { .. })));
+    assert!(
+        for_deepseek
+            .iter()
+            .any(|message| matches!(message, Message::Tool { .. }))
+    );
+    assert!(
+        !for_kimi
+            .iter()
+            .any(|message| matches!(message, Message::Tool { .. }))
+    );
 }
 
 // --- 合并的规矩 -------------------------------------------------------------
@@ -489,12 +493,16 @@ fn an_executors_events_stay_out_of_a_debaters_projection_but_not_its_own() {
     assert!(!synthesizer_text.contains("e-body"), "{synthesizer_text}");
 
     let for_executor = project(&log.events(), &executor, &caps());
-    assert!(for_executor
-        .iter()
-        .any(|message| matches!(message, Message::Assistant { .. })));
-    assert!(for_executor
-        .iter()
-        .any(|message| matches!(message, Message::Tool { .. })));
+    assert!(
+        for_executor
+            .iter()
+            .any(|message| matches!(message, Message::Assistant { .. }))
+    );
+    assert!(
+        for_executor
+            .iter()
+            .any(|message| matches!(message, Message::Tool { .. }))
+    );
 }
 
 // --- 名字 -------------------------------------------------------------------

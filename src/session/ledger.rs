@@ -16,9 +16,9 @@ use std::time::SystemTime;
 
 use chrono::{NaiveDate, Utc};
 
-use crate::events::{read_events, EventPayload, Usage};
+use crate::events::{EventPayload, Usage, read_events};
 
-use super::store::{modified, SessionStore};
+use super::store::{SessionStore, modified};
 
 /// 一个 UTC 自然日的合计，从各会话文件加总而来。
 #[derive(Debug, Clone, PartialEq)]

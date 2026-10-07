@@ -20,7 +20,7 @@ pub mod observe;
 pub mod store;
 
 pub use ledger::DayLedger;
-pub use store::{new_session_id, SessionStore, StoredSession};
+pub use store::{SessionStore, StoredSession, new_session_id};
 
 use crate::config::SessionConfig;
 use crate::context::skills::Skills;

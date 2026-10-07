@@ -18,15 +18,15 @@ use std::sync::Arc;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    read_events, Event, EventPayload, Redactor, SessionId, SpeakerId, StopReason, REDACTED,
+    Event, EventPayload, REDACTED, Redactor, SessionId, SpeakerId, StopReason, read_events,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, Message, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, PathLocks};
+use heng::tools::{PathLocks, builtin};
 use heng::{
-    assemble, assemble_discussion, AssemblyParts, DebaterParts, DiscussionParts, Harness,
-    SessionScaffold, SynthesizerParts,
+    AssemblyParts, DebaterParts, DiscussionParts, Harness, SessionScaffold, SynthesizerParts,
+    assemble, assemble_discussion,
 };
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 

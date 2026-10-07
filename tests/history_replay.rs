@@ -13,13 +13,13 @@ use std::path::Path;
 
 use heng::config::FileViewerSettings;
 use heng::events::{
-    read_events, ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId,
-    StopReason, ToolCallId, Usage,
+    ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId, StopReason,
+    ToolCallId, Usage, read_events,
 };
-use heng::render::{draw_frame, wording, ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState};
+use heng::render::{ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState, draw_frame, wording};
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
-use ratatui::Terminal;
 
 fn facts() -> SessionFacts {
     SessionFacts {

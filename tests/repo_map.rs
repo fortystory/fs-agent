@@ -15,17 +15,17 @@ mod support;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use heng::config::{SessionConfig, DEFAULT_REPO_MAP_TOKENS, MAX_REPO_MAP_TOKENS};
+use heng::config::{DEFAULT_REPO_MAP_TOKENS, MAX_REPO_MAP_TOKENS, SessionConfig};
 use heng::context::estimate_tokens;
 use heng::context::repo_map::{
-    extract, rank, render, Definition, RankContext, Relevance, RepoMap, Scored, SymbolKind,
-    REPO_MAP_TOOL,
+    Definition, REPO_MAP_TOOL, RankContext, Relevance, RepoMap, Scored, SymbolKind, extract, rank,
+    render,
 };
-use heng::events::{read_events, Event, EventPayload, Role, SessionId, SpeakerId, ToolCallId};
+use heng::events::{Event, EventPayload, Role, SessionId, SpeakerId, ToolCallId, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, Message, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- 纯函数：抽取 ----------------------------------------------------------
@@ -288,9 +288,11 @@ fn session_context_collects_recent_paths_and_identifiers() {
         vec![PathBuf::from("/work/src/context.rs")],
         "只有文件类工具算数，而且 `./` 被折叠掉了"
     );
-    assert!(context
-        .recent_identifiers
-        .contains(&"trimpolicy".to_owned()));
+    assert!(
+        context
+            .recent_identifiers
+            .contains(&"trimpolicy".to_owned())
+    );
     assert!(context.recent_identifiers.contains(&"budget".to_owned()));
     assert!(
         !context.recent_identifiers.contains(&"is".to_owned()),

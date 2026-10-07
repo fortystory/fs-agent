@@ -15,8 +15,8 @@ use chrono::{DateTime, Utc};
 use ratatui::buffer::CellWidth;
 
 use crate::events::{
-    hook_format, ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId,
-    StopReason, Usage,
+    ContextSource, Decision, DecisionSource, HistoryReason, RoundMode, SpeakerId, StopReason,
+    Usage, hook_format,
 };
 use serde_json::Value;
 
@@ -1171,11 +1171,7 @@ pub fn renderer_dropped(dropped: u64) -> String {
 
 /// 状态词：有没有一个回合进行中。
 pub fn status_word(busy: bool) -> &'static str {
-    if busy {
-        "工作中"
-    } else {
-        "就绪"
-    }
+    if busy { "工作中" } else { "就绪" }
 }
 
 /// 「在跑」的字形循环：**一轮月相**，一格一个相位 —— **倒着走**（2026-10-06 维护者定：

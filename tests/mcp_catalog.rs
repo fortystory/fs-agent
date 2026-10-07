@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use heng::config::{McpServerConfig, McpSettings, SessionConfig};
-use heng::events::{read_events, ContextSource, EventPayload, SessionId, SpeakerId};
+use heng::events::{ContextSource, EventPayload, SessionId, SpeakerId, read_events};
 use heng::mcp::{McpConnection, McpError, McpService, ServerManifest};
 use heng::permissions::{Mode, Policy};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::builtin;
-use heng::{assemble, AssemblyParts, SessionScaffold};
+use heng::{AssemblyParts, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider};
 
 /// 一个最简的假连接：这份测试只关心「这台连上了」这个事实。

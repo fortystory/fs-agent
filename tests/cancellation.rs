@@ -17,13 +17,13 @@ use std::sync::Arc;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    pending_tool_calls, read_events, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage,
+    Event, EventPayload, SessionId, SpeakerId, StopReason, Usage, pending_tool_calls, read_events,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent, ToolSpec};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::{Effect, Registry, Tool, ToolContext, ToolError, ToolOutput};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 use tokio::sync::Notify;
 

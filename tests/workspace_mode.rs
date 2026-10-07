@@ -15,9 +15,9 @@ use heng::events::{Decision, Event, EventPayload, SessionId, SpeakerId};
 use heng::permissions::{Answer, Asker, Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, PathLocks};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
-use support::{sandbox_available, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
+use heng::tools::{PathLocks, builtin};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
+use support::{CaptureBuf, FakeProvider, Reply, ScriptedAsker, sandbox_available};
 
 struct Fixture {
     harness: Harness,
@@ -314,12 +314,14 @@ async fn a_workspace_write_cannot_climb_out_with_dot_dot() {
         "{}",
         requests[0].reason
     );
-    assert!(!fixture
-        .workspace
-        .parent()
-        .unwrap()
-        .join("escaped.txt")
-        .exists());
+    assert!(
+        !fixture
+            .workspace
+            .parent()
+            .unwrap()
+            .join("escaped.txt")
+            .exists()
+    );
 
     fixture.harness.shutdown().await;
 }

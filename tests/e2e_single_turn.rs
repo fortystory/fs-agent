@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use heng::config::{ReasoningEffort, SessionConfig};
 use heng::events::{
-    read_events, Event, EventPayload, Role, SessionId, SpeakerId, StopReason, Usage,
+    Event, EventPayload, Role, SessionId, SpeakerId, StopReason, Usage, read_events,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, Message, ProviderError, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {

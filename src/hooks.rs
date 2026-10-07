@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::events::{
-    hook_format, Decision, DecisionSource, Event, EventPayload, SessionId, StopReason, ToolCallId,
+    Decision, DecisionSource, Event, EventPayload, SessionId, StopReason, ToolCallId, hook_format,
 };
 use crate::tools::Effect;
 

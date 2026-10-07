@@ -13,14 +13,14 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::{emit, emit_completed, Error};
+use super::{Error, emit, emit_completed};
 use crate::events::{
-    pending_tool_calls, superseded_seqs, Event, EventPayload, HistoryReason, SpeakerId, ToolCallId,
+    Event, EventPayload, HistoryReason, SpeakerId, ToolCallId, pending_tool_calls, superseded_seqs,
 };
 use crate::render::RenderHandle;
 use crate::session::Session;
 use crate::tools::edit;
-use crate::tools::{before_artifact, EditCall, ToolError, EDIT_FILE};
+use crate::tools::{EDIT_FILE, EditCall, ToolError, before_artifact};
 
 /// 被杀死的进程始终没来得及写下的那一个结果。
 ///

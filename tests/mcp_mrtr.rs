@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use heng::config::{
     McpServerConfig, McpSettings, SandboxAvailability, SandboxMode, SandboxSettings,
 };
-use heng::mcp::{connect_all, ConnectOptions, McpService};
+use heng::mcp::{ConnectOptions, McpService, connect_all};
 use heng::questions::{UserAnswer, UserAnswers, UserQuestion, UserQuestions};
 use heng::tools::Sandbox;
 

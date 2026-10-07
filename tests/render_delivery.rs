@@ -10,9 +10,9 @@
 use futures::StreamExt;
 
 use heng::events::SpeakerId;
+use heng::provider::StreamEvent;
 use heng::provider::capability::caps_for;
 use heng::provider::openai::sse_stream;
-use heng::provider::StreamEvent;
 use heng::render::{self, RENDER_CHANNEL_CAPACITY};
 
 /// 一个 SSE 帧扛着一条文本增量，按线上写出来的样子。

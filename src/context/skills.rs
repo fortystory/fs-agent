@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use crate::events::{Event, EventPayload};
 
-use super::{estimate_tokens, CHARS_PER_TOKEN};
+use super::{CHARS_PER_TOKEN, estimate_tokens};
 
 /// 加载一份技能正文的那个内建工具。只在这里命名一次，因为「加载一个技能」意味着什么由技能模块
 /// 拥有：工具、黏性丢弃类别与重算出来的已加载集合，都必须对这个名字达成一致。

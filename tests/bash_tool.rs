@@ -12,16 +12,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use heng::config::{SessionConfig, DEFAULT_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS};
+use heng::config::{DEFAULT_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, SessionConfig};
 use heng::context::TRUNCATED_MARKER;
-use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason};
+use heng::events::{Decision, Event, EventPayload, SessionId, SpeakerId, StopReason, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::{
-    builtin, BashLimits, Effect, EXIT_CODE_PREFIX, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX,
+    BashLimits, EXIT_CODE_PREFIX, Effect, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX, builtin,
 };
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 struct Fixture {

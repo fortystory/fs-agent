@@ -25,7 +25,7 @@ use crate::config::McpSettings;
 
 pub mod rmcp_client;
 
-pub use rmcp_client::{connect_all, ConnectOptions, RunClient, StderrSink, BASE_ENV_KEYS};
+pub use rmcp_client::{BASE_ENV_KEYS, ConnectOptions, RunClient, StderrSink, connect_all};
 
 /// 一台 server 声明的一个提示词模板（`.scratch/mcp-support/spec.md` §8）。
 ///

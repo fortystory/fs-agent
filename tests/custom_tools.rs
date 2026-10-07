@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use heng::config::{resolve, EnvMap, ToolDeclaration, DEFAULT_CUSTOM_TOOL_TIMEOUT_MS};
-use heng::events::{read_events, Decision, Event, EventPayload, SessionId, SpeakerId, StopReason};
-use heng::permissions::{decide, Call, Mode, Policy, Rule, Scope, Subject};
+use heng::config::{DEFAULT_CUSTOM_TOOL_TIMEOUT_MS, EnvMap, ToolDeclaration, resolve};
+use heng::events::{Decision, Event, EventPayload, SessionId, SpeakerId, StopReason, read_events};
+use heng::permissions::{Call, Mode, Policy, Rule, Scope, Subject, decide};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::{
-    builtin, is_custom_tool, with_dynamic, CustomTool, Effect, Tool, TIMEOUT_PREFIX,
+    CustomTool, Effect, TIMEOUT_PREFIX, Tool, builtin, is_custom_tool, with_dynamic,
 };
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 /// 一份把一个参数夹在字面前缀与后缀之间回显出来的声明。

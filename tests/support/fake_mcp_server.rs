@@ -21,7 +21,7 @@
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn main() {
     // 一行 stderr：测试据此断言「server 的诊断被接住了」，而不是直接砸进终端。
@@ -53,9 +53,11 @@ fn main() {
 /// 两路心跳：一路是 server 自己，一路是它 spawn 的长跑子进程 —— 后者才验得到「整组」。
 fn start_heartbeats() {
     if let Ok(path) = std::env::var("FAKE_MCP_SELF_HEARTBEAT") {
-        std::thread::spawn(move || loop {
-            let _ = std::fs::write(&path, b"alive");
-            std::thread::sleep(Duration::from_millis(200));
+        std::thread::spawn(move || {
+            loop {
+                let _ = std::fs::write(&path, b"alive");
+                std::thread::sleep(Duration::from_millis(200));
+            }
         });
     }
     if let Ok(path) = std::env::var("FAKE_MCP_CHILD_HEARTBEAT") {

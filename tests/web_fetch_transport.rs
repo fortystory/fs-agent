@@ -8,8 +8,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use heng::web::fetch_http::{
-    decode_body, is_global_v6, is_public_unicast, next_hop, read_bounded, validate_url, HttpFetch,
-    MAX_RESPONSE_BYTES, MAX_URL_CHARS,
+    HttpFetch, MAX_RESPONSE_BYTES, MAX_URL_CHARS, decode_body, is_global_v6, is_public_unicast,
+    next_hop, read_bounded, validate_url,
 };
 use heng::web::{FetchProvider, FetchedContent};
 use reqwest::header::{ACCEPT, AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, USER_AGENT};

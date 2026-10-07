@@ -15,15 +15,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use heng::config::SessionConfig;
 use heng::events::{
-    pending_tool_calls, read_events, Decision, DecisionSource, Event, EventPayload, SessionId,
-    SpeakerId, StopReason,
+    Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId, StopReason,
+    pending_tool_calls, read_events,
 };
 use heng::hooks::{Constraint, Hook, HookError, Tightening};
 use heng::permissions::{Answer, Asker, Mode, Policy, Rule};
 use heng::provider::{ChatRequest, FinishReason, Message, StreamEvent, ToolSpec};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::{Effect, Tool, ToolContext, ToolError, ToolOutput};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use serde_json::Value;
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker, ScriptedHook};
 
@@ -369,9 +369,11 @@ async fn scenario_2_a_hook_can_tighten_to_ask_and_the_question_happens() {
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0].0, Decision::Allow);
     assert_eq!(decisions[0].1, DecisionSource::User);
-    assert!(fixture
-        .hook_events()
-        .contains(&("pre_tool_use".to_owned(), "tighten:ask".to_owned())));
+    assert!(
+        fixture
+            .hook_events()
+            .contains(&("pre_tool_use".to_owned(), "tighten:ask".to_owned()))
+    );
 }
 
 #[tokio::test]
@@ -615,9 +617,11 @@ async fn a_pre_hook_rewrites_the_arguments_the_gate_and_the_tool_see() {
     assert!(results[0].2.clone().unwrap().contains("权限拒绝"));
     assert_eq!(fixture.decisions()[0].0, Decision::Deny);
     assert_eq!(fixture.decisions()[0].1, DecisionSource::Policy);
-    assert!(fixture
-        .hook_events()
-        .contains(&("pre_tool_use".to_owned(), "rewrite".to_owned())));
+    assert!(
+        fixture
+            .hook_events()
+            .contains(&("pre_tool_use".to_owned(), "rewrite".to_owned()))
+    );
 }
 
 #[tokio::test]
@@ -690,11 +694,13 @@ async fn a_stopped_turn_still_leaves_exactly_one_result() {
         "即使钩子停掉了这个回合，已经开始的那次调用仍然欠一条结果"
     );
     assert!(fixture.pending().is_empty());
-    assert!(fixture.results()[0]
-        .2
-        .clone()
-        .unwrap()
-        .contains("钩子停掉了这个回合"));
+    assert!(
+        fixture.results()[0]
+            .2
+            .clone()
+            .unwrap()
+            .contains("钩子停掉了这个回合")
+    );
 }
 
 #[tokio::test]

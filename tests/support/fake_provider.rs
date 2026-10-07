@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use heng::events::Usage;
-use heng::provider::capability::{caps_for, ModelCaps};
+use heng::provider::capability::{ModelCaps, caps_for};
 use heng::provider::{
     ChatRequest, EventStream, FinishReason, Provider, ProviderError, StreamEvent,
 };

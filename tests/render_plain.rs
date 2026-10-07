@@ -6,8 +6,8 @@
 
 mod support;
 
-use heng::events::{hook_format, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId};
-use heng::render::{channel, PlainOptions, RenderHandle, RenderSinks, Renderer};
+use heng::events::{Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId, hook_format};
+use heng::render::{PlainOptions, RenderHandle, RenderSinks, Renderer, channel};
 use support::CaptureBuf;
 
 fn kimi() -> SpeakerId {

@@ -2,8 +2,8 @@
 //! 号，而且最后一行被截断是可容忍的。
 
 use heng::events::{
-    last_assistant_has_tool_calls, pending_tool_calls, read_events, total_usage, Event, EventLog,
-    EventPayload, Role, SessionId, SpeakerId, StopReason, ToolCallId, Usage, SCHEMA_VERSION,
+    Event, EventLog, EventPayload, Role, SCHEMA_VERSION, SessionId, SpeakerId, StopReason,
+    ToolCallId, Usage, last_assistant_has_tool_calls, pending_tool_calls, read_events, total_usage,
 };
 use std::io::Write;
 

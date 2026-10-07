@@ -23,7 +23,7 @@
 use super::capability::ModelCaps;
 use super::{Message, ToolCall};
 use crate::events::{
-    hook_format, superseded_seqs, ContextSource, Event, EventPayload, SpeakerId, ToolCallId,
+    ContextSource, Event, EventPayload, SpeakerId, ToolCallId, hook_format, superseded_seqs,
 };
 
 /// 送进 `name` 字段的最长清洗后参与者名。

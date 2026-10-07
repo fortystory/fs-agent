@@ -12,13 +12,13 @@ use heng::render::editor;
 use heng::render::palette;
 use heng::render::width::text_columns;
 use heng::render::{
-    draw_frame, wording, CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent,
-    SessionFacts, TuiState, TOKEN_COMMAND, TOKEN_REFERENCE,
+    CatalogEntry, ConsoleRequest, FrontEndEvent, Key, RenderEvent, SessionFacts, TOKEN_COMMAND,
+    TOKEN_REFERENCE, TuiState, draw_frame, wording,
 };
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::style::{Color, Modifier};
-use ratatui::Terminal;
 
 fn facts() -> SessionFacts {
     SessionFacts {
@@ -1580,7 +1580,7 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
     // 宽度在这整件事里从不参与，页高也不再随「读数有几项」走。
     // 左栏顶上留的那一行空行是**花掉的**，而底下不再让给提示行：提示行回到了主列里
     // （`.scratch/tui-feedback/spec.md` §2），所以阶梯看到的内容行是 `h − 1`。
-    use heng::render::layout::{plan, SidebarKind};
+    use heng::render::layout::{SidebarKind, plan};
     use ratatui::layout::Rect;
 
     let cases = [
@@ -1636,7 +1636,7 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
 /// 高度 = 内容行 − 身份 − 页签条，「用量字段数」那个常数退休。
 #[test]
 fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
-    use heng::render::layout::{plan, SidebarKind};
+    use heng::render::layout::{SidebarKind, plan};
     use ratatui::layout::Rect;
 
     let cases = [
@@ -3769,8 +3769,8 @@ fn a_number_too_wide_for_the_value_column_no_longer_needs_the_bare_form() {
     // 留着。这里改成断言制式之后的形态，值仍然是右贴齐的。
     // 外壳的窄档给值留 21 列，七位数的计数放得下，所以这条兜底
     // 是在它所在之处断言的：面板自己的行生成器。
-    use heng::render::panel::Panel;
     use heng::render::Block;
+    use heng::render::panel::Panel;
     use ratatui::layout::Rect;
 
     let facts = facts();
@@ -4440,9 +4440,11 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
     );
     let row = tab_bar_row(&mut state, 120, 24);
     click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
-    assert!(sidebar_rows(&mut state, 120, 24)
-        .join("\n")
-        .contains("一件事"));
+    assert!(
+        sidebar_rows(&mut state, 120, 24)
+            .join("\n")
+            .contains("一件事")
+    );
 
     apply_todo(
         &mut state,

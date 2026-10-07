@@ -20,11 +20,11 @@
 use crate::context;
 use crate::discussion;
 use crate::events::{Event, EventPayload, Role, RoundMode, SpeakerId};
-use crate::provider::capability::ModelCaps;
 use crate::provider::Message;
+use crate::provider::capability::ModelCaps;
 
 use super::executor::executor_identity;
-use super::{build_messages, scoped_events_slice, TurnScope};
+use super::{TurnScope, build_messages, scoped_events_slice};
 
 /// 一次请求为什么无法从流上重算出来。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

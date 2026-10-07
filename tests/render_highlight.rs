@@ -6,7 +6,7 @@
 //! 不是一个新依赖。
 
 use heng::render::highlight::{
-    ansi_line, diff_tag, highlight_diff, highlight_rust, Class, DiffTag,
+    Class, DiffTag, ansi_line, diff_tag, highlight_diff, highlight_rust,
 };
 
 #[test]

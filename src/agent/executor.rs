@@ -9,10 +9,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::Error;
 use crate::config::{LandingPoint, SessionConfig};
 use crate::context::skills::Skills;
 use crate::events::{
-    usage_of, Event, EventLog, EventPayload, ParticipantId, SessionId, SpeakerId, StopReason, Usage,
+    Event, EventLog, EventPayload, ParticipantId, SessionId, SpeakerId, StopReason, Usage, usage_of,
 };
 use crate::hooks::Hook;
 use crate::permissions::{Asker, Policy};
@@ -21,9 +22,8 @@ use crate::render::RenderHandle;
 use crate::session::{Session, SessionParts};
 use crate::tools::file::WROTE_PATH_PREFIX;
 use crate::tools::{ExecutorSpawner, PathLocks, Registry, ToolError, ToolOutput};
-use crate::Error;
 
-use super::{append_event, run_turn, CancelObserver, TurnScope};
+use super::{CancelObserver, TurnScope, append_event, run_turn};
 
 /// 执行者的私有身份（spec §16）。
 ///

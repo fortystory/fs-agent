@@ -13,7 +13,7 @@ use heng::mcp::{
     McpConnection, McpError, McpService, PromptArgument, PromptSummary, ServerManifest,
 };
 use heng::tools::{
-    builtin, with_mcp, MCP_CALL_TOOL, MCP_LIST_TOOL, MCP_READ_TOOL, MCP_RESOURCES_TOOL,
+    MCP_CALL_TOOL, MCP_LIST_TOOL, MCP_READ_TOOL, MCP_RESOURCES_TOOL, builtin, with_mcp,
 };
 
 // --- 假的 MCP 连接 --------------------------------------------------------

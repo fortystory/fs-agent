@@ -1,8 +1,12 @@
 [package]
 name = "heng"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "衡（heng）：自用的 coding agent harness —— 只追加的事件流 + 按 agent 投影"
+# 真正的门槛不是 edition 2024 自己的 1.85，而是依赖里声明得最高的那一个：
+# `tree-sitter` 0.27 与 `tree-sitter-highlight` 0.27 是 1.90（ratatui 那一线是 1.88）。
+# 写下来还有第二个作用：edition 2024 的默认 resolver 是 v3，它会照这个字段挑依赖版本。
+rust-version = "1.90"
 license = "MIT"
 # 仓库里有**三个** bin（产品本身 + 时间 server + 下面那个测试辅助的假 MCP server），所以
 # `cargo run` 得知道不指名时跑哪个 —— 不加这一行它会报「could not determine which binary to

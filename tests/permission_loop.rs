@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    read_events, Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId,
+    Decision, DecisionSource, Event, EventPayload, SessionId, SpeakerId, read_events,
 };
 use heng::permissions::{Answer, Asker, Mode, Policy, Rule, Scope, Subject};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, ScriptedAsker};
 
 struct Fixture {
@@ -311,11 +311,13 @@ async fn ask_without_an_answerer_downgrades_to_deny_and_says_why() {
     );
 
     assert_eq!(fixture.results().len(), 1);
-    assert!(fixture.results()[0]
-        .2
-        .clone()
-        .unwrap()
-        .contains("降级为拒绝"));
+    assert!(
+        fixture.results()[0]
+            .2
+            .clone()
+            .unwrap()
+            .contains("降级为拒绝")
+    );
     fixture.harness.shutdown().await;
 }
 

@@ -29,7 +29,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::style::Print;
 use ratatui::crossterm::terminal::{
-    enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, SetTitle,
+    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, SetTitle, enable_raw_mode,
 };
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -59,7 +59,7 @@ use super::panel::Panel;
 use super::selection;
 use super::severity::Severity;
 use super::token;
-use super::transcript::{summarize_args, Block, ToolBlock, Transcript};
+use super::transcript::{Block, ToolBlock, Transcript, summarize_args};
 use super::width::{char_columns, ellipsize_line, text_columns, truncate_columns};
 use super::wording::{self, speaker_label};
 use super::{DeltaKind, Render, RenderEvent};
@@ -6656,24 +6656,28 @@ fn paint_block(
             rows.into_iter().map(RenderedLine::from).collect()
         }
         Block::Delta { .. } => Vec::new(),
-        Block::RoundStarted { round, mode } => vec![Line::from(Span::styled(
-            wording::round_section(*round, *mode),
-            Style::default()
-                .fg(palette::MUTED)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .into()],
+        Block::RoundStarted { round, mode } => vec![
+            Line::from(Span::styled(
+                wording::round_section(*round, *mode),
+                Style::default()
+                    .fg(palette::MUTED)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .into(),
+        ],
         Block::RoundEnded { round, reason } => {
             vec![severity_line(*reason, wording::round_ended(*round, *reason)).into()]
         }
         Block::Divergence { topic, positions } => {
-            let mut lines: Vec<RenderedLine> = vec![Line::from(Span::styled(
-                format!("!! {}", wording::divergence(topic)),
-                Style::default()
-                    .fg(palette::PLAIN)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .into()];
+            let mut lines: Vec<RenderedLine> = vec![
+                Line::from(Span::styled(
+                    format!("!! {}", wording::divergence(topic)),
+                    Style::default()
+                        .fg(palette::PLAIN)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .into(),
+            ];
             for position in positions {
                 lines.push(Line::from(format!("{}- {position}", wording::INDENT)).into());
             }
@@ -6682,102 +6686,122 @@ fn paint_block(
         Block::Tool(tool) => tool_block_lines(tool, colors, style),
         // 后置 hook 的反馈，关于刚画出来的那次调用：一行普通的缩进行，黄色，因为说话的是策略
         // 而不是工具。
-        Block::ToolFeedback { outcome, .. } => vec![Line::from(Span::styled(
-            format!("{}{}", wording::INDENT, wording::hook_feedback(outcome)),
-            Style::default().fg(palette::WARN),
-        ))
-        .into()],
-        Block::TurnStarted { speaker, iteration } => vec![speaker_line(
-            speaker,
-            wording::turn_started(*iteration),
-            Style::default().fg(palette::MUTED),
-            colors,
-            style,
-        )
-        .into()],
-        Block::TurnEnded { speaker, reason } => {
-            vec![severity_speaker_line(
+        Block::ToolFeedback { outcome, .. } => vec![
+            Line::from(Span::styled(
+                format!("{}{}", wording::INDENT, wording::hook_feedback(outcome)),
+                Style::default().fg(palette::WARN),
+            ))
+            .into(),
+        ],
+        Block::TurnStarted { speaker, iteration } => vec![
+            speaker_line(
                 speaker,
-                *reason,
-                wording::turn_ended(*reason),
+                wording::turn_started(*iteration),
+                Style::default().fg(palette::MUTED),
                 colors,
                 style,
             )
-            .into()]
+            .into(),
+        ],
+        Block::TurnEnded { speaker, reason } => {
+            vec![
+                severity_speaker_line(
+                    speaker,
+                    *reason,
+                    wording::turn_ended(*reason),
+                    colors,
+                    style,
+                )
+                .into(),
+            ]
         }
         Block::PermissionAsked {
             speaker,
             tool_name,
             args,
-        } => vec![speaker_line(
-            speaker,
-            wording::permission_asked(tool_name.as_deref(), &summarize_args(args)),
-            Style::default().fg(palette::MUTED),
-            colors,
-            style,
-        )
-        .into()],
+        } => vec![
+            speaker_line(
+                speaker,
+                wording::permission_asked(tool_name.as_deref(), &summarize_args(args)),
+                Style::default().fg(palette::MUTED),
+                colors,
+                style,
+            )
+            .into(),
+        ],
         Block::PermissionDecided {
             speaker,
             decision,
             source,
             reason,
-        } => vec![speaker_line(
-            speaker,
-            wording::permission_decided(*decision, *source, reason.as_deref()),
-            Style::default().fg(palette::MUTED),
-            colors,
-            style,
-        )
-        .into()],
+        } => vec![
+            speaker_line(
+                speaker,
+                wording::permission_decided(*decision, *source, reason.as_deref()),
+                Style::default().fg(palette::MUTED),
+                colors,
+                style,
+            )
+            .into(),
+        ],
         Block::Hook {
             speaker,
             point,
             outcome,
-        } => vec![speaker_line(
-            speaker,
-            wording::hook(point, outcome),
-            Style::default().fg(palette::MUTED),
-            colors,
-            style,
-        )
-        .into()],
+        } => vec![
+            speaker_line(
+                speaker,
+                wording::hook(point, outcome),
+                Style::default().fg(palette::MUTED),
+                colors,
+                style,
+            )
+            .into(),
+        ],
         Block::ExecutorSpawned {
             speaker,
             executor_id,
-        } => vec![speaker_line(
-            speaker,
-            wording::executor_spawned(executor_id.as_str()),
-            Style::default().fg(palette::MUTED),
-            colors,
-            style,
-        )
-        .into()],
+        } => vec![
+            speaker_line(
+                speaker,
+                wording::executor_spawned(executor_id.as_str()),
+                Style::default().fg(palette::MUTED),
+                colors,
+                style,
+            )
+            .into(),
+        ],
         Block::ExecutorFinished {
             executor_id,
             reason,
             summary,
-        } => vec![severity_line(
-            *reason,
-            wording::executor_finished(executor_id.as_str(), *reason, summary),
-        )
-        .into()],
-        Block::Usage { speaker, usage } => vec![speaker_line(
-            speaker,
-            wording::usage_summary(usage),
-            Style::default().fg(palette::MUTED),
-            colors,
-            style,
-        )
-        .into()],
-        Block::AgentError { speaker, message } => vec![severity_speaker_line(
-            speaker,
-            StopReason::Error,
-            wording::agent_error(message),
-            colors,
-            style,
-        )
-        .into()],
+        } => vec![
+            severity_line(
+                *reason,
+                wording::executor_finished(executor_id.as_str(), *reason, summary),
+            )
+            .into(),
+        ],
+        Block::Usage { speaker, usage } => vec![
+            speaker_line(
+                speaker,
+                wording::usage_summary(usage),
+                Style::default().fg(palette::MUTED),
+                colors,
+                style,
+            )
+            .into(),
+        ],
+        Block::AgentError { speaker, message } => vec![
+            severity_speaker_line(
+                speaker,
+                StopReason::Error,
+                wording::agent_error(message),
+                colors,
+                style,
+            )
+            .into(),
+        ],
         Block::SessionError { code, detail } => {
             vec![severity_line(StopReason::Error, wording::session_error(code, detail)).into()]
         }
@@ -6817,11 +6841,13 @@ fn paint_block(
         Block::History { reason, summary } => {
             vec![narration(wording::history(*reason, summary.as_deref())).into()]
         }
-        Block::Diagnostic(message) => vec![Line::from(Span::styled(
-            wording::diagnostic(message),
-            Style::default().fg(palette::WARN),
-        ))
-        .into()],
+        Block::Diagnostic(message) => vec![
+            Line::from(Span::styled(
+                wording::diagnostic(message),
+                Style::default().fg(palette::WARN),
+            ))
+            .into(),
+        ],
         Block::Notice(message) => vec![narration(message.clone()).into()],
     }
 }
@@ -7845,8 +7871,8 @@ mod tests {
     #[test]
     fn every_kind_of_block_lands_in_the_views_the_split_names() {
         use crate::events::{
-            hook_format, Decision, DecisionSource, HistoryReason, ParticipantId, RoundMode,
-            SpeakerId, Usage,
+            Decision, DecisionSource, HistoryReason, ParticipantId, RoundMode, SpeakerId, Usage,
+            hook_format,
         };
         use crate::render::transcript::{ToolBlock, ToolOutcome};
 
@@ -8498,8 +8524,8 @@ mod tests {
         // 浮层是**外来屏幕**：它盖住的那一整块 —— 包括四周那一格留白 —— 由它自己交代，
         // 底下的左栏（标记、页签条、读数）不能从它的空白处透出来。窄终端上浮层与左栏重叠得
         // 更多，这条尤其显眼（2026-10-07 维护者报的）。
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let mut state = state();
         state.area = Rect::new(0, 0, 100, 30);

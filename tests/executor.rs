@@ -13,13 +13,13 @@ use std::sync::Arc;
 
 use heng::config::SessionConfig;
 use heng::events::{
-    read_events, Decision, Event, EventPayload, ParticipantId, Role, SessionId, SpeakerId,
-    StopReason, Usage,
+    Decision, Event, EventPayload, ParticipantId, Role, SessionId, SpeakerId, StopReason, Usage,
+    read_events,
 };
 use heng::permissions::{Asker, Mode, Policy, Rule, Scope, Subject};
 use heng::provider::{FinishReason, Message, ProviderError, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
 fn kimi() -> SpeakerId {

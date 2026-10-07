@@ -9,9 +9,9 @@
 //! 它与 [`crate::render::tui`] 里的命中区域同一套纪律：每帧重建、由下一次指针事件来读，所以
 //! 「记下来的」与「看见的」不可能漂开。记录点是**画那一行的同一个地方**。
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
-use ratatui::Frame;
 
 use crate::render::width;
 

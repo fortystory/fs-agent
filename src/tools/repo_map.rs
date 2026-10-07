@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::context::repo_map::{RepoMap, REPO_MAP_TOOL};
+use crate::context::repo_map::{REPO_MAP_TOOL, RepoMap};
 use crate::provider::ToolSpec;
 
 use super::tool::{Effect, Tool, ToolContext, ToolError, ToolOutput};

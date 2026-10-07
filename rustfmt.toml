@@ -1,0 +1,9 @@
+# 格式风格用 2024：Rust 1.85 起 rustfmt 的「style edition」与语言 edition 解耦，不写这一行
+# 它会跟着 `Cargo.toml` 的 edition 走。这里显式写下来，是为了让「格式风格」这件事有它自己
+# 的落点，不靠 edition 顺带决定。
+#
+# 相对 2021 style，本仓库吃到三处变化：`use` 排序改成大小写敏感的 ASCII 序（`TASK_TOOL` 因此
+# 排在 `ToolError` 前面）、长字符串字面量不再按宽度折行（`THINKING_IN_CHINESE` 那类常量回到
+# 单行）、嵌套调用的换行布局拆成块。切过来那一次是 94 个文件、504 删 / 581 增行的重排，之后
+# 不再产生漂移。要退回 2021 style，把这一行改回去再跑一次 `cargo fmt` 就是那件事本身。
+style_edition = "2024"

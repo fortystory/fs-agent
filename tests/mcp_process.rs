@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use heng::config::{
     McpServerConfig, McpSettings, SandboxAvailability, SandboxMode, SandboxSettings,
 };
-use heng::mcp::{connect_all, ConnectOptions, McpService, StderrSink};
+use heng::mcp::{ConnectOptions, McpService, StderrSink, connect_all};
 use heng::tools::Sandbox;
 use serde_json::json;
 

@@ -1151,7 +1151,9 @@ fn the_status_row_marks_labels_values_and_separators() {
     let kinds: Vec<wording::StatusKind> = parts.iter().map(|part| part.kind).collect();
     assert_eq!(
         kinds,
-        vec![Value, Label, Value, Separator, Value, Separator, Label, Value, Separator, Value],
+        vec![
+            Value, Label, Value, Separator, Value, Separator, Label, Value, Separator, Value
+        ],
         "四段、三档：{parts:?}"
     );
 }

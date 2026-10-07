@@ -13,7 +13,7 @@
 //! [`normalize_usage`]、[`classify_status`]、[`retry_delay`] —— 所以它们用录下来的 chunk 形状
 //! 测试，不需要网络。
 
-use std::collections::{btree_map::Entry, BTreeMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,9 +21,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use super::capability::{caps_for, ModelCaps, UnknownModel};
+use super::capability::{ModelCaps, UnknownModel, caps_for};
 use super::{
     ChatRequest, EventStream, FinishReason, Message, Provider, ProviderError, StreamEvent,
     ToolCall, ToolChoice, ToolSpec,
@@ -912,9 +912,7 @@ pub enum BuildError {
     Config(#[from] ConfigError),
     #[error(transparent)]
     UnknownModel(#[from] UnknownModel),
-    #[error(
-        "provider `{provider}` 没有 API key：在 config.toml 里设置 `api_key`，或者导出 {hint}"
-    )]
+    #[error("provider `{provider}` 没有 API key：在 config.toml 里设置 `api_key`，或者导出 {hint}")]
     MissingKey { provider: String, hint: String },
     #[error("provider `{provider}`：建不出 HTTP client：{detail}")]
     HttpClient { provider: String, detail: String },

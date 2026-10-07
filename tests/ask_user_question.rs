@@ -18,18 +18,18 @@ use async_trait::async_trait;
 use heng::config::SessionConfig;
 use heng::context::repo_map::RepoMapInput;
 use heng::context::skills::Skills;
-use heng::events::{read_events, EventPayload, SessionId, SpeakerId};
+use heng::events::{EventPayload, SessionId, SpeakerId, read_events};
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::questions::{Choice, UserAnswer, UserAnswers, UserQuestion, UserQuestions};
 use heng::render::{
-    console, spawn_plain_console_with, ConsoleQuestions, LineReader, RenderSinks, Renderer,
+    ConsoleQuestions, LineReader, RenderSinks, Renderer, console, spawn_plain_console_with,
 };
 use heng::tools::{
-    AskUserQuestionTool, BashLimits, Effect, PathLocks, Registry, Sandbox, SessionPaths, Tool,
-    ToolContext, ToolError, ToolOutput, ASK_USER_QUESTION_TOOL, TASK_TOOL,
+    ASK_USER_QUESTION_TOOL, AskUserQuestionTool, BashLimits, Effect, PathLocks, Registry, Sandbox,
+    SessionPaths, TASK_TOOL, Tool, ToolContext, ToolError, ToolOutput,
 };
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use serde_json::Value;
 use support::{AlwaysAllow, FakeProvider, Reply};
 

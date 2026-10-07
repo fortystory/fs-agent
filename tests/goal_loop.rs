@@ -11,18 +11,18 @@ use std::path::{Path, PathBuf};
 use chrono::{TimeZone, Utc};
 use heng::config::SessionConfig;
 use heng::events::{
-    current_goal, read_events, ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId,
+    ContextSource, Event, EventPayload, Redactor, SessionId, SpeakerId, current_goal, read_events,
 };
 use heng::events::{GoalStopReason, StopReason};
 use heng::goals::{
-    self, check_start, progress, threshold_step, unfinished, Manifest, NoProgress, Progress, Retry,
-    StartRefusal, ThresholdStep, TodoCall,
+    self, Manifest, NoProgress, Progress, Retry, StartRefusal, ThresholdStep, TodoCall,
+    check_start, progress, threshold_step, unfinished,
 };
 use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
-use heng::tools::{builtin, todo, PathLocks};
-use heng::{assemble, AssemblyParts, Harness, SessionScaffold};
+use heng::tools::{PathLocks, builtin, todo};
+use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{CaptureBuf, FakeProvider, Reply};
 
 // --- 一场会话 --------------------------------------------------------------
@@ -938,9 +938,11 @@ async fn clear_is_the_same_rollover_without_a_summary_and_leaves_no_trace_on_the
 
     let old_log = session.log_path.clone();
     let before = session.events();
-    assert!(before
-        .iter()
-        .any(|event| matches!(event.payload, EventPayload::MessageCompleted { .. })));
+    assert!(
+        before
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::MessageCompleted { .. }))
+    );
 
     // `/clear` 调的**就是**翻页那条机制，差别只有一处：不带压缩、不带摘要注入。
     let store = SessionStore::new(root.join("store"));
@@ -1072,9 +1074,11 @@ async fn stopping_a_goal_records_one_event_with_the_count_and_the_stuck_entries(
     assert_eq!(stopped[0].1, 3);
     assert_eq!(stopped[0].2, ["02", "03"], "卡住的条目随事件一起落");
     // 它与 `GoalCompleted` 是并列的两条：这一条流上没有「做完了」。
-    assert!(!events
-        .iter()
-        .any(|event| matches!(event.payload, EventPayload::GoalCompleted { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::GoalCompleted { .. }))
+    );
 
     // 说给人听的那一段点名了卡住的条目。
     let line = heng::render::wording::goal_stopped(

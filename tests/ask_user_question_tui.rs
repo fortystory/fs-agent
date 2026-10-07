@@ -11,11 +11,11 @@
 use heng::config::FileViewerSettings;
 use heng::questions::{UserAnswer, UserAnswers, UserQuestion};
 use heng::render::{
-    draw_frame, ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts, TuiState,
+    ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts, TuiState, draw_frame,
 };
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
-use ratatui::Terminal;
 use tokio::sync::oneshot;
 
 fn facts() -> SessionFacts {

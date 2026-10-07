@@ -10,7 +10,7 @@ use heng::events::{
     ContextSource, Decision, DecisionSource, Event, EventPayload, HistoryReason, ParticipantId,
     Role, RoundMode, SessionId, SpeakerId, StopReason, ToolCallId, Usage,
 };
-use heng::hooks::{effective_verdict, public_history, Constraint, HookEvent, Tightening};
+use heng::hooks::{Constraint, HookEvent, Tightening, effective_verdict, public_history};
 
 /// 每个枚举变体各一条 payload，外加钩子能不能看见它。
 fn all_payloads() -> Vec<(&'static str, EventPayload, bool)> {

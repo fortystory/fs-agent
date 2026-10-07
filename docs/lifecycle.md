@@ -530,7 +530,7 @@ flowchart TD
 - **说什么**：这一档的全部承诺都建立在沙箱上；没有沙箱时它在组装期就被拒。
 - **图上的边**：图 2 的 `tools → open`（组装期那次拒绝就在 `open` 里）与 `open → probe`；
   会话里 `Shift+Tab` 再跳过一次（图 1 的 `loop` 收手势）。
-- **证据**：`src/lib.rs:398-414`、`src/lib.rs:1146-1156`、`src/tools/sandbox.rs:48-83`
+- **证据**：`src/lib.rs:398-414`、`src/lib.rs:1146-1156`、`src/tools/sandbox.rs:47-82`
 - **破坏了会怎样**：关掉沙箱仍然允许 `workspace` 档，「区内自动、区外要问」就失去内核担保，
   区外的写会真的落盘 —— 用户以为还有一道墙，其实没有了。
 
@@ -614,12 +614,12 @@ flowchart TD
 | `scfg` | `SessionConfig`：预算 · 迭代上限 · 沙箱 · 落点 | `src/cli.rs:306-312`、`src/config.rs:1170-1180` | `fn session_config` |
 | `mode` | 起始权限模式：`--mode` 压过 `[permissions] mode` | `src/cli.rs:229-231`、`src/cli.rs:323` | `fn effective_mode` |
 | `tools` | 工具表组装：内建 + 动态 + 联网，组装期定死 | `src/cli.rs:386-389`、`src/tools/mod.rs:96-130` | `fn with_dynamic`、`fn with_web` |
-| `probe` | 沙箱探测：`mode="off"` 或已给结果则不探 | `src/lib.rs:315-322`、`src/tools/sandbox.rs:48-83` | `fn sandbox_availability`、`fn probe` |
+| `probe` | 沙箱探测：`mode="off"` 或已给结果则不探 | `src/lib.rs:315-322`、`src/tools/sandbox.rs:47-82` | `fn sandbox_availability`、`fn probe` |
 | `open` | `assemble`：建/开日志 · 技能 · `AGENTS.md` · 起渲染器 | `src/lib.rs:217-275`、`src/lib.rs:448-470` | `fn open`、`fn assemble` |
 | `kind` | 这条流有没有 `SessionStarted` | `src/lib.rs:244-252` | — |
 | `skel` | 新流：`SessionStarted` + 沙箱状态 + 钉住注入 | `src/lib.rs:366-386` | `fn record_skeleton` |
 | `resume` | 续流：补记沙箱状态 · 收尾悬空 `tool_call` · 重放历史 | `src/lib.rs:330-345`、`src/agent/history.rs:40-61`、`src/cli.rs:417-419` | `fn start`、`fn recover_pending_calls` |
-| `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:1981` | `fn banner` |
+| `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:1993` | `fn banner` |
 | `loop` | 主循环 | `src/cli.rs:1102-1313` | `fn interactive_loop` |
 | `quit` | 排空渲染通道，然后 stderr 打续接回执 | `src/cli.rs:511-525`、`src/lib.rs:1167-1170` | `fn finish_session`、`fn drain_renderer` |
 | `ok` | 退出 0 | `src/cli.rs:2262-2272`、`src/cli.rs:1973-1978` | `fn exit_code_after` |
@@ -684,10 +684,10 @@ flowchart TD
 | `prov-->>core: [DONE]` | `src/agent.rs:639-649`、`src/agent.rs:672-677` | 只有 `[DONE]` 才算完成单位 |
 | `core->>core: MessageCompleted 落流` | `src/agent.rs:679-690` | — |
 | `Note over core: 固定顺序` | `src/agent.rs:1-7`、`src/hooks.rs:99`、`src/agent.rs:896-1131` | `hook.pre` / `hook.post` 在 CLI 下恒不发生，见 §4 |
-| `core->>gate: 权限门 + 钩子约束取上确界` | `src/agent.rs:1894-1903`、`src/hooks.rs:99` | `Allow < Ask < Deny` |
+| `core->>gate: 权限门 + 钩子约束取上确界` | `src/agent.rs:1890-1899`、`src/hooks.rs:99` | `Allow < Ask < Deny` |
 | `gate->>human: Ask 时问一次` | `src/agent.rs:1904-1954`、`src/permissions.rs:974-1012`、`src/render/input.rs:251` | 没有 asker 则降级 `Deny` |
 | `human-->>gate: 允许 / 总是允许 / 拒绝` | `src/agent.rs:1954-1995`、`src/permissions.rs:996-1004` | `Answer` 三值 |
-| `gate-->>core: 裁决` | `src/agent.rs:1894-1903` | 与钩子约束取上确界之后 |
+| `gate-->>core: 裁决` | `src/agent.rs:1890-1899` | 与钩子约束取上确界之后 |
 | `core->>tools: dispatch（工作区锁 → 路径锁）` | `src/agent.rs:1078-1112`、`src/tools/registry.rs:178-185` | — |
 | `tools-->>core: 结果：打码 → 截断 → 追加` | `src/agent.rs:2053-2087` | `emit_completed` |
 | `core->>core: 还有 tool_call？→ 下一轮迭代` | `src/agent.rs:726-728` | `last_assistant_has_tool_calls` |
@@ -701,7 +701,7 @@ flowchart TD
 | `deb2` | 讨论者 B：同一条规则 | `src/lib.rs:566-605`、`src/cli.rs:900-948`、`src/agent.rs:1334-1427` | `fn discussion_participants` |
 | `task` | `task` 工具调用：先判预算、再构造端口并推迟 | `src/agent.rs:1044-1076` | — |
 | `pre` | `hook.pre`：在门之前，能拦下一次询问 | `src/agent.rs:896-994` | — |
-| `gate` | 权限门 → 通过后决定推迟还是就地派发 | `src/agent.rs:1894-1903`、`src/agent.rs:1035-1077`、`src/agent.rs:1841` | `fn authorize` |
+| `gate` | 权限门 → 通过后决定推迟还是就地派发 | `src/agent.rs:1890-1899`、`src/agent.rs:1035-1077`、`src/agent.rs:1841` | `fn authorize` |
 | `hooks` | 钩子实现：可注入，CLI 不注入 | `src/hooks.rs:169-181`、`src/lib.rs:94`、`tests/hook_mount_points.rs:297-298` | `trait Hook` |
 | `pool` | 推迟批：按 `max_parallel_executors` buffered | `src/agent.rs:1140-1178` | `fn run_deferred` |
 | `spawn` | `ExecutorPort::new` 快照会话 | `src/agent/executor.rs:90-140` | `fn new` |
@@ -713,7 +713,7 @@ flowchart TD
 | `finished` | `ExecutorFinished` 落流 | `src/agent/executor.rs:204-215` | — |
 | `one` | 那次 `task` 调用唯一的结果：摘要 + 改动文件 + token | `src/agent/executor.rs:217-231`、`src/agent/executor.rs:305-324` | `fn executor_report` |
 | `round` | 讨论轮次：`RoundStarted` + `join_all` 并发 | `src/agent.rs:1400-1427` | — |
-| `syn` | 合成器：一次 `run_single_shot` | `src/agent.rs:1653-1676`、`src/agent.rs:1600` | `fn run_single_shot` |
+| `syn` | 合成器：一次 `run_single_shot` | `src/agent.rs:1649-1672`、`src/agent.rs:1600` | `fn run_single_shot` |
 | `out` | 共识 / 分歧 / 未决 | `src/agent.rs:1574-1584`、`CONTEXT.md:36-38` | — |
 
 ### 图 4 的边
@@ -723,7 +723,7 @@ flowchart TD
 | `deb --> task` | `src/agent.rs:702-711` | 回合里逐条调 `process_call` |
 | `deb2 --> round` | `src/agent.rs:1409-1417` | 每轮 `RoundStarted` 之后 `join_all` |
 | `task --> pre` | `src/agent.rs:890-891` | `resolve_facts` 之后立刻 `hook.pre` |
-| `pre --> gate` | `src/agent.rs:1894-1903` | 门在钩子之后，取上确界 |
+| `pre --> gate` | `src/agent.rs:1890-1899` | 门在钩子之后，取上确界 |
 | `pre -.-> hooks` | `src/agent.rs:903-917`、`src/cli.rs:396` | CLI 恒 `None`，测试可注入 |
 | `gate --> pool` | `src/agent.rs:1072-1076` | `task` 被推迟 |
 | `pool --> spawn` | `src/agent.rs:1155-1176`、`src/agent/executor.rs:236-238` | `dispatch` → `ExecutorSpawner::spawn` |
@@ -742,7 +742,7 @@ flowchart TD
 
 | 节点 id | 一句话 | 证据 | 符号 |
 | --- | --- | --- | --- |
-| `emit` | `append_event`：唯一写路径 | `src/agent.rs:2268-2280` | `fn append_event` |
+| `emit` | `append_event`：唯一写路径 | `src/agent.rs:2264-2276` | `fn append_event` |
 | `red` | 打码在追加之前，于是「流上文本 == 模型看到的文本」 | `src/agent.rs:2223`、`src/events.rs:513-530`、`src/events.rs:641-665` | `fn redact` |
 | `log` | `EventLog::append`：JSONL 一行一事件 | `src/events.rs:1009-1038` | `fn append` |
 | `disk` | 会话目录：JSONL + `outputs/` | `src/events.rs:948-1002`、`src/lib.rs:233-236` | `fn create`、`fn open` |

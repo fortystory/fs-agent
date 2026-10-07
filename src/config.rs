@@ -914,7 +914,7 @@ fn resolve_mcp_server(name: &str, raw: &RawMcpServer) -> Result<McpServerConfig,
                         "server `{name}` 同时写了 `command` 与 `url`；`transport` 没法推断，\
                          请显式写 `transport = \"stdio\"` 或 `\"http\"`"
                     ),
-                })
+                });
             }
             (None, None) => {
                 return Err(ConfigError::InvalidMcp {
@@ -922,7 +922,7 @@ fn resolve_mcp_server(name: &str, raw: &RawMcpServer) -> Result<McpServerConfig,
                         "server `{name}` 既没有 `command`（stdio）也没有 `url`（http），\
                          无法连接"
                     ),
-                })
+                });
             }
         },
     };
@@ -1102,7 +1102,7 @@ fn resolve_ui(raw: Option<&RawUi>) -> Result<UiSettings, ConfigError> {
         Some(other) => {
             return Err(ConfigError::UnknownNumberStyle {
                 value: other.to_owned(),
-            })
+            });
         }
     };
     // 查看器与制式同一个道理：不认识的词是启动错误，不静默回退 —— 写了 `vim` 的人以为
@@ -1114,7 +1114,7 @@ fn resolve_ui(raw: Option<&RawUi>) -> Result<UiSettings, ConfigError> {
         Some(other) => {
             return Err(ConfigError::UnknownFileViewer {
                 value: other.to_owned(),
-            })
+            });
         }
     };
     let width = raw
@@ -1786,7 +1786,7 @@ fn resolve_sandbox(raw: Option<&RawSandbox>, env: &EnvMap) -> Result<SandboxSett
         Some(other) => {
             return Err(ConfigError::UnknownSandboxMode {
                 mode: other.to_owned(),
-            })
+            });
         }
     };
     let home = env
@@ -2370,9 +2370,13 @@ pub enum ConfigError {
     UnknownOutsideRead { value: String },
     #[error("未知的沙箱模式 `{mode}`；`[sandbox] mode` 只接 `bwrap`（缺省）或 `off`")]
     UnknownSandboxMode { mode: String },
-    #[error("未知的 number_style 值 `{value}`；`[ui] number_style` 只接 `cn`（缺省，万 / 亿）或 `si`（k / M / G）")]
+    #[error(
+        "未知的 number_style 值 `{value}`；`[ui] number_style` 只接 `cn`（缺省，万 / 亿）或 `si`（k / M / G）"
+    )]
     UnknownNumberStyle { value: String },
-    #[error("未知的 file_viewer 值 `{value}`；`[ui] file_viewer` 只接 `builtin`（缺省，内置只读预览）或 `nvim`（在浮层里嵌一个真 nvim）")]
+    #[error(
+        "未知的 file_viewer 值 `{value}`；`[ui] file_viewer` 只接 `builtin`（缺省，内置只读预览）或 `nvim`（在浮层里嵌一个真 nvim）"
+    )]
     UnknownFileViewer { value: String },
     #[error(
         "`[ui] file_viewer_width = {width}` 太窄了：至少要 {min} 列，否则浮层里放不下一屏 nvim"
