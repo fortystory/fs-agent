@@ -119,8 +119,8 @@ Charting: **已完成**（2026-10-03，两轮 grilling 共 15 问 + 三次只读
 - [x] [§7「图上不能断的边」](issues/13-invariants-section.md)
 - [x] [收口：全绿 + 索引核对 + 人工验收](issues/14-close-out.md)
 
-共 **14** 张票（**5 决策 + 9 实现**），当前 **5 resolved / 8 done + 1 ready-for-walkthrough** ——
-实现票全部落地；票 14 剩下的只有「人在 GitHub 上看一眼五张图渲染出来」（见 `## 进度`）。
+共 **14** 张票（**5 决策 + 9 实现**），当前 **5 resolved + 9 done** —— 全部收口；票 14 剩下的
+那一项（五张图在 GitHub 上渲染出来）已由人在 2026-10-07 看过（见 `## 进度`）。
 
 ## 已定的决定
 
@@ -185,3 +185,7 @@ feature 行。护栏全绿：`lifecycle-check.py`（74 节点 / 78 边对账）�
 `check-language.py`、`cargo test`。本 feature **不改运行时行为**，所以没有事件流层面的验收。
 
 **待确认**：无。五张票的决定都已在 live exchange 或只读取证里落定。
+
+**已收口（2026-10-07）**：票 14 的人工验收通过 —— 五张图在 GitHub 上渲染正常，`Status` 转
+`done`。本 effort 至此 **14/14（5 resolved + 9 done）**；`spec.md` 抬头与
+[`.scratch/README.md`](../README.md) 的 feature 行同步更新。

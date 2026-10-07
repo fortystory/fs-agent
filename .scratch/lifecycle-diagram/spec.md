@@ -1,8 +1,8 @@
 # fs-agent 运行时生命周期图：`docs/lifecycle.md`
 
-Status: 8 done + 1 ready-for-walkthrough（2026-10-03 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 十五条冻结项 +
+Status: 9 done（2026-10-03 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 十五条冻结项 +
 五张决策票全部 resolved；实现票由 `/to-tickets` 拆出，[`issues/06`](issues/06-doc-skeleton-and-overview-diagram.md)–[`14`](issues/14-close-out.md)
-同日全部落地；票 14 剩下的只有「在 GitHub 上把五张图看一眼」）
+同日全部落地；票 14 的人工验收「在 GitHub 上看一眼五张图」2026-10-07 通过）
 
 fs-agent 有 15 个顶层边界、3 个前端、4 档权限模式、3 类问询发起者，还有嵌套会话与一条只追加的
 事件流。这些**分别在 `docs/` 的逐面文档里讲清了**，但**没有一处把它们连起来**：今天想回答「从敲下

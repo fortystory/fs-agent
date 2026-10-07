@@ -1,7 +1,7 @@
 # 14 — 收口：全绿 + 索引核对 + 人工验收
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 07, 08, 13
 
@@ -57,6 +57,11 @@ Blocked by: 07, 08, 13
 
 本票因此标 **`ready-for-walkthrough`**（不是 `done`）：能自动化的部分都跑过了，剩下的只有
 「在 GitHub 上把五张图看一眼」。
+
+## 验收（2026-10-07）
+
+维护者在 GitHub 上看过五张图：都渲染出来了、长图没有被截断得读不了、`sequenceDiagram` 的中文
+标签没有挤在一起。本票转 **`done`** —— 那是最后一项，本 effort 至此 14/14（5 resolved + 9 done）。
 
 **六条逐条有结论：**
 
