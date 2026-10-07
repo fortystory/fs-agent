@@ -388,9 +388,12 @@ impl Widget for ScreenWidget<'_> {
                 let Some(target) = buf.cell_mut(Position::new(area.x + col, area.y + row)) else {
                     continue;
                 };
-                if !cell.contents().is_empty() {
-                    target.set_symbol(cell.contents());
-                }
+                // **没有文字也要写一个空格**：这块外来屏幕盖住的每一格都由它自己交代成空。
+                // 只设样式不写符号的话，同一帧里先画的左栏（标记、页签条、读数）会原样留在
+                // 缓冲里 —— 屏幕上就是它们从浮层的空白处透出来（2026-10-07 维护者报的）。
+                // 空内容的格子与「本来就该是空格」的格子在 `vt100` 里是同一件事。
+                let contents = cell.contents();
+                target.set_symbol(if contents.is_empty() { " " } else { contents });
                 target.set_style(style_of(cell));
             }
         }

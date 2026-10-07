@@ -12,7 +12,7 @@
 use heng::render::viewer::ScreenWidget;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 
 /// nvim 那一屏的底色。
@@ -99,4 +99,28 @@ fn a_wide_character_is_not_cut_in_half() {
         !tail.symbol().is_empty(),
         "第二格该留给宽字的后半格，而不是被写成空串：{tail:?}"
     );
+}
+
+#[test]
+fn an_empty_cell_of_the_alien_screen_covers_what_is_under_it() {
+    // 外来屏幕盖住的每一格都由它交代：**没有文字的那些也要写一个空格**，不能只换个样式 ——
+    // 只设样式的话，同一帧里先画的左栏（标记、页签条、读数）会原样留在缓冲里，从浮层的
+    // 空白处透出来（2026-10-07 维护者报的）。
+    let area = Rect::new(0, 0, 8, 1);
+    let parser = vt100::Parser::new(1, 8, 0);
+    let mut buf = Buffer::empty(area);
+    buf.set_string(0, 0, "衡mark", Style::default().fg(Color::LightMagenta));
+
+    ScreenWidget {
+        screen: parser.screen(),
+    }
+    .render(area, &mut buf);
+
+    for col in 0..area.width {
+        assert_eq!(
+            buf.cell(Position::new(col, 0)).expect("在缓冲里").symbol(),
+            " ",
+            "第 {col} 列没被外来屏幕盖住"
+        );
+    }
 }

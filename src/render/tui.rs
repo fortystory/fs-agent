@@ -7517,6 +7517,14 @@ fn draw_file_viewer(frame: &mut ratatui::Frame, panes: &layout::Regions, state: 
     }
     let screen = pane.viewer.screen();
     let alive = pane.viewer.alive();
+    // 跨在左边缘上的那个宽字形让位：它占着浮层外一格、第二格落在浮层里，而第二格在差分里
+    // 会被跳过 —— 于是半个字形盖在留白上。与详情覆盖层同一条来路
+    // （[`blank_half_covered_glyphs`]）。
+    blank_half_covered_glyphs(frame, area);
+    // 整块先清成空：**留白那一圈由这里交代**，不留给「缓冲里本来就该是空的」那个假设 ——
+    // 它底下压着左栏，不清就会从留白里透出来（`.scratch/nvim-file-viewer/spec.md` §3 的
+    // 「去框留白」说的正是这块地；2026-10-07 维护者报的）。里圈随后由外来那一屏自己铺满。
+    frame.render_widget(Clear, area);
     frame.render_widget(viewer::ScreenWidget { screen: &screen }, grid);
     if !screen.hide_cursor() {
         let (row, col) = screen.cursor_position();
@@ -8327,6 +8335,53 @@ mod tests {
         assert!(
             !keyboard_in_the_input(&viewer),
             "文件查看器立着时输入区没有光标"
+        );
+    }
+
+    #[test]
+    fn the_viewer_frame_covers_everything_under_it() {
+        // 浮层是**外来屏幕**：它盖住的那一整块 —— 包括四周那一格留白 —— 由它自己交代，
+        // 底下的左栏（标记、页签条、读数）不能从它的空白处透出来。窄终端上浮层与左栏重叠得
+        // 更多，这条尤其显眼（2026-10-07 维护者报的）。
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut state = state();
+        state.area = Rect::new(0, 0, 100, 30);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("TestBackend");
+        // 第一帧：没有浮层，左栏照常画出来。
+        terminal
+            .draw(|frame| draw_frame(frame, &mut state))
+            .unwrap();
+
+        // 第二帧：装上浮层（与 `state_with_viewer` 同一套几何）。
+        let panes = layout::plan(state.area, 1, state.sidebar_wanted);
+        let area = panes
+            .overlay_area(panes.viewer_width(crate::config::DEFAULT_FILE_VIEWER_WIDTH))
+            .expect("100x30 放得下浮层");
+        state.file_viewer = Some(FileViewerPane {
+            viewer: Box::new(viewer::FakeViewer::default()),
+            grid: layout::inner(area),
+        });
+        state.file_viewer_rect = None;
+
+        let frame = terminal
+            .draw(|frame| draw_frame(frame, &mut state))
+            .unwrap();
+        let buf = frame.buffer;
+        let mut leaked = Vec::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                if buf[(x, y)].symbol() != " " {
+                    leaked.push((x, y, buf[(x, y)].symbol().to_owned()));
+                }
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "浮层没盖住底下的东西：{} 处，样例 {:?}",
+            leaked.len(),
+            &leaked[..leaked.len().min(10)]
         );
     }
 
