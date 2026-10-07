@@ -1,6 +1,6 @@
 # fs-agent v1：可扩展核心 + 多 agent 讨论
 
-Status: 34/34 done
+Status: 35/35 done
 
 - **来源**：`.scratch/multi-agent-architecture/map.md`（wayfinder 地图，25 张决策票全部 `resolved`）。本 spec 是那张图的**折叠**，不是新决定——唯一例外见 `补记` 的「spec 期新增的一条决定」。
 - **实现票落点**：`.scratch/fs-agent-v1/issues/NN-*.md`（由 `/to-tickets` 生成）。**不要写回 `multi-agent-architecture/`**——那个目录是决策图，编号已被决策票占用。

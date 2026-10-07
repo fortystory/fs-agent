@@ -7,7 +7,7 @@
 **需求池**：下表里形态为 `seed`、且没写「已移交」或「已折成 spec」的那些行，就是还能推进的意向（按表格数，不在这里记会漂的数字）；想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
-| [`fs-agent-v1/`](fs-agent-v1/spec.md) | spec | fs-agent v1：可扩展核心 + 多 agent 讨论 | 34/34 done |
+| [`fs-agent-v1/`](fs-agent-v1/spec.md) | spec | fs-agent v1：可扩展核心 + 多 agent 讨论 | 35/35 done |
 | [`multi-agent-architecture/`](multi-agent-architecture/map.md) | map | fs-agent：自用 · 可扩展核心 · 多 agent 讨论（wayfinder 决策图）—— **已折成 [`fs-agent-v1/spec.md`](fs-agent-v1/spec.md)** | 25/25 resolved |
 | [`tui-layout/`](tui-layout/spec.md) | map + spec | 四分区全屏 TUI：布局、多行输入与信息面板（**外壳已被 `tui-sidebar` 推翻**；`tui-ux` 的增量折在它的 §14） | 9 resolved + 7 done |
 | [`tui-sidebar/`](tui-sidebar/spec.md) | spec | 全高左栏、回合条与状态行：TUI 外壳改版 | 1 resolved + 4 done |

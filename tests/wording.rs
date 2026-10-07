@@ -720,6 +720,10 @@ fn a_banner_labels_the_model_mode_and_session_in_chinese() {
 fn interactive_feedback_reads_in_chinese() {
     assert_eq!(wording::nothing_to_undo(), "没有可撤销的修改");
     assert_eq!(
+        wording::undone(&PathBuf::from("src/a.rs")),
+        "已撤销对 src/a.rs 的这次编辑"
+    );
+    assert_eq!(
         wording::unknown_command("/nope", &[]),
         "未知命令 /nope（可用：/undo、/discuss、/goal-new、/loop、/clear、/quit、/exit，或直接输入 /<技能名>）"
     );

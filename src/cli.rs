@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use ratatui::buffer::CellWidth;
 
-use crate::agent::{CancelSignal, replay};
+use crate::agent::{CancelSignal, UndoOutcome, replay};
 use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
 use crate::events::{
     ContextSource, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage, read_events,
@@ -1147,6 +1147,18 @@ fn question(words: &[String]) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// 一次 `/undo` 对前端说的那句话。
+///
+/// 三种结果**都**要开口：成功那次尤其 —— 它刚把一个文件改回原样，而屏幕上没有别的东西替它
+/// 说话，少这一句就与「没东西可撤」长得一模一样（`.scratch/fs-agent-v1/issues/35-undo-receipt.md`）。
+fn undo_receipt(outcome: Result<Option<UndoOutcome>, crate::Error>) -> String {
+    match outcome {
+        Ok(Some(undone)) => render::wording::heng(&render::wording::undone(&undone.path)),
+        Ok(None) => render::wording::heng(render::wording::nothing_to_undo()),
+        Err(error) => render::wording::heng(&render::wording::error_report(&error)),
+    }
+}
+
 /// 读一行、跑它、重复 —— 直到用户离开或输入结束。
 async fn interactive_loop(
     harness: &mut Harness,
@@ -1235,15 +1247,10 @@ async fn interactive_loop(
             // 况就在上面处理。
             Submission::Ignore => {}
             Submission::Quit => return ExitCode::SUCCESS,
-            Submission::Undo => match harness.undo_last_edit().await {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    harness.notice(&format!("heng: {}", render::wording::nothing_to_undo()))
-                }
-                Err(error) => {
-                    harness.notice(&format!("heng: {}", render::wording::error_report(&error)))
-                }
-            },
+            Submission::Undo => {
+                let receipt = undo_receipt(harness.undo_last_edit().await);
+                harness.notice(&receipt);
+            }
             // 一次模板调用：收参数（命令行上的位置参数 + 缺的用问卷问）→ `prompts/get` → 那段
             // 文本**就是这一轮的输入**（server 渲染出来的那条消息）。
             Submission::McpPrompt {
@@ -3644,9 +3651,12 @@ fn print_sessions_help(out: &mut dyn Write) {
 mod tests {
     use super::{
         ExitRequest, McpPromptEntry, Mode, Submission, exit_code_after, finish_session, submission,
+        undo_receipt,
     };
-    use crate::agent::CancelSignal;
+    use crate::agent::{CancelSignal, UndoOutcome};
+    use crate::events::ToolCallId;
     use crate::render::FrontEndEvent;
+    use std::path::PathBuf;
     use std::process::ExitCode;
 
     /// 这些测试里一场会话知道的技能。
@@ -3669,6 +3679,22 @@ mod tests {
     fn read(text: &str) -> Submission<'_> {
         let prompts = prompts();
         submission(text, has_skill, &prompts)
+    }
+
+    /// 一次 `/undo` 的三种结果各说一句话，成功那次也**必须**说 —— 回滚在屏幕上本来是无声的
+    /// （`.scratch/fs-agent-v1/issues/35-undo-receipt.md`）。
+    #[test]
+    fn an_undo_always_answers_with_one_line() {
+        let undone = undo_receipt(Ok(Some(UndoOutcome {
+            tool_call_id: ToolCallId::new("call-1"),
+            path: PathBuf::from("src/a.rs"),
+        })));
+        assert_eq!(undone, "heng: 已撤销对 src/a.rs 的这次编辑");
+        assert_eq!(undo_receipt(Ok(None)), "heng: 没有可撤销的修改");
+        assert_eq!(
+            undo_receipt(Err(crate::Error::Undo("快照对不上".to_owned()))),
+            "heng: 撤销失败：快照对不上"
+        );
     }
 
     #[test]
