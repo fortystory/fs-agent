@@ -365,6 +365,11 @@ fn respond_to(bytes: &[u8], cursor: (u16, u16), out: &mut Vec<u8>) {
 ///
 /// 这一层就是 `tui-term` 替人做的事，几十行：每个格子连颜色与属性一起搬过去 ——
 /// 宽字符的第二格在 `vt100` 里是空串，**跳过**它，覆盖会把那个字擦掉一半。
+///
+/// 而**没有文字**的格子照样要搬：nvim 铺底色靠的正是「设好背景、再擦掉」，擦出来的格子
+/// `contents()` 是空的、`bgcolor()` 却是它的底色。只画有字的那几格，屏幕上就只剩文字处
+/// 有底色、空白处透出底下的转录 —— 而「没有框线，nvim 自己那块底色就是边界」
+/// （`.scratch/nvim-file-viewer/spec.md` §3）正是靠铺满成立。
 pub struct ScreenWidget<'a> {
     pub screen: &'a vt100::Screen,
 }
@@ -376,14 +381,16 @@ impl Widget for ScreenWidget<'_> {
                 let Some(cell) = self.screen.cell(row, col) else {
                     continue;
                 };
-                let contents = cell.contents();
-                if contents.is_empty() {
+                // 宽字的第二格：它没有内容，覆盖会把那个字擦掉一半。
+                if cell.is_wide_continuation() {
                     continue;
                 }
                 let Some(target) = buf.cell_mut(Position::new(area.x + col, area.y + row)) else {
                     continue;
                 };
-                target.set_symbol(contents);
+                if !cell.contents().is_empty() {
+                    target.set_symbol(cell.contents());
+                }
                 target.set_style(style_of(cell));
             }
         }

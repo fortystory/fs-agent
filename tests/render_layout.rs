@@ -2023,6 +2023,40 @@ fn clicking_the_tree_hands_it_the_keyboard_and_the_arrows_walk_the_rows() {
 }
 
 #[test]
+fn clicking_the_input_area_takes_the_keyboard_back_from_the_files_page() {
+    // 点左栏把键盘交给文件页之后，点回输入区该把它还回来 —— 否则一个点开过文件的人想接着
+    // 打字，只能先按一下 `Esc`（`.scratch/files-page/spec.md` §5 的「归还」那一条）。
+    let mut state = idle();
+    install_files(&mut state, &["a.rs"]);
+    open_files_page(&mut state, 120, 24);
+    let page = sidebar_page(&screen(120, 24, &mut state));
+    // 点文件行：键盘交给这一页，同时开出内容弹窗 —— 先按 `Esc` 把弹窗关掉（一次手势一层），
+    // 键盘仍在文件页上。
+    click_in_row(&mut state, 120, 24, page as u16, "a.rs");
+    state.key(Key::Esc);
+    state.key(Key::Char('x'));
+    let frame = buffer(120, 24, &mut state);
+    let (_, row) = cell_of(&frame, 120, 24, wording::PROMPT).expect("输入区在屏幕上");
+    assert!(
+        !row_text(&frame, row, 120).contains('x'),
+        "键盘在文件页时打字不落进草稿：{}",
+        row_text(&frame, row, 120)
+    );
+
+    // 点输入区那一格：键盘该回到输入区。
+    let (column, row) = cell_of(&frame, 120, 24, wording::PROMPT).expect("输入区在屏幕上");
+    click(&mut state, column, row);
+    state.key(Key::Char('x'));
+    let frame = buffer(120, 24, &mut state);
+    let (_, row) = cell_of(&frame, 120, 24, wording::PROMPT).expect("输入区还在");
+    assert!(
+        row_text(&frame, row, 120).contains('x'),
+        "点过输入区之后，打字该落进草稿：{}",
+        row_text(&frame, row, 120)
+    );
+}
+
+#[test]
 fn the_arrows_open_and_collapse_a_directory_and_enter_inserts_the_path() {
     let mut state = idle();
     install_files(&mut state, &["src/", "src/a.rs"]);

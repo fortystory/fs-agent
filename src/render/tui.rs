@@ -2839,6 +2839,8 @@ impl TuiState {
                 .is_some_and(|rect| rect.contains((column, row).into()));
             if !inside {
                 self.close_detail();
+                // 关掉它的这一下如果落在输入区上，那同时就是「我要打字」：键盘也一起还回去。
+                self.take_input_keyboard(column, row);
             }
             return;
         }
@@ -2863,6 +2865,12 @@ impl TuiState {
             // 中间那三种确认是**覆盖层**，它们占着**指针**：一次落在别处的点击什么都不做 ——
             // 尤其是，它绝不许关掉一个读的人还没回答的问题（spec §7、§9）。
             self.question_click(QuestionClick::At(column, row));
+            return;
+        }
+        // 点回输入区 = 「我要打字」：键盘还给输入区。它与「点左栏任意处把键盘交给这一页」
+        // 是同一条规矩的两半（`.scratch/files-page/spec.md` §5 的「归还」）—— 少了它，点开过
+        // 一个文件的人想接着打字，只能先按一下 `Esc`。输入区没有别的点击语义，所以到头了。
+        if !questioning && self.take_input_keyboard(column, row) {
             return;
         }
         // 点左栏任意处把键盘交给这一页 —— 页签条与页区都算，而这一下同时仍然是它本来
@@ -3173,6 +3181,20 @@ impl TuiState {
     /// 不该扣着键盘（与「没地方画覆盖层就关掉它」同一条纪律）。
     fn release_sidebar_keyboard(&mut self) {
         self.sidebar_keyboard = false;
+    }
+
+    /// 点在输入区上：把键盘还给输入区，回答 `true`。
+    ///
+    /// 它与「点左栏任意处把键盘交给这一页」是同一条规矩的两半
+    /// （`.scratch/files-page/spec.md` §5 的「归还」）—— 点在哪儿，键盘就归哪儿。输入区没有
+    /// 别的点击语义（那是行编辑，点在哪儿都还是同一份草稿），所以这一下到头了。
+    fn take_input_keyboard(&mut self, column: u16, row: u16) -> bool {
+        let input = layout::plan(self.area, 1, self.sidebar_wanted).input;
+        if !input.contains((column, row).into()) {
+            return false;
+        }
+        self.release_sidebar_keyboard();
+        true
     }
 
     /// 键盘在左栏时的一个按键：归这一页回答 `true`。
