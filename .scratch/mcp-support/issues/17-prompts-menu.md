@@ -1,7 +1,7 @@
 # 17 — 提示词模板接进 `/` 菜单
 
 Type: implement
-Status: ready-for-walkthrough
+Status: done
 Part of: ../map.md
 Blocked by: 10, 12
 
@@ -72,3 +72,11 @@ Blocked by: 10, 12
 - **状态记 `ready-for-walkthrough`**：能自动化的部分都落地了（解析、参数、往返、降级都有测试），
   剩下的是**在真终端里点一次菜单、填一遍参数**看那一眼 —— 问卷的 TUI 交互本来就走真机走查那条线
   （`docs/agents/issue-tracker.md` 的约定）。
+
+## 收口（2026-10-07）
+
+维护者确认收口，`Status` 从 `ready-for-walkthrough` 转 `done`。能自动化的那一半早已在：
+`tests/mcp_prompts.rs` 四条（两台好的拍平、坏的那台整台不出现、必填缺一条路径、常量条目回归）
+与 `src/cli.rs` 的单元测试四条（菜单条目与解析、位置参数按声明顺序填实参、`prompts/get` 往返、
+模板不进工具表）。原先留给真机的那一眼 —— 在真终端点一次 `/` 菜单、按声明顺序填一遍参数 ——
+至此不再挡这一票。

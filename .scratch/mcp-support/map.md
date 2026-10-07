@@ -134,10 +134,10 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 - [x] [文档与索引](issues/18-docs-and-index.md)
 - [x] [MCP 加载结果进上下文，那条记录可点开详情](issues/19-mcp-catalog-in-context.md)
 
-共 **19** 张票（**9 决策 + 10 实现**），当前 **9 resolved + 9 done + 1 ready-for-walkthrough**
-（票 17 只剩「在真终端里点一次 `/` 菜单、填一遍模板参数」那一项人工走查；票 19 由
+共 **19** 张票（**9 决策 + 10 实现**），当前 **9 resolved + 10 done** —— 全部收口（票 17 原先
+停在 `ready-for-walkthrough`，2026-10-07 由维护者确认收口，见票底）。票 19 由
 [`context-injection-detail`](../context-injection-detail/seed.md) 那条例意向折进来，2026-10-07
-补进本清单 —— 它此前漏在这里，`scripts/wayfinder-check.py` 因条目数对不上而红）。
+补进本清单 —— 它此前漏在这里，`scripts/wayfinder-check.py` 因条目数对不上而红。
 
 ## 已定的决定
 

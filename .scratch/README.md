@@ -36,7 +36,7 @@
 | [`multi-role-view/`](multi-role-view/seed.md) | seed | 多角色输出分屏 / 分 tab（现在是单流按 speaker 上色） | — |
 | [`desktop-notifications/`](desktop-notifications/seed.md) | seed | 桌面通知：回合完成、等审批这类时刻在 Linux 上提示 | — |
 | [`interjection-flow/`](interjection-flow/seed.md) | seed | 运行中插入对话：排队等到边界，或立刻打断 | — |
-| [`mcp-support/`](mcp-support/map.md) | map + spec | 接入 MCP：现行规范全集（tool / resource / prompt / elicitation + MRTR），**不扩工具表** —— 用四个元工具 `mcp_list` / `mcp_call` / `mcp_resources` / `mcp_read`；连接层取 `rmcp`，server 进程过沙箱 + 环境白名单，信任按能力逐台声明。逐面文档在 [`docs/mcp.md`](../docs/mcp.md)。 | 9 resolved + 9 done + 1 ready-for-walkthrough |
+| [`mcp-support/`](mcp-support/map.md) | map + spec | 接入 MCP：现行规范全集（tool / resource / prompt / elicitation + MRTR），**不扩工具表** —— 用四个元工具 `mcp_list` / `mcp_call` / `mcp_resources` / `mcp_read`；连接层取 `rmcp`，server 进程过沙箱 + 环境白名单，信任按能力逐台声明。逐面文档在 [`docs/mcp.md`](../docs/mcp.md)。 | 9 resolved + 10 done |
 | [`context-compaction/`](context-compaction/seed.md) | seed | 压缩上下文：溢出前折成摘要继续跑 —— **已移交 [`goal-loop`](goal-loop/seed.md)，并在那里落地**（`src/lib.rs` 的 `compact()` 产出 `HistoryReason::Compaction`） | — |
 | [`rag-vector-store/`](rag-vector-store/seed.md) | seed | RAG / 向量检索：按语义检索仓库或外部资料 | — |
 | [`background-services/`](background-services/seed.md) | seed | 后台服务进程与定时任务 | — |

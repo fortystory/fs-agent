@@ -1,7 +1,8 @@
 # MCP 接入：四个元工具（工具层 · 服务层 · 连接层）
 
-Status: 9 resolved + 9 done + 1 ready-for-walkthrough（实现票 [`issues/10`](issues/10-mcp-service-and-list.md)–[`19`](issues/19-mcp-catalog-in-context.md)，
-2026-10-03 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 二十条冻结项 + 九张决策票；依赖边见各票抬头）
+Status: 9 resolved + 10 done（实现票 [`issues/10`](issues/10-mcp-service-and-list.md)–[`19`](issues/19-mcp-catalog-in-context.md)，
+2026-10-03 由 wayfinder 决策图 [`map.md`](map.md) 折成 —— 二十条冻结项 + 九张决策票；依赖边见各票抬头；
+票 17 于 2026-10-07 收口，实现票至此全部落地）
 
 模型今天只能用内建的那几个工具加 `config.toml` 里静态声明的 `custom__*`。**外部能力进不来**：
 想让它操作 GitHub、查内部的 Jira、读一份外部数据源，只能靠 `bash` 拼命令行 —— 而那把每次调用都
