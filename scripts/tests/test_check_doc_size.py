@@ -30,7 +30,11 @@ def load_module():
     return module
 
 
-DOC_FILES = load_module().DOC_FILES
+_GUARDRAIL = load_module()
+DOC_FILES = _GUARDRAIL.DOC_FILES
+# 行数上限从脚本里现取：写死数字的话，预算一放宽（`AGENTS.md` 2026-10-06、`README.md`
+# 2026-10-07 各放宽过一次）这条用例就变成假红。
+README_LINE_LIMIT = _GUARDRAIL.ENTRY_BUDGET["README.md"]["lines"]
 
 SHORT = "# 标题\n\n这是一句短话，用中文写。\n"
 
@@ -205,7 +209,8 @@ class EntryBudgetTest(unittest.TestCase):
             self.assertIn("非空白字符数", result.stdout)
 
     def test_over_line_budget_fails(self):
-        with fixture(overrides={"README.md": "短句。\n" * 300}) as root:
+        # 段与段之间空一行：只撞「行数」那条上限，不顺手撞「单元 > 500」。
+        with fixture(overrides={"README.md": "短句。\n\n" * README_LINE_LIMIT}) as root:
             result = run(cwd=root)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("行数", result.stdout)

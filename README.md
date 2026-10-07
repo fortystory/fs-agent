@@ -1,8 +1,29 @@
 # 衡（heng）
 
 ```text
-                 héng
-                  衡
+                 héng                 
+     ██▖    ▄▄              ▗██       
+      ▀█▙   ▀▀████▙▄▄▄▖   ▗▟█▀        
+       ▝█▙     ▜█   ▀▜█▌  █▛          
+        ██   ▗▄█▌ ▄▄▄██▘ ▝█▙          
+     ▗▄█▛▘ ▐█▀▀▘ █▛▀▀     ▝▜█▄▖       
+   ▄██▀▘        ▄█▙▄▖       ▝▜█▙▖     
+             ▗█▛▀▜█▛▀██▖       ▀▀     
+      ▟██▙   ██ ▗▟█▙  ▜█  ▗▟█▙▖       
+     ▐█▘▝█▌  ███▛▜█▀████  ██▀▜█▖      
+     █▌  ▐█  █▛  ▟█▌  ▐█▌▐█▌  ▜█▖     
+    ▐█   ▐█▌ ████▛▜██▙▟█▌▐█▌  ▝██     
+    ▐█   ▐█▌▐█▛  ▗█▌ ▀▜█▌▝█▙   ▜█▖    
+    █▛   ▐█▌▝█▌  ▟█▙  ▝█▌ ██▖  ▐█▌    
+    █▌   ▟█   ▗▄█▛▜█▙▄    ▐█▙   █▌    
+    ▜▌  ▗█▌▗▄███▌  ▝███▙▄  ▜█▖  ▀▘    
+        ▐█▌▝▀  ▜█   █▌ ▀▀▘ ▝██        
+        ██     ▐█▌ ▗█▌      ▝█▙       
+       ▐█▌     ▐█▌ ▐█▌       ▜█▖      
+       ██      ▐█▌  ██        ▜█▖     
+      ▟█▘      ▐█   ██▖        ▜█▖    
+      █▛       ██   ▐█▌         ▜█    
+               █▛    ▀▘               
                            一套自用的 coding agent harness
                            forked synthesis · 分叉合成 · two forks, one stem
 ```
@@ -22,7 +43,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **34 张**实现票全部 `done`，此后每个 feature 也各自落了地，逐行的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)，其中几条只剩**真机走查**（`ready-for-walkthrough`，清单在 [`docs/tui-manual-checklist.md`](docs/tui-manual-checklist.md)）。规模：`src/` **48,517** 行、`tests/` **46,844** 行（`wc -l`）、**1,366** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
+**状态**：v1 的 **34 张**实现票全部 `done`，此后每个 feature 也各自落了地，逐行的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)，其中几条只剩**真机走查**（`ready-for-walkthrough`，清单在 [`docs/tui-manual-checklist.md`](docs/tui-manual-checklist.md)）。规模：`src/` **48,724** 行、`tests/` **47,181** 行（`wc -l`）、**1,369** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
 
 ## 快速开始
 

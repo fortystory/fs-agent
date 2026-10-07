@@ -301,9 +301,15 @@ def review_rules(unit: Unit) -> list[str]:
 #   **10,769 / 64**（feature 索引天然随 feature 增长，与 `input-tokens`、`trace-tab`、
 #   `tui-visual-language`、`time-mcp`、`tui-feedback`、`files-page`、`todo-page`、
 #   `clickable-links` 八次同因；这一行是一轮五问的 grilling 折成 spec、同日一张实现票落地）。
-#   其余两份照旧只许降。
+#   其余两份照旧只许降（`README.md` 那次放宽见下面 2026-10-07 的注）。
+# **2026-10-07 维护者放宽 `README.md`（第二份被放宽的入口文档）**：顶部 banner 按
+#   `rename-to-heng` spec 的「README 的 banner 与左栏标记同源」换成 `wording::logo_lines()`
+#   当前的二十三行小篆块字（原先那两行是矮终端用的 `logo_lines_compact`），README 294 → 316 行。
+#   维护者的原话是「加点预算吧，logo 确实大了不少」。新上限 **17,800 / 317**、终点
+#   **18,500 / 320**（字符那一档没动，终点只抬行数）。放宽与收紧同一条规矩 —— 显式动作、
+#   理由写进提交信息，决定也记进 `.scratch/docs-slim/issues/05` 的 `## 评论`。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 17447, "lines": 296, "target_chars": 18500, "target_lines": 300},
+    "README.md": {"chars": 17800, "lines": 317, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {"chars": 10769, "lines": 64, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }

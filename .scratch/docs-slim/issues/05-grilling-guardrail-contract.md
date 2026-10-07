@@ -115,3 +115,10 @@ Blocked by: 03
   「想加点啥有点费劲」。新上限 **5,000 / 140**、终点 **5,500 / 150**（`scripts/check-doc-size.py`
   的 `ENTRY_BUDGET`，注释里记了同一条）。`README.md` 与 `.scratch/README.md` 照旧只许降；
   放宽与收紧同一条规矩：**显式动作，理由写在提交信息里**。
+- **2026-10-07 维护者放宽了 `README.md` 那一档** —— 与上一条同一种显式动作。来由：顶部 banner
+  按 [`rename-to-heng` spec](../rename-to-heng/spec.md) 的「README 的 banner 与左栏标记同源」
+  换成 `wording::logo_lines()` 当前的二十三行小篆块字（原先那两行是矮终端用的
+  `logo_lines_compact`），README 从 294 行涨到 316 行。维护者的原话是「加点预算吧，logo 确实
+  大了不少」。新上限 **17,800 / 317**、终点 **18,500 / 320**（`scripts/check-doc-size.py` 的
+  `ENTRY_BUDGET`，注释里记了同一条；字符那一档没动，终点只抬行数）。至此两份入口文档被显式
+  放宽过，`.scratch/README.md` 照旧只许降。
