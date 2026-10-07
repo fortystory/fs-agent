@@ -92,10 +92,26 @@ impl Pane {
             return;
         };
         *last = line;
-        // 如果刚重写的那一行已经折过行，它的显示行就是陈旧的 —— 而且它们是缓存里**最后**
-        // 那些，所以正好丢掉它们就是全部工作。清掉整个缓存反而会把更早每一行的显示行都扔
-        // 了，而 `starts` 还在指它们的老偏移：于是窗格报出两行，历史从屏幕上消失，也没有
-        // 什么可以往回滚了（2026-09-23，用户报告）。
+        self.forget_last_wrap();
+    }
+
+    /// 给最新那条来源行**追加一段**，不动它的其余部分。
+    ///
+    /// 一笔用量长在它所归属的那次调用的行尾（ADR 0016），所以它得能补写已经画出去的那一行，
+    /// 而不是新起一行 —— 那行的时间戳、名字配色与详情入口都留在原地。
+    pub fn append_to_last(&mut self, span: Span<'static>) {
+        let Some(last) = self.lines.back_mut() else {
+            return;
+        };
+        last.spans.push(span);
+        self.forget_last_wrap();
+    }
+
+    /// 刚改过的那条来源行如果已经折过行，它的显示行就是陈旧的 —— 而且它们是缓存里**最后**
+    /// 那些，所以正好丢掉它们就是全部工作。清掉整个缓存反而会把更早每一行的显示行都扔了，
+    /// 而 `starts` 还在指它们的老偏移：于是窗格报出两行，历史从屏幕上消失，也没有什么可以
+    /// 往回滚了（2026-09-23，用户报告）。
+    fn forget_last_wrap(&mut self) {
         if self.wrapped_sources == self.lines.len() {
             if let Some(start) = self.starts.pop_back() {
                 self.wrapped.truncate(start);

@@ -41,7 +41,7 @@ use ratatui::widgets::{
 };
 use tokio::sync::broadcast;
 
-use crate::events::{ContextSource, Event, EventPayload, Role, StopReason, ToolCallId};
+use crate::events::{ContextSource, Event, EventPayload, Role, StopReason, ToolCallId, Usage};
 use crate::permissions::{Answer, Mode, PermissionRequest};
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
@@ -715,6 +715,12 @@ pub struct TuiState {
     /// 留着这份清单就是为了那时候按新宽度重放它们。代价是 `Tui` 多持一份块（与 `pane`
     /// 已经持有的源行同量级）—— 先按「全量重放」实现，简单可靠优先。
     painted: Vec<Painted>,
+    /// 现在在不在一次模型调用里（`TurnStarted` 之后、`TurnEnded` 之前）。合成器那次调用不属于
+    /// 任何回合，所以它的用量走独立行那条老路（§4）。
+    in_call: bool,
+    /// 这条发言里模型被调用了几次，以及那几次的读数之和 —— 收尾那条合计的原料（§5）。
+    turn_calls: usize,
+    turn_usage: Usage,
     /// 对话视图的源行是按多宽排的。
     ///
     /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
@@ -1594,28 +1600,81 @@ impl TurnRail {
     }
 }
 
+/// 轨迹页里长在一条行尾的那一段：一笔用量，或一次发言的合计。
+///
+/// 它不是块，所以既不带来自己的时刻戳，也不开详情入口 —— `▸` 的判据是「谁把内容折起来谁
+/// 就有」，而它什么都没折（ADR 0016、`.scratch/trace-usage-tail/spec.md` §1、§5）。
+#[derive(Debug, Clone, Copy)]
+enum Tail {
+    /// 产生它的那次调用的读数。
+    Usage(Usage),
+    /// 一次发言里各次调用之和 —— 只在跨 ≥2 次调用时出现。
+    Total(Usage),
+}
+
+impl Tail {
+    /// 它在屏幕上占的那几个字。
+    fn span(self) -> Span<'static> {
+        let text = match self {
+            Tail::Usage(usage) => wording::usage_tail(&usage),
+            Tail::Total(usage) => wording::total_tail(&usage),
+        };
+        Span::styled(format!(" {text}"), Style::default().fg(palette::MUTED))
+    }
+}
+
 /// 一条已经画进窗格、且能在宽度变化时重放的记录。
 ///
 /// 大多数行来自一个 [`Block`]；思考行是唯一的例外 —— 它是渲染器自己的状态（票 02 §1），
 /// 由 `pane.push` / `pane.replace_last` 原地管。宽度一变两者都得回来，所以清单里两种都记
 /// （`.scratch/markdown-render/spec.md` §1）。
+///
+/// 每一条还带一段可选的**尾巴**：一笔用量长在它所归属的那次调用的行尾，合计长在发言收尾那
+/// 一行上。它记在这里而不是当场写屏，是为了让宽度变化与 `--continue` 的重放跟实时同源
+/// （ADR 0016、`.scratch/trace-usage-tail/spec.md` §2）。
 enum Painted {
     /// 一个定稿的块，以及产生它的那一刻（`.scratch/trace-in-main/spec.md` §5）。轨迹页把这个
     /// 时刻画在行的开头，而重放要把它一起带回来。
-    Block { block: Block, at: DateTime<Utc> },
+    Block {
+        block: Block,
+        at: DateTime<Utc>,
+        tail: Option<Tail>,
+    },
     /// 还开着的思考行，以及**思考开始那一刻** —— 第一条推理增量到达的时候
     /// （`.scratch/trace-thought-stamp/spec.md` §1，推翻 `trace-in-main` 用户故事 21 的后半句）。
     /// 带 `at` 是为了宽度变化重放出来的那一行仍有同一个戳。
     Thinking {
         speaker: crate::events::SpeakerId,
         at: DateTime<Utc>,
+        tail: Option<Tail>,
     },
     /// 定稿的思考行；`trace` 是记下来的整段推理，`None` 是合成器那种「没记下来」。
     Thought {
         speaker: crate::events::SpeakerId,
         trace: Option<String>,
         at: DateTime<Utc>,
+        tail: Option<Tail>,
     },
+}
+
+impl Painted {
+    /// 这条记录尾上挂着的那一段，有的话。
+    fn tail(&self) -> Option<Tail> {
+        match self {
+            Painted::Block { tail, .. }
+            | Painted::Thinking { tail, .. }
+            | Painted::Thought { tail, .. } => *tail,
+        }
+    }
+
+    /// 把尾巴挂上去 —— 该次调用收尾时那一下。
+    fn set_tail(&mut self, tail: Tail) {
+        match self {
+            Painted::Block { tail: slot, .. }
+            | Painted::Thinking { tail: slot, .. }
+            | Painted::Thought { tail: slot, .. } => *slot = Some(tail),
+        }
+    }
 }
 
 /// 一次进行中的历史重放：组装好的事件流、其中有多少已经铺进转录、以及那产出了多少条
@@ -1658,6 +1717,9 @@ impl TuiState {
             trace: Pane::new(),
             live: String::new(),
             painted: Vec::new(),
+            in_call: false,
+            turn_calls: 0,
+            turn_usage: Usage::default(),
             // 第一帧之前没有真正的宽度；先用共享渲染那个缺省把行排出来，首帧一画出来就会
             // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
             conversation_width: SHARED_RENDER_WIDTH,
@@ -1974,6 +2036,9 @@ impl TuiState {
             // 新回合的思考是新的一段，所以「已经画过」这个闩随回合一起清掉（票 02 §1）。
             if matches!(&block, Block::TurnStarted { .. }) {
                 self.thinking_done = false;
+                // 每一次迭代 = 一次模型调用，也就是一笔用量的归属单位（§5）。
+                self.turn_calls += 1;
+                self.in_call = true;
             }
             match &block {
                 // 推理不是消息正文的一部分：它被折进自己那一行，所以永远不加入正文流过的那条
@@ -2006,7 +2071,7 @@ impl TuiState {
             self.panel.observe(&block);
             // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
             self.todo.observe(&block);
-            produced += self.push_block(block, at, targets);
+            produced += self.trace_block(block, at, targets);
         }
         produced
     }
@@ -2024,14 +2089,72 @@ impl TuiState {
         }
     }
 
-    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻），好在宽度变化时重放
-    /// （spec §1）。
-    fn push_block(&mut self, block: Block, at: DateTime<Utc>, targets: Targets) -> usize {
-        let produced = self.emit_block(&block, at, targets);
+    /// 画一个块，并处理它那两种尾巴：一笔用量不再是自己的一条，而是攒着等那次调用收尾；
+    /// `TurnEnded` 在跨 ≥2 次调用时带上合计
+    /// （ADR 0016、`.scratch/trace-usage-tail/spec.md` §1、§5）。
+    fn trace_block(&mut self, block: Block, at: DateTime<Utc>, targets: Targets) -> usize {
+        // 用量属于产生它的那次调用：贴到**它到达这一刻**那次调用最后画出的那条过程行上。
+        //
+        // 不推迟到那次调用收尾再贴 —— 工具行排在用量之后，消息行也排在它之后，等下去只会
+        // 等到一条内容行，而最常见的纯对话调用就再也贴不上（ADR 0016 的「被否决的替代
+        // 方案」）。
+        if let Block::Usage { usage, .. } = &block {
+            if self.in_call {
+                self.turn_usage.accumulate(*usage);
+                if self.usage_host_exists() {
+                    let tail = Tail::Usage(*usage);
+                    if let Some(slot) = self.painted.last_mut() {
+                        slot.set_tail(tail);
+                    }
+                    // 那一行已经画出去了，所以这一段是补在它尾巴上，不是另起一行 —— 它的
+                    // 时刻戳、名字配色与详情入口都留在原地。
+                    self.trace.append_to_last(tail.span());
+                    return 0;
+                }
+            }
+            return self.push_block(block, at, targets, None);
+        }
+        let tail = if matches!(&block, Block::TurnEnded { .. }) {
+            self.in_call = false;
+            let total = (self.turn_calls >= 2).then_some(Tail::Total(self.turn_usage));
+            self.turn_calls = 0;
+            self.turn_usage = Usage::default();
+            total
+        } else {
+            None
+        };
+        self.push_block(block, at, targets, tail)
+    }
+
+    /// 窗格最后那条来源行能不能承载一笔用量。
+    ///
+    /// 用量到达这一刻，那次调用最后画出来的那条正是它 —— 有推理时是思考行，没推理时是回合
+    /// 开始那行。消息行与一条独立的用量行都不承载：前者在轨迹页是「首行 + `…`」的内容入口，
+    /// 把数字挂上去读不出归属（§1、§4）。
+    fn usage_host_exists(&self) -> bool {
+        match self.painted.last() {
+            Some(Painted::Thinking { .. } | Painted::Thought { .. }) => true,
+            Some(Painted::Block { block, .. }) => {
+                !matches!(block, Block::Message { .. } | Block::Usage { .. })
+            }
+            None => false,
+        }
+    }
+
+    /// 把一个块排成行、推进窗格，并**记住它**（连产生它的时刻与尾巴），好在宽度变化时重放
+    /// （spec §1；尾巴见 ADR 0016）。
+    fn push_block(
+        &mut self,
+        block: Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        tail: Option<Tail>,
+    ) -> usize {
+        let produced = self.emit_block(&block, at, targets, tail);
         if produced > 0 {
             // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
             // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
-            self.painted.push(Painted::Block { block, at });
+            self.painted.push(Painted::Block { block, at, tail });
         }
         produced
     }
@@ -2040,7 +2163,13 @@ impl TuiState {
     ///
     /// 对每个被选中的目标各排版一次：分派点必须在这里，因为只有这里同时知道「画给谁」与
     /// 「按多宽画」（票 09）。发言者配色的分配是幂等的，所以同一块画两遍不会分叉。
-    fn emit_block(&mut self, block: &Block, at: DateTime<Utc>, targets: Targets) -> usize {
+    fn emit_block(
+        &mut self,
+        block: &Block,
+        at: DateTime<Utc>,
+        targets: Targets,
+        tail: Option<Tail>,
+    ) -> usize {
         let mut produced = 0;
         // 对话视图只收保留清单；左栏不在时**也不退回全量**（2026-10-05 维护者推翻 §6）——
         // 收起左栏就是「过程行暂时看不到」，规则只有一个。
@@ -2083,7 +2212,15 @@ impl TuiState {
             let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
             let style = prefix_style(Viewport::Trace, self.trace_tier_width);
             // 轨迹页的名字在**每一行**上（它的行是紧凑的单行），所以这里不参与去重。
-            let lines = paint_block(block, &mut self.colors, width, style, Viewport::Trace, true);
+            let mut lines =
+                paint_block(block, &mut self.colors, width, style, Viewport::Trace, true);
+            // 尾巴补在**最后一条**行尾：那是这一块读下来的落脚点。用量与合计都走这里，
+            // 于是实时与重放画出来的是同一行（ADR 0016、`.scratch/trace-usage-tail/spec.md` §3、§5）。
+            if let Some(tail) = tail {
+                if let Some(last) = lines.last_mut() {
+                    last.line.spans.push(tail.span());
+                }
+            }
             produced = produced.max(lines.len());
             self.push_view_lines(
                 Viewport::Trace,
@@ -2157,16 +2294,21 @@ impl TuiState {
     /// 它原样留着自己那份内容。
     fn emit_painted(&mut self, painted: &Painted, targets: Targets) {
         match painted {
-            Painted::Block { block, at } => {
-                self.emit_block(block, *at, targets);
+            Painted::Block { block, at, tail } => {
+                self.emit_block(block, *at, targets, *tail);
             }
-            Painted::Thinking { speaker, at } => {
+            Painted::Thinking { speaker, at, .. } => {
                 self.paint_thinking_line(speaker, *at, targets);
             }
-            Painted::Thought { speaker, trace, at } => {
+            Painted::Thought {
+                speaker,
+                trace,
+                at,
+                tail,
+            } => {
                 // 重放是**追加**：窗格刚被清空，定稿的那一条要重新画出来（实时路径才是
                 // 就地重写那条「正在思考」）。
-                self.paint_settled_thinking(speaker, trace.clone(), *at, targets, false);
+                self.paint_settled_thinking(speaker, trace.clone(), *at, targets, false, *tail);
             }
         }
     }
@@ -2491,7 +2633,11 @@ impl TuiState {
         // （票 07 §2）。两个视口各画一遍：它们的前缀分档可能不同（票 09）。
         self.paint_thinking_line(&speaker, at, self.targets());
         // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
-        self.painted.push(Painted::Thinking { speaker, at });
+        self.painted.push(Painted::Thinking {
+            speaker,
+            at,
+            tail: None,
+        });
         true
     }
 
@@ -2525,9 +2671,15 @@ impl TuiState {
         at: DateTime<Utc>,
         targets: Targets,
         in_place: bool,
+        tail: Option<Tail>,
     ) {
         if targets.trace {
             let (line, detail) = self.thinking_settled_line(speaker, text, Viewport::Trace);
+            let mut line = line;
+            // 尾巴跟着这条行走：定稿是整行重写，丢在这里就等于把那笔用量吞掉。
+            if let Some(tail) = tail {
+                line.spans.push(tail.span());
+            }
             let line = stamped_line(line, at);
             if in_place {
                 self.trace.replace_last(line);
@@ -2624,13 +2776,16 @@ impl TuiState {
         self.thinking_done = true;
         // 就地写：一段思考就是一行，从 `正在思考` 到 `思考完成`（票 02 §1）。
         let speaker = self.thinking_speaker.clone();
-        self.paint_settled_thinking(&speaker, text.clone(), at, self.targets(), true);
+        // 尾巴若已经挂在还开着的那一条上，定稿是整行重写，得跟着搬过去。
+        let tail = self.painted.last().and_then(Painted::tail);
+        self.paint_settled_thinking(&speaker, text.clone(), at, self.targets(), true, tail);
         // 重放清单里那一条也从「开着」换成「定稿」，连它的详情与时刻一起 —— 否则一次宽度变化
         // 会把这条行变回进行中，或者把它的 trace 与时刻丢掉（spec §1）。
         let settled = Painted::Thought {
             speaker: speaker.clone(),
             trace: text,
             at,
+            tail,
         };
         match self.painted.last_mut() {
             Some(slot @ Painted::Thinking { .. }) => *slot = settled,

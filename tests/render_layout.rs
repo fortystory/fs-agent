@@ -9290,3 +9290,233 @@ fn the_receipt_of_an_open_lands_in_the_hint_row() {
         assert!(rows.contains(&receipt), "提示行该说 {receipt:?}：{rows}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// 用量尾巴与回合合计
+// （ADR 0016、.scratch/trace-usage-tail/spec.md）
+// ---------------------------------------------------------------------------
+
+/// 一条 `TurnStarted`，迭代号由调用方给 —— 工具循环里的第二次调用就是 `iteration: 2`。
+fn turn_started_at(seq: u64, iteration: u32) -> heng::render::RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId};
+    heng::render::RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::Debater("kimi".into()),
+        EventPayload::TurnStarted {
+            agent: SpeakerId::Debater("kimi".into()),
+            iteration,
+        },
+    ))
+}
+
+#[test]
+fn a_usage_tail_rides_the_row_of_its_call() {
+    // 一笔用量不再是自己的块：它长在产生它的那次调用的行尾，而独立的那一行没有了
+    // （ADR 0016）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("先看依赖，"));
+    state.apply(text_delta("答案是 42。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
+    open_trace_tab(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains("✓ 思考完成 in=10 out=2"),
+        "尾巴长在它那次调用的行上：{text}"
+    );
+    assert!(!text.contains("用量 in="), "独立的那一行没有了：{text}");
+    assert!(
+        !text.contains("cached="),
+        "缓存那一半留在诊断通道里：{text}"
+    );
+}
+
+#[test]
+fn a_usage_tail_lands_on_the_turn_row_when_nothing_was_thought() {
+    // 这次调用没有推理：它最后画出来的那条过程行是回合的开始行，尾巴就长在那儿。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "答案是 42。", None));
+    open_trace_tab(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains("回合开始（第 1 次迭代） in=10 out=2"),
+        "没有思考行时它跟在这次调用的第一行上：{text}"
+    );
+    assert!(!text.contains("用量 in="), "仍然没有独立的一行：{text}");
+}
+
+#[test]
+fn each_call_carries_its_own_tail_and_the_turn_sums_them() {
+    // 一次发言跨两次模型调用：两笔各长在各次调用的行上，收尾那行给一条合计（§5）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("第一次调用在调工具。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "", Some("第一次调用在调工具。")));
+    state.apply(tool_started(
+        4,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(5, "call-1", true, Some("ok"), None));
+    state.apply(turn_started_at(6, 2));
+    state.apply(reasoning_delta("第二次调用收尾。"));
+    state.apply(text_delta("答案是 42。"));
+    state.apply(usage(7, 5, 1, 0, 5));
+    state.apply(message(8, "答案是 42。", Some("第二次调用收尾。")));
+    state.apply(turn_ended(9));
+    open_trace_tab(&mut state, 120, 24);
+
+    let rows = trace_page(&mut state, 120, 24);
+    let text = rows.join("\n");
+    let first = rows
+        .iter()
+        .find(|row| row.contains("in=10 out=2"))
+        .unwrap_or_else(|| panic!("第一笔在屏幕上：{text}"));
+    assert!(
+        first.contains("思考完成"),
+        "第一笔长在它那次调用的行上：{first}"
+    );
+    let second = rows
+        .iter()
+        .find(|row| row.contains("in=5 out=1"))
+        .unwrap_or_else(|| panic!("第二笔在屏幕上：{text}"));
+    assert!(second.contains("思考完成"), "第二笔同理：{second}");
+    let total = rows
+        .iter()
+        .find(|row| row.contains("合计 in=15 out=3"))
+        .unwrap_or_else(|| panic!("合计在屏幕上：{text}"));
+    assert!(total.contains("回合结束"), "合计并进收尾那一行：{total}");
+}
+
+#[test]
+fn a_single_call_turn_carries_no_total() {
+    // 只调用一次时那笔数字就在尾巴上，再加一条合计是同一个数印两遍（§5）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("想一下。"));
+    state.apply(text_delta("答案是 42。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "答案是 42。", Some("想一下。")));
+    state.apply(turn_ended(4));
+    open_trace_tab(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 120, 24).join("\n");
+    assert!(text.contains("in=10 out=2"), "尾巴还在：{text}");
+    assert!(!text.contains("合计"), "没有合计：{text}");
+}
+
+#[test]
+fn a_call_that_never_wrote_prose_keeps_its_usage() {
+    // 只推理、不产出正文的那次调用：用量到的时候思考行还开着，定稿是整行重写 —— 它得跟着
+    // 这条行走，不能被吞掉，也不能被顶掉（§7 的回归一）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("只想了，没写。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "", Some("只想了，没写。")));
+    open_trace_tab(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains("✓ 思考完成 in=10 out=2"),
+        "定稿没有把这笔用量吞掉：{text}"
+    );
+    assert_eq!(
+        text.matches("思考完成").count(),
+        1,
+        "一段思考就是一行：{text}"
+    );
+    assert!(!text.contains("正在思考"), "也没有留下进行中那行：{text}");
+}
+
+#[test]
+fn a_width_change_replays_the_usage_tail_once() {
+    // 尾巴跟着绘制记录走，所以换宽度重排之后它还在、而且只有一份（§2）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("先看依赖，"));
+    state.apply(text_delta("答案是 42。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
+    open_trace_tab(&mut state, 120, 24);
+    let _ = trace_page(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 100, 24).join("\n");
+    assert_eq!(
+        text.matches("in=10 out=2").count(),
+        1,
+        "重排之后尾巴不多不少：{text}"
+    );
+    assert!(!text.contains("正在思考"), "也没有留下进行中那行：{text}");
+}
+
+#[test]
+fn a_synthesizer_usage_keeps_its_own_row() {
+    // 合成器那次调用不属于任何回合，没有可承载的宿主 —— 它照旧自己占一行（§4）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(usage(1, 10, 2, 6, 4));
+    open_trace_tab(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 120, 24).join("\n");
+    assert!(
+        text.contains("用量 in=10 out=2 cached=6 miss=4"),
+        "合成器那笔仍是独立一行：{text}"
+    );
+}
+
+#[test]
+fn a_narrow_trace_wraps_the_tail_instead_of_dropping_it() {
+    // 窄档照折行，不省略、也不消失（§6）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("先看依赖，"));
+    state.apply(text_delta("答案是 42。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
+    open_trace_tab(&mut state, 80, 24);
+
+    let text = trace_page(&mut state, 80, 24).join("\n");
+    assert!(text.contains("in=10"), "窄档里这笔数字还在：{text}");
+}
+
+#[test]
+fn the_usage_tail_does_not_take_over_the_rows_detail() {
+    // 尾巴是纯文本：那一行点开还是它自己的详情（§6）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("先看依赖，"));
+    state.apply(text_delta("答案是 42。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "答案是 42。", Some("先看依赖，")));
+    open_trace_tab(&mut state, 120, 24);
+
+    click_row(&mut state, 120, 24, "思考完成 in=10 out=2");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("── 思考 ──"), "弹的还是思考详情：{text}");
+    assert!(text.contains("先看依赖，"), "而且带全文：{text}");
+}
+
+#[test]
+fn a_replayed_call_that_never_wrote_prose_keeps_one_thinking_row() {
+    // 回归二：只推理、不产出正文的那次调用，换宽度重排之后不会多出一条永不消失的
+    // 「正在思考」（§7）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(reasoning_delta("只想了，没写。"));
+    state.apply(usage(2, 10, 2, 6, 4));
+    state.apply(message(3, "", Some("只想了，没写。")));
+    open_trace_tab(&mut state, 120, 24);
+    let _ = trace_page(&mut state, 120, 24);
+
+    let text = trace_page(&mut state, 100, 24).join("\n");
+    assert_eq!(text.matches("思考完成").count(), 1, "定稿只有一条：{text}");
+    assert!(!text.contains("正在思考"), "没有卡住的那一行：{text}");
+    assert_eq!(text.matches("in=10 out=2").count(), 1, "尾巴也还在：{text}");
+}

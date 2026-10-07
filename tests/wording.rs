@@ -231,6 +231,21 @@ fn a_usage_line_reads_in_chinese() {
 }
 
 #[test]
+fn a_usage_tail_keeps_only_the_two_numbers_it_is_read_for() {
+    // 轨迹页那一段只放最常读的两项，缓存那一半仍归 `usage_summary` 那条通道
+    // （ADR 0016、`.scratch/trace-usage-tail/spec.md` §3、§5）。
+    let usage = Usage {
+        input_tokens: 10,
+        output_tokens: 2,
+        cached_tokens: 6,
+        miss_tokens: 4,
+        reasoning_tokens: None,
+    };
+    assert_eq!(wording::usage_tail(&usage), "in=10 out=2");
+    assert_eq!(wording::total_tail(&usage), "合计 in=10 out=2");
+}
+
+#[test]
 fn a_permission_ask_and_verdict_read_in_chinese() {
     // 问题显示工具与那次具体的调用，从不显示 id。
     assert_eq!(

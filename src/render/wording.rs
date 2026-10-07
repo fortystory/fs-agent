@@ -260,6 +260,22 @@ pub fn usage_summary(usage: &Usage) -> String {
     )
 }
 
+/// 轨迹页里一笔用量长在它所归属的那次调用的行尾时，那一段怎么写
+/// （[ADR 0016](../../docs/adr/0016-usage-rides-the-row-of-its-call.md)、
+/// `.scratch/trace-usage-tail/spec.md` §3）。
+///
+/// 只留最常读的两项：缓存命中与未命中仍归 [`usage_summary`] 那条诊断通道与左栏
+/// `调用量` 页，不挤进这条尾巴。
+pub fn usage_tail(usage: &Usage) -> String {
+    format!("in={} out={}", usage.input_tokens, usage.output_tokens)
+}
+
+/// 一次发言跨多次模型调用时，收尾行尾那条合计
+/// （`.scratch/trace-usage-tail/spec.md` §5）。口径是这条发言内全部调用之和。
+pub fn total_tail(usage: &Usage) -> String {
+    format!("合计 in={} out={}", usage.input_tokens, usage.output_tokens)
+}
+
 /// 流式推理轨迹前面的那条标记。
 pub fn reasoning_marker() -> &'static str {
     "[思考] "

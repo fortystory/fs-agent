@@ -181,6 +181,10 @@ _Avoid_: 配额、quota、上下文预算
 模型的计量单位：输入 / 输出、以及缓存命中与未命中各自计数。**不给它中文名**——UI 与统计行一律写 `token`。细节见 [docs/observability.md](docs/observability.md)。
 _Avoid_: 词元、令牌、字
 
+**用量（Usage）**:
+一次模型调用的 token 读数：输入 / 输出、以及缓存命中与未命中各自计数。它**属于产生它的那次调用**，不是独立的一条 —— 轨迹页把它读在那次调用的行上，一次发言跨多次调用时收尾还有一条合计。细节见 [docs/render.md](docs/render.md) 与 [ADR 0016](docs/adr/0016-usage-rides-the-row-of-its-call.md)。
+_Avoid_: 花费（那是价目表算出来的钱）、账单
+
 **价目表（PriceTable / Pricing）**:
 按 model id 配的单价，单位是每百万 token 的 USD，命中与未命中分开计价。**费用只作显示**。细节见 [docs/observability.md](docs/observability.md)。
 _Avoid_: 费率表、计费表、cost table
@@ -202,6 +206,10 @@ _Avoid_: iteration、pass
 **回合（Turn）**:
 单个 agent 的一次完整往返：它取上下文、落到事件为止，是会话与讨论统计的单位。细节见 [docs/lifecycle.md](docs/lifecycle.md)。
 _Avoid_: step、call
+
+**迭代（Iteration）**:
+一次**模型调用**：取上下文、发一次请求、收完这条流。`TurnStarted.iteration` 数的是它，屏幕上读作「第 N 次迭代」。一个**回合**可以跨多次迭代（带着工具调用就再来一轮），所以它是回合内部的单位，也是**用量**的归属单位。细节见 [docs/lifecycle.md](docs/lifecycle.md)。
+_Avoid_: 轮次、round（那是讨论协议的一步）
 
 ## 工具
 
