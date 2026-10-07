@@ -123,17 +123,21 @@ MCP server 接进 fs-agent」的每一个还需要拍板的问题，并且**回�
 
 **实现票**（交棒后拆出的构建切片，`Type: implement`；wayfinder 会话不认领它们）：
 
-- [ ] [服务层骨架 + `mcp_list`（tracer bullet）](issues/10-mcp-service-and-list.md)
-- [ ] [`mcp_call`：转发一次外部调用](issues/11-mcp-call.md)
-- [ ] [连接层：`rmcp` + 真 stdio / Streamable HTTP](issues/12-rmcp-connection.md)
-- [ ] [server 进程：环境白名单与可写根](issues/13-server-process-env.md)
-- [ ] [`Effect` 与信任三个位](issues/14-effect-and-trust.md)
-- [ ] [MRTR：把 elicitation 接到问询端口](issues/15-mrtr-elicitation.md)
-- [ ] [资源：`mcp_resources` 与 `mcp_read`](issues/16-resources.md)
-- [ ] [提示词模板接进 `/` 菜单](issues/17-prompts-menu.md)
-- [ ] [文档与索引](issues/18-docs-and-index.md)
+- [x] [服务层骨架 + `mcp_list`（tracer bullet）](issues/10-mcp-service-and-list.md)
+- [x] [`mcp_call`：转发一次外部调用](issues/11-mcp-call.md)
+- [x] [连接层：`rmcp` + 真 stdio / Streamable HTTP](issues/12-rmcp-connection.md)
+- [x] [server 进程：环境白名单与可写根](issues/13-server-process-env.md)
+- [x] [`Effect` 与信任三个位](issues/14-effect-and-trust.md)
+- [x] [MRTR：把 elicitation 接到问询端口](issues/15-mrtr-elicitation.md)
+- [x] [资源：`mcp_resources` 与 `mcp_read`](issues/16-resources.md)
+- [x] [提示词模板接进 `/` 菜单](issues/17-prompts-menu.md)
+- [x] [文档与索引](issues/18-docs-and-index.md)
+- [x] [MCP 加载结果进上下文，那条记录可点开详情](issues/19-mcp-catalog-in-context.md)
 
-共 **19** 张票（**9 决策 + 10 实现**），当前 **9 resolved / 9 done / 1 ready-for-walkthrough**。
+共 **19** 张票（**9 决策 + 10 实现**），当前 **9 resolved + 9 done + 1 ready-for-walkthrough**
+（票 17 只剩「在真终端里点一次 `/` 菜单、填一遍模板参数」那一项人工走查；票 19 由
+[`context-injection-detail`](../context-injection-detail/seed.md) 那条例意向折进来，2026-10-07
+补进本清单 —— 它此前漏在这里，`scripts/wayfinder-check.py` 因条目数对不上而红）。
 
 ## 已定的决定
 
