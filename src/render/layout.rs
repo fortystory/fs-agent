@@ -82,8 +82,26 @@ const SIDEBAR_TOP_GAP: u16 = 1;
 /// 标记自己的宽度，与画家共用，好让两者不会脱节。
 pub const LOGO_WIDTH: u16 = 38;
 
-/// 标记画的行数，以及文字身份占的那一行。
-const LOGO_ROWS: u16 = 5;
+/// 块字标记画的行数：拼音一行，加上它下面那块二十二行的小篆。
+///
+/// 它公开，是因为字形那一份也按它声明自己的行数（`wording::logo_lines`），两处不能各写
+/// 一遍。它同时是高度阶梯里标记那一档的价格：字形越大，标记越早给页区让位。
+pub const LOGO_ROWS: u16 = 23;
+
+/// 放不下块字时收起来的那一版标记占的行数：拼音加一个汉字，宽度仍是 [`LOGO_WIDTH`]。
+///
+/// 它保留原来的行数，于是矮终端上左栏的每一页与标记换形之前一模一样。
+pub const LOGO_COMPACT_ROWS: u16 = 5;
+
+/// 画块字那一档要求的页区地板（其余各档用 [`SIDEBAR_MIN_PAGE_ROWS`]）。
+///
+/// 块字的价码比一行身份高得多：小篆那一版一口气吃掉二十三行，所以只有当页区还剩得下这些行
+/// 时它才值得出现，否则退回 [`SidebarKind::MarkCompact`]（2026-10-07 随块字一起定，字形从
+/// 十六行涨到二十三行时门槛也随之上移）。按这条，终端从 32 行起才画篆书：24 行的左栏仍旧
+/// 是收起来的那一版加十五行页区。
+const BLOCK_LOGO_MIN_PAGE_ROWS: u16 = 5;
+
+/// 文字身份占的那一行。
 const IDENTITY_ROWS: u16 = 1;
 
 /// 页区在身份与页签条之外**最少**保留的行数（`.scratch/trace-tab/spec.md` §4）。
@@ -115,8 +133,10 @@ const TRANSCRIPT_FLOOR_WITH_QUESTIONNAIRE: u16 = 3;
 /// —— 一个自己比高度的画家就握着半条阶梯，而两半会漂移。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarKind {
-    /// 宽档上的标记（spec §2）。
+    /// 宽档上的块字标记（spec §2）。
     Mark,
+    /// 高度放不下块字、宽度仍旧够时收起来的那一版：拼音加一个汉字。
+    MarkCompact,
     /// 一行文字身份，窄档放得下的就是这个。
     Text,
     /// 两者都不是：高度阶梯让出了身份，好让读数留下来。
@@ -128,6 +148,7 @@ impl SidebarKind {
     pub fn rows(self) -> u16 {
         match self {
             SidebarKind::Mark => LOGO_ROWS,
+            SidebarKind::MarkCompact => LOGO_COMPACT_ROWS,
             SidebarKind::Text => IDENTITY_ROWS,
             SidebarKind::Hidden => 0,
         }
@@ -475,10 +496,11 @@ fn main_width(width: u16, sidebar_wanted: bool) -> u16 {
 
 /// 给定左栏自己的内容高度，它的身份以及页区拿几行。
 ///
-/// 阶梯是定死的：**标记**先走（先退成文字身份，再退成没有），让位给页区那条
-/// [`SIDEBAR_MIN_PAGE_ROWS`] 的地板；页区本身拿走剩下的一切 —— 页高与「调用量页有几项
-/// 读数」不再是一回事（`.scratch/trace-tab/spec.md` §4）。意愿为假时连门都不进：整栏让位
-/// （`.scratch/sidebar-toggle/spec.md` §2）。
+/// 阶梯是定死的：**块字**先走（先退成收起来的那一版，再退成文字身份，再退成没有），让位给
+/// 页区的地板；页区本身拿走剩下的一切 —— 页高与「调用量页有几项读数」不再是一回事
+/// （`.scratch/trace-tab/spec.md` §4）。块字那一档的地板比其余各档高一截
+/// （[`BLOCK_LOGO_MIN_PAGE_ROWS`]），所以它只在真放得下的终端上出现。意愿为假时连门都不进：
+/// 整栏让位（`.scratch/sidebar-toggle/spec.md` §2）。
 fn sidebar_content(width: u16, content_rows: u16, sidebar_wanted: bool) -> (SidebarKind, u16) {
     let Some(tier) = sidebar_tier(width, sidebar_wanted) else {
         return (SidebarKind::Hidden, 0);
@@ -489,11 +511,17 @@ fn sidebar_content(width: u16, content_rows: u16, sidebar_wanted: bool) -> (Side
         SidebarKind::Text
     };
     loop {
-        if kind.rows() + TAB_ROWS + SIDEBAR_MIN_PAGE_ROWS <= content_rows {
+        let floor = if kind == SidebarKind::Mark {
+            BLOCK_LOGO_MIN_PAGE_ROWS
+        } else {
+            SIDEBAR_MIN_PAGE_ROWS
+        };
+        if kind.rows() + TAB_ROWS + floor <= content_rows {
             break;
         }
         match kind {
-            SidebarKind::Mark => kind = SidebarKind::Text,
+            SidebarKind::Mark => kind = SidebarKind::MarkCompact,
+            SidebarKind::MarkCompact => kind = SidebarKind::Text,
             SidebarKind::Text => kind = SidebarKind::Hidden,
             // 地板：页签条与那三行页。连这些也放不下的终端在 [`MIN_HEIGHT`] 以下，永远
             // 到不了这里。

@@ -4722,29 +4722,44 @@ fn draw_sidebar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut
         state.files_page.rect = None;
         return;
     };
-    draw_sidebar_identity(frame, panes, sidebar);
+    draw_sidebar_identity(frame, panes, state, sidebar);
     draw_tab_bar(frame, panes, state, sidebar, tabs);
     draw_sidebar_page(frame, panes, state);
 }
 
-/// 左栏的身份：标记、文字身份，或者什么都没有（spec §3）。
+/// 左栏的身份：两版标记之一、文字身份，或者什么都没有（spec §3）。
 ///
-/// 三者选哪一个是排版的决定 —— [`layout::SidebarKind`] —— 于是那条阶梯只有一个家。标记在
-/// 宽档里居中，那档宽度就是标记自己的宽度加左右各一列留白。这里什么都不动：标记的下落
-/// 短横与文字身份的那一半都在票 08 关掉了（`.scratch/tui-input-pulse/spec.md` §2），这个
-/// 界面里全部的动画如今都活在提示符的颜色里。
-fn draw_sidebar_identity(frame: &mut ratatui::Frame, panes: &layout::Regions, sidebar: Rect) {
+/// 选哪一个是排版的决定 —— [`layout::SidebarKind`] —— 于是那条阶梯只有一个家。标记在
+/// 宽档里居中，那档宽度就是标记自己的宽度加左右各一列留白。标记有大小两版：块字放得下就画
+/// 块字，放不下退回收起来的那一版（`wording::logo_lines_compact`），这个选择同样只由排版做。
+///
+/// 标记是**静止的，除非有一次运行在进行中**：那时每帧给它一束从右下扫到左上的反光
+/// （`.scratch/mark-sweep/spec.md` §2）。`sweep` 由 [`TuiState::busy`] 与脉冲那一个计数器
+/// 拼出来 —— 循环只在一次运行里说 `busy`，而 `RunState` 的两个边沿都把计数器归零，所以一次
+/// 运行总是从光带在右下角进场那一刻开始扫。歇着的时候这里是 `None`：一块颜色都不动。
+fn draw_sidebar_identity(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &TuiState,
+    sidebar: Rect,
+) {
     let dim = Style::default().fg(palette::MUTED);
     match panes.sidebar_kind {
-        layout::SidebarKind::Mark => {
-            // 标记是 38 列，而宽档是 40 列，所以它居中时左右各留一列白；比标记还窄的档位
+        kind @ (layout::SidebarKind::Mark | layout::SidebarKind::MarkCompact) => {
+            // 两版标记都是 38 列，而宽档是 40 列，所以它居中时左右各留一列白；比标记还窄的档位
             // 根本不会要这几行（spec §2）。
             let offset = sidebar.width.saturating_sub(layout::LOGO_WIDTH) / 2;
-            // 标记不动：下落短横随票 08 的关停一起离开渲染路径，这里画的就是那个静止的
-            // 标记（`.scratch/tui-visual-language/spec.md` §34）。
-            let lines: Vec<Line<'static>> = mark_lines()
+            let sweep = state.busy().then_some(state.pulse);
+            let lines: Vec<Line<'static>> = mark_lines(kind, sweep)
                 .into_iter()
-                .map(|(text, color)| Line::from(Span::styled(text, Style::default().fg(color))))
+                .map(|spans| {
+                    Line::from(
+                        spans
+                            .into_iter()
+                            .map(|(text, color)| Span::styled(text, Style::default().fg(color)))
+                            .collect::<Vec<_>>(),
+                    )
+                })
                 .collect();
             let rows = lines.len() as u16;
             frame.render_widget(
@@ -5400,33 +5415,116 @@ fn open_receipt(
 
 /// 标记的那些行与它们的颜色。
 ///
-/// 文字是 [`wording::logo_lines`] 的；让它读起来像字形的那条颜色坡道住在这里，与别的绘制在
-/// 一起。行越靠上越亮，于是标记读起来像从上方照亮 —— **永远如此**：那个按帧下落的短横在
-/// 票 08 就退出了屏幕，它的分支与常量也随本 effort 的死代码收口一起删掉
-/// （`.scratch/tui-visual-language/spec.md` §34），所以这个标记是静止的。
+/// 文字是 `wording` 的，它长什么样住在那里；颜色住在这里：**标着拼音的那一行暗一档，其余全亮**
+/// —— 注在字形旁边，不与它抢眼。画一块字标不能像画一行字那样从上往下渐暗：字块是一个图形，
+/// 深浅不一的几笔会让它读起来像缺了角。加粗与背景一概不设，而且是刻意不设背景：标记坐在用户
+/// 主题已有的任何背景上，填掉字缝里的那些格会在它能匹配的同样多的终端上与那个主题打架。
 ///
-/// 只设前景，而且是刻意不设背景：标记坐在用户主题已有的任何背景上，填掉那些半阴影行会在它能
-/// 匹配的同样多的终端上与那个主题打架。
-fn mark_lines() -> Vec<(String, Color)> {
-    let rows = wording::logo_lines();
+/// 两版标记走同一条上色规则，只是拼音所在的行号不同 —— 收起来的那一版在第一行留了一段空白
+/// （`wording::logo_lines_compact`），所以那个位置由调用的这一处说出，而不是让画家去猜。
+///
+/// 返回的是**每行的若干段**（连续同色的字符合成一段），因为扫光会让一行里出现几种颜色。
+/// `sweep` 是扫光要看的那一帧：`None` 时整块就是基线色，一个像素都不动。
+fn mark_lines(kind: layout::SidebarKind, sweep: Option<u64>) -> Vec<Vec<(String, Color)>> {
+    match kind {
+        layout::SidebarKind::Mark => paint_mark(&wording::logo_lines(), 0, sweep),
+        layout::SidebarKind::MarkCompact => paint_mark(&wording::logo_lines_compact(), 1, sweep),
+        other => unreachable!("只有两版标记走这条路：{other:?}"),
+    }
+}
+
+/// 一串标记行各自带上颜色：`preamble` 那一行是拼音，退一档；其余是字形，全亮。扫光压在上面
+/// （[`mark_sweep`]），扫不到的格保持自己的基线色。
+fn paint_mark(
+    rows: &[&'static str],
+    preamble: usize,
+    sweep: Option<u64>,
+) -> Vec<Vec<(String, Color)>> {
     debug_assert!(
         rows.iter()
             .all(|row| text_columns(row) == layout::LOGO_WIDTH as usize),
         "标记要么整个画出来，要么一个都不画，所以它的宽度是布局的契约"
     );
-    let rows_len = rows.len();
-    rows.into_iter()
+    let columns = rows.first().map_or(0, |row| row.chars().count());
+    rows.iter()
         .enumerate()
         .map(|(row, text)| {
-            let color = if row < rows_len - 1 {
-                palette::MARK_BRIGHT
-            } else {
+            let baseline = if row == preamble {
                 palette::MARK_DIM
+            } else {
+                palette::MARK_BRIGHT
             };
-            (text.to_owned(), color)
+            let mut spans: Vec<(String, Color)> = Vec::new();
+            for (column, glyph) in text.chars().enumerate() {
+                // 留白不吃扫光：那里没有字形，改它的颜色只会让一帧里多出一段没人看得见的
+                // 变化（也给逐格比对的测试添噪声）。块字之间那些空档因此永远是基线色。
+                let color = if glyph == ' ' {
+                    baseline
+                } else {
+                    sweep
+                        .and_then(|frame| mark_sweep(column, row, columns, rows.len(), frame))
+                        .unwrap_or(baseline)
+                };
+                match spans.last_mut() {
+                    Some((run, last)) if *last == color => run.push(glyph),
+                    _ => spans.push((glyph.to_string(), color)),
+                }
+            }
+            spans
         })
         .collect()
 }
+
+/// 扫光：一格该不该被这束反光照到，照到了是什么颜色（`.scratch/mark-sweep/spec.md` §2）。
+///
+/// 光从**右下走到左上**。把每一格投影到那条轴上：`s = (最右一列 − 这一列) + (最下一行 −
+/// 这一行)`，于是右下角是 0、左上角最大，等值线是一条条斜线、垂直于光走的方向；光带就是 `s`
+/// 上的一段区间，它的头每帧朝 `s` 大的方向走 [`SWEEP_STEP`]。核心是白的
+/// （[`palette::MARK_LIGHT`]），两侧各留一截过渡 [`palette::MARK_BRIGHT`] —— 过渡在字形那几
+/// 行上看不出来（它们本来就是这一档），看得见的是拼音行：它从 [`palette::MARK_DIM`] 被抬到
+/// 亮档，于是光带的前后沿也在那条细字上有交代。
+///
+/// 参数是**格子数**，不是像素：它在整块标记（含左右留白）上算，因为留白格没有字形、颜色
+/// 不可见，把它们算进来只是让投影的跨度跟着块走。
+///
+/// 公开是为了让 `tests/render_layout.rs` 直接量它的方向与档位 —— 扫光在屏幕上的样子由它
+/// 一个纯函数决定，逐格比对那一帧只是把它画出来。
+pub fn mark_sweep(
+    column: usize,
+    row: usize,
+    columns: usize,
+    rows: usize,
+    frame: u64,
+) -> Option<Color> {
+    let head = -SWEEP_HALO + (frame % SWEEP_PERIOD) as i64 * SWEEP_STEP;
+    // 一轮必须把光带整个**送出**块的左上角之外，否则它会在某一帧从右下凭空跳回来。
+    debug_assert!(
+        -SWEEP_HALO + (SWEEP_PERIOD as i64 - 1) * SWEEP_STEP > (columns + rows) as i64,
+        "扫光一轮要走出块外"
+    );
+    let progress = (columns - 1 - column) as i64 + (rows - 1 - row) as i64;
+    let distance = (progress - head).abs();
+    if distance <= SWEEP_CORE {
+        Some(palette::MARK_LIGHT)
+    } else if distance <= SWEEP_HALO {
+        Some(palette::MARK_BRIGHT)
+    } else {
+        None
+    }
+}
+
+/// 扫光每一帧朝左上走多远（单位是投影上的格子），以及走完一轮回到起点要用几帧。
+///
+/// 一轮 64 格、每帧 3 格，约 22 帧扫完（60 ms 一帧，**1.3 秒**），剩下几帧是两轮之间的空档：
+/// 一次运行里反复扫，节奏是 1.8 秒一轮。速度是拿真机看着定的 —— 再快像闪，再慢就不像
+/// 一束光扫过去（`.scratch/mark-sweep/spec.md` §2）。
+const SWEEP_STEP: i64 = 3;
+pub const SWEEP_PERIOD: u64 = 30;
+
+/// 光带核心与它两侧过渡的半宽（同样是投影上的格子）。核心 5 格宽、连过渡一共 13 格 ——
+/// 相对 38 列的块，读起来是一条斜带而不是一条线。
+const SWEEP_CORE: i64 = 2;
+const SWEEP_HALO: i64 = 6;
 
 /// 主列的内容区：这条转录的两个视图之一，加上它右边缘的滚动条、指示器，以及（只在对话页上
 /// 的）回合条。

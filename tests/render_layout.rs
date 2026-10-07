@@ -165,8 +165,8 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
     );
 
     // 左栏：宽档上的标记，居中，两侧各留一列空气。它从顶上留的
-    // 那一行空行下面开始（2026-10-01 真机反馈）；标记本身是一块五行网格，
-    // 拼音在第 2 行、汉字在第 3 行。
+    // 那一行空行下面开始（2026-10-01 真机反馈）；120x24 装不下块字，所以这里是收起来的
+    // 那一版 —— 五行网格、拼音在第 2 行、汉字在第 3 行。
     assert!(
         rows[2].contains("héng") && rows[3].contains('衡'),
         "标记的拼音与汉字落在左栏的那两行上：{:?} / {:?}",
@@ -264,8 +264,8 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
         "┆",
         "最后一行（提示行那一行）也有它：左栏恢复全高"
     );
-    // 标记从顶上留的那一行空行**下面**开始：第 1 行；五行网格里汉字在第 3 行，
-    // 从往里十七列处开始（列 1 + 17 = 18）。
+    // 标记从顶上留的那一行空行**下面**开始：第 1 行；120x24 里是收起来的那一版，
+    // 五行网格里汉字在第 3 行，从往里十七列处开始（列 1 + 17 = 18）。
     assert_eq!(frame[(0, 1)].symbol(), " ", "左边一列空气");
     assert_eq!(frame[(18, 3)].symbol(), "衡", "然后是标记");
     // 标记宽 38 列：2 + 38 = 40，所以最后一列空气在 39，
@@ -274,33 +274,40 @@ fn the_wide_sidebar_is_forty_columns_and_centres_the_mark() {
 }
 
 #[test]
-fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
+fn the_mark_keeps_a_dim_preamble_in_both_its_forms() {
     // 静止的标记 —— 画家负责的那一半：字形是 `wording` 的，
-    // 它们落在哪几行、渐变怎么下落却是画家的，所以在
+    // 它们落在哪几行、哪一行暗却是画家的，所以在
     // 看得见它的地方逐格断言，就在缓冲里。动的那一半是
     // `the_mark_does_not_move_while_a_run_is_in_flight`
     // （`.scratch/tui-input-pulse/spec.md` §2）。
+    //
+    // 120x24 装不下块字，所以这里先是收起来的那一版：拼音加一个汉字。
     let frame = buffer(120, 24, &mut state());
     assert_eq!(
         frame[(17, 2)].symbol(),
         "h",
-        "拼音起于标记五行里的第二行（往里十六列处）"
+        "拼音起于收起来那版标记的第二行（往里十六列处）"
     );
     assert_eq!(
         frame[(18, 3)].symbol(),
         "衡",
         "汉字在它下一行，与拼音中心对齐"
     );
+    assert_eq!(frame[(1, 2)].fg, Color::Magenta, "标着拼音的那一行退一档");
+    assert_eq!(frame[(1, 3)].fg, Color::LightMagenta, "汉字那一行是亮的");
+
+    // 高到 32 行往上（`BLOCK_LOGO_MIN_PAGE_ROWS`）就换成篆书：二十三行全在屏幕上，且与
+    // `wording::logo_lines` 逐格相同；拼音在第一行、字形从第二行起。
+    let mut tall = state();
+    let block = mark_rows_at(120, 32, 23, &mut tall);
     assert_eq!(
-        frame[(1, 1)].fg,
-        Color::LightMagenta,
-        "标记的顶端是亮的那一头"
+        block,
+        wording::logo_lines().map(str::to_owned).to_vec(),
+        "120x32 画的就是 `logo_lines` 那二十三行"
     );
-    assert_eq!(
-        frame[(1, 5)].fg,
-        Color::Magenta,
-        "而最下面那一行是暗的那一头"
-    );
+    let frame = buffer(120, 32, &mut state());
+    assert_eq!(frame[(1, 1)].fg, Color::Magenta, "块字的拼音那一行也退一档");
+    assert_eq!(frame[(1, 2)].fg, Color::LightMagenta, "字形第一行是亮的");
 
     // 标记是宽档独占的：100 列拿到的是 28 列宽的左栏
     // （标记塞不进去），60 列干脆没有左栏。
@@ -313,7 +320,7 @@ fn the_mark_is_lit_from_above_and_only_on_the_wide_rung() {
         let mut fresh = state();
         let rows = screen(width, height, &mut fresh);
         assert!(
-            !rows.join("\n").contains('衡'),
+            !any_mark_on_screen(&rows.join("\n")),
             "{width}x{height} 在标记的那一档之下：{:#?}",
             rows[1]
         );
@@ -822,60 +829,202 @@ fn the_transcript_pane_shows_both_the_notices_and_the_streaming_tail() {
     assert!(text.contains("正在读文件"), "流式的尾巴也在窗格里：{text}");
 }
 
+/// 屏幕上那版**块字**标记在不在：找它最上面那行字形。
+///
+/// 不能拿汉字当判据 —— 块字是拼出来的，屏幕上一个大标记里一个「衡」字都没有。
+fn block_mark_on_screen(text: &str) -> bool {
+    text.contains(wording::logo_lines()[1].trim())
+}
+
+/// 屏幕上那版**收起来**的标记在不在：它仍是拼音加一个汉字。
+fn compact_mark_on_screen(text: &str) -> bool {
+    text.contains(wording::logo_lines_compact()[2].trim())
+}
+
+/// 两者的并集：屏幕上画了标记，无论哪一版。
+fn any_mark_on_screen(text: &str) -> bool {
+    block_mark_on_screen(text) || compact_mark_on_screen(text)
+}
+
 /// 标记在 120x24 下的五行颜色，自上而下：画家写的那一列
 /// 是左栏的第二列，标记的第一个字形在它每一行上都坐在
 /// 那里。
+///
+/// 120x24 装不下篆书（二十三行），所以这里量的总是收起来的那一版。
 fn mark_colours(state: &mut TuiState) -> Vec<Color> {
     let frame = buffer(120, 24, state);
     (1..=5u16).map(|y| frame[(1, y)].fg).collect()
 }
 
-/// 人眼里看到的整块标记：从 120x24 的一帧上读出的五行、它预留的整幅宽度。
+/// 人眼里看到的整块标记：从一帧上读出的那几行、它预留的整幅宽度。
 ///
-/// 标记从左栏第二列起（`mark_colours` 也是这么找它的），宽 `LOGO_WIDTH` 列。它的正身
-/// 如今是汉字「衡」，所以这里读的是**格**、不是字符 —— `cells` 按显示宽度走。
-fn mark_rows(state: &mut TuiState) -> Vec<String> {
-    let frame = buffer(120, 24, state);
+/// 标记从左栏第二列起（`mark_colours` 也是这么找它的），宽 `LOGO_WIDTH` 列，`rows` 说读
+/// 几行（篆书二十三行，收起来那版五行）。这里读的是**格**、不是字符 —— `cells` 按显示宽度走。
+fn mark_rows_at(width: u16, height: u16, rows: u16, state: &mut TuiState) -> Vec<String> {
+    let frame = buffer(width, height, state);
     let width = heng::render::layout::LOGO_WIDTH;
-    (1..=5u16).map(|y| cells(&frame, y, 1, 1 + width)).collect()
+    (1..=rows).map(|y| cells(&frame, y, 1, 1 + width)).collect()
+}
+
+/// 120x24 里那版收起来的标记。
+fn mark_rows(state: &mut TuiState) -> Vec<String> {
+    mark_rows_at(120, 24, 5, state)
 }
 
 #[test]
-fn the_mark_does_not_move_while_a_run_is_in_flight() {
-    // 标记（汉字「衡」与它上面标注的拼音）在运行中逐格不变。它曾经会动 —— 一条下落的
-    // 短横，票 08 之后静止了 —— 所以这里按住的是一整块：五行文字与它们的颜色一起，
-    // 都不许漂。
+fn the_mark_holds_still_while_nothing_runs() {
+    // 歇着的标记一个像素都不动：字形与它的基线色一起，逐格不变。它曾经有一条下落的短横
+    // （票 08 关掉），2026-10-07 起多了一束**只在运行中**扫过的反光 —— 所以"不动"这条
+    // 现在有前提：没有运行在进行中（`.scratch/mark-sweep/spec.md` §2）。
     let mut state = state();
     let still = mark_rows(&mut state);
     assert_eq!(
         still,
-        heng::render::wording::logo_lines()
+        heng::render::wording::logo_lines_compact()
             .map(str::to_owned)
             .to_vec(),
-        "屏幕上那五行就是 `logo_lines` 里的那五行"
+        "屏幕上那五行就是 `logo_lines_compact` 里的那五行"
     );
+    let colours = vec![
+        Color::LightMagenta,
+        Color::Magenta,
+        Color::LightMagenta,
+        Color::LightMagenta,
+        Color::LightMagenta,
+    ];
+    assert_eq!(mark_colours(&mut state), colours, "基线色：字亮、注暗");
 
-    state.request(ConsoleRequest::RunState { running: true });
-    for frame in 0..8 {
+    for frame in 0..12 {
         state.tick();
         assert_eq!(
             mark_rows(&mut state),
             still,
-            "运行中的第 {frame} 帧：标记没有动"
+            "空闲第 {frame} 帧：标记没有动"
         );
-        // 而且动的也不是颜色：色带没被碰过。
         assert_eq!(
             mark_colours(&mut state),
-            vec![
-                Color::LightMagenta,
-                Color::LightMagenta,
-                Color::LightMagenta,
-                Color::LightMagenta,
-                Color::Magenta
-            ],
-            "颜色也没变：第 {frame} 帧"
+            colours,
+            "空闲第 {frame} 帧：颜色也没变"
         );
     }
+}
+
+/// 一束光扫过整块标记要用几帧，以及它的投影怎么算 —— 测试与画家共用同一份算术
+/// （[`heng::render::tui::mark_sweep`]），免得两边各写一遍方向。
+fn sweep_progress(column: usize, row: usize, columns: usize, rows: usize) -> i64 {
+    (columns - 1 - column) as i64 + (rows - 1 - row) as i64
+}
+
+/// 某一帧里被这束光照到白的那几格，换算成"右下 0、左上最大"的投影值。
+fn lit_at(frame: u64, columns: usize, rows: usize) -> Vec<i64> {
+    (0..rows)
+        .flat_map(|row| (0..columns).map(move |column| (column, row)))
+        .filter(|(column, row)| {
+            heng::render::tui::mark_sweep(*column, *row, columns, rows, frame) == Some(Color::White)
+        })
+        .map(|(column, row)| sweep_progress(column, row, columns, rows))
+        .collect()
+}
+
+#[test]
+fn the_light_sweeps_from_the_bottom_right_to_the_top_left() {
+    // `.scratch/mark-sweep/spec.md` §2：光从右下进场、往左上走。这条量的是**方向**，
+    // 用一个纯函数，逐帧看它照亮的那几格的投影是不是一直在往 s 大的方向推。
+    let (columns, rows) = (38usize, 23usize);
+    let period = heng::render::tui::SWEEP_PERIOD;
+    let span = sweep_progress(0, 0, columns, rows);
+
+    let frames: Vec<(u64, Vec<i64>)> = (0..period).map(|f| (f, lit_at(f, columns, rows))).collect();
+    let lit: Vec<i64> = frames
+        .iter()
+        .flat_map(|(_, values)| values.iter().copied())
+        .collect();
+    assert!(!lit.is_empty(), "整轮里总有一帧被照到");
+    assert!(
+        lit.iter().any(|s| *s <= 4),
+        "光要扫到右下角那一片（投影接近 0）：{lit:?}"
+    );
+    assert!(
+        lit.iter().any(|s| *s >= span - 4),
+        "也要扫到左上角那一片（投影接近最大 {span}）：{lit:?}"
+    );
+
+    // 每一帧的**前沿**（这一帧照亮的最大投影）随着帧号单调不减，且中间确实在推进 ——
+    // 这就是"从右下往左上走"。
+    let mut front = i64::MIN;
+    let mut advanced = 0;
+    for (frame, values) in &frames {
+        if values.is_empty() {
+            continue;
+        }
+        let now = *values.iter().max().expect("非空");
+        assert!(
+            now >= front,
+            "第 {frame} 帧的前沿 {now} 退回到了 {front} 后面：{values:?}"
+        );
+        if now > front {
+            advanced += 1;
+        }
+        front = now;
+    }
+    assert!(
+        advanced >= period as i32 / 2,
+        "整轮里前沿一直在走：{advanced}"
+    );
+
+    // 一轮里没有一帧是变宽的乱扫：白格永远聚在一段连续的投影上（核心半宽以内）。
+    for (frame, values) in &frames {
+        if let (Some(lo), Some(hi)) = (values.iter().min(), values.iter().max()) {
+            assert!(
+                hi - lo <= 4,
+                "第 {frame} 帧白格跨度 {lo}..{hi} 太宽，不像一条光带"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight() {
+    // 屏幕上的那一份：空闲时标记里没有一格是白的；一次运行中，某一帧必然有。
+    use heng::render::layout::LOGO_WIDTH;
+    let white_cells = |state: &mut TuiState| -> Vec<(u16, u16)> {
+        let frame = buffer(120, 32, state);
+        (1..=23u16)
+            .flat_map(|y| (1..1 + LOGO_WIDTH).map(move |x| (x, y)))
+            .filter(|(x, y)| frame[(*x, *y)].fg == Color::White)
+            .collect()
+    };
+
+    let mut idle = state();
+    for frame in 0..heng::render::tui::SWEEP_PERIOD {
+        idle.tick();
+        assert!(
+            white_cells(&mut idle).is_empty(),
+            "空闲第 {frame} 帧：标记里不该有反光"
+        );
+    }
+
+    let mut running = state();
+    running.request(ConsoleRequest::RunState { running: true });
+    let mut seen = Vec::new();
+    for frame in 0..heng::render::tui::SWEEP_PERIOD {
+        running.tick();
+        let cells = white_cells(&mut running);
+        if !cells.is_empty() {
+            seen.push((frame, cells));
+        }
+    }
+    assert!(!seen.is_empty(), "运行一轮里那束光总该扫过标记");
+    let (frame, first) = &seen[0];
+    // 屏幕坐标换成标记自己的格：左栏在 x=1 处居中（120 列宽档），身份从 y=1 起。
+    let progress: Vec<i64> = first
+        .iter()
+        .map(|(x, y)| sweep_progress((x - 1) as usize, (y - 1) as usize, 38, 23))
+        .collect();
+    assert!(
+        progress.iter().all(|s| *s < 12),
+        "光从右下进场，第 {frame} 帧不该已经跑到左上：{first:?}"
+    );
 }
 
 /// 提示符画在哪：那个装着 `❱` 的格子，按人在屏幕上找它的方式找到，
@@ -1016,8 +1165,12 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
 #[test]
 fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
     // 钟在动的东西（`.scratch/tui-visual-language/spec.md` §30–§32）：提示符的颜色，加上
-    // 状态行那个字形循环 —— 别的什么都没有（没有标记、没有回合条、没有别的状态行文字）。
+    // 状态行那个字形循环 —— 别的什么都没有（没有回合条、没有别的状态行文字）。
     // 80 列以下整条左栏都没有，差别仍然恰好是那几格。
+    //
+    // **左栏那一束扫光不在这条的范围里**：一次运行中它会改标记那几格的颜色，由
+    // `the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight` 单独管。这里按排版
+    // 给出的左栏矩形把它筛掉，免得两条测试为同一件事各写一份期望格。
     use heng::render::wording;
     for (width, height) in [(120u16, 24u16), (60, 24), (40, 10)] {
         let mut state = state();
@@ -1036,9 +1189,16 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
         }
         let after = buffer(width, height, &mut state);
         let (prompt_x, prompt_y) = prompt_at(width, height, &mut state);
+        let sidebar_right = {
+            use heng::render::layout::plan;
+            use ratatui::layout::Rect;
+            plan(Rect::new(0, 0, width, height), 1, true)
+                .sidebar
+                .map_or(0, |sidebar| sidebar.right())
+        };
         let changed: Vec<(u16, u16)> = (0..height)
             .flat_map(|y| (0..width).map(move |x| (x, y)))
-            .filter(|(x, y)| before[(*x, *y)] != after[(*x, *y)])
+            .filter(|(x, y)| *x >= sidebar_right && before[(*x, *y)] != after[(*x, *y)])
             .collect();
         let mut expected: Vec<(u16, u16)> = (0..heng::render::editor::prompt_columns())
             .map(|offset| (prompt_x + offset, prompt_y))
@@ -1396,7 +1556,7 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             ),
         }
         assert_eq!(
-            text.contains('衡'),
+            any_mark_on_screen(&text),
             identity == "mark",
             "{width}x{height} 只在宽档上画标记：{text}"
         );
@@ -1425,21 +1585,26 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
 
     let cases = [
         // 高度、身份、页区行数
-        (24u16, SidebarKind::Mark, 15u16), // 23 − 5 − 3
-        (15, SidebarKind::Mark, 6),        // 14 − 5 − 3
-        (13, SidebarKind::Mark, 4),        // 12 − 5 − 3
-        (12, SidebarKind::Mark, 3),        // 11 − 5 − 3，正好是地板
-        (11, SidebarKind::Text, 6),        // 10 − 1 − 3：标记让位换回页高
-        (10, SidebarKind::Text, 5),        // 9 − 1 − 3
+        (32u16, SidebarKind::Mark, 5u16), // 31 − 23 − 3：篆书与它那 5 行页区地板刚好都够
+        (31, SidebarKind::MarkCompact, 22), // 30 − 5 − 3：篆书让位，页区几乎全拿回来
+        (24, SidebarKind::MarkCompact, 15), // 23 − 5 − 3
+        (12, SidebarKind::MarkCompact, 3), // 11 − 5 − 3，正好是地板
+        (11, SidebarKind::Text, 6),       // 10 − 1 − 3：收起来那版让位换回页高
+        (10, SidebarKind::Text, 5),       // 9 − 1 − 3
     ];
     for (height, kind, page_rows) in cases {
         let mut state = state();
         let rows = screen(120, height, &mut state);
         let text = rows.join("\n");
         assert_eq!(
-            text.contains('衡'),
+            block_mark_on_screen(&text),
             kind == SidebarKind::Mark,
-            "{height} 行画不画标记：{text}"
+            "{height} 行画不画篆书：{text}"
+        );
+        assert_eq!(
+            compact_mark_on_screen(&text),
+            kind == SidebarKind::MarkCompact,
+            "{height} 行画不画收起来那版标记：{text}"
         );
         assert_eq!(
             text.contains("heng"),
@@ -1467,7 +1632,7 @@ fn the_sidebar_gives_up_its_identity_before_the_page_floor() {
     }
 }
 
-/// 页区撑满之后左栏三档的实测（`.scratch/trace-tab/spec.md` §4）：
+/// 页区撑满之后左栏四档的实测（`.scratch/trace-tab/spec.md` §4）：
 /// 高度 = 内容行 − 身份 − 页签条，「用量字段数」那个常数退休。
 #[test]
 fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
@@ -1476,9 +1641,10 @@ fn the_sidebar_page_fills_the_height_the_identity_and_tabs_leave() {
 
     let cases = [
         // 宽、高、身份、页区行数
-        (120u16, 24u16, SidebarKind::Mark, 15u16), // 23 − 5 − 3
-        (80, 24, SidebarKind::Text, 19),           // 23 − 1 − 3
-        (80, 10, SidebarKind::Text, 5),            // 9 − 1 − 3
+        (120u16, 24u16, SidebarKind::MarkCompact, 15u16), // 23 − 5 − 3
+        (120, 32, SidebarKind::Mark, 5),                  // 31 − 23 − 3：篆书这一档的页区地板
+        (80, 24, SidebarKind::Text, 19),                  // 23 − 1 − 3
+        (80, 10, SidebarKind::Text, 5),                   // 9 − 1 − 3
     ];
     for (width, height, kind, page_rows) in cases {
         let regions = plan(Rect::new(0, 0, width, height), 1, true);

@@ -72,3 +72,7 @@ Blocked by: 07
 6. **测试**：新用例 `the_prompt_is_an_angle_bracket_whose_colour_walks_the_wheel`、`the_prompts_colour_stays_out_of_the_draft`、`the_only_thing_a_pulse_frame_touches_is_the_prompt`（三档尺寸逐格比对，变化的格子必须**恰好**是提示符那两格）、`the_mark_does_not_move_while_a_run_is_in_flight`、`the_mark_stays_still_on_the_narrow_rung_too`；`tests/render_layout.rs` 里所有写死 `"> "` 的断言改成按 `editor::PROMPT` 取（提示符那格按屏幕搜索定位，不按矩形）。**735 passed / 0 failed**。
 7. **文档**：README 的帧**重新 dump**（提示符那两格变了）并把左栏那段改成「界面里唯一在动的是提示符」；`docs/render.md` 改 mark 段与「定时器只为脉冲存在」那段；`CONTEXT.md` 新增 **提示符色相（PromptHue）** 与 **脉冲（Pulse）**（原**忙碌脉冲**改名并改写），**下落短横（FallingDash）** 标为已退出屏幕；手工清单 ⑯ 整节重写成「输入区三行、提示符色相与静止的左栏」九条（含模糊宽度与空闲 CPU 两条）。票 05–07 的 Comments 保留为历史。
 8. **基线**：`cargo test` **735 passed / 0 failed**；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移。
+
+- 2026-10-07 追记：**「mark 静止」这条被推翻了** —— 左栏那块标记在一次运行进行中会扫过一束反光（`.scratch/mark-sweep/spec.md`、[ADR 0015](../../../docs/adr/0015-mark-light-sweep.md)）。
+  随之改名的测试：`the_mark_does_not_move_while_a_run_is_in_flight` → `the_mark_holds_still_while_nothing_runs`（"不动"从此有前提：没有运行在跑）；另加 `the_light_sweeps_from_the_bottom_right_to_the_top_left` 与 `the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight`。
+  本票与票 04–07 关掉的那两样（下落短横、色相环）**没有回来** —— 扫光只在运行时出现，不是给静止的东西加装饰。

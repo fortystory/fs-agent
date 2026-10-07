@@ -54,3 +54,5 @@ mark 之外的任何动画（状态字转轮 / 输入框律动 / 转录底部动
 5. **注释回改**：`Tui::run` 里「Three sources and no timer」那段改写为「三条来源 + 一条只在忙碌时 arm 的脉冲定时器」，并指向本 spec §2/§4；模块文档的 `select!` 那条也补了一句。
 6. **测试**：`the_mark_walks_the_pulse_ring_while_a_run_is_in_flight`（两圈 24 帧，逐帧断言 5 行**同色**且等于 `PULSE_PALETTE[frame % 12]`）、`a_finished_run_puts_the_pulse_back_at_the_rings_first_frame`（跑 3 帧 → 归零后是静态渐变 → 下一轮从第 1 帧起）、`the_pulse_is_invisible_where_the_mark_is_not_drawn`（100×24 / 60×24 / 40×10：两帧 buffer **逐格相等**、帧里没有 mark 字形）、`the_pulse_moves_only_while_a_run_is_in_flight`（空闲 tick 不置脏、忙碌 tick 置脏、运行结束后又不置脏）。既有的 `the_mark_is_lit_from_above_and_only_on_the_wide_rung` 留作**空闲**那半的断言，注释里点名了它的另一半在哪。
 7. **基线**：`cargo test` **728 passed / 0 failed**；`cargo clippy --all-targets` 干净；`cargo fmt --check` 只剩 `src/context/repo_map.rs` 的既有漂移（新代码已 `rustfmt` 过，那两个文件没碰）。
+
+- 2026-10-07 追记：标记换成块字后（[ADR 0014](../../../docs/adr/0014-renamed-to-heng.md) 的补注），本票点名的 `the_mark_is_lit_from_above_and_only_on_the_wide_rung` 改名为 `the_mark_keeps_a_dim_preamble_in_both_its_forms`（`tests/render_layout.rs`）：它钉的现在是**拼音那一行退一档、字形全亮**，不再是"上亮下暗的渐变"。脉冲那一整套早就随票 08 退出屏幕。

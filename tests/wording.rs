@@ -649,23 +649,44 @@ fn the_header_identity_is_the_crate_and_the_version_it_was_built_from() {
 }
 
 #[test]
-fn the_mark_is_five_rows_of_one_width() {
+fn both_forms_of_the_mark_are_one_width_and_the_rows_the_layout_budgeted() {
     // 左栏要么整块画标记、要么完全不画 —— `layout` 在任何东西被画出来
-    // 之前就按 `LOGO_WIDTH` 定了这件事。一行宽度不同就会溜过
+    // 之前就按 `LOGO_WIDTH` 与行数定了这件事。一行宽度不同就会溜过
     // 那道闸、画到边框上去，所以这条契约钉在这里、钉在
     // 字形所在的地方，而不是在画家那边指望它。
     //
-    // 量的是**显示宽度**：标记的正身是汉字「衡」，一个字符占两列，
-    // 按 `chars().count()` 算会把它少算一列。
-    let rows = wording::logo_lines();
-    assert_eq!(rows.len(), 5, "标记是五行：{rows:?}");
-    for row in rows {
+    // 两版一起量：篆书那版二十三行，收起来那版五行（矮终端拿到的就是它），而行数由 `layout`
+    // 的常数说，两处不能各写一遍。
+    let block = wording::logo_lines();
+    assert_eq!(
+        block.len(),
+        heng::render::layout::LOGO_ROWS as usize,
+        "块字是布局预留的那些行：{block:?}"
+    );
+    let compact = wording::logo_lines_compact();
+    assert_eq!(
+        compact.len(),
+        heng::render::layout::LOGO_COMPACT_ROWS as usize,
+        "收起来那版是布局预留的那些行：{compact:?}"
+    );
+    for row in block.iter().chain(compact.iter()) {
         assert_eq!(
             heng::render::width::text_columns(row),
             heng::render::layout::LOGO_WIDTH as usize,
             "每一行都是布局预留的那个宽度：{row:?}"
         );
     }
+
+    // 两版的形状各钉一句：块字拼出来之后里面一个汉字都没有，收起来那版仍是拼音加汉字
+    // —— 它们不是同一张图的两种高度，不能互相顶替。
+    assert!(
+        block.iter().all(|row| !row.contains('衡')),
+        "块字那版是点阵，不该含汉字：{block:?}"
+    );
+    assert!(
+        compact[1].contains("héng") && compact[2].contains('衡'),
+        "收起来那版还是拼音与汉字：{compact:?}"
+    );
 }
 
 #[test]

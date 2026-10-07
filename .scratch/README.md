@@ -60,3 +60,4 @@
 | [`nvim-file-viewer/`](nvim-file-viewer/spec.md) | spec | **文件查看器**：`[ui] file_viewer = "nvim"` 时内容弹窗换成一屏真 nvim（只读、不折行、去框留白、键盘独占、`Ctrl-C` 或框外点击关）—— 先在 `prototype/embed-nvim` 分支上验完三问再落地（[ADR 0013](../docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)） | 1/1 done |
 | [`clickable-links/`](clickable-links/spec.md) | spec | **可点链接**：对话视图里点一下 URL 或工作区内真存在的文件路径（`/eli5` 的 `.html` 就是后者），由宿主 spawn `xdg-open` 打开 —— 识别与**选区**同层、拖选照旧只复制、只有人的指针能触发 | 3/3 done |
 | [`rename-to-heng/`](rename-to-heng/spec.md) | spec | **改名**：`fs-agent` → **衡（heng）**（[ADR 0014](../docs/adr/0014-renamed-to-heng.md)）：`fs` 歧义 + 产品定位是 harness；标识符、路径、文档与左栏标记一起换，历史不追改 | 4/4 done |
+| [`mark-sweep/`](mark-sweep/spec.md) | spec | 标记上的**扫光**：一次运行进行中，一束反光从右下扫到左上（斜亮带 + 两侧过渡、峰值白、1.8 秒一轮）；空闲一个像素都不动 —— 推翻 `tui-input-pulse` 票 08 的「标记静止」（[ADR 0015](../docs/adr/0015-mark-light-sweep.md)） | 1/1 done |

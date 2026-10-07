@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文档密度的护栏：40 份活文档的「单元 ≤500」、入口三份的体量预算、中文占比余量。
+"""文档密度的护栏：41 份活文档的「单元 ≤500」、入口三份的体量预算、中文占比余量。
 
 来源是 `.scratch/docs-slim/spec.md`（§1 单元口径、§2 护栏契约）。它守的是**不许恶化**，
 不是「瘦身做完了没」——装上就是绿的，存量欠账按文件的**违规计数基线**记着。
@@ -38,9 +38,9 @@ import re
 import sys
 from dataclasses import dataclass
 
-# --- 清单：40 份活文档 -------------------------------------------------------
+# --- 清单：41 份活文档 -------------------------------------------------------
 # scope 与 `.scratch/docs-slim/research/03` 一致：入口三份（README / CONTEXT / AGENTS）+
-# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 14 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
+# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 15 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
 # `.scratch/*/issues/`、`.scratch/*/spec.md`、`.scratch/*/research/`。
 DOC_FILES = [
     "README.md",
@@ -79,6 +79,7 @@ DOC_FILES = [
     "docs/adr/0012-input-tokens-are-atomic.md",
     "docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md",
     "docs/adr/0014-renamed-to-heng.md",
+    "docs/adr/0015-mark-light-sweep.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -296,10 +297,14 @@ def review_rules(unit: Unit) -> list[str]:
 #   的句子削掉（`docs/agents/commits.md` 那一轮就是这么落成的）。新上限 **5,000 / 140**、终点
 #   **5,500 / 150**：按现有密度（约 36 字符/行）折算是六倍体量。放宽与收紧同一条规矩 ——
 #   显式动作、理由写进提交信息，决定也记进 `.scratch/docs-slim/issues/05` 的 `## 评论`。
+# **2026-10-07 新增 `mark-sweep` 索引行时再跟一次**：同一类显式动作。10,612 / 63 →
+#   **10,769 / 64**（feature 索引天然随 feature 增长，与 `input-tokens`、`trace-tab`、
+#   `tui-visual-language`、`time-mcp`、`tui-feedback`、`files-page`、`todo-page`、
+#   `clickable-links` 八次同因；这一行是一轮五问的 grilling 折成 spec、同日一张实现票落地）。
 #   其余两份照旧只许降。
 ENTRY_BUDGET = {
     "README.md": {"chars": 17447, "lines": 296, "target_chars": 18500, "target_lines": 300},
-    ".scratch/README.md": {"chars": 10612, "lines": 63, "target_chars": 13500, "target_lines": 100},
+    ".scratch/README.md": {"chars": 10769, "lines": 64, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，
