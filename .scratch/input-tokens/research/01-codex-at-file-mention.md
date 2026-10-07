@@ -382,7 +382,7 @@ pub const PLUGIN_TEXT_MENTION_SIGIL: char = '@';
 | 五类候选：文件 / 目录 / plugin / skill / task（`candidate.rs:18-25`） | fs-agent 有 skill 与 MCP 的概念（`.scratch/mcp-support/`、skills），**但没有任何「提及」语法把它们插进 prompt** |
 | 插入的是**相对路径纯文本**，含空白加双引号，图片变附件（`chat_composer.rs:2741-2760`、`:2369-2376`） | 无对应物 |
 | 浮层渲染在输入区**上方**，`Clear` 后自绘（`render.rs:46`；`chat_composer.rs:44`） | fs-agent 的输入区在 `src/render/input.rs`，**没有覆盖层机制**给输入区用（详情覆盖层走的是另一套） |
-| 键位硬编码在 popup handler；`tui.keymap` 的 `list` context 服务其它列表视图（`chat_composer.rs:2265-2341`；`tui_keymap.rs:454-479`） | fs-agent 有问卷区的 `j`/`k`/`Ctrl-N`/`Ctrl-P` 分派（`.scratch/questionnaire-keys/`，[ADR 0010](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)），**与本功能无共用代码** |
+| 键位硬编码在 popup handler；`tui.keymap` 的 `list` context 服务其它列表视图（`chat_composer.rs:2265-2341`；`tui_keymap.rs:454-479`） | fs-agent 有问卷区的 `j`/`k`/`Ctrl-N`/`Ctrl-P` 分派（`.scratch/questionnaire-keys/`，[ADR 0010](../../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)），**与本功能无共用代码** |
 | 搜索根随会话 CWD 变，resume 时换根（`tui/src/file_search.rs:44-50`） | fs-agent 的工作目录是会话属性（`continue-by-id` 的 spec 里处理过「命中别的工作区时工作目录跟着那场会话走」） |
 
 另外两条纯事实：

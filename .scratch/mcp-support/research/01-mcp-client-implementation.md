@@ -609,7 +609,7 @@ server 侧拉进来这两点。
    改进』……要动它们，先改这张 spec」，`README.md:270` 的「这一版不做」清单也列着。选项：
    (a) 直接改这三处 + README；(b) 学 `.scratch/sandbox/spec.md` 的先例，另起一个 effort，把
    MCP 从「这一版不做」里按一份自己的 spec 拿出去（`README.md:270` 那段结尾自己就举了这个先例：
-   「或者像 [`sandbox`](.scratch/sandbox/spec.md) 那样另起一个 effort」）。牵动：所有后续票的
+   「或者像 [`sandbox`](../../../.scratch/sandbox/spec.md) 那样另起一个 effort」）。牵动：所有后续票的
    依据、以及 `.scratch/README.md` 的 feature 索引。
 
 ## 来源

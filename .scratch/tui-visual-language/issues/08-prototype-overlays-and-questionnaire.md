@@ -27,8 +27,8 @@ Blocked by: 03, 04, 05
 
 ## 接受的边界
 
-- 问卷的键位与「选项区 / 输入区」语义是 [`questionnaire-keys/spec.md`](../questionnaire-keys/spec.md) 与 [ADR 0010](../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) 的契约，**只改视觉表达**；
-- 浮层的几何基准（模态主列居中 vs 详情屏幕居中）是 [`tui-chrome/spec.md`](../tui-chrome/spec.md) 写下来的决定，不重开；
+- 问卷的键位与「选项区 / 输入区」语义是 [`questionnaire-keys/spec.md`](../../questionnaire-keys/spec.md) 与 [ADR 0010](../../../docs/adr/0010-questionnaire-keys-dispatch-by-zone.md) 的契约，**只改视觉表达**；
+- 浮层的几何基准（模态主列居中 vs 详情屏幕居中）是 [`tui-chrome/spec.md`](../../tui-chrome/spec.md) 写下来的决定，不重开；
 - 覆盖层立着时滚轮按指针位置分派是既有交互，不动。
 
 ## 已查明的硬约束（来自 [终端能力边界](01-research-terminal-capability-bounds.md)，2026-10-05）

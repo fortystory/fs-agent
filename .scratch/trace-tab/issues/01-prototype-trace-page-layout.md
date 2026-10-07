@@ -40,7 +40,7 @@ Blocked by: 03
 - **消息正文是唯一的多行块**：assistant 走 markdown、其余按 `\n` 分行（`4658-4696`）。
 - `Block::Message` **今天没有详情入口** —— `DetailKind` 只有 `Thinking` / `Context` / `Tool`（`tui.rs:5058-5076`）。这正是决定 1 要补的那一个。
 
-**三档帧**（prototype：[trace-pages.py](prototype/trace-pages.py) 与 [trace-pages.txt](prototype/trace-pages.txt)，`python3 .scratch/trace-tab/prototype/trace-pages.py` 可重跑）：
+**三档帧**（prototype：[trace-pages.py](../prototype/trace-pages.py) 与 [trace-pages.txt](../prototype/trace-pages.txt)，`python3 .scratch/trace-tab/prototype/trace-pages.py` 可重跑）：
 
 - 40 列：一条 5 行的回答在「照抄」画法里折成 5 行、把两行工具行挤出屏幕，在决定后的画法里占 1 行；
 - 28 列：同一条回答「照抄」占 **6 行**、决定后占 1 行；短前缀让 `read_file src/render/` 多露出 2 列。

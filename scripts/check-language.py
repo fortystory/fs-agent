@@ -170,7 +170,10 @@ ENGLISH_PROSE_CEILING = 29
 # 标识符、代码路径、引用与命令，插一段代码块就会拉低比例；但再往下掉 —— 也就是有人把
 # 整段散文翻回英文 —— 必须报红。
 DOCS_MIN_RATIO = {
+    "README.md": 24,
+    "CONTEXT.md": 41,
     "AGENTS.md": 23,
+    ".scratch/README.md": 21,
     "docs/adr/0001-chinese-ui-frozen-model-text.md": 44,
     "docs/adr/0002-fullscreen-alt-screen-tui.md": 40,
     "docs/adr/0003-plan-leaves-the-permission-modes.md": 41,
@@ -178,10 +181,20 @@ DOCS_MIN_RATIO = {
     "docs/adr/0005-model-visible-text-in-chinese.md": 36,
     "docs/adr/0006-sandbox-by-bubblewrap.md": 41,
     "docs/adr/0007-workspace-permission-mode.md": 43,
+    # 2026-10-07 文档整理那一批：以下十三条按同一条规矩（实测减 2 点）补上下限 —— 它们
+    # （`0008` 起的七份 ADR、三份逐面文档、三份入口文档）落盘时都漏了这一步，与
+    # `check-doc-size.py` 的 `DOC_FILES` 漏掉 ADR 0016、README 的 ADR 索引行也漏掉它同类。
+    "docs/adr/0008-markdown-parsing-by-pulldown-cmark.md": 37,
     # 2026-10-01 目标循环那一批：实测 52.2%。
     "docs/adr/0009-goals-are-files-and-progress-is-derived.md": 50,
+    "docs/adr/0010-questionnaire-keys-dispatch-by-zone.md": 48,
     # 2026-10-03 生命周期图那一批：实测 34.4%。
     "docs/adr/0011-diagrams-in-mermaid.md": 32,
+    "docs/adr/0012-input-tokens-are-atomic.md": 52,
+    "docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md": 35,
+    "docs/adr/0014-renamed-to-heng.md": 39,
+    "docs/adr/0015-mark-light-sweep.md": 53,
+    "docs/adr/0016-usage-rides-the-row-of-its-call.md": 49,
     "docs/bash.md": 32,
     "docs/credentials.md": 39,
     "docs/custom-tools.md": 30,
@@ -189,6 +202,7 @@ DOCS_MIN_RATIO = {
     # 2026-10-01 目标循环那一批：实测 41.1%。
     "docs/goals.md": 39,
     "docs/executor.md": 38,
+    "docs/grep.md": 38,
     "docs/highlight.md": 35,
     # 2026-10-03 生命周期图那一批：全部落地后实测 20.2%。
     "docs/lifecycle.md": 18,
@@ -201,6 +215,8 @@ DOCS_MIN_RATIO = {
     "docs/sandbox.md": 33,
     "docs/skills.md": 41,
     "docs/tui-manual-checklist.md": 46,
+    "docs/web.md": 31,
+    "docs/agents/commits.md": 26,
     "docs/agents/domain.md": 29,
     "docs/agents/issue-tracker.md": 29,
     "docs/agents/triage-labels.md": 32,

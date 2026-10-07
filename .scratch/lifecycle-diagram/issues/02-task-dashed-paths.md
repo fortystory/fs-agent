@@ -51,7 +51,7 @@ Blocked by: —
    `src/` 内零 `impl Hook`（只有 `tests/support/hook.rs:89`），`src/config.rs` 里 hook 零命中
    —— **没有配置面**。
 2. **MCP**：`src/` 全仓零命中，但 spec 已定并拆出 9 张 `ready-for-agent` 实现票
-   （[`.scratch/mcp-support/spec.md`](../mcp-support/spec.md)）—— 也就是说它**有一个已写下来的
+   （[`.scratch/mcp-support/spec.md`](../../mcp-support/spec.md)）—— 也就是说它**有一个已写下来的
    接缝**，不是一句愿望。图上**先用旁注**（不占节点）。
 
 **生产组装点只有三个**（这是判据的基准）：交互式 `src/cli.rs:380`、`discuss` `:700`、

@@ -12,7 +12,7 @@ Blocked by: —
 ## 问题
 
 左栏页签条上的 `文件` 页到今天只画一行占位（`wording::tab_placeholder()`）。它该画什么？
-`FileIndex`（[`input-tokens` 票 01](../input-tokens/issues/01-file-index.md)）当初就是为它做的，
+`FileIndex`（[`input-tokens` 票 01](../../input-tokens/issues/01-file-index.md)）当初就是为它做的，
 而 `tui.rs:3413` 还留着**另一套**语义（「这个会话碰过的文件」）。除了「列什么」，还有一串悬着
 的事：怎么排、鼠标与键盘各做什么、点开一个文件能看多深、那份索引什么时候重扫。
 
@@ -25,7 +25,7 @@ Blocked by: —
    做好、当初就是为这一页埋的；而「这一场改过哪些文件」既有的出路是 `sessions show --files`，
    语义也更贴轨迹视图。**被否决**：会话碰过的文件（`tui.rs:3413` 那条旧注释）。
 3. **数据源共用那一份 `FileIndex`**：进 TUI 预热一次、每次提交后重扫一次，就是
-   [`input-tokens`](../input-tokens/spec.md) 定下的那条节奏；不另起第二条遍历 —— 仓库里
+   [`input-tokens`](../../input-tokens/spec.md) 定下的那条节奏；不另起第二条遍历 —— 仓库里
    「什么算工作区文件」只该有一个答案。代价明说：这一页与 `@` 候选永远是同一份快照。
 
 ### B. 树的形态
@@ -52,7 +52,7 @@ Blocked by: —
     （xterm 的 `shiftEscape`、WezTerm 的 `bypass_mouse_reporting_modifiers = "SHIFT"`、VTE 源码里的
     `start_selecting`）；它还不静默 —— 终端会顺手启动一次原生选择。crossterm 0.29 的
     `MouseEvent::modifiers` 读得到也没用，因为事件不来。**它还与本仓库已有的承诺正面冲突**：
-    [`docs/render.md`](../../docs/render.md) 的「选区」一节写着「按住 shift 的终端原生选择照旧
+    [`docs/render.md`](../../../docs/render.md) 的「选区」一节写着「按住 shift 的终端原生选择照旧
     可用」。
 12. **插入改走键盘**：`↑` / `↓` 移行，`Enter` 把该行的路径作为 `@路径` 插进草稿（目录带尾斜杠，
     与索引里那个拼法一致）。键盘是唯一完全绕开终端鼠标语义的选择，而且与「滚轮看、键盘选」天然
@@ -89,7 +89,7 @@ Blocked by: —
     里面到底干了什么），所以模型连跑几条 `bash` 会各触发一次重扫 —— `FileIndex::begin()` 那个
     守卫会把在飞的那一次合并掉。
 22. **进程模型：保持 `spawn_blocking` 的线程，不另起进程**。它已经在渲染循环之外
-    （[`input-tokens` 票 01](../input-tokens/issues/01-file-index.md) 的验收就是「键盘与绘制从不被它
+    （[`input-tokens` 票 01](../../input-tokens/issues/01-file-index.md) 的验收就是「键盘与绘制从不被它
     挡住」），而进程隔离能挡的那类风险（内存、崩溃、权限）在这里本来就不在。独立进程要重想一整套：
     结果怎么回来、进程何时回收、退出与 `--continue` 时怎么收尾、过不过沙箱、拿哪些环境变量 ——
     仓库里 MCP server 那一层就是为这些才那么厚。**已知弱点**：一个永不返回的遍历（网络文件系统上
@@ -105,10 +105,10 @@ Blocked by: —
   一个字不动。
 - **`src/render/wording.rs`**：折叠字形（展开态是新的，收起态复用符号表里那个「有折起来的内容」）、
   加载与空态、弹窗的标题与截断提示、焦点行相关的话。
-- **[`CONTEXT.md`](../../CONTEXT.md)**：**左栏**词条要写上这一页到底是什么（今天只是把
+- **[`CONTEXT.md`](../../../CONTEXT.md)**：**左栏**词条要写上这一页到底是什么（今天只是把
   `调用量` / `todo` / `文件` 三个名字并列）；可能还要一个新词条承接「文件页 / 文件树」这个概念。
-- **[`docs/render.md`](../../docs/render.md)**：左栏那一节。
-- **[`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md)**：真终端里要看的是 40 / 28
+- **[`docs/render.md`](../../../docs/render.md)**：左栏那一节。
+- **[`docs/tui-manual-checklist.md`](../../../docs/tui-manual-checklist.md)**：真终端里要看的是 40 / 28
   两档下树的密度、焦点行读不读得清、深路径的名字怎么截、弹窗的高亮与行号在真配色下的样子。
 - **测试**：走既有的 TUI 帧测试那一层（`TestBackend` + 「画一帧、读屏幕」），不新增 seam；树的
   展开与收起、焦点行、插入、弹窗、两档宽度各要有断言。

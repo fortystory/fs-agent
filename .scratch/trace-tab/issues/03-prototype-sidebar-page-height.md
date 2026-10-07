@@ -19,7 +19,7 @@ Blocked by: —
 要定这三页在新高度下的形态：
 
 - **调用量**页（6 个字段）：贴顶还是居中，其余留白怎么处理；
-- **todo** 页：今天「装不下就在计数行上面画一行 `＋N 项`」（[`docs/render.md`](../../docs/render.md) 左栏一节），行数多了之后这条规则要不要改；
+- **todo** 页：今天「装不下就在计数行上面画一行 `＋N 项`」（[`docs/render.md`](../../../docs/render.md) 左栏一节），行数多了之后这条规则要不要改；
 - **轨迹**页：它拿到的是一个 15 / 19 / 6 行的框，框里画什么归[轨迹视图那张票](01-prototype-trace-page-layout.md)，本票只管框与页签的关系。
 
 另外核实：`tabs` 与 `sidebar_page` 的 `y` 都由 `kind.rows() + TAB_ROWS` 推出（`src/render/layout.rs:341-356`），页高改了之后命中矩形、`SIDEBAR_TOP_GAP` 与「高度不够先丢 mark」那条阶梯是否照旧。
@@ -41,7 +41,7 @@ Blocked by: —
 1. `sidebar_page.height`（`:349-356`）从 `fields` 改成 `content_rows − kind.rows() − TAB_ROWS`，其中 `content_rows = area.height − SIDEBAR_TOP_GAP`。
 2. `sidebar_content`（`:395-419`）的判据从 `kind.rows() + TAB_ROWS + fields <= content_rows` 改成 `kind.rows() + TAB_ROWS + SIDEBAR_MIN_FIELDS <= content_rows`；`SIDEBAR_FIELDS`（`:71`）与那条「逐字段递减」的支路随之删掉。`SIDEBAR_MIN_FIELDS` 建议改名 `SIDEBAR_MIN_PAGE`（它的新身份是页的地板，不再是字段数）。
 
-**实测**（prototype：[frames.py](prototype/frames.py) 与它的输出 [frames.txt](prototype/frames.txt)，`python3 .scratch/trace-tab/prototype/frames.py` 可重跑）：
+**实测**（prototype：[frames.py](../prototype/frames.py) 与它的输出 [frames.txt](../prototype/frames.txt)，`python3 .scratch/trace-tab/prototype/frames.py` 可重跑）：
 
 | 终端 | 内容行 | 身份（今天 → 决定后） | 页区 y | 页高（今天 → 决定后） |
 | --- | ---: | --- | --- | --- |

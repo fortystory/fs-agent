@@ -14,7 +14,7 @@ Blocked by: —
 - 屏幕上**唯一在动的东西**是输入区提示符 `❱ ` 的 24 位色相呼吸（`tui.rs:4163-4206`、`PULSE_PALETTE` 在 `4223`），只在一次运行进行中时动，空闲时**没有时钟**；
 - 等待回答且正文还空时，对话视图末尾给两行「谁在答 / 正在做什么」（有工具在跑就说那个工具，否则是会走的「正在思考…」）；
 - **下落短横**动画（`▀▀▀▀` 从上往下落）真机上看下来不好看，已退出屏幕（`tui.rs:3785` 传 `mark_lines(None)`），代码与它自己的单元测试都留着，文档写明「别顺手接回渲染路径」；
-- [`tui-input-pulse/spec.md`](../tui-input-pulse/spec.md) 明确不做：提示符的其它动法（闪、跳色、固定 16 色、染草稿、加配置），以及**输入区以外任何忙碌动画**。
+- [`tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md) 明确不做：提示符的其它动法（闪、跳色、固定 16 色、染草稿、加配置），以及**输入区以外任何忙碌动画**。
 
 要问的是这几个真问题：
 
@@ -23,7 +23,7 @@ Blocked by: —
 3. 用**什么**表达：文字、字形（例如一个静态的进行中标记）、亮度、颜色，还是动？
 4. **代价是什么**：空闲时要不要引入时钟（今天空闲**没有**唤醒、没有重画）；与「输入区以外任何忙碌动画都不取」正面冲突；终端兼容性（若用 `DIM` 或颜色，看 [终端能力边界](01-research-terminal-capability-bounds.md) 的结论）。
 
-**允许的结论是「不动」** —— 只要那是重新看过之后的结论，而不是默认延续。若推翻 [`tui-input-pulse/spec.md`](../tui-input-pulse/spec.md) 的某条「明确不做」，在答案里写清**推翻哪一条、为什么**。
+**允许的结论是「不动」** —— 只要那是重新看过之后的结论，而不是默认延续。若推翻 [`tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md) 的某条「明确不做」，在答案里写清**推翻哪一条、为什么**。
 
 ## 产物
 
@@ -31,9 +31,9 @@ Blocked by: —
 
 ## 接受的边界
 
-- **提示符呼吸本身默认保留**（除非本票明确决定撤）；它「只在运行中动」这条语义是 [`tui-input-pulse/spec.md`](../tui-input-pulse/spec.md) 的决定；
+- **提示符呼吸本身默认保留**（除非本票明确决定撤）；它「只在运行中动」这条语义是 [`tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md) 的决定；
 - 下落短横若被重新考虑，必须正面对上「真机上不好看」这条记录，而不是顺手接回渲染路径；
-- 本票只定「在跑」的表达，不动等待两行的**内容文案**归属（那在 `wording` 层，属 [`chinese-ui/spec.md`](../chinese-ui/spec.md) 的领域）。
+- 本票只定「在跑」的表达，不动等待两行的**内容文案**归属（那在 `wording` 层，属 [`chinese-ui/spec.md`](../../chinese-ui/spec.md) 的领域）。
 
 ## 作答
 
@@ -72,7 +72,7 @@ Blocked by: —
 
 - `wording.rs`：`status_word` 的消费者从 `hint_line` 换成 `status_row`；`status_row` 多一段并重排降级。
 - `tui.rs`：`prompt_colour` 旁边加 `spinner_frame(pulse, busy)`；`draw_status` 应用它；`PULSE` 的武装条件从「运行时」放宽到「始终」。
-- `docs/render.md`：「键盘」那条（提示符脉冲、`PROMPT_HUE_PER_SECOND`）与状态行那节都要改；[`tui-input-pulse/spec.md`](../tui-input-pulse/spec.md) 的两条「明确不做」要划掉并写明被本票推翻。
+- `docs/render.md`：「键盘」那条（提示符脉冲、`PROMPT_HUE_PER_SECOND`）与状态行那节都要改；[`tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md) 的两条「明确不做」要划掉并写明被本票推翻。
 
 ## 补记（2026-10-06）：字形集换成了月相
 

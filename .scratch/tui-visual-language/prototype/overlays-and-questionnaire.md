@@ -61,4 +61,4 @@
 - 问卷**已选去掉黄色**，只靠 `BOLD` 与已有的 `[x]` / `●` 标记（05）；
 - 表头进内容档 `PLAIN` + `BOLD`（05 的「`BOLD` = 这一行领起一块」）；
 - 页脚 `DarkGray` → `MUTED`（05）；
-- 模态按钮之间那 3 个空格、菜单的内边距 1 格 —— 留给 [间距与对齐](09-grilling-spacing-and-alignment.md) 定常量，本票不动。
+- 模态按钮之间那 3 个空格、菜单的内边距 1 格 —— 留给 [间距与对齐](../issues/09-grilling-spacing-and-alignment.md) 定常量，本票不动。

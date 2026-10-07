@@ -43,7 +43,7 @@ Blocked by: —
      前置条件 · 不配证据表也不做脚本。
 2. **代价第一条要写实**：`mermaid` 不在 `canonical_language` 里（`src/render/highlight.rs:214-228`），
    fs-agent 自己的 TUI 只把它当普通代码块渲染；要真正在终端画图是另一个 effort，指向
-   [`../tui-mermaid/seed.md`](../tui-mermaid/seed.md)。
+   [`../tui-mermaid/seed.md`](../../tui-mermaid/seed.md)。
 3. `README.md` 的 ADR 索引加一条。
 
 ## 验证

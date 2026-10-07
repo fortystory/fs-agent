@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文档密度的护栏：41 份活文档的「单元 ≤500」、入口三份的体量预算、中文占比余量。
+"""文档密度的护栏：42 份活文档的「单元 ≤500」、入口三份的体量预算、中文占比余量。
 
 来源是 `.scratch/docs-slim/spec.md`（§1 单元口径、§2 护栏契约）。它守的是**不许恶化**，
 不是「瘦身做完了没」——装上就是绿的，存量欠账按文件的**违规计数基线**记着。
@@ -38,9 +38,9 @@ import re
 import sys
 from dataclasses import dataclass
 
-# --- 清单：41 份活文档 -------------------------------------------------------
+# --- 清单：42 份活文档 -------------------------------------------------------
 # scope 与 `.scratch/docs-slim/research/03` 一致：入口三份（README / CONTEXT / AGENTS）+
-# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 15 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
+# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 16 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
 # `.scratch/*/issues/`、`.scratch/*/spec.md`、`.scratch/*/research/`。
 DOC_FILES = [
     "README.md",
@@ -80,6 +80,9 @@ DOC_FILES = [
     "docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md",
     "docs/adr/0014-renamed-to-heng.md",
     "docs/adr/0015-mark-light-sweep.md",
+    # **2026-10-07 补收**：`docs/adr/0016` 落盘时漏了这份清单，README 的 ADR 索引行也漏了它 ——
+    # 两处都由 ④ 的自检打了 warn（「`docs/` 下有清单外的 md」），这一轮一并补上。
+    "docs/adr/0016-usage-rides-the-row-of-its-call.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -308,9 +311,18 @@ def review_rules(unit: Unit) -> list[str]:
 #   维护者的原话是「加点预算吧，logo 确实大了不少」。新上限 **17,800 / 317**、终点
 #   **18,500 / 320**（字符那一档没动，终点只抬行数）。放宽与收紧同一条规矩 —— 显式动作、
 #   理由写进提交信息，决定也记进 `.scratch/docs-slim/issues/05` 的 `## 评论`。
+# **2026-10-07 补 ADR 0016 的索引项时上调 `README.md`**：ADR 索引行漏了 `docs/adr/0016`
+#   （`trace-usage-tail` 那一轮落盘），`DOC_FILES` 也漏了它 —— 两处都是靠 ④ 的自检打的 warn
+#   才发现。补上那一段与「状态」里的数字之后 17,778 / 316 → **17,928 / 316**。这与
+#   `.scratch/README.md` 那边同因：**每份 ADR 都该有入口**，索引行随份数增长只会往上走 ——
+#   终点仍是 ≤18,500 / ≤320。
+# **2026-10-07 补记 `.scratch/README.md` 漏掉的两次常规上调**：棘轮上一次落在 `aea100b`
+#   （`mark-sweep` 那行，10,769 / 64）。此后 `b1b5189`（`/` 菜单按来源上色那一轮动了索引行）
+#   与 `abc160f`（`diff-page` 立项加一行）都没跟着上调，实测已是 **11,049 / 66**。这一轮补上，
+#   与 `input-tokens` 起的那九次同因：feature 索引天然随 feature 增长。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 17800, "lines": 317, "target_chars": 18500, "target_lines": 320},
-    ".scratch/README.md": {"chars": 10769, "lines": 64, "target_chars": 13500, "target_lines": 100},
+    "README.md": {"chars": 17928, "lines": 317, "target_chars": 18500, "target_lines": 320},
+    ".scratch/README.md": {"chars": 11049, "lines": 66, "target_chars": 13500, "target_lines": 100},
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，
@@ -460,7 +472,7 @@ def print_list(report: Report) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="40 份活文档的密度护栏（单元 ≤500 / 入口预算 / 占比余量）")
+    parser = argparse.ArgumentParser(description="42 份活文档的密度护栏（单元 ≤500 / 入口预算 / 占比余量）")
     parser.add_argument("--list", action="store_true", help="打印全部单元与每条规则的当日命中数")
     args = parser.parse_args()
 

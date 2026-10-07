@@ -14,7 +14,7 @@ Blocked by: —
 1. **测试里钉住颜色与修饰符的断言**。扫 `tests/`（重点 `render_layout.rs`、`render_tui.rs`、`render_markdown.rs`、`render_highlight.rs`、`ask_user_question_tui.rs`、`history_replay.rs`、`wording.rs`、`todo.rs`，别的若有也收）。每处记：`文件:行号`、断言的是什么、以及它属于哪一类 —— **「钉语义」**（改色板时可改成引用色板常量，断言意图不变）还是**「钉色值本身」**（改了色板就必须改这条断言）。要一张表 + 按文件与类别的总数。
 2. **公开契约**：`src/render/mod.rs` 导出的 `render_block` / `render_block_uncoloured` 有哪些调用方（含 `tests/`）；`Severity::ansi`（`src/render/severity.rs`）服务哪些路径，它与 TUI 里那份严重度映射（`src/render/tui.rs` 里 `severity_style` 附近）今天有没有任何一处显式绑定 —— 两套映射各写各的，是收敛的候选；`markdown::to_lines_indented` 的列预算契约。
 3. **文档与脚本锚点**：`docs/render.md` 里哪些段落描述了具体颜色或字形（列小节标题与行号）；`docs/tui-manual-checklist.md` 的 ①–㉘ 里哪些是纯观感项；`scripts/tui-startup-check.py` 钉了哪些字形或颜色锚点。
-4. **`docs/render.md` 与代码的矛盾复核**。charting 期已核出 6 处，逐条复核真假、给准确行号、写清正确的事实该是什么。已知的一处：文档仍写着 TUI 是「alt screen 上的一圈外框」，而外框在 [`tui-chrome/spec.md`](../tui-chrome/spec.md) 已经拆掉。另有一类是注释与实现相左（如 `src/render/tui.rs:15` 说「循环里唯一的定时器是标记的脉冲」，同文件 `385-388` 与 `474-478` 却还有退出手势的 deadline）。
+4. **`docs/render.md` 与代码的矛盾复核**。charting 期已核出 6 处，逐条复核真假、给准确行号、写清正确的事实该是什么。已知的一处：文档仍写着 TUI 是「alt screen 上的一圈外框」，而外框在 [`tui-chrome/spec.md`](../../tui-chrome/spec.md) 已经拆掉。另有一类是注释与实现相左（如 `src/render/tui.rs:15` 说「循环里唯一的定时器是标记的脉冲」，同文件 `385-388` 与 `474-478` 却还有退出手势的 deadline）。
 
 ## 产物
 

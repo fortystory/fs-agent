@@ -16,7 +16,7 @@
 - **状态行**：整行一个 `DarkGray`（`tui.rs:3935`），内容是 ` 模型 X │ Y │ Z `（`wording.rs:1697-1713` 的三档降级）。
 - **提示行**：整行一个 `DarkGray`（`tui.rs:4531`），拿到的宽度是 **`panes.hints.width` = 主列宽**。
 - **输入区**：整段 `BOLD`（`tui.rs:4515`）；只有提示符那个 span 单独上专色（`4507-4512`）。
-- 两条横虚线都在（`input.y-1` 与 `hints.y-1`，`tui.rs:3726`）—— **[`tui-chrome/spec.md:196`](../tui-chrome/spec.md) 当初还给转录的那一行空白，就在状态行上方那条虚线之上**。
+- 两条横虚线都在（`input.y-1` 与 `hints.y-1`，`tui.rs:3726`）—— **[`tui-chrome/spec.md:196`](../../tui-chrome/spec.md) 当初还给转录的那一行空白，就在状态行上方那条虚线之上**。
 
 ## 核心问题：提示行的宽度是主列宽
 
@@ -35,7 +35,7 @@
 
 | 方案 | 做法 | 代价 |
 | --- | --- | --- |
-| **A 跨整屏** | `panes.hints` 从主列宽改成整屏宽；左栏从「全高」改成「到提示行为止」 | 左栏页区少 1 行（120×24 下 15 → 14）；撞 [`sidebar-toggle`](../sidebar-toggle/spec.md) / [`trace-tab`](../trace-tab/spec.md) 写下的「全高」 |
+| **A 跨整屏** | `panes.hints` 从主列宽改成整屏宽；左栏从「全高」改成「到提示行为止」 | 左栏页区少 1 行（120×24 下 15 → 14）；撞 [`sidebar-toggle`](../../sidebar-toggle/spec.md) / [`trace-tab`](../../trace-tab/spec.md) 写下的「全高」 |
 | **B 减条目** | 维持主列宽，把 `PgUp/PgDn 滚动` 与 `ctrl-o 左栏` 从提示行移走（进 `/` 菜单的帮助） | 这两条在屏幕上永远不可见 —— 而 `ctrl-o 左栏` 正是「叫回左栏」这件事的唯一提示 |
 | **C 保持现状** | 承认宽屏也只看得见 4 条 | 痛点原样保留 |
 
@@ -55,7 +55,7 @@
 
 ## 待拍板 3：状态行与转录之间那行空白
 
-[`tui-chrome/spec.md:196`](../tui-chrome/spec.md) 当初把「状态行上方那一行还给转录」，并留下话：**「若真机上读起来转录与状态行贴太紧，那就是留一行空白的理由，届时改 `CHROME` 一处」**。
+[`tui-chrome/spec.md:196`](../../tui-chrome/spec.md) 当初把「状态行上方那一行还给转录」，并留下话：**「若真机上读起来转录与状态行贴太紧，那就是留一行空白的理由，届时改 `CHROME` 一处」**。
 
 | 方案 | 代价 |
 | --- | --- |
@@ -72,4 +72,4 @@
 
 ## 输入区：按 05 的决定执行，本票不再问
 
-去掉整段 `BOLD`（`tui.rs:4515`），草稿归 `PLAIN`；**提示符 `❱` 仍是界面上唯一会动的专色**，也是唯一的焦点。顺带一条：[`tui-input-pulse/spec.md`](../tui-input-pulse/spec.md) 的测试断言「草稿保住了 `BOLD`」（`tests/render_layout.rs:950-953`）要跟着改。
+去掉整段 `BOLD`（`tui.rs:4515`），草稿归 `PLAIN`；**提示符 `❱` 仍是界面上唯一会动的专色**，也是唯一的焦点。顺带一条：[`tui-input-pulse/spec.md`](../../tui-input-pulse/spec.md) 的测试断言「草稿保住了 `BOLD`」（`tests/render_layout.rs:950-953`）要跟着改。

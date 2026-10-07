@@ -17,7 +17,7 @@ Blocked by: —
 
 ## 已有材料
 
-[两个视口的可行性调研](research/01-pane-and-two-view-feasibility.md)（charting 期，2026-10-05）已把 `pane.rs` 的结构、折行的两级、宽度变化路径、左栏几何、点击链与 `--continue` 重播路径逐条取证，并给出「共享 `painted`」这条最省的形态。本票在它之上只做一件事：把**改造面与测试影响**钉成切片。
+[两个视口的可行性调研](../research/01-pane-and-two-view-feasibility.md)（charting 期，2026-10-05）已把 `pane.rs` 的结构、折行的两级、宽度变化路径、左栏几何、点击链与 `--continue` 重播路径逐条取证，并给出「共享 `painted`」这条最省的形态。本票在它之上只做一件事：把**改造面与测试影响**钉成切片。
 
 ## 产物
 
@@ -80,4 +80,4 @@ Blocked by: —
 本次只实跑了全绿基线，未落地 `src/` 改动。
 
 **context pointer**：逐条证据、代码形状示意与完整测试清单见
-[research/02-shared-painted-change-surface.md](research/02-shared-painted-change-surface.md)。
+[research/02-shared-painted-change-surface.md](../research/02-shared-painted-change-surface.md)。

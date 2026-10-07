@@ -30,7 +30,7 @@ Blocked by: 11
 2. **左栏画到提示行上一行为止**；左栏与主列之间那条竖虚线**同样收短**。**页区在 120×24 下从 15 行变 14 行**（页高的公式不变，变的只是剩余高度）。
 3. **输入区草稿去掉整段 `BOLD`**：草稿归正文档，提示符 `❱` 仍是唯一的焦点。
 4. 提示阶梯的数字与注释**重算重写** —— 「宽屏带着左栏时提示行比屏窄 41 列」那句作废。
-5. **回改既有 spec**：[`sidebar-toggle`](../sidebar-toggle/spec.md) 与 [`trace-tab`](../trace-tab/spec.md) 写下的「全高左栏」；以及 `docs/render.md` 的外壳几何那几处。
+5. **回改既有 spec**：[`sidebar-toggle`](../../sidebar-toggle/spec.md) 与 [`trace-tab`](../../trace-tab/spec.md) 写下的「全高左栏」；以及 `docs/render.md` 的外壳几何那几处。
 
 ## 验证
 

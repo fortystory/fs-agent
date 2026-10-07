@@ -20,7 +20,7 @@ Blocked by: 01
 
 ## 现状（2026-10-06 量的，改前先复核）
 
-- 指针链路：`mouse`（[`:2640-2658`](../../src/render/tui.rs)）→ `press_at` `:2723` →
+- 指针链路：`mouse`（[`:2640-2658`](../../../src/render/tui.rs)）→ `press_at` `:2723` →
   `drag_to` `:2731` → `release_at` `:2745`：`drag.selecting` 为真先 `copy`、否则
   `click_at`。`DRAG_THRESHOLD` 当前是 **2**（挪一格仍算手抖、两格之上才起选 ——
   `selection.rs:135`），所以「点在链接上没挪动」这条判据有整整两格的容差。
@@ -31,7 +31,7 @@ Blocked by: 01
   （`take_suspend_request`，`:3532`）同形。
 - 回执：`hint_line`（`:4149`）把 `copy_receipt`（`:4176`）排在提示集合之前；措辞在
   `render/wording.rs:1275`。
-- 会话 cwd 在 `TuiState::cwd`（[`:658`](../../src/render/tui.rs)）。
+- 会话 cwd 在 `TuiState::cwd`（[`:658`](../../../src/render/tui.rs)）。
 - 外部进程的先例：`render/viewer.rs:160` 的 `NvimViewer::spawn`（pty 那一档）与
   `tools/process.rs`（**不经 shell** 的 argv 直传纪律，见该文件开头的文档注释）。
 - 全仓没有任何 `xdg-open` / `Command::new("open")` 代码。

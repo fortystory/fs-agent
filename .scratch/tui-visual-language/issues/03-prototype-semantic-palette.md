@@ -11,7 +11,7 @@ Blocked by: 01
 
 要定：
 
-- **形状**：模块放哪（`src/render/palette.rs`？还是并进 `wording.rs` 的同侪）？导出的是 `Color` 常量、`Style`、还是一个 `fn 语义() -> Style`？命名用扁平的英文常量（`MUTED` / `CHROME` / `WARN`）还是分族（`chrome::LINE` / `severity::WARN`）？后者更长但更好找。**标识符用英文**（[ADR 0004](../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)）。
+- **形状**：模块放哪（`src/render/palette.rs`？还是并进 `wording.rs` 的同侪）？导出的是 `Color` 常量、`Style`、还是一个 `fn 语义() -> Style`？命名用扁平的英文常量（`MUTED` / `CHROME` / `WARN`）还是分族（`chrome::LINE` / `severity::WARN`）？后者更长但更好找。**标识符用英文**（[ADR 0004](../../../docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)）。
 - **粒度**：语义表怎么切？charting 期的穷举给出了这些族 —— 框架线、静音/次要文字、名字（五个角色）、选中态、警示与诊断、严重度四档、markdown（行内代码/引用/网格/标题）、语法高亮七类、浮层、问卷、输入区记号、在跑信号。哪些合、哪些分？
 - **收敛到什么程度**：今天屏幕上有多少种不同的前景色？收敛之后目标是多少？（冻结项 3：颜色只留给需要预警与分类的语义，层级交给 `dim`/`bold` 与留白。）**这个数字本身就是本票要拍的。**
 - **哪些不能动**：[`tui-ux/map.md`](../../tui-ux/map.md) 冻结项 9 的角色五色是写下来的决定；`docs/render.md` 与 `docs/tui-manual-checklist.md` 里有没有钉死的色值（02 号票会给出清单）。
@@ -90,4 +90,4 @@ Blocked by: 01
 两处对本票色板的修正，**以本节的版本为准**：
 
 1. **`Severity::Good` 与 `Note` 改归 `MUTED`**（原案是 `PLAIN`）：它们是过程行，正常完成不该抢注意力。`Warn` / `Bad` 保持颜色不变。
-2. **界面域新增一个条目 `INJECTED = LightBlue`（索引 12）**，只给上下文注入行。理由不是审美，是 [`trace-tab/spec.md`](../trace-tab/spec.md) §2 例外二明写的契约：「注入行与别的叙述行同灰，于是注入 / 用户 / 助手在轨迹页上分不开」。**界面域因此是 7 个条目**，不是 6 个。
+2. **界面域新增一个条目 `INJECTED = LightBlue`（索引 12）**，只给上下文注入行。理由不是审美，是 [`trace-tab/spec.md`](../../trace-tab/spec.md) §2 例外二明写的契约：「注入行与别的叙述行同灰，于是注入 / 用户 / 助手在轨迹页上分不开」。**界面域因此是 7 个条目**，不是 6 个。

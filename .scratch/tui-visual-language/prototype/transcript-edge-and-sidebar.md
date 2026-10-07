@@ -7,7 +7,7 @@
 - **`TRAILING_COLUMNS = 2` 永远预留**。注释把理由写死了：「画不画都留着，这样文字不会因为转录长高了而重新折行」（`layout.rs:40-42`）。所以「只在需要时画」**已经是**现状：滚动条只在 `pane.total() > track.height` 时才画（`tui.rs:4399`），回合条在空会话里一格都不画（`4365-4368`）——但**列永远在**。
 - **滚动条**：`Scrollbar(VerticalRight)`，track 与 thumb 都是 `DarkGray`；thumb 在「回看」时加 `BOLD`（`4403-4409`）。ratatui 的默认字形是 track `│`、thumb `█`。
 - **回合条**：普通格 `┊`、焦点格 `┃`（`LightMagenta`+`BOLD`）、截断 `⋮`；每格记一个命中区域（`4374-4394`）。
-- **轨迹页的右缘什么都没有**：只有 pane 与右下指示器。它有自己独立的滚动与贴底跟随（[`trace-tab` 票 04](../trace-tab/issues/04-grilling-scroll-and-follow.md)），却没有位置指示。
+- **轨迹页的右缘什么都没有**：只有 pane 与右下指示器。它有自己独立的滚动与贴底跟随（[`trace-tab` 票 04](../../trace-tab/issues/04-grilling-scroll-and-follow.md)），却没有位置指示。
 - **占比条是 `bg(DarkGray)` 涂出来的**，而同一行的标签是 `fg(DarkGray)`（`panel.rs:183` / `194` / `196`）——**同一个值，一个当字一个当底**。条「不占列」，所以列宽与降级链完全不受它影响。
 - **身份标记的品红坡道**（`LightMagenta` → `Magenta`，5 行）不在色板里 —— 它是这次唯一没有归属的色。
 
@@ -31,7 +31,7 @@
 | B 什么都不加 | 保持现状，靠右下指示器 | 「我在这条流的哪儿」没有表达 |
 | C 两个都补 | 再加回合条 | 38/26 列里再挤一列，且轨迹页本身按回合分段、可以直接滚 |
 
-➡️ 推荐 **A**。[`trace-tab` 票 04](../trace-tab/issues/04-grilling-scroll-and-follow.md) 明确给了轨迹页**独立的滚动与贴底跟随** —— 有独立滚动就该有位置指示，而回合一格一格的导航在轨迹页上是冗余的（它就按回合分段）。
+➡️ 推荐 **A**。[`trace-tab` 票 04](../../trace-tab/issues/04-grilling-scroll-and-follow.md) 明确给了轨迹页**独立的滚动与贴底跟随** —— 有独立滚动就该有位置指示，而回合一格一格的导航在轨迹页上是冗余的（它就按回合分段）。
 
 ## 待拍板 3：占比条怎么表达
 
@@ -57,8 +57,8 @@
 
 ## 不重开的（票面已冻结）
 
-- 对话视图与轨迹视图的**分工**（各画什么）—— [`trace-tab/spec.md`](../trace-tab/spec.md)；
-- 左栏的**宽度档**（40 / 28 / 隐藏）与 `Ctrl-O` 意愿 —— [`sidebar-toggle/spec.md`](../sidebar-toggle/spec.md)；
+- 对话视图与轨迹视图的**分工**（各画什么）—— [`trace-tab/spec.md`](../../trace-tab/spec.md)；
+- 左栏的**宽度档**（40 / 28 / 隐藏）与 `Ctrl-O` 意愿 —— [`sidebar-toggle/spec.md`](../../sidebar-toggle/spec.md)；
 - **`文件` 页的内容** —— 另一个 effort，本票只碰它的占位行外观；
 - 轨迹页的**隔行底色** —— 只可调色值，不撤。
 

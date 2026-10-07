@@ -52,7 +52,7 @@ Blocked by: 09, 10, 11
 
 ## 验证
 
-1. 上面六条逐条有结论，写在本票底部的「结果」一节（照 [lifecycle-diagram 的收口票](../lifecycle-diagram/issues/14-close-out.md) 的写法）。
+1. 上面六条逐条有结论，写在本票底部的「结果」一节（照 [lifecycle-diagram 的收口票](../../lifecycle-diagram/issues/14-close-out.md) 的写法）。
 2. `python3 scripts/check-doc-size.py` 退出 0，且 `--list` 里 **36 份全部 0 违规**。
 3. `git status` 只看得到本轮该动的文件；**没有误改 `src/`**。
 4. **没有事件流层面的验收**：本 feature 不改运行时行为（`src/` 一个字节不动），所以 `sessions replay` 那类核对

@@ -22,17 +22,17 @@ Blocked by: —
 
 ## 现状（2026-10-06 量的，改前先复核）
 
-- 屏幕文本层：[`src/render/selection.rs:26-60`](../../src/render/selection.rs) 的 `TextRow`
+- 屏幕文本层：[`src/render/selection.rs:26-60`](../../../src/render/selection.rs) 的 `TextRow`
   （`text` / `folded` / `lead`）与 `ScreenText`（`push` / `block_at` / `clear`）。
-- 记录点：[`src/render/tui.rs:5372-5391`](../../src/render/tui.rs) 的 `note_rows`（每块一次
+- 记录点：[`src/render/tui.rs:5372-5391`](../../../src/render/tui.rs) 的 `note_rows`（每块一次
   `push`）与 `row_lead`（靠右排出来的行才有非零 `lead`）。
 - 每帧的填与清：`state.screen_text.clear()` 在 `:4486`，`selection::paint` 在 `:4552`。
 - 一条显示行的文本从哪来：`note_rows` 里的 `line_text(line)`（拼 span 的 content）。
 - 折行：`src/render/pane.rs:418+` 的 `wrap_line`（**数的是列**，不是字节），
   `TextRow.folded` 的判据就是「这一片属于上一片」。
 - 链接今天的样子：`render::markdown` 的 `open_frame` / `close_link`
-  （[`src/render/markdown.rs:449-477`](../../src/render/markdown.rs)）—— 标签下划线 +
-  灰色 ` (url)`；`palette::CODE_QUIET` 在 [`src/render/palette.rs:96`](../../src/render/palette.rs)。
+  （[`src/render/markdown.rs:449-477`](../../../src/render/markdown.rs)）—— 标签下划线 +
+  灰色 ` (url)`；`palette::CODE_QUIET` 在 [`src/render/palette.rs:96`](../../../src/render/palette.rs)。
 - 宽度工具：`render::width` 的 `text_columns` / `char_columns`。
 
 ## 落点

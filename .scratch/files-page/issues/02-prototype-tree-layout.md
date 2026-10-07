@@ -19,7 +19,7 @@ Blocked by: —
 1. **密度**：120×24 下页区是 15 行（宽档还先花掉 5 行标记 —— 以实际几何为准）。展开两三层之后
    还剩几行正文？28 列档四层缩进拿走 8 列、名字只剩 20 列，超宽的名字怎么截（尾部省略？保扩展名？）。
 2. **焦点行的画法**：语义色板里「常驻选中 = `ACCENT` + `BOLD`、临时光标 = `REVERSED`」
-   （[`tui-visual-language` 票 05](../tui-visual-language/issues/05-grilling-hierarchy-and-selection.md)）
+   （[`tui-visual-language` 票 05](../../tui-visual-language/issues/05-grilling-hierarchy-and-selection.md)）
    —— 键盘焦点行属于哪一档？页面其余部分**不铺底色**这条要不要为它破例。
 3. **折叠字形**：收起态复用符号表里那个「有折起来的内容」（`▸`），展开态是新添一个（`▾`？还是
    别的）。它进符号表，语义怎么写才与「todo 的进行中」那个双义不打架。
@@ -31,16 +31,16 @@ Blocked by: —
 ## 产物
 
 `.scratch/files-page/prototype/tree-and-overlay.md`：帧草图 + 逐项决定 + 待拍板项；照
-[`tui-visual-language` 那批 prototype](../tui-visual-language/prototype/transcript-edge-and-sidebar.md)
+[`tui-visual-language` 那批 prototype](../../tui-visual-language/prototype/transcript-edge-and-sidebar.md)
 的做法，配一个用 `TestBackend` 渲染出来的可得对照（可跑的 `-demo.py` 或帧快照）。
 
 ## 接受的边界
 
 - 树的形态、行的构成、初始状态、缩进宽度、同层排序、不给色都是 [01 号票](01-page-shape.md) 的
   冻结项，不重开。
-- 左栏的宽度两档（40 / 28 / 隐藏）与 `Ctrl-O` 意愿是 [`sidebar-toggle/spec.md`](../sidebar-toggle/spec.md)
+- 左栏的宽度两档（40 / 28 / 隐藏）与 `Ctrl-O` 意愿是 [`sidebar-toggle/spec.md`](../../sidebar-toggle/spec.md)
   的契约。
-- 语义色板与字形语法是 [`tui-visual-language/spec.md`](../tui-visual-language/spec.md) 的契约：
+- 语义色板与字形语法是 [`tui-visual-language/spec.md`](../../tui-visual-language/spec.md) 的契约：
   本票新添的字形与取色进那两张表，但不新起体系。
 - 弹窗的**读法与边界**（渲染器直接读盘、有界截断、要高亮要行号、不进事件流）由 01 号票定，
   本票只画它长什么样。

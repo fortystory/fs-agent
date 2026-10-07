@@ -6,7 +6,7 @@ Part of: ../map.md
 Blocked by: 11
 
 > 规格：[`../spec.md`](../spec.md) 实现决定 §30–§33。
-> **这是本轮最贵的一张票**：它推翻 [`tui-input-pulse`](../tui-input-pulse/spec.md) 的两条「明确不做」，其中一条动的是**唤醒模型**。
+> **这是本轮最贵的一张票**：它推翻 [`tui-input-pulse`](../../tui-input-pulse/spec.md) 的两条「明确不做」，其中一条动的是**唤醒模型**。
 
 ## 目标
 
