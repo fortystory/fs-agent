@@ -335,11 +335,16 @@ def review_rules(unit: Unit) -> list[str]:
 #   越过了（MiniMax 那次字符还在终点之内），所以按显式动作把棘轮抬到 **19,100 / 330**。
 #   `.scratch/README.md` 同因：`model-switching` 那一行索引（与 ADR 索引同一条纪律），实测
 #   **11,634 / 68**，抬到 **11,700 / 68**。
+# **2026-10-08 补记 `.scratch/README.md` 又漏掉的两次常规上调**：棘轮上一次落在 `20e6ddb`
+#   （`model-switching` 那行）。此后 `32f8b5a`（`trace-usage-tail` 立项的一整行索引 —— 与
+#   `input-tokens` 起那十一次同因的那种增长 —— 另有三处票数收尾：`fs-agent-v1` 35/35、
+#   `mcp-support` 10 done、`lifecycle-diagram` 9 done）与 `281aa43` 都没跟着上调，
+#   实测已是 **11,917 / 70**。这一轮补上。
 ENTRY_BUDGET = {
     "README.md": {"chars": 19100, "lines": 330, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 11700,
-        "lines": 68,
+        "chars": 11917,
+        "lines": 70,
         "target_chars": 13500,
         "target_lines": 100,
     },
