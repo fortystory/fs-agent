@@ -5,8 +5,8 @@
 //!
 //! * **门与效果** —— `effect()` 恒为 `Effect::ReadOnly`，于是四档里它都放行、
 //!   也不取工作区锁；反向锚是 `bash` 的一次纯搜索仍要审批；
-//! * **命中与范围** —— 结果形如 `path:line:文本`、只扫会话 cwd、
-//!   遵守 `.gitignore` 并跳过隐藏文件；
+//! * **命中与范围** —— 结果形如 `path:line:文本`（`count: true` 时改为每个文件的命中行数
+//!   与一个总数）、只扫会话 cwd、遵守 `.gitignore` 并跳过隐藏文件；
 //! * **不登记读集合** —— 搜到的文件不算「已读」，随后的 `edit_file`
 //!   仍要求先 `read_file`。
 
@@ -347,7 +347,7 @@ fn the_tool_is_read_only_and_declares_no_read_paths() {
 fn the_declaration_steers_the_model_away_from_assembling_shell_searches() {
     let registry = builtin(false);
     let spec = registry.get(GREP_TOOL).unwrap().spec();
-    let description = spec.description;
+    let description = &spec.description;
     assert!(description.contains("不要用 `bash` 拼"), "{description}");
     assert!(description.contains("path:line:文本"), "{description}");
     assert_eq!(
@@ -357,7 +357,16 @@ fn the_declaration_steers_the_model_away_from_assembling_shell_searches() {
     );
     assert!(
         spec.parameters["properties"].get("glob").is_some(),
-        "`glob` 是可选的第二个参数"
+        "`glob` 是可选的收窄参数"
+    );
+    assert_eq!(
+        spec.parameters["properties"]["count"]["type"],
+        serde_json::json!("boolean"),
+        "`count` 是个开关，与 `glob` 一样可选"
+    );
+    assert!(
+        description.contains("count"),
+        "描述里要提到它，否则模型不会知道有这一位：{description}"
     );
 }
 
@@ -652,5 +661,165 @@ async fn a_binary_file_is_dropped_rather_than_dumped() {
     let output = completed_output(&fixture.events(), "call-1").unwrap();
     assert!(output.contains("plain.txt:1:needle"), "{output}");
     assert!(!output.contains("blob.bin"), "{output}");
+    fixture.shutdown().await;
+}
+
+// --- 计数模式 -------------------------------------------------------------
+
+#[tokio::test]
+async fn a_count_gives_each_file_a_line_and_the_workspace_a_total() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "count": true }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/first.rs", "let needle = 1;\nneedle\n");
+    fixture.write("src/second.rs", "needle\n");
+    fixture.write("src/third.rs", "let other = 2;\n");
+    fixture.run_turn("数一数").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        [
+            "src/first.rs:2",
+            "src/second.rs:1",
+            "共 3 条匹配（2 个文件）"
+        ],
+        "每文件一行 `路径:条数`、按路径有序，总数行在末尾；零命中的文件不占一行"
+    );
+    assert!(
+        !output.contains("let needle"),
+        "计数模式一行命中都不列 —— 列出来就等于没在计数：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_counted_total_is_the_whole_workspace_not_what_a_listing_would_keep() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "count": true }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    // 与 `more_matches_than_the_limit_are_counted_rather_than_dumped` 同一个规模：顶破行模式
+    // 那道条数上限，但离 token 上限还很远 —— 于是这里只可能在「总数会不会被截断」上分道。
+    let total = MAX_MATCHES + 100;
+    fixture.write("big.txt", &"needle\n".repeat(total));
+    fixture.run_turn("数一数").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "计数模式不受那道上限约束，于是一个文件一行、一个总数行：{output}"
+    );
+    let per_file = format!("big.txt:{total}");
+    let summary = format!("共 {total} 条匹配（1 个文件）");
+    assert_eq!(lines[0], per_file.as_str());
+    assert_eq!(
+        lines[1],
+        summary.as_str(),
+        "总数数的是整个工作区，不是列出来那些的个数"
+    );
+    assert!(
+        !output.contains("还有"),
+        "「还有 N 条未列出」是行模式的事：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_count_measures_lines_and_not_occurrences_within_a_line() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "count": true }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    // 一行里三次出现、另一行一次：数**行**时是 2，与 `rg -c` 同义。
+    fixture.write(
+        "src/thing.rs",
+        "let a = needle + needle + needle;\nneedle\n",
+    );
+    fixture.run_turn("数一数").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(
+        output.starts_with("src/thing.rs:2\n"),
+        "同一行里的多次出现只算一条命中行：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_count_with_no_match_answers_in_the_very_same_words() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "count": true }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "let other = 1;\n");
+    fixture.run_turn("数一数").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output, "在工作区里没有匹配 `needle` 的行",
+        "0 处匹配与 0 行是同一件事，所以两种模式的措辞一字不分岔"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_count_still_only_walks_the_files_its_glob_selects() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "glob": "src/**", "count": true }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/inside.rs", "needle\n");
+    fixture.write("docs/outside.md", "needle\n");
+    fixture.run_turn("数一数").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert!(
+        output.contains("src/inside.rs:1") && !output.contains("docs/outside.md"),
+        "`count` 与 `glob` 正交：计数同样只扫被收窄过的那批文件：{output}"
+    );
     fixture.shutdown().await;
 }

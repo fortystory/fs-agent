@@ -1,4 +1,4 @@
-//! 内建的 `grep(pattern)` 工具：在工作区里按行搜索，只读、只扫会话 cwd。
+//! 内建的 `grep(pattern, glob?, count?)` 工具：在工作区里按行搜索，只读、只扫会话 cwd。
 //!
 //! 与 `repo_map` 同一个形状（`.scratch/grep-tool/spec.md` §2）：一个**只读**工具，自己走
 //! `ctx.cwd`，不声明读路径 —— 于是它绕开 `outside_read` 那套「工具声明过的读路径」语义，
@@ -12,14 +12,18 @@
 //! [`crate::context::truncate_result`]。工具内另按**条数**先收一刀（[`MAX_MATCHES`]），并在
 //! 末尾如实写出省掉了多少 —— token 那条界与它无关，也不新增第二套截断。
 //!
+//! `count: true` 换一种输出：每个文件一行命中**行数**，末尾一个总数。它**不受 [`MAX_MATCHES`]
+//! 影响** —— 那条界收的是「要列出来的行」，而计数模式一行都不列，于是那个总数是整个工作区的
+//! 真实值，而不是一个模型无从察觉的残数。
+//!
 //! 命中的文件**不算「已读」**：`read_paths()` 是调用前的纯函数，声明不了运行时才知道的命中
 //! 文件，而这条工具不值得动 `Tool` 接口（spec §3）。
 //!
 //! 可选的 `glob` 只影响「搜哪些文件」，由 `globset` 在遍历之后过滤 —— 它缩小的范围，不放宽的是
-//! 忽略规则（spec §3、票 02）。
+//! 忽略规则（spec §3、票 02）。它与 `count` 正交：计数同样只扫被 `glob` 收窄过的那批文件。
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -53,7 +57,10 @@ impl Tool for GrepTool {
             description: "在工作区里按行搜索正则（rg 语法）。这是搜代码的首选方式 —— \
                           不要用 `bash` 拼 `rg` / `grep`：这个工具是只读的，在每一档权限模式\
                           下都放行。范围是会话工作区，遵守 `.gitignore` 并跳过隐藏文件；\
-                          结果形如 `path:line:文本`，命中太多时会被截断并给出一条落盘路径。"
+                          结果形如 `path:line:文本`，命中太多时会被截断并给出一条落盘路径。\
+                          可选 `count: true` 改为报**每个文件的命中行数**（形如 `path:条数`）\
+                          与末尾一个总数 —— 那时一行命中都不列，所以那个总数数的是整个工作区，\
+                          不受行模式列出条数那条上限的截断。"
                 .to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -67,6 +74,12 @@ impl Tool for GrepTool {
                         "type": "string",
                         "description": "可选，只搜匹配这个 glob 的文件，例如 `*.rs`。它只缩小\
                                         搜的范围，不会让被 `.gitignore` 忽略的文件重新被搜到"
+                    },
+                    "count": {
+                        "type": "boolean",
+                        "description": "可选，默认 `false`。为 `true` 时不列命中行，改为报每个文件\
+                                        的命中行数与一个总数 —— 数的是**行**（同一行里出现多次\
+                                        只算一条，与 `rg -c` 同义）"
                     }
                 },
                 "required": ["pattern"]
@@ -94,11 +107,21 @@ impl Tool for GrepTool {
             .map(str::trim)
             .filter(|glob| !glob.is_empty());
         let glob = glob_text.map(compile_glob).transpose()?;
+        // 类型不对（`1` 而不是 `true`）按没给算，而不是报错：这一位错了最多让模型拿到
+        // 列行的那份输出、重问一次，而报错只会让它卡在这儿。与 `glob` 同一档宽松。
+        let counting = args.get("count").and_then(Value::as_bool).unwrap_or(false);
 
-        let hits = search(ctx.cwd, &matcher, glob.as_ref())?;
-        if hits.text.is_empty() {
+        let hits = search(ctx.cwd, &matcher, glob.as_ref(), counting)?;
+        // 两种模式的「空」不是同一处：行模式看有没有列出行，计数模式看有没有命中过文件。
+        let empty = if counting {
+            hits.per_file.is_empty()
+        } else {
+            hits.text.is_empty()
+        };
+        if empty {
             // 「glob 什么都没选上」与「选上了但这些文件里没有匹配」是两件事，
-            // 而模型看到的必须是能据以行动的那一句。
+            // 而模型看到的必须是能据以行动的那一句。两种输出模式共用这一处：0 处匹配在
+            // 计数模式里也就是「没有匹配的行」，所以措辞一个字都不必分岔。
             if let (Some(glob), 0) = (glob_text, hits.scanned) {
                 return Ok(ToolOutput::new(format!(
                     "工作区里没有匹配 glob `{glob}` 的文件"
@@ -107,6 +130,9 @@ impl Tool for GrepTool {
             return Ok(ToolOutput::new(format!(
                 "在工作区里没有匹配 `{pattern}` 的行"
             )));
+        }
+        if counting {
+            return Ok(ToolOutput::new(hits.count_text()));
         }
         Ok(ToolOutput::new(hits.text))
     }
@@ -128,16 +154,43 @@ fn compile_glob(glob: &str) -> Result<GlobSet, ToolError> {
         .map_err(|error| ToolError::message(format!("{GREP_TOOL}：`glob` 无法编译：{error}")))
 }
 
-/// 一次遍历的产物：要交给模型的文本，经 `glob` 过滤后**实际搜过**的文件数，以及超出的条数。
+/// 一次遍历的产物：要交给模型的文本，每个命中文件的命中行数，经 `glob` 过滤后**实际搜过**的
+/// 文件数，以及超出的条数。
 ///
 /// `scanned` 只为一件事存在：把「`glob` 什么都没选上」与「选上了但这些文件里没有匹配」分开。
 /// 文本已经含末尾那句「还有 N 条未列出」，所以调用方不必再拼一次。
+///
+/// `text` 与 `per_file` 是**两个模式的产物**，不会同时有内容：行模式只有 `text`，计数模式
+/// 只有 `per_file`（`text` 恒空，因为那种模式一行命中都不列）。`per_file` 天然按路径有序 ——
+/// 遍历器排过序，所以这里不必再排一次，输出稳定性也就跟着它。
 struct Search {
     text: String,
+    per_file: Vec<(PathBuf, usize)>,
     scanned: usize,
 }
 
-/// 走一遍会话 cwd，把命中的行写成 `相对路径:行号:文本`。
+impl Search {
+    /// 计数模式的输出：每个命中文件一行 `路径:条数`，末尾一个总数。
+    ///
+    /// 总数是各项之和，**没有第二处存它**：[`MAX_MATCHES`] 那条界在这里不生效（计数模式一行
+    /// 都不列），所以这个和就是整个工作区的真实命中行数。收尾句的位置与行模式那句
+    /// 「还有 N 条未列出」一致 —— 都在末尾。
+    fn count_text(&self) -> String {
+        let mut text = String::new();
+        let mut total = 0usize;
+        for (path, lines) in &self.per_file {
+            text.push_str(&format!("{}:{lines}\n", path.display()));
+            total += *lines;
+        }
+        text.push_str(&format!(
+            "共 {total} 条匹配（{} 个文件）\n",
+            self.per_file.len()
+        ));
+        text
+    }
+}
+
+/// 走一遍会话 cwd，把命中的写成 `相对路径:行号:文本`（计数模式写成 `相对路径:条数`）。
 ///
 /// 忽略规则就是 `ignore` 的默认：遵守 `.gitignore`（含 `.ignore` 与 git 的全局忽略）、跳过
 /// 隐藏文件与隐藏目录 —— 与 `rg` 的默认一致，所以换工具不改变搜索结果（spec §2）。条目按路径
@@ -145,12 +198,17 @@ struct Search {
 ///
 /// `glob` 在遍历之后过滤：它只决定「搜哪些文件」，绝不参与 pattern 的匹配，也不放宽忽略规则
 /// （spec §3）。
+///
+/// `counting` 只换产出、不换扫描：同一条遍历、同一批文件、同一套忽略规则，区别落在
+/// [`Collector`] 把命中写成行还是计进那个文件的数上。
 fn search(
     root: &Path,
     matcher: &RegexMatcher,
     glob: Option<&GlobSet>,
+    counting: bool,
 ) -> Result<Search, ToolError> {
     let mut text = String::new();
+    let mut per_file: Vec<(PathBuf, usize)> = Vec::new();
     let mut scanned = 0usize;
     let mut listed = 0usize;
     let mut skipped = 0usize;
@@ -182,9 +240,16 @@ fn search(
             text: &mut text,
             listed: &mut listed,
             skipped: &mut skipped,
+            local: 0,
+            counting,
         };
         // 单个文件读不了（竞态、权限）不该让整次搜索失败 —— 与遍历错误同一档处理。
         let _ = searcher.search_path(matcher, path, &mut sink);
+        // 这个文件的行数只在 `sink` 里活着，搜完就得取出来；零命中的文件不进 `per_file`
+        // —— 输出里不该有一行 `0`，那是在替模型多写一句「这个文件没有」。
+        if counting && sink.local > 0 {
+            per_file.push((relative.to_path_buf(), sink.local));
+        }
     }
 
     if skipped > 0 {
@@ -193,24 +258,41 @@ fn search(
             "还有 {skipped} 条未列出：请缩小搜索范围，或用 `glob` 只搜一部分文件\n"
         ));
     }
-    Ok(Search { text, scanned })
+    Ok(Search {
+        text,
+        per_file,
+        scanned,
+    })
 }
 
 /// 把命中收进一个字符串的接收端。
 ///
 /// 列满 [`MAX_MATCHES`] 之后不再收集文本，但**继续数**：末尾那句「还有 N 条未列出」只有把整个
 /// 工作区数完才是诚实的。
+///
+/// 计数模式（`counting`）是同一个接收端的另一种写法：只累 `local`，既不写文本也不受那条界约束
+/// —— 换来的那个总数因此不受截断影响。
 struct Collector<'a> {
     path: &'a Path,
     text: &'a mut String,
     listed: &'a mut usize,
     skipped: &'a mut usize,
+    /// 这个文件自己的命中行数。行模式没人读它（行已经在 `text` 里了），计数模式下它是这个
+    /// 文件唯一被留下的东西 —— [`search`] 搜完就把它取走。
+    local: usize,
+    counting: bool,
 }
 
 impl Sink for Collector<'_> {
     type Error = io::Error;
 
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
+        // 计数模式一行都不列，于是 [`MAX_MATCHES`] 那条界在这里**不生效**：它收的是「要列出来
+        // 的行」，而这里没有要列的行。先分岔，于是总数是全工作区的真实值，不是一个残数。
+        if self.counting {
+            self.local += 1;
+            return Ok(true);
+        }
         if *self.listed >= MAX_MATCHES {
             *self.skipped += 1;
             return Ok(true);
