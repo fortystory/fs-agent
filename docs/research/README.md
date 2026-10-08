@@ -1,13 +1,14 @@
 # `docs/research/`：一手调研的原始笔记
 
-**这些是材料，不是结论。** 正文又长又未删节（合计约 796KB），里面混着上游文档的原话、源码片段
+**这些是材料，不是结论。** 正文又长又未删节（合计约 840KB），里面混着上游文档的原话、源码片段
 与评测数据；它们是当时为了回答「别的 coding agent 怎么做」而读的东西，**结论已经折进**
 [`.scratch/`](../../.scratch/README.md) 的 spec 与 [`docs/`](../) 的逐面文档。要查某个设计
 **为什么**这样定，看 spec 与 ADR；要看**当时读到了什么**，才来这里。
 
 - `coding-agent-features.md`：横向对比（按能力维度整理，是这批笔记的入口）。
-- `notes/`：五份上游笔记（aider/openhands、claude-code/amp、cline/continue、codex/gemini、
-  opencode/goose），逐份摘录加引用。
+- `notes/`：六份笔记 —— 五份上游正文（aider/openhands、claude-code/amp、cline/continue、
+  codex/gemini、opencode/goose）逐份摘录加引用，再加 `shell-vs-first-class-tools.md`
+  （单题深挖「专用工具 vs shell」，与横向对比同族，故正文是中文，引文仍留原文）。
 
 两条读法上的提醒：
 
