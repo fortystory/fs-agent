@@ -214,15 +214,23 @@ impl Sandbox {
             return Ok(argv.to_vec());
         }
         let SandboxAvailability::Available { bwrap } = &self.availability else {
+            // 两支的出路不一样，所以 [`WAYS_OUT`]（「装一个 bubblewrap，或者把 `mode` 设成
+            // `off`」）只拼给真正不可用的那一支。
             let reason = match &self.availability {
-                SandboxAvailability::Unavailable { reason } => reason.clone(),
-                // 组装期一定会把它定下来；走到这里说明有人绕过了组装。
+                SandboxAvailability::Unavailable { reason } => format!("{reason}。{WAYS_OUT}"),
+                // 组装期一定会把它定下来；走到这里说明某条新造配置的路径没把那一格带过来
+                // （`Session::retarget` 曾经是这么一条）。这一支与这台机器上有没有 `bwrap`
+                // 无关，所以**不**拼 `WAYS_OUT`：那句指引会把人支去装一个已经装好的东西
+                // （2026-10-08 实测到的那次，执行者与人都被它骗过）。
                 SandboxAvailability::Untested | SandboxAvailability::Available { .. } => {
-                    "沙箱状态还没有定下来".to_owned()
+                    "这个会话的沙箱状态还没有定下来：组装期的探测结果没有带到这次调用上。\
+                     它与这台机器上有没有 `bwrap` 无关（那是另一句话），所以别在这条上重试\
+                     —— 让用户重开会话即可恢复"
+                        .to_owned()
                 }
             };
             return Err(ToolError::message(format!(
-                "沙箱不可用，命令没有跑：{reason}。{WAYS_OUT}"
+                "沙箱不可用，命令没有跑：{reason}"
             )));
         };
         // 升级批准的那批路径：`bwrap` 只能绑**已经存在**的源（不存在的挂载目标会让整条

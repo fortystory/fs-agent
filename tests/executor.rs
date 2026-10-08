@@ -20,7 +20,7 @@ use heng::permissions::{Asker, Mode, Policy, Rule, Scope, Subject};
 use heng::provider::{FinishReason, Message, ProviderError, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
-use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
+use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply, sandbox_available};
 
 fn kimi() -> SpeakerId {
     SpeakerId::Debater("kimi".into())
@@ -378,6 +378,56 @@ async fn a_task_call_runs_a_nested_executor_and_reports_the_summary_back() {
         "{}",
         fixture.stderr.text()
     );
+}
+
+#[tokio::test]
+async fn an_executor_runs_its_shell_in_the_sandbox_the_session_probed() {
+    // 执行者不是 fork 出来的：`ExecutorPort::new` 克隆的是父会话那份配置，沙箱那一格因此跟着
+    // 过来 —— 执行者的 `bash` 与主会话跑在同一个沙箱里（票 03 第 3 条：执行者与讨论者同等
+    // 生效）。这一条钉住它：改成用 `Config::session_config` 重造那份配置，执行者的第一次
+    // `bash` 就会撞「沙箱状态还没有定下来」（2026-10-08 实测到的那次）。
+    let mut config = SessionConfig::new("fake-model");
+    config.sandbox = sandbox_available();
+    let mut fixture = fixture(
+        &[("AGENTS.md", "PROJECT RULES")],
+        vec![
+            calls(
+                "call-task",
+                "task",
+                serde_json::json!({"brief": "跑一条命令"}),
+            ),
+            calls(
+                "call-bash",
+                "bash",
+                serde_json::json!({"command": "echo hi"}),
+            ),
+            Reply::text("EXECUTOR REPORT: 跑过了"),
+            Reply::text("主会话写下结论"),
+        ],
+        config,
+        Policy::for_mode(Mode::Auto),
+        None,
+    )
+    .await;
+
+    fixture.harness.run_turn("派一件事").await.unwrap();
+
+    let events = fixture.events();
+    let ran = only_speaker(
+        &events,
+        &executor("kimi-1"),
+        |payload| matches!(payload, EventPayload::ToolCallCompleted { .. }),
+        "执行者的工具结果",
+    );
+    match &ran.payload {
+        EventPayload::ToolCallCompleted { ok, output, .. } => assert!(
+            *ok,
+            "执行者的 shell 必须在会话探过的那个沙箱里真的跑起来：{output:?}"
+        ),
+        other => panic!("要的是 ToolCallCompleted，得到 {other:?}"),
+    }
+
+    fixture.harness.shutdown().await;
 }
 
 #[tokio::test]

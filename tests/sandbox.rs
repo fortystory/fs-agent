@@ -1390,6 +1390,28 @@ fn untested_bwrap(bwrap: &Path) -> SessionConfig {
     config
 }
 
+#[test]
+fn an_untested_sandbox_does_not_point_at_installing_bwrap() {
+    // 「还没定下来」与「这台机器上起不来」是两件事：前者的出路是重开会话，后者才是装一个
+    // `bwrap`。把后者的指引拼到前者身上，会把人支去装一个已经装好的东西 —— 2026-10-08
+    // 那次实测里，执行者与人都被那句话骗过。
+    let dir = tempfile::tempdir().unwrap();
+    let bwrap = fake_bwrap(&dir.path().join("bin"), "/bin/true");
+    let settings = untested_bwrap(&bwrap);
+    let sandbox = Sandbox::new(&settings.sandbox);
+
+    let error = sandbox
+        .wrap(&["/bin/echo".to_owned()], dir.path())
+        .expect_err("还没探过就是不能跑，而不是猜一个默认值");
+
+    let message = error.to_string();
+    assert!(message.contains("没有定下来"), "{message}");
+    assert!(
+        !message.contains("装一个 bubblewrap"),
+        "这一支与这台机器上有没有 `bwrap` 无关：{message}"
+    );
+}
+
 #[tokio::test]
 async fn a_discussion_forked_from_a_live_session_keeps_the_sandbox() {
     // `/discuss` 的讨论者是从活会话 fork 出来的，拿的是 `Config::session_config` 造的那份

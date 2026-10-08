@@ -172,7 +172,25 @@ impl Session {
     /// 「换了配置」这件事永远与「换了 provider」一起发生（[`crate::Harness::switch_model`]）：
     /// 只改一半会让下一次请求拿新 id 去问旧 caps。
     pub fn retarget(&mut self, config: SessionConfig) {
+        let mut config = config;
+        // 沙箱是**会话**的事实：`retarget_to` 拿的是 `Config::session_config` 造的新配置，那
+        // 一格还没探过。不带上它，换一次模型就会让 `bash` 从那一刻起永久拒绝，理由还是一句
+        // 与这台机器无关的「沙箱状态还没有定下来」（2026-10-08 实测到的那次）。
+        self.inherit_sandbox(&mut config);
         self.config = config;
+    }
+
+    /// 把这场会话已经定下来的沙箱那一格带进一份**新造**的配置里。
+    ///
+    /// 沙箱是会话的事实，不是每个 agent、也不是每次换模型的（`.scratch/sandbox/spec.md` §3）：
+    /// 组装期探过一次就不再探第二次（库不读进程环境）。而 `Config::session_config` 造出来的每
+    /// 一份新配置里，那一格都是解析期的 `Untested` —— 所以**每一条**新造配置的路径都要经这里，
+    /// 否则它的去处第一次调 `bash` 就撞「沙箱状态还没有定下来」。讨论者（[`Self::fork`]）与
+    /// 会话中途换模型（[`Self::retarget`]）都在这条路上。
+    fn inherit_sandbox(&self, config: &mut SessionConfig) {
+        if config.sandbox.needs_probe() {
+            config.sandbox = self.config.sandbox.clone();
+        }
     }
 
     /// 这场会话在文本进入事件流的路上会打码掉的那些值（spec §20）。
@@ -260,14 +278,10 @@ impl Session {
     /// 以它们的投影把那场会话的回合变成 `user` 消息，而它们的轮次追加到同一份流上。读集合刻意
     /// **不**继承 —— 读权限是每个 agent 各自的（spec §12），而讨论者什么都没读过。
     ///
-    /// 沙箱是**会话**的事实，不是每个 agent 各自的（`.scratch/sandbox/spec.md` §3）：这场会话
-    /// 已经探过一次，而 fork 进来的那份配置（`cli` 用 `Config::session_config` 造出来的）里那一
-    /// 格还没探过。继承父会话定下来的那一份，而不是让讨论者在第一次 `bash` 调用时撞上「沙箱状态
-    /// 还没有定下来」——探测本来也不该有第二次，库不读进程环境。
+    /// 沙箱那一格经 [`Self::inherit_sandbox`] 带过去：它是**会话**的事实，不是每个 agent
+    /// 各自的，而 fork 进来的那份配置（`cli` 用 `Config::session_config` 造出来的）里还没探过。
     pub(crate) fn fork(&self, mut config: SessionConfig, identity: Option<String>) -> Self {
-        if config.sandbox.needs_probe() {
-            config.sandbox = self.config.sandbox.clone();
-        }
+        self.inherit_sandbox(&mut config);
         Self::new(SessionParts {
             id: self.id.clone(),
             cwd: self.cwd.clone(),

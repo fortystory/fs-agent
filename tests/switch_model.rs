@@ -6,16 +6,17 @@
 
 mod support;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use heng::config::{ReasoningEffort, SessionConfig};
+use heng::config::{ReasoningEffort, SandboxAvailability, SandboxMode, SessionConfig};
 use heng::context::skills::Skills;
 use heng::events::{EventLog, SessionId, SpeakerId};
 use heng::permissions::{Mode, Policy};
 use heng::provider::capability::caps_for;
 use heng::render::{RenderSinks, Renderer};
 use heng::session::{Session, SessionParts};
-use heng::tools::{PathLocks, builtin};
+use heng::tools::{PathLocks, Sandbox, builtin};
 use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
 
@@ -65,6 +66,43 @@ fn retargeting_a_session_swaps_the_configuration_and_nothing_else() {
     assert_eq!(session.cwd(), cwd);
     assert_eq!(session.log_path(), log_path);
     assert!(Arc::ptr_eq(&tools, &session.shared_tools()));
+}
+
+#[test]
+fn retargeting_keeps_the_sandbox_the_session_already_probed() {
+    // 沙箱是**会话**的事实（`.scratch/sandbox/spec.md` §3），而 `retarget_to` 拿的是
+    // `Config::session_config` 造的新配置 —— 那一格还没探过。不把它带过来，换一次模型就让
+    // `bash` 从那一刻起永久拒绝，理由还是一句与这台机器无关的「沙箱状态还没有定下来」
+    // （2026-10-08 实测到的那次）。
+    let (_dir, mut session) = {
+        let mut probed = SessionConfig::new("kimi-k3");
+        probed.sandbox.mode = SandboxMode::Bwrap;
+        probed.sandbox.availability = SandboxAvailability::Available {
+            bwrap: PathBuf::from("/bin/true"),
+        };
+        session_with(probed)
+    };
+
+    let mut fresh = SessionConfig::new("MiniMax-M3.1-Flash-Preview");
+    fresh.sandbox.mode = SandboxMode::Bwrap;
+    assert!(
+        fresh.sandbox.needs_probe(),
+        "前提：`retarget_to` 造出来的那份配置里那一格还没探过"
+    );
+
+    session.retarget(fresh);
+
+    assert!(
+        !session.config().sandbox.needs_probe(),
+        "换模型不该把沙箱打回没探过的样子"
+    );
+    let sandbox = Sandbox::new(&session.config().sandbox);
+    assert!(
+        sandbox
+            .wrap(&["/bin/echo".to_owned()], session.cwd())
+            .is_ok(),
+        "换过模型之后 shell 照旧能跑"
+    );
 }
 
 struct Fixture {
