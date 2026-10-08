@@ -5372,8 +5372,10 @@ fn files_tree(state: &TuiState) -> Option<Vec<files::Row>> {
     Some(files::rows(paths, &state.files_page.expanded))
 }
 
-/// 树的一行：缩进、折叠字形（只有目录有）、名字（目录带尾斜杠）。
+/// 树的一行：**缩进 + 字形列 + 名字**（目录带尾斜杠）。
 ///
+/// 字形列每行都占两格 —— 目录那里是 `▸ `，文件那里**留空**。于是同层的名字落在同一列上，
+/// 扫读时眼睛不必每一行各自往前挪两格。窄档（28 列）下这一格的代价是两列名字。
 /// 名字超宽时截断 —— 28 列的窄档是这一页最容易读不下去的地方。
 fn files_line(row: &files::Row, width: usize, focused: bool) -> Line<'static> {
     let glyph = if row.dir {
@@ -5384,7 +5386,9 @@ fn files_line(row: &files::Row, width: usize, focused: bool) -> Line<'static> {
         };
         format!("{mark} ")
     } else {
-        String::new()
+        // 这一格是**字形列**，不是「有折叠能力」的标记：文件行留空，只是为了与同层的目录行
+        // 严格同列，而不是说自己少了个字形。
+        wording::INDENT.to_owned()
     };
     let slash = if row.dir { "/" } else { "" };
     let text = format!(

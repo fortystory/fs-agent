@@ -1759,8 +1759,8 @@ fn the_tree_is_two_columns_per_level_and_puts_directories_first() {
     );
     assert_eq!(
         sidebar_row(&rows[page + 2]).trim_end(),
-        "README.md",
-        "文件排在目录后面，而且没有折叠字形"
+        "  README.md",
+        "文件排在目录后面，字形列留空而名字与目录行同列"
     );
 }
 
@@ -1780,8 +1780,8 @@ fn clicking_a_directory_expands_and_collapses_it() {
     );
     assert_eq!(
         sidebar_row(&rows[page + 1]).trim_end(),
-        "  a.rs",
-        "子项缩进两列"
+        "    a.rs",
+        "子项再缩进两列，字形列留空"
     );
     assert_eq!(
         sidebar_row(&rows[page]).trim_end(),
