@@ -1260,7 +1260,7 @@ fn model_picker_options(config: &Config, current: &str) -> Vec<PickerOption> {
         })
         .map(|(id, model)| PickerOption {
             label: id.clone(),
-            detail: render::wording::model_detail_via(&model.provider),
+            detail: render::wording::model_detail_profile(&model.provider),
             current: id == current,
             enabled: true,
         })

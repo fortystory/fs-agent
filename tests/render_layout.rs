@@ -9965,11 +9965,11 @@ fn the_picker_lays_one_model_per_row_in_three_columns() {
             .filter(|(label, _)| row.contains(label))
             .count();
         assert_eq!(hits, 1, "一行一个模型：{row}");
-        assert!(
-            row.contains(wording::picker_status_current())
-                || row.contains(wording::picker_status_switchable()),
-            "第三列是状态：{row}"
-        );
+        // 状态词**只出现一次** —— 它是第三列，而第一列与第二列后面都不该再冒一个出来
+        // （回归：那条 `match index { 1 => …, _ => status }` 会在第 0 列后面也画一次）。
+        let statuses = row.matches(wording::picker_status_current()).count()
+            + row.matches(wording::picker_status_switchable()).count();
+        assert_eq!(statuses, 1, "一行只有一个状态词：{row}");
     }
     // 第二列说它走哪个 profile（`detail` 就是那一列）—— 一条模型 id 与一条 profile 同行。
     let (request, mut answer) = picker_detailed(
@@ -9977,7 +9977,7 @@ fn the_picker_lays_one_model_per_row_in_three_columns() {
         &[("kimi-k3", true), ("deepseek-v4-pro", true)],
         0,
         |label| {
-            wording::model_detail_via(if label == "kimi-k3" {
+            wording::model_detail_profile(if label == "kimi-k3" {
                 "kimi"
             } else {
                 "deepseek"
@@ -9988,16 +9988,27 @@ fn the_picker_lays_one_model_per_row_in_three_columns() {
     let rows = screen(120, 24, &mut state);
     let body: Vec<&String> = rows
         .iter()
-        .filter(|row| row.contains("走 `") && row.contains(wording::PICKER_COLUMN))
+        .filter(|row| row.contains('`') && row.contains(wording::PICKER_COLUMN))
         .collect();
     assert_eq!(body.len(), 2, "两行：{rows:#?}");
+    // 第二列只给 profile 的名字（反引号包住），不加「走」那种动词。
     assert!(
-        body[0].contains("kimi-k3") && body[0].contains("走 `kimi`"),
+        body[0].contains("kimi-k3") && body[0].contains("`kimi`"),
         "模型 id 与它的 profile 同行：{}",
         body[0]
     );
     assert!(
-        body[1].contains("deepseek-v4-pro") && body[1].contains("走 `deepseek`"),
+        !body[0].contains("走 `"),
+        "第二列不再有那个动词：{}",
+        body[0]
+    );
+    assert!(
+        body[1].contains("deepseek-v4-pro") && body[1].contains("`deepseek`"),
+        "模型 id 与它的 profile 同行：{}",
+        body[0]
+    );
+    assert!(
+        body[1].contains("deepseek-v4-pro") && body[1].contains("`deepseek`"),
         "第二行同样：{}",
         body[1]
     );

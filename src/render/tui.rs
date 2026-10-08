@@ -8416,13 +8416,13 @@ fn picker_row(
             spans.push(Span::raw(" ".repeat(column_width - used)));
         }
         match index {
-            // 第二列：它走哪个 profile（`detail` 就是那一格）。
+            // 第二列：它走哪个 provider profile（`detail` 就是那一格）。
             1 => spans.push(Span::styled(
                 option.detail.clone(),
                 Style::default().fg(palette::MUTED),
             )),
             // 第三列：这一行是不是当前这一场会话在用的。
-            _ => spans.push(Span::styled(
+            2 => spans.push(Span::styled(
                 status.to_owned(),
                 Style::default().fg(if option.current {
                     palette::ACCENT
@@ -8430,6 +8430,8 @@ fn picker_row(
                     palette::MUTED
                 }),
             )),
+            // 第 0 列（模型 id）的内容在上面那个 span 里画完了，这里只补过它的留白。
+            _ => {}
         }
     }
     if highlighted {

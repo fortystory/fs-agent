@@ -2153,9 +2153,12 @@ pub fn effort_fixed_detail(model: &str) -> String {
     format!("{model} 没有档位旋钮，思考常开")
 }
 
-/// 模型候选里「有 key」时的那句 detail：这个模型挂在哪个 profile 上。
-pub fn model_detail_via(provider: &str) -> String {
-    format!("走 `{provider}`")
+/// 模型候选第二列：那个 model id 挂在哪个 provider profile 上。
+///
+/// 只给**名字**（反引号包住），不加「走」那种动词 —— 表格第二列的标签已经说明了这一列是什么，
+/// 再加一个字就把它说成一句散文了。
+pub fn model_detail_profile(provider: &str) -> String {
+    format!("`{provider}`")
 }
 
 /// 运行中要切换时给的那句回执（spec §6）。四个入口共用它。
