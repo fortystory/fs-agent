@@ -1211,12 +1211,13 @@ pub fn status_spinner(frame: u64, busy: bool) -> &'static str {
 /// **位置就是优先级**：[`hint_line`] 从前往后填、超宽就停，所以排在最末的那条是窄档最先
 /// 丢掉的一条。左栏开关因此挂在最后 —— 滚动比它常用得多
 /// （`.scratch/sidebar-toggle/spec.md` §4）。
-const KEY_HINTS: [&str; 6] = [
+const KEY_HINTS: [&str; 7] = [
     "enter 发送",
     "ctrl-j 换行",
     "esc 取消",
     "shift+tab 模式",
     "PgUp/PgDn 滚动",
+    "ctrl-t 换模型",
     "ctrl-o 左栏",
 ];
 
@@ -1254,8 +1255,9 @@ const VIEWER_HINTS: [&str; 2] = ["esc 取消", "PgUp/PgDn 滚动"];
 /// （`.scratch/tui-visual-language/spec.md` §18）。这一行只剩键位提示与出口。
 ///
 /// 提示从左边填，出口（`exit`）预留在它们末尾 —— 于是窄终端保住它的出口*以及*排在前面的那些
-/// 提示，让掉的是排在最末的 `ctrl-o 左栏`。位置就是优先级：`ctrl-o 左栏` 挂最后，因为滚动
-/// 比它常用得多（`.scratch/sidebar-toggle/spec.md` §4）。
+/// 提示，让掉的是排在最末的那两条。位置就是优先级：`ctrl-o 左栏` 挂最后，因为滚动比它常用得多
+/// （`.scratch/sidebar-toggle/spec.md` §4）；`ctrl-t 换模型` 排在它前面一格 —— 它一次会话里
+/// 用不到几次，而它开出来的那块浮层自带完整的键位说明，所以不必在提示行上抢位置。
 pub fn status_line(busy: bool, width: u16, raised: bool) -> String {
     status_line_with(None, busy, width, raised)
 }
@@ -2143,11 +2145,6 @@ pub fn model_detail_via(provider: &str) -> String {
     format!("走 `{provider}`")
 }
 
-/// 模型候选里「缺 key」时的那句 detail：**点名那个环境变量**，于是修法可以直接抄。
-pub fn model_detail_missing_key(env: &str) -> String {
-    format!("缺 `{env}`，切过去会起不来")
-}
-
 /// 运行中要切换时给的那句回执（spec §6）。四个入口共用它。
 pub fn switch_busy() -> &'static str {
     "这一回合跑完再切"
@@ -2197,8 +2194,11 @@ pub fn switched_effort(effort: &str) -> String {
 }
 
 /// 选择器页脚那行键位提示。
+///
+/// 网格里**横向**与**纵向**是两件事，所以两套键都写出来：`j/k`（或 `←/→`）走相邻那一格、
+/// `↑/↓` 换行 —— 与 `ls` 那一族的手感相同。
 pub fn picker_keys() -> &'static str {
-    "j/k 移动 · 回车 选择 · esc 取消"
+    "j/k 或 ←→ 移动 · ↑↓ 换行 · 回车 选择 · esc 取消"
 }
 
 /// `/goal-new` 的用法：参数不对时说的那句。

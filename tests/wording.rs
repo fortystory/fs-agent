@@ -425,6 +425,7 @@ fn the_status_line_keeps_the_way_out_and_fills_hints_from_the_front() {
         "esc 取消",
         "shift+tab 模式",
         "PgUp/PgDn 滚动",
+        "ctrl-t 换模型",
         "ctrl-o 左栏",
         wording::EXIT_HINT_IDLE,
     ] {
@@ -469,8 +470,8 @@ fn the_status_line_keeps_the_way_out_and_fills_hints_from_the_front() {
 
 #[test]
 fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
-    // 它排在最末 —— 位置就是优先级，所以只有最宽的档位看得见它
-    // （`.scratch/sidebar-toggle/spec.md` §4）。
+    // 它排在最末、`ctrl-t 换模型` 排在它前面一格 —— 位置就是优先级，所以只有最宽的档位看得见
+    // 它们（`.scratch/sidebar-toggle/spec.md` §4）。
     let wide = wording::status_line(false, 200, false);
     assert!(wide.contains("ctrl-o 左栏"), "{wide}");
     assert!(
@@ -481,6 +482,17 @@ fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
         wide.find("ctrl-o 左栏").unwrap() > wide.find("PgUp/PgDn 滚动").unwrap(),
         "新条目排在所有旧条目之后：{wide}"
     );
+    assert!(
+        wide.find("ctrl-o 左栏").unwrap() > wide.find("ctrl-t 换模型").unwrap(),
+        "换模型排在左栏开关前面一格：{wide}"
+    );
+    // `ctrl-t` 排在它前面一格，所以它先被看见的那一档里 `ctrl-o` 已经让掉了。
+    assert!(
+        wording::status_line(false, 106, false).contains("ctrl-t 换模型")
+            && !wording::status_line(false, 106, false).contains("ctrl-o 左栏"),
+        "106 列：{}",
+        wording::status_line(false, 106, false)
+    );
     // 它是窄档最先丢掉的那一条。
     let narrow = wording::status_line(false, 100, false);
     assert!(
@@ -489,13 +501,24 @@ fn the_sidebar_switch_is_hinted_at_the_end_of_the_line() {
     );
 
     // 忙碌行的出口短八列（`ctrl-c 退出` 对 `ctrl-c/ctrl-d 退出`），所以在同一个列宽上
-    // 它比空闲行更早看到这一条 —— 同一条阶梯，两条出口。
+    // 它比空闲行更早看到最后那几条 —— 同一条阶梯，两条出口。
     let busy = wording::status_line(true, 99, false);
-    assert!(busy.contains("ctrl-o 左栏"), "忙碌行在 99 列上：{busy}");
+    assert!(busy.contains("ctrl-t 换模型"), "忙碌行在 99 列上：{busy}");
     let idle_here = wording::status_line(false, 99, false);
     assert!(
-        !idle_here.contains("ctrl-o 左栏"),
+        !idle_here.contains("ctrl-t 换模型"),
         "空闲行同宽还看不到：{idle_here}"
+    );
+    // 要连左栏开关（整份表的最后一条）一起放下，得再宽十四列 —— 而 174 列那一档放得下全部。
+    assert!(
+        !wording::status_line(false, 119, false).contains("ctrl-o 左栏"),
+        "119 列还差一列：{}",
+        wording::status_line(false, 119, false)
+    );
+    assert!(
+        wording::status_line(false, 120, false).contains("ctrl-o 左栏"),
+        "120 列放下整份表：{}",
+        wording::status_line(false, 120, false)
     );
 }
 
@@ -554,13 +577,26 @@ fn the_hint_ladder_is_the_one_the_prototype_measured() {
         wording::status_line(true, 60, false),
         "enter 发送 · ctrl-j 换行 · esc 取消 · ctrl-c 退出"
     );
-    let full = "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
+    let full = "enter 发送 · ctrl-j 换行 · esc 取消 · shift+tab 模式 · PgUp/PgDn 滚动 · ctrl-t 换模型 · ctrl-o 左栏 · ctrl-c/ctrl-d 退出";
     assert_eq!(wording::status_line(false, 120, false), full);
     // 在最大宽度上行是稳定的：再没什么可买的了。
     assert_eq!(wording::status_line(false, 174, false), full);
+    // 阶梯是「放不下就停」，所以最后两条是一起让掉的 —— 106 列那一档里 `ctrl-t` 还在、
+    // `ctrl-o` 已经没了（位置就是优先级）。
+    assert!(
+        wording::status_line(false, 106, false).contains("ctrl-t 换模型")
+            && !wording::status_line(false, 106, false).contains("ctrl-o 左栏"),
+        "106 列：{}",
+        wording::status_line(false, 106, false)
+    );
+    assert!(
+        !wording::status_line(false, 105, false).contains("ctrl-t 换模型"),
+        "105 列差一列就放不下它：{}",
+        wording::status_line(false, 105, false)
+    );
     // 忙只换出口那一段，不换阶梯。
     assert_eq!(
-        wording::status_line(true, 120, false).replace("ctrl-c 退出", "ctrl-c/ctrl-d 退出"),
+        wording::status_line(true, 174, false).replace("ctrl-c 退出", "ctrl-c/ctrl-d 退出"),
         full
     );
 }

@@ -1233,31 +1233,29 @@ struct Retargeted {
     profile: String,
 }
 
-/// 模型候选（spec §8）：`config.models` 的**全部**键，不只列现在跑得起来的那几个。
+/// 模型候选（spec §8）：`config.models` 里**已经有密钥**的那些。
 ///
-/// 顺序是 `BTreeMap` 的键序，不是插入序，所以两次列出来的读法一致。缺密钥的那几个**列着**
-/// 但灰掉，detail 点名那个环境变量 —— 人要看见「换一个模型」都有哪些可换的，而「这个还没配」
-/// 正是其中一条信息。
+/// 顺序是 `BTreeMap` 的键序，不是插入序，所以两次列出来的读法一致。**缺密钥的不列** ——
+/// 2026-10-08 维护者把 spec §8「列全部、缺 key 的标灰并点名环境变量」收窄成这一条：一个选不了的
+/// 候选在选择器里只能占一格并教人一件它当场就能知道的事（而那件事属于配置诊断，不属于这个浮层）。
+/// 于是 `enabled` 在模型这份清单上恒为真 —— 字段留着，因为档位那份清单与将来的别的清单仍要能
+/// 表达「这一行选不了」，而前端也不该为某一份清单写两套画法。
 fn model_picker_options(config: &Config, current: &str) -> Vec<PickerOption> {
     config
         .models
         .iter()
-        .map(|(id, model)| {
-            let profile = config.providers.get(&model.provider);
-            let enabled = profile.is_some_and(|profile| profile.api_key.is_some());
-            let detail = match profile {
-                Some(_) if enabled => render::wording::model_detail_via(&model.provider),
-                // `profile.key_env` 就是修法（`ProviderProfile` 的文档注释明写这一点），所以
-                // 点名它而不是说「缺密钥」。
-                Some(profile) => render::wording::model_detail_missing_key(&profile.key_env),
-                None => render::wording::model_detail_missing_key(&model.provider),
-            };
-            PickerOption {
-                label: id.clone(),
-                detail,
-                current: id == current,
-                enabled,
-            }
+        .filter(|(_, model)| {
+            config
+                .providers
+                .get(&model.provider)
+                .is_some_and(|profile| profile.api_key.is_some())
+        })
+        .map(|(id, model)| PickerOption {
+            label: id.clone(),
+            // detail 说清它挂在哪个 profile 上：选之前就该知道换过去走的是哪一家。
+            detail: render::wording::model_detail_via(&model.provider),
+            current: id == current,
+            enabled: true,
         })
         .collect()
 }
@@ -4143,56 +4141,56 @@ mod tests {
         assert!(matches!(read("/model 这个"), Submission::Model(_)));
     }
 
-    /// 模型候选：配置里的**全部**键，按键序，缺 key 的灰着并点名那个环境变量。
+    /// 模型候选：**已经有密钥**的那些，按键序。缺密钥的不列（2026-10-08 维护者收窄了
+    /// spec §8 原来那条「列全部、缺 key 的标灰」—— 一个选不了的候选只能占一格并教人一件当场
+    /// 就知道的事，而那件事属于配置诊断）。
     #[test]
-    fn the_model_candidates_are_every_configured_model_and_name_the_missing_key() {
+    fn the_model_candidates_are_the_configured_models_that_have_a_key() {
         let config = crate::config::resolve(
             Some("[providers.kimi-code-cn]\nbase_url = \"https://api.kimi.com/coding/v1\"\napi_key_env = \"KIMI_CODE_CN_API_KEY\"\n\n[models.\"kimi-k3\"]\nprovider = \"kimi-code-cn\"\n"),
-            &[("MINIMAX_API_KEY", "sk-minimax")]
-                .into_iter()
-                .map(|(key, value)| (key.to_owned(), value.to_owned()))
-                .collect(),
+            &[
+                ("KIMI_API_KEY", "sk-kimi-code"),
+                ("MINIMAX_API_KEY", "sk-minimax"),
+                ("MINIMAX_CN_API_KEY", "sk-minimax-cn"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
         )
         .unwrap();
 
         let options = super::model_picker_options(&config, "MiniMax-M3.1-Flash-Preview");
         let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
-        // 每个配置过的模型都在清单上（一个不多），而顺序是 **`BTreeMap` 的键序**，不是
-        // `BUILTIN_MODELS` 的声明序 —— 所以两次列出来读法一致。
-        let mut expected: Vec<&str> = crate::config::BUILTIN_MODELS
-            .iter()
-            .map(|(id, _)| *id)
-            .collect();
-        expected.sort();
-        assert_eq!(labels, expected);
-        assert!(
-            labels.windows(2).all(|pair| pair[0] < pair[1]),
-            "清单按键排好序：{labels:?}"
+        // `kimi-k3` 指向的是一条**没有密钥**的 profile，所以它根本不在清单上；
+        // `minimax-cn` 有密钥（虽然内建的 `MiniMax-M3` 默认走国际站），所以它在。
+        assert_eq!(
+            labels,
+            vec![
+                "MiniMax-M3",
+                "MiniMax-M3.1-Flash-Preview",
+                "k3",
+                "k3-256k",
+                "kimi-for-coding",
+                "kimi-for-coding-highspeed",
+            ],
+            "只有有密钥的那些，键序"
         );
+        assert!(
+            !labels.contains(&"kimi-k3"),
+            "缺 key 的那个不列：{labels:?}"
+        );
+        // 当前那个被标出来了，detail 说它走哪个 profile。
         let current = options
             .iter()
             .find(|option| option.current)
             .expect("当前那个被标出来了");
         assert_eq!(current.label, "MiniMax-M3.1-Flash-Preview");
-
-        // 缺 key 的那一个灰着，而它的 detail **点名那个环境变量** —— 修法可以直接抄。
-        let missing = options
-            .iter()
-            .find(|option| option.label == "kimi-k3")
-            .expect("配置里的模型都在清单上");
-        assert!(!missing.enabled);
+        assert!(current.detail.contains("minimax"), "{:?}", current.detail);
+        // 清单上没有选不了的行 —— 模型这一份恒为真。
         assert!(
-            missing.detail.contains("KIMI_CODE_CN_API_KEY"),
-            "缺哪个环境变量要说出来：{:?}",
-            missing.detail
+            options.iter().all(|option| option.enabled),
+            "模型清单里没有选不了的行"
         );
-        // 有 key 的那一个可点，detail 说它走哪个 profile。
-        let usable = options
-            .iter()
-            .find(|option| option.label == "MiniMax-M3.1-Flash-Preview")
-            .unwrap();
-        assert!(usable.enabled);
-        assert!(usable.detail.contains("minimax"), "{:?}", usable.detail);
     }
 
     /// 档位候选：**第一档是「默认」**，其余按强度从弱到强；表为空时给空清单（前端显示 `固定`）。
@@ -4338,7 +4336,12 @@ mod tests {
         let (title, count) = front_end.await.expect("前端回来了");
 
         assert_eq!(title, super::render::wording::picker_title_model());
-        assert_eq!(count, crate::config::BUILTIN_MODELS.len());
+        assert_eq!(
+            count,
+            // 测试那份配置里给了 key 的就是 MiniMax 的两条 profile，所以列的是它们旗下的模型。
+            5,
+            "清单是配置里有密钥的那些模型"
+        );
         assert_eq!(harness.model(), "kimi-k3", "取消不是一次切换");
         harness.shutdown().await;
         assert!(

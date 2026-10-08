@@ -708,13 +708,13 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
     // 不再是终端宽度：120 列终端给出 79 列提示，80 列给出 51 列。量出来的阶梯因此是
     // 40 列 -> 一条提示 + 出口，80 -> 三条，100 -> 四条，120 -> 五条。
     //
-    // `ctrl-o 左栏` 排在最末，所以只有最宽那一档看得见它
-    // （`.scratch/sidebar-toggle/spec.md` §4）。
+    // `ctrl-o 左栏` 排在最末、`ctrl-t 换模型` 排在它前面一格，所以这两条只有最宽那一档看得见
+    // （`.scratch/sidebar-toggle/spec.md` §4 的「位置就是优先级」）。
     assert_eq!(hint_items(40).len(), 2, "40 列：{:?}", hint_items(40));
     assert_eq!(hint_items(80).len(), 3, "80 列：{:?}", hint_items(80));
     assert_eq!(hint_items(100).len(), 4, "100 列：{:?}", hint_items(100));
     assert_eq!(hint_items(120).len(), 5, "120 列：{:?}", hint_items(120));
-    assert_eq!(hint_items(174).len(), 7, "174 列：{:?}", hint_items(174));
+    assert_eq!(hint_items(174).len(), 8, "174 列：{:?}", hint_items(174));
 
     // 在地板上，出口之前只挤得下一条提示 —— 而 `就绪` 不在这里，它住在状态行里。左栏在地板
     // 上本来就不画，所以提示行拿到的就是整屏 40 列。
@@ -768,8 +768,18 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         "后面还跟着整份提示表：{roomy:?}"
     );
     assert!(
+        roomy.contains(&"ctrl-t 换模型".to_owned()),
+        "换模型的快捷键在表里：{roomy:?}"
+    );
+    assert!(
         roomy.contains(&"ctrl-o 左栏".to_owned()),
         "左栏开关是这一档多出来的那一条：{roomy:?}"
+    );
+    // 120 列下它已经被让掉 —— 窄终端先丢最后两条，而这一行还有更常用的键要放。
+    assert!(
+        !hint_items(120).contains(&"ctrl-t 换模型".to_owned()),
+        "120 列还看不到它：{:?}",
+        hint_items(120)
     );
     assert!(
         !screen(174, 24, &mut state())
@@ -9870,7 +9880,8 @@ fn clicking_outside_the_picker_cancels_it() {
 
 #[test]
 fn only_the_current_picker_row_carries_the_current_marker() {
-    // 两枚记号各说一件事：当前项 `▸`、选不了的 `×`，其余留空格 —— 于是三行仍然对齐。
+    // 两枚记号各说一件事：当前项 `▸`、选不了的 `×`，其余留空格。网格里它们**各贴着自己那一格**
+    // —— 所以断言是「记号紧跟着那个标签」，而不是「那一行含有它」。
     let mut state = idle();
     let (request, _answer) = picker(
         "模型",
@@ -9883,23 +9894,105 @@ fn only_the_current_picker_row_carries_the_current_marker() {
     );
     state.request(request);
     let rows = screen(120, 24, &mut state);
-    let marked: Vec<String> = rows
+    let row = rows
         .iter()
-        .filter(|row| row.contains('▸') || row.contains('×'))
-        .cloned()
-        .collect();
-    assert_eq!(marked.len(), 2, "当前那一行与禁用那一行各一枚：{marked:?}");
+        .find(|row| row.contains('▸') || row.contains('×'))
+        .expect("候选那一行");
     assert!(
-        marked
-            .iter()
-            .any(|row| row.contains('▸') && row.contains("deepseek-v4-pro")),
-        "当前项那一行带 `▸`：{marked:?}"
+        row.contains("▸ deepseek-v4-pro"),
+        "当前项那一格带 `▸`：{row}"
+    );
+    assert!(row.contains("× MiniMax-M3"), "选不了的那一格带 `×`：{row}");
+    assert!(
+        !row.contains("▸ kimi-k3"),
+        "既不是当前的又能选的那一格不带记号：{row}"
+    );
+    // 三格横着排在同一行上 —— 表格而不是一列。
+    let first = row.find("kimi-k3").expect("第一格");
+    let second = row.find("MiniMax-M3").expect("第二格");
+    let third = row.find("deepseek-v4-pro").expect("第三格");
+    assert!(
+        first < second && second < third,
+        "从左到右按索引顺序：{row}"
+    );
+}
+
+#[test]
+fn the_picker_lays_the_models_out_as_a_wide_grid() {
+    // 加宽 + 表格：候选横着铺开，浮层撑满主列 —— 宽终端上同一行就能看到**全部**配置好的模型。
+    let labels = [
+        ("kimi-k3", true),
+        ("k3-256k", true),
+        ("deepseek-flash", true),
+        ("deepseek-v4-pro", true),
+    ];
+    let mut state = idle();
+    let (request, mut answer) = picker("模型", &labels, 0);
+    state.request(request);
+    let rows = screen(174, 24, &mut state);
+    let row = rows
+        .iter()
+        .find(|row| row.contains("kimi-k3"))
+        .expect("候选在屏幕上");
+    for (label, _) in labels {
+        assert!(row.contains(label), "{label} 在同一行上：{row}");
+    }
+    // 表格是对齐的：按索引从左到右，且**没有一格被浮层的内宽裁掉**。
+    let first = row.find("kimi-k3").expect("第一格");
+    let last = row.find("deepseek-v4-pro").expect("最后一格");
+    assert!(first < last, "从左到右按索引顺序：{row}");
+    // 名字**完整**出现（而不是被内宽裁成 `de`）就是「没有被裁掉半截」的判据。
+    assert!(row.contains("deepseek-v4-pro"), "最后一格完整：{row}");
+    // 页脚把两套键都写出来：横向与纵向在网格里是两件事。
+    assert!(rows.join("\n").contains("↑↓ 换行"), "页脚说明 ↑↓ 是换行");
+
+    // 窄一档（120 列）放不下四格，于是折行 —— 顺序不变，最后一格**完整**地在第二行。
+    let rows = screen(120, 24, &mut state);
+    let first_row = rows.iter().find(|row| row.contains("kimi-k3")).unwrap();
+    assert!(
+        !first_row.contains("deepseek-v4-pro"),
+        "120 列下它折到下一行：{first_row}"
+    );
+    let second = rows
+        .iter()
+        .find(|row| row.contains("deepseek-v4-pro"))
+        .expect("折行那一行在屏幕上");
+    assert!(
+        second.contains("deepseek-v4-pro"),
+        "折下来的那一格完整：{second}"
     );
     assert!(
-        marked
-            .iter()
-            .any(|row| row.contains('×') && row.contains("MiniMax-M3")),
-        "选不了的那一行带 `×`：{marked:?}"
+        !second.contains("kimi-k3") && !second.contains("deepseek-flash"),
+        "第二行只有折下来的那几格：{second}"
+    );
+
+    state.key(Key::Enter);
+    assert_eq!(answer.try_recv().expect("答案送出去了"), Some(0));
+}
+
+#[test]
+fn down_moves_a_row_and_keeps_the_column() {
+    let mut state = idle();
+    // 六行两栏：第一行四格，第二行两格。
+    let labels = [
+        ("a", true),
+        ("b", true),
+        ("c", true),
+        ("d", true),
+        ("e", true),
+        ("f", true),
+    ];
+    let (request, mut answer) = picker("模型", &labels, 1);
+    state.request(request);
+    // 先画一帧定下几栏。
+    let _ = screen(120, 24, &mut state);
+    // `b` 在第一行第二格 —— `↓` 换行、留在第二列，于是落在 `f` 那一格（第五行…第二行）。
+    state.key(Key::Down);
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().expect("答案送出去了"),
+        Some(5),
+        "`↓` 换行并留在同一列"
     );
 }
 
