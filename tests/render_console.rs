@@ -6,8 +6,10 @@
 
 use std::sync::Arc;
 
+use heng::config::ReasoningEffort;
 use heng::permissions::{Answer, Asker, PermissionRequest};
-use heng::render::{ConsoleAsker, ConsoleRequest, FrontEndEvent, console};
+use heng::render::spawn_plain_console_with;
+use heng::render::{ConsoleAsker, ConsoleRequest, FrontEndEvent, PickerOption, console};
 
 #[tokio::test]
 async fn a_prompt_travels_out_and_the_answer_comes_back() {
@@ -119,4 +121,38 @@ async fn a_generic_asker_handle_can_be_shared() {
     };
     assert_eq!(asker.ask(&request).await, Answer::Allow);
     front_end.await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 选择器与会话更新（`.scratch/model-switching/spec.md` §9）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_line_oriented_front_end_cancels_the_picker() {
+    // 选择器是 TUI 独占的交互：这条路径上没有键盘，于是答案是**取消**而不是一个下标 ——
+    // 想在这条路径上换模型就用 `/model <id>`（spec §9）。
+    let (handle, port, _events) = console();
+    let _console = spawn_plain_console_with(port, Box::new(|| Box::pin(async { None })));
+    let options = vec![PickerOption {
+        label: "kimi-k3".to_owned(),
+        detail: String::new(),
+        current: true,
+        enabled: true,
+    }];
+    assert_eq!(handle.picker("模型", options).await, None);
+}
+
+#[tokio::test]
+async fn the_line_oriented_front_end_ignores_a_session_update() {
+    // 它没有状态行，所以那些新事实无处可去 —— 而忽略不是错误（spec §3）。
+    let (handle, port, _events) = console();
+    let _console = spawn_plain_console_with(port, Box::new(|| Box::pin(async { None })));
+    handle.session_update(
+        "MiniMax-M3.1-Flash-Preview".to_owned(),
+        Some(ReasoningEffort::High),
+        1_048_576,
+        vec!["minimax".to_owned()],
+    );
+    // 通道没被关掉、也没有崩：接下来的通知照旧发得出去。
+    handle.set_running(false);
 }

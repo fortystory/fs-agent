@@ -20,6 +20,7 @@ use tokio::sync::oneshot;
 
 fn facts() -> SessionFacts {
     SessionFacts {
+        switchable: true,
         session_id: "01J8ZQ4K7M".to_owned(),
         session_dir: "~/code/fortystory/heng".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),

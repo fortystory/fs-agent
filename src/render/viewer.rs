@@ -88,6 +88,9 @@ pub fn key_bytes(key: &Key) -> Option<Vec<u8>> {
         Key::CtrlW => vec![0x17],
         // `Ctrl-D` 在 nvim 里是「向下翻半屏」，比它在前端当「退出」更值钱。
         Key::CtrlD => vec![0x04],
+        // nvim 的 transpose：它在浮层里独占键盘，所以选择器那个手势到不了这里，得照原样
+        // 进去（`.scratch/nvim-file-viewer/spec.md` §4）。
+        Key::CtrlT => vec![0x14],
         Key::CtrlC | Key::CtrlZ => return None,
     };
     Some(bytes)

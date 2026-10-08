@@ -166,6 +166,23 @@ pub struct Harness {
     cancel: CancelSignal,
 }
 
+/// 换完模型/档位之后循环要推回前端的那几条新事实（spec §3）。
+///
+/// 它们是**推**过去的，不是问出来的：`RunState` / `Muted` 那一格 —— 循环推、前端收、发完就完。
+/// 之所以要推，是因为这三样是注入的只读值，前端自己够不到：上下文窗口换了模型就可能换
+/// （1M ↔ 256K），而它是状态行那个 `n%` 的分母。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Switched {
+    /// 新的模型 id，状态行显示的那一格。
+    pub model: String,
+    /// 新的推理档位；`None` 就是「默认」那一档（spec §5，不发这个参数）。
+    pub effort: Option<crate::config::ReasoningEffort>,
+    /// 新模型的可用输入（[`context::usable_input`]），即 `上下文 n%` 的新分母。
+    pub context_window: u64,
+    /// 新的发言者名册（spec §4）：名字是 provider profile 的名字，换厂商就换名。
+    pub speakers: Vec<String>,
+}
+
 /// 组装好之后由调用方驱动的讨论。
 pub struct DiscussionHarness {
     discussion: agent::Discussion,
@@ -957,6 +974,57 @@ impl Harness {
         self.drive_turn().await
     }
 
+    /// 这一场会话当前用的模型 id。
+    ///
+    /// 循环读它来回答「这一场会话现在是什么」，以及给 `/effort` 判那一档当前模型认不认。
+    pub fn model(&self) -> &str {
+        &self.session.config().model
+    }
+
+    /// 这一场会话当前的推理档位；`None` 就是「默认」那一档（spec §5）。
+    pub fn effort(&self) -> Option<crate::config::ReasoningEffort> {
+        self.session.config().params.reasoning_effort
+    }
+
+    /// 这个目标跨过的那些更早的会话已经花掉的 token（`.scratch/goal-loop/spec.md` §8）。
+    ///
+    /// 换模型时它要照旧带着走：累计额度是**会话**事实，不是模型的事实（换模型不重置额度，
+    /// 与翻页那一条同纪律）。
+    pub fn carried_tokens(&self) -> u64 {
+        self.session.config().carried_tokens
+    }
+
+    /// 会话中途换模型与思考档位（spec §2）：换掉 provider、会话配置与发言者，并返回那些
+    /// **注入给前端的新事实**。
+    ///
+    /// 三样**必须一起**换，所以它们在一个动作里：provider 在建好时就把模型 id 与 caps 存了
+    /// 进去，而下一次请求的配置带着新的 id —— 只换一半就会拿新 id 去问旧 caps（或者反过来）。
+    /// 发言者也跟着换，因为它的名字是 **provider profile 的名字**而不是模型 id（spec §4）；
+    /// 渲染器那边不用改逻辑，新名字走 `SpeakerColors` 已有的「没人认领的槽位」那条路。
+    ///
+    /// `profile_name` 由调用方给出：只有它读得到配置，所以也只有它知道新模型挂在哪个 profile 下。
+    ///
+    /// **换档不重建 provider** —— 档位只是 `SessionConfig::params` 里的一个值，provider 不读它
+    /// （[`crate::provider::openai`] 只从 `ChatRequest.params` 读）。所以那条路是纯配置动作，
+    /// 调用方把它放进同一个 `SessionConfig` 传进来就够了。
+    pub fn switch_model(
+        &mut self,
+        provider: Arc<dyn Provider>,
+        config: SessionConfig,
+        profile_name: &str,
+    ) -> Switched {
+        self.provider = provider;
+        self.speaker = SpeakerId::Debater(profile_name.to_owned().into());
+        let switched = Switched {
+            model: config.model.clone(),
+            effort: config.params.reasoning_effort,
+            context_window: context::usable_input(&self.provider.caps()),
+            speakers: vec![profile_name.to_owned()],
+        };
+        self.session.retarget(config);
+        switched
+    }
+
     /// 这场会话的上下文用掉了窗口的百分之多少（`.scratch/goal-loop/spec.md` §6 的阈值判据）。
     ///
     /// 分子是**投影之后、裁剪之前**的估算，分母是 [`context::usable_input`] —— 也就是状态行
@@ -1054,6 +1122,12 @@ impl Harness {
         self.opened.render.notice(message);
     }
 
+    /// 渲染通道的一个廉价克隆，供那些**在一次借用之外**还要说一句话的循环手势用
+    /// （理由与 [`ModeCycle`] 相同）。
+    pub fn render_handle(&self) -> RenderHandle {
+        self.opened.render.clone()
+    }
+
     /// 拼好的系统提示词摆进转录（轨迹页看得到的那一条，不进事件流）。
     pub fn identity(&self, text: &str) {
         self.opened.render.identity(text);
@@ -1131,6 +1205,14 @@ impl DiscussionHarness {
     /// 调它。
     pub async fn shutdown(self) {
         drain_renderer(self.render, self.render_task).await;
+    }
+
+    /// 渲染通道的一个廉价克隆，供那些**在一次借用之外**还要说一句话的循环手势用。
+    ///
+    /// 与 [`ModeCycle`] 同一个理由：循环钉住一个 run future 时 harness 被借走了，而「运行中
+    /// 拒绝切换」那条回执恰好要在这个时候发出去。
+    pub fn render_handle(&self) -> RenderHandle {
+        self.render.clone()
     }
 }
 

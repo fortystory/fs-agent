@@ -79,6 +79,7 @@ fn load(arg: &str) -> Vec<Event> {
 
 fn facts() -> SessionFacts {
     SessionFacts {
+        switchable: true,
         session_id: "bench".to_owned(),
         cwd: "/bench".to_owned(),
         model: "bench-model".to_owned(),

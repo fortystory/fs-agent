@@ -301,13 +301,22 @@ fn builtin_provider(name: &str) -> Option<&'static BuiltinProvider> {
         .find(|builtin| builtin.name == name)
 }
 
-/// 推理档位。两家厂商都在请求顶层接受它，但只有部分 model id 真正照办（spec §4：Kimi K3 /
-/// DeepSeek）。档位在会话开始时就定死：中途改它会扔掉前缀缓存。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// 推理档位。三家厂商都在请求顶层接受它，但**每家每模型认的档位不一样**（spec §4：Kimi K3 /
+/// DeepSeek 是 `low`/`high`/`max`，MiniMax M3.1 另有 `medium`/`xhigh`）—— 哪些档位可用写在
+/// [`ModelCaps::reasoning_efforts`] 里，那张表才是权威。
+///
+/// **变体的顺序有意义**：从弱到强。能力表里那张档位表也按这个顺序排好，所以选择器画候选时
+/// 顺着表走就是这个顺序；而要比较两档谁更强（例如把档位表对齐着比）用派生的 [`Ord`]。
+///
+/// 中途换档要付缓存的代价（Kimi 与 DeepSeek 都明写换 effort 会让上下文缓存失效、要重新
+/// prefill），所以切换回执里带着那句话；但那是**代价**，不是禁令。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     Low,
+    Medium,
     High,
+    Xhigh,
     Max,
 }
 
@@ -315,8 +324,22 @@ impl ReasoningEffort {
     pub fn as_str(&self) -> &'static str {
         match self {
             ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
             ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh => "xhigh",
             ReasoningEffort::Max => "max",
+        }
+    }
+
+    /// 记号（`/effort high`）解析成哪一档。大小写不敏感 —— 命令行里没人爱按厂商文档的大小写打字。
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "xhigh" => Some(Self::Xhigh),
+            "max" => Some(Self::Max),
+            _ => None,
         }
     }
 }
@@ -330,7 +353,9 @@ pub struct GenerationParams {
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    /// 整个会话钉住；中途从不切换。
+    /// 这一场会话的推理档位。`None` 是**「默认」那一档**（spec §5）：不发这个字段，由厂商
+    /// 自己挑 —— 把厂商默认展开成某个具体值会让人以为是自己选的。会话中途可以换（§2），
+    /// 换的代价是前缀缓存重来，回执里会说。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
 }

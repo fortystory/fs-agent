@@ -40,7 +40,7 @@ from dataclasses import dataclass
 
 # --- 清单：42 份活文档 -------------------------------------------------------
 # scope 与 `.scratch/docs-slim/research/03` 一致：入口三份（README / CONTEXT / AGENTS）+
-# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 16 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
+# `.scratch/README.md`、`docs/` 逐面 18 份、`docs/adr/` 17 份、`docs/agents/` 4 份。**不含** `docs/research/`（一手引文）、
 # `.scratch/*/issues/`、`.scratch/*/spec.md`、`.scratch/*/research/`。
 DOC_FILES = [
     "README.md",
@@ -83,6 +83,7 @@ DOC_FILES = [
     # **2026-10-07 补收**：`docs/adr/0016` 落盘时漏了这份清单，README 的 ADR 索引行也漏了它 ——
     # 两处都由 ④ 的自检打了 warn（「`docs/` 下有清单外的 md」），这一轮一并补上。
     "docs/adr/0016-usage-rides-the-row-of-its-call.md",
+    "docs/adr/0017-model-and-effort-switch-mid-session.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -326,11 +327,19 @@ def review_rules(unit: Unit) -> list[str]:
 #   把棘轮抬到 **18,211 / 319**（17,928 / 316 之后越过了行数那一档；字符仍离终点 18,500 有余）。
 #   与 `.scratch/README.md` 同日同因：新增 `minimax-provider` 那一行索引也是常规增长，
 #   11,049 / 66 → **11,334 / 67**（与 `input-tokens` 起那十次同因）。
+# **2026-10-08 会话中途换模型与思考强度那一轮**：`model-switching` 要在入口文档落**四处**必然的
+#   信息 —— 配置样例里 `reasoning_effort` 按模型给（原先那行注释还写着「会话开始前定死」，那是
+#   被推翻的旧语义）、`--model` 那行说明它是**起手**那一个、会话里命令清单多两条、新入口段落
+#   讲 `Ctrl-T` 与状态行那两格。仍然是**信息增长**，所以先照 2026-10-08 MiniMax 那次的先例压过
+#   一轮（两段注释收紧、TUI 段落并成一行），实测 **18,935 / 327**；终点 18,500 / 320 这次真的
+#   越过了（MiniMax 那次字符还在终点之内），所以按显式动作把棘轮抬到 **19,100 / 330**。
+#   `.scratch/README.md` 同因：`model-switching` 那一行索引（与 ADR 索引同一条纪律），实测
+#   **11,634 / 68**，抬到 **11,700 / 68**。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 18211, "lines": 319, "target_chars": 18500, "target_lines": 320},
+    "README.md": {"chars": 19100, "lines": 330, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 11334,
-        "lines": 67,
+        "chars": 11700,
+        "lines": 68,
         "target_chars": 13500,
         "target_lines": 100,
     },

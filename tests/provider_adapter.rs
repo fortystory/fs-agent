@@ -138,12 +138,12 @@ fn the_minimax_models_enter_the_table_with_their_own_numbers() {
     // 思考一律走 reasoning_content —— 默认形态会把 `<think>` 留在正文里。
     assert!(m3.reasoning_split);
     // 官方：「reasoning_effort … 仅 M3.1-Flash-Preview 生效」，所以两条 id 只差这一位。
-    assert!(!m3.supports_reasoning_effort);
+    assert!(m3.reasoning_efforts.is_empty());
 
     let m31 = caps_for("MiniMax-M3.1-Flash-Preview").unwrap();
     assert_eq!(m31.vendor, heng::config::Vendor::MiniMax);
     assert_eq!(m31.context_window, m3.context_window);
-    assert!(m31.supports_reasoning_effort);
+    assert!(!m31.reasoning_efforts.is_empty());
     assert!(m31.reasoning_split);
 }
 
@@ -288,6 +288,124 @@ fn reasoning_effort_is_sent_at_the_top_level() {
     let (body, warnings) = build_body(&request("kimi-k3", params), kimi());
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(body["reasoning_effort"], "low");
+}
+
+#[test]
+fn every_model_reports_exactly_the_efforts_its_vendor_documents() {
+    // 按集合比：选择器与状态行各自按强度排序（枚举顺序），所以表的顺序不是契约。
+    let documented: &[(&str, &[ReasoningEffort])] = &[
+        (
+            "kimi-k3",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+        ),
+        (
+            "k3",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+        ),
+        (
+            "k3-256k",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+        ),
+        (
+            "kimi-for-coding",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+        ),
+        // K2.7 HighSpeed 是 `Thinking:ON`：思考常开，没有档位。
+        ("kimi-for-coding-highspeed", &[]),
+        (
+            "deepseek-flash",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+        ),
+        (
+            "deepseek-v4-pro",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+        ),
+        (
+            "MiniMax-M3.1-Flash-Preview",
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+                ReasoningEffort::Max,
+            ],
+        ),
+        // 「仅 M3.1-Flash-Preview 生效」。
+        ("MiniMax-M3", &[]),
+    ];
+
+    for (model, expected) in documented {
+        let caps = caps_for(model).unwrap();
+        let actual: Vec<ReasoningEffort> = caps.reasoning_efforts.to_vec();
+        let mut expected = expected.to_vec();
+        let mut actual = actual;
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected, "{model} 的档位表与厂商文档不符");
+    }
+}
+
+#[test]
+fn an_effort_the_model_recognises_travels_and_one_it_does_not_is_dropped_with_a_warning() {
+    let on_kimi = GenerationParams {
+        reasoning_effort: Some(ReasoningEffort::High),
+        ..Default::default()
+    };
+    let (body, warnings) = build_body(&request("kimi-k3", on_kimi.clone()), kimi());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(body["reasoning_effort"], "high");
+
+    // `xhigh` 是 MiniMax 的档位，Kimi 不认 —— 发了就是一个 400。
+    let off_kimi = GenerationParams {
+        reasoning_effort: Some(ReasoningEffort::Xhigh),
+        ..Default::default()
+    };
+    let (body, warnings) = build_body(&request("kimi-k3", off_kimi), kimi());
+    assert!(body.get("reasoning_effort").is_none(), "{body}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("xhigh"), "{warnings:?}");
+
+    // 同理 `medium` 在 DeepSeek 的档位表里没有。
+    let off_deepseek = GenerationParams {
+        reasoning_effort: Some(ReasoningEffort::Medium),
+        ..Default::default()
+    };
+    let (body, warnings) = build_body(&request("deepseek-v4-pro", off_deepseek), deepseek());
+    assert!(body.get("reasoning_effort").is_none(), "{body}");
+    assert!(
+        warnings.iter().any(|warning| warning.contains("medium")),
+        "{warnings:?}"
+    );
+
+    // 空表（思考常开、没有旋钮）与过去的 `false` 行为一致：丢掉并告警。
+    let (body, warnings) = build_body(&request("MiniMax-M3", on_kimi), minimax());
+    assert!(body.get("reasoning_effort").is_none(), "{body}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("high"), "{warnings:?}");
 }
 
 #[test]
@@ -731,14 +849,16 @@ fn the_kimi_coding_plan_models_are_registered_with_their_own_windows() {
 
     // K2.8 Preview 收一个推理档位；K2.7 HighSpeed 只有开着思考这一种。
     assert!(
-        caps_for("kimi-for-coding")
+        !caps_for("kimi-for-coding")
             .unwrap()
-            .supports_reasoning_effort
+            .reasoning_efforts
+            .is_empty()
     );
     assert!(
-        !caps_for("kimi-for-coding-highspeed")
+        caps_for("kimi-for-coding-highspeed")
             .unwrap()
-            .supports_reasoning_effort
+            .reasoning_efforts
+            .is_empty()
     );
 }
 

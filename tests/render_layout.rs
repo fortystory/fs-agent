@@ -7,7 +7,7 @@
 //! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
 //! 在路上算出来的那些矩形。
 
-use heng::config::FileViewerSettings;
+use heng::config::{FileViewerSettings, ReasoningEffort};
 use heng::render::editor;
 use heng::render::palette;
 use heng::render::width::text_columns;
@@ -22,6 +22,7 @@ use ratatui::style::{Color, Modifier};
 
 fn facts() -> SessionFacts {
     SessionFacts {
+        switchable: true,
         session_id: "01J8ZQ4K7M".to_owned(),
         session_dir: "~/code/fortystory/heng".to_owned(),
         model: "claude-sonnet-4-5".to_owned(),
@@ -1495,8 +1496,10 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
         (40u16, 10u16, None, "", false, 1usize),
         (40, 24, None, "", false, 15),
         (60, 24, None, "", true, 15),
-        (80, 14, Some(28u16), "heng", true, 5),
-        (80, 24, Some(28), "heng", true, 15),
+        // 80 列下状态行放不下「模型 + 档位」那一格了（2026-10-08：状态行多了一段档位，
+        // `.scratch/model-switching/spec.md` §11），于是它在 100 列才回来。
+        (80, 14, Some(28u16), "heng", false, 5),
+        (80, 24, Some(28), "heng", false, 15),
         (100, 24, Some(28), "heng", true, 15),
         (120, 24, Some(40), "mark", true, 15),
         (174, 50, Some(40), "mark", true, 41),
@@ -1570,6 +1573,8 @@ fn every_size_in_the_matrix_draws_the_regions_its_budget_allows() {
             model,
             "{width}x{height} 只在放得下时把模型留在状态行上：{text}"
         );
+        // 档位那一格与模型**同生共死**（`.scratch/model-switching/spec.md` §11）：模型在，
+        // 它就在。80 列是它开始让位的那一档 —— 状态行多了一段就是这么贵。
     }
 }
 
@@ -4089,6 +4094,7 @@ fn the_status_row_starts_on_the_mode_the_session_was_assembled_with() {
     // 刚配好的那道闸门撒了谎。
     let mut state = TuiState::new(
         SessionFacts {
+            switchable: true,
             mode: heng::permissions::Mode::Readonly,
             ..facts()
         },
@@ -5933,6 +5939,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
 
     let mut state = TuiState::new(
         SessionFacts {
+            switchable: true,
             session_id: "01J8ZQ4K7M".to_owned(),
             session_dir: dir.display().to_string(),
             model: "claude-sonnet-4-5".to_owned(),
@@ -6031,6 +6038,7 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
 fn state_with_roster(names: &[&str]) -> TuiState {
     TuiState::new(
         SessionFacts {
+            switchable: true,
             speaker_order: names.iter().map(|name| (*name).to_owned()).collect(),
             ..facts()
         },
@@ -7030,6 +7038,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
 
     let mut state = TuiState::new(
         SessionFacts {
+            switchable: true,
             session_id: "01J8ZQ4K7M".to_owned(),
             session_dir: dir.display().to_string(),
             model: "claude-sonnet-4-5".to_owned(),
@@ -9605,4 +9614,459 @@ fn a_replayed_call_that_never_wrote_prose_keeps_one_thinking_row() {
     assert_eq!(text.matches("思考完成").count(), 1, "定稿只有一条：{text}");
     assert!(!text.contains("正在思考"), "没有卡住的那一行：{text}");
     assert_eq!(text.matches("in=10 out=2").count(), 1, "尾巴也还在：{text}");
+}
+
+// ---------------------------------------------------------------------------
+// 会话中途换模型与思考强度（`.scratch/model-switching/spec.md`）
+// ---------------------------------------------------------------------------
+
+/// 循环推回来的那条新事实（spec §3）。
+fn session_update(
+    model: &str,
+    effort: Option<ReasoningEffort>,
+    window: u64,
+    speakers: &[&str],
+) -> ConsoleRequest {
+    ConsoleRequest::SessionUpdate {
+        model: model.to_owned(),
+        effort,
+        context_window: window,
+        speakers: speakers.iter().map(|name| (*name).to_owned()).collect(),
+    }
+}
+
+/// 造一份清单：`label`、`detail` 与「当前」那一行。
+fn picker(
+    title: &str,
+    options: &[(&str, bool)],
+    current: usize,
+) -> (
+    ConsoleRequest,
+    tokio::sync::oneshot::Receiver<Option<usize>>,
+) {
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    (
+        ConsoleRequest::Picker(heng::render::PickerRequest {
+            title: title.to_owned(),
+            options: options
+                .iter()
+                .enumerate()
+                .map(|(index, (label, enabled))| heng::render::PickerOption {
+                    label: (*label).to_owned(),
+                    detail: String::new(),
+                    current: index == current,
+                    enabled: *enabled,
+                })
+                .collect(),
+            reply,
+        }),
+        answer,
+    )
+}
+
+#[test]
+fn the_status_row_shows_the_effort_and_re_rewrites_it_when_the_session_moves() {
+    let mut state = idle();
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("模型 claude-sonnet-4-5"),
+        "状态行报出模型：{text}"
+    );
+
+    // 循环推回来的新事实：模型、档位、窗口与名册一起改（spec §3）。
+    state.request(session_update(
+        "MiniMax-M3.1-Flash-Preview",
+        Some(ReasoningEffort::Xhigh),
+        1_000_000,
+        &["minimax-cn"],
+    ));
+    let rows = screen(120, 24, &mut state);
+    let text = rows.join("\n");
+    assert!(
+        text.contains("模型 MiniMax-M3.1-Flash-Preview · xhigh"),
+        "状态行改写成了新模型与新档位：{text}"
+    );
+    // 上下文那一栏的分母也换了 —— 它本来就是新模型的能力事实。
+    let status = rows
+        .iter()
+        .find(|row| row.contains("上下文"))
+        .expect("状态行");
+    assert!(
+        !status.contains("%") || status.contains("上下文"),
+        "{status}"
+    );
+}
+
+#[test]
+fn the_two_status_cells_open_their_picker_and_nothing_else_on_that_row_does() {
+    let mut state = idle();
+    state.request(session_update(
+        "kimi-k3",
+        Some(ReasoningEffort::High),
+        200_000,
+        &["kimi"],
+    ));
+
+    // 点模型那一格 → 要开模型清单。
+    click_text(&mut state, 120, 24, "kimi-k3");
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenPicker(heng::render::PickerKind::Model)]
+    );
+
+    // 点档位那一格 → 要开档位清单。
+    let mut state = idle();
+    state.request(session_update(
+        "kimi-k3",
+        Some(ReasoningEffort::High),
+        200_000,
+        &["kimi"],
+    ));
+    click_text(&mut state, 120, 24, "high");
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenPicker(heng::render::PickerKind::Effort)]
+    );
+
+    // 状态词与标签不是可点的：它们什么都不上行。
+    let mut state = idle();
+    state.request(session_update(
+        "kimi-k3",
+        Some(ReasoningEffort::High),
+        200_000,
+        &["kimi"],
+    ));
+    click_text(&mut state, 120, 24, "就绪");
+    assert!(state.take_events().is_empty(), "状态词那一格不点得动");
+}
+
+#[test]
+fn clicking_a_status_cell_does_not_take_the_keyboard_away_from_the_input() {
+    // 点状态行**不是**「点输入区」：那一格要上行一个手势，但键盘仍然归输入区，
+    // 所以下一个可打印字符仍然落在草稿里。
+    let mut state = idle();
+    click_text(&mut state, 120, 24, "claude-sonnet-4-5");
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenPicker(heng::render::PickerKind::Model)]
+    );
+    state.key(Key::Char('x'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains('x'), "键盘还在输入区：{text}");
+}
+
+#[test]
+fn a_discussion_session_only_says_it_cannot_switch() {
+    // 讨论会话的模型是**两个模型的拼法**，那是名册里的配置事实，不是一场活会话能中途
+    // 改的值（spec §12）。
+    let mut state = {
+        let mut facts = facts();
+        facts.model = "kimi-k3 + deepseek-v4-pro".to_owned();
+        facts.switchable = false;
+        let (reply, line) = tokio::sync::oneshot::channel();
+        let mut state = TuiState::new(facts, std::path::PathBuf::from("/x/heng"), None);
+        state.request(ConsoleRequest::Prompt { reply });
+        drop(line);
+        state
+    };
+    let mut events = state.take_events();
+    events.clear();
+    click_text(&mut state, 120, 24, "kimi-k3 + deepseek-v4-pro");
+    assert!(events.is_empty(), "占位");
+    assert!(state.take_events().is_empty(), "讨论会话不上行切换手势");
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains(&wording::heng(wording::switch_not_switchable())),
+        "它给的是一句说明：{text}"
+    );
+}
+
+#[test]
+fn ctrl_t_asks_for_the_model_picker() {
+    let mut state = idle();
+    state.key(Key::CtrlT);
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenPicker(heng::render::PickerKind::Model)]
+    );
+}
+
+#[test]
+fn the_picker_starts_on_the_current_row_and_answers_with_the_highlighted_one() {
+    let mut state = idle();
+    let (request, mut answer) = picker("模型", &[("kimi-k3", true), ("deepseek-v4-pro", true)], 1);
+    state.request(request);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("模型"), "浮层有标题：{text}");
+    assert!(
+        text.contains("kimi-k3") && text.contains("deepseek-v4-pro"),
+        "{text}"
+    );
+
+    // 往下走到头就停住，不绕回。
+    state.key(Key::Char('j'));
+    state.key(Key::Char('j'));
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().expect("答案送出去了"),
+        Some(1),
+        "回的是高亮那一行的下标"
+    );
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("deepseek-v4-pro"), "浮层关上了：{text}");
+}
+
+#[test]
+fn a_disabled_picker_row_does_not_answer_and_esc_cancels() {
+    let mut state = idle();
+    let (request, mut answer) = picker("模型", &[("kimi-k3", true), ("MiniMax-M3", false)], 0);
+    state.request(request);
+
+    // 第二行是禁用的：回车在上面不响应。
+    state.key(Key::Char('j'));
+    state.key(Key::Enter);
+    assert!(answer.try_recv().is_err(), "禁用的那一行不回答，浮层还立着");
+    // 然后取消。
+    state.key(Key::Esc);
+    assert_eq!(answer.try_recv().expect("取消送出去了"), None);
+
+    // 键盘回到输入区。
+    state.key(Key::Char('y'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains('y'), "浮层关掉后打字照旧落进草稿：{text}");
+}
+
+#[test]
+fn the_picker_takes_the_keyboard_while_it_is_up() {
+    let mut state = idle();
+    let (request, _answer) = picker("思考强度", &[("默认", true), ("high", true)], 0);
+    state.request(request);
+    // 立着的时候可打印字符不进文本（这一格被它占着）。
+    state.key(Key::Char('z'));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains('z'), "打字落不到草稿上：{text}");
+    // `ctrl-t` 在它立着时不再上行。
+    assert!(state.take_events().is_empty());
+    state.key(Key::CtrlT);
+    assert!(
+        state.take_events().is_empty(),
+        "选择器立着时 ctrl-t 归它，不上行"
+    );
+}
+
+#[test]
+fn clicking_outside_the_picker_cancels_it() {
+    let mut state = idle();
+    let (request, mut answer) = picker("模型", &[("kimi-k3", true)], 0);
+    state.request(request);
+    // 点框外（第一行是页签条，那儿不属于浮层）。
+    click(&mut state, 2, 0);
+    assert_eq!(answer.try_recv().expect("取消送出去了"), None);
+    let text = screen(120, 24, &mut state).join("\n");
+    // 候选名只出现在浮层上（状态行那一格还是 `claude-sonnet-4-5`），所以它是「浮层还在不在」
+    // 的判据。
+    assert!(!text.contains("kimi-k3"), "浮层关上了：{text}");
+}
+
+#[test]
+fn only_the_current_picker_row_carries_the_current_marker() {
+    // 两枚记号各说一件事：当前项 `▸`、选不了的 `×`，其余留空格 —— 于是三行仍然对齐。
+    let mut state = idle();
+    let (request, _answer) = picker(
+        "模型",
+        &[
+            ("kimi-k3", true),
+            ("MiniMax-M3", false),
+            ("deepseek-v4-pro", true),
+        ],
+        2,
+    );
+    state.request(request);
+    let rows = screen(120, 24, &mut state);
+    let marked: Vec<String> = rows
+        .iter()
+        .filter(|row| row.contains('▸') || row.contains('×'))
+        .cloned()
+        .collect();
+    assert_eq!(marked.len(), 2, "当前那一行与禁用那一行各一枚：{marked:?}");
+    assert!(
+        marked
+            .iter()
+            .any(|row| row.contains('▸') && row.contains("deepseek-v4-pro")),
+        "当前项那一行带 `▸`：{marked:?}"
+    );
+    assert!(
+        marked
+            .iter()
+            .any(|row| row.contains('×') && row.contains("MiniMax-M3")),
+        "选不了的那一行带 `×`：{marked:?}"
+    );
+}
+
+#[test]
+fn clicking_a_row_inside_the_picker_selects_that_row() {
+    let mut state = idle();
+    let (request, mut answer) = picker("模型", &[("kimi-k3", true), ("deepseek-v4-pro", true)], 0);
+    state.request(request);
+    // 先画一帧，才知道第二行画在哪儿 —— 只有画出来的行点得到。
+    let frame = buffer(120, 24, &mut state);
+    let row = (0..24)
+        .find(|y| row_text(&frame, *y, 120).contains("deepseek-v4-pro"))
+        .expect("第二行在屏幕上");
+    let column = row_text(&frame, row, 120)
+        .find("deepseek-v4-pro")
+        .map(|at| text_columns(&row_text(&frame, row, 120)[..at]) as u16)
+        .expect("它在");
+    click(&mut state, column, row);
+    assert_eq!(
+        answer.try_recv().expect("答案送出去了"),
+        Some(1),
+        "框内点一行等于选中那行"
+    );
+}
+
+#[test]
+fn a_long_picker_scrolls_and_answers_with_the_highlighted_row() {
+    // 候选多过浮层的高度：它在内部滚动，于是回车回的永远是**高亮那一行**而不是第几行。
+    let mut state = idle();
+    let owned: Vec<String> = (0..30).map(|i| format!("模型-{i:02}")).collect();
+    let labels: Vec<(&str, bool)> = owned.iter().map(|label| (label.as_str(), true)).collect();
+    let (request, mut answer) = picker("模型", &labels, 0);
+    state.request(request);
+    // 往下走二十九格 —— 浮层只有几行高，于是它滚过去了。
+    for _ in 0..29 {
+        state.key(Key::Char('j'));
+    }
+    state.key(Key::Enter);
+    assert_eq!(
+        answer.try_recv().expect("答案送出去了"),
+        Some(29),
+        "回的是高亮那一行的下标"
+    );
+}
+
+#[test]
+fn after_escaping_the_picker_escape_is_free_to_raise_the_exit_gesture() {
+    // 选择器关掉之后不留下任何会吃掉下一次 `Esc` 的东西：举手退出那两下照旧能用。
+    let mut state = idle();
+    let (request, mut answer) = picker("模型", &[("kimi-k3", true)], 0);
+    state.request(request);
+    state.key(Key::Esc);
+    assert_eq!(answer.try_recv().expect("取消送出去了"), None);
+    assert!(state.take_events().is_empty(), "取消不发任何手势");
+
+    // 举手那两下照旧：`Ctrl-C` 第一下只举手（提示行出现「再按一次」），第二下才退。
+    assert!(state.take_events().is_empty());
+    state.key(Key::CtrlC);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(
+        text.contains("再按一次 ctrl-c/ctrl-d 退出"),
+        "退出举手照旧举得起来：{text}"
+    );
+    state.key(Key::CtrlC);
+    assert!(state.should_quit(), "第二下 `Ctrl-C` 真的退出");
+}
+
+#[test]
+fn a_fixed_effort_model_says_instead_of_opening_an_empty_picker() {
+    // 那个模型没有档位旋钮，所以点它只给一句说明（spec §8），不是一块空浮层。
+    let mut state = {
+        let mut facts = facts();
+        facts.model = "MiniMax-M3".to_owned();
+        let (reply, line) = tokio::sync::oneshot::channel();
+        let mut state = TuiState::new(facts, std::path::PathBuf::from("/x/heng"), None);
+        state.request(ConsoleRequest::Prompt { reply });
+        drop(line);
+        state
+    };
+    let _ = state.take_events();
+    click_text(&mut state, 120, 24, "固定");
+    assert!(state.take_events().is_empty(), "没有可开的清单");
+    let rows = screen(120, 24, &mut state);
+    let hint = rows.last().expect("有一行");
+    assert!(
+        hint.contains("没有档位旋钮，思考常开"),
+        "提示行那一行是那句说明：{hint:?}"
+    );
+    // 而模型那一格照旧可点。
+    let mut state = {
+        let mut facts = facts();
+        facts.model = "MiniMax-M3".to_owned();
+        let (reply, line) = tokio::sync::oneshot::channel();
+        let mut state = TuiState::new(facts, std::path::PathBuf::from("/x/heng"), None);
+        state.request(ConsoleRequest::Prompt { reply });
+        drop(line);
+        state
+    };
+    let _ = state.take_events();
+    click_text(&mut state, 120, 24, "MiniMax-M3");
+    assert_eq!(
+        state.take_events(),
+        vec![FrontEndEvent::OpenPicker(heng::render::PickerKind::Model)]
+    );
+}
+
+#[test]
+fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
+    // 换 provider 就换发言者的名字：新的走「没人认领的槽位」，旧的颜色**不动**
+    // （`.scratch/model-switching/spec.md` §4）。
+    let mut state = {
+        let mut facts = facts();
+        facts.speaker_order = vec!["kimi".to_owned()];
+        let (reply, line) = tokio::sync::oneshot::channel();
+        let mut state = TuiState::new(facts, std::path::PathBuf::from("/x/heng"), None);
+        state.request(ConsoleRequest::Prompt { reply });
+        drop(line);
+        state
+    };
+    state.apply(message(8, "kimi 答的", None));
+    let before = screen(120, 24, &mut state);
+    let frame_before = buffer(120, 24, &mut state);
+
+    state.request(session_update(
+        "MiniMax-M3.1-Flash-Preview",
+        Some(ReasoningEffort::High),
+        1_048_576,
+        &["minimax-cn"],
+    ));
+    let _ = screen(120, 24, &mut state);
+
+    // 换名之后新发言者的第一行拿到**另一个**颜色，而转录里已经画过的行不改名。
+    state.apply(RenderEvent::Logged(heng::events::Event::new(
+        9,
+        heng::events::SpeakerId::Debater("minimax-cn".into()),
+        heng::events::EventPayload::MessageCompleted {
+            role: heng::events::Role::Assistant,
+            text: "minimax 答的".to_owned(),
+            reasoning: None,
+        },
+    )));
+    let rows = screen(120, 24, &mut state);
+    let frame = buffer(120, 24, &mut state);
+    let colour_at = |frame: &ratatui::buffer::Buffer, needle: &str| {
+        (0..24)
+            .find_map(|y| {
+                let row = row_text(frame, y, 120);
+                row.find(needle).map(|at| {
+                    (
+                        text_columns(&row[..at]) as u16,
+                        y,
+                        frame[(text_columns(&row[..at]) as u16, y)].fg,
+                    )
+                })
+            })
+            .map(|(_, _, colour)| colour)
+    };
+    let old = colour_at(&frame_before, "kimi");
+    let new = colour_at(&frame, "minimax-cn");
+    assert!(old.is_some(), "换之前那条发言在屏幕上");
+    assert!(new.is_some(), "换之后那条发言在屏幕上");
+    assert_ne!(old, new, "新名字没有复用旧名字的颜色槽位");
+    assert!(
+        rows.join("\n").contains("kimi") || !before.join("\n").contains("kimi"),
+        "已经画过的行不改名：{:?}",
+        rows.iter()
+            .filter(|row| row.contains("kimi"))
+            .collect::<Vec<_>>()
+    );
 }

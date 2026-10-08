@@ -725,11 +725,11 @@ fn interactive_feedback_reads_in_chinese() {
     );
     assert_eq!(
         wording::unknown_command("/nope", &[]),
-        "未知命令 /nope（可用：/undo、/discuss、/goal-new、/loop、/clear、/quit、/exit，或直接输入 /<技能名>）"
+        "未知命令 /nope（可用：/undo、/discuss、/goal-new、/loop、/model、/effort、/clear、/quit、/exit，或直接输入 /<技能名>）"
     );
     assert_eq!(
         wording::unknown_command("/nope", &["ask-matt", "release"]),
-        "未知命令 /nope（可用：/undo、/discuss、/goal-new、/loop、/clear、/quit、/exit；技能：/ask-matt、/release）"
+        "未知命令 /nope（可用：/undo、/discuss、/goal-new、/loop、/model、/effort、/clear、/quit、/exit；技能：/ask-matt、/release）"
     );
     assert_eq!(wording::skill_loaded("ask-matt"), "已加载技能 ask-matt");
     assert_eq!(
@@ -1113,7 +1113,7 @@ fn status_text(parts: &[wording::StatusPart]) -> String {
 }
 
 #[test]
-fn the_status_row_gives_up_the_model_then_the_mode_and_never_itself() {
+fn the_status_row_gives_up_the_model_with_the_effort_then_the_mode_and_never_itself() {
     // 短形永远带着自己的标签，所以不会凭空冒出一个
     // 没有解释的 `6%` —— 而一次调用报出它的输入之前，它会说出来，
     // 而不是显示一个零（spec §5）。
@@ -1122,27 +1122,68 @@ fn the_status_row_gives_up_the_model_then_the_mode_and_never_itself() {
 
     let model = "claude-sonnet-4-5";
     let share = wording::context_share_value(Some(12_345), 200_000);
-    // 四段，降级顺序是**先丢模型、再丢模式，最后剩「上下文 + 状态词」**
-    // —— 「在跑」最后才丢（`.scratch/tui-visual-language/spec.md` §17）。
-    // 标签只有 `模型` 与 `上下文`：模式的名字自己就是一个值。
+    // 五段，降级顺序是**先丢模型 + 档位、再丢模式，最后剩「上下文 + 状态词」**
+    // —— 模型与档位是同一件事的两半（这一场会话由谁答、答多深），所以它们同生共死；
+    // 「在跑」最后才丢（spec §11、§12）。
+    // 模型与档位之间**不**放 `┆` —— 那会把同一格说成两件事，所以它们之间是段内的 `·`。
     assert_eq!(
-        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 77)),
-        " 模型 claude-sonnet-4-5 ┆ 询问 ┆ 上下文 6% ┆ 就绪"
+        status_text(&wording::status_row(
+            model,
+            "high",
+            Mode::Ask,
+            &share,
+            "就绪",
+            90
+        )),
+        " 模型 claude-sonnet-4-5 · high ┆ 询问 ┆ 上下文 6% ┆ 就绪"
     );
     assert_eq!(
-        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 45)),
+        status_text(&wording::status_row(
+            model,
+            "high",
+            Mode::Ask,
+            &share,
+            "就绪",
+            50
+        )),
         " 询问 ┆ 上下文 6% ┆ 就绪",
-        "模型是第一个让位的字段"
+        "模型与档位一起让位"
     );
     assert_eq!(
-        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 17)),
+        status_text(&wording::status_row(
+            model,
+            "high",
+            Mode::Ask,
+            &share,
+            "就绪",
+            20
+        )),
         " 上下文 6% ┆ 就绪",
         "接着让位的是模式，最后剩的读数与状态词都在"
     );
     assert_eq!(
-        status_text(&wording::status_row(model, Mode::Ask, &share, "就绪", 4)),
+        status_text(&wording::status_row(
+            model,
+            "high",
+            Mode::Ask,
+            &share,
+            "就绪",
+            4
+        )),
         " 上下文 6% ┆ 就绪",
         "没有哪一档会拿掉这一行：连这一档都装不下的宽度归画家去截"
+    );
+    // 没有旋钮的模型显示 `固定`，它同样在那半格里（spec §8）。
+    assert_eq!(
+        status_text(&wording::status_row(
+            "MiniMax-M3",
+            wording::effort_fixed(),
+            Mode::Ask,
+            &share,
+            "就绪",
+            90
+        )),
+        " 模型 MiniMax-M3 · 固定 ┆ 询问 ┆ 上下文 6% ┆ 就绪"
     );
 }
 
@@ -1151,14 +1192,17 @@ fn the_status_row_marks_labels_values_and_separators() {
     use wording::StatusKind::{Label, Separator, Value};
     // 行内三档：标签退后、值靠前、分隔符只是线（§17）。
     // 整行前面那一格是留白，算一个值段。
-    let parts = wording::status_row("m", Mode::Ask, "6%", "就绪", 80);
+    // 段内那个 `·` 走**值**那一档（它是内容的一部分，不是段与段之间的框架线），
+    // 而段与段之间才是 `┆`（Separator）。
+    let parts = wording::status_row("m", "high", Mode::Ask, "6%", "就绪", 80);
     let kinds: Vec<wording::StatusKind> = parts.iter().map(|part| part.kind).collect();
     assert_eq!(
         kinds,
         vec![
-            Value, Label, Value, Separator, Value, Separator, Label, Value, Separator, Value
+            Value, Label, Value, Value, Value, Separator, Value, Separator, Label, Value,
+            Separator, Value
         ],
-        "四段、三档：{parts:?}"
+        "五段、三档：{parts:?}"
     );
 }
 

@@ -55,8 +55,8 @@ use crate::events::{Event, SpeakerId};
 pub use headless::Headless;
 pub use input::{
     AskRequest, CatalogEntry, CatalogKind, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsolePort,
-    ConsoleQuestions, ConsoleRequest, FrontEndEvent, LineReader, QuestionnaireRequest, console,
-    spawn_plain_console, spawn_plain_console_with,
+    ConsoleQuestions, ConsoleRequest, FrontEndEvent, LineReader, PickerKind, PickerOption,
+    PickerRequest, QuestionnaireRequest, console, spawn_plain_console, spawn_plain_console_with,
 };
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;

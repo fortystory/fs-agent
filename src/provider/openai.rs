@@ -330,12 +330,24 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
         );
     }
     if let Some(effort) = params.reasoning_effort {
-        if caps.supports_reasoning_effort {
+        // 查表而不是问「有没有这个开关」：每家每模型认的档位不同，给一个它不认的值是最容易
+        // 变成 400 的地方（`xhigh` 只对 MiniMax M3.1 有效，`medium` 任何 Kimi/DeepSeek 都不收）。
+        if caps.reasoning_efforts.contains(&effort) {
             body.insert("reasoning_effort".to_owned(), json!(effort.as_str()));
         } else {
             warnings.push(format!(
-                "model `{model}` 不接受 reasoning_effort；丢掉了显式设置的 `{}`",
-                effort.as_str()
+                "model `{model}` 没有 reasoning_effort=`{}` 这一档；丢掉了这个档位 \
+                 （它有：{}）",
+                effort.as_str(),
+                if caps.reasoning_efforts.is_empty() {
+                    "没有档位，思考档位固定".to_owned()
+                } else {
+                    caps.reasoning_efforts
+                        .iter()
+                        .map(|known| known.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                }
             ));
         }
     }

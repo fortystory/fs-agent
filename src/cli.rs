@@ -21,7 +21,7 @@ use std::sync::Arc;
 use ratatui::buffer::CellWidth;
 
 use crate::agent::{CancelSignal, UndoOutcome, replay};
-use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap};
+use crate::config::{self, Config, Debater, DiscussionRoster, EnvMap, ReasoningEffort};
 use crate::events::{
     ContextSource, Event, EventPayload, SessionId, SpeakerId, StopReason, Usage, read_events,
     total_usage,
@@ -34,8 +34,8 @@ use crate::provider::openai::{BuildError, OpenAiProvider, stderr_warnings};
 use crate::questions::{UserQuestion, UserQuestions};
 use crate::render::token::{self, Token};
 use crate::render::{
-    self, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsoleQuestions, FrontEndEvent,
-    PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
+    self, ConsoleAsker, ConsoleEvents, ConsoleHandle, ConsoleQuestions, FrontEndEvent, PickerKind,
+    PickerOption, PlainOptions, RenderSinks, Renderer, SessionFacts, TuiOptions,
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
@@ -348,6 +348,7 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             }
         };
         let facts = SessionFacts {
+            switchable: true,
             session_id: stored.id.as_str().to_owned(),
             session_dir: stored.dir.display().to_string(),
             model: model.clone(),
@@ -694,6 +695,10 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             }
         };
         let facts = SessionFacts {
+            // 讨论 CLI 这条路径上没有可换的模型：`model` 那一格是两个模型的**拼法**，那是名册里
+            // 的配置事实，不是一场活会话能中途改的值（`.scratch/model-switching/spec.md` §12）。
+            // 点它只给一句说明，`ctrl-t` 与 `/model` 同样回这一句。
+            switchable: false,
             session_id: stored.id.as_str().to_owned(),
             session_dir: stored.dir.display().to_string(),
             // 面板只有一行模型和一行上下文，而一场讨论有一对讨论者、没有单一窗口：这一行列出**两个
@@ -1067,6 +1072,9 @@ async fn discuss_in_session(
     // 同上：`Quit` 只记请求、让这场讨论拿到收尾，130 由 `interactive_loop` 兑现。
     // 这个 future 在它运行的整段时间里借走 harness，所以它自成一个作用域：下面的通告要把 harness
     // 拿回来。
+    // 回合 future 借着 harness，所以回执走一个在借用**之前**就克隆下来的渲染句柄
+    // （与 `ModeCycle` 同一个理由）。
+    let render = harness.render_handle();
     let outcome = {
         let mut run =
             Box::pin(harness.discuss(&question, debaters, synthesizer, roster.max_rounds));
@@ -1078,6 +1086,11 @@ async fn discuss_in_session(
                     // 柄之所以存在，是因为 run future 借走了 harness（spec §12）。
                     Some(FrontEndEvent::CycleMode) => {
                         modes.cycle();
+                    }
+                    // 运行中要切换：拒绝，并说清为什么（spec §6）。与模式手势不同形 ——
+                    // 换模型要换 provider 与请求参数，而一个讨论正在跑着。
+                    Some(FrontEndEvent::OpenPicker(_)) => {
+                        render.notice(&render::wording::heng(render::wording::switch_busy()));
                     }
                     Some(event) => quit.apply(&event, &signal),
                     // 输入结束让讨论像被取消一样落下来，所以流仍然得到它的收尾。
@@ -1106,6 +1119,7 @@ async fn run_discussion(
 ) -> Result<crate::agent::DiscussionOutcome, crate::Error> {
     let signal = harness.cancel_signal();
     let modes = harness.mode_cycle();
+    let render = harness.render_handle();
     let mut run = Box::pin(harness.discuss(question));
     loop {
         tokio::select! {
@@ -1114,6 +1128,13 @@ async fn run_discussion(
                 // 一个策略盖住三位参与者，所以这与它在别处的是同一个手势（spec §12）。
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
+                }
+                // 讨论 CLI 这条路径上换不了模型：模型是**名册**里的配置事实，而这一场
+                // 讨论是独立会话（spec §12）。所以这一格给的与忙闲无关，是另一句话。
+                Some(FrontEndEvent::OpenPicker(_)) => {
+                    render.notice(&render::wording::heng(
+                        render::wording::switch_not_switchable(),
+                    ));
                 }
                 Some(event) => quit.apply(&event, &signal),
                 // 输入结束让讨论像被取消一样落下来，所以流仍然得到它的收尾。
@@ -1160,6 +1181,285 @@ fn undo_receipt(outcome: Result<Option<UndoOutcome>, crate::Error>) -> String {
 }
 
 /// 读一行、跑它、重复 —— 直到用户离开或输入结束。
+/// 组装一个新模型：provider、会话配置与它挂在哪个 profile 下。
+///
+/// 会话中途换模型与换档的**四个入口**（`/model`、`/effort`、点状态行那两格、`ctrl-t`）都从这里
+/// 出（spec §7），所以「换完之后下一次请求长什么样」只有一个答案。
+///
+/// `carried_tokens` 由调用方给（从当前会话读出来）：累计额度是**会话**事实 —— 这一场之前已经
+/// 花掉的 token，换模型不该抹掉它（`.scratch/goal-loop/spec.md` §8 的「翻页不重置额度」是同一条
+/// 纪律）。其余从配置来的一切（预算、打码器、逐 agent 的旋钮、沙箱）照
+/// [`Config::session_config`] 给的走 —— 换模型后预算按新模型的配置走，这是对的。
+///
+/// `[routing]` 的两个覆盖由 `session_config` 重新填，而不是从上一场会话的副本抄过来：它们是**配置
+/// 事实**，换模型不该跟着上一场的模型走（spec「明确不做」第三条）。
+fn retarget_to(
+    config: &Config,
+    model: &str,
+    effort: Option<ReasoningEffort>,
+    carried_tokens: u64,
+) -> Result<Retargeted, String> {
+    // 先问能力表：没登记的 model id 那条错误把已知 id 列全了，是这里最有用的一句。
+    let caps = caps_for(model).map_err(|error| error.to_string())?;
+    let provider = OpenAiProvider::build(config, model, stderr_warnings())
+        .map_err(|error| error.to_string())?;
+    let profile = config
+        .resolve_model(Some(model))
+        .map_err(|error| error.to_string())?
+        .1
+        .name
+        .clone();
+    let mut session_config = config
+        .session_config(model)
+        .map_err(|error| error.to_string())?;
+    // 档位查的是刚拿到的那张能力表 —— 新模型不认的这一档在这里就落回「默认」，而不是留到回合
+    // 中途由适配器告警丢掉。
+    if let Some(wanted) = effort {
+        session_config.params.reasoning_effort =
+            caps.reasoning_efforts.contains(&wanted).then_some(wanted);
+    }
+    session_config.carried_tokens = carried_tokens;
+    Ok(Retargeted {
+        provider: Arc::new(provider),
+        config: session_config,
+        profile,
+    })
+}
+
+/// [`retarget_to`] 的产物。`profile` 是**发言者名字的来源**（spec §4）。
+struct Retargeted {
+    provider: Arc<dyn crate::provider::Provider>,
+    config: crate::config::SessionConfig,
+    profile: String,
+}
+
+/// 模型候选（spec §8）：`config.models` 的**全部**键，不只列现在跑得起来的那几个。
+///
+/// 顺序是 `BTreeMap` 的键序，不是插入序，所以两次列出来的读法一致。缺密钥的那几个**列着**
+/// 但灰掉，detail 点名那个环境变量 —— 人要看见「换一个模型」都有哪些可换的，而「这个还没配」
+/// 正是其中一条信息。
+fn model_picker_options(config: &Config, current: &str) -> Vec<PickerOption> {
+    config
+        .models
+        .iter()
+        .map(|(id, model)| {
+            let profile = config.providers.get(&model.provider);
+            let enabled = profile.is_some_and(|profile| profile.api_key.is_some());
+            let detail = match profile {
+                Some(_) if enabled => render::wording::model_detail_via(&model.provider),
+                // `profile.key_env` 就是修法（`ProviderProfile` 的文档注释明写这一点），所以
+                // 点名它而不是说「缺密钥」。
+                Some(profile) => render::wording::model_detail_missing_key(&profile.key_env),
+                None => render::wording::model_detail_missing_key(&model.provider),
+            };
+            PickerOption {
+                label: id.clone(),
+                detail,
+                current: id == current,
+                enabled,
+            }
+        })
+        .collect()
+}
+
+/// 档位候选（spec §8）：这一档（`current: true`）与「默认」（spec §5）。
+///
+/// **模型自己的档位表**决定有什么可切，所以两家厂商的五档与三档各自不同。表是空的
+/// （`MiniMax-M3`、`kimi-for-coding-highspeed`）时给**空清单**：那一格显示 `固定`，前端点它给
+/// 一句说明 —— 一个只有「默认」可选的清单会读成「有东西可切」，而那里其实什么也没有。
+fn effort_picker_options(model: &str, current: Option<ReasoningEffort>) -> Vec<PickerOption> {
+    let Ok(caps) = caps_for(model) else {
+        return Vec::new();
+    };
+    if caps.reasoning_efforts.is_empty() {
+        return Vec::new();
+    }
+    let mut options = vec![PickerOption {
+        label: render::wording::effort_default().to_owned(),
+        detail: render::wording::effort_default_detail().to_owned(),
+        current: current.is_none(),
+        enabled: true,
+    }];
+    // 能力表里那张表已经是弱到强排好的，所以画出来的顺序就是强度顺序。
+    options.extend(caps.reasoning_efforts.iter().map(|effort| PickerOption {
+        label: effort.as_str().to_owned(),
+        detail: String::new(),
+        current: current == Some(*effort),
+        enabled: true,
+    }));
+    options
+}
+
+/// 当前模型认不认这一档。`Err` 那句把它的档位列全 —— 换模型才可能得到它。
+fn effort_supported(model: &str, effort: ReasoningEffort) -> Result<(), String> {
+    let caps = caps_for(model).map_err(|error| error.to_string())?;
+    if caps.reasoning_efforts.contains(&effort) {
+        return Ok(());
+    }
+    Err(render::wording::effort_unknown_for(
+        model,
+        &caps
+            .reasoning_efforts
+            .iter()
+            .map(|known| known.as_str())
+            .collect::<Vec<_>>(),
+    ))
+}
+
+/// 档位在回执与状态行上的读法。`None` 是「默认」那一档，它**不是**缺省值（spec §5）。
+fn effort_label(effort: Option<ReasoningEffort>) -> String {
+    effort
+        .map(|effort| effort.as_str().to_owned())
+        .unwrap_or_else(|| render::wording::effort_default().to_owned())
+}
+
+/// 一次切换的正文：换 provider 与配置、推一条新事实回去（spec §3）。
+fn apply_switch(
+    harness: &mut Harness,
+    console: &ConsoleHandle,
+    config: &Config,
+    model: &str,
+    effort: Option<ReasoningEffort>,
+) -> Result<crate::Switched, String> {
+    let retargeted = retarget_to(config, model, effort, harness.carried_tokens())?;
+    let switched =
+        harness.switch_model(retargeted.provider, retargeted.config, &retargeted.profile);
+    console.session_update(
+        switched.model.clone(),
+        switched.effort,
+        switched.context_window,
+        switched.speakers.clone(),
+    );
+    Ok(switched)
+}
+
+/// 点状态行或按 `ctrl-t` 之后的那条路（spec §7）：算候选 → 发清单 → 等答案 → 切。
+///
+/// `running` 是忙闲判据（§6），由调用点给 —— 它就是「这个手势到达时有没有东西在跑」这
+/// 一件事，运行中给一句回执、空闲才真的开清单。四个入口共用这一个动作，所以「换完之后
+/// 下一次请求长什么样」只有一个答案。
+///
+/// 人取消了（`Esc` 或框外点击）就什么都不发生 —— 一次取消不是一次切换，不给回执。
+async fn open_picker(
+    harness: &mut Harness,
+    console: &ConsoleHandle,
+    config: &Config,
+    kind: PickerKind,
+    running: bool,
+) {
+    if running {
+        harness.notice(&render::wording::heng(render::wording::switch_busy()));
+        return;
+    }
+    let (title, options) = match kind {
+        PickerKind::Model => (
+            render::wording::picker_title_model(),
+            model_picker_options(config, harness.model()),
+        ),
+        PickerKind::Effort => (
+            render::wording::picker_title_effort(),
+            effort_picker_options(harness.model(), harness.effort()),
+        ),
+    };
+    let Some(index) = console.picker(title, options).await else {
+        return;
+    };
+    // 清单**现算一遍**（不是复用发出去的那份）：等待期间人可能已经用 `/model` 换过模型，
+    // 于是档位那张表已经不同了 —— 拿旧表去切会切到一个新模型不认的档位。判据同样现读
+    // `harness`：那才是此刻这一场会话真正的模型与档位。
+    let fresh = match kind {
+        PickerKind::Model => model_picker_options(config, harness.model()),
+        PickerKind::Effort => effort_picker_options(harness.model(), harness.effort()),
+    };
+    let picked = fresh.get(index);
+    let Some(choice) = picked else {
+        return;
+    };
+    // 禁用行点了没反应（前端那一层就已经不响应）；这里再判一次是为了不让一条别人的清单
+    // 走成切换。
+    if !choice.enabled {
+        return;
+    }
+    switch_to(harness, console, config, choice.label.clone(), kind);
+}
+
+/// 切换失败时把那句话给出去 —— 「组不出 provider」「这一档模型不认」都在这儿变成一句提示行。
+fn report(harness: &mut Harness, outcome: Result<(), String>) {
+    if let Err(message) = outcome {
+        harness.notice(&render::wording::heng(&message));
+    }
+}
+
+/// 切换本身，外加回执。两个命令与两个手势都到这里。
+fn switch_to(
+    harness: &mut Harness,
+    console: &ConsoleHandle,
+    config: &Config,
+    chosen: String,
+    kind: PickerKind,
+) {
+    // 换模型要把**当前档位**带着走（换档不需要 —— 它自己就是那一档），所以判据现读。
+    let receipt = match kind {
+        PickerKind::Model => {
+            let before = harness.effort();
+            switch_to_model(harness, console, config, &chosen, before)
+        }
+        PickerKind::Effort => switch_to_effort(harness, console, config, &chosen),
+    };
+    if let Err(message) = receipt {
+        harness.notice(&render::wording::heng(&message));
+    }
+}
+
+/// 换模型。档位照旧带着走 —— 人刚选的那一档不该因为换了模型而丢；新模型不认它时它落回
+/// 「默认」，而那件事要说出来（`Switched::effort` 就是它）。
+fn switch_to_model(
+    harness: &mut Harness,
+    console: &ConsoleHandle,
+    config: &Config,
+    model: &str,
+    before: Option<ReasoningEffort>,
+) -> Result<(), String> {
+    let switched = apply_switch(harness, console, config, model, before)?;
+    let mut receipt = render::wording::switched_model(&switched.model);
+    if switched.effort != before {
+        receipt.push_str(&format!(
+            "，{}",
+            render::wording::switched_effort(&effort_label(switched.effort))
+        ));
+    }
+    harness.notice(&receipt);
+    Ok(())
+}
+
+/// 换档。**只**改 `SessionConfig::params` —— provider 不读它（`build_body` 只从
+/// `ChatRequest.params` 读），所以这是一个纯配置动作，不需要重建 provider；把它当成与换
+/// 模型同一件事，是这里最容易有的误解。
+fn switch_to_effort(
+    harness: &mut Harness,
+    console: &ConsoleHandle,
+    config: &Config,
+    label: &str,
+) -> Result<(), String> {
+    let effort = if label == render::wording::effort_default() {
+        None
+    } else {
+        let Some(effort) = ReasoningEffort::from_token(label) else {
+            return Err(format!(
+                "`{label}` 不是一档思考强度；{}",
+                render::wording::effort_usage()
+            ));
+        };
+        Some(effort)
+    };
+    let model = harness.model().to_owned();
+    let switched = apply_switch(harness, console, config, &model, effort)?;
+    harness.notice(&render::wording::switched_effort(&effort_label(
+        switched.effort,
+    )));
+    Ok(())
+}
+
 async fn interactive_loop(
     harness: &mut Harness,
     console: &ConsoleHandle,
@@ -1231,6 +1531,11 @@ async fn interactive_loop(
                     }
                     Some(FrontEndEvent::CycleMode) => {
                         harness.mode_cycle().cycle();
+                    }
+                    // 点状态行那两格或按 `ctrl-t`（spec §7）。这里是**空闲**：这一支的整段
+                    // 期间只有提示行在等，没有回合、没有讨论，所以清单可以真的开出来。
+                    Some(FrontEndEvent::OpenPicker(kind)) => {
+                        open_picker(harness, console, config, kind, false).await;
                     }
                     None => return ExitCode::SUCCESS,
                 },
@@ -1356,6 +1661,42 @@ async fn interactive_loop(
                     harness.notice(&render::wording::heng(&message));
                 }
             }
+            // `/model <id>`：换模型。**不带参数不给开弹窗而是说一句用法** —— 选择器是 TUI
+            // 独占的交互，而这一路必须能一步到位（plain 前端就靠它换模型，spec §7）。
+            Submission::Model(args) => {
+                let model = args.trim();
+                if model.is_empty() {
+                    harness.notice(&render::wording::heng(render::wording::model_usage()));
+                } else if let Err(message) =
+                    switch_to_model(harness, console, config, model, harness.effort())
+                {
+                    harness.notice(&render::wording::heng(&message));
+                }
+            }
+            // `/effort <档>`：换档。这一条到达时一定**空闲**（提交只在回合之间被读），所以
+            // 不必判忙闲 —— 忙闲是那三个运行中到达的入口的事。
+            Submission::Effort(args) => {
+                let arg = args.trim();
+                if arg.is_empty() {
+                    harness.notice(&render::wording::heng(&render::wording::effort_usage()));
+                } else if let Some(effort) = ReasoningEffort::from_token(arg) {
+                    // 当前模型认不认这一档 —— 换模型才可能得到它，而「它有哪几档」本身就是答案的
+                    // 一半，所以这句说清，而不是默默落回「默认」。
+                    match effort_supported(harness.model(), effort) {
+                        Err(message) => harness.notice(&render::wording::heng(&message)),
+                        Ok(()) => {
+                            let label = effort.as_str();
+                            let outcome = switch_to_effort(harness, console, config, label);
+                            report(harness, outcome);
+                        }
+                    }
+                } else {
+                    // `默认` 与「不是一档」都由 [`switch_to_effort`] 自己判、自己说 —— 选择器那条
+                    // 路与它共用同一段判断，所以命令这一层不重写一遍。
+                    let outcome = switch_to_effort(harness, console, config, arg);
+                    report(harness, outcome);
+                }
+            }
             // 其余的都是 prompt，含换行：转录把它显示成用户写下的那一条消息（spec §12）。
             Submission::Prompt(text) => {
                 if let Err(error) =
@@ -1440,6 +1781,13 @@ enum Submission<'a> {
     Goal(String),
     /// `/loop <名字>`：选定目标并连续工作（§4）。参数是目标的名字，一个不断开的词。
     Loop(String),
+    /// `/model <model id>`：换这一场会话用的模型（spec §7）。缺参数是**用法错误**而不是
+    /// 「打开选择器」—— 选择器是 TUI 独占的交互，命令这一路必须能一步到位（plain 前端就靠
+    /// 它换模型）。
+    Model(String),
+    /// `/effort <档位>`：换思考强度（spec §7）。参数可以是五个档位之一或 `默认`（= 不发这个
+    /// 参数）。缺参数同样是用法错误。
+    Effort(String),
     /// `/clear`：结束当前会话、开一个新的（`.scratch/goal-loop/spec.md` §12）。**不是**「清空
     /// 上下文继续用」—— 旧会话留在磁盘上，进程不重启，渲染器与终端留着。
     Clear,
@@ -1518,6 +1866,10 @@ fn submission<'a>(
         "goal-new" => Submission::Goal(task),
         // `/loop <名字>`：一个参数，形状与 `/goal-new` 相同。
         "loop" => Submission::Loop(task),
+        // `/model <id>` 与 `/effort <档>`：换模型与换档。缺参数在这里**不**拦 —— 循环给一句
+        // 用法，与 `parse_goal_new_line` 缺参数是同一个形状（`Err(())` 然后一句话）。
+        "model" => Submission::Model(task),
+        "effort" => Submission::Effort(task),
         _ => {
             // `/<server>:<模板>`：模板条目是运行时才知道的名字，所以这里问的是那份菜单
             // （票 17）。冒号是它与人打出来的技能名的分界。
@@ -2300,6 +2652,8 @@ impl ExitRequest {
             FrontEndEvent::Cancel => signal.cancel(),
             // 模式循环在调用点自己处理。
             FrontEndEvent::CycleMode => {}
+            // 切换由调用点自己处理（忙闲判据在那一侧）。
+            FrontEndEvent::OpenPicker(_) => {}
         }
     }
 
@@ -2327,6 +2681,8 @@ async fn run_one_turn(
 ) -> Result<crate::agent::TurnOutcome, crate::Error> {
     let signal = harness.cancel_signal();
     let modes = harness.mode_cycle();
+    // 同上：回执走借用之前克隆下来的渲染句柄。
+    let render = harness.render_handle();
     let mut turn = Box::pin(async move {
         match start {
             TurnStart::Prompt(input) => harness.run_turn(input).await,
@@ -2342,6 +2698,10 @@ async fn run_one_turn(
                 // 中途换档」的意思。
                 Some(FrontEndEvent::CycleMode) => {
                     modes.cycle();
+                }
+                // 运行中要切换：拒绝，并说清为什么（spec §6）。
+                Some(FrontEndEvent::OpenPicker(_)) => {
+                    render.notice(&render::wording::heng(render::wording::switch_busy()));
                 }
                 Some(event) => quit.apply(&event, &signal),
                 // 输入结束让回合像被取消一样落下来，所以流仍然得到它的收尾。
@@ -3653,14 +4013,340 @@ fn print_sessions_help(out: &mut dyn Write) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExitRequest, McpPromptEntry, Mode, Submission, exit_code_after, finish_session, submission,
-        undo_receipt,
+        ConsoleHandle, ExitRequest, McpPromptEntry, Mode, Submission, exit_code_after,
+        finish_session, retarget_to, submission, undo_receipt,
     };
     use crate::agent::{CancelSignal, UndoOutcome};
-    use crate::events::ToolCallId;
-    use crate::render::FrontEndEvent;
+    use crate::config::{Config, ReasoningEffort};
+    use crate::events::{SessionId, SpeakerId, ToolCallId};
+    use crate::render::{ConsolePort, ConsoleRequest, FrontEndEvent, PickerKind, console};
+    use crate::{Harness, Policy};
     use std::path::PathBuf;
     use std::process::ExitCode;
+
+    /// 一张三家厂商都给了 key 的配置，于是 `retarget_to` 能真的组装出 provider。
+    fn switchable_config() -> crate::config::Config {
+        crate::config::resolve(
+            None,
+            &[
+                ("MOONSHOT_API_KEY", "sk-kimi"),
+                ("DEEPSEEK_API_KEY", "sk-deepseek"),
+                ("MINIMAX_API_KEY", "sk-minimax"),
+                ("MINIMAX_CN_API_KEY", "sk-minimax-cn"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+        )
+        .expect("一张能跑的配置")
+    }
+
+    /// 换模型是**重建**：provider 与配置都重新组装，而累计额度（会话事实）照旧带着走。
+    #[test]
+    fn retargeting_rebuilds_the_provider_and_carries_the_goal_usage_over() {
+        let config = switchable_config();
+        let retargeted = retarget_to(&config, "MiniMax-M3.1-Flash-Preview", None, 12_345)
+            .expect("MiniMax M3.1 有 key");
+
+        assert_eq!(retargeted.profile, "minimax");
+        assert_eq!(retargeted.config.model, "MiniMax-M3.1-Flash-Preview");
+        assert_eq!(retargeted.config.carried_tokens, 12_345);
+        // 请求参数是从这个模型的配置条目读的，不是从上一场会话抄的。
+        assert_eq!(
+            retargeted.config.executor_model,
+            config.routing.executor_model
+        );
+        // 换一个厂商就换 profile，于是发言者的名字也跟着换（spec §4）。
+        assert_eq!(
+            retargeted.config.model, "MiniMax-M3.1-Flash-Preview",
+            "模型 id 就是线上发的那一个"
+        );
+    }
+
+    /// 当前档位新模型不认时退回「默认」—— 而不是让适配器在回合中途把它丢掉。
+    #[test]
+    fn an_effort_the_new_model_cannot_have_falls_back_to_the_default() {
+        let config = switchable_config();
+        // M3.1 认 xhigh。
+        let kept = retarget_to(
+            &config,
+            "MiniMax-M3.1-Flash-Preview",
+            Some(ReasoningEffort::Xhigh),
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            kept.config.params.reasoning_effort,
+            Some(ReasoningEffort::Xhigh)
+        );
+
+        // Kimi 只有 low/high/max，于是 xhigh 落回「默认」（不发这个参数）。
+        let dropped = retarget_to(&config, "kimi-k3", Some(ReasoningEffort::Xhigh), 0).unwrap();
+        assert_eq!(dropped.config.params.reasoning_effort, None);
+        assert_eq!(dropped.profile, "kimi");
+
+        // 换档只是配置动作：`high` 照旧留着。
+        let high = retarget_to(&config, "kimi-k3", Some(ReasoningEffort::High), 0).unwrap();
+        assert_eq!(
+            high.config.params.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+    }
+
+    /// 没登记的模型与缺 key 的模型都是错误，且错的那句把修法说全。
+    #[test]
+    fn retargeting_to_a_model_that_cannot_be_assembled_says_why() {
+        let config = switchable_config();
+        let unknown = retarget_to(&config, "gpt-4o", None, 0).err().unwrap();
+        assert!(unknown.contains("gpt-4o"), "{unknown}");
+        assert!(unknown.contains("kimi-k3"), "已知 id 要列全：{unknown}");
+
+        // 一个指向没给 key 的 profile 的模型：那条错误必须点名那个环境变量（修法能直接抄）。
+        let config = crate::config::resolve(
+            Some(
+                "[providers.kimi-code-cn]\nbase_url = \"https://api.kimi.com/coding/v1\"\n\
+                 api_key_env = \"KIMI_CODE_CN_API_KEY\"\n\n\
+                 [models.\"kimi-k3\"]\nprovider = \"kimi-code-cn\"\n",
+            ),
+            &Default::default(),
+        )
+        .unwrap();
+        let message = retarget_to(&config, "kimi-k3", None, 0)
+            .err()
+            .expect("缺 key 就组不出 provider");
+        assert!(message.contains("KIMI_CODE_CN_API_KEY"), "{message}");
+    }
+
+    /// `/model` 与 `/effort` 进 `Submission`，且**命令记号在任何位置都算命令**。
+    ///
+    /// 后一半是 `input-tokens` 票 04 那条纪律：一条普通消息里夹着命令记号，仍然被解析成
+    /// 命令（而不是把整条当成 prompt）。
+    #[test]
+    fn the_switch_commands_are_parsed_and_a_token_anywhere_still_counts() {
+        assert!(matches!(read("/model kimi-k3"), Submission::Model(id) if id == "kimi-k3"));
+        assert!(matches!(read("/effort high"), Submission::Effort(effort) if effort == "high"));
+        assert!(matches!(read("/effort 默认"), Submission::Effort(effort) if effort == "默认"));
+        // 缺参数**不是**一条错误命令：它到循环那里才判（与 `parse_goal_new_line` 同形）。
+        assert!(matches!(read("/model"), Submission::Model(id) if id.is_empty()));
+        // 带点号的 id 不按点号切（`MiniMax-M3.1-Flash-Preview`）。
+        assert!(matches!(
+            read("/model MiniMax-M3.1-Flash-Preview"),
+            Submission::Model(id) if id == "MiniMax-M3.1-Flash-Preview"
+        ));
+        // 命令记号在**任何位置**都算命令；参数照旧是「记号旁边那一整段」，与 `/goal-new`
+        // 同一个形状（`input-tokens` 票 04 的纪律）。
+        assert!(matches!(
+            read("先看看这个 /model kimi-k3"),
+            Submission::Model(id) if id == "先看看这个 kimi-k3"
+        ));
+        // 内建命令带着记号之外的字仍然**不是**内建命令 —— 整条退回普通消息。
+        assert!(matches!(read("/model 这个"), Submission::Model(_)));
+    }
+
+    /// 模型候选：配置里的**全部**键，按键序，缺 key 的灰着并点名那个环境变量。
+    #[test]
+    fn the_model_candidates_are_every_configured_model_and_name_the_missing_key() {
+        let config = crate::config::resolve(
+            Some("[providers.kimi-code-cn]\nbase_url = \"https://api.kimi.com/coding/v1\"\napi_key_env = \"KIMI_CODE_CN_API_KEY\"\n\n[models.\"kimi-k3\"]\nprovider = \"kimi-code-cn\"\n"),
+            &[("MINIMAX_API_KEY", "sk-minimax")]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .collect(),
+        )
+        .unwrap();
+
+        let options = super::model_picker_options(&config, "MiniMax-M3.1-Flash-Preview");
+        let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
+        // 每个配置过的模型都在清单上（一个不多），而顺序是 **`BTreeMap` 的键序**，不是
+        // `BUILTIN_MODELS` 的声明序 —— 所以两次列出来读法一致。
+        let mut expected: Vec<&str> = crate::config::BUILTIN_MODELS
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        expected.sort();
+        assert_eq!(labels, expected);
+        assert!(
+            labels.windows(2).all(|pair| pair[0] < pair[1]),
+            "清单按键排好序：{labels:?}"
+        );
+        let current = options
+            .iter()
+            .find(|option| option.current)
+            .expect("当前那个被标出来了");
+        assert_eq!(current.label, "MiniMax-M3.1-Flash-Preview");
+
+        // 缺 key 的那一个灰着，而它的 detail **点名那个环境变量** —— 修法可以直接抄。
+        let missing = options
+            .iter()
+            .find(|option| option.label == "kimi-k3")
+            .expect("配置里的模型都在清单上");
+        assert!(!missing.enabled);
+        assert!(
+            missing.detail.contains("KIMI_CODE_CN_API_KEY"),
+            "缺哪个环境变量要说出来：{:?}",
+            missing.detail
+        );
+        // 有 key 的那一个可点，detail 说它走哪个 profile。
+        let usable = options
+            .iter()
+            .find(|option| option.label == "MiniMax-M3.1-Flash-Preview")
+            .unwrap();
+        assert!(usable.enabled);
+        assert!(usable.detail.contains("minimax"), "{:?}", usable.detail);
+    }
+
+    /// 档位候选：**第一档是「默认」**，其余按强度从弱到强；表为空时给空清单（前端显示 `固定`）。
+    #[test]
+    fn the_effort_candidates_start_with_the_default_and_follow_the_strength_order() {
+        let five =
+            super::effort_picker_options("MiniMax-M3.1-Flash-Preview", Some(ReasoningEffort::High));
+        assert_eq!(
+            five.iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["默认", "low", "medium", "high", "xhigh", "max"]
+        );
+        let current = five.iter().find(|option| option.current).unwrap();
+        assert_eq!(current.label, "high");
+
+        // Kimi 只有三档。
+        assert_eq!(
+            super::effort_picker_options("kimi-k3", None)
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["默认", "low", "high", "max"]
+        );
+        assert!(
+            super::effort_picker_options("kimi-k3", None)[0].current,
+            "None 就是「默认」那一档"
+        );
+
+        // 没有旋钮的模型：空清单。那一格显示 `固定`，而不是给一个只有「默认」可选的假清单。
+        assert!(super::effort_picker_options("MiniMax-M3", None).is_empty());
+        assert!(super::effort_picker_options("kimi-for-coding-highspeed", None).is_empty());
+    }
+
+    /// 一个共享的 `Vec<u8>`，拿来当 headless 渲染器的写出口。
+    #[derive(Clone, Default)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("sink 已中毒").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Sink {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("sink 已中毒").clone()).expect("sink 里是 UTF-8")
+        }
+    }
+
+    /// 一个交互式的循环与它那条键盘：忙闲判定、切换、回执都在这一对上面验。
+    async fn live_session(
+        config: &Config,
+    ) -> (Harness, ConsoleHandle, ConsolePort, Sink, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let cwd = dir.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("工作区");
+        let stderr = Sink::default();
+        let (console, port, _events) = console();
+        let harness = crate::assemble(crate::AssemblyParts {
+            provider: Box::new(
+                crate::provider::openai::OpenAiProvider::build(
+                    config,
+                    "kimi-k3",
+                    crate::provider::openai::silent_warnings(),
+                )
+                .expect("kimi-k3 有 key"),
+            ),
+            speaker: SpeakerId::Debater("kimi".into()),
+            config: config.session_config("kimi-k3").expect("kimi-k3 在配置里"),
+            renderer: crate::render::Renderer::headless(crate::render::RenderSinks {
+                stdout_result: Box::new(std::io::sink()),
+                stderr_diagnostic: Box::new(stderr.clone()),
+            }),
+            scaffold: crate::SessionScaffold {
+                cwd,
+                log_path: dir.path().join("log.jsonl"),
+                session_id: SessionId::new("s-1"),
+                tools: crate::tools::builtin(false),
+                locks: crate::tools::PathLocks::new(),
+                policy: Policy::for_mode(Mode::Ask),
+                // 没有交互式应答者，于是权限门降级为「不动手」：这些测试不写文件。
+                asker: None,
+                questions: None,
+                hook: None,
+                home: None,
+            },
+        })
+        .await
+        .expect("组装得起来");
+        (harness, console, port, stderr, dir)
+    }
+
+    /// 运行中切换被**拒绝**，而拒绝要说清为什么（spec §6）。
+    #[tokio::test]
+    async fn a_switch_while_something_runs_is_refused_with_a_reason() {
+        let config = switchable_config();
+        let (mut harness, console, mut port, stderr, _dir) = live_session(&config).await;
+
+        super::open_picker(&mut harness, &console, &config, PickerKind::Model, true).await;
+        // 没有清单发出去，而会话一点没变 —— 被拒绝的切换不重建 provider，也不推新事实。
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), port.recv())
+                .await
+                .is_err(),
+            "运行中不发清单"
+        );
+        assert_eq!(harness.model(), "kimi-k3");
+        // 渲染器是另一个 task：把它收掉，每一条渲染事件才都落到那两个写出口上。
+        harness.shutdown().await;
+        assert!(
+            stderr
+                .text()
+                .contains(super::render::wording::switch_busy()),
+            "拒绝给了那一句：{:?}",
+            stderr.text()
+        );
+    }
+
+    /// 空闲时那一份清单真的发到端口上了，而且人取消了之后什么都不会变。
+    #[tokio::test]
+    async fn an_idle_switch_asks_the_front_end_and_a_cancellation_changes_nothing() {
+        let config = switchable_config();
+        let (mut harness, console, mut port, stderr, _dir) = live_session(&config).await;
+
+        let front_end = tokio::spawn(async move {
+            match port.recv().await {
+                Some(ConsoleRequest::Picker(request)) => {
+                    let title = request.title.clone();
+                    let count = request.options.len();
+                    let _ = request.reply.send(None);
+                    (title, count)
+                }
+                other => panic!("期望一份清单，实际 {other:?}"),
+            }
+        });
+        super::open_picker(&mut harness, &console, &config, PickerKind::Model, false).await;
+        let (title, count) = front_end.await.expect("前端回来了");
+
+        assert_eq!(title, super::render::wording::picker_title_model());
+        assert_eq!(count, crate::config::BUILTIN_MODELS.len());
+        assert_eq!(harness.model(), "kimi-k3", "取消不是一次切换");
+        harness.shutdown().await;
+        assert!(
+            !stderr.text().contains("前缀缓存"),
+            "取消不给回执：{:?}",
+            stderr.text()
+        );
+    }
 
     /// 这些测试里一场会话知道的技能。
     fn has_skill(name: &str) -> bool {
@@ -4917,7 +5603,7 @@ mod tests {
         // 真相（参数形状只能各自解析），所以一致性由这条测试钉住。
         let mut parsed: Vec<&str> = Vec::new();
         for name in [
-            "undo", "discuss", "goal-new", "loop", "clear", "quit", "exit",
+            "undo", "discuss", "goal-new", "loop", "model", "effort", "clear", "quit", "exit",
         ] {
             let line = format!("/{name}");
             let submission = read(&line);

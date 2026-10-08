@@ -165,6 +165,16 @@ impl Session {
         &self.config
     }
 
+    /// 会话中途换模型与档位：换掉这一场的配置，其余（流、工具表、策略、读集、取消信号）原样。
+    ///
+    /// **只有 [`crate::Harness`] 调它** —— 它是 `/model`、`/effort`、点状态行与快捷键四个入口
+    /// 的共同落点，渲染器碰不到，也不该碰（spec §2）。字段保持私有而不改成 `pub`，是为了让
+    /// 「换了配置」这件事永远与「换了 provider」一起发生（[`crate::Harness::switch_model`]）：
+    /// 只改一半会让下一次请求拿新 id 去问旧 caps。
+    pub fn retarget(&mut self, config: SessionConfig) {
+        self.config = config;
+    }
+
     /// 这场会话在文本进入事件流的路上会打码掉的那些值（spec §20）。
     ///
     /// 由 [`SessionConfig`] 持有，因为 `Config::session_config` 是配置变成注入值的唯一一处；这个

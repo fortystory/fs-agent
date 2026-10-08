@@ -43,6 +43,35 @@ pub struct QuestionnaireRequest {
     pub reply: oneshot::Sender<Result<UserAnswers, String>>,
 }
 
+/// 一次「从这份清单里挑一个」的问话（spec §9）。
+///
+/// 与 [`Ask`](ConsoleRequest::Ask) 同形的**一问一答**通道，只是答案是一个下标而不是一个许可。
+/// 走自己的那一格而不是复用问卷：问卷是**模型发起**的（答完它那条工具调用就结束了），选择
+/// 器是**人发起**的会话属性（答完回循环，改这一场会话用什么模型）。这两件事的生命周期不同，
+/// 共用一条通道会让其中一个悬着等人回答。
+#[derive(Debug)]
+pub struct PickerRequest {
+    /// 「模型」/「思考强度」。
+    pub title: String,
+    pub options: Vec<PickerOption>,
+    /// 选中的那一行的下标，`None` = 取消（`Esc` 或框外点击）。
+    pub reply: oneshot::Sender<Option<usize>>,
+}
+
+/// 清单里的一行。
+///
+/// `detail` 是**为什么**这一行长这样（挂在哪个 profile、缺哪个环境变量），而不是装饰 —— 它
+/// 回答的是「我点了它会发生什么」。`enabled: false` 的行画成灰的且点了不响应：缺密钥的模型
+/// 切过去组不出 provider，与其给一次请求时的失败，不如在清单上就说明白。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickerOption {
+    pub label: String,
+    pub detail: String,
+    /// 当前这一场会话用的就是它。
+    pub current: bool,
+    pub enabled: bool,
+}
+
 /// 菜单里一个 `/` 名字的**来处**：三样东西共用一个菜单，而它们该看得出是三类。
 ///
 /// 它只影响名字的颜色（颜色住在 `/` 菜单那一节的调色板里）—— 分派仍旧只看名字，与类别无关。
@@ -115,6 +144,20 @@ pub enum ConsoleRequest {
     /// 把模型的问卷摆到用户面前（spec §7）。它的答案类型与 [`Ask`](Self::Ask) 的不同，
     /// 所以走自己的通道。
     Questionnaire(QuestionnaireRequest),
+    /// 把一份清单摆到用户面前，让他挑一个（spec §9）。答 `None` 就是取消。
+    Picker(PickerRequest),
+    /// 换完模型/档位之后循环推回来的新事实（spec §3）。
+    ///
+    /// 这是**发完就完**的通知，与 [`Muted`](Self::Muted) / [`RunState`](Self::RunState) 同一格：
+    /// 循环推、前端收，没有答案要等。之所以要推，是因为这三样是注入的只读值 —— 换了模型之后
+    /// 上下文窗口可能变（1M ↔ 256K），而它是状态行那个 `n%` 的分母，前端自己算不出来。
+    SessionUpdate {
+        model: String,
+        effort: Option<crate::config::ReasoningEffort>,
+        context_window: u64,
+        /// 新的发言者名册（spec §4）：名字是 provider profile 的名字，换厂商就换名。
+        speakers: Vec<String>,
+    },
     /// 开头的 `/` 能变成哪些名字。
     ///
     /// 组装之后立刻推一次，因为技能来自会话，没有什么能更早把它们列出来。一个不画菜单的
@@ -153,6 +196,18 @@ pub enum FrontEndEvent {
     CycleMode,
     /// 用户要求离开。
     Quit,
+    /// 点状态行那两格，或按 `ctrl-t`：打开模型/档位的选择器（spec §7）。
+    ///
+    /// **只带载荷，不带实现**：前端不知道现在忙不忙（渲染器不知道什么在跑），所以它只是说
+    /// 「有人要开这个」。判忙闲、发清单、真的切换都在循环那一侧。
+    OpenPicker(PickerKind),
+}
+
+/// 要开哪一份清单。`Copy` 是刻意的：加上它不破坏 [`FrontEndEvent`] 的 `Copy`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerKind {
+    Model,
+    Effort,
 }
 
 /// 键盘上属于循环的那一端。
@@ -203,6 +258,49 @@ impl ConsoleHandle {
     /// 照它一如既往的样子行事。
     pub fn replay(&self, events: Vec<Event>) {
         let _ = self.requests.send(ConsoleRequest::Replay { events });
+    }
+
+    /// 把一份清单摆到用户面前并等一个下标（`None` = 取消）。
+    ///
+    /// 候选由**循环**算好送过来（spec §8）：渲染器从不伸手去够配置，而「哪些模型可用」要读
+    /// `Config`、`caps_for` 与环境变量。前端只画拿到的清单。
+    ///
+    /// 一个已经走了的前端 —— 或者根本不支持选择器的那条路（plain）—— 读作 `None`，也就是
+    /// 取消，而不是一次挂住的等待。
+    pub async fn picker(
+        &self,
+        title: impl Into<String>,
+        options: Vec<PickerOption>,
+    ) -> Option<usize> {
+        let (reply, answer) = oneshot::channel();
+        if self
+            .requests
+            .send(ConsoleRequest::Picker(PickerRequest {
+                title: title.into(),
+                options,
+                reply,
+            }))
+            .is_err()
+        {
+            return None;
+        }
+        answer.await.ok().flatten()
+    }
+
+    /// 把换完模型/档位之后的新事实推给前端（spec §3）。发完就完。
+    pub fn session_update(
+        &self,
+        model: String,
+        effort: Option<crate::config::ReasoningEffort>,
+        context_window: u64,
+        speakers: Vec<String>,
+    ) {
+        let _ = self.requests.send(ConsoleRequest::SessionUpdate {
+            model,
+            effort,
+            context_window,
+            speakers,
+        });
     }
 }
 
@@ -375,6 +473,13 @@ pub fn spawn_plain_console_with(
                     let answers = answer_questionnaire(&mut reader, &request.questions).await;
                     let _ = request.reply.send(answers);
                 }
+                // 选择器是 TUI 独占的交互：这条路径上没有键盘，于是答案是取消而不是一个
+                // 下标（spec「明确不做」）。想在这条路径上换模型就用 `/model <id>`。
+                ConsoleRequest::Picker(request) => {
+                    let _ = request.reply.send(None);
+                }
+                // 没有状态行，所以换完模型的新事实无处可去（plain 前端不显示它们）。
+                ConsoleRequest::SessionUpdate { .. } => {}
                 // 面向行的前端没有菜单：名字靠那句未知命令的文案去发现。
                 ConsoleRequest::Catalog { .. } => {}
                 // 禁言对这条前端是**构造性**的：它只在循环要一行的时候读，而无人值守的循环

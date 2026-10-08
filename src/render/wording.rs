@@ -1838,6 +1838,16 @@ pub const GAP: &str = "   ";
 /// 一行里各条目的分隔。
 pub const SEP: &str = " · ";
 
+/// 选择器里「当前项」那一行的记号。
+///
+/// 它是**选择器**的符号，与问卷那四枚是不同的一套（`.scratch/tui-visual-language/spec.md`
+/// §26 那一族里问卷占了自己的形状）—— 一块浮层上只需要「这一行是当前的」与「这一行选不了」
+/// 两枚。
+pub const PICKER_CURRENT: &str = "▸";
+
+/// 选择器里「这一行选不了」的记号（缺密钥的模型，spec §8）。
+pub const PICKER_DISABLED: &str = "×";
+
 /// 一项那一行开头的字形。一张 [`mode_label`] 那样的表，于是「哪个字形是什么意思」只有
 /// 一个归宿，左栏那一页自己一个都不留。
 pub fn todo_glyph(status: crate::tools::todo::Status) -> &'static str {
@@ -1926,28 +1936,37 @@ impl StatusPart {
     }
 }
 
-/// 状态行：`模型 X │ Y │ 上下文 n% │ 状态词`，宽度阶梯折在里面。
+/// 状态行：`模型 X · 档位 ┆ 模式 ┆ 上下文 n% ┆ 状态词`，宽度阶梯折在里面。
 ///
-/// 四段、三档角色：标签退后、值靠前、分隔符只是线（§17）。**标签只有 `模型` 与 `上下文`
-/// 两个**：模式的名字自己就是一个值（prototype 的 `模型 kimi │ 询问 │ 上下文 42%`）。
+/// **视觉上五段、数组里四段**：模型与档位之间没有段分隔符（见下），所以它们是同一段的两半 —/
+/// 而降级时两半一起丢，这正是「同生共死」在代码里的形状。
 ///
-/// 降级顺序是**先丢模型、再丢模式，最后剩「上下文 + 状态词」** —— 「在跑」最后才丢，它住在
-/// 永远在场的那一行上（§16–§18）。
+/// 五段、三档角色：标签退后、值靠前、分隔符只是线（§17）。**标签只有 `模型` 与 `上下文`
+/// 两个**：模式的名字与档位自己就是一个值。
+///
+/// **模型与档位之间没有 [`STATUS_SEPARATOR`]**：它们是同一格的两半 —— 这一场会话由谁答、答多深 ——
+/// 而一条段与段之间的线会把它们说成两件可以各丢各的事。它们之间用段内的 [`SEP`]。
+///
+/// 降级顺序是**先丢「模型 + 档位」、再丢模式，最后剩「上下文 + 状态词」**（spec §11）：
+/// 前两者同生共死，而「在跑」最后才丢，它住在永远在场的那一行上（§16–§18）。
 ///
 /// 刻意**没有**一档是把整行拿走。那需要的宽度比 [`super::layout::MIN_WIDTH`] 还窄，所以
 /// 这一行永远会画；一个连最后一档都放不下的 `width` 由画家去截。
 pub fn status_row(
     model: &str,
+    effort: &str,
     mode: Mode,
     share: &str,
     word: &str,
     width: usize,
 ) -> Vec<StatusPart> {
-    // 一段 = 标签 + 值；模式与状态词两段只有值。段与段之间是 ` │ `，整行前面留一格。
+    // 一段 = 标签 + 值；模式与状态词两段只有值。段与段之间是 ` ┆ `，整行前面留一格。
     let segments: [Vec<StatusPart>; 4] = [
         vec![
             StatusPart::label(format!("{PANEL_MODEL} ")),
             StatusPart::value(model),
+            StatusPart::value(SEP),
+            StatusPart::value(effort),
         ],
         vec![StatusPart::value(mode_label(mode))],
         vec![
@@ -1966,6 +1985,7 @@ pub fn status_row(
         }
         parts
     };
+    // 先丢「模型 + 档位」（同一格的两半），再丢模式；剩下那一档是「上下文 + 状态词」。
     for rung in [&segments[..], &segments[1..], &segments[2..]] {
         let parts = row(rung);
         let columns: usize = parts
@@ -2035,7 +2055,7 @@ pub struct Command {
 /// **一族命令用连字符写成一条**（`/goal-new`，将来 `/goal-list` / `/goal-show` / `/goal-rm`
 /// 照走）：空格形状的子命令在 `/` 菜单里补不出来（菜单按命令名的前缀过滤，`new` 是第二个词），
 /// 而 `/goal-` 一个前缀就能把这一族全列出来。
-pub static BUILT_IN_COMMANDS: [Command; 7] = [
+pub static BUILT_IN_COMMANDS: [Command; 9] = [
     Command {
         name: "undo",
         description: "回滚上一次编辑",
@@ -2051,6 +2071,14 @@ pub static BUILT_IN_COMMANDS: [Command; 7] = [
     Command {
         name: "loop",
         description: "选定目标并连续工作：`/loop <名字>`",
+    },
+    Command {
+        name: "model",
+        description: "换这个会话用的模型：`/model <model id>`",
+    },
+    Command {
+        name: "effort",
+        description: "换思考强度：`/effort <low|medium|high|xhigh|max|默认>`",
     },
     Command {
         name: "clear",
@@ -2072,6 +2100,105 @@ pub static BUILT_IN_COMMANDS: [Command; 7] = [
 /// 语言护栏那一侧也不必把同一个前缀数上二十几遍。
 pub fn heng(message: &str) -> String {
     format!("heng: {message}")
+}
+
+/// 选择器的标题：模型那一份。
+pub fn picker_title_model() -> &'static str {
+    "模型"
+}
+
+/// 选择器的标题：思考强度那一份。
+///
+/// 不写「档位」：状态行那一格写的是「档位」，而这里要说明选的是**这一场会话让模型想多深**。
+pub fn picker_title_effort() -> &'static str {
+    "思考强度"
+}
+
+/// 「默认」那一档。它**不是**缺省值 —— 它是不发 `reasoning_effort`，由厂商自己挑（spec §5）。
+pub fn effort_default() -> &'static str {
+    "默认"
+}
+
+/// 「默认」那一档的说明：说清它与「某个具体档位」不是一回事。
+pub fn effort_default_detail() -> &'static str {
+    "不发 `reasoning_effort`，由厂商自己挑它的缺省"
+}
+
+/// 状态行上那个模型没有档位旋钮时显示的值（spec §8）。
+pub fn effort_fixed() -> &'static str {
+    "固定"
+}
+
+/// 点那一格时说的那句：这个模型没有档位可选，所以点它什么都不变（spec §8）。
+///
+/// **短**是硬要求：它落在提示行上，而提示行要把键位提示与出口也留在同一行
+/// （[`status_line_with`] 的阶梯）—— 一句放不下的回执读起来就是「点了没反应」，而那正是要
+/// 避免的那件事。
+pub fn effort_fixed_detail(model: &str) -> String {
+    format!("{model} 没有档位旋钮，思考常开")
+}
+
+/// 模型候选里「有 key」时的那句 detail：这个模型挂在哪个 profile 上。
+pub fn model_detail_via(provider: &str) -> String {
+    format!("走 `{provider}`")
+}
+
+/// 模型候选里「缺 key」时的那句 detail：**点名那个环境变量**，于是修法可以直接抄。
+pub fn model_detail_missing_key(env: &str) -> String {
+    format!("缺 `{env}`，切过去会起不来")
+}
+
+/// 运行中要切换时给的那句回执（spec §6）。四个入口共用它。
+pub fn switch_busy() -> &'static str {
+    "这一回合跑完再切"
+}
+
+/// 讨论会话里点状态行那两格（或用命令）时说的那句（spec §12）。
+///
+/// `facts.model` 是两个模型的拼法 —— 那是配置事实，不是这一场会话可以中途改的值。
+pub fn switch_not_switchable() -> &'static str {
+    "讨论里的两位是配置事实，不在会话中途换"
+}
+
+/// `/model` 不带参数时说的用法：选择器是 TUI 独占的，命令这一路必须能一步到位。
+pub fn model_usage() -> &'static str {
+    "`/model <model id>`：换一个模型，例如 `/model kimi-k3`；要挑的话点状态行那格或按 ctrl-t"
+}
+
+/// `/effort` 不带参数时说的用法。
+pub fn effort_usage() -> String {
+    format!(
+        "`/effort <档位>`：low、medium、high、xhigh、max，或者 `{}`；能用哪几档由当前模型决定",
+        effort_default()
+    )
+}
+
+/// `/effort <这一档当前模型没有>` 时说的那句，并把它的档位列全。
+pub fn effort_unknown_for(model: &str, known: &[&str]) -> String {
+    let have = if known.is_empty() {
+        "它一个档位都没有".to_owned()
+    } else {
+        format!("它有：{}", known.join("、"))
+    };
+    format!("`{model}` 没有这一档；{have}")
+}
+
+/// 换完之后的回执（spec §13）。
+///
+/// 那半句「前缀缓存重来」不是每次都拦着不让换 —— 代价是真的，但它是**代价**：换档与换模型都会
+/// 让厂商侧的前缀缓存失效、下一次调用要重新读一遍上下文。让人知道自己刚付了什么。
+pub fn switched_model(model: &str) -> String {
+    format!("模型 → {model}（前缀缓存重来，下一次调用会重新读一遍上下文）")
+}
+
+/// 换完档位之后的回执，与 [`switched_model`] 同一个代价说明。
+pub fn switched_effort(effort: &str) -> String {
+    format!("档位 → {effort}（前缀缓存重来，下一次调用会重新读一遍上下文）")
+}
+
+/// 选择器页脚那行键位提示。
+pub fn picker_keys() -> &'static str {
+    "j/k 移动 · 回车 选择 · esc 取消"
 }
 
 /// `/goal-new` 的用法：参数不对时说的那句。

@@ -91,7 +91,10 @@ api_key = "sk-..."
 
 [models.kimi-k3]
 temperature = 0.6
-# reasoning_effort = "high"   # 会话开始前定死，中途切档会废掉前缀缓存
+# reasoning_effort = "high"   # low/medium/high/xhigh/max；只是**起手**的那一档，会话中途
+#                             # `/effort <档>` 或点状态行那格就能改（回执会说明前缀缓存重来）。
+#                             # 能给哪几档由模型决定：Kimi 与 DeepSeek 三档，MiniMax M3.1 另有
+#                             # medium/xhigh，而 K2.7 HighSpeed 与 `MiniMax-M3` 没有这个旋钮。
 
 [turn]                        # 回合上限：一个回合最多多少次 provider 调用（spec §3 / §16）
 # max_iterations = 1000         # 一个回合的调用上限（默认 100），讨论者也走这条；
@@ -133,6 +136,9 @@ miss_input = 0.28
 cached_input = 0.028
 output = 0.42
 # MiniMax：M Plan 的订阅 Key（`sk-cp-` 前缀）只吃套餐额度，国内站写 `provider = "minimax-cn"`，带点号的 id 要给 TOML 键加引号（`[models."MiniMax-M3"]`）。
+
+# 按模型写档位：`[models."MiniMax-M3.1-Flash-Preview"] reasoning_effort = "xhigh"`（它独有
+# medium/xhigh；`MiniMax-M3` 那个 id 不收这个参数，状态行显示「固定」）。
 ```
 
 文件页点开一个文件时，浮层里默认是**内置的只读预览**（渲染器读盘、高亮、带行号，瞬时、不起进程）。`[ui] file_viewer = "nvim"` 换成**一屏真的 nvim**：读你自己的 `~/.config/nvim`（`XDG_CONFIG_HOME` / `NVIM_APPNAME` 照常生效），只读（`-M -R`，状态行亮 `[RO]`）、不折行，键盘与鼠标都归它 —— `Ctrl-C` 或点浮层外面退出，`:q` 也行；宽度上限 `file_viewer_width`（缺省 135），起不来就回退内置预览。它不进事件流、不进模型上下文，也不过沙箱。
@@ -159,7 +165,7 @@ heng --tui                  # 强制 TUI（与 --plain 互斥）
 heng --continue             # 接着跑本工作区最新的会话（会话 id 不变，前缀缓存继续命中）
 heng -c 20261001T155845Z-7a69cbff   # 按 id 续指定的一场（不带 id 就是最新；先在本桶找、再全 store；它在别的工作区时会切到那个目录）
 heng --session 20261001T155845Z-7a69cbff   # 同一个意思的显式拼写
-heng --model deepseek-v4-pro
+heng --model deepseek-v4-pro  # **起手**那一个；会话中途换用 `/model <id>`、点状态行那格，或按 Ctrl-T
 heng --config /path/to/config.toml  # 换一份配置文件
 heng --cwd /path/to/repo
 heng discuss "把权限模型换成 X，风险在哪？"   # 两个异构讨论者 + 合成器
@@ -167,9 +173,11 @@ heng discuss --plain "…" 2>/dev/null          # 只要合成产物（讨论过
 heng --help
 ```
 
-会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/goal-new <名字> <来源>…` 从一批票生成目标清单、`/loop <名字>` 选定目标并连续工作、`/clear` 结束当前会话开一个新的、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出（`/exit` 是它的别名）。
+会话里：`/undo` 回滚上一次编辑、`/discuss [--debaters A,B] [问题]` 就在**这个会话里**起一场多角色讨论（讨论者用本会话的上下文各自作答，事件写进同一条流；`--debaters` 指定池子里的哪两位，不写就随机抽两个；不带问题就用最后一个问题）、`/goal-new <名字> <来源>…` 从一批票生成目标清单、`/loop <名字>` 选定目标并连续工作、`/clear` 结束当前会话开一个新的、`/model <model id>` 与 `/effort <low|medium|high|xhigh|max|默认>` 换这个会话用的模型与思考强度（**只在空闲生效**：运行中拒绝并给一句「这一回合跑完再切」；换档与换模型都会打掉前缀缓存，回执里会说）、`/<技能名> [任务]` 直接运行一个技能（包括标了 `disable-model-invocation: true` 的；不带任务就按技能正文立刻开工）、`/quit` 退出（`/exit` 是它的别名）。
 
 TUI 里输入 `/` 会弹出补全窗口（命令 + 技能，跟随光标、按已输入的字符过滤，`Tab` 只补全、回车补全并提交），**Esc** 取消正在跑的回合（问卷立着时除外 —— 那里的 `Esc` 是「退出这次询问」，取消归 `Ctrl-C`）、**Shift+Tab** 在 `readonly` / `ask` / `workspace` / `auto` 四档权限模式之间循环（当前档位就在状态行上）。写类工具要不要问、`readonly` 档下能不能写、区外的写要不要停下来问一次，全由这一档决定；`--mode` 旗标与 `[permissions] mode` 是它的两个入口。
+
+**Ctrl-T** 或点状态行的 `模型 X · high` 那两格打开选择器（`j`/`k` 移动、回车选中、`Esc` 取消）：清单列的是 `config.toml` 里登记的全部模型（缺 key 的灰着，detail 点名那个环境变量）与当前模型那几档加一档「默认」；没有档位旋钮时那一格显示 `固定`。
 
 ### TUI 长什么样
 
@@ -272,7 +280,7 @@ hook.pre → 权限门 → [询问] → dispatch → hook.post → 追加事件
 | [`.scratch/fs-agent-v1/spec.md`](.scratch/fs-agent-v1/spec.md) | v1 spec：问题陈述、用户故事、20 节实现决定、测试决定、明确的「明确不做」 |
 | [`docs/`](docs/) | 逐面说明：[`bash`](docs/bash.md) · [`credentials`](docs/credentials.md) · [`custom-tools`](docs/custom-tools.md) · [`discussion`](docs/discussion.md) · [`executor`](docs/executor.md) · [`goals`](docs/goals.md) · [`grep`](docs/grep.md) · [`observability`](docs/observability.md) · [`permissions`](docs/permissions.md) · [`render`](docs/render.md) · [`repo-map`](docs/repo-map.md) · [`sandbox`](docs/sandbox.md) · [`skills`](docs/skills.md) · [`highlight`](docs/highlight.md) · [`tui-manual-checklist`](docs/tui-manual-checklist.md) · [`web`](docs/web.md) · [`mcp`](docs/mcp.md) |
 | [`docs/lifecycle.md`](docs/lifecycle.md) | **运行时生命周期**：从敲下命令到进程退出的五张图（一张鸟瞰 + 四张分层详图）与逐节点的 `文件:行号` 证据表，把上面各份逐面说明接起来；护栏是 [`scripts/lifecycle-check.py`](scripts/lifecycle-check.py)（守指称完整性，见它的用法） |
-| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） · [输入框里的记号是不可分割的一块](docs/adr/0012-input-tokens-are-atomic.md)（`@路径` 与 `/命令` 整块删、整块移） · [文件页那一档可以换成一块外来屏幕（内嵌 nvim）](docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)（`[ui] file_viewer = "nvim"`；三处例外见该 ADR） · [名字从 `fs-agent` 改成衡（`heng`）](docs/adr/0014-renamed-to-heng.md)（汉字是正身、`heng` 是拼音；历史不追改，`Forked Synthesis` 退作机制名） · [标记上的扫光](docs/adr/0015-mark-light-sweep.md)（只在运行中扫过；峰值白） · [用量长在产生它的那次调用的行上](docs/adr/0016-usage-rides-the-row-of-its-call.md)（尾巴与回合合计都由渲染层算；诊断通道一个字不动） |
+| [`docs/adr/`](docs/adr/) | 不可逆的决定：[中文 UI 与冻结的模型文本](docs/adr/0001-chinese-ui-frozen-model-text.md) · [全屏备用屏幕（alt screen）TUI](docs/adr/0002-fullscreen-alt-screen-tui.md)（含标记与其代价）· [「计划」从权限模式里搬出来](docs/adr/0003-plan-leaves-the-permission-modes.md)（模式三档 + 模型的 `todo` 工具；后来由 ADR 0007 加了第四档 `workspace`）· [散文用中文，标识符与「进 `messages` / 进流」的文本留英文](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md)（语言的线，加 `check-language.py` 的护栏；那张「英文只留三类」的清单已被 ADR 0005 取代） · [模型可见与进流的文本也走中文](docs/adr/0005-model-visible-text-in-chinese.md)（语言按「是不是标识符」分，推翻 ADR 0001 的那一半） · [让 shell 的写边界由内核担保：bubblewrap 沙箱](docs/adr/0006-sandbox-by-bubblewrap.md)（默认开 + fail closed；网络不在这一层） · [第四档权限模式 `workspace`](docs/adr/0007-workspace-permission-mode.md)（区外要问；被内核拒之后的一条升级通道） · [Markdown 的解析交给 `pulldown-cmark`](docs/adr/0008-markdown-parsing-by-pulldown-cmark.md)（渲染仍是我们自己的；`to_lines` 因此开始收宽度） · [目标是一份文件，进度与额度都从会话流派生](docs/adr/0009-goals-are-files-and-progress-is-derived.md)（目标不进会话状态；`/loop`、翻页与跨会话预算都建在这条上） · [问卷的键位按区域分派，单选与多选共用一个答案形状](docs/adr/0010-questionnaire-keys-dispatch-by-zone.md)（`Zone` 替换布尔；`selected` 与 `custom` 并存，推翻 §7 那条单选覆盖的约定） · [文档里的流程图用 mermaid](docs/adr/0011-diagrams-in-mermaid.md)（流程图用受约束的 mermaid 方言，图配证据表 + `scripts/lifecycle-check.py` 对账；已有五处 ASCII 图一个字不改） · [输入框里的记号是不可分割的一块](docs/adr/0012-input-tokens-are-atomic.md)（`@路径` 与 `/命令` 整块删、整块移） · [文件页那一档可以换成一块外来屏幕（内嵌 nvim）](docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)（`[ui] file_viewer = "nvim"`；三处例外见该 ADR） · [名字从 `fs-agent` 改成衡（`heng`）](docs/adr/0014-renamed-to-heng.md)（汉字是正身、`heng` 是拼音；历史不追改，`Forked Synthesis` 退作机制名） · [标记上的扫光](docs/adr/0015-mark-light-sweep.md)（只在运行中扫过；峰值白） · [用量长在产生它的那次调用的行上](docs/adr/0016-usage-rides-the-row-of-its-call.md)（尾巴与回合合计都由渲染层算；诊断通道一个字不动） · [模型与思考强度是会话中途可变的会话值](docs/adr/0017-model-and-effort-switch-mid-session.md)（走 `FrontEndEvent` + `Picker`，不进事件流；推翻 `minimax-provider` 的「会话开始定死」） |
 | [`docs/research/`](docs/research/) | 一手调研的**原始笔记**（`coding-agent-features.md` 是横向对比，`notes/` 下五份是上游正文，合计约 792KB）：材料，不是结论 —— 结论已折进 `.scratch/` 的 spec 与 `docs/` 的逐面文档 |
 | [`.scratch/README.md`](.scratch/README.md) | **feature 索引**：一行一个 feature —— 是 spec 还是决策地图、一句话、票数与完成度 |
 | [`AGENTS.md`](AGENTS.md) | agent 在本仓库工作时的约定（文档往哪写、语言怎么选、提交怎么写）；它的四条细则（issue tracker / triage labels / domain docs / docs）在 [`docs/agents/`](docs/agents/) 的四份约定（`issue-tracker` / `triage-labels` / `domain` / `commits`）与上表 |

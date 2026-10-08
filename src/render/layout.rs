@@ -291,7 +291,12 @@ impl Regions {
 
     /// 一个 `rows` 个显示行高的问题去哪儿：在主列里居中，在那里画不清楚时哪儿都不去。
     pub fn modal(&self, rows: u16) -> Option<Rect> {
-        let width = self.modal_width();
+        self.modal_sized(self.modal_width(), rows)
+    }
+
+    /// 一个**自己算宽度**的模态去哪儿：选择器用它 —— 那一列候选用不着整块模态那么宽，
+    /// 而一个 model id 可能很长（`.scratch/model-switching/spec.md` §10）。
+    pub fn modal_sized(&self, width: u16, rows: u16) -> Option<Rect> {
         let height = rows.saturating_add(BORDER_COLUMNS);
         if width <= BORDER_COLUMNS || height > self.main.height {
             return None;

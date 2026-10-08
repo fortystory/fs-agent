@@ -5,16 +5,41 @@
 //! 某个模型的形状，要么拒绝去猜。
 //!
 //! 这些数字的来源是厂商自己的 API 参考：Kimi（`kimi-k3`，1M 上下文，`max_completion_tokens`
-//! 上限 1048576，`reasoning_effort` 取 low/high/max，`cached_tokens`，`prompt_cache_key`，缓
-//! 存下限 256 个 prompt token）、DeepSeek（`deepseek-flash` / `deepseek-v4-pro`，1M 上下文，
+//! 上限 1048576，`reasoning_effort` 取 `low`/`high`/`max`，`cached_tokens`，`prompt_cache_key`，
+//! 缓存下限 256 个 prompt token）、DeepSeek（`deepseek-flash` / `deepseek-v4-pro`，1M 上下文，
 //! 384K 最大输出，`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，没有
 //! `prompt_cache_key`）与 MiniMax（`MiniMax-M3.1-Flash-Preview` / `MiniMax-M3`，1M 上下文，
-//! `reasoning_split` 把思考拆到 `reasoning_content`，`reasoning_effort` 只对 M3.1 生效，缓存
-//! 是自动的、512 个输入 token 起，命中报在 `prompt_tokens_details.cached_tokens`）。
+//! `reasoning_split` 把思考拆到 `reasoning_content`，`reasoning_effort` 只对 M3.1 生效且它有
+//! 五档 `low`/`medium`/`high`/`xhigh`/`max`，缓存是自动的、512 个输入 token 起，命中报在
+//! `prompt_tokens_details.cached_tokens`）。
+//!
+//! 档位集合是**每模型各有一份**的：Kimi 的 K2.7 HighSpeed 思考常开（空表），DeepSeek 与 Kimi
+//! K3 是三档，M3.1 是五档。厂商自己还会在别的版本上改这张表，所以它住在数据里而不是枚举里。
 
 use std::fmt;
 
-use crate::config::Vendor;
+use crate::config::{ReasoningEffort, Vendor};
+
+/// 三个 Kimi / DeepSeek 模型共有的那一组档位：`low` / `high` / `max`。
+///
+/// 静态表让 `ModelCaps` 保持 `Copy`（它到处被按值传），所以这些是常量而不是 `Vec`。
+const LOW_HIGH_MAX: &[ReasoningEffort] = &[
+    ReasoningEffort::Low,
+    ReasoningEffort::High,
+    ReasoningEffort::Max,
+];
+
+/// MiniMax M3.1 的全部五档，比别家多出 `medium` 与 `xhigh`。
+const FIVE_EFFORTS: &[ReasoningEffort] = &[
+    ReasoningEffort::Low,
+    ReasoningEffort::Medium,
+    ReasoningEffort::High,
+    ReasoningEffort::Xhigh,
+    ReasoningEffort::Max,
+];
+
+/// 没有这个旋钮：思考常开，模型不收 `reasoning_effort`（空表）。
+const NO_EFFORTS: &[ReasoningEffort] = &[];
 
 /// 承载输出 token 上限的那个线上参数。Kimi 弃用了 `max_tokens`、改用
 /// `max_completion_tokens`；DeepSeek 仍然记的是 `max_tokens`。
@@ -50,8 +75,12 @@ pub struct ModelCaps {
     pub supports_tools: bool,
     /// 会返回 `reasoning_content`。
     pub supports_reasoning: bool,
-    /// 接受顶层的 `reasoning_effort` 档位。
-    pub supports_reasoning_effort: bool,
+    /// 这个模型认哪几档 `reasoning_effort`，**从弱到强**排好序。空表 = 没有这个旋钮
+    /// （Kimi 的 `kimi-for-coding-highspeed` 思考常开，MiniMax 的 `M3` 干脆不收这个字段）。
+    ///
+    /// 这不是「有这个开关」的 `bool`：它回答的是「**有哪几档**」，三家厂商不一样，所以选择器
+    /// 的候选就是这张表（spec §1）。适配器发请求时查它 —— **绝不发给模型一个它不认的值**。
+    pub reasoning_efforts: &'static [ReasoningEffort],
     /// 带工具的请求里，模型自己的 `reasoning_content` 是否必须重放；丢掉它是厂商侧的错误
     /// （DeepSeek 直接 400）。重放由投影（§5）负责，这个标志只记录它为什么不是可选项。
     pub requires_reasoning_replay: bool,
@@ -94,14 +123,14 @@ pub fn caps_for(model: &str) -> Result<ModelCaps, UnknownModel> {
         // 同一个 K3 模型，一个是 Open Platform 的 id，两个是编程套餐的 id。
         "kimi-k3" | "k3" => k3_caps(1_048_576),
         "k3-256k" => k3_caps(262_144),
-        // Kimi Code 的 K2.x 模型。`kimi-for-coding` 是 K2.8 Preview（接受一个 effort
-        // 档位）；`kimi-for-coding-highspeed` 是 K2.7 Code，思考常开、没有档位。
-        "kimi-for-coding" => kimi_code_k2_caps(1_048_576, true),
-        "kimi-for-coding-highspeed" => kimi_code_k2_caps(262_144, false),
+        // Kimi Code 的 K2.x 模型。`kimi-for-coding` 是 K2.8 Preview（接受三个档位）；
+        // `kimi-for-coding-highspeed` 是 K2.7 Code，思考常开、没有档位。
+        "kimi-for-coding" => kimi_code_k2_caps(1_048_576, LOW_HIGH_MAX),
+        "kimi-for-coding-highspeed" => kimi_code_k2_caps(262_144, NO_EFFORTS),
         "deepseek-v4-pro" | "deepseek-flash" => deepseek_caps(),
         // MiniMax 的 M3 系：`reasoning_effort` 只对 M3.1 生效，其余一模一样。
-        "MiniMax-M3.1-Flash-Preview" => minimax_caps(true),
-        "MiniMax-M3" => minimax_caps(false),
+        "MiniMax-M3.1-Flash-Preview" => minimax_caps(FIVE_EFFORTS),
+        "MiniMax-M3" => minimax_caps(NO_EFFORTS),
         other => return Err(UnknownModel::new(other)),
     };
     Ok(caps)
@@ -118,7 +147,7 @@ fn k3_caps(context_window: u32) -> ModelCaps {
         max_output_tokens: context_window,
         supports_tools: true,
         supports_reasoning: true,
-        supports_reasoning_effort: true,
+        reasoning_efforts: LOW_HIGH_MAX,
         requires_reasoning_replay: true,
         supports_temperature: false,
         supports_top_p: false,
@@ -130,14 +159,17 @@ fn k3_caps(context_window: u32) -> ModelCaps {
     }
 }
 
-fn kimi_code_k2_caps(context_window: u32, supports_reasoning_effort: bool) -> ModelCaps {
+fn kimi_code_k2_caps(
+    context_window: u32,
+    reasoning_efforts: &'static [ReasoningEffort],
+) -> ModelCaps {
     ModelCaps {
         vendor: Vendor::Kimi,
         context_window,
         max_output_tokens: context_window,
         supports_tools: true,
         supports_reasoning: true,
-        supports_reasoning_effort,
+        reasoning_efforts,
         requires_reasoning_replay: true,
         supports_temperature: true,
         supports_top_p: true,
@@ -157,7 +189,7 @@ fn deepseek_caps() -> ModelCaps {
         max_output_tokens: 393_216,
         supports_tools: true,
         supports_reasoning: true,
-        supports_reasoning_effort: true,
+        reasoning_efforts: LOW_HIGH_MAX,
         requires_reasoning_replay: true,
         supports_temperature: true,
         supports_top_p: true,
@@ -178,14 +210,14 @@ fn deepseek_caps() -> ModelCaps {
 /// 缓存是自动的（没有 `prompt_cache_key` 这类参数），512 个输入 token 起才缓存，命中的读数报在
 /// `prompt_tokens_details.cached_tokens`。`reasoning_effort` 只有 M3.1 认；`reasoning_split`
 /// 两条都发，于是思考一律走 `reasoning_content` —— 默认形态会把 `<think>` 留在正文里。
-fn minimax_caps(supports_reasoning_effort: bool) -> ModelCaps {
+fn minimax_caps(reasoning_efforts: &'static [ReasoningEffort]) -> ModelCaps {
     ModelCaps {
         vendor: Vendor::MiniMax,
         context_window: 1_048_576,
         max_output_tokens: 1_048_576,
         supports_tools: true,
         supports_reasoning: true,
-        supports_reasoning_effort,
+        reasoning_efforts,
         requires_reasoning_replay: true,
         supports_temperature: true,
         supports_top_p: true,

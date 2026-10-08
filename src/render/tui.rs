@@ -43,13 +43,14 @@ use tokio::sync::broadcast;
 
 use crate::events::{ContextSource, Event, EventPayload, Role, StopReason, ToolCallId, Usage};
 use crate::permissions::{Answer, Mode, PermissionRequest};
+use crate::provider::capability::caps_for;
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
 use super::editor::{self, Input};
 use super::file_index::{self, FileIndex};
 use super::files;
 use super::highlight;
-use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent};
+use super::input::{CatalogEntry, ConsolePort, ConsoleRequest, FrontEndEvent, PickerKind};
 use super::layout;
 use super::links;
 use super::opener;
@@ -142,6 +143,13 @@ pub enum Key {
     /// 视图手势，所以忙闲都生效，也不清举手；只有两个独占键盘的视图（详情覆盖层、历史重放）
     /// 拦得住它。
     CtrlO,
+    /// `Ctrl-T`：打开模型/档位的选择器（`.scratch/model-switching/spec.md` §7）。
+    ///
+    /// 它不归任何视图管 —— 与 `Ctrl-Z` 同一档 —— 但**选择器立着时归选择器**（先判它）。
+    ///
+    /// 为什么不取 `Ctrl-M`：它在终端里就是回车（`\r`），crossterm 报成 `KeyCode::Enter`，
+    /// 与「提交」正面撞车 —— 与 `Ctrl-J` 是同一件事（`.scratch/tui-feedback/spec.md` §9）。
+    CtrlT,
     PageUp,
     PageDown,
 }
@@ -164,6 +172,9 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 'j' => Some(Key::Newline),
                 'z' => Some(Key::CtrlZ),
                 'o' => Some(Key::CtrlO),
+                // `Ctrl-M` 不在这儿：它在终端里就是回车（`\r`），落到下面那个 `Enter` 分支
+                // 里去 —— 与「提交」撞车（spec §7）。
+                't' => Some(Key::CtrlT),
                 _ => None,
             };
         }
@@ -234,6 +245,28 @@ impl SpeakerColors {
             roster,
             free_slots,
             extra: Vec::new(),
+        }
+    }
+
+    /// 名册在会话中途换了（换 provider 就换了发言者的名字，spec §4）时的更新。
+    ///
+    /// **已经分配过槽位的名字一个都不动** —— 颜色对读的人必须稳定，而新名字走「没人认领的
+    /// 槽位」那条路，与 `/discuss` 中途加入的讨论者同一条。于是同一场会话里先后两个名字各有
+    /// 各的颜色，而转录里已经画过的行不改名（事件流只追加）：那正是那一段注释写明的意图。
+    ///
+    /// 注意 [`Self::roster`] **不**被换掉：它是**组装时**那份名册，也就是槽位按位置分配
+    /// 的依据；换掉它会让同一个名字在换一次之后拿到另一个颜色。当前名册是
+    /// [`SessionFacts::speaker_order`]，它只管显示。
+    pub fn adopt_roster(&mut self, roster: &[String]) {
+        if roster.is_empty() {
+            return;
+        }
+        self.uncoloured = false;
+        for name in roster {
+            let known = self.roster.contains(name) || self.extra.contains(name);
+            if !known {
+                self.extra.push(name.clone());
+            }
         }
     }
 
@@ -321,6 +354,13 @@ pub struct SessionFacts {
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
     /// 名册不在流上（票 07 §1）。
     pub speaker_order: Vec<String>,
+    /// 状态行那两格能不能点、能不能真的换（spec §12）。
+    ///
+    /// 单 agent 会话是 `true`；**讨论 CLI 那条路径**是 `false`，因为那里的
+    /// [`model`](Self::model) 是两个模型的拼法 —— 那是名册里的配置事实，不是一场活会话
+    /// 能中途改的值（`.scratch/model-switching/spec.md` §12）。组装时定下来：讨论那些参与者
+    /// 是同时组装的，而换档要换 provider 与请求参数，与模式手势不同形。
+    pub switchable: bool,
 }
 
 /// TUI 的注入值：console 通道的前端这一端，加上左栏与状态行要显示的那些事实。
@@ -794,6 +834,20 @@ pub struct TuiState {
     /// 每个发言者的名字用什么颜色画（票 07）。放在这里而不是每行重算，因为会话中途第一
     /// 次出现的名字得保住已经发给它的那个槽位。
     colors: SpeakerColors,
+    /// 状态行那一格显示的推理档位（spec §11）。它是**渲染器状态**，与 `mode` 同一格：
+    /// 循环推一条 `SessionUpdate` 过来，前端并进它自己的显示，不进事件流 ——
+    /// 换档是会话属性，不是这一场会话发生过的一件事。
+    effort: Option<crate::config::ReasoningEffort>,
+    /// 会话中途换模型/档位的选择器浮层（spec §10）。
+    ///
+    /// 它**不进** `questionnaire()` 那条路径：问卷是模型发起的，答完就是那条工具调用的结果；
+    /// 选择器是人发起的会话属性，答完要回循环去改这一场会话
+    /// （`.scratch/model-switching/spec.md` §10）。键盘归属按「谁立着谁拿」判。
+    picker: Option<Picker>,
+    /// 提示行上那一句短的说明（spec §12：讨论会话里点状态行那两格）。
+    ///
+    /// 与复制/打开链接那两句回执同一个机制与同一段寿命：提示行一次只留一句最新的。
+    notice: Option<(std::time::Instant, String)>,
     /// 正在被思考的那一段的推理增量。它是一条思考行两半之间的桥：这行在第一个增量上开
     /// 出来，等 trace 完成时用这里的内容重写，因为完整的 trace 只在 `MessageCompleted`
     /// 上才有（票 02 §1）。
@@ -1360,6 +1414,10 @@ enum HitAction {
     SwitchMainTab(MainTab),
     /// 跳到这个单位的开头，跟点它的回合条格子一样（spec §4）。
     TurnRailUnit(usize),
+    /// 点状态行的模型那一格：打开模型清单（spec §7）。
+    SwitchModel,
+    /// 点状态行的档位那一格：打开思考强度清单（spec §7）。
+    SwitchEffort,
 }
 
 /// 一个问题占着指针时的一次指针手势。
@@ -1385,6 +1443,11 @@ struct Regions {
 }
 
 impl Regions {
+    /// 记下一块可点的区域。
+    fn push(&mut self, rect: Rect, action: HitAction) {
+        self.cells.push(Region { rect, action });
+    }
+
     /// 忘掉一切：每帧调一次，在画任何东西之前。
     fn clear(&mut self) {
         self.cells.clear();
@@ -1787,6 +1850,9 @@ impl TuiState {
             main_tab: MainTab::Conversation,
             sidebar_wanted: true,
             colors,
+            effort: None,
+            picker: None,
+            notice: None,
             reasoning: String::new(),
             thinking_speaker: crate::events::SpeakerId::System,
             thinking_open: false,
@@ -1976,6 +2042,9 @@ impl TuiState {
         }
         if open_receipt(self.opened.as_ref(), now).is_none() {
             self.opened = None;
+        }
+        if notice_line(self.notice.as_ref(), now).is_none() {
+            self.notice = None;
         }
     }
 
@@ -3028,6 +3097,11 @@ impl TuiState {
     /// 是这一帧自己的那些部件，回合条与页签排在它们旁边的文字之前。这里从不滚动某个立着的东西
     /// 背后的转录（票 04 §2，`tui-sidebar` spec §7）。
     fn click_at(&mut self, column: u16, row: u16) {
+        // 选择器**不独占指针**（spec §10）：框外点击关掉它（与详情覆盖层同一条），框内点一行
+        // 等于选中那行，其余点击照旧分派 —— 立着的时候输入区仍然可以被点，键盘归属才不变。
+        if self.picker.is_some() && self.picker_click(column, row) {
+            return;
+        }
         if self.detail_open() {
             // 框外的一次点击关掉它 —— 它来自的那一行、转录、页脚，什么都行
             // （票 02 §4；2026-09-23 修正，原先只认「再点同一行」）。框内的点击是覆盖层自己的、
@@ -3090,6 +3164,10 @@ impl TuiState {
                 }
             }
             Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
+            // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
+            // 拼法**，是名册里的配置事实，所以它只给一句说明。
+            Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
+            Some(HitAction::SwitchEffort) => self.ask_picker(PickerKind::Effort),
             Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
             _ if self.indicator_hit(Viewport::Trace, column, row) => self.trace.to_bottom(),
             _ if self.indicator_hit(Viewport::Conversation, column, row) => {
@@ -3393,6 +3471,100 @@ impl TuiState {
         }
         self.release_sidebar_keyboard();
         true
+    }
+
+    /// 「有人要开这份清单」：能换就上行一个手势，换不了就给一句说明。
+    ///
+    /// 忙闲不在这里判 —— 渲染器不知道什么在跑，所以只上行；循环那一侧答一句「这一回合跑完
+    /// 再切」（spec §6）。
+    fn ask_picker(&mut self, kind: PickerKind) {
+        if !self.facts.switchable {
+            self.say(wording::heng(wording::switch_not_switchable()));
+            return;
+        }
+        // 没有档位旋钮的模型：开出来只会是一个**空**浮层（spec §8 的那一句正是为了这个），
+        // 所以这里给一句说明，而不是让读的人看见一块没有候选的盒子。
+        if kind == PickerKind::Effort && self.fixed_effort() {
+            self.say(wording::effort_fixed_detail(&self.facts.model));
+            return;
+        }
+        self.events.push(FrontEndEvent::OpenPicker(kind));
+    }
+
+    /// 指针落在选择器上时的那一下（spec §10）。
+    ///
+    /// 框内点一行等于选中它（禁用行不响应），框外关掉它。回答 `true` 表示这一下已经被它吃掉。
+    fn picker_click(&mut self, column: u16, row: u16) -> bool {
+        let Some(picker) = self.picker.as_ref() else {
+            return false;
+        };
+        let inside = picker
+            .rect
+            .is_some_and(|rect| rect.contains((column, row).into()));
+        if !inside {
+            let mut picker = self.picker.take().expect("刚判过它在");
+            picker.close(None);
+            return true;
+        }
+        let hit = picker
+            .rows
+            .iter()
+            .find(|(line, _)| *line == row)
+            .map(|(_, index)| *index);
+        match hit {
+            // 只有**画出来**的行才点得到（与问卷的选项区同一条纪律）。
+            Some(index) => {
+                let enabled = picker
+                    .options
+                    .get(index)
+                    .is_some_and(|option| option.enabled);
+                if enabled {
+                    let mut picker = self.picker.take().expect("刚判过它在");
+                    picker.close(Some(index));
+                }
+            }
+            None => return false,
+        }
+        true
+    }
+
+    /// 选择器立着时的一个按键（spec §10）。
+    ///
+    /// `Ctrl-T` 在这里**不**上行 —— 它归选择器自己（这一格被它占着），而别的手势照旧穿透：
+    /// 退出、挂起、左栏开关、模式循环都不该因为开着一份清单而失灵（与
+    /// `sidebar_key` 同一判据）。
+    fn picker_key(&mut self, key: Key) {
+        match key {
+            Key::Char('j') | Key::Down => {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.move_highlight(1);
+                }
+            }
+            Key::Char('k') | Key::Up => {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.move_highlight(-1);
+                }
+            }
+            Key::Enter => {
+                // 禁用行不响应：回车在那里什么都不发生，浮层还立着（spec §8）。
+                if self
+                    .picker
+                    .as_ref()
+                    .is_some_and(Picker::highlighted_is_enabled)
+                {
+                    let mut picker = self.picker.take().expect("刚判过它在");
+                    let answer = picker.highlight;
+                    picker.close(Some(answer));
+                }
+            }
+            // 取消不是一次切换，也不给回执（spec §7）。
+            Key::Esc => {
+                if let Some(mut picker) = self.picker.take() {
+                    picker.close(None);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// 键盘在左栏时的一个按键：归这一页回答 `true`。
@@ -3811,6 +3983,40 @@ impl TuiState {
                 questionnaire.reset_zone();
                 self.pending = Some(Pending::Questionnaire(questionnaire));
             }
+            // 换完模型/档位之后循环推回来的新事实（spec §3）。它是**通知**：没有答案要等，
+            // 前端把它并进自己那份注入事实，然后请一帧。
+            ConsoleRequest::SessionUpdate {
+                model,
+                effort,
+                context_window,
+                speakers,
+            } => {
+                self.facts.model = model;
+                self.facts.context_window = context_window;
+                self.facts.speaker_order = speakers;
+                // 档位是渲染器状态（与 `mode` 同一格）：它不进 `facts`，因为它是**会话中途**
+                // 才有的值，而注入的 facts 是组装时的快照。
+                self.effort = effort;
+                // 名册换了，于是每个新名字去拿一个没人认领的颜色槽位 ——
+                // `SpeakerColors` 已经为这件事备好了路（spec §4）。
+                self.colors.adopt_roster(&self.facts.speaker_order);
+            }
+            // 一份「从这份清单里挑一个」的问话（spec §9）。
+            ConsoleRequest::Picker(request) => {
+                // 覆盖层与问题为它退下：一个还没回答的问题不该被一块浮层压住，而一份清单
+                // 也只可能在这一刻没有别的东西占着键盘。
+                self.close_detail();
+                if matches!(
+                    self.pending,
+                    Some(Pending::Loop { .. } | Pending::Questionnaire(_))
+                ) {
+                    // 循环一次只问一个问题，所以这不可能发生。丢掉*新*的那份让屏幕上那个
+                    // 仍然可答 —— 与 `Ask` 同一个读法。
+                    let _ = request.reply.send(None);
+                    return;
+                }
+                self.picker = Some(Picker::new(request));
+            }
             // 循环能作用上去的那些名字。它们在组装之后到达一次 —— skills 来自会话 ——
             // 没有别的东西携带它们。
             ConsoleRequest::Catalog { entries } => {
@@ -3980,6 +4186,13 @@ impl TuiState {
         if self.file_viewer.is_some() && self.viewer_key(key) {
             return;
         }
+        // 选择器立着时**键盘归它**（spec §10）：`j/k` 与上下键移动高亮、回车选中、`Esc`
+        // 取消，其余可打印字符不落进草稿。关掉之后键盘原样还回去 —— 与问卷立着时输入区禁言
+        // 是同一条纪律。
+        if self.picker.is_some() {
+            self.picker_key(key);
+            return;
+        }
         // 详情覆盖层是一个自成一体的视图模式：它立着的时候占着键盘，而它下面的转录冻在
         // 读的人离开的地方（票 02 §4）。
         if self.detail_open() {
@@ -4003,6 +4216,16 @@ impl TuiState {
         // 左栏开关（`.scratch/sidebar-toggle/spec.md` §3）：排在两个「独占键盘的视图」之后
         // —— 详情覆盖层与历史重放各自拦得住它 —— 而在清举手之前：它是纯视图手势，不该让
         // 半分钟前那一下退出举手作废；问卷 / `/` 菜单立着时也照常生效。
+        // `Ctrl-T`：打开模型/档位的选择器（spec §7）。它排在左栏开关旁边 —— 同样不归任何
+        // 视图管，同样忙闲都生效 —— 而选择器立着时它归选择器（上面那一支已经提前返回）。
+        //
+        // `Ctrl-M` 不能用：它在终端里就是回车（`\r`），crossterm 报成 `KeyCode::Enter`，
+        // 与「提交」正面撞车（`map_key` 那里记着同一件事）。
+        if key == Key::CtrlT {
+            // 讨论会话里的模型是名册里的配置事实，不换：给一句说明。
+            self.ask_picker(PickerKind::Model);
+            return;
+        }
         if key == Key::CtrlO {
             self.sidebar_wanted = !self.sidebar_wanted;
             // 收起来的那一栏不该扣着键盘：下一次打字要落进输入区。
@@ -4490,7 +4713,10 @@ impl TuiState {
         // `wording::hint_row` 保住 —— 回执不许把它挤掉。打开的回执排在同一位、更靠前一点：
         // 两者同时新鲜是几乎不可能的事，真撞上了就让更重的那件事说话
         // （`.scratch/clickable-links/spec.md` §4）。
-        let receipt = self.open_receipt().or_else(|| self.copy_receipt());
+        let receipt = self
+            .notice_line()
+            .or_else(|| self.open_receipt())
+            .or_else(|| self.copy_receipt());
         if self.prompt_reply.is_some() {
             wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
         } else {
@@ -4508,6 +4734,35 @@ impl TuiState {
     /// 最近一次打开的那句回执（成功或失败），还在寿命内的话。
     fn open_receipt(&self) -> Option<String> {
         open_receipt(self.opened.as_ref(), std::time::Instant::now())
+    }
+
+    /// 状态行那一格显示的档位：表为空时是 `固定`，而「默认」那**一档**是 `None`
+    /// （spec §5、§8）。
+    fn effort_label(&self) -> String {
+        if self.fixed_effort() {
+            return wording::effort_fixed().to_owned();
+        }
+        self.effort
+            .map(|effort| effort.as_str().to_owned())
+            .unwrap_or_else(|| wording::effort_default().to_owned())
+    }
+
+    /// 当前模型有没有档位可选。没有就是「固定」：思考常开、模型不收那个参数。
+    fn fixed_effort(&self) -> bool {
+        caps_for(&self.facts.model).is_ok_and(|caps| caps.reasoning_efforts.is_empty())
+    }
+
+    /// 在提示行上留一句短说明。
+    ///
+    /// 与复制/打开链接那两句回执同一种形状与同一段寿命：提示行一次只留一句最新的，而过期
+    /// 的那句在 [`TuiState::tick`] 里被清掉（不用另起一个时钟）。
+    fn say(&mut self, text: String) {
+        self.notice = Some((std::time::Instant::now(), text));
+    }
+
+    /// 提示行上那一句说明，还在寿命内的话。
+    fn notice_line(&self) -> Option<String> {
+        notice_line(self.notice.as_ref(), std::time::Instant::now())
     }
 
     /// 底部块这一帧要多少内容行。
@@ -4878,6 +5133,11 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     }
     // 最后画，所以它在它所问的那条转录之上。
     draw_modal(frame, &panes, state);
+    // 选择器浮层：与详情覆盖层一样盖在上面，而它与详情**不可能**同时立着（收到清单时详情
+    // 已经关掉，见 `TuiState::request`）。
+    if let Some(picker) = state.picker.as_mut() {
+        draw_picker(frame, &panes, picker);
+    }
     // 详情覆盖层盖在所有这一切之上。它不可能与一个问题同时立着 —— 打开它需要一个空闲的
     // 键盘 —— 所以两者之间的顺序只是形式（票 02 §4）。
     draw_detail(frame, &panes, state);
@@ -5281,11 +5541,12 @@ fn draw_label_bar(
 /// 四段共享一条线，行内分三档：标签退后、值靠前、分隔符只是线。宽度阶梯住在
 /// [`wording::status_row`] 里；这一行本身总是画出来的，连它最后一档都容不下的宽度会被截断
 /// 而不是丢掉（spec §2）。
-fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiState) {
+fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     let share = wording::context_share_value(state.panel.last_input(), state.facts.context_window);
     let width = panes.status.width as usize;
     let parts = wording::status_row(
         &state.facts.model,
+        &state.effort_label(),
         state.mode,
         &share,
         &format!(
@@ -5296,16 +5557,18 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
         width,
     );
     let spans: Vec<Span<'static>> = parts
-        .into_iter()
+        .iter()
         .map(|part| {
             let colour = match part.kind {
                 wording::StatusKind::Label => palette::MUTED,
                 wording::StatusKind::Value => palette::PLAIN,
                 wording::StatusKind::Separator => palette::CHROME,
             };
-            Span::styled(part.text, Style::default().fg(colour))
+            Span::styled(part.text.clone(), Style::default().fg(colour))
         })
         .collect();
+    // 两格的位置按**这一帧真正画出去的**那些段落算，所以截断之后它们的矩形也跟着短。
+    let drawn = parts.clone();
     let line = Line::from(spans);
     // 状态行永远画得出来（[`wording::status_row`] 没有一档把整行拿走），所以截断只在比它的
     // 最后一档还窄的帧上兜底 —— 那不是真终端能到的宽度。截断归 [`super::width`]，但
@@ -5318,6 +5581,157 @@ fn draw_status(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &TuiS
         line
     };
     frame.render_widget(Paragraph::new(line), panes.status);
+    // 「记住读的人真看到了什么」：这一帧真的画了哪两格，就把它们的矩形记进 `Regions`。
+    // 降级之后模型那一段可能根本没画出来 —— 那时它不可点，而不是点在上一帧的位置上。
+    let (model, effort) = status_cells(panes.status, &drawn);
+    if let Some(rect) = model {
+        state.regions.push(rect, HitAction::SwitchModel);
+    }
+    if let Some(rect) = effort {
+        state.regions.push(rect, HitAction::SwitchEffort);
+    }
+}
+
+/// 状态行上那两格各自占的矩形：`模型 X` 与 `· 档位`。没画出来的那一格是 `None`。
+///
+/// 顺着 [`wording::status_row`] 的段落结构走一遍、边走边累积列号，所以答案跟着**这一帧
+/// 真正画出来的文本**走：降级之后模型那一段被丢掉了，点它就什么都不会上行。
+fn status_cells(row: Rect, parts: &[wording::StatusPart]) -> (Option<Rect>, Option<Rect>) {
+    /// 走到哪一段了。段与段之间的 `┆` 把它带回 `Outside`。
+    #[derive(Clone, Copy, PartialEq)]
+    enum Cell {
+        Outside,
+        /// `模型 ` 标签 + 模型值。
+        Model,
+        /// 段内那个 `·` 之后的档位值。
+        Effort,
+    }
+    let mut cell = Cell::Outside;
+    let mut x = row.x;
+    let mut model: Option<Rect> = None;
+    let mut effort: Option<Rect> = None;
+    // 两格都是**连续**的一段，所以合并就是「往右加宽」。
+    let grow = |slot: &mut Option<Rect>, x: u16, width: u16| {
+        *slot = Some(match *slot {
+            Some(previous) => Rect {
+                x: previous.x,
+                y: previous.y,
+                width: previous.width + width,
+                height: previous.height,
+            },
+            None => Rect {
+                x,
+                y: row.y,
+                width,
+                height: row.height,
+            },
+        });
+    };
+    for part in parts {
+        match (part.kind, cell) {
+            (wording::StatusKind::Label, _) => {
+                cell = if part.text.starts_with(wording::PANEL_MODEL) {
+                    Cell::Model
+                } else {
+                    Cell::Outside
+                };
+            }
+            // 段与段之间那条框架线：模型与档位各自那一格到此为止。
+            (wording::StatusKind::Separator, _) => cell = Cell::Outside,
+            // 段内那个 `·` 就是两格的分界：它属于档位那一格 —— 读的人看到的正是
+            // `模型 X · high`，后半格从间隔号开始。
+            (wording::StatusKind::Value, _) if part.text == wording::SEP => {
+                cell = Cell::Effort;
+                grow(&mut effort, x, part.text.cell_width());
+            }
+            (wording::StatusKind::Value, target @ (Cell::Model | Cell::Effort)) => {
+                let width = part.text.cell_width();
+                if target == Cell::Model {
+                    grow(&mut model, x, width);
+                } else {
+                    grow(&mut effort, x, width);
+                }
+            }
+            (wording::StatusKind::Value, _) => {}
+        }
+        x += part.text.cell_width();
+    }
+    (model, effort)
+}
+
+/// 会话中途换模型/档位的选择器浮层（spec §10）。
+///
+/// 与问卷**不同形**，而且必须不同：问卷是模型发起的、答完它那条工具调用就结束了；选择器是
+/// **人发起**的会话属性，答完要回循环去换 provider 与请求参数。所以它不进
+/// `questionnaire()` 那条路径，而是 `TuiState` 上一个独立的状态，键盘归属按「谁立着谁拿」
+/// 判（与 `detail` 与 `sidebar_keyboard` 同一套分派）。
+#[derive(Debug)]
+struct Picker {
+    title: String,
+    options: Vec<crate::render::PickerOption>,
+    /// 回答的那一半。取出即 `take()`，所以答案**只送得出一次**（与 `prompt_reply` 同一写法）。
+    reply: Option<tokio::sync::oneshot::Sender<Option<usize>>>,
+    /// 高亮那一行的下标。
+    highlight: usize,
+    /// 浮层内部滚到了第几行（候选多过浮层的高度时）。
+    top: usize,
+    /// 浮层画在哪儿。框外的一次点击关掉它（与详情覆盖层同一条），所以它要记得上一次真被
+    /// 画在了哪里。
+    rect: Option<Rect>,
+    /// 这一帧真的画出来的那些行：`(屏幕行, 该行的下标)`。与问卷的选项区同一条纪律：
+    /// 只有画出来的行才点得到。
+    rows: Vec<(u16, usize)>,
+}
+
+impl Picker {
+    fn new(request: crate::render::PickerRequest) -> Self {
+        let crate::render::PickerRequest {
+            title,
+            options,
+            reply,
+        } = request;
+        // 高亮落在「当前」那一行；清单里没有当前项就落第一行。
+        let highlight = options
+            .iter()
+            .position(|option| option.current)
+            .unwrap_or(0);
+        Self {
+            title,
+            options,
+            reply: Some(reply),
+            highlight,
+            top: 0,
+            rect: None,
+            rows: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.options.len()
+    }
+
+    /// 移动高亮。到两端就停住，不绕回 —— 与问卷那一套同一条纪律（绕回会让长清单难走）。
+    fn move_highlight(&mut self, delta: isize) {
+        if self.len() == 0 {
+            return;
+        }
+        let last = self.len() - 1;
+        self.highlight = self.highlight.saturating_add_signed(delta).min(last);
+    }
+
+    /// 高亮是不是一个**能选**的行。禁用行（缺密钥的模型）不响应（spec §8）。
+    fn highlighted_is_enabled(&self) -> bool {
+        self.options
+            .get(self.highlight)
+            .is_some_and(|option| option.enabled)
+    }
+
+    /// 关掉它，把答案送出去。**只做一次**。
+    fn close(&mut self, answer: Option<usize>) {
+        if let Some(reply) = self.reply.take() {
+            let _ = reply.send(answer);
+        }
+    }
 }
 
 /// 文件页那一页自己的状态。
@@ -5650,6 +6064,15 @@ fn copy_receipt(
 /// （`.scratch/clickable-links/spec.md` §4）。
 ///
 /// 与 [`copy_receipt`] 同一条寿命、同一个形状：话是运行期写进来的，这里只管它还能不能露脸。
+/// 提示行那一句说明，还在寿命内吗。
+fn notice_line(
+    notice: Option<&(std::time::Instant, String)>,
+    now: std::time::Instant,
+) -> Option<String> {
+    let (at, text) = notice?;
+    (now.duration_since(*at) < RECEIPT_WINDOW).then(|| text.clone())
+}
+
 fn open_receipt(
     opened: Option<&(std::time::Instant, String)>,
     now: std::time::Instant,
@@ -7813,6 +8236,127 @@ fn keyboard_in_the_input(state: &TuiState) -> bool {
         && state.file_viewer.is_none()
 }
 
+/// 选择器浮层：一块居中的盒子，标题 + 一列候选 + 页脚键位（spec §10）。
+///
+/// 宽度取**最长的一行**加余量（一个 model id 可以很长），高度按候选数、上限是主列装得下的
+/// 那些 —— 候选多过高度就在内部滚动，于是 `Enter` 回的永远是**高亮那一行**而不是第几行。
+///
+/// 不复用 [`DetailView`]：那个是只读正文、且独占整个指针；选择器更接近**问卷**（一块浮层、
+/// 上下键移动、回车确认、`Esc` 取消），而它与问卷那处不同的地方在状态机那边，不在这里。
+fn draw_picker(frame: &mut ratatui::Frame, panes: &layout::Regions, picker: &mut Picker) {
+    // 框 + 标题 + 页脚。放不下就连候选都不画 —— 一个只有标题的浮层回答不了任何问题。
+    let chrome = 2u16;
+    let room = panes.main.height.saturating_sub(chrome + 2);
+    if room == 0 {
+        return;
+    }
+    let longest = picker
+        .options
+        .iter()
+        .map(|option| {
+            option.label.cell_width() as usize
+                + if option.detail.is_empty() {
+                    0
+                } else {
+                    wording::GAP.len() + option.detail.cell_width() as usize
+                }
+        })
+        .max()
+        .unwrap_or(0);
+    // 余量：两格记号与它们后面的空格。
+    let width = ((longest + 4) as u16)
+        .min(panes.main.width.saturating_sub(4))
+        .max(3);
+    let visible = (picker.len() as u16).min(room);
+    // 滚动：高亮跑出窗口就把它带回窗口，滚到高亮之上就把窗口挪到高亮那里。
+    if picker.highlight < picker.top {
+        picker.top = picker.highlight;
+    }
+    if visible > 0 && picker.highlight >= picker.top + visible as usize {
+        picker.top = picker.highlight + 1 - visible as usize;
+    }
+    let height = visible + chrome + 2;
+    let Some(area) = panes.modal_sized(width, height) else {
+        return;
+    };
+    picker.rect = Some(area);
+    blank_half_covered_glyphs(frame, area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(chrome_block(), area);
+    let inner = layout::inner(area);
+    // 标题行：`模型` / `思考强度`。
+    let title = Line::from(Span::styled(
+        picker.title.clone(),
+        Style::default()
+            .fg(palette::PLAIN)
+            .add_modifier(Modifier::BOLD),
+    ));
+    frame.render_widget(
+        Paragraph::new(title),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    // 候选：每一行记下它画在哪儿，于是只有**画出来的**行点得到（与问卷的选项区同一条纪律）。
+    picker.rows.clear();
+    for (offset, index) in (picker.top..picker.top + visible as usize).enumerate() {
+        let Some(option) = picker.options.get(index) else {
+            break;
+        };
+        let row = inner.y + 1 + offset as u16;
+        picker.rows.push((row, index));
+        let highlighted = index == picker.highlight;
+        frame.render_widget(
+            Paragraph::new(picker_row(option, highlighted)),
+            Rect::new(inner.x, row, inner.width, 1),
+        );
+    }
+    // 页脚：那些键是干什么的。它不参与命中 —— 没有键可点。
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            wording::picker_keys(),
+            Style::default().fg(palette::MUTED),
+        ))),
+        Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+    );
+}
+
+/// 清单里的一行：当前项一个记号，禁用项用灰，高亮用焦点色 + 粗体（照**焦点行**那条，
+/// `.scratch/tui-visual-language/spec.md` §29）。
+fn picker_row(option: &crate::render::PickerOption, highlighted: bool) -> Line<'static> {
+    // **两枚记号各说一件事**：当前项一个 `▸`，选不了的那行一个 `×`。所以两列都不带记号的行
+    // （既不是当前的、又能选）留一个空格 —— 标题、候选与页脚因此逐行对齐。
+    let (marker, marker_colour) = if option.current {
+        (wording::PICKER_CURRENT, palette::ACCENT)
+    } else if !option.enabled {
+        (wording::PICKER_DISABLED, palette::MUTED)
+    } else {
+        (" ", palette::MUTED)
+    };
+    let mut spans = vec![
+        Span::styled(format!("{marker} "), Style::default().fg(marker_colour)),
+        Span::styled(
+            option.label.clone(),
+            // 禁用项暗一档：它点了不响应，读的人该先看见这一点。
+            Style::default().fg(if option.enabled {
+                palette::PLAIN
+            } else {
+                palette::MUTED
+            }),
+        ),
+    ];
+    if !option.detail.is_empty() {
+        spans.push(Span::styled(
+            format!("{}{}", wording::GAP, option.detail),
+            Style::default().fg(palette::MUTED),
+        ));
+    }
+    if highlighted {
+        for span in &mut spans {
+            span.style = span.style.fg(palette::ACCENT).add_modifier(Modifier::BOLD);
+        }
+    }
+    Line::from(spans)
+}
+
 fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     if state.detail.is_none() {
         state.detail_rect = None;
@@ -8266,6 +8810,7 @@ mod tests {
     fn state() -> TuiState {
         TuiState::new(
             SessionFacts {
+                switchable: true,
                 session_id: "s-1".to_owned(),
                 session_dir: "/tmp/s-1".to_owned(),
                 model: "fake-model".to_owned(),
