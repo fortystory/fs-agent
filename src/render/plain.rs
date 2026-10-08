@@ -200,6 +200,9 @@ impl Plain {
             Block::ContextInjected { source, .. } => {
                 self.line(&wording::context_injected(source));
             }
+            Block::CommandRun { text } => {
+                self.line(&wording::command_run(&text));
+            }
             Block::Sandbox {
                 mode,
                 unavailable_reason,

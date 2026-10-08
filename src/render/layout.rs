@@ -188,6 +188,12 @@ pub struct Regions {
     pub divide: Option<u16>,
     /// 这一帧最后出来的是哪种左栏身份。
     pub sidebar_kind: SidebarKind,
+    /// 居中浮层的底边到此为止：屏幕底边，或者 —— **问卷占着底部时** —— 问卷块的那一行
+    /// （`.scratch/questionnaire-reading/spec.md`）。
+    ///
+    /// 详情覆盖层与文件查看器照旧在**整屏**里居中，而问卷立着时它们不许压住那道题：一个
+    /// 看不见题面的问卷等于答不了，所以浮层在自己的可用高度里居中，而不是盖在它上面。
+    pub overlay_floor: u16,
 }
 
 /// 终端是不是小到只放得下那句告知（[`crate::render::wording::too_small`]）。
@@ -273,17 +279,26 @@ impl Regions {
 
     /// 一块居中的浮层，宽度由调用方给。详情覆盖层与文件查看器共用它，只换那个上限
     /// （`.scratch/nvim-file-viewer/spec.md` §2、§3）。
+    ///
+    /// 底边在 [`Self::overlay_floor`] 之上：平时那就是屏幕底边，所以形状一个字不变；问卷占着
+    /// 底部时它在**自己那段高度**里居中，于是一道还没答的题不会被一页正文盖住
+    /// （`.scratch/questionnaire-reading/spec.md`）。
     pub fn overlay_area(&self, width: u16) -> Option<Rect> {
-        if width <= BORDER_COLUMNS || self.screen.height <= BORDER_COLUMNS + DETAIL_MIN_ROWS {
-            return None;
-        }
+        let room = self
+            .overlay_floor
+            .min(self.screen.y + self.screen.height)
+            .saturating_sub(self.screen.y);
         let height = self
             .screen
             .height
-            .saturating_sub(BORDER_COLUMNS + DETAIL_MARGIN_ROWS);
+            .saturating_sub(BORDER_COLUMNS + DETAIL_MARGIN_ROWS)
+            .min(room);
+        if width <= BORDER_COLUMNS || height <= BORDER_COLUMNS + DETAIL_MIN_ROWS {
+            return None;
+        }
         Some(Rect::new(
             self.screen.x + (self.screen.width.saturating_sub(width)) / 2,
-            self.screen.y + (self.screen.height.saturating_sub(height)) / 2,
+            self.screen.y + (room.saturating_sub(height)) / 2,
             width,
             height,
         ))
@@ -466,6 +481,13 @@ fn plan_with(area: Rect, rows: u16, sidebar_wanted: bool, questionnaire: bool) -
         }),
         divide,
         sidebar_kind,
+        // 问卷占着底部时，浮层的地板抬到它上面那一行；平时是屏幕底边 —— 于是
+        // `overlay_area` 只有一个判据（`.scratch/questionnaire-reading/spec.md`）。
+        overlay_floor: if questionnaire {
+            input.y
+        } else {
+            area.y + area.height
+        },
     }
 }
 

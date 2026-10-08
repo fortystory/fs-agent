@@ -65,6 +65,10 @@ _Avoid_: 渲染、render、format
 持有事件流、名册、预算与配置的那个值，是唯一持有可变状态的结构。细节见 [docs/lifecycle.md](docs/lifecycle.md)。
 _Avoid_: conversation、thread、context
 
+**命令记录（`CommandRun`）**:
+人在这场会话里运行的一条 `/` 命令，**原文**记在流上：转录里画成一行 `[命令] …`（用草稿里命令那个颜色），`sessions show` 列出来，而**投影把它当零** —— 模型读不到 `/clear`、`/undo` 这类它没听见的东西（命令是手势，不是话）。判据是「这一条提交会不会变成一句 user 消息」：会的那几条原文已经是用户发言，不重复记。细节见 [docs/render.md](docs/render.md) 与 [ADR 0019](docs/adr/0019-command-records-are-log-only.md)。
+_Avoid_: 回执（那是命令自己说的那句，成功才有）、`Notice`（那是渲染通道上的告知，连事件流都不进）、消息
+
 ## 会话存储
 
 **会话目录（StoredSession）**:
@@ -140,7 +144,7 @@ _Avoid_: 用户提问（那是模型的）、prompt、确认框
 _Avoid_: 询问（那是 harness 的闸门）、question（类型名用 `UserQuestion`）、prompt
 
 **问卷（Questionnaire）**:
-模型一次提问调用里的**整批问题**，以及前端为它持有的键盘状态。它不是事件、不落流：唯一持久痕迹是那条工具调用与它的唯一结果。**它占的是底部输入区那一块，不是整个指针**：落在别处的点击照旧归页签、左栏与回合条（问卷立着时也翻得到轨迹页），而**键盘始终是它的** —— 切页不会把键盘交给文件页，也不打开任何详情覆盖层。细节见 [docs/render.md](docs/render.md)。
+模型一次提问调用里的**整批问题**，以及前端为它持有的键盘状态。它不是事件、不落流：唯一持久痕迹是那条工具调用与它的唯一结果。**它占的是底部输入区那一块，不是整个指针**：落在别处的点击照旧归页签、左栏、回合条与那一页的行 —— 问卷立着时也翻得到轨迹页、也点得开轨迹与文件的详情覆盖层。**键盘则跟着当前那一层**：没有浮层时归问卷（区域分派见 **选项区**），**浮层立着时归浮层**，`Esc` / `Ctrl-D` 关掉它之后键盘原样还给问卷，作答与焦点都原样留着。浮层不遮住它 —— 一道看不见题面的问卷等于答不了。细节见 [docs/render.md](docs/render.md) 与 [`.scratch/questionnaire-reading/spec.md`](.scratch/questionnaire-reading/spec.md)。
 _Avoid_: 表单、form、wizard（那是多步配置流程，不是模型的问题）
 
 **问卷请求（QuestionnaireRequest）**:

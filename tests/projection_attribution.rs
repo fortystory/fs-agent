@@ -892,3 +892,48 @@ fn a_persona_is_private_to_the_side_it_describes() {
     }
     drop(dir);
 }
+
+#[test]
+fn a_command_record_reaches_no_projection_at_all() {
+    // `/clear`、`/undo` 是**手势**：流上留着它是为了读的人回头查，模型一个字节都不该看见
+    // （`.scratch/command-echo/spec.md`）。
+    let (dir, log) = log(|log| {
+        log.append(
+            SpeakerId::System,
+            EventPayload::CommandRun {
+                text: "/clear".to_owned(),
+            },
+        )
+        .unwrap();
+        user_says(log, "第一条问题");
+        say(log, &deepseek(), "第一条回答");
+        log.append(
+            SpeakerId::System,
+            EventPayload::CommandRun {
+                text: "/undo".to_owned(),
+            },
+        )
+        .unwrap();
+        user_says(log, "第二条问题");
+        say(log, &deepseek(), "第二条回答");
+    });
+
+    for speaker in [deepseek(), kimi(), synthesizer()] {
+        let messages = project(&log.events(), &speaker, &caps());
+        let dumped = format!("{messages:?}");
+        assert!(
+            !dumped.contains("/clear") && !dumped.contains("/undo"),
+            "{speaker} 读到了一条命令记录：{dumped}"
+        );
+    }
+    // 它确实落在流上（否则「转录里有一行」是空的）。
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::CommandRun { .. }))
+            .count(),
+        2,
+        "两条命令都在流上"
+    );
+    drop(dir);
+}

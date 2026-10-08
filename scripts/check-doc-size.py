@@ -85,6 +85,7 @@ DOC_FILES = [
     "docs/adr/0016-usage-rides-the-row-of-its-call.md",
     "docs/adr/0017-model-and-effort-switch-mid-session.md",
     "docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md",
+    "docs/adr/0019-command-records-are-log-only.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -346,11 +347,16 @@ def review_rules(unit: Unit) -> list[str]:
 #   棘轮 19,100 → **19,160**；`DOC_FILES` 同步补上那一份（漏了它会由 ④ 的自检打 warn）。
 #   `.scratch/README.md` 同因：`diff-page` 那一行索引（立项时写的、这次收尾改成 8 resolved +
 #   7 done），实测仍在上限之内。
+# **2026-10-09 落 ADR 0019 时上调 `README.md`**：与前两次同因（每份 ADR 都该有入口），实测
+#   **19,247 / 327**，棘轮 19,160 → **19,250**；`DOC_FILES` 同步补上那一份。
+# **同日 `questionnaire-reading` 与 `command-echo` 两个 feature 立项**：`feature 索引天然随
+#   feature 增长`（与 `input-tokens` 起那十几次同因），两行索引把 `.scratch/README.md` 推到
+#   **12,381 / 72**，棘轮 11,917 / 70 → **12,400 / 72**；终点（13,500 / 100）仍有余量。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 19160, "lines": 330, "target_chars": 18500, "target_lines": 320},
+    "README.md": {"chars": 19250, "lines": 330, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 11917,
-        "lines": 70,
+        "chars": 12400,
+        "lines": 72,
         "target_chars": 13500,
         "target_lines": 100,
     },

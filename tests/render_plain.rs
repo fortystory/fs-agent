@@ -621,3 +621,18 @@ async fn an_answer_to_a_questionnaire_reads_as_the_user_speaking() {
     assert!(text.contains("● A"), "选中的那一格在：{text}");
     assert!(text.contains("○ B"), "没选的那一格也在：{text}");
 }
+
+#[tokio::test]
+async fn a_command_record_reaches_the_transcript_verbatim() {
+    // 命令是手势：它不进模型上下文，而它在别处一个字都不留，所以这一行是读的人唯一能查
+    // 「我刚才敲了什么」的地方（`.scratch/command-echo/spec.md`）。
+    let events = [Event::new(
+        1,
+        SpeakerId::System,
+        EventPayload::CommandRun {
+            text: "/clear".to_owned(),
+        },
+    )];
+    let (_stdout, stderr) = run(&events, false).await;
+    assert_eq!(stderr.text(), "[命令] /clear\n");
+}

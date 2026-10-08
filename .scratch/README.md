@@ -59,6 +59,8 @@
 | [`files-page/`](files-page/spec.md) | map + spec | 左栏「文件」页：工作区文件树（与 `@` 同源的那份索引、同层目录在前）、键盘焦点行与插 `@路径`、文件内容弹窗（直接读盘 + 高亮 + 行号）、非只读调用之后重扫 —— 2026-10-06 由 22 问的 charting 折成 spec，六张实现票同日落地、2026-10-07 收口 | 4 resolved + 6 done |
 | [`todo-page/`](todo-page/seed.md) | seed | 左栏 `todo` 页的呈现：进度行（`3/11 1个正在进行` / `11/11 完成`）、样式、进度行上的按钮点开详情弹窗看完整列表（长文本折行，不截断） | — |
 | [`nvim-file-viewer/`](nvim-file-viewer/spec.md) | spec | **文件查看器**：`[ui] file_viewer = "nvim"` 时内容弹窗换成一屏真 nvim（只读、不折行、去框留白、键盘独占、`Ctrl-C` 或框外点击关）—— 先在 `prototype/embed-nvim` 分支上验完三问再落地（[ADR 0013](../docs/adr/0013-nvim-file-viewer-is-an-alien-screen.md)） | 1/1 done |
+| [`questionnaire-reading/`](questionnaire-reading/spec.md) | spec | **问卷期间读得进详情**：问模型的同时能点开轨迹里那次调用、左栏文件页那一行（改前那几扇门全关着）；键盘改成**跟着当前那一层**（浮层立着时归浮层，`Esc` 关掉后原样还给问卷），浮层底边被 `overlay_floor` 挡在题面之上。推翻 `questionnaire-keys` §7 补记的「切页不打开任何详情覆盖层」，ADR 0010 的区域分派未动 | 1/1 done |
+| [`command-echo/`](command-echo/spec.md) | spec | **命令留痕**：一条 `/` 命令落一条 `CommandRun`（原文），转录里一行 `[命令] …`、`sessions show` 列一行，而**投影把它当零**（模型读不到 `/clear`）；判据是「这一条提交会不会变成一句 user 消息」（[ADR 0019](../docs/adr/0019-command-records-are-log-only.md)） | 1/1 done |
 | [`clickable-links/`](clickable-links/spec.md) | spec | **可点链接**：对话视图里点一下 URL 或工作区内真存在的文件路径（`/eli5` 的 `.html` 就是后者），由宿主 spawn `xdg-open` 打开 —— 识别与**选区**同层、拖选照旧只复制、只有人的指针能触发 | 3/3 done |
 | [`rename-to-heng/`](rename-to-heng/spec.md) | spec | **改名**：`fs-agent` → **衡（heng）**（[ADR 0014](../docs/adr/0014-renamed-to-heng.md)）：`fs` 歧义 + 产品定位是 harness；标识符、路径、文档与左栏标记一起换，历史不追改 | 4/4 done |
 | [`mark-sweep/`](mark-sweep/spec.md) | spec | 标记上的**扫光**：一次运行进行中，一束反光从右下扫到左上（斜亮带 + 两侧过渡、峰值白、1.8 秒一轮）；空闲一个像素都不动 —— 推翻 `tui-input-pulse` 票 08 的「标记静止」（[ADR 0015](../docs/adr/0015-mark-light-sweep.md)） | 1/1 done |

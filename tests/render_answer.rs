@@ -253,3 +253,48 @@ fn the_answer_is_a_bubble_against_the_right_edge_like_any_user_turn() {
     );
     assert_eq!(buffer[(left, row)].bg, palette::BUBBLE, "底色是那块气泡底");
 }
+
+/// 一条命令记录的事件（`.scratch/command-echo/spec.md`）。
+fn ran(seq: u64, text: &str) -> RenderEvent {
+    use heng::events::{Event, EventPayload, SpeakerId};
+    RenderEvent::Logged(Event::new(
+        seq,
+        SpeakerId::System,
+        EventPayload::CommandRun {
+            text: text.to_owned(),
+        },
+    ))
+}
+
+#[test]
+fn a_command_record_reaches_the_conversation_view() {
+    // `/clear` 之类不变成一句 user 消息（模型也不读它），而回执只有成功才有 —— 所以这条
+    // 记录是转录里唯一的出处，它得留在**对话视图**而不是只在轨迹页（全量那侧一直有）。
+    let mut state = state();
+    state.apply(ran(1, "/clear"));
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("[命令] /clear"), "{text}");
+}
+
+#[test]
+fn a_command_record_is_one_line_in_the_command_colour() {
+    // 同一件东西同一个颜色：命令在输入区里是那个蓝，在转录里也是
+    // （`.scratch/tui-feedback/spec.md` §11 那条纪律的第三处）。而它不是 `narration` 那一档
+    // 静音 —— 那是 `Notice` 的样式，而这一行是查得到的东西。
+    use heng::render::palette;
+
+    let mut state = state();
+    state.apply(ran(1, "/undo"));
+    let buffer = frame_of(120, 24, &mut state);
+    let (row, line) = (0..24)
+        .map(|y| (y, row_of(&buffer, y, 120)))
+        .find(|(_, line)| line.contains("/undo"))
+        .expect("那一行在屏幕上");
+    let at = line.find("/undo").expect("刚刚找到过");
+    let column = line[..at].chars().count() as u16;
+    assert_eq!(
+        buffer[(column, row)].fg,
+        palette::TOKEN_COMMAND,
+        "命令那一行用的是草稿里命令那个颜色"
+    );
+}

@@ -388,6 +388,25 @@ pub fn record_context_injection_from(
     )
 }
 
+/// 记下「人在这场会话里运行了一条 `/` 命令」（`.scratch/command-echo/spec.md`）。
+///
+/// `text` 是敲下去的那一条**原文**：命令是手势而不是一句话，所以投影把它当零（模型读到的
+/// 消息一个字节都没变），而转录、复盘与 `--continue` 之后都读得出它。
+pub fn record_command_run(
+    session: &mut Session,
+    render: &RenderHandle,
+    text: &str,
+) -> Result<(), Error> {
+    emit(
+        session,
+        render,
+        &SpeakerId::System,
+        EventPayload::CommandRun {
+            text: text.to_owned(),
+        },
+    )
+}
+
 /// 记下这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
 ///
 /// 一条只追加的事件，别的什么都不写：当前目标是「流上最后一条 `GoalSelected`」

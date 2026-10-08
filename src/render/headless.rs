@@ -111,6 +111,11 @@ impl Render for Headless {
                         EventPayload::GoalCompleted { .. } => {}
                         // 停下并报告由循环说出来，这里不重复。
                         EventPayload::GoalStopped { .. } => {}
+                        // 命令记录与上下文注入同一档：一行 stderr（模型上下文里没有它）。
+                        EventPayload::CommandRun { text } => {
+                            let _ =
+                                writeln!(sinks.stderr_diagnostic, "{}", wording::command_run(text));
+                        }
                         // 与上下文注入同一档：一行诊断（模型上下文里没有它）。
                         EventPayload::SandboxStatus {
                             mode,

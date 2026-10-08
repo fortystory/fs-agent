@@ -1554,7 +1554,17 @@ async fn interactive_loop(
         // 拿到一行了，所以从这里到这个循环的下一次轮转之间，会话正在跑东西 —— 一个回合、一场讨论、
         // 一次 `/undo`。`Ctrl-C` 是它们共同的取消手势。
         console.set_running(true);
-        match submission(&submitted, |name| harness.has_skill(name), menu.prompts) {
+        let submission = submission(&submitted, |name| harness.has_skill(name), menu.prompts);
+        // 命令在转录里留一条**原文**（`.scratch/command-echo/spec.md`）：判据是「这一条提交
+        // 会不会变成一句 user 消息」。会的那几条（普通消息、带任务的 `/<skill>`）在流上已经有
+        // 了，而不会的那些 —— `/clear`、`/model …`、裸 `/<skill>` —— 一个字都不留，而回执只有
+        // 成功才有。记在执行之前，所以 `/clear` 自己的那一条留在**这场**会话里。
+        if records_itself(&submission)
+            && let Err(error) = harness.record_command_run(submitted.trim_end())
+        {
+            harness.notice(&format!("heng: {}", render::wording::error_report(&error)));
+        }
+        match submission {
             // 一个空行：没有可答的，于是再问一次。提示处返回 `None` 是唯一结束输入的东西，而那种情
             // 况就在上面处理。
             Submission::Ignore => {}
@@ -1719,6 +1729,25 @@ async fn interactive_loop(
         if quit.requested() {
             return quit.code();
         }
+    }
+}
+
+/// 这一条提交会不会在流上**一个字都不留**，因而需要另记一条命令记录
+/// （`.scratch/command-echo/spec.md`）。
+///
+/// 判据只有一条：提交之后有没有一句是用户说的。`Prompt` 与**带任务**的 `/<skill>` 都会把
+/// 原文送进模型上下文，转录里已经有了（那是气泡，模型也读得到），再记一遍只会重复；其余那几
+/// 条 —— 内建命令、MCP 模板、**裸**技能、以及一个错字 —— 都由循环自己执行，所以流上找不到
+/// 「我刚才敲了什么」。
+///
+/// 空行与退出不记：前者什么都不是，后者在人离开的那一刻写下一个动作没有意义。
+fn records_itself(submission: &Submission<'_>) -> bool {
+    match submission {
+        Submission::Ignore | Submission::Quit | Submission::Prompt(_) => false,
+        // 技能是唯一一个「名字本身就是这句话的一部分」的记号，所以光秃秃的一条另记；
+        // 打了任务的那条**整条原文**已经是 user 消息（`.scratch/ui-trim/spec.md` §2）。
+        Submission::Skill { bare, .. } => *bare,
+        _ => true,
     }
 }
 
@@ -3821,6 +3850,7 @@ fn render_entry(entry: &Entry) -> String {
             mode,
             unavailable_reason,
         } => render::wording::sandbox(mode, unavailable_reason.as_deref()),
+        Entry::Command { text } => render::wording::command_run(text),
     }
 }
 
@@ -4038,7 +4068,7 @@ fn print_sessions_help(out: &mut dyn Write) {
 mod tests {
     use super::{
         ConsoleHandle, ExitRequest, McpPromptEntry, Mode, Submission, exit_code_after,
-        finish_session, retarget_to, submission, undo_receipt,
+        finish_session, records_itself, retarget_to, submission, undo_receipt,
     };
     use crate::agent::{CancelSignal, UndoOutcome};
     use crate::config::{Config, ReasoningEffort};
@@ -4414,6 +4444,41 @@ mod tests {
             undo_receipt(Err(crate::Error::Undo("快照对不上".to_owned()))),
             "heng: 撤销失败：快照对不上"
         );
+    }
+
+    /// 哪些提交要另记一条命令记录（`.scratch/command-echo/spec.md`）。
+    ///
+    /// 判据只有一条：这条提交会不会变成一句 user 消息。会的那几条原文已经在转录里了
+    /// （用户气泡，模型也读得到），不会的那些 —— 内建命令、MCP 模板、裸技能、错字 ——
+    /// 一个字都不留，而回执只有成功才有。
+    #[test]
+    fn only_the_submissions_that_leave_no_words_of_their_own_get_a_command_record() {
+        for line in [
+            "/clear",
+            "/undo",
+            "/model kimi-k3",
+            "/effort high",
+            "/loop 一个目标",
+            "/goal-new x .scratch/a",
+            "/discuss 一个问题",
+            "/ask-matt",
+            "/db:user_report",
+            "/没这个命令",
+            // 记号前面有字也一样记：`/loop` 的提交语义是**执行**（ADR 0012），所以
+            // `请 /loop 一个目标` 真的会启动循环，而它启动的那句话一个字都不留。
+            "请 /loop 一个目标",
+        ] {
+            assert!(records_itself(&read(line)), "「{line}」该留一条原文");
+        }
+        for line in [
+            "问一句普通的话",
+            "/ask-matt 帮我改一下这两处",
+            "",
+            "   ",
+            "/quit",
+        ] {
+            assert!(!records_itself(&read(line)), "「{line}」不该重复记一条");
+        }
     }
 
     #[test]

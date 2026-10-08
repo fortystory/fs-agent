@@ -2638,6 +2638,14 @@ pub fn built_in_names() -> String {
     )
 }
 
+/// 人运行了一条 `/` 命令时留在转录里的那一行（`.scratch/command-echo/spec.md`）。
+///
+/// **原样**回显敲下去的那一条，前面加一枚方括号标签 —— 与上下文注入、沙箱状态同一个形状，
+/// 它同样是一条**只给人看的记账**。命令自己的回执（若有）就在它下面一行。
+pub fn command_run(command: &str) -> String {
+    format!("[命令] {command}")
+}
+
 /// 循环不认识的一条斜杠命令。它点名内建命令，以及 —— 有的话 —— 用户可以按名字载入的
 /// 技能，于是 `/` 一直可发现。
 pub fn unknown_command(command: &str, skills: &[&str]) -> String {

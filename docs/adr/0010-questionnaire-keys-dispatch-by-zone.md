@@ -8,6 +8,13 @@
 规格在 [`.scratch/questionnaire-keys/spec.md`](../../.scratch/questionnaire-keys/spec.md)，
 意向的两次记录在 [`seed.md`](../../.scratch/questionnaire-keys/seed.md)。
 
+> **2026-10-09 补注（正文不改，只记放宽）**：`.scratch/questionnaire-keys/spec.md` §7 那条补记
+> 里的「切页不打开任何详情覆盖层」已被
+> [`.scratch/questionnaire-reading/spec.md`](../../.scratch/questionnaire-reading/spec.md)
+> 放宽 —— 问卷立着时点一行照样开详情，而**键盘**跟着当前那一层：浮层立着时归浮层，
+> `Esc` / `Ctrl-D` 关掉之后**原样还给问卷**（作答与焦点都留着）。本文的**区域分派一个字
+> 没动**：它仍管的是「键盘落在问卷的哪一区」，而那段空白是「键盘根本不在问卷上」的那一段时间。
+
 ## 决定
 
 > 问卷里**键盘在哪一区**是显式状态（`Zone`），整套键位按它分派；而一道题的答案只有一个形状：

@@ -348,3 +348,23 @@ fn show_reports_the_sandbox_state_on_its_own_line() {
         "不可用时把原因一起摊开：{out}"
     );
 }
+
+#[test]
+fn show_reports_a_command_record_on_its_own_line() {
+    // 命令不进模型上下文，所以它在别处一个字都不留（`.scratch/command-echo/spec.md`）——
+    // 而复盘的人恰恰要查「当时我敲了什么」，于是 `sessions show` 是它的第二个出处。
+    let fixture = fixture();
+    let mut log = EventLog::open(&fixture.log_path).unwrap();
+    log.append(
+        SpeakerId::System,
+        EventPayload::CommandRun {
+            text: "/model kimi-k3".to_owned(),
+        },
+    )
+    .unwrap();
+    drop(log);
+
+    let (code, out, _) = run(&fixture, &["show", fixture.id.as_str()]);
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(out.contains("[命令] /model kimi-k3"), "{out}");
+}

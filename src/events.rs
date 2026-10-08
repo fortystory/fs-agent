@@ -356,6 +356,16 @@ pub enum EventPayload {
     SessionEnded {
         reason: StopReason,
     },
+    /// 人在这场会话里运行了一条 `/` 命令，**原文**记在这里（`.scratch/command-echo/spec.md`）。
+    ///
+    /// 命令是**手势**而不是一句话：它不进模型上下文，所以转录里看不到「我刚才敲了什么」——
+    /// 而回执只有成功才有，`/clear` 那类什么都不说。于是这一条补的是那句话本身。
+    ///
+    /// **log-only**：投影不把它变成任何一条 `messages`，所以模型永远读不到 `/clear`、
+    /// `/undo` 这类它压根没听见的东西。`text` 是人敲下的那一整条（散文，打码）。
+    CommandRun {
+        text: String,
+    },
     /// 这个会话在为哪个目标干活（`.scratch/goal-loop/spec.md` §4）。
     ///
     /// **只追加**，所以**当前目标 = 流上最后一条** —— 切换目标天然就是再记一条，与 `todo`
@@ -490,6 +500,7 @@ impl EventPayload {
             EventPayload::ContextInjected { .. } => "ContextInjected",
             EventPayload::SandboxStatus { .. } => "SandboxStatus",
             EventPayload::SessionEnded { .. } => "SessionEnded",
+            EventPayload::CommandRun { .. } => "CommandRun",
             EventPayload::GoalSelected { .. } => "GoalSelected",
             EventPayload::GoalStopped { .. } => "GoalStopped",
             EventPayload::GoalCompleted { .. } => "GoalCompleted",
@@ -533,6 +544,8 @@ impl EventPayload {
             | EventPayload::UsageRecorded { .. }
             | EventPayload::TurnEnded { .. } => {}
             EventPayload::ContextInjected { content, .. } => redactor.redact(content),
+            // 命令原文是人敲的那一行散文：粘进 `/goal-new` 的来源路径也在里面，所以打码。
+            EventPayload::CommandRun { text } => redactor.redact(text),
             // 汇总要打码：它是人写的那类叙述文本，而 `goal` 是键，不动。
             EventPayload::GoalCompleted { summary, .. } => redactor.redact(summary),
             // 同上：说明是散文，`goal`、条目 id 与那个计数都是键。

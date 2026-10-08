@@ -887,6 +887,14 @@ impl Harness {
         agent::record_goal_selected(&mut self.session, &self.opened.render, goal)
     }
 
+    /// 记下人刚运行的那一条 `/` 命令，原文入流（`.scratch/command-echo/spec.md`）。
+    ///
+    /// 它落**当前**会话：`/clear` 那类命令后面紧跟着一次翻页，而它自己那一条记在翻页**之前**
+    /// —— 它是这场会话的最后一个手势，留在这一场里才对得上「我在这场里做过什么」。
+    pub fn record_command_run(&mut self, text: &str) -> Result<(), Error> {
+        agent::record_command_run(&mut self.session, &self.opened.render, text)
+    }
+
     /// 压缩与翻页：**一个动作**，总是成对发生（`.scratch/goal-loop/spec.md` §7）。
     ///
     /// 不做「压缩后看空间够不够再决定翻不翻」那条分支 —— 少一条路径、少一种状态要测。摘要

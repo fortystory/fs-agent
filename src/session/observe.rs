@@ -247,6 +247,13 @@ pub enum Entry {
         source: ContextSource,
         content: String,
     },
+    /// 人运行了一条 `/` 命令（`.scratch/command-echo/spec.md`）。
+    ///
+    /// 它**不是**一条消息：命令不进模型上下文，而复盘的人恰恰想知道「当时我敲了什么」——
+    /// `/clear`、`/undo` 这类命令在别处一个字都不留。
+    Command {
+        text: String,
+    },
 }
 
 impl Entry {
@@ -272,6 +279,7 @@ impl Entry {
             Entry::History { .. } => "HistorySuperseded",
             Entry::Context { .. } => "ContextInjected",
             Entry::Sandbox { .. } => "SandboxStatus",
+            Entry::Command { .. } => "CommandRun",
         }
     }
 
@@ -296,6 +304,7 @@ impl Entry {
             | Entry::RoundEnded { .. }
             | Entry::SessionEnded { .. }
             | Entry::Sandbox { .. }
+            | Entry::Command { .. }
             | Entry::Divergence { .. } => None,
         }
     }
@@ -517,6 +526,9 @@ fn entry_of(event: &Event) -> Option<Entry> {
             mode: mode.clone(),
             unavailable_reason: unavailable_reason.clone(),
         },
+        // 命令记录要列出来：它不进模型上下文，而在别处一个字都不留，于是复盘视图是它唯一
+        // 的出处（`.scratch/command-echo/spec.md`）。
+        EventPayload::CommandRun { text } => Entry::Command { text: text.clone() },
         EventPayload::MessageCompleted { role, text, .. } => Entry::Message {
             speaker,
             role: *role,
@@ -992,6 +1004,8 @@ pub fn stats(events: &[Event], cost: Option<&CostModel>) -> Stats {
             EventPayload::GoalStopped { .. } => {}
             // 沙箱状态不计进任何一项统计：它是这一刻的记账，不是用量。
             EventPayload::SandboxStatus { .. } => {}
+            // 命令记录不计进任何一项统计：它是这一刻的记账，不是用量。
+            EventPayload::CommandRun { .. } => {}
             EventPayload::SessionEnded { reason } => {
                 *stops.entry(reason.as_str().to_owned()).or_default() += 1;
             }

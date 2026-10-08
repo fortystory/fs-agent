@@ -3196,9 +3196,10 @@ impl TuiState {
         // （`wheel_at` 的 `owned`），点击跟上它（`.scratch/questionnaire-keys/spec.md` §7 的
         // 补记）。
         //
-        // 而**键盘仍归问卷**：问卷立着时这些点击可以切页、可以滚到底，却不打开详情、也不把键盘
-        // 交给别的视图（`key` 里那条分派要的就是这个）—— 否则一个还没答完的问卷会被一页正文
-        // 压住，或者 `j`/`k` 悄悄落到文件页去，而「全屏唯一的反显就是键盘所在」也随之说谎。
+        // 而**键盘**是另一条判据：没有浮层立着时它归问卷（`j`/`k` 移动高亮、回车提交、`Esc`
+        // 退出询问），一旦**浮层**立着就归浮层 —— `Esc` 与 `Ctrl-D` 把它关掉，问卷的作答原样
+        // 留在那里等你回来答（`.scratch/questionnaire-reading/spec.md`，取代原先「切页不打开
+        // 详情」那半句）。
         let questioning = self.questionnaire().is_some();
         if questioning {
             let owned = self
@@ -3254,20 +3255,20 @@ impl TuiState {
             }
             _ => {
                 // 文件页上的点击先于转录：左栏页区里的一行是这一页自己的东西
-                // （`.scratch/files-page/spec.md` §4）。问卷立着时它也不接这一下 —— 它会打开
-                // 一个覆盖层，而键盘要留在问卷那里。
-                if !questioning && self.files_click(column, row) {
+                // （`.scratch/files-page/spec.md` §4）。问卷立着时它照旧接这一下 —— 它开出来
+                // 的浮层要走的正是上面那条键盘分派（`.scratch/questionnaire-reading/spec.md`）。
+                if self.files_click(column, row) {
                     return;
                 }
                 // 改动页同理：页区里的一个**文件行**是这一页自己的东西（点一行就把焦点放到
                 // 那一行上，并在详情覆盖层里开那份 diff）。
-                if !questioning && self.changes_click(column, row) {
+                if self.changes_click(column, row) {
                     return;
                 }
                 // 对话视图里点到一段可点的文本（链接热区）：解析出目标就交给运行期去打开
                 // （`.scratch/clickable-links/spec.md` §1、§3）。它排在轨迹页之前 —— 两页
                 // 共用同一块矩形，但各自的矩形只在真画了那一页时才有值，所以不会互相抢。
-                if !questioning && self.follow_link(column, row) {
+                if self.follow_link(column, row) {
                     return;
                 }
                 // 指针落在轨迹页上吗？`trace_rect` 只在上一帧真的画了轨迹页时才有值，所以
@@ -3281,11 +3282,6 @@ impl TuiState {
                 // （`.scratch/tui-feedback/spec.md` §9）。行号是**屏幕**行号，拿它去取别处的
                 // 详情会点到同一横行的别的行上。
                 if !over_trace {
-                    return;
-                }
-                // 问卷立着时到此为止：详情覆盖层与问卷不会同时立着（`draw_frame` 的前提），
-                // 而一个还没答完的问卷不该被一页正文压住。
-                if questioning {
                     return;
                 }
                 let panes = layout::plan(self.area, 1, self.sidebar_wanted);
@@ -4334,7 +4330,9 @@ impl TuiState {
             return;
         }
         // 详情覆盖层是一个自成一体的视图模式：它立着的时候占着键盘，而它下面的转录冻在
-        // 读的人离开的地方（票 02 §4）。
+        // 读的人离开的地方（票 02 §4）。问卷立着时也一样 —— 它排在问卷那一支**前面**，
+        // 所以 `Esc` / `Ctrl-D` 关掉的是这一层，而下面那道题的作答原样留着
+        // （`.scratch/questionnaire-reading/spec.md`）。
         if self.detail_open() {
             match key {
                 // 「别的都被忽略」的唯一例外：`Ctrl-D` 关掉覆盖层，而不是退出、更不是发问
@@ -5540,8 +5538,9 @@ pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     if let Some(picker) = state.picker.as_mut() {
         draw_picker(frame, &panes, picker);
     }
-    // 详情覆盖层盖在所有这一切之上。它不可能与一个问题同时立着 —— 打开它需要一个空闲的
-    // 键盘 —— 所以两者之间的顺序只是形式（票 02 §4）。
+    // 详情覆盖层盖在所有这一切之上。它**可以**与一个问题同时立着 —— 问卷立着时点一行就
+    // 开（`.scratch/questionnaire-reading/spec.md`），而它的底边被 [`layout::Regions::overlay_floor`]
+    // 挡在问卷上面，所以那道题始终看得见。
     draw_detail(frame, &panes, state);
     draw_file_viewer(frame, &panes, state);
     // 拖选的这一层反白画在最后：它只碰缓冲，所以它盖在所有东西之上，而没有任何绘制函数
@@ -7929,6 +7928,7 @@ fn paint_block(
             ))
             .into(),
         ],
+        Block::CommandRun { text } => vec![command_line(text).into()],
         Block::Notice(message) => vec![narration(message.clone()).into()],
     }
 }
@@ -7992,6 +7992,18 @@ fn narration(text: String) -> Line<'static> {
 
 fn severity_line(reason: StopReason, text: String) -> Line<'static> {
     Line::from(Span::styled(text, severity_style(reason)))
+}
+
+/// 人运行的一条 `/` 命令（`.scratch/command-echo/spec.md`）。
+///
+/// 用草稿里那个 `TOKEN_COMMAND` 蓝：同一个东西同一个颜色，命令在输入区里是这个样子、
+/// 在转录里也是（`/ask` 那条纪律的另一处）。它**不是** `narration` 那一档静音 —— 这一行是
+/// 读的人唯一能查「我刚才敲了什么」的地方，而命令常常什么都不说。
+fn command_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        wording::command_run(text),
+        Style::default().fg(palette::TOKEN_COMMAND),
+    ))
 }
 
 /// 一条点名了发言者的严重度行：名字保持发言者的颜色，这一行的其余部分保持严重度的颜色
@@ -8248,6 +8260,9 @@ fn selects(view: Viewport, block: &Block) -> bool {
         Block::Message { .. } => true,
         // 用户对问卷的作答与他打的话同一档，所以同样留在对话视图里。
         Block::Answer { .. } => true,
+        // 命令记录与作答同一档的理由：它回答的是「我刚才做了什么」，而它不进模型上下文
+        // （`.scratch/command-echo/spec.md`）。轨迹视图照旧有全量。
+        Block::CommandRun { .. } => true,
         // 「为什么没有回答」的那几类立刻要知道（冻结项 8）。
         Block::AgentError { .. } | Block::SessionError { .. } | Block::SessionEnded { .. } => true,
         // hook 只在**失败**时是说给用户的；成功的那条留在轨迹里。

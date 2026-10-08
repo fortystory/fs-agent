@@ -10103,3 +10103,151 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_trace_row_opens_its_detail_while_a_questionnaire_is_up() {
+    // 读模型做决定之前想看一眼上一次调用发生了什么 —— 覆盖层以前在问卷立着时打不开
+    // （`questioning` 那一串门），于是只能等这一轮问完再看
+    // （`.scratch/questionnaire-reading/spec.md`）。
+    use heng::questions::{Choice, UserQuestion};
+    let (mut state, _answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    });
+    state.apply(tool_started(
+        1,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls -la"}),
+    ));
+    state.apply(tool_completed(2, "call-1", true, Some("全部文件"), None));
+    open_trace_tab(&mut state, 120, 24);
+    click_text(&mut state, 120, 24, "调用 bash");
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("ls -la"), "详情覆盖层开着：{text}");
+    // 浮层的底边被挡在问卷上面，所以那道题始终看得见 —— 一个看不见题面的问卷等于答不了。
+    assert!(text.contains("选一个"), "题面还在底部：{text}");
+    assert!(text.contains("1. 甲"), "选项也在：{text}");
+}
+
+#[test]
+fn the_detail_holds_the_keyboard_and_closing_it_hands_the_questionnaire_back() {
+    // 键盘跟着**当前那一层**：详情立着时 `Esc` 关的是它（不是「退出这次询问」），而关掉
+    // 之后问卷的作答与焦点原样留在那儿（`.scratch/questionnaire-reading/spec.md`）。
+    use heng::questions::{Choice, UserQuestion};
+    let (mut state, mut answers) = questionnaire_state(UserQuestion {
+        id: "q1".to_owned(),
+        header: None,
+        question: "选一个".to_owned(),
+        multi_select: false,
+        options: vec![Choice {
+            label: "甲".to_owned(),
+            description: None,
+        }],
+    });
+    state.apply(tool_started(
+        1,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls -la"}),
+    ));
+    state.apply(tool_completed(2, "call-1", true, Some("全部文件"), None));
+    open_trace_tab(&mut state, 120, 24);
+    click_text(&mut state, 120, 24, "调用 bash");
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("ls -la"), "详情开着：{text}");
+
+    // 键盘跟着当前那一层：空格（确认）与回车（提交）都落在详情里，问卷既没作答也没提交。
+    state.key(Key::Char(' '));
+    state.key(Key::Enter);
+    assert!(
+        answers.try_recv().is_err(),
+        "详情占着键盘，问卷既没被作答也没被提交"
+    );
+
+    // `Esc` 关掉的是详情（它排在问卷那一支前面），而下面那道题的作答与焦点原样留着。
+    state.key(Key::Esc);
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(!text.contains("ls -la"), "详情关掉了：{text}");
+
+    // 键盘回到问卷：高亮仍在第一项，于是空格确认它、回车提交。
+    state.key(Key::Char(' '));
+    state.key(Key::Enter);
+    let answers = answers.try_recv().expect("问卷提交了");
+    assert_eq!(
+        answers.expect("一次成功的作答").answers[0].selected,
+        vec!["甲".to_owned()]
+    );
+}
+
+#[test]
+fn a_file_row_in_the_sidebar_opens_its_content_while_a_questionnaire_is_up() {
+    // 文件页与轨迹页是同一类：点一行开详情覆盖层。以前问卷立着时这一列被 `questioning`
+    // 挡着，连目录都展不开（`.scratch/questionnaire-reading/spec.md`）。
+    let dir = workspace("questionnaire-files");
+    std::fs::write(dir.join("hello.rs"), "fn main() {}\n").expect("写一个文件");
+    let mut state = files_in(&dir, &["hello.rs"]);
+    use heng::render::QuestionnaireRequest;
+    let (reply, _answers) = tokio::sync::oneshot::channel();
+    state.request(ConsoleRequest::Questionnaire(QuestionnaireRequest {
+        questions: vec![heng::questions::UserQuestion {
+            id: "q1".to_owned(),
+            header: None,
+            question: "选一个".to_owned(),
+            multi_select: false,
+            options: vec![heng::questions::Choice {
+                label: "甲".to_owned(),
+                description: None,
+            }],
+        }],
+        reply,
+    }));
+    open_files_page(&mut state, 120, 24);
+    click_row(&mut state, 120, 24, "hello.rs");
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("fn main() {}"), "文件内容画出来了：{text}");
+    assert!(text.contains("选一个"), "题面还在底部：{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_overlay_stops_above_the_questionnaire_while_one_is_up() {
+    // 纯几何那一半：浮层的底边就是问卷块顶上的那道线（`.scratch/questionnaire-reading/spec.md`）。
+    // 看不见题面的问卷等于答不了 —— 所以这条比「点得开」更要紧。
+    use heng::render::layout::{plan, plan_questionnaire};
+    use ratatui::layout::Rect;
+
+    let area = Rect::new(0, 0, 120, 24);
+    let plain = plan(area, 1, true);
+    let asked = plan_questionnaire(area, 6, true);
+
+    // 平时地板就是屏幕底边，于是浮层那块形状一个字不变：上下各留两行转录。
+    assert_eq!(plain.overlay_floor, area.y + area.height);
+    assert_eq!(plain.detail().expect("有地方画").bottom(), area.height - 2);
+
+    // 问卷立着时地板抬到它上面，浮层在**自己那段高度**里居中。
+    assert_eq!(asked.overlay_floor, asked.input.y, "地板是问卷块的顶边");
+    let overlay = asked.detail().expect("有地方画");
+    assert!(
+        overlay.bottom() <= asked.input.y,
+        "浮层底边 {}{} 压住了第 {} 行的问卷",
+        overlay.y,
+        overlay.height,
+        asked.input.y
+    );
+    assert_eq!(
+        overlay.y,
+        asked.input.y.saturating_sub(overlay.height) / 2,
+        "它在可用高度里居中，而不是盖在上面"
+    );
+}

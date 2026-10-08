@@ -50,6 +50,13 @@ pub enum Block {
     Answer {
         text: String,
     },
+    /// 人运行了一条 `/` 命令：那一行**原文**（`.scratch/command-echo/spec.md`）。
+    ///
+    /// 与 [`Block::Answer`] 同一档：它由流上的一条事件推出来，而那一条**不进模型上下文** ——
+    /// 模型读到的消息一个字节都没变。这条只回答「我刚才敲了什么」。
+    CommandRun {
+        text: String,
+    },
     RoundStarted {
         round: u32,
         mode: RoundMode,
@@ -442,6 +449,12 @@ impl Transcript {
             }
             // 会话骨架不是一个人会实时读的叙述；沙箱状态按上下文注入那一档画一行。
             EventPayload::SessionStarted { .. } => {}
+            // 命令记录：一条**手势**，画成一行原样显示的文字。命令不进模型上下文，而它又
+            // 常常什么都不说（`/clear`），所以没有它转录里就少了「我刚才做了什么」
+            // （`.scratch/command-echo/spec.md`）。
+            EventPayload::CommandRun { text } => {
+                blocks.push(Block::CommandRun { text });
+            }
             // 归属也是**只进日志**的记账：给人看的那一句由循环发（「开始做目标 <名字>」），而这
             // 条事件说的是这个会话在为谁干活。清单本身以一次上下文注入到达，那一行由
             // `ContextInjected` 画出来。
