@@ -9654,6 +9654,20 @@ fn picker(
     ConsoleRequest,
     tokio::sync::oneshot::Receiver<Option<usize>>,
 ) {
+    let owned: Vec<(&str, bool)> = options.to_vec();
+    picker_detailed(title, &owned, current, |_| String::new())
+}
+
+/// 同一件事，但每一条的 `detail` 由调用方给 —— 表格第二列（profile）就靠它。
+fn picker_detailed(
+    title: &str,
+    options: &[(&str, bool)],
+    current: usize,
+    detail: impl Fn(&str) -> String,
+) -> (
+    ConsoleRequest,
+    tokio::sync::oneshot::Receiver<Option<usize>>,
+) {
     let (reply, answer) = tokio::sync::oneshot::channel();
     (
         ConsoleRequest::Picker(heng::render::PickerRequest {
@@ -9663,7 +9677,7 @@ fn picker(
                 .enumerate()
                 .map(|(index, (label, enabled))| heng::render::PickerOption {
                     label: (*label).to_owned(),
-                    detail: String::new(),
+                    detail: detail(label),
                     current: index == current,
                     enabled: *enabled,
                 })
@@ -9880,8 +9894,7 @@ fn clicking_outside_the_picker_cancels_it() {
 
 #[test]
 fn only_the_current_picker_row_carries_the_current_marker() {
-    // 两枚记号各说一件事：当前项 `▸`、选不了的 `×`，其余留空格。网格里它们**各贴着自己那一格**
-    // —— 所以断言是「记号紧跟着那个标签」，而不是「那一行含有它」。
+    // 当前项一个 `▸`，而第三列的「状态」把它说成文字 —— 两处说同一件事：一处给位置、一处给读法。
     let mut state = idle();
     let (request, _answer) = picker(
         "模型",
@@ -9894,105 +9907,122 @@ fn only_the_current_picker_row_carries_the_current_marker() {
     );
     state.request(request);
     let rows = screen(120, 24, &mut state);
-    let row = rows
+    let current = rows
         .iter()
-        .find(|row| row.contains('▸') || row.contains('×'))
-        .expect("候选那一行");
+        .find(|row| row.contains('▸'))
+        .expect("当前那一行带 `▸`");
     assert!(
-        row.contains("▸ deepseek-v4-pro"),
-        "当前项那一格带 `▸`：{row}"
+        current.contains("▸ deepseek-v4-pro"),
+        "`▸` 跟着当前那个模型：{current}"
     );
-    assert!(row.contains("× MiniMax-M3"), "选不了的那一格带 `×`：{row}");
     assert!(
-        !row.contains("▸ kimi-k3"),
-        "既不是当前的又能选的那一格不带记号：{row}"
+        current.contains(wording::picker_status_current()),
+        "状态列写「当前」：{current}"
     );
-    // 三格横着排在同一行上 —— 表格而不是一列。
-    let first = row.find("kimi-k3").expect("第一格");
-    let second = row.find("MiniMax-M3").expect("第二格");
-    let third = row.find("deepseek-v4-pro").expect("第三格");
     assert!(
-        first < second && second < third,
-        "从左到右按索引顺序：{row}"
+        !rows
+            .iter()
+            .any(|row| row.contains('▸') && row.contains("kimi-k3")),
+        "不是当前的那些不带 `▸`"
+    );
+    // 选不了的那行没有记号（表格第三列已经说了状态），但它点了不响应。
+    let disabled = rows
+        .iter()
+        .find(|row| row.contains("MiniMax-M3") && !row.contains('▸'))
+        .expect("禁用那一行");
+    assert!(
+        !disabled.contains(wording::picker_status_current()),
+        "它不是当前：{disabled}"
     );
 }
 
 #[test]
-fn the_picker_lays_the_models_out_as_a_wide_grid() {
-    // 加宽 + 表格：候选横着铺开，浮层撑满主列 —— 宽终端上同一行就能看到**全部**配置好的模型。
+fn the_picker_lays_one_model_per_row_in_three_columns() {
+    // 一行一个模型，三列是 `模型 id ┆ profile ┆ 状态` —— 表格要对齐，所以短的那些右面留白。
     let labels = [
         ("kimi-k3", true),
         ("k3-256k", true),
-        ("deepseek-flash", true),
         ("deepseek-v4-pro", true),
     ];
     let mut state = idle();
-    let (request, mut answer) = picker("模型", &labels, 0);
+    let (request, _answer) = picker("模型", &labels, 0);
     state.request(request);
-    let rows = screen(174, 24, &mut state);
-    let row = rows
-        .iter()
-        .find(|row| row.contains("kimi-k3"))
-        .expect("候选在屏幕上");
-    for (label, _) in labels {
-        assert!(row.contains(label), "{label} 在同一行上：{row}");
-    }
-    // 表格是对齐的：按索引从左到右，且**没有一格被浮层的内宽裁掉**。
-    let first = row.find("kimi-k3").expect("第一格");
-    let last = row.find("deepseek-v4-pro").expect("最后一格");
-    assert!(first < last, "从左到右按索引顺序：{row}");
-    // 名字**完整**出现（而不是被内宽裁成 `de`）就是「没有被裁掉半截」的判据。
-    assert!(row.contains("deepseek-v4-pro"), "最后一格完整：{row}");
-    // 页脚把两套键都写出来：横向与纵向在网格里是两件事。
-    assert!(rows.join("\n").contains("↑↓ 换行"), "页脚说明 ↑↓ 是换行");
-
-    // 窄一档（120 列）放不下四格，于是折行 —— 顺序不变，最后一格**完整**地在第二行。
     let rows = screen(120, 24, &mut state);
-    let first_row = rows.iter().find(|row| row.contains("kimi-k3")).unwrap();
-    assert!(
-        !first_row.contains("deepseek-v4-pro"),
-        "120 列下它折到下一行：{first_row}"
-    );
-    let second = rows
+    let body: Vec<&String> = rows
         .iter()
-        .find(|row| row.contains("deepseek-v4-pro"))
-        .expect("折行那一行在屏幕上");
-    assert!(
-        second.contains("deepseek-v4-pro"),
-        "折下来的那一格完整：{second}"
+        // 左栏的分隔列也是 `┆`，所以还要看第三列的状态词 —— 那才是浮层的行。
+        .filter(|row| {
+            row.contains(wording::PICKER_COLUMN)
+                && (row.contains(wording::picker_status_current())
+                    || row.contains(wording::picker_status_switchable()))
+        })
+        .collect();
+    assert_eq!(body.len(), 3, "三个候选各占一行：{rows:#?}");
+    for row in &body {
+        // 一行只放得下一个模型 id。
+        let hits = labels
+            .iter()
+            .filter(|(label, _)| row.contains(label))
+            .count();
+        assert_eq!(hits, 1, "一行一个模型：{row}");
+        assert!(
+            row.contains(wording::picker_status_current())
+                || row.contains(wording::picker_status_switchable()),
+            "第三列是状态：{row}"
+        );
+    }
+    // 第二列说它走哪个 profile（`detail` 就是那一列）—— 一条模型 id 与一条 profile 同行。
+    let (request, mut answer) = picker_detailed(
+        "模型",
+        &[("kimi-k3", true), ("deepseek-v4-pro", true)],
+        0,
+        |label| {
+            wording::model_detail_via(if label == "kimi-k3" {
+                "kimi"
+            } else {
+                "deepseek"
+            })
+        },
     );
-    assert!(
-        !second.contains("kimi-k3") && !second.contains("deepseek-flash"),
-        "第二行只有折下来的那几格：{second}"
-    );
-
-    state.key(Key::Enter);
-    assert_eq!(answer.try_recv().expect("答案送出去了"), Some(0));
-}
-
-#[test]
-fn down_moves_a_row_and_keeps_the_column() {
-    let mut state = idle();
-    // 六行两栏：第一行四格，第二行两格。
-    let labels = [
-        ("a", true),
-        ("b", true),
-        ("c", true),
-        ("d", true),
-        ("e", true),
-        ("f", true),
-    ];
-    let (request, mut answer) = picker("模型", &labels, 1);
     state.request(request);
-    // 先画一帧定下几栏。
-    let _ = screen(120, 24, &mut state);
-    // `b` 在第一行第二格 —— `↓` 换行、留在第二列，于是落在 `f` 那一格（第五行…第二行）。
+    let rows = screen(120, 24, &mut state);
+    let body: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.contains("走 `") && row.contains(wording::PICKER_COLUMN))
+        .collect();
+    assert_eq!(body.len(), 2, "两行：{rows:#?}");
+    assert!(
+        body[0].contains("kimi-k3") && body[0].contains("走 `kimi`"),
+        "模型 id 与它的 profile 同行：{}",
+        body[0]
+    );
+    assert!(
+        body[1].contains("deepseek-v4-pro") && body[1].contains("走 `deepseek`"),
+        "第二行同样：{}",
+        body[1]
+    );
+    let _ = answer.try_recv();
+
+    // 三列对齐：第二列（profile）在每一行上都从同一列起。
+    let profile_column = body
+        .iter()
+        .map(|row| {
+            let at = row.rfind(wording::PICKER_COLUMN).expect("第二列");
+            text_columns(row[..at].trim_end())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        profile_column.windows(2).all(|pair| pair[0] == pair[1]),
+        "第二列逐行对齐：{profile_column:?}"
+    );
+
+    // 一行一个模型，所以横向与纵向是同一件事：`↓` 就是下一行。
     state.key(Key::Down);
     state.key(Key::Enter);
     assert_eq!(
         answer.try_recv().expect("答案送出去了"),
-        Some(5),
-        "`↓` 换行并留在同一列"
+        Some(1),
+        "`↓` 走到下一行"
     );
 }
 

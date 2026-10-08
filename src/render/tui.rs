@@ -3537,28 +3537,15 @@ impl TuiState {
     /// `sidebar_key` 同一判据）。
     fn picker_key(&mut self, key: Key) {
         match key {
-            // 横向：相邻那一格。行尾就折到下一行的第一格（`+1` 天然如此）。
-            Key::Char('j') | Key::Right | Key::Tab => {
+            // 一行一个模型，所以横向与纵向是**同一件事**：下一行/上一行。
+            Key::Char('j') | Key::Down | Key::Right | Key::Tab => {
                 if let Some(picker) = self.picker.as_mut() {
                     picker.move_highlight(1);
                 }
             }
-            Key::Char('k') | Key::Left | Key::BackTab => {
+            Key::Char('k') | Key::Up | Key::Left | Key::BackTab => {
                 if let Some(picker) = self.picker.as_mut() {
                     picker.move_highlight(-1);
-                }
-            }
-            // 纵向：换行、留在同一列 —— 网格几栏是**这一帧**的事实（`draw_picker` 每帧重算）。
-            Key::Down => {
-                if let Some(picker) = self.picker.as_mut() {
-                    let step = picker.columns.max(1) as isize;
-                    picker.move_highlight(step);
-                }
-            }
-            Key::Up => {
-                if let Some(picker) = self.picker.as_mut() {
-                    let step = picker.columns.max(1) as isize;
-                    picker.move_highlight(-step);
                 }
             }
             Key::Enter => {
@@ -5694,9 +5681,6 @@ struct Picker {
     /// 浮层画在哪儿。框外的一次点击关掉它（与详情覆盖层同一条），所以它要记得上一次真被
     /// 画在了哪里。
     rect: Option<Rect>,
-    /// 网格摆成几栏。**上一帧**算出来的那一个：网格几栏是读的人眼前的事实，所以它跟着帧走
-    /// （与 `Regions` 那条纪律相同），而键盘的 `↑/↓` 按它换行。
-    columns: usize,
     /// 这一帧真的画出来的那些格：`(屏幕行, 列起, 列宽, 该格的候选下标)`。与问卷的选项区同一
     /// 条纪律：只有画出来的那几格点得到 —— 而且按**列**命中，因为一行上有好几格，点第三格就该
     /// 选第三格。
@@ -5722,7 +5706,6 @@ impl Picker {
             highlight,
             top: 0,
             rect: None,
-            columns: 1,
             rows: Vec::new(),
         }
     }
@@ -5742,28 +5725,6 @@ impl Picker {
         }
         let last = self.len() - 1;
         self.highlight = self.highlight.saturating_add_signed(step).min(last);
-    }
-
-    /// 网格摆成几栏、每栏多宽。
-    ///
-    /// 每栏宽 = **最长**的那一格加 [`wording::GAP`] —— 表格要对齐，所以短的那些留白，而不是各自
-    /// 贴紧下一栏（那读起来是一段文字，不是一张表）。放不下两栏时就一栏（这是窄终端的读法，
-    /// 不是错）。
-    fn grid(&self, inner_width: usize) -> (usize, usize) {
-        let longest = self
-            .options
-            .iter()
-            .map(picker_cell_width)
-            .max()
-            .unwrap_or(0)
-            .max(4);
-        let cell_width = longest + wording::GAP.len();
-        // 栏与栏之间还有一道 [`wording::GAP`]，所以每多一栏要多花 `cell_width + GAP` 列
-        // （第一栏不需要它后面那道）。忘了这一项就会多画一栏，而那一栏会被浮层的内宽裁掉半截 ——
-        // 屏幕上读起来是「最后那个模型的名字被砍掉了」。
-        let pitch = cell_width + wording::GAP.len();
-        let columns = ((inner_width + wording::GAP.len()) / pitch).max(1);
-        (columns, cell_width)
     }
 
     /// 高亮是不是一个**能选**的行。禁用行（缺密钥的模型）不响应（spec §8）。
@@ -8297,20 +8258,22 @@ fn draw_picker(frame: &mut ratatui::Frame, panes: &layout::Regions, picker: &mut
     if rows_room == 0 {
         return;
     }
-    // **加宽**：浮层几乎撑满主列，于是网格能横着铺开 —— 候选多时一屏看得完，而不必先滚动
-    // 才知道后面还有什么。
-    let width = panes.main.width.saturating_sub(4).max(3);
-    let inner_width = width.saturating_sub(chrome) as usize;
-    let (columns, cell_width) = picker.grid(inner_width);
-    picker.columns = columns;
-    let visible = picker.len().div_ceil(columns).max(1) as u16;
-    let visible = visible.min(rows_room);
-    // 滚动按**行**：高亮跑出窗口就把它带回窗口，滚到高亮之上就把窗口挪到高亮那一行。
-    let highlighted_row = (picker.highlight / columns) as u16;
-    let first_row = highlighted_row.saturating_sub(visible - 1);
-    picker.top = first_row as usize;
+    // **宽度由内容定**：三列各自按自己那一列最长的值对齐，列与列之间是 [`wording::PICKER_COLUMN`]。
+    // 表格就该是对齐的，所以短的那些右面留白，而不是各自贴紧下一列。
+    let layout = picker_columns(&picker.options);
+    let width = layout
+        .total()
+        .min(panes.main.width.saturating_sub(4) as usize) as u16;
+    let visible = (picker.len() as u16).min(rows_room);
+    // 滚动：高亮跑出窗口就把它带回窗口，滚到高亮之上就把窗口挪到高亮那里。
+    if picker.highlight < picker.top {
+        picker.top = picker.highlight;
+    }
+    if visible > 0 && picker.highlight >= picker.top + visible as usize {
+        picker.top = picker.highlight + 1 - visible as usize;
+    }
     let height = visible + chrome + 2;
-    let Some(area) = panes.modal_sized(width, height) else {
+    let Some(area) = panes.modal_sized(width.max(3), height) else {
         return;
     };
     picker.rect = Some(area);
@@ -8329,29 +8292,18 @@ fn draw_picker(frame: &mut ratatui::Frame, panes: &layout::Regions, picker: &mut
         Paragraph::new(title),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
-    // 候选：**一行 `columns` 格**，行内按索引顺序铺（所以 `j` 走的是相邻那一格）。每一格记下它
-    // 画在哪儿，于是只有**画出来的**那几格点得到（与问卷的选项区同一条纪律）。
+    // 候选：一行一个，每行三列。每一格记下它画在哪儿，于是只有**画出来的**那几行点得到（与
+    // 问卷的选项区同一条纪律）。
     picker.rows.clear();
-    let skip = picker.top * columns;
-    for row_offset in 0..visible as usize {
-        let row = inner.y + 1 + row_offset as u16;
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        for column in 0..columns {
-            let index = skip + row_offset * columns + column;
-            let Some(option) = picker.options.get(index) else {
-                break;
-            };
-            let from = inner.x + (column * (cell_width + wording::GAP.len())) as u16;
-            // 那一格必须完整落在内宽里 —— `grid` 已经保证过，这里只是不让它越界写出框。
-            if column > 0 {
-                // 栏与栏之间留 [`wording::GAP`] —— 表格的对齐靠它，不靠各格自己贴紧。
-                spans.push(Span::raw(" ".repeat(wording::GAP.len())));
-            }
-            spans.extend(picker_cell(option, index == picker.highlight, cell_width));
-            picker.rows.push((row, from, cell_width as u16, index));
-        }
+    for offset in 0..visible as usize {
+        let index = picker.top + offset;
+        let Some(option) = picker.options.get(index) else {
+            break;
+        };
+        let row = inner.y + 1 + offset as u16;
+        picker.rows.push((row, inner.x, inner.width, index));
         frame.render_widget(
-            Paragraph::new(Line::from(spans)),
+            Paragraph::new(picker_row(option, index == picker.highlight, &layout)),
             Rect::new(inner.x, row, inner.width, 1),
         );
     }
@@ -8365,59 +8317,127 @@ fn draw_picker(frame: &mut ratatui::Frame, panes: &layout::Regions, picker: &mut
     );
 }
 
-/// 一格自己要占的列数：记号与空格两列，加标签与那句 detail。
-fn picker_cell_width(option: &crate::render::PickerOption) -> usize {
-    option.label.cell_width() as usize
-        + if option.detail.is_empty() {
-            0
-        } else {
-            wording::GAP.len() + option.detail.cell_width() as usize
-        }
+/// 表格的三列各自多宽，以及**总共**多宽。
+///
+/// 宽度由内容定，所以一个 model id 很长时整块浮层跟着长 —— 而它仍然**不**超过主列（那一档就
+/// 截断，不是滚动）。
+struct PickerColumns {
+    /// 模型 id 那一列（**含**行首的记号与它后面的空格）。
+    model: usize,
+    /// profile 那一列。
+    profile: usize,
+    /// 状态那一列。
+    status: usize,
 }
 
-/// 网格里一格的那些 span。`cell_width` 是它**该占**的列数，短的那些右面留白 —— 对齐是表格
-/// 的样子。
-fn picker_cell(
+impl PickerColumns {
+    /// 一行有多宽：两条款与三个列分隔。
+    fn row(&self) -> usize {
+        self.model + self.profile + self.status + 2 * PickerColumnRule::COLUMNS
+    }
+
+    /// 连边框一起多宽。
+    fn total(&self) -> usize {
+        self.row() + 2
+    }
+}
+
+/// 列与列之间那一条（含它两侧各一格空格）。
+struct PickerColumnRule;
+
+impl PickerColumnRule {
+    const COLUMNS: usize = wording::PICKER_COLUMN.len() + 2;
+}
+
+/// 这一份清单的列宽。
+fn picker_columns(options: &[crate::render::PickerOption]) -> PickerColumns {
+    // 行首两列是记号与它后面的空格；每个值左对齐到本列最长的那个，右面留白。
+    let widest = |width: fn(&crate::render::PickerOption) -> usize| {
+        options.iter().map(width).max().unwrap_or(0)
+    };
+    PickerColumns {
+        model: widest(|option| option.label.cell_width() as usize + 2).max(4),
+        profile: widest(|option| option.detail.cell_width() as usize).max(3),
+        status: widest(|option| {
+            if option.current {
+                wording::picker_status_current()
+            } else {
+                wording::picker_status_switchable()
+            }
+            .cell_width() as usize
+        })
+        .max(3),
+    }
+}
+
+/// 一行三个单元格：模型 id ┆ profile ┆ 状态。
+fn picker_row(
     option: &crate::render::PickerOption,
     highlighted: bool,
-    cell_width: usize,
-) -> Vec<Span<'static>> {
-    // **两枚记号各说一件事**：当前项一个 `▸`，选不了的那行一个 `×`。其余留一个空格 ——
-    // 每格同样宽，标题、候选与页脚因此逐列对齐。
-    let (marker, marker_colour) = if option.current {
-        (wording::PICKER_CURRENT, palette::ACCENT)
-    } else if !option.enabled {
-        (wording::PICKER_DISABLED, palette::MUTED)
+    columns: &PickerColumns,
+) -> Line<'static> {
+    let status = if option.current {
+        wording::picker_status_current()
     } else {
-        (" ", palette::MUTED)
+        wording::picker_status_switchable()
     };
-    let label_style = if option.enabled {
-        Style::default().fg(palette::PLAIN)
-    } else {
-        // 禁用项暗一档：它点了不响应，读的人该先看见这一点。
-        Style::default().fg(palette::MUTED)
-    };
-    let mut spans = vec![
-        Span::styled(format!("{marker} "), Style::default().fg(marker_colour)),
-        Span::styled(option.label.clone(), label_style),
+    // 当前项一个 `▸`；选不了的那行**没有**记号 —— 状态列说了它是「可切换」，而它灰着且点了
+    // 不响应，两处都不响就是选不了。
+    let mut spans = vec![Span::styled(
+        format!(
+            "{} {}",
+            if option.current {
+                wording::PICKER_CURRENT
+            } else {
+                " "
+            },
+            option.label
+        ),
+        Style::default().fg(if option.enabled {
+            palette::PLAIN
+        } else {
+            // 禁用项暗一档：它点了不响应，读的人该先看见这一点。
+            palette::MUTED
+        }),
+    )];
+    let cells = [
+        (option.label.cell_width() as usize + 2, columns.model),
+        (option.detail.cell_width() as usize, columns.profile),
+        (status.cell_width() as usize, columns.status),
     ];
-    if !option.detail.is_empty() {
-        spans.push(Span::styled(
-            format!("{}{}", wording::GAP, option.detail),
-            Style::default().fg(palette::MUTED),
-        ));
+    for (index, (used, column_width)) in cells.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(
+                format!(" {} ", wording::PICKER_COLUMN),
+                Style::default().fg(palette::CHROME),
+            ));
+        }
+        if *used < *column_width {
+            spans.push(Span::raw(" ".repeat(column_width - used)));
+        }
+        match index {
+            // 第二列：它走哪个 profile（`detail` 就是那一格）。
+            1 => spans.push(Span::styled(
+                option.detail.clone(),
+                Style::default().fg(palette::MUTED),
+            )),
+            // 第三列：这一行是不是当前这一场会话在用的。
+            _ => spans.push(Span::styled(
+                status.to_owned(),
+                Style::default().fg(if option.current {
+                    palette::ACCENT
+                } else {
+                    palette::MUTED
+                }),
+            )),
+        }
     }
     if highlighted {
         for span in &mut spans {
             span.style = span.style.fg(palette::ACCENT).add_modifier(Modifier::BOLD);
         }
     }
-    // 右面补白，把这一格撑到整栏宽。
-    let used = picker_cell_width(option);
-    if cell_width > used {
-        spans.push(Span::raw(" ".repeat(cell_width - used)));
-    }
-    spans
+    Line::from(spans)
 }
 
 fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {

@@ -106,7 +106,10 @@ effort  换思考强度：`/effort <low|medium|high|xhigh|max|默认>`
 ### 维护者的一处收窄（2026-10-08，实现之后）
 
 候选从「`config.models` 的全部键、缺 key 的标灰并点名环境变量」收窄成「**只列已经有密钥的
-那些**」—— 见票 05 那一节的理由。`enabled` 与那条 detail 文案随之退了场。
+那些**」，同日再收窄成「**`config.toml` 里显式配置过、且有密钥**，外加当前模型兜底」—— 理由与
+来由见票 05 那一节（内建 profile 是代码里的常量，所以「注释掉一段就当它不存在」只能在选择器这一层
+按配置事实判）。`enabled` 与 `model_detail_missing_key` 那条文案随之退了场；
+`Config::configured_providers` 是为这次收窄新记的。
 
 测试：`tests/render_console.rs` 两条（plain 回 `None`、忽略 `SessionUpdate`）与 `cli.rs` 的
 `mod tests` 四条（解析、模型候选、档位候选、忙闲——最后两条用 `open_picker` 直接驱动，配一个

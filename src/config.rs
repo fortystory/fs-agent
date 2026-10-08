@@ -22,7 +22,7 @@
 
 pub mod cost;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -411,6 +411,13 @@ pub struct Config {
     pub default_model: String,
     pub providers: BTreeMap<String, ProviderProfile>,
     pub models: BTreeMap<String, ModelProfile>,
+    /// **`config.toml` 里显式写过的那些 provider profile 名**（`[providers.*]` 的键）。
+    ///
+    /// 与 [`Self::providers`] 分开记一份，因为后者是**解析后**的全部 —— 五个内建 profile 无论有
+    /// 没有被配置都会在（`config.toml` 只做覆盖，注释掉一段只是不给覆盖），所以「配置了什么」
+    /// 这件事只能另记一份。选择器的模型候选按它取（2026-10-08 维护者定的：只列配置里写过的那些，
+    /// 而「注释掉 `[providers.kimi-code]` 就当它不存在」在解析层是做不到的）。
+    pub configured_providers: BTreeSet<String>,
     /// 每个模型一百万 token 多少钱，作显示用（spec §17）。按 model id 作键；没有条目的模型
     /// 报作「无价格」，永不是免费。
     pub pricing: PriceTable,
@@ -1315,6 +1322,9 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     };
 
     let providers = resolve_providers(&raw, env)?;
+    // 「配置里写过的那些」要在**解析掉内建 profile 之前**取：解析之后 `providers` 里那五条
+    // 永远都在（内建缺省），于是这份名单只能从 `raw` 直接拿。
+    let configured_providers: BTreeSet<String> = raw.providers.keys().cloned().collect();
     let models = resolve_models(&raw, &providers)?;
     let pricing = resolve_pricing(&raw, &models)?;
     let mode = resolve_mode(raw.permissions.as_ref())?;
@@ -1353,6 +1363,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
     Ok(Config {
         default_model,
         providers,
+        configured_providers,
         models,
         pricing,
         mode,

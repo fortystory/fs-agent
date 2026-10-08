@@ -1233,26 +1233,33 @@ struct Retargeted {
     profile: String,
 }
 
-/// 模型候选（spec §8）：`config.models` 里**已经有密钥**的那些。
+/// 模型候选（spec §8）：`config.toml` 里**显式配置过**的那些 provider 名下的模型（有密钥）。
 ///
-/// 顺序是 `BTreeMap` 的键序，不是插入序，所以两次列出来的读法一致。**缺密钥的不列** ——
-/// 2026-10-08 维护者把 spec §8「列全部、缺 key 的标灰并点名环境变量」收窄成这一条：一个选不了的
-/// 候选在选择器里只能占一格并教人一件它当场就能知道的事（而那件事属于配置诊断，不属于这个浮层）。
-/// 于是 `enabled` 在模型这份清单上恒为真 —— 字段留着，因为档位那份清单与将来的别的清单仍要能
-/// 表达「这一行选不了」，而前端也不该为某一份清单写两套画法。
+/// 两条判据都要：
+///
+/// * **配置里写过的** —— [`Config::configured_providers`]。五个内建 profile 无论有没有被配置都在
+///   （`config.toml` 只做覆盖，注释掉 `[providers.kimi-code]` 只是不给覆盖），所以「我配了哪几家」
+///   只能另记一份。2026-10-08 维护者定的：注释掉一段就当它不存在。
+/// * **有密钥** —— 配置了但没给 key 的那条切过去起不来，那属于配置诊断而不属于这个浮层。
+///
+/// **当前模型兜底**：一份什么模型段都没写的配置里，上面的两条会列出空清单 —— 而清单里看不到自己
+/// 正在用的那个模型是最刺眼的一种不诚实，所以它无条件在列。
+///
+/// 顺序是 `BTreeMap` 的键序，不是插入序，所以两次列出来的读法一致。
 fn model_picker_options(config: &Config, current: &str) -> Vec<PickerOption> {
     config
         .models
         .iter()
-        .filter(|(_, model)| {
-            config
-                .providers
-                .get(&model.provider)
-                .is_some_and(|profile| profile.api_key.is_some())
+        .filter(|(id, model)| {
+            *id == current
+                || (config.configured_providers.contains(&model.provider)
+                    && config
+                        .providers
+                        .get(&model.provider)
+                        .is_some_and(|profile| profile.api_key.is_some()))
         })
         .map(|(id, model)| PickerOption {
             label: id.clone(),
-            // detail 说清它挂在哪个 profile 上：选之前就该知道换过去走的是哪一家。
             detail: render::wording::model_detail_via(&model.provider),
             current: id == current,
             enabled: true,
@@ -4141,56 +4148,56 @@ mod tests {
         assert!(matches!(read("/model 这个"), Submission::Model(_)));
     }
 
-    /// 模型候选：**已经有密钥**的那些，按键序。缺密钥的不列（2026-10-08 维护者收窄了
-    /// spec §8 原来那条「列全部、缺 key 的标灰」—— 一个选不了的候选只能占一格并教人一件当场
-    /// 就知道的事，而那件事属于配置诊断）。
+    /// 模型候选：**`config.toml` 里显式配置过的那几家**名下、有密钥的模型，按键序。
+    ///
+    /// 两条判据都要，而**当前模型无条件在列**（一份什么都不写的配置里清单会空，而看不到自己正在用
+    /// 的那个模型是最刺眼的一种不诚实）。
     #[test]
-    fn the_model_candidates_are_the_configured_models_that_have_a_key() {
+    fn the_model_candidates_are_the_configured_providers_models_and_the_current_one() {
         let config = crate::config::resolve(
-            Some("[providers.kimi-code-cn]\nbase_url = \"https://api.kimi.com/coding/v1\"\napi_key_env = \"KIMI_CODE_CN_API_KEY\"\n\n[models.\"kimi-k3\"]\nprovider = \"kimi-code-cn\"\n"),
-            &[
-                ("KIMI_API_KEY", "sk-kimi-code"),
-                ("MINIMAX_API_KEY", "sk-minimax"),
-                ("MINIMAX_CN_API_KEY", "sk-minimax-cn"),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), value.to_owned()))
-            .collect(),
+            Some(
+                // 只给两条 profile：一条有 key（minimax），一条没给 key（deepseek）。
+                "[providers.minimax]\napi_key = \"sk-minimax\"\n\n[providers.deepseek]\n",
+            ),
+            &Default::default(),
         )
         .unwrap();
-
-        let options = super::model_picker_options(&config, "MiniMax-M3.1-Flash-Preview");
+        // 当前模型挂在 `kimi`（内建、config.toml 里没写）上 —— 它兜底进清单。
+        let options = super::model_picker_options(&config, "kimi-k3");
         let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
-        // `kimi-k3` 指向的是一条**没有密钥**的 profile，所以它根本不在清单上；
-        // `minimax-cn` 有密钥（虽然内建的 `MiniMax-M3` 默认走国际站），所以它在。
         assert_eq!(
             labels,
             vec![
+                // 配置里有、且有密钥的那家（两个 id）。
                 "MiniMax-M3",
                 "MiniMax-M3.1-Flash-Preview",
-                "k3",
-                "k3-256k",
-                "kimi-for-coding",
-                "kimi-for-coding-highspeed",
+                // 当前模型：内建 profile，也无条件在列（键序落在最后）。
+                "kimi-k3",
+                // 配置里有、但没给密钥的那家（`deepseek-flash` 与 `deepseek-v4-pro`）
+                // 一个都不在 —— 切过去起不来。
             ],
-            "只有有密钥的那些，键序"
+            "配置里写过的 + 当前模型"
         );
+        // 缺密钥的那家的模型一个都不在。
         assert!(
-            !labels.contains(&"kimi-k3"),
-            "缺 key 的那个不列：{labels:?}"
+            !labels.contains(&"deepseek-v4-pro") && !labels.contains(&"deepseek-flash"),
+            "缺 key 的不列：{labels:?}"
+        );
+        // 内建但没被配置的 profile（`kimi-code`）名下的模型也不在 —— 那正是注释掉
+        // `[providers.kimi-code]` 的效果。
+        assert!(
+            !labels
+                .iter()
+                .any(|label| label.starts_with("k3") || label.contains("coding")),
+            "没配置的那家不列：{labels:?}"
         );
         // 当前那个被标出来了，detail 说它走哪个 profile。
         let current = options
             .iter()
             .find(|option| option.current)
             .expect("当前那个被标出来了");
-        assert_eq!(current.label, "MiniMax-M3.1-Flash-Preview");
-        assert!(current.detail.contains("minimax"), "{:?}", current.detail);
-        // 清单上没有选不了的行 —— 模型这一份恒为真。
-        assert!(
-            options.iter().all(|option| option.enabled),
-            "模型清单里没有选不了的行"
-        );
+        assert_eq!(current.label, "kimi-k3");
+        assert!(current.detail.contains("kimi"), "{:?}", current.detail);
     }
 
     /// 档位候选：**第一档是「默认」**，其余按强度从弱到强；表为空时给空清单（前端显示 `固定`）。
@@ -4338,9 +4345,10 @@ mod tests {
         assert_eq!(title, super::render::wording::picker_title_model());
         assert_eq!(
             count,
-            // 测试那份配置里给了 key 的就是 MiniMax 的两条 profile，所以列的是它们旗下的模型。
-            5,
-            "清单是配置里有密钥的那些模型"
+            // `switchable_config()` 只给环境变量、config.toml 是空的 —— 于是候选只有**当前模型**
+            // 兜底那一个（「配置里写过的」那一条在它下面没有可选项）。
+            1,
+            "没有显式配置时清单里只有当前模型"
         );
         assert_eq!(harness.model(), "kimi-k3", "取消不是一次切换");
         harness.shutdown().await;
