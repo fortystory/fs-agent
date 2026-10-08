@@ -3265,6 +3265,11 @@ impl TuiState {
                 if self.changes_click(column, row) {
                     return;
                 }
+                // `todo` 页同理：整页任何一格都是「看全那份清单」
+                // （`.scratch/todo-page/spec.md` §5）。
+                if self.todo_click(column, row) {
+                    return;
+                }
                 // 对话视图里点到一段可点的文本（链接热区）：解析出目标就交给运行期去打开
                 // （`.scratch/clickable-links/spec.md` §1、§3）。它排在轨迹页之前 —— 两页
                 // 共用同一块矩形，但各自的矩形只在真画了那一页时才有值，所以不会互相抢。
@@ -3295,6 +3300,44 @@ impl TuiState {
                 }
             }
         }
+    }
+
+    /// 点左栏的 `todo` 页：页区里**任何一格**都打开那份完整清单
+    /// （`.scratch/todo-page/spec.md` §5）。
+    ///
+    /// 这一页没有焦点行，所以这里**不需要**「屏幕行 → 行下标」那套换算：落在这块矩形里就是
+    /// 落在这一页上。列表空着时开不出一个空弹窗，于是这一次归 `false`，指针继续往下走。
+    fn todo_click(&mut self, column: u16, row: u16) -> bool {
+        if self.tab != Tab::Todo || !self.todo.page_contains((column, row)) {
+            return false;
+        }
+        if self.todo.is_empty() {
+            return false;
+        }
+        self.open_todo_detail();
+        true
+    }
+
+    /// 把左栏 `todo` 页那份完整清单打开在详情覆盖层里
+    /// （`.scratch/todo-page/spec.md` §6）。
+    ///
+    /// 正文是**打开那一刻**的那份列表的一份拷贝 —— 此后模型提交新列表只改面板，不动开着的
+    /// 这个。与文件页那个弹窗同一纪律：只给人看，不进事件流、不进模型上下文。
+    fn open_todo_detail(&mut self) {
+        self.close_file_viewer();
+        let detail = Detail {
+            // 标题说清这一份**是谁提交的** —— 讨论会话里各方各有一份（§1）。
+            title: wording::detail_todo_title(
+                self.todo.speaker().map(wording::speaker_name).as_deref(),
+            ),
+            // 一份计划不是谁说的话：标题用正文档那一档，与文件页那个内容弹窗同一个颜色。
+            color: palette::PLAIN,
+            kind: DetailKind::Todo {
+                items: self.todo.all().to_vec(),
+            },
+        };
+        let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
+        self.open_detail(detail, width, DetailOpener::Todo);
     }
 
     /// 一次点击落在文件页上吗：落在哪一行就动那一行 —— 目录展开或收起，
@@ -5704,9 +5747,12 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     };
     let rows = match state.tab {
         Tab::Usage => state.panel.lines(&state.facts, page),
-        Tab::Todo => state.todo.lines(page),
-        // 文件页自己画：它要多记一份「哪些行画在哪」（点击与键盘要用），
-        // 而另外两页画的是纯读数。
+        // `todo` 自己画：它要记下自己的矩形（整页可点，`.scratch/todo-page/spec.md` §5），
+        // 也要把**折出来的续行**标给屏幕文本层 —— 否则一条折行的待办复制出来会多几个换行（§8）。
+        Tab::Todo => {
+            draw_todo_page(frame, page, state);
+            return;
+        }
         Tab::Files => {
             draw_files_page(frame, page, state);
             return;
@@ -5721,9 +5767,22 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
     // 这一帧没画改动页：指针于是不该再落在一页已经不在屏幕上的东西上（与文件页同一条
     // 「只认真画出来的东西」）。
     state.changes.rect = None;
-    // 左栏这一块也进屏幕文本层：三页的画法各不相同，但都是「一页已经排好的行」，没有软折
-    // 可言（`.scratch/tui-feedback/spec.md` §5）。
+    // 同理是这一页：停在 `调用量` 上时，点左栏不该开出一份清单。
+    state.todo.clear_rect();
+    // `调用量` 那一块也进屏幕文本层：它是「一页已经排好的行」，没有软折可言
+    // （`.scratch/tui-feedback/spec.md` §5）。
     note_rows(state, page, &rows, &[], &[]);
+    frame.render_widget(Paragraph::new(rows), page);
+}
+
+/// 左栏的 `todo` 页：页顶一条进度行（末行右端留着那个按钮）、下面是全部未完成的项
+/// （`.scratch/todo-page/spec.md` §2–§5）。
+fn draw_todo_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
+    state.todo.set_rect(page);
+    state.files_page.rect = None;
+    state.changes.rect = None;
+    let (rows, folded) = state.todo.lines_with_folds(page);
+    note_rows(state, page, &rows, &folded, &[]);
     frame.render_widget(Paragraph::new(rows), page);
 }
 
@@ -8415,6 +8474,13 @@ enum DetailKind {
     /// `git diff HEAD -- <path>`（那是子进程，所以弹窗先立起来、正文后到），未跟踪的直接读盘
     /// 给全文。这个弹窗与 `File` 同一条纪律：不进事件流、不进模型上下文、不打码。
     Diff { path: String, body: changes::Body },
+    /// 一份待办清单：左栏 `todo` 页整份点开就是它（`.scratch/todo-page/spec.md` §6）。
+    ///
+    /// 正文是**打开那一刻**的那份列表的一份拷贝 —— 弹窗是快照，模型之后提交的新列表不重画
+    /// 它，关掉重开才是新的那份。
+    Todo {
+        items: Vec<crate::tools::todo::Item>,
+    },
     /// 一次工具调用：它的参数，以及这次调用产出了什么。
     Tool {
         /// 给落盘输出文件命名的那个 id，`outputs/<id>.txt`。
@@ -8446,6 +8512,9 @@ enum DetailOpener {
     /// 改动页打开：与文件页一样，不冻也不还原 —— 这一页的位置由它自己那份列表与焦点拿着
     /// （`.scratch/diff-page/spec.md` §6）。
     Changes,
+    /// `todo` 页打开：同样什么都不冻、什么都不还 —— 这一页没有滚动、没有焦点行，
+    /// 关掉之后左栏仍停在它上面（`.scratch/todo-page/spec.md` §5）。
+    Todo,
 }
 
 /// 详情覆盖层的打开状态（票 02 §4）。
@@ -8575,7 +8644,10 @@ impl TuiState {
                     self.trace.set_holding(false);
                     self.trace.restore(top, follow);
                 }
-                Some(DetailOpener::Files) | Some(DetailOpener::Changes) | None => {}
+                Some(DetailOpener::Files)
+                | Some(DetailOpener::Changes)
+                | Some(DetailOpener::Todo)
+                | None => {}
             }
         }
     }
@@ -8744,6 +8816,13 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<DetailLi
                 source,
             ))));
             rows.extend(folded_text(content, width));
+        }
+        DetailKind::Todo { items } => {
+            rows.extend(
+                crate::render::todo::detail_rows(items, width)
+                    .into_iter()
+                    .map(DetailLine::plain),
+            );
         }
         DetailKind::Tool {
             tool_call_id,

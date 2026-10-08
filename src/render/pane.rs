@@ -441,6 +441,9 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<Line<'static>> {
 ///
 /// 续行从第零列起 —— 窗格是一份日志，缩进会主张一种折行后的文字并没有的结构。
 /// Markdown 渲染器的表格单元格复用它（那里的续行同样从第零列起）。
+///
+/// **一处有意例外**：左栏的 `todo` 页把续行**缩进到内容列**（`.scratch/todo-page/spec.md` §3）。
+/// 那一页不是日志 —— 缩进主张的是「这一片属于哪一项」，而那正是折行要保住的东西。
 pub(crate) fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut out: Vec<Line<'static>> = Vec::new();

@@ -317,25 +317,30 @@ fn the_sidebar_shows_the_id_before_the_content() {
         tool_call_id: ToolCallId::new("call-1"),
         tool: TODO_TOOL.to_owned(),
         args: items_with_ids(&[
-            ("补测试", "completed", Some("03")),
-            ("没有 id 的一项", "pending", None),
+            ("先写的一件", "pending", Some("01")),
+            ("正在做的那件", "in_progress", Some("02")),
+            ("做完的一件", "completed", Some("03")),
+            ("没有 id 的一件", "pending", None),
         ]),
         outcome: None,
     })));
 
     let rows: Vec<String> = panel
-        .lines(Rect::new(0, 0, 28, 4))
+        .lines(Rect::new(0, 0, 28, 6))
         .iter()
         .map(|line| line.to_string())
         .collect();
+    // 逐行比对本身就是那条对齐断言：`● 02 ` 与 `☐    ` 都是五列，于是**带 id 与不带 id 的
+    // 两行内容起于同一列**（票 09 验收第 5 条要的是这个同帧比对）。
     assert_eq!(
         rows,
         vec![
-            "✓ 03 补测试".to_owned(),
-            "☐ 没有 id 的一项".to_owned(),
-            "已完成 1/2".to_owned(),
+            "1/4 · 1 个在做          详情".to_owned(),
+            "● 02 正在做的那件".to_owned(),
+            "☐ 01 先写的一件".to_owned(),
+            "☐    没有 id 的一件".to_owned(),
         ],
-        "有 id 的项在状态字形之后带上 id，没 id 的照旧；计数行不动"
+        "进度行在最上面、正在做的排在最前、做完的不在页上；id 位补满，于是两类行内容同列"
     );
 }
 
@@ -556,6 +561,113 @@ async fn two_calls_in_one_message_each_get_a_result_and_the_last_list_wins() {
     session.harness.shutdown().await;
 }
 
+#[test]
+fn an_item_wraps_and_the_page_says_what_never_got_shown() {
+    use heng::events::ToolCallId;
+    use heng::render::todo::TodoPanel;
+    use heng::render::{Block, ToolBlock};
+    use ratatui::layout::Rect;
+
+    let mut panel = TodoPanel::default();
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: SpeakerId::Debater("kimi".into()),
+        tool_call_id: ToolCallId::new("call-1"),
+        tool: TODO_TOOL.to_owned(),
+        args: items_with_ids(&[
+            (
+                "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十",
+                "pending",
+                None,
+            ),
+            ("还没露过面的一条", "pending", None),
+        ]),
+        outcome: None,
+    })));
+
+    // 四行页区：前缀五列之后内容只剩 23 列，所以那 30 个字折三行，而页区放不下三行。
+    let rows: Vec<String> = panel
+        .lines(Rect::new(0, 0, 28, 4))
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "0/2                     详情".to_owned(),
+            "☐    一二三四五六七八九十一".to_owned(),
+            "     二三四五六七八九十一二…".to_owned(),
+            "＋1 项".to_owned(),
+        ],
+        "折行折到内容列（字形与 id 位补满之后），截断的那一条加 `…`，\
+         而它露过面所以不算进「还有几条没露过面」"
+    );
+}
+
+#[test]
+fn a_page_with_no_list_says_so_instead_of_showing_a_zero() {
+    use heng::events::ToolCallId;
+    use heng::render::todo::TodoPanel;
+    use heng::render::{Block, ToolBlock};
+    use ratatui::layout::Rect;
+
+    let mut panel = TodoPanel::default();
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: SpeakerId::Debater("kimi".into()),
+        tool_call_id: ToolCallId::new("call-1"),
+        tool: TODO_TOOL.to_owned(),
+        args: items_of(&[("一件事", "pending")]),
+        outcome: None,
+    })));
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: SpeakerId::Debater("kimi".into()),
+        tool_call_id: ToolCallId::new("call-2"),
+        tool: TODO_TOOL.to_owned(),
+        args: serde_json::json!({ "items": [] }),
+        outcome: None,
+    })));
+
+    let rows: Vec<String> = panel
+        .lines(Rect::new(0, 0, 28, 5))
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![heng::render::wording::TODO_EMPTY.to_owned()],
+        "空列表那一页是一句实话，不是 0/0、也不是一块空白"
+    );
+}
+
+#[test]
+fn a_two_row_page_is_the_progress_line_and_the_overflow_alone() {
+    use heng::events::ToolCallId;
+    use heng::render::todo::TodoPanel;
+    use heng::render::{Block, ToolBlock};
+    use ratatui::layout::Rect;
+
+    let mut panel = TodoPanel::default();
+    panel.observe(&Block::Tool(Box::new(ToolBlock {
+        speaker: SpeakerId::Debater("kimi".into()),
+        tool_call_id: ToolCallId::new("call-1"),
+        tool: TODO_TOOL.to_owned(),
+        args: items_of(&[("一条", "pending"), ("另一条", "pending")]),
+        outcome: None,
+    })));
+
+    let rows: Vec<String> = panel
+        .lines(Rect::new(0, 0, 28, 2))
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "0/2                     详情".to_owned(),
+            "＋2 项".to_owned()
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_real_session_keeps_the_id_in_the_arguments_and_the_sidebar_reads_it_back() {
     use heng::events::ToolCallId;
@@ -602,9 +714,8 @@ async fn a_real_session_keeps_the_id_in_the_arguments_and_the_sidebar_reads_it_b
     assert_eq!(
         rows,
         vec![
-            "✓ 03 补测试".to_owned(),
-            "▸ 04 写文档".to_owned(),
-            "已完成 1/2".to_owned(),
+            "1/2 · 1 个在做          详情".to_owned(),
+            "● 04 写文档".to_owned()
         ]
     );
 

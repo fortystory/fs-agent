@@ -1903,20 +1903,11 @@ pub fn stamp(at: DateTime<Utc>) -> String {
 
 /// **有折起来的内容**：这一行点得开。思考行、工具行、上下文注入行、轨迹视图的消息行都有；
 /// **对话视图的消息行不给** —— 它已经把全文显出来了。
-///
-/// **双义**：同一个字形在 todo 页里是「进行中」（[`TODO_IN_PROGRESS`]）。两处靠**区域**区分
-/// —— todo 页整页都是 todo 行，不会与转录混。这条写在表里，别让它当暗知识。
 pub const FOLDABLE: &str = "▸";
 
 /// **折着的内容摊开了**：文件页里一个展开着的目录。收起态复用 [`FOLDABLE`]，两者按
-/// 「这一行里有没有折着的东西」读 —— 与 todo 页那个「进行中」的双义靠**区域**区分
-/// （`.scratch/files-page/spec.md` §3）。
+/// 「这一行里有没有折着的东西」读。
 pub const UNFOLDED: &str = "▾";
-
-/// 一条 `todo` 项那一行开头的三个字形：等待、在做、做完。
-pub const TODO_PENDING: &str = "☐";
-pub const TODO_IN_PROGRESS: &str = FOLDABLE;
-pub const TODO_COMPLETED: &str = "✓";
 
 /// 回合条三格：焦点、普通、这一列没地方放的单位。
 pub const RAIL_FOCUS: &str = "┃";
@@ -1973,8 +1964,21 @@ pub fn picker_status_switchable() -> &'static str {
 /// 状态，而它自己那一格灰着。
 pub const PICKER_CURRENT: &str = "▸";
 
-/// 一项那一行开头的字形。一张 [`mode_label`] 那样的表，于是「哪个字形是什么意思」只有
-/// 一个归宿，左栏那一页自己一个都不留。
+// ---------------------------------------------------------------------------
+// 左栏 `todo` 页（`.scratch/todo-page/spec.md` §2–§4、§7）
+//
+// 这一页是**摘要**：页顶一条进度行，下面是全部未完成项（做完的折掉）。三枚状态字形
+// 各不相同形 —— 「在做」刻意离开 `▸`，那个字形归转录里可折叠的行，两处曾靠区域区分，
+// 而这一页现在既折行又开弹窗，同形就真的要靠记忆了。
+// ---------------------------------------------------------------------------
+
+/// 一条 `todo` 项那一行开头的三个字形：等待、在做、做完。
+pub const TODO_PENDING: &str = "☐";
+pub const TODO_IN_PROGRESS: &str = "●";
+pub const TODO_COMPLETED: &str = "✓";
+
+/// 一项处在什么位置 → 它那一行的字形。一张 [`mode_label`] 那样的表，于是「哪个字形是什么
+/// 意思」只有一个归宿，左栏那一页自己一个都不留。
 pub fn todo_glyph(status: crate::tools::todo::Status) -> &'static str {
     match status {
         crate::tools::todo::Status::Pending => TODO_PENDING,
@@ -1983,14 +1987,50 @@ pub fn todo_glyph(status: crate::tools::todo::Status) -> &'static str {
     }
 }
 
-/// `todo` 页的计数行：`已完成 2/5`。
-pub fn todo_count(completed: usize, total: usize) -> String {
-    format!("已完成 {completed}/{total}")
+/// 页顶那条进度行：`2/11 · 1 个在做`；全部做完写 `11/11 完成`；其余只写 `2/11`。
+///
+/// 它是这一页唯一的完成度信息 —— 做完的项折掉了，页上不给展开它们的地方。
+pub fn todo_progress(done: usize, total: usize, busy: usize) -> String {
+    let head = format!("{done}/{total}");
+    if busy > 0 {
+        return format!("{head}{SEP}{busy} 个在做");
+    }
+    if total > 0 && done == total {
+        return format!("{head}{SEP}完成");
+    }
+    head
 }
 
-/// 顶替那些这一页没地方放的项的那一行：`＋3 项`。
+/// 顶替那些这一页没地方放的项的那一行：`＋3 项`。那个数是**一条都没露出来的未完成项数**
+/// —— 被 `…` 截断、至少露过一行的那一条不算在里面。
 pub fn todo_overflow(hidden: usize) -> String {
     format!("＋{hidden} 项")
+}
+
+/// 列表被清空之后这一页写的那一句。
+pub const TODO_EMPTY: &str = "还没有待办";
+
+/// 进度行右端那一块：这一页**点页里任何一格**都开整份清单，而它是页上唯一写明
+/// 「这里能点」的东西（`.scratch/todo-page/spec.md` §5）。
+pub const TODO_BUTTON: &str = "详情";
+
+/// 一个说话者的**名字**（不带 `[…]` 那一层括号）：弹窗标题用它拼出「谁提交的那一份」。
+/// 它是措辞层里关于「怎么说一个说话者」的又一处登记 —— 别的层不自己拼。
+pub fn speaker_name(speaker: &crate::events::SpeakerId) -> String {
+    match speaker {
+        crate::events::SpeakerId::Debater(id) => id.to_string(),
+        crate::events::SpeakerId::Executor(id) => format!("执行者 {id}"),
+        crate::events::SpeakerId::User => "用户".to_owned(),
+        crate::events::SpeakerId::System => "系统".to_owned(),
+    }
+}
+
+/// 待办清单那个弹窗的标题：`待办`，以及**谁提交的那一份**（讨论会话里各方各有一份）。
+pub fn detail_todo_title(speaker: Option<&str>) -> String {
+    match speaker {
+        Some(name) => format!("待办 · {name}"),
+        None => "待办".to_owned(),
+    }
 }
 
 /// 文件页在索引还没就绪时说的那一句：说清它在等，而不是显示一块空白或者编出来的数据

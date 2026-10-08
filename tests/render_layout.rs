@@ -1622,8 +1622,8 @@ fn the_todo_page_fits_more_items_now_that_the_page_fills_the_height() {
         "没有溢出行：{rows:#?}"
     );
     assert!(
-        rows.iter().any(|line| line.contains("已完成 0/12")),
-        "计数行照旧：{rows:#?}"
+        rows.iter().any(|line| line.contains("0/12")),
+        "进度行照旧，只是搬到了页区第一行：{rows:#?}"
     );
 }
 
@@ -4054,6 +4054,10 @@ fn kimi() -> heng::events::SpeakerId {
     heng::events::SpeakerId::Debater("kimi".into())
 }
 
+fn debater(name: &str) -> heng::events::SpeakerId {
+    heng::events::SpeakerId::Debater(name.into())
+}
+
 fn executor() -> heng::events::SpeakerId {
     heng::events::SpeakerId::Executor(heng::events::ParticipantId::new("kimi-1"))
 }
@@ -4203,7 +4207,9 @@ fn an_executors_list_stays_out_of_the_sidebar() {
 }
 
 #[test]
-fn the_todo_page_lists_each_item_with_its_glyph_and_counts_them() {
+fn the_sidebar_page_leads_with_the_progress_line_and_keeps_only_the_open_items() {
+    // 摘要压在最上面：进度行是页区第一行，正在做的那条排在最前，
+    // 做完的不再出现在页上 —— 于是「还有什么没做」在页面上是连续的一块。
     let mut state = state_with_roster(&["kimi"]);
     apply_todo(
         &mut state,
@@ -4218,19 +4224,36 @@ fn the_todo_page_lists_each_item_with_its_glyph_and_counts_them() {
     let row = tab_bar_row(&mut state, 120, 24);
     click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
 
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("☐ 还没开始"), "{text}");
-    assert!(text.contains("▸ 正在做"), "{text}");
-    assert!(text.contains("✓ 做完了"), "{text}");
-    assert!(text.contains("已完成 1/3"), "{text}");
+    let page = sidebar_rows(&mut state, 120, 24);
+    let at = |needle: &str| {
+        page.iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} 在页面上：{page:#?}"))
+    };
+    let (progress, busy, waiting) = (at("1/3"), at("正在做"), at("还没开始"));
+    assert!(
+        progress < busy && busy < waiting,
+        "进度行在最上、正在做的排在那一条待做之前：{page:#?}"
+    );
+    assert!(
+        page[busy].starts_with('●'),
+        "正在做的那一条带的是 `●`：`{}`",
+        page[busy]
+    );
+    assert!(
+        !page.iter().any(|line| line.contains("做完了")),
+        "做完的不再出现在页上：{page:#?}"
+    );
+    assert!(
+        !page.iter().any(|line| line.contains('▸')),
+        "`▸` 退出这一页（它与转录里可折叠块的记号同形）：{page:#?}"
+    );
 }
 
 #[test]
 fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
-    // 这一页不滚动：页区给出的行数里，计数行先被留出来，
-    // 塞不下的在它上面用一行说明。计数那一行是地板 ——
-    // 别的都留不下时剩下的就是它。
-    // 页区撑满之后（`.scratch/trace-tab/spec.md` §4）这一页高 15 行，
+    // 这一页不滚动：进度行占掉页区第一行，条目拿剩下的，放不下的
+    // 在末行报出来。页区撑满之后（`.scratch/trace-tab/spec.md` §4）这一页高 15 行，
     // 所以要 30 项才逼得出溢出行。
     let items: Vec<(String, &str)> = (0..30)
         .map(|index| (format!("第 {index} 项"), "pending"))
@@ -4248,27 +4271,27 @@ fn the_todo_page_shows_what_fits_then_says_how_many_more_there_are() {
     let rows = sidebar_rows(&mut state, 120, 24);
     let count = rows
         .iter()
-        .position(|line| line.contains("已完成 0/30"))
-        .unwrap_or_else(|| panic!("计数那一行在页面上：{rows:#?}"));
+        .position(|line| line.contains("0/30"))
+        .unwrap_or_else(|| panic!("进度那一行在页面上：{rows:#?}"));
+    // 进度行**在页区第一行**（不是像旧的计数行那样在最后），所以条目在它下面。
     let shown = rows
         .iter()
-        .take(count)
+        .skip(count + 1)
         .filter(|line| (0..30).any(|index| line.contains(&format!("第 {index} 项"))))
         .count();
-    let overflow = rows[count - 1].clone();
-    assert!(
-        overflow.contains(&format!("＋{} 项", 30 - shown)),
-        "计数上面那一行说明有多少项没挤下（显示了 {shown} 项）：{rows:#?}"
-    );
-    assert!(shown < 30, "这一页没能把它们全装下：{rows:#?}");
+    let overflow = rows.last().cloned().unwrap_or_default();
     assert_eq!(
         shown, 13,
-        "15 行的页区里条目拿 14 行，其中一行归溢出：{rows:#?}"
+        "15 行的页区里进度行拿一行、溢出行拿一行，条目十四行里画得下十三行：{rows:#?}"
+    );
+    assert!(
+        overflow.contains("＋17 项"),
+        "末行说的是**一条都没露过面**的那几条（这一条露过，所以不算）：{overflow}"
     );
 }
 
 #[test]
-fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
+fn a_page_one_row_tall_degrades_to_the_progress_line_alone() {
     // 走面板而不是走一帧，因为没有终端会向布局要一页
     // 只有一行的页面 —— `SIDEBAR_MIN_PAGE_ROWS` 才是地板 —— 而这条规矩
     // 在那儿仍然得成立，而不是画出一个跑出来的项。
@@ -4293,7 +4316,7 @@ fn a_page_one_row_tall_degrades_to_the_count_line_alone() {
     let lines = panel.lines(Rect::new(0, 0, 28, 1));
     let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
     assert_eq!(text.len(), 1, "{text:?}");
-    assert!(text[0].contains("已完成 0/1"), "{text:?}");
+    assert!(text[0].contains("0/1"), "{text:?}");
 }
 
 #[test]
@@ -4354,7 +4377,7 @@ fn the_three_tab_labels_fit_at_the_narrow_width() {
 fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
     // 一个有条件的页签唯一能做的事，就是把页面从正在读它的人
     // 手里拿走。它做不到：闩是「曾经有过列表」，而清空
-    // 列表之后页面留着，显示计数。
+    // 列表之后页面留着，显示进度。
     let mut state = state_with_roster(&["kimi"]);
     apply_todo(
         &mut state,
@@ -4377,7 +4400,7 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
         serde_json::json!({ "items": [] }),
     );
     let page = sidebar_rows(&mut state, 120, 24).join("\n");
-    assert!(page.contains("已完成 0/0"), "{page}");
+    assert!(page.contains(wording::TODO_EMPTY), "{page}");
     assert!(!page.contains("一件事"), "而那些项随列表一起没了：{page}");
 }
 
@@ -4386,11 +4409,68 @@ fn the_todo_page_stays_put_when_the_list_is_cleared_under_it() {
 /// 那一页与转录**共用同一批屏幕行**，可两列说的不是一回事 —— 它没有可点开的条目。
 /// 点它以转录的行号去取详情，开着的是另一个视图里的东西；指针落在哪一列正是这件事
 /// 的判据。
+/// 一行的内容从第几列开始（跳过状态字形与前缀里的空格）。
+fn content_column(row: &str) -> usize {
+    row.chars()
+        .position(|ch| !ch.is_whitespace() && ch != '☐' && ch != '●' && ch != '✓')
+        .unwrap_or_else(|| panic!("{row:?} 里没有内容"))
+}
+
 #[test]
-fn clicking_a_todo_row_opens_nothing() {
+fn a_long_item_wraps_instead_of_being_cut() {
+    // 今天这一页把超宽的一条按页宽截断，长句子直接少半截。
+    // 折行之后全文都在，而折出来的续行缩进到**内容列** —— 那是一条的对齐口径，
+    // 与「前缀补满」一起让带 id 的与不带 id 的两行内容起于同一列。
+    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("短的一条", "pending")]),
+    );
+    apply_todo(
+        &mut state,
+        "call-2",
+        kimi(),
+        todo_args(&[(long, "pending"), ("还有一条", "pending")]),
+    );
+    let row = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, row, wording::TAB_TODO);
+
+    let page = sidebar_rows(&mut state, 120, 24);
+    let first = page
+        .iter()
+        .position(|line| line.contains("一二三四"))
+        .unwrap_or_else(|| panic!("那一条在页面上：{page:#?}"));
+    let head = page[first].clone();
+    let cont = page[first + 1].clone();
+    assert!(!head.contains('…'), "这一页放得下就不截断：{page:#?}");
+    assert!(
+        cont.contains("七八九十"),
+        "后半句在下一行，不是丢掉：{page:#?}"
+    );
+    assert_eq!(
+        content_column(&head),
+        content_column(&cont),
+        "续行缩进到内容列：{page:#?}"
+    );
+    assert!(
+        page.iter().any(|line| line.contains("还有一条")),
+        "后面那一条照旧排着：{page:#?}"
+    );
+}
+
+/// 左栏 `todo` 页现在是**点得开**的一页：整页点一下就是那份完整清单
+/// （`.scratch/todo-page/spec.md` §5、§6）。
+#[test]
+fn clicking_the_todo_page_opens_the_whole_list() {
     let mut state = state_with_roster(&["kimi"]);
     let items: Vec<(String, &str)> = (0..8)
-        .map(|index| (format!("第 {index} 项"), "pending"))
+        .map(|index| {
+            let status = if index == 0 { "in_progress" } else { "pending" };
+            (format!("第 {index} 项"), status)
+        })
         .collect();
     let borrowed: Vec<(&str, &str)> = items
         .iter()
@@ -4406,26 +4486,309 @@ fn clicking_a_todo_row_opens_nothing() {
 
     let rows = screen(120, 24, &mut state);
     let page_top = sidebar_page(&rows);
-    let clickable = rows
+    let beside = rows
         .iter()
         .position(|row| row.contains("被点开的消息"))
         .expect("转录里那条消息画出来了");
     assert!(
-        clickable >= page_top,
-        "布置：可点的那一行要落在左栏页区里（第 {clickable} 行，页从第 {page_top} 行起）"
+        beside >= page_top,
+        "布置：转录里那条消息要落在左栏页区里（第 {beside} 行，页从第 {page_top} 行起）"
     );
 
     let tab = tab_bar_row(&mut state, 120, 24);
     click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
     let frame = buffer(120, 24, &mut state);
-    let (column, _) = cell_of(&frame, 120, 24, "☐ 第 2 项").expect("todo 页上那一项");
-    let before = screen(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "第 2 项").expect("todo 页上那一项");
+    click(&mut state, column, row);
 
-    click(&mut state, column, clickable as u16);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains(&wording::detail_todo_title(None)),
+        "弹窗的标题是这一份：{text}"
+    );
+    assert!(
+        text.contains("第 0 项") && text.contains("第 7 项"),
+        "**整份**清单都在，包括页上放不下的那些：{text}"
+    );
+    assert!(text.contains("esc 关闭"), "页脚点出出口：{text}");
+
+    state.key(Key::Esc);
+    let page = sidebar_rows(&mut state, 120, 40).join("\n");
+    assert!(page.contains("第 2 项"), "关掉之后左栏仍停在那一页：{page}");
+}
+
+#[test]
+fn the_done_items_in_the_todo_detail_step_back_one_shade() {
+    // 降暗取**样**判断，不钉死某个色值 —— 那一档的归属由语义色板说了算
+    // （spec 测试决定「要钉住的行为 → 弹窗」）。
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("还等着的那一条", "pending"), ("做完的那一条", "completed")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "还等着的那一条").expect("那一项在页上");
+    click(&mut state, column, row);
+
+    let frame = buffer(120, 40, &mut state);
+    // 弹窗在 120 列下宽 116、居中，**盖住左栏** —— 这一帧里那两行只在弹窗里。
+    let (open, open_row) = cell_of(&frame, 120, 40, "还等着的那一条").expect("弹窗里有它");
+    let (done, done_row) = cell_of(&frame, 120, 40, "做完的那一条").expect("做完的也在弹窗里");
+    assert_ne!(
+        first_ink_fg(&frame, open, open_row),
+        first_ink_fg(&frame, done, done_row),
+        "做完的那一项退到另一档，而不只是少个记号"
+    );
+}
+
+#[test]
+fn the_todo_detail_holds_the_list_of_that_moment() {
+    // 弹窗是**打开那一刻**的快照：开着的时候模型又提交了新的一份，
+    // 开着的那个不动，关掉重开看到的是新的那份。
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("刚开工时的那一条", "pending")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "刚开工时的那一条").expect("那一项在页上");
+    click(&mut state, column, row);
+
+    apply_todo(
+        &mut state,
+        "call-2",
+        kimi(),
+        todo_args(&[("后来才立的那一条", "pending")]),
+    );
+    let open = screen(120, 40, &mut state).join("\n");
+    assert!(
+        open.contains("刚开工时的那一条") && !open.contains("后来才立的那一条"),
+        "开着的那个是快照，不跟着模型重写：{open}"
+    );
+
+    state.key(Key::Esc);
+    let frame = buffer(120, 40, &mut state);
+    let (column, row) = cell_of(&frame, 120, 40, "后来才立的那一条").expect("页上已经是新的那份");
+    click(&mut state, column, row);
+    let reopened = screen(120, 40, &mut state).join("\n");
+    assert!(
+        reopened.contains("后来才立的那一条") && !reopened.contains("刚开工时的那一条"),
+        "重开看到的是新的那份：{reopened}"
+    );
+}
+
+#[test]
+fn a_folded_item_is_copied_back_as_one_line() {
+    // 一条折成两行的待办，选中它之后剪贴板里是**一条**：续行接在上一行后面，
+    // 而不是各占一行 —— 那正是屏幕文本层认得「这是续行」的那件事。
+    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[(long, "pending")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "一二三四").expect("那一条在页上");
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 20, row + 1));
+    state.mouse(release(column + 20, row + 1));
+
+    // 复制出来的是**一条**：上半截接上下半截，中间没有一个换行（若屏幕文本层没认出那是
+    // 续行，这里就会多出一个 `\n`）。下半截前面那几格是缩进，它是那一行的内容。
+    let clip = state.take_clipboard().expect("拖选出文本");
+    assert_eq!(
+        clip,
+        heng::render::selection::osc52(
+            "一二三四五六七八九十一二三四五六七     八九十一二三四五六七"
+        ),
+        "折行的续行接在上一行后面，而不是自成一行：{clip:?}"
+    );
+    assert!(
+        !screen(120, 24, &mut state).join("\n").contains("esc 关闭"),
+        "拖选不是点开"
+    );
+}
+
+#[test]
+fn the_sidebar_page_says_so_when_there_is_no_list_at_all() {
+    // 列表被清空之后，页上是一句实话而不是一块空白 —— 一块空白分不清「没有」与「坏了」。
+    // 而页签**仍在**：它是一只闩（`.scratch/todo-and-modes/spec.md` §4）。
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("一件事", "pending")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    assert!(
+        sidebar_rows(&mut state, 120, 24)
+            .join("\n")
+            .contains("一件事")
+    );
+
+    apply_todo(
+        &mut state,
+        "call-2",
+        kimi(),
+        serde_json::json!({ "items": [] }),
+    );
+    let page = sidebar_rows(&mut state, 120, 24).join("\n");
+    assert!(page.contains(wording::TODO_EMPTY), "页里是一句话：{page}");
+    assert!(
+        !page.contains("0/0"),
+        "而不是一个读不出该做什么的 0/0：{page}"
+    );
+}
+
+#[test]
+fn an_empty_list_gives_no_button_and_opens_nothing() {
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("一件事", "pending")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    apply_todo(
+        &mut state,
+        "call-2",
+        kimi(),
+        serde_json::json!({ "items": [] }),
+    );
+
+    let page = sidebar_rows(&mut state, 120, 24).join("\n");
+    assert!(
+        !page.contains(wording::TODO_BUTTON),
+        "空列表时不画那一块：{page}"
+    );
+
+    let row = tab_bar_row(&mut state, 120, 24) + 4;
+    let before = screen(120, 24, &mut state);
+    click(&mut state, 30, row);
     assert_eq!(
         screen(120, 24, &mut state),
         before,
-        "点左栏 todo 页里的一项，屏幕上什么都不该动"
+        "而点那一块开不出一个空弹窗"
+    );
+}
+
+#[test]
+fn everything_done_leaves_the_progress_line_alone() {
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("做完了", "completed"), ("也做完了", "completed")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+
+    let page = sidebar_rows(&mut state, 120, 24);
+    let at = page
+        .iter()
+        .position(|line| line.contains("2/2"))
+        .expect("进度行在页上");
+    assert!(
+        page[at].contains("完成") && !page.iter().any(|line| line.contains("做完了")),
+        "全做完之后页上就那一行进度，条目区留白：{page:#?}"
+    );
+}
+
+#[test]
+fn the_todo_detail_names_who_submitted_that_list() {
+    // 讨论会话里各方各有一份，而页上是**最后一个落地者**的那份 —— 弹窗标题要说出那是谁，
+    // 否则读的人读到的是别人的计划而不自知。
+    let mut state = state_with_roster(&["kimi", "claude"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("kimi 那一轮的那一条", "pending")]),
+    );
+    apply_todo(
+        &mut state,
+        "call-2",
+        debater("claude"),
+        todo_args(&[("claude 那一轮的那一条", "pending")]),
+    );
+
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) =
+        cell_of(&frame, 120, 24, "claude 那一轮的那一条").expect("页上是最后落地的那一份");
+    click(&mut state, column, row);
+
+    let text = screen(120, 40, &mut state).join(
+        "
+",
+    );
+    assert!(
+        text.contains(&wording::detail_todo_title(Some("claude"))),
+        "标题写清是谁提交的那份：{text}"
+    );
+    assert!(
+        !text.contains("kimi 那一轮的那一条"),
+        "而打开的是最后落地的那份：{text}"
+    );
+
+    // 执行者的那份仍然只住在转录里：左栏连页签都不为它长。
+    apply_todo(
+        &mut state,
+        "call-3",
+        executor(),
+        todo_args(&[("执行者交回来的那一条", "pending")]),
+    );
+    state.key(Key::Esc);
+    let page = sidebar_rows(&mut state, 120, 40).join("\n");
+    assert!(
+        !page.contains("执行者交回来的那一条"),
+        "执行者的那份不进左栏：{page}"
+    );
+}
+
+#[test]
+fn dragging_across_the_todo_page_selects_instead_of_opening() {
+    // 这一页现在整页可点，而拖选仍然是另一条路（按下起拖选、松开才决定是复制还是点）。
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("一件事", "pending")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "一件事").expect("那一项在页上");
+    state.mouse(press(column, row));
+    state.mouse(drag_to(column + 4, row));
+    state.mouse(release(column + 4, row));
+
+    let text = screen(120, 24, &mut state).join("\n");
+    assert!(text.contains("已复制"), "拖选出文本、提示行给回执：{text}");
+    assert!(
+        !text.contains("esc 关闭"),
+        "而这一次拖选没有顺手把整份清单弹出来：{text}"
     );
 }
 
@@ -5998,6 +6361,17 @@ fn input_corner(width: u16, height: u16) -> (u16, u16) {
 /// 匹配是拿一行**按终端读它的方式**读出来的 —— 一个宽字素
 /// 前进两列、它后面那一格跳过 —— 所以匹配报出来的列
 /// 是屏幕列，而鼠标事件带的正是它。
+/// 那一行**第一个画出东西的格子**的前景色（从 `column` 往左找，跳过前缀的空格）。
+fn first_ink_fg(frame: &Buffer, column: u16, row: u16) -> ratatui::style::Color {
+    (0..=column)
+        .rev()
+        .find_map(|x| {
+            let cell = &frame[(x, row)];
+            (cell.symbol() != " ").then_some(cell.fg)
+        })
+        .unwrap_or(ratatui::style::Color::Reset)
+}
+
 fn cell_of(frame: &Buffer, width: u16, height: u16, needle: &str) -> Option<(u16, u16)> {
     for y in 0..height {
         let row = row_text(frame, y, width);
