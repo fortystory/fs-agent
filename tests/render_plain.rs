@@ -614,5 +614,10 @@ async fn an_answer_to_a_questionnaire_reads_as_the_user_speaking() {
     ];
     let (_stdout, stderr) = run(&events, false).await;
     let text = stderr.text();
-    assert!(text.contains("[用户] 用哪个方案：A"), "{text}");
+    assert!(
+        text.contains("[用户] 用哪个方案：这两条路走哪一条？"),
+        "题面完整摆出来：{text}"
+    );
+    assert!(text.contains("● A"), "选中的那一格在：{text}");
+    assert!(text.contains("○ B"), "没选的那一格也在：{text}");
 }

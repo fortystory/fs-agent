@@ -1061,72 +1061,107 @@ pub fn questionnaire_option(number: usize, label: &str, description: Option<&str
     text
 }
 
-/// 用户对一次问卷的作答，读作**他说的一句话**：一道题一行，`题面：答案`
+/// 用户对一次问卷的作答，摆成**他说的一句话**：一道题占一段，题面一行，然后是那张选项表
 /// （`.scratch/ui-trim/spec.md`）。
 ///
-/// 题面从**调用参数**里取 —— `header` 优先，没有就用 `question` —— 因为结果那边只有题的
-/// `id`。两边都对不上时退回那个 `id`：写不出题面时，一行里有个名字总比一行空话强。
+/// 题面与选项都从**调用参数**里取 —— 结果那边只有题的 `id` 与选中的标签，摆不出表来。两张
+/// 都取不到时退回那个 `id`：写不出题面时，一行里有个名字总比一行空话强。
 ///
-/// 一道题的答案三选一：所选标签用「、」连起来；自定义文本跟在它后面、括在圆括号里（多选题
-/// 上两者并存）；两边都空是**跳过** —— 那是一次刻意的「不答」，与一个从没走到的问题不同
-/// （spec §7）。
+/// 第二版（2026-10-08 维护者看过第一版之后）：题面**完整**摆出来（不再截到 40 字），而且
+/// **整张选项表**都列 —— 包括没被选中的那些，所以标记与问卷里同一对（`multi_select` 决定
+/// `[x]`/`[ ]` 还是 `●`/`○`）。一条回执要读得出「当时还有哪些没选」，那正是它存在的理由。
 pub fn answered(args: &Value, answers: &UserAnswers) -> String {
     answers
         .answers
         .iter()
-        .map(|answer| {
-            format!(
-                "{}：{}",
-                question_label(args, &answer.id),
-                answer_body(answer)
-            )
-        })
+        .flat_map(|answer| answer_lines(args, answer))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// 一道题在试卷里写着什么：`header` 优先，没有就用 `question`，都对不上就用它的 `id`。
-///
-/// 题面裁到 [`ANSWER_QUESTION_MAX_CHARS`]：转录里那一行是**回执**，不是重印一遍问卷。
-fn question_label(args: &Value, id: &str) -> String {
-    let question = args
-        .get("questions")
-        .and_then(Value::as_array)
-        .and_then(|questions| {
-            questions
-                .iter()
-                .find(|question| question.get("id").and_then(Value::as_str) == Some(id))
-        });
-    let Some(question) = question else {
-        return id.to_owned();
-    };
-    for key in ["header", "question"] {
-        if let Some(text) = question.get(key).and_then(Value::as_str) {
-            let text = text.trim();
-            if !text.is_empty() {
-                return cut(text, ANSWER_QUESTION_MAX_CHARS);
-            }
-        }
-    }
-    id.to_owned()
-}
-
-/// 一道题的题面在那一行回执里最长占多少个字。
-const ANSWER_QUESTION_MAX_CHARS: usize = 40;
-
-/// 一道题的答案那半句。
-fn answer_body(answer: &UserAnswer) -> String {
-    let chosen = answer.selected.join("、");
+/// 一道题占的那几行。
+fn answer_lines(args: &Value, answer: &UserAnswer) -> Vec<String> {
+    let question = question_of(args, &answer.id);
     let custom = answer
         .custom
         .as_deref()
         .map(str::trim)
         .filter(|custom| !custom.is_empty());
-    match (chosen.is_empty(), custom) {
-        (false, Some(custom)) => format!("{chosen}（{custom}）"),
-        (false, None) => chosen,
-        (true, Some(custom)) => custom.to_owned(),
-        (true, None) => questionnaire_skipped().to_owned(),
+    let mut lines = vec![question_label(question, &answer.id)];
+    let options = question
+        .and_then(|question| question.get("options"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let multi = question
+        .and_then(|question| question.get("multi_select"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    for option in options {
+        let label = option
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let picked = answer.selected.iter().any(|selected| selected == label);
+        let mark = match (multi, picked) {
+            (true, true) => CHOICE_CHECKED,
+            (true, false) => CHOICE_UNCHECKED,
+            (false, true) => CHOICE_PICKED,
+            (false, false) => CHOICE_UNPICKED,
+        };
+        lines.push(format!("{ANSWER_INDENT}{mark} {label}"));
+    }
+    // 没有选项的题：答案就是他自己打的那一行（或者一次跳过）—— 作答时它也是这个形状。
+    if options.is_empty() {
+        lines.push(format!(
+            "{ANSWER_INDENT}{}",
+            custom.unwrap_or(questionnaire_skipped())
+        ));
+        return lines;
+    }
+    // 多选题里自定义文本是对所选选项的**补充**（spec §7），所以它跟在选项表下面，用问卷自己
+    // 那个标签点名。
+    if let Some(custom) = custom {
+        lines.push(format!(
+            "{ANSWER_INDENT}{}{custom}",
+            questionnaire_custom_label()
+        ));
+    }
+    // 选项表上一格都没勾、也没有补充：那是一次刻意的「不答」，与一个从没走到的问题不同。
+    if answer.selected.is_empty() && custom.is_none() {
+        lines.push(format!("{ANSWER_INDENT}{}", questionnaire_skipped()));
+    }
+    lines
+}
+
+/// 回执里每题的内容比题面低两格 —— 题面是那句话的开头，选项与答案是它下面的表。
+const ANSWER_INDENT: &str = "  ";
+
+/// 调用参数里 `id` 是这一道题的那一份，取不到就是 `None`。
+fn question_of<'a>(args: &'a Value, id: &str) -> Option<&'a Value> {
+    args.get("questions")?
+        .as_array()?
+        .iter()
+        .find(|question| question.get("id").and_then(Value::as_str) == Some(id))
+}
+
+/// 一道题在试卷里写着什么：`header：question`（`header` 只是题面上方的一行短标签，两个都摆
+/// 出来才读得全），只有一个时就是它，都取不到时退回 `id`。
+fn question_label(question: Option<&Value>, id: &str) -> String {
+    let Some(question) = question else {
+        return id.to_owned();
+    };
+    let field = |key: &str| {
+        question
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    };
+    match (field("header"), field("question")) {
+        (Some(header), Some(text)) if header != text => format!("{header}：{text}"),
+        (Some(text), _) | (None, Some(text)) => text.to_owned(),
+        (None, None) => id.to_owned(),
     }
 }
 

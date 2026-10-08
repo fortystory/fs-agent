@@ -31,7 +31,8 @@ fn state() -> TuiState {
     TuiState::new(facts(), std::path::PathBuf::from("/x/heng"), None)
 }
 
-/// 一次 `ask_user_question` 的调用：两道题，第一道带 `header`，第二道只有 `question`。
+/// 一次 `ask_user_question` 的调用：两道题 —— 第一道是多选题、带 `header` 三个选项，第二道
+/// 没有选项（自由文本）。
 fn ask_args() -> serde_json::Value {
     json!({
         "questions": [
@@ -39,23 +40,30 @@ fn ask_args() -> serde_json::Value {
                 "id": "pick",
                 "header": "用哪个方案",
                 "question": "这两条路走哪一条？",
-                "options": [{"label": "A"}, {"label": "B"}]
+                "multi_select": true,
+                "options": [{"label": "A"}, {"label": "B"}, {"label": "C"}]
             },
             {"id": "note", "question": "还有别的要说吗？", "options": []}
         ]
     })
 }
 
-/// 那两道题的一份答案：第一道两个标签都选了，第二道是自定义文本。
+/// 那两道题的一份答案：第一道选了 A 与 B（`C` 没选）另加一句补充，第二道是自定义文本。
 fn answered_body() -> String {
     json!({
         "answers": [
-            {"id": "pick", "selected": ["A", "B"]},
+            {"id": "pick", "selected": ["A", "B"], "custom": "另一个想法"},
             {"id": "note", "selected": [], "custom": "没有"}
         ]
     })
     .to_string()
 }
+
+/// 那份回执摆出来的样子：题面一行（`header：question`），然后是**整张选项表** —— 没选中的
+/// 那些也在，标记与问卷里同一对。
+const ANSWERED_TEXT: &str = "用哪个方案：这两条路走哪一条？\n  \
+                              [x] A\n  [x] B\n  [ ] C\n  \
+                              自定义：另一个想法\n还有别的要说吗？\n  没有";
 
 /// 一次工具调用开始的日志事件。
 fn call(seq: u64, id: &str, tool: &str, args: serde_json::Value) -> RenderEvent {
@@ -97,7 +105,8 @@ fn answer_of(blocks: &[Block]) -> Option<&str> {
 
 #[test]
 fn an_answer_becomes_a_user_turn_in_the_transcript() {
-    // 一道题一行，`题面：答案`：`header` 优先，没有就用 `question`（结果那边只有题的 `id`）。
+    // 题面完整摆出来（`header：question`），下面是那张选项表：选中的打勾、没选的留空 —— 一条
+    // 回执要读得出「当时还有哪些没选」。没有选项的题就一行答案。
     let mut transcript = Transcript::new();
     let mut blocks = transcript.push(call(1, "call-1", "ask_user_question", ask_args()));
     blocks.extend(transcript.push(result(2, "call-1", true, Some(&answered_body()))));
@@ -108,8 +117,8 @@ fn an_answer_becomes_a_user_turn_in_the_transcript() {
     );
     assert_eq!(
         answer_of(&blocks),
-        Some("用哪个方案：A、B\n还有别的要说吗？：没有"),
-        "答案跟在它后面，读作他说的那句话"
+        Some(ANSWERED_TEXT),
+        "答案跟在它后面，摆成他说的那句话"
     );
 }
 
@@ -122,7 +131,22 @@ fn a_skipped_question_says_so_instead_of_leaving_a_blank() {
     let body = json!({"answers": [{"id": "note", "selected": []}]}).to_string();
     let blocks = transcript.push(result(2, "call-1", true, Some(&body)));
 
-    assert_eq!(answer_of(&blocks), Some("还有别的要说吗？：已跳过"));
+    assert_eq!(answer_of(&blocks), Some("还有别的要说吗？\n  已跳过"));
+}
+
+#[test]
+fn a_skipped_option_question_still_shows_the_empty_table() {
+    // 有选项的那道题被跳过时，表照摆、每格都是空的，底下再说一句跳过 —— 「跳过」是这张表
+    // 的一种读法，不是另一件事。
+    let mut transcript = Transcript::new();
+    transcript.push(call(1, "call-1", "ask_user_question", ask_args()));
+    let body = json!({"answers": [{"id": "pick", "selected": []}]}).to_string();
+    let blocks = transcript.push(result(2, "call-1", true, Some(&body)));
+
+    assert_eq!(
+        answer_of(&blocks),
+        Some("用哪个方案：这两条路走哪一条？\n  [ ] A\n  [ ] B\n  [ ] C\n  已跳过")
+    );
 }
 
 #[test]
@@ -190,8 +214,9 @@ fn the_screen_shows_the_answer_as_the_user_speaking() {
     state.apply(result(2, "call-1", true, Some(&answered_body())));
 
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("用哪个方案：A、B"), "{text}");
-    assert!(text.contains("还有别的要说吗？：没有"), "{text}");
+    for line in ANSWERED_TEXT.split('\n') {
+        assert!(text.contains(line.trim()), "缺了这一行 {line:?}：\n{text}");
+    }
 }
 
 #[test]
