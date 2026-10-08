@@ -7,11 +7,15 @@
 
 **它不含实现决策**（那是 `docs/` 逐面文档与 `.scratch/` 的 spec 的事），也**不收两类东西**：通用编程概念（timeout、error type、工具函数那种，即使本项目到处在用），以及 skills 工具链的名字（`/grill-with-docs`、`/wayfinder`、`/handoff`……）——后者是**外来名**，只在票与文档的正文里出现，本文件最多在某个词的 `_Avoid_` 里点它一下，不给它立条目。
 
+**它是本仓库的 glossary（词汇表）**：一个概念在这里只立一个词、只给一句定义，代码、`docs/`、票与 spec 都照这里写（提到「词汇表」时说的就是本文件）。于是收不收一个词有两条判据：它是**本项目特有**的概念（通用编程概念不收，见上），以及它值得有一个**唯一**的名字（同义词一律进 `_Avoid_`，而不是多立一条词）。
+
 > **每条的格式是「中文名（English）」**：**中文是叙述、文档与讨论里的正式用词；英文槽位是代码里的标识符 / 类型名 —— 若这个概念只在 spec 与文档里立了名、代码里没有对应实体，槽位就写那个已被文档采用的写法**。两者指同一个概念，不是互为别名——所以写文档时说「讨论者」，写代码时写 `Debater`。
 >
 > **流程词没有对应的代码标识符**：那一节的英文槽位放它在磁盘上或 tracker 里的位置（`spec.md`、`map.md`、`Status:`）；没有中文名的词就直接不给中文名，见**token** 那条的先例。
 >
 > `agent` 是泛称（程序名「衡」，命令 `heng`；"一个 agent 回合"），**不作为类型名**：类型名一律用下面的 **`Debater` / `Executor`**（即讨论者 / 执行者）。
+>
+> **`_Avoid_` 是条目末尾那行别名黑名单**：同一个概念的其他叫法列在这儿，见到就换回主词。它是收敛同义词的地方，也是「一个概念在仓库里只有一种写法」的前提 —— 里面可以点一个别处的词条（「那是**落点**」），也可以点一个干脆不要的说法。
 
 ## 名字
 
@@ -375,6 +379,10 @@ _Avoid_: 脱敏、掩码、mask、sanitize
 
 ## 流程
 
+**slug**:
+文件名的短标识：小写、连字符分词 —— feature 目录与票的文件名（`.scratch/<feature-slug>/issues/NN-<slug>.md`）、ADR 与学习记录文件名末尾那一截（`0005-model-visible-text-in-chinese.md`）都是它。它是**磁盘上的定位符**，不是给人读的称谓：叙述与引用写 title 或词条名。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
+_Avoid_: 不给它中文名（一律写 slug）；短名、文件名（那是它待的地方，没说出它是一段标识）
+
 **feature 目录（`.scratch/<feature-slug>/`）**:
 issue tracker 的存放单位：**一个 feature 一个目录**，它自己的 spec、决策图与票全在目录里，feature 之间不共享文件。总清单是 `.scratch/README.md`（**feature 索引**，一行一个 feature：形态、一句话、票数与完成度）。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
 _Avoid_: 不给它中文名（全仓库都写 feature）；项目、模块（那是代码里的东西，不是 tracker 的单位）
@@ -404,6 +412,10 @@ _Avoid_: issue（那是对外 tracker 的说法，本仓库的 tracker 就是 ma
 **阻塞边（`Blocked by`）**:
 票顶上那一行记的依赖边：列出的每个文件都变成 `resolved` 之后这张票才解除阻塞。本地 markdown 没有原生依赖边，这条边只是**约定**。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
 _Avoid_: 依赖、前置（听着像代码里的依赖，这条边只决定「先做哪张票」）、blocker（那是边另一端的票，不是边本身）
+
+**认领（claim）**:
+开工前把一张票**占下来**的那个动作：决策票把 `Status:` 写成 `claimed` 并保存，这就是这次 session 的第一次写入，于是并发的 session 跳过它。叙述里说「认领」，磁盘上写 `claimed`。**没被认领**是 **frontier** 的三个条件之一。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
+_Avoid_: 领取、申报；把它读成「负责人」（这里没有那个人，认领只说明有人在动了）；与「解决」混（`claimed` → `resolved` 是两步）
 
 **frontier**:
 还没被认领的**下一批票**：扫一遍票据目录，找 open、没被阻塞、也没被认领的那些，**编号最小的当选**；`Type: implement` 一律跳过。设计票全关掉，图就算走完，哪怕实现票还开着。细节见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
