@@ -41,8 +41,10 @@
 - **`disable-model-invocation: true`。** 带这个旗标的技能既不在清单里，也不能由
   `skill(name)` 加载：模型没法绕过这个旗标去猜它的名字。只有用户能调它。
 - **用户调用。** 交互式会话里的 `/<name> [task]` 会加载用户点名的技能 —— 包括标了
-  `disable-model-invocation: true` 的 —— 然后把 `task` 当一次普通回合跑（只写 `/<name>`
-  则跑一个默认提示词）。正文是一条追加在历史**之后**的 `ContextInjected { source: Skill }`，
+  `disable-model-invocation: true` 的 —— 然后把**整条原文**当一次普通回合跑（只写 `/<name>`
+  则跑一个默认提示词）。**技能名留在那条消息里**：`/research 帮我查 X` 发出去的就是这一条
+  （2026-10-08 改，`.scratch/ui-trim/spec.md` §2；在那之前技能名被丢掉）。正文是一条追加在历史
+  **之后**的 `ContextInjected { source: Skill }`，
   也就是会话中途注入占的那个位置（以前占它的是旧 plan 模式的指令；用户加载的技能正文就是
   它现在为之存在的那个场景），所以缓存过的前缀一动不动。
   每份正文封顶 `MAX_SKILL_TOKENS`，但这条注入是钉住的：丢掉旧工具加载正文的那个 25k 合计

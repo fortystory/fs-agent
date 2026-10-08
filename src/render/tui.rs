@@ -2026,10 +2026,13 @@ impl TuiState {
 
     /// 把脉冲推进一帧（`.scratch/tui-input-pulse/spec.md` §2b）。
     ///
-    /// **空闲也走**：时钟从「仅运行时武装」放宽到「始终」之后，状态行那个字形循环在空闲时
-    /// 也在动，只是慢下来（`.scratch/tui-visual-language/spec.md` §31、§32）。这是本 effort
-    /// 最贵的一笔 —— 空闲不再是零唤醒。它推进的是脉冲的帧、别的什么都不是：**不是**一个通用
-    /// 的「重画点什么」的钩子，任何需要一帧的东西都应该通过那个改变了它的事件说出来。
+    /// **空闲也走**：挂在这条时钟上的东西空闲时也活着 —— 光标闪烁，以及那几条与运行无关的
+    /// 回执寿命（复制、打开、通知行）。票 09 曾让空闲停掉时钟，`.scratch/tui-visual-language/spec.md`
+    /// §32 推翻了它；2026-10-08 状态字形在就绪时也定住了（`.scratch/ui-trim/spec.md`），但这条
+    /// 时钟的其余住户还在，所以「空闲不再零唤醒」这笔代价**没有**跟着收回。
+    ///
+    /// 它推进的是脉冲的帧、别的什么都不是：**不是**一个通用的「重画点什么」的钩子，任何需要
+    /// 一帧的东西都应该通过那个改变了它的事件说出来。
     pub fn tick(&mut self) {
         self.pulse = self.pulse.wrapping_add(1);
         self.dirty = true;
@@ -4783,7 +4786,7 @@ impl TuiState {
             .len() as u16,
             None => self
                 .editor
-                .height(layout::input_text_width(area, self.sidebar_wanted)),
+                .height(layout::content_width(area, self.sidebar_wanted)),
         }
     }
 }
@@ -6012,27 +6015,13 @@ fn draw_too_small(frame: &mut ratatui::Frame, area: Rect) {
     );
 }
 
-/// 在一个脉冲帧上提示符的颜色（`.scratch/tui-input-pulse/spec.md` §2b）。
-///
-/// 维护者的脚本，翻译过来的样子：色相以每秒 0.3 圈走过色环 —— 每 3.3 秒一整圈 —— 同时饱和
-/// 度在 0.55 上下呼吸，幅度 0.2、每 2.1 秒一次，而明度留在 0.85，好让这个字形永远不喊叫。
-/// **它只在一次运行进行中的时候走**：帧来自循环的时钟，那时才武装、别时不武装，而运行结束时
-/// 计数器复位，所以歇着的提示符永远穿帧 0 的颜色（票 09）。
-/// 呼吸的意义正在于此：只变色相就是换了个颜色，而一个还会胀缩的颜色，读起来才像活的。
-///
-/// 颜色本身归色板（[`palette::prompt_colour`]）；这里只把帧换成秒。
-fn prompt_colour(frame: u64) -> Color {
-    palette::prompt_colour(frame as f64 * PULSE_FRAME.as_secs_f64())
-}
-
-/// 一个脉冲帧：大约每秒十六帧，这是一个走色环的颜色要读起来像在旋转、而不是一串跳跃所需要的
-/// 速度（`.scratch/tui-input-pulse/spec.md` §2b：维护者自己的脚本跑在 60 fps，而这是同一个
-/// 样子、步长更粗）。它是这个界面上**每一个**由脉冲驱动的动画共用的帧长。
+/// 一个脉冲帧：这个界面上**每一个**由脉冲驱动的动画共用的帧长 —— 左栏标记忙时那束扫光，与
+/// 光标闪烁。
 ///
 /// **这个时钟一直在走**：票 09 曾让它在空闲时停掉（「一个在他们打字时手底下动来动去的颜色
-/// 是噪声」），`.scratch/tui-visual-language/spec.md` §32 推翻了它 —— 动的不再是提示符（它空闲
-/// 时仍歇在帧 0 的颜色上），而是**状态行那个字形循环**，那是新的一条信息通道，不是给静态元素
-/// 加装饰。代价写在明面上：空闲的会话不再零唤醒。
+/// 是噪声」），`.scratch/tui-visual-language/spec.md` §32 推翻了它。提示符的色相随后随提示符
+/// 一起退场（`.scratch/ui-trim/spec.md`），但空闲那一半仍有住户：光标闪烁与那几条回执的寿命。
+/// 代价写在明面上：空闲的会话不再零唤醒。
 const PULSE_FRAME: std::time::Duration = std::time::Duration::from_millis(60);
 
 /// 那个按需武装的 deadline 到点了没有（`None` = 永远不会到点）。
@@ -6474,26 +6463,12 @@ fn draw_bottom(
         state.pending = Some(Pending::Questionnaire(questionnaire));
         return None;
     }
-    let (mut rows, cursor) = state.editor.view(
-        layout::input_text_width(frame.area(), state.sidebar_wanted),
+    let (rows, cursor) = state.editor.view(
+        layout::content_width(frame.area(), state.sidebar_wanted),
         panes.input.height,
     );
-    // 提示符是自己的一个 span（见 `editor::Input::view`），正是它给了提示符一个草稿永远不会
-    // 拿到的颜色。只有**就是**提示符的那个 span 上色：它下面那些行的缩进是同样宽的空格，而
-    // 一份长到把提示符滚出顶端的草稿，屏幕上根本没有提示符可上色
-    // （`.scratch/tui-input-pulse/spec.md` §2b）。
-    // 提示符的色相只在一次运行进行中走：空闲时它歇在帧 0 的颜色上，于是输入区**完全静止**
-    // ——动的是状态行那个字形循环（`.scratch/tui-visual-language/spec.md` §30–§33）。
-    let prompt_frame = if state.busy() { state.pulse } else { 0 };
-    let prompt_style = Style::default().fg(prompt_colour(prompt_frame));
-    for row in &mut rows {
-        match row.spans.first_mut() {
-            Some(lead) if lead.content.as_ref() == editor::PROMPT => lead.style = prompt_style,
-            _ => {}
-        }
-    }
-    // 草稿归正文档：整段 `BOLD` 随本 effort 退场（`.scratch/tui-visual-language/spec.md` §19），
-    // 提示符 `❱` 仍是界面上唯一会动的专色、唯一焦点。
+    // 草稿归正文档，自己不带任何前缀：提示符与它的色相随 `.scratch/ui-trim/spec.md` 一起退场
+    // （整段 `BOLD` 则是更早退的，`.scratch/tui-visual-language/spec.md` §19）。
     // 输入区也进屏幕文本层（没有软折：草稿的换行是用户自己敲的）。
     note_rows(state, panes.input, &rows, &[], &[]);
     frame.render_widget(Paragraph::new(rows), panes.input);
@@ -7158,6 +7133,17 @@ fn paint_block(
             rows.into_iter().map(RenderedLine::from).collect()
         }
         Block::Delta { .. } => Vec::new(),
+        // 用户的回答走**用户消息**那条路 —— 同一个气泡、同一档颜色、同一份前缀。这一处转发
+        // 是刻意的：样式只有一份，两条路就没有地方漂移（`.scratch/ui-trim/spec.md`）。
+        Block::Answer { text } => {
+            let as_speech = Block::Message {
+                speaker: crate::events::SpeakerId::User,
+                role: Role::User,
+                text: text.clone(),
+                reasoning: None,
+            };
+            paint_block(&as_speech, colors, width, style, view, name)
+        }
         Block::RoundStarted { round, mode } => vec![
             Line::from(Span::styled(
                 wording::round_section(*round, *mode),
@@ -7611,14 +7597,19 @@ fn trace_message_row(
 }
 
 /// 一条来源行是不是用户自己的消息，那正是回合条一格跳转所瞄准的（spec §4）。
+/// 这个块是不是**用户说的话**（气泡、以及对话窗格里靠右那一版排版都认它）。
+///
+/// 两条来路：他自己打的那条消息，以及他对一次问卷的作答（`Block::Answer`）—— 后者不是流上
+/// 的消息，但屏幕上它是同一件事（`.scratch/ui-trim/spec.md`）。
 fn is_user_message(block: &Block) -> bool {
-    matches!(
-        block,
-        Block::Message {
-            speaker: crate::events::SpeakerId::User,
-            ..
-        }
-    )
+    matches!(block, Block::Answer { .. })
+        || matches!(
+            block,
+            Block::Message {
+                speaker: crate::events::SpeakerId::User,
+                ..
+            }
+        )
 }
 
 /// 一个块是谁说的（不说话的那些是 `None`）。
@@ -7638,6 +7629,8 @@ fn block_speaker(block: &Block) -> Option<&crate::events::SpeakerId> {
         | Block::Usage { speaker, .. }
         | Block::AgentError { speaker, .. } => Some(speaker),
         Block::Tool(tool) => Some(&tool.speaker),
+        // 问卷的作答是用户说的：与他自己打的那条消息同一档（`.scratch/ui-trim/spec.md`）。
+        Block::Answer { .. } => Some(&crate::events::SpeakerId::User),
         _ => None,
     }
 }
@@ -7660,6 +7653,8 @@ fn selects(view: Viewport, block: &Block) -> bool {
         } => false,
         // 用户文本与 assistant 正文 —— 对话本来就该只有这些。
         Block::Message { .. } => true,
+        // 用户对问卷的作答与他打的话同一档，所以同样留在对话视图里。
+        Block::Answer { .. } => true,
         // 「为什么没有回答」的那几类立刻要知道（冻结项 8）。
         Block::AgentError { .. } | Block::SessionError { .. } | Block::SessionEnded { .. } => true,
         // hook 只在**失败**时是说给用户的；成功的那条留在轨迹里。
@@ -8863,30 +8858,6 @@ mod tests {
             Some(now - std::time::Duration::from_millis(1)),
             now
         ));
-    }
-
-    /// 提示符的颜色是维护者的脚本翻进这个渲染器的结果，所以这些数字是对着脚本自己的输出钉的。
-    ///
-    /// 脚本每 **1/60 秒**走 0.005 色相、0.05 呼吸，所以两者在*某个时刻*上一致，而**不是**在
-    /// 某个下标上：一个脉冲帧是 60 ms，也就是三个半脚本帧，我们这里的帧 5 是脚本的帧 18。
-    /// 这些三元组就是 `colorsys.hsv_to_rgb` 为脚本的帧打出来的
-    /// （`.scratch/tui-input-pulse/spec.md` §2b）。
-    #[test]
-    fn the_prompt_colour_is_the_script_at_the_same_moment() {
-        assert_eq!(PULSE_FRAME.as_millis(), 60);
-        for (frame, expected) in [
-            (0u64, Color::Rgb(216, 97, 97)),
-            (5, Color::Rgb(216, 146, 63)),
-            (10, Color::Rgb(203, 216, 55)),
-            (30, Color::Rgb(131, 196, 216)),
-        ] {
-            assert_eq!(
-                prompt_colour(frame),
-                expected,
-                "帧 {frame}：脚本在第 {} 秒打出来的就是这个颜色",
-                frame as f64 * PULSE_FRAME.as_secs_f64()
-            );
-        }
     }
 
     // --- 目标循环跑着时的键盘（`.scratch/goal-loop/spec.md` §5） -------------

@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::permissions::{Escalation, Mode};
 use crate::provider::FinishReason;
+use crate::questions::{UserAnswer, UserAnswers};
 use crate::render::width::{text_columns, truncate_columns};
 
 /// 一个轮次模式给人看的标签。
@@ -1060,6 +1061,75 @@ pub fn questionnaire_option(number: usize, label: &str, description: Option<&str
     text
 }
 
+/// 用户对一次问卷的作答，读作**他说的一句话**：一道题一行，`题面：答案`
+/// （`.scratch/ui-trim/spec.md`）。
+///
+/// 题面从**调用参数**里取 —— `header` 优先，没有就用 `question` —— 因为结果那边只有题的
+/// `id`。两边都对不上时退回那个 `id`：写不出题面时，一行里有个名字总比一行空话强。
+///
+/// 一道题的答案三选一：所选标签用「、」连起来；自定义文本跟在它后面、括在圆括号里（多选题
+/// 上两者并存）；两边都空是**跳过** —— 那是一次刻意的「不答」，与一个从没走到的问题不同
+/// （spec §7）。
+pub fn answered(args: &Value, answers: &UserAnswers) -> String {
+    answers
+        .answers
+        .iter()
+        .map(|answer| {
+            format!(
+                "{}：{}",
+                question_label(args, &answer.id),
+                answer_body(answer)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 一道题在试卷里写着什么：`header` 优先，没有就用 `question`，都对不上就用它的 `id`。
+///
+/// 题面裁到 [`ANSWER_QUESTION_MAX_CHARS`]：转录里那一行是**回执**，不是重印一遍问卷。
+fn question_label(args: &Value, id: &str) -> String {
+    let question = args
+        .get("questions")
+        .and_then(Value::as_array)
+        .and_then(|questions| {
+            questions
+                .iter()
+                .find(|question| question.get("id").and_then(Value::as_str) == Some(id))
+        });
+    let Some(question) = question else {
+        return id.to_owned();
+    };
+    for key in ["header", "question"] {
+        if let Some(text) = question.get(key).and_then(Value::as_str) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return cut(text, ANSWER_QUESTION_MAX_CHARS);
+            }
+        }
+    }
+    id.to_owned()
+}
+
+/// 一道题的题面在那一行回执里最长占多少个字。
+const ANSWER_QUESTION_MAX_CHARS: usize = 40;
+
+/// 一道题的答案那半句。
+fn answer_body(answer: &UserAnswer) -> String {
+    let chosen = answer.selected.join("、");
+    let custom = answer
+        .custom
+        .as_deref()
+        .map(str::trim)
+        .filter(|custom| !custom.is_empty());
+    match (chosen.is_empty(), custom) {
+        (false, Some(custom)) => format!("{chosen}（{custom}）"),
+        (false, None) => chosen,
+        (true, Some(custom)) => custom.to_owned(),
+        (true, None) => questionnaire_skipped().to_owned(),
+    }
+}
+
 /// 模型推荐一个选项时接的后缀（`.scratch/tui-feedback/spec.md` §1）。
 pub const RECOMMENDED_SUFFIX: &str = "(推荐)";
 
@@ -1185,23 +1255,26 @@ pub fn status_word(busy: bool) -> &'static str {
 /// 的两个锚点与它无关。
 pub const PULSE_GLYPHS: [&str; 8] = ["🌘", "🌗", "🌖", "🌕", "🌔", "🌓", "🌒", "🌑"];
 
-/// 空闲时每换一格要几帧。运行中是它的四分之一 —— 同一个时钟，两种速度（§31）。
+/// 就绪时状态词前那个字形：**满月，静止不动**。
 ///
-/// 一轮是八格：运行中 8 × 2 帧 ≈ 0.96 秒，空闲 8 × 8 帧 ≈ 3.8 秒
+/// 它曾经也走这一集月相，只是慢四倍（§31）。2026-10-08 维护者把它收掉
+/// （`.scratch/ui-trim/spec.md`）：月相是「还在跑」的一条信息通道，而空闲时它照样一格一格地
+/// 走，等于让一个什么都没做的界面在微微地动 —— 而「就绪」两个字已经把状态说完了。
+pub const IDLE_GLYPH: &str = "🌕";
+
+/// 运行中每换一格要几帧：一轮是八格，8 × 2 帧 ≈ 0.96 秒
 /// （2026-10-06 维护者把速率加快了一档：原来运行 8 帧、空闲 32 帧）。
-const IDLE_FRAMES_PER_GLYPH: u64 = 8;
+const BUSY_FRAMES_PER_GLYPH: u64 = 2;
 
 /// 状态词前那个字形，取第 `frame` 帧。
 ///
-/// 空闲每 8 帧（≈0.5 秒）换一格，运行中每 2 帧（≈0.12 秒）—— 于是「在跑」有自己的信息
-/// 通道，而不是又一种颜色（§30）。
+/// **就绪时它不看帧**，固定在 [`IDLE_GLYPH`]；运行中每 [`BUSY_FRAMES_PER_GLYPH`] 帧
+/// （≈0.12 秒）换一格 —— 于是「在跑」有自己的信息通道，而不是又一种颜色（§30）。
 pub fn status_spinner(frame: u64, busy: bool) -> &'static str {
-    let step = if busy {
-        IDLE_FRAMES_PER_GLYPH / 4
-    } else {
-        IDLE_FRAMES_PER_GLYPH
-    };
-    PULSE_GLYPHS[(frame / step) as usize % PULSE_GLYPHS.len()]
+    if !busy {
+        return IDLE_GLYPH;
+    }
+    PULSE_GLYPHS[(frame / BUSY_FRAMES_PER_GLYPH) as usize % PULSE_GLYPHS.len()]
 }
 
 /// 活着的键位提示，按它们显示的先后：最常用的在前。出口是 [`EXIT_HINT_IDLE`] /
@@ -1803,10 +1876,6 @@ pub const UNFOLDED: &str = "▾";
 pub const TODO_PENDING: &str = "☐";
 pub const TODO_IN_PROGRESS: &str = FOLDABLE;
 pub const TODO_COMPLETED: &str = "✓";
-
-/// 提示符。它后面那个空格算在这个常量里 —— 布局留出的列数就是它的宽度
-/// （[`crate::render::editor::prompt_columns`]），所以不另立一个「提示符 + 空格」。
-pub const PROMPT: &str = "❱ ";
 
 /// 回合条三格：焦点、普通、这一列没地方放的单位。
 pub const RAIL_FOCUS: &str = "┃";

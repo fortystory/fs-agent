@@ -354,16 +354,13 @@ impl Regions {
     }
 }
 
-/// 一个输入行有多少宽度留给文字：主列的内容减去提示符。在 [`plan`] 跑之前就知道，因为
-/// plan 需要的正是草稿自己的高度。
-pub fn input_text_width(area: Rect, sidebar_wanted: bool) -> u16 {
-    main_width(area.width, sidebar_wanted).saturating_sub(crate::render::editor::prompt_columns())
-}
-
 /// 主列的内容宽度。
 ///
-/// 问卷在 [`plan`] 跑之前就需要这个 —— 它想要几行决定输入区多高 —— 而它必须与 `plan`
-/// 交回来的 `input` 矩形一致，否则画出来的行与请求的高度就对不上。
+/// 问卷与输入区都在 [`plan`] 跑之前就需要这个 —— 它们想要几行决定输入区多高 —— 而它必须与
+/// `plan` 交回来的 `input` 矩形一致，否则画出来的行与请求的高度就对不上。
+///
+/// 2026-10-08 之前它还有一个 `input_text_width` 兄弟，从它这里再减掉提示符那两列；提示符退场
+/// 之后两者相同，于是只留这一个（`.scratch/ui-trim/spec.md`）。
 pub fn content_width(area: Rect, sidebar_wanted: bool) -> u16 {
     main_width(area.width, sidebar_wanted)
 }

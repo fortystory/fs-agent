@@ -8,7 +8,6 @@
 //! 在路上算出来的那些矩形。
 
 use heng::config::{FileViewerSettings, ReasoningEffort};
-use heng::render::editor;
 use heng::render::palette;
 use heng::render::width::text_columns;
 use heng::render::{
@@ -211,7 +210,7 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[17].contains("模型 claude-sonnet-4-5")
             && rows[17].contains("┆ 询问 ┆")
             && rows[17].contains("上下文 —")
-            && rows[17].contains("🌘 就绪")
+            && rows[17].contains("🌕 就绪")
             && !rows[17].contains('…'),
         "状态行报出模型、模式、占比与带字形循环的状态词：{:?}",
         rows[17]
@@ -222,8 +221,8 @@ fn a_wide_terminal_draws_the_mark_the_sidebar_and_the_main_column() {
         rows[18]
     );
     assert!(
-        rows[19].contains(&format!("┆{}", editor::PROMPT)),
-        "输入区的第一行带着提示符：{:?}",
+        rows[19].trim_matches(['┆', ' ']).is_empty(),
+        "输入区的第一行是一份空草稿：{:?}",
         rows[19]
     );
     assert!(
@@ -622,8 +621,8 @@ fn a_floor_sized_terminal_still_draws_the_main_column() {
     // 它上面那条横线在第 4 行，提示行在第 9 行。
     assert_eq!(transcript_rows(&rows), 1, "一行转录：{rows:#?}");
     assert!(
-        rows[5].starts_with(editor::PROMPT),
-        "输入区的第一行是提示符那一行：{:?}",
+        rows[5].trim().is_empty(),
+        "输入区的第一行是一份空草稿：{:?}",
         rows[5]
     );
     assert!(
@@ -1038,122 +1037,44 @@ fn the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight() {
     );
 }
 
-/// 提示符画在哪：那个装着 `❱` 的格子，按人在屏幕上找它的方式找到，
-/// 而不是从一块这个测试还得跟布局同步的矩形里找。
-fn prompt_at(width: u16, height: u16, state: &mut TuiState) -> (u16, u16) {
-    let frame = buffer(width, height, state);
-    for y in 0..height {
-        for x in 0..width {
-            if frame[(x, y)].symbol() == "❱" {
-                return (x, y);
-            }
+/// 草稿第一格：屏幕上那一行里写着 `hello` 的第一个字，以及它在哪一行。
+///
+/// 输入框不再有提示符（2026-10-08，`.scratch/ui-trim/spec.md`），所以「草稿从哪一格起」就是
+/// 输入行的第一格 —— 不再有那个要跳过去的前导。
+fn draft_cell(state: &mut TuiState) -> (u16, u16) {
+    let frame = buffer(120, 24, state);
+    for y in 0..24 {
+        if row_text(&frame, y, 120).contains("hello") {
+            let x = (0..120)
+                .find(|x| frame[(*x, y)].symbol() == "h")
+                .expect("草稿的第一个字在屏幕上");
+            return (x, y);
         }
     }
-    panic!("提示符在屏幕上");
-}
-
-/// 输入区第一行里提示符那一格：它的符号，以及它被涂上的颜色。
-fn prompt_cell(state: &mut TuiState) -> (String, Color) {
-    let frame = buffer(120, 24, state);
-    let (x, y) = prompt_at(120, 24, state);
-    (frame[(x, y)].symbol().to_owned(), frame[(x, y)].fg)
+    panic!("草稿在屏幕上");
 }
 
 #[test]
-fn the_prompt_is_an_angle_bracket_that_holds_still_while_you_type() {
-    // 提示符的颜色是这个界面的动画，维护者给它定的规矩是
-    // 一场长争论的结论：**agent 干活时它动，用户打字时它
-    // 停**（`.scratch/tui-input-pulse/spec.md` §2b，票 09）。静止色
-    // 是第 0 帧 —— 他们那条脚本起步的那一帧 —— 所以每次键盘回到
-    // 他们手里都是同一个颜色。
-    let mut state = state();
-    let (symbol, colour) = prompt_cell(&mut state);
-    assert_eq!(symbol, "❱", "提示符字形");
-    assert_eq!(
-        colour,
-        Color::Rgb(216, 97, 97),
-        "在等一行的提示符穿的是那条脚本的第一个颜色"
-    );
-
-    // 打字不会惊动它：一个 tick 也没把颜色挪离静止帧。
-    for frame in 0..5 {
-        state.tick();
-        assert_eq!(
-            prompt_cell(&mut state).1,
-            colour,
-            "键盘归写的人时第 {frame} 个 tick：什么都没动"
-        );
-    }
-}
-
-#[test]
-fn the_prompts_colour_walks_the_wheel_while_a_run_is_in_flight() {
-    // 那条规矩的另一半：一旦有回合进行中颜色就动起来，而且它的
-    // 任何两帧都不穿同一个颜色。
-    let mut state = state();
-    let resting = prompt_cell(&mut state).1;
-    state.request(ConsoleRequest::RunState { running: true });
-    let mut seen = Vec::new();
-    for _ in 0..5 {
-        state.tick();
-        seen.push(prompt_cell(&mut state).1);
-    }
-    let mut unique = seen.clone();
-    unique.sort_by_key(|colour| format!("{colour:?}"));
-    unique.dedup();
-    assert_eq!(
-        unique.len(),
-        seen.len(),
-        "一次运行的每一帧都有自己的颜色：{seen:?}"
-    );
-    assert!(!seen.contains(&resting), "而且没有一帧是静止色：{seen:?}");
-
-    // 运行结束时提示符回到静止，下一次运行也从那儿起步 ——
-    // 计数器属于某一次运行，所以静止色永远不是「它停在哪儿就是哪儿」。
-    state.request(ConsoleRequest::RunState { running: false });
-    assert_eq!(
-        prompt_cell(&mut state).1,
-        resting,
-        "运行结束把提示符放回静止"
-    );
-    state.request(ConsoleRequest::RunState { running: true });
-    state.tick();
-    assert_eq!(
-        prompt_cell(&mut state).1,
-        seen[0],
-        "下一次运行从头重走上一次走过的那些帧"
-    );
-}
-
-#[test]
-fn the_prompts_colour_stays_out_of_the_draft() {
-    // 提示符是自己的一个 span，这样才能上色；挨着它的草稿不是。
-    // 被染色的草稿意味着 span 边界丢了，写的人看到的会是
-    // 自己的文字在眼皮底下变色。
+fn the_draft_starts_at_the_first_column_of_the_input_row() {
+    // 输入框没有前导了：第一行第一个字就是草稿的第一个字，而它穿的是终端
+    // 自己的前景色（草稿归正文档，`.scratch/tui-visual-language/spec.md` §19）。
     let mut state = state();
     for ch in "hello".chars() {
         state.key(Key::Char(ch));
     }
     state.tick();
     let frame = buffer(120, 24, &mut state);
-    let (x, y) = prompt_at(120, 24, &mut state);
-    assert!(
-        row_text(&frame, y, 120).contains("❱ hello"),
-        "草稿紧跟在提示符后面：{:?}",
-        row_text(&frame, y, 120)
-    );
-    // 提示符自己的格子带着色相；它后面那个空格属于同一个 span，
-    // 草稿从那之后再往后一格开始。
-    assert_eq!(frame[(x, y)].fg, prompt_cell(&mut state).1, "色相");
-    let draft = &frame[(x + 2, y)];
+    let (x, y) = draft_cell(&mut state);
+    let draft = &frame[(x, y)];
+    assert_eq!(draft.symbol(), "h");
     assert_eq!(
         format!("{:?}", draft.fg),
         format!("{:?}", Color::Reset),
-        "草稿还是终端自己的前景色，没被动过：{draft:?}"
+        "草稿是终端自己的前景色，没被动过：{draft:?}"
     );
     assert!(
         !draft.modifier.contains(Modifier::BOLD),
-        "草稿不再整段加粗，提示符仍是唯一的焦点：{draft:?}"
+        "草稿不再整段加粗：{draft:?}"
     );
 }
 
@@ -1175,9 +1096,10 @@ fn the_mark_stays_still_on_the_narrow_rung_too() {
 
 #[test]
 fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
-    // 钟在动的东西（`.scratch/tui-visual-language/spec.md` §30–§32）：提示符的颜色，加上
-    // 状态行那个字形循环 —— 别的什么都没有（没有回合条、没有别的状态行文字）。
-    // 80 列以下整条左栏都没有，差别仍然恰好是那几格。
+    // 钟在动的东西：状态行那个字形循环（`.scratch/tui-visual-language/spec.md` §30–§32）
+    // —— 别的什么都没有（没有回合条、没有别的状态行文字、也没有输入区：提示符的色相随
+    // 提示符一起退场，`.scratch/ui-trim/spec.md`）。80 列以下整条左栏都没有，差别仍然恰好
+    // 是那一格。
     //
     // **左栏那一束扫光不在这条的范围里**：一次运行中它会改标记那几格的颜色，由
     // `the_sweep_shows_up_on_the_mark_only_while_a_run_is_in_flight` 单独管。这里按排版
@@ -1199,7 +1121,6 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
             state.tick();
         }
         let after = buffer(width, height, &mut state);
-        let (prompt_x, prompt_y) = prompt_at(width, height, &mut state);
         let sidebar_right = {
             use heng::render::layout::plan;
             use ratatui::layout::Rect;
@@ -1211,9 +1132,6 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
             .flat_map(|y| (0..width).map(move |x| (x, y)))
             .filter(|(x, y)| *x >= sidebar_right && before[(*x, *y)] != after[(*x, *y)])
             .collect();
-        let mut expected: Vec<(u16, u16)> = (0..heng::render::editor::prompt_columns())
-            .map(|offset| (prompt_x + offset, prompt_y))
-            .collect();
         // 状态行上那个字形格：新一帧穿的还是循环里的字形，而不是空白。
         let glyph = (0..height)
             .find_map(|y| {
@@ -1222,21 +1140,18 @@ fn a_pulse_frame_touches_the_prompt_and_the_status_glyph_and_nothing_else() {
                     .map(|x| (x, y))
             })
             .expect("状态行那个字形在屏幕上");
-        expected.push(glyph);
-        expected.sort();
-        let mut changed = changed;
-        changed.sort();
         assert_eq!(
-            changed, expected,
-            "{width}x{height}：只有提示符自己那两格与状态行那个字形在变"
+            changed,
+            vec![glyph],
+            "{width}x{height}：只有状态行那个字形在变"
         );
     }
 }
 
-/// 空闲也在动，只是更慢：这是本 effort 推翻 `tui-input-pulse` 那两条「明确不做」的地方
-/// （`.scratch/tui-visual-language/spec.md` §31、§32）。
+/// 就绪时它**定住**：月相只描述「还在跑」。2026-10-08 维护者收掉了
+/// `tui-visual-language` §31 那条「空闲也在动，只是更慢」（`.scratch/ui-trim/spec.md`）。
 #[test]
-fn the_status_glyph_moves_while_idle_too() {
+fn the_status_glyph_holds_still_while_idle() {
     use heng::render::wording;
     let glyph = |state: &mut TuiState| -> String {
         let frame = buffer(120, 24, state);
@@ -1250,26 +1165,11 @@ fn the_status_glyph_moves_while_idle_too() {
     };
 
     let mut state = state();
-    assert_eq!(glyph(&mut state), "🌘");
-    for _ in 0..8 {
+    assert_eq!(glyph(&mut state), "🌕", "就绪时停在满月");
+    for _ in 0..64 {
         state.tick();
     }
-    assert_eq!(
-        glyph(&mut state),
-        "🌗",
-        "空闲时它也在走，只是慢到 8 帧一格 —— 而相位是**倒着**走的（2026-10-06）"
-    );
-    // 而提示符在空闲时**不动**：它歇在帧 0 的颜色上。
-    let (x, y) = prompt_at(120, 24, &mut state);
-    let idle_prompt = buffer(120, 24, &mut state)[(x, y)].fg;
-    for _ in 0..8 {
-        state.tick();
-    }
-    assert_eq!(
-        buffer(120, 24, &mut state)[(x, y)].fg,
-        idle_prompt,
-        "输入区仍然完全静止"
-    );
+    assert_eq!(glyph(&mut state), "🌕", "整轮月相的时间过去，它一格都没换");
 }
 
 /// 同一个人连着说的几段正文：屏幕上**只留一个名字**，段与段之间空一行
@@ -2050,24 +1950,22 @@ fn clicking_the_input_area_takes_the_keyboard_back_from_the_files_page() {
     click_in_row(&mut state, 120, 24, page as u16, "a.rs");
     state.key(Key::Esc);
     state.key(Key::Char('x'));
+    let (input_x, input_y) = input_corner(120, 24);
     let frame = buffer(120, 24, &mut state);
-    let (_, row) = cell_of(&frame, 120, 24, wording::PROMPT).expect("输入区在屏幕上");
     assert!(
-        !row_text(&frame, row, 120).contains('x'),
+        !row_text(&frame, input_y, 120).contains('x'),
         "键盘在文件页时打字不落进草稿：{}",
-        row_text(&frame, row, 120)
+        row_text(&frame, input_y, 120)
     );
 
     // 点输入区那一格：键盘该回到输入区。
-    let (column, row) = cell_of(&frame, 120, 24, wording::PROMPT).expect("输入区在屏幕上");
-    click(&mut state, column, row);
+    click(&mut state, input_x, input_y);
     state.key(Key::Char('x'));
     let frame = buffer(120, 24, &mut state);
-    let (_, row) = cell_of(&frame, 120, 24, wording::PROMPT).expect("输入区还在");
     assert!(
-        row_text(&frame, row, 120).contains('x'),
+        row_text(&frame, input_y, 120).contains('x'),
         "点过输入区之后，打字该落进草稿：{}",
-        row_text(&frame, row, 120)
+        row_text(&frame, input_y, 120)
     );
 }
 
@@ -2432,15 +2330,24 @@ fn the_keyboard_goes_back_when_the_sidebar_is_not_the_files_page() {
     let (column, row) = tab_cell(&frame, 120, 24, wording::TAB_USAGE);
     click(&mut state, column, row);
     state.key(Key::Char('x'));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("❱ x"), "输入区收得到字：{text}");
+    let input_y = input_row(120, 24);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows[input_y].contains('x'),
+        "输入区收得到字：{}",
+        rows[input_y]
+    );
 
     // 文件页里按 `Ctrl-O` 收起左栏：键盘跟着还回去。
     open_files_page(&mut state, 120, 24);
     state.key(Key::CtrlO);
     state.key(Key::Char('y'));
-    let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("❱ xy"), "收起左栏之后打字也落得进去：{text}");
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows[input_y].contains("xy"),
+        "收起左栏之后打字也落得进去：{}",
+        rows[input_y]
+    );
 }
 
 #[test]
@@ -3313,8 +3220,8 @@ fn the_input_area_holds_three_rows_before_it_grows_and_the_transcript_pays_for_i
     // 从转录底往下数第三行开始。
     let input = TRANSCRIPT_TOP + rows + 2;
     assert!(
-        empty[input].contains(editor::PROMPT),
-        "提示符：{:?}",
+        empty[input].trim_matches(['┆', ' ']).is_empty(),
+        "输入区的第一行是一份空草稿：{:?}",
         empty[input]
     );
     assert!(
@@ -4586,12 +4493,12 @@ fn menu_box(frame: &Buffer, width: u16, height: u16, needle: &str) -> (u16, u16,
     (x, top, right - x + 2, bottom - top + 1)
 }
 
-/// 草稿打在哪一行：提示符是主列里的第一样东西，
-/// 所以它跟在左栏与分隔线后面。
-fn input_row(rows: &[String]) -> usize {
-    rows.iter()
-        .position(|row| row.contains(&format!("┆{}", editor::PROMPT)))
-        .expect("输入区那一行")
+/// 草稿打在哪一行：输入框的第一行。
+///
+/// 它不再靠找提示符定位（2026-10-08 起输入框没有提示符，`.scratch/ui-trim/spec.md`）——
+/// 那两列消失之后，「含 `┆` 的第一行」是左栏与主列之间的分隔线所在的第一行，不是输入区。
+fn input_row(width: u16, height: u16) -> usize {
+    input_corner(width, height).1 as usize
 }
 
 #[test]
@@ -4633,14 +4540,11 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     // 于是接着打的就是这一段任务的第一个字。
     family.key(Key::Tab);
     let text = screen(120, 24, &mut family).join("\n");
-    assert!(
-        text.contains(&format!("┆{}/goal-new", editor::PROMPT)),
-        "Tab 补出整条命令：\n{text}"
-    );
+    assert!(text.contains("┆/goal-new"), "Tab 补出整条命令：\n{text}");
     family.key(Key::Char('x'));
     let text = screen(120, 24, &mut family).join("\n");
     assert!(
-        text.contains(&format!("┆{}/goal-new x", editor::PROMPT)),
+        text.contains("┆/goal-new x"),
         "补全自带一个分隔空格：\n{text}"
     );
 
@@ -4659,9 +4563,9 @@ fn a_slash_opens_a_menu_of_the_names_the_loop_reported() {
     let (_, top, _, height) = menu_box(&frame, 120, 24, "/undo");
     assert!(height >= 3, "是一个框，不是一行：高 {height}");
     assert!(
-        top as usize + height as usize <= input_row(&rows),
+        top as usize + height as usize <= input_row(120, 24),
         "菜单坐在输入区上面：{top}+{height} 对 {}",
-        input_row(&rows)
+        input_row(120, 24)
     );
 }
 
@@ -4811,10 +4715,7 @@ fn tab_fills_the_highlighted_name_in_and_does_not_submit_it() {
         "Tab 只补全；它从不把草稿里的东西发出去"
     );
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains(&format!("┆{}/ask-matt", editor::PROMPT)),
-        "名字在草稿里：\n{text}"
-    );
+    assert!(text.contains("┆/ask-matt"), "名字在草稿里：\n{text}");
     // 而且补全把菜单关上了，所以后面还能接着打一个任务名。
     assert!(!text.contains("┆ /ask-matt"), "菜单结束了：\n{text}");
 }
@@ -4900,10 +4801,7 @@ fn esc_closes_the_menu_and_leaves_the_draft_where_it_was() {
     // 草稿活下来：`Esc` 关的是菜单，它没有开始把草稿
     // 扔掉，也没有清掉一行长的草稿（spec §6、§7）。
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains(&format!("┆{}/", editor::PROMPT)),
-        "草稿还在那儿：\n{text}"
-    );
+    assert!(text.contains("┆/"), "草稿还在那儿：\n{text}");
     assert!(!text.contains("┆ /undo"), "菜单不见了：\n{text}");
     assert!(!text.contains("清空输入"), "什么都没被问：\n{text}");
 }
@@ -4924,7 +4822,7 @@ fn esc_keeps_its_word_per_token_not_per_query() {
     state.key(Key::Tab);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(&format!("┆{}@a @a", editor::PROMPT)),
+        text.contains("┆@a @a"),
         "`Esc` 关掉的那一个记号里 `Tab` 什么都补不了：\n{text}"
     );
 
@@ -4934,7 +4832,7 @@ fn esc_keeps_its_word_per_token_not_per_query() {
     state.key(Key::Tab);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(&format!("┆{}@ab @a", editor::PROMPT)),
+        text.contains("┆@ab @a"),
         "另一个记号重新开菜单，`Tab` 于是补全了它：\n{text}"
     );
 }
@@ -5060,10 +4958,7 @@ fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
     state.key(Key::Down);
     state.key(Key::Tab);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains(&format!("┆{}@src/", editor::PROMPT)),
-        "目录补进了草稿：\n{text}"
-    );
+    assert!(text.contains("┆@src/"), "目录补进了草稿：\n{text}");
     assert!(
         text.contains("┆ @src/main.rs"),
         "菜单接着列这一层：\n{text}"
@@ -5085,17 +4980,14 @@ fn accepting_a_directory_keeps_the_menu_open_on_the_next_level() {
     }
     file.key(Key::Tab);
     let text = screen(120, 24, &mut file).join("\n");
-    assert!(
-        text.contains(&format!("┆{}@src/main.rs", editor::PROMPT)),
-        "文件补进了草稿：\n{text}"
-    );
+    assert!(text.contains("┆@src/main.rs"), "文件补进了草稿：\n{text}");
     assert!(!text.contains("┆ @src/map.md"), "菜单关掉了：\n{text}");
 
     // 补完之后自带一个**分隔的空格**：接着打就是下一样东西，不会粘在路径上。
     file.key(Key::Char('x'));
     let text = screen(120, 24, &mut file).join("\n");
     assert!(
-        text.contains(&format!("┆{}@src/main.rs x", editor::PROMPT)),
+        text.contains("┆@src/main.rs x"),
         "补全自带一个分隔空格：\n{text}"
     );
 }
@@ -5111,10 +5003,7 @@ fn enter_in_the_at_menu_accepts_without_sending() {
     state.key(Key::Enter);
     assert!(line.try_recv().is_err(), "`@` 菜单里回车只接受，不发送");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(
-        text.contains(&format!("┆{}@src/main.rs", editor::PROMPT)),
-        "路径落进草稿：\n{text}"
-    );
+    assert!(text.contains("┆@src/main.rs"), "路径落进草稿：\n{text}");
 
     // 再按一次才是发送 —— 插进去的路径只是句子的一部分（spec §2 那处刻意分叉）。
     state.key(Key::Enter);
@@ -5133,14 +5022,13 @@ fn enter_in_the_at_menu_accepts_without_sending() {
 
 /// 输入行里 `needle` 那一格的前景色。
 ///
-/// 找的是**输入行**（`┆❱` 那一行）：`/` 菜单会浮在它上面，而菜单里也有同样的文字。
+/// 找的是**输入行**（排版给出的那个矩形）：`/` 菜单会浮在它上面，而菜单里也有同样的文字。
 fn draft_colour(frame: &Buffer, width: u16, height: u16, needle: &str) -> Color {
-    let lead = format!("┆{}", editor::PROMPT);
-    let (row, line) = (0..height)
-        .map(|y| (y, row_text(frame, y, width)))
-        .find(|(_, line)| line.contains(&lead) && line.contains(needle))
-        .unwrap_or_else(|| panic!("{needle:?} 在输入行上"));
-    let byte = line.find(needle).expect("刚刚找到过");
+    let row = input_row(width, height) as u16;
+    let line = row_text(frame, row, width);
+    let byte = line
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} 在输入行上：{line:?}"));
     let column = text_columns(&line[..byte]) as u16;
     frame[(column, row)].fg
 }
@@ -5211,7 +5099,7 @@ fn a_pasted_token_is_a_chip_like_a_typed_one() {
     state.key(Key::Backspace);
     let text = screen(120, 24, &mut state).join("\n");
     assert!(
-        text.contains(&format!("┆{}改  它", editor::PROMPT)),
+        text.contains("┆改  它"),
         "一下退格带走整块，且不吞旁边的空白：\n{text}"
     );
 }
@@ -6086,6 +5974,17 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
 /// 一个固定在左栏列上的坐标会点到左栏的页上，而不是这句话身上。
 fn click_row(state: &mut TuiState, width: u16, height: u16, needle: &str) {
     click_text(state, width, height, needle);
+}
+
+/// 输入区第一格在屏幕上的位置。
+///
+/// 输入框不再有提示符（2026-10-08，`.scratch/ui-trim/spec.md`），所以测试不能再靠找那个字形
+/// 来定位它：位置问排版，而排版与画出来的是同一个来源。草稿按一行算（这里要的只是那个矩形）。
+fn input_corner(width: u16, height: u16) -> (u16, u16) {
+    use heng::render::layout::plan;
+    use ratatui::layout::Rect;
+    let regions = plan(Rect::new(0, 0, width, height), 1, true);
+    (regions.input.x, regions.input.y)
 }
 
 // ---------------------------------------------------------------------------
@@ -7132,14 +7031,11 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     // 覆盖层的，它后面的编辑器没在被打字。
     state.key(Key::Char('x'));
     // 详情覆盖层现在屏幕居中（`.scratch/tui-chrome/spec.md` §4），
-    // 120x40 下它横跨第 2 到 117 列，把输入区的提示符也压在下面 ——
+    // 120x40 下它横跨第 2 到 117 列，把输入区也压在下面 ——
     // 所以草稿要等覆盖层关掉之后才看得见。
     state.key(Key::Esc);
     let rows = screen(120, 40, &mut state);
-    let input = rows
-        .iter()
-        .position(|row| row.contains(editor::PROMPT))
-        .expect("输入区那一行画出来了");
+    let input = input_corner(120, 40).1 as usize;
     assert!(
         !rows[input].contains('x'),
         "草稿里什么都没落进去：{:?}",

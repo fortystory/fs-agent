@@ -1595,9 +1595,10 @@ async fn interactive_loop(
             }
             // `/<skill> [task]` 是用户侧的技能调用（spec §9）：`disable-model-invocation: true`
             // 的技能为用户留下的那条路。正文进上下文尾部。光秃秃的 `/<skill>` 就地跑 —— 正文**就
-            // 是**指令 —— 而打了任务时，任务作为一条普通 user 消息跟在它后面。
-            Submission::Skill { name, task } => {
-                if task.is_empty() {
+            // 是**指令 —— 而打了任务时，**整条原文**（技能名在内）作为一条普通 user 消息跟在它
+            // 后面（`.scratch/ui-trim/spec.md` §2）。
+            Submission::Skill { name, task, bare } => {
+                if bare {
                     harness.notice(&format!("heng: {}", render::wording::skill_started(name)));
                     if let Err(error) =
                         run_one_turn(harness, events, TurnStart::Skill(name), &mut quit).await
@@ -1766,9 +1767,18 @@ enum Submission<'a> {
     /// 情况。
     Unknown(&'a str),
     /// `/<skill>` 以及跟在它后面的任务。
+    ///
+    /// `task` 是**整条原文**，技能名留在里面：`/research 帮我查 X` 发出去的就是这一条，于是
+    /// 对话里读得出「这句话是怎么发出去的」（`.scratch/ui-trim/spec.md`）。它曾经是记号
+    /// **两侧**的字拼起来的（`task_around`），技能名被丢掉。
+    ///
+    /// `bare` 说的是「整条草稿只有那一个记号」（`/research`，尾巴上的空白不算）：那时正文
+    /// **就是**指令，不再多发一条 user 消息。技能是唯一一个「名字本身就是这句话的一部分」
+    /// 的记号，所以内建命令与 MCP 模板的参数仍取记号旁边的字。
     Skill {
         name: &'a str,
         task: String,
+        bare: bool,
     },
     /// `/<server>:<模板>`：一次 MCP 提示词模板调用（票 17）。发起者是**人**：它走 `/` 菜单，
     /// 不进工具表。`inline` 是命令行上给的位置参数，缺的那些由循环用问卷补齐。
@@ -1849,9 +1859,12 @@ fn submission<'a>(
     };
 
     let name = command_name(text, &token);
-    // 内建命令没有任务来装记号旁边的字，所以它们只在整条只有那**一个**记号、而且它写成
-    // `/<名字>`（没有多出来的斜杠 —— `//undo` 不算）时才匹配。技能不受这一条限制。
-    let whole = text.trim().chars().count() == token.end - token.start && token.query == name;
+    // 整条草稿只有那**一个**记号（尾巴上的空白不算）。两类判断都从它出发：内建命令与 `bare`
+    // 的技能调用都是「光秃秃的一个名字」。
+    let only_token = text.trim().chars().count() == token.end - token.start;
+    // 内建命令没有任务来装记号旁边的字，所以它们还多要一条：记号写成 `/<名字>`（没有多出来的
+    // 斜杠 —— `//undo` 不算）。技能不受多出来那个斜杠的限制，名字本来就是剥掉斜杠之后才比的。
+    let whole = only_token && token.query == name;
     if whole {
         match name {
             "quit" | "exit" => return Submission::Quit,
@@ -1888,7 +1901,11 @@ fn submission<'a>(
                 }
             }
             if has_skill(name) {
-                Submission::Skill { name, task }
+                Submission::Skill {
+                    name,
+                    task: text.trim_end().to_owned(),
+                    bare: only_token,
+                }
             } else {
                 // 一个内建命令带着记号之外的字：整条仍是一条普通消息，用户写下的东西一个字
                 // 都不会被丢掉。
@@ -4579,14 +4596,17 @@ mod tests {
             read("/ask-matt 帮我看一下"),
             Submission::Skill {
                 name: "ask-matt",
-                task: "帮我看一下".to_owned(),
-            }
+                task: "/ask-matt 帮我看一下".to_owned(),
+                bare: false,
+            },
+            "技能名留在发给模型的文本里（ui-trim §2）"
         );
         assert_eq!(
             read("/ask-matt"),
             Submission::Skill {
                 name: "ask-matt",
-                task: String::new(),
+                task: "/ask-matt".to_owned(),
+                bare: true,
             },
             "光秃秃的技能名只加载正文"
         );
@@ -4599,7 +4619,8 @@ mod tests {
             read("/ask-matt\n第一行\n第二行"),
             Submission::Skill {
                 name: "ask-matt",
-                task: "第一行\n第二行".to_owned(),
+                task: "/ask-matt\n第一行\n第二行".to_owned(),
+                bare: false,
             }
         );
         // 任务可以从技能那一行开始，再往下面续。
@@ -4607,7 +4628,23 @@ mod tests {
             read("/ask-matt 第一行\n第二行"),
             Submission::Skill {
                 name: "ask-matt",
-                task: "第一行\n第二行".to_owned(),
+                task: "/ask-matt 第一行\n第二行".to_owned(),
+                bare: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_skill_keeps_the_words_around_its_name() {
+        // 技能名**前面**的字也不许丢，技能名本身也不许丢：整条原文就是发出去的那条消息
+        // （`.scratch/ui-trim/spec.md` §2）。内建命令那套「参数取记号旁边的字」不适用于它 ——
+        // 技能的名字本身就是这句话的一部分。
+        assert_eq!(
+            read("请用 /ask-matt 帮我看一下"),
+            Submission::Skill {
+                name: "ask-matt",
+                task: "请用 /ask-matt 帮我看一下".to_owned(),
+                bare: false,
             }
         );
     }
@@ -4649,8 +4686,10 @@ mod tests {
             read("//review"),
             Submission::Skill {
                 name: "review",
-                task: String::new(),
-            }
+                task: "//review".to_owned(),
+                bare: true,
+            },
+            "多出来那个斜杠不把技能挡在裸调用之外"
         );
     }
 
@@ -4950,7 +4989,8 @@ mod tests {
             read("/review\n   \n"),
             Submission::Skill {
                 name: "review",
-                task: String::new(),
+                task: "/review".to_owned(),
+                bare: true,
             }
         );
     }

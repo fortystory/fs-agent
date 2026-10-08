@@ -16,6 +16,7 @@ use crate::events::{
     ContextSource, Decision, DecisionSource, Event, EventPayload, HistoryReason, ParticipantId,
     Role, RoundMode, SpeakerId, StopReason, ToolCallId, Usage, hook_format,
 };
+use crate::questions::UserAnswers;
 
 use super::wording;
 use super::{DeltaKind, RenderEvent};
@@ -39,6 +40,15 @@ pub enum Block {
         /// 而事件流没有单独的推理事件 —— 所以转录那条「思考结束」的行就是把它留给详情
         /// 视图的（票 02 §1）。
         reasoning: Option<String>,
+    },
+    /// 用户对一次 `ask_user_question` 的作答：**他说的那一档**，但它不是流上的一条 `user`
+    /// 消息（`.scratch/ui-trim/spec.md`）。
+    ///
+    /// 模型那一侧一个字节没变：进上下文的是那次工具调用与它的结果。这一条只给人看 —— 问卷
+    /// 答完，转录里要读得出「我选了什么」。它由**结果**推出来（见 [`Transcript::push`]），
+    /// 所以 `--continue` 重放同样重现，两个前端看到的也是同一份。
+    Answer {
+        text: String,
     },
     RoundStarted {
         round: u32,
@@ -297,6 +307,9 @@ impl Transcript {
                     .is_some_and(|tool| tool.tool_call_id == tool_call_id)
                 {
                     let mut tool = self.pending_tool.take().expect("刚匹配上");
+                    // 问卷的答案要在结果被搬进去之前从它上面读一遍：那一行说的是**这次调用
+                    // 问的**是哪些题，而结果那边只有题的 `id`（`answer_block`）。
+                    let answered = answer_block(&tool, output.as_deref());
                     tool.outcome = Some(ToolOutcome {
                         ok,
                         output,
@@ -306,6 +319,7 @@ impl Transcript {
                     // 这次调用仍可能被随后的后置 hook 批注。
                     self.awaiting_hook = true;
                     blocks.push(Block::Tool(Box::new(tool)));
+                    blocks.extend(answered);
                     return blocks;
                 }
                 // 一条没有匹配开始的结果：把它浮出来，而不是丢掉，好让转录仍然显示有东西
@@ -448,6 +462,24 @@ impl Transcript {
         }
         blocks
     }
+}
+
+/// 一次 `ask_user_question` 调用的结果翻成一条 [`Block::Answer`]，其余工具一律不给块。
+///
+/// 三条判据，缺一条就什么都不给：名字对得上、结果能按 [`UserAnswers`] 读出来、里面至少有一
+/// 条答案。一次被取消的问卷没有结果（`ok` 是假的那条也不该长出一行「我选了什么」），被裁剪
+/// 过的 JSON 读不出来，两者都退回「只画工具行」—— 那正是今天的样子。
+fn answer_block(tool: &ToolBlock, output: Option<&str>) -> Option<Block> {
+    if tool.tool != crate::tools::ASK_USER_QUESTION_TOOL {
+        return None;
+    }
+    let answers: UserAnswers = serde_json::from_str(output?).ok()?;
+    if answers.answers.is_empty() {
+        return None;
+    }
+    Some(Block::Answer {
+        text: wording::answered(&tool.args, &answers),
+    })
 }
 
 /// 一次工具调用参数的一行摘要。

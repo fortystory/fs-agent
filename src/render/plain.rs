@@ -83,6 +83,9 @@ impl Plain {
                 // 为页面命名的。
                 reasoning: _,
             } => self.message(speaker, role, &text),
+            // 用户对一次问卷的作答：屏幕上它是**用户说的**那一档，与他自己打的一句话同一条路
+            // （`.scratch/ui-trim/spec.md`）。
+            Block::Answer { text } => self.message(SpeakerId::User, Role::User, &text),
             Block::RoundStarted { round, mode } => {
                 self.end_line();
                 self.line(&format!("\n{}", wording::round_section(round, mode)));

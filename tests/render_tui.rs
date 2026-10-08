@@ -76,14 +76,14 @@ fn state_running() -> TuiState {
 
 #[test]
 fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
-    // 时钟的那一帧既驱动提示符的色相，也驱动状态行那个字形循环
-    // （`.scratch/tui-visual-language/spec.md` §30–§32）。票 09 曾让空闲的 tick「连一帧都不该
-    // 要」；§32 推翻了它：动的不再是提示符（空闲时它仍歇在帧 0 的颜色上），而是状态词前面
-    // 那个字形 —— 那是新的一条信息通道，不是给静态元素加装饰。代价是空闲不再零唤醒。
+    // 时钟从「仅运行时武装」放宽到「始终」（`.scratch/tui-visual-language/spec.md` §32）：票 09
+    // 曾让空闲的 tick「连一帧都不该要」，§32 推翻了它。2026-10-08 之后，空闲那一半里动的不是
+    // 状态字形（它定在满月），而是光标闪烁与那几条回执的寿命（`.scratch/ui-trim/spec.md`）——
+    // 时钟本身照旧一直在走，代价（空闲不再零唤醒）也照旧。
     let mut state = new_state();
     state.mark_clean();
     state.tick();
-    assert!(state.is_dirty(), "空闲的一次 tick 也要下一帧：字形在动");
+    assert!(state.is_dirty(), "空闲的一次 tick 也要下一帧：光标还在闪");
 
     state.request(ConsoleRequest::RunState { running: true });
     state.mark_clean();
@@ -96,12 +96,13 @@ fn the_pulse_runs_in_idle_too_and_only_the_status_glyph_moves() {
     assert!(state.is_dirty(), "这台时钟不再随运行一起停");
 }
 
-/// 字形循环的速率：运行中每 2 帧换一格，空闲每 8 帧 —— 同一个时钟，两种速度。
+/// 字形循环的速率：运行中每 2 帧换一格，**就绪时一格都不换**。
 ///
 /// 一轮是**八格月相**（`.scratch/tui-visual-language/spec.md` §30）：运行中 8 × 2 帧 ≈ 0.96 秒
-/// 走完一轮，空闲 8 × 8 帧 ≈ 3.8 秒（2026-10-06 维护者把速率加快了一档）。
+/// 走完一轮（2026-10-06 维护者把速率加快了一档）。就绪那一半 2026-10-08 被收掉
+/// （`.scratch/ui-trim/spec.md`）：月相只描述「还在跑」，空闲停在满月。
 #[test]
-fn the_status_glyph_changes_every_two_frames_running_and_eight_idle() {
+fn the_status_glyph_changes_every_two_frames_running_and_never_when_idle() {
     // 相位**倒着**走（2026-10-06 维护者定）：第一格是残月 `🌘`，往后一格一格走向新月。
     use heng::render::wording;
 
@@ -113,11 +114,14 @@ fn the_status_glyph_changes_every_two_frames_running_and_eight_idle() {
     assert_eq!(wording::status_spinner(8, true), "🌔");
     assert_eq!(wording::status_spinner(16, true), "🌘", "一轮之后回到起点");
 
-    assert_eq!(wording::status_spinner(0, false), "🌘");
-    assert_eq!(wording::status_spinner(7, false), "🌘", "空闲慢下来");
-    assert_eq!(wording::status_spinner(8, false), "🌗");
-    assert_eq!(wording::status_spinner(56, false), "🌑");
-    assert_eq!(wording::status_spinner(64, false), "🌘");
+    for frame in [0, 1, 7, 8, 56, 64, 10_000] {
+        assert_eq!(
+            wording::status_spinner(frame, false),
+            wording::IDLE_GLYPH,
+            "就绪时它不看帧：第 {frame} 帧也是满月"
+        );
+    }
+    assert_eq!(wording::IDLE_GLYPH, "🌕");
 }
 
 #[test]

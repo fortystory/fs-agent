@@ -8,12 +8,6 @@
 use heng::render::editor::{self, Input};
 use ratatui::style::{Color, Style};
 
-/// 编辑器画出来的那个提示符。这些测试关心的是折行与光标，
-/// 不是那个字形，所以它们通过这里来写这个前导：草稿前面那个记号
-/// 在票 08 换成了 `❱ `（`.scratch/tui-input-pulse/spec.md` §2b），而只留
-/// 一处要改的地方就够了。
-const P: &str = editor::PROMPT;
-
 /// 一个装着 `text`、光标在末尾的编辑器 —— 把它打出来之后剩下的样子。
 fn typed(text: &str) -> Input {
     let mut input = Input::new();
@@ -22,6 +16,9 @@ fn typed(text: &str) -> Input {
 }
 
 /// 一帧会画出来的那些行，作为纯字符串。
+///
+/// 草稿不带头（2026-10-08 起输入框没有提示符，`.scratch/ui-trim/spec.md`），所以这些行就是
+/// 草稿自己的字折出来的样子。
 fn rows(input: &Input, width: u16, height: u16) -> Vec<String> {
     input
         .view(width, height)
@@ -32,25 +29,23 @@ fn rows(input: &Input, width: u16, height: u16) -> Vec<String> {
 }
 
 #[test]
-fn a_draft_wraps_by_display_columns_with_the_prompt_then_an_indent() {
-    // 提示符领着第一行，两个空格领着它之后的每一行，而文本
-    // 按五列折行：提示符与缩进同宽，所以每一行
-    // 装同样多的文本（spec §2、§5）。
-    assert_eq!(rows(&typed("abc"), 5, 10), vec![format!("{P}abc")]);
+fn a_draft_wraps_by_display_columns() {
+    // 文本按五列折行（spec §2、§5）。
+    assert_eq!(rows(&typed("abc"), 5, 10), vec!["abc"]);
     assert_eq!(
         rows(&typed("abcdefgh"), 5, 10),
-        vec![format!("{P}abcde"), "  fgh".to_owned()]
+        vec!["abcde".to_owned(), "fgh".to_owned()]
     );
     // 一个换行是它自己的一次换行，而不是折行。
     assert_eq!(
         rows(&typed("ab\ncd"), 5, 10),
-        vec![format!("{P}ab"), "  cd".to_owned()]
+        vec!["ab".to_owned(), "cd".to_owned()]
     );
-    // 空草稿仍然占一行：提示符永远在那儿等着你打字。
-    assert_eq!(rows(&Input::new(), 5, 10), vec![P.to_owned()]);
+    // 空草稿仍然占一行：那一行等着你打字。
+    assert_eq!(rows(&Input::new(), 5, 10), vec![String::new()]);
     assert_eq!(
         rows(&typed("ab\n"), 5, 10),
-        vec![format!("{P}ab"), "  ".to_owned()]
+        vec!["ab".to_owned(), String::new()]
     );
 }
 
@@ -60,10 +55,10 @@ fn a_wide_character_takes_two_columns_in_the_draft() {
     // 按字节数会让它早折三列。
     assert_eq!(
         rows(&typed("你好世界"), 6, 10),
-        vec![format!("{P}你好世"), "  界".to_owned()]
+        vec!["你好世".to_owned(), "界".to_owned()]
     );
     // 正好填满一行时，光标留在这行的最后一格，与 ASCII 一样。
-    assert_eq!(rows(&typed("你好世"), 6, 10), vec![format!("{P}你好世")]);
+    assert_eq!(rows(&typed("你好世"), 6, 10), vec!["你好世"]);
 }
 
 #[test]
@@ -73,50 +68,34 @@ fn the_cursor_maps_onto_the_row_it_is_typed_on() {
     let input = typed("abcdefgh");
     let (_, cursor) = input.view(5, 10);
     assert_eq!(cursor.row, 1);
-    assert_eq!(cursor.column, 2 + 3);
+    assert_eq!(cursor.column, 3);
 
     // `Home` 把它放到整份草稿的头部。
     let mut input = input;
     input.home();
     let (_, cursor) = input.view(5, 10);
-    assert_eq!((cursor.row, cursor.column), (0, 2));
+    assert_eq!((cursor.row, cursor.column), (0, 0));
 
     // 光标在一整行的末尾时，它留在最后一格 —— 终端那种
     // 待定折行 —— 而不是自己另开一行、把草稿往下推。
     let input = typed("abcde");
     assert_eq!(input.height(5), 1);
     let (_, cursor) = input.view(5, 10);
-    assert_eq!((cursor.row, cursor.column), (0, 2 + 4), "这一行的最后一格");
+    assert_eq!((cursor.row, cursor.column), (0, 4), "这一行的最后一格");
 
-    // 而空草稿把它放在提示符后面第一格。
+    // 而空草稿把它放在第一格。
     let (_, cursor) = Input::new().view(5, 10);
-    assert_eq!((cursor.row, cursor.column), (0, 2));
-}
-
-#[test]
-fn the_prompt_and_the_indent_are_the_same_width() {
-    // 布局从一个常量里预留列数，而编辑器画这个提示符；
-    // 两边必须一致，否则每一行折出来的位置都差一列。
-    assert_eq!(
-        editor::prompt_columns() as usize,
-        heng::render::width::text_columns(editor::PROMPT)
-    );
-    // 两列，与 `> ` 当初一样：草稿前面那个字形在票 08 换了，
-    // 正是这一条说明那次改动没有挪动任何人的文本。`❱` 是模糊宽度 ——
-    // 在这个渲染器的表里算一列，在配置成把这类字符画成双宽的终端里算两列，
-    // 人工清单要求真人去看的就是这个。
-    assert_eq!(editor::PROMPT, "❱ ");
-    assert_eq!(editor::prompt_columns(), 2);
+    assert_eq!((cursor.row, cursor.column), (0, 0));
 }
 
 #[test]
 fn the_cursor_follows_the_text_not_the_end_of_the_line() {
     let mut input = typed("abc");
-    assert_eq!(input.view(80, 10).1.column, 2 + 3, "> abc");
+    assert_eq!(input.view(80, 10).1.column, 3, "abc|");
     input.home();
-    assert_eq!(input.view(80, 10).1.column, 2, "> |abc");
+    assert_eq!(input.view(80, 10).1.column, 0, "|abc");
     input.right();
-    assert_eq!(input.view(80, 10).1.column, 3, "> a|bc");
+    assert_eq!(input.view(80, 10).1.column, 1, "a|bc");
 }
 
 #[test]
@@ -129,13 +108,13 @@ fn a_new_line_opens_between_the_lines_and_the_arrows_cross_it() {
     // 从第二行行首按左键，踩到第一行的末尾。
     input.home();
     let (_, cursor) = input.view(80, 10);
-    assert_eq!((cursor.row, cursor.column), (1, 2), "home 是这一行的行首");
+    assert_eq!((cursor.row, cursor.column), (1, 0), "home 是这一行的行首");
     input.left();
     let (_, cursor) = input.view(80, 10);
-    assert_eq!((cursor.row, cursor.column), (0, 2 + 2));
+    assert_eq!((cursor.row, cursor.column), (0, 2));
     input.right();
     let (_, cursor) = input.view(80, 10);
-    assert_eq!((cursor.row, cursor.column), (1, 2));
+    assert_eq!((cursor.row, cursor.column), (1, 0));
 }
 
 #[test]
@@ -179,14 +158,14 @@ fn up_and_down_hold_the_visual_column_across_a_short_line() {
     for _ in 0..4 {
         input.right();
     }
-    assert_eq!(input.view(80, 10).1.column, 2 + 4);
+    assert_eq!(input.view(80, 10).1.column, 4);
     input.down();
-    assert_eq!(input.view(80, 10).1.column, 2 + 2, "被短的那一行夹住了");
+    assert_eq!(input.view(80, 10).1.column, 2, "被短的那一行夹住了");
     input.down();
-    assert_eq!(input.view(80, 10).1.column, 2 + 4, "那个目标列活了下来");
+    assert_eq!(input.view(80, 10).1.column, 4, "那个目标列活了下来");
     input.up();
     input.up();
-    assert_eq!(input.view(80, 10).1.column, 2 + 4);
+    assert_eq!(input.view(80, 10).1.column, 4);
     // 第一行再往上没地方去了。
     input.up();
     assert_eq!(input.view(80, 10).1.row, 0);
@@ -199,17 +178,17 @@ fn a_draft_taller_than_the_area_scrolls_to_keep_the_cursor_in_view() {
     let (rows, cursor) = input.view(10, height);
     assert_eq!(rows.len(), height as usize, "视图正好等于那块区域");
     assert_eq!(cursor.row, height - 1, "光标在最后一条可见行上");
-    assert_eq!(cursor.column, 2 + 9);
+    assert_eq!(cursor.column, 9);
 
     input.home();
     let (rows, cursor) = input.view(10, height);
-    assert_eq!((cursor.row, cursor.column), (0, 2), "home 把头部卷回来");
+    assert_eq!((cursor.row, cursor.column), (0, 0), "home 把头部卷回来");
     let head: String = rows[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert_eq!(head, format!("{P}xxxxxxxxxx"), "十列文本正好填满这一行");
+    assert_eq!(head, "xxxxxxxxxx", "十列文本正好填满这一行");
 }
 
 #[test]
@@ -482,8 +461,8 @@ fn a_token_that_wraps_keeps_its_style_across_the_fold() {
     let (rows, _) = input.view(5, 10);
     let mut seen = 0;
     for row in &rows {
-        // 第一个 span 是引子（提示符或缩进），正文从第二个起。
-        for span in row.spans.iter().skip(1) {
+        // 草稿没有引子了（`.scratch/ui-trim/spec.md`），每一个 span 都是正文。
+        for span in row.spans.iter() {
             if span.content.is_empty() {
                 continue;
             }

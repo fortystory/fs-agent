@@ -145,57 +145,11 @@ pub fn style(severity: Severity) -> Style {
 }
 
 // --- 提示符的专色 ------------------------------------------------------------
-
-/// 提示符的色相走色环有多快，单位是每秒圈数。维护者的脚本每 1/60 秒走 0.005，这三个常量就
-/// 是那个：脚本的速率换成秒，这样换个帧长，样子还留得住。
-pub const PROMPT_HUE_PER_SECOND: f64 = 0.3;
-
-/// 提示符呼吸的中心饱和度、它摆多远，以及摆多快（每秒弧度：脚本里的每 1/60 秒 0.05）。
-pub const PROMPT_SATURATION: f64 = 0.55;
-pub const PROMPT_SATURATION_BREATH: f64 = 0.2;
-pub const PROMPT_BREATH_PER_SECOND: f64 = 3.0;
-
-/// 提示符保持的明度（亮度）：在暗色主题上够亮、读得清，在亮色主题上够暗、不刺眼。
-pub const PROMPT_VALUE: f64 = 0.85;
-
-/// 提示符的颜色，取 `seconds` 那一刻。
-///
-/// 它是 24 位色，这个界面里**唯一**不是 16 色 ANSI 码的地方 —— 提示符两边都坐在终端自己的
-/// 背景上，而一个必须在十六个名字里挑一个的色相会看得见台阶。整个函数是时间的纯函数，所以
-/// 测试不必有终端就能说出某一刻长什么样。
-///
-/// 它不属于上面任何一档：谁都不许拿它当自己的颜色（§2 的「提示符专色」）。
-pub fn prompt_colour(seconds: f64) -> Color {
-    let hue = (seconds * PROMPT_HUE_PER_SECOND) % 1.0;
-    let saturation =
-        PROMPT_SATURATION + PROMPT_SATURATION_BREATH * (seconds * PROMPT_BREATH_PER_SECOND).sin();
-    let (red, green, blue) = hsv_to_rgb(hue, saturation, PROMPT_VALUE);
-    Color::Rgb(red, green, blue)
-}
-
-/// HSV 转 RGB，按它来源那个脚本里 `colorsys.hsv_to_rgb` 的算法 —— 包括截到 8 位，这样同一刻
-/// 给出的颜色与脚本当年给出的一样。
-fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> (u8, u8, u8) {
-    // 色环的每六分之一是一个色相升、下一个色相降；`sector` 是第几个六分之一，`offset` 是在
-    // 里面走了多远。
-    let scaled = (hue.fract() * 6.0).rem_euclid(6.0);
-    let sector = scaled.floor();
-    let offset = scaled - sector;
-    let (rising, falling) = (
-        value * (1.0 - saturation * (1.0 - offset)),
-        value * (1.0 - saturation * offset),
-    );
-    let (red, green, blue) = match sector as u32 {
-        0 => (value, rising, value * (1.0 - saturation)),
-        1 => (falling, value, value * (1.0 - saturation)),
-        2 => (value * (1.0 - saturation), value, rising),
-        3 => (value * (1.0 - saturation), falling, value),
-        4 => (rising, value * (1.0 - saturation), value),
-        _ => (value, value * (1.0 - saturation), falling),
-    };
-    let byte = |channel: f64| (channel * 255.0).clamp(0.0, 255.0) as u8;
-    (byte(red), byte(green), byte(blue))
-}
+//
+// 这里曾经住着提示符 `❱` 的色相与呼吸（`PROMPT_HUE_PER_SECOND` 那一组常量、`prompt_colour`
+// 与它下面那个 `hsv_to_rgb`）—— 这个界面里**唯一**一处 24 位色。2026-10-08 维护者点掉了输入框
+// 那个字形，色相于是没有载体，整套随它一起退场（`.scratch/ui-trim/spec.md`；来源是
+// `.scratch/tui-input-pulse/spec.md` §2b）。今天这个色板里每一个颜色都是 16 色 ANSI 码。
 
 #[cfg(test)]
 mod tests {
@@ -211,17 +165,5 @@ mod tests {
                 assert_ne!(left, right, "菜单里两类来源撞了同一个颜色");
             }
         }
-    }
-
-    /// 色环，钉在每个实现都同意的那六个点上 —— 分区算术里一个舍入错误最先显形的那几个角。
-    #[test]
-    fn hsv_to_rgb_matches_the_shortcut_table() {
-        assert_eq!(hsv_to_rgb(0.0, 0.0, 1.0), (255, 255, 255));
-        assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), (255, 0, 0));
-        assert_eq!(hsv_to_rgb(1.0 / 3.0, 1.0, 1.0), (0, 255, 0));
-        assert_eq!(hsv_to_rgb(2.0 / 3.0, 1.0, 1.0), (0, 0, 255));
-        // 色环闭合：色相 1 就是色相 0，而越过它的色相会回绕而不是 panic。
-        assert_eq!(hsv_to_rgb(1.0, 0.4, 0.8), hsv_to_rgb(0.0, 0.4, 0.8));
-        assert_eq!(hsv_to_rgb(2.25, 0.4, 0.8), hsv_to_rgb(0.25, 0.4, 0.8));
     }
 }

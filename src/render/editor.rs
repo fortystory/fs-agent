@@ -12,27 +12,14 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::token::{self, Token};
-use super::width::{char_columns, text_columns};
+use super::width::char_columns;
 
-/// 草稿第一行上的提示符。
+/// 草稿**没有提示符**：第一行第一个字就是草稿的第一个字，折行之后每一行也顶格
+/// （2026-10-08 维护者点掉了原来那个 `❱ `，`.scratch/ui-trim/spec.md`）。
 ///
-/// 用 `❱`（U+2771）而不是 `>`：编辑器待在那里时，画家给这个字形的颜色会绕着色相轮走
-/// （`.scratch/tui-input-pulse/spec.md` §2b），而在这个字重下，尖括号是读起来像箭头的那个
-/// 形状。在这个渲染器的宽度表里它算**一列**，所以提示符正好与 `> ` 一样是两列宽，
-/// [`prompt_columns`] 下游的一切都不动。一个配成把模糊宽度字符画成双倍的终端会把它显示成
-/// 两列，这一点记成一条手工检查，而不是在这里去防。
-///
-/// 定义住在符号表里（[`super::wording::PROMPT`]）—— 这一个字形只有一个归宿，这里给编辑器的
-/// 读者留个名字。
-pub use super::wording::PROMPT;
-
-/// 提示符占的列数 —— 也因此是第一行之后每一行都带的缩进，好让每一行装同样多的文字。从
-/// [`PROMPT`] 推出来，好让两者不会脱节；布局留出的就是这个数。
-pub fn prompt_columns() -> u16 {
-    text_columns(PROMPT) as u16
-}
-
-/// 草稿里逻辑行之间的分隔符。
+/// 它原来占两列，承担两件事：一个「键在这里」的眼色，以及画家给那个 span 上色的位置
+/// （`.scratch/tui-input-pulse/spec.md` §2b）。色相那套随它一起退场，于是两件事都不再需要
+/// 它：输入行留给文字的宽度就是主列的内容宽度。
 const NEWLINE: char = '\n';
 
 /// 光标落在一帧画出来的那些行里的哪儿。
@@ -122,9 +109,8 @@ impl Input {
     /// 滚动的目的是把光标那一行留在 `height` 之内：草稿长到它十行的上限然后开始滚，而不是
     /// 把正在打的东西藏起来（spec §5）。
     ///
-    /// 一行的引子 —— 第一行的提示符、其余行的缩进 —— 是它**自己的 span**，这样画家有地方
-    /// 放提示符的颜色，而不必伸手进草稿的正文里（`.scratch/tui-input-pulse/spec.md` §2b）。
-    /// 字符一个没变，所以编辑器自己的测试像人那样读这一行：把 span 拼起来。
+    /// 每一行都是草稿自己的字，前后不带任何前缀 —— 原来第一行那个 `❱ ` 与其余行的等宽缩进
+    /// 一起退场了（`.scratch/ui-trim/spec.md`）。
     pub fn view(&self, width: u16, height: u16) -> (Vec<Line<'static>>, Placed) {
         let (rows, placed) = self.display_rows(width.max(1) as usize);
         let height = (height.max(1)) as usize;
@@ -133,18 +119,11 @@ impl Input {
         } else {
             0
         };
-        let indent = " ".repeat(prompt_columns() as usize);
         let lines = rows
             .iter()
-            .enumerate()
             .skip(top)
             .take(height)
-            .map(|(index, row)| {
-                let lead = if index == 0 { PROMPT } else { indent.as_str() };
-                let mut spans = vec![Span::raw(lead.to_owned())];
-                spans.extend(self.row_spans(row));
-                Line::from(spans)
-            })
+            .map(|row| Line::from(self.row_spans(row)))
             .collect();
         (
             lines,
@@ -591,21 +570,19 @@ impl Input {
             at += 1;
         }
         let offset = cursor - rows[at].start;
-        let prompt = prompt_columns() as usize;
-        let column = prompt
-            + rows[at]
-                .text
-                .chars()
-                .take(offset)
-                .map(char_columns)
-                .sum::<usize>();
+        let column = rows[at]
+            .text
+            .chars()
+            .take(offset)
+            .map(char_columns)
+            .sum::<usize>();
         // 光标在一条正好填满的行末尾时，停在它最后一格上，像终端的待决折行那样，而不是另开
         // 一行、把草稿剩下的部分往下推。
         (
             rows,
             Placed {
                 row: at as u16,
-                column: column.min(prompt + width - 1) as u16,
+                column: column.min(width - 1) as u16,
             },
         )
     }

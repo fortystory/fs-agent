@@ -561,17 +561,17 @@ flowchart TD
 | `boot` | 进程入口，`main` 只调 `cli::main()` | `src/main.rs:1-3`、`src/cli.rs:78-103` | `fn main` |
 | `cmd` | 子命令分派：`--version` / `--help` / `probe` / `discuss` / `prune` / `sessions`，其余交互式 | `src/cli.rs:105-129` | `fn run` |
 | `setup` | 组装：配置 · 凭据 · provider · 工具表 · 沙箱 | `src/cli.rs:234-411` | `fn interactive` |
-| `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:3339`、`src/cli.rs:2643-2687` | `fn choose_session` |
+| `sess` | 会话：新开或 `--continue` / `--session` 恢复 | `src/cli.rs:3356`、`src/cli.rs:2643-2687` | `fn choose_session` |
 | `render` | 渲染器选定 TUI / plain（headless 见 §6） | `src/cli.rs:327-372`、`src/render/mod.rs:241-255` | `fn tui`、`fn plain` |
 | `loop` | 主循环：等一行或手势 | `src/cli.rs:1468` | `fn interactive_loop` |
-| `route` | 分派 `Submission` | `src/cli.rs:1822`、`src/cli.rs:1387-1440` | `fn submission` |
+| `route` | 分派 `Submission` | `src/cli.rs:1832`、`src/cli.rs:1387-1440` | `fn submission` |
 | `turn` | 一次 turn | `src/lib.rs:658-682`、`src/agent.rs:443-732` | `fn run_turn` |
 | `disc` | 讨论：`--discuss` 子命令与会话内 `/discuss` | `src/cli.rs:545-770`、`src/cli.rs:950-1052`、`src/agent.rs:1334-1585` | `fn run_discussion` |
-| `goal` | 目标循环 `/loop` | `src/cli.rs:2202` | `fn run_goal_loop` |
-| `maint` | `probe` · `prune` · `sessions` 三条独立子命令，各自退出 | `src/cli.rs:3256`、`src/cli.rs:2112`、`src/cli.rs:2402`、`src/cli.rs:2560` | `fn run_sessions` |
+| `goal` | 目标循环 `/loop` | `src/cli.rs:2219` | `fn run_goal_loop` |
+| `maint` | `probe` · `prune` · `sessions` 三条独立子命令，各自退出 | `src/cli.rs:3273`、`src/cli.rs:2112`、`src/cli.rs:2402`、`src/cli.rs:2560` | `fn run_sessions` |
 | `tail` | 收尾：排空渲染通道 + 续接回执 | `src/cli.rs:511-525`、`src/lib.rs:1160` | `fn finish_session`、`fn shutdown` |
-| `ok` | 退出 0（空输入、`/quit`、`Ignore`、正常收尾） | `src/cli.rs:2629`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
-| `aborted` | 退出 130（忙碌中被举手退出，等回合收尾后兑现） | `src/cli.rs:2645` | `struct ExitRequest` |
+| `ok` | 退出 0（空输入、`/quit`、`Ignore`、正常收尾） | `src/cli.rs:2646`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
+| `aborted` | 退出 130（忙碌中被举手退出，等回合收尾后兑现） | `src/cli.rs:2662` | `struct ExitRequest` |
 
 ### 图 1 的边
 
@@ -580,8 +580,8 @@ flowchart TD
 | `boot --> cmd` | `src/main.rs:1-3` | `main` 无逻辑，直接进 `cli::main` |
 | `cmd -->\|交互式\| setup` | `src/cli.rs:127` | 没有子命令就是交互式 |
 | `cmd -->\|--discuss\| disc` | `src/cli.rs:116` | `discuss` 子命令独立组装 |
-| `cmd -->\|probe / prune / sessions\| maint` | `src/cli.rs:3256` | 三条各自 `return` 自己的 `ExitCode` |
-| `setup --> sess` | `src/cli.rs:3339` | `choose_session` 决定开哪一场 |
+| `cmd -->\|probe / prune / sessions\| maint` | `src/cli.rs:3273` | 三条各自 `return` 自己的 `ExitCode` |
+| `setup --> sess` | `src/cli.rs:3356` | `choose_session` 决定开哪一场 |
 | `setup --> render` | `src/cli.rs:327-372` | 渲染器在组装前选定并注入 |
 | `sess --> loop` | `src/cli.rs:446-459` | `interactive_loop(...)` 被调 |
 | `render --> loop` | `src/cli.rs:446-459` | 同上；两条入边是图 1 的有意合并 |
@@ -589,13 +589,13 @@ flowchart TD
 | `route -->\|一句提示\| turn` | `src/cli.rs:1304-1313`、`src/cli.rs:2043` | `Submission::Prompt` → `TurnStart::Prompt` |
 | `route -->\|/discuss\| disc` | `src/cli.rs:1310-1315` | 走 `discuss_in_session` |
 | `route -->\|/loop\| goal` | `src/cli.rs:1282-1302` | 走 `run_goal_loop` |
-| `route -->\|/quit 或空行\| tail` | `src/cli.rs:2629` | `None` 与 `Quit` 都 `ExitCode::SUCCESS` |
+| `route -->\|/quit 或空行\| tail` | `src/cli.rs:2646` | `None` 与 `Quit` 都 `ExitCode::SUCCESS` |
 | `turn --> loop` | `src/cli.rs:1314` | 处理完回到循环顶 |
 | `disc --> loop` | `src/cli.rs:1314` | 讨论结束回到循环顶 |
 | `goal --> turn` | `src/cli.rs:1633` | 每回合边界用 `TurnStart::Injected` 驱动 |
 | `tail --> ok` | `src/cli.rs:1983-1988` | `exit_code_after(false)` |
 | `loop -->\|两下 Ctrl-C\| tail` | `src/cli.rs:1176-1180` | 空闲时收到 `Quit` |
-| `loop -->\|取消后收尾\| aborted` | `src/cli.rs:2054-2062`、`src/cli.rs:2645` | 忙时先取消，回合收尾后兑现 130 |
+| `loop -->\|取消后收尾\| aborted` | `src/cli.rs:2054-2062`、`src/cli.rs:2662` | 忙时先取消，回合收尾后兑现 130 |
 
 ### 图 2 的节点
 
@@ -608,7 +608,7 @@ flowchart TD
 | `rt` | 多线程 tokio runtime，失败即退 | `src/cli.rs:89-102` | — |
 | `cmd` | 子命令分派 | `src/cli.rs:105-129` | `fn run` |
 | `parse` | 交互式参数解析，两渲染器互斥 | `src/cli.rs:161-219` | `fn parse_interactive` |
-| `cfg` | 显式 `--config` 必须存在，否则默认路径 | `src/cli.rs:2752`、`src/cli.rs:2097-2110` | `fn load_config` |
+| `cfg` | 显式 `--config` 必须存在，否则默认路径 | `src/cli.rs:2769`、`src/cli.rs:2097-2110` | `fn load_config` |
 | `red` | 每条 provider key 解析一次，打码器持全部值 | `src/config.rs:1238`、`src/events.rs:611-630` | `fn redactor` |
 | `prov` | provider 装配 + 能力表（双保险） | `src/cli.rs:299-305`、`src/cli.rs:334-340`、`src/provider/openai.rs:101-127`、`src/provider/capability.rs:121` | `fn build`、`fn caps_for` |
 | `scfg` | `SessionConfig`：预算 · 迭代上限 · 沙箱 · 落点 | `src/cli.rs:306-312`、`src/config.rs:1220` | `fn session_config` |
@@ -619,11 +619,11 @@ flowchart TD
 | `kind` | 这条流有没有 `SessionStarted` | `src/lib.rs:348` | — |
 | `skel` | 新流：`SessionStarted` + 沙箱状态 + 钉住注入 | `src/lib.rs:366-386` | `fn record_skeleton` |
 | `resume` | 续流：补记沙箱状态 · 收尾悬空 `tool_call` · 重放历史 | `src/lib.rs:348`、`src/agent/history.rs:40-61`、`src/cli.rs:417-419` | `fn start`、`fn recover_pending_calls` |
-| `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:2028` | `fn banner` |
+| `banner` | 横幅走渲染通道；`/` 菜单 = 内建 + 已发现技能 | `src/cli.rs:423-444`、`src/render/wording.rs:2097` | `fn banner` |
 | `loop` | 主循环 | `src/cli.rs:1468` | `fn interactive_loop` |
 | `quit` | 排空渲染通道，然后 stderr 打续接回执 | `src/cli.rs:511-525`、`src/lib.rs:1249` | `fn finish_session`、`fn drain_renderer` |
-| `ok` | 退出 0 | `src/cli.rs:2629`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
-| `cc` | 退出 130：忙时第一下取消、第二下记 `ExitRequest` | `src/cli.rs:2645`、`src/cli.rs:2054-2062` | `struct ExitRequest` |
+| `ok` | 退出 0 | `src/cli.rs:2646`、`src/cli.rs:1983-1988` | `fn exit_code_after` |
+| `cc` | 退出 130：忙时第一下取消、第二下记 `ExitRequest` | `src/cli.rs:2662`、`src/cli.rs:2054-2062` | `struct ExitRequest` |
 | `panic` | TUI 的 panic 钩子 + `Drop` 还原终端（见 §3 正文） | `src/render/tui.rs:626`、`src/render/tui.rs:470-471` | `struct TerminalModes` |
 
 ### 图 2 的边
@@ -650,7 +650,7 @@ flowchart TD
 | `skel --> banner` | `src/cli.rs:417-429` | 骨架先于横幅 |
 | `resume --> banner` | `src/cli.rs:417-429` | 重放先于横幅 |
 | `banner --> loop` | `src/cli.rs:446-459` | 进主循环 |
-| `loop -->\|/quit 或空行\| quit` | `src/cli.rs:2629`、`src/cli.rs:462` | `harness.shutdown()` |
+| `loop -->\|/quit 或空行\| quit` | `src/cli.rs:2646`、`src/cli.rs:462` | `harness.shutdown()` |
 | `loop -->\|忙碌时两下 Ctrl-C\| cc` | `src/cli.rs:2054-2062` | 先等回合收尾，再兑现 130 |
 | `quit --> ok` | `src/cli.rs:1983-1988` | `finish_session` 原样返回 `code` |
 
@@ -755,7 +755,7 @@ flowchart TD
 | `req` | provider 请求 | `src/agent.rs:562-569` | — |
 | `cont` | `--continue`：补骨架之外的状态 | `src/lib.rs:348`、`src/cli.rs:417-419` | `fn start` |
 | `replay` | `sessions replay`：同一 `build_messages` 重算 | `src/agent/replay.rs:55-85`、`src/cli.rs:2880` | `fn replay` |
-| `goal` | `/loop`：每回合边界重算进度 | `src/cli.rs:2202`、`src/lib.rs:838-845`、`src/lib.rs:880-912` | `fn run_goal_loop`、`fn compact_and_rollover` |
+| `goal` | `/loop`：每回合边界重算进度 | `src/cli.rs:2219`、`src/lib.rs:838-845`、`src/lib.rs:880-912` | `fn run_goal_loop`、`fn compact_and_rollover` |
 | `compact` | 压缩 + 翻页：一个动作，成对发生 | `src/lib.rs:941`、`src/lib.rs:923-929` | `fn compact` |
 | `ask` | 询问 Ask：harness 发起，答案是闸门 | `src/permissions.rs:974-1012`、`src/render/input.rs:258-291` | `trait Asker` |
 | `uq` | 用户提问：模型发起，答案是上下文 | `src/questions.rs:70-78`、`src/render/input.rs:294-335`、`src/tools/ask_user.rs:201-220` | `trait UserQuestions` |

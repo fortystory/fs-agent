@@ -573,3 +573,46 @@ async fn the_sandbox_state_gets_one_narration_line_like_a_context_injection() {
         "不可用时把原因一起摊开：{text}"
     );
 }
+
+#[tokio::test]
+async fn an_answer_to_a_questionnaire_reads_as_the_user_speaking() {
+    // 问卷的答案在这一侧同样是**用户说的**那一档（`.scratch/ui-trim/spec.md`）：同一个块，
+    // 同一个 `[用户]` 前缀，逐行读下来就是他答的那句话。模型那一侧一个字节没变 —— 进上下文
+    // 的仍是那次工具调用与它的结果。
+    let events = [
+        Event::new(
+            1,
+            kimi(),
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_name: "ask_user_question".to_owned(),
+                args: serde_json::json!({
+                    "questions": [
+                        {
+                            "id": "pick",
+                            "header": "用哪个方案",
+                            "question": "这两条路走哪一条？",
+                            "options": [{"label": "A"}, {"label": "B"}]
+                        }
+                    ]
+                }),
+            },
+        ),
+        Event::new(
+            2,
+            kimi(),
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new("call-1"),
+                ok: true,
+                output: Some(
+                    serde_json::json!({"answers": [{"id": "pick", "selected": ["A"]}]}).to_string(),
+                ),
+                error: None,
+                duration_ms: 3,
+            },
+        ),
+    ];
+    let (_stdout, stderr) = run(&events, false).await;
+    let text = stderr.text();
+    assert!(text.contains("[用户] 用哪个方案：A"), "{text}");
+}
