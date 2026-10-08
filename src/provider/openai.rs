@@ -1,10 +1,10 @@
-//! OpenAI 兼容客户端：一套实现，两个厂商档案。
+//! OpenAI 兼容客户端：一套实现，三个厂商档案。
 //!
-//! KIMI 与 DeepSeek 不是两个 provider，而是关于同一套请求与响应形状的两组事实。这个模块是那些差
-//! 异每一处的执行点（spec §4）：
+//! KIMI、DeepSeek 与 MiniMax 不是三个 provider，而是关于同一套请求与响应形状的三组事实。这个模
+//! 块是那些差异每一处的执行点（spec §4）：
 //!
 //! * `tool_call` 的参数碎片（含 `index`）在这里拼好，所以上面那层永远看不到碎片；
-//! * 两家厂商的 `usage` 形状都归一成 `cached` / `miss`；
+//! * 三家厂商的 `usage` 形状都归一成 `cached` / `miss`；
 //! * 明确设了、模型却不支持的参数是**带着告警丢掉**，绝不悄悄丢；
 //! * 六个 `ProviderError` 类别在这里指派，其中 `QuotaExhausted` 与 `RateLimited` 保持分开；
 //! * 传输层重试有上界、且住在这里；上面那层从不重跑一个回合。
@@ -170,6 +170,12 @@ impl OpenAiProvider {
                  表示这个套餐里没有你请求的那个 model。"
             }
             Some(Vendor::DeepSeek) => "请确认这个密钥属于 https://api.deepseek.com 且仍然有效。",
+            Some(Vendor::MiniMax) => {
+                "MiniMax 的订阅 Key（`sk-cp-` 前缀）只吃 M Plan 的额度，与按量计费的 API Key \
+                 不通用；国际站 https://api.minimax.io/v1 与国内站 https://api.minimax.cn/v1 \
+                 是两套端点，密钥与 base URL 不能互换，而且一次 401 也可能表示这个套餐里没有你 \
+                 请求的那个 model。"
+            }
             None => "请确认这个密钥与 base_url 是配套的。",
         }
     }
@@ -332,6 +338,12 @@ pub fn build_body(request: &ChatRequest, caps: ModelCaps) -> (Value, Vec<String>
                 effort.as_str()
             ));
         }
+    }
+
+    // MiniMax 默认会把思考留在 `content` 的 `<think>` 标签里；开了这个开关它才走
+    // `reasoning_content`，而正文、投影重放与对话视图都只认后者。
+    if caps.reasoning_split {
+        body.insert("reasoning_split".to_owned(), json!(true));
     }
 
     if let Some(cache_key) = &request.cache_key {
@@ -776,7 +788,9 @@ fn parse_finish_reason(reason: &str) -> FinishReason {
 /// 把厂商的 `usage` 对象归一成中性的形状。
 ///
 /// Kimi 报的是 `cached_tokens`；DeepSeek 报的是 `prompt_cache_hit_tokens` 与
-/// `prompt_cache_miss_tokens`。两者都变成 `cached_tokens` / `miss_tokens`。
+/// `prompt_cache_miss_tokens`；MiniMax 的缓存是自动的，命中只报在
+/// `prompt_tokens_details.cached_tokens` 里（它不报顶层那个字段）。三者都变成 `cached_tokens` /
+/// `miss_tokens`。
 pub fn normalize_usage(vendor: Vendor, usage: &Value) -> Usage {
     let input_tokens = u64_field(usage, "prompt_tokens").unwrap_or(0);
     let output_tokens = u64_field(usage, "completion_tokens").unwrap_or(0);
@@ -794,6 +808,12 @@ pub fn normalize_usage(vendor: Vendor, usage: &Value) -> Usage {
             let miss = u64_field(usage, "prompt_cache_miss_tokens")
                 .unwrap_or_else(|| input_tokens.saturating_sub(cached));
             (cached, miss)
+        }
+        Vendor::MiniMax => {
+            // 不回落顶层 `cached_tokens`：MiniMax 不报那个字段，留着会让人读成「这里也兼容顶层
+            // 形状」。
+            let cached = nested_u64(usage, "prompt_tokens_details", "cached_tokens").unwrap_or(0);
+            (cached, input_tokens.saturating_sub(cached))
         }
     };
     Usage {

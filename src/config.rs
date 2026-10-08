@@ -201,13 +201,14 @@ pub struct ToolDeclaration {
 /// 没有配置也没有导出 `default_model` 时用的模型。
 pub const DEFAULT_MODEL: &str = "kimi-k3";
 
-/// 一条 provider profile 对哪家厂商说话。只有这两家被建模；`#[non_exhaustive]` 让任何地方
-/// 都不会假定存在第三家。
+/// 一条 provider profile 对哪家厂商说话。只有这三家被建模；`#[non_exhaustive]` 让任何地方
+/// 都不会假定厂商只有这几家。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Vendor {
     Kimi,
     DeepSeek,
+    MiniMax,
 }
 
 impl Vendor {
@@ -216,18 +217,20 @@ impl Vendor {
         match self {
             Vendor::Kimi => "Kimi",
             Vendor::DeepSeek => "DeepSeek",
+            Vendor::MiniMax => "MiniMax",
         }
     }
 
     /// 这家厂商的密钥允许与哪些主机配对。
     ///
-    /// Kimi 有两套共享一个厂商的系统：开放平台（`api.moonshot.cn` / `api.moonshot.ai`）
-    /// 与 Kimi Code，也就是 coding plan（`api.kimi.com`）。两者的密钥不能互换，但都是
-    /// Kimi。
+    /// 两家都各有两套共享一个厂商系统的端点：Kimi 是开放平台（`api.moonshot.cn` /
+    /// `api.moonshot.ai`）与 Kimi Code，也就是 coding plan（`api.kimi.com`）；MiniMax 是国际站
+    /// （`api.minimax.io`）与国内站（`api.minimax.cn`）。各套的密钥不能互换，但都是同一家厂商。
     pub fn hosts(&self) -> &'static [&'static str] {
         match self {
             Vendor::Kimi => &["api.moonshot.cn", "api.moonshot.ai", "api.kimi.com"],
             Vendor::DeepSeek => &["api.deepseek.com"],
+            Vendor::MiniMax => &["api.minimax.io", "api.minimax.cn"],
         }
     }
 }
@@ -252,7 +255,8 @@ impl BuiltinProvider {
 }
 
 /// 内置的那些 profile。`kimi` 是开放平台，`kimi-code` 是 coding plan；`KIMI_API_KEY`
-/// 属于后者，与 Kimi 自己那份第三方工具文档一致。
+/// 属于后者，与 Kimi 自己那份第三方工具文档一致。MiniMax 同样是两条：`minimax` 是国际站、
+/// `minimax-cn` 是国内站（M Plan 的订阅站），两边的账号与密钥也不通用。
 pub const BUILTIN_PROVIDERS: &[BuiltinProvider] = &[
     BuiltinProvider {
         name: "kimi",
@@ -273,6 +277,20 @@ pub const BUILTIN_PROVIDERS: &[BuiltinProvider] = &[
         vendor: Vendor::DeepSeek,
         base_url: "https://api.deepseek.com",
         key_env: "DEEPSEEK_API_KEY",
+        alt_key_envs: &[],
+    },
+    BuiltinProvider {
+        name: "minimax",
+        vendor: Vendor::MiniMax,
+        base_url: "https://api.minimax.io/v1",
+        key_env: "MINIMAX_API_KEY",
+        alt_key_envs: &[],
+    },
+    BuiltinProvider {
+        name: "minimax-cn",
+        vendor: Vendor::MiniMax,
+        base_url: "https://api.minimax.cn/v1",
+        key_env: "MINIMAX_CN_API_KEY",
         alt_key_envs: &[],
     },
 ];
@@ -1872,6 +1890,10 @@ struct RawModel {
 ///
 /// K3 系列刻意出现两次：`kimi-k3` 是开放平台的 id，而 `k3` / `k3-256k` 是同一个模型在
 /// Kimi Code（coding plan）下的 id。
+///
+/// MiniMax 的两个 id 默认走国际站 `minimax`；用国内站（M Plan 的订阅站）时在
+/// `[models."MiniMax-M3"]` 下把 `provider` 改成 `minimax-cn` —— 带点号的 id 在 TOML 里要给
+/// 键加引号，否则会被解析成嵌套表。
 pub const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("kimi-k3", "kimi"),
     ("k3", "kimi-code"),
@@ -1880,6 +1902,8 @@ pub const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("kimi-for-coding-highspeed", "kimi-code"),
     ("deepseek-v4-pro", "deepseek"),
     ("deepseek-flash", "deepseek"),
+    ("MiniMax-M3.1-Flash-Preview", "minimax"),
+    ("MiniMax-M3", "minimax"),
 ];
 
 fn resolve_providers(

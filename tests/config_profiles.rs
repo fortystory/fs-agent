@@ -29,7 +29,7 @@ fn builtin_defaults_exist_with_no_config_file_and_no_environment() {
     let config = resolve(None, &env(&[])).unwrap();
 
     assert_eq!(config.default_model, DEFAULT_MODEL);
-    assert_eq!(config.models.len(), 7);
+    assert_eq!(config.models.len(), 9);
 
     let kimi = config.provider("kimi").expect("内建的 kimi profile");
     assert_eq!(kimi.base_url, "https://api.moonshot.cn/v1");
@@ -49,6 +49,8 @@ fn builtin_defaults_exist_with_no_config_file_and_no_environment() {
         "kimi-for-coding-highspeed",
         "deepseek-v4-pro",
         "deepseek-flash",
+        "MiniMax-M3.1-Flash-Preview",
+        "MiniMax-M3",
     ] {
         assert!(config.model(id).is_some(), "内建模型 {id}");
     }
@@ -80,6 +82,76 @@ fn a_coding_plan_key_on_the_coding_host_passes_the_domain_guard() {
         config.provider("kimi").unwrap().key_source,
         KeySource::Missing
     );
+}
+
+#[test]
+fn the_two_minimax_sites_are_their_own_builtin_profiles() {
+    // 国际站与国内站是两套端点、两把不通用的密钥：与 Kimi 的两套系统同形。
+    let config = resolve(None, &env(&[])).unwrap();
+
+    let global = config.provider("minimax").expect("内建的 minimax");
+    assert_eq!(global.base_url, "https://api.minimax.io/v1");
+    assert_eq!(global.vendor, Some(Vendor::MiniMax));
+    assert_eq!(global.key_env, "MINIMAX_API_KEY");
+    assert_eq!(global.key_source, KeySource::Missing);
+
+    let china = config.provider("minimax-cn").expect("内建的 minimax-cn");
+    assert_eq!(china.base_url, "https://api.minimax.cn/v1");
+    assert_eq!(china.vendor, Some(Vendor::MiniMax));
+    assert_eq!(china.key_env, "MINIMAX_CN_API_KEY");
+
+    // 两个 id 默认落在国际站上。
+    assert_eq!(config.model("MiniMax-M3").unwrap().provider, "minimax");
+    assert_eq!(
+        config.model("MiniMax-M3.1-Flash-Preview").unwrap().provider,
+        "minimax"
+    );
+
+    // 变量之间不渗漏：导出国内站的 Key，国际站那份仍然没有。
+    let keyed = resolve(None, &env(&[("MINIMAX_CN_API_KEY", "sk-cp-cn")])).unwrap();
+    assert_eq!(
+        keyed.provider("minimax-cn").unwrap().api_key.as_deref(),
+        Some("sk-cp-cn")
+    );
+    assert_eq!(
+        keyed.provider("minimax").unwrap().key_source,
+        KeySource::Missing
+    );
+}
+
+#[test]
+fn a_minimax_key_is_domain_checked_against_both_sites() {
+    // 两把 Key 都能用在两个站上：主机判据按**厂商**走，两个站都是 MiniMax。
+    let crossed = r#"
+[providers.minimax-cn]
+api_key_env = "MINIMAX_API_KEY"
+"#;
+    let config = resolve(Some(crossed), &env(&[("MINIMAX_API_KEY", "sk-cp-global")])).unwrap();
+    assert_eq!(
+        config.provider("minimax-cn").unwrap().api_key.as_deref(),
+        Some("sk-cp-global")
+    );
+
+    // 而指到别家主机上仍然被结构性拦住。
+    let elsewhere = r#"
+[providers.minimax-cn]
+base_url = "https://api.deepseek.com"
+"#;
+    let error = resolve(Some(elsewhere), &env(&[("MINIMAX_CN_API_KEY", "sk-cp-cn")]))
+        .expect_err("跨厂商的配对必须被拒")
+        .to_string();
+    assert!(error.contains("MINIMAX_CN_API_KEY"), "{error}");
+    assert!(error.contains("api.minimax.cn"), "{error}");
+}
+
+#[test]
+fn a_minimax_model_id_works_as_a_discussion_name() {
+    // 短形式的名字就是 model id，而 MiniMax 的 id 里有点号与短横线 —— 名字的判据只要求
+    // 「不断开的词」，所以不必给它们另外起名。
+    let file = "[discussion]\ndebaters = [\"MiniMax-M3\", \"kimi-k3\"]\n";
+    let config = resolve(Some(file), &env(&[])).unwrap();
+    let roster = config.discussion.as_ref().expect("[discussion] 名册");
+    assert_eq!(roster.names(), vec!["MiniMax-M3", "kimi-k3"]);
 }
 
 #[test]
@@ -168,8 +240,8 @@ reasoning_effort = "low"
     assert_eq!(model.params.reasoning_effort, Some(ReasoningEffort::Low));
 
     // provider 是共享的那一份；这次覆盖没有给它开叉。
-    // （三个内建 profile：kimi、kimi-code、deepseek。）
-    assert_eq!(config.providers.len(), 3);
+    // （五个内建 profile：kimi、kimi-code、deepseek、minimax、minimax-cn。）
+    assert_eq!(config.providers.len(), 5);
     assert_eq!(
         config
             .provider_for("deepseek-v4-pro")

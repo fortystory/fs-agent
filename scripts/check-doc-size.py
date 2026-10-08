@@ -320,9 +320,20 @@ def review_rules(unit: Unit) -> list[str]:
 #   （`mark-sweep` 那行，10,769 / 64）。此后 `b1b5189`（`/` 菜单按来源上色那一轮动了索引行）
 #   与 `abc160f`（`diff-page` 立项加一行）都没跟着上调，实测已是 **11,049 / 66**。这一轮补上，
 #   与 `input-tokens` 起的那九次同因：feature 索引天然随 feature 增长。
+# **2026-10-08 MiniMax 进 `README.md` 时显式上调一次**：第三个厂商要落三处必然的入口信息 ——
+#   provider 表两行、内置模型 id 两个、配置样例里一行（M Plan 的 `sk-cp-` 前缀与带点号 id 的
+#   TOML 引号坑）。这次是**信息增长**而不是排版取舍，所以先照上面的先例把样例压到一行，再按实测
+#   把棘轮抬到 **18,211 / 319**（17,928 / 316 之后越过了行数那一档；字符仍离终点 18,500 有余）。
+#   与 `.scratch/README.md` 同日同因：新增 `minimax-provider` 那一行索引也是常规增长，
+#   11,049 / 66 → **11,334 / 67**（与 `input-tokens` 起那十次同因）。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 17928, "lines": 317, "target_chars": 18500, "target_lines": 320},
-    ".scratch/README.md": {"chars": 11049, "lines": 66, "target_chars": 13500, "target_lines": 100},
+    "README.md": {"chars": 18211, "lines": 319, "target_chars": 18500, "target_lines": 320},
+    ".scratch/README.md": {
+        "chars": 11334,
+        "lines": 67,
+        "target_chars": 13500,
+        "target_lines": 100,
+    },
     "AGENTS.md": {"chars": 5000, "lines": 140, "target_chars": 5500, "target_lines": 150},
 }
 # 口径：字符数 = 剥掉全部空白后的 `len`；行数 = `text.count("\n") + 1`（与票面的实测同口径，

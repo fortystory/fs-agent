@@ -63,3 +63,4 @@
 | [`rename-to-heng/`](rename-to-heng/spec.md) | spec | **改名**：`fs-agent` → **衡（heng）**（[ADR 0014](../docs/adr/0014-renamed-to-heng.md)）：`fs` 歧义 + 产品定位是 harness；标识符、路径、文档与左栏标记一起换，历史不追改 | 4/4 done |
 | [`mark-sweep/`](mark-sweep/spec.md) | spec | 标记上的**扫光**：一次运行进行中，一束反光从右下扫到左上（斜亮带 + 两侧过渡、峰值白、1.8 秒一轮）；空闲一个像素都不动 —— 推翻 `tui-input-pulse` 票 08 的「标记静止」（[ADR 0015](../docs/adr/0015-mark-light-sweep.md)） | 1/1 done |
 | [`diff-page/`](diff-page/seed.md) | seed | 左栏多一页 `diff`：列出改动的文件，点一个开详情弹窗看那份 diff（`git diff` 的口径、谁去跑 git、用什么上色都还没谈） | — |
+| [`minimax-provider/`](minimax-provider/spec.md) | spec | **MiniMax 作为第三个厂商**：两条内建 profile（国际站 `api.minimax.io` / 国内站 `api.minimax.cn`，M Plan 的订阅站在国内站）+ 两个 M3 系模型进能力表，`reasoning_split` 让思考走 `reasoning_content`、缓存读数取 `prompt_tokens_details.cached_tokens`；**Anthropic 兼容端点明确不接**（会话调用只有 OpenAI 兼容那一套） | 2/2 done |

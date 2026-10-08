@@ -33,6 +33,10 @@ fn deepseek() -> ModelCaps {
     caps_for("deepseek-v4-pro").unwrap()
 }
 
+fn minimax() -> ModelCaps {
+    caps_for("MiniMax-M3").unwrap()
+}
+
 fn request(model: &str, params: GenerationParams) -> ChatRequest {
     ChatRequest {
         model: model.to_owned(),
@@ -115,6 +119,34 @@ fn the_two_vendors_differ_where_the_spec_says_they_do() {
     assert_eq!(deepseek.min_cacheable_tokens, 0);
 }
 
+#[test]
+fn the_minimax_models_enter_the_table_with_their_own_numbers() {
+    let m3 = caps_for("MiniMax-M3").unwrap();
+    assert_eq!(m3.vendor, heng::config::Vendor::MiniMax);
+    assert_eq!(m3.context_window, 1_048_576);
+    // 官方没给输出上限，所以照「不比窗口更紧」记。
+    assert_eq!(m3.max_output_tokens, 1_048_576);
+    assert!(m3.supports_tools);
+    assert!(m3.supports_reasoning);
+    assert!(m3.requires_reasoning_replay);
+    assert!(m3.supports_temperature && m3.supports_top_p);
+    assert!(m3.supports_stream_options);
+    // 缓存是自动的（没有 prompt_cache_key），512 个输入 token 起才缓存。
+    assert!(!m3.supports_prompt_cache_key);
+    assert_eq!(m3.min_cacheable_tokens, 512);
+    assert_eq!(m3.max_tokens_field.field_name(), "max_completion_tokens");
+    // 思考一律走 reasoning_content —— 默认形态会把 `<think>` 留在正文里。
+    assert!(m3.reasoning_split);
+    // 官方：「reasoning_effort … 仅 M3.1-Flash-Preview 生效」，所以两条 id 只差这一位。
+    assert!(!m3.supports_reasoning_effort);
+
+    let m31 = caps_for("MiniMax-M3.1-Flash-Preview").unwrap();
+    assert_eq!(m31.vendor, heng::config::Vendor::MiniMax);
+    assert_eq!(m31.context_window, m3.context_window);
+    assert!(m31.supports_reasoning_effort);
+    assert!(m31.reasoning_split);
+}
+
 // --- 请求体 ----------------------------------------------------------------
 
 #[test]
@@ -142,6 +174,41 @@ fn the_deepseek_body_omits_the_cache_key_it_does_not_support() {
         body.get("prompt_cache_key").is_none(),
         "DeepSeek 没有 prompt_cache_key：{body}"
     );
+}
+
+#[test]
+fn the_minimax_body_asks_for_a_separate_reasoning_channel() {
+    let (body, warnings) = build_body(
+        &request("MiniMax-M3", GenerationParams::default()),
+        minimax(),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // 这一位是必须的：不开它，思考会以 `<think>` 标签留在 content 里。
+    assert_eq!(body["reasoning_split"], true);
+    assert_eq!(body["stream_options"]["include_usage"], true);
+    assert!(
+        body.get("prompt_cache_key").is_none(),
+        "MiniMax 的缓存是自动的，没有这个参数：{body}"
+    );
+    // 没有显式设上限时两个字段都不发。
+    assert!(body.get("max_tokens").is_none(), "{body}");
+    assert!(body.get("max_completion_tokens").is_none(), "{body}");
+
+    // 别的厂商不收 reasoning_split（新位默认 false）。
+    let (kimi_body, _) = build_body(&request("kimi-k3", GenerationParams::default()), kimi());
+    assert!(
+        kimi_body.get("reasoning_split").is_none(),
+        "Kimi 不认这个字段：{kimi_body}"
+    );
+
+    // 输出上限走新字段名。
+    let params = GenerationParams {
+        max_output_tokens: Some(4096),
+        ..Default::default()
+    };
+    let (capped, _) = build_body(&request("MiniMax-M3", params), minimax());
+    assert_eq!(capped["max_completion_tokens"], 4096);
+    assert!(capped.get("max_tokens").is_none(), "{capped}");
 }
 
 #[test]
@@ -471,6 +538,45 @@ fn a_missing_miss_count_falls_back_to_input_minus_cached() {
     );
     assert_eq!(usage.cached_tokens, 70);
     assert_eq!(usage.miss_tokens, 30);
+}
+
+#[test]
+fn minimax_cached_tokens_come_from_the_nested_field() {
+    let usage = normalize_usage(
+        heng::config::Vendor::MiniMax,
+        &serde_json::json!({
+            "prompt_tokens": 1200,
+            "completion_tokens": 300,
+            "total_tokens": 1500,
+            "prompt_tokens_details": { "cached_tokens": 800 },
+        }),
+    );
+    assert_eq!(
+        usage,
+        Usage {
+            input_tokens: 1200,
+            output_tokens: 300,
+            cached_tokens: 800,
+            miss_tokens: 400,
+            reasoning_tokens: None,
+        }
+    );
+}
+
+#[test]
+fn minimax_ignores_a_top_level_cached_tokens_field() {
+    // MiniMax 只报嵌套的那个；顶层 `cached_tokens` 是别家的形状，这里不认它 —— 认得的话，
+    // 一次真调用里的「零缓存」就会被悄悄读成一个命中。
+    let usage = normalize_usage(
+        heng::config::Vendor::MiniMax,
+        &serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 1,
+            "cached_tokens": 80,
+        }),
+    );
+    assert_eq!(usage.cached_tokens, 0);
+    assert_eq!(usage.miss_tokens, 100);
 }
 
 // --- 错误归类 --------------------------------------------------------------

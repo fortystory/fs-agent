@@ -1,14 +1,16 @@
 //! 能力表：模型 id -> 那个模型实际支持什么。
 //!
-//! 按模型 id 构建，只建模本 crate 实际对话的这两家厂商。它是 `#[non_exhaustive]`，所以新增一
+//! 按模型 id 构建，只建模本 crate 实际对话的这三家厂商。它是 `#[non_exhaustive]`，所以新增一
 //! 项能力不是破坏性变更；而没登记的 id 是**错误**，绝不是悄悄降级（spec §4）：适配器要么知道
 //! 某个模型的形状，要么拒绝去猜。
 //!
 //! 这些数字的来源是厂商自己的 API 参考：Kimi（`kimi-k3`，1M 上下文，`max_completion_tokens`
 //! 上限 1048576，`reasoning_effort` 取 low/high/max，`cached_tokens`，`prompt_cache_key`，缓
-//! 存下限 256 个 prompt token）与 DeepSeek（`deepseek-flash` / `deepseek-v4-pro`，1M 上下文，
+//! 存下限 256 个 prompt token）、DeepSeek（`deepseek-flash` / `deepseek-v4-pro`，1M 上下文，
 //! 384K 最大输出，`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，没有
-//! `prompt_cache_key`）。
+//! `prompt_cache_key`）与 MiniMax（`MiniMax-M3.1-Flash-Preview` / `MiniMax-M3`，1M 上下文，
+//! `reasoning_split` 把思考拆到 `reasoning_content`，`reasoning_effort` 只对 M3.1 生效，缓存
+//! 是自动的、512 个输入 token 起，命中报在 `prompt_tokens_details.cached_tokens`）。
 
 use std::fmt;
 
@@ -60,6 +62,10 @@ pub struct ModelCaps {
     /// 接受 `stream_options: {include_usage: true}`，它会在 `[DONE]` 之前多给一个只带用量
     /// 的 chunk。
     pub supports_stream_options: bool,
+    /// 接受 `reasoning_split: true`（MiniMax）：为真时思考走 `reasoning_content`，否则它会以
+    /// `<think>` 标签留在 `content` 里。这是**输出格式**的事实，不是用户的旋钮 —— 正文里混着
+    /// 标签会同时污染事件流、投影重放与对话视图。
+    pub reasoning_split: bool,
     pub max_tokens_field: MaxTokensField,
     /// 低于这个 prompt token 数时厂商根本不缓存。
     pub min_cacheable_tokens: u32,
@@ -77,6 +83,9 @@ pub const KNOWN_MODELS: &[&str] = &[
     // DeepSeek。
     "deepseek-flash",
     "deepseek-v4-pro",
+    // MiniMax（M3.1 走 M Plan，M3 两者皆可）。
+    "MiniMax-M3.1-Flash-Preview",
+    "MiniMax-M3",
 ];
 
 /// 按 id 查模型。不认识的 id 是错误，永远不给默认值。
@@ -90,6 +99,9 @@ pub fn caps_for(model: &str) -> Result<ModelCaps, UnknownModel> {
         "kimi-for-coding" => kimi_code_k2_caps(1_048_576, true),
         "kimi-for-coding-highspeed" => kimi_code_k2_caps(262_144, false),
         "deepseek-v4-pro" | "deepseek-flash" => deepseek_caps(),
+        // MiniMax 的 M3 系：`reasoning_effort` 只对 M3.1 生效，其余一模一样。
+        "MiniMax-M3.1-Flash-Preview" => minimax_caps(true),
+        "MiniMax-M3" => minimax_caps(false),
         other => return Err(UnknownModel::new(other)),
     };
     Ok(caps)
@@ -112,6 +124,7 @@ fn k3_caps(context_window: u32) -> ModelCaps {
         supports_top_p: false,
         supports_prompt_cache_key: true,
         supports_stream_options: true,
+        reasoning_split: false,
         max_tokens_field: MaxTokensField::MaxCompletionTokens,
         min_cacheable_tokens: 257,
     }
@@ -130,6 +143,7 @@ fn kimi_code_k2_caps(context_window: u32, supports_reasoning_effort: bool) -> Mo
         supports_top_p: true,
         supports_prompt_cache_key: true,
         supports_stream_options: true,
+        reasoning_split: false,
         max_tokens_field: MaxTokensField::MaxCompletionTokens,
         min_cacheable_tokens: 257,
     }
@@ -149,8 +163,37 @@ fn deepseek_caps() -> ModelCaps {
         supports_top_p: true,
         supports_prompt_cache_key: false,
         supports_stream_options: true,
+        reasoning_split: false,
         max_tokens_field: MaxTokensField::MaxTokens,
         min_cacheable_tokens: 0,
+    }
+}
+
+/// MiniMax 的 M3 系（`MiniMax-M3.1-Flash-Preview` 与 `MiniMax-M3`），走 OpenAI 兼容端点。
+///
+/// `max_output_tokens` 取窗口值：**官方没有记下输出上限**，所以照「不比窗口更紧」办（与 K3
+/// 同一条先例）。这是一处出处缺口 —— 真撞上厂商侧更小的界时会得到一次 `InvalidRequest`，比在这里
+/// 猜一个更小的数字诚实。
+///
+/// 缓存是自动的（没有 `prompt_cache_key` 这类参数），512 个输入 token 起才缓存，命中的读数报在
+/// `prompt_tokens_details.cached_tokens`。`reasoning_effort` 只有 M3.1 认；`reasoning_split`
+/// 两条都发，于是思考一律走 `reasoning_content` —— 默认形态会把 `<think>` 留在正文里。
+fn minimax_caps(supports_reasoning_effort: bool) -> ModelCaps {
+    ModelCaps {
+        vendor: Vendor::MiniMax,
+        context_window: 1_048_576,
+        max_output_tokens: 1_048_576,
+        supports_tools: true,
+        supports_reasoning: true,
+        supports_reasoning_effort,
+        requires_reasoning_replay: true,
+        supports_temperature: true,
+        supports_top_p: true,
+        supports_prompt_cache_key: false,
+        supports_stream_options: true,
+        reasoning_split: true,
+        max_tokens_field: MaxTokensField::MaxCompletionTokens,
+        min_cacheable_tokens: 512,
     }
 }
 

@@ -43,7 +43,7 @@
 - **权限、秘密、可撤销。** 三个内置模式、断路器短路拒绝、cwd 路径限制、`.env` 家族默认拒、密钥在**入流前**打码、会话目录 `0700`、root 拒绝启动；每次 `edit_file` 都能 `/undo` 原样退回，且不碰你的 git。
 - **要能复盘。** `sessions show / replay / stats` 只从会话自己的事件流回答「这一轮为什么停」「谁在哪一轮改了哪个文件」「这次编辑走了降级匹配吗」。
 
-**状态**：v1 的 **35 张**实现票全部 `done`，此后每个 feature 也各自落了地，逐行的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)，其中几条只剩**真机走查**（`ready-for-walkthrough`，清单在 [`docs/tui-manual-checklist.md`](docs/tui-manual-checklist.md)）。规模：`src/` **49,197** 行、`tests/` **47,724** 行（`wc -l`）、**1,391** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
+**状态**：v1 的 **35 张**实现票全部 `done`，此后每个 feature 也各自落了地，逐行的票数与完成度见 [`.scratch/README.md`](.scratch/README.md)，其中几条只剩**真机走查**（`ready-for-walkthrough`，清单在 [`docs/tui-manual-checklist.md`](docs/tui-manual-checklist.md)）。规模：`src/` **49,284** 行、`tests/` **47,902** 行（`wc -l`）、**1,398** 条测试（`cargo test` 的 passed 合计）—— 复核就跑 `wc -l` 与 `cargo test`。
 
 ## 快速开始
 
@@ -67,15 +67,17 @@ cargo install --path .
 
 配置在 `~/.config/heng/config.toml`（认 `XDG_CONFIG_HOME`）。优先级是 **`config.toml` > 已导出环境变量 > 内置默认**；**项目里的 `.env` 永远不会被加载**，所以 clone 下来的仓库改不了你的行为。
 
-内置三个 provider profile（Kimi 的两套系统 key 互不通用，所以是两个）：
+内置五个 provider profile（同一家的两套系统 key 互不通用，所以 Kimi 与 MiniMax 各占两条）：
 
 | profile | `base_url` | key 环境变量 |
 | --- | --- | --- |
 | `kimi` | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` |
 | `kimi-code` | `https://api.kimi.com/coding/v1` | `KIMI_API_KEY`（或 `KIMI_CODE_API_KEY`） |
 | `deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
+| `minimax` | `https://api.minimax.io/v1` | `MINIMAX_API_KEY` |
+| `minimax-cn` | `https://api.minimax.cn/v1` | `MINIMAX_CN_API_KEY` |
 
-内置模型 id：`kimi-k3`、`k3`、`k3-256k`、`kimi-for-coding`、`kimi-for-coding-highspeed`、`deepseek-v4-pro`、`deepseek-flash`。默认 `kimi-k3`（也可用 `HENG_MODEL` 覆盖）。**未登记的 model id 在启动时报错，不静默降级。**
+内置模型 id：`kimi-k3`、`k3`、`k3-256k`、`kimi-for-coding`、`kimi-for-coding-highspeed`、`deepseek-v4-pro`、`deepseek-flash`、`MiniMax-M3.1-Flash-Preview`、`MiniMax-M3`。默认 `kimi-k3`（也可用 `HENG_MODEL` 覆盖）。**未登记的 model id 在启动时报错，不静默降级。**
 
 一份够用的配置：
 
@@ -130,6 +132,7 @@ debaters = ["kimi-k3", "deepseek-v4-pro"]     # 简写：名字就是模型 id
 miss_input = 0.28
 cached_input = 0.028
 output = 0.42
+# MiniMax：M Plan 的订阅 Key（`sk-cp-` 前缀）只吃套餐额度，国内站写 `provider = "minimax-cn"`，带点号的 id 要给 TOML 键加引号（`[models."MiniMax-M3"]`）。
 ```
 
 文件页点开一个文件时，浮层里默认是**内置的只读预览**（渲染器读盘、高亮、带行号，瞬时、不起进程）。`[ui] file_viewer = "nvim"` 换成**一屏真的 nvim**：读你自己的 `~/.config/nvim`（`XDG_CONFIG_HOME` / `NVIM_APPNAME` 照常生效），只读（`-M -R`，状态行亮 `[RO]`）、不折行，键盘与鼠标都归它 —— `Ctrl-C` 或点浮层外面退出，`:q` 也行；宽度上限 `file_viewer_width`（缺省 135），起不来就回退内置预览。它不进事件流、不进模型上下文，也不过沙箱。
