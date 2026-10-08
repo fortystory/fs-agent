@@ -66,3 +66,4 @@
 | [`minimax-provider/`](minimax-provider/spec.md) | spec | **MiniMax 作为第三个厂商**：两条内建 profile（国际站 `api.minimax.io` / 国内站 `api.minimax.cn`，M Plan 的订阅站在国内站）+ 两个 M3 系模型进能力表，`reasoning_split` 让思考走 `reasoning_content`、缓存读数取 `prompt_tokens_details.cached_tokens`；**Anthropic 兼容端点明确不接**（会话调用只有 OpenAI 兼容那一套） | 2/2 done |
 | [`model-switching/`](model-switching/spec.md) | spec | **会话中途换模型与思考强度**：四个入口（点状态行那两格、`/model`、`/effort`、`ctrl-t`）共用一条 `Picker` 通道；能力表从 `bool` 升级成每模型一份的档位表（含 `medium` / `xhigh` 与一档「默认」），空闲才切、运行中拒绝并给回执，讨论会话只显示不切换。**推翻 `minimax-provider` 的「只有 low/high/max 且会话开始定死」**（2026-10-08 由维护者的需求直接折成 spec 并拆六张票） | 5 done + 1 ready-for-walkthrough |
 | [`ui-trim/`](ui-trim/spec.md) | spec | 界面收一收（维护者点名的五处）：问卷答完的答案以**用户发言**回到转录、`/<skill> 任务` 的**技能名不再被删**、就绪时状态字形**定在满月**、输入框的 `❱` 退场、随它一起清掉提示符色相那一套 | 5/5 done |
+| [`ask-guidance/`](ask-guidance/seed.md) | seed | 让模型用 `ask_user_question` 而不是在回答正文里问：只加了一句正面引导（`ASK_GUIDANCE`），不加禁则也不加边界；真机效果待观察 | — |
