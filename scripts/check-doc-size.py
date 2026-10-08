@@ -84,6 +84,7 @@ DOC_FILES = [
     # 两处都由 ④ 的自检打了 warn（「`docs/` 下有清单外的 md」），这一轮一并补上。
     "docs/adr/0016-usage-rides-the-row-of-its-call.md",
     "docs/adr/0017-model-and-effort-switch-mid-session.md",
+    "docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -340,8 +341,13 @@ def review_rules(unit: Unit) -> list[str]:
 #   `input-tokens` 起那十一次同因的那种增长 —— 另有三处票数收尾：`fs-agent-v1` 35/35、
 #   `mcp-support` 10 done、`lifecycle-diagram` 9 done）与 `281aa43` 都没跟着上调，
 #   实测已是 **11,917 / 70**。这一轮补上。
+# **2026-10-08 改动页那一轮落 ADR 0018 时上调 `README.md`**：与 2026-10-07 补 ADR 0016 那次
+#   同因 —— **每份 ADR 都该有入口**，ADR 索引行随份数增长只会往上走。实测 **19,153 / 330**，
+#   棘轮 19,100 → **19,160**；`DOC_FILES` 同步补上那一份（漏了它会由 ④ 的自检打 warn）。
+#   `.scratch/README.md` 同因：`diff-page` 那一行索引（立项时写的、这次收尾改成 8 resolved +
+#   7 done），实测仍在上限之内。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 19100, "lines": 330, "target_chars": 18500, "target_lines": 320},
+    "README.md": {"chars": 19160, "lines": 330, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
         "chars": 11917,
         "lines": 70,

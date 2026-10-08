@@ -1875,6 +1875,12 @@ pub const TAB_USAGE: &str = "调用量";
 pub const TAB_TODO: &str = "todo";
 pub const TAB_FILES: &str = "文件";
 
+/// 左栏第四签：相对 HEAD 改了什么（`.scratch/diff-page/spec.md` §1）。
+///
+/// 它与 `todo` 那一签**有意不同**：常驻 —— 工作区干净、不是仓库、甚至找不到 `git` 时页签
+/// 都还在，页里各写一句。四签在窄档（28 列）下占 21 列，还剩 7 列填线，放得下。
+pub const TAB_CHANGES: &str = "改动";
+
 /// 主列页签条上的两个标签：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
 pub const TAB_CONVERSATION: &str = "对话";
 pub const TAB_TRACE: &str = "轨迹";
@@ -1997,6 +2003,122 @@ pub fn files_loading() -> &'static str {
 /// 一个在等数据，一个已经读完、而答案就是「没有」。
 pub fn files_empty() -> &'static str {
     "工作区里没有文件"
+}
+
+// ---------------------------------------------------------------------------
+// 改动页：那一列改动的文件，以及它们的四个字形与四句页内文案
+// （`.scratch/diff-page/spec.md` 实现决定 §5）
+// ---------------------------------------------------------------------------
+
+/// 一行开头那个状态字形。**每一个都占满两格**（`??` 本来就是两格），于是名字严格同列 ——
+/// 与文件页那条真机反馈后的规矩同源。
+pub const CHANGE_MODIFIED: &str = "M";
+pub const CHANGE_ADDED: &str = "A";
+pub const CHANGE_DELETED: &str = "D";
+pub const CHANGE_UNTRACKED: &str = "??";
+
+/// 四个分组标题。占一整行、**不带计数**（件数不是这一页要回答的问题），也不给色 ——
+/// 过程退后，只有焦点行是信号。
+pub const CHANGE_GROUP_MODIFIED: &str = "已修改";
+pub const CHANGE_GROUP_ADDED: &str = "新增";
+pub const CHANGE_GROUP_DELETED: &str = "已删除";
+pub const CHANGE_GROUP_UNTRACKED: &str = "未跟踪";
+
+/// 取数还没回来时页里那一句。
+pub fn changes_loading() -> &'static str {
+    "正在读取改动…"
+}
+
+/// 工作区相对 HEAD 什么都没有改。
+pub fn changes_empty() -> &'static str {
+    "没有改动"
+}
+
+/// 这个工作目录不在 git 仓库里 —— 页签照旧在，页里写这一句。
+pub fn changes_not_a_repo() -> &'static str {
+    "这里不是 git 仓库"
+}
+
+/// `PATH` 上找不到 `git`。与上一句分开：那是环境问题，不是「没改动」。
+pub fn changes_no_git() -> &'static str {
+    "找不到 git"
+}
+
+/// 装不下时末行那一句：`还有 12 处改动`。
+pub fn changes_more(remaining: usize) -> String {
+    format!("还有 {remaining} 处改动")
+}
+
+/// 键盘在改动页上按 `r` 之后的那一句回执 —— 它说清这一下真的去取数了。
+pub fn changes_refreshing() -> &'static str {
+    "正在重读改动…"
+}
+
+/// 一次取数失败（超时、非零退出、IO）之后的那一句回执。页里的内容不动：上一次的读数还在
+/// 那儿，只是没更新。
+pub fn changes_read_failed() -> &'static str {
+    "改动没读出来"
+}
+
+/// 一次取数就失败、而这一页**从来没取到过数**时，页里那一句。
+///
+/// 它与上面那句回执分开：回执说的是「这一次没成，你看到的是上一次的」，而这句话说的是
+/// 「这里现在什么都没有」。少了它，页里会一直挂着「正在读取改动…」，而其实没有人在读。
+pub fn changes_failed() -> &'static str {
+    "读不出改动"
+}
+
+/// 那份 diff 里没有可显示的内容时（只有 `old mode` / `new mode` 这类头行，没有 hunk）的
+/// 兜底一句：一块空白说明不了「这份改动本来就没有正文」。
+pub fn changes_nothing_to_show() -> &'static str {
+    "这份改动没有可显示的内容"
+}
+
+/// 一份 diff 还在读时，弹窗里那一句。
+///
+/// 弹窗**先立起来、正文后到**：一次 `git diff` 是一次子进程，而处理一个按键的路径上不许等它
+/// （`.scratch/diff-page/spec.md` §6）。
+pub fn changes_diff_loading() -> &'static str {
+    "正在读取 diff…"
+}
+
+/// 读不出这份 diff（无 HEAD 的空仓库、跑不成的命令、读不了的盘）。
+pub fn changes_diff_unreadable() -> &'static str {
+    "读不出这份 diff"
+}
+
+/// 未跟踪文件的标题：它**没有 diff 可比**，正文是全文。
+pub fn changes_new_file() -> &'static str {
+    "新文件"
+}
+
+/// 二进制文件在弹窗里只报这一句，不往屏幕上泼乱码。
+pub fn changes_binary() -> &'static str {
+    "二进制文件，不显示内容"
+}
+
+/// 一份 diff 太长时的收尾：`只显示前 2000 行，还有 37 行`。
+///
+/// 与文件页那三档限额同源（行宽、行数、字节），只是这里把两个数都说出来 —— 省掉多少是读的
+/// 人该知道的（`.scratch/diff-page/spec.md` §6）。
+pub fn changes_truncated(shown: usize, skipped: usize) -> String {
+    format!("只显示前 {shown} 行，还有 {skipped} 行")
+}
+
+/// `[ui] diff_viewer` 那个命令不在 `PATH` 上时的回执。三条回执都带工具名 —— 回退发生得
+/// 无声无息，读的人至少要知道是谁没跑成（`.scratch/diff-page/spec.md` §8）。
+pub fn changes_viewer_missing(tool: &str) -> String {
+    format!("找不到 {tool}，用内置呈现")
+}
+
+/// 它超时（2 秒）时的回执。
+pub fn changes_viewer_timeout(tool: &str) -> String {
+    format!("{tool} 超时，用内置呈现")
+}
+
+/// 它非零退出时的回执。它的 stderr **不画进正文** —— 读的人会把它当成 diff。
+pub fn changes_viewer_failed(tool: &str) -> String {
+    format!("{tool} 没能画出这份 diff，用内置呈现")
 }
 
 /// 状态行里模型窗口有多满的那个**值**：`6%`，或者在还没有一次调用报出输入 token 之前是

@@ -6,8 +6,9 @@
 //!
 //! diff 层回答关于一行的一个问题：它是新增、删除、hunk 头，还是上下文？语法层回答的是
 //! 另一个：这是什么代码？一行可以既是新增又是关键字，于是调用方把两种样式合起来
-//! （[`Class::style`] 盖在 [`DiffTag::style`] 上），而不是挑一个赢家。diff 层这一轮仍然
-//! 没有调用方：它是为工具输出留着的。
+//! （[`Class::style`] 盖在 [`DiffTag::style`] 上），而不是挑一个赢家。diff 层的生产调用方
+//! 是**改动页**点开的那份 diff（[`highlight_diff_with`]，`.scratch/diff-page/spec.md` §6）；
+//! [`ansi_line`] 那条产出 ANSI 的路今天仍然只有测试在调。
 //!
 //! 语法层通过 `tree-sitter-highlight` 跑文法；syntect 会走的 Oniguruma 那条路没有走
 //! （spec §19，明确不做）。
@@ -15,7 +16,7 @@
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 use super::palette;
@@ -191,14 +192,17 @@ impl DiffTag {
         }
     }
 
-    /// 这个标签的 TUI 样式。它是**背景**，这样它与语法层的前景是叠加的，而不是互相打架。
+    /// 这个标签的 TUI 样式。新增与删除给的是**背景**，这样它与语法层的前景是叠加的，而不是
+    /// 互相打架；hunk 头给的是前景 —— 它不是一行代码，是一条分隔。
+    ///
+    /// 颜色值住在色板的**内容域**（[`super::palette`]），这里只回答「哪一档」。
     pub fn style(self) -> Style {
         match self {
             DiffTag::Context => Style::default(),
-            DiffTag::Added => Style::default().bg(Color::Rgb(0, 40, 0)),
-            DiffTag::Removed => Style::default().bg(Color::Rgb(50, 0, 0)),
+            DiffTag::Added => Style::default().bg(palette::DIFF_ADDED),
+            DiffTag::Removed => Style::default().bg(palette::DIFF_REMOVED),
             DiffTag::Hunk => Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::DIFF_HUNK)
                 .add_modifier(Modifier::BOLD),
         }
     }
@@ -410,7 +414,18 @@ fn try_highlight(config: &HighlightConfiguration, source: &str) -> Option<Vec<Ve
 /// 这就是两层在合成：先剥掉 diff 标记，剩下的代码当作一整份文档来高亮（所以跨行的字符串
 /// 或注释照样能解析），然后标记作为一个纯文本 span 贴回去。于是一个被删掉的 `fn` 既是
 /// 删除又是关键字 —— 这正是把两层分开的全部理由。
+///
+/// 语言写死是 Rust，因为这一档最早的调用方只处理 Rust 工具输出；改动页那一档按扩展名认
+/// 语言，走 [`highlight_diff_with`]（`.scratch/diff-page/spec.md` §6）。
 pub fn highlight_diff(source: &str) -> Vec<Vec<Span>> {
+    highlight_diff_with(Some("rust"), source)
+}
+
+/// [`highlight_diff`] 的同一个合成，只是语言由调用方认（`None` = 不上语法色，只把标记贴
+/// 回去）。
+///
+/// 认不出语言时**退纯文本**而不是让代码消失：与 [`highlight_code`] 同一条降级纪律。
+pub fn highlight_diff_with(language: Option<&str>, source: &str) -> Vec<Vec<Span>> {
     let lines: Vec<&str> = source.split('\n').collect();
     let mut code_lines: Vec<&str> = Vec::with_capacity(lines.len());
     let mut markers: Vec<Option<&str>> = Vec::with_capacity(lines.len());
@@ -433,7 +448,11 @@ pub fn highlight_diff(source: &str) -> Vec<Vec<Span>> {
         }
     }
 
-    let mut highlighted = highlight_rust(&code_lines.join("\n"));
+    let code = code_lines.join("\n");
+    let mut highlighted = match language {
+        Some(language) => highlight_code(language, &code).unwrap_or_else(|| plain_lines(&code)),
+        None => plain_lines(&code),
+    };
     highlighted.resize(code_lines.len(), Vec::new());
     for (line, marker) in highlighted.iter_mut().zip(markers) {
         if let Some(marker) = marker {

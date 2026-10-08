@@ -8,7 +8,7 @@
 //! 它住在自己的文件里，而不是住在 `render_layout.rs` 里，好让拥有那个
 //! 文件的票能继续改它，而不跟这一个撞车。
 
-use heng::config::FileViewerSettings;
+use heng::config::{DiffViewerSettings, FileViewerSettings};
 use heng::questions::{UserAnswer, UserAnswers, UserQuestion};
 use heng::render::{
     ConsoleRequest, FrontEndEvent, Key, QuestionnaireRequest, SessionFacts, TuiState, draw_frame,
@@ -31,6 +31,7 @@ fn facts() -> SessionFacts {
         budget_limit: Some(100_000),
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
+        diff_viewer: DiffViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }

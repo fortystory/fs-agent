@@ -4,7 +4,7 @@
 //! 一个键是什么意思的状态。把它与终端拆开，正是让这件事
 //! 可测的原因（spec §Testing Decisions）。
 
-use heng::config::FileViewerSettings;
+use heng::config::{DiffViewerSettings, FileViewerSettings};
 use heng::events::{
     Decision, DecisionSource, Event, EventPayload, Role, SpeakerId, StopReason, ToolCallId,
     hook_format,
@@ -45,6 +45,7 @@ fn facts() -> SessionFacts {
         budget_limit: Some(100_000),
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
+        diff_viewer: DiffViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }

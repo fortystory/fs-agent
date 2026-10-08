@@ -1231,3 +1231,51 @@ fn a_file_viewer_width_that_could_never_hold_nvim_is_a_startup_error() {
     .unwrap();
     assert_eq!(config.file_viewer.width, 20);
 }
+
+#[test]
+fn the_diff_viewer_defaults_to_the_builtin_rendering() {
+    // 没配就是内置那一档：渲染器自己排、自己上色（`.scratch/diff-page/spec.md` §8）。
+    let config = resolve(None, &env(&[])).unwrap();
+    assert_eq!(config.diff_viewer.program, None);
+    assert!(config.diff_viewer.args.is_empty());
+
+    // 空串与不写是一回事。
+    let config = resolve(Some("[ui]\ndiff_viewer = \"\"\n"), &env(&[])).unwrap();
+    assert_eq!(config.diff_viewer.program, None);
+}
+
+#[test]
+fn the_diff_viewer_takes_a_program_and_an_argv_array() {
+    let config = resolve(
+        Some("[ui]\ndiff_viewer = \"delta\"\ndiff_viewer_args = [\"--paging=never\", \"--syntax-theme=ansi\"]\n"),
+        &env(&[]),
+    )
+    .unwrap();
+    assert_eq!(config.diff_viewer.program.as_deref(), Some("delta"));
+    assert_eq!(
+        config.diff_viewer.args,
+        vec![
+            "--paging=never".to_owned(),
+            "--syntax-theme=ansi".to_owned()
+        ]
+    );
+
+    // 只写程序名也合法：参数是可选的那一格。
+    let config = resolve(Some("[ui]\ndiff_viewer = \"difft\"\n"), &env(&[])).unwrap();
+    assert_eq!(config.diff_viewer.program.as_deref(), Some("difft"));
+    assert!(config.diff_viewer.args.is_empty());
+}
+
+#[test]
+fn diff_viewer_args_without_a_program_is_a_startup_error() {
+    // 写了参数却没写程序名：那组参数没有去处，而配置里那两行看着像配好了 —— 只有报错说得清
+    // （与 `[ui]` 那两项同一形状）。
+    let error = resolve(
+        Some("[ui]\ndiff_viewer_args = [\"--paging=never\"]\n"),
+        &env(&[]),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("diff_viewer_args"), "{error}");
+    assert!(error.contains("diff_viewer"), "{error}");
+}

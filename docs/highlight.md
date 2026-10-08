@@ -1,11 +1,13 @@
-# `src/render/highlight.rs`：代码块的语法高亮，外加一层还没有调用方的 diff
+# `src/render/highlight.rs`：代码块的语法高亮，外加补丁那一层 diff
 
 **结论先行：语法高亮现在是转录里代码块的高亮提供者。** 渲染器按围栏上那个语言名挑一份文法，
 把这里给出的 `Class` 铺到代码行上（规格见 [`.scratch/markdown-render/spec.md`](../.scratch/markdown-render/spec.md)
 的 §3 与 §4）。
 
-> **状态（2026-10-01 复核）**：渲染器里有一处调用点（`highlight_code`），十种语言的文法都已经是
-> 硬依赖。**diff 层仍然没有调用方** —— 它是为工具输出留着的，理由在下面。
+> **状态（2026-10-08 复核）**：两层都有生产调用点了 —— 语法层是转录里代码块的提供者
+> （`highlight_code`），diff 层是**改动页**点开的那份 diff（`highlight_diff_with`，
+> `.scratch/diff-page/spec.md` §6；那一档按文件的扩展名认语言，认不出就退纯文本）。
+> 十种语言的文法都已经是硬依赖。
 
 ## 它是什么
 
@@ -70,22 +72,24 @@ diff 那套 ANSI 组合，不是 TUI 色板。
 `tree-sitter-sequel` 还给出一个 `spell`，那是它给「没归类的词」的兜底，**有意**留在 `Plain`：
 那本来就是「不知道是什么」。
 
-## diff 层为什么还没有调用方
+## diff 层这一路是怎么回来的
 
 TUI 从前直接显示工具输出，并用这一层上色。后来 `.scratch/tui-ux/` 的票 02 决定工具输出
 **不再直接显示**：转录里只留一行调用行，正文进详情覆盖层，而详情层画的是**纯文本** ——
-于是那个组合函数被删掉（提交 `940cd43`），`highlight_diff` 与 `ansi_line` 再也没有调用者。
+于是那个组合函数被删掉（提交 `940cd43`），`highlight_diff` 与 `ansi_line` 安静了一阵。
 
-它还在，是因为**工具输出的高亮**仍然是一件可能回来的事：详情覆盖层想要颜色时，那里是把
-它接回去最自然的地方（详情正文现在是按宽度折的纯文本，改成「先按语言高亮、再按宽度折行」
-即可，注意那次折行是按显示列走的）。如果那时决定「详情层就是纯文本」，这一层与
-`tests/render_highlight.rs` 里 diff 那一半可以一起删掉；但 `tree-sitter` 与
-`tree-sitter-rust` **不能**一起删 —— `src/context/repo_map.rs` 在读侧用它们做符号抽取，
-那是另一条独立用途。
+2026-10-08 那一轮（`.scratch/diff-page/spec.md` §6）把它接了回来：**改动页**点开一份 diff
+时，标记剥掉、代码按扩展名认的语言高亮、标记再贴回去 —— 正是当初设想的用法，只是入口从
+「工具输出」换成了「改动页的弹窗」。`ansi_line`（产出 ANSI 的那条路，给 plain 用的）仍然
+只有测试在调；真要删，它和 `tests/render_highlight.rs` 里的那一半还是一起删。但
+`tree-sitter` 与 `tree-sitter-rust` **不能**一起删 —— `src/context/repo_map.rs` 在读侧用它
+们做符号抽取，那是另一条独立用途。
 
 ## 想自己确认
 
-要确认语法层真的接上了，看渲染器里挑文法的那一处：`grep -rn highlight_code src/`。要确认
+要确认语法层真的接上了，看渲染器里挑文法的那一处：`grep -rn highlight_code src/`；要确认
+diff 层也接上了，看 `grep -rn highlight_diff src/`（改动页那一档走的是
+`highlight_diff_with`）。要确认
 十种文法都活着，跑 `cargo test --test render_markdown all_ten_grammars`：十种语言各一个最小
 样例，每一种都要求至少拿到一片非 `Plain` 的样式，接错了、常量名写错了、选错了语言都会在
 那里报红。

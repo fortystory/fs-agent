@@ -21,11 +21,13 @@
 //! （spec §5）：这一个每行都重复，好让交错的多 agent 日志仍然读得下去，而模型那一侧
 //! 每个合并块只写一次。
 
+pub mod changes;
 pub mod editor;
 pub mod file_index;
 pub mod files;
 pub mod headless;
 pub mod highlight;
+pub mod hostproc;
 pub mod input;
 pub mod layout;
 pub mod links;

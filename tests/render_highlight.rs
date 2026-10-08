@@ -6,7 +6,7 @@
 //! 不是一个新依赖。
 
 use heng::render::highlight::{
-    Class, DiffTag, ansi_line, diff_tag, highlight_diff, highlight_rust,
+    Class, DiffTag, ansi_line, diff_tag, highlight_diff, highlight_diff_with, highlight_rust,
 };
 
 #[test]
@@ -91,4 +91,23 @@ fn a_stripped_diff_body_is_highlighted_with_cross_line_state() {
     assert_eq!(spans.len(), 3);
     assert_eq!(spans[0][0].text, "+");
     assert!(spans[1].iter().any(|span| span.class == Class::Comment));
+}
+
+#[test]
+fn the_language_of_a_patch_comes_from_the_caller_not_from_rust() {
+    // 改动页按**扩展名**认语言，所以一个 Python 文件里的关键字该是 Python 的关键字
+    // （`.scratch/diff-page/spec.md` §6）。在此之前这一层写死按 Rust 高亮。
+    let spans = highlight_diff_with(Some("python"), "+def f():\n+    return 1\n");
+    let keyword = spans[0]
+        .iter()
+        .find(|span| span.text == "def")
+        .expect("`def` 是一个 span");
+    assert_eq!(keyword.class, Class::Keyword);
+
+    // 认不出语言（`None`）时不上语法色，但**标记与文本都还在** —— 降级，不是消失。
+    let plain = highlight_diff_with(None, "+added\n-removed");
+    assert_eq!(plain.len(), 2);
+    let text: String = plain[0].iter().map(|span| span.text.as_str()).collect();
+    assert_eq!(text, "+added");
+    assert!(plain[0].iter().all(|span| span.class == Class::Plain));
 }

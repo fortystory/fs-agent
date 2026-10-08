@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use heng::config::FileViewerSettings;
+use heng::config::{DiffViewerSettings, FileViewerSettings};
 use heng::events::{
     ContextSource, Event, EventPayload, HistoryReason, Role, SessionId, SpeakerId, StopReason,
     ToolCallId, Usage, read_events,
@@ -34,6 +34,7 @@ fn facts() -> SessionFacts {
         budget_limit: Some(100_000),
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
+        diff_viewer: DiffViewerSettings::default(),
         speaker_order: vec!["kimi".to_owned()],
     }
 }

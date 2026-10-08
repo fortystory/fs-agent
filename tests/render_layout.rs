@@ -7,7 +7,7 @@
 //! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
 //! 在路上算出来的那些矩形。
 
-use heng::config::{FileViewerSettings, ReasoningEffort};
+use heng::config::{DiffViewerSettings, FileViewerSettings, ReasoningEffort};
 use heng::render::palette;
 use heng::render::width::text_columns;
 use heng::render::{
@@ -32,6 +32,7 @@ fn facts() -> SessionFacts {
         budget_limit: Some(100_000),
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
+        diff_viewer: DiffViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }
@@ -5848,6 +5849,7 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
             budget_limit: Some(100_000),
             number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
+            diff_viewer: DiffViewerSettings::default(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/heng"),
@@ -6958,6 +6960,7 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
             budget_limit: Some(100_000),
             number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
+            diff_viewer: DiffViewerSettings::default(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/heng"),

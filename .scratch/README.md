@@ -62,7 +62,7 @@
 | [`clickable-links/`](clickable-links/spec.md) | spec | **可点链接**：对话视图里点一下 URL 或工作区内真存在的文件路径（`/eli5` 的 `.html` 就是后者），由宿主 spawn `xdg-open` 打开 —— 识别与**选区**同层、拖选照旧只复制、只有人的指针能触发 | 3/3 done |
 | [`rename-to-heng/`](rename-to-heng/spec.md) | spec | **改名**：`fs-agent` → **衡（heng）**（[ADR 0014](../docs/adr/0014-renamed-to-heng.md)）：`fs` 歧义 + 产品定位是 harness；标识符、路径、文档与左栏标记一起换，历史不追改 | 4/4 done |
 | [`mark-sweep/`](mark-sweep/spec.md) | spec | 标记上的**扫光**：一次运行进行中，一束反光从右下扫到左上（斜亮带 + 两侧过渡、峰值白、1.8 秒一轮）；空闲一个像素都不动 —— 推翻 `tui-input-pulse` 票 08 的「标记静止」（[ADR 0015](../docs/adr/0015-mark-light-sweep.md)） | 1/1 done |
-| [`diff-page/`](diff-page/seed.md) | seed | 左栏多一页 `diff`：列出改动的文件，点一个开详情弹窗看那份 diff（`git diff` 的口径、谁去跑 git、用什么上色都还没谈） | — |
+| [`diff-page/`](diff-page/spec.md) | map + spec | 多一页 `改动`：相对 HEAD 的改动（含未跟踪）+ 点开看 diff | 8 resolved + 7 done |
 | [`minimax-provider/`](minimax-provider/spec.md) | spec | **MiniMax 作为第三个厂商**：两条内建 profile（国际站 `api.minimax.io` / 国内站 `api.minimax.cn`，M Plan 的订阅站在国内站）+ 两个 M3 系模型进能力表，`reasoning_split` 让思考走 `reasoning_content`、缓存读数取 `prompt_tokens_details.cached_tokens`；**Anthropic 兼容端点明确不接**（会话调用只有 OpenAI 兼容那一套） | 2/2 done |
 | [`model-switching/`](model-switching/spec.md) | spec | **会话中途换模型与思考强度**：四个入口（点状态行那两格、`/model`、`/effort`、`ctrl-t`）共用一条 `Picker` 通道；能力表从 `bool` 升级成每模型一份的档位表（含 `medium` / `xhigh` 与一档「默认」），空闲才切、运行中拒绝并给回执，讨论会话只显示不切换。**推翻 `minimax-provider` 的「只有 low/high/max 且会话开始定死」**（2026-10-08 由维护者的需求直接折成 spec 并拆六张票） | 5 done + 1 ready-for-walkthrough |
 | [`ui-trim/`](ui-trim/spec.md) | spec | 界面收一收（维护者点名的五处）：问卷答完的答案以**用户发言**回到转录、`/<skill> 任务` 的**技能名不再被删**、就绪时状态字形**定在满月**、输入框的 `❱` 退场、随它一起清掉提示符色相那一套 | 5/5 done |

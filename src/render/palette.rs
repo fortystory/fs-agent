@@ -130,6 +130,24 @@ pub const CODE_STRING: Color = Color::Green;
 /// 语法数字与常量 —— `LightYellow` 而不是界面域的 `WARN`（`Yellow`）：代码里的数字不是警告。
 pub const CODE_NUMBER: Color = Color::LightYellow;
 
+// --- 补丁的三档（`.scratch/diff-page/spec.md` §6） ---------------------------
+//
+// 它们住进内容域而不是界面域，因为回答的是「这是什么」：这一行在补丁里算新增、删除，还是
+// 一个 hunk 的头。**新增与删除给的是背景** —— 这样它们与语法层的前景是叠加的，而不是互相
+// 打架（`highlight` 模块头那两层分家的同一个理由）。两个值取得很暗：一块背景色要读得出
+// 「这一行不一样」，又不能把代码本身压下去。
+
+/// 补丁里新增的一行。本文件里**仅有**的两个 24 位色之一：要暗到刚好看得出来，16 色那几档
+/// 没有一个合适的绿。
+pub const DIFF_ADDED: Color = Color::Rgb(0, 40, 0);
+
+/// 补丁里删除的一行。另一个 24 位色，理由同上。
+pub const DIFF_REMOVED: Color = Color::Rgb(50, 0, 0);
+
+/// hunk 头（`@@ … @@`）。它是**前景**，不配背景 —— 它不是一行代码，是一条分隔；配粗体一起
+/// 用，于是一眼分得开「这是头」与「这是内容」。
+pub const DIFF_HUNK: Color = Color::Cyan;
+
 // --- 严重度 -----------------------------------------------------------------
 
 /// 一档严重度的 TUI 样式。
@@ -149,7 +167,8 @@ pub fn style(severity: Severity) -> Style {
 // 这里曾经住着提示符 `❱` 的色相与呼吸（`PROMPT_HUE_PER_SECOND` 那一组常量、`prompt_colour`
 // 与它下面那个 `hsv_to_rgb`）—— 这个界面里**唯一**一处 24 位色。2026-10-08 维护者点掉了输入框
 // 那个字形，色相于是没有载体，整套随它一起退场（`.scratch/ui-trim/spec.md`；来源是
-// `.scratch/tui-input-pulse/spec.md` §2b）。今天这个色板里每一个颜色都是 16 色 ANSI 码。
+// `.scratch/tui-input-pulse/spec.md` §2b）。今天这个色板里除补丁那两个背景（[`DIFF_ADDED`] /
+// [`DIFF_REMOVED`] —— 它们要暗得恰好，16 色里没有合适的档）之外，都是 16 色 ANSI 码。
 
 #[cfg(test)]
 mod tests {

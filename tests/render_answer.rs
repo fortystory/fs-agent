@@ -5,7 +5,7 @@
 //! 的重放也走它 —— 而 `draw_frame` 说它在屏幕上长什么样。plain 那一半住在
 //! `render_plain.rs`：同一个块，画的是一行 `[用户] …`。
 
-use heng::config::FileViewerSettings;
+use heng::config::{DiffViewerSettings, FileViewerSettings};
 use heng::render::{Block, RenderEvent, SessionFacts, Transcript, TuiState, draw_frame};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -23,6 +23,7 @@ fn facts() -> SessionFacts {
         budget_limit: Some(100_000),
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
+        diff_viewer: DiffViewerSettings::default(),
         speaker_order: Vec::new(),
     }
 }

@@ -46,6 +46,7 @@ use crate::permissions::{Answer, Mode, PermissionRequest};
 use crate::provider::capability::caps_for;
 use crate::questions::{UserAnswer, UserAnswers, UserQuestion};
 
+use super::changes;
 use super::editor::{self, Input};
 use super::file_index::{self, FileIndex};
 use super::files;
@@ -350,6 +351,11 @@ pub struct SessionFacts {
     /// 与 `number_style` 同一条：配置里定下来的值，组装时注入一次，会话中途不变
     /// （`.scratch/nvim-file-viewer/spec.md` §2）。
     pub file_viewer: crate::config::FileViewerSettings,
+    /// 看一份 diff 时交给哪个外部命令（`[ui] diff_viewer` 与 `diff_viewer_args`）。
+    ///
+    /// 与 `file_viewer` 同一条：配置里定下来的值，组装时注入一次，会话中途不变
+    /// （`.scratch/diff-page/spec.md` §8）。
+    pub diff_viewer: crate::config::DiffViewerSettings,
     /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
     /// 名册不在流上（票 07 §1）。
@@ -424,6 +430,19 @@ impl Tui {
         let (files_tx, mut files_rx) =
             tokio::sync::mpsc::unbounded_channel::<Vec<std::path::PathBuf>>();
 
+        // 改动页的读数从这条通道回来。它是渲染器自己在**宿主侧**起的一次只读 git：不进事件
+        // 流、不进 `messages`、不过权限门与沙箱，而它必须 `tokio::spawn` 出去 —— 一帧的
+        // `select!` 只等通道与两个定时器，任何一支里都不许 await
+        // （`.scratch/diff-page/spec.md` §3）。
+        let (changes_tx, mut changes_rx) =
+            tokio::sync::mpsc::unbounded_channel::<changes::Outcome>();
+
+        // 弹窗里那一份 diff 也是宿主侧跑出来的，走同一条形状：**打开那一刻**置一次请求，
+        // 循环起子进程，结果经这条通道回来填进还开着的那一个弹窗
+        // （`.scratch/diff-page/spec.md` §6）。
+        let (diff_tx, mut diff_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(u64, changes::Body, Option<String>)>();
+
         // 重新打开的会话在画任何东西之前先等这次重放。循环把它作为**第一条** console 请求
         // 推过来，紧接组装之后、横幅之前；与此同时组装已经在渲染通道上发出了那些恢复
         // 结果，而它们已经在那份重放快照里了。在这里等，正是为了不让它们被画在历史之上、
@@ -458,6 +477,27 @@ impl Tui {
                     let _ = tx.send(file_index::scan(&root));
                 });
             }
+            // 改动页那一次取数走 `tokio::spawn`（它要 await `tokio::process` 与超时，不是
+            // blocking 的活）。同一时刻只有一次在飞 —— `take_changes` 里那个 `loading` 位。
+            if state.take_changes() {
+                let root = state.cwd().to_path_buf();
+                let tx = changes_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(changes::status(&root).await);
+                });
+            }
+            // 弹窗里那一份 diff：一次 `git diff HEAD -- <path>`（或者对未跟踪文件的一次读盘
+            // —— 那一档在打开时就同步做完了，不会走到这里）。配了 `[ui] diff_viewer` 时，
+            // 这一趟还会把那份 diff 从 stdin 喂给它（`changes::body` 里分派）。
+            if let Some((serial, file, columns)) = state.take_diff_read() {
+                let root = state.cwd().to_path_buf();
+                let viewer = state.diff_viewer().clone();
+                let tx = diff_tx.clone();
+                tokio::spawn(async move {
+                    let (body, note) = changes::body(&root, &file, &viewer, columns).await;
+                    let _ = tx.send((serial, body, note));
+                });
+            }
             if state.replay_pending() {
                 // 批次之间每个来源都会被问一遍 —— 键盘、实时流与循环的请求 —— 否则一次长
                 // 重放中的 `Ctrl-C` 就是一个死键。最后一个分支总是就绪的，所以这个 select
@@ -488,6 +528,8 @@ impl Tui {
                     maybe_event = keys.next() => state.terminal_event(maybe_event),
                     request = port.recv() => closed = state.port_request(request),
                     Some(paths) = files_rx.recv() => state.files_loaded(paths),
+                    Some(outcome) = changes_rx.recv() => state.changes_loaded(outcome),
+                    Some((serial, body, note)) = diff_rx.recv() => state.diff_loaded(serial, body, note),
                     Some(()) = viewer_rx.recv() => state.mark_dirty(),
                     _ = pulse.tick() => state.tick(),
                     _ = tokio::time::sleep_until(tokio::time::Instant::from(
@@ -813,6 +855,14 @@ pub struct TuiState {
     /// 与 [`Panel`]、[`TodoPanel`] 同一族：一页的状态收在一个值里，而它整个只活在进程内 ——
     /// 不进事件流、不落盘。
     files_page: FilesPage,
+    /// 改动页那一页自己的状态（`.scratch/diff-page/spec.md` §2、§4）。
+    ///
+    /// 数据来自渲染器自己在宿主侧跑的 `git status`：不进事件流、不进 `messages`、不过权限门
+    /// 与沙箱（只读、不写盘）。
+    changes: ChangesPage,
+    /// 该发一次 git 取数了吗。与 `file_scan_wanted` **分开一位** —— 两件事的节奏与失败模式
+    /// 不同，共用一位会让一边的失败拖住另一边（§4）。
+    changes_wanted: bool,
     /// 上一帧左栏页签条的标签行画在哪 —— 「点左栏」把页签条也算进去
     /// （`.scratch/files-page/spec.md` §5）。
     tabs_rect: Option<Rect>,
@@ -898,6 +948,15 @@ pub struct TuiState {
     /// 上一帧把这个覆盖层画在哪里，好让框外的一次点击把它关掉 —— 与指示器遵循的是同一条
     /// 「记住读的人真看到了什么」的规矩（票 02 §4）。
     detail_rect: Option<Rect>,
+    /// 正在读的那一份 diff：读什么，以及它属于哪一次打开
+    /// （`.scratch/diff-page/spec.md` §6）。
+    ///
+    /// 弹窗**先立起来**、正文后到：一次 `git diff` 是一次子进程，而处理一个按键的路径上不许
+    /// 等它（与那三条「一帧里不 await」同一条纪律）。
+    diff_reading: Option<DiffReading>,
+    /// 打开过多少次详情弹窗。给在飞的那次取数对号：结果回来时弹窗已经换成别的文件、或者
+    /// 干脆关掉了，那一次结果就直接丢掉。
+    detail_serial: u64,
     /// 上一帧把**中间的模态**画在哪里，好让滚轮知道指针是不是落在它上面（`tui-chrome` §5）。
     /// 与 [`TuiState::detail_rect`] 同一条规矩：这一帧真的画了什么就记什么，没画出来就是
     /// `None`，而那时滚轮落到转录上。
@@ -1845,6 +1904,9 @@ impl TuiState {
             todo: crate::render::TodoPanel::default(),
             tab: Tab::Usage,
             files_page: FilesPage::default(),
+            // 进 TUI 就取一次数：打开就有东西看（§4）。
+            changes: ChangesPage::default(),
+            changes_wanted: true,
             tabs_rect: None,
             sidebar_keyboard: false,
             main_tab: MainTab::Conversation,
@@ -1867,6 +1929,8 @@ impl TuiState {
             viewer_wake: None,
             detail_opener: None,
             detail_rect: None,
+            diff_reading: None,
+            detail_serial: 0,
             modal_rect: None,
             questionnaire_bottom: None,
             regions: Regions::default(),
@@ -2087,8 +2151,13 @@ impl TuiState {
     pub fn apply(&mut self, event: RenderEvent) -> usize {
         // 「工作区变了」是一条静默信号：它不画任何东西，只请一次重扫 —— 索引落地时那一帧
         // 自己会脏（`.scratch/files-page/spec.md` §2）。
+        //
+        // 它同时请改动页重取一次（`.scratch/diff-page/spec.md` §4）：判据是那条既有的
+        // `Effect`，所以执行者与讨论者的调用**也走得通**（它们落在同一条父流、同一个渲染器
+        // 上）。两位分开置，因为两件事的节奏与失败模式不同。
         if matches!(event, RenderEvent::WorkspaceChanged) {
             self.file_scan_wanted = true;
+            self.changes_wanted = true;
             return 0;
         }
         self.dirty = true;
@@ -2995,15 +3064,18 @@ impl TuiState {
                 return;
             }
         }
-        // 指针落在左栏页区里时这一格归文件页（`.scratch/files-page/spec.md` §4）：
-        // 与覆盖层、问卷分派同一条「指针在哪就管哪」的规矩。别的页照旧滚主列当前那一页。
-        if self.tab == Tab::Files
-            && self
-                .files_page
-                .rect
-                .is_some_and(|page| page.contains((column, row).into()))
+        // 指针落在左栏页区里时这一格归那一页（`.scratch/files-page/spec.md` §4、
+        // `.scratch/diff-page/spec.md` §7）：与覆盖层、问卷分派同一条「指针在哪就管哪」的
+        // 规矩。别的页照旧滚主列当前那一页。
+        if self
+            .sidebar_page_rect()
+            .is_some_and(|page| page.contains((column, row).into()))
         {
-            self.files_wheel(up);
+            // 改动页**没有滚动机制**（那一份 spec 明确不做）：滚轮落在它上面时这一格归它，
+            // 但什么都不动 —— 不穿透去滚主列背后那一页。
+            if self.tab == Tab::Files {
+                self.files_wheel(up);
+            }
             return;
         }
         self.wheel_current(up);
@@ -3156,13 +3228,17 @@ impl TuiState {
         match self.regions.action_at(column, row) {
             Some(HitAction::SwitchTab(tab)) => {
                 self.tab = tab;
-                // 点页签条也是一次「点左栏」：切到文件页时键盘跟着交给它，并先给第一行焦点，
-                // 于是 `↓` 立刻走得动（`.scratch/files-page/spec.md` §5）。切到另外两页则把
-                // 键盘还回去 —— 它们没有能用方向键走的东西。
+                // 点页签条也是一次「点左栏」：切到能走键盘的那两页时键盘跟着交给它们，并先给
+                // 第一行焦点，于是 `↓` 立刻走得动（`.scratch/files-page/spec.md` §5）。
+                // 切到另外两页则把键盘还回去 —— 它们没有能用方向键走的东西。
                 if !questioning {
-                    self.sidebar_keyboard = tab == Tab::Files;
+                    self.sidebar_keyboard = matches!(tab, Tab::Files | Tab::Changes);
                     if tab == Tab::Files && self.files_page.focus.is_none() {
                         self.files_page.focus = Some(0);
+                    }
+                    if tab == Tab::Changes && self.changes.focus.is_none() {
+                        self.changes.rows = changes::rows(&self.changes.files);
+                        self.changes_move_focus(1);
                     }
                 }
             }
@@ -3181,6 +3257,11 @@ impl TuiState {
                 // （`.scratch/files-page/spec.md` §4）。问卷立着时它也不接这一下 —— 它会打开
                 // 一个覆盖层，而键盘要留在问卷那里。
                 if !questioning && self.files_click(column, row) {
+                    return;
+                }
+                // 改动页同理：页区里的一个**文件行**是这一页自己的东西（点一行就把焦点放到
+                // 那一行上，并在详情覆盖层里开那份 diff）。
+                if !questioning && self.changes_click(column, row) {
                     return;
                 }
                 // 对话视图里点到一段可点的文本（链接热区）：解析出目标就交给运行期去打开
@@ -3426,33 +3507,52 @@ impl TuiState {
         self.files_page.rows.get(self.files_page.focus?).cloned()
     }
 
-    /// 点左栏的**文件页**：键盘交给这一页，焦点行落在点的那一行上。
+    /// 点左栏的**文件页**或**改动页**：键盘交给这一页，焦点行落在点的那一行上。
     ///
-    /// 只认得**真画出来**的那两块矩形（页签条与页区），与指针分派同一条纪律；也只认文件页
-    /// —— 另外两页没有能用方向键走的东西，键盘扣在它们上面只会让输入区静默失灵。落在页签条
-    /// 上时焦点行没有对应的树行，就保持原样；还没有焦点时先给第一行，于是 `↓` 立刻走得动。
+    /// 只认得**真画出来**的那两块矩形（页签条与页区），与指针分派同一条纪律；也只认能走键盘
+    /// 的那两页 —— `调用量` 与 `todo` 没有能用方向键走的东西，键盘扣在它们上面只会让输入区
+    /// 静默失灵。落在页签条上、或者落在改动页的分组标题上时，焦点行保持原样；还没有焦点时
+    /// 先给第一个文件行，于是 `↓` 立刻走得动。
     fn take_sidebar_keyboard(&mut self, column: u16, row: u16) {
-        if self.tab != Tab::Files {
+        let Some(page) = self.sidebar_page_rect() else {
             return;
-        }
+        };
         let point = (column, row).into();
-        let in_page = self
-            .files_page
-            .rect
-            .is_some_and(|page| page.contains(point));
+        let in_page = page.contains(point);
         let in_tabs = self.tabs_rect.is_some_and(|tabs| tabs.contains(point));
         if !in_page && !in_tabs {
             return;
         }
         self.sidebar_keyboard = true;
         if in_page {
-            if let Some(index) = self.files_index_at(row) {
-                self.files_page.focus = Some(index);
-                return;
+            match self.tab {
+                Tab::Files => {
+                    if let Some(index) = self.files_index_at(row) {
+                        self.files_page.focus = Some(index);
+                        return;
+                    }
+                }
+                Tab::Changes => {
+                    if let Some(index) = self.changes_index_at(row) {
+                        self.changes.focus = Some(index);
+                        return;
+                    }
+                }
+                _ => {}
             }
         }
-        if self.files_page.focus.is_none() && !self.files_page.rows.is_empty() {
-            self.files_page.focus = Some(0);
+        match self.tab {
+            Tab::Files => {
+                if self.files_page.focus.is_none() && !self.files_page.rows.is_empty() {
+                    self.files_page.focus = Some(0);
+                }
+            }
+            Tab::Changes => {
+                if self.changes.focus.is_none() {
+                    self.changes_move_focus(1);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3575,10 +3675,20 @@ impl TuiState {
 
     /// 键盘在左栏时的一个按键：归这一页回答 `true`。
     ///
-    /// 认的只有走树的那几个键；别的键照旧落到它们本来去的地方 —— 点一下左栏不该把打字的手感
-    /// 弄丢。`Esc` 与 `Enter` 明确是「把键盘还回去」
-    /// （`.scratch/files-page/spec.md` §5）。
+    /// 认的只有**能走键盘的那两页**的键；别的键照旧落到它们本来去的地方 —— 点一下左栏不该把
+    /// 打字的手感弄丢。`Esc` 在两页上都是「把键盘还回去」
+    /// （`.scratch/files-page/spec.md` §5、`.scratch/diff-page/spec.md` §7）。
     fn sidebar_key(&mut self, key: Key) -> bool {
+        match self.tab {
+            Tab::Files => self.files_key(key),
+            Tab::Changes => self.changes_key(key),
+            // 另外两页没有能用方向键走的东西：键盘本来也不该扣在它们上面。
+            _ => return false,
+        }
+    }
+
+    /// 文件页的键位。
+    fn files_key(&mut self, key: Key) -> bool {
         match key {
             // 一次手势一层：这一下只把键盘还回去。要取消回合，等键盘回去之后再按一下 ——
             // 那一下仍按既有的忙碌 / 空闲分叉走。
@@ -3591,6 +3701,30 @@ impl TuiState {
             // 打字不落进草稿：键盘确实在左栏。控制键（`Ctrl-*`）、`Tab` / `Shift+Tab` 与
             // 翻页键照常穿透 —— 退出、挂起、左栏开关、模式循环、翻页都不该因为点了一下左栏
             // 而失灵（`.scratch/files-page/spec.md` §5）。
+            Key::Char(_) => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// 改动页的键位：`↑` `↓` `Enter` `Esc` `r`（`.scratch/diff-page/spec.md` §7）。
+    ///
+    /// `@路径` 插入**不搬过来** —— 那是文件页的语义，两页各自回答一个问题。
+    fn changes_key(&mut self, key: Key) -> bool {
+        match key {
+            // 一次手势一层：这一下只把键盘还回去，**不**取消正在跑的回合（§7）。
+            Key::Esc => self.sidebar_keyboard = false,
+            Key::Up => self.changes_move_focus(-1),
+            Key::Down => self.changes_move_focus(1),
+            Key::Enter => self.open_changes_focus(),
+            // 手动重取（§4）：在**外部 shell** 里做的 `git add` 不会触发任何信号，所以这一页
+            // 要有一把手动键。它落在改动页的键盘归属上，不是全局键 —— `r` 是普通字符，做成
+            // 全局键会与输入区抢键。
+            Key::Char('r') => {
+                self.changes_wanted = true;
+                self.say(wording::changes_refreshing().to_owned());
+            }
+            // 与文件页同一条：打字不落进草稿。
             Key::Char(_) => {}
             _ => return false,
         }
@@ -4420,6 +4554,8 @@ impl TuiState {
         // 「改完再 `@` 它」是索引的主要用法，所以每提交一条消息就在后台重扫一次
         // （`.scratch/input-tokens/spec.md` §1）。位在这里置，遍历由循环去发。
         self.file_scan_wanted = true;
+        // 改动页同理：一次提交本身就可能改变 HEAD 附近的读数（§4）。
+        self.changes_wanted = true;
         let _ = reply.send(Some(line));
     }
 
@@ -4455,6 +4591,266 @@ impl TuiState {
         }
         self.sync_tokens();
         self.dirty = true;
+    }
+
+    /// 该发一次 git 取数了吗：取走那个位。
+    ///
+    /// 与 [`TuiState::take_file_scan`] 同一条分工：状态机只置位，渲染循环真去起子进程，结果
+    /// 从 [`TuiState::changes_loaded`] 回来 —— 于是测试不必起任何进程就能走完整条路。
+    ///
+    /// **一次取数还在飞就先不发**：`loading` 就是那个守卫（形状照 `FileIndex::Loading`），
+    /// 位留着，等结果落地之后的下一轮补发 —— 连着几次触发因此合并成一次，而且不丢
+    /// （`.scratch/diff-page/spec.md` §4）。
+    pub fn take_changes(&mut self) -> bool {
+        if !self.changes_wanted || self.changes.loading {
+            return false;
+        }
+        self.changes.loading = true;
+        self.changes_wanted = false;
+        true
+    }
+
+    /// 一次取数的结果回来了。
+    ///
+    /// 三条分支各说一件事：成功换上读数；**不可用态**在没有上一次读数时才写进页里（有读数
+    /// 就保留它，只在提示行说一句）；其它失败一律保留读数 + 提示行回执。
+    pub fn changes_loaded(&mut self, outcome: changes::Outcome) {
+        self.changes.loading = false;
+        match outcome {
+            changes::Outcome::Changed(files) => {
+                self.changes.files = files;
+                self.changes.state = ChangesState::Ready;
+                // 新读数可能少了几行：焦点行不能指着一份已经不存在的清单。
+                self.changes.rows = changes::rows(&self.changes.files);
+                self.changes_clamp_focus();
+            }
+            changes::Outcome::NotARepo => {
+                self.changes_unavailable(ChangesState::NotARepo, wording::changes_not_a_repo());
+            }
+            changes::Outcome::NoGit => {
+                self.changes_unavailable(ChangesState::NoGit, wording::changes_no_git());
+            }
+            changes::Outcome::Failed => {
+                // 有读数就保留它，只在提示行说一句；**一次都还没取到过**时页里那句得跟着
+                // 变成「读不出来」—— 一句永远挂着的「正在读取改动…」是骗人。
+                if self.changes.state == ChangesState::Ready {
+                    self.say(wording::changes_read_failed().to_owned());
+                } else {
+                    self.changes.state = ChangesState::Failed;
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// 这一页此刻只有一句话时的那句；有列表可画时是 `None`（§5 的四句文案）。
+    fn changes_note(&self) -> Option<&'static str> {
+        match self.changes.state {
+            ChangesState::NotAsked => Some(wording::changes_loading()),
+            ChangesState::Ready if self.changes.files.is_empty() => Some(wording::changes_empty()),
+            ChangesState::Ready => None,
+            ChangesState::NotARepo => Some(wording::changes_not_a_repo()),
+            ChangesState::NoGit => Some(wording::changes_no_git()),
+            ChangesState::Failed => Some(wording::changes_failed()),
+        }
+    }
+
+    /// 「这里不可用」：**有上一次读数就保留它**，只在提示行说一句 —— 一个正看着 diff 列表的
+    /// 人不该因为一次失败的取数看到那一页被换成一句错误（§4）。
+    fn changes_unavailable(&mut self, state: ChangesState, note: &str) {
+        if self.changes.state == ChangesState::Ready {
+            self.say(note.to_owned());
+        } else {
+            self.changes.state = state;
+        }
+    }
+
+    /// 把焦点行收回范围内，并保证它落在一个**文件行**上（分组标题不是可点的东西）。
+    fn changes_clamp_focus(&mut self) {
+        let Some(at) = self.changes.focus else {
+            return;
+        };
+        self.changes.focus = nearest_file_row(&self.changes.rows, at);
+    }
+
+    /// `↑` / `↓`：焦点行移到**下一个文件行**（分组标题跳过），两端停住。
+    fn changes_move_focus(&mut self, delta: isize) {
+        let files: Vec<usize> = self
+            .changes
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, changes::Item::File(_)))
+            .map(|(index, _)| index)
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let next = match self
+            .changes
+            .focus
+            .and_then(|at| files.iter().position(|index| *index == at))
+        {
+            Some(position) => {
+                let moved = (position as isize + delta).clamp(0, files.len() as isize - 1);
+                files[moved as usize]
+            }
+            // 还没有焦点：往下走给第一个文件行，往上走给最后一个（与文件页同一条）。
+            None if delta > 0 => files[0],
+            None => *files.last().expect("刚判过它非空"),
+        };
+        self.changes.focus = Some(next);
+        self.dirty = true;
+    }
+
+    /// `Enter` 或点一行：打开焦点行那份 diff（`.scratch/diff-page/spec.md` §6）。
+    ///
+    /// 焦点行**只落在文件行上**（`changes_move_focus` 跳过分组标题），所以这里不必再判一次。
+    fn open_changes_focus(&mut self) {
+        let Some(index) = self.changes.focus else {
+            return;
+        };
+        let Some(changes::Item::File(file)) = self.changes.rows.get(index).cloned() else {
+            return;
+        };
+        self.open_changes_detail(file);
+    }
+
+    /// 把一份 diff 打开在详情覆盖层里。
+    ///
+    /// 正文在**打开那一刻**取，两条路：未跟踪的新文件没有 diff 可比（`git diff HEAD` 对它
+    /// 是空输出），当场读盘给全文；已跟踪的要跑一次 `git diff HEAD -- <path>` —— 那是子进程，
+    /// 所以弹窗先带着一句「正在读」立起来，结果从渲染循环那条通道回来时填进去。
+    ///
+    /// 打开方记成 [`DetailOpener::Changes`]：这一页不冻也不还原 —— 它的位置由它自己那份列表
+    /// 与焦点拿着。
+    fn open_changes_detail(&mut self, file: changes::ChangedFile) {
+        // 两块浮层互斥：开着文件查看器时点开一份 diff，先把查看器收掉。
+        self.close_file_viewer();
+        self.detail_serial += 1;
+        let serial = self.detail_serial;
+        let untracked = file.kind == changes::Kind::Untracked;
+        let title = if untracked {
+            // 未跟踪的文件没有 diff 可比，标题因此说清这一点（正文是全文）。
+            wording::changes_new_file().to_owned()
+        } else {
+            file.path.clone()
+        };
+        // 两条路都走**同一趟取数**：未跟踪那一档在里面直接读盘（快），已跟踪那一档跑一次
+        // `git diff`。于是配了 `[ui] diff_viewer` 时两种文件都会交给那个命令 —— 票 06 的口径
+        // 是「未跟踪也一视同仁」（`.scratch/diff-page/issues/06-grilling-external-viewer.md`
+        // 的边界那一条）。
+        let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
+        self.diff_reading = Some(DiffReading {
+            serial,
+            file: file.clone(),
+            columns: width,
+            sent: false,
+        });
+        let detail = Detail {
+            title,
+            // 一份 diff 不是谁说的话：标题用正文档那一档（与树里那一行同一个颜色）。
+            color: palette::PLAIN,
+            kind: DetailKind::Diff {
+                path: file.path,
+                body: changes::Body::Pending,
+            },
+        };
+        self.open_detail(detail, width, DetailOpener::Changes);
+    }
+
+    /// 看一份 diff 时用哪个外部命令（`[ui] diff_viewer`）。渲染循环拿它去起子进程
+    /// （`.scratch/diff-page/spec.md` §8）。
+    pub fn diff_viewer(&self) -> &crate::config::DiffViewerSettings {
+        &self.facts.diff_viewer
+    }
+
+    /// 该发一次 `git diff` 了吗：取走那一次请求（同一次不重复发）。
+    ///
+    /// 与 [`TuiState::take_changes`] 同一条分工：状态机只记「要读什么」，渲染循环真去起子
+    /// 进程，结果从 [`TuiState::diff_loaded`] 回来。第二个返回值是**正文宽** —— 外部工具那一
+    /// 档要把它当 `COLUMNS` 传出去（§8）。
+    pub fn take_diff_read(&mut self) -> Option<(u64, changes::ChangedFile, usize)> {
+        let reading = self.diff_reading.as_mut()?;
+        if reading.sent {
+            return None;
+        }
+        reading.sent = true;
+        Some((reading.serial, reading.file.clone(), reading.columns))
+    }
+
+    /// 那份 diff 拿回来了：填进**还开着的那一个**弹窗。
+    ///
+    /// 序号对不上（这一份属于上一次打开、或者弹窗已经关了）就丢掉 —— 一个慢回答不许盖掉读的
+    /// 人后来打开的东西。`note` 是外部工具没跑成时提示行那一句回执（那时正文已经回退成内置
+    /// 那一档）。
+    pub fn diff_loaded(&mut self, serial: u64, body: changes::Body, note: Option<String>) {
+        if self.diff_reading.as_ref().map(|reading| reading.serial) != Some(serial) {
+            return;
+        }
+        self.diff_reading = None;
+        if let Some(note) = note {
+            self.say(note);
+        }
+        let session_dir = self.facts.session_dir.clone();
+        let Some(view) = self.detail.as_mut() else {
+            return;
+        };
+        if let DetailKind::Diff { body: slot, .. } = &mut view.detail.kind {
+            // 标题右端标出**谁画的**（内置那一档不标）：同一份 diff 在两台机器上长得不一样
+            // 时，读的人知道为什么（§8）。底子是打开那一刻算好的那个（未跟踪的是「新文件」）
+            // —— 结果只在这一步追加，而一次打开只会回填一次。
+            if let changes::Body::External { tool, .. } = &body {
+                let base = view.detail.title.clone();
+                view.detail.title = format!("{base} · {tool}");
+            }
+            *slot = body;
+        }
+        // 正文换了就得按**同一个**宽度重排：弹窗的排版在打开那一刻就完成了。
+        view.body = detail_body(&view.detail, &session_dir, view.width);
+        self.dirty = true;
+    }
+
+    /// 一次点击落在改动页上吗：落在**文件行**上就把焦点放到那一行、并打开那份 diff，落在分组
+    /// 标题上什么都不做。回答 `true` 表示这一下归这一页。
+    fn changes_click(&mut self, column: u16, row: u16) -> bool {
+        if self.tab != Tab::Changes || !self.changes_page_contains(column, row) {
+            return false;
+        }
+        if let Some(index) = self.changes_index_at(row) {
+            self.changes.focus = Some(index);
+            self.open_changes_focus();
+        }
+        true
+    }
+
+    /// 这一格是不是落在改动页的页区里。
+    fn changes_page_contains(&self, column: u16, row: u16) -> bool {
+        self.changes
+            .rect
+            .is_some_and(|page| page.contains((column, row).into()))
+    }
+
+    /// 屏幕行 `row` 对应的列表行下标。
+    ///
+    /// 这一页**没有滚动**，所以它就是「离页区顶端几行」。落在页区之外、或者那一行是分组标题
+    /// 时是 `None` —— 标题没有可点的东西。
+    fn changes_index_at(&self, row: u16) -> Option<usize> {
+        let page = self.changes.rect?;
+        if row < page.y {
+            return None;
+        }
+        let index = (row - page.y) as usize;
+        matches!(self.changes.rows.get(index), Some(changes::Item::File(_))).then_some(index)
+    }
+
+    /// 左栏当前那一页的页区；没画、或者这一页不是能走键盘的那两页时是 `None`。
+    fn sidebar_page_rect(&self) -> Option<Rect> {
+        match self.tab {
+            Tab::Files => self.files_page.rect,
+            Tab::Changes => self.changes.rect,
+            _ => None,
+        }
     }
 
     /// 把草稿里**能兑现**的记号区间算好同步进编辑器（`.scratch/input-tokens/spec.md` §4）。
@@ -5316,8 +5712,16 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
             draw_files_page(frame, page, state);
             return;
         }
+        // 改动页同理：一行的语义（哪一行是个文件、哪一行是分组标题）只在画的时候才算得出来。
+        Tab::Changes => {
+            draw_changes_page(frame, page, state);
+            return;
+        }
     };
     state.files_page.rect = None;
+    // 这一帧没画改动页：指针于是不该再落在一页已经不在屏幕上的东西上（与文件页同一条
+    // 「只认真画出来的东西」）。
+    state.changes.rect = None;
     // 左栏这一块也进屏幕文本层：三页的画法各不相同，但都是「一页已经排好的行」，没有软折
     // 可言（`.scratch/tui-feedback/spec.md` §5）。
     note_rows(state, page, &rows, &[], &[]);
@@ -5331,6 +5735,8 @@ fn draw_sidebar_page(frame: &mut ratatui::Frame, panes: &layout::Regions, state:
 /// 正文档那一个默认样式。索引还没就绪与工作区真的是空的各说各的，都不画一块空白。
 fn draw_files_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
     state.files_page.rect = Some(page);
+    // 这一帧画的是文件页：改动页那一块不再是在屏幕上的东西。
+    state.changes.rect = None;
     let Some(tree) = files_tree(state) else {
         return draw_sidebar_note(frame, page, wording::files_loading(), state);
     };
@@ -5418,12 +5824,139 @@ fn files_line(row: &files::Row, width: usize, focused: bool) -> Line<'static> {
 /// 「在等数据」与「读完了，就是空的」是两句话，但形状是同一种。
 fn draw_sidebar_note(frame: &mut ratatui::Frame, page: Rect, note: &str, state: &mut TuiState) {
     state.files_page.rows.clear();
+    let line = draw_page_note(frame, page, note);
+    note_rows(state, page, std::slice::from_ref(&line), &[], &[]);
+}
+
+/// 一页只有一句话时的那一行本体。
+///
+/// 与 [`draw_sidebar_note`] 分开，是因为「页里写一句」这件事本身不该替哪一页做主 —— 那一位
+/// 属于各自清理自己那份行状态的调用方（文件页清 `rows`，改动页清它自己那份）。
+fn draw_page_note(frame: &mut ratatui::Frame, page: Rect, note: &str) -> Line<'static> {
     let line = Line::from(Span::styled(
         truncate_columns(note, page.width as usize),
         Style::default().fg(palette::MUTED),
     ));
-    note_rows(state, page, std::slice::from_ref(&line), &[], &[]);
-    frame.render_widget(Paragraph::new(line), page);
+    frame.render_widget(Paragraph::new(line.clone()), page);
+    line
+}
+
+/// 改动页：相对 HEAD 改过的那些文件，按状态分好组
+/// （`.scratch/diff-page/spec.md` 实现决定 §5）。
+///
+/// 这一页**不给色**：字形与分组标题都是正文档那一档，层次只交给结构与字形
+/// （「过程退后、内容保持、信号着色」）；唯一带色的是焦点行 —— 那是信号。页区**没有滚动**：
+/// 装不下就画满，末行说一句还有多少。
+fn draw_changes_page(frame: &mut ratatui::Frame, page: Rect, state: &mut TuiState) {
+    state.changes.rect = Some(page);
+    // 这一帧画的是改动页：文件页那一块不再是在屏幕上的东西。
+    state.files_page.rect = None;
+    if let Some(note) = state.changes_note() {
+        state.changes.rows.clear();
+        let line = draw_page_note(frame, page, note);
+        note_rows(state, page, std::slice::from_ref(&line), &[], &[]);
+        return;
+    }
+    let rows = changes::rows(&state.changes.files);
+    let total = state.changes.files.len();
+    let window = page.height as usize;
+    // 装不下就画满页区，最后一行留给那一句「还有 M 处改动」（§5）。**不给这一页加滚动**：
+    // 那是新机制，等真机反馈再谈。
+    let overflow = rows.len() > window;
+    let shown = if overflow {
+        window.saturating_sub(1)
+    } else {
+        rows.len()
+    };
+    let mut lines: Vec<Line<'static>> = rows
+        .iter()
+        .take(shown)
+        .enumerate()
+        .map(|(index, item)| {
+            changes_line(
+                item,
+                page.width as usize,
+                state.changes.focus == Some(index),
+            )
+        })
+        .collect();
+    if overflow {
+        let drawn = rows
+            .iter()
+            .take(shown)
+            .filter(|item| matches!(item, changes::Item::File(_)))
+            .count();
+        lines.push(Line::from(Span::styled(
+            wording::changes_more(total.saturating_sub(drawn)),
+            Style::default().fg(palette::MUTED),
+        )));
+    }
+    // 焦点与点击要拿屏幕行换下标，所以整份可见行都留着（不只是窗口里那几行）。
+    state.changes.rows = rows;
+    note_rows(state, page, &lines, &[], &[]);
+    frame.render_widget(Paragraph::new(lines), page);
+}
+
+/// 从 `rows` 的第 `from` 行起找最近的一个**文件行**：先往后找，找不到再回头往前找。整份清单
+/// 里一个文件都没有（只有标题，理论上不会发生）时是 `None`。
+fn nearest_file_row(rows: &[changes::Item], from: usize) -> Option<usize> {
+    if rows.is_empty() {
+        return None;
+    }
+    let from = from.min(rows.len() - 1);
+    (from..rows.len())
+        .chain((0..from).rev())
+        .find(|index| matches!(rows[*index], changes::Item::File(_)))
+}
+
+/// 改动页上的一行：分组标题占整行，文件行是**字形（占满两格）+ 空格 + 全路径**。
+///
+/// 字形占满两格，于是名字严格落在同一列上（与文件页那条真机反馈后的规矩同源：那一列每行都
+/// 占满，扫读时眼睛不必重新找列）。路径超宽用 `…` 收尾 —— 28 列的窄档里那是唯一读得下去
+/// 的写法。
+fn changes_line(item: &changes::Item, width: usize, focused: bool) -> Line<'static> {
+    let style = if focused {
+        // 常驻选中那一档（`.scratch/tui-visual-language/spec.md` §8），与文件页同一个。
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette::PLAIN)
+    };
+    let text = match item {
+        changes::Item::Header(kind) => changes_header(*kind).to_owned(),
+        changes::Item::File(file) => {
+            let glyph = changes_glyph(file.kind);
+            // 字形**占满两格**，然后才是那个分隔的空格 —— 于是 `M` / `A` / `D` / `??` 四种
+            // 字形之后的名字严格同列。
+            let pad = 2usize.saturating_sub(text_columns(glyph));
+            format!("{glyph}{} {}", " ".repeat(pad), file.path)
+        }
+    };
+    if text_columns(&text) > width {
+        return ellipsize_line(Line::from(Span::styled(text, style)), width);
+    }
+    Line::from(Span::styled(text, style))
+}
+
+/// 一个状态字形。`??` 本来就是两格，其余三个补一格 —— 两者都占满两格。
+fn changes_glyph(kind: changes::Kind) -> &'static str {
+    match kind {
+        changes::Kind::Modified => wording::CHANGE_MODIFIED,
+        changes::Kind::Added => wording::CHANGE_ADDED,
+        changes::Kind::Deleted => wording::CHANGE_DELETED,
+        changes::Kind::Untracked => wording::CHANGE_UNTRACKED,
+    }
+}
+
+/// 一个分组标题。不带计数 —— 件数不是这一页要回答的问题。
+fn changes_header(kind: changes::Kind) -> &'static str {
+    match kind {
+        changes::Kind::Modified => wording::CHANGE_GROUP_MODIFIED,
+        changes::Kind::Added => wording::CHANGE_GROUP_ADDED,
+        changes::Kind::Deleted => wording::CHANGE_GROUP_DELETED,
+        changes::Kind::Untracked => wording::CHANGE_GROUP_UNTRACKED,
+    }
 }
 
 /// 左栏的页签条：两条分隔线、标签夹在中间（spec §3，
@@ -5466,6 +5999,13 @@ fn draw_tab_bar(
         wording::TAB_FILES,
         state.tab == Tab::Files,
         HitAction::SwitchTab(Tab::Files),
+    ));
+    // 第四签**常驻**：`todo` 那一签是有条件的，这一签不是 —— 工作区干净、不是仓库、
+    // 甚至找不到 `git` 时页签都还在，页里各写一句（§1、§5）。
+    entries.push((
+        wording::TAB_CHANGES,
+        state.tab == Tab::Changes,
+        HitAction::SwitchTab(Tab::Changes),
     ));
     draw_label_bar(frame, state, tabs, &entries);
 }
@@ -5774,6 +6314,50 @@ struct FilesPage {
     focus: Option<usize>,
 }
 
+/// 改动页那一页自己的状态（`.scratch/diff-page/spec.md` §2、§4）。
+///
+/// 与 [`FilesPage`] 同一族：一页的状态收在一个值里，整个只活在进程内 —— 不进事件流、不落盘。
+/// 它的数据来自**渲染器自己在宿主侧跑的 git**，与文件索引各取各的（git 的口径与遍历的口径
+/// 不是一回事）。
+#[derive(Debug, Default)]
+struct ChangesPage {
+    /// 上一次取到的读数（相对 HEAD 的那些改动）。**取数失败不覆盖它**（§4）。
+    files: Vec<changes::ChangedFile>,
+    /// 这一页此刻处在哪一态。
+    state: ChangesState,
+    /// 一次取数在飞：并发守卫，形状照 [`FileIndex::Loading`] —— 在飞时不重发，位留着补发。
+    loading: bool,
+    /// 上一帧排出来的那些行（分组标题 + 文件）。焦点与点击拿它换下标。
+    rows: Vec<changes::Item>,
+    /// 焦点行在 [`ChangesPage::rows`] 里的下标。它**只落在文件行上** —— 分组标题没有可点的
+    /// 东西。`None` 表示还没有一行拿过焦点。
+    focus: Option<usize>,
+    /// 上一帧页区画在哪；没画改动页时是 `None`（与文件页同一条「只认真画出来的东西」）。
+    rect: Option<Rect>,
+}
+
+/// 改动页的取数处在哪一态。
+///
+/// 它与 [`ChangesPage::files`] 分开，正是为了「失败保留上一次读数」那条：读数在，页里就照旧
+/// 画它，那几句不可用态只在**一次都还没取到过**的时候出现（§4、§5）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ChangesState {
+    /// 还没取到数 —— 页里写「正在读取改动…」。
+    #[default]
+    NotAsked,
+    /// 有读数了（可能是空的：工作区干净）。
+    Ready,
+    /// 这里不是 git 仓库。
+    NotARepo,
+    /// `PATH` 上找不到 `git`。
+    NoGit,
+    /// 取数失败了，而且这一页从来没有取到过数。
+    ///
+    /// 它必须与 [`ChangesState::NotAsked`] 分开：那两句话一个说「在读」、一个说「读不出来」，
+    /// 而把前者永远挂在一次失败的取数上就是骗人。
+    Failed,
+}
+
 /// 正在显示左栏的哪一页（spec §3）。
 ///
 /// 点出来的，从不给键位：`Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环。
@@ -5796,6 +6380,11 @@ enum Tab {
     /// （`.scratch/files-page/spec.md` §1、§3）。它回答的是「工作区长什么样」，
     /// **不是**「这个会话碰过哪些文件」—— 后者归 `sessions show --files`。
     Files,
+    /// 相对 HEAD 改了什么（`.scratch/diff-page/spec.md`）。
+    ///
+    /// 与 `todo` 那一签**有意不同**：它是**常驻**的第四签 —— 工作区干不干净、这里是不是
+    /// 一个仓库、甚至 `git` 在不在 `PATH` 上，都不该让页签本身出现或消失（§1、§5）。
+    Changes,
 }
 
 /// 正在显示主列的哪一页：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
@@ -7805,6 +8394,12 @@ enum DetailKind {
     /// 工作区里的一个文件的内容（`.scratch/files-page/spec.md` §6）。正文在**打开那一刻**
     /// 由渲染器直接读盘，带着它自己的有界截断 —— 这个弹窗不进事件流、不进模型上下文。
     File { body: files::FileBody },
+    /// 一个文件的改动（`.scratch/diff-page/spec.md` §6）。
+    ///
+    /// 正文与 `File` 一样在**打开那一刻**取，只是取法分两条：已跟踪的跑一次
+    /// `git diff HEAD -- <path>`（那是子进程，所以弹窗先立起来、正文后到），未跟踪的直接读盘
+    /// 给全文。这个弹窗与 `File` 同一条纪律：不进事件流、不进模型上下文、不打码。
+    Diff { path: String, body: changes::Body },
     /// 一次工具调用：它的参数，以及这次调用产出了什么。
     Tool {
         /// 给落盘输出文件命名的那个 id，`outputs/<id>.txt`。
@@ -7833,6 +8428,9 @@ enum DetailOpener {
     },
     /// 文件页打开：不冻也不还原任何视图。
     Files,
+    /// 改动页打开：与文件页一样，不冻也不还原 —— 这一页的位置由它自己那份列表与焦点拿着
+    /// （`.scratch/diff-page/spec.md` §6）。
+    Changes,
 }
 
 /// 详情覆盖层的打开状态（票 02 §4）。
@@ -7849,11 +8447,28 @@ struct FileViewerPane {
     grid: Rect,
 }
 
+/// 一份正在读的 diff（`.scratch/diff-page/spec.md` §6）。
+#[derive(Debug, Clone)]
+struct DiffReading {
+    /// 它属于哪一次打开。回来时对不上号就丢掉 —— 那时弹窗已经换成别的文件、或者关掉了。
+    serial: u64,
+    /// 读哪个文件。
+    file: changes::ChangedFile,
+    /// 正文文本区有多宽。外部工具那一档要把它当 `COLUMNS` 传出去，好让它按同一个宽度排
+    /// （`.scratch/diff-page/spec.md` §8）。
+    columns: usize,
+    /// 循环已经把这一次发出去了吗。同一次不重复发（`take_diff_read` 的守卫）。
+    sent: bool,
+}
+
 struct DetailView {
     /// 正在显示什么。
     detail: Detail,
     /// 主体，按它被打开时的宽度排版。
     body: Vec<DetailLine>,
+    /// 打开时用的**正文文本区**宽度。改动页那一档要拿它重排：一次 `git diff` 的结果比弹窗
+    /// 晚到，那时要按同一个宽度再排一遍（`.scratch/diff-page/spec.md` §6）。
+    width: usize,
     /// 屏幕上主体的第一行。
     top: usize,
     /// 覆盖层一次能显示多少主体行。
@@ -7923,6 +8538,7 @@ impl TuiState {
         self.detail = Some(DetailView {
             detail,
             body,
+            width,
             top: 0,
             height: 0,
         });
@@ -7934,6 +8550,9 @@ impl TuiState {
     /// 的冻结，会把一个已经往上滚的读的人拽回底部（票 02 §4）。
     fn close_detail(&mut self) {
         if self.detail.take().is_some() {
+            // 那一份还在读的 diff 跟着一起作废：弹窗都关了，回来的结果没有去处
+            // （下一次打开会给自己一个新的序号）。
+            self.diff_reading = None;
             // 还原给**打开它的那一页**：轨迹页回到底部或原处，文件页什么都不动
             // （票 13、`.scratch/files-page/spec.md` §5）。
             match self.detail_opener.take() {
@@ -7941,7 +8560,7 @@ impl TuiState {
                     self.trace.set_holding(false);
                     self.trace.restore(top, follow);
                 }
-                Some(DetailOpener::Files) | None => {}
+                Some(DetailOpener::Files) | Some(DetailOpener::Changes) | None => {}
             }
         }
     }
@@ -8026,6 +8645,85 @@ fn detail_body(detail: &Detail, session_dir: &str, width: usize) -> Vec<DetailLi
                 )))),
             }
         }
+        DetailKind::Diff { path, body } => match body {
+            // 还在读：一句话占位。弹窗先立起来，是为了让那一下点击**立刻**有回应 ——
+            // 一次 `git diff` 的结果下一轮才回来（§6）。
+            changes::Body::Pending => rows.push(DetailLine::plain(Line::from(Span::styled(
+                wording::changes_diff_loading(),
+                Style::default().fg(palette::MUTED),
+            )))),
+            changes::Body::Patch(text) => {
+                let (lines, skipped) = changes::clamp(text);
+                let patch = changes::patch_rows(&lines);
+                // 只有头行的 diff（`old mode` / `new mode` 那类，或者一份空 diff）：给一句
+                // 话，而不是一块空白 —— 空白说明不了「这份改动本来就没有正文」。
+                if patch.is_empty() {
+                    rows.push(DetailLine::plain(Line::from(Span::styled(
+                        wording::changes_nothing_to_show(),
+                        Style::default().fg(palette::MUTED),
+                    ))));
+                }
+                // N 数的是**画出来的那些行**（头行不算），这样读者不必自己减掉四行。
+                let shown = patch.len();
+                rows.extend(diff_body_lines(path, &patch, width));
+                if skipped > 0 {
+                    rows.push(DetailLine::plain(Line::from(Span::styled(
+                        wording::changes_truncated(shown, skipped),
+                        Style::default().fg(palette::MUTED),
+                    ))));
+                }
+            }
+            // 未跟踪的新文件：没有 diff 可比，正文就是全文（标题已经写了「新文件」）。
+            changes::Body::NewFile(body) => match body {
+                files::FileBody::Text { text, truncated } => {
+                    rows.extend(file_body_lines(path, text, width));
+                    if *truncated {
+                        rows.push(DetailLine::plain(Line::from(Span::styled(
+                            wording::detail_truncated(),
+                            Style::default().fg(palette::MUTED),
+                        ))));
+                    }
+                }
+                files::FileBody::Binary => rows.push(DetailLine::plain(Line::from(Span::styled(
+                    wording::changes_binary(),
+                    Style::default().fg(palette::MUTED),
+                )))),
+                files::FileBody::Unreadable => {
+                    rows.push(DetailLine::plain(Line::from(Span::styled(
+                        wording::changes_diff_unreadable(),
+                        Style::default().fg(palette::MUTED),
+                    ))))
+                }
+                files::FileBody::NotText => rows.push(DetailLine::plain(Line::from(Span::styled(
+                    wording::file_not_text(),
+                    Style::default().fg(palette::MUTED),
+                )))),
+            },
+            // 外部工具画的那一版（`[ui] diff_viewer`）：它吐的东西已经解成了带样式的片，
+            // 仍走我们自己的折行与截断（§8）。
+            changes::Body::External {
+                lines,
+                skipped,
+                tool: _,
+            } => {
+                let shown = lines.len();
+                rows.extend(external_body_lines(lines, width));
+                if *skipped > 0 {
+                    rows.push(DetailLine::plain(Line::from(Span::styled(
+                        wording::changes_truncated(shown, *skipped),
+                        Style::default().fg(palette::MUTED),
+                    ))));
+                }
+            }
+            changes::Body::Binary => rows.push(DetailLine::plain(Line::from(Span::styled(
+                wording::changes_binary(),
+                Style::default().fg(palette::MUTED),
+            )))),
+            changes::Body::Unreadable => rows.push(DetailLine::plain(Line::from(Span::styled(
+                wording::changes_diff_unreadable(),
+                Style::default().fg(palette::MUTED),
+            )))),
+        },
         DetailKind::Context { source, content } => {
             rows.push(DetailLine::plain(section_header(&wording::context_source(
                 source,
@@ -8111,6 +8809,91 @@ fn file_body_lines(path: &str, text: &str, width: usize) -> Vec<DetailLine> {
             )];
             spans.extend(row);
             pane::wrap_line(&Line::from(spans), budget)
+                .into_iter()
+                .enumerate()
+                .map(|(folded, line)| DetailLine {
+                    line,
+                    folded: folded > 0,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// 一份补丁的正文：行号列 + 补丁本身，按 `width` 折行
+/// （`.scratch/diff-page/spec.md` §6）。
+///
+/// 行号列 = 最长行号的位数 + 1，右对齐、后面跟一格空格；折行在插前缀**之后**按剩余预算算，
+/// 续行顶格 —— 与 [`file_body_lines`] 同形。没有行号的行（hunk 头、`\ No newline`）在那一列
+/// 留白。
+///
+/// 上色是**两层合成**（与 markdown 代码块、文件弹窗同一套）：剥掉 diff 标记之后，剩下的代码
+/// 按这个文件的**扩展名**认语言做语法高亮，再把 diff 那一档铺上去 —— 新增给背景、删除给另一
+/// 种背景、hunk 头给前景。于是一行既是「新增」又是「字符串」，谁也不用让位。
+fn diff_body_lines(path: &str, patch: &[changes::PatchLine], width: usize) -> Vec<DetailLine> {
+    let source = patch
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let highlighted = highlight::highlight_diff_with(files::language_for(path), &source);
+    let digits = patch
+        .iter()
+        .filter_map(|line| line.number)
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len();
+    let gutter = " ".repeat(digits + 1);
+    let budget = width.saturating_sub(digits + 1).max(1);
+    patch
+        .iter()
+        .zip(highlighted)
+        .flat_map(|(line, spans)| {
+            let number = match line.number {
+                Some(number) => format!("{number:>digits$} "),
+                None => gutter.clone(),
+            };
+            let tag = line.tag.style();
+            let content: Vec<Span<'static>> = match line.tag {
+                // hunk 头不是一行代码：它不带语法色，只带自己那一档（前景 + 粗体）。
+                highlight::DiffTag::Hunk => vec![Span::styled(line.text.clone(), tag)],
+                _ => spans
+                    .into_iter()
+                    .map(|span| {
+                        // 语法前景盖在 diff 背景上 —— 顺序要紧：`patch` 保留已有的前景。
+                        Span::styled(span.text, span.class.style().patch(tag))
+                    })
+                    .collect(),
+            };
+            let mut rendered = vec![Span::styled(number, Style::default().fg(palette::MUTED))];
+            rendered.extend(content);
+            pane::wrap_line(&Line::from(rendered), budget)
+                .into_iter()
+                .enumerate()
+                .map(|(folded, line)| DetailLine {
+                    line,
+                    folded: folded > 0,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// 外部工具那一档的正文：它吐的那些片**原样**按我们的正文宽折行。
+///
+/// 颜色是它自己的（不经过语义色板 —— 那是 [ADR 0018](../../docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md)
+/// 记下的代价），但折行、截断与滚动仍旧是我们的；而转义序列已经在 [`changes::parse_sgr`] 里
+/// 解成了样式，所以拖选复制出来的还是干净的文本。
+fn external_body_lines(lines: &[Vec<changes::Piece>], width: usize) -> Vec<DetailLine> {
+    lines
+        .iter()
+        .flat_map(|line| {
+            let spans: Vec<Span<'static>> = line
+                .iter()
+                .map(|piece| Span::styled(piece.text.clone(), piece.style.style()))
+                .collect();
+            pane::wrap_line(&Line::from(spans), width)
                 .into_iter()
                 .enumerate()
                 .map(|(folded, line)| DetailLine {
@@ -8507,12 +9290,19 @@ fn draw_detail(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut 
     // （不读一个字就知道是谁的行）没丢，标题本来就在框内第一行、紧挨边框
     // （`.scratch/tui-visual-language/spec.md` §28）。
     frame.render_widget(chrome_block(), area);
-    // 标题行是被点那一行自己的文字，这样读的人知道他们打开的是哪一行。
+    // 标题行是被点那一行自己的文字，这样读的人知道他们打开的是哪一行。超宽时用 `…` 收尾
+    // （`.scratch/diff-page/spec.md` §6）—— 一条长路径的尾巴比它的开头更有辨识度。
+    let title_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    let title_line = if text_columns(&title) > text.width as usize {
+        ellipsize_line(
+            Line::from(Span::styled(title.clone(), title_style)),
+            text.width as usize,
+        )
+    } else {
+        Line::from(Span::styled(title.clone(), title_style))
+    };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            truncate_columns(&title, text.width as usize),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ))),
+        Paragraph::new(title_line),
         Rect::new(text.x, text.y, text.width, 1),
     );
     // 主体拿走标题与页脚之间的一切；页脚钉在覆盖层最后一行文字上，所以两者不可能重叠
@@ -8879,6 +9669,7 @@ mod tests {
                 budget_limit: None,
                 number_style: crate::render::wording::NumberStyle::Cn,
                 file_viewer: crate::config::FileViewerSettings::default(),
+                diff_viewer: crate::config::DiffViewerSettings::default(),
                 speaker_order: vec!["kimi".to_owned()],
             },
             std::path::PathBuf::from("/x/heng"),

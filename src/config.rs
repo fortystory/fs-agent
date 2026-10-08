@@ -457,6 +457,9 @@ pub struct Config {
     /// `[ui] file_viewer` 与 `file_viewer_width`：点开一个工作区文件时用哪个查看器、
     /// 它多宽（`.scratch/nvim-file-viewer/spec.md` §2）。缺省是内置只读预览、135 列。
     pub file_viewer: FileViewerSettings,
+    /// `[ui] diff_viewer` 与 `diff_viewer_args`：看一份 diff 时交给哪个外部命令
+    /// （`.scratch/diff-page/spec.md` §8）。缺省是内置那一档 —— 渲染器自己排、自己上色。
+    pub diff_viewer: DiffViewerSettings,
     /// `[web]`：两个联网工具的部署设置（`.scratch/web-search-tool/spec.md` §9）。组装期读一次，
     /// 决定那两个工具在不在工具表里。
     pub web: WebSettings,
@@ -511,13 +514,15 @@ pub const MAX_PROVIDER_RETRIES: u32 = 10;
 /// 这一节是**为以后留的口子**：颜色、密度、数字制式这类「只是给人看」的选择都住在这里，
 /// 而不是散进 `[permissions]` 那种语义小节。缺省只有一个值，所以 `Default` 就是那处缺省
 /// —— [`NumberStyle::default`] 说的那套制式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UiSettings {
     /// 界面上那些计数用哪套书写制式（万 / 亿，或 k / M / G）；缺省由
     /// [`NumberStyle`] 自己说。
     pub number_style: NumberStyle,
     /// 点开一个工作区文件时用哪个查看器、它多宽；缺省由 [`FileViewerSettings`] 说。
     pub file_viewer: FileViewerSettings,
+    /// 看一份 diff 时交给哪个外部命令；缺省由 [`DiffViewerSettings`] 说（内置）。
+    pub diff_viewer: DiffViewerSettings,
 }
 
 /// `[ui] file_viewer`：点开一个工作区文件时，用哪一个查看器
@@ -557,6 +562,24 @@ impl Default for FileViewerSettings {
 
 /// `file_viewer_width` 的缺省值 —— 与内置预览那档的 `DETAIL_MAX_WIDTH` 同值。
 pub const DEFAULT_FILE_VIEWER_WIDTH: u16 = 135;
+
+/// `[ui] diff_viewer` 与 `diff_viewer_args`：看一份 diff 时交给哪个外部命令
+/// （`.scratch/diff-page/spec.md` §8）。
+///
+/// 形状与 [`FileViewerSettings`] **有意不同**：那一档是在浮层里嵌一屏真 nvim（一块外来
+/// 屏幕、独占键盘、要 pty），而这一档是**一次性输出** —— 我们把那份 diff 从 **stdin** 喂给
+/// 这个命令，收它的 stdout，按「只认 SGR」解成带样式的行画进**同一个**弹窗。它不占键盘、
+/// 不需要 pty，也不给 `respond_to`（[ADR 0018](../../docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md)）。
+///
+/// 不写 `diff_viewer`（或写空串）= 内置那一档：渲染器自己排、自己上色。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiffViewerSettings {
+    /// 程序名。`None` 就是内置那一档。按 `PATH` 找，**绝不过 shell**。
+    pub program: Option<String>,
+    /// 交给它的 argv，按**整元素**替换、**绝不过 shell** —— 与 `[tools.*]` 那条「argv 替换」
+    /// 同一条规矩（`docs/custom-tools.md`）。
+    pub args: Vec<String>,
+}
 
 /// `file_viewer_width` 的下界：比这更窄的浮层放不下一屏 nvim（一行正文加一条状态行）。
 const MIN_FILE_VIEWER_WIDTH: u16 = 20;
@@ -1178,9 +1201,23 @@ fn resolve_ui(raw: Option<&RawUi>) -> Result<UiSettings, ConfigError> {
             min: MIN_FILE_VIEWER_WIDTH,
         });
     }
+    // 外部 diff 工具那一档（`.scratch/diff-page/spec.md` §8）：一个程序名 + 相邻的 argv
+    // 数组。**空串与不写是一回事**（内置那一档）—— 写了参数却没写程序名则是配错了：那组
+    // 参数没有去处，而配置里那两行看着像配好了。
+    let args = raw
+        .and_then(|raw| raw.diff_viewer_args.clone())
+        .unwrap_or_default();
+    let program = match raw.and_then(|raw| raw.diff_viewer.as_deref()) {
+        None | Some("") => None,
+        Some(program) => Some(program.to_owned()),
+    };
+    if program.is_none() && !args.is_empty() {
+        return Err(ConfigError::DiffViewerArgsWithoutProgram);
+    }
     Ok(UiSettings {
         number_style,
         file_viewer: FileViewerSettings { kind, width },
+        diff_viewer: DiffViewerSettings { program, args },
     })
 }
 
@@ -1378,6 +1415,7 @@ pub fn resolve(file_text: Option<&str>, env: &EnvMap) -> Result<Config, ConfigEr
         goals,
         number_style: ui.number_style,
         file_viewer: ui.file_viewer,
+        diff_viewer: ui.diff_viewer,
         web,
         mcp,
     })
@@ -1490,7 +1528,8 @@ struct RawGoals {
     provider_retries: Option<u32>,
 }
 
-/// 一张 `[ui]` 表：数字用哪套书写制式，以及点开文件时用哪个查看器。
+/// 一张 `[ui]` 表：数字用哪套书写制式、点开文件时用哪个查看器，以及看一份 diff 时交给
+/// 哪个外部命令。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawUi {
@@ -1501,6 +1540,10 @@ struct RawUi {
     /// 浮层宽度上限（列），缺省 [`DEFAULT_FILE_VIEWER_WIDTH`]，下界
     /// [`MIN_FILE_VIEWER_WIDTH`]。
     file_viewer_width: Option<u16>,
+    /// 看一份 diff 时交给哪个外部命令；不写（或写空串）= 内置那一档。
+    diff_viewer: Option<String>,
+    /// 交给它的 argv，按整元素替换、绝不过 shell。
+    diff_viewer_args: Option<Vec<String>>,
 }
 
 /// 一张 `[web]` 表：两个联网工具的部署设置。
@@ -2442,6 +2485,11 @@ pub enum ConfigError {
         "`[ui] file_viewer_width = {width}` 太窄了：至少要 {min} 列，否则浮层里放不下一屏 nvim"
     )]
     FileViewerWidthTooNarrow { width: u16, min: u16 },
+    #[error(
+        "`[ui] diff_viewer_args` 写了参数，却没有写 `[ui] diff_viewer`：那组参数没有去处。\
+         要么补上程序名（例如 `diff_viewer = \"delta\"`），要么把参数也去掉（不写就是用内置呈现）"
+    )]
+    DiffViewerArgsWithoutProgram,
     #[error("[discussion] {reason}")]
     InvalidDiscussion { reason: String },
     #[error(
