@@ -592,6 +592,7 @@ fn a_speakers_name_is_drawn_in_its_role_colour() {
                 role: Role::User,
                 text: "hello".to_owned(),
                 reasoning: None,
+                timing: Default::default(),
             }],
             &["kimi", "claude"],
         ),
@@ -663,6 +664,7 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
         tool: "read_file".to_owned(),
         args: serde_json::json!({"path": "a.rs"}),
         outcome,
+        timing: Default::default(),
     };
     let ok = render_block_uncoloured(&Block::Tool(Box::new(tool(Some(ToolOutcome {
         ok: true,
@@ -732,6 +734,7 @@ fn the_synthesizers_product_renders_with_the_system_speaker() {
         role: Role::Assistant,
         text: "consensus".to_owned(),
         reasoning: None,
+        timing: Default::default(),
     });
     // 第一行是发言者前缀**独占的一行**（2026-10-05 的排版修订）。它的字面用词归措辞层；
     // 这里它只需要是一个带方括号的归属。
@@ -768,6 +771,7 @@ fn the_answer_block_is_rendered_as_markdown() {
         role: Role::Assistant,
         text: "# 标题\n\n- 一\n- 二\n".to_owned(),
         reasoning: None,
+        timing: Default::default(),
     });
     // 第一行是名字，标题在它下面一行（2026-10-05 的排版修订）。
     let heading = &lines[1];
@@ -826,6 +830,7 @@ fn intermediate_narration_is_dim_and_the_answer_is_not() {
         role: Role::Assistant,
         text: "正文".to_owned(),
         reasoning: None,
+        timing: Default::default(),
     });
     // 第一行是名字，正文在它下面一行（2026-10-05 的排版修订）。
     assert_ne!(
@@ -844,6 +849,7 @@ fn a_message_body_starts_on_its_own_line() {
         role: Role::User,
         text: "one\ntwo".to_owned(),
         reasoning: None,
+        timing: Default::default(),
     });
     assert_eq!(lines.len(), 3, "名字一行，正文每行各占一行");
     assert_eq!(lines[0].spans[0].content.as_ref(), "[用户]");
@@ -860,6 +866,7 @@ fn the_answers_continuation_starts_at_the_left_edge() {
         role: Role::Assistant,
         text: "# 标题\n\n正文\n第二行".to_owned(),
         reasoning: None,
+        timing: Default::default(),
     });
     assert!(lines.len() >= 3, "多行答案：{lines:?}");
     for line in &lines[1..] {
@@ -885,6 +892,7 @@ fn a_single_line_answer_is_a_name_row_and_a_body_row() {
         role: Role::Assistant,
         text: "正文".to_owned(),
         reasoning: None,
+        timing: Default::default(),
     });
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0].spans[0].content.as_ref(), "[kimi]");
@@ -1020,6 +1028,7 @@ fn a_users_message_keeps_its_lines_and_its_length() {
         role: Role::User,
         text,
         reasoning: None,
+        timing: Default::default(),
     });
 
     let rendered: Vec<String> = lines

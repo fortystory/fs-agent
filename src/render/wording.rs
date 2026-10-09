@@ -456,6 +456,157 @@ pub fn detail_footer(position: usize, total: usize) -> String {
     format!("↕ {position}/{total} · esc 关闭")
 }
 
+// ---------------------------------------------------------------------------
+// 详情覆盖层的面：标签条上的面名、计时面、概述面
+// （`.scratch/trace-ledger/spec.md` §6，票 13）
+// ---------------------------------------------------------------------------
+
+/// 一面拿不到的那个数怎么写。**不填 0、不写占位符**：没有的数就说没有，理由写在
+/// 同一行的「计时来源」里（票 13 第 6 条）。
+pub const UNAVAILABLE: &str = "不可用";
+
+/// 计时面那一行的行首词。
+pub const TIMING_STARTED: &str = "开始时刻";
+pub const TIMING_TOTAL: &str = "总时长";
+pub const TIMING_FIRST_TOKEN: &str = "首 token";
+pub const TIMING_GENERATED: &str = "生成";
+pub const TIMING_THROUGHPUT: &str = "吞吐";
+pub const TIMING_APPROVAL: &str = "其中等审批";
+pub const TIMING_SOURCE: &str = "计时来源";
+
+/// 计时面「计时」那两个字的另一处出现：它是标签条上的一面名。
+pub fn detail_timing_face() -> &'static str {
+    "计时"
+}
+
+/// 概述面的面名，也是标签条上最后一格。
+pub fn detail_summary_face() -> &'static str {
+    "概述"
+}
+
+/// 计时面里「这一面有两节」时那两节的小标题。一节的时候不画 —— 它只是把面名重复一遍
+/// （票 13 第 9 条）。
+pub fn timing_call_section() -> &'static str {
+    "这次模型调用"
+}
+
+pub fn timing_tool_section() -> &'static str {
+    "这次工具调用"
+}
+
+/// 那次调用没有问过权限时的写法。这不是「拿不到」，是**没问过** —— 一次没等待的调用
+/// 报 0 秒会把「没等」与「等了一瞬间」混成一样（票 13 第 6 条）。
+pub fn timing_no_approval() -> &'static str {
+    "没有等待审批"
+}
+
+/// 「这次模型调用」那一节末尾那一行：这些数是**哪两个时刻相减**，以及那几个量为什么不在。
+///
+/// `span` 说这次调用的起点与终点都拿得到（`TurnStarted.at` 与 `MessageCompleted.at`），
+/// `first_token` 说流上带着首 token 时刻。两个都不在时这一句还要说清原因 —— 写在同一行，
+/// 不另起一句（票 13 第 6 条）。
+pub fn timing_source_call(span: bool, first_token: bool) -> String {
+    let span = if span {
+        "TurnStarted.at → MessageCompleted.at"
+    } else {
+        "拿不到这次调用的起点与终点"
+    };
+    let first = if first_token {
+        "首 token 是 MessageCompleted.first_token_ms"
+    } else {
+        "这条流上没有 first_token_ms，首 token / 生成 / 吞吐 不可用"
+    };
+    format!("{span}；{first}")
+}
+
+/// 「这次工具调用」那一节末尾那一行。
+pub fn timing_source_tool() -> &'static str {
+    "ToolCallStarted.at → ToolCallCompleted.at"
+}
+
+/// 工具那两个口径并排出现时那句话：总跨度与等审批是**两个**数，不是一个数拆出来的两段。
+pub fn timing_two_measures() -> &'static str {
+    "两个口径，不是两个可相加的数"
+}
+
+/// 吞吐的写法：输出 token 除以生成时长，两个分子分母都摊开，好让读的人自己复核。
+pub fn timing_throughput(tokens: u64, generated_ms: u64) -> String {
+    let seconds = generated_ms as f64 / 1000.0;
+    let rate = (tokens as f64 / seconds).round() as u64;
+    format!(
+        "{rate} token/s（输出 {tokens} ÷ {}）",
+        duration_text(generated_ms)
+    )
+}
+
+/// 时钟读数：行首那九列用的写法（本地时区、秒）。
+pub fn clock(at: DateTime<Utc>) -> String {
+    at.with_timezone(&chrono::Local)
+        .format("%H:%M:%S")
+        .to_string()
+}
+
+/// 带毫秒的时钟读数 —— 计时面要的是**精确值**：一次调用的起点与终点常常落在同一秒里，
+/// 只读秒会把两秒之间的一切读成 0（票 13 第 6 条）。
+pub fn clock_ms(at: DateTime<Utc>) -> String {
+    at.with_timezone(&chrono::Local)
+        .format("%H:%M:%S.%3f")
+        .to_string()
+}
+
+/// 一次工具有没有做成。概述面那一行里的「是什么」按它写（票 13 第 7 条）。
+pub fn tool_ok() -> &'static str {
+    "成功"
+}
+
+/// 一次调用还没有结果时概述面里的那个词 —— 与行上那句 `失败` 同一档的短词。
+pub fn tool_pending() -> &'static str {
+    "没有结果"
+}
+
+/// 概述面里「多长」的那一段：一段文字有多少字。
+pub fn summary_length(chars: usize) -> String {
+    format!("{chars} 字")
+}
+
+/// 概述面里一条消息「是什么」。
+pub fn summary_message() -> &'static str {
+    "一条消息"
+}
+
+/// 概述面里一段思考「是什么」。
+pub fn summary_thinking() -> &'static str {
+    "一段思考"
+}
+
+/// 概述面里一条不属于任何一面的记录「是什么」。单面那四种没有概述面，所以这是一句兜底 ——
+/// 说得比编一句具体的话更诚实。
+pub fn summary_record() -> &'static str {
+    "一条记录"
+}
+
+/// 概述面里一次工具调用「是什么」：工具名加成败。
+pub fn tool_call_summary(tool: &str, outcome: &str) -> String {
+    format!("一次 {tool} 调用 · {outcome}")
+}
+
+/// 概述面那一行：**是什么 · 多长 · 什么时候 · 谁说的**（票 13 第 7 条）。
+///
+/// 四段里拿不到的那几段整个不画 —— 它是一句摘要，不是一个读数面，所以那里不放
+/// `不可用`（那是计时面的事）。
+pub fn summary_row(
+    what: &str,
+    length: Option<String>,
+    at: Option<DateTime<Utc>>,
+    who: Option<&str>,
+) -> String {
+    let mut parts = vec![what.to_owned()];
+    parts.extend(length);
+    parts.extend(at.map(clock));
+    parts.extend(who.map(str::to_owned));
+    parts.join(" · ")
+}
+
 /// 一次工具调用的**描述**：这次调用是干什么的，替代它那一行生参数。
 ///
 /// 转录显示 `{label} 调用 {tool} {description}`；具体的参数与整条输出住在这次调用的
@@ -1921,7 +2072,8 @@ pub const TAB_TRACE: &str = "轨迹";
 ///
 /// 时刻本身来自产生这个块的那条事件的 `at`，所以 `--continue` 重放出来的是当初那一刻。
 pub fn stamp(at: DateTime<Utc>) -> String {
-    format!("{} ", at.with_timezone(&chrono::Local).format("%H:%M:%S"))
+    // 与计时面那个 [`clock`] 同一处格式：行首那九列与详情里的读数写的必须是同一个时刻。
+    format!("{} ", clock(at))
 }
 
 // ---------------------------------------------------------------------------

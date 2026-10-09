@@ -323,6 +323,7 @@ fn the_sidebar_shows_the_id_before_the_content() {
             ("没有 id 的一件", "pending", None),
         ]),
         outcome: None,
+        timing: Default::default(),
     })));
 
     let rows: Vec<String> = panel
@@ -582,6 +583,7 @@ fn an_item_wraps_and_the_page_says_what_never_got_shown() {
             ("还没露过面的一条", "pending", None),
         ]),
         outcome: None,
+        timing: Default::default(),
     })));
 
     // 四行页区：前缀五列之后内容只剩 23 列，所以那 30 个字折三行，而页区放不下三行。
@@ -617,6 +619,7 @@ fn a_page_with_no_list_says_so_instead_of_showing_a_zero() {
         tool: TODO_TOOL.to_owned(),
         args: items_of(&[("一件事", "pending")]),
         outcome: None,
+        timing: Default::default(),
     })));
     panel.observe(&Block::Tool(Box::new(ToolBlock {
         speaker: SpeakerId::Debater("kimi".into()),
@@ -624,6 +627,7 @@ fn a_page_with_no_list_says_so_instead_of_showing_a_zero() {
         tool: TODO_TOOL.to_owned(),
         args: serde_json::json!({ "items": [] }),
         outcome: None,
+        timing: Default::default(),
     })));
 
     let rows: Vec<String> = panel
@@ -652,6 +656,7 @@ fn a_two_row_page_is_the_progress_line_and_the_overflow_alone() {
         tool: TODO_TOOL.to_owned(),
         args: items_of(&[("一条", "pending"), ("另一条", "pending")]),
         outcome: None,
+        timing: Default::default(),
     })));
 
     let rows: Vec<String> = panel
@@ -705,6 +710,7 @@ async fn a_real_session_keeps_the_id_in_the_arguments_and_the_sidebar_reads_it_b
         tool: TODO_TOOL.to_owned(),
         args: started,
         outcome: None,
+        timing: Default::default(),
     })));
     let rows: Vec<String> = panel
         .lines(Rect::new(0, 0, 28, 4))

@@ -1,7 +1,7 @@
 # 13 — 首 token 时刻落流，详情覆盖层分成面（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: —
 
@@ -60,17 +60,77 @@ Blocked by: —
 
 ## 验收
 
-- [ ] 一次有增量的模型调用在日志里带上首 token 时刻；用户消息那一条不带。
-- [ ] 一条没有该字段的老流读成「不可用」，`sessions replay` / `--continue` / `sessions show` 照旧。
-- [ ] 点一行工具调用：详情顶上出现标签条，`Tab` / `Shift+Tab` 与点标签都能切面。
-- [ ] 切换到计时面能读到开始时刻 / 总时长 / 首 token / 生成 / 吞吐，末行写清计时来源。
-- [ ] 老会话上那三项写 `不可用`（不是 0、不是空白）。
-- [ ] 票 12 未落地时计时面只出现「这次工具调用」一节，不出现空的「这次模型调用」。
-- [ ] 面数 ≤ 1 的详情**不画**标签条，且与今天逐字相同。
-- [ ] 各面各记自己的滚动位置：切走再切回来还在原处。
-- [ ] 覆盖层尺寸与今天完全一致（100×30 仍是 92×26）；页脚仍是那一对数加 `esc 关闭`。
-- [ ] 分派表是一个可测的常量，测试断言每种记录的面集合等于表里那一行。
-- [ ] `cargo test` 全绿、`cargo clippy` 干净、`cargo fmt --check` 只留既有漂移。
+- [x] 一次有增量的模型调用在日志里带上首 token 时刻；用户消息那一条不带
+      （产出点在上一阶段落的 `src/agent.rs`；落盘与读回由
+      `the_first_token_field_survives_a_round_trip_through_the_log` 钉住）。
+- [x] 一条没有该字段的老流读成「不可用」，`sessions replay` / `--continue` / `sessions show` 照旧
+      （`a_message_completed_without_the_first_token_field_reads_as_none`、
+      `a_stream_written_before_the_field_is_readable_unchanged`，重放那几条在 `tests/history_replay.rs`）。
+- [x] 点一行工具调用：详情顶上出现标签条，`Tab` / `Shift+Tab` 与点标签都能切面
+      （`the_label_bar_borrows_a_body_row_without_touching_the_box`、
+      `a_message_detail_walks_its_faces_with_the_tab_key`、`clicking_a_label_switches_the_face`）。
+- [x] 切换到计时面能读到开始时刻 / 总时长 / 首 token / 生成 / 吞吐，末行写清计时来源
+      （`the_timing_face_reads_the_numbers_off_this_call`）。
+- [x] 老会话上那三项写 `不可用`（不是 0、不是空白）
+      （`an_old_stream_reports_the_three_numbers_as_unavailable`、
+      `a_stream_without_a_first_token_says_unavailable_instead_of_zero`）。
+- [x] 票 12 未落地时计时面只出现「这次工具调用」一节，不出现空的「这次模型调用」
+      （`a_tool_timing_face_only_shows_the_section_it_can_prove`、
+      `the_tool_timing_face_shows_only_the_section_it_can_prove`）。
+- [x] 面数 ≤ 1 的详情**不画**标签条，且与今天逐字相同
+      （`a_detail_with_one_face_draws_no_bar_at_all`、`a_single_face_detail_keeps_todays_body_verbatim`）。
+- [x] 各面各记自己的滚动位置：切走再切回来还在原处（`each_face_keeps_its_own_scroll_position`）。
+- [x] 覆盖层尺寸与今天完全一致（100×30 是 **96×26** —— 票面与 spec §6 那个 `92` 是旧数字，
+      见落地记录）；页脚仍是那一对数加 `esc 关闭`（`the_label_bar_borrows_a_body_row_without_touching_the_box`）。
+- [x] 分派表是一个可测的常量，测试断言每种记录的面集合等于表里那一行
+      （`every_record_kind_gets_the_faces_the_table_names`）。
+- [x] `cargo test` 全绿、`cargo clippy` 与基线逐条相同、`cargo fmt --check` 干净。
+
+## 落地记录
+
+**2026-10-10 落地（面那一半，事件侧见下面的阶段记录）。**
+
+**落点**：`src/render/transcript.rs`（`CallTiming` / `ToolTiming` 两个共享层的计时，
+`Block::Message` 与 `ToolBlock` 各多带一份 —— 两个渲染器都忽略它们）、`src/render/tui.rs`
+（`RecordKind` / `FaceId` / `DETAIL_FACES` 那张分派表、`Section` / `Face`、`DetailView` 与
+`detail_face_to` / `detail_face_cycle`、`draw_detail` 里的标签条与逐面滚动、计时面与概述面）、
+`src/render/wording.rs`（面名、计时面各行的词、概述行、`clock_ms`）、`src/render/mod.rs`（多导出
+两个计时类型）、`src/render/plain.rs`（新字段不画一个字）。测试：`tests/render_layout.rs`（八条
+新的面断言）、`tests/history_replay.rs`、`tests/render_tui.rs`、`tests/todo.rs` 的构造点。
+
+### 与票面 / 规格不同的地方
+
+1. **覆盖层尺寸是 96×26，不是 92×26。** 票面与 `spec.md` §6 都写「100×30 仍是 92×26」，而
+   实测（`plan(100×30).detail()`）是 `x = 2, y = 2, 宽 96, 高 26`：宽度 = `100 − MODAL_MARGIN(4)`、
+   `left = (100 − 96) / 2`、高度 = `30 − (BORDER_COLUMNS + DETAIL_MARGIN_ROWS)`、`top = (30 − 26) / 2`。
+   `src/render/layout.rs` 在这次改动里**零 diff**（`git diff HEAD -- src/render/layout.rs` 为空），
+   而 `MODAL_MARGIN` 一直是 4、`DETAIL_MAX_WIDTH` 是 135 —— 那两处算术今天就是这几个数，所以
+   **92 是旧数字**（`spec.md` 的正文按纪律不动）。验收与测试钉的是今天实测量的 96×26。
+2. **降级那一节不画小节标题，于是「这次工具调用」这五个字不在屏幕上。** 第 6 条说工具计时面
+   「只出现『这次工具调用』一节」，而第 9 条说小节标题只在这一面 ≥ 2 节时画 —— 两条相乘的结果是：
+   那一面**只有它那一节的内容**（开始时刻 / 总时长 / 其中等审批 / 计时来源），标题不出现。
+   所以集成测试的判据是「不出现空的『这次模型调用』」而不是「出现『这次工具调用』」——
+   后者要等票 14 把「这次模型调用」那一节补进来（那时才有两节、才画标题）。
+3. **等审批那一段的两个档**：`approval_ms` 为 `None`（这次调用根本没问过权限）写
+   `没有等待审批`；问过而两个时刻相同写 `0.0 s · 两个口径，不是两个可相加的数` —— 那是**真读数**，
+   不是拿 0 顶上去（`0.0 s` 那两个时刻确实在同一毫秒里）。「不填 0」那条纪律只针对
+   拿不到的首 token / 生成 / 吞吐三项。
+4. **五条断言的判据订正**：这一票的测试里有五条当初写的判据与实现的算术不符（覆盖层按旧数字
+   断言 92、切面后按「整屏没有那句正文」断言、老流按「整屏出现三次不可用」计数、工具计时面按
+   「没有等待审批」断言、滚动按「第 100 行可见」断言）。逐条核实后**改的是断言**，不是实现：
+   前三条是判据写偏（底下那条转录行本来就写着同一句正文；计时来源那一行里也有「不可用」；
+   票面那个 92 是旧数字），第四条是场景与断言不符（测试构造的是**问过**的权限，而那句话是
+   「没问过」的写法），第五条是「一次 `PageDown` 滚多少」按实测几何重新算（见下）。实现一侧
+   没有为了这几条改动过。
+
+### 落地时算清楚的两个数（写在这里免得下次再采一遍）
+
+- **120×40 下主体 29 行**：覆盖层 36 = 40 − 4；框内 34 = 36 − 2；除掉上下内边距 32；带标签条时
+  主体 = 32 − 3 = 29（标题一行、标签条一行、页脚一行）。于是 `PageDown` 一次 28 行（一页减一行
+  重叠），200 行的输出滚 5 次落在第 141 行。
+- **`DetailView.height` 是上一帧写回的数**：测试里两次按键之间不画帧时它还是 0（那一帧才量出
+  主体高度），所以按真实按键序列在滚动前先渲染一帧。
+
 ## 阶段记录
 
 ### 2026-10-09 傍晚：事件侧落地（`Status` 仍是 `ready-for-agent`）

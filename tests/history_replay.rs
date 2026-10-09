@@ -288,6 +288,15 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
         .map(|row| row as u16)
 }
 
+/// 工具详情顶上那条标签条上的四个面名 —— 它同时是「覆盖层立着、正落在**参数**那一面」
+/// 的判据（票 13 第 5 条），而今天那块正文里的小节标题 `── 参数 ──` 不再画了。
+const TOOL_FACES: &str = "参数┆输出┆计时┆概述";
+
+/// 切到下一面（`Tab`）—— 那些输出正文住在「输出」那一面上，而打开时落在「参数」。
+fn next_face(state: &mut TuiState) {
+    state.key(Key::Tab);
+}
+
 /// 一次左键**按下**与它的抬起：点击动作发生在**抬起**上
 /// （`.scratch/tui-feedback/spec.md` §5 —— 拖选正是这样拦下它的）。
 fn mouse_event(
@@ -904,8 +913,8 @@ fn a_history_tool_line_opens_the_same_detail_overlay() {
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
-        text.contains("── 参数 ──"),
-        "覆盖层开在那条历史行上：{text}"
+        text.contains(TOOL_FACES),
+        "覆盖层开在那条历史行上、落在参数那一面：{text}"
     );
     assert!(text.contains("\"command\""), "带着参数：{text}");
 }
@@ -981,6 +990,7 @@ fn a_history_detail_reads_the_spilled_tool_output() {
     open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("with a second line the preview never carried"),
@@ -1003,6 +1013,7 @@ fn a_history_detail_degrades_when_the_spilled_file_is_gone() {
     open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("head of the output"), "预览：{text}");
     assert!(text.contains("全文不可用"), "降级：{text}");
@@ -1024,6 +1035,7 @@ fn a_history_detail_degrades_when_the_spilled_file_is_empty() {
     open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("head of the output"), "预览：{text}");
     assert!(text.contains("全文不可用"), "降级：{text}");
@@ -1053,6 +1065,7 @@ fn a_history_result_without_the_truncation_note_is_its_own_full_text() {
     open_trace_tab(&mut state, 120, 40);
 
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("interrupted while this call was in flight"),
@@ -1084,7 +1097,7 @@ fn the_divider_and_section_lines_are_not_clickable() {
     click(&mut state, 10, seam as u16);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
-        !text.contains("── 参数 ──") && !text.contains("── 推理 ──"),
+        !text.contains(TOOL_FACES) && !text.contains("── 推理 ──"),
         "点接缝什么都不开：{text}"
     );
 }
@@ -1107,9 +1120,7 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
 
     click_row(&mut state, 120, 40, "调用 bash");
     assert!(
-        screen(120, 40, &mut state)
-            .join("\n")
-            .contains("── 参数 ──"),
+        screen(120, 40, &mut state).join("\n").contains(TOOL_FACES),
         "历史详情是开着的"
     );
 
@@ -1117,7 +1128,7 @@ fn a_history_detail_freezes_the_viewport_and_releases_it() {
     state.live_event(RenderEvent::notice("历史详情打开时的新内容".to_owned()));
     let frozen = screen(120, 40, &mut state);
     assert!(
-        frozen.iter().any(|row| row.contains("── 参数 ──")),
+        frozen.iter().any(|row| row.contains(TOOL_FACES)),
         "正在读的仍然是那个覆盖层：{frozen:?}"
     );
 

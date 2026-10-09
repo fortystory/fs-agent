@@ -63,7 +63,7 @@ pub use input::{
 pub use plain::{Plain, PlainOptions};
 pub use severity::Severity;
 pub use todo::TodoPanel;
-pub use transcript::{Block, ToolBlock, ToolOutcome, Transcript};
+pub use transcript::{Block, CallTiming, ToolBlock, ToolOutcome, ToolTiming, Transcript};
 pub use tui::{
     Key, SessionFacts, SpeakerColors, TOKEN_COMMAND, TOKEN_REFERENCE, Tui, TuiOptions, TuiState,
     draw_frame, paint_frame, render_block, render_block_uncoloured,

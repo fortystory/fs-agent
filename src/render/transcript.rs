@@ -10,6 +10,7 @@
 //! * **增量文本原样透传。** 增量绕过事件流，所以事后无法重新推出来；转录把它们转发
 //!   过去，好让渲染器在它们到达时就画。
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::events::{
@@ -40,6 +41,9 @@ pub enum Block {
         /// 而事件流没有单独的推理事件 —— 所以转录那条「思考结束」的行就是把它留给详情
         /// 视图的（票 02 §1）。
         reasoning: Option<String>,
+        /// 这条消息出自的那次模型调用的计时。用户自己那条消息不是一次调用，于是它是空的
+        /// （票 13 第 6 条）。
+        timing: CallTiming,
     },
     /// 用户对一次 `ask_user_question` 的作答：**他说的那一档**，但它不是流上的一条 `user`
     /// 消息（`.scratch/ui-trim/spec.md`）。
@@ -183,6 +187,8 @@ pub struct ToolBlock {
     pub tool: String,
     pub args: Value,
     pub outcome: Option<ToolOutcome>,
+    /// 这次调用自己的那两个时刻。详情里「这次工具调用」那一节读它（票 13 第 6 条）。
+    pub timing: ToolTiming,
 }
 
 /// 一次完成（或被放弃）的工具调用产出了什么。
@@ -194,6 +200,40 @@ pub struct ToolOutcome {
     pub duration_ms: u64,
 }
 
+/// 一次工具调用的计时 —— 详情里「这次工具调用」那一节的全部输入。
+///
+/// 它是**两个口径**中的第二个：`ToolOutcome.duration_ms` 是这次调用自己的墙钟（含钩子、权限
+/// 与排队），而这里等审批那一段是它的一个切分。两者并排读可以，相加不行
+/// （`.scratch/trace-ledger/issues/06-grilling-timeline.md` §7）。
+///
+/// 两样都是可选的：流上没记下开始时刻的调用（一条没有配对开始的孤立结果）没有起点，
+/// 没有问过权限的那次调用没有等审批那一段。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ToolTiming {
+    /// 这次调用是什么时候起的：它的 `ToolCallStarted.at`。
+    pub started_at: Option<DateTime<Utc>>,
+    /// 等审批那一段的长度：`PermissionAsked.at` → `PermissionDecided.at`。
+    pub approval_ms: Option<u64>,
+}
+
+/// 一次模型调用的计时 —— 详情里「这次模型调用」那一节的全部输入
+/// （[ADR 0020](../../../docs/adr/0020-first-token-time-rides-the-completion.md)）。
+///
+/// 起点与终点都是**事件信封的时刻**（这次调用的 `TurnStarted.at` 与 `MessageCompleted.at`），
+/// 首 token 那一段是那个可选字段，吞吐的分子是这一次调用报出来的输出 token。四样都可选：
+/// 拿不到的东西不写数字（票 13 第 6 条）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CallTiming {
+    /// 这次调用从哪儿开始。
+    pub started_at: Option<DateTime<Utc>>,
+    /// 这次调用在哪儿结束（那条 `MessageCompleted` 的时刻）。
+    pub completed_at: Option<DateTime<Utc>>,
+    /// 首个增量 token 距起点多少毫秒（`MessageCompleted.first_token_ms`）。
+    pub first_token_ms: Option<u64>,
+    /// 这次调用报出来的输出 token 数 —— 吞吐的分子。
+    pub output_tokens: Option<u64>,
+}
+
 /// 那个增量的「事件转块」状态机。
 #[derive(Debug, Default)]
 pub struct Transcript {
@@ -201,6 +241,12 @@ pub struct Transcript {
     /// 一次调用已经画出来了，而它的后置 hook —— 那个不带 `tool_call_id` 的 —— 可能还在
     /// 路上。下一个到达的后置 hook 批注的就是那次调用。
     awaiting_hook: bool,
+    /// 正在进行的这次模型调用：起点与到此刻为止报出来的输出 token。那条 `MessageCompleted`
+    /// 到达时把两者一起冻进它的计时里（ADR 0020）。
+    call: CallTiming,
+    /// 这次工具调用是什么时候问的权限。与 `PermissionDecided` 相减就是等审批那一段，
+    /// 而它只在这一对之间活着。
+    approval_asked_at: Option<DateTime<Utc>>,
 }
 
 impl Transcript {
@@ -313,12 +359,17 @@ impl Transcript {
             } => {
                 // 一次新调用顶掉上一条仍在期待中的反馈。
                 self.awaiting_hook = false;
+                self.approval_asked_at = None;
                 self.pending_tool = Some(ToolBlock {
                     speaker,
                     tool_call_id,
                     tool: tool_name,
                     args,
                     outcome: None,
+                    timing: ToolTiming {
+                        started_at: Some(event.at),
+                        approval_ms: None,
+                    },
                 });
                 return blocks;
             }
@@ -364,6 +415,8 @@ impl Transcript {
                         error,
                         duration_ms,
                     }),
+                    // 没有配对的那条开始，于是没有起点可报 —— 不编一个。
+                    timing: ToolTiming::default(),
                 })));
                 return blocks;
             }
@@ -371,15 +424,28 @@ impl Transcript {
                 role,
                 text,
                 reasoning,
-                // 首 token 时刻不进块：它属于**计时**，而计时由详情覆盖层的计时面读
-                // （ADR 0020）。转录这一层要的是「这一条说了什么」。
-                ..
+                first_token_ms,
             } => {
+                // 一次模型调用在哪一刻结束、等了多久才吐第一个字、报了多少输出 token ——
+                // 三样都从这里冻进这条消息。**用户自己那条**不是一次调用（它没有
+                // `TurnStarted` 配它），于是拿到一份空的计时，计时面照实说「拿不到」。
+                let timing = match role {
+                    Role::Assistant => CallTiming {
+                        completed_at: Some(event.at),
+                        first_token_ms,
+                        ..self.call
+                    },
+                    _ => CallTiming::default(),
+                };
+                if matches!(role, Role::Assistant) {
+                    self.call = CallTiming::default();
+                }
                 blocks.push(Block::Message {
                     speaker,
                     role,
                     text,
                     reasoning,
+                    timing,
                 });
             }
             EventPayload::RoundStarted { round, mode } => {
@@ -394,12 +460,26 @@ impl Transcript {
                 blocks.push(Block::Divergence { topic, positions });
             }
             EventPayload::TurnStarted { iteration, .. } => {
+                // 每一次迭代 = 一次模型调用 = 一笔计时：起点在这里，用量随后到，终点那条
+                // `MessageCompleted` 收尾（ADR 0020）。
+                self.call = CallTiming {
+                    started_at: Some(event.at),
+                    ..CallTiming::default()
+                };
                 blocks.push(Block::TurnStarted { speaker, iteration });
             }
             EventPayload::TurnEnded { reason } => {
+                // 一次调用没有终点事件就到了这儿（被取消、报错）：那份计时不再属于任何人 ——
+                // 留着它只会让下一条消息顶着上一个回合的起点（合成器那条就是这样）。
+                self.call = CallTiming::default();
                 blocks.push(Block::TurnEnded { speaker, reason });
             }
             EventPayload::PermissionAsked { request, .. } => {
+                // 等审批那一段的起点。它对的是**这一次**调用 —— `pending_tool` 正开着
+                // （票 13 第 6 条）。
+                if self.pending_tool.is_some() {
+                    self.approval_asked_at = Some(event.at);
+                }
                 blocks.push(Block::PermissionAsked {
                     speaker,
                     tool_name: crate::events::permission_format::tool_name(&request)
@@ -415,6 +495,17 @@ impl Transcript {
                 reason,
                 ..
             } => {
+                if let (Some(asked), Some(tool)) =
+                    (self.approval_asked_at.take(), self.pending_tool.as_mut())
+                {
+                    tool.timing.approval_ms = Some(
+                        event
+                            .at
+                            .signed_duration_since(asked)
+                            .num_milliseconds()
+                            .max(0) as u64,
+                    );
+                }
                 blocks.push(Block::PermissionDecided {
                     speaker,
                     decision,
@@ -447,6 +538,14 @@ impl Transcript {
                 });
             }
             EventPayload::UsageRecorded { usage } => {
+                // 一笔用量落在**产生它的那次调用**上（ADR 0016）：这里攒着，等那条
+                // `MessageCompleted` 把它冻进计时 —— 吞吐的分子就是它（ADR 0020）。
+                self.call.output_tokens = Some(
+                    self.call
+                        .output_tokens
+                        .unwrap_or(0)
+                        .saturating_add(usage.output_tokens),
+                );
                 blocks.push(Block::Usage { speaker, usage });
             }
             EventPayload::AgentError { message, .. } => {

@@ -123,6 +123,20 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
+/// 详情覆盖层顶上那条标签条上的那几个面名 —— 它们连成一串，就是那一行。
+///
+/// 它同时是「覆盖层立着、正落在**默认面**上」的判据：工具落在**参数**、消息落在**正文**
+/// （票 13 第 5 条）。今天那块正文里的小节标题 `── 参数 ──` 不再画了 —— 面名由标签条说，
+/// 正文不重复它（票 13 第 9 条）。
+const TOOL_FACES: &str = "参数┆输出┆计时┆概述";
+const MESSAGE_FACES: &str = "正文┆计时┆概述";
+const THINKING_FACES: &str = "思考┆计时┆概述";
+
+/// 切到下一面：覆盖层立着时 `Tab` 是空键，于是它归标签条（票 13 第 3 条）。
+fn next_face(state: &mut TuiState) {
+    state.key(Key::Tab);
+}
+
 #[test]
 fn a_terminal_below_the_minimum_shows_one_centred_notice() {
     // 39x24 比下限少一列；40x9 少一行。两种都只画
@@ -462,7 +476,7 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
     click_row(&mut state, 120, 40, "调用 bash");
     let open = screen(120, 40, &mut state);
     assert!(
-        open.join("\n").contains("── 参数 ──"),
+        open.join("\n").contains(TOOL_FACES),
         "覆盖层立着：{}",
         open.join("\n")
     );
@@ -470,7 +484,7 @@ fn ctrl_o_is_ignored_while_the_detail_overlay_is_up() {
     state.key(Key::CtrlO);
     let after = screen(120, 40, &mut state);
     assert_eq!(open, after, "覆盖层立着时 Ctrl-O 一个像素都不动");
-    assert!(after.join("\n").contains("── 参数 ──"), "覆盖层也没被关掉");
+    assert!(after.join("\n").contains(TOOL_FACES), "覆盖层也没被关掉");
 }
 
 #[test]
@@ -1226,7 +1240,7 @@ fn a_message_in_the_conversation_is_not_an_entry() {
         let (column, row) = cell_of(&frame, 120, 24, needle).expect("在屏幕上");
         click(&mut state, column, row);
         let text = screen(120, 24, &mut state).join("\n");
-        assert!(!text.contains("── 正文 ──"), "点 {needle} 不弹窗：{text}");
+        assert!(!text.contains(MESSAGE_FACES), "点 {needle} 不弹窗：{text}");
     }
 
     // 轨迹页那一侧一个字没改：点它的消息行照旧开全文。
@@ -1298,7 +1312,7 @@ fn dragging_across_the_transcript_highlights_it_and_swallows_the_click() {
     // 抬起：那一次点击被拖选拦下（正文详情不开），反白跟着走掉。
     state.mouse(release(column + 4, row + 1));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(!text.contains("── 正文 ──"), "拖选不吃成一次点击：{text}");
+    assert!(!text.contains(MESSAGE_FACES), "拖选不吃成一次点击：{text}");
     let frame = buffer(120, 24, &mut state);
     assert!(
         !frame[(column, row)].modifier.contains(Modifier::REVERSED),
@@ -1353,7 +1367,7 @@ fn a_press_and_release_without_a_drag_is_still_a_click() {
     state.mouse(press(column, row));
     state.mouse(release(column, row));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "没拖动就是一次点击：{text}");
+    assert!(text.contains(MESSAGE_FACES), "没拖动就是一次点击：{text}");
 }
 
 /// 在主列页签上按住拖开、再松开：页签**不**切。
@@ -1383,7 +1397,7 @@ fn a_drag_inside_the_detail_overlay_selects_instead_of_closing_it() {
     let (column, row) = cell_of(&frame, 120, 24, "第一段正文").expect("轨迹页上那行消息");
     click(&mut state, column, row);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
+    assert!(text.contains(MESSAGE_FACES), "详情开着：{text}");
 
     // 覆盖层里那一行正文：拖过两格。
     let frame = buffer(120, 24, &mut state);
@@ -1392,7 +1406,7 @@ fn a_drag_inside_the_detail_overlay_selects_instead_of_closing_it() {
     state.mouse(drag_to(column + 2, row));
     state.mouse(release(column + 2, row));
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "覆盖层还开着：{text}");
+    assert!(text.contains(MESSAGE_FACES), "覆盖层还开着：{text}");
 }
 
 #[test]
@@ -4317,6 +4331,7 @@ fn a_page_one_row_tall_degrades_to_the_progress_line_alone() {
             error: None,
             duration_ms: 1,
         }),
+        timing: Default::default(),
     })));
 
     let lines = panel.lines(Rect::new(0, 0, 28, 1));
@@ -6355,15 +6370,19 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
     // 那是下一个测试的主题。
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "参数那一节：{text}");
-    assert!(text.contains("── 输出 ──"), "输出那一节：{text}");
+    assert!(text.contains(TOOL_FACES), "顶上那句标签列着这几面：{text}");
+    assert!(text.contains("\"command\""), "打开时落在参数那一面：{text}");
+
+    // 输出那一面要按一下 `Tab`：它就是这次调用产出了什么（票 13 第 3 条）。
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("alpha"), "整段输出：{text}");
     assert!(text.contains("esc 关闭"), "页脚点出出口：{text}");
 
     // Esc 关上它，转录回来了。
     state.key(Key::Esc);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains("── 参数 ──"), "Esc 关上覆盖层：{text}");
+    assert!(!text.contains(TOOL_FACES), "Esc 关上覆盖层：{text}");
     assert!(
         text.contains("调用 bash"),
         "它打开时所在的那一行还在：{text}"
@@ -6387,6 +6406,8 @@ fn the_detail_body_is_wrapped_to_the_real_text_width() {
     state.apply(tool_completed(2, "call-wide", true, Some(&long), None));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
+    // 那一段长正文在「输出」那一面上（打开时落在「参数」）。
+    next_face(&mut state);
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
@@ -6415,9 +6436,10 @@ fn the_detail_body_scrolls_with_the_keys_and_the_wheel() {
 
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
-    // 正文从顶部开始，40 行时那儿是参数那一节。
+    // 那 40 行输出在「输出」那一面上，而它从顶部开始。
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "正文从顶部开始：{text}");
+    assert!(text.contains("输出第 0 行"), "正文从顶部开始：{text}");
 
     // 用翻页键一路走到最底下，然后单个箭头往回挪一行：
     // 箭头和翻页作用在同一段正文上。
@@ -6487,6 +6509,8 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
 
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
+    // 落盘全文在「输出」那一面上。
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
         text.contains("with a second line the preview never carried"),
@@ -6518,6 +6542,7 @@ fn a_missing_spilled_file_degrades_to_the_preview() {
 
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("head of the output"), "预览：{text}");
     assert!(text.contains("全文不可用"), "降级被说出来了：{text}");
@@ -6542,10 +6567,7 @@ fn a_question_in_the_way_keeps_the_collapsed_lines_unclickable() {
     state.request(ask_permission().0);
     click(&mut state, 20, row);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        !text.contains("── 参数 ──"),
-        "详情没有在问句上面打开：{text}"
-    );
+    assert!(!text.contains(TOOL_FACES), "详情没有在问句上面打开：{text}");
     assert!(text.contains("权限询问"), "而屏幕上还是那个问句：{text}");
 }
 
@@ -7400,7 +7422,7 @@ fn the_detail_overlay_freezes_the_transcript() {
     let _ = screen(120, 24, &mut state);
     click_row(&mut state, 120, 24, "被点开的消息");
     let before = screen(120, 24, &mut state);
-    assert!(before.join("\n").contains("── 正文 ──"), "覆盖层起来了");
+    assert!(before.join("\n").contains(MESSAGE_FACES), "覆盖层起来了");
     let frozen = transcript_text(&buffer(120, 24, &mut state), transcript_rows(&before));
 
     // 覆盖层开着的时候有新输出到来。
@@ -7437,11 +7459,11 @@ fn a_question_closes_the_detail_overlay_instead_of_stacking_on_it() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
+    assert!(text.contains(TOOL_FACES), "覆盖层打开了：{text}");
 
     state.request(ask_permission().0);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains("── 参数 ──"), "覆盖层为问句让了位：{text}");
+    assert!(!text.contains(TOOL_FACES), "覆盖层为问句让了位：{text}");
     assert!(text.contains("权限询问"), "而问句起来了：{text}");
 }
 
@@ -7556,12 +7578,12 @@ fn ctrl_d_closes_the_detail_overlay() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
+    assert!(text.contains(TOOL_FACES), "覆盖层打开了：{text}");
 
     state.key(Key::CtrlD);
     assert!(!state.should_quit(), "关上不是退出");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains("── 参数 ──"), "覆盖层关上了：{text}");
+    assert!(!text.contains(TOOL_FACES), "覆盖层关上了：{text}");
 }
 
 #[test]
@@ -7646,7 +7668,7 @@ fn the_detail_overlay_ignores_every_key_but_its_own() {
     assert!(!state.should_quit(), "Ctrl-C 不会从覆盖层里退出");
     assert!(state.take_events().is_empty(), "也不会取消任何东西");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "覆盖层还开着：{text}");
+    assert!(text.contains(TOOL_FACES), "覆盖层还开着：{text}");
 
     // `Ctrl-Z` 是那个「别的全部忽略」的唯一例外：挂起是终端层手势，不属于任何一个视图的
     // 键位表，所以覆盖层立着也拦不住它（`.scratch/suspend-gesture/spec.md` §2）。
@@ -7832,13 +7854,13 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "覆盖层打开了：{text}");
+    assert!(text.contains(TOOL_FACES), "覆盖层打开了：{text}");
 
     // 外面：覆盖层在屏幕上留出的上边距（第 0 行）——整圈框都是关闭目标，
     // 而这里的覆盖层压住了它下面几乎每一行（120×40 下它占 2..38）。
     click(&mut state, MAIN_LEFT_AT_120, 0);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(!text.contains("── 参数 ──"), "点在转录上把它关上了：{text}");
+    assert!(!text.contains(TOOL_FACES), "点在转录上把它关上了：{text}");
 
     // 里面：什么都不发生，因为覆盖层自己没有按钮 —— 而且
     // 这包括覆盖层盖住它时那一行原本所在的屏幕行。老的
@@ -7846,13 +7868,10 @@ fn a_click_outside_the_detail_overlay_closes_it() {
     // 出口是 `Esc`、`Ctrl-D`，以及在别处点一下（票 02 §4，2026-09-23 修正）。
     click_row(&mut state, 120, 40, "调用 bash");
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("── 参数 ──"), "重新打开了：{text}");
+    assert!(text.contains(TOOL_FACES), "重新打开了：{text}");
     click(&mut state, 60, 12);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(
-        text.contains("── 参数 ──"),
-        "在里面点一下它照样开着：{text}"
-    );
+    assert!(text.contains(TOOL_FACES), "在里面点一下它照样开着：{text}");
     // 决定的是**屏幕位置**，不是它底下压着哪一条转录行：
     // 点在覆盖层矩形里面什么都不发生。所以当覆盖层是从某一行
     // 打开来的时候，而那一行正好在覆盖层底下 —— 通常都在那儿，因为
@@ -7933,6 +7952,7 @@ fn a_complete_result_does_not_claim_its_text_is_unavailable() {
     ));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
@@ -7965,6 +7985,7 @@ fn a_cut_result_still_says_when_the_whole_text_is_gone() {
     ));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
@@ -8013,10 +8034,10 @@ fn a_tool_call_line_describes_the_call_and_folds_the_arguments_away() {
         "问题自己的摘要描述了这次调用：{text}"
     );
 
-    // 参数还在详情里，在它们自己的标题下。
+    // 参数还在详情里：打开就落在「参数」那一面。
     click_row(&mut asked, 120, 40, "调用 ask_user_question");
     let text = screen(120, 40, &mut asked).join("\n");
-    assert!(text.contains("── 参数 ──"), "参数那一节：{text}");
+    assert!(text.contains(TOOL_FACES), "参数那一面：{text}");
     assert!(text.contains("下一步"), "而它带着具体的参数：{text}");
 }
 
@@ -8150,6 +8171,9 @@ fn the_detail_footer_counts_the_last_row_on_screen() {
     ));
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
+    // 那 200 行在「输出」那一面；页脚数的是**当前这一面**的那一对数
+    // （票 13 第 8 条）。
+    next_face(&mut state);
 
     // 页脚那两个数，不管它们在屏幕上的哪儿。
     let counts = |state: &mut TuiState| -> (usize, usize) {
@@ -9541,7 +9565,7 @@ fn closing_a_trace_detail_returns_to_where_it_was_opened() {
     let row = main_row_of(&mut state, "被点开的消息");
     click(&mut state, MAIN_LEFT_AT_120, row);
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 正文 ──"), "详情开着：{text}");
+    assert!(text.contains(MESSAGE_FACES), "详情开着：{text}");
 
     state.key(Key::Esc);
     assert_eq!(
@@ -10142,7 +10166,7 @@ fn the_usage_tail_does_not_take_over_the_rows_detail() {
 
     click_row(&mut state, 120, 24, "思考完成 in=10 out=2");
     let text = screen(120, 24, &mut state).join("\n");
-    assert!(text.contains("── 思考 ──"), "弹的还是思考详情：{text}");
+    assert!(text.contains(THINKING_FACES), "弹的还是思考详情：{text}");
     assert!(text.contains("先看依赖，"), "而且带全文：{text}");
 }
 
@@ -10891,4 +10915,403 @@ fn an_overlay_stops_above_the_questionnaire_while_one_is_up() {
         asked.input.y.saturating_sub(overlay.height) / 2,
         "它在可用高度里居中，而不是盖在上面"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 详情覆盖层的面（票 13）
+// ---------------------------------------------------------------------------
+
+/// 一个固定的时刻：计时面的那几条断言只拿它**算差**，不读它的字面值（那是本地时区的事）。
+fn a_call_start() -> chrono::DateTime<chrono::Utc> {
+    fixed_at(9, 12, 11)
+}
+
+/// 一次模型调用：起点、一笔用量、一条带首 token 时刻的完成 —— 8 秒前开始、8 秒后完成，
+/// 首 token 等了 7.4 秒，报出来 222 个输出 token。
+fn a_call_with_a_first_token(state: &mut TuiState) {
+    use heng::events::{EventPayload, Role, Usage};
+    let start = a_call_start();
+    state.apply(at_event(
+        1,
+        start,
+        EventPayload::TurnStarted {
+            agent: kimi(),
+            iteration: 1,
+        },
+    ));
+    state.apply(at_event(
+        2,
+        start + chrono::Duration::milliseconds(200),
+        EventPayload::UsageRecorded {
+            usage: Usage {
+                input_tokens: 12_000,
+                output_tokens: 222,
+                cached_tokens: 0,
+                miss_tokens: 0,
+                reasoning_tokens: None,
+            },
+        },
+    ));
+    state.apply(at_event(
+        3,
+        start + chrono::Duration::milliseconds(8_000),
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "答案是 42。".to_owned(),
+            reasoning: None,
+            first_token_ms: Some(7_400),
+        },
+    ));
+}
+
+/// 切到「计时」那一面：打开时落在默认面上，`Tab` 走一格。
+fn tab_to_timing(state: &mut TuiState) {
+    next_face(state);
+}
+
+#[test]
+fn a_message_detail_walks_its_faces_with_the_tab_key() {
+    // 一份消息详情有三个面：正文（默认面，票 13 第 5 条）、计时、概述。`Tab` 一路走，
+    // `Shift+Tab` 走回来，而标签条上写着现在在哪一面、有哪几面（票 13 第 3 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    a_call_with_a_first_token(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "答案是 42。");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(MESSAGE_FACES), "顶上那条标签条：{text}");
+    assert!(text.contains("答案是 42。"), "打开时落在正文上：{text}");
+
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("开始时刻"), "第二面是计时：{text}");
+    // 正文那一面换掉了：整屏只剩**底下那条转录行**里的那一处 —— 覆盖层不再画它。这里数
+    // 次数而不是问「有没有」，因为底下的行本来就写着同一句话，一句 `!contains` 证明不了
+    // 这一面换了。
+    assert_eq!(
+        text.matches("答案是 42。").count(),
+        1,
+        "这一面换了，正文只剩底下那条转录行：{text}"
+    );
+
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("一条消息"), "第三面是概述：{text}");
+
+    // `Tab` 是环形的：再走一格回到正文。
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("答案是 42。"), "绕过末尾回到第一面：{text}");
+
+    // `Shift+Tab` 往回走一格：正文 → 概述（最后一面）。
+    state.key(Key::BackTab);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("一条消息"), "往回的 `Tab`：{text}");
+}
+
+#[test]
+fn the_timing_face_reads_the_numbers_off_this_call() {
+    // 计时面给的是**精确值**（与时间轴那个「给形状」的分工）：开始时刻 / 总时长 /
+    // 首 token / 生成 / 吞吐，末行写清是哪两个时刻相减（票 13 第 6 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    a_call_with_a_first_token(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "答案是 42。");
+    tab_to_timing(&mut state);
+
+    let text = screen(120, 40, &mut state).join("\n");
+    for needle in ["开始时刻", "总时长", "首 token", "生成", "吞吐", "计时来源"] {
+        assert!(text.contains(needle), "计时面读得到「{needle}」：{text}");
+    }
+    assert!(text.contains("8.0 s"), "总时长 = 完成 − 起点：{text}");
+    assert!(text.contains("7.4 s"), "首 token 是流上那一笔：{text}");
+    assert!(text.contains("0.6 s"), "生成 = 总时长 − 首 token：{text}");
+    assert!(
+        text.contains("370 token/s") && text.contains("输出 222"),
+        "吞吐 = 输出 token ÷ 生成时长：{text}"
+    );
+    assert!(
+        text.contains("TurnStarted.at → MessageCompleted.at"),
+        "末行写清哪两个时刻相减：{text}"
+    );
+    assert!(
+        !text.contains(wording::UNAVAILABLE),
+        "这一面的数一个不缺：{text}"
+    );
+}
+
+#[test]
+fn an_old_stream_reports_the_three_numbers_as_unavailable() {
+    // 老流上没有 `first_token_ms`：首 token / 生成 / 吞吐三项**不存在**，写 `不可用` 并把
+    // 原因写进同一行的计时来源 —— 不填 0、不写占位符（票 13 第 6 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    let start = a_call_start();
+    use heng::events::{EventPayload, Role};
+    state.apply(at_event(
+        1,
+        start,
+        EventPayload::TurnStarted {
+            agent: kimi(),
+            iteration: 1,
+        },
+    ));
+    state.apply(at_event(
+        2,
+        start + chrono::Duration::milliseconds(8_000),
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "答案是 42。".to_owned(),
+            reasoning: None,
+            first_token_ms: None,
+        },
+    ));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "答案是 42。");
+    tab_to_timing(&mut state);
+
+    let rows = screen(120, 40, &mut state);
+    let text = rows.join("\n");
+    // 三项**各自那一行**都以「不可用」收尾 —— 不是数整屏出现几次：末尾那条计时来源里也写着
+    // 这两个字（「首 token / 生成 / 吞吐 不可用」），数次数只会把那一句也算进去。
+    for label in [
+        wording::TIMING_FIRST_TOKEN,
+        wording::TIMING_GENERATED,
+        wording::TIMING_THROUGHPUT,
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.contains(label) && !row.contains(wording::TIMING_SOURCE))
+            .unwrap_or_else(|| panic!("计时面上有「{label}」那一行：{text}"));
+        assert!(
+            row.trim_end()
+                .trim_end_matches('┆')
+                .trim_end()
+                .ends_with(wording::UNAVAILABLE),
+            "「{label}」那一行的值写「{}」—— 不填 0、不写占位符：{text}",
+            wording::UNAVAILABLE
+        );
+    }
+    assert!(text.contains("8.0 s"), "拿得到的那个照旧写着：{text}");
+    assert!(!text.contains("0.0 s"), "不拿 0 顶上去：{text}");
+    assert!(
+        text.contains("first_token_ms"),
+        "原因与它写在同一行：{text}"
+    );
+}
+
+#[test]
+fn a_tool_timing_face_only_shows_the_section_it_can_prove() {
+    // 工具行属于哪次模型调用今天没有记账，于是这一面只出现「这次工具调用」那一节 ——
+    // 不出现一个空的「这次模型调用」（票 13 第 6 条）。两个口径并排，而话写清它们不相加。
+    let mut state = state_with_roster(&["kimi"]);
+    let start = a_call_start();
+    state.apply(tool_started(
+        1,
+        "call-timing",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    // 一次**问过**的权限：问与答之间隔着 0.2 s。那一段是「其中等审批」这个读数 —— 它由两个
+    // 时刻相减得来，而与总跨度并排、不相加（票 13 第 6 条）。
+    use heng::events::{Decision, DecisionSource, EventPayload, ToolCallId};
+    state.apply(at_event(
+        2,
+        start + chrono::Duration::milliseconds(100),
+        EventPayload::PermissionAsked {
+            request_id: "r-1".to_owned(),
+            tool_call_id: ToolCallId::new("call-timing"),
+            request: serde_json::json!({"tool_name": "bash", "args": {"command": "ls"}}),
+        },
+    ));
+    state.apply(at_event(
+        3,
+        start + chrono::Duration::milliseconds(300),
+        EventPayload::PermissionDecided {
+            request_id: "r-1".to_owned(),
+            decision: Decision::Allow,
+            source: DecisionSource::User,
+            reason: None,
+        },
+    ));
+    state.apply(tool_completed_after(
+        4,
+        "call-timing",
+        true,
+        Some("out"),
+        None,
+        400,
+    ));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state); // 参数 → 输出
+    next_face(&mut state); // 输出 → 计时
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("开始时刻"), "{text}");
+    assert!(text.contains("0.4 s"), "总时长是那笔墙钟：{text}");
+    assert!(text.contains("其中等审批"), "{text}");
+    assert!(
+        text.contains(&format!("0.2 s · {}", wording::timing_two_measures())),
+        "等审批那一段就是问与答之间那 0.2 s，而它和总跨度并排、不相加：{text}"
+    );
+    assert!(
+        !text.contains(wording::timing_call_section()),
+        "不出现空的「这次模型调用」：{text}"
+    );
+    assert!(
+        text.contains("ToolCallStarted.at → ToolCallCompleted.at"),
+        "末行写清哪两个时刻相减：{text}"
+    );
+}
+
+#[test]
+fn each_face_keeps_its_own_scroll_position() {
+    // 切面不是滚动：每一面各记自己的 `top`，切走再切回来还在原处（票 13 第 3 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-scroll",
+        "bash",
+        serde_json::json!({"command": "seq 1 200"}),
+    ));
+    let body: Vec<String> = (1..=200).map(|n| format!("第 {n} 行")).collect();
+    state.apply(tool_completed(
+        2,
+        "call-scroll",
+        true,
+        Some(&body.join("\n")),
+        None,
+    ));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state); // 参数 → 输出
+
+    // 主体高度是**上一帧量出来的那个数**（`DetailView.height` 由画那一帧写回），所以先渲染
+    // 一帧 —— 真实的按键本来就发生在两帧之间。120×40 下覆盖层 36 行、带标签条时主体 29 行，
+    // 于是 `PageDown` 一次滚 28 行（一页减一行重叠），5 次落在 140；200 行还没到底
+    // （底是 200 − 29 = 171）。
+    let _ = screen(120, 40, &mut state);
+    for _ in 0..5 {
+        state.key(Key::PageDown);
+    }
+    let scrolled = screen(120, 40, &mut state).join("\n");
+    assert!(
+        scrolled.contains("第 141 行"),
+        "输出那一面滚下去了，顶上就是第 141 行：{scrolled}"
+    );
+    assert!(
+        !scrolled.contains("第 1 行"),
+        "而开头的那些行早就不在窗口里了：{scrolled}"
+    );
+
+    next_face(&mut state); // 输出 → 计时
+    let timing = screen(120, 40, &mut state).join("\n");
+    assert!(timing.contains("开始时刻"), "而计时面从头开始：{timing}");
+
+    state.key(Key::BackTab); // 计时 → 输出
+    let back = screen(120, 40, &mut state).join("\n");
+    assert_eq!(back, scrolled, "切回来还在原处");
+}
+
+#[test]
+fn clicking_a_label_switches_the_face() {
+    // 点标签也切面：标签条上每个标签画出来的时候记了一个命中矩形（票 13 第 3 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-label",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-label", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    let frame = buffer(120, 40, &mut state);
+    let (column, row) = cell_of(&frame, 120, 40, "概述").expect("标签条上那个标签");
+    click(&mut state, column, row);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains("一次 bash 调用"),
+        "点「概述」就落在概述面上：{text}"
+    );
+}
+
+#[test]
+fn the_label_bar_borrows_a_body_row_without_touching_the_box() {
+    // **覆盖层的尺寸一行都不许动**：100×30 仍是今天实测量的那个框，96×26。标签条借走的是
+    // **主体**的一行，框还是那个框、标题与页脚还在原处；页脚仍是那一对数加 `esc 关闭`，
+    // **不加面号**（票 13 第 3、6、8 条）。
+    //
+    // 票面与 `spec.md` §6 里写的「92×26」是**旧数字**：那张图当初按别的宽度画的，而成文时
+    // 的尺寸算术（`MODAL_MARGIN = 4`）给出的是 `100 − 4 = 96`。那两处算术这一次一行没动
+    // （`src/render/layout.rs` 在这次改动里零 diff），所以这里钉的是今天实测量的形状 ——
+    // 这个数对不上记在票的落地记录里，`spec.md` 的正文不动。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-box",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-box", true, Some("out"), None));
+    open_trace_tab(&mut state, 100, 30);
+    click_row(&mut state, 100, 30, "调用 bash");
+
+    let frame = buffer(100, 30, &mut state);
+    let (left, top, width) = overlay_frame(&frame, 100, 30).expect("覆盖层的上边框");
+    assert_eq!(left, 2, "100 列下居中：100 − 96 的两半各留 2 列");
+    assert_eq!(top, 2, "30 行下居中：30 − 26 的两半各留 2 行");
+    assert_eq!(width, 96, "覆盖层的宽度与今天一致：100 − MODAL_MARGIN");
+    assert_eq!(
+        frame[(left + 2, top + 25)].symbol(),
+        "┄",
+        "下边框在框顶上第 25 行处：框高与今天一致（26）"
+    );
+
+    let rows = screen(100, 30, &mut state);
+    // 框内自上而下：一行内边距、一行标题（标题在框内第一行，票 03 §Answer）、然后是标签条。
+    let title = &rows[usize::from(top) + 2];
+    assert!(title.contains("调用 bash"), "标题还在它那一行上：{rows:?}");
+    let bar = &rows[usize::from(top) + 3];
+    assert!(bar.contains(TOOL_FACES), "标签条紧挨着标题：{bar}");
+    let footer = rows
+        .iter()
+        .find(|row| row.contains('↕'))
+        .expect("页脚画出来了");
+    assert!(
+        footer.contains("· esc 关闭"),
+        "页脚仍是那一对数加出口：{footer}"
+    );
+    assert!(!footer.contains("面"), "页脚不报面号：{footer}");
+}
+
+#[test]
+fn a_detail_with_one_face_draws_no_bar_at_all() {
+    // 面数 ≤ 1 的详情**不画**标签条，且与今天逐字相同：一份注入详情的正文顶上仍是它那一
+    // 行来源标题（票 13 第 6 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(heng::render::RenderEvent::Logged(heng::events::Event::new(
+        1,
+        heng::events::SpeakerId::User,
+        heng::events::EventPayload::ContextInjected {
+            source: heng::events::ContextSource::AgentsMd,
+            content: "注入的正文一段".to_owned(),
+        },
+    )));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "上下文注入");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains(wording::detail_summary_face()),
+        "单面详情没有标签条：{text}"
+    );
+    assert!(
+        text.contains(&wording::context_source(
+            &heng::events::ContextSource::AgentsMd
+        )),
+        "正文还是今天那一份（来源标题 + 内容）：{text}"
+    );
+    assert!(text.contains("注入的正文一段"), "{text}");
 }
