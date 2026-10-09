@@ -929,6 +929,12 @@ pub struct TuiState {
     ///
     /// `None` = 那一行不属于任何块（单位之间的分隔线、折叠出来的折行将来各自另有身份）。
     trace_block_ids: std::collections::VecDeque<Option<BlockId>>,
+    /// 来源面那条祖先链的原料：账本上那几种**能当一环**的记录，按账本行号递增。
+    ///
+    /// 只记链要用的三类（用户消息、迭代的回复、单位组头），每条一个账本行号 —— 链深不封顶，
+    /// 所以不能只留「最近那一条」；位置用账本行号，于是 `CAP` 把那些行挪出窗口之后，链上
+    /// 那一环仍然报得出位置（票 14 第 1、6 条）。宽度重放与它一起清、按同样的顺序重建。
+    anchors: Vec<Anchor>,
     /// 轨迹页两级分组的当前进度：一个正在开着的一级组与一个正在开着的二级组。
     ///
     /// 它是**跨块排版状态**的一部分，与 [`Self::trace_flow`] 同进同出（宽度重放时一起清）——
@@ -2035,6 +2041,7 @@ impl TuiState {
             turn_rail: TurnRail::default(),
             trace_links: std::collections::VecDeque::new(),
             trace_block_ids: std::collections::VecDeque::new(),
+            anchors: Vec::new(),
             trace_groups: TraceGroups::default(),
             next_local_id: 0,
             trace_drawn: Drawn::default(),
@@ -2547,7 +2554,8 @@ impl TuiState {
                 bubble(&mut lines, width, carry_name);
             }
             produced = produced.max(lines.len());
-            self.push_view_lines(
+            // 对话页没有账本行号可记：来源面只长在轨迹页的行上。
+            let _ = self.push_view_lines(
                 Viewport::Conversation,
                 speaker,
                 is_message,
@@ -2583,7 +2591,7 @@ impl TuiState {
             let duration = tool_duration(block);
             attach_row_tail(lines.last_mut(), duration, tail, width as usize);
             produced = produced.max(lines.len());
-            self.push_view_lines(
+            let first = self.push_view_lines(
                 Viewport::Trace,
                 block_speaker(block),
                 matches!(block, Block::Message { .. }),
@@ -2591,6 +2599,12 @@ impl TuiState {
                 Some(is_user_message(block)),
                 id,
             );
+            // 来源面那条链的两环长在消息上：用户自己说的那句与一次迭代的回复（票 14）。
+            // 位置取这一块**第一条内容行**的账本行号 —— 链要的是「哪一行」，不是这一块
+            // 后来折出了几行。
+            if let (Some(kind), Some(row)) = (anchor_kind(block), first) {
+                self.note_anchor(kind, row);
+            }
         }
         // 这一块让当前开着的那一组发生了什么：工具算进直方图，收尾给跨度盖棺。两者都只
         // **改写组头那一行**（`.scratch/trace-ledger/spec.md` §5）。
@@ -2634,6 +2648,8 @@ impl TuiState {
             self.trace.clear();
             self.trace_links.clear();
             self.trace_block_ids.clear();
+            // 锚表按账本行号记账，而重放会重新分配行号 —— 所以它与窗格一起从头再来。
+            self.anchors.clear();
             // 组的边界也是由块序列推出来的，所以重放要按同样的顺序再推一遍。
             self.trace_groups = TraceGroups::default();
             self.trace_flow = Flow::default();
@@ -2741,6 +2757,9 @@ impl TuiState {
     /// 空行的两条规矩：**换发言者**要空（把两个人的话分开）；对话视图里**两条消息之间**也要空
     /// —— 一条消息是一段（2026-10-06 维护者：同一个人连说几段时，只留一个名字，段与段之间
     /// 空一行）。同一人连发的**工具行**不空：一组动作读起来是一组。
+    ///
+    /// 返回值是**轨迹页上第一条内容行的账本行号** —— 来源面那条链按它给本行定位（票 14）；
+    /// 没往轨迹页推任何行（这个视口不在收件人里）时是 `None`。
     fn push_view_lines(
         &mut self,
         view: Viewport,
@@ -2749,9 +2768,9 @@ impl TuiState {
         lines: Vec<RenderedLine>,
         user: Option<bool>,
         id: BlockId,
-    ) {
+    ) -> Option<usize> {
         if lines.is_empty() {
-            return;
+            return None;
         }
         let blank = {
             let flow = match view {
@@ -2780,9 +2799,14 @@ impl TuiState {
             // 因此重新带上名字。
             flow.message = is_message;
         }
+        let mut first = None;
         for rendered in lines {
             self.push_line(view, rendered.line, rendered.link, user, Some(id));
+            if view == Viewport::Trace && first.is_none() {
+                first = Some(self.trace.pushed());
+            }
         }
+        first
     }
 
     /// 记下「现在在跑哪个工具」—— 对话视图末尾那句「正在做什么」用的就是它。
@@ -3343,6 +3367,12 @@ impl TuiState {
             }
         } else {
             self.push_line(Viewport::Trace, line, None, None, Some(header.id));
+            // 一级组头是来源面那条链的「那一回合」那一环（票 14 第 1 条）。二级（迭代）头不
+            // 记：链上那一环是「迭代的**回复**」，由消息自己记。
+            if header.level == HeaderLevel::Unit {
+                let row = self.trace.pushed();
+                self.note_anchor(AnchorKind::UnitHeader, row);
+            }
         }
     }
 
@@ -3404,6 +3434,8 @@ impl TuiState {
                 text: settled.trace.clone(),
                 timing: settled.timing,
             },
+            // 链在打开那一刻才定 —— 构造这一行时还不知道账本以后会长成什么样。
+            chain: None,
         };
         (line, detail)
     }
@@ -3808,13 +3840,18 @@ impl TuiState {
                     return;
                 }
                 let panes = layout::plan(self.area, 1, self.sidebar_wanted);
-                if let Some(detail) = self.trace_link_at(row) {
+                if let Some((detail, ledger_row)) = self.trace_hit_at(row) {
                     // 打开方先算好：`open_detail` 借 `&mut self`。
                     let opener = DetailOpener::Trace {
                         top: self.trace.top(),
                         follow: self.trace.following(),
                     };
-                    self.open_detail(detail, panes.detail_text_width() as usize, opener);
+                    self.open_detail(
+                        detail,
+                        panes.detail_text_width() as usize,
+                        opener,
+                        Some(ledger_row),
+                    );
                 }
             }
         }
@@ -3856,9 +3893,11 @@ impl TuiState {
             kind: DetailKind::Todo {
                 items: self.todo.all().to_vec(),
             },
+            chain: None,
         };
         let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
-        self.open_detail(detail, width, DetailOpener::Todo);
+        // 待办是一份快照，不是账本上的某一行 —— 它没有来源面，也就没有「本行」。
+        self.open_detail(detail, width, DetailOpener::Todo, None);
     }
 
     /// 一次点击落在文件页上吗：落在哪一行就动那一行 —— 目录展开或收起，
@@ -4057,9 +4096,10 @@ impl TuiState {
             speaker: None,
             at: None,
             kind: DetailKind::File { body },
+            chain: None,
         };
         let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
-        self.open_detail(detail, width, DetailOpener::Files);
+        self.open_detail(detail, width, DetailOpener::Files, None);
     }
 
     /// 焦点所在的那一行。
@@ -4576,15 +4616,17 @@ impl TuiState {
         true
     }
 
-    /// 轨迹页里一次点击落到的那个可点链接，拷成它要打开的东西。
+    /// 轨迹页里一次点击落到的那个可点链接，拷成它要打开的东西，外加那条来源行在**账本上的
+    /// 行号**（票 14 的来源面按后者定「本行」）。
     ///
     /// 覆盖层将在哪个宽度上打开，来自上一帧，那是中间块几何唯一已知的地方（票 04 §1）。行号是
     /// **屏幕**行号：一次点击按它换回那条来源行。**只有轨迹页有入口** —— 对话页画的是全文，
     /// 点它不打开任何东西（`.scratch/tui-feedback/spec.md` §9）。
-    fn trace_link_at(&self, row: u16) -> Option<Detail> {
+    fn trace_hit_at(&self, row: u16) -> Option<(Detail, usize)> {
         let offset = (row.checked_sub(self.trace_drawn.top)?) as usize;
         let source = (*self.trace_drawn.rows.get(offset)?)?;
-        self.trace_links.get(source)?.clone()
+        let detail = self.trace_links.get(source)?.clone()?;
+        Some((detail, self.trace.ledger_row(source)?))
     }
 
     /// 一条记录的身份：流上的东西取信封的行号，渲染层自己造的没有信封，于是 `index` 由
@@ -4617,6 +4659,61 @@ impl TuiState {
     /// 而那是后面几轮账本与检索的接缝（`.scratch/trace-ledger/spec.md` §2）。
     pub fn first_source_of(&self, id: BlockId) -> Option<usize> {
         self.trace_block_ids.iter().position(|it| *it == Some(id))
+    }
+
+    /// 记下账本上这一条**锚**：能当来源面那一环的记录，以及它在账本上的行号（票 14）。
+    ///
+    /// 它只增：链要往上看好几环，而 `CAP` 只挪窗口不挪行号 —— 所以这张表与窗格是**两条**
+    /// 寿命不同的账，各司其职。
+    fn note_anchor(&mut self, kind: AnchorKind, row: usize) {
+        self.anchors.push(Anchor { kind, row });
+    }
+
+    /// 一条详情的**祖先链**：本行是谁带出来的（票 14 第 1 条）。
+    ///
+    /// 三环各自取「本行**上方**最近的那一条」—— 迭代的回复、单位组头、用户消息。某一环取不到
+    /// 就到此为止：链本身就是渐短的，不写「不可用」占位（票 14 第 2 条）。链深不封顶（一个
+    /// 回合能有几百次迭代），所以**固定截到三环**，三环之外还有更深的链时在面上写清。
+    fn ancestor_chain(&self, here: usize, here_text: &str) -> LedgerChain {
+        let mut links = Vec::new();
+        for kind in [
+            AnchorKind::Reply,
+            AnchorKind::UnitHeader,
+            AnchorKind::UserMessage,
+        ] {
+            let Some(anchor) = self
+                .anchors
+                .iter()
+                .rfind(|anchor| anchor.kind == kind && anchor.row < here)
+            else {
+                break;
+            };
+            links.push(ChainLink {
+                kind,
+                row: anchor.row,
+                text: self.anchor_text(anchor.row),
+            });
+        }
+        // 第一环之上还有别的迭代回复 —— 那些是链更深的那些环，不再展开。
+        let deeper = links.first().is_some_and(|first| {
+            self.anchors
+                .iter()
+                .any(|anchor| anchor.kind == AnchorKind::Reply && anchor.row < first.row)
+        });
+        LedgerChain {
+            here,
+            here_text: here_text.to_owned(),
+            links,
+            deeper,
+        }
+    }
+
+    /// 账本第 `row` 行那条来源行的行首文字；那一行已经被上限裁掉时是 `None` —— 于是链上
+    /// 那一环**只给位置**（票 14 第 6 条）。
+    fn anchor_text(&self, row: usize) -> Option<String> {
+        let text = line_text(self.trace.ledger_line(row)?);
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
     }
 
     /// 一次点击是否落在了「回到末尾」指示器上。每个视口各有一个（票 09）。
@@ -5360,8 +5457,9 @@ impl TuiState {
                 path: file.path,
                 body: changes::Body::Pending,
             },
+            chain: None,
         };
-        self.open_detail(detail, width, DetailOpener::Changes);
+        self.open_detail(detail, width, DetailOpener::Changes, None);
     }
 
     /// 看一份 diff 时用哪个外部命令（`[ui] diff_viewer`）。渲染循环拿它去起子进程
@@ -8561,6 +8659,7 @@ fn paint_block(
                     source: source.clone(),
                     content: content.clone(),
                 },
+                chain: None,
             };
             vec![RenderedLine::linked(line, detail)]
         }
@@ -8808,6 +8907,7 @@ fn tool_block_lines(
         at: facts.at,
         // 整块搬进详情：参数、输出与这次调用自己的计时都在里面（票 13 第 6、7 条）。
         kind: DetailKind::Tool(Box::new(tool.clone())),
+        chain: None,
     };
     let mut lines = vec![RenderedLine::linked(Line::from(call), detail.clone())];
     if let Some(first) = error_first_line(outcome) {
@@ -9024,6 +9124,7 @@ fn trace_message_row(
             text: text.to_owned(),
             timing: facts.timing,
         },
+        chain: None,
     };
     RenderedLine::linked(head, detail)
 }
@@ -9052,6 +9153,21 @@ fn timing_of(block: &Block) -> CallTiming {
     match block {
         Block::Message { timing, .. } => *timing,
         _ => CallTiming::default(),
+    }
+}
+
+/// 这一块在来源面那条链上算不算一环，算的话是哪一环（票 14 第 1 条）。
+///
+/// 只有消息算：用户自己那句是「上面那条用户消息」，助手的每一条都是「一次迭代的回复」。
+/// 单位组头不由这一块画（它长在成员前面、由 [`TuiState::paint_group_header`] 自己记一条锚）。
+fn anchor_kind(block: &Block) -> Option<AnchorKind> {
+    match block {
+        Block::Message {
+            speaker: crate::events::SpeakerId::User,
+            ..
+        } => Some(AnchorKind::UserMessage),
+        Block::Message { .. } => Some(AnchorKind::Reply),
+        _ => None,
     }
 }
 
@@ -9238,6 +9354,12 @@ pub struct Detail {
     /// 那条路上的详情入口从不被点开（它只取走文字）。
     at: Option<DateTime<Utc>>,
     kind: DetailKind,
+    /// 被点的这一行是谁带出来的 —— 来源面那条只读链（票 14 第 1 条）。
+    ///
+    /// 构造这一份详情时是 `None`：链要的那三环（上面那条迭代的回复 / 那一回合 / 上面那条
+    /// 用户消息）是**账本上的事实**，不是在画这一行的那一刻能定下来的。它在**打开那一刻**
+    /// 按这一行在账本上的行号算出来（[`TuiState::open_detail`]）。
+    chain: Option<LedgerChain>,
 }
 
 /// 一个详情视图可以关于的两件事。
@@ -9318,19 +9440,23 @@ enum RecordKind {
 /// 一块详情里的**一面**的名字 —— 它是一个记号，内容由 [`face_sections`] 按这一面造出来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FaceId {
-    /// **今天那一面**：不分面的那四种详情（注入 / 文件 / 改动 / 待办）唯一的那一面。它没有
-    /// 名字、也不画标签条 —— 面数 ≤ 1 时整块详情与今天逐字相同（票 13 第 6 条）。
+    /// **今天那一面**：不分面的那三种详情（文件 / 改动 / 待办）唯一的那一面。它没有名字、也不
+    /// 画标签条 —— 面数 ≤ 1 时整块详情与今天逐字相同（票 13 第 6 条）。
     Only,
     /// 消息的正文。
     Body,
     /// 思考的全文（或「未记录」那一句）。
     Thought,
+    /// 上下文注入的正文（票 14 第 4 条）：注入那一面就是今天那一份，逐字不动。
+    Injection,
     /// 一次工具调用的参数。
     Args,
     /// 一次工具调用的输出。
     Output,
     /// 这一块的时间：开始 / 总时长 / 首 token / 生成 / 吞吐 / 等审批。
     Timing,
+    /// 只读的祖先链：这一行是被什么带出来的（票 14 第 1 条）。
+    Source,
     /// 一行简述：是什么、多长、什么时候、谁说的。
     Summary,
 }
@@ -9342,9 +9468,11 @@ impl FaceId {
             FaceId::Only => "",
             FaceId::Body => wording::detail_message_section(),
             FaceId::Thought => wording::detail_thinking_section(),
+            FaceId::Injection => wording::detail_injection_face(),
             FaceId::Args => wording::detail_args_section(),
             FaceId::Output => wording::detail_output_section(),
             FaceId::Timing => wording::detail_timing_face(),
+            FaceId::Source => wording::detail_source_face(),
             FaceId::Summary => wording::detail_summary_face(),
         }
     }
@@ -9352,12 +9480,12 @@ impl FaceId {
 
 /// **一张按记录种类穷举的表**：每种详情有哪几面、**第一面就是打开时落的那一面**。
 ///
-/// 面集合只有这一处事实源：面从它读，测试断言「每种记录的面集合等于表里那一行」
-/// （票 13 第 4、5 条）。表是按行读的，所以加一行就是加一种记录的面 —— 票 14 会给工具插
-/// 「来源」、给注入落两行，票 15 会给消息与思考插「用量」，都只改这张表与 [`face_sections`]。
+/// 面集合只有这一处事实源：面从它读，测试断言「每种记录的面集合等于表里那一行」。
+/// 它同时就是规格里那张七行的表（`spec.md` §6、`08-grilling-inspector.md` §2）：七种
+/// `DetailKind` 各一行，每一行的第一面是今天打开就看到的那一面。
 ///
-/// **默认面永远是今天打开就看到的那一面**：工具落在参数（它是这次调用最稳定的身份，
-/// 而输出常常很长），消息落在正文，思考落在思考 —— 而「概述」排在每一行的末尾。
+/// **默认面永远是今天打开就看到的那一面**：工具落在参数（它是这次调用最稳定的身份，而输出
+/// 常常很长），消息落在正文，思考落在思考，注入落在注入 —— 而「概述」排在每一行的末尾。
 const DETAIL_FACES: &[(RecordKind, &[FaceId])] = &[
     (
         RecordKind::Message,
@@ -9373,11 +9501,13 @@ const DETAIL_FACES: &[(RecordKind, &[FaceId])] = &[
             FaceId::Args,
             FaceId::Output,
             FaceId::Timing,
+            FaceId::Source,
             FaceId::Summary,
         ],
     ),
-    // 这四种这一次仍是**今天那一面**：注入、文件、改动、待办不分面（票 14 接它们）。
-    (RecordKind::Context, &[FaceId::Only]),
+    // 注入从今天那一面长出第二面来（标题条上写「注入」），文件 / 改动 / 待办仍是**今天那一
+    // 面**：它们的主体本身就是一份完整的可滚动对象，不必多点一次（票 14 第 4、7 条）。
+    (RecordKind::Context, &[FaceId::Injection, FaceId::Summary]),
     (RecordKind::File, &[FaceId::Only]),
     (RecordKind::Diff, &[FaceId::Only]),
     (RecordKind::Todo, &[FaceId::Only]),
@@ -9482,10 +9612,13 @@ fn detail_faces(detail: &Detail, session_dir: &str, width: usize) -> Vec<Face> {
 fn face_sections(detail: &Detail, face: FaceId, session_dir: &str, width: usize) -> Vec<Section> {
     use DetailKind::*;
     match (&detail.kind, face) {
-        // 今天那一面：不分面的四种详情那份正文，逐字不动。
-        (Context { .. } | File { .. } | Diff { .. } | Todo { .. }, FaceId::Only) => {
+        // 今天那一面：不分面的三种详情那份正文，逐字不动。
+        (File { .. } | Diff { .. } | Todo { .. }, FaceId::Only) => {
             vec![Section::whole(today_body(detail, width))]
         }
+        // 注入那一面也是今天那一份正文（来源标题 + 内容）—— 它只是从无名的那一面变成了
+        // 标签条上写得出名字的第一面（票 14 第 4 条）。
+        (Context { .. }, FaceId::Injection) => vec![Section::whole(today_body(detail, width))],
         (Message { text, .. }, FaceId::Body) => vec![Section::whole(folded_text(text, width))],
         (Thinking { text, .. }, FaceId::Thought) => {
             vec![Section::whole(thought_rows(text.as_deref(), width))]
@@ -9497,6 +9630,7 @@ fn face_sections(detail: &Detail, face: FaceId, session_dir: &str, width: usize)
             vec![call_timing_section(timing, width)]
         }
         (Tool(tool), FaceId::Timing) => vec![tool_timing_section(tool, width)],
+        (Tool(_), FaceId::Source) => vec![source_section(detail, width)],
         (_, FaceId::Summary) => vec![Section::whole(vec![detail_summary_row(detail)])],
         (Tool(tool), FaceId::Args) => vec![Section::whole(tool_args_rows(tool, width))],
         (Tool(tool), FaceId::Output) => {
@@ -9506,21 +9640,149 @@ fn face_sections(detail: &Detail, face: FaceId, session_dir: &str, width: usize)
     }
 }
 
-/// **今天那一面**：不分面的那四种详情（注入 / 文件 / 改动 / 待办）那份正文。
+/// **今天那一面**：不分面的那三种详情（文件 / 改动 / 待办）那份正文。
 ///
-/// 面数 ≤ 1 的详情与今天**逐字相同**（票 13 第 6 条），所以那四种的正文一个字节都不动。
-/// 消息 / 思考 / 工具三种已经有面，它们的正文走各自那些面（[`face_sections`]）。
+/// 面数 ≤ 1 的详情与今天**逐字相同**（票 13 第 6 条），所以那三种的正文一个字节都不动。
+/// 消息 / 思考 / 工具 / 注入四种已经有面，它们的正文走各自那些面（[`face_sections`]）。
 fn today_body(detail: &Detail, width: usize) -> Vec<DetailLine> {
     match &detail.kind {
         DetailKind::Context { .. }
         | DetailKind::File { .. }
         | DetailKind::Diff { .. }
         | DetailKind::Todo { .. } => detail_body(detail, width),
-        // 有面那三种到不了这里：它们的每一面都在 `face_sections` 里各画各的。
+        // 有面那四种到不了这里：它们的每一面都在 `face_sections` 里各画各的。
         DetailKind::Message { .. } | DetailKind::Thinking { .. } | DetailKind::Tool(_) => {
             Vec::new()
         }
     }
+}
+
+/// 账本上能当**来源面那一环**的记录有哪几种（票 14 第 1 条）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnchorKind {
+    /// 用户自己说的一句话 —— 「上面那条用户消息」那一环。
+    UserMessage,
+    /// 一次迭代（模型调用）的回复 —— 「上面那条迭代的回复」那一环。
+    Reply,
+    /// 一个单位（回合 / 轮次）的组头 —— 「那一回合」那一环。
+    UnitHeader,
+}
+
+impl AnchorKind {
+    /// 链上那一环的标签。
+    fn label(self) -> &'static str {
+        match self {
+            AnchorKind::UserMessage => wording::chain_user(),
+            AnchorKind::Reply => wording::chain_reply(),
+            AnchorKind::UnitHeader => wording::chain_unit(),
+        }
+    }
+}
+
+/// 账本上的一条**锚**：能当来源面那一环的那种记录，以及它在账本上的行号。
+///
+/// 链深不封顶，所以不能只留「最近那一条」；而 `CAP` 会把这些行挪出窗口，所以位置用**账本
+/// 行号**（1 起数，裁不掉）。行首文字不存——要看的时候回窗格里取，取不到就只给位置。
+#[derive(Debug, Clone, Copy)]
+struct Anchor {
+    kind: AnchorKind,
+    /// 这一条在账本上的行号。
+    row: usize,
+}
+
+/// 祖先链上的一环（票 14 第 1 条）。
+#[derive(Debug, Clone)]
+struct ChainLink {
+    kind: AnchorKind,
+    /// 它在账本上的行号。
+    row: usize,
+    /// 那一行的行首文字；已经被上限裁掉时是 `None`，于是这一环**只给位置**（票 14 第 6 条）。
+    text: Option<String>,
+}
+
+/// 一份详情的**祖先链**：本行，加上它上面那三环（票 14 第 1 条）。
+///
+/// 链深不封顶（一个回合能有几百次迭代），所以固定截到三环：本行 + 至多三环祖先。某一环取不
+/// 到就到此为止 —— 链本身就是渐短的，不写「不可用」占位（票 14 第 2 条）。
+#[derive(Debug, Clone)]
+struct LedgerChain {
+    /// 本行在账本上的行号。
+    here: usize,
+    /// 本行的行首文字（就是覆盖层标题那一行）。
+    here_text: String,
+    /// 至多三环祖先，从近到远。
+    links: Vec<ChainLink>,
+    /// 三环之外还有更深的链，没有展开（票 14 第 1 条）。
+    deeper: bool,
+}
+
+/// 来源面：那条只读的祖先链（票 14 第 1 条）。
+///
+/// 每一环给出**行首文字**与它在账本上的位置；文字取不到（那一行被上限裁掉了）就只给位置。
+/// 链断在哪儿就画到哪儿 —— 面上没有「不可用」这种占位。
+fn source_section(detail: &Detail, width: usize) -> Section {
+    let Some(chain) = &detail.chain else {
+        // 这一份详情不是从账本上某一行点开的（今天的四种单面详情各走自己的面，到不了这里）。
+        // 给一句实话，不编一条链出来。
+        return Section::whole(vec![DetailLine::plain(Line::from(Span::styled(
+            wording::chain_unknown(),
+            Style::default().fg(palette::MUTED),
+        )))]);
+    };
+    let mut rows = vec![chain_row_line(
+        false,
+        wording::chain_here(),
+        chain.here,
+        Some(&chain.here_text),
+        width,
+    )];
+    for link in &chain.links {
+        rows.push(chain_row_line(
+            true,
+            link.kind.label(),
+            link.row,
+            link.text.as_deref(),
+            width,
+        ));
+    }
+    if chain.deeper {
+        rows.push(DetailLine::plain(Line::from(Span::styled(
+            wording::chain_deeper(),
+            Style::default().fg(palette::MUTED),
+        ))));
+    }
+    Section::whole(rows)
+}
+
+/// 链上的一行：`← 上面那条迭代的回复 · 第 118 行 · 09:12:11 [kimi] ▸ …`。
+///
+/// 一行一环，超宽时用 `…` 收尾（不折行）：链是一串坐标，读的人要的是「有哪几环、各在哪
+/// 一行」，折出来的续行只会让这条链读不出来。
+fn chain_row_line(
+    arrow: bool,
+    label: &str,
+    row: usize,
+    text: Option<&str>,
+    width: usize,
+) -> DetailLine {
+    let mut spans = Vec::new();
+    if arrow {
+        spans.push(Span::styled(
+            wording::chain_arrow(),
+            Style::default().fg(palette::MUTED),
+        ));
+    }
+    spans.push(Span::styled(
+        format!("{label} · {}", wording::chain_row(row)),
+        Style::default().fg(palette::MUTED),
+    ));
+    if let Some(text) = text {
+        spans.push(Span::styled(
+            format!(" · {text}"),
+            Style::default().fg(palette::PLAIN),
+        ));
+    }
+    DetailLine::plain(ellipsize_line(Line::from(spans), width))
 }
 
 /// 一段思考的正文：记录了 trace 时是整段，没记下时是一句实话（票 02 §1）。
@@ -9703,15 +9965,16 @@ fn tool_timing_section(tool: &ToolBlock, width: usize) -> Section {
     )
 }
 
-/// 概述面那一行：**是什么 · 多长 · 什么时候 · 谁说的**（票 13 第 7 条）。
+/// 概述面那一行：**是什么 · 多长 · 什么时候 · 谁说的**（票 13 第 7 条、票 14 第 5 条）。
 ///
 /// 「什么时候」取这一块到达的时刻（与行首那九列同源），「谁说的」取发言者。
 fn detail_summary_row(detail: &Detail) -> DetailLine {
     let what = match &detail.kind {
         DetailKind::Message { .. } => wording::summary_message().to_owned(),
         DetailKind::Thinking { .. } => wording::summary_thinking().to_owned(),
+        DetailKind::Context { .. } => wording::summary_injection().to_owned(),
         DetailKind::Tool(tool) => tool_summary_what(tool),
-        // 单面那四种没有概述面；真被问到时给的也是同一句实话。
+        // 单面那三种没有概述面；真被问到时给的也是同一句实话。
         _ => wording::summary_record().to_owned(),
     };
     let length = match &detail.kind {
@@ -9719,6 +9982,10 @@ fn detail_summary_row(detail: &Detail) -> DetailLine {
         | DetailKind::Thinking {
             text: Some(text), ..
         } => Some(wording::summary_length(text.chars().count())),
+        // 一条注入「多长」：它加载进来的那一段正文有多少字。
+        DetailKind::Context { content, .. } => {
+            Some(wording::summary_length(content.chars().count()))
+        }
         DetailKind::Tool(tool) => tool
             .outcome
             .as_ref()
@@ -9968,7 +10235,22 @@ impl TuiState {
     ///
     /// 打开方一起记下来：覆盖层立着时**只冻打开它的那一页**，关掉时也只还原它
     /// （票 05）。轨迹页那条路径的行为与改动前逐字相同。
-    fn open_detail(&mut self, detail: Detail, width: usize, opener: DetailOpener) {
+    ///
+    /// `here` 是这一行在**账本上的行号** —— 来源面那条祖先链按它定「本行」并往上找那三环
+    /// （票 14）。不是从账本上某一行点开的（文件页 / 改动页 / `todo` 页那三种单面详情）时是
+    /// `None`，那几种记录也没有来源面。
+    fn open_detail(
+        &mut self,
+        mut detail: Detail,
+        width: usize,
+        opener: DetailOpener,
+        here: Option<usize>,
+    ) {
+        // 链在**打开那一刻**才算：它讲的是账本上的事实（这几环各在第几行），而画这一行的
+        // 时候那件事还没有答案（票 14 第 1 条）。
+        if let Some(row) = here {
+            detail.chain = Some(self.ancestor_chain(row, &detail.title));
+        }
         self.detail_opener = Some(opener);
         let faces = detail_faces(&detail, &self.facts.session_dir, width);
         self.detail = Some(DetailView {
@@ -10890,6 +11172,80 @@ mod tests {
             conversation.turn_rail.lines.len(),
             conversation.conversation.sources()
         );
+    }
+
+    /// 来源面那一环**还在窗口里**时带着那一行的行首文字；被上限裁掉之后只剩位置 —— 位置裁
+    /// 不掉，文字也编不出来（票 14 第 6 条）。
+    #[test]
+    fn a_chain_link_keeps_its_position_after_the_cap_clips_its_row() {
+        let mut page = state();
+        page.trace.push(Line::from("回复那一条"));
+        page.note_anchor(AnchorKind::Reply, 1);
+        page.trace.push(Line::from("回合头"));
+        page.note_anchor(AnchorKind::UnitHeader, 2);
+        page.trace.push(Line::from("本行"));
+        let here = page.trace.pushed();
+        let chain = page.ancestor_chain(here, "本行");
+        assert_eq!(chain.links.len(), 2, "本行上方那两环");
+        assert_eq!(chain.links[0].row, 1);
+        assert_eq!(
+            chain.links[0].text.as_deref(),
+            Some("回复那一条"),
+            "行还在窗口里，文字就取得到"
+        );
+        assert_eq!(chain.links[1].row, 2);
+        assert!(!chain.deeper, "没有更深的链");
+
+        // 再把那两行挤出窗口：位置照旧，文字没了。
+        for _ in 0..pane::CAP {
+            page.trace.push(Line::from("后来的行"));
+        }
+        let here = page.trace.pushed();
+        let chain = page.ancestor_chain(here, "本行");
+        assert_eq!(chain.links.len(), 2, "链还是那两环");
+        assert_eq!(chain.links[0].row, 1, "位置仍是账本第 1 行");
+        assert_eq!(chain.links[0].text, None, "文字取不到就只给位置");
+        assert_eq!(chain.links[1].row, 2);
+        assert_eq!(chain.links[1].text, None);
+    }
+
+    /// 更深的链不再展开：本行上面还有别的迭代回复时，链只列到三环（票 14 第 1 条）——
+    /// 一个几百次迭代的回合不会画出一长串。
+    #[test]
+    fn the_chain_stops_at_three_links_even_when_there_are_more_iterations() {
+        let mut page = state();
+        // 三次迭代各一条回复，加上一个回合头与一条用户消息，然后才是本行。
+        for row in 1..=5 {
+            page.trace.push(Line::from("账本上的一行"));
+            let kind = match row {
+                2 => AnchorKind::UnitHeader,
+                5 => AnchorKind::UserMessage,
+                _ => AnchorKind::Reply,
+            };
+            page.note_anchor(kind, row);
+        }
+        page.trace.push(Line::from("本行"));
+        let here = page.trace.pushed();
+        let chain = page.ancestor_chain(here, "本行");
+        assert_eq!(chain.links.len(), 3, "固定三环：回复 / 回合 / 用户消息");
+        assert_eq!(chain.links[0].kind, AnchorKind::Reply);
+        assert_eq!(chain.links[0].row, 4, "最近的那一条回复");
+        assert_eq!(chain.links[1].kind, AnchorKind::UnitHeader);
+        assert_eq!(chain.links[2].kind, AnchorKind::UserMessage);
+        assert!(chain.deeper, "再往上是更早的迭代 —— 不再展开");
+    }
+
+    /// 链是渐短的：本行上方没有那一环时链到此为止，**不写占位**（票 14 第 2 条）。
+    #[test]
+    fn a_chain_that_cannot_reach_an_ancestor_just_ends() {
+        let mut page = state();
+        page.trace.push(Line::from("本行"));
+        let here = page.trace.pushed();
+        let chain = page.ancestor_chain(here, "本行");
+        assert!(chain.links.is_empty(), "一环都没有");
+        assert!(!chain.deeper, "也没有更深的链");
+        assert_eq!(chain.here, here);
+        assert_eq!(chain.here_text, "本行");
     }
 
     /// 每一类块进哪个视图 —— 分工是一个穷尽的 match，所以穷举地测它，而不是只在帧里
@@ -12009,6 +12365,7 @@ mod tests {
             speaker: Some(speaker.clone()),
             at: Some(at),
             kind,
+            chain: None,
         };
         vec![
             (
@@ -12205,6 +12562,7 @@ mod tests {
                     output_tokens: Some(204),
                 },
             },
+            chain: None,
         };
         let text = face_text(&detail, FaceId::Timing);
         for label in [
@@ -12283,6 +12641,7 @@ mod tests {
                 text: "一条十二个字的消息".to_owned(),
                 timing: CallTiming::default(),
             },
+            chain: None,
         };
         let text = face_text(&detail, FaceId::Summary);
         assert!(text.contains(wording::summary_message()), "{text}");

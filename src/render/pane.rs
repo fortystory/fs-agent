@@ -52,6 +52,11 @@ pub struct Pane {
     seen: usize,
     /// 计数是不是被按住了 —— 读者把转录停在一行上看着，而不是从头滚到尾（票 02 §4）。
     holding: bool,
+    /// 累计推入过多少条来源行（只增，[`Self::clear`] 才归零）。
+    ///
+    /// 它与 `lines.len()` 的差就是被 [`CAP`] 裁掉的那些，而两者一起回答「这一条来源行在
+    /// 账本上是第几行」。
+    pushed: usize,
 }
 
 impl Pane {
@@ -69,6 +74,7 @@ impl Pane {
             follow: true,
             seen: 0,
             holding: false,
+            pushed: 0,
         }
     }
 
@@ -79,6 +85,7 @@ impl Pane {
     /// （`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。
     pub fn push(&mut self, line: Line<'static>) -> usize {
         self.lines.push_back(line);
+        self.pushed += 1;
         self.wrap_pending();
         self.evict()
     }
@@ -175,6 +182,31 @@ impl Pane {
         self.wrapped.clear();
         self.wrapped_sources = 0;
         self.width = 0;
+        self.pushed = 0;
+    }
+
+    /// 到这一刻为止一共推入过多少条来源行（只增）。
+    ///
+    /// **账本行号**（第几行）按它算：一次 [`CAP`] 裁剪只把最旧的那些挪出窗口，挪不走它们在
+    /// 账本上的位置 —— 而来源面那条链需要的就是一个裁不掉的坐标（票 14 第 6 条）。
+    pub fn pushed(&self) -> usize {
+        self.pushed
+    }
+
+    /// 窗格里第 `source` 条来源行在**账本上的行号**（1 起数）；它已经被裁掉就 `None`。
+    ///
+    /// 与 [`Self::source_at`] 方向相反的那一半：那边是显示行 → 来源行下标，这边把来源行
+    /// 下标换成裁不掉的那个坐标。
+    pub fn ledger_row(&self, source: usize) -> Option<usize> {
+        (source < self.lines.len()).then(|| self.pushed - self.lines.len() + source + 1)
+    }
+
+    /// 账本第 `row` 行（1 起数）那条来源行，**还在窗口里**的话。
+    ///
+    /// 已经被裁掉的那些取不到 —— 链上那一环于是只报位置，不编一段文字出来（票 14 第 6 条）。
+    pub fn ledger_line(&self, row: usize) -> Option<&Line<'static>> {
+        let first = self.pushed.checked_sub(self.lines.len())? + 1;
+        self.lines.get(row.checked_sub(first)?)
     }
 
     /// 一个显示行属于哪条来源行，如果有的话。
@@ -537,6 +569,30 @@ pub(crate) fn push_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **账本行号裁不掉**：被上限挪出窗口的那些行仍报得出「第几行」，而它们的文字取不到了
+    /// （票 14 第 6 条：来源面那一环退成只给位置）。
+    #[test]
+    fn the_ledger_row_survives_the_cap_while_the_line_does_not() {
+        let mut pane = Pane::new();
+        for index in 1..=CAP + 3 {
+            pane.push(Line::from(format!("第 {index} 行")));
+        }
+        assert_eq!(pane.sources(), CAP, "窗口里留下的就是上限那么多");
+        assert_eq!(
+            pane.ledger_row(0),
+            Some(4),
+            "窗口里第一条是账本第 4 行 —— 前三行被裁掉了"
+        );
+        assert_eq!(pane.ledger_line(3), None, "账本第 3 行不在窗口里了");
+        assert_eq!(
+            pane.ledger_line(4).map(|line| line.to_string()),
+            Some("第 4 行".to_owned()),
+            "账本第 4 行还在窗口里"
+        );
+        assert_eq!(pane.ledger_row(CAP), None, "窗口之外的来源行没有行号");
+        assert_eq!(pane.pushed(), CAP + 3, "推入总数是账本的水位");
+    }
 
     /// 推过上限之后，`push` 报的数是它真丢掉的那些源行 —— 绘制侧的平行表就靠这个数跟窗格
     /// 同进同出（[`super::CAP`]，`.scratch/trace-tab/issues/07-pane-evict-accounting.md`）。

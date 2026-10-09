@@ -290,7 +290,7 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
 
 /// 工具详情顶上那条标签条上的四个面名 —— 它同时是「覆盖层立着、正落在**参数**那一面」
 /// 的判据（票 13 第 5 条），而今天那块正文里的小节标题 `── 参数 ──` 不再画了。
-const TOOL_FACES: &str = "参数┆输出┆计时┆概述";
+const TOOL_FACES: &str = "参数┆输出┆计时┆来源┆概述";
 
 /// 切到下一面（`Tab`）—— 那些输出正文住在「输出」那一面上，而打开时落在「参数」。
 fn next_face(state: &mut TuiState) {

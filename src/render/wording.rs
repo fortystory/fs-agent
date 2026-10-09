@@ -484,6 +484,71 @@ pub fn detail_summary_face() -> &'static str {
     "概述"
 }
 
+// ---------------------------------------------------------------------------
+// 详情覆盖层的面：来源面（`.scratch/trace-ledger/spec.md` §6，票 14）
+// ---------------------------------------------------------------------------
+
+/// 注入那一面的面名。它此前没有名字 —— 单面详情不画标签条，那一名也就没人念（票 14 第 4 条）。
+pub fn detail_injection_face() -> &'static str {
+    "注入"
+}
+
+/// 来源面的面名，也是标签条上「计时」与「概述」之间那一格（票 14 第 3 条）。
+pub fn detail_source_face() -> &'static str {
+    "来源"
+}
+
+/// 来源面那条链上的四环各叫什么（票 14 第 1 条）：本行，以及它上面那三环。
+pub fn chain_here() -> &'static str {
+    "本行"
+}
+
+pub fn chain_reply() -> &'static str {
+    "上面那条迭代的回复"
+}
+
+pub fn chain_unit() -> &'static str {
+    "那一回合"
+}
+
+pub fn chain_user() -> &'static str {
+    "上面那条用户消息"
+}
+
+/// 一环在**账本上的位置**：第几行。位置裁不掉，所以行首文字取不到时它仍然给得出来
+/// （票 14 第 6 条）。
+pub fn chain_row(row: usize) -> String {
+    format!("第 {row} 行")
+}
+
+/// 链上的一环：`上面那条迭代的回复 · 第 118 行 · 09:12:11 [kimi] ▸ …`。
+///
+/// `text` 是那一行的行首文字，**拿不到就只给位置** —— 那一行被上限裁掉了，而位置与内容是
+/// 两件事（票 14 第 6 条）。
+pub fn chain_link(label: &str, row: usize, text: Option<&str>) -> String {
+    match text {
+        Some(text) => format!("{label} · {} · {text}", chain_row(row)),
+        None => format!("{label} · {}", chain_row(row)),
+    }
+}
+
+/// 链上除本行以外的每一环前面那个记号：这一环是从本行**往上**的一步。
+pub fn chain_arrow() -> &'static str {
+    "← "
+}
+
+/// 这一行不在账本上时怎么写（今天的四种单面详情各走自己的面，到不了这里；这一句是那一支的
+/// 实话）。
+pub fn chain_unknown() -> &'static str {
+    "这一行不在账本上"
+}
+
+/// 链固定截到三环，更深的链不再展开（票 14 第 1 条）。链深不封顶 —— 一个回合能有几百次
+/// 迭代 —— 所以这一句写在链尾，而不是拿整块面去换深度。
+pub fn chain_deeper() -> &'static str {
+    "…（更深的链不再展开）"
+}
+
 /// 计时面里「这一面有两节」时那两节的小标题。一节的时候不画 —— 它只是把面名重复一遍
 /// （票 13 第 9 条）。
 pub fn timing_call_section() -> &'static str {
@@ -577,6 +642,11 @@ pub fn summary_message() -> &'static str {
 /// 概述面里一段思考「是什么」。
 pub fn summary_thinking() -> &'static str {
     "一段思考"
+}
+
+/// 概述面里一条上下文注入「是什么」（票 14 第 5 条）。
+pub fn summary_injection() -> &'static str {
+    "一条注入"
 }
 
 /// 概述面里一条不属于任何一面的记录「是什么」。单面那四种没有概述面，所以这是一句兜底 ——

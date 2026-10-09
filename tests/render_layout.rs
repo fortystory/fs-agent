@@ -128,7 +128,7 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 它同时是「覆盖层立着、正落在**默认面**上」的判据：工具落在**参数**、消息落在**正文**
 /// （票 13 第 5 条）。今天那块正文里的小节标题 `── 参数 ──` 不再画了 —— 面名由标签条说，
 /// 正文不重复它（票 13 第 9 条）。
-const TOOL_FACES: &str = "参数┆输出┆计时┆概述";
+const TOOL_FACES: &str = "参数┆输出┆计时┆来源┆概述";
 const MESSAGE_FACES: &str = "正文┆计时┆概述";
 const THINKING_FACES: &str = "思考┆计时┆概述";
 
@@ -11288,8 +11288,198 @@ fn the_label_bar_borrows_a_body_row_without_touching_the_box() {
 
 #[test]
 fn a_detail_with_one_face_draws_no_bar_at_all() {
-    // 面数 ≤ 1 的详情**不画**标签条，且与今天逐字相同：一份注入详情的正文顶上仍是它那一
-    // 行来源标题（票 13 第 6 条）。
+    // 面数 ≤ 1 的详情**不画**标签条，且与今天逐字相同：文件 / 改动 / 待办的主体本身就是一份
+    // 完整的可滚动对象，不必多点一次（票 14 第 7 条）。这里拿待办那一份验。
+    let mut state = state_with_roster(&["kimi"]);
+    apply_todo(
+        &mut state,
+        "call-1",
+        kimi(),
+        todo_args(&[("一件事", "pending")]),
+    );
+    let tab = tab_bar_row(&mut state, 120, 24);
+    click_in_row(&mut state, 120, 24, tab, wording::TAB_TODO);
+    let frame = buffer(120, 24, &mut state);
+    let (column, row) = cell_of(&frame, 120, 24, "一件事").expect("那一项在页上");
+    click(&mut state, column, row);
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains(wording::detail_summary_face())
+            && !text.contains(wording::detail_source_face()),
+        "单面详情连标签条都没有：{text}"
+    );
+    assert!(
+        text.contains(&wording::detail_todo_title(None)),
+        "正文还是今天那一份（标题 + 清单）：{text}"
+    );
+    assert!(text.contains("一件事"), "{text}");
+}
+
+/// 一次迭代：一个回合里的第几次模型调用 —— 组头编号与「上面那条迭代的回复」那一环都看它。
+fn iteration(state: &mut TuiState, seq: u64, at: chrono::DateTime<chrono::Utc>, ordinal: u32) {
+    use heng::events::EventPayload;
+    state.apply(at_event(
+        seq,
+        at,
+        EventPayload::TurnStarted {
+            agent: kimi(),
+            iteration: ordinal,
+        },
+    ));
+}
+
+/// 一次模型调用的完成：助手说的那一段。来源面那条链上「一次迭代的回复」就是它。
+fn assistant_says(state: &mut TuiState, seq: u64, at: chrono::DateTime<chrono::Utc>, text: &str) {
+    use heng::events::{EventPayload, Role};
+    state.apply(at_event(
+        seq,
+        at,
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: text.to_owned(),
+            reasoning: None,
+            first_token_ms: None,
+        },
+    ));
+}
+
+#[test]
+fn a_tool_detail_reads_the_read_only_chain_that_carried_this_row() {
+    // 来源面：一条**只读的祖先链** —— 本行 → 上面那条迭代的回复 → 那一回合 → 上面那条用户
+    // 消息，每一环带着行首文字与它在账本上的位置（票 14 第 1 条）。
+    //
+    // 这一次调用落在**第三次迭代**里，所以链上头还有更早的迭代 —— 链固定截到三环，更深的
+    // 那些不再展开：一个几百次迭代的回合不会画出一长串（票 14 第 1 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    let start = a_call_start();
+    state.apply(user_message(1, "把 grep 的输出截断修一下"));
+    iteration(&mut state, 2, start, 1);
+    assistant_says(
+        &mut state,
+        3,
+        start + chrono::Duration::milliseconds(500),
+        "先看一眼那次调用。",
+    );
+    state.apply(tool_started(
+        4,
+        "call-first",
+        "grep",
+        serde_json::json!({"pattern": "截断"}),
+    ));
+    state.apply(tool_completed(5, "call-first", true, Some("out"), None));
+    iteration(&mut state, 6, start + chrono::Duration::seconds(1), 2);
+    assistant_says(
+        &mut state,
+        7,
+        start + chrono::Duration::seconds(2),
+        "头尾都留住了，省掉多少也写清楚了。",
+    );
+    state.apply(tool_started(
+        8,
+        "call-second",
+        "bash",
+        serde_json::json!({"command": "cargo test"}),
+    ));
+    state.apply(tool_completed(9, "call-second", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state); // 参数 → 输出
+    next_face(&mut state); // 输出 → 计时
+    next_face(&mut state); // 计时 → 来源
+
+    let rows = screen(120, 40, &mut state);
+    let text = rows.join("\n");
+    for (label, hint) in [
+        (wording::chain_here(), "本行"),
+        (wording::chain_reply(), "上面那条迭代的回复"),
+        (wording::chain_unit(), "那一回合"),
+        (wording::chain_user(), "上面那条用户消息"),
+    ] {
+        assert!(text.contains(label), "链上有{hint}：{text}");
+    }
+    assert!(
+        text.contains("头尾都留住了，省掉多少也写清楚了。"),
+        "回复那一环的行首文字是它上面最近的那一条：{text}"
+    );
+    assert!(
+        text.contains("把 grep 的输出截断修一下"),
+        "用户消息那一环的行首文字：{text}"
+    );
+    assert_eq!(
+        text.matches(wording::chain_arrow()).count(),
+        3,
+        "四环连成一条：本行之外那三环各带一个「往上」的记号，一个不多一个不少：{text}"
+    );
+    assert_eq!(
+        text.matches(wording::chain_reply()).count(),
+        1,
+        "更早的迭代不再展开：链只有那一条回复：{text}"
+    );
+    assert!(
+        text.contains(wording::chain_deeper()),
+        "而它写清了截到三环：{text}"
+    );
+    // 每一环都带着它在账本上的位置（`第 N 行`）。
+    for row in rows
+        .iter()
+        .filter(|row| row.contains(wording::chain_arrow()) || row.contains(wording::chain_here()))
+    {
+        assert!(
+            row.contains("第 ") && row.contains(" 行"),
+            "这一环带着位置：{row:?}"
+        );
+    }
+}
+
+#[test]
+fn a_chain_that_breaks_ends_there_instead_of_a_placeholder() {
+    // 开场段落里的一次调用：它上面既没有迭代的回复、也没有回合与用户消息 —— 链在某一环自然
+    // 断掉，面上**不写占位符**（票 14 第 2 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-preamble",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-preamble", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state); // 参数 → 输出
+    next_face(&mut state); // 输出 → 计时
+    next_face(&mut state); // 计时 → 来源
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(wording::chain_here()), "链上仍有本行：{text}");
+    assert!(
+        !text.contains(wording::chain_arrow()),
+        "而它上面一环都没有 —— 链就是渐短的：{text}"
+    );
+    for label in [
+        wording::chain_reply(),
+        wording::chain_unit(),
+        wording::chain_user(),
+    ] {
+        assert!(
+            !text.contains(label),
+            "断在哪儿就画到哪儿，不补「{label}」：{text}"
+        );
+    }
+    assert!(
+        !text.contains(wording::UNAVAILABLE),
+        "也不写「不可用」这种占位：{text}"
+    );
+    assert!(
+        !text.contains(wording::chain_deeper()),
+        "链没被截断：{text}"
+    );
+}
+
+#[test]
+fn an_injection_detail_grows_a_label_bar_and_still_opens_on_the_injection() {
+    // 注入从今天那一面长出第二面来：标签条上写着「注入 ┆ 概述」，而**默认面仍是注入** ——
+    // 打开就看到今天那份正文（来源标题 + 内容），面名只是第一次写出来（票 14 第 4 条）。
     let mut state = state_with_roster(&["kimi"]);
     state.apply(heng::render::RenderEvent::Logged(heng::events::Event::new(
         1,
@@ -11304,14 +11494,18 @@ fn a_detail_with_one_face_draws_no_bar_at_all() {
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(
-        !text.contains(wording::detail_summary_face()),
-        "单面详情没有标签条：{text}"
+        text.contains(&format!(
+            "{}┆{}",
+            wording::detail_injection_face(),
+            wording::detail_summary_face()
+        )),
+        "顶上按顺序列着这两面：{text}"
     );
     assert!(
         text.contains(&wording::context_source(
             &heng::events::ContextSource::AgentsMd
         )),
-        "正文还是今天那一份（来源标题 + 内容）：{text}"
+        "默认落在注入那一面：{text}"
     );
     assert!(text.contains("注入的正文一段"), "{text}");
 }
