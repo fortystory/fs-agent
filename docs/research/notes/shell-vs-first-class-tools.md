@@ -231,7 +231,7 @@ Windows 分支对应 `findstr` / `Select-String` / `type` / `Get-Content`。
 
 ### 3.6 与 heng 现有措辞的逐条对比
 
-heng 的 `grep` 工具描述（[`src/tools/grep.rs`](../../src/tools/grep.rs) 第 53–56 行）：
+heng 的 `grep` 工具描述（[`src/tools/grep.rs`](../../../src/tools/grep.rs) 第 53–56 行）：
 
 > "在工作区里按行搜索正则（rg 语法）。这是搜代码的首选方式 —— **不要用 `bash` 拼 `rg` / `grep`**：这个工具是只读的，在每一档权限模式下都放行。范围是会话工作区，遵守 `.gitignore` 并跳过隐藏文件；结果形如 `path:line:文本`，命中太多时会被截断并给出一条落盘路径。"
 
@@ -340,7 +340,7 @@ goose 给每个工具挂 `ToolAnnotations::from_raw(title, read_only_hint, destr
 | **Claude Code `Glob`** | 文件路径列表，按 mtime 排序 | **100**，命中上限给截断标志 | 未在文档中明示 |
 | **Claude Code `Grep`** | 三种模式；`count` 模式的总计数覆盖被 `head_limit`/`offset` 截断的命中 | `head_limit` / `offset` 由模型给 | `offset` 越界时**单独一句** `No entries at this offset`，明确区别于"没有匹配"；ripgrep 拒绝的 pattern 返回带诊断信息的错误而不是 `No files found` |
 | **goose `shell`** | 结构化对象（stdout / stderr 分开） | 每流 **2000 行**，超出落临时文件 | 不适用 |
-| **heng `grep`** | `相对路径:行号:文本` | **500** 条，超出末尾写「还有 N 条未列出：请缩小搜索范围，或用 `glob` 只搜一部分文件」；token 截断走统一流水线 | 一句如实说明，不返回空字符串（[`docs/grep.md`](../../docs/grep.md)） |
+| **heng `grep`** | `相对路径:行号:文本` | **500** 条，超出末尾写「还有 N 条未列出：请缩小搜索范围，或用 `glob` 只搜一部分文件」；token 截断走统一流水线 | 一句如实说明，不返回空字符串（[`docs/grep.md`](../../../docs/grep.md)） |
 
 ### 6.1 Gemini CLI 的 auto-context：唯一一家主动加上下文的
 
@@ -404,7 +404,7 @@ goose 给每个工具挂 `ToolAnnotations::from_raw(title, read_only_hint, destr
 
 2. **措辞强度与"例外出口"是两件事。** 没有任何一家在执行层拦截，所以强度只能来自文本。opencode 用的是 `DO NOT` / `NOT` 加"unless explicitly instructed or when these commands are truly necessary"这类出口条件；Codex 用 `NEVER try ... only ...`。反过来，**只写禁令不给出路会有代价**：opencode 的 grep 描述专门为"计数"这个专用工具做不到的场景开了个 `rg` 的口子，Gemini 的 `grep_search` 则干脆不做计数（`names_only` 只给路径），Codex 的 `grep_files` 则把 `--files-with-matches` 固定住、只给路径列表——三家对"计数"这件事的处理各不相同。
 
-3. **"只读搜索走专用工具"确实能省掉一次批准，这有三处一手佐证。** Claude Code 内置 read-only 命令集（`grep`/`rg`/`find`/`git diff`/`git grep`…）免提示；Gemini CLI 允许把 `tools.core` 收成 `["run_shell_command(git)"]`——注意这条 WARNING 说这样一收 `grep_search` 也会一起消失；opencode 的权限请求是从 tree-sitter 解析出的命令模式出发的。这三点都指向 heng 把 `grep` 的 `effect()` 定成 `Effect::ReadOnly` 所换来的东西是真实的（见 [`docs/grep.md`](../../docs/grep.md)）。
+3. **"只读搜索走专用工具"确实能省掉一次批准，这有三处一手佐证。** Claude Code 内置 read-only 命令集（`grep`/`rg`/`find`/`git diff`/`git grep`…）免提示；Gemini CLI 允许把 `tools.core` 收成 `["run_shell_command(git)"]`——注意这条 WARNING 说这样一收 `grep_search` 也会一起消失；opencode 的权限请求是从 tree-sitter 解析出的命令模式出发的。这三点都指向 heng 把 `grep` 的 `effect()` 定成 `Effect::ReadOnly` 所换来的东西是真实的（见 [`docs/grep.md`](../../../docs/grep.md)）。
 
 4. **零匹配必须写句子，且要与"翻页越界"分开。** 四家都给了明确句子（opencode `"No files found"`、Gemini `No matches found for pattern "…" in … (filter: "…").`、Codex `"No matches found."`、heng 的中文说明），Claude Code 还专门把 `offset` 越界写成另一句 `No entries at this offset`，以免模型把"翻过头了"读成"没有匹配"。heng 已有这个区分，值得保持。
 
