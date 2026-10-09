@@ -48,7 +48,8 @@ pub trait Viewer: Send {
 ///
 /// **`Ctrl-C` 与 `Ctrl-Z` 不在这里**：前者是前端的「关掉这个浮层」，后者是终端层的挂起手势
 /// （`.scratch/suspend-gesture/spec.md` §1「任何视图都拦不住它」），两者都由
-/// `TuiState::key` 在更前面接走，根本到不了这里。
+/// `TuiState::key` 在更前面接走，根本到不了这里。**`Ctrl-V` 也不在这里**，理由是另一条：
+/// 它到得了这里，而这张表就是它唯一的出路 —— 表里没有它，于是它不发出去（见下面那一行）。
 ///
 /// 一个已知的缺口：`Key` 不带修饰信息（`map_key` 那一层就把 `Alt+x` 当裸字符收下了），
 /// 所以带 `Alt` 的组合到不了 nvim。换来的是这一层不必再懂一遍 crossterm 的键模型。
@@ -91,7 +92,10 @@ pub fn key_bytes(key: &Key) -> Option<Vec<u8>> {
         // nvim 的 transpose：它在浮层里独占键盘，所以选择器那个手势到不了这里，得照原样
         // 进去（`.scratch/nvim-file-viewer/spec.md` §4）。
         Key::CtrlT => vec![0x14],
-        Key::CtrlC | Key::CtrlZ => return None,
+        // `Ctrl-V`（主列两页的切换，`.scratch/trace-shortcuts/spec.md` §1）**不在这一张表里**：
+        // 这一档是一块外来的屏幕，表里没有的键一律不发 —— 与 `Ctrl-C` / `Ctrl-Z` 同一条规矩，
+        // 于是它在查看器立着时既不到 nvim 那里，也不切页签。
+        Key::CtrlC | Key::CtrlV | Key::CtrlZ => return None,
     };
     Some(bytes)
 }

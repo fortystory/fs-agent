@@ -1623,14 +1623,48 @@ pub fn status_spinner(frame: u64, busy: bool) -> &'static str {
 ///
 /// **位置就是优先级**：[`hint_line`] 从前往后填、超宽就停，所以排在最末的那条是窄档最先
 /// 丢掉的一条。左栏开关因此挂在最后 —— 滚动比它常用得多
-/// （`.scratch/sidebar-toggle/spec.md` §4）。
-const KEY_HINTS: [&str; 7] = [
+/// （`.scratch/sidebar-toggle/spec.md` §4）；`ctrl-v 轨迹` 插在它前面一格，理由与它同一档：
+/// 两个都是纯视图手势，而翻页签比收左栏更贴着手上的事。实测的落差：这一套要 **134 列**提示行
+/// 才齐，`ctrl-v 轨迹` 在 **120 列**起就有，而 `ctrl-o 左栏` 那一条要等 134 列
+/// （`.scratch/trace-shortcuts/spec.md` §1）。
+///
+/// 轨迹页**不铺这一套**，它有自己的 [`TRACE_HINTS`] —— `enter` 在两页上不是同一件事
+/// （spec §2）。
+const KEY_HINTS: [&str; 8] = [
     "enter 发送",
     "ctrl-j 换行",
     "esc 取消",
     "shift+tab 模式",
     "PgUp/PgDn 滚动",
     "ctrl-t 换模型",
+    "ctrl-v 轨迹",
+    "ctrl-o 左栏",
+];
+
+/// 轨迹页（主列页签条的第二页）的键位提示，按它们显示的先后：最常用的在前。
+///
+/// **这是本仓库第二套提示表，不是 [`KEY_HINTS`] 的一条分支**：提示说的是键盘现在会做什么，
+/// 而这两页的键盘语义是两份 —— `enter` 在对话页是发送、在轨迹页是开详情，`shift+tab 模式`
+/// 只在输入区那一侧有东西可切（`.scratch/trace-shortcuts/spec.md` §2）。
+///
+/// **位置就是优先级**，判据与 [`KEY_HINTS`] 同一条：窄档从末位丢起。`ctrl-o 左栏` 两页都收在
+/// 最后（它是两页共用的那条收尾）；`ctrl-v 对话` 排在它前面一格 —— 两者都是纯视图手势，
+/// 而翻页签比收左栏更贴着手上的事。实测的落差：这张表要 **143 列**提示行才齐，`ctrl-v 对话`
+/// 在 **129 列**起就有，而 `ctrl-o 左栏` 那一条要等 143 列。
+///
+/// 次序里没有 `g` / `G`（跳到第一条 / 跳到最新）与 `ctrl-t 换模型`：前者是 `↑↓/j/k` 的加速
+/// 档，后者开出来的浮层自带完整键位说明 —— 能进表的只有「不知道就找不到路」的那些，与
+/// [`KEY_HINTS`] 里把 `ctrl-t` 排到末位的理由相同。
+const TRACE_HINTS: [&str; 10] = [
+    "↑↓/j/k 移动",
+    "enter 详情",
+    "/ 搜索",
+    "space 折叠",
+    "n/N 命中",
+    "[ ] 层级",
+    "{ } 全折展",
+    "esc 退出层",
+    "ctrl-v 对话",
     "ctrl-o 左栏",
 ];
 
@@ -1697,6 +1731,26 @@ pub fn viewer_status_line_with(
     raised: bool,
 ) -> String {
     hint_row(receipt, &VIEWER_HINTS, exit_hint(busy, raised), width)
+}
+
+/// 主列当前显示**轨迹页**时的提示行：同样的阶梯，铺在 [`TRACE_HINTS`] 上。
+///
+/// 它排在 [`status_line`] / [`viewer_status_line`] 那个分叉**之前**，因为 `prompt_reply` 管
+/// 不着这一页：轨迹页上的 `enter` 是开详情的键，而它收编的是 `↑` / `↓` 那一族
+/// （`.scratch/trace-ledger/spec.md` §4）—— 于是它在讨论会话里也照样成立，不像对话页那样
+/// 分「有没有人在读行」两支（`.scratch/trace-shortcuts/spec.md` §2）。
+pub fn trace_status_line(busy: bool, width: u16, raised: bool) -> String {
+    trace_status_line_with(None, busy, width, raised)
+}
+
+/// 同上，但把一个**回执**排在最前 —— 复制、打开与 `Notice` 都照旧落在这一页上。
+pub fn trace_status_line_with(
+    receipt: Option<&str>,
+    busy: bool,
+    width: u16,
+    raised: bool,
+) -> String {
+    hint_row(receipt, &TRACE_HINTS, exit_hint(busy, raised), width)
 }
 
 /// 一次复制之后提示行打头的那句回执（`.scratch/tui-feedback/spec.md` §6）。

@@ -155,6 +155,15 @@ pub enum Key {
     /// 为什么不取 `Ctrl-M`：它在终端里就是回车（`\r`），crossterm 报成 `KeyCode::Enter`，
     /// 与「提交」正面撞车 —— 与 `Ctrl-J` 是同一件事（`.scratch/tui-feedback/spec.md` §9）。
     CtrlT,
+    /// `Ctrl-V`：主列两页的切换 —— 对话 ⇄ 轨迹（`.scratch/trace-shortcuts/spec.md` §1）。
+    ///
+    /// 与 [`Key::CtrlO`] 同一档的纯视图手势：忙闲都生效、也不清举手；详情覆盖层与历史重放
+    /// 这两处独占键盘的视图拦得住它，文件查看器那一档它进的是查看器的显式转发表（不在表里，
+    /// 于是不发）。
+    ///
+    /// 为什么不取 `Ctrl-K`：它在输入区占着「抹到行尾」（与 `Ctrl-U` 的「抹到行首」成对，
+    /// 见 `map_key` 那一批 Emacs 键）；`Ctrl-V` 在本前端的键盘表里是一枚空闲键。
+    CtrlV,
     PageUp,
     PageDown,
 }
@@ -180,6 +189,9 @@ fn map_key(key: KeyEvent) -> Option<Key> {
                 // `Ctrl-M` 不在这儿：它在终端里就是回车（`\r`），落到下面那个 `Enter` 分支
                 // 里去 —— 与「提交」撞车（spec §7）。
                 't' => Some(Key::CtrlT),
+                // 主列两页的切换（`.scratch/trace-shortcuts/spec.md` §1）：`Ctrl-K` 被行编辑
+                // 的「抹到行尾」占着，它是这一圈里剩下的那枚空闲键。
+                'v' => Some(Key::CtrlV),
                 _ => None,
             };
         }
@@ -4461,15 +4473,7 @@ impl TuiState {
                     }
                 }
             }
-            Some(HitAction::SwitchMainTab(tab)) => {
-                self.main_tab = tab;
-                // 轨迹页**重新成为当前显示页时自动回到持有**（票 18 第 3 条）：交还过的那
-                // 一位不留着 —— 它是「我要去轨迹页上做事」那一下，没必要再多点一次。
-                // 切到对话页时不用管：那一层的前提本来就不成立。
-                if tab == MainTab::Trace {
-                    self.take_trace_keyboard();
-                }
-            }
+            Some(HitAction::SwitchMainTab(tab)) => self.set_main_tab(tab),
             // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
             // 拼法**，是名册里的配置事实，所以它只给一句说明。
             Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
@@ -4842,10 +4846,12 @@ impl TuiState {
             Key::Enter => self.accept_trace_search(),
             Key::Esc => self.cancel_trace_search(),
             // 这几类不是「打进查询串的字」，照旧走它们本来的路：取消 / 退出、左栏开关、
-            // 选择器、翻页三键、模式循环。收下它们就等于在搜索模式里扣住了这些全局手势。
+            // 主列切页、选择器、翻页三键、模式循环。收下它们就等于在搜索模式里扣住了这些全局
+            // 手势。
             Key::CtrlC
             | Key::CtrlD
             | Key::CtrlO
+            | Key::CtrlV
             | Key::CtrlT
             | Key::CtrlG
             | Key::PageUp
@@ -5633,6 +5639,30 @@ impl TuiState {
     /// 这个位置。
     fn release_trace_keyboard(&mut self) {
         self.trace_keyboard = false;
+    }
+
+    /// 切主列页签：点页签与 `Ctrl-V` 走的是这同一条路。
+    ///
+    /// 轨迹页**重新成为当前显示页时自动回到持有**（票 18 第 3 条）：交还过的那一位不留着
+    /// —— 它是「我要去轨迹页上做事」那一下，没必要再多点一次。切到对话页时不用管：那一层
+    /// 的前提本来就不成立（`trace_keyboard` 只在主列显示轨迹页时被读）。
+    fn set_main_tab(&mut self, tab: MainTab) {
+        self.main_tab = tab;
+        if tab == MainTab::Trace {
+            self.take_trace_keyboard();
+        }
+    }
+
+    /// `Ctrl-V`：在对话页与轨迹页之间翻一个来回（`.scratch/trace-shortcuts/spec.md` §1）。
+    ///
+    /// 两个标签只有两个，所以「翻一个来回」就是它的全部语义；切换本身落到
+    /// [`Self::set_main_tab`]，与点页签**逐字同路**。
+    fn switch_main_tab(&mut self) {
+        let tab = match self.main_tab {
+            MainTab::Conversation => MainTab::Trace,
+            MainTab::Trace => MainTab::Conversation,
+        };
+        self.set_main_tab(tab);
     }
 
     /// 点在输入区上：把键盘还给输入区，回答 `true`。
@@ -6625,6 +6655,14 @@ impl TuiState {
             }
             return;
         }
+        // 主列两页的切换（`.scratch/trace-shortcuts/spec.md` §1）：与左栏开关同一档的纯视图
+        // 手势 —— 忙闲都生效、不清举手，而详情覆盖层与历史重放拦得住它（上面两支已经提前
+        // 返回），选择器立着时归选择器（也已经在上面返回）。它排在轨迹页那一支之后：轨迹页
+        // 只认自己收编的那几个键，这一枚照旧落到这里，而搜索模式里也不许把它扣下。
+        if key == Key::CtrlV {
+            self.switch_main_tab();
+            return;
+        }
         // 别的键先清掉旧的举手：半分钟前那一下不该莫名其妙地算数（spec §1）。`Ctrl-C` 与
         // `Ctrl-D` 自己不在这里清 —— 它们正是要摸这把举手的那两个键；问卷立着时的 `Esc`
         // 也不是「别的键」，它摸的是槽位里另一把（`.scratch/questionnaire-keys/spec.md` §5）。
@@ -7369,6 +7407,10 @@ impl TuiState {
 
     /// 提示行的文字：键位提示与出口。**状态词不在这里** —— 它在状态行的最后一段
     /// （`.scratch/tui-visual-language/spec.md` §18）。
+    ///
+    /// 键位提示有**两套**，按主列当前显示的那一页挑：对话页那套见
+    /// [`wording::status_line_with`]，轨迹页那套见 [`wording::trace_status_line_with`]
+    /// （`.scratch/trace-shortcuts/spec.md` §2）。出口那一段两页共用。
     fn hint_line(&self, width: u16) -> String {
         // 只有**退出**那一把会换提示行的出口段：举着「退出这次询问」时那句
         // 「再按一次 ctrl-c/ctrl-d 退出」是错的（问卷的举手由它自己的页脚说，见票 04）。
@@ -7391,6 +7433,13 @@ impl TuiState {
             .notice_line()
             .or_else(|| self.open_receipt())
             .or_else(|| self.copy_receipt());
+        // **主列的两页各有自己的一套提示**（`.scratch/trace-shortcuts/spec.md` §2）：判据是
+        // 当前显示的是哪一页，所以这一支排在下面那个 `prompt_reply` 分叉**之前** —— 轨迹页上
+        // 的 `enter` 是开详情、不是发送，而它在讨论会话里也照样成立（与 `viewer_status_line`
+        // 那条区分同一个理由：提示说的是键盘*现在*干什么）。
+        if self.main_tab == MainTab::Trace {
+            return wording::trace_status_line_with(receipt.as_deref(), self.busy(), width, raised);
+        }
         if self.prompt_reply.is_some() {
             wording::status_line_with(receipt.as_deref(), self.busy(), width, raised)
         } else {
@@ -8306,7 +8355,8 @@ fn draw_tab_bar(
 /// （`.scratch/trace-in-main/spec.md` §1、§2）。
 ///
 /// 它只画标签下面那一条线 —— 屏幕第一行就是标签那一行，上边界就是屏幕自己，不必再画一条。
-/// 点标签切页、从不给键位：照左栏那条既有的规矩（`Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环）。
+/// 点标签切页，而键盘上另有一个 `Ctrl-V` 切它（`.scratch/trace-shortcuts/spec.md` §1）——
+/// `Tab` 与 `Shift+Tab` 照左栏那条既有的规矩归 `/` 菜单与模式循环。
 fn draw_main_tab_bar(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
     paint_rule(
         frame,
@@ -8681,8 +8731,10 @@ enum Tab {
 
 /// 正在显示主列的哪一页：同一份转录的两个视图（`.scratch/trace-in-main/spec.md` §2）。
 ///
-/// 与 [`Tab`] 同一套规矩：点出来的、从不给键位、只活在这一次进程里。默认是 `Conversation`
-/// —— 起步与拆分之前一致。
+/// 与 [`Tab`] 同一套规矩：只活在这一次进程里。默认是 `Conversation`
+/// —— 起步与拆分之前一致。**跟左栏那几页不同的是它有一个键位**：`Ctrl-V` 在两页之间翻一个
+/// 来回（`.scratch/trace-shortcuts/spec.md` §1，那一条推翻了「两处页签都不给键位」里主列那
+/// 一半）；左栏那几页仍然只靠点 —— `Tab` 归 `/` 菜单、`Shift+Tab` 归模式循环。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MainTab {
     /// 对话视图：用户文本、assistant 正文与保留清单。

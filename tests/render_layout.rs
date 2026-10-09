@@ -793,7 +793,7 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         "忙碌只换出口那一段：{busy:?}"
     );
 
-    // 174 列能把每条提示都放下。
+    // 174 列能把除左栏开关之外的每条提示都放下。
     let roomy = hint_items(174);
     assert_eq!(roomy.first().unwrap(), "enter 发送", "{roomy:?}");
     assert!(
@@ -804,9 +804,21 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
         roomy.contains(&"ctrl-t 换模型".to_owned()),
         "换模型的快捷键在表里：{roomy:?}"
     );
+    // `ctrl-v 轨迹` 插在 `ctrl-o 左栏` 前面一格（两个都是纯视图手势，而翻页签更贴着手上的
+    // 事），于是整份表从 120 列涨到 134 列提示行 —— 174 列终端给 133 列，差一列，让掉的是
+    // 左栏开关（位置就是优先级，它本来就在最末）。
     assert!(
-        roomy.contains(&"ctrl-o 左栏".to_owned()),
-        "左栏开关是这一档多出来的那一条：{roomy:?}"
+        roomy.contains(&"ctrl-v 轨迹".to_owned()),
+        "174 列那一档里新键已经看得见：{roomy:?}"
+    );
+    assert!(
+        !roomy.contains(&"ctrl-o 左栏".to_owned()),
+        "整份表还差一列：{roomy:?}"
+    );
+    assert!(
+        hint_items(175).contains(&"ctrl-o 左栏".to_owned()),
+        "175 列（134 列提示行）放下整份表：{:?}",
+        hint_items(175)
     );
     // 120 列下它已经被让掉 —— 窄终端先丢最后两条，而这一行还有更常用的键要放。
     assert!(
@@ -819,6 +831,56 @@ fn the_hint_row_gives_up_hints_before_it_gives_up_the_way_out() {
             .join("\n")
             .contains("shift+enter"),
         "任何宽度下都没有幽灵换行键"
+    );
+}
+
+/// 轨迹页有**自己的**一套提示（`.scratch/trace-shortcuts/spec.md` §2）：那里的 `enter` 是开
+/// 详情，所以 `enter 发送` 与 `shift+tab 模式` 不该在那一页上出现，而轨迹页自己的键位要在。
+#[test]
+fn the_trace_page_hints_at_its_own_keys() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    let row = hint_items_of(120, &mut state).join(" · ");
+    assert!(row.contains("↑↓/j/k 移动"), "{row}");
+    assert!(row.contains("enter 详情"), "{row}");
+    assert!(!row.contains("enter 发送"), "轨迹页不承诺发送：{row}");
+    assert!(!row.contains("shift+tab"), "那一页没有模式可切：{row}");
+    assert!(row.ends_with("ctrl-c/ctrl-d 退出"), "出口照旧在末尾：{row}");
+
+    // 切回对话页，两套就换回来了 —— 这个状态里没有人在读行，于是换回来的是查看器那一套
+    // （那时 `enter 发送` 会是一个兑现不了的承诺，`.scratch/tui-feedback/spec.md` §6）。
+    state.key(Key::CtrlV);
+    let back = hint_items_of(120, &mut state).join(" · ");
+    assert!(back.contains("esc 取消"), "{back}");
+    assert!(back.contains("PgUp/PgDn 滚动"), "{back}");
+    assert!(!back.contains("↑↓/j/k 移动"), "{back}");
+
+    // 讨论会话里同样成立：一次 `discuss` 没有人在读行，而轨迹页那一页照旧是这一套 ——
+    // 判据排在「有没有人在读行」那个分叉之前。
+    let mut discussion = state_with_roster(&["kimi", "deepseek"]);
+    a_session_with_process_rows(&mut discussion);
+    open_trace_tab(&mut discussion, 120, 24);
+    let discussion_row = hint_items_of(120, &mut discussion).join(" · ");
+    assert!(discussion_row.contains("↑↓/j/k 移动"), "{discussion_row}");
+    assert!(
+        !discussion_row.contains("esc 取消") && !discussion_row.contains("PgUp/PgDn 滚动"),
+        "查看器那一套不该出现在轨迹页上：{discussion_row}"
+    );
+}
+
+/// 窄档下轨迹页的提示按阶梯丢，而出口永远在场 —— 那一条契约两页共用
+/// （`.scratch/trace-shortcuts/spec.md` §2）。
+#[test]
+fn the_trace_page_gives_up_hints_before_it_gives_up_the_way_out() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+    open_trace_tab(&mut state, 40, 24);
+    let row = hint_items_of(40, &mut state).join(" · ");
+    assert_eq!(row, "↑↓/j/k 移动 · ctrl-c/ctrl-d 退出", "{row}");
+    assert!(
+        !row.contains("enter 详情"),
+        "40 列（最小帧）那一档放不下第二条：{row}"
     );
 }
 
@@ -12376,6 +12438,122 @@ fn switching_the_main_tab_keeps_the_selection() {
         selected_rows_text(&mut state, 120, 40),
         before,
         "切走再切回来，同一块还亮着"
+    );
+}
+
+/// `Ctrl-V` 在主列两页之间翻一个来回（`.scratch/trace-shortcuts/spec.md` §1）：与点页签走
+/// **同一条路**，所以切到轨迹页时那一层照票 18 第 3 条自动回到持有。
+#[test]
+fn ctrl_v_flips_the_main_tab_both_ways() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut state);
+
+    // 起步是对话页：过程行不在上面。
+    let conversation = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(conversation.contains("问题"), "{conversation}");
+    assert!(
+        !conversation.contains("调用 bash"),
+        "过程行不进对话：{conversation}"
+    );
+
+    state.key(Key::CtrlV);
+    let page = trace_page(&mut state, 120, 24).join("\n");
+    assert!(page.contains("调用 bash"), "轨迹页画全量块：{page}");
+    // **自动回到持有**：切过去之后 `↓` 立刻选得中一块（票 18 第 3 条）。
+    state.key(Key::Down);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 24).len(),
+        1,
+        "切过去就能用方向键"
+    );
+
+    // 再按一下回来：过程行又出了对话页。
+    state.key(Key::CtrlV);
+    let back = conversation_rows(&mut state, 120, 24).join("\n");
+    assert!(back.contains("问题"), "{back}");
+    assert!(!back.contains("调用 bash"), "回到对话页：{back}");
+}
+
+/// `Ctrl-V` 与 `Ctrl-O` 同一档的**纯视图手势**：忙闲都生效、不清退出举手，而两处独占键盘
+/// 的视图（详情覆盖层、历史重放）拦得住它，选择器立着时归选择器
+/// （`.scratch/trace-shortcuts/spec.md` §1）。
+#[test]
+fn ctrl_v_is_a_view_only_gesture() {
+    // 跑着的时候也生效 —— 恰恰是那时最想翻过去看看工具在干什么。
+    let mut busy = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut busy);
+    busy.request(ConsoleRequest::RunState { running: true });
+    busy.key(Key::CtrlV);
+    assert!(
+        trace_page(&mut busy, 120, 24)
+            .join("\n")
+            .contains("调用 bash"),
+        "跑着的时候 Ctrl-V 也切得过去"
+    );
+
+    // 不清举手：半分钟前那一下退出举手照旧举着，提示行仍写着那句催促。
+    let mut raised = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut raised);
+    raised.key(Key::CtrlC);
+    raised.key(Key::CtrlV);
+    assert!(
+        screen(120, 24, &mut raised)
+            .join("\n")
+            .contains("再按一次 ctrl-c/ctrl-d 退出"),
+        "Ctrl-V 不清掉退出举手"
+    );
+
+    // 详情覆盖层立着时它进不去：一帧都不动，覆盖层也没被关掉。
+    let mut detail = state_with_roster(&["kimi"]);
+    detail.apply(tool_started(
+        1,
+        "call-24",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    detail.apply(tool_completed(2, "call-24", true, Some("body"), None));
+    open_trace_tab(&mut detail, 120, 40);
+    click_row(&mut detail, 120, 40, "调用 bash");
+    let open = screen(120, 40, &mut detail);
+    assert!(open.join("\n").contains(TOOL_FACES), "覆盖层立着");
+    detail.key(Key::CtrlV);
+    let after = screen(120, 40, &mut detail);
+    assert_eq!(open, after, "覆盖层立着时 Ctrl-V 一个像素都不动");
+    assert!(after.join("\n").contains(TOOL_FACES), "覆盖层也没被关掉");
+
+    // 历史重放里键盘归重放：它同样拦得住。
+    let mut replay = state_with_roster(&["kimi"]);
+    replay.request(ConsoleRequest::Replay {
+        events: vec![heng::events::Event::new(
+            1,
+            heng::events::SpeakerId::System,
+            heng::events::EventPayload::SessionStarted {
+                session_id: heng::events::SessionId::new("01J8ZQ4K7M"),
+                cwd: "/workspace".to_owned(),
+                schema_version: 1,
+            },
+        )],
+    });
+    assert!(replay.replay_pending(), "重放立着");
+    let before = screen(120, 24, &mut replay);
+    replay.key(Key::CtrlV);
+    assert_eq!(before, screen(120, 24, &mut replay), "重放期间它不动这一帧");
+
+    // 选择器立着时归选择器：这一下既不切页、也不改浮层。
+    let mut picking = state_with_roster(&["kimi"]);
+    a_session_with_process_rows(&mut picking);
+    let (request, _answer) = picker("模型", &[("claude-sonnet-4-5", true), ("kimi-k2", true)], 0);
+    picking.request(request);
+    let open = screen(120, 24, &mut picking);
+    picking.key(Key::CtrlV);
+    assert_eq!(open, screen(120, 24, &mut picking), "选择器吞下这一下");
+    // 关掉它之后主列还在对话页上 —— 那一下没有偷偷切页。
+    picking.key(Key::Esc);
+    assert!(
+        !conversation_rows(&mut picking, 120, 24)
+            .join("\n")
+            .contains("调用 bash"),
+        "选择器立着时 Ctrl-V 不切页"
     );
 }
 
