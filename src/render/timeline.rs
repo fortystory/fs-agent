@@ -76,6 +76,18 @@ impl BandKind {
     }
 }
 
+/// 横带上的两条泳道 —— 命中底色只铺在这两行上（`.scratch/trace-ledger/spec.md` §11、票 23）。
+///
+/// 它是**落轴判据**的另一半：一块命中落不落轴，看它属不属于一次模型调用或一次工具调用；
+/// 落哪一条就由它说。横带只有这两条泳道（「输入」泳道票 06 已判不做），于是没有第三个值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lane {
+    /// 模型泳道：一次模型调用占的那一段时间。
+    Model,
+    /// 工具泳道：一次工具调用占的那一段时间。
+    Tool,
+}
+
 /// 模型泳道的一格：这一段在**等首 token** 还是在**吐字**（票 22 第 2 条）。
 ///
 /// 只在拿得到首 token 时刻时才有 `Wait`：老会话整段都是一个 `Decode`，因为那时轴只知道
@@ -368,6 +380,14 @@ impl Axis {
         Some((first, last))
     }
 
+    /// **一格多长** —— 整趟跨度除以格数。
+    ///
+    /// 会话越长一格越粗，所以它不是常数；命中段之间「够不够断得开」按它判（[`hit_bands`]、
+    /// 票 23 第 3 条）。
+    pub fn cell(&self) -> TimeDelta {
+        (self.end - self.start) / i32::from(self.width)
+    }
+
     /// 一格左缘那一刻 —— 刻度标签按它取时刻。
     pub fn at_of(&self, column: u16) -> DateTime<Utc> {
         let span = (self.end - self.start).num_milliseconds();
@@ -398,4 +418,70 @@ pub fn ticks(axis: Axis, kind: BandKind) -> Vec<(u16, DateTime<Utc>)> {
         .into_iter()
         .map(|column| (column, axis.at_of(column)))
         .collect()
+}
+
+/// 一段命中底色：某条泳道上从哪一格到哪一格（**闭区间**，两端都算在内）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitBand {
+    /// 铺在哪条泳道上。
+    pub lane: Lane,
+    /// 这一段的第一格。
+    pub first: u16,
+    /// 这一段的最后一格（含）。
+    pub last: u16,
+}
+
+/// 把命中块合成一段段底色（`.scratch/trace-ledger/spec.md` §11、票 23）。
+///
+/// 输入是每个命中块的**落点**（在哪条泳道、哪一刻），而「哪些块算命中」在调用方 —— 注入、
+/// 问卷作答、`/` 命令、开场段落既不是模型调用也不是工具调用，于是根本不进这个列表。
+/// 「搜到的命中不一定都在轴上出现」那条限制就是它。
+///
+/// 三条口径：
+///
+/// * **相邻两块间隔小于一格算同一段**，大于等于一格才断开。阈值就是 [`Axis::cell`]，
+///   跟着分辨率走，不写死秒数 —— 分界画不出来就不画（票 23 第 3 条）。
+/// * 一条泳道上，一段底色**从它第一块铺到最后一块**：命中说的是「这一刻有命中」，那是
+///   **位置**而不是长度，与刻度行上那段视口区间是同一条口径。孤零零的一块因此也占得住它
+///   那一格 —— 否则「只搜到一个」在轴上永远看不见。
+/// * 两条泳道**各合各的**：同一刻的模型命中与工具命中是两段，因为它们铺在不同的行上。
+pub fn hit_bands(
+    axis: Axis,
+    hits: impl IntoIterator<Item = (Lane, DateTime<Utc>)>,
+) -> Vec<HitBand> {
+    let hits: Vec<(Lane, DateTime<Utc>)> = hits.into_iter().collect();
+    let cell = axis.cell();
+    let mut bands = Vec::new();
+    for lane in [Lane::Model, Lane::Tool] {
+        let mut times: Vec<DateTime<Utc>> = hits
+            .iter()
+            .filter(|(on, _)| *on == lane)
+            .map(|(_, at)| *at)
+            .collect();
+        times.sort_unstable();
+        let mut run: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
+        for at in times {
+            run = match run {
+                Some((first, previous)) if at - previous < cell => Some((first, at)),
+                Some((first, previous)) => {
+                    bands.push(band(axis, lane, first, previous));
+                    Some((at, at))
+                }
+                None => Some((at, at)),
+            };
+        }
+        if let Some((first, last)) = run {
+            bands.push(band(axis, lane, first, last));
+        }
+    }
+    bands
+}
+
+/// 一段时刻落在一条泳道上的哪几格。
+fn band(axis: Axis, lane: Lane, first: DateTime<Utc>, last: DateTime<Utc>) -> HitBand {
+    HitBand {
+        lane,
+        first: axis.column(first),
+        last: axis.column(last),
+    }
 }

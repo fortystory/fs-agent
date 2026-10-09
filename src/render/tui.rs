@@ -60,7 +60,7 @@ use super::pane::{self, Pane};
 use super::panel::{self, Panel};
 use super::selection;
 use super::severity::Severity;
-use super::timeline::{self, BandKind, ModelCell, Timeline};
+use super::timeline::{self, BandKind, Lane, ModelCell, Timeline};
 use super::token;
 use super::transcript::{
     Block, BlockId, CallTiming, ToolBlock, ToolOutcome, Transcript, summarize_args,
@@ -806,12 +806,13 @@ pub struct TuiState {
     /// 与 `painted` 同一条寿命：宽度重放**不重建**它（重放换的是窗格里的行，而这一趟的秒数
     /// 一个都没变）。
     timeline: Timeline,
-    /// 块身份 → 它首行那一刻。
+    /// 块身份 → 它在轴上的落点（哪一刻、落哪条泳道）。
     ///
-    /// 横带要问两件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
-    /// 底色要按视口里那几块算。两件都每帧问一次，所以它是一张表，不是对 `painted` 的一次
-    /// 线性查找（同一张纪律见 [`Self::timeline`]）。
-    block_at: std::collections::HashMap<BlockId, DateTime<Utc>>,
+    /// 横带要问三件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
+    /// 底色要按视口里那几块算，泳道行的**命中底色**要问这一块落不落轴、落在哪一条（票 23）。
+    /// 三件都每帧问一次，所以它是一张表，不是对 `painted` 的一次线性查找（同一张纪律见
+    /// [`Self::timeline`]）。
+    block_at: std::collections::HashMap<BlockId, BlockStamp>,
     /// 现在在不在一次模型调用里（`TurnStarted` 之后、`TurnEnded` 之前）。合成器那次调用不属于
     /// 任何回合，所以它的用量走独立行那条老路（§4）。
     in_call: bool,
@@ -2133,6 +2134,29 @@ impl Painted {
         }
     }
 
+    /// 这一条落不落轴，落在哪条泳道（`.scratch/trace-ledger/spec.md` §11、票 23 第 5 条）。
+    ///
+    /// 判据是**属不属于一次模型调用或一次工具调用**：工具块落工具泳道，助手消息与思考
+    /// （一次调用的推理那一段）落模型泳道。其余一律 `None` —— 注入、开场段落、问卷作答、
+    /// `/` 命令、文件 / 改动 / 待办那些既不是模型调用也不是工具调用，组头与小标题更是
+    /// 一次调用的**摘要**而不是一次调用。用户自己那条消息同理：它不是一次调用。
+    ///
+    /// 于是「搜到的命中不一定都在轴上出现」是可执行的判据的后果，而不是漏画。
+    fn lane(&self) -> Option<Lane> {
+        match self {
+            Painted::Block { block, .. } => match block {
+                Block::Tool(_) => Some(Lane::Tool),
+                Block::Message {
+                    role: Role::Assistant,
+                    ..
+                } => Some(Lane::Model),
+                _ => None,
+            },
+            Painted::Thinking { .. } | Painted::Thought(_) => Some(Lane::Model),
+            Painted::GroupHeader(_) | Painted::SectionHeader(_) => None,
+        }
+    }
+
     /// 这条记录尾上挂着的那一段，有的话。
     fn tail(&self) -> Option<Tail> {
         match self {
@@ -2154,6 +2178,17 @@ impl Painted {
             Painted::GroupHeader(_) | Painted::SectionHeader(_) => {}
         }
     }
+}
+
+/// 一个块在轴上的落点：它首行**那一刻**，以及它**落不落轴、落在哪条泳道**。
+///
+/// 两件事总是一起被问（横带每帧要问三处），所以它们是一条记录而不是两张表。`lane` 为
+/// `None` 的那些块（注入、问卷作答、`/` 命令、开场段落、组头与小标题）在轴上没有位置 ——
+/// 命中底色因此漏掉它们，而那是判据说好的（`.scratch/trace-ledger/spec.md` §11、票 23）。
+#[derive(Debug, Clone, Copy)]
+struct BlockStamp {
+    at: DateTime<Utc>,
+    lane: Option<Lane>,
 }
 
 /// 一段查询串切出来的那些词：空白分词、大小写不敏感、各词 **AND**
@@ -3119,13 +3154,19 @@ impl TuiState {
         }
     }
 
-    /// 把一条绘制记录推进重放清单，并记下它的身份与时刻。
+    /// 把一条绘制记录推进重放清单，并记下它的身份与它在轴上的落点。
     ///
-    /// 两张表同进同出：块身份那张（[`Self::block_at`]）是给横带用的（票 22 的第 9 条与
-    /// 「视口区间」那一条），而它与 `painted` 一样活过宽度重放 —— 重放走的就是这份清单，
-    /// 所以这里也是重放时重建身份表的地方。
+    /// 两张表同进同出：块身份那张（[`Self::block_at`]）是给横带用的（视口区间、选中标记，
+    /// 以及票 23 那两条泳道上的命中底色），而它与 `painted` 一样活过宽度重放 —— 重放走的
+    /// 就是这份清单，所以这里也是重放时重建那张表的地方。
     fn push_painted(&mut self, painted: Painted) {
-        self.block_at.insert(painted.id(), painted.at());
+        self.block_at.insert(
+            painted.id(),
+            BlockStamp {
+                at: painted.at(),
+                lane: painted.lane(),
+            },
+        );
         self.painted.push(painted);
     }
 
@@ -5149,13 +5190,13 @@ impl TuiState {
             let Some(id) = self.block_at_source(source) else {
                 continue;
             };
-            let Some(at) = self.block_at.get(&id) else {
+            let Some(stamp) = self.block_at.get(&id) else {
                 continue;
             };
             if first.is_none() {
-                first = Some(*at);
+                first = Some(stamp.at);
             }
-            last = Some(*at);
+            last = Some(stamp.at);
         }
         Some((first?, last?))
     }
@@ -5166,8 +5207,31 @@ impl TuiState {
     /// 多长不画，不足一格的长度更不画。查的是身份那张表，不是对 `painted` 的一次扫描。
     fn selection_mark(&self, axis: timeline::Axis) -> Option<u16> {
         let id = self.trace_selection?;
-        let at = *self.block_at.get(&id)?;
+        let at = self.block_at.get(&id)?.at;
         Some(axis.column(at))
+    }
+
+    /// 这一帧轴上要铺的**命中底色**（`.scratch/trace-ledger/spec.md` §11、票 23）。
+    ///
+    /// 输入是票 20 已经算好的那份**命中集**（块身份）加那张身份表：一块在哪一刻、属不属于
+    /// 一次模型调用或一次工具调用 —— 于是轴上不必再扫一遍块，也不必另记一份「命中段」。
+    /// 没有过滤（或查询串切不出词）时是空的：清掉搜索之后轴上不留一点残余（票 23 第 9 条）。
+    ///
+    /// 每帧过一遍**命中集**（不是一遍 `painted`）：它由查询落地时算好，大小只跟命中数有关，
+    /// 而合并要一次排序 —— 这一档规模上它比维护第二份「命中段」缓存便宜，也少一处会与过滤集
+    /// 走散的状态。合并与阈值都是纯算术，住在 [`timeline::hit_bands`] 里。
+    fn hit_bands(&self, axis: timeline::Axis) -> Vec<timeline::HitBand> {
+        if !self.filtering() {
+            return Vec::new();
+        }
+        let Some(search) = self.trace_search.as_ref() else {
+            return Vec::new();
+        };
+        let hits = search.hits.iter().filter_map(|id| {
+            let stamp = self.block_at.get(id)?;
+            Some((stamp.lane?, stamp.at))
+        });
+        timeline::hit_bands(axis, hits)
     }
 
     /// 一条源行所属那一块的**头尾两条源行**（都含）。
@@ -9067,9 +9131,23 @@ impl Lanes {
             .set_style(style);
     }
 
+    /// 把一段**底色**铺在第 `row` 行的 `first..=last` 格上（闭区间，两端都算在内）。
+    ///
+    /// 横带上那两档底色（刻度行的视口区间、泳道行的命中）共用这一条路径：底色怎么铺只有
+    /// 一处，于是「闭区间」这条口径也只有一个家。
+    fn wash(&self, frame: &mut ratatui::Frame, row: u16, first: u16, last: u16, colour: Color) {
+        let buffer = frame.buffer_mut();
+        for column in first..=last {
+            buffer[(self.x + column, row)].set_bg(colour);
+        }
+    }
+
     /// 刻度行：视口的区间底色铺在下面，`HH:MM:SS` 标签画在上面（票 22 第 6 条）。
     ///
     /// 标签是**绝对时刻**，不是时长 —— 横带上不给任何时长数字（票 22 第 8 条那半句）。
+    ///
+    /// 这一行**不铺命中底色**：那一段归两条泳道行（[`Lanes::hits`]）。两个底色、两个语义
+    /// （票 23 第 2 条）—— 「在看哪儿」与「哪儿有命中」不是一件事，撞在同一行上会读混。
     fn ticks(
         &self,
         frame: &mut ratatui::Frame,
@@ -9081,10 +9159,7 @@ impl Lanes {
         // 出来（「在看哪儿」这件事不必过一遍保底那一关，它是位置，不是长度）。
         if let Some((from, to)) = state.viewport_span(ledger_rows) {
             let (first, last) = (self.axis.column(from), self.axis.column(to));
-            let buffer = frame.buffer_mut();
-            for column in first..=last {
-                buffer[(self.x + column, self.top)].set_bg(palette::VIEWPORT);
-            }
+            self.wash(frame, self.top, first, last, palette::VIEWPORT);
         }
         let style = Style::default().fg(palette::MUTED);
         for (column, at) in timeline::ticks(self.axis, kind) {
@@ -9095,6 +9170,25 @@ impl Lanes {
                 }
                 self.paint(frame, self.top, column, &symbol.to_string(), style);
             }
+        }
+    }
+
+    /// 命中底色：连续命中合成的那些段，铺在**两条泳道行**上（票 23 第 1、2 条）。
+    ///
+    /// 它只铺**背景** —— 泳道的字形、回合边界与选中标记都是前景，同一格里两者共存，所以
+    /// 不需要定谁压过谁（票 23 第 7 条）。铺在字形之前也不为别的：`set_style` 只覆盖它
+    /// 显式给的那几个字段，前景那几笔不会把底色洗掉。
+    ///
+    /// 落在哪一行由档位定：完整与稀疏档两条泳道各占一行；一行三态版把两条泳道压进了同一
+    /// 行，于是两类的底色也落在那一行上 —— 那一行本来就是「模型与工具合起来的时间」。
+    fn hits(&self, frame: &mut ratatui::Frame, state: &TuiState, compact: bool) {
+        for band in state.hit_bands(self.axis) {
+            let row = match (compact, band.lane) {
+                (false, Lane::Model) => self.row(1),
+                (false, Lane::Tool) => self.row(2),
+                (true, _) => self.row(1),
+            };
+            self.wash(frame, row, band.first, band.last, palette::HIT);
         }
     }
 
@@ -9228,6 +9322,8 @@ fn draw_trace_band(
         now,
     };
     lanes.ticks(frame, state, panes.band_kind, ledger_rows);
+    // 命中底色铺在泳道那几行上，在字形之前：刻度行那一段只认视口（票 23 第 2 条）。
+    lanes.hits(frame, state, panes.band_kind == BandKind::Compact);
     match panes.band_kind {
         BandKind::Compact => lanes.compact(frame, state),
         _ => {

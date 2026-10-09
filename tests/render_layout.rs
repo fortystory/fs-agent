@@ -13916,3 +13916,284 @@ fn a_running_segment_is_drawn_up_to_now() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 轴上的命中底色（`.scratch/trace-ledger/spec.md` §11、票 23）
+// ---------------------------------------------------------------------------
+
+/// 一条带固定时刻、自己那句正文的模型回答。
+fn answer_at(seq: u64, at: chrono::DateTime<chrono::Utc>, text: &str) -> heng::render::RenderEvent {
+    at_event(
+        seq,
+        at,
+        heng::events::EventPayload::MessageCompleted {
+            role: heng::events::Role::Assistant,
+            text: text.to_owned(),
+            reasoning: None,
+            first_token_ms: None,
+        },
+    )
+}
+
+/// 一条带固定时刻、自己那段输出的工具结果 —— 轨迹页上它就是那个工具块。
+fn tool_result_at(
+    seq: u64,
+    id: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    output: &str,
+) -> heng::render::RenderEvent {
+    at_event(
+        seq,
+        at,
+        heng::events::EventPayload::ToolCallCompleted {
+            tool_call_id: heng::events::ToolCallId::new(id),
+            ok: true,
+            output: Some(output.to_owned()),
+            error: None,
+            duration_ms: 0,
+        },
+    )
+}
+
+/// 一条带固定时刻的上下文注入 —— 它不是模型调用也不是工具调用（票 23 第 5 条）。
+fn injection_at(
+    seq: u64,
+    at: chrono::DateTime<chrono::Utc>,
+    content: &str,
+) -> heng::render::RenderEvent {
+    at_event(
+        seq,
+        at,
+        heng::events::EventPayload::ContextInjected {
+            source: heng::events::ContextSource::AgentsMd,
+            content: content.to_owned(),
+        },
+    )
+}
+
+/// 一条七个单位的账本，**轴域正好 63 秒铺在 63 格上**（一格一秒，于是断言里的格号就是秒数）：
+/// 第 `index` 个单位的模型那一块落在 `index * 9 + 1` 秒，工具那一块落在 `index * 9 + 4` 秒。
+///
+/// 末尾那条注入撑起轴域的右端（63 秒），顺便当一个**不落轴**的块：它不是模型调用也不是
+/// 工具调用，在轴上没有位置。
+fn a_ledger_of_stamped_hits(state: &mut TuiState) {
+    let base = fixed_at(9, 0, 0);
+    let seconds = chrono::TimeDelta::seconds;
+    for index in 0..7u64 {
+        let at = base + seconds(index as i64 * 9);
+        state.apply(turn_at(100 + index * 4, 1, at));
+        state.apply(answer_at(
+            101 + index * 4,
+            at + seconds(1),
+            &format!("真回答 {index}"),
+        ));
+        state.apply(tool_at(
+            102 + index * 4,
+            &format!("c{index}"),
+            at + seconds(3),
+            false,
+        ));
+        state.apply(tool_result_at(
+            103 + index * 4,
+            &format!("c{index}"),
+            at + seconds(4),
+            &format!("读完了 {index}"),
+        ));
+        state.apply(turn_ended_at(104 + index * 4, at + seconds(5)));
+    }
+    state.apply(injection_at(900, base + seconds(63), "开场那一段注入"));
+}
+
+/// 某一行上铺着命中底色的那些格（轴内，0 起数）。
+fn hit_cells(frame: &Buffer, row: u16) -> Vec<u16> {
+    (0..63)
+        .filter(|column| frame[(axis_left_at_120() + column, row)].bg == palette::HIT)
+        .collect()
+}
+
+/// 泳道那一行在轴上的样子：逐格的字形与前景色 —— 「未命中的段不调弱」要的是逐格相同。
+fn lane_cells(frame: &Buffer, row: u16) -> Vec<(String, Color)> {
+    (0..63)
+        .map(|column| {
+            let cell = &frame[(axis_left_at_120() + column, row)];
+            (cell.symbol().to_owned(), cell.fg)
+        })
+        .collect()
+}
+
+/// 命中底色铺在**两条泳道行**上，而刻度行的底色只认视口 —— 两处底色、两个语义
+/// （票 23 第 2、6 条）。
+#[test]
+fn the_hits_wash_the_lanes_and_spare_the_tick_row() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "真回答 3");
+
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        hit_cells(&frame, band_row(1)),
+        vec![28],
+        "模型那一块（第 28 秒）在模型泳道上铺着底色"
+    );
+    assert!(
+        hit_cells(&frame, band_row(2)).is_empty(),
+        "模型类命中不落工具泳道"
+    );
+    for column in 0..63 {
+        assert_ne!(
+            frame[(axis_left_at_120() + column, band_row(0))].bg,
+            palette::HIT,
+            "刻度行不铺命中底色（第 {column} 格）"
+        );
+    }
+}
+
+/// 工具类命中只落工具泳道（票 23 第 1 条）。
+#[test]
+fn a_tool_hit_lands_on_the_tool_lane_only() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "读完了 3");
+
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        hit_cells(&frame, band_row(2)),
+        vec![31],
+        "工具那一块（第 31 秒）在工具泳道上铺着底色"
+    );
+    assert!(
+        hit_cells(&frame, band_row(1)).is_empty(),
+        "工具类命中不落模型泳道"
+    );
+}
+
+/// 命中之间隔着大于一格，底色就断开 —— 空档那些格一个字节都不铺（票 23 第 3 条）。
+#[test]
+fn the_band_breaks_where_the_hits_are_far_apart() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "真回答");
+
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        hit_cells(&frame, band_row(1)),
+        vec![1, 10, 19, 28, 37, 46, 55],
+        "七块命中隔着九秒（一格一秒）：断成七段，段与段之间的空档是留白"
+    );
+}
+
+/// 注入那类命中**不在轴上出现**，而它在账本的过滤视图里**在**（票 23 第 5 条）——
+/// 「搜到的命中不一定都在轴上出现」是判据的后果，不是漏画。
+#[test]
+fn a_hit_outside_the_two_lanes_never_reaches_the_axis() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "开场那一段注入");
+
+    let page = trace_page(&mut state, 120, 24).join("\n");
+    assert!(page.contains("上下文注入"), "它在账本的过滤视图里：{page}");
+    assert!(
+        corner_text(&mut state, 120, 24).contains("1 个命中"),
+        "浮字位照样报它"
+    );
+    let frame = buffer(120, 24, &mut state);
+    for row in [band_row(1), band_row(2)] {
+        assert!(
+            hit_cells(&frame, row).is_empty(),
+            "注入既不是模型调用也不是工具调用，在轴上没有位置（第 {row} 行）"
+        );
+    }
+}
+
+/// 选中标记与命中底色**正交**：标记是前景竖线、底色是背景，同一格上两者共存
+/// （票 23 第 7 条）。
+#[test]
+fn the_selection_mark_shares_a_cell_with_a_hit_band() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "读完了 3");
+    // `n` 把选中带到第一个命中块上 —— 它正落在第 31 格那段底色上。
+    state.key(Key::Char('n'));
+
+    let frame = buffer(120, 24, &mut state);
+    let cell = &frame[(axis_left_at_120() + 31, band_row(2))];
+    assert_eq!(cell.symbol(), wording::BAND_MARK, "竖线画着");
+    assert_eq!(cell.fg, palette::ACCENT, "它是焦点色的前景记号");
+    assert_eq!(cell.bg, palette::HIT, "同一格的底色仍是命中那一档");
+}
+
+/// 未命中的那些格只是不加底色：字形与前景色逐格与过滤前**一模一样**（票 23 第 4 条）。
+#[test]
+fn the_unhit_stretches_of_a_lane_are_not_dialled_down() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    let before = lane_cells(&buffer(120, 24, &mut state), band_row(1));
+
+    search_for(&mut state, "真回答 3");
+    let frame = buffer(120, 24, &mut state);
+    assert!(!hit_cells(&frame, band_row(1)).is_empty(), "确实铺上了底色");
+    assert_eq!(
+        lane_cells(&frame, band_row(1)),
+        before,
+        "泳道一个字形、一个颜色都没变"
+    );
+}
+
+/// 折叠不改轴：折行是显示状态，时间区间是事实 —— 折起来的那一段底色照画（票 23 第 8 条）。
+#[test]
+fn folding_does_not_touch_the_axis() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    let before = hit_cells(&buffer(120, 24, &mut state), band_row(1));
+    assert!(before.is_empty(), "还没搜，轴上没有命中底色");
+
+    // 先把整本账折起来，再搜。
+    state.key(Key::Char('{'));
+    search_for(&mut state, "真回答");
+    let frame = buffer(120, 24, &mut state);
+    assert_eq!(
+        hit_cells(&frame, band_row(1)),
+        vec![1, 10, 19, 28, 37, 46, 55],
+        "折着的时候底色一格不少"
+    );
+}
+
+/// 清掉搜索之后，轴回到票 22 的样子：一段底色都不留（票 23 第 9 条）。
+#[test]
+fn clearing_the_search_takes_every_band_away() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_of_stamped_hits(&mut state);
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let lanes = [
+        lane_cells(&frame, band_row(1)),
+        lane_cells(&frame, band_row(2)),
+    ];
+
+    search_for(&mut state, "读完了 3");
+    let frame = buffer(120, 24, &mut state);
+    assert!(
+        !hit_cells(&frame, band_row(2)).is_empty(),
+        "过滤期间铺着底色"
+    );
+
+    state.key(Key::Esc);
+    let frame = buffer(120, 24, &mut state);
+    assert!(hit_cells(&frame, band_row(1)).is_empty(), "没有残留");
+    assert!(hit_cells(&frame, band_row(2)).is_empty(), "没有残留");
+    assert_eq!(
+        [
+            lane_cells(&frame, band_row(1)),
+            lane_cells(&frame, band_row(2))
+        ],
+        lanes,
+        "两条泳道逐格回到过滤之前"
+    );
+}

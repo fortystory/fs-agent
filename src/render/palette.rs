@@ -57,6 +57,14 @@ pub const BUBBLE: Color = Color::Rgb(0x33, 0x33, 0x33);
 /// 而不是一个抢注意力的色块，也不会与那块中性灰的气泡混成同一件事。
 pub const VIEWPORT: Color = Color::Rgb(0x1f, 0x2d, 0x3d);
 
+/// **有命中的那一段时间**在时间轴上占的底色（`.scratch/trace-ledger/spec.md` §12、票 23）。
+///
+/// 与 [`VIEWPORT`] 是两档底色、两个语义、两处行：那一档铺在**刻度行**上说「你在看哪儿」，
+/// 这一档铺在**两条泳道行**上说「哪儿有命中」。两者语义不同，所以不必区分到不可分辨 —— 但
+/// 必须分辨得开，否则「命中」与「当前视口」会被读成同一件事，于是它取暖褐：与那一档的冷蓝
+/// 在色相上正相反，暗度相当（两者都是一层哑光，而不是抢注意力的色块）。
+pub const HIT: Color = Color::Rgb(0x3d, 0x2e, 0x1e);
+
 /// 草稿里一条**能兑现**的 `/` 命令的颜色。
 ///
 /// 它与 [`INJECTED`] 撞值、[`TOKEN_REFERENCE`] 与 [`ACCENT`] 撞值，都是**刻意的**：两个记号
@@ -193,5 +201,12 @@ mod tests {
                 assert_ne!(left, right, "菜单里两类来源撞了同一个颜色");
             }
         }
+    }
+
+    /// 横带上那两档底色必须分辨得开 —— 撞成同一个值时，「命中」与「当前视口」在屏幕上
+    /// 就是同一件事（`.scratch/trace-ledger/spec.md` §12、票 23 第 6 条）。
+    #[test]
+    fn the_two_band_backgrounds_never_look_the_same() {
+        assert_ne!(VIEWPORT, HIT, "命中底色不能与视口底色撞值");
     }
 }

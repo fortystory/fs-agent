@@ -5,7 +5,9 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use heng::events::{ParticipantId, SpeakerId, ToolCallId};
-use heng::render::timeline::{Axis, BandKind, LABEL_COLUMNS, ModelCell, Timeline, ticks};
+use heng::render::timeline::{
+    Axis, BandKind, HitBand, LABEL_COLUMNS, Lane, ModelCell, Timeline, hit_bands, ticks,
+};
 
 /// 一个固定时刻打底：测试里的秒数都是相对它数的。
 fn t0() -> DateTime<Utc> {
@@ -301,4 +303,136 @@ fn degrading_gives_the_rows_back_to_the_ledger() {
 #[test]
 fn the_lane_label_takes_five_columns() {
     assert_eq!(LABEL_COLUMNS, 5, "`模型 ` 两个汉字加一格空白");
+}
+
+// ---------------------------------------------------------------------------
+// 轴上的命中底色（`.scratch/trace-ledger/spec.md` §11、票 23）
+// ---------------------------------------------------------------------------
+
+/// 一段命中底色在哪几格 —— 断言里反复要的那对数。
+fn cells_of(band: &HitBand) -> (u16, u16) {
+    (band.first, band.last)
+}
+
+#[test]
+fn a_cell_is_the_whole_span_divided_by_the_columns() {
+    assert_eq!(
+        one_second_a_cell().cell(),
+        TimeDelta::seconds(1),
+        "20 秒铺在 20 格上：一格一秒"
+    );
+    let coarse = Axis::new(at(0), at(200), 20).expect("轴");
+    assert_eq!(
+        coarse.cell(),
+        TimeDelta::seconds(10),
+        "会话越长一格越粗 —— 阈值跟的就是这个数，不是写死的秒数"
+    );
+}
+
+#[test]
+fn hits_less_than_a_cell_apart_merge_into_one_band() {
+    // 一格一秒：3.0 s 与 3.4 s 之间那 0.4 格画不出分界，于是合成一段（票 23 第 3 条）。
+    let bands = hit_bands(
+        one_second_a_cell(),
+        [(Lane::Model, at(3)), (Lane::Model, ms(3_400))],
+    );
+    assert_eq!(bands.len(), 1, "分界画不出来就不画：{bands:?}");
+    assert_eq!(bands[0].lane, Lane::Model);
+    assert_eq!(cells_of(&bands[0]), (3, 3), "两块落在同一格上");
+}
+
+#[test]
+fn a_gap_of_one_cell_breaks_the_band_in_two() {
+    // 正好隔一格（>= 一格）就断开成两段 —— 阈值那条线的另一半。
+    let bands = hit_bands(
+        one_second_a_cell(),
+        [(Lane::Model, at(3)), (Lane::Model, at(4))],
+    );
+    assert_eq!(bands.len(), 2, "隔着一格就断开：{bands:?}");
+    assert_eq!(cells_of(&bands[0]), (3, 3));
+    assert_eq!(cells_of(&bands[1]), (4, 4));
+}
+
+#[test]
+fn the_threshold_follows_the_resolution() {
+    // 同一对时刻（相隔 2 秒）在两个分辨率上是两件事：一格一秒时它们之间看得见空档，
+    // 一格十秒时看不见。阈值跟着一格走，不写死秒数（票 23 第 3 条）。
+    let hits = [(Lane::Model, at(3)), (Lane::Model, at(5))];
+    let fine = Axis::new(at(0), at(20), 20).expect("轴");
+    assert_eq!(hit_bands(fine, hits).len(), 2, "一格一秒：看得见那条空档");
+    let coarse = Axis::new(at(0), at(200), 20).expect("轴");
+    assert_eq!(hit_bands(coarse, hits).len(), 1, "一格十秒：两块在同一段里");
+}
+
+#[test]
+fn two_clusters_of_hits_leave_the_gap_between_them_blank() {
+    let bands = hit_bands(
+        one_second_a_cell(),
+        [
+            (Lane::Tool, at(1)),
+            (Lane::Tool, ms(1_400)),
+            (Lane::Tool, at(2)),
+            // 空档：六格之外才有下一次命中。
+            (Lane::Tool, at(8)),
+            (Lane::Tool, ms(8_400)),
+        ],
+    );
+    assert_eq!(bands.len(), 2, "两簇各一段：{bands:?}");
+    assert_eq!(cells_of(&bands[0]), (1, 2), "第一簇从它第一块铺到最后一块");
+    assert_eq!(cells_of(&bands[1]), (8, 8), "第二簇");
+}
+
+#[test]
+fn a_lone_hit_keeps_the_cell_it_falls_in() {
+    // 命中说的是「**这一刻**有命中」—— 与视口区间同一条位置口径，两端都算在内。孤零零的
+    // 一块因此也留得下一格，否则「只搜到一个」在轴上永远看不见。
+    let bands = hit_bands(one_second_a_cell(), [(Lane::Tool, at(7))]);
+    assert_eq!(bands.len(), 1);
+    assert_eq!(bands[0].lane, Lane::Tool);
+    assert_eq!(cells_of(&bands[0]), (7, 7));
+}
+
+#[test]
+fn a_session_of_continuous_hits_is_one_band() {
+    // 几乎整场都是命中的会话里，底色连成一整段 —— 分辨率的诚实后果，不额外切碎
+    // （票 23 验收那一条）。
+    let hits: Vec<(Lane, DateTime<Utc>)> = (0..20)
+        .map(|index| (Lane::Model, ms(index * 700)))
+        .collect();
+    let bands = hit_bands(one_second_a_cell(), hits);
+    assert_eq!(bands.len(), 1, "一整场连成一段：{bands:?}");
+    assert_eq!(cells_of(&bands[0]), (0, 13), "从第一块铺到最后一块");
+}
+
+#[test]
+fn the_two_lanes_never_merge_with_each_other() {
+    // 同一段时刻里模型与工具各有命中：那是**两条泳道上的两段**，不是一段 —— 底色铺在
+    // 不同的行上（票 23 第 1 条）。
+    let bands = hit_bands(
+        one_second_a_cell(),
+        [
+            (Lane::Model, at(2)),
+            (Lane::Tool, ms(2_200)),
+            (Lane::Model, ms(2_400)),
+        ],
+    );
+    assert_eq!(bands.len(), 2, "两条泳道各一段：{bands:?}");
+    let model = bands
+        .iter()
+        .find(|band| band.lane == Lane::Model)
+        .expect("模型那一段");
+    let tool = bands
+        .iter()
+        .find(|band| band.lane == Lane::Tool)
+        .expect("工具那一段");
+    assert_eq!(cells_of(model), (2, 2));
+    assert_eq!(cells_of(tool), (2, 2), "同一格上，不同的行");
+}
+
+#[test]
+fn nothing_hit_is_no_band_at_all() {
+    assert!(
+        hit_bands(one_second_a_cell(), []).is_empty(),
+        "没有命中就没有底色可铺"
+    );
 }
