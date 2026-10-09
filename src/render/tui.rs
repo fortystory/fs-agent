@@ -57,7 +57,7 @@ use super::links;
 use super::opener;
 use super::palette;
 use super::pane::{self, Pane};
-use super::panel::Panel;
+use super::panel::{self, Panel};
 use super::selection;
 use super::severity::Severity;
 use super::token;
@@ -805,6 +805,14 @@ pub struct TuiState {
     /// 这条发言里模型被调用了几次，以及那几次的读数之和 —— 收尾那条合计的原料（§5）。
     turn_calls: usize,
     turn_usage: Usage,
+    /// 到现在为止开过几次发言（1 起数）—— 一条记录的用量面按它认领自己那次发言（票 15）。
+    ///
+    /// 判据与一级组头同一个（`TurnStarted { iteration: 1 }`）：一次发言里那几次迭代都算同一次。
+    turn_ordinal: u32,
+    /// 已经收尾的那些发言，各自的合计用量（下标 = 发言序号 − 1）—— 「本次」那一节在**打开
+    /// 那一刻**按它查出与行尾那个 `合计` 同一个数（票 15 第 3 条）。只增、不随宽度重放清空：
+    /// 它认的是发言，不是屏幕上的行。
+    turn_totals: Vec<Usage>,
     /// 对话视图的源行是按多宽排的。
     ///
     /// 表格与代码块是按宽度排出来的，所以宽度一变，**源行本身**就得整批重排（spec §1）：
@@ -1816,6 +1824,22 @@ impl Tail {
     }
 }
 
+/// 画一个块要的那几笔**不属于块本身**的账 —— 绘制记录里除块之外的字段就是它们。
+///
+/// 一起传是因为它们的去处是同一个（[`TuiState::emit_block`] 造的那一份 [`DetailFacts`]），
+/// 拆成七个参数只会让每一个调用点都写一串位置参数。
+#[derive(Debug, Clone, Copy)]
+struct BlockPaint {
+    /// 这一块什么时候到的。
+    at: DateTime<Utc>,
+    /// 长在它行尾的那一段（一笔用量，或一次发言的合计）。
+    tail: Option<Tail>,
+    /// 它在账本上的身份。
+    id: BlockId,
+    /// 它到达那一刻的用量账（票 15）。
+    usage: UsageScope,
+}
+
 /// 一条已经画进窗格、且能在宽度变化时重放的记录。
 ///
 /// 大多数行来自一个 [`Block`]；思考行是唯一的例外 —— 它是渲染器自己的状态（票 02 §1），
@@ -1836,6 +1860,9 @@ enum Painted {
         at: DateTime<Utc>,
         id: BlockId,
         tail: Option<Tail>,
+        /// 这一块到达那一刻的用量账 —— 与 `at` 同一条纪律：重放用的就是这里记下的这一份，
+        /// 不按「重放那一刻」重算（票 15 第 3 条）。
+        usage: UsageScope,
     },
     /// 还开着的思考行，以及**思考开始那一刻** —— 第一条推理增量到达的时候
     /// （`.scratch/trace-thought-stamp/spec.md` §1，推翻 `trace-in-main` 用户故事 21 的后半句）。
@@ -1924,6 +1951,9 @@ struct SettledThinking {
     /// 还没到 —— 所以那之后到来的 `MessageCompleted` 会把它补齐（[`TuiState::apply`]）。
     /// 重放路径上没有增量可依，定稿就发生在那条完成事件上，于是它一开始就是齐的。
     timing: CallTiming,
+    /// 这段思考到达那一刻的用量账（它属于哪一次发言、到它为止的会话累计）—— 用量面那两节
+    /// （票 15 第 1 条）。与 `timing` 同一条纪律：随记录一起记下，重放才与实时同值。
+    usage: UsageScope,
 }
 
 impl Painted {
@@ -2004,6 +2034,8 @@ impl TuiState {
             in_call: false,
             turn_calls: 0,
             turn_usage: Usage::default(),
+            turn_ordinal: 0,
+            turn_totals: Vec::new(),
             // 第一帧之前没有真正的宽度；先用共享渲染那个缺省把行排出来，首帧一画出来就会
             // 发现宽度不同并按真宽度重放（spec §1）。轨迹视图那一份同理。
             conversation_width: SHARED_RENDER_WIDTH,
@@ -2355,6 +2387,10 @@ impl TuiState {
             // 新回合的思考是新的一段，所以「已经画过」这个闩随回合一起清掉（票 02 §1）。
             if matches!(&block, Block::TurnStarted { .. }) {
                 self.thinking_done = false;
+                // 一次发言的第一迭代开一次新的发言：用量面的「本次」按它认领（票 15）。
+                if matches!(&block, Block::TurnStarted { iteration: 1, .. }) {
+                    self.turn_ordinal += 1;
+                }
                 // 每一次迭代 = 一次模型调用，也就是一笔用量的归属单位（§5）。
                 self.turn_calls += 1;
                 self.in_call = true;
@@ -2454,6 +2490,8 @@ impl TuiState {
         let tail = if matches!(&block, Block::TurnEnded { .. }) {
             self.in_call = false;
             let total = (self.turn_calls >= 2).then_some(Tail::Total(self.turn_usage));
+            // 这一次发言收尾了：合计进账，用量面的「本次」那一节按它回答（票 15 第 3 条）。
+            self.turn_totals.push(self.turn_usage);
             self.turn_calls = 0;
             self.turn_usage = Usage::default();
             total
@@ -2492,7 +2530,20 @@ impl TuiState {
         id: BlockId,
         replaying: bool,
     ) -> usize {
-        let produced = self.emit_block(&block, at, targets, tail, id, replaying);
+        // 用量账在**到达这一刻**记下：这条记录属于哪一次发言，以及到它为止的会话累计。
+        // 会话累计直接读左栏那一份 —— 两处同源同一个数（票 15 第 3 条）。
+        let usage = UsageScope {
+            turn: Some(self.turn_ordinal),
+            session: self.panel.total(),
+            this: Usage::default(),
+        };
+        let paint = BlockPaint {
+            at,
+            tail,
+            id,
+            usage,
+        };
+        let produced = self.emit_block(&block, paint, targets, replaying);
         if produced > 0 {
             // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
             // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
@@ -2501,6 +2552,7 @@ impl TuiState {
                 at,
                 id,
                 tail,
+                usage,
             });
         }
         produced
@@ -2513,18 +2565,23 @@ impl TuiState {
     fn emit_block(
         &mut self,
         block: &Block,
-        at: DateTime<Utc>,
+        paint: BlockPaint,
         targets: Targets,
-        tail: Option<Tail>,
-        id: BlockId,
         replaying: bool,
     ) -> usize {
+        let BlockPaint {
+            at,
+            tail,
+            id,
+            usage,
+        } = paint;
         let mut produced = 0;
-        // 详情入口要的那两笔账：这一块什么时候到的，以及产生它的那次调用的计时
-        // （票 13 第 6、7 条）。两个视口画的是同一块，于是共用同一份。
+        // 详情入口要的那几笔账：这一块什么时候到的、产生它的那次调用的计时、以及它的用量
+        // （票 13 第 6、7 条、票 15）。两个视口画的是同一块，于是共用同一份。
         let facts = DetailFacts {
             at: Some(at),
             timing: timing_of(block),
+            usage,
         };
         // 对话视图只收保留清单；左栏不在时**也不退回全量**（2026-10-05 维护者推翻 §6）——
         // 收起左栏就是「过程行暂时看不到」，规则只有一个。
@@ -2681,8 +2738,19 @@ impl TuiState {
                 at,
                 id,
                 tail,
+                usage,
             } => {
-                self.emit_block(block, *at, targets, *tail, *id, replaying);
+                self.emit_block(
+                    block,
+                    BlockPaint {
+                        at: *at,
+                        tail: *tail,
+                        id: *id,
+                        usage: *usage,
+                    },
+                    targets,
+                    replaying,
+                );
             }
             Painted::Thinking {
                 speaker, at, id, ..
@@ -3436,6 +3504,7 @@ impl TuiState {
             },
             // 链在打开那一刻才定 —— 构造这一行时还不知道账本以后会长成什么样。
             chain: None,
+            usage: Some(settled.usage),
         };
         (line, detail)
     }
@@ -3488,6 +3557,12 @@ impl TuiState {
             id,
             tail,
             timing,
+            // 用量账与计时同一条纪律：随这一行一起记下，打开时那一面读的就是它（票 15）。
+            usage: UsageScope {
+                turn: Some(self.turn_ordinal),
+                session: self.panel.total(),
+                this: Usage::default(),
+            },
         };
         self.paint_settled_thinking(&settled, self.targets(), true);
         // 重放清单里那一条也从「开着」换成「定稿」，连它的详情与时刻一起 —— 否则一次宽度变化
@@ -3509,11 +3584,15 @@ impl TuiState {
         let Some(Painted::Thought(settled)) = self.painted.last() else {
             return;
         };
-        if settled.timing == timing {
+        // 会话累计也在这一刻长了一截（本条调用的那笔用量随同一条完成事件进来）—— 用量面
+        // 那一节读的就是它（票 15）。
+        let session = self.panel.total();
+        if settled.timing == timing && settled.usage.session == session {
             return;
         }
         let mut settled = settled.clone();
         settled.timing = timing;
+        settled.usage.session = session;
         // 就地重写那一行，并把它的详情入口一并换成新的 —— 两处同一条记录。
         self.paint_settled_thinking(&settled, self.targets(), true);
         if let Some(slot @ Painted::Thought(_)) = self.painted.last_mut() {
@@ -3894,6 +3973,7 @@ impl TuiState {
                 items: self.todo.all().to_vec(),
             },
             chain: None,
+            usage: None,
         };
         let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
         // 待办是一份快照，不是账本上的某一行 —— 它没有来源面，也就没有「本行」。
@@ -4097,6 +4177,7 @@ impl TuiState {
             at: None,
             kind: DetailKind::File { body },
             chain: None,
+            usage: None,
         };
         let width = layout::plan(self.area, 1, self.sidebar_wanted).detail_text_width() as usize;
         self.open_detail(detail, width, DetailOpener::Files, None);
@@ -4667,6 +4748,26 @@ impl TuiState {
     /// 寿命不同的账，各司其职。
     fn note_anchor(&mut self, kind: AnchorKind, row: usize) {
         self.anchors.push(Anchor { kind, row });
+    }
+
+    /// 一次发言的合计用量 —— 用量面「本次」那一节读它（票 15 第 3 条）。
+    ///
+    /// 它与行尾那个 `合计` **同一个数**：收尾的发言取 [`Self::turn_totals`] 里那一份，还在
+    /// 跑的那一次取 [`Self::turn_usage`]（到这一刻为止之和）；`None` 是「这条记录不属于任何
+    /// 一次发言」，于是那一节是空的。
+    fn turn_total(&self, turn: Option<u32>) -> Usage {
+        // 不属于任何一次发言（用户自己那句话，或者一次发言都还没开出来）就没有用量可报 ——
+        // 那条记录本身没花 token。
+        let Some(turn) = turn.filter(|turn| *turn > 0) else {
+            return Usage::default();
+        };
+        match self.turn_totals.get(turn as usize - 1) {
+            Some(total) => *total,
+            // 还没收尾的那一次发言：读「到这一刻为止」的那一份。它还没结算，但口径与收尾后
+            // 那个合计是同一条 —— 同一次发言里各次调用之和。
+            None if turn == self.turn_ordinal => self.turn_usage,
+            None => Usage::default(),
+        }
     }
 
     /// 一条详情的**祖先链**：本行是谁带出来的（票 14 第 1 条）。
@@ -5458,6 +5559,7 @@ impl TuiState {
                 body: changes::Body::Pending,
             },
             chain: None,
+            usage: None,
         };
         self.open_detail(detail, width, DetailOpener::Changes, None);
     }
@@ -5514,7 +5616,7 @@ impl TuiState {
         // 读到哪儿原样留着（与改动前一样：换的是正文，不是这个人读到的位置）—— 它就落在
         // 那一面上，而这一种详情只有一面。
         let top = view.face().top;
-        view.faces = detail_faces(&view.detail, &session_dir, width);
+        view.faces = detail_faces(&view.detail, &session_dir, width, self.facts.number_style);
         view.face_mut().top = top;
         self.dirty = true;
     }
@@ -8660,6 +8762,7 @@ fn paint_block(
                     content: content.clone(),
                 },
                 chain: None,
+                usage: None,
             };
             vec![RenderedLine::linked(line, detail)]
         }
@@ -8908,6 +9011,7 @@ fn tool_block_lines(
         // 整块搬进详情：参数、输出与这次调用自己的计时都在里面（票 13 第 6、7 条）。
         kind: DetailKind::Tool(Box::new(tool.clone())),
         chain: None,
+        usage: None,
     };
     let mut lines = vec![RenderedLine::linked(Line::from(call), detail.clone())];
     if let Some(first) = error_first_line(outcome) {
@@ -9125,6 +9229,16 @@ fn trace_message_row(
             timing: facts.timing,
         },
         chain: None,
+        // 助手说的每一条都属于产生它的那一次发言；**用户自己那句不是一次调用**（`turn = 0`），
+        // 所以它用量面的「本次」那一节是空的 —— 那条消息本身没花 token（票 15 第 3 条）。
+        usage: Some(UsageScope {
+            turn: match speaker {
+                crate::events::SpeakerId::User => None,
+                _ => facts.usage.turn,
+            },
+            session: facts.usage.session,
+            this: Usage::default(),
+        }),
     };
     RenderedLine::linked(head, detail)
 }
@@ -9360,6 +9474,24 @@ pub struct Detail {
     /// 用户消息）是**账本上的事实**，不是在画这一行的那一刻能定下来的。它在**打开那一刻**
     /// 按这一行在账本上的行号算出来（[`TuiState::open_detail`]）。
     chain: Option<LedgerChain>,
+    /// 这一条记录自己的用量 —— 用量面那两节（票 15 第 1 条）。
+    ///
+    /// `None` = 这一类记录没有用量面。工具调用**没有用量**：`UsageRecorded` 带发言者、不带
+    /// 工具调用 id，行尾那条尾巴也只挂在消息与思考上。
+    usage: Option<UsageScope>,
+}
+
+/// 用量面那两节要的两笔账（票 15 第 1 条）。
+#[derive(Debug, Clone, Copy, Default)]
+struct UsageScope {
+    /// 这条记录属于哪一次发言（1 起数）；`None` = 它不属于任何一次发言 —— 用户自己那句话不是
+    /// 一次调用，所以它那一节是空的。
+    turn: Option<u32>,
+    /// 到这条记录为止的会话累计（构造这一份详情那一刻的数，与左栏面板同一个累计器）。
+    session: Usage,
+    /// 「本次」那一节的读数 —— **打开那一刻**才定：这条记录画出来的时候，这次发言可能还没
+    /// 收尾（后面还有调用），而它与行尾那个 `合计` 必须是同一个数（票 15 第 3 条）。
+    this: Usage,
 }
 
 /// 一个详情视图可以关于的两件事。
@@ -9453,6 +9585,8 @@ enum FaceId {
     Args,
     /// 一次工具调用的输出。
     Output,
+    /// 一条消息 / 一段思考的用量：本次与这一趟会话两节（票 15）。
+    Usage,
     /// 这一块的时间：开始 / 总时长 / 首 token / 生成 / 吞吐 / 等审批。
     Timing,
     /// 只读的祖先链：这一行是被什么带出来的（票 14 第 1 条）。
@@ -9471,6 +9605,7 @@ impl FaceId {
             FaceId::Injection => wording::detail_injection_face(),
             FaceId::Args => wording::detail_args_section(),
             FaceId::Output => wording::detail_output_section(),
+            FaceId::Usage => wording::detail_usage_face(),
             FaceId::Timing => wording::detail_timing_face(),
             FaceId::Source => wording::detail_source_face(),
             FaceId::Summary => wording::detail_summary_face(),
@@ -9489,11 +9624,16 @@ impl FaceId {
 const DETAIL_FACES: &[(RecordKind, &[FaceId])] = &[
     (
         RecordKind::Message,
-        &[FaceId::Body, FaceId::Timing, FaceId::Summary],
+        &[FaceId::Body, FaceId::Usage, FaceId::Timing, FaceId::Summary],
     ),
     (
         RecordKind::Thinking,
-        &[FaceId::Thought, FaceId::Timing, FaceId::Summary],
+        &[
+            FaceId::Thought,
+            FaceId::Usage,
+            FaceId::Timing,
+            FaceId::Summary,
+        ],
     ),
     (
         RecordKind::Tool,
@@ -9597,10 +9737,20 @@ impl Face {
 ///
 /// 主体在这里、在打开的那一刻读，并按正文文本区将被画出来的宽度排版（与今天同一条纪律），
 /// 于是此后切面与滚动都是纯算术。
-fn detail_faces(detail: &Detail, session_dir: &str, width: usize) -> Vec<Face> {
+fn detail_faces(
+    detail: &Detail,
+    session_dir: &str,
+    width: usize,
+    numbers: wording::NumberStyle,
+) -> Vec<Face> {
     face_table(detail.kind.record_kind())
         .iter()
-        .map(|face| Face::from_sections(*face, face_sections(detail, *face, session_dir, width)))
+        .map(|face| {
+            Face::from_sections(
+                *face,
+                face_sections(detail, *face, session_dir, width, numbers),
+            )
+        })
         .collect()
 }
 
@@ -9609,7 +9759,13 @@ fn detail_faces(detail: &Detail, session_dir: &str, width: usize) -> Vec<Face> {
 /// 一根穷尽的 match（种类 × 面）。分派表不会给一种记录一个它没有的面，所以那些组合落到最后
 /// 一支是空的 —— 真落到了就是表与生成器漂了，测试会抓到（票 13 的「分派表是一个可测的常量」
 /// 那一条）。
-fn face_sections(detail: &Detail, face: FaceId, session_dir: &str, width: usize) -> Vec<Section> {
+fn face_sections(
+    detail: &Detail,
+    face: FaceId,
+    session_dir: &str,
+    width: usize,
+    numbers: wording::NumberStyle,
+) -> Vec<Section> {
     use DetailKind::*;
     match (&detail.kind, face) {
         // 今天那一面：不分面的三种详情那份正文，逐字不动。
@@ -9629,6 +9785,12 @@ fn face_sections(detail: &Detail, face: FaceId, session_dir: &str, width: usize)
         (Thinking { timing, .. }, FaceId::Timing) => {
             vec![call_timing_section(timing, width)]
         }
+        // 用量面挂在消息与思考上 —— 工具调用**没有用量**，所以这里没有它那一支
+        // （票 15 第 6 条）。
+        (Message { .. } | Thinking { .. }, FaceId::Usage) => match &detail.usage {
+            Some(usage) => usage_section(usage, width, numbers),
+            None => Vec::new(),
+        },
         (Tool(tool), FaceId::Timing) => vec![tool_timing_section(tool, width)],
         (Tool(_), FaceId::Source) => vec![source_section(detail, width)],
         (_, FaceId::Summary) => vec![Section::whole(vec![detail_summary_row(detail)])],
@@ -9714,6 +9876,75 @@ struct LedgerChain {
     links: Vec<ChainLink>,
     /// 三环之外还有更深的链，没有展开（票 14 第 1 条）。
     deeper: bool,
+}
+
+/// 用量面：两节各五行（输入 / 缓存读 / 未命中 / 输出 / 推理），末尾一句口径（票 15）。
+///
+/// 两节的小标题在「这一面 ≥ 2 节」时由 [`Face::from_sections`] 画 —— 这一面是**三**节
+/// （「本次」、「这一趟会话」与末尾那句口径），所以两个小标题都在；末尾那一节没有标题。
+fn usage_section(usage: &UsageScope, width: usize, numbers: wording::NumberStyle) -> Vec<Section> {
+    vec![
+        Section::named(
+            wording::usage_this_section(),
+            usage_rows(&usage.this, width, numbers),
+        ),
+        Section::named(
+            wording::usage_session_section(),
+            usage_rows(&usage.session, width, numbers),
+        ),
+        // 末尾那句口径**逐字**在位：读者最容易在这里把三个数数两遍（票 15 第 2 条）。
+        Section::whole(vec![DetailLine::plain(Line::from(Span::styled(
+            wording::usage_ledger_note(),
+            Style::default().fg(palette::MUTED),
+        )))]),
+    ]
+}
+
+/// 用量面的一行里给数字与条形留的列数：数字列放得下五位数，条最多 [`panel::BAR_COLUMNS`]。
+///
+/// 窄屏时先缩这个（详情文本区一共也没多宽），而**条形那一段的宽度上限归面板** —— 两处画的
+/// 是同一条条（票 15 第 5 条）。
+const USAGE_ROW_COLUMNS: usize = 12;
+
+/// 一节的五行：桶名、数字、以及一条**与左栏面板共用**的占比条（票 15 第 1、5 条）。
+///
+/// 分母取这一节里最大的那个桶 —— 用量面没有天然的分母（不像面板那边的上下文窗口与额度），
+/// 拿这一节的最大值当刻度至少让「谁大谁小」读得出来。推理没报时那一格写
+/// `—（供应商未报）` 且**不画条**：没有分母的条就是骗人（票 15 第 4 条）。
+fn usage_rows(usage: &Usage, width: usize, numbers: wording::NumberStyle) -> Vec<DetailLine> {
+    let buckets = [
+        (wording::USAGE_INPUT, Some(usage.input_tokens)),
+        (wording::USAGE_CACHED, Some(usage.cached_tokens)),
+        (wording::USAGE_MISS, Some(usage.miss_tokens)),
+        (wording::USAGE_OUTPUT, Some(usage.output_tokens)),
+        (wording::USAGE_REASONING, usage.reasoning_tokens),
+    ];
+    let scale = buckets
+        .iter()
+        .filter_map(|(_, value)| *value)
+        .max()
+        .unwrap_or(0);
+    // 标签列与值列加一条空列；剩下的才是条的。文本区更窄时先缩数字那一列。
+    let columns = USAGE_ROW_COLUMNS.min(width.saturating_sub(7)).max(1);
+    let room = width.saturating_sub(panel::label_columns() + 1).max(1);
+    buckets
+        .into_iter()
+        .map(|(label, value)| {
+            let text = match value {
+                Some(value) => wording::compact(value, numbers),
+                None => wording::usage_reasoning_missing().to_owned(),
+            };
+            let share = value
+                .filter(|_| scale > 0)
+                .map(|value| value as f64 / scale as f64);
+            // 没有条的那一行（供应商没报推理 token）把条的宽度也让给那一句话 —— 它是一句
+            // 完整的话，而右对齐到面边缘只会让它离标签远得读不出来。
+            match share {
+                Some(_) => DetailLine::plain(panel::row(label, &text, columns, true, share)),
+                None => DetailLine::plain(panel::row(label, &text, room, false, None)),
+            }
+        })
+        .collect()
 }
 
 /// 来源面：那条只读的祖先链（票 14 第 1 条）。
@@ -10132,6 +10363,9 @@ struct DetailFacts {
     at: Option<DateTime<Utc>>,
     /// 产生它的那次模型调用的计时。用户自己那条消息不是一次调用，于是是一份空的。
     timing: CallTiming,
+    /// 这一块到达那一刻的用量账（它属于哪一次发言、到它为止的会话累计）—— 用量面那两节
+    /// （票 15 第 1 条）。「本次」那一节还没定，它在**打开那一刻**才填上。
+    usage: UsageScope,
 }
 
 /// 轨迹页两级分组的当前进度 —— 推块的副产物，重放时从头再来一遍
@@ -10251,8 +10485,18 @@ impl TuiState {
         if let Some(row) = here {
             detail.chain = Some(self.ancestor_chain(row, &detail.title));
         }
+        // 用量面「本次」那一节同理：这条记录画出来的时候，它那一次发言可能还没收尾（后面
+        // 还有调用）—— 打开这一刻查出来的那个数才与行尾的 `合计` 相等（票 15 第 3 条）。
+        if let Some(usage) = detail.usage.as_mut() {
+            usage.this = self.turn_total(usage.turn);
+        }
         self.detail_opener = Some(opener);
-        let faces = detail_faces(&detail, &self.facts.session_dir, width);
+        let faces = detail_faces(
+            &detail,
+            &self.facts.session_dir,
+            width,
+            self.facts.number_style,
+        );
         self.detail = Some(DetailView {
             detail,
             faces,
@@ -12359,13 +12603,27 @@ mod tests {
     fn details_by_kind() -> Vec<(RecordKind, Detail)> {
         let at = some_at();
         let speaker = crate::events::SpeakerId::Debater("kimi".into());
-        let window = |title: &str, kind: DetailKind| Detail {
-            title: title.to_owned(),
-            color: palette::PLAIN,
-            speaker: Some(speaker.clone()),
-            at: Some(at),
-            kind,
-            chain: None,
+        let window = |title: &str, kind: DetailKind| {
+            // 用量面只挂在消息与思考上（工具调用没有用量）—— 别的种类留 `None`，就是它们在
+            // 真实里的样子（票 15 第 6 条）。
+            let usage = matches!(
+                kind,
+                DetailKind::Message { .. } | DetailKind::Thinking { .. }
+            )
+            .then_some(UsageScope {
+                turn: Some(1),
+                session: Usage::default(),
+                this: Usage::default(),
+            });
+            Detail {
+                title: title.to_owned(),
+                color: palette::PLAIN,
+                speaker: Some(speaker.clone()),
+                at: Some(at),
+                kind,
+                chain: None,
+                usage,
+            }
         };
         vec![
             (
@@ -12448,7 +12706,7 @@ mod tests {
 
     /// 一面的正文，作为一块文本 —— 单位测试按它断言（帧层那条接缝留给画出来的那一刻）。
     fn face_text(detail: &Detail, id: FaceId) -> String {
-        face_sections(detail, id, "/tmp", 88)
+        face_sections(detail, id, "/tmp", 88, wording::NumberStyle::Cn)
             .iter()
             .flat_map(|section| {
                 section
@@ -12472,20 +12730,23 @@ mod tests {
                 .find(|(row, _)| *row == kind)
                 .map(|(_, faces)| *faces)
                 .unwrap_or_else(|| panic!("分派表里没有 {kind:?} 这一行"));
-            let faces: Vec<FaceId> = detail_faces(&detail, "/tmp", 88)
+            let faces: Vec<FaceId> = detail_faces(&detail, "/tmp", 88, wording::NumberStyle::Cn)
                 .iter()
                 .map(|face| face.id)
                 .collect();
             assert_eq!(faces, row, "{kind:?} 的面集合");
-            // 这一行里每一面都真的生成得出东西 —— 空的一面是漂了的征兆。
+            // 这一行里每一面都真的生成得出东西 —— 空的一面是漂了的征兆。一节还是几节由面
+            // 自己定（用量面是两节读数加末尾那句口径），但每一节都不许空。
             for face in faces {
-                let sections = face_sections(&detail, face, "/tmp", 88);
-                assert_eq!(sections.len(), 1, "{kind:?} 的 {} 面", face.name());
-                assert!(
-                    !sections[0].rows.is_empty(),
-                    "{kind:?} 的 {} 面是空的",
-                    face.name()
-                );
+                let sections = face_sections(&detail, face, "/tmp", 88, wording::NumberStyle::Cn);
+                assert!(!sections.is_empty(), "{kind:?} 的 {} 面没有节", face.name());
+                for section in &sections {
+                    assert!(
+                        !section.rows.is_empty(),
+                        "{kind:?} 的 {} 面里有一节是空的",
+                        face.name()
+                    );
+                }
             }
             seen.push(kind);
         }
@@ -12543,6 +12804,68 @@ mod tests {
         );
     }
 
+    /// 用量面：两节各五行加末尾那句口径；推理没报时那一格写 `—（供应商未报）` 且**不画条形**
+    /// （票 15 第 1、2、4 条）。
+    #[test]
+    fn the_usage_face_names_the_two_sections_and_the_ledger_note() {
+        let usage = Usage {
+            input_tokens: 12_000,
+            output_tokens: 222,
+            cached_tokens: 11_000,
+            miss_tokens: 1_000,
+            reasoning_tokens: None,
+        };
+        let detail = Detail {
+            title: "[kimi] 正文".to_owned(),
+            color: palette::PLAIN,
+            speaker: Some(crate::events::SpeakerId::Debater("kimi".into())),
+            at: Some(some_at()),
+            kind: DetailKind::Message {
+                text: "正文".to_owned(),
+                timing: CallTiming::default(),
+            },
+            chain: None,
+            usage: Some(UsageScope {
+                turn: Some(1),
+                session: usage,
+                this: usage,
+            }),
+        };
+        let sections = face_sections(&detail, FaceId::Usage, "/tmp", 88, wording::NumberStyle::Cn);
+        assert_eq!(sections.len(), 3, "两节读数加末尾那句口径");
+        assert_eq!(sections[0].title, Some(wording::usage_this_section()));
+        assert_eq!(sections[1].title, Some(wording::usage_session_section()));
+        assert_eq!(sections[2].title, None, "末尾那句口径没有小标题");
+        assert_eq!(sections[0].rows.len(), 5, "一节五行");
+
+        let text = face_text(&detail, FaceId::Usage);
+        assert!(
+            text.contains(wording::usage_ledger_note()),
+            "口径逐字在位：{text}"
+        );
+        let reasoning = text
+            .lines()
+            .find(|row| row.contains(wording::USAGE_REASONING))
+            .expect("推理那一行");
+        assert!(
+            reasoning.contains(wording::usage_reasoning_missing()),
+            "供应商没报就写「{}」：{reasoning}",
+            wording::usage_reasoning_missing()
+        );
+        assert!(
+            !reasoning.contains(wording::BAR_FULL) && !reasoning.contains(wording::BAR_EMPTY),
+            "没有分母的条不画：{reasoning}"
+        );
+        let input = text
+            .lines()
+            .find(|row| row.contains(wording::USAGE_INPUT))
+            .expect("输入那一行");
+        assert!(
+            input.contains(wording::BAR_FULL),
+            "拿得到的那一行画条：{input}"
+        );
+    }
+
     /// 老流上首 token 那一笔不存在：那三个量写 `不可用`，**不填 0**，而原因写在同一行的
     /// 计时来源里（票 13 第 6 条）。
     #[test]
@@ -12563,6 +12886,7 @@ mod tests {
                 },
             },
             chain: None,
+            usage: None,
         };
         let text = face_text(&detail, FaceId::Timing);
         for label in [
@@ -12605,7 +12929,13 @@ mod tests {
         };
         tool.timing.approval_ms = Some(2_400);
 
-        let sections = face_sections(&detail, FaceId::Timing, "/tmp", 88);
+        let sections = face_sections(
+            &detail,
+            FaceId::Timing,
+            "/tmp",
+            88,
+            wording::NumberStyle::Cn,
+        );
         assert_eq!(sections.len(), 1, "只有它自己能证明的那一节");
         assert_eq!(sections[0].title, Some(wording::timing_tool_section()));
         let text = face_text(&detail, FaceId::Timing);
@@ -12642,6 +12972,7 @@ mod tests {
                 timing: CallTiming::default(),
             },
             chain: None,
+            usage: None,
         };
         let text = face_text(&detail, FaceId::Summary);
         assert!(text.contains(wording::summary_message()), "{text}");
@@ -12673,7 +13004,7 @@ mod tests {
             if row != [FaceId::Only] {
                 continue;
             }
-            let faces = detail_faces(&detail, "/tmp", 88);
+            let faces = detail_faces(&detail, "/tmp", 88, wording::NumberStyle::Cn);
             assert_eq!(faces.len(), 1, "{kind:?} 只有一面");
             assert_eq!(faces[0].name(), "", "{kind:?} 那一面没有名字");
             let rows: Vec<String> = faces[0]

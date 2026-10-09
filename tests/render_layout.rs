@@ -129,8 +129,8 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// （票 13 第 5 条）。今天那块正文里的小节标题 `── 参数 ──` 不再画了 —— 面名由标签条说，
 /// 正文不重复它（票 13 第 9 条）。
 const TOOL_FACES: &str = "参数┆输出┆计时┆来源┆概述";
-const MESSAGE_FACES: &str = "正文┆计时┆概述";
-const THINKING_FACES: &str = "思考┆计时┆概述";
+const MESSAGE_FACES: &str = "正文┆用量┆计时┆概述";
+const THINKING_FACES: &str = "思考┆用量┆计时┆概述";
 
 /// 切到下一面：覆盖层立着时 `Tab` 是空键，于是它归标签条（票 13 第 3 条）。
 fn next_face(state: &mut TuiState) {
@@ -10964,14 +10964,15 @@ fn a_call_with_a_first_token(state: &mut TuiState) {
     ));
 }
 
-/// 切到「计时」那一面：打开时落在默认面上，`Tab` 走一格。
+/// 切到「计时」那一面：打开时落在正文上，`Tab` 走过**用量**那一面。
 fn tab_to_timing(state: &mut TuiState) {
-    next_face(state);
+    next_face(state); // 正文 → 用量
+    next_face(state); // 用量 → 计时
 }
 
 #[test]
 fn a_message_detail_walks_its_faces_with_the_tab_key() {
-    // 一份消息详情有三个面：正文（默认面，票 13 第 5 条）、计时、概述。`Tab` 一路走，
+    // 一份消息详情有四个面：正文（默认面）、用量（票 15）、计时、概述。`Tab` 一路走，
     // `Shift+Tab` 走回来，而标签条上写着现在在哪一面、有哪几面（票 13 第 3 条）。
     let mut state = state_with_roster(&["kimi"]);
     a_call_with_a_first_token(&mut state);
@@ -10984,7 +10985,10 @@ fn a_message_detail_walks_its_faces_with_the_tab_key() {
 
     next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("开始时刻"), "第二面是计时：{text}");
+    assert!(
+        text.contains(wording::usage_ledger_note()),
+        "第二面是用量：{text}"
+    );
     // 正文那一面换掉了：整屏只剩**底下那条转录行**里的那一处 —— 覆盖层不再画它。这里数
     // 次数而不是问「有没有」，因为底下的行本来就写着同一句话，一句 `!contains` 证明不了
     // 这一面换了。
@@ -10996,7 +11000,11 @@ fn a_message_detail_walks_its_faces_with_the_tab_key() {
 
     next_face(&mut state);
     let text = screen(120, 40, &mut state).join("\n");
-    assert!(text.contains("一条消息"), "第三面是概述：{text}");
+    assert!(text.contains("开始时刻"), "第三面是计时：{text}");
+
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("一条消息"), "第四面是概述：{text}");
 
     // `Tab` 是环形的：再走一格回到正文。
     next_face(&mut state);
@@ -11508,4 +11516,197 @@ fn an_injection_detail_grows_a_label_bar_and_still_opens_on_the_injection() {
         "默认落在注入那一面：{text}"
     );
     assert!(text.contains("注入的正文一段"), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// 用量面（票 15）
+// ---------------------------------------------------------------------------
+
+/// 一个回合里第 `iteration` 次迭代：开始、一笔用量、一条答复 —— 跨多次调用的那一条消息就是
+/// 这样长出来的。`usage` 是（输入 / 输出 / 缓存读 / 未命中）。
+fn a_call(
+    state: &mut TuiState,
+    seq: u64,
+    iteration: u32,
+    (input, output, cached, miss): (u64, u64, u64, u64),
+    text: &str,
+) {
+    state.apply(turn_started_at(seq, iteration));
+    state.apply(usage(seq + 1, input, output, cached, miss));
+    state.apply(message(seq + 2, text, None));
+}
+
+#[test]
+fn a_message_detail_reads_its_usage_in_two_sections() {
+    // 用量面：两节各五行（输入 / 缓存读 / 未命中 / 输出 / 推理），末尾一句口径逐字在位
+    // （票 15 第 1、2 条）。
+    //
+    // 「本次」是这条消息所属**那次发言**的各次调用之和 —— 与行尾那个 `合计` 同一个数；
+    // 「这一趟会话」是到这条记录为止的会话累计，所以它比「本次」大（票 15 第 3 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    // 第一个回合：两次迭代，各一笔用量。
+    state.apply(user_message(1, "把 grep 的输出截断修一下"));
+    a_call(
+        &mut state,
+        2,
+        1,
+        (12_000, 222, 11_000, 1_000),
+        "先看一眼那次调用。",
+    );
+    a_call(&mut state, 5, 2, (300, 8, 0, 300), "头尾都留住了。");
+    state.apply(turn_ended(8));
+    // 第二个回合：也是两次调用 —— 它让「这一趟会话」比「本次」大。
+    state.apply(user_message(9, "再跑一遍测试"));
+    a_call(&mut state, 10, 1, (5_000, 50, 0, 5_000), "先看一眼。");
+    a_call(&mut state, 13, 2, (200, 10, 0, 200), "跑完了。");
+    state.apply(turn_ended(16));
+
+    open_trace_tab(&mut state, 120, 40);
+    let this_turn = heng::events::Usage {
+        input_tokens: 5_200,
+        output_tokens: 60,
+        cached_tokens: 0,
+        miss_tokens: 5_200,
+        reasoning_tokens: None,
+    };
+    // 行尾那个合计（`合计 in=5200 out=60`）先看：覆盖层立着的时候它被挡在下面。
+    let before = screen(120, 40, &mut state).join("\n");
+    assert!(
+        before.contains(&wording::total_tail(&this_turn)),
+        "这次发言行尾那个合计：{before}"
+    );
+
+    // 点的是**第二个回合**里那条消息：「本次」就是它那一次发言，「这一趟会话」多算了第一个
+    // 回合 —— 两节这才分得开。
+    click_row(&mut state, 120, 40, "跑完了。");
+    next_face(&mut state); // 正文 → 用量
+
+    let rows = screen(120, 40, &mut state);
+    let text = rows.join("\n");
+    let style = wording::NumberStyle::default();
+    // 这一趟会话到这条记录为止：第一个回合那两次调用也在里面。
+    let session = heng::events::Usage {
+        input_tokens: 17_500,
+        output_tokens: 290,
+        cached_tokens: 11_000,
+        miss_tokens: 6_500,
+        reasoning_tokens: None,
+    };
+    // 用量面那一片：从「本次」那一节的小标题到末尾那句口径。
+    let start = rows
+        .iter()
+        .position(|row| row.contains(wording::usage_this_section()))
+        .unwrap_or_else(|| panic!("「本次」那一节：{text}"));
+    let end = rows
+        .iter()
+        .position(|row| row.contains(wording::usage_ledger_note()))
+        .unwrap_or_else(|| panic!("末尾那句口径：{text}"));
+    assert!(start < end, "两节在口径句上面：{text}");
+    let face = rows[start..=end].join("\n");
+    for label in [
+        wording::USAGE_INPUT,
+        wording::USAGE_CACHED,
+        wording::USAGE_MISS,
+        wording::USAGE_OUTPUT,
+        wording::USAGE_REASONING,
+    ] {
+        assert!(
+            face.matches(label).count() >= 2,
+            "两节各一行「{label}」：{face}"
+        );
+    }
+    assert_eq!(
+        face.matches(wording::usage_session_section()).count(),
+        1,
+        "第二节的小标题写清是「这一趟会话」：{face}"
+    );
+    assert!(
+        face.contains(wording::usage_ledger_note()),
+        "末尾那句口径**逐字**在位：{face}"
+    );
+
+    // 「本次」那节的四个数与行尾那个合计相等（同源同口径）；「这一趟」比它大。
+    assert!(
+        face.contains(&wording::compact(this_turn.input_tokens, style))
+            && face.contains(&wording::compact(this_turn.output_tokens, style)),
+        "「本次」的输入与输出就是那个合计的两个数：{face}"
+    );
+    assert!(
+        face.contains(&wording::compact(session.input_tokens, style)),
+        "「这一趟会话」到这条记录为止：{face}"
+    );
+    assert_ne!(
+        this_turn.input_tokens, session.input_tokens,
+        "两节不是同一个数"
+    );
+
+    // 这一面的数字与左栏用量面板对同一段会话给出同一个累计值：面板那一行的「输入」，
+    // 与这一面「这一趟会话」的输入格，是同一个 compact 值（票 15 的验收）。
+    let total = wording::compact(session.input_tokens, style);
+    assert!(
+        before.contains(&total),
+        "面板那一行的累计：{total} —— {before}"
+    );
+    assert!(face.contains(&total), "而这一面也是它：{face}");
+}
+
+#[test]
+fn a_reasoning_count_the_provider_never_reported_draws_no_bar() {
+    // 推理为 `None` 时那一格写 `—（供应商未报）` 且**不画条形** —— 没有分母的条就是骗人
+    // （票 15 第 4 条）。同一面里拿得到的那四行照旧画条。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(usage(2, 12_000, 222, 11_000, 1_000));
+    state.apply(message(3, "答案是 42。", None));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "答案是 42。");
+    next_face(&mut state); // 正文 → 用量
+
+    let rows = screen(120, 40, &mut state);
+    let reasoning: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.contains(wording::usage_reasoning_missing()))
+        .collect();
+    assert_eq!(reasoning.len(), 2, "两节各一行推理：{}", rows.join("\n"));
+    for row in reasoning {
+        assert!(
+            row.contains(wording::usage_reasoning_missing()),
+            "那一格写「{}」：{row}",
+            wording::usage_reasoning_missing()
+        );
+        assert!(
+            !row.contains(wording::BAR_FULL) && !row.contains(wording::BAR_EMPTY),
+            "没有分母的条不画：{row}"
+        );
+    }
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(wording::USAGE_INPUT) && row.contains(wording::BAR_FULL)),
+        "拿得到的那几行照旧画条：{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn a_tool_detail_has_no_usage_face() {
+    // 工具调用**没有用量**：用量事件带发言者、不带工具调用 id，所以这一面不挂工具详情
+    // （票 15 第 6 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-usage",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-usage", true, Some("out"), None));
+    open_trace_tab(&mut state, 120, 40);
+    click_row(&mut state, 120, 40, "调用 bash");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(TOOL_FACES), "工具那一行还是那几面：{text}");
+    assert!(
+        !text.contains(wording::detail_usage_face()),
+        "没有用量面：{text}"
+    );
+    assert!(!text.contains(wording::usage_ledger_note()), "{text}");
 }

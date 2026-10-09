@@ -498,6 +498,39 @@ pub fn detail_source_face() -> &'static str {
     "来源"
 }
 
+/// 用量面的面名（票 15 第 6 条）。
+pub fn detail_usage_face() -> &'static str {
+    "用量"
+}
+
+/// 用量面两节的小标题（票 15 第 1 条）。
+pub fn usage_this_section() -> &'static str {
+    "本次"
+}
+
+pub fn usage_session_section() -> &'static str {
+    "这一趟会话（到这条记录为止）"
+}
+
+/// 用量面那五个桶的名字，与左栏面板数的是同一组东西（票 15 第 1 条）。
+pub const USAGE_INPUT: &str = "输入";
+pub const USAGE_CACHED: &str = "缓存读";
+pub const USAGE_MISS: &str = "未命中";
+pub const USAGE_OUTPUT: &str = "输出";
+pub const USAGE_REASONING: &str = "推理";
+
+/// 供应商没报推理 token 时那一格怎么写（票 15 第 4 条）。
+///
+/// 它同时说清这一格**不画条形** —— 没有分母的条就是骗人。
+pub fn usage_reasoning_missing() -> &'static str {
+    "—（供应商未报）"
+}
+
+/// 用量面末尾那句口径，**逐字**（票 15 第 2 条）：写死它是因为读者最容易在这里数两遍。
+pub fn usage_ledger_note() -> &'static str {
+    "输入 = 缓存读 + 未命中；推理已含在输出里，这两条不能再相加。"
+}
+
 /// 来源面那条链上的四环各叫什么（票 14 第 1 条）：本行，以及它上面那三环。
 pub fn chain_here() -> &'static str {
     "本行"

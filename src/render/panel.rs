@@ -62,6 +62,14 @@ impl Panel {
         self.last_input
     }
 
+    /// 到此刻为止的**会话累计**：每一条 `UsageRecorded` 折叠出来的那一个数。
+    ///
+    /// 详情覆盖层的用量面那一节「这一趟会话（到这条记录为止）」读的就是它 —— 两处同源同
+    /// 口径，所以同一段会话在两处给出同一个累计值（票 15 第 3、6 条）。
+    pub fn total(&self) -> Usage {
+        self.total
+    }
+
     /// 在 `area` 里要画的行，最重要的在前。
     pub fn lines(&self, facts: &SessionFacts, area: Rect) -> Vec<Line<'static>> {
         let value_columns = (area.width as usize).saturating_sub(label_columns() + 1);
@@ -148,7 +156,9 @@ impl Panel {
 }
 
 /// 标签列：与最宽的标签同宽，这样没有标签会被裁，这一列也不会与自己装的那些词脱节。
-fn label_columns() -> usize {
+///
+/// 详情覆盖层的用量面借它对齐自己那五个桶 —— 两处的行是同一种形状（票 15 第 5 条）。
+pub(crate) fn label_columns() -> usize {
     [
         wording::PANEL_CONTEXT,
         wording::PANEL_TOKENS,
@@ -169,7 +179,13 @@ fn label_columns() -> usize {
 /// `share` 是这一行填满了多少（`0.0`…`1.0`，超过 1 表示已经撞顶）：给了就画一条 [`BAR_COLUMNS`]
 /// 列宽的块字符条（`▓` 满 / `░` 空，前景静音档），`N = ceil(share × 条宽)`。条**占列**，
 /// 所以值列要先给它让出地方（`.scratch/tui-visual-language/issues/07` 决定 3）。
-fn row(label: &str, value: &str, width: usize, right: bool, share: Option<f64>) -> Line<'static> {
+pub(crate) fn row(
+    label: &str,
+    value: &str,
+    width: usize,
+    right: bool,
+    share: Option<f64>,
+) -> Line<'static> {
     let labels = label_columns();
     let label = pad_right(&fit(label, labels), labels);
     // 数字比条值钱：值先拿到它需要的那些列，剩下的才给条，而条最多 [`BAR_COLUMNS`] 列。
@@ -194,15 +210,11 @@ fn row(label: &str, value: &str, width: usize, right: bool, share: Option<f64>) 
     ];
     if bar_columns > 0 {
         // `ceil` 保证占比一大于零就至少有一格，`min(bar_columns)` 保证撞顶时不越出条。
-        let share = share.unwrap_or(0.0).clamp(0.0, 1.0);
-        let filled = ((share * bar_columns as f64).ceil() as usize).min(bar_columns);
-        // 字形归符号表（`wording::BAR_FULL` / `BAR_EMPTY`）。
-        let bar = format!(
-            "{}{}",
-            wording::BAR_FULL.to_string().repeat(filled),
-            wording::BAR_EMPTY.to_string().repeat(bar_columns - filled)
-        );
-        spans.push(Span::styled(bar, Style::default().fg(palette::MUTED)));
+        let share = share.unwrap_or(0.0);
+        spans.push(Span::styled(
+            proportion_bar(share, bar_columns),
+            Style::default().fg(palette::MUTED),
+        ));
         spans.push(Span::raw(" "));
     }
     spans.push(Span::raw(value));
@@ -211,7 +223,25 @@ fn row(label: &str, value: &str, width: usize, right: bool, share: Option<f64>) 
 
 /// 占比条占的列数上限（`.scratch/tui-visual-language/issues/07` 决定 3：一共 10 列的读数区）。
 /// 余地不够时条自己缩短，最低到一格 —— 数字先得到它要的列。
-const BAR_COLUMNS: usize = 10;
+///
+/// 详情覆盖层的用量面与这一页**共用同一条条**（票 15 第 5 条）：同一组数画成两种条，等于给
+/// 它两种读法。
+pub(crate) const BAR_COLUMNS: usize = 10;
+
+/// 一条占比条：`share` 是这一格填满了多少（`0.0`…`1.0`，超过 1 表示已经撞顶），
+/// `columns` 是它能占的列数。
+///
+/// `ceil` 保证占比一大于零就至少有一格（否则千分之一的占比会画成一条空条，读起来与零一样），
+/// `min(columns)` 保证撞顶时不越出条。字形归符号表（`wording::BAR_FULL` / `BAR_EMPTY`）。
+pub(crate) fn proportion_bar(share: f64, columns: usize) -> String {
+    let share = share.clamp(0.0, 1.0);
+    let filled = ((share * columns as f64).ceil() as usize).min(columns);
+    format!(
+        "{}{}",
+        wording::BAR_FULL.to_string().repeat(filled),
+        wording::BAR_EMPTY.to_string().repeat(columns - filled)
+    )
+}
 
 /// 把 `text` 适配到 `width` 列。
 ///
