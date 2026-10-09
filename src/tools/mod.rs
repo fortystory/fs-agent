@@ -57,7 +57,7 @@ pub use task::{TASK_TOOL, TaskTool};
 pub use todo::{TODO_TOOL, TodoTool};
 pub use tool::{
     BashLimits, Effect, ExecutorSpawner, ReadPathResolver, ReadSet, Tool, ToolContext, ToolError,
-    ToolOutput, WritePathResolver,
+    ToolOutput, WorkspaceResolver, WritePathResolver,
 };
 pub use web_fetch::{WEB_FETCH_TOOL, WebFetchTool};
 pub use web_search::{WEB_SEARCH_TOOL, WebSearchTool};

@@ -116,6 +116,10 @@ pub struct ToolContext<'a> {
     pub outputs_dir: &'a Path,
     /// 会话 cwd，用于显示，也给那些相对它跑的工具。
     pub cwd: &'a Path,
+    /// 这一次调用可以站到工作区里的哪个目录：它**永远**收容在会话工作区之内，与 `read_paths`
+    /// / `write_paths` 眼下放行到哪一侧无关。`bash` 的 `workdir` 用它
+    /// （`.scratch/bash-workdir/spec.md` §3）。
+    pub workspace_paths: &'a dyn WorkspaceResolver,
     /// 会话已发现的技能库（spec §9）。是组装期发现好的一个值，所以 `skill(name)` 是查表，
     /// 而不是去解析一个路径。
     pub skills: &'a Skills,
@@ -163,6 +167,16 @@ pub trait ReadPathResolver: Send + Sync {
 /// 把模型给的写路径解析到会话 cwd 上。
 pub trait WritePathResolver: Send + Sync {
     fn resolve_write(&self, path: &Path) -> Result<PathBuf, ToolError>;
+}
+
+/// 把模型给的路径解析到**会话工作区之内**，与这一次调用拿到多少放行无关。
+///
+/// 与 [`ReadPathResolver`] / [`WritePathResolver`] 只差一处：那两个可能是 `SessionPaths` 的
+/// `relaxed_read` / `relaxed_write`（那一次越界刚刚被策略或用户放行），而 `bash` 的
+/// `workdir` 没有任何放行通道 —— 拿它们解析会把「只能落在区内」漏成「区外可跑」
+/// （`.scratch/bash-workdir/spec.md` §3）。
+pub trait WorkspaceResolver: Send + Sync {
+    fn resolve_within(&self, path: &Path) -> Result<PathBuf, ToolError>;
 }
 
 /// 一条路径在这个会话里有没有被读过。读权限是逐 agent 的，且两个方向都不继承（spec §16）。

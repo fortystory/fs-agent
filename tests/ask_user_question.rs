@@ -91,6 +91,7 @@ async fn call(
         write_paths: &paths,
         outputs_dir: cwd,
         cwd,
+        workspace_paths: &paths,
         skills: &skills,
         repo_map: &repo_map,
         bash: &bash,

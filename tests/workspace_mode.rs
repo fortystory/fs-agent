@@ -383,6 +383,43 @@ async fn outside_read_case(
     (ok, message, requests)
 }
 
+// --- `workdir` 与这些放行无关（`.scratch/bash-workdir` §3）------------------
+
+#[tokio::test]
+async fn an_opened_outside_read_does_not_open_the_workdir() {
+    // `bash` 的 `workdir` 没有任何放行通道：它的收容永远按会话工作区判，与区外读那一侧
+    // 放行到哪无关。拿放宽过的路径表解析它，会让「只能落在区内」漏成「区外可跑」。
+    let asker = ScriptedAsker::default();
+    let mut fixture = fixture_with(
+        sandbox_available(),
+        Policy::for_mode(Mode::Workspace).with_outside_read(Decision::Allow),
+        Some(Arc::new(asker.clone())),
+        |_| {
+            vec![
+                call(
+                    "call-1",
+                    "bash",
+                    serde_json::json!({ "command": "pwd", "workdir": "../" }),
+                ),
+                Reply::text("ack"),
+            ]
+        },
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (ok, message) = fixture.results().remove(0);
+    assert!(!ok, "区外读放行不代表站位也放行：{message}");
+    assert!(message.contains("workdir"), "{message}");
+    assert!(
+        asker.requests().is_empty(),
+        "站位落在区外是工具错误，不是一次询问"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
 // --- 没有沙箱就没有这一档（spec §6）----------------------------------------
 
 #[tokio::test]

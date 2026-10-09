@@ -209,7 +209,10 @@ impl Sandbox {
     /// 三种情形：关掉了就原样返回；探测说有 `bwrap` 就用**探测到的那个绝对路径**（于是
     /// PATH 中途变了也不影响）；不可用就是 [`ToolError`] —— 这一次调用无处可跑，而那与
     /// 「命令失败了」是两件不同的事。
-    pub fn wrap(&self, argv: &[String], cwd: &Path) -> Result<Vec<String>, ToolError> {
+    ///
+    /// 收的是**边界**，不是站位：挂载表只由会话工作区决定，进程站在哪个子目录里是
+    /// [`super::process::run`] 的 `current_dir` 的事（`.scratch/bash-workdir/spec.md` §3）。
+    pub fn wrap(&self, argv: &[String], boundary: &Path) -> Result<Vec<String>, ToolError> {
         if self.is_off() {
             return Ok(argv.to_vec());
         }
@@ -245,7 +248,7 @@ impl Sandbox {
         }
         let mut spec = self.spec.clone();
         spec.writable_roots.extend(self.grants.iter().cloned());
-        let mut wrapped = wrap(argv, cwd, &spec);
+        let mut wrapped = wrap(argv, boundary, &spec);
         wrapped[0] = bwrap.display().to_string();
         Ok(wrapped)
     }
@@ -266,6 +269,9 @@ impl Sandbox {
 
 /// 把一个 argv 包成 bubblewrap 调用。
 ///
+/// `boundary` 是**会话工作区**：可写根与保护路径都锚在它上面。站位不进这张挂载表 —— 它由
+/// [`super::process::run`] 的 `current_dir` 表达（`.scratch/bash-workdir/spec.md` §3）。
+///
 /// flag 的顺序是行为的一部分，而且有三处顺序上的讲究：
 ///
 /// * `--ro-bind / /` 在所有可写根的 `--bind` **之前**；
@@ -277,7 +283,7 @@ impl Sandbox {
 /// 不存在的可写根、遮罩目录与保护路径**整条跳过**：`bwrap` 对不存在的挂载目标会直接报错
 /// 退出（实测原文是 `bwrap: Can't create file …: Read-only file system`），而
 /// `~/.cargo` 这类缓存目录在没装 Rust 的机器上本来就不存在。
-pub fn wrap(argv: &[String], cwd: &Path, spec: &SandboxSpec) -> Vec<String> {
+pub fn wrap(argv: &[String], boundary: &Path, spec: &SandboxSpec) -> Vec<String> {
     if spec.mode == SandboxMode::Off {
         return argv.to_vec();
     }
@@ -294,7 +300,7 @@ pub fn wrap(argv: &[String], cwd: &Path, spec: &SandboxSpec) -> Vec<String> {
         "/tmp",
     ]));
 
-    for root in writable_roots(cwd, spec) {
+    for root in writable_roots(boundary, spec) {
         push_pair(&mut argv_out, "--bind", &root);
     }
 
@@ -321,7 +327,7 @@ pub fn wrap(argv: &[String], cwd: &Path, spec: &SandboxSpec) -> Vec<String> {
         argv_out.push(mask);
     }
 
-    for protected in protected_paths(cwd) {
+    for protected in protected_paths(boundary) {
         push_pair(&mut argv_out, "--ro-bind", &protected);
     }
 
@@ -330,11 +336,11 @@ pub fn wrap(argv: &[String], cwd: &Path, spec: &SandboxSpec) -> Vec<String> {
     argv_out
 }
 
-/// 会话 cwd 与配置的每一条可写根，按这个顺序，去掉重复的、跳过不存在的。
-fn writable_roots(cwd: &Path, spec: &SandboxSpec) -> Vec<PathBuf> {
+/// 会话工作区（`boundary`）与配置的每一条可写根，按这个顺序，去掉重复的、跳过不存在的。
+fn writable_roots(boundary: &Path, spec: &SandboxSpec) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::with_capacity(spec.writable_roots.len() + 1);
-    if cwd.exists() {
-        roots.push(canonical(cwd));
+    if boundary.exists() {
+        roots.push(canonical(boundary));
     }
     for root in &spec.writable_roots {
         if !root.exists() {
@@ -354,17 +360,20 @@ fn writable_roots(cwd: &Path, spec: &SandboxSpec) -> Vec<PathBuf> {
 /// 会让提交全线失败；而地板真正要防的是另外两样：改 `.git/config`（把 push 指向别处）与
 /// 改 `.git/hooks`（下次 commit 执行任意代码）。这两个恰好可以用 `--ro-bind` 精确表达。
 ///
+/// 锚在 `boundary`（会话工作区）上，所以 `bash` 的 `workdir` 换站位不会把这几条保护换成
+/// 子目录里那份不存在的路径（`.scratch/bash-workdir/spec.md` §3）。
+///
 /// `.env` 家族与权限门的地板共用同一个口径（[`is_env_file`]）；shell rc 文件不在工作区
 /// 里，`--ro-bind / /` 已经管了。
-fn protected_paths(cwd: &Path) -> Vec<PathBuf> {
+fn protected_paths(boundary: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for relative in [".git/config", ".git/hooks"] {
-        let path = cwd.join(relative);
+        let path = boundary.join(relative);
         if path.exists() {
             paths.push(canonical(&path));
         }
     }
-    paths.extend(env_files(cwd));
+    paths.extend(env_files(boundary));
     paths
 }
 

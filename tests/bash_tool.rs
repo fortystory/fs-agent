@@ -33,7 +33,16 @@ struct Fixture {
 }
 
 async fn fixture(replies: Vec<Reply>, mode: Mode, config: SessionConfig) -> Fixture {
-    let dir = tempfile::tempdir().unwrap();
+    fixture_in(tempfile::tempdir().unwrap(), replies, mode, config).await
+}
+
+/// 同上，但临时目录由调用方给：需要在**装配之前**就拿到工作区里一条绝对路径时用它。
+async fn fixture_in(
+    dir: tempfile::TempDir,
+    replies: Vec<Reply>,
+    mode: Mode,
+    config: SessionConfig,
+) -> Fixture {
     let session = dir.path().join("session");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&session).unwrap();
@@ -428,6 +437,319 @@ async fn an_oversized_result_is_spilled_before_it_reaches_the_stream() {
     );
     let spilled = std::fs::read_to_string(&pointer).unwrap();
     assert!(spilled.contains(&"b".repeat(100)), "整个正文都在磁盘上");
+
+    fixture.harness.shutdown().await;
+}
+
+// --- `workdir`：站位在工作区之内（`.scratch/bash-workdir` 票 01）----------
+
+/// 一次带 `workdir` 的脚本化 `bash` 调用。
+fn run_in(id: &str, command: &str, workdir: &str) -> Reply {
+    bash_reply(
+        id,
+        serde_json::json!({ "command": command, "workdir": workdir }),
+    )
+}
+
+/// 一次脚本化的 `read_file` 调用。
+fn read(id: &str, path: &str) -> Reply {
+    Reply::Stream(vec![
+        StreamEvent::ToolCallCompleted {
+            index: 0,
+            id: id.into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({ "file_path": path }).to_string(),
+        },
+        StreamEvent::Finished {
+            finish_reason: FinishReason::ToolCalls,
+        },
+    ])
+}
+
+/// 一条路径的物理形：`pwd -P` 打印出来的正是这一种。
+fn physical(path: &std::path::Path) -> String {
+    std::fs::canonicalize(path).unwrap().display().to_string()
+}
+
+/// 一次调用跑完之后，事件流里有没有人**问过**用户。
+fn asked(fixture: &Fixture) -> usize {
+    fixture
+        .events()
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::PermissionAsked { .. }))
+        .count()
+}
+
+#[tokio::test]
+async fn a_workdir_moves_the_command_into_a_subdirectory() {
+    let mut fixture = fixture(
+        vec![run_in("call-bash", "pwd -P", "sub"), Reply::text("done")],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+    std::fs::create_dir_all(fixture.workspace.join("sub")).unwrap();
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, output) = fixture.results().remove(0);
+    assert!(ok, "{output}");
+    assert!(
+        output.contains(&physical(&fixture.workspace.join("sub"))),
+        "命令站在相对工作区解析出来的 `sub` 里：{output}"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_absolute_workdir_inside_the_workspace_is_the_same_thing() {
+    // 模型从 `pwd` 或报错信息里抄到绝对路径很常见，所以同一个站位换一种写法照样成立。
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("workspace/sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let absolute = physical(&sub);
+
+    let mut fixture = fixture_in(
+        dir,
+        vec![
+            run_in("call-bash", "pwd -P", &absolute),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, output) = fixture.results().remove(0);
+    assert!(ok, "{output}");
+    assert!(output.contains(&absolute), "{output}");
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_workdir_outside_the_workspace_is_a_tool_error() {
+    // 三种写法都算区外：相对的回退、区外的绝对路径、以及写了一大串 `..` 的。判定按**解析后的
+    // 真实位置**做，所以 `sub/../../..` 不会因为字面上还带着工作区的前缀就蒙混过去。
+    for workdir in ["../", "/", "sub/../../.."] {
+        let mut fixture = fixture(
+            vec![run_in("call-bash", "pwd", workdir), Reply::text("ack")],
+            Mode::Auto,
+            SessionConfig::new("fake-model"),
+        )
+        .await;
+        std::fs::create_dir_all(fixture.workspace.join("sub")).unwrap();
+
+        fixture.harness.run_turn("run it").await.unwrap();
+
+        let (_, ok, message) = fixture.results().remove(0);
+        assert!(!ok, "`{workdir}` 是区外，必须是工具错误：{message}");
+        assert!(message.contains("workdir"), "{message}");
+        assert_eq!(
+            asked(&fixture),
+            0,
+            "`workdir` 不构成写，所以它自己的错误一条都不弹审批"
+        );
+
+        fixture.harness.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn an_empty_workdir_is_an_argument_error() {
+    let mut fixture = fixture(
+        vec![
+            bash_reply(
+                "call-bash",
+                serde_json::json!({ "command": "pwd > made.txt", "workdir": "" }),
+            ),
+            Reply::text("ack"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, message) = fixture.results().remove(0);
+    assert!(
+        !ok,
+        "空串与 `timeout_ms` / `escalation` 的半截写法同一种形状：{message}"
+    );
+    assert!(message.contains("workdir"), "{message}");
+    assert!(!fixture.exists("made.txt"), "参数被拒，命令没有跑");
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_dot_workdir_is_the_workspace_itself() {
+    let mut fixture = fixture(
+        vec![run_in("call-bash", "pwd -P", "."), Reply::text("done")],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, output) = fixture.results().remove(0);
+    assert!(ok, "{output}");
+    assert!(
+        output.contains(&physical(&fixture.workspace)),
+        "`\".\"` 等价于不写：{output}"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_missing_workdir_is_a_tool_error_and_is_never_created() {
+    let mut fixture = fixture(
+        vec![
+            run_in("call-bash", "pwd > made.txt", "no-such-dir"),
+            Reply::text("ack"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, message) = fixture.results().remove(0);
+    assert!(!ok, "{message}");
+    assert!(message.contains("workdir"), "{message}");
+    assert!(
+        !fixture.exists("made.txt"),
+        "目录不存在时命令不跑，也不替它建任何东西"
+    );
+    assert!(
+        !fixture.workspace.join("no-such-dir").exists(),
+        "隐式写入不该藏在参数里：那是另一条命令的事"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_workdir_that_is_a_file_is_a_tool_error() {
+    let mut fixture = fixture(
+        vec![
+            run_in("call-bash", "pwd > made.txt", "notes.txt"),
+            Reply::text("ack"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+    std::fs::write(fixture.workspace.join("notes.txt"), "不是目录\n").unwrap();
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, message) = fixture.results().remove(0);
+    assert!(!ok, "{message}");
+    assert!(message.contains("workdir"), "{message}");
+    assert!(!fixture.exists("made.txt"), "命令没有跑");
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_workdir_alongside_an_escalation_is_an_argument_error() {
+    let mut fixture = fixture(
+        vec![
+            bash_reply(
+                "call-bash",
+                serde_json::json!({
+                    "command": "echo hi",
+                    "workdir": "sub",
+                    "escalation": {
+                        "justification": "想写缓存目录",
+                        "writable_paths": ["/tmp/heng-workdir-probe"],
+                    }
+                }),
+            ),
+            Reply::text("ack"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+    std::fs::create_dir_all(fixture.workspace.join("sub")).unwrap();
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, message) = fixture.results().remove(0);
+    assert!(
+        !ok,
+        "一个是站位、一个是额外可写根，混起来等于让模型自选工作区：{message}"
+    );
+    assert!(message.contains("workdir"), "{message}");
+    assert!(message.contains("escalation"), "{message}");
+    assert_eq!(asked(&fixture), 0, "参数错误不弹审批");
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_workdir_does_not_move_the_base_of_sibling_tools() {
+    let mut fixture = fixture(
+        vec![
+            run_in("call-bash", "pwd -P", "sub"),
+            read("call-read", "made.txt"),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+    std::fs::create_dir_all(fixture.workspace.join("sub")).unwrap();
+    std::fs::write(fixture.workspace.join("made.txt"), "工作区根上的那份\n").unwrap();
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let results = fixture.results();
+    assert_eq!(results.len(), 2, "{results:?}");
+    let (_, ok, output) = &results[1];
+    assert!(ok, "`workdir` 只影响那一条命令的进程：{output}");
+    assert!(
+        output.contains("工作区根上的那份"),
+        "兄弟工具的基准仍按工作区解析：{output}"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_stream_records_the_workdir_as_the_model_wrote_it() {
+    let mut fixture = fixture(
+        vec![run_in("call-bash", "pwd", "sub"), Reply::text("done")],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+    std::fs::create_dir_all(fixture.workspace.join("sub")).unwrap();
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let args = fixture
+        .events()
+        .into_iter()
+        .find_map(|event| match event.payload {
+            EventPayload::ToolCallStarted { args, .. } => Some(args),
+            _ => None,
+        })
+        .expect("一条 ToolCallStarted 事件");
+    assert_eq!(
+        args.get("workdir").and_then(|value| value.as_str()),
+        Some("sub"),
+        "回放要能重算这次调用站在哪，所以记的是模型发的原文：{args}"
+    );
 
     fixture.harness.shutdown().await;
 }

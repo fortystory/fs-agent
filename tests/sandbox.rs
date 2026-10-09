@@ -580,6 +580,7 @@ async fn run_spawns_the_probed_bwrap_with_the_command_after_the_separator() {
 
     let outcome = process::run(
         &workspace,
+        &workspace,
         &shell("echo hi"),
         Duration::from_secs(10),
         &sandbox_using(&bwrap),
@@ -627,6 +628,7 @@ async fn a_command_failing_inside_the_sandbox_is_still_a_result() {
 
     let outcome = process::run(
         &workspace,
+        &workspace,
         &shell("echo hi"),
         Duration::from_secs(10),
         &sandbox_using(&bwrap),
@@ -656,6 +658,7 @@ async fn an_unavailable_sandbox_refuses_to_run_anything() {
 
     let error = process::run(
         &workspace,
+        &workspace,
         &shell("echo hi"),
         Duration::from_secs(10),
         &Sandbox::new(&settings),
@@ -677,6 +680,7 @@ async fn with_the_sandbox_off_run_spawns_the_command_directly() {
 
     let outcome = process::run(
         &workspace,
+        &workspace,
         &shell("echo direct"),
         Duration::from_secs(10),
         &Sandbox::new(&SandboxSettings::off()),
@@ -685,6 +689,55 @@ async fn with_the_sandbox_off_run_spawns_the_command_directly() {
     .unwrap();
 
     assert!(outcome.stdout.contains("direct"));
+}
+
+// --- 边界与站位（`.scratch/bash-workdir` 票 01）----------------------------
+
+#[tokio::test]
+async fn a_workdir_moves_the_standing_point_and_leaves_the_boundary_alone() {
+    // 边界与站位是两件事。若当初把同一个值喂给 `wrap()`，`workdir: "src"` 就会让
+    // `src/.git/config`（不存在）取代工作区的 `.git/config`（存在），那条保护静默消失。
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let sub = workspace.join("src");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(workspace.join(".git/config"), "").unwrap();
+    std::fs::create_dir_all(&sub).unwrap();
+    let workspace = canonical(&workspace);
+    let sub = canonical(&sub);
+
+    // 边界：挂载表仍按工作区根拼。
+    let assembled = wrap(&shell("true"), &workspace, &spec(&[], &[]));
+    let root = workspace.display().to_string();
+    assert!(
+        assembled
+            .windows(3)
+            .any(|window| window == ["--bind", &root, &root]),
+        "工作区根仍进可写根：{assembled:?}"
+    );
+    let git_config = workspace.join(".git/config").display().to_string();
+    assert!(
+        assembled
+            .windows(3)
+            .any(|window| window == ["--ro-bind", &git_config, &git_config]),
+        "保护路径仍锚在工作区：{assembled:?}"
+    );
+
+    // 站位：真正 spawn 出来的进程站在 `src` 里。
+    let outcome = process::run(
+        &workspace,
+        &sub,
+        &shell("pwd -P"),
+        Duration::from_secs(10),
+        &Sandbox::new(&SandboxSettings::off()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcome.stdout.trim(),
+        sub.display().to_string(),
+        "`current_dir` 取站位，不取边界"
+    );
 }
 
 // --- 端到端：工具真的跑在沙箱里（票 03）-----------------------------------
@@ -1347,6 +1400,7 @@ async fn the_real_bubblewrap_keeps_writes_inside_the_workspace() {
     // 工作区里照常写。
     let inside = process::run(
         &workspace,
+        &workspace,
         &shell("echo inside > made.txt"),
         Duration::from_secs(30),
         &sandbox,
@@ -1364,6 +1418,7 @@ async fn the_real_bubblewrap_keeps_writes_inside_the_workspace() {
     let _ = std::fs::remove_file(&outside);
     let escaped = process::run(
         &workspace,
+        &workspace,
         &shell(&format!("echo x > {}", outside.display())),
         Duration::from_secs(30),
         &sandbox,
@@ -1376,6 +1431,50 @@ async fn the_real_bubblewrap_keeps_writes_inside_the_workspace() {
         escaped.report()
     );
     assert!(!outside.exists(), "沙箱里写的区外文件不该出现在宿主上");
+}
+
+/// 同一层真机验证，但这一次站位在子目录里（`.scratch/bash-workdir` §3）。
+///
+/// 站位换的是 `current_dir`，边界仍是整个工作区：往上一层写自己的文件能成，往区外写仍然被
+/// 内核打回。没有可用 `bwrap` 的机器上跳过。
+#[tokio::test]
+async fn the_real_bubblewrap_lets_a_workdir_write_across_the_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let sub = workspace.join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let availability = probe(std::env::var_os("PATH").as_deref(), &workspace);
+    let SandboxAvailability::Available { bwrap } = availability else {
+        eprintln!("跳过：这台机器上没有可用的 bwrap（{availability:?}）");
+        return;
+    };
+    let mut settings = SandboxSettings::off();
+    settings.mode = SandboxMode::Bwrap;
+    settings.availability = SandboxAvailability::Available { bwrap };
+    let sandbox = Sandbox::new(&settings);
+
+    let outcome = process::run(
+        &workspace,
+        &sub,
+        &shell("pwd -P; echo inside > ../made.txt"),
+        Duration::from_secs(30),
+        &sandbox,
+    )
+    .await
+    .unwrap();
+    assert!(outcome.status.success(), "{}", outcome.report());
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("made.txt")).unwrap(),
+        "inside\n",
+        "工作区根仍是可写根：站在 `src` 里也写得动它"
+    );
+    let sub = canonical(&sub).display().to_string();
+    assert!(
+        outcome.stdout.contains(&sub),
+        "命令确实站在 `src` 里：{}",
+        outcome.stdout
+    );
 }
 
 /// 一份开着沙箱、但探测结果还没填的配置 —— `cli` 用 `Config::session_config` 造出来的就是

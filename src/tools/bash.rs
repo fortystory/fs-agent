@@ -1,5 +1,5 @@
-//! 内建的 `bash(command, timeout_ms?)` 工具：在会话工作区里跑一条 shell 命令（spec §7、§12、
-//! §20）。
+//! 内建的 `bash(command, timeout_ms?, workdir?, escalation?)` 工具：在会话工作区里跑一条
+//! shell 命令（spec §7、§12、§20）。
 //!
 //! 三条决定定义了这个工具：
 //!
@@ -15,7 +15,7 @@
 //! 后两条是每个命令类工具都需要的机制，所以它们住在 [`super::process`] 里、与动态工具共用
 //! （spec §14）；这个模块只是 shell 特有的那部分。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -49,6 +49,14 @@ pub const ESCALATION_NOTE: &str = "命令被沙箱拒绝（内核说只读文件
      终局，同一条命令再被拒也不会再问。不许先绕道去聊天里问用户，也不许在没被拒的时候预先\
      声明一个更宽的档位。";
 
+/// 工具描述里那段**站位**（`.scratch/bash-workdir/spec.md` §1）。
+///
+/// 与 [`SANDBOX_NOTE`] 同一个理由：模型可见、进请求前缀，所以是常量、一次定死。它要说清四件事
+/// —— 可选、相对路径按工作区解析、目标是工作区内一个**已存在**的目录、以及它不改变别的工具
+/// 解析相对路径的基准（不写最后这半句，模型会按 shell 的直觉以为基准跟着走了）。
+pub const WORKDIR_NOTE: &str = "可选，这条命令在工作区内的哪个目录跑；相对路径按工作区解析，目录必须已存在且落在工作区\
+     内。用它代替在命令里写 cd；只影响这一条命令的进程，不改变其他工具解析相对路径的基准。";
+
 /// 那个 shell 与让它收下命令字符串的那个旗标。`-l` 给命令一份用户的登录环境；`-c` 才是收下
 /// 那一个参数的东西。
 const SHELL: &str = "bash";
@@ -81,6 +89,10 @@ impl Tool for BashTool {
                         "type": "integer",
                         "description": "可选，墙钟上限，单位毫秒。不写就用配置的默认值，并会被\
                                         配置的上限夹住"
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": WORKDIR_NOTE
                     },
                     "escalation": {
                         "type": "object",
@@ -116,7 +128,13 @@ impl Tool for BashTool {
     ///
     /// 半截的写法 —— 有理由没路径、路径为空、字段类型不对 —— 是**参数错误**，不是静默
     /// 忽略：一次被吞掉的升级申请会变成一条看起来「命令没跑成但也没人问」的谜。
+    ///
+    /// 与 `workdir` 同现也是参数错误，而且这一条**必须在这里**：`workdir` 说这条命令站在哪、
+    /// `escalation` 说这一次额外能写哪，混起来就等于让模型自选工作区。`facts()` 会在权限门
+    /// 之前调一次这个方法，于是这种调用连一次审批都不会弹
+    /// （`.scratch/bash-workdir/spec.md` §2）。
     fn escalation(&self, args: &Value) -> Result<Option<Escalation>, ToolError> {
+        refuse_workdir_with_escalation(args)?;
         escalation(args)
     }
 
@@ -135,8 +153,14 @@ impl Tool for BashTool {
                 "{BASH_TOOL}：`timeout_ms` 必须是正的毫秒数"
             )));
         }
+        let workdir = requested_workdir(&args)?
+            .map(|value| resolve_workdir(ctx, &value))
+            .transpose()?;
         let limit = ctx.bash.timeout(requested);
-        let outcome = process::run(ctx.cwd, &argv, limit, ctx.sandbox).await?;
+        // 站位给 `current_dir`，边界（`ctx.cwd`）给沙箱的可写根与保护路径 —— 这一拆是
+        // `.scratch/bash-workdir/spec.md` §3 那条不变式的全部内容。
+        let standing = workdir.as_deref().unwrap_or(ctx.cwd);
+        let outcome = process::run(ctx.cwd, standing, &argv, limit, ctx.sandbox).await?;
         Ok(ToolOutput::new(outcome.report()))
     }
 }
@@ -164,6 +188,61 @@ fn requested_timeout_ms(args: &Value) -> Result<Option<u64>, ToolError> {
             ToolError::message(format!("{BASH_TOOL}：`timeout_ms` 必须是正的整数毫秒数"))
         }),
     }
+}
+
+/// 模型给的 `workdir`，当它给了的话。一个存在但不是非空字符串的值（`""` 同样）是参数错误，
+/// 与 `timeout_ms` / `escalation` 的半截写法同一种形状（spec §2）。首尾空白照 `escalation`
+/// 那一族的做法剪掉 —— 参数本身仍然是模型写的原文，事件流记的是它。
+fn requested_workdir(args: &Value) -> Result<Option<String>, ToolError> {
+    match args.get("workdir") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.trim().to_owned())),
+        Some(_) => Err(ToolError::message(format!(
+            "{BASH_TOOL}：`workdir` 要写成一段非空的目录路径，相对路径按工作区解析；\
+             不给就整段别给"
+        ))),
+    }
+}
+
+/// `workdir` 与 `escalation` 同现：一个说这条命令站在哪、一个说这一次额外能写哪，混起来就
+/// 等于让模型自选工作区，所以是参数错误（spec §2）。
+///
+/// 这个检查住在 [`Tool::escalation`] 里，而不是 `call()` 里，因为 `facts()` 会在权限门**之前**
+/// 调那一次：于是这种调用连一次审批都不会弹 —— 放在 `call()` 里的话，用户会先被问一次注定
+/// 失败的动作。
+fn refuse_workdir_with_escalation(args: &Value) -> Result<(), ToolError> {
+    let given = |name: &str| args.get(name).is_some_and(|value| !value.is_null());
+    if given("workdir") && given("escalation") {
+        return Err(ToolError::message(format!(
+            "{BASH_TOOL}：`workdir` 与 `escalation` 不能同现：一个说这条命令站在哪，一个说\
+             这一次额外能写哪，混起来就等于让模型自选工作区"
+        )));
+    }
+    Ok(())
+}
+
+/// 模型给的那个站位，解析成一个工作区之内、**已存在**的目录。
+///
+/// 收容走 [`ToolContext::workspace_paths`]（永远严格的那一份），而**不**走 `read_paths` /
+/// `write_paths`：那两个可能已经被放宽，拿它们解析会让「只能落在区内」漏成「区外可跑」
+/// （spec §3）。也不替模型建目录 —— 那是一次隐式写入，不该藏在参数里（spec §2）。
+fn resolve_workdir(ctx: &ToolContext<'_>, value: &str) -> Result<PathBuf, ToolError> {
+    let resolved = ctx
+        .workspace_paths
+        .resolve_within(Path::new(value))
+        .map_err(|error| {
+            ToolError::message(format!(
+                "{BASH_TOOL}：`workdir` 解析不了：{error}；它只挑工作区里的一个站位，\
+                 站在区外没有通道放行"
+            ))
+        })?;
+    if !resolved.is_dir() {
+        return Err(ToolError::message(format!(
+            "{BASH_TOOL}：`workdir` 指向的不是工作区里一个已存在的目录：{value}。\
+             `workdir` 只挑站位，不替你建目录（那是另一条命令的事）"
+        )));
+    }
+    Ok(resolved)
 }
 
 /// 参数里那次升级申请，当它带了的时候。

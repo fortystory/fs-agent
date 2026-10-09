@@ -1,17 +1,18 @@
 # `bash`
 
-`bash(command, timeout_ms?)` 在会话工作区里跑一条 shell 命令，返回它的退出状态、stdout
-与 stderr。spec §7 把它列为 v1 内建工具的最后一个；§12 管它要过的那道权限门；§20 管它
-**刻意不做**的那件事（进程级隔离）。这份文件是给人看的决策地图，以及这些决策住在代码的
+`bash(command, timeout_ms?, workdir?, escalation?)` 在会话工作区里跑一条 shell 命令，返回它的
+退出状态、stdout 与 stderr。spec §7 把它列为 v1 内建工具的最后一个；§12 管它要过的那道权限门；
+§20 管它**刻意不做**的那件事（进程级隔离）。这份文件是给人看的决策地图，以及这些决策住在代码的
 哪里。
 
 ## 形状
 
 | 部件 | 值 | 为什么 |
 | --- | --- | --- |
-| `spec()` | `bash(command: string, timeout_ms?: integer, escalation?: object)` | 一条命令字符串、一个可选的上限、一个可选的升级申请 |
+| `spec()` | `bash(command: string, timeout_ms?: integer, workdir?: string, escalation?: object)` | 一条命令字符串、一个可选的上限、一个可选的站位、一个可选的升级申请 |
 | `effect()` | **恒为 `Exclusive`** | shell 什么都能写，所以派发层拿的是全工作区的锁，权限门看到的是一次写 |
-| `command(args)` | `["bash", "-lc", command]` | 权限门、`CommandPrefix` 作用域与断路器在进程起来**之前**读 argv；`escalation` **不进** argv，它不是命令的一部分 |
+| `command(args)` | `["bash", "-lc", command]` | 权限门、`CommandPrefix` 作用域与断路器在进程起来**之前**读 argv；`escalation` 与 `workdir` 都**不进** argv，它们不是命令的一部分 |
+| 站位 | `workdir` 解析后落在工作区内 → `current_dir` 取它，否则就是工作区本身 | 它换的是进程站在哪，**不是**边界（见下面那一节） |
 | 执行 | 对这个 argv 直接 `spawn` | 模型的命令是**一个元素**，所以它插不进第二层 shell |
 | 结果 | 退出状态 + stdout + stderr，分段 | 与别的工具结果一样的普通工具结果；非零退出是数据，不是错误 |
 
@@ -85,6 +86,45 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 `xargs`、别名）、命令替换（`$(rm …)`）、here-doc 或写到盘上的脚本、以及换个写法的混淆
 拼写，它都看不见。真正的边界是 agent 没有 root，而它手里的 key 也不是你文件系统的钥匙。
 
+## `workdir`：这条命令站在哪
+
+模型今天要换个目录干活，只能把 `cd x && …` 写进每一条命令。`workdir` 把「站在哪」从
+命令文本里拿出来交给参数：一条命令的 `current_dir` 由它决定，省掉的是那个重复的前缀。
+
+**值域**：一段字符串。相对路径按**工作区**解析，绝对路径也给；**区外一律按解析后的真实
+位置**判定，所以 `src/..` 合法、`src/../../..` 越界。`"."` 合法（等价不写），空串是参数错误。
+目录**必须已存在**——`workdir` 不替你 `mkdir`，那是另一条命令的事。
+
+模型可见的那句是 `WORKDIR_NOTE` 常量，逐字如下（工具声明进请求前缀，所以它一次定死）：
+
+> 可选，这条命令在工作区内的哪个目录跑；相对路径按工作区解析，目录必须已存在且落在工作区
+> 内。用它代替在命令里写 cd；只影响这一条命令的进程，不改变其他工具解析相对路径的基准。
+
+**四条工具错误**（都不是权限裁决：`workdir` 不构成写，所以它自己不引发任何询问，四条里也没有
+哪一条会变成一次可批准的动作）：`workdir` 不是非空字符串；解析后落在工作区之外；那个目标不是
+工作区里一个**已存在**的目录（不存在，或者是文件）；`workdir` 与 `escalation` 同现。最后一条
+是因为一个说「站在哪」、一个说「额外能写哪」，混在一起就等于让模型自选工作区，而那要重做一遍
+边界论证。前三条的检查在 `call()` 里，与 `timeout_ms: 0` 同一种形状；最后一条住在
+`BashTool::escalation()` 里，于是它连一次审批都不会弹。区外那一句的原文由
+`tools/paths.rs` 的 `SessionPaths::resolve_within()` 产出，其余在 `tools/bash.rs`。
+
+**三条它刻意不动的东西**：
+
+- **边界**。沙箱的可写根与 `.git/config`、`.git/hooks`、`.env` 那一族保护路径**仍绑工作区**。
+  所以 `run()` 把边界与站位拆成两个参数，而 `wrap()` 只收前者：可写根与保护路径都由它推出来
+  （[`tools/sandbox.rs`](../src/tools/sandbox.rs)），否则子目录会让工作区那几条保护悄悄消失。
+- **其他工具的基准**。`read_file`、`grep`、`@` 记号、左栏文件页与改动页的路径全都仍按工作区
+  解析：`workdir: ".scratch/x"` 之后 `read_file("spec.md")` 读的是工作区根那份。工具描述把
+  这句明写给模型看。
+- **门与断路器**。`Call.cwd` 仍是工作区：`rm` 断路器与路径 glob 按它折叠相对参数，在子目录里
+  只会**更保守**（更容易拒，不会漏），而 `bash` 本来不声明写目标。
+
+**为什么是这个形状**。[`../.scratch/bash-workdir/research/01-cwd-parameter-precedent.md`](../.scratch/bash-workdir/research/01-cwd-parameter-precedent.md)
+那份一手调研里，Codex 的 `workdir`、Gemini CLI 的 `dir_path`、opencode 的 `workdir` 都是
+「参数 + 每次新进程」，而 Anthropic 的 API 级 bash 规格与 goose 把 cwd 留给应用侧、
+Claude Code 则把 `cd` 记成会话状态。选参数是因为本仓库的进程**每次都是新的**，
+没有可沿用的状态；描述里那半句「用它代替在命令里写 cd」照 opencode 的措辞。
+
 ## 超时与进程树
 
 一次只把 future drop 掉的超时，会把 shell 的子进程留在后台继续跑。所以 `bash`：
@@ -144,15 +184,19 @@ spec §12 把一条硬约束放在模式与规则**之外**：`rm` 打到 `/`、
 - **PTY / 交互式程序。** 不分配终端、stdin 按设计是空的。
 - **后台作业与作业控制。** 一条命令可以在它自己的 shell 里把进程放到后台，但没有任何
   东西管理或汇报作业；超时或取消杀掉整个进程组。
+- **会话中途换工作区。** 工作区由 `--cwd` 或启动时的当前目录定下，一场会话只有一个；
+  `workdir` 只在它里面挑站位。要在别处长期干活，是「起一个会话在那儿」或 worktree 那条路。
 
 ## 代码住在哪
 
 | 部件 | 模块 |
 | --- | --- |
 | `BashTool`、argv、超时、进程组 kill、结果格式 | `tools/bash.rs` |
-| `escalation` 参数、那两个常量（`SANDBOX_NOTE`、`ESCALATION_NOTE`） | `tools/bash.rs` |
+| `escalation` 与 `workdir` 两个参数、模型可见的那段描述 | `tools/bash.rs` |
+| `workdir` 的解析与收容判定（不存在的目标按最深已存在祖先解析） | `tools/paths.rs` 的 `SessionPaths`，经 `tools/tool.rs` 交给工具 |
 | 升级的裁决（遮罩 / 保护路径的拒绝、其余 `Ask`） | `permissions.rs` |
 | `sealed()` 与升级路径的归一化 | `tools/sandbox.rs` |
+| 边界与站位两个参数（可写根与保护路径绑前者，`current_dir` 取后者） | `tools/process.rs` 的 `run()`；`tools/sandbox.rs` 的 `wrap()` 按边界拼挂载表 |
 | `BashLimits`（交给这个工具的两个上限） | `tools/tool.rs` |
 | 默认值与上限 | `config.rs`（`SessionConfig::bash_timeout_ms` / `max_bash_timeout_ms`） |
 | `rm` 断路器与它拆 shell 的那部分 | `permissions.rs`（`rm_breaker`、`simple_commands`） |

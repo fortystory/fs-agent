@@ -102,13 +102,19 @@ pub fn describe_status(status: &ExitStatus) -> String {
 ///
 /// `argv` 先经 `sandbox` 包一层（`mode = "off"` 时是单位函数）。只有 spawn 或 wait 失败、
 /// 沙箱不可用、以及 `bwrap` 自己报错才是 [`ToolError`]；命令自己的退出状态是数据。
+///
+/// **边界与站位是两个参数**（`.scratch/bash-workdir/spec.md` §3）：`boundary` 是会话工作区，
+/// 沙箱的可写根与保护路径按它拼；`workdir` 是这条命令站的位置，交给 `current_dir`。合成一个
+/// 参数会让 `workdir: "src"` 把工作区的 `.git/config` 那几条保护换成 `src/.git/config`
+/// —— 一条不存在的路径，于是保护静默消失。
 pub async fn run(
-    cwd: &std::path::Path,
+    boundary: &std::path::Path,
+    workdir: &std::path::Path,
     argv: &[String],
     limit: Duration,
     sandbox: &Sandbox,
 ) -> Result<CommandOutcome, ToolError> {
-    let argv = sandbox.wrap(argv, cwd)?;
+    let argv = sandbox.wrap(argv, boundary)?;
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| ToolError::message("argv 为空，无法运行"))?;
@@ -116,7 +122,7 @@ pub async fn run(
     let mut command = Command::new(program);
     command
         .args(rest)
-        .current_dir(cwd)
+        .current_dir(workdir)
         // 构造上就非交互：不请求 TTY、stdin 是空的，这里也没有任何东西去凭空设置 `TERM` /
         // `NO_COLOR`（spec §20、`docs/bash.md`）。
         .stdin(Stdio::null())

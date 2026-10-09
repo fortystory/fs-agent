@@ -1,10 +1,6 @@
 # `.scratch/`：feature 索引
 
-本仓库的 issue tracker 就是这里的 markdown（约定见 [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md)）。
-
-一个 feature 一个目录，三种形态：**`spec.md`**（构建计划）、**`map.md`**（wayfinder 的决策图）、**`seed.md`**（种子材料，还没变成 spec）；票在 `issues/NN-<slug>.md`，一票一个文件，抬头的 `Status:` 记状态 —— 实现票走 `ready-for-agent` → `done`（能自动化的部分都做完、只剩人在真终端里逐项走查的走 `ready-for-walkthrough`），wayfinder 的决策票走 `claimed` → `resolved`。
-
-**需求池**：下表里形态为 `seed`、且没写「已移交」或「已折成 spec」的那些行，就是还能推进的意向（按表格数，不在这里记会漂的数字）；想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
+本仓库的 issue tracker 就是这里的 markdown：一个 feature 一个目录，三种形态 **spec.md**（构建计划）/ **map.md**（wayfinder 的决策图）/ **seed.md**（种子材料，还没变成 spec）；票在 `issues/NN-<slug>.md` 一票一个文件，抬头的 `Status:` 记状态（`ready-for-agent` → `done` / `ready-for-walkthrough`；决策票 `claimed` → `resolved`），约定见 [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md)。**需求池**：下表里形态为 `seed`、且没写「已移交」或「已折成 spec」的那些行，就是还能推进的意向（按表格数，不在这里记会漂的数字）；想推进哪一条就走 `/grill-with-docs` 折成 spec，再 `/to-tickets` 拆票。
 | 目录 | 形态 | 一句话 | 票 |
 | --- | --- | --- | --- |
 | [`fs-agent-v1/`](fs-agent-v1/spec.md) | spec | fs-agent v1：可扩展核心 + 多 agent 讨论 | 35/35 done |
@@ -41,6 +37,7 @@
 | [`rag-vector-store/`](rag-vector-store/seed.md) | seed | RAG / 向量检索：按语义检索仓库或外部资料 | — |
 | [`background-services/`](background-services/seed.md) | seed | 后台服务进程与定时任务 | — |
 | [`web-search-tool/`](web-search-tool/spec.md) | spec | 两个内建联网工具 `web_search` / `web_fetch`，结构照 DSH 的 `ctx.web` 三层（工具 / 服务 / 后端）：搜索后端取 DeepSeek 的 Anthropic 兼容端点 + 原生服务器工具（零新密钥），抓取自己发 HTTP 并自带 SSRF 防护，结果带不可信标记与 URL 引用。逐面文档在 [`docs/web.md`](../docs/web.md)。 | 5 done + 1 ready-for-walkthrough |
+| [`bash-workdir/`](bash-workdir/spec.md) | spec | `bash` 的第四个参数 `workdir`：一条命令可以站在**工作区之内**的另一个目录跑（相对按工作区解析、按解析后位置判界），沙箱边界与兄弟工具的路径基准一处不动；先例调研见 [`research/`](bash-workdir/research/01-cwd-parameter-precedent.md) | 2/2 done |
 | [`grep-tool/`](grep-tool/spec.md) | spec | `grep` 工具：只读、只扫工作区（`Effect::ReadOnly`，四档全放行），输出 `path:line:文本`；可选的 `glob` 只缩小文件范围、不放宽忽略规则；命中超过 500 条时先收一刀并在末尾如实写清省掉多少，token 溢出仍走统一的截断与指针；实现取自带 ripgrep 拆出的库（`ignore` + `grep-searcher` + `grep-regex`）—— 2026-10-02 由 seed 折成 spec、同日拆出 4 张实现票，**2026-10-03 四张全部落地**，逐面文档是 [`docs/grep.md`](../docs/grep.md) | 4/4 done |
 | [`clear-command/`](clear-command/seed.md) | seed | `/clear` 命令：清上下文继续用 —— **已移交 [`goal-loop`](goal-loop/seed.md)**，意向也改成了「结束当前会话、开一个新的」 | — |
 | [`loop-and-goals/`](loop-and-goals/seed.md) | seed | `/loop` 持续工作与跨轮目标 / 计划 —— **已移交 [`goal-loop`](goal-loop/seed.md)** | — |
@@ -48,7 +45,7 @@
 | [`git-worktree/`](git-worktree/seed.md) | seed | git worktree：会话级或执行者级的隔离工作区（Codex 有 `--worktree` 与 `/worktree`）；会牵动会话桶、权限档与沙箱的「工作区」定义 | — |
 | [`lifecycle-diagram/`](lifecycle-diagram/map.md) | map + spec | **衡（heng）运行时生命周期图**（wayfinder 决策图）：把「进程启动 → 一次 turn → 委派 → 退出」画成 mermaid 放进 [`docs/lifecycle.md`](../docs/lifecycle.md) —— 一张鸟瞰 + 四张分层详图，配「节点/边 → `文件:行号`」证据表与 `scripts/lifecycle-check.py` 弱校验；全 mermaid 是本仓库第一种，留了 [ADR 0011](../docs/adr/0011-diagrams-in-mermaid.md)。 | 5 resolved + 9 done |
 | [`tui-mermaid/`](tui-mermaid/seed.md) | seed | TUI 里渲染 mermaid：把模型输出的 mermaid 围栏块画成图（今天只是一行灰色语言名 + 不着色的原文）—— **调研结论：能画、且不用浏览器**（`mermaid-text` 0.57.0 等三个纯 Rust 件），真阻力是本仓库自己的三条线（`to_lines` 纯函数、折行归 `pane::wrap_line`、TUI 单任务同步）与 ADR 门槛；与 `lifecycle-diagram` 选 mermaid 只是恰好同名，它属产品功能 | — |
-| [`docs-slim/`](docs-slim/map.md) | map + spec | **文档瘦身**（wayfinder 决策图 + 折出来的 spec，2026-10-04 建）：给活文档定「压表达」规则 —— 单元 ≤500 字符、只拆 + 只删「别处已有一份的复述」、不动 `DOCS_MIN_RATIO`；**不删任何文件**。图 7/7、实现票 5/5（[`issues/08`](docs-slim/issues/08-doc-size-guardrail.md)–[`12`](docs-slim/issues/12-remainder-and-close-out.md)，08 是护栏脚本那个 tracer bullet），护栏是 [`scripts/check-doc-size.py`](../scripts/check-doc-size.py)，这 40 份的违规已清零 | 7 resolved + 5 done |
+| [`docs-slim/`](docs-slim/map.md) | map + spec | **文档瘦身**（wayfinder 决策图 + 折出来的 spec，2026-10-04 建）：给活文档定「压表达」规则 —— 单元 ≤500 字符、只删「别处已有一份的复述」；**不删任何文件**。护栏是 [`scripts/check-doc-size.py`](../scripts/check-doc-size.py)，存量违规已清零 | 7 resolved + 5 done |
 | [`trace-tab/`](trace-tab/spec.md) → [`trace-in-main/`](trace-in-main/spec.md) | spec | 轨迹视图：转录拆成两个视图 —— 轨迹页画**全量块**、主列只留对话加保留清单。**2026-10-06 搬进主列**（多一条页签条、行首加时刻），推翻「轨迹 = 左栏的一页」与 §6 | 6 resolved + 12 done + 1 walkthrough |
 | [`tui-visual-language/`](tui-visual-language/spec.md) | map + spec | **TUI 视觉语言**：把屏幕上人眼看到的样式收进两层 —— 语义色板（绘制代码只引用语义名）+ 字形语法（框架一套虚线、内容一套实线），色彩**收敛**（层级交给结构与字形，颜色只留给要预警与分类的语义），并收口退场死代码与 `docs/render.md` 的文档矛盾。wayfinder 决策图 2026-10-05 建并**同日走完**（十张决策票全关），**已折成 [`spec.md`](tui-visual-language/spec.md)**；九张实现票（11–19）**2026-10-06 全部落地**、2026-10-07 收成 done —— 真终端观感项记在 [`docs/tui-manual-checklist.md`](../docs/tui-manual-checklist.md) 的 2026-10-06 那一节 | 10 resolved + 9 done |
 | [`time-mcp/`](time-mcp/spec.md) | spec | 时间：仓库自带一台 stdio MCP server `heng-mcp-time`（只答三条方法、只提供一个工具 `get_current_time`，读一次本地时钟回一行「本机现在：…」，带 UTC 偏移、时区名与星期几），而系统提示词里只加一句静态指引、**不放时间的值**（身份是缓存前缀，也是 replay 复现当时请求时会再调一次的那个函数） | 3/3 done |

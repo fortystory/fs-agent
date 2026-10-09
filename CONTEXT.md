@@ -79,6 +79,14 @@ _Avoid_: 会话文件、存档、checkpoint
 按会话 cwd 分出的目录，是 `--continue` 找会话时的第一层范围。细节见 [docs/observability.md](docs/observability.md)。
 _Avoid_: 索引、registry
 
+**工作区（workspace）**:
+这场会话的工作目录（`--cwd`，否则取启动时的当前目录）：模型给的路径按它解析、权限门的 `workspace` 档用它划区内区外、沙箱把它当第一个可写根。**一场会话只有一个**，不因工具参数而变——`bash` 的 `workdir` 只是工作区内的一个站位，不是它。细节见 [docs/bash.md](docs/bash.md) 与 [docs/sandbox.md](docs/sandbox.md)。
+_Avoid_: 当前目录（那是进程自己的）、仓库根（那是 git 认的）、`workdir`（那是工具参数）
+
+**站位（workdir / `current_dir`）**:
+`bash` 一次调用站在工作区里的哪个目录：`workdir` 参数换的是进程的 `current_dir`，**不换边界** —— 沙箱的可写根与保护路径、兄弟工具解析相对路径的基准，都仍按**工作区**。值域只能落在工作区之内，目录必须已存在。细节见 [docs/bash.md](docs/bash.md) 的 `## workdir` 一节。
+_Avoid_: 工作区（那是一场会话只有一个的那件事）、`cd`（那是会话状态，本项目不记）
+
 ## 目标
 
 **目标（Goal）**:

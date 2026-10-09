@@ -92,7 +92,10 @@ impl Tool for CustomTool {
             )));
         }
         let limit = Duration::from_millis(self.declaration.timeout_ms);
-        let outcome = process::run(ctx.cwd, &argv, limit, ctx.sandbox).await?;
+        // 边界与站位给同一个值：动态工具的 argv 模板是使用者在 `config.toml` 里声明的，
+        // 里面插不进第二个参数，所以它没有「换站位」这回事
+        // （`.scratch/bash-workdir/spec.md` §7）。
+        let outcome = process::run(ctx.cwd, ctx.cwd, &argv, limit, ctx.sandbox).await?;
         Ok(ToolOutput::new(outcome.report()))
     }
 }

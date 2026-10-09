@@ -193,6 +193,10 @@ impl Registry {
             write_paths: &call.paths,
             outputs_dir: &call.outputs_dir,
             cwd: call.paths.cwd(),
+            // 站位解析永远按会话工作区收容，与上面那两份路径表眼下放行到哪一侧无关：
+            // `call.paths` 可能已经因为一次被放行的越界而变成 `relaxed_*` 的副本，而
+            // `bash` 的 `workdir` 没有任何放行通道（`.scratch/bash-workdir/spec.md` §3）。
+            workspace_paths: &call.paths,
             skills: &call.skills,
             repo_map: &call.repo_map,
             bash: &call.bash,

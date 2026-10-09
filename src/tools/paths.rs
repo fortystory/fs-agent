@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::permissions::Direction;
 
-use super::tool::{ReadPathResolver, ToolError, WritePathResolver};
+use super::tool::{ReadPathResolver, ToolError, WorkspaceResolver, WritePathResolver};
 
 /// 把一个会话产物按「仅属主」写盘（`0600`）。
 ///
@@ -97,13 +97,37 @@ impl SessionPaths {
     }
 
     fn resolve_towards(&self, path: &Path, direction: Direction) -> Result<PathBuf, ToolError> {
-        let joined = self.join(path);
-        let resolved = match std::fs::canonicalize(&joined) {
-            Ok(resolved) => resolved,
-            Err(_) => resolve_missing(&joined)?,
-        };
+        let resolved = self.resolve_target(path)?;
         self.check_contained(&resolved, direction)?;
         Ok(resolved)
+    }
+
+    /// 解析一条**必须落在工作区内**的目标，与这次调用的读/写放行状态无关。
+    ///
+    /// 与 [`ReadPathResolver::resolve_read`] / [`WritePathResolver::resolve_write`] 的差别只有
+    /// 一处，而那一处正是「窄」与「区外可跑」之间的差别：那两个经 `relaxed_read` /
+    /// `relaxed_write` 之后不再收容（那一次越界刚刚被策略或用户放行），这里的判据永远按会话
+    /// 工作区本身（`.scratch/bash-workdir/spec.md` §3）。
+    pub fn resolve_within(&self, path: &Path) -> Result<PathBuf, ToolError> {
+        let resolved = self.resolve_target(path)?;
+        if self.is_contained(&resolved) {
+            return Ok(resolved);
+        }
+        Err(ToolError::message(format!(
+            "{} 在会话工作区之外（{}）",
+            resolved.display(),
+            self.cwd.display()
+        )))
+    }
+
+    /// 一条路径要落到哪里：存在就是它的规范形，不存在就经**最深的已存在祖先**解析。两个收容
+    /// 入口共用它，所以同一串 `..` 在哪一边都骗不过去。
+    fn resolve_target(&self, path: &Path) -> Result<PathBuf, ToolError> {
+        let joined = self.join(path);
+        match std::fs::canonicalize(&joined) {
+            Ok(resolved) => Ok(resolved),
+            Err(_) => resolve_missing(&joined),
+        }
     }
 
     /// 把模型给的路径按字面拼到 cwd 上，不规范化、也不做收容检查。
@@ -122,9 +146,18 @@ impl SessionPaths {
         }
     }
 
-    /// 收容规则，按组件逐段做前缀比较，这样 `/work-evil` 冒充不了 `/work` 的子路径。
+    /// 收容判定，按组件逐段做前缀比较，这样 `/work-evil` 冒充不了 `/work` 的子路径。
+    ///
+    /// 判据只有这一份：两个入口（[`SessionPaths::resolve_towards`] 与
+    /// [`SessionPaths::resolve_within`]）都用它，差别只在放行开关与错误文案 —— 前者的读/写
+    /// 那一侧可能被放行，后者永不放行。
+    fn is_contained(&self, resolved: &Path) -> bool {
+        resolved.starts_with(&self.cwd)
+    }
+
+    /// 收容规则：不落在工作区里、而这一侧又没有放行时，就是一条工具错误。
     fn check_contained(&self, resolved: &Path, direction: Direction) -> Result<(), ToolError> {
-        if resolved.starts_with(&self.cwd) {
+        if self.is_contained(resolved) {
             return Ok(());
         }
         let relaxed = match direction {
@@ -183,6 +216,12 @@ impl ReadPathResolver for SessionPaths {
 impl WritePathResolver for SessionPaths {
     fn resolve_write(&self, path: &Path) -> Result<PathBuf, ToolError> {
         self.resolve_towards(path, Direction::Write)
+    }
+}
+
+impl WorkspaceResolver for SessionPaths {
+    fn resolve_within(&self, path: &Path) -> Result<PathBuf, ToolError> {
+        SessionPaths::resolve_within(self, path)
     }
 }
 
