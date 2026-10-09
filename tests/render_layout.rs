@@ -12221,6 +12221,95 @@ fn switching_the_main_tab_keeps_the_selection() {
     );
 }
 
+/// 宽度变化重放之后，「开场那一段已经开过了」这件事**跟着记录一起回来** —— 否则后面再到的
+/// 一块开场段会**再开一条** `开场` 小标题（票 18 记下的那条旁支缺陷）。
+///
+/// 分组进度是块序的函数，而组头与小标题都是它的记录：重放按记录序把它重建出来，于是它
+/// 与实时路径推完同一批块之后的那一份逐字相同。
+#[test]
+fn a_rebuild_hands_the_preamble_back_so_a_later_block_never_reopens_it() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(injected(1, "第一段注入的正文"));
+    // 第一帧：窗格宽度从初值（80）变成真宽度，整本账按新宽度重推一遍。
+    open_trace_tab(&mut state, 120, 40);
+    let rebuilt = trace_page(&mut state, 120, 40).join("\n");
+    assert_eq!(
+        rebuilt.matches(wording::section_preamble()).count(),
+        1,
+        "重放之后那一条小标题还在、且只有一条：{rebuilt}"
+    );
+
+    // 同一段里再来一块：它是**开场段**的一块，属于已经开过的那一条小标题。
+    state.apply(injected(2, "第二段注入的正文"));
+
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert_eq!(
+        page.matches(wording::section_preamble()).count(),
+        1,
+        "开场不会再开一条：{page}"
+    );
+    assert!(
+        page.contains(&format!(
+            "{}{}{}",
+            wording::section_preamble(),
+            wording::header_separator(),
+            wording::section_injections(2)
+        )),
+        "第二块算进同一条小标题：{page}"
+    );
+    assert_eq!(
+        page.matches("上下文注入").count(),
+        2,
+        "两块都在那一条小标题底下：{page}"
+    );
+}
+
+/// 重放之后**分组进度整体**接着往下走 —— 新回合的序号与还在跑的回合的工具都算数。
+///
+/// 与开场那一条同源：重放清掉的是整份账，而「开过哪几个组、当前开着哪一个」是它的一份
+/// 进度，不是可以从窗格那几行读回来的东西。
+#[test]
+fn a_rebuild_keeps_the_group_progress_carrying_on() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "c1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "c1", true, Some("out"), None));
+    // 第一帧：整本账重推一遍，而此刻这个回合还开着。
+    open_trace_tab(&mut state, 120, 40);
+    state.apply(tool_started(
+        4,
+        "c2",
+        "read_file",
+        serde_json::json!({"path": "a.rs"}),
+    ));
+    state.apply(tool_completed(5, "c2", true, Some("out"), None));
+
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        page.contains("read_file×1"),
+        "重放之后那次调用照样算进这个回合的组头：{page}"
+    );
+
+    // 同一本账里再开一个回合：它是**第二个**，不是从头数的那一个。
+    state.apply(turn_ended(6));
+    state.apply(turn_started(7));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        page.contains(&wording::header_unit(2, false)),
+        "序号接着账本往下数：{page}"
+    );
+    assert_eq!(
+        page.matches(&wording::header_unit(1, false)).count(),
+        1,
+        "「回合 1」还是只有那一条：{page}"
+    );
+}
+
 /// 改宽度（触发整批重放）之后选中**仍在原来那一块** —— 它认块不认位置。
 #[test]
 fn a_rebuild_after_a_width_change_keeps_the_selected_block() {

@@ -5039,16 +5039,21 @@ impl TuiState {
         self.dirty = true;
     }
 
-    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、组状态、跨块排版状态，以及那一份
+    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、跨块排版状态，以及那一份
     /// 「哪几行是折叠把手」。
     ///
     /// 它们必须一起清 —— 都是「按块序列推出来的」那几份账（票 12、16、18、21）。
+    ///
+    /// 组进度（[`Self::trace_groups`]）是这里唯一的例外：它不是清掉，而是照记录序
+    /// **重建**（[`TraceGroups::rebuilt`]）。它也是最容易被漏掉的一份 —— 清掉它、而重放只
+    /// 把组头与小标题那几行画回去，重放之后再到达的一块开场段就会再开一条 `开场`
+    /// （票 18 记下的那条欠账）。
     fn clear_trace_for_replay(&mut self) {
         self.trace.clear();
         self.trace_links.clear();
         self.trace_block_ids.clear();
         self.anchors.clear();
-        self.trace_groups = TraceGroups::default();
+        self.trace_groups = TraceGroups::rebuilt(&self.painted);
         self.trace_flow = Flow::default();
         self.fold_handles.clear();
     }
@@ -12218,8 +12223,11 @@ struct DetailFacts {
     usage: UsageScope,
 }
 
-/// 轨迹页两级分组的当前进度 —— 推块的副产物，重放时从头再来一遍
+/// 轨迹页两级分组的当前进度 —— 推块的副产物，重放时按记录序**重建**
 /// （`.scratch/trace-ledger/spec.md` §5）。
+///
+/// 「重放」是清掉整份账再按记录推一遍，所以这一份也得跟着回来，否则重放之后再到达的块会
+/// 以为「一个组都还没开过」（[`TraceGroups::rebuilt`]）。
 #[derive(Debug, Default)]
 struct TraceGroups {
     /// 已经开过几个一级组：下一个组头的序号是它 + 1。
@@ -12306,6 +12314,38 @@ impl TraceGroups {
         } else {
             matches!(block, Block::TurnStarted { iteration, .. } if *iteration > 1)
         }
+    }
+
+    /// 按**记录序**把这份进度重建出来 —— 宽度重放与过滤重放共用它（[`Self::clear_trace_for_replay`]）。
+    ///
+    /// 进度是「推块那一刻」的账，可它只由块序定：组头与小标题的记录里就带着它该恢复的那半
+    /// （哪一级组、是不是开场那一条），所以重放不必把「开组」与「开小标题」两件事逐块重推
+    /// 一遍 —— 那会把两条记录各画第二次。读记录就够，而且读出来的那一份与实时路径推完同一
+    /// 批块之后**逐字相同**。
+    ///
+    /// 补记的状态而不是补记的行：开场那一条在重放清单里已经有自己的 `SectionHeader`，缺的
+    /// 只是「它开过了」这件事本身。
+    fn rebuilt(records: &[Painted]) -> Self {
+        let mut groups = Self::default();
+        for painted in records {
+            match painted {
+                Painted::GroupHeader(header) => match header.level {
+                    HeaderLevel::Unit => {
+                        groups.units += 1;
+                        groups.unit = Some(OpenGroup { header: header.id });
+                    }
+                    HeaderLevel::Iteration => {
+                        groups.iteration = Some(OpenGroup { header: header.id });
+                    }
+                },
+                // 压缩那一条小标题不带状态：它不属于「开场段开过了没有」这个话题。
+                Painted::SectionHeader(header) if header.kind == SectionKind::Preamble => {
+                    groups.preamble = Some(header.id);
+                }
+                _ => {}
+            }
+        }
+        groups
     }
 }
 
