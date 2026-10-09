@@ -1083,6 +1083,23 @@ pub struct TuiState {
     trace_search: Option<TraceSearch>,
     /// 搜索索引（票 20 第 3 条）。每块一条、字段是块自己那段文字的全文，增量建、只建一次。
     trace_index: TraceIndex,
+    /// 轨迹页的**折叠集合**：哪些块收成了一行（票 21 第 9 条）。
+    ///
+    /// 与过滤集同一条纪律：按**块身份**记、存在 `TuiState` 侧、不存窗格里 —— 于是宽度变化
+    /// 那次重放之后原样还在。三档折行共用这一个集合（单位 / 迭代 / 连续工具调用各是里面的
+    /// 一个身份），因为「谁收起来了」只回答一次。
+    folded: std::collections::HashSet<BlockId>,
+    /// 进入全折之前那一份折叠态 —— `{` 存、`}` 还原（票 21 第 6 条）。
+    ///
+    /// 没有它，全展就只能是「清空折叠集合」，而那会把读者自己折的东西一起抹掉。连按两次
+    /// `{` 不覆盖它：否则 `}` 还原出来的就是全折态本身。
+    fold_before_all: Option<std::collections::HashSet<BlockId>>,
+    /// 当前账本上那些**折叠把手**的身份：组头那几行，以及现在画着的几条折行。
+    ///
+    /// 指针要它：一次点击落在一条源行上时，只有这一行是个把手才翻得动折叠，而「这一行是
+    /// 组头 / 折行，还是一条普通块行」在身份表上读不出来（[`TuiState::trace_block_ids`] 只有
+    /// 身份，没有种类）。它与窗格同进同出 —— 重放开始那一刻清空，推一条行时补一格。
+    fold_handles: std::collections::HashSet<BlockId>,
     /// 进行中的那次历史重放，有的话。`Some` 是一个一次性的启动状态：在它排空之前，键盘、
     /// 指针与循环的行为都不一样（`.scratch/tui-history-replay/spec.md` §2）。
     replay: Option<Replay>,
@@ -1540,6 +1557,12 @@ enum HitAction {
     SwitchEffort,
     /// 点详情覆盖层标签条上的一个标签：切到那一面（票 13 第 3 条）。
     DetailFace(usize),
+    /// 点轨迹页上的一行**折叠把手**（组头那一行，或者一行折行）：折 / 展它代表的那一块
+    /// （票 21 第 5 条）。
+    ///
+    /// 它走的是既有的命中矩形那一层 —— 折叠**不新增手势**：没有双击识别（`DRAG_THRESHOLD`
+    /// 只分「点击 vs 拖选」），也没有悬停。
+    Fold(BlockId),
 }
 
 /// 一个问题占着指针时的一次指针手势。
@@ -1958,6 +1981,97 @@ struct GroupHeader {
     tools: Vec<(String, u64)>,
 }
 
+/// 账本上一条折行 —— 「一块画几行」这一层的产出（票 21 第 2 条）。
+///
+/// 它**沿用组头那一行的格式**：一级折行就是一级组头那行的字段换成摘要（虚线保留、`▸`
+/// 出现），二级折行与二级组头同族（弱色单行）。三档折行各自带着**自己那一份数** —— 折起来
+/// 之后那一行是读者能看到的全部，所以数与字都在推它的那一刻算齐。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FoldLine {
+    /// 一级折行：`回合 3 · 12 个步骤 · 9 个工具调用 · 2.1 s`。
+    Unit {
+        /// 它代表那个一级组头 —— 折行占的就是组头原来那一行。
+        id: BlockId,
+        at: DateTime<Utc>,
+        ordinal: u32,
+        /// 这一组里的成员记录数（组头与二级头不算成员）。
+        steps: u32,
+        calls: u32,
+        span: std::time::Duration,
+    },
+    /// 二级折行：`第 7 次迭代 · 4 个工具调用 · 18 s`。
+    Iteration {
+        /// 它代表那个二级组头。
+        id: BlockId,
+        at: DateTime<Utc>,
+        ordinal: u32,
+        calls: u32,
+        span: std::time::Duration,
+    },
+    /// 连续工具调用那一档：`3 个工具调用 · bash, read`。
+    Run {
+        /// 它代表**段首那一次调用** —— 折行落在它原来那一行上。
+        id: BlockId,
+        at: DateTime<Utc>,
+        calls: u32,
+        names: Vec<String>,
+    },
+    /// 开场那一段折成的一行：`开场 · 4 条注入 · …`。
+    ///
+    /// 它**不是**三档里的一档，也不进折叠集合：无主段落没有可折的子结构，开场那一串注入
+    /// 折成的是**一行**、不是可展开的一组（票 21 第 8 条）。所以它没有把手，按不了 `Space`。
+    Preamble {
+        /// 它代表那一行小标题。
+        id: BlockId,
+        at: DateTime<Utc>,
+        injections: u32,
+        /// 段内第一条注入 —— 这一行点开看的是它（见 [`TuiState::fold_line_link`]）。
+        first: BlockId,
+    },
+}
+
+impl FoldLine {
+    /// 这一条折行代表谁：折行的身份就是它的。
+    fn id(&self) -> BlockId {
+        match self {
+            FoldLine::Unit { id, .. }
+            | FoldLine::Iteration { id, .. }
+            | FoldLine::Run { id, .. }
+            | FoldLine::Preamble { id, .. } => *id,
+        }
+    }
+
+    /// 它是一条**可折 / 可展**的折行吗 —— 开场那一段收成的那一行不是（票 21 第 8 条）。
+    fn is_toggleable(&self) -> bool {
+        !matches!(self, FoldLine::Preamble { .. })
+    }
+}
+
+/// 重放一条绘制记录时推什么 —— 「过滤先（哪些块在）、折叠后（一块画几行）」里的后半句
+/// （票 21 接在 [`TuiState::visible_records`] 那一层之后）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Planned {
+    /// 按原样画这一条。
+    Record,
+    /// 这一条不画 —— 被外面某一层折行收走了（或者它是开场那段里的一条注入）。
+    Skip,
+    /// 这一条画成一行折行。
+    Fold(FoldLine),
+}
+
+/// 账本上一块**可折的东西**占哪儿：折行落在 `head` 那一行上，`head` 之后到 `end` 之前
+/// 那些记录收起来。
+///
+/// 与 [`FoldLine`] 一起由 [`fold_scopes`] 一次扫描算出来：**范围与折行的样子是同一件事的
+/// 两面**，分开写就会有两处「哪几块算一段」的判据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FoldScope {
+    /// 折行占据的那一条记录（组头，或段首那一次调用）。
+    head: usize,
+    /// 这一折管到哪一条记录为止（不含）。
+    end: usize,
+}
+
 /// 一段**定稿**的思考：谁说的、记下来没有、到此为止那一刻，以及它的身份与行尾。
 ///
 /// 收成一个结构体是因为这五样是一件事：定稿时构造一次，重画时读一次
@@ -2241,6 +2355,9 @@ impl TuiState {
             trace_selection: None,
             trace_search: None,
             trace_index: TraceIndex::default(),
+            folded: std::collections::HashSet::new(),
+            fold_before_all: None,
+            fold_handles: std::collections::HashSet::new(),
             anchors: Vec::new(),
             trace_groups: TraceGroups::default(),
             next_local_id: 0,
@@ -2602,10 +2719,14 @@ impl TuiState {
         // 进了账本，而账本上只剩命中块（票 20 第 7 条）。重放是那句判据的唯一权威，所以
         // 这里不清账、只重推一遍。
         //
-        // 增量事件跳过它：一条流式输出每秒几十条，而它唯一画出来的东西是那条**还没定稿**的
-        // 思考行 —— 那一行本来就进不了过滤视图（`paint_thinking_line` 那里已经挡了）。
-        // 它定稿那一下（`settle_thinking`）自己带一次重放。
-        if self.filtering() && !incremental {
+        // 折起来的东西也一样：新块与**挂着它的那一组**都长在折行底下，而组头那一行此刻画的
+        // 是折行 —— 一次重放把账本按新的折叠态重推一遍，是这里唯一能对齐它的东西（票 21）。
+        //
+        // 增量事件两边都跳过：一条流式输出每秒几十条，而它唯一画出来的东西是那条**还没
+        // 定稿**的思考行 —— 那一行进不了过滤视图（`paint_thinking_line` 那里已经挡了），
+        // 也进不了折起来的那一组（那里也挡了）。它定稿那一下（`settle_thinking`）自己带
+        // 一次重放。
+        if (self.filtering() || !self.folded.is_empty()) && !incremental {
             self.replay_trace();
         }
         produced
@@ -2894,18 +3015,30 @@ impl TuiState {
             self.dirty = true;
             return;
         }
-        // 过滤（票 20）先决定「哪些块在」；折叠（票 21）会接在它后面，管「一块画几行」。
-        // 宽度变化本身不动那份判据，所以重放出来的还是同一批块 —— 过滤集留在原处。
+        // 过滤（票 20）先决定「哪些块在」；折叠（票 21）接在它后面，管「一块画几行」。
+        // 宽度变化本身不动那两份判据，所以重放出来的还是同一批块、折的还是那几块 ——
+        // 过滤集与折叠集合都留在原处。
         let visible = self.visible_records();
+        let plan = ledger_plan(&self.painted, &self.folded, self.filtering());
         let painted = std::mem::take(&mut self.painted);
         let replay = Targets {
             conversation,
             trace,
         };
         for (index, item) in painted.iter().enumerate() {
-            // 谓词只对轨迹页说话：对话视图没有过滤（它那一半照旧）。
-            if trace && !visible[index] {
-                continue;
+            // 谓词与折叠都只对轨迹页说话：对话视图既不过滤也不折叠（它那一半照旧）。
+            if trace {
+                if !visible[index] {
+                    continue;
+                }
+                match &plan[index] {
+                    Planned::Skip => continue,
+                    Planned::Fold(line) => {
+                        self.paint_fold_line(line, replay, &painted);
+                        continue;
+                    }
+                    Planned::Record => {}
+                }
             }
             // `true` = 这是**重画**：组头已经在那份清单里，重画它而不是再开一个
             // （`.scratch/trace-ledger/spec.md` §5）。新到达的块才走开组那半边。
@@ -3295,7 +3428,13 @@ impl TuiState {
         self.reasoning.clear();
         // 名字打头，所以它拿发言者的颜色 —— 每一条带名字的行都遵循同一条规矩
         // （票 07 §2）。两个视口各画一遍：它们的前缀分档可能不同（票 09）。
-        self.paint_thinking_line(&speaker, at, self.targets(), id);
+        //
+        // 这一行马上要长在**账本末尾**，所以它盖不盖在折起来的组底下按最后那一条记录问
+        // （票 21）：增量不触发重放，这一行是唯一会从一个折行底下漏出来的东西。
+        let last = self.painted.len().saturating_sub(1);
+        if !self.covered_by_folded(last) {
+            self.paint_thinking_line(&speaker, at, self.targets(), id);
+        }
         // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
         self.painted.push(Painted::Thinking {
             speaker,
@@ -3517,6 +3656,69 @@ impl TuiState {
         }
     }
 
+    /// 把一条折行画进轨迹窗格（票 21 第 2、3 条）：它**占一个源行**，而那一行就是那个块
+    /// —— 可选中、`Enter` 开详情、`Space` 展开，身份照 [`Self::push_line`] 记进身份表。
+    ///
+    /// 顺手把它记成**折叠把手**：指针要按源行回答「这一行点得开吗」，而身份表只记身份、
+    /// 不记种类（见 [`Self::fold_handles`]）。开场那一段收成的一行不入这份账 —— 它点不动
+    /// （票 21 第 8 条）。
+    fn paint_fold_line(&mut self, line: &FoldLine, targets: Targets, records: &[Painted]) {
+        if !targets.trace {
+            return;
+        }
+        let id = line.id();
+        let rendered = fold_line(line, self.trace_width, self.discussion());
+        let link = self.fold_line_link(line, records);
+        self.push_line(Viewport::Trace, rendered, link, None, Some(id));
+        if line.is_toggleable() {
+            self.fold_handles.insert(id);
+        }
+    }
+
+    /// 一条折行通向哪儿。
+    ///
+    /// **连续工具调用那一档**挂**段首那一次调用**的详情：折行替掉的就是它那一行，所以读者
+    /// 点开看到的是这一段从哪儿开始 —— 与它原来那一行同一份构造，标题、配色与各面都不漂。
+    /// **组头那两档不挂**：一个单位 / 一次迭代今天没有一个可读的对象，与组头那一行今天的
+    /// 判据一致（点它什么都不开）。
+    ///
+    /// **开场那一行挂段内第一条注入**：那一段折叠之后只剩一个入口，而「从这一段的第一条
+    /// 看起」与「一个块的第一条源行才是落点」是同一条读法（票 21 第 8 条）。
+    fn fold_line_link(&mut self, line: &FoldLine, records: &[Painted]) -> Option<Detail> {
+        let id = match line {
+            FoldLine::Run { id, .. } => *id,
+            FoldLine::Preamble { first, .. } => *first,
+            FoldLine::Unit { .. } | FoldLine::Iteration { .. } => return None,
+        };
+        let (block, facts) = records.iter().find_map(|painted| match painted {
+            Painted::Block {
+                block,
+                at,
+                usage,
+                id: record,
+                ..
+            } if *record == id => Some((
+                block,
+                DetailFacts {
+                    at: Some(*at),
+                    timing: timing_of(block),
+                    usage: *usage,
+                },
+            )),
+            _ => None,
+        })?;
+        match block {
+            Block::Tool(tool) => {
+                let style = prefix_style(Viewport::Trace, self.trace_tier_width);
+                tool_block_lines(tool, &mut self.colors, style, facts)
+                    .first()
+                    .and_then(|rendered| rendered.link.clone())
+            }
+            Block::ContextInjected { .. } => injection_detail(block, facts),
+            _ => None,
+        }
+    }
+
     /// 一个块是不是**开场段**里的一块。
     ///
     /// 开场是第一个单位之前那一段：身份注入、技能注入、命令、诊断与回执。
@@ -3630,6 +3832,9 @@ impl TuiState {
             }
         } else {
             self.push_line(Viewport::Trace, line, None, None, Some(header.id));
+            // 组头那一行是**折叠把手**：点它就是折 / 展它代表的那个单位 / 迭代（票 21
+            // 第 5 条）。展开态的组头没有 `▸`（票 21 第 7 条），而字形不是热区 —— 整行都算。
+            self.fold_handles.insert(header.id);
             // 一级组头是来源面那条链的「那一回合」那一环（票 14 第 1 条）。二级（迭代）头不
             // 记：链上那一环是「迭代的**回复**」，由消息自己记。
             if header.level == HeaderLevel::Unit {
@@ -4103,6 +4308,11 @@ impl TuiState {
             Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
             Some(HitAction::SwitchEffort) => self.ask_picker(PickerKind::Effort),
             Some(HitAction::TurnRailUnit(unit)) => self.jump_to_unit(unit),
+            // 点组头那一行 / 点一行折行 = 折 / 展（票 21 第 5 条）。它排在开详情那一条之前：
+            // 折叠把手那一行本来就没有可点开的东西，而「点一行开详情」保护的是一行**内容**。
+            //
+            // 落在热区里之前键盘已经拿回来了（上面那一步），所以点完立刻能用 `↑` / `↓` 走。
+            Some(HitAction::Fold(id)) => self.toggle_fold(id),
             _ if self.indicator_hit(Viewport::Trace, column, row) => self.trace.to_bottom(),
             _ if self.indicator_hit(Viewport::Conversation, column, row) => {
                 self.conversation.to_bottom()
@@ -4436,6 +4646,12 @@ impl TuiState {
             // 没有第三个方向可用（`←` / `→` 在左栏两页已被占用），所以是两个成对的括号键。
             Key::Char('[') => self.jump_to_group_header(),
             Key::Char(']') => self.jump_to_first_member(),
+            // `Space`：折 / 展选中那一块所在的那一档（票 21 第 4 条）—— 组头是那一组的把手，
+            // 它折 / 展的是整个单位；一次工具调用折 / 展的是与它相邻那几次调用那一段。
+            Key::Char(' ') => self.toggle_fold_at_cursor(),
+            // `{` / `}`：全折 / 全展（票 21 第 6 条）—— 这两个键全局无绑定。
+            Key::Char('{') => self.fold_everything(),
+            Key::Char('}') => self.unfold_everything(),
             // `/`：进搜索。它**必须**在这一层被接住 —— 这一层排在记号菜单那一支之前，
             // 否则同一个物理键永远被菜单先抓走（票 20 第 1 条）。没在筛的时候 `n` / `N`
             // 什么都不做，照旧落进输入区：它们是普通字符。
@@ -4676,27 +4892,32 @@ impl TuiState {
             return;
         }
         let visible = self.visible_records();
+        // 折叠接在它的后面：**过滤先决定哪些块在，折叠后决定一块画几行**（票 21 第 10 条）。
+        // 过滤期间 `ledger_plan` 一律不折 —— 命中块必须画开，而折叠集合一个字节都不动。
+        let plan = ledger_plan(&self.painted, &self.folded, self.filtering());
         let painted = std::mem::take(&mut self.painted);
-        for (item, show) in painted.iter().zip(&visible) {
-            if !*show {
+        let targets = Targets {
+            conversation: false,
+            trace: true,
+        };
+        for (index, item) in painted.iter().enumerate() {
+            if !visible[index] {
                 continue;
             }
-            self.emit_painted(
-                item,
-                Targets {
-                    conversation: false,
-                    trace: true,
-                },
-                true,
-            );
+            match &plan[index] {
+                Planned::Skip => {}
+                Planned::Fold(line) => self.paint_fold_line(line, targets, &painted),
+                Planned::Record => self.emit_painted(item, targets, true),
+            }
         }
         self.painted = painted;
         self.dirty = true;
     }
 
-    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、组状态与跨块排版状态。
+    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、组状态、跨块排版状态，以及那一份
+    /// 「哪几行是折叠把手」。
     ///
-    /// 这六样必须一起清 —— 它们都是「按块序列推出来的」那几份账（票 12、16、18）。
+    /// 它们必须一起清 —— 都是「按块序列推出来的」那几份账（票 12、16、18、21）。
     fn clear_trace_for_replay(&mut self) {
         self.trace.clear();
         self.trace_links.clear();
@@ -4704,6 +4925,7 @@ impl TuiState {
         self.anchors.clear();
         self.trace_groups = TraceGroups::default();
         self.trace_flow = Flow::default();
+        self.fold_handles.clear();
     }
 
     /// 这一趟重放推哪些记录（票 20）。
@@ -4726,11 +4948,11 @@ impl TuiState {
                 // 一级组头管到下一个一级组头（或一个无主段落的小标题）为止 —— 这中间那些
                 // 二级头与成员都是它的成员。
                 Painted::GroupHeader(header) if header.level == HeaderLevel::Unit => {
-                    self.next_header_after(index, true)
+                    next_header_after(&self.painted, index, true)
                 }
                 // 二级组头与小标题管到下一个组头或小标题为止。
                 Painted::GroupHeader(_) | Painted::SectionHeader(_) => {
-                    self.next_header_after(index, false)
+                    next_header_after(&self.painted, index, false)
                 }
                 _ => continue,
             };
@@ -4739,21 +4961,6 @@ impl TuiState {
             }
         }
         visible
-    }
-
-    /// 第 `index` 条记录之后，第一条把它那一段划走的组头或小标题；没有就是账本的末尾。
-    ///
-    /// `unit_only` 是要「只认一级组头」（一级头的范围）还是「认任何组头」（二级头与小标题
-    /// 的范围到此为止）。**它与 [`Self::group_shape`] 那套归属不是同一条判据**：那边回答的
-    /// 是「一条记录属于哪一个组头」（组头自己属于自己），而这里问的是「这条头管到哪一行」。
-    fn next_header_after(&self, index: usize, unit_only: bool) -> usize {
-        (index + 1..self.painted.len())
-            .find(|other| match &self.painted[*other] {
-                Painted::GroupHeader(header) => !unit_only || header.level == HeaderLevel::Unit,
-                Painted::SectionHeader(_) => true,
-                _ => false,
-            })
-            .unwrap_or(self.painted.len())
     }
 
     /// `n` / `N`：沿命中走一个，并把选中移到那个块（票 20 第 6 条）。
@@ -4815,6 +5022,23 @@ impl TuiState {
         if search.fresh > 0 && self.trace.following() {
             search.fresh = 0;
         }
+    }
+
+    /// 账本上第 `index` 个位置是不是被某个**折着的**组盖着。
+    ///
+    /// 只有就地长出来的那一条（还没定稿的思考行）需要问它：别的块到达之后都会按票 21 那次
+    /// 重放对齐，而那一次重放自己知道该收谁 —— 这一条不走重放（增量每秒几十条），所以它
+    /// 自己问一句，免得从一个折行底下漏出来。
+    ///
+    /// 判据就是 [`fold_scopes`] 那一份范围（与折起、展开用的是同一条「哪几块算一段」）。
+    /// 过滤期间折叠整体让位（[`ledger_plan`] 的 `open_everything`），所以这里也放行。
+    fn covered_by_folded(&self, index: usize) -> bool {
+        if self.filtering() {
+            return false;
+        }
+        fold_scopes(&self.painted).into_iter().any(|(scope, line)| {
+            self.folded.contains(&line.id()) && scope.head < index && index < scope.end
+        })
     }
 
     /// 一条源行属于哪一块。`None` 是「这条行不属于任何块」（单位之间的分隔线那类）。
@@ -4953,14 +5177,119 @@ impl TuiState {
     /// 把选中落到那一条记录的第一条源行上，并把**视口跟过去**（票 19 第 3 条）——
     /// 跳转与 `↑` / `↓` 同一条纪律：用户主动跳过去就该看见。
     ///
-    /// 那一条记录**换不出源行**时（被 `CAP` 裁掉了，或将来被折叠收起）什么都不做：位置都
-    /// 报不出来就没法把读者带过去，硬改选中只会在屏上留下一个看不见的落点。
+    /// 那一条记录**换不出源行**时先摊开挡路的那几层折叠（票 19 留的口子、票 21 接上）：
+    /// 折起来的成员不再占源行，而 `[` / `]` 的落点不该落在看不见的东西上。摊开之后仍然报不
+    /// 出位置（被 `CAP` 裁掉了）就什么都不做 —— 硬改选中只会在屏上留下一个看不见的落点。
     fn land_on_record(&mut self, id: BlockId) {
+        if self.first_source_of(id).is_none() && self.unfold_around(id) {
+            self.replay_trace();
+        }
         let Some(row) = self.first_source_of(id) else {
             return;
         };
         self.trace_selection = Some(id);
         self.trace.reveal_source(row);
+    }
+
+    /// 把**收着这一块的那几层**展开，返回「折叠集合有没有动过」。
+    ///
+    /// 判据落在范围上，不落在「它现在画没画」上：一条记录被哪几层收着，由 [`fold_scopes`]
+    /// 那一份范围说 —— 于是展开与折起用的是同一条「哪几块算一段」。
+    fn unfold_around(&mut self, id: BlockId) -> bool {
+        let Some(index) = self.painted.iter().position(|painted| painted.id() == id) else {
+            return false;
+        };
+        let scopes = fold_scopes(&self.painted);
+        let mut changed = false;
+        for (scope, line) in &scopes {
+            // `scope.head < index`：目标自己那一行不在任何范围里，所以「选中一个组头」不会
+            // 顺手把上层也摊开（它本来就在账本上）。
+            if scope_covers(scope, index) && self.folded.remove(&line.id()) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// `Space`：折 / 展**选中那一块所在的那一档**（票 21 第 4 条）。
+    ///
+    /// 组头是那一组的把手 —— 选中它就是折 / 展**整个单位**（票 09 §6：不折就无处可折）；
+    /// 一次工具调用折 / 展的是**与它相邻那几次调用**那一段；别的块（消息、思考、无主段落里的
+    /// 行）没有可折的子结构，所以什么都不做（票 21 第 8 条）。开场那一段收成的一行同理：
+    /// 它不是可展开的一组。
+    fn toggle_fold_at_cursor(&mut self) {
+        let Some(id) = self.fold_target_at_cursor() else {
+            return;
+        };
+        self.toggle_fold(id);
+    }
+
+    /// 选中那一块折的**是折叠集合里的哪一个身份**。
+    fn fold_target_at_cursor(&self) -> Option<BlockId> {
+        let row = self.selection_anchor()?;
+        let id = self.block_at_source(row)?;
+        let index = self.painted.iter().position(|painted| painted.id() == id)?;
+        match &self.painted[index] {
+            Painted::GroupHeader(header) => Some(header.id),
+            Painted::Block {
+                block: Block::Tool(_),
+                ..
+            } => fold_scopes(&self.painted)
+                .into_iter()
+                .find(|(scope, line)| {
+                    matches!(line, FoldLine::Run { .. }) && scope.head <= index && index < scope.end
+                })
+                .map(|(_, line)| line.id()),
+            _ => None,
+        }
+    }
+
+    /// 折 / 展一个身份，并把账本按新的折叠态重推一遍（票 21 第 9 条）。
+    ///
+    /// 重放是**唯一**那条路：折叠改的是「一块画几行」，与宽度重放、过滤共用同一个入口，
+    /// 所以拖动宽度之后折叠态原样还在。
+    fn toggle_fold(&mut self, id: BlockId) {
+        if !self.folded.remove(&id) {
+            self.folded.insert(id);
+        }
+        self.replay_trace();
+    }
+
+    /// `{`：全折 —— 整本账折到只剩各级组头与折行，**正在跑的那个回合也折**（票 21 第 6 条）。
+    ///
+    /// 折之前先把此刻那一份折叠态存起来：`}` 要还原的正是**它**，不是「清空」（那样会把读者
+    /// 自己折的东西一并抹掉）。**连按两次 `{` 不覆盖那份存根** —— 否则 `}` 还原出来的就是
+    /// 全折态本身，那一次全展白按。
+    fn fold_everything(&mut self) {
+        if self.fold_before_all.is_none() {
+            self.fold_before_all = Some(self.folded.clone());
+        }
+        for (_, line) in fold_scopes(&self.painted) {
+            self.folded.insert(line.id());
+        }
+        self.replay_trace();
+    }
+
+    /// `}`：全展 —— 全折过就**还原到进全折之前**那一份折叠态；没全折过，那就是「全展」本身
+    /// （清空折叠集合）。
+    ///
+    /// 前一半正是票面那句「不是清空折叠态」：全折是一次临时的看全，而读者自己折过的那几块
+    /// 不属于它。
+    fn unfold_everything(&mut self) {
+        match self.fold_before_all.take() {
+            Some(before) => self.folded = before,
+            None => self.folded.clear(),
+        }
+        self.replay_trace();
+    }
+
+    /// 这一条源行是不是一个**折叠把手**（组头那一行，或者一行折行），是的话它翻的是谁。
+    ///
+    /// 指针走这一条，因为 [`Self::trace_block_ids`] 只有身份、没有种类：一条普通的工具行与
+    /// 一条代表它那一段的折行在那张表上长得一模一样，而点前者该开详情、点后者该折 / 展。
+    fn fold_handle_at(&self, source: usize) -> Option<BlockId> {
+        let id = self.block_at_source(source)?;
+        self.fold_handles.contains(&id).then_some(id)
     }
 
     /// `Enter`：开选中那一块的详情。
@@ -8550,6 +8879,26 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             state.trace_drawn.rows = (0..rows.len())
                 .map(|offset| state.trace.source_at(top + offset))
                 .collect();
+            // 折叠热区：这一帧真画出来的**组头行与折行**整行都算把手（票 21 第 5 条）。每帧
+            // 重建、与屏幕文本层同一套纪律 —— 一个滚出视口的把手不必各自失效。
+            //
+            // 只认**每一条源行的第一显示行**：一条窄到折成两行的组头不该被热两次。
+            let handles: Vec<(u16, BlockId)> = (0..rows.len())
+                .filter_map(|offset| {
+                    let source = state.trace.source_at(top + offset)?;
+                    if offset > 0 && state.trace.source_at(top + offset - 1) == Some(source) {
+                        return None;
+                    }
+                    let id = state.fold_handle_at(source)?;
+                    Some((offset as u16, id))
+                })
+                .collect();
+            for (offset, id) in handles {
+                state.regions.push(
+                    Rect::new(text_area.x, text_area.y + offset, text_area.width, 1),
+                    HitAction::Fold(id),
+                );
+            }
             let folded = soft_folds(&state.trace, top, rows.len());
             note_rows(state, text_area, &rows, &folded, &[]);
             // 点击按它分派：`trace_rect` 只在上一帧真画了轨迹页时才有值（票 09 那条纪律照旧，
@@ -9687,35 +10036,26 @@ fn paint_block(
         Block::SessionEnded { reason } => {
             vec![severity_line(*reason, wording::session_ended(*reason)).into()]
         }
-        Block::ContextInjected { source, content } => {
+        Block::ContextInjected { source, .. } => {
             // 这条记录**点得开**（票 19）：转录上只有一行来源名，加载数据本身在详情里。
             // 它拿一个**专色**（票 10，`.scratch/trace-tab/spec.md` §2 例外二）：注入行
             // 与别的叙述行同灰，于是「注入 / 用户 / 助手」在轨迹页上分不开。
-            let text = wording::context_injected(source.clone());
+            //
             // `▸` 说这一行点得开 —— 注入行是**折起来**的：屏幕上只有来源名，加载数据本身在
             // 详情里，所以它按判据拿这个字形（`.scratch/tui-visual-language/spec.md` §13）。
+            let text = wording::context_injected(source.clone());
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} ", wording::FOLDABLE),
                     Style::default().fg(palette::MUTED),
                 ),
-                Span::styled(text.clone(), Style::default().fg(palette::INJECTED)),
+                Span::styled(text, Style::default().fg(palette::INJECTED)),
             ]);
-            let detail = Detail {
-                title: text,
-                color: palette::INJECTED,
-                // 注入归属给某个发言者（用户或一位讨论者），而它到达的时刻就是上面的 `at`。
-                // 它今天是**单面**详情（票 14 会给它两面）。
-                speaker: block_speaker(block).cloned(),
-                at: facts.at,
-                kind: DetailKind::Context {
-                    source: source.clone(),
-                    content: content.clone(),
-                },
-                chain: None,
-                usage: None,
-            };
-            vec![RenderedLine::linked(line, detail)]
+            // 详情与「开场那一段收成的一行」共用一份构造（票 21 第 8 条）。
+            match injection_detail(block, facts) {
+                Some(detail) => vec![RenderedLine::linked(line, detail)],
+                None => vec![line.into()],
+            }
         }
         Block::Sandbox {
             mode,
@@ -9868,6 +10208,101 @@ fn group_header_line(header: &GroupHeader, width: u16, discussion: bool) -> Line
     Line::from(spans)
 }
 
+/// 一条折行：把组头那一行的字形换成它折起来的摘要 —— **虚线保留、`▸` 出现**（票 21 第 2 条）。
+///
+/// 三个形状对应三档：一级沿用一级组头（虚线填到右缘、文字亮一档），二级与连续工具调用共用
+/// 二级组头那一档（弱色单行、不带虚线）。`▸` **只在折行上出现** —— 展开态的账本里一个都
+/// 没有，那是这个字形的全部意思：这里有折起来的东西（票 21 第 7 条）。
+///
+/// 开场那一段收成的一行也走这里：它戴着 `▸` 与末尾那个省略号，但它**翻不动**
+/// （[`FoldLine::is_toggleable`]）—— 省略号许诺的是详情，不是摊开。
+fn fold_line(line: &FoldLine, width: u16, discussion: bool) -> Line<'static> {
+    let sep = wording::header_separator();
+    let mut unit = false;
+    let (at, head, style) = match line {
+        FoldLine::Unit {
+            at,
+            ordinal,
+            steps,
+            calls,
+            span,
+            ..
+        } => {
+            unit = true;
+            (
+                *at,
+                format!(
+                    "{}{sep}{}{sep}{}{sep}{}",
+                    wording::header_unit(*ordinal, discussion),
+                    wording::fold_steps(*steps),
+                    wording::fold_tool_calls(*calls),
+                    wording::header_span(*span)
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )
+        }
+        FoldLine::Iteration {
+            at,
+            ordinal,
+            calls,
+            span,
+            ..
+        } => (
+            *at,
+            format!(
+                "{}{sep}{}{sep}{}",
+                wording::header_iteration(*ordinal),
+                wording::fold_tool_calls(*calls),
+                wording::header_span(*span)
+            ),
+            Style::default().fg(palette::MUTED),
+        ),
+        FoldLine::Run {
+            at, calls, names, ..
+        } => (
+            *at,
+            format!(
+                "{}{sep}{}",
+                wording::fold_tool_calls(*calls),
+                wording::fold_tool_names(names)
+            ),
+            Style::default().fg(palette::MUTED),
+        ),
+        FoldLine::Preamble { at, injections, .. } => (
+            *at,
+            format!(
+                "{}{sep}{}{sep}{}",
+                wording::section_preamble(),
+                wording::section_injections(*injections),
+                wording::fold_ellipsis()
+            ),
+            Style::default().fg(palette::MUTED),
+        ),
+    };
+    let mut spans = vec![Span::styled(
+        wording::stamp(at),
+        Style::default().fg(palette::MUTED),
+    )];
+    if unit {
+        spans.push(Span::styled("┄ ", Style::default().fg(palette::CHROME)));
+    }
+    spans.push(Span::styled(
+        format!("{} ", wording::FOLDABLE),
+        Style::default().fg(palette::MUTED),
+    ));
+    spans.push(Span::styled(head, style));
+    if unit {
+        // 虚线填到屏幕右缘 —— 一级折行读起来仍是一条边界（与一级组头同一个形状）。
+        spans.push(Span::styled(" ", Style::default()));
+        let used = line_columns(&Line::from(spans.clone()));
+        spans.push(Span::styled(
+            "┄".repeat((width as usize).saturating_sub(used)),
+            Style::default().fg(palette::CHROME),
+        ));
+    }
+    Line::from(spans)
+}
+
 /// 一条**中间**叙述行：用静音档，好让模型那个以正文档渲染的回答成为显眼的东西。带严重度的
 /// 行改为问色板（见 [`severity_line`]）。
 fn narration(text: String) -> Line<'static> {
@@ -9907,6 +10342,30 @@ fn severity_speaker_line(
 /// 不再抢注意力，只有出问题时屏幕才亮。
 fn severity_style(reason: StopReason) -> Style {
     palette::style(Severity::of(reason))
+}
+
+/// 一条上下文注入通向的详情 —— **它自己那一行**与**开场那一段收成的一行**共用这一份构造
+/// （票 21 第 8 条），所以两处点开看到的是同一个标题与同一份正文。
+///
+/// 不是注入块就没有详情可给：调用方按块种类分派，这一层只回答「注入长什么样」。
+fn injection_detail(block: &Block, facts: DetailFacts) -> Option<Detail> {
+    let Block::ContextInjected { source, content } = block else {
+        return None;
+    };
+    let title = wording::context_injected(source.clone());
+    Some(Detail {
+        title,
+        color: palette::INJECTED,
+        // 注入归属给某个发言者（用户或一位讨论者），而它到达的时刻就是上面的 `at`。
+        speaker: block_speaker(block).cloned(),
+        at: facts.at,
+        kind: DetailKind::Context {
+            source: source.clone(),
+            content: content.clone(),
+        },
+        chain: None,
+        usage: None,
+    })
 }
 
 /// 一次已完成的工具调用，折成一行：读的人能打开的**那次调用**，整份输出在它后面（票 02 §3）。
@@ -11427,6 +11886,193 @@ fn group_span(header: &GroupHeader) -> std::time::Duration {
             .to_std()
             .unwrap_or_default()
     })
+}
+
+/// 这一折盖着账本上第 `index` 个位置吗（`head` 自己不在里面：它是折行占着的那一行）。
+fn scope_covers(scope: &FoldScope, index: usize) -> bool {
+    scope.head < index && index < scope.end
+}
+
+/// 一条记录是不是一次**工具调用** —— 连续工具调用那一档聚的就是它们。
+fn is_tool_record(painted: &Painted) -> bool {
+    matches!(
+        painted,
+        Painted::Block {
+            block: Block::Tool(_),
+            ..
+        }
+    )
+}
+
+/// 第 `index` 条记录之后，第一条把它那一段划走的组头或小标题；没有就是账本的末尾。
+///
+/// `unit_only` 是要「只认一级组头」（一级头的范围）还是「认任何组头」（二级头与小标题的
+/// 范围到此为止）。**它与 [`TuiState::group_shape`] 那套归属不是同一条判据**：那边回答的是
+/// 「一条记录属于哪一个组头」（组头自己属于自己），而这里问的是「这条头管到哪一行」。
+/// 过滤与折叠三档共用这一句。
+fn next_header_after(records: &[Painted], index: usize, unit_only: bool) -> usize {
+    (index + 1..records.len())
+        .find(|other| match &records[*other] {
+            Painted::GroupHeader(header) => !unit_only || header.level == HeaderLevel::Unit,
+            Painted::SectionHeader(_) => true,
+            _ => false,
+        })
+        .unwrap_or(records.len())
+}
+
+/// 账本上所有可折的东西，以及**折起来时那一条折行**（票 21 第 1、2 条）。
+///
+/// 一次扫描同时给出两样：范围（哪些记录被收走）与折行的样子（折成哪一句）。两者是同一件事
+/// 的两面 —— 分开写就会有两处「哪几块算一段」的判据。
+fn fold_scopes(records: &[Painted]) -> Vec<(FoldScope, FoldLine)> {
+    let mut scopes = Vec::new();
+    for (index, painted) in records.iter().enumerate() {
+        let Painted::GroupHeader(header) = painted else {
+            continue;
+        };
+        let end = next_header_after(records, index, header.level == HeaderLevel::Unit);
+        let members = &records[index + 1..end];
+        let calls = members.iter().filter(|it| is_tool_record(it)).count() as u32;
+        let line = match header.level {
+            HeaderLevel::Unit => FoldLine::Unit {
+                id: header.id,
+                at: header.at,
+                ordinal: header.ordinal,
+                // 二级头是**标题**、不是成员，所以它不算一步 —— 「12 个步骤」数的是这一段里
+                // 有几件事，而一次调用的标题不是一件事。
+                steps: members
+                    .iter()
+                    .filter(|it| !matches!(it, Painted::GroupHeader(_)))
+                    .count() as u32,
+                calls,
+                span: group_span(header),
+            },
+            HeaderLevel::Iteration => FoldLine::Iteration {
+                id: header.id,
+                at: header.at,
+                ordinal: header.ordinal,
+                calls,
+                span: group_span(header),
+            },
+        };
+        scopes.push((FoldScope { head: index, end }, line));
+    }
+    // 连续工具调用那一档：**记录序上直接相邻**的几次调用才算一段 —— 中间夹着任何别的
+    // 东西（一段思考、一条消息、一次收尾）就断开。那正是票面第 1 条要的「不相邻的不合并」：
+    // 把两段被思考分开的调用并成一行，读起来像它们属于同一轮思考。
+    let mut index = 0;
+    while index < records.len() {
+        if !is_tool_record(&records[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut end = index + 1;
+        while end < records.len() && is_tool_record(&records[end]) {
+            end += 1;
+        }
+        // 一次调用折起来什么也不省 —— 它本来就一行；这一档要的是**几次**连在一起。
+        if end - start >= 2 {
+            // **同名只报一次、按首次出现的次序**：折行说的是「这一段都动了什么」。
+            let mut names: Vec<String> = Vec::new();
+            for painted in &records[start..end] {
+                if let Painted::Block {
+                    block: Block::Tool(tool),
+                    ..
+                } = painted
+                    && !names.contains(&tool.tool)
+                {
+                    names.push(tool.tool.clone());
+                }
+            }
+            if let Painted::Block { at, .. } = &records[start] {
+                scopes.push((
+                    FoldScope { head: start, end },
+                    FoldLine::Run {
+                        id: records[start].id(),
+                        at: *at,
+                        calls: (end - start) as u32,
+                        names,
+                    },
+                ));
+            }
+        }
+        index = end;
+    }
+    scopes
+}
+
+/// 「一块画几行」：账本上每一条记录推什么（票 21 接在 [`TuiState::visible_records`] 那一层
+/// 之后 —— 过滤先决定哪些块在，折叠后决定一块画几行）。
+///
+/// `open_everything` 是**过滤期间的临时覆盖**：命中块必须画开，而折叠集合一个字节都不动
+/// （票 21 第 10 条）—— 于是退出过滤自然还原，不需要另记一份「原折叠态」。
+fn ledger_plan(
+    records: &[Painted],
+    folded: &std::collections::HashSet<BlockId>,
+    open_everything: bool,
+) -> Vec<Planned> {
+    let mut plan: Vec<Planned> = records.iter().map(|_| Planned::Record).collect();
+    if open_everything {
+        return plan;
+    }
+    let scopes = fold_scopes(records);
+    // **由外到内**：单位管着它下面的迭代、迭代管着它下面那一段调用。一条记录被两层同时
+    // 收走时只有最外面那一层画折行 —— 里面那一层连自己那一行都不画。
+    for layer in 0..3 {
+        for (scope, line) in &scopes {
+            let mine = match layer {
+                0 => matches!(line, FoldLine::Unit { .. }),
+                1 => matches!(line, FoldLine::Iteration { .. }),
+                _ => matches!(line, FoldLine::Run { .. }),
+            };
+            if !mine || !folded.contains(&line.id()) || plan[scope.head] != Planned::Record {
+                continue;
+            }
+            plan[scope.head] = Planned::Fold(line.clone());
+            for slot in plan[scope.head + 1..scope.end].iter_mut() {
+                *slot = Planned::Skip;
+            }
+        }
+    }
+    // 开场那一段：一串注入收成**一行**。它不是可展开的一组 —— 不进折叠集合、没有把手，
+    // 也没有哪一支键翻得动它（票 21 第 8 条）。无主段落的其余部分一个字节不动。
+    for (index, painted) in records.iter().enumerate() {
+        let Painted::SectionHeader(header) = painted else {
+            continue;
+        };
+        if header.kind != SectionKind::Preamble {
+            continue;
+        }
+        let end = next_header_after(records, index, false);
+        let injections: Vec<usize> = (index + 1..end)
+            .filter(|other| {
+                matches!(
+                    records[*other],
+                    Painted::Block {
+                        block: Block::ContextInjected { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        // **一条注入不折**：它本来就一行，而那一行点得开（票 19 起注入行就有详情）——
+        // 收起来只会把那个入口换成另一个入口，什么也不省。折的是「一串」。
+        if injections.len() < 2 {
+            continue;
+        }
+        let first = injections[0];
+        plan[index] = Planned::Fold(FoldLine::Preamble {
+            id: header.id,
+            at: header.at,
+            injections: header.injections,
+            first: records[first].id(),
+        });
+        for other in injections {
+            plan[other] = Planned::Skip;
+        }
+    }
+    plan
 }
 
 /// 一段正文按 `width` 折行，并标出哪些是折出来的**续行**。
@@ -13661,6 +14307,246 @@ mod tests {
             payload,
         ))
     }
+
+    // --- 折叠三档（票 21） ---------------------------------------------------
+    //
+    // 「哪几块被折、折成什么字」是纯函数层的事（票 21 的「测试决定」），所以这一组直接读
+    // `fold_scopes` / `ledger_plan`；屏上的形状交给 `tests/render_layout.rs`。
+
+    /// 一段答复。
+    fn an_answer(seq: u64, text: &str) -> RenderEvent {
+        logged(
+            seq,
+            EventPayload::MessageCompleted {
+                role: Role::Assistant,
+                text: text.to_owned(),
+                reasoning: None,
+                first_token_ms: None,
+            },
+        )
+    }
+
+    /// 一次跑完的调用。
+    fn a_call(seq: u64, id: &str, tool: &str) -> Vec<RenderEvent> {
+        vec![
+            logged(
+                seq,
+                EventPayload::ToolCallStarted {
+                    tool_call_id: ToolCallId::new(id),
+                    tool_name: tool.to_owned(),
+                    args: serde_json::json!({"command": tool}),
+                },
+            ),
+            logged(
+                seq + 1,
+                EventPayload::ToolCallCompleted {
+                    tool_call_id: ToolCallId::new(id),
+                    ok: true,
+                    output: Some("body".to_owned()),
+                    error: None,
+                    duration_ms: 3,
+                },
+            ),
+        ]
+    }
+
+    /// 一个回合、两次迭代，第二次迭代里**连着三次**调用 —— 三档折叠每一档都有东西可折。
+    fn a_ledger_with_a_run_of_calls() -> TuiState {
+        let mut state = state();
+        let kimi = crate::events::SpeakerId::Debater("kimi".into());
+        state.apply(logged(
+            1,
+            EventPayload::TurnStarted {
+                agent: kimi.clone(),
+                iteration: 1,
+            },
+        ));
+        state.apply(an_answer(2, "先看一眼。"));
+        state.apply(logged(
+            3,
+            EventPayload::TurnStarted {
+                agent: kimi,
+                iteration: 2,
+            },
+        ));
+        state.apply(an_answer(4, "接着跑。"));
+        for (offset, (tool, name)) in [("bash", "c-a"), ("read", "c-b"), ("bash", "c-c")]
+            .into_iter()
+            .enumerate()
+        {
+            for event in a_call(10 + offset as u64 * 2, name, tool) {
+                state.apply(event);
+            }
+        }
+        state
+    }
+
+    /// 同一个账本，而三次调用之间**夹着一条消息** —— 那两段不相邻，于是不该并成一行。
+    fn a_ledger_with_a_gap_between_calls() -> TuiState {
+        let mut state = state();
+        let kimi = crate::events::SpeakerId::Debater("kimi".into());
+        state.apply(logged(
+            1,
+            EventPayload::TurnStarted {
+                agent: kimi,
+                iteration: 1,
+            },
+        ));
+        let mut seq = 2;
+        for (offset, tool) in ["bash", "read", "bash"].into_iter().enumerate() {
+            for event in a_call(seq, &format!("c-{offset}"), tool) {
+                state.apply(event);
+            }
+            seq += 2;
+            state.apply(an_answer(seq, "再看一眼。"));
+            seq += 1;
+        }
+        state
+    }
+
+    fn folded_ids(ids: &[BlockId]) -> std::collections::HashSet<BlockId> {
+        ids.iter().copied().collect()
+    }
+
+    /// 一个单位折成**一行摘要**：它下面的成员一条都不占行（票 21 第 1 条）。
+    #[test]
+    fn the_plan_folds_a_whole_unit_into_one_summary_line() {
+        let state = a_ledger_with_a_run_of_calls();
+        let unit = state
+            .painted
+            .iter()
+            .find_map(|painted| match painted {
+                Painted::GroupHeader(header) if header.level == HeaderLevel::Unit => {
+                    Some(header.id)
+                }
+                _ => None,
+            })
+            .expect("有一个一级组头");
+        let plan = ledger_plan(&state.painted, &folded_ids(&[unit]), false);
+
+        match &plan[0] {
+            Planned::Fold(FoldLine::Unit {
+                ordinal,
+                steps,
+                calls,
+                ..
+            }) => assert_eq!(
+                (*ordinal, *steps, *calls),
+                (1, 7, 3),
+                "回合 1：这一段里有七条成员记录，其中三次调用；二级头是标题、\n\
+                 不是一步，所以它不算进去"
+            ),
+            other => panic!("第一条该是这个单位的一级折行：{other:?}"),
+        }
+        assert!(
+            plan[1..].iter().all(|slot| *slot == Planned::Skip),
+            "整组只剩那一行：{:?}",
+            &plan[1..]
+        );
+    }
+
+    /// 一次迭代折成一行；**同一迭代下相邻的三次调用**折成 `3 个工具调用 · bash, read`
+    /// —— 三次调用只报两个名字，同名的不重复（票 21 第 1、2 条）。
+    #[test]
+    fn adjacent_calls_fold_into_one_line_and_report_each_tool_once() {
+        let state = a_ledger_with_a_run_of_calls();
+        let runs: Vec<FoldLine> = fold_scopes(&state.painted)
+            .into_iter()
+            .filter_map(|(_, line)| matches!(line, FoldLine::Run { .. }).then_some(line))
+            .collect();
+        assert_eq!(runs.len(), 1, "只该有一段相邻的调用");
+        match &runs[0] {
+            FoldLine::Run { calls, names, .. } => {
+                assert_eq!(*calls, 3);
+                assert_eq!(names, &["bash", "read"], "同名只报一次，按首次出现的次序");
+            }
+            other => panic!("这不是那一段调用：{other:?}"),
+        }
+
+        // 夹着一条消息就是**不相邻**：并成一行会把两段思考混成一段（票 21 第 1 条）。
+        let gapped = a_ledger_with_a_gap_between_calls();
+        assert!(
+            fold_scopes(&gapped.painted)
+                .iter()
+                .all(|(_, line)| !matches!(line, FoldLine::Run { .. })),
+            "被消息隔开的调用不成一段"
+        );
+    }
+
+    /// 过滤期间**一律画开**：命中块必须看得出来，而折叠集合一个字节都不动
+    /// （票 21 第 10 条）—— 这是「退出过滤之后用户那份折叠态原样回来」的那一半。
+    #[test]
+    fn nothing_stays_folded_while_a_filter_is_on() {
+        let state = a_ledger_with_a_run_of_calls();
+        let everything: Vec<BlockId> = fold_scopes(&state.painted)
+            .into_iter()
+            .map(|(_, line)| line.id())
+            .collect();
+        assert!(!everything.is_empty(), "这份账本上有可折的东西");
+        let folded = folded_ids(&everything);
+        assert!(
+            ledger_plan(&state.painted, &folded, false)
+                .iter()
+                .any(|slot| !matches!(slot, Planned::Record)),
+            "没筛的时候它折着"
+        );
+        assert!(
+            ledger_plan(&state.painted, &folded, true)
+                .iter()
+                .all(|slot| *slot == Planned::Record),
+            "筛着的时候一条折行都没有"
+        );
+    }
+
+    /// 折行挂得上详情链接：连续工具调用那一档挂段首那一次调用的详情（票 21 第 3 条）。
+    #[test]
+    fn a_folded_run_still_carries_the_link_of_its_first_call() {
+        let mut state = a_ledger_with_a_run_of_calls();
+        let run = fold_scopes(&state.painted)
+            .into_iter()
+            .find_map(|(_, line)| matches!(line, FoldLine::Run { .. }).then_some(line))
+            .expect("这一段三次调用是一个可折的段");
+        // 重放那一刻 `painted` 是**取出来**递给这一层的（`mem::take`），所以链接也从那一份
+        // 找 —— 这条测试与那条路径共用同一个入参。
+        let records = std::mem::take(&mut state.painted);
+        assert!(
+            state.fold_line_link(&run, &records).is_some(),
+            "折行得能点开：它是那一段的第一条源行"
+        );
+    }
+
+    /// 无主段落里的**开场**是个例外：那一串注入收成一行 —— 而它**不是可展开的一组**
+    /// （票 21 第 8 条）。
+    #[test]
+    fn the_preamble_folds_its_injections_into_one_line() {
+        let mut state = state();
+        for (seq, content) in [(1, "第一条注入"), (2, "第二条注入")] {
+            state.apply(logged(
+                seq,
+                EventPayload::ContextInjected {
+                    source: ContextSource::AgentsMd,
+                    content: content.to_owned(),
+                },
+            ));
+        }
+        let plan = ledger_plan(&state.painted, &folded_ids(&[]), false);
+        match &plan[0] {
+            Planned::Fold(line @ FoldLine::Preamble { injections, .. }) => {
+                assert_eq!(*injections, 2);
+                assert!(
+                    !line.is_toggleable(),
+                    "开场那一行翻不动 —— 它不是一个可展开的组"
+                );
+            }
+            other => panic!("开场该收成一行：{other:?}"),
+        }
+        assert!(
+            plan[1..].iter().all(|slot| *slot == Planned::Skip),
+            "注入不各自占行：{:?}",
+            &plan[1..]
+        );
+    }
+
     /// 两级分组：回合一级、迭代二级，而**成员不缩进** —— 工具行保住它的内容宽度
     /// （`.scratch/trace-ledger/spec.md` §5）。
     #[test]

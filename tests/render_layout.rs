@@ -12085,8 +12085,10 @@ fn clicking_a_blank_spot_in_the_ledger_clears_the_selection() {
     state.key(Key::Down);
     assert_eq!(selected_rows_text(&mut state, 120, 40).len(), 1);
 
-    // 组头那一行：它点不开任何东西，所以这一下就是「点空白」。
-    click_text(&mut state, 120, 40, &wording::header_unit(1, false));
+    // 一条通知行：它既没有详情入口、也不是折叠把手，所以这一下就是「点空白」
+    // （票 21 之后组头那一行不再是空白 —— 它成了折 / 展的把手）。
+    state.apply(RenderEvent::notice("命令回执".to_owned()));
+    click_text(&mut state, 120, 40, "命令回执");
     assert!(
         selected_rows_text(&mut state, 120, 40).is_empty(),
         "点空白清掉选中"
@@ -12094,7 +12096,7 @@ fn clicking_a_blank_spot_in_the_ledger_clears_the_selection() {
 
     // 交还之后点它一样拿回键盘。
     state.key(Key::Esc);
-    click_text(&mut state, 120, 40, &wording::header_unit(1, false));
+    click_text(&mut state, 120, 40, "命令回执");
     state.key(Key::Down);
     assert_eq!(
         selected_rows_text(&mut state, 120, 40).len(),
@@ -12943,5 +12945,353 @@ fn leaving_the_filter_puts_the_viewport_back() {
         trace_page(&mut state, 120, 24).join("\n").contains("续篇"),
         "`G` 回到底部就看得到它：{:#?}",
         trace_page(&mut state, 120, 24)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 折叠：三档、折行就是那一行、全折全展（票 21）
+//
+// 判据是**屏上出现了什么**：折起来的块占一行、展开的成员一条不占行、`▸` 只在折行上，
+// 而全展还回来的是读者自己那份折叠态
+// （`.scratch/trace-ledger/spec.md` §8、票 21）。
+// ---------------------------------------------------------------------------
+
+/// 一个回合、两次迭代；第二次迭代里**连着三次**调用 —— 三档折叠每一档都有东西可折。
+///
+/// 这个回合**没有收尾**（没有 `TurnEnded`）：正在跑的那个回合也要折得起来（票 21 第 6 条）。
+fn a_turn_with_a_run_of_calls(state: &mut TuiState) {
+    state.apply(user_message(1, "把这三件事都跑一遍"));
+    state.apply(turn_started(2));
+    state.apply(message(3, "先看一眼。", None));
+    state.apply(turn_started_at(4, 2));
+    state.apply(message(5, "接着跑。", None));
+    for (offset, (tool, id)) in [("bash", "c-a"), ("read", "c-b"), ("bash", "c-c")]
+        .into_iter()
+        .enumerate()
+    {
+        let seq = 6 + offset as u64 * 2;
+        state.apply(tool_started(
+            seq,
+            id,
+            tool,
+            serde_json::json!({"command": tool}),
+        ));
+        state.apply(tool_completed(seq + 1, id, true, Some("body"), None));
+    }
+}
+
+/// 选中一个回合的一级组头按 `Space`：整组折成一行摘要，成员一条都不占行
+/// （票 21 第 1、2 条）。
+#[test]
+fn folding_a_unit_leaves_one_summary_line() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(
+        walk_down_to(&mut state, 120, 40, "回合 1"),
+        "选中落到那个一级组头上"
+    );
+    state.key(Key::Char(' '));
+
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        page.contains("回合 1 · 7 个步骤 · 3 个工具调用"),
+        "折行沿用组头的格式：{page}"
+    );
+    assert!(
+        page.contains(&format!("┄ {}", wording::FOLDABLE)),
+        "`▸` 跟着那条虚线：{page}"
+    );
+    assert!(!page.contains("先看一眼"), "成员一条都不占行：{page}");
+    assert!(!page.contains("接着跑"), "{page}");
+    assert!(!page.contains("调用 bash"), "{page}");
+    assert!(
+        !page.contains("第 2 次迭代"),
+        "二级头也收在那一行里：{page}"
+    );
+}
+
+/// 一次迭代折成一行；同一迭代下**相邻**的三次调用折成 `3 个工具调用 · bash, read`
+/// （票 21 第 1、2 条）。
+#[test]
+fn an_iteration_and_a_run_of_calls_each_fold_into_one_line() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    assert!(walk_down_to(&mut state, 120, 40, "第 2 次迭代"));
+    state.key(Key::Char(' '));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("第 2 次迭代 · 3 个工具调用"), "{page}");
+    assert!(!page.contains("调用 bash"), "那一组收起来了：{page}");
+    assert!(page.contains("先看一眼"), "别的迭代照旧：{page}");
+
+    // 展开它，再去折那一段调用：是三次调用、两个名字。
+    state.key(Key::Char(' '));
+    assert!(walk_down_to(&mut state, 120, 40, "调用 bash"));
+    state.key(Key::Char(' '));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("3 个工具调用 · bash, read"), "{page}");
+    assert!(!page.contains("调用 read"), "那几次调用收成一行：{page}");
+}
+
+/// 折行**就是那一行**：它可选中、`Enter` 开它的详情、`Space` 再展开（票 21 第 3 条）。
+#[test]
+fn a_fold_line_can_be_selected_opened_and_unfolded() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "调用 bash"));
+    state.key(Key::Char(' '));
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("3 个工具调用 · bash, read"),
+        "先折起来"
+    );
+    // 折行占一条源行，而选中仍落在它上面（它代表段首那一次调用）。
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        1,
+        "折行那一行整行亮着"
+    );
+
+    // `Enter` 开它的详情 —— 与段首那次调用自己那一行是同一份详情。
+    state.key(Key::Enter);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains(wording::detail_args_section()),
+        "详情覆盖层立着，落在参数那一面上：{text}"
+    );
+    state.key(Key::Esc);
+
+    // `Space` 展开：那几次调用各回各的行。
+    state.key(Key::Char(' '));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        page.contains("调用 bash") && page.contains("调用 read"),
+        "{page}"
+    );
+    assert!(!page.contains("3 个工具调用"), "{page}");
+}
+
+/// 点组头那一行 / 点一行折行 = 折 / 展；**两次相邻的单击就是两次点击**（没有双击识别）
+/// （票 21 第 5 条）。
+#[test]
+fn clicking_a_header_or_a_fold_line_toggles_it() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    click_row(&mut state, 120, 40, "回合 1");
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("回合 1 · 7 个步骤"),
+        "点组头折起来"
+    );
+    // 再点同一处：那是**第二次单击**，于是它照旧是一次点击 —— 折回去。
+    click_row(&mut state, 120, 40, "回合 1");
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("先看一眼"), "第二次单击又展开：{page}");
+    assert!(!page.contains("个步骤"), "它不是一个双击：{page}");
+}
+
+/// `{` 全折到只剩各级组头与折行（**正在跑的那个回合也折**）；`}` 回到全折前那份折叠态
+/// —— 读者自己折过的东西还在（票 21 第 6 条）。
+#[test]
+fn folding_everything_leaves_headers_only_and_gives_the_readers_folds_back() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    // 读者自己先折一次迭代 —— 它是「全折之前那份折叠态」里的一样东西。
+    assert!(walk_down_to(&mut state, 120, 40, "第 2 次迭代"));
+    state.key(Key::Char(' '));
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("第 2 次迭代 · 3 个工具调用")
+    );
+
+    state.key(Key::Char('{'));
+    let all = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        all.contains("回合 1 · 7 个步骤 · 3 个工具调用"),
+        "一支没跑完的回合也折了：{all}"
+    );
+    assert!(
+        !all.contains("先看一眼") && !all.contains("调用 bash"),
+        "只剩组头与折行：{all}"
+    );
+    assert!(!all.contains("第 2 次迭代"), "迭代收在它那一组里：{all}");
+
+    state.key(Key::Char('}'));
+    let back = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        back.contains("第 2 次迭代 · 3 个工具调用"),
+        "读者自己折的那一次还在：{back}"
+    );
+    assert!(
+        !back.contains("回合 1 · 7 个步骤"),
+        "而全折不是读者折的 —— 它被撤掉了：{back}"
+    );
+    assert!(back.contains("先看一眼"), "{back}");
+}
+
+/// 无主段落不折；开场那一串注入折成**一行**、而且它不可展开（票 21 第 8 条）。
+#[test]
+fn the_preamble_collapses_to_one_line_and_stays_that_way() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(injected(1, "第一条注入的正文"));
+    state.apply(injected(2, "第二条注入的正文"));
+    state.apply(RenderEvent::notice("命令回执".to_owned()));
+    open_trace_tab(&mut state, 120, 40);
+
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        page.contains("开场 · 2 条注入 · …"),
+        "一串注入收成一行：{page}"
+    );
+    assert_eq!(
+        page.matches("上下文注入").count(),
+        0,
+        "注入不各自占行：{page}"
+    );
+    assert!(page.contains("命令回执"), "同一段里别的块照旧：{page}");
+
+    // 选到它（`g` = 账本第一条块，而它就是那一条）按 `Space`：它不是可展开的一组
+    // （`▸` 只许诺详情，不许诺摊开）。
+    state.key(Key::Char('g'));
+    assert!(
+        selected_rows_text(&mut state, 120, 40)
+            .iter()
+            .any(|row| row.contains("开场")),
+        "选中落在那一行上：{:?}",
+        selected_rows_text(&mut state, 120, 40)
+    );
+    state.key(Key::Char(' '));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert_eq!(
+        page.matches("上下文注入").count(),
+        0,
+        "按了也不摊开：{page}"
+    );
+}
+
+/// 过滤期间命中块被强制画开，而退出过滤之后**读者自己那份折叠态原样恢复**
+/// （票 21 第 10 条）。
+#[test]
+fn a_filter_opens_the_hits_and_leaves_the_readers_folds_alone() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
+    state.key(Key::Char(' '));
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("回合 1 · 7 个步骤")
+    );
+
+    // 命中块落在折起来的那一组里：它必须画开，否则读者按 `n` 也看不见它。
+    search_for(&mut state, "command");
+    let filtered = trace_page(&mut state, 120, 40).join("\n");
+    assert!(filtered.contains("调用 bash"), "命中块画开了：{filtered}");
+    assert!(
+        !filtered.contains("个步骤"),
+        "过滤期间一条折行都没有：{filtered}"
+    );
+
+    // 退出过滤（此时不在搜索模式，`Esc` 的第一层就是清过滤）：折回去的仍是原来那一块。
+    state.key(Key::Esc);
+    let back = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        back.contains("回合 1 · 7 个步骤"),
+        "读者那份折叠态复原：{back}"
+    );
+    assert!(!back.contains("调用 bash"), "{back}");
+}
+
+/// 折叠集合按**块身份**存：改宽度触发那次重放之后它原样还在（票 21 第 9 条）。
+#[test]
+fn a_width_change_keeps_what_the_reader_folded() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
+    state.key(Key::Char(' '));
+
+    for width in [100, 140] {
+        let page = trace_page(&mut state, width, 40).join("\n");
+        assert!(
+            page.contains("回合 1 · 7 个步骤 · 3 个工具调用"),
+            "{width} 列下它照旧折着：{page}"
+        );
+        assert!(!page.contains("先看一眼"), "{page}");
+    }
+}
+
+/// 折起来的成员不占源行，而两个括号键的落点不该落空：从折行的组头按 `]` 要先摊开再落点
+/// （票 19 留在 `land_on_record` 里的那个口子、票 21 接上）。
+#[test]
+fn the_brackets_unfold_what_they_have_to_land_on() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
+    state.key(Key::Char(' '));
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("回合 1 · 7 个步骤"),
+        "先折起来"
+    );
+
+    state.key(Key::Char(']'));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("先看一眼"), "落点那一行摊开了：{page}");
+    assert!(!page.contains("个步骤"), "组也开了：{page}");
+    assert!(
+        selected_rows_text(&mut state, 120, 40)
+            .iter()
+            .any(|row| row.contains("回合开始（第 1 次迭代）")),
+        "选中落在组内第一条成员上：{:?}",
+        selected_rows_text(&mut state, 120, 40)
+    );
+}
+
+/// 一个**正在跑**的回合折起来之后，新到的东西不从折行底下漏出来 —— 那是票面第 6 条
+/// 「正在跑的那个回合也折」的另一面（票 21）。
+#[test]
+fn a_folded_turn_keeps_what_arrives_out_of_the_ledger() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
+    state.key(Key::Char(' '));
+
+    // 新块到达：它进了账本，但折行底下不冒出第二行 —— 折行自己长大一格。
+    state.apply(message(20, "新来的一句。", None));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("回合 1 · 8 个步骤"), "折行跟着长：{page}");
+    assert!(
+        !page.contains("新来的一句"),
+        "它没有从折行底下漏出来：{page}"
+    );
+
+    // 还在流的思考行同理：增量那一趟不触发重放，所以它自己问一句。
+    state.apply(reasoning_delta("正在想一件事。"));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(!page.contains("正在思考"), "{page}");
+    assert!(!page.contains("正在想一件事"), "{page}");
+
+    // 展开之后它还在 —— 收起来不是丢掉。
+    state.key(Key::Char(' '));
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("新来的一句"), "{page}");
+    assert!(
+        page.contains("正在思考"),
+        "那条还在流的思考行回来了：{page}"
     );
 }
