@@ -12304,3 +12304,165 @@ fn g_and_shift_g_are_the_two_ends_of_the_ledger() {
         "`G` 恢复了跟随，所以新块把视口带下去：{page:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 层级跳转：两个括号键（票 19）
+//
+// `[` 到所属组头（**最近的那一级**）、`]` 到该组的第一条成员行；跳转改变选中、视口跟着
+// 选中走，到头就到头，无主段落里两个键都不动（`.scratch/trace-ledger/spec.md` §9）。
+// ---------------------------------------------------------------------------
+
+/// 一本有两级分组、两次迭代、收尾之后还留着一段无主段落的账 —— 两个括号键要看的正是这些
+/// 边界。
+fn a_two_level_ledger(state: &mut TuiState) {
+    state.apply(user_message(1, "第一步的问题"));
+    state.apply(turn_started(2));
+    state.apply(tool_started(
+        3,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(4, "call-1", true, Some("out"), None));
+    state.apply(turn_started_at(5, 2));
+    state.apply(tool_started(
+        6,
+        "call-2",
+        "read_file",
+        serde_json::json!({"path": "x.rs"}),
+    ));
+    state.apply(tool_completed(7, "call-2", true, Some("out"), None));
+    state.apply(turn_ended(8));
+    state.apply(RenderEvent::notice("回合收尾之后的一句".to_owned()));
+}
+
+/// `[` 落到**最近的那一级**组头、`]` 进那一组的第一条成员（票 19 第 1、2 条、验收第 1–3 条）。
+#[test]
+fn the_brackets_climb_to_the_header_and_drop_into_its_members() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_two_level_ledger(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    // 第二次迭代里那条工具行按 `[`：落到它那一次迭代的**二级头**，不是一级头。
+    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
+    state.key(Key::Char('['));
+    let rows = selected_rows_text(&mut state, 120, 40);
+    assert_eq!(rows.len(), 1, "组头占一行：{rows:#?}");
+    assert!(
+        rows[0].contains(&wording::header_iteration(2)),
+        "落到最近的那一级（二级头）：{rows:#?}"
+    );
+    assert!(
+        !rows[0].contains(&wording::header_unit(1, false)),
+        "不是一级头：{rows:#?}"
+    );
+
+    // `]`：进那一组的第一条成员 —— 二级头下面那一条。
+    state.key(Key::Char(']'));
+    let rows = selected_rows_text(&mut state, 120, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(&wording::turn_started(2))),
+        "`]` 进第一条成员：{rows:#?}"
+    );
+
+    // 从一级组头按 `]` 也是同一处进法：跳过二级头，落到它自己的第一条成员。
+    state.key(Key::Char('g'));
+    assert!(
+        walk_down_to(&mut state, 120, 40, "回合 1"),
+        "先落到一级组头"
+    );
+    state.key(Key::Char(']'));
+    let rows = selected_rows_text(&mut state, 120, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(&wording::turn_started(1))),
+        "一级组头按 `]` 跳过二级头进第一条成员：{rows:#?}"
+    );
+
+    // 第一次迭代那一段没有二级头，所以那里的成员按 `[` 落到一级头。
+    assert!(walk_down_to(&mut state, 120, 40, "调用 bash"));
+    state.key(Key::Char('['));
+    let rows = selected_rows_text(&mut state, 120, 40);
+    assert!(
+        rows[0].contains(&wording::header_unit(1, false)),
+        "最近的那一级就是一级头：{rows:#?}"
+    );
+}
+
+/// 跳转**把视口带走**（票 19 第 3 条）：目标本来在视口之外时也要看见 —— 这条与「滚出视口
+/// 不拉回来」是同一件事的镜像。
+#[test]
+fn a_jump_brings_the_viewport_along() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    for index in 0..40u64 {
+        let id = format!("call-{index}");
+        state.apply(tool_started(
+            2 + index * 2,
+            &id,
+            "bash",
+            serde_json::json!({"command": "ls"}),
+        ));
+        state.apply(tool_completed(3 + index * 2, &id, true, Some("out"), None));
+    }
+    open_trace_tab(&mut state, 120, 24);
+
+    // 视口与选中都在账本末尾：那一个一级组头早已滚出屏幕。
+    state.key(Key::Char('G'));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        !page
+            .iter()
+            .any(|row| row.contains(&wording::header_unit(1, false))),
+        "组头本来在视口之外：{page:#?}"
+    );
+
+    state.key(Key::Char('['));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter()
+            .any(|row| row.contains(&wording::header_unit(1, false))),
+        "跳过去就该看见：{page:#?}"
+    );
+    let rows = selected_rows_text(&mut state, 120, 24);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains(&wording::header_unit(1, false))),
+        "选中与视口一起到了那里：{rows:#?}"
+    );
+}
+
+/// 无主段落里两个键都不动：收尾之后那一段的行**不编一个所属组**，也不进任何组
+/// （票 19 第 6 条）。
+#[test]
+fn an_unowned_row_answers_neither_bracket() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(3, "call-1", true, Some("out"), None));
+    state.apply(turn_ended(4));
+    state.apply(RenderEvent::notice("收尾之后的一句".to_owned()));
+    open_trace_tab(&mut state, 120, 40);
+
+    assert!(walk_down_to(&mut state, 120, 40, "收尾之后的一句"));
+    let before = selected_rows_text(&mut state, 120, 40);
+    assert_eq!(before.len(), 1, "{before:#?}");
+    state.key(Key::Char('['));
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        before,
+        "不编一个所属组"
+    );
+    state.key(Key::Char(']'));
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        before,
+        "也不进任何组"
+    );
+}

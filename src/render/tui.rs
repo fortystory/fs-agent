@@ -4245,6 +4245,10 @@ impl TuiState {
             Key::Char('g') => self.select_first_block(),
             // 最新那一条**并恢复跟随**：`g` 的一端是账本的头，这一端是它的尾（票 10 §12）。
             Key::Char('G') => self.select_last_block(),
+            // 层级跳转（票 19）：`[` 往上到所属组头、`]` 往下进该组的第一条成员。方向键里
+            // 没有第三个方向可用（`←` / `→` 在左栏两页已被占用），所以是两个成对的括号键。
+            Key::Char('[') => self.jump_to_group_header(),
+            Key::Char(']') => self.jump_to_first_member(),
             Key::Esc => self.trace_escape(),
             _ => return false,
         }
@@ -4353,6 +4357,60 @@ impl TuiState {
             self.trace_selection = self.block_at_source(row);
             self.trace.to_bottom();
         }
+    }
+
+    /// `[`：跳到**所属的那一级组头**（票 19）—— 一条工具行落到它那一次迭代的二级头，
+    /// 回合里第一次迭代（没有二级头）落到一级头。
+    ///
+    /// 归属缺失时什么都不做：无主段落（开场 / 压缩 / 新会话段）里的行**不编一个所属组**。
+    /// 组头上按它也是空操作 —— 它自己就是「最近的那一级组头」。
+    fn jump_to_group_header(&mut self) {
+        let Some((shape, header)) = self.group_at_cursor() else {
+            return;
+        };
+        let id = shape.records[header].id;
+        self.land_on_record(id);
+    }
+
+    /// `]`：进**它所属那一组的第一条成员行**（票 19）。
+    ///
+    /// 在组头上按它是同一处，于是从一级组头一路按下去能走到成员；一级组里的二级头不算它的
+    /// 成员，遇到它继续往里找。归属缺失（无主段落）时什么都不做。
+    fn jump_to_first_member(&mut self) {
+        let Some((shape, header)) = self.group_at_cursor() else {
+            return;
+        };
+        let Some(member) = shape.first_member_of(header) else {
+            return;
+        };
+        let id = shape.records[member].id;
+        self.land_on_record(id);
+    }
+
+    /// 光标**落在哪一组**：选中那一块（还没有选中时用 [`Self::selection_anchor`] 给的那个
+    /// 起点）背后那一条记录，以及它归属的组头在记录序里的下标。
+    ///
+    /// 这是两个括号键共用的前半段，于是「归属缺失时什么都不做」只写在一处。
+    fn group_at_cursor(&self) -> Option<(GroupShape, usize)> {
+        let row = self.selection_anchor()?;
+        let id = self.block_at_source(row)?;
+        let at = self.painted.iter().position(|painted| painted.id() == id)?;
+        let shape = self.group_shape();
+        let header = shape.records.get(at)?.owner?;
+        Some((shape, header))
+    }
+
+    /// 把选中落到那一条记录的第一条源行上，并把**视口跟过去**（票 19 第 3 条）——
+    /// 跳转与 `↑` / `↓` 同一条纪律：用户主动跳过去就该看见。
+    ///
+    /// 那一条记录**换不出源行**时（被 `CAP` 裁掉了，或将来被折叠收起）什么都不做：位置都
+    /// 报不出来就没法把读者带过去，硬改选中只会在屏上留下一个看不见的落点。
+    fn land_on_record(&mut self, id: BlockId) {
+        let Some(row) = self.first_source_of(id) else {
+            return;
+        };
+        self.trace_selection = Some(id);
+        self.trace.reveal_source(row);
     }
 
     /// `Enter`：开选中那一块的详情。
@@ -4963,6 +5021,45 @@ impl TuiState {
     /// 而那是后面几轮账本与检索的接缝（`.scratch/trace-ledger/spec.md` §2）。
     pub fn first_source_of(&self, id: BlockId) -> Option<usize> {
         self.trace_block_ids.iter().position(|it| *it == Some(id))
+    }
+
+    /// 账本此刻的分组形状：谁属于哪个组头（票 19）。
+    ///
+    /// 走的是**记录序**（[`Self::painted`]）而不是「此刻画出来的行序」：折叠（票 21）决定的是
+    /// 账本上留下几行、留下哪一行，而「谁属于谁」不由它决定 —— 折行占一个源行、代表整个单位。
+    /// 判据写在这一层，两级分组折起来之后照样能当大纲用。
+    ///
+    /// 它也**不是常驻状态**：一次按键当场算一遍（记录的类型与顺序都是现成的），于是不必再
+    /// 维护第二份与窗格、与那次裁剪同步的账。
+    fn group_shape(&self) -> GroupShape {
+        let discussion = self.discussion();
+        let mut shape = GroupShape {
+            records: Vec::with_capacity(self.painted.len()),
+        };
+        let mut current: Option<usize> = None;
+        for (index, painted) in self.painted.iter().enumerate() {
+            // 这条记录**自己**的归属，以及它之后那一条记录的归属。
+            let (level, own, next) = match painted {
+                // 组头：它自己就是「最近的那一级组头」—— 于是 `[` 在组头那一行上是空操作。
+                Painted::GroupHeader(header) => (Some(header.level), Some(index), Some(index)),
+                // 无主段落（开场 / 压缩 / 新会话段）：它自己与它之后那些记录都没有主，
+                // 直到下一个组头。
+                Painted::SectionHeader(_) => (None, None, None),
+                // 收尾事件：**它自己**还属于本组，它后面的记录就不属于了 —— 诊断、通知、
+                // 新会话段都落在这一段里。
+                Painted::Block { block, .. } if is_boundary(block, discussion) => {
+                    (None, current, None)
+                }
+                _ => (None, current, current),
+            };
+            shape.records.push(ShapedRecord {
+                id: painted.id(),
+                owner: own,
+                level,
+            });
+            current = next;
+        }
+        shape
     }
 
     /// 记下账本上这一条**锚**：能当来源面那一环的记录，以及它在账本上的行号（票 14）。
@@ -10664,6 +10761,52 @@ struct OpenGroup {
     header: BlockId,
 }
 
+/// 账本的**分组形状**：每一行背后那条记录属于谁、它自己是不是组头（票 19）。
+///
+/// 与 [`TraceGroups`] 的分工：那个是**推块那一刻**的进度（正在开着的是哪两组，给组头就地
+/// 改写用），这一份是**问的时候**从记录序推出来的结构（给两个括号键用）。两者都由同一份
+/// 记录序决定，所以不会漂开。
+///
+/// 一次按键算一遍、算完就丢：它要回答的两个问题（「这一行属于谁」「这一组的第一条成员是
+/// 谁」）都是当场可读的，而常驻下来就得跟 `CAP` 的裁剪、跟宽度重放各同步一次。
+#[derive(Debug)]
+struct GroupShape {
+    /// 与 `painted` 等长、同序。
+    records: Vec<ShapedRecord>,
+}
+
+/// `painted` 里一条记录在这张图上的那一格。
+#[derive(Debug)]
+struct ShapedRecord {
+    /// 这条记录的身份：落点要它（行号从身份查出来）。
+    id: BlockId,
+    /// 它归属的组头在 `records` 里的下标；`None` 是「这一段没有主」。
+    owner: Option<usize>,
+    /// 它是组头的话是哪一级 —— 组头自己就是「最近的那一级组头」。
+    level: Option<HeaderLevel>,
+}
+
+impl GroupShape {
+    /// 这一组的**第一条成员**记录。
+    ///
+    /// 一级组里的二级头**不算**它的成员：遇到它继续往后找，于是「从一级组头一路按 `]` 能走
+    /// 到成员」。反过来，二级组遇到下一个组头（无论哪一级）就到此为止 —— 那已经出了这一组。
+    /// 无主段落也到此为止：它不属于任何组。
+    fn first_member_of(&self, header: usize) -> Option<usize> {
+        let level = self.records.get(header)?.level?;
+        for (index, record) in self.records.iter().enumerate().skip(header + 1) {
+            if let Some(here) = record.level {
+                if here == HeaderLevel::Unit || level == HeaderLevel::Iteration {
+                    return None;
+                }
+                continue;
+            }
+            return record.owner.map(|_| index);
+        }
+        None
+    }
+}
+
 impl TraceGroups {
     /// 这一批块里有没有**开一个新的一级组**（单位）。
     fn opens_unit(&self, block: &Block, discussion: bool) -> bool {
@@ -13570,5 +13713,273 @@ mod tests {
                 "{kind:?} 的那一面就是今天的正文"
             );
         }
+    }
+
+    // --- 层级跳转：两个括号键（票 19） ---------------------------------------
+
+    /// 往这个状态上推一次完整的工具调用（两条事件：开始与完成）。
+    fn a_tool_call(page: &mut TuiState, seq: u64, id: &str, tool: &str) {
+        page.apply(logged(
+            seq,
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new(id),
+                tool_name: tool.to_owned(),
+                args: serde_json::json!({"command": tool}),
+            },
+        ));
+        page.apply(logged(
+            seq + 1,
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new(id),
+                ok: true,
+                output: Some("out".to_owned()),
+                error: None,
+                duration_ms: 3,
+            },
+        ));
+    }
+
+    /// 一本有开场、两级分组、一个无主段落（收尾之后那条通知）的账 —— 两个括号键要看的正是
+    /// 这几处边界。
+    fn a_page_with_two_levels() -> TuiState {
+        let mut page = state();
+        page.main_tab = MainTab::Trace;
+        let kimi = crate::events::SpeakerId::Debater("kimi".into());
+        page.apply(RenderEvent::identity("你是衡（heng）"));
+        page.apply(logged(
+            1,
+            EventPayload::MessageCompleted {
+                role: Role::User,
+                text: "问题".to_owned(),
+                reasoning: None,
+                first_token_ms: None,
+            },
+        ));
+        page.apply(logged(
+            2,
+            EventPayload::TurnStarted {
+                agent: kimi.clone(),
+                iteration: 1,
+            },
+        ));
+        a_tool_call(&mut page, 3, "c-1", "ls");
+        page.apply(logged(
+            5,
+            EventPayload::TurnStarted {
+                agent: kimi.clone(),
+                iteration: 2,
+            },
+        ));
+        a_tool_call(&mut page, 6, "c-2", "read");
+        page.apply(logged(
+            8,
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+        ));
+        page.apply(RenderEvent::notice("回合收尾之后的一句"));
+        page
+    }
+
+    /// 第几个、哪一级的组头那条记录的身份。
+    fn header_of(page: &TuiState, level: HeaderLevel, ordinal: u32) -> BlockId {
+        page.painted
+            .iter()
+            .find_map(|painted| match painted {
+                Painted::GroupHeader(header)
+                    if header.level == level && header.ordinal == ordinal =>
+                {
+                    Some(header.id)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{level:?} {ordinal} 那个组头在"))
+    }
+
+    /// 某个身份**紧跟着的下一条**记录的身份。
+    fn record_after(page: &TuiState, id: BlockId) -> BlockId {
+        let index = page
+            .painted
+            .iter()
+            .position(|painted| painted.id() == id)
+            .expect("那一条记录在");
+        page.painted
+            .get(index + 1)
+            .map(|painted| painted.id())
+            .expect("它后面还有一条")
+    }
+
+    /// 那一次工具调用那条记录的身份。
+    fn tool_block(page: &TuiState, tool: &str) -> BlockId {
+        page.painted
+            .iter()
+            .find_map(|painted| match painted {
+                Painted::Block {
+                    block: Block::Tool(tool_block),
+                    id,
+                    ..
+                } if tool_block.tool == tool => Some(*id),
+                _ => None,
+            })
+            .expect("那次调用在")
+    }
+
+    /// `[` 落到**最近的**那一级组头：第二次迭代里的工具行落到它的二级头，而第一次迭代
+    /// （那一段没有二级头）落到一级头（票 19 第 1、2 条）。
+    #[test]
+    fn a_row_climbs_to_the_nearest_header() {
+        let mut page = a_page_with_two_levels();
+        let unit = header_of(&page, HeaderLevel::Unit, 1);
+        let iteration = header_of(&page, HeaderLevel::Iteration, 2);
+        let first = tool_block(&page, "ls");
+        let second = tool_block(&page, "read");
+
+        page.trace_selection = Some(second);
+        page.key(Key::Char('['));
+        assert_eq!(
+            page.trace_selection,
+            Some(iteration),
+            "第二次迭代里那条落到二级头，不是一级头"
+        );
+
+        page.trace_selection = Some(first);
+        page.key(Key::Char('['));
+        assert_eq!(
+            page.trace_selection,
+            Some(unit),
+            "第一次迭代那一段没有二级头，所以落到一级头"
+        );
+
+        page.key(Key::Char('['));
+        assert_eq!(
+            page.trace_selection,
+            Some(unit),
+            "组头自己按 `[` 是空操作：它自己就是最近的那一级"
+        );
+
+        // 还有别的组头的时候也不乱跳：两个键都不动别的组。
+        assert_ne!(iteration, unit);
+    }
+
+    /// `]` 落到**它所属那一组的第一条成员**：从成员行按与从组头按是同一处，而从一级组头
+    /// 按下去会跳过二级头直接进成员（票 19 第 2 条）。
+    #[test]
+    fn a_header_drops_into_its_first_member() {
+        let mut page = a_page_with_two_levels();
+        let unit = header_of(&page, HeaderLevel::Unit, 1);
+        let iteration = header_of(&page, HeaderLevel::Iteration, 2);
+        let second = tool_block(&page, "read");
+
+        let member = record_after(&page, iteration);
+        page.trace_selection = Some(second);
+        page.key(Key::Char(']'));
+        assert_eq!(
+            page.trace_selection,
+            Some(member),
+            "成员行按 `]` 回到它那一组的第一条成员"
+        );
+
+        page.trace_selection = Some(iteration);
+        page.key(Key::Char(']'));
+        assert_eq!(
+            page.trace_selection,
+            Some(member),
+            "从组头按 `]` 也是同一处"
+        );
+
+        let first_member = record_after(&page, unit);
+        assert_ne!(first_member, iteration, "一级组里的二级头不是它的成员");
+        page.trace_selection = Some(unit);
+        page.key(Key::Char(']'));
+        assert_eq!(
+            page.trace_selection,
+            Some(first_member),
+            "一级组头按下去跳过二级头，直接进成员"
+        );
+    }
+
+    /// 无主段落里两个键都不动：开场段与收尾之后那一段的行**不编一个所属组**，在组的最前面
+    /// 与最后面也**不循环**（票 19 第 4、6 条）。
+    #[test]
+    fn an_unclaimed_stretch_answers_neither_bracket() {
+        let mut page = a_page_with_two_levels();
+        let preamble = page.painted.first().map(|painted| painted.id()).unwrap();
+        let notice = page.painted.last().map(|painted| painted.id()).unwrap();
+
+        for held in [preamble, notice] {
+            page.trace_selection = Some(held);
+            page.key(Key::Char('['));
+            assert_eq!(page.trace_selection, Some(held), "不编一个所属组");
+            page.key(Key::Char(']'));
+            assert_eq!(page.trace_selection, Some(held), "也不进任何组");
+            page.key(Key::Char('['));
+            assert_eq!(page.trace_selection, Some(held), "到头就到头，不绕到另一头");
+        }
+
+        // 已经在某组第一条成员上时，`]` 也停在原地。
+        let unit = header_of(&page, HeaderLevel::Unit, 1);
+        let member = record_after(&page, unit);
+        page.trace_selection = Some(member);
+        page.key(Key::Char(']'));
+        assert_eq!(page.trace_selection, Some(member), "已经在组首就不动");
+    }
+
+    /// 两个键只在轨迹页**持有键盘**时归它：交还之后 `[` / `]` 回到草稿 —— 与这一层里别的
+    /// 键同一条（它们此前是全局无绑定的，所以收编它们不改别处的意思，但要钉住这一条）。
+    #[test]
+    fn the_brackets_only_answer_while_the_trace_page_holds_the_keyboard() {
+        let mut page = a_page_with_two_levels();
+        page.release_trace_keyboard();
+        for key in [Key::Char('['), Key::Char(']')] {
+            page.key(key);
+        }
+        assert_eq!(page.editor.text(), "[]", "交还之后两个括号回到草稿");
+        assert_eq!(page.trace_selection, None, "也没有偷偷动选中");
+
+        page.take_trace_keyboard();
+        page.key(Key::Char('['));
+        assert_eq!(page.editor.text(), "[]", "持有的时候它们不回输入区");
+    }
+
+    /// `]` 在**组内最后一条成员**上回到组首 —— 不越出这一组、也不绕到账本另一头；而它已经
+    /// 在组首时才是空操作（票 19 第 4 条：到头就到头，不循环）。
+    #[test]
+    fn the_last_member_folds_back_to_the_first_one() {
+        let mut page = a_page_with_two_levels();
+        let unit = header_of(&page, HeaderLevel::Unit, 1);
+        let first_member = record_after(&page, unit);
+        let last_of_unit = tool_block(&page, "ls");
+
+        page.trace_selection = Some(last_of_unit);
+        page.key(Key::Char(']'));
+        assert_eq!(
+            page.trace_selection,
+            Some(first_member),
+            "回到本组第一条成员，不越到下一组去"
+        );
+        page.key(Key::Char(']'));
+        assert_eq!(page.trace_selection, Some(first_member), "已经在组首就停住");
+    }
+
+    /// 两个键的判据**不看此刻画出来什么**：视口在哪儿不参与，落点只由记录序决定
+    /// （票 19 第 5 条 —— 折叠落地时折行代表整个单位，靠的正是这一条）。
+    #[test]
+    fn the_brackets_ignore_where_the_viewport_is() {
+        let mut page = a_page_with_two_levels();
+        let iteration = header_of(&page, HeaderLevel::Iteration, 2);
+        let second = tool_block(&page, "read");
+        let member = record_after(&page, iteration);
+
+        page.trace_selection = Some(second);
+        page.trace.scroll_to_source(0);
+        page.key(Key::Char('['));
+        assert_eq!(page.trace_selection, Some(iteration), "视口在顶上时一样");
+
+        page.trace.to_bottom();
+        page.trace_selection = Some(second);
+        page.key(Key::Char('['));
+        assert_eq!(page.trace_selection, Some(iteration), "视口在底下时也一样");
+        page.key(Key::Char(']'));
+        assert_eq!(page.trace_selection, Some(member));
     }
 }
