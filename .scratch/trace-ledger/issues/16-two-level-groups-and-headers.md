@@ -125,3 +125,18 @@ Blocked by: 12
 - `Pane::replace_at` 现在有两个真实消费者（组头与小标题），票 16 之前它只有一个测试。
 - 二级头的耗时住在二级头上；**交互会话里它也定稿**（下一个迭代开始的那一刻、或者回合结束时）。
 - 层级跳转（票 19）要的「所属组头」现在有着落：一级组的 `BlockId` 就是那个把手。
+
+## 评论
+
+**2026-10-11（code review 之后补的一笔）：第 5 条当时只落了一半。** 上面那条验收里的括注
+（「`group_header_line` 里按已用列数算填充，右边的虚线先被吃完」）说的是当时的实情：**字段一个
+都没丢**，head 超宽时整行被窗格折成两行 —— 与 §5 的「零额外行数」和时刻列竖向对齐都相冲。
+`docs/render.md` 与 `spec.md` 一路写着「超宽从右往左丢」，所以那是文档在说谎，不是实现的选择。
+
+现在照第 5 条补齐了，粒度也定下来：**按工具项逐项丢**（`bash×2 read×1 edit×1` 先丢 `edit×1`、
+再丢 `read×1`），一项不剩才整段不画，然后才轮到跨度、最后是序号；连序号都放不下就截断 ——
+组头因此**永远占一行**（一级带虚线、二级不带，两档同一套判据）。判据钉在
+`a_group_header_sheds_fields_from_the_right_and_stays_one_line`（逐档宽度）、
+`an_iteration_header_sheds_its_span_first_and_stays_one_line` 与
+`a_group_header_that_does_not_fit_sheds_fields_instead_of_wrapping`（屏上：组头后面紧跟着的
+又是一条成员行）三条测试上。
