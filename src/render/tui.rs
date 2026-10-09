@@ -60,6 +60,7 @@ use super::pane::{self, Pane};
 use super::panel::{self, Panel};
 use super::selection;
 use super::severity::Severity;
+use super::timeline::{self, BandKind, ModelCell, Timeline};
 use super::token;
 use super::transcript::{
     Block, BlockId, CallTiming, ToolBlock, ToolOutcome, Transcript, summarize_args,
@@ -799,6 +800,18 @@ pub struct TuiState {
     /// 留着这份清单就是为了那时候按新宽度重放它们。代价是 `Tui` 多持一份块（与 `pane`
     /// 已经持有的源行同量级）—— 先按「全量重放」实现，简单可靠优先。
     painted: Vec<Painted>,
+    /// 整趟会话的时间轴账（票 22 第 7 条）：两泳道的段在**事件到达时**累积，横带每帧只读它
+    /// —— 不重扫 [`Self::painted`]，那里的块数随会话线性长。
+    ///
+    /// 与 `painted` 同一条寿命：宽度重放**不重建**它（重放换的是窗格里的行，而这一趟的秒数
+    /// 一个都没变）。
+    timeline: Timeline,
+    /// 块身份 → 它首行那一刻。
+    ///
+    /// 横带要问两件与「哪一块」有关的事：选中的那一块在轴上画一道位置标记，刻度行的区间
+    /// 底色要按视口里那几块算。两件都每帧问一次，所以它是一张表，不是对 `painted` 的一次
+    /// 线性查找（同一张纪律见 [`Self::timeline`]）。
+    block_at: std::collections::HashMap<BlockId, DateTime<Utc>>,
     /// 现在在不在一次模型调用里（`TurnStarted` 之后、`TurnEnded` 之前）。合成器那次调用不属于
     /// 任何回合，所以它的用量走独立行那条老路（§4）。
     in_call: bool,
@@ -2109,6 +2122,17 @@ impl Painted {
         }
     }
 
+    /// 这一条首行那一刻 —— 横带要的「这一块在轴上的哪儿」（票 22）。
+    fn at(&self) -> DateTime<Utc> {
+        match self {
+            Painted::Block { at, .. }
+            | Painted::Thinking { at, .. }
+            | Painted::Thought(SettledThinking { at, .. })
+            | Painted::GroupHeader(GroupHeader { at, .. })
+            | Painted::SectionHeader(SectionHeader { at, .. }) => *at,
+        }
+    }
+
     /// 这条记录尾上挂着的那一段，有的话。
     fn tail(&self) -> Option<Tail> {
         match self {
@@ -2309,6 +2333,8 @@ impl TuiState {
             trace: Pane::new(),
             live: String::new(),
             painted: Vec::new(),
+            timeline: Timeline::default(),
+            block_at: std::collections::HashMap::new(),
             in_call: false,
             turn_calls: 0,
             turn_usage: Usage::default(),
@@ -2614,6 +2640,7 @@ impl TuiState {
         };
         self.observe_goal(&event);
         self.observe_running_tool(&event);
+        self.observe_timeline(&event);
         // 这一整趟的收件人（两个视图都常驻，所以通常两个都在）。
         let targets = self.targets();
         let mut produced = 0usize;
@@ -2853,7 +2880,7 @@ impl TuiState {
             }
             // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
             // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
-            self.painted.push(Painted::Block {
+            self.push_painted(Painted::Block {
                 block,
                 at,
                 id,
@@ -3092,6 +3119,16 @@ impl TuiState {
         }
     }
 
+    /// 把一条绘制记录推进重放清单，并记下它的身份与时刻。
+    ///
+    /// 两张表同进同出：块身份那张（[`Self::block_at`]）是给横带用的（票 22 的第 9 条与
+    /// 「视口区间」那一条），而它与 `painted` 一样活过宽度重放 —— 重放走的就是这份清单，
+    /// 所以这里也是重放时重建身份表的地方。
+    fn push_painted(&mut self, painted: Painted) {
+        self.block_at.insert(painted.id(), painted.at());
+        self.painted.push(painted);
+    }
+
     /// 把一条来源行推进它那个视图的窗格：折行缓存、链接入口、回合条的纹理，最后按窗格报回来
     /// 的丢弃数裁掉两边溢出的部分。
     ///
@@ -3209,6 +3246,53 @@ impl TuiState {
             EventPayload::ToolCallCompleted { .. }
             | EventPayload::TurnEnded { .. }
             | EventPayload::SessionEnded { .. } => self.running_tool = None,
+            _ => {}
+        }
+    }
+
+    /// 把这一条事件记进整趟会话的 span 表（票 22 第 7 条）。
+    ///
+    /// 与 [`Self::observe_running_tool`] 同一处形状：事件 → 渲染层自己那份账，而那笔账每帧
+    /// 只被横带读一遍 —— **不重扫 `painted`**，那里的块数随会话线性长。
+    ///
+    /// 只认带信封的事件：两条泳道的边界事件全在流上，而渲染层自己造的那几条（增量、诊断、
+    /// 通知）没有时刻可言。
+    fn observe_timeline(&mut self, event: &RenderEvent) {
+        let RenderEvent::Logged(event) = event else {
+            return;
+        };
+        let at = event.at;
+        // 每一条事件都是这一趟里的一刻：轴域的两头由它撑开，而 span 只由下面那几类边界事件
+        // 产生（票 22 第 6 条）。
+        self.timeline.observed(at);
+        // 归属取信封上的发言者，与块那一侧同源（`TurnStarted` 的 payload 里那个 agent 是同一
+        // 个人，两个字段不打架）。
+        match &event.payload {
+            EventPayload::TurnStarted { iteration, .. } => {
+                self.timeline
+                    .turn_started(&event.speaker_id, *iteration, at);
+            }
+            // 一个单位收尾：那一次发言的模型段到此为止。
+            EventPayload::TurnEnded { .. } => self.timeline.turn_ended(&event.speaker_id, at),
+            // 讨论会话那一级的单位是轮次，它的头也画一道边界（票 22 第 4 条）。
+            EventPayload::RoundStarted { .. } => self.timeline.round_started(at),
+            EventPayload::RoundEnded { .. } => self.timeline.round_ended(at),
+            // 首 token 那一刻是这一次模型调用的：**用户自己那条消息**没有调用可归，于是它带的
+            // 那个 `None` 与老流同形（ADR 0020）。
+            EventPayload::MessageCompleted {
+                role,
+                first_token_ms,
+                ..
+            } if *role == Role::Assistant => {
+                self.timeline
+                    .message_completed(&event.speaker_id, *first_token_ms);
+            }
+            EventPayload::ToolCallStarted { tool_call_id, .. } => {
+                self.timeline.tool_started(tool_call_id, at);
+            }
+            EventPayload::ToolCallCompleted { tool_call_id, .. } => {
+                self.timeline.tool_completed(tool_call_id, at);
+            }
             _ => {}
         }
     }
@@ -3436,7 +3520,7 @@ impl TuiState {
             self.paint_thinking_line(&speaker, at, self.targets(), id);
         }
         // 记进重放清单：宽度变化时它也要跟着回来，连它的时刻一起（spec §1、§3）。
-        self.painted.push(Painted::Thinking {
+        self.push_painted(Painted::Thinking {
             speaker,
             at,
             id,
@@ -3554,7 +3638,7 @@ impl TuiState {
         };
         // 画它，然后记住它画在哪一行 —— 直方图每来一条长一格，靠的是这个下标。
         self.paint_group_header(&header, targets, false);
-        self.painted.push(Painted::GroupHeader(header));
+        self.push_painted(Painted::GroupHeader(header));
         let open = OpenGroup { header: id };
         match level {
             HeaderLevel::Unit => {
@@ -3761,7 +3845,7 @@ impl TuiState {
                 injections: 0,
             };
             self.paint_section_header(&header, targets, false);
-            self.painted.push(Painted::SectionHeader(header));
+            self.push_painted(Painted::SectionHeader(header));
             return;
         }
         // 开场段：一个单位还没开出来之前的那些块。压缩已经在上面处理掉了。
@@ -3787,7 +3871,7 @@ impl TuiState {
                     injections: u32::from(injection),
                 };
                 self.paint_section_header(&header, targets, false);
-                self.painted.push(Painted::SectionHeader(header));
+                self.push_painted(Painted::SectionHeader(header));
                 self.trace_groups.preamble = Some(id);
             }
         }
@@ -3972,7 +4056,7 @@ impl TuiState {
         // 会把这条行变回进行中，或者把它的 trace 与时刻丢掉（spec §1）。
         match self.painted.last_mut() {
             Some(slot @ Painted::Thinking { .. }) => *slot = Painted::Thought(settled),
-            _ => self.painted.push(Painted::Thought(settled)),
+            _ => self.push_painted(Painted::Thought(settled)),
         }
         // 它若命中就出现在过滤视图里：账本此刻是按旧判据推的，所以这里补一次重放。
         self.note_trace_index(id, text);
@@ -5047,6 +5131,43 @@ impl TuiState {
     /// 真有消费者」）—— 今天有两个：画选中那一笔，与 `↑` / `↓` 找邻块。
     fn block_at_source(&self, source: usize) -> Option<BlockId> {
         self.trace_block_ids.get(source).copied().flatten()
+    }
+
+    /// 账本这一帧可见的那几块，把轴切成哪一段时间（票 22 第 6 条：视口用刻度行的区间底色标）。
+    ///
+    /// 口径 = **可见的第一块到可见的最后一块**，取它们首行那一刻。还没定稿的尾巴不属于任何块，
+    /// 于是它不参与：这一段说的是「这一屏的块在全程的哪儿」，而不是「这一屏覆盖了多久」。
+    /// 滚出视口的那几块一个字节都不看 —— 每帧只过一遍可视的那十几行。
+    fn viewport_span(&self, rows: u16) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let top = self.trace.top();
+        let mut first: Option<DateTime<Utc>> = None;
+        let mut last: Option<DateTime<Utc>> = None;
+        for offset in 0..usize::from(rows) {
+            let Some(source) = self.trace.source_at(top + offset) else {
+                continue;
+            };
+            let Some(id) = self.block_at_source(source) else {
+                continue;
+            };
+            let Some(at) = self.block_at.get(&id) else {
+                continue;
+            };
+            if first.is_none() {
+                first = Some(*at);
+            }
+            last = Some(*at);
+        }
+        Some((first?, last?))
+    }
+
+    /// 选中的那一块在轴上哪一格（票 22 第 9 条）。
+    ///
+    /// 语义是「**位置**精确、长度有下限」：它是一根竖线，画在选中块首行那一刻 —— 那一块
+    /// 多长不画，不足一格的长度更不画。查的是身份那张表，不是对 `painted` 的一次扫描。
+    fn selection_mark(&self, axis: timeline::Axis) -> Option<u16> {
+        let id = self.trace_selection?;
+        let at = *self.block_at.get(&id)?;
+        Some(axis.column(at))
     }
 
     /// 一条源行所属那一块的**头尾两条源行**（都含）。
@@ -8845,9 +8966,11 @@ const SWEEP_HALO: i64 = 6;
 /// 矩形、同一条滚动条列，各自的窗格、滚动位置、跟随与链接表互不影响。回合条只画在对话页上
 /// —— 它量的是对话视口的单位位置，画在轨迹页上会指着一个跟它无关的视口（§4）。
 fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &mut TuiState) {
-    let text_area = panes.transcript_text();
+    // 两页的正文区**底边同高、顶上差一条横带**（票 22）：横带只属于轨迹页，所以它扣掉的
+    // 那几行也从轨迹页的正文里出，对话页一个字都不白给。
     match state.main_tab {
         MainTab::Conversation => {
+            let text_area = panes.transcript_text();
             let live = state.conversation_live();
             // 拖选要的那一层：同一个来源行折出来的下一片就是**软折续行**，复制时拼回去
             // （`.scratch/tui-feedback/spec.md` §5–§6）。
@@ -8870,6 +8993,9 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             draw_indicator(frame, text_area, state, Viewport::Conversation);
         }
         MainTab::Trace => {
+            let text_area = panes.trace_text();
+            // 固定区那一块排在账本上面，于是它不随账本滚动（票 22 第 1 条）。
+            draw_trace_band(frame, panes, state, text_area.height);
             // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
             let live = TuiState::live_rows(&state.live);
             let mut rows = state.trace.view(text_area.width, text_area.height, &live);
@@ -8905,9 +9031,227 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             // 只是现在它等于主列的内容区）。
             state.trace_rect = Some(text_area);
             frame.render_widget(Paragraph::new(rows), text_area);
-            draw_scrollbar(frame, panes.scrollbar(), &state.trace);
+            draw_scrollbar(frame, panes.trace_scrollbar(), &state.trace);
             draw_indicator(frame, text_area, state, Viewport::Trace);
         }
+    }
+}
+
+/// 画这一帧横带时几条泳道共用的那点东西：轴、它在屏幕上的起点、横带的第一行、以及
+/// 「此刻」。
+///
+/// 四样总是一起出现（每一条泳道都要它们），所以它们是一个值而不是一串参数 —— 一条泳道的
+/// 画法因此只认一个输入。
+#[derive(Clone, Copy)]
+struct Lanes {
+    /// 整趟会话铺在这条轴上（票 22 第 6 条）。
+    axis: timeline::Axis,
+    /// 轴第一格在屏幕上的列。
+    x: u16,
+    /// 横带第一行（刻度行）在屏幕上的行。
+    top: u16,
+    /// 进行中的那几段的右端（票 22 第 8 条）。
+    now: DateTime<Utc>,
+}
+
+impl Lanes {
+    /// 横带第 `index` 行（0 = 刻度、1 = 模型、2 = 工具）。
+    fn row(&self, index: u16) -> u16 {
+        self.top + index
+    }
+
+    /// 往轴上第 `column` 格写一个字形。
+    fn paint(&self, frame: &mut ratatui::Frame, row: u16, column: u16, symbol: &str, style: Style) {
+        frame.buffer_mut()[(self.x + column, row)]
+            .set_symbol(symbol)
+            .set_style(style);
+    }
+
+    /// 刻度行：视口的区间底色铺在下面，`HH:MM:SS` 标签画在上面（票 22 第 6 条）。
+    ///
+    /// 标签是**绝对时刻**，不是时长 —— 横带上不给任何时长数字（票 22 第 8 条那半句）。
+    fn ticks(
+        &self,
+        frame: &mut ratatui::Frame,
+        state: &TuiState,
+        kind: BandKind,
+        ledger_rows: u16,
+    ) {
+        // 视口区间：起点那一格到终点那一格，**两端都算在内** —— 视口落到一格上时那一格也标
+        // 出来（「在看哪儿」这件事不必过一遍保底那一关，它是位置，不是长度）。
+        if let Some((from, to)) = state.viewport_span(ledger_rows) {
+            let (first, last) = (self.axis.column(from), self.axis.column(to));
+            let buffer = frame.buffer_mut();
+            for column in first..=last {
+                buffer[(self.x + column, self.top)].set_bg(palette::VIEWPORT);
+            }
+        }
+        let style = Style::default().fg(palette::MUTED);
+        for (column, at) in timeline::ticks(self.axis, kind) {
+            for (offset, symbol) in wording::clock(at).chars().enumerate() {
+                let column = column + offset as u16;
+                if column >= self.axis.width() {
+                    break;
+                }
+                self.paint(frame, self.top, column, &symbol.to_string(), style);
+            }
+        }
+    }
+
+    /// 模型泳道：每一次模型调用占了哪些格子（票 22 第 2 条）。
+    ///
+    /// 两段的字形一样、**色调**分档：等首 token 是静音、吐字是正文档。缺首 token 时刻时整段
+    /// 是正文档 —— 它说的是「这一段是模型调用」，不假装切点为零。
+    fn model(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        let row = self.row(1);
+        for (column, cell) in state
+            .timeline
+            .model_cells(self.axis, self.now)
+            .into_iter()
+            .enumerate()
+        {
+            let Some(cell) = cell else {
+                continue;
+            };
+            let color = match cell {
+                ModelCell::Wait => palette::MUTED,
+                ModelCell::Decode => palette::PLAIN,
+            };
+            self.paint(
+                frame,
+                row,
+                column as u16,
+                wording::BAND_MODEL,
+                Style::default().fg(color),
+            );
+        }
+        // 回合边界画在这一行上的一道竖线（票 22 第 4 条）；迭代边界不标，一个回合 1–557 次
+        // 迭代太密。
+        let style = Style::default().fg(palette::CHROME);
+        for column in state.timeline.turn_marks(self.axis) {
+            self.paint(frame, row, column, wording::BAND_MARK, style);
+        }
+    }
+
+    /// 工具泳道：每一次工具调用占了哪些格子，**并发调用叠着画**（票 22 第 3 条）。
+    fn tools(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        let row = self.row(2);
+        let style = Style::default().fg(palette::PLAIN);
+        for (column, depth) in state
+            .timeline
+            .tool_depth(self.axis, self.now)
+            .into_iter()
+            .enumerate()
+        {
+            let symbol = match depth {
+                0 => continue,
+                1 => wording::BAND_TOOL,
+                _ => wording::BAND_TOOL_STACKED,
+            };
+            self.paint(frame, row, column as u16, symbol, style);
+        }
+        // 选中块的位置标记（票 22 第 9 条）：与回合边界同族的一道竖线，色是焦点那一档 ——
+        // 它画在**最下一行**，与命中底色（票 23，铺在两条泳道行上）正交、同格共存。
+        let selected = Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD);
+        if let Some(column) = state.selection_mark(self.axis) {
+            self.paint(frame, row, column, wording::BAND_MARK, selected);
+        }
+    }
+
+    /// 一行三态版：把两条泳道压成一行 —— 模型在跑 / 工具在跑 / 工具叠着（票 22 第 10 条）。
+    ///
+    /// 一格上两条泳道都在时画**工具**，与原型帧 1c 的排法相反：模型段的口径是「这一次迭代」
+    /// （它一路画到下一个起始事件），于是它天然盖住工具跑着的那一段 —— 让模型优先，这一行就
+    /// 只剩模型，工具那两态永远读不出来。
+    fn compact(&self, frame: &mut ratatui::Frame, state: &TuiState) {
+        let row = self.row(1);
+        let model = state.timeline.model_cells(self.axis, self.now);
+        let depth = state.timeline.tool_depth(self.axis, self.now);
+        let style = Style::default().fg(palette::PLAIN);
+        for column in 0..usize::from(self.axis.width()) {
+            let symbol = if depth[column] >= 2 {
+                wording::BAND_TOOL_STACKED
+            } else if depth[column] == 1 {
+                wording::BAND_TOOL
+            } else if model[column].is_some() {
+                wording::BAND_MODEL_ONLY
+            } else {
+                continue;
+            };
+            self.paint(frame, row, column as u16, symbol, style);
+        }
+    }
+}
+
+/// 轨迹页顶上那条固定横带：刻度行 + 模型泳道 + 工具泳道
+/// （`.scratch/trace-ledger/spec.md` §10、票 22）。
+///
+/// 三行都画在**固定区**里（[`layout::Regions::band`]），所以滚动账本时它一个字节都不动。
+/// 它**不可聚焦**：不进键盘阶梯、不响应鼠标、不产生过滤（票 22 第 11 条）—— 于是这里一处
+/// `state.regions.push` 也没有，而横带也落在 [`TuiState::trace_rect`] 之外，点它什么都不做。
+///
+/// 宽度那一档（完整 / 稀疏 / 一行三态）由排版定，这里只按它画：阶梯只有一个家，画家不自比
+/// 宽度。
+fn draw_trace_band(
+    frame: &mut ratatui::Frame,
+    panes: &layout::Regions,
+    state: &TuiState,
+    ledger_rows: u16,
+) {
+    let Some(band) = panes.band else {
+        return;
+    };
+    // 进行中的那一段画到**此刻**（票 22 第 8 条）—— 轴域因此也跟着走到此刻，而一趟静止的
+    // 会话不会每帧变宽（那由 `Timeline::domain` 里的 `running` 判）。
+    let now = Utc::now();
+    let Some((from, to)) = state.timeline.domain(now) else {
+        return;
+    };
+    let Some(axis) = timeline::Axis::new(
+        from,
+        to,
+        // 轴宽与排版里那一笔同源：正文宽（扣掉滚动条与回合条那两列）再扣行首九列与泳道标签
+        // 五列 —— 120 列下是 63 格。
+        panes
+            .trace_text()
+            .width
+            .saturating_sub(layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS),
+    ) else {
+        return;
+    };
+    let lanes = Lanes {
+        axis,
+        x: band.x + layout::STAMP_COLUMNS + timeline::LABEL_COLUMNS,
+        top: band.y,
+        now,
+    };
+    lanes.ticks(frame, state, panes.band_kind, ledger_rows);
+    match panes.band_kind {
+        BandKind::Compact => lanes.compact(frame, state),
+        _ => {
+            let labels_x = band.x + layout::STAMP_COLUMNS;
+            draw_lane_label(frame, lanes.row(1), labels_x, wording::LANE_MODEL);
+            lanes.model(frame, state);
+            draw_lane_label(frame, lanes.row(2), labels_x, wording::LANE_TOOL);
+            lanes.tools(frame, state);
+        }
+    }
+}
+
+/// 一条泳道左边那五列的标签。
+///
+/// 逐**列**推进：标签是汉字，按字符下标走会把第二个字写进第一个字盖住的那一格
+/// （`模型 ` 会变成 `模 `）。
+fn draw_lane_label(frame: &mut ratatui::Frame, row: u16, x: u16, label: &str) {
+    let style = Style::default().fg(palette::MUTED);
+    let mut column = x;
+    for symbol in label.chars() {
+        frame.buffer_mut()[(column, row)]
+            .set_symbol(&symbol.to_string())
+            .set_style(style);
+        column += char_columns(symbol) as u16;
     }
 }
 

@@ -39,6 +39,7 @@ pub mod panel;
 pub mod plain;
 pub mod selection;
 pub mod severity;
+pub mod timeline;
 pub mod todo;
 pub mod token;
 pub mod transcript;

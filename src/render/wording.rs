@@ -2301,7 +2301,8 @@ pub fn header_separator() -> &'static str {
 // 符号表与字符级间距
 // （`.scratch/tui-visual-language/spec.md` §12–§15）
 //
-// 一个语义一个具名常量。**字形一个都不改**：表里每一个都早已在仓库里上过屏。
+// 一个语义一个具名常量。**字形一个都不改**：表里每一个都早已在仓库里上过屏 —— 唯一的
+// 例外是时间轴那三行横带的泳道填充（票 22），那三个块元素字符在下面各自注明出处。
 // ---------------------------------------------------------------------------
 
 /// **有折起来的内容**：这一行点得开。思考行、工具行、上下文注入行、轨迹视图的消息行都有；
@@ -2316,6 +2317,26 @@ pub const UNFOLDED: &str = "▾";
 pub const RAIL_FOCUS: &str = "┃";
 pub const RAIL_CELL: &str = "┊";
 pub const RAIL_TRUNCATED: &str = "⋮";
+
+/// 时间轴那三行横带的两条泳道标签（`.scratch/trace-ledger/spec.md` §10、票 22）。
+///
+/// 各两个汉字加一格空白，正好占横轴左边那五列 —— 「五列」这个数是排版与画家共用的一笔账，
+/// 所以它定在 [`crate::render::timeline::LABEL_COLUMNS`]，这里只有字。
+pub const LANE_MODEL: &str = "模型 ";
+pub const LANE_TOOL: &str = "工具 ";
+
+/// 泳道里的填充与记号（票 22 第 2、3、4、9 条）。
+///
+/// * 填充取**块元素**那一族：`█` 是滚动条滑块与块字标记在用的字形，`▔` 与 `▁` 是同一族里
+///   这一票才上屏的两个成员。三种密度正好读作「模型在跑 / 工具在跑 / 工具叠着」。
+/// * 记号取**竖线**那一族（`│`，markdown 表格的列线在用）：回合边界画在模型泳道上、
+///   选中块的位置标记画在工具泳道上，两者同一族、靠颜色与行分开。
+pub const BAND_MODEL: &str = "█";
+pub const BAND_TOOL: &str = "▁";
+pub const BAND_TOOL_STACKED: &str = "█";
+/// 一行三态版的那两格：模型在跑、工具在跑 —— 工具叠着与 [`BAND_TOOL_STACKED`] 同形。
+pub const BAND_MODEL_ONLY: &str = "▔";
+pub const BAND_MARK: &str = "│";
 
 /// 问卷选项的四个标记：多选已选 / 多选未选 / 单选已选 / 单选未选。光标（`>`）与它们正交 ——
 /// 光标说 `Enter` 会确认哪个，标记说哪些被选中了。

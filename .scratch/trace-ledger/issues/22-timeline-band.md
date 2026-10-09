@@ -1,7 +1,7 @@
 # 22 — 时间轴的三行横带（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 12, 13, 18
 
@@ -71,3 +71,113 @@ Blocked by: 12, 13, 18
 - [ ] 宽度不足时三级降级（稀疏刻度 → 一行三态 → 整条不画）；高度不足时**账本仍在**。
 - [ ] 横带**进不了键盘阶梯**、点它没有反应、**不产生过滤**。
 - [ ] `cargo test` 全绿、`cargo clippy` 干净、`cargo fmt --check` 只留既有漂移。
+
+## 落地记录
+
+**2026-10-10 落地。** 五个落点：`src/render/timeline.rs`（**新文件**：整趟会话的 span 表与一格
+换算，全是纯算术）、`src/render/layout.rs`（轨迹页顶上那三行的固定区与它的降级档）、
+`src/render/tui.rs`（事件 → span 表的接线、块身份那张时刻表、横带的画家、轨迹页改用它的正文
+矩形）、`src/render/palette.rs`（**视口区间底色**那一档）、`src/render/wording.rs`（两条泳道标签、
+泳道填充与那两个记号）。测试：`tests/render_timeline.rs`（**新文件**，18 条纯函数）与
+`tests/render_layout.rs`（16 条帧层）。
+
+### 形状：三条分开的账
+
+- **span 表**（`Timeline`）：由 `TuiState::observe_timeline` 在**事件到达**时喂 —— 与
+  `observe_running_tool` 同一处形状，而横带每帧只读它，不重扫 `painted`（票 22 第 7 条）。
+- **身份表**（`block_at`：块身份 → 它首行那一刻）：每条绘制记录进 `painted` 时顺手记一份
+  （新入口 `TuiState::stash`，原来那五处 `push` 都改走它）。横带每帧问它两次：视口那一段、
+  以及选中块那一根标记。宽度重放走的就是 `painted`，所以它跟着一起重建。
+- **轴域**：每一条带信封的事件都记一刻（`Timeline::observed`），而 span 只由那几类边界事件产生
+  —— 于是轴域从这一趟的第一条事件起算：用户消息、注入、用量各是一刻，它们前后的空白读作留白，
+  一个刚开出来的会话也有一根从第一条消息起算的轴。
+- **一格换算**（`Axis`）：纯算术。`cells` 按**段的宽度**判「不足一格不画」—— 向上取整也会占
+  一格，而占一格就是说谎。
+
+### 与票面不同的六处
+
+1. **那三行只从轨迹页扣，对话页一行都不少。** 票面说「顶部固定区 2 → 5 行、外壳 6 → 9」，
+   按那个字面口径对话页顶上会多出三行空白（横带只画在轨迹页）。实现里 `Regions` 给两块正文区：
+   `transcript`（对话页 15 行，外壳仍是 6）与 `trace`（轨迹页 12 行，外壳是
+   `TRACE_CHROME = 9`），两者**底边齐平**，于是状态行、输入区与提示行两页同高。票面那两处
+   「一起改」在这里落成**新的 `band` 矩形**（`MAIN_TABS_ROWS` 之后那几行）**加上轨迹页那一笔
+   外壳账** —— 一条横贯两页的固定区没有意义，那三行是轨迹页的读法，不是对话页的内容。
+2. **一行三态版里工具优先**（原型帧 1c 是模型优先）。模型段的口径是「这一次迭代」—— 它一路
+   画到下一个起始事件，于是天然盖住工具跑着的那一段；让模型优先，那一行就只剩模型，
+   「工具在跑 / 工具叠着」两态永远读不出来。
+3. **泳道填充用了两个新上屏的块元素字符**（`▔` 模型、`▁` 工具，叠着仍是 `█`）。票面那句
+   「不新增字形」说的是**记号**那一族（分隔线用框架虚线、回合边界与选中标记用同一族竖线）——
+   记号一个都没新增（两者都用既有的 `│`）。泳道得有个东西表示「这一格上有一段」，而块元素
+   那族（`▀ ▄ █`）本来就是块字标记与滚动条滑块在用的；符号表那节的头注也跟着改了。
+4. **降级阈值（轴宽）**：完整五标签 `≥ 44`、稀疏两标签 `≥ 32`、一行三态 `≥ 9`、再窄整条不画。
+   它们落在真机的三档上：120 列（轴 63）完整、80 列（轴 35）稀疏、40..47 列（轴 24..31）
+   一行三态；高度不足时（连 `MIN_LEDGER_ROWS = 3` 行都留不下）整条让位，40×10 与加横带之前
+   逐字相同。票面只给了阶梯，没给数。
+5. **视口区间的口径** = 视口里**可见的第一块到可见的最后一块**，取它们首行那一刻；还没定稿的
+   尾巴不属于任何块，于是不参与。刻度行上那段底色**两端都算在内**（「在看哪儿」是位置，不过
+   「不足一格不画」那一关）。
+6. **选中标记画在工具泳道行**（最下一行）—— 票面只说「一根前景竖线」，位置照
+   [状态行与轴](11-status-row-and-axis-readout.md) §7 那句「最下一行」。它用 `ACCENT + BOLD`，
+   与回合边界那道 `CHROME` 的竖线同形、不同色、不同行。
+
+### 既有断言的改写
+
+票面预期「轨迹页可视 15 → 12」会带来一批按 15 行写的帧层断言改写；因为对话页不损失那三行
+（上面第 1 条），**真正动的只有轨迹页那几处辅助与一条断言**：
+
+| 改了什么 | 为什么 |
+| --- | --- |
+| `trace_page_with_blanks` 改成从**账本**起（新增 `ledger_top` 与 `trace_band_rows` 两个辅助） | 它原来的意思是「轨迹页那几块」，而现在那几块里夹着三行固定横带 —— 绝大多数断言说的是账本 |
+| `a_failed_call_grows_one_row_with_the_first_line_of_its_error` | 判据回到原意：它断言「没有以九空格开头的行」，而横带的刻度行正是那样开头的；账本范围一划清就对了 |
+| `rule_before` 改成取**最后一条**含 needle 的行 | 贴底跟随 + 账本矮三行之后，靠上那条 needle 的组头容易滚出视口 |
+| `the_trace_rule_travels_with_the_content`：6 回合 → 3 回合，needle 换成最后一轮的开头 | 同上：这一条测的是「内容与它上面的线一起挪」，不需要那么多内容 |
+
+对话页那 15 行、回合条的格数、状态行与输入区的几何**一处都没动** —— 那是上面第 1 条的直接结果。
+`neither_view_paints_a_stripe_background` 照旧通过（视口底色只铺在刻度行的轴内，从轴的第一格起）。
+
+### 验收
+
+- [x] 轨迹内容区顶上固定三行，**滚动账本时它不动**
+      （`the_trace_page_pins_a_three_row_band_under_the_tabs`、`the_band_does_not_move_when_the_ledger_scrolls`）。
+- [x] 120×24 下账本从 15 行变成 **12 行**；状态行、输入区、提示行都在屏内
+      （`the_band_takes_three_rows_and_the_shell_grows_to_nine`：`transcript` 15 / `trace` 12 /
+      `TRACE_CHROME = 9`，加上屏上那两行断言）。
+- [x] 横轴宽度 63 列、正文 68 列（`the_axis_is_sixty_three_columns_wide`，按主列 79 推出来）。
+- [x] 模型泳道画出一段调用占了哪些格子；并发调用在工具泳道上**叠着**看得见
+      （`the_model_lane_splits_on_the_first_token`、`concurrent_tool_calls_stack_in_the_tool_lane`）。
+- [x] 有首 token 时刻时切两段；**不足一格的段不画**
+      （`the_model_lane_splits_on_the_first_token`、`a_call_shorter_than_one_cell_is_not_drawn`；
+      纯函数那一半是 `a_segment_shorter_than_one_cell_is_not_drawn`）。
+- [x] 老会话（无首 token 时刻）模型泳道**整段画**，没有占位符
+      （`an_old_session_draws_the_model_lane_in_one_colour`）。
+- [x] 进行中的那一段画到当前时刻、右端不收边、**不给数字**
+      （`a_running_segment_is_drawn_up_to_now`）—— 「不收边」在这一版里是**没有收边字形**：
+      一段的右端就是它最后那一格，横带上从来不给段尾画一个结束记号。
+- [x] 回合边界有竖线；**迭代边界没有**
+      （`the_unit_boundary_is_a_line_and_the_iteration_boundary_is_not`；
+      纯函数那一半是 `the_unit_boundary_gets_a_mark_and_an_iteration_boundary_does_not`、
+      `a_discussion_round_also_marks_its_boundary`）。
+- [x] 空档是留白，没有解释性文字（`the_band_leaves_the_gaps_blank`）。
+- [x] 刻度行的区间底色标出当前视口，滚动时它跟着走
+      （`the_tick_row_marks_the_viewport_and_follows_the_scroll`）。
+- [x] 选中块在轴上有一道竖线（`the_selected_block_leaves_a_mark_on_the_tool_lane`）。
+- [x] 宽度不足时三级降级（`the_band_degrades_three_steps_as_the_terminal_narrows`、
+      `the_band_falls_back_three_steps_as_the_axis_narrows`）；高度不足时**账本仍在**
+      （`the_band_gives_up_its_rows_before_the_ledger_does`）。
+- [x] 横带**进不了键盘阶梯**、点它没有反应、**不产生过滤**
+      （`the_band_takes_neither_the_keyboard_nor_a_click`：横带落在 `trace_rect` 之外，
+      点击既不开详情也不清选中）。
+- [x] `cargo test --no-fail-fast` **1707 passed / 0 failed**（票 21 是 1673，本轮 +34：纯函数 18 +
+      帧层 16）；`cargo clippy --all-targets` 与基线
+      **逐条相同**（41 条 collapsible-if 那四条既有警告，只有「哪一条算 duplicate」那两行标注
+      因编译顺序互换）；`cargo fmt --check` 干净；`scripts/check-doc-size.py` 与
+      `scripts/check-language.py` 通过。
+
+### 交给后面的票
+
+- **票 23（轴上的命中底色）**：底色那一档的**第二个**具名常量还没有；视口底色铺刻度行、命中底色
+  铺两条泳道行 —— `the_tick_row_marks_the_viewport_and_follows_the_scroll` 里那条「泳道行不铺
+  底色」正是留给它的位子。命中集是 `state.trace_search.hits`（票 20 的 `HashSet<BlockId>`），
+  轴上要的「这一块在哪一刻」问 `block_at` 那张表。
+- **票 24（文档）**：`docs/render.md` 的时间轴一节与 `CONTEXT.md` 的**时间轴**词条本票一个字都
+  没改；真机走查那一项（两档底色在不同主题上的可分辨性、79 列里组头与行尾的密度）也归它。

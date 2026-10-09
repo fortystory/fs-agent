@@ -8391,10 +8391,31 @@ fn wheel_at(column: u16, row: u16, up: bool) -> ratatui::crossterm::event::Mouse
 
 /// 主列轨迹页里的那些行：页签条、状态行、输入区与提示行都不算，左栏不算
 /// （`.scratch/trace-in-main/spec.md` §1、§3）。
+///
+/// **顶上那条固定横带也不算**（票 22）：那三行是刻度与两条泳道，而这里的断言说的几乎都是
+/// 账本。要看横带的用 [`trace_band_rows`]。
 fn trace_page_with_blanks(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
     let rows = conversation_rows(state, width, height);
     let height_of_page = transcript_rows(&rows);
-    rows[TRANSCRIPT_TOP..TRANSCRIPT_TOP + height_of_page].to_vec()
+    let top = ledger_top(&rows);
+    rows[top..TRANSCRIPT_TOP + height_of_page].to_vec()
+}
+
+/// 轨迹页的账本从哪一行起。
+///
+/// 横带那几行的前九列是空的，而账本每一条源行都以 `HH:MM:SS ` 起排（票 12 的时间戳列）：
+/// 于是「哪一行开始是账本」从屏幕上读得出来，测试不必再推一遍排版的宽度阶梯。
+fn ledger_top(rows: &[String]) -> usize {
+    (TRANSCRIPT_TOP..rows.len())
+        .find(|index| rows[*index].chars().nth(2) == Some(':'))
+        .unwrap_or(TRANSCRIPT_TOP)
+}
+
+/// 轨迹页顶上那条固定横带的那几行（票 22）—— 刻度、模型泳道、工具泳道。
+fn trace_band_rows(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let rows = conversation_rows(state, width, height);
+    let top = ledger_top(&rows);
+    rows[TRANSCRIPT_TOP..top].to_vec()
 }
 
 /// 同上，但空行不占位置 —— 大多数断言只关心有字的那些。
@@ -9057,7 +9078,8 @@ fn hiding_and_showing_the_sidebar_leaves_the_scroll_intent_alone() {
 /// （`.scratch/trace-in-main/spec.md` §3）。
 fn rule_before(state: &mut TuiState, needle: &str) -> Option<(u16, u16)> {
     let frame = buffer(120, 24, state);
-    let row = (TRANSCRIPT_TOP as u16..24).find(|y| {
+    // 取**最后一条**含 `needle` 的行：贴底跟随的时候，靠下的那一条最可能还在屏幕上。
+    let row = (TRANSCRIPT_TOP as u16..24).rev().find(|y| {
         cells(&frame, *y, MAIN_LEFT_AT_120, TRANSCRIPT_TEXT_RIGHT_AT_120).contains(needle)
     })?;
     // 组的界是**组头那一行** —— 它是一条带文字的虚线（`.scratch/trace-ledger/spec.md` §5），
@@ -9168,12 +9190,15 @@ fn the_trace_page_has_a_scrollbar_in_its_rightmost_column() {
 #[test]
 fn the_trace_rule_travels_with_the_content() {
     let mut state = state_with_roster(&["kimi"]);
-    turns(&mut state, 6);
+    // 三个回合就够：票 22 之后账本只有 12 行，再多的话这条内容行与它上面的组头就不一定
+    // 同时在视口里 —— 而这一条测的是「它和它上面那条线一起挪」。
+    turns(&mut state, 3);
     open_trace_tab(&mut state, 120, 24);
     let _ = screen(120, 24, &mut state);
-    let before = rule_before(&mut state, "问题 5").expect("最后一个回合的问题在屏幕上");
+    let needle = "回合开始（第 1 次迭代）";
+    let before = rule_before(&mut state, needle).expect("最后一轮的开头在屏幕上");
     state.mouse(wheel_at(10, 12, true));
-    let after = rule_before(&mut state, "问题 5").expect("它还在屏幕上");
+    let after = rule_before(&mut state, needle).expect("它还在屏幕上");
     assert_ne!(before.0, after.0, "内容挪了屏幕行");
     assert_eq!(
         before.0 - before.1,
@@ -13294,4 +13319,600 @@ fn a_folded_turn_keeps_what_arrives_out_of_the_ledger() {
         page.contains("正在思考"),
         "那条还在流的思考行回来了：{page}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 时间轴的三行横带（`.scratch/trace-ledger/spec.md` §10、票 22）
+//
+// 帧层只进票面点名的那几处：三行的位置与高度、外壳 6 → 9、可视 15 → 12、横轴 63、正文 68、
+// 窄屏的三级降级、矮终端里账本仍在，以及「横带不可聚焦」。span 表与一格换算那些算术在
+// `tests/render_timeline.rs` 里逐条钉着。
+// ---------------------------------------------------------------------------
+
+/// 横带在屏幕上的第一行：主列页签条那两行之下。
+const BAND_TOP: u16 = 2;
+
+/// 横带某一行在屏幕上的那一行号（0 = 刻度、1 = 模型泳道、2 = 工具泳道）。
+fn band_row(index: u16) -> u16 {
+    BAND_TOP + index
+}
+
+/// 横轴第一格在屏幕上的列（120 列终端）：主列左缘 + 行首九列时刻 + 泳道标签五列。
+fn axis_left_at_120() -> u16 {
+    MAIN_LEFT_AT_120 + heng::render::layout::STAMP_COLUMNS + heng::render::timeline::LABEL_COLUMNS
+}
+
+/// 一条带固定时刻的 `TurnStarted`。
+fn turn_at(
+    seq: u64,
+    iteration: u32,
+    at: chrono::DateTime<chrono::Utc>,
+) -> heng::render::RenderEvent {
+    at_event(
+        seq,
+        at,
+        heng::events::EventPayload::TurnStarted {
+            agent: heng::events::SpeakerId::System,
+            iteration,
+        },
+    )
+}
+
+/// 一条带固定时刻的 `TurnEnded`。
+fn turn_ended_at(seq: u64, at: chrono::DateTime<chrono::Utc>) -> heng::render::RenderEvent {
+    at_event(
+        seq,
+        at,
+        heng::events::EventPayload::TurnEnded {
+            reason: heng::events::StopReason::Completed,
+        },
+    )
+}
+
+/// 一条带固定时刻、可带首 token 时刻的模型回答。
+fn message_at(
+    seq: u64,
+    at: chrono::DateTime<chrono::Utc>,
+    first_token_ms: Option<u64>,
+) -> heng::render::RenderEvent {
+    at_event(
+        seq,
+        at,
+        heng::events::EventPayload::MessageCompleted {
+            role: heng::events::Role::Assistant,
+            text: format!("第 {seq} 句"),
+            reasoning: None,
+            first_token_ms,
+        },
+    )
+}
+
+/// 一次带固定时刻的工具调用开始 / 完成。
+fn tool_at(
+    seq: u64,
+    id: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    done: bool,
+) -> heng::render::RenderEvent {
+    let payload = if done {
+        heng::events::EventPayload::ToolCallCompleted {
+            tool_call_id: heng::events::ToolCallId::new(id),
+            ok: true,
+            output: Some("好".to_owned()),
+            error: None,
+            duration_ms: 0,
+        }
+    } else {
+        heng::events::EventPayload::ToolCallStarted {
+            tool_call_id: heng::events::ToolCallId::new(id),
+            tool_name: "bash".to_owned(),
+            args: serde_json::json!({"command": "ls"}),
+        }
+    };
+    at_event(seq, at, payload)
+}
+
+/// 一段隔 `step` 秒一条的会话：N 次模型调用，每一次都换一个新单位 —— 于是账本里有内容、
+/// 时间轴上也有一段一段可读的形状。
+fn stamped_turns(state: &mut TuiState, base: chrono::DateTime<chrono::Utc>, count: u64, step: i64) {
+    for index in 0..count {
+        let at = base + chrono::TimeDelta::seconds(index as i64 * step);
+        state.apply(turn_at(100 + index * 2, 1, at));
+        state.apply(message_at(
+            101 + index * 2,
+            at + chrono::TimeDelta::seconds(1),
+            None,
+        ));
+        // 每个单位都收尾：轴域于是是这一段内容自己的跨度，而不是「到此刻为止」——
+        // 固定时刻的测试不该被真实时钟牵着走。
+        state.apply(turn_ended_at(
+            102 + index * 2,
+            at + chrono::TimeDelta::seconds(2),
+        ));
+    }
+}
+
+#[test]
+fn the_trace_page_pins_a_three_row_band_under_the_tabs() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    stamped_turns(&mut state, base, 3, 10);
+    open_trace_tab(&mut state, 120, 24);
+    let band = trace_band_rows(&mut state, 120, 24);
+    assert_eq!(band.len(), 3, "刻度 + 模型泳道 + 工具泳道：{band:#?}");
+    assert!(
+        band[0].contains(&wording::clock(base)),
+        "第一行是刻度，写着绝对时刻：{:?}",
+        band[0]
+    );
+    assert!(
+        band[1].starts_with(&format!("{}模型", " ".repeat(9))),
+        "第二行是模型泳道，标签从第 9 列起：{:?}",
+        band[1]
+    );
+    assert!(
+        band[2].starts_with(&format!("{}工具", " ".repeat(9))),
+        "第三行是工具泳道：{:?}",
+        band[2]
+    );
+    let rows = conversation_rows(&mut state, 120, 24);
+    assert_eq!(
+        ledger_top(&rows),
+        usize::from(BAND_TOP) + 3,
+        "账本从横带下面起"
+    );
+    assert!(
+        rows[usize::from(band_row(3))].starts_with(&wording::clock(base)),
+        "账本第一行仍是它自己的时刻戳：{:?}",
+        rows[usize::from(band_row(3))]
+    );
+}
+
+#[test]
+fn the_band_takes_three_rows_and_the_shell_grows_to_nine() {
+    use heng::render::layout;
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true);
+    assert_eq!(
+        panes.band.map(|band| band.height),
+        Some(layout::BAND_ROWS),
+        "轨迹页顶上留着三行"
+    );
+    assert_eq!(panes.transcript.height, 15, "对话页的转录仍是 15 行");
+    assert_eq!(panes.trace.height, 12, "轨迹页的可视从 15 行变成 12 行");
+    assert_eq!(
+        panes.trace.y,
+        panes.transcript.y + layout::BAND_ROWS,
+        "那三行正是它差的那几行"
+    );
+    assert_eq!(
+        panes.trace.bottom(),
+        panes.transcript.bottom(),
+        "两块正文区的底边齐平 —— 状态行、输入区与提示行两页同一个位置"
+    );
+    assert_eq!(layout::TRACE_CHROME, 9, "轨迹页的外壳是 9 行");
+
+    // 屏上：状态行、输入区与提示行都在，提示行落在最后一行上。
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 2, 10);
+    let rows = screen(120, 24, &mut state);
+    assert!(
+        rows[23].contains("esc 取消") || rows[23].contains("ctrl-c"),
+        "提示行还在屏幕最后一行：{:?}",
+        rows[23]
+    );
+    assert!(
+        rows[17].contains("模型"),
+        "状态行紧贴账本下面：{:?}",
+        rows[17]
+    );
+}
+
+#[test]
+fn the_axis_is_sixty_three_columns_wide() {
+    use heng::render::layout;
+    use heng::render::timeline::LABEL_COLUMNS;
+    let panes = layout::plan(ratatui::layout::Rect::new(0, 0, 120, 24), 1, true);
+    let text = panes.trace_text();
+    assert_eq!(text.width - layout::STAMP_COLUMNS, 68, "正文 68 列");
+    assert_eq!(
+        text.width - layout::STAMP_COLUMNS - LABEL_COLUMNS,
+        63,
+        "横轴 63 列"
+    );
+    // 屏上同一个数：刻度行里最后一个标签的右端正好落在轴的最后那一列上。
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 2, 10);
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let left = axis_left_at_120();
+    let tick = cells(&frame, band_row(0), MAIN_LEFT_AT_120, 120);
+    assert!(!tick.trim().is_empty(), "刻度行有读数：{tick:?}");
+    assert!(
+        cells(&frame, band_row(0), left, left + 63).trim().len() > 8,
+        "刻度落在轴里：{tick:?}"
+    );
+    assert!(
+        cells(&frame, band_row(0), left + 63, 120).trim().is_empty(),
+        "轴右端那两列不画刻度：{tick:?}"
+    );
+}
+
+#[test]
+fn the_band_does_not_move_when_the_ledger_scrolls() {
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 8, 10);
+    open_trace_tab(&mut state, 120, 24);
+    let before = trace_band_rows(&mut state, 120, 24);
+    // 滚轮落在**账本**上：横带是固定区，它一格都不该跟着动。
+    state.mouse(wheel_at(60, 10, true));
+    let after = trace_band_rows(&mut state, 120, 24);
+    assert_eq!(before, after, "滚动账本时横带一个字节都不动");
+}
+
+#[test]
+fn the_model_lane_splits_on_the_first_token() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    state.apply(turn_at(1, 1, base));
+    state.apply(message_at(
+        2,
+        base + chrono::TimeDelta::seconds(5),
+        Some(2_000),
+    ));
+    state.apply(turn_ended_at(3, base + chrono::TimeDelta::seconds(10)));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(1);
+    let left = axis_left_at_120();
+    assert_eq!(
+        frame[(left + 5, row)].symbol(),
+        wording::BAND_MODEL,
+        "起头那一段在等首 token"
+    );
+    assert_eq!(
+        frame[(left + 5, row)].fg,
+        palette::MUTED,
+        "等首 token 那一格是静音档"
+    );
+    assert_eq!(
+        frame[(left + 40, row)].symbol(),
+        wording::BAND_MODEL,
+        "吐字段也画着"
+    );
+    assert_eq!(
+        frame[(left + 40, row)].fg,
+        palette::PLAIN,
+        "吐字那一格是前景档"
+    );
+    assert!(
+        frame[(left + 62, row)].symbol() == " " || frame[(left + 62, row)].fg == palette::PLAIN,
+        "收尾之后没有第三档颜色"
+    );
+}
+
+#[test]
+fn an_old_session_draws_the_model_lane_in_one_colour() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    state.apply(turn_at(1, 1, base));
+    state.apply(message_at(2, base + chrono::TimeDelta::seconds(5), None));
+    state.apply(turn_ended_at(3, base + chrono::TimeDelta::seconds(10)));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(1);
+    let left = axis_left_at_120();
+    assert_eq!(
+        frame[(left + 5, row)].fg,
+        palette::PLAIN,
+        "没有首 token 时刻就整段画，不插占位符"
+    );
+    assert_eq!(
+        frame[(left + 40, row)].fg,
+        palette::PLAIN,
+        "整段是同一个色调"
+    );
+}
+
+#[test]
+fn concurrent_tool_calls_stack_in_the_tool_lane() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    state.apply(tool_at(1, "call-1", base, false));
+    state.apply(tool_at(
+        2,
+        "call-2",
+        base + chrono::TimeDelta::seconds(2),
+        false,
+    ));
+    state.apply(tool_at(
+        3,
+        "call-1",
+        base + chrono::TimeDelta::seconds(6),
+        true,
+    ));
+    state.apply(tool_at(
+        4,
+        "call-2",
+        base + chrono::TimeDelta::seconds(8),
+        true,
+    ));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(2);
+    let left = axis_left_at_120();
+    assert_eq!(
+        frame[(left + 5, row)].symbol(),
+        wording::BAND_TOOL,
+        "只有一次调用在跑"
+    );
+    assert_eq!(
+        frame[(left + 30, row)].symbol(),
+        wording::BAND_TOOL_STACKED,
+        "两次调用叠着，那一格更实"
+    );
+    assert_eq!(
+        frame[(left + 58, row)].symbol(),
+        wording::BAND_TOOL,
+        "先起的那次收了尾，只剩后一次"
+    );
+}
+
+#[test]
+fn a_call_shorter_than_one_cell_is_not_drawn() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    // 轴域是 100 秒、63 格 —— 一格约 1.6 秒。0.1 秒的调用不画（宁缺勿假）。
+    state.apply(tool_at(1, "long", base, false));
+    state.apply(tool_at(
+        2,
+        "long",
+        base + chrono::TimeDelta::seconds(10),
+        true,
+    ));
+    state.apply(tool_at(
+        3,
+        "short",
+        base + chrono::TimeDelta::seconds(50),
+        false,
+    ));
+    state.apply(tool_at(
+        4,
+        "short",
+        base + chrono::TimeDelta::seconds(50) + chrono::TimeDelta::milliseconds(100),
+        true,
+    ));
+    state.apply(turn_ended_at(5, base + chrono::TimeDelta::seconds(100)));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(2);
+    let left = axis_left_at_120();
+    assert_eq!(
+        frame[(left + 3, row)].symbol(),
+        wording::BAND_TOOL,
+        "十秒那次画得出来"
+    );
+    for column in 30..35 {
+        assert_eq!(
+            frame[(left + column, row)].symbol(),
+            " ",
+            "不到一格的调用一格都不占（第 {column} 格）"
+        );
+    }
+}
+
+#[test]
+fn the_band_leaves_the_gaps_blank() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    state.apply(tool_at(1, "call-1", base, false));
+    state.apply(tool_at(
+        2,
+        "call-1",
+        base + chrono::TimeDelta::seconds(2),
+        true,
+    ));
+    state.apply(turn_ended_at(3, base + chrono::TimeDelta::seconds(20)));
+    open_trace_tab(&mut state, 120, 24);
+    let band = trace_band_rows(&mut state, 120, 24);
+    // 空档保持留白：两条泳道那两行除了标签与泳道字形，一个汉字都不写。
+    for line in [&band[1], &band[2]] {
+        let lane = &line[usize::from(MAIN_LEFT_AT_120) + 14..];
+        assert!(
+            !lane
+                .chars()
+                .any(|ch| ch.is_alphabetic() || ('\u{4e00}'..='\u{9fff}').contains(&ch)),
+            "泳道上不写解释性文字：{line:?}"
+        );
+    }
+}
+
+#[test]
+fn the_unit_boundary_is_a_line_and_the_iteration_boundary_is_not() {
+    let mut state = state_with_roster(&["kimi"]);
+    let base = fixed_at(9, 0, 0);
+    state.apply(turn_at(1, 1, base));
+    state.apply(turn_at(2, 2, base + chrono::TimeDelta::seconds(10)));
+    state.apply(turn_at(3, 1, base + chrono::TimeDelta::seconds(20)));
+    state.apply(turn_ended_at(4, base + chrono::TimeDelta::seconds(20)));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(1);
+    let left = axis_left_at_120();
+    assert_eq!(
+        frame[(left, row)].symbol(),
+        wording::BAND_MARK,
+        "单位的头画一道竖线"
+    );
+    assert_eq!(
+        frame[(left + 62, row)].symbol(),
+        wording::BAND_MARK,
+        "第二个单位也画"
+    );
+    assert_ne!(
+        frame[(left + 31, row)].symbol(),
+        wording::BAND_MARK,
+        "迭代边界不标 —— 一个回合里可以有几百次"
+    );
+}
+
+#[test]
+fn the_tick_row_marks_the_viewport_and_follows_the_scroll() {
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 40, 10);
+    open_trace_tab(&mut state, 120, 24);
+    let painted = |state: &mut TuiState| -> Vec<bool> {
+        let frame = buffer(120, 24, state);
+        (0..63)
+            .map(|column| frame[(axis_left_at_120() + column, band_row(0))].bg == palette::VIEWPORT)
+            .collect()
+    };
+    let before = painted(&mut state);
+    assert!(before.iter().any(|hit| *hit), "视口那一段铺着底色");
+    assert!(!before[0], "视口不在开头时头几格没有底色（{before:?}）");
+    // 底色只铺在**刻度行**：两条泳道行一个字节都不沾（命中底色是票 23 的事）。
+    let frame = buffer(120, 24, &mut state);
+    for row in [band_row(1), band_row(2)] {
+        for column in 0..63 {
+            assert_eq!(
+                frame[(axis_left_at_120() + column, row)].bg,
+                Color::Reset,
+                "泳道行不铺底色（第 {column} 格）"
+            );
+        }
+    }
+    state.mouse(wheel_at(60, 10, true));
+    let after = painted(&mut state);
+    assert_ne!(before, after, "滚动时视口区间跟着走");
+}
+
+#[test]
+fn the_selected_block_leaves_a_mark_on_the_tool_lane() {
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 6, 10);
+    open_trace_tab(&mut state, 120, 24);
+    // 先选中最新的那一块：`G` 到最新，再按 `↑` 把落点放到上一块上。
+    state.key(Key::Char('g'));
+    state.key(Key::Char('g'));
+    state.key(Key::Up);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(2);
+    let marks: Vec<u16> = (0..63)
+        .filter(|column| frame[(axis_left_at_120() + column, row)].symbol() == wording::BAND_MARK)
+        .collect();
+    assert_eq!(marks.len(), 1, "选中块在轴上只留一道位置标记：{marks:?}");
+    assert_eq!(
+        frame[(axis_left_at_120() + marks[0], row)].fg,
+        palette::ACCENT,
+        "它是一根焦点色的前景记号"
+    );
+}
+
+#[test]
+fn the_band_gives_up_its_rows_before_the_ledger_does() {
+    // 40×10 是屏幕的下界：那里横带整条让位，账本仍在（票 22 第 10 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(RenderEvent::notice("只此一行"));
+    let rows = screen(40, 10, &mut state);
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("模型 ") || row.contains("工具 ")),
+        "矮终端上不画横带：{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("只此一行")),
+        "账本仍在屏幕上：{rows:#?}"
+    );
+}
+
+#[test]
+fn the_band_degrades_three_steps_as_the_terminal_narrows() {
+    use heng::render::layout;
+    use heng::render::timeline::BandKind;
+    // 120 列：完整刻度（轴 63 格）。80 列：宽档左栏换成窄档，轴 35 格 —— 稀疏刻度。
+    // 40 列：没有左栏，轴 24 格 —— 一行三态版，省下的一行还给账本。
+    for (width, kind, rows) in [
+        (120u16, BandKind::Full, 3u16),
+        (80, BandKind::Sparse, 3),
+        (40, BandKind::Compact, 2),
+    ] {
+        let panes = layout::plan(ratatui::layout::Rect::new(0, 0, width, 24), 1, true);
+        assert_eq!(panes.band_kind, kind, "{width} 列上的那一档");
+        assert_eq!(
+            panes.band.map(|band| band.height),
+            Some(rows),
+            "{width} 列上横带占的行"
+        );
+        assert_eq!(
+            panes.transcript.height - panes.trace.height,
+            rows,
+            "{width} 列上省下的行还给账本"
+        );
+    }
+    // 40 列上的三档：没有泳道标签、只剩一行三态，而账本照旧。
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 4, 10);
+    open_trace_tab(&mut state, 40, 24);
+    let band = trace_band_rows(&mut state, 40, 24);
+    assert_eq!(band.len(), 2, "一行三态版是两行：{band:#?}");
+    assert!(
+        !band
+            .iter()
+            .any(|row| row.contains("模型 ") || row.contains("工具 ")),
+        "一行三态版把那五列也还给轴：{band:#?}"
+    );
+    assert!(
+        trace_page(&mut state, 40, 24)
+            .iter()
+            .any(|row| row.contains("第")),
+        "账本照旧画着"
+    );
+}
+
+#[test]
+fn the_band_takes_neither_the_keyboard_nor_a_click() {
+    let mut state = state_with_roster(&["kimi"]);
+    stamped_turns(&mut state, fixed_at(9, 0, 0), 4, 10);
+    open_trace_tab(&mut state, 120, 24);
+    // 点横带：它落在账本那一块矩形之外，于是什么都不发生 —— 不开详情、不清选中、
+    // 不产生过滤（票 22 第 11 条）。
+    state.key(Key::Up);
+    let before = screen(120, 24, &mut state);
+    click(&mut state, 60, band_row(1));
+    let after = screen(120, 24, &mut state);
+    assert_eq!(before, after, "点横带没有反应");
+    assert!(
+        !after.iter().any(|row| row.contains("个命中")),
+        "横带不产生过滤"
+    );
+}
+
+#[test]
+fn a_running_segment_is_drawn_up_to_now() {
+    let mut state = state_with_roster(&["kimi"]);
+    // 「当前时刻」是墙钟：进行中的那一段画到它，所以这一趟的起点也得在现在附近。
+    let base = chrono::Utc::now() - chrono::TimeDelta::seconds(8);
+    state.apply(tool_at(1, "call-1", base, false));
+    open_trace_tab(&mut state, 120, 24);
+    let frame = buffer(120, 24, &mut state);
+    let row = band_row(2);
+    let left = axis_left_at_120();
+    assert_eq!(
+        frame[(left, row)].symbol(),
+        wording::BAND_TOOL,
+        "从起点那一格起"
+    );
+    assert_eq!(
+        frame[(left + 62, row)].symbol(),
+        wording::BAND_TOOL,
+        "右端画到当前时刻那一格"
+    );
+    // 流式的那一段**不给时长数字**：横带上只有绝对时刻，一句「多长」都没有。
+    let band = trace_band_rows(&mut state, 120, 24);
+    for line in &band {
+        assert!(
+            !line.contains(" s") && !line.contains("分钟"),
+            "横带上不给时长：{line:?}"
+        );
+    }
 }
