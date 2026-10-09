@@ -1076,6 +1076,13 @@ pub struct TuiState {
     indicator: Option<Rect>,
     /// 轨迹页的同一份矩形（票 09）。
     trace_indicator: Option<Rect>,
+    /// 轨迹页的搜索与过滤态（票 20）。`None` 是「这个会话里还从来没搜过」。
+    ///
+    /// 它按**块身份**记，不存窗格里 —— 于是宽度变化重放之后过滤集原样还在
+    /// （票 20 第 10 条）。也只活在进程内：切会话 / 恢复会话都不持久。
+    trace_search: Option<TraceSearch>,
+    /// 搜索索引（票 20 第 3 条）。每块一条、字段是块自己那段文字的全文，增量建、只建一次。
+    trace_index: TraceIndex,
     /// 进行中的那次历史重放，有的话。`Some` 是一个一次性的启动状态：在它排空之前，键盘、
     /// 指针与循环的行为都不一样（`.scratch/tui-history-replay/spec.md` §2）。
     replay: Option<Replay>,
@@ -2011,6 +2018,143 @@ impl Painted {
     }
 }
 
+/// 一段查询串切出来的那些词：空白分词、大小写不敏感、各词 **AND**
+/// （`.scratch/trace-ledger/spec.md` §7）。
+///
+/// 故意只有这一条规矩：没有引号短语、没有正则、没有模糊匹配 —— 全仓没有现成的模糊件，
+/// 自己写一套不值（票 09 §2）。
+fn query_terms(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// 这段文字命中不命中这几个词。空词表什么都不命中 —— 「没有查询」与「查询命中一切」是
+/// 两件事，而这里回答的是前者（过滤不激活时 [`TuiState::trace_admits`] 早就放行了）。
+fn hits_terms(terms: &[String], text: &str) -> bool {
+    if terms.is_empty() {
+        return false;
+    }
+    let text = text.to_lowercase();
+    terms.iter().all(|term| text.contains(term.as_str()))
+}
+
+/// 一块自己要搜的那段文字 —— 就是它显示出来的那份内容（票 20 第 3 条）：工具调用的摘要
+/// 与它的参数和输出、消息正文与思考、注入正文、命令原文、错误正文。
+///
+/// 索引的是**事件里那份文本**（它可能已被上下文组装截断），而详情里的输出面读的是落盘
+/// 全文 —— 那两处口径不同，界面上不许混着说（票 09 §2）。
+///
+/// 没有文字的块（回合起止、一次用量、一次权限决定……）返回空串，于是它们根本不进索引。
+fn block_text(block: &Block) -> String {
+    match block {
+        Block::Message {
+            text, reasoning, ..
+        } => match reasoning {
+            Some(reasoning) => format!("{text} {reasoning}"),
+            None => text.clone(),
+        },
+        Block::Answer { text } | Block::CommandRun { text } => text.clone(),
+        Block::Divergence { topic, positions } => format!("{topic} {}", positions.join(" ")),
+        Block::Tool(tool) => {
+            let mut out = format!("{} {}", tool.tool, tool.args);
+            if let Some(outcome) = &tool.outcome {
+                if let Some(output) = &outcome.output {
+                    out.push(' ');
+                    out.push_str(output);
+                }
+                if let Some(error) = &outcome.error {
+                    out.push(' ');
+                    out.push_str(error);
+                }
+            }
+            out
+        }
+        Block::ToolFeedback { outcome } => outcome.clone(),
+        Block::PermissionAsked {
+            tool_name, args, ..
+        } => match tool_name {
+            Some(name) => format!("{name} {args}"),
+            None => args.to_string(),
+        },
+        Block::PermissionDecided { reason, .. } => reason.clone().unwrap_or_default(),
+        Block::Hook { outcome, .. } => outcome.clone(),
+        Block::ExecutorFinished { summary, .. } => summary.clone(),
+        Block::AgentError { message, .. } => message.clone(),
+        Block::SessionError { code, detail } => format!("{code} {detail}"),
+        Block::ContextInjected { content, .. } => content.clone(),
+        Block::Sandbox {
+            mode,
+            unavailable_reason,
+        } => match unavailable_reason {
+            Some(reason) => format!("{mode} {reason}"),
+            None => mode.clone(),
+        },
+        Block::History { summary, .. } => summary.clone().unwrap_or_default(),
+        Block::Diagnostic(text) | Block::Notice(text) => text.clone(),
+        // 增量在去渲染器的路上，永远不定稿（它进不了共享源），于是它不在索引里
+        // （票 20 第 4 条）。别的那些本来就没有文字可搜。
+        Block::Delta { .. } => String::new(),
+        _ => String::new(),
+    }
+}
+
+/// 搜索索引：每块一条记录，字段是**块自己那段文字的全文**（票 20 第 3 条）。
+///
+/// 不另立字段、不做分词预处理。它**覆盖整场会话** —— `CAP` 只裁窗格的源行、裁不到这里，
+/// 所以早就滚出屏的那一块照样搜得到；也**不做截断**：截断就是拿一个静默的洞换内存，
+/// 而搜不到的东西没人知道（票 20 第 5 条）。
+///
+/// 建在**块定稿进共享源那一刻**：增量建、只建一次。宽度变化与过滤那两种重放都不重建它
+/// —— 重放换的是窗格的行，不是块（票 20 第 4 条）。还在流的增量块也不进来：它还在变。
+#[derive(Default)]
+struct TraceIndex {
+    /// 按建索引的顺序，也就是账本的顺序。
+    entries: Vec<(BlockId, String)>,
+}
+
+impl TraceIndex {
+    fn note(&mut self, id: BlockId, text: String) {
+        if text.trim().is_empty() {
+            // 没有文字的块命中不了任何一个词，留着只是白占一份内存。
+            return;
+        }
+        self.entries.push((id, text));
+    }
+
+    /// 命中那几个词的块身份。
+    fn hits(&self, terms: &[String]) -> std::collections::HashSet<BlockId> {
+        self.entries
+            .iter()
+            .filter(|(_, text)| hits_terms(terms, text))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+}
+
+/// 轨迹页的搜索态（票 20）。只活在进程内：切会话 / 恢复会话都不持久 —— 它与轨迹页的
+/// 滚动位置同一档，是视图本地状态。
+#[derive(Default)]
+struct TraceSearch {
+    /// 查询串。
+    query: String,
+    /// 查询串切出来的词。空词表 = 没有过滤（这一档与「命中 0 个」不是一回事）。
+    terms: Vec<String>,
+    /// 过滤集：命中的那些**块身份**。按身份记，于是宽度变化重放之后它原样还在
+    /// （票 20 第 8 条、第 10 条）。
+    hits: std::collections::HashSet<BlockId>,
+    /// 搜索模式里收起来的那份草稿 —— `Some` 就是「输入区此刻切在搜索模式」。
+    ///
+    /// 收起来的是编辑器**整份**状态（缓冲、光标、历史、记号区间），所以退出时放回去是
+    /// 字面意义上的「原样还原」（票 20 第 2 条）。
+    draft: Option<Input>,
+    /// 自进入过滤以来新到达的命中块数 —— `· 新增 M` 数的就是它（票 20 第 9 条）。
+    fresh: usize,
+    /// 进过滤之前那一份视口位置与跟随意图：退出过滤时原样还回去（票 20 第 7 条）。
+    ///
+    /// 位置按**来源行**记，不按显示行：过滤换掉了账本上的行，而来源行在「同一份块、同一个
+    /// 宽度」下是稳定的。窗格自己那一位锚在过滤期间会被夹取覆盖掉，所以这里另记一份。
+    before_filter: Option<(usize, bool)>,
+}
+
 /// 一次进行中的历史重放：组装好的事件流、其中有多少已经铺进转录、以及那产出了多少条
 /// 来源行。
 ///
@@ -2095,6 +2239,8 @@ impl TuiState {
             trace_block_ids: std::collections::VecDeque::new(),
             trace_keyboard: true,
             trace_selection: None,
+            trace_search: None,
+            trace_index: TraceIndex::default(),
             anchors: Vec::new(),
             trace_groups: TraceGroups::default(),
             next_local_id: 0,
@@ -2341,6 +2487,8 @@ impl TuiState {
         // 这一刻属于这条事件：轨迹页把它的时刻画在块的开头，重放时从同一处取
         // （`.scratch/trace-in-main/spec.md` §5）。
         let at = event_at(&event);
+        // 增量事件在过滤期间不触发重放（见这个方法末尾那一支）。
+        let incremental = matches!(event, RenderEvent::Delta { .. });
         // 身份的一半：流上的事件带信封，所以它的行号就是这一批块的来源（ADR 0021）。
         // 渲染层自己造的那几条（增量 / 诊断 / 通知 / 身份注入）没有信封，于是是 `None`。
         let seq = match &event {
@@ -2449,6 +2597,16 @@ impl TuiState {
             // `todo` 页也是同一种推法，来源是唯一带列表的那一种块：一次调用自己的参数。
             self.todo.observe(&block);
             produced += self.trace_block(block, at, targets, id);
+        }
+        // 过滤激活时，这一趟推出去的行要按新的「哪些块在」再对齐一次：未命中的那些刚被推
+        // 进了账本，而账本上只剩命中块（票 20 第 7 条）。重放是那句判据的唯一权威，所以
+        // 这里不清账、只重推一遍。
+        //
+        // 增量事件跳过它：一条流式输出每秒几十条，而它唯一画出来的东西是那条**还没定稿**的
+        // 思考行 —— 那一行本来就进不了过滤视图（`paint_thinking_line` 那里已经挡了）。
+        // 它定稿那一下（`settle_thinking`）自己带一次重放。
+        if self.filtering() && !incremental {
+            self.replay_trace();
         }
         produced
     }
@@ -2567,6 +2725,11 @@ impl TuiState {
         };
         let produced = self.emit_block(&block, paint, targets, replaying);
         if produced > 0 {
+            // 索引与这一条记录同一步建：**块定稿进共享源那一刻**（票 20 第 4 条）。
+            // 重放不重建 —— 重放换的是窗格的行，不是块。
+            if !replaying {
+                self.note_trace_index(id, block_text(&block));
+            }
             // 不产生行的那些块（流式增量）不留：重放它们什么都不画，白占一份内存。判据是
             // **任一**目标产出了行 —— 只在一个视图里出行的块，不记就再也回不来了。
             self.painted.push(Painted::Block {
@@ -2724,25 +2887,26 @@ impl TuiState {
             self.turn_rail.clear();
         }
         if trace {
-            self.trace.clear();
-            self.trace_links.clear();
-            self.trace_block_ids.clear();
-            // 锚表按账本行号记账，而重放会重新分配行号 —— 所以它与窗格一起从头再来。
-            self.anchors.clear();
-            // 组的边界也是由块序列推出来的，所以重放要按同样的顺序再推一遍。
-            self.trace_groups = TraceGroups::default();
-            self.trace_flow = Flow::default();
+            // 与过滤那一次重放共用同一份清账（票 20）。
+            self.clear_trace_for_replay();
         }
         if self.painted.is_empty() {
             self.dirty = true;
             return;
         }
+        // 过滤（票 20）先决定「哪些块在」；折叠（票 21）会接在它后面，管「一块画几行」。
+        // 宽度变化本身不动那份判据，所以重放出来的还是同一批块 —— 过滤集留在原处。
+        let visible = self.visible_records();
         let painted = std::mem::take(&mut self.painted);
         let replay = Targets {
             conversation,
             trace,
         };
-        for item in &painted {
+        for (index, item) in painted.iter().enumerate() {
+            // 谓词只对轨迹页说话：对话视图没有过滤（它那一半照旧）。
+            if trace && !visible[index] {
+                continue;
+            }
             // `true` = 这是**重画**：组头已经在那份清单里，重画它而不是再开一个
             // （`.scratch/trace-ledger/spec.md` §5）。新到达的块才走开组那半边。
             self.emit_painted(item, replay, true);
@@ -3146,6 +3310,10 @@ impl TuiState {
     ///
     /// 思考是一条**过程行**，只归轨迹（冻结项 2、8）：对话视图里它除了打断阅读什么都不做。
     /// 左栏不在时它也不回对话视图（2026-10-05 维护者推翻 §6）。
+    ///
+    /// **未定稿的增量行不在索引里**（票 20 第 4 条），所以这一条在过滤期间直接被谓词挡在
+    /// 账本外：它还在变，而「命中不命中」这一刻还答不出来。它定稿那一刻才进索引，那一下
+    /// 触发一次重放，于是它若命中就出现（见 [`TuiState::settle_thinking`]）。
     fn paint_thinking_line(
         &mut self,
         speaker: &crate::events::SpeakerId,
@@ -3153,7 +3321,7 @@ impl TuiState {
         targets: Targets,
         id: BlockId,
     ) {
-        if targets.trace {
+        if targets.trace && self.trace_admits(id) {
             let line = self.thinking_in_progress_line(speaker, Viewport::Trace);
             // 开着的行也有时刻：思考**开始**那一刻（`.scratch/trace-thought-stamp/spec.md`
             // §1）。它会在定稿时就地重写成完成那一刻（§2）。
@@ -3172,6 +3340,10 @@ impl TuiState {
     /// `in_place` 说它是**就地重写**还是**追加**：实时路径上那条「正在思考」已经在窗格里，
     /// 冻住它就是重写最后一行；重放路径上窗格刚被清空，定稿那条要重新画出来
     /// （票 02 §1、票 09）。只喂轨迹视图 —— 思考行是过程行（票 10）。
+    ///
+    /// 过滤期间那一行**不在窗格最后**（它开出来时就被谓词挡了，而且一次重放会把账本整批
+    /// 换掉），所以这里再问一遍「窗格最后那一条真的是它吗」：问不对就什么都不写，跟着来的
+    /// 那次重放会把定稿这一条安排到它该在的位置上（票 20 第 4 条）。
     fn paint_settled_thinking(
         &mut self,
         settled: &SettledThinking,
@@ -3186,12 +3358,13 @@ impl TuiState {
                 line.spans.push(tail.span());
             }
             let line = stamped_line(line, settled.at);
-            if in_place {
+            let here = self.trace_block_ids.back() == Some(&Some(settled.id));
+            if in_place && here {
                 self.trace.replace_last(line);
                 if let Some(link) = self.trace_links.back_mut() {
                     *link = Some(detail);
                 }
-            } else {
+            } else if self.trace_admits(settled.id) {
                 self.push_line(Viewport::Trace, line, Some(detail), None, Some(settled.id));
             }
         }
@@ -3587,11 +3760,19 @@ impl TuiState {
             },
         };
         self.paint_settled_thinking(&settled, self.targets(), true);
+        // 一段思考到这一刻才算**定稿**，于是它是这一刻才进索引的（票 20 第 4 条）——
+        // 开着的那一段还在变，不建。合成器那种「没记下来」的形状没有文本可搜，也就不进。
+        let text = settled.trace.clone().unwrap_or_default();
         // 重放清单里那一条也从「开着」换成「定稿」，连它的详情与时刻一起 —— 否则一次宽度变化
         // 会把这条行变回进行中，或者把它的 trace 与时刻丢掉（spec §1）。
         match self.painted.last_mut() {
             Some(slot @ Painted::Thinking { .. }) => *slot = Painted::Thought(settled),
             _ => self.painted.push(Painted::Thought(settled)),
+        }
+        // 它若命中就出现在过滤视图里：账本此刻是按旧判据推的，所以这里补一次重放。
+        self.note_trace_index(id, text);
+        if self.filtering() {
+            self.replay_trace();
         }
     }
 
@@ -4236,6 +4417,11 @@ impl TuiState {
     /// 与 `j` / `k` 等价（前者收编自编辑器光标，后者全局原本没有绑定）；`Home` / `End`
     /// **不征用** —— 那是编辑器的行首行尾，`g` / `G` 在轨迹页持有时才是「跳到头 / 尾」。
     fn trace_key(&mut self, key: Key) -> bool {
+        // 搜索模式立着时，输入区是那一刻的键盘主人（票 20 第 2 条）：它收下**每一个**键，
+        // 于是 `n`、`↑`、`[` 这些在别的时候归轨迹页的键在这里就只是查询串里的字。
+        if self.trace_searching() {
+            return self.trace_search_key(key);
+        }
         match key {
             Key::Up | Key::Char('k') => self.move_trace_selection(-1),
             Key::Down | Key::Char('j') => self.move_trace_selection(1),
@@ -4244,26 +4430,390 @@ impl TuiState {
             Key::Enter => self.open_selected_detail(),
             Key::Char('g') => self.select_first_block(),
             // 最新那一条**并恢复跟随**：`g` 的一端是账本的头，这一端是它的尾（票 10 §12）。
+            // **它不动过滤** —— 「我要看最新」与「我不筛了」是两件事（票 20 第 9 条）。
             Key::Char('G') => self.select_last_block(),
             // 层级跳转（票 19）：`[` 往上到所属组头、`]` 往下进该组的第一条成员。方向键里
             // 没有第三个方向可用（`←` / `→` 在左栏两页已被占用），所以是两个成对的括号键。
             Key::Char('[') => self.jump_to_group_header(),
             Key::Char(']') => self.jump_to_first_member(),
+            // `/`：进搜索。它**必须**在这一层被接住 —— 这一层排在记号菜单那一支之前，
+            // 否则同一个物理键永远被菜单先抓走（票 20 第 1 条）。没在筛的时候 `n` / `N`
+            // 什么都不做，照旧落进输入区：它们是普通字符。
+            Key::Char('/') => self.begin_trace_search(),
+            Key::Char('n') if self.filtering() => self.step_trace_hit(true),
+            Key::Char('N') if self.filtering() => self.step_trace_hit(false),
             Key::Esc => self.trace_escape(),
             _ => return false,
         }
         true
     }
 
-    /// `Esc` 在轨迹页这一层的层序（票 10 §4）：搜索模式 → 有过滤则清过滤 → 有选中则清选中 →
-    /// **把键盘还给输入区**。
+    /// 搜索模式里的一个按键（票 20 第 2 条）：普通键改串、`Backspace` 删字、`Enter` 接受
+    /// 并离开、`Esc` 取消并还原草稿。
     ///
-    /// 今天落的是后两层 —— 搜索与过滤归票 20，而它们该在的位置就是这两行的上面。层序因此
-    /// 留在这里，不是留给以后现找一遍。一次手势一层，所以「退完」之后那一下 `Esc` 才轮到
-    /// 取消回合那一档（与左栏两页同一条纪律）。
+    /// 编辑全都走**既有那个编辑器** —— 缓冲、光标、行内编辑、拖选都在它里面，所以搜索模式
+    /// 一个绘制件都不新造。`Enter` 在这里**不提交草稿**：这是对今天语义的一处收窄，写进了
+    /// `docs/render.md`。
+    fn trace_search_key(&mut self, key: Key) -> bool {
+        match key {
+            Key::Enter => self.accept_trace_search(),
+            Key::Esc => self.cancel_trace_search(),
+            // 这几类不是「打进查询串的字」，照旧走它们本来的路：取消 / 退出、左栏开关、
+            // 选择器、翻页三键、模式循环。收下它们就等于在搜索模式里扣住了这些全局手势。
+            Key::CtrlC
+            | Key::CtrlD
+            | Key::CtrlO
+            | Key::CtrlT
+            | Key::CtrlG
+            | Key::PageUp
+            | Key::PageDown
+            | Key::BackTab => return false,
+            _ => {
+                // `Tab` 在这台键盘上就是一段空白：记号菜单不在这个模式里开（草稿不在场），
+                // 而查询串是靠空白分词的。
+                if key == Key::Tab {
+                    self.editor.insert_char('\t');
+                } else {
+                    self.editor_key(key);
+                }
+                // 改一个字符就实时重算并重放，不设节流（票 20 第 2 条）。
+                self.refresh_trace_query();
+            }
+        }
+        true
+    }
+
+    /// `Esc` 在轨迹页这一层的层序（票 10 §4、票 20 第 10 条）：搜索模式 → 有过滤则清过滤 →
+    /// 有选中则清选中 → **把键盘还给输入区**。
+    ///
+    /// 一次手势一层，所以「退完」之后那一下 `Esc` 才轮到取消回合那一档（与左栏两页同一条
+    /// 纪律）。
     fn trace_escape(&mut self) {
+        if self.trace_searching() {
+            self.cancel_trace_search();
+            return;
+        }
+        if self.filtering() {
+            self.clear_trace_filter();
+            return;
+        }
         if self.trace_selection.take().is_none() {
             self.release_trace_keyboard();
+        }
+    }
+
+    // --- 搜索与过滤（`.scratch/trace-ledger/spec.md` §7、§8） ------------------------
+
+    /// 输入区此刻切在搜索模式吗（票 20 第 2 条）。判据就是「草稿被收起来了」。
+    fn trace_searching(&self) -> bool {
+        self.trace_search
+            .as_ref()
+            .is_some_and(|search| search.draft.is_some())
+    }
+
+    /// 轨迹页此刻在不在过滤态：查询串切得出词来就是（票 20）。
+    ///
+    /// 「命中 0 个」也是过滤态 —— 那时那一行写 `0 个命中`，账本上一块都不剩。
+    fn filtering(&self) -> bool {
+        self.trace_search
+            .as_ref()
+            .is_some_and(|search| !search.terms.is_empty())
+    }
+
+    /// 这一条记录在不在过滤集里（票 20）。没有过滤时每一条都在。
+    ///
+    /// 判据是**过滤集**（那些命中的块身份），不是「有没有命中」—— 一个都没命中时账本上
+    /// 一块都不剩，那正是 `0 个命中` 在屏上的样子。
+    fn trace_admits(&self, id: BlockId) -> bool {
+        match self.trace_search.as_ref() {
+            Some(search) if !search.terms.is_empty() => search.hits.contains(&id),
+            _ => true,
+        }
+    }
+
+    /// `/`：进搜索 —— 输入区切到搜索模式，查询串打在它里面（票 20 第 1、2 条）。
+    ///
+    /// 草稿**整份**收起来（缓冲、光标、历史、记号区间），退出时原样放回去。上次留下的
+    /// 查询串接着改：过滤还在的时候再按 `/` 是「改这条查询」，不是「重新开始搜」。
+    fn begin_trace_search(&mut self) {
+        let draft = std::mem::take(&mut self.editor);
+        let query = self
+            .trace_search
+            .as_ref()
+            .map(|search| search.query.clone())
+            .unwrap_or_default();
+        self.editor.insert_str(&query);
+        let search = self.trace_search.get_or_insert_with(TraceSearch::default);
+        search.draft = Some(draft);
+    }
+
+    /// `Enter`：接受查询并离开搜索模式 —— **不提交草稿**（票 20 第 2 条）。
+    ///
+    /// 过滤留着（它正是刚打进去的那条查询），草稿原样还回输入区。
+    fn accept_trace_search(&mut self) {
+        let Some(search) = self.trace_search.as_mut() else {
+            return;
+        };
+        if let Some(draft) = search.draft.take() {
+            self.editor = draft;
+        }
+    }
+
+    /// `Esc` 在搜索模式里：取消这次搜索 —— 查询串与过滤一起丢掉，草稿原样还原
+    /// （票 20 第 2 条、第 10 条）。
+    fn cancel_trace_search(&mut self) {
+        let Some(search) = self.trace_search.as_mut() else {
+            return;
+        };
+        search.query.clear();
+        if let Some(draft) = search.draft.take() {
+            self.editor = draft;
+        }
+        self.refresh_trace_filter();
+    }
+
+    /// `Esc` 的第二层：清掉这条过滤，账本回到全量（票 20 第 10 条）。
+    fn clear_trace_filter(&mut self) {
+        let Some(search) = self.trace_search.as_mut() else {
+            return;
+        };
+        search.query.clear();
+        self.refresh_trace_filter();
+    }
+
+    /// 查询串改了一个字符：从输入区读回来，重算过滤集 —— 实时，不设节流
+    /// （票 20 第 2 条）。
+    fn refresh_trace_query(&mut self) {
+        let query = self.editor.text().to_owned();
+        if let Some(search) = self.trace_search.as_mut() {
+            search.query = query;
+        }
+        self.refresh_trace_filter();
+    }
+
+    /// 重算过滤集，并把视口与账本按新的过滤态对齐（票 20 第 7、8 条）。
+    ///
+    /// 两件事各有一条理由：**进过滤时记下视口的位置与跟随意图，然后停在那儿**（新块不该把
+    /// 读者顶走）；**退出过滤时把这两样原样还回去**（「回到原处」—— 过滤换掉了账本上的行，
+    /// 所以窗格自己那份锚兜不住它）。账本那一边由一次重放兑现：过滤集变了，账本上「哪些块
+    /// 在」就变了。
+    fn refresh_trace_filter(&mut self) {
+        let Some(search) = self.trace_search.as_ref() else {
+            return;
+        };
+        let terms = query_terms(&search.query);
+        let active = !terms.is_empty();
+        let was = self.filtering();
+        let hits = self.trace_index.hits(&terms);
+        if let Some(search) = self.trace_search.as_mut() {
+            search.terms = terms;
+            search.hits = hits;
+        }
+        if active && !was {
+            let here = (
+                self.trace.source_at(self.trace.top()).unwrap_or(0),
+                self.trace.following(),
+            );
+            if let Some(search) = self.trace_search.as_mut() {
+                search.before_filter = Some(here);
+            }
+            self.trace.set_following(false);
+        } else if !active && was {
+            let before = self
+                .trace_search
+                .as_ref()
+                .and_then(|search| search.before_filter);
+            match before {
+                // 那时贴着底：还到底部就是原处。
+                Some((_, true)) => self.trace.to_bottom(),
+                // 账本刚刚被重放成全量，所以这个位置按**来源行**报 —— 下一帧重新折行之后
+                // 它才落得下来。
+                Some((source, false)) => {
+                    self.trace.anchor_to_source(source);
+                    self.trace.set_following(false);
+                }
+                None => {}
+            }
+        }
+        if let Some(search) = self.trace_search.as_mut() {
+            // 换了一条查询，之前数的那几个「新增」就作废了。
+            search.fresh = 0;
+        }
+        if active || was {
+            self.replay_trace();
+        }
+    }
+
+    /// 一块定稿进共享源那一刻建索引（票 20 第 4 条）。
+    ///
+    /// 过滤激活时它顺手回答「这一块进不进过滤集」：命中就把身份收进去，并记一笔新增 ——
+    /// `· 新增 M` 数的就是它（M 是新到达的**块**数，不是行数）。
+    fn note_trace_index(&mut self, id: BlockId, text: String) {
+        let fresh_hit = match self.trace_search.as_ref() {
+            Some(search) if !search.terms.is_empty() => hits_terms(&search.terms, &text),
+            _ => false,
+        };
+        if fresh_hit && let Some(search) = self.trace_search.as_mut() {
+            search.hits.insert(id);
+            search.fresh += 1;
+        }
+        self.trace_index.note(id, text);
+    }
+
+    /// 按这一刻那份「哪些块在」的判据把轨迹页重推一遍（票 20 第 7 条）。
+    ///
+    /// 与宽度变化重放**同一条路**（取走整份 `painted` → 逐条重推），差别只在中间那一步问
+    /// 了一遍 [`Self::visible_records`]：过滤决定「哪些块在」。折叠（票 21）接在它后面
+    /// —— 一块画几行 —— 所以它接的是同一个入口。
+    ///
+    /// 窗格的视口**意图**保住：`clear` 留着 `follow` / `top` / `top_source`，下一帧照着它
+    /// 重新折行定位。但换掉整份账本之后「原处」得按**来源行**重报一遍 —— 那一份记在
+    /// `TraceSearch::before_filter` 里，由 [`Self::refresh_trace_filter`] 在进出过滤时存取。
+    fn replay_trace(&mut self) {
+        self.clear_trace_for_replay();
+        if self.painted.is_empty() {
+            self.dirty = true;
+            return;
+        }
+        let visible = self.visible_records();
+        let painted = std::mem::take(&mut self.painted);
+        for (item, show) in painted.iter().zip(&visible) {
+            if !*show {
+                continue;
+            }
+            self.emit_painted(
+                item,
+                Targets {
+                    conversation: false,
+                    trace: true,
+                },
+                true,
+            );
+        }
+        self.painted = painted;
+        self.dirty = true;
+    }
+
+    /// 清空轨迹页的重放清单：窗格与它的三张平行表、锚表、组状态与跨块排版状态。
+    ///
+    /// 这六样必须一起清 —— 它们都是「按块序列推出来的」那几份账（票 12、16、18）。
+    fn clear_trace_for_replay(&mut self) {
+        self.trace.clear();
+        self.trace_links.clear();
+        self.trace_block_ids.clear();
+        self.anchors.clear();
+        self.trace_groups = TraceGroups::default();
+        self.trace_flow = Flow::default();
+    }
+
+    /// 这一趟重放推哪些记录（票 20）。
+    ///
+    /// **过滤先**决定「哪些块在」；组头与小标题跟着它们的成员 —— 一个组里一个可见的成员
+    /// 都没有，那个头也收起来，否则过滤视图里会留下一串没有成员的空头（票 20 第 7 条：
+    /// 组头保留，但它保留的是**有成员的组**的那个头，而它自己不因过滤改写）。
+    /// 折叠（票 21）改的是「一块画几行」，接在这一层之后。
+    fn visible_records(&self) -> Vec<bool> {
+        let mut visible: Vec<bool> = self
+            .painted
+            .iter()
+            .map(|painted| self.trace_admits(painted.id()))
+            .collect();
+        if !self.filtering() {
+            return visible;
+        }
+        for index in 0..self.painted.len() {
+            let end = match &self.painted[index] {
+                // 一级组头管到下一个一级组头（或一个无主段落的小标题）为止 —— 这中间那些
+                // 二级头与成员都是它的成员。
+                Painted::GroupHeader(header) if header.level == HeaderLevel::Unit => {
+                    self.next_header_after(index, true)
+                }
+                // 二级组头与小标题管到下一个组头或小标题为止。
+                Painted::GroupHeader(_) | Painted::SectionHeader(_) => {
+                    self.next_header_after(index, false)
+                }
+                _ => continue,
+            };
+            if (index + 1..end).any(|other| visible[other]) {
+                visible[index] = true;
+            }
+        }
+        visible
+    }
+
+    /// 第 `index` 条记录之后，第一条把它那一段划走的组头或小标题；没有就是账本的末尾。
+    ///
+    /// `unit_only` 是要「只认一级组头」（一级头的范围）还是「认任何组头」（二级头与小标题
+    /// 的范围到此为止）。**它与 [`Self::group_shape`] 那套归属不是同一条判据**：那边回答的
+    /// 是「一条记录属于哪一个组头」（组头自己属于自己），而这里问的是「这条头管到哪一行」。
+    fn next_header_after(&self, index: usize, unit_only: bool) -> usize {
+        (index + 1..self.painted.len())
+            .find(|other| match &self.painted[*other] {
+                Painted::GroupHeader(header) => !unit_only || header.level == HeaderLevel::Unit,
+                Painted::SectionHeader(_) => true,
+                _ => false,
+            })
+            .unwrap_or(self.painted.len())
+    }
+
+    /// `n` / `N`：沿命中走一个，并把选中移到那个块（票 20 第 6 条）。
+    ///
+    /// 顺序取**账本的顺序**（`painted` 的记录序）：命中集是个集合，而「下一个」要有一个确定
+    /// 的顺序。走到头就停在原地 —— 与 `[` / `]` 同一条「不循环」。
+    fn step_trace_hit(&mut self, forward: bool) {
+        let Some(search) = self.trace_search.as_ref() else {
+            return;
+        };
+        if search.terms.is_empty() {
+            return;
+        }
+        let hits: Vec<BlockId> = self
+            .painted
+            .iter()
+            .map(Painted::id)
+            .filter(|id| search.hits.contains(id))
+            .collect();
+        let current = self
+            .trace_selection
+            .and_then(|id| hits.iter().position(|it| *it == id));
+        let target = match (current, forward) {
+            // 还没有选中（或者选中的那一块不在命中集里）：从头 / 从尾开始。
+            (None, true) => hits.first().copied(),
+            (None, false) => hits.last().copied(),
+            (Some(at), true) => hits.get(at + 1).copied(),
+            (Some(at), false) => at.checked_sub(1).and_then(|at| hits.get(at).copied()),
+        };
+        if let Some(id) = target {
+            self.land_on_record(id);
+        }
+    }
+
+    /// 内容区右下角那个浮字位此刻该写什么：过滤期间整句让给命中读法，别的场合交给新内容
+    /// 指示器（票 20 第 9 条）。
+    ///
+    /// `None` 就是「不是过滤态，那一行照旧」。
+    fn trace_hit_readout(&self) -> Option<String> {
+        let search = self.trace_search.as_ref()?;
+        if search.terms.is_empty() {
+            return None;
+        }
+        Some(if search.fresh == 0 {
+            wording::hit_count(search.hits.len())
+        } else {
+            wording::hit_count_with_new(search.hits.len(), search.fresh)
+        })
+    }
+
+    /// 跟随回到跟上之后，「新增」就没有意义了 —— 读者已经看见了（票 20 第 9 条）。
+    ///
+    /// 它与新内容指示器那一套同一条节奏，只是数的是**命中块**；过滤期间那个位置让给了
+    /// 命中读法，所以清零这件事由这里管。
+    fn settle_trace_fresh(&mut self) {
+        let Some(search) = self.trace_search.as_mut() else {
+            return;
+        };
+        if search.fresh > 0 && self.trace.following() {
+            search.fresh = 0;
         }
     }
 
@@ -6047,6 +6597,11 @@ impl TuiState {
         if self.pending.is_some() || self.slash.dismissed {
             return None;
         }
+        // 搜索模式里输入区打的是**查询串**，不是草稿：它里面的 `/` 与 `@` 都只是字，所以
+        // 记号菜单在这一刻不开（票 20 第 2 条 —— 同一个物理键两层换含义的另一半）。
+        if self.trace_searching() {
+            return None;
+        }
         let token = self.editor.token()?;
         let entries: Vec<MenuEntry> = match token.prefix {
             '/' => {
@@ -6617,6 +7172,9 @@ fn wrap_with_lead(body: &str, lead: &str, width: usize) -> Vec<Line<'static>> {
 /// （spec §2）。
 pub fn draw_frame(frame: &mut ratatui::Frame, state: &mut TuiState) {
     let area = frame.area();
+    // 跟随回到跟上之后那一行「新增」就作废了 —— 它在画之前对一次，于是同一帧上读到的是
+    // 清过之后的那句话（票 20 第 9 条）。
+    state.settle_trace_fresh();
     // 指针是在两帧之间被回应的，而打开详情需要这一帧被画出来时的宽度。
     state.area = area;
     // 上一帧记下来的才是指针可能打中的；这一帧从什么都没有开始，只记它真画出来的东西
@@ -8186,18 +8744,39 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, 
     // 它的点击不属于任何人（票 02 §4）。对话页的指示器照画（票 13）—— 今天打开方恒为轨迹页
     // （`.scratch/tui-feedback/spec.md` §9）。
     let frozen = state.detail_open() && view == Viewport::Trace;
-    if pane.following() || frozen || area.width == 0 || area.height == 0 {
+    if frozen || area.width == 0 || area.height == 0 {
         match view {
             Viewport::Conversation => state.indicator = None,
             Viewport::Trace => state.trace_indicator = None,
         }
         return;
     }
-    let fresh = pane.fresh();
-    let text = if fresh == 0 {
-        wording::back_to_bottom().to_owned()
+    // **过滤期间那个位置整句让给命中读法**（票 20 第 9 条）：与新内容指示器同一位、同一色、
+    // 同一贴边算术，但它是一个**信息位** —— 那一刻它不再是一条手势路（回最新由 `G` 承担），
+    // 所以它不记矩形，点它没有反应。
+    let readout = if view == Viewport::Trace {
+        state.trace_hit_readout()
     } else {
-        wording::new_content(fresh)
+        None
+    };
+    // 过滤没激活时逐字照旧：跟着底部就不画，滚走了才写「N 条新行」/「点此到底」。
+    if readout.is_none() && pane.following() {
+        match view {
+            Viewport::Conversation => state.indicator = None,
+            Viewport::Trace => state.trace_indicator = None,
+        }
+        return;
+    }
+    let text = match &readout {
+        Some(text) => text.clone(),
+        None => {
+            let fresh = pane.fresh();
+            if fresh == 0 {
+                wording::back_to_bottom().to_owned()
+            } else {
+                wording::new_content(fresh)
+            }
+        }
     };
     // `area` 已经是文字区 —— 滚动条那一列不在里面 —— 所以右边缘的一个宽字符不可能把滚动条
     // 遮没。
@@ -8211,7 +8790,8 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             truncate_columns(&text, width as usize),
-            // 新内容指示器归焦点色（`.scratch/tui-visual-language/spec.md` §6）。
+            // 新内容指示器归焦点色（`.scratch/tui-visual-language/spec.md` §6）—— 命中读法
+            // 与它同一位，也就同一色。
             Style::default()
                 .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
@@ -8220,7 +8800,8 @@ fn draw_indicator(frame: &mut ratatui::Frame, area: Rect, state: &mut TuiState, 
     );
     match view {
         Viewport::Conversation => state.indicator = Some(rect),
-        Viewport::Trace => state.trace_indicator = Some(rect),
+        // 命中读法画在同一个位置却不记矩形：过滤期间它不是可点的手势位（票 20 第 9 条）。
+        Viewport::Trace => state.trace_indicator = readout.is_none().then_some(rect),
     }
 }
 
@@ -13981,5 +14562,330 @@ mod tests {
         assert_eq!(page.trace_selection, Some(iteration), "视口在底下时也一样");
         page.key(Key::Char(']'));
         assert_eq!(page.trace_selection, Some(member));
+    }
+
+    // --- 搜索与过滤：索引、判据、导航、草稿（票 20） -------------------------
+
+    /// 查询串：空白分词、大小写不敏感、各词 AND（票 20 第 6 条）。
+    #[test]
+    fn the_query_splits_on_spaces_ignores_case_and_requires_every_word() {
+        let terms = query_terms("  Read  PANE.txt ");
+        assert_eq!(terms, vec!["read".to_owned(), "pane.txt".to_owned()]);
+        assert!(hits_terms(&terms, "请 READ 那个 pane.txt"), "大小写不敏感");
+        assert!(!hits_terms(&terms, "只有 read 一个词"), "各词 AND");
+        assert!(!hits_terms(&[], "没有词就不命中"), "空词表什么都不命中");
+    }
+
+    /// 索引覆盖**整场会话**，不受 `CAP` 裁剪 —— 早就滚出屏的那一块照样搜得到；而还在流的
+    /// 增量不进索引，它定稿那一刻才进（票 20 第 4、5 条）。
+    #[test]
+    fn the_index_covers_the_whole_session_and_waits_for_a_delta_to_settle() {
+        let mut page = state();
+        page.apply(RenderEvent::Delta {
+            speaker: crate::events::SpeakerId::Debater("kimi".into()),
+            kind: DeltaKind::Reasoning,
+            text: "这段推理还在流".to_owned(),
+        });
+        assert!(
+            page.trace_index.entries.is_empty(),
+            "开着的那一段还没定稿，不进索引"
+        );
+        page.apply(RenderEvent::Delta {
+            speaker: crate::events::SpeakerId::Debater("kimi".into()),
+            kind: DeltaKind::Text,
+            text: "答案".to_owned(),
+        });
+        assert_eq!(page.trace_index.entries.len(), 1, "定稿那一刻进索引");
+        let first = page.trace_index.entries[0].0;
+        assert!(
+            page.trace_index.hits(&query_terms("推理")).contains(&first),
+            "那一段思考定稿之后搜得到"
+        );
+
+        // 一整场会话比窗格的上限更长：窗格裁到 `CAP`，索引一条不少。
+        let mut long = state();
+        for index in 0..pane::CAP + 20 {
+            long.apply(RenderEvent::notice(format!("第 {index} 句话")));
+        }
+        assert_eq!(long.trace.sources(), pane::CAP, "窗格裁到上限");
+        assert_eq!(long.trace_index.entries.len(), pane::CAP + 20);
+        let earliest = long.trace_index.entries[0].0;
+        assert!(
+            long.trace_index
+                .hits(&query_terms("第 0 句话"))
+                .contains(&earliest),
+            "早就滚出屏的那一块照样搜得到"
+        );
+    }
+
+    /// 过滤视图里组头**保留**（它不因过滤改写），而一个成员都没有命中的组头收起来 ——
+    /// 否则过滤视图里会留下一串没有成员的空头（票 20 第 7 条）。
+    #[test]
+    fn a_filtered_ledger_keeps_the_headers_that_still_have_members() {
+        let mut page = a_page_with_two_levels();
+        page.key(Key::Char('/'));
+        for ch in "read".chars() {
+            page.key(Key::Char(ch));
+        }
+        page.key(Key::Enter);
+        assert!(page.filtering());
+
+        let visible = page.visible_records();
+        let shown: Vec<BlockId> = page
+            .painted
+            .iter()
+            .zip(&visible)
+            .filter(|(_, show)| **show)
+            .map(|(painted, _)| painted.id())
+            .collect();
+        assert!(shown.contains(&tool_block(&page, "read")), "命中的那一块在");
+        assert!(
+            !shown.contains(&tool_block(&page, "ls")),
+            "没命中的那一块不占行"
+        );
+        assert!(
+            shown.contains(&header_of(&page, HeaderLevel::Iteration, 2)),
+            "有命中成员的那个二级头留着"
+        );
+        assert!(
+            shown.contains(&header_of(&page, HeaderLevel::Unit, 1)),
+            "一级头留着：它里面那个迭代有命中成员"
+        );
+
+        // 另一个回合里的调用才是「那个组一个成员都没命中」的样子。
+        let mut two_turns = state();
+        two_turns.main_tab = MainTab::Trace;
+        let kimi = crate::events::SpeakerId::Debater("kimi".into());
+        two_turns.apply(logged(
+            1,
+            EventPayload::MessageCompleted {
+                role: Role::User,
+                text: "第一个回合里没有那个词".to_owned(),
+                reasoning: None,
+                first_token_ms: None,
+            },
+        ));
+        two_turns.apply(logged(
+            2,
+            EventPayload::TurnStarted {
+                agent: kimi.clone(),
+                iteration: 1,
+            },
+        ));
+        two_turns.apply(logged(
+            3,
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+        ));
+        two_turns.apply(logged(
+            4,
+            EventPayload::TurnStarted {
+                agent: kimi.clone(),
+                iteration: 1,
+            },
+        ));
+        a_tool_call(&mut two_turns, 5, "c-1", "read");
+        two_turns.apply(logged(
+            7,
+            EventPayload::TurnEnded {
+                reason: StopReason::Completed,
+            },
+        ));
+
+        two_turns.key(Key::Char('/'));
+        for ch in "read".chars() {
+            two_turns.key(Key::Char(ch));
+        }
+        two_turns.key(Key::Enter);
+        let visible = two_turns.visible_records();
+        let shown: Vec<BlockId> = two_turns
+            .painted
+            .iter()
+            .zip(&visible)
+            .filter(|(_, show)| **show)
+            .map(|(painted, _)| painted.id())
+            .collect();
+        assert!(
+            shown.contains(&header_of(&two_turns, HeaderLevel::Unit, 2)),
+            "命中所在的那个回合的组头在"
+        );
+        assert!(
+            !shown.contains(&header_of(&two_turns, HeaderLevel::Unit, 1)),
+            "一个成员都没命中的一级头收起来"
+        );
+    }
+
+    /// 进搜索时草稿**整份**收起来、退出时原样还原；`Enter` 离开但不提交，`Esc` 取消并把
+    /// 查询串与过滤一起丢掉（票 20 第 2、10 条）。
+    #[test]
+    fn the_search_mode_keeps_the_draft_and_never_submits_it() {
+        let mut page = a_page_with_two_levels();
+        let (reply, mut line) = tokio::sync::oneshot::channel();
+        page.request(ConsoleRequest::Prompt { reply });
+        for ch in "写了一半的话".chars() {
+            page.key(Key::Char(ch));
+        }
+        assert_eq!(page.editor.text(), "写了一半的话");
+
+        // `/` 进搜索：输入区切到搜索模式，草稿整份收起来。
+        page.key(Key::Char('/'));
+        assert!(page.trace_searching());
+        assert_eq!(page.editor.text(), "", "查询串从空开始");
+        for ch in "read".chars() {
+            page.key(Key::Char(ch));
+        }
+        assert_eq!(page.trace_search.as_ref().unwrap().query, "read");
+        // 改一个字符就实时重算：这一刻还没按回车，过滤已经生效了（票 20 第 2 条）。
+        assert!(page.filtering(), "打一个字符就重算，不等回车");
+
+        // `Enter` 接受并离开 —— 过滤留着，草稿一个字没动，也**没有提交**。
+        page.key(Key::Enter);
+        assert!(!page.trace_searching());
+        assert!(page.filtering(), "接受的查询留着过滤");
+        assert_eq!(page.editor.text(), "写了一半的话", "草稿原样还原");
+        assert!(line.try_recv().is_err(), "搜索模式里的回车不提交草稿");
+
+        // 再按 `/` 接着改那条查询；`Esc` 取消 —— 查询与过滤一起丢掉，草稿还回来。
+        page.key(Key::Char('/'));
+        assert_eq!(page.editor.text(), "read", "接着上次那条查询改");
+        page.key(Key::Char('x'));
+        assert!(page.filtering());
+        page.key(Key::Esc);
+        assert!(!page.filtering(), "取消搜索把过滤也丢掉");
+        assert!(!page.trace_searching());
+        assert_eq!(page.editor.text(), "写了一半的话");
+    }
+
+    /// 没有在筛的时候 `n` / `N` 就只是两个普通字符：照旧落进输入区 —— 那一层只在过滤
+    /// 激活时收它们（票 20 第 6 条）。
+    #[test]
+    fn the_hit_keys_stay_typed_into_the_draft_while_nothing_is_filtered() {
+        let mut page = a_page_with_two_levels();
+        page.key(Key::Char('n'));
+        page.key(Key::Char('N'));
+        assert_eq!(page.editor.text(), "nN");
+        assert!(page.trace_selection.is_none(), "没有命中就没有下一个");
+    }
+
+    /// `Esc` 的四层序（票 20 第 10 条）：搜索模式 → 清过滤 → 清选中 → 交还键盘。
+    #[test]
+    fn escape_walks_the_four_layers_in_order() {
+        let mut page = a_page_with_two_levels();
+        page.key(Key::Char('g'));
+        assert!(page.trace_selection.is_some(), "先放一个选中");
+
+        page.key(Key::Char('/'));
+        page.key(Key::Char('r'));
+        assert!(page.trace_searching());
+        page.key(Key::Esc);
+        assert!(
+            !page.trace_searching() && !page.filtering(),
+            "第一层：取消搜索"
+        );
+        assert!(page.trace_selection.is_some(), "选中与搜索互不清");
+
+        page.key(Key::Char('/'));
+        page.key(Key::Char('r'));
+        page.key(Key::Enter);
+        assert!(page.filtering() && !page.trace_searching());
+        page.key(Key::Esc);
+        assert!(!page.filtering(), "第二层：清过滤");
+        assert!(page.trace_selection.is_some(), "选中还留着");
+        page.key(Key::Esc);
+        assert!(page.trace_selection.is_none(), "第三层：清选中");
+        assert!(page.trace_keyboard);
+        page.key(Key::Esc);
+        assert!(!page.trace_keyboard, "第四层：交还键盘");
+    }
+
+    /// `n` / `N` 沿命中按**账本顺序**走，并把选中移到那一块（票 20 第 6 条）。
+    #[test]
+    fn the_hits_walk_in_ledger_order_and_take_the_selection_with_them() {
+        let mut page = a_page_with_two_levels();
+        a_tool_call(&mut page, 9, "c-3", "read");
+        page.apply(RenderEvent::notice("再 read 一次"));
+        page.key(Key::Char('/'));
+        for ch in "read".chars() {
+            page.key(Key::Char(ch));
+        }
+        page.key(Key::Enter);
+
+        let first = tool_block(&page, "read");
+        let second = page
+            .painted
+            .iter()
+            .find_map(|painted| match painted {
+                Painted::Block {
+                    block: Block::Tool(tool),
+                    id,
+                    ..
+                } if tool.tool == "read" && *id != first => Some(*id),
+                _ => None,
+            })
+            .expect("第二次 read 在");
+        let notice = page
+            .painted
+            .iter()
+            .find_map(|painted| match painted {
+                Painted::Block {
+                    block: Block::Notice(text),
+                    id,
+                    ..
+                } if text.contains("再 read") => Some(*id),
+                _ => None,
+            })
+            .expect("那条通知在");
+
+        // 没有选中时 `n` 从第一个命中开始。
+        page.key(Key::Char('n'));
+        assert_eq!(page.trace_selection, Some(first));
+        page.key(Key::Char('n'));
+        assert_eq!(page.trace_selection, Some(second));
+        page.key(Key::Char('n'));
+        assert_eq!(page.trace_selection, Some(notice), "通知里的命中也算一个");
+        page.key(Key::Char('n'));
+        assert_eq!(page.trace_selection, Some(notice), "走到头就停住");
+        page.key(Key::Char('N'));
+        assert_eq!(page.trace_selection, Some(second), "`N` 往回走一个");
+    }
+
+    /// 过滤期间新到的命中块进账，并记一笔「新增」—— `· 新增 M` 数的是**块**，不是行
+    /// （票 20 第 9 条）。
+    #[test]
+    fn a_hit_that_arrives_while_filtering_lands_in_the_ledger_and_counts_as_new() {
+        let mut page = a_page_with_two_levels();
+        page.key(Key::Char('/'));
+        for ch in "read".chars() {
+            page.key(Key::Char(ch));
+        }
+        page.key(Key::Enter);
+        let before = page.trace_search.as_ref().unwrap().hits.len();
+        assert_eq!(before, 1);
+        assert_eq!(page.trace_search.as_ref().unwrap().fresh, 0);
+
+        a_tool_call(&mut page, 20, "c-9", "read");
+        let search = page.trace_search.as_ref().unwrap();
+        assert_eq!(search.hits.len(), 2, "它进了过滤集");
+        assert_eq!(search.fresh, 1, "而且算一个新增");
+        let landed = tool_block(&page, "read");
+        let newest = page
+            .painted
+            .iter()
+            .filter_map(|painted| match painted {
+                Painted::Block {
+                    block: Block::Tool(tool),
+                    id,
+                    ..
+                } if tool.tool == "read" => Some(*id),
+                _ => None,
+            })
+            .next_back()
+            .expect("两次 read 在");
+        assert_ne!(landed, newest);
+        assert!(
+            page.first_source_of(newest).is_some(),
+            "新命中的那一块出现在过滤视图里"
+        );
     }
 }

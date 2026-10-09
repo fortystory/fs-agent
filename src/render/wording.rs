@@ -1924,6 +1924,23 @@ pub fn back_to_bottom() -> &'static str {
     "点此到底"
 }
 
+/// 过滤态那一行：命中几个（`.scratch/trace-ledger/spec.md` §11）。
+///
+/// 它住在内容区右下角那个浮字位上 —— 与新内容指示器同一位，而同一位上两种读法互斥：
+/// 过滤期间整句让给命中读法（票 20 第 9 条）。
+///
+/// **无匹配时也写同一句**（`0 个命中`）：不为「出了事」单造一个词，否则那一行是两种读法
+/// 混在一起。
+pub fn hit_count(hits: usize) -> String {
+    format!("{hits} 个命中")
+}
+
+/// 同上，外加自进入过滤以来新到达的**命中块数** —— 读者要的是「有多少值得按 `n` 过去」，
+/// 所以数的是块，不是新到达的行（票 20 第 9 条）。
+pub fn hit_count_with_new(hits: usize, fresh: usize) -> String {
+    format!("{} · 新增 {fresh}", hit_count(hits))
+}
+
 /// 比最小尺寸还小的终端上显示的一切，好让原因是一句话、而不是一块空屏（spec §2）。
 pub fn too_small(width: u16, height: u16) -> String {
     format!("终端太小：至少 {width}×{height}")

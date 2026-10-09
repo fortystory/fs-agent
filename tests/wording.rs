@@ -724,6 +724,16 @@ fn the_scroll_indicator_and_the_minimum_explain_themselves() {
 }
 
 #[test]
+fn the_hit_readout_is_one_sentence_in_three_states() {
+    // 过滤期间右下角那一行的三态（`.scratch/trace-ledger/spec.md` §11、票 20 第 9 条）：
+    // 有命中 / 有命中且新到了几个块 / 一个都没有 —— 最后那一档也是同一句话。
+    assert_eq!(wording::hit_count(12), "12 个命中");
+    assert_eq!(wording::hit_count(0), "0 个命中");
+    assert_eq!(wording::hit_count_with_new(12, 2), "12 个命中 · 新增 2");
+    assert_eq!(wording::hit_count_with_new(0, 0), "0 个命中 · 新增 0");
+}
+
+#[test]
 fn every_panel_label_is_the_chinese_the_prototype_shows() {
     assert_eq!(wording::PANEL_MODEL, "模型");
     assert_eq!(wording::PANEL_CONTEXT, "上下文");

@@ -1,7 +1,7 @@
 # 20 — 搜索与过滤（tracer bullet）
 
 Type: implement
-Status: ready-for-agent
+Status: done
 Part of: ../map.md
 Blocked by: 12, 18
 
@@ -60,6 +60,129 @@ Blocked by: 12, 18
 11. 搜索串**只活在进程内**，切会话 / 恢复会话不持久。
 
 ## 验收
+
+- [x] 轨迹页持有键盘时按 `/` 进搜索；打字时 `/` 仍然弹记号菜单（两层换含义）。
+- [x] 查询串打在输入区，进搜索前的草稿**原样存着**、退出后**原样还原**。
+- [x] 搜索模式里 `Enter` 离开搜索模式但**不提交草稿**；`Esc` 取消并还原。
+- [x] 改一个字符就实时重算，不按回车。
+- [x] 一块命中时它那几行一起出现在过滤视图里；未命中的块**一条源行都不占**。
+- [x] 索引覆盖整场会话：早就滚出屏（被裁掉）的那块仍能搜到。
+- [x] 还在流的增量块不进索引；它定稿后若命中就出现在过滤视图里。
+- [x] 组头在过滤视图里**保留且不改写**。
+- [x] 过滤期间新块进账而视口不动；`Esc` 清过滤后回到原位。
+- [x] `n` / `N` 跳命中并把选中移到那个块。
+- [x] 右下角那一行：`12 个命中` / `12 个命中 · 新增 2` / `0 个命中` 三种文案各自出现；
+      滚到底后「新增」清零。
+- [x] 过滤期间那个位置**点它没有反应**（不再是手势位）；`G` 仍回到底部但**过滤不变**。
+- [x] **状态行逐字未变**。
+- [x] 改宽度（触发重放）之后过滤集原样还在。
+- [x] `cargo test` 全绿、`cargo clippy` 干净、`cargo fmt --check` 只留既有漂移。
+
+## 落地记录
+
+**2026-10-10 落地。** 五个落点：`src/render/tui.rs`（索引、查询语义、搜索态、重放那条路、键盘
+那一支、右下角浮字位）、`src/render/pane.rs`（`anchor_to_source`）、`src/render/wording.rs`
+（命中读法那两句话）、`tests/render_layout.rs` 与 `tests/wording.rs`。**既有断言一条都没改** ——
+没有过滤时屏上输出一个字符都没变（`cargo test --no-fail-fast` 1636 → 1658 全绿）。22 条新测试
+（8 低层 + 1 措辞 + 13 帧层）。
+
+### 重放那条路的形状：一份「推哪些块」的谓词（给票 21 的门）
+
+票面要的那扇门落成一个**新入口 + 一次谓词扫描**，折叠接在这里，不接在别的什么地方：
+
+- `TuiState::replay_trace()` —— 过滤那条重放：清掉轨迹页那几份账（窗格、链接表、身份表、锚表、
+  组状态、跨块排版状态 —— 抽成 `clear_trace_for_replay()`，与宽度重放共用），取走整份
+  `painted`，**逐条问一遍谓词**，再重推。
+- `TuiState::visible_records() -> Vec<bool>` —— 那句谓词：**过滤先**决定「哪些块在」，组头与
+  小标题跟着它们的成员，`Painted::Thinking`（未定稿）按「它不在索引里」自然被挡在外面。
+- `TuiState::trace_admits(id)` —— 单条记录的判据（命中集收着**块身份**）。
+
+票 21 要加的是**「一块画几行」**那一层，位置有两处：`visible_records` 之后（折起来的块仍在账本
+上占一行，所以不该从 `visible_records` 里去掉），以及 `emit_painted` / `emit_block` 里决定推
+几行的地方。触发重放的时机也照票 21 的口径复用同一个 `replay_trace()`（折叠 / 展开 / 全折 /
+全展各来一次），不需要新机制。
+
+### 与票面不同的六处
+
+1. **触发重放的判据落成「谓词真的变了才重放」**，而不是票 09 §9 那张时机清单的字面（进搜索改
+   串、出搜索、折叠…）。差别只在「出搜索」那一格：`Enter` 接受时查询串一个字没变，过滤集也就
+   没变 —— 那一下重放是白做一遍几百行。结果相同，代价少一次。
+2. **实时路径不去猜谓词**：过滤激活时新到的块照旧推一遍，随后由一次 `replay_trace()` 按判据
+   对齐。重放是那句判据的**唯一权威**，所以「未命中的一条源行都不占」由一个地方保证，而不是
+   两处各判一半。例外是增量事件（`RenderEvent::Delta`）：它每秒几十条，而它唯一画出来的东西是
+   那条**还没定稿**的思考行，所以它不触发重放；思考**定稿**那一下（`settle_thinking`）自己带
+   一次 —— 那正是票面第 4 条那半句「它定稿那一刻建索引并触发一次重放」。
+3. **未定稿的思考行在过滤期间根本不上屏**（`paint_thinking_line` 走同一个谓词）。它不是「推出去
+   再清掉」能了事的：那是账本上唯一一条**就地改写**的行（`Pane::replace_last`），清掉之后
+   `settle_thinking` 会改到别人头上。`paint_settled_thinking` 因此多了一道「窗格最后那一条真的
+   是它吗」的判据，问不对就什么都不写。
+4. **组头 / 小标题的可见性是「有可见成员的头才留」**。票面只说「组头保留且不因过滤改写」，而
+   「保留」的粒度要定：一个成员都没命中的组头若留着，过滤视图里就是一串没有成员的空头。它自己
+   仍然**不因过滤改写** —— 措辞与直方图照旧是该单位全体成员的那一份（验收那一条测的正是这个）。
+5. **`n` / `N` 只在过滤激活时收**。它们与 `j` / `k` / `g` / `G`（一直收）不同：那两个键在轨迹页
+   上本来就不该是打字，而 `n` 在没筛的时候只是一个普通字母。没有过滤时它们照旧落进输入区。
+6. **「回到原处」按来源行记，为此窗格多了一个入口**（票面的「落点」只列了渲染层那几处）。
+   显示行活不过一次重放（过滤换掉了账本上的行），所以进过滤时记的是「视口顶端那条来源行」，
+   退出时 `Pane::anchor_to_source` 把它交给下一帧重新折行 —— 窗格自己那份锚在过滤期间会被夹取
+   覆盖掉，靠不住。
+
+另外三件顺手定下来的小事：**搜索模式里记号菜单不开**（`token_menu` 多一道守卫）—— 否则查询串
+里的 `/` 会弹出菜单；**`Ctrl-C` / `Ctrl-D` / `Ctrl-O` / `Ctrl-T` / `Ctrl-G` / 翻页三键 /
+`BackTab` 在搜索模式里照旧穿透**（不收它们，就等于在搜索模式里扣住了这些全局手势）；**`Tab`**
+在搜索模式里是一段空白（查询串靠空白分词）。
+
+### 验收
+
+- [x] 轨迹页持有键盘时 `/` 进搜索；打字时 `/` 仍弹记号菜单
+      （`the_slash_goes_to_search_on_the_trace_page_and_to_the_menu_while_typing`）；
+      搜索模式里再打 `/` 只是查询串里的一个字
+      （`a_slash_typed_into_the_search_query_is_just_a_character`）。
+- [x] 查询串打在输入区；草稿原样存着、退出后原样还原
+      （`the_query_is_typed_in_the_input_area_and_the_draft_comes_back_untouched`、
+      `the_search_mode_keeps_the_draft_and_never_submits_it`）。
+- [x] `Enter` 离开搜索模式但**不提交草稿**（`the_search_mode_keeps_the_draft_and_never_submits_it`
+      里那个 `prompt_reply` 通道一个字都没收到）；`Esc` 取消并还原。
+- [x] 改一个字符就实时重算，不按回车（同一条低层测试里「还没按回车，`filtering` 已经是真的」）。
+- [x] 一块命中时它那几行一起出现（`a_hit_brings_all_the_rows_of_its_block`：失败调用的错误正文
+      那一条附属行跟着主行），未命中块一条源行都不占
+      （`a_filtered_ledger_keeps_only_the_blocks_that_hit`）。
+- [x] 索引覆盖整场会话：早就滚出屏的那块仍能搜到
+      （`the_search_covers_the_whole_session_not_just_the_window`、
+      `the_index_covers_the_whole_session_and_waits_for_a_delta_to_settle`）。
+- [x] 还在流的增量块不进索引；定稿后若命中就出现在过滤视图里
+      （`the_index_covers_the_whole_session_and_waits_for_a_delta_to_settle`、
+      `a_hit_that_arrives_while_filtering_lands_in_the_ledger_and_counts_as_new`）。
+- [x] 组头在过滤视图里保留且不改写
+      （`a_filtered_ledger_keeps_the_headers_that_still_have_members`、
+      `a_filtered_ledger_keeps_only_the_blocks_that_hit` 里那两行 `回合 2` / `回合 1`）。
+- [x] 过滤期间新块进账而视口不动；`Esc` 清过滤后回到原位
+      （`leaving_the_filter_puts_the_viewport_back`）。
+- [x] `n` / `N` 跳命中并把选中移到那个块
+      （`the_hit_keys_walk_the_hits_and_take_the_selection_with_them`、
+      `the_hits_walk_in_ledger_order_and_take_the_selection_with_them`）。
+- [x] 右下角那一行三种文案各自出现；滚到底后「新增」清零
+      （`the_hit_readout_is_one_sentence_in_three_states`、
+      `the_corner_gives_itself_to_the_hit_readout_while_a_filter_is_on`、
+      `an_empty_hit_set_still_says_the_same_sentence`）。
+- [x] 过滤期间那个位置点它没有反应；`G` 仍回到底部但过滤不变
+      （`clicking_the_corner_does_nothing_while_a_filter_is_on`、
+      `the_corner_gives_itself_to_the_hit_readout_while_a_filter_is_on`）。
+- [x] 状态行逐字未变（`filtering_never_touches_the_status_row`）。
+- [x] 改宽度（触发重放）之后过滤集原样还在（`a_width_change_keeps_the_filter_set`）。
+- [x] `cargo test --no-fail-fast` 1658 passed / 0 failed；`cargo clippy --all-targets` 与基线
+      **逐条相同**（83 行同、具体警告逐条同）；`cargo fmt --check` 干净；
+      `scripts/check-doc-size.py` 与 `scripts/check-language.py` 通过。
+
+### 交给后面的票
+
+- **票 21（折叠）**：入口就是 `replay_trace()` 与 `visible_records()`（见「重放那条路」那一节）。
+  折起来的块仍在账本上占**一行**，所以它该加在「块画几行」那一层，不是 `visible_records` 那一层。
+  票 19 留下的那个口子照旧在 `land_on_record`（折行换不出源行时先展开再落点）。
+- **票 22 / 23（时间轴与轴上的命中底色）**：命中集是 `TuiState` 里的 `HashSet<BlockId>`
+  （`trace_search.hits`，按**块身份**记），轴的输入直接读它，不必自己再搜一遍。
+- **票 24（文档与收口）**：`docs/render.md` 的**键盘**一节已经补上这一票要的三处
+  （`/` 两义、搜索模式里 `Enter` 不提交草稿、搜的是整场会话而不是窗口内）。`CONTEXT.md` 的
+  **命中** / **过滤**词条与「搜到的命中不一定都在轴上出现」那一条留给它。
 
 - [ ] 轨迹页持有键盘时按 `/` 进搜索；打字时 `/` 仍然弹记号菜单（两层换含义）。
 - [ ] 查询串打在输入区，进搜索前的草稿**原样存着**、退出后**原样还原**。

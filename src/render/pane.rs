@@ -359,6 +359,15 @@ impl Pane {
         self.sync_top_source();
     }
 
+    /// 重新折行之后视口顶端该落在**哪一条来源行**上。
+    ///
+    /// 与 [`Pane::restore`] 是两个坐标：那个记的是**显示行**（它活不过一次重放 —— 重放会把
+    /// 行整批换掉），而来源行在「同一份块、同一个宽度」下是稳定的。过滤退出时账本刚被重放成
+    /// 全量，位置就得按来源行报 —— 下一帧重新折行（`Pane::ensure`）之后用的正是这一位。
+    pub fn anchor_to_source(&mut self, source: usize) {
+        self.top_source = source;
+    }
+
     /// 视口此刻是不是跟着底部走。
     pub fn following(&self) -> bool {
         self.follow

@@ -12466,3 +12466,482 @@ fn an_unowned_row_answers_neither_bracket() {
         "也不进任何组"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 搜索与过滤（票 20）
+//
+// 判据两半：`/` 归轨迹页那一层（排在记号菜单之前），而命中之后账本上**只剩命中块**。
+// 过滤集按块身份记在渲染器一侧，于是宽度变化重放之后它原样还在
+// （`.scratch/trace-ledger/spec.md` §7、§8、§11）。
+// ---------------------------------------------------------------------------
+
+/// 一场两个回合的会话，每个回合一次能分辨的调用 —— 过滤要看的就是「命中一个、另一个
+/// 一条源行都不占」。
+fn two_turns_with_two_calls(state: &mut TuiState) {
+    state.apply(user_message(1, "第一个问题"));
+    state.apply(turn_started(2));
+    state.apply(message(3, "第一个回答", None));
+    state.apply(tool_started(
+        4,
+        "call-a",
+        "read",
+        serde_json::json!({"path": "a.rs"}),
+    ));
+    state.apply(tool_completed(5, "call-a", true, Some("甲"), None));
+    state.apply(turn_ended(6));
+    state.apply(user_message(7, "第二个问题"));
+    state.apply(turn_started(8));
+    state.apply(message(9, "第二个回答", None));
+    state.apply(tool_started(
+        10,
+        "call-b",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(11, "call-b", true, Some("乙"), None));
+    state.apply(turn_ended(12));
+}
+
+/// 打一个查询串进搜索模式，再回车接受。
+fn search_for(state: &mut TuiState, query: &str) {
+    state.key(Key::Char('/'));
+    for ch in query.chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Enter);
+}
+
+/// 输入区那一行画出来的文字（左栏与分隔列不算）。
+fn input_text(state: &mut TuiState, width: u16, height: u16) -> String {
+    let frame = buffer(width, height, state);
+    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
+    cells(&frame, input_corner(width, height).1, left, width)
+        .trim_end()
+        .to_owned()
+}
+
+/// 内容区右下角那个浮字位那一行画出来的文字。
+fn corner_text(state: &mut TuiState, width: u16, height: u16) -> String {
+    let frame = buffer(width, height, state);
+    let rows = transcript_rows(&conversation_rows(state, width, height));
+    let row = (TRANSCRIPT_TOP + rows - 1) as u16;
+    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
+    cells(&frame, row, left, width).trim_end().to_owned()
+}
+
+/// 打字时 `/` 仍然弹记号菜单，而轨迹页持有键盘时同一个键归搜索（票 20 第 1 条）。
+#[test]
+fn the_slash_goes_to_search_on_the_trace_page_and_to_the_menu_while_typing() {
+    let mut typing = idle();
+    install_catalog(&mut typing);
+    typing.key(Key::Char('/'));
+    let frame = buffer(120, 24, &mut typing);
+    let (_, top, _, _) = menu_box(&frame, 120, 24, "/undo");
+    assert!(top > 0, "打字时 `/` 弹的是记号菜单");
+
+    let mut state = state_with_roster(&["kimi"]);
+    install_catalog(&mut state);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    let _ = screen(120, 40, &mut state);
+    state.key(Key::Char('/'));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        !text.contains("/undo"),
+        "轨迹页持有键盘时 `/` 进搜索，不弹菜单：\n{text}"
+    );
+    for ch in "第二个回答".chars() {
+        state.key(Key::Char(ch));
+    }
+    assert_eq!(
+        input_text(&mut state, 120, 40),
+        "第二个回答",
+        "查询串打在输入区"
+    );
+}
+
+/// 进搜索前的草稿**原样存着**、退出后**原样还原**；`Enter` 离开搜索模式但**不提交草稿**，
+/// `Esc` 取消并把查询与过滤一起丢掉（票 20 第 2、10 条）。
+#[test]
+fn the_query_is_typed_in_the_input_area_and_the_draft_comes_back_untouched() {
+    let mut state = state_with_roster(&["kimi"]);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    for ch in "半句话的草稿".chars() {
+        state.key(Key::Char(ch));
+    }
+    assert_eq!(input_text(&mut state, 120, 40), "半句话的草稿");
+
+    state.key(Key::Char('/'));
+    assert_eq!(input_text(&mut state, 120, 40), "", "搜索模式从空查询开始");
+    for ch in "第二个回答".chars() {
+        state.key(Key::Char(ch));
+    }
+    assert_eq!(input_text(&mut state, 120, 40), "第二个回答");
+
+    state.key(Key::Enter);
+    assert_eq!(
+        input_text(&mut state, 120, 40),
+        "半句话的草稿",
+        "草稿原样还原，而回车没有把它发出去"
+    );
+    let filtered = screen(120, 40, &mut state).join("\n");
+    assert!(filtered.contains("第二个回答"), "{filtered}");
+    assert!(
+        !filtered.contains("第一个回答"),
+        "过滤留着（接受的查询就是刚打进去的那条）：{filtered}"
+    );
+
+    // 再按一次 `/` 接着改那条查询、`Esc` 取消：查询与过滤一起丢掉。
+    state.key(Key::Char('/'));
+    assert_eq!(input_text(&mut state, 120, 40), "第二个回答");
+    state.key(Key::Esc);
+    assert_eq!(input_text(&mut state, 120, 40), "半句话的草稿");
+    let all = screen(120, 40, &mut state).join("\n");
+    assert!(all.contains("第一个回答"), "账本回到全量：{all}");
+}
+
+/// 真过滤：账本上只剩命中块，未命中块**一条源行都不占**；有命中成员的那个组头保留、
+/// 一个成员都没命中的那个收起来（票 20 第 7 条）。
+#[test]
+fn a_filtered_ledger_keeps_only_the_blocks_that_hit() {
+    let mut state = state_with_roster(&["kimi"]);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    search_for(&mut state, "第二个回答");
+
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("第二个回答"), "命中那一块在：{page}");
+    assert!(!page.contains("第一个回答"), "未命中的一块不占行：{page}");
+    assert!(
+        !page.contains("调用 read"),
+        "未命中的一次调用也不占行：{page}"
+    );
+    assert!(!page.contains("第二个问题"), "用户那句话没命中：{page}");
+    // 组头保留：它是那个回合的头，而不是「命中成员」的头。
+    assert!(page.contains("回合 2"), "命中那个回合的组头留着：{page}");
+    assert!(
+        !page.contains("回合 1"),
+        "一个成员都没命中的那个收起来：{page}"
+    );
+}
+
+/// 一块命中，它那几行**一起**进过滤视图 —— 命中与过滤的粒度都是块，不是行
+/// （票 20 第 3 条）。
+#[test]
+fn a_hit_brings_all_the_rows_of_its_block() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    search_for(&mut state, "missing.rs");
+
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(page.contains("missing.rs"), "主行在：{page}");
+    assert!(
+        page.contains("no such file"),
+        "它是那一块的附属行，跟着一起在：{page}"
+    );
+    assert!(!page.contains("调用 bash"), "别的块一条源行都不占：{page}");
+}
+
+/// 索引覆盖**整场会话**：早就滚出屏的那一块照样搜得到 —— 这是与窗口内搜索不同的一档
+/// （票 20 第 5 条）。
+#[test]
+fn the_search_covers_the_whole_session_not_just_the_window() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(message(
+            (index as u64) * 2 + 1,
+            &format!("第 {index} 句话"),
+            None,
+        ));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    assert!(
+        !trace_page(&mut state, 120, 24)
+            .join("\n")
+            .contains("第 0 句话"),
+        "最旧的那一句已经滚出屏"
+    );
+    search_for(&mut state, "第 0 句话");
+    let page = trace_page(&mut state, 120, 24).join("\n");
+    assert!(
+        page.contains("第 0 句话"),
+        "滚出屏的那一块仍然搜得到：{page}"
+    );
+}
+
+/// 右下角那一行：`n 个命中` / `n 个命中 · 新增 M` 两种文案各自出现，滚到底之后「新增」
+/// 清零；而过滤期间那个位置**不再是手势位**，`G` 补上「回到最新」且**不动过滤**
+/// （票 20 第 9 条）。
+#[test]
+fn the_corner_gives_itself_to_the_hit_readout_while_a_filter_is_on() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..30 {
+        state.apply(message(
+            (index as u64) * 2 + 1,
+            &format!("命中 {index}"),
+            None,
+        ));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "命中");
+
+    let text = corner_text(&mut state, 120, 24);
+    assert!(text.contains("30 个命中"), "三十块都命中：{text:?}");
+    assert!(
+        !text.contains("点此到底"),
+        "过滤期间那一行整句让给命中读法：{text:?}"
+    );
+
+    // 过滤期间跟随暂停：视口停在读者原来读的地方，新到的命中块照样进账，那一行给「新增」。
+    state.key(Key::Char('g'));
+    state.apply(message(80, "命中 全都在这儿", None));
+    let text = corner_text(&mut state, 120, 24);
+    assert!(text.contains("31 个命中"), "{text:?}");
+    assert!(text.contains("新增 1"), "新到的命中块算一个新增：{text:?}");
+    assert!(
+        !trace_page(&mut state, 120, 24)
+            .join("\n")
+            .contains("命中 全都在这儿"),
+        "视口没有被新块顶走"
+    );
+
+    // `G` 回到底部并恢复跟随，而**过滤不变**；滚到底之后「新增」清零。
+    state.key(Key::Char('G'));
+    let page = trace_page(&mut state, 120, 24).join("\n");
+    assert!(
+        page.contains("命中 全都在这儿"),
+        "回到底部就看到新到的那一块：{page}"
+    );
+    assert!(
+        page.contains("命中 29"),
+        "过滤还在（账本上只有命中块）：{page}"
+    );
+    let text = corner_text(&mut state, 120, 24);
+    assert!(!text.contains("新增"), "滚到底之后「新增」清零：{text:?}");
+    assert!(text.contains("31 个命中"), "{text:?}");
+}
+
+/// 过滤期间那个浮字位**不再是可点的手势位**：点它没有反应 —— 回到最新由 `G` 承担
+/// （票 20 第 9 条）。
+#[test]
+fn clicking_the_corner_does_nothing_while_a_filter_is_on() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..30 {
+        state.apply(message(
+            (index as u64) * 2 + 1,
+            &format!("命中 {index}"),
+            None,
+        ));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    search_for(&mut state, "命中");
+    // 视口先离开底部：它现在停在顶上，于是「回到最新」与「留在原处」看得出来是两件事。
+    state.key(Key::Char('g'));
+    let before = trace_page(&mut state, 120, 24);
+    assert!(!before.is_empty());
+
+    let frame = buffer(120, 24, &mut state);
+    let rows = transcript_rows(&conversation_rows(&mut state, 120, 24));
+    let row = (TRANSCRIPT_TOP + rows - 1) as u16;
+    let column = (0..120)
+        .find(|x| frame[(*x, row)].symbol() != " ")
+        .expect("那个浮字位画着东西");
+    click(&mut state, column, row);
+    assert_eq!(
+        trace_page(&mut state, 120, 24),
+        before,
+        "点它没有反应（回到最新由 `G` 承担）"
+    );
+}
+
+/// 搜索模式里的 `/` 只是查询串里的一个字 —— 记号菜单不在这一刻开（票 20 第 2 条：
+/// 同一个物理键两层换含义的另一半）。
+#[test]
+fn a_slash_typed_into_the_search_query_is_just_a_character() {
+    let mut state = state_with_roster(&["kimi"]);
+    install_catalog(&mut state);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    state.key(Key::Char('/'));
+    state.key(Key::Char('/'));
+    state.key(Key::Char('u'));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(!text.contains("/undo"), "菜单没开：\n{text}");
+    assert_eq!(
+        input_text(&mut state, 120, 40),
+        "/u",
+        "那两个键是查询串里的字"
+    );
+}
+
+/// 含 `needle` 的那一行此刻是不是整行画成**选中**那一档。
+///
+/// 不能直接数 [`selected_rows_text`]：过滤期间右下角那个浮字位整句也是那一档
+/// （`ACCENT` + `BOLD`），而它不是选中。按文字认才分得开。
+fn row_is_selected(state: &mut TuiState, width: u16, height: u16, needle: &str) -> bool {
+    let frame = buffer(width, height, state);
+    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
+    let selected = selected_rows(&frame, width, height, left);
+    (0..height).any(|y| {
+        let text = cells(&frame, y, left, width - 2);
+        text.contains(needle) && selected.contains(&y)
+    })
+}
+
+/// 状态行那一行画出来的文字（左栏与分隔列不算）。
+fn status_row_text(state: &mut TuiState, width: u16, height: u16) -> String {
+    let rows = conversation_rows(state, width, height);
+    let row = (TRANSCRIPT_TOP + transcript_rows(&rows)) as u16;
+    let frame = buffer(width, height, state);
+    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
+    cells(&frame, row, left, width)
+}
+
+/// 状态行**一个字都不动**：它在两个视图之间共用，而过滤只属于轨迹页
+/// （票 20 第 9 条、票 11 §1）。
+#[test]
+fn filtering_never_touches_the_status_row() {
+    let mut state = state_with_roster(&["kimi"]);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    let before = status_row_text(&mut state, 120, 40);
+    assert!(before.contains("模型"), "这一行是状态行：{before:?}");
+
+    search_for(&mut state, "第二个回答");
+    assert_eq!(
+        status_row_text(&mut state, 120, 40),
+        before,
+        "过滤期间状态行逐字未变"
+    );
+    state.key(Key::Esc);
+    assert_eq!(
+        status_row_text(&mut state, 120, 40),
+        before,
+        "清过滤之后也一个字没变"
+    );
+}
+
+/// `n` / `N` 沿命中走，并把选中移到那一块（票 20 第 6 条）。
+#[test]
+fn the_hit_keys_walk_the_hits_and_take_the_selection_with_them() {
+    let mut state = state_with_roster(&["kimi"]);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    search_for(&mut state, "回答");
+    assert!(
+        !row_is_selected(&mut state, 120, 40, "第一个回答"),
+        "还没有选中"
+    );
+
+    state.key(Key::Char('n'));
+    assert!(
+        row_is_selected(&mut state, 120, 40, "第一个回答"),
+        "第一个命中的那一块被选中"
+    );
+    state.key(Key::Char('n'));
+    assert!(
+        row_is_selected(&mut state, 120, 40, "第二个回答"),
+        "下一个命中"
+    );
+    state.key(Key::Char('N'));
+    assert!(
+        row_is_selected(&mut state, 120, 40, "第一个回答"),
+        "`N` 往回走一个"
+    );
+}
+
+/// 无匹配时那一行写 `0 个命中` —— 与有命中时同一句话（票 20 第 9 条）。
+#[test]
+fn an_empty_hit_set_still_says_the_same_sentence() {
+    let mut state = state_with_roster(&["kimi"]);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    search_for(&mut state, "一个字都不沾边的词");
+
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("0 个命中"), "同一句话写到底：\n{text}");
+    let page = trace_page(&mut state, 120, 40).join("\n");
+    assert!(
+        !page.contains("第一个回答") && !page.contains("调用 read"),
+        "一个命中都没有时账本上一块都不剩（右下角那一行不算）：{page}"
+    );
+}
+
+/// 改宽度（触发重放）之后过滤集原样还在 —— 它按**块身份**记在渲染器一侧，不存窗格里
+/// （票 20 第 8、10 条）。
+#[test]
+fn a_width_change_keeps_the_filter_set() {
+    let mut state = state_with_roster(&["kimi"]);
+    two_turns_with_two_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    search_for(&mut state, "第二个回答");
+
+    let narrow = trace_page(&mut state, 100, 40).join("\n");
+    assert!(narrow.contains("第二个回答"), "{narrow}");
+    assert!(!narrow.contains("第一个回答"), "{narrow}");
+    let wide = trace_page(&mut state, 140, 40).join("\n");
+    assert!(
+        wide.contains("第二个回答"),
+        "重放之后命中那一块还在：{wide}"
+    );
+    assert!(
+        !wide.contains("第一个回答"),
+        "而未命中的那一块照旧不占行：{wide}"
+    );
+    assert!(wide.contains("回合 2"), "组头也在：{wide}");
+}
+
+/// 过滤期间新块到达视口不动，清掉过滤之后视口**回到原处**（票 20 第 7 条）。
+#[test]
+fn leaving_the_filter_puts_the_viewport_back() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..30 {
+        state.apply(message(
+            (index as u64) * 2 + 1,
+            &format!("第 {index} 句话"),
+            None,
+        ));
+    }
+    open_trace_tab(&mut state, 120, 24);
+    // 让视口离开底部：贴着底时「回到原处」与「回到底部」看不出区别。
+    state.key(Key::PageUp);
+    state.key(Key::PageUp);
+    let before = trace_page(&mut state, 120, 24);
+    assert!(
+        before.iter().any(|row| row.contains("第 0 句话")),
+        "视口离开了底部：{before:#?}"
+    );
+
+    search_for(&mut state, "第 7 句话");
+    assert!(
+        trace_page(&mut state, 120, 24)
+            .join("\n")
+            .contains("第 7 句话"),
+        "命中那一块进了视口"
+    );
+    // 清过滤（此时不在搜索模式，`Esc` 的第一层就是它）——视口回到原来那一条来源行上。
+    // 比的是画出来的那些行，不含右下角那一行：那是新内容计数，它数的是「离开底部之后到了
+    // 多少」，而过滤期间那一屏换过内容，所以两个数本来就不必相同。
+    state.key(Key::Esc);
+    assert_eq!(
+        trace_page(&mut state, 120, 24).first(),
+        before.first(),
+        "退出过滤回到原处"
+    );
+
+    // 过滤期间新块到达：视口不动（它落在下方看不见），而那一块照样进了账本。
+    search_for(&mut state, "第");
+    state.apply(message(80, "第 7 句话的续篇", None));
+    assert!(
+        !trace_page(&mut state, 120, 24).join("\n").contains("续篇"),
+        "新块没有把视口顶走"
+    );
+    state.key(Key::Char('G'));
+    assert!(
+        trace_page(&mut state, 120, 24).join("\n").contains("续篇"),
+        "`G` 回到底部就看得到它：{:#?}",
+        trace_page(&mut state, 120, 24)
+    );
+}
