@@ -1,7 +1,7 @@
 # 轨迹页对齐 DSH：把轨迹升格成可寻址的账本（wayfinder 决策图）
 
 Label: `wayfinder:map`
-Status: 3 done + 10 ready-for-agent + 11 resolved
+Status: 11 resolved + 12 done + 1 ready-for-walkthrough
 Tracker: local markdown —— 见 [`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md)
 Charting: **已完成**（2026-10-09，两轮 grilling 共九问：终点形状 / 欠缺的判据 / 允许动到哪一层 /
 DSH 里真用过的能力 / 范围铺多宽 / TTFT 的数据路 / 轨迹页的定位 / 交付批次 / 用量放哪）。
@@ -95,26 +95,30 @@ DSH 里真用过的能力 / 范围铺多宽 / TTFT 的数据路 / 轨迹页的�
 **实现票**（`/to-tickets` 从 [`spec.md`](spec.md) 拆出的十三张，2026-10-09）：
 
 - [x] [12 — 块身份与「按行键替换任意一行」](issues/12-block-identity-and-pane-replace-at.md)
-- [ ] [13 — 首 token 时刻落流，详情覆盖层分成面](issues/13-first-token-and-detail-faces.md)
-- [ ] [14 — 来源面与概述面](issues/14-source-and-summary-faces.md)
-- [ ] [15 — 用量面](issues/15-usage-face.md)
+- [x] [13 — 首 token 时刻落流，详情覆盖层分成面](issues/13-first-token-and-detail-faces.md)
+- [x] [14 — 来源面与概述面](issues/14-source-and-summary-faces.md)
+- [x] [15 — 用量面](issues/15-usage-face.md)
 - [x] [16 — 账本的两级分组与并进虚线的组头](issues/16-two-level-groups-and-headers.md)
 - [x] [17 — 行尾的数字与异常](issues/17-row-numbers-and-anomalies.md)
-- [ ] [18 — 键盘归属层与选中](issues/18-keyboard-layer-and-selection.md)
-- [ ] [19 — 层级跳转](issues/19-hierarchical-jump.md)
-- [ ] [20 — 搜索与过滤](issues/20-search-and-filtering.md)
-- [ ] [21 — 折叠三档与全折全展](issues/21-folding.md)
-- [ ] [22 — 时间轴的三行横带](issues/22-timeline-band.md)
-- [ ] [23 — 命中在轴上的底色](issues/23-hit-band-on-timeline.md)
+- [x] [18 — 键盘归属层与选中](issues/18-keyboard-layer-and-selection.md)
+- [x] [19 — 层级跳转](issues/19-hierarchical-jump.md)
+- [x] [20 — 搜索与过滤](issues/20-search-and-filtering.md)
+- [x] [21 — 折叠三档与全折全展](issues/21-folding.md)
+- [x] [22 — 时间轴的三行横带](issues/22-timeline-band.md)
+- [x] [23 — 命中在轴上的底色](issues/23-hit-band-on-timeline.md)
 - [ ] [24 — 文档、走查与收口](issues/24-docs-and-close-out.md)
 
-共 **24** 张票（3 research + 4 prototype + 7 grilling + 13 implement），当前 **14/24** ——
-十一张决策票全部 `resolved`（**图已走完**）；实现票 3 张 `done`、10 张 `ready-for-agent`。
-**frontier = [18 — 键盘归属层与选中](issues/18-keyboard-layer-and-selection.md)**（它现在
-是唯一一张没有前置的实现票）。[13](issues/13-first-token-and-detail-faces.md) 的**事件侧
-已落地**、面机制那一半还开着；16（两级分组与组头）与 17（行尾的耗时、失败与结果摘要）
-已 `done`。决策票走完这张图就算走完了 ——
-实现票住在同一个目录里，由 `/implement` 认领，不由 wayfinder 会话认领。
+共 **24** 张票（3 research + 4 prototype + 7 grilling + 13 implement），**24 张都走过了** ——
+十一张决策票全部 `resolved`（**图已走完**）；十三张实现票里 **12 张 `done`**，最后一张
+[24 — 文档、走查与收口](issues/24-docs-and-close-out.md) 收成 **`ready-for-walkthrough`**：
+能自动化的那一半全部做完并跑绿，只剩 [`docs/tui-manual-checklist.md`](../../docs/tui-manual-checklist.md)
+的 [㉙](../../docs/tui-manual-checklist.md) 那一条要人在真终端上逐项勾。实现票住在同一个目录里，
+由 `/implement` 认领，不由 wayfinder 会话认领。
+
+这一轮另有两笔**清单外**的账：**工具详情的第六面 `Schema`**（规格 §6 与用户故事 39 要它，
+却没有落在任何一张实现票上；[票 24](issues/24-docs-and-close-out.md) 的「收口前的补记」记了
+六条口径）与**宽度重放之后再开一条「开场」小标题的缺陷**（[票 18](issues/18-keyboard-layer-and-selection.md)
+记下的旁支缺陷：`c1640cc` 修、`e092b44` 补记成已修）。
 
 **决策票的 frontier 上没有票了 —— 这张图走完了。** 最后那张是[长历史与行选择](issues/10-grilling-history-and-selection.md)
 动完选中之后才清晰的那两条 fog（状态行怎么报、命中在轴上怎么画）：等的就是「选中一动，这两处的答案
