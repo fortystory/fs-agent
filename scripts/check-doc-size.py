@@ -86,6 +86,8 @@ DOC_FILES = [
     "docs/adr/0017-model-and-effort-switch-mid-session.md",
     "docs/adr/0018-external-diff-viewer-colours-sit-outside-the-palette.md",
     "docs/adr/0019-command-records-are-log-only.md",
+    "docs/adr/0020-first-token-time-rides-the-completion.md",
+    "docs/adr/0021-line-identity-comes-from-the-event-envelope.md",
     "docs/agents/commits.md",
     "docs/agents/domain.md",
     "docs/agents/issue-tracker.md",
@@ -352,10 +354,27 @@ def review_rules(unit: Unit) -> list[str]:
 # **同日 `questionnaire-reading` 与 `command-echo` 两个 feature 立项**：`feature 索引天然随
 #   feature 增长`（与 `input-tokens` 起那十几次同因），两行索引把 `.scratch/README.md` 推到
 #   **12,381 / 72**，棘轮 11,917 / 70 → **12,400 / 72**；终点（13,500 / 100）仍有余量。
+# **同日落 ADR 0020（首 token 时刻）时上调 `README.md`**：与前三次同因 —— 每份 ADR 都该有
+#   入口。ADR 索引行把实测推到 **19,406 / 327**，棘轮 19,250 → **19,410**；`DOC_FILES` 同步
+#   补上那一份。
+# **同日补 `.scratch/README.md` 漏掉的那次常规上调**：`trace-ledger` 立项时写的那一整行索引
+#   （charting 当天落的，与 `input-tokens` 起那十几次同因）没跟着上调；同日那张票收尾时那一行
+#   又从 `5/10 resolved` 改成 `6/10 resolved` 并补了一句，两次合计实测 **12,909 / 70**，
+#   棘轮 12,400 / 72 → **12,950 / 72**。
+# **同日 `trace-ledger` 那张图收掉 [检视器的面与内容](08) 时再上调**：与前几次同因 —— 索引行
+#   跟票走，那一行从 `7/10 resolved` 改成 `8/10 resolved` 并把 08 票的链接与一句结论补进去，
+#   实测推到 **13,051 / 70**，棘轮 12,950 → **13,100 / 72**。终点（13,500 / 100）只剩 400
+#   的余量，所以这张图后面每收一张票都要盯住它。
+# **`trace-ledger` 收掉 [长历史与行选择](10) 时同步上调两份**：与前几次同因 —— 索引行跟票走
+#   （`.scratch/README.md` 那一行补进 09 / 10 票与一句结论，实测 **13,184 / 72**，棘轮 13,100
+#   → **13,200 / 72**，终点 13,500 只剩 300）；`README.md` 则是落 ADR 0021（行身份来自事件
+#   信封）时索引行多一条入口，实测 **19,448 / 327**，棘轮 19,410 → **19,500 / 330**。两处都先
+#   从别处省过一轮（把 ADR 0013 / 0014 的括号说明与 feature 那行的功能罗列压短）才动的棘轮，
+#   `DOC_FILES` 也同步补上了 ADR 0021。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 19250, "lines": 330, "target_chars": 18500, "target_lines": 320},
+    "README.md": {"chars": 19500, "lines": 330, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 12400,
+        "chars": 13200,
         "lines": 72,
         "target_chars": 13500,
         "target_lines": 100,
