@@ -7,6 +7,8 @@
 //! 写着什么、回合条上的格在哪、挤得下几条提示 —— 从不涉及布局
 //! 在路上算出来的那些矩形。
 
+use std::collections::BTreeMap;
+
 use heng::config::{DiffViewerSettings, FileViewerSettings, ReasoningEffort};
 use heng::render::palette;
 use heng::render::width::text_columns;
@@ -18,6 +20,21 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::style::{Color, Modifier};
+
+/// 这一场会话的工具表里那些**声明 schema**：`bash` 在里面，别的名字都不在 —— Schema 面查得到
+/// 与查不到两条路都能在这条接缝上测（票 24 收口补的那一面）。
+fn tool_schemas() -> BTreeMap<String, serde_json::Value> {
+    let mut schemas = BTreeMap::new();
+    schemas.insert(
+        "bash".to_owned(),
+        serde_json::json!({
+            "type": "object",
+            "properties": {"command": {"type": "string", "description": "要跑的命令"}},
+            "required": ["command"],
+        }),
+    );
+    schemas
+}
 
 fn facts() -> SessionFacts {
     SessionFacts {
@@ -33,6 +50,8 @@ fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
+        // 工具表里那些声明：详情覆盖层的 Schema 面按名字查它（票 24 收口补的那一面）。
+        tool_schemas: tool_schemas(),
         speaker_order: Vec::new(),
     }
 }
@@ -128,7 +147,7 @@ fn buffer(width: u16, height: u16, state: &mut TuiState) -> Buffer {
 /// 它同时是「覆盖层立着、正落在**默认面**上」的判据：工具落在**参数**、消息落在**正文**
 /// （票 13 第 5 条）。今天那块正文里的小节标题 `── 参数 ──` 不再画了 —— 面名由标签条说，
 /// 正文不重复它（票 13 第 9 条）。
-const TOOL_FACES: &str = "参数┆输出┆计时┆来源┆概述";
+const TOOL_FACES: &str = "参数┆输出┆Schema┆计时┆来源┆概述";
 const MESSAGE_FACES: &str = "正文┆用量┆计时┆概述";
 const THINKING_FACES: &str = "思考┆用量┆计时┆概述";
 
@@ -6390,6 +6409,64 @@ fn a_click_opens_the_detail_and_a_second_click_closes_it() {
 }
 
 #[test]
+fn the_schema_face_shows_the_declaration_of_the_tool_this_call_used() {
+    // Schema 面画的是**这次调用那个工具在工具表里的声明**（发给 provider 的那份 JSON Schema），
+    // 原样 `pretty` 打印 —— 与参数面同一套排法。它是票 24 收口时补的第三面。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-s1",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-s1", true, Some("ok"), None));
+    open_trace_tab(&mut state, 120, 40);
+
+    click_row(&mut state, 120, 40, "调用 bash");
+    // 打开落在参数面（票 13 第 5 条），参数 → 输出 → Schema 是三下 `Tab` 里的第三面。
+    next_face(&mut state);
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(TOOL_FACES), "标签条列着这几面：{text}");
+    assert!(
+        text.contains("\"type\": \"object\""),
+        "那一份声明原样画在上面：{text}"
+    );
+    assert!(text.contains("要跑的命令"), "连同它自己的描述一起：{text}");
+    assert!(
+        !text.contains("\"command\": \"ls\""),
+        "这一面不是参数面：{text}"
+    );
+}
+
+#[test]
+fn the_schema_face_says_so_when_the_tool_is_not_in_the_table() {
+    // 工具表里没有这个名字时**写一句话说明查不到** —— 重放一场老会话时那个工具可能已经不在
+    // 表里。不画空面、也不编一份 schema 出来（票 24 收口的降级）。
+    let mut session_facts = facts_with_roster(&["kimi"]);
+    session_facts.tool_schemas = BTreeMap::new();
+    let mut state = TuiState::new(session_facts, std::path::PathBuf::from("/x/heng"), None);
+    state.apply(tool_started(
+        1,
+        "call-s2",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(2, "call-s2", true, Some("ok"), None));
+    open_trace_tab(&mut state, 120, 40);
+
+    click_row(&mut state, 120, 40, "调用 bash");
+    next_face(&mut state);
+    next_face(&mut state);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains(&wording::detail_schema_missing("bash")),
+        "一句话说明查不到：{text}"
+    );
+    assert!(!text.contains("\"type\""), "没有编一份 schema 出来：{text}");
+}
+
+#[test]
 fn the_detail_body_is_wrapped_to_the_real_text_width() {
     // 详情正文排版的宽度是**文本区**的宽度 —— 框宽减掉两列边框与两侧内边距 ——
     // 而不是框宽。按框宽排出来的行，尾部四列会被 `Paragraph` 裁掉，
@@ -6488,6 +6565,8 @@ fn the_detail_overlay_reads_the_spilled_tool_output() {
             number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
             diff_viewer: DiffViewerSettings::default(),
+            // 工具表里那些声明：Schema 面按名字查它（票 24 收口补的那一面）。
+            tool_schemas: tool_schemas(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/heng"),
@@ -7610,6 +7689,8 @@ fn a_tool_body_over_the_reading_limit_is_cut_and_says_so() {
             number_style: heng::render::wording::NumberStyle::Cn,
             file_viewer: FileViewerSettings::default(),
             diff_viewer: DiffViewerSettings::default(),
+            // 工具表里那些声明：Schema 面按名字查它（票 24 收口补的那一面）。
+            tool_schemas: tool_schemas(),
             speaker_order: vec!["kimi".to_owned()],
         },
         std::path::PathBuf::from("/x/heng"),
@@ -11177,7 +11258,8 @@ fn a_tool_timing_face_only_shows_the_section_it_can_prove() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state); // 参数 → 输出
-    next_face(&mut state); // 输出 → 计时
+    next_face(&mut state); // 输出 → Schema
+    next_face(&mut state); // Schema → 计时
 
     let text = screen(120, 40, &mut state).join("\n");
     assert!(text.contains("开始时刻"), "{text}");
@@ -11237,11 +11319,13 @@ fn each_face_keeps_its_own_scroll_position() {
         "而开头的那些行早就不在窗口里了：{scrolled}"
     );
 
-    next_face(&mut state); // 输出 → 计时
+    next_face(&mut state); // 输出 → Schema
+    next_face(&mut state); // Schema → 计时
     let timing = screen(120, 40, &mut state).join("\n");
     assert!(timing.contains("开始时刻"), "而计时面从头开始：{timing}");
 
-    state.key(Key::BackTab); // 计时 → 输出
+    state.key(Key::BackTab); // 计时 → Schema
+    state.key(Key::BackTab); // Schema → 输出
     let back = screen(120, 40, &mut state).join("\n");
     assert_eq!(back, scrolled, "切回来还在原处");
 }
@@ -11418,7 +11502,8 @@ fn a_tool_detail_reads_the_read_only_chain_that_carried_this_row() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state); // 参数 → 输出
-    next_face(&mut state); // 输出 → 计时
+    next_face(&mut state); // 输出 → Schema
+    next_face(&mut state); // Schema → 计时
     next_face(&mut state); // 计时 → 来源
 
     let rows = screen(120, 40, &mut state);
@@ -11480,7 +11565,8 @@ fn a_chain_that_breaks_ends_there_instead_of_a_placeholder() {
     open_trace_tab(&mut state, 120, 40);
     click_row(&mut state, 120, 40, "调用 bash");
     next_face(&mut state); // 参数 → 输出
-    next_face(&mut state); // 输出 → 计时
+    next_face(&mut state); // 输出 → Schema
+    next_face(&mut state); // Schema → 计时
     next_face(&mut state); // 计时 → 来源
 
     let text = screen(120, 40, &mut state).join("\n");

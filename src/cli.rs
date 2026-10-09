@@ -13,6 +13,7 @@
 //! [`crate::session::observe`] 与 [`crate::agent::replay`]。交互式渲染器仍是唯一没有接线的那一块
 //! （票 18）。
 
+use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -39,7 +40,7 @@ use crate::render::{
 };
 use crate::session::observe::{self, CostModel, Entry, Filter, Listing, Timeline};
 use crate::session::{SessionStore, StoredSession};
-use crate::tools::{self, PathLocks, Sandbox};
+use crate::tools::{self, PathLocks, Registry, Sandbox};
 use crate::web::WebService;
 use crate::web::fetch_http::HttpFetch;
 use crate::web::search_deepseek::{DEEPSEEK_SEARCH_PROVIDER, DeepSeekSearch};
@@ -334,6 +335,31 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
     // 键盘的两端：循环持有的句柄与手势接收端，以及选定的渲染器（或 plain 逐行读取器）为它服务的那
     // 个端口。
     let (console, port, mut events) = render::console();
+    let asker = Arc::new(ConsoleAsker::from_handle(&console));
+    // 模型的问题走同一个键盘、走它自己的端口（spec §7）。交互式组装总是有一个 —— TUI 或 plain
+    // —— 所以工具表提供 `ask_user_question`，而这张表是按端口在不在建的，不是按第二个容易漂移的
+    // 标志建的。
+    let questions: Option<Arc<dyn UserQuestions>> =
+        Some(Arc::new(ConsoleQuestions::from_handle(&console)));
+
+    // MCP 这一层也在组装期定下：`[mcp] enabled` 与仓库根的 `.mcp.json` 都在这里读一次。
+    // 包成 `Arc`：工具表拿一份，`/` 菜单那半边（模板）也要拿一份 —— 同一次连接、同一个值。
+    let mcp = Arc::new(mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await);
+    // 模板清单是**界面层**的东西：它进 `/` 菜单，不进工具表、也不进前缀缓存。server 不可用时
+    // 它的条目根本不出现（spec §8）。
+    let prompts = mcp_prompt_entries(&mcp).await;
+
+    // 工具表在**渲染器之前**建出来：详情覆盖层的 Schema 面要读它那份声明，而它随会话事实在组装时
+    // 注入一次（`SessionFacts::tool_schemas`）。表仍然只建一份 —— 往下照旧交给脚手架，没有第二张。
+    let tools = tools::with_mcp(
+        tools::with_web(
+            tools::with_dynamic(&config.tools, questions.is_some()),
+            web_service(&config),
+        ),
+        Arc::clone(&mcp),
+    );
+    let facts_tool_schemas = tool_schemas(&tools);
+
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
         // 表头与面板显示这些；它们都不走事件流。模式就是其中之一：它是前端要显示、手势要挪动的一个
@@ -358,6 +384,9 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             number_style: config.number_style,
             file_viewer: config.file_viewer,
             diff_viewer: config.diff_viewer.clone(),
+            // 工具表里每一份声明 —— 详情覆盖层的 Schema 面读的就是它（票 24 收口补的那一面）。
+            // 表在上面的渲染器之前建好，这里只是把它的声明抄成一份按名字查的账。
+            tool_schemas: facts_tool_schemas,
             // 单 agent 会话以它的档案发言，所以那就是转录的名字配色需要安排的全部名册
             // （票 07 §1）。
             speaker_order: vec![profile.name.clone()],
@@ -382,33 +411,14 @@ async fn interactive(args: &[String], env: &EnvMap) -> ExitCode {
             color: std::io::stderr().is_terminal() && env.get("NO_COLOR").is_none(),
         })
     };
-    let asker = Arc::new(ConsoleAsker::from_handle(&console));
-    // 模型的问题走同一个键盘、走它自己的端口（spec §7）。交互式组装总是有一个 —— TUI 或 plain
-    // —— 所以工具表提供 `ask_user_question`，而这张表是按端口在不在建的，不是按第二个容易漂移的
-    // 标志建的。
-    let questions: Option<Arc<dyn UserQuestions>> =
-        Some(Arc::new(ConsoleQuestions::from_handle(&console)));
-
-    // MCP 这一层也在组装期定下：`[mcp] enabled` 与仓库根的 `.mcp.json` 都在这里读一次。
-    // 包成 `Arc`：工具表拿一份，`/` 菜单那半边（模板）也要拿一份 —— 同一次连接、同一个值。
-    let mcp = Arc::new(mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await);
-    // 模板清单是**界面层**的东西：它进 `/` 菜单，不进工具表、也不进前缀缓存。server 不可用时
-    // 它的条目根本不出现（spec §8）。
-    let prompts = mcp_prompt_entries(&mcp).await;
-
     let mut harness = match assemble(AssemblyParts {
         scaffold: SessionScaffold {
             cwd: cwd.clone(),
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            // 工具表在这里、在组装处定下：内建的那些加上每一个动态声明的工具（spec §14）。
-            tools: tools::with_mcp(
-                tools::with_web(
-                    tools::with_dynamic(&config.tools, questions.is_some()),
-                    web_service(&config),
-                ),
-                Arc::clone(&mcp),
-            ),
+            // 工具表在上面、在渲染器之前就建好了，就是这一张（内建的那些加上每一个动态声明的
+            // 工具，spec §14）。
+            tools,
             locks: PathLocks::new(),
             // 用户选的那一档：`[permissions] mode`，或者压在它上面的 `--mode`（spec §12）。无头调
             // 用方没有应答者，于是降级。
@@ -686,6 +696,27 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     );
 
     let (console, port, mut events) = render::console();
+    // 同一个键盘也回答讨论者的权限询问：一场讨论仍然是一场带着工具的会话。
+    let asker = Arc::new(ConsoleAsker::from_handle(&console));
+    // 讨论者是主会话而不是执行者，所以它也可以问用户（spec §7）；这个端口与权限门用的是同一个键
+    // 盘。
+    let questions: Option<Arc<dyn UserQuestions>> =
+        Some(Arc::new(ConsoleQuestions::from_handle(&console)));
+
+    // 讨论者与任何会话一样拿得到四个 MCP 元工具（spec §9）。
+    let mcp = mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await;
+
+    // 工具表在**渲染器之前**建出来，理由与单 agent 那条路同：详情覆盖层的 Schema 面要读它那份
+    // 声明，而它随会话事实在组装时注入一次（`SessionFacts::tool_schemas`）。讨论者拿的就是这一张。
+    let tools = tools::with_mcp(
+        tools::with_web(
+            tools::with_dynamic(&config.tools, questions.is_some()),
+            web_service(&config),
+        ),
+        mcp,
+    );
+    let facts_tool_schemas = tool_schemas(&tools);
+
     let use_tui = parsed.tui || (!parsed.plain && std::io::stdout().is_terminal());
     let renderer = if use_tui {
         let caps = match caps_for(&pair[0].model) {
@@ -714,6 +745,8 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
             number_style: config.number_style,
             file_viewer: config.file_viewer,
             diff_viewer: config.diff_viewer.clone(),
+            // 每一份工具声明 —— 详情覆盖层的 Schema 面按名字查它（票 24 收口补的那一面）。
+            tool_schemas: facts_tool_schemas,
             // 这一对，按名册顺序 —— 与 `pick_pair` 产出的顺序相同，正是它把第一个调色板槽位给了第
             // 一位讨论者（票 07 §1）。
             speaker_order: vec![pair[0].name.clone(), pair[1].name.clone()],
@@ -740,28 +773,14 @@ async fn discuss(args: &[String], env: &EnvMap) -> ExitCode {
     // 循环还不会开口问之前就说了这一点。在这里告诉它而不是让它推断，理由与
     // `ConsoleRequest::RunState` 记下的那条相同。
     console.set_running(true);
-    // 同一个键盘也回答讨论者的权限询问：一场讨论仍然是一场带着工具的会话。
-    let asker = Arc::new(ConsoleAsker::from_handle(&console));
-    // 讨论者是主会话而不是执行者，所以它也可以问用户（spec §7）；这个端口与权限门用的是同一个键
-    // 盘。
-    let questions: Option<Arc<dyn UserQuestions>> =
-        Some(Arc::new(ConsoleQuestions::from_handle(&console)));
-
-    // 讨论者与任何会话一样拿得到四个 MCP 元工具（spec §9）。
-    let mcp = mcp_service(&config, &cwd, env, home.as_deref(), questions.clone()).await;
 
     let mut harness = match assemble_discussion(DiscussionParts {
         scaffold: SessionScaffold {
             cwd,
             log_path: stored.log_path.clone(),
             session_id: stored.id.clone(),
-            tools: tools::with_mcp(
-                tools::with_web(
-                    tools::with_dynamic(&config.tools, questions.is_some()),
-                    web_service(&config),
-                ),
-                mcp,
-            ),
+            // 工具表在上面、渲染器之前就建好了，就是这一张。
+            tools,
             locks: PathLocks::new(),
             // 文件里的模式：讨论者与任何会话一样走同一个权限门，而名册共享一个策略（spec §12、
             // §15）。
@@ -3049,6 +3068,20 @@ fn web_service(config: &Config) -> WebService {
         // 哪一家。
         _ => service,
     }
+}
+
+/// 工具表里每个工具的**声明 schema**，按工具名 —— 详情覆盖层的 Schema 面要的那份账
+/// （[`SessionFacts::tool_schemas`]）。
+///
+/// 它直接来自 [`Registry::specs`]：那正是 `agent` 每次请求发给 provider 的同一份声明，所以渲染
+/// 层画出来的与模型手里的不会漂开，也不经第二次加工。表在组装期建好之后不再变，于是这一份抄本
+/// 只在组装时取一次。
+fn tool_schemas(registry: &Registry) -> BTreeMap<String, serde_json::Value> {
+    registry
+        .specs()
+        .into_iter()
+        .map(|spec| (spec.name, spec.parameters))
+        .collect()
 }
 
 /// 这个会话的 MCP 服务（`.scratch/mcp-support/spec.md` §1、§3、§5）。

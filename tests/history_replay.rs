@@ -20,6 +20,24 @@ use heng::render::{ConsoleRequest, Key, RenderEvent, SessionFacts, TuiState, dra
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
+use std::collections::BTreeMap;
+
+/// 这一场会话的工具表里那些**声明 schema**：`bash` 在里面（重放的那些工具调用用的就是它）。
+///
+/// 面这一层读它，而重放这条路与实时那条路共用同一份注入 —— 于是「重放出来的详情与实时那次
+/// 逐字相同」这条契约也包括 Schema 面（票 24 收口补的那一面）。
+fn tool_schemas() -> BTreeMap<String, serde_json::Value> {
+    let mut schemas = BTreeMap::new();
+    schemas.insert(
+        "bash".to_owned(),
+        serde_json::json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        }),
+    );
+    schemas
+}
 
 fn facts() -> SessionFacts {
     SessionFacts {
@@ -35,6 +53,7 @@ fn facts() -> SessionFacts {
         number_style: heng::render::wording::NumberStyle::Cn,
         file_viewer: FileViewerSettings::default(),
         diff_viewer: DiffViewerSettings::default(),
+        tool_schemas: tool_schemas(),
         speaker_order: vec!["kimi".to_owned()],
     }
 }
@@ -288,9 +307,9 @@ fn row_of(state: &mut TuiState, width: u16, height: u16, needle: &str) -> Option
         .map(|row| row as u16)
 }
 
-/// 工具详情顶上那条标签条上的四个面名 —— 它同时是「覆盖层立着、正落在**参数**那一面」
+/// 工具详情顶上那条标签条上的六个面名 —— 它同时是「覆盖层立着、正落在**参数**那一面」
 /// 的判据（票 13 第 5 条），而今天那块正文里的小节标题 `── 参数 ──` 不再画了。
-const TOOL_FACES: &str = "参数┆输出┆计时┆来源┆概述";
+const TOOL_FACES: &str = "参数┆输出┆Schema┆计时┆来源┆概述";
 
 /// 切到下一面（`Tab`）—— 那些输出正文住在「输出」那一面上，而打开时落在「参数」。
 fn next_face(state: &mut TuiState) {

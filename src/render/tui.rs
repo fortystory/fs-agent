@@ -39,6 +39,7 @@ use ratatui::widgets::{
     Block as WidgetBlock, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
     ScrollbarState,
 };
+use std::collections::BTreeMap;
 use tokio::sync::broadcast;
 
 use crate::events::{ContextSource, Event, EventPayload, Role, StopReason, ToolCallId, Usage};
@@ -359,6 +360,16 @@ pub struct SessionFacts {
     /// 与 `file_viewer` 同一条：配置里定下来的值，组装时注入一次，会话中途不变
     /// （`.scratch/diff-page/spec.md` §8）。
     pub diff_viewer: crate::config::DiffViewerSettings,
+    /// 这一场会话的工具表里，每个工具的**声明 schema**：工具名 → provider 收到的那份 JSON
+    /// Schema（`Registry::specs()` 里 `parameters` 那一个字段）。
+    ///
+    /// 详情覆盖层的 Schema 面按工具名查它，把那一份**原样** `pretty` 打出来。与 `number_style` /
+    /// `file_viewer` / `speaker_order` 同一条纪律：**组装期的事实，组装时注入一次，会话中途不
+    /// 变** —— 工具表在组装时就建好，此后只读（工具数组是缓存前缀的一部分，spec §14）。
+    ///
+    /// 注入的是**主会话那张表**：执行者手里的 [`crate::tools::Registry::for_executor`] 是它的
+    /// 子集（滤掉不可委派的），所以这个名字集合覆盖得了这一场会话里出现的每一次调用。
+    pub tool_schemas: BTreeMap<String, serde_json::Value>,
     /// 这个会话的讨论者，按抽出来的顺序。单 agent 会话列出它那一个档案；讨论列出名册
     /// 产出的那一对。它就是发言者颜色的来源，所以它和别的事实一样在组装时注入：
     /// 名册不在流上（票 07 §1）。
@@ -7025,7 +7036,13 @@ impl TuiState {
         // 读到哪儿原样留着（与改动前一样：换的是正文，不是这个人读到的位置）—— 它就落在
         // 那一面上，而这一种详情只有一面。
         let top = view.face().top;
-        view.faces = detail_faces(&view.detail, &session_dir, width, self.facts.number_style);
+        view.faces = detail_faces(
+            &view.detail,
+            &session_dir,
+            &self.facts.tool_schemas,
+            width,
+            self.facts.number_style,
+        );
         view.face_mut().top = top;
         self.dirty = true;
     }
@@ -11440,6 +11457,9 @@ enum FaceId {
     Args,
     /// 一次工具调用的输出。
     Output,
+    /// 这次调用那个工具在工具表里的**声明 schema**：发给 provider 的那份 JSON Schema（票 24
+    /// 收口时补的那一面）。
+    Schema,
     /// 一条消息 / 一段思考的用量：本次与这一趟会话两节（票 15）。
     Usage,
     /// 这一块的时间：开始 / 总时长 / 首 token / 生成 / 吞吐 / 等审批。
@@ -11460,6 +11480,7 @@ impl FaceId {
             FaceId::Injection => wording::detail_injection_face(),
             FaceId::Args => wording::detail_args_section(),
             FaceId::Output => wording::detail_output_section(),
+            FaceId::Schema => wording::detail_schema_face(),
             FaceId::Usage => wording::detail_usage_face(),
             FaceId::Timing => wording::detail_timing_face(),
             FaceId::Source => wording::detail_source_face(),
@@ -11495,6 +11516,7 @@ const DETAIL_FACES: &[(RecordKind, &[FaceId])] = &[
         &[
             FaceId::Args,
             FaceId::Output,
+            FaceId::Schema,
             FaceId::Timing,
             FaceId::Source,
             FaceId::Summary,
@@ -11592,9 +11614,13 @@ impl Face {
 ///
 /// 主体在这里、在打开的那一刻读，并按正文文本区将被画出来的宽度排版（与今天同一条纪律），
 /// 于是此后切面与滚动都是纯算术。
+///
+/// `session_dir` 与 `schemas` 都是组装期注入的那份账（[`SessionFacts::session_dir`] /
+/// [`SessionFacts::tool_schemas`]）：输出面从前者读落盘全文，Schema 面从后者查这次调用的声明。
 fn detail_faces(
     detail: &Detail,
     session_dir: &str,
+    schemas: &BTreeMap<String, serde_json::Value>,
     width: usize,
     numbers: wording::NumberStyle,
 ) -> Vec<Face> {
@@ -11603,7 +11629,7 @@ fn detail_faces(
         .map(|face| {
             Face::from_sections(
                 *face,
-                face_sections(detail, *face, session_dir, width, numbers),
+                face_sections(detail, *face, session_dir, schemas, width, numbers),
             )
         })
         .collect()
@@ -11618,6 +11644,7 @@ fn face_sections(
     detail: &Detail,
     face: FaceId,
     session_dir: &str,
+    schemas: &BTreeMap<String, serde_json::Value>,
     width: usize,
     numbers: wording::NumberStyle,
 ) -> Vec<Section> {
@@ -11652,6 +11679,9 @@ fn face_sections(
         (Tool(tool), FaceId::Args) => vec![Section::whole(tool_args_rows(tool, width))],
         (Tool(tool), FaceId::Output) => {
             vec![Section::whole(tool_output_rows(tool, session_dir, width))]
+        }
+        (Tool(tool), FaceId::Schema) => {
+            vec![Section::whole(tool_schema_rows(tool, schemas, width))]
         }
         _ => Vec::new(),
     }
@@ -11915,6 +11945,27 @@ fn tool_output_rows(tool: &ToolBlock, session_dir: &str, width: usize) -> Vec<De
         ))));
     }
     rows
+}
+
+/// 一次调用的**声明 schema**：这次用的那个工具在工具表里的那一份（发给 provider 的 JSON
+/// Schema），**原样** `pretty` 打印、按正文宽度折行 —— 与参数面同一套 [`folded_text`] 排法。
+///
+/// 查不到时写一句话（[`wording::detail_schema_missing`]）：不画空面、也不编一份 schema 出来。
+/// 工具表是**这一场会话**建的那张，而重放一场老会话时那个工具可能已经不在表里，一条没有配对
+/// 开始的调用还会把工具名记成 `?`。
+fn tool_schema_rows(
+    tool: &ToolBlock,
+    schemas: &BTreeMap<String, serde_json::Value>,
+    width: usize,
+) -> Vec<DetailLine> {
+    let Some(schema) = schemas.get(&tool.tool) else {
+        return vec![DetailLine::plain(Line::from(Span::styled(
+            wording::detail_schema_missing(&tool.tool),
+            Style::default().fg(palette::MUTED),
+        )))];
+    };
+    let pretty = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+    folded_text(&pretty, width)
 }
 
 /// 一面已经带样式的行，按 `width` 折开，续行标成折出来的。
@@ -12617,6 +12668,7 @@ impl TuiState {
         let faces = detail_faces(
             &detail,
             &self.facts.session_dir,
+            &self.facts.tool_schemas,
             width,
             self.facts.number_style,
         );
@@ -13934,6 +13986,7 @@ mod tests {
                 number_style: crate::render::wording::NumberStyle::Cn,
                 file_viewer: crate::config::FileViewerSettings::default(),
                 diff_viewer: crate::config::DiffViewerSettings::default(),
+                tool_schemas: schemas(),
                 speaker_order: vec!["kimi".to_owned()],
             },
             std::path::PathBuf::from("/x/heng"),
@@ -15345,7 +15398,7 @@ mod tests {
 
     /// 一面的正文，作为一块文本 —— 单位测试按它断言（帧层那条接缝留给画出来的那一刻）。
     fn face_text(detail: &Detail, id: FaceId) -> String {
-        face_sections(detail, id, "/tmp", 88, wording::NumberStyle::Cn)
+        face_sections(detail, id, "/tmp", &schemas(), 88, wording::NumberStyle::Cn)
             .iter()
             .flat_map(|section| {
                 section
@@ -15356,6 +15409,59 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// 单位测试手里那份工具表：`bash` 的声明在里面，别的名字都不在 —— 于是 Schema 面这一侧
+    /// 查得到与查不到两条路都测得动（票 24 收口时补的那一面）。
+    fn schemas() -> BTreeMap<String, serde_json::Value> {
+        let mut schemas = BTreeMap::new();
+        schemas.insert(
+            "bash".to_owned(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            }),
+        );
+        schemas
+    }
+
+    /// Schema 面画的是**这次调用那个工具**在工具表里的那一份，原样 `pretty` 打印
+    /// （票 24 收口时补的那一面）。
+    #[test]
+    fn the_schema_face_prints_the_declaration_verbatim() {
+        let (_, detail) = details_by_kind()
+            .into_iter()
+            .find(|(kind, _)| *kind == RecordKind::Tool)
+            .expect("工具那一份");
+        let text = face_text(&detail, FaceId::Schema);
+        assert_eq!(
+            text,
+            serde_json::to_string_pretty(&schemas()["bash"]).expect("pretty"),
+            "那一份声明原样在位"
+        );
+    }
+
+    /// 一条**没有配对开始**的调用（转录把工具名记成 `?`）在 Schema 面上写的是同一句实话 ——
+    /// 它落到与「老会话里那个工具已经不在表里」同一个 miss 上（票 24 收口的降级）。
+    #[test]
+    fn a_call_with_no_started_event_reports_its_schema_as_missing() {
+        let (_, tool) = details_by_kind()
+            .into_iter()
+            .find(|(kind, _)| *kind == RecordKind::Tool)
+            .expect("工具那一份");
+        let DetailKind::Tool(tool) = &tool.kind else {
+            panic!("工具详情");
+        };
+        let mut tool = (**tool).clone();
+        tool.tool = "?".to_owned();
+        let rows = tool_schema_rows(&tool, &schemas(), 88);
+        let text: String = rows
+            .iter()
+            .map(|row| line_text(&row.line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(text, wording::detail_schema_missing("?"));
     }
 
     /// **分派表是一处事实源**：每一种记录生成出来的面集合，等于表里属于它的那一行
@@ -15369,15 +15475,23 @@ mod tests {
                 .find(|(row, _)| *row == kind)
                 .map(|(_, faces)| *faces)
                 .unwrap_or_else(|| panic!("分派表里没有 {kind:?} 这一行"));
-            let faces: Vec<FaceId> = detail_faces(&detail, "/tmp", 88, wording::NumberStyle::Cn)
-                .iter()
-                .map(|face| face.id)
-                .collect();
+            let faces: Vec<FaceId> =
+                detail_faces(&detail, "/tmp", &schemas(), 88, wording::NumberStyle::Cn)
+                    .iter()
+                    .map(|face| face.id)
+                    .collect();
             assert_eq!(faces, row, "{kind:?} 的面集合");
             // 这一行里每一面都真的生成得出东西 —— 空的一面是漂了的征兆。一节还是几节由面
             // 自己定（用量面是两节读数加末尾那句口径），但每一节都不许空。
             for face in faces {
-                let sections = face_sections(&detail, face, "/tmp", 88, wording::NumberStyle::Cn);
+                let sections = face_sections(
+                    &detail,
+                    face,
+                    "/tmp",
+                    &schemas(),
+                    88,
+                    wording::NumberStyle::Cn,
+                );
                 assert!(!sections.is_empty(), "{kind:?} 的 {} 面没有节", face.name());
                 for section in &sections {
                     assert!(
@@ -15470,7 +15584,14 @@ mod tests {
                 this: usage,
             }),
         };
-        let sections = face_sections(&detail, FaceId::Usage, "/tmp", 88, wording::NumberStyle::Cn);
+        let sections = face_sections(
+            &detail,
+            FaceId::Usage,
+            "/tmp",
+            &schemas(),
+            88,
+            wording::NumberStyle::Cn,
+        );
         assert_eq!(sections.len(), 3, "两节读数加末尾那句口径");
         assert_eq!(sections[0].title, Some(wording::usage_this_section()));
         assert_eq!(sections[1].title, Some(wording::usage_session_section()));
@@ -15572,6 +15693,7 @@ mod tests {
             &detail,
             FaceId::Timing,
             "/tmp",
+            &schemas(),
             88,
             wording::NumberStyle::Cn,
         );
@@ -15643,7 +15765,7 @@ mod tests {
             if row != [FaceId::Only] {
                 continue;
             }
-            let faces = detail_faces(&detail, "/tmp", 88, wording::NumberStyle::Cn);
+            let faces = detail_faces(&detail, "/tmp", &schemas(), 88, wording::NumberStyle::Cn);
             assert_eq!(faces.len(), 1, "{kind:?} 只有一面");
             assert_eq!(faces[0].name(), "", "{kind:?} 那一面没有名字");
             let rows: Vec<String> = faces[0]
