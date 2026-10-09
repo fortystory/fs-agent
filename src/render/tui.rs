@@ -3815,43 +3815,74 @@ impl TuiState {
     ///
     /// **连续工具调用那一档**挂**段首那一次调用**的详情：折行替掉的就是它那一行，所以读者
     /// 点开看到的是这一段从哪儿开始 —— 与它原来那一行同一份构造，标题、配色与各面都不漂。
-    /// **组头那两档不挂**：一个单位 / 一次迭代今天没有一个可读的对象，与组头那一行今天的
-    /// 判据一致（点它什么都不开）。
     ///
     /// **开场那一行挂段内第一条注入**：那一段折叠之后只剩一个入口，而「从这一段的第一条
     /// 看起」与「一个块的第一条源行才是落点」是同一条读法（票 21 第 8 条）。
+    ///
+    /// **一级与二级那两档挂组内第一条能开详情的成员**：一个单位 / 一次迭代今天本身不是一个
+    /// 可读的对象（没有「一个回合」的详情），而折起来之后那一行就是这一组唯一的入口 ——
+    /// 于是它落到往下第一件读得动的东西上。组里可能先有二级头、小标题这些不是对象的行，
+    /// 所以是「往前找第一条真能开的块」；一条都找不到就仍不挂（那是诚实的结果，不是偷懒）。
     fn fold_line_link(&mut self, line: &FoldLine, records: &[Painted]) -> Option<Detail> {
         let id = match line {
-            FoldLine::Run { id, .. } => *id,
-            FoldLine::Preamble { first, .. } => *first,
-            FoldLine::Unit { .. } | FoldLine::Iteration { .. } => return None,
+            FoldLine::Run { id, .. } => Some(*id),
+            FoldLine::Preamble { first, .. } => Some(*first),
+            FoldLine::Unit { .. } | FoldLine::Iteration { .. } => None,
         };
-        let (block, facts) = records.iter().find_map(|painted| match painted {
+        if let Some(id) = id {
+            let record = records.iter().find(|record| record.id() == id)?;
+            return self.record_detail(record);
+        }
+        // 剩下的两档各代表**一整组**：先找到那条组头，再在它的范围里找第一条能开的成员。
+        let (id, unit_only) = match line {
+            FoldLine::Unit { id, .. } => (*id, true),
+            FoldLine::Iteration { id, .. } => (*id, false),
+            FoldLine::Run { .. } | FoldLine::Preamble { .. } => return None,
+        };
+        let head = records
+            .iter()
+            .position(|record| matches!(record, Painted::GroupHeader(header) if header.id == id))?;
+        let end = next_header_after(records, head, unit_only);
+        records[head + 1..end]
+            .iter()
+            .find_map(|record| self.record_detail(record))
+    }
+
+    /// 一条绘制记录在账本上那个**可开详情的入口** —— 折行挂「组内第一条能开的成员」用它。
+    ///
+    /// 判据与那一行自己**同源**：块走它自己那一套绘制（轨迹视图那一份），定稿的思考走它
+    /// 那份构造。造不出入口的记录（组头、小标题、还在流的那条思考行、本来就没入口的叙述行）
+    /// 给 `None` —— 屏幕上那一行点不开，折行也就别挂在它上面。
+    fn record_detail(&mut self, record: &Painted) -> Option<Detail> {
+        match record {
             Painted::Block {
-                block,
-                at,
-                usage,
-                id: record,
-                ..
-            } if *record == id => Some((
-                block,
-                DetailFacts {
+                block, at, usage, ..
+            } => {
+                let width = self.trace_width.saturating_sub(layout::STAMP_COLUMNS);
+                let style = prefix_style(Viewport::Trace, self.trace_tier_width);
+                let facts = DetailFacts {
                     at: Some(*at),
                     timing: timing_of(block),
                     usage: *usage,
-                },
-            )),
-            _ => None,
-        })?;
-        match block {
-            Block::Tool(tool) => {
-                let style = prefix_style(Viewport::Trace, self.trace_tier_width);
-                tool_block_lines(tool, &mut self.colors, style, facts)
-                    .first()
-                    .and_then(|rendered| rendered.link.clone())
+                };
+                paint_block(
+                    block,
+                    &mut self.colors,
+                    width,
+                    style,
+                    Viewport::Trace,
+                    // 名字照画：这里要的是与轨迹页上那一行**同一份**构造，而那里每一行都带
+                    // 名字（`emit_block` 传的就是 `true`）。
+                    true,
+                    facts,
+                )
+                .into_iter()
+                .find_map(|rendered| rendered.link)
             }
-            Block::ContextInjected { .. } => injection_detail(block, facts),
-            _ => None,
+            Painted::Thought(settled) => {
+                Some(self.thinking_settled_line(settled, Viewport::Trace).1)
+            }
+            Painted::Thinking { .. } | Painted::GroupHeader(_) | Painted::SectionHeader(_) => None,
         }
     }
 
@@ -10617,27 +10648,16 @@ fn section_header_line(header: &SectionHeader) -> Line<'static> {
     ])
 }
 
+/// 组头那一行：**行首的起时刻 + 组头的字 + 一级头那条填到右缘的虚线**。
+///
+/// 字段顺序是**起时刻 · 序号 · 墙钟跨度 · 工具直方图**，超宽时**从右往左丢**（见
+/// [`unit_header_head`] / [`iteration_header_head`] 的候选表），所以它**永远占一行** ——
+/// 折成两行会同时推翻「零额外行数」与时刻列的竖向对齐（`.scratch/trace-ledger/spec.md` §5、
+/// 票 16 第 5 条）。
+///
+/// 一级头与二级头是两种形状：一级占满一整行虚线（它是一条边界、文字亮一档），二级是弱色
+/// 单行、**不带虚线**（它只是那一段的标题）。
 fn group_header_line(header: &GroupHeader, width: u16, discussion: bool) -> Line<'static> {
-    let sep = wording::header_separator();
-    let span = wording::header_span(group_span(header));
-    let head = match header.level {
-        HeaderLevel::Unit => {
-            let mut text = format!(
-                "{}{sep}{span}",
-                wording::header_unit(header.ordinal, discussion)
-            );
-            // **拿不到的字段整个不画**：工具直方图此刻还是空的（工具还没跑）就不给它留地方。
-            let tools = wording::header_tools(&header.tools);
-            if !tools.is_empty() {
-                text.push_str(sep);
-                text.push_str(&tools);
-            }
-            text
-        }
-        HeaderLevel::Iteration => {
-            format!("{}{sep}{span}", wording::header_iteration(header.ordinal))
-        }
-    };
     let style = match header.level {
         // 一级是**边界**：它与虚线同一支，文字亮一档。
         HeaderLevel::Unit => Style::default().add_modifier(Modifier::BOLD),
@@ -10653,6 +10673,10 @@ fn group_header_line(header: &GroupHeader, width: u16, discussion: bool) -> Line
     ];
     match header.level {
         HeaderLevel::Unit => {
+            // 一级头占的那几列里，行首九列归时刻、`┄ ` 那个前缀与末尾那一格空白也不能动
+            // —— 剩下的才是这一段字段的余地。
+            let budget = (width as usize).saturating_sub(layout::STAMP_COLUMNS as usize + 2 + 1);
+            let head = unit_header_head(header, discussion, budget);
             spans.push(Span::styled("┄ ", Style::default().fg(palette::CHROME)));
             spans.push(Span::styled(head.clone(), style));
             // 虚线填到屏幕右缘 —— 那一行因此读起来是**一条边界**，而不是一行孤零零的字。
@@ -10664,10 +10688,66 @@ fn group_header_line(header: &GroupHeader, width: u16, discussion: bool) -> Line
             ));
         }
         HeaderLevel::Iteration => {
-            spans.push(Span::styled(head, style));
+            let budget = (width as usize).saturating_sub(layout::STAMP_COLUMNS as usize);
+            spans.push(Span::styled(iteration_header_head(header, budget), style));
         }
     }
     Line::from(spans)
+}
+
+/// 在一串**从最全到最简**的候选里挑第一个放得下的；一个都放不下就把最简那个截断。
+///
+/// 分档量的是整段字段的列数 —— 一个字段带着**它自己那个分隔符**（` · `）往前挤，逐字段各量
+/// 一次会让「那个分隔符算谁的」有两处答案。
+fn header_head(candidates: Vec<String>, budget: usize) -> String {
+    if let Some(fits) = candidates
+        .iter()
+        .find(|candidate| text_columns(candidate) <= budget)
+    {
+        return fits.clone();
+    }
+    // **一路丢完还放不下**（极窄的屏）：把最简那个截断。组头永远占一行是这一行形状里最硬
+    // 的那条 —— 折成两行会与「零额外行数」和时刻列竖向对齐相冲（`spec.md` §5）。
+    let simplest = candidates.last().cloned().unwrap_or_default();
+    if budget == 0 {
+        return String::new();
+    }
+    let mut cut = truncate_columns(&simplest, budget - 1);
+    cut.push_str(wording::ELLIPSIS);
+    cut
+}
+
+/// 一级组头的那段字段：**超宽从右往左丢** —— 先丢直方图尾部、再丢整段直方图，序号与跨度
+/// 最后丢（`spec.md` §5、票 16 第 5 条）。
+///
+/// 直方图那一档的**粒度是一个工具项**：`bash×2 read×1 edit×1` 先丢 `edit×1`、再丢
+/// `read×1`，一项不剩时才整段不画。这样窄档下读的人先看到「这一组最先动的是哪几样」，
+/// 而不是一下子什么都没有 —— 第一项是这一组最早动的东西，也是最能说明它在干什么的那一个。
+fn unit_header_head(header: &GroupHeader, discussion: bool, budget: usize) -> String {
+    let sep = wording::header_separator();
+    let name = wording::header_unit(header.ordinal, discussion);
+    let span = wording::header_span(group_span(header));
+    let mut candidates: Vec<String> = Vec::new();
+    // 从「直方图一个不少」到「只剩第一项」，逐项丢尾部。
+    for keep in (1..=header.tools.len()).rev() {
+        candidates.push(format!(
+            "{name}{sep}{span}{sep}{}",
+            wording::header_tools(&header.tools[..keep])
+        ));
+    }
+    // 直方图整段丢（它拿不到时本来就不画，所以没有直方图时这两个候选就是全部）。
+    candidates.push(format!("{name}{sep}{span}"));
+    // 序号最后丢。
+    candidates.push(name);
+    header_head(candidates, budget)
+}
+
+/// 二级组头的那段字段：只有序号与跨度两个，于是超宽时**先丢跨度**、序号最后丢。
+fn iteration_header_head(header: &GroupHeader, budget: usize) -> String {
+    let name = wording::header_iteration(header.ordinal);
+    let span = wording::header_span(group_span(header));
+    let sep = wording::header_separator();
+    header_head(vec![format!("{name}{sep}{span}"), name], budget)
 }
 
 /// 一条折行：把组头那一行的字形换成它折起来的摘要 —— **虚线保留、`▸` 出现**（票 21 第 2 条）。
@@ -15209,6 +15289,104 @@ mod tests {
             vec![("bash".to_owned(), 2), ("read".to_owned(), 1)],
             "同类归并，按首次出现排序（`bash×2 read×1`）"
         );
+    }
+
+    /// 组头超宽时**从右往左丢**：先按工具项丢直方图的尾部，再丢整段直方图，序号与跨度最后
+    /// 丢 —— 而它**永远占一行**（`spec.md` §5、票 16 第 5 条）。
+    ///
+    /// 每一档给一个**恰好**的宽度，于是「这一档丢了什么」只有一个答案；判据同时盯住那一条：
+    /// 画出来的列数不超过给的宽度（超了就会被窗格折成两行，而那与「零额外行数」和时刻列
+    /// 竖向对齐都相冲）。
+    #[test]
+    fn a_group_header_sheds_fields_from_the_right_and_stays_one_line() {
+        let header = GroupHeader {
+            id: BlockId {
+                seq: Some(1),
+                index: 0,
+            },
+            level: HeaderLevel::Unit,
+            ordinal: 1,
+            at: Utc::now(),
+            span: Some(std::time::Duration::from_millis(12_000)),
+            tools: vec![
+                ("bash".to_owned(), 2),
+                ("read".to_owned(), 1),
+                ("edit".to_owned(), 1),
+            ],
+        };
+        let row = |width: u16| {
+            let line = group_header_line(&header, width, false);
+            let columns = line_columns(&line);
+            assert!(
+                columns <= width as usize,
+                "{width} 列下组头画了 {columns} 列 —— 它必须占一行"
+            );
+            line_text(&line)
+        };
+
+        // 宽档：四个字段一个不少。
+        let wide = row(48);
+        assert!(
+            wide.contains("回合 1 · 12 s · bash×2 read×1 edit×1"),
+            "{wide}"
+        );
+
+        // 窄一列：直方图的**尾部**先丢一项，它前面那些留着。
+        let shorter = row(47);
+        assert!(
+            shorter.contains("回合 1 · 12 s · bash×2 read×1"),
+            "{shorter}"
+        );
+        assert!(!shorter.contains("edit×1"), "尾部那一项先走：{shorter}");
+
+        // 再窄：尾部一路丢到只剩第一项（分档的粒度是**工具项**）。
+        let one_left = row(40);
+        assert!(one_left.contains("回合 1 · 12 s · bash×2"), "{one_left}");
+        assert!(!one_left.contains("read×1"), "{one_left}");
+
+        // 一项都不剩时才整段不画，而那时**跨度还在**。
+        let span_left = row(25);
+        assert!(span_left.contains("回合 1 · 12 s"), "{span_left}");
+        assert!(!span_left.contains('×'), "整段直方图不画了：{span_left}");
+
+        // 直方图丢完之后才轮到跨度：只剩序号。
+        let ordinal_only = row(18);
+        assert!(ordinal_only.contains("回合 1"), "{ordinal_only}");
+        assert!(!ordinal_only.contains("12 s"), "{ordinal_only}");
+
+        // 连序号都放不下时**截断**，而不是折行。
+        assert!(row(17).contains("回合"), "{}", row(17));
+    }
+
+    /// 二级组头（弱色单行、不带虚线）只有两个字段，超宽时先丢**跨度**、序号最后丢；
+    /// 它同样永远占一行。
+    #[test]
+    fn an_iteration_header_sheds_its_span_first_and_stays_one_line() {
+        let header = GroupHeader {
+            id: BlockId {
+                seq: Some(2),
+                index: 0,
+            },
+            level: HeaderLevel::Iteration,
+            ordinal: 7,
+            at: Utc::now(),
+            span: Some(std::time::Duration::from_millis(18_000)),
+            tools: Vec::new(),
+        };
+        let row = |width: u16| {
+            let line = group_header_line(&header, width, false);
+            let columns = line_columns(&line);
+            assert!(
+                columns <= width as usize,
+                "{width} 列下二级组头画了 {columns} 列"
+            );
+            line_text(&line)
+        };
+
+        assert!(row(30).contains("第 7 次迭代 · 18 s"), "{}", row(30));
+        let short = row(20);
+        assert!(short.contains("第 7 次迭代"), "{short}");
+        assert!(!short.contains("18 s"), "跨度先走：{short}");
     }
 
     /// 开场与压缩那两段**不属于任何一级组**，所以它们各有自己的小标题；而开场那条随注入数

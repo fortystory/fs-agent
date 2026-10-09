@@ -9207,6 +9207,78 @@ fn the_trace_page_opens_each_turn_with_a_header() {
     }
 }
 
+/// 组头放不下时**丢字段，而不是被窗格折成两行**：先丢直方图的尾部，第一项留着
+/// （`spec.md` §5、票 16 第 5 条、用户故事 6）。
+///
+/// 判据看屏上两件事：组头那一行少了哪些字段，以及它**后面紧接着的又是一条成员行**
+/// —— 折成两行时那一位置会是它的续行。
+#[test]
+fn a_group_header_that_does_not_fit_sheds_fields_instead_of_wrapping() {
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(user_message(1, "把这几样都跑一遍"));
+    state.apply(turn_started(2));
+    for (offset, tool) in ["bash", "read", "edit", "web_search", "web_fetch", "task"]
+        .into_iter()
+        .enumerate()
+    {
+        let seq = 3 + offset as u64 * 2;
+        let id = format!("c-{offset}");
+        state.apply(tool_started(
+            seq,
+            &id,
+            tool,
+            serde_json::json!({"command": tool}),
+        ));
+        state.apply(tool_completed(seq + 1, &id, true, Some("body"), None));
+    }
+    open_trace_tab(&mut state, 120, 40);
+
+    // 宽档：尾部那几项先走，直方图最前面那一项留着。
+    let wide = trace_page(&mut state, 120, 40);
+    let header = wide
+        .iter()
+        .position(|row| row.contains("回合 1"))
+        .expect("组头在屏幕上");
+    assert!(
+        wide[header].contains("bash×1"),
+        "第一项留着：{}",
+        wide[header]
+    );
+    assert!(
+        !wide[header].contains("task×1"),
+        "尾部先走：{}",
+        wide[header]
+    );
+    assert!(
+        wide[header + 1].contains("回合开始"),
+        "组头只占一行：{:#?}",
+        &wide[header..=header + 1]
+    );
+
+    // 窄档：丢得更多，而**第一项仍在** —— 从右往左丢，不是把整段直方图先扔掉。
+    let narrow = trace_page(&mut state, 70, 40);
+    let header = narrow
+        .iter()
+        .position(|row| row.contains("回合 1"))
+        .expect("组头在屏幕上");
+    assert!(
+        narrow[header].contains("bash×1"),
+        "第一项还在：{}",
+        narrow[header]
+    );
+    assert!(
+        narrow[header].matches('×').count() < wide[header].matches('×').count(),
+        "窄档丢的比宽档更多：宽 {} / 窄 {}",
+        wide[header],
+        narrow[header]
+    );
+    assert!(
+        narrow[header + 1].contains("回合开始"),
+        "组头只占一行：{:#?}",
+        &narrow[header..=header + 1]
+    );
+}
+
 /// 轨迹页补了滚动条，画在**最右列**，正文因此 38 / 26 列
 /// （`.scratch/tui-visual-language/issues/07` 决定 2）。
 #[test]
@@ -13273,6 +13345,55 @@ fn a_fold_line_can_be_selected_opened_and_unfolded() {
         "{page}"
     );
     assert!(!page.contains("3 个工具调用"), "{page}");
+}
+
+/// 折起来的**单位**与**迭代**两级也挂详情：`Enter` 开出它组内**第一条能开详情的成员**
+/// （`spec.md` §8 与票 21 第 3 条：折行「是一个源行、可选中、`Enter` 开详情、`Space` 展开」）。
+///
+/// 而 `Space` 照旧是展开 —— 两件事各归各的手势，不打架。
+#[test]
+fn a_folded_unit_and_iteration_open_their_first_member_with_a_detail() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_turn_with_a_run_of_calls(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    // 一级折行：组内第一条能开详情的成员是那条助手消息（二级头与「回合开始」都没有入口）。
+    assert!(walk_down_to(&mut state, 120, 40, "回合 1"));
+    state.key(Key::Char(' '));
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("回合 1 · 7 个步骤"),
+        "先折起来"
+    );
+    state.key(Key::Enter);
+    let opened = screen(120, 40, &mut state).join("\n");
+    assert!(opened.contains(MESSAGE_FACES), "详情覆盖层立着：{opened}");
+    assert!(
+        opened.contains("先看一眼"),
+        "开的是组内第一条能开详情的成员：{opened}"
+    );
+    state.key(Key::Esc);
+
+    // 那个折行仍然折着，而 `Space` 展开它 —— 两件事不打架。
+    state.key(Key::Char(' '));
+    let expanded = trace_page(&mut state, 120, 40).join("\n");
+    assert!(expanded.contains("先看一眼"), "{expanded}");
+    assert!(!expanded.contains("个步骤"), "`Space` 是展开：{expanded}");
+
+    // 二级折行同理：折起来之后按 `Enter` 开它组内第一条成员。
+    assert!(walk_down_to(&mut state, 120, 40, "第 2 次迭代"));
+    state.key(Key::Char(' '));
+    assert!(
+        trace_page(&mut state, 120, 40)
+            .join("\n")
+            .contains("第 2 次迭代 · 3 个工具调用"),
+        "先折起来"
+    );
+    state.key(Key::Enter);
+    let opened = screen(120, 40, &mut state).join("\n");
+    assert!(opened.contains(MESSAGE_FACES), "详情覆盖层立着：{opened}");
+    assert!(opened.contains("接着跑"), "开的是那一条成员：{opened}");
 }
 
 /// 点组头那一行 / 点一行折行 = 折 / 展；**两次相邻的单击就是两次点击**（没有双击识别）

@@ -233,7 +233,10 @@ pub(crate) const BAR_COLUMNS: usize = 10;
 ///
 /// `ceil` 保证占比一大于零就至少有一格（否则千分之一的占比会画成一条空条，读起来与零一样），
 /// `min(columns)` 保证撞顶时不越出条。字形归符号表（`wording::BAR_FULL` / `BAR_EMPTY`）。
-pub(crate) fn proportion_bar(share: f64, columns: usize) -> String {
+///
+/// **只给本模块的 [`row`] 用**：用量那一面走的是 `row` 那一族（`tui.rs` 借的也是 `row`
+/// 与 [`BAR_COLUMNS`]），所以这条条自己不必出模块的边（2026-10-11 收口时收回了它的可见性）。
+fn proportion_bar(share: f64, columns: usize) -> String {
     let share = share.clamp(0.0, 1.0);
     let filled = ((share * columns as f64).ceil() as usize).min(columns);
     format!(
