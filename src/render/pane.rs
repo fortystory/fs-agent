@@ -309,6 +309,33 @@ impl Pane {
         });
     }
 
+    /// 把一条**来源行**带进视口；它已经整条在窗口里就一个显示行都不动。
+    ///
+    /// 「选中那一块」要的正是这件事：选中按块身份记着，而它可能早就被新到达的行推出了视口
+    /// —— 那一下 `↑` / `↓` 除了换落点还得让读的人真的看见它（`.scratch/trace-ledger/spec.md`
+    /// §9 的「选中永远可见或可找回」）。只滚到**刚好**露出来那一格，不把它拽到顶上：那一下
+    /// 是「跟过去」，不是「重排视口」。
+    ///
+    /// 视口离开底部就是回看态，与 [`Pane::scroll`] 同一条：这一下不恢复跟随。
+    pub fn reveal_source(&mut self, source: usize) {
+        let Some(&start) = self.starts.get(source) else {
+            // 还没有折过行（没有宽度）或者这条来源行不存在 —— 两件事都没有可滚的落点。
+            return;
+        };
+        let height = self.height as usize;
+        if height == 0 {
+            return;
+        }
+        let end = self.starts.get(source + 1).copied().unwrap_or(self.total);
+        if start < self.top {
+            // 在窗口之上：把它放到顶行。
+            self.scroll(start as isize - self.top as isize);
+        } else if end > self.top + height {
+            // 在窗口之下：把它放到末行。
+            self.scroll(end as isize - (self.top + height) as isize);
+        }
+    }
+
     /// 重新跟着底部；下一帧把视口放到那里。
     pub fn to_bottom(&mut self) {
         self.follow = true;
@@ -686,5 +713,86 @@ mod tests {
         assert_eq!(text[2], "第二条", "后面三条整体下移一行，内容一字不改");
         assert_eq!(text[3], "第三条");
         assert_eq!(text[4], "第四条");
+    }
+
+    /// `reveal_source` 只**跟过去**：已经在窗口里的那一条一个显示行都不动。
+    #[test]
+    fn revealing_a_line_already_in_the_window_moves_nothing() {
+        let mut pane = Pane::new();
+        for index in 0..30 {
+            pane.push(Line::from(format!("第 {index} 行")));
+        }
+        pane.view(20, 6, &[]);
+        let top = pane.top();
+        pane.reveal_source(28);
+        assert_eq!(pane.top(), top, "在窗口里的行不推动视口");
+    }
+
+    /// 窗口之下的那一条滚到**末行**，之上的那一条滚到**顶行** —— 两次都只露出来，不重排。
+    #[test]
+    fn revealing_a_line_outside_the_window_puts_it_at_the_nearest_edge() {
+        let mut pane = Pane::new();
+        for index in 0..30 {
+            pane.push(Line::from(format!("第 {index} 行")));
+        }
+        pane.view(20, 6, &[]);
+        // 贴底跟随：窗口里是最后六条（第 24 到 29 行）。
+        assert_eq!(pane.top(), 24);
+
+        // 之上：滚到顶行。
+        pane.reveal_source(10);
+        assert_eq!(pane.top(), 10, "往上跟过去时它落在顶行");
+        assert!(!pane.following(), "跟过去就是回看态");
+
+        // 之下：刚好放到末行上。
+        pane.view(20, 6, &[]);
+        pane.reveal_source(20);
+        assert_eq!(pane.top(), 15, "往下跟过去时它落在末行（20 − 6 + 1）");
+        pane.view(20, 6, &[]);
+        assert_eq!(
+            (pane.top()..pane.top() + 6).collect::<Vec<_>>(),
+            vec![15, 16, 17, 18, 19, 20]
+        );
+    }
+
+    /// 一条**折成了几行**的来源行按它自己那一段算：露出来的是它开头那一片，而不是
+    /// 「第几条来源行」这个整数对应的某一格。
+    #[test]
+    fn revealing_a_wrapped_line_shows_it_from_its_first_row() {
+        let mut pane = Pane::new();
+        pane.push(Line::from("前面那一条"));
+        pane.push(Line::from("很长很长很长很长很长很长很长很长"));
+        pane.push(Line::from("后面那一条"));
+        // 宽度 10：长的那一条折成四行，三条来源行一共六行。
+        pane.view(10, 3, &[]);
+        assert_eq!(pane.total(), 6);
+        assert_eq!(
+            pane.top(),
+            3,
+            "贴底：窗口里是长的那一条的后两片与它后面那一条"
+        );
+
+        pane.reveal_source(1);
+        assert_eq!(pane.top(), 1, "顶到长的那一条的第一片上");
+        let rows: Vec<String> = pane
+            .view(10, 3, &[])
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert!(rows[0].starts_with('很'), "窗口顶上就是它的开头：{rows:?}");
+    }
+
+    /// 没有折过行（没有宽度）、或者这一条来源行根本不在窗口里时，什么都不做 —— 没有可滚的
+    /// 落点，而静默滚到别处更糟。
+    #[test]
+    fn revealing_without_a_width_or_a_line_does_nothing() {
+        let mut pane = Pane::new();
+        pane.push(Line::from("唯一一行"));
+        pane.reveal_source(0);
+        assert_eq!(pane.top(), 0, "还没画过一帧：没有宽度可算");
+
+        pane.view(20, 5, &[]);
+        pane.reveal_source(99);
+        assert_eq!(pane.top(), 0, "不存在的来源行不动视口");
     }
 }

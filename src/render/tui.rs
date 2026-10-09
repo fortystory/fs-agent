@@ -922,6 +922,26 @@ pub struct TuiState {
     thinking_done: bool,
     /// 回合条的单位与它们的分段头。
     turn_rail: TurnRail,
+    /// 轨迹页持有键盘吗。
+    ///
+    /// 这是仓库里**第四套**「键盘在谁那里」的机制（前三是左栏那个布尔、两页各自的焦点索引、
+    /// 反显的隐式归属），与左栏那一个同形但方向相反：左栏是「点一下交给我、`Esc` 还回去」，
+    /// 轨迹页是**默认持有**，`Esc` 退完三层把它交还给输入区，点账本任何位置再拿回来
+    /// （`.scratch/trace-ledger/spec.md` §4）。
+    ///
+    /// 两个条件都成立才算持有：**主列当前显示的是轨迹页**（这一层是十六层阶梯里第一个读主列
+    /// 页签的）**且**这一位是 `true`。所以它默认为真 —— 它说的是「不处于已交还状态」，重新成为
+    /// 当前显示页时自然回到持有。
+    trace_keyboard: bool,
+    /// 轨迹页里键盘认的那**一个块**（`.scratch/trace-ledger/spec.md` §9）。
+    ///
+    /// 存的是**块身份**而不是位置下标：宽度变化重放会把整本账重推一遍、`CAP` 会把全体下标
+    /// 左移，而这两件事都推翻不了身份（ADR 0021）。画在哪一行、按 `↑` / `↓` 走到哪一块，
+    /// 都是查出来的。
+    ///
+    /// 它在两种情况下**留着但不画**：那一块被过滤掉了（过滤归票 20），或者它被 `CAP` 裁出了
+    /// 窗口 —— 两者都不清它，因为「清掉读者放下的一处位置」比「暂时看不见」更难解释。
+    trace_selection: Option<BlockId>,
     /// 轨迹页每条来源行背后的详情，与那个窗格平行、按它的上限一起裁剪，好让两者永不脱节。
     /// 不是入口的那些行是 `None`。
     ///
@@ -2073,6 +2093,8 @@ impl TuiState {
             turn_rail: TurnRail::default(),
             trace_links: std::collections::VecDeque::new(),
             trace_block_ids: std::collections::VecDeque::new(),
+            trace_keyboard: true,
+            trace_selection: None,
             anchors: Vec::new(),
             trace_groups: TraceGroups::default(),
             next_local_id: 0,
@@ -3850,6 +3872,16 @@ impl TuiState {
         if !questioning && self.take_input_keyboard(column, row) {
             return;
         }
+        // 点账本任何位置都把键盘**拿回来**（`.scratch/trace-ledger/spec.md` §4）：点一行 =
+        // 拿回 + 开详情，点空白 = 拿回 + 清选中。鼠标用户于是不必另记一个手势 —— `Esc` 把它
+        // 还回去，点一下就回来。判据是「上一帧真画了轨迹页」（`trace_rect`），与滚轮、点击行
+        // 同一条纪律。问卷立着时拿走键盘的是问卷，所以这一支整支跳过 —— 与「点左栏」同一句。
+        let over_trace = self
+            .trace_rect
+            .is_some_and(|rect| rect.contains((column, row).into()));
+        if !questioning && over_trace {
+            self.take_trace_keyboard();
+        }
         // 点左栏任意处把键盘交给这一页 —— 页签条与页区都算，而这一下同时仍然是它本来
         // 那件事（切页、展开、开弹窗）（`.scratch/files-page/spec.md` §5）。
         if !questioning {
@@ -3863,6 +3895,10 @@ impl TuiState {
                 // 切到另外两页则把键盘还回去 —— 它们没有能用方向键走的东西。
                 if !questioning {
                     self.sidebar_keyboard = matches!(tab, Tab::Files | Tab::Changes);
+                    if self.sidebar_keyboard {
+                        // 键盘交给左栏时轨迹页那一层放下 —— 与点页区同一条归还规矩。
+                        self.release_trace_keyboard();
+                    }
                     if tab == Tab::Files && self.files_page.focus.is_none() {
                         self.files_page.focus = Some(0);
                     }
@@ -3872,7 +3908,15 @@ impl TuiState {
                     }
                 }
             }
-            Some(HitAction::SwitchMainTab(tab)) => self.main_tab = tab,
+            Some(HitAction::SwitchMainTab(tab)) => {
+                self.main_tab = tab;
+                // 轨迹页**重新成为当前显示页时自动回到持有**（票 18 第 3 条）：交还过的那
+                // 一位不留着 —— 它是「我要去轨迹页上做事」那一下，没必要再多点一次。
+                // 切到对话页时不用管：那一层的前提本来就不成立。
+                if tab == MainTab::Trace {
+                    self.take_trace_keyboard();
+                }
+            }
             // 点状态行那两格（spec §7、§12）。讨论会话不上行 —— 那一格的模型是**两个模型的
             // 拼法**，是名册里的配置事实，所以它只给一句说明。
             Some(HitAction::SwitchModel) => self.ask_picker(PickerKind::Model),
@@ -3907,10 +3951,8 @@ impl TuiState {
                 }
                 // 指针落在轨迹页上吗？`trace_rect` 只在上一帧真的画了轨迹页时才有值，所以
                 // 「记住读的人真看到了什么」这条纪律也管着视口的选择
-                // （`.scratch/trace-in-main/spec.md` §4）。
-                let over_trace = self
-                    .trace_rect
-                    .is_some_and(|rect| rect.contains((column, row).into()));
+                // （`.scratch/trace-in-main/spec.md` §4）。它已经算过一次（拿回键盘那一步），
+                // 两处用同一个判据。
                 // 落点不在轨迹页的内容区里就什么都不点：左栏、分隔列、状态行、输入区、对话页
                 // 里**没点中链接的那几列**都没有可点开的行
                 // （`.scratch/tui-feedback/spec.md` §9）。行号是**屏幕**行号，拿它去取别处的
@@ -3918,19 +3960,14 @@ impl TuiState {
                 if !over_trace {
                     return;
                 }
-                let panes = layout::plan(self.area, 1, self.sidebar_wanted);
                 if let Some((detail, ledger_row)) = self.trace_hit_at(row) {
-                    // 打开方先算好：`open_detail` 借 `&mut self`。
-                    let opener = DetailOpener::Trace {
-                        top: self.trace.top(),
-                        follow: self.trace.following(),
-                    };
-                    self.open_detail(
-                        detail,
-                        panes.detail_text_width() as usize,
-                        opener,
-                        Some(ledger_row),
-                    );
+                    self.open_trace_detail(detail, ledger_row);
+                } else {
+                    // 点到的是一格**空白**：拿回键盘 + 清选中（票 10 §7）。组头与小标题那几行
+                    // 也算空白 —— 它们本来就没有可点开的东西，所以「点一行」那一支接不住它们。
+                    // 点一行**不顺手选中**：详情盖住那一行之后读者多半按 `Esc` 关掉，而关掉
+                    // 那一刻凭空多出一个高亮是能感觉到的跳动（票 10 §7）。
+                    self.trace_selection = None;
                 }
             }
         }
@@ -4191,6 +4228,169 @@ impl TuiState {
         self.files_page.rows.get(self.files_page.focus?).cloned()
     }
 
+    // --- 轨迹页那一层：选中与它的键位（`.scratch/trace-ledger/spec.md` §4、§9） ---------
+
+    /// 轨迹页持有键盘时的一个按键：归这一层回答 `true`。
+    ///
+    /// 认的只有表上那几个键，别的**照旧**穿透（见 [`TuiState::key`] 那一支的注）。`↑` / `↓`
+    /// 与 `j` / `k` 等价（前者收编自编辑器光标，后者全局原本没有绑定）；`Home` / `End`
+    /// **不征用** —— 那是编辑器的行首行尾，`g` / `G` 在轨迹页持有时才是「跳到头 / 尾」。
+    fn trace_key(&mut self, key: Key) -> bool {
+        match key {
+            Key::Up | Key::Char('k') => self.move_trace_selection(-1),
+            Key::Down | Key::Char('j') => self.move_trace_selection(1),
+            // 键盘上兑现「点一行开详情」（票 10 §5）。它**不改选中**：选中说的是「我在这里
+            // 做事」，而看一眼一行不该把落点搬过去 —— 与「点一行不顺手选中」同一条理由。
+            Key::Enter => self.open_selected_detail(),
+            Key::Char('g') => self.select_first_block(),
+            // 最新那一条**并恢复跟随**：`g` 的一端是账本的头，这一端是它的尾（票 10 §12）。
+            Key::Char('G') => self.select_last_block(),
+            Key::Esc => self.trace_escape(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// `Esc` 在轨迹页这一层的层序（票 10 §4）：搜索模式 → 有过滤则清过滤 → 有选中则清选中 →
+    /// **把键盘还给输入区**。
+    ///
+    /// 今天落的是后两层 —— 搜索与过滤归票 20，而它们该在的位置就是这两行的上面。层序因此
+    /// 留在这里，不是留给以后现找一遍。一次手势一层，所以「退完」之后那一下 `Esc` 才轮到
+    /// 取消回合那一档（与左栏两页同一条纪律）。
+    fn trace_escape(&mut self) {
+        if self.trace_selection.take().is_none() {
+            self.release_trace_keyboard();
+        }
+    }
+
+    /// 一条源行属于哪一块。`None` 是「这条行不属于任何块」（单位之间的分隔线那类）。
+    ///
+    /// 这是票 12 那份身份账的**反向查询**（票 12 的落地记录里写着「需要时再加，那时它才
+    /// 真有消费者」）—— 今天有两个：画选中那一笔，与 `↑` / `↓` 找邻块。
+    fn block_at_source(&self, source: usize) -> Option<BlockId> {
+        self.trace_block_ids.get(source).copied().flatten()
+    }
+
+    /// 一条源行所属那一块的**头尾两条源行**（都含）。
+    ///
+    /// 附属行（失败正文那行、还在长的增量行、折出来的续行）与它的主行共享一个身份，所以
+    /// 它们落在同一段里 —— 这正是「选中的粒度是块」在代码上的样子：中间那些行从来不是落点。
+    fn block_bounds_at(&self, source: usize) -> Option<(usize, usize)> {
+        let id = self.block_at_source(source)?;
+        let first = (0..source)
+            .rev()
+            .find(|row| self.block_at_source(*row) != Some(id))
+            .map_or(0, |row| row + 1);
+        let last = (source + 1..self.trace.sources())
+            .find(|row| self.block_at_source(*row) != Some(id))
+            .map_or(self.trace.sources() - 1, |row| row - 1);
+        Some((first, last))
+    }
+
+    /// 账本上第一条有身份的源行 / 最后一条。
+    fn first_block_row(&self) -> Option<usize> {
+        (0..self.trace.sources()).find(|row| self.block_at_source(*row).is_some())
+    }
+
+    fn last_block_row(&self) -> Option<usize> {
+        (0..self.trace.sources())
+            .rev()
+            .find(|row| self.block_at_source(*row).is_some())
+    }
+
+    /// 移动选中时从哪儿出发：选中的那一块的第一条源行；**还没有选中时**是视口顶端那一条有
+    /// 身份的源行 —— 读者正在看的地方（贴底跟随的账本上那就是最新那一段）。
+    ///
+    /// 选中的那一块已经被 `CAP` 裁出窗口时也走这一支：它没有了位置可算，而「从眼前这块接着
+    /// 走」比「什么都不做」有用。
+    fn selection_anchor(&self) -> Option<usize> {
+        if let Some(row) = self.trace_selection.and_then(|id| self.first_source_of(id)) {
+            return Some(row);
+        }
+        // 视口顶端那一条**来源行** —— 窗格报的是显示行，而一条来源行可能折成了几行，所以
+        // 要换回来再往下找。
+        let top = self.trace.source_at(self.trace.top()).unwrap_or(0);
+        (top..self.trace.sources()).find(|row| self.block_at_source(*row).is_some())
+    }
+
+    /// 选中上 / 下一**块**。
+    ///
+    /// 走的是身份表上的一步 —— 附属行与主行同号，所以它们永远不会各自成为一个落点。选中
+    /// 之后把视口跟过去：`↑` / `↓` 是「我要在这里做事」，而落点看不见就做不了事
+    /// （票 10 §13：「选中永远可见或可找回」）。
+    fn move_trace_selection(&mut self, step: isize) {
+        let target = match self
+            .selection_anchor()
+            .and_then(|row| self.block_bounds_at(row))
+        {
+            Some((first, _)) if step < 0 => (0..first)
+                .rev()
+                .find(|row| self.block_at_source(*row).is_some()),
+            Some((_, last)) => {
+                (last + 1..self.trace.sources()).find(|row| self.block_at_source(*row).is_some())
+            }
+            // 账本上一条有身份的行都没有：没有可选的落点。
+            None => None,
+        };
+        let Some(row) = target else {
+            return;
+        };
+        self.trace_selection = self.block_at_source(row);
+        self.trace.reveal_source(row);
+    }
+
+    /// `g`：账本第一条行 —— 它是最后一端之外的**另一端**，与「第一页」不是一件事（票 10 §12）。
+    fn select_first_block(&mut self) {
+        if let Some(row) = self.first_block_row() {
+            self.trace_selection = self.block_at_source(row);
+            self.trace.reveal_source(row);
+        }
+    }
+
+    /// `G`：最新那一条，并**恢复跟随**（选中的块被过滤掉之类的场合不归它管 —— 那归票 20）。
+    fn select_last_block(&mut self) {
+        if let Some(row) = self.last_block_row() {
+            self.trace_selection = self.block_at_source(row);
+            self.trace.to_bottom();
+        }
+    }
+
+    /// `Enter`：开选中那一块的详情。
+    ///
+    /// 走的正是指针那一条路 —— 同一份链接、同一个 [`DetailOpener::Trace`]，于是关掉覆盖层
+    /// 还原给轨迹页的那笔账一个字不差。选中的是组头、小标题这类**没有详情**的行时什么都不
+    /// 做：它们本来就点不开，键盘上也不该变出一个来。
+    fn open_selected_detail(&mut self) {
+        let Some(row) = self.trace_selection.and_then(|id| self.first_source_of(id)) else {
+            return;
+        };
+        let Some(detail) = self.trace_links.get(row).cloned().flatten() else {
+            return;
+        };
+        let Some(here) = self.trace.ledger_row(row) else {
+            return;
+        };
+        self.open_trace_detail(detail, here);
+    }
+
+    /// 把一份详情开在轨迹页的某一行上 —— 指针与 `Enter` **走的就是这一条**，于是打开方、
+    /// 正文宽度与「关掉时还原给谁」三件事在两条入口上不会漂开。
+    ///
+    /// `here` 是那一行在**账本上的行号**（来源面那条链按它定「本行」）。
+    fn open_trace_detail(&mut self, detail: Detail, here: usize) {
+        let panes = layout::plan(self.area, 1, self.sidebar_wanted);
+        let opener = DetailOpener::Trace {
+            top: self.trace.top(),
+            follow: self.trace.following(),
+        };
+        self.open_detail(
+            detail,
+            panes.detail_text_width() as usize,
+            opener,
+            Some(here),
+        );
+    }
+
     /// 点左栏的**文件页**或**改动页**：键盘交给这一页，焦点行落在点的那一行上。
     ///
     /// 只认得**真画出来**的那两块矩形（页签条与页区），与指针分派同一条纪律；也只认能走键盘
@@ -4208,6 +4408,9 @@ impl TuiState {
             return;
         }
         self.sidebar_keyboard = true;
+        // 键盘交给这一页，轨迹页那一层就放下 —— 两层同时「持有」没有意义，而 `↑` / `↓` 落在
+        // 谁身上必须有一个答案（票 18；与「点回输入区」同一条归还规矩）。
+        self.release_trace_keyboard();
         if in_page {
             match self.tab {
                 Tab::Files => {
@@ -4246,6 +4449,23 @@ impl TuiState {
         self.sidebar_keyboard = false;
     }
 
+    /// 点账本任何位置：键盘归轨迹页。
+    ///
+    /// 它同时把左栏那个布尔放下 —— 「点在哪儿，键盘就归哪儿」对这两层是同一句话，而两个都
+    /// 拿着键盘的中间状态没有意义（`↑`/`↓` 到底动谁没有答案）。
+    fn take_trace_keyboard(&mut self) {
+        self.trace_keyboard = true;
+        self.release_sidebar_keyboard();
+    }
+
+    /// 把键盘从轨迹页手里交还给输入区（`Esc` 退完三层那一下）。
+    ///
+    /// **选中不动**：交还说的是键盘在谁那里，不是读者放在哪一块上——再点一下账本就回到
+    /// 这个位置。
+    fn release_trace_keyboard(&mut self) {
+        self.trace_keyboard = false;
+    }
+
     /// 点在输入区上：把键盘还给输入区，回答 `true`。
     ///
     /// 它与「点左栏任意处把键盘交给这一页」是同一条规矩的两半
@@ -4257,6 +4477,9 @@ impl TuiState {
             return false;
         }
         self.release_sidebar_keyboard();
+        // 轨迹页那一层也放下：点了输入区就是「我要打字」，而这一层收编的正是 `↑` / `↓` ——
+        // 留着它，读的人会看见一个按键落在账本上、而不是落在光标上。
+        self.release_trace_keyboard();
         true
     }
 
@@ -5151,6 +5374,26 @@ impl TuiState {
         // 键盘在左栏时，走树的那几个键归文件页（`.scratch/files-page/spec.md` §5）。它排在
         // 详情覆盖层之后 —— 覆盖层立着时它上面的左栏读不到键盘，`Esc` 先关覆盖层、再还键盘。
         if self.sidebar_keyboard && self.sidebar_key(key) {
+            return;
+        }
+        // 轨迹页那一层（`.scratch/trace-ledger/spec.md` §4）：排在详情覆盖层之下、记号菜单与
+        // `Esc` 的全局阶梯之上。这两个位置各有一条理由 —— 覆盖层立着时键盘归它、关掉之后
+        // 轨迹页那一层**原样**恢复（这一支根本没被摸到）；而 `Esc` 归这一层消化，才有
+        // 「一次手势一层」：清选中 → 交还键盘 → 再一下才是取消回合那一档。
+        //
+        // 它只认自己收编的那几个键（`↑`/`↓`/`j`/`k`/`Enter`/`g`/`G`/`Esc`），别的**照旧**
+        // 落到输入区：这一层是**部分持有**，不是一块模态浮层 —— 打字、`Backspace`、`Tab`、
+        // 翻页三键与所有 `Ctrl-*` 都照原样走。
+        //
+        // 问卷与中间那几种模态立着时它**整个让位**：那时候键盘归它们，「没有浮层时归问卷、
+        // 浮层立着时归浮层」是同一条纪律
+        // （`.scratch/questionnaire-reading/spec.md`），而这一层扣着 `Enter` 与方向键不放会
+        // 让一道正在等的题按不动。关掉它们之后原样还给轨迹页 —— 这一位没被动过。
+        if self.main_tab == MainTab::Trace
+            && self.trace_keyboard
+            && self.pending.is_none()
+            && self.trace_key(key)
+        {
             return;
         }
         // 左栏开关（`.scratch/sidebar-toggle/spec.md` §3）：排在两个「独占键盘的视图」之后
@@ -7645,8 +7888,9 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
         MainTab::Trace => {
             // 轨迹页只画正文尾巴：等待提示是对话视图自己的（票 12 的修订之后它也没有动画）。
             let live = TuiState::live_rows(&state.live);
-            let rows = state.trace.view(text_area.width, text_area.height, &live);
+            let mut rows = state.trace.view(text_area.width, text_area.height, &live);
             let top = state.trace.top();
+            mark_trace_selection(state, top, &mut rows);
             state.trace_drawn.top = text_area.y;
             state.trace_drawn.rows = (0..rows.len())
                 .map(|offset| state.trace.source_at(top + offset))
@@ -7659,6 +7903,35 @@ fn draw_transcript(frame: &mut ratatui::Frame, panes: &layout::Regions, state: &
             frame.render_widget(Paragraph::new(rows), text_area);
             draw_scrollbar(frame, panes.scrollbar(), &state.trace);
             draw_indicator(frame, text_area, state, Viewport::Trace);
+        }
+    }
+}
+
+/// 选中的那一**块**整行画成 `ACCENT + BOLD`（`.scratch/trace-ledger/spec.md` §9、票 18）。
+///
+/// 画在**绘制这一步**、而不是推进窗格那一步：选中说的是「键盘现在认哪一块」，一次按键就能
+/// 换，而按它重推整本账是几百行的事。跟着身份走，于是宽度变化重放之后那一行照样亮着 ——
+/// 重放换的是行，不是块。
+///
+/// 附属行跟着所属块一起亮：它们与主行共享一个身份（失败正文那行、还在长的增量行、折出来的
+/// 续行都在这一档里），所以「一个块亮几行」这件事不需要第二套记账。
+///
+/// **不画反显**（全屏唯一的反显仍只给问卷与 `/`·`@` 菜单）：把选中行反显会把它自己那档
+/// `ACCENT + BOLD` 洗白。也不借底色：那是内容语义（票 10 §4、§6）。
+fn mark_trace_selection(state: &TuiState, top: usize, rows: &mut [Line<'static>]) {
+    let Some(selected) = state.trace_selection else {
+        return;
+    };
+    for (offset, row) in rows.iter_mut().enumerate() {
+        let Some(source) = state.trace.source_at(top + offset) else {
+            // 还没定稿的尾巴不属于任何块，没有身份可跟。
+            continue;
+        };
+        if state.block_at_source(source) != Some(selected) {
+            continue;
+        }
+        for span in &mut row.spans {
+            span.style = span.style.fg(palette::ACCENT).add_modifier(Modifier::BOLD);
         }
     }
 }
@@ -12217,6 +12490,282 @@ mod tests {
         assert!(row.hotspots[0].covers(3) && row.hotspots[0].covers(8));
         assert!(!row.hotspots[0].covers(2), "`见` 那两列不是候选");
         assert!(!row.hotspots[1].covers(12), "`与` 后面那个空格不是候选");
+    }
+
+    // --- 轨迹页那一层：选中与它的键位（票 18） ---------------------------------
+    //
+    // 屏上那几件（整行亮着、点了拿回、覆盖层压着时不生效）在集成测试里
+    // （`tests/render_layout.rs`）；这里管的是更划算的那几件：选中在**块**之间怎么走、
+    // 身份怎么换回源行。
+
+    /// 一场两个块、其**第一块占两条源行**（一次失败的调用：调用行 + 错误正文首行）的会话 ——
+    /// 「附属行不是落点」这件事要的正是它。
+    fn a_page_with_a_failed_call() -> TuiState {
+        let mut page = state();
+        page.main_tab = MainTab::Trace;
+        page.apply(logged(
+            1,
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new("c-1"),
+                tool_name: "read_file".to_owned(),
+                args: serde_json::json!({"path": "missing.rs"}),
+            },
+        ));
+        page.apply(logged(
+            2,
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new("c-1"),
+                ok: false,
+                output: None,
+                error: Some("no such file".to_owned()),
+                duration_ms: 3,
+            },
+        ));
+        page.apply(logged(
+            3,
+            EventPayload::ToolCallStarted {
+                tool_call_id: ToolCallId::new("c-2"),
+                tool_name: "bash".to_owned(),
+                args: serde_json::json!({"command": "ls"}),
+            },
+        ));
+        page.apply(logged(
+            4,
+            EventPayload::ToolCallCompleted {
+                tool_call_id: ToolCallId::new("c-2"),
+                ok: true,
+                output: Some("out".to_owned()),
+                error: None,
+                duration_ms: 3,
+            },
+        ));
+        page
+    }
+
+    /// 账本上那一串**块**（按源行顺序，同一个块只算一次）。
+    fn blocks_in_order(page: &TuiState) -> Vec<BlockId> {
+        let mut blocks: Vec<BlockId> = Vec::new();
+        for row in page.trace_block_ids.iter().flatten() {
+            if blocks.last() != Some(row) {
+                blocks.push(*row);
+            }
+        }
+        blocks
+    }
+
+    /// 「源行 → 块」这一向：一条源行属于哪一块、那一块占哪几条源行。
+    ///
+    /// 这是票 12 那份身份账的反向查询（它的落地记录写着「需要时再加」），今天的消费者是选中
+    /// 那一笔与 `↑` / `↓` 找邻块。
+    #[test]
+    fn a_source_row_knows_which_block_it_belongs_to() {
+        let page = a_page_with_a_failed_call();
+        // 失败那一次调用占两条源行：主行与它的错误正文首行。
+        let first = page
+            .first_source_of(page.trace_block_ids[0].expect("第一条有身份"))
+            .unwrap();
+        assert_eq!(first, 0);
+        assert_eq!(
+            page.block_bounds_at(0),
+            Some((0, 1)),
+            "一个块的两条源行都在它的界里"
+        );
+        assert_eq!(
+            page.block_at_source(1),
+            page.block_at_source(0),
+            "附属行与主行同一个身份"
+        );
+        assert_eq!(page.block_at_source(1), page.block_at_source(1));
+        assert_eq!(page.block_bounds_at(1), Some((0, 1)), "从附属行问也一样");
+        // 第二条块只占一行，而它有自己的界。
+        let second = blocks_in_order(&page)[1];
+        let second_row = page.first_source_of(second).unwrap();
+        assert_eq!(
+            page.block_bounds_at(second_row),
+            Some((second_row, second_row))
+        );
+        assert_ne!(page.block_at_source(second_row), page.block_at_source(0));
+        // 没有身份的行（这里不存在，但要有一个确定的答案）。
+        assert_eq!(page.block_at_source(page.trace.sources()), None);
+    }
+
+    /// `↑` / `↓` 在**块**之间走：附属行与主行同号，所以中间那些行从来不是落点 ——
+    /// 一次按键一块，逐块走过整本账。
+    #[test]
+    fn the_selection_walks_block_by_block_and_never_lands_on_an_extra_row() {
+        let mut page = a_page_with_a_failed_call();
+        let blocks = blocks_in_order(&page);
+        assert_eq!(blocks.len(), 2, "两条块：{blocks:?}");
+
+        // `g` 落在第一块的第一条源行上。
+        page.key(Key::Char('g'));
+        assert_eq!(page.trace_selection, Some(blocks[0]));
+        assert_eq!(page.first_source_of(blocks[0]), Some(0), "落点是主行");
+
+        // `↓`（与 `j` 同一条）换到下一块 —— 跳过那一条附属行。
+        page.key(Key::Char('j'));
+        assert_eq!(page.trace_selection, Some(blocks[1]));
+        page.key(Key::Down);
+        assert_eq!(
+            page.trace_selection,
+            Some(blocks[1]),
+            "走到头就停在原地，不越界"
+        );
+        page.key(Key::Up);
+        assert_eq!(page.trace_selection, Some(blocks[0]));
+        page.key(Key::Char('k'));
+        assert_eq!(page.trace_selection, Some(blocks[0]), "往上也没有下一块");
+
+        // `G` 落在最新那一块上，并把视口带到底（恢复跟随）。
+        page.key(Key::Char('G'));
+        assert_eq!(page.trace_selection, Some(blocks[1]));
+        assert!(page.trace.following(), "`G` 恢复跟随");
+    }
+
+    /// 选中存的是**块身份**：宽度变化重放之后它还在那一块上，而位置下标那套活不过这一趟
+    /// （ADR 0021、票 18 第 8 条）。
+    #[test]
+    fn a_rebuild_keeps_the_selected_block() {
+        let mut page = a_page_with_a_failed_call();
+        let blocks = blocks_in_order(&page);
+        page.key(Key::Char('G'));
+        assert_eq!(page.trace_selection, Some(blocks[1]));
+
+        page.rerender_if_width_changed(SHARED_RENDER_WIDTH, 40);
+        assert_eq!(page.trace_selection, Some(blocks[1]), "重放之后还是那一块");
+        assert_eq!(
+            page.first_source_of(blocks[1]),
+            Some(page.trace.sources() - 1),
+            "它还在，而且换到了重放之后的那一条源行上"
+        );
+    }
+
+    /// 选中的是一块**没有详情**的行（组头 / 小标题）时 `Enter` 什么都不做：它们本来就点不开，
+    /// 键盘上也不该变出一个来。相邻那一条能点开的行照旧开得出详情 —— 这一条不是空断言。
+    #[test]
+    fn enter_on_a_row_without_a_detail_opens_nothing() {
+        let mut page = state();
+        page.main_tab = MainTab::Trace;
+        // 一条注入既是开场段的一块（于是那一页顶上多一行小标题），又是一条点得开的记录。
+        page.apply(RenderEvent::identity("你是衡（heng）"));
+        let header = page
+            .trace_block_ids
+            .front()
+            .copied()
+            .flatten()
+            .expect("开场有小标题");
+        let notice = *page.trace_block_ids.back().expect("注入那一行在");
+        let notice = notice.expect("它也有身份");
+        assert_ne!(header, notice);
+        assert_eq!(
+            page.first_source_of(header),
+            Some(0),
+            "小标题是第一条来源行"
+        );
+        assert!(
+            page.trace_links.front().is_none_or(Option::is_none),
+            "小标题点不开"
+        );
+
+        page.trace_selection = Some(header);
+        page.key(Key::Enter);
+        assert!(!page.detail_open(), "点不开的行，键盘上也开不出详情");
+
+        // 而它下面那一条能点开：同一个键、同一份链接。
+        assert!(
+            page.trace_links.back().is_some_and(Option::is_some),
+            "注入那一行点得开"
+        );
+        page.trace_selection = Some(notice);
+        page.key(Key::Enter);
+        assert!(page.detail_open(), "能点开的那一条照旧开得出详情");
+    }
+
+    /// 覆盖层立着 / 关掉**都不碰**轨迹页那一层：交还过就还是交还着，持有就还是持有
+    /// （票 18 第 2 条、spec §4 的「关掉覆盖层恢复原状态」）。
+    #[test]
+    fn opening_and_closing_a_detail_leaves_the_pages_holding_alone() {
+        let mut page = a_page_with_a_failed_call();
+        let detail = page
+            .trace_links
+            .iter()
+            .flatten()
+            .next()
+            .cloned()
+            .expect("那两条调用各有一份详情");
+        let opener = DetailOpener::Trace {
+            top: 0,
+            follow: true,
+        };
+
+        for held in [false, true] {
+            if held {
+                page.take_trace_keyboard();
+            } else {
+                page.release_trace_keyboard();
+            }
+            page.open_detail(detail.clone(), 40, opener, None);
+            assert_eq!(page.trace_keyboard, held, "覆盖层立着时那一位没被动过");
+            page.close_detail();
+            assert_eq!(page.trace_keyboard, held, "关掉之后原样");
+        }
+    }
+
+    /// `Esc` 在这一层的层序：有选中先清选中，之后那一下才把键盘交还；再之后这一层就不认键了。
+    #[test]
+    fn escape_clears_then_hands_back_and_then_stops_answering() {
+        let mut page = a_page_with_a_failed_call();
+        page.key(Key::Down); // 还没选中：从视口顶端那一条出发落一块
+        assert!(page.trace_selection.is_some(), "先有选中");
+
+        page.key(Key::Esc);
+        assert_eq!(page.trace_selection, None, "第一下清选中");
+        assert!(page.trace_keyboard, "键盘还在轨迹页手里");
+        page.key(Key::Esc);
+        assert!(!page.trace_keyboard, "第二下把它交还给输入区");
+
+        // 交还之后那几个键一个都不认了：`j` 落进草稿。
+        page.key(Key::Char('j'));
+        assert_eq!(page.editor.text(), "j");
+        // 重新成为当前显示页 = 拿回来。
+        page.take_trace_keyboard();
+        assert!(page.trace_keyboard, "拿回来之后照旧持有");
+        page.key(Key::Down);
+        assert!(page.trace_selection.is_some(), "而它又认键了");
+    }
+
+    /// 「点在哪儿键盘就归哪儿」：左栏与输入区拿过去时轨迹页那一层放下，点账本又拿回来。
+    #[test]
+    fn the_keyboards_belonging_is_exclusive_between_the_columns() {
+        let mut page = a_page_with_a_failed_call();
+        assert!(page.trace_keyboard, "默认持有");
+        page.sidebar_keyboard = true;
+        page.release_trace_keyboard();
+        assert!(!page.trace_keyboard, "键盘交给左栏时轨迹页放下它");
+
+        page.take_trace_keyboard();
+        assert!(
+            page.trace_keyboard && !page.sidebar_keyboard,
+            "点账本拿回来"
+        );
+    }
+
+    /// 问卷与中间那几种模态立着时它**整个让位**：那时候键盘归它们（`Enter` 是作答，不是开
+    /// 详情），关掉之后原样还给轨迹页。
+    #[test]
+    fn a_pending_question_keeps_the_trace_layer_out_of_the_way() {
+        let mut page = a_page_with_a_failed_call();
+        page.pending = Some(Pending::ClearDraft);
+        let before = page.trace_selection;
+        page.key(Key::Down);
+        assert_eq!(
+            page.trace_selection, before,
+            "模态占着键盘时 `↓` 不落到账本上"
+        );
+        assert!(page.trace_keyboard, "而轨迹页那一位没被动过");
+        page.pending = None;
+        page.key(Key::Down);
+        assert!(page.trace_selection.is_some(), "关掉之后就还给轨迹页");
     }
 
     /// 块的身份来自**事件信封**：信封的行号就是 JSONL 的行号，实时与重放是同一个值

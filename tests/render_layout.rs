@@ -11710,3 +11710,597 @@ fn a_tool_detail_has_no_usage_face() {
     );
     assert!(!text.contains(wording::usage_ledger_note()), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// 轨迹页那一层：键盘归属与选中（票 18）
+//
+// 判据两半：**主列当前显示页是轨迹** 且 **没有处于已交还状态**。位置在详情覆盖层之下、
+// 记号菜单之上。这一层不画反显 —— 选中行自己就是「键盘在这」的锚点
+// （`.scratch/trace-ledger/spec.md` §4、§9）。
+// ---------------------------------------------------------------------------
+
+/// 一屏格子里画成「常驻选中」那一档的（`ACCENT` + `BOLD`，与左栏两页、页签条同一档）。
+fn is_focus_cell(cell: &ratatui::buffer::Cell) -> bool {
+    cell.fg == palette::ACCENT && cell.modifier.contains(Modifier::BOLD)
+}
+
+/// 主列里画成**选中**的那些屏幕行：判据是这一行的文字格子**全都**是那一档（空格不算，
+/// 它们没有字可亮）。整行亮是这一层的画法，所以这里数的正是它。
+fn selected_rows(frame: &Buffer, width: u16, height: u16, left: u16) -> Vec<u16> {
+    (0..height)
+        .filter(|y| {
+            // 右边两列不算：滚动条那一列有自己的颜色（选中行的滑块也在那儿），而它不是
+            // 这一行的文字。
+            let ink: Vec<&ratatui::buffer::Cell> = (left..width - 2)
+                .map(|x| &frame[(x, *y)])
+                .filter(|cell| cell.symbol() != " ")
+                .collect();
+            !ink.is_empty() && ink.iter().all(|cell| is_focus_cell(cell))
+        })
+        .collect()
+}
+
+/// 主列里画成选中的那些行的文本 —— 左栏那一段不算（它有自己的选中行）。
+fn selected_rows_text(state: &mut TuiState, width: u16, height: u16) -> Vec<String> {
+    let frame = buffer(width, height, state);
+    let left = divide_column(&frame, width, height).map_or(0, |divide| divide + 1);
+    selected_rows(&frame, width, height, left)
+        .into_iter()
+        .map(|y| cells(&frame, y, left, width - 2))
+        .collect()
+}
+
+/// 一场四个块、其中一次调用失败（错误正文首行是它的**附属行**）的会话。
+///
+/// 失败那一次调用的两条源行共享一个身份，正是「选中的粒度是块」要跳过的那种落点。
+fn a_ledger_with_a_failed_call(state: &mut TuiState) {
+    state.apply(user_message(1, "第一步的问题"));
+    state.apply(turn_started(2));
+    state.apply(message(3, "第一步的回答", None));
+    state.apply(tool_started(
+        4,
+        "call-ok",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    state.apply(tool_completed(5, "call-ok", true, Some("out"), None));
+    state.apply(tool_started(
+        6,
+        "call-bad",
+        "read_file",
+        serde_json::json!({"path": "missing.rs"}),
+    ));
+    state.apply(tool_completed(
+        7,
+        "call-bad",
+        false,
+        None,
+        Some("no such file\n后面那些行只在详情里"),
+    ));
+    state.apply(turn_ended(8));
+}
+
+/// 一直 `↓`，直到选中的那一块含 `needle`；走到了返回 `true`。
+fn walk_down_to(state: &mut TuiState, width: u16, height: u16, needle: &str) -> bool {
+    for _ in 0..20 {
+        let rows = selected_rows_text(state, width, height);
+        if rows.iter().any(|row| row.contains(needle)) {
+            return true;
+        }
+        state.key(Key::Down);
+    }
+    false
+}
+
+/// 轨迹页是当前显示页时 `↑` / `↓`（或 `j` / `k`）移动选中，`Enter` 开那一块的详情。
+#[test]
+fn the_arrows_walk_the_blocks_and_enter_opens_the_selected_one() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(
+        selected_rows_text(&mut state, 120, 40).is_empty(),
+        "刚上轨迹页时没有选中：位置还没有被放下"
+    );
+
+    // `↓` 落在一块上，而且那一行整行亮着。
+    state.key(Key::Down);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        1,
+        "一次只有一个落点"
+    );
+
+    // 从第一条行一路走到最新：每一步都换一块；走到头那一步停在原地。
+    state.key(Key::Char('g'));
+    let mut visited = Vec::new();
+    for _ in 0..16 {
+        let row = selected_rows_text(&mut state, 120, 40);
+        assert!(
+            (1..=2).contains(&row.len()),
+            "每一步正好一块（块最多两条源行）：{row:#?}"
+        );
+        if visited.last() == Some(&row) {
+            break;
+        }
+        visited.push(row);
+        state.key(Key::Down);
+    }
+    assert_eq!(
+        visited.len(),
+        7,
+        "账本上正好七块（用户那句话、一级组头、回合开始、一次回答、两次调用、回合一收）：\
+         {visited:#?}"
+    );
+
+    // `↑` / `k` 原路回去。
+    state.key(Key::Up);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        visited[visited.len() - 2],
+        "`↑` 往回走一块"
+    );
+    state.key(Key::Char('k'));
+    state.key(Key::Char('k'));
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        visited[visited.len() - 4],
+        "`k` 与 `↑` 同一条"
+    );
+
+    // `Enter` 开选中那一块的详情，`Esc` 关掉它。
+    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
+    state.key(Key::Enter);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(
+        text.contains(TOOL_FACES),
+        "`Enter` 兑现「点一行开详情」：{text}"
+    );
+    state.key(Key::Esc);
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(!text.contains(TOOL_FACES), "关掉之后回到账本：{text}");
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        2,
+        "开一趟详情不改选中：失败那一块的两条源行还亮着"
+    );
+}
+
+/// 选中的是**一个块**：附属行（失败正文那行）跟着所属块一起亮，而 `↓` 跳过它，不会误停。
+#[test]
+fn a_block_is_the_unit_so_its_extra_row_is_never_a_landing_point() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+
+    // 从第一条行一路走到底，每一步都看一眼：`no such file` 那一行**从来不会单独亮**。
+    state.key(Key::Char('g'));
+    let mut seen_extra_row = false;
+    for step in 0..10 {
+        let texts = selected_rows_text(&mut state, 120, 40);
+        assert!(!texts.is_empty(), "第 {step} 步有落点");
+        if texts.iter().any(|row| row.contains("no such file")) {
+            seen_extra_row = true;
+            assert!(
+                texts.iter().any(|row| row.contains("调用 read_file")),
+                "附属行只跟着它所属的那一块一起亮，绝不单独成为落点：{texts:#?}"
+            );
+            assert_eq!(texts.len(), 2, "那一块正好两条源行：{texts:#?}");
+        }
+        state.key(Key::Down);
+    }
+    assert!(
+        seen_extra_row,
+        "这一趟里它亮过 —— 否则上面那条断言什么都没验"
+    );
+}
+
+/// 选中行整行是 `ACCENT` + `BOLD`，而**账本里没有反显** —— 全屏唯一的反显仍只给问卷与
+/// `/`·`@` 菜单（票 18 第 5、6 条）。
+#[test]
+fn the_selected_row_goes_accent_and_bold_and_nothing_is_reversed() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
+
+    let frame = buffer(120, 40, &mut state);
+    let rows = selected_rows(&frame, 120, 40, MAIN_LEFT_AT_120);
+    assert_eq!(rows.len(), 2, "失败那一块的两条源行：{rows:?}");
+    // 整行：从行首那个时刻戳到这一行的最后一个非空格，每一格都是那一档。
+    for y in &rows {
+        let ink: Vec<(u16, &ratatui::buffer::Cell)> = (MAIN_LEFT_AT_120
+            ..TRANSCRIPT_TEXT_RIGHT_AT_120)
+            .map(|x| (x, &frame[(x, *y)]))
+            .filter(|(_, cell)| cell.symbol() != " ")
+            .collect();
+        assert!(!ink.is_empty(), "有字才谈得上整行");
+        for (x, cell) in &ink {
+            assert!(
+                is_focus_cell(cell),
+                "第 {y} 行第 {x} 格不是选中那一档：{:?} {:?}",
+                cell.fg,
+                cell.modifier
+            );
+        }
+        let stamped =
+            (MAIN_LEFT_AT_120..MAIN_LEFT_AT_120 + 9).any(|x| frame[(x, *y)].symbol() != " ");
+        assert_eq!(
+            stamped,
+            cells(&frame, *y, MAIN_LEFT_AT_120, 120).contains("调用 read_file"),
+            "时刻戳只长在块的主行上，附属行从第 9 列起排：{:?}",
+            cells(&frame, *y, MAIN_LEFT_AT_120, 120)
+        );
+    }
+
+    // 没有反显：这一屏里没有一格带 `REVERSED`。
+    let reversed: Vec<(u16, u16)> = (0..40u16)
+        .flat_map(|y| (0..120u16).map(move |x| (x, y)))
+        .filter(|(x, y)| frame[(*x, *y)].modifier.contains(Modifier::REVERSED))
+        .collect();
+    assert!(
+        reversed.is_empty(),
+        "账本（以及这一屏别处）没有反显：{reversed:?}"
+    );
+}
+
+/// 覆盖层立着时它持有键盘，而轨迹页那一层**不生效**；关掉之后恢复原来的持有状态
+/// （票 18 第 2 条）。
+#[test]
+fn the_detail_overlay_holds_the_keyboard_and_hands_the_page_back_untouched() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
+    let before = selected_rows_text(&mut state, 120, 40);
+    assert_eq!(before.len(), 2);
+
+    // 点一行开详情（点一行 = 拿回 + 开详情，而它**不改选中**）。
+    click_row(&mut state, 120, 40, "调用 bash");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(TOOL_FACES), "详情开着：{text}");
+
+    // 覆盖层立着时轨迹页那一层不生效：那几个键滚的是覆盖层，选中一块都不动。
+    state.key(Key::Down);
+    state.key(Key::Up);
+    state.key(Key::Char('j'));
+    state.key(Key::Enter);
+    state.key(Key::Esc);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        before,
+        "关掉之后选中原样回来（这一路上那几个键都归覆盖层）"
+    );
+    assert!(
+        !screen(120, 40, &mut state).join("\n").contains(TOOL_FACES),
+        "`Esc` 关掉的是覆盖层那一层"
+    );
+
+    // 而键盘也确实回到轨迹页手里了：`↑` 走的是账本。
+    state.key(Key::Up);
+    assert_ne!(
+        selected_rows_text(&mut state, 120, 40),
+        before,
+        "还是归轨迹页"
+    );
+}
+
+/// `Esc` 的层序：有选中则清选中 → 把键盘交还给输入区 → 之后那一下才轮到取消回合那一档。
+/// 一次手势一层，退完没有第五层。交还之后 `↑` / `↓` 回到输入区移光标。
+#[test]
+fn escape_clears_the_selection_then_hands_the_keyboard_back() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    // 一份两行的草稿：交还之后 `↑` / `↓` 有没有回到输入区，看光标落在哪一行就知道了。
+    for ch in "甲乙".chars() {
+        state.key(Key::Char(ch));
+    }
+    state.key(Key::Newline);
+    state.key(Key::Char('丙'));
+    let (_, cursor) = frame_and_cursor(120, 40, &mut state);
+    let cursor = cursor.expect("草稿里那个光标在");
+
+    state.key(Key::Down);
+    assert_eq!(selected_rows_text(&mut state, 120, 40).len(), 1, "先有选中");
+
+    // 第一下：清选中，而键盘**还在轨迹页手里** —— 再按一下 `↓`，它落在账本上，不是草稿上。
+    state.key(Key::Esc);
+    assert!(
+        selected_rows_text(&mut state, 120, 40).is_empty(),
+        "第一下只清选中"
+    );
+    state.key(Key::Down);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        1,
+        "键盘还在轨迹页手里，所以 `↓` 又落了一块"
+    );
+    let (_, still) = frame_and_cursor(120, 40, &mut state);
+    assert_eq!(
+        still.expect("光标还在").1,
+        cursor.1,
+        "`↓` 一次都没有落到草稿上"
+    );
+
+    // 第二下清掉刚落的这一块、第三下交还键盘：此后 `↑` 才回到输入区移光标。
+    state.key(Key::Esc);
+    state.key(Key::Esc);
+    state.key(Key::Up);
+    let (_, up) = frame_and_cursor(120, 40, &mut state);
+    assert_eq!(
+        up.expect("光标还在").1,
+        cursor.1 - 1,
+        "`↑` 把光标带到草稿的上一行"
+    );
+    state.key(Key::Down);
+    let (_, down) = frame_and_cursor(120, 40, &mut state);
+    assert_eq!(down, Some(cursor), "`↓` 把它带回原来那一行");
+    assert!(
+        selected_rows_text(&mut state, 120, 40).is_empty(),
+        "交还之后那两个键不再选任何一块"
+    );
+
+    // 而 `j` 又只是一段文字：它落进草稿，不落进账本。
+    state.key(Key::Char('j'));
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("丙j"), "`j` 落进了草稿：{text}");
+}
+
+/// 交还之后**点账本任何位置**都能把键盘拿回来：点一行 = 拿回 + 开详情（不顺手选中）。
+#[test]
+fn clicking_the_ledger_takes_the_keyboard_back() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    state.key(Key::Esc); // 交还
+    state.key(Key::Down);
+    assert!(selected_rows_text(&mut state, 120, 40).is_empty());
+
+    // 点一行：拿回 + 开详情，**不顺手选中**。
+    click_row(&mut state, 120, 40, "调用 read_file");
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains(TOOL_FACES), "详情开着：{text}");
+    state.key(Key::Esc);
+    assert!(
+        selected_rows_text(&mut state, 120, 40).is_empty(),
+        "点一行不顺手留下高亮"
+    );
+
+    // 拿回来了：`↓` 又落在账本上。
+    state.key(Key::Down);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        1,
+        "键盘回来了"
+    );
+}
+
+/// 点**空白**（这里点的是组头那一行，它没有可点开的东西）也拿回键盘，并把选中清掉。
+#[test]
+fn clicking_a_blank_spot_in_the_ledger_clears_the_selection() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    state.key(Key::Down);
+    assert_eq!(selected_rows_text(&mut state, 120, 40).len(), 1);
+
+    // 组头那一行：它点不开任何东西，所以这一下就是「点空白」。
+    click_text(&mut state, 120, 40, &wording::header_unit(1, false));
+    assert!(
+        selected_rows_text(&mut state, 120, 40).is_empty(),
+        "点空白清掉选中"
+    );
+
+    // 交还之后点它一样拿回键盘。
+    state.key(Key::Esc);
+    click_text(&mut state, 120, 40, &wording::header_unit(1, false));
+    state.key(Key::Down);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        1,
+        "点空白把键盘拿回来了"
+    );
+}
+
+/// 点回输入区 = 「我要打字」：键盘还给输入区，而**选中留在账本上**（左栏两页的焦点行同一
+/// 条纪律：换的是键盘在谁那里，不是读者放下的位置）。
+#[test]
+fn clicking_the_input_area_takes_the_keyboard_back_from_the_trace_page() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    state.key(Key::Down);
+    let before = selected_rows_text(&mut state, 120, 40);
+    assert_eq!(before.len(), 1);
+
+    let (column, row) = input_corner(120, 40);
+    click(&mut state, column, row);
+    // 键盘回去了：`j` 落进草稿，而选中的那一块一个字节都没动。
+    state.key(Key::Char('j'));
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        before,
+        "`j` 不再动选中"
+    );
+    let text = screen(120, 40, &mut state).join("\n");
+    assert!(text.contains("j"), "`j` 落进了草稿：{text}");
+}
+
+/// 重新成为当前显示页时**自动回到持有**，不必再点一次。
+#[test]
+fn the_trace_page_takes_the_keyboard_back_when_it_becomes_the_current_page() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    state.key(Key::Esc); // 交还
+    state.key(Key::Down);
+    assert!(selected_rows_text(&mut state, 120, 40).is_empty());
+
+    // 切到对话页再切回来。
+    click_in_row(
+        &mut state,
+        120,
+        40,
+        TRANSCRIPT_TOP as u16 - 2,
+        wording::TAB_CONVERSATION,
+    );
+    let _ = screen(120, 40, &mut state);
+    click_in_row(
+        &mut state,
+        120,
+        40,
+        TRANSCRIPT_TOP as u16 - 2,
+        wording::TAB_TRACE,
+    );
+    state.key(Key::Down);
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40).len(),
+        1,
+        "切回来就自动持有，不必再点一次"
+    );
+}
+
+/// 切主页签**不动选中**：切走再切回来，同一块还亮着（它在 `TuiState` 侧按块身份记）。
+#[test]
+fn switching_the_main_tab_keeps_the_selection() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    state.key(Key::Down);
+    state.key(Key::Down);
+    let before = selected_rows_text(&mut state, 120, 40);
+    assert_eq!(before.len(), 1);
+
+    click_in_row(
+        &mut state,
+        120,
+        40,
+        TRANSCRIPT_TOP as u16 - 2,
+        wording::TAB_CONVERSATION,
+    );
+    let _ = screen(120, 40, &mut state);
+    click_in_row(
+        &mut state,
+        120,
+        40,
+        TRANSCRIPT_TOP as u16 - 2,
+        wording::TAB_TRACE,
+    );
+    assert_eq!(
+        selected_rows_text(&mut state, 120, 40),
+        before,
+        "切走再切回来，同一块还亮着"
+    );
+}
+
+/// 改宽度（触发整批重放）之后选中**仍在原来那一块** —— 它认块不认位置。
+#[test]
+fn a_rebuild_after_a_width_change_keeps_the_selected_block() {
+    let mut state = state_with_roster(&["kimi"]);
+    a_ledger_with_a_failed_call(&mut state);
+    open_trace_tab(&mut state, 120, 40);
+    assert!(walk_down_to(&mut state, 120, 40, "调用 read_file"));
+    let before = selected_rows_text(&mut state, 120, 40);
+    assert_eq!(before.len(), 2, "{before:#?}");
+
+    // 换个宽度重画：主列窄了一档，整本账按新宽度重推一遍。
+    let _ = screen(100, 40, &mut state);
+    let after = selected_rows_text(&mut state, 100, 40);
+    assert_eq!(after.len(), 2, "重放之后仍然正好那两条源行：{after:#?}");
+    assert!(
+        after.iter().any(|row| row.contains("调用 read_file")),
+        "还是原来那一块：{before:#?} → {after:#?}"
+    );
+    assert!(
+        after.iter().any(|row| row.contains("no such file")),
+        "附属行也跟着它：{after:#?}"
+    );
+}
+
+/// 翻页与滚轮**不动选中**；新块到达时视口照跟随走、选中留在原地
+/// （票 18 第 8 条；`.scratch/trace-ledger/spec.md` §9 的「粘性」）。
+#[test]
+fn paging_wheeling_and_new_blocks_leave_the_selection_alone() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+
+    // `G` 落在最新那一块上并恢复跟随 —— 从那以后，选中就是「第 39 句话」那一块。
+    state.key(Key::Char('G'));
+    let landed = selected_rows_text(&mut state, 120, 24);
+    assert_eq!(landed.len(), 1);
+    assert!(landed[0].contains("第 39 句话"), "{landed:#?}");
+
+    // 翻页与滚轮：视口动，而选中不动 —— 于是往回走一块正好是第 38 句，而不是从翻页那一处
+    // 再往回数。
+    state.key(Key::PageUp);
+    state.key(Key::PageUp);
+    state.mouse(wheel_at(60, TRANSCRIPT_TOP as u16, true));
+    state.key(Key::Up);
+    let walked_back = selected_rows_text(&mut state, 120, 24);
+    assert_eq!(
+        walked_back.len(),
+        1,
+        "`↑` 把选中的那一块带回了视口：{walked_back:#?}"
+    );
+    assert!(
+        walked_back[0].contains("第 38 句话"),
+        "翻页与滚轮一次都没有推动选中：{walked_back:#?}"
+    );
+
+    // 新块到达：视口照跟随走，而选中留在原地。
+    state.key(Key::Char('G'));
+    state.apply(RenderEvent::notice("最新那一句".to_owned()));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("最新那一句")),
+        "视口照跟随走：{page:#?}"
+    );
+    let stayed = selected_rows_text(&mut state, 120, 24);
+    assert_eq!(stayed.len(), 1, "{stayed:#?}");
+    assert!(
+        stayed[0].contains("第 39 句话"),
+        "新块到达不推动选中：{stayed:#?}"
+    );
+}
+
+/// `g` 到第一条行、`G` 到最新**并恢复跟随**（票 18 第 7 条）。
+#[test]
+fn g_and_shift_g_are_the_two_ends_of_the_ledger() {
+    let mut state = state_with_roster(&["kimi"]);
+    for index in 0..40 {
+        state.apply(RenderEvent::notice(format!("第 {index} 句话")));
+    }
+    open_trace_tab(&mut state, 120, 24);
+
+    // `g` 把读者带到头，并把选中放在**第一条**那一块上。
+    state.key(Key::Char('g'));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("第 0 句话")),
+        "`g` 到账本第一条行：{page:#?}"
+    );
+    let first = selected_rows_text(&mut state, 120, 24);
+    assert_eq!(first.len(), 1);
+    assert!(
+        first[0].contains(wording::section_preamble()),
+        "`g` 也落一个选中 —— 账本第一条行是开场那一段的小标题：{first:#?}"
+    );
+
+    // `G`：回到最新，**并恢复跟随** —— 下一条新块到达时视口跟着走。
+    state.key(Key::Char('G'));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("第 39 句话")),
+        "`G` 到最新：{page:#?}"
+    );
+    state.apply(RenderEvent::notice("又一句".to_owned()));
+    let page = trace_page(&mut state, 120, 24);
+    assert!(
+        page.iter().any(|row| row.contains("又一句")),
+        "`G` 恢复了跟随，所以新块把视口带下去：{page:#?}"
+    );
+}
