@@ -347,6 +347,8 @@ pub fn record_user_message(
             role: Role::User,
             text: text.to_owned(),
             reasoning: None,
+            // 人自己说的话没有「等首 token」这一段。
+            first_token_ms: None,
         },
     )
 }
@@ -635,6 +637,9 @@ pub async fn run_turn(
 
         // 请求自己有可能仍在进行中 —— 适配器只有在传输层作答之后才交回流 —— 所以这次发送也可以
         // select：一次手势不该被迫等一条卡住的连接。
+        // 「等首 token」的分母：请求发出的那一刻。它与流上的 `at` 是两套时钟（一个量挂钟、
+        // 一个量流逝），而这一段要的正是流逝。
+        let call_started = Instant::now();
         let mut cancel = cancelled.clone();
         let sent = tokio::select! {
             biased;
@@ -655,6 +660,8 @@ pub async fn run_turn(
         let mut text = String::new();
         let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        // 第一个**增量**到达的那一刻，只记一次；正文与推理先到者为准（ADR 0020）。
+        let mut first_token_at: Option<Instant> = None;
         let mut failed = false;
         let mut saw_done = false;
         let mut aborted = false;
@@ -670,10 +677,12 @@ pub async fn run_turn(
                 }
                 item = stream.next() => match item {
                     Some(Ok(StreamEvent::TextDelta(delta))) => {
+                        first_token_at.get_or_insert_with(Instant::now);
                         render.text_delta(speaker, &delta);
                         text.push_str(&delta);
                     }
                     Some(Ok(StreamEvent::ReasoningDelta(delta))) => {
+                        first_token_at.get_or_insert_with(Instant::now);
                         render.reasoning_delta(speaker, &delta);
                         reasoning.push_str(&delta);
                     }
@@ -750,6 +759,9 @@ pub async fn run_turn(
                     role: Role::Assistant,
                     text: text.clone(),
                     reasoning: (!reasoning.is_empty()).then(|| reasoning.clone()),
+                    // 一个增量都没发的那次调用没有这一段，于是是 `None` 而不是 0。
+                    first_token_ms: first_token_at
+                        .map(|at| at.duration_since(call_started).as_millis() as u64),
                 },
             )?;
         }
@@ -1803,6 +1815,8 @@ pub async fn run_single_shot(
             role: Role::Assistant,
             text: text.clone(),
             reasoning: None,
+            // 这条是 harness 自己合成的，没有 provider 流，于是没有「首个增量」那一刻。
+            first_token_ms: None,
         },
     )?;
     Ok(Some(text))

@@ -59,6 +59,8 @@ fn user_says(log: &mut EventLog, text: &str) {
             role: Role::User,
             text: text.to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -80,6 +82,8 @@ fn say_with_reasoning(
             role: Role::Assistant,
             text: text.to_owned(),
             reasoning: reasoning.map(str::to_owned),
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -788,6 +792,8 @@ fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitiz
             role: Role::Assistant,
             text: "保守的看法".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -797,6 +803,8 @@ fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitiz
             role: Role::User,
             text: "问题".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -806,6 +814,8 @@ fn a_personas_name_reaches_the_model_verbatim_while_the_wire_field_stays_sanitiz
             role: Role::Assistant,
             text: "再看一次".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -858,6 +868,8 @@ fn a_persona_is_private_to_the_side_it_describes() {
             role: Role::User,
             text: "问题".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -867,6 +879,8 @@ fn a_persona_is_private_to_the_side_it_describes() {
             role: Role::Assistant,
             text: "张三的作答".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();

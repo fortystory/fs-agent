@@ -154,6 +154,27 @@ pub enum Block {
     Notice(String),
 }
 
+/// 一条记录的身份：它来自哪一条事件，以及那是该来源的第几件。
+///
+/// **流上的东西取事件信封的行号** —— 那就是 JSONL 的行号，落盘与读回原样保留，所以实时与会话
+/// 恢复是**同一个值**（[ADR 0021](../../../docs/adr/0021-line-identity-comes-from-the-event-envelope.md)）。
+/// 它比「它在窗格里的第几行」耐用：后者被上限裁剪与宽度重放推翻两次，而身份两次都活过。
+///
+/// **一条事件可以产出零个到多个块**（一次工具调用的结果连同由它推出来的问卷作答），所以
+/// `seq` 单独一个不够 —— `index` 补上「那是该来源的第几件」。
+///
+/// **渲染层自己造的记录没有信封**：推理增量开出的思考行、诊断、通知、拼好的系统提示词 ——
+/// 增量绕过事件流，事后推不出来（见本模块开头第二条规矩）。它们的 `seq` 是 `None`，而 `index`
+/// 由渲染层那条单调计数补上，于是身份**唯一**，且**跨重放稳定**（重放走的是同一个事件序列，
+/// 于是同一个计数）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlockId {
+    /// 来源事件在 JSONL 里的行号；渲染层自己造的记录没有信封，于是是 `None`。
+    pub seq: Option<u64>,
+    /// 该来源内的第几件。`seq` 是 `None` 时它是渲染层自造那条流里的第几件。
+    pub index: u32,
+}
+
 /// 一次工具调用，一直开着，直到它的结果（以及任何后置 hook 的反馈）到达。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolBlock {
@@ -350,6 +371,9 @@ impl Transcript {
                 role,
                 text,
                 reasoning,
+                // 首 token 时刻不进块：它属于**计时**，而计时由详情覆盖层的计时面读
+                // （ADR 0020）。转录这一层要的是「这一条说了什么」。
+                ..
             } => {
                 blocks.push(Block::Message {
                     speaker,

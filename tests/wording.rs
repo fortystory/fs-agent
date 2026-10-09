@@ -246,6 +246,55 @@ fn a_usage_tail_keeps_only_the_two_numbers_it_is_read_for() {
 }
 
 #[test]
+fn a_tool_duration_tail_reads_in_seconds_and_keeps_tenths_below_ten() {
+    // 秒为单位；≥ 10 s 不再带小数 —— 行尾那一段的宽度是有限的，而「12.4 秒」与
+    // 「12 秒」对读者没有区别（`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md`）。
+    assert_eq!(wording::tool_duration_tail(200), " · 0.2 s");
+    assert_eq!(wording::tool_duration_tail(1_500), " · 1.5 s");
+    assert_eq!(wording::tool_duration_tail(9_960), " · 10 s");
+    assert_eq!(wording::tool_duration_tail(49_000), " · 49 s");
+}
+
+#[test]
+fn the_two_places_that_read_a_duration_say_the_same_thing() {
+    // 组头的墙钟跨度与工具行行尾的耗时**共用一套算术**：同一个时长在两处读出来一样，而
+    // 10 s 那条边界是唯一会分岔的地方（`9_960 ms` 两边都读 `10 s`，不读 `10.0 s`）。
+    use std::time::Duration;
+    assert_eq!(wording::header_span(Duration::from_millis(200)), "0.2 s");
+    assert_eq!(wording::header_span(Duration::from_millis(1_500)), "1.5 s");
+    assert_eq!(wording::header_span(Duration::from_millis(9_960)), "10 s");
+    assert_eq!(wording::header_span(Duration::from_millis(10_000)), "10 s");
+    assert_eq!(wording::header_span(Duration::from_millis(49_000)), "49 s");
+    assert_eq!(
+        wording::tool_duration_tail(9_960),
+        format!(" · {}", wording::header_span(Duration::from_millis(9_960)))
+    );
+}
+
+#[test]
+fn the_result_notes_only_speak_when_something_is_off() {
+    // 空输出是流上真的空；截断那一句的判据与数字都取自**流上那段正文里嵌着的标记**
+    // —— 工具结果自己的头尾预览，而不是上下文组装期那一处（票 17 第 6、7 条）。
+    assert_eq!(wording::tool_no_output(), " · 无输出");
+    let truncated = format!(
+        "头\n{}18842 字符，约 4710 token；全文在 /tmp/c-1.txt]\n尾",
+        heng::context::TRUNCATED_MARKER
+    );
+    assert_eq!(
+        wording::tool_truncation_note(&truncated).as_deref(),
+        Some(" · 已截断 18842 字符")
+    );
+    // 平常的结果一个字也不加：结果摘要只在异常时给一句。
+    assert_eq!(wording::tool_truncation_note("line one\nline two"), None);
+    // 标记在、数字却读不出来时只给那一句 —— 宁可少一个数，不编一个。
+    let mute = format!("{}一大段 字符", heng::context::TRUNCATED_MARKER);
+    assert_eq!(
+        wording::tool_truncation_note(&mute).as_deref(),
+        Some(" · 已截断")
+    );
+}
+
+#[test]
 fn a_permission_ask_and_verdict_read_in_chinese() {
     // 问题显示工具与那次具体的调用，从不显示 id。
     assert_eq!(

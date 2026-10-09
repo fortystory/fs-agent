@@ -314,6 +314,36 @@ pub fn tool_failed() -> &'static str {
     "失败"
 }
 
+/// 工具行行尾那一段**这次调用自己花了多久**（`.scratch/trace-ledger/spec.md` §5）。
+///
+/// **拿不到就不画**，所以这个函数从不接一个 `Option`（票 17 第 3 条）。
+pub fn tool_duration_tail(duration_ms: u64) -> String {
+    format!(" · {}", duration_text(duration_ms))
+}
+
+/// 一次成功的调用什么也没输出时，行上补的这一句（`.scratch/trace-ledger/spec.md` §5）。
+///
+/// 常规成功行一个字也不加，只有「没有」这一种情况值得占一句。
+pub fn tool_no_output() -> &'static str {
+    " · 无输出"
+}
+
+/// 结果被切过之后行上补的这一句，`result` 是流上那段正文。
+///
+/// 判据与数字都取自**工具结果自己的头尾预览里嵌着的那句标记**：`context::TRUNCATED_MARKER`
+/// 后面跟着全文的字符数。上下文组装期那一处标记不进工具结果，所以行上读不到它，也不与这个数
+/// 混成一个（票 17 第 6、7 条）。
+///
+/// 标记在、数字却读不出来时只给一句 ` · 已截断`：宁可少一个数，不编一个。
+pub fn tool_truncation_note(result: &str) -> Option<String> {
+    let rest = result.split_once(crate::context::TRUNCATED_MARKER)?.1;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    Some(match digits.parse::<u64>() {
+        Ok(chars) => format!(" · 已截断 {chars} 字符"),
+        Err(_) => " · 已截断".to_owned(),
+    })
+}
+
 /// 整条工具输出读不回来时详情视图的那句话 —— 指针指的文件没了，或者从来没写过
 /// （票 02 §4）。
 pub fn detail_output_unavailable() -> &'static str {
@@ -1892,6 +1922,80 @@ pub const TAB_TRACE: &str = "轨迹";
 /// 时刻本身来自产生这个块的那条事件的 `at`，所以 `--continue` 重放出来的是当初那一刻。
 pub fn stamp(at: DateTime<Utc>) -> String {
     format!("{} ", at.with_timezone(&chrono::Local).format("%H:%M:%S"))
+}
+
+// ---------------------------------------------------------------------------
+// 轨迹页的两级组头
+// （`.scratch/trace-ledger/spec.md` §5）
+// ---------------------------------------------------------------------------
+
+/// 一级组头的那一段序号：交互会话数**回合**、讨论会话数**轮次**。它是视图层的统称
+/// —— 流上的事件仍叫 `TurnStarted` / `RoundStarted`（`CONTEXT.md` 的**单位**那条词条）。
+pub fn header_unit(ordinal: u32, discussion: bool) -> String {
+    if discussion {
+        format!("轮次 {ordinal}")
+    } else {
+        format!("回合 {ordinal}")
+    }
+}
+
+/// 二级组头的那一段序号：一次模型调用就是一次迭代。
+pub fn header_iteration(ordinal: u32) -> String {
+    format!("第 {ordinal} 次迭代")
+}
+
+/// 一段墙钟时长怎么读：**秒为单位，一位小数，≥ 10 s 不带小数** —— 组头的跨度与工具行行尾
+/// 的耗时**共用这一套算术**，于是同一个时长在两处读出来一样（`.scratch/trace-ledger/spec.md`
+/// §5）。它只定义一次是因为两处各写一遍时，10 s 那条边界会分岔：`9_960 ms` 到底读 `10 s`
+/// 还是 `10.0 s`，两个实现给过两个答案。
+///
+/// 行尾那一段是最挤的地方，而「12.4 秒」与「12 秒」对读者是同一件事。
+pub fn duration_text(duration_ms: u64) -> String {
+    // 以十分之一秒为单位四舍五入，于是「带不带小数」只有一个边界（10 s），而边界两侧的
+    // 舍入方向一致：`9_960 ms` 与 `10_000 ms` 都读 `10 s`。
+    let tenths = (duration_ms + 50) / 100;
+    if tenths < 100 {
+        format!("{}.{} s", tenths / 10, tenths % 10)
+    } else {
+        format!("{} s", (tenths + 5) / 10)
+    }
+}
+
+/// 组头里那段墙钟跨度的写法 [`duration_text`]。
+///
+/// 拿不到就**整段不画**（没有那个字形），不写 0、不写占位符。
+pub fn header_span(duration: std::time::Duration) -> String {
+    duration_text(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// 一级组头里那份工具直方图：同类归并、**按首次出现排序**（`bash×2 read×2 edit×1`）。
+pub fn header_tools(tools: &[(String, u64)]) -> String {
+    tools
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(name, count)| format!("{name}×{count}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 开场那一段的标题：一个单位还没开出来之前的那几行。
+pub fn section_preamble() -> &'static str {
+    "开场"
+}
+
+/// 开场段里数到了几条注入。
+pub fn section_injections(count: u32) -> String {
+    format!("{count} 条注入")
+}
+
+/// 上下文压缩那一段的标题 —— 那一段不属于任何一级组，但读者需要知道它在那儿。
+pub fn section_compaction() -> &'static str {
+    "压缩 · 前面若干轮压成摘要"
+}
+
+/// 组头那一行里，各段之间那个分隔点。
+pub fn header_separator() -> &'static str {
+    " · "
 }
 
 // ---------------------------------------------------------------------------

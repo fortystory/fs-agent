@@ -259,6 +259,8 @@ fn session_context_collects_recent_paths_and_identifiers() {
                 role: Role::User,
                 text: "please fix the TrimPolicy budget is".to_owned(),
                 reasoning: None,
+
+                first_token_ms: None,
             },
         ),
         Event::new(

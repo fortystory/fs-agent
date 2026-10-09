@@ -111,6 +111,8 @@ fn message(seq: u64, text: &str, reasoning: Option<&str>) -> Event {
             role: Role::Assistant,
             text: text.to_owned(),
             reasoning: reasoning.map(str::to_owned),
+
+            first_token_ms: None,
         },
     )
 }

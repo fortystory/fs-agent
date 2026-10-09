@@ -187,6 +187,7 @@ async fn one_turn_lands_completed_units_in_the_log_and_only_the_final_product_on
             role,
             text,
             reasoning,
+            ..
         } => {
             assert_eq!(*role, Role::Assistant);
             assert_eq!(text, "hello from fake");

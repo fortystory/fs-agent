@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 
 /// 记进 [`EventPayload::SessionStarted`] 的 schema 版本。
 ///
-/// payload 的形状一变它就涨；跨版本不承诺任何向后兼容。
-pub const SCHEMA_VERSION: u32 = 1;
+/// payload 的形状一变它就涨；跨版本不承诺任何向后兼容。它只是**记号** —— 代码里没有任何
+/// 按版本分派的读取逻辑，兼容性完全由 serde 的形状给出。
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// 定义一个透明序列化的自有字符串标识。
 ///
@@ -427,6 +428,18 @@ pub enum EventPayload {
         role: Role,
         text: String,
         reasoning: Option<String>,
+        /// **首个增量 token 距本次调用开始的毫秒数** —— `TextDelta` 与 `ReasoningDelta`
+        /// 先到者为准，因为屏幕上第一次动就是等待结束，而推理生成本来也是生成。
+        ///
+        /// 可选，所以**双向兼容**：老流缺这个字段读成 `None`（那一段时间轴的模型泳道整段画、
+        /// 详情覆盖层的计时面不列那三个数）；老二进制读新流忽略未知字段。恒 `None` 的三处：
+        /// 用户自己那条消息、harness 合成的 `System` 那条（它没有 provider 流），以及
+        /// provider 一个增量都没发的那次调用。
+        ///
+        /// [ADR 0020](../../docs/adr/0020-first-token-time-rides-the-completion.md) 定它搭在完成
+        /// 事件上：首 token、生成时长与吞吐三个数都从这一个字段推出来。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        first_token_ms: Option<u64>,
     },
     ToolCallStarted {
         tool_call_id: ToolCallId,

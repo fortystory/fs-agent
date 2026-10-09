@@ -58,6 +58,8 @@ fn fixture() -> Fixture {
             role: Role::User,
             text: "怎么共享状态？".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -83,6 +85,8 @@ fn fixture() -> Fixture {
             role: Role::Assistant,
             text: "用共享事件流。\nCONCLUSION: 共享事件流".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();

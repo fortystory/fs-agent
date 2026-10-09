@@ -91,6 +91,8 @@ async fn a_message_without_deltas_is_still_shown() {
             role: Role::Assistant,
             text: "hello\nthere".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )];
     let (_stdout, stderr) = run(&events, false).await;
@@ -339,6 +341,8 @@ async fn the_synthesizers_message_is_the_only_thing_on_stdout() {
                 role: Role::Assistant,
                 text: "a debater's answer".to_owned(),
                 reasoning: None,
+
+                first_token_ms: None,
             },
         ),
         Event::new(
@@ -348,6 +352,8 @@ async fn the_synthesizers_message_is_the_only_thing_on_stdout() {
                 role: Role::Assistant,
                 text: "the option space".to_owned(),
                 reasoning: None,
+
+                first_token_ms: None,
             },
         ),
     ];

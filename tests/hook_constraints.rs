@@ -81,6 +81,8 @@ fn all_payloads() -> Vec<(&'static str, EventPayload, bool)> {
                 role: Role::Assistant,
                 text: "hi".to_owned(),
                 reasoning: Some("because".to_owned()),
+
+                first_token_ms: None,
             },
             false,
         ),

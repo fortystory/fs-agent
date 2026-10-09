@@ -683,20 +683,32 @@ fn a_tool_block_paints_one_line_and_folds_the_rest() {
         ok[0]
     );
 
-    // 失败是同一行末尾带 `失败`；错误正文不在这里。
+    // 失败是同一行末尾带 `失败`，而错误正文的**首行**另起一行、从内容起点起排
+    // （`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md` 第 5 条）；整段错误
+    // 仍然在详情里。
     let failed = render_block_uncoloured(&Block::Tool(Box::new(tool(Some(ToolOutcome {
         ok: false,
         output: None,
-        error: Some("no such file".to_owned()),
+        error: Some("no such file\n还有下文".to_owned()),
         duration_ms: 1,
     })))));
-    assert_eq!(failed.len(), 1, "失败的调用也是一行：{failed:#?}");
+    assert_eq!(failed.len(), 2, "失败是调用行加一行错误首行：{failed:#?}");
     let call: String = failed[0]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
     assert_eq!(call, "[kimi] ▸ 调用 read_file a.rs 失败");
+    let error: String = failed[1]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(
+        error.trim_end(),
+        format!("{}no such file", " ".repeat(9)),
+        "错误首行从内容起点（第 9 列）起，第二行往后留在详情里：{failed:#?}"
+    );
 
     // 后置 hook 的反馈是政策，不是输出：它留在屏幕上，作为关于
     // 刚画出的那条调用自己的块。

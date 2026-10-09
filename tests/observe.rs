@@ -64,6 +64,8 @@ fn says(log: &mut EventLog, speaker: &SpeakerId, text: &str) {
             role: Role::Assistant,
             text: text.to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -135,6 +137,8 @@ fn the_timeline_groups_by_round_and_merges_a_tool_call_with_its_result_and_feedb
             role: Role::User,
             text: "怎么共享状态？".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -614,6 +618,8 @@ fn list_summarizes_a_stored_session_from_its_own_stream() {
             role: Role::User,
             text: "hi".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();

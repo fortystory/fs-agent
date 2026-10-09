@@ -220,6 +220,8 @@ async fn ids_do_not_collide_and_latest_follows_the_most_recently_written_stream(
             role: Role::User,
             text: "asked later".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     );
     assert_eq!(
@@ -319,6 +321,8 @@ async fn resuming_keeps_the_id_closes_dangling_calls_and_continues_the_session()
             role: Role::Assistant,
             text: "editing again".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     );
     append(

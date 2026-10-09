@@ -2553,6 +2553,8 @@ fn user_message(seq: u64, text: &str) -> heng::render::RenderEvent {
             role: Role::User,
             text: text.to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     ))
 }
@@ -2816,6 +2818,8 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
                 role: Role::Assistant,
                 text: format!("第 {round} 轮"),
                 reasoning: None,
+
+                first_token_ms: None,
             },
             EventPayload::TurnEnded {
                 reason: StopReason::Completed,
@@ -2868,6 +2872,8 @@ fn a_discussion_counts_rounds_where_a_session_counts_turns() {
                 role: Role::Assistant,
                 text: format!("第 {round} 轮"),
                 reasoning: None,
+
+                first_token_ms: None,
             },
             EventPayload::RoundEnded {
                 round,
@@ -5808,6 +5814,8 @@ fn message(seq: u64, text: &str, reasoning: Option<&str>) -> heng::render::Rende
             role: Role::Assistant,
             text: text.to_owned(),
             reasoning: reasoning.map(str::to_owned),
+
+            first_token_ms: None,
         },
     ))
 }
@@ -5888,6 +5896,19 @@ fn tool_completed(
     output: Option<&str>,
     error: Option<&str>,
 ) -> heng::render::RenderEvent {
+    tool_completed_after(seq, id, ok, output, error, 3)
+}
+
+/// 同上，而**那次调用自己的墙钟**由调用方给 —— 轨迹页行尾那段耗时就是它
+/// （`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md`）。
+fn tool_completed_after(
+    seq: u64,
+    id: &str,
+    ok: bool,
+    output: Option<&str>,
+    error: Option<&str>,
+    duration_ms: u64,
+) -> heng::render::RenderEvent {
     use heng::events::{Event, EventPayload, SpeakerId, ToolCallId};
     heng::render::RenderEvent::Logged(Event::new(
         seq,
@@ -5897,7 +5918,7 @@ fn tool_completed(
             ok,
             output: output.map(str::to_owned),
             error: error.map(str::to_owned),
-            duration_ms: 3,
+            duration_ms,
         },
     ))
 }
@@ -6080,9 +6101,241 @@ fn a_tool_result_is_folded_into_its_call_line() {
         text.contains("[kimi] ▸ 调用 read_file missing.rs 失败"),
         "失败是调用行上的一个后缀：{text}"
     );
+}
+
+#[test]
+fn a_failed_call_grows_one_row_with_the_first_line_of_its_error() {
+    // 错误正文仍然整段在详情里，而它的**首行**上屏：不点开也知道坏在哪
+    // （`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md` 第 5 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-3",
+        "read_file",
+        serde_json::json!({"path": "missing.rs"}),
+    ));
+    state.apply(tool_completed(
+        2,
+        "call-3",
+        false,
+        None,
+        Some("no such file\n后面那些行只在详情里"),
+    ));
+    open_trace_tab(&mut state, 120, 40);
+
+    let page = trace_page(&mut state, 120, 40);
+    let call = page
+        .iter()
+        .find(|row| row.contains("调用 read_file"))
+        .expect("调用行");
+    assert!(call.contains("失败"), "末尾那个红 `失败` 还在：{call}");
+    // 第二行从内容起点（第 9 列）起排：它没有自己的时刻戳。这块的账目（耗时、用量尾巴）
+    // 按既有规矩落在块的**最后一条**行尾，所以这一行后面可以有它们。
+    let error = page
+        .iter()
+        .find(|row| row.contains("no such file"))
+        .expect("错误首行");
     assert!(
-        !text.contains("no such file"),
-        "错误正文在详情里，不在转录里：{text}"
+        error.starts_with(&format!("{}no such file", " ".repeat(9))),
+        "错误首行从第 9 列起，只画一行：{error:?}"
+    );
+    assert!(
+        !page.iter().any(|row| row.contains("后面那些行")),
+        "第二行往后仍然只在详情里：{page:#?}"
+    );
+    assert!(
+        !page.iter().any(|row| row.contains('✗')),
+        "行首不加 `✗` —— 那要让全体行的内容宽降两列：{page:#?}"
+    );
+
+    // `ok = false` 而没有错误正文时，那一行不画 —— 没有可说的话就不占一格。
+    let mut mute = state_with_roster(&["kimi"]);
+    mute.apply(tool_started(
+        1,
+        "call-4",
+        "bash",
+        serde_json::json!({"command": "ls"}),
+    ));
+    mute.apply(tool_completed(2, "call-4", false, None, None));
+    open_trace_tab(&mut mute, 120, 40);
+    let page = trace_page(&mut mute, 120, 40);
+    assert!(
+        page.iter()
+            .any(|row| row.contains("调用 bash") && row.contains("失败")),
+        "失败那一行还在：{page:#?}"
+    );
+    assert!(
+        !page.iter().any(|row| row.starts_with("         ")),
+        "没有错误正文就没有第二行：{page:#?}"
+    );
+}
+
+#[test]
+fn a_healthy_call_row_gains_the_duration_and_nothing_else() {
+    // 常规成功行除了耗时一个字也不加（`.scratch/trace-ledger/issues/17-row-numbers-and-anomalies.md`
+    // 第 6 条）：账本还得是一份好扫的流。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "cargo test"}),
+    ));
+    state.apply(tool_completed_after(
+        2,
+        "call-1",
+        true,
+        Some("line one\nline two"),
+        None,
+        1_500,
+    ));
+    open_trace_tab(&mut state, 120, 40);
+
+    let page = trace_page(&mut state, 120, 40);
+    let call = page
+        .iter()
+        .find(|row| row.contains("调用 bash"))
+        .expect("调用行");
+    // 时刻那一格由事件信封给（测试里是「现在」），所以只钉它行尾那一段。
+    assert!(
+        call.trim_end()
+            .ends_with("[kimi] ▸ 调用 bash 运行 cargo test · 1.5 s"),
+        "行尾只有耗时那一段：{call:?}"
+    );
+    assert!(
+        !page
+            .iter()
+            .any(|row| row.contains("无输出") || row.contains("已截断")),
+        "成功的行不补结果摘要：{page:#?}"
+    );
+}
+
+#[test]
+fn the_duration_sits_right_before_the_usage_tail() {
+    // ADR 0016 把行尾定成用量的家，而耗时是后来者（票 17 第 1、2 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "cargo test"}),
+    ));
+    state.apply(tool_completed_after(
+        3,
+        "call-1",
+        true,
+        Some("out"),
+        None,
+        1_500,
+    ));
+    state.apply(usage(4, 19_502, 1_880, 0, 0));
+    open_trace_tab(&mut state, 120, 40);
+
+    let page = trace_page(&mut state, 120, 40);
+    let call = page
+        .iter()
+        .find(|row| row.contains("调用 bash"))
+        .expect("调用行");
+    assert!(
+        call.contains("· 1.5 s in=19502 out=1880"),
+        "耗时排在那条用量尾巴前面：{call:?}"
+    );
+}
+
+#[test]
+fn a_row_too_narrow_for_the_duration_keeps_the_usage_and_drops_it() {
+    // 放不下时丢的是耗时那一段，用量尾巴完整保留（票 17 第 2 条）。同一个调用在宽终端上
+    // 两段都在，窄下来之后先走的是耗时。
+    let command = "cargo test --offline --workspace --all-features --no-fail-fast --quiet";
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(turn_started(1));
+    state.apply(tool_started(
+        2,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": command}),
+    ));
+    state.apply(tool_completed_after(
+        3,
+        "call-1",
+        true,
+        Some("out"),
+        None,
+        1_500,
+    ));
+    state.apply(usage(4, 19_502, 1_880, 0, 0));
+    open_trace_tab(&mut state, 200, 40);
+
+    let wide = trace_page(&mut state, 200, 40).join("\n");
+    assert!(
+        wide.contains("· 1.5 s in=19502 out=1880"),
+        "宽得下时两段都在：{wide}"
+    );
+
+    let narrow = trace_page(&mut state, 80, 40).join("\n");
+    // 窄到这一行自己都折行时，尾巴也会被窗格折开 —— 那是窗格既有的折行，不是这一段算术
+    // 丢的。这条断言钉的是：**先走的是耗时那一段**，用量还在。
+    assert!(narrow.contains("in=19"), "用量尾巴留着：{narrow}");
+    assert!(
+        !narrow.contains("1.5 s"),
+        "放不下时丢的是耗时那一段，而且不留 0 也不留占位符：{narrow}"
+    );
+}
+
+#[test]
+fn an_empty_or_truncated_result_says_so_in_one_phrase() {
+    // 结果摘要只在异常时给一句（票 17 第 6 条）。
+    let mut state = state_with_roster(&["kimi"]);
+    state.apply(tool_started(
+        1,
+        "call-1",
+        "bash",
+        serde_json::json!({"command": "true"}),
+    ));
+    state.apply(tool_completed(2, "call-1", true, Some("   \n"), None));
+    state.apply(tool_started(
+        3,
+        "call-2",
+        "bash",
+        serde_json::json!({"command": "cargo test"}),
+    ));
+    state.apply(tool_completed_after(
+        4,
+        "call-2",
+        true,
+        Some(&format!(
+            "头\n{}18842 字符，约 4710 token；全文在 /tmp/call-2.txt]\n尾",
+            heng::context::TRUNCATED_MARKER
+        )),
+        None,
+        1_500,
+    ));
+    // `ok = true` 而**结果字段是空的**（`None`）与一段空串同一档：都是「没有输出」
+    // （票 17 第 6 条、票 04 §6 的口径）。
+    state.apply(tool_started(
+        5,
+        "call-3",
+        "bash",
+        serde_json::json!({"command": "true"}),
+    ));
+    state.apply(tool_completed(6, "call-3", true, None, None));
+    open_trace_tab(&mut state, 120, 40);
+
+    let page = trace_page(&mut state, 120, 40);
+    let text = page.join("\n");
+    assert_eq!(
+        page.iter().filter(|row| row.contains("· 无输出")).count(),
+        2,
+        "两种没输出的形状都说一句：{text}"
+    );
+    assert!(
+        text.contains("· 已截断 18842 字符"),
+        "被截断说一句，且只说流上真有的那个数：{text}"
+    );
+    assert!(
+        !text.contains("约 4710 token"),
+        "标记的其余部分仍然只在详情里：{text}"
     );
 }
 
@@ -8783,11 +9036,13 @@ fn rule_before(state: &mut TuiState, needle: &str) -> Option<(u16, u16)> {
     let row = (TRANSCRIPT_TOP as u16..24).find(|y| {
         cells(&frame, *y, MAIN_LEFT_AT_120, TRANSCRIPT_TEXT_RIGHT_AT_120).contains(needle)
     })?;
+    // 组的界是**组头那一行** —— 它是一条带文字的虚线（`.scratch/trace-ledger/spec.md` §5），
+    // 所以判据是「含虚线且写着 `回合` / `轮次`」，不是「整行都是虚线」。
     let rule = (TRANSCRIPT_TOP as u16..row).rev().find(|y| {
         // 只看正文那一段：最右那两列是滚动条与回合条的位置，滑块会盖在线上
         // （`.scratch/tui-visual-language/issues/07` 决定 2）。
         let line = cells(&frame, *y, MAIN_LEFT_AT_120, TRANSCRIPT_TEXT_RIGHT_AT_120);
-        line.contains('┄') && line.trim_end().chars().all(|ch| ch == '┄')
+        (line.contains("回合 ") || line.contains("轮次 ")) && line.contains('┄')
     })?;
     Some((row, rule))
 }
@@ -8795,26 +9050,32 @@ fn rule_before(state: &mut TuiState, needle: &str) -> Option<(u16, u16)> {
 /// 轨迹页里两个单位之间画一条横向虚线 —— 那条线就是轮次的边界，没有底色
 /// （票 12 的 2026-10-05 修订）。
 #[test]
-fn the_trace_page_draws_a_rule_between_units() {
+fn the_trace_page_opens_each_turn_with_a_header() {
     let mut state = state_with_roster(&["kimi"]);
     turns(&mut state, 3);
-    // 高一点的终端：三个回合各四行、各一条线，换发言者处还各多一行空白
+    // 高一点的终端：三个回合各四行、各一条组头，换发言者处还各多一行空白
     // （`.scratch/tui-visual-language/spec.md` §23），24 行的页装不下三份。
     open_trace_tab(&mut state, 120, 40);
     let page = trace_page(&mut state, 120, 40);
 
-    // 每个回合四行加一条线：问题、回合开始、回答、回合结束、线 × 3。
-    let rules: Vec<usize> = page
+    // 每个回合一条组头。**并进**单位之间那条虚线，所以它占的那一行就是边界那一行、零额外行数
+    // （`.scratch/trace-ledger/spec.md` §5）。
+    let headers: Vec<usize> = page
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains('┄') && row.trim_end().chars().all(|ch| ch == '┄'))
+        .filter(|(_, row)| (row.contains("回合 ") || row.contains("轮次 ")) && row.contains('┄'))
         .map(|(index, _)| index)
         .collect();
-    assert_eq!(rules.len(), 3, "三个回合三条线：{page:#?}");
-    for rule in &rules {
+    assert_eq!(headers.len(), 3, "三个回合三条组头：{page:#?}");
+    for (position, header) in headers.iter().enumerate() {
+        // 组头**长在这一级组的最前面**：它下面紧跟的就是那一回合的第一行成员。
         assert!(
-            page[rule - 1].contains("回合结束"),
-            "线紧跟在那个回合的收尾之后：{page:#?}"
+            page[header + 1].contains("回合开始"),
+            "组头紧跟在那之前那一行成员上面：{page:#?}"
+        );
+        assert!(
+            page[*header].contains(&format!("回合 {}", position + 1)),
+            "序号从 1 起数：{page:#?}"
         );
     }
 }
@@ -9097,6 +9358,8 @@ fn the_conversation_page_carries_no_stamps() {
             role: Role::User,
             text: "问题".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     ));
     let conversation = conversation_rows(&mut state, 120, 24).join("\n");
@@ -9195,6 +9458,8 @@ fn a_settling_thinking_line_jumps_to_the_moment_it_finished() {
             role: Role::Assistant,
             text: "答案是 42。".to_owned(),
             reasoning: Some("先看依赖，".to_owned()),
+
+            first_token_ms: None,
         },
     ));
     open_trace_tab(&mut state, 120, 24);
@@ -10446,6 +10711,8 @@ fn a_new_speaker_name_takes_an_unclaimed_colour_and_the_old_one_keeps_its() {
             role: heng::events::Role::Assistant,
             text: "minimax 答的".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )));
     let rows = screen(120, 24, &mut state);

@@ -107,6 +107,50 @@ impl Pane {
         self.forget_last_wrap();
     }
 
+    /// 替换**任意一条**来源行，就地改写它。给「那一行自己会变、而它不是最后一行」用：
+    /// 一个单位（回合 / 轮次）的组头随回合推进而增长（`.scratch/trace-ledger/spec.md` §5），
+    /// 所以要能改写**已经画出去、后面还有行**的那一条。
+    ///
+    /// 与 [`Pane::replace_last`] 的差别正是「任意一条」：折行缓存里它的后面那些起点要平移，
+    /// 视口那几项也要 —— 否则读者脚下的位置会被一次改写悄悄挪走。
+    ///
+    /// **替换一条不存在的行是空操作**（而不是改最后一行）：那是调用方算错了下标，而静默改掉
+    /// 另一条内容更糟。
+    pub fn replace_at(&mut self, source: usize, line: Line<'static>) {
+        let Some(slot) = self.lines.get_mut(source) else {
+            return;
+        };
+        *slot = line;
+        if self.wrapped_sources <= source {
+            // 这一条还没折过行，所以下一趟 `wrap_pending` 会折它 —— 没有陈旧缓存要清。
+            return;
+        }
+        let width = self.width.max(1) as usize;
+        let start = self.starts[source];
+        let end = self
+            .starts
+            .get(source + 1)
+            .copied()
+            .unwrap_or(self.wrapped.len());
+        let old_height = end.saturating_sub(start);
+        let fresh = wrap_line(&self.lines[source], width);
+        let new_height = fresh.len();
+        self.wrapped.drain(start..end);
+        // 后面的起点全体平移高度差：那一段换成了新折出来的行。
+        let delta = new_height as isize - old_height as isize;
+        for offset in self.starts.iter_mut().skip(source + 1) {
+            *offset = shift(*offset, delta);
+        }
+        for (offset, row) in fresh.into_iter().enumerate() {
+            self.wrapped.insert(start + offset, row);
+        }
+        // 视口那几项都按同一个高度差走 —— 读者看到的那一行不动，这是「就地改写」的全部意思。
+        // `top_source` 记的是**来源行**下标，而来源行的条数没变，所以它一个字都不动。
+        self.top = shift(self.top, delta);
+        self.total = shift(self.total, delta);
+        self.seen = shift(self.seen, delta);
+    }
+
     /// 刚改过的那条来源行如果已经折过行，它的显示行就是陈旧的 —— 而且它们是缓存里**最后**
     /// 那些，所以正好丢掉它们就是全部工作。清掉整个缓存反而会把更早每一行的显示行都扔了，
     /// 而 `starts` 还在指它们的老偏移：于是窗格报出两行，历史从屏幕上消失，也没有什么可以
@@ -419,6 +463,12 @@ impl Default for Pane {
     }
 }
 
+/// 一个显示行下标按高度差平移；夹在零以上 —— 负的显示行不存在。
+fn shift(offset: usize, delta: isize) -> usize {
+    let moved = offset as isize + delta;
+    if moved < 0 { 0 } else { moved as usize }
+}
+
 /// `text` 在 `width` 列下的显示行：每条逻辑行一个，各自按显示列折行。
 pub fn wrap_text(text: &str, width: usize) -> Vec<Line<'static>> {
     if text.is_empty() {
@@ -511,5 +561,74 @@ mod tests {
         }
         assert_eq!(pane.evict(), 3);
         assert_eq!(pane.sources(), CAP);
+    }
+
+    /// `replace_at` 改的是**指定那一条**，其余行与它们的顺序一个字都不动。
+    ///
+    /// 这是它存在的理由：单位组头随回合推进而增长，而它画出去的时候后面已经有行了
+    /// （`.scratch/trace-ledger/spec.md` §5）。
+    #[test]
+    fn replacing_a_middle_line_leaves_the_others_alone() {
+        let mut pane = Pane::new();
+        for text in ["第一行", "第二行", "第三行", "第四行"] {
+            pane.push(Line::from(text));
+        }
+        pane.view(20, 10, &[]);
+        pane.replace_at(1, Line::from("换过的第二行"));
+        let rows = pane.view(20, 10, &[]);
+        let text: Vec<String> = rows.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[0], "第一行");
+        assert_eq!(text[1], "换过的第二行");
+        assert_eq!(text[2], "第三行");
+        assert_eq!(text[3], "第四行");
+        assert_eq!(pane.sources(), 4, "改写不动来源行的条数");
+    }
+
+    /// 替换一条**不存在的**行是空操作，而**不是**改最后一行：那是调用方算错了下标，
+    /// 静默改掉另一条内容更糟。
+    #[test]
+    fn replacing_a_line_that_is_not_there_does_nothing() {
+        let mut pane = Pane::new();
+        pane.push(Line::from("唯一一行"));
+        pane.view(20, 10, &[]);
+        pane.replace_at(7, Line::from("不该出现的行"));
+        let rows = pane.view(20, 10, &[]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].to_string(), "唯一一行");
+    }
+
+    /// 空窗格上调用是安全的 —— 与 `replace_last` 同一个答案：没有东西可改写。
+    #[test]
+    fn replacing_on_an_empty_pane_does_nothing() {
+        let mut pane = Pane::new();
+        pane.replace_at(0, Line::from("x"));
+        assert_eq!(pane.sources(), 0);
+    }
+
+    /// 折行高度变了（一条短的换成一条长的）之后，后面那些行的起点与视口都要跟着走 ——
+    /// 读者看到的那一行不动。这是「就地改写」的全部意思。
+    #[test]
+    fn replacing_a_line_that_grows_shifts_the_rest_without_moving_the_viewport() {
+        let mut pane = Pane::new();
+        for text in ["短", "第二条", "第三条", "第四条"] {
+            pane.push(Line::from(text));
+        }
+        // 宽度 18：只有被替换的那一条会折行（10 个汉字 20 列），其余三条各自一行。
+        pane.view(18, 20, &[]);
+        let before = pane.total();
+        assert_eq!(before, 4);
+        pane.replace_at(0, Line::from("换长了的一行很长很长"));
+        let rows = pane.view(18, 20, &[]);
+        let text: Vec<String> = rows.iter().map(|line| line.to_string()).collect();
+
+        assert_eq!(rows.len(), before + 1, "多折出来的那一行把总数顶上去");
+        assert!(
+            text[0].starts_with('换'),
+            "第一条是折出来的第一段：{:?}",
+            text[0]
+        );
+        assert_eq!(text[2], "第二条", "后面三条整体下移一行，内容一字不改");
+        assert_eq!(text[3], "第三条");
+        assert_eq!(text[4], "第四条");
     }
 }

@@ -85,6 +85,8 @@ fn says(log: &mut EventLog, speaker: &SpeakerId, text: &str) {
             role: Role::Assistant,
             text: text.to_owned(),
             reasoning: Some("private reasoning".to_owned()),
+
+            first_token_ms: None,
         },
     )
     .unwrap();

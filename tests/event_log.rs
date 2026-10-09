@@ -67,6 +67,8 @@ fn torn_final_line_is_tolerated_and_repaired_on_open() {
                 role: Role::User,
                 text: "hi".to_owned(),
                 reasoning: None,
+
+                first_token_ms: None,
             },
         )
         .unwrap();
@@ -117,6 +119,8 @@ fn a_complete_final_line_without_a_newline_is_preserved_on_open() {
                 role: Role::User,
                 text: "hi".to_owned(),
                 reasoning: None,
+
+                first_token_ms: None,
             },
         )
         .unwrap();
@@ -159,6 +163,8 @@ fn corruption_before_the_final_line_is_an_error() {
             role: Role::User,
             text: "hi".to_owned(),
             reasoning: None,
+
+            first_token_ms: None,
         },
     )
     .unwrap();
@@ -224,6 +230,8 @@ fn continuation_is_decided_by_the_last_assistant_message() {
                 role: Role::Assistant,
                 text: text.to_owned(),
                 reasoning: None,
+
+                first_token_ms: None,
             },
         )
     };
@@ -292,4 +300,117 @@ fn usage_without_reasoning_leaves_the_reasoning_total_absent() {
         },
     )];
     assert_eq!(total_usage(&events).reasoning_tokens, None);
+}
+
+// ---- 首 token 时刻（ADR 0020）：那个字段是**可选**的，于是两个方向都兼容 ----
+
+#[test]
+fn a_message_completed_without_the_first_token_field_reads_as_none() {
+    // 一条**老流**：它写的时候还没有那个字段，于是事件 JSON 里没有 `first_token_ms`。
+    let old = serde_json::json!({
+        "MessageCompleted": {
+            "role": "Assistant",
+            "text": "答案",
+            "reasoning": null,
+        }
+    });
+    let payload: EventPayload = serde_json::from_value(old).expect("老流照读");
+    match payload {
+        EventPayload::MessageCompleted {
+            role,
+            text,
+            first_token_ms,
+            ..
+        } => {
+            assert_eq!(role, Role::Assistant);
+            assert_eq!(text, "答案");
+            assert_eq!(
+                first_token_ms, None,
+                "缺字段读成「不可用」而不是 0 —— 0 是一条被编造出来的数"
+            );
+        }
+        other => panic!("读出来不是一条消息：{other:?}"),
+    }
+}
+
+#[test]
+fn the_first_token_field_survives_a_round_trip_through_the_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("log.jsonl");
+    let mut log = EventLog::create(&path).unwrap();
+    let kimi = SpeakerId::Debater("kimi".into());
+    // 前面两条是别的形状：流里本来就允许一条新字段的事件旁边跟着没有它的事件。
+    for _ in 0..2 {
+        log.append(kimi.clone(), started("s-1")).unwrap();
+    }
+    log.append(
+        kimi,
+        EventPayload::MessageCompleted {
+            role: Role::Assistant,
+            text: "答案".to_owned(),
+            reasoning: None,
+            first_token_ms: Some(742),
+        },
+    )
+    .unwrap();
+
+    let events = read_events(&path).expect("读回来");
+    let found = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::MessageCompleted { first_token_ms, .. } => Some(*first_token_ms),
+            _ => None,
+        })
+        .expect("那条消息在流里");
+    assert_eq!(
+        found,
+        Some(742),
+        "落盘与读回是同一个数 —— 而 `seq` 就是行号，所以这份流仍可按行号寻址"
+    );
+    // 缺字段的那几条读成 None，而不是读不出来。
+    for event in &events {
+        if let EventPayload::MessageCompleted {
+            role,
+            first_token_ms,
+            ..
+        } = &event.payload
+        {
+            assert!(*role == Role::Assistant, "这条角色不变，说明形状没被读歪");
+            let _ = first_token_ms;
+        }
+    }
+}
+
+#[test]
+fn a_stream_written_before_the_field_is_readable_unchanged() {
+    // 「老二进制读新流」那一半：只用**老形状**声明去读一份**带新字段**的流，serde 忽略未知
+    // 字段 —— 所以一个没升过版本的渲染器不会因为多一个键就拒读整条流。
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct OldMessageCompleted {
+        role: Role,
+        text: String,
+        reasoning: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    enum OldPayload {
+        MessageCompleted(OldMessageCompleted),
+    }
+
+    let new = serde_json::json!({
+        "MessageCompleted": {
+            "role": "Assistant",
+            "text": "答案",
+            "reasoning": null,
+            "first_token_ms": 742,
+        }
+    });
+    let payload: OldPayload = serde_json::from_value(new).expect("老形状忽略未知字段");
+    match payload {
+        OldPayload::MessageCompleted(message) => {
+            assert_eq!(message.text, "答案");
+            assert_eq!(message.reasoning, None);
+        }
+    }
 }
