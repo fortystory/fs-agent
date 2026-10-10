@@ -2,9 +2,12 @@
 debug
 target
 
-# 沙箱里 `~/.cargo/registry` 是只读的，所以构建要用一个工作区内的 CARGO_HOME
-# （`CARGO_HOME=$PWD/.cargo-home cargo build`）：里面是索引与解包出来的依赖，可再生。
-.cargo-home/
+# 工作区里的中间产物：可再生，删掉不影响仓库状态（源码、文档、票都在别处）。
+# 工具的默认路径在这里改向：pytest 走根目录的 `pytest.ini`（`cache_dir` 指到
+# `.cache/pytest`），cargo 的索引与解包出来的依赖本来就落在沙箱的可写根 `~/.cargo`
+# 里 —— 早先那个工作区内的 `.cargo-home` 是为了绕开「`~/.cargo/registry` 只读」，
+# 而那条已经不成立了（可写根里有 `~/.cargo`），所以没有再搬进来。
+.cache/
 
 # rustfmt 生成的备份文件
 **/*.rs.bk

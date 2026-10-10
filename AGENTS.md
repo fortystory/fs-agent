@@ -23,3 +23,14 @@ issue 与 spec 都是 `.scratch/` 下的 markdown：**一个 feature 一个目�
 文档索引：[`README.md`](README.md) 的「文档」一节；feature 索引是 [`.scratch/README.md`](.scratch/README.md)。新增文档前先读这两处；提交信息照 [`docs/agents/commits.md`](docs/agents/commits.md) 写。
 
 > `## Agent skills` 与它的四个 `###` 是技能工具链的锚点，**保留英文**；正文照 [ADR 0004](docs/adr/0004-prose-in-chinese-identifiers-and-model-text-in-english.md) 用中文。
+
+## 工作区里的中间产物
+
+可再生的东西——缓存、编译中间结果、日志——放进工作区的 `.cache/`。它已被 git 忽略，
+删掉不影响仓库状态；源码、文档与票都在别处，所以往里写东西不必先想「会不会被提交」。
+现在住在那里的：`.cache/pytest`（由根目录 `pytest.ini` 的 `cache_dir` 引导过去）与
+`~/.cargo`（cargo 的索引与解包出来的依赖；它在沙箱的可写根里。早先工作区内的
+`.cargo-home` 存在，是因为当时 `~/.cargo` 只读——那条已经不成立了，所以它被删掉而没有搬进来）。
+
+两处搬不进来：`.dsh-mattskillsdeck-cache` 与 `.scratch/.dsh-write-probe`——落点由仓库外那个
+skills-deck 自己决定，我们没有改它写哪里的入口。
