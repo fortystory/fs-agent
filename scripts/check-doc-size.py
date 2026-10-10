@@ -52,6 +52,8 @@ DOC_FILES = [
     "docs/custom-tools.md",
     "docs/discussion.md",
     "docs/executor.md",
+    "docs/git.md",
+    "docs/glob.md",
     "docs/goals.md",
     "docs/grep.md",
     "docs/highlight.md",
@@ -331,6 +333,13 @@ def review_rules(unit: Unit) -> list[str]:
 #   把棘轮抬到 **18,211 / 319**（17,928 / 316 之后越过了行数那一档；字符仍离终点 18,500 有余）。
 #   与 `.scratch/README.md` 同日同因：新增 `minimax-provider` 那一行索引也是常规增长，
 #   11,049 / 66 → **11,334 / 67**（与 `input-tokens` 起那十次同因）。
+# **2026-10-10 内置工具按用量扩编那一轮**（`.scratch/tool-coverage`）：README 要落**两条新工具**
+#   的入口信息 —— 「架构」一节里加一条内建工具清单（`git` 与 `glob` 各自那一档形状），`docs/`
+#   索引里加两份逐面说明。先照 2026-10-08 MiniMax 那次的先例把新加的那段压到三行，实测
+#   **19,750 / 331**，仍越过了 19,500 / 330，所以按显式动作把棘轮抬到 **19,800 / 332**（终点
+#   18,500 / 320 不变）。`.scratch/README.md` 同因：`tool-coverage` 那一行 feature 索引，
+#   13,180 / 72 → **13,560 / 73**，抬到 **13,600**；这一次终点 13,500 也被越过了 —— 那是
+#   索引行随 feature 增长的常规代价，不是排版欠账。
 # **2026-10-08 会话中途换模型与思考强度那一轮**：`model-switching` 要在入口文档落**四处**必然的
 #   信息 —— 配置样例里 `reasoning_effort` 按模型给（原先那行注释还写着「会话开始前定死」，那是
 #   被推翻的旧语义）、`--model` 那行说明它是**起手**那一个、会话里命令清单多两条、新入口段落
@@ -372,9 +381,9 @@ def review_rules(unit: Unit) -> list[str]:
 #   从别处省过一轮（把 ADR 0013 / 0014 的括号说明与 feature 那行的功能罗列压短）才动的棘轮，
 #   `DOC_FILES` 也同步补上了 ADR 0021。
 ENTRY_BUDGET = {
-    "README.md": {"chars": 19500, "lines": 330, "target_chars": 18500, "target_lines": 320},
+    "README.md": {"chars": 19800, "lines": 332, "target_chars": 18500, "target_lines": 320},
     ".scratch/README.md": {
-        "chars": 13200,
+        "chars": 13600,
         "lines": 72,
         "target_chars": 13500,
         "target_lines": 100,

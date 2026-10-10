@@ -202,7 +202,15 @@ blocking edges 是 `01 → {02, 03} → 04`，每张票抬头写着自己被谁 
   的口径）。
 - **工具内分页（`head_limit` / `offset`）与 `output_mode`（`files_with_matches` / `count`）**：
   只做 `content` 一种输出。
-- **`ignore_case` / `context`（`-C`）/ `max_count` 等开关**：用 pattern 的内联语法或多次调用解决。
+- ~~**`ignore_case` / `context`（`-C`）/ `max_count` 等开关**：用 pattern 的内联语法或多次调用解决。~~
+  **2026-10-10 部分推翻**：改成加 `after` / `before` 两个上下文参数（**不加** `context`）。
+  依据是实测：八天里 bash 内的 `grep` / `rg` 共 5495 次，其中 **20.1% 带 `-A` / `-B`**
+  （`-A` 903、`-B` 202、`-C` 1），带上下文占 `grep` / `rg` 段 23.2%；形态表里
+  `grep -A <N> -n <PAT> <PATH>` 664 段 / 584 调用。那条「用内联语法或多次调用解决」的替代
+  方案没有被采用，所以推翻它。落地见
+  [`.scratch/tool-coverage/spec.md`](../tool-coverage/spec.md) §1 与
+  [票 08](../tool-coverage/issues/08-grep-context-lines.md)；`ignore_case` 与 `max_count`
+  **仍然不做**（`-C` 1 次、`-i` 不足以支撑一个永久参数）。
 - **登记命中文件进读集合**：不动 `Tool::read_paths` 的接口。
 - **禁掉 `bash` 里的 `rg` / `grep`**：只劝阻，不拦。
 - **并发承诺**：`ReadOnly` 今天不带来并行，本 spec 不改变调度器。

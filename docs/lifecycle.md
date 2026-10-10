@@ -472,7 +472,7 @@ flowchart TD
 
 - **说什么**：动态工具与联网工具都在组装期入表，之后再不改动 —— 表是缓存前缀的一部分。
 - **图上的边**：图 2 的 `mode → tools`（**没有回边**）。
-- **证据**：`src/cli.rs:386-389`、`src/tools/mod.rs:96-118`、`src/tools/registry.rs:88-93`
+- **证据**：`src/cli.rs:386-389`、`src/tools/mod.rs:96-125`、`src/tools/registry.rs:88-93`
 - **破坏了会怎样**：运行期往表里加一个工具，每个会话的缓存前缀就作废一次（全量未命中），
   而且模型看到的工具集合与流里记下的那次请求不再对得上。
 
@@ -613,7 +613,7 @@ flowchart TD
 | `prov` | provider 装配 + 能力表（双保险） | `src/cli.rs:299-305`、`src/cli.rs:334-340`、`src/provider/openai.rs:101-127`、`src/provider/capability.rs:121` | `fn build`、`fn caps_for` |
 | `scfg` | `SessionConfig`：预算 · 迭代上限 · 沙箱 · 落点 | `src/cli.rs:306-312`、`src/config.rs:1220` | `fn session_config` |
 | `mode` | 起始权限模式：`--mode` 压过 `[permissions] mode` | `src/cli.rs:229-231`、`src/cli.rs:323` | `fn effective_mode` |
-| `tools` | 工具表组装：内建 + 动态 + 联网，组装期定死 | `src/cli.rs:386-389`、`src/tools/mod.rs:96-130` | `fn with_dynamic`、`fn with_web` |
+| `tools` | 工具表组装：内建 + 动态 + 联网，组装期定死 | `src/cli.rs:386-389`、`src/tools/mod.rs:96-136` | `fn with_dynamic`、`fn with_web` |
 | `probe` | 沙箱探测：`mode="off"` 或已给结果则不探 | `src/lib.rs:333`、`src/tools/sandbox.rs:47-82` | `fn sandbox_availability`、`fn probe` |
 | `open` | `assemble`：建/开日志 · 技能 · `AGENTS.md` · 起渲染器 | `src/lib.rs:217-275`、`src/lib.rs:448-470` | `fn open`、`fn assemble` |
 | `kind` | 这条流有没有 `SessionStarted` | `src/lib.rs:348` | — |
@@ -706,7 +706,7 @@ flowchart TD
 | `pool` | 推迟批：按 `max_parallel_executors` buffered | `src/agent.rs:1140-1178` | `fn run_deferred` |
 | `spawn` | `ExecutorPort::new` 快照会话 | `src/agent/executor.rs:90-140` | `fn new` |
 | `policy` | 派生策略：只传播 `Deny` 与 `Ask` | `src/agent/executor.rs:107-111`、`src/permissions.rs:414-420` | `fn inherited_rules` |
-| `table` | 执行者工具表：`task` 结构性缺席 | `src/agent/executor.rs:134`、`src/tools/registry.rs:70-78`、`src/tools/tool.rs:249-255` | `fn for_executor`、`fn delegable` |
+| `table` | 执行者工具表：`task` 结构性缺席 | `src/agent/executor.rs:134`、`src/tools/registry.rs:70-78`、`src/tools/tool.rs:249-272` | `fn for_executor`、`fn delegable` |
 | `budget` | 独立回合预算：`executor_max_iterations` | `src/agent/executor.rs:118`、`src/config.rs:41-45` | `const DEFAULT_MAX_ITERATIONS` |
 | `run` | 执行者自己的回合（`TurnScope::Executor`） | `src/agent/executor.rs:184-192`、`src/agent.rs:443-732` | `fn run_turn` |
 | `spawned` | `ExecutorSpawned` 落流（简报先记） | `src/agent/executor.rs:148-159` | — |

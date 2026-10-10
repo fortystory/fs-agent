@@ -43,9 +43,9 @@ outside_read = "deny"        # "deny"（缺省）| "ask" | "allow"
 **只有 `bash` 有这条路。** 动态工具的 schema 与 argv 模板是使用者在 `config.toml` 里声明的，插不进新参数；它们的越界就是失败，要放宽就写 `[sandbox] writable_roots`。
 
 ```
-bash(command: "echo x > ~/.npm/probe")
+bash(command: "echo x > ~/.npm/probe", workdir: ".")
   → 内核拒（只读文件系统）——这是这条命令的结论
-bash(command: "echo x > ~/.npm/probe",
+bash(command: "echo x > ~/.npm/probe", workdir: ".",
      escalation: { justification: "构建产物要写到 ~/.npm 的缓存目录",
                    writable_paths: ["/home/ada/.npm"] })
   → 弹一次审批 → 批准后这一次调用多一条可写根
