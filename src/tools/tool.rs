@@ -222,6 +222,15 @@ pub trait Tool: Send + Sync {
     /// 线级声明，原样发给 provider。
     fn spec(&self) -> ToolSpec;
 
+    /// 这一组参数本身能不能跑。`facts()` 在读 `effect()` **之前**调它。
+    ///
+    /// 分档与参数校验是两件事：一条 `op` 写错了的工具没法分档，而分档又发生在权限门那边，
+    /// 于是校验必须住在更早的一条路上 —— 否则一次注定失败的调用会先弹一次审批，用户答完
+    /// 才拿到那句「`op` 不认识」（`bash` 的 `escalation` 半截写法当年走的就是这条路）。
+    fn validate(&self, _args: &Value) -> Result<(), ToolError> {
+        Ok(())
+    }
+
     /// 这次调用的工作区副作用。是 args 的纯函数。
     fn effect(&self, args: &Value) -> Effect;
 

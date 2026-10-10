@@ -399,7 +399,7 @@ async fn an_executor_runs_its_shell_in_the_sandbox_the_session_probed() {
             calls(
                 "call-bash",
                 "bash",
-                serde_json::json!({"command": "echo hi"}),
+                serde_json::json!({"command": "echo hi", "workdir": "."}),
             ),
             Reply::text("EXECUTOR REPORT: 跑过了"),
             Reply::text("主会话写下结论"),

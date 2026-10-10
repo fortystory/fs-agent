@@ -348,7 +348,7 @@ fn the_declaration_steers_the_model_away_from_assembling_shell_searches() {
     let registry = builtin(false);
     let spec = registry.get(GREP_TOOL).unwrap().spec();
     let description = &spec.description;
-    assert!(description.contains("不要用 `bash` 拼"), "{description}");
+    assert!(description.contains("别用 `bash` 拼"), "{description}");
     assert!(description.contains("path:line:文本"), "{description}");
     assert_eq!(
         spec.parameters.get("required").unwrap(),
@@ -364,6 +364,17 @@ fn the_declaration_steers_the_model_away_from_assembling_shell_searches() {
         serde_json::json!("boolean"),
         "`count` 是个开关，与 `glob` 一样可选"
     );
+    for name in ["after", "before"] {
+        assert_eq!(
+            spec.parameters["properties"][name]["type"],
+            serde_json::json!("integer"),
+            "`{name}` 是可选的上下文行数"
+        );
+        assert!(
+            description.contains(name),
+            "描述里要提到 `{name}`，否则模型不会知道有这一位：{description}"
+        );
+    }
     assert!(
         description.contains("count"),
         "描述里要提到它，否则模型不会知道有这一位：{description}"
@@ -614,7 +625,10 @@ async fn more_matches_than_the_limit_are_counted_rather_than_dumped() {
         "列出的条数就是那个常量上限，外加一句收尾"
     );
     let last = lines.last().unwrap();
-    assert!(last.contains(&format!("还有 {extra} 条未列出")), "{last}");
+    assert!(
+        last.contains(&format!("还有 {extra} 条命中未列出")),
+        "{last}"
+    );
     assert!(last.contains("glob"), "收尾要给一句能照做的事：{last}");
     assert!(
         !output.contains("[已截断："),
@@ -739,7 +753,7 @@ async fn the_counted_total_is_the_whole_workspace_not_what_a_listing_would_keep(
     );
     assert!(
         !output.contains("还有"),
-        "「还有 N 条未列出」是行模式的事：{output}"
+        "「还有 N 条命中未列出」是行模式的事：{output}"
     );
     fixture.shutdown().await;
 }
@@ -820,6 +834,220 @@ async fn a_count_still_only_walks_the_files_its_glob_selects() {
     assert!(
         output.contains("src/inside.rs:1") && !output.contains("docs/outside.md"),
         "`count` 与 `glob` 正交：计数同样只扫被收窄过的那批文件：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+// --- 上下文行（票 08）-----------------------------------------------------
+
+#[tokio::test]
+async fn after_and_before_print_context_lines_beside_the_hits() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "before": 1, "after": 2 }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "one\ntwo\nneedle\nthree\nfour\n");
+    fixture.run_turn("看看上下文").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output,
+        "src/thing.rs-2-two\nsrc/thing.rs:3:needle\nsrc/thing.rs-4-three\nsrc/thing.rs-5-four\n",
+        "上下文行用 `-` 分隔、带真实行号，命中行仍用 `:`：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn two_hit_blocks_are_separated_by_a_dash_dash_line() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "after": 1 }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write(
+        "src/thing.rs",
+        "one\nneedle\nthree\nfour\nfive\nsix\nseven\nneedle\nnine\n",
+    );
+    fixture.run_turn("看看上下文").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output,
+        "src/thing.rs:2:needle\nsrc/thing.rs-3-three\n--\n\
+         src/thing.rs:8:needle\nsrc/thing.rs-9-nine\n",
+        "两个命中块之间插一行 `--`：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn overlapping_context_of_neighbouring_hits_merges_into_one_block() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "before": 1, "after": 1 }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    // 两个命中隔着两行：它们各自的上下文区间 [1,3] 与 [3,5] 重叠，合成一块。
+    fixture.write("src/thing.rs", "one\nneedle\nthree\nneedle\nfive\n");
+    fixture.run_turn("看看上下文").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output,
+        "src/thing.rs-1-one\nsrc/thing.rs:2:needle\nsrc/thing.rs-3-three\n\
+         src/thing.rs:4:needle\nsrc/thing.rs-5-five\n",
+        "重叠的上下文合成一块，同一段正文不出现两遍：{output}"
+    );
+    assert!(!output.contains("--"), "合成一块就不再有分隔行：{output}");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn context_lines_share_the_line_budget_with_the_hits() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "before": 1, "after": 1 }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    // 600 行、每三行一个命中 = 200 条命中；每条带上前后两行就是 600 行输出，
+    // 于是那条 500 的界先被上下文行吃掉一大截。
+    let mut body = String::new();
+    for line in 1..=600 {
+        body.push_str(if line % 3 == 1 {
+            "needle\n"
+        } else {
+            "filler\n"
+        });
+    }
+    fixture.write("src/many.rs", &body);
+    fixture.run_turn("看看上下文").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    let listed: Vec<&str> = output
+        .lines()
+        .filter(|line| line.starts_with("src/many.rs"))
+        .collect();
+    assert!(
+        listed.len() <= MAX_MATCHES,
+        "上限收的是**列出来的行**（命中行 + 上下文行合计），不是命中条数：{}",
+        listed.len()
+    );
+    let hits = listed.iter().filter(|line| line.contains(":")).count();
+    let unlisted = output
+        .lines()
+        .find_map(|line| line.strip_prefix("还有 "))
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|count| count.parse::<usize>().ok());
+    assert_eq!(
+        unlisted,
+        Some(200 - hits),
+        "末尾那句数的是**未列出的命中行数**，不是未列出的行数：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn count_ignores_the_context_parameters() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "count": true, "after": 3, "before": 3 }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "one\ntwo\nneedle\nfour\nfive\n");
+    fixture.run_turn("数一数").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output, "src/thing.rs:1\n共 1 条匹配（1 个文件）\n",
+        "计数模式一行不列，两个上下文参数各走各的：{output}"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_context_that_is_not_a_non_negative_integer_is_a_parameter_error() {
+    for bad in [
+        serde_json::json!({ "after": -1 }),
+        serde_json::json!({ "after": "3" }),
+    ] {
+        let mut fixture = fixture(
+            vec![
+                grep_reply(
+                    "call-1",
+                    serde_json::json!({ "pattern": "needle", "after": bad["after"] }),
+                ),
+                Reply::text("done"),
+            ],
+            Mode::Auto,
+            None,
+        )
+        .await;
+        fixture.run_turn("看看").await;
+
+        let error = completed_output(&fixture.events(), "call-1").unwrap_err();
+        assert!(error.contains("`after`"), "{bad} 是一条参数错误：{error}");
+        fixture.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn after_zero_is_legal_and_prints_no_context() {
+    let mut fixture = fixture(
+        vec![
+            grep_reply(
+                "call-1",
+                serde_json::json!({ "pattern": "needle", "after": 0 }),
+            ),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        None,
+    )
+    .await;
+    fixture.write("src/thing.rs", "one\nneedle\nthree\n");
+    fixture.run_turn("看看").await;
+
+    let output = completed_output(&fixture.events(), "call-1").unwrap();
+    assert_eq!(
+        output, "src/thing.rs:2:needle\n",
+        "`after: 0` 合法：{output}"
     );
     fixture.shutdown().await;
 }

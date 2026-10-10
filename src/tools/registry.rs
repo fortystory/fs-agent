@@ -110,6 +110,11 @@ impl Registry {
             return Err(ToolError::message(format!("没有注册的工具：{tool_name}")));
         };
 
+        // 参数先过关，再谈副作用：`effect()` 是 args 的纯函数，它按「哪个 `op`」分档，而一个
+        // 不认识的 `op` 分不了档。先在这里判出来，这一次调用就一次审批也不会弹
+        // （`.scratch/tool-coverage` §3）。
+        tool.validate(args)?;
+
         let effect = tool.effect(args);
         let mut write_targets = Vec::new();
         let mut path_error: Option<PathError> = None;

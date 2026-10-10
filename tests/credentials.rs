@@ -575,7 +575,7 @@ async fn a_command_echo_is_redacted_before_it_enters_the_stream() {
             tool_call(
                 "call-1",
                 "bash",
-                serde_json::json!({"command": "cat notes.txt"}),
+                serde_json::json!({"command": "cat notes.txt", "workdir": "."}),
             ),
             Reply::text("done"),
         ],

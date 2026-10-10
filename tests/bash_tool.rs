@@ -19,7 +19,8 @@ use heng::permissions::{Mode, Policy};
 use heng::provider::{FinishReason, StreamEvent};
 use heng::render::{RenderSinks, Renderer};
 use heng::tools::{
-    BashLimits, EXIT_CODE_PREFIX, Effect, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX, builtin,
+    BashLimits, CWD_PREFIX, EXIT_CODE_PREFIX, Effect, STDERR_HEADER, STDOUT_HEADER, TIMEOUT_PREFIX,
+    builtin,
 };
 use heng::{AssemblyParts, Harness, SessionScaffold, assemble};
 use support::{AlwaysAllow, CaptureBuf, FakeProvider, Reply};
@@ -147,8 +148,10 @@ fn bash_reply(id: &str, args: serde_json::Value) -> Reply {
     ])
 }
 
+/// 一次脚本化的 `bash` 调用。站位必填（`.scratch/tool-coverage` 票 09），而这些测试关心的是
+/// 命令本身，所以站在工作区根。
 fn run(id: &str, command: &str) -> Reply {
-    bash_reply(id, serde_json::json!({ "command": command }))
+    run_in(id, command, ".")
 }
 
 fn run_with_timeout(id: &str, command: &str, timeout_ms: u64) -> Reply {
@@ -230,8 +233,8 @@ async fn a_real_command_reports_its_stdout_and_exit_code() {
     let (_, ok, output) = fixture.results().remove(0);
     assert!(ok, "命令成功了：{output}");
     assert!(
-        output.starts_with(&format!("{EXIT_CODE_PREFIX}0\n")),
-        "状态走在结果最前面：{output:?}"
+        output.starts_with(&format!("{CWD_PREFIX}.\n{EXIT_CODE_PREFIX}0\n")),
+        "站位那一行在最前面，状态紧跟其后（`.scratch/tool-coverage` §2）：{output:?}"
     );
     assert!(output.contains(STDOUT_HEADER), "{output:?}");
     assert!(output.contains(STDERR_HEADER), "{output:?}");
@@ -660,7 +663,9 @@ async fn a_workdir_that_is_a_file_is_a_tool_error() {
 }
 
 #[tokio::test]
-async fn a_workdir_alongside_an_escalation_is_an_argument_error() {
+async fn a_workdir_and_an_escalation_travel_together() {
+    // 站位必填之后，两者永远同现 —— 那条互斥会打死每一次升级重试，所以它已经取消
+    // （`.scratch/tool-coverage` 票 09）。升级申请原样透传到门。
     let mut fixture = fixture(
         vec![
             bash_reply(
@@ -684,14 +689,14 @@ async fn a_workdir_alongside_an_escalation_is_an_argument_error() {
 
     fixture.harness.run_turn("run it").await.unwrap();
 
-    let (_, ok, message) = fixture.results().remove(0);
+    let (_, ok, output) = fixture.results().remove(0);
+    assert!(ok, "带站位的升级重试要能走到沙箱那一档：{output}");
+    assert!(output.contains("hi"), "{output}");
     assert!(
-        !ok,
-        "一个是站位、一个是额外可写根，混起来等于让模型自选工作区：{message}"
+        output.starts_with("cwd: sub\n"),
+        "站位仍然照常回显：{output}"
     );
-    assert!(message.contains("workdir"), "{message}");
-    assert!(message.contains("escalation"), "{message}");
-    assert_eq!(asked(&fixture), 0, "参数错误不弹审批");
+    assert_eq!(asked(&fixture), 1, "升级申请照旧要问一次人");
 
     fixture.harness.shutdown().await;
 }
@@ -749,6 +754,72 @@ async fn the_stream_records_the_workdir_as_the_model_wrote_it() {
         args.get("workdir").and_then(|value| value.as_str()),
         Some("sub"),
         "回放要能重算这次调用站在哪，所以记的是模型发的原文：{args}"
+    );
+
+    fixture.harness.shutdown().await;
+}
+
+// --- 站位必传与 `cwd:` 回显（`.scratch/tool-coverage` 票 09）---------------
+
+#[tokio::test]
+async fn a_missing_workdir_is_an_argument_error_that_names_the_root() {
+    let mut fixture = fixture(
+        vec![
+            bash_reply("call-bash", serde_json::json!({ "command": "pwd" })),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let (_, ok, message) = fixture.results().remove(0);
+    assert!(!ok, "站位必填：{message}");
+    assert!(message.contains("workdir"), "{message}");
+    assert!(
+        message.contains('.'),
+        "文案要告诉模型工作区根怎么写，否则它会去猜：{message}"
+    );
+    assert_eq!(asked(&fixture), 0, "参数错误不弹审批");
+
+    fixture.harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_result_leads_with_the_standing_point() {
+    let mut fixture = fixture(
+        vec![
+            run("call-root", "echo hi"),
+            run_in("call-sub", "echo hi", "sub"),
+            Reply::text("done"),
+        ],
+        Mode::Auto,
+        SessionConfig::new("fake-model"),
+    )
+    .await;
+    std::fs::create_dir_all(fixture.workspace.join("sub")).unwrap();
+
+    fixture.harness.run_turn("run it").await.unwrap();
+
+    let results = fixture.results();
+    let (_, ok, output) = &results[0];
+    assert!(ok, "{output}");
+    assert!(
+        output.starts_with("cwd: .\n"),
+        "结果首行无条件回显站位，根写作 `.`：{output}"
+    );
+    assert!(
+        output.contains(&format!("{EXIT_CODE_PREFIX}0")),
+        "退出码那一段一个字不动，只是前面多了一行站位：{output}"
+    );
+
+    let (_, ok, output) = &results[1];
+    assert!(ok, "{output}");
+    assert!(
+        output.starts_with("cwd: sub\n"),
+        "子目录的站位写成相对工作区的路径：{output}"
     );
 
     fixture.harness.shutdown().await;

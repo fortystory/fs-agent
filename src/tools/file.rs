@@ -173,7 +173,8 @@ impl Tool for ReadFile {
             description: format!(
                 "读取工作区里的一个文件，返回带行号的内容（行号是文件里的行号）。不写 `limit` \
                  时最多读 {DEFAULT_READ_LINES} 行；还有没读到的行时，结果末尾会给出接着读的 \
-                 `offset`"
+                 `offset`。要看某一段（一个函数体、某个错误分支）就带 `offset` 与 `limit` —— \
+                 别为了看一段去 `bash` 拼 `sed -n`"
             ),
             parameters: serde_json::json!({
                 "type": "object",

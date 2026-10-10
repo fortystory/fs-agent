@@ -893,7 +893,7 @@ async fn the_bash_tool_runs_through_the_sandbox() {
             call(
                 "call-bash",
                 "bash",
-                serde_json::json!({ "command": "echo hi" }),
+                serde_json::json!({ "command": "echo hi", "workdir": "." }),
             ),
             Reply::text("done"),
         ],
@@ -968,7 +968,7 @@ async fn an_unavailable_sandbox_makes_bash_a_tool_error_with_two_ways_out() {
             call(
                 "call-bash",
                 "bash",
-                serde_json::json!({ "command": "echo never" }),
+                serde_json::json!({ "command": "echo never", "workdir": "." }),
             ),
             Reply::text("could not run"),
         ],
@@ -986,6 +986,11 @@ async fn an_unavailable_sandbox_makes_bash_a_tool_error_with_two_ways_out() {
     assert!(
         message.contains("\"off\""),
         "两条出路之一要写出来：{message}"
+    );
+    assert!(
+        message.starts_with("cwd: .\n"),
+        "站位那一行**无条件**：连命令根本没跑起来的那条出口也要有 —— 那正是模型最需要知道\
+         自己以为站在哪的时候（`.scratch/tool-coverage` §2）：{message}"
     );
     assert!(
         !fixture.workspace.join("made.txt").exists(),
@@ -1012,13 +1017,14 @@ async fn an_escalation_asks_once_and_binds_the_declared_path_for_that_call() {
             call(
                 "call-1",
                 "bash",
-                serde_json::json!({ "command": "echo x > ~/.npm/probe" }),
+                serde_json::json!({ "command": "echo x > ~/.npm/probe", "workdir": "." }),
             ),
             call(
                 "call-2",
                 "bash",
                 serde_json::json!({
                     "command": "echo x > ~/.npm/probe",
+                    "workdir": ".",
                     "escalation": {
                         "justification": "构建产物要写到缓存目录",
                         "writable_paths": [granted.clone()],
@@ -1109,6 +1115,7 @@ async fn a_refused_escalation_is_a_failed_result_not_a_tool_error() {
                 "bash",
                 serde_json::json!({
                     "command": "echo x > ~/.npm/probe",
+                    "workdir": ".",
                     "escalation": {
                         "justification": "构建产物要写到缓存目录",
                         "writable_paths": [granted.display().to_string()],
@@ -1153,6 +1160,7 @@ async fn an_escalation_into_a_mask_is_denied_without_asking() {
                 "bash",
                 serde_json::json!({
                     "command": "echo x >> authorized_keys",
+                    "workdir": ".",
                     "escalation": {
                         "justification": "想加一把钥匙",
                         "writable_paths": [ssh.join("authorized_keys").display().to_string()],
@@ -1190,14 +1198,17 @@ async fn a_half_written_escalation_is_a_parameter_error() {
     for args in [
         serde_json::json!({
             "command": "echo hi",
+            "workdir": ".",
             "escalation": { "justification": "有理由没路径" }
         }),
         serde_json::json!({
             "command": "echo hi",
+            "workdir": ".",
             "escalation": { "justification": "有理由没路径", "writable_paths": [] }
         }),
         serde_json::json!({
             "command": "echo hi",
+            "workdir": ".",
             "escalation": { "justification": "  ", "writable_paths": ["/tmp/x"] }
         }),
     ] {
@@ -1268,6 +1279,7 @@ fn the_escalation_argument_is_not_part_of_the_argv() {
     let tool = registry.get("bash").expect("bash 是内置工具");
     let args = serde_json::json!({
         "command": "echo hi",
+        "workdir": ".",
         "escalation": { "justification": "要写缓存", "writable_paths": ["/tmp/x"] }
     });
 
@@ -1532,7 +1544,7 @@ async fn a_discussion_forked_from_a_live_session_keeps_the_sandbox() {
                     call(
                         "call-bash",
                         "bash",
-                        serde_json::json!({ "command": "echo hi" }),
+                        serde_json::json!({ "command": "echo hi", "workdir": "." }),
                     ),
                     Reply::text("结论：进沙箱\nCONCLUSION: 进沙箱"),
                 ],

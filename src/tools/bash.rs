@@ -1,5 +1,5 @@
-//! 内建的 `bash(command, timeout_ms?, workdir?, escalation?)` 工具：在会话工作区里跑一条
-//! shell 命令（spec §7、§12、§20）。
+//! 内建的 `bash(command, workdir, timeout_ms?, escalation?)` 工具：在会话工作区里跑一条
+//! shell 命令（spec §7、§12、§20；`.scratch/tool-coverage` §2）。
 //!
 //! 三条决定定义了这个工具：
 //!
@@ -49,13 +49,23 @@ pub const ESCALATION_NOTE: &str = "命令被沙箱拒绝（内核说只读文件
      终局，同一条命令再被拒也不会再问。不许先绕道去聊天里问用户，也不许在没被拒的时候预先\
      声明一个更宽的档位。";
 
-/// 工具描述里那段**站位**（`.scratch/bash-workdir/spec.md` §1）。
+/// 工具描述里那段**站位**（`.scratch/bash-workdir/spec.md` §1、`.scratch/tool-coverage` §2）。
 ///
 /// 与 [`SANDBOX_NOTE`] 同一个理由：模型可见、进请求前缀，所以是常量、一次定死。它要说清四件事
-/// —— 可选、相对路径按工作区解析、目标是工作区内一个**已存在**的目录、以及它不改变别的工具
-/// 解析相对路径的基准（不写最后这半句，模型会按 shell 的直觉以为基准跟着走了）。
-pub const WORKDIR_NOTE: &str = "可选，这条命令在工作区内的哪个目录跑；相对路径按工作区解析，目录必须已存在且落在工作区\
-     内。用它代替在命令里写 cd；只影响这一条命令的进程，不改变其他工具解析相对路径的基准。";
+/// —— 必填、相对路径按工作区解析且**根写 `.`**、目标是工作区内一个**已存在**的目录、以及它不
+/// 改变别的工具解析相对路径的基准（不写最后这半句，模型会按 shell 的直觉以为基准跟着走了）。
+///
+/// 必填是 2026-10-10 改的（上线两天 3175 次调用只有 1 次带它，而 86% 的调用以 `cd` 开头）。
+/// 「用它代替在命令里写 `cd`」那半句是同一个改动的另一半 —— 站位一旦必填，那条劝阻才有着落。
+pub const WORKDIR_NOTE: &str = "必填，这条命令在工作区内的哪个目录跑；相对路径按工作区解析，工作区根写 `.`，\
+     目录必须已存在且落在工作区内。用它代替在命令里写 cd；只影响这一条命令的进程，\
+     不改变其他工具解析相对路径的基准。";
+
+/// 结果首行那一段站位（`.scratch/tool-coverage` §2）。
+///
+/// **无条件**加：`cd "$(pwd)"` 那 517 段的痛点恰恰是「不确定自己站在哪」，所以填根时最需要
+/// 这一行确认。根写作 `.`，其余是相对工作区的路径。
+pub const CWD_PREFIX: &str = "cwd: ";
 
 /// 那个 shell 与让它收下命令字符串的那个旗标。`-l` 给命令一份用户的登录环境；`-c` 才是收下
 /// 那一个参数的东西。
@@ -114,7 +124,7 @@ impl Tool for BashTool {
                         "required": ["justification", "writable_paths"]
                     }
                 },
-                "required": ["command"]
+                "required": ["command", "workdir"]
             }),
         }
     }
@@ -129,12 +139,10 @@ impl Tool for BashTool {
     /// 半截的写法 —— 有理由没路径、路径为空、字段类型不对 —— 是**参数错误**，不是静默
     /// 忽略：一次被吞掉的升级申请会变成一条看起来「命令没跑成但也没人问」的谜。
     ///
-    /// 与 `workdir` 同现也是参数错误，而且这一条**必须在这里**：`workdir` 说这条命令站在哪、
-    /// `escalation` 说这一次额外能写哪，混起来就等于让模型自选工作区。`facts()` 会在权限门
-    /// 之前调一次这个方法，于是这种调用连一次审批都不会弹
-    /// （`.scratch/bash-workdir/spec.md` §2）。
+    /// 与 `workdir` 同现**不再**是参数错误（`.scratch/tool-coverage` §2）：站位必填之后两者
+    /// 永远同现，那条旧规则会打死每一次升级重试。它当初要防的「借站位自选工作区」，在「必填 +
+    /// 严格解析在会话工作区之内」之后已经由 [`resolve_workdir`] 收着。
     fn escalation(&self, args: &Value) -> Result<Option<Escalation>, ToolError> {
-        refuse_workdir_with_escalation(args)?;
         escalation(args)
     }
 
@@ -153,16 +161,43 @@ impl Tool for BashTool {
                 "{BASH_TOOL}：`timeout_ms` 必须是正的毫秒数"
             )));
         }
-        let workdir = requested_workdir(&args)?
-            .map(|value| resolve_workdir(ctx, &value))
-            .transpose()?;
+        let workdir = resolve_workdir(ctx, &requested_workdir(&args)?)?;
         let limit = ctx.bash.timeout(requested);
+        // 站位先算出来，于是**每一条**出口都带着它 —— 包括跑不起来的那几条（沙箱不可用、
+        // 进程起不来）。那种时候模型正需要知道它以为站在哪、而实际什么都没跑起来
+        // （`.scratch/tool-coverage` §2：首行**无条件**加）。
+        let standing = cwd_line(ctx, &workdir);
         // 站位给 `current_dir`，边界（`ctx.cwd`）给沙箱的可写根与保护路径 —— 这一拆是
         // `.scratch/bash-workdir/spec.md` §3 那条不变式的全部内容。
-        let standing = workdir.as_deref().unwrap_or(ctx.cwd);
-        let outcome = process::run(ctx.cwd, standing, &argv, limit, ctx.sandbox).await?;
-        Ok(ToolOutput::new(outcome.report()))
+        match process::run(ctx.cwd, &workdir, &argv, limit, ctx.sandbox).await {
+            Ok(outcome) => Ok(ToolOutput::new(format!("{standing}{}", outcome.report()))),
+            Err(error) => Err(with_standing(error, &standing)),
+        }
     }
+}
+
+/// 把站位那一行安到一条错误的最前面。
+///
+/// 只有 [`ToolError::Message`] 这么办：[`ToolError::InvalidatesReads`] 的 message 是给人看的
+/// 「改前先读」那条回执，前缀一段站位会把它读成别的东西，而那类错误根本与站位无关。
+fn with_standing(error: ToolError, standing: &str) -> ToolError {
+    match error {
+        ToolError::Message(message) => ToolError::Message(format!("{standing}{message}")),
+        other => other,
+    }
+}
+
+/// 结果首行：这条命令实际落在哪个目录。
+///
+/// 相对会话工作区写，根写 `.`。站位已被 [`resolve_workdir`] 收容在工作区之内，所以相对化
+/// 不会失败；真走到那条兜底时（路径写法怪到 `strip_prefix` 不认）就把绝对路径原样交出去，
+/// 宁可长一点也不给一句错的确认。**无条件**：成功、超时、非零退出、以及跑不起来的那些出口。
+fn cwd_line(ctx: &ToolContext<'_>, workdir: &Path) -> String {
+    let relative = workdir.strip_prefix(ctx.cwd).unwrap_or(workdir);
+    if relative.as_os_str().is_empty() {
+        return format!("{CWD_PREFIX}.\n");
+    }
+    format!("{CWD_PREFIX}{}\n", relative.display())
 }
 
 /// 这次调用要跑的那一条 argv，从 args 构造，好让 [`Tool::command`] 与 [`Tool::call`] 对「将
@@ -190,35 +225,18 @@ fn requested_timeout_ms(args: &Value) -> Result<Option<u64>, ToolError> {
     }
 }
 
-/// 模型给的 `workdir`，当它给了的话。一个存在但不是非空字符串的值（`""` 同样）是参数错误，
-/// 与 `timeout_ms` / `escalation` 的半截写法同一种形状（spec §2）。首尾空白照 `escalation`
-/// 那一族的做法剪掉 —— 参数本身仍然是模型写的原文，事件流记的是它。
-fn requested_workdir(args: &Value) -> Result<Option<String>, ToolError> {
+/// 模型给的 `workdir`：这条命令的站位，**必填**（`.scratch/tool-coverage` §2）。
+///
+/// 省略、空串、类型不对都是参数错误，与 `timeout_ms` / `escalation` 的半截写法同一形状。文案里
+/// 必须点名「根写 `.`」—— 强制力来自字段必填，可模型总得有个自然写法去填它。
+fn requested_workdir(args: &Value) -> Result<String, ToolError> {
     match args.get("workdir") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.trim().to_owned())),
-        Some(_) => Err(ToolError::message(format!(
-            "{BASH_TOOL}：`workdir` 要写成一段非空的目录路径，相对路径按工作区解析；\
-             不给就整段别给"
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(value.trim().to_owned()),
+        _ => Err(ToolError::message(format!(
+            "{BASH_TOOL}：`workdir` 必填：这条命令在工作区内的哪个目录跑，工作区根写 `.`；\
+             相对路径按工作区解析，目录必须已存在且落在工作区内"
         ))),
     }
-}
-
-/// `workdir` 与 `escalation` 同现：一个说这条命令站在哪、一个说这一次额外能写哪，混起来就
-/// 等于让模型自选工作区，所以是参数错误（spec §2）。
-///
-/// 这个检查住在 [`Tool::escalation`] 里，而不是 `call()` 里，因为 `facts()` 会在权限门**之前**
-/// 调那一次：于是这种调用连一次审批都不会弹 —— 放在 `call()` 里的话，用户会先被问一次注定
-/// 失败的动作。
-fn refuse_workdir_with_escalation(args: &Value) -> Result<(), ToolError> {
-    let given = |name: &str| args.get(name).is_some_and(|value| !value.is_null());
-    if given("workdir") && given("escalation") {
-        return Err(ToolError::message(format!(
-            "{BASH_TOOL}：`workdir` 与 `escalation` 不能同现：一个说这条命令站在哪，一个说\
-             这一次额外能写哪，混起来就等于让模型自选工作区"
-        )));
-    }
-    Ok(())
 }
 
 /// 模型给的那个站位，解析成一个工作区之内、**已存在**的目录。

@@ -14,6 +14,8 @@ pub mod bash;
 pub mod custom;
 pub mod edit;
 pub mod file;
+pub mod git;
+pub mod glob;
 pub mod goal_note;
 pub mod grep;
 mod mcp_args;
@@ -29,16 +31,19 @@ pub mod skill;
 pub mod task;
 pub mod todo;
 pub mod tool;
+pub mod walk;
 pub mod web_fetch;
 pub mod web_search;
 
 pub use ask_user::{ASK_USER_QUESTION_TOOL, AskUserQuestionTool};
-pub use bash::{BASH_TOOL, BashTool};
+pub use bash::{BASH_TOOL, BashTool, CWD_PREFIX};
 pub use custom::{CustomTool, is_custom_tool};
 pub use file::{
     DEFAULT_READ_LINES, EDIT_FILE, EditCall, EditFile, MATCH_LEVEL_PREFIX, READ_FILE, ReadFile,
     WRITE_FILE, WROTE_PATH_PREFIX, WriteFile, before_artifact,
 };
+pub use git::{GIT_TOOL, GitTool};
+pub use glob::{GLOB_TOOL, GlobTool, MAX_PATHS};
 pub use goal_note::{GOAL_NOTE_TOOL, GoalNoteTool};
 pub use grep::{GREP_TOOL, GrepTool, MAX_MATCHES};
 pub use mcp_call::{MCP_CALL_TOOL, McpCallTool};
@@ -78,6 +83,9 @@ pub use web_search::{WEB_SEARCH_TOOL, WebSearchTool};
 /// `grep` 与 `repo_map` 同一档：无状态、只读、自己走会话 cwd，所以它在每一档权限模式下都
 /// 留在表里（`.scratch/grep-tool/spec.md` §1）。
 ///
+/// `git` 与 `glob` 同一档：一条工具各自只有一个必填字段，`git` 按 `op` 在只读与独占之间分档
+/// （`.scratch/tool-coverage` §3、§4）。
+///
 /// `todo` 刻意**不**放在 `can_ask` 后面：维护一份列表不需要有人作答，所以三个渲染器都挂它
 /// —— 这正是它与 `ask_user_question` 的分界（`.scratch/todo-and-modes/spec.md` §2）。
 /// `goal_note` 与它同一档，理由也同一档：记一行新工作不需要有人作答
@@ -91,6 +99,8 @@ pub fn builtin(can_ask: bool) -> Registry {
     registry.register(Box::new(SkillTool));
     registry.register(Box::new(RepoMapTool::new()));
     registry.register(Box::new(GrepTool));
+    registry.register(Box::new(GitTool));
+    registry.register(Box::new(GlobTool));
     registry.register(Box::new(TaskTool));
     registry.register(Box::new(TodoTool));
     registry.register(Box::new(GoalNoteTool));
